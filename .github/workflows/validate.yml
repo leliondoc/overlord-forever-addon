@@ -1,0 +1,50 @@
+name: Validate addon
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone project
+        uses: actions/checkout@v4
+
+      - name: Installer Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Installer Lua 5.1
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
+            /etc/apt/sources.list.d/azure-cli.list 2>/dev/null || true
+          sudo apt-get update -qq
+          sudo apt-get install -y lua5.1
+
+      - name: Valider versions, syntaxe Lua et fronts Forever
+        run: |
+          bash .github/scripts/validate-changelog.sh CHANGELOG.md
+          CHANGELOG_VERSION=$(grep -E '^[0-9]+\.[0-9]+(\.[0-9]+)?$' CHANGELOG.md)
+          TOC_VERSION=$(sed -n 's/^## Version: //p' Overlord.toc)
+          CORE_VERSION=$(sed -n 's/^Overlord.Version = "\([^"]*\)"/\1/p' Core.lua)
+          test "$TOC_VERSION" = "$CHANGELOG_VERSION"
+          test "$CORE_VERSION" = "$CHANGELOG_VERSION"
+
+          mapfile -t LUA_FILES < <(find . -maxdepth 1 -type f -name '*.lua' -print | sort)
+          lua5.1 tests/lua_syntax_check.lua "${LUA_FILES[@]}"
+          lua5.1 tests/zone_capture_lease.test.lua
+
+          mapfile -t TEST_FILES < <(find tests -maxdepth 1 -type f -name '*.test.mjs' -print | sort)
+          node --test "${TEST_FILES[@]}"

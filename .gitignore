@@ -1,0 +1,18 @@
+# Fichiers systeme
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editeurs / IDE
+.vscode/
+.idea/
+.cursor/
+*.swp
+*~
+
+# Fichiers temporaires
+*.bak
+*.tmp
+
+# Build packager BigWigs
+.release/

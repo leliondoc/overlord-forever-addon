@@ -1,0 +1,16 @@
+# Configuration du packager BigWigs (zip CurseForge / GitHub Releases)
+package-as: Overlord
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
+ignore:
+  - README.md
+  - CHANGELOG.md
+  - .gitignore
+  - .github
+  - .pkgmeta
+  - .release
+  - .cursor
+  - tests

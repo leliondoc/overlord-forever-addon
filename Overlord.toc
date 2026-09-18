@@ -1,0 +1,51 @@
+## Interface: 16001
+## Title: Overlord Forever
+## Author: Troma
+## Notes: Zone capture for open-world war fronts on WoW Forever: sync, map, leaderboard.
+## Notes-frFR: Capture de zones sur les fronts du monde ouvert (WoW Forever) : synchro, carte, classement.
+## Notes-esES: Captura de zonas en frentes del mundo abierto (WoW Forever): sincronización, mapa, clasificación.
+## Notes-esMX: Captura de zonas en frentes del mundo abierto (WoW Forever): sincronización, mapa, clasificación.
+## Notes-deDE: Zonen-Eroberung auf offenen Kriegsfronten (WoW Forever). Sync, Karte, Rangliste.
+## Notes-ruRU: Захват зон на фронтах открытого мира (WoW Forever): синхронизация, карта, рейтинг.
+## Version: 1.0.0
+## SavedVariables: OverlordDB
+## IconTexture: Interface\AddOns\Overlord\Textures\overlord_minimap
+## X-Category: PvP
+## X-License: All Rights Reserved
+## X-Curse-Project-ID: 1701204
+
+Locales.lua
+Core.lua
+RealmPools.lua
+UIShared.lua
+Fronts.lua
+Zones.lua
+Ressources.lua
+Leaderboard.lua
+Sync.lua
+SyncGuildKeep.lua
+SyncDomination.lua
+SyncVictoryBonus.lua
+SyncResolution.lua
+SyncAux.lua
+ZoneCaptureLease.lua
+FrontActivity.lua
+CombatTracker.lua
+ZoneControl.lua
+GuildKeep.lua
+GuildKeepControl.lua
+GuildKeepImmersion.lua
+Outpost.lua
+OutpostControl.lua
+SyncOutpost.lua
+SyncHistoryCatchup.lua
+MapMarkers.lua
+MapMarkersKeep.lua
+ZoneIndicator.lua
+UI.lua
+ActionShortcut.lua
+Button.lua
+Popups.lua
+LeaderboardUI.lua
+SettingsPanel.lua
+Commands.lua
