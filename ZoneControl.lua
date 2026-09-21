@@ -1630,8 +1630,9 @@ function Overlord.ZoneControl:CaptureZone(zone)
     zone._zsOfficialCapturerSeenAt = nil
     zone.holdTimeElapsed = 0
     zone.holdStartTime = nil
-    zone.capturedTime = time()
-    zone.updatedAt = time()
+    local now = time()
+    zone.capturedTime = now
+    zone.updatedAt = now
     zone.holdTimeRequired = 120
 
     -- Meme logique que Sync:OnReceiveCapture : evite +2 quand un allie envoie aussi un "C"
@@ -1706,6 +1707,9 @@ function Overlord.ZoneControl:CaptureZone(zone)
     
     -- Sauvegarde et refresh
     Overlord:SaveState()
+    if Overlord.NotifyDominationOwnersChanged then
+        Overlord:NotifyDominationOwnersChanged()
+    end
     if Overlord.UI then
         Overlord.UI:RequestRefresh()
     end
@@ -1856,4 +1860,3 @@ function Overlord.ZoneControl:Resume()
     mountFrame:RegisterUnitEvent("UNIT_ENTERED_VEHICLE", "player")
     mountFrame:RegisterUnitEvent("UNIT_EXITED_VEHICLE", "player")
 end
-

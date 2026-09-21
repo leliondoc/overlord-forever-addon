@@ -15,6 +15,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  windows-persistence:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verifier le pont local SavedVariables
+        shell: pwsh
+        run: ./tests/forever_savedvariables_bridge.test.ps1
+
   validate:
     runs-on: ubuntu-latest
     steps:
@@ -45,6 +53,9 @@ jobs:
           mapfile -t LUA_FILES < <(find . -maxdepth 1 -type f -name '*.lua' -print | sort)
           lua5.1 tests/lua_syntax_check.lua "${LUA_FILES[@]}"
           lua5.1 tests/zone_capture_lease.test.lua
+          lua5.1 tests/forever_persistence.test.lua
+          lua5.1 tests/forever_leaderboard.test.lua
+          lua5.1 tests/forever_world_kills.test.lua
 
           mapfile -t TEST_FILES < <(find tests -maxdepth 1 -type f -name '*.test.mjs' -print | sort)
           node --test "${TEST_FILES[@]}"

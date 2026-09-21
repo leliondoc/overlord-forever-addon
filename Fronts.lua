@@ -648,7 +648,7 @@ local FEATURED_FRONT_ART = {
     arathi = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-ArathiHighlands.blp",
     loch_modan = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-LochModan.blp",
     durotar = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-Durotar.blp",
-    ashenvale = "Interface\\Icons\\Achievement_Zone_Ashenvale_01",
+    ashenvale = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-Ashenvale.blp",
 }
 
 local FEATURED_FRONT_NAME_KEYS = {
@@ -713,13 +713,6 @@ end
 -- Mini-icone identite front (panneau activite recente) : vignettes WarBoard Blizzard.
 function Overlord.Fronts:GetFrontActivityIcon(frontId)
     if not frontId then return nil end
-    if frontId == "coiled_isle" then
-        return {
-            kind = "texture",
-            path = "Interface\\Icons\\INV_Misc_Map_01",
-            texCoord = { 0.08, 0.92, 0.08, 0.92 },
-        }
-    end
     local art = FEATURED_FRONT_ART[frontId]
     if not art then return nil end
     return {

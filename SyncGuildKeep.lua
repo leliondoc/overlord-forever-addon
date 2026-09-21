@@ -389,22 +389,11 @@ local IsStaleCampaignTimestamp
 local NormalizeGkCapturerName
 
 local function NormalizeGkRosterName(name)
-    if type(name) ~= "string" then return "" end
-    if Overlord.Sync and Overlord.Sync.NormalizeContributorFullName then
-        name = Overlord.Sync:NormalizeContributorFullName(name) or name
+    if Overlord.Sync and Overlord.Sync.GetCaptureContributorDedupKey then
+        local dk = Overlord.Sync:GetCaptureContributorDedupKey(name)
+        if dk then return dk end
     end
-    name = name:match("^%s*(.-)%s*$") or ""
-    if name == "" then return "" end
-    local base, realm = name:match("^([^%-]+)%-(.+)$")
-    if base and realm then
-        base = base:match("^%s*(.-)%s*$") or base
-        realm = realm:match("^%s*(.-)%s*$") or realm
-        -- CHAT_MSG_ADDON compacte les royaumes a espaces (WyrmrestAccord),
-        -- alors que GetUnitName peut garder l'espace (Wyrmrest Accord).
-        realm = realm:gsub("%s+", "")
-        return (base .. "-" .. realm):lower()
-    end
-    return name:lower()
+    return ""
 end
 
 local function LocalPlayerIsGuildKeepAnchor(st)
@@ -769,11 +758,13 @@ local function GuildKeepSyncTimestamp(st)
     return 0
 end
 
-local VALID_POOL_TAG = { fr = true, eu = true, de = true, us = true }
+local VALID_POOL_TAG = { eu = true, us = true }
 
 local function NormalizePoolTag(pool)
     if type(pool) ~= "string" then return "" end
     pool = pool:lower():match("^%s*([a-z]+)%s*$") or ""
+    if pool == "na" then pool = "us" end
+    if pool == "fr" or pool == "de" then pool = "eu" end
     if VALID_POOL_TAG[pool] then return pool end
     return ""
 end

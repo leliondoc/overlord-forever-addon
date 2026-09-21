@@ -202,9 +202,12 @@ local function CanNeutralZaReplaceCanonicalCapture(zoneId, zone, ts)
         local stable = Overlord.CaptureLease:GetPersistableView(zone)
         if stable and stable ~= zone then zone = stable end
     end
-    if not zone or not zone.owner then return true end
-
+    if not zone then return true end
     local capturedAt = tonumber(zone.capturedTime) or 0
+    -- Owner vide mais horloge de campagne : ApplyFactionConfig a pu nil l'owner
+    -- avant Restore. Un ZA N ne doit pas effacer cette capture.
+    if not zone.owner and capturedAt <= 0 then return true end
+
     local localClock = math.max(capturedAt, tonumber(zone.updatedAt) or 0)
     local campaignStart = (Overlord.GetCurrentCampaignStartTs
         and Overlord:GetCurrentCampaignStartTs())
@@ -1004,41 +1007,67 @@ function Overlord.Sync:GetChannelId()
     return nil
 end
 
-function Overlord.Sync:GetPlayerFullName()
-    if cachedPlayerFullName then return cachedPlayerFullName end
-    -- WoW 12.0.5 : SafeUnitName gere les secret values
-    local name = Overlord:SafeUnitName("player")
-    -- Garde : evite un crash nil..string si l'API n'est pas encore prete
-    -- (appelle tres precoce avant PLAYER_ENTERING_WORLD).
-    if not name or name == "" then return "" end
-    local realm = Overlord:SafeGetRealmName()
-    if realm and realm ~= "" then
-        local full = name .. "-" .. realm
-        cachedPlayerFullName = full
-        return full
-    end
-    -- Royaume pas encore disponible : retourne le nom seul (sans tiret orphelin),
-    -- NE PAS mettre en cache. Des que le royaume sera pret au prochain appel,
-    -- la cle canonique "Nom-Royaume" sera mise en cache et les dedupKey convergeront.
-    return name
+-- Forever : base Prenom Nom. Un suffixe -Royaume d'API est ignore, jamais recolle.
+function Overlord.Sync:ForeverCharacterBase(name)
+    name = self:NormalizeContributorFullName(name) or name
+    if type(name) ~= "string" then return nil end
+    name = name:match("^%s*(.-)%s*$") or ""
+    if name == "" or #name > 80 then return nil end
+    local hyphen = name:find("-", 1, true)
+    local base = hyphen and name:sub(1, hyphen - 1) or name
+    base = (base:match("^%s*(.-)%s*$") or ""):gsub("%s+", " ")
+    if base == "" then return nil end
+    return base
 end
 
--- Refuse les placeholders "Unknown" (et equivalents localises) que l'API WoW retourne
--- quand une unite n'est pas encore resolue. Sans ce filtre, des lignes "Unknown"
--- se propageaient via sync et polluaient durablement le leaderboard de tous les pairs.
+-- Identite canonique Forever : "Prenom Nom". Nil si le nom n'est pas complet.
+function Overlord.Sync:CanonicalForeverName(name)
+    local base = self:ForeverCharacterBase(name)
+    if not base or not self:IsForeverCharacterName(base) then return nil end
+    return base
+end
+
+function Overlord.Sync:CanonicalForeverNameFromUnit(unit)
+    if not unit then return nil end
+    local name = Overlord:SafeGetUnitName(unit, true) or Overlord:SafeUnitName(unit)
+    return self:CanonicalForeverName(name)
+end
+
+function Overlord.Sync:GetPlayerFullName()
+    if cachedPlayerFullName then return cachedPlayerFullName end
+    local name = Overlord:SafeUnitName("player")
+    if not name or name == "" then return "" end
+    local canon = self:CanonicalForeverName(name)
+    if not canon then return "" end
+    cachedPlayerFullName = canon
+    return canon
+end
+
+-- Forever : Prenom Nom uniquement. Un token unique ou un Nom-Royaume Retail est refuse.
 function Overlord.Sync:IsValidPlayerName(name)
+    return self:IsForeverCharacterName(name)
+end
+
+-- Forever : identite personnage = Prenom Nom (un seul espace).
+-- Un -Royaume eventuel (API) est ignore, il ne fait pas partie de l'identite.
+function Overlord.Sync:IsForeverCharacterName(name)
     if type(name) ~= "string" then return false end
-    if name == "" or name == "?" or #name > 80 then return false end
-    if name ~= (name:match("^%s*(.-)%s*$") or "") or name:find("%s") then return false end
+    name = self:NormalizeContributorFullName(name) or name
+    if type(name) ~= "string" or name == "" or #name > 80 then return false end
+    if name ~= (name:match("^%s*(.-)%s*$") or "") then return false end
     if name:find("[%c|:]") then return false end
     local hyphen = name:find("-", 1, true)
     if hyphen and (hyphen == 1 or hyphen == #name
         or name:find("-", hyphen + 1, true)) then return false end
     local base = hyphen and name:sub(1, hyphen - 1) or name
-    local realm = hyphen and name:sub(hyphen + 1) or nil
-    if not self:IsValidPlayerNameSegment(base, 48, false)
-        or (realm and not self:IsValidPlayerNameSegment(realm, 64, true)) then return false end
-    local lower = base:lower()
+    base = (base:match("^%s*(.-)%s*$") or ""):gsub("%s+", " ")
+    local given, family = base:match("^([^%s]+)%s([^%s]+)$")
+    if not given or not family then return false end
+    if not self:IsValidPlayerNameSegment(given, 24, false)
+        or not self:IsValidPlayerNameSegment(family, 24, false) then
+        return false
+    end
+    local lower = given:lower()
     if lower == "unknown" or lower == "inconnu" or lower == "unbekannt"
        or lower == "desconocido" or lower == "desconhecido" then
         return false
@@ -1098,32 +1127,18 @@ function Overlord.Sync:IsValidWhisperTarget(target)
     target = target:match("^%s*(.-)%s*$") or ""
     if target == "" or #target < 2 or #target > 50 then return false end
     if not self:IsValidPlayerName(target) then return false end
-    local base = target:match("^([^%-]+)") or target
-    if not base:match("^[%a]") then return false end
     if target:find("[%(%)%[%]{}|:<>=\"`~!@#$%%^&*]", 1) then return false end
     return true
 end
 
--- Nom-Royaume requis pour les contributions distantes (evite fusion Nom + realm local implicite).
-function Overlord.Sync:ContributorNameHasRealm(name)
-    if type(name) ~= "string" or name == "" then return false end
-    name = self:NormalizeContributorFullName(name)
-    if not name then return false end
-    local hyphen = name:find("-", 1, true)
-    if not hyphen then return false end
-    local realm = name:sub(hyphen + 1):match("^%s*(.-)%s*$") or ""
-    return realm ~= ""
+-- Identite complete Forever : Prenom Nom.
+function Overlord.Sync:HasCompleteContributorIdentity(name)
+    return self:CanonicalForeverName(name) ~= nil
 end
 
--- Accepte un nom sync distant : Nom-Royaume, ou nom court uniquement pour le perso local.
+-- Accepte un nom sync distant uniquement s'il est un Prenom Nom Forever.
 function Overlord.Sync:AcceptSyncedContributorName(name)
-    if not self:IsValidPlayerName(name) then return false end
-    if self:ContributorNameHasRealm(name) then return true end
-    local me = self:GetPlayerFullName()
-    if not me or me == "" then return false end
-    local base = (name:match("^([^%-]+)") or name):lower()
-    local myBase = (me:match("^([^%-]+)") or me):lower()
-    return base ~= "" and base == myBase
+    return self:HasCompleteContributorIdentity(name)
 end
 
 -- Lookup strictement O(1). Ne jamais appeler ici EnsureDedupMetaIndex ni les
@@ -1275,50 +1290,11 @@ function Overlord.Sync:NormalizeContributorFullName(name)
     return name
 end
 
--- Cle stable pour dedupliquer un joueur entre le payload reseau et le scan local
--- (ex. "Tromyr" vs "Tromyr-Royaume" = meme personne sur ce client -> un seul point).
+-- Cle stable Forever : "prenom nom". Jamais de -Royaume.
 function Overlord.Sync:GetCaptureContributorDedupKey(name)
-    if not name or name == "" then return nil end
-    name = self:NormalizeContributorFullName(name)
-    if not name or name == "" then return nil end
-    local hyphen = name:find("-", 1, true)
-    local base, realm
-    if hyphen then
-        base = name:sub(1, hyphen - 1)
-        realm = name:sub(hyphen + 1)
-    else
-        base = name
-        realm = nil
-    end
-    -- Perso local : cle identique a GetPlayerFullName() des que le nom court matche,
-    -- sinon LC / "C" credites sous "Nom" et ForceUpdate sous "Nom-Royaume" = deux lignes.
-    -- WoW 12.0.5 : SafeUnitName gere les secret values
-    do
-        local me = Overlord:SafeUnitName("player")
-        if me and base and base:lower() == me:lower() and (not realm or realm == "") then
-            local myFull = self:GetPlayerFullName()
-            if myFull and myFull ~= "" then
-                local h2 = myFull:find("-", 1, true)
-                if h2 then
-                    local br = myFull:sub(1, h2 - 1):match("^%s*(.-)%s*$") or ""
-                    local rr = (myFull:sub(h2 + 1) or ""):gsub("%s", "")
-                    if br ~= "" and rr ~= "" and br:lower() == base:lower() then
-                        return (br .. "-" .. rr):lower()
-                    end
-                end
-            end
-        end
-    end
-    -- WoW 12.0.5 : SafeGetRealmName gere les secret values
-    local localRealm = Overlord:SafeGetRealmName()
-    if (not realm or realm == "") and localRealm ~= "" then
-        realm = localRealm
-    end
-    if realm and realm ~= "" then
-        realm = realm:gsub("%s", "")
-        return (base .. "-" .. realm):lower()
-    end
-    return (base or ""):lower()
+    local canon = self:CanonicalForeverName(name)
+    if not canon then return nil end
+    return canon:lower()
 end
 
 -- True si l'expediteur addon designe le joueur local (formats Nom vs Nom-Royaume du canal).
@@ -1333,19 +1309,18 @@ function Overlord.Sync:IsSenderLocalPlayer(sender)
     end
     local sk = self:GetCaptureContributorDedupKey(sender)
     local mk = self:GetCaptureContributorDedupKey(myFullName)
-    return sk ~= nil and mk ~= nil and Overlord:SafeStringEquals(sk, mk)
+    if sk ~= nil and mk ~= nil and Overlord:SafeStringEquals(sk, mk) then
+        return true
+    end
+    return self.ForeverIdentitiesMatch and self:ForeverIdentitiesMatch(sender, myFullName)
+        or false
 end
 
--- Retourne notre band (realm_faction) pour le routage bridge
--- WoW 12.0.5 : SafeGetRealmName gere les secret values
+-- Forever : un seul monde, pas de royaume. Band = faction pour le routage BNet.
 function Overlord.Sync:GetMyBand()
-    local realm = Overlord:SafeGetRealmName()
-    if not realm or realm == "" then
-        realm = "Unknown"
-    end
     local faction = Overlord.PlayerFaction or ""
     local fc = (faction == "Horde") and "H" or "A"
-    return realm .. "_" .. fc
+    return "Forever_" .. Overlord.RealmPools:GetOverlordPoolTag() .. "_" .. fc
 end
 
 -- Verifie si on a un lien BNet direct vers la faction adverse (amis BNet de l'autre faction)
@@ -1384,35 +1359,19 @@ local COMMUNITY_INVITES = {
     us = {},
 }
 
--- Retourne la region du joueur : "us" ou "eu".
--- GetCurrentRegion() : 1=US, 2=KR, 3=EU, 4=TW, 5=CN
+-- Retourne la region du joueur : "us" (NA) ou "eu". Forever realmless, jamais nil.
 local function GetPlayerRegion()
-    if not GetCurrentRegion then return nil end
-    local region = GetCurrentRegion()
-    if region == 1 then return "us" end
-    if region == 3 then return "eu" end
-    return nil
-end
-
--- Pools FR/DE : voir RealmPools.lua (source unique des listes de royaumes).
-
-local function GetLocalRealmKeyForCommunity()
     local rp = Overlord.RealmPools
-    if rp and rp.GetPlayerRealmKey then
-        return rp:GetPlayerRealmKey()
+    if rp and rp.GetOverlordPoolTag then
+        return rp:GetOverlordPoolTag() or "eu"
     end
-    if Overlord.SafeGetRealmName then
-        local r = Overlord:SafeGetRealmName()
-        if r and r ~= "" then return r end
-    end
-    return ""
+    if GetCurrentRegion and GetCurrentRegion() == 1 then return "us" end
+    return "eu"
 end
 
--- Royaumes RP EU : RealmPools.lua (RealmPools.RP ; FR_RP / DE_RP fusionnes dans pools FR / DE).
-
+-- Compatibilite des appels historiques : Forever ne classe pas les royaumes RP.
 function Overlord.Sync:IsRPRealm()
-    local rp = Overlord.RealmPools
-    return rp and rp.IsRPRealm and rp:IsRPRealm(GetLocalRealmKeyForCommunity())
+    return false
 end
 
 -- Horodatage du dernier envoi RG (au moins un whisper) : auto-accept groupe cote demandeur RP.
@@ -1694,7 +1653,8 @@ function Overlord.Sync:FindCommunityClub(forceRefresh, preserveCacheOnMiss)
     end
     lastCommunitySearch = now
 
-    -- Noms explicites : "Overlord US", "Overlord US 2", "Overlord EU", etc.
+    -- Forever : club personnage dont le nom contient "overlord"
+    -- (ex. "Overlord Forever EU", "Overlord test" en beta).
     -- Tous les clubs du pool (shards) : roster fusionne dans SyncAux pour la sync whisper.
     local wantTag = GetCommunityPoolTag()
     if not wantTag then
@@ -1704,13 +1664,11 @@ function Overlord.Sync:FindCommunityClub(forceRefresh, preserveCacheOnMiss)
     local matchedClubIds = {}
     local subscribedEuropeanClubIds = {}
     for _, info in ipairs(clubInfos) do
-        if info.name:find("overlord") and info.name:find("forever")
-            and info.name:find(wantTag) then
+        if info.name:find("overlord", 1, true) then
             matchedClubIds[#matchedClubIds + 1] = info.id
         end
         local words = " " .. info.name:gsub("[^%w]+", " ") .. " "
-        if GetPlayerRegion() == "eu" and info.name:find("overlord")
-            and info.name:find("forever")
+        if GetPlayerRegion() == "eu" and info.name:find("overlord", 1, true)
             and (words:find(" fr ", 1, true) or words:find(" de ", 1, true)
                 or words:find(" eu ", 1, true)) then
             subscribedEuropeanClubIds[#subscribedEuropeanClubIds + 1] = info.id
@@ -2223,10 +2181,9 @@ local function ResolveBNetGameplaySender(sync, gameAccountID)
         or (info.clientProgram and info.clientProgram ~= "WoW")
         or (info.wowProjectID and info.wowProjectID ~= WOW_PROJECT_ID)
         or info.isInCurrentRegion == false then return nil end
-    local realm = info.realmName or info.realmDisplayName
-    if realm and realm ~= "" then realm = realm:gsub("%s", "") end
-    local fullName = realm and realm ~= ""
-        and (info.characterName .. "-" .. realm) or info.characterName
+    local fullName = sync.CanonicalForeverName
+        and sync:CanonicalForeverName(info.characterName) or nil
+    if not fullName then return nil end
     local key = sync.GetCaptureContributorDedupKey
         and sync:GetCaptureContributorDedupKey(fullName) or nil
     local faction = info.factionName
@@ -2744,7 +2701,8 @@ function Overlord.Sync:OnReceiveR1(sender, payload)
     local targetBand, replyTo, rest = strsplit(":", payload, 3)
     if not targetBand or not replyTo or not rest then return end
     if #targetBand > 80 or targetBand:find(":", 1, true) or not targetBand:match("_[AH]$") then return end
-    if #replyTo < 2 or #replyTo > 50 or replyTo:find(":", 1, true) or not replyTo:find("-", 1, true) then return end
+    if #replyTo < 2 or #replyTo > 50 or replyTo:find(":", 1, true)
+        or not self:HasCompleteContributorIdentity(replyTo) then return end
     -- replyTo n'est pas libre : il doit etre l'identite WoW portee par le message addon direct.
     if not self.CaptureContributorMatchesSender
         or not self:CaptureContributorMatchesSender(replyTo, sender) then return end
@@ -4774,7 +4732,7 @@ end
 -- Appele quand on recoit R2 (relais) : on envoie la reponse en whisper a replyTo
 function Overlord.Sync:OnSyncRequestRelayed(replyTo, payload)
     if not replyTo or replyTo == "" or #replyTo > 50 then return end
-    if not replyTo:find("%-") then return end
+    if not self:HasCompleteContributorIdentity(replyTo) then return end
     self:OnSyncRequest(replyTo, payload or "", "WHISPER", replyTo)
 end
 
@@ -5291,7 +5249,9 @@ local function GetGroupMemberNames()
     for i = 1, count do
         local unit = prefix .. i
         if UnitExists(unit) then
-            local full = Overlord:SafeGetUnitName(unit, true)
+            local raw = Overlord:SafeGetUnitName(unit, true)
+            local full = Overlord.Sync.CanonicalForeverName
+                and Overlord.Sync:CanonicalForeverName(raw) or nil
             if full and full ~= "" then
                 local faction = UnitFactionGroup(unit)
                 cachedGroupNames[full] = faction or true
@@ -5342,7 +5302,9 @@ function Overlord.Sync:ResolveDirectGroupTerritorialPool(remotePool, sender, sou
     local function normalize(pool)
         if type(pool) ~= "string" then return "" end
         pool = pool:lower():match("^%s*([a-z]+)%s*$") or ""
-        if pool == "fr" or pool == "de" or pool == "eu" or pool == "us" then
+        if pool == "na" then pool = "us" end
+        if pool == "fr" or pool == "de" then pool = "eu" end
+        if pool == "eu" or pool == "us" then
             return pool
         end
         return ""
@@ -5505,9 +5467,7 @@ function Overlord.Sync:GetCaptureNetworkWitnessTopCandidates(seed, originName)
     local top, seen = {}, {}
     local function consider(name)
         if type(name) ~= "string" or name == ""
-            -- Un nom distant court serait complete avec le realm local du
-            -- receveur et produirait une autre identite. Echec ferme.
-            or not name:find("-", 1, true)
+            or not self:HasCompleteContributorIdentity(name)
             or not self.IsValidWhisperTarget or not self:IsValidWhisperTarget(name) then return end
         local key = self:GetCaptureNetworkWitnessIdentityKey(name)
         if not key or key == originKey or seen[key] then return end
@@ -5844,8 +5804,10 @@ function Overlord.Sync:OnReceiveCaptureNetworkRouteCommit(payload, sender, sourc
         or slot < 1 or slot > 3 or size < 2 or size > 3 or slot > size
         or not baseline or baseline < 0 or baseline ~= math.floor(baseline)
         or baseline + 1 >= ceiling
-        or type(predecessorName) ~= "string" or not predecessorName:find("-", 1, true)
-        or type(successorName) ~= "string" or not successorName:find("-", 1, true)
+        or type(predecessorName) ~= "string"
+        or not self:HasCompleteContributorIdentity(predecessorName)
+        or type(successorName) ~= "string"
+        or not self:HasCompleteContributorIdentity(successorName)
         or not self:IsValidWhisperTarget(predecessorName)
         or not self:IsValidWhisperTarget(successorName) then return end
     local originKey = self:GetCaptureNetworkWitnessIdentityKey(sender)
@@ -6015,7 +5977,7 @@ function Overlord.Sync:RestoreCaptureNetworkWitnessRouteFromSaved(
     if not seed then return nil end
     local targets, keys, seen = {}, {}, {}
     for name in saved.captureNetworkWitnessTargets:gmatch("[^,]+") do
-        if #targets >= 3 or not name:find("-", 1, true)
+        if #targets >= 3 or not self:HasCompleteContributorIdentity(name)
             or not self:IsValidWhisperTarget(name) then return nil end
         local key = self:GetCaptureNetworkWitnessIdentityKey(name)
         if not key or key == self:GetCaptureNetworkWitnessIdentityKey(originName)
@@ -8553,7 +8515,7 @@ function Overlord.Sync:MaybeBroadcastObservedLeaderboardRace(
     playerName = self.NormalizeContributorFullName
         and self:NormalizeContributorFullName(playerName) or playerName
     if not playerName or playerName == "" then return false end
-    if not self:ContributorNameHasRealm(playerName)
+    if not self:HasCompleteContributorIdentity(playerName)
         and not (Overlord.Leaderboard and Overlord.Leaderboard.IsLocalDisplayName
             and Overlord.Leaderboard:IsLocalDisplayName(playerName)) then
         return false
@@ -9527,21 +9489,19 @@ local function CollectRaidSyncWhisperTargets(maxCount)
     local inRaid = IsInRaid()
     local prefix = inRaid and "raid" or "party"
     local count = inRaid and GetNumGroupMembers() or 4
-    local realm = Overlord:SafeGetRealmName() or ""
     local leaders, others = {}, {}
     local roster = {}
     local selfIndex = nil
+    local sync = Overlord.Sync
 
     for i = 1, count do
         local unit = prefix .. i
         if UnitExists(unit) then
-            local name, unitRealm = Overlord:SafeUnitName(unit)
-            if name and name ~= "" then
-                local full = (unitRealm and unitRealm ~= "") and (name .. "-" .. unitRealm)
-                    or (name .. "-" .. realm)
-                local isSelf = UnitIsUnit(unit, "player")
+            local full = sync and sync.CanonicalForeverNameFromUnit
+                and sync:CanonicalForeverNameFromUnit(unit) or nil
+            if full and full ~= "" then
                 roster[#roster + 1] = full
-                if isSelf then
+                if UnitIsUnit(unit, "player") then
                     selfIndex = #roster
                 elseif UnitIsGroupLeader(unit) then
                     leaders[#leaders + 1] = full
@@ -9769,7 +9729,8 @@ function Overlord.Sync:OnNameplateAdded(unit)
     lastProximitySR:Prune(now, 8)
     local isLarge = Overlord.Sync:IsLargeEvent()
     -- WoW 12.0.5 : SafeGetUnitName gere les secret values
-    local fullName = Overlord:SafeGetUnitName(unit, true)
+    local rawName = Overlord:SafeGetUnitName(unit, true)
+    local fullName = self:CanonicalForeverName(rawName)
     if not fullName or fullName == "" then return end
     -- Classe : tout joueur en nameplate est une unite valide - imperative pour le classement.
     local _, plateClass = UnitClass(unit)

@@ -1747,12 +1747,8 @@ RenderKillRows = function(force)
             PrepareVirtualRow(row, dataIndex, KILL_ROW_HEIGHT, P)
             local class, faction, raceFile, raceSex = CachedMeta(metaCache, entry.name)
             local nameStr = (type(entry.name) == "string") and entry.name or tostring(entry.name or "")
-            local shortName = nameStr:match("^(.-)%-") or nameStr
-            local realmSuffix = nameStr:match("^.-%-(.+)$")
-            local duplicateCount = duplicateShortNames[shortName:lower()] or 0
-            if realmSuffix and duplicateCount > 1 then
-                shortName = shortName .. "-" .. realmSuffix
-            end
+            local shortName = (Overlord.Sync and Overlord.Sync.CanonicalForeverName
+                and Overlord.Sync:CanonicalForeverName(nameStr)) or nameStr
             local locTag = localeCache[entry.name]
             if locTag and locTag ~= "" then shortName = shortName .. " (" .. locTag .. ")" end
             local bountyActive = (Overlord.Bounty and Overlord.Bounty.IsActiveBountyForName
@@ -1967,7 +1963,8 @@ RenderCaptureRows = function(faction, force)
             used = slot
             PrepareVirtualRow(row, dataIndex, CAPTURE_ROW_HEIGHT, P)
             local nameStr = tostring(entry.name or "")
-            local shortName = nameStr:match("^(.-)%-") or nameStr
+            local shortName = (Overlord.Sync and Overlord.Sync.CanonicalForeverName
+                and Overlord.Sync:CanonicalForeverName(nameStr)) or nameStr
             local locTag = localeCache[entry.name]
             local localeLabel = (locTag and locTag ~= "") and ("(" .. locTag .. ")") or ""
             local metaClass, _, raceFile, raceSex = CachedMeta(metaCache, entry.name)

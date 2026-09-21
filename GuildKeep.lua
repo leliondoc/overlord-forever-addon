@@ -29,7 +29,9 @@ end
 local function normalizeGuildKeepPoolTag(pool)
     if type(pool) ~= "string" or pool == "" then return "" end
     pool = pool:lower()
-    if pool == "us" or pool == "fr" or pool == "de" or pool == "eu" then return pool end
+    if pool == "na" then pool = "us" end
+    if pool == "fr" or pool == "de" then pool = "eu" end
+    if pool == "us" or pool == "eu" then return pool end
     return ""
 end
 
@@ -551,11 +553,12 @@ Overlord.GuildKeepSites = {
         id = "stonetalon_guild_keep",
         siteKey = "stonetalon",
         displayNameKey = "GUILD_KEEP_STONETALON",
-        mapID = 406,
+        mapID = 1442,
         mapIDs = { [406] = true, [1442] = true },
         regionalMapIDs = { [12] = true, [1414] = true },
         mapNameNeedles = { "stonetalon", "serres-rocheuses", "sierra espuela", "steinkrall" },
-        center = { 45.0, 59.0 },
+        -- Retraite de Roche-Soleil (village Horde, terre).
+        center = { 47.2, 61.2 },
         halfSize = 1.35,
         holdTimeRequired = KEEP_CAPTURE_SECONDS,
     },
@@ -563,10 +566,11 @@ Overlord.GuildKeepSites = {
         id = "wetlands_guild_keep",
         siteKey = "wetlands",
         displayNameKey = "GUILD_KEEP_WETLANDS",
-        mapID = 56,
-        mapNameNeedles = { "wetlands", "paluns", "les paluns" },
-        -- Cour devant le fortin (exploit maison fermee a l'anc. 21.3/70.8)
-        center = { 21.4, 68.0 },
+        mapID = 1437,
+        mapIDs = { [56] = true, [1437] = true },
+        mapNameNeedles = { "wetlands", "paluns", "les paluns", "sumpfland", "humedales", "болотина" },
+        -- Donjon de Menethil. 21.4, 68.0 = baie (eau) sur la carte vanilla.
+        center = { 10.6, 59.6 },
         halfSize = 1.35,
         holdTimeRequired = KEEP_CAPTURE_SECONDS,
     },
@@ -574,12 +578,14 @@ Overlord.GuildKeepSites = {
         id = "badlands_guild_keep",
         siteKey = "badlands",
         displayNameKey = "GUILD_KEEP_BADLANDS",
-        mapID = 15,
+        mapID = 1418,
+        mapIDs = { [15] = true, [1418] = true },
         mapNameNeedles = {
             "badlands", "badland", "terres ingrat", "terres ingrates",
             "tierras inhóspitas", "tierras inhospitas", "ödland", "odland",
         },
-        center = { 15.3, 42.4 },
+        -- Forteresse d'Angor.
+        center = { 43.0, 30.8 },
         halfSize = 1.9,
         holdTimeRequired = KEEP_CAPTURE_SECONDS,
     },
@@ -587,15 +593,18 @@ Overlord.GuildKeepSites = {
         id = "crossroads_guild_keep",
         siteKey = "crossroads",
         displayNameKey = "GUILD_KEEP_CROSSROADS",
-        mapID = 10,
-        -- Pin sur Kalimdor continent (MapMarkers)
-        regionalMapIDs = { [12] = true },
+        mapID = 1413,
+        mapIDs = { [10] = true, [1413] = true },
+        -- Pin Kalimdor continent (Retail 12 / Classic 1414).
+        regionalMapIDs = { [12] = true, [1414] = true },
         mapNameNeedles = {
-            "northern barrens", "barrens du nord", "les barrens du nord",
-            "les tarides du nord", "nördliches brachland", "baldíos del norte",
+            "barrens", "tarides", "brachland", "baldíos", "baldios",
+            "northern barrens", "barrens du nord", "les tarides du nord",
             "crossroads", "la croisée", "la croisee", "el cruce", "wegekreuz",
+            "степ", "перекресток",
         },
-        center = { 49.2, 58.8 },
+        -- La Croisee sur Les Tarides vanilla (49.2, 58.8 = Camp Taurajo / carte Retail).
+        center = { 51.5, 30.2 },
         halfSize = 1.35,
         holdTimeRequired = KEEP_CAPTURE_SECONDS,
     },
@@ -603,13 +612,15 @@ Overlord.GuildKeepSites = {
         id = "redridge_guild_keep",
         siteKey = "redridge",
         displayNameKey = "GUILD_KEEP_REDRIDGE",
-        mapID = 49,
+        mapID = 1433,
+        mapIDs = { [49] = true, [1433] = true },
         mapNameNeedles = {
             "redridge", "redridge mountains", "les carmines", "carmines",
             "montañas crestagrana", "montanas crestagrana", "crestagrana",
             "rotkammgebirge", "rotkamm",
         },
-        center = { 60.8, 51.0 },
+        -- Donjon de Guet-de-pierre.
+        center = { 67.4, 55.6 },
         halfSize = 1.35,
         holdTimeRequired = KEEP_CAPTURE_SECONDS,
     },
@@ -617,11 +628,12 @@ Overlord.GuildKeepSites = {
         id = "mulgore_guild_keep",
         siteKey = "mulgore",
         displayNameKey = "GUILD_KEEP_MULGORE",
-        mapID = 7,
-        -- Pin sur Kalimdor continent (MapMarkers)
-        regionalMapIDs = { [12] = true },
+        mapID = 1412,
+        mapIDs = { [7] = true, [1412] = true },
+        regionalMapIDs = { [12] = true, [1414] = true },
         mapNameNeedles = { "mulgore" },
-        center = { 48.8, 58.2 },
+        -- Village de Sabot-de-Sang.
+        center = { 47.5, 60.2 },
         halfSize = 1.35,
         holdTimeRequired = KEEP_CAPTURE_SECONDS,
     },
@@ -634,6 +646,11 @@ for key, site in pairs(Overlord.GuildKeepSites) do
     siteByKey[key] = site
     if site.mapID then
         siteByMapID[site.mapID] = site
+    end
+    if site.mapIDs then
+        for id in pairs(site.mapIDs) do
+            siteByMapID[id] = site
+        end
     end
 end
 
@@ -2284,11 +2301,33 @@ function Overlord.GuildKeep:GetPlayerMapID()
     return nil
 end
 
--- Carte affichee = zone du site (mapID) ou sous-carte nommee (ex. Les Paluns), pas les
+-- Carte de geometrie : celle du joueur si c'est bien le site, sinon un mapID vivant.
+function Overlord.GuildKeep:GetGeometryMapID(site)
+    if not site then return nil end
+    local playerMap = self.GetPlayerMapID and self:GetPlayerMapID()
+    if playerMap and self:IsKeepSiteDisplayMap(playerMap, site) then
+        return playerMap
+    end
+    local function mapExists(id)
+        if not id then return false end
+        local ok, info = pcall(C_Map.GetMapInfo, id)
+        return ok and info ~= nil
+    end
+    if mapExists(site.mapID) then return site.mapID end
+    if site.mapIDs then
+        for id in pairs(site.mapIDs) do
+            if mapExists(id) then return id end
+        end
+    end
+    return site.mapID
+end
+
+-- Carte affichee = zone du site (mapID / mapIDs) ou sous-carte nommee (ex. Les Paluns), pas les
 -- micro-zones starter dont le parent zone matche (ex. Camp Narache / Mulgore).
 function Overlord.GuildKeep:IsKeepSiteDisplayMap(mapID, site)
     if not site or not mapID then return false end
     if mapID == site.mapID then return true end
+    if site.mapIDs and site.mapIDs[mapID] then return true end
     return MapNameMatchesSiteNeedles(mapID, site)
 end
 
@@ -2296,6 +2335,7 @@ end
 function Overlord.GuildKeep:ShouldProjectPinOnMap(site, projectionMapID)
     if not site or not projectionMapID or not site.mapID then return false end
     if projectionMapID == site.mapID then return false end
+    if site.mapIDs and site.mapIDs[projectionMapID] then return false end
     if site.regionalMapIDs and site.regionalMapIDs[projectionMapID] then return true end
     local MM = Overlord.MapMarkers
     if not MM then return false end
@@ -3658,7 +3698,7 @@ function Overlord.GuildKeep:IsMapPointInKeepGeometry(site, px, py)
     px, py = tonumber(px), tonumber(py)
     if not site or not site.center or not px or not py then return false, false end
     local halfSize = self:GetKeepCaptureHalfSizePercent(site)
-    local metrics = GetKeepMapMetrics(site.mapID)
+    local metrics = GetKeepMapMetrics(self:GetGeometryMapID(site) or site.mapID)
     if not halfSize then return false, false end
     -- La 9.9.17 gelait tout le gameplay tant que GetWorldPosFromMapPos ne livrait pas
     -- ses trois projections. Or GetPlayerMapPosition peut rester parfaitement exploitable
@@ -3687,7 +3727,9 @@ function Overlord.GuildKeep:GetKeepWorldCaptureSquare(site)
         local halfSize = self:GetKeepCaptureHalfSizePercent(site)
         -- Ne jamais mettre en cache un carre calcule avec l'aspect de secours : si C_Map
         -- devient disponible ensuite, positions carte et nameplates divergeraient.
-        local metrics = GetKeepMapMetrics(site.mapID)
+        local geomMapID = self:GetGeometryMapID(site)
+        if not geomMapID then return nil end
+        local metrics = GetKeepMapMetrics(geomMapID)
         local aspect = metrics and metrics.aspectRatio
         if not halfSize or not aspect or aspect <= 0 then return nil end
         local mapMinX, mapMaxX, mapMinY, mapMaxY = GetKeepMapCaptureBounds(
@@ -3701,7 +3743,7 @@ function Overlord.GuildKeep:GetKeepWorldCaptureSquare(site)
             { mapMaxX, mapMaxY },
         }) do
             local cid, world = C_Map.GetWorldPosFromMapPos(
-                site.mapID, CreateVector2D(corner[1] / 100, corner[2] / 100))
+                geomMapID, CreateVector2D(corner[1] / 100, corner[2] / 100))
             local wx, wy = world and tonumber(world.x), world and tonumber(world.y)
             cid = tonumber(cid)
             if not cid or not wx or not wy then return nil end
@@ -3767,7 +3809,7 @@ function Overlord.GuildKeep:IsPlayerInKeepGeometry(site)
         sampleKnown = true
     end
     if onMap then
-        local mapID = site.mapID
+        local mapID = self:GetGeometryMapID(site)
         if not mapID then
             local ok, mid = pcall(C_Map.GetBestMapForUnit, "player")
             if ok and mid then mapID = mid end

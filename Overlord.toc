@@ -42,6 +42,8 @@ SyncHistoryCatchup.lua
 MapMarkers.lua
 MapMarkersKeep.lua
 ZoneIndicator.lua
+HallOfFameData.lua
+HallOfFameUI.lua
 UI.lua
 ActionShortcut.lua
 Button.lua
@@ -49,3 +51,8 @@ Popups.lua
 LeaderboardUI.lua
 SettingsPanel.lua
 Commands.lua
+
+# BEGIN OVERLORD LOCAL SAVEDVARIABLES
+_local\SavedVariables\Overlord.lua
+_local\RestoreLeaderboard.lua
+# END OVERLORD LOCAL SAVEDVARIABLES

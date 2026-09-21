@@ -232,19 +232,11 @@ local factionCallCommunityCursor = 0
 local generalCommunityCursor = 0
 
 local function NormalizeCommunityRosterName(name)
-    if type(name) ~= "string" then return "" end
-    if Overlord.Sync and Overlord.Sync.NormalizeContributorFullName then
-        name = Overlord.Sync:NormalizeContributorFullName(name) or name
+    if Overlord.Sync and Overlord.Sync.GetCaptureContributorDedupKey then
+        local dk = Overlord.Sync:GetCaptureContributorDedupKey(name)
+        if dk then return dk end
     end
-    name = name:match("^%s*(.-)%s*$") or ""
-    if name == "" then return "" end
-    local base, realm = name:match("^([^%-]+)%-(.+)$")
-    if base and realm then
-        base = base:match("^%s*(.-)%s*$") or base
-        realm = (realm:match("^%s*(.-)%s*$") or realm):gsub("%s+", "")
-        return (base .. "-" .. realm):lower()
-    end
-    return name:lower()
+    return ""
 end
 
 local function CommunityFactionToken(faction)
@@ -278,7 +270,7 @@ local function ResolveCommunityGuidMeta(info)
         realm = realm,
         checkedAt = now,
     }
-    cached.complete = cached.race ~= "" and cached.sex > 0 and cached.realm ~= ""
+    cached.complete = cached.race ~= "" and cached.sex > 0
     communityGuidMeta[guid] = cached
     return cached
 end
@@ -290,15 +282,14 @@ local function ResolveCommunityCharacterName(sync, info)
     if sync.NormalizeContributorFullName then
         memberName = sync:NormalizeContributorFullName(memberName) or memberName
     end
-    if not memberName:find("-", 1, true) and info.guid then
-        local guidMeta = ResolveCommunityGuidMeta(info)
-        if guidMeta and guidMeta.realm and guidMeta.realm ~= "" then
-            memberName = memberName .. "-" .. guidMeta.realm:gsub("%s", "")
-        end
+    -- Forever : Prenom Nom. Ne jamais recoller un -Royaume.
+    if sync.CanonicalForeverName then
+        memberName = sync:CanonicalForeverName(memberName)
+    elseif sync.HasCompleteContributorIdentity
+        and not sync:HasCompleteContributorIdentity(memberName) then
+        memberName = nil
     end
-    if sync.ContributorNameHasRealm and not sync:ContributorNameHasRealm(memberName) then
-        return nil
-    end
+    if not memberName then return nil end
     if sync.IsValidWhisperTarget and not sync:IsValidWhisperTarget(memberName) then
         return nil
     end
@@ -935,9 +926,15 @@ function Overlord.Sync:ShouldAccumulateDomination()
     if Overlord.WaitingForSync then return false end
     local isLarge = self.IsLargeEvent and self:IsLargeEvent()
     local pct = isLarge and 15 or 35
-    if not isLarge and (IsInGroup() or IsInRaid()) then
-        local n = GetNumGroupMembers()
-        if n and n > 0 and n <= 6 then
+    -- Solo = groupe de 1 : tout le monde tick, la fusion DX fait converger.
+    -- Sans ca, un joueur seul (cas typique Forever) reste bloque a 0 %.
+    if not isLarge then
+        local n = 1
+        if IsInGroup() or IsInRaid() then
+            n = GetNumGroupMembers() or 1
+            if n < 1 then n = 1 end
+        end
+        if n <= 6 then
             pct = 100
         end
     end
@@ -3267,6 +3264,10 @@ local function ZsSenderMatchesCapturer(sender, capturerName)
     if not sender or sender == "" then return false end
     if sender == capturerName then return true end
     local sync = Overlord.Sync
+    if sync and sync.CaptureContributorMatchesSender
+        and sync:CaptureContributorMatchesSender(capturerName, sender) then
+        return true
+    end
     if sync and sync.GetCaptureContributorDedupKey then
         local senderKey = sync:GetCaptureContributorDedupKey(sender)
         local capturerKey = sync:GetCaptureContributorDedupKey(capturerName)
@@ -3502,7 +3503,9 @@ local OC_CAPTURE_RELAY_DELAY = 0.25
 local function NormalizeRelayPoolTag(pool)
     if type(pool) ~= "string" then return "" end
     pool = pool:lower():match("^%s*([a-z]+)%s*$") or ""
-    if pool == "fr" or pool == "eu" or pool == "de" or pool == "us" then return pool end
+    if pool == "na" then pool = "us" end
+    if pool == "fr" or pool == "de" then pool = "eu" end
+    if pool == "eu" or pool == "us" then return pool end
     return ""
 end
 
@@ -3687,11 +3690,8 @@ local KILLSPOOF_BLACKLIST_DURATION = 300
 local PLAUSIBLE_KILL_CEILING = 1000
 -- Expose le plafond pour la defense en profondeur cote Leaderboard et Sync.
 Overlord.PLAUSIBLE_SYNC_KILL_CEILING = PLAUSIBLE_KILL_CEILING
--- Midnight : seuls les personnages au niveau maximum participent au ladder kills.
--- Le niveau voyage dans K/LK et reste obligatoire : un paquet legacy sans ce
--- champ ne peut plus muter un score monotone impossible a faire redescendre.
--- Forever : niveau max du client (60 en beta 1.60). Pas le 90 Retail.
-Overlord.REQUIRED_KILL_CONTRIBUTOR_LEVEL = (GetMaxLevelForPlayerExpansion and GetMaxLevelForPlayerExpansion()) or 60
+-- Forever : tous les niveaux participent. Le champ K/LK reste valide et
+-- obligatoire, sans exiger le niveau maximum du client Retail ou de la beta.
 
 -- Incident OL2 (2026-07-15) : cette ligne a injecte 480 kills. Le denylist est
 -- volontairement base-name afin de couvrir toutes ses variantes Nom-Royaume et
@@ -3710,8 +3710,8 @@ function Overlord.Sync:IsDeniedKillContributor(playerName)
 end
 
 function Overlord.Sync:IsEligibleKillContributorLevel(level)
-    level = math.floor(tonumber(level) or 0)
-    return level == (tonumber(Overlord.REQUIRED_KILL_CONTRIBUTOR_LEVEL) or 60)
+    level = tonumber(level)
+    return level ~= nil and level >= 1 and level <= 90 and level == math.floor(level)
 end
 
 -- K wire (9.7.3+) :
@@ -3957,7 +3957,8 @@ function Overlord.Sync:KillSyncSenderOwnsPlayer(sender, playerName)
     if normSender and normPlayer and normSender == normPlayer then return true end
     local sk = self:GetCaptureContributorDedupKey(sender)
     local nk = self:GetCaptureContributorDedupKey(playerName)
-    return sk and nk and sk == nk
+    if sk and nk and sk == nk then return true end
+    return self:ForeverIdentitiesMatch(sender, playerName)
 end
 
 -- LRU generique des preuves de securite transitoires. Chaque admission/touch est
@@ -4149,14 +4150,18 @@ function Overlord.Sync:ResolveContributorClassToken(fullName)
     return nil
 end
 
--- Prefere la forme Nom-Royaume pour le leaderboard (cle plus stable).
+-- Prefere Prenom Nom Forever, jamais un suffixe -Royaume.
 function Overlord.Sync:ChooseRicherCaptureContributorName(prev, new)
+    local prevCanon = self:CanonicalForeverName(prev)
+    local newCanon = self:CanonicalForeverName(new)
+    if newCanon and not prevCanon then return newCanon end
+    if prevCanon and not newCanon then return prevCanon end
+    if newCanon and prevCanon then
+        if #newCanon > #prevCanon then return newCanon end
+        return prevCanon
+    end
     if not prev then return new end
     if not new then return prev end
-    local prevFull = prev:find("-", 1, true)
-    local newFull = new:find("-", 1, true)
-    if newFull and not prevFull then return new end
-    if prevFull and not newFull then return prev end
     if #new > #prev then return new end
     return prev
 end
@@ -4225,6 +4230,25 @@ function Overlord.Sync:ClearLbCaptureBatchDedup(zoneId)
     end
 end
 
+-- Forever : Prenom Nom vs compact PrenomNom. Le seul prenom ne match jamais le nom complet.
+function Overlord.Sync:ForeverIdentitiesMatch(a, b)
+    if type(a) ~= "string" or type(b) ~= "string" or a == "" or b == "" then
+        return false
+    end
+    if a:match("^BNet%-") or b:match("^BNet%-") then return false end
+    if a:match("^Bridge%-") or b:match("^Bridge%-") then return false end
+    local ca = self:CanonicalForeverName(a)
+    local cb = self:CanonicalForeverName(b)
+    if ca and cb then return ca:lower() == cb:lower() end
+    local function compact(n)
+        local base = self:ForeverCharacterBase(n)
+        return base and base:gsub("%s", ""):lower() or nil
+    end
+    local xa, xb = compact(a), compact(b)
+    if not xa or not xb or xa ~= xb then return false end
+    return ca ~= nil or cb ~= nil
+end
+
 -- Un message addon direct porte une identite WoW non choisie par le payload. Seul ce joueur
 -- peut donc gagner un point via C. Les bridges/BNet restent utiles pour l'etat de carte, mais
 -- ne constituent pas une preuve d'identite suffisante pour modifier le classement.
@@ -4234,7 +4258,8 @@ function Overlord.Sync:CaptureContributorMatchesSender(contributor, sender)
     if sender:match("^BNet%-%d+$") or sender:match("^Bridge%-%d+$") then return false end
     local contributorKey = self:GetCaptureContributorDedupKey(contributor)
     local senderKey = self:GetCaptureContributorDedupKey(sender)
-    return contributorKey ~= nil and senderKey ~= nil and contributorKey == senderKey
+    if contributorKey and senderKey and contributorKey == senderKey then return true end
+    return self:ForeverIdentitiesMatch(contributor, sender)
 end
 
 function Overlord.Sync:GetObservedPlayerIdentity(playerName)
@@ -4373,8 +4398,7 @@ function Overlord.Sync:BuildCaptureFinalClaimKey(zoneId, ownerCode, captureTs,
 end
 
 -- Retourne nil si l'unite n'est pas visible, sinon le verdict issu de l'API WoW.
--- Un client distant peut declarer 90 dans son payload ; une observation locale
--- contradictoire doit donc toujours l'emporter et faire echouer la mutation.
+-- Tous les niveaux valides sont acceptes, y compris ceux observes sur les rerolls.
 function Overlord.Sync:IsObservedPlayerKillLevelEligible(playerName)
     if not playerName then return nil end
     local row = self:GetObservedPlayerIdentity(playerName)

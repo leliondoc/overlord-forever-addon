@@ -53,6 +53,9 @@ jobs:
           mapfile -t LUA_FILES < <(find . -maxdepth 1 -type f -name '*.lua' -print | sort)
           lua5.1 tests/lua_syntax_check.lua "${LUA_FILES[@]}"
           lua5.1 tests/zone_capture_lease.test.lua
+          lua5.1 tests/forever_persistence.test.lua
+          lua5.1 tests/forever_leaderboard.test.lua
+          lua5.1 tests/forever_world_kills.test.lua
 
           mapfile -t TEST_FILES < <(find tests -maxdepth 1 -type f -name '*.test.mjs' -print | sort)
           node --test "${TEST_FILES[@]}"
@@ -66,6 +69,8 @@ jobs:
 
       - name: Preparer changelog HTML pour CurseForge
         run: |
+          # A developer's local account bridge must never ship to other players.
+          sed -i '/^# BEGIN OVERLORD LOCAL SAVEDVARIABLES$/,/^# END OVERLORD LOCAL SAVEDVARIABLES$/d' Overlord.toc
           pandoc CHANGELOG.md -f gfm -t html --wrap=none -o CHANGELOG.cf.html
           cat > .pkgmeta.ci << 'EOF'
           package-as: Overlord
@@ -82,6 +87,8 @@ jobs:
             - .pkgmeta.ci
             - .release
             - tests
+            - docs
+            - _local
           EOF
 
       - name: Package and release

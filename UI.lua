@@ -2500,8 +2500,25 @@ function Overlord.UI:CreateZoneListSection(parent)
             Overlord.ManualBountyUI:Toggle()
         end
     end)
-    end)
     zoneListFrame.mbBtn = mbBtn
+
+    -- Forever : modules absents du TOC (Export, HoF, Contrats, General).
+    local foreverUnavailable = L.FOREVER_FEATURE_UNAVAILABLE
+        or "Unavailable on Overlord Forever."
+    if self.SetWC3ButtonUnavailable then
+        if not Overlord.Export then
+            self.SetWC3ButtonUnavailable(exportBtn, foreverUnavailable)
+        end
+        if not Overlord.HallOfFameUI then
+            self.SetWC3ButtonUnavailable(hofBtn, foreverUnavailable)
+        end
+        if not Overlord.ManualBountyUI then
+            self.SetWC3ButtonUnavailable(mbBtn, foreverUnavailable)
+        end
+        if not Overlord.General then
+            self.SetWC3ButtonUnavailable(generalBtn, foreverUnavailable)
+        end
+    end
 
     if self.RefreshActionGridActiveState then
         self:RefreshActionGridActiveState()
@@ -3731,7 +3748,7 @@ function Overlord.UI:RefreshActionGridActiveState()
 
     local opts = { gold = C.gold, white = C.white }
     local function panelOpen(btn, open)
-        if not btn then return end
+        if not btn or btn._olUnavailable then return end
         local isOpen = open == true
         if btn._olFrontPickerBadge then
             if btn._olPanelOpenState ~= isOpen then

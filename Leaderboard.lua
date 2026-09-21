@@ -215,7 +215,7 @@ end
 
 local MAX_GUILD_NAME_LEN = 24
 
-local VALID_SAVED_VARS_POOLS = { us = true, fr = true, eu = true, de = true }
+local VALID_SAVED_VARS_POOLS = { us = true, eu = true }
 
 -- Tags locale sync explicitement EU (front du jour / export : eviter les fantomes cross-region).
 local EU_EXPLICIT_LOCALE_TAGS = {
@@ -227,6 +227,8 @@ local EU_EXPLICIT_LOCALE_TAGS = {
 local function normalizeSavedVarsPool(pool)
     if type(pool) ~= "string" or pool == "" then return "" end
     pool = pool:lower()
+    if pool == "na" then pool = "us" end
+    if pool == "fr" or pool == "de" then pool = "eu" end
     if VALID_SAVED_VARS_POOLS[pool] then return pool end
     return ""
 end
@@ -2505,6 +2507,15 @@ function Overlord.Leaderboard:Initialize(loadFromDB)
     -- ne doit jamais laisser un ladder local visible mais impossible a relayer.
     if OverlordDB then
         local bucket = OverlordDB.leaderboard
+        -- Premier lancement : publier le bucket vide AVANT l'attestation et les
+        -- premieres captures. Sinon Save() pose campaignStart plus tard, sans
+        -- preuve, et le login suivant efface les scores pourtant acquis localement.
+        -- Ne jamais re-estampiller ici un ancien bucket qui contient des scores.
+        if not bucket or ((tonumber(bucket.campaignStart) or 0) <= 0
+            and not LeaderboardBucketHasScores(bucket)) then
+            self:Save()
+            bucket = OverlordDB.leaderboard
+        end
         local bucketEpoch = bucket and tonumber(bucket.campaignStart) or 0
         local attestedBucketEpoch = tonumber(OverlordDB.leaderboardScoreBucketEpoch) or 0
         if not LeaderboardCampaignEpochsMatch(attestedBucketEpoch, bucketEpoch) then
@@ -2665,12 +2676,10 @@ function Overlord.Leaderboard:Initialize(loadFromDB)
         end)
         end
         AddLoginRepairStage(function()
-            local myName = Overlord:SafeUnitName("player")
-            local realm = Overlord:SafeGetRealmName()
+            local fullName = Overlord.Sync and Overlord.Sync.GetPlayerFullName
+                and Overlord.Sync:GetPlayerFullName() or ""
             local _, myClass = UnitClass("player")
             local myFaction = UnitFactionGroup("player")
-            local fullName = (realm and realm ~= "" and myName)
-                and (myName .. "-" .. realm) or (myName or "")
             if fullName ~= "" then
                 lb:ForceUpdateLocalPlayer(fullName, myClass, myFaction)
             end
@@ -2788,17 +2797,14 @@ end
 -- WoW 12.0.5 : SafeUnitName et SafeStringEquals gerent les secret values
 function Overlord.Leaderboard:IsLocalDisplayName(displayName)
     if not displayName or displayName == "" then return false end
-    local me = Overlord:SafeUnitName("player")
+    local sync = Overlord.Sync
+    local me = sync and sync.GetPlayerFullName and sync:GetPlayerFullName() or Overlord:SafeUnitName("player")
     if not me or me == "" then return false end
-    displayName = displayName:match("^%s*(.-)%s*$") or displayName
     if Overlord:SafeStringEquals(displayName, me) then return true end
-    local h = displayName:find("-", 1, true)
-    if not h then return false end
-    local base = displayName:sub(1, h - 1)
-    local rr = displayName:sub(h + 1):gsub("%s", "")
-    if not Overlord:SafeStringEquals(base, me) then return false end
-    local myRealm = Overlord:SafeGetRealmName()
-    return rr == "" or Overlord:SafeStringEquals(rr, myRealm)
+    if sync and sync.ForeverIdentitiesMatch then
+        return sync:ForeverIdentitiesMatch(displayName, me)
+    end
+    return false
 end
 
 -- Lifetime : credit uniquement sur la cle canonique Nom-Royaume (evite double Nom + Nom-Royaume).
@@ -3210,12 +3216,7 @@ function Overlord.Leaderboard:UpdateLocalPlayerGuild()
     local guild = sanitizeGuildName(Overlord:SafeGetGuildInfo("player"))
     local sync = Overlord.Sync
     local fullName = (sync and sync.GetPlayerFullName and sync:GetPlayerFullName()) or nil
-    if not fullName or fullName == "" then
-        local name, realm = Overlord:SafeUnitName("player")
-        if not name then return end
-        realm = realm or Overlord:SafeGetRealmName()
-        fullName = (realm and realm ~= "") and (name .. "-" .. realm) or name
-    end
+    if not fullName or fullName == "" then return end
     if guild == "" then
         -- Debarrasser guilde obsolete apres demission / kick (evite guilde fantome au ladder).
         local previousGuild = self:GetHotPlayerGuildState(fullName)
@@ -4058,32 +4059,10 @@ function Overlord.Leaderboard:GetPlayerInfo(playerName)
     if not playerName or playerName == "" then return nil end
     local info = self.playerInfo[playerName]
     if info then return info end
-    -- WoW 12.0.5 : SafeGetRealmName gere les secret values
-    local realm = Overlord:SafeGetRealmName()
-    if realm and realm ~= "" then
-        info = self.playerInfo[playerName .. "-" .. realm]
+    local canon = syncN and syncN.CanonicalForeverName and syncN:CanonicalForeverName(playerName)
+    if canon and canon ~= playerName then
+        info = self.playerInfo[canon]
         if info then return info end
-    end
-    local shortName = playerName:match("^([^-]+)")
-    if shortName and shortName ~= playerName then
-        local infoShort = self.playerInfo[shortName]
-        if infoShort then
-            -- Meme cle dedup que le nom complet : evite "Toto" local vs "Toto-Hyjal" distant.
-            local getDK = Overlord.Sync and Overlord.Sync.GetCaptureContributorDedupKey
-            if getDK and Overlord.Sync then
-                local dkFull = Overlord.Sync:GetCaptureContributorDedupKey(playerName)
-                local dkShort = Overlord.Sync:GetCaptureContributorDedupKey(shortName)
-                if dkFull and dkShort and dkShort:lower() == dkFull:lower() then
-                    return infoShort
-                end
-            else
-                return infoShort
-            end
-        end
-        if realm and realm ~= "" then
-            info = self.playerInfo[shortName .. "-" .. realm]
-            if info then return info end
-        end
     end
     return nil
 end
@@ -4112,7 +4091,7 @@ function Overlord.Leaderboard:GetExportPlayerMeta(playerName)
 
     if dk and self:EnsureDedupMetaIndex() then
         local b = self._dedupMetaIndex[dk:lower()]
-        if b then
+        if b and (b.faction == "Alliance" or b.faction == "Horde") then
             local bestClass, bestFaction = b.class or "", b.faction or ""
             if bestClass == "" then
                 return "", bestFaction
@@ -4139,7 +4118,8 @@ function Overlord.Leaderboard:GetExportPlayerMeta(playerName)
                 return bestClass, bestFaction
             end
         end
-        return "", ""
+        -- Index pas encore reconstruit apres le chargement du bucket :
+        -- ne pas jeter la ligne, la faction est dans playerInfo.
     end
 
     local info = self:GetPlayerInfo(playerName)
@@ -4382,16 +4362,16 @@ function Overlord.Leaderboard:ScanRaidInfo()
     end
 
     local changed = false
+    local sync = Overlord.Sync
     for i = 1, count do
         local unit = prefix .. i
         if UnitExists(unit) then
             -- WoW 12.0.5 : SafeUnitName gere les secret values
-            local name, realm = Overlord:SafeUnitName(unit)
+            local name = Overlord:SafeUnitName(unit)
             if name then
-                if not realm or realm == "" then
-                    realm = Overlord:SafeGetRealmName()
-                end
-                local fullName = (realm and realm ~= "") and (name .. "-" .. realm) or name
+                local fullName = sync and sync.CanonicalForeverName
+                    and sync:CanonicalForeverName(name) or nil
+                if fullName then
                 local _, className = UnitClass(unit)
                 local faction = UnitFactionGroup(unit)
                 if className then
@@ -4401,6 +4381,7 @@ function Overlord.Leaderboard:ScanRaidInfo()
                     if not prev or (now and (prev.class ~= now.class or prev.faction ~= now.faction)) then
                         changed = true
                     end
+                end
                 end
             end
         end
@@ -4442,8 +4423,8 @@ function Overlord.Leaderboard:EnrichMissingClassesFromVisibleUnits()
 
     local function ingestUnit(unit)
         if not unit or not UnitExists(unit) or not UnitIsPlayer(unit) then return end
-        -- WoW 12.0.5 : SafeGetUnitName gere les secret values
-        local full = Overlord:SafeGetUnitName(unit, true)
+        local full = Overlord.Sync and Overlord.Sync.CanonicalForeverNameFromUnit
+            and Overlord.Sync:CanonicalForeverNameFromUnit(unit) or nil
         local _, classToken = UnitClass(unit)
         ingestNameClass(full, classToken)
     end
@@ -8275,20 +8256,27 @@ function Overlord.Leaderboard:SetPlayerCaptureCount(playerName, count, fromSync)
     end
 end
 
--- Nom d'affichage / export : prefere Nom-Royaume (meme heuristique que Sync.lua).
+-- Nom d'affichage Forever : prefere Prenom Nom, jamais un suffixe -Royaume.
 function Overlord.Leaderboard:ChooseRicherPlayerName(prev, new)
     if not prev then return new end
     if not new then return prev end
-    -- Eviter une cle export "Nom|MAGE" choisie au lieu du Nom-Royaume propre.
     local function hasPipe(s)
         return s and s:find("|", 1, true)
     end
     if hasPipe(prev) and not hasPipe(new) then return new end
     if hasPipe(new) and not hasPipe(prev) then return prev end
-    local prevFull = prev:find("-", 1, true)
-    local newFull = new:find("-", 1, true)
-    if newFull and not prevFull then return new end
-    if prevFull and not newFull then return prev end
+    local sync = Overlord.Sync
+    if sync and sync.CanonicalForeverName then
+        local prevCanon = sync:CanonicalForeverName(prev)
+        local newCanon = sync:CanonicalForeverName(new)
+        if newCanon and not prevCanon then return newCanon end
+        if prevCanon and not newCanon then return prevCanon end
+        if newCanon and prevCanon then
+            if #newCanon > #prevCanon then return newCanon end
+            if #newCanon == #prevCanon and newCanon < prevCanon then return newCanon end
+            return prevCanon
+        end
+    end
     if #new > #prev then return new end
     if #new == #prev and new < prev then return new end
     return prev
@@ -8557,12 +8545,7 @@ function Overlord.Leaderboard:_MergeLocalPlayerLeaderboardAliases(yieldWork)
     local getDK = sync and sync.GetCaptureContributorDedupKey
     if not getDK then return end
     local seed = (sync and sync.GetPlayerFullName) and sync:GetPlayerFullName() or nil
-    if not seed or seed == "" then
-        local me = Overlord:SafeUnitName("player")
-        local realm = Overlord:SafeGetRealmName()
-        if not me or me == "" then return end
-        seed = (realm and realm ~= "") and (me .. "-" .. realm) or me
-    end
+    if not seed or seed == "" then return end
     local dk0 = getDK(sync, seed)
     if not dk0 then return end
     local aliases = {}

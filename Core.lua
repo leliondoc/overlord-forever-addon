@@ -134,6 +134,9 @@ function Overlord:RefreshCaptureSyncGameplayAvailability()
         end
     end
     self:RefreshCaptureSyncVisuals()
+    if self.NotifyDominationOwnersChanged then
+        self:NotifyDominationOwnersChanged()
+    end
 end
 
 function Overlord:ClearLoginUnconfirmedFrontState(frontId)
@@ -588,36 +591,15 @@ function Overlord:IsKillContextBlocked()
     if IsInInstance() then return true end
     local okInst, _, instType = pcall(GetInstanceInfo)
     if okInst and instType and instType ~= "none" and instType ~= "" then return true end
-    local temporaryZone = self:IsInTemporaryKillScoringZone()
-    if self:IsInCatchUpPhase(temporaryZone) then return true end
-    -- Certains evenements publics de ces zones utilisent l'UI de scenario tout en
-    -- restant en monde ouvert. Les vraies instances ont deja ete refusees ci-dessus.
-    if C_Scenario and C_Scenario.IsInScenario and C_Scenario.IsInScenario()
-        and not temporaryZone then
-        return true
-    end
-    return false, temporaryZone
+    -- Aucune liste de cartes/continents Retail : les phases et evenements
+    -- exterieurs restent eligibles. Les vraies instances sont refusees ci-dessus.
+    return false
 end
 
--- Classement kills : front actif OU fortins / mines EK / forets (meme perimetre que le HUD ressources).
--- Inclut aussi les capitales de faction et les exceptions PvP exterieures ci-dessus.
+-- Classement kills Forever : tout le monde ouvert, a tous les niveaux.
 -- Les primes (bounty) restent sur InActiveFront uniquement.
 function Overlord:IsKillScoringActive()
-    local blocked, temporaryZone = self:IsKillContextBlocked()
-    if blocked then return false end
-    -- Le classement Forever est reserve aux personnages au niveau maximum.
-    -- Cette garde locale empeche le client officiel de creer puis diffuser une
-    -- ligne K depuis un reroll, avant meme les validations reseau K/LK.
-    local level = self.SafeUnitLevel and self:SafeUnitLevel("player") or 0
-    local requiredLevel = tonumber(self.REQUIRED_KILL_CONTRIBUTOR_LEVEL) or 60
-    if level ~= requiredLevel then return false end
-    if self.InActiveFront then return true end
-    if temporaryZone then return true end
-    local res = self.Ressources
-    if res and res.IsInOverlordKillZone then
-        return res:IsInOverlordKillZone()
-    end
-    return false
+    return not self:IsKillContextBlocked()
 end
 
 -- ============================================================
@@ -862,16 +844,13 @@ function Overlord.Shard:GetCurrentShardID()
     return self.currentShardID
 end
 
--- Un rapporteur distant n'est exploitable que si WoW fournit explicitement Nom-Royaume.
--- Ne jamais completer un nom court avec notre royaume : ce serait une association inventee.
+-- Un rapporteur distant n'est exploitable que si WoW fournit un Prenom Nom Forever.
 local function BuildShardReferenceCandidate(playerName)
     if type(playerName) ~= "string" or playerName == "" then return nil, nil end
-    local normalized = Overlord.Sync and Overlord.Sync.NormalizeContributorFullName
-        and Overlord.Sync:NormalizeContributorFullName(playerName) or playerName
-    if type(normalized) ~= "string" or normalized == "" then return nil, nil end
-    local character, realm = normalized:match("^([^%-]+)%-(.+)$")
-    if not character or character == "" or not realm or realm == "" then return nil, nil end
-    return character .. "-" .. realm, realm
+    local canon = Overlord.Sync and Overlord.Sync.CanonicalForeverName
+        and Overlord.Sync:CanonicalForeverName(playerName) or nil
+    if not canon then return nil, nil end
+    return canon, nil
 end
 
 local localShardReferenceFullName
@@ -1295,20 +1274,18 @@ function Overlord.Shard:IsPlayerAlreadyGrouped(playerName)
     local targetKey = sync and sync.GetCaptureContributorDedupKey
         and sync:GetCaptureContributorDedupKey(playerName)
     local targetLower = tostring(playerName):lower()
-    local targetBase = targetLower:match("^([^%-]+)") or targetLower
-    local targetHasRealm = targetLower:find("-", 1, true) ~= nil
 
     local function unitMatches(unit)
         if not UnitExists or not UnitExists(unit) then return false end
-        local name, realm = UnitFullName(unit)
+        local name = Overlord:SafeUnitName(unit)
         if not name or name == "" then return false end
-        local full = (realm and realm ~= "") and (name .. "-" .. realm) or name
+        local full = sync and sync.CanonicalForeverName and sync:CanonicalForeverName(name) or name
         if full:lower() == targetLower then return true end
         if sync and sync.GetCaptureContributorDedupKey and targetKey then
             local unitKey = sync:GetCaptureContributorDedupKey(full)
             if unitKey and unitKey:lower() == targetKey:lower() then return true end
         end
-        return (not targetHasRealm and name:lower() == targetBase)
+        return false
     end
 
     if unitMatches("player") then return true end
@@ -1336,33 +1313,29 @@ function Overlord.Shard:GetNearbyKeepGroupUnit(sender, siteKey)
         or not UnitFullName or not UnitPhaseReason or not UnitDistanceSquared
         or not UnitIsVisible or not C_Map or not C_Map.GetPlayerMapPosition then return nil end
     local ok, unit = pcall(function()
-        local target = sender:lower():gsub("%s", "")
-        -- CHAT_MSG_ADDON peut omettre le royaume pour un expediteur de notre royaume.
-        -- Ne jamais utiliser ce nom court pour correspondre a un homonyme cross-realm.
-        if not target:find("-", 1, true) then
-            target = target .. "-" .. GetNormalizedRealmName():lower():gsub("%s", "")
-        end
+        local sync = Overlord.Sync
+        local targetKey = sync and sync.GetCaptureContributorDedupKey
+            and sync:GetCaptureContributorDedupKey(sender) or nil
+        if not targetKey then return nil end
         local prefix = IsInRaid() and "raid" or "party"
         local count = prefix == "raid" and math.min(GetNumGroupMembers(), 40) or 4
         for i = 1, count do
             local token = prefix .. i
             if UnitExists(token) and not UnitIsUnit(token, "player") then
-                local name, realm = UnitFullName(token)
-                if name then
-                    if not realm or realm == "" then realm = GetNormalizedRealmName() end
-                    local full = (name .. "-" .. realm):lower():gsub("%s", "")
-                    if full == target then
-                        if not UnitIsVisible(token) or UnitPhaseReason(token) ~= nil then return nil end
-                        local distance, checked = UnitDistanceSquared(token)
-                        if checked ~= true or not distance or distance < 0
-                            or distance > KEEP_SHARD_WITNESS_RANGE_SQ then return nil end
-                        local pos = C_Map.GetPlayerMapPosition(site.mapID, token)
-                        if not pos then return nil end
-                        local x, y = pos:GetXY()
-                        if not x or not y or (x == 0 and y == 0)
-                            or x < 0 or x > 1 or y < 0 or y > 1 then return nil end
-                        return token
-                    end
+                local unitName = sync.CanonicalForeverNameFromUnit
+                    and sync:CanonicalForeverNameFromUnit(token)
+                local unitKey = unitName and sync:GetCaptureContributorDedupKey(unitName) or nil
+                if unitKey and unitKey == targetKey then
+                    if not UnitIsVisible(token) or UnitPhaseReason(token) ~= nil then return nil end
+                    local distance, checked = UnitDistanceSquared(token)
+                    if checked ~= true or not distance or distance < 0
+                        or distance > KEEP_SHARD_WITNESS_RANGE_SQ then return nil end
+                    local pos = C_Map.GetPlayerMapPosition(site.mapID, token)
+                    if not pos then return nil end
+                    local x, y = pos:GetXY()
+                    if not x or not y or (x == 0 and y == 0)
+                        or x < 0 or x > 1 or y < 0 or y > 1 then return nil end
+                    return token
                 end
             end
         end
@@ -1635,9 +1608,10 @@ local function IsSelfShardInviteTarget(playerName)
         local pk = sync:GetCaptureContributorDedupKey(playerName)
         if sk and pk and sk:lower() == pk:lower() then return true end
     end
-    local selfBase = selfName:match("^([^%-]+)") or selfName
-    local targetBase = playerName:match("^([^%-]+)") or playerName
-    return selfBase:lower() == targetBase:lower()
+    if sync and sync.ForeverIdentitiesMatch then
+        return sync:ForeverIdentitiesMatch(playerName, selfName)
+    end
+    return false
 end
 
 local function BuildDifferentShardRowsForFaction(shard, faction)
@@ -2554,9 +2528,12 @@ end
 
 local function LocaleDisplayIsEuContext(poolHint)
     local pool = type(poolHint) == "string" and poolHint:lower() or ""
-    if pool == "fr" or pool == "de" or pool == "eu" then return true end
+    if Overlord.RealmPools and Overlord.RealmPools.NormalizeRegionPool then
+        pool = Overlord.RealmPools:NormalizeRegionPool(pool)
+    end
+    if pool == "eu" then return true end
     if pool == "us" then return false end
-    return GetCurrentRegion and GetCurrentRegion() == 3
+    return not (GetCurrentRegion and GetCurrentRegion() == 1)
 end
 
 -- Affichage classement : frfr -> frFR, ptbr -> ptBR, esmx -> esMX.
@@ -2595,8 +2572,7 @@ local function GetCurrentPoolForSavedVars()
     if rp and rp.GetOverlordPoolTag then
         return rp:GetOverlordPoolTag() or "eu"
     end
-    local region = GetCurrentRegion and GetCurrentRegion() or 3
-    if region == 1 then return "us" end
+    if GetCurrentRegion and GetCurrentRegion() == 1 then return "us" end
     return "eu"
 end
 
@@ -2604,30 +2580,13 @@ function Overlord:GetCurrentSavedVarsPool()
     return GetCurrentPoolForSavedVars()
 end
 
--- Le territoire conserve ses tags fins fr/de/eu, mais le classement europeen est
--- une seule campagne partagee. US reste volontairement isole.
+-- Forever realmless : NA et EU seulement. Plus de buckets FR/DE.
 function Overlord:GetCurrentLeaderboardSavedVarsPool()
-    local pool = GetCurrentPoolForSavedVars()
-    return pool == "us" and "us" or "eu"
+    return GetCurrentPoolForSavedVars()
 end
 
--- Deduit le pool SavedVariables (us / fr / de / eu) depuis un tag locale sync (LK/K/LC).
--- "en" seul est ambigu (client US sur EU ou l'inverse) : retourne nil.
--- Sert a rejeter les scores d'un autre pool sans se fier au nom de royaume
--- (Hyjal, Archimonde, Ysondre existent en US et en EU).
+-- Une langue ne permet pas de distinguer NA et EU (frFR existe sur les deux).
 function Overlord:SavedVarsPoolFromLocaleTag(localeTag)
-    if type(localeTag) ~= "string" or localeTag == "" then return nil end
-    -- Americas : ne jamais deduire fr/eu depuis la locale client (US + client frFR reste pool us).
-    if GetCurrentRegion and GetCurrentRegion() == 1 then
-        return nil
-    end
-    local loc = localeTag:lower():match("^([a-z][a-z][a-z]?[a-z]?[a-z]?)$")
-    if not loc or loc == "" then return nil end
-    local lang = (#loc >= 4) and loc:sub(1, 2) or loc
-    -- fr/de ambigus sans royaume (client FR sur Ravencrest = eu, sur Hyjal = fr).
-    if lang == "es" or lang == "it" or lang == "ru" or lang == "pt" then
-        return "eu"
-    end
     return nil
 end
 
@@ -3195,11 +3154,9 @@ function Overlord:RequestFactionChangeReconcile()
     state.worker = coroutine.create(function()
         if not leaderboard then return end
         if leaderboard.ForceUpdateLocalPlayer then
-            local myName = Overlord:SafeUnitName("player")
-            local realm = Overlord:SafeGetRealmName()
+            local fullName = Overlord.Sync and Overlord.Sync.GetPlayerFullName
+                and Overlord.Sync:GetPlayerFullName() or ""
             local _, myClass = UnitClass("player")
-            local fullName = (realm and realm ~= "" and myName)
-                and (myName .. "-" .. realm) or (myName or "")
             if fullName ~= "" then
                 leaderboard:ForceUpdateLocalPlayer(fullName, myClass, faction)
             end
@@ -3769,7 +3726,9 @@ end
 function Overlord:Initialize()
     if self.IsInitialized then return end
     
-    -- Charge les données sauvegardées ou initialise
+    -- ADDON_LOADED suit la lecture des SavedVariables. Sur la beta affectee,
+    -- le pont local charge le meme fichier a la fin du TOC, avant cet evenement.
+    -- Attendre un timer ne peut pas reparer une lecture omise par le client.
     if not OverlordDB then
         OverlordDB = {
             zones = {},
@@ -3787,40 +3746,14 @@ function Overlord:Initialize()
     OverlordDB.history = OverlordDB.history or {}
     OverlordDB.lastResetTimestamp = tonumber(OverlordDB.lastResetTimestamp) or 0
     OverlordDB.dominationTime = OverlordDB.dominationTime or { Alliance = 0, Horde = 0 }
-    -- Les secondes de domination appartiennent au pool de royaume, comme le classement.
-    -- Garder un alias actif preserve les nombreux lecteurs historiques sans permettre
-    -- qu'un alt EU republie le bucket FR sous une etiquette EU (ou inversement).
+    -- Les secondes de domination sont separees entre NA et EU.
     local currentDominationPool = GetCurrentPoolForSavedVars()
-    local currentDominationRealmKey = Overlord.RealmPools
-        and Overlord.RealmPools.GetPlayerRealmKey
-        and Overlord.RealmPools:GetPlayerRealmKey() or ""
-    local previousDominationRealmKey = type(OverlordDB.lastSessionRealmKey) == "string"
-        and OverlordDB.lastSessionRealmKey or ""
-    local sameDominationRealm = currentDominationRealmKey ~= ""
-        and previousDominationRealmKey ~= ""
-        and currentDominationRealmKey == previousDominationRealmKey
     local legacyFrontDominationTime = OverlordDB.frontDominationTime
     local legacyDominationOwnerPool = currentDominationPool
     OverlordDB.frontDominationTimeByPool = OverlordDB.frontDominationTimeByPool or {}
     if (tonumber(OverlordDB.frontDominationPoolVersion) or 0) < 1 then
-        local previousPool = type(OverlordDB.lastSessionPool) == "string"
-            and OverlordDB.lastSessionPool:lower() or ""
-        local validPool = { fr = true, eu = true, de = true, us = true }
-        local rp = Overlord.RealmPools
-        local frenchReclassification = currentDominationPool == "fr"
-            and sameDominationRealm and previousPool == "eu" and rp and rp.IsFrenchEURealm
-            and rp:IsFrenchEURealm()
-        local germanReclassification = currentDominationPool == "de"
-            and sameDominationRealm and (previousPool == "eu" or previousPool == "fr")
-            and rp and rp.IsGermanEURealm and rp:IsGermanEURealm()
-        -- Un vrai changement d'alt conserve le legacy dans son ancien pool.
-        -- Seule une reclassification connue du MEME royaume le rattache au pool
-        -- courant (Vol'jin eu->fr, anciens royaumes DE eu/fr->de).
-        local legacyOwnerPool = currentDominationPool
-        if validPool[previousPool] and previousPool ~= currentDominationPool
-            and not frenchReclassification and not germanReclassification then
-            legacyOwnerPool = previousPool
-        end
+        local previousPool = Overlord.RealmPools:NormalizeRegionPool(OverlordDB.lastSessionPool)
+        local legacyOwnerPool = previousPool ~= "" and previousPool or currentDominationPool
         legacyDominationOwnerPool = legacyOwnerPool
         if type(OverlordDB.frontDominationTimeByPool[legacyOwnerPool]) ~= "table" then
             OverlordDB.frontDominationTimeByPool[legacyOwnerPool] =
@@ -4073,10 +4006,13 @@ function Overlord:Initialize()
     local currentPool = GetCurrentPoolForSavedVars()
     local currentLeaderboardPool = self:GetCurrentLeaderboardSavedVarsPool()
     local lastPool = OverlordDB.lastSessionPool
-    if type(lastPool) ~= "string" then
+    if Overlord.RealmPools and Overlord.RealmPools.NormalizeRegionPool then
+        lastPool = Overlord.RealmPools:NormalizeRegionPool(lastPool or "")
+    elseif type(lastPool) ~= "string" then
         lastPool = ""
     else
         lastPool = lastPool:lower()
+        if lastPool == "fr" or lastPool == "de" then lastPool = "eu" end
     end
     OverlordDB.leaderboardsByPool = OverlordDB.leaderboardsByPool or {}
     -- Seed legacy AVANT l'union : sinon celle-ci creerait un bucket eu vide et
@@ -4107,82 +4043,28 @@ function Overlord:Initialize()
         end
     end
     self:UnifyEuropeanLeaderboardBuckets()
-    local rp = Overlord.RealmPools
-    local isFrenchRealm = rp and rp.IsFrenchEURealm and rp:IsFrenchEURealm()
-    local isGermanRealm = rp and rp.IsGermanEURealm and rp:IsGermanEURealm()
-    -- Royaumes francophones EU mal classes (ex. Vol'jin) : bucket eu + pool fr.
-    local frenchRealmMisclassifiedEuToFr = currentPool == "fr" and isFrenchRealm
-        and sameDominationRealm and lastPool == "eu"
-    -- Terenas et royaumes DE retires a tort du pool FR.
-    local germanRealmMisclassifiedFrToDe = currentPool == "de" and isGermanRealm
-        and sameDominationRealm and lastPool == "fr"
-    local poolRealmMigration = frenchRealmMisclassifiedEuToFr or germanRealmMisclassifiedFrToDe
-    local migrationFromPool = frenchRealmMisclassifiedEuToFr and "eu"
-        or (germanRealmMisclassifiedFrToDe and "fr" or nil)
-    if migrationFromPool then
-        -- Le worker GH peut couvrir plusieurs frames et un /reload. Persister l'intention
-        -- avant lastSessionPool, puis ne l'effacer qu'apres son swap atomique.
-        OverlordDB.guildKeepLbMigrationFrom = migrationFromPool
-    end
+    -- Reprendre uniquement une migration deja journalisee par une ancienne version.
     if Overlord.Leaderboard and OverlordDB.guildKeepLbMigrationFrom then
-        Overlord.Leaderboard._guildKeepLbMigrationFrom =
-            OverlordDB.guildKeepLbMigrationFrom
-    end
-    local dominationMigrationFromPool = migrationFromPool
-    if not dominationMigrationFromPool and currentPool == "de" and isGermanRealm
-        and sameDominationRealm and lastPool == "eu" then
-        dominationMigrationFromPool = "eu"
-    end
-    -- La migration de classification doit suivre la meme regle pour la barre :
-    -- copier seulement vers un bucket cible vide, jamais lors d'un vrai switch.
-    if dominationMigrationFromPool and OverlordDB.frontDominationTimeByPool then
-        local target = OverlordDB.frontDominationTimeByPool[currentPool]
-        local source = OverlordDB.frontDominationTimeByPool[dominationMigrationFromPool]
-        local function hasDominationProgress(buckets)
-            if type(buckets) ~= "table" then return false end
-            for _, bucket in pairs(buckets) do
-                if type(bucket) == "table"
-                    and ((tonumber(bucket.Alliance) or 0) > 0
-                        or (tonumber(bucket.Horde) or 0) > 0) then
-                    return true
-                end
-            end
-            return false
-        end
-        if not hasDominationProgress(target) and hasDominationProgress(source) then
-            local copied = {}
-            for frontId, bucket in pairs(source) do
-                if type(bucket) == "table" then
-                    copied[frontId] = {}
-                    for key, value in pairs(bucket) do copied[frontId][key] = value end
-                end
-            end
-            OverlordDB.frontDominationTimeByPool[currentPool] = copied
-            OverlordDB.frontDominationTime = copied
-            if self.RecalculateDominationTotals then self:RecalculateDominationTotals() end
-        end
+        Overlord.Leaderboard._guildKeepLbMigrationFrom = OverlordDB.guildKeepLbMigrationFrom
     end
     OverlordDB.leaderboard = OverlordDB.leaderboardsByPool[currentLeaderboardPool]
-    if (lastPool ~= "" and lastPool ~= currentPool) or poolRealmMigration then
+    if lastPool ~= "" and lastPool ~= currentPool then
         poolChanged = true
         for _, savedData in pairs(OverlordDB.zones or {}) do
             if type(savedData) == "table" and savedData.status ~= "in_progress" then
-                savedData.updatedAt = 0
+                local ct = tonumber(savedData.capturedTime) or 0
+                if not ((savedData.owner == "Alliance" or savedData.owner == "Horde") and ct > 0) then
+                    savedData.updatedAt = 0
+                end
             end
         end
         for _, zone in ipairs(Overlord.ZoneDatabase or {}) do
-            zone.updatedAt = 0
+            local ct = tonumber(zone.capturedTime) or 0
+            if not ((zone.owner == "Alliance" or zone.owner == "Horde") and ct > 0) then
+                zone.updatedAt = 0
+            end
         end
         ZeroGuildKeepsForSyncCatchup()
-        if frenchRealmMisclassifiedEuToFr then
-            if Overlord.GuildKeep and Overlord.GuildKeep.MigrateKeepStatesPoolTag then
-                Overlord.GuildKeep:MigrateKeepStatesPoolTag("eu", "fr")
-            end
-        elseif germanRealmMisclassifiedFrToDe then
-            if Overlord.GuildKeep and Overlord.GuildKeep.MigrateKeepStatesPoolTag then
-                Overlord.GuildKeep:MigrateKeepStatesPoolTag("fr", "de")
-            end
-        end
         if Overlord.GuildKeep and Overlord.GuildKeep.ClearForeignPoolHeldStates then
             Overlord.GuildKeep:ClearForeignPoolHeldStates()
         end
@@ -4193,7 +4075,7 @@ function Overlord:Initialize()
         DebugOverlord("Changement de pool : " .. lastPool .. " -> " .. currentPool .. " (updatedAt = 0)")
     end
     OverlordDB.lastSessionPool = currentPool
-    OverlordDB.lastSessionRealmKey = currentDominationRealmKey
+    OverlordDB.lastSessionRealmKey = nil
 
     self.IsInitialized = true
     -- Toujours dans le chat general par defaut : repere visuel pour nouveau joueur /reload.
@@ -4332,24 +4214,15 @@ function Overlord:Initialize()
             return Overlord.Sync:EnsureDominationBoostEventLedgerPrepared()
         end, true)
 
-        for _, mod in ipairs({ "Ressources", "Combat", "Bounty", "ManualBounty" }) do
+        for _, mod in ipairs({ "Ressources", "Combat" }) do
             local moduleName = mod
             AddLoginInitStage(moduleName, function()
                 return Overlord[moduleName]:Initialize()
-            end, moduleName == "ManualBounty")
+            end)
         end
 
-        -- Le registre COD legacy peut contenir des milliers de preuves. ManualBounty
-        -- est deja initialise afin que les contrats approved soient proteges du
-        -- TTL/quota; Sync ne demarre qu'apres l'union/prune cooperative complete.
-        AddLoginInitStage("ManualBountyMailLedger", function()
-            if not Overlord.ManualBountyMail
-                or not Overlord.ManualBountyMail.EnsureCodSendLedgerPrepared then return true end
-            return Overlord.ManualBountyMail:EnsureCodSendLedgerPrepared()
-        end, true)
-
         for _, mod in ipairs({
-            "ManualBountyMail", "General", "Sync", "ZoneIndicator", "Shard", "LadderDigest",
+            "Sync", "ZoneIndicator", "Shard",
         }) do
             local moduleName = mod
             AddLoginInitStage(moduleName, function()
@@ -4417,7 +4290,7 @@ function Overlord:Initialize()
         end)
 
         -- Les deux autres modules UI conservent chacun leur frame dediee.
-        for _, mod in ipairs({ "Button", "ManualBountyUI" }) do
+        for _, mod in ipairs({ "Button" }) do
             local moduleName = mod
             AddLoginInitStage(moduleName, function()
                 Overlord[moduleName]:Initialize()
@@ -4510,9 +4383,13 @@ function Overlord:MergeLeaderboardBucketInto(target, source, onDone)
         return tag:lower():match("^([a-z][a-z][a-z]?[a-z]?[a-z]?)$") or ""
     end
     local function cleanPool(pool)
+        if Overlord.RealmPools and Overlord.RealmPools.NormalizeRegionPool then
+            return Overlord.RealmPools:NormalizeRegionPool(pool)
+        end
         if type(pool) ~= "string" then return "" end
         pool = pool:lower()
-        return (pool == "us" or pool == "fr" or pool == "de" or pool == "eu") and pool or ""
+        if pool == "fr" or pool == "de" then pool = "eu" end
+        return (pool == "us" or pool == "eu") and pool or ""
     end
     local function guildHash(name)
         local h = 0
@@ -5707,7 +5584,11 @@ local function CountFrontOwners(front)
             -- plutot que OverlordDB.zones seul (peut rester une campagne en retard).
             state = select(1, Overlord.Fronts:GetZone(zone.id, front.id))
         end
-        if state and not state._loginSyncUnconfirmed then
+        -- Quarantaine visuelle bornee (gate login), pas le flag brut : sinon une
+        -- carte jamais confirmee par le reseau bloque la domination a vie.
+        local loginPending = state and Overlord.IsLoginZoneDisplayPending
+            and Overlord:IsLoginZoneDisplayPending(state)
+        if state and not loginPending then
             owner = state.owner
         end
         if not state and OverlordDB and OverlordDB.zones and OverlordDB.zones[zone.id] then
@@ -5780,25 +5661,35 @@ TryDominationInitialGrant = function(forceConfirmedFront)
         or not Overlord.Fronts.Registry or not OverlordDB then
         return
     end
-    if Overlord.Sync and Overlord.Sync.ShouldAccumulateDomination
+    -- Entree de front / capture locale : peindre tout de suite, sans election.
+    if not forceConfirmedFront
+        and Overlord.Sync and Overlord.Sync.ShouldAccumulateDomination
         and not Overlord.Sync:ShouldAccumulateDomination() then
         return
     end
     local front = Overlord.Fronts.Registry[Overlord.Fronts.activeFrontId]
     if not front then return end
-    if dominationInitialGrantDone[front.id] then return end
-    dominationInitialGrantDone[front.id] = true
     local allyCount, hordeCount = CountFrontOwners(front)
+    if allyCount + hordeCount <= 0 then return end
     local bucket = EnsureFrontDominationBucket(front.id)
+    if not bucket then return end
     local seq = GetDominationScoreSeq()
-    if bucket and math.floor(tonumber(bucket.scoreSeq) or 0) < seq then
+    local localSeq = math.floor(tonumber(bucket.scoreSeq) or 0)
+    local bucketEmpty = (tonumber(bucket.Alliance) or 0)
+        + (tonumber(bucket.Horde) or 0) <= 0
+    -- Un tick vide (zones encore en quarantaine) ne doit pas figer la barre a 0 %.
+    if dominationInitialGrantDone[front.id] and not bucketEmpty then return end
+    if localSeq >= seq and not bucketEmpty then return end
+    if bucketEmpty then
+        bucket.Alliance = CapDominationValue(allyCount)
+        bucket.Horde = CapDominationValue(hordeCount)
+    else
         bucket.Alliance = CapDominationValue(bucket.Alliance + allyCount)
         bucket.Horde = CapDominationValue(bucket.Horde + hordeCount)
-        bucket.scoreSeq = seq
-        bucket.scoreSource = GetDominationScoreSource()
-    else
-        return
     end
+    bucket.scoreSeq = seq
+    bucket.scoreSource = GetDominationScoreSource()
+    dominationInitialGrantDone[front.id] = true
     Overlord:RecalculateDominationTotals()
     Overlord:MarkDirty()
     if Overlord.UI and Overlord.UI.RefreshDomination then
@@ -5807,6 +5698,11 @@ TryDominationInitialGrant = function(forceConfirmedFront)
     if Overlord.Sync and Overlord.Sync.BroadcastDomination then
         Overlord.Sync:BroadcastDomination()
     end
+end
+
+-- Capture locale : le premier owner confirme doit peindre la barre (100 % / 0 %).
+function Overlord:NotifyDominationOwnersChanged()
+    TryDominationInitialGrant(true)
 end
 
 function Overlord:RecalculateDominationTotals()
@@ -6656,6 +6552,12 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         if Overlord.Shard and Overlord.Shard.PersistGuildKeepReloadShardLease then
             Overlord.Shard:PersistGuildKeepReloadShardLease()
         end
+        if Overlord.Popups and Overlord.Popups.CommitPendingPopupMark then
+            Overlord.Popups:CommitPendingPopupMark()
+        end
+        if Overlord.Popups and Overlord.Popups.PersistSeenFlags then
+            Overlord.Popups:PersistSeenFlags()
+        end
         Overlord:SaveState()
         if Overlord.Leaderboard then
             -- Un snapshot tranche ne peut pas terminer apres PLAYER_LOGOUT. Le dernier
@@ -6732,11 +6634,10 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
             local sentAt = Overlord.Sync.lastRGSentAt or 0
             if sentAt > 0 and GetTime() - sentAt < 90 then
                 -- Securite : n'accepter que si l'inviteur est un emetteur front recent connu (cache sync)
-                local inviterName, inviterRealm = ...
-                local fullInviter = (inviterRealm and inviterRealm ~= "")
-                    and (inviterName .. "-" .. inviterRealm)
-                    or inviterName
-                local known = Overlord.Sync.IsRecentFrontSender
+                local inviterName = ...
+                local fullInviter = Overlord.Sync.CanonicalForeverName
+                    and Overlord.Sync:CanonicalForeverName(inviterName) or nil
+                local known = fullInviter and Overlord.Sync.IsRecentFrontSender
                     and (Overlord.Sync:IsRecentFrontSender(fullInviter)
                         or Overlord.Sync:IsRecentFrontSender(inviterName))
                 if known then

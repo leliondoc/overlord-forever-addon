@@ -165,11 +165,13 @@ FactionToCode = function(fac)
     return ""
 end
 
-local VALID_POOL_TAG = { fr = true, eu = true, de = true, us = true }
+local VALID_POOL_TAG = { eu = true, us = true }
 
 local function NormalizePoolTag(pool)
     if type(pool) ~= "string" then return "" end
     pool = pool:lower():match("^%s*([a-z]+)%s*$") or ""
+    if pool == "na" then pool = "us" end
+    if pool == "fr" or pool == "de" then pool = "eu" end
     if VALID_POOL_TAG[pool] then return pool end
     return ""
 end
@@ -318,15 +320,7 @@ local function OpRosterMatchKey(name)
         local dk = Overlord.Sync:GetCaptureContributorDedupKey(name)
         if dk and dk ~= "" then return dk:lower() end
     end
-    if type(name) ~= "string" then return "" end
-    name = name:match("^%s*(.-)%s*$") or ""
-    if name == "" then return "" end
-    local base, realm = name:match("^([^%-]+)%-(.+)$")
-    if base and realm then
-        realm = realm:gsub("%s+", "")
-        return (base .. "-" .. realm):lower()
-    end
-    return name:lower()
+    return ""
 end
 
 local function PruneOpDedup(now)

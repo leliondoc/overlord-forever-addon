@@ -216,7 +216,8 @@ local function FactionCode(value)
 end
 
 local function ContributorCanRelay(name)
-    return sync.ContributorNameHasRealm and sync:ContributorNameHasRealm(name) or false
+    return sync.HasCompleteContributorIdentity
+        and sync:HasCompleteContributorIdentity(name) or false
 end
 
 local function AppendPacket(queue, msgType, data)

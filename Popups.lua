@@ -16,12 +16,8 @@ local WELCOME_FACTION_SEAL_ATLAS = {
 }
 local WELCOME_POPUP_ID = "welcome_first_install"
 local GUILD_KEEP_REMINDER_POPUP_ID = "guild_keep_siege_reminder"
-local UPDATE_9920_COILED_ISLE_POPUP_ID = "update_9_9_20_coiled_isle"
+local FOREVER_LAUNCH_POPUP_ID = "forever_launch_1_0_0"
 local FEATURED_FRONT_POPUP_ID = "daily_featured_front"
-local ACTIVE_ONE_SHOT_POPUP_IDS = {
-    [WELCOME_POPUP_ID] = true,
-    [UPDATE_9920_COILED_ISLE_POPUP_ID] = true,
-}
 -- Vrais atlas Blizzard du systeme PlayerChoiceFrame (Interface\AddOns\Blizzard_PlayerChoice) :
 -- "Header" = blason a ailes au-dessus du cadre, "TitleLeft/Right/Middle" = ruban 3 pieces.
 -- Memes noms que le jeu utilise pour ses propres choix Alliance/Horde ("War Mode", etc.).
@@ -122,17 +118,33 @@ local nextGuildKeepReminderCheckAt = 0
 -- Persistance (une fois par id de popup)
 -- ---------------------------------------------------------------------------
 
+-- Compatibilite avec les anciens flags numeriques ; les nouveaux sont booleens.
+local function PopupValueSeen(v)
+    return v == true or v == 1
+end
+
 function Overlord.Popups:HasSeen(id)
     if not id or not OverlordDB or not OverlordDB.config then return true end
     local seen = OverlordDB.config.popupsSeen
-    return seen and seen[id] == true
+    if seen and PopupValueSeen(seen[id]) then return true end
+    return false
 end
 
 function Overlord.Popups:MarkSeen(id)
     if not id or not OverlordDB then return end
     OverlordDB.config = OverlordDB.config or {}
     OverlordDB.config.popupsSeen = OverlordDB.config.popupsSeen or {}
+    -- Boolean, pas 1 : c'est le test Retail (seen[id] == true).
     OverlordDB.config.popupsSeen[id] = true
+end
+
+function Overlord.Popups:PersistSeenFlags()
+    if not OverlordDB or not OverlordDB.config or not OverlordDB.config.popupsSeen then return end
+    for id, v in pairs(OverlordDB.config.popupsSeen) do
+        if v == 1 then
+            OverlordDB.config.popupsSeen[id] = true
+        end
+    end
 end
 
 -- Cle calendaire (premiere connexion du jour, heure client WoW).
@@ -171,7 +183,18 @@ function Overlord.Popups:MarkFeaturedFrontShownToday()
     OverlordDB.config.popupsDailyShown[FEATURED_FRONT_POPUP_ID] = gk:GetServerSiegeDayKey()
 end
 
--- Migration depuis l'ancien announceSeen.
+-- Ecrit le flag one-shot / quotidien des que la popup est affichee, pas a la
+-- fermeture : un /reload pendant l'affichage perdait sinon popupsSeen.
+function Overlord.Popups:CommitPendingPopupMark()
+    if not pendingSeenId then return end
+    if pendingMarkMode == "daily" then
+        self:MarkShownToday(pendingSeenId)
+    else
+        self:MarkSeen(pendingSeenId)
+    end
+end
+
+-- Conserver les identifiants deja vus lors des mises a jour de l'addon.
 local function MigrateLegacyPopupFlags()
     if not OverlordDB or not OverlordDB.config then return end
     local cfg = OverlordDB.config
@@ -184,12 +207,8 @@ local function MigrateLegacyPopupFlags()
         end
         cfg.announceSeen = nil
     end
-    if cfg.popupsSeen then
-        for id in pairs(cfg.popupsSeen) do
-            if not ACTIVE_ONE_SHOT_POPUP_IDS[id] then
-                cfg.popupsSeen[id] = nil
-            end
-        end
+    if Overlord.Popups and Overlord.Popups.PersistSeenFlags then
+        Overlord.Popups:PersistSeenFlags()
     end
     if cfg.popupsDailyShown and cfg.popupsDailyShown.daily_guild_kills then
         local dayKey = cfg.popupsDailyShown.daily_guild_kills
@@ -368,11 +387,7 @@ local function EnsureDialogFrame()
     end)
     f:SetScript("OnHide", function(self)
         if pendingSeenId then
-            if pendingMarkMode == "daily" then
-                Overlord.Popups:MarkShownToday(pendingSeenId)
-            else
-                Overlord.Popups:MarkSeen(pendingSeenId)
-            end
+            Overlord.Popups:CommitPendingPopupMark()
             pendingSeenId = nil
             pendingMarkMode = nil
         end
@@ -453,7 +468,7 @@ end
 local quickGuideFrame = nil
 local quickGuideBlocker = nil
 local quickGuidePage = 1
-local GUIDE_PAGE_COUNT = 4
+local GUIDE_PAGE_COUNT = 3
 
 local function HideQuickGuide()
     if quickGuideFrame then quickGuideFrame:Hide() end
@@ -522,7 +537,6 @@ local GUIDE_PAGE_TITLES = {
     function() return L.GUIDE_PAGE1_TITLE end,
     function() return L.GUIDE_PAGE2_TITLE end,
     function() return L.GUIDE_PAGE3_TITLE end,
-    function() return L.GUIDE_PAGE4_TITLE end,
 }
 
 local function BuildQuickGuidePageBody(page)
@@ -550,17 +564,9 @@ local function BuildQuickGuidePageBody(page)
     if page == 3 then
         return JoinGuideSections(
             BuildGuildKeepGuideSection(),
-            FormatGuideSection(L.GUIDE_SECTION_OUTPOST, L.GUIDE_OUTPOST_BODY)
-        )
-    end
-    if page == 4 then
-        return JoinGuideSections(
-            FormatGuideSection(L.GUIDE_SECTION_GENERAL, L.GUIDE_GENERAL_BODY),
-            FormatGuideSection(L.GUIDE_SECTION_BOUNTY, L.GUIDE_BOUNTY_BODY),
-            FormatGuideSection(L.GUIDE_SECTION_GOLD_CONTRACT, L.GUIDE_GOLD_CONTRACT_BODY),
+            FormatGuideSection(L.GUIDE_SECTION_OUTPOST, L.GUIDE_OUTPOST_BODY),
             FormatGuideSection(L.GUIDE_SECTION_FACTION_CALL, L.GUIDE_FACTION_CALL_BODY),
-            FormatGuideSection(L.GUIDE_SECTION_TOOLS, L.GUIDE_TOOLS_BODY),
-            FormatGuideSection(L.GUIDE_SECTION_HOF, L.GUIDE_HOF_BODY)
+            FormatGuideSection(L.GUIDE_SECTION_TOOLS, L.GUIDE_TOOLS_BODY)
         )
     end
     return ""
@@ -788,11 +794,18 @@ end
 -- opts : showBookIcon, showGuideButton (bienvenue) ; showFactionSeal ; playFactionHorn (Bloodlust / Heroism)
 -- addonSoundKey : ex. "faction_call" (cor) ; okText : libelle bouton OK
 function Overlord.Popups:ShowDialog(seenId, title, body, markMode, opts)
-    if not title or not body then return end
+    if type(title) ~= "string" or title == "" or type(body) ~= "string" or body == "" then return end
+    if seenId and (markMode or "once") ~= "daily" and self:HasSeen(seenId) then
+        return
+    end
     EnsureDialogFrame()
     opts = opts or {}
     pendingSeenId = seenId
     pendingMarkMode = markMode or "once"
+    -- One-shot : marquer a l'affichage pour survivre a un /reload avant Compris.
+    if seenId then
+        self:CommitPendingPopupMark()
+    end
     dialogFrame.titleFs:SetText(title)
     dialogFrame.bodyFs:SetText(body)
     if dialogFrame.okBtn then
@@ -918,6 +931,7 @@ end
 
 function Overlord.Popups:TryShowNextLoginAnnouncement()
     if Overlord.InstanceSuspended or not Overlord.IsInitialized then return false end
+    if dialogFrame and dialogFrame:IsShown() then return false end
     MigrateLegacyPopupFlags()
 
     for _, ann in ipairs(loginAnnouncements) do
@@ -927,7 +941,7 @@ function Overlord.Popups:TryShowNextLoginAnnouncement()
             if not ann.when or ann.when() then
                 local title = type(ann.title) == "function" and ann.title() or ann.title
                 local body  = type(ann.body)  == "function" and ann.body()  or ann.body
-                if title and body then
+                if type(title) == "string" and title ~= "" and type(body) == "string" and body ~= "" then
                     pendingLoginChain = true
                     self:ShowDialog(ann.id, title, body, nil, ann.opts)
                     return true
@@ -1112,7 +1126,7 @@ function Overlord.Popups:TryShowNextDailyAnnouncement()
             if not ann.when or ann.when() then
                 local title = type(ann.title) == "function" and ann.title() or ann.title
                 local body  = type(ann.body)  == "function" and ann.body()  or ann.body
-                if title and body then
+                if type(title) == "string" and title ~= "" and type(body) == "string" and body ~= "" then
                     self:ShowDialog(ann.id, title, body, "daily", ann.opts)
                     return true
                 end
@@ -2161,13 +2175,14 @@ Overlord.Popups:RegisterLoginAnnouncement({
     opts = { showBookIcon = true, showGuideButton = true, playFactionHorn = true },
 })
 
+-- Annonce one-shot Forever : fronts v1, hors contenu Retail.
 Overlord.Popups:RegisterLoginAnnouncement({
-    id = UPDATE_9920_COILED_ISLE_POPUP_ID,
+    id = FOREVER_LAUNCH_POPUP_ID,
     title = function()
-        return L.POPUP_UPDATE_9920_COILED_ISLE_TITLE
+        return L.POPUP_UPDATE_FOREVER_1000_TITLE
     end,
     body = function()
-        return L.POPUP_UPDATE_9920_COILED_ISLE_BODY
+        return L.POPUP_UPDATE_FOREVER_1000_BODY
     end,
     opts = { showFactionSeal = true, addonSoundKey = "faction_call", dialogLayout = "patchNotes" },
 })

@@ -11,7 +11,7 @@ local VB_DEDUP_WINDOW = 60
 local VB_MAX_FUTURE_SKEW = 300
 local VB_VICTORY_BONUS = 0.02
 
-local VALID_VB_POOL = { fr = true, eu = true, de = true, us = true }
+local VALID_VB_POOL = { eu = true, us = true }
 local victoryTransportEvidence = {}
 local vbSrPayloadCache = nil
 local validatedVictoryStores = setmetatable({}, { __mode = "k" })
@@ -26,6 +26,8 @@ end
 local function NormalizeVictoryPoolTag(pool)
     if type(pool) ~= "string" then return "" end
     pool = pool:lower():match("^%s*([a-z]+)%s*$") or ""
+    if pool == "na" then pool = "us" end
+    if pool == "fr" or pool == "de" then pool = "eu" end
     if VALID_VB_POOL[pool] then return pool end
     return ""
 end

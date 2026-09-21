@@ -221,6 +221,7 @@ end
 
 function Overlord.Button:RefreshGeneralButton()
     if not generalBtnFrame or not generalBtnFrame.icon then return end
+    if generalBtnFrame._olUnavailable then return end
     local icon = generalBtnFrame.icon
     local gen = Overlord.General
     local active = gen and gen.IsLocalHolder and gen:IsLocalHolder()

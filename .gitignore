@@ -16,3 +16,6 @@ desktop.ini
 
 # Build packager BigWigs
 .release/
+
+# Local Forever SavedVariables bridge and private recovery backups
+_local/

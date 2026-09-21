@@ -30,7 +30,9 @@ end
 local function normalizeOutpostPoolTag(pool)
     if type(pool) ~= "string" or pool == "" then return "" end
     pool = pool:lower()
-    if pool == "us" or pool == "fr" or pool == "de" or pool == "eu" then return pool end
+    if pool == "na" then pool = "us" end
+    if pool == "fr" or pool == "de" then pool = "eu" end
+    if pool == "us" or pool == "eu" then return pool end
     return ""
 end
 
@@ -41,17 +43,18 @@ local function currentOutpostPoolTag()
     return ""
 end
 
--- Registre : un avant-poste par front Forever. Coords Arathi = site Retail existant.
+-- Registre : un avant-poste par front Forever. Coords = cartes vanilla (pas Retail Cata).
 Overlord.OutpostSites = {
     arathi = {
         id = "arathi_outpost",
         siteKey = "arathi",
         displayNameKey = "OUTPOST_ARATHI_NAME",
         frontId = "arathi",
-        mapID = 14,
+        mapID = 1417,
         mapIDs = { [14] = true, [1417] = true },
         mapNameNeedles = { "arathi" },
-        center = { 11.2, 70.5 },
+        -- Tour du Sage : terre, hors cercles Stromgarde / High Perch / Argorok.
+        center = { 33.3, 27.8 },
         halfSize = 1.35,
     },
     loch_modan = {
@@ -59,10 +62,11 @@ Overlord.OutpostSites = {
         siteKey = "loch_modan",
         displayNameKey = "OUTPOST_LOCH_MODAN_NAME",
         frontId = "loch_modan",
-        mapID = 48,
+        mapID = 1432,
         mapIDs = { [48] = true, [1432] = true },
         mapNameNeedles = { "loch modan", "loch" },
-        center = { 40.3, 39.4 },
+        -- Retraite de Katrell : rive sud du Loch, pas dans l'eau (40.3, 39.4 = lac vanilla).
+        center = { 50.5, 67.8 },
         halfSize = 1.35,
     },
     durotar = {
@@ -70,11 +74,12 @@ Overlord.OutpostSites = {
         siteKey = "durotar",
         displayNameKey = "OUTPOST_DUROTAR_NAME",
         frontId = "durotar",
-        mapID = 1,
+        mapID = 1411,
         mapIDs = { [1] = true, [1411] = true },
         regionalMapIDs = { [12] = true, [1414] = true },
         mapNameNeedles = { "durotar" },
-        center = { 38.8, 58.2 },
+        -- Ferme des Tranchegroins : ouest de Tranchecolline, pas dans la Furie-du-Sud.
+        center = { 47.8, 49.6 },
         halfSize = 1.35,
     },
     ashenvale = {
@@ -82,11 +87,12 @@ Overlord.OutpostSites = {
         siteKey = "ashenvale",
         displayNameKey = "OUTPOST_ASHENVALE_NAME",
         frontId = "ashenvale",
-        mapID = 63,
+        mapID = 1440,
         mapIDs = { [63] = true, [1440] = true },
         regionalMapIDs = { [12] = true, [1414] = true },
         mapNameNeedles = { "ashenvale", "orneval", "vallefresno", "eschental" },
-        center = { 27.0, 26.0 },
+        -- Ruines d'Ordil'Aran (terre), pas le liseré nord / Strand de Zoram.
+        center = { 29.0, 32.0 },
         halfSize = 1.35,
     },
 }

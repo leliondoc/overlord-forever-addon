@@ -17,7 +17,6 @@ local L = Overlord.L
 local ACTIVITY_WINDOW = 300
 local ACTIVITY_SCHEMA = 5
 local ACTIVITY_ACTOR_MAX = 64
-local COILED_ISLE_ACTIVITY_ID = "coiled_isle"
 -- Aligne sur Sync.MAX_CLOCK_SKEW pour ne pas refuser un evenement deja accepte par le coeur.
 local MAX_FUTURE_SKEW = 300
 local MAX_SYNC_PAYLOAD_BYTES = 240
@@ -73,7 +72,6 @@ local function CountToBucket(count)
 end
 
 local function IsKnownFrontId(frontId)
-    if frontId == COILED_ISLE_ACTIVITY_ID then return true end
     return type(frontId) == "string" and frontId ~= ""
         and Overlord.Fronts and Overlord.Fronts.GetFront
         and Overlord.Fronts:GetFront(frontId) ~= nil
@@ -85,7 +83,6 @@ local function GetActivitySourceOrder()
     for _, frontId in ipairs((fronts and fronts.Order) or {}) do
         order[#order + 1] = frontId
     end
-    order[#order + 1] = COILED_ISLE_ACTIVITY_ID
     return order
 end
 
@@ -100,9 +97,6 @@ local function EnsureZoneIndex()
             index[zone.id] = frontId
         end
     end
-    -- Champ de bataille temporaire 12.1, hors des six fronts territoriaux.
-    index[COILED_ISLE_ACTIVITY_ID] = COILED_ISLE_ACTIVITY_ID
-    index.coiled_isle_outpost = COILED_ISLE_ACTIVITY_ID
     zoneToFront = index
     return index
 end
@@ -494,10 +488,7 @@ function FA:GetBucketLabel(frontId)
     return CountToBucket(self:GetActiveCount(frontId))
 end
 
-local function GetFrontActivityDisplayName(front, frontId)
-    if frontId == COILED_ISLE_ACTIVITY_ID then
-        return (L and L.FRONT_ACTIVITY_COILED_ISLE) or "The Coiled Isle"
-    end
+local function GetFrontActivityDisplayName(front)
     if not front then return "?" end
     return front.dropdownLabel or front.mapName or front.id or "?"
 end
@@ -513,13 +504,13 @@ function FA:GetActivityRows()
 
     for _, frontId in ipairs(GetActivitySourceOrder()) do
         local front = fronts:GetFront(frontId)
-        if front or frontId == COILED_ISLE_ACTIVITY_ID then
+        if front then
             local lastActivityAt = activity and tonumber(activity[frontId]) or nil
             local ageSeconds = lastActivityAt and math.max(0, now - lastActivityAt) or nil
             local active = ageSeconds ~= nil and ageSeconds <= ACTIVITY_WINDOW
             rows[#rows + 1] = {
                 frontId = frontId,
-                label = GetFrontActivityDisplayName(front, frontId),
+                label = GetFrontActivityDisplayName(front),
                 lastActivityAt = active and lastActivityAt or nil,
                 ageSeconds = active and ageSeconds or nil,
                 active = active,

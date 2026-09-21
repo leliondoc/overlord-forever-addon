@@ -688,7 +688,7 @@ function Overlord.UI.AttachWC3GridButtonTooltip(btn, text, opts)
 end
 
 function Overlord.UI.RefreshWC3GridButtonTooltip(btn, opts)
-    if not btn or not btn._gridTooltip then return end
+    if not btn or not btn._gridTooltip or btn._olUnavailable then return end
     opts = opts or {}
     local gold = opts.gold or DEFAULT_GOLD
     local white = opts.white or DEFAULT_WHITE
@@ -739,7 +739,7 @@ end
 function Overlord.UI.ApplyWC3ButtonChrome(btn, active, opts)
     opts = opts or {}
     local gold = opts.gold or DEFAULT_GOLD
-    if not btn or not btn.label then return end
+    if not btn or not btn.label or btn._olUnavailable then return end
     btn._olActiveChrome = active and true or false
     if active then
         local r = NATIVE_RED_BTN
@@ -755,11 +755,53 @@ function Overlord.UI.ApplyWC3ButtonChrome(btn, active, opts)
     end
 end
 
+local WC3_BTN_UNAVAIL_GRAY = { 0.50, 0.53, 0.63 }
+
+-- Grise un bouton d'action hors perimetre (pas de SetEnabled : le tooltip doit rester).
+function Overlord.UI.SetWC3ButtonUnavailable(btn, tooltipText, opts)
+    if not btn or not btn.label then return end
+    opts = opts or {}
+    local gray = opts.gray or WC3_BTN_UNAVAIL_GRAY
+    btn._olUnavailable = true
+    btn._olActiveChrome = false
+    btn._olPanelOpenState = false
+    btn:SetBackdropColor(0.10, 0.10, 0.12, 0.78)
+    btn:SetBackdropBorderColor(gray[1], gray[2], gray[3], 0.40)
+    btn.label:SetTextColor(gray[1], gray[2], gray[3])
+    btn.baseTextColor = { gray[1], gray[2], gray[3] }
+    if btn.icon then
+        if btn.icon.SetDesaturated then
+            btn.icon:SetDesaturated(true)
+        end
+        btn.icon:SetVertexColor(0.62, 0.62, 0.62)
+        btn.icon:SetAlpha(0.40)
+    end
+    btn:SetScript("OnClick", nil)
+    btn:SetScript("OnMouseDown", nil)
+    btn:SetScript("OnMouseUp", nil)
+    btn:SetScript("OnEnter", function(self)
+        self:SetBackdropBorderColor(gray[1], gray[2], gray[3], 0.72)
+        if not tooltipText or tooltipText == "" then return end
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        local tp = Overlord.UI.TooltipPalette and Overlord.UI.TooltipPalette()
+        if tp then
+            GameTooltip:AddLine(tooltipText, tp.MUTED[1], tp.MUTED[2], tp.MUTED[3], true)
+        else
+            GameTooltip:SetText(tooltipText, 0.72, 0.72, 0.72, 1, true)
+        end
+        GameTooltip:Show()
+    end)
+    btn:SetScript("OnLeave", function(self)
+        self:SetBackdropBorderColor(gray[1], gray[2], gray[3], 0.40)
+        GameTooltip:Hide()
+    end)
+end
+
 function Overlord.UI.SetWC3ButtonActive(btn, active, opts)
     opts = opts or {}
     local gold = opts.gold or DEFAULT_GOLD
     local white = opts.white or DEFAULT_WHITE
-    if not btn or not btn.label then return end
+    if not btn or not btn.label or btn._olUnavailable then return end
     local isActive = active and true or false
     if btn._olActiveChrome == isActive then
         return

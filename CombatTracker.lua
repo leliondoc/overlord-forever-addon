@@ -725,19 +725,16 @@ end
 
 local function SafeFullUnitName(unit)
     if not unit then return nil end
-    -- WoW 12.0.5 : GetUnitName(true) evite UnitFullName + comparaisons sur secret values.
+    local sync = Overlord.Sync
+    if sync and sync.CanonicalForeverNameFromUnit then
+        return sync:CanonicalForeverNameFromUnit(unit)
+    end
     if Overlord.SafeGetUnitName then
         return SafeAccessibleString(Overlord:SafeGetUnitName(unit, true))
     end
-    local ok, name, realm = pcall(UnitFullName, unit)
+    local ok, name = pcall(UnitFullName, unit)
     if not ok then return nil end
-    name = SafeAccessibleString(name)
-    if not name then return nil end
-    realm = SafeAccessibleString(realm)
-    if not realm or realm == "" then
-        realm = SafeAccessibleString(Overlord:SafeGetRealmName())
-    end
-    return (realm and realm ~= "") and (name .. "-" .. realm) or name
+    return SafeAccessibleString(name)
 end
 
 -- Verifie qu'un nom de joueur est exploitable : non vide, pas le placeholder "Unknown"
@@ -748,15 +745,10 @@ end
 IsValidPlayerName = function(name)
     name = SafeAccessibleString(name)
     if not name then return false end
-    if name == "" or name == "?" then return false end
-    local base = name:match("^([^%-]+)") or name
-    if base == "" then return false end
-    local lower = base:lower()
-    if lower == "unknown" or lower == "inconnu" or lower == "unbekannt"
-       or lower == "desconocido" or lower == "desconhecido" then
-        return false
+    if Overlord.Sync and Overlord.Sync.IsValidPlayerName then
+        return Overlord.Sync:IsValidPlayerName(name)
     end
-    return true
+    return false
 end
 
 -- Expose la validation aux autres modules (Sync.lua l'utilise pour filtrer
@@ -844,7 +836,10 @@ local function NormalizeHonorVictimName(name)
     -- Les messages peuvent contenir un lien de joueur selon les reglages de chat.
     name = name:match("|Hplayer:([^:|]+)") or name
     name = name:match("^%s*(.-)%s*$") or name
-    if name == "" or name:find("%s") or name:find("[,:%(%)%[%]|]") then return nil end
+    if name == "" or name:find("[,:%(%)%[%]|]") then return nil end
+    if Overlord.Sync and Overlord.Sync.IsValidPlayerName then
+        return Overlord.Sync:IsValidPlayerName(name) and name or nil
+    end
     return IsValidPlayerName(name) and name or nil
 end
 
@@ -1053,8 +1048,7 @@ function Overlord.Combat:CreditHealerHonorableKills(count)
         or not IsKillScoringActive() or not Overlord.Leaderboard then return 0 end
 
     ResetBountyStreakOutsideFront()
-    local playerFullName = (Overlord.Sync and Overlord.Sync:GetPlayerFullName())
-        or Overlord:SafeUnitName("player")
+    local playerFullName = Overlord.Sync and Overlord.Sync:GetPlayerFullName() or ""
     if not playerFullName or playerFullName == "" then return 0 end
 
     local totalKills = Overlord.Leaderboard:RegisterKill(playerFullName)
@@ -1165,24 +1159,24 @@ function Overlord.Combat:FindGroupMemberName(guid)
     return nil
 end
 
--- Nom victime enrichi (royaume) pour le matching des contrats en or.
+-- Nom victime Forever (Prenom Nom) pour le matching des contrats en or.
 local function ResolveManualBountyVictimName(victimGUID, victimName)
-    local contractVictimName = victimName
+    local contractVictimName = Overlord.Sync and Overlord.Sync.CanonicalForeverName
+        and Overlord.Sync:CanonicalForeverName(victimName) or nil
     if victimGUID then
         local cachedVictim = guidPlayerInfoCache[victimGUID]
         local cachedName = cachedVictim and SafeAccessibleString(cachedVictim.name)
-        if cachedName and cachedName:find("-", 1, true) then
-            contractVictimName = cachedName
+        local cachedCanon = cachedName and Overlord.Sync and Overlord.Sync.CanonicalForeverName
+            and Overlord.Sync:CanonicalForeverName(cachedName) or nil
+        if cachedCanon then
+            contractVictimName = cachedCanon
         elseif UnitNameFromGUID then
-            local okName, resolvedName, resolvedRealm = pcall(UnitNameFromGUID, victimGUID)
+            local okName, resolvedName = pcall(UnitNameFromGUID, victimGUID)
             resolvedName = okName and SafeAccessibleString(resolvedName) or nil
-            resolvedRealm = okName and SafeAccessibleString(resolvedRealm) or nil
-            if resolvedName and resolvedRealm and resolvedRealm ~= ""
-                and not resolvedName:find("-", 1, true) then
-                resolvedName = resolvedName .. "-" .. resolvedRealm:gsub("%s", "")
-            end
-            if resolvedName and resolvedName:find("-", 1, true) then
-                contractVictimName = resolvedName
+            local resolvedCanon = resolvedName and Overlord.Sync and Overlord.Sync.CanonicalForeverName
+                and Overlord.Sync:CanonicalForeverName(resolvedName) or nil
+            if resolvedCanon then
+                contractVictimName = resolvedCanon
             end
         end
     end
@@ -1194,8 +1188,7 @@ end
 -- absent du message d'honneur initial.
 local function ApplyLocalKillEvidence(killerGUID, playerGUID, victimGUID, victimName)
     if not killerGUID or not playerGUID or killerGUID ~= playerGUID then return nil, nil end
-    local playerFullName = (Overlord.Sync and Overlord.Sync:GetPlayerFullName())
-        or Overlord:SafeUnitName("player")
+    local playerFullName = Overlord.Sync and Overlord.Sync:GetPlayerFullName() or ""
     if not playerFullName or playerFullName == "" then
         dbg("ProcessKill: nom du joueur local indisponible, skip")
         return nil, nil
@@ -1267,8 +1260,7 @@ function Overlord.Combat:ProcessKill(
         -- Preuve honor locale : le payout reste gated par BD (victime) + paire killer/victime.
         if killerGUID and playerGUID and killerGUID == playerGUID
             and victimName and victimName ~= "?" then
-            local playerFullName = (Overlord.Sync and Overlord.Sync:GetPlayerFullName())
-                or Overlord:SafeUnitName("player")
+            local playerFullName = Overlord.Sync and Overlord.Sync:GetPlayerFullName() or ""
             if playerFullName and playerFullName ~= ""
                 and Overlord.BountySync and Overlord.BountySync.RegisterPriorKillCredit then
                 Overlord.BountySync:RegisterPriorKillCredit(playerFullName, victimName)
@@ -1316,7 +1308,7 @@ function Overlord.Combat:ProcessKill(
 
         local currentZone = Overlord.Zones:GetCurrentPlayerZone()
         if Overlord.Sync and Overlord.Sync.BroadcastKill then
-            -- Le leaderboard est global au front : meme hors disque de capture, diffuser le total.
+            -- Le leaderboard couvre tout le monde ouvert : diffuser aussi hors front.
             -- Le zoneId vide reste valide pour K (il sert seulement aux compteurs de zone distants).
             Overlord.Sync:BroadcastKill(currentZone and currentZone.id or "", totalKills,
                 not bountyProofOnly)
@@ -1324,15 +1316,10 @@ function Overlord.Combat:ProcessKill(
         Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.KILL_CONFIRM, victimName or "?", totalKills))
         killCredited = true
         NoteDetailedLocalKillCredit(victimGUID, healerBatch)
-    elseif killerGUID and killerName and IsValidPlayerName(killerName) then
-        local fullKillerName = killerName
-        if not fullKillerName:find("-") then
-            -- WoW 12.0.5 : SafeGetRealmName gere les secret values
-            local realm = Overlord:SafeGetRealmName()
-            if realm and realm ~= "" then
-                fullKillerName = killerName .. "-" .. realm
-            end
-        end
+    elseif killerGUID and killerName then
+        local fullKillerName = Overlord.Sync and Overlord.Sync.CanonicalForeverName
+            and Overlord.Sync:CanonicalForeverName(killerName) or nil
+        if fullKillerName then
         -- Kill allie observe : compter localement, mais ne pas marquer de credit "joueur local"
         -- pour le filtre d'export Check PvP. Si BD arrive ensuite, priorKillCredit garde +2 net.
         Overlord.Leaderboard:RegisterKill(fullKillerName, true)
@@ -1358,6 +1345,7 @@ function Overlord.Combat:ProcessKill(
             Overlord.Leaderboard:SetPlayerGuild(fullKillerName, killerGuild)
         end
         killCredited = true
+        end
     end
 
     -- Kill de zone : disques de capture du front actif uniquement (pas fortins / mines EK).
@@ -1522,7 +1510,7 @@ function Overlord.Combat:OnPlayerDead()
         if IsKillScoringActive() then
             -- Anti-farming : la victime c'est nous ; l'attaquant est l'ennemi qui nous a tues.
             -- WoW 12.0.5 : SafeUnitName gere les secret values
-            local myName = Overlord.Sync and Overlord.Sync:GetPlayerFullName() or Overlord:SafeUnitName("player") or "?"
+            local myName = Overlord.Sync and Overlord.Sync:GetPlayerFullName() or "?"
             if not RecordAndCheckKillFarm(fullKillerName, myName) then
                 Overlord.Leaderboard:RegisterKill(fullKillerName)
                 -- La victime connait le front physique du kill : appliquer aussi localement
