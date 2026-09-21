@@ -569,7 +569,7 @@ local function AcceptRequesterRate(senderKey)
 end
 
 function sync:OnHistoryCatchupRequest(payload, sender, channel)
-    if channel ~= "WHISPER" or type(payload) ~= "string"
+    if (channel ~= "WHISPER" and channel ~= "BETA") or type(payload) ~= "string"
         or not sender or sender == "" then return false end
     local version, campaignIdStr, startStr, nonce, countStr, hashStr =
         strsplit(":", payload, 6)
@@ -945,7 +945,7 @@ local function StartReturnPush(pending, target)
 end
 
 function sync:OnHistoryPushBegin(payload, sender, channel)
-    if channel ~= "WHISPER" or type(payload) ~= "string" then return false end
+    if (channel ~= "WHISPER" and channel ~= "BETA") or type(payload) ~= "string" then return false end
     local version, campaignIdStr, startStr, nonce, countStr, hashStr =
         strsplit(":", payload, 6)
     local campaignId = math.floor(tonumber(campaignIdStr) or 0)
@@ -1006,7 +1006,7 @@ local function SendPushTerminal(target, campaignId, nonce, status, count, hash)
 end
 
 function sync:OnHistoryPushCommit(payload, sender, channel)
-    if channel ~= "WHISPER" or type(payload) ~= "string" then return false end
+    if (channel ~= "WHISPER" and channel ~= "BETA") or type(payload) ~= "string" then return false end
     local version, campaignIdStr, nonce, countStr, hashStr = strsplit(":", payload, 5)
     local campaignId = math.floor(tonumber(campaignIdStr) or 0)
     local count = math.floor(tonumber(countStr) or -1)
@@ -1074,7 +1074,7 @@ end
 -- le rythme de dispatch local n'a aucune incidence, mais chaque paquet LK/LC/LR
 -- doit avoir effectivement traverse le whisper avant HA:D puis HA:C.
 function sync:NoteHistoryCatchupDelivery(msgType, payload, sender, channel)
-    if channel ~= "WHISPER" or type(payload) ~= "string"
+    if (channel ~= "WHISPER" and channel ~= "BETA") or type(payload) ~= "string"
         or (msgType ~= "LK" and msgType ~= "LC" and msgType ~= "LR") then
         return false
     end
@@ -1106,7 +1106,7 @@ end
 -- digest restent mis a jour par NoteHistoryCatchupDelivery seulement apres que
 -- le handler a accepte la ligne ; cette fonction ne consomme donc aucun budget.
 function sync:IsExpectedHistoryCatchupDelivery(msgType, sender, channel)
-    if channel ~= "WHISPER"
+    if (channel ~= "WHISPER" and channel ~= "BETA")
         or (msgType ~= "LK" and msgType ~= "LC" and msgType ~= "LR") then
         return false
     end
@@ -1128,7 +1128,7 @@ function sync:IsExpectedHistoryCatchupDelivery(msgType, sender, channel)
 end
 
 function sync:OnHistoryCatchupAck(payload, sender, channel)
-    if channel ~= "WHISPER" or type(payload) ~= "string" then return false end
+    if (channel ~= "WHISPER" and channel ~= "BETA") or type(payload) ~= "string" then return false end
     local version, campaignIdStr, nonce, status, countStr, hashStr =
         strsplit(":", payload, 6)
     local campaignId = math.floor(tonumber(campaignIdStr) or 0)
@@ -1136,7 +1136,7 @@ function sync:OnHistoryCatchupAck(payload, sender, channel)
     local hash = math.floor(tonumber(hashStr) or -1)
     local pending = self._historyCatchupPending
     if version ~= PROTOCOL_VERSION or not pending or pending.terminal
-        or channel ~= "WHISPER" or campaignId ~= pending.campaignId
+        or (channel ~= "WHISPER" and channel ~= "BETA") or campaignId ~= pending.campaignId
         or nonce ~= pending.nonce or SenderKey(sender) ~= pending.targetKey
         or count < 0 or count > MAX_SNAPSHOT_QUEUE
         or hash < 0 or hash >= HASH_MOD then return false end

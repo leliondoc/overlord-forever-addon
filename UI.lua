@@ -2415,6 +2415,9 @@ function Overlord.UI:CreateZoneListSection(parent)
         Overlord.UI:OnCommunityButtonClick()
     end)
     zoneListFrame.communityBtn = communityBtn
+    if Overlord.CommunityModeEnabled == false and self.SetWC3ButtonUnavailable then
+        self.SetWC3ButtonUnavailable(communityBtn, L.COMMUNITY_BETA_DISABLED)
+    end
 
     local exportBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
         L.CHECK_PVP_BUTTON, "Interface\\Icons\\INV_Misc_Note_01")
@@ -2757,6 +2760,7 @@ end
 
 -- Recalcule domination, contenu principal, actions, bandeau communaute et hauteur totale.
 function Overlord.UI:ApplyCommunityHintLayout(memberOfClub)
+    if Overlord.CommunityModeEnabled == false then memberOfClub = true; communitySuccessUntil = 0 end
     local zf = zoneListFrame
     if not zf or not zf._communityLayoutReady or not zf.domBarFrame or not zf.domTitleLabel or not zf.zonesPanel or not zf.zoneListHeader then
         return
@@ -3258,6 +3262,7 @@ local function CreateCommunityPopupFrame()
 end
 
 function Overlord.UI:ShowCommunityPopup()
+    if Overlord.CommunityModeEnabled == false then return end
     if not Overlord.Sync then return end
     if not communityPopupFrame then
         communityPopupFrame = CreateCommunityPopupFrame()
@@ -3427,6 +3432,7 @@ function Overlord.UI:OnDiscordButtonClick()
 end
 
 function Overlord.UI:OnCommunityButtonClick()
+    if Overlord.CommunityModeEnabled == false then return end
     if not Overlord.Sync or not Overlord.Sync.FindCommunityClub then return end
     lastCommunityClubPollAt = 0
     local clubId = Overlord.Sync:FindCommunityClub()
@@ -3454,6 +3460,14 @@ function Overlord.UI:OnCommunityButtonClick()
 end
 
 function Overlord.UI:RefreshCommunityButton()
+    if Overlord.CommunityModeEnabled == false then
+        if communityHintPanel then communityHintPanel:Hide() end
+        if lastCommunityLayoutClubState ~= true then
+            lastCommunityLayoutClubState = true
+            self:ApplyCommunityHintLayout(true)
+        end
+        return
+    end
     if not communityBtn or not Overlord.Sync or not Overlord.Sync.FindCommunityClub then return end
     local now = GetTime()
     if now - lastCommunityClubPollAt >= COMMUNITY_CLUB_POLL_INTERVAL then

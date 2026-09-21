@@ -1,11 +1,12 @@
-1.0.0
+1.0.1
 
 **Overlord Forever**
 
 - Count outdoor PvP kills worldwide at every character level, including outside war fronts. Instanced combat remains excluded; duplicate and farming protection remains active.
 
 - First public Forever build: Arathi (same capture points as Retail), Loch Modan, Durotar, and Ashenvale war fronts.
-- Sync over party/raid, Overlord Forever character communities, and Battle.net friends (cross-faction). Character identity is `Given Family` only: no realm suffix is stored or compared.
+- During the beta, Community mode is greyed out. Its gameplay data uses the addon channel, party/raid and Battle.net bridges, including keeps, outposts, leaderboards and history. Relays preserve the original author, deduplicate deliveries and keep NA/EU separate.
+- Beta relay traffic shares a 1 KB/s budget with a 500-byte burst allowance across destinations. Bounded queues, fragmented snapshots and targeted return routes limit traffic; existing gameplay validation remains active. Character identity is `Given Family` only.
 - Guild keeps on Stonetalon, Wetlands, Badlands, Crossroads, Redridge, and Mulgore. Outposts on the four Forever fronts.
 - Gold mines, wood, weekly domination, featured front rotation, and faction call.
 - Removed speculative save-loading delays, capture resurrection from map rendering/saving, and reset bypasses. Native SavedVariables loading and the Retail campaign/sync rules are preserved.
@@ -21,5 +22,5 @@
 
 **Recommended after updating**
 
-- `/reload` after installing.
-- Join the Overlord Forever community for your region when the invite is published.
+- Fully restart WoW after installing this update (new Lua module).
+- Other participants need this version for the beta relay. Communities are not required; a connected channel/group/Battle.net path is still needed between players.

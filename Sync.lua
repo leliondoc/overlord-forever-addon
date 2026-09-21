@@ -608,6 +608,7 @@ local function RecordNearbySender(sender)
 end
 
 function Overlord.Sync:Initialize()
+    if Overlord.BetaNetwork then Overlord.BetaNetwork:Start() end
     -- Restaure le flag de victoire depuis la DB (TV-2 : evite le re-fire apres /reload).
     -- Si une victoire a eu lieu apres le dernier reset hebdo, la campagne est terminee.
     if OverlordDB then
@@ -790,6 +791,13 @@ function Overlord.Sync:SendSyncRequest(opts)
     local requestMode = opts.fullResponse == true and "F"
         or (opts.stateResponse == true and "S") or "T"
     local payload = SRPayload(requestMode)
+    if Overlord.CommunityModeEnabled == false and Overlord.BetaNetwork then
+        if opts.betaTarget then
+            self:ExpectDirectFullLeaderboardResponse(opts.betaTarget)
+            return Overlord.BetaNetwork:Send("SR", payload, opts.betaTarget)
+        end
+        Overlord.BetaNetwork:Broadcast("SR", payload)
+    end
     -- Une SR locale partagee remplit deja le role de la prochaine vague periodique.
     -- La noter avant les transports evite qu'un ticker decale de quelques secondes
     -- emette la meme demande une seconde fois.
@@ -1206,6 +1214,8 @@ function Overlord.Sync:ExpectDirectFullLeaderboardResponse(target)
 end
 
 function Overlord.Sync:ConsumeExpectedFullLeaderboardResponse(msgType, sender, channel)
+    if channel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsDispatching(sender)
+        and Overlord.BetaNetwork:IsTargetedDispatch() then channel = "WHISPER" end
     if channel ~= "WHISPER" or (msgType ~= "LK" and msgType ~= "LC" and msgType ~= "LR") then
         return false
     end
@@ -1603,6 +1613,7 @@ function Overlord.Sync:HandleCommunityMembershipLost()
 end
 
 function Overlord.Sync:FindCommunityClub(forceRefresh, preserveCacheOnMiss)
+    if Overlord.CommunityModeEnabled == false then return nil end
     if Overlord.InstanceSuspended then return communityClubId end
     local now = GetTime()
 
@@ -1753,6 +1764,7 @@ end
 
 -- Tous les clubs Overlord du pool local (ex. US + US 2 si le joueur y est abonne).
 function Overlord.Sync:FindAllCommunityClubs()
+    if Overlord.CommunityModeEnabled == false then return {} end
     if not communityClubId and #communityClubIds == 0 then
         self:FindCommunityClub()
     end
@@ -1763,6 +1775,7 @@ end
 -- API retourne deliberement un cache distinct : FindAllCommunityClubs garde
 -- exactement sa portee locale pour les captures, alertes et Guild Keeps.
 function Overlord.Sync:FindEuropeanLeaderboardBridgeClubs()
+    if Overlord.CommunityModeEnabled == false then return {} end
     if GetPlayerRegion() ~= "eu" then return europeanLeaderboardBridgeClubIds end
     if #europeanLeaderboardBridgeClubIds == 0 then
         self:FindCommunityClub()
@@ -1805,6 +1818,9 @@ end
 -- force=true : bypasse le cooldown scanInterval (utilise apres BroadcastCapture pour propagation
 -- immediate cross-realm / cross-faction sans attendre le prochain cycle de 120s).
 function Overlord.Sync:ScanCommunityMembers(force)
+    if Overlord.CommunityModeEnabled == false then
+        return Overlord.BetaNetwork and Overlord.BetaNetwork:Broadcast("NH", Overlord.Version) or 0
+    end
     -- C_Club retourne des tables "forbidden" en instance PvP : ne pas iterer du tout
     if Overlord.InstanceSuspended then return 0 end
     local clubId = self:FindCommunityClub()
@@ -1869,6 +1885,9 @@ end
 -- Chemin fiable pour late joiner ; reponse whisper SR = 100 % ZA garanti cote receveur.
 function Overlord.Sync:SendLoginCatchupSyncToCommunity()
     if Overlord.InstanceSuspended or IsInInstance() then return 0 end
+    if Overlord.CommunityModeEnabled == false then
+        return Overlord.BetaNetwork and Overlord.BetaNetwork:Broadcast("SR", SRPayload("T")) or 0
+    end
     if not self:FindCommunityClub() then return 0 end
 
     local myName = self:GetPlayerFullName()
@@ -1928,6 +1947,7 @@ end
 
 -- Envoi : priorite GROUPE (RAID/PARTY) pour que la sync marche cross-realm, sinon canal Overlord (meme royaume uniquement).
 function Overlord.Sync:Send(msgType, data, groupOnly)
+    if Overlord.BetaNetwork and Overlord.BetaNetwork:IsEcho(msgType, data) then return false end
     if Overlord.InstanceSuspended then return end
     -- Filet de securite : IsInInstance/GetInstanceInfo peuvent confirmer une instance
     -- meme quand InstanceSuspended est brievement false (race condition en loading)
@@ -1981,6 +2001,7 @@ local channelBudgetResetTime = 0
 
 -- Envoi supplementaire au canal (pour visibilite cross-faction : ennemis voient captures/zones en cours)
 function Overlord.Sync:SendToChannel(msgType, data, critical)
+    if Overlord.BetaNetwork and Overlord.BetaNetwork:IsEcho(msgType, data) then return false end
     if not SYNC_USE_REALM_CHANNEL or Overlord.InstanceSuspended or IsInInstance() then return false end
     local channelId = self:GetChannelId()
     if not channelId then return false end
@@ -2129,6 +2150,10 @@ function Overlord.Sync:HasRecentKillCredit(playerName)
 end
 
 function Overlord.Sync:SendWhisper(msgType, data, target)
+    if Overlord.CommunityModeEnabled == false and Overlord.BetaNetwork
+        and msgType ~= "R1" and msgType ~= "BF" and Overlord.BetaNetwork:IsPeer(target) then
+        return Overlord.BetaNetwork:Send(msgType, data or "", target)
+    end
     if Overlord.InstanceSuspended or IsInInstance() then return end
     -- Cible vide / trop courte / espaces : l'API envoie quand meme et Blizzard affiche
     -- "Aucun joueur nommé '' ne joue actuellement" (non filtre par l'ancien pattern (.+)).
@@ -2206,6 +2231,9 @@ function Overlord.Sync:SendToBNet(gameAccountID, msgType, data)
     local msg = msgType .. ":" .. band
     if data and data ~= "" then msg = msg .. ":" .. data end
     if #msg > 4000 then return end
+    if (msgType == "BR" or msgType == "BF") and Overlord.CommunityModeEnabled == false then
+        msg = "R2:" .. band .. ":" .. msgType .. ":" .. (data or "")
+    end
     -- securecall au lieu de pcall : empeche le taint de se propager au systeme de chat
     -- (pcall attrape les erreurs mais laisse le taint contaminer SetLastTellTarget)
     if C_BattleNet and C_BattleNet.SendGameData then
@@ -2258,8 +2286,15 @@ end
 
 -- Envoi a tous les amis BNet (throttle 0.4s entre chaque, max 10 amis)
 -- Donnees addon uniquement : rien n'apparait dans le chat (BN_CHAT_MSG_ADDON)
+function Overlord.Sync:GetBetaBNetTargets()
+    return GetBNetFriendsInWoW()
+end
+
 function Overlord.Sync:SendToBNetFriends(msgType, data)
     if not SYNC_USE_BNET_OUTBOUND then return end
+    if Overlord.CommunityModeEnabled == false and Overlord.BetaNetwork then
+        return Overlord.BetaNetwork:Broadcast(msgType, data or "")
+    end
     local friends = GetBNetFriendsInWoW()
     for idx, gameAccountID in ipairs(friends) do
         C_Timer.After((idx - 1) * BNET_DELAY_PER_FRIEND, function()
@@ -2306,6 +2341,11 @@ end
 
 -- Dispatch des messages BNet recus (appele sous pcall depuis OnBNetMessage).
 function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
+    if msgType == "BR" and Overlord.BetaNetwork then
+        return Overlord.BetaNetwork:Receive(payload, ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
+    elseif msgType == "BF" and Overlord.BetaNetwork then
+        return Overlord.BetaNetwork:ReceiveFragment(payload, ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
+    end
     if self.SenderBurstShouldDrop and self:SenderBurstShouldDrop(sender, msgType) then return end
     if msgType == "K" then
         local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
@@ -2395,10 +2435,17 @@ function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
     end
 end
 
--- R2 ne transporte jamais d'autorite gameplay. Le destinataire ne peut pas prouver
--- qu'un replyTo fourni par son ami BNet vient bien d'un R1 WoW direct ; C/ZS restent
--- donc sur les chemins directs (groupe, canal, communaute, BNet direct).
+-- Beta BR/BF preserves the original author through a bounded relay envelope.
+-- Earlier hops are vouched for by the BNet peer; legacy R2 remains SR/TV only.
 function Overlord.Sync:OnReceiveR2Relay(senderID, replyTo, innerMsg)
+    if innerMsg and (innerMsg:sub(1, 3) == "BR:" or innerMsg:sub(1, 3) == "BF:") and Overlord.CommunityModeEnabled == false and Overlord.BetaNetwork then
+        local pool = Overlord.RealmPools:GetOverlordPoolTag()
+        if replyTo ~= "Forever_" .. pool .. "_A" and replyTo ~= "Forever_" .. pool .. "_H" then return end
+        if innerMsg:sub(1, 3) == "BF:" then
+            return Overlord.BetaNetwork:ReceiveFragment(innerMsg:sub(4), ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
+        end
+        return Overlord.BetaNetwork:Receive(innerMsg:sub(4), ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
+    end
     local msgType, payload = strsplit(":", innerMsg, 2)
     if msgType == "SR" then
         -- On simule une SR et on envoie la reponse a replyTo au lieu du sender BNet.
@@ -2410,11 +2457,15 @@ end
 
 function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
     if prefix ~= PREFIX then return end
+    if channel == "BETA" and (not Overlord.BetaNetwork or not Overlord.BetaNetwork:IsDispatching(sender)) then return end
+    if message and message:sub(1, 3) == "BF:" and Overlord.BetaNetwork then
+        return Overlord.BetaNetwork:ReceiveFragment(message:sub(4), sender, channel)
+    end
 
     if self:IsSenderLocalPlayer(sender) then return end
 
     -- Tracker les joueurs Overlord actifs pour la detection d'events massifs (80v80 sans raid)
-    RecordNearbySender(sender)
+    if channel ~= "BETA" then RecordNearbySender(sender) end
 
     local msgType, payload = strsplit(":", message, 2)
     if self.NoteRaidLateJoinCatchUpResponse then
@@ -2694,9 +2745,9 @@ local R1_RELAY_COOLDOWN = 2
 local R1_RELAY_MAX_PAYLOAD = 320
 local lastR1RelayBySender = Overlord.Sync:NewBoundedSessionLedger(512, 0, 60)
 
--- Recoit R1 : seules les requetes d'etat et TV sans autorite capteur traversent le bridge.
+-- R1 beta accepts bounded BF envelopes; legacy R1 remains restricted to SR/TV.
 function Overlord.Sync:OnReceiveR1(sender, payload)
-    if not payload or not Overlord.InActiveFront then return end
+    if not payload then return end
     if #payload > R1_RELAY_MAX_PAYLOAD then return end
     local targetBand, replyTo, rest = strsplit(":", payload, 3)
     if not targetBand or not replyTo or not rest then return end
@@ -2707,6 +2758,12 @@ function Overlord.Sync:OnReceiveR1(sender, payload)
     if not self.CaptureContributorMatchesSender
         or not self:CaptureContributorMatchesSender(replyTo, sender) then return end
     local innerType = rest:match("^([^:]+)")
+    if innerType == "BF" and Overlord.CommunityModeEnabled == false and Overlord.BetaNetwork then
+        local pool = Overlord.RealmPools:GetOverlordPoolTag()
+        if targetBand ~= "Forever_" .. pool .. "_A" and targetBand ~= "Forever_" .. pool .. "_H" then return end
+        return Overlord.BetaNetwork:ReceiveFragment(rest:sub(4), sender, "WHISPER")
+    end
+    if not Overlord.InActiveFront then return end
     if innerType ~= "SR" and innerType ~= "TV" then return end
     local now = GetTime()
     local relayKey = tostring(sender) .. ":" .. innerType
@@ -4737,6 +4794,12 @@ function Overlord.Sync:OnSyncRequestRelayed(replyTo, payload)
 end
 
 function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
+    -- Routed request: delayed replies return through SendWhisper's beta route.
+    if channel == "BETA" then
+        if not Overlord.BetaNetwork or not Overlord.BetaNetwork:IsDispatching(sender) then return end
+        channel = Overlord.BetaNetwork:IsTargetedDispatch() and "WHISPER" or "CHANNEL"
+        replyToOverride = sender
+    end
     -- Extraction de la version, victoryTs et victoryFaction du payload SR
     -- Format: "faction:version:victoryTs:victoryFaction"
     local _, senderVersionField, senderVTs, senderVF, senderVFront, senderRequestMode =
@@ -5533,7 +5596,7 @@ function Overlord.Sync:OnReceiveCaptureNetworkProbe(
     holdTime, holdRequirement, captureBaseline, sender, sourceChannel)
     local baseline = tonumber(captureBaseline)
     local ceiling = tonumber(Overlord.PLAUSIBLE_SYNC_CAPTURE_CEILING) or 500
-    if sourceChannel ~= "WHISPER" or type(probeId) ~= "string"
+    if (sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) or type(probeId) ~= "string"
         or not probeId:match("^[0-9a-f]+$") or #probeId > 24
         or (tonumber(holdTime) or 0) > 10
         or not baseline or baseline < 0 or baseline ~= math.floor(baseline)
@@ -5604,7 +5667,7 @@ function Overlord.Sync:OnReceiveCaptureNetworkProbe(
 end
 
 function Overlord.Sync:OnReceiveCaptureNetworkProbeReply(payload, sender, sourceChannel)
-    if sourceChannel ~= "WHISPER" or type(payload) ~= "string" or #payload > 80 then return end
+    if (sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) or type(payload) ~= "string" or #payload > 80 then return end
     local probeId, waveId = strsplit(":", payload)
     if not probeId or not probeId:match("^[0-9a-f]+$")
         or not waveId or not waveId:match("^[%w_-]+$") then return end
@@ -5791,7 +5854,7 @@ function Overlord.Sync:ActivateCaptureNetworkRouteCommit(row)
 end
 
 function Overlord.Sync:OnReceiveCaptureNetworkRouteCommit(payload, sender, sourceChannel)
-    if sourceChannel ~= "WHISPER" or type(payload) ~= "string" or #payload > 240 then return end
+    if (sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) or type(payload) ~= "string" or #payload > 240 then return end
     local probeId, routeId, waveId, slotRaw, sizeRaw, baselineRaw,
         predecessorName, successorName =
         strsplit(":", payload)
@@ -5880,7 +5943,7 @@ function Overlord.Sync:OnReceiveCaptureNetworkRouteCommit(payload, sender, sourc
 end
 
 function Overlord.Sync:OnReceiveCaptureNetworkRouteAck(payload, sender, sourceChannel)
-    if sourceChannel ~= "WHISPER" or type(payload) ~= "string" or #payload > 90 then return end
+    if (sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) or type(payload) ~= "string" or #payload > 90 then return end
     local routeId, waveId, senderSlotRaw = strsplit(":", payload)
     local senderSlot = math.floor(tonumber(senderSlotRaw) or 0)
     if not routeId or not routeId:match("^[0-9a-f]+$")
@@ -6208,7 +6271,7 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
     -- Un W honnete est toujours un addon whisper cible. Ignorer le marqueur sur
     -- PARTY/RAID/CHANNEL/BNet empeche un diffuseur de designer tous les receveurs
     -- et garantit la borne stricte de trois temoins engages.
-    if sourceChannel ~= "WHISPER" then
+    if (sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) then
         zsNetworkWitness, zsNetworkRouteId = nil, nil
     end
     local zsCapturerShard = tonumber(zsCapturerShardStr)
@@ -9567,7 +9630,7 @@ end
 -- Une page ZA en whisper provenant d'une cible attendue constitue l'ACK du dump SR.
 -- Le simple succes syntaxique de SendAddonMessage ne ferme plus le rattrapage.
 function Overlord.Sync:NoteRaidLateJoinCatchUpResponse(sender, msgType, channel, payload)
-    if channel ~= "WHISPER" or msgType ~= "ZA" or not sender or sender == "" then
+    if (channel ~= "WHISPER" and not (channel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) or msgType ~= "ZA" or not sender or sender == "" then
         return false
     end
     local snapshotId, pageIndex, pageCount, body =

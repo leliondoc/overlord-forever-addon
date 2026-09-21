@@ -1,0 +1,86 @@
+-- Exercise production entry points and the real leaderboard, without any club.
+assert(loadfile("tests/forever_world_kills.test.lua"))()
+function GetChannelName() return 0 end
+function strsplit(sep, value, limit)
+    local fields, start = {}, 1
+    while not limit or #fields < limit - 1 do
+        local at = value:find(sep, start, true)
+        if not at then break end
+        fields[#fields + 1] = value:sub(start, at - 1); start = at + #sep
+    end
+    fields[#fields + 1] = value:sub(start)
+    return (unpack or table.unpack)(fields)
+end
+C_Club = setmetatable({}, { __index = function() error("Beta attempted community API") end })
+C_BattleNet = { GetGameAccountInfoByID = function()
+    return { characterName = "Bridge Tester", clientProgram = "WoW", wowProjectID = WOW_PROJECT_ID,
+        factionName = "Alliance", isInCurrentRegion = true }
+end }
+assert(loadfile("SyncBetaNetwork.lua"))()
+local s, net = Overlord.Sync, Overlord.BetaNetwork
+local payload = s:BuildKillBroadcastPayload("Remote Tester", "", 3, "WARRIOR", "Alliance",
+    1789527600, "", "enus", 0, 1789527600, 2)
+local function wire(id, kind, data)
+    return "eu|integration-" .. id .. "|" .. time() .. "|*|Remote Tester,Bridge Tester|" .. kind .. "|" .. data
+end
+local packet = wire(1, "K", payload)
+s:OnBNetMessage("R2:Forever_eu_A:BR:" .. packet, 123)
+assert(Overlord.Leaderboard.kills["Remote Tester"] == 3, "Real R2 kill handler lost low-level score")
+assert(not net.stats.lastError, net.stats.lastError)
+assert(s:FindCommunityClub() == nil)
+assert(#s:FindAllCommunityClubs() == 0)
+assert(s:IsGuildKeepCommunitySender("Remote Tester"), "Routed keep sender lost its trust context")
+-- A second score through fragmented R2 reaches the same production receiver.
+payload = s:BuildKillBroadcastPayload("Remote Tester", "", 4, "WARRIOR", "Alliance",
+    1789527600, "", "enus", 0, 1789527600, 2)
+packet = wire(2, "K", payload)
+local count = math.ceil(#packet / 170)
+for i = count, 1, -1 do
+    s:OnBNetMessage("R2:Forever_eu_H:BF:integration-2:" .. i .. ":" .. count .. ":"
+        .. packet:sub((i - 1) * 170 + 1, i * 170), 123)
+end
+assert(Overlord.Leaderboard.kills["Remote Tester"] == 4, "Fragmented production R2 failed")
+local before = net.stats.received
+s:OnBNetMessage("R2:Forever_us_A:BR:" .. wire(3, "K", payload), 123)
+assert(net.stats.received == before, "Cross-region bridge was accepted")
+assert(loadfile("SyncGuildKeep.lua"))()
+assert(loadfile("SyncOutpost.lua"))()
+Overlord.GuildKeepSites = { fixture = {} }
+Overlord.OutpostSites = { fixture = {} }
+local keep, outpost
+Overlord.GuildKeep = {
+    SanitizeGuildName = function(_, value) return value end,
+    GetState = function() return { status = "neutral" } end,
+    ApplyRemoteState = function(_, _, state) keep = state; return false end,
+}
+Overlord.Outpost = {
+    SanitizeGuildName = function(_, value) return value end,
+    GetState = function() return { status = "neutral" } end,
+    ApplyRemoteState = function(_, _, state) outpost = state; return false end,
+}
+s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(4, "GK",
+    "v8:fixture:neutral:0:::0:" .. time() .. ":120:eu:0:::0::0:0:0:"), 123)
+assert(keep and keep.pool == "eu" and keep.communitySource, "Real keep receiver rejected routed snapshot")
+s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(5, "OP",
+    "v1:fixture:neutral:0:::0:0:" .. time() .. ":120:eu:0"), 123)
+assert(outpost and outpost.pool == "eu", "Real outpost receiver rejected routed snapshot")
+local mergedGuild
+local originalMerge = Overlord.Leaderboard.MergeOwnedGuildMetadata
+Overlord.Leaderboard.MergeOwnedGuildMetadata = function(self, name, guild, at)
+    mergedGuild = { name, guild }
+    return originalMerge(self, name, guild, at)
+end
+local epoch = Overlord:TimestampToCampaignId(OverlordDB.lastResetTimestamp)
+s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(6, "GI",
+    "Remote Tester:Beta Guild:" .. epoch .. ":" .. time()), 123)
+assert(mergedGuild and mergedGuild[1] == "Remote Tester" and mergedGuild[2] == "Beta Guild",
+    "Production guild identity handler rejected relay")
+-- UI/community entry points use the replacement transport, preserving payloads.
+local sent = {}
+net.Broadcast = function(_, kind, data) sent[#sent + 1] = { kind, data }; return 1 end
+for _, method in ipairs({ "BroadcastToCommunity", "BroadcastGuildKeepToCommunity",
+    "BroadcastToEnemyFactionCommunity", "BroadcastGeneralToFactionCommunity" }) do
+    assert(s[method](s, "GK", "unchanged") == 1, method .. " lost its replacement route")
+    assert(sent[#sent][1] == "GK" and sent[#sent][2] == "unchanged")
+end
+print("Beta integration: real R2/fragmented R2, low-level kills, peer trust, no club API, unchanged community payloads OK")

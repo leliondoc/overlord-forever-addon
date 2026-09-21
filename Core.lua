@@ -1,6 +1,8 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.0.0"
+Overlord.Version = "1.0.1"
+-- Temporary beta policy. Set true when community transport is enabled again.
+Overlord.CommunityModeEnabled = false
 Overlord.IsInitialized = false
 Overlord.PlayerFaction = nil
 Overlord.InActiveFront = false

@@ -79,6 +79,7 @@ end
 -- GR/GY : uniquement via la communaute Battle.net Overlord (whispers membres en ligne).
 local function guildResolutionCanBroadcast()
     if Overlord.InstanceSuspended or IsInInstance() then return false end
+    if Overlord.CommunityModeEnabled == false then return Overlord.BetaNetwork ~= nil end
     local sync = Overlord.Sync
     if not sync or not sync.FindCommunityClub then return false end
     return sync:FindCommunityClub() ~= nil
@@ -253,7 +254,7 @@ function Overlord.Sync:OnReceiveClassRequest(payload, sender)
 end
 
 function Overlord.Sync:OnReceiveClassAnswer(payload, sender, channel)
-    if channel ~= "WHISPER" then return end
+    if (channel ~= "WHISPER" and channel ~= "BETA") then return end
     if type(payload) ~= "string" or payload == "" then return end
     if #payload > CLASS_REQUEST_MAX_PAYLOAD then return end
     classRequestsMaybePurge()
@@ -479,7 +480,7 @@ function Overlord.Sync:FlushGuildRequests()
 end
 
 function Overlord.Sync:OnReceiveGuildRequest(payload, sender, channel)
-    if channel ~= "WHISPER" then return end
+    if (channel ~= "WHISPER" and channel ~= "BETA") then return end
     if type(payload) ~= "string" or payload == "" then return end
     if #payload > CLASS_REQUEST_MAX_PAYLOAD then return end
     if Overlord.InstanceSuspended or IsInInstance() then return end
@@ -538,7 +539,7 @@ end
 
 function Overlord.Sync:OnReceiveGuildAnswer(payload, sender, channel)
     -- GY : whisper (reponse GR) ou canal/groupe (batch SR AppendGuildMetadataToSrQueue).
-    if channel ~= "WHISPER" and channel ~= "CHANNEL" and channel ~= "RAID" and channel ~= "PARTY" then return end
+    if (channel ~= "WHISPER" and channel ~= "BETA") and channel ~= "CHANNEL" and channel ~= "RAID" and channel ~= "PARTY" then return end
     if type(payload) ~= "string" or payload == "" then return end
     if #payload > CLASS_REQUEST_MAX_PAYLOAD then return end
     guildRequestsMaybePurge()
@@ -732,7 +733,7 @@ end
 function Overlord.Sync:OnReceiveGuildIdentity(payload, sender, channel)
     if not payload or payload == "" then return end
     if Overlord.InstanceSuspended then return end
-    if channel ~= "WHISPER" and channel ~= "CHANNEL" and channel ~= "RAID" and channel ~= "PARTY" then
+    if (channel ~= "WHISPER" and channel ~= "BETA") and channel ~= "CHANNEL" and channel ~= "RAID" and channel ~= "PARTY" then
         return
     end
     local rawName, guildTag, epochStr, guildAtStr = strsplit(":", payload, 4)

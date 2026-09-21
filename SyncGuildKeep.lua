@@ -800,6 +800,9 @@ end
 
 -- GH : le royaume expediteur doit correspondre au pool local.
 local function SenderRealmMatchesCurrentPool(sender, sourceChannel)
+    if sourceChannel == "BETA" and Overlord.BetaNetwork then
+        return Overlord.BetaNetwork:IsDispatching(sender)
+    end
     if type(sender) ~= "string" or sender == "" then return false end
     if (sourceChannel == "PARTY" or sourceChannel == "RAID")
         and SyncSenderIsInOurGroup(sender) then return true end
@@ -2502,7 +2505,7 @@ function Overlord.Sync:OnReceiveGuildKeepState(payload, sender, channel)
         if exactHandled then
             NoteTrustedGuildKeepTraffic(siteKey, true)
             if Overlord.MarkGuildKeepSyncReceived then Overlord:MarkGuildKeepSyncReceived() end
-            if authorityChanged and channel == "WHISPER"
+            if authorityChanged and (channel == "WHISPER" or channel == "BETA")
                 and GuildKeepPayloadHasExplicitLocalPool(remotePool) then
                 local correctedPayload = BuildGuildKeepPayload(siteKey, stCurrent)
                 if correctedPayload then
@@ -2607,7 +2610,7 @@ function Overlord.Sync:OnReceiveGuildKeepState(payload, sender, channel)
     if not applied then return end
     NoteTrustedGuildKeepTraffic(siteKey, recoveryAdvanced)
     local stAfter = Overlord.GuildKeep:GetState(siteKey)
-    if channel == "WHISPER" and status == "in_progress" and stAfter then
+    if (channel == "WHISPER" or channel == "BETA") and status == "in_progress" and stAfter then
         local deliveredKey = GuildKeepCriticalStartKey(siteKey, stAfter)
         if deliveredKey then seenCommunityGKCriticalStart[siteKey] = deliveredKey end
     end
@@ -2634,7 +2637,7 @@ function Overlord.Sync:OnReceiveGuildKeepState(payload, sender, channel)
     -- Un GK ennemi peut arriver par la communaute sur un seul joueur du raid.
     -- Le republier sur les chemins primaires locaux aligne GK sur ZS :
     -- groupe/raid + canal, sans re-fan-out communaute (relai 1-hop).
-    if channel == "WHISPER" and payload and payload ~= ""
+    if (channel == "WHISPER" or channel == "BETA") and payload and payload ~= ""
         and GuildKeepPayloadHasExplicitLocalPool(remotePool) then
         if status == "in_progress" then
             -- Transition locale (notre cote decouvre le siege) : message one-shot critique,
@@ -2760,7 +2763,7 @@ function Overlord.Sync:OnReceiveGuildKeepAbort(
     end
     NoteTrustedGuildKeepTraffic(terminal.siteKey, true)
     if Overlord.MarkGuildKeepSyncReceived then Overlord:MarkGuildKeepSyncReceived() end
-    if sourceChannel == "WHISPER" then
+    if (sourceChannel == "WHISPER" or sourceChannel == "BETA") then
         local statePayload = BuildGuildKeepPayload(
             terminal.siteKey, Overlord.GuildKeep:GetState(terminal.siteKey))
         if statePayload then
@@ -2854,7 +2857,7 @@ function Overlord.Sync:OnReceiveGuildKeepCapture(
     -- Si la verite arrive par communaute, conserver le snapshot GK enrichi (autorite
     -- terminale) sur les chemins locaux. Le degrader en GC faisait rejeter le relais
     -- par tous les peers froids du raid/canal.
-    if sourceChannel == "WHISPER" and payload and payload ~= "" and GuildKeepPayloadHasExplicitLocalPool(remotePool) then
+    if (sourceChannel == "WHISPER" or sourceChannel == "BETA") and payload and payload ~= "" and GuildKeepPayloadHasExplicitLocalPool(remotePool) then
         local statePayload = BuildGuildKeepPayload(siteKey, Overlord.GuildKeep:GetState(siteKey))
         if statePayload then
             BroadcastGuildKeepToGroup("GK", statePayload)
@@ -2899,7 +2902,7 @@ function Overlord.Sync:OnReceiveDominationBoost(payload, sender, sourceChannel)
         if not self:MarkDominationBoostEventSeen(fac, eventId, epoch) then return end
         -- Canal/groupe : le DX emis au spend porte les secondes exactes (merge max).
         -- Whisper/BNet : relais communaute sans DX dedie ; completer seulement jusqu'au ratio cible.
-        local secondsViaWbOnly = sourceChannel == "WHISPER" or sourceChannel == "BNET"
+        local secondsViaWbOnly = (sourceChannel == "WHISPER" or sourceChannel == "BETA") or sourceChannel == "BNET"
         if secondsViaWbOnly and Overlord.ApplyWoodDominationBonusSeconds then
             local applyDelta = delta
             if Overlord.GetDominationDisplayFractions then
@@ -2920,7 +2923,7 @@ function Overlord.Sync:OnReceiveDominationBoost(payload, sender, sourceChannel)
         if Overlord.UI and Overlord.UI.RefreshDomination then
             Overlord.UI:RefreshDomination()
         end
-        if sourceChannel ~= "WHISPER" and payload and payload ~= ""
+        if (sourceChannel ~= "WHISPER" and sourceChannel ~= "BETA") and payload and payload ~= ""
             and GuildKeepPayloadHasExplicitLocalPool(wirePool) then
             local relayPl, relayKey = payload, "WB:" .. payload
             C_Timer.After(0.5, function()
@@ -3100,7 +3103,7 @@ function Overlord.Sync:OnReceiveGuildKeepDailyProof(payload, sender, sourceChann
     end
     local currentDay = Overlord.GuildKeep and Overlord.GuildKeep.GetServerSiegeDayKey
         and Overlord.GuildKeep:GetServerSiegeDayKey() or ""
-    local trustedHistoricalTransport = sourceChannel == "WHISPER"
+    local trustedHistoricalTransport = (sourceChannel == "WHISPER" or sourceChannel == "BETA")
         or sourceChannel == "RAID" or sourceChannel == "PARTY"
     local trustedHistoricalReplay = trustedHistoricalTransport
         and currentDay ~= "" and dayKey < currentDay
@@ -3218,7 +3221,7 @@ function Overlord.Sync:OnReceiveGuildKeepDailyProof(payload, sender, sourceChann
     if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
         Overlord.LeaderboardUI:RefreshIfVisible()
     end
-    if sourceChannel == "WHISPER" and GuildKeepPayloadHasExplicitLocalPool(remotePool) then
+    if (sourceChannel == "WHISPER" or sourceChannel == "BETA") and GuildKeepPayloadHasExplicitLocalPool(remotePool) then
         BroadcastGuildKeepToGroup("GH", payload)
         SendGuildKeepToChannel("GH", payload, true)
     end

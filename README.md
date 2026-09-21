@@ -6,7 +6,7 @@ Addon **World of Warcraft Forever** pour la capture de zones sur les fronts du m
 |---|---|
 | **Auteur** | Troma |
 | **Licence** | All Rights Reserved |
-| **Version** | 1.0.0 |
+| **Version** | 1.0.1 |
 | **Jeu** | WoW Forever (`## Interface: 16001`) |
 | **CurseForge** | https://www.curseforge.com/wow/addons/overlord-forever |
 | **Dépôt** | https://github.com/leliondoc/overlord-forever-addon |
@@ -72,8 +72,10 @@ Pas de Gilnéas, Forêt d'Elwynn, ni Tarides du Sud (cartes Forever, pas de scis
 
 ### Synchronisation multi-joueurs
 
-- État partagé entre joueurs de la même région NA/EU (canal de faction, groupe/raid, communauté Overlord Forever). Forever n'a pas de royaumes.
-- Prise en charge **cross-faction** via les communautés de personnages et les relais Battle.net.
+- État partagé entre joueurs de la même région NA/EU (canal addon, groupe/raid et relais Battle.net). Forever n'a pas de royaumes.
+- Pendant la bêta, le mode communauté est grisé. Les captures, fortins, avant-postes, classements et historiques passent par ces passerelles, y compris entre factions via Battle.net.
+- Le relais conserve l'auteur initial, élimine les doublons et limite les trajets à trois relais. Son budget partagé est de 1 Ko/s, réserve de 500 octets comprise, avec 128 messages en attente au maximum. Les grosses données sont fragmentées ; trois amis Battle.net au maximum sont sélectionnés par message, à tour de rôle.
+- Tous les participants doivent avoir cette version et un chemin de communication entre eux. La découverte périodique permet le rattrapage ; une file saturée ou un paquet expiré peut retarder la synchronisation. Les auteurs antérieurs sont attestés par le relais, pas authentifiés directement par Blizzard. Les contrôles de campagne et de validité des données restent actifs.
 - Noms Forever en deux parties (ex. `Troma Orcbane`) acceptés dans la sync et les whispers.
 - Commande `/ov sync` pour demander un rattrapage manuel.
 
@@ -105,7 +107,7 @@ Pas de Gilnéas, Forêt d'Elwynn, ni Tarides du Sud (cartes Forever, pas de scis
 
 - **Kills JcJ en monde ouvert** comptés partout, à tous les niveaux, même hors des fronts Forever. Les instances (BG, arènes, donjons et raids) sont exclues.
 - **Avant-postes** sur les quatre fronts.
-- Appel de faction pour alerter les alliés de la communauté Overlord Forever.
+- Appel de faction pour alerter les alliés accessibles par les passerelles de synchronisation.
 
 ### Langues
 

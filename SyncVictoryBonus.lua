@@ -643,7 +643,7 @@ local function HasVictoryTransportEvidence(ev, sender, sourceChannel)
 end
 
 local function IsHistoricalReplaySenderTrusted(sync, sender, sourceChannel)
-    if sourceChannel == "WHISPER" then
+    if (sourceChannel == "WHISPER" or sourceChannel == "BETA") then
         return (sync.SenderIsInOurGroup and sync:SenderIsInOurGroup(sender or ""))
             or (sync.IsGuildKeepCommunitySender and sync:IsGuildKeepCommunitySender(sender or ""))
     end
