@@ -56,6 +56,7 @@ jobs:
           lua5.1 tests/forever_persistence.test.lua
           lua5.1 tests/forever_leaderboard.test.lua
           lua5.1 tests/forever_world_kills.test.lua
+          lua5.1 tests/forever_resource_maps.test.lua
           lua5.1 tests/forever_beta_network.test.lua
           lua5.1 tests/forever_beta_integration.test.lua
 

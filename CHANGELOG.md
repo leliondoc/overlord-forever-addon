@@ -1,6 +1,8 @@
-1.0.1
+1.0.2
 
 **Overlord Forever**
+
+- Fix missing mine and forest markers on Forever maps, including Southshore: use Classic map IDs for continent projections and shared map aliases for world-map/minimap markers and harvesting detection.
 
 - Count outdoor PvP kills worldwide at every character level, including outside war fronts. Instanced combat remains excluded; duplicate and farming protection remains active.
 
@@ -22,5 +24,5 @@
 
 **Recommended after updating**
 
-- Fully restart WoW after installing this update (new Lua module).
+- `/reload` after installing, then reopen the map.
 - Other participants need this version for the beta relay. Communities are not required; a connected channel/group/Battle.net path is still needed between players.

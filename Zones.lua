@@ -1440,28 +1440,28 @@ Overlord.MineDatabase = {
     {
         id = "azurelode",
         name = L.MINE_AZURELODE,
-        mapID = 25,              -- Hillsbrad Foothills
+        mapID = 1424, mapIDs = { [25] = true, [1424] = true }, -- Hillsbrad Foothills
         center = {34.4, 72.2},
         radius = 4,
     },
     {
         id = "darrow",
         name = L.MINE_DARROW,
-        mapID = 25,              -- Hillsbrad Foothills (Austrivage / Southshore)
+        mapID = 1424, mapIDs = { [25] = true, [1424] = true }, -- Hillsbrad Foothills (Austrivage / Southshore)
         center = {46.0, 55},
         radius = 4,
     },
     {
         id = "elemgorge",
         name = L.MINE_ELEMGORGE,
-        mapID = 21,              -- Silverpine Forest
+        mapID = 1421, mapIDs = { [21] = true, [1421] = true }, -- Silverpine Forest
         center = {57.3, 46.4},
         radius = 4,
     },
     {
         id = "stonessplinter",
         name = L.MINE_STONESSPLINTER,
-        mapID = 48,              -- Loch Modan
+        mapID = 1432, mapIDs = { [48] = true, [1432] = true }, -- Loch Modan
         center = {33.2, 70.0},
         radius = 4,
     },
@@ -1469,7 +1469,7 @@ Overlord.MineDatabase = {
         id = "jasperlode",
         name = L.MINE_JASPERLODE,
         -- Ancien front Elwynn : mine conservee hors front Forever.
-        mapID = 37,
+        mapID = 1429,
         mapIDs = { [37] = true, [1429] = true },
         center = {61.9, 54.2},
         radius = 4,
@@ -1477,6 +1477,12 @@ Overlord.MineDatabase = {
 }
 
 -- Index de lookup par ID
+-- Use the same map aliases for harvesting, world-map circles and minimap pins.
+function Overlord.Zones:ResourceMatchesMap(resource, mapID)
+    return resource ~= nil and mapID ~= nil
+        and (resource.mapID == mapID or (resource.mapIDs and resource.mapIDs[mapID] == true)) or false
+end
+
 local MineLookup = {}
 for _, mine in ipairs(Overlord.MineDatabase) do
     MineLookup[mine.id] = mine
@@ -1493,6 +1499,7 @@ end
 local mineMapIDs = {}
 for _, mine in ipairs(Overlord.MineDatabase) do
     mineMapIDs[mine.mapID] = true
+    for mapID in pairs(mine.mapIDs or {}) do mineMapIDs[mapID] = true end
 end
 
 function Overlord.Zones:IsMineMapID(mapID)
@@ -1539,7 +1546,7 @@ function Overlord.Zones:GetCurrentPlayerMine()
     py = py * 100
 
     for _, mine in ipairs(Overlord.MineDatabase) do
-        if mine.mapID == resolvedMapID then
+        if self:ResourceMatchesMap(mine, resolvedMapID) then
             local dx = mine.center[1] - px
             local dy = mine.center[2] - py
             local scale = Overlord.MineMapCircleScale or 0.50
@@ -1561,7 +1568,7 @@ Overlord.WoodDatabase = {
     {
         id = "wetlands_forest",
         name = (L and L.WOOD_ZONE_WETLANDS_FOREST) or "Wetlands Forest",
-        mapID = 56, -- Les Paluns
+        mapID = 1437, mapIDs = { [56] = true, [1437] = true }, -- Les Paluns
         center = {42.4, 55.4},
         radius = 4,
     },
@@ -1578,6 +1585,7 @@ for _, woodZone in ipairs(Overlord.WoodDatabase) do
     end
     if woodZone.mapID then
         woodMapIDs[woodZone.mapID] = true
+        for mapID in pairs(woodZone.mapIDs or {}) do woodMapIDs[mapID] = true end
     end
 end
 
@@ -1649,7 +1657,7 @@ function Overlord.Zones:GetCurrentPlayerWoodZone()
     py = py * 100
 
     for _, woodZone in ipairs(Overlord.WoodDatabase) do
-        if woodZone.mapID == resolvedMapID and woodZone.center and woodZone.radius then
+        if self:ResourceMatchesMap(woodZone, resolvedMapID) and woodZone.center and woodZone.radius then
             local dx = woodZone.center[1] - px
             local dy = woodZone.center[2] - py
             if dx * dx + dy * dy <= woodZone.radius * woodZone.radius then

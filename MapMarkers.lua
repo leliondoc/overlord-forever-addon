@@ -2873,7 +2873,7 @@ local function UpdateResourceMinimapPins(cfg, dataRefresh)
 
     for _, resource in ipairs(database) do
         local pin = cfg.pins[resource.id]
-        if pin and resource.mapID == mapID then
+        if pin and Overlord.Zones:ResourceMatchesMap(resource, mapID) then
             if dataRefresh or pin._olResourceStyle == nil then
                 local r, g, b, fa, ba, br, bg, bb
                 if cfg.getCircleColors then
@@ -4029,7 +4029,7 @@ local function RefreshResourceOverlays(mapID, database, overlayTable, cfg)
     if not canvas or not parent then return end
 
     for _, resource in ipairs(database) do
-        if resource.mapID == mapID then
+        if Overlord.Zones:ResourceMatchesMap(resource, mapID) then
             local ov = overlayTable[resource.id]
             if ov and ov:GetParent() ~= parent then
                 ov:Hide()
