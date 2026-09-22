@@ -3770,8 +3770,6 @@ local BLOCKED_KILL_CONTRIBUTOR_BASES = {
 -- Moderation du classement hebdomadaire 2026-09-22 uniquement. Un ancien pair
 -- peut encore relayer son total maximal : la ligne doit rester refusee jusqu'au
 -- reset suivant, puis le joueur peut de nouveau etre credite normalement.
-local REMOVED_CURRENT_CAMPAIGN_KILL_ROW = "roxymigurdia greyrat"
-local REMOVED_KILL_ROW_CAMPAIGN_ID = 20260922
 
 function Overlord.Sync:IsDeniedKillContributor(playerName)
     if type(playerName) ~= "string" or playerName == "" then return false end
@@ -3781,13 +3779,13 @@ function Overlord.Sync:IsDeniedKillContributor(playerName)
     local base = normalized:match("^([^%-]+)") or normalized
     local lowerBase = base:lower()
     if BLOCKED_KILL_CONTRIBUTOR_BASES[lowerBase] == true then return true end
-    if lowerBase ~= REMOVED_CURRENT_CAMPAIGN_KILL_ROW then return false end
+    if lowerBase ~= "roxymigurdia greyrat" then return false end
     local campaignId = OverlordDB and tonumber(OverlordDB.campaignId)
     if not campaignId and Overlord.TimestampToCampaignId
         and Overlord.GetCurrentCampaignStartTs then
         campaignId = Overlord:TimestampToCampaignId(Overlord:GetCurrentCampaignStartTs())
     end
-    return campaignId == REMOVED_KILL_ROW_CAMPAIGN_ID
+    return campaignId == 20260922
 end
 
 function Overlord.Sync:IsEligibleKillContributorLevel(level)
