@@ -6,7 +6,7 @@ Addon **World of Warcraft Forever** pour la capture de zones sur les fronts du m
 |---|---|
 | **Auteur** | Troma |
 | **Licence** | All Rights Reserved |
-| **Version** | 1.0.3 |
+| **Version** | 1.0.6 |
 | **Jeu** | WoW Forever (`## Interface: 16001`) |
 | **CurseForge** | https://www.curseforge.com/wow/addons/overlord-forever |
 | **Dépôt** | https://github.com/leliondoc/overlord-forever-addon |
@@ -24,6 +24,13 @@ La bêta Forever peut écrire `OverlordDB` dans `WTF`, sans le relire au prochai
 `/reload`, changement de personnage ou redémarrage. Les captures et les drapeaux
 des pop-up sont alors remplacés par un état neuf. Attendre après la connexion
 ne répare pas cette lecture. Voir le [repro sur le forum Blizzard](https://eu.forums.blizzard.com/en/wow/t/addon-savedvariables-never-load-on-160169893/629799).
+
+La synchronisation communautaire récupère automatiquement les classements auprès
+des joueurs encore connectés, y compris après un chargement vide. Depuis 1.0.6,
+elle essaie rapidement plusieurs pairs si le premier est également vide. Cela
+ne remplace pas une sauvegarde persistante : si tous les joueurs perdent leur
+état au redémarrage, aucun message d'addon ne peut reconstruire seul les scores.
+La version CurseForge ne contient aucune sauvegarde personnelle.
 
 Sous Windows, le contournement local s'installe depuis le dossier `Overlord` :
 

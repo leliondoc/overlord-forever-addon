@@ -191,4 +191,34 @@ for _, e in ipairs(clients) do
         assert(info.race == "Orc" and info.raceSex == 2, "Replica race metadata diverged")
     end
 end
+-- A beta client whose SavedVariables were not loaded must rotate past an empty
+-- peer quickly. The same bounded HR exchange then imports a populated peer.
+local empty = client("Empty Tester", "alliance")
+local fresh = client("Fresh Tester", "alliance")
+fresh.Overlord.SavedVariablesLoadedAtLogin = false
+empty.Overlord.Sync.IsOnlineCommunitySender = function(_, sender)
+    return sender == fresh.name
+end
+a.Overlord.Sync.IsOnlineCommunitySender = function(_, sender)
+    return sender == fresh.name
+end
+fresh.Overlord.Sync.GetOnlineCommunityMembers = function()
+    return { empty.name }
+end
+assert(fresh.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp())
+advance(28)
+assert(fresh.Overlord.Sync._emptySaveCatchupRounds == 1,
+    "Blank beta peer incorrectly certified lost leaderboard as recovered")
+assert((fresh.OverlordDB.leaderboardHistoryCatchupAck.historyAt or 0) == 0,
+    "Blank beta peer incorrectly certified keep and outpost history")
+fresh.Overlord.Sync.GetOnlineCommunityMembers = function()
+    return { a.name }
+end
+advance(250)
+assert(fresh.Overlord.Leaderboard.kills[names[180]] == 180,
+    "Beta missing-save client did not recover from the next populated peer")
+assert(not fresh.Overlord.Sync._emptySaveCatchupRounds,
+    "Empty-save retry state survived successful recovery")
+assert((fresh.OverlordDB.leaderboardHistoryCatchupAck.historyAt or 0) > 0,
+    "Populated peer did not certify historical catch-up")
 print("Beta catchup: four replicas converge; late Analyst, 180 kills + 120 captures, guilds, three hops, saturated queue, return union and verified ACK OK")

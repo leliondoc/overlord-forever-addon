@@ -1,4 +1,10 @@
-1.0.5
+1.0.6
+
+**Overlord Forever 1.0.6**
+
+- When the Forever beta fails to load SavedVariables, begin the existing bounded, direct leaderboard catch-up shortly after the territorial login burst. If the first peer is also empty, rotate through up to three more peers promptly instead of treating an empty response as recovered data.
+- Keep the Retail-style community, channel, group and Battle.net synchronization, campaign guards and per-frame work budgets. No player backup or local bridge is packaged in this release.
+- The beta client still needs the included Windows SavedVariables repair for reliable persistence when no peer with the old data remains online.
 
 **Overlord Forever 1.0.5**
 

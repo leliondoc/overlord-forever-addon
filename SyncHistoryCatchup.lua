@@ -28,6 +28,12 @@ local EXHAUSTED_RETRY_SEC = 2 * 60
 local PERIODIC_ROSTER_TTL_SEC = 15 * 60
 local CAMPAIGN_MIN_AGE_SEC = 30 * 60
 local INITIAL_DELAY_SEC = 24
+-- On the affected Forever beta, the client can omit every account SavedVariable
+-- at login. Let the territorial burst finish first, then seek a durable peer
+-- sooner than the normal veteran anti-entropy round.
+local EMPTY_SAVE_INITIAL_DELAY_SEC = 16
+local EMPTY_SAVE_RETRY_SEC = 30
+local MAX_EMPTY_SAVE_ROUNDS = 3
 -- Fragmentation and three relay hops share 1 KB/s. A full 340-row snapshot
 -- can legitimately exceed the direct-whisper timeouts, even without loss.
 local ACK_TIMEOUT_SEC = Overlord.BetaNetworkEnabled ~= false and 600 or 120
@@ -137,11 +143,12 @@ end
 
 -- Un C_Timer.After possede par generation : aucune boucle OnUpdate, aucun scan
 -- synchrone et jamais plus d'un reveil anti-entropie arme par client.
-local function ArmNextHistoryCatchup(delay)
+local function ArmNextHistoryCatchup(delay, skipJitter)
     sync._historyCatchupWakeGeneration =
         math.floor(tonumber(sync._historyCatchupWakeGeneration) or 0) + 1
     local generation = sync._historyCatchupWakeGeneration
-    C_Timer.After(PeriodicDelay(delay), function()
+    C_Timer.After(skipJitter and math.max(30, math.floor(tonumber(delay) or 30))
+        or PeriodicDelay(delay), function()
         if not Overlord.Sync
             or Overlord.Sync._historyCatchupWakeGeneration ~= generation then return end
         if Overlord.InstanceSuspended or IsInInstance()
@@ -150,7 +157,13 @@ local function ArmNextHistoryCatchup(delay)
             return
         end
         if Overlord.Sync.ScheduleLoginLeaderboardHistoryCatchUp then
-            Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true, true)
+            local ack = OverlordDB and OverlordDB.leaderboardHistoryCatchupAck
+            local historyAt = type(ack) == "table"
+                and math.floor(tonumber(ack.historyAt) or 0) or 0
+            local needsHistory = historyAt <= 0
+                or NowServer() - historyAt >= HISTORY_ACK_SEC
+            Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(
+                true, not needsHistory)
         end
     end)
 end
@@ -840,6 +853,9 @@ local function CompleteHistoryCatchup(pending, count, hash)
     ClearOutboundPush(pending)
     pending.awaitingAck = false
     pending.terminal = true
+    local emptyBetaRound = Overlord.SavedVariablesLoadedAtLogin == false
+        and math.floor(tonumber(pending.requestedCount) or -1) == 0
+        and math.floor(tonumber(count) or -1) == 0
     if OverlordDB then
         local now = NowServer()
         local previous = OverlordDB.leaderboardHistoryCatchupAck
@@ -847,7 +863,7 @@ local function CompleteHistoryCatchup(pending, count, hash)
             and math.floor(tonumber(previous.campaignId) or 0) or 0
         local historyAt = previousCampaign == pending.campaignId
             and math.floor(tonumber(previous.historyAt or previous.at) or 0) or 0
-        if not pending.ladderOnly then historyAt = now end
+        if not pending.ladderOnly and not emptyBetaRound then historyAt = now end
         OverlordDB.leaderboardHistoryCatchupAck = {
             campaignId = pending.campaignId,
             at = now,
@@ -857,7 +873,17 @@ local function CompleteHistoryCatchup(pending, count, hash)
         }
     end
     sync._historyCatchupPending = nil
-    ArmNextHistoryCatchup(RECENT_ACK_SEC)
+    -- A blank beta client can first meet another blank client. An empty digest
+    -- proves transport delivery, not that its lost weekly scores were recovered.
+    -- Rotate a few more peers promptly, without a broadcast or unbounded retry.
+    local emptyRounds = math.floor(tonumber(sync._emptySaveCatchupRounds) or 0)
+    if emptyBetaRound and emptyRounds < MAX_EMPTY_SAVE_ROUNDS then
+        sync._emptySaveCatchupRounds = emptyRounds + 1
+        ArmNextHistoryCatchup(EMPTY_SAVE_RETRY_SEC, true)
+    else
+        if not emptyBetaRound then sync._emptySaveCatchupRounds = nil end
+        ArmNextHistoryCatchup(RECENT_ACK_SEC)
+    end
     return true
 end
 
@@ -1241,7 +1267,9 @@ function sync:ScheduleLoginLeaderboardHistoryCatchUp(force, ladderOnly)
         ladderOnly = ladderOnly == true,
         terminal = false,
     }
-    C_Timer.After(INITIAL_DELAY_SEC, function()
+    local initialDelay = Overlord.SavedVariablesLoadedAtLogin == false
+        and EMPTY_SAVE_INITIAL_DELAY_SEC or INITIAL_DELAY_SEC
+    C_Timer.After(initialDelay, function()
         ScheduleAttempt(generation, campaignId, 1)
     end)
     return true
