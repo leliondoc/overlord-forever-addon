@@ -6,6 +6,8 @@ Overlord = {
     SavedVariablesLoadedAtLogin = false,
 }
 OverlordDB = { config = { popupsSeen = {}, popupsDailyShown = {} } }
+time = os.time
+date = os.date
 assert(loadfile("Popups.lua"))()
 
 local popups = Overlord.Popups
