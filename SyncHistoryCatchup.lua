@@ -28,10 +28,12 @@ local EXHAUSTED_RETRY_SEC = 2 * 60
 local PERIODIC_ROSTER_TTL_SEC = 15 * 60
 local CAMPAIGN_MIN_AGE_SEC = 30 * 60
 local INITIAL_DELAY_SEC = 24
-local ACK_TIMEOUT_SEC = 120
-local PUSH_ACK_TIMEOUT_SEC = 120
+-- Fragmentation and three relay hops share 1 KB/s. A full 340-row snapshot
+-- can legitimately exceed the direct-whisper timeouts, even without loss.
+local ACK_TIMEOUT_SEC = Overlord.CommunityModeEnabled == false and 600 or 120
+local PUSH_ACK_TIMEOUT_SEC = Overlord.CommunityModeEnabled == false and 600 or 120
 local SEND_INTERVAL_SEC = 0.12
-local RESPONSE_WATCHDOG_SEC = 110
+local RESPONSE_WATCHDOG_SEC = Overlord.CommunityModeEnabled == false and 570 or 110
 local MAX_ATTEMPTS = 4
 local REQUESTER_COOLDOWN_SEC = 120
 local COMPAT_PULL_COOLDOWN_SEC = 2 * 60
@@ -460,6 +462,9 @@ end
 
 local function FinishResponse(state)
     if sync._historyCatchupResponse ~= state then return end
+    -- A refused enqueue is not a delivered ACK. Retry on the next tick before
+    -- releasing the response or authorizing the return push.
+    if sync:SendWhisper("HA", TerminalAckData(state), state.target) ~= true then return end
     -- Si les ladders differaient, le demandeur va d'abord fusionner notre
     -- snapshot puis nous repousser cette union. N'accepter HB que pour ce nonce
     -- precis empeche un membre de la communaute d'ouvrir un flux arbitraire.
@@ -490,7 +495,6 @@ local function FinishResponse(state)
         end
     end
     local compatPullTarget = state.compatibilityPull and state.target or nil
-    sync:SendWhisper("HA", TerminalAckData(state), state.target)
     ClearResponse(state)
     if compatPullTarget then ScheduleCompatFullPull(compatPullTarget) end
 end
@@ -499,8 +503,9 @@ local function SendResponseTick(state)
     if sync._historyCatchupResponse ~= state then return end
     local packet = state.queue and state.queue[state.index]
     if packet then
-        sync:SendWhisper(packet.type, packet.data, state.target)
-        state.index = state.index + 1
+        if sync:SendWhisper(packet.type, packet.data, state.target) == true then
+            state.index = state.index + 1
+        end
         return
     end
     if state.phase == "ladder" then
@@ -906,28 +911,31 @@ local function StartReturnPush(pending, target)
             hash = hash,
         }
         pending.pushOutbound = push
+        local pushDeadline = GetTime() + RESPONSE_WATCHDOG_SEC
         push.ticker = C_Timer.NewTicker(SEND_INTERVAL_SEC, function()
             if sync._historyCatchupPending ~= pending
                 or pending.pushOutbound ~= push then
                 if push.ticker and push.ticker.Cancel then push.ticker:Cancel() end
                 return
             end
+            if GetTime() > pushDeadline then
+                RetryHistoryCatchup(pending)
+                return
+            end
             local packet = push.queue and push.queue[push.index]
             if packet then
                 if sync:SendWhisper(packet.type, packet.data, push.target) ~= true then
-                    RetryHistoryCatchup(pending)
                     return
                 end
                 push.index = push.index + 1
                 return
             end
+            if sync:SendWhisper("HC", ReturnCommitData(pending, push), push.target) ~= true then
+                return
+            end
             if push.ticker and push.ticker.Cancel then push.ticker:Cancel() end
             push.ticker = nil
             pending.awaitingPushAck = true
-            if sync:SendWhisper("HC", ReturnCommitData(pending, push), push.target) ~= true then
-                RetryHistoryCatchup(pending)
-                return
-            end
             C_Timer.After(PUSH_ACK_TIMEOUT_SEC, function()
                 if sync._historyCatchupPending == pending
                     and pending.pushOutbound == push

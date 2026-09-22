@@ -793,8 +793,11 @@ function Overlord.Sync:SendSyncRequest(opts)
     local payload = SRPayload(requestMode)
     if Overlord.CommunityModeEnabled == false and Overlord.BetaNetwork then
         if opts.betaTarget then
-            self:ExpectDirectFullLeaderboardResponse(opts.betaTarget)
-            return Overlord.BetaNetwork:Send("SR", payload, opts.betaTarget)
+            local sent = Overlord.BetaNetwork:Send("SR", payload, opts.betaTarget)
+            if sent and requestMode == "F" then
+                self:ExpectDirectFullLeaderboardResponse(opts.betaTarget)
+            end
+            return sent
         end
         Overlord.BetaNetwork:Broadcast("SR", payload)
     end
@@ -2238,7 +2241,9 @@ function Overlord.Sync:SendToBNet(gameAccountID, msgType, data)
     -- (pcall attrape les erreurs mais laisse le taint contaminer SetLastTellTarget)
     if C_BattleNet and C_BattleNet.SendGameData then
         securecall(C_BattleNet.SendGameData, gameAccountID, PREFIX, msg)
+        return true
     end
+    return false
 end
 
 -- Liste des amis BNet connectes en WoW Forever (meme projet que le client local).
@@ -5269,7 +5274,12 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
             -- ce tick n'avance pas l'index et le suivant reprendra le meme slot.
             if not item then return end
             if whisperTarget then
-                Overlord.Sync:SendWhisper(item.type, item.data, whisperTarget)
+                if Overlord.Sync:SendWhisper(item.type, item.data, whisperTarget) ~= true then
+                    -- A bounded beta relay can apply backpressure. Keep this row
+                    -- until accepted (or the response watchdog expires).
+                    responseState.queueIndex = math.max(
+                        0, (tonumber(responseState.queueIndex) or 1) - 1)
+                end
             elseif bnetTarget then
                 Overlord.Sync:SendToBNet(bnetTarget, item.type, item.data)
             elseif channel == "RAID" or channel == "PARTY" then
@@ -8554,6 +8564,9 @@ local lastBNetKillBroadcast = 0
 -- K transporte un total absolu, donc les doublons sont absorbes par SetPlayerKills(max).
 function Overlord.Sync:SendKillBroadcast(payload)
     if not payload or payload == "" then return end
+    if Overlord.CommunityModeEnabled == false and Overlord.BetaNetwork then
+        return Overlord.BetaNetwork:Broadcast("K", payload)
+    end
     local msg = "K:" .. payload
     if self:IsLargeEvent() then
         local raidOk = IsInRaid() and UnitInRaid("player")

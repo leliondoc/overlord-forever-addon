@@ -54,11 +54,17 @@ jobs:
           lua5.1 tests/lua_syntax_check.lua "${LUA_FILES[@]}"
           lua5.1 tests/zone_capture_lease.test.lua
           lua5.1 tests/forever_persistence.test.lua
+          lua5.1 tests/forever_recovery.test.lua
           lua5.1 tests/forever_leaderboard.test.lua
           lua5.1 tests/forever_world_kills.test.lua
           lua5.1 tests/forever_resource_maps.test.lua
+          lua5.1 tests/forever_capture_locations.test.lua
           lua5.1 tests/forever_beta_network.test.lua
           lua5.1 tests/forever_beta_integration.test.lua
+          lua5.1 tests/forever_beta_catchup.test.lua
+          lua5.1 tests/forever_general.test.lua
+          lua5.1 tests/forever_contracts.test.lua
+          lua5.1 tests/forever_contract_mail.test.lua
 
           mapfile -t TEST_FILES < <(find tests -maxdepth 1 -type f -name '*.test.mjs' -print | sort)
           node --test "${TEST_FILES[@]}"

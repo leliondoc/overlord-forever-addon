@@ -4,6 +4,7 @@ local now, pending, calls = 100, {}, 0
 function GetTime() return now end
 function time() return 1790016000 + math.floor(now) end
 function IsInInstance() return false end
+function IsInGroup() return true end
 function strsplit(sep, value, limit)
     local fields, start = {}, 1
     while not limit or #fields < limit - 1 do
@@ -42,22 +43,27 @@ local function client(name, channel, pool)
     function s:CanonicalForeverName(n) return type(n) == "string" and n:match("^%a+ %a+$") and n or nil end
     function s:ForeverIdentitiesMatch(x, y) return type(x) == "string" and type(y) == "string" and x:lower() == y:lower() end
     function s:GetPlayerFullName() return name end
+    function s:GetChannelId() return 1 end
     function s:ExpectDirectFullLeaderboardResponse() end
     function s:SendSyncRequest() end
     function s:SendToGroup(kind, fragment)
+        if not IsInGroup() then return false end
         -- Deliberately duplicate every channel delivery to exercise dedup.
         return self:SendToChannel(kind, fragment)
     end
     function s:SendToChannel(kind, fragment)
+        if a.refuseChannel then a.refuseChannel = false; return false end
         assert(#kind + #fragment + 1 <= 255, "Addon packet exceeded 255 bytes")
         for _, other in ipairs(clients) do
             if other ~= a and other.channel == channel then
                 other.BetaNetwork:ReceiveFragment(fragment, name, "CHANNEL")
             end
         end
+        return true
     end
     function s:GetBetaBNetTargets() return a.friends end
     function s:SendToBNet(other, kind, wire)
+        if other.offline then return false end
         assert(#wire < 4000)
         if kind == "BR" then
             a.lastWire = wire
@@ -66,12 +72,14 @@ local function client(name, channel, pool)
             assert(kind == "BF")
             other.BetaNetwork:ReceiveFragment(wire, name, "BNET", a)
         end
+        return true
     end
     function s:SendWhisper(kind, data, target)
         assert(kind == "BF" and #data + 3 <= 255)
         for _, other in ipairs(clients) do
             if other.name == target then other.BetaNetwork:ReceiveFragment(data, name, "WHISPER") end
         end
+        return true
     end
     function s:OnAddonMessage(_, message, transport, origin)
         assert(transport == "BETA")
@@ -98,8 +106,10 @@ local c = client("Horde Tester", "two")
 local d = client("Dwarf Tester", "two")
 local us = client("Other Tester", "us", "us")
 b.friends, c.friends = { c, us }, { b }
-local kinds = { "C", "ZS", "ZR", "ZA", "GK", "GC", "GA", "G7", "GH", "OP", "OC", "LO", "LOC", "OE",
-    "K", "LK", "LR", "LC", "DX", "WB", "VB", "TV", "HR", "HB", "HC", "HA", "GI", "GR", "GY" }
+local kinds = {}
+for kind in ("SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR DX VB MN MS WN WS GK GC GA G7 GH OP OC WB SH HR HB HC HA LD CR CA GR GY GI FC GE GP GX GD GM BQ BR PB PK MK PX PP PM"):gmatch("%S+") do
+    if kind ~= "SR" then kinds[#kinds + 1] = kind end
+end
 for _, kind in ipairs(kinds) do
     assert(a.BetaNetwork:Send(kind, string.rep("x", 450)))
     drain()
@@ -110,6 +120,28 @@ end
 assert(#d.received == #kinds, "Duplicate routes produced duplicate delivery")
 assert(#us.received == 0, "EU data leaked to NA")
 assert(#a.received == 0, "Original sender received its own forwarded event")
+a.refuseChannel = true
+assert(a.BetaNetwork:Broadcast("DX", "front-one", {
+    { type = "DX", payload = "front-two" }, { type = "VB", payload = "bonus" },
+    { type = "MS", payload = "stock" },
+}) == 1)
+drain()
+for i, payload in ipairs({ "front-one", "front-two", "bonus", "stock" }) do
+    assert(d.received[#kinds + i].payload == payload, "Bundled payload/throttled fragment lost: " .. payload)
+end
+IsInGroup = function() return false end
+a.refuseChannel = true
+assert(a.BetaNetwork:Send("K", "retry-without-group"))
+drain()
+assert(d.received[#d.received].payload == "retry-without-group", "Throttled solo channel fragment was discarded")
+-- A friend disconnecting must not hold the FIFO until its packet expires.
+us.offline = true
+local started = now
+assert(a.BetaNetwork:Send("K", "dead-friend-one"))
+assert(a.BetaNetwork:Send("K", "dead-friend-two"))
+drain()
+assert(now - started < 20 and d.received[#d.received].payload == "dead-friend-two", "Offline BNet friend blocked the relay")
+IsInGroup = function() return true end
 assert(a.BetaNetwork:Send("HB", string.rep("y", 3300))); drain()
 assert(d.received[#d.received].payload == string.rep("y", 3300), "Large history page lost fragments")
 -- Targeted request/reply traverses the reverse route without cross-faction whispers.

@@ -7,7 +7,7 @@
 ## Notes-esMX: Captura de zonas en frentes del mundo abierto (WoW Forever): sincronización, mapa, clasificación.
 ## Notes-deDE: Zonen-Eroberung auf offenen Kriegsfronten (WoW Forever). Sync, Karte, Rangliste.
 ## Notes-ruRU: Захват зон на фронтах открытого мира (WoW Forever): синхронизация, карта, рейтинг.
-## Version: 1.0.2
+## Version: 1.0.3
 ## SavedVariables: OverlordDB
 ## IconTexture: Interface\AddOns\Overlord\Textures\overlord_minimap
 ## X-Category: PvP
@@ -30,6 +30,9 @@ SyncResolution.lua
 SyncAux.lua
 ZoneCaptureLease.lua
 FrontActivity.lua
+ManualBountySync.lua
+ManualBounty.lua
+ManualBountyMail.lua
 CombatTracker.lua
 ZoneControl.lua
 GuildKeep.lua
@@ -42,6 +45,11 @@ SyncHistoryCatchup.lua
 SyncBetaNetwork.lua
 MapMarkers.lua
 MapMarkersKeep.lua
+General.lua
+GeneralSync.lua
+GeneralMap.lua
+ManualBountyMap.lua
+GeneralNameplate.lua
 ZoneIndicator.lua
 HallOfFameData.lua
 HallOfFameUI.lua
@@ -49,11 +57,7 @@ UI.lua
 ActionShortcut.lua
 Button.lua
 Popups.lua
+ManualBountyUI.lua
 LeaderboardUI.lua
 SettingsPanel.lua
 Commands.lua
-
-# BEGIN OVERLORD LOCAL SAVEDVARIABLES
-_local\SavedVariables\Overlord.lua
-_local\RestoreLeaderboard.lua
-# END OVERLORD LOCAL SAVEDVARIABLES

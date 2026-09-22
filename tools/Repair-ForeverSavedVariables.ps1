@@ -32,6 +32,17 @@ if (($toc.Contains($beginMarker) -or $toc.Contains($endMarker)) -and
     throw 'Incomplete local bridge block in Overlord.toc; no files were changed.'
 }
 $cleanToc = [regex]::Replace($toc, $bridgePattern, '')
+# Keep private recovery hooks already installed after the live save. Reinstalling
+# the bridge must not silently remove a user's one-time data recovery.
+$recoveryHooks = @()
+$oldBlock = [regex]::Match($toc, $bridgePattern).Value
+foreach ($line in ($oldBlock -split '\r?\n')) {
+    $hook = $line.Trim()
+    if ($hook -match '^_local\\[A-Za-z0-9_-]+\.lua$' -and
+        $hook -ne '_local\SavedVariablesBridgeStatus.lua') {
+        $recoveryHooks += $hook
+    }
+}
 
 if (Test-Path -LiteralPath $localRoot) {
     if ((Get-Item -LiteralPath $localRoot -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
@@ -71,6 +82,12 @@ New-Item -ItemType Directory -Path $localRoot -Force | Out-Null
 $backupRoot = Join-Path $localRoot ('backup-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $backupRoot | Out-Null
 Copy-Item -LiteralPath $tocPath -Destination (Join-Path $backupRoot 'Overlord.toc')
+foreach ($hook in $recoveryHooks) {
+    $hookPath = Join-Path $addonRoot $hook
+    if (Test-Path -LiteralPath $hookPath -PathType Leaf) {
+        Copy-Item -LiteralPath $hookPath -Destination (Join-Path $backupRoot (Split-Path $hook -Leaf))
+    }
+}
 if (-not $Disable) {
     foreach ($suffix in @('', '.bak', '.capture-backup')) {
         $candidate = $sourcePath + $suffix
@@ -84,8 +101,18 @@ if (-not $Disable) {
     # A directory junction follows the NEW file when WoW rotates .lua to .lua.bak.
     # A hard link or a one-time copy would keep loading an obsolete capture.
     $newline = if ($toc.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $statusPath = Join-Path $localRoot 'SavedVariablesBridgeStatus.lua'
+    if (Test-Path -LiteralPath $statusPath -PathType Leaf) {
+        Copy-Item -LiteralPath $statusPath -Destination (Join-Path $backupRoot 'SavedVariablesBridgeStatus.lua')
+    }
+    [IO.File]::WriteAllText($statusPath,
+        '-- Local bridge probe; contains no account data.' + $newline +
+        'Overlord = Overlord or {}' + $newline +
+        'Overlord.SavedVariablesBridgeLoaded = type(OverlordDB) == "table"' + $newline, $utf8)
+    $hookLines = if ($recoveryHooks.Count) { ($recoveryHooks -join $newline) + $newline } else { '' }
     $newToc = $cleanToc.TrimEnd("`r", "`n") + $newline + $newline +
         $beginMarker + $newline + '_local\SavedVariables\Overlord.lua' + $newline +
+        '_local\SavedVariablesBridgeStatus.lua' + $newline + $hookLines +
         $endMarker + $newline
 } else {
     $newToc = $cleanToc

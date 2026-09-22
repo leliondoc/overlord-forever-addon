@@ -18,6 +18,21 @@ $installed = [IO.File]::ReadAllText($toc)
 if ($installed.IndexOf('_local\SavedVariables\Overlord.lua') -lt $installed.IndexOf('Popups.lua')) {
     throw 'The save must load after all addon files.'
 }
+$probe = Join-Path $addon '_local/SavedVariablesBridgeStatus.lua'
+if (-not (Test-Path -LiteralPath $probe)) { throw 'Bridge load probe missing.' }
+
+# A repair after an addon update must preserve a previously installed recovery hook.
+$recovery = Join-Path $addon '_local/RestoreLeaderboard.lua'
+[IO.File]::WriteAllText($recovery, '-- private recovery fixture')
+$installed = $installed.Replace('# END OVERLORD LOCAL SAVEDVARIABLES',
+    "_local\RestoreLeaderboard.lua`n# END OVERLORD LOCAL SAVEDVARIABLES")
+[IO.File]::WriteAllText($toc, $installed)
+& $script | Out-Null
+$installed = [IO.File]::ReadAllText($toc)
+if (-not $installed.Contains('_local\RestoreLeaderboard.lua')) { throw 'Repair removed recovery hook.' }
+if ($installed.IndexOf('_local\SavedVariablesBridgeStatus.lua') -lt $installed.IndexOf('_local\SavedVariables\Overlord.lua')) {
+    throw 'Bridge probe runs before the save.'
+}
 
 # Simulate WoW replacing the file at logout. A hard link would fail this case.
 Move-Item -LiteralPath $save -Destination ($save + '.bak')

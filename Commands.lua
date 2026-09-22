@@ -348,6 +348,41 @@ local function RunScaleCommand(args)
     Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.SCALE_SET, v))
 end
 
+-- Read-only evidence: distinguishes an unloaded save from a campaign rollover.
+local function ShowPersistenceStatus()
+    local function emit(message)
+        Overlord:PrintNotification("|cFFFFD100[Overlord:persistence]|r " .. message)
+    end
+    local function totals(bucket)
+        local kills, captures = 0, 0
+        for _, n in pairs(type(bucket.kills) == "table" and bucket.kills or {}) do
+            kills = kills + math.max(0, tonumber(n) or 0)
+        end
+        for _, n in pairs(type(bucket.captureCount) == "table" and bucket.captureCount
+            or type(bucket.captureCounts) == "table" and bucket.captureCounts or {}) do
+            captures = captures + math.max(0, tonumber(n) or 0)
+        end
+        return tostring(kills) .. " kills, " .. tostring(captures) .. " captures"
+    end
+    local db = OverlordDB or {}
+    emit("Save at login: " .. tostring(Overlord.SavedVariablesLoadedAtLogin)
+        .. "; local bridge: " .. tostring(Overlord.SavedVariablesBridgeLoaded))
+    emit("Campaign at login: " .. tostring(Overlord.SavedVariablesCampaignAtLogin)
+        .. "; active: " .. tostring(db.lastResetTimestamp))
+    emit("Active: " .. totals(db.leaderboard or {}))
+    local latest
+    for _, row in pairs(db.history or {}) do
+        if type(row) == "table" and (not latest
+            or (tonumber(row.campaignStart) or 0) > (tonumber(latest.campaignStart) or 0)) then
+            latest = row
+        end
+    end
+    if latest then emit("Latest archive: " .. tostring(latest.campaignStart) .. "; " .. totals(latest)) end
+    if Overlord.SavedVariablesLoadedAtLogin == false then
+        emit("No save loaded (first login or beta loader issue). Windows repair: tools/Repair-ForeverSavedVariables.ps1")
+    end
+end
+
 -- Handler principal des commandes
 local function CommandHandler(msg)
     local args = {}
@@ -356,6 +391,7 @@ local function CommandHandler(msg)
     end
     
     local cmd = args[1] and string.lower(args[1]) or nil
+    if cmd == "persistence" then ShowPersistenceStatus(); return end
     
     if not cmd or cmd == "help" then
         ShowHelp()

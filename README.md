@@ -6,7 +6,7 @@ Addon **World of Warcraft Forever** pour la capture de zones sur les fronts du m
 |---|---|
 | **Auteur** | Troma |
 | **Licence** | All Rights Reserved |
-| **Version** | 1.0.2 |
+| **Version** | 1.0.3 |
 | **Jeu** | WoW Forever (`## Interface: 16001`) |
 | **CurseForge** | https://www.curseforge.com/wow/addons/overlord-forever |
 | **Dépôt** | https://github.com/leliondoc/overlord-forever-addon |
@@ -49,11 +49,28 @@ le TOC. Quand Blizzard corrige le problème, utiliser le même script avec `-Dis
 Cette option conserve les sauvegardes. Pour un zip manuel, désactiver le lien
 et exclure `_local` ; la publication GitHub/CurseForge enlève ce bloc automatiquement.
 
+### Distinguer un chargement lent, un reset et une perte
+
+Le classement peut se remplir progressivement au login pendant le rattrapage
+par les pairs. Un tableau initialement vide ne prouve pas une perte sur disque.
+`/ov persistence` affiche si une sauvegarde était présente avant l’initialisation,
+le résultat du pont local (après réinstallation du script), les epochs de campagne
+au login et après initialisation, ainsi que les totaux actifs et de la dernière archive.
+`nil` pour le pont signifie que la sonde locale n’est pas installée ; `false` signifie
+que son passage n’a trouvé aucune table de sauvegarde.
+
+Un reset hebdomadaire ouvre normalement un nouveau classement. Une copie complète
+de la campagne précédente est maintenant conservée par région dans
+`leaderboardPreviousCampaigns`, avec les métadonnées et les rangs hors du top de
+l’historique compact. Cette copie ne se réinjecte jamais automatiquement dans une
+nouvelle campagne. Le script de réparation conserve les scripts de récupération
+locaux déjà installés et sauvegarde leurs fichiers avant de réparer le TOC.
+
 ## Fronts de guerre
 
 Overlord Forever gère quatre fronts indépendants, chacun avec ses zones de capture, prérequis et capitales de faction :
 
-- **Hautes-terres d'Arathi** (`arathi`) : mêmes points de capture que Overlord Retail
+- **Hautes-terres d'Arathi** (`arathi`) : points de capture recalés sur la carte Classic / Forever
 - **Loch Modan** (`loch_modan`)
 - **Durotar** (`durotar`)
 - **Orneval / Ashenvale** (`ashenvale`)
@@ -78,6 +95,15 @@ Pas de Gilnéas, Forêt d'Elwynn, ni Tarides du Sud (cartes Forever, pas de scis
 - Tous les participants doivent avoir cette version et un chemin de communication entre eux. La découverte périodique permet le rattrapage ; une file saturée ou un paquet expiré peut retarder la synchronisation. Les auteurs antérieurs sont attestés par le relais, pas authentifiés directement par Blizzard. Les contrôles de campagne et de validité des données restent actifs.
 - Noms Forever en deux parties (ex. `Troma Orcbane`) acceptés dans la sync et les whispers.
 - Commande `/ov sync` pour demander un rattrapage manuel.
+
+Le canal utilisé par cette version Forever est `OverlordF`. Le classement se
+réconcilie aussi à la connexion par échanges ciblés entre pairs : kills,
+captures, races et métadonnées de guilde, puis retour des données fusionnées.
+Ces échanges passent par les mêmes bridges que les événements en direct, sans
+communauté. Les gros rattrapages réessaient les lignes refusées par une file
+pleine et disposent d'un délai adapté au débit du relais. Les kills en gros
+événement et les messages supplémentaires des envois communautaires (autres
+fronts, bonus, stocks) empruntent également ce réseau.
 
 ### Carte et minimap
 
@@ -108,6 +134,13 @@ Pas de Gilnéas, Forêt d'Elwynn, ni Tarides du Sud (cartes Forever, pas de scis
 - **Kills JcJ en monde ouvert** comptés partout, à tous les niveaux, même hors des fronts Forever. Les instances (BG, arènes, donjons et raids) sont exclues.
 - **Avant-postes** sur les quatre fronts.
 - Appel de faction pour alerter les alliés accessibles par les passerelles de synchronisation.
+- **Commandant** : rôle du chef de groupe sur un front, position sur la carte/minimap,
+  badge de nameplate et libération du rôle à la mort ou à la perte du commandement.
+  La communauté n'est pas requise ; les annonces passent aussi par les bridges Forever.
+- **Contrats en or** : cibles ennemies connues, preuves de kill, approbation du
+  signataire et préparation du règlement par courrier/COD. Les identités utilisent
+  le prénom et le nom Forever, sans royaume. L'envoi du courrier reste manuel.
+  Voir la [vérification des API et les limites de validation](docs/forever-commandant-contracts.md).
 
 ### Langues
 
@@ -142,3 +175,5 @@ Les versions publiées sur CurseForge sont déclenchées par des **tags Git** (`
 ## Développement
 
 Ce dépôt inclut des fichiers ignorés par le client WoW (`.github/`, `CHANGELOG.md`, `.pkgmeta`, etc.) : seuls les fichiers listés dans `Overlord.toc` sont chargés en jeu.
+
+Positions de capture et références Classic : [audit des emplacements](docs/forever-capture-locations.md).

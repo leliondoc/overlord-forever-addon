@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.0.2"
+Overlord.Version = "1.0.3"
 -- Temporary beta policy. Set true when community transport is enabled again.
 Overlord.CommunityModeEnabled = false
 Overlord.IsInitialized = false
@@ -3727,6 +3727,10 @@ end
 -- Initialisation de l'addon
 function Overlord:Initialize()
     if self.IsInitialized then return end
+    -- Session-only evidence captured before defaults/migrations/reset stages.
+    self.SavedVariablesLoadedAtLogin = type(OverlordDB) == "table"
+    self.SavedVariablesCampaignAtLogin = type(OverlordDB) == "table"
+        and tonumber(OverlordDB.lastResetTimestamp) or nil
     
     -- ADDON_LOADED suit la lecture des SavedVariables. Sur la beta affectee,
     -- le pont local charge le meme fichier a la fin du TOC, avant cet evenement.
@@ -4216,15 +4220,19 @@ function Overlord:Initialize()
             return Overlord.Sync:EnsureDominationBoostEventLedgerPrepared()
         end, true)
 
-        for _, mod in ipairs({ "Ressources", "Combat" }) do
+        for _, mod in ipairs({ "Ressources", "Combat", "ManualBounty" }) do
             local moduleName = mod
             AddLoginInitStage(moduleName, function()
                 return Overlord[moduleName]:Initialize()
-            end)
+            end, moduleName == "ManualBounty")
         end
 
+        AddLoginInitStage("ManualBountyMailLedger", function()
+            return Overlord.ManualBountyMail:EnsureCodSendLedgerPrepared()
+        end, true)
+
         for _, mod in ipairs({
-            "Sync", "ZoneIndicator", "Shard",
+            "ManualBountyMail", "General", "Sync", "ZoneIndicator", "Shard",
         }) do
             local moduleName = mod
             AddLoginInitStage(moduleName, function()
@@ -4292,7 +4300,7 @@ function Overlord:Initialize()
         end)
 
         -- Les deux autres modules UI conservent chacun leur frame dediee.
-        for _, mod in ipairs({ "Button" }) do
+        for _, mod in ipairs({ "Button", "ManualBountyUI" }) do
             local moduleName = mod
             AddLoginInitStage(moduleName, function()
                 Overlord[moduleName]:Initialize()

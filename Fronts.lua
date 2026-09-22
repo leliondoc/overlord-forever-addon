@@ -238,12 +238,15 @@ local function MapTypeAllowsFrontOverlay(mapType)
     return mapType == E.Zone
 end
 
+-- Positions terrestres de reference : docs/forever-capture-locations.md.
+-- Les IDs historiques restent stables, y compris les anciens noms Retail.
 Overlord.Fronts.Registry = {
     arathi = {
         id = "arathi",
+        preferredMapID = 1417,
         mapName = L.FRONT_ARATHI_NAME or "Arathi Highlands",
         dropdownLabel = L.FRONT_ARATHI_DROPDOWN or "Arathi",
-        -- 14 = Retail / Forever moderne, 1417 = Classic Era. Coords : carte Overlord existante.
+        -- Positions Vanilla / Forever ; conserver les IDs pour les captures et les bridges.
         mapIDs = { [14] = true, [1417] = true },
         excludedMapIDs = Overlord.FRONT_EXCLUDED_BATTLEGROUND_MAP_IDS or { [3358] = true, [10440] = true },
         mapNameNeedles = {"arathi"},
@@ -251,16 +254,16 @@ Overlord.Fronts.Registry = {
         allianceCapitalId = "stromgarde",
         hordeCapitalId = "hammerfell",
         zones = {
-            Zone("stromgarde", { center = {20.0, 63.5}, radius = 5, status = "captured", isCapital = true }),
-            Zone("faldir", { center = {26.3, 83.7}, prereqZones = {"stromgarde"} }),
+            Zone("stromgarde", { center = {25.38, 58.36}, radius = 5, status = "captured", isCapital = true }),
+            Zone("faldir", { center = {32.28, 81.38}, prereqZones = {"stromgarde"} }),
             Zone("witherbark", { center = {62.0, 74.0}, prereqZones = {"faldir"} }),
-            Zone("goshek", { center = {52.8, 60.1}, radius = 3, prereqZones = {"witherbark"} }),
-            Zone("dabyrie", { center = {49.0, 39.0}, radius = 3, prereqZones = {"goshek"} }),
-            Zone("refuge", { center = {40.5, 47.5}, prereqZones = {"argorok"} }),
-            Zone("highperch", { center = {20.9, 45.9}, radius = 3, prereqZones = {"stromgarde"} }),
-            Zone("newstead", { center = {14.5, 42.5}, radius = 3, prereqZones = {"refuge"} }),
-            Zone("hammerfell", { center = {68.5, 34.0}, radius = 5, prereqZones = {"dabyrie", "newstead"}, isCapital = true }),
-            Zone("argorok", { center = {27.0, 32.0}, prereqZones = {"highperch"} }),
+            Zone("goshek", { center = {61.88, 57.33}, radius = 3, prereqZones = {"witherbark"} }),
+            Zone("dabyrie", { center = {54.18, 38.09}, radius = 3, prereqZones = {"goshek"} }),
+            Zone("refuge", { center = {45.83, 47.56}, prereqZones = {"argorok"} }),
+            Zone("highperch", { center = {25.19, 40.13}, radius = 3, prereqZones = {"stromgarde"} }),
+            Zone("newstead", { center = {18.04, 47.22}, radius = 3, prereqZones = {"refuge"} }),
+            Zone("hammerfell", { center = {74.18, 33.96}, radius = 5, prereqZones = {"dabyrie", "newstead"}, isCapital = true }),
+            Zone("argorok", { center = {27.43, 31.39}, prereqZones = {"highperch"} }),
         },
         prereqs = {
             Alliance = ARATHI_ALLIANCE_PREREQS,
@@ -273,6 +276,7 @@ Overlord.Fronts.Registry = {
     },
     loch_modan = {
         id = "loch_modan",
+        preferredMapID = 1432,
         mapName = L.FRONT_LOCH_MODAN_NAME or "Loch Modan",
         dropdownLabel = L.FRONT_LOCH_MODAN_DROPDOWN or "Loch Modan",
         mapIDs = { [48] = true, [1432] = true },
@@ -287,14 +291,14 @@ Overlord.Fronts.Registry = {
         },
         zones = {
             Zone("loch_alliance_capital", { center = {35.4, 46.6}, radius = 5, status = "captured", isCapital = true }),
-            Zone("loch_valley_of_kings", { center = {20.1, 76.0}, prereqZones = {"loch_alliance_capital"} }),
-            Zone("loch_south_gate_pass", { center = {15.0, 56.8}, prereqZones = {"loch_valley_of_kings"} }),
+            Zone("loch_valley_of_kings", { center = {22.07, 73.13}, prereqZones = {"loch_alliance_capital"} }),
+            Zone("loch_south_gate_pass", { center = {18.18, 84.01}, prereqZones = {"loch_valley_of_kings"} }),
             Zone("loch_farstrider_lodge", { center = {82.6, 64.2}, prereqZones = {"loch_south_gate_pass"} }),
             Zone("loch_ironband", { center = {69.2, 63.8}, prereqZones = {"loch_farstrider_lodge"} }),
             Zone("loch_silver_stream_mine", { center = {34.6, 21.2}, prereqZones = {"loch_alliance_capital"} }),
             Zone("loch_algaz_post", { center = {24.5, 17.3}, prereqZones = {"loch_silver_stream_mine"} }),
-            Zone("loch_stonewrought_dam", { center = {47.9, 11.9}, prereqZones = {"loch_algaz_post"} }),
-            Zone("loch_the_loch", { center = {54.1, 54.6}, prereqZones = {"loch_stonewrought_dam"} }),
+            Zone("loch_stonewrought_dam", { center = {46.05, 13.61}, prereqZones = {"loch_algaz_post"} }),
+            Zone("loch_the_loch", { center = {63.56, 47.92}, prereqZones = {"loch_stonewrought_dam"} }),
             Zone("loch_horde_capital", { center = {69.8, 24.1}, radius = 5, prereqZones = {"loch_ironband", "loch_the_loch"}, isCapital = true }),
         },
         prereqs = {
@@ -322,6 +326,7 @@ Overlord.Fronts.Registry = {
     },
     durotar = {
         id = "durotar",
+        preferredMapID = 1411,
         mapName = L.FRONT_DUROTAR_NAME or "Durotar",
         dropdownLabel = L.FRONT_DUROTAR_DROPDOWN or "Durotar",
         mapIDs = { [1] = true, [1411] = true },
@@ -336,15 +341,15 @@ Overlord.Fronts.Registry = {
         },
         zones = {
             Zone("durotar_tiragarde_keep", { center = {58.4, 57.2}, radius = 5, status = "captured", isCapital = true }),
-            Zone("durotar_alliance_fleet", { center = {51.8, 89.0}, prereqZones = {"durotar_tiragarde_keep"} }),
+            Zone("durotar_alliance_fleet", { center = {52.08, 82.03}, prereqZones = {"durotar_tiragarde_keep"} }),
             Zone("durotar_senjin_village", { center = {54.8, 74.1}, prereqZones = {"durotar_alliance_fleet"} }),
             Zone("durotar_razor_hill", { center = {52.6, 42.5}, prereqZones = {"durotar_senjin_village"} }),
             Zone("durotar_deadeye_shore", { center = {59.4, 24.3}, prereqZones = {"durotar_razor_hill"} }),
             Zone("durotar_southfury", { center = {39.9, 36.6}, prereqZones = {"durotar_tiragarde_keep"} }),
-            Zone("durotar_spirit_rock", { center = {43.9, 75.8}, prereqZones = {"durotar_southfury"} }),
+            Zone("durotar_spirit_rock", { center = {44.63, 68.65}, prereqZones = {"durotar_southfury"} }),
             Zone("durotar_thunder_ridge", { center = {39.2, 25.4}, prereqZones = {"durotar_spirit_rock"} }),
             Zone("durotar_drygulch_ravine", { center = {49.1, 29.1}, prereqZones = {"durotar_thunder_ridge"} }),
-            Zone("durotar_dranosh_blockade", { center = {46.1, 15.4}, radius = 5, prereqZones = {"durotar_deadeye_shore", "durotar_drygulch_ravine"}, isCapital = true }),
+            Zone("durotar_dranosh_blockade", { center = {46.10, 13.77}, radius = 5, prereqZones = {"durotar_deadeye_shore", "durotar_drygulch_ravine"}, isCapital = true }),
         },
         prereqs = {
             Alliance = DUROTAR_ALLIANCE_PREREQS,
@@ -371,6 +376,7 @@ Overlord.Fronts.Registry = {
     },
     ashenvale = {
         id = "ashenvale",
+        preferredMapID = 1440,
         mapName = L.FRONT_ASHENVALE_NAME or "Ashenvale",
         dropdownLabel = L.FRONT_ASHENVALE_DROPDOWN or "Ashenvale",
         mapIDs = { [63] = true, [1440] = true },
@@ -388,13 +394,13 @@ Overlord.Fronts.Registry = {
         },
         zones = {
             Zone("ash_astranaar", { center = {35.0, 49.0}, radius = 5, status = "captured", isCapital = true }),
-            Zone("ash_iris_lake", { center = {48.0, 45.0}, prereqZones = {"ash_astranaar"} }),
-            Zone("ash_raynewood", { center = {56.0, 56.0}, prereqZones = {"ash_iris_lake"} }),
-            Zone("ash_night_run", { center = {66.0, 50.0}, prereqZones = {"ash_raynewood"} }),
-            Zone("ash_bloodtooth_camp", { center = {74.5, 46.0}, prereqZones = {"ash_night_run"} }),
+            Zone("ash_iris_lake", { center = {45.82, 43.25}, prereqZones = {"ash_astranaar"} }),
+            Zone("ash_raynewood", { center = {60.96, 51.84}, prereqZones = {"ash_iris_lake"} }),
+            Zone("ash_night_run", { center = {66.32, 52.56}, prereqZones = {"ash_raynewood"} }),
+            Zone("ash_bloodtooth_camp", { center = {54.75, 79.62}, prereqZones = {"ash_night_run"} }),
             Zone("ash_silverwind", { center = {50.5, 66.0}, prereqZones = {"ash_astranaar"} }),
-            Zone("ash_mystral_lake", { center = {47.0, 72.0}, prereqZones = {"ash_silverwind"} }),
-            Zone("ash_fallen_sky_lake", { center = {63.0, 78.0}, prereqZones = {"ash_mystral_lake"} }),
+            Zone("ash_mystral_lake", { center = {50.84, 75.08}, prereqZones = {"ash_silverwind"} }),
+            Zone("ash_fallen_sky_lake", { center = {65.88, 80.30}, prereqZones = {"ash_mystral_lake"} }),
             Zone("ash_dor_danil", { center = {72.0, 74.0}, prereqZones = {"ash_fallen_sky_lake"} }),
             Zone("ash_splintertree", { center = {73.5, 61.0}, radius = 5, prereqZones = {"ash_bloodtooth_camp", "ash_dor_danil"}, isCapital = true }),
         },
@@ -471,6 +477,14 @@ end
 function Overlord.Fronts:GetMapID(frontId)
     local front = self:GetFront(frontId)
     if not front then return nil end
+    -- Les coordonnees de ce registre sont celles de la carte Vanilla.
+    -- Ne pas choisir au hasard un alias Retail si les deux cartes existent.
+    if front.preferredMapID then
+        local ok, info = pcall(C_Map.GetMapInfo, front.preferredMapID)
+        if ok and info and MapTypeAllowsFrontOverlay(info.mapType) then
+            return front.preferredMapID
+        end
+    end
     local function PickZoneMapID()
         local fallback = nil
         for mapID in pairs(front.mapIDs or {}) do

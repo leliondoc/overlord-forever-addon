@@ -7297,6 +7297,21 @@ function Overlord.Leaderboard:OpenAtomicWeeklyBucket(archiveEpoch, resetEpoch, c
         campaignId = tonumber(OverlordDB.leaderboard and OverlordDB.leaderboard.campaignId) or 0,
     }
     local oldScoreBucketEpoch = GetMatchingLeaderboardScoreBucketEpoch(archiveEpoch)
+    -- Keep one complete, detached campaign per region as a recovery checkpoint.
+    -- The compact history drops metadata and lower ranks; the periodic snapshot
+    -- will soon belong to the new week. Never import this checkpoint into scores
+    -- automatically: a real weekly reset must remain a reset.
+    local recoveryPool = Overlord.GetCurrentLeaderboardSavedVarsPool
+        and Overlord:GetCurrentLeaderboardSavedVarsPool() or nil
+    if recoveryPool == "eu" or recoveryPool == "us" then
+        OverlordDB.leaderboardPreviousCampaigns = OverlordDB.leaderboardPreviousCampaigns or {}
+        OverlordDB.leaderboardPreviousCampaigns[recoveryPool] = {
+            bucket = oldBucket,
+            scoreBucketEpoch = oldScoreBucketEpoch > 0 and oldScoreBucketEpoch or nil,
+            resetEpoch = resetEpoch,
+            savedAt = (GetServerTime and GetServerTime()) or time(),
+        }
+    end
     local marker = {
         version = 1,
         resetEpoch = resetEpoch,

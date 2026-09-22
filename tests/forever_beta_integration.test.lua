@@ -76,6 +76,31 @@ s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(6, "GI",
 assert(mergedGuild and mergedGuild[1] == "Remote Tester" and mergedGuild[2] == "Beta Guild",
     "Production guild identity handler rejected relay")
 -- UI/community entry points use the replacement transport, preserving payloads.
+assert(loadfile("General.lua"))()
+assert(loadfile("GeneralSync.lua"))()
+assert(loadfile("ManualBounty.lua"))()
+assert(loadfile("ManualBountySync.lua"))()
+local campaign = OverlordDB.lastResetTimestamp
+s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(7, "GE",
+    "A:eu:5000:5000:1417:" .. time() .. ":" .. campaign), 123)
+local commander = Overlord.General:GetSlot("Alliance")
+assert(commander and commander.holder == "Remote Tester", "Commander was rejected without a club, or attributed to the bridge")
+s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(8, "GX",
+    "A:eu:" .. time() .. ":" .. campaign), 123)
+assert(not Overlord.General:GetSlot("Alliance"), "Relayed commander release was lost")
+local contract = { id = "MBFOREVER-1", poster = "Remote Tester", target = "Victim Tester",
+    targetRace = "Orc", targetRaceSex = 2, targetGuild = "Guild", targetFaction = "Horde",
+    amountCopper = 10000, pool = "eu", epoch = campaign, createdAt = time(), updatedAt = time(), status = "open" }
+local contractPayload = assert(Overlord.ManualBountySync:BuildPBPayload(contract))
+s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(9, "PB", contractPayload), 123)
+assert(Overlord.ManualBounty:GetContract(contract.id), "Realmless contract did not cross the bridge")
+assert(not net.stats.lastError, net.stats.lastError)
+-- BR is also the legacy contract refresh request. Inside a beta envelope it
+-- must reach the contract handler, not be decoded as another relay envelope.
+local refreshSender
+Overlord.ManualBountySync.OnReceiveBR = function(_, _, sender) refreshSender = sender end
+s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(10, "BR", "contract-refresh"), 123)
+assert(refreshSender == "Remote Tester", "Contract BR collided with the BNet relay envelope")
 local sent = {}
 net.Broadcast = function(_, kind, data) sent[#sent + 1] = { kind, data }; return 1 end
 for _, method in ipairs({ "BroadcastToCommunity", "BroadcastGuildKeepToCommunity",
@@ -83,4 +108,16 @@ for _, method in ipairs({ "BroadcastToCommunity", "BroadcastGuildKeepToCommunity
     assert(s[method](s, "GK", "unchanged") == 1, method .. " lost its replacement route")
     assert(sent[#sent][1] == "GK" and sent[#sent][2] == "unchanged")
 end
+-- Even the large-event branch must use the replacement community relay.
+s.IsLargeEvent = function() return true end
+s:SendKillBroadcast("large-event-score")
+assert(sent[#sent][1] == "K" and sent[#sent][2] == "large-event-score",
+    "Large-event kill stayed on the local raid/channel")
+local extras = { { type = "DX", payload = "second-front" }, { type = "VB", payload = "bonus" } }
+net.Broadcast = function(_, _, _, actual)
+    assert(actual == extras, "Community bundle lost its secondary payloads")
+    return 1
+end
+assert(s:BroadcastToCommunity("DX", "first-front", 12, 0.3, true, extras) == 1)
+assert(s:BroadcastGuildKeepToCommunity("GK", "keep", 12, 0.3, extras) == 1)
 print("Beta integration: real R2/fragmented R2, low-level kills, peer trust, no club API, unchanged community payloads OK")

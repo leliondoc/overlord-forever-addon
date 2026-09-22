@@ -1951,7 +1951,7 @@ end
 function Overlord.Sync:BroadcastGuildKeepToCommunity(
     msgType, payload, maxMembers, whisperDelaySec, extraWhispers, onlineMembersMinTtl)
     if Overlord.CommunityModeEnabled == false then
-        return Overlord.BetaNetwork and Overlord.BetaNetwork:Broadcast(msgType, payload) or 0
+        return Overlord.BetaNetwork and Overlord.BetaNetwork:Broadcast(msgType, payload, extraWhispers) or 0
     end
     if not msgType or not payload or payload == "" then return end
     if Overlord.InstanceSuspended or IsInInstance() then return end
@@ -2725,7 +2725,7 @@ function Overlord.Sync:BroadcastToCommunity(
     msgType, payload, maxMembers, whisperDelaySec, forceTargets, extraWhispers,
     onlineMembersMinTtl)
     if Overlord.CommunityModeEnabled == false then
-        return Overlord.BetaNetwork and Overlord.BetaNetwork:Broadcast(msgType, payload) or 0
+        return Overlord.BetaNetwork and Overlord.BetaNetwork:Broadcast(msgType, payload, extraWhispers) or 0
     end
     if not msgType or not payload or payload == "" then return end
     if Overlord.InstanceSuspended or IsInInstance() then return end

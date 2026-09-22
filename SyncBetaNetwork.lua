@@ -7,7 +7,7 @@ local sync = addon.Sync
 local net = { peers = {}, stats = { sent = 0, received = 0, dropped = 0 } }
 addon.BetaNetwork = net
 local allowed = {}
-for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR DX VB MN MS WN WS GK GC GA G7 GH OP OC WB SH HR HB HC HA LD CR CA GR GY GI FC"):gmatch("%S+") do
+for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR DX VB MN MS WN WS GK GC GA G7 GH OP OC WB SH HR HB HC HA LD CR CA GR GY GI FC GE GP GX GD GM BQ BR PB PK MK PX PP PM"):gmatch("%S+") do
     allowed[kind] = true
 end
 local MAX_PACKET, MAX_PATH, TTL = 3600, 4, 120
@@ -140,11 +140,26 @@ local function tasksFor(p, wire)
     return tasks
 end
 local function emit(task)
+    -- Missing optional local paths are not send failures; a throttled channel
+    -- that is present must, however, retry the same fragment.
+    if task.transport == "GROUP" and not IsInGroup() then return true end
+    if task.transport == "CHANNEL" and not sync:GetChannelId() then return true end
     if not spend(task.bytes) then return false end
-    if task.transport == "BNET" then sync:SendToBNet(task.target, task.kind, task.data)
-    elseif task.transport == "WHISPER" then sync:SendWhisper(task.kind, task.data, task.target)
-    elseif task.transport == "GROUP" then sync:SendToGroup(task.kind, task.data)
-    else sync:SendToChannel(task.kind, task.data, false) end
+    local sent
+    if task.transport == "BNET" then sent = sync:SendToBNet(task.target, task.kind, task.data)
+    elseif task.transport == "WHISPER" then sent = sync:SendWhisper(task.kind, task.data, task.target)
+    elseif task.transport == "GROUP" then sent = sync:SendToGroup(task.kind, task.data)
+    else sent = sync:SendToChannel(task.kind, task.data, false) end
+    if sent ~= true then
+        -- A BNet recipient can log out after route selection. There is no
+        -- throttling retry here; let catchup rediscover a path instead of
+        -- blocking every other peer behind a dead friend for the full TTL.
+        if task.transport == "BNET" then
+            net.stats.dropped = net.stats.dropped + 1
+            return true
+        end
+        return false
+    end
     net.stats.sent = net.stats.sent + 1
     net.stats.bytes = (net.stats.bytes or 0) + task.bytes
     return true
@@ -172,10 +187,17 @@ pump = function()
     end
     local item = queue[head]
     if not item then queue, head = {}, 1; return end
-    local task = item.tasks[item.index]
-    if time() - item.p.at <= TTL and task then
-        if emit(task) then item.index = item.index + 1 end
-    else item.index = #item.tasks + 1 end
+    -- Drain the available shared byte budget, not just one fragment per tick.
+    -- The old 10-fragment/s ceiling unnecessarily backed up full snapshots.
+    for _ = 1, 16 do
+        local task = item.tasks[item.index]
+        if time() - item.p.at > TTL or not task then
+            item.index = #item.tasks + 1
+            break
+        end
+        if not emit(task) then break end
+        item.index = item.index + 1
+    end
     if item.index > #item.tasks then queue[head] = false; head = head + 1 end
     if head > #queue then queue, head = {}, 1 end
     if head > 128 then
@@ -206,8 +228,16 @@ function net:Send(kind, payload, target, immediate)
     remember(seen, seenOrder, name:lower() .. ":" .. p.id, now, 2048)
     return true
 end
-function net:Broadcast(kind, payload)
-    return self:Send(kind, payload or "") and 1 or 0
+function net:Broadcast(kind, payload, extras)
+    local sent = self:Send(kind, payload or "")
+    -- Community producers bundle further fronts, victory bonuses and resource
+    -- stocks with the first message. Preserve every payload on the beta route.
+    for _, extra in ipairs(extras or {}) do
+        if extra.type and extra.payload then
+            if not self:Send(extra.type, extra.payload) then sent = false end
+        end
+    end
+    return sent and 1 or 0
 end
 function net:Receive(wire, sender, transport, bnetID)
     if not active() then return false end
@@ -247,9 +277,9 @@ function net:Receive(wire, sender, transport, bnetID)
             -- Bound this cache by the same live peer population.
             self.requested = self.requested or {}
             if not self.requestOrder then self.requestOrder = {} end
-            remember(self.requested, self.requestOrder, origin:lower(), now, 128)
-            sync:ExpectDirectFullLeaderboardResponse(origin)
-            sync:SendSyncRequest({ fullResponse = true, betaTarget = origin })
+            if sync:SendSyncRequest({ fullResponse = true, betaTarget = origin }) then
+                remember(self.requested, self.requestOrder, origin:lower(), now, 128)
+            end
         end
     end
     if #p.path < MAX_PATH and (p.target == "*" or not addressed) then

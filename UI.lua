@@ -2505,7 +2505,7 @@ function Overlord.UI:CreateZoneListSection(parent)
     end)
     zoneListFrame.mbBtn = mbBtn
 
-    -- Forever : modules absents du TOC (Export, HoF, Contrats, General).
+    -- Keep optional module buttons unavailable only when the module is absent.
     local foreverUnavailable = L.FOREVER_FEATURE_UNAVAILABLE
         or "Unavailable on Overlord Forever."
     if self.SetWC3ButtonUnavailable then

@@ -6,11 +6,11 @@ const fronts = readFileSync(new URL("../Fronts.lua", import.meta.url), "utf8");
 const toc = readFileSync(new URL("../Overlord.toc", import.meta.url), "utf8");
 const outpost = readFileSync(new URL("../Outpost.lua", import.meta.url), "utf8");
 
-test("Forever fronts: Arathi (existing points), Loch, Durotar, Ashenvale", () => {
+test("Forever fronts: Arathi (Classic points), Loch, Durotar, Ashenvale", () => {
     assert.match(fronts, /Overlord\.Fronts\.Order = Overlord\.Fronts\.Order or \{"arathi", "loch_modan", "durotar", "ashenvale"\}/);
     assert.match(fronts, /activeFrontId = "arathi"/);
     assert.match(fronts, /Zone\("stromgarde"/);
-    assert.match(fronts, /center = \{20\.0, 63\.5\}/);
+    assert.match(fronts, /center = \{25\.38, 58\.36\}/);
     assert.match(fronts, /id = "ashenvale"/);
     assert.match(
         fronts,
@@ -28,7 +28,11 @@ test("TOC Forever 16001 and CurseForge 1701204", () => {
     assert.match(toc, /HallOfFameData\.lua/);
     assert.match(toc, /HallOfFameUI\.lua/);
     assert.doesNotMatch(toc, /HallOfFameLifetime\.lua/);
-    assert.doesNotMatch(toc, /Bounty\.lua|Export\.lua|ManualBounty|General\.lua/);
+    assert.doesNotMatch(toc, /^Bounty\.lua$|^Export\.lua$/m);
+    for (const module of ["General", "GeneralSync", "GeneralMap", "GeneralNameplate",
+        "ManualBounty", "ManualBountySync", "ManualBountyMail", "ManualBountyMap", "ManualBountyUI"]) {
+        assert.ok(toc.split(/\r?\n/).includes(`${module}.lua`), `${module} is not loaded`);
+    }
     const hof = readFileSync(new URL("../HallOfFameData.lua", import.meta.url), "utf8");
     const hofUi = readFileSync(new URL("../HallOfFameUI.lua", import.meta.url), "utf8");
     assert.match(hof, /id = "donors"/);
