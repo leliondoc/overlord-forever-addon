@@ -2,7 +2,7 @@
 -- WoW 12.0 (Midnight) : COMBAT_LOG_EVENT_UNFILTERED supprime pour les addons.
 -- Detection multi-source :
 --   1) PARTY_KILL : attribue le killing blow au vrai membre du groupe/raid
---   2) PLAYER_PVP_KILLS_CHANGED : confirme les KB et la contribution des soigneurs
+--   2) PLAYER_PVP_KILLS_CHANGED : confirme les KB et les victoires honorables
 --   3) CHAT_MSG_COMBAT_HONOR_GAIN : diagnostic localise, jamais une attribution
 --   4) PLAYER_DEAD : detecte nos morts, attribue le kill a l'ennemi cible/proche
 Overlord = Overlord or {}
@@ -86,18 +86,18 @@ local DEATH_DEDUP_WINDOW = 5
 local TOTAL_KB_ACHIEVEMENT_ID = 1487
 local previousKillingBlows = 0
 -- Le compteur HK Blizzard est un compteur de proximite de raid, pas une preuve
--- d'action individuelle. Il ne sert qu'au secours soigneur, apres reconciliation
--- avec les morts deja attribuees par PARTY_KILL / compteur de killing blows.
+-- d'un coup fatal individuel. Il credite les victoires honorables restantes apres
+-- reconciliation avec PARTY_KILL / le compteur de killing blows.
 local previousSessionHonorableKills = nil
 local previousSessionKillingBlows = nil
 local pvpKillBaselineReady = false
 local MAX_PVP_KILL_DELTA = 40
 -- Attendre aussi le dernier retry du backup KB sans nom (0.75 + 8 * 0.25 s).
 -- Le secours anonyme ne passe qu'apres toutes les sources detaillees possibles.
-local HEALER_HK_RECONCILE_DELAY = 3.0
-local HEALER_HK_EVIDENCE_WINDOW = 3
+local HONOR_RECONCILE_DELAY = 3.0
+local HONOR_EVIDENCE_WINDOW = 3
 local recentDetailedLocalKillTimes = {}
-local pendingHealerHonorCredits = nil
+local pendingHonorCredits = nil
 
 -- Tracking du dernier ennemi vu (nameplate) pour attribuer les morts
 local lastEnemyTarget = { name = nil, guid = nil, time = 0 }
@@ -304,24 +304,9 @@ local function GetSessionHonorableKills()
     return honorableKills
 end
 
-local function IsLocalPlayerHealer()
-    if type(UnitGroupRolesAssigned) == "function" then
-        local ok, role = pcall(UnitGroupRolesAssigned, "player")
-        if ok and role == "HEALER" then return true end
-    end
-    if type(GetSpecialization) == "function" and type(GetSpecializationRole) == "function" then
-        local ok, role = pcall(function()
-            local spec = GetSpecialization()
-            return spec and GetSpecializationRole(spec) or nil
-        end)
-        if ok and role == "HEALER" then return true end
-    end
-    return false
-end
-
 local function ResetPvpKillReconciliation()
     recentDetailedLocalKillTimes = {}
-    pendingHealerHonorCredits = nil
+    pendingHonorCredits = nil
     pendingUnknownLocalKill = nil
     lastUnknownLocalBackupQueuedAt = 0
 end
@@ -367,7 +352,7 @@ local function ConsumeRecentDetailedLocalKills(limit)
     local kept = {}
     for i = 1, #recentDetailedLocalKillTimes do
         local at = tonumber(recentDetailedLocalKillTimes[i]) or 0
-        if now - at >= 0 and now - at <= HEALER_HK_EVIDENCE_WINDOW then
+        if now - at >= 0 and now - at <= HONOR_EVIDENCE_WINDOW then
             kept[#kept + 1] = at
         end
     end
@@ -379,9 +364,9 @@ local function ConsumeRecentDetailedLocalKills(limit)
     return consumed
 end
 
-local FlushDueHealerHonorCredits
+local FlushDueHonorCredits
 
-local function CompactPendingHealerBatches(pending)
+local function CompactPendingHonorBatches(pending)
     local head = math.max(1, math.floor(tonumber(pending and pending.head) or 1))
     local batches = pending and pending.batches
     if not batches or head <= 32 or head * 2 <= #batches then return end
@@ -391,26 +376,26 @@ local function CompactPendingHealerBatches(pending)
     pending.head = 1
 end
 
-local function ScheduleNextHealerHonorFlush(pending)
-    if pendingHealerHonorCredits ~= pending or not C_Timer or not C_Timer.After then return end
+local function ScheduleNextHonorFlush(pending)
+    if pendingHonorCredits ~= pending or not C_Timer or not C_Timer.After then return end
     local batch = pending.batches[pending.head]
     if not batch then
-        pendingHealerHonorCredits = nil
+        pendingHonorCredits = nil
         return
     end
     pending.timerGeneration = (tonumber(pending.timerGeneration) or 0) + 1
     local generation = pending.timerGeneration
     pending.timerDueAt = tonumber(batch.dueAt) or GetTime()
     C_Timer.After(math.max(0.05, pending.timerDueAt - GetTime()), function()
-        if pendingHealerHonorCredits ~= pending
+        if pendingHonorCredits ~= pending
             or pending.timerGeneration ~= generation then return end
         pending.timerDueAt = 0
-        FlushDueHealerHonorCredits(pending)
+        FlushDueHonorCredits(pending)
     end)
 end
 
-FlushDueHealerHonorCredits = function(pending)
-    if pendingHealerHonorCredits ~= pending then return end
+FlushDueHonorCredits = function(pending)
+    if pendingHonorCredits ~= pending then return end
     local now = GetTime()
     local credit = 0
     while pending.head <= #pending.batches do
@@ -421,27 +406,27 @@ FlushDueHealerHonorCredits = function(pending)
         pending.count = math.max(0, (tonumber(pending.count) or 0) - batchCount)
         pending.head = pending.head + 1
     end
-    if credit > 0 and Overlord.Combat and Overlord.Combat.CreditHealerHonorableKills then
-        Overlord.Combat:CreditHealerHonorableKills(credit)
+    if credit > 0 and Overlord.Combat and Overlord.Combat.CreditHonorableKills then
+        Overlord.Combat:CreditHonorableKills(credit)
     end
     if (tonumber(pending.count) or 0) <= 0 or pending.head > #pending.batches then
-        pendingHealerHonorCredits = nil
+        pendingHonorCredits = nil
         return
     end
-    CompactPendingHealerBatches(pending)
-    ScheduleNextHealerHonorFlush(pending)
+    CompactPendingHonorBatches(pending)
+    ScheduleNextHonorFlush(pending)
 end
 
 local function NoteDetailedLocalKillCredit(victimGUID, preferredBatch)
     local unknown = pendingUnknownLocalKill
     if unknown and (not unknown.victimGUID or not victimGUID
         or unknown.victimGUID == victimGUID) then
-        preferredBatch = preferredBatch or unknown.healerBatch
+        preferredBatch = preferredBatch or unknown.honorBatch
         pendingUnknownLocalKill = nil
         lastUnknownLocalBackupQueuedAt = 0
         dbg("backup local sans victime annule par credit detaille")
     end
-    local pending = pendingHealerHonorCredits
+    local pending = pendingHonorCredits
     if pending and (tonumber(pending.count) or 0) > 0 then
         local batchIndex
         if preferredBatch then
@@ -474,18 +459,18 @@ local function NoteDetailedLocalKillCredit(victimGUID, preferredBatch)
                 until not nextBatch or (tonumber(nextBatch.count) or 0) > 0
                 pending.timerGeneration = (tonumber(pending.timerGeneration) or 0) + 1
                 if pending.count > 0 then
-                    CompactPendingHealerBatches(pending)
-                    ScheduleNextHealerHonorFlush(pending)
+                    CompactPendingHonorBatches(pending)
+                    ScheduleNextHonorFlush(pending)
                 else
-                    pendingHealerHonorCredits = nil
+                    pendingHonorCredits = nil
                 end
             elseif pending.count <= 0 then
-                pendingHealerHonorCredits = nil
+                pendingHonorCredits = nil
             end
-            dbg("credit HK soigneur annule par preuve detaillee")
+            dbg("credit HK annule par preuve detaillee")
             return
         end
-        pendingHealerHonorCredits = nil
+        pendingHonorCredits = nil
     end
     recentDetailedLocalKillTimes[#recentDetailedLocalKillTimes + 1] = GetTime()
     if #recentDetailedLocalKillTimes > MAX_PVP_KILL_DELTA then
@@ -493,24 +478,24 @@ local function NoteDetailedLocalKillCredit(victimGUID, preferredBatch)
     end
 end
 
-local function QueueHealerHonorCredits(count)
+local function QueueHonorCredits(count)
     count = math.max(0, math.floor(tonumber(count) or 0))
-    if count <= 0 or not IsLocalPlayerHealer() or not C_Timer or not C_Timer.After then return end
-    local pending = pendingHealerHonorCredits
+    if count <= 0 or not C_Timer or not C_Timer.After then return end
+    local pending = pendingHonorCredits
     if not pending then
         pending = { count = 0, batches = {}, head = 1, timerGeneration = 0, timerDueAt = 0 }
-        pendingHealerHonorCredits = pending
+        pendingHonorCredits = pending
     end
     count = math.min(count, MAX_PVP_KILL_DELTA - pending.count)
     if count <= 0 then return end
     local batch = {
         count = count,
-        dueAt = GetTime() + HEALER_HK_RECONCILE_DELAY,
+        dueAt = GetTime() + HONOR_RECONCILE_DELAY,
     }
     pending.batches[#pending.batches + 1] = batch
     pending.count = pending.count + count
     if (tonumber(pending.timerDueAt) or 0) <= 0 then
-        ScheduleNextHealerHonorFlush(pending)
+        ScheduleNextHonorFlush(pending)
     end
     return batch
 end
@@ -560,7 +545,7 @@ end
 
 -- Les backups recents peuvent arriver sans nom de victime. On les differe pour
 -- laisser PARTY_KILL ou la resolution du GUID fournir une preuve detaillee.
-local function DeferUnknownLocalBackupKill(sourceName, victimGUID, callback, healerBatch)
+local function DeferUnknownLocalBackupKill(sourceName, victimGUID, callback, honorBatch)
     local now = GetTime()
     if pendingUnknownLocalKill
         and now - lastUnknownLocalBackupQueuedAt <= UNKNOWN_LOCAL_BACKUP_DEDUP_WINDOW then
@@ -573,7 +558,7 @@ local function DeferUnknownLocalBackupKill(sourceName, victimGUID, callback, hea
         sourceName = sourceName,
         victimGUID = victimGUID,
         callback = callback,
-        healerBatch = healerBatch,
+        honorBatch = honorBatch,
         queuedAt = now,
         attempts = 0,
     }
@@ -1040,9 +1025,9 @@ function Overlord.Combat:OnPartyKillEvent(arg1, arg2)
                      safeTarget, victimName, not killScoring)
 end
 
--- Secours strictement reserve au role soigneur. Il n'est appele qu'apres une
--- courte reconciliation avec les preuves nommees de la meme mort.
-function Overlord.Combat:CreditHealerHonorableKills(count)
+-- Credit des victoires honorables sans preuve nommee, apres reconciliation avec
+-- les coups fatals de la meme mort. Valable pour toutes les specialisations.
+function Overlord.Combat:CreditHonorableKills(count)
     count = math.floor(tonumber(count) or 0)
     if count <= 0 or count > MAX_PVP_KILL_DELTA
         or not IsKillScoringActive() or not Overlord.Leaderboard then return 0 end
@@ -1080,7 +1065,7 @@ function Overlord.Combat:CreditHealerHonorableKills(count)
     end
     if count == 1 then
         Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.KILL_CONFIRM,
-            L.HONORABLE_KILL_LABEL or "healer honorable kill", totalKills))
+            L.HONORABLE_KILL_LABEL or "honorable kill", totalKills))
     else
         local fmt = L.HONORABLE_KILLS_CONFIRM or "+%d honorable kills: Total: %d"
         Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. fmt,
@@ -1090,7 +1075,7 @@ function Overlord.Combat:CreditHealerHonorableKills(count)
 end
 
 -- PLAYER_PVP_KILLS_CHANGED : backup strict pour un coup fatal local. Son compteur
--- HK de raid ne devient un credit anonyme qu'en role soigneur et apres reconciliation.
+-- HK credite les autres victoires honorables seulement apres reconciliation.
 function Overlord.Combat:OnPVPKillsChanged(unitTarget)
     local killScoring = IsKillScoringActive()
 
@@ -1101,12 +1086,12 @@ function Overlord.Combat:OnPVPKillsChanged(unitTarget)
     -- Mettre toutes les HK restantes en attente. Le ProcessKill KB execute plus bas
     -- annule lui-meme une unite s'il credite reellement le joueur ; on ne depend donc
     -- pas du timing relatif des compteurs Blizzard pour reconnaitre un doublon.
-    local healerFallback = math.max(0, honorDelta - detailedCredits)
+    local honorFallback = math.max(0, honorDelta - detailedCredits)
     dbg("  HK delta:", honorDelta, "KB delta:", killingBlowDelta,
-        "preuves detaillees:", detailedCredits, "secours soigneur:", healerFallback)
-    local healerBatch
-    if healerFallback > 0 and killScoring then
-        healerBatch = QueueHealerHonorCredits(healerFallback)
+        "preuves detaillees:", detailedCredits, "secours HK:", honorFallback)
+    local honorBatch
+    if honorFallback > 0 and killScoring then
+        honorBatch = QueueHonorCredits(honorFallback)
     end
     if killingBlows > previousKillingBlows then previousKillingBlows = killingBlows end
     if killingBlowDelta <= 0 then return end
@@ -1134,13 +1119,13 @@ function Overlord.Combat:OnPVPKillsChanged(unitTarget)
     if targetName == "?" then
         if DeferUnknownLocalBackupKill("PLAYER_PVP_KILLS_CHANGED", targetGUID, function(resolvedTargetName)
             self:ProcessKill(playerGUID, playerName, targetGUID, resolvedTargetName,
-                not killScoring, healerBatch)
-        end, healerBatch) then
+                not killScoring, honorBatch)
+        end, honorBatch) then
             return
         end
     end
     self:ProcessKill(playerGUID, playerName, targetGUID, targetName, not killScoring,
-        healerBatch)
+        honorBatch)
 end
 
 -- Cherche le nom d'un membre du groupe par son GUID
@@ -1202,9 +1187,9 @@ end
 
 -- Traitement commun d'un kill confirme.
 -- bountyProofOnly : preuve detaillee pour payout prime (BD) sans crediter le classement.
--- healerBatch : lot HK cree par le meme event, a annuler si ce KB est credite ici.
+-- honorBatch : lot HK cree par le meme event, a annuler si ce KB est credite ici.
 function Overlord.Combat:ProcessKill(
-    killerGUID, killerName, victimGUID, victimName, bountyProofOnly, healerBatch)
+    killerGUID, killerName, victimGUID, victimName, bountyProofOnly, honorBatch)
     local now = GetTime()
     local playerGUID = UnitGUID("player")
 
@@ -1218,8 +1203,8 @@ function Overlord.Combat:ProcessKill(
             and Overlord.BountySync and Overlord.BountySync.RegisterPriorKillCredit then
             Overlord.BountySync:RegisterPriorKillCredit(playerFullName, enrichedVictimName)
         end
-        if killerGUID and playerGUID and killerGUID == playerGUID and healerBatch then
-            NoteDetailedLocalKillCredit(victimGUID, healerBatch)
+        if killerGUID and playerGUID and killerGUID == playerGUID and honorBatch then
+            NoteDetailedLocalKillCredit(victimGUID, honorBatch)
         end
         return
     end
@@ -1282,8 +1267,8 @@ function Overlord.Combat:ProcessKill(
         if RecordAndCheckKillFarm(playerFullName, victimName) then
             RecordProcessKillDedup(victimGUID, contractVictimName, victimName, now)
             -- Le rejet anti-farm reste une preuve detaillee : consommer son lot HK
-            -- empeche le secours soigneur anonyme de recreer le score trois secondes apres.
-            NoteDetailedLocalKillCredit(victimGUID, healerBatch)
+            -- empeche le secours HK anonyme de recreer le score trois secondes apres.
+            NoteDetailedLocalKillCredit(victimGUID, honorBatch)
             return
         end
 
@@ -1315,7 +1300,7 @@ function Overlord.Combat:ProcessKill(
         end
         Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.KILL_CONFIRM, victimName or "?", totalKills))
         killCredited = true
-        NoteDetailedLocalKillCredit(victimGUID, healerBatch)
+        NoteDetailedLocalKillCredit(victimGUID, honorBatch)
     elseif killerGUID and killerName then
         local fullKillerName = Overlord.Sync and Overlord.Sync.CanonicalForeverName
             and Overlord.Sync:CanonicalForeverName(killerName) or nil
