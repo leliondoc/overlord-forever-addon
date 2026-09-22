@@ -172,6 +172,7 @@ local function ShowHelp()
     Overlord:PrintNotification(L.HELP_SHOW)
     Overlord:PrintNotification(L.HELP_HIDE)
     Overlord:PrintNotification(L.HELP_TOGGLE)
+    Overlord:PrintNotification(L.HELP_HUD)
     Overlord:PrintNotification(L.HELP_STATUS)
     Overlord:PrintNotification(L.HELP_ZONES)
     Overlord:PrintNotification(L.HELP_WHERE)
@@ -365,8 +366,7 @@ local function ShowPersistenceStatus()
         return tostring(kills) .. " kills, " .. tostring(captures) .. " captures"
     end
     local db = OverlordDB or {}
-    emit("Save at login: " .. tostring(Overlord.SavedVariablesLoadedAtLogin)
-        .. "; local bridge: " .. tostring(Overlord.SavedVariablesBridgeLoaded))
+    emit("Save at login: " .. tostring(Overlord.SavedVariablesLoadedAtLogin))
     emit("Campaign at login: " .. tostring(Overlord.SavedVariablesCampaignAtLogin)
         .. "; active: " .. tostring(db.lastResetTimestamp))
     emit("Active: " .. totals(db.leaderboard or {}))
@@ -379,7 +379,7 @@ local function ShowPersistenceStatus()
     end
     if latest then emit("Latest archive: " .. tostring(latest.campaignStart) .. "; " .. totals(latest)) end
     if Overlord.SavedVariablesLoadedAtLogin == false then
-        emit("No save loaded (first login or beta loader issue). Windows repair: tools/Repair-ForeverSavedVariables.ps1")
+        emit("No save loaded (first login or beta loader issue). Community sync can recover shared scores.")
     end
 end
 
@@ -400,6 +400,31 @@ local function CommandHandler(msg)
 
     if not Overlord.IsInitialized then
         Overlord:PrintNotification("|cFFFF0000[Overlord]|r " .. L.NOT_INITIALIZED)
+        return
+    end
+
+    if cmd == "hud" then
+        local settings = Overlord.SettingsPanel
+        if not settings then return end
+        local action = args[2] and string.lower(args[2]) or "toggle"
+        if action == "auto" then
+            settings:SetTopHudMode("auto")
+            Overlord:PrintNotification(L.HUD_AUTO)
+            return
+        end
+        local visible
+        if action == "toggle" then
+            visible = not settings:IsTopHudVisible()
+        elseif action == "on" then
+            visible = true
+        elseif action == "off" then
+            visible = false
+        else
+            Overlord:PrintNotification(L.HELP_HUD)
+            return
+        end
+        settings:SetTopHudVisible(visible)
+        Overlord:PrintNotification(visible and L.HUD_SHOWN or L.HUD_HIDDEN)
         return
     end
 

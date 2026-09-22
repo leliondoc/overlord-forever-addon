@@ -15,14 +15,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  windows-persistence:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Verifier le pont local SavedVariables
-        shell: pwsh
-        run: ./tests/forever_savedvariables_bridge.test.ps1
-
   validate:
     runs-on: ubuntu-latest
     steps:
@@ -55,6 +47,7 @@ jobs:
           lua5.1 tests/zone_capture_lease.test.lua
           lua5.1 tests/forever_persistence.test.lua
           lua5.1 tests/forever_recovery.test.lua
+          lua5.1 tests/forever_popups_persistence.test.lua
           lua5.1 tests/forever_leaderboard.test.lua
           lua5.1 tests/forever_world_kills.test.lua
           lua5.1 tests/forever_honorable_kills.test.lua

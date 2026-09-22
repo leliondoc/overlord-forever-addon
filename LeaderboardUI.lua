@@ -221,8 +221,21 @@ end
 
 local function SetRaceIcon(texture, raceFile, sex)
     if not texture then return false end
-    if Overlord.UI and Overlord.UI.SetRaceIcon then
-        return Overlord.UI.SetRaceIcon(texture, raceFile, sex)
+    if Overlord.UI then
+        local race = raceFile
+        if Overlord.Sync and Overlord.Sync.NormalizeRaceFileToken then
+            race = Overlord.Sync:NormalizeRaceFileToken(raceFile)
+        end
+        if race and race ~= "" and Overlord.UI.SetClassicRaceIcon then
+            local gender = tonumber(sex) == 3 and "female" or "male"
+            if Overlord.UI.SetClassicRaceIcon(texture, race .. "-" .. gender) then
+                return true
+            end
+        end
+        -- Les races absentes de la feuille Classic conservent leur portrait Blizzard.
+        if Overlord.UI.SetRaceIcon then
+            return Overlord.UI.SetRaceIcon(texture, raceFile, sex)
+        end
     end
     texture:Hide()
     return false

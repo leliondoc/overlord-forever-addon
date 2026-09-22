@@ -55,6 +55,7 @@ jobs:
           lua5.1 tests/zone_capture_lease.test.lua
           lua5.1 tests/forever_persistence.test.lua
           lua5.1 tests/forever_recovery.test.lua
+          lua5.1 tests/forever_popups_persistence.test.lua
           lua5.1 tests/forever_leaderboard.test.lua
           lua5.1 tests/forever_world_kills.test.lua
           lua5.1 tests/forever_honorable_kills.test.lua
@@ -80,8 +81,6 @@ jobs:
 
       - name: Preparer changelog HTML pour CurseForge
         run: |
-          # A developer's local account bridge must never ship to other players.
-          sed -i '/^# BEGIN OVERLORD LOCAL SAVEDVARIABLES$/,/^# END OVERLORD LOCAL SAVEDVARIABLES$/d' Overlord.toc
           pandoc CHANGELOG.md -f gfm -t html --wrap=none -o CHANGELOG.cf.html
           cat > .pkgmeta.ci << 'EOF'
           package-as: Overlord

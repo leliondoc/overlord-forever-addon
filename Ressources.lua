@@ -1078,6 +1078,11 @@ local function LayoutHudTopRow(showKeep, showGold, showWood, showTutorial)
     NotifyHudStackLayout()
 end
 
+local function HideTopHudManually()
+    if OverlordDB then OverlordDB.goldHUDHidden = true end
+    if goldHudRoot then goldHudRoot:Hide() end
+end
+
 local function CreateGoldHUD()
     if goldHUD then return end
 
@@ -1490,10 +1495,7 @@ local function CreateGoldHUD()
     closeBtn:SetPoint("TOPRIGHT", -4, -4)
     closeBtn:SetNormalFontObject("GameFontNormalSmall")
     closeBtn:SetText("X")
-    closeBtn:SetScript("OnClick", function()
-        goldHudRoot:Hide()
-        if OverlordDB then OverlordDB.goldHUDHidden = true end
-    end)
+    closeBtn:SetScript("OnClick", HideTopHudManually)
     closeBtn:SetScript("OnEnter", function(btn) btn:SetText("|cFFFF4444X|r") end)
     closeBtn:SetScript("OnLeave", function(btn) btn:SetText("X") end)
 
@@ -1583,6 +1585,15 @@ local function CreateGoldHUD()
         GameTooltip:Show()
     end)
     woodHUD:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    local woodCloseBtn = CreateFrame("Button", nil, woodHUD)
+    woodCloseBtn:SetSize(16, 16)
+    woodCloseBtn:SetPoint("TOPRIGHT", -4, -4)
+    woodCloseBtn:SetNormalFontObject("GameFontNormalSmall")
+    woodCloseBtn:SetText("X")
+    woodCloseBtn:SetScript("OnClick", HideTopHudManually)
+    woodCloseBtn:SetScript("OnEnter", function(btn) btn:SetText("|cFFFF4444X|r") end)
+    woodCloseBtn:SetScript("OnLeave", function(btn) btn:SetText("X") end)
 
     boostBtn:SetScript("OnEnter", function(self)
         ShowWoodDominationTooltip(self)
@@ -1872,6 +1883,10 @@ end
 
 local lastHUDZoneCheck = 0
 local lastHUDMapID = nil
+local AUTO_HUD_GRACE_SECONDS = 15
+local autoGoldLastRelevantAt = nil
+local autoWoodLastRelevantAt = nil
+local autoKeepLastRelevantAt = nil
 
 -- Masque le HUD or pendant les instances (CdB, donjon, etc.) - appele depuis Core:SuspendForInstance.
 function Overlord.Ressources:HideGoldHUDForInstance()
@@ -1901,6 +1916,30 @@ local function IsInHUDZone()
     return false, mapID
 end
 
+local function GetAutoHudContext(mapID)
+    local zones = Overlord.Zones
+    local inCapture = zones and zones.GetCurrentPlayerZone and zones:GetCurrentPlayerZone() ~= nil
+    local inMine = zones and zones.GetCurrentPlayerMine and zones:GetCurrentPlayerMine() ~= nil
+    local inWood = zones and zones.GetCurrentPlayerWoodZone and zones:GetCurrentPlayerWoodZone() ~= nil
+
+    local inKeep = false
+    local keep = Overlord.GuildKeep
+    if keep and keep.ResolveSiteByMapID and keep.IsPlayerInKeepGeometryForHud then
+        local site = keep:ResolveSiteByMapID(mapID)
+        inKeep = site and keep:IsPlayerInKeepGeometryForHud(site) or false
+    end
+
+    local inOutpost = false
+    local outpost = Overlord.Outpost
+    if outpost and outpost.ResolveSiteByMapID and outpost.IsPlayerInOutpostGeometry then
+        local site = outpost:ResolveSiteByMapID(mapID)
+        inOutpost = site and outpost:IsPlayerInOutpostGeometry(site) or false
+    end
+
+    return inCapture or inMine or inKeep or inOutpost,
+        inWood or (inCapture and wood >= WOOD_SPEND_COST), inKeep
+end
+
 local function HUDZoneCheck(force)
     if not force then
         local now = GetTime()
@@ -1920,20 +1959,40 @@ local function HUDZoneCheck(force)
     if not goldHudRoot or not goldHUD then return end
 
     local inZone, mapID = IsInHUDZone()
-    -- Changement de zone : reset le flag "ferme manuellement"
     if mapID ~= lastHUDMapID then
         lastHUDMapID = mapID
-        if OverlordDB then OverlordDB.goldHUDHidden = false end
+        autoGoldLastRelevantAt = nil
+        autoWoodLastRelevantAt = nil
+        autoKeepLastRelevantAt = nil
     end
 
-    local settingsHidden = OverlordDB and OverlordDB.config and OverlordDB.config.showTopHud == false
+    local cfg = OverlordDB and OverlordDB.config
+    local hudMode = cfg and cfg.topHudMode or "auto"
+    local settingsHidden = hudMode == "never"
+        or (cfg and cfg.topHudMode == nil and cfg.showTopHud == false)
     local hudHidden = settingsHidden or (OverlordDB and OverlordDB.goldHUDHidden)
-    local showTutorial = not (OverlordDB and OverlordDB.config and OverlordDB.config.showTutorialBook == false)
-    local showWood = Overlord.Ressources:ShouldShowWoodHUD(mapID, inZone) and not hudHidden
-    local showGold = inZone and not hudHidden
-    local showCluster = showGold or showWood
-    local showKeep = showGold
+    local showTutorial = cfg and cfg.showTutorialBook == true or false
+    local showGold, showWood, showKeep = false, false, false
+    if inZone and not hudHidden then
+        if hudMode == "auto" then
+            local relevantGold, relevantWood, relevantKeep = GetAutoHudContext(mapID)
+            local now = GetTime()
+            if relevantGold then autoGoldLastRelevantAt = now end
+            if relevantWood then autoWoodLastRelevantAt = now end
+            if relevantKeep then autoKeepLastRelevantAt = now end
+            showGold = autoGoldLastRelevantAt and now - autoGoldLastRelevantAt <= AUTO_HUD_GRACE_SECONDS or false
+            showWood = autoWoodLastRelevantAt and now - autoWoodLastRelevantAt <= AUTO_HUD_GRACE_SECONDS or false
+            showKeep = autoKeepLastRelevantAt and now - autoKeepLastRelevantAt <= AUTO_HUD_GRACE_SECONDS or false
+        else
+            showGold = true
+            showWood = true
+            showKeep = true
+        end
+    end
+    showWood = showWood and Overlord.Ressources:ShouldShowWoodHUD(mapID, inZone)
+    showKeep = showKeep and showGold
         and Overlord.Ressources:ShouldShowGuildKeepHUD(mapID, inZone)
+    local showCluster = showGold or showWood
     if showCluster then
         if not goldHudRoot:IsShown() then
             goldHudRoot:Show()
@@ -1948,6 +2007,7 @@ local function HUDZoneCheck(force)
         end
         if woodHUD then woodHUD:Hide() end
         if guildKeepHUD then guildKeepHUD:Hide() end
+        lastHudTopLayoutKey = nil
         NotifyHudStackLayout()
     end
 end

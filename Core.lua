@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.0.8"
+Overlord.Version = "1.0.9"
 -- Forever uses one global community. The beta relay remains enabled in parallel
 -- so non-members and temporarily unavailable C_Club rosters still converge.
 Overlord.CommunityModeEnabled = true
@@ -3722,9 +3722,7 @@ function Overlord:Initialize()
     self.SavedVariablesCampaignAtLogin = type(OverlordDB) == "table"
         and tonumber(OverlordDB.lastResetTimestamp) or nil
     
-    -- ADDON_LOADED suit la lecture des SavedVariables. Sur la beta affectee,
-    -- le pont local charge le meme fichier a la fin du TOC, avant cet evenement.
-    -- Attendre un timer ne peut pas reparer une lecture omise par le client.
+    -- ADDON_LOADED follows SavedVariables loading. Waiting cannot repair a client-side load failure.
     if not OverlordDB then
         OverlordDB = {
             zones = {},
@@ -3969,7 +3967,21 @@ function Overlord:Initialize()
         end
     end
 
-    -- Initialisation de config (n'écrase pas celles de l'utilisateur)
+    -- Initialisation de config et migration de l'ancien choix de HUD.
+    -- L'ancien showTopHud=true etait la valeur par defaut, pas un choix "Toujours".
+    -- Corrige aussi les saves deja migrees vers always avant ce changement.
+    local hudCfg = OverlordDB.config
+    if hudCfg.topHudModeUserSelected ~= true then
+        hudCfg.topHudMode = (hudCfg.topHudMode == "never" or hudCfg.showTopHud == false)
+            and "never" or "auto"
+    elseif hudCfg.topHudMode ~= "auto"
+        and hudCfg.topHudMode ~= "always"
+        and hudCfg.topHudMode ~= "never" then
+        hudCfg.topHudMode = "auto"
+    end
+    if hudCfg.topHudMode == "auto" and hudCfg.showTutorialBookUserSelected ~= true then
+        hudCfg.showTutorialBook = false
+    end
     local CONFIG_DEFAULTS = {
         uiVisible = true,
         soundEnabled = true,

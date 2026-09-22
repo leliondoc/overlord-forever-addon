@@ -114,6 +114,12 @@ local loginAnnouncements = {}
 local GUILD_KEEP_REMINDER_RECHECK_SEC = 30
 local nextGuildKeepReminderCheckAt = 0
 
+-- La beta peut ecrire OverlordDB sans le recharger. Sans etat precedent fiable,
+-- les annonces automatiques reviendraient a chaque connexion ou /reload.
+local function CanAutoShowPersistentPopup()
+    return Overlord.SavedVariablesLoadedAtLogin ~= false
+end
+
 -- ---------------------------------------------------------------------------
 -- Persistance (une fois par id de popup)
 -- ---------------------------------------------------------------------------
@@ -930,6 +936,7 @@ function Overlord.Popups:RegisterLoginAnnouncement(entry)
 end
 
 function Overlord.Popups:TryShowNextLoginAnnouncement()
+    if not CanAutoShowPersistentPopup() then return false end
     if Overlord.InstanceSuspended or not Overlord.IsInitialized then return false end
     if dialogFrame and dialogFrame:IsShown() then return false end
     MigrateLegacyPopupFlags()
@@ -1116,7 +1123,8 @@ local function BuildBattleReportBody()
     return battleReportBodyCache
 end
 
-function Overlord.Popups:TryShowNextDailyAnnouncement()
+function Overlord.Popups:TryShowNextDailyAnnouncement(forcePreview)
+    if not forcePreview and not CanAutoShowPersistentPopup() then return false end
     if Overlord.InstanceSuspended or not Overlord.IsInitialized then return false end
     if dialogFrame and dialogFrame:IsShown() then return false end
     MigrateLegacyPopupFlags()
@@ -1171,7 +1179,7 @@ function Overlord.Popups:PreviewBattleReport(attempt)
         if Overlord.CheckActiveFrontZone then Overlord:CheckActiveFrontZone() end
         if not IsPlayerOnActiveFront() and not IsPlayerOnFrontMap() then return end
     end
-    if self:TryShowNextDailyAnnouncement() then return end
+    if self:TryShowNextDailyAnnouncement(true) then return end
     if Overlord.PrintNotification and L.POPUP_BATTLE_REPORT_NO_DATA then
         Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.POPUP_BATTLE_REPORT_NO_DATA)
     end
@@ -2152,6 +2160,7 @@ function Overlord.Popups:SyncFeaturedFrontDock()
 end
 
 function Overlord.Popups:TryShowFeaturedFrontOnLogin()
+    if not CanAutoShowPersistentPopup() then return false end
     if Overlord.InstanceSuspended or not Overlord.IsInitialized then return false end
     if dialogFrame and dialogFrame:IsShown() then return false end
     MigrateLegacyPopupFlags()
@@ -2199,6 +2208,7 @@ local function BuildGuildKeepReminderBody()
 end
 
 function Overlord.Popups:TryShowGuildKeepSiegeReminder()
+    if not CanAutoShowPersistentPopup() then return false end
     if Overlord.InstanceSuspended or not Overlord.IsInitialized then return false end
     if InCombatLockdown and InCombatLockdown() then return false end
     if dialogFrame and dialogFrame:IsShown() then return false end

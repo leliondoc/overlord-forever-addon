@@ -24,6 +24,7 @@ Overlord.SettingsPanel.ShowMinimapButtonVariableName = "Overlord_ShowMinimapButt
 Overlord.SettingsPanel.ShowMinimapCaptureZonesVariableName = "Overlord_ShowMinimapCaptureZones"
 Overlord.SettingsPanel.ShowMapZoneTitlesVariableName = "Overlord_ShowMapZoneTitles"
 Overlord.SettingsPanel.ShowTopHudVariableName = "Overlord_ShowTopHud"
+Overlord.SettingsPanel.TopHudModeVariableName = "Overlord_TopHudMode"
 Overlord.SettingsPanel.ShowTutorialBookVariableName = "Overlord_ShowTutorialBook"
 Overlord.SettingsPanel.SoundEnabledVariableName = "Overlord_SoundEnabled"
 Overlord.SettingsPanel.WorldDefenseEnabledVariableName = "Overlord_WorldDefenseEnabled"
@@ -47,7 +48,8 @@ local DEFAULT_SHOW_MINIMAP_BUTTON = true
 local DEFAULT_SHOW_MINIMAP_CAPTURE_ZONES = true
 local DEFAULT_SHOW_MAP_ZONE_TITLES = true
 local DEFAULT_SHOW_TOP_HUD = true
-local DEFAULT_SHOW_TUTORIAL_BOOK = true
+local DEFAULT_TOP_HUD_MODE = "auto"
+local DEFAULT_SHOW_TUTORIAL_BOOK = false
 local DEFAULT_SOUND_ENABLED = true
 local DEFAULT_WORLD_DEFENSE_ENABLED = true
 
@@ -396,37 +398,67 @@ local function setShowMapZoneTitles(value)
     notifySettingsAPI(Overlord.SettingsPanel.ShowMapZoneTitlesVariableName, OverlordDB.config.showMapZoneTitles)
 end
 
-local function getShowTopHud()
-    if OverlordDB and OverlordDB.config and OverlordDB.config.showTopHud == false then
-        return false
+local function getTopHudMode()
+    local cfg = OverlordDB and OverlordDB.config
+    if cfg and (cfg.topHudMode == "auto" or cfg.topHudMode == "always" or cfg.topHudMode == "never") then
+        return cfg.topHudMode
     end
-    return true
+    if cfg and cfg.showTopHud == false then return "never" end
+    return DEFAULT_TOP_HUD_MODE
 end
 
-local function setShowTopHud(value)
+local function setTopHudMode(value)
     if not OverlordDB then return end
+    if value ~= "auto" and value ~= "always" and value ~= "never" then return end
     OverlordDB.config = OverlordDB.config or {}
-    OverlordDB.config.showTopHud = value == true
-    if value == true then
+    OverlordDB.config.topHudMode = value
+    OverlordDB.config.topHudModeUserSelected = true
+    OverlordDB.config.showTopHud = value ~= "never"
+    if value ~= "never" then
         OverlordDB.goldHUDHidden = false
     end
     if not settingsSuppressSideEffects and Overlord.Ressources and Overlord.Ressources.OnShowTopHudSettingChanged then
         Overlord.Ressources:OnShowTopHudSettingChanged()
     end
     notifySettingsAPI(Overlord.SettingsPanel.ShowTopHudVariableName, OverlordDB.config.showTopHud)
+    notifySettingsAPI(Overlord.SettingsPanel.TopHudModeVariableName, value)
+end
+
+local function getShowTopHud()
+    return getTopHudMode() ~= "never"
+end
+
+local function setShowTopHud(value)
+    setTopHudMode(value == true and "always" or "never")
+end
+
+-- Point d'entree commun aux commandes slash et au panneau d'options.
+function Overlord.SettingsPanel:IsTopHudVisible()
+    return getShowTopHud() and not (OverlordDB and OverlordDB.goldHUDHidden)
+end
+
+function Overlord.SettingsPanel:SetTopHudVisible(value)
+    setShowTopHud(value)
+    self:RefreshControls()
+end
+
+function Overlord.SettingsPanel:SetTopHudMode(value)
+    setTopHudMode(value)
+    self:RefreshControls()
 end
 
 local function getShowTutorialBook()
-    if OverlordDB and OverlordDB.config and OverlordDB.config.showTutorialBook == false then
-        return false
+    if OverlordDB and OverlordDB.config and OverlordDB.config.showTutorialBook ~= nil then
+        return OverlordDB.config.showTutorialBook == true
     end
-    return true
+    return DEFAULT_SHOW_TUTORIAL_BOOK
 end
 
 local function setShowTutorialBook(value)
     if not OverlordDB then return end
     OverlordDB.config = OverlordDB.config or {}
     OverlordDB.config.showTutorialBook = value == true
+    OverlordDB.config.showTutorialBookUserSelected = true
     if not settingsSuppressSideEffects and Overlord.Ressources and Overlord.Ressources.OnShowTutorialBookSettingChanged then
         Overlord.Ressources:OnShowTutorialBookSettingChanged()
     end
@@ -505,6 +537,8 @@ local Acc = {
     setShowMapZoneTitles = setShowMapZoneTitles,
     getShowTopHud = getShowTopHud,
     setShowTopHud = setShowTopHud,
+    getTopHudMode = getTopHudMode,
+    setTopHudMode = setTopHudMode,
     getShowTutorialBook = getShowTutorialBook,
     setShowTutorialBook = setShowTutorialBook,
     getSoundEnabled = getSoundEnabled,
@@ -569,7 +603,7 @@ function Overlord.SettingsPanel:ResetDefaults()
     setMapPathOpacity(DEFAULT_MAP_PATH_OPACITY)
     setAutoWaypoint(DEFAULT_AUTO_WAYPOINT)
     setShowMinimapButton(DEFAULT_SHOW_MINIMAP_BUTTON)
-    setShowTopHud(DEFAULT_SHOW_TOP_HUD)
+    setTopHudMode(DEFAULT_TOP_HUD_MODE)
     setShowTutorialBook(DEFAULT_SHOW_TUTORIAL_BOOK)
     setSoundEnabled(DEFAULT_SOUND_ENABLED)
     setWorldDefenseEnabled(DEFAULT_WORLD_DEFENSE_ENABLED)
@@ -616,7 +650,7 @@ local function CreateToggleRow(parent, opts)
 
     local button = UI.CreateWC3Button(row, 96, 24, "", function()
         if opts.set and opts.get then
-            opts.set(not opts.get())
+            opts.set(opts.nextValue and opts.nextValue(opts.get()) or not opts.get())
             row:Refresh()
         end
     end, nil, { gold = gold, white = white })
@@ -625,18 +659,20 @@ local function CreateToggleRow(parent, opts)
 
     function row:Refresh()
         local enabled = opts.get and opts.get() or false
-        local text = enabled
+        local text = opts.formatValue and opts.formatValue(enabled) or (enabled
             and ((L and L.SETTINGS_TOGGLE_ON) or "Enabled")
-            or ((L and L.SETTINGS_TOGGLE_OFF) or "Disabled")
+            or ((L and L.SETTINGS_TOGGLE_OFF) or "Disabled"))
         self.valueButton.label:SetText(text)
         if UI and UI.SetWC3ButtonActive then
-            UI.SetWC3ButtonActive(self.valueButton, enabled, { gold = gold, white = white })
+            local active = opts.isActive and opts.isActive(enabled)
+            if active == nil then active = enabled end
+            UI.SetWC3ButtonActive(self.valueButton, active, { gold = gold, white = white })
         end
     end
 
     row:SetScript("OnClick", function(self)
         if opts.set and opts.get then
-            opts.set(not opts.get())
+            opts.set(opts.nextValue and opts.nextValue(opts.get()) or not opts.get())
             self:Refresh()
         end
     end)
@@ -833,8 +869,19 @@ local function BuildSettingsRows(sp, rowParent, initialRowW, gold, white, placeR
         height = ROW_H,
         label = (L and L.SHOW_TOP_HUD_LABEL) or "Top HUD",
         tooltip = (L and L.SHOW_TOP_HUD_TOOLTIP) or "",
-        get = Acc.getShowTopHud,
-        set = Acc.setShowTopHud,
+        get = Acc.getTopHudMode,
+        set = Acc.setTopHudMode,
+        nextValue = function(mode)
+            if mode == "auto" then return "always" end
+            if mode == "always" then return "never" end
+            return "auto"
+        end,
+        formatValue = function(mode)
+            if mode == "always" then return L.TOP_HUD_MODE_ALWAYS or "Always" end
+            if mode == "never" then return L.TOP_HUD_MODE_NEVER or "Never" end
+            return L.TOP_HUD_MODE_AUTO or "Auto"
+        end,
+        isActive = function(mode) return mode ~= "never" end,
         gold = gold,
         white = white,
     })
@@ -1211,16 +1258,34 @@ local function RegisterVerticalFallback()
             setAutoWaypoint
         )
         Settings.CreateCheckbox(category, awSetting, (L and L.AUTO_WAYPOINT_TOOLTIP) or "")
-        local thSetting = Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.ShowTopHudVariableName,
-            type(DEFAULT_SHOW_TOP_HUD),
-            (L and L.SHOW_TOP_HUD_LABEL) or "Top HUD",
-            DEFAULT_SHOW_TOP_HUD,
-            getShowTopHud,
-            setShowTopHud
-        )
-        Settings.CreateCheckbox(category, thSetting, (L and L.SHOW_TOP_HUD_TOOLTIP) or "")
+        if Settings.CreateDropdown and Settings.CreateControlTextContainer then
+            local thSetting = Settings.RegisterProxySetting(
+                category,
+                Overlord.SettingsPanel.TopHudModeVariableName,
+                type(DEFAULT_TOP_HUD_MODE),
+                (L and L.SHOW_TOP_HUD_LABEL) or "Top HUD",
+                DEFAULT_TOP_HUD_MODE,
+                getTopHudMode,
+                setTopHudMode
+            )
+            local hudOptions = Settings.CreateControlTextContainer()
+            hudOptions:Add("auto", (L and L.TOP_HUD_MODE_AUTO) or "Auto")
+            hudOptions:Add("always", (L and L.TOP_HUD_MODE_ALWAYS) or "Always")
+            hudOptions:Add("never", (L and L.TOP_HUD_MODE_NEVER) or "Never")
+            Settings.CreateDropdown(category, thSetting, function() return hudOptions:GetData() end,
+                (L and L.SHOW_TOP_HUD_TOOLTIP) or "")
+        else
+            local thSetting = Settings.RegisterProxySetting(
+                category,
+                Overlord.SettingsPanel.ShowTopHudVariableName,
+                type(DEFAULT_SHOW_TOP_HUD),
+                (L and L.SHOW_TOP_HUD_LABEL) or "Top HUD",
+                DEFAULT_SHOW_TOP_HUD,
+                getShowTopHud,
+                setShowTopHud
+            )
+            Settings.CreateCheckbox(category, thSetting, (L and L.SHOW_TOP_HUD_TOOLTIP) or "")
+        end
         local tbSetting = Settings.RegisterProxySetting(
             category,
             Overlord.SettingsPanel.ShowTutorialBookVariableName,
@@ -1362,12 +1427,12 @@ function Overlord.SettingsPanel:Register()
         )
         Settings.RegisterProxySetting(
             category,
-            Overlord.SettingsPanel.ShowTopHudVariableName,
-            type(DEFAULT_SHOW_TOP_HUD),
+            Overlord.SettingsPanel.TopHudModeVariableName,
+            type(DEFAULT_TOP_HUD_MODE),
             (L and L.SHOW_TOP_HUD_LABEL) or "Top HUD",
-            DEFAULT_SHOW_TOP_HUD,
-            getShowTopHud,
-            setShowTopHud
+            DEFAULT_TOP_HUD_MODE,
+            getTopHudMode,
+            setTopHudMode
         )
         Settings.RegisterProxySetting(
             category,

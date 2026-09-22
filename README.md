@@ -6,7 +6,7 @@ Addon **World of Warcraft Forever** pour la capture de zones sur les fronts du m
 |---|---|
 | **Auteur** | Troma |
 | **Licence** | All Rights Reserved |
-| **Version** | 1.0.6 |
+| **Version** | 1.0.9 |
 | **Jeu** | WoW Forever (`## Interface: 16001`) |
 | **CurseForge** | https://www.curseforge.com/wow/addons/overlord-forever |
 | **Dépôt** | https://github.com/leliondoc/overlord-forever-addon |
@@ -32,46 +32,25 @@ ne remplace pas une sauvegarde persistante : si tous les joueurs perdent leur
 état au redémarrage, aucun message d'addon ne peut reconstruire seul les scores.
 La version CurseForge ne contient aucune sauvegarde personnelle.
 
-Sous Windows, le contournement local s'installe depuis le dossier `Overlord` :
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Repair-ForeverSavedVariables.ps1
-```
-
-Le script sauvegarde les fichiers existants dans `_local`, puis relie le dossier
-de sauvegarde du compte à l'addon et ajoute sa lecture **à la fin du TOC**, avant
-`ADDON_LOADED`. Il lit toujours le fichier courant, même quand WoW le remplace à
-la déconnexion. Aucun programme ne doit rester ouvert. Il ne modifie pas `WTF`.
-Le même principe est documenté par [ForeverSVFix](https://github.com/nobewayo/ForeverSVFix#how-it-works).
-
-**Quitter complètement puis relancer WoW** après installation. Capturer un point,
-faire `/reload`, puis connecter un autre personnage du même compte : le point
-doit conserver son propriétaire et les annonces déjà vues doivent rester masquées.
-La validation en jeu reste nécessaire sur le client Windows.
-
-Si plusieurs comptes ont une sauvegarde, ajouter `-Account "ACCOUNT#1"`.
-Le lien est propre à ce compte : le désactiver avant d'utiliser un autre compte
-WoW dans cette installation. Relancer le script après une mise à jour qui remplace
-le TOC. Quand Blizzard corrige le problème, utiliser le même script avec `-Disable`.
-Cette option conserve les sauvegardes. Pour un zip manuel, désactiver le lien
-et exclure `_local` ; la publication GitHub/CurseForge enlève ce bloc automatiquement.
+Quand aucune sauvegarde n'a été chargée au login, Overlord ne relance pas
+automatiquement les annonces de bienvenue, le rapport quotidien ni le rappel
+de siège : il ne peut pas savoir si elles ont déjà été vues. Le guide reste
+accessible par `/ov guide` ou le panneau. Ce comportement est inclus pour tous
+les joueurs et ne nécessite aucun pont local.
 
 ### Distinguer un chargement lent, un reset et une perte
 
 Le classement peut se remplir progressivement au login pendant le rattrapage
 par les pairs. Un tableau initialement vide ne prouve pas une perte sur disque.
 `/ov persistence` affiche si une sauvegarde était présente avant l’initialisation,
-le résultat du pont local (après réinstallation du script), les epochs de campagne
-au login et après initialisation, ainsi que les totaux actifs et de la dernière archive.
-`nil` pour le pont signifie que la sonde locale n’est pas installée ; `false` signifie
-que son passage n’a trouvé aucune table de sauvegarde.
+les epochs de campagne au login et après initialisation, ainsi que les totaux
+actifs et de la dernière archive.
 
 Un reset hebdomadaire ouvre normalement un nouveau classement. Une copie complète
 de la campagne précédente est maintenant conservée par région dans
 `leaderboardPreviousCampaigns`, avec les métadonnées et les rangs hors du top de
 l’historique compact. Cette copie ne se réinjecte jamais automatiquement dans une
-nouvelle campagne. Le script de réparation conserve les scripts de récupération
-locaux déjà installés et sauvegarde leurs fichiers avant de réparer le TOC.
+nouvelle campagne.
 
 ## Fronts de guerre
 
@@ -161,6 +140,7 @@ Alias : `/ov` et `/overlord`. Tapez **`/ov help`** en jeu pour la liste complèt
 |---|---|
 | `/ov` | Ouvre le panneau principal |
 | `/ov show` / `hide` / `toggle` | Affiche, cache ou bascule l'interface |
+| `/ov hud auto` / `on` / `off` / `toggle` | Auto affiche les panneaux utiles près des objectifs, mines et forêts ; `on` les garde sur les cartes concernées, `off` les masque. `/ov hud` bascule aussi l'état. Utilisable dans une macro. |
 | `/ov status` | État de toutes les zones du front |
 | `/ov zones` | Zones disponibles avec coordonnées |
 | `/ov where` | Bascule l'indicateur de zone |
@@ -174,6 +154,8 @@ Alias : `/ov` et `/overlord`. Tapez **`/ov help`** en jeu pour la liste complèt
 ## Options
 
 **Échap → Options → AddOns → Overlord** : échelle UI, opacité des overlays carte/minimap, notifications chat, waypoint automatique, affichage minimap, etc.
+
+Le HUD du haut est en mode **Auto** par défaut, y compris après migration de l'ancien réglage « activé ». Il montre le panneau or près d'une capture ou d'une mine, le panneau bois dans une forêt (ou près d'une capture si le bois permet une action), et le panneau fortin sur place. Les panneaux restent visibles 15 secondes après la sortie du lieu. La croix masque le groupe jusqu'à sa réactivation via les options ou `/ov hud on` / `auto`. Le livre du tutoriel est masqué par défaut en mode Auto ; le guide reste accessible dans le panneau et avec `/ov guide`.
 
 ## Releases
 

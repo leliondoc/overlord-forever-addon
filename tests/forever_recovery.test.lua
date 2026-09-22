@@ -31,7 +31,6 @@ local lines = {}
 Overlord.PrintNotification = function(_, s) lines[#lines+1] = s end
 Overlord.IsInitialized, Overlord.InstanceSuspended = false, true
 Overlord.SavedVariablesLoadedAtLogin = true
-Overlord.SavedVariablesBridgeLoaded = true
 Overlord.SavedVariablesCampaignAtLogin = epoch
 OverlordDB.history = { old = {campaignStart=epoch, kills={A=27}, captureCounts={A=13}} }
 assert(loadfile('Commands.lua'))()

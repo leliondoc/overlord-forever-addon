@@ -1,4 +1,11 @@
-1.0.8
+1.0.9
+
+**Overlord Forever 1.0.9**
+
+- Show the top HUD contextually by default near capture objectives, mines, forests and guild keeps. Keep Always and Never options, preserve manual dismissal, and add `/ov hud auto|on|off|toggle` for macros.
+- Use Classic race portraits in the leaderboard when available, with Blizzard atlas fallback for other races.
+- Suppress automatic welcome, daily report, featured front and siege reminder pop-ups when the Forever beta did not load SavedVariables. The guide remains available on demand, and normal one-time/daily behavior remains when the saved state loads.
+- Keep the public addon independent of any personal SavedVariables bridge or account data.
 
 **Overlord Forever 1.0.8**
 
