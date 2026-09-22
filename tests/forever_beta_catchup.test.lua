@@ -205,6 +205,8 @@ end
 for _, e in ipairs(clients) do
     e.Overlord.Sync._historyCatchupWakeGeneration =
         (e.Overlord.Sync._historyCatchupWakeGeneration or 0) + 1
+    e.Overlord.Sync._historyCatchupPending = nil
+    e.Overlord.Sync.GetOnlineCommunityMembers = function() return {} end
 end
 local empty = client("Empty Tester", "alliance")
 local fresh = client("Fresh Tester", "alliance")
