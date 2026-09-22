@@ -2131,6 +2131,8 @@ local lastCommunityClubPollAt = 0
 local cachedCommunityClubId = nil
 local lastCommunityStatsAt = 0
 local cachedCommunityOnline = nil
+local communityMembershipEventFrame = nil
+local communityMembershipRefreshPending = false
 local GK_HUD_REFRESH_INTERVAL = 15
 local lastGkHudRefreshAt = 0
 local lastMainFrameHeight = nil
@@ -3435,7 +3437,9 @@ function Overlord.UI:OnCommunityButtonClick()
     if Overlord.CommunityModeEnabled == false then return end
     if not Overlord.Sync or not Overlord.Sync.FindCommunityClub then return end
     lastCommunityClubPollAt = 0
-    local clubId = Overlord.Sync:FindCommunityClub()
+    -- A join can happen after the last background scan. The click must inspect
+    -- Blizzard's current club list instead of reusing the five-minute cache.
+    local clubId = Overlord.Sync:FindCommunityClub(true)
     cachedCommunityClubId = clubId
     if clubId then
         if Overlord.Sync.HandleCommunityMembershipDetected then
@@ -3451,13 +3455,40 @@ function Overlord.UI:OnCommunityButtonClick()
             return
         end
         if ToggleCommunitiesFrame then
-            securecall(ToggleCommunitiesFrame)
+            if not CommunitiesFrame or not CommunitiesFrame:IsShown() then
+                securecall(ToggleCommunitiesFrame)
+            end
+            if CommunitiesFrame and CommunitiesFrame.SelectClub then
+                securecall(CommunitiesFrame.SelectClub, CommunitiesFrame, clubId)
+            end
         end
         return
     end
 
     self:ShowCommunityPopup()
 end
+
+local function OnCommunityMembershipChanged()
+    if Overlord.CommunityModeEnabled == false or not Overlord.Sync
+        or communityMembershipRefreshPending then return end
+    communityMembershipRefreshPending = true
+    -- CLUB_ADDED can fire before GetSubscribedClubs has finished updating.
+    C_Timer.After(0.2, function()
+        communityMembershipRefreshPending = false
+        if not Overlord.Sync or not Overlord.UI then return end
+        Overlord.Sync:ResetCommunitySearch()
+        cachedCommunityClubId = Overlord.Sync:FindCommunityClub(true)
+        lastCommunityClubPollAt = GetTime()
+        if Overlord.UI.RefreshCommunityButton then
+            Overlord.UI:RefreshCommunityButton()
+        end
+    end)
+end
+
+communityMembershipEventFrame = CreateFrame("Frame")
+communityMembershipEventFrame:RegisterEvent("CLUB_ADDED")
+communityMembershipEventFrame:RegisterEvent("CLUB_REMOVED")
+communityMembershipEventFrame:SetScript("OnEvent", OnCommunityMembershipChanged)
 
 function Overlord.UI:RefreshCommunityButton()
     if Overlord.CommunityModeEnabled == false then

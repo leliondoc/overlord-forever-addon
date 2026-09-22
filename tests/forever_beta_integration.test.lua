@@ -36,7 +36,8 @@ C_Club.GetSubscribedClubs = function()
     return { { clubId = 777, name = "Overlord Forever", clubType = Enum.ClubType.Character } }
 end
 C_Club.GetClubMembers = function() return {} end
-s:ResetCommunitySearch()
+-- The Community button forces a fresh scan immediately after a mid-session join,
+-- even when the preceding scan cached that no community was present.
 assert(s:FindCommunityClub(true) == 777, "Global Overlord community was not discovered after joining")
 assert(s:IsGuildKeepCommunitySender("Remote Tester"), "Routed keep sender lost its trust context")
 -- A second score through fragmented R2 reaches the same production receiver.

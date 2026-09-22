@@ -1,6 +1,10 @@
-1.0.4
+1.0.5
 
-**Overlord Forever 1.0.4**
+**Overlord Forever 1.0.5**
+
+- Detect a newly joined Overlord community immediately from the Community button, even while the previous negative club lookup is cached.
+- Refresh the panel when Blizzard reports a club join or leave, and open the detected Overlord club directly from the button. Nearby events share one refresh to avoid stutter.
+- Keep the global leaderboard, parallel sync relays, US Guild Keep schedule and data recovery behavior from 1.0.4.
 
 - Re-enable the Overlord community button with the global Forever invite `0m7kdXcnvR`. The numeric club ID is discovered automatically through `C_Club` after joining.
 - Use one global Forever data pool. Existing US, EU, FR, DE and NA leaderboard, domination, keep, outpost, victory-bonus, Commander and Contract records migrate into the global pool without discarding current-campaign data.
@@ -17,4 +21,4 @@
 
 - Fully restart WoW after installing because this release adds modules to the TOC.
 - Join the Overlord community from the in-game button for the strongest roster path. The channel, group and Battle.net relay remains active as a fallback.
-- Other participants should update to 1.0.4 so every client writes the global pool and uses the same Guild Keep clock.
+- Other participants should update to 1.0.5 so the community panel detects membership promptly and all clients keep the same global pool and Guild Keep clock.
