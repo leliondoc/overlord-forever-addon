@@ -1094,7 +1094,10 @@ function Overlord.Combat:OnPVPKillsChanged(unitTarget)
         honorBatch = QueueHonorCredits(honorFallback)
     end
     if killingBlows > previousKillingBlows then previousKillingBlows = killingBlows end
-    if killingBlowDelta <= 0 then return end
+    -- PARTY_KILL peut avoir deja credite le KB avant que le compteur PvP avance.
+    -- Ses preuves detaillees ont ete rapprochees des HK ci-dessus : ne pas lancer
+    -- un backup sans victime pour ce meme coup fatal, qui echapperait au dedup.
+    if killingBlowDelta <= detailedCredits then return end
 
     local playerGUID = UnitGUID("player")
     local targetGUID = nil
