@@ -10,16 +10,29 @@ OverlordDB.campaignId = 20260922
 assert(sync:IsDeniedKillContributor(name), "Current campaign row is not excluded")
 lb.kills[name] = 998
 OverlordDB.leaderboard.kills = lb.kills
-OverlordDB.leaderboardScoreSanitizeVersion = 2
+OverlordDB.leaderboardsByPool = { global = { kills = { [name] = 998 } } }
+OverlordDB.leaderboardSnapshot = {
+    campaignStart = OverlordDB.lastResetTimestamp,
+    scoreBucketEpoch = OverlordDB.lastResetTimestamp,
+    kills = { [name] = 998 },
+}
+OverlordDB.leaderboardScoreSanitizeVersion = 3
 lb:EnsureLegacyScoreSanitized()
 local attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 3 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 4 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Score cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
 end
-assert(OverlordDB.leaderboardScoreSanitizeVersion == 3, "Score cleanup did not commit")
+assert(OverlordDB.leaderboardScoreSanitizeVersion == 4, "Score cleanup did not commit")
 assert(lb.kills[name] == nil, "Existing score was not removed")
+assert(OverlordDB.leaderboardsByPool.global.kills[name] == nil,
+    "Pooled score was not removed")
+assert(OverlordDB.leaderboardSnapshot.kills[name] == nil,
+    "Snapshot score was not removed")
+OverlordDB.leaderboardSnapshot.kills[name] = 998
+lb:RestoreFullLadderFromSnapshotIfNeeded()
+assert(lb.kills[name] == nil, "A stale snapshot restored the removed score")
 lb:RegisterKill(name, true)
 lb:SetPlayerKills(name, 998, true)
 assert(lb.kills[name] == nil, "An old peer restored the removed score")
