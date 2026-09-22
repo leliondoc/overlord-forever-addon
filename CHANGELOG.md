@@ -1,4 +1,11 @@
-1.0.6
+1.0.7
+
+**Overlord Forever 1.0.7**
+
+- Credit confirmed honorable victories to DPS and healers alike. Reconcile the PvP counter with killing blows so the same death cannot score twice when events arrive in either order.
+- Remove one disputed kill row from the 09/22/2026 campaign and reject stale copies relayed by older clients. The exclusion expires at the next weekly reset; other scores are unchanged.
+- Keep the featured-front x2 bonus and existing bounded synchronization. No private SavedVariables or local recovery data is included.
+
 
 **Overlord Forever 1.0.6**
 
