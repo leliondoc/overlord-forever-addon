@@ -73,7 +73,7 @@ assert(score() == 3, "HK followed by KB counted twice")
 
 -- The featured front's advertised x2 applies once to every role, including DPS.
 Overlord.InActiveFront = true
-Overlord.Fronts.IsFeaturedFrontActive = function() return true end
+Overlord.Fronts.IsFeaturedFrontActive = function() return Overlord.InActiveFront end
 honorableKills = 14
 Overlord.Combat:OnPVPKillsChanged("player")
 advance(3.1)
