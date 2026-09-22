@@ -102,7 +102,7 @@ local function client(name, channel)
         end
         assert(message:sub(1, 3) == "BF:"
             or (destination and destination.channel == channel),
-            "Raw cross-faction reply")
+            "Raw cross-faction reply: " .. tostring(name) .. " -> " .. tostring(target))
         for _, other in ipairs(clients) do
             if other.name == target then
                 other.Overlord.Sync:OnAddonMessage(prefix, message, transport, name)
@@ -200,6 +200,12 @@ for _, e in ipairs(clients) do
 end
 -- A beta client whose SavedVariables were not loaded must rotate past an empty
 -- peer quickly. The same bounded HR exchange then imports a populated peer.
+-- Stop the previous fixture's periodic rounds so they cannot inject unrelated
+-- cross-faction traffic into the isolated same-faction direct-whisper case.
+for _, e in ipairs(clients) do
+    e.Overlord.Sync._historyCatchupWakeGeneration =
+        (e.Overlord.Sync._historyCatchupWakeGeneration or 0) + 1
+end
 local empty = client("Empty Tester", "alliance")
 local fresh = client("Fresh Tester", "alliance")
 fresh.Overlord.SavedVariablesLoadedAtLogin = false
