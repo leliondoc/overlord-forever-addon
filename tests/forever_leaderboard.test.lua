@@ -59,7 +59,7 @@ end
 
 -- A first installation has an empty, unstamped score table and no previous weekly reset.
 OverlordDB = { config = {}, zones = {}, lastResetTimestamp = campaign,
-    leaderboard = { kills = {}, captures = {}, playerInfo = {} }, leaderboardScoreSanitizeVersion = 2 }
+    leaderboard = { kills = {}, captures = {}, playerInfo = {} }, leaderboardScoreSanitizeVersion = 3 }
 local lb = loadLeaderboard()
 lb:ForceUpdateLocalPlayer(player, "PRIEST", faction)
 lb:Save()
@@ -89,7 +89,7 @@ lb = loadLeaderboard()
 assert(next(lb.captureCount) == nil, "An unverified nonempty score table bypassed the campaign guard")
 
 -- A missing score table follows the same first-install path.
-OverlordDB = { config = {}, lastResetTimestamp = campaign, leaderboardScoreSanitizeVersion = 2 }
+OverlordDB = { config = {}, lastResetTimestamp = campaign, leaderboardScoreSanitizeVersion = 3 }
 lb = loadLeaderboard()
 assert(OverlordDB.leaderboard.campaignStart == campaign
     and OverlordDB.leaderboardScoreBucketEpoch == campaign, "Missing score table was not initialized")

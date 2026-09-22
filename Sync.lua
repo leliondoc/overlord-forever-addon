@@ -8283,7 +8283,11 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     if faction ~= "" and faction ~= "U" and not validFaction then return end
     -- Refuse les placeholders "Unknown" venus d'un pair non patche.
     if not self:AcceptSyncedContributorName(playerName) then return end
-    if self.IsDeniedKillContributor and self:IsDeniedKillContributor(playerName) then return end
+    if self.IsDeniedKillContributor and self:IsDeniedKillContributor(playerName) then
+        -- Une ligne retiree compte comme recue pour le digest HR : sinon un pair
+        -- non mis a jour ferait echouer et repeter tout le rattrapage du classement.
+        return true
+    end
     if not self.IsEligibleKillContributorLevel
         or not self:IsEligibleKillContributorLevel(levelToken) then return end
     local classMetadataValid = class and class ~= "" and class ~= "UNKNOWN"
