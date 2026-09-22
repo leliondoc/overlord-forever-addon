@@ -95,7 +95,14 @@ local function client(name, channel)
     -- Keep production SendWhisper: it must choose BF routes, including replies.
     e.securecall = function(fn, ...) return fn(...) end
     e.C_ChatInfo = { SendAddonMessage = function(prefix, message, transport, target)
-        assert(transport == "WHISPER" and message:sub(1, 3) == "BF:", "Raw cross-faction reply")
+        assert(transport == "WHISPER", "Invalid direct transport")
+        local destination
+        for _, other in ipairs(clients) do
+            if other.name == target then destination = other; break end
+        end
+        assert(message:sub(1, 3) == "BF:"
+            or (destination and destination.channel == channel),
+            "Raw cross-faction reply")
         for _, other in ipairs(clients) do
             if other.name == target then
                 other.Overlord.Sync:OnAddonMessage(prefix, message, transport, name)
