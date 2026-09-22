@@ -5,8 +5,6 @@
 - Purge the disputed weekly kill row from the live leaderboard, pooled scores and recovery snapshot. A stale snapshot can no longer restore it on reconnect.
 - Keep all other scores and the campaign-scoped expiry unchanged. The cleanup remains sliced across frames to avoid login stutter.
 
-1.0.7
-
 **Overlord Forever 1.0.7**
 
 - Credit confirmed honorable victories to DPS and healers alike. Reconcile the PvP counter with killing blows so the same death cannot score twice when events arrive in either order.
