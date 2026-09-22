@@ -1,3 +1,10 @@
+1.0.8
+
+**Overlord Forever 1.0.8**
+
+- Purge the disputed weekly kill row from the live leaderboard, pooled scores and recovery snapshot. A stale snapshot can no longer restore it on reconnect.
+- Keep all other scores and the campaign-scoped expiry unchanged. The cleanup remains sliced across frames to avoid login stutter.
+
 1.0.7
 
 **Overlord Forever 1.0.7**

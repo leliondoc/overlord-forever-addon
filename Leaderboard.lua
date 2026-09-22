@@ -2277,7 +2277,7 @@ local function ScheduleLocalGuildRosterEnrich(delaySec)
     end)
 end
 
-local LEGACY_SCORE_SANITIZE_VERSION = 3
+local LEGACY_SCORE_SANITIZE_VERSION = 4
 
 -- Migration de securite globale, executee avant Sync mais repartie sur plusieurs
 -- frames. Les SavedVariables visees peuvent justement etre anormalement grosses :
@@ -2300,6 +2300,8 @@ function Overlord.Leaderboard:EnsureLegacyScoreSanitized()
     end
     AddBucket(OverlordDB.leaderboard)
     for _, bucket in pairs(OverlordDB.leaderboardsByPool or {}) do AddBucket(bucket) end
+    -- Le snapshot peut restaurer un score retire du bucket au login suivant.
+    AddBucket(OverlordDB.leaderboardSnapshot)
 
     local captureCeiling = Overlord.PLAUSIBLE_SYNC_CAPTURE_CEILING
     local killCeiling = Overlord.PLAUSIBLE_SYNC_KILL_CEILING
@@ -7826,6 +7828,8 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
     for name, count in pairs(snapshotKills) do
         local n = tonumber(count) or 0
         if type(name) == "string" and name ~= "" and n > 0
+            and not (Overlord.Sync and Overlord.Sync.IsDeniedKillContributor
+                and Overlord.Sync:IsDeniedKillContributor(name))
             and n > (tonumber(self.kills[name]) or 0) then
             self.kills[name] = n
             dirty = true
