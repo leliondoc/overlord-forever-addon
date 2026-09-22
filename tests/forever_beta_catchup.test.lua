@@ -69,6 +69,7 @@ local function client(name, channel)
     -- Community mode is enabled in production; an empty roster must still leave
     -- the channel/group/BNet fallback fully functional for non-members.
     e.C_Club = { GetSubscribedClubs = function() return {} end }
+    e.Enum = { ClubType = { Character = 1 } }
     local s, lb = e.Overlord.Sync, e.Overlord.Leaderboard
     s.GetPlayerFullName = function() return name end
     s.GetChannelId = function() return 1 end
