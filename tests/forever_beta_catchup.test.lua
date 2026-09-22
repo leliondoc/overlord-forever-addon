@@ -66,7 +66,9 @@ local function client(name, channel)
         fields[#fields + 1] = value:sub(start)
         return unpack(fields)
     end
-    e.C_Club = setmetatable({}, { __index = function() error("Community API used") end })
+    -- Community mode is enabled in production; an empty roster must still leave
+    -- the channel/group/BNet fallback fully functional for non-members.
+    e.C_Club = { GetSubscribedClubs = function() return {} end }
     local s, lb = e.Overlord.Sync, e.Overlord.Leaderboard
     s.GetPlayerFullName = function() return name end
     s.GetChannelId = function() return 1 end
