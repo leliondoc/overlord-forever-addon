@@ -7,7 +7,7 @@
 ## Notes-esMX: Captura de zonas en frentes del mundo abierto (WoW Forever): sincronización, mapa, clasificación.
 ## Notes-deDE: Zonen-Eroberung auf offenen Kriegsfronten (WoW Forever). Sync, Karte, Rangliste.
 ## Notes-ruRU: Захват зон на фронтах открытого мира (WoW Forever): синхронизация, карта, рейтинг.
-## Version: 1.0.3
+## Version: 1.0.4
 ## SavedVariables: OverlordDB
 ## IconTexture: Interface\AddOns\Overlord\Textures\overlord_minimap
 ## X-Category: PvP
@@ -61,3 +61,4 @@ ManualBountyUI.lua
 LeaderboardUI.lua
 SettingsPanel.lua
 Commands.lua
+

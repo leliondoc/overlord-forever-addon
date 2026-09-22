@@ -1,15 +1,13 @@
-1.0.3
+1.0.4
 
-**Overlord Forever 1.0.3**
+**Overlord Forever 1.0.4**
 
-- Make the leaderboard converge after login without Communities. Full history catch-up now crosses addon channels, groups and Battle.net bridges, retries saturated queues, and returns the merged result to late clients.
-- Forward captures, kills, guild metadata, keeps, outposts, domination, victory bonuses and resource stocks through the same bounded Forever relay. NA and EU remain isolated.
-- Restore Commander mode on Forever, including map/minimap position, nameplate badge, group-leader lifecycle and bridge synchronization.
-- Restore gold Contracts with Forever two-part identities, kill proofs, signer approval, duplicate guards and manual mail/COD settlement.
-- Reposition 22 capture objectives in Arathi, Durotar, Ashenvale and Loch Modan on Classic/Forever terrain. Prefer Vanilla map coordinate frames and keep all objective IDs and saved capture states stable.
-- Preserve a complete previous-campaign leaderboard checkpoint per region. Add `/ov persistence` to distinguish peer catch-up, a weekly rollover and the Forever beta SavedVariables loader bug.
-- Harden the Windows SavedVariables repair bridge: keep private recovery hooks, follow WoW file rotation and expose whether the live save loaded before initialization.
-- Keep outdoor PvP kills at all levels and existing mine/forest Classic map fixes from 1.0.2.
+- Re-enable the Overlord community button with the global Forever invite `0m7kdXcnvR`. The numeric club ID is discovered automatically through `C_Club` after joining.
+- Use one global Forever data pool. Existing US, EU, FR, DE and NA leaderboard, domination, keep, outpost, victory-bonus, Commander and Contract records migrate into the global pool without discarding current-campaign data.
+- Run Communities and the bounded channel/group/Battle.net relay together. Members and non-members receive the same authoritative payload families, including late-login history catch-up.
+- Keep rolling updates compatible with 1.0.3 by accepting legacy US/EU packet and bridge tags while emitting the new global tag.
+- Use the US Tuesday weekly campaign boundary for every Forever client, and schedule every Guild Keep on the Retail US window: 6:00–7:00 PM Pacific, with the reminder starting one hour earlier.
+- Retain the Classic terrain coordinate repairs, Commander mode, Contracts and SavedVariables recovery bridge introduced in 1.0.3.
 
 **Beta limitation**
 
@@ -18,4 +16,5 @@
 **Recommended after updating**
 
 - Fully restart WoW after installing because this release adds modules to the TOC.
-- Other participants need 1.0.3 for complete relay coverage and the fastest leaderboard catch-up. Communities are not required; a connected channel, group or Battle.net path is still needed.
+- Join the Overlord community from the in-game button for the strongest roster path. The channel, group and Battle.net relay remains active as a fallback.
+- Other participants should update to 1.0.4 so every client writes the global pool and uses the same Guild Keep clock.

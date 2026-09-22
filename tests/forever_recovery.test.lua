@@ -13,7 +13,7 @@ lb:Save()
 local other = {bucket={kills={['Remote Player']=7}}, resetEpoch=epoch}
 OverlordDB.leaderboardPreviousCampaigns = {us=other}
 assert(lb:OpenAtomicWeeklyBucket(epoch, epoch + 604800, 20260923))
-local backup = OverlordDB.leaderboardPreviousCampaigns.eu
+local backup = OverlordDB.leaderboardPreviousCampaigns.global
 assert(backup and backup.bucket.kills['Player Number1'] == 1, 'Lower ranks lost')
 assert(backup.bucket.captureCount['Player Number200'] == 1)
 assert(backup.bucket.playerInfo['Player Number1'].guild == 'Recovery Guild', 'Metadata lost')
@@ -23,7 +23,7 @@ assert(next(lb.kills) == nil, 'Previous campaign was added to new scores')
 lb.kills['New Player'] = 2
 assert(backup.bucket.kills['New Player'] == nil, 'Recovery table aliases current campaign')
 lb:OpenAtomicWeeklyBucket(epoch, epoch + 604800, 20260923)
-assert(OverlordDB.leaderboardPreviousCampaigns.eu == backup, 'Repeated reset overwrote checkpoint')
+assert(OverlordDB.leaderboardPreviousCampaigns.global == backup, 'Repeated reset overwrote checkpoint')
 
 -- Diagnostics work before initialization and in instances, without changing saves.
 SlashCmdList = {}

@@ -11,7 +11,7 @@ local VB_DEDUP_WINDOW = 60
 local VB_MAX_FUTURE_SKEW = 300
 local VB_VICTORY_BONUS = 0.02
 
-local VALID_VB_POOL = { eu = true, us = true }
+local VALID_VB_POOL = { global = true }
 local victoryTransportEvidence = {}
 local vbSrPayloadCache = nil
 local validatedVictoryStores = setmetatable({}, { __mode = "k" })
@@ -26,8 +26,8 @@ end
 local function NormalizeVictoryPoolTag(pool)
     if type(pool) ~= "string" then return "" end
     pool = pool:lower():match("^%s*([a-z]+)%s*$") or ""
-    if pool == "na" then pool = "us" end
-    if pool == "fr" or pool == "de" then pool = "eu" end
+    if pool == "global" or pool == "na" or pool == "us" or pool == "eu"
+        or pool == "fr" or pool == "de" then return "global" end
     if VALID_VB_POOL[pool] then return pool end
     return ""
 end
@@ -455,6 +455,45 @@ local function EnsureVictoryEventsDB()
     OverlordDB.dominationVictoryEvents = OverlordDB.dominationVictoryEvents or {}
     local root = OverlordDB.dominationVictoryEvents
     if type(root.byPool) ~= "table" then root.byPool = {} end
+    if not root.globalPoolUnified then
+        local global = type(root.byPool.global) == "table" and root.byPool.global or nil
+        if global and NormalizeFiniteInteger(global.epoch) ~= epoch then
+            root.legacyByPool = type(root.legacyByPool) == "table" and root.legacyByPool or {}
+            root.legacyByPool["global:" .. tostring(global.epoch or 0)] = global
+            global = nil
+        end
+        for _, oldPool in ipairs({ "us", "eu", "fr", "de", "na" }) do
+            local legacy = root.byPool[oldPool]
+            if type(legacy) == "table" and NormalizeFiniteInteger(legacy.epoch) == epoch then
+                if not global then
+                    global = legacy
+                elseif global ~= legacy then
+                    global.rawById = type(global.rawById) == "table" and global.rawById or {}
+                    for eventId, event in pairs(type(legacy.rawById) == "table"
+                        and legacy.rawById or {}) do
+                        if global.rawById[eventId] == nil then global.rawById[eventId] = event end
+                    end
+                    global.byEventId = type(global.byEventId) == "table" and global.byEventId or {}
+                    for eventId, event in pairs(type(legacy.byEventId) == "table"
+                        and legacy.byEventId or {}) do
+                        if global.byEventId[eventId] == nil then global.byEventId[eventId] = event end
+                    end
+                end
+            elseif type(legacy) == "table" then
+                root.legacyByPool = type(root.legacyByPool) == "table" and root.legacyByPool or {}
+                root.legacyByPool[oldPool .. ":" .. tostring(legacy.epoch or 0)] = legacy
+            end
+        end
+        if global then
+            root.byPool.global = global
+            global.rawCount = nil
+            validatedVictoryStores[global] = nil
+        end
+        for _, oldPool in ipairs({ "us", "eu", "fr", "de", "na" }) do
+            root.byPool[oldPool] = nil
+        end
+        root.globalPoolUnified = true
+    end
     local store = root.byPool[pool]
     if type(store) ~= "table" or NormalizeFiniteInteger(store.epoch) ~= epoch then
         store = {

@@ -1907,9 +1907,9 @@ end
 
 -- Fortin : membre du club Overlord en ligne (cross-faction). Cache prolonge cote reception GK/GC.
 function Overlord.Sync:IsGuildKeepCommunitySender(sender)
-    if Overlord.CommunityModeEnabled == false then
-        return Overlord.BetaNetwork and Overlord.BetaNetwork:IsPeer(sender) or false
-    end
+    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork
+        and Overlord.BetaNetwork:IsPeer(sender) then return true end
+    if Overlord.CommunityModeEnabled == false then return false end
     if not sender or sender == "" then return false end
     if sender:find("^BNet%-", 1) or sender:find("^Bridge%-", 1) then return false end
     local key = CommunityRosterMatchKey(sender)
@@ -1948,20 +1948,26 @@ local function CommunityMemberInOurGroup(memberName)
         and Overlord.Sync:SenderIsInOurGroup(memberName) or false
 end
 
+local function BroadcastViaBeta(msgType, payload, extras)
+    if Overlord.BetaNetworkEnabled == false or not Overlord.BetaNetwork then return 0 end
+    return Overlord.BetaNetwork:Broadcast(msgType, payload or "", extras) or 0
+end
+
 function Overlord.Sync:BroadcastGuildKeepToCommunity(
     msgType, payload, maxMembers, whisperDelaySec, extraWhispers, onlineMembersMinTtl)
+    local betaSent = BroadcastViaBeta(msgType, payload, extraWhispers)
     if Overlord.CommunityModeEnabled == false then
-        return Overlord.BetaNetwork and Overlord.BetaNetwork:Broadcast(msgType, payload, extraWhispers) or 0
+        return betaSent
     end
-    if not msgType or not payload or payload == "" then return end
-    if Overlord.InstanceSuspended or IsInInstance() then return end
-    if not self.HasCommunityClub or not self:HasCommunityClub() then return end
+    if not msgType or not payload or payload == "" then return betaSent end
+    if Overlord.InstanceSuspended or IsInInstance() then return betaSent end
+    if not self.HasCommunityClub or not self:HasCommunityClub() then return betaSent end
     maxMembers = maxMembers or 4
     whisperDelaySec = tonumber(whisperDelaySec) or 0.35
 
     local onlineList = RefreshOnlineMembersCache(
         self, false, tonumber(onlineMembersMinTtl))
-    if #onlineList == 0 then return end
+    if #onlineList == 0 then return betaSent end
 
     local candidates = {}
     for i = 1, #onlineList do
@@ -1998,6 +2004,7 @@ function Overlord.Sync:BroadcastGuildKeepToCommunity(
     if sent > 0 then
         gkCommunityRotateCursor = (gkCommunityRotateCursor + sent) % n
     end
+    return sent + betaSent
 end
 
 -- Toutes les emissions communautaires passent par une seule pompe afin de borner
@@ -2005,15 +2012,16 @@ end
 
 -- Communaute : faction ennemie uniquement (prime de sang), meme tourniquet/cooldown que BroadcastToCommunity.
 function Overlord.Sync:BroadcastToEnemyFactionCommunity(msgType, payload, maxMembers, whisperDelaySec, forceTargets)
+    local betaSent = BroadcastViaBeta(msgType, payload)
     if Overlord.CommunityModeEnabled == false then
-        return Overlord.BetaNetwork and Overlord.BetaNetwork:Broadcast(msgType, payload) or 0
+        return betaSent
     end
-    if not msgType or not payload or payload == "" then return end
-    if Overlord.InstanceSuspended or IsInInstance() then return end
-    if not self.HasCommunityClub or not self:HasCommunityClub() then return end
-    if not self.GetOnlineCommunityMembers or not self.SendWhisper then return end
+    if not msgType or not payload or payload == "" then return betaSent end
+    if Overlord.InstanceSuspended or IsInInstance() then return betaSent end
+    if not self.HasCommunityClub or not self:HasCommunityClub() then return betaSent end
+    if not self.GetOnlineCommunityMembers or not self.SendWhisper then return betaSent end
     local pf = Overlord.PlayerFaction
-    if not pf then return end
+    if not pf then return betaSent end
 
     maxMembers = maxMembers or COMMUNITY_WHISPER_MAX
     whisperDelaySec = tonumber(whisperDelaySec) or 0.3
@@ -2031,7 +2039,7 @@ function Overlord.Sync:BroadcastToEnemyFactionCommunity(msgType, payload, maxMem
                 forceTargets = true,
             })
         end
-        return
+        return betaSent
     end
 
     local FA = Enum.PvPFaction
@@ -2048,7 +2056,7 @@ function Overlord.Sync:BroadcastToEnemyFactionCommunity(msgType, payload, maxMem
             end
         end
     end
-    if #candidates == 0 then return end
+    if #candidates == 0 then return betaSent end
 
     local sent = 0
     local now = GetTime()
@@ -2080,6 +2088,7 @@ function Overlord.Sync:BroadcastToEnemyFactionCommunity(msgType, payload, maxMem
             bountyEnemyRoutineCursor = (bountyEnemyRoutineCursor + sent) % total
         end
     end
+    return sent + betaSent
 end
 
 -- File d'envoi communautaire : un whisper a la fois (evite N closures C_Timer.After en rafale).
@@ -2724,11 +2733,12 @@ end
 function Overlord.Sync:BroadcastToCommunity(
     msgType, payload, maxMembers, whisperDelaySec, forceTargets, extraWhispers,
     onlineMembersMinTtl)
+    local betaSent = BroadcastViaBeta(msgType, payload, extraWhispers)
     if Overlord.CommunityModeEnabled == false then
-        return Overlord.BetaNetwork and Overlord.BetaNetwork:Broadcast(msgType, payload, extraWhispers) or 0
+        return betaSent
     end
-    if not msgType or not payload or payload == "" then return end
-    if Overlord.InstanceSuspended or IsInInstance() then return end
+    if not msgType or not payload or payload == "" then return betaSent > 0 end
+    if Overlord.InstanceSuspended or IsInInstance() then return betaSent > 0 end
     maxMembers = maxMembers or COMMUNITY_WHISPER_MAX
     whisperDelaySec = tonumber(whisperDelaySec) or 0.3
 
@@ -2747,7 +2757,7 @@ function Overlord.Sync:BroadcastToCommunity(
                 onlineMembersMinTtl = onlineMembersMinTtl,
             })
         end
-        return
+        return betaSent > 0
     end
 
     local sent = 0
@@ -2812,22 +2822,24 @@ function Overlord.Sync:BroadcastToCommunity(
             communityRoutineCursor = (communityRoutineCursor + sent) % total
         end
     end
-    return sent > 0
+    return sent > 0 or betaSent > 0
 end
 
 function Overlord.Sync:WhisperCommunityMembersForContributorNames(
     msgType, payload, contributorNames, whisperDelaySec, forceTargets)
-    if Overlord.CommunityModeEnabled == false then
-        local sent = 0
+    local betaSent = 0
+    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then
         for i, name in ipairs(contributorNames or {}) do
             if i > 12 then break end
-            if Overlord.BetaNetwork and Overlord.BetaNetwork:Send(msgType, payload, name) then sent = sent + 1 end
+            if Overlord.BetaNetwork:Send(msgType, payload, name) then betaSent = betaSent + 1 end
         end
-        return sent
     end
-    if not msgType or not payload or payload == "" then return end
-    if not contributorNames or #contributorNames == 0 then return end
-    if Overlord.InstanceSuspended or IsInInstance() then return end
+    if Overlord.CommunityModeEnabled == false then
+        return betaSent
+    end
+    if not msgType or not payload or payload == "" then return betaSent end
+    if not contributorNames or #contributorNames == 0 then return betaSent end
+    if Overlord.InstanceSuspended or IsInInstance() then return betaSent end
     whisperDelaySec = tonumber(whisperDelaySec) or 0.3
 
     local wanted = {}
@@ -2835,10 +2847,10 @@ function Overlord.Sync:WhisperCommunityMembersForContributorNames(
         local dk = self:GetCaptureContributorDedupKey(n)
         if dk then wanted[dk:lower()] = true end
     end
-    if not next(wanted) then return end
+    if not next(wanted) then return betaSent end
 
     local onlineList = RefreshOnlineMembersCache(self)
-    if #onlineList == 0 then return end
+    if #onlineList == 0 then return betaSent end
 
     local now = GetTime()
     local matched = {}
@@ -2864,6 +2876,7 @@ function Overlord.Sync:WhisperCommunityMembersForContributorNames(
             end
         end
     end
+    return sent + betaSent
 end
 
 -- File LR : cadence les observations de race sans creer une closure par joueur visible.
@@ -2926,13 +2939,14 @@ end
 
 -- Relais communauté Général de faction (same-faction, cache TTL long, exclusion groupe).
 function Overlord.Sync:BroadcastGeneralToFactionCommunity(msgType, payload, maxMembers, whisperDelaySec, forceTargets)
+    local betaSent = BroadcastViaBeta(msgType, payload)
     if Overlord.CommunityModeEnabled == false then
-        return Overlord.BetaNetwork and Overlord.BetaNetwork:Broadcast(msgType, payload) or 0
+        return betaSent
     end
-    if not msgType or not payload or payload == "" then return end
-    if Overlord.InstanceSuspended or IsInInstance() then return end
-    if not self.HasCommunityClub or not self:HasCommunityClub() then return end
-    if not Overlord.PlayerFaction then return end
+    if not msgType or not payload or payload == "" then return betaSent end
+    if Overlord.InstanceSuspended or IsInInstance() then return betaSent end
+    if not self.HasCommunityClub or not self:HasCommunityClub() then return betaSent end
+    if not Overlord.PlayerFaction then return betaSent end
 
     maxMembers = maxMembers or 12
     whisperDelaySec = tonumber(whisperDelaySec) or 0.35
@@ -2949,7 +2963,7 @@ function Overlord.Sync:BroadcastGeneralToFactionCommunity(msgType, payload, maxM
                 forceTargets = true,
             })
         end
-        return
+        return betaSent
     end
 
     local groupKeys = {}
@@ -3011,6 +3025,7 @@ function Overlord.Sync:BroadcastGeneralToFactionCommunity(msgType, payload, maxM
     if sent > 0 and total > 0 then
         generalCommunityCursor = (generalCommunityCursor + sent) % total
     end
+    return sent + betaSent
 end
 
 -- ============ Appel de faction (FC) ============
@@ -3064,13 +3079,16 @@ function Overlord.Sync:BroadcastFactionCall(payload)
     local playerFaction = Overlord.PlayerFaction
     if not playerFaction then return 0 end
 
+    local betaSent = BroadcastViaBeta("FC", payload)
     if Overlord.CommunityModeEnabled == false then
-        local sent = Overlord.BetaNetwork and Overlord.BetaNetwork:Broadcast("FC", payload) or 0
-        if sent > 0 then self:SetFactionCallSharedCooldown(FactionCallCooldownNow()) end
-        return sent
+        if betaSent > 0 then self:SetFactionCallSharedCooldown(FactionCallCooldownNow()) end
+        return betaSent
     end
     local onlineList = RefreshOnlineMembersCache(self, false, 15)
-    if #onlineList == 0 then return 0 end
+    if #onlineList == 0 then
+        if betaSent > 0 then self:SetFactionCallSharedCooldown(FactionCallCooldownNow()) end
+        return betaSent
+    end
     local sent = 0
     local now = GetTime()
 
@@ -3095,7 +3113,7 @@ function Overlord.Sync:BroadcastFactionCall(payload)
             end
         end
     end
-    if sent > 0 then
+    if sent > 0 or betaSent > 0 then
         factionCallCommunityCursor = (factionCallCommunityCursor + sent) % total
         self:SetFactionCallSharedCooldown(FactionCallCooldownNow())
         self:SendToChannel("FC", payload)
@@ -3103,7 +3121,7 @@ function Overlord.Sync:BroadcastFactionCall(payload)
             self:Send("FC", payload)
         end
     end
-    return sent
+    return sent + betaSent
 end
 
 function Overlord.Sync:ResolveFactionCallPlace(zoneId, frontId)
@@ -3345,15 +3363,17 @@ end
 -- reassembler des qu'il y avait plus de membres que la limite d'un broadcast.
 function Overlord.Sync:BroadcastZoneSnapshotPagesToCommunity(
     pages, maxMembers, whisperDelaySec, forceTargets)
-    if Overlord.CommunityModeEnabled == false then
-        local sent = 0
-        for _, page in ipairs(pages or {}) do
-            sent = sent + (Overlord.BetaNetwork and Overlord.BetaNetwork:Broadcast("ZA", page) or 0)
+    local betaSent = 0
+    if type(pages) == "table" then
+        for _, page in ipairs(pages) do
+            betaSent = betaSent + BroadcastViaBeta("ZA", page)
         end
-        return sent
     end
-    if type(pages) ~= "table" or #pages == 0 then return 0 end
-    if Overlord.InstanceSuspended or IsInInstance() then return 0 end
+    if Overlord.CommunityModeEnabled == false then
+        return betaSent
+    end
+    if type(pages) ~= "table" or #pages == 0 then return betaSent end
+    if Overlord.InstanceSuspended or IsInInstance() then return betaSent end
     maxMembers = math.max(0, math.floor(tonumber(maxMembers) or COMMUNITY_WHISPER_MAX))
     whisperDelaySec = math.max(0.08, tonumber(whisperDelaySec) or 0.2)
 
@@ -3363,7 +3383,7 @@ function Overlord.Sync:BroadcastZoneSnapshotPagesToCommunity(
             validPages[#validPages + 1] = payload
         end
     end
-    if #validPages == 0 then return 0 end
+    if #validPages == 0 then return betaSent end
 
     local onlineList = RefreshOnlineMembersCache(self)
     if #onlineList == 0 then
@@ -3379,7 +3399,7 @@ function Overlord.Sync:BroadcastZoneSnapshotPagesToCommunity(
                 forceTargets = true,
             })
         end
-        return 0
+        return betaSent
     end
 
     -- Un lot prioritaire ne doit pas depasser la borne dure de la file. On
@@ -3387,7 +3407,7 @@ function Overlord.Sync:BroadcastZoneSnapshotPagesToCommunity(
     local queueCap = forceTargets and 384 or 256
     local freeSlots = math.max(0, queueCap - CommunityWhisperQueueSize())
     maxMembers = math.min(maxMembers, math.floor(freeSlots / #validPages))
-    if maxMembers <= 0 then return 0 end
+    if maxMembers <= 0 then return betaSent end
 
     local now = GetTime()
     lastCommunityDirectWhisper:Prune(now, 8)
@@ -3420,20 +3440,22 @@ function Overlord.Sync:BroadcastZoneSnapshotPagesToCommunity(
             communityRoutineCursor = (communityRoutineCursor + sent) % total
         end
     end
-    return sent
+    return sent + betaSent
 end
 
 -- Petit fan-out synchrone reserve aux releases de bail juste avant un loading.
 -- La file normale utilise C_Timer.After et peut etre suspendue avant son premier
 -- item ; quelques whispers immediats donnent au ZR une vraie voie cross-faction.
 function Overlord.Sync:BroadcastToCommunityImmediate(msgType, payload, maxMembers)
+    local betaSent = msgType == "ZR" and Overlord.BetaNetworkEnabled ~= false
+        and Overlord.BetaNetwork and Overlord.BetaNetwork:Send(msgType, payload, nil, true)
+        and 1 or 0
     if Overlord.CommunityModeEnabled == false then
-        return msgType == "ZR" and Overlord.BetaNetwork
-            and Overlord.BetaNetwork:Send(msgType, payload, nil, true) and 1 or 0
+        return betaSent
     end
-    if msgType ~= "ZR" or not payload or payload == "" then return 0 end
-    if Overlord.InstanceSuspended or IsInInstance() then return 0 end
-    if not self.SendWhisper then return 0 end
+    if msgType ~= "ZR" or not payload or payload == "" then return betaSent end
+    if Overlord.InstanceSuspended or IsInInstance() then return betaSent end
+    if not self.SendWhisper then return betaSent end
     local onlineList = RefreshOnlineMembersCache(self)
     if #onlineList == 0 then
         if onlineMembersRefreshPending then
@@ -3445,7 +3467,7 @@ function Overlord.Sync:BroadcastToCommunityImmediate(msgType, payload, maxMember
                 forceTargets = true,
             })
         end
-        return 0
+        return betaSent
     end
     local limit = math.min(math.max(1, tonumber(maxMembers) or 6), 8)
     local sent = 0
@@ -3457,7 +3479,7 @@ function Overlord.Sync:BroadcastToCommunityImmediate(msgType, payload, maxMember
             sent = sent + 1
         end
     end
-    return sent
+    return sent + betaSent
 end
 
 function Overlord.Sync:AntiSpoofCheck(sender, zoneId, capturerName)
@@ -3549,9 +3571,8 @@ local OC_CAPTURE_RELAY_DELAY = 0.25
 local function NormalizeRelayPoolTag(pool)
     if type(pool) ~= "string" then return "" end
     pool = pool:lower():match("^%s*([a-z]+)%s*$") or ""
-    if pool == "na" then pool = "us" end
-    if pool == "fr" or pool == "de" then pool = "eu" end
-    if pool == "eu" or pool == "us" then return pool end
+    if pool == "global" or pool == "na" or pool == "us" or pool == "eu"
+        or pool == "fr" or pool == "de" then return "global" end
     return ""
 end
 

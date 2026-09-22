@@ -791,7 +791,7 @@ function Overlord.Sync:SendSyncRequest(opts)
     local requestMode = opts.fullResponse == true and "F"
         or (opts.stateResponse == true and "S") or "T"
     local payload = SRPayload(requestMode)
-    if Overlord.CommunityModeEnabled == false and Overlord.BetaNetwork then
+    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then
         if opts.betaTarget then
             local sent = Overlord.BetaNetwork:Send("SR", payload, opts.betaTarget)
             if sent and requestMode == "F" then
@@ -1336,6 +1336,14 @@ function Overlord.Sync:GetMyBand()
     return "Forever_" .. Overlord.RealmPools:GetOverlordPoolTag() .. "_" .. fc
 end
 
+local function IsCompatibleForeverBand(band)
+    if type(band) ~= "string" then return false end
+    local pool, faction = band:match("^Forever_([a-z]+)_([AH])$")
+    if not pool or not faction then return false end
+    return Overlord.RealmPools:NormalizeRegionPool(pool)
+        == Overlord.RealmPools:GetOverlordPoolTag()
+end
+
 -- Verifie si on a un lien BNet direct vers la faction adverse (amis BNet de l'autre faction)
 function Overlord.Sync:HasDirectBNetToEnemyFaction()
     for _, band in pairs(bnet_links) do
@@ -1367,19 +1375,16 @@ end
 -- Re-cherche toutes les 5 min si pas trouvee (le joueur peut rejoindre en cours de session).
 -- Liens d'invitation par pool (table ordonnee : dernier = shard overflow si cap Blizzard 1000).
 local COMMUNITY_INVITES = {
-    -- Codes a coller quand les communautes Forever existent en jeu.
-    eu = {},
-    us = {},
+    global = { "0m7kdXcnvR" },
 }
 
--- Retourne la region du joueur : "us" (NA) ou "eu". Forever realmless, jamais nil.
+-- Forever beta has one global population, including US and EU players.
 local function GetPlayerRegion()
     local rp = Overlord.RealmPools
     if rp and rp.GetOverlordPoolTag then
-        return rp:GetOverlordPoolTag() or "eu"
+        return rp:GetOverlordPoolTag() or "global"
     end
-    if GetCurrentRegion and GetCurrentRegion() == 1 then return "us" end
-    return "eu"
+    return "global"
 end
 
 -- Compatibilite des appels historiques : Forever ne classe pas les royaumes RP.
@@ -1478,7 +1483,7 @@ function Overlord.Sync:GetCommunityPoolTag()
 end
 
 local function GetCommunityInviteListForPool()
-    return COMMUNITY_INVITES[GetPlayerRegion()] or COMMUNITY_INVITES.eu
+    return COMMUNITY_INVITES.global
 end
 
 local function ClearCommunityClubCache()
@@ -1534,9 +1539,9 @@ function Overlord.Sync:GetCommunityInviteCode()
     return codes
 end
 
--- Retourne le tag region pour les URLs Blizzard ("US" ou "EU")
+-- The supplied Forever invite is global and intentionally has no region tag.
 function Overlord.Sync:GetCommunityRegionTag()
-    return GetPlayerRegion() == "us" and "US" or "EU"
+    return ""
 end
 
 -- Export Check PvP / affichage : aligne sur le pool FR (royaume EU francophone)
@@ -1786,12 +1791,10 @@ function Overlord.Sync:FindEuropeanLeaderboardBridgeClubs()
     return europeanLeaderboardBridgeClubIds
 end
 
--- Export Check PvP : les comptes EU/US doivent etre abonnes au club Character correspondant
--- (Overlord FR / DE / EU / US) pour eviter les exports depuis une install isolee qui polluent l'agregation.
--- Autres regions Blizzard : pas de communaute dediee dans l'addon, on laisse passer.
+-- Export Check PvP: the global Forever population uses the single Overlord club.
 function Overlord.Sync:IsEligibleForCheckPvPExport()
     local pr = GetPlayerRegion()
-    if pr ~= "eu" and pr ~= "us" then
+    if pr ~= "global" then
         return true
     end
     -- En instance PvP suspendue : FindCommunityClub ne relit pas C_Club (tables interdites) ;
@@ -1821,20 +1824,20 @@ end
 -- force=true : bypasse le cooldown scanInterval (utilise apres BroadcastCapture pour propagation
 -- immediate cross-realm / cross-faction sans attendre le prochain cycle de 120s).
 function Overlord.Sync:ScanCommunityMembers(force)
-    if Overlord.CommunityModeEnabled == false then
-        return Overlord.BetaNetwork and Overlord.BetaNetwork:Broadcast("NH", Overlord.Version) or 0
-    end
+    local betaSent = Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork
+        and Overlord.BetaNetwork:Broadcast("NH", Overlord.Version) or 0
+    if Overlord.CommunityModeEnabled == false then return betaSent end
     -- C_Club retourne des tables "forbidden" en instance PvP : ne pas iterer du tout
-    if Overlord.InstanceSuspended then return 0 end
+    if Overlord.InstanceSuspended then return betaSent end
     local clubId = self:FindCommunityClub()
-    if not clubId then return 0 end
+    if not clubId then return betaSent end
 
     -- En event massif (raid 20+ OU 15+ joueurs Overlord a proximite) : reduire le scan
     local inLargeEvent = self:IsLargeEvent()
     local scanInterval = inLargeEvent and 300 or COMMUNITY_SCAN_INTERVAL
 
     local now = GetTime()
-    if not force and now - lastCommunityScan < scanInterval then return 0 end
+    if not force and now - lastCommunityScan < scanInterval then return betaSent end
     lastCommunityScan = now
 
     lastCommunitySR:Prune(now, 8)
@@ -1844,13 +1847,13 @@ function Overlord.Sync:ScanCommunityMembers(force)
     local maxSR = inLargeEvent and 3 or COMMUNITY_MAX_SR_PER_SCAN
     local cachedOnline = self.GetOnlineCommunityMembersIfFresh and self:GetOnlineCommunityMembersIfFresh(15)
     if cachedOnline and #cachedOnline == 0 then
-        return 0
+        return betaSent
     end
     if not cachedOnline and self.GetOnlineCommunityMembers then
         cachedOnline = self:GetOnlineCommunityMembers(true, 15)
     end
     if cachedOnline and #cachedOnline == 0 then
-        return 0
+        return betaSent
     end
     if cachedOnline and #cachedOnline > 0 then
         local startIdx = (communityCachedScanCursor % #cachedOnline) + 1
@@ -1877,21 +1880,23 @@ function Overlord.Sync:ScanCommunityMembers(force)
         end
         communityCachedScanCursor = (communityCachedScanCursor + math.max(1, scanned))
             % #cachedOnline
-        return sent
+        return sent + betaSent
     end
     -- Cache froid : GetOnlineCommunityMembers a deja demarre le worker tranche de
     -- SyncAux. Ne jamais retomber ici sur un GetClubMembers/GetMemberInfo synchrone.
-    return 0
+    return betaSent
 end
 
 -- Fin de gate login : SR whisper a tous les membres commu en ligne (pas 12 au hasard).
 -- Chemin fiable pour late joiner ; reponse whisper SR = 100 % ZA garanti cote receveur.
 function Overlord.Sync:SendLoginCatchupSyncToCommunity()
     if Overlord.InstanceSuspended or IsInInstance() then return 0 end
+    local betaSent = Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork
+        and Overlord.BetaNetwork:Broadcast("SR", SRPayload("T")) or 0
     if Overlord.CommunityModeEnabled == false then
-        return Overlord.BetaNetwork and Overlord.BetaNetwork:Broadcast("SR", SRPayload("T")) or 0
+        return betaSent
     end
-    if not self:FindCommunityClub() then return 0 end
+    if not self:FindCommunityClub() then return betaSent end
 
     local myName = self:GetPlayerFullName()
     local payload = SRPayload("T")
@@ -1900,7 +1905,7 @@ function Overlord.Sync:SendLoginCatchupSyncToCommunity()
     -- Force un vrai relire du roster : au login, un cache vide peut provenir
     -- d'un C_Club encore partiellement initialise, pas d'une communaute vide.
     local onlineList = (self.GetOnlineCommunityMembers and self:GetOnlineCommunityMembers(true, 0)) or {}
-    if #onlineList == 0 then return 0 end
+    if #onlineList == 0 then return betaSent end
 
     for i = 1, #onlineList do
         if sent >= maxSR then break end
@@ -1915,7 +1920,7 @@ function Overlord.Sync:SendLoginCatchupSyncToCommunity()
             sent = sent + 1
         end
     end
-    return sent
+    return sent + betaSent
 end
 
 -- Stats communaute (utilise par la sync cross-realm)
@@ -2153,7 +2158,7 @@ function Overlord.Sync:HasRecentKillCredit(playerName)
 end
 
 function Overlord.Sync:SendWhisper(msgType, data, target)
-    if Overlord.CommunityModeEnabled == false and Overlord.BetaNetwork
+    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork
         and msgType ~= "R1" and msgType ~= "BF" and Overlord.BetaNetwork:IsPeer(target) then
         return Overlord.BetaNetwork:Send(msgType, data or "", target)
     end
@@ -2234,7 +2239,7 @@ function Overlord.Sync:SendToBNet(gameAccountID, msgType, data)
     local msg = msgType .. ":" .. band
     if data and data ~= "" then msg = msg .. ":" .. data end
     if #msg > 4000 then return end
-    if (msgType == "BR" or msgType == "BF") and Overlord.CommunityModeEnabled == false then
+    if (msgType == "BR" or msgType == "BF") and Overlord.BetaNetworkEnabled ~= false then
         msg = "R2:" .. band .. ":" .. msgType .. ":" .. (data or "")
     end
     -- securecall au lieu de pcall : empeche le taint de se propager au systeme de chat
@@ -2297,7 +2302,7 @@ end
 
 function Overlord.Sync:SendToBNetFriends(msgType, data)
     if not SYNC_USE_BNET_OUTBOUND then return end
-    if Overlord.CommunityModeEnabled == false and Overlord.BetaNetwork then
+    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then
         return Overlord.BetaNetwork:Broadcast(msgType, data or "")
     end
     local friends = GetBNetFriendsInWoW()
@@ -2443,9 +2448,8 @@ end
 -- Beta BR/BF preserves the original author through a bounded relay envelope.
 -- Earlier hops are vouched for by the BNet peer; legacy R2 remains SR/TV only.
 function Overlord.Sync:OnReceiveR2Relay(senderID, replyTo, innerMsg)
-    if innerMsg and (innerMsg:sub(1, 3) == "BR:" or innerMsg:sub(1, 3) == "BF:") and Overlord.CommunityModeEnabled == false and Overlord.BetaNetwork then
-        local pool = Overlord.RealmPools:GetOverlordPoolTag()
-        if replyTo ~= "Forever_" .. pool .. "_A" and replyTo ~= "Forever_" .. pool .. "_H" then return end
+    if innerMsg and (innerMsg:sub(1, 3) == "BR:" or innerMsg:sub(1, 3) == "BF:") and Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then
+        if not IsCompatibleForeverBand(replyTo) then return end
         if innerMsg:sub(1, 3) == "BF:" then
             return Overlord.BetaNetwork:ReceiveFragment(innerMsg:sub(4), ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
         end
@@ -2763,9 +2767,8 @@ function Overlord.Sync:OnReceiveR1(sender, payload)
     if not self.CaptureContributorMatchesSender
         or not self:CaptureContributorMatchesSender(replyTo, sender) then return end
     local innerType = rest:match("^([^:]+)")
-    if innerType == "BF" and Overlord.CommunityModeEnabled == false and Overlord.BetaNetwork then
-        local pool = Overlord.RealmPools:GetOverlordPoolTag()
-        if targetBand ~= "Forever_" .. pool .. "_A" and targetBand ~= "Forever_" .. pool .. "_H" then return end
+    if innerType == "BF" and Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then
+        if not IsCompatibleForeverBand(targetBand) then return end
         return Overlord.BetaNetwork:ReceiveFragment(rest:sub(4), sender, "WHISPER")
     end
     if not Overlord.InActiveFront then return end
@@ -5375,11 +5378,8 @@ function Overlord.Sync:ResolveDirectGroupTerritorialPool(remotePool, sender, sou
     local function normalize(pool)
         if type(pool) ~= "string" then return "" end
         pool = pool:lower():match("^%s*([a-z]+)%s*$") or ""
-        if pool == "na" then pool = "us" end
-        if pool == "fr" or pool == "de" then pool = "eu" end
-        if pool == "eu" or pool == "us" then
-            return pool
-        end
+        if pool == "global" or pool == "na" or pool == "us" or pool == "eu"
+            or pool == "fr" or pool == "de" then return "global" end
         return ""
     end
     local localPool = Overlord.GetCurrentSavedVarsPool
@@ -5387,10 +5387,7 @@ function Overlord.Sync:ResolveDirectGroupTerritorialPool(remotePool, sender, sou
     remotePool = normalize(remotePool)
     if localPool == "" or remotePool == "" then return nil end
     if remotePool == localPool then return localPool end
-    if localPool == "us" or remotePool == "us" then return nil end
-    if sourceChannel ~= "PARTY" and sourceChannel ~= "RAID" then return nil end
-    if not SyncSenderIsInOurGroup(sender) then return nil end
-    return localPool
+    return nil
 end
 
 function Overlord.Sync:GetGroupMemberFaction(sender)
@@ -8564,8 +8561,8 @@ local lastBNetKillBroadcast = 0
 -- K transporte un total absolu, donc les doublons sont absorbes par SetPlayerKills(max).
 function Overlord.Sync:SendKillBroadcast(payload)
     if not payload or payload == "" then return end
-    if Overlord.CommunityModeEnabled == false and Overlord.BetaNetwork then
-        return Overlord.BetaNetwork:Broadcast("K", payload)
+    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then
+        Overlord.BetaNetwork:Broadcast("K", payload)
     end
     local msg = "K:" .. payload
     if self:IsLargeEvent() then

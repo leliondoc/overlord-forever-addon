@@ -55,26 +55,26 @@ end
 -- paiement : le signataire revalide toujours le COD contre son propre registre.
 local function CanonicalLedgerPool(pool)
     pool = type(pool) == "string" and pool:lower() or nil
-    if pool == "fr" or pool == "de" or pool == "eu" then return "eu" end
-    if pool == "us" then return "us" end
+    if pool == "global" or pool == "fr" or pool == "de" or pool == "eu"
+        or pool == "us" or pool == "na" then return "global" end
     return nil
 end
 
 local function MergeEuCodSendLedger(root, yieldWork)
     if codSendLedgerMigratedRoot == root then return end
-    local eu = type(root.eu) == "table" and root.eu or {}
-    root.eu = eu
-    for _, legacyPool in ipairs({ "fr", "de" }) do
+    local global = type(root.global) == "table" and root.global or {}
+    root.global = global
+    for _, legacyPool in ipairs({ "fr", "de", "eu", "us", "na" }) do
         local bucket = root[legacyPool]
         if type(bucket) == "table" then
             for characterKey, sourceLedger in pairs(bucket) do
                 if yieldWork then yieldWork() end
                 if type(characterKey) == "string" and characterKey ~= ""
                     and type(sourceLedger) == "table" then
-                    local targetLedger = eu[characterKey]
+                    local targetLedger = global[characterKey]
                     if type(targetLedger) ~= "table" then
                         targetLedger = {}
-                        eu[characterKey] = targetLedger
+                        global[characterKey] = targetLedger
                     end
                     for contractId, rawTimestamp in pairs(sourceLedger) do
                         if yieldWork then yieldWork() end
@@ -251,7 +251,9 @@ local function StartCodSendLedgerPreparation(root, pool, characterKey, keepValid
         end
         -- Commit unique migration + sanitation : avant ce point, un /reload ou
         -- une exception conserve FR/DE et ne publie aucun marker partiel.
-        root.fr, root.de = nil, nil
+        for _, oldPool in ipairs({ "fr", "de", "eu", "us", "na" }) do
+            root[oldPool] = nil
+        end
         codSendLedgerMigratedRoot = root
         state.pending, state.failed, state.retryAt = false, nil, nil
         state.valid, state.failures = true, 0

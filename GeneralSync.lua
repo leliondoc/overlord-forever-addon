@@ -258,7 +258,7 @@ local function AcceptGeneralSender(sender, faction)
     if not sender or not faction then return true end
     -- Forever has no club roster. A beta envelope retains the claiming player
     -- as author; the gateway must never become the commander instead.
-    if Overlord.CommunityModeEnabled == false and Overlord.BetaNetwork
+    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork
         and Overlord.BetaNetwork:IsDispatching(sender) then
         return faction == "Alliance" or faction == "Horde"
     end

@@ -29,9 +29,8 @@ end
 local function normalizeGuildKeepPoolTag(pool)
     if type(pool) ~= "string" or pool == "" then return "" end
     pool = pool:lower()
-    if pool == "na" then pool = "us" end
-    if pool == "fr" or pool == "de" then pool = "eu" end
-    if pool == "us" or pool == "eu" then return pool end
+    if pool == "global" or pool == "na" or pool == "us" or pool == "eu"
+        or pool == "fr" or pool == "de" then return "global" end
     return ""
 end
 
@@ -258,13 +257,9 @@ function Overlord.GuildKeep:GetSiegeMinuteOfDay(ts)
 end
 
 function Overlord.GuildKeep:IsUsSiegeSchedule()
-    local pool = currentGuildKeepPoolTag()
-    if pool == "us" then return true end
-    if pool == "fr" or pool == "de" or pool == "eu" then return false end
-    if GetCurrentRegion then
-        return GetCurrentRegion() == 1
-    end
-    return false
+    -- Forever beta is a single global population: every client must evaluate
+    -- the same Retail US window (18:00-19:00 Pacific), regardless of login region.
+    return true
 end
 
 function Overlord.GuildKeep:GetSiegeWindowStartMinute()

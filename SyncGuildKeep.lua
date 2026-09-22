@@ -758,13 +758,13 @@ local function GuildKeepSyncTimestamp(st)
     return 0
 end
 
-local VALID_POOL_TAG = { eu = true, us = true }
+local VALID_POOL_TAG = { global = true }
 
 local function NormalizePoolTag(pool)
     if type(pool) ~= "string" then return "" end
     pool = pool:lower():match("^%s*([a-z]+)%s*$") or ""
-    if pool == "na" then pool = "us" end
-    if pool == "fr" or pool == "de" then pool = "eu" end
+    if pool == "global" or pool == "na" or pool == "us" or pool == "eu"
+        or pool == "fr" or pool == "de" then return "global" end
     if VALID_POOL_TAG[pool] then return pool end
     return ""
 end

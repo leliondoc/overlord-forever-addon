@@ -3,24 +3,18 @@ Overlord = Overlord or {}
 local RealmPools = {}
 Overlord.RealmPools = RealmPools
 
--- Pool Overlord Forever (realmless) : uniquement NA (`us`) et EU (`eu`).
--- Plus de sous-pools FR/DE : un compte et ses alts partagent le meme bucket.
+-- Forever beta is one global population. Accept old tags so 1.0.3 packets and
+-- SavedVariables converge into the same bucket during the rolling update.
 function RealmPools:NormalizeRegionPool(pool)
     if type(pool) ~= "string" then return "" end
     pool = pool:lower():match("^%s*([a-z]+)%s*$") or ""
-    if pool == "na" then pool = "us" end
-    if pool == "fr" or pool == "de" then pool = "eu" end
-    if pool == "us" or pool == "eu" then return pool end
+    if pool == "global" or pool == "na" or pool == "us" or pool == "eu"
+        or pool == "fr" or pool == "de" then return "global" end
     return ""
 end
 
--- L'API courante prime. Une ancienne session ne doit pas verrouiller la region.
 function RealmPools:GetOverlordPoolTag()
-    local region = GetCurrentRegion and GetCurrentRegion()
-    if region == 1 then return "us" end
-    if region == 3 then return "eu" end
-    local previous = self:NormalizeRegionPool(OverlordDB and OverlordDB.lastSessionPool)
-    return previous ~= "" and previous or "eu"
+    return "global"
 end
 
 -- Compatibilite des lecteurs historiques : un nom ne prouve jamais une region.
@@ -28,7 +22,7 @@ function RealmPools:InferPoolTagFromRealmName()
     return ""
 end
 
--- Plus de pont FR<->EU : NA et EU restent separes.
+-- All historical region tags refer to the same Forever beta population.
 function RealmPools:AreOutpostCrossPoolsLinked(poolA, poolB)
     poolA = self:NormalizeRegionPool(poolA)
     poolB = self:NormalizeRegionPool(poolB)

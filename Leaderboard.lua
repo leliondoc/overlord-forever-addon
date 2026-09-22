@@ -215,7 +215,7 @@ end
 
 local MAX_GUILD_NAME_LEN = 24
 
-local VALID_SAVED_VARS_POOLS = { us = true, eu = true }
+local VALID_SAVED_VARS_POOLS = { global = true }
 
 -- Tags locale sync explicitement EU (front du jour / export : eviter les fantomes cross-region).
 local EU_EXPLICIT_LOCALE_TAGS = {
@@ -227,8 +227,8 @@ local EU_EXPLICIT_LOCALE_TAGS = {
 local function normalizeSavedVarsPool(pool)
     if type(pool) ~= "string" or pool == "" then return "" end
     pool = pool:lower()
-    if pool == "na" then pool = "us" end
-    if pool == "fr" or pool == "de" then pool = "eu" end
+    if pool == "global" or pool == "na" or pool == "us" or pool == "eu"
+        or pool == "fr" or pool == "de" then return "global" end
     if VALID_SAVED_VARS_POOLS[pool] then return pool end
     return ""
 end
@@ -238,8 +238,7 @@ local function currentSavedVarsPool()
         local pool = normalizeSavedVarsPool(Overlord:GetCurrentSavedVarsPool() or "")
         if pool ~= "" then return pool end
     end
-    if GetCurrentRegion and GetCurrentRegion() == 1 then return "us" end
-    return "eu"
+    return "global"
 end
 
 local function guildKeepLbPoolMatchesCurrent(pool)
@@ -2212,13 +2211,9 @@ function Overlord.Leaderboard:EnsureWritableCampaignBucket()
 
     local campaignStart = math.floor(tonumber(self:GetCurrentCampaignStart()) or 0)
     if campaignStart > 0 and LeaderboardCampaignEpochsMatch(bucketEpoch, campaignStart) then
-        local untilReset = C_DateAndTime and C_DateAndTime.GetSecondsUntilWeeklyReset
-            and tonumber(C_DateAndTime.GetSecondsUntilWeeklyReset()) or nil
-        if untilReset and untilReset > 0 and untilReset <= 604800 then
-            self._nextWritableCampaignCheckAt = now + untilReset
-        else
-            self._nextWritableCampaignCheckAt = now + 60
-        end
+        local globalReset = Overlord.GetLastResetTimestamp
+            and (Overlord:GetLastResetTimestamp() + 604800) or 0
+        self._nextWritableCampaignCheckAt = globalReset > now and globalReset or now + 60
         return true
     end
     if Overlord.CheckWeeklyReset then
@@ -7303,7 +7298,7 @@ function Overlord.Leaderboard:OpenAtomicWeeklyBucket(archiveEpoch, resetEpoch, c
     -- automatically: a real weekly reset must remain a reset.
     local recoveryPool = Overlord.GetCurrentLeaderboardSavedVarsPool
         and Overlord:GetCurrentLeaderboardSavedVarsPool() or nil
-    if recoveryPool == "eu" or recoveryPool == "us" then
+    if recoveryPool == "global" then
         OverlordDB.leaderboardPreviousCampaigns = OverlordDB.leaderboardPreviousCampaigns or {}
         OverlordDB.leaderboardPreviousCampaigns[recoveryPool] = {
             bucket = oldBucket,
@@ -7815,12 +7810,10 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
     if (tonumber(snap.campaignStart) or 0) ~= campaignStart then return false end
     if not LeaderboardCampaignEpochsMatch(
         snap.scoreBucketEpoch, snap.campaignStart) then return false end
-    -- Garde de classement : US reste isole, tandis que fr/de/eu partagent le bucket EU.
-    local snapPool = tostring(snap.pool or "")
+    local snapPool = normalizeSavedVarsPool(tostring(snap.pool or ""))
     local curPool = (Overlord.GetCurrentLeaderboardSavedVarsPool
         and Overlord:GetCurrentLeaderboardSavedVarsPool()) or ""
-    if snapPool == "fr" or snapPool == "de" then snapPool = "eu" end
-    if curPool == "fr" or curPool == "de" then curPool = "eu" end
+    curPool = normalizeSavedVarsPool(curPool)
     if snapPool ~= "" and curPool ~= "" and snapPool ~= curPool then return false end
 
     -- Un snapshot est une SavedVariable et peut donc provenir d'une ancienne
@@ -7989,11 +7982,7 @@ end
 -- Export Check PvP : sur region EU Blizzard, pools SV fr/de et eu = meme campagne (raid multilingue).
 local function ExportSavedVarsPoolsCompatible(current, other)
     if current == "" or other == "" then return true end
-    if current == other then return true end
-    if GetCurrentRegion and GetCurrentRegion() == 3 then
-        if current ~= "us" and other ~= "us" then return true end
-    end
-    return false
+    return normalizeSavedVarsPool(current) == normalizeSavedVarsPool(other)
 end
 
 -- Export Check PvP uniquement : ce contributeur appartient-il au pool actif ?
@@ -8023,18 +8012,7 @@ function Overlord.Leaderboard:ContributorBelongsToCurrentPool(playerName)
         hasLocalKill = dk and keys["#dk:" .. dk]
     end
 
-    -- Export US : bucket deja separe par region Blizzard, mais la sync whisper peut
-    -- deposer des tags EU (engb, frfr...) dans le bucket US : les filtrer ici.
-    if current == "us" then
-        if EU_EXPLICIT_LOCALE_TAGS[locLower] then return false end
-        return true
-    end
-
     if hasLocalKill then return true end
-
-    -- Pool EU/FR/DE : rejeter les tags NA explicites sans kill local (fantomes US).
-    if locLower == "enus" then return false end
-
     return true
 end
 

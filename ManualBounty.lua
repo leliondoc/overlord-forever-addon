@@ -41,6 +41,7 @@ local remoteCatalogContractIds = {}
 local remoteCatalogContractCount = 0
 local openContractCount = 0
 local migratedDbRoot = nil
+local migratedSettlementRoot = nil
 local nextLocalId = 0
 local srContractCursor = 0
 local positionTicker = nil
@@ -87,8 +88,9 @@ end
 
 local function NormalizePool(pool)
     pool = type(pool) == "string" and pool:lower() or ""
-    if pool == "us" or pool == "fr" or pool == "de" or pool == "eu" then
-        return pool
+    if pool == "global" or pool == "us" or pool == "na" or pool == "fr"
+        or pool == "de" or pool == "eu" then
+        return "global"
     end
     return nil
 end
@@ -96,6 +98,52 @@ end
 local function CurrentPool()
     if not Overlord.GetCurrentSavedVarsPool then return nil end
     return NormalizePool(Overlord:GetCurrentSavedVarsPool())
+end
+
+local function MergeLegacyContractPoolBuckets(root, pool, yieldWork)
+    root[pool] = type(root[pool]) == "table" and root[pool] or {}
+    local target = root[pool]
+    for _, oldPool in ipairs({ "us", "eu", "fr", "de", "na" }) do
+        local source = root[oldPool]
+        if type(source) == "table" and source ~= target then
+            for key, value in pairs(source) do
+                local current = target[key]
+                if current == nil or (type(value) == "table" and type(current) == "table"
+                    and (tonumber(value.updatedAt) or 0) > (tonumber(current.updatedAt) or 0)) then
+                    if type(value) == "table" then value.pool = pool end
+                    target[key] = value
+                end
+                if yieldWork then yieldWork() end
+            end
+        end
+        root[oldPool] = nil
+    end
+    return target
+end
+
+local function MergeLegacySettlementPoolBuckets(root, pool)
+    root[pool] = type(root[pool]) == "table" and root[pool] or {}
+    local target = root[pool]
+    for _, oldPool in ipairs({ "us", "eu", "fr", "de", "na" }) do
+        local source = root[oldPool]
+        if type(source) == "table" and source ~= target then
+            for characterKey, ledger in pairs(source) do
+                if type(ledger) == "table" then
+                    target[characterKey] = type(target[characterKey]) == "table"
+                        and target[characterKey] or {}
+                    for contractId, value in pairs(ledger) do
+                        local current = target[characterKey][contractId]
+                        if current == nil or (type(value) == "table" and type(current) == "table"
+                            and (tonumber(value.updatedAt) or 0)
+                                > (tonumber(current.updatedAt) or 0)) then
+                            target[characterKey][contractId] = value
+                        end
+                    end
+                end
+            end
+        end
+        root[oldPool] = nil
+    end
 end
 
 local function CurrentCampaignEpoch()
@@ -165,6 +213,7 @@ local function EnsureDb()
     if not pool then return nil end
 
     if migratedDbRoot ~= root then
+        MergeLegacyContractPoolBuckets(root, pool)
         -- Migration unique du stockage plat 9.0 vers un compartiment par pool.
         local legacy = {}
         local hasLegacy = false
@@ -561,6 +610,10 @@ local function EnsureSettlementLedger()
         OverlordDB.manualBountySettlementLedger = {}
     end
     local root = OverlordDB.manualBountySettlementLedger
+    if migratedSettlementRoot ~= root then
+        MergeLegacySettlementPoolBuckets(root, pool)
+        migratedSettlementRoot = root
+    end
     if type(root[pool]) ~= "table" then root[pool] = {} end
     if type(root[pool][characterKey]) ~= "table" then
         root[pool][characterKey] = {}
@@ -2243,6 +2296,7 @@ local function PrepareManualBountyDbForLogin(yieldWork)
     local pool = CurrentPool()
     if not pool then return nil end
     if migratedDbRoot ~= root then
+        MergeLegacyContractPoolBuckets(root, pool, yieldWork)
         local legacy = {}
         for key, value in pairs(root) do
             if type(value) == "table" and (value.id or value.status or value.target) then

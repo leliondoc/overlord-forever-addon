@@ -36,8 +36,14 @@ local function drain()
     end
 end
 local function client(name, channel, pool)
-    local a = { Version = "1.0.0", CommunityModeEnabled = false,
-        RealmPools = { GetOverlordPoolTag = function() return pool or "eu" end }, Sync = {}, received = {} }
+    local a = { Version = "1.0.0", CommunityModeEnabled = true, BetaNetworkEnabled = true,
+        RealmPools = {
+            GetOverlordPoolTag = function() return "global" end,
+            NormalizeRegionPool = function(_, value)
+                return ({ global = true, us = true, na = true, eu = true, fr = true, de = true })[value]
+                    and "global" or ""
+            end,
+        }, Sync = {}, received = {} }
     a.name, a.channel, a.friends = name, channel, {}
     local s = a.Sync
     function s:CanonicalForeverName(n) return type(n) == "string" and n:match("^%a+ %a+$") and n or nil end
@@ -118,7 +124,7 @@ for _, kind in ipairs(kinds) do
         and #received.payload == 450, "Community message lost through gateway: " .. kind)
 end
 assert(#d.received == #kinds, "Duplicate routes produced duplicate delivery")
-assert(#us.received == 0, "EU data leaked to NA")
+assert(#us.received == #kinds, "Global Forever data did not reach the former NA route")
 assert(#a.received == 0, "Original sender received its own forwarded event")
 a.refuseChannel = true
 assert(a.BetaNetwork:Broadcast("DX", "front-one", {
@@ -160,6 +166,6 @@ local accepted = 0
 for i = 1, 200 do if a.BetaNetwork:Send("K", tostring(i)) then accepted = accepted + 1 end end
 assert(accepted == 128 and a.BetaNetwork.stats.dropped >= 72, "Queue was not bounded")
 drain()
-a.CommunityModeEnabled = true
+a.BetaNetworkEnabled = false
 assert(not a.BetaNetwork:Send("K", "disabled"), "Beta transport remained active after community re-enable")
-print("Beta network: every data family, fragmentation, 3-hop routing, reply path, dedup, NA/EU, identity, expiry and queue bounds OK")
+print("Beta network: community-parallel relay, fragmentation, global routing, reply path, dedup, identity, expiry and queue bounds OK")

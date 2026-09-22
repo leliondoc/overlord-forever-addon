@@ -1,8 +1,10 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.0.3"
--- Temporary beta policy. Set true when community transport is enabled again.
-Overlord.CommunityModeEnabled = false
+Overlord.Version = "1.0.4"
+-- Forever uses one global community. The beta relay remains enabled in parallel
+-- so non-members and temporarily unavailable C_Club rosters still converge.
+Overlord.CommunityModeEnabled = true
+Overlord.BetaNetworkEnabled = true
 Overlord.IsInitialized = false
 Overlord.PlayerFaction = nil
 Overlord.InActiveFront = false
@@ -2572,10 +2574,9 @@ end
 local function GetCurrentPoolForSavedVars()
     local rp = Overlord.RealmPools
     if rp and rp.GetOverlordPoolTag then
-        return rp:GetOverlordPoolTag() or "eu"
+        return rp:GetOverlordPoolTag() or "global"
     end
-    if GetCurrentRegion and GetCurrentRegion() == 1 then return "us" end
-    return "eu"
+    return "global"
 end
 
 function Overlord:GetCurrentSavedVarsPool()
@@ -3274,14 +3275,12 @@ local function GetWeeklyResetTimestampForRule(resetWday, resetHour, now)
 end
 
 local function GetFallbackWeeklyResetRule()
-    if GetCurrentRegion and GetCurrentRegion() == 1 then
-        return RESET_WDAY_US, RESET_HOUR_US
-    end
-    return RESET_WDAY_EU, RESET_HOUR_EU
+    -- Forever beta is a global population. Use one deterministic US campaign
+    -- boundary even when a client is logged in through an EU account endpoint.
+    return RESET_WDAY_US, RESET_HOUR_US
 end
 
 local function IsLegacyUSResetAhead(dbReset, regionalReset)
-    if not GetCurrentRegion or GetCurrentRegion() ~= 1 then return false end
     dbReset = math.floor(tonumber(dbReset) or 0)
     regionalReset = math.floor(tonumber(regionalReset) or 0)
     if dbReset <= 0 or regionalReset <= 0 or dbReset <= regionalReset then return false end
@@ -3314,17 +3313,8 @@ end
 -- Calcule le timestamp du dernier reset hebdomadaire reel de la region.
 function Overlord:GetLastResetTimestamp()
     local now = (GetServerTime and GetServerTime()) or time()
-    local computed
-    if C_DateAndTime and C_DateAndTime.GetSecondsUntilWeeklyReset then
-        local untilReset = tonumber(C_DateAndTime.GetSecondsUntilWeeklyReset())
-        if untilReset and untilReset > 0 and untilReset <= SECONDS_PER_WEEK then
-            computed = math.floor(now + untilReset - SECONDS_PER_WEEK)
-        end
-    end
-    if not computed then
-        local resetWday, resetHour = GetFallbackWeeklyResetRule()
-        computed = GetWeeklyResetTimestampForRule(resetWday, resetHour, now)
-    end
+    local resetWday, resetHour = GetFallbackWeeklyResetRule()
+    local computed = GetWeeklyResetTimestampForRule(resetWday, resetHour, now)
     -- Stabilise la session : GetServerTime et untilReset ne tickent pas a la meme seconde (NA).
     if cachedRegionalResetTs and (now - cachedRegionalResetWallAt) < REGIONAL_RESET_CACHE_SEC then
         if math.abs(computed - cachedRegionalResetTs) < REGIONAL_RESET_CACHE_SEC then
@@ -3752,7 +3742,7 @@ function Overlord:Initialize()
     OverlordDB.history = OverlordDB.history or {}
     OverlordDB.lastResetTimestamp = tonumber(OverlordDB.lastResetTimestamp) or 0
     OverlordDB.dominationTime = OverlordDB.dominationTime or { Alliance = 0, Horde = 0 }
-    -- Les secondes de domination sont separees entre NA et EU.
+    -- Forever beta uses one global domination bucket.
     local currentDominationPool = GetCurrentPoolForSavedVars()
     local legacyFrontDominationTime = OverlordDB.frontDominationTime
     local legacyDominationOwnerPool = currentDominationPool
@@ -3766,6 +3756,37 @@ function Overlord:Initialize()
                 type(legacyFrontDominationTime) == "table" and legacyFrontDominationTime or {}
         end
         OverlordDB.frontDominationPoolVersion = 1
+    end
+    -- 1.0.3 briefly split Forever into US/EU. Merge every current legacy bucket
+    -- by monotonic maxima, then remove aliases only after the global table exists.
+    if (tonumber(OverlordDB.globalDominationUnifiedVersion) or 0) < 1 then
+        local global = OverlordDB.frontDominationTimeByPool.global or {}
+        for _, oldPool in ipairs({ "us", "eu", "fr", "de", "na" }) do
+            local source = OverlordDB.frontDominationTimeByPool[oldPool]
+            if type(source) == "table" then
+                for frontId, sourceRow in pairs(source) do
+                    if type(sourceRow) == "table" then
+                        local targetRow = global[frontId]
+                        if type(targetRow) ~= "table" then
+                            global[frontId] = sourceRow
+                        elseif targetRow ~= sourceRow then
+                            for key, value in pairs(sourceRow) do
+                                if type(value) == "number" then
+                                    targetRow[key] = math.max(tonumber(targetRow[key]) or 0, value)
+                                elseif targetRow[key] == nil then
+                                    targetRow[key] = value
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        OverlordDB.frontDominationTimeByPool.global = global
+        for _, oldPool in ipairs({ "us", "eu", "fr", "de", "na" }) do
+            OverlordDB.frontDominationTimeByPool[oldPool] = nil
+        end
+        OverlordDB.globalDominationUnifiedVersion = 1
     end
     if type(OverlordDB.frontDominationTimeByPool[currentDominationPool]) ~= "table" then
         OverlordDB.frontDominationTimeByPool[currentDominationPool] = {}
@@ -4021,32 +4042,10 @@ function Overlord:Initialize()
         if lastPool == "fr" or lastPool == "de" then lastPool = "eu" end
     end
     OverlordDB.leaderboardsByPool = OverlordDB.leaderboardsByPool or {}
-    -- Seed legacy AVANT l'union : sinon celle-ci creerait un bucket eu vide et
-    -- masquerait definitivement OverlordDB.leaderboard des anciennes versions.
-    local hasCurrentLeaderboardRoot = OverlordDB.leaderboardsByPool[currentLeaderboardPool] ~= nil
-        or (currentLeaderboardPool == "eu"
-            and (OverlordDB.leaderboardsByPool.fr ~= nil
-                or OverlordDB.leaderboardsByPool.de ~= nil))
-    if not hasCurrentLeaderboardRoot then
-        local lastLeaderboardPool = lastPool == "us" and "us"
-            or (lastPool ~= "" and "eu" or "")
-        if lastLeaderboardPool ~= "" and lastLeaderboardPool ~= currentLeaderboardPool then
-            -- Seule frontiere de classement restante : US versus Europe.
-            -- Conserver d'abord la racine standalone dans son pool d'origine. Sur
-            -- le premier changement de region apres upgrade, creer directement la
-            -- cible vide puis rebinder OverlordDB.leaderboard perdrait sinon le
-            -- dernier classement legacy a la deconnexion suivante.
-            if type(OverlordDB.leaderboard) == "table"
-                and type(OverlordDB.leaderboardsByPool[lastLeaderboardPool]) ~= "table" then
-                OverlordDB.leaderboardsByPool[lastLeaderboardPool] = OverlordDB.leaderboard
-            end
-            OverlordDB.leaderboardsByPool[currentLeaderboardPool] = EmptyLeaderboardBucket()
-        else
-            -- Promotion in-place du standalone legacy : aucune copie O(N), et
-            -- aucune alias cross-region car la provenance a ete verifiee ci-dessus.
-            OverlordDB.leaderboardsByPool[currentLeaderboardPool] =
-                OverlordDB.leaderboard or EmptyLeaderboardBucket()
-        end
+    -- Seed the global target with the standalone legacy root before union.
+    if type(OverlordDB.leaderboardsByPool[currentLeaderboardPool]) ~= "table" then
+        OverlordDB.leaderboardsByPool[currentLeaderboardPool] =
+            OverlordDB.leaderboard or EmptyLeaderboardBucket()
     end
     self:UnifyEuropeanLeaderboardBuckets()
     -- Reprendre uniquement une migration deja journalisee par une ancienne version.
@@ -4398,8 +4397,9 @@ function Overlord:MergeLeaderboardBucketInto(target, source, onDone)
         end
         if type(pool) ~= "string" then return "" end
         pool = pool:lower()
-        if pool == "fr" or pool == "de" then pool = "eu" end
-        return (pool == "us" or pool == "eu") and pool or ""
+        if pool == "global" or pool == "us" or pool == "na" or pool == "eu"
+            or pool == "fr" or pool == "de" then return "global" end
+        return ""
     end
     local function guildHash(name)
         local h = 0
@@ -4592,17 +4592,20 @@ end
 -- Migration sans perte vers un unique bucket EU. Les anciens buckets fr/de ne
 -- restent pas dupliques : toutes les prochaines sessions europeennes pointent sur eu.
 function Overlord:UnifyEuropeanLeaderboardBuckets()
-    if not OverlordDB or self:GetCurrentLeaderboardSavedVarsPool() ~= "eu" then return end
+    if not OverlordDB or self:GetCurrentLeaderboardSavedVarsPool() ~= "global" then return end
     if self._europeanLeaderboardUnionPending then return end
     local buckets = OverlordDB.leaderboardsByPool or {}
     OverlordDB.leaderboardsByPool = buckets
-    if tonumber(OverlordDB.europeanLeaderboardUnifiedVersion) == 1
-        and type(buckets.eu) == "table" and buckets.fr == nil and buckets.de == nil then
+    local poolOrder = { "global", "us", "eu", "fr", "de", "na" }
+    if tonumber(OverlordDB.globalLeaderboardUnifiedVersion) == 1
+        and type(buckets.global) == "table" and buckets.us == nil
+        and buckets.eu == nil and buckets.fr == nil and buckets.de == nil
+        and buckets.na == nil then
         return
     end
     local expectedEpoch = tonumber(OverlordDB.lastResetTimestamp) or 0
     if expectedEpoch <= 0 then
-        for _, pool in ipairs({ "eu", "fr", "de" }) do
+        for _, pool in ipairs(poolOrder) do
             local bucket = buckets[pool]
             expectedEpoch = math.max(expectedEpoch,
                 type(bucket) == "table" and tonumber(bucket.campaignStart) or 0)
@@ -4627,10 +4630,10 @@ function Overlord:UnifyEuropeanLeaderboardBuckets()
     end
     local unified = nil
     -- Reutiliser un bucket existant in-place limite le pic de memoire de migration.
-    for _, pool in ipairs({ "eu", "fr", "de" }) do
+    for _, pool in ipairs(poolOrder) do
         local bucket = buckets[pool]
         if bucketIsCurrent(bucket) then
-            if pool == "eu" then unified = bucket; break end
+            if pool == "global" then unified = bucket; break end
             if not unified then unified = bucket end
         end
     end
@@ -4647,7 +4650,7 @@ function Overlord:UnifyEuropeanLeaderboardBuckets()
             and self:TimestampToCampaignId(expectedEpoch) or 0
     end
     local mergeSources = {}
-    for _, pool in ipairs({ "eu", "fr", "de" }) do
+    for _, pool in ipairs(poolOrder) do
         local bucket = buckets[pool]
         local bucketEpoch = type(bucket) == "table" and tonumber(bucket.campaignStart) or 0
         if type(bucket) == "table" and bucket ~= unified and bucketIsCurrent(bucket) then
@@ -4668,7 +4671,7 @@ function Overlord:UnifyEuropeanLeaderboardBuckets()
             tonumber(mergeSources[i].repairVersion) or 0)
     end
     unified.repairVersion = mergedRepairVersion
-    buckets.eu = unified
+    buckets.global = unified
     self._europeanLeaderboardUnionPending = true
     local sourceIndex = 0
     local function mergeNext(_, previousSucceeded)
@@ -4686,8 +4689,8 @@ function Overlord:UnifyEuropeanLeaderboardBuckets()
         end
         -- Commit seulement apres la derniere tranche : un /reload intermediaire garde
         -- fr/de et rejoue une union max/idempotente, donc aucune donnee n'est perdue.
-        buckets.fr = nil
-        buckets.de = nil
+        for _, pool in ipairs({ "us", "eu", "fr", "de", "na" }) do buckets[pool] = nil end
+        OverlordDB.globalLeaderboardUnifiedVersion = 1
         OverlordDB.europeanLeaderboardUnifiedVersion = 1
         self._europeanLeaderboardUnionPending = nil
         local lb = self.Leaderboard
@@ -6338,13 +6341,10 @@ function Overlord:ResetAll()
     OverlordDB.frontDominationTimeByPool =
         OverlordDB.frontDominationTimeByPool or {}
     local resetDominationPool = GetCurrentPoolForSavedVars()
-    -- Les ancres de campagne historiques sont globales aux SavedVariables.
-    -- Comme pour le classement, purger tous les pools a chaque vrai reset evite
-    -- qu'un passage US/EU re-etiquette un vieux bucket sous l'epoch courant.
-    OverlordDB.frontDominationTimeByPool.fr = {}
-    OverlordDB.frontDominationTimeByPool.eu = {}
-    OverlordDB.frontDominationTimeByPool.de = {}
-    OverlordDB.frontDominationTimeByPool.us = {}
+    OverlordDB.frontDominationTimeByPool.global = {}
+    for _, oldPool in ipairs({ "fr", "eu", "de", "us", "na" }) do
+        OverlordDB.frontDominationTimeByPool[oldPool] = nil
+    end
     OverlordDB.frontDominationTime =
         OverlordDB.frontDominationTimeByPool[resetDominationPool]
     dominationInitialGrantDone = {}
@@ -6352,10 +6352,10 @@ function Overlord:ResetAll()
     OverlordDB.dominationVictoryEvents = OverlordDB.dominationVictoryEvents or { byPool = {} }
     OverlordDB.dominationVictoryEvents.byPool =
         OverlordDB.dominationVictoryEvents.byPool or {}
-    OverlordDB.dominationVictoryEvents.byPool.fr = nil
-    OverlordDB.dominationVictoryEvents.byPool.eu = nil
-    OverlordDB.dominationVictoryEvents.byPool.de = nil
-    OverlordDB.dominationVictoryEvents.byPool.us = nil
+    for _, oldPool in ipairs({ "fr", "eu", "de", "us", "na" }) do
+        OverlordDB.dominationVictoryEvents.byPool[oldPool] = nil
+    end
+    OverlordDB.dominationVictoryEvents.byPool.global = nil
     OverlordDB.lastCampaignStats = nil
     if Overlord.Zones and Overlord.Zones.ClearFrontVictories then
         Overlord.Zones:ClearFrontVictories()

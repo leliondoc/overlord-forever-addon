@@ -186,8 +186,9 @@ end
 
 local function NormalizePool(pool)
     pool = type(pool) == "string" and pool:lower() or ""
-    if pool == "us" or pool == "fr" or pool == "de" or pool == "eu" then
-        return pool
+    if pool == "global" or pool == "us" or pool == "na" or pool == "fr"
+        or pool == "de" or pool == "eu" then
+        return "global"
     end
     return nil
 end
@@ -563,8 +564,8 @@ local function EmitAll(msgType, payload, critical, communityWide)
     local sync = Overlord.Sync
     if not sync or not payload or payload == "" then return end
     if Overlord.InstanceSuspended or (IsInInstance and IsInInstance()) then return end
-    if Overlord.CommunityModeEnabled == false and Overlord.BetaNetwork then
-        return Overlord.BetaNetwork:Broadcast(msgType, payload)
+    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then
+        Overlord.BetaNetwork:Broadcast(msgType, payload)
     end
     sync:Send(msgType, payload)
     if sync.SendToChannel and IsInGroup and IsInGroup() then
@@ -630,7 +631,7 @@ function Overlord.ManualBountySync:CanBroadcast()
         return false
     end
     if IsInGroup and IsInGroup() then return true end
-    if Overlord.CommunityModeEnabled == false and Overlord.BetaNetwork
+    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork
         and #Overlord.BetaNetwork:GetPeers() > 0 then return true end
     if sync.HasCommunityClub and sync:HasCommunityClub() then return true end
     return sync.GetChannelId and sync:GetChannelId() ~= nil
@@ -746,7 +747,7 @@ local function PumpContractQueue()
     local sync = Overlord.Sync
     if not sync or not sync.SendWhisper then return end
     local sent = sync:SendWhisper(item.msgType, item.payload, item.target)
-    if sent ~= true and Overlord.CommunityModeEnabled == false then
+    if sent ~= true and Overlord.BetaNetworkEnabled ~= false then
         item.firstFailureAt = item.firstFailureAt or GetTime()
         if GetTime() - item.firstFailureAt < 120 then
             ScheduleContractPump(CONTRACT_QUEUE_GAP_SEC)

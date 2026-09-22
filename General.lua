@@ -169,7 +169,11 @@ end
 local function PoolMatches(pool)
     local localPool = Overlord.General:GetPoolTag()
     if not localPool or localPool == "" then return false end
-    return (pool or ""):lower() == localPool:lower()
+    if Overlord.RealmPools and Overlord.RealmPools.NormalizeRegionPool then
+        pool = Overlord.RealmPools:NormalizeRegionPool(pool)
+        localPool = Overlord.RealmPools:NormalizeRegionPool(localPool)
+    end
+    return pool ~= "" and pool == localPool
 end
 
 local function SenderKey(sender)
@@ -1078,7 +1082,7 @@ function Overlord.General:TryRestoreLocalGeneral()
     end
 
     local pool = self:GetPoolTag()
-    if pool == "" or (sess.pool or ""):lower() ~= pool:lower() then return false end
+    if pool == "" or not PoolMatches(sess.pool) then return false end
     if sess.faction ~= Overlord.PlayerFaction then
         self:ClearPersistedSession()
         return false
@@ -1087,7 +1091,7 @@ function Overlord.General:TryRestoreLocalGeneral()
     if not self:IsRaidLeader() then return false end
     -- Restauration uniquement sur la carte du front (pas InActiveFront global hors zone).
     if not IsOnOverlordFrontMap() then return false end
-    if Overlord.CommunityModeEnabled ~= false
+    if Overlord.CommunityModeEnabled ~= false and Overlord.BetaNetworkEnabled == false
         and (not Overlord.Sync or not Overlord.Sync.FindCommunityClub or not Overlord.Sync:FindCommunityClub()) then
         return false
     end
@@ -1202,7 +1206,7 @@ function Overlord.General:TryClaim(silentFail)
         end
         return false
     end
-    if Overlord.CommunityModeEnabled ~= false
+    if Overlord.CommunityModeEnabled ~= false and Overlord.BetaNetworkEnabled == false
         and (not Overlord.Sync or not Overlord.Sync.FindCommunityClub or not Overlord.Sync:FindCommunityClub()) then
         if not silentFail and L and L.GENERAL_NOT_COMMUNITY and Overlord.PrintNotification then
             Overlord:PrintNotification("|cffff6600[Overlord]|r " .. L.GENERAL_NOT_COMMUNITY)

@@ -62,8 +62,10 @@ local function FormatCooldown(sec)
 end
 
 local function HasCommunityClub()
-    if Overlord.CommunityModeEnabled == false then return Overlord.BetaNetwork ~= nil end
-    return Overlord.Sync and Overlord.Sync.FindCommunityClub and Overlord.Sync:FindCommunityClub()
+    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then return true end
+    if Overlord.CommunityModeEnabled == false then return false end
+    return Overlord.Sync and Overlord.Sync.FindCommunityClub
+        and Overlord.Sync:FindCommunityClub()
 end
 
 local function HasNearbyEnemies(forceRefresh)

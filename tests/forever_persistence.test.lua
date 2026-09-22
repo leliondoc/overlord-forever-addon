@@ -31,16 +31,19 @@ assert(loadfile("Core.lua"))()
 assert(loadfile("RealmPools.lua"))()
 assert(loadfile("Popups.lua"))()
 
--- Region is determined by the live API, never by realm, language, or another alt.
+-- Forever beta is one global pool regardless of the login region or old tag.
 OverlordDB = { lastSessionPool = "us" }
-assert(Overlord.RealmPools:GetOverlordPoolTag() == "eu")
+assert(Overlord.RealmPools:GetOverlordPoolTag() == "global")
 region = 1
 OverlordDB.lastSessionPool = "eu"
-assert(Overlord.RealmPools:GetOverlordPoolTag() == "us")
-assert(not Overlord.RealmPools:AreOutpostCrossPoolsLinked("eu", "us"))
+assert(Overlord.RealmPools:GetOverlordPoolTag() == "global")
+assert(Overlord.RealmPools:AreOutpostCrossPoolsLinked("eu", "us"))
 assert(Overlord.RealmPools:AreOutpostCrossPoolsLinked("fr", "eu"))
+assert(Overlord.RealmPools:NormalizeRegionPool("na") == "global")
 assert(Overlord:SavedVarsPoolFromLocaleTag("frFR") == nil)
+local globalReset = Overlord:GetLastResetTimestamp()
 region = 3
+assert(Overlord:GetLastResetTimestamp() == globalReset, "EU and US clients chose different campaigns")
 
 local zone = { id = "point", holdTimeRequired = 120, status = "locked" }
 Overlord.ZoneDatabase = { zone }
@@ -141,8 +144,8 @@ assert(not sync:ForeverIdentitiesMatch("Troma Orcbane", "Troma Other"))
 assert(sync:IsValidWhisperTarget("Élodie Marteau"))
 assert(sync:IsValidWhisperTarget("Иван Воин"))
 assert(not sync:IsValidWhisperTarget("Troma Orcbane:payload"))
-assert(sync:GetMyBand() == "Forever_eu_H")
+assert(sync:GetMyBand() == "Forever_global_H")
 region = 1
-assert(sync:GetMyBand() == "Forever_us_H")
+assert(sync:GetMyBand() == "Forever_global_H")
 assert(not sync:IsRPRealm())
-print("Forever identity: full names, API suffix, compact sender, accents, Cyrillic and NA/EU routing OK")
+print("Forever identity: full names, API suffix, compact sender, accents, Cyrillic and global routing OK")

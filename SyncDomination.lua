@@ -48,13 +48,13 @@ local DM_COMMUNITY_MAX = 12
 local DM_COMMUNITY_MAX_LARGE = 8
 local DM_COMMUNITY_DELAY = 0.35
 local DM_COMMUNITY_DELAY_LARGE = 0.4
-local VALID_DM_POOL_TAG = { eu = true, us = true }
+local VALID_DM_POOL_TAG = { global = true }
 
 local function NormalizeDominationPoolTag(pool)
     if type(pool) ~= "string" then return "" end
     pool = pool:lower():match("^%s*([a-z]+)%s*$") or ""
-    if pool == "na" then pool = "us" end
-    if pool == "fr" or pool == "de" then pool = "eu" end
+    if pool == "global" or pool == "na" or pool == "us" or pool == "eu"
+        or pool == "fr" or pool == "de" then return "global" end
     if VALID_DM_POOL_TAG[pool] then return pool end
     return ""
 end

@@ -30,10 +30,10 @@ local CAMPAIGN_MIN_AGE_SEC = 30 * 60
 local INITIAL_DELAY_SEC = 24
 -- Fragmentation and three relay hops share 1 KB/s. A full 340-row snapshot
 -- can legitimately exceed the direct-whisper timeouts, even without loss.
-local ACK_TIMEOUT_SEC = Overlord.CommunityModeEnabled == false and 600 or 120
-local PUSH_ACK_TIMEOUT_SEC = Overlord.CommunityModeEnabled == false and 600 or 120
+local ACK_TIMEOUT_SEC = Overlord.BetaNetworkEnabled ~= false and 600 or 120
+local PUSH_ACK_TIMEOUT_SEC = Overlord.BetaNetworkEnabled ~= false and 600 or 120
 local SEND_INTERVAL_SEC = 0.12
-local RESPONSE_WATCHDOG_SEC = Overlord.CommunityModeEnabled == false and 570 or 110
+local RESPONSE_WATCHDOG_SEC = Overlord.BetaNetworkEnabled ~= false and 570 or 110
 local MAX_ATTEMPTS = 4
 local REQUESTER_COOLDOWN_SEC = 120
 local COMPAT_PULL_COOLDOWN_SEC = 2 * 60

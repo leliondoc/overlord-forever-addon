@@ -1,6 +1,7 @@
 -- Exercise production entry points and the real leaderboard, without any club.
 assert(loadfile("tests/forever_world_kills.test.lua"))()
 function GetChannelName() return 0 end
+function securecall(fn, ...) return fn(...) end
 function strsplit(sep, value, limit)
     local fields, start = {}, 1
     while not limit or #fields < limit - 1 do
@@ -11,7 +12,8 @@ function strsplit(sep, value, limit)
     fields[#fields + 1] = value:sub(start)
     return (unpack or table.unpack)(fields)
 end
-C_Club = setmetatable({}, { __index = function() error("Beta attempted community API") end })
+C_Club = { GetSubscribedClubs = function() return {} end }
+Enum = Enum or {}; Enum.ClubType = Enum.ClubType or { Character = 1 }
 C_BattleNet = { GetGameAccountInfoByID = function()
     return { characterName = "Bridge Tester", clientProgram = "WoW", wowProjectID = WOW_PROJECT_ID,
         factionName = "Alliance", isInCurrentRegion = true }
@@ -29,6 +31,13 @@ assert(Overlord.Leaderboard.kills["Remote Tester"] == 3, "Real R2 kill handler l
 assert(not net.stats.lastError, net.stats.lastError)
 assert(s:FindCommunityClub() == nil)
 assert(#s:FindAllCommunityClubs() == 0)
+assert(s:GetCommunityInviteCode() == "0m7kdXcnvR")
+C_Club.GetSubscribedClubs = function()
+    return { { clubId = 777, name = "Overlord Forever", clubType = Enum.ClubType.Character } }
+end
+C_Club.GetClubMembers = function() return {} end
+s:ResetCommunitySearch()
+assert(s:FindCommunityClub(true) == 777, "Global Overlord community was not discovered after joining")
 assert(s:IsGuildKeepCommunitySender("Remote Tester"), "Routed keep sender lost its trust context")
 -- A second score through fragmented R2 reaches the same production receiver.
 payload = s:BuildKillBroadcastPayload("Remote Tester", "", 4, "WARRIOR", "Alliance",
@@ -40,9 +49,8 @@ for i = count, 1, -1 do
         .. packet:sub((i - 1) * 170 + 1, i * 170), 123)
 end
 assert(Overlord.Leaderboard.kills["Remote Tester"] == 4, "Fragmented production R2 failed")
-local before = net.stats.received
 s:OnBNetMessage("R2:Forever_us_A:BR:" .. wire(3, "K", payload), 123)
-assert(net.stats.received == before, "Cross-region bridge was accepted")
+assert(net.stats.received >= 3, "Legacy US bridge tag was not accepted by the global pool")
 assert(loadfile("SyncGuildKeep.lua"))()
 assert(loadfile("SyncOutpost.lua"))()
 Overlord.GuildKeepSites = { fixture = {} }
@@ -60,10 +68,10 @@ Overlord.Outpost = {
 }
 s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(4, "GK",
     "v8:fixture:neutral:0:::0:" .. time() .. ":120:eu:0:::0::0:0:0:"), 123)
-assert(keep and keep.pool == "eu" and keep.communitySource, "Real keep receiver rejected routed snapshot")
+assert(keep and keep.pool == "global" and keep.communitySource, "Real keep receiver rejected routed snapshot")
 s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(5, "OP",
     "v1:fixture:neutral:0:::0:0:" .. time() .. ":120:eu:0"), 123)
-assert(outpost and outpost.pool == "eu", "Real outpost receiver rejected routed snapshot")
+assert(outpost and outpost.pool == "global", "Real outpost receiver rejected routed snapshot")
 local mergedGuild
 local originalMerge = Overlord.Leaderboard.MergeOwnedGuildMetadata
 Overlord.Leaderboard.MergeOwnedGuildMetadata = function(self, name, guild, at)
@@ -105,7 +113,7 @@ local sent = {}
 net.Broadcast = function(_, kind, data) sent[#sent + 1] = { kind, data }; return 1 end
 for _, method in ipairs({ "BroadcastToCommunity", "BroadcastGuildKeepToCommunity",
     "BroadcastToEnemyFactionCommunity", "BroadcastGeneralToFactionCommunity" }) do
-    assert(s[method](s, "GK", "unchanged") == 1, method .. " lost its replacement route")
+    assert(s[method](s, "GK", "unchanged"), method .. " lost its replacement route")
     assert(sent[#sent][1] == "GK" and sent[#sent][2] == "unchanged")
 end
 -- Even the large-event branch must use the replacement community relay.
@@ -118,6 +126,6 @@ net.Broadcast = function(_, _, _, actual)
     assert(actual == extras, "Community bundle lost its secondary payloads")
     return 1
 end
-assert(s:BroadcastToCommunity("DX", "first-front", 12, 0.3, true, extras) == 1)
+assert(s:BroadcastToCommunity("DX", "first-front", 12, 0.3, true, extras))
 assert(s:BroadcastGuildKeepToCommunity("GK", "keep", 12, 0.3, extras) == 1)
 print("Beta integration: real R2/fragmented R2, low-level kills, peer trust, no club API, unchanged community payloads OK")

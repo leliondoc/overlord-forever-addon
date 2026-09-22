@@ -16,7 +16,7 @@ local seen, recent, assemblies = {}, {}, {}
 local seenOrder, recentOrder, assemblyOrder, peerOrder = {}, {}, {}, {}
 local serial = 0
 local session = tostring(time()) .. "-" .. tostring(math.random(1, 2147483646))
-local function enabled() return addon.CommunityModeEnabled == false end
+local function enabled() return addon.BetaNetworkEnabled ~= false end
 local function active() return enabled() and not addon.InstanceSuspended and not IsInInstance() end
 local function region() return addon.RealmPools:GetOverlordPoolTag() end
 local function canonical(name) return sync:CanonicalForeverName(name) end
@@ -36,7 +36,8 @@ local function decode(wire)
     if type(wire) ~= "string" or #wire > MAX_PACKET then return nil end
     local pool, id, at, target, path, kind, payload = strsplit("|", wire, 7)
     at = tonumber(at)
-    if pool ~= region() or not id or #id > 64 or not id:match("^[%w%-]+$")
+    local normalizedPool = addon.RealmPools:NormalizeRegionPool(pool)
+    if normalizedPool ~= region() or not id or #id > 64 or not id:match("^[%w%-]+$")
         or not at or at ~= math.floor(at) or time() - at > TTL or at - time() > 30
         or not allowed[kind] or not payload or payload:find("[%c]")
         or (target ~= "*" and canonical(target) ~= target) then return nil end
@@ -47,7 +48,7 @@ local function decode(wire)
         unique[name:lower()] = true
     end
     if #nodes < 1 or #nodes > MAX_PATH or table.concat(nodes, ",") ~= path then return nil end
-    return { region = pool, id = id, at = at, target = target, path = nodes, kind = kind, payload = payload }
+    return { region = normalizedPool, id = id, at = at, target = target, path = nodes, kind = kind, payload = payload }
 end
 function net:IsPeer(name)
     local key = canonical(name)

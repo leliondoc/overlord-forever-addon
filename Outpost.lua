@@ -30,9 +30,8 @@ end
 local function normalizeOutpostPoolTag(pool)
     if type(pool) ~= "string" or pool == "" then return "" end
     pool = pool:lower()
-    if pool == "na" then pool = "us" end
-    if pool == "fr" or pool == "de" then pool = "eu" end
-    if pool == "us" or pool == "eu" then return pool end
+    if pool == "global" or pool == "na" or pool == "us" or pool == "eu"
+        or pool == "fr" or pool == "de" then return "global" end
     return ""
 end
 
