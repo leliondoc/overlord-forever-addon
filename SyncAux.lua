@@ -2826,12 +2826,17 @@ function Overlord.Sync:BroadcastToCommunity(
 end
 
 function Overlord.Sync:WhisperCommunityMembersForContributorNames(
-    msgType, payload, contributorNames, whisperDelaySec, forceTargets)
+    msgType, payload, contributorNames, whisperDelaySec, forceTargets, knownBetaPeersOnly)
     local betaSent = 0
     if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then
         for i, name in ipairs(contributorNames or {}) do
             if i > 12 then break end
-            if Overlord.BetaNetwork:Send(msgType, payload, name) then betaSent = betaSent + 1 end
+            -- Revalidating legacy guilds must not flood the relay mesh looking for
+            -- offline owners. A known peer route is enough; community members are
+            -- still matched against the online cache below.
+            if not knownBetaPeersOnly or Overlord.BetaNetwork:IsPeer(name) then
+                if Overlord.BetaNetwork:Send(msgType, payload, name) then betaSent = betaSent + 1 end
+            end
         end
     end
     if Overlord.CommunityModeEnabled == false then

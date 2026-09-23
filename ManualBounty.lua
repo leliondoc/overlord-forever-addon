@@ -121,17 +121,19 @@ local function MergeLegacyContractPoolBuckets(root, pool, yieldWork)
     return target
 end
 
-local function MergeLegacySettlementPoolBuckets(root, pool)
+local function MergeLegacySettlementPoolBuckets(root, pool, yieldWork)
     root[pool] = type(root[pool]) == "table" and root[pool] or {}
     local target = root[pool]
     for _, oldPool in ipairs({ "us", "eu", "fr", "de", "na" }) do
         local source = root[oldPool]
         if type(source) == "table" and source ~= target then
             for characterKey, ledger in pairs(source) do
+                if yieldWork then yieldWork() end
                 if type(ledger) == "table" then
                     target[characterKey] = type(target[characterKey]) == "table"
                         and target[characterKey] or {}
                     for contractId, value in pairs(ledger) do
+                        if yieldWork then yieldWork() end
                         local current = target[characterKey][contractId]
                         if current == nil or (type(value) == "table" and type(current) == "table"
                             and (tonumber(value.updatedAt) or 0)
@@ -600,7 +602,7 @@ end
 
 -- Le registre de reglement est local au personnage signataire. Il n'est jamais
 -- cree depuis un paquet reseau : seul CreateContract peut ouvrir une entree.
-local function EnsureSettlementLedger()
+local function EnsureSettlementLedger(yieldWork)
     if not OverlordDB then return nil end
     local pool = CurrentPool()
     local me = GetLocalFullName()
@@ -611,7 +613,7 @@ local function EnsureSettlementLedger()
     end
     local root = OverlordDB.manualBountySettlementLedger
     if migratedSettlementRoot ~= root then
-        MergeLegacySettlementPoolBuckets(root, pool)
+        MergeLegacySettlementPoolBuckets(root, pool, yieldWork)
         migratedSettlementRoot = root
     end
     if type(root[pool]) ~= "table" then root[pool] = {} end
@@ -998,7 +1000,7 @@ function Overlord.ManualBounty:RecordClaimCandidate(contract)
 end
 
 local function RestoreLocalSettlementLedger(yieldWork)
-    local ledger = EnsureSettlementLedger()
+    local ledger = EnsureSettlementLedger(yieldWork)
     if not ledger then return end
     local now = ServerNow()
     for id, entry in pairs(ledger) do

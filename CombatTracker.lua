@@ -1,10 +1,10 @@
 -- CombatTracker.lua - Detection des kills ennemis et des morts du joueur
 -- WoW 12.0 (Midnight) : COMBAT_LOG_EVENT_UNFILTERED supprime pour les addons.
 -- Detection multi-source :
---   1) PARTY_KILL : attribue le killing blow au vrai membre du groupe/raid
---   2) PLAYER_PVP_KILLS_CHANGED : confirme les KB et les victoires honorables
+--   1) PARTY_KILL : preuve nommee pour contrats et activite, jamais un score VH
+--   2) PLAYER_PVP_KILLS_CHANGED : seul compteur de victoires honorables Blizzard
 --   3) CHAT_MSG_COMBAT_HONOR_GAIN : diagnostic localise, jamais une attribution
---   4) PLAYER_DEAD : detecte nos morts, attribue le kill a l'ennemi cible/proche
+--   4) PLAYER_DEAD : activite de front, sans attribuer de score a une cible supposee
 Overlord = Overlord or {}
 Overlord.Combat = {}
 
@@ -85,19 +85,9 @@ local DEATH_DEDUP_WINDOW = 5
 -- Sert a confirmer qu'un vrai killing blow a eu lieu
 local TOTAL_KB_ACHIEVEMENT_ID = 1487
 local previousKillingBlows = 0
--- Le compteur HK Blizzard est un compteur de proximite de raid, pas une preuve
--- d'un coup fatal individuel. Il credite les victoires honorables restantes apres
--- reconciliation avec PARTY_KILL / le compteur de killing blows.
+-- Un seul credit par VH du compteur Blizzard, sans cumul avec les coups fatals.
 local previousSessionHonorableKills = nil
-local previousSessionKillingBlows = nil
-local pvpKillBaselineReady = false
-local MAX_PVP_KILL_DELTA = 40
--- Attendre aussi le dernier retry du backup KB sans nom (0.75 + 8 * 0.25 s).
--- Le secours anonyme ne passe qu'apres toutes les sources detaillees possibles.
-local HONOR_RECONCILE_DELAY = 3.0
-local HONOR_EVIDENCE_WINDOW = 3
-local recentDetailedLocalKillTimes = {}
-local pendingHonorCredits = nil
+local honorableKillCounterSource = nil
 
 -- Tracking du dernier ennemi vu (nameplate) pour attribuer les morts
 local lastEnemyTarget = { name = nil, guid = nil, time = 0 }
@@ -295,209 +285,28 @@ local function GetKillingBlows()
 end
 
 local function GetSessionHonorableKills()
-    if type(GetPVPSessionStats) ~= "function" then return nil end
-    local ok, honorableKills = pcall(GetPVPSessionStats)
+    -- Le total a vie ne repasse pas a zero chaque jour. Repli journalier pour
+    -- les clients beta qui n'exposent pas encore cette API.
+    local source = type(GetPVPLifetimeStats) == "function" and "lifetime" or "session"
+    local reader = source == "lifetime" and GetPVPLifetimeStats or GetPVPSessionStats
+    if type(reader) ~= "function" then return nil end
+    local ok, honorableKills = pcall(reader)
     if not ok or type(honorableKills) ~= "number" then return nil end
     if canaccessvalue and not canaccessvalue(honorableKills) then return nil end
     honorableKills = math.floor(honorableKills)
-    if honorableKills < 0 then return nil end
-    return honorableKills
+    if honorableKills < 0 or honorableKills >= math.huge or honorableKills ~= honorableKills then return nil end
+    return honorableKills, source
 end
 
 local function ResetPvpKillReconciliation()
-    recentDetailedLocalKillTimes = {}
-    pendingHonorCredits = nil
     pendingUnknownLocalKill = nil
     lastUnknownLocalBackupQueuedAt = 0
 end
 
 local function RefreshPvpKillBaselines()
-    local killingBlows = GetKillingBlows()
-    previousSessionKillingBlows = killingBlows
-    if killingBlows > previousKillingBlows then
-        previousKillingBlows = killingBlows
-    end
-    previousSessionHonorableKills = GetSessionHonorableKills()
-    pvpKillBaselineReady = previousSessionHonorableKills ~= nil
+    previousSessionHonorableKills, honorableKillCounterSource = GetSessionHonorableKills()
+    previousKillingBlows = GetKillingBlows()
     ResetPvpKillReconciliation()
-end
-
-local function ReadPvpKillDeltas()
-    local honorableKills = GetSessionHonorableKills()
-    local killingBlows = GetKillingBlows()
-    if not pvpKillBaselineReady or previousSessionHonorableKills == nil
-        or previousSessionKillingBlows == nil or honorableKills == nil then
-        previousSessionHonorableKills = honorableKills
-        previousSessionKillingBlows = killingBlows
-        pvpKillBaselineReady = honorableKills ~= nil
-        return 0, 0, killingBlows
-    end
-
-    local honorDelta = honorableKills - previousSessionHonorableKills
-    local killingBlowDelta = killingBlows - previousSessionKillingBlows
-    previousSessionHonorableKills = honorableKills
-    previousSessionKillingBlows = killingBlows
-    if honorDelta < 0 or killingBlowDelta < 0
-        or honorDelta > MAX_PVP_KILL_DELTA
-        or killingBlowDelta > MAX_PVP_KILL_DELTA then
-        ResetPvpKillReconciliation()
-        return 0, 0, killingBlows
-    end
-    return honorDelta, killingBlowDelta, killingBlows
-end
-
-local function ConsumeRecentDetailedLocalKills(limit)
-    limit = math.max(0, math.floor(tonumber(limit) or 0))
-    local now = GetTime()
-    local kept = {}
-    for i = 1, #recentDetailedLocalKillTimes do
-        local at = tonumber(recentDetailedLocalKillTimes[i]) or 0
-        if now - at >= 0 and now - at <= HONOR_EVIDENCE_WINDOW then
-            kept[#kept + 1] = at
-        end
-    end
-    recentDetailedLocalKillTimes = kept
-    local consumed = math.min(limit, #recentDetailedLocalKillTimes)
-    for _ = 1, consumed do
-        table.remove(recentDetailedLocalKillTimes, 1)
-    end
-    return consumed
-end
-
-local FlushDueHonorCredits
-
-local function CompactPendingHonorBatches(pending)
-    local head = math.max(1, math.floor(tonumber(pending and pending.head) or 1))
-    local batches = pending and pending.batches
-    if not batches or head <= 32 or head * 2 <= #batches then return end
-    local compact = {}
-    for i = head, #batches do compact[#compact + 1] = batches[i] end
-    pending.batches = compact
-    pending.head = 1
-end
-
-local function ScheduleNextHonorFlush(pending)
-    if pendingHonorCredits ~= pending or not C_Timer or not C_Timer.After then return end
-    local batch = pending.batches[pending.head]
-    if not batch then
-        pendingHonorCredits = nil
-        return
-    end
-    pending.timerGeneration = (tonumber(pending.timerGeneration) or 0) + 1
-    local generation = pending.timerGeneration
-    pending.timerDueAt = tonumber(batch.dueAt) or GetTime()
-    C_Timer.After(math.max(0.05, pending.timerDueAt - GetTime()), function()
-        if pendingHonorCredits ~= pending
-            or pending.timerGeneration ~= generation then return end
-        pending.timerDueAt = 0
-        FlushDueHonorCredits(pending)
-    end)
-end
-
-FlushDueHonorCredits = function(pending)
-    if pendingHonorCredits ~= pending then return end
-    local now = GetTime()
-    local credit = 0
-    while pending.head <= #pending.batches do
-        local batch = pending.batches[pending.head]
-        if (tonumber(batch.dueAt) or 0) > now then break end
-        local batchCount = math.max(0, math.floor(tonumber(batch.count) or 0))
-        credit = math.min(MAX_PVP_KILL_DELTA, credit + batchCount)
-        pending.count = math.max(0, (tonumber(pending.count) or 0) - batchCount)
-        pending.head = pending.head + 1
-    end
-    if credit > 0 and Overlord.Combat and Overlord.Combat.CreditHonorableKills then
-        Overlord.Combat:CreditHonorableKills(credit)
-    end
-    if (tonumber(pending.count) or 0) <= 0 or pending.head > #pending.batches then
-        pendingHonorCredits = nil
-        return
-    end
-    CompactPendingHonorBatches(pending)
-    ScheduleNextHonorFlush(pending)
-end
-
-local function NoteDetailedLocalKillCredit(victimGUID, preferredBatch)
-    local unknown = pendingUnknownLocalKill
-    if unknown and (not unknown.victimGUID or not victimGUID
-        or unknown.victimGUID == victimGUID) then
-        preferredBatch = preferredBatch or unknown.honorBatch
-        pendingUnknownLocalKill = nil
-        lastUnknownLocalBackupQueuedAt = 0
-        dbg("backup local sans victime annule par credit detaille")
-    end
-    local pending = pendingHonorCredits
-    if pending and (tonumber(pending.count) or 0) > 0 then
-        local batchIndex
-        if preferredBatch then
-            for i = pending.head, #pending.batches do
-                if pending.batches[i] == preferredBatch
-                    and (tonumber(preferredBatch.count) or 0) > 0 then
-                    batchIndex = i
-                    break
-                end
-            end
-        end
-        if not batchIndex then
-            -- Sans lien explicite (PARTY_KILL arrive seul), la preuve la plus recente
-            -- correspond mieux a la rafale courante que le plus ancien lot encore ouvert.
-            for i = #pending.batches, pending.head, -1 do
-                if (tonumber(pending.batches[i].count) or 0) > 0 then
-                    batchIndex = i
-                    break
-                end
-            end
-        end
-        if batchIndex then
-            local batch = pending.batches[batchIndex]
-            batch.count = math.max(0, math.floor(tonumber(batch.count) or 0) - 1)
-            pending.count = math.max(0, pending.count - 1)
-            if batchIndex == pending.head and batch.count <= 0 then
-                repeat
-                    pending.head = pending.head + 1
-                    local nextBatch = pending.batches[pending.head]
-                until not nextBatch or (tonumber(nextBatch.count) or 0) > 0
-                pending.timerGeneration = (tonumber(pending.timerGeneration) or 0) + 1
-                if pending.count > 0 then
-                    CompactPendingHonorBatches(pending)
-                    ScheduleNextHonorFlush(pending)
-                else
-                    pendingHonorCredits = nil
-                end
-            elseif pending.count <= 0 then
-                pendingHonorCredits = nil
-            end
-            dbg("credit HK annule par preuve detaillee")
-            return
-        end
-        pendingHonorCredits = nil
-    end
-    recentDetailedLocalKillTimes[#recentDetailedLocalKillTimes + 1] = GetTime()
-    if #recentDetailedLocalKillTimes > MAX_PVP_KILL_DELTA then
-        table.remove(recentDetailedLocalKillTimes, 1)
-    end
-end
-
-local function QueueHonorCredits(count)
-    count = math.max(0, math.floor(tonumber(count) or 0))
-    if count <= 0 or not C_Timer or not C_Timer.After then return end
-    local pending = pendingHonorCredits
-    if not pending then
-        pending = { count = 0, batches = {}, head = 1, timerGeneration = 0, timerDueAt = 0 }
-        pendingHonorCredits = pending
-    end
-    count = math.min(count, MAX_PVP_KILL_DELTA - pending.count)
-    if count <= 0 then return end
-    local batch = {
-        count = count,
-        dueAt = GetTime() + HONOR_RECONCILE_DELAY,
-    }
-    pending.batches[#pending.batches + 1] = batch
-    pending.count = pending.count + count
-    if (tonumber(pending.timerDueAt) or 0) <= 0 then
-        ScheduleNextHonorFlush(pending)
-    end
-    return batch
 end
 
 local function RefreshKillingBlowBaseline()
@@ -545,7 +354,7 @@ end
 
 -- Les backups recents peuvent arriver sans nom de victime. On les differe pour
 -- laisser PARTY_KILL ou la resolution du GUID fournir une preuve detaillee.
-local function DeferUnknownLocalBackupKill(sourceName, victimGUID, callback, honorBatch)
+local function DeferUnknownLocalBackupKill(sourceName, victimGUID, callback)
     local now = GetTime()
     if pendingUnknownLocalKill
         and now - lastUnknownLocalBackupQueuedAt <= UNKNOWN_LOCAL_BACKUP_DEDUP_WINDOW then
@@ -558,7 +367,6 @@ local function DeferUnknownLocalBackupKill(sourceName, victimGUID, callback, hon
         sourceName = sourceName,
         victimGUID = victimGUID,
         callback = callback,
-        honorBatch = honorBatch,
         queuedAt = now,
         attempts = 0,
     }
@@ -613,7 +421,7 @@ function Overlord.Combat:Initialize()
         combatFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
         -- Le chat reste diagnostique : en raid son nom de victime n'identifie pas le tueur.
         combatFrame:RegisterEvent("CHAT_MSG_COMBAT_HONOR_GAIN")
-        -- PARTY_KILL couvre les KB ; PVP_KILLS_CHANGED couvre aussi les assistants.
+        -- Les VH sont comptees uniquement par PVP_KILLS_CHANGED, tous roles compris.
         combatFrame:RegisterEvent("PARTY_KILL")
         combatFrame:RegisterEvent("PLAYER_PVP_KILLS_CHANGED")
         -- Detection de nos morts : attribue le kill a l'ennemi cible/proche
@@ -624,7 +432,7 @@ function Overlord.Combat:Initialize()
     end
 
     C_Timer.After(1, function()
-        if not pvpKillBaselineReady then
+        if previousSessionHonorableKills == nil then
             RefreshPvpKillBaselines()
         end
         dbg("KB initial:", previousKillingBlows)
@@ -1025,11 +833,11 @@ function Overlord.Combat:OnPartyKillEvent(arg1, arg2)
                      safeTarget, victimName, not killScoring)
 end
 
--- Credit des victoires honorables sans preuve nommee, apres reconciliation avec
--- les coups fatals de la meme mort. Valable pour toutes les specialisations.
+-- Une augmentation du compteur VH officiel vaut exactement autant de credits.
+-- Aucun bonus x2 ni credit de coup fatal ne modifie ce total.
 function Overlord.Combat:CreditHonorableKills(count)
     count = math.floor(tonumber(count) or 0)
-    if count <= 0 or count > MAX_PVP_KILL_DELTA
+    if count <= 0
         or not IsKillScoringActive() or not Overlord.Leaderboard then return 0 end
 
     ResetBountyStreakOutsideFront()
@@ -1041,12 +849,11 @@ function Overlord.Combat:CreditHonorableKills(count)
     if count > 1 then
         totalKills = Overlord.Leaderboard:AddKills(playerFullName, count - 1, false)
     end
+    -- Le front du jour conserve son bonus de ressources, sans multiplier les VH.
     if Overlord.Fronts and Overlord.Fronts.IsFeaturedFrontActive
-        and Overlord.Fronts:IsFeaturedFrontActive() then
-        totalKills = Overlord.Leaderboard:AddKills(playerFullName, count, false)
-        if Overlord.Ressources and Overlord.Ressources.AddGold then
-            Overlord.Ressources:AddGold(count)
-        end
+        and Overlord.Fronts:IsFeaturedFrontActive()
+        and Overlord.Ressources and Overlord.Ressources.AddGold then
+        Overlord.Ressources:AddGold(count)
     end
     if Overlord.Leaderboard.UpdateLocalPlayerGuild then
         Overlord.Leaderboard:UpdateLocalPlayerGuild()
@@ -1063,72 +870,29 @@ function Overlord.Combat:CreditHonorableKills(count)
     if Overlord.Sync and Overlord.Sync.BroadcastKill then
         Overlord.Sync:BroadcastKill(currentZone and currentZone.id or "", totalKills, true)
     end
-    if count == 1 then
-        Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.KILL_CONFIRM,
-            L.HONORABLE_KILL_LABEL or "honorable kill", totalKills))
-    else
-        local fmt = L.HONORABLE_KILLS_CONFIRM or "+%d honorable kills: Total: %d"
-        Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. fmt,
-            count, totalKills))
-    end
+    local fmt = L.HONORABLE_KILLS_CONFIRM or "+%d honorable kills: Total: %d"
+    Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. fmt, count, totalKills))
     return totalKills
 end
 
--- PLAYER_PVP_KILLS_CHANGED : backup strict pour un coup fatal local. Son compteur
--- HK credite les autres victoires honorables seulement apres reconciliation.
+-- PLAYER_PVP_KILLS_CHANGED peut etre repete ou regrouper plusieurs VH.
+-- Lire le delta officiel une seule fois ; le payload ne designe pas une victime.
 function Overlord.Combat:OnPVPKillsChanged(unitTarget)
-    local killScoring = IsKillScoringActive()
-
-    dbg("PLAYER_PVP_KILLS_CHANGED event fired, unitTarget:", tostring(unitTarget))
-
-    local honorDelta, killingBlowDelta, killingBlows = ReadPvpKillDeltas()
-    local detailedCredits = ConsumeRecentDetailedLocalKills(honorDelta)
-    -- Mettre toutes les HK restantes en attente. Le ProcessKill KB execute plus bas
-    -- annule lui-meme une unite s'il credite reellement le joueur ; on ne depend donc
-    -- pas du timing relatif des compteurs Blizzard pour reconnaitre un doublon.
-    local honorFallback = math.max(0, honorDelta - detailedCredits)
-    dbg("  HK delta:", honorDelta, "KB delta:", killingBlowDelta,
-        "preuves detaillees:", detailedCredits, "secours HK:", honorFallback)
-    local honorBatch
-    if honorFallback > 0 and killScoring then
-        honorBatch = QueueHonorCredits(honorFallback)
-    end
-    if killingBlows > previousKillingBlows then previousKillingBlows = killingBlows end
-    -- PARTY_KILL peut avoir deja credite le KB avant que le compteur PvP avance.
-    -- Ses preuves detaillees ont ete rapprochees des HK ci-dessus : ne pas lancer
-    -- un backup sans victime pour ce meme coup fatal, qui echapperait au dedup.
-    if killingBlowDelta <= detailedCredits then return end
-
-    local playerGUID = UnitGUID("player")
-    local targetGUID = nil
-    local targetName = nil
-    local safeUnitTarget = SafeAccessibleString(unitTarget)
-    -- N'utiliser le payload comme victime que si Blizzard fournit reellement un
-    -- token joueur hostile ; "player" est le payload normal de cet event.
-    if not targetName and safeUnitTarget and safeUnitTarget ~= "player"
-        and UnitExists(safeUnitTarget) and UnitIsPlayer(safeUnitTarget)
-        and (not UnitCanAttack or UnitCanAttack("player", safeUnitTarget)) then
-        targetGUID = UnitGUID(safeUnitTarget)
-        targetName = SafeFullUnitName(safeUnitTarget)
-    end
-    if not IsValidPlayerName(targetName) then
-        targetName = "?"
-    end
-
-    dbg("  Processing kill via PVP_KILLS_CHANGED:", targetName)
-
-    -- WoW 12.0.5 : SafeUnitName gere les secret values
-    local playerName = Overlord:SafeUnitName("player") or "?"
-    if targetName == "?" then
-        if DeferUnknownLocalBackupKill("PLAYER_PVP_KILLS_CHANGED", targetGUID, function(resolvedTargetName)
-            self:ProcessKill(playerGUID, playerName, targetGUID, resolvedTargetName,
-                not killScoring, honorBatch)
-        end, honorBatch) then
-            return
-        end
-    end
-    self:ProcessKill(playerGUID, playerName, targetGUID, targetName, not killScoring,
-        honorBatch)
+    local current, source = GetSessionHonorableKills()
+    if current == nil then return end -- panne transitoire : conserver la reference
+    local previous = previousSessionHonorableKills
+    if source == "lifetime" and source == honorableKillCounterSource
+        and previous and current < previous then return end
+    previousSessionHonorableKills = current
+    local previousSource = honorableKillCounterSource
+    honorableKillCounterSource = source
+    if not IsKillScoringActive() or previous == nil or previousSource ~= source then return end
+    local delta = current - previous
+    -- Le compteur "session" est journalier : un reset/recul rebase sans retirer
+    -- les VH hebdomadaires ni importer des kills d'une ancienne session.
+    if delta <= 0 then return end
+    dbg("PLAYER_PVP_KILLS_CHANGED: VH Blizzard +", delta)
+    self:CreditHonorableKills(delta)
 end
 
 -- Cherche le nom d'un membre du groupe par son GUID
@@ -1188,34 +952,13 @@ local function ApplyLocalKillEvidence(killerGUID, playerGUID, victimGUID, victim
     return playerFullName, enrichedVictimName
 end
 
--- Traitement commun d'un kill confirme.
--- bountyProofOnly : preuve detaillee pour payout prime (BD) sans crediter le classement.
--- honorBatch : lot HK cree par le meme event, a annuler si ce KB est credite ici.
-function Overlord.Combat:ProcessKill(
-    killerGUID, killerName, victimGUID, victimName, bountyProofOnly, honorBatch)
+-- Une preuve de coup fatal peut servir aux contrats et a l'activite locale.
+-- Elle ne cree aucun point de classement : seule la VH Blizzard le fait.
+function Overlord.Combat:ProcessKill(killerGUID, killerName, victimGUID, victimName, bountyProofOnly)
     local now = GetTime()
-    local playerGUID = UnitGUID("player")
-
-    -- Une seule porte de dedup pour toutes les sources. Aucun handler ne marque
-    -- le kill avant que ses effets aient ete appliques.
-    if not bountyProofOnly and WasKillRecentlyProcessed(victimGUID, victimName, now) then
-        dbg("ProcessKill dedup: deja traite", tostring(victimGUID), tostring(victimName))
-        local playerFullName, enrichedVictimName =
-            ApplyLocalKillEvidence(killerGUID, playerGUID, victimGUID, victimName)
-        if playerFullName and enrichedVictimName
-            and Overlord.BountySync and Overlord.BountySync.RegisterPriorKillCredit then
-            Overlord.BountySync:RegisterPriorKillCredit(playerFullName, enrichedVictimName)
-        end
-        if killerGUID and playerGUID and killerGUID == playerGUID and honorBatch then
-            NoteDetailedLocalKillCredit(victimGUID, honorBatch)
-        end
-        return
-    end
-
-    -- Purge bornee : aucun kill ne paie un balayage complet de la session.
+    if WasKillRecentlyProcessed(victimGUID, victimName, now) then return false end
     CleanupRecentlyProcessedKills(now)
     CleanupGuidPlayerInfoCache()
-
     -- Cache les metadonnees victime via nameplate/target (apres dedup pour ne scanner qu'une fois).
     if victimGUID and victimName and victimName ~= "?" then
         if not guidPlayerInfoCache[victimGUID] then
@@ -1240,114 +983,37 @@ function Overlord.Combat:ProcessKill(
         end
     end
 
-    local playerFaction = Overlord.PlayerFaction
-
-    dbg("ProcessKill: killer=" .. tostring(killerName) .. " victim=" .. tostring(victimName))
-
-    if bountyProofOnly then
-        -- Preuve honor locale : le payout reste gated par BD (victime) + paire killer/victime.
-        if killerGUID and playerGUID and killerGUID == playerGUID
-            and victimName and victimName ~= "?" then
-            local playerFullName = Overlord.Sync and Overlord.Sync:GetPlayerFullName() or ""
-            if playerFullName and playerFullName ~= ""
-                and Overlord.BountySync and Overlord.BountySync.RegisterPriorKillCredit then
-                Overlord.BountySync:RegisterPriorKillCredit(playerFullName, victimName)
+    local playerGUID = UnitGUID("player")
+    local playerFullName, enrichedVictimName =
+        ApplyLocalKillEvidence(killerGUID, playerGUID, victimGUID, victimName)
+    if killerGUID and killerGUID ~= playerGUID and killerName then
+        local fullName = Overlord.Sync and Overlord.Sync.CanonicalForeverName
+            and Overlord.Sync:CanonicalForeverName(killerName)
+        if fullName and Overlord.Leaderboard then
+            local class = guidAllyClassCache[killerGUID]
+            local faction = guidFactionCache[killerGUID] or Overlord.PlayerFaction
+            if class then Overlord.Leaderboard:SetPlayerInfo(fullName, class, faction) end
+            local guild = guidAllyGuildCache[killerGUID]
+            if guild and guild ~= "" then
+                Overlord.Leaderboard:SetPlayerGuild(fullName, guild, false, true, time())
             end
         end
-        return
     end
-
-    -- En War Mode monde ouvert (warfront hors BG), PARTY_KILL correspond a un ennemi reel
-    -- (on ne peut pas tuer des allies en War Mode)
-
-    local killCredited = false
-    if killerGUID and playerGUID and killerGUID == playerGUID then
-        ResetBountyStreakOutsideFront()
-        local playerFullName, contractVictimName =
-            ApplyLocalKillEvidence(killerGUID, playerGUID, victimGUID, victimName)
-        if not playerFullName then return end
-        -- Anti-farming : supprime les stats si la meme victime est tuee trop souvent
-        if RecordAndCheckKillFarm(playerFullName, victimName) then
-            RecordProcessKillDedup(victimGUID, contractVictimName, victimName, now)
-            -- Le rejet anti-farm reste une preuve detaillee : consommer son lot HK
-            -- empeche le secours HK anonyme de recreer le score trois secondes apres.
-            NoteDetailedLocalKillCredit(victimGUID, honorBatch)
-            return
-        end
-
-        -- Prime : le +1 kill habituel reste acquis ; BD complete a +2 net si la victime l'emet.
-        local totalKills = Overlord.Leaderboard:RegisterKill(playerFullName)
-        if Overlord.Fronts and Overlord.Fronts.IsFeaturedFrontActive and Overlord.Fronts:IsFeaturedFrontActive() then
-            Overlord.Leaderboard:AddKills(playerFullName, 1, false)
-            totalKills = totalKills + 1
-            if Overlord.Ressources and Overlord.Ressources.AddGold then
-                Overlord.Ressources:AddGold(1)
-            end
-        end
-        if Overlord.BountySync and Overlord.BountySync.RegisterPriorKillCredit then
-            Overlord.BountySync:RegisterPriorKillCredit(playerFullName, contractVictimName)
-        end
-        if Overlord.Leaderboard.UpdateLocalPlayerGuild then
-            Overlord.Leaderboard:UpdateLocalPlayerGuild()
-        end
-        if Overlord.InActiveFront and Overlord.Bounty and Overlord.Bounty.OnLocalKill then
-            Overlord.Bounty:OnLocalKill()
-        end
-
-        local currentZone = Overlord.Zones:GetCurrentPlayerZone()
-        if Overlord.Sync and Overlord.Sync.BroadcastKill then
-            -- Le leaderboard couvre tout le monde ouvert : diffuser aussi hors front.
-            -- Le zoneId vide reste valide pour K (il sert seulement aux compteurs de zone distants).
-            Overlord.Sync:BroadcastKill(currentZone and currentZone.id or "", totalKills,
-                not bountyProofOnly)
-        end
-        Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.KILL_CONFIRM, victimName or "?", totalKills))
-        killCredited = true
-        NoteDetailedLocalKillCredit(victimGUID, honorBatch)
-    elseif killerGUID and killerName then
-        local fullKillerName = Overlord.Sync and Overlord.Sync.CanonicalForeverName
-            and Overlord.Sync:CanonicalForeverName(killerName) or nil
-        if fullKillerName then
-        -- Kill allie observe : compter localement, mais ne pas marquer de credit "joueur local"
-        -- pour le filtre d'export Check PvP. Si BD arrive ensuite, priorKillCredit garde +2 net.
-        Overlord.Leaderboard:RegisterKill(fullKillerName, true)
-        if Overlord.BountySync and Overlord.BountySync.RegisterPriorKillCredit then
-            Overlord.BountySync:RegisterPriorKillCredit(fullKillerName, victimName)
-        end
-        if Overlord.Sync and Overlord.Sync.RegisterRecentKCredit then
-            Overlord.Sync:RegisterRecentKCredit(fullKillerName, true)
-        end
-        local killerFac = playerFaction
-        if killerGUID and guidFactionCache[killerGUID] then
-            killerFac = guidFactionCache[killerGUID]
-        end
-        local killerClass = killerGUID and guidAllyClassCache[killerGUID]
-        if killerClass then
-            Overlord.Leaderboard:SetPlayerInfo(fullKillerName, killerClass, killerFac)
-        elseif killerFac == "Alliance" or killerFac == "Horde" then
-            Overlord.Leaderboard:SetPlayerFaction(fullKillerName, killerFac)
-        end
-        local killerGuild = killerGUID and guidAllyGuildCache[killerGUID]
-        if killerGuild and killerGuild ~= ""
-            and Overlord.Leaderboard.SetPlayerGuild then
-            Overlord.Leaderboard:SetPlayerGuild(fullKillerName, killerGuild)
-        end
-        killCredited = true
+    if playerFullName then
+        local pending = pendingUnknownLocalKill
+        if pending and (not pending.victimGUID or pending.victimGUID == victimGUID) then
+            pendingUnknownLocalKill = nil
+            lastUnknownLocalBackupQueuedAt = 0
         end
     end
-
-    -- Kill de zone : disques de capture du front actif uniquement (pas fortins / mines EK).
-    if Overlord.InActiveFront and victimName and victimName ~= "?" then
-        local currentZone = Overlord.Zones:GetCurrentPlayerZone()
-        if currentZone and currentZone.status ~= "locked" then
-            self:RegisterZoneKill(currentZone, killerGUID, killerName, victimName, playerFaction)
+    RecordProcessKillDedup(victimGUID, enrichedVictimName, victimName, now)
+    if not bountyProofOnly and Overlord.InActiveFront and victimName and victimName ~= "?" then
+        local zone = Overlord.Zones:GetCurrentPlayerZone()
+        if zone and zone.status ~= "locked" then
+            self:RegisterZoneKill(zone, killerGUID, killerName, victimName, Overlord.PlayerFaction)
         end
     end
-    if killCredited then
-        local enrichedVictimName = ResolveManualBountyVictimName(victimGUID, victimName)
-        RecordProcessKillDedup(victimGUID, enrichedVictimName, victimName, now)
-    end
-    return killCredited
+    return true
 end
 
 -- Enregistre un kill pour une zone specifique (compteur zone + progression capture)
@@ -1500,13 +1166,7 @@ function Overlord.Combat:OnPlayerDead()
             -- WoW 12.0.5 : SafeUnitName gere les secret values
             local myName = Overlord.Sync and Overlord.Sync:GetPlayerFullName() or "?"
             if not RecordAndCheckKillFarm(fullKillerName, myName) then
-                Overlord.Leaderboard:RegisterKill(fullKillerName)
-                -- La victime connait le front physique du kill : appliquer aussi localement
-                -- le second credit du front du jour sans attendre le total K cross-faction.
-                if Overlord.Fronts and Overlord.Fronts.IsFeaturedFrontActive
-                    and Overlord.Fronts:IsFeaturedFrontActive() then
-                    Overlord.Leaderboard:AddKills(fullKillerName, 1, true)
-                end
+                -- Une cible supposee ne peut jamais gagner de VH au classement.
                 Overlord.Leaderboard:SetPlayerFaction(fullKillerName, enemyFaction)
 
                 if killerClass then
@@ -1556,10 +1216,6 @@ function Overlord.Combat:OnPlayerDead()
                         Overlord.Sync:BroadcastToCommunity("EK", payload, 12, 0.35)
                     end
                 end
-
-                local playerName = Overlord:SafeUnitName("player") or "?"
-                Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.KILL_ENEMY_NEARBY,
-                    killerName:match("^(.-)%-") or killerName, playerName))
             end
         end
     end

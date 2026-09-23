@@ -6,7 +6,7 @@ Addon **World of Warcraft Forever** pour la capture de zones sur les fronts du m
 |---|---|
 | **Auteur** | Troma |
 | **Licence** | All Rights Reserved |
-| **Version** | 1.0.9 |
+| **Version** | 1.0.10 |
 | **Jeu** | WoW Forever (`## Interface: 16001`) |
 | **CurseForge** | https://www.curseforge.com/wow/addons/overlord-forever |
 | **Dépôt** | https://github.com/leliondoc/overlord-forever-addon |
@@ -107,7 +107,7 @@ fronts, bonus, stocks) empruntent également ce réseau.
 
 ### Ressources et stratégie
 
-- **Mines d'or**, renforts et barricades selon le front.
+- **Mines de coins**, renforts et barricades selon le front.
 - Économie locale liée à la progression de capture.
 
 ### Guild Keep
@@ -117,7 +117,9 @@ fronts, bonus, stocks) empruntent également ce réseau.
 
 ### Autres systèmes
 
-- **Kills JcJ en monde ouvert** comptés partout, à tous les niveaux, même hors des fronts Forever. Les instances (BG, arènes, donjons et raids) sont exclues.
+- **Victoires honorables Blizzard (VH)** en monde ouvert, à tous les niveaux : une hausse du compteur officiel donne exactement autant de crédits. Les coups fatals et les cibles supposées à la mort ne donnent aucun crédit supplémentaire. Le front du jour ajoute seulement de l’or. Les instances (BG, arènes, donjons et raids) sont exclues.
+- Les totaux de guilde additionnent les VH de tous les membres connus, y compris hors du top 200 joueurs. Ce ne sont pas des victimes uniques. Une guilde temporairement indisponible au chargement ne supprime plus le rattachement connu.
+- Pendant la bêta, tous les comptes utilisent la même semaine américaine (mardi 08:00 UTC, ancre commune de l’addon). Aucun reset EU le mercredi. Une sauvegarde absente au login ne déclenche plus de faux reset hebdomadaire.
 - **Avant-postes** sur les quatre fronts.
 - Appel de faction pour alerter les alliés accessibles par les passerelles de synchronisation.
 - **Commandant** : rôle du chef de groupe sur un front, position sur la carte/minimap,
@@ -155,7 +157,7 @@ Alias : `/ov` et `/overlord`. Tapez **`/ov help`** en jeu pour la liste complèt
 
 **Échap → Options → AddOns → Overlord** : échelle UI, opacité des overlays carte/minimap, notifications chat, waypoint automatique, affichage minimap, etc.
 
-Le HUD du haut est en mode **Auto** par défaut, y compris après migration de l'ancien réglage « activé ». Il montre le panneau or près d'une capture ou d'une mine, le panneau bois dans une forêt (ou près d'une capture si le bois permet une action), et le panneau fortin sur place. Les panneaux restent visibles 15 secondes après la sortie du lieu. La croix masque le groupe jusqu'à sa réactivation via les options ou `/ov hud on` / `auto`. Le livre du tutoriel est masqué par défaut en mode Auto ; le guide reste accessible dans le panneau et avec `/ov guide`.
+Le HUD du haut est en mode **Auto** par défaut, y compris après migration de l'ancien réglage « activé ». Il montre le panneau coins près d'une capture ou d'une mine, le panneau bois dans une forêt (ou près d'une capture si le bois permet une action), et le panneau fortin sur place. Les panneaux restent visibles 15 secondes après la sortie du lieu. La croix masque le groupe jusqu'à sa réactivation via les options ou `/ov hud on` / `auto`. Le livre du tutoriel est masqué par défaut en mode Auto ; le guide reste accessible dans le panneau et avec `/ov guide`.
 
 ## Releases
 
@@ -166,3 +168,13 @@ Les versions publiées sur CurseForge sont déclenchées par des **tags Git** (`
 Ce dépôt inclut des fichiers ignorés par le client WoW (`.github/`, `CHANGELOG.md`, `.pkgmeta`, etc.) : seuls les fichiers listés dans `Overlord.toc` sont chargés en jeu.
 
 Positions de capture et références Classic : [audit des emplacements](docs/forever-capture-locations.md).
+
+### Transition du compteur PvP
+
+Les scores déjà enregistrés sont conservés : les anciennes versions mélangeaient VH, coups fatals, bonus et certaines attributions supposées. Ils ne peuvent pas être recalculés exactement en VH faute de journal détaillé. Les nouveaux crédits suivent la règle 1 VH = 1 crédit ; tous les participants doivent mettre à jour pour appliquer la même règle. Le prochain reset US ouvrira une campagne entièrement comptée selon cette règle chez les clients à jour.
+
+La bêta peut toujours omettre de charger les SavedVariables. Le correctif empêche un effacement supplémentaire au login mais ne permet pas à Lua de relire un fichier que le client n’a pas chargé. Le rattrapage réseau reste nécessaire dans ce cas.
+
+Les guildes et factions déjà connues ne sont plus remplacées par les copies du classement envoyées par des tiers. Les changements de guilde et les départs doivent venir du personnage concerné ; ses déclarations corrigent les anciennes informations relayées, même si celles-ci portent une date plus récente. Un relais peut toujours renseigner une guilde inconnue. Une affiliation déjà erronée doit être corrigée par le personnage ou par une restauration locale vérifiée.
+
+La monnaie fictive des mines s’appelle **coin** dans l’interface (pluriel **coins**), y compris pour le bonus du front du jour. Les contrats et dons en véritable or du jeu conservent leur libellé.

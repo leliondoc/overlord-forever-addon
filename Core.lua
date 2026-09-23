@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.0.9"
+Overlord.Version = "1.0.10"
 -- Forever uses one global community. The beta relay remains enabled in parallel
 -- so non-members and temporarily unavailable C_Club rosters still converge.
 Overlord.CommunityModeEnabled = true
@@ -521,6 +521,19 @@ function Overlord:SafeGetGuildInfo(unit)
     end)
     if not ok or not guild or guild == "" then return nil end
     return guild
+end
+
+-- nil = metadata pas encore disponible ; "" = absence de guilde confirmee.
+-- GetGuildInfo peut etre vide pendant le login alors que IsInGuild reste vrai.
+function Overlord:GetLocalGuildIdentity()
+    local guild = self:SafeGetGuildInfo("player")
+    if guild then return guild end
+    if self.InstanceSuspended or type(IsInGuild) ~= "function" then return nil end
+    local ok, inGuild = pcall(IsInGuild)
+    if ok and (not canaccessvalue or canaccessvalue(inGuild)) and inGuild == false then
+        return ""
+    end
+    return nil
 end
 
 -- Comparaison simple - en instance, retourne false
@@ -3191,12 +3204,9 @@ end
 -- Frame principal pour gérer les events
 local eventFrame = CreateFrame("Frame")
 
--- Secours si l'API Blizzard de reset hebdomadaire est indisponible.
--- Le chemin normal utilise C_DateAndTime.GetSecondsUntilWeeklyReset(), donc la region
--- et les changements d'heure restent decides par le client WoW.
+-- BETA Forever : une seule campagne americaine pour tous les comptes/langues.
+-- Ne pas utiliser le reset regional du client pendant cette beta.
 -- wday: 1=Dimanche, 2=Lundi, 3=Mardi, 4=Mercredi, ..., 7=Samedi
-local RESET_HOUR_EU = 3
-local RESET_WDAY_EU = 4  -- Mercredi
 local RESET_HOUR_US = 8
 local RESET_WDAY_US = 3  -- Mardi
 local SECONDS_PER_DAY = 86400
@@ -3350,50 +3360,15 @@ end
 
 -- Timestamp unix de debut de la campagne en cours (aligne sur Leaderboard:GetCurrentCampaignStart).
 function Overlord:GetCurrentCampaignStartTs()
-    local fromDb = (OverlordDB and tonumber(OverlordDB.lastResetTimestamp)) or 0
-    local calendarReset = self:GetLastResetTimestamp() or 0
-    if IsLegacyUSResetAhead(fromDb, calendarReset) then return calendarReset end
-    if fromDb > 0 and calendarReset > 0 then
-        -- Une fois le reset global applique, son epoch DB reste l'ancre de cette
-        -- campagne. Si l'API Blizzard se recale de quelques heures ensuite, ne
-        -- deplacez pas la frontiere : cela rendrait captures et scores deja faits
-        -- artificiellement "anciens" et re-armerait CheckWeeklyReset.
-        if HasRecentCompletedWeeklyReset(calendarReset)
-            and math.abs(fromDb - calendarReset) <= CAMPAIGN_EPOCH_TOLERANCE_SEC then
-            return fromDb
-        end
-        return math.max(fromDb, calendarReset)
-    end
-    if fromDb > 0 then return fromDb end
-    return calendarReset
+    -- Une ancienne sauvegarde EU (ou une date future) ne choisit jamais la
+    -- campagne active. La compatibilite des anciens stamps reste dans le lecteur.
+    return self:GetLastResetTimestamp() or 0
 end
 
 -- Met a jour OverlordDB.campaignId selon la semaine courante (login, apres reset hebdo, correctif saves anciennes).
 function Overlord:SyncCampaignIdWithCurrentWeek()
     if not OverlordDB then return end
     OverlordDB.campaignId = self:TimestampToCampaignId(self:GetCurrentCampaignStartTs())
-end
-
--- Nettoie seulement d'eventuels alias europeens legacy. US et EU ont des calendriers
--- independants : le reset de l'un ne doit jamais effacer la campagne de l'autre.
-local function ResetOtherLeaderboardPoolBuckets(campaignStart, campaignId)
-    if not OverlordDB then return end
-    local currentPool = Overlord:GetCurrentLeaderboardSavedVarsPool() or ""
-    OverlordDB.leaderboardsByPool = OverlordDB.leaderboardsByPool or {}
-    for pool, bucket in pairs(OverlordDB.leaderboardsByPool) do
-        if currentPool == "eu" and (pool == "fr" or pool == "de") and type(bucket) == "table" then
-            bucket.kills = {}
-            bucket.captures = {}
-            bucket.captureCount = {}
-            bucket.playerInfo = {}
-            -- Donnees bounty par campagne : sans ce reset, les pools inactifs
-            -- accumulaient leurs primes en SavedVariables indefiniment.
-            bucket.bountyTimes = {}
-            bucket.bountyKills = {}
-            bucket.campaignStart = campaignStart
-            bucket.campaignId = campaignId
-        end
-    end
 end
 
 -- Verifie si un reset hebdomadaire est necessaire et l'execute
@@ -3413,6 +3388,20 @@ function Overlord:CheckWeeklyReset()
     -- Reset interrompu : le nouveau bucket a deja pu etre ouvert alors que
     -- l'archive compacte ou les side-effects fixes n'etaient pas termines.
     local pending = tonumber(OverlordDB and OverlordDB.pendingWeeklyResetAt) or 0
+    if pending > 0 and pending ~= lastReset then
+        -- Ancien reset regional interrompu : ne jamais le rejouer en beta US.
+        -- Si son bucket a deja ete detache, finir uniquement l'archive sauvegardee.
+        OverlordDB.pendingWeeklyResetAt = nil
+        local marker = OverlordDB.pendingWeeklyArchive
+        if type(marker) == "table" then
+            marker.coreSideEffectsApplied = true
+            marker.leaderboardSideEffectsApplied = true
+            if self.Leaderboard and self.Leaderboard.ResumePendingWeeklyArchive then
+                self.Leaderboard:ResumePendingWeeklyArchive()
+            end
+        end
+        pending = 0
+    end
     if pending > 0 then
         if self.Leaderboard then
             OverlordDB.lastResetTimestamp = pending
@@ -3426,7 +3415,6 @@ function Overlord:CheckWeeklyReset()
                 and tonumber(marker.resetEpoch) == pending
                 and marker.coreSideEffectsApplied ~= true then
                 -- Tables de taille fixe : meme frame logique que le swap leaderboard.
-                ResetOtherLeaderboardPoolBuckets(pending, campaignId)
                 self:ResetAll()
                 MarkWeeklyMapResetCompleted(pending)
                 self.Leaderboard:MarkWeeklyResetCoreSideEffectsApplied(pending)
@@ -3498,7 +3486,6 @@ function Overlord:CheckWeeklyReset()
             if type(marker) == "table"
                 and tonumber(marker.resetEpoch) == lastReset
                 and marker.coreSideEffectsApplied ~= true then
-                ResetOtherLeaderboardPoolBuckets(lastReset, campaignId)
                 self:ResetAll()
                 MarkWeeklyMapResetCompleted(lastReset)
                 self.Leaderboard:MarkWeeklyResetCoreSideEffectsApplied(lastReset)
@@ -3724,12 +3711,17 @@ function Overlord:Initialize()
     
     -- ADDON_LOADED follows SavedVariables loading. Waiting cannot repair a client-side load failure.
     if not OverlordDB then
+        local campaignStart = self:GetLastResetTimestamp()
         OverlordDB = {
             zones = {},
             config = {},
             history = {},
             leaderboard = { kills = {}, captures = {}, playerInfo = {} },
-            lastResetTimestamp = 0
+            -- Une sauvegarde non chargee n'est pas une nouvelle semaine. Ancrer
+            -- la session avant le rattrapage reseau evite d'effacer ses scores
+            -- et captures avec un faux ResetAll au stage hebdomadaire du login.
+            lastResetTimestamp = campaignStart,
+            campaignId = self:TimestampToCampaignId(campaignStart),
         }
     end
 
@@ -4465,18 +4457,22 @@ function Overlord:MergeLeaderboardBucketInto(target, source, onDone)
         local sourceGuildAt, targetGuildAt = tonumber(sourceInfo.guildAt) or 0,
             tonumber(info.guildAt) or 0
         local sourceGuild, targetGuild = cleanGuild(sourceInfo.guild), cleanGuild(info.guild)
+        local sourceGuildAuth, targetGuildAuth = sourceInfo.guildAuth == true,
+            info.guildAuth == true
         if sourceGuild == targetGuild then
             info.guild = sourceGuild
             info.guildAt = math.max(sourceGuildAt, targetGuildAt)
-            info.guildAuth = ((sourceInfo.guildAuth == true or info.guildAuth == true)
-                and sourceGuild ~= "") or nil
-        elseif guildWins(sourceGuild, sourceGuildAt, targetGuild, targetGuildAt) then
+            info.guildAuth = sourceGuildAuth or targetGuildAuth or nil
+        elseif (sourceGuildAuth and not targetGuildAuth)
+            or (sourceGuildAuth == targetGuildAuth
+                and guildWins(sourceGuild, sourceGuildAt, targetGuild, targetGuildAt)) then
             info.guild = sourceGuild
             info.guildAt = sourceGuildAt
-            info.guildAuth = (sourceInfo.guildAuth == true and sourceGuild ~= "") or nil
+            info.guildAuth = sourceGuildAuth or nil
         else
             info.guild = targetGuild
             info.guildAt = targetGuildAt
+            info.guildAuth = targetGuildAuth or nil
         end
         local sourceRaceAt, targetRaceAt = tonumber(sourceInfo.raceAt) or 0,
             tonumber(info.raceAt) or 0

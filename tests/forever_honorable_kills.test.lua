@@ -50,41 +50,86 @@ Overlord.Combat:Initialize()
 local playerName = Overlord.Sync:GetPlayerFullName()
 local function score() return Overlord.Leaderboard.kills[playerName] or 0 end
 
--- A DPS receives an HK even when someone else lands the killing blow.
-honorableKills = 11
-Overlord.Combat:OnPVPKillsChanged("player")
-advance(3.1)
-assert(score() == 1, "DPS honorable victory without a killing blow was lost")
+-- Every role gets exactly the official delta, independent of damage/healing.
+for _, role in ipairs({ "DAMAGER", "HEALER", "TANK" }) do
+    UnitGroupRolesAssigned = function() return role end
+    honorableKills = honorableKills + 1
+    Overlord.Combat:OnPVPKillsChanged("player")
+    Overlord.Combat:OnPVPKillsChanged("player")
+end
+assert(score() == 3, "Role or duplicate notification changed the official VH count")
 
--- Detailed killing-blow evidence before the HK counter must consume that HK.
+-- Named killing blows are evidence, never a second source of leaderboard points.
 Overlord.Combat:OnPartyKillEvent("Player-1-LOCAL", "Player-2-VICTIM_A")
-assert(score() == 2, "Local killing blow was not credited")
-honorableKills, killingBlows = 12, 3
+assert(score() == 3, "Killing blow added a point before Blizzard awarded an HK")
+honorableKills, killingBlows = 14, 3
 Overlord.Combat:OnPVPKillsChanged("player")
-advance(3.1)
-assert(score() == 2, "KB followed by HK counted twice")
-
--- The reverse event order must also cancel the delayed anonymous HK credit.
-honorableKills, killingBlows = 13, 4
+assert(score() == 4, "KB before HK counted twice")
+honorableKills, killingBlows = 15, 4
 Overlord.Combat:OnPVPKillsChanged("player")
 Overlord.Combat:OnPartyKillEvent("Player-1-LOCAL", "Player-2-VICTIM_B")
-advance(3.1)
-assert(score() == 3, "HK followed by KB counted twice")
+advance(10)
+assert(score() == 5, "HK before KB or delayed backup counted twice")
 
--- The featured front's advertised x2 applies once to every role, including DPS.
 Overlord.InActiveFront = true
 Overlord.Fronts.IsFeaturedFrontActive = function() return Overlord.InActiveFront end
-honorableKills = 14
+local gold = 0
+Overlord.Ressources = { AddGold = function(_, count) gold = gold + count end }
+honorableKills = 16
 Overlord.Combat:OnPVPKillsChanged("player")
-advance(3.1)
-assert(score() == 5, "Featured-front honorable victory did not receive x2")
-
--- A healer still receives the same HK credit without a killing blow.
+assert(score() == 6 and gold == 1, "Featured front must grant gold but never multiply HK")
 Overlord.InActiveFront = false
-UnitGroupRolesAssigned = function() return "HEALER" end
-honorableKills = 15
+
+-- A batched counter increase must not be capped at the old limit of 40.
+honorableKills = 96
 Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 86, "Batched legitimate HKs were lost")
+
+-- Missing data is not zero; the next valid reading keeps the previous reference.
+GetPVPSessionStats = function() return nil end
 Overlord.Combat:OnPVPKillsChanged("player")
-advance(3.1)
-assert(score() == 6, "A repeated healer HK event counted twice")
-print("Forever honorable kills: DPS/healer HKs, KB dedup in both orders and featured x2 OK")
+honorableKills = 97
+GetPVPSessionStats = function() return honorableKills, 0 end
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 87, "Transient counter outage lost an HK")
+
+-- A daily reset never subtracts weekly points or replays old totals.
+honorableKills = 0
+Overlord.Combat:OnPVPKillsChanged("player")
+honorableKills = 1
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 88, "Daily reset changed weekly history")
+
+-- Instance credits are baselined, including changes while events are suspended.
+Overlord.InstanceSuspended = true
+honorableKills = 40
+Overlord.Combat:OnPVPKillsChanged("player")
+Overlord.InstanceSuspended = false
+Overlord.Combat:Resume()
+honorableKills = 41
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 89, "Instance points leaked into the outdoor leaderboard")
+
+-- Prefer the lifetime counter: no daily rollover, no false zero replay.
+local lifetime = 2000
+GetPVPLifetimeStats = function() return lifetime end
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 89, "Switching counter imported historical HKs")
+lifetime = 0
+Overlord.Combat:OnPVPKillsChanged("player")
+lifetime = 2001
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 90, "Transient lifetime zero duplicated the player's history")
+
+-- Being the target or a nearby priest when someone dies is not an HK.
+Overlord.Zones.GetEnemyFaction = function() return "Alliance" end
+Overlord.Combat.IdentifyKiller = function() return "Nearby Priest", "Player-2-PRIEST" end
+Overlord.Combat.GetEnemyClassFromNameplate = function() return "PRIEST" end
+Overlord.Sync.SendToGroup = function() end
+Overlord.Sync.SendToChannel = function() end
+Overlord.Sync.BroadcastToCommunity = function() end
+Overlord.Combat:OnPlayerDead()
+assert((Overlord.Leaderboard.kills["Nearby Priest"] or 0) == 0,
+    "A guessed killer received an exportable score")
+assert(score() == 90)
+print("Forever HK: exact Blizzard deltas, all roles, no KB/death/x2 additions, batching, counters and instances OK")

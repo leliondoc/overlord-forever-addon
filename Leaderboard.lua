@@ -860,8 +860,7 @@ local function normalizeGuildAt(ts)
     return ts
 end
 
--- Registre replique de guilde : (guildAt, valeur). L'autorite indique seulement la
--- provenance locale ; elle ne peut pas bloquer une valeur plus recente relayee par LK.
+-- Ordre temporel entre declarations de meme provenance.
 -- A date egale, un tombstone gagne, puis le tie-break stable existant departage les guildes.
 local function guildLwwValueWins(newGuild, newAt, curGuild, curAt)
     newGuild = sanitizeGuildName(newGuild or "")
@@ -878,6 +877,11 @@ local function guildLwwValueWins(newGuild, newAt, curGuild, curAt)
     if newGuild == "" then return true end
     if curGuild == "" then return false end
     return guildNameTieWins(newGuild, curGuild)
+end
+
+local function guildRecordWins(newGuild, newAt, newAuth, curGuild, curAt, curAuth)
+    if (newAuth == true) ~= (curAuth == true) then return newAuth == true end
+    return guildLwwValueWins(newGuild, newAt, curGuild, curAt)
 end
 
 -- Les anciennes versions persistaient GetTime() (uptime du client) dans factionAt. Ces petites
@@ -926,7 +930,9 @@ function Overlord.Leaderboard:PatchDedupMetaGuildForPlayer(playerName, guild, fo
     local previousGuild = sanitizeGuildName(b.guild or "")
     local previousAt = normalizeGuildAt(b.guildAt)
     local sameValue = previousGuild:lower() == guild:lower()
-    if sameValue then
+    if force and b.guildAuth ~= true then
+        -- Une observation directe corrige meme un hint relaye plus recent.
+    elseif sameValue then
         if guildAt < previousAt then return false end
         if guildAt == previousAt and guild >= previousGuild then return false end
     elseif not guildLwwValueWins(guild, guildAt, previousGuild, previousAt) then
@@ -935,7 +941,7 @@ function Overlord.Leaderboard:PatchDedupMetaGuildForPlayer(playerName, guild, fo
     b.guild = guild
     b.guildRank = newRank
     b.guildAuth = (sameValue and b.guildAuth == true) or force == true or nil
-    b.guildAt = math.max(guildAt, sameValue and previousAt or 0)
+    b.guildAt = guildAt
     b._guildSeen = true
     -- Le vote de faction est derive des lignes playerInfo, pas de l'alias LWW.
     -- Une mutation de guilde rend cette vue froide; le getter GK demandera la
@@ -1008,22 +1014,18 @@ function Overlord.Leaderboard:GetHotPlayerGuildState(playerName)
         direct and direct.guildAuth == true or false
 end
 
--- GY / LK : fusion LWW pure. Une autorite locale ancienne ne bloque jamais une tuple
--- plus recente ; un hint sans timestamp ne fait que bootstrap une valeur absente.
+-- Un relais peut renseigner une guilde inconnue, pas changer une affiliation.
+-- Seul le personnage concerne (GI/K) confirme un changement ou un depart.
 function Overlord.Leaderboard:ShouldAcceptSyncedGuild(playerName, incomingGuild, incomingGuildAt)
     incomingGuild = sanitizeGuildName(incomingGuild)
     if incomingGuild == "" then return false end
-    local incAt = normalizeGuildAt(incomingGuildAt)
     local sync = Overlord.Sync
     if sync and sync.NormalizeContributorFullName then
         playerName = sync:NormalizeContributorFullName(playerName)
     end
     if not playerName or playerName == "" then return false end
-    local existing, prevAt = self:GetHotPlayerGuildState(playerName)
-    if existing == incomingGuild then
-        return incAt > prevAt
-    end
-    return guildLwwValueWins(incomingGuild, incAt, existing, prevAt)
+    local existing, _, authoritative = self:GetHotPlayerGuildState(playerName)
+    return existing == "" and not authoritative
 end
 
 function Overlord.Leaderboard:IsLocalPlayerGuildTarget(playerName)
@@ -1103,8 +1105,7 @@ function Overlord.Leaderboard:RebuildDedupMetaIndex(yieldWork, onName)
             local dk = (getDK and getDK(sync, n)) or n
             local b = bucketFor(dk)
             if b then
-                -- Guilde dedup : registre LWW, tombstone compris. guildAuth reste une
-                -- provenance et n'entre jamais dans l'ordre du registre.
+                -- Une declaration directe prime sur un ancien hint relaye.
                 local g = sanitizeGuildName(inf.guild or "")
                 local ts = normalizeGuildAt(inf.guildAt)
                 if g ~= "" or ts > 0 then
@@ -1114,7 +1115,8 @@ function Overlord.Leaderboard:RebuildDedupMetaIndex(yieldWork, onName)
                     local previousAt = normalizeGuildAt(b.guildAt)
                     local sameValue = previousGuild:lower() == g:lower()
                     local accept = not b._guildSeen
-                        or guildLwwValueWins(g, ts, previousGuild, previousAt)
+                        or guildRecordWins(g, ts, candidateAuth,
+                            previousGuild, previousAt, b.guildAuth)
                     if accept then
                         b.guild = g
                         b.guildRank = r
@@ -1637,7 +1639,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
     end
 
     state.worker = coroutine.create(function()
-        if not dedupCanonicalValid then
+        if not dedupCanonicalValid or not dedupKillMaxIndex then
             -- La barriere login construit cet index en tranches. S'il a ete invalide
             -- ensuite, demander sa preparation asynchrone et conserver la vue stale.
             self:EnsureNetworkHotIndexesPrepared()
@@ -1722,14 +1724,16 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             Horde = captureRows(state.hordeTop, "Horde"),
         }
 
-        -- Le classement guildes et les totaux ont toujours porte sur les 200 joueurs
-        -- visibles. Leur aggregation est donc strictement bornee par K.
+        -- Le top joueurs est limite a 200 lignes, pas les totaux de guilde.
+        -- L'index deja prepare contient un maximum par joueur deduplique ; le
+        -- parcourir en tranches conserve les membres sortis du top sans doublons.
         local guildBuckets = {}
         local alliKills, hordeKills = 0, 0
-        for _, row in ipairs(sortedKills) do
-            local _, faction, guild = indexedMeta(row.name)
-            if faction == "Alliance" then alliKills = alliKills + row.kills
-            elseif faction == "Horde" then hordeKills = hordeKills + row.kills end
+        if not forEach(dedupKillMaxIndex, function(key, count)
+            local name = state.canonicalIndex[key] or key
+            local _, faction, guild = indexedMeta(name)
+            if faction == "Alliance" then alliKills = alliKills + count
+            elseif faction == "Horde" then hordeKills = hordeKills + count end
             if guild and guild ~= "" then
                 local key = guild:lower()
                 local bucket = guildBuckets[key]
@@ -1741,14 +1745,13 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                 elseif guild < bucket.guild then
                     bucket.guild = guild
                 end
-                bucket.kills = bucket.kills + row.kills
-                if faction == "Horde" then bucket._facHorde = bucket._facHorde + row.kills
+                bucket.kills = bucket.kills + count
+                if faction == "Horde" then bucket._facHorde = bucket._facHorde + count
                 elseif faction == "Alliance" then
-                    bucket._facAlliance = bucket._facAlliance + row.kills
+                    bucket._facAlliance = bucket._facAlliance + count
                 end
             end
-            yieldWork()
-        end
+        end) then return end
         local sortedGuilds = {}
         for _, bucket in pairs(guildBuckets) do
             local voted = ""
@@ -1759,10 +1762,10 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             sortedGuilds[#sortedGuilds + 1] = bucket
             yieldWork()
         end
-        table.sort(sortedGuilds, function(a, b)
+        sortRowsWithYield(sortedGuilds, function(a, b)
             if a.kills ~= b.kills then return a.kills > b.kills end
             return (a.guild or "") < (b.guild or "")
-        end)
+        end, yieldWork)
 
         if self._dedupMetaIndex ~= state.metaIndex then
             state.aborted = true
@@ -2836,10 +2839,11 @@ function Overlord.Leaderboard:ForceUpdateLocalPlayer(playerName, class, faction)
     local previousFaction = prev and prev.faction or ""
     -- factionAt : derniere info connue (swap milieu de campagne + sync)
     local locTag = (Overlord.GetClientLocaleTag and Overlord:GetClientLocaleTag()) or ""
-    local guildRaw = (Overlord.SafeGetGuildInfo and Overlord:SafeGetGuildInfo("player")) or ""
-    local guildTag = sanitizeGuildName(guildRaw)
+    local identity = Overlord:GetLocalGuildIdentity()
+    local guildTag = identity == nil and sanitizeGuildName(prev and prev.guild)
+        or sanitizeGuildName(identity)
     local poolTag = normalizeSavedVarsPool(Overlord:GetCurrentSavedVarsPool() or "")
-    local guildAt = (guildTag ~= "") and time() or 0
+    local guildAt = identity == nil and normalizeGuildAt(prev and prev.guildAt) or time()
     local raceFile = (prev and prev.race) or ""
     local raceSex = (prev and tonumber(prev.raceSex)) or 0
     local raceAt = (prev and tonumber(prev.raceAt)) or 0
@@ -2863,7 +2867,7 @@ function Overlord.Leaderboard:ForceUpdateLocalPlayer(playerName, class, faction)
         factionAt = leaderboardServerNow(),
         locale = locTag,
         guild = guildTag,
-        guildAuth = (guildTag ~= "") and true or nil,
+        guildAuth = identity ~= nil or (prev and prev.guildAuth == true) or nil,
         guildAt = guildAt,
         pool = poolTag,
         race = raceFile,
@@ -2955,19 +2959,14 @@ local function lbMergeTwoPlayerInfoRows(self, bestKey, otherKey)
     local gO = sanitizeGuildName(iO.guild or "")
     local gAtT, gAtO = normalizeGuildAt(iT.guildAt), normalizeGuildAt(iO.guildAt)
     local mergedGuild, mergedGuildAuth, mergedGuildAt
-    if gT == gO then
-        mergedGuild = gT
-        mergedGuildAt = math.max(gAtT, gAtO)
-        mergedGuildAuth = ((iT.guildAuth == true or iO.guildAuth == true)
-            and mergedGuild ~= "") or nil
-    elseif guildLwwValueWins(gO, gAtO, gT, gAtT) then
+    if guildRecordWins(gO, gAtO, iO.guildAuth, gT, gAtT, iT.guildAuth) then
         mergedGuild = gO
         mergedGuildAt = gAtO
-        mergedGuildAuth = (iO.guildAuth == true and gO ~= "") or nil
+        mergedGuildAuth = iO.guildAuth == true or nil
     else
         mergedGuild = gT
         mergedGuildAt = gAtT
-        mergedGuildAuth = (iT.guildAuth == true and gT ~= "") or nil
+        mergedGuildAuth = iT.guildAuth == true or nil
     end
     local pT = normalizeSavedVarsPool(iT.pool)
     local pO = normalizeSavedVarsPool(iO.pool)
@@ -3107,7 +3106,7 @@ function Overlord.Leaderboard:SetPlayerGuild(playerName, guild, fromSync, author
                 }
                 NoteDedupCanonicalName(self, playerName)
             else
-                if incAt >= prevAt then prev.guildAt = incAt end
+                if not prev.guildAuth or incAt >= prevAt then prev.guildAt = incAt end
                 prev.guildAuth = true
             end
             if self:PatchDedupMetaGuildForPlayer(playerName, guild, true, false, incAt) then
@@ -3119,6 +3118,7 @@ function Overlord.Leaderboard:SetPlayerGuild(playerName, guild, fromSync, author
         if incAt <= prevAt then return end
     end
     if prev and prevGuild ~= guild
+        and not ((authoritative or prevGuild == "") and not prev.guildAuth)
         and not guildLwwValueWins(guild, incAt, prevGuild, prevAt) then
         return
     end
@@ -3163,17 +3163,17 @@ function Overlord.Leaderboard:ClearPlayerGuild(playerName, fromSync, verifiedOwn
     if type(row) ~= "table" then
         self.playerInfo[playerName] = {
             class = "", faction = "", factionAt = 0, locale = "", guild = "",
-            guildAt = clearedAt, pool = "",
+            guildAt = clearedAt, guildAuth = true, pool = "",
         }
         NoteDedupCanonicalName(self, playerName)
-    elseif clearedAt < previousAt then
+    elseif row.guildAuth == true and clearedAt < previousAt then
         return false
     else
-        if (row.guild or "") == "" and not row.guildAuth and clearedAt == previousAt then
+        if (row.guild or "") == "" and row.guildAuth == true and clearedAt == previousAt then
             return false
         end
         row.guild = ""
-        row.guildAuth = nil
+        row.guildAuth = true
         row.guildAt = clearedAt
         if row.pool == nil then row.pool = "" end
     end
@@ -3194,10 +3194,10 @@ function Overlord.Leaderboard:ClearPlayerGuild(playerName, fromSync, verifiedOwn
         end
         local bucketGuild = sanitizeGuildName(bucket.guild or "")
         local bucketAt = normalizeGuildAt(bucket.guildAt)
-        if (bucketGuild == "" and clearedAt > bucketAt)
+        if bucket.guildAuth ~= true or (bucketGuild == "" and clearedAt >= bucketAt)
             or guildLwwValueWins("", clearedAt, bucketGuild, bucketAt) then
             bucket.guild = ""
-            bucket.guildAuth = nil
+            bucket.guildAuth = true
             bucket.guildAt = clearedAt
             bucket._guildSeen = true
         end
@@ -3210,7 +3210,9 @@ end
 
 function Overlord.Leaderboard:UpdateLocalPlayerGuild()
     if Overlord.InstanceSuspended or not Overlord.SafeGetGuildInfo then return end
-    local guild = sanitizeGuildName(Overlord:SafeGetGuildInfo("player"))
+    local identity = Overlord:GetLocalGuildIdentity()
+    if identity == nil then return end
+    local guild = sanitizeGuildName(identity)
     local sync = Overlord.Sync
     local fullName = (sync and sync.GetPlayerFullName and sync:GetPlayerFullName()) or nil
     if not fullName or fullName == "" then return end
@@ -3536,7 +3538,7 @@ function Overlord.Leaderboard:MergeLeaderboardKillMetadata(
 
     if faction == "Alliance" or faction == "Horde" then
         local currentFaction = row.faction or ""
-        if currentFaction == "" or currentFaction == faction or faction < currentFaction then
+        if currentFaction == "" or currentFaction == faction or guildAuthoritative == true then
             if currentFaction ~= faction then
                 row.faction = faction
                 row.factionAt = leaderboardServerNow()
@@ -3557,26 +3559,30 @@ function Overlord.Leaderboard:MergeLeaderboardKillMetadata(
         end
     end
 
-    if hasGuildRegister then
+    if hasGuildRegister and (guildAuthoritative == true
+        or (sanitizeGuildName(row.guild or "") == "" and row.guildAuth ~= true
+            and sanitizeGuildName(guild or "") ~= "")) then
         local incomingGuild = sanitizeGuildName(guild or "")
         local incomingAt = normalizeGuildAt(guildAt)
         if incomingAt <= leaderboardServerNow() + 300 then
             local currentGuild = sanitizeGuildName(row.guild or "")
             local currentAt = normalizeGuildAt(row.guildAt)
             local wins = false
-            if incomingGuild:lower() == currentGuild:lower() then
+            if row.guildAuth ~= true
+                and (guildAuthoritative == true or currentGuild == "") then
+                wins = true
+            elseif incomingGuild:lower() == currentGuild:lower() then
                 wins = incomingAt > currentAt
                     or (incomingAt == currentAt and incomingGuild < currentGuild)
             else
-                wins = guildLwwValueWins(
-                    incomingGuild, incomingAt, currentGuild, currentAt)
+                wins = guildLwwValueWins(incomingGuild, incomingAt, currentGuild, currentAt)
             end
             if wins then
                 row.guild = incomingGuild
                 row.guildAt = incomingAt
-                row.guildAuth = guildAuthoritative == true and incomingGuild ~= "" or nil
+                row.guildAuth = guildAuthoritative == true or nil
                 changed = true
-            elseif incomingGuild ~= "" and incomingGuild:lower() == currentGuild:lower()
+            elseif incomingGuild:lower() == currentGuild:lower()
                 and guildAuthoritative == true and row.guildAuth ~= true then
                 row.guildAuth = true
                 changed = true
@@ -3653,23 +3659,21 @@ function Overlord.Leaderboard:MergeOwnedGuildMetadata(playerName, guild, guildAt
     local currentAt = normalizeGuildAt(row.guildAt)
     local sameGuild = incomingGuild:lower() == currentGuild:lower()
     local valueWins
-    if sameGuild then
+    if row.guildAuth ~= true then
+        valueWins = true
+    elseif sameGuild then
         valueWins = incomingAt > currentAt
             or (incomingAt == currentAt and incomingGuild < currentGuild)
     else
         valueWins = guildLwwValueWins(incomingGuild, incomingAt, currentGuild, currentAt)
     end
-    local authorityOnly = sameGuild and incomingGuild ~= "" and row.guildAuth ~= true
+    local authorityOnly = sameGuild and row.guildAuth ~= true
     if not valueWins and not authorityOnly then return false end
     if valueWins then
         row.guild = incomingGuild
         row.guildAt = incomingAt
     end
-    if incomingGuild ~= "" then
-        row.guildAuth = true
-    elseif valueWins then
-        row.guildAuth = nil
-    end
+    row.guildAuth = true
     self:MarkMetaDirty()
     return true
 end
@@ -4000,16 +4004,16 @@ function Overlord.Leaderboard:HealPropagateGuildAcrossDedupAliases(yieldWork)
                     local candidate = {
                         guild = g,
                         guildAt = guildAt,
-                        guildAuth = inf.guildAuth == true and g ~= "",
+                        guildAuth = inf.guildAuth == true,
                         rank = guildAliasRank(k, self),
                     }
                     local previous = bestByDk[dkKey]
                     local sameValue = previous
                         and previous.guild:lower() == candidate.guild:lower()
                         and previous.guildAt == candidate.guildAt
-                    if not previous or guildLwwValueWins(
-                        candidate.guild, candidate.guildAt,
-                        previous.guild, previous.guildAt) then
+                    if not previous or guildRecordWins(
+                        candidate.guild, candidate.guildAt, candidate.guildAuth,
+                        previous.guild, previous.guildAt, previous.guildAuth) then
                         bestByDk[dkKey] = candidate
                     elseif sameValue then
                         previous.guildAuth = previous.guildAuth or candidate.guildAuth
@@ -4030,7 +4034,7 @@ function Overlord.Leaderboard:HealPropagateGuildAcrossDedupAliases(yieldWork)
                 if best then
                     local cur = sanitizeGuildName(inf.guild or "")
                     local curAt = normalizeGuildAt(inf.guildAt)
-                    local curAuth = inf.guildAuth == true and cur ~= ""
+                    local curAuth = inf.guildAuth == true
                     if cur:lower() ~= best.guild:lower()
                         or curAt ~= best.guildAt or curAuth ~= best.guildAuth then
                         inf.guild = best.guild
@@ -7877,7 +7881,7 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
                 factionAt = math.max(0, math.floor(tonumber(info.factionAt) or 0)),
                 locale = snapshotLocale,
                 guild = snapshotGuild,
-                guildAuth = (info.guildAuth == true and snapshotGuild ~= "") or nil,
+                guildAuth = info.guildAuth == true or nil,
                 guildAt = snapshotGuildAt,
                 pool = snapshotPool,
                 race = snapshotRace,
@@ -7899,10 +7903,11 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
                 end
                 local currentGuild = sanitizeGuildName(current.guild or "")
                 local currentGuildAt = normalizeGuildAt(current.guildAt)
-                if type(info.guild) == "string" and guildLwwValueWins(
-                    snapshotGuild, snapshotGuildAt, currentGuild, currentGuildAt) then
+                if type(info.guild) == "string" and guildRecordWins(
+                    snapshotGuild, snapshotGuildAt, info.guildAuth,
+                    currentGuild, currentGuildAt, current.guildAuth) then
                     current.guild = snapshotGuild
-                    current.guildAuth = (info.guildAuth == true and snapshotGuild ~= "") or nil
+                    current.guildAuth = info.guildAuth == true or nil
                     current.guildAt = snapshotGuildAt
                     dirty = true
                 end

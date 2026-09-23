@@ -381,14 +381,12 @@ function Overlord.Sync:MaybeRequestMissingGuild(playerName)
     local lb = Overlord.Leaderboard
     if lb then
         local direct = lb.playerInfo and lb.playerInfo[playerName]
-        local guild = direct and direct.guild or ""
-        if guild and guild ~= "" then return end
-        -- Un registre vide date est un tombstone autoritaire, pas une donnee
-        -- manquante. Ne pas lancer GR/GY pour tenter de ressusciter une ancienne guilde.
-        if direct and (tonumber(direct.guildAt) or 0) > 0 then return end
+        -- Seul un depart confirme par le personnage bloque le rattrapage.
+        -- Les anciens tombstones de relais pouvaient etre de fausses absences.
+        if direct and direct.guildAuth == true then return end
         if lb.GetHotPlayerGuildState then
-            guild = lb:GetHotPlayerGuildState(playerName)
-            if guild and guild ~= "" then return end
+            local _, _, authoritative = lb:GetHotPlayerGuildState(playerName)
+            if authoritative then return end
         end
     end
 
@@ -430,12 +428,12 @@ function Overlord.Sync:FlushGuildRequests()
     for name, _ in pairs(pendingGuildRequests) do
         local stillMissing = true
         local direct = lb and lb.playerInfo and lb.playerInfo[name]
-        if direct and (tonumber(direct.guildAt) or 0) > 0 then
+        if direct and direct.guildAuth == true then
             stillMissing = false
         end
         if lb and lb.GetHotPlayerGuildState then
-            local guild = lb:GetHotPlayerGuildState(name)
-            if guild and guild ~= "" then stillMissing = false end
+            local _, _, authoritative = lb:GetHotPlayerGuildState(name)
+            if authoritative then stillMissing = false end
         end
         if stillMissing then
             names[#names + 1] = name
@@ -455,9 +453,16 @@ function Overlord.Sync:FlushGuildRequests()
         local payload = table.concat(b, ",")
         if #payload > 0 and #payload <= CLASS_REQUEST_MAX_PAYLOAD then
             if self.WhisperCommunityMembersForContributorNames then
-                self:WhisperCommunityMembersForContributorNames("GR", payload, b, 0.5)
+                self:WhisperCommunityMembersForContributorNames("GR", payload, b, 0.5, false, true)
             end
-            if self.BroadcastToCommunity then
+            local needsPeerHints = false
+            for _, n in ipairs(b) do
+                local info = lb and lb.playerInfo and lb.playerInfo[n]
+                if not info or not info.guild or info.guild == "" then needsPeerHints = true; break end
+            end
+            -- Une guilde deja renseignee se verifie aupres du proprietaire. Un
+            -- broadcast de toutes les lignes non verifiees saturerait le rattrapage.
+            if needsPeerHints and self.BroadcastToCommunity then
                 self:BroadcastToCommunity("GR", payload, maxCommunity, 0.5)
             end
             for _, n in ipairs(b) do
@@ -510,16 +515,28 @@ function Overlord.Sync:OnReceiveGuildRequest(payload, sender, channel)
             trimmed = self:NormalizeContributorFullName(trimmed) or trimmed
             local lastAnswer = guildAnswerCooldowns[trimmed]
             if not (lastAnswer and (now - lastAnswer) < CLASS_ANSWER_COOLDOWN) then
-                local guild, _, guildAuth = lb:GetHotPlayerGuildState(trimmed)
-                if guild and guild ~= "" and self:IsValidGuildSyncToken(guild) then
-                    local entry = trimmed .. "|" .. guild
-                    local projected = (#answers == 0) and #entry or (#entry + 1)
-                    local currentLen = 0
-                    for _, e in ipairs(answers) do currentLen = currentLen + #e + 1 end
-                    if currentLen + projected <= maxPayload then
-                        answers[#answers + 1] = entry
-                        answersAuth[#answers] = guildAuth and "1" or "0"
+                if self:IsSenderLocalPlayer(trimmed) and self.BuildLocalGuildIdentityPayload then
+                    local identityPayload = self:BuildLocalGuildIdentityPayload()
+                    if identityPayload then
                         guildAnswerCooldowns[trimmed] = now
+                        C_Timer.After(math.random(100, CLASS_REQUEST_RESPONSE_JITTER_MAX) / 1000, function()
+                            if Overlord.Sync and not Overlord.InstanceSuspended then
+                                Overlord.Sync:SendWhisper("GI", identityPayload, sender)
+                            end
+                        end)
+                    end
+                else
+                    local guild, _, guildAuth = lb:GetHotPlayerGuildState(trimmed)
+                    if guild and guild ~= "" and self:IsValidGuildSyncToken(guild) then
+                        local entry = trimmed .. "|" .. guild
+                        local projected = (#answers == 0) and #entry or (#entry + 1)
+                        local currentLen = 0
+                        for _, e in ipairs(answers) do currentLen = currentLen + #e + 1 end
+                        if currentLen + projected <= maxPayload then
+                            answers[#answers + 1] = entry
+                            answersAuth[#answers] = guildAuth and "1" or "0"
+                            guildAnswerCooldowns[trimmed] = now
+                        end
                     end
                 end
             end
@@ -576,18 +593,18 @@ function Overlord.Sync:OnReceiveGuildAnswer(payload, sender, channel)
             if name ~= "" then
                 if clearAt then
                     local clearTs = math.floor(tonumber(clearAt) or 0)
-                    if clearTs > 0 and lb.ClearPlayerGuild then
+                    local owned = self.KillSyncSenderOwnsPlayer
+                        and self:KillSyncSenderOwnsPlayer(sender, name)
+                    if owned and clearTs > 0 and lb.ClearPlayerGuild then
                         if lb:ClearPlayerGuild(name, true, true, clearTs) then updated = true end
                     end
                 else
-                -- GY/SR est un hint sans timestamp : il peut remplir une absence mais jamais
-                -- ecraser un fait GI/K/LK horodate. Tous les recepteurs appliquent ainsi la
-                -- meme fusion lexicale, sans observation ni table de votes locale.
-                if lb.ShouldAcceptSyncedGuild
-                    and lb:ShouldAcceptSyncedGuild(name, guild, 0) then
-                    lb:SetPlayerGuild(name, guild, true, false, 0, false)
-                    updated = true
-                end
+                    -- GY/SR est un hint : remplir une absence non confirmee uniquement.
+                    if lb.ShouldAcceptSyncedGuild
+                        and lb:ShouldAcceptSyncedGuild(name, guild, 0) then
+                        lb:SetPlayerGuild(name, guild, true, false, 0, false)
+                        updated = true
+                    end
                 end
             end
         end
@@ -654,8 +671,8 @@ function Overlord.Sync:HealRequestMissingGuildsFromDB()
     StartMissingIdentityHeal(self, "_missingGuildHealToken", { lb.kills or {} }, maxAsked,
         guildResolutionCanBroadcast,
         function(name)
-            local guild = lb:GetHotPlayerGuildState(name)
-            return not guild or guild == ""
+            local _, _, authoritative = lb:GetHotPlayerGuildState(name)
+            return not authoritative
         end,
         Overlord.Sync.MaybeRequestMissingGuild)
 end
@@ -684,17 +701,13 @@ local GI_IDENTITY_MIN_GAP = 600
 local lastGuildIdentityBroadcastAt = 0
 local guildIdentityHeartbeatActive = false
 
-function Overlord.Sync:BroadcastGuildIdentity(force)
+function Overlord.Sync:BuildLocalGuildIdentityPayload()
     if Overlord.InstanceSuspended or IsInInstance() then return end
-    if not resolutionCanBroadcast() then return end
-    local now = GetTime()
-    if not force and lastGuildIdentityBroadcastAt > 0
-        and (now - lastGuildIdentityBroadcastAt) < GI_IDENTITY_MIN_GAP then
-        return
-    end
     local lb = Overlord.Leaderboard
     if not lb or not Overlord.SafeGetGuildInfo then return end
-    local guild = (Overlord:SafeGetGuildInfo("player") or ""):gsub("[|=:,]", ""):match("^%s*(.-)%s*$") or ""
+    local identity = Overlord:GetLocalGuildIdentity()
+    if identity == nil then return end
+    local guild = identity:gsub("[|=:,]", ""):match("^%s*(.-)%s*$") or ""
     if #guild > 24 then return end
     if guild ~= "" and (not self.IsValidGuildSyncToken or not self:IsValidGuildSyncToken(guild)) then return end
     local playerName = self.GetPlayerFullName and self:GetPlayerFullName()
@@ -721,6 +734,17 @@ function Overlord.Sync:BroadcastGuildIdentity(force)
     end
     local payload = string.format("%s:%s:%s:%s", playerName, guild, epoch, math.floor(guildAt))
     if #payload > CLASS_REQUEST_MAX_PAYLOAD then return end
+    return payload
+end
+
+function Overlord.Sync:BroadcastGuildIdentity(force)
+    if Overlord.InstanceSuspended or IsInInstance() then return end
+    if not resolutionCanBroadcast() then return end
+    local now = GetTime()
+    if not force and lastGuildIdentityBroadcastAt > 0
+        and (now - lastGuildIdentityBroadcastAt) < GI_IDENTITY_MIN_GAP then return end
+    local payload = self:BuildLocalGuildIdentityPayload()
+    if not payload then return end
     lastGuildIdentityBroadcastAt = now
     if self.Send then self:Send("GI", payload) end
     if self.BroadcastToCommunity then

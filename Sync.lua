@@ -1022,11 +1022,11 @@ end
 function Overlord.Sync:ForeverCharacterBase(name)
     name = self:NormalizeContributorFullName(name) or name
     if type(name) ~= "string" then return nil end
-    name = name:match("^%s*(.-)%s*$") or ""
+    name = name:match("^[ \t\r\n]*(.-)[ \t\r\n]*$") or ""
     if name == "" or #name > 80 then return nil end
     local hyphen = name:find("-", 1, true)
     local base = hyphen and name:sub(1, hyphen - 1) or name
-    base = (base:match("^%s*(.-)%s*$") or ""):gsub("%s+", " ")
+    base = (base:match("^[ \t\r\n]*(.-)[ \t\r\n]*$") or ""):gsub("[ \t\r\n]+", " ")
     if base == "" then return nil end
     return base
 end
@@ -1065,14 +1065,14 @@ function Overlord.Sync:IsForeverCharacterName(name)
     if type(name) ~= "string" then return false end
     name = self:NormalizeContributorFullName(name) or name
     if type(name) ~= "string" or name == "" or #name > 80 then return false end
-    if name ~= (name:match("^%s*(.-)%s*$") or "") then return false end
+    if name ~= (name:match("^[ \t\r\n]*(.-)[ \t\r\n]*$") or "") then return false end
     if name:find("[%c|:]") then return false end
     local hyphen = name:find("-", 1, true)
     if hyphen and (hyphen == 1 or hyphen == #name
         or name:find("-", hyphen + 1, true)) then return false end
     local base = hyphen and name:sub(1, hyphen - 1) or name
-    base = (base:match("^%s*(.-)%s*$") or ""):gsub("%s+", " ")
-    local given, family = base:match("^([^%s]+)%s([^%s]+)$")
+    base = (base:match("^[ \t\r\n]*(.-)[ \t\r\n]*$") or ""):gsub("[ \t\r\n]+", " ")
+    local given, family = base:match("^([^ ]+) ([^ ]+)$")
     if not given or not family then return false end
     if not self:IsValidPlayerNameSegment(given, 24, false)
         or not self:IsValidPlayerNameSegment(family, 24, false) then
@@ -1284,10 +1284,10 @@ end
 -- Sinon cle "Nom-Royaume|WARRIOR" != "Nom-Royaume" et l'export Check PvP remplace | par "_" (lignes grises).
 function Overlord.Sync:StripPipeLeakFromContributorName(name)
     if type(name) ~= "string" then return name end
-    name = name:match("^%s*(.-)%s*$") or name
+    name = name:match("^[ \t\r\n]*(.-)[ \t\r\n]*$") or name
     local p = name:find("|", 1, true)
     if p then
-        name = name:sub(1, p - 1):match("^%s*(.-)%s*$") or name:sub(1, p - 1)
+        name = name:sub(1, p - 1):match("^[ \t\r\n]*(.-)[ \t\r\n]*$") or name:sub(1, p - 1)
     end
     return name
 end
@@ -8307,6 +8307,8 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
         and self:IsValidGuildSyncToken(guildTag)
     local hasGuildRegister = validGuildRegister or guildAt > 0
     if not self:AuthorizeLeaderboardSubject("LK", playerName, sender, channel) then return end
+    local guildOwner = self.KillSyncSenderOwnsPlayer
+        and self:KillSyncSenderOwnsPlayer(sender, playerName) or false
     local observedLevelEligible = self.IsObservedPlayerKillLevelEligible
         and self:IsObservedPlayerKillLevelEligible(playerName)
     if observedLevelEligible == false then return end
@@ -8319,7 +8321,7 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
             localeClaimVerified and locTag or nil,
             validGuildRegister and guildTag or "",
             guildAt,
-            hasGuildRegister)
+            hasGuildRegister, nil, nil, nil, guildOwner)
     elseif Overlord.Leaderboard.SetPlayerLevel then
         Overlord.Leaderboard:SetPlayerLevel(playerName, levelToken)
     end
@@ -8340,17 +8342,17 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
         and not Overlord.Leaderboard.MergeLeaderboardKillMetadata then
         Overlord.Leaderboard:SetPlayerLocale(playerName, locTag)
     end
-    -- Un LK peut relayer la ligne d'un tiers : la guilde est un hint horodate,
-    -- non autoritaire, fusionne deterministement comme en 9.3.1.
+    -- Un LK tiers peut remplir une guilde inconnue. Seul le personnage concerne
+    -- peut confirmer un changement ou un depart.
     if not Overlord.Leaderboard.MergeLeaderboardKillMetadata
         and guildTag and guildTag ~= "" and self:IsValidGuildSyncToken(guildTag)
         and Overlord.Leaderboard.SetPlayerGuild then
         Overlord.Leaderboard:SetPlayerGuild(
-            playerName, guildTag, true, false, guildAtStr, false)
+            playerName, guildTag, true, guildOwner, guildAtStr, guildOwner)
     elseif not Overlord.Leaderboard.MergeLeaderboardKillMetadata
-        and tonumber(guildAtStr) and tonumber(guildAtStr) > 0
+        and guildOwner and tonumber(guildAtStr) and tonumber(guildAtStr) > 0
         and Overlord.Leaderboard.ClearPlayerGuild then
-        -- Le tombstone voyage dans LK avec le meme registre LWW que la guilde non vide.
+        -- Le depart doit provenir du personnage concerne.
         Overlord.Leaderboard:ClearPlayerGuild(playerName, true, true, guildAtStr)
     end
     -- MaybeRequestMissingGuild verifie deja la guilde connue en interne (pas de pre-check O(N)).
@@ -8702,8 +8704,15 @@ function Overlord.Sync:BroadcastKill(zoneId, totalKills, killScoringAtEvent,
             local totalKills = (Overlord.Leaderboard and Overlord.Leaderboard.kills
                 and Overlord.Leaderboard.kills[playerName]) or d.totalKills
             local locTag = (Overlord.GetClientLocaleTag and Overlord:GetClientLocaleTag()) or ""
-            local guildTag = Overlord.SafeGetGuildInfo and (Overlord:SafeGetGuildInfo("player") or "") or ""
+            local guildTag = Overlord:GetLocalGuildIdentity()
             local guildAt = time()
+            if guildTag == nil then
+                -- Une lecture indisponible ne publie jamais un depart de guilde.
+                local known = Overlord.Leaderboard and Overlord.Leaderboard.playerInfo
+                    and Overlord.Leaderboard.playerInfo[playerName]
+                guildTag = known and known.guild or ""
+                guildAt = known and tonumber(known.guildAt) or 0
+            end
             local playerLevel = Overlord.SafeUnitLevel
                 and (Overlord:SafeUnitLevel("player") or 0) or 0
             if Overlord.Leaderboard and Overlord.Leaderboard.SetPlayerLevel then

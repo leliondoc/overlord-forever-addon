@@ -142,6 +142,10 @@ assert(sync:ForeverIdentitiesMatch("TromaOrcbane", "Troma Orcbane"))
 assert(not sync:ForeverIdentitiesMatch("Troma", "Troma Orcbane"))
 assert(not sync:ForeverIdentitiesMatch("Troma Orcbane", "Troma Other"))
 assert(sync:IsValidWhisperTarget("Élodie Marteau"))
+-- Some Windows C locales classify UTF-8 continuation byte 0xA0 as whitespace.
+-- Identity normalization must trim ASCII separators without breaking accents.
+assert(sync:CanonicalForeverName("Shàter Dogx") == "Shàter Dogx")
+assert(sync:CanonicalForeverName("  Àlbert Chàrlà  ") == "Àlbert Chàrlà")
 assert(sync:IsValidWhisperTarget("Иван Воин"))
 assert(not sync:IsValidWhisperTarget("Troma Orcbane:payload"))
 assert(sync:GetMyBand() == "Forever_global_H")

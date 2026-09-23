@@ -1,4 +1,14 @@
-1.0.9
+1.0.10
+
+**Overlord Forever 1.0.10**
+
+- Count outdoor Blizzard honorable kills once, without extra killing-blow, guessed-enemy or featured-front x2 credits. Keep the featured-front coin reward and preserve existing campaign totals.
+- Sum guild totals across all known members, including players outside the top 200; preserve guild membership while the game API is still loading.
+- Prevent third-party leaderboard relays and legacy pool merges from reassigning owner-confirmed guilds or factions and from clearing membership. Owner declarations can repair older relayed mistakes; confirmed departures remain protected after reload.
+- Recheck unverified guilds with reachable owners, without duplicate queries or searching the beta mesh for offline characters.
+- Rename the fictional mine currency to coins throughout all five interface languages, including HUD, map tooltips, notifications, costs and the featured front. Real gold contracts and donations retain their game-currency labels.
+- Enforce the shared US beta campaign anchor, reject interrupted regional resets, and avoid a false weekly reset when SavedVariables did not load.
+- Slice the full guild ranking sort and legacy settlement migration across frames. Add stress coverage for 10,000 players/guilds, 1,000 aliases and 5,000 historical settlements.
 
 **Overlord Forever 1.0.9**
 

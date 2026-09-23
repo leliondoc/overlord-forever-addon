@@ -2,6 +2,8 @@
 assert(loadfile("tests/forever_leaderboard.test.lua"))()
 local instanced, instanceType, level = false, "none", 2
 local killerGUID = "Player-1-LOCAL"
+local hk = 10
+function GetPVPSessionStats() return hk, 0 end
 function IsInInstance() return instanced, instanceType end
 function GetInstanceInfo() return nil, instanceType, nil, nil, nil, nil, nil, 99999 end
 function UnitLevel() return level end
@@ -32,6 +34,7 @@ Overlord.Sync.BroadcastKill = function(_, zoneId, total, eligible)
 end
 assert(loadfile("CombatTracker.lua"))()
 local me = Overlord.Sync:GetPlayerFullName()
+Overlord.Combat:OnPVPKillsChanged("player")
 for _, value in ipairs({ 1, 2, 10, 59, 60 }) do
     level = value
     assert(Overlord:IsKillScoringActive(), "Outdoor kill blocked at level " .. value)
@@ -46,6 +49,8 @@ assert(not Overlord.Sync:IsEligibleKillContributorLevel("invalid"))
 assert(not Overlord.Sync:IsEligibleKillContributorLevel(1.5))
 level = 2
 Overlord.Combat:OnPartyKillEvent(killerGUID, "Player-2-ENEMY")
+hk = 11
+Overlord.Combat:OnPVPKillsChanged("player")
 assert(Overlord.Leaderboard.kills[me] == 1, "Level 2 outdoor PvP kill was not counted")
 assert(sent and sent.zoneId == "" and sent.total == 1 and sent.eligible,
     "Kill outside fronts was not broadcast")
@@ -57,6 +62,8 @@ for _, kind in ipairs({ "pvp", "arena", "party", "raid", "scenario" }) do
     instanced, instanceType = true, kind
     assert(not Overlord:IsKillScoringActive(), "Instanced combat was accepted: " .. kind)
     Overlord.Combat:OnPartyKillEvent(killerGUID, "Player-2-" .. kind)
+    hk = hk + 1
+    Overlord.Combat:OnPVPKillsChanged("player")
     assert(Overlord.Leaderboard.kills[me] == 1, "Instance kill changed the score")
 end
 instanced, instanceType = false, "pvp"
