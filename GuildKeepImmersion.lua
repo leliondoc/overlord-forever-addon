@@ -430,7 +430,7 @@ function GKI:OnDailyDefense(siteKey, guild, faction, defenseTs, tenantClaimedAt,
     if not alreadyDefendedToday then
         if ch.guild == guild then
             -- Une capture puis sa restauration causale le meme jour ne vaut pas deux jours.
-            if not revertedCapture then
+            if not revertedCapture and tostring(ch.lastSiegeDay):sub(1, 8) ~= dayKey:sub(1, 8) then
                 ch.daysHeld = math.max(1, (tonumber(ch.daysHeld) or 0) + 1)
             end
         else
@@ -594,8 +594,7 @@ function GKI:TryVigilMessages()
     local loc = L()
     if not gk or not loc or not gk.GetSiegeReminderStartMinute then return end
     if Overlord.InstanceSuspended then return end
-    local minute = GetServerMinuteOfDay()
-    if minute < gk:GetSiegeReminderStartMinute() or minute >= gk:GetSiegeWindowStartMinute() then
+    if not gk:IsSiegeReminderWindow() then
         return
     end
     if not self:EnsureDB() then return end

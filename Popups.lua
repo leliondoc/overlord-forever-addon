@@ -154,28 +154,33 @@ function Overlord.Popups:PersistSeenFlags()
 end
 
 -- Cle calendaire (premiere connexion du jour, heure client WoW).
-function Overlord.Popups:GetCalendarDayKey()
+function Overlord.Popups:GetCalendarDayKey(id)
+    if id == GUILD_KEEP_REMINDER_POPUP_ID and Overlord.GuildKeep
+        and Overlord.GuildKeep.GetServerSiegeDayKey then
+        return Overlord.GuildKeep:GetServerSiegeDayKey()
+    end
     return date("%Y%m%d", time())
 end
 
 function Overlord.Popups:HasShownToday(id)
     if not id or not OverlordDB or not OverlordDB.config then return true end
     local daily = OverlordDB.config.popupsDailyShown
-    return daily and daily[id] == self:GetCalendarDayKey()
+    return daily and daily[id] == self:GetCalendarDayKey(id)
 end
 
 function Overlord.Popups:MarkShownToday(id)
     if not id or not OverlordDB then return end
     OverlordDB.config = OverlordDB.config or {}
     OverlordDB.config.popupsDailyShown = OverlordDB.config.popupsDailyShown or {}
-    OverlordDB.config.popupsDailyShown[id] = self:GetCalendarDayKey()
+    OverlordDB.config.popupsDailyShown[id] = self:GetCalendarDayKey(id)
 end
 
 function Overlord.Popups:HasShownFeaturedFrontToday()
     if not FEATURED_FRONT_POPUP_ID or not OverlordDB or not OverlordDB.config then return true end
     local gk = Overlord.GuildKeep
     if not gk or not gk.GetServerSiegeDayKey then return true end
-    local dayKey = gk:GetServerSiegeDayKey()
+    local dayKey = gk.GetServerCalendarDayKey and gk:GetServerCalendarDayKey()
+        or gk:GetServerSiegeDayKey()
     local daily = OverlordDB.config.popupsDailyShown
     return daily and daily[FEATURED_FRONT_POPUP_ID] == dayKey
 end
@@ -186,7 +191,8 @@ function Overlord.Popups:MarkFeaturedFrontShownToday()
     if not gk or not gk.GetServerSiegeDayKey then return end
     OverlordDB.config = OverlordDB.config or {}
     OverlordDB.config.popupsDailyShown = OverlordDB.config.popupsDailyShown or {}
-    OverlordDB.config.popupsDailyShown[FEATURED_FRONT_POPUP_ID] = gk:GetServerSiegeDayKey()
+    OverlordDB.config.popupsDailyShown[FEATURED_FRONT_POPUP_ID] =
+        gk.GetServerCalendarDayKey and gk:GetServerCalendarDayKey() or gk:GetServerSiegeDayKey()
 end
 
 -- Ecrit le flag one-shot / quotidien des que la popup est affichee, pas a la
@@ -1057,6 +1063,7 @@ end
 
 local function IsGuildKeepReminderWindow()
     local gk = Overlord.GuildKeep
+    if gk and gk.IsSiegeReminderWindow then return gk:IsSiegeReminderWindow() end
     if not gk or not gk.GetSiegeReminderStartMinute or not gk.GetSiegeWindowStartMinute then
         return false
     end

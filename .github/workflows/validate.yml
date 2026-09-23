@@ -57,6 +57,8 @@ jobs:
           lua5.1 tests/forever_kill_row_removal.test.lua
           lua5.1 tests/forever_resource_maps.test.lua
           lua5.1 tests/forever_capture_locations.test.lua
+          lua5.1 tests/forever_siege_schedule.test.lua
+          lua5.1 tests/forever_silverpine_outpost.test.lua
           lua5.1 tests/forever_beta_network.test.lua
           lua5.1 tests/forever_beta_integration.test.lua
           lua5.1 tests/forever_beta_catchup.test.lua

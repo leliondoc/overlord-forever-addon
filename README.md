@@ -113,14 +113,15 @@ fronts, bonus, stocks) empruntent également ce réseau.
 ### Guild Keep
 
 - Fortins de guilde sur des zones dédiées (Serres-Rocheuses, Les Paluns, Terres Ingrates, La Croisée, Les Carmines, Mulgore).
-- Capture intra-guilde, fenêtre horaire de vulnérabilité, sync dédiée (`GK`).
+- Capture intra-guilde, toutes les 6 heures : **03h–04h, 09h–10h, 15h–16h et 21h–22h, heure serveur**. Une victoire par fortin et par siège, avec rappels et synchronisation dédiés (`GK`).
 
 ### Autres systèmes
 
 - **Victoires honorables Blizzard (VH)** en monde ouvert, à tous les niveaux : une hausse du compteur officiel donne exactement autant de crédits. Les coups fatals et les cibles supposées à la mort ne donnent aucun crédit supplémentaire. Le front du jour ajoute seulement de l’or. Les instances (BG, arènes, donjons et raids) sont exclues.
-- Les totaux de guilde additionnent les VH de tous les membres connus, y compris hors du top 200 joueurs. Ce ne sont pas des victimes uniques. Une guilde temporairement indisponible au chargement ne supprime plus le rattachement connu.
+- Le classement des kills affiche jusqu'à 5 000 joueurs. Le tri est réparti en tranches et seules les lignes visibles sont dessinées pour limiter le travail par image.
+- Les totaux de guilde additionnent les VH de tous les membres connus. Ce ne sont pas des victimes uniques. Une guilde temporairement indisponible au chargement ne supprime plus le rattachement connu.
 - Pendant la bêta, tous les comptes utilisent la même semaine américaine (mardi 08:00 UTC, ancre commune de l’addon). Aucun reset EU le mercredi. Une sauvegarde absente au login ne déclenche plus de faux reset hebdomadaire.
-- **Avant-postes** sur les quatre fronts.
+- **Avant-postes** sur les quatre fronts et **Savix Chapel** dans la forêt des Pins-Argentés (61,8 / 64,4), capturable en permanence.
 - Appel de faction pour alerter les alliés accessibles par les passerelles de synchronisation.
 - **Commandant** : rôle du chef de groupe sur un front, position sur la carte/minimap,
   badge de nameplate et libération du rôle à la mort ou à la perte du commandement.

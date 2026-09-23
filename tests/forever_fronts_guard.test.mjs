@@ -44,7 +44,7 @@ test("TOC Forever 16001 and CurseForge 1701204", () => {
 test("Outposts match the four Forever fronts", () => {
     assert.match(outpost, /frontId = "arathi"/);
     assert.match(outpost, /center = \{ 33\.3, 27\.8 \}/);
-    assert.match(outpost, /center = \{ 50\.5, 67\.8 \}/);
+    assert.match(outpost, /loch_modan = \{[\s\S]*?center = \{ 40\.3, 39\.4 \}/);
     assert.match(outpost, /center = \{ 47\.8, 49\.6 \}/);
     assert.match(outpost, /center = \{ 29\.0, 32\.0 \}/);
     assert.match(outpost, /frontId = "ashenvale"/);

@@ -42,8 +42,21 @@ local function currentOutpostPoolTag()
     return ""
 end
 
--- Registre : un avant-poste par front Forever. Coords = cartes vanilla (pas Retail Cata).
+-- Un avant-poste par front Forever, plus les sites autonomes en monde ouvert.
 Overlord.OutpostSites = {
+    silverpine = {
+        id = "silverpine_outpost",
+        siteKey = "silverpine",
+        displayNameKey = "OUTPOST_SILVERPINE_NAME",
+        standaloneOpenWorld = true,
+        mapID = 1421,
+        mapIDs = { [21] = true, [1421] = true },
+        displayMapIDs = { [21] = true, [1421] = true },
+        includeChildMaps = false,
+        mapNameNeedles = { "silverpine", "pins-argent", "silberwald", "argenteos" },
+        center = { 61.8, 64.4 },
+        halfSize = 1.35,
+    },
     arathi = {
         id = "arathi_outpost",
         siteKey = "arathi",
@@ -64,8 +77,8 @@ Overlord.OutpostSites = {
         mapID = 1432,
         mapIDs = { [48] = true, [1432] = true },
         mapNameNeedles = { "loch modan", "loch" },
-        -- Retraite de Katrell : rive sud du Loch, pas dans l'eau (40.3, 39.4 = lac vanilla).
-        center = { 50.5, 67.8 },
+        -- Retraite de Katrell : emplacement Retail restaure sur demande.
+        center = { 40.3, 39.4 },
         halfSize = 1.35,
     },
     durotar = {

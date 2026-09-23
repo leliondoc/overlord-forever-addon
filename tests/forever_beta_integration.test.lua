@@ -68,7 +68,7 @@ Overlord.Outpost = {
     ApplyRemoteState = function(_, _, state) outpost = state; return false end,
 }
 s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(4, "GK",
-    "v8:fixture:neutral:0:::0:" .. time() .. ":120:eu:0:::0::0:0:0:"), 123)
+    "v9:fixture:neutral:0:::0:" .. time() .. ":120:eu:0:::0::0:0:0:"), 123)
 assert(keep and keep.pool == "global" and keep.communitySource, "Real keep receiver rejected routed snapshot")
 s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(5, "OP",
     "v1:fixture:neutral:0:::0:0:" .. time() .. ":120:eu:0"), 123)

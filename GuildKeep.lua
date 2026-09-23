@@ -9,6 +9,11 @@ Overlord.GuildKeep.DEFAULT_HOLD_TIME_REQUIRED = KEEP_CAPTURE_SECONDS
 local SIEGE_WINDOW_EU_START_MINUTE = 21 * 60
 local SIEGE_WINDOW_US_START_MINUTE = 18 * 60 -- 18h00 Pacifique (pool us), pas GetGameTime / heure royaume
 local SIEGE_WINDOW_DURATION_MINUTE = 60 -- 1h
+local SIEGE_INTERVAL_MINUTE = 6 * 60
+local SIEGE_FIRST_START_MINUTE = 3 * 60
+-- Fixed rollout boundary: historical daily proofs retain their original calendar.
+local SIX_HOUR_SIEGES_SINCE = 1790180264 -- 2026-09-23 16:17:44 UTC
+Overlord.GuildKeep.SIX_HOUR_SIEGES_SINCE = SIX_HOUR_SIEGES_SINCE
 -- Fortin neutre / non tenu (fort vide ; les warfronts utilisent Empty-Tower)
 Overlord.GuildKeep.NEUTRAL_ATLAS = "Warfronts-BaseMapIcons-Empty-MainHall"
 local GUILD_KEEP_NEUTRAL_ATLAS = Overlord.GuildKeep.NEUTRAL_ATLAS
@@ -236,6 +241,9 @@ local function GetCentralEuropeanMinuteOfDay(ts)
 end
 
 local function GetServerMinuteOfDay(ts)
+    if (tonumber(ts) or GetUtcEpoch()) >= SIX_HOUR_SIEGES_SINCE then
+        return Overlord.GuildKeep:GetRealmMinuteOfDay(ts)
+    end
     local gk = Overlord.GuildKeep
     if gk and gk.IsUsSiegeSchedule and gk:IsUsSiegeSchedule() then
         return GetPacificMinuteOfDay(ts)
@@ -245,11 +253,36 @@ end
 
 local function GetServerCalendarForTimestamp(ts)
     ts = math.floor(tonumber(ts) or GetUtcEpoch())
+    if ts >= SIX_HOUR_SIEGES_SINCE then
+        return Overlord.GuildKeep:GetRealmCalendar(ts)
+    end
     local gk = Overlord.GuildKeep
     if gk and gk.IsUsSiegeSchedule and gk:IsUsSiegeSchedule() then
         return GetPacificCalendar(ts)
     end
     return GetCentralEuropeanCalendar(ts)
+end
+
+-- GetGameTime is the realm clock, independent of client language/OS timezone.
+local realmCalendarCache = {}
+function Overlord.GuildKeep:GetRealmCalendar(ts)
+    local now = GetUtcEpoch()
+    ts = math.floor(tonumber(ts) or now)
+    local hour, minute
+    if GetGameTime then hour, minute = GetGameTime() end
+    if not hour then return GetPacificCalendar(ts) end
+    local utcMinute = math.floor(now / 60) % 1440
+    local offset = (hour * 60 + minute - utcMinute) % 1440
+    if offset > 840 then offset = offset - 1440 end
+    if realmCalendarCache.ts ~= ts or realmCalendarCache.offset ~= offset then
+        realmCalendarCache = { ts = ts, offset = offset, value = date("!*t", ts + offset * 60) }
+    end
+    return realmCalendarCache.value
+end
+
+function Overlord.GuildKeep:GetRealmMinuteOfDay(ts)
+    local cal = self:GetRealmCalendar(ts)
+    return (tonumber(cal.hour) or 0) * 60 + (tonumber(cal.min) or 0)
 end
 
 function Overlord.GuildKeep:GetSiegeMinuteOfDay(ts)
@@ -262,22 +295,44 @@ function Overlord.GuildKeep:IsUsSiegeSchedule()
     return true
 end
 
-function Overlord.GuildKeep:GetSiegeWindowStartMinute()
+function Overlord.GuildKeep:GetSiegeWindowStartMinute(ts)
+    if (tonumber(ts) or GetUtcEpoch()) >= SIX_HOUR_SIEGES_SINCE then
+        local minute = GetServerMinuteOfDay(ts)
+        return SIEGE_FIRST_START_MINUTE
+            + math.floor((minute - SIEGE_FIRST_START_MINUTE) / SIEGE_INTERVAL_MINUTE) * SIEGE_INTERVAL_MINUTE
+    end
     if self:IsUsSiegeSchedule() then
         return SIEGE_WINDOW_US_START_MINUTE
     end
     return SIEGE_WINDOW_EU_START_MINUTE
 end
 
-function Overlord.GuildKeep:GetSiegeWindowEndMinute()
-    return self:GetSiegeWindowStartMinute() + SIEGE_WINDOW_DURATION_MINUTE
+function Overlord.GuildKeep:GetSiegeWindowEndMinute(ts)
+    return self:GetSiegeWindowStartMinute(ts) + SIEGE_WINDOW_DURATION_MINUTE
+end
+
+function Overlord.GuildKeep:GetNextSiegeStartMinute()
+    local start = self:GetSiegeWindowStartMinute()
+    if GetUtcEpoch() >= SIX_HOUR_SIEGES_SINCE and not self:IsSiegeWindowOpen() then
+        start = start + SIEGE_INTERVAL_MINUTE
+    end
+    return start
 end
 
 function Overlord.GuildKeep:GetSiegeReminderStartMinute()
-    return self:GetSiegeWindowStartMinute() - 60
+    return self:GetNextSiegeStartMinute() - 60
+end
+
+function Overlord.GuildKeep:IsSiegeReminderWindow()
+    local minute = GetServerMinuteOfDay()
+    local start = self:GetNextSiegeStartMinute()
+    return minute >= start - 60 and minute < start
 end
 
 function Overlord.GuildKeep:GetSiegeWindowStartLabel()
+    if GetUtcEpoch() >= SIX_HOUR_SIEGES_SINCE then
+        return string.format("%02d:00", math.floor(self:GetNextSiegeStartMinute() / 60) % 24)
+    end
     if self:IsUsSiegeSchedule() then
         return (L and L.GUILD_KEEP_SIEGE_START_US) or "6:00 PM Pacific"
     end
@@ -285,6 +340,9 @@ function Overlord.GuildKeep:GetSiegeWindowStartLabel()
 end
 
 function Overlord.GuildKeep:GetSiegeWindowEndLabel()
+    if GetUtcEpoch() >= SIX_HOUR_SIEGES_SINCE then
+        return "04:00 / 10:00 / 16:00 / 22:00"
+    end
     if self:IsUsSiegeSchedule() then
         return (L and L.GUILD_KEEP_SIEGE_END_US) or "7:00 PM Pacific"
     end
@@ -292,6 +350,10 @@ function Overlord.GuildKeep:GetSiegeWindowEndLabel()
 end
 
 function Overlord.GuildKeep:GetSiegeWindowRangeLabel()
+    if GetUtcEpoch() >= SIX_HOUR_SIEGES_SINCE then
+        return (L and L.GUILD_KEEP_SIEGE_RANGE_SIX_HOURS)
+            or "03:00–04:00, 09:00–10:00, 15:00–16:00, 21:00–22:00 (server time)"
+    end
     if self:IsUsSiegeSchedule() then
         return (L and L.GUILD_KEEP_SIEGE_RANGE_US)
             or "6:00 to 7:00 PM Pacific"
@@ -301,6 +363,10 @@ function Overlord.GuildKeep:GetSiegeWindowRangeLabel()
 end
 
 function Overlord.GuildKeep:GetSiegeClosedMessage()
+    if GetUtcEpoch() >= SIX_HOUR_SIEGES_SINCE then
+        return string.format((L and L.GUILD_KEEP_SIEGE_CLOSED_SIX_HOURS)
+            or "Guild Keeps open every 6 hours: %s.", self:GetSiegeWindowRangeLabel())
+    end
     if self:IsUsSiegeSchedule() then
         return (L and L.GUILD_KEEP_SIEGE_CLOSED_US)
             or "Guild Keeps are attackable from 6:00 to 7:00 PM Pacific."
@@ -309,7 +375,7 @@ function Overlord.GuildKeep:GetSiegeClosedMessage()
         or "Guild Keeps are attackable from 21:00 to 22:00 server time."
 end
 
-function Overlord.GuildKeep:GetServerSiegeDayKey(ts)
+function Overlord.GuildKeep:GetServerCalendarDayKey(ts)
     local cal = GetServerCalendarForTimestamp(ts or GetUtcEpoch())
     local y = tonumber(cal.year) or tonumber(cal.yearOffset) or 0
     if y > 0 and y < 100 then y = y + 2000 end
@@ -320,6 +386,17 @@ function Overlord.GuildKeep:GetServerSiegeDayKey(ts)
     local month = tonumber(cal.month) or 1
     local day = tonumber(cal.monthDay or cal.day) or 1
     return string.format("%04d%02d%02d", y, month, day)
+end
+
+-- Keep the historical method name for callers; new keys identify a siege, not a day.
+function Overlord.GuildKeep:GetServerSiegeDayKey(ts)
+    ts = tonumber(ts) or GetUtcEpoch()
+    if ts < SIX_HOUR_SIEGES_SINCE then return self:GetServerCalendarDayKey(ts) end
+    local start = self:GetSiegeWindowStartMinute(ts)
+    local dayTs = start < 0 and ts - 6 * 3600 or ts
+    local cal = self:GetRealmCalendar(dayTs)
+    return string.format("%04d%02d%02d%02d", cal.year, cal.month,
+        cal.monthDay or cal.day, math.floor(start / 60) % 24)
 end
 
 function Overlord.GuildKeep:IsSiegeWindowOpen()
@@ -335,8 +412,8 @@ function Overlord.GuildKeep:GetSiegeSecondsRemaining(ts)
     local minute = tonumber(cal.minute or cal.min) or 0
     local second = tonumber(cal.second or cal.sec) or 0
     local nowSec = hour * 3600 + minute * 60 + second
-    local startSec = self:GetSiegeWindowStartMinute() * 60
-    local endSec = self:GetSiegeWindowEndMinute() * 60
+    local startSec = self:GetSiegeWindowStartMinute(ts) * 60
+    local endSec = self:GetSiegeWindowEndMinute(ts) * 60
     if nowSec < startSec or nowSec >= endSec then return 0 end
     return math.max(0, endSec - nowSec)
 end
@@ -353,8 +430,13 @@ function Overlord.GuildKeep:IsSiegeTimestampInWindow(ts, graceBefore, graceAfter
     local minute = tonumber(cal.minute or cal.min) or 0
     local second = tonumber(cal.second or cal.sec) or 0
     local sec = hour * 3600 + minute * 60 + second
-    local startSec = self:GetSiegeWindowStartMinute() * 60 - (tonumber(graceBefore) or 0)
-    local endSec = self:GetSiegeWindowEndMinute() * 60 + (tonumber(graceAfter) or 0)
+    local startSec = self:GetSiegeWindowStartMinute(ts) * 60 - (tonumber(graceBefore) or 0)
+    local endSec = self:GetSiegeWindowEndMinute(ts) * 60 + (tonumber(graceAfter) or 0)
+    if ts >= SIX_HOUR_SIEGES_SINCE and sec >= endSec then
+        local nextStart = startSec + SIEGE_INTERVAL_MINUTE * 60
+        local nextEnd = endSec + SIEGE_INTERVAL_MINUTE * 60
+        if sec >= nextStart and sec < nextEnd then return true end
+    end
     return sec >= startSec and sec < endSec
 end
 

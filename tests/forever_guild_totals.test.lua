@@ -147,7 +147,7 @@ lb:MarkDirty()
 assert(lb:StartDisplayCacheBuild())
 drain()
 local cache = lb._displayCache
-assert(cache and #cache.sortedKills == 200, "Player display limit changed")
+assert(cache and #cache.sortedKills == 211, "Full player display lost members or duplicated aliases")
 local found
 for _, row in ipairs(cache.sortedGuilds) do
     if row.guild == "French Guild" then found = row.kills end

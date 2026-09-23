@@ -908,7 +908,14 @@ end
 
 -- Version semantique des quatre payloads. Elle est volontairement distincte de G7,
 -- qui est seulement le nom historique de l'enveloppe de fragmentation.
-local GK_WIRE_SEMANTIC_VERSION = "v8"
+-- Wire-only revision: saved v8 causal tuples remain valid; daily schedules do not.
+local GK_WIRE_SEMANTIC_VERSION = "v9"
+local function isGuildKeepSiegeKey(key)
+    if type(key) ~= "string" or not key:match("^%d+$") then return false end
+    if #key == 8 then return true end
+    local hour = #key == 10 and tonumber(key:sub(9, 10))
+    return hour == 3 or hour == 9 or hour == 15 or hour == 21
+end
 
 -- G7 fragmente uniquement les rares payloads UTF-8 qui depassent la limite
 -- SendAddonMessage. L'identite/hash porte le payload complet ; aucun fragment
@@ -2994,7 +3001,7 @@ function Overlord.Sync:BroadcastGuildKeepDailyProof(siteKey, dayKey, forceReplay
     dayKey = tostring(dayKey or "")
     local pool = CurrentGuildKeepPoolTag()
     local epoch = math.floor(tonumber(OverlordDB and OverlordDB.lastResetTimestamp) or 0)
-    if not dayKey:match("^%d%d%d%d%d%d%d%d$") or epoch <= 0 then return end
+    if not isGuildKeepSiegeKey(dayKey) or epoch <= 0 then return end
     if pool == "" then
         if not queuedForRetry then
             QueuePendingGuildKeepDailyProof(siteKey, dayKey)
@@ -3058,7 +3065,7 @@ function Overlord.Sync:OnReceiveGuildKeepDailyProof(payload, sender, sourceChann
     -- Une GH v7 ne peut pas etre convertie : generationAt n'y est pas l'offset de retry.
     if version ~= GK_WIRE_SEMANTIC_VERSION then return end
     if not siteKey or not Overlord.GuildKeepSites[siteKey]
-        or not dayKey or not dayKey:match("^%d%d%d%d%d%d%d%d$") then return end
+        or not dayKey or not isGuildKeepSiegeKey(dayKey) then return end
     remotePool = ResolveGuildKeepPayloadPool(remotePool, sender, sourceChannel)
     if not remotePool then return end
     local fac = FactionCodeToFaction(facCode)

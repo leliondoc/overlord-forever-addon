@@ -18,9 +18,10 @@ test("Forever uses one global community and keeps the fallback relay active", ()
     assert.match(beta, /NormalizeRegionPool\(pool\)/);
 });
 
-test("all Forever clients use the Retail US Guild Keep window", () => {
+test("Forever Guild Keeps use four realm-time siege windows", () => {
     const keep = read("GuildKeep.lua");
-    assert.match(keep, /SIEGE_WINDOW_US_START_MINUTE = 18 \* 60/);
-    assert.match(keep, /function Overlord\.GuildKeep:IsUsSiegeSchedule\(\)[\s\S]*?return true\s*end/);
+    assert.match(keep, /SIEGE_INTERVAL_MINUTE = 6 \* 60/);
+    assert.match(keep, /SIEGE_FIRST_START_MINUTE = 3 \* 60/);
+    assert.match(keep, /hour, minute = GetGameTime\(\)/);
     assert.match(keep, /SIEGE_WINDOW_DURATION_MINUTE = 60/);
 });

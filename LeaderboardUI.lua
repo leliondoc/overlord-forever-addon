@@ -12,9 +12,7 @@ local outpostRows = {}
 -- Kills : 10 lignes visibles, scroll au-dela (meme principe que les listes Captures)
 local MAX_VISIBLE_KILL_ROWS = 10
 local KILL_ROW_HEIGHT = 26
--- Le top joueurs reste borne pour garder une navigation utile. Le pool de frames, lui, est
--- virtualise plus bas et ne grandit jamais avec ce nombre.
-local MAX_KILL_ENTRIES = 200
+-- Le cache fournit les 5000 premiers ; seules les lignes visibles ont une frame.
 -- Nombre max de lignes affichables dans les listes Captures (avec scroll au-dela)
 local MAX_CAPTURE_LINES = 25
 -- Meme hauteur de ligne que le classement kills (aspect unifie)
@@ -1742,7 +1740,7 @@ RenderKillRows = function(force)
     local view = lbFrame._lbView
     local sortedKills = view.sortedKills or {}
     local first, poolSize, total = GetVirtualRowWindow(
-        lbFrame.scrollKills, KILL_ROW_HEIGHT, #sortedKills, MAX_KILL_ENTRIES)
+        lbFrame.scrollKills, KILL_ROW_HEIGHT, #sortedKills)
     Overlord.LeaderboardUI:EnsureKillRows(poolSize)
     SyncVirtualRenderWindow(lbFrame.scrollKills, first, poolSize, total, force)
 
@@ -2088,7 +2086,7 @@ function Overlord.LeaderboardUI:Refresh()
     LayoutLeaderboardSections()
     FitLeaderboardFrameHeight()
 
-    local killCount = math.min(#view.sortedKills, MAX_KILL_ENTRIES)
+    local killCount = #view.sortedKills
     local alliCount = math.min(#(view.byFaction.Alliance or {}), MAX_CAPTURE_LINES)
     local hordeCount = math.min(#(view.byFaction.Horde or {}), MAX_CAPTURE_LINES)
     SetLeaderboardScrollExtent(

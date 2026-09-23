@@ -60,7 +60,10 @@ local beforeDisplay = slices
 drain()
 assert(slices - beforeDisplay > 1000, "Large guild sort did not yield")
 local cache = assert(lb._displayCache, "Large display cache was not published")
-assert(#cache.sortedKills == 200 and cache.sortedKills[1].kills == 10000)
+assert(#cache.sortedKills == 5000 and cache.sortedKills[1].kills == 10000)
+for i, row in ipairs(cache.sortedKills) do
+    assert(row.kills == 10001 - i, "Top 5000 lost, duplicated or misordered a player")
+end
 assert(#cache.sortedGuilds == 10000 and cache.sortedGuilds[1].kills == 10000)
 assert(cache.alliKills + cache.hordeKills == total, "Aliases inflated faction totals")
 local guildTotal = 0

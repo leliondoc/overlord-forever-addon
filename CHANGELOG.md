@@ -1,4 +1,13 @@
-1.0.10
+1.0.11
+
+**Overlord Forever 1.0.11**
+
+- Expand the kill leaderboard to the top 5,000 players. Keep sorting spread across frames and render only visible rows; guild totals still include all known members.
+- Open Guild Keeps every six hours, from 03:00–04:00, 09:00–10:00, 15:00–16:00 and 21:00–22:00 server time. Track reminders, capture proofs and victories separately for each siege while preserving historical captures and daily front rotation.
+- Update Guild Keep synchronization for the new schedule. Players need this update to synchronize siege state with one another.
+- Add Savix Chapel, an always-open guild outpost in Silverpine Forest at 61.8, 64.4.
+- Restore Katrell's Retreat to its Retail coordinates, 40.3, 39.4, and rename the Ashenvale outpost to Shobek'Aran in all interface languages.
+- Add coverage for siege boundaries, server timezones, successive captures, saved victories and the new outpost's capture area.
 
 **Overlord Forever 1.0.10**
 

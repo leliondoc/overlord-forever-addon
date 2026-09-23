@@ -11,6 +11,13 @@ Overlord.Leaderboard = {
     targetRevision = 0,
 }
 
+local function isGuildKeepSiegeKey(key)
+    if type(key) ~= "string" or not key:match("^%d+$") then return false end
+    if #key == 8 then return true end -- historical daily proofs
+    local hour = #key == 10 and tonumber(key:sub(9, 10))
+    return hour == 3 or hour == 9 or hour == 15 or hour == 21
+end
+
 -- Plafond de plausibilite du compteur de captures d'un avant-poste par (site, guilde).
 -- Un avant-poste ne peut etre repris qu'apres expiration du hold (>= 5 min) : le maximum
 -- theorique sur une campagne hebdomadaire est ~2016 captures (1 toutes les 5 min, 7 jours).
@@ -589,7 +596,7 @@ end
 local function isGuildKeepWinDayClosed(gk, dayKey)
     if not gk or not gk.GetServerSiegeDayKey then return false end
     dayKey = tostring(dayKey or "")
-    if not dayKey:match("^%d%d%d%d%d%d%d%d$") then return false end
+    if not isGuildKeepSiegeKey(dayKey) then return false end
     local today = gk:GetServerSiegeDayKey()
     if dayKey > today then return false end
     if dayKey == today and gk.IsSiegeWindowClosedForToday
@@ -626,7 +633,7 @@ local function getValidGuildKeepAward(lb, awardKey, award)
     local dayKey = tostring(awardKey or ""):match("^([^:]+):") or ""
     local keyedSite = tostring(awardKey or ""):match("^[^:]+:(.+)$") or ""
     if guild == "" or guildKey == "" or (faction ~= "Alliance" and faction ~= "Horde")
-        or not dayKey:match("^%d%d%d%d%d%d%d%d$") or keyedSite ~= siteKey then
+        or not isGuildKeepSiegeKey(dayKey) or keyedSite ~= siteKey then
         return nil
     end
     if not isGuildKeepWinDayClosed(gk, dayKey) then return nil end
@@ -1464,7 +1471,7 @@ function Overlord.Leaderboard:IsDedupKeyForLocalPlayer(dk)
     return false
 end
 
-local DISPLAY_KILL_RANK_LIMIT = 200
+local DISPLAY_KILL_RANK_LIMIT = 5000
 local DISPLAY_CAPTURE_RANK_LIMIT = 25
 local DISPLAY_CACHE_WORK_PER_SLICE = 64
 local DISPLAY_CACHE_SLICE_BUDGET_MS = 1
@@ -1568,7 +1575,6 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         captureCountSource = self.captureCount,
         capturesSource = self.captures,
         playerInfoSource = self.playerInfo,
-        killTop = newDisplayTopK(DISPLAY_KILL_RANK_LIMIT),
         allianceTop = newDisplayTopK(DISPLAY_CAPTURE_RANK_LIMIT),
         hordeTop = newDisplayTopK(DISPLAY_CAPTURE_RANK_LIMIT),
         sliceWork = 0,
@@ -1662,9 +1668,6 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         state.metaIndex = self._dedupMetaIndex
         state.legacyMetaIndex = self._dedupLegacyShortMetaIndex
 
-        if not forEach(state.killSource, function(name, count)
-            offerDisplayTopK(self, state.killTop, dedupKey(name), canonicalName(name), count)
-        end) then return end
         if not forEach(state.captureCountSource, function(name, count)
             local top = captureTopFor(name)
             if top then
@@ -1693,14 +1696,20 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             return name
         end
         local sortedKills = {}
-        for _, row in ipairs(state.killTop.rows) do
-            sortedKills[#sortedKills + 1] = { name = cleanName(row.name), kills = row.count }
+        local killTop = newDisplayTopK(DISPLAY_KILL_RANK_LIMIT)
+        -- L'index contient deja un maximum par joueur, sans doublonner ses alias.
+        if not forEach(dedupKillMaxIndex, function(key, count)
+            offerDisplayTopK(self, killTop, key,
+                cleanName(state.canonicalIndex[key] or key), count)
+        end) then return end
+        for _, row in ipairs(killTop.rows) do
+            sortedKills[#sortedKills + 1] = { name = row.name, kills = row.count }
             yieldWork()
         end
-        table.sort(sortedKills, function(a, b)
+        sortRowsWithYield(sortedKills, function(a, b)
             if a.kills ~= b.kills then return a.kills > b.kills end
             return (a.name or "") < (b.name or "")
-        end)
+        end, yieldWork)
 
         local function captureRows(top, faction)
             local rows = {}
@@ -1724,9 +1733,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             Horde = captureRows(state.hordeTop, "Horde"),
         }
 
-        -- Le top joueurs est limite a 200 lignes, pas les totaux de guilde.
-        -- L'index deja prepare contient un maximum par joueur deduplique ; le
-        -- parcourir en tranches conserve les membres sortis du top sans doublons.
+        -- Totaux complets, calcules en tranches depuis le meme index deduplique.
         local guildBuckets = {}
         local alliKills, hordeKills = 0, 0
         if not forEach(dedupKillMaxIndex, function(key, count)
@@ -5337,7 +5344,7 @@ local function normalizeGuildKeepDailyProof(lb, siteKey, dayKey, row)
         or not gk.GetAssaultAttemptStartedAt then return nil end
     siteKey, dayKey = tostring(siteKey or ""), tostring(dayKey or "")
     if not isValidGuildKeepSite(siteKey)
-        or not dayKey:match("^%d%d%d%d%d%d%d%d$") then return nil end
+        or not isGuildKeepSiegeKey(dayKey) then return nil end
     local kind = row.kind
     local guild = sanitizeGuildName(row.guild or "")
     local faction = row.faction
@@ -5879,7 +5886,7 @@ function Overlord.Leaderboard:RequestGuildKeepProofLedgerRebuild(siteKey, dayKey
     local index = self._guildKeepProofDaysBySite
     siteKey, dayKey = tostring(siteKey or ""), tostring(dayKey or "")
     if self._guildKeepProofLedgerPrepared and type(index) == "table"
-        and isValidGuildKeepSite(siteKey) and dayKey:match("^%d%d%d%d%d%d%d%d$") then
+        and isValidGuildKeepSite(siteKey) and isGuildKeepSiegeKey(dayKey) then
         local days = index[siteKey]
         if not days then days = {}; index[siteKey] = days end
         local seen = false
@@ -5982,9 +5989,9 @@ function Overlord.Leaderboard:EnsureGuildKeepProofLedgerPrepared(requireCurrent)
         local epoch = math.floor(tonumber(OverlordDB.lastResetTimestamp) or 0)
         local allowedDays = {}
         local nowTs = leaderboardServerNow()
-        for dayOffset = 0, 8 do
-            local key = Overlord.GuildKeep:GetServerSiegeDayKey(nowTs - dayOffset * 86400)
-            if type(key) == "string" and key:match("^%d%d%d%d%d%d%d%d$") then
+        for dayOffset = 0, 36 do
+            local key = Overlord.GuildKeep:GetServerSiegeDayKey(nowTs - dayOffset * 21600)
+            if type(key) == "string" and isGuildKeepSiegeKey(key) then
                 allowedDays[key] = true
             end
         end
@@ -6151,12 +6158,12 @@ function Overlord.Leaderboard:EnsureGuildKeepProofLedgerPrepared(requireCurrent)
             if not okAward then error(awardKey) end
             awardCursor = awardKey
             if awardKey == nil then break end
-            local dayKey, rawSiteKey = tostring(awardKey or ""):match("^(%d%d%d%d%d%d%d%d):(.+)$")
+            local dayKey, rawSiteKey = tostring(awardKey or ""):match("^(%d+):(.+)$")
             local siteKey = rawSiteKey
             if siteKey == "elwynn" then siteKey = "redridge"
             elseif siteKey == "echo_isles" then siteKey = "crossroads" end
             local proofRow = dayKey and siteKey and compact[dayKey] and compact[dayKey][siteKey]
-            if type(award) == "table" and proofRow then
+            if isGuildKeepSiegeKey(dayKey) and type(award) == "table" and proofRow then
                 local pool = normalizeSavedVarsPool(award.pool)
                 if migrationFrom ~= "" and pool == migrationFrom then
                     pool = currentPool
@@ -6317,7 +6324,7 @@ function Overlord.Leaderboard:RecordGuildKeepSiegeWin(
     dayKey = tostring(dayKey or "")
     winTs = math.floor(tonumber(winTs) or 0)
     local campaignStart = self:GetCurrentCampaignStart()
-    if not dayKey:match("^%d%d%d%d%d%d%d%d$") or winTs <= 0
+    if not isGuildKeepSiegeKey(dayKey) or winTs <= 0
         or not self:IsTimestampInCurrentCampaign(winTs, campaignStart)
         or winTs > leaderboardServerNow() + 300 then return false end
     if not isGuildKeepWinDayClosed(gk, dayKey) then return false end

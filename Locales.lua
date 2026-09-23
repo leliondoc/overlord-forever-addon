@@ -3,6 +3,7 @@
 Overlord = Overlord or {}
 local L = {}
 Overlord.L = L
+L.OUTPOST_SILVERPINE_NAME = "Savix Chapel"
 
 function Overlord.IsFrenchLocale()
     local loc = GetLocale() or "enUS"
@@ -302,7 +303,7 @@ L.GUIDE_SECTION_FACTION_CALL = "Faction call"
 L.GUIDE_FACTION_CALL_BODY   = "The |cFFFFD100Call to arms|r button (on an active front, with nearby enemies) alerts online allies in your |cFFFFD100Overlord community|r. Shared cooldown across the faction banner."
 L.VICTORY_DOMINATION_BONUS  = "Total front victory: +%d%% weekly domination for your faction."
 L.GUIDE_SECTION_GUILD_KEEP  = "Guild Keep"
-L.GUIDE_GUILD_KEEP_BODY     = "Separate from the six |cFFFFD100war fronts|r (Arathi, Gilneas, Loch Modan, Southern Barrens, Durotar, Elwynn Forest): guild keeps on |cFFFFD100Ashenvale|r, |cFFFFD100The Wetlands|r, |cFFFFD100Badlands|r, |cFFFFD100The Crossroads|r, |cFFFFD100Redridge Mountains|r, and |cFFFFD100Mulgore|r.\n\n|cFFFFFFFFKeep icons|r\n%s\n\n|cFFFFFFFFRules|r\n• |cFFFFD100War Mode|r active and |cFFFFD100guild|r required.\n• Keeps are vulnerable every day from |cFFFFD100%s|r.\n• Outside this window, capture is closed.\n\n|cFFFFFFFFCapture|r\n• |cFFFFD100%d min|r inside the square: leave it and progress |cFFFF4444decays|r.\n• Enemy bodies in the square |cFFFF4444contest|r the keep: even numbers freeze progress, enemy superiority makes it fall back.\n• Only the |cFFFFD100enemy faction|r can contest or reclaim the keep.\n• The central capture timer appears only for your guild's assailants inside the square.\n• |cFFFFD100Leaderboard kills|r on a keep count only during the siege hour and only inside the capture square.\n• Progress syncs between addon users (GK): stay grouped for faster updates.\n\n|cFFFFFFFFVictory at %s|r\n• Capture or defense counts the same: |cFFFFD1001 daily siege win|r for that keep.\n• A held keep stays yours until weekly reset or an enemy guild captures it during a siege.\n• Ranking shows only the current holder and siege wins."
+L.GUIDE_GUILD_KEEP_BODY     = "Separate from the six |cFFFFD100war fronts|r (Arathi, Gilneas, Loch Modan, Southern Barrens, Durotar, Elwynn Forest): guild keeps on |cFFFFD100Ashenvale|r, |cFFFFD100The Wetlands|r, |cFFFFD100Badlands|r, |cFFFFD100The Crossroads|r, |cFFFFD100Redridge Mountains|r, and |cFFFFD100Mulgore|r.\n\n|cFFFFFFFFKeep icons|r\n%s\n\n|cFFFFFFFFRules|r\n• |cFFFFD100War Mode|r active and |cFFFFD100guild|r required.\n• Keeps are vulnerable every 6 hours at |cFFFFD100%s|r.\n• Outside this window, capture is closed.\n\n|cFFFFFFFFCapture|r\n• |cFFFFD100%d min|r inside the square: leave it and progress |cFFFF4444decays|r.\n• Enemy bodies in the square |cFFFF4444contest|r the keep: even numbers freeze progress, enemy superiority makes it fall back.\n• Only the |cFFFFD100enemy faction|r can contest or reclaim the keep.\n• The central capture timer appears only for your guild's assailants inside the square.\n• |cFFFFD100Leaderboard kills|r on a keep count only during the siege hour and only inside the capture square.\n• Progress syncs between addon users (GK): stay grouped for faster updates.\n\n|cFFFFFFFFVictory at %s|r\n• Capture or defense counts the same: |cFFFFD1001 win per siege|r for that keep.\n• A held keep stays yours until weekly reset or an enemy guild captures it during a siege.\n• Ranking shows only the current holder and siege wins."
 L.TOOLTIP_SHIFT_GUIDE       = "Shift + left click: Quick guide"
 
 -- Shard (phasing / instance layer ID from NPC GUID)
@@ -503,7 +504,7 @@ L.OUTPOST_GILNEAS_NAME        = "Traitor's Bridge"
 L.OUTPOST_SOUTHERN_BARRENS_NAME = "Cairne's Gate"
 L.OUTPOST_DUROTAR_NAME        = "Jaggedswine Farm"
 L.OUTPOST_ELWYNN_NAME         = "Thunder Falls"
-L.OUTPOST_ASHENVALE_NAME      = "Ordil'Aran"
+L.OUTPOST_ASHENVALE_NAME      = "Shobek'Aran"
 L.OUTPOST_COILED_ISLE_NAME    = "Gate of the Eastern Fang"
 L.FRONT_ACTIVITY_COILED_ISLE  = "The Coiled Isle"
 L.OUTPOST_NEUTRAL             = "Unclaimed"
@@ -1243,7 +1244,7 @@ L.GUIDE_SECTION_FACTION_CALL = "Appel de faction"
 L.GUIDE_FACTION_CALL_BODY   = "Le bouton |cFFFFD100Aux armes|r (sur un front actif, avec des ennemis proches) alerte les alliés en ligne de votre |cFFFFD100communauté Overlord|r. Cooldown partagé pour toute la bannière."
 L.VICTORY_DOMINATION_BONUS  = "Victoire totale: +%d %% de domination hebdomadaire pour votre faction."
 L.GUIDE_SECTION_GUILD_KEEP  = "Fortin de guilde"
-L.GUIDE_GUILD_KEEP_BODY     = "Hors des six |cFFFFD100fronts de guerre|r (Arathi, Gilnéas, Loch Modan, Tarides du Sud, Durotar, Forêt d'Elwynn) : fortins de guilde en |cFFFFD100Orneval|r, aux |cFFFFD100Paluns|r, aux |cFFFFD100Terres ingrates|r, à |cFFFFD100La Croisée|r, dans les |cFFFFD100Carmines|r et au |cFFFFD100Mulgore|r.\n\n|cFFFFFFFFIcônes de fortin|r\n%s\n\n|cFFFFFFFFRègles|r\n• |cFFFFD100Mode Guerre|r actif et |cFFFFD100guilde|r requis.\n• Les fortins sont vulnérables chaque jour de |cFFFFD100%s|r.\n• Hors de cette fenêtre, la capture est fermée.\n\n|cFFFFFFFFCapture|r\n• |cFFFFD100%d min|r dans le carré : en sortir fait |cFFFF4444redescendre|r le timer.\n• Des ennemis dans le carré |cFFFF4444contestent|r le fortin : égalité gèle la progression, surnombre ennemi la fait redescendre.\n• Seule la |cFFFFD100faction ennemie|r peut contester ou reprendre le fortin.\n• Le timer central n'apparaît que pour les assaillants de votre guilde dans le carré.\n• Les |cFFFFD100kills au classement|r sur un fortin ne comptent que pendant l'heure de siège, dans le carré.\n• La progression se synchronise entre joueurs Overlord (GK) : restez groupés.\n\n|cFFFFFFFFVictoire à %s|r\n• Capture ou défense comptent pareil : |cFFFFD1001 victoire quotidienne de siège|r pour ce fortin.\n• Un fortin tenu reste à vous jusqu'au reset hebdo ou une capture ennemie pendant un siège.\n• Le classement affiche seulement le tenant actuel et les victoires."
+L.GUIDE_GUILD_KEEP_BODY     = "Hors des six |cFFFFD100fronts de guerre|r (Arathi, Gilnéas, Loch Modan, Tarides du Sud, Durotar, Forêt d'Elwynn) : fortins de guilde en |cFFFFD100Orneval|r, aux |cFFFFD100Paluns|r, aux |cFFFFD100Terres ingrates|r, à |cFFFFD100La Croisée|r, dans les |cFFFFD100Carmines|r et au |cFFFFD100Mulgore|r.\n\n|cFFFFFFFFIcônes de fortin|r\n%s\n\n|cFFFFFFFFRègles|r\n• |cFFFFD100Mode Guerre|r actif et |cFFFFD100guilde|r requis.\n• Les fortins sont vulnérables toutes les 6 heures : |cFFFFD100%s|r.\n• Hors de cette fenêtre, la capture est fermée.\n\n|cFFFFFFFFCapture|r\n• |cFFFFD100%d min|r dans le carré : en sortir fait |cFFFF4444redescendre|r le timer.\n• Des ennemis dans le carré |cFFFF4444contestent|r le fortin : égalité gèle la progression, surnombre ennemi la fait redescendre.\n• Seule la |cFFFFD100faction ennemie|r peut contester ou reprendre le fortin.\n• Le timer central n'apparaît que pour les assaillants de votre guilde dans le carré.\n• Les |cFFFFD100kills au classement|r sur un fortin ne comptent que pendant l'heure de siège, dans le carré.\n• La progression se synchronise entre joueurs Overlord (GK) : restez groupés.\n\n|cFFFFFFFFVictoire à %s|r\n• Capture ou défense comptent pareil : |cFFFFD1001 victoire par siège|r pour ce fortin.\n• Un fortin tenu reste à vous jusqu'au reset hebdo ou une capture ennemie pendant un siège.\n• Le classement affiche seulement le tenant actuel et les victoires."
 L.TOOLTIP_SHIFT_GUIDE       = "Maj + clic gauche : guide rapide"
 L.LOCKED            = "Verrouillée"
 
@@ -1445,7 +1446,7 @@ L.OUTPOST_GILNEAS_NAME        = "Pont du Traître"
 L.OUTPOST_SOUTHERN_BARRENS_NAME = "Porte de Cairne"
 L.OUTPOST_DUROTAR_NAME        = "Ferme des Tranchegroins"
 L.OUTPOST_ELWYNN_NAME         = "Chutes du Tonnerre"
-L.OUTPOST_ASHENVALE_NAME      = "Ordil'Aran"
+L.OUTPOST_ASHENVALE_NAME      = "Shobek'Aran"
 L.OUTPOST_COILED_ISLE_NAME    = "Porte du Crochet oriental"
 L.FRONT_ACTIVITY_COILED_ISLE  = "Île Annelée"
 L.OUTPOST_NEUTRAL             = "Non revendiqué"
@@ -2183,7 +2184,7 @@ L.GUIDE_SECTION_FACTION_CALL = "Llamada de facción"
 L.GUIDE_FACTION_CALL_BODY   = "El botón |cFFFFD100A las armas|r (en un frente activo, con enemigos cerca) alerta a los aliados en línea de tu |cFFFFD100comunidad Overlord|r. Enfriamiento compartido para toda la bandera."
 L.VICTORY_DOMINATION_BONUS  = "Victoria total del frente: +%d %% de dominación semanal para tu facción."
 L.GUIDE_SECTION_GUILD_KEEP  = "Fortaleza de hermandad"
-L.GUIDE_GUILD_KEEP_BODY     = "Separado de los seis |cFFFFD100frentes de guerra|r (Arathi, Gilneas, Loch Modan, Los Baldíos del Sur, Durotar, Bosque de Elwynn): fortalezas de hermandad en |cFFFFD100Vallefresno|r, |cFFFFD100Los Humedales|r, |cFFFFD100Tierras Inhóspitas|r, |cFFFFD100El Cruce|r, |cFFFFD100Montañas Crestagrana|r y |cFFFFD100Mulgore|r.\n\n|cFFFFFFFFIconos de fortaleza|r\n%s\n\n|cFFFFFFFFReglas|r\n• |cFFFFD100Modo Guerra|r activo y |cFFFFD100hermandad|r obligatorios.\n• Las fortalezas son vulnerables cada día de |cFFFFD100%s|r.\n• Fuera de esta ventana, la captura está cerrada.\n\n|cFFFFFFFFCaptura|r\n• |cFFFFD100%d min|r dentro del cuadrado: al salir, el progreso |cFFFF4444decae|r.\n• Los enemigos en el cuadrado |cFFFF4444disputan|r la fortaleza: la igualdad congela el progreso, la superioridad enemiga lo hace retroceder.\n• Solo la |cFFFFD100facción enemiga|r puede disputar o reclamar la fortaleza.\n• El temporizador central solo aparece para los asaltantes de tu hermandad dentro del cuadrado.\n• Los |cFFFFD100kills en clasificación|r en una fortaleza solo cuentan durante la hora de asedio, dentro del cuadrado.\n• El progreso se sincroniza entre usuarios de Overlord (GK): permaneced agrupados.\n\n|cFFFFFFFFVictoria a las %s|r\n• Captura o defensa cuentan igual: |cFFFFD1001 victoria diaria de asedio|r para esa fortaleza.\n• Una fortaleza mantenida sigue siendo vuestra hasta el reinicio semanal o una captura enemiga durante un asedio.\n• La clasificación solo muestra titular actual y victorias."
+L.GUIDE_GUILD_KEEP_BODY     = "Separado de los seis |cFFFFD100frentes de guerra|r (Arathi, Gilneas, Loch Modan, Los Baldíos del Sur, Durotar, Bosque de Elwynn): fortalezas de hermandad en |cFFFFD100Vallefresno|r, |cFFFFD100Los Humedales|r, |cFFFFD100Tierras Inhóspitas|r, |cFFFFD100El Cruce|r, |cFFFFD100Montañas Crestagrana|r y |cFFFFD100Mulgore|r.\n\n|cFFFFFFFFIconos de fortaleza|r\n%s\n\n|cFFFFFFFFReglas|r\n• |cFFFFD100Modo Guerra|r activo y |cFFFFD100hermandad|r obligatorios.\n• Las fortalezas son vulnerables cada 6 horas: |cFFFFD100%s|r.\n• Fuera de esta ventana, la captura está cerrada.\n\n|cFFFFFFFFCaptura|r\n• |cFFFFD100%d min|r dentro del cuadrado: al salir, el progreso |cFFFF4444decae|r.\n• Los enemigos en el cuadrado |cFFFF4444disputan|r la fortaleza: la igualdad congela el progreso, la superioridad enemiga lo hace retroceder.\n• Solo la |cFFFFD100facción enemiga|r puede disputar o reclamar la fortaleza.\n• El temporizador central solo aparece para los asaltantes de tu hermandad dentro del cuadrado.\n• Los |cFFFFD100kills en clasificación|r en una fortaleza solo cuentan durante la hora de asedio, dentro del cuadrado.\n• El progreso se sincroniza entre usuarios de Overlord (GK): permaneced agrupados.\n\n|cFFFFFFFFVictoria a las %s|r\n• Captura o defensa cuentan igual: |cFFFFD1001 victoria por asedio|r para esa fortaleza.\n• Una fortaleza mantenida sigue siendo vuestra hasta el reinicio semanal o una captura enemiga durante un asedio.\n• La clasificación solo muestra titular actual y victorias."
 L.TOOLTIP_SHIFT_GUIDE       = "Mayús + clic izquierdo: guía rápida"
 
 -- Shard
@@ -2383,7 +2384,7 @@ L.OUTPOST_GILNEAS_NAME        = "Puente del Traidor"
 L.OUTPOST_SOUTHERN_BARRENS_NAME = "Puerta de Cairne"
 L.OUTPOST_DUROTAR_NAME        = "Granja Javaguja"
 L.OUTPOST_ELWYNN_NAME         = "Cascadas del Trueno"
-L.OUTPOST_ASHENVALE_NAME      = "Ordil'Aran"
+L.OUTPOST_ASHENVALE_NAME      = "Shobek'Aran"
 L.OUTPOST_COILED_ISLE_NAME    = "Puerta del Colmillo Oriental"
 L.FRONT_ACTIVITY_COILED_ISLE  = "Isla Serpenteante"
 L.OUTPOST_NEUTRAL             = "Sin reclamar"
@@ -3119,7 +3120,7 @@ L.GUIDE_SECTION_FACTION_CALL = "Fraktionsruf"
 L.GUIDE_FACTION_CALL_BODY   = "Der Button |cFFFFD100Zu den Waffen|r (auf aktivem Front, mit Feinden in der Nähe) warnt online Verbündete in Eurer |cFFFFD100Overlord-Community|r. Geteilte Abklingzeit für die ganze Fraktionsfahne."
 L.VICTORY_DOMINATION_BONUS  = "Totaler Frontsieg: +%d %% wöchentliche Dominanz für Eure Fraktion."
 L.GUIDE_SECTION_GUILD_KEEP  = "Gildenfestung"
-L.GUIDE_GUILD_KEEP_BODY     = "Getrennt von den sechs |cFFFFD100Kriegsfronten|r (Arathi, Gilneas, Loch Modan, Südliches Brachland, Durotar, Wald von Elwynn): Gildenfestungen in |cFFFFD100Eschental|r, |cFFFFD100Sumpfland|r, |cFFFFD100Ödland|r, |cFFFFD100Das Wegekreuz|r, |cFFFFD100Rotkammgebirge|r und |cFFFFD100Mulgore|r.\n\n|cFFFFFFFFFestungssymbole|r\n%s\n\n|cFFFFFFFFRegeln|r\n• |cFFFFD100Kriegsmodus|r aktiv und |cFFFFD100Gilde|r nötig.\n• Festungen sind täglich von |cFFFFD100%s|r verwundbar.\n• Außerhalb dieses Fensters ist die Eroberung geschlossen.\n\n|cFFFFFFFFEroberung|r\n• |cFFFFD100%d Min|r im Quadrat; beim Verlassen |cFFFF4444sinkt|r der Fortschritt.\n• Feinde im Quadrat |cFFFF4444bekämpfen|r die Festung: Gleichstand pausiert den Fortschritt, feindliche Überzahl lässt ihn zurückgehen.\n• Nur die |cFFFFD100feindliche Fraktion|r kann bekämpfen oder zurückerobern.\n• Der zentrale Eroberungstimer erscheint nur für Angreifer Eurer Gilde im Quadrat.\n• |cFFFFD100Ranglisten-Kills|r auf einer Festung zählen nur während der Belagerungsstunde im Eroberungsquadrat.\n• Fortschritt sync zwischen Overlord-Nutzern (GK); gruppiert bleiben.\n\n|cFFFFFFFFSieg um %s|r\n• Eroberung oder Verteidigung zählen gleich: |cFFFFD1001 täglicher Belagerungssieg|r für diese Festung.\n• Eine gehaltene Festung bleibt Eurer Gilde bis zum wöchentlichen Reset oder bis zu einer feindlichen Eroberung im Belagerungsfenster.\n• Die Rangliste zeigt nur aktuellen Halter und Siege."
+L.GUIDE_GUILD_KEEP_BODY     = "Getrennt von den sechs |cFFFFD100Kriegsfronten|r (Arathi, Gilneas, Loch Modan, Südliches Brachland, Durotar, Wald von Elwynn): Gildenfestungen in |cFFFFD100Eschental|r, |cFFFFD100Sumpfland|r, |cFFFFD100Ödland|r, |cFFFFD100Das Wegekreuz|r, |cFFFFD100Rotkammgebirge|r und |cFFFFD100Mulgore|r.\n\n|cFFFFFFFFFestungssymbole|r\n%s\n\n|cFFFFFFFFRegeln|r\n• |cFFFFD100Kriegsmodus|r aktiv und |cFFFFD100Gilde|r nötig.\n• Festungen sind alle 6 Stunden angreifbar: |cFFFFD100%s|r verwundbar.\n• Außerhalb dieses Fensters ist die Eroberung geschlossen.\n\n|cFFFFFFFFEroberung|r\n• |cFFFFD100%d Min|r im Quadrat; beim Verlassen |cFFFF4444sinkt|r der Fortschritt.\n• Feinde im Quadrat |cFFFF4444bekämpfen|r die Festung: Gleichstand pausiert den Fortschritt, feindliche Überzahl lässt ihn zurückgehen.\n• Nur die |cFFFFD100feindliche Fraktion|r kann bekämpfen oder zurückerobern.\n• Der zentrale Eroberungstimer erscheint nur für Angreifer Eurer Gilde im Quadrat.\n• |cFFFFD100Ranglisten-Kills|r auf einer Festung zählen nur während der Belagerungsstunde im Eroberungsquadrat.\n• Fortschritt sync zwischen Overlord-Nutzern (GK); gruppiert bleiben.\n\n|cFFFFFFFFSieg um %s|r\n• Eroberung oder Verteidigung zählen gleich: |cFFFFD1001 Sieg pro Belagerung|r für diese Festung.\n• Eine gehaltene Festung bleibt Eurer Gilde bis zum wöchentlichen Reset oder bis zu einer feindlichen Eroberung im Belagerungsfenster.\n• Die Rangliste zeigt nur aktuellen Halter und Siege."
 L.TOOLTIP_SHIFT_GUIDE       = "Umschalt + Linksklick: Kurzanleitung"
 
 -- Shard
@@ -3319,7 +3320,7 @@ L.OUTPOST_GILNEAS_NAME        = "Brücke des Verräters"
 L.OUTPOST_SOUTHERN_BARRENS_NAME = "Cairnes Tor"
 L.OUTPOST_DUROTAR_NAME        = "Stachelhauerhof"
 L.OUTPOST_ELWYNN_NAME         = "Donnerfälle"
-L.OUTPOST_ASHENVALE_NAME      = "Ordil'Aran"
+L.OUTPOST_ASHENVALE_NAME      = "Shobek'Aran"
 L.OUTPOST_COILED_ISLE_NAME    = "Tor des Östlichen Fangzahns"
 L.FRONT_ACTIVITY_COILED_ISLE  = "Gewundene Insel"
 L.OUTPOST_NEUTRAL             = "Unbeansprucht"
@@ -4061,7 +4062,7 @@ L.GUIDE_SECTION_FACTION_CALL = "Призыв фракции"
 L.GUIDE_FACTION_CALL_BODY   = "Кнопка |cFFFFD100Призыв к оружию|r (на активном фронте, при наличии врагов поблизости) оповещает союзников в сети в вашем |cFFFFD100сообществе Overlord|r. Общее время восстановления для всего знамени фракции."
 L.VICTORY_DOMINATION_BONUS  = "Полная победа на фронте: +%d%% к еженедельному господству вашей фракции."
 L.GUIDE_SECTION_GUILD_KEEP  = "Крепость гильдии"
-L.GUIDE_GUILD_KEEP_BODY     = "Отдельно от шести |cFFFFD100фронтов войны|r (Арати, Гилнеас, Лок Модан, Южные Степи, Дуротар, Элвиннский лес): крепости гильдий в |cFFFFD100Ясеневом лесу|r, |cFFFFD100Болотине|r, |cFFFFD100Бесплодных землях|r, на |cFFFFD100Перекрестке|r, в |cFFFFD100Красногорье|r и |cFFFFD100Мулгоре|r.\n\n|cFFFFFFFFИконки крепостей|r\n%s\n\n|cFFFFFFFFПравила|r\n• Требуется активный |cFFFFD100Режим войны|r и нахождение в |cFFFFD100гильдии|r.\n• Крепости уязвимы каждый день с |cFFFFD100%s|r.\n• Вне этого промежутка времени захват закрыт.\n\n|cFFFFFFFFЗахват|r\n• Находитесь |cFFFFD100%d мин.|r внутри квадрата: если вы покинете его, прогресс начнет |cFFFF4444убывать|r.\n• Враги в квадрате |cFFFF4444оспаривают|r крепость: равное количество игроков замораживает прогресс, численное преимущество врага откатывает его назад.\n• Только |cFFFFD100вражеская фракция|r может оспорить или вернуть крепость.\n• Центральный таймер захвата отображается только для штурмующих из вашей гильдии внутри квадрата.\n• |cFFFFD100Убийства для таблицы лидеров|r в крепости засчитываются только во время часа осады и только внутри квадрата захвата.\n• Прогресс синхронизируется между пользователями аддона (GK): оставайтесь в группе для более быстрого обновления данных.\n\n|cFFFFFFFFПобеда в %s|r\n• Захват или защита засчитываются одинаково: |cFFFFD1001 ежедневная победа в осаде|r для этой крепости.\n• Удерживаемая крепость остается вашей до еженедельного сброса или пока вражеская гильдия не захватит ее во время осады.\n• В рейтинге отображаются только текущий владелец и победы в осадах."
+L.GUIDE_GUILD_KEEP_BODY     = "Отдельно от шести |cFFFFD100фронтов войны|r (Арати, Гилнеас, Лок Модан, Южные Степи, Дуротар, Элвиннский лес): крепости гильдий в |cFFFFD100Ясеневом лесу|r, |cFFFFD100Болотине|r, |cFFFFD100Бесплодных землях|r, на |cFFFFD100Перекрестке|r, в |cFFFFD100Красногорье|r и |cFFFFD100Мулгоре|r.\n\n|cFFFFFFFFИконки крепостей|r\n%s\n\n|cFFFFFFFFПравила|r\n• Требуется активный |cFFFFD100Режим войны|r и нахождение в |cFFFFD100гильдии|r.\n• Крепости уязвимы каждые 6 часов: |cFFFFD100%s|r.\n• Вне этого промежутка времени захват закрыт.\n\n|cFFFFFFFFЗахват|r\n• Находитесь |cFFFFD100%d мин.|r внутри квадрата: если вы покинете его, прогресс начнет |cFFFF4444убывать|r.\n• Враги в квадрате |cFFFF4444оспаривают|r крепость: равное количество игроков замораживает прогресс, численное преимущество врага откатывает его назад.\n• Только |cFFFFD100вражеская фракция|r может оспорить или вернуть крепость.\n• Центральный таймер захвата отображается только для штурмующих из вашей гильдии внутри квадрата.\n• |cFFFFD100Убийства для таблицы лидеров|r в крепости засчитываются только во время часа осады и только внутри квадрата захвата.\n• Прогресс синхронизируется между пользователями аддона (GK): оставайтесь в группе для более быстрого обновления данных.\n\n|cFFFFFFFFПобеда в %s|r\n• Захват или защита засчитываются одинаково: |cFFFFD1001 победа за осаду|r для этой крепости.\n• Удерживаемая крепость остается вашей до еженедельного сброса или пока вражеская гильдия не захватит ее во время осады.\n• В рейтинге отображаются только текущий владелец и победы в осадах."
 L.TOOLTIP_SHIFT_GUIDE       = "Shift + ЛКМ: Краткое руководство"
 
 -- Shard (phasing / instance layer ID from NPC GUID)
@@ -4262,7 +4263,7 @@ L.OUTPOST_GILNEAS_NAME        = "Предательский мост"
 L.OUTPOST_SOUTHERN_BARRENS_NAME = "Великие Врата"
 L.OUTPOST_DUROTAR_NAME        = "Ферма Кабана"
 L.OUTPOST_ELWYNN_NAME         = "Ревущий водопад"
-L.OUTPOST_ASHENVALE_NAME      = "Ордил'Аран"
+L.OUTPOST_ASHENVALE_NAME      = "Shobek'Aran"
 L.OUTPOST_COILED_ISLE_NAME    = "Врата Восточного Клыка"
 L.FRONT_ACTIVITY_COILED_ISLE  = "Спиральный остров"
 L.OUTPOST_NEUTRAL             = "Нейтральный"
@@ -4823,4 +4824,21 @@ function Overlord.ApplyGoldLocaleStrings()
         Loc.GOLD_BARRICADE_ACTIVE = string.format("Reinforce ready: the next enemy capture on your zones will take %d s longer.", R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_USED = string.format("Reinforce triggered: enemy must hold %d s longer.", R.BARRICADE_INCREASE)
     end
+end
+
+-- Four one-hour sieges on the realm clock, shared by every client locale.
+do
+    local locale = (GetLocale() or "enUS"):sub(1, 2)
+    local clocks = { en = "server time", fr = "heure serveur", es = "hora del servidor",
+        de = "Serverzeit", ru = "время сервера" }
+    local closed = {
+        en = "Guild Keeps open every 6 hours: %s.",
+        fr = "Les fortins sont attaquables toutes les 6 heures : %s.",
+        es = "Las fortalezas se pueden atacar cada 6 horas: %s.",
+        de = "Gildenfestungen sind alle 6 Stunden angreifbar: %s.",
+        ru = "Гильдейские крепости доступны для захвата каждые 6 часов: %s.",
+    }
+    L.GUILD_KEEP_SIEGE_RANGE_SIX_HOURS = "03:00–04:00, 09:00–10:00, 15:00–16:00, 21:00–22:00 ("
+        .. (clocks[locale] or clocks.en) .. ")"
+    L.GUILD_KEEP_SIEGE_CLOSED_SIX_HOURS = closed[locale] or closed.en
 end
