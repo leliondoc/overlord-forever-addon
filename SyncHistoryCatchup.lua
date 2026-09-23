@@ -9,11 +9,12 @@ local Overlord = _G.Overlord
 if not Overlord or not Overlord.Sync then return end
 
 local sync = Overlord.Sync
-local PROTOCOL_VERSION = "3"
+local PROTOCOL_VERSION = "4"
+local PREVIOUS_PROTOCOL_VERSION = "3"
 local COMPAT_PROTOCOL_VERSION = "2"
 local LEGACY_PROTOCOL_VERSION = "1"
-local MAX_SNAPSHOT_ROWS = 200
-local MAX_SNAPSHOT_QUEUE = 340
+local MAX_SNAPSHOT_ROWS = Overlord.Leaderboard.KILL_RANK_LIMIT or 500
+local MAX_SNAPSHOT_QUEUE = MAX_SNAPSHOT_ROWS + 75 + 40
 local MAX_HISTORY_QUEUE = 340
 local MAX_RACE_ROWS = 40
 local HASH_MOD = 2147483647
@@ -34,12 +35,14 @@ local INITIAL_DELAY_SEC = 24
 local EMPTY_SAVE_INITIAL_DELAY_SEC = 16
 local EMPTY_SAVE_RETRY_SEC = 30
 local MAX_EMPTY_SAVE_ROUNDS = 3
--- Fragmentation and three relay hops share 1 KB/s. A full 340-row snapshot
+-- Fragmentation and three relay hops share 1 KB/s. A full 615-row snapshot
 -- can legitimately exceed the direct-whisper timeouts, even without loss.
-local ACK_TIMEOUT_SEC = Overlord.BetaNetworkEnabled ~= false and 600 or 120
-local PUSH_ACK_TIMEOUT_SEC = Overlord.BetaNetworkEnabled ~= false and 600 or 120
-local SEND_INTERVAL_SEC = 0.12
-local RESPONSE_WATCHDOG_SEC = Overlord.BetaNetworkEnabled ~= false and 570 or 110
+local ACK_TIMEOUT_SEC = Overlord.BetaNetworkEnabled ~= false and 1200 or 240
+local PUSH_ACK_TIMEOUT_SEC = Overlord.BetaNetworkEnabled ~= false and 1200 or 240
+-- Leave room for live events and relay traffic; a larger top must not create
+-- a longer burst that expires in a downstream relay's bounded queue.
+local SEND_INTERVAL_SEC = Overlord.BetaNetworkEnabled ~= false and 1 or 0.12
+local RESPONSE_WATCHDOG_SEC = Overlord.BetaNetworkEnabled ~= false and 1170 or 230
 local MAX_ATTEMPTS = 4
 local REQUESTER_COOLDOWN_SEC = 120
 local COMPAT_PULL_COOLDOWN_SEC = 2 * 60
@@ -52,6 +55,7 @@ local lastCompatPullAt = -COMPAT_PULL_GLOBAL_COOLDOWN_SEC
 local expectedHistoryPushes = {}
 local expectedHistoryPushCount = 0
 local snapshotWireCache = setmetatable({}, { __mode = "k" })
+local PrepareSnapshotForNetwork
 
 local function NowServer()
     return (GetServerTime and GetServerTime()) or time()
@@ -202,24 +206,25 @@ local function SnapshotForCampaign(campaignStart)
     return snapshot
 end
 
-local function AppendSnapshotNames(result, seen, order, values)
+local function AppendSnapshotNames(result, seen, order, values, limit, yieldWork)
     if type(order) == "table" then
-        for i = 1, math.min(#order, MAX_SNAPSHOT_ROWS) do
+        for i = 1, math.min(#order, limit) do
             local name = tostring(order[i] or "")
             if name ~= "" and not seen[name] and tonumber(values and values[name]) then
                 result[#result + 1] = name
                 seen[name] = true
             end
+            if yieldWork then yieldWork() end
         end
     end
 end
 
-local function SnapshotNameLists(snapshot)
+local function SnapshotNameLists(snapshot, killLimit, yieldWork)
     local kills, captures, killSeen, captureSeen = {}, {}, {}, {}
     AppendSnapshotNames(kills, killSeen, snapshot and snapshot.killOrder,
-        snapshot and snapshot.kills)
+        snapshot and snapshot.kills, killLimit or MAX_SNAPSHOT_ROWS, yieldWork)
     AppendSnapshotNames(captures, captureSeen, snapshot and snapshot.captureOrder,
-        snapshot and snapshot.captureCount)
+        snapshot and snapshot.captureCount, 75, yieldWork)
     return kills, captures
 end
 
@@ -319,18 +324,20 @@ local function BuildSnapshotCapturePayload(snapshot, name, wireEpoch)
 end
 
 -- Seule source des pages LK/LC/LR du protocole HR. La file est plafonnee a
--- 340 paquets et ne trie, fusionne ni repare le classement actif.
-function sync:BuildHistoryCatchupSnapshotQueue(snapshot, wireEpoch)
+-- 615 paquets et ne trie, fusionne ni repare le classement actif.
+function sync:BuildHistoryCatchupSnapshotQueue(snapshot, wireEpoch, killLimit, yieldWork)
     local queue, raceSeen = {}, {}
     if type(snapshot) ~= "table" then return queue end
-    local killNames, captureNames = SnapshotNameLists(snapshot)
+    local killNames, captureNames = SnapshotNameLists(snapshot, killLimit, yieldWork)
     for i = 1, #killNames do
         local name = killNames[i]
         AppendPacket(queue, "LK", BuildSnapshotKillPayload(snapshot, name, wireEpoch))
+        if yieldWork then yieldWork() end
     end
     for i = 1, #captureNames do
         local name = captureNames[i]
         AppendPacket(queue, "LC", BuildSnapshotCapturePayload(snapshot, name, wireEpoch))
+        if yieldWork then yieldWork() end
     end
     local raceSent = 0
     local function appendRace(name)
@@ -344,8 +351,12 @@ function sync:BuildHistoryCatchupSnapshotQueue(snapshot, wireEpoch)
                 name, info.race, info.raceSex, wireEpoch, info.raceAt)
         if AppendPacket(queue, "LR", payload) then raceSent = raceSent + 1 end
     end
-    for i = 1, #killNames do appendRace(killNames[i]) end
-    for i = 1, #captureNames do appendRace(captureNames[i]) end
+    for i = 1, #killNames do
+        appendRace(killNames[i]); if yieldWork then yieldWork() end
+    end
+    for i = 1, #captureNames do
+        appendRace(captureNames[i]); if yieldWork then yieldWork() end
+    end
     return queue
 end
 
@@ -353,7 +364,7 @@ end
 -- Les premieres lignes restent prioritaires et la longue traine tourne entre
 -- les demandes, comme l'ancien export actif, sans heal/merge/tri du bucket live.
 function sync:BuildBoundedFullSrLeaderboardQueue(snapshot, wireEpoch, isLargeEvent)
-    local source = self:BuildHistoryCatchupSnapshotQueue(snapshot, wireEpoch)
+    local _, _, source = self:ComputeHistoryCatchupSnapshotDigest(snapshot, wireEpoch)
     local byType = { LK = {}, LR = {}, LC = {} }
     for i = 1, #source do
         local packet = source[i]
@@ -402,10 +413,10 @@ function sync:PrepareBoundedFullSrLeaderboardQueue(isLargeEvent, callback)
         settled = true
         callback(success == true, type(page) == "table" and page or {})
     end
-    local accepted = lb:SnapshotCurrentCampaignBeforeReset(function(success)
+    local accepted = PrepareSnapshotForNetwork(lb, function(success, preparedSnapshot)
         if settled then return end
         local campaignStart = CurrentCampaign()
-        local snapshot = success and SnapshotForCampaign(campaignStart) or nil
+        local snapshot = success and preparedSnapshot or nil
         if not snapshot then
             finish(false, {})
             return
@@ -422,18 +433,22 @@ function sync:PrepareBoundedFullSrLeaderboardQueue(isLargeEvent, callback)
     return accepted == true
 end
 
-function sync:ComputeHistoryCatchupSnapshotDigest(snapshot, wireEpoch)
-    local cached = type(snapshot) == "table" and snapshotWireCache[snapshot] or nil
+function sync:ComputeHistoryCatchupSnapshotDigest(snapshot, wireEpoch, killLimit, yieldWork)
+    killLimit = killLimit or MAX_SNAPSHOT_ROWS
+    local profiles = type(snapshot) == "table" and snapshotWireCache[snapshot] or nil
+    local cached = profiles and profiles[killLimit]
     if cached and cached.wireEpoch == wireEpoch then
         return cached.count, cached.hash, cached.queue
     end
-    local queue = self:BuildHistoryCatchupSnapshotQueue(snapshot, wireEpoch)
+    local queue = self:BuildHistoryCatchupSnapshotQueue(snapshot, wireEpoch, killLimit, yieldWork)
     local hash = 0
     for i = 1, #queue do
         hash = (hash + HashPacket(queue[i].type, queue[i].data)) % HASH_MOD
+        if yieldWork then yieldWork() end
     end
     if type(snapshot) == "table" then
-        snapshotWireCache[snapshot] = {
+        snapshotWireCache[snapshot] = profiles or {}
+        snapshotWireCache[snapshot][killLimit] = {
             wireEpoch = wireEpoch,
             count = #queue,
             hash = hash,
@@ -441,6 +456,50 @@ function sync:ComputeHistoryCatchupSnapshotDigest(snapshot, wireEpoch)
         }
     end
     return #queue, hash, queue
+end
+
+-- Serialization and hashing also yield; callers only read a finished immutable cache.
+local snapshotWireBuilds = setmetatable({}, { __mode = "k" })
+PrepareSnapshotForNetwork = function(lb, callback, killLimit, requestedWireEpoch)
+    killLimit = killLimit or MAX_SNAPSHOT_ROWS
+    return lb:SnapshotCurrentCampaignBeforeReset(function(success)
+        local campaignStart = CurrentCampaign()
+        local snapshot = success and SnapshotForCampaign(campaignStart)
+        if not snapshot then callback(false); return end
+        local wireEpoch = requestedWireEpoch or campaignStart
+        if not CampaignEpochsMatch(wireEpoch, campaignStart) then callback(false); return end
+        local profiles = snapshotWireCache[snapshot]
+        local cached = profiles and profiles[killLimit]
+        if cached and cached.wireEpoch == wireEpoch then callback(true, snapshot); return end
+        local builds = snapshotWireBuilds[snapshot] or {}
+        snapshotWireBuilds[snapshot] = builds
+        local active = builds[killLimit]
+        if active and active.wireEpoch == wireEpoch then
+            active.callbacks[#active.callbacks + 1] = callback
+            return
+        end
+        local state = { wireEpoch = wireEpoch, callbacks = { callback } }
+        builds[killLimit] = state
+        local work, started = 0, 0
+        local function yieldWork()
+            work = work + 1
+            if work >= 32 or (debugprofilestop and debugprofilestop() - started >= 1) then
+                coroutine.yield()
+            end
+        end
+        local worker = coroutine.create(function()
+            sync:ComputeHistoryCatchupSnapshotDigest(snapshot, wireEpoch, killLimit, yieldWork)
+        end)
+        local function resume()
+            work, started = 0, debugprofilestop and debugprofilestop() or 0
+            local ok = coroutine.resume(worker)
+            if ok and coroutine.status(worker) ~= "dead" then C_Timer.After(0, resume); return end
+            if builds[killLimit] == state then builds[killLimit] = nil end
+            ok = ok and CurrentCampaign() == campaignStart
+            for _, done in ipairs(state.callbacks) do pcall(done, ok, snapshot) end
+        end
+        C_Timer.After(0, resume)
+    end)
 end
 
 local function BuildHistoricalQueue()
@@ -599,8 +658,8 @@ function sync:OnHistoryCatchupRequest(payload, sender, channel)
     if not RequesterAllowed(sender, ladderOnly) then return false end
     local currentStart, currentId = CurrentCampaign()
     local supportsPushPull = version == PROTOCOL_VERSION
-    local compatibilityV2 = version == COMPAT_PROTOCOL_VERSION
-    if (not supportsPushPull and not compatibilityV2
+    local compatibilityPull = version == COMPAT_PROTOCOL_VERSION or version == PREVIOUS_PROTOCOL_VERSION
+    if (not supportsPushPull and not compatibilityPull
             and version ~= LEGACY_PROTOCOL_VERSION) or campaignId <= 0
         or campaignId ~= currentId or not CampaignEpochsMatch(campaignStart, currentStart)
         or type(nonce) ~= "string" or not nonce:match("^[%w]+$")
@@ -625,26 +684,23 @@ function sync:OnHistoryCatchupRequest(payload, sender, channel)
     -- dans la meme frame ne lancent pas deux snapshots/reponses.
     local reservation = { target = sender, campaignId = campaignId, nonce = nonce }
     self._historyCatchupResponse = reservation
-    local accepted = lb:SnapshotCurrentCampaignBeforeReset(function(success)
+    local accepted = PrepareSnapshotForNetwork(lb, function(success, preparedSnapshot)
         if sync._historyCatchupResponse ~= reservation then return end
         sync._historyCatchupResponse = nil
         local startNow, idNow = CurrentCampaign()
         local snapshot = success and idNow == campaignId
             and CampaignEpochsMatch(startNow, campaignStart)
-            and SnapshotForCampaign(startNow) or nil
+            and preparedSnapshot or nil
         if not snapshot then
             BusyAck(sender, campaignId, nonce, version)
             return
         end
         local localCount, localHash, ladderQueue =
-            sync:ComputeHistoryCatchupSnapshotDigest(snapshot, campaignStart)
-        -- HR v2 avait deux scopes differents sous le meme numero : ancien
-        -- top-150 global contre nouveau top-200/per-faction. Envoyer notre vue
-        -- visible reste utile aux anciens receveurs, mais leur demander HB ne
-        -- peut jamais produire le meme digest. HA:S reprend donc leur propre
-        -- preuve et termine proprement ce pull unidirectionnel ; SR:F rotatif
-        -- recupere ensuite leur tranche en retour, sans boucle bulk impossible.
-        if compatibilityV2 then
+            sync:ComputeHistoryCatchupSnapshotDigest(snapshot, campaignStart,
+                supportsPushPull and MAX_SNAPSHOT_ROWS or 200)
+        -- Old peers compare a top 150/200. Give them only a bounded legacy view;
+        -- never ask them to certify a 500-player union they cannot represent.
+        if compatibilityPull then
             StartResponse(sender, campaignId, nonce, "S",
                 remoteCount, remoteHash, ladderQueue, not ladderOnly,
                 version, false, true)
@@ -654,7 +710,7 @@ function sync:OnHistoryCatchupRequest(payload, sender, channel)
         StartResponse(sender, campaignId, nonce, same and "S" or "D",
             localCount, localHash, same and nil or ladderQueue, not ladderOnly,
             version, supportsPushPull)
-    end)
+    end, supportsPushPull and MAX_SNAPSHOT_ROWS or 200, campaignStart)
     if accepted ~= true then
         self._historyCatchupResponse = nil
         BusyAck(sender, campaignId, nonce, version)
@@ -735,7 +791,7 @@ local function ScheduleAttempt(generation, campaignId, attempt)
             ScheduleAttempt(generation, campaignId, attempt + 1)
             return
         end
-        lb:SnapshotCurrentCampaignBeforeReset(function(success)
+        PrepareSnapshotForNetwork(lb, function(success, preparedSnapshot)
             local active = sync._historyCatchupPending
             if not active or active.generation ~= generation or active.terminal then return end
             local currentStart, currentId = CurrentCampaign()
@@ -743,7 +799,11 @@ local function ScheduleAttempt(generation, campaignId, attempt)
                 RestartHistoryCatchupForCurrentCampaign(active)
                 return
             end
-            local snapshot = success and SnapshotForCampaign(currentStart) or nil
+            if not success then
+                ScheduleAttempt(generation, campaignId, attempt + 1)
+                return
+            end
+            local snapshot = preparedSnapshot
             local count, hash = sync:ComputeHistoryCatchupSnapshotDigest(snapshot, currentStart)
             -- Les rondes periodiques reutilisent le dernier roster complet. Un
             -- candidat stale qui ne repond plus force un vrai refresh au retry,
@@ -905,7 +965,7 @@ local function StartReturnPush(pending, target)
         return RetryHistoryCatchup(pending)
     end
     pending.preparingPush = true
-    local accepted = lb:SnapshotCurrentCampaignBeforeReset(function(success)
+    local accepted = PrepareSnapshotForNetwork(lb, function(success, preparedSnapshot)
         if sync._historyCatchupPending ~= pending or pending.terminal then return end
         pending.preparingPush = nil
         local campaignStart, campaignId = CurrentCampaign()
@@ -917,7 +977,7 @@ local function StartReturnPush(pending, target)
             RetryHistoryCatchup(pending)
             return
         end
-        local snapshot = SnapshotForCampaign(campaignStart)
+        local snapshot = preparedSnapshot
         local count, hash, queue =
             sync:ComputeHistoryCatchupSnapshotDigest(snapshot, campaignStart)
         local begin = table.concat({
@@ -1078,12 +1138,12 @@ function sync:OnHistoryPushCommit(payload, sender, channel)
         SendPushTerminal(sender, campaignId, nonce, "E", 0, 0)
         return false
     end
-    local accepted = lb:SnapshotCurrentCampaignBeforeReset(function(success)
+    local accepted = PrepareSnapshotForNetwork(lb, function(success, preparedSnapshot)
         if sync._historyCatchupPushInbound ~= state then return end
         local campaignStart, verifiedCampaignId = CurrentCampaign()
         local snapshot = success and verifiedCampaignId == campaignId
             and CampaignEpochsMatch(campaignStart, state.campaignStart)
-            and SnapshotForCampaign(campaignStart) or nil
+            and preparedSnapshot or nil
         local finalCount, finalHash = -1, -1
         if snapshot then
             finalCount, finalHash =
@@ -1095,7 +1155,7 @@ function sync:OnHistoryPushCommit(payload, sender, channel)
         else
             SendPushTerminal(sender, campaignId, nonce, "E", 0, 0)
         end
-    end)
+    end, MAX_SNAPSHOT_ROWS, state.campaignStart)
     if accepted ~= true then
         self._historyCatchupPushInbound = nil
         SendPushTerminal(sender, campaignId, nonce, "E", 0, 0)

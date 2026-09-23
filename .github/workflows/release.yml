@@ -57,6 +57,7 @@ jobs:
           lua5.1 tests/forever_recovery.test.lua
           lua5.1 tests/forever_popups_persistence.test.lua
           lua5.1 tests/forever_leaderboard.test.lua
+          lua5.1 tests/forever_display_cache.test.lua
           lua5.1 tests/forever_world_kills.test.lua
           lua5.1 tests/forever_honorable_kills.test.lua
           lua5.1 tests/forever_guild_totals.test.lua

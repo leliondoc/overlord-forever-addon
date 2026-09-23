@@ -1,6 +1,7 @@
 -- Leaderboard.lua - Classement des kills et captures par joueur
 Overlord = Overlord or {}
 Overlord.Leaderboard = {
+    KILL_RANK_LIMIT = 500,
     kills = {},
     captures = {},
     captureCount = {},
@@ -1471,7 +1472,7 @@ function Overlord.Leaderboard:IsDedupKeyForLocalPlayer(dk)
     return false
 end
 
-local DISPLAY_KILL_RANK_LIMIT = 5000
+local DISPLAY_KILL_RANK_LIMIT = Overlord.Leaderboard.KILL_RANK_LIMIT
 local DISPLAY_CAPTURE_RANK_LIMIT = 25
 local DISPLAY_CACHE_WORK_PER_SLICE = 64
 local DISPLAY_CACHE_SLICE_BUDGET_MS = 1
@@ -1558,6 +1559,7 @@ end
 
 local function displayCacheSourcesMatch(cache, lb)
     return cache
+        and lb:IsDisplayCacheScopeCurrent(cache)
         and cache.killSource == lb.kills
         and cache.captureCountSource == lb.captureCount
         and cache.capturesSource == lb.captures
@@ -1565,11 +1567,16 @@ local function displayCacheSourcesMatch(cache, lb)
 end
 
 function Overlord.Leaderboard:StartDisplayCacheBuild()
+    if self._storageBound ~= true then return false end
     if self._displayCacheBuildPending then return false end
     if not C_Timer or not C_Timer.After then return false end
 
     local state = {
         epoch = self._displayCacheEpoch or 0,
+        campaignStart = self:GetCurrentCampaignStart(),
+        pool = Overlord.GetCurrentLeaderboardSavedVarsPool
+            and Overlord:GetCurrentLeaderboardSavedVarsPool() or "",
+        scoreBucketEpoch = OverlordDB and OverlordDB.leaderboardScoreBucketEpoch,
         metaEpoch = self._dedupMetaEpoch or 0,
         killSource = self.kills,
         captureCountSource = self.captureCount,
@@ -1733,11 +1740,11 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             Horde = captureRows(state.hordeTop, "Horde"),
         }
 
-        -- Totaux complets, calcules en tranches depuis le meme index deduplique.
+        -- Guildes et totaux affiches portent sur les memes joueurs que le reseau.
         local guildBuckets = {}
         local alliKills, hordeKills = 0, 0
-        if not forEach(dedupKillMaxIndex, function(key, count)
-            local name = state.canonicalIndex[key] or key
+        for _, row in ipairs(sortedKills) do
+            local name, count = row.name, row.kills
             local _, faction, guild = indexedMeta(name)
             if faction == "Alliance" then alliKills = alliKills + count
             elseif faction == "Horde" then hordeKills = hordeKills + count end
@@ -1758,7 +1765,8 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                     bucket._facAlliance = bucket._facAlliance + count
                 end
             end
-        end) then return end
+            yieldWork()
+        end
         local sortedGuilds = {}
         for _, bucket in pairs(guildBuckets) do
             local voted = ""
@@ -1846,6 +1854,9 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             locale = locale,
             duplicateShortNames = duplicateShortNames,
             epoch = state.epoch,
+            campaignStart = state.campaignStart,
+            pool = state.pool,
+            scoreBucketEpoch = state.scoreBucketEpoch,
             ready = true,
             killSource = state.killSource,
             captureCountSource = state.captureCountSource,
@@ -1923,6 +1934,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                 and displayCacheSourcesMatch(state.result, self) then
                 self._displayMetaCache = state.displayMeta
                 self._displayCache = state.result
+                self:SaveDisplayCache(state.result)
             end
             state.scoreEpochChanged = scoreEpochChanged
             requestConsumerRefresh()
@@ -1941,6 +1953,10 @@ function Overlord.Leaderboard:EnsureDisplayCache()
     local epoch = self._displayCacheEpoch or 0
     local cache = self._displayCache
     if displayCacheSourcesMatch(cache, self) and cache.epoch == epoch then return cache end
+    if not displayCacheSourcesMatch(cache, self) then
+        cache = self:RestoreDisplayCache()
+        self._displayCache = cache
+    end
     self:StartDisplayCacheBuild()
     if displayCacheSourcesMatch(cache, self) then return cache end
 
@@ -1950,6 +1966,10 @@ function Overlord.Leaderboard:EnsureDisplayCache()
             sortedKills = {}, byFaction = { Alliance = {}, Horde = {} }, sortedGuilds = {},
             alliKills = 0, hordeKills = 0, meta = {}, locale = {}, duplicateShortNames = {},
             ready = false,
+            campaignStart = self:GetCurrentCampaignStart(),
+            pool = Overlord.GetCurrentLeaderboardSavedVarsPool
+                and Overlord:GetCurrentLeaderboardSavedVarsPool() or "",
+            scoreBucketEpoch = OverlordDB and OverlordDB.leaderboardScoreBucketEpoch,
             killSource = self.kills, captureCountSource = self.captureCount,
             capturesSource = self.captures, playerInfoSource = self.playerInfo,
         }
@@ -1995,6 +2015,104 @@ local function GetMatchingLeaderboardScoreBucketEpoch(campaignStart)
         return attestedEpoch
     end
     return 0
+end
+
+-- Presentation only: never merge this saved view into scores or relay it.
+-- It contains at most 500 kills/guilds and 25 captures per faction, without
+-- references to the unbounded live score/metadata tables.
+function Overlord.Leaderboard:IsDisplayCacheScopeCurrent(cache)
+    if type(cache) ~= "table" or not OverlordDB then return false end
+    local campaign = self:GetCurrentCampaignStart()
+    local bucket = OverlordDB.leaderboard
+    local pool = Overlord.GetCurrentLeaderboardSavedVarsPool
+        and Overlord:GetCurrentLeaderboardSavedVarsPool() or ""
+    return type(bucket) == "table" and cache.pool == pool
+        and LeaderboardCampaignEpochsMatch(cache.campaignStart, campaign)
+        and LeaderboardCampaignEpochsMatch(bucket.campaignStart, campaign)
+        and LeaderboardCampaignEpochsMatch(cache.scoreBucketEpoch, campaign)
+        and GetMatchingLeaderboardScoreBucketEpoch(campaign) > 0
+end
+
+function Overlord.Leaderboard:SaveDisplayCache(cache)
+    if self._storageBound ~= true or not cache.ready or cache.fromSavedCache
+        or not self:IsDisplayCacheScopeCurrent(cache) then return false end
+    OverlordDB.leaderboardDisplayCache = {
+        version = 1, killLimit = self.KILL_RANK_LIMIT,
+        campaignStart = cache.campaignStart, scoreBucketEpoch = cache.scoreBucketEpoch,
+        pool = cache.pool, at = (GetServerTime and GetServerTime()) or time(),
+        sortedKills = cache.sortedKills, sortedGuilds = cache.sortedGuilds,
+        byFaction = cache.byFaction, meta = cache.meta, locale = cache.locale,
+        alliKills = cache.alliKills, hordeKills = cache.hordeKills,
+    }
+    return true
+end
+
+function Overlord.Leaderboard:RestoreDisplayCache()
+    local saved = OverlordDB and OverlordDB.leaderboardDisplayCache
+    if type(saved) ~= "table" or saved.version ~= 1
+        or saved.killLimit ~= self.KILL_RANK_LIMIT
+        or not self:IsDisplayCacheScopeCurrent(saved) then return nil end
+    -- Validate only bounded visible rows, never traverse arbitrary saved maps.
+    local function text(value, maximum)
+        return type(value) == "string" and #value <= maximum
+    end
+    local function count(value)
+        return type(value) == "number" and value >= 0 and value < math.huge
+            and value == math.floor(value)
+    end
+    if type(saved.sortedKills) ~= "table" or #saved.sortedKills > self.KILL_RANK_LIMIT
+        or type(saved.sortedGuilds) ~= "table" or #saved.sortedGuilds > self.KILL_RANK_LIMIT
+        or type(saved.byFaction) ~= "table" or type(saved.meta) ~= "table"
+        or type(saved.locale) ~= "table"
+        or not count(saved.alliKills) or not count(saved.hordeKills) then return nil end
+    local cache = {
+        sortedKills = {}, sortedGuilds = {}, byFaction = { Alliance = {}, Horde = {} },
+        meta = {}, locale = {}, duplicateShortNames = {},
+        alliKills = saved.alliKills, hordeKills = saved.hordeKills,
+        campaignStart = saved.campaignStart, scoreBucketEpoch = saved.scoreBucketEpoch,
+        pool = saved.pool, savedAt = saved.at,
+        ready = true, fromSavedCache = true, epoch = -1,
+        killSource = self.kills, captureCountSource = self.captureCount,
+        capturesSource = self.captures, playerInfoSource = self.playerInfo,
+    }
+    local function copyMeta(name)
+        if not text(name, 160) or name == "" then return false end
+        local meta, locale = saved.meta[name], saved.locale[name]
+        if type(meta) ~= "table" or not text(meta[1], 32) or not text(meta[2], 16)
+            or not text(meta[3], 64) or not count(meta[4]) or meta[4] > 3
+            or not text(locale, 32) then return false end
+        cache.meta[name] = { meta[1], meta[2], meta[3], meta[4] }
+        cache.locale[name] = locale
+        return true
+    end
+    for i = 1, #saved.sortedKills do
+        local row = saved.sortedKills[i]
+        if type(row) ~= "table" or not count(row.kills) or not copyMeta(row.name)
+            or (Overlord.Sync and Overlord.Sync.IsDeniedKillContributor
+                and Overlord.Sync:IsDeniedKillContributor(row.name)) then return nil end
+        cache.sortedKills[i] = { name = row.name, kills = row.kills }
+        local short = (row.name:match("^(.-)%-") or row.name):lower()
+        cache.duplicateShortNames[short] = (cache.duplicateShortNames[short] or 0) + 1
+    end
+    for _, faction in ipairs({"Alliance", "Horde"}) do
+        local rows = saved.byFaction[faction]
+        if type(rows) ~= "table" or #rows > DISPLAY_CAPTURE_RANK_LIMIT then return nil end
+        for i = 1, #rows do
+            local row = rows[i]
+            if type(row) ~= "table" or not count(row.count) or row.faction ~= faction
+                or not text(row.class, 32) or not copyMeta(row.name) then return nil end
+            cache.byFaction[faction][i] = {
+                name = row.name, count = row.count, class = row.class, faction = faction,
+            }
+        end
+    end
+    for i = 1, #saved.sortedGuilds do
+        local row = saved.sortedGuilds[i]
+        if type(row) ~= "table" or not text(row.guild, 128) or not count(row.kills)
+            or not text(row.faction, 16) then return nil end
+        cache.sortedGuilds[i] = { guild = row.guild, kills = row.kills, faction = row.faction }
+    end
+    return cache
 end
 
 -- Aligne le marqueur de reset LB sur lastResetTimestamp (bucket considere cohérent avec la semaine DB).
@@ -2565,6 +2683,11 @@ function Overlord.Leaderboard:Initialize(loadFromDB)
     local networkPrepared = self:EnsureNetworkHotIndexesPrepared()
     if networkPrepared ~= true then return networkPrepared end
     self._networkHotIndexPrepResumeInitialize = nil
+    -- A panel opened before binding may already show the saved preview.
+    -- Wake it once the real sources are ready, without waiting for a peer.
+    if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RequestRefresh then
+        Overlord.LeaderboardUI:RequestRefresh()
+    end
 
     -- Migrations / dedup lourdes : +5 s au login pour ne pas empiler avec UI / sync / carte.
     -- Chaque operation est ensuite executee sur une frame distincte. Les anciennes
@@ -7156,7 +7279,7 @@ end
 -- appartiennent a cette campagne), pas sur GetCurrentCampaignStart : ainsi un vrai reset hebdo
 -- (snapshot = ancienne semaine) ne ressuscite jamais d'anciennes donnees, alors qu'un faux
 -- reset mid-week (snapshot = semaine courante) reste recuperable.
-local LADDER_SNAPSHOT_MAX_KILL_PLAYERS = 200
+local LADDER_SNAPSHOT_MAX_KILL_PLAYERS = Overlord.Leaderboard.KILL_RANK_LIMIT
 local LADDER_SNAPSHOT_MAX_CAPTURE_PLAYERS_PER_FACTION = 25
 local LADDER_SNAPSHOT_WORK_PER_SLICE = 80
 local LADDER_SNAPSHOT_SLICE_BUDGET_MS = 1
@@ -7349,6 +7472,7 @@ function Overlord.Leaderboard:OpenAtomicWeeklyBucket(archiveEpoch, resetEpoch, c
     self.bountyKills = newBucket.bountyKills
     self.playerInfo = newBucket.playerInfo
     OverlordDB.leaderboard = newBucket
+    OverlordDB.leaderboardDisplayCache = nil
     OverlordDB.leaderboardLocalKillKeys = {}
     OverlordDB.leaderboardResetEpoch = resetEpoch
     OverlordDB.leaderboardScoreBucketEpoch = resetEpoch
@@ -7588,6 +7712,24 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
         return true
     end
     if self._snapshotBuildPending then return true end
+    -- Share the login index builder, so aliases cannot occupy two of the 500 slots.
+    if self:EnsureNetworkHotIndexesPrepared() ~= true then
+        if self._networkHotIndexPrepFailed or (self._snapshotIndexWaitAttempts or 0) >= 120 then
+            self._snapshotIndexWaitAttempts = nil
+            self:ResolveSnapshotCompletion(false)
+            return false
+        end
+        if not self._snapshotIndexWaitPending then
+            self._snapshotIndexWaitPending = true
+            self._snapshotIndexWaitAttempts = (self._snapshotIndexWaitAttempts or 0) + 1
+            C_Timer.After(0.25, function()
+                self._snapshotIndexWaitPending = nil
+                self:SnapshotCurrentCampaignFull()
+            end)
+        end
+        return true
+    end
+    self._snapshotIndexWaitAttempts = nil
     local campaignStart = tonumber(OverlordDB.leaderboard and OverlordDB.leaderboard.campaignStart) or 0
     if campaignStart <= 0 then campaignStart = self:GetCurrentCampaignStart() end
     if campaignStart <= 0 then
@@ -7608,7 +7750,11 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
         key = nil,
         campaignStart = campaignStart,
         scoreBucketEpoch = scoreBucketEpoch,
-        killHeap = self:NewTopSnapshotHeap(LADDER_SNAPSHOT_MAX_KILL_PLAYERS),
+        killHeap = newDisplayTopK(LADDER_SNAPSHOT_MAX_KILL_PLAYERS),
+        killIndex = dedupKillMaxIndex,
+        canonicalIndex = dedupCanonicalIndex,
+        canonicalGeneration = dedupCanonicalGeneration,
+        metaIndex = self._dedupMetaIndex,
         capHeapAlliance = self:NewTopSnapshotHeap(
             LADDER_SNAPSHOT_MAX_CAPTURE_PLAYERS_PER_FACTION),
         capHeapHorde = self:NewTopSnapshotHeap(
@@ -7623,6 +7769,15 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
         capturesSource = self.captures,
     }
     self._snapshotBuildPending = state
+
+    local finalWork, finalStarted = 0, 0
+    local function yieldFinalWork()
+        finalWork = finalWork + 1
+        if finalWork >= LADDER_SNAPSHOT_WORK_PER_SLICE
+            or (debugprofilestop and debugprofilestop() - finalStarted >= LADDER_SNAPSHOT_SLICE_BUDGET_MS) then
+            coroutine.yield()
+        end
+    end
 
     local function finishSnapshot()
         local liveCampaignStart = tonumber(
@@ -7648,10 +7803,14 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
         appendCaptureHeap(state.capHeapAlliance)
         appendCaptureHeap(state.capHeapHorde)
         appendCaptureHeap(state.capHeapUnknown)
-        table.sort(killRows, SnapshotRowIsBetter)
-        table.sort(capRows, SnapshotRowIsBetter)
-        -- Rien a sauvegarder : ne pas ecraser un snapshot precedent valide.
-        if #killRows == 0 and #capRows == 0 then
+        sortRowsWithYield(killRows, SnapshotRowIsBetter, yieldFinalWork)
+        sortRowsWithYield(capRows, SnapshotRowIsBetter, yieldFinalWork)
+        -- Preserve a recoverable snapshot, but publish an attested empty bucket
+        -- on a fresh install so two empty peers can finish their handshake.
+        local previous = OverlordDB.leaderboardSnapshot
+        if #killRows == 0 and #capRows == 0 and type(previous) == "table"
+            and previous.campaignStart == state.campaignStart
+            and previous.scoreBucketEpoch == state.scoreBucketEpoch then
             self._snapshotDirty = changedDuringBuild
             self._snapshotBuildPending = nil
             self:ResolveSnapshotCompletion(true)
@@ -7665,16 +7824,19 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
             snapKills[r.name] = r.count
             killOrder[#killOrder + 1] = r.name
             kept[r.name] = true
+            yieldFinalWork()
         end
         for i = 1, #capRows do
             local r = capRows[i]
             snapCaps[r.name] = r.count
             captureOrder[#captureOrder + 1] = r.name
             kept[r.name] = true
+            yieldFinalWork()
         end
-        -- Au plus 300 lignes : cette finalisation reste bornee independamment de N.
+        -- Copy metadata in slices as well as sorting, even at the 500-player cap.
         for name in pairs(kept) do
-            local info = state.playerInfoSource and state.playerInfoSource[name]
+            local info = state.metaIndex[GetKillDedupKey(name)]
+                or (state.playerInfoSource and state.playerInfoSource[name])
             if type(info) == "table" then
                 snapInfo[name] = {
                     class = info.class or "",
@@ -7691,6 +7853,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
                     level = math.floor(tonumber(info.level) or 0),
                 }
             end
+            yieldFinalWork()
         end
         -- Seules les zones des meilleurs capteurs visibles de chaque faction sont utiles.
         -- Chaque joueur est borne a la fois en nombre et en octets pour que le
@@ -7717,6 +7880,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
                             end
                         end
                     end
+                    yieldFinalWork()
                 end
                 local bytes, keep = 0, 0
                 for j = 1, #copy do
@@ -7728,6 +7892,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
                 for j = #copy, keep + 1, -1 do copy[j] = nil end
                 if #copy > 0 then snapCaptures[name] = copy end
             end
+            yieldFinalWork()
         end
 
         local pool = (Overlord.GetCurrentLeaderboardSavedVarsPool
@@ -7747,7 +7912,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
         -- Une mutation de valeur pendant l'iteration ne doit pas jeter tout le
         -- travail. Publier ce snapshot monotone puis laisser dirty=true garantit
         -- qu'une passe ulterieure rattrape les dernieres valeurs sans starvation.
-        self._snapshotDirty = changedDuringBuild
+        self._snapshotDirty = changedDuringBuild or state.revision ~= (self._snapshotRevision or 0)
         self._snapshotBuildPending = nil
         self:ResolveSnapshotCompletion(true)
     end
@@ -7755,16 +7920,28 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
     local function runSlice()
         if self._snapshotBuildPending ~= state then return end
         if self.kills ~= state.killSource or self.captureCount ~= state.captureSource
-            or self.playerInfo ~= state.playerInfoSource or self.captures ~= state.capturesSource then
+            or self.playerInfo ~= state.playerInfoSource or self.captures ~= state.capturesSource
+            or not dedupCanonicalValid or state.canonicalGeneration ~= dedupCanonicalGeneration then
             self._snapshotBuildPending = nil
             self:ResolveSnapshotCompletion(false)
+            return
+        end
+        if state.finalizer then
+            finalWork, finalStarted = 0, debugprofilestop and debugprofilestop() or 0
+            local ok = coroutine.resume(state.finalizer)
+            if not ok then
+                self._snapshotBuildPending = nil
+                self:ResolveSnapshotCompletion(false)
+            elseif coroutine.status(state.finalizer) ~= "dead" then
+                C_Timer.After(0, runSlice)
+            end
             return
         end
         local budget = LADDER_SNAPSHOT_WORK_PER_SLICE
         local processed = 0
         local sliceStarted = debugprofilestop and debugprofilestop() or nil
         while budget > 0 do
-            local source = state.phase == "kills" and state.killSource or state.captureSource
+            local source = state.phase == "kills" and state.killIndex or state.captureSource
             -- Une compaction exceptionnelle peut retirer le curseur entre deux
             -- frames. Elle annule proprement cette passe; les simples increments
             -- et insertions, eux, ne provoquent plus d'abandon systematique.
@@ -7779,13 +7956,18 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
                     state.phase = "captures"
                     state.key = nil
                 else
-                    finishSnapshot()
+                    state.finalizer = coroutine.create(finishSnapshot)
+                    C_Timer.After(0, runSlice)
                     return
                 end
             else
                 state.key = key
                 if state.phase == "kills" then
-                    self:OfferTopSnapshotRow(state.killHeap, key, value)
+                    local name = state.canonicalIndex[key] or key
+                    if Overlord.Sync and Overlord.Sync.StripPipeLeakFromContributorName then
+                        name = Overlord.Sync:StripPipeLeakFromContributorName(name)
+                    end
+                    offerDisplayTopK(self, state.killHeap, key, name, value)
                 else
                     local info = self.playerInfo and self.playerInfo[key]
                     local faction = type(info) == "table" and info.faction or ""
@@ -8644,7 +8826,7 @@ function Overlord.Leaderboard:GetSortedGuildKills(sortedKillRows, maxRows)
     local rows = type(sortedKillRows) == "table"
         and sortedKillRows or self:MergeNameCountRowsForDisplay(self.kills)
     local buckets = {}
-    local rowCount = math.min(#rows,
+    local rowCount = math.min(#rows, self.KILL_RANK_LIMIT,
         math.max(0, math.floor(tonumber(maxRows) or #rows)))
 
     for i = 1, rowCount do

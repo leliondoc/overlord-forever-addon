@@ -12,7 +12,7 @@ local outpostRows = {}
 -- Kills : 10 lignes visibles, scroll au-dela (meme principe que les listes Captures)
 local MAX_VISIBLE_KILL_ROWS = 10
 local KILL_ROW_HEIGHT = 26
--- Le cache fournit les 5000 premiers ; seules les lignes visibles ont une frame.
+-- Le cache fournit les 500 premiers ; seules les lignes visibles ont une frame.
 -- Nombre max de lignes affichables dans les listes Captures (avec scroll au-dela)
 local MAX_CAPTURE_LINES = 25
 -- Meme hauteur de ligne que le classement kills (aspect unifie)
@@ -2129,6 +2129,9 @@ function Overlord.LeaderboardUI:Refresh()
 
     local startDate, endDate = Overlord:GetCampaignDateRange()
     local subFmt = string.format(L.LB_CAMPAIGN_DATE, startDate, endDate)
+    if dc.fromSavedCache then
+        subFmt = subFmt .. "  ·  " .. (L.LB_CACHED_REFRESHING or "Saved ranking · updating…")
+    end
     if lbFrame._lbSubFmt ~= subFmt then
         lbFrame._lbSubFmt = subFmt
         lbFrame.subtitle:SetText(subFmt)

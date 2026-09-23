@@ -3,6 +3,7 @@
 assert(loadfile("tests/forever_leaderboard.test.lua"))()
 assert(loadfile("Leaderboard.lua"))()
 local lb = Overlord.Leaderboard
+lb._storageBound = true
 local timers, head = {}, 1
 local calls, maxCalls, maxQueued, slices = 0, 0, 0, 0
 local getKey = Overlord.Sync.GetCaptureContributorDedupKey
@@ -42,10 +43,10 @@ for i = 1, 10000 do
     lb.kills[name] = i
     -- Every character in a separate guild exercises the largest possible guild sort.
     lb.playerInfo[name] = { guild = "Guild " .. suffix(i), guildAuth = true,
-        guildAt = time(), faction = i % 2 == 0 and "Alliance" or "Horde", class = "PRIEST" }
+        guildAt = time(), faction = i % 2 == 0 and "Alliance" or "Horde", class = "PRIEST", level = 2 }
     lb.captureCount[name] = i % 25 + 1
     if i % 10 == 0 then lb.kills[name .. "-Realm"] = i end
-    total = total + i
+    if i > 9500 then total = total + i end
 end
 lb:MarkDirty()
 assert(lb:EnsureNetworkHotIndexesPrepared() == false)
@@ -58,17 +59,43 @@ for _ = 1, 100 do assert(not lb:StartDisplayCacheBuild()) end
 assert(#timers == 1, "Repeated refreshes duplicated the display builder")
 local beforeDisplay = slices
 drain()
-assert(slices - beforeDisplay > 1000, "Large guild sort did not yield")
+assert(slices - beforeDisplay > 200, "Large ranking preparation did not yield")
 local cache = assert(lb._displayCache, "Large display cache was not published")
-assert(#cache.sortedKills == 5000 and cache.sortedKills[1].kills == 10000)
+assert(#cache.sortedKills == 500 and cache.sortedKills[1].kills == 10000)
 for i, row in ipairs(cache.sortedKills) do
-    assert(row.kills == 10001 - i, "Top 5000 lost, duplicated or misordered a player")
+    assert(row.kills == 10001 - i, "Top 500 lost, duplicated or misordered a player")
 end
-assert(#cache.sortedGuilds == 10000 and cache.sortedGuilds[1].kills == 10000)
+assert(#cache.sortedGuilds == 500 and cache.sortedGuilds[1].kills == 10000)
 assert(cache.alliKills + cache.hordeKills == total, "Aliases inflated faction totals")
 local guildTotal = 0
 for _, row in ipairs(cache.sortedGuilds) do guildTotal = guildTotal + row.kills end
-assert(guildTotal == total, "Players outside top 200 were lost or counted twice")
+assert(guildTotal == total, "Guild totals differ from the displayed top 500")
+
+-- The real snapshot and its wire serializer must agree with that exact top,
+-- including aliases, without sorting 500 rows or serializing them in one frame.
+lb._storageBound = true
+local snapshotDone
+local beforeSnapshot = slices
+lb:SnapshotCurrentCampaignBeforeReset(function(ok) snapshotDone = ok end)
+drain()
+assert(snapshotDone and slices - beforeSnapshot > 100, "Snapshot work was not sliced")
+local snapshot = assert(OverlordDB.leaderboardSnapshot)
+assert(#snapshot.killOrder == 500)
+for i, row in ipairs(cache.sortedKills) do
+    assert(snapshot.killOrder[i] == row.name and snapshot.kills[row.name] == row.kills,
+        "Network and display disagree on the top 500")
+    assert(snapshot.playerInfo[row.name].guild ~= "", "Alias lost its guild metadata")
+end
+assert(loadfile("SyncHistoryCatchup.lua"))()
+local prepared
+local beforeWire = slices
+Overlord.Sync:PrepareBoundedFullSrLeaderboardQueue(false, function(ok) prepared = ok end)
+drain()
+assert(prepared and slices - beforeWire > 40, "Network serialization did not yield")
+local count, _, queue = Overlord.Sync:ComputeHistoryCatchupSnapshotDigest(snapshot, snapshot.campaignStart)
+local killsSent = 0
+for _, packet in ipairs(queue) do if packet.type == "LK" then killsSent = killsSent + 1 end end
+assert(killsSent == 500 and count <= 615, "Wire queue truncated or exceeded the top 500")
 
 -- Identity repair must scan verified populations cooperatively and send nothing.
 assert(loadfile("SyncResolution.lua"))()

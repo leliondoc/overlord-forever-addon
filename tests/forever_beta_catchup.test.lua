@@ -1,5 +1,5 @@
 -- Real HR/HB/HC/HA, LK/LC/LR admission and monotone merge through three hops.
--- Only WoW's transports, clock and asynchronous snapshot builder are simulated.
+-- Only WoW transports and clock are simulated; the sliced snapshot builder is real.
 local now, serial, pending, clients = 100, 0, {}, {}
 local function later(delay, run)
     serial = serial + 1
@@ -34,6 +34,9 @@ local function client(name, channel)
     e._G, e.print = e, function() end
     e.loadfile = function(path) return setfenv(assert(loadfile(path)), e) end
     e.loadfile("tests/forever_world_kills.test.lua")()
+    -- The base capture fixture stubs index readiness; restore the real module
+    -- before exercising the production snapshot/index workers.
+    e.loadfile("Leaderboard.lua")()
     e.name, e.channel, e.friends = name, channel, {}
     e.GetTime = function() return now end
     e.time = function() return 1790017000 + math.floor(now) end
@@ -105,27 +108,15 @@ local function client(name, channel)
             "Raw cross-faction reply: " .. tostring(name) .. " -> " .. tostring(target))
         for _, other in ipairs(clients) do
             if other.name == target then
-                other.Overlord.Sync:OnAddonMessage(prefix, message, transport, name)
+                local destination = other
+                later(0.05, function()
+                    destination.Overlord.Sync:OnAddonMessage(prefix, message, transport, name)
+                end)
             end
         end
     end }
     lb.kills, lb.captureCount, lb.captures, lb.playerInfo = {}, {}, {}, {}
-    lb.SnapshotCurrentCampaignBeforeReset = function(self, done)
-        local snapshot = {
-            campaignStart = e.Overlord:GetCurrentCampaignStartTs(),
-            scoreBucketEpoch = e.OverlordDB.leaderboardScoreBucketEpoch,
-            kills = copy(self.kills), captureCount = copy(self.captureCount),
-            captures = copy(self.captures), playerInfo = copy(self.playerInfo),
-            killOrder = {}, captureOrder = {},
-        }
-        for key in pairs(snapshot.kills) do snapshot.killOrder[#snapshot.killOrder + 1] = key end
-        for key in pairs(snapshot.captureCount) do snapshot.captureOrder[#snapshot.captureOrder + 1] = key end
-        table.sort(snapshot.killOrder)
-        table.sort(snapshot.captureOrder)
-        e.OverlordDB.leaderboardSnapshot = snapshot
-        later(0, function() done(true) end)
-        return true
-    end
+    lb._storageBound = true
     e.loadfile("SyncHistoryCatchup.lua")()
     e.loadfile("SyncBetaNetwork.lua")()
     clients[#clients + 1] = e
@@ -144,37 +135,58 @@ for _, e in ipairs(clients) do
     assert(e.Overlord.BetaNetwork:Broadcast("NH", "1.0.2") == 1)
 end
 advance(10)
-for _, e in ipairs(clients) do e.Overlord.Sync.SendSyncRequest = e.savedRequest end
+-- Keep peer discovery alive throughout the deliberately slow 500-row exchange.
+-- Isolate HR from legacy SR traffic as in the initial discovery above.
+local heartbeatActive = true
+local function heartbeat()
+    if not heartbeatActive then return end
+    for _, e in ipairs(clients) do e.Overlord.BetaNetwork:Broadcast("NH", "1.0.11") end
+    later(45, heartbeat)
+end
+later(45, heartbeat)
 local campaign = a.Overlord:GetCurrentCampaignStartTs()
 local names = {}
-for i = 1, 180 do
+for i = 1, 500 do
     local name = "Player " .. string.char(65 + math.floor((i - 1) / 26)) .. string.char(65 + (i - 1) % 26)
     names[#names + 1] = name
     local lb = d.Overlord.Leaderboard
     lb.kills[name] = i
     lb.playerInfo[name] = { class = "WARRIOR", faction = "Horde", level = 2,
         locale = "engb", guild = "Veteran Guild", guildAt = 1790016000 }
-    if i <= 10 then
+    if i > 460 then
         lb.playerInfo[name].race, lb.playerInfo[name].raceSex = "Orc", 2
     end
     if i <= 120 then lb.captureCount[name], lb.captures[name] = i, {} end
 end
-a.Overlord.Leaderboard.kills["Unique Tester"] = 7
+a.Overlord.Leaderboard.kills["Unique Tester"] = 750
 a.Overlord.Leaderboard.playerInfo["Unique Tester"] = {
     class = "PRIEST", faction = "Alliance", level = 2, locale = "engb" }
 -- Deterministic peer selection; peer discovery, trust and routing remain real.
 a.Overlord.Sync.GetOnlineCommunityMembers = function() return { d.name } end
 d.refuseChannel = true
+local sendWhisper = d.Overlord.Sync.SendWhisper
+d.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
+    if kind == "LK" and not d.refusedSnapshotEnqueue then
+        d.refusedSnapshotEnqueue = true
+        return false
+    end
+    return sendWhisper(self, kind, payload, target)
+end
 assert(a.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true, true))
-advance(550)
+advance(1600)
 for _, name in ipairs(names) do
     assert(a.Overlord.Leaderboard.kills[name] == d.Overlord.Leaderboard.kills[name], "Missing late-login kill: " .. name)
-    assert(a.Overlord.Leaderboard.captureCount[name] == d.Overlord.Leaderboard.captureCount[name], "Missing late-login capture: " .. name)
+    if (d.Overlord.Leaderboard.captureCount[name] or 0) >= 96 then
+        assert(a.Overlord.Leaderboard.captureCount[name] == d.Overlord.Leaderboard.captureCount[name], "Missing late-login capture: " .. name)
+    end
     assert(a.Overlord.Leaderboard.playerInfo[name].guild == "Veteran Guild", "Guild metadata lost")
 end
-assert(d.Overlord.Leaderboard.kills["Unique Tester"] == 7, "Return union never reached veteran")
+assert(d.Overlord.Leaderboard.kills["Unique Tester"] == 750, "Return union never reached veteran")
 assert(a.OverlordDB.leaderboardHistoryCatchupAck, "No verified catchup ACK through bridges")
-assert(d.Overlord.BetaNetwork.stats.dropped > 0, "Fixture never exercised queue backpressure")
+assert(d.refusedSnapshotEnqueue, "Fixture never exercised snapshot backpressure")
+for _, e in ipairs(clients) do
+    assert(e.Overlord.BetaNetwork.stats.dropped == 0, "Paced catchup saturated a relay queue")
+end
 -- The gateways also import the same union: relaying alone must not be mistaken
 -- for merging targeted replies intended for another player.
 b.Overlord.Sync.GetOnlineCommunityMembers = function() return { a.name } end
@@ -186,14 +198,17 @@ for _, e in ipairs(clients) do
     e.Overlord.Sync.SendSyncRequest = function() return true end
     e.Overlord.BetaNetwork:Broadcast("NH", "1.0.2")
 end
-advance(550)
+advance(1600)
 for _, e in ipairs(clients) do
-    for _, name in ipairs(names) do
+    for i = 2, #names do
+        local name = names[i]
         assert(e.Overlord.Leaderboard.kills[name] == d.Overlord.Leaderboard.kills[name], "Replica kills diverged")
-        assert(e.Overlord.Leaderboard.captureCount[name] == d.Overlord.Leaderboard.captureCount[name], "Replica captures diverged")
+        if (d.Overlord.Leaderboard.captureCount[name] or 0) >= 96 then
+            assert(e.Overlord.Leaderboard.captureCount[name] == d.Overlord.Leaderboard.captureCount[name], "Replica captures diverged")
+        end
     end
-    assert(e.Overlord.Leaderboard.kills["Unique Tester"] == 7, "Replica lost union")
-    for i = 1, 10 do
+    assert(e.Overlord.Leaderboard.kills["Unique Tester"] == 750, "Replica lost union")
+    for i = 461, 500 do
         local info = e.Overlord.Leaderboard.playerInfo[names[i]]
         assert(info.race == "Orc" and info.raceSex == 2, "Replica race metadata diverged")
     end
@@ -206,8 +221,13 @@ for _, e in ipairs(clients) do
     e.Overlord.Sync._historyCatchupWakeGeneration =
         (e.Overlord.Sync._historyCatchupWakeGeneration or 0) + 1
     e.Overlord.Sync._historyCatchupPending = nil
+    local response = e.Overlord.Sync._historyCatchupResponse
+    if response and response.ticker then response.ticker:Cancel() end
+    e.Overlord.Sync._historyCatchupResponse = nil
+    e.Overlord.Sync._historyCatchupPushInbound = nil
     e.Overlord.Sync.GetOnlineCommunityMembers = function() return {} end
 end
+heartbeatActive = false
 local empty = client("Empty Tester", "alliance")
 local fresh = client("Fresh Tester", "alliance")
 fresh.Overlord.SavedVariablesLoadedAtLogin = false
@@ -229,11 +249,57 @@ assert((fresh.OverlordDB.leaderboardHistoryCatchupAck.historyAt or 0) == 0,
 fresh.Overlord.Sync.GetOnlineCommunityMembers = function()
     return { a.name }
 end
-advance(250)
-assert(fresh.Overlord.Leaderboard.kills[names[180]] == 180,
+advance(1600)
+assert(fresh.Overlord.Leaderboard.kills[names[500]] == 500,
     "Beta missing-save client did not recover from the next populated peer")
 assert(not fresh.Overlord.Sync._emptySaveCatchupRounds,
     "Empty-save retry state survived successful recovery")
 assert((fresh.OverlordDB.leaderboardHistoryCatchupAck.historyAt or 0) > 0,
     "Populated peer did not certify historical catch-up")
-print("Beta catchup: four replicas converge; late Analyst, 180 kills + 120 captures, guilds, three hops, saturated queue, return union and verified ACK OK")
+-- Different locally retained tails must not change the displayed top or guild total.
+for _, e in ipairs({a, b, c, d, fresh}) do
+    e.Overlord.Leaderboard:EnsureNetworkHotIndexesPrepared()
+end
+advance(1)
+for _, e in ipairs({a, b, c, d, fresh}) do
+    assert(e.Overlord.Leaderboard:StartDisplayCacheBuild())
+end
+advance(1)
+for _, e in ipairs({a, b, c, d, fresh}) do
+    local cache = assert(e.Overlord.Leaderboard._displayCache)
+    assert(#cache.sortedKills == 500 and cache.sortedKills[1].name == "Unique Tester")
+    for _, row in ipairs(cache.sortedKills) do
+        assert(row.name ~= names[1], "Rank 501 leaked into the displayed top")
+    end
+    assert(#cache.sortedGuilds == 1 and cache.sortedGuilds[1].kills == 125249,
+        "Replica guild totals included players outside the common top 500")
+end
+
+-- Old peers still receive a bounded pull they understand, without a 500-row
+-- push request or an impossible digest certification loop.
+local legacyResponder = client("Compat Tester", "alliance")
+local legacySync = legacyResponder.Overlord.Sync
+legacyResponder.OverlordDB.leaderboardSnapshot = copy(a.OverlordDB.leaderboardSnapshot)
+legacyResponder.Overlord.Leaderboard._snapshotDirty = false
+legacySync.IsOnlineCommunitySender = function() return true end
+legacySync.GetSRPayload = function() return nil end
+for _, version in ipairs({"2", "3"}) do
+    local sent = {}
+    legacySync.SendWhisper = function(_, kind, data)
+        sent[#sent + 1] = {type = kind, data = data}
+        return true
+    end
+    assert(legacySync:OnHistoryCatchupRequest(table.concat({version,
+        a.Overlord:TimestampToCampaignId(campaign), campaign, "plegacy" .. version, 0, 0}, ":"),
+        "Legacy Tester", "WHISPER"))
+    advance(300)
+    local kills = 0
+    for _, packet in ipairs(sent) do
+        if packet.type == "LK" then kills = kills + 1 end
+        assert(packet.type ~= "HB", "Old peer was asked to certify a new top")
+    end
+    assert(kills == 200 and #sent <= 316, "Legacy reply exceeded its understood scope")
+    assert(sent[#sent].type == "HA" and sent[#sent].data:match("^" .. version .. ":")
+        and sent[#sent].data:match(":S:0:0$"), "Legacy pull did not terminate cleanly")
+end
+print("Beta catchup: four replicas converge; late Analyst, 500-player ranking + 25 Horde captures, guilds, three hops, backpressure, paced relay queues, return union and verified ACK OK")

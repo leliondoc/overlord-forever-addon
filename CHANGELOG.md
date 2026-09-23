@@ -1,4 +1,13 @@
-1.0.11
+1.0.12
+
+**Overlord Forever 1.0.12**
+
+- Align the kill leaderboard, peer catch-up and guild kill totals on the top 500 players. Keep aliases deduplicated, rank ties stable and capture rankings unchanged.
+- Save the last displayed ranking so it can appear immediately after reconnecting. Refresh it in the background, and discard it when the campaign, data pool or cache format changes. The saved view never becomes an authoritative score source.
+- Spread snapshot construction and network serialization across frames. Pace beta catch-up to one row per second while retaining the shared 1 KB/s relay budget and bounded queue. Older peers receive only the 200-row view they understand.
+- Verify 500-player convergence through three relays, failed-enqueue retries, reload caching and a 10,000-player preparation workload.
+
+**Overlord Forever 1.0.11**
 
 **Overlord Forever 1.0.11**
 
