@@ -1,4 +1,11 @@
-1.0.12
+1.0.13
+
+**Overlord Forever 1.0.13**
+
+- Raise the accepted synchronized kill total from 1,000 to 5,000 per player and campaign, inclusive. Reject higher totals instead of turning them into a capped score; keep local honorable-kill counting unchanged.
+- Keep the top 500, background work slices, relay budgets and catch-up pacing unchanged.
+- All participants need 1.0.13 or later to share totals above 1,000. Older clients still reject those totals; missing scores can return through the existing catch-up when an updated peer has retained them.
+- Add regression coverage for live kills, leaderboard snapshots, additive guards and saved-score cleanup at the new boundaries.
 
 **Overlord Forever 1.0.12**
 

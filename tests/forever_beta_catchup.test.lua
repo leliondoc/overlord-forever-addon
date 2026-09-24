@@ -150,7 +150,8 @@ for i = 1, 500 do
     local name = "Player " .. string.char(65 + math.floor((i - 1) / 26)) .. string.char(65 + (i - 1) % 26)
     names[#names + 1] = name
     local lb = d.Overlord.Leaderboard
-    lb.kills[name] = i
+    -- Fill the whole accepted range, including scores above the old 1000 cap.
+    lb.kills[name] = i * 10
     lb.playerInfo[name] = { class = "WARRIOR", faction = "Horde", level = 2,
         locale = "engb", guild = "Veteran Guild", guildAt = 1790016000 }
     if i > 460 then
@@ -158,7 +159,7 @@ for i = 1, 500 do
     end
     if i <= 120 then lb.captureCount[name], lb.captures[name] = i, {} end
 end
-a.Overlord.Leaderboard.kills["Unique Tester"] = 750
+a.Overlord.Leaderboard.kills["Unique Tester"] = 4999
 a.Overlord.Leaderboard.playerInfo["Unique Tester"] = {
     class = "PRIEST", faction = "Alliance", level = 2, locale = "engb" }
 -- Deterministic peer selection; peer discovery, trust and routing remain real.
@@ -181,7 +182,7 @@ for _, name in ipairs(names) do
     end
     assert(a.Overlord.Leaderboard.playerInfo[name].guild == "Veteran Guild", "Guild metadata lost")
 end
-assert(d.Overlord.Leaderboard.kills["Unique Tester"] == 750, "Return union never reached veteran")
+assert(d.Overlord.Leaderboard.kills["Unique Tester"] == 4999, "Return union never reached veteran")
 assert(a.OverlordDB.leaderboardHistoryCatchupAck, "No verified catchup ACK through bridges")
 assert(d.refusedSnapshotEnqueue, "Fixture never exercised snapshot backpressure")
 for _, e in ipairs(clients) do
@@ -207,7 +208,7 @@ for _, e in ipairs(clients) do
             assert(e.Overlord.Leaderboard.captureCount[name] == d.Overlord.Leaderboard.captureCount[name], "Replica captures diverged")
         end
     end
-    assert(e.Overlord.Leaderboard.kills["Unique Tester"] == 750, "Replica lost union")
+    assert(e.Overlord.Leaderboard.kills["Unique Tester"] == 4999, "Replica lost union")
     for i = 461, 500 do
         local info = e.Overlord.Leaderboard.playerInfo[names[i]]
         assert(info.race == "Orc" and info.raceSex == 2, "Replica race metadata diverged")
@@ -250,7 +251,7 @@ fresh.Overlord.Sync.GetOnlineCommunityMembers = function()
     return { a.name }
 end
 advance(1600)
-assert(fresh.Overlord.Leaderboard.kills[names[500]] == 500,
+assert(fresh.Overlord.Leaderboard.kills[names[500]] == 5000,
     "Beta missing-save client did not recover from the next populated peer")
 assert(not fresh.Overlord.Sync._emptySaveCatchupRounds,
     "Empty-save retry state survived successful recovery")
@@ -267,11 +268,12 @@ end
 advance(1)
 for _, e in ipairs({a, b, c, d, fresh}) do
     local cache = assert(e.Overlord.Leaderboard._displayCache)
-    assert(#cache.sortedKills == 500 and cache.sortedKills[1].name == "Unique Tester")
+    assert(#cache.sortedKills == 500 and cache.sortedKills[1].name == names[500]
+        and cache.sortedKills[1].kills == 5000 and cache.sortedKills[2].name == "Unique Tester")
     for _, row in ipairs(cache.sortedKills) do
         assert(row.name ~= names[1], "Rank 501 leaked into the displayed top")
     end
-    assert(#cache.sortedGuilds == 1 and cache.sortedGuilds[1].kills == 125249,
+    assert(#cache.sortedGuilds == 1 and cache.sortedGuilds[1].kills == 1252490,
         "Replica guild totals included players outside the common top 500")
 end
 

@@ -6,7 +6,7 @@ Addon **World of Warcraft Forever** pour la capture de zones sur les fronts du m
 |---|---|
 | **Auteur** | Troma |
 | **Licence** | All Rights Reserved |
-| **Version** | 1.0.12 |
+| **Version** | 1.0.13 |
 | **Jeu** | WoW Forever (`## Interface: 16001`) |
 | **CurseForge** | https://www.curseforge.com/wow/addons/overlord-forever |
 | **Dépôt** | https://github.com/leliondoc/overlord-forever-addon |
@@ -119,6 +119,7 @@ fronts, bonus, stocks) empruntent également ce réseau.
 
 - **Victoires honorables Blizzard (VH)** en monde ouvert, à tous les niveaux : une hausse du compteur officiel donne exactement autant de crédits. Les coups fatals et les cibles supposées à la mort ne donnent aucun crédit supplémentaire. Le front du jour ajoute seulement de l’or. Les instances (BG, arènes, donjons et raids) sont exclues.
 - Le classement des kills et son rattrapage réseau portent sur les **500 premiers joueurs**. Le tri, la préparation du transfert et les envois sont répartis dans le temps ; seules les lignes visibles sont dessinées.
+- Les totaux reçus par synchronisation sont acceptés jusqu’à **5 000 VH par joueur et par campagne**, incluses. Au-delà, le total reçu est refusé. Les clients antérieurs à 1.0.13 refusent encore les totaux supérieurs à 1 000 ; tous les participants doivent mettre à jour pour partager ces scores. Le compteur local de VH continue de progresser indépendamment de ce seuil réseau.
 - Une fois affiché, le dernier tableau est conservé en mémoire et dans `OverlordDB`. À la prochaine connexion, ce cache borné apparaît immédiatement avec la mention « Classement en mémoire · actualisation… », pendant la préparation des données locales. Il ne déclenche aucun transfert et ne remplace jamais les scores ; les mises à jour réseau continuent en arrière-plan. Une autre campagne, un autre pool ou un format incompatible invalide ce cache. Il ne peut pas survivre au défaut de chargement de toutes les SavedVariables décrit plus haut.
 - Sur le réseau de relais bêta, chaque transfert de rattrapage émet au plus une ligne par seconde, avec le budget partagé de 1 Ko/s et la file de 128 messages. Un rattrapage complet peut donc prendre plusieurs minutes ; les versions antérieures conservent leur ancien plafond.
 - Les totaux de guilde du classement additionnent les VH des membres présents dans ce même **top 500**. Ce ne sont pas des victimes uniques. Une guilde temporairement indisponible au chargement ne supprime plus le rattachement connu.

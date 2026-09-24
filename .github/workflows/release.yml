@@ -60,6 +60,7 @@ jobs:
           lua5.1 tests/forever_display_cache.test.lua
           lua5.1 tests/forever_world_kills.test.lua
           lua5.1 tests/forever_honorable_kills.test.lua
+          lua5.1 tests/forever_kill_ceiling.test.lua
           lua5.1 tests/forever_guild_totals.test.lua
           lua5.1 tests/forever_performance.test.lua
           lua5.1 tests/forever_us_reset.test.lua

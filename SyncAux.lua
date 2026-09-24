@@ -3757,9 +3757,10 @@ local KILLSPOOF_WINDOW = 30
 local KILLSPOOF_THRESHOLD = 5
 local KILLSPOOF_BLACKLIST_DURATION = 300
 -- Plafond plausible d'un total de kills sur une campagne hebdo : au-dela on REFUSE la
--- valeur (pas de clamp, qui figeait les injections au plafond). Marge large au-dessus
--- des tops legitimes (500+ observes en event massif) sans laisser passer les 9999 injectes.
-local PLAUSIBLE_KILL_CEILING = 1000
+-- valeur (pas de clamp, qui figeait les injections au plafond). Accepter les joueurs
+-- depassant 1000 VH sans laisser passer les 9999 injectes. Ce seuil ne change ni
+-- le nombre de lignes du classement, ni les budgets/cadences de synchronisation.
+local PLAUSIBLE_KILL_CEILING = 5000
 -- Expose le plafond pour la defense en profondeur cote Leaderboard et Sync.
 Overlord.PLAUSIBLE_SYNC_KILL_CEILING = PLAUSIBLE_KILL_CEILING
 -- Forever : tous les niveaux participent. Le champ K/LK reste valide et
