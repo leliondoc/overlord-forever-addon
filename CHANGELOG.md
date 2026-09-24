@@ -1,4 +1,12 @@
-1.0.13
+1.0.14
+
+**Overlord Forever 1.0.14**
+
+- Rewrite the tutorial for Forever in all seven interface languages, including layers, regional communication and the current objectives. Add Brazilian Portuguese and Simplified Chinese interface translations.
+- Restore the Elwynn front and add the Lakeshire front in Redridge Mountains, with faction routes, map overlays and guild outposts. Add Aeythyr Lodge at Quel'Lithien Lodge in the Eastern Plaguelands. Remove the Stonewatch Guild Keep.
+- Correct Night Run and the Hillsbrad mine locations. Place the Wetlands forest at 53.8, 43.7 and add the Ashenvale forest at 33.6, 63.6. Keep Mystral's capture point on its named south bank.
+- Restore contextual indicator centering, adjust the main panel's default position and preserve manually moved panel positions across reloads, including through the native layout cache when the beta fails to load addon saves.
+- Extend capture and map checks to all 57 control zones and add regression coverage for panel position persistence, scale changes and position reset.
 
 **Overlord Forever 1.0.13**
 

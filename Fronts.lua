@@ -396,7 +396,7 @@ Overlord.Fronts.Registry = {
             Zone("ash_astranaar", { center = {35.0, 49.0}, radius = 5, status = "captured", isCapital = true }),
             Zone("ash_iris_lake", { center = {45.82, 43.25}, prereqZones = {"ash_astranaar"} }),
             Zone("ash_raynewood", { center = {60.96, 51.84}, prereqZones = {"ash_iris_lake"} }),
-            Zone("ash_night_run", { center = {66.32, 52.56}, prereqZones = {"ash_raynewood"} }),
+            Zone("ash_night_run", { center = {66.6, 56.0}, prereqZones = {"ash_raynewood"} }),
             Zone("ash_bloodtooth_camp", { center = {54.75, 79.62}, prereqZones = {"ash_night_run"} }),
             Zone("ash_silverwind", { center = {50.5, 66.0}, prereqZones = {"ash_astranaar"} }),
             Zone("ash_mystral_lake", { center = {50.84, 75.08}, prereqZones = {"ash_silverwind"} }),
@@ -427,9 +427,101 @@ Overlord.Fronts.Registry = {
             },
         },
     },
+    elwynn = {
+        id = "elwynn",
+        preferredMapID = 1429,
+        mapName = L.FRONT_ELWYNN_NAME or "Elwynn Forest",
+        dropdownLabel = L.FRONT_ELWYNN_DROPDOWN or "Elwynn",
+        mapIDs = { [37] = true, [1429] = true },
+        mapNameNeedles = { "elwynn", "elwyn", "艾尔文", "엘윈" },
+        allianceCapitalId = "elwynn_westbrook",
+        hordeCapitalId = "elwynn_invasion_camp",
+        panelHeads = {
+            Alliance = "HUMAN_MALE", Horde = "ORC_MALE",
+            faceInward = true, hordeMirror = false,
+        },
+        zones = {
+            Zone("elwynn_westbrook", { center = {24.2, 74.5}, radius = 5, status = "captured", isCapital = true }),
+            Zone("elwynn_goldshire", { center = {42.1, 65.9}, prereqZones = {"elwynn_westbrook"} }),
+            Zone("elwynn_tower_of_azora", { center = {64.7, 69.5}, prereqZones = {"elwynn_goldshire"} }),
+            Zone("elwynn_ridgepoint", { center = {83.8, 78.7}, prereqZones = {"elwynn_tower_of_azora"} }),
+            Zone("elwynn_stone_cairn", { center = {74.3, 51.4}, prereqZones = {"elwynn_ridgepoint"} }),
+            Zone("elwynn_eastvale", { center = {82.0, 66.2}, prereqZones = {"elwynn_stone_cairn"} }),
+            Zone("elwynn_mirror_lake", { center = {49.8, 68.1}, prereqZones = {"elwynn_westbrook"} }),
+            Zone("elwynn_fargodeep", { center = {39.0, 82.6}, prereqZones = {"elwynn_mirror_lake"} }),
+            Zone("elwynn_jerods_landing", { center = {48.4, 87.7}, prereqZones = {"elwynn_fargodeep"} }),
+            Zone("elwynn_invasion_camp", { center = {90.9, 73.7}, radius = 5,
+                prereqZones = {"elwynn_eastvale", "elwynn_jerods_landing"}, isCapital = true }),
+        },
+        prereqs = { Alliance = ELWYNN_ALLIANCE_PREREQS, Horde = ELWYNN_HORDE_PREREQS },
+        displayOrder = {
+            Alliance = { "elwynn_westbrook", "elwynn_goldshire", "elwynn_mirror_lake",
+                "elwynn_tower_of_azora", "elwynn_fargodeep", "elwynn_ridgepoint",
+                "elwynn_jerods_landing", "elwynn_stone_cairn", "elwynn_eastvale",
+                "elwynn_invasion_camp" },
+            Horde = { "elwynn_invasion_camp", "elwynn_eastvale", "elwynn_jerods_landing",
+                "elwynn_stone_cairn", "elwynn_fargodeep", "elwynn_ridgepoint",
+                "elwynn_mirror_lake", "elwynn_tower_of_azora", "elwynn_goldshire",
+                "elwynn_westbrook" },
+        },
+    },
+    redridge = {
+        id = "redridge",
+        preferredMapID = 1433,
+        mapName = L.FRONT_REDRIDGE_NAME or "Redridge Mountains",
+        dropdownLabel = L.FRONT_REDRIDGE_DROPDOWN or "Lakeshire",
+        mapIDs = { [49] = true, [1433] = true },
+        mapNameNeedles = { "redridge", "carmines", "crestagrana", "rotkamm", "赤脊山" },
+        allianceCapitalId = "redridge_lakeshire",
+        hordeCapitalId = "redridge_renders_valley",
+        panelHeads = {
+            Alliance = "HUMAN_MALE", Horde = "ORC_MALE",
+            faceInward = true, hordeMirror = false,
+        },
+        -- Two land routes around Lake Everstill meet at Stonewatch Falls.
+        zones = {
+            Zone("redridge_lakeshire", { center = {25.0, 43.0}, radius = 5, status = "captured", isCapital = true }),
+            Zone("redridge_althers_mill", { center = {53.0, 42.0}, prereqZones = {"redridge_lakeshire"} }),
+            Zone("redridge_ilgalar", { center = {80.0, 49.0}, prereqZones = {"redridge_althers_mill"} }),
+            Zone("redridge_three_corners", { center = {18.0, 69.0}, prereqZones = {"redridge_lakeshire"} }),
+            Zone("redridge_lakeridge_highway", { center = {38.0, 73.0}, prereqZones = {"redridge_three_corners"} }),
+            Zone("redridge_stonewatch_falls", { center = {75.0, 67.0},
+                prereqZones = {"redridge_ilgalar", "redridge_lakeridge_highway"} }),
+            Zone("redridge_renders_valley", { center = {73.0, 78.0}, radius = 5,
+                prereqZones = {"redridge_stonewatch_falls"}, isCapital = true }),
+        },
+        prereqs = {
+            Alliance = {
+                redridge_lakeshire = {},
+                redridge_althers_mill = {"redridge_lakeshire"},
+                redridge_ilgalar = {"redridge_althers_mill"},
+                redridge_three_corners = {"redridge_lakeshire"},
+                redridge_lakeridge_highway = {"redridge_three_corners"},
+                redridge_stonewatch_falls = {"redridge_ilgalar", "redridge_lakeridge_highway"},
+                redridge_renders_valley = {"redridge_stonewatch_falls"},
+            },
+            Horde = {
+                redridge_renders_valley = {},
+                redridge_stonewatch_falls = {"redridge_renders_valley"},
+                redridge_ilgalar = {"redridge_stonewatch_falls"},
+                redridge_lakeridge_highway = {"redridge_stonewatch_falls"},
+                redridge_althers_mill = {"redridge_ilgalar"},
+                redridge_three_corners = {"redridge_lakeridge_highway"},
+                redridge_lakeshire = {"redridge_althers_mill", "redridge_three_corners"},
+            },
+        },
+        displayOrder = {
+            Alliance = { "redridge_lakeshire", "redridge_althers_mill", "redridge_three_corners",
+                "redridge_ilgalar", "redridge_lakeridge_highway", "redridge_stonewatch_falls",
+                "redridge_renders_valley" },
+            Horde = { "redridge_renders_valley", "redridge_stonewatch_falls",
+                "redridge_ilgalar", "redridge_lakeridge_highway", "redridge_althers_mill",
+                "redridge_three_corners", "redridge_lakeshire" },
+        },
+    },
 }
 
-Overlord.Fronts.Order = Overlord.Fronts.Order or {"arathi", "loch_modan", "durotar", "ashenvale"}
+Overlord.Fronts.Order = {"arathi", "loch_modan", "durotar", "ashenvale", "elwynn", "redridge"}
 if not Overlord.Fronts.activeFrontId then
     Overlord.Fronts.activeFrontId = "arathi"
 end
@@ -663,6 +755,8 @@ local FEATURED_FRONT_ART = {
     loch_modan = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-LochModan.blp",
     durotar = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-Durotar.blp",
     ashenvale = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-Ashenvale.blp",
+    elwynn = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-ElwynnForest.blp",
+    redridge = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-RedridgeMountains.blp",
 }
 
 local FEATURED_FRONT_NAME_KEYS = {
@@ -670,6 +764,8 @@ local FEATURED_FRONT_NAME_KEYS = {
     loch_modan = "FRONT_LOCH_MODAN_NAME",
     durotar = "FRONT_DUROTAR_NAME",
     ashenvale = "FRONT_ASHENVALE_NAME",
+    elwynn = "FRONT_ELWYNN_NAME",
+    redridge = "FRONT_REDRIDGE_NAME",
 }
 
 local featuredFrontCacheDayKey = nil

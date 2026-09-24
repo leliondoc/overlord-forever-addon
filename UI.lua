@@ -8,6 +8,14 @@ Overlord.UI.SHARD_TOOLTIP_SCAN_MAX = 48
 local L = Overlord.L
 
 local mainFrame = nil
+-- Le cache de placement WoW est restaure avant PLAYER_LOGIN. Creer seulement
+-- le cadre ici permet de le recuperer meme si les SavedVariables sont absentes ;
+-- le contenu du panneau reste construit dans l'etape UI differee.
+local mainFrameShell = CreateFrame("Frame", "OverlordMainFrame", UIParent, "BackdropTemplate")
+mainFrameShell:SetSize(340, 520)
+mainFrameShell:SetMovable(true)
+mainFrameShell:SetDontSavePosition(false)
+mainFrameShell:Hide()
 local zoneListFrame = nil
 local activeZoneFrame = nil
 
@@ -1723,14 +1731,16 @@ end
 -- Sauvegarde position comme Classic Quest Log : GetLeft/GetBottom en espace UIParent.
 -- GetLeft() renvoie des coords dans l'espace du parent, mais il faut corriger si le panel a
 -- un scale != 1, car la position visuelle reelle est GetLeft() * frameScale.
--- Lors de la restauration on remet SetScale(1), donc on sauvegarde en coords a scale=1.
+-- La sauvegarde reste en coordonnees UIParent, independamment de l'echelle du panneau.
 local function SaveFramePosition()
-    if not mainFrame or not OverlordDB then return end
+    if not mainFrame then return end
+    mainFrame:SetUserPlaced(true)
+    if not OverlordDB then return end
     local left, bottom = mainFrame:GetLeft(), mainFrame:GetBottom()
     if left == nil or bottom == nil then return end
     local frameScale = mainFrame:GetScale()
     if frameScale and frameScale ~= 1 and frameScale > 0 then
-        -- Converti en coords UIParent comme si scale=1 (ce qui sera le cas a la restauration)
+        -- Convertit en coordonnees UIParent ; RestoreFramePosition fait l'inverse.
         left   = left   * frameScale
         bottom = bottom * frameScale
     end
@@ -1754,9 +1764,10 @@ local function RestoreFramePosition()
     end
     if not a or type(a.left) ~= "number" or type(a.bottom) ~= "number" then return false end
     mainFrame:ClearAllPoints()
-    mainFrame:SetScale(1)
-    mainFrame:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", a.left, a.bottom)
     Overlord.UI:ApplyUiScale()
+    local scale = mainFrame:GetScale()
+    mainFrame:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", a.left / scale, a.bottom / scale)
+    mainFrame:SetUserPlaced(true)
     return true
 end
 
@@ -1770,6 +1781,7 @@ function Overlord.UI:Initialize()
             userMovedPanel = true
         end
     end
+    if userMovedPanel then SaveFramePosition() end
 end
 
 -- Ancrage initial : carte ouverte a droite de la map, sinon bord droit ecran.
@@ -1779,7 +1791,8 @@ function Overlord.UI:UpdatePanelAnchor()
     if not mainFrame then return end
 
     -- Position manuelle : ne pas re-ancrer (hooks carte / Show ne doivent pas deplacer le panel)
-    if userMovedPanel then
+    if userMovedPanel or mainFrame:IsUserPlaced() then
+        userMovedPanel = true
         return
     end
 
@@ -1793,7 +1806,7 @@ function Overlord.UI:UpdatePanelAnchor()
             mainFrame:SetPoint("LEFT", WorldMapFrame, "RIGHT", 4, 0)
         end
     else
-        mainFrame:SetPoint("RIGHT", UIParent, "RIGHT", -220, 0)
+        mainFrame:SetPoint("RIGHT", UIParent, "RIGHT", -120, 0)
     end
     self:ApplyUiScale()
 end
@@ -1849,9 +1862,11 @@ end
 
 function Overlord.UI:CreateMainFrame()
     RegisterShardTooltipInviteLinkHandler()
-    mainFrame = CreateFrame("Frame", "OverlordMainFrame", UIParent, "BackdropTemplate")
+    mainFrame = mainFrameShell
+    userMovedPanel = mainFrame:IsUserPlaced()
     -- Largeur fixe. Hauteur initiale : sera recalculée par ApplyCommunityHintLayout (plus de vide sous la progression).
     mainFrame:SetSize(340, 520)
+    self:ApplyUiScale()
     self:UpdatePanelAnchor()
 
     -- Re-ancre le panel quand la carte s'ouvre/ferme/resize. Blizzard_WorldMap est
@@ -1874,7 +1889,10 @@ function Overlord.UI:CreateMainFrame()
     mainFrame:EnableMouse(true)
     mainFrame:SetMovable(true)
     mainFrame:RegisterForDrag("LeftButton")
-    mainFrame:SetScript("OnDragStart", function(self) self:StartMoving() end)
+    mainFrame:SetScript("OnDragStart", function(self)
+        userMovedPanel = true
+        self:StartMoving()
+    end)
     mainFrame:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
         userMovedPanel = true
@@ -4857,6 +4875,7 @@ end
 
 function Overlord.UI:ResetPosition()
     userMovedPanel = false
+    if mainFrame then mainFrame:SetUserPlaced(false) end
     if OverlordDB then
         OverlordDB.panelPos = nil
         OverlordDB.panelAnchor = nil

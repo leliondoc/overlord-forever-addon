@@ -24,14 +24,17 @@ local function visit(resource, mapID, wood)
     assert(found == nil, "Resource detected outside circle")
 end
 local expected = { azurelode = 1424, darrow = 1424, elemgorge = 1421,
-    stonessplinter = 1432, jasperlode = 1429, wetlands_forest = 1437 }
+    stonessplinter = 1432, jasperlode = 1429, wetlands_forest = 1437,
+    ashenvale_forest = 1440 }
 for _, db in ipairs({ Overlord.MineDatabase, Overlord.WoodDatabase }) do
     for _, resource in ipairs(db) do
         assert(resource.mapID == expected[resource.id], "Continent projection uses a Retail map")
-        for mapID in pairs(resource.mapIDs) do visit(resource, mapID, resource.id == "wetlands_forest") end
+        for mapID in pairs(resource.mapIDs) do visit(resource, mapID, db == Overlord.WoodDatabase) end
     end
 end
-now, currentMap, x, y = now + 1, 99999, 34.4, 72.2
+now, currentMap, x, y = now + 1, 99999, 28.0, 57.0
 assert(z:GetCurrentPlayerMine().id == "azurelode", "Mine submap ancestry broke")
+assert(Overlord.WoodDatabase[1].center[1] == 53.8 and Overlord.WoodDatabase[1].center[2] == 43.7)
+assert(Overlord.WoodDatabase[2].center[1] == 33.6 and Overlord.WoodDatabase[2].center[2] == 63.6)
 assert(not z:IsResourceMapContext(99998), "Unrelated map enabled resource ticker")
-print("Forever resource maps: all 5 mines, forest, Classic/Retail aliases, harvesting boundaries and cave ancestry OK")
+print("Forever resource maps: all 5 mines, two forests, map aliases, harvesting boundaries and cave ancestry OK")

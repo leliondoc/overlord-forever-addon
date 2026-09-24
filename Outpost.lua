@@ -44,6 +44,21 @@ end
 
 -- Un avant-poste par front Forever, plus les sites autonomes en monde ouvert.
 Overlord.OutpostSites = {
+    aeythyr_lodge = {
+        id = "aeythyr_lodge_outpost",
+        siteKey = "aeythyr_lodge",
+        displayNameKey = "OUTPOST_AEYTHYR_LODGE_NAME",
+        standaloneOpenWorld = true,
+        mapID = 1423,
+        mapIDs = { [23] = true, [1423] = true },
+        displayMapIDs = { [23] = true, [1423] = true },
+        includeChildMaps = false,
+        mapNameNeedles = { "eastern plaguelands", "maleterres de l'est", "östliche pestländer",
+            "tierras de la peste del este", "terras pestilentas orientais", "东瘟疫之地" },
+        -- Cour du pavillon de Quel'Lithien, sur la carte Classic des Maleterres de l'Est.
+        center = { 52.1, 18.4 },
+        halfSize = 1.35,
+    },
     silverpine = {
         id = "silverpine_outpost",
         siteKey = "silverpine",
@@ -105,6 +120,29 @@ Overlord.OutpostSites = {
         mapNameNeedles = { "ashenvale", "orneval", "vallefresno", "eschental" },
         -- Ruines d'Ordil'Aran (terre), pas le liseré nord / Strand de Zoram.
         center = { 29.0, 32.0 },
+        halfSize = 1.35,
+    },
+    elwynn = {
+        id = "elwynn_outpost",
+        siteKey = "elwynn",
+        displayNameKey = "OUTPOST_ELWYNN_NAME",
+        frontId = "elwynn",
+        mapID = 1429,
+        mapIDs = { [37] = true, [1429] = true },
+        mapNameNeedles = { "elwynn", "elwyn", "艾尔文" },
+        center = { 24.9, 58.7 },
+        halfSize = 1.35,
+    },
+    redridge = {
+        id = "redridge_outpost",
+        siteKey = "redridge",
+        displayNameKey = "OUTPOST_REDRIDGE_NAME",
+        frontId = "redridge",
+        mapID = 1433,
+        mapIDs = { [49] = true, [1433] = true },
+        mapNameNeedles = { "redridge", "carmines", "crestagrana", "rotkamm", "赤脊山" },
+        -- Camp de Render : à l'écart des routes de capture.
+        center = { 40.0, 17.0 },
         halfSize = 1.35,
     },
 }

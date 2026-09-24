@@ -25,9 +25,17 @@ function Overlord.IsRussianLocale()
     return loc == "ruRU" or loc:sub(1, 2) == "ru"
 end
 
+function Overlord.IsPortugueseLocale()
+    return (GetLocale() or "enUS") == "ptBR"
+end
+
+function Overlord.IsChineseLocale()
+    return (GetLocale() or "enUS") == "zhCN"
+end
+
 function Overlord.UsesCommaDecimalLocale()
     return Overlord.IsFrenchLocale() or Overlord.IsSpanishLocale() or Overlord.IsGermanLocale()
-        or Overlord.IsRussianLocale()
+        or Overlord.IsRussianLocale() or Overlord.IsPortugueseLocale()
 end
 
 -- ================================================================
@@ -836,13 +844,13 @@ L.EXPORT_ERROR_NO_COMMUNITY = "Check PvP export is turned off until you join the
 
 -- === Mines / Gold ===
 L.MINE_AZURELODE        = "Azurelode Mine"
-L.MINE_DARROW           = "Darrow Mine"
+L.MINE_DARROW           = "Darrow Hill"
 L.MINE_ELEMGORGE        = "Elemgorge Mine"
 L.MINE_STONESSPLINTER   = "Stonesplinter Mine"
 L.MINE_JASPERLODE       = "Jasperlode Mine"
 L.GOLD_LABEL            = "Coins"
 L.GOLD_COUNTER          = "Coins: %d / %d"
-L.GOLD_HEADER_TIP       = "Earn coins inside the coin mine circles. Hillsbrad Foothills: Azurelode mine, Darrow mine (Southshore). Silverpine Forest: Elemgorge mine. Loch Modan: Stonesplinter mine. Elwynn Forest: Jasperlode mine. War Mode must be on."
+L.GOLD_HEADER_TIP       = "Earn coins inside the marked circles. Hillsbrad Foothills: Azurelode Mine and Darrow Hill. Silverpine Forest: Elemgorge Mine. Loch Modan: Stonesplinter Mine. Elwynn Forest: Jasperlode Mine."
 L.GOLD_EK_MAP_TAG       = "Coin mines"
 -- GOLD_FULL, GOLD_REINFORCE_*, GOLD_BARRICADE_* : numeriques via ApplyGoldLocaleStrings() (Ressources init)
 L.GOLD_NODE_BONUS       = "+%d coins (mining node)"
@@ -1778,13 +1786,13 @@ L.FARM_TRADE_DETECTED = "Échange de zones supprimé sur %s (alternances rapides
 
 -- Mines / Or (frFR : aucun mélange avec l'anglais ; noms de zones comme dans le client)
 L.MINE_AZURELODE        = "Mine de Veine-d'Azur"
-L.MINE_DARROW           = "Mine de Darrow"
+L.MINE_DARROW           = "Colline de Darrow"
 L.MINE_ELEMGORGE        = "Mine du Gouffre d'Elem"
 L.MINE_STONESSPLINTER   = "Mine de Brisetaille"
 L.MINE_JASPERLODE       = "Veine-de-Jaspe"
 L.GOLD_LABEL            = "Coins"
 L.GOLD_COUNTER          = "Coins : %d / %d"
-L.GOLD_HEADER_TIP       = "Gagnez des coins dans les cercles des mines de coins. Contreforts de Hautebrande : mines de Veine-d'Azur et de Darrow (Austrivage). Forêt des Pins-argentés : mine du Gouffre d'Elem. Loch Modan : mine de Brisetaille. Forêt d'Elwynn : Veine-de-Jaspe. Le mode Guerre doit être activé."
+L.GOLD_HEADER_TIP       = "Gagnez des coins dans les cercles indiqués. Contreforts de Hautebrande : mine de Veine-d'Azur et colline de Darrow. Forêt des Pins-Argentés : mine du Gouffre d'Elem. Loch Modan : mine de Brisetaille. Forêt d'Elwynn : Veine-de-Jaspe."
 L.GOLD_EK_MAP_TAG       = "Mines de coins"
 L.GOLD_NODE_BONUS       = "+%d coins (filon miné)"
 L.GOLD_FCT_GAIN         = "+%d coins"
@@ -2715,13 +2723,13 @@ L.EXPORT_ERROR_NO_COMMUNITY = "La exportación a Check PvP está desactivada has
 
 -- Mines / Gold
 L.MINE_AZURELODE        = "Mina de Veta Azur"
-L.MINE_DARROW           = "Mina Darrow"
+L.MINE_DARROW           = "Colina Darrow"
 L.MINE_ELEMGORGE        = "Mina de Elemgorge"
 L.MINE_STONESSPLINTER   = "Mina Partedura"
 L.MINE_JASPERLODE       = "Mina de Jaspe"
 L.GOLD_LABEL            = "Coins"
 L.GOLD_COUNTER          = "Coins: %d / %d"
-L.GOLD_HEADER_TIP       = "Gana coins dentro de los círculos de minas de coins. Laderas de Trabalomas: minas Veta Azur y Darrow (Costasur). Bosque de Argenteos: mina Elemgorge. Loch Modan: mina Partedura. Bosque de Elwynn: mina de Jaspe. El Modo Guerra debe estar activo."
+L.GOLD_HEADER_TIP       = "Gana coins dentro de los círculos marcados. Laderas de Trabalomas: mina Veta Azur y colina Darrow. Bosque de Argénteos: mina Elemgorge. Loch Modan: mina Partedura. Bosque de Elwynn: mina de Jaspe."
 L.GOLD_EK_MAP_TAG       = "Minas de coins"
 L.GOLD_NODE_BONUS       = "+%d coins (veta minada)"
 L.GOLD_FCT_GAIN         = "+%d coins"
@@ -3652,13 +3660,13 @@ L.EXPORT_ERROR_NO_COMMUNITY = "Check-PvP-Export ist deaktiviert, bis Ihr der Ove
 
 -- Mines / Gold
 L.MINE_AZURELODE        = "Azurmine"
-L.MINE_DARROW           = "Darrowmine"
+L.MINE_DARROW           = "Darrowhügel"
 L.MINE_ELEMGORGE        = "Elemgorge-Mine"
 L.MINE_STONESSPLINTER   = "Steinsplittermine"
 L.MINE_JASPERLODE       = "Jaspismine"
 L.GOLD_LABEL            = "Coins"
 L.GOLD_COUNTER          = "Coins: %d / %d"
-L.GOLD_HEADER_TIP       = "Coins in den Coin-Minen-Kreisen verdienen. Vorgebirge des Hügellands: Azurmine, Darrow (Süderstade). Silberwald: Elemgorge. Loch Modan: Steinsplitter. Wald von Elwynn: Jaspis. Kriegsmodus muss aktiv sein."
+L.GOLD_HEADER_TIP       = "Verdient Coins in den markierten Kreisen. Vorgebirge des Hügellands: Azurmine und Darrowhügel. Silberwald: Elemgorge. Loch Modan: Steinsplitter. Wald von Elwynn: Jaspismine."
 L.GOLD_EK_MAP_TAG       = "Coin-Minen"
 L.GOLD_NODE_BONUS       = "+%d coins (Abbau)"
 L.GOLD_FCT_GAIN         = "+%d coins"
@@ -4599,13 +4607,13 @@ L.EXPORT_ERROR_NO_COMMUNITY = "Экспорт Check PvP отключен, пок
 
 -- === Mines / Gold ===
 L.MINE_AZURELODE        = "Лазуритовый рудник"
-L.MINE_DARROW           = "Рудник Дарроу"
+L.MINE_DARROW           = "Холм Дарроу"
 L.MINE_ELEMGORGE        = "Серебряный рудник"
 L.MINE_STONESSPLINTER   = "Рудник Камнедробов"
 L.MINE_JASPERLODE       = "Яшмовая шахта"
 L.GOLD_LABEL            = "Coins"
 L.GOLD_COUNTER          = "Coins: %d / %d"
-L.GOLD_HEADER_TIP       = "Зарабатывайте coins внутри кругов рудников coins. Предгорья Хилсбрада: Лазуритовый рудник, рудник Дарроу (Южнобережье). Серебряный бор: Серебряный рудник. Лок Модан: Рудник Камнедробов. Элвиннский лес: Яшмовая шахта. Должен быть включен режим войны."
+L.GOLD_HEADER_TIP       = "Получайте coins в отмеченных кругах. Предгорья Хилсбрада: Лазуритовый рудник и холм Дарроу. Серебряный бор: рудник ущелья Элем. Лок Модан: рудник Камнедробов. Элвиннский лес: Яшмовая шахта."
 L.GOLD_EK_MAP_TAG       = "Рудники coins"
 -- GOLD_FULL, GOLD_REINFORCE_*, GOLD_BARRICADE_* : numeriques via ApplyGoldLocaleStrings() (Ressources init)
 L.GOLD_NODE_BONUS       = "+%d coins (рудная жила)"
@@ -4812,6 +4820,38 @@ function Overlord.ApplyGoldLocaleStrings()
             R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_ACTIVE = string.format("Усиление готово: следующий вражеский захват на ваших зонах займет на %d сек больше времени.", R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_USED = string.format("Усиление сработало: противник должен удерживать зону на %d сек дольше.", R.BARRICADE_INCREASE)
+    elseif Overlord.IsPortugueseLocale() then
+        Loc.GOLD_FULL = string.format("Limite de coins atingido (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
+        Loc.GOLD_REINFORCE_TIP = string.format(
+            "Custa %d coins. Sua próxima captura de ponto, capital, posto ou forte termina %d segundos antes (tempo mínimo: %d s).",
+            R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
+        Loc.GOLD_REINFORCE_SPENT = string.format("%d coins gastos. Sua próxima captura será %d s mais curta.",
+            R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)
+        Loc.GOLD_REINFORCE_ACTIVE = string.format("Ataque pronto: próxima captura %d s mais curta.", R.REINFORCE_REDUCTION)
+        Loc.GOLD_REINFORCE_USED = string.format("Ataque usado: captura reduzida em %d s.", R.REINFORCE_REDUCTION)
+        Loc.GOLD_BARRICADE_TIP = string.format(
+            "Custa %d coins. A próxima captura inimiga de um dos seus pontos exige mais %d segundos.",
+            R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
+        Loc.GOLD_BARRICADE_SPENT = string.format("%d coins gastos. Próxima captura inimiga demora mais %d s.",
+            R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
+        Loc.GOLD_BARRICADE_ACTIVE = string.format("Reforço pronto: próxima captura inimiga demora mais %d s.", R.BARRICADE_INCREASE)
+        Loc.GOLD_BARRICADE_USED = string.format("Reforço ativado: o inimigo precisa segurar por mais %d s.", R.BARRICADE_INCREASE)
+    elseif Overlord.IsChineseLocale() then
+        Loc.GOLD_FULL = string.format("Coin 已达上限（%d/%d）。", R.GOLD_MAX, R.GOLD_MAX)
+        Loc.GOLD_REINFORCE_TIP = string.format(
+            "花费 %d coin。下次占领据点、首府、前哨或公会要塞时缩短 %d 秒（最短需 %d 秒）。",
+            R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
+        Loc.GOLD_REINFORCE_SPENT = string.format("已花费 %d coin。下次占领缩短 %d 秒。",
+            R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)
+        Loc.GOLD_REINFORCE_ACTIVE = string.format("进攻准备就绪：下次占领缩短 %d 秒。", R.REINFORCE_REDUCTION)
+        Loc.GOLD_REINFORCE_USED = string.format("进攻已生效：占领时间缩短 %d 秒。", R.REINFORCE_REDUCTION)
+        Loc.GOLD_BARRICADE_TIP = string.format(
+            "花费 %d coin。敌人下次占领你的一个战线据点时，需额外守住 %d 秒。",
+            R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
+        Loc.GOLD_BARRICADE_SPENT = string.format("已花费 %d coin。敌人下次占领需额外 %d 秒。",
+            R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
+        Loc.GOLD_BARRICADE_ACTIVE = string.format("增援准备就绪：敌人下次占领需额外 %d 秒。", R.BARRICADE_INCREASE)
+        Loc.GOLD_BARRICADE_USED = string.format("增援已生效：敌人需额外守住 %d 秒。", R.BARRICADE_INCREASE)
     else
         Loc.GOLD_FULL = string.format("Coin cap reached (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
         Loc.GOLD_REINFORCE_TIP = string.format(

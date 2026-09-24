@@ -23,10 +23,11 @@ function Overlord.UI.TooltipPalette()
     return Overlord.UI_TT or { HL = { 1, 0.82, 0 }, BODY = { 1, 1, 1 }, MUTED = { 0.72, 0.72, 0.72 } }
 end
 
--- Conserve les polices historiques sur les clients latin, mais remplace leur
--- chemin code en dur par celui d'un FontObject Blizzard sur le client ruRU.
+-- Conserve les polices historiques sur les clients latin, mais utilise une
+-- police Blizzard localisée pour les clients à glyphes cyrilliques ou chinois.
 function Overlord.UI.ResolveLocalizedFontPath(fontObject, fallbackPath)
-    if not (Overlord.IsRussianLocale and Overlord.IsRussianLocale()) then
+    if not ((Overlord.IsRussianLocale and Overlord.IsRussianLocale())
+        or (Overlord.IsChineseLocale and Overlord.IsChineseLocale())) then
         return fallbackPath
     end
     if fontObject and fontObject.GetFont then

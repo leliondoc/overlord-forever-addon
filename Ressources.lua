@@ -841,8 +841,9 @@ end
 
 -- Ancre sous laquelle empiler l'indicateur de zone (cluster tutoriel + ressources + fortin).
 function Overlord.Ressources:GetGoldHUDStackBottom()
-    if goldHudRoot and goldHudRoot:IsShown() then return goldHudRoot end
-    if goldHUD and goldHUD:IsShown() then return goldHUD end
+    -- Un enfant peut rester IsShown() alors que son parent est masque.
+    -- Seul le cluster visible doit servir d'ancre ; sinon l'indicateur se recentre.
+    if goldHudRoot and goldHudRoot:IsVisible() then return goldHudRoot end
     return nil
 end
 

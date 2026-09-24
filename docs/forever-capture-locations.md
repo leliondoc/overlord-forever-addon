@@ -16,7 +16,7 @@ Cela ne simule pas le relief ni les modifications propres au serveur Forever : u
 
 Les identifiants, prérequis, rayons et scores ne changent pas. Les sauvegardes restaurent les états des objectifs, pas leurs coordonnées. Tous les joueurs doivent charger la même mise à jour ; un ancien client conserve ses anciens cercles jusqu’à mise à jour et rechargement.
 
-## Références des 40 objectifs
+## Références des 40 objectifs initiaux
 
 | Objectif (ID historique) | Centre corrigé ou conservé (%) | Référence terrestre Classic : PNJ, position (%) |
 | --- | --- | --- |
@@ -53,10 +53,22 @@ Les identifiants, prérequis, rayons et scores ne changent pas. Les sauvegardes 
 | `ash_astranaar` | 35.00, 49.00 | Shindrell Swiftfire (3845), 34.67 / 48.84 |
 | `ash_iris_lake` | 45.82, 43.25 | Shadethicket Moss Eater (3780), 45.82 / 43.25 |
 | `ash_raynewood` | 60.96, 51.84 | Laughing Sister (4054), 60.96 / 51.84 |
-| `ash_night_run` | 66.32, 52.56 | Felmusk Satyr (3758), 66.32 / 52.56 |
+| `ash_night_run` | 66.60, 56.00 | Site de Night Run, 66.60 / 57.00 (référence ci-dessous) |
 | `ash_bloodtooth_camp` | 54.75, 79.62 | Ran Bloodtooth (3696), 54.75 / 79.62 |
 | `ash_silverwind` | 50.50, 66.00 | Astranaar Sentinel (6087), 50.27 / 66.04 |
 | `ash_mystral_lake` | 50.84, 75.08 | Krolg (3897), 50.84 / 75.08 |
 | `ash_fallen_sky_lake` | 65.88, 80.30 | Shadethicket Bark Ripper (3784), 65.88 / 80.30 |
 | `ash_dor_danil` | 72.00, 74.00 | Ashenvale Outrunner (12856), 71.91 / 73.67 |
 | `ash_splintertree` | 73.50, 61.00 | Qeeju (15131), 73.38 / 61.02 |
+
+
+## Extension 1.0.14 : 57 objectifs
+
+Le test couvre désormais les 57 objectifs et les cartes Classic 1429 (Elwynn) et 1433 (Carmines), ainsi que leurs alias.
+
+- [Night Run](https://classic-wow-archive.fandom.com/wiki/Night_Run) situe le camp à 66.6, 57.0. Le centre de capture est à 66.6, 56.0. Les coordonnées 72.5, 50.0 décrivent un virage du chemin d'accès et ne doivent pas servir de centre.
+- Mystral conserve la référence terrestre de Krolg, 50.84, 75.08, cohérente avec son nom « rive sud » et distincte du refuge de Vent-argent.
+- Les dix références d'Elwynn reprennent la disposition Retail restaurée à la demande de l'auteur. Elles vérifient la détection et le choix de carte ; elles ne constituent pas un relevé indépendant du relief Forever.
+- Les sept références des Carmines utilisent les repères de la [carte antérieure à Cataclysm](https://www.mmo4ever.com/wow/map.php?creature=3085&id=44) : Lakeshire 25/43, Alther 53/42, Ilgalar 80/49, Three Corners 18/69, Lakeridge Highway 38/73, Stonewatch Falls 75/67 et Render's Valley 73/78.
+
+La validation automatisée confirme que chaque référence sélectionne le bon objectif dans les deux familles d'identifiants. Elle ne certifie pas la navigation en jeu.

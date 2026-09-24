@@ -685,22 +685,6 @@ Overlord.GuildKeepSites = {
         halfSize = 1.35,
         holdTimeRequired = KEEP_CAPTURE_SECONDS,
     },
-    redridge = {
-        id = "redridge_guild_keep",
-        siteKey = "redridge",
-        displayNameKey = "GUILD_KEEP_REDRIDGE",
-        mapID = 1433,
-        mapIDs = { [49] = true, [1433] = true },
-        mapNameNeedles = {
-            "redridge", "redridge mountains", "les carmines", "carmines",
-            "montañas crestagrana", "montanas crestagrana", "crestagrana",
-            "rotkammgebirge", "rotkamm",
-        },
-        -- Donjon de Guet-de-pierre.
-        center = { 67.4, 55.6 },
-        halfSize = 1.35,
-        holdTimeRequired = KEEP_CAPTURE_SECONDS,
-    },
     mulgore = {
         id = "mulgore_guild_keep",
         siteKey = "mulgore",

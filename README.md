@@ -6,7 +6,7 @@ Addon **World of Warcraft Forever** pour la capture de zones sur les fronts du m
 |---|---|
 | **Auteur** | Troma |
 | **Licence** | All Rights Reserved |
-| **Version** | 1.0.13 |
+| **Version** | 1.0.14 |
 | **Jeu** | WoW Forever (`## Interface: 16001`) |
 | **CurseForge** | https://www.curseforge.com/wow/addons/overlord-forever |
 | **Dépôt** | https://github.com/leliondoc/overlord-forever-addon |
@@ -38,6 +38,12 @@ de siège : il ne peut pas savoir si elles ont déjà été vues. Le guide reste
 accessible par `/ov guide` ou le panneau. Ce comportement est inclus pour tous
 les joueurs et ne nécessite aucun pont local.
 
+La position déplacée du panneau principal utilise aussi le cache de placement
+natif de WoW, par personnage. Le cadre est créé avant la connexion pour récupérer
+ce placement lorsque les SavedVariables de l'addon sont absentes. Les positions
+sauvegardées dans `OverlordDB` restent prioritaires lorsqu'elles sont présentes.
+`/ov resetpos` réinitialise les deux mémorisations du panneau.
+
 ### Distinguer un chargement lent, un reset et une perte
 
 Le classement peut se remplir progressivement au login pendant le rattrapage
@@ -54,16 +60,17 @@ nouvelle campagne.
 
 ## Fronts de guerre
 
-Overlord Forever gère quatre fronts indépendants, chacun avec ses zones de capture, prérequis et capitales de faction :
+Overlord Forever gère six fronts indépendants, chacun avec ses zones de capture, prérequis et capitales de faction :
 
 - **Hautes-terres d'Arathi** (`arathi`) : points de capture recalés sur la carte Classic / Forever
 - **Loch Modan** (`loch_modan`)
 - **Durotar** (`durotar`)
 - **Orneval / Ashenvale** (`ashenvale`)
+- **Forêt d'Elwynn** (`elwynn`), parcours rétabli du front Retail
+- **Carmines / Comté-du-Lac** (`redridge`), parcours autour du lac Placide
 
 Le panneau principal permet de basculer entre les fronts disponibles. Les pins et la logique de capture s'adaptent à la carte où vous vous trouvez.
 
-Pas de Gilnéas, Forêt d'Elwynn, ni Tarides du Sud (cartes Forever, pas de scission Cataclysm).
 
 ## Fonctionnalités
 
@@ -75,7 +82,7 @@ Pas de Gilnéas, Forêt d'Elwynn, ni Tarides du Sud (cartes Forever, pas de scis
 
 ### Synchronisation multi-joueurs
 
-- État partagé entre joueurs de la même région NA/EU (canal addon, groupe/raid et relais Battle.net). Forever n'a pas de royaumes.
+- État partagé entre joueurs de la même région NA/EU (canal addon, groupe/raid et relais Battle.net).
 - Pendant la bêta, le mode communauté est grisé. Les captures, fortins, avant-postes, classements et historiques passent par ces passerelles, y compris entre factions via Battle.net.
 - Le relais conserve l'auteur initial, élimine les doublons et limite les trajets à trois relais. Son budget partagé est de 1 Ko/s, réserve de 500 octets comprise, avec 128 messages en attente au maximum. Les grosses données sont fragmentées ; trois amis Battle.net au maximum sont sélectionnés par message, à tour de rôle.
 - Tous les participants doivent avoir cette version et un chemin de communication entre eux. La découverte périodique permet le rattrapage ; une file saturée ou un paquet expiré peut retarder la synchronisation. Les auteurs antérieurs sont attestés par le relais, pas authentifiés directement par Blizzard. Les contrôles de campagne et de validité des données restent actifs.
@@ -112,7 +119,7 @@ fronts, bonus, stocks) empruntent également ce réseau.
 
 ### Guild Keep
 
-- Fortins de guilde sur des zones dédiées (Serres-Rocheuses, Les Paluns, Terres Ingrates, La Croisée, Les Carmines, Mulgore).
+- Fortins de guilde sur des zones dédiées (Serres-Rocheuses, Les Paluns, Terres Ingrates, La Croisée, Mulgore).
 - Capture intra-guilde, toutes les 6 heures : **03h–04h, 09h–10h, 15h–16h et 21h–22h, heure serveur**. Une victoire par fortin et par siège, avec rappels et synchronisation dédiés (`GK`).
 
 ### Autres systèmes
@@ -124,7 +131,8 @@ fronts, bonus, stocks) empruntent également ce réseau.
 - Sur le réseau de relais bêta, chaque transfert de rattrapage émet au plus une ligne par seconde, avec le budget partagé de 1 Ko/s et la file de 128 messages. Un rattrapage complet peut donc prendre plusieurs minutes ; les versions antérieures conservent leur ancien plafond.
 - Les totaux de guilde du classement additionnent les VH des membres présents dans ce même **top 500**. Ce ne sont pas des victimes uniques. Une guilde temporairement indisponible au chargement ne supprime plus le rattachement connu.
 - Pendant la bêta, tous les comptes utilisent la même semaine américaine (mardi 08:00 UTC, ancre commune de l’addon). Aucun reset EU le mercredi. Une sauvegarde absente au login ne déclenche plus de faux reset hebdomadaire.
-- **Avant-postes** sur les quatre fronts et **Savix Chapel** dans la forêt des Pins-Argentés (61,8 / 64,4), capturable en permanence.
+- **Avant-postes** sur les six fronts, plus **Savix Chapel** dans la forêt des Pins-Argentés (61,8 / 64,4) et **Aeythyr Lodge** aux Maleterres de l'Est (52,1 / 18,4), capturables en permanence.
+- **Forêts de bois** dans les Paluns (53,8 / 43,7) et en Orneval (33,6 / 63,6).
 - Appel de faction pour alerter les alliés accessibles par les passerelles de synchronisation.
 - **Commandant** : rôle du chef de groupe sur un front, position sur la carte/minimap,
   badge de nameplate et libération du rôle à la mort ou à la perte du commandement.
@@ -136,7 +144,7 @@ fronts, bonus, stocks) empruntent également ce réseau.
 
 ### Langues
 
-Interface traduite en **anglais**, **français**, **espagnol**, **allemand** et **russe** dans `Locales.lua`.
+Interface traduite en **anglais**, **français**, **espagnol**, **allemand**, **russe**, **portugais brésilien** et **chinois simplifié**. Le guide Forever dans `GuideLocales.lua` décrit les six fronts, les layers et la synchronisation ; les chaînes ptBR et zhCN se trouvent dans leurs fichiers `Locales_*.lua`.
 
 ## Commandes
 

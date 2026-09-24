@@ -1,10 +1,11 @@
--- Independent Vanilla ground references (Questie v10.0.0 classicNpcDB).
+-- Vanilla ground references (Questie v10.0.0 classicNpcDB), published subzone
+-- coordinates and restored Elwynn layout samples; see docs/forever-capture-locations.md.
 -- These checks test capture reach and map selection, not server terrain navigation.
 Overlord = { L = { ZONE_NAMES = {} } }
 Enum = { UIMapType = { Zone = 3, Continent = 2 } }
 local now, currentMap, x, y = 10, 1417, 0, 0
 local classicAvailable = true
-local classic = { [1417]=true, [1432]=true, [1411]=true, [1440]=true }
+local classic = { [1417]=true, [1432]=true, [1411]=true, [1440]=true, [1429]=true, [1433]=true }
 function GetTime() return now end
 function wipe(t) for k in pairs(t) do t[k] = nil end end
 function CreateVector2D(x, y) return {x=x, y=y} end
@@ -56,13 +57,33 @@ local anchors = {
     {"ash_astranaar", 34.67, 48.84}, -- NPC 3845: Shindrell Swiftfire
     {"ash_iris_lake", 45.82, 43.25}, -- NPC 3780: Shadethicket Moss Eater
     {"ash_raynewood", 60.96, 51.84}, -- NPC 4054: Laughing Sister
-    {"ash_night_run", 66.32, 52.56}, -- NPC 3758: Felmusk Satyr
+    {"ash_night_run", 66.6, 57.0}, -- Classic WoW Wiki: Night Run settlement, not the river approach
     {"ash_bloodtooth_camp", 54.75, 79.62}, -- NPC 3696: Ran Bloodtooth
     {"ash_silverwind", 50.27, 66.04}, -- NPC 6087: Astranaar Sentinel
     {"ash_mystral_lake", 50.84, 75.08}, -- NPC 3897: Krolg
     {"ash_fallen_sky_lake", 65.88, 80.30}, -- NPC 3784: Shadethicket Bark Ripper
     {"ash_dor_danil", 71.91, 73.67}, -- NPC 12856: Ashenvale Outrunner
     {"ash_splintertree", 73.38, 61.02}, -- NPC 15131: Qeeju
+    -- Elwynn: samples from the user-requested restored Retail layout.
+    -- Verify capture/map routing; these are not independently surveyed terrain anchors.
+    {"elwynn_westbrook", 24.2, 74.5},
+    {"elwynn_goldshire", 42.1, 65.9},
+    {"elwynn_tower_of_azora", 64.7, 69.5},
+    {"elwynn_ridgepoint", 83.8, 78.7},
+    {"elwynn_stone_cairn", 74.3, 51.4},
+    {"elwynn_eastvale", 82.0, 66.2},
+    {"elwynn_mirror_lake", 49.8, 68.1},
+    {"elwynn_fargodeep", 39.0, 82.6},
+    {"elwynn_jerods_landing", 48.4, 87.7},
+    {"elwynn_invasion_camp", 90.9, 73.7},
+    -- Redridge: published pre-Cataclysm subzone map coordinates (MMO4ever, map 44).
+    {"redridge_lakeshire", 25.0, 43.0},
+    {"redridge_althers_mill", 53.0, 42.0},
+    {"redridge_ilgalar", 80.0, 49.0},
+    {"redridge_three_corners", 18.0, 69.0},
+    {"redridge_lakeridge_highway", 38.0, 73.0},
+    {"redridge_stonewatch_falls", 75.0, 67.0},
+    {"redridge_renders_valley", 73.0, 78.0},
 }
 local seen = {}
 for _, a in ipairs(anchors) do
@@ -76,21 +97,21 @@ for _, a in ipairs(anchors) do
         assert(Overlord.Fronts:GetMapID() == front.preferredMapID, "Retail alias selected")
         now, x, y = now + 1, a[2], a[3]
         local found = Overlord.Zones:GetCurrentPlayerZone()
-        assert(found == zone, "Ground reference cannot capture " .. a[1] .. ": " .. tostring(found and found.id))
+        assert(found == zone, "Location reference cannot capture " .. a[1] .. ": " .. tostring(found and found.id))
     end
     seen[a[1]] = true
 end
 local count = 0
 for _, front in pairs(Overlord.Fronts.Registry) do
     for _, zone in ipairs(front.zones) do
-        assert(seen[zone.id], "Missing ground reference " .. zone.id)
+        assert(seen[zone.id], "Missing location reference " .. zone.id)
         count = count + 1
     end
 end
-assert(count == 40)
+assert(count == 57)
 classicAvailable = false
 for _, front in pairs(Overlord.Fronts.Registry) do
     front.resolvedMapID = nil
     assert(front.mapIDs[Overlord.Fronts:GetMapID(front.id)], "Alias-only client lost its map")
 end
-print("Forever capture locations: 40 ground references, capture detection and preferred Vanilla maps OK")
+print("Forever capture locations: 57 references, capture detection and preferred Vanilla maps OK")

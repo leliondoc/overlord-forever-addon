@@ -6,8 +6,8 @@ const fronts = readFileSync(new URL("../Fronts.lua", import.meta.url), "utf8");
 const toc = readFileSync(new URL("../Overlord.toc", import.meta.url), "utf8");
 const outpost = readFileSync(new URL("../Outpost.lua", import.meta.url), "utf8");
 
-test("Forever fronts: Arathi (Classic points), Loch, Durotar, Ashenvale", () => {
-    assert.match(fronts, /Overlord\.Fronts\.Order = Overlord\.Fronts\.Order or \{"arathi", "loch_modan", "durotar", "ashenvale"\}/);
+test("Forever fronts: six Classic map campaigns", () => {
+    assert.match(fronts, /Overlord\.Fronts\.Order = \{"arathi", "loch_modan", "durotar", "ashenvale", "elwynn", "redridge"\}/);
     assert.match(fronts, /activeFrontId = "arathi"/);
     assert.match(fronts, /Zone\("stromgarde"/);
     assert.match(fronts, /center = \{25\.38, 58\.36\}/);
@@ -17,7 +17,10 @@ test("Forever fronts: Arathi (Classic points), Loch, Durotar, Ashenvale", () => 
         /ashenvale = "Interface\\\\QuestionFrame\\\\Answer-WarBoard-Classic-Ashenvale\.blp"/,
     );
     assert.doesNotMatch(fronts, /Achievement_Zone_Ashenvale/);
-    assert.doesNotMatch(fronts, /id = "elwynn"/);
+    assert.match(fronts, /id = "elwynn"/);
+    assert.match(fronts, /id = "redridge"/);
+    assert.match(fronts, /Zone\("redridge_lakeshire", \{ center = \{25\.0, 43\.0\}/);
+    assert.match(fronts, /Zone\("redridge_stonewatch_falls", \{ center = \{75\.0, 67\.0\}/);
     assert.doesNotMatch(fronts, /id = "gilneas"/);
     assert.doesNotMatch(fronts, /id = "southern_barrens"/);
 });
@@ -41,14 +44,16 @@ test("TOC Forever 16001 and CurseForge 1701204", () => {
     assert.match(hofUi, /local selectedCategory = "donors"/);
 });
 
-test("Outposts match the four Forever fronts", () => {
+test("Outposts cover six fronts and two open-world lodges", () => {
     assert.match(outpost, /frontId = "arathi"/);
     assert.match(outpost, /center = \{ 33\.3, 27\.8 \}/);
     assert.match(outpost, /loch_modan = \{[\s\S]*?center = \{ 40\.3, 39\.4 \}/);
     assert.match(outpost, /center = \{ 47\.8, 49\.6 \}/);
     assert.match(outpost, /center = \{ 29\.0, 32\.0 \}/);
     assert.match(outpost, /frontId = "ashenvale"/);
-    assert.doesNotMatch(outpost, /frontId = "elwynn"/);
+    assert.match(outpost, /frontId = "elwynn"/);
+    assert.match(outpost, /frontId = "redridge"/);
+    assert.match(outpost, /aeythyr_lodge = \{[\s\S]*?center = \{ 52\.1, 18\.4 \}/);
     assert.doesNotMatch(outpost, /coiled_isle/);
     assert.doesNotMatch(outpost, /11\.2, 70\.5/);
 });

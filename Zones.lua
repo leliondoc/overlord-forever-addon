@@ -1432,7 +1432,7 @@ end
 local captureCancelledCooldowns = {}
 local CAPTURE_CANCELLED_COOLDOWN = 30
 
--- ==================== Mines d'or (Hillsbrad / Silverpine / Loch Modan) ====================
+-- ==================== Mines de coins ====================
 -- Zones de minage separees du systeme de capture. Le joueur accumule de l'or
 -- en restant dans le cercle d'une mine (+ bonus si vrai node mine).
 
@@ -1441,14 +1441,15 @@ Overlord.MineDatabase = {
         id = "azurelode",
         name = L.MINE_AZURELODE,
         mapID = 1424, mapIDs = { [25] = true, [1424] = true }, -- Hillsbrad Foothills
-        center = {34.4, 72.2},
+        -- Entrées de Veine-d'Azur (26,58 et 30,56), au sud des champs de Hautebrande.
+        center = {28.0, 57.0},
         radius = 4,
     },
     {
         id = "darrow",
         name = L.MINE_DARROW,
-        mapID = 1424, mapIDs = { [25] = true, [1424] = true }, -- Hillsbrad Foothills (Austrivage / Southshore)
-        center = {46.0, 55},
+        mapID = 1424, mapIDs = { [25] = true, [1424] = true }, -- Colline de Darrow, au nord d'Austrivage
+        center = {46.0, 32.0},
         radius = 4,
     },
     {
@@ -1468,7 +1469,7 @@ Overlord.MineDatabase = {
         {
         id = "jasperlode",
         name = L.MINE_JASPERLODE,
-        -- Ancien front Elwynn : mine conservee hors front Forever.
+        -- Mine de Veine-de-Jaspe sur le front d'Elwynn.
         mapID = 1429,
         mapIDs = { [37] = true, [1429] = true },
         center = {61.9, 54.2},
@@ -1569,7 +1570,14 @@ Overlord.WoodDatabase = {
         id = "wetlands_forest",
         name = (L and L.WOOD_ZONE_WETLANDS_FOREST) or "Wetlands Forest",
         mapID = 1437, mapIDs = { [56] = true, [1437] = true }, -- Les Paluns
-        center = {42.4, 55.4},
+        center = {53.8, 43.7},
+        radius = 4,
+    },
+    {
+        id = "ashenvale_forest",
+        name = (L and L.WOOD_ZONE_ASHENVALE_FOREST) or "Ashenvale Forest",
+        mapID = 1440, mapIDs = { [63] = true, [1440] = true },
+        center = {33.6, 63.6},
         radius = 4,
     },
 }
