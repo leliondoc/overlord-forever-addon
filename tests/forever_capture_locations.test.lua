@@ -5,7 +5,8 @@ Overlord = { L = { ZONE_NAMES = {} } }
 Enum = { UIMapType = { Zone = 3, Continent = 2 } }
 local now, currentMap, x, y = 10, 1417, 0, 0
 local classicAvailable = true
-local classic = { [1417]=true, [1432]=true, [1411]=true, [1440]=true, [1429]=true, [1433]=true }
+local classic = { [1417]=true, [1432]=true, [1411]=true, [1440]=true,
+    [1429]=true, [1433]=true, [1424]=true }
 function GetTime() return now end
 function wipe(t) for k in pairs(t) do t[k] = nil end end
 function CreateVector2D(x, y) return {x=x, y=y} end
@@ -84,6 +85,9 @@ local anchors = {
     {"redridge_lakeridge_highway", 38.0, 73.0},
     {"redridge_stonewatch_falls", 75.0, 67.0},
     {"redridge_renders_valley", 73.0, 78.0},
+    -- Hillsbrad town references: Southshore innkeeper (51.2/58.9) and Tarren Mill hub (61/19).
+    {"hillsbrad_southshore", 51.2, 58.9},
+    {"hillsbrad_tarren_mill", 61.0, 19.0},
 }
 local seen = {}
 for _, a in ipairs(anchors) do
@@ -101,6 +105,23 @@ for _, a in ipairs(anchors) do
     end
     seen[a[1]] = true
 end
+-- The special front's circles must cover the towns and their immediate approaches,
+-- while leaving the open ground between them outside both captures.
+local hillsbrad = Overlord.Fronts:GetFront("hillsbrad")
+Overlord.Fronts.activeFrontId = hillsbrad.id
+Overlord.ZoneDatabase = hillsbrad.zones
+currentMap = hillsbrad.preferredMapID
+for _, sample in ipairs({
+    {59.0, 58.0, "hillsbrad_southshore"},
+    {69.0, 19.0, "hillsbrad_tarren_mill"},
+    {56.0, 39.0, nil},
+}) do
+    now, x, y = now + 1, sample[1], sample[2]
+    local found = Overlord.Zones:GetCurrentPlayerZone()
+    assert((found and found.id) == sample[3], "Unexpected Hillsbrad capture at " .. x .. ", " .. y)
+end
+assert(Overlord.Fronts:ResolveFrontByMapID(623) == nil,
+    "The Southshore / Tarren Mill battleground is not the open-world front")
 local count = 0
 for _, front in pairs(Overlord.Fronts.Registry) do
     for _, zone in ipairs(front.zones) do
@@ -108,10 +129,10 @@ for _, front in pairs(Overlord.Fronts.Registry) do
         count = count + 1
     end
 end
-assert(count == 57)
+assert(count == 59)
 classicAvailable = false
 for _, front in pairs(Overlord.Fronts.Registry) do
     front.resolvedMapID = nil
     assert(front.mapIDs[Overlord.Fronts:GetMapID(front.id)], "Alias-only client lost its map")
 end
-print("Forever capture locations: 57 references, capture detection and preferred Vanilla maps OK")
+print("Forever capture locations: 59 references, capture detection and preferred Vanilla maps OK")

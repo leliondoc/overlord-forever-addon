@@ -141,7 +141,7 @@ Overlord.OutpostSites = {
         mapID = 1433,
         mapIDs = { [49] = true, [1433] = true },
         mapNameNeedles = { "redridge", "carmines", "crestagrana", "rotkamm", "赤脊山" },
-        -- Camp de Render : à l'écart des routes de capture.
+        -- Camp de Renosh : à l'écart des routes de capture.
         center = { 40.0, 17.0 },
         halfSize = 1.35,
     },

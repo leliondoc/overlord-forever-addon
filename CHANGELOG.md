@@ -1,4 +1,10 @@
-1.0.14
+1.0.15
+
+**Overlord Forever 1.0.15**
+
+- Add a special two-point Hillsbrad Foothills front between Southshore and Tarren Mill. Both towns have large capture circles, faction capitals and direct opposing-faction routes; the open-world map is distinct from the namesake battleground.
+- Name the Redridge outpost Renosh Camp in all seven interface languages.
+- Update the seven-language Forever guide, front names and map documentation. Cover the two towns, wide capture areas, map aliases and battleground exclusion in the location tests.
 
 **Overlord Forever 1.0.14**
 

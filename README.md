@@ -6,7 +6,7 @@ Addon **World of Warcraft Forever** pour la capture de zones sur les fronts du m
 |---|---|
 | **Auteur** | Troma |
 | **Licence** | All Rights Reserved |
-| **Version** | 1.0.14 |
+| **Version** | 1.0.15 |
 | **Jeu** | WoW Forever (`## Interface: 16001`) |
 | **CurseForge** | https://www.curseforge.com/wow/addons/overlord-forever |
 | **Dépôt** | https://github.com/leliondoc/overlord-forever-addon |
@@ -60,7 +60,7 @@ nouvelle campagne.
 
 ## Fronts de guerre
 
-Overlord Forever gère six fronts indépendants, chacun avec ses zones de capture, prérequis et capitales de faction :
+Overlord Forever gère sept fronts indépendants avec leurs zones de capture, prérequis et capitales de faction :
 
 - **Hautes-terres d'Arathi** (`arathi`) : points de capture recalés sur la carte Classic / Forever
 - **Loch Modan** (`loch_modan`)
@@ -68,6 +68,7 @@ Overlord Forever gère six fronts indépendants, chacun avec ses zones de captur
 - **Orneval / Ashenvale** (`ashenvale`)
 - **Forêt d'Elwynn** (`elwynn`), parcours rétabli du front Retail
 - **Carmines / Comté-du-Lac** (`redridge`), parcours autour du lac Placide
+- **Contreforts de Hautebrande** (`hillsbrad`), front spécial à deux grands cercles : Austrivage (51,2 / 58) et Moulin-de-Tarren (61,8 / 19)
 
 Le panneau principal permet de basculer entre les fronts disponibles. Les pins et la logique de capture s'adaptent à la carte où vous vous trouvez.
 
@@ -131,7 +132,7 @@ fronts, bonus, stocks) empruntent également ce réseau.
 - Sur le réseau de relais bêta, chaque transfert de rattrapage émet au plus une ligne par seconde, avec le budget partagé de 1 Ko/s et la file de 128 messages. Un rattrapage complet peut donc prendre plusieurs minutes ; les versions antérieures conservent leur ancien plafond.
 - Les totaux de guilde du classement additionnent les VH des membres présents dans ce même **top 500**. Ce ne sont pas des victimes uniques. Une guilde temporairement indisponible au chargement ne supprime plus le rattachement connu.
 - Pendant la bêta, tous les comptes utilisent la même semaine américaine (mardi 08:00 UTC, ancre commune de l’addon). Aucun reset EU le mercredi. Une sauvegarde absente au login ne déclenche plus de faux reset hebdomadaire.
-- **Avant-postes** sur les six fronts, plus **Savix Chapel** dans la forêt des Pins-Argentés (61,8 / 64,4) et **Aeythyr Lodge** aux Maleterres de l'Est (52,1 / 18,4), capturables en permanence.
+- **Avant-postes** sur les six fronts classiques, plus **Savix Chapel** dans la forêt des Pins-Argentés (61,8 / 64,4) et **Aeythyr Lodge** aux Maleterres de l'Est (52,1 / 18,4), capturables en permanence. Le front spécial des Contreforts de Hautebrande comporte uniquement ses deux points de capture.
 - **Forêts de bois** dans les Paluns (53,8 / 43,7) et en Orneval (33,6 / 63,6).
 - Appel de faction pour alerter les alliés accessibles par les passerelles de synchronisation.
 - **Commandant** : rôle du chef de groupe sur un front, position sur la carte/minimap,
@@ -144,7 +145,7 @@ fronts, bonus, stocks) empruntent également ce réseau.
 
 ### Langues
 
-Interface traduite en **anglais**, **français**, **espagnol**, **allemand**, **russe**, **portugais brésilien** et **chinois simplifié**. Le guide Forever dans `GuideLocales.lua` décrit les six fronts, les layers et la synchronisation ; les chaînes ptBR et zhCN se trouvent dans leurs fichiers `Locales_*.lua`.
+Interface traduite en **anglais**, **français**, **espagnol**, **allemand**, **russe**, **portugais brésilien** et **chinois simplifié**. Le guide Forever dans `GuideLocales.lua` décrit les sept fronts, les layers et la synchronisation ; les chaînes ptBR et zhCN se trouvent dans leurs fichiers `Locales_*.lua`.
 
 ## Commandes
 

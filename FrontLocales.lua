@@ -1,31 +1,46 @@
--- Names for the Forever Lakeshire front and the Aeythyr Lodge outpost.
+-- Names for the Forever Redridge and two-point Hillsbrad fronts.
 local L = Overlord.L
 local locale = GetLocale() or "enUS"
 local names = {
     enUS = { "Redridge Mountains", "Lakeshire", "Lakeshire", "Alther's Mill",
         "Tower of Ilgalar", "Three Corners", "Lakeridge Highway", "Stonewatch Falls",
-        "Render's Valley", "Render's Camp" },
+        "Render's Valley", "Renosh Camp" },
     frFR = { "Les Carmines", "Comté-du-Lac", "Comté-du-Lac", "Moulin d'Alther",
         "Tour d'Ilgalar", "Les Trois Corners", "Route du lac", "Chutes de Guet-de-pierre",
-        "Vallée de Render", "Camp de Render" },
+        "Vallée de Render", "Camp de Renosh" },
     esES = { "Montañas Crestagrana", "Villa del Lago", "Villa del Lago", "Molino de Alther",
         "Torre de Ilgalar", "Tres Esquinas", "Camino del Lago", "Cascadas de Petravista",
-        "Valle de Render", "Campamento de Render" },
+        "Valle de Render", "Campamento de Renosh" },
     deDE = { "Rotkammgebirge", "Seenhain", "Seenhain", "Althers Mühle",
         "Turm von Ilgalar", "Drei Ecken", "Seeweg", "Steinwachfälle",
-        "Renders Tal", "Renders Lager" },
+        "Renders Tal", "Renosh-Lager" },
     ruRU = { "Красногорье", "Приозерье", "Приозерье", "Мельница Алтера",
         "Башня Илгалара", "Три Угла", "Дорога у озера", "Водопад Каменной Стражи",
-        "Долина Рендера", "Лагерь Рендера" },
+        "Долина Рендера", "Лагерь Реноша" },
     ptBR = { "Montanhas Cristarrubra", "Vila do Lago", "Vila do Lago", "Moinho de Alther",
         "Torre de Ilgalar", "Três Esquinas", "Estrada do Lago", "Cataratas da Vigília de Pedra",
-        "Vale de Render", "Acampamento de Render" },
+        "Vale de Render", "Acampamento de Renosh" },
     zhCN = { "赤脊山", "湖畔镇", "湖畔镇", "阿尔瑟尔磨坊",
         "伊尔加拉之塔", "三岔路口", "湖边大道", "石堡瀑布",
-        "伦德山谷", "伦德营地" },
+        "伦德山谷", "雷诺什营地" },
 }
 names.esMX = names.esES
 local n = names[locale] or names.enUS
+local hillsbradNames = {
+    enUS = { "Hillsbrad Foothills", "Southshore / Tarren Mill", "Southshore", "Tarren Mill" },
+    frFR = { "Contreforts de Hautebrande", "Austrivage / Moulin-de-Tarren", "Austrivage", "Moulin-de-Tarren" },
+    esES = { "Laderas de Trabalomas", "Costasur / Molino Tarren", "Costasur", "Molino Tarren" },
+    deDE = { "Vorgebirge des Hügellands", "Süderstade / Tarrens Mühle", "Süderstade", "Tarrens Mühle" },
+    ruRU = { "Предгорья Хилсбрада", "Южнобережье / Мельница Таррен", "Южнобережье", "Мельница Таррен" },
+    ptBR = { "Contrafortes de Eira dos Montes", "Costa Sul / Moinho Tarren", "Costa Sul", "Moinho Tarren" },
+    zhCN = { "希尔斯布莱德丘陵", "南海镇 / 塔伦米尔", "南海镇", "塔伦米尔" },
+}
+hillsbradNames.esMX = hillsbradNames.esES
+local h = hillsbradNames[locale] or hillsbradNames.enUS
+L.FRONT_HILLSBRAD_NAME = h[1]
+L.FRONT_HILLSBRAD_DROPDOWN = h[2]
+L.ZONE_NAMES.hillsbrad_southshore = h[3]
+L.ZONE_NAMES.hillsbrad_tarren_mill = h[4]
 local forestNames = {
     enUS = "Ashenvale Forest", frFR = "Forêt d'Orneval",
     esES = "Bosque de Vallefresno", esMX = "Bosque de Vallefresno",

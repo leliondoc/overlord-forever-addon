@@ -519,9 +519,46 @@ Overlord.Fronts.Registry = {
                 "redridge_three_corners", "redridge_lakeshire" },
         },
     },
+    hillsbrad = {
+        id = "hillsbrad",
+        preferredMapID = 1424,
+        mapName = L.FRONT_HILLSBRAD_NAME or "Hillsbrad Foothills",
+        dropdownLabel = L.FRONT_HILLSBRAD_DROPDOWN or "Southshore / Tarren Mill",
+        mapIDs = { [25] = true, [1424] = true },
+        excludedMapIDs = { [623] = true }, -- Southshore vs. Tarren Mill battleground
+        mapNameNeedles = { "hillsbrad", "hautebrande", "laderas de trabalomas",
+            "hügelland", "предгорья хилсбрада", "contrafortes de eira dos montes", "希尔斯布莱德" },
+        allianceCapitalId = "hillsbrad_southshore",
+        hordeCapitalId = "hillsbrad_tarren_mill",
+        panelHeads = {
+            Alliance = "HUMAN_MALE", Horde = "UNDEAD_MALE",
+            faceInward = true, hordeMirror = false,
+        },
+        -- Two large town circles. The registry's 0.60 capture scale makes radius 15 = 9 map units.
+        zones = {
+            Zone("hillsbrad_southshore", { center = {51.2, 58.0}, radius = 15,
+                status = "captured", isCapital = true }),
+            Zone("hillsbrad_tarren_mill", { center = {61.8, 19.0}, radius = 15,
+                prereqZones = {"hillsbrad_southshore"}, isCapital = true }),
+        },
+        prereqs = {
+            Alliance = {
+                hillsbrad_southshore = {},
+                hillsbrad_tarren_mill = {"hillsbrad_southshore"},
+            },
+            Horde = {
+                hillsbrad_tarren_mill = {},
+                hillsbrad_southshore = {"hillsbrad_tarren_mill"},
+            },
+        },
+        displayOrder = {
+            Alliance = { "hillsbrad_southshore", "hillsbrad_tarren_mill" },
+            Horde = { "hillsbrad_tarren_mill", "hillsbrad_southshore" },
+        },
+    },
 }
 
-Overlord.Fronts.Order = {"arathi", "loch_modan", "durotar", "ashenvale", "elwynn", "redridge"}
+Overlord.Fronts.Order = {"arathi", "loch_modan", "durotar", "ashenvale", "elwynn", "redridge", "hillsbrad"}
 if not Overlord.Fronts.activeFrontId then
     Overlord.Fronts.activeFrontId = "arathi"
 end
@@ -757,6 +794,7 @@ local FEATURED_FRONT_ART = {
     ashenvale = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-Ashenvale.blp",
     elwynn = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-ElwynnForest.blp",
     redridge = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-RedridgeMountains.blp",
+    hillsbrad = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-HillsbradFoothills.blp",
 }
 
 local FEATURED_FRONT_NAME_KEYS = {
@@ -766,6 +804,7 @@ local FEATURED_FRONT_NAME_KEYS = {
     ashenvale = "FRONT_ASHENVALE_NAME",
     elwynn = "FRONT_ELWYNN_NAME",
     redridge = "FRONT_REDRIDGE_NAME",
+    hillsbrad = "FRONT_HILLSBRAD_NAME",
 }
 
 local featuredFrontCacheDayKey = nil

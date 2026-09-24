@@ -6,8 +6,8 @@ const fronts = readFileSync(new URL("../Fronts.lua", import.meta.url), "utf8");
 const toc = readFileSync(new URL("../Overlord.toc", import.meta.url), "utf8");
 const outpost = readFileSync(new URL("../Outpost.lua", import.meta.url), "utf8");
 
-test("Forever fronts: six Classic map campaigns", () => {
-    assert.match(fronts, /Overlord\.Fronts\.Order = \{"arathi", "loch_modan", "durotar", "ashenvale", "elwynn", "redridge"\}/);
+test("Forever fronts: seven Classic map campaigns", () => {
+    assert.match(fronts, /Overlord\.Fronts\.Order = \{"arathi", "loch_modan", "durotar", "ashenvale", "elwynn", "redridge", "hillsbrad"\}/);
     assert.match(fronts, /activeFrontId = "arathi"/);
     assert.match(fronts, /Zone\("stromgarde"/);
     assert.match(fronts, /center = \{25\.38, 58\.36\}/);
@@ -21,6 +21,9 @@ test("Forever fronts: six Classic map campaigns", () => {
     assert.match(fronts, /id = "redridge"/);
     assert.match(fronts, /Zone\("redridge_lakeshire", \{ center = \{25\.0, 43\.0\}/);
     assert.match(fronts, /Zone\("redridge_stonewatch_falls", \{ center = \{75\.0, 67\.0\}/);
+    assert.match(fronts, /id = "hillsbrad"/);
+    assert.match(fronts, /Zone\("hillsbrad_southshore", \{ center = \{51\.2, 58\.0\}, radius = 15/);
+    assert.match(fronts, /Zone\("hillsbrad_tarren_mill", \{ center = \{61\.8, 19\.0\}, radius = 15/);
     assert.doesNotMatch(fronts, /id = "gilneas"/);
     assert.doesNotMatch(fronts, /id = "southern_barrens"/);
 });
@@ -53,6 +56,7 @@ test("Outposts cover six fronts and two open-world lodges", () => {
     assert.match(outpost, /frontId = "ashenvale"/);
     assert.match(outpost, /frontId = "elwynn"/);
     assert.match(outpost, /frontId = "redridge"/);
+    assert.doesNotMatch(outpost, /frontId = "hillsbrad"/);
     assert.match(outpost, /aeythyr_lodge = \{[\s\S]*?center = \{ 52\.1, 18\.4 \}/);
     assert.doesNotMatch(outpost, /coiled_isle/);
     assert.doesNotMatch(outpost, /11\.2, 70\.5/);

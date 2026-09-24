@@ -72,3 +72,9 @@ Le test couvre désormais les 57 objectifs et les cartes Classic 1429 (Elwynn) e
 - Les sept références des Carmines utilisent les repères de la [carte antérieure à Cataclysm](https://www.mmo4ever.com/wow/map.php?creature=3085&id=44) : Lakeshire 25/43, Alther 53/42, Ilgalar 80/49, Three Corners 18/69, Lakeridge Highway 38/73, Stonewatch Falls 75/67 et Render's Valley 73/78.
 
 La validation automatisée confirme que chaque référence sélectionne le bon objectif dans les deux familles d'identifiants. Elle ne certifie pas la navigation en jeu.
+
+## Extension locale : Austrivage / Moulin-de-Tarren
+
+Le front spécial des Contreforts de Hautebrande utilise la carte Classic 1424 (alias 25), avec seulement deux capitales : Austrivage à 51.2/58.0 et Moulin-de-Tarren à 61.8/19.0. Leur rayon effectif de capture est de 9 unités sur la carte, soit plus du triple du rayon habituel de 2.4. Les cercles restent séparés par la campagne centrale.
+
+Références des deux villes : [aubergiste d'Austrivage à 51/58](https://wowwiki-archive.fandom.com/wiki/Innkeeper_Anderson) et [Tarren Mill vers 60/19](https://classictinker.com/locations/tarren-mill/). Le test couvre les centres, les abords et la séparation des deux cercles. La carte 623 du champ de bataille homonyme est exclue du front de monde ouvert.
