@@ -4,6 +4,8 @@ Overlord.UI = Overlord.UI or {}
 Overlord.UI.SHARD_POPUP_VIRTUAL_BUTTONS = 12
 Overlord.UI.SHARD_TOOLTIP_PLAYER_MAX = 12
 Overlord.UI.SHARD_TOOLTIP_SCAN_MAX = 48
+-- Indisponibilite de l'interface d'adhesion uniquement, independante de la sync.
+Overlord.UI.COMMUNITY_JOIN_AVAILABLE = false
 
 local L = Overlord.L
 
@@ -2435,8 +2437,11 @@ function Overlord.UI:CreateZoneListSection(parent)
         Overlord.UI:OnCommunityButtonClick()
     end)
     zoneListFrame.communityBtn = communityBtn
-    if Overlord.CommunityModeEnabled == false and self.SetWC3ButtonUnavailable then
-        self.SetWC3ButtonUnavailable(communityBtn, L.COMMUNITY_BETA_DISABLED)
+    -- Temporairement indisponible sur la beta ; les transports communautaires
+    -- restent actifs. Reutiliser le meme rendu grise que les autres boutons.
+    if (not self.COMMUNITY_JOIN_AVAILABLE or Overlord.CommunityModeEnabled == false)
+        and self.SetWC3ButtonUnavailable then
+        self.SetWC3ButtonUnavailable(communityBtn, L.COMMUNITY_BUTTON_UNAVAILABLE)
     end
 
     local exportBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
@@ -2780,7 +2785,10 @@ end
 
 -- Recalcule domination, contenu principal, actions, bandeau communaute et hauteur totale.
 function Overlord.UI:ApplyCommunityHintLayout(memberOfClub)
-    if Overlord.CommunityModeEnabled == false then memberOfClub = true; communitySuccessUntil = 0 end
+    if not self.COMMUNITY_JOIN_AVAILABLE or Overlord.CommunityModeEnabled == false then
+        memberOfClub = true
+        communitySuccessUntil = 0
+    end
     local zf = zoneListFrame
     if not zf or not zf._communityLayoutReady or not zf.domBarFrame or not zf.domTitleLabel or not zf.zonesPanel or not zf.zoneListHeader then
         return
@@ -3282,7 +3290,7 @@ local function CreateCommunityPopupFrame()
 end
 
 function Overlord.UI:ShowCommunityPopup()
-    if Overlord.CommunityModeEnabled == false then return end
+    if not self.COMMUNITY_JOIN_AVAILABLE or Overlord.CommunityModeEnabled == false then return end
     if not Overlord.Sync then return end
     if not communityPopupFrame then
         communityPopupFrame = CreateCommunityPopupFrame()
@@ -3452,6 +3460,8 @@ function Overlord.UI:OnDiscordButtonClick()
 end
 
 function Overlord.UI:OnCommunityButtonClick()
+    if not self.COMMUNITY_JOIN_AVAILABLE then return end
+    if communityBtn and communityBtn._olUnavailable then return end
     if Overlord.CommunityModeEnabled == false then return end
     if not Overlord.Sync or not Overlord.Sync.FindCommunityClub then return end
     lastCommunityClubPollAt = 0
@@ -3509,7 +3519,7 @@ communityMembershipEventFrame:RegisterEvent("CLUB_REMOVED")
 communityMembershipEventFrame:SetScript("OnEvent", OnCommunityMembershipChanged)
 
 function Overlord.UI:RefreshCommunityButton()
-    if Overlord.CommunityModeEnabled == false then
+    if not self.COMMUNITY_JOIN_AVAILABLE or Overlord.CommunityModeEnabled == false then
         if communityHintPanel then communityHintPanel:Hide() end
         if lastCommunityLayoutClubState ~= true then
             lastCommunityLayoutClubState = true
@@ -3517,7 +3527,8 @@ function Overlord.UI:RefreshCommunityButton()
         end
         return
     end
-    if not communityBtn or not Overlord.Sync or not Overlord.Sync.FindCommunityClub then return end
+    if not communityBtn or communityBtn._olUnavailable
+        or not Overlord.Sync or not Overlord.Sync.FindCommunityClub then return end
     local now = GetTime()
     if now - lastCommunityClubPollAt >= COMMUNITY_CLUB_POLL_INTERVAL then
         lastCommunityClubPollAt = now
@@ -4890,6 +4901,10 @@ function Overlord.UI:ResetPosition()
 end
 
 function Overlord.UI:Show(opts)
+    if not mainFrame then
+        if Overlord.PrintLoginInitStatus then Overlord:PrintLoginInitStatus() end
+        return
+    end
     if Overlord.InstanceSuspended then
         Overlord:PrintNotification("|cFF00FF00[Overlord]|r " .. L.DISABLED_IN_INSTANCE)
         return
@@ -4944,6 +4959,10 @@ function Overlord.UI:Hide(autoHide)
 end
 
 function Overlord.UI:Toggle()
+    if not mainFrame then
+        self:Show()
+        return
+    end
     if mainFrame then
         if mainFrame:IsShown() then
             self:Hide()

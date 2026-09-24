@@ -55,6 +55,18 @@ if locale == "ptBR" or locale == "zhCN" then
     end
 end
 
+local communityButtonUnavailable = {
+    enUS = "Community button temporarily unavailable during the beta.",
+    frFR = "Bouton Communauté temporairement indisponible pendant la bêta.",
+    esES = "Botón Comunidad temporalmente no disponible durante la beta.",
+    deDE = "Community-Schaltfläche während der Beta vorübergehend nicht verfügbar.",
+    ruRU = "Кнопка сообщества временно недоступна во время бета-тестирования.",
+    ptBR = "Botão Comunidade temporariamente indisponível durante o beta.",
+    zhCN = "社区按钮在测试期间暂时不可用。",
+}
+L.COMMUNITY_BUTTON_UNAVAILABLE = communityButtonUnavailable[locale]
+    or (locale == "esMX" and communityButtonUnavailable.esES) or communityButtonUnavailable.enUS
+
 local replacements = {
     enUS = { { "Shard", "Layer" }, { "shard", "layer" } },
     enGB = { { "Shard", "Layer" }, { "shard", "layer" } },

@@ -1040,15 +1040,18 @@ end
 
 function Overlord.Sync:CanonicalForeverNameFromUnit(unit)
     if not unit then return nil end
-    local name = Overlord:SafeGetUnitName(unit, true) or Overlord:SafeUnitName(unit)
-    return self:CanonicalForeverName(name)
+    -- Valider chaque source : une chaine non vide peut n'etre que le prenom.
+    local canon = self:CanonicalForeverName(Overlord:SafeGetUnitName(unit, true))
+    if canon then return canon end
+    return self:CanonicalForeverName(Overlord:SafeUnitName(unit))
 end
 
 function Overlord.Sync:GetPlayerFullName()
     if cachedPlayerFullName then return cachedPlayerFullName end
-    local name = Overlord:SafeUnitName("player")
-    if not name or name == "" then return "" end
-    local canon = self:CanonicalForeverName(name)
+    -- Sur la beta, UnitName peut omettre le nom de famille alors que
+    -- GetUnitName fournit encore l'identite complete. Ne pas bloquer les
+    -- barrieres de login (notamment ManualBounty) sur la seule premiere API.
+    local canon = self:CanonicalForeverNameFromUnit("player")
     if not canon then return "" end
     cachedPlayerFullName = canon
     return canon

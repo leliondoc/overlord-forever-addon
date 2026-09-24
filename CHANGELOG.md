@@ -1,4 +1,12 @@
-1.0.15
+1.0.16
+
+**Overlord Forever 1.0.16**
+
+- Fix startup getting stuck on Contracts after the latest beta patch when UnitName no longer returns the full character name. Use the validated full name from GetUnitName so the main panel can open again.
+- Show the current initialization step when the panel is unavailable instead of silently ignoring clicks and `/ov show`.
+- Temporarily gray out and disable the Community button, hide the mandatory-community banner and joining prompts, and keep community synchronization and the fallback relay active.
+- Keep the minimap button on the map border after login and minimap resizing, with support for rectangular and square minimaps and existing button collectors.
+- Add regression coverage for complete player names, delayed identity availability and the Contracts login barrier.
 
 **Overlord Forever 1.0.15**
 

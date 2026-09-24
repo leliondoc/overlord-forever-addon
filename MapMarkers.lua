@@ -2505,7 +2505,10 @@ end
 -- ---- Bouton minimap (style LibDBIcon) ----
 
 function Overlord.MapMarkers:CreateMinimapButton()
-    if minimapButton then return minimapButton end
+    if minimapButton then
+        self:RefreshMinimapButtonPosition()
+        return minimapButton
+    end
 
     -- Les gestionnaires de boutons (notamment MinimapButtonButton) detectent les
     -- boutons natifs par leur nom global. "OverlordMinimapBtn" ne correspondait
@@ -2586,6 +2589,14 @@ function Overlord.MapMarkers:CreateMinimapButton()
     minimapButton:SetScript("OnLeave", function()
         GameTooltip:Hide()
     end)
+    -- Le bouton est cree avant PLAYER_LOGIN, donc avant la restauration des
+    -- dimensions de la minimap par le mode Edition et les addons d'interface.
+    local function refreshPosition()
+        Overlord.MapMarkers:RefreshMinimapButtonPosition()
+    end
+    Minimap:HookScript("OnSizeChanged", refreshPosition)
+    Minimap:HookScript("OnShow", refreshPosition)
+    C_Timer.After(0, refreshPosition)
     minimapButton:SetShown(IsMinimapButtonEnabled())
     return minimapButton
 end
@@ -2597,12 +2608,30 @@ function Overlord.MapMarkers:RefreshMinimapButtonVisibility()
 end
 
 function Overlord.MapMarkers:SetMinimapButtonPos(angle)
-    -- Rayon dynamique : s'adapte a la taille reelle de la minimap (addons, scale UI)
-    local radius = (Minimap:GetWidth() / 2) + 10
-    local x = math.cos(angle) * radius
-    local y = math.sin(angle) * radius
+    if not minimapButton then return end
+    angle = tonumber(angle)
+    if not angle or angle ~= angle or math.abs(angle) == math.huge then angle = math.rad(200) end
+    minimapButton._overlordMinimapAngle = angle
+    -- Meme marge de bord que les boutons LibDBIcon ; utiliser les deux axes
+    -- pour ne pas eloigner le bouton d'une minimap rectangulaire/redimensionnee.
+    local w, h = Minimap:GetWidth() / 2 + 5, Minimap:GetHeight() / 2 + 5
+    local x, y = math.cos(angle), math.sin(angle)
+    if GetMinimapShape and GetMinimapShape() == "SQUARE" then
+        local edge = math.max(math.abs(x), math.abs(y))
+        x, y = x / edge, y / edge
+    end
+    x, y = x * w, y * h
     minimapButton:ClearAllPoints()
     minimapButton:SetPoint("CENTER", Minimap, "CENTER", x, y)
+end
+
+function Overlord.MapMarkers:RefreshMinimapButtonPosition()
+    if not minimapButton or minimapButton:GetParent() ~= Minimap then return end
+    local _, relativeTo = minimapButton:GetPoint()
+    -- Un button-bag peut garder le parent mais remplacer l'ancre : ne pas lui
+    -- reprendre son icone lors d'un resize ou d'un nouvel appel d'initialisation.
+    if relativeTo and relativeTo ~= Minimap then return end
+    self:SetMinimapButtonPos(minimapButton._overlordMinimapAngle)
 end
 
 -- ---- Cercles de zone sur la minimap (comme la grande carte) ----

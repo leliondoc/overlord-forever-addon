@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.0.15"
+Overlord.Version = "1.0.16"
 -- Forever uses one global community. The beta relay remains enabled in parallel
 -- so non-members and temporarily unavailable C_Club rosters still converge.
 Overlord.CommunityModeEnabled = true
@@ -3701,6 +3701,20 @@ function Overlord:ScheduleLoginUiFullRefresh(delay)
     end)
 end
 
+-- Diagnostic de session : une barriere requise peut empecher la creation du
+-- panneau. Les commandes et le bouton minimap doivent alors expliquer l'attente.
+function Overlord:PrintLoginInitStatus()
+    local stage = self._loginInitStage or "startup"
+    local state = self._loginInitState or "pending"
+    local french = self.IsFrenchLocale and self.IsFrenchLocale()
+    local label = french and "Initialisation" or "Initialization"
+    local message = "|cFFFFD100[Overlord]|r " .. label .. ": " .. stage .. " (" .. state .. ")"
+    if self._loginInitError then message = message .. ": " .. self._loginInitError end
+    -- Toujours visible dans le chat general, meme si les notifications sont
+    -- dirigees vers un autre onglet ou que le gestionnaire d'erreurs est indisponible.
+    print(message)
+end
+
 -- Initialisation de l'addon
 function Overlord:Initialize()
     if self.IsInitialized then return end
@@ -4318,6 +4332,9 @@ function Overlord:Initialize()
             local stage = loginInitStages[loginInitStageIndex]
         if not stage then
             Overlord._deferredModuleInitDone = true
+            Overlord._loginInitStage = "complete"
+            Overlord._loginInitState = "ready"
+            Overlord._loginInitError = nil
             Overlord:FlushDeferredCaptureRelease()
             Overlord:FlushDeferredInstanceTransition()
             if Overlord._loginFactionChangeDeferred then
@@ -4342,8 +4359,13 @@ function Overlord:Initialize()
             return
             end
 
+            Overlord._loginInitStage = stage.name
+            Overlord._loginInitState = "running"
+            Overlord._loginInitError = nil
             local ok, completedOrErr = pcall(stage.callback)
             if not ok then
+                Overlord._loginInitState = "error"
+                Overlord._loginInitError = tostring(completedOrErr)
                 Overlord:PrintNotification("|cFFFF0000[Overlord]|r "
                     .. string.format(L.MODULE_ERROR, stage.name, tostring(completedOrErr)))
                 -- Les handlers Sync ne doivent jamais demarrer apres une exception
@@ -4351,14 +4373,17 @@ function Overlord:Initialize()
                 -- best-effort afin qu'une erreur UI n'annule pas tout l'addon.
                 if stage.required then return end
             elseif completedOrErr == "blocked" then
+                Overlord._loginInitState = "blocked"
                 -- Migration/index de securite en echec terminal : fail closed.
                 -- Ne pas initialiser Sync et ne pas repoller ce stage chaque frame.
                 return
             elseif completedOrErr == "waiting" then
+                Overlord._loginInitState = "waiting"
                 loginInitStageIndex = loginInitStageIndex - 1
                 C_Timer.After(1, RunNextLoginInitStage)
                 return
             elseif completedOrErr == false then
+                Overlord._loginInitState = "pending"
                 loginInitStageIndex = loginInitStageIndex - 1
                 C_Timer.After(0, RunNextLoginInitStage)
                 return

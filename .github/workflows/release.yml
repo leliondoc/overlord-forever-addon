@@ -54,6 +54,8 @@ jobs:
           lua5.1 tests/lua_syntax_check.lua "${LUA_FILES[@]}"
           lua5.1 tests/zone_capture_lease.test.lua
           lua5.1 tests/forever_persistence.test.lua
+          lua5.1 tests/forever_player_identity.test.lua
+          lua5.1 tests/forever_minimap_button.test.lua
           lua5.1 tests/forever_panel_position.test.lua
           lua5.1 tests/forever_recovery.test.lua
           lua5.1 tests/forever_popups_persistence.test.lua
