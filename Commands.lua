@@ -167,6 +167,84 @@ local function ShowShardDebug()
         st and tostring(math.floor(st.holdTimeElapsed or 0)) or "?"))
 end
 
+-- Opt-in observation of actual incoming packets, independent of the relay's
+-- preferred-route cache. No payloads, BattleTags or account IDs are displayed.
+local networkProbeRunning = false
+local function StartNetworkProbe()
+    if networkProbeRunning then
+        Overlord:PrintNotification("[Overlord] Network observation already running (30s).")
+        return
+    end
+    networkProbeRunning = true
+    local counts, rows, order = {}, {}, {}
+    local frame = CreateFrame("Frame")
+    frame:RegisterEvent("CHAT_MSG_ADDON")
+    frame:RegisterEvent("BN_CHAT_MSG_ADDON")
+    frame:SetScript("OnEvent", function(_, event, prefix, message, channel, sender)
+        if Overlord.InstanceSuspended or IsInInstance() then return end
+        if prefix ~= "OverlordF" or type(message) ~= "string" then return end
+        local transport = event == "BN_CHAT_MSG_ADDON" and "BNET" or channel
+        if type(transport) ~= "string" then return end
+        if transport ~= "BNET" and Overlord.Sync:IsSenderLocalPlayer(sender) then return end
+        counts[transport] = (counts[transport] or 0) + 1
+        local name = sender
+        if transport == "BNET" then
+            name = "Battle.net contact"
+            local getGameAccount = C_BattleNet and C_BattleNet.GetGameAccountInfoByID
+            if getGameAccount then
+                local ok, game = pcall(getGameAccount, sender)
+                if ok and game and game.characterName then name = game.characterName end
+            end
+        end
+        if type(name) ~= "string" then return end
+        local key = transport .. ":" .. name
+        local row = rows[key]
+        if not row and #order < 100 then
+            row = { name = name, transport = transport, count = 0 }
+            rows[key] = row
+            order[#order + 1] = row
+        end
+        if row then row.count = row.count + 1 end
+    end)
+    Overlord:PrintNotification("[Overlord] Network observation: 30s. Use /ov sync now.")
+    C_Timer.After(30, function()
+        frame:UnregisterAllEvents()
+        frame:SetScript("OnEvent", nil)
+        networkProbeRunning = false
+        local function emit(text) Overlord:PrintNotification(text) end
+        emit("[Overlord] Incoming Overlord packets (30s; includes fragments, not score changes):")
+        local transports = {}
+        for transport in pairs(counts) do transports[#transports + 1] = transport end
+        table.sort(transports)
+        for _, transport in ipairs(transports) do emit(transport .. " = " .. counts[transport]) end
+        if #transports == 0 then emit("No packets observed. Try outside instances.") end
+        if (counts.BNET or 0) > 0 then
+            emit("Battle.net reception confirmed on this client.")
+        else
+            emit("No Battle.net reception here during this sample; upstream Battle.net remains possible.")
+        end
+        -- Prefer known opposite-faction senders in the bounded output. Faction
+        -- is leaderboard metadata, not a Blizzard-authenticated observation.
+        for _, row in ipairs(order) do
+            local info = Overlord.Leaderboard and Overlord.Leaderboard:GetPlayerInfo(row.name)
+            row.faction = info and info.faction or "?"
+            row.enemy = (row.faction == "Horde" or row.faction == "Alliance")
+                and row.faction ~= Overlord.PlayerFaction
+        end
+        table.sort(order, function(a, b)
+            if a.enemy ~= b.enemy then return a.enemy end
+            if a.count ~= b.count then return a.count > b.count end
+            return a.transport .. a.name < b.transport .. b.name
+        end)
+        emit("Direct senders; faction from stored leaderboard metadata (may be stale):")
+        for i = 1, math.min(15, #order) do
+            local row = order[i]
+            emit(string.format("%s [%s] %s x%d", row.name, row.faction, row.transport, row.count))
+        end
+        emit("Up to 15 senders shown; this does not identify earlier hops or validate payloads.")
+    end)
+end
+
 local function ShowHelp()
     Overlord:PrintNotification(L.HELP_HEADER)
     Overlord:PrintNotification(L.HELP_SHOW)
@@ -475,6 +553,9 @@ local function CommandHandler(msg)
 
     elseif cmd == "shard" then
         ShowShardDebug()
+
+    elseif cmd == "network" or cmd == "reseau" then
+        StartNetworkProbe()
         
     elseif cmd == "start" then
         local zoneInput = args[2]

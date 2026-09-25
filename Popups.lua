@@ -44,7 +44,7 @@ local FEATURED_FRONT_TOGGLE_H = 52
 local FEATURED_FRONT_CLOSE_SIZE = 10
 -- Chevauchement de l'onglet sur le bord gauche du main (reliure livre).
 local FEATURED_FRONT_SPINE_OVERLAP = 1
-local FEATURED_FRONT_LAYOUT_VERSION = 56
+local FEATURED_FRONT_LAYOUT_VERSION = 57
 local FEATURED_FRONT_ACTIVITY_ROW_H = 18
 local FEATURED_FRONT_ACTIVITY_ROW_GAP = 3
 local FEATURED_FRONT_ACTIVITY_MAX_ROWS = 8
@@ -52,12 +52,13 @@ local FEATURED_FRONT_ACTIVITY_VISIBLE_ROWS = 5
 local FEATURED_FRONT_ACTIVITY_TITLE_H = 28
 local FEATURED_FRONT_ACTIVITY_BOTTOM_PAD = 8
 local FEATURED_FRONT_BODY_ACTIVITY_GAP = 10
+local FEATURED_FRONT_BOTTOM_PAD = 16
+local FEATURED_FRONT_ACTIVITY_RAIL_W = 24
 local FEATURED_FRONT_BOUNTY_GAP = 10
 local FEATURED_FRONT_NO_ACTIVE_LIFT = 10
 local FEATURED_FRONT_ACTIONS_GAP = 8
 local FEATURED_FRONT_ACTIVITY_ICON = 14
 local FEATURED_FRONT_ACTIVITY_STAR = 10
-local FEATURED_FRONT_ACTIVITY_CONTENT_W = 224
 local FEATURED_FRONT_ACTIVITY_TITLE_ICON = "Bonus-Icon-PVP"
 local FEATURED_FRONT_ACTIVITY_STAR_ATLAS = "QuestDailyIcon"
 local FEATURED_FRONT_ART_HEIGHT = 112
@@ -1477,8 +1478,9 @@ local function CreateFeaturedFrontActivityRow(parent)
     row:SetHeight(FEATURED_FRONT_ACTIVITY_ROW_H)
 
     row.content = CreateFrame("Frame", nil, row)
-    row.content:SetSize(FEATURED_FRONT_ACTIVITY_CONTENT_W, FEATURED_FRONT_ACTIVITY_ROW_H)
+    row.content:SetHeight(FEATURED_FRONT_ACTIVITY_ROW_H)
     row.content:SetPoint("LEFT", row, "LEFT", 10, 0)
+    row.content:SetPoint("RIGHT", row, "RIGHT", -4, 0)
 
     row.star = row.content:CreateTexture(nil, "ARTWORK")
     row.star:SetSize(FEATURED_FRONT_ACTIVITY_STAR, FEATURED_FRONT_ACTIVITY_STAR)
@@ -1671,6 +1673,7 @@ local function LayoutFeaturedFrontActivityScroll(f, rowCount)
     local rowStep = FEATURED_FRONT_ACTIVITY_ROW_H + FEATURED_FRONT_ACTIVITY_ROW_GAP
     local rowsH = math.max(1, rowCount * rowStep - FEATURED_FRONT_ACTIVITY_ROW_GAP)
     local contentH = math.max(viewportH, rowsH)
+    f.activityRowsContent:SetWidth(math.max(1, f.activityScroll:GetWidth() or 1))
     f.activityRowsContent:SetHeight(contentH)
     f.activityScroll._overlordContentHeight = contentH
     f.activityScroll._overlordHasOverflow = rowsH > viewportH + 1
@@ -1729,6 +1732,32 @@ local function AnchorFeaturedFrontActivityBlock(f, contentH, minimumContentH, bo
     else
         f._activityResolvedHeight = contentH
     end
+
+    -- Le viewport peut afficher moins de cinq lignes : le bouton doit rester
+    -- dans le cadre meme quand le texte au-dessus prend davantage de place.
+    local frameBottom = f:GetBottom()
+    local resolvedTop = f.activityPanel:GetTop()
+    if frameBottom and resolvedTop then
+        local bountySpace = bountyVisible and f.bountyBtn
+            and (f.bountyBtn:GetHeight() + FEATURED_FRONT_BOUNTY_GAP) or 0
+        local availableH = math.max(1,
+            resolvedTop - frameBottom - FEATURED_FRONT_BOTTOM_PAD - bountySpace)
+        if f._activityResolvedHeight > availableH then
+            f.activityPanel:ClearAllPoints()
+            f.activityPanel:SetPoint("LEFT", f, "LEFT", 24, 0)
+            f.activityPanel:SetPoint("RIGHT", f, "RIGHT", -24, 0)
+            f.activityPanel:SetPoint("BOTTOM", f, "BOTTOM", 0,
+                FEATURED_FRONT_BOTTOM_PAD + bountySpace)
+            f.activityPanel:SetHeight(availableH)
+            f._activityResolvedHeight = availableH
+            if bountyVisible and f.bountyBtn then
+                f.bountyBtn:ClearAllPoints()
+                f.bountyBtn:SetPoint("LEFT", f, "LEFT", 24, 0)
+                f.bountyBtn:SetPoint("RIGHT", f, "RIGHT", -24, 0)
+                f.bountyBtn:SetPoint("BOTTOM", f, "BOTTOM", 0, FEATURED_FRONT_BOTTOM_PAD)
+            end
+        end
+    end
 end
 
 local function ApplyFeaturedFrontActivityLayout(f, rowCount)
@@ -1752,6 +1781,7 @@ local function ApplyFeaturedFrontActivityLayout(f, rowCount)
 
     local bodyTextH = f.bodyFs and math.ceil(f.bodyFs:GetStringHeight() or 0) or 0
     local layoutKey = rowCount .. "|" .. (bountyVisible and 1 or 0) .. "|" .. contentH .. "|" .. bodyTextH
+        .. "|" .. (f:GetHeight() or 0) .. "|" .. (GetFeaturedFrontActiveZoneFrame() and 1 or 0)
     if f._activityLayoutKey == layoutKey and not f._activityBodyCollisionPending then return end
     f._activityLayoutKey = layoutKey
 
@@ -1803,6 +1833,7 @@ ApplyFeaturedFrontActivity = function(f)
         ApplyFeaturedFrontActivityLayout(f, 0)
         return
     end
+
     local visibleRows = 0
     for i, data in ipairs(rows) do
         local rowFrame = f.activityRows[i]
@@ -1963,7 +1994,7 @@ EnsureFeaturedFrontFrame = function()
 
     f.activityScroll, f.activityRowsContent = Overlord.UI:CreateCleanScroll(
         f.activityPanel,
-        FEATURED_FRONT_PANEL_WIDTH - 56,
+        FEATURED_FRONT_PANEL_WIDTH - 48 - FEATURED_FRONT_ACTIVITY_RAIL_W,
         math.max(1, activityPanelHeight
             - FEATURED_FRONT_ACTIVITY_TITLE_H - FEATURED_FRONT_ACTIVITY_BOTTOM_PAD),
         FEATURED_FRONT_ACTIVITY_ROW_H + FEATURED_FRONT_ACTIVITY_ROW_GAP,
@@ -1972,7 +2003,8 @@ EnsureFeaturedFrontFrame = function()
     f.activityScroll:SetPoint(
         "TOPLEFT", f.activityPanel, "TOPLEFT", 0, -FEATURED_FRONT_ACTIVITY_TITLE_H)
     f.activityScroll:SetPoint(
-        "BOTTOMRIGHT", f.activityPanel, "BOTTOMRIGHT", -8, FEATURED_FRONT_ACTIVITY_BOTTOM_PAD)
+        "BOTTOMRIGHT", f.activityPanel, "BOTTOMRIGHT", -FEATURED_FRONT_ACTIVITY_RAIL_W,
+        FEATURED_FRONT_ACTIVITY_BOTTOM_PAD)
     f.activityScroll:Hide()
 
     f.bountyBtn = Overlord.UI.CreateWC3Button(

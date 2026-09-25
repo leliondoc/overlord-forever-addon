@@ -4,6 +4,8 @@
 
 - Fix leaderboard forgery through the beta relay. Only the last hop of a relayed message is authenticated by WoW/Battle.net, so an earlier origin written by a modified client can no longer credit kills, captures, Guild Keep points or an authoritative guild, and no longer puts the impersonated player in quarantine. Map, keep and outpost state are still relayed as before, and genuine scores still reach every player through ladder snapshots and catch-up.
 - Remove the forged "Asmon Gold" row and its guild from the 2026-09-22 leaderboard, including saved copies and rows relayed back by older clients.
+- Add `/ov network` (alias `/ov reseau`): a read-only 30-second count of incoming Overlord packets by transport and direct sender, without payloads or account identifiers.
+- Keep the featured front activity list and Contracts button inside the panel when the text above takes more room, and leave space for the activity scroll bar.
 
 **Overlord Forever 1.0.18**
 
