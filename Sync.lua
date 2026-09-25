@@ -3225,6 +3225,10 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
     -- Sans resolution fiable BNet -> personnage courant, un K BNet n'est pas une preuve
     -- d'identite. Les rattrapages cross-realm passent par les snapshots SR/LK.
     if isBNetRelay then return end
+    -- Origine BetaNetwork relayee : nom choisi par la passerelle. Ni credit, ni
+    -- quarantaine (elle viserait le nom usurpe, pas le forgeur). Le score d'un
+    -- joueur distant arrive par les snapshots LK.
+    if self.IsUnauthenticatedRelayOrigin and self:IsUnauthenticatedRelayOrigin(sender) then return end
     local owned = not isBNetRelay and self:KillSyncSenderOwnsPlayer(sender, playerName)
     if not owned then
         if sender and sender ~= "" and self.KillAntiSpoofRecord then

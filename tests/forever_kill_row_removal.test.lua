@@ -19,12 +19,12 @@ OverlordDB.leaderboardSnapshot = {
 OverlordDB.leaderboardScoreSanitizeVersion = 3
 lb:EnsureLegacyScoreSanitized()
 local attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 4 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 5 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Score cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
 end
-assert(OverlordDB.leaderboardScoreSanitizeVersion == 4, "Score cleanup did not commit")
+assert(OverlordDB.leaderboardScoreSanitizeVersion == 5, "Score cleanup did not commit")
 assert(lb.kills[name] == nil, "Existing score was not removed")
 assert(OverlordDB.leaderboardsByPool.global.kills[name] == nil,
     "Pooled score was not removed")
@@ -36,6 +36,44 @@ assert(lb.kills[name] == nil, "A stale snapshot restored the removed score")
 lb:RegisterKill(name, true)
 lb:SetPlayerKills(name, 998, true)
 assert(lb.kills[name] == nil, "An old peer restored the removed score")
+
+-- 2026-09-22 : row forged through a spoofed BetaNetwork origin, and its guild.
+local forged, forgedGuild = "Asmon Gold", "OLYMPUS RUSSIA"
+assert(sync:IsDeniedKillContributor(forged), "Forged row is not excluded this week")
+lb.kills[forged] = 4999
+lb.playerInfo[forged] = { class = "", faction = "Horde", factionAt = 0, locale = "",
+    guild = forgedGuild, pool = "global" }
+local function hasForgedGuild()
+    for _, row in ipairs(lb:GetSortedGuildKills()) do
+        if row.guild == forgedGuild then return true end
+    end
+    return false
+end
+assert(hasForgedGuild(), "Fixture did not place the forged guild in the guild column")
+OverlordDB.leaderboardScoreSanitizeVersion = 4
+lb:EnsureLegacyScoreSanitized()
+attempts = 0
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 5 and #timers > 0 do
+    attempts = attempts + 1
+    assert(attempts < 20, "Forged row cleanup did not finish within its bounded slices")
+    table.remove(timers, 1)()
+end
+assert(lb.kills[forged] == nil, "Existing forged score was not removed on upgrade")
+assert(not hasForgedGuild(), "Forged guild stayed in the guild column")
+strsplit = strsplit or function(sep, value, limit)
+    local fields, start = {}, 1
+    while not limit or #fields < limit - 1 do
+        local at = value:find(sep, start, true)
+        if not at then break end
+        fields[#fields + 1] = value:sub(start, at - 1); start = at + #sep
+    end
+    fields[#fields + 1] = value:sub(start)
+    return (unpack or table.unpack)(fields)
+end
+sync:OnReceiveLeaderboardKills(forged .. ":4999:WARRIOR:Horde:" .. OverlordDB.campaignId
+    .. ":enus:" .. forgedGuild .. ":0:B" .. OverlordDB.lastResetTimestamp .. ":60",
+    "Some Peer", "WHISPER")
+assert(lb.kills[forged] == nil, "An old peer relayed the forged score back")
 
 OverlordDB.campaignId = 20260929
 assert(not sync:IsDeniedKillContributor(name), "Player remained excluded next week")

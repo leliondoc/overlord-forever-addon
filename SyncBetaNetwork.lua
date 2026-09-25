@@ -66,6 +66,13 @@ end
 function net:IsDispatching(sender)
     return self.context ~= nil and same(self.context.origin, sender)
 end
+-- Only the last hop is authenticated by WoW/BNet. Any earlier origin is written
+-- by that gateway: a modified client can put any name in path[1]. Such an origin
+-- must never own a score, a capture credit or an identity claim.
+function net:IsRelayedOrigin(sender)
+    local context = self.context
+    return context ~= nil and (tonumber(context.hops) or 0) > 0 and same(context.origin, sender)
+end
 function net:IsTargetedDispatch()
     return self.context ~= nil and self.context.targeted == true
 end

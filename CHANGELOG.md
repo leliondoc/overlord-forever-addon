@@ -1,4 +1,9 @@
-1.0.18
+1.0.19
+
+**Overlord Forever 1.0.19**
+
+- Fix leaderboard forgery through the beta relay. Only the last hop of a relayed message is authenticated by WoW/Battle.net, so an earlier origin written by a modified client can no longer credit kills, captures, Guild Keep points or an authoritative guild, and no longer puts the impersonated player in quarantine. Map, keep and outpost state are still relayed as before, and genuine scores still reach every player through ladder snapshots and catch-up.
+- Remove the forged "Asmon Gold" row and its guild from the 2026-09-22 leaderboard, including saved copies and rows relayed back by older clients.
 
 **Overlord Forever 1.0.18**
 

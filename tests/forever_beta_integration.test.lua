@@ -20,15 +20,36 @@ C_BattleNet = { GetGameAccountInfoByID = function()
 end }
 assert(loadfile("SyncBetaNetwork.lua"))()
 local s, net = Overlord.Sync, Overlord.BetaNetwork
-local payload = s:BuildKillBroadcastPayload("Remote Tester", "", 3, "WARRIOR", "Alliance",
-    1789527600, "", "enus", 0, 1789527600, 2)
-local function wire(id, kind, data)
-    return "eu|integration-" .. id .. "|" .. time() .. "|*|Remote Tester,Bridge Tester|" .. kind .. "|" .. data
+local function killPayload(name, total)
+    return s:BuildKillBroadcastPayload(name, "", total, "WARRIOR", "Alliance",
+        1789527600, "", "enus", 0, 1789527600, 2)
 end
-local packet = wire(1, "K", payload)
-s:OnBNetMessage("R2:Forever_eu_A:BR:" .. packet, 123)
-assert(Overlord.Leaderboard.kills["Remote Tester"] == 3, "Real R2 kill handler lost low-level score")
+local function wire(id, kind, data, path)
+    return "eu|integration-" .. id .. "|" .. time() .. "|*|" .. (path or "Remote Tester,Bridge Tester")
+        .. "|" .. kind .. "|" .. data
+end
+-- Only the last hop is authenticated by BNet. A relayed origin is written by the
+-- gateway and must never own a kill score, even for a genuine remote player.
+local directRemoteTotal = Overlord.Leaderboard.kills["Remote Tester"]
+s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(1, "K", killPayload("Remote Tester", 3)), 123)
+assert(Overlord.Leaderboard.kills["Remote Tester"] == directRemoteTotal,
+    "Relayed origin was credited as the owner")
 assert(not net.stats.lastError, net.stats.lastError)
+-- The 1.0.18 exploit: a modified gateway names any victim as origin.
+s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(11, "K", killPayload("Forged Victim", 4999),
+    "Forged Victim,Bridge Tester"), 123)
+assert(Overlord.Leaderboard.kills["Forged Victim"] == nil, "Forged beta origin injected a kill row")
+for i = 1, 8 do
+    s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(20 + i, "K", killPayload("Other Victim", 4999),
+        "Forged Victim,Bridge Tester"), 123)
+end
+assert(Overlord.Leaderboard.kills["Other Victim"] == nil, "Forged origin credited another name")
+assert(not s:KillAntiSpoofIsBlacklisted("Forged Victim"),
+    "Kill quarantine punished the impersonated name instead of ignoring the relay")
+-- The gateway's own packet (no earlier hop) is authenticated and keeps low levels.
+local packet = wire(12, "K", killPayload("Bridge Tester", 3), "Bridge Tester")
+s:OnBNetMessage("R2:Forever_eu_A:BR:" .. packet, 123)
+assert(Overlord.Leaderboard.kills["Bridge Tester"] == 3, "Real R2 kill handler lost low-level score")
 assert(s:FindCommunityClub() == nil)
 assert(#s:FindAllCommunityClubs() == 0)
 assert(s:GetCommunityInviteCode() == "0m7kdXcnvR")
@@ -41,16 +62,15 @@ C_Club.GetClubMembers = function() return {} end
 assert(s:FindCommunityClub(true) == 777, "Global Overlord community was not discovered after joining")
 assert(s:IsGuildKeepCommunitySender("Remote Tester"), "Routed keep sender lost its trust context")
 -- A second score through fragmented R2 reaches the same production receiver.
-payload = s:BuildKillBroadcastPayload("Remote Tester", "", 4, "WARRIOR", "Alliance",
-    1789527600, "", "enus", 0, 1789527600, 2)
-packet = wire(2, "K", payload)
+local payload = killPayload("Bridge Tester", 4)
+packet = wire(2, "K", payload, "Bridge Tester")
 local count = math.ceil(#packet / 170)
 for i = count, 1, -1 do
     s:OnBNetMessage("R2:Forever_eu_H:BF:integration-2:" .. i .. ":" .. count .. ":"
         .. packet:sub((i - 1) * 170 + 1, i * 170), 123)
 end
-assert(Overlord.Leaderboard.kills["Remote Tester"] == 4, "Fragmented production R2 failed")
-s:OnBNetMessage("R2:Forever_us_A:BR:" .. wire(3, "K", payload), 123)
+assert(Overlord.Leaderboard.kills["Bridge Tester"] == 4, "Fragmented production R2 failed")
+s:OnBNetMessage("R2:Forever_us_A:BR:" .. wire(3, "K", payload, "Bridge Tester"), 123)
 assert(net.stats.received >= 3, "Legacy US bridge tag was not accepted by the global pool")
 assert(loadfile("SyncGuildKeep.lua"))()
 assert(loadfile("SyncOutpost.lua"))()
@@ -82,8 +102,11 @@ end
 local epoch = Overlord:TimestampToCampaignId(OverlordDB.lastResetTimestamp)
 s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(6, "GI",
     "Remote Tester:Beta Guild:" .. epoch .. ":" .. time()), 123)
-assert(mergedGuild and mergedGuild[1] == "Remote Tester" and mergedGuild[2] == "Beta Guild",
-    "Production guild identity handler rejected relay")
+assert(mergedGuild == nil, "A relayed origin claimed an authoritative guild")
+s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(16, "GI",
+    "Bridge Tester:Beta Guild:" .. epoch .. ":" .. time(), "Bridge Tester"), 123)
+assert(mergedGuild and mergedGuild[1] == "Bridge Tester" and mergedGuild[2] == "Beta Guild",
+    "Production guild identity handler rejected the authenticated gateway")
 -- UI/community entry points use the replacement transport, preserving payloads.
 assert(loadfile("General.lua"))()
 assert(loadfile("GeneralSync.lua"))()

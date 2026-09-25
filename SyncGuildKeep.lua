@@ -2826,7 +2826,11 @@ function Overlord.Sync:OnReceiveGuildKeepCapture(
         anchorShard, anchorStartedAt, anchorGenerationAt, anchorPlayer,
         baseGuild, baseFac, baseCapturedAt, acceptedTerminalAuthority) then return end
     local objective = Overlord.GuildKeepSites[siteKey]
-    if acceptedTerminalAuthority ~= "" and objective and objective.id
+    -- Une origine BetaNetwork relayee n'est pas authentifiee : l'etat du donjon suit,
+    -- mais aucun point de classement ne lui est attribue.
+    local relayedOrigin = self.IsUnauthenticatedRelayOrigin
+        and self:IsUnauthenticatedRelayOrigin(sender or "")
+    if acceptedTerminalAuthority ~= "" and objective and objective.id and not relayedOrigin
         and Overlord.Leaderboard and Overlord.Leaderboard.CreditPlayerObjectiveCapture then
         local classToken = self.ResolveContributorClassToken
             and self:ResolveContributorClassToken(acceptedTerminalAuthority) or nil

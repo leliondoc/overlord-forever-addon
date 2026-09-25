@@ -3504,6 +3504,8 @@ function Overlord.Sync:AntiSpoofCheck(sender, zoneId, capturerName)
     -- Il ne doit pas compter comme une capture simultanee du relais lui-meme.
     -- La blacklist existante reste appliquee avant cette exemption.
     if not ZsSenderMatchesCapturer(sender, capturerName) then return false end
+    -- Origine relayee : nom potentiellement usurpe, ne jamais l'accumuler vers une quarantaine.
+    if self:IsUnauthenticatedRelayOrigin(sender) then return false end
 
     BoundSecurityEvidenceTable(senderBroadcastHistory, 512, sender)
     if not senderBroadcastHistory[sender] then
@@ -3773,9 +3775,16 @@ local BLOCKED_KILL_CONTRIBUTOR_BASES = {
     sfvsafqw = true,
 }
 
--- Moderation du classement hebdomadaire 2026-09-22 uniquement. Un ancien pair
--- peut encore relayer son total maximal : la ligne doit rester refusee jusqu'au
--- reset suivant, puis le joueur peut de nouveau etre credite normalement.
+-- Moderation d'un classement hebdomadaire precis (campaignId -> base-names). Un ancien
+-- pair peut encore relayer son total maximal : la ligne reste refusee jusqu'au reset
+-- suivant, puis le nom peut de nouveau etre credite normalement.
+-- 2026-09-22 : Asmon Gold (4999 VH forges via une origine BetaNetwork usurpee).
+local CAMPAIGN_KILL_ROW_REMOVALS = {
+    [20260922] = {
+        ["roxymigurdia greyrat"] = true,
+        ["asmon gold"] = true,
+    },
+}
 
 function Overlord.Sync:IsDeniedKillContributor(playerName)
     if type(playerName) ~= "string" or playerName == "" then return false end
@@ -3785,13 +3794,13 @@ function Overlord.Sync:IsDeniedKillContributor(playerName)
     local base = normalized:match("^([^%-]+)") or normalized
     local lowerBase = base:lower()
     if BLOCKED_KILL_CONTRIBUTOR_BASES[lowerBase] == true then return true end
-    if lowerBase ~= "roxymigurdia greyrat" then return false end
     local campaignId = OverlordDB and tonumber(OverlordDB.campaignId)
     if not campaignId and Overlord.TimestampToCampaignId
         and Overlord.GetCurrentCampaignStartTs then
         campaignId = Overlord:TimestampToCampaignId(Overlord:GetCurrentCampaignStartTs())
     end
-    return campaignId == 20260922
+    local removed = campaignId and CAMPAIGN_KILL_ROW_REMOVALS[campaignId]
+    return removed ~= nil and removed[lowerBase] == true
 end
 
 function Overlord.Sync:IsEligibleKillContributorLevel(level)
@@ -4033,10 +4042,20 @@ function Overlord.Sync:KillAntiSpoofRecord(sender)
     return false
 end
 
+-- Origine BetaNetwork a plus d'un saut : nom ecrit par la passerelle, pas par WoW.
+-- Faille exploitee jusqu'en 1.0.18 : path = "Victime,Forgeur" faisait passer un K
+-- forge pour un K proprietaire (ex. Asmon Gold 4999). Aucun score ni credit ne
+-- doit en dependre ; l'etat de carte reste relaye normalement.
+function Overlord.Sync:IsUnauthenticatedRelayOrigin(sender)
+    local net = Overlord.BetaNetwork
+    return net ~= nil and net.IsRelayedOrigin ~= nil and net:IsRelayedOrigin(sender) == true
+end
+
 -- Compare sender et nom credite (canal direct). Retourne true si l'expediteur est le proprietaire.
 function Overlord.Sync:KillSyncSenderOwnsPlayer(sender, playerName)
     if not sender or sender == "" or not playerName or playerName == "" then return false end
     if sender:sub(1, 5) == "BNet-" or sender:sub(1, 7) == "Bridge-" then return false end
+    if self:IsUnauthenticatedRelayOrigin(sender) then return false end
     local normSender = self:NormalizeContributorFullName(sender)
     local normPlayer = self:NormalizeContributorFullName(playerName)
     if normSender and normPlayer and normSender == normPlayer then return true end
@@ -4397,6 +4416,7 @@ function Overlord.Sync:IsLocallyObservedLeaderboardClaim(kind, claimKey)
 end
 
 function Overlord.Sync:RecordCaptureCreditProgressEvidence(sender, capturer, zoneId, faction, holdTime)
+    if self:IsUnauthenticatedRelayOrigin(sender) then return end
     if not self:CaptureContributorMatchesSender(capturer, sender) then return end
     if not zoneId or zoneId == "" or (faction ~= "Alliance" and faction ~= "Horde") then return end
     -- Le sender WoW doit etre le capteur et maintenir une progression coherente pendant 45 s.
@@ -4419,6 +4439,7 @@ function Overlord.Sync:RecordCaptureCreditProgressEvidence(sender, capturer, zon
 end
 
 function Overlord.Sync:CanCreditDirectCapture(sender, contributor, zoneId, faction)
+    if self:IsUnauthenticatedRelayOrigin(sender) then return false end
     if not self:CaptureContributorMatchesSender(contributor, sender) then return false end
     local senderKey = GetDirectEvidenceSenderKey(sender)
     if not senderKey then return false end
