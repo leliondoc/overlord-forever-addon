@@ -11,6 +11,7 @@ for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF F
     allowed[kind] = true
 end
 local MAX_PACKET, MAX_PATH, TTL = 3600, 4, 120
+local MAX_BRIDGE_FRIENDS = 5
 local queue, head, pumping = {}, 1, false
 local seen, recent, assemblies = {}, {}, {}
 local seenOrder, recentOrder, assemblyOrder, peerOrder = {}, {}, {}, {}
@@ -123,11 +124,36 @@ local function tasksFor(p, wire)
             if not p.skipGroup then add("GROUP", fragment, "BF") end
             if not p.skipChannel then add("CHANNEL", fragment, "BF") end
         end
+        -- Opposite-faction friends are the only Horde/Alliance bridges: each packet
+        -- reaches all of them (bounded). Same-faction friends already hear it on the
+        -- channel and share the remaining rotating slots. Friends already on the path
+        -- have the packet and are skipped.
         local friends = sync.GetBetaBNetTargets and sync:GetBetaBNetTargets() or {}
-        local total = #friends
+        local myFaction = addon.PlayerFaction
+        local bridges, others = {}, {}
+        for _, id in ipairs(friends) do
+            local faction, character
+            if sync.GetBetaBNetTargetInfo then faction, character = sync:GetBetaBNetTargetInfo(id) end
+            local onPath = false
+            if character then
+                for _, node in ipairs(p.path) do
+                    if same(node, character) then onPath = true; break end
+                end
+            end
+            if not onPath then
+                if #bridges < MAX_BRIDGE_FRIENDS and (faction == "Alliance" or faction == "Horde")
+                    and (myFaction == "Alliance" or myFaction == "Horde") and faction ~= myFaction then
+                    bridges[#bridges + 1] = id
+                else
+                    others[#others + 1] = id
+                end
+            end
+        end
+        for _, id in ipairs(bridges) do bnet(id) end
+        local total, slots = #others, math.max(1, 3 - #bridges)
         local cursor = net.friendCursor or 0
-        for i = 1, math.min(3, total) do bnet(friends[(cursor + i - 1) % total + 1]) end
-        if total > 0 then net.friendCursor = (cursor + math.min(3, total)) % total end
+        for i = 1, math.min(slots, total) do bnet(others[(cursor + i - 1) % total + 1]) end
+        if total > 0 then net.friendCursor = (cursor + math.min(slots, total)) % total end
         -- R1 fallback to a known gateway when there is no local broadcast path.
         if sync.FindBridgeForEnemyFaction and sync.GetChannelId and not sync:GetChannelId()
             and not IsInGroup() then

@@ -2284,21 +2284,41 @@ local function GetBNetFriendsInWoW()
     if cachedBNetFriendsList and (now - cachedBNetFriendsAt) < BNET_FRIENDS_CACHE_TTL then
         return cachedBNetFriendsList
     end
-    local list = {}
+    -- list.info[id] = { faction, name } : le relais beta privilegie les amis de la
+    -- faction adverse (seuls ponts Horde/Alliance). Stocke dans la liste pour ne pas
+    -- ajouter de local au chunk Sync.lua (limite WoW de 200).
+    local list = { info = {} }
     pcall(function()
         local numFriends = BNGetNumFriends()
         if not numFriends or numFriends == 0 then return end
+        local bridges, sameFaction = {}, {}
         for i = 1, numFriends do
             local numAccounts = C_BattleNet and C_BattleNet.GetFriendNumGameAccounts and C_BattleNet.GetFriendNumGameAccounts(i)
             if numAccounts then
                 for j = 1, numAccounts do
-                    if #list >= BNET_MAX_FRIENDS then break end
                     local game = C_BattleNet.GetFriendGameAccountInfo(i, j)
                     if game and game.gameAccountID and IsForeverWowGameAccount(game) then
-                        table.insert(list, game.gameAccountID)
+                        local faction = game.factionName
+                        list.info[game.gameAccountID] = {
+                            faction = faction,
+                            name = Overlord.Sync:CanonicalForeverName(game.characterName),
+                        }
+                        local enemy = (faction == "Alliance" or faction == "Horde")
+                            and (Overlord.PlayerFaction == "Alliance" or Overlord.PlayerFaction == "Horde")
+                            and faction ~= Overlord.PlayerFaction
+                        table.insert(enemy and bridges or sameFaction, game.gameAccountID)
                     end
                 end
             end
+        end
+        -- Plafond global inchange ; les ponts de faction adverse passent en premier.
+        for _, id in ipairs(bridges) do
+            if #list >= BNET_MAX_FRIENDS then break end
+            list[#list + 1] = id
+        end
+        for _, id in ipairs(sameFaction) do
+            if #list >= BNET_MAX_FRIENDS then break end
+            list[#list + 1] = id
         end
     end)
     cachedBNetFriendsList = list
@@ -2310,6 +2330,14 @@ end
 -- Donnees addon uniquement : rien n'apparait dans le chat (BN_CHAT_MSG_ADDON)
 function Overlord.Sync:GetBetaBNetTargets()
     return GetBNetFriendsInWoW()
+end
+
+-- Faction et identite Forever d'un ami BNet cible (nil si inconnues).
+function Overlord.Sync:GetBetaBNetTargetInfo(gameAccountID)
+    local info = GetBNetFriendsInWoW().info
+    local row = info and info[gameAccountID]
+    if not row then return nil, nil end
+    return row.faction, row.name
 end
 
 function Overlord.Sync:SendToBNetFriends(msgType, data)

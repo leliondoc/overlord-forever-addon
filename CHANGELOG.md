@@ -1,4 +1,8 @@
-1.0.21
+1.0.22
+
+**Overlord Forever 1.0.22**
+
+- Horde–Alliance relay: every beta packet now goes to all Battle.net friends of the opposite faction (up to five), who are the only bridges between factions. Previously each packet went to three Forever friends in rotation regardless of faction, so a bridge with several same-faction friends passed on only part of the traffic, delaying or losing capture alerts. Same-faction friends keep the remaining rotating slots, and a packet is no longer sent back to a friend who relayed it. No setting or extra friend is needed.
 
 **Overlord Forever 1.0.21**
 

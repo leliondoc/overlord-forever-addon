@@ -68,6 +68,7 @@ local function client(name, channel, pool)
         return true
     end
     function s:GetBetaBNetTargets() return a.friends end
+    function s:GetBetaBNetTargetInfo(other) return other.faction, other.name end
     function s:SendToBNet(other, kind, wire)
         if other.offline then return false end
         assert(#wire < 4000)
@@ -166,6 +167,42 @@ local accepted = 0
 for i = 1, 200 do if a.BetaNetwork:Send("K", tostring(i)) then accepted = accepted + 1 end end
 assert(accepted == 128 and a.BetaNetwork.stats.dropped >= 72, "Queue was not bounded")
 drain()
+-- A Horde gateway with five Horde friends and one Alliance friend (listed last)
+-- must hand every packet to the Alliance bridge, not one packet in two.
+local gate = client("Gate Tester", "gate")
+gate.PlayerFaction = "Horde"
+local ally = client("Ally Tester", "ally")
+ally.faction, ally.PlayerFaction = "Alliance", "Alliance"
+for _, n in ipairs({ "Horde One", "Horde Two", "Horde Three", "Horde Four", "Horde Five" }) do
+    local friend = client(n, "friend " .. n)
+    friend.faction = "Horde"
+    gate.friends[#gate.friends + 1] = friend
+end
+gate.friends[#gate.friends + 1] = ally
+local sentTo = {}
+local gateSend = gate.Sync.SendToBNet
+function gate.Sync:SendToBNet(other, kind, wire)
+    sentTo[other.name] = (sentTo[other.name] or 0) + 1
+    return gateSend(self, other, kind, wire)
+end
+for i = 1, 10 do
+    assert(gate.BetaNetwork:Send("K", "bridge-" .. i)); drain()
+end
+local bridged = 0
+for _, row in ipairs(ally.received) do
+    if row.payload:match("^bridge%-") then bridged = bridged + 1 end
+end
+assert(bridged == 10, "Opposite-faction friend missed packets behind same-faction rotation: " .. bridged)
+local hordeSends = 0
+for name, count in pairs(sentTo) do if name ~= ally.name then hordeSends = hordeSends + count end end
+assert(hordeSends == 20, "Same-faction rotation no longer shares the remaining slots")
+-- The friend a packet came from already has it: never bounce it back.
+ally.friends = { gate }
+gate.faction = "Horde"
+sentTo = {}
+assert(ally.BetaNetwork:Send("K", "from-ally")); drain()
+assert(gate.received[#gate.received].payload == "from-ally", "Alliance packet did not reach the gateway")
+assert(not sentTo[ally.name], "Gateway bounced a packet back to the friend on its path")
 a.BetaNetworkEnabled = false
 assert(not a.BetaNetwork:Send("K", "disabled"), "Beta transport remained active after community re-enable")
 print("Beta network: community-parallel relay, fragmentation, global routing, reply path, dedup, identity, expiry and queue bounds OK")

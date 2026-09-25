@@ -22,18 +22,25 @@ local bnetGames = {
         wowProjectID = 18, factionName = "Horde", isInCurrentRegion = true, isOnline = true },
     [456] = { gameAccountID = 456, characterName = "Retail Friend", clientProgram = "WoW",
         wowProjectID = 1, factionName = "Alliance", isInCurrentRegion = true, isOnline = true },
+    [789] = { gameAccountID = 789, characterName = "Ally Friend", clientProgram = "WoW",
+        wowProjectID = 18, factionName = "Alliance", isInCurrentRegion = true, isOnline = true },
 }
-function BNGetNumFriends() return 2 end
+-- Friend order as Battle.net lists it: the same-faction Forever friend comes first.
+local friendOrder = { 789, 456, 123 }
+function BNGetNumFriends() return #friendOrder end
 C_BattleNet = {
     GetGameAccountInfoByID = function(id) return bnetGames[id] end,
     GetFriendNumGameAccounts = function() return 1 end,
-    GetFriendGameAccountInfo = function(i) return bnetGames[i == 1 and 123 or 456] end,
+    GetFriendGameAccountInfo = function(i) return bnetGames[friendOrder[i]] end,
 }
 assert(loadfile("SyncBetaNetwork.lua"))()
 local s, net = Overlord.Sync, Overlord.BetaNetwork
+Overlord.PlayerFaction = "Alliance"
 local targets = s:GetBetaBNetTargets()
-assert(#targets == 1 and targets[1] == 123,
-    "Battle.net targets must be Forever friends (project 18), never Retail friends (project 1)")
+assert(#targets == 2 and targets[1] == 123 and targets[2] == 789,
+    "Battle.net targets must be Forever friends (project 18), opposite faction first, never Retail (project 1)")
+local bridgeFaction, bridgeName = s:GetBetaBNetTargetInfo(123)
+assert(bridgeFaction == "Horde" and bridgeName == "Bridge Tester", "Bridge friend faction/identity unknown")
 assert(s:IsForeverBNetProject(18) and not s:IsForeverBNetProject(1),
     "Forever project detection still trusts the Retail WOW_PROJECT_ID")
 local function killPayload(name, total)
