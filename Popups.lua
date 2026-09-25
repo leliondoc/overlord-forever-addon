@@ -51,7 +51,6 @@ local FEATURED_FRONT_ACTIVITY_MAX_ROWS = 8
 local FEATURED_FRONT_ACTIVITY_VISIBLE_ROWS = 5
 local FEATURED_FRONT_ACTIVITY_TITLE_H = 28
 local FEATURED_FRONT_ACTIVITY_BOTTOM_PAD = 8
-local FEATURED_FRONT_ACTIVITY_TEXT_PAD = 10
 local FEATURED_FRONT_BODY_ACTIVITY_GAP = 10
 local FEATURED_FRONT_BOUNTY_GAP = 10
 local FEATURED_FRONT_NO_ACTIVE_LIFT = 10
@@ -1566,11 +1565,9 @@ local function HideFeaturedFrontActivityRows(f)
     end
 end
 
-local function ComputeFeaturedFrontActivityHeight(rowCount, showEmpty)
+local function ComputeFeaturedFrontActivityHeight(rowCount)
     local contentH = FEATURED_FRONT_ACTIVITY_TITLE_H
-    if showEmpty then
-        contentH = contentH + 36 + FEATURED_FRONT_ACTIVITY_BOTTOM_PAD
-    elseif rowCount > 0 then
+    if rowCount > 0 then
         local visibleRows = math.min(rowCount, FEATURED_FRONT_ACTIVITY_VISIBLE_ROWS)
         contentH = contentH + visibleRows * (FEATURED_FRONT_ACTIVITY_ROW_H + FEATURED_FRONT_ACTIVITY_ROW_GAP)
             + FEATURED_FRONT_ACTIVITY_BOTTOM_PAD
@@ -1608,26 +1605,6 @@ local function GetFeaturedFrontActivityMatchHeight(f, bountyVisible)
         return math.max(0, matchH - bountyH - FEATURED_FRONT_BOUNTY_GAP)
     end
     return matchH
-end
-
--- Texte vide : centrage vertical mesure (le panneau garde sa hauteur d'alignement actions).
-local function LayoutFeaturedFrontActivityEmptyText(f)
-    if not f or not f.activityEmptyFs or not f.activityPanel then return end
-    local pad = FEATURED_FRONT_ACTIVITY_TEXT_PAD
-    local panelH = f.activityPanel:GetHeight() or 0
-    local areaH = panelH - FEATURED_FRONT_ACTIVITY_TITLE_H - FEATURED_FRONT_ACTIVITY_BOTTOM_PAD
-    if areaH < 0 then areaH = 0 end
-
-    f.activityEmptyFs:ClearAllPoints()
-    f.activityEmptyFs:SetPoint("LEFT", f.activityPanel, "LEFT", pad, 0)
-    f.activityEmptyFs:SetPoint("RIGHT", f.activityPanel, "RIGHT", -pad, 0)
-    f.activityEmptyFs:SetJustifyH("CENTER")
-    f.activityEmptyFs:SetWordWrap(true)
-    f.activityEmptyFs:SetShadowOffset(0, 0)
-
-    local textH = f.activityEmptyFs:GetStringHeight() or 0
-    local topInset = math.max(0, math.floor((areaH - textH) * 0.5))
-    f.activityEmptyFs:SetPoint("TOP", f.activityPanel, "TOP", 0, -(FEATURED_FRONT_ACTIVITY_TITLE_H + topInset))
 end
 
 local function ApplyFeaturedFrontActivityAnchors(f, contentH, bountyVisible, verticalShift)
@@ -1674,10 +1651,10 @@ end
 
 -- La carte garde la hauteur historique de cinq lignes. Les fronts supplementaires
 -- restent accessibles dans un vrai viewport, sans pousser le bouton Contrats sous le cadre.
-local function LayoutFeaturedFrontActivityScroll(f, rowCount, showEmpty)
+local function LayoutFeaturedFrontActivityScroll(f, rowCount)
     if not f or not f.activityScroll or not f.activityRowsContent then return end
     rowCount = math.max(0, math.floor(tonumber(rowCount) or 0))
-    local showRows = rowCount > 0 and not showEmpty
+    local showRows = rowCount > 0
     f.activityScroll:SetShown(showRows)
     if not showRows then
         f.activityScroll._overlordHasOverflow = false
@@ -1754,14 +1731,10 @@ local function AnchorFeaturedFrontActivityBlock(f, contentH, minimumContentH, bo
     end
 end
 
-local function ApplyFeaturedFrontActivityLayout(f, rowCount, showEmpty)
+local function ApplyFeaturedFrontActivityLayout(f, rowCount)
     if not f or not f.activityPanel then return end
     rowCount = rowCount or f._activityRowCount or 0
-    if showEmpty == nil then
-        showEmpty = f._activityShowEmpty == true
-    end
     f._activityRowCount = rowCount
-    f._activityShowEmpty = showEmpty
 
     local actionsCard = Overlord.UI and Overlord.UI.actionsCard
     if not actionsCard then return end
@@ -1770,7 +1743,7 @@ local function ApplyFeaturedFrontActivityLayout(f, rowCount, showEmpty)
         and Overlord.ManualBounty.HasOpenContracts
         and Overlord.ManualBounty:HasOpenContracts()
     local bountyVisible = hasContracts
-    local minimumContentH = ComputeFeaturedFrontActivityHeight(rowCount, showEmpty)
+    local minimumContentH = ComputeFeaturedFrontActivityHeight(rowCount)
     local contentH = minimumContentH
     local matchH = GetFeaturedFrontActivityMatchHeight(f, bountyVisible)
     if matchH then
@@ -1778,17 +1751,12 @@ local function ApplyFeaturedFrontActivityLayout(f, rowCount, showEmpty)
     end
 
     local bodyTextH = f.bodyFs and math.ceil(f.bodyFs:GetStringHeight() or 0) or 0
-    local layoutKey = rowCount .. "|" .. (showEmpty and 1 or 0) .. "|"
-        .. (bountyVisible and 1 or 0) .. "|" .. contentH .. "|" .. bodyTextH
+    local layoutKey = rowCount .. "|" .. (bountyVisible and 1 or 0) .. "|" .. contentH .. "|" .. bodyTextH
     if f._activityLayoutKey == layoutKey and not f._activityBodyCollisionPending then return end
     f._activityLayoutKey = layoutKey
 
     AnchorFeaturedFrontActivityBlock(f, contentH, minimumContentH, bountyVisible)
-    LayoutFeaturedFrontActivityScroll(f, rowCount, showEmpty)
-
-    if f.activityEmptyFs and showEmpty and f.activityTitleFs then
-        LayoutFeaturedFrontActivityEmptyText(f)
-    end
+    LayoutFeaturedFrontActivityScroll(f, rowCount)
 end
 
 function Overlord.Popups:RefreshFeaturedFrontBountyButton()
@@ -1830,25 +1798,11 @@ ApplyFeaturedFrontActivity = function(f)
             row:Hide()
         end
     end
-    if f.activityEmptyFs then f.activityEmptyFs:Hide() end
-
     if #rows == 0 or not anyActive then
         HideFeaturedFrontActivityRows(f)
-        if f.activityEmptyFs then
-            f.activityEmptyFs:Show()
-            local emptyText = L.FEATURED_FRONT_ACTIVITY_NONE or "No fighting reported in the last 5 minutes"
-            if f.activityEmptyFs._activityEmptyKey ~= emptyText then
-                f.activityEmptyFs._activityEmptyKey = emptyText
-                f.activityEmptyFs:SetText(emptyText)
-            end
-        end
-        ApplyFeaturedFrontActivityLayout(f, 0, true)
+        ApplyFeaturedFrontActivityLayout(f, 0)
         return
     end
-    if f.activityEmptyFs then
-        f.activityEmptyFs._activityEmptyKey = nil
-    end
-
     local visibleRows = 0
     for i, data in ipairs(rows) do
         local rowFrame = f.activityRows[i]
@@ -1864,7 +1818,7 @@ ApplyFeaturedFrontActivity = function(f)
             visibleRows = visibleRows + 1
         end
     end
-    ApplyFeaturedFrontActivityLayout(f, visibleRows, false)
+    ApplyFeaturedFrontActivityLayout(f, visibleRows)
 end
 
 EnsureFeaturedFrontToggle = function(mainFrame)
@@ -2065,13 +2019,6 @@ EnsureFeaturedFrontFrame = function()
             rowTop - (i - 1) * (FEATURED_FRONT_ACTIVITY_ROW_H + FEATURED_FRONT_ACTIVITY_ROW_GAP))
         f.activityRows[i] = row
     end
-
-    f.activityEmptyFs = f.activityPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    f.activityEmptyFs:SetWordWrap(true)
-    f.activityEmptyFs:SetMaxLines(3)
-    f.activityEmptyFs:SetTextColor(0.55, 0.55, 0.55)
-    f.activityEmptyFs:SetShadowOffset(0, 0)
-    f.activityEmptyFs:Hide()
 
     -- Le volet lateral possede l'activite et son ticker : le replier arrete tout
     -- travail periodique, puis la reouverture repeint immediatement la carte.

@@ -1,4 +1,8 @@
-1.0.17
+1.0.18
+
+**Overlord Forever 1.0.18**
+
+- Remove the empty recent-activity message and its reserved space from the featured front panel so it no longer overlaps the Contracts button. Keep the activity title and combat rows.
 
 **Overlord Forever 1.0.17**
 
