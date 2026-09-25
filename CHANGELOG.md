@@ -1,4 +1,9 @@
-1.0.19
+1.0.20
+
+**Overlord Forever 1.0.20**
+
+- Fix Battle.net synchronization between Forever players, including Horde–Alliance friends. Battle.net reports WoW Forever as project 18 while the beta client still reports project 1 (Retail), so Overlord skipped every Forever friend when sending, discarded their data when receiving, and spent its Battle.net slots on Retail friends instead. Leaderboards, captures, keeps and outposts can now cross factions through Battle.net friends again. Both players need this version.
+- Keep the full leaderboard catch-up working without Communities. With no Overlord community available, the periodic digest catch-up had no peer to ask and never ran; it now uses the players discovered through the beta relay (channel, group and Battle.net, both factions). Only the peer choice changes; the exchange itself is unchanged.
 
 **Overlord Forever 1.0.19**
 

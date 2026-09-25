@@ -14,12 +14,28 @@ function strsplit(sep, value, limit)
 end
 C_Club = { GetSubscribedClubs = function() return {} end }
 Enum = Enum or {}; Enum.ClubType = Enum.ClubType or { Character = 1 }
-C_BattleNet = { GetGameAccountInfoByID = function()
-    return { characterName = "Bridge Tester", clientProgram = "WoW", wowProjectID = WOW_PROJECT_ID,
-        factionName = "Alliance", isInCurrentRegion = true }
-end }
+-- Real Forever beta: the client still reports WOW_PROJECT_ID = 1 (Retail) while
+-- Battle.net reports Forever friends as project 18.
+WOW_PROJECT_ID = 1
+local bnetGames = {
+    [123] = { gameAccountID = 123, characterName = "Bridge Tester", clientProgram = "WoW",
+        wowProjectID = 18, factionName = "Horde", isInCurrentRegion = true, isOnline = true },
+    [456] = { gameAccountID = 456, characterName = "Retail Friend", clientProgram = "WoW",
+        wowProjectID = 1, factionName = "Alliance", isInCurrentRegion = true, isOnline = true },
+}
+function BNGetNumFriends() return 2 end
+C_BattleNet = {
+    GetGameAccountInfoByID = function(id) return bnetGames[id] end,
+    GetFriendNumGameAccounts = function() return 1 end,
+    GetFriendGameAccountInfo = function(i) return bnetGames[i == 1 and 123 or 456] end,
+}
 assert(loadfile("SyncBetaNetwork.lua"))()
 local s, net = Overlord.Sync, Overlord.BetaNetwork
+local targets = s:GetBetaBNetTargets()
+assert(#targets == 1 and targets[1] == 123,
+    "Battle.net targets must be Forever friends (project 18), never Retail friends (project 1)")
+assert(s:IsForeverBNetProject(18) and not s:IsForeverBNetProject(1),
+    "Forever project detection still trusts the Retail WOW_PROJECT_ID")
 local function killPayload(name, total)
     return s:BuildKillBroadcastPayload(name, "", total, "WARRIOR", "Alliance",
         1789527600, "", "enus", 0, 1789527600, 2)

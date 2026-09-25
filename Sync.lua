@@ -2208,6 +2208,16 @@ end
 -- le personnage Retail actuellement connecte. Le resoudre permet d'afficher un
 -- in_progress BNet sans compter WoW+BNet comme deux temoins differents : les
 -- deux chemins se dedupliquent sur la meme identite canonique.
+-- Battle.net identifie WoW Forever par le projet 18, alors que WOW_PROJECT_ID vaut
+-- encore 1 (Retail) sur le client beta : la comparaison directe excluait tous les
+-- amis Forever (envoi et reception) et ciblait les amis Retail a la place.
+-- Pas de local ici : le chunk Sync.lua est proche de la limite WoW de 200 locals.
+function Overlord.Sync:IsForeverBNetProject(projectID)
+    if projectID == nil then return true end
+    if projectID == 18 then return true end
+    return WOW_PROJECT_ID ~= nil and WOW_PROJECT_ID ~= 1 and projectID == WOW_PROJECT_ID
+end
+
 local resolvedBNetFactionByPlayer = {}
 local function ResolveBNetGameplaySender(sync, gameAccountID)
     if not sync or not gameAccountID or not C_BattleNet
@@ -2215,7 +2225,7 @@ local function ResolveBNetGameplaySender(sync, gameAccountID)
     local ok, info = pcall(C_BattleNet.GetGameAccountInfoByID, gameAccountID)
     if not ok or not info or not info.characterName or info.characterName == ""
         or (info.clientProgram and info.clientProgram ~= "WoW")
-        or (info.wowProjectID and info.wowProjectID ~= WOW_PROJECT_ID)
+        or not sync:IsForeverBNetProject(info.wowProjectID)
         or info.isInCurrentRegion == false then return nil end
     local fullName = sync.CanonicalForeverName
         and sync:CanonicalForeverName(info.characterName) or nil
@@ -2266,8 +2276,7 @@ local function IsForeverWowGameAccount(game)
     if not game or not game.isOnline or not game.characterName then return false end
     if game.clientProgram ~= WOW_CLIENT_PROGRAM then return false end
     if game.isInCurrentRegion == false then return false end
-    if not game.wowProjectID then return true end
-    return game.wowProjectID == WOW_PROJECT_ID
+    return Overlord.Sync:IsForeverBNetProject(game.wowProjectID)
 end
 
 local function GetBNetFriendsInWoW()

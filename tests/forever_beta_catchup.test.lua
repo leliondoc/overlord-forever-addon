@@ -304,4 +304,46 @@ for _, version in ipairs({"2", "3"}) do
     assert(sent[#sent].type == "HA" and sent[#sent].data:match("^" .. version .. ":")
         and sent[#sent].data:match(":S:0:0$"), "Legacy pull did not terminate cleanly")
 end
+-- Communities are disabled on the Forever beta. A client without any club (real
+-- roster function, no stub) must pick its catch-up peer among the players found
+-- by the beta relay, across factions, and import the Horde ranking by HR alone.
+for _, e in ipairs(clients) do
+    e.Overlord.Sync._historyCatchupWakeGeneration =
+        (e.Overlord.Sync._historyCatchupWakeGeneration or 0) + 1
+    e.Overlord.Sync._historyCatchupPending = nil
+    local response = e.Overlord.Sync._historyCatchupResponse
+    if response and response.ticker then response.ticker:Cancel() end
+    e.Overlord.Sync._historyCatchupResponse = nil
+    e.Overlord.Sync._historyCatchupPushInbound = nil
+end
+local solo = client("Solo Tester", "alliance")
+assert(#solo.Overlord.Sync:GetOnlineCommunityMembers(true, 0) == 0,
+    "Fixture unexpectedly exposes a community roster")
+-- Only the legacy SR:F pull is disabled, so rows can arrive through HR only.
+solo.Overlord.Sync.SendSyncRequest = function() return true end
+-- Production clients all send NH every 45 s; the empty/legacy fixtures stay quiet
+-- so the rotation can only land on a populated replica.
+local populated = { a, b, c, d, solo }
+local soloHeartbeat = true
+local function announcePopulated()
+    if not soloHeartbeat then return end
+    for _, e in ipairs(populated) do
+        e.Overlord.Sync.SendSyncRequest = function() return true end
+        e.Overlord.BetaNetwork:Broadcast("NH", "1.0.20")
+    end
+    later(45, announcePopulated)
+end
+announcePopulated()
+advance(10)
+assert(solo.Overlord.BetaNetwork:IsPeer(d.name), "Horde veteran was not discovered through the relay")
+assert(solo.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true, true))
+-- Cross-faction multi-hop exchange on the shared 1 KB/s beta budget.
+advance(3200)
+soloHeartbeat = false
+-- names[1] is rank 501 (outside the replicated top 500), as in the replica check.
+for i = 2, #names do
+    assert(solo.Overlord.Leaderboard.kills[names[i]] == d.Overlord.Leaderboard.kills[names[i]],
+        "Client without a community never caught up from beta peers: " .. names[i])
+end
+assert(solo.Overlord.Leaderboard.kills["Unique Tester"] == 4999, "Solo client lost the Alliance union")
 print("Beta catchup: four replicas converge; late Analyst, 500-player ranking + 25 Horde captures, guilds, three hops, backpressure, paced relay queues, return union and verified ACK OK")

@@ -823,6 +823,14 @@ local function ScheduleAttempt(generation, campaignId, attempt)
                 online = sync.GetOnlineCommunityMembers
                     and sync:GetOnlineCommunityMembers(forceRosterRefresh, rosterTtl) or {}
             end
+            -- Communautes indisponibles sur la beta : sans club, le roster est vide et
+            -- l'anti-entropie n'avait plus aucun pair. Les joueurs decouverts par le
+            -- relais beta (toutes factions, via Battle.net) servent alors de pairs.
+            -- Seule la selection du pair change ; le protocole HR reste identique.
+            if #online == 0 and Overlord.BetaNetworkEnabled ~= false
+                and Overlord.BetaNetwork and Overlord.BetaNetwork.GetPeers then
+                online = Overlord.BetaNetwork:GetPeers()
+            end
             local total, target = #online, nil
             local identity = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
             if total > 0 then
