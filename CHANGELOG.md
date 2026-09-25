@@ -1,4 +1,8 @@
-1.0.16
+1.0.17
+
+**Overlord Forever 1.0.17**
+
+- Show a one-time login warning that Communities and Battle.net are temporarily unavailable and Horde–Alliance data transfer may be unreliable. Use the existing yellow alert icon and remember the notice when displayed.
 
 **Overlord Forever 1.0.16**
 

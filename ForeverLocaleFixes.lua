@@ -67,6 +67,41 @@ local communityButtonUnavailable = {
 L.COMMUNITY_BUTTON_UNAVAILABLE = communityButtonUnavailable[locale]
     or (locale == "esMX" and communityButtonUnavailable.esES) or communityButtonUnavailable.enUS
 
+local networkNotice = {
+    enUS = {
+        "Please read this",
+        "Communities and Battle.net are temporarily unavailable. Data transfer between the Horde and Alliance will be unreliable during this period.",
+    },
+    frFR = {
+        "Lisez ça, s'il vous plaît",
+        "Les communautés et Battle.net sont désactivés pour l'instant. Le transfert de données entre la Horde et l'Alliance sera peu fiable durant ce laps de temps.",
+    },
+    esES = {
+        "Por favor, lee esto",
+        "Las comunidades y Battle.net están desactivados por ahora. La transferencia de datos entre la Horda y la Alianza será poco fiable durante este periodo.",
+    },
+    deDE = {
+        "Bitte lest dies",
+        "Communitys und Battle.net sind vorübergehend deaktiviert. Die Datenübertragung zwischen Horde und Allianz kann in dieser Zeit unzuverlässig sein.",
+    },
+    ruRU = {
+        "Пожалуйста, прочитайте это",
+        "Сообщества и Battle.net временно отключены. Передача данных между Ордой и Альянсом в это время может работать ненадёжно.",
+    },
+    ptBR = {
+        "Leia isto, por favor",
+        "Comunidades e Battle.net estão desativados por enquanto. A transferência de dados entre a Horda e a Aliança pode ser instável nesse período.",
+    },
+    zhCN = {
+        "请阅读此通知",
+        "社区和战网目前暂不可用。在此期间，部落与联盟之间的数据传输可能不稳定。",
+    },
+}
+local notice = networkNotice[locale]
+    or (locale == "esMX" and networkNotice.esES) or networkNotice.enUS
+L.FOREVER_NETWORK_NOTICE_TITLE = notice[1]
+L.FOREVER_NETWORK_NOTICE_BODY = notice[2]
+
 local replacements = {
     enUS = { { "Shard", "Layer" }, { "shard", "layer" } },
     enGB = { { "Shard", "Layer" }, { "shard", "layer" } },

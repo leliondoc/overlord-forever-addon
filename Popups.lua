@@ -17,6 +17,7 @@ local WELCOME_FACTION_SEAL_ATLAS = {
 local WELCOME_POPUP_ID = "welcome_first_install"
 local GUILD_KEEP_REMINDER_POPUP_ID = "guild_keep_siege_reminder"
 local FOREVER_LAUNCH_POPUP_ID = "forever_launch_1_0_0"
+local FOREVER_NETWORK_NOTICE_ID = "forever_community_bnet_notice_1_0_17"
 local FEATURED_FRONT_POPUP_ID = "daily_featured_front"
 -- Vrais atlas Blizzard du systeme PlayerChoiceFrame (Interface\AddOns\Blizzard_PlayerChoice) :
 -- "Header" = blason a ailes au-dessus du cadre, "TitleLeft/Right/Middle" = ruban 3 pieces.
@@ -281,6 +282,7 @@ local function ApplyDialogLayout(mode)
     if f._dialogLayoutMode == mode then return end
     f._dialogLayoutMode = mode
     if mode == "welcome" then
+        if f.warningIcon then f.warningIcon:Hide() end
         f:SetSize(420, 210)
         if f.bodyPanel then f.bodyPanel:SetSize(388, 96) end
         if f.bookIcon then f.bookIcon:Show() end
@@ -306,7 +308,21 @@ local function ApplyDialogLayout(mode)
         f.guideBtn:ClearAllPoints()
         f.guideBtn:SetPoint("TOPRIGHT", f.bodyPanel, "BOTTOM", -4, -10)
         f.okBtn:SetPoint("TOPLEFT", f.bodyPanel, "BOTTOM", 4, -10)
+    elseif mode == "warning" then
+        f:SetSize(420, 200)
+        f.bodyPanel:SetSize(388, 96)
+        if f.bookIcon then f.bookIcon:Hide() end
+        if f.factionSeal then f.factionSeal:Hide() end
+        if f.guideBtn then f.guideBtn:Hide() end
+        f.warningIcon:Show()
+        f.bodyFs:ClearAllPoints()
+        f.bodyFs:SetPoint("TOPLEFT", f.bodyPanel, "TOPLEFT", 68, -8)
+        f.bodyFs:SetPoint("BOTTOMRIGHT", f.bodyPanel, "BOTTOMRIGHT", -14, 8)
+        f.bodyFs:SetJustifyV("MIDDLE")
+        f.okBtn:ClearAllPoints()
+        f.okBtn:SetPoint("TOP", f.bodyPanel, "BOTTOM", 0, -10)
     elseif mode == "factionSeal" then
+        if f.warningIcon then f.warningIcon:Hide() end
         f:SetSize(420, 200)
         if f.bodyPanel then f.bodyPanel:SetSize(388, 96) end
         if f.bookIcon then f.bookIcon:Hide() end
@@ -324,6 +340,7 @@ local function ApplyDialogLayout(mode)
         f.okBtn:ClearAllPoints()
         f.okBtn:SetPoint("TOP", f.bodyPanel, "BOTTOM", 0, -10)
     elseif mode == "patchNotes" then
+        if f.warningIcon then f.warningIcon:Hide() end
         -- Notes de patch (one-shot login) : panneau haut, texte centre verticalement.
         f:SetSize(420, 380)
         if f.bodyPanel then f.bodyPanel:SetSize(388, 276) end
@@ -342,6 +359,7 @@ local function ApplyDialogLayout(mode)
         f.okBtn:ClearAllPoints()
         f.okBtn:SetPoint("TOP", f.bodyPanel, "BOTTOM", 0, -10)
     else
+        if f.warningIcon then f.warningIcon:Hide() end
         f:SetSize(420, 200)
         if f.bodyPanel then f.bodyPanel:SetSize(388, 96) end
         if f.bookIcon then f.bookIcon:Hide() end
@@ -439,6 +457,13 @@ local function EnsureDialogFrame()
     f.bookIcon:SetTexture(TUTORIAL_ICON)
     f.bookIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     f.bookIcon:Hide()
+
+    f.warningIcon = f.bodyPanel:CreateTexture(nil, "ARTWORK")
+    f.warningIcon:SetSize(42, 42)
+    f.warningIcon:SetPoint("LEFT", f.bodyPanel, "LEFT", 14, 0)
+    f.warningIcon:SetTexture("Interface\\DialogFrame\\UI-Dialog-Icon-AlertNew")
+    f.warningIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    f.warningIcon:Hide()
 
     f.factionSeal = f.bodyPanel:CreateTexture(nil, "ARTWORK")
     f.factionSeal:SetDrawLayer("ARTWORK", 1)
@@ -826,7 +851,10 @@ function Overlord.Popups:ShowDialog(seenId, title, body, markMode, opts)
             okLabel:SetText(opts.okText or L.POPUP_OK or L.EXPORT_CLOSE or "OK")
         end
     end
-    if opts.showBookIcon or opts.showGuideButton then
+    if opts.showWarningIcon then
+        ApplyDialogLayout("warning")
+        dialogFrame.bodyFs:SetJustifyH("LEFT")
+    elseif opts.showBookIcon or opts.showGuideButton then
         ApplyDialogLayout("welcome")
         dialogFrame.bodyFs:SetJustifyH("LEFT")
     elseif opts.showFactionSeal then
@@ -2178,6 +2206,17 @@ end
 -- ---------------------------------------------------------------------------
 -- Annonces enregistrees (ajouter ici les futurs popups one-shot)
 -- ---------------------------------------------------------------------------
+
+-- Avertissement prioritaire, une seule fois apres une sauvegarde chargee.
+Overlord.Popups:RegisterLoginAnnouncement({
+    id = FOREVER_NETWORK_NOTICE_ID,
+    title = function() return L.FOREVER_NETWORK_NOTICE_TITLE end,
+    body = function() return L.FOREVER_NETWORK_NOTICE_BODY end,
+    when = function()
+        return Overlord.UI and Overlord.UI.COMMUNITY_JOIN_AVAILABLE == false
+    end,
+    opts = { showWarningIcon = true },
+})
 
 -- Une fois par compte : jamais vu (nouvelle install ou veterane sans popupsSeen).
 Overlord.Popups:RegisterLoginAnnouncement({
