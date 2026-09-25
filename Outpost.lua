@@ -72,6 +72,20 @@ Overlord.OutpostSites = {
         center = { 61.8, 64.4 },
         halfSize = 1.35,
     },
+    lesi_bear_cave = {
+        id = "lesi_bear_cave_outpost",
+        siteKey = "lesi_bear_cave",
+        displayNameKey = "OUTPOST_LESI_BEAR_CAVE_NAME",
+        standaloneOpenWorld = true,
+        mapID = 1439,
+        mapIDs = { [62] = true, [1439] = true },
+        displayMapIDs = { [62] = true, [1439] = true },
+        includeChildMaps = false,
+        mapNameNeedles = { "darkshore", "sombrivage", "dunkelküste", "costa oscura", "costa negra", "黑海岸" },
+        -- Grotte de Lunaclaw (quete druide de la forme d'ours), carte Classic de Sombrivage.
+        center = { 43.4, 45.8 },
+        halfSize = 1.35,
+    },
     arathi = {
         id = "arathi_outpost",
         siteKey = "arathi",

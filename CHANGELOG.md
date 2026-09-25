@@ -1,4 +1,8 @@
-1.0.20
+1.0.21
+
+**Overlord Forever 1.0.21**
+
+- Add Lesi Bear Cave, a new open-world guild outpost at Lunaclaw's cave in Darkshore (43.4 / 45.8). It works like Savix Chapel and Aeythyr Lodge: always open, held for 5 minutes by a guild member, contested only by the opposing faction. Players on older versions do not see it.
 
 **Overlord Forever 1.0.20**
 

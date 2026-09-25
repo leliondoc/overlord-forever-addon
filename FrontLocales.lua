@@ -54,6 +54,7 @@ L.FRONT_REDRIDGE_DROPDOWN = n[2]
 L.OUTPOST_REDRIDGE_NAME = n[10]
 -- Custom site name requested verbatim by the author, shared by all locales.
 L.OUTPOST_AEYTHYR_LODGE_NAME = "Aeythyr Lodge"
+L.OUTPOST_LESI_BEAR_CAVE_NAME = "Lesi Bear Cave"
 for index, id in ipairs({ "redridge_lakeshire", "redridge_althers_mill", "redridge_ilgalar",
     "redridge_three_corners", "redridge_lakeridge_highway", "redridge_stonewatch_falls",
     "redridge_renders_valley" }) do

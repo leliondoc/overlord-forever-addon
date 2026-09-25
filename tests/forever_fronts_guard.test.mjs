@@ -47,7 +47,7 @@ test("TOC Forever 16001 and CurseForge 1701204", () => {
     assert.match(hofUi, /local selectedCategory = "donors"/);
 });
 
-test("Outposts cover six fronts and two open-world lodges", () => {
+test("Outposts cover six fronts and three open-world sites", () => {
     assert.match(outpost, /frontId = "arathi"/);
     assert.match(outpost, /center = \{ 33\.3, 27\.8 \}/);
     assert.match(outpost, /loch_modan = \{[\s\S]*?center = \{ 40\.3, 39\.4 \}/);
@@ -58,6 +58,7 @@ test("Outposts cover six fronts and two open-world lodges", () => {
     assert.match(outpost, /frontId = "redridge"/);
     assert.doesNotMatch(outpost, /frontId = "hillsbrad"/);
     assert.match(outpost, /aeythyr_lodge = \{[\s\S]*?center = \{ 52\.1, 18\.4 \}/);
+    assert.match(outpost, /lesi_bear_cave = \{[\s\S]*?mapIDs = \{ \[62\] = true, \[1439\] = true \}[\s\S]*?center = \{ 43\.4, 45\.8 \}/);
     assert.doesNotMatch(outpost, /coiled_isle/);
     assert.doesNotMatch(outpost, /11\.2, 70\.5/);
 });
