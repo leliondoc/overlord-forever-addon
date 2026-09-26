@@ -130,4 +130,17 @@ for _, realmOffset in ipairs({ 2 * 3600, -7 * 3600, 0, 2 * 3600 }) do
         assert(gk:GetServerSiegeDayKey(ts) == gk:ComputeServerSiegeDayKey(ts))
     end
 end
-print("Forever siege schedule: four windows, realm timezones, midnight, legacy captures, per-siege awards, reload and cached keys OK")
+-- The full keep award pass is keyed on the last finished siege: the signature
+-- changes when a siege ends, never when it opens or while it runs.
+offset = 2 * 3600
+for _, hour in ipairs({ 3, 9, 15 }) do
+    at(hour - 1, 30)
+    local before = lb:GetGuildKeepAwardWindowSignature()
+    at(hour)
+    assert(lb:GetGuildKeepAwardWindowSignature() == before, "Siege opening changed the signature")
+    at(hour, 59, 59)
+    assert(lb:GetGuildKeepAwardWindowSignature() == before, "Running siege changed the signature")
+    at(hour + 1, 0, 1)
+    assert(lb:GetGuildKeepAwardWindowSignature() ~= before, "Siege end did not change the signature")
+end
+print("Forever siege schedule: four windows, realm timezones, midnight, legacy captures, per-siege awards, reload, cached keys and siege-end signature OK")

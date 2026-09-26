@@ -1,4 +1,8 @@
-1.0.26
+1.0.27
+
+**Overlord Forever 1.0.27**
+
+- Guild keep siege wins are now fully checked only when needed: once after login, then once when each siege ends (every six hours). Between sieges nothing is recomputed. Proofs received from other players already update their own keep right away, in the background, so no win is lost; the regular re-checks every thirty seconds or ten minutes are gone.
 
 **Overlord Forever 1.0.26**
 

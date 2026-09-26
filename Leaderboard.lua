@@ -1477,9 +1477,6 @@ local DISPLAY_CAPTURE_RANK_LIMIT = 25
 -- Au-dela de ce nombre de couples (creneau, fortin), la reparation des victoires de
 -- fortin est decoupee sur plusieurs images au lieu d'un seul bloc.
 Overlord.Leaderboard.GK_AWARD_REPAIR_SYNC_MAX = 16
--- Filet de securite de la passe complete une fois stable (fin de siege et mutations
--- la relancent immediatement).
-Overlord.Leaderboard.GK_AWARD_SAFETY_RECHECK_SEC = 600
 -- Fortins = priorite la plus basse (sieges toutes les 6 h, peu de joueurs) : une
 -- operation au plus toutes les 0,1 s, rien en combat ni en gros event, et les
 -- preuves recues sont regroupees 10 s avant reconciliation. Resultats identiques.
@@ -6676,12 +6673,23 @@ function Overlord.Leaderboard:AwardHeldGuildKeepWinForSite(siteKey, dayKey, winT
     return changed
 end
 
--- Etat de la fenetre de siege : change a l'ouverture et a la fermeture de chaque siege.
+-- Dernier siege termine + campagne : ne change qu'a la fin d'un siege (toutes les
+-- 6 h) ou au reset hebdomadaire. Siege en cours ou a venir : le precedent (6 h avant).
 function Overlord.Leaderboard:GetGuildKeepAwardWindowSignature()
     local gk = Overlord.GuildKeep
-    if not gk or not gk.IsSiegeWindowOpen or not gk.IsSiegeWindowClosedForToday then return "" end
-    return (gk:IsSiegeWindowOpen() and "open" or "shut") .. ":"
-        .. (gk:IsSiegeWindowClosedForToday() and "done" or "pending")
+    if not gk or not gk.IsSiegeWindowClosedForToday then return "" end
+    local slotKey = gk.ComputeServerSiegeDayKey or gk.GetServerSiegeDayKey
+    if not slotKey then return "" end
+    local now = leaderboardServerNow()
+    local lastClosed = gk:IsSiegeWindowClosedForToday() and slotKey(gk, now)
+        or slotKey(gk, now - 6 * 3600)
+    return tostring(lastClosed) .. "|" .. tostring(self:GetCurrentCampaignStart() or 0)
+end
+
+-- Force une passe complete au prochain tick (tests, reinitialisations).
+function Overlord.Leaderboard:RequestFullGuildKeepAwardPass()
+    self._gkAwardPassSignature = nil
+    self._gkAwardNextCheckAt = nil
 end
 
 -- Taches (fortin, jour) de la fin de passe, dans l'ordre de l'ancien corps :
@@ -6747,14 +6755,15 @@ function Overlord.Leaderboard:MaybeAwardGuildKeepDailyWins()
     if nowClock > 0 and self._gkAwardNextCheckAt and nowClock < self._gkAwardNextCheckAt then
         return false
     end
-    -- Sieges toutes les 6 h : une fois stable, la passe complete (~170 reconciliations
-    -- en fin de semaine) ne repart qu'a la fin d'un siege (ouverture/fermeture de la
-    -- fenetre), sur mutation reelle (invalidation) ou apres le filet de securite.
-    -- Le coup d'oeil toutes les 30 s ne lit que l'etat de la fenetre de siege.
-    if self._gkAwardStable and nowClock > 0 and self._gkAwardSafetyAt
-        and nowClock < self._gkAwardSafetyAt
-        and self._gkAwardWindowSignature == self:GetGuildKeepAwardWindowSignature() then
-        self._gkAwardNextCheckAt = nowClock + GK_DAILY_AWARD_RECHECK_SEC
+    -- Sieges toutes les 6 h. Une victoire n'est creee qu'a la cloture d'un siege ; une
+    -- preuve recue ou appliquee declenche deja une reconciliation ciblee (ce fortin, a
+    -- partir de ce creneau) sur tous ses chemins (GH direct/historique, publication,
+    -- correction de lignee, migration). La passe complete ne tourne donc qu'une fois
+    -- a la connexion puis a la fin de chaque siege (signature = dernier siege termine
+    -- + campagne) ; le coup d'oeil toutes les 30 s ne compare que cette signature.
+    local signature = self:GetGuildKeepAwardWindowSignature()
+    if self._gkAwardPassSignature ~= nil and self._gkAwardPassSignature == signature then
+        if nowClock > 0 then self._gkAwardNextCheckAt = nowClock + GK_DAILY_AWARD_RECHECK_SEC end
         return false
     end
     local dayKey = gk.GetServerSiegeDayKey and gk:GetServerSiegeDayKey() or ""
@@ -6770,11 +6779,11 @@ function Overlord.Leaderboard:MaybeAwardGuildKeepDailyWins()
     -- lot, la reparation est decoupee (~1 ms par image) puis la passe se termine ici.
     local repairPairs = self:CollectGuildKeepAwardRepairPairs()
     if #repairPairs > (self.GK_AWARD_REPAIR_SYNC_MAX or 16) and C_Timer and C_Timer.After then
-        self:StartGuildKeepAwardRepairJob(repairPairs, dayKey)
+        self:StartGuildKeepAwardRepairJob(repairPairs, dayKey, signature)
         return false
     end
     local changed = self:RunGuildKeepAwardRepairPairs(repairPairs, 1, #repairPairs)
-    return self:FinishGuildKeepDailyAwardPass(dayKey, changed)
+    return self:FinishGuildKeepDailyAwardPass(dayKey, changed, signature)
 end
 
 -- Combat ou gros event : le travail fortin attend (il sera refait a l'identique).
@@ -6817,9 +6826,9 @@ function Overlord.Leaderboard:RunGuildKeepAwardRepairPairs(repairPairs, first, l
     return repaired
 end
 
-function Overlord.Leaderboard:StartGuildKeepAwardRepairJob(repairPairs, dayKey)
+function Overlord.Leaderboard:StartGuildKeepAwardRepairJob(repairPairs, dayKey, signature)
     local job = { pairs = repairPairs, index = 1, changed = false, dayKey = dayKey,
-        invalidations = self._gkAwardInvalidations or 0 }
+        signature = signature }
     self._gkAwardRepairJob = job
     local lb = self
     local function slice()
@@ -6853,22 +6862,23 @@ function Overlord.Leaderboard:StartGuildKeepAwardRepairJob(repairPairs, dayKey)
             return
         end
         lb._gkAwardRepairJob = nil
-        local mutatedDuringPass = (lb._gkAwardInvalidations or 0) ~= job.invalidations
-        lb:CompleteGuildKeepDailyAwardPass(job.dayKey, job.changed, mutatedDuringPass)
+        lb:CompleteGuildKeepDailyAwardPass(job.dayKey, job.changed, job.signature)
     end
     C_Timer.After(0, slice)
 end
 
 -- Suite de la passe apres la reparation des preuves (identique a l'ancien corps).
-function Overlord.Leaderboard:FinishGuildKeepDailyAwardPass(dayKey, changed, mutatedDuringPass)
+function Overlord.Leaderboard:FinishGuildKeepDailyAwardPass(dayKey, changed, signature)
     if not Overlord.GuildKeep then return changed end
     for _, task in ipairs(self:CollectHeldGuildKeepAwardTasks()) do
         changed = self:AwardHeldGuildKeepWinForSite(task.siteKey, task.dayKey, task.winTs) or changed
     end
-    return self:CompleteGuildKeepDailyAwardPass(dayKey, changed, mutatedDuringPass)
+    return self:CompleteGuildKeepDailyAwardPass(dayKey, changed, signature)
 end
 
-function Overlord.Leaderboard:CompleteGuildKeepDailyAwardPass(dayKey, changed, mutatedDuringPass)
+-- La signature est celle du debut de passe : un siege qui se termine pendant la
+-- passe (decoupee sur ~17 s) en relance une nouvelle ensuite.
+function Overlord.Leaderboard:CompleteGuildKeepDailyAwardPass(dayKey, changed, signature)
     local nowClock = GetTime and GetTime() or 0
     -- Plus de backfill multi-jours depuis la tenure (RepairHeldGuildKeepWinsSinceTenure) :
     -- c'etait la source des victoires fantomes (il creditait CHAQUE jour entre la capture et
@@ -6877,20 +6887,16 @@ function Overlord.Leaderboard:CompleteGuildKeepDailyAwardPass(dayKey, changed, m
     -- de CE jour (award du jour ci-dessus + rattrapage login d'un seul jour, lui-meme borne
     -- par claimedAt <= jour). Modele convergent identique aux outposts.
     if changed then
-        self:InvalidateGuildKeepDailyAwardStable()
         -- Le ticker de cloture peut creer/reparer un award sans paquet GH entrant.
         -- Dans ce cas aucun handler sync ne demandera le repaint : invalider aussi
         -- la liste de sites cachee, meme si le panneau est actuellement ferme.
         if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
             Overlord.LeaderboardUI:RefreshIfVisible()
         end
-    elseif dayKey ~= "" and nowClock > 0 and not mutatedDuringPass then
-        self._gkAwardStable = true
-        self._gkAwardStableDayKey = dayKey
-        self._gkAwardNextCheckAt = nowClock + GK_DAILY_AWARD_RECHECK_SEC
-        self._gkAwardSafetyAt = nowClock + (self.GK_AWARD_SAFETY_RECHECK_SEC or 600)
-        self._gkAwardWindowSignature = self:GetGuildKeepAwardWindowSignature()
     end
+    self._gkAwardPassSignature = signature or self:GetGuildKeepAwardWindowSignature()
+    self._gkAwardStableDayKey = dayKey
+    if nowClock > 0 then self._gkAwardNextCheckAt = nowClock + GK_DAILY_AWARD_RECHECK_SEC end
     return changed
 end
 
