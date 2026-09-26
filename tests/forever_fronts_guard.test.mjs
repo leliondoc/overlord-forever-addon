@@ -38,6 +38,11 @@ test("TOC Forever 16001 and CurseForge 1701204", () => {
     for (const module of ["General", "GeneralSync", "GeneralMap", "GeneralNameplate"]) {
         assert.ok(toc.split(/\r?\n/).includes(`${module}.lua`), `${module} is not loaded`);
     }
+    // Every login init stage must tolerate a module that is not loaded.
+    const core = readFileSync(new URL("../Core.lua", import.meta.url), "utf8");
+    const calls = core.match(/Overlord\[moduleName\]:Initialize\(\)/g) || [];
+    const guards = core.match(/if Overlord\[moduleName\] then\s+AddLoginInitStage/g) || [];
+    assert.ok(calls.length > 0 && guards.length === calls.length, "A login init stage calls a module that may not be loaded");
     // Gold contracts are disabled on Forever: none of their modules is loaded.
     for (const module of ["ManualBounty", "ManualBountySync", "ManualBountyMail", "ManualBountyMap", "ManualBountyUI"]) {
         assert.ok(!toc.split(/\r?\n/).includes(`${module}.lua`), `${module} is still loaded`);

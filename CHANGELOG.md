@@ -1,4 +1,8 @@
-1.0.29
+1.0.30
+
+**Overlord Forever 1.0.30**
+
+- Fixed the "Error module ManualBountyUI" message shown at login since 1.0.29: the disabled gold-contract interface was still initialized.
 
 **Overlord Forever 1.0.29**
 

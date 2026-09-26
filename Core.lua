@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.0.29"
+Overlord.Version = "1.0.30"
 -- Forever uses one global community. The beta relay remains enabled in parallel
 -- so non-members and temporarily unavailable C_Club rosters still converge.
 Overlord.CommunityModeEnabled = true
@@ -4227,9 +4227,12 @@ function Overlord:Initialize()
         -- Les deux autres modules UI conservent chacun leur frame dediee.
         for _, mod in ipairs({ "Button", "ManualBountyUI" }) do
             local moduleName = mod
-            AddLoginInitStage(moduleName, function()
-                Overlord[moduleName]:Initialize()
-            end)
+            -- ManualBountyUI n'est plus charge sur Forever (contrats desactives).
+            if Overlord[moduleName] then
+                AddLoginInitStage(moduleName, function()
+                    Overlord[moduleName]:Initialize()
+                end)
+            end
         end
 
         local loginInitStageIndex = 0
