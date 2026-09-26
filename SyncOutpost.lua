@@ -1171,7 +1171,7 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
         MaybeResetOutpostDefenderAlert(siteKey, stAfter)
     end
     MaybeResetOutpostAssaultAlert(siteKey, stAfter)
-    if (channel == "WHISPER" or channel == "BETA") and payload and payload ~= ""
+    if (channel == "WHISPER" or (channel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) and payload and payload ~= ""
         and OutpostPayloadHasExplicitLinkedPool(remotePool) then
         if status == "in_progress" then
             local payloadGuild = Overlord.Outpost:SanitizeGuildName(guild or "")
@@ -1273,7 +1273,7 @@ function Overlord.Sync:OnReceiveOutpostCapture(payload, sender, sourceChannel)
     end
     -- Si la verite arrive par communaute, la republier sur les chemins primaires locaux.
     -- Pas de re-fanout communaute ici : le relais large est 1-hop pour eviter l'explosion.
-    if (sourceChannel == "WHISPER" or sourceChannel == "BETA") and payload ~= "" and OutpostPayloadHasExplicitLinkedPool(wirePool) then
+    if (sourceChannel == "WHISPER" or (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) and payload ~= "" and OutpostPayloadHasExplicitLinkedPool(wirePool) then
         BroadcastOutpostToGroup("OC", payload)
         self:SendToChannel("OC", payload, true)
     end
@@ -1503,7 +1503,7 @@ function Overlord.Sync:OnReceiveLeaderboardOutpostTenant(payload, sender, source
     if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
         Overlord.LeaderboardUI:RefreshIfVisible()
     end
-    if (sourceChannel == "WHISPER" or sourceChannel == "BETA") and payload ~= "" and OutpostPayloadHasExplicitLinkedPool(wirePool) then
+    if (sourceChannel == "WHISPER" or (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) and payload ~= "" and OutpostPayloadHasExplicitLinkedPool(wirePool) then
         BroadcastOutpostToGroup("LO", payload)
         self:SendToChannel("LO", payload, true)
     end
@@ -1566,7 +1566,7 @@ function Overlord.Sync:OnReceiveLeaderboardOutpostCount(payload, sender, sourceC
     local relayPayload = string.format("%s:%s:%s:%d:%d:%d:%s",
         siteKey, guild, facCode or "", count, latestTs, remoteEpoch, remotePool)
     -- Relais 1-hop comme LO : republier si le pool appartient au groupe Outpost local.
-    if (sourceChannel == "WHISPER" or sourceChannel == "BETA") and payload ~= "" and OutpostPayloadHasExplicitLinkedPool(wirePool) then
+    if (sourceChannel == "WHISPER" or (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) and payload ~= "" and OutpostPayloadHasExplicitLinkedPool(wirePool) then
         BroadcastOutpostToGroup("LOC", relayPayload)
         self:SendToChannel("LOC", relayPayload, true)
     end

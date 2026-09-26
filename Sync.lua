@@ -1032,10 +1032,28 @@ function Overlord.Sync:ForeverCharacterBase(name)
 end
 
 -- Identite canonique Forever : "Prenom Nom". Nil si le nom n'est pas complet.
+-- Memo borne des fonctions pures de nom (resultat identique, recalcule ~25
+-- operations de chaine a chaque appel ; des dizaines d'appels par message recu).
+-- Stocke sur l'objet : le chunk Sync.lua est proche de la limite de 200 locals.
+function Overlord.Sync:_MemoNameResult(field, name, result)
+    local memo = self[field]
+    if not memo or memo.n >= 2048 then
+        memo = { n = 0, values = {} }
+        self[field] = memo
+    end
+    if memo.values[name] == nil then memo.n = memo.n + 1 end
+    memo.values[name] = result
+    return result
+end
+
 function Overlord.Sync:CanonicalForeverName(name)
+    local memo = type(name) == "string" and self._canonicalNameMemo or nil
+    local hit = memo and memo.values[name]
+    if hit ~= nil then return hit or nil end
     local base = self:ForeverCharacterBase(name)
-    if not base or not self:IsForeverCharacterName(base) then return nil end
-    return base
+    local result = base and self:IsForeverCharacterName(base) and base or nil
+    if type(name) == "string" then self:_MemoNameResult("_canonicalNameMemo", name, result or false) end
+    return result
 end
 
 function Overlord.Sync:CanonicalForeverNameFromUnit(unit)
@@ -1066,6 +1084,13 @@ end
 -- Un -Royaume eventuel (API) est ignore, il ne fait pas partie de l'identite.
 function Overlord.Sync:IsForeverCharacterName(name)
     if type(name) ~= "string" then return false end
+    local memo = self._foreverNameMemo
+    local hit = memo and memo.values[name]
+    if hit ~= nil then return hit end
+    return self:_MemoNameResult("_foreverNameMemo", name, self:_IsForeverCharacterNameUncached(name))
+end
+
+function Overlord.Sync:_IsForeverCharacterNameUncached(name)
     name = self:NormalizeContributorFullName(name) or name
     if type(name) ~= "string" or name == "" or #name > 80 then return false end
     if name ~= (name:match("^[ \t\r\n]*(.-)[ \t\r\n]*$") or "") then return false end
@@ -2192,16 +2217,11 @@ end
 -- Pas de sync addon cross-region (US vs EU) : Check PvP et SV restent dans le bon pool.
 local function IsBNetGameAccountInCurrentRegion(gameAccountID)
     if not gameAccountID then return false end
-    local ok, allow = pcall(function()
-        if C_BattleNet and C_BattleNet.GetGameAccountInfoByID then
-            local info = C_BattleNet.GetGameAccountInfoByID(gameAccountID)
-            if info and info.isInCurrentRegion == false then
-                return false
-            end
-        end
-        return true
-    end)
-    return ok and allow
+    if not (C_BattleNet and C_BattleNet.GetGameAccountInfoByID) then return true end
+    -- Appel direct sous pcall : plus de closure creee a chaque message BNet.
+    local ok, info = pcall(C_BattleNet.GetGameAccountInfoByID, gameAccountID)
+    if not ok then return false end
+    return not (info and info.isInCurrentRegion == false)
 end
 
 -- BNet transporte une identite de compte synthetique, mais l'API locale expose
@@ -2283,6 +2303,21 @@ local function GetBNetFriendsInWoW()
     local now = GetTime()
     if cachedBNetFriendsList and (now - cachedBNetFriendsAt) < BNET_FRIENDS_CACHE_TTL then
         return cachedBNetFriendsList
+    end
+    -- Liste expiree : servir l'ancienne et reconstruire a l'image suivante, jamais
+    -- au milieu du traitement d'un paquet (scan de tous les amis et comptes).
+    if cachedBNetFriendsList and C_Timer and C_Timer.After then
+        local stale = cachedBNetFriendsList
+        if not stale.refreshQueued then
+            stale.refreshQueued = true
+            C_Timer.After(0, function()
+                if cachedBNetFriendsList == stale then
+                    cachedBNetFriendsList = nil
+                    GetBNetFriendsInWoW()
+                end
+            end)
+        end
+        return stale
     end
     -- list.info[id] = { faction, name } : le relais beta privilegie les amis de la
     -- faction adverse (seuls ponts Horde/Alliance). Stocke dans la liste pour ne pas

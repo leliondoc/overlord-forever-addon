@@ -54,12 +54,29 @@ local function active() return enabled() and not addon.InstanceSuspended and not
 local function region() return addon.RealmPools:GetOverlordPoolTag() end
 local function canonical(name) return sync:CanonicalForeverName(name) end
 local function same(a, b) return sync:ForeverIdentitiesMatch(a, b) end
+-- FIFO ring (order.first..order.last): same eviction order as before, but O(1).
+-- Removing the first array slot shifted up to 2048 keys for every received packet.
 local function remember(values, order, key, value, limit)
     if values[key] == nil then
-        if #order >= limit then values[table.remove(order, 1)] = nil end
-        order[#order + 1] = key
+        local first, last = order.first or 1, order.last or 0
+        if last - first + 1 >= limit then
+            values[order[first]] = nil
+            order[first] = nil
+            first = first + 1
+        end
+        last = last + 1
+        order[last] = key
+        order.first, order.last = first, last
     end
     values[key] = value
+end
+-- Duplicate check on the raw wire, before decode and identity work. Same key as
+-- Receive records (origin = first path node, which decode requires canonical).
+local function alreadySeen(wire)
+    if type(wire) ~= "string" then return false end
+    local _, id, _, _, path = strsplit("|", wire, 6)
+    local origin = path and path:match("^[^,]+")
+    return id ~= nil and origin ~= nil and seen[origin:lower() .. ":" .. id] ~= nil
 end
 local function encode(p)
     return table.concat({ p.region, p.id, tostring(p.at), p.target,
@@ -163,15 +180,13 @@ local function tasksFor(p, wire)
         local friends = sync.GetBetaBNetTargets and sync:GetBetaBNetTargets() or {}
         local myFaction = addon.PlayerFaction
         local bridges, others = {}, {}
+        local pathKeys = {}
+        for _, node in ipairs(p.path) do pathKeys[node:lower()] = true end
         for _, id in ipairs(friends) do
             local faction, character
             if sync.GetBetaBNetTargetInfo then faction, character = sync:GetBetaBNetTargetInfo(id) end
-            local onPath = false
-            if character then
-                for _, node in ipairs(p.path) do
-                    if same(node, character) then onPath = true; break end
-                end
-            end
+            -- Friend names and path nodes are canonical Forever names.
+            local onPath = type(character) == "string" and pathKeys[character:lower()] == true
             if not onPath then
                 if #bridges < MAX_BRIDGE_FRIENDS and (faction == "Alliance" or faction == "Horde")
                     and (myFaction == "Alliance" or myFaction == "Horde") and faction ~= myFaction then
@@ -316,12 +331,17 @@ function net:Broadcast(kind, payload, extras)
     end
     return sent and 1 or 0
 end
-function net:Receive(wire, sender, transport, bnetID)
+function net:Receive(wire, sender, transport, bnetID, decoded)
     if not active() then return false end
-    local p = decode(wire)
+    -- Copies of an already processed packet (other bridges, group + channel) are
+    -- rejected before any decode; the result is the same false as below.
+    if alreadySeen(wire) then return false end
+    local p = decoded or decode(wire)
     if not p or not sender or not same(p.path[#p.path], sender) then return false end
     local me = sync:GetPlayerFullName()
-    for _, node in ipairs(p.path) do if same(node, me) then return false end end
+    local meKey = type(me) == "string" and me:lower() or nil
+    -- Path nodes and our own name are canonical: case-insensitive equality is same().
+    for _, node in ipairs(p.path) do if node:lower() == meKey then return false end end
     local origin = p.path[1]
     local key = origin:lower() .. ":" .. p.id
     if seen[key] then return false end
@@ -386,9 +406,11 @@ function net:ReceiveFragment(payload, sender, transport, bnetID)
     if not a.chunks[part] then a.chunks[part] = chunk; a.got = a.got + 1 end
     if a.got ~= count then return true end
     local wire = table.concat(a.chunks)
+    -- Every later duplicate fragment of a completed packet lands here again.
+    if alreadySeen(wire) then return false end
     local p = decode(wire)
     if not p or p.id ~= id then return false end
-    return self:Receive(wire, name, transport, bnetID)
+    return self:Receive(wire, name, transport, bnetID, p)
 end
 function net:Start()
     if not enabled() or self.started then return end

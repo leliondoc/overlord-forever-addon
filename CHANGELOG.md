@@ -2,6 +2,8 @@
 
 **Overlord Forever 1.0.23**
 
+- Fix CPU spikes in large events (up to 74% of a frame reported). Every player who received a guild keep or outpost update through the beta relay re-sent it to their raid and channel, and outpost captures and domination boosts were re-published into the relay under each receiver's name. With many Overlord players in one place this multiplied every update by the number of players. Keeps and outposts are now re-sent only when the update was addressed to that player, and those re-publications are skipped when no Community exists; the relay already carries the original.
+- Make each relayed packet much cheaper: duplicate copies are rejected before any decoding, a packet is decoded once instead of twice, packet history no longer shifts up to 2048 entries per packet, player-name checks are cached (about 80 times faster), and the Battle.net friend list is refreshed outside packet handling.
 - Relay priority for large events: when a player's relay is saturated (for example a Horde–Alliance Battle.net bridge during a big battle), capture, keep, outpost, front, faction-call and commander messages are now sent before kills, rankings, history and economy data. Those can wait, since the periodic catch-up repairs them afterwards. The queue keeps its 128-packet bound; when it is full, an urgent message replaces the oldest waiting non-urgent one instead of being refused.
 
 **Overlord Forever 1.0.22**

@@ -3642,8 +3642,18 @@ local function RememberStructureRelay(cache, relayKey, now)
     return true
 end
 
+-- Sans club Communaute, BroadcastToCommunity ne fait que rediffuser par le relais
+-- beta, deja emprunte par l'auteur. Chaque receveur en creait une copie a son nom
+-- (nouvel id, jamais dedupliquee) : avalanche O(joueurs) par capture en gros event.
+-- Methode (pas de local) : le chunk SyncAux.lua est a la limite WoW de 200 locals.
+function Overlord.Sync:StructureRelayOnlyReachesBeta()
+    return Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork ~= nil
+        and not (self.HasCommunityClub and self:HasCommunityClub())
+end
+
 function Overlord.Sync:RelayOutpostCaptureToCommunitySafe(payload, relayKey, poolTag)
     if not payload or payload == "" then return end
+    if self:StructureRelayOnlyReachesBeta() then return end
     if not RelayOutpostPoolMatchesLocal(poolTag) then return end
     if Overlord.InstanceSuspended or IsInInstance() then return end
     if not self.BroadcastToCommunity then return end
@@ -3656,6 +3666,7 @@ end
 
 function Overlord.Sync:RelayDominationBoostToCommunitySafe(payload, relayKey, poolTag)
     if not payload or payload == "" then return end
+    if self:StructureRelayOnlyReachesBeta() then return end
     if not RelayPoolMatchesLocal(poolTag) then return end
     if Overlord.InstanceSuspended or IsInInstance() then return end
     if not self.BroadcastToCommunity then return end

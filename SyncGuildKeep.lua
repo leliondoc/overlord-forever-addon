@@ -2512,7 +2512,7 @@ function Overlord.Sync:OnReceiveGuildKeepState(payload, sender, channel)
         if exactHandled then
             NoteTrustedGuildKeepTraffic(siteKey, true)
             if Overlord.MarkGuildKeepSyncReceived then Overlord:MarkGuildKeepSyncReceived() end
-            if authorityChanged and (channel == "WHISPER" or channel == "BETA")
+            if authorityChanged and (channel == "WHISPER" or (channel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch()))
                 and GuildKeepPayloadHasExplicitLocalPool(remotePool) then
                 local correctedPayload = BuildGuildKeepPayload(siteKey, stCurrent)
                 if correctedPayload then
@@ -2644,7 +2644,7 @@ function Overlord.Sync:OnReceiveGuildKeepState(payload, sender, channel)
     -- Un GK ennemi peut arriver par la communaute sur un seul joueur du raid.
     -- Le republier sur les chemins primaires locaux aligne GK sur ZS :
     -- groupe/raid + canal, sans re-fan-out communaute (relai 1-hop).
-    if (channel == "WHISPER" or channel == "BETA") and payload and payload ~= ""
+    if (channel == "WHISPER" or (channel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) and payload and payload ~= ""
         and GuildKeepPayloadHasExplicitLocalPool(remotePool) then
         if status == "in_progress" then
             -- Transition locale (notre cote decouvre le siege) : message one-shot critique,
@@ -2770,7 +2770,7 @@ function Overlord.Sync:OnReceiveGuildKeepAbort(
     end
     NoteTrustedGuildKeepTraffic(terminal.siteKey, true)
     if Overlord.MarkGuildKeepSyncReceived then Overlord:MarkGuildKeepSyncReceived() end
-    if (sourceChannel == "WHISPER" or sourceChannel == "BETA") then
+    if (sourceChannel == "WHISPER" or (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) then
         local statePayload = BuildGuildKeepPayload(
             terminal.siteKey, Overlord.GuildKeep:GetState(terminal.siteKey))
         if statePayload then
@@ -2868,7 +2868,7 @@ function Overlord.Sync:OnReceiveGuildKeepCapture(
     -- Si la verite arrive par communaute, conserver le snapshot GK enrichi (autorite
     -- terminale) sur les chemins locaux. Le degrader en GC faisait rejeter le relais
     -- par tous les peers froids du raid/canal.
-    if (sourceChannel == "WHISPER" or sourceChannel == "BETA") and payload and payload ~= "" and GuildKeepPayloadHasExplicitLocalPool(remotePool) then
+    if (sourceChannel == "WHISPER" or (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) and payload and payload ~= "" and GuildKeepPayloadHasExplicitLocalPool(remotePool) then
         local statePayload = BuildGuildKeepPayload(siteKey, Overlord.GuildKeep:GetState(siteKey))
         if statePayload then
             BroadcastGuildKeepToGroup("GK", statePayload)
@@ -3232,7 +3232,7 @@ function Overlord.Sync:OnReceiveGuildKeepDailyProof(payload, sender, sourceChann
     if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
         Overlord.LeaderboardUI:RefreshIfVisible()
     end
-    if (sourceChannel == "WHISPER" or sourceChannel == "BETA") and GuildKeepPayloadHasExplicitLocalPool(remotePool) then
+    if (sourceChannel == "WHISPER" or (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) and GuildKeepPayloadHasExplicitLocalPool(remotePool) then
         BroadcastGuildKeepToGroup("GH", payload)
         SendGuildKeepToChannel("GH", payload, true)
     end
