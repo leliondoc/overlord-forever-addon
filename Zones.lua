@@ -284,69 +284,6 @@ function Overlord.Zones:GetNextObjectiveZone(frontId)
     return self:GetZone(ids[1])
 end
 
-function Overlord.Zones:IsNextObjectiveZone(zoneId, frontId)
-    if not zoneId then return false end
-    for _, id in ipairs(self:GetNextObjectiveZoneIds(frontId)) do
-        if id == zoneId then return true end
-    end
-    return false
-end
-
-function Overlord.Zones:GetCapturedCountForFront(frontId)
-    self:MigrateLegacyCaptureFinalQuarantines(frontId)
-    local front = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
-    if not front or not front.zones then return 0 end
-    local n = 0
-    local pf = Overlord.PlayerFaction
-    for _, zone in ipairs(front.zones) do
-        if zone.owner == pf and zone.status == "captured"
-            and not zone._loginSyncUnconfirmed then
-            n = n + 1
-        end
-    end
-    return n
-end
-
-function Overlord.Zones:GetEnemyCapturedCountForFront(frontId)
-    self:MigrateLegacyCaptureFinalQuarantines(frontId)
-    local front = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
-    if not front or not front.zones then return 0 end
-    local enemy = self:GetEnemyFaction()
-    local n = 0
-    for _, zone in ipairs(front.zones) do
-        if zone.owner == enemy and zone.status ~= "in_progress"
-            and not zone._loginSyncUnconfirmed then
-            n = n + 1
-        end
-    end
-    return n
-end
-
-function Overlord.Zones:GetTotalCountForFront(frontId)
-    local front = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
-    return (front and front.zones and #front.zones) or 0
-end
-
-function Overlord.Zones:GetDisplayOrder()
-    local front = Overlord.Fronts and Overlord.Fronts:GetCurrentFront()
-    if not front then return {} end
-    local frontId = front.id
-    if cachedDisplayFaction == Overlord.PlayerFaction and cachedDisplayFrontId == frontId and cachedDisplayOrder then
-        return cachedDisplayOrder
-    end
-    local order = front and front.displayOrder and front.displayOrder[Overlord.PlayerFaction]
-    cachedDisplayOrder = {}
-    if order then
-        for _, zoneId in ipairs(order) do
-            local zone = self:GetZone(zoneId)
-            if zone then table.insert(cachedDisplayOrder, zone) end
-        end
-    end
-    cachedDisplayFaction = Overlord.PlayerFaction
-    cachedDisplayFrontId = frontId
-    return cachedDisplayOrder
-end
-
 -- Prérequis du front selon la faction locale (voyage inter-front ou init login).
 function Overlord.Zones:ApplyFrontPrereqs(faction, zones)
     zones = zones or Overlord.ZoneDatabase
@@ -1236,11 +1173,6 @@ function Overlord.Zones:IsFrontOnTruce(zoneId, frontIdHint, forDisplay)
     end
     local onCooldown, remaining = self:IsOnVictoryCooldown(resolvedFrontId, forDisplay)
     return onCooldown, remaining
-end
-
--- Alias historique : treve etendue a toute la carte du front, pas seulement la capitale perdante.
-function Overlord.Zones:IsCapitalOnTruce(zoneId)
-    return self:IsFrontOnTruce(zoneId)
 end
 
 -- Formate une duree en secondes en "Xh00", "Xm" ou "Xs" sous la minute

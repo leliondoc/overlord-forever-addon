@@ -1103,13 +1103,6 @@ local function GetOutpostMapPinPosition(site, displayMapID, canvas, parent)
     return GetOverlayPoint(canvas, parent, nx * cw, ny * ch)
 end
 
-local function LayoutKeepMarker(root, site, canvas, parent)
-    local ox, oy = GetKeepMapPinPosition(site, canvas, parent)
-    if not ox or not oy then return nil, nil end
-    PlaceMapPinCenter(root, parent, ox, oy, nil)
-    return ox, oy
-end
-
 function Overlord.MapMarkers:CreateGuildKeepOverlay(site)
     local canvas = GetCanvas()
     local parent = GetOverlayParent()

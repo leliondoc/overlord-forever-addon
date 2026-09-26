@@ -1486,17 +1486,6 @@ local function OnReceiveRG(payload, sender)
     end)
 end
 
--- Pool FR/DE : royaume EU francophone / germanophone (cf. RealmPools.lua). Pas la locale client.
-local function IsLocaleInFRPool()
-    local rp = Overlord.RealmPools
-    return rp and rp.GetOverlordPoolTag and rp:GetOverlordPoolTag() == "fr"
-end
-
-local function IsLocaleInDEPool()
-    local rp = Overlord.RealmPools
-    return rp and rp.GetOverlordPoolTag and rp:GetOverlordPoolTag() == "de"
-end
-
 local function GetCommunityPoolTag()
     local rp = Overlord.RealmPools
     if rp and rp.GetOverlordPoolTag then
@@ -1565,21 +1554,6 @@ function Overlord.Sync:GetCommunityInviteCode()
         return codes[#codes]
     end
     return codes
-end
-
--- The supplied Forever invite is global and intentionally has no region tag.
-function Overlord.Sync:GetCommunityRegionTag()
-    return ""
-end
-
--- Export Check PvP / affichage : aligne sur le pool FR (royaume EU francophone)
-function Overlord.Sync:IsInFrenchCommunityPool()
-    return IsLocaleInFRPool()
-end
-
--- Export Check PvP / affichage : aligne sur le pool DE (royaume EU germanophone)
-function Overlord.Sync:IsInGermanCommunityPool()
-    return IsLocaleInDEPool()
 end
 
 -- C_Club est pret ou les early retries sont epuises : on peut faire confiance a un "pas membre".
@@ -1817,21 +1791,6 @@ function Overlord.Sync:FindEuropeanLeaderboardBridgeClubs()
         self:FindCommunityClub()
     end
     return europeanLeaderboardBridgeClubIds
-end
-
--- Export Check PvP: the global Forever population uses the single Overlord club.
-function Overlord.Sync:IsEligibleForCheckPvPExport()
-    local pr = GetPlayerRegion()
-    if pr ~= "global" then
-        return true
-    end
-    -- En instance PvP suspendue : FindCommunityClub ne relit pas C_Club (tables interdites) ;
-    -- on s'appuie sur le cache communityClubId pour eviter un faux NO_COMMUNITY.
-    if Overlord.InstanceSuspended then
-        return self:FindCommunityClub() ~= nil
-    end
-    -- Re-scan immediat : lastCommunitySearch = 0 cassait le premier GetTime() (< cooldown, jamais C_Club).
-    return self:FindCommunityClub(true, true) ~= nil
 end
 
 -- Reinitialise le compteur de retries au login/entree en front pour relancer la recherche.
@@ -2248,25 +2207,6 @@ function Overlord.Sync:RegisterRecentWhisperTarget(target)
     target = target:match("^%s*(.-)%s*$") or ""
     if target == "" or #target < 2 then return end
     self:_RememberRecentAddonWhisper(target, GetTime())
-end
-
--- Enregistre un credit kill total (K reseau ou credit local groupe) pour bloquer EK additif en double.
--- skipZone=true : le client a deja incremente les compteurs de zone localement (ProcessKill groupe).
-function Overlord.Sync:RegisterRecentKCredit(playerName, skipZone)
-    if not playerName or playerName == "" then return end
-    playerName = self:NormalizeContributorFullName(playerName) or playerName
-    if playerName == "" then return end
-    local now = GetTime()
-    return recentKCredits:Remember(playerName:lower(),
-        { ts = now, skipZone = skipZone and true or false }, now, true)
-end
-
--- Credit kill total (K) recent pour dedup EK et bonus prime BD (+1 si deja compte via K).
-function Overlord.Sync:HasRecentKillCredit(playerName)
-    if not playerName or playerName == "" then return false end
-    playerName = self:NormalizeContributorFullName(playerName) or playerName
-    if playerName == "" then return false end
-    return recentKCredits:Get(playerName:lower(), GetTime()) ~= nil
 end
 
 function Overlord.Sync:SendWhisper(msgType, data, target)
@@ -5592,12 +5532,6 @@ function Overlord.Sync:GetGroupMemberGuild(sender)
     local guild = Overlord:SafeGetGuildInfo(unit) or ""
     cachedGroupGuilds[key] = guild
     return guild
-end
-
--- Ponts GK (implementation dans SyncGuildKeep.lua)
-function Overlord.Sync:GetBNetLinkBand(gameAccountID)
-    if not gameAccountID then return nil end
-    return bnet_links[gameAccountID]
 end
 
 function Overlord.Sync:IsNearbyAddonSender(sender)
@@ -9918,6 +9852,16 @@ function Overlord.Sync:RequestRaidLeaderboardCatchUp()
         and now - priv.lastRaidLateJoinSr < priv.raidLateJoinSrGlobalCooldown then
         return
     end
+    -- Appele depuis chaque nameplate alliee (20-40 par image quand un groupe arrive).
+    -- Avec le drapeau force et le budget whisper epuise, rien ne partait mais le roster
+    -- de 40 unites etait reconstruit a chaque plaque : un essai au plus toutes les 5 s,
+    -- et aucun si le budget de la fenetre courante est deja consomme.
+    if now - (tonumber(priv.lastRaidLateJoinAttemptAt) or -math.huge) < 5 then return end
+    if now - priv.raidLateJoinSrBurstStart < priv.raidLateJoinSrBurstWindow
+        and priv.raidLateJoinSrBurstCount >= priv.raidLateJoinSrBurstMax then
+        return
+    end
+    priv.lastRaidLateJoinAttemptAt = now
 
     local targets = CollectRaidSyncWhisperTargets(priv.raidLateJoinSrMaxTargets + 1)
     if #targets == 0 then return end

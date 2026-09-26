@@ -788,10 +788,6 @@ local function SortRowsWithYield(rows, less, yieldWork)
     return rows
 end
 
-local function SortSrEntries(a, b)
-    return a.key < b.key
-end
-
 local function SanitizeGuild(guild)
     if not guild or guild == "" then return "" end
     guild = guild:gsub("^%s+", ""):gsub("%s+$", "")

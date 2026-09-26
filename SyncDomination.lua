@@ -97,14 +97,6 @@ function Overlord.Sync:ApplyDominationSnapshot(bucket, remoteAlly, remoteHorde, 
     return true
 end
 
-local function NormalizeDominationBoostSnapshotValue(v)
-    v = tonumber(v)
-    if not v or v ~= v or v == math.huge or v == -math.huge then return nil end
-    if v < 0 then return nil end
-    if v > 1 then return nil end
-    return math.floor(v * 10000) / 10000
-end
-
 function Overlord.Sync:ApplyDominationBoostSnapshot(remoteBoostA, remoteBoostH)
     -- Obsolete depuis 7.1.13 : la barre suit les secondes zone, pas dominationBoostPct.
     return false
@@ -150,14 +142,6 @@ function Overlord.Sync:BroadcastDominationToCommunity(payloads, forceTargets)
         end
     end
     self:BroadcastToCommunity("DX", firstPayload, maxMembers, delay, forceTargets, extraWhispers)
-end
-
-local function DominationSourceWins(remoteSource, localSource)
-    remoteSource = tostring(remoteSource or "")
-    localSource = tostring(localSource or "")
-    if remoteSource == "" then return false end
-    if localSource == "" then return true end
-    return remoteSource > localSource
 end
 
 function Overlord.Sync:MergeDominationBucket(bucket, remoteAlly, remoteHorde, remoteSeq, remoteSource, opts)

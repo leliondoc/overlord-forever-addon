@@ -2194,18 +2194,6 @@ local function GetPlayerPositionForResourceMap(mapID)
     return px * 100, py * 100
 end
 
-local function ClampMinimapPinXY(pinX, pinY, halfMM, inset)
-    inset = inset or 0
-    local maxDist = math.max(0, halfMM - inset)
-    local dist = math.sqrt(pinX * pinX + pinY * pinY)
-    if dist > maxDist and dist > 0 then
-        local s = maxDist / dist
-        pinX, pinY = pinX * s, pinY * s
-        dist = maxDist
-    end
-    return pinX, pinY, dist
-end
-
 local function PlaceMinimapPinCenter(pin, pinX, pinY)
     if not pin then return false end
     pinX = SnapMapPinCoord(pinX)
@@ -4135,14 +4123,6 @@ WOOD_WORLD_CONFIG = {
     updateText = UpdateWoodOverlayText,
 }
 
-function Overlord.MapMarkers:CreateMineOverlay(mine)
-    return CreateResourceOverlay(mine, MINE_WORLD_CONFIG)
-end
-
-function Overlord.MapMarkers:CreateWoodOverlay(wood)
-    return CreateResourceOverlay(wood, WOOD_WORLD_CONFIG)
-end
-
 function Overlord.MapMarkers:RefreshMineOverlays(mapID)
     RefreshResourceOverlays(mapID, Overlord.MineDatabase, mineOverlays, MINE_WORLD_CONFIG)
 end
@@ -4536,13 +4516,6 @@ function Overlord.MapMarkers:GetMinimapDriverContext()
     context.sinF = sinF
     context.cosF = cosF
     return context
-end
-
--- Compatibilite pour d'eventuels modules externes : meme contrat, mais sans table temporaire.
-function Overlord.MapMarkers:WithMinimapDriver(fn)
-    if not fn then return end
-    local context = self:GetMinimapDriverContext()
-    if context then fn(context) end
 end
 
 function Overlord.MapMarkers:QueuePassThroughButtons(frame)

@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.0.27"
+Overlord.Version = "1.0.28"
 -- Forever uses one global community. The beta relay remains enabled in parallel
 -- so non-members and temporarily unavailable C_Club rosters still converge.
 Overlord.CommunityModeEnabled = true
@@ -379,10 +379,6 @@ function Overlord:IsLoginCaptureSyncGateActive()
     return self:IsCaptureSyncGateReasonActive("login")
 end
 
-function Overlord:IsInstanceCaptureSyncGateActive()
-    return self:IsCaptureSyncGateReasonActive("instance")
-end
-
 function Overlord:MarkGuildKeepSyncReceived()
     captureSyncGate.gkReceivedDuringGate = true
 end
@@ -588,10 +584,6 @@ function Overlord:ResolveTemporaryKillScoringMapID(mapID)
         mapID = tonumber(info.parentMapID) or 0
     end
     return nil
-end
-
-function Overlord:IsTemporaryKillScoringMap(mapID)
-    return self:ResolveTemporaryKillScoringMapID(mapID) ~= nil
 end
 
 function Overlord:IsInTemporaryKillScoringZone()
@@ -1422,24 +1414,6 @@ function Overlord.Shard:OnKeepShardWitness(payload, sender, channel)
     return true
 end
 
--- Retourne la liste des joueurs sur un shard different du notre
-function Overlord.Shard:GetPlayersOnDifferentShard()
-    local result = {}
-    local myShard = CoerceShardId(self.currentShardID)
-    if myShard == nil then return result end
-    local now = GetTime()
-    for player, shard in pairs(self.knownShards) do
-        local seenAt = self.knownShardUpdatedAt[player] or 0
-        if now - seenAt > SHARD_PEER_TTL then
-            self:RemoveKnownShardPeer(player)
-        elseif shard and tonumber(shard) ~= myShard and self:PartyInviteTargetIsUsable(player)
-            and not self:IsPlayerAlreadyGrouped(player) then
-            result[player] = shard
-        end
-    end
-    return result
-end
-
 -- Shard connu pour un joueur sync (nil si expire ou absent).
 function Overlord.Shard:GetKnownPlayerShard(playerName)
     if not playerName or playerName == "" then return nil end
@@ -1449,26 +1423,6 @@ function Overlord.Shard:GetKnownPlayerShard(playerName)
         return nil
     end
     return self.knownShards[playerName]
-end
-
--- Joueurs connus sur un shard donne. Pour un Guild Keep, ils servent de contacts
--- auxquels le retardataire demande une invitation vers la shard ancree.
-function Overlord.Shard:GetPlayersOnShard(shardId, includeGrouped)
-    local result = {}
-    local sid = CoerceShardId(shardId)
-    if sid == nil then return result end
-    local myShard = CoerceShardId(self.currentShardID)
-    local now = GetTime()
-    for player, shard in pairs(self.knownShards) do
-        local seenAt = self.knownShardUpdatedAt[player] or 0
-        if now - seenAt > SHARD_PEER_TTL then
-            self:RemoveKnownShardPeer(player)
-        elseif CoerceShardId(shard) == sid and self:PartyInviteTargetIsUsable(player)
-            and (includeGrouped or not self:IsPlayerAlreadyGrouped(player)) then
-            result[player] = shard
-        end
-    end
-    return result
 end
 
 local function NormalizeShardPlayerName(name)
@@ -2299,8 +2253,11 @@ local function HandleShardPulseEvent(frame, event, ...)
             and not ObserveShardFromUnit(arg1)
             and not ObserveShardFromUnit("target") then
             if LocalShardEvidenceNeedsRefresh(8) then
-                Overlord.Shard:Update()
-                RefreshShardBadgeAfterScan()
+                -- En zone PvP les GUID joueurs ne portent pas de shard : la preuve reste
+                -- vieille et chaque PARTY_KILL de raid (plusieurs/s en 200v200) lancait un
+                -- scan complet des nameplates. Meme scan force, via le debounce commun.
+                shardEventNeedsUnthrottledScan = true
+                ScheduleShardUpdateFromEvent(frame, event)
             end
         end
         return
@@ -2436,17 +2393,6 @@ local function TryPlaySoundEntry(entry, channelOrder)
         if PlaySoundFile then
             local ok, willPlay = pcall(PlaySoundFile, entry, channel)
             if ok and willPlay then return true end
-        end
-    end
-    return false
-end
-
-local function TryPlaySoundList(ids, channelOrder)
-    if not ids then return false end
-    for i = 1, #ids do
-        local id = ids[i]
-        if id and TryPlaySoundEntry(id, channelOrder) then
-            return true
         end
     end
     return false
@@ -2616,51 +2562,6 @@ local function EmptyLeaderboardBucket()
         -- Ce bucket neuf respecte deja les invariants des reparations lourdes.
         repairVersion = 3,
     }
-end
-
-local function CopyLeaderboardBucket(src)
-    local out = EmptyLeaderboardBucket()
-    if type(src) ~= "table" then return out end
-    if type(src.kills) == "table" then
-        for k, v in pairs(src.kills) do out.kills[k] = v end
-    end
-    if type(src.captures) == "table" then
-        for k, v in pairs(src.captures) do
-            -- Chaque valeur captures est une liste mutable. Une copie superficielle liait
-            -- deux pools SavedVariables : ajouter/fusionner une zone dans le pool courant
-            -- modifiait silencieusement le bucket source conserve pour l'autre pool.
-            if type(v) == "table" then
-                local zones = {}
-                for zoneKey, zoneId in pairs(v) do zones[zoneKey] = zoneId end
-                out.captures[k] = zones
-            else
-                out.captures[k] = v
-            end
-        end
-    end
-    if type(src.captureCount) == "table" then
-        for k, v in pairs(src.captureCount) do out.captureCount[k] = v end
-    end
-    if type(src.bountyTimes) == "table" then
-        for k, v in pairs(src.bountyTimes) do out.bountyTimes[k] = v end
-    end
-    if type(src.bountyKills) == "table" then
-        for k, v in pairs(src.bountyKills) do out.bountyKills[k] = v end
-    end
-    if type(src.playerInfo) == "table" then
-        for name, info in pairs(src.playerInfo) do
-            if type(info) == "table" then
-                local copy = {}
-                for k, v in pairs(info) do copy[k] = v end
-                out.playerInfo[name] = copy
-            else
-                out.playerInfo[name] = info
-            end
-        end
-    end
-    out.campaignStart = tonumber(src.campaignStart) or out.campaignStart
-    out.campaignId = tonumber(src.campaignId) or out.campaignId
-    return out
 end
 
 local function CancelTimerList(list)
@@ -5792,18 +5693,6 @@ function Overlord:GetDominationDisplayFractions()
     if allyPct < 0 then allyPct = 0 end
     if allyPct > 1 then allyPct = 1 end
     return allyPct, 1 - allyPct
-end
-
--- Secondes exportees vers Check PvP : meme ratio que la barre in-game, total zone-secondes inchange.
-function Overlord:GetDominationExportSeconds()
-    local allyTime, hordeTime = self:GetDominationTotals()
-    local total = allyTime + hordeTime
-    if total <= 0 then return 0, 0 end
-    local allyPct = self:GetDominationDisplayFractions()
-    local allyS = math.floor(total * allyPct + 0.5)
-    local hordeS = total - allyS
-    if hordeS < 0 then hordeS = 0 end
-    return CapDominationValue(allyS), CapDominationValue(hordeS)
 end
 
 -- Bonus domination bois : secondes de zone persistantes (CRDT max), pas dominationBoostPct.

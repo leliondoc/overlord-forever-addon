@@ -3635,34 +3635,6 @@ function Overlord.UI:RefreshPanelState(force)
     self:RefreshForces()
 end
 
-function Overlord.UI:InvalidatePanelStateCache()
-    lastPanelStateKey = nil
-    lastForcesOffZone = false
-    lastForcesDisplayKey = nil
-    lastActiveZoneIdle = false
-    lastHeaderBandHeight = nil
-    lastDominationPaintKey = nil
-    lastShardBadgeID = nil
-    lastShardBadgeRealm = nil
-    lastCommunityLayoutKey = nil
-    lastMainFrameHeight = nil
-    lastForcesAnchorMode = nil
-    lastFrontEmblemKey = nil
-    lastActiveZoneStatusKey = nil
-    cachedRefreshActiveZone = nil
-    cachedRefreshActiveZoneAt = 0
-    lastCommunityClubPollAt = 0
-    cachedCommunityClubId = nil
-    lastCommunityStatsAt = 0
-    cachedCommunityOnline = nil
-    lastGkHudRefreshAt = 0
-    if zoneListFrame and zoneListFrame.zoneLines then
-        for _, line in ipairs(zoneListFrame.zoneLines) do
-            line._paintKey = nil
-        end
-    end
-end
-
 -- MAJ texte minuteur / treve sur les lignes deja peintes (evite un Refresh() complet chaque seconde).
 function Overlord.UI:UpdateZoneListTimers()
     if not zoneListFrame or not zoneListFrame.zoneLines then return end

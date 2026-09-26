@@ -714,18 +714,6 @@ function Overlord:GetDominationVictoryBonusTotals()
         NormalizeFiniteInteger(store.totals.Horde) or 0
 end
 
-function Overlord:HasDominationVictoryEventNear(frontId, faction, victoryTs)
-    local store = EnsureVictoryEventsDB()
-    if not store then return false end
-    local probe = {
-        frontId = SanitizeVictoryFrontId(frontId),
-        faction = faction,
-        victoryTs = NormalizeFiniteInteger(victoryTs) or 0,
-    }
-    local component = FindVictoryComponent(store, probe)
-    return component and next(component) ~= nil
-end
-
 function Overlord:GetDominationVictoryEventNear(frontId, faction, victoryTs)
     local store = EnsureVictoryEventsDB()
     if not store then return nil end

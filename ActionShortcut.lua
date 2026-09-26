@@ -190,14 +190,6 @@ local function RefreshActionButtonIcons()
     end
 end
 
-function Overlord.ActionShortcut:GetIconTexture()
-    return ICON_TEXTURE
-end
-
-function Overlord.ActionShortcut:GetMacroBody()
-    return MACRO_BODY
-end
-
 function Overlord.ActionShortcut:EnsureMacro()
     if IsInCombat() then
         Notify((L and L.ACTION_SHORTCUT_COMBAT) or "The action bar shortcut cannot be created during combat.")

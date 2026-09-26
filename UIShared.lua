@@ -113,24 +113,6 @@ function Overlord.UI.GetViewerFactionPalette()
     }
 end
 
-function Overlord.UI.ApplyViewerFactionWaxSeal(tex, opts)
-    if not tex then return false end
-    opts = opts or {}
-    local fac = Overlord.PlayerFaction or UnitFactionGroup("player")
-    local atlas = FACTION_WAX_SEAL_ATLAS[fac]
-    if not atlas or not tex.SetAtlas then
-        tex:Hide()
-        return false
-    end
-    tex:SetAtlas(atlas, true)
-    if opts.size then
-        tex:SetSize(opts.size, opts.size)
-    end
-    tex:SetAlpha(opts.alpha or 0.92)
-    tex:Show()
-    return true
-end
-
 local cachedWoodBgFile
 local woodBgResolverFrame
 
@@ -316,31 +298,6 @@ local function ApplyScenarioTitleTopCrop(tex, atlas, keepTopPx, cropSidePx, trim
     return true
 end
 
--- Calque dedie au-dessus du fond NineSlice / contenu du panneau.
-local function EnsureChromeHolder(parent, chrome)
-    if not chrome.holder then
-        chrome.holder = CreateFrame("Frame", nil, parent)
-        chrome.holder:SetAllPoints(parent)
-        chrome.holder:EnableMouse(false)
-    end
-    chrome.holder:Show()
-    local level = (parent.GetFrameLevel and parent:GetFrameLevel()) or 0
-    chrome.holder:SetFrameLevel(level + 25)
-
-    if chrome.top and chrome.top.GetParent and chrome.top:GetParent() ~= chrome.holder then
-        chrome.top:Hide()
-        chrome.top = nil
-    end
-    if chrome.topFade then
-        chrome.topFade:Hide()
-        chrome.topFade = nil
-    end
-    if not chrome.top then
-        chrome.top = chrome.holder:CreateTexture(nil, "OVERLAY", nil, 7)
-    end
-    return chrome.holder
-end
-
 -- Taille native (pixels UI) d'un atlas, mise en cache : sert a garder le ratio
 -- largeur/hauteur d'origine quand on redimensionne le bandeau a la largeur du panneau.
 local perksAtlasNativeSizeCache = {}
@@ -422,44 +379,6 @@ function Overlord.UI.ApplyPerksHordeVsAllianceChrome(parent, opts)
     return chrome
 end
 
--- Panneau large (classement) : partie haute du TitleBG BfA, faction du joueur.
--- opts : topOverlap, keepTopPx, trimBottomPx, cropSidePx, alpha
-function Overlord.UI.ApplyPerksHordeVsAllianceChromeWide(parent, opts)
-    if not parent then return nil end
-    opts = opts or {}
-    HideStalePerksChrome(parent)
-
-    local keepTopPx = opts.keepTopPx or BFA_SCENARIO_TITLE_KEEP_TOP_PX
-    local trimBottomPx = opts.trimBottomPx or BFA_SCENARIO_TITLE_TRIM_BOTTOM_PX
-    local topOverlap = opts.topOverlap or (22 - trimBottomPx)
-    local cropSidePx = opts.cropSidePx or 0
-    local alpha = opts.alpha or 1
-
-    local chrome = parent._expandableChrome
-    if not chrome then
-        chrome = {}
-        parent._expandableChrome = chrome
-    end
-    EnsureChromeHolder(parent, chrome)
-    if chrome.topFade then chrome.topFade:Hide() end
-    if chrome.topCap then chrome.topCap:Hide() end
-    if chrome.bottom then chrome.bottom:Hide() end
-    if chrome.topAlliance then chrome.topAlliance:Hide() end
-    if chrome.topHorde then chrome.topHorde:Hide() end
-
-    if parent.SetClipsChildren then parent:SetClipsChildren(false) end
-
-    local isHorde = Overlord.PlayerFaction == "Horde"
-    local topAtlas = isHorde and BFA_SCENARIO_HORDE_TOP_ATLAS or BFA_SCENARIO_ALLIANCE_TOP_ATLAS
-    if ApplyScenarioTitleTopCrop(chrome.top, topAtlas, keepTopPx, cropSidePx, trimBottomPx) then
-        chrome.top:ClearAllPoints()
-        chrome.top:SetPoint("BOTTOM", parent, "TOP", 0, -topOverlap)
-        chrome.top:SetAlpha(alpha)
-    end
-
-    return chrome
-end
-
 -- Bandeau scenario BfA complet (style fin d'arene) : remplace le fond tooltip sur HUD etroit.
 -- opts : width, keepTopPx, trimBottomPx, cropSidePx, wingPad, crestLift, alpha
 function Overlord.UI.ApplyScenarioArenaBannerChrome(parent, opts)
@@ -512,44 +431,6 @@ function Overlord.UI.ApplyScenarioArenaBannerChrome(parent, opts)
     return chrome
 end
 
--- Orbe Mode Guerre + anneau talent (centre d'un cluster de portraits).
--- opts : orbSize, ringSize, orbAlpha, ringAlpha
-function Overlord.UI.ApplyPerksHordeVsAllianceAccent(parent, opts)
-    if not parent then return nil end
-    opts = opts or {}
-
-    local accent = parent._perksAccent
-    if not accent then
-        accent = {}
-        parent._perksAccent = accent
-        accent.ring = parent:CreateTexture(nil, "ARTWORK", nil, -2)
-        accent.orb = parent:CreateTexture(nil, "ARTWORK", nil, -1)
-    end
-
-    local ringSize = opts.ringSize or 72
-    local orbSize = opts.orbSize or 48
-    local ringAlpha = opts.ringAlpha or 0.32
-    local orbAlpha = opts.orbAlpha or 0.40
-
-    if TrySetBlizzardAtlas(accent.ring, PERKS_CHROME_RING_ATLAS, true) then
-        accent.ring:SetSize(ringSize, ringSize)
-        accent.ring:ClearAllPoints()
-        accent.ring:SetPoint("CENTER", parent, "CENTER", 0, 0)
-        accent.ring:SetAlpha(ringAlpha)
-    end
-
-    if opts.orbSize and TrySetBlizzardAtlas(accent.orb, PERKS_CHROME_ORB_ATLAS, true) then
-        accent.orb:SetSize(orbSize, orbSize)
-        accent.orb:ClearAllPoints()
-        accent.orb:SetPoint("CENTER", parent, "CENTER", 0, 0)
-        accent.orb:SetAlpha(orbAlpha)
-    else
-        accent.orb:Hide()
-    end
-
-    return accent
-end
-
 -- Sous-panneau sombre a bordure doree fine.
 -- opts : panelBg, borderColor, borderAlpha, insets
 function Overlord.UI.CreateWC3SubPanel(parent, w, h, opts)
@@ -572,30 +453,6 @@ function Overlord.UI.CreateWC3SubPanel(parent, w, h, opts)
     f:SetBackdropColor(panelBg[1], panelBg[2], panelBg[3], panelBg[4] or 0.85)
     f:SetBackdropBorderColor(borderColor[1], borderColor[2], borderColor[3], borderAlpha)
     return f
-end
-
--- Pastille de couleur + ligne de statut (panneau principal, popups).
--- opts : height, font (template WoW)
-function Overlord.UI.CreateStatusBadge(parent, opts)
-    opts = opts or {}
-    local row = CreateFrame("Frame", nil, parent)
-    row:SetHeight(opts.height or 18)
-
-    local dot = row:CreateTexture(nil, "ARTWORK")
-    dot:SetSize(8, 8)
-    dot:SetPoint("LEFT", row, "LEFT", 0, 0)
-    dot:SetColorTexture(0.5, 0.5, 0.5, 0.95)
-    row.dot = dot
-
-    local text = row:CreateFontString(nil, "OVERLAY", opts.font or "GameFontNormal")
-    text:SetPoint("LEFT", dot, "RIGHT", 6, 0)
-    text:SetPoint("RIGHT", row, "RIGHT", 0, 0)
-    text:SetJustifyH("LEFT")
-    text:SetWordWrap(false)
-    text:SetMaxLines(1)
-    row.text = text
-
-    return row
 end
 
 -- Bouton style WC3 (texte, icone optionnelle, onClick optionnel).

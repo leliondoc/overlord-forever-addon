@@ -888,21 +888,6 @@ local function FormatAllyCallerName(name)
     return "|cFFFFD100" .. name .. "|r"
 end
 
-local function FormatEnemyCallerName(name)
-    if not name or name == "" then return "" end
-    if Overlord.PlayerFaction == "Alliance" then
-        return "|cFFFF4444" .. name .. "|r"
-    elseif Overlord.PlayerFaction == "Horde" then
-        return "|cFF4488FF" .. name .. "|r"
-    end
-    return "|cFFFF8800" .. name .. "|r"
-end
-
-local function FormatShortDisplayName(fullName)
-    if not fullName or fullName == "" then return "?" end
-    return fullName:match("^(.-)%-") or fullName
-end
-
 -- Popup RP quand un allie sonne le cor de guerre (reception FC).
 function Overlord.Popups:ShowFactionCall(senderName, zoneName, frontName)
     if not senderName or senderName == "" then return end
@@ -924,24 +909,6 @@ function Overlord.Popups:ShowFactionCall(senderName, zoneName, frontName)
     })
 end
 
--- Popup RP quand un allie assume le role de General (reception GE).
-function Overlord.Popups:ShowGeneralAssumed(senderName, frontName, faction)
-    if not senderName or senderName == "" then return end
-    frontName = frontName or ""
-    local caller = FormatAllyCallerName(senderName)
-    local body
-    if faction == "Horde" then
-        body = string.format(L.POPUP_GENERAL_BODY_HORDE or "", caller, frontName)
-    else
-        body = string.format(L.POPUP_GENERAL_BODY or "", caller, frontName)
-    end
-    self:ShowDialog(nil, L.POPUP_GENERAL_TITLE, body, nil, {
-        showFactionSeal = true,
-        addonSoundKey = "general_assumed",
-        okText = L.POPUP_GENERAL_OK,
-    })
-end
-
 -- Alerte raid a chaque entree de front tant que la version reste en retard (cf. OnEnterFront).
 function Overlord.Popups:ShowOutdatedVersion(latestVersion)
     if not latestVersion or latestVersion == "" or not L.RAID_WARNING_OUTDATED then return end
@@ -949,18 +916,6 @@ function Overlord.Popups:ShowOutdatedVersion(latestVersion)
     if Overlord.PrintRaidWarning then
         Overlord:PrintRaidWarning(msg)
     end
-end
-
--- Alerte map-wide : general ennemi assume le commandement (front actif).
-function Overlord.Popups:ShowGeneralEnemySpotted(senderName, frontName)
-    if not L or not L.POPUP_GENERAL_ENEMY_SPOTTED_BODY then return end
-    local enemy = FormatEnemyCallerName(FormatShortDisplayName(senderName))
-    local body = string.format(L.POPUP_GENERAL_ENEMY_SPOTTED_BODY, enemy, frontName or "")
-    self:ShowDialog(nil, L.POPUP_GENERAL_ENEMY_SPOTTED_TITLE, body, nil, {
-        showFactionSeal = true,
-        addonSoundKey = "general_assumed",
-        okText = L.POPUP_GENERAL_OK,
-    })
 end
 
 -- Enregistre une annonce login : { id, title, body, when? }
@@ -2119,26 +2074,6 @@ function Overlord.Popups:ShowFeaturedFrontDialog(forcePreview)
         self:MarkFeaturedFrontShownToday()
     end
     return true
-end
-
-function Overlord.Popups:PreviewFeaturedFront()
-    if not Overlord.IsInitialized then return end
-    if OverlordDB then
-        OverlordDB.config = OverlordDB.config or {}
-        OverlordDB.config.popupsDailyShown = OverlordDB.config.popupsDailyShown or {}
-        OverlordDB.config.popupsDailyShown[FEATURED_FRONT_POPUP_ID] = nil
-    end
-    self:ShowFeaturedFrontDialog(true)
-end
-
-function Overlord.Popups:ToggleFeaturedFrontPanel()
-    local mainFrame = GetMainPanelFrame()
-    if mainFrame and mainFrame:IsShown() then
-        ToggleFeaturedFrontExpanded()
-    elseif Overlord.UI then
-        Overlord.UI:Show()
-        ToggleFeaturedFrontExpanded()
-    end
 end
 
 -- Onglet fleche sur le bord gauche du panneau principal ; restaure l'etat replie/deplie.

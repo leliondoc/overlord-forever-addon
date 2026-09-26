@@ -165,10 +165,6 @@ local function FilterRows(rows, searchText)
     return out
 end
 
-function Overlord.HallOfFameData:InvalidateCache()
-    donorRows = nil
-end
-
 function Overlord.HallOfFameData:GetHonorView(categoryId, searchText)
     local cache = EnsureRows()
     if categoryId and categoryId ~= "donors" and categoryId ~= "summary" then
@@ -203,26 +199,6 @@ function Overlord.HallOfFameData:GetRecentHonorRows(limit, searchText)
     local count = math.min(limit, #view.rows)
     for i = 1, count do
         out[i] = view.rows[i]
-    end
-    return out
-end
-
-function Overlord.HallOfFameData:GetProgressStats()
-    return EnsureRows().stats
-end
-
-function Overlord.HallOfFameData:GetTotalPoints()
-    return EnsureRows().stats.totalPoints
-end
-
-function Overlord.HallOfFameData:GetDonorEntries()
-    local cache = EnsureRows()
-    local out = {}
-    for i = 1, #cache.rows do
-        local row = cache.rows[i]
-        if row.data then
-            out[#out + 1] = row.data
-        end
     end
     return out
 end

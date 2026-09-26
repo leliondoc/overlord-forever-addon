@@ -309,13 +309,6 @@ local function RefreshPvpKillBaselines()
     ResetPvpKillReconciliation()
 end
 
-local function RefreshKillingBlowBaseline()
-    local killingBlows = GetKillingBlows()
-    if killingBlows > previousKillingBlows then
-        previousKillingBlows = killingBlows
-    end
-end
-
 -- Retente la résolution GUID avant d'abandonner le nom de la victime.
 local function ResolvePendingUnknownLocalKill(expectedPending)
     local pending = pendingUnknownLocalKill

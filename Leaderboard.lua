@@ -97,19 +97,6 @@ local function GetKillDedupKey(name)
     return dk and dk:lower() or nil
 end
 
-local function EnsureDedupKillMaxIndex(lb)
-    if dedupKillMaxIndex then return dedupKillMaxIndex end
-    dedupKillMaxIndex = {}
-    for name, count in pairs(lb.kills or {}) do
-        local dk = GetKillDedupKey(name)
-        count = tonumber(count) or 0
-        if dk and count > (dedupKillMaxIndex[dk] or 0) then
-            dedupKillMaxIndex[dk] = count
-        end
-    end
-    return dedupKillMaxIndex
-end
-
 local function UpdateDedupKillMaxIndex(name, count)
     NoteDedupCanonicalName(Overlord.Leaderboard, name)
     if not dedupKillMaxIndex then return end
@@ -118,14 +105,6 @@ local function UpdateDedupKillMaxIndex(name, count)
     if dk and count > (dedupKillMaxIndex[dk] or 0) then
         dedupKillMaxIndex[dk] = count
     end
-end
-
-function Overlord.Leaderboard:GetMaxKillsForDedupName(playerName)
-    if not playerName or playerName == "" then return 0 end
-    local dk = GetKillDedupKey(playerName)
-    if not dk then return tonumber(self.kills and self.kills[playerName]) or 0 end
-    local index = EnsureDedupKillMaxIndex(self)
-    return tonumber(index[dk]) or 0
 end
 
 -- Index inverse dedupKey -> max captures : miroir de dedupKillMaxIndex. Obligatoire car
@@ -293,101 +272,6 @@ local function ensureGuildKeepLeaderboardTables(lb)
     OverlordDB.guildKeepOfficialTenants = OverlordDB.guildKeepOfficialTenants or {}
     OverlordDB.guildKeepCutoffSnapshots = OverlordDB.guildKeepCutoffSnapshots or {}
     return epoch
-end
-
--- Royaumes francophones EU mal classes (ex. Vol'jin) : retag eu -> fr avant purge login.
-function Overlord.Leaderboard:MigrateGuildKeepDataPoolTag(fromPool, toPool)
-    fromPool = normalizeSavedVarsPool(fromPool)
-    toPool = normalizeSavedVarsPool(toPool)
-    if fromPool == "" or toPool == "" or fromPool == toPool then return false end
-    local changed = false
-    local function retagPool(row)
-        if type(row) ~= "table" then return end
-        if normalizeSavedVarsPool(row.pool) == fromPool then
-            row.pool = toPool
-            changed = true
-        end
-    end
-    for _, row in pairs(self:GetGuildKeepTenantsTable()) do
-        retagPool(row)
-    end
-    for _, row in pairs(self:GetGuildKeepSiegeWinAwardsTable()) do
-        retagPool(row)
-    end
-    if OverlordDB and OverlordDB.guildKeepOfficialTenants then
-        for _, row in pairs(OverlordDB.guildKeepOfficialTenants) do
-            retagPool(row)
-        end
-    end
-    if OverlordDB and OverlordDB.guildKeepCutoffSnapshots then
-        for _, snapshot in pairs(OverlordDB.guildKeepCutoffSnapshots) do
-            if type(snapshot) == "table" then
-                for _, row in pairs(snapshot) do
-                    retagPool(row)
-                    if type(row) == "table" and type(row.byBase) == "table" then
-                        for _, candidate in pairs(row.byBase) do retagPool(candidate) end
-                    end
-                end
-            end
-        end
-    end
-    if changed then self:MarkDirty() end
-    return changed
-end
-
--- Retire du disque les projections de fortins d'un autre pool (changement multi-compte).
-function Overlord.Leaderboard:PurgeGuildKeepLbForeignPoolData()
-    local changed = false
-    local tenants = self:GetGuildKeepTenantsTable()
-    for siteKey, t in pairs(tenants) do
-        if type(t) == "table" and not guildKeepLbPoolMatchesCurrent(t.pool) then
-            tenants[siteKey] = nil
-            changed = true
-        end
-    end
-    local awards = self:GetGuildKeepSiegeWinAwardsTable()
-    for key, award in pairs(awards) do
-        if type(award) == "table" and not guildKeepLbPoolMatchesCurrent(award.pool) then
-            awards[key] = nil
-            changed = true
-        end
-    end
-    local official = OverlordDB and OverlordDB.guildKeepOfficialTenants
-    if type(official) == "table" then
-        for siteKey, tenant in pairs(official) do
-            if type(tenant) ~= "table" or not guildKeepLbPoolMatchesCurrent(tenant.pool) then
-                official[siteKey] = nil
-                changed = true
-            end
-        end
-    end
-    local snapshots = OverlordDB and OverlordDB.guildKeepCutoffSnapshots
-    if type(snapshots) == "table" then
-        for dayKey, snapshot in pairs(snapshots) do
-            if type(snapshot) ~= "table" then
-                snapshots[dayKey] = nil
-                changed = true
-            else
-                for siteKey, row in pairs(snapshot) do
-                    if type(row) ~= "table" or not guildKeepLbPoolMatchesCurrent(row.pool) then
-                        snapshot[siteKey] = nil
-                        changed = true
-                    elseif type(row.byBase) == "table" then
-                        for baseKey, candidate in pairs(row.byBase) do
-                            if type(candidate) ~= "table"
-                                or not guildKeepLbPoolMatchesCurrent(candidate.pool) then
-                                row.byBase[baseKey] = nil
-                                changed = true
-                            end
-                        end
-                    end
-                end
-                if not next(snapshot) then snapshots[dayKey] = nil end
-            end
-        end
-    end
-    if changed then self:MarkDirty() end
-    return changed
 end
 
 -- Retire les caracteres qui cassent le protocole LK (|:=,)
@@ -959,25 +843,6 @@ function Overlord.Leaderboard:PatchDedupMetaGuildForPlayer(playerName, guild, fo
     return true
 end
 
--- Timestamp d'affirmation de guilde connu pour un contributeur (dedup meta ou playerInfo).
-function Overlord.Leaderboard:GetPlayerGuildAt(playerName)
-    if not playerName or playerName == "" then return 0 end
-    local sync = Overlord.Sync
-    if sync and sync.NormalizeContributorFullName then
-        playerName = sync:NormalizeContributorFullName(playerName)
-    end
-    local getDK = sync and sync.GetCaptureContributorDedupKey
-    local dk = getDK and getDK(sync, playerName)
-    if dk and self:EnsureDedupMetaIndex() then
-        local b = self._dedupMetaIndex[dk:lower()]
-        if b and normalizeGuildAt(b.guildAt) > 0 then
-            return normalizeGuildAt(b.guildAt)
-        end
-    end
-    local info = self:GetPlayerInfo(playerName)
-    return normalizeGuildAt(info and info.guildAt)
-end
-
 function Overlord.Leaderboard:GetHotPlayerClass(playerName)
     if not playerName or playerName == "" then return "" end
     local sync = Overlord.Sync
@@ -1049,12 +914,6 @@ function Overlord.Leaderboard:IsLocalPlayerGuildTarget(playerName)
         end
     end
     return false
-end
-
--- Guilde confirmee par K (proprietaire) ou perso local : GY ne doit pas l'ecraser.
-function Overlord.Leaderboard:HasAuthoritativeGuildForPlayer(playerName)
-    local _, _, authoritative = self:GetHotPlayerGuildState(playerName)
-    return authoritative == true
 end
 
 -- Index O(n) sur playerInfo : evite de rescanner toutes les cles a chaque GetExportPlayerMeta.
@@ -1456,20 +1315,6 @@ function Overlord.Leaderboard:PrepareForHeavyRead(forceMerge)
     if self.MaybeAwardGuildKeepDailyWins then
         self:MaybeAwardGuildKeepDailyWins()
     end
-end
-
-function Overlord.Leaderboard:IsDedupKeyForLocalPlayer(dk)
-    if not dk or dk == "" then return false end
-    local sync = Overlord.Sync
-    local getDK = sync and sync.GetCaptureContributorDedupKey
-    if getDK and sync.GetPlayerFullName then
-        local myFull = sync:GetPlayerFullName()
-        if myFull then
-            local myK = getDK(sync, myFull)
-            if myK and myK:lower() == dk:lower() then return true end
-        end
-    end
-    return false
 end
 
 local DISPLAY_KILL_RANK_LIMIT = Overlord.Leaderboard.KILL_RANK_LIMIT
@@ -3517,21 +3362,6 @@ function Overlord.Leaderboard:NormalizePlayerInfoClassTokens(yieldWork)
     end
 end
 
--- Migration 3.2.14 : nettoie les UNKNOWN persistes en DB
--- UNKNOWN etait ecrit a tort dans les anciennes versions, bloquant l'enrichissement
-function Overlord.Leaderboard:CleanupUnknownClassesInDB()
-    local cleaned = 0
-    for name, info in pairs(self.playerInfo or {}) do
-        if info and info.class == "UNKNOWN" then
-            info.class = ""
-            cleaned = cleaned + 1
-        end
-    end
-    if cleaned > 0 then
-        self:MarkMetaDirty()
-    end
-end
-
 function Overlord.Leaderboard:IsLocalFactionAlias(playerName)
     if not playerName or playerName == "" then return false end
     if self:IsLocalDisplayName(playerName) then return true end
@@ -3837,23 +3667,6 @@ function Overlord.Leaderboard:MergeOwnedGuildMetadata(playerName, guild, guildAt
     return true
 end
 
-function Overlord.Leaderboard:GetExportPlayerLevel(playerName)
-    if not playerName or playerName == "" then return 0 end
-    local sync = Overlord.Sync
-    if sync and sync.NormalizeContributorFullName then
-        playerName = sync:NormalizeContributorFullName(playerName)
-    end
-    if not playerName or playerName == "" then return 0 end
-    local getDK = sync and sync.GetCaptureContributorDedupKey
-    local dk = getDK and sync:GetCaptureContributorDedupKey(playerName) or playerName
-    if dk and self:EnsureDedupMetaIndex() then
-        local b = self._dedupMetaIndex[dk:lower()]
-        if b then return math.floor(tonumber(b.level) or 0) end
-    end
-    local info = self:GetPlayerInfo(playerName)
-    return math.floor(tonumber(info and info.level) or 0)
-end
-
 -- Race connue pour export UI / SR : Communaute en priorite, LR/K legacy en fallback.
 function Overlord.Leaderboard:GetExportPlayerRace(playerName, allowCommunityRefresh)
     if not playerName or playerName == "" then return "", 0 end
@@ -3958,11 +3771,6 @@ function Overlord.Leaderboard:SetPlayerRace(
     if not fromSync and sync and sync.MaybeBroadcastObservedLeaderboardRace then
         sync:MaybeBroadcastObservedLeaderboardRace(playerName, normRace, sex, observedAt)
     end
-end
-
-function Overlord.Leaderboard:SetPlayerRaceFromSync(
-    playerName, raceFile, raceSexOpt, observedAtOpt)
-    self:SetPlayerRace(playerName, raceFile, raceSexOpt, true, observedAtOpt)
 end
 
 -- Complete la race depuis nameplates / groupe (affichage local, hors chemin chaud sync).
@@ -4290,48 +4098,6 @@ function Overlord.Leaderboard:GetExportPlayerMeta(playerName)
     return bestClass, bestFaction
 end
 
--- Locale client (sync K/LK) agregee comme la faction : entree la plus recente (factionAt) avec locale non vide.
--- Join lexical stable entre alias equivalents.
-function Overlord.Leaderboard:GetExportPlayerLocale(playerName)
-    if not playerName or playerName == "" then return "" end
-    local sync = Overlord.Sync
-    local getDK = sync and sync.GetCaptureContributorDedupKey
-    local dk = getDK and sync:GetCaptureContributorDedupKey(playerName) or playerName
-
-    if dk and self:EnsureDedupMetaIndex() then
-        local b = self._dedupMetaIndex[dk:lower()]
-        if b and b.locale and b.locale ~= "" then
-            return b.locale
-        end
-        return ""
-    end
-
-    local info = self:GetPlayerInfo(playerName)
-    return sanitizeLocaleTag((info and info.locale) or "")
-end
-
-local function InferContributorPoolHintForLocale(playerName)
-    local pool = normalizeSavedVarsPool(
-        Overlord.Leaderboard:GetContributorSavedVarsPool(playerName) or "")
-    if pool ~= "" then return pool end
-    if not playerName or playerName == "" then return "" end
-    local rp = Overlord.RealmPools
-    if rp and rp.InferPoolTagFromRealmName then
-        return normalizeSavedVarsPool(rp:InferPoolTagFromRealmName(playerName) or "")
-    end
-    return ""
-end
-
-function Overlord.Leaderboard:GetLeaderboardDisplayTag(playerName)
-    if not playerName or playerName == "" then return "" end
-    local localeTag = sanitizeLocaleTag(self:GetExportPlayerLocale(playerName))
-    if localeTag == "" then return "" end
-    if Overlord.FormatLocaleTagForDisplay then
-        return Overlord:FormatLocaleTagForDisplay(localeTag, InferContributorPoolHintForLocale(playerName))
-    end
-    return localeTag:upper()
-end
-
 -- Guilde agregee comme locale : premiere entree non vide sur les cles dedup ; perso local via GetGuildInfo.
 function Overlord.Leaderboard:GetExportPlayerGuild(playerName)
     if not playerName or playerName == "" then return "" end
@@ -4355,30 +4121,6 @@ function Overlord.Leaderboard:GetExportPlayerGuild(playerName)
 
     local info = self:GetPlayerInfo(playerName)
     return sanitizeGuildName((info and info.guild) or "")
-end
-
--- Demande aux pairs (GR/GY) les guildes manquantes pour le classement guildes.
-function Overlord.Leaderboard:RequestMissingGuildsForKillRows()
-    local sync = Overlord.Sync
-    if not sync or not sync.MaybeRequestMissingGuild then return end
-    if Overlord.InstanceSuspended then return end
-    local maxAsk = 32
-    local missing = {}
-    for name, kills in pairs(self.kills or {}) do
-        if (kills or 0) > 0 then
-            local guild = self:GetExportPlayerGuild(name)
-            if not guild or guild == "" then
-                missing[#missing + 1] = { name = name, kills = kills }
-            end
-        end
-    end
-    table.sort(missing, function(a, b)
-        if a.kills ~= b.kills then return a.kills > b.kills end
-        return (a.name or "") < (b.name or "")
-    end)
-    for i = 1, math.min(#missing, maxAsk) do
-        sync:MaybeRequestMissingGuild(missing[i].name)
-    end
 end
 
 -- Rafraichit la guilde du perso local avant agregation (pas d'inference tierce depuis le groupe).
@@ -5416,73 +5158,6 @@ function Overlord.Leaderboard:ApplyOutpostCaptureCountSync(siteKey, guild, facti
     return anchorChanged or mergedCount > current or factionChanged
 end
 
--- Applique un identifiant CRDT OE deja confirme par trois expediteurs distincts.
--- kind="E" : captureTs ; kind="A" : total + latestTs de l'ancre.
-function Overlord.Leaderboard:ApplyOutpostLedgerProofSync(
-    siteKey, guild, faction, poolTag, kind, value, proofTs)
-    siteKey = tostring(siteKey or "")
-    guild = sanitizeGuildName(guild or "")
-    poolTag = normalizeSavedVarsPool(poolTag) or ""
-    value = math.floor(tonumber(value) or 0)
-    proofTs = math.floor(tonumber(proofTs) or 0)
-    if not isValidOutpostSite(siteKey) or guild == "" or poolTag == ""
-        or not outpostLbPoolMatchesCurrent(poolTag)
-        or (faction ~= "Alliance" and faction ~= "Horde") then return false end
-    local campaignStart = self:GetCurrentCampaignStart()
-    if proofTs <= 0 or not self:IsTimestampInCurrentCampaign(proofTs, campaignStart)
-        or proofTs > leaderboardServerNow() + 300 then return false end
-    if kind == "A" and (value <= 0 or value > PLAUSIBLE_OUTPOST_CAPTURE_COUNT) then return false end
-    if kind == "E" then value = proofTs end
-    if kind ~= "A" and kind ~= "E" then return false end
-
-    ensureOutpostLeaderboardTables(self)
-    local guildKey = guild:lower()
-    local rowKey = outpostCaptureRowKey(siteKey, guildKey, poolTag)
-    if rowKey == "" then return false end
-    local counts = self:GetOutpostCaptureCountsTable()
-    local row = counts[rowKey]
-    if not row then
-        row = {
-            siteKey = siteKey, guild = guild, guildKey = guildKey, faction = faction,
-            factionAt = proofTs,
-            count = 0, lastTs = 0, floorTs = 0, events = {}, locAnchors = {},
-            eventLedgerVersion = 2, eventLedgerBoundsV1 = true,
-            eventLedgerPreparedV1 = true, eventCount = 0,
-            newestEventTs = 0, newestAnchorTs = 0, pool = poolTag,
-        }
-        counts[rowKey] = row
-    end
-    ensureOutpostEventLedgerV2(row)
-    local previousCount = math.floor(tonumber(row.count) or 0)
-    local changed = false
-    if kind == "E" then
-        local eventKey = tostring(proofTs)
-        if not row.events[eventKey] then
-            if math.floor(tonumber(row.count) or 0) >= PLAUSIBLE_OUTPOST_CAPTURE_COUNT then return false end
-            if countOutpostEvents(row) >= PLAUSIBLE_OUTPOST_CAPTURE_COUNT then return false end
-            row.events[eventKey], changed = true, true
-            noteOutpostEventAdded(row, proofTs)
-        end
-    else
-        local anchorKey = tostring(value)
-        local previousTs = tonumber(row.locAnchors[anchorKey])
-        if not previousTs or proofTs < previousTs then
-            row.locAnchors[anchorKey], changed = proofTs, true
-            row.newestAnchorTs = math.max(
-                math.floor(tonumber(row.newestAnchorTs) or 0), proofTs)
-            row.count = math.max(math.floor(tonumber(row.count) or 0), value)
-        end
-    end
-    local mergedCount = math.floor(tonumber(row.count) or 0)
-    row.guild, row.guildKey, row.pool = guild, guildKey, poolTag
-    local factionChanged = mergeOutpostRowFaction(row, faction, proofTs)
-    if changed or mergedCount > previousCount or factionChanged then
-        self:MarkDirty()
-        self:RequestOutpostLedgerRebuild()
-    end
-    return changed or mergedCount > previousCount or factionChanged
-end
-
 function Overlord.Leaderboard:GetGuildKeepSiegeWinAwardsTable()
     if not OverlordDB then return {} end
     ensureGuildKeepLeaderboardTables(self)
@@ -5849,10 +5524,6 @@ end
 
 function Overlord.Leaderboard:GetGuildKeepDailyProofForDay(siteKey, dayKey)
     return getGuildKeepDailyProofForDay(self, siteKey, dayKey)
-end
-
-function Overlord.Leaderboard:GetRawGuildKeepDailyProofForDay(siteKey, dayKey)
-    return getRawGuildKeepDailyProofForDay(self, siteKey, dayKey)
 end
 
 function Overlord.Leaderboard:GetRawGuildKeepDailyProofCandidatesForDay(siteKey, dayKey)
@@ -7295,137 +6966,6 @@ local MAX_HISTORY_ENTRIES = 12
 -- l'historique etait le premier poste de taille du fichier SavedVariables).
 local MAX_HISTORY_PLAYERS = 100
 
-function Overlord.Leaderboard:ArchiveCampaign(campaignStartOverride)
-    if not OverlordDB then return end
-    if not OverlordDB.history then
-        OverlordDB.history = {}
-    end
-
-    local hasData = false
-    for _ in pairs(self.kills) do hasData = true; break end
-    if not hasData then
-        for _ in pairs(self.captures) do hasData = true; break end
-    end
-    if not hasData then
-        for _ in pairs(self.bountyTimes or {}) do hasData = true; break end
-    end
-    if not hasData then
-        for _ in pairs(self.bountyKills or {}) do hasData = true; break end
-    end
-    if not hasData then return end
-
-    local archivedCampaignStart = tonumber(campaignStartOverride) or 0
-    if archivedCampaignStart <= 0 then
-        archivedCampaignStart = tonumber(OverlordDB.leaderboard and OverlordDB.leaderboard.campaignStart) or 0
-    end
-    if archivedCampaignStart <= 0 then
-        local lastCampaign = (OverlordDB and tonumber(OverlordDB.lastResetTimestamp)) or 0
-        if lastCampaign > 0 then
-            archivedCampaignStart = lastCampaign
-        else
-            archivedCampaignStart = self:GetCurrentCampaignStart()
-        end
-    end
-    local scoreBucketEpoch = GetMatchingLeaderboardScoreBucketEpoch(archivedCampaignStart)
-
-    local dateKey = date("%Y-%m-%d_%H%M%S")
-    local entry = {
-        kills = {},
-        captureCounts = {},
-        bountyTimes = {},
-        bountyKills = {},
-        totalZonesCaptured = Overlord.Zones:GetCapturedCount(),
-        campaignStart = archivedCampaignStart,
-        scoreBucketEpoch = scoreBucketEpoch > 0 and scoreBucketEpoch or nil,
-    }
-    OverlordDB.history[dateKey] = entry
-
-    local killRows = {}
-    for k, v in pairs(self.kills) do
-        killRows[#killRows + 1] = { name = k, kills = tonumber(v) or 0 }
-    end
-    table.sort(killRows, function(a, b)
-        if a.kills ~= b.kills then return a.kills > b.kills end
-        return (a.name or "") < (b.name or "")
-    end)
-    for i = 1, math.min(#killRows, MAX_HISTORY_PLAYERS) do
-        entry.kills[killRows[i].name] = killRows[i].kills
-    end
-
-    -- Compte de captures par joueur : les listes completes de zoneIds n'etaient
-    -- lues nulle part et dominaient le poids de l'archive.
-    local capRows = {}
-    for k, v in pairs(self.captureCount or {}) do
-        local n = tonumber(v) or 0
-        if n > 0 then capRows[#capRows + 1] = { name = k, count = n } end
-    end
-    if #capRows == 0 then
-        for k, v in pairs(self.captures) do
-            local n = (type(v) == "table") and #v or (tonumber(v) or 0)
-            if n > 0 then capRows[#capRows + 1] = { name = k, count = n } end
-        end
-    end
-    table.sort(capRows, function(a, b)
-        if a.count ~= b.count then return a.count > b.count end
-        return (a.name or "") < (b.name or "")
-    end)
-    for i = 1, math.min(#capRows, MAX_HISTORY_PLAYERS) do
-        entry.captureCounts[capRows[i].name] = capRows[i].count
-    end
-
-    local bountyTimeRows = {}
-    for k, v in pairs(self.bountyTimes or {}) do
-        local n = tonumber(v) or 0
-        if n > 0 then bountyTimeRows[#bountyTimeRows + 1] = { name = k, count = n } end
-    end
-    table.sort(bountyTimeRows, function(a, b)
-        if a.count ~= b.count then return a.count > b.count end
-        return (a.name or "") < (b.name or "")
-    end)
-    for i = 1, math.min(#bountyTimeRows, MAX_HISTORY_PLAYERS) do
-        entry.bountyTimes[bountyTimeRows[i].name] = bountyTimeRows[i].count
-    end
-
-    local bountyKillRows = {}
-    for k, v in pairs(self.bountyKills or {}) do
-        local n = tonumber(v) or 0
-        if n > 0 then bountyKillRows[#bountyKillRows + 1] = { name = k, count = n } end
-    end
-    table.sort(bountyKillRows, function(a, b)
-        if a.count ~= b.count then return a.count > b.count end
-        return (a.name or "") < (b.name or "")
-    end)
-    for i = 1, math.min(#bountyKillRows, MAX_HISTORY_PLAYERS) do
-        entry.bountyKills[bountyKillRows[i].name] = bountyKillRows[i].count
-    end
-
-    -- Rotation : supprime les campagnes les plus anciennes pour eviter que OverlordDB.history
-    -- croisse indefiniment et remplisse le disque des joueurs.
-    local keys = {}
-    for k in pairs(OverlordDB.history) do keys[#keys + 1] = k end
-    if #keys > MAX_HISTORY_ENTRIES then
-        table.sort(keys)
-        for i = 1, #keys - MAX_HISTORY_ENTRIES do
-            OverlordDB.history[keys[i]] = nil
-        end
-    end
-end
-
--- True si ce nom (ou sa cle dedup) a ete credite en local (combat), pas seulement via sync.
-function Overlord.Leaderboard:HasLocalKillCredit(playerName)
-    if not playerName or playerName == "" then return false end
-    if self:IsLocalDisplayName(playerName) then return true end
-    local keys = OverlordDB and OverlordDB.leaderboardLocalKillKeys
-    if not keys then return false end
-    if keys[playerName] then return true end
-    local sync = Overlord.Sync
-    if sync and sync.GetCaptureContributorDedupKey then
-        local dk = sync:GetCaptureContributorDedupKey(playerName)
-        if dk and keys["#dk:" .. dk] then return true end
-    end
-    return false
-end
-
 -- Marque persistee en SavedVariables (sans inferer depuis le perso connecte).
 function Overlord.Leaderboard:HasPersistedLocalKillMark(playerName)
     if not playerName or playerName == "" then return false end
@@ -7438,19 +6978,6 @@ function Overlord.Leaderboard:HasPersistedLocalKillMark(playerName)
         if dk and keys["#dk:" .. dk] then return true end
     end
     return false
-end
-
--- Extrait les kills locaux d'un bucket avant wipe campagne (perso + MarkLocalKillCredit).
-function Overlord.Leaderboard:SalvageLocalKillRowsFromBucket(bucket)
-    local out = {}
-    if not bucket or type(bucket.kills) ~= "table" then return out end
-    for name, count in pairs(bucket.kills) do
-        local n = tonumber(count) or 0
-        if n > 0 and self:HasLocalKillCredit(name) then
-            out[name] = n
-        end
-    end
-    return out
 end
 
 -- Reinjecte les kills salves (max) dans le bucket courant apres wipe ou resync asymetrique.
@@ -8376,84 +7903,6 @@ function Overlord.Leaderboard:MarkLocalKillCredit(playerName)
     end
 end
 
--- Compat API legacy. Un nom complet Nom-Royaume est une identite distincte et doit etre
--- replique pareil par tous les clients ; une decision basee sur le personnage local divergeait.
-function Overlord.Leaderboard:ShouldRejectSyncKillCreditForAltRealm(playerName)
-    return false
-end
-
--- Conservee pour les anciens appelants : aucune purge receiver-local n'est convergente.
-function Overlord.Leaderboard:PurgeUnplayedAltRealmKillRows()
-    return false
-end
-
--- Pool SavedVariables (us/fr/eu) connu pour ce contributeur (champ pool ou locale sync).
-function Overlord.Leaderboard:GetContributorSavedVarsPool(playerName)
-    if not playerName or playerName == "" then return "" end
-    local sync = Overlord.Sync
-    local getDK = sync and sync.GetCaptureContributorDedupKey
-    local dk = getDK and sync:GetCaptureContributorDedupKey(playerName) or playerName
-
-    local bestPool = ""
-    if dk and self:EnsureDedupMetaIndex() then
-        local bucket = self._dedupMetaIndex[dk:lower()]
-        bestPool = normalizeSavedVarsPool(bucket and bucket.pool)
-    else
-        -- Mode degrade sans normaliseur dedup : consultation exacte uniquement.
-        local info = self:GetPlayerInfo(playerName)
-        bestPool = normalizeSavedVarsPool(info and info.pool)
-        if bestPool == "" and info and info.locale and info.locale ~= ""
-            and Overlord.SavedVarsPoolFromLocaleTag
-            and not (GetCurrentRegion and GetCurrentRegion() == 1) then
-            bestPool = normalizeSavedVarsPool(Overlord:SavedVarsPoolFromLocaleTag(info.locale) or "")
-        end
-    end
-    if bestPool == "" then
-        local rp = Overlord.RealmPools
-        if rp and rp.InferPoolTagFromRealmName then
-            bestPool = normalizeSavedVarsPool(rp:InferPoolTagFromRealmName(playerName) or "")
-        end
-    end
-    return bestPool
-end
-
--- Export Check PvP : sur region EU Blizzard, pools SV fr/de et eu = meme campagne (raid multilingue).
-local function ExportSavedVarsPoolsCompatible(current, other)
-    if current == "" or other == "" then return true end
-    return normalizeSavedVarsPool(current) == normalizeSavedVarsPool(other)
-end
-
--- Export Check PvP uniquement : ce contributeur appartient-il au pool actif ?
-function Overlord.Leaderboard:ContributorBelongsToCurrentPool(playerName)
-    if not playerName or playerName == "" then return true end
-    if self:IsLocalDisplayName(playerName) then return true end
-
-    local current = normalizeSavedVarsPool(Overlord:GetCurrentSavedVarsPool() or "")
-    if current == "" then return true end
-
-    local contributor = self:GetContributorSavedVarsPool(playerName)
-    if contributor ~= "" then return ExportSavedVarsPoolsCompatible(current, contributor) end
-
-    local loc = self:GetExportPlayerLocale(playerName)
-    local locLower = (loc ~= "" and loc:lower()) or ""
-
-    if locLower ~= "" and Overlord.SavedVarsPoolFromLocaleTag then
-        local fromLoc = normalizeSavedVarsPool(Overlord:SavedVarsPoolFromLocaleTag(locLower) or "")
-        if fromLoc ~= "" then return ExportSavedVarsPoolsCompatible(current, fromLoc) end
-    end
-
-    local keys = OverlordDB and OverlordDB.leaderboardLocalKillKeys
-    local sync = Overlord.Sync
-    local hasLocalKill = keys and keys[playerName]
-    if not hasLocalKill and keys and sync and sync.GetCaptureContributorDedupKey then
-        local dk = sync:GetCaptureContributorDedupKey(playerName)
-        hasLocalKill = dk and keys["#dk:" .. dk]
-    end
-
-    if hasLocalKill then return true end
-    return true
-end
-
 -- Enregistre un kill pour un joueur, retourne le nouveau total
 -- fromSync : true pour EK reseau (ne pas marquer credit local ni pool du receveur).
 function Overlord.Leaderboard:RegisterKill(playerName, fromSync)
@@ -8638,32 +8087,6 @@ function Overlord.Leaderboard:CreditPlayerObjectiveCapture(
     return true
 end
 
-function Overlord.Leaderboard:AddBountyActivation(playerName)
-    if not self:EnsureWritableCampaignBucket() then return end
-    local sync = Overlord.Sync
-    if sync and sync.StripPipeLeakFromContributorName then
-        playerName = sync:StripPipeLeakFromContributorName(playerName)
-    end
-    if not playerName or playerName == "" then return end
-    if not self.IsLocalDisplayName or not self:IsLocalDisplayName(playerName) then return end
-    self.bountyTimes[playerName] = (self.bountyTimes[playerName] or 0) + 1
-    self:CreditLocalLifetime("bountyTimes", 1, playerName)
-    self:MarkDirty()
-end
-
-function Overlord.Leaderboard:AddBountyKill(playerName)
-    if not self:EnsureWritableCampaignBucket() then return end
-    local sync = Overlord.Sync
-    if sync and sync.StripPipeLeakFromContributorName then
-        playerName = sync:StripPipeLeakFromContributorName(playerName)
-    end
-    if not playerName or playerName == "" then return end
-    if not self.IsLocalDisplayName or not self:IsLocalDisplayName(playerName) then return end
-    self.bountyKills[playerName] = (self.bountyKills[playerName] or 0) + 1
-    self:CreditLocalLifetime("bountyKills", 1, playerName)
-    self:MarkDirty()
-end
-
 -- Sync : prend le max pour eviter les retours en arriere (meme logique que SetPlayerKills)
 function Overlord.Leaderboard:SetPlayerCaptureCount(playerName, count, fromSync)
     if not self:EnsureWritableCampaignBucket() then return end
@@ -8783,115 +8206,6 @@ function Overlord.Leaderboard:MergeNameCountRowsForDisplay(nameCountTable, maxRo
         end
     end
     return list
-end
-
--- Fusionne les doublons Nom / Nom-Royaume dans les tables brutes (kills, captureCount, captures, playerInfo).
--- Appele une seule fois par Initialize ; rend OverlordDB canonique avant toute lecture ou export.
--- Regles : compteur = max des deux entrees ; nom conserve = forme la plus complete (Nom-Royaume).
-function Overlord.Leaderboard:ConsolidateDuplicates()
-    InvalidateDedupCanonicalIndex()
-    local sync = Overlord.Sync
-    local function dk(name)
-        if not name or name == "" then return nil end
-        return (sync and sync.GetCaptureContributorDedupKey) and sync:GetCaptureContributorDedupKey(name) or name
-    end
-    local rich = function(a, b) return self:ChooseRicherPlayerName(a, b) end
-    local dirty = false
-
-    -- Kills
-    local killBucket = {}
-    for name, count in pairs(self.kills) do
-        local key = dk(name)
-        if key then
-            local e = killBucket[key]
-            if not e then
-                killBucket[key] = { canonical = name, count = count }
-            else
-                local best = rich(e.canonical, name)
-                local merged = math.max(e.count, count)
-                local other = (best == name) and e.canonical or name
-                self.kills[other] = nil
-                self.kills[best] = merged
-                UpdateDedupKillMaxIndex(best, merged)
-                killBucket[key] = { canonical = best, count = merged }
-                dirty = true
-            end
-        end
-    end
-
-    -- captureCount
-    local capBucket = {}
-    for name, count in pairs(self.captureCount) do
-        local key = dk(name)
-        if key then
-            local e = capBucket[key]
-            if not e then
-                capBucket[key] = { canonical = name, count = count }
-            else
-                local best = rich(e.canonical, name)
-                local merged = math.max(e.count, count)
-                local other = (best == name) and e.canonical or name
-                self.captureCount[other] = nil
-                self.captureCount[best] = merged
-                UpdateDedupCaptureMaxIndex(best, merged)
-                capBucket[key] = { canonical = best, count = merged }
-                dirty = true
-            end
-        end
-    end
-
-    -- captures (listes de zones uniques)
-    local zoneBucket = {}
-    for name, zones in pairs(self.captures) do
-        if type(zones) == "table" then
-            local key = dk(name)
-            if key then
-                local e = zoneBucket[key]
-                if not e then
-                    zoneBucket[key] = { canonical = name }
-                else
-                    local best = rich(e.canonical, name)
-                    local other = (best == name) and e.canonical or name
-                    -- Fusionne la liste de zones sous le nom canonique
-                    local targetZones = self.captures[best] or {}
-                    local otherZones = self.captures[other] or {}
-                    local seen = {}
-                    for _, z in ipairs(targetZones) do seen[z] = true end
-                    for _, z in ipairs(otherZones) do
-                        if not seen[z] then
-                            targetZones[#targetZones + 1] = z
-                            seen[z] = true
-                        end
-                    end
-                    self.captures[best] = targetZones
-                    self.captures[other] = nil
-                    zoneBucket[key] = { canonical = best }
-                    dirty = true
-                end
-            end
-        end
-    end
-
-    -- playerInfo : fusionne classe/faction (prefere valeurs non vides)
-    local infoBucket = {}
-    for name, info in pairs(self.playerInfo) do
-        local key = dk(name)
-        if key then
-            local e = infoBucket[key]
-            if not e then
-                infoBucket[key] = { canonical = name }
-            else
-                local best = rich(e.canonical, name)
-                local other = (best == name) and e.canonical or name
-                -- Une seule implementation de fusion : elle conserve aussi guildAt/race/raceAt.
-                lbMergeTwoPlayerInfoRows(self, best, other)
-                infoBucket[key] = { canonical = best }
-                dirty = true
-            end
-        end
-    end
-
-    if dirty then self:MarkMetaDirty() end
 end
 
 -- Fusionne toutes les cles (captureCount, captures, kills, playerInfo) qui partagent la meme cle dedup Sync.
@@ -9191,79 +8505,4 @@ function Overlord.Leaderboard:GetSortedCapturesByFaction(maxRowsPerFaction)
         return (a.name or "") < (b.name or "")
     end)
     return { Alliance = alli, Horde = horde }
-end
-
--- Lignes captures fusionnees pour Sync LC (evite deux messages LC pour "Toto" et "Toto-Royaume").
-function Overlord.Leaderboard:BuildMergedCaptureSyncRows()
-    local sync = Overlord.Sync
-    local function dedupKey(name)
-        if not name or name == "" then return nil end
-        return (sync and sync.GetCaptureContributorDedupKey) and sync:GetCaptureContributorDedupKey(name) or name
-    end
-    local buckets = {}
-
-    local function touch(pname)
-        local dk = dedupKey(pname)
-        if not dk then return nil end
-        local b = buckets[dk]
-        if not b then
-            b = { capCount = 0, name = pname, zonesOrder = {}, zonesSeen = {} }
-            buckets[dk] = b
-        else
-            b.name = self:ChooseRicherPlayerName(b.name, pname)
-        end
-        return b
-    end
-
-    for pname, zones in pairs(self.captures or {}) do
-        local b = touch(pname)
-        if b and type(zones) == "table" then
-            for _, zid in ipairs(zones) do
-                if not b.zonesSeen[zid] then
-                    b.zonesSeen[zid] = true
-                    b.zonesOrder[#b.zonesOrder + 1] = zid
-                end
-            end
-        end
-    end
-
-    for pname, count in pairs(self.captureCount or {}) do
-        local b = touch(pname)
-        if b and count and count > 0 then
-            b.capCount = math.max(b.capCount, count)
-        end
-    end
-
-    local rows = {}
-    for _, b in pairs(buckets) do
-        table.sort(b.zonesOrder)
-        local classMeta, faction = self:GetExportPlayerMeta(b.name)
-        do -- score-only autorise : faction vide relayee avec le code LC "U"
-            -- Meme regle qu'avant : capCount ou nombre de zones uniques (legacy).
-            local cc = b.capCount
-            if cc <= 0 then
-                cc = #b.zonesOrder
-            end
-            if cc > 0 then
-                -- Ne pas propager UNKNOWN en LC : les receveurs feraient SetPlayerClassFromSync(UNKNOWN).
-                local classOut = (classMeta and classMeta ~= "UNKNOWN") and classMeta or ""
-                -- Locale : propagee en LC pour que les joueurs sans kills (uniquement captures)
-                -- obtiennent aussi le tag (fr/en/...) - sinon locale transmise uniquement via LK.
-                local localeOut = self:GetExportPlayerLocale(b.name) or ""
-                rows[#rows + 1] = {
-                    name = b.name,
-                    zones = b.zonesOrder,
-                    faction = (faction == "Alliance" or faction == "Horde") and faction or "",
-                    capCount = cc,
-                    class = classOut,
-                    locale = localeOut,
-                }
-            end
-        end
-    end
-    table.sort(rows, function(a, b)
-        if a.capCount ~= b.capCount then return a.capCount > b.capCount end
-        return (a.name or "") < (b.name or "")
-    end)
-    return rows
 end

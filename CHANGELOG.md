@@ -1,4 +1,9 @@
-1.0.27
+1.0.28
+
+**Overlord Forever 1.0.28**
+
+- Fewer frame drops in large fights: a raid kill no longer triggers an immediate scan of every nameplate to find the layer (shard); kills are grouped with the other layer checks into one scan per burst. When many allied players appear at once, the raid catch-up no longer rebuilds the 40-member roster for every nameplate while its message budget is exhausted.
+- Removed about 1,500 lines of unused code inherited from Retail Overlord (functions no longer called anywhere). No behaviour change.
 
 **Overlord Forever 1.0.27**
 

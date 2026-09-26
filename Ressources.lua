@@ -181,14 +181,6 @@ function Overlord.Ressources:AddGold(amount, opts)
     return gained
 end
 
-function Overlord.Ressources:GetWood()
-    return wood
-end
-
-function Overlord.Ressources:IsReinforceActive()
-    return reinforceActive
-end
-
 function Overlord.Ressources:IsBarricadeActive()
     return barricadeActive
 end

@@ -2983,16 +2983,6 @@ local function sanitizeKeepState(st, site)
     end
 end
 
--- Ancres de possession du tenant sortant pour revert.
-function Overlord.GuildKeep:ResolvePreviousTenantAnchors(st, prevGuild, siteKey)
-    local prevCa = math.floor(tonumber(st and st.previousClaimedAt) or 0)
-    local prevEx = math.floor(tonumber(st and st.previousExpiresAt) or 0)
-    if prevCa > 0 then
-        return prevCa, prevEx
-    end
-    return 0, 0
-end
-
 local GUILD_KEEP_SITE_KEY_MIGRATION_VERSION = 1
 local initializedGuildKeepDb
 local initializedGuildKeepRows
@@ -4406,26 +4396,6 @@ function Overlord.GuildKeep:ApplyRemoteState(siteKey, remote, suppressPresentati
         self:RefreshKeepPresentation(siteKey)
     end
     return true, recoveryAdvanced
-end
-
--- Royaumes francophones EU mal classes : retag eu -> fr sur l'etat fortin local.
-function Overlord.GuildKeep:MigrateKeepStatesPoolTag(fromPool, toPool)
-    fromPool = normalizeGuildKeepPoolTag(fromPool)
-    toPool = normalizeGuildKeepPoolTag(toPool)
-    if fromPool == "" or toPool == "" or fromPool == toPool then return false end
-    local changed = false
-    for key in pairs(Overlord.GuildKeepSites or {}) do
-        local st = self:GetState(key)
-        if st and normalizeGuildKeepPoolTag(st.pool) == fromPool then
-            st.pool = toPool
-            changed = true
-        end
-    end
-    if changed then
-        self:SaveKeeps()
-        self:MarkDirty()
-    end
-    return changed
 end
 
 -- Changement de pool SavedVariables : aucune capture/tenure de l'ancien pool ne doit

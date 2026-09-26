@@ -144,15 +144,6 @@ local function SnapshotOutpostTransitionState(siteKey, st)
     return snap
 end
 
-local function StableSyncBucket(value, bucketCount)
-    local h = 5381
-    value = tostring(value or "")
-    for i = 1, #value do
-        h = (h * 33 + string.byte(value, i)) % 2147483647
-    end
-    return h % bucketCount
-end
-
 local function FactionCodeToFaction(code)
     if code == "A" then return "Alliance" end
     if code == "H" then return "Horde" end

@@ -49,26 +49,11 @@ function FA:GetRevision()
     return activityRevision
 end
 
-function FA:RegisterActivityChangeListener(owner, callback)
-    if owner == nil then return false end
-    if callback ~= nil and type(callback) ~= "function" then return false end
-    activityChangeListeners[owner] = callback
-    return true
-end
-
 local function PublishActivityChange(frontId)
     activityRevision = activityRevision + 1
     for _, callback in pairs(activityChangeListeners) do
         pcall(callback, frontId, activityRevision)
     end
-end
-
-local function CountToBucket(count)
-    if count <= 0 then return nil end
-    if count <= 5 then return "1-5" end
-    if count <= 15 then return "6-15" end
-    if count <= 30 then return "16-30" end
-    return "31+"
 end
 
 local function IsKnownFrontId(frontId)
@@ -431,61 +416,6 @@ function FA:RecordLocalByZoneRef(zoneRef, playerName, ts)
     local frontId = self:GetLocalFrontId(zoneRef)
     if not frontId then return false end
     return self:Record(frontId, playerName, ts)
-end
-
-function FA:GetLastActivityAt(frontId)
-    if not IsKnownFrontId(frontId) then return nil end
-    local activity, actors = GetStores()
-    if not activity then return nil end
-    local now = ActivityNow()
-    if PurgeFront(frontId, activity, actors, now) then
-        PublishActivityChange(frontId)
-    end
-    return tonumber(activity[frontId])
-end
-
--- Compatibilite FactionTalkingHead : compteur local d'acteurs distincts observes.
--- Le panneau recent n'utilise plus cette valeur.
-function FA:GetActiveCount(frontId)
-    if not IsKnownFrontId(frontId) then return 0 end
-    local activity, actors = GetStores()
-    if not activity then return 0 end
-    local now = ActivityNow()
-    if PurgeFront(frontId, activity, actors, now) then
-        PublishActivityChange(frontId)
-    end
-    local bucket = actors[frontId]
-    if type(bucket) ~= "table" then return 0 end
-    local count = 0
-    for _ in pairs(bucket) do count = count + 1 end
-    return count
-end
-
--- Lecture UI best-effort strictement bornee : l'annonce de faction a seulement
--- besoin de distinguer <= 15 et >= 21, jamais de compter un roster entier.
-function FA:GetActiveCountCapped(frontId, countCap, scanCap)
-    if not IsKnownFrontId(frontId) then return 0 end
-    local _, actors = GetStores()
-    if not actors then return 0 end
-    local bucket = actors[frontId]
-    if type(bucket) ~= "table" then return 0 end
-    countCap = math.max(1, math.floor(tonumber(countCap) or 21))
-    scanCap = math.max(countCap, math.floor(tonumber(scanCap) or 64))
-    local now = ActivityNow()
-    local count, scanned = 0, 0
-    for _, ts in pairs(bucket) do
-        if scanned >= scanCap then break end
-        scanned = scanned + 1
-        if NormalizeTimestamp(ts, now) then
-            count = count + 1
-            if count >= countCap then return countCap end
-        end
-    end
-    return count
-end
-
-function FA:GetBucketLabel(frontId)
-    return CountToBucket(self:GetActiveCount(frontId))
 end
 
 local function GetFrontActivityDisplayName(front)

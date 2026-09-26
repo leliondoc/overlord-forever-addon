@@ -435,31 +435,6 @@ function Overlord.General:GetActiveList()
     return list
 end
 
-function Overlord.General:GetEnemyDisplayEntry()
-    local pool = self:GetPoolTag()
-    local faction = self:GetEnemyFaction()
-    if pool == "" or not faction then return nil end
-    return self:BuildDisplayEntryFromSlot(GetSlotTable(pool, faction))
-end
-
-function Overlord.General:IsHolderName(name, faction)
-    if not name or name == "" then return false end
-    faction = faction or Overlord.PlayerFaction
-    local slot = self:GetSlot(faction)
-    if not slot or not slot.holder then return false end
-    return SenderMatches(slot.holder, name)
-end
-
-function Overlord.General:GetHolderFactionForName(name)
-    if not name or name == "" then return nil end
-    for _, faction in ipairs({ "Alliance", "Horde" }) do
-        if self:IsHolderName(name, faction) then
-            return faction
-        end
-    end
-    return nil
-end
-
 function Overlord.General:ValidateDuelMusicPulse(sender, claimTs)
     if not sender or not claimTs then return false end
     local pool = self:GetPoolTag()

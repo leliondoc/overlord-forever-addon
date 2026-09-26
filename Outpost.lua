@@ -305,10 +305,6 @@ function Overlord.Outpost:GetSitesForFront(frontId)
     return sitesByFront[frontId] or {}
 end
 
-function Overlord.Outpost:IsStandaloneOpenWorldSite(site)
-    return site and site.standaloneOpenWorld == true
-end
-
 function Overlord.Outpost:IsStandaloneOpenWorldDisplayMap(mapID)
     if not mapID then return false end
     if standaloneSiteByDisplayMapID[mapID] then return true end
@@ -750,10 +746,6 @@ function Overlord.Outpost:PlayerGuildOwnsOutpost(st)
     if not st or st.status ~= "held" then return false end
     local g = self:GetLocalPlayerGuild()
     return g ~= "" and g == sanitizeGuildName(st.ownerGuild or "")
-end
-
-function Overlord.Outpost:IsLocalOutpostCaptureActive(st)
-    return st and st.status == "in_progress" and st.isHolding and st.holdAuthorityLocal
 end
 
 function Overlord.Outpost:IsPlayerOutpostAssailant(st)

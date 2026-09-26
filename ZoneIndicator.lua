@@ -170,27 +170,6 @@ local function ApplySavedIndicatorPosition()
     end
 end
 
--- Position par defaut en haut d'ecran (hors cluster or).
-function Overlord.ZoneIndicator:RepositionDetached()
-    if IsIndicatorUserPlaced() then
-        ApplySavedIndicatorPosition()
-        return
-    end
-    if not indicatorFrame then return end
-    local w = (Overlord.Ressources and Overlord.Ressources.GetHudPanelWidth
-        and Overlord.Ressources:GetHudPanelWidth()) or 280
-    if indicatorFrame._olLayoutMode == "detached" and indicatorFrame._olLayoutWidth == w then
-        return
-    end
-    indicatorFrame._olLayoutMode = "detached"
-    indicatorFrame._olLayoutWidth = w
-    indicatorFrame._olLayoutKey = nil
-    indicatorFrame:ClearAllPoints()
-    indicatorFrame:SetWidth(w)
-    indicatorFrame:SetPoint("TOP", UIParent, "TOP", 0, IND_DEFAULT_TOP_Y)
-    EnableIndicatorDrag()
-end
-
 -- Empile sous le cluster or ; ignore si le joueur a deplace l'indicateur lui-meme.
 local function ApplyAutoStackIndicatorPosition()
     if not indicatorFrame then return end
@@ -591,10 +570,6 @@ function Overlord.ZoneIndicator:GuildKeepHudNeedsRefresh()
         return true
     end
     return false
-end
-
-function Overlord.ZoneIndicator:ShouldRefreshOutpostCaptureHud()
-    return select(1, EvaluateOutpostHudCached())
 end
 
 function Overlord.ZoneIndicator:SyncOutpostCaptureHud()

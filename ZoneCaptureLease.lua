@@ -1812,7 +1812,3 @@ ScheduleLeaseMaintenance = function(forcedDelay, zoneHint)
     leaseMaintenanceTimer = C_Timer.NewTimer(
         math.max(LEASE_TIMER_EPSILON, dueAt - now), SweepActiveLeases)
 end
-
-function Lease:WakeMaintenance(zone)
-    TrackLeaseZone(zone)
-end

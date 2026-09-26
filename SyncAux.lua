@@ -3859,12 +3859,6 @@ local function normalizeRaceSexCode(sex)
     return 0
 end
 
-function Overlord.Sync.IsValidRaceFileToken(token)
-    if not token or token == "" then return false end
-    if RACE_FILE_ALIASES[token] then return true end
-    return VALID_RACE_FILE[token] == true
-end
-
 function Overlord.Sync:NormalizeRaceFileToken(race)
     if not race or race == "" then return nil end
     race = race:match("^%s*(.-)%s*$") or race
@@ -4386,44 +4380,10 @@ function Overlord.Sync:GetObservedPlayerIdentity(playerName)
     return RefreshObservedUnitsSnapshot()[targetKey]
 end
 
-function Overlord.Sync:IsObservedPlayerRace(playerName, raceFile, raceSex)
-    raceFile = self:NormalizeRaceFileToken(raceFile)
-    local row = raceFile and self:GetObservedPlayerIdentity(playerName)
-    if not row or not Overlord:SafeStringEquals(row.race, raceFile) then return false end
-    raceSex = math.floor(tonumber(raceSex) or 0)
-    return raceSex ~= 2 and raceSex ~= 3 or row.raceSex == raceSex
-end
-
-function Overlord.Sync:IsObservedPlayerClass(playerName, classToken)
-    if not playerName or not self:IsValidCaptureClassToken(classToken) then return false end
-    local row = self:GetObservedPlayerIdentity(playerName)
-    return row and Overlord:SafeStringEquals(row.class, classToken) or false
-end
-
 function Overlord.Sync:IsObservedPlayerFaction(playerName, faction)
     if not playerName or (faction ~= "Alliance" and faction ~= "Horde") then return false end
     local row = self:GetObservedPlayerIdentity(playerName)
     return row and Overlord:SafeStringEquals(row.faction, faction) or false
-end
-
--- Une observation WoW locale est une preuve plus forte qu'un vote reseau. Ce
--- raccourci reste limite aux metadonnees directement visibles et s'execute avant
--- toute allocation de ligne/quota dans le chemin de classement.
-function Overlord.Sync:IsLocallyObservedLeaderboardClaim(kind, claimKey)
-    if type(claimKey) ~= "string" or claimKey == "" then return false end
-    local playerName, value, extra = strsplit(":", claimKey, 3)
-    if not playerName or playerName == "" or not value or value == "" then return false end
-    if kind == "META-CLASS" then
-        return self.IsObservedPlayerClass and self:IsObservedPlayerClass(playerName, value) or false
-    elseif kind == "META-FACTION" then
-        return self.IsObservedPlayerFaction and self:IsObservedPlayerFaction(playerName, value) or false
-    elseif kind == "META-RACE" then
-        return self.IsObservedPlayerRace
-            and self:IsObservedPlayerRace(playerName, value, tonumber(extra) or 0) or false
-    elseif kind == "GY" then
-        return self.IsObservedPlayerGuild and self:IsObservedPlayerGuild(playerName, value) or false
-    end
-    return false
 end
 
 function Overlord.Sync:RecordCaptureCreditProgressEvidence(sender, capturer, zoneId, faction, holdTime)
