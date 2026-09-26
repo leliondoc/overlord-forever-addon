@@ -115,4 +115,32 @@ now = now + 601
 processed = {}
 lb:MaybeAwardGuildKeepDailyWins()
 assert(#processed == 2, "Safety net did not rerun the full pass")
-print("Forever guild keep awards: sliced late-campaign repair, single job, order, stability, small-pass sync and siege-driven rechecks OK")
+-- Receiving daily proofs (GH): reconciliation is deferred out of the network
+-- handler, coalesced per keep (oldest slot wins) and runs the same days in order.
+OverlordDB.guildKeepCutoffSnapshots = {
+    ["2026092403"] = { north = {}, south = {} },
+    ["2026092409"] = { north = {} },
+    ["2026092415"] = { north = {}, south = {} },
+    ["2026092421"] = { south = {} },
+}
+local expected = {}
+local realReconcile = lb.ReconcileGuildKeepDailyAward
+lb.ReconcileGuildKeepDailyAward = function(_, siteKey, dayKey)
+    expected[#expected + 1] = siteKey .. "@" .. dayKey
+    return false
+end
+lb:ReconcileGuildKeepDailyAwardsFromDay("north", "2026092409")
+lb:ReconcileGuildKeepDailyAwardsFromDay("south", "2026092403")
+local synchronous = expected
+expected = {}
+timers = {}
+lb:RequestGuildKeepAwardsReconcileFromDay("north", "2026092415")
+lb:RequestGuildKeepAwardsReconcileFromDay("south", "2026092403")
+lb:RequestGuildKeepAwardsReconcileFromDay("north", "2026092409")
+assert(#expected == 0, "Daily proof reconciled inside the network handler")
+drain()
+assert(table.concat(expected, ",") == table.concat(synchronous, ","),
+    "Deferred reconcile differs: " .. table.concat(expected, ",") .. " vs " .. table.concat(synchronous, ","))
+assert(not lb._gkReconcileScheduled and not lb._gkReconcilePending)
+lb.ReconcileGuildKeepDailyAward = realReconcile
+print("Forever guild keep awards: sliced late-campaign repair, single job, order, stability, small-pass sync and siege-driven rechecks, deferred GH reconcile OK")

@@ -3222,7 +3222,10 @@ function Overlord.Sync:OnReceiveGuildKeepDailyProof(payload, sender, sourceChann
     if Overlord.GuildKeep and Overlord.GuildKeep.ReconcileDeferredLineageAfterDailyProofChange then
         Overlord.GuildKeep:ReconcileDeferredLineageAfterDailyProofChange(siteKey, dayKey)
     end
-    if lb.ReconcileGuildKeepDailyAwardsFromDay then
+    if lb.RequestGuildKeepAwardsReconcileFromDay then
+        -- Differe et coalesce : ~19 ms par preuve dans le handler reseau sinon.
+        lb:RequestGuildKeepAwardsReconcileFromDay(siteKey, dayKey)
+    elseif lb.ReconcileGuildKeepDailyAwardsFromDay then
         lb:ReconcileGuildKeepDailyAwardsFromDay(siteKey, dayKey)
     elseif lb.ReconcileGuildKeepDailyAward then
         lb:ReconcileGuildKeepDailyAward(siteKey, dayKey)

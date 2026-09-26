@@ -6441,11 +6441,10 @@ end
 -- Une mutation brute ancienne peut changer la projection de tous les jours suivants du
 -- meme keep. Six sites x sept jours au maximum : une passe ciblee est moins couteuse et
 -- beaucoup plus lisible qu'un cache d'invalidation supplementaire.
-function Overlord.Leaderboard:ReconcileGuildKeepDailyAwardsFromDay(siteKey, fromDayKey)
-    if not OverlordDB then return false end
-    siteKey, fromDayKey = tostring(siteKey or ""), tostring(fromDayKey or "")
+-- Creneaux (ordre croissant) de ce fortin a partir de fromDayKey.
+function Overlord.Leaderboard:CollectGuildKeepAwardDaysFrom(siteKey, fromDayKey)
     local days = {}
-    for dayKey, snapshot in pairs(OverlordDB.guildKeepCutoffSnapshots or {}) do
+    for dayKey, snapshot in pairs(OverlordDB and OverlordDB.guildKeepCutoffSnapshots or {}) do
         dayKey = tostring(dayKey or "")
         if dayKey >= fromDayKey and type(snapshot) == "table"
             and snapshot[siteKey] ~= nil then
@@ -6453,11 +6452,72 @@ function Overlord.Leaderboard:ReconcileGuildKeepDailyAwardsFromDay(siteKey, from
         end
     end
     table.sort(days)
+    return days
+end
+
+function Overlord.Leaderboard:ReconcileGuildKeepDailyAwardsFromDay(siteKey, fromDayKey)
+    if not OverlordDB then return false end
+    siteKey, fromDayKey = tostring(siteKey or ""), tostring(fromDayKey or "")
     local changed = false
-    for _, dayKey in ipairs(days) do
+    for _, dayKey in ipairs(self:CollectGuildKeepAwardDaysFrom(siteKey, fromDayKey)) do
         if self:ReconcileGuildKeepDailyAward(siteKey, dayKey) then changed = true end
     end
     return changed
+end
+
+-- Reception GH : /ov perf mesurait ~19 ms par preuve (tous les creneaux suivants du
+-- fortin) dans le handler reseau, et une rafale s'additionnait dans une seule image.
+-- Demandes coalescees par fortin (creneau le plus ancien, qui couvre les suivants),
+-- puis memes reconciliations dans le meme ordre, ~1 ms par image.
+function Overlord.Leaderboard:RequestGuildKeepAwardsReconcileFromDay(siteKey, fromDayKey)
+    siteKey, fromDayKey = tostring(siteKey or ""), tostring(fromDayKey or "")
+    if siteKey == "" or not OverlordDB then return end
+    if not (C_Timer and C_Timer.After) then
+        self:ReconcileGuildKeepDailyAwardsFromDay(siteKey, fromDayKey)
+        return
+    end
+    local pending = self._gkReconcilePending or {}
+    self._gkReconcilePending = pending
+    if not pending[siteKey] or fromDayKey < pending[siteKey] then pending[siteKey] = fromDayKey end
+    if self._gkReconcileScheduled then return end
+    self._gkReconcileScheduled = true
+    C_Timer.After(0, function() self:RunPendingGuildKeepAwardReconciles() end)
+end
+
+function Overlord.Leaderboard:RunPendingGuildKeepAwardReconciles()
+    local queue = self._gkReconcileQueue
+    if not queue or queue.index > #queue.items then
+        queue = { items = {}, index = 1 }
+        local pending = self._gkReconcilePending or {}
+        self._gkReconcilePending = nil
+        local sites = {}
+        for siteKey in pairs(pending) do sites[#sites + 1] = siteKey end
+        table.sort(sites)
+        for _, siteKey in ipairs(sites) do
+            for _, dayKey in ipairs(self:CollectGuildKeepAwardDaysFrom(siteKey, pending[siteKey])) do
+                queue.items[#queue.items + 1] = { siteKey = siteKey, dayKey = dayKey }
+            end
+        end
+        self._gkReconcileQueue = queue
+    end
+    local startedAt = debugprofilestop and debugprofilestop() or 0
+    local steps, changed = 0, false
+    while queue.index <= #queue.items do
+        local item = queue.items[queue.index]
+        queue.index = queue.index + 1
+        steps = steps + 1
+        if self:ReconcileGuildKeepDailyAward(item.siteKey, item.dayKey) then changed = true end
+        if steps >= 64 or not debugprofilestop or debugprofilestop() - startedAt >= 1 then break end
+    end
+    if changed and Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
+        Overlord.LeaderboardUI:RefreshIfVisible()
+    end
+    if queue.index <= #queue.items or self._gkReconcilePending then
+        C_Timer.After(0, function() self:RunPendingGuildKeepAwardReconciles() end)
+        return
+    end
+    self._gkReconcileQueue = nil
+    self._gkReconcileScheduled = false
 end
 
 -- Enregistre uniquement le score couvert par la preuve quotidienne causale GH.
