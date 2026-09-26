@@ -73,6 +73,7 @@ jobs:
           lua5.1 tests/forever_siege_schedule.test.lua
           lua5.1 tests/forever_silverpine_outpost.test.lua
           lua5.1 tests/forever_lesi_bear_cave_outpost.test.lua
+          lua5.1 tests/forever_guild_keep_award_slicing.test.lua
           lua5.1 tests/forever_beta_network.test.lua
           lua5.1 tests/forever_beta_integration.test.lua
           lua5.1 tests/forever_beta_catchup.test.lua

@@ -260,11 +260,14 @@ local PERF_MODULES = {
 local PERF_SPIKE_MS = 50
 local perfState = nil
 
-local function PerfFinish(label, startedAt, ...)
+local function PerfFinish(label, startedAt, sliced, ...)
     local state = perfState
     if state then
-        state.depth = state.depth - 1
+        if not sliced then state.depth = state.depth - 1 end
         local elapsed = debugprofilestop() - startedAt
+        -- Inside a coroutine the clock also runs while the worker is paused between
+        -- frames: that is elapsed wall time, not one frame. Keep it apart.
+        if sliced then label = label .. " (sliced, multi-frame)" end
         local row = state.stats[label]
         if not row then
             row = { calls = 0, total = 0, max = 0 }
@@ -274,7 +277,7 @@ local function PerfFinish(label, startedAt, ...)
         row.total = row.total + elapsed
         if elapsed > row.max then row.max = elapsed end
         -- Only the outermost call is reported live, so one freeze prints one line.
-        if elapsed >= PERF_SPIKE_MS and state.depth == 0 then
+        if not sliced and elapsed >= PERF_SPIKE_MS and state.depth == 0 then
             Overlord:PrintNotification(string.format("|cFFFF4444[Overlord perf]|r %d ms  %s",
                 math.floor(elapsed + 0.5), label))
         end
@@ -286,8 +289,9 @@ local function PerfWrap(label, fn)
     return function(...)
         local state = perfState
         if not state then return fn(...) end
-        state.depth = state.depth + 1
-        return PerfFinish(label, debugprofilestop(), fn(...))
+        local sliced = coroutine.running() ~= nil
+        if not sliced then state.depth = state.depth + 1 end
+        return PerfFinish(label, debugprofilestop(), sliced, fn(...))
     end
 end
 
@@ -304,15 +308,21 @@ local function StopPerf()
     for label, row in pairs(state.stats) do
         rows[#rows + 1] = { label = label, calls = row.calls, total = row.total, max = row.max }
     end
+    -- Multi-frame (sliced) timings are wall time: excluded from both rankings.
+    local frameRows = {}
+    for _, r in ipairs(rows) do
+        if not r.label:find("(sliced", 1, true) then frameRows[#frameRows + 1] = r end
+    end
+    rows = frameRows
     table.sort(rows, function(a, b) return a.max > b.max end)
-    Overlord:PrintNotification("[Overlord perf] Slowest single calls (max ms / total ms / calls):")
-    for i = 1, math.min(10, #rows) do
+    Overlord:PrintNotification("[Overlord perf] Slowest single calls in one frame (max ms / total ms / calls):")
+    for i = 1, math.min(12, #rows) do
         local r = rows[i]
         Overlord:PrintNotification(string.format("  %.1f / %.0f / %d  %s", r.max, r.total, r.calls, r.label))
     end
     table.sort(rows, function(a, b) return a.total > b.total end)
     Overlord:PrintNotification("[Overlord perf] Most total time:")
-    for i = 1, math.min(5, #rows) do
+    for i = 1, math.min(8, #rows) do
         local r = rows[i]
         Overlord:PrintNotification(string.format("  %.0f ms / %d calls  %s", r.total, r.calls, r.label))
     end

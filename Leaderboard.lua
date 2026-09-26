@@ -1474,6 +1474,9 @@ end
 
 local DISPLAY_KILL_RANK_LIMIT = Overlord.Leaderboard.KILL_RANK_LIMIT
 local DISPLAY_CAPTURE_RANK_LIMIT = 25
+-- Au-dela de ce nombre de couples (creneau, fortin), la reparation des victoires de
+-- fortin est decoupee sur plusieurs images au lieu d'un seul bloc.
+Overlord.Leaderboard.GK_AWARD_REPAIR_SYNC_MAX = 16
 -- Champ (pas de local) : ecart minimal entre deux builds quand une vue est affichee.
 Overlord.Leaderboard.DISPLAY_CACHE_MIN_REBUILD_SEC = 3
 local DISPLAY_CACHE_WORK_PER_SLICE = 64
@@ -6522,6 +6525,9 @@ end
 local GK_DAILY_AWARD_RECHECK_SEC = 30
 
 function Overlord.Leaderboard:InvalidateGuildKeepDailyAwardStable()
+    -- Compteur lu par la passe decoupee : une mutation pendant la passe l'empeche
+    -- de se declarer stable pour 30 s, le tick suivant la relance.
+    self._gkAwardInvalidations = (self._gkAwardInvalidations or 0) + 1
     self._gkAwardStable = false
     self._gkAwardStableDayKey = nil
     self._gkAwardNextCheckAt = nil
@@ -6642,7 +6648,82 @@ function Overlord.Leaderboard:MaybeAwardGuildKeepDailyWins()
     -- Une passe propre suffit dans toutes les phases de la journee. Les mutations terrain
     -- invalident explicitement ce cache, donc le ticker 1 Hz reste reactif sans rescanner
     -- les preuves et les six fortins chaque seconde pendant des heures.
-    local changed = RepairGuildKeepAwardsFromDailyProofs(self)
+    -- Une passe de reparation deja decoupee sur plusieurs images est en cours : attendre.
+    if self._gkAwardRepairJob then return false end
+    -- Fin de campagne : ~28 creneaux x 6 fortins, ~3,7 ms par reconciliation, soit
+    -- ~350 ms dans une seule image (mesure en jeu via /ov perf). Au-dela d'un petit
+    -- lot, la reparation est decoupee (~1 ms par image) puis la passe se termine ici.
+    local repairPairs = self:CollectGuildKeepAwardRepairPairs()
+    if #repairPairs > (self.GK_AWARD_REPAIR_SYNC_MAX or 16) and C_Timer and C_Timer.After then
+        self:StartGuildKeepAwardRepairJob(repairPairs, dayKey)
+        return false
+    end
+    local changed = self:RunGuildKeepAwardRepairPairs(repairPairs, 1, #repairPairs)
+    return self:FinishGuildKeepDailyAwardPass(dayKey, changed)
+end
+
+-- Couples (creneau ferme, fortin) dont la preuve du jour existe. Lecture seule, rapide.
+function Overlord.Leaderboard:CollectGuildKeepAwardRepairPairs()
+    local gk = Overlord.GuildKeep
+    local pairsList = {}
+    for dayKey, snapshot in pairs(OverlordDB.guildKeepCutoffSnapshots or {}) do
+        if type(snapshot) == "table" and isGuildKeepWinDayClosed(gk, dayKey) then
+            for siteKey in pairs(snapshot) do
+                pairsList[#pairsList + 1] = { dayKey = dayKey, siteKey = siteKey }
+            end
+        end
+    end
+    return pairsList
+end
+
+-- Meme travail que RepairGuildKeepAwardsFromDailyProofs, sur une tranche de la liste.
+-- Chaque couple est reverifie au moment de son traitement (la table peut changer).
+function Overlord.Leaderboard:RunGuildKeepAwardRepairPairs(repairPairs, first, last)
+    local repaired = false
+    local snapshots = OverlordDB.guildKeepCutoffSnapshots or {}
+    for i = first, last do
+        local item = repairPairs[i]
+        local snapshot = item and snapshots[item.dayKey]
+        if type(snapshot) == "table" and snapshot[item.siteKey] ~= nil
+            and getGuildKeepDailyProofForDay(self, item.siteKey, item.dayKey)
+            and self:ReconcileGuildKeepDailyAward(item.siteKey, item.dayKey) then
+            repaired = true
+        end
+    end
+    return repaired
+end
+
+function Overlord.Leaderboard:StartGuildKeepAwardRepairJob(repairPairs, dayKey)
+    local job = { pairs = repairPairs, index = 1, changed = false, dayKey = dayKey,
+        invalidations = self._gkAwardInvalidations or 0 }
+    self._gkAwardRepairJob = job
+    local lb = self
+    local function slice()
+        if lb._gkAwardRepairJob ~= job then return end
+        local startedAt = debugprofilestop and debugprofilestop() or 0
+        repeat
+            if lb:RunGuildKeepAwardRepairPairs(job.pairs, job.index, job.index) then
+                job.changed = true
+            end
+            job.index = job.index + 1
+        until job.index > #job.pairs or not debugprofilestop
+            or debugprofilestop() - startedAt >= 1
+        if job.index <= #job.pairs then
+            C_Timer.After(0, slice)
+            return
+        end
+        lb._gkAwardRepairJob = nil
+        local mutatedDuringPass = (lb._gkAwardInvalidations or 0) ~= job.invalidations
+        lb:FinishGuildKeepDailyAwardPass(job.dayKey, job.changed, mutatedDuringPass)
+    end
+    C_Timer.After(0, slice)
+end
+
+-- Suite de la passe apres la reparation des preuves (identique a l'ancien corps).
+function Overlord.Leaderboard:FinishGuildKeepDailyAwardPass(dayKey, changed, mutatedDuringPass)
+    local gk = Overlord.GuildKeep
+    if not gk then return changed end
+    local nowClock = GetTime and GetTime() or 0
     local now = leaderboardServerNow()
 
     -- Rattrapage login : avant le siege du jour, le tenant courant est encore
@@ -6672,7 +6753,7 @@ function Overlord.Leaderboard:MaybeAwardGuildKeepDailyWins()
         if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
             Overlord.LeaderboardUI:RefreshIfVisible()
         end
-    elseif dayKey ~= "" and nowClock > 0 then
+    elseif dayKey ~= "" and nowClock > 0 and not mutatedDuringPass then
         self._gkAwardStable = true
         self._gkAwardStableDayKey = dayKey
         self._gkAwardNextCheckAt = nowClock + GK_DAILY_AWARD_RECHECK_SEC
