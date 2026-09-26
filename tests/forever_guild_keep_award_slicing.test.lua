@@ -61,6 +61,31 @@ assert(#processed == 30)
 assert(lb._gkAwardStable == false and lb._gkAwardNextCheckAt == nil,
     "A mutation during the pass was hidden for 30 s")
 
+-- Closing the day awards each held keep (~10 ms each): one keep per frame too.
+Overlord.GuildKeepSites = { a = {}, b = {}, c = {}, d = {}, e = {}, f = {} }
+Overlord.GuildKeep.IsSiegeWindowClosedForToday = function() return true end
+pairsList = {}
+for i = 1, 20 do pairsList[i] = { dayKey = "day" .. i, siteKey = "a" } end
+local awarded, awardSlices = {}, {}
+lb.AwardHeldGuildKeepWinForSite = function(_, siteKey, dayKey)
+    awarded[#awarded + 1] = siteKey .. "@" .. dayKey
+    clock = clock + 10
+    return siteKey == "c"
+end
+lb:InvalidateGuildKeepDailyAwardStable()
+processed = {}
+assert(lb:MaybeAwardGuildKeepDailyWins() == false and #awarded == 0)
+while #timers > 0 do
+    local before = #awarded
+    table.remove(timers, 1)()
+    awardSlices[#awardSlices + 1] = #awarded - before
+end
+assert(#processed == 20 and #awarded == 6, "Held keeps not all awarded: " .. #awarded)
+for _, count in ipairs(awardSlices) do assert(count <= 1, "Several keeps awarded in one frame") end
+assert(lb._gkAwardStable == false, "A changed award must not mark the day stable")
+lb.AwardHeldGuildKeepWinForSite = function() return false end
+Overlord.GuildKeep.IsSiegeWindowClosedForToday = function() return false end
+
 -- Small repairs keep the previous synchronous behaviour.
 pairsList = { { dayKey = "d1", siteKey = "fixture" }, { dayKey = "d2", siteKey = "fixture" } }
 processed = {}

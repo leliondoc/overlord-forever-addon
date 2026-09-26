@@ -6566,12 +6566,12 @@ function Overlord.Leaderboard:ShouldBroadcastLocalGuildKeepProof(proof, siteKey)
     return shouldBroadcastLocalGuildKeepProof(proof, siteKey)
 end
 
-local function AwardHeldGuildKeepWinsAt(lb, winTs)
-    local gk = Overlord.GuildKeep
-    if not lb or not gk or not Overlord.GuildKeepSites then return false end
+-- Un fortin a la fois (~10 ms chacun en fin de semaine) : la passe decoupee les
+-- enchaine image par image ; le chemin court les appelle d'affilee comme avant.
+function Overlord.Leaderboard:AwardHeldGuildKeepWinForSite(siteKey, dayKey, winTs)
+    local lb = self
     local changed = false
-    local dayKey = gk:GetServerSiegeDayKey(winTs)
-    for siteKey in pairs(Overlord.GuildKeepSites) do
+    do
         local localProof = lb.BuildGuildKeepDailyProofForState
             and lb:BuildGuildKeepDailyProofForState(siteKey, dayKey) or nil
         if localProof then
@@ -6602,6 +6602,29 @@ local function AwardHeldGuildKeepWinsAt(lb, winTs)
         end
     end
     return changed
+end
+
+-- Taches (fortin, jour) de la fin de passe, dans l'ordre de l'ancien corps :
+-- rattrapage de la veille d'abord, puis la cloture du jour.
+function Overlord.Leaderboard:CollectHeldGuildKeepAwardTasks()
+    local gk = Overlord.GuildKeep
+    local tasks = {}
+    if not gk or not Overlord.GuildKeepSites or not gk.GetServerSiegeDayKey then return tasks end
+    local now = leaderboardServerNow()
+    local function addAll(winTs)
+        local dayKey = gk:GetServerSiegeDayKey(winTs)
+        for siteKey in pairs(Overlord.GuildKeepSites) do
+            tasks[#tasks + 1] = { siteKey = siteKey, dayKey = dayKey, winTs = winTs }
+        end
+    end
+    -- Rattrapage login : avant le siege du jour, le tenant courant est encore
+    -- celui qui devait recevoir la victoire de defense de la veille.
+    if gk.IsSiegeWindowOpen and not gk:IsSiegeWindowOpen() and not gk:IsSiegeWindowClosedForToday() then
+        local prevTs = now - 86400
+        if prevTs >= (self:GetCurrentCampaignStart() or 0) then addAll(prevTs) end
+    end
+    if gk:IsSiegeWindowClosedForToday() then addAll(now) end
+    return tasks
 end
 
 -- Reprojette chaque registre causal GH vers l'award additif correspondant. Un GA neutral
@@ -6701,44 +6724,48 @@ function Overlord.Leaderboard:StartGuildKeepAwardRepairJob(repairPairs, dayKey)
     local function slice()
         if lb._gkAwardRepairJob ~= job then return end
         local startedAt = debugprofilestop and debugprofilestop() or 0
+        local steps = 0
         repeat
-            if lb:RunGuildKeepAwardRepairPairs(job.pairs, job.index, job.index) then
-                job.changed = true
+            steps = steps + 1
+            if job.index <= #job.pairs then
+                if lb:RunGuildKeepAwardRepairPairs(job.pairs, job.index, job.index) then
+                    job.changed = true
+                end
+                job.index = job.index + 1
+            else
+                -- Fin de passe : taches collectees apres la reparation, comme avant.
+                job.tasks = job.tasks or lb:CollectHeldGuildKeepAwardTasks()
+                job.taskIndex = job.taskIndex or 1
+                local task = job.tasks[job.taskIndex]
+                if not task then break end
+                if lb:AwardHeldGuildKeepWinForSite(task.siteKey, task.dayKey, task.winTs) then
+                    job.changed = true
+                end
+                job.taskIndex = job.taskIndex + 1
             end
-            job.index = job.index + 1
-        until job.index > #job.pairs or not debugprofilestop
-            or debugprofilestop() - startedAt >= 1
-        if job.index <= #job.pairs then
+        until steps >= 64 or not debugprofilestop or debugprofilestop() - startedAt >= 1
+        if job.index <= #job.pairs or not job.tasks or job.tasks[job.taskIndex] then
             C_Timer.After(0, slice)
             return
         end
         lb._gkAwardRepairJob = nil
         local mutatedDuringPass = (lb._gkAwardInvalidations or 0) ~= job.invalidations
-        lb:FinishGuildKeepDailyAwardPass(job.dayKey, job.changed, mutatedDuringPass)
+        lb:CompleteGuildKeepDailyAwardPass(job.dayKey, job.changed, mutatedDuringPass)
     end
     C_Timer.After(0, slice)
 end
 
 -- Suite de la passe apres la reparation des preuves (identique a l'ancien corps).
 function Overlord.Leaderboard:FinishGuildKeepDailyAwardPass(dayKey, changed, mutatedDuringPass)
-    local gk = Overlord.GuildKeep
-    if not gk then return changed end
+    if not Overlord.GuildKeep then return changed end
+    for _, task in ipairs(self:CollectHeldGuildKeepAwardTasks()) do
+        changed = self:AwardHeldGuildKeepWinForSite(task.siteKey, task.dayKey, task.winTs) or changed
+    end
+    return self:CompleteGuildKeepDailyAwardPass(dayKey, changed, mutatedDuringPass)
+end
+
+function Overlord.Leaderboard:CompleteGuildKeepDailyAwardPass(dayKey, changed, mutatedDuringPass)
     local nowClock = GetTime and GetTime() or 0
-    local now = leaderboardServerNow()
-
-    -- Rattrapage login : avant le siege du jour, le tenant courant est encore
-    -- celui qui devait recevoir la victoire de defense de la veille.
-    if gk.IsSiegeWindowOpen and not gk:IsSiegeWindowOpen() and not gk:IsSiegeWindowClosedForToday() then
-        local prevTs = now - 86400
-        if prevTs >= (self:GetCurrentCampaignStart() or 0) then
-            changed = AwardHeldGuildKeepWinsAt(self, prevTs) or changed
-        end
-    end
-
-    local closedToday = gk:IsSiegeWindowClosedForToday()
-    if closedToday then
-        changed = AwardHeldGuildKeepWinsAt(self, now) or changed
-    end
     -- Plus de backfill multi-jours depuis la tenure (RepairHeldGuildKeepWinsSinceTenure) :
     -- c'etait la source des victoires fantomes (il creditait CHAQUE jour entre la capture et
     -- aujourd'hui en supposant une tenure continue, meme jamais observee a la cloture). Un
