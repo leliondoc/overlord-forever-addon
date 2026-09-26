@@ -6,7 +6,7 @@ Addon **World of Warcraft Forever** pour la capture de zones sur les fronts du m
 |---|---|
 | **Auteur** | Troma |
 | **Licence** | All Rights Reserved |
-| **Version** | 1.0.25 |
+| **Version** | 1.0.26 |
 | **Jeu** | WoW Forever (`## Interface: 16001`) |
 | **CurseForge** | https://www.curseforge.com/wow/addons/overlord-forever |
 | **Dépôt** | https://github.com/leliondoc/overlord-forever-addon |

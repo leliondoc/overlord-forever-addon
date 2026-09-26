@@ -1,4 +1,8 @@
-1.0.25
+1.0.26
+
+**Overlord Forever 1.0.26**
+
+- Players logging in could keep seeing zones captured by the other faction before their login as neutral. Their map request went through the relay to every Overlord player, and almost all of them (95%) answered with a full snapshot of every zone. For a player of the other faction, all those answers crossed the same Battle.net bridge, filled its queue, and no snapshot arrived complete. A relayed request is now answered by about three players on average; requests addressed to a specific player are still always answered.
 
 **Overlord Forever 1.0.25**
 

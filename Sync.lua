@@ -4882,9 +4882,11 @@ end
 
 function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
     -- Routed request: delayed replies return through SendWhisper's beta route.
+    local viaBetaBroadcast = false
     if channel == "BETA" then
         if not Overlord.BetaNetwork or not Overlord.BetaNetwork:IsDispatching(sender) then return end
-        channel = Overlord.BetaNetwork:IsTargetedDispatch() and "WHISPER" or "CHANNEL"
+        viaBetaBroadcast = not Overlord.BetaNetwork:IsTargetedDispatch()
+        channel = viaBetaBroadcast and "CHANNEL" or "WHISPER"
         replyToOverride = sender
     end
     -- Extraction de la version, victoryTs et victoryFaction du payload SR
@@ -4971,6 +4973,19 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         respondChance = 0.95
     end
     -- En event massif sur canal : reponse courte garantie (ZA + DM + treve) meme si la file complete est refusee.
+    -- Un SR diffuse par le relais beta atteint TOUT le reseau (pas un seul canal). A 95 %,
+    -- chaque pair renvoyait un snapshot ZA complet au demandeur : pour un joueur de la
+    -- faction adverse, ces reponses traversaient toutes le meme pont Battle.net, saturaient
+    -- sa file (128 paquets) et aucun snapshot n'arrivait complet (zones restees neutres).
+    -- Viser ~3 repondants ; les SR cibles (whisper) restent garantis.
+    if viaBetaBroadcast and not quarantinedMapOnly then
+        local peerCount = Overlord.BetaNetwork and Overlord.BetaNetwork.GetPeers
+            and #Overlord.BetaNetwork:GetPeers() or 0
+        respondChance = math.min(respondChance, math.max(0.05, 3 / math.max(1, peerCount)))
+        if math.random() > respondChance then return end
+        -- Tirage deja fait : ne pas repasser par le tirage generique ci-dessous.
+        respondChance = 1.0
+    end
     local minimalResponseOnly = territorialResponseOnly or stateResponseRequested
     if math.random() > respondChance then
         if isLarge and channel ~= "WHISPER" and channel ~= "BNET" then
