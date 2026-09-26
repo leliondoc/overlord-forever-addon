@@ -1480,6 +1480,12 @@ Overlord.Leaderboard.GK_AWARD_REPAIR_SYNC_MAX = 16
 -- Filet de securite de la passe complete une fois stable (fin de siege et mutations
 -- la relancent immediatement).
 Overlord.Leaderboard.GK_AWARD_SAFETY_RECHECK_SEC = 600
+-- Fortins = priorite la plus basse (sieges toutes les 6 h, peu de joueurs) : une
+-- operation au plus toutes les 0,1 s, rien en combat ni en gros event, et les
+-- preuves recues sont regroupees 10 s avant reconciliation. Resultats identiques.
+Overlord.Leaderboard.GK_WORK_STEP_INTERVAL = 0.1
+Overlord.Leaderboard.GK_WORK_POSTPONE_RETRY = 2
+Overlord.Leaderboard.GK_RECONCILE_DEBOUNCE_SEC = 10
 -- Champ (pas de local) : ecart minimal entre deux builds quand une vue est affichee.
 Overlord.Leaderboard.DISPLAY_CACHE_MIN_REBUILD_SEC = 3
 local DISPLAY_CACHE_WORK_PER_SLICE = 64
@@ -6481,10 +6487,14 @@ function Overlord.Leaderboard:RequestGuildKeepAwardsReconcileFromDay(siteKey, fr
     if not pending[siteKey] or fromDayKey < pending[siteKey] then pending[siteKey] = fromDayKey end
     if self._gkReconcileScheduled then return end
     self._gkReconcileScheduled = true
-    C_Timer.After(0, function() self:RunPendingGuildKeepAwardReconciles() end)
+    C_Timer.After(self.GK_RECONCILE_DEBOUNCE_SEC or 10, function() self:RunPendingGuildKeepAwardReconciles() end)
 end
 
 function Overlord.Leaderboard:RunPendingGuildKeepAwardReconciles()
+    if self:ShouldPostponeGuildKeepWork() then
+        C_Timer.After(self.GK_WORK_POSTPONE_RETRY or 2, function() self:RunPendingGuildKeepAwardReconciles() end)
+        return
+    end
     local queue = self._gkReconcileQueue
     if not queue or queue.index > #queue.items then
         queue = { items = {}, index = 1 }
@@ -6500,20 +6510,19 @@ function Overlord.Leaderboard:RunPendingGuildKeepAwardReconciles()
         end
         self._gkReconcileQueue = queue
     end
-    local startedAt = debugprofilestop and debugprofilestop() or 0
     local steps, changed = 0, false
     while queue.index <= #queue.items do
         local item = queue.items[queue.index]
         queue.index = queue.index + 1
         steps = steps + 1
         if self:ReconcileGuildKeepDailyAward(item.siteKey, item.dayKey) then changed = true end
-        if steps >= 64 or not debugprofilestop or debugprofilestop() - startedAt >= 1 then break end
+        if steps >= 1 then break end
     end
     if changed and Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
         Overlord.LeaderboardUI:RefreshIfVisible()
     end
     if queue.index <= #queue.items or self._gkReconcilePending then
-        C_Timer.After(0, function() self:RunPendingGuildKeepAwardReconciles() end)
+        C_Timer.After(self.GK_WORK_STEP_INTERVAL or 0.1, function() self:RunPendingGuildKeepAwardReconciles() end)
         return
     end
     self._gkReconcileQueue = nil
@@ -6754,6 +6763,8 @@ function Overlord.Leaderboard:MaybeAwardGuildKeepDailyWins()
     -- les preuves et les six fortins chaque seconde pendant des heures.
     -- Une passe de reparation deja decoupee sur plusieurs images est en cours : attendre.
     if self._gkAwardRepairJob then return false end
+    -- Priorite basse : pas de nouvelle passe en combat ni en gros event (tick suivant).
+    if self:ShouldPostponeGuildKeepWork() then return false end
     -- Fin de campagne : ~28 creneaux x 6 fortins, ~3,7 ms par reconciliation, soit
     -- ~350 ms dans une seule image (mesure en jeu via /ov perf). Au-dela d'un petit
     -- lot, la reparation est decoupee (~1 ms par image) puis la passe se termine ici.
@@ -6764,6 +6775,15 @@ function Overlord.Leaderboard:MaybeAwardGuildKeepDailyWins()
     end
     local changed = self:RunGuildKeepAwardRepairPairs(repairPairs, 1, #repairPairs)
     return self:FinishGuildKeepDailyAwardPass(dayKey, changed)
+end
+
+-- Combat ou gros event : le travail fortin attend (il sera refait a l'identique).
+function Overlord.Leaderboard:ShouldPostponeGuildKeepWork()
+    if InCombatLockdown and InCombatLockdown() then return true end
+    local sync = Overlord.Sync
+    if not sync or not sync.IsLargeEvent then return false end
+    local ok, large = pcall(sync.IsLargeEvent, sync)
+    return ok and large == true
 end
 
 -- Couples (creneau ferme, fortin) dont la preuve du jour existe. Lecture seule, rapide.
@@ -6804,7 +6824,10 @@ function Overlord.Leaderboard:StartGuildKeepAwardRepairJob(repairPairs, dayKey)
     local lb = self
     local function slice()
         if lb._gkAwardRepairJob ~= job then return end
-        local startedAt = debugprofilestop and debugprofilestop() or 0
+        if lb:ShouldPostponeGuildKeepWork() then
+            C_Timer.After(lb.GK_WORK_POSTPONE_RETRY or 2, slice)
+            return
+        end
         local steps = 0
         repeat
             steps = steps + 1
@@ -6824,9 +6847,9 @@ function Overlord.Leaderboard:StartGuildKeepAwardRepairJob(repairPairs, dayKey)
                 end
                 job.taskIndex = job.taskIndex + 1
             end
-        until steps >= 64 or not debugprofilestop or debugprofilestop() - startedAt >= 1
+        until steps >= 1
         if job.index <= #job.pairs or not job.tasks or job.tasks[job.taskIndex] then
-            C_Timer.After(0, slice)
+            C_Timer.After(lb.GK_WORK_STEP_INTERVAL or 0.1, slice)
             return
         end
         lb._gkAwardRepairJob = nil

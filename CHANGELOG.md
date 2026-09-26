@@ -1,4 +1,8 @@
-1.0.24
+1.0.25
+
+**Overlord Forever 1.0.25**
+
+- Guild keep calculations now run at the lowest priority. Sieges happen every six hours and few players take part, so their siege-win bookkeeping should never be felt: it pauses during combat and large events, does one step every tenth of a second in the background instead of as much as possible per frame, and groups keep proofs received from other players for ten seconds before processing them. Results are unchanged; they may simply appear a little later.
 
 **Overlord Forever 1.0.24**
 

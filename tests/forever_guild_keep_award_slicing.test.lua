@@ -115,6 +115,26 @@ now = now + 601
 processed = {}
 lb:MaybeAwardGuildKeepDailyWins()
 assert(#processed == 2, "Safety net did not rerun the full pass")
+-- Lowest priority: nothing starts or runs in combat; it resumes afterwards.
+local inCombat = true
+InCombatLockdown = function() return inCombat end
+pairsList = {}
+for i = 1, 20 do pairsList[i] = { dayKey = "c" .. i, siteKey = "fixture" } end
+processed = {}
+lb:InvalidateGuildKeepDailyAwardStable()
+assert(lb:MaybeAwardGuildKeepDailyWins() == false and not lb._gkAwardRepairJob,
+    "A keep award pass started during combat")
+inCombat = false
+lb:MaybeAwardGuildKeepDailyWins()
+assert(lb._gkAwardRepairJob)
+inCombat = true
+for _ = 1, 3 do table.remove(timers, 1)() end
+assert(#processed == 0, "Keep award work ran during combat")
+inCombat = false
+drain()
+assert(#processed == 20 and not lb._gkAwardRepairJob, "Pass did not resume after combat")
+InCombatLockdown = nil
+
 -- Receiving daily proofs (GH): reconciliation is deferred out of the network
 -- handler, coalesced per keep (oldest slot wins) and runs the same days in order.
 OverlordDB.guildKeepCutoffSnapshots = {
@@ -143,4 +163,4 @@ assert(table.concat(expected, ",") == table.concat(synchronous, ","),
     "Deferred reconcile differs: " .. table.concat(expected, ",") .. " vs " .. table.concat(synchronous, ","))
 assert(not lb._gkReconcileScheduled and not lb._gkReconcilePending)
 lb.ReconcileGuildKeepDailyAward = realReconcile
-print("Forever guild keep awards: sliced late-campaign repair, single job, order, stability, small-pass sync and siege-driven rechecks, deferred GH reconcile OK")
+print("Forever guild keep awards: sliced late-campaign repair, single job, order, stability, small-pass sync and siege-driven rechecks, deferred GH reconcile, combat postponement OK")
