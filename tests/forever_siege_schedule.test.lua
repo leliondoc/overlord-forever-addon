@@ -120,4 +120,14 @@ for _, hour in ipairs({9, 15, 21}) do
     assert(Overlord.Fronts:GetFeaturedFrontId() == featured, "Daily front rotated with siege")
     assert(Overlord.Popups:HasShownFeaturedFrontToday(), "Daily front popup repeated")
 end
-print("Forever siege schedule: four windows, realm timezones, midnight, legacy captures, per-siege awards and reload OK")
+-- Cached siege keys equal the uncached computation for every realm offset, even
+-- when the offset changes between two lookups of the same timestamp.
+for _, realmOffset in ipairs({ 2 * 3600, -7 * 3600, 0, 2 * 3600 }) do
+    offset = realmOffset
+    for _, ts in ipairs({ midnight + 3600, midnight + 5 * 3600, midnight + 20 * 3600 + 59 }) do
+        assert(gk:GetServerSiegeDayKey(ts) == gk:ComputeServerSiegeDayKey(ts),
+            "Cached siege key diverged for offset " .. realmOffset)
+        assert(gk:GetServerSiegeDayKey(ts) == gk:ComputeServerSiegeDayKey(ts))
+    end
+end
+print("Forever siege schedule: four windows, realm timezones, midnight, legacy captures, per-siege awards, reload and cached keys OK")

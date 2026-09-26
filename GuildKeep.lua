@@ -389,7 +389,41 @@ function Overlord.GuildKeep:GetServerCalendarDayKey(ts)
 end
 
 -- Keep the historical method name for callers; new keys identify a siege, not a day.
+-- Decalage royaume/UTC lu comme GetRealmCalendar (heure de jeu), ou "pacific" sans
+-- GetGameTime. Il change a l'heure d'ete et peut sauter une minute a une frontiere.
+function Overlord.GuildKeep:GetRealmCalendarOffsetKey()
+    local hour, minute
+    if GetGameTime then hour, minute = GetGameTime() end
+    if not hour then return "pacific" end
+    local utcMinute = math.floor(GetUtcEpoch() / 60) % 1440
+    local offset = (hour * 60 + minute - utcMinute) % 1440
+    if offset > 840 then offset = offset - 1440 end
+    return offset
+end
+
+-- Mesure /ov perf : ~1 700 appels par seconde depuis les elections de preuves de
+-- fortin (208 683 en 2 min). Pour un horodatage explicite, le resultat ne depend
+-- que de cet horodatage et du decalage royaume : cache borne, vide quand le decalage
+-- change (resultat identique, jamais fige sur un decalage passager).
 function Overlord.GuildKeep:GetServerSiegeDayKey(ts)
+    local explicit = tonumber(ts)
+    if not explicit then return self:ComputeServerSiegeDayKey(nil) end
+    local offsetKey = self:GetRealmCalendarOffsetKey()
+    local cache = self._siegeDayKeyCache
+    if not cache or cache.offsetKey ~= offsetKey or cache.n >= 4096 then
+        cache = { offsetKey = offsetKey, n = 0, values = {} }
+        self._siegeDayKeyCache = cache
+    end
+    local value = cache.values[explicit]
+    if value == nil then
+        value = self:ComputeServerSiegeDayKey(explicit)
+        cache.values[explicit] = value
+        cache.n = cache.n + 1
+    end
+    return value
+end
+
+function Overlord.GuildKeep:ComputeServerSiegeDayKey(ts)
     ts = tonumber(ts) or GetUtcEpoch()
     if ts < SIX_HOUR_SIEGES_SINCE then return self:GetServerCalendarDayKey(ts) end
     local start = self:GetSiegeWindowStartMinute(ts)
