@@ -3762,16 +3762,13 @@ function Overlord.UI:RequestRefresh()
         return
     end
     zoneListRefreshForced = true
-    local now = GetTime()
-    if now - uiRefreshLastAt >= UI_REFRESH_MIN_INTERVAL then
-        uiRefreshLastAt = now
-        uiRefreshPending = false
-        self:Refresh()
-        return
-    end
+    -- Toujours differe (au plus tot l'image suivante) : un Refresh synchrone
+    -- s'ajoutait au cout du paquet reseau ou du kill qui le demandait, dans la
+    -- meme image. Meme plafond de 4 rafraichissements par seconde.
     if uiRefreshPending then return end
     uiRefreshPending = true
-    local delay = math.max(0.01, UI_REFRESH_MIN_INTERVAL - (now - uiRefreshLastAt))
+    local now = GetTime()
+    local delay = math.max(0, UI_REFRESH_MIN_INTERVAL - (now - uiRefreshLastAt))
     C_Timer.After(delay, function()
         uiRefreshPending = false
         if Overlord.UI and mainFrame and mainFrame:IsShown() then

@@ -1071,7 +1071,7 @@ function Overlord.Zones:RefreshInactiveFrontAvailability(frontId)
         end
     end
     if changed and Overlord.MapMarkers and Overlord.MapMarkers.RequestOverlayRefresh then
-        Overlord.MapMarkers:RequestOverlayRefresh()
+        Overlord.MapMarkers:RequestOverlayRefresh(true)
     end
 end
 

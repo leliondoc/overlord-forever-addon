@@ -217,7 +217,7 @@ end
 local function RefreshVisuals()
     if Overlord.UI and Overlord.UI.RequestRefresh then Overlord.UI:RequestRefresh() end
     if Overlord.MapMarkers and Overlord.MapMarkers.RequestOverlayRefresh then
-        Overlord.MapMarkers:RequestOverlayRefresh()
+        Overlord.MapMarkers:RequestOverlayRefresh(true)
     end
 end
 

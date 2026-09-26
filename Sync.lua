@@ -4381,7 +4381,7 @@ function Overlord.Sync:OnReceiveCapture(payload, sender)
             -- pour ne jamais sauver previousOwner/quarantaine de l'ancienne vague.
             PersistSyncedZoneState(inactiveZone)
             if Overlord.MapMarkers and Overlord.MapMarkers.RequestOverlayRefresh then
-                Overlord.MapMarkers:RequestOverlayRefresh()
+                Overlord.MapMarkers:RequestOverlayRefresh(true)
             end
             if Overlord.UI then Overlord.UI:RequestRefresh() end
             if captureApplied and shouldPrintInactiveCapture then
@@ -6602,7 +6602,7 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
         if inactiveApplied and inactiveZone and owner then
             if Overlord.MarkCaptureSyncReceived then Overlord:MarkCaptureSyncReceived() end
             if Overlord.MapMarkers and Overlord.MapMarkers.RequestOverlayRefresh then
-                Overlord.MapMarkers:RequestOverlayRefresh()
+                Overlord.MapMarkers:RequestOverlayRefresh(true)
             end
             if Overlord.UI then Overlord.UI:RequestRefresh() end
             if status == "in_progress" and owner == enemyFaction
@@ -8294,7 +8294,7 @@ function Overlord.Sync:OnReceiveZoneAll(
             loginPairRepairMode or runtimeGlobalRepairMode)
         Overlord:MarkDirty()
         if Overlord.MapMarkers and Overlord.MapMarkers.RequestOverlayRefresh then
-            Overlord.MapMarkers:RequestOverlayRefresh()
+            Overlord.MapMarkers:RequestOverlayRefresh(true)
         end
         if Overlord.UI then Overlord.UI:RequestRefresh() end
     end

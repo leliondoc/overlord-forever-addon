@@ -1474,6 +1474,8 @@ end
 
 local DISPLAY_KILL_RANK_LIMIT = Overlord.Leaderboard.KILL_RANK_LIMIT
 local DISPLAY_CAPTURE_RANK_LIMIT = 25
+-- Champ (pas de local) : ecart minimal entre deux builds quand une vue est affichee.
+Overlord.Leaderboard.DISPLAY_CACHE_MIN_REBUILD_SEC = 3
 local DISPLAY_CACHE_WORK_PER_SLICE = 64
 local DISPLAY_CACHE_SLICE_BUDGET_MS = 1
 
@@ -1937,6 +1939,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                 self:SaveDisplayCache(state.result)
             end
             state.scoreEpochChanged = scoreEpochChanged
+            self._displayCacheLastBuildAt = GetTime()
             requestConsumerRefresh()
             return
         end
@@ -1956,6 +1959,23 @@ function Overlord.Leaderboard:EnsureDisplayCache()
     if not displayCacheSourcesMatch(cache, self) then
         cache = self:RestoreDisplayCache()
         self._displayCache = cache
+    end
+    -- Sous un flux continu de kills, chaque build publiait une vue deja perimee qui
+    -- relancait aussitot le suivant : ~1 ms par image tant que le panneau restait
+    -- ouvert. Une vue valide deja affichee est gardee au plus quelques secondes ;
+    -- un build differe unique publie ensuite l'etat le plus recent.
+    local lastBuildAt = self._displayCacheLastBuildAt
+    local minGap = self.DISPLAY_CACHE_MIN_REBUILD_SEC or 3
+    if displayCacheSourcesMatch(cache, self) and lastBuildAt
+        and GetTime() - lastBuildAt < minGap and C_Timer and C_Timer.After then
+        if not self._displayCacheDeferredBuild then
+            self._displayCacheDeferredBuild = true
+            C_Timer.After(math.max(0, minGap - (GetTime() - lastBuildAt)), function()
+                self._displayCacheDeferredBuild = false
+                self:StartDisplayCacheBuild()
+            end)
+        end
+        return cache
     end
     self:StartDisplayCacheBuild()
     if displayCacheSourcesMatch(cache, self) then return cache end
