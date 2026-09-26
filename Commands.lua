@@ -245,6 +245,112 @@ local function StartNetworkProbe()
     end)
 end
 
+-- Opt-in profiler (/ov perf [seconds]): times every function of the Overlord
+-- modules for a bounded window, prints any single call over 50 ms immediately,
+-- then a top list, and restores the original functions. Off by default.
+local PERF_MODULES = {
+    "ActionShortcut", "Button", "CaptureLease", "Combat", "FrontActivity", "Fronts",
+    "General", "GeneralMap", "GeneralNameplate", "GeneralSync", "GuildKeep",
+    "GuildKeepControl", "GuildKeepImmersion", "HallOfFameUI", "Leaderboard",
+    "LeaderboardUI", "ManualBounty", "ManualBountyMail", "ManualBountyMap",
+    "ManualBountySync", "ManualBountyUI", "MapMarkers", "Outpost", "OutpostControl",
+    "Popups", "Ressources", "SettingsPanel", "Shard", "Sync", "UI", "ZoneControl",
+    "ZoneIndicator", "Zones", "BetaNetwork",
+}
+local PERF_SPIKE_MS = 50
+local perfState = nil
+
+local function PerfFinish(label, startedAt, ...)
+    local state = perfState
+    if state then
+        state.depth = state.depth - 1
+        local elapsed = debugprofilestop() - startedAt
+        local row = state.stats[label]
+        if not row then
+            row = { calls = 0, total = 0, max = 0 }
+            state.stats[label] = row
+        end
+        row.calls = row.calls + 1
+        row.total = row.total + elapsed
+        if elapsed > row.max then row.max = elapsed end
+        -- Only the outermost call is reported live, so one freeze prints one line.
+        if elapsed >= PERF_SPIKE_MS and state.depth == 0 then
+            Overlord:PrintNotification(string.format("|cFFFF4444[Overlord perf]|r %d ms  %s",
+                math.floor(elapsed + 0.5), label))
+        end
+    end
+    return ...
+end
+
+local function PerfWrap(label, fn)
+    return function(...)
+        local state = perfState
+        if not state then return fn(...) end
+        state.depth = state.depth + 1
+        return PerfFinish(label, debugprofilestop(), fn(...))
+    end
+end
+
+local function StopPerf()
+    local state = perfState
+    if not state then return end
+    perfState = nil
+    for i = #state.wrapped, 1, -1 do
+        local item = state.wrapped[i]
+        if item.owner[item.key] == item.wrapper then item.owner[item.key] = item.original end
+    end
+    state.frame:SetScript("OnUpdate", nil)
+    local rows = {}
+    for label, row in pairs(state.stats) do
+        rows[#rows + 1] = { label = label, calls = row.calls, total = row.total, max = row.max }
+    end
+    table.sort(rows, function(a, b) return a.max > b.max end)
+    Overlord:PrintNotification("[Overlord perf] Slowest single calls (max ms / total ms / calls):")
+    for i = 1, math.min(10, #rows) do
+        local r = rows[i]
+        Overlord:PrintNotification(string.format("  %.1f / %.0f / %d  %s", r.max, r.total, r.calls, r.label))
+    end
+    table.sort(rows, function(a, b) return a.total > b.total end)
+    Overlord:PrintNotification("[Overlord perf] Most total time:")
+    for i = 1, math.min(5, #rows) do
+        local r = rows[i]
+        Overlord:PrintNotification(string.format("  %.0f ms / %d calls  %s", r.total, r.calls, r.label))
+    end
+end
+
+local function StartPerf(seconds)
+    if perfState then
+        Overlord:PrintNotification("[Overlord perf] Already running. /ov perf stop to end it now.")
+        return
+    end
+    local state = { stats = {}, wrapped = {}, depth = 0, frame = CreateFrame("Frame") }
+    local function wrapTable(owner, prefix)
+        if type(owner) ~= "table" then return end
+        for key, value in pairs(owner) do
+            if type(value) == "function" and type(key) == "string" then
+                local wrapper = PerfWrap(prefix .. key, value)
+                state.wrapped[#state.wrapped + 1] = { owner = owner, key = key, original = value, wrapper = wrapper }
+            end
+        end
+    end
+    wrapTable(Overlord, "Core:")
+    for _, name in ipairs(PERF_MODULES) do
+        local module = Overlord[name]
+        -- Frames and Blizzard objects are skipped: only plain module tables.
+        if type(module) == "table" and not module.GetObjectType then wrapTable(module, name .. ":") end
+    end
+    for _, item in ipairs(state.wrapped) do item.owner[item.key] = item.wrapper end
+    -- An error inside a timed call skips PerfFinish; never let depth drift across frames.
+    state.frame:SetScript("OnUpdate", function() if perfState then perfState.depth = 0 end end)
+    perfState = state
+    Overlord:PrintNotification(string.format(
+        "[Overlord perf] Timing %d functions for %ds. Calls over %d ms print here.",
+        #state.wrapped, seconds, PERF_SPIKE_MS))
+    C_Timer.After(seconds, function()
+        if perfState == state then StopPerf() end
+    end)
+end
+
 local function ShowHelp()
     Overlord:PrintNotification(L.HELP_HEADER)
     Overlord:PrintNotification(L.HELP_SHOW)
@@ -556,6 +662,14 @@ local function CommandHandler(msg)
 
     elseif cmd == "network" or cmd == "reseau" then
         StartNetworkProbe()
+
+    elseif cmd == "perf" then
+        if args[2] == "stop" then
+            StopPerf()
+        else
+            local seconds = math.floor(tonumber(args[2]) or 60)
+            StartPerf(math.max(10, math.min(600, seconds)))
+        end
         
     elseif cmd == "start" then
         local zoneInput = args[2]

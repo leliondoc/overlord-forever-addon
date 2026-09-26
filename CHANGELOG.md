@@ -3,6 +3,7 @@
 **Overlord Forever 1.0.24**
 
 - Smoother frame rate with Overlord windows open during fights. The main panel no longer redraws inside the handling of each network message or kill; it redraws on a following frame, still at most four times per second. The open leaderboard no longer rebuilds its whole ranking continuously while kills arrive: it keeps the current view and refreshes at most every three seconds. The open world map no longer recomputes its whole layout (paths and all their dots) when a zone changes owner; it only recolors what changed.
+- Add `/ov perf [seconds]` (default 60): an opt-in profiler that times Overlord's functions for that window, prints any single call over 50 ms in chat as it happens, then lists the slowest and most expensive functions. It removes itself at the end and costs nothing when not used.
 - Show Lesi Bear Cave on the Kalimdor continent map, like the other Kalimdor outposts.
 
 **Overlord Forever 1.0.23**
