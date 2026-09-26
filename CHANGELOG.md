@@ -3,6 +3,7 @@
 **Overlord Forever 1.0.26**
 
 - Players logging in could keep seeing zones captured by the other faction before their login as neutral. Their map request went through the relay to every Overlord player, and almost all of them (95%) answered with a full snapshot of every zone. For a player of the other faction, all those answers crossed the same Battle.net bridge, filled its queue, and no snapshot arrived complete. A relayed request is now answered by about three players on average; requests addressed to a specific player are still always answered.
+- Login state recovery without Communities, like the Retail community catch-up: about twelve seconds after login, Overlord asks three players it has heard on the relay (two of them from the other faction when known) for the zone state only, with a guaranteed answer. It retries twice if nobody is known yet.
 
 **Overlord Forever 1.0.25**
 

@@ -1921,10 +1921,12 @@ function Overlord.Sync:SendLoginCatchupSyncToCommunity()
     if Overlord.InstanceSuspended or IsInInstance() then return 0 end
     local betaSent = Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork
         and Overlord.BetaNetwork:Broadcast("SR", SRPayload("T")) or 0
-    if Overlord.CommunityModeEnabled == false then
+    if Overlord.CommunityModeEnabled == false or not self:FindCommunityClub() then
+        -- Sans club : meme principe que la communaute (quelques SR cibles, reponse
+        -- garantie) avec les pairs decouverts par le relais beta.
+        self:ScheduleBetaPeerLoginCatchup()
         return betaSent
     end
-    if not self:FindCommunityClub() then return betaSent end
 
     local myName = self:GetPlayerFullName()
     local payload = SRPayload("T")
@@ -1949,6 +1951,88 @@ function Overlord.Sync:SendLoginCatchupSyncToCommunity()
         end
     end
     return sent + betaSent
+end
+
+-- Equivalent sans Communaute du rattrapage login : au plus 3 SR territoriaux cibles
+-- (reponse whisper garantie, snapshot ZA seul), dont 2 vers la faction adverse qui
+-- connait ses captures. Remplace l'avalanche de reponses au SR diffuse a tout le
+-- reseau, qui saturait les ponts Battle.net. Les pairs viennent des hello du relais.
+Overlord.Sync.BETA_LOGIN_CATCHUP_TARGETS = 3
+Overlord.Sync.BETA_LOGIN_CATCHUP_ENEMY_TARGETS = 2
+Overlord.Sync.BETA_LOGIN_CATCHUP_FIRST_DELAY = 12
+Overlord.Sync.BETA_LOGIN_CATCHUP_RETRY_DELAY = 20
+Overlord.Sync.BETA_LOGIN_CATCHUP_MAX_ATTEMPTS = 3
+
+function Overlord.Sync:ScheduleBetaPeerLoginCatchup()
+    if Overlord.BetaNetworkEnabled == false or not Overlord.BetaNetwork then return false end
+    if self._betaLoginCatchupScheduled then return false end
+    self._betaLoginCatchupScheduled = true
+    C_Timer.After(self.BETA_LOGIN_CATCHUP_FIRST_DELAY or 12, function()
+        if Overlord.Sync then Overlord.Sync:RunBetaPeerLoginCatchup(1) end
+    end)
+    return true
+end
+
+function Overlord.Sync:GetBetaPeerFaction(name)
+    local faction = self.GetResolvedBNetPlayerFaction and self:GetResolvedBNetPlayerFaction(name)
+    if faction == "Alliance" or faction == "Horde" then return faction end
+    local lb = Overlord.Leaderboard
+    local info = lb and lb.GetPlayerInfo and lb:GetPlayerInfo(name)
+    faction = info and info.faction
+    if faction == "Alliance" or faction == "Horde" then return faction end
+    return nil
+end
+
+function Overlord.Sync:RunBetaPeerLoginCatchup(attempt)
+    local net = Overlord.BetaNetwork
+    if not net or Overlord.InstanceSuspended or IsInInstance() then
+        self._betaLoginCatchupScheduled = false
+        return 0
+    end
+    local myName = self:GetPlayerFullName()
+    local myFaction = Overlord.PlayerFaction
+    local enemies, others = {}, {}
+    for _, name in ipairs(net:GetPeers()) do
+        if name ~= "" and not self:ForeverIdentitiesMatch(name, myName) then
+            local faction = self:GetBetaPeerFaction(name)
+            if faction and myFaction and faction ~= myFaction then
+                enemies[#enemies + 1] = name
+            else
+                others[#others + 1] = name
+            end
+        end
+    end
+    if #enemies + #others == 0 then
+        if attempt < (self.BETA_LOGIN_CATCHUP_MAX_ATTEMPTS or 3) then
+            C_Timer.After(self.BETA_LOGIN_CATCHUP_RETRY_DELAY or 20, function()
+                if Overlord.Sync then Overlord.Sync:RunBetaPeerLoginCatchup(attempt + 1) end
+            end)
+        else
+            self._betaLoginCatchupScheduled = false
+        end
+        return 0
+    end
+    self._betaLoginCatchupScheduled = false
+    -- Tirage aleatoire : la charge de reponse se repartit entre les pairs.
+    local function pick(list, count, out)
+        while count > 0 and #list > 0 do
+            out[#out + 1] = table.remove(list, math.random(1, #list))
+            count = count - 1
+        end
+    end
+    local targets = {}
+    pick(enemies, self.BETA_LOGIN_CATCHUP_ENEMY_TARGETS or 2, targets)
+    pick(others, (self.BETA_LOGIN_CATCHUP_TARGETS or 3) - #targets, targets)
+    pick(enemies, (self.BETA_LOGIN_CATCHUP_TARGETS or 3) - #targets, targets)
+    local payload = SRPayload("T")
+    for index, target in ipairs(targets) do
+        C_Timer.After((index - 1) * LOGIN_CATCHUP_SR_DELAY, function()
+            if Overlord.Sync and not Overlord.InstanceSuspended then
+                pcall(Overlord.Sync.SendWhisper, Overlord.Sync, "SR", payload, target)
+            end
+        end)
+    end
+    return #targets
 end
 
 -- Stats communaute (utilise par la sync cross-realm)
