@@ -37,11 +37,14 @@ local LB_COL_GAP = 12
 local LB_FRAME_PAD = 16
 local LB_FRAME_W = LB_FRAME_PAD + LB_MAIN_W + LB_COL_GAP + LB_GUILD_KILLS_W + LB_COL_GAP
     + LB_GUILD_KEEP_W + LB_COL_GAP + LB_OUTPOST_W + LB_FRAME_PAD
--- Colonnes guildes (tues) : 3 colonnes equidistantes sur panneau 208 (# -70, nom 0, tues +70)
-local LB_GUILD_COL_RANK = -70
-local LB_GUILD_COL_NAME = 0
-local LB_GUILD_COL_KILLS = 70
-local LB_GUILD_NAME_W = 100
+-- Colonnes guildes (tues) sur panneau 208. VH elargi a 58 px : les totaux de
+-- guilde depassent 10 000 (5-6 chiffres) ; le rang (max "500") se contente de 28 px.
+local LB_GUILD_COL_RANK = -76
+local LB_GUILD_COL_NAME = -10
+local LB_GUILD_COL_KILLS = 64
+local LB_GUILD_NAME_W = 92
+local LB_GUILD_RANK_W = 28
+local LB_GUILD_KILLS_TEXT_W = 58
 -- Fortins : 3 colonnes equidistantes sur panneau 388 (fort -100, guilde 0, wins +100)
 local LB_GK_KEEP_LEFT = 8
 local LB_GK_KEEP_NAME_W = 92
@@ -1019,7 +1022,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.guildHeaderBand = guildHeaderBand
     local ghRank = guildHeaderBand:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     ghRank:SetPoint("CENTER", guildHeaderBand, "CENTER", LB_GUILD_COL_RANK, 0)
-    ghRank:SetWidth(36)
+    ghRank:SetWidth(LB_GUILD_RANK_W)
     ghRank:SetJustifyH("CENTER")
     ghRank:SetText("#")
     ApplyOfficialHeaderColor(ghRank, P)
@@ -1031,7 +1034,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     ApplyOfficialHeaderColor(ghName, P)
     local ghKills = guildHeaderBand:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     ghKills:SetPoint("CENTER", guildHeaderBand, "CENTER", LB_GUILD_COL_KILLS, 0)
-    ghKills:SetWidth(40)
+    ghKills:SetWidth(LB_GUILD_KILLS_TEXT_W)
     ghKills:SetJustifyH("CENTER")
     ghKills:SetText(L.LB_COL_KILLS)
     ApplyOfficialHeaderColor(ghKills, P)
@@ -1517,7 +1520,7 @@ function Overlord.LeaderboardUI:CreateGuildRow(parent, index, yOffset, P)
 
     row.rank = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     row.rank:SetPoint("CENTER", row, "CENTER", LB_GUILD_COL_RANK, 0)
-    row.rank:SetWidth(36)
+    row.rank:SetWidth(LB_GUILD_RANK_W)
     row.rank:SetJustifyH("CENTER")
 
     row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -1528,7 +1531,7 @@ function Overlord.LeaderboardUI:CreateGuildRow(parent, index, yOffset, P)
 
     row.kills = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     row.kills:SetPoint("CENTER", row, "CENTER", LB_GUILD_COL_KILLS, 0)
-    row.kills:SetWidth(40)
+    row.kills:SetWidth(LB_GUILD_KILLS_TEXT_W)
     row.kills:SetJustifyH("CENTER")
 
     row:Hide()
@@ -1830,7 +1833,9 @@ RenderGuildRows = function(force)
                 else
                     row.name:SetTextColor(P.white[1], P.white[2], P.white[3])
                 end
-                row.kills:SetText(entry.kills or 0)
+                local guildKills = tonumber(entry.kills) or 0
+                row.kills:SetText(guildKills >= 1000000
+                    and string.format("%.1fM", guildKills / 1000000) or guildKills)
                 SetSecondaryTextColor(row.kills, P, medalColor)
             end
             row:Show()
