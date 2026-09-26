@@ -1477,6 +1477,9 @@ local DISPLAY_CAPTURE_RANK_LIMIT = 25
 -- Au-dela de ce nombre de couples (creneau, fortin), la reparation des victoires de
 -- fortin est decoupee sur plusieurs images au lieu d'un seul bloc.
 Overlord.Leaderboard.GK_AWARD_REPAIR_SYNC_MAX = 16
+-- Filet de securite de la passe complete une fois stable (fin de siege et mutations
+-- la relancent immediatement).
+Overlord.Leaderboard.GK_AWARD_SAFETY_RECHECK_SEC = 600
 -- Champ (pas de local) : ecart minimal entre deux builds quand une vue est affichee.
 Overlord.Leaderboard.DISPLAY_CACHE_MIN_REBUILD_SEC = 3
 local DISPLAY_CACHE_WORK_PER_SLICE = 64
@@ -6604,6 +6607,14 @@ function Overlord.Leaderboard:AwardHeldGuildKeepWinForSite(siteKey, dayKey, winT
     return changed
 end
 
+-- Etat de la fenetre de siege : change a l'ouverture et a la fermeture de chaque siege.
+function Overlord.Leaderboard:GetGuildKeepAwardWindowSignature()
+    local gk = Overlord.GuildKeep
+    if not gk or not gk.IsSiegeWindowOpen or not gk.IsSiegeWindowClosedForToday then return "" end
+    return (gk:IsSiegeWindowOpen() and "open" or "shut") .. ":"
+        .. (gk:IsSiegeWindowClosedForToday() and "done" or "pending")
+end
+
 -- Taches (fortin, jour) de la fin de passe, dans l'ordre de l'ancien corps :
 -- rattrapage de la veille d'abord, puis la cloture du jour.
 function Overlord.Leaderboard:CollectHeldGuildKeepAwardTasks()
@@ -6665,6 +6676,16 @@ function Overlord.Leaderboard:MaybeAwardGuildKeepDailyWins()
     -- Garde monotone avant tout calcul calendaire : GetServerSiegeDayKey traverse les
     -- conversions DST et allouait plusieurs tables date() sur le ticker global 1 Hz.
     if nowClock > 0 and self._gkAwardNextCheckAt and nowClock < self._gkAwardNextCheckAt then
+        return false
+    end
+    -- Sieges toutes les 6 h : une fois stable, la passe complete (~170 reconciliations
+    -- en fin de semaine) ne repart qu'a la fin d'un siege (ouverture/fermeture de la
+    -- fenetre), sur mutation reelle (invalidation) ou apres le filet de securite.
+    -- Le coup d'oeil toutes les 30 s ne lit que l'etat de la fenetre de siege.
+    if self._gkAwardStable and nowClock > 0 and self._gkAwardSafetyAt
+        and nowClock < self._gkAwardSafetyAt
+        and self._gkAwardWindowSignature == self:GetGuildKeepAwardWindowSignature() then
+        self._gkAwardNextCheckAt = nowClock + GK_DAILY_AWARD_RECHECK_SEC
         return false
     end
     local dayKey = gk.GetServerSiegeDayKey and gk:GetServerSiegeDayKey() or ""
@@ -6784,6 +6805,8 @@ function Overlord.Leaderboard:CompleteGuildKeepDailyAwardPass(dayKey, changed, m
         self._gkAwardStable = true
         self._gkAwardStableDayKey = dayKey
         self._gkAwardNextCheckAt = nowClock + GK_DAILY_AWARD_RECHECK_SEC
+        self._gkAwardSafetyAt = nowClock + (self.GK_AWARD_SAFETY_RECHECK_SEC or 600)
+        self._gkAwardWindowSignature = self:GetGuildKeepAwardWindowSignature()
     end
     return changed
 end

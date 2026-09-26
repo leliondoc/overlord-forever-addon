@@ -93,4 +93,26 @@ lb:InvalidateGuildKeepDailyAwardStable()
 lb:MaybeAwardGuildKeepDailyWins()
 assert(#processed == 2 and #timers == 0 and not lb._gkAwardRepairJob,
     "Small repair should stay synchronous")
-print("Forever guild keep awards: sliced late-campaign repair, single job, order, stability and small-pass sync OK")
+-- Sieges are every 6 h: once stable, the full pass only reruns when the siege
+-- window changes, on a real mutation, or after the 10-minute safety net.
+local now = 1000
+GetTime = function() return now end
+local windowOpen = true
+Overlord.GuildKeep.IsSiegeWindowOpen = function() return windowOpen end
+processed = {}
+lb:InvalidateGuildKeepDailyAwardStable()
+lb:MaybeAwardGuildKeepDailyWins()
+assert(#processed == 2 and lb._gkAwardStable == true, "Stable pass not recorded")
+now = now + 31
+processed = {}
+lb:MaybeAwardGuildKeepDailyWins()
+assert(#processed == 0, "Full pass reran every 30 s without any siege change")
+now = now + 31
+windowOpen = false
+lb:MaybeAwardGuildKeepDailyWins()
+assert(#processed == 2, "Siege end did not rerun the full pass")
+now = now + 601
+processed = {}
+lb:MaybeAwardGuildKeepDailyWins()
+assert(#processed == 2, "Safety net did not rerun the full pass")
+print("Forever guild keep awards: sliced late-campaign repair, single job, order, stability, small-pass sync and siege-driven rechecks OK")
