@@ -16,6 +16,10 @@ assert(op:GetDisplayName(site) == "Lesi Bear Cave")
 assert(site.standaloneOpenWorld and not site.frontId)
 assert(op:ResolveSiteByMapID(1439) == site and op:ResolveSiteByMapID(62) == site)
 assert(#op:GetSitesOnMap(1439) == 1 and #op:GetSitesOnMap(62) == 1)
+-- Shown on the Kalimdor continent map like the Ashenvale and Durotar outposts.
+assert(op:ShouldProjectOutpostPinOnMap(site, 1414) and op:ShouldProjectOutpostPinOnMap(site, 12),
+    "Lesi Bear Cave is not projected on Kalimdor")
+assert(not op:ShouldProjectOutpostPinOnMap(site, 1439), "Detail map must not project its own pin")
 -- Lunaclaw's cave, Darkshore (Classic map).
 assert(op:IsPlayerInOutpostGeometry(site), "Standalone capture requires an active front")
 now, x = now + 1, 46

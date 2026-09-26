@@ -80,6 +80,8 @@ Overlord.OutpostSites = {
         mapID = 1439,
         mapIDs = { [62] = true, [1439] = true },
         displayMapIDs = { [62] = true, [1439] = true },
+        -- Kalimdor : sans cette ligne le pin est projete comme un site des Royaumes de l'Est.
+        regionalMapIDs = { [12] = true, [1414] = true },
         includeChildMaps = false,
         mapNameNeedles = { "darkshore", "sombrivage", "dunkelküste", "costa oscura", "costa negra", "黑海岸" },
         -- Grotte de Lunaclaw (quete druide de la forme d'ours), carte Classic de Sombrivage.
