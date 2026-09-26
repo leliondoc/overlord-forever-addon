@@ -50,11 +50,23 @@ local forestNames = {
 L.WOOD_ZONE_ASHENVALE_FOREST = forestNames[locale] or forestNames.enUS
 if locale == "ptBR" then L.WOOD_ZONE_WETLANDS_FOREST = "Floresta do Pantanal" end
 L.FRONT_REDRIDGE_NAME = n[1]
-L.FRONT_REDRIDGE_DROPDOWN = n[2]
+L.FRONT_REDRIDGE_DROPDOWN = n[1]
 L.OUTPOST_REDRIDGE_NAME = n[10]
--- Custom site name requested verbatim by the author, shared by all locales.
-L.OUTPOST_AEYTHYR_LODGE_NAME = "Aeythyr Lodge"
-L.OUTPOST_LESI_BEAR_CAVE_NAME = "Lesi Bear Cave"
+-- Standalone outpost names, translated per locale.
+local standaloneOutpostNames = {
+    enUS = { "Savix Chapel", "Aeythyr Lodge", "Lesi Bear Cave" },
+    frFR = { "Chapelle de Savix", "Pavillon d'Aeythyr", "Grotte de l'ours de Lesi" },
+    esES = { "Capilla de Savix", "Pabellón de Aeythyr", "Cueva del oso de Lesi" },
+    deDE = { "Kapelle von Savix", "Aeythyrs Jagdhütte", "Lesis Bärenhöhle" },
+    ruRU = { "Часовня Савикса", "Охотничий домик Эйтира", "Медвежья пещера Леси" },
+    ptBR = { "Capela Savix", "Pavilhão de Aeythyr", "Caverna do Urso de Lesi" },
+    zhCN = { "萨维克斯教堂", "艾西尔小屋", "莱西熊洞" },
+}
+standaloneOutpostNames.esMX = standaloneOutpostNames.esES
+local outpostNames = standaloneOutpostNames[locale] or standaloneOutpostNames.enUS
+L.OUTPOST_SILVERPINE_NAME = outpostNames[1]
+L.OUTPOST_AEYTHYR_LODGE_NAME = outpostNames[2]
+L.OUTPOST_LESI_BEAR_CAVE_NAME = outpostNames[3]
 for index, id in ipairs({ "redridge_lakeshire", "redridge_althers_mill", "redridge_ilgalar",
     "redridge_three_corners", "redridge_lakeridge_highway", "redridge_stonewatch_falls",
     "redridge_renders_valley" }) do

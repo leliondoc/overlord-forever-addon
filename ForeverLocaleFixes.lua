@@ -122,3 +122,26 @@ for key, value in pairs(L) do
         L[key] = value
     end
 end
+
+-- Oublis de traduction visibles (revue 1.0.29).
+local visibleTranslationFixes = {
+    frFR = {
+        CHECK_PVP_BUTTON = "Exporter",
+        HOF_BUTTON = "Panthéon",
+        HOF_TITLE = "Panthéon",
+        GUIDE_SECTION_HOF = "Panthéon",
+        LB_CAPTURES_ALLIANCE = "Alliance : captures",
+        LB_CAPTURES_HORDE = "Horde : captures",
+        MB_WANTED = "RECHERCHÉ",
+        STATS_COL_STAT = "Statistique",
+    },
+    esES = {
+        MB_WANTED = "SE BUSCA",
+    },
+    deDE = {
+        CHECK_PVP_BUTTON = "Exportieren",
+        MB_WANTED = "GESUCHT",
+    },
+}
+visibleTranslationFixes.esMX = visibleTranslationFixes.esES
+for key, value in pairs(visibleTranslationFixes[locale] or {}) do L[key] = value end

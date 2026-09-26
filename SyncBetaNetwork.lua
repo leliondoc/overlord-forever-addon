@@ -46,6 +46,10 @@ local function dropOldestWaitingBulk()
     return false
 end
 local seen, recent, assemblies = {}, {}, {}
+-- Gateways heard on our realm channel (last hop). A group copy coming from one of
+-- them is already on that channel: re-emitting it there only burns the Blizzard
+-- channel throttle of every raid member.
+local channelHeard, channelHeardOrder = {}, {}
 local seenOrder, recentOrder, assemblyOrder, peerOrder = {}, {}, {}, {}
 local serial = 0
 local session = tostring(time()) .. "-" .. tostring(math.random(1, 2147483646))
@@ -125,6 +129,19 @@ function net:IsRelayedOrigin(sender)
 end
 function net:IsTargetedDispatch()
     return self.context ~= nil and self.context.targeted == true
+end
+-- The same broadcast was queued by this client within 2 s: its channel/group
+-- copies already carry it, a legacy direct copy would only duplicate it.
+function net:CarriesBroadcast(kind, payload)
+    if not active() then return false end
+    local at = recent[tostring(kind) .. "|*|" .. tostring(payload or "")]
+    return at ~= nil and GetTime() - at < 2
+end
+-- Packet dispatched straight from its author over our channel or group.
+function net:IsDirectLocalDispatch()
+    local c = self.context
+    return c ~= nil and (tonumber(c.hops) or 0) == 0
+        and (c.transport == "CHANNEL" or c.transport == "RAID" or c.transport == "PARTY")
 end
 function net:IsEcho(kind, payload)
     return self.context and self.context.kind == kind and self.context.payload == payload
@@ -226,11 +243,11 @@ local function emit(task)
     if task.transport == "GROUP" and not IsInGroup() then return true end
     if task.transport == "CHANNEL" and not sync:GetChannelId() then return true end
     if not spend(task.bytes) then return false end
-    local sent
+    local sent, reason
     if task.transport == "BNET" then sent = sync:SendToBNet(task.target, task.kind, task.data)
     elseif task.transport == "WHISPER" then sent = sync:SendWhisper(task.kind, task.data, task.target)
     elseif task.transport == "GROUP" then sent = sync:SendToGroup(task.kind, task.data)
-    else sent = sync:SendToChannel(task.kind, task.data, false) end
+    else sent, reason = sync:SendToChannel(task.kind, task.data, false) end
     if sent ~= true then
         -- A BNet recipient can log out after route selection. There is no
         -- throttling retry here; let catchup rediscover a path instead of
@@ -239,6 +256,9 @@ local function emit(task)
             net.stats.dropped = net.stats.dropped + 1
             return true
         end
+        -- Our own 1 s channel byte budget: wait in place, as before. Only a real
+        -- refusal by the Blizzard throttle is retried later on its own.
+        task.refused = reason ~= "budget"
         return false
     end
     net.stats.sent = net.stats.sent + 1
@@ -291,7 +311,22 @@ pump = function()
             item.index = #item.tasks + 1
             break
         end
-        if not emit(task) then break end
+        if not emit(task) then
+            if not task.refused then break end
+            -- A refused channel/group/whisper copy must not stall the Battle.net
+            -- copies behind it: retry it later on its own, at most three times.
+            task.refused = nil
+            task.retries = (task.retries or 0) + 1
+            net.stats.refused = (net.stats.refused or 0) + 1
+            item.index = item.index + 1
+            if task.retries <= 3 and queuedCount() < MAX_QUEUE then
+                local retryLane = URGENT[item.p.kind] and urgentLane or bulkLane
+                retryLane.items[#retryLane.items + 1] = { p = item.p, tasks = { task }, index = 1 }
+            else
+                net.stats.dropped = net.stats.dropped + 1
+            end
+            break
+        end
         item.index = item.index + 1
     end
     if item.index > #item.tasks then lane.items[lane.head] = false; lane.head = lane.head + 1 end
@@ -357,7 +392,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     if addressed and p.kind ~= "NH" then
         local previous = self.context
         self.context = { origin = origin, gateway = sender, hops = #p.path - 1,
-            kind = p.kind, payload = p.payload, targeted = p.target ~= "*" }
+            kind = p.kind, payload = p.payload, targeted = p.target ~= "*", transport = transport }
         -- BETA is explicit: do not masquerade the relay as a direct WoW whisper.
         local ok, err = pcall(sync.OnAddonMessage, sync, "OverlordF",
             p.kind .. ":" .. p.payload, "BETA", origin)
@@ -381,8 +416,12 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     end
     if #p.path < MAX_PATH and (p.target == "*" or not addressed) then
         p.path[#p.path + 1] = me
-        p.skipChannel = transport == "CHANNEL"
         p.skipGroup = transport == "RAID" or transport == "PARTY"
+        -- Whoever gave us a group copy either put it on the channel or got it from
+        -- there. Only a gateway we never hear on our channel (another realm) needs it.
+        local heardAt = p.skipGroup and channelHeard[sender:lower()] or nil
+        p.skipChannel = transport == "CHANNEL"
+            or (heardAt ~= nil and GetTime() - heardAt <= 300)
         self:Queue(p)
     end
     return true
@@ -395,6 +434,9 @@ function net:ReceiveFragment(payload, sender, transport, bnetID)
     if not name or not id or #id > 64 or not id:match("^[%w%-]+$") or not chunk
         or #chunk > 170 or not part or not count or count < 1 or count > 64
         or part < 1 or part > count or part ~= math.floor(part) or count ~= math.floor(count) then return false end
+    if transport == "CHANNEL" then
+        remember(channelHeard, channelHeardOrder, name:lower(), GetTime(), 256)
+    end
     local key = name:lower() .. ":" .. id
     local a = assemblies[key]
     if not a or GetTime() - a.at > 15 then

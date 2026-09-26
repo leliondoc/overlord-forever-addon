@@ -346,4 +346,54 @@ for i = 2, #names do
         "Client without a community never caught up from beta peers: " .. names[i])
 end
 assert(solo.Overlord.Leaderboard.kills["Unique Tester"] == 4999, "Solo client lost the Alliance union")
+-- A peer that never answers (lost request, departed player, old version) used to
+-- freeze the anti-entropy for the 20 min ACK timeout. After 270 s of silence the
+-- next peer is tried, and the Horde ranking still arrives.
+for _, e in ipairs(clients) do
+    e.Overlord.Sync._historyCatchupWakeGeneration =
+        (e.Overlord.Sync._historyCatchupWakeGeneration or 0) + 1
+    e.Overlord.Sync._historyCatchupPending = nil
+    local response = e.Overlord.Sync._historyCatchupResponse
+    if response and response.ticker then response.ticker:Cancel() end
+    e.Overlord.Sync._historyCatchupResponse = nil
+    e.Overlord.Sync._historyCatchupPushInbound = nil
+end
+local mute = client("Mute Tester", "horde")
+local late = client("Late Tester", "alliance")
+local muteAsked = false
+mute.Overlord.Sync.OnHistoryCatchupRequest = function() muteAsked = true; return false end
+late.Overlord.Sync.GetOnlineCommunityMembers = function()
+    return { muteAsked and d.name or mute.name }
+end
+local lateHeartbeat = true
+local function announceLate()
+    if not lateHeartbeat then return end
+    for _, e in ipairs({ b, c, d, mute, late }) do
+        e.Overlord.Sync.SendSyncRequest = function() return true end
+        e.Overlord.BetaNetwork:Broadcast("NH", "1.0.29")
+    end
+    later(45, announceLate)
+end
+announceLate()
+advance(10)
+assert(late.Overlord.BetaNetwork:IsPeer(mute.name), "Mute peer was not discovered")
+assert(late.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true, true))
+advance(320)
+assert(muteAsked, "Fixture never asked the mute peer")
+local lateDiag = table.concat(late.Overlord.Sync:GetHistoryCatchupDiagnostics(), " ")
+assert(late.Overlord.Sync._historyCatchupPending
+    and late.Overlord.Sync._historyCatchupPending.target == d.name,
+    "Catch-up stayed stuck on a silent peer: " .. lateDiag)
+advance(1600)
+lateHeartbeat = false
+for i = 2, #names do
+    assert(late.Overlord.Leaderboard.kills[names[i]] == d.Overlord.Leaderboard.kills[names[i]],
+        "Late client never caught up after a silent peer: " .. names[i])
+end
+lateDiag = table.concat(late.Overlord.Sync:GetHistoryCatchupDiagnostics(), " ")
+-- Incomplete rounds are spaced out (rows are already merged) instead of resending
+-- the whole snapshot up to four times back to back through the same bridge.
+local requests = tonumber(lateDiag:match("(%d+) requests"))
+assert(requests and requests <= 4 and lateDiag:find("rows received", 1, true),
+    "Catch-up hammered the bridge or lost its diagnostics: " .. lateDiag)
 print("Beta catchup: four replicas converge; late Analyst, 500-player ranking + 25 Horde captures, guilds, three hops, backpressure, paced relay queues, return union and verified ACK OK")

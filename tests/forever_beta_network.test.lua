@@ -58,6 +58,8 @@ local function client(name, channel, pool)
         return self:SendToChannel(kind, fragment)
     end
     function s:SendToChannel(kind, fragment)
+        if a.refuseAlways then return false end
+        if a.budgetTicks and a.budgetTicks > 0 then a.budgetTicks = a.budgetTicks - 1; return false, "budget" end
         if a.refuseChannel then a.refuseChannel = false; return false end
         assert(#kind + #fragment + 1 <= 255, "Addon packet exceeded 255 bytes")
         for _, other in ipairs(clients) do
@@ -141,6 +143,51 @@ a.refuseChannel = true
 assert(a.BetaNetwork:Send("K", "retry-without-group"))
 drain()
 assert(d.received[#d.received].payload == "retry-without-group", "Throttled solo channel fragment was discarded")
+-- A group copy from a gateway heard on our channel is already on that channel:
+-- re-emitting it there burned every raid member's channel throttle. A gateway we
+-- never hear on the channel (other realm) still gets its copy forwarded.
+do
+    local channelSends = 0
+    local originalSendToChannel = b.Sync.SendToChannel
+    b.Sync.SendToChannel = function(self, kind, fragment)
+        channelSends = channelSends + 1
+        return originalSendToChannel(self, kind, fragment)
+    end
+    local function groupWire(id, origin)
+        return table.concat({ "global", id, tostring(time()), "*", origin, "K", "raid-copy-" .. id }, "|")
+    end
+    b.BetaNetwork:ReceiveFragment("probe-1:1:1:x", a.name, "CHANNEL")
+    assert(b.BetaNetwork:Receive(groupWire("raid-1", a.name), a.name, "RAID"))
+    drain()
+    assert(channelSends == 0, "Raid copy from a channel peer was re-emitted on the channel")
+    assert(c.received[#c.received].payload == "raid-copy-raid-1", "Raid copy no longer reached the bridge")
+    assert(b.BetaNetwork:Receive(groupWire("raid-2", "Remote Realmer"), "Remote Realmer", "RAID"))
+    drain()
+    assert(channelSends > 0, "Raid copy from another realm was not forwarded to the channel")
+    b.Sync.SendToChannel = originalSendToChannel
+end
+-- Our own 1 s channel byte budget is not a Blizzard refusal: the fragment waits in
+-- place (as before) and is never counted as refused nor dropped.
+do
+    local refusedBefore, droppedBefore = b.BetaNetwork.stats.refused or 0, b.BetaNetwork.stats.dropped
+    b.budgetTicks = 8
+    assert(b.BetaNetwork:Send("K", "bridge-budget-wait"))
+    drain()
+    assert(a.received[#a.received].payload == "bridge-budget-wait", "Budget-deferred channel copy was lost")
+    assert((b.BetaNetwork.stats.refused or 0) == refusedBefore and b.BetaNetwork.stats.dropped == droppedBefore,
+        "Local channel budget was treated as a Blizzard refusal")
+end
+-- A channel that stays throttled must neither stall the Battle.net copy behind it
+-- nor retry forever: three bounded retries, then the copy is counted as dropped.
+b.refuseAlways = true
+local refusedBefore, droppedBefore = b.BetaNetwork.stats.refused or 0, b.BetaNetwork.stats.dropped
+assert(b.BetaNetwork:Send("K", "bridge-channel-throttled"))
+drain()
+b.refuseAlways = nil
+assert(c.received[#c.received].payload == "bridge-channel-throttled",
+    "Throttled channel copy blocked the Battle.net bridge")
+assert((b.BetaNetwork.stats.refused or 0) - refusedBefore == 4
+    and b.BetaNetwork.stats.dropped - droppedBefore == 1, "Refused channel copy was not bounded")
 -- A friend disconnecting must not hold the FIFO until its packet expires.
 us.offline = true
 local started = now

@@ -175,4 +175,37 @@ net.Broadcast = function(_, _, _, actual)
 end
 assert(s:BroadcastToCommunity("DX", "first-front", 12, 0.3, true, extras))
 assert(s:BroadcastGuildKeepToCommunity("GK", "keep", 12, 0.3, extras) == 1)
+
+-- A broadcast LK line from our HR target is not part of its addressed snapshot:
+-- counting it would break the digest proof and force an endless retry.
+assert(loadfile("SyncHistoryCatchup.lua"))()
+local lkPayload = "Remote Tester:41:WARRIOR:Alliance:1789527600:enus::0:B1789527600:2"
+s._historyCatchupPending = { awaitingAck = true, terminal = false, deliveryCount = 0, deliveryHash = 0,
+    targetKey = tostring(s:GetCaptureContributorDedupKey("Remote Tester")):lower() }
+net.context = { targeted = false }
+assert(not s:NoteHistoryCatchupDelivery("LK", lkPayload, "Remote Tester", "BETA"),
+    "A broadcast LK beacon was counted in the HR delivery digest")
+net.context = { targeted = true }
+assert(s:NoteHistoryCatchupDelivery("LK", lkPayload, "Remote Tester", "BETA")
+    and s._historyCatchupPending.deliveryCount == 1, "Addressed HR row was not counted")
+net.context, s._historyCatchupPending = nil, nil
+-- A legacy direct K/EK/SR copy is skipped once the relay queued the same packet
+-- (its channel/group copies carry it); other kinds keep their direct copy.
+assert(net:Send("K", "dedup-kill"), "Relay refused the kill")
+assert(s:RelayAlreadyCarries("K", "dedup-kill"), "Relayed kill was not recognized")
+assert(not s:RelayAlreadyCarries("K", "other-kill"), "Unrelated kill was skipped")
+assert(net:Send("C", "dedup-capture"))
+assert(not s:RelayAlreadyCarries("C", "dedup-capture"), "Transport-sensitive kind lost its direct copy")
+-- Blizzard throttle refusals (Enum.SendAddonMessageResult ~= 0) are reported,
+-- counted and never mistaken for a sent packet; older boolean results still work.
+local originalChatInfo = C_ChatInfo
+C_ChatInfo = { SendAddonMessage = function() return 8 end }
+assert(s:SendAddonChecked("K:x", "CHANNEL", 1) == false, "Channel throttle refusal counted as sent")
+C_ChatInfo = { SendAddonMessage = function() return 0 end }
+assert(s:SendAddonChecked("K:x", "CHANNEL", 1) == true)
+C_ChatInfo = { SendAddonMessage = function() return true end }
+assert(s:SendAddonChecked("K:x", "RAID") == true)
+local channelStats = s._addonSendStats.CHANNEL
+assert(channelStats.refused >= 1 and channelStats.lastCode == 8, "Refusal was not counted")
+C_ChatInfo = originalChatInfo
 print("Beta integration: real R2/fragmented R2, low-level kills, peer trust, no club API, unchanged community payloads OK")

@@ -2027,6 +2027,7 @@ end
 -- Envoi : priorite GROUPE (RAID/PARTY) pour que la sync marche cross-realm, sinon canal Overlord (meme royaume uniquement).
 function Overlord.Sync:Send(msgType, data, groupOnly)
     if Overlord.BetaNetwork and Overlord.BetaNetwork:IsEcho(msgType, data) then return false end
+    if self:RelayAlreadyCarries(msgType, data) then return true end
     if Overlord.InstanceSuspended then return end
     -- Filet de securite : IsInInstance/GetInstanceInfo peuvent confirmer une instance
     -- meme quand InstanceSuspended est brievement false (race condition en loading)
@@ -2046,23 +2047,51 @@ function Overlord.Sync:Send(msgType, data, groupOnly)
     local raidOk = IsInRaid() and UnitInRaid("player")
         and (not self._instanceResumeTime or GetTime() - self._instanceResumeTime > 5)
     if raidOk then
-        securecall(C_ChatInfo.SendAddonMessage, PREFIX, msg, "RAID")
-        return true
+        return self:SendAddonChecked(msg, "RAID")
     end
     if IsInGroup() then
-        securecall(C_ChatInfo.SendAddonMessage, PREFIX, msg, "PARTY")
-        return true
+        return self:SendAddonChecked(msg, "PARTY")
     end
 
     if groupOnly then return false end
     if SYNC_USE_REALM_CHANNEL then
         local channelId = self:GetChannelId()
         if channelId then
-            securecall(C_ChatInfo.SendAddonMessage, PREFIX, msg, "CHANNEL", channelId)
-            return true
+            return self:SendAddonChecked(msg, "CHANNEL", channelId)
         end
     end
     return false
+end
+
+-- Forever : le relais beta porte deja sur le canal et le groupe chaque paquet qu'il
+-- diffuse. Les copies directes heritees de Retail doublaient K/EK et, pour SR,
+-- contournaient la borne de ~3 repondants (une SR directe fait repondre ~95 % du
+-- canal). Limite aux types dont le traitement ne depend pas du transport.
+Overlord.Sync.RELAY_DEDUP_KINDS = { K = true, EK = true, SR = true }
+function Overlord.Sync:RelayAlreadyCarries(msgType, data)
+    if not self.RELAY_DEDUP_KINDS[msgType] or Overlord.BetaNetworkEnabled == false then return false end
+    local net = Overlord.BetaNetwork
+    return net ~= nil and net.CarriesBroadcast ~= nil and net:CarriesBroadcast(msgType, data) == true
+end
+
+-- C_ChatInfo.SendAddonMessage renvoie Enum.SendAddonMessageResult (0 = succes) ;
+-- les anciens clients renvoyaient un booleen. Un envoi refuse par le throttle
+-- Blizzard (canal ou prefixe) n'est PAS parti : l'appelant doit le savoir pour
+-- reessayer au lieu de perdre le paquet en silence.
+function Overlord.Sync:SendAddonChecked(msg, chatType, target)
+    local result = securecall(C_ChatInfo.SendAddonMessage, PREFIX, msg, chatType, target)
+    local ok = result == nil or result == true or result == 0
+    local stats = self._addonSendStats or {}
+    self._addonSendStats = stats
+    local row = stats[chatType] or { ok = 0, refused = 0 }
+    stats[chatType] = row
+    if ok then
+        row.ok = row.ok + 1
+    else
+        row.refused = row.refused + 1
+        row.lastCode = result
+    end
+    return ok
 end
 
 -- Variante pour les producteurs qui envoient ensuite explicitement au canal.
@@ -2081,6 +2110,7 @@ local channelBudgetResetTime = 0
 -- Envoi supplementaire au canal (pour visibilite cross-faction : ennemis voient captures/zones en cours)
 function Overlord.Sync:SendToChannel(msgType, data, critical)
     if Overlord.BetaNetwork and Overlord.BetaNetwork:IsEcho(msgType, data) then return false end
+    if self:RelayAlreadyCarries(msgType, data) then return true end
     if not SYNC_USE_REALM_CHANNEL or Overlord.InstanceSuspended or IsInInstance() then return false end
     local channelId = self:GetChannelId()
     if not channelId then return false end
@@ -2095,10 +2125,10 @@ function Overlord.Sync:SendToChannel(msgType, data, critical)
         channelBudgetResetTime = now
     end
     local msgLen = #msg + #PREFIX + 4
-    if channelBytesSent + msgLen > CHANNEL_BYTE_BUDGET_PER_SEC and not critical then return false end
+    -- Second retour : budget local depasse (pas un refus Blizzard, se vide en 1 s).
+    if channelBytesSent + msgLen > CHANNEL_BYTE_BUDGET_PER_SEC and not critical then return false, "budget" end
     channelBytesSent = channelBytesSent + msgLen
-    securecall(C_ChatInfo.SendAddonMessage, PREFIX, msg, "CHANNEL", channelId)
-    return true
+    return self:SendAddonChecked(msg, "CHANNEL", channelId)
 end
 
 -- Broadcast du shardID courant (permet de detecter si des joueurs sont sur des shards differents)
@@ -2232,8 +2262,7 @@ function Overlord.Sync:SendWhisper(msgType, data, target)
     self:_RememberRecentAddonWhisper(target, now)
     -- securecall : empeche le taint addon de contaminer SetLastTellTarget
     -- (meme fix que SendToBNet, sinon "secret string value" sur les whispers entrants)
-    securecall(C_ChatInfo.SendAddonMessage, PREFIX, msg, "WHISPER", target)
-    return true
+    return self:SendAddonChecked(msg, "WHISPER", target)
 end
 
 -- Envoi via Battle.net (cross-faction, cross-realm, amis BNet uniquement)
@@ -2573,7 +2602,12 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
     if self:IsSenderLocalPlayer(sender) then return end
 
     -- Tracker les joueurs Overlord actifs pour la detection d'events massifs (80v80 sans raid)
-    if channel ~= "BETA" then RecordNearbySender(sender) end
+    -- Une copie relayee recue directement de son auteur (canal/groupe) remplace
+    -- la copie directe supprimee : elle compte pour la detection d'event massif.
+    if channel ~= "BETA" or (Overlord.BetaNetwork and Overlord.BetaNetwork.IsDirectLocalDispatch
+        and Overlord.BetaNetwork:IsDirectLocalDispatch()) then
+        RecordNearbySender(sender)
+    end
 
     local msgType, payload = strsplit(":", message, 2)
     if self.NoteRaidLateJoinCatchUpResponse then
@@ -8686,10 +8720,12 @@ function Overlord.Sync:SendKillBroadcast(payload)
     if self:IsLargeEvent() then
         local raidOk = IsInRaid() and UnitInRaid("player")
             and (not self._instanceResumeTime or GetTime() - self._instanceResumeTime > 5)
-        if raidOk then
-            securecall(C_ChatInfo.SendAddonMessage, PREFIX, msg, "RAID")
+        if self:RelayAlreadyCarries("K", payload) then
+            -- Le relais a deja mis ce K sur le groupe et le canal.
+        elseif raidOk then
+            self:SendAddonChecked(msg, "RAID")
         elseif IsInGroup() then
-            securecall(C_ChatInfo.SendAddonMessage, PREFIX, msg, "PARTY")
+            self:SendAddonChecked(msg, "PARTY")
         end
         self:SendToChannel("K", payload)
         return
@@ -10056,6 +10092,9 @@ end
 
 -- Broadcast ST : annonce notre band et celles qu'on peut atteindre via nos amis BNet (pour etre bridge)
 function Overlord.Sync:BroadcastST()
+    -- Annonce des ponts R1 (Retail). Sur Forever le relais beta atteint directement
+    -- les amis Battle.net ; ces annonces ne faisaient que consommer le canal.
+    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then return end
     local now = GetTime()
     if now - lastSTBroadcast < 10 then return end
     local bands = {}

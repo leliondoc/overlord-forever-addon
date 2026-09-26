@@ -35,9 +35,12 @@ test("TOC Forever 16001 and CurseForge 1701204", () => {
     assert.match(toc, /HallOfFameUI\.lua/);
     assert.doesNotMatch(toc, /HallOfFameLifetime\.lua/);
     assert.doesNotMatch(toc, /^Bounty\.lua$|^Export\.lua$/m);
-    for (const module of ["General", "GeneralSync", "GeneralMap", "GeneralNameplate",
-        "ManualBounty", "ManualBountySync", "ManualBountyMail", "ManualBountyMap", "ManualBountyUI"]) {
+    for (const module of ["General", "GeneralSync", "GeneralMap", "GeneralNameplate"]) {
         assert.ok(toc.split(/\r?\n/).includes(`${module}.lua`), `${module} is not loaded`);
+    }
+    // Gold contracts are disabled on Forever: none of their modules is loaded.
+    for (const module of ["ManualBounty", "ManualBountySync", "ManualBountyMail", "ManualBountyMap", "ManualBountyUI"]) {
+        assert.ok(!toc.split(/\r?\n/).includes(`${module}.lua`), `${module} is still loaded`);
     }
     const hof = readFileSync(new URL("../HallOfFameData.lua", import.meta.url), "utf8");
     const hofUi = readFileSync(new URL("../HallOfFameUI.lua", import.meta.url), "utf8");

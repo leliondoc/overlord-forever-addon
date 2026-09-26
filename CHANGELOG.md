@@ -1,4 +1,19 @@
-1.0.28
+1.0.29
+
+**Overlord Forever 1.0.29**
+
+- Gold contracts are disabled on Overlord Forever: their modules are no longer loaded (lighter addon), the Contracts button is greyed out, no wax seal is shown on the maps, contract messages from older versions are ignored, and an open contract no longer prevents anyone from becoming General.
+- The leaderboard catch-up now actually brings in the other faction's scores. Three problems kept it from working through Battle.net bridges: a player who never answered blocked it for 20 minutes before the next one was tried (now 4.5 minutes); a transfer that lost even a few lines on the way was restarted at once, up to four times in a row, which saturated the bridge and never finished (the lines received are kept and the next round follows about two minutes later); and every other round now asks a player of the other faction first, since allies share the same gap. The protocol and the acceptance rules are unchanged.
+- Packets refused by Blizzard's addon throttle are no longer lost silently. Overlord ignored the result of each send: when the realm channel was saturated, a kill, capture or relay fragment was dropped while being counted as sent, so two players of the same faction could see slightly different totals. A refused send is now reported, and relay copies are retried (at most three times) without holding back the Battle.net copies.
+- Much less traffic on the realm channel, so fewer sends hit Blizzard's throttle during big fights:
+  - In a raid, each member no longer re-sends on the channel every packet it received from the raid when that packet was already on the channel. In a 40-player raid, one kill could go out on the channel up to about 39 times.
+  - Kills (K, EK) and sync requests (SR) no longer go out twice (a direct copy inherited from Retail plus the relay's copy). For sync requests this also restores the intended limit of about three answering players; the direct copy made about 95% of the channel answer every request.
+  - The old bridge announcements (ST), replaced by the relay, are no longer sent.
+- `/ov network` now also shows the state of the leaderboard catch-up (requests, completed rounds, lines received, last player asked and result), relay counters and sends refused by Blizzard.
+- The Redridge front is now listed by its zone name (Redridge Mountains / Les Carmines / ...) instead of the town of Lakeshire, like the other fronts.
+- Translated the standalone outpost names (Savix Chapel, Aeythyr Lodge, Lesi Bear Cave) in every language, and fixed a few English leftovers in French, Spanish and German (Hall of Fame, Export, WANTED...).
+- Brazilian Portuguese: bounty COD invoices sent by Portuguese clients are recognized again (their mail subject had been translated, so the signer never matched it).
+- Brazilian Portuguese and Simplified Chinese: fixed many machine-translation errors (kills column, keep, class, race, Discord, disabled/auto toggles, layer terms, guild keep messages) and translated the tutorial texts that were still in English.
 
 **Overlord Forever 1.0.28**
 

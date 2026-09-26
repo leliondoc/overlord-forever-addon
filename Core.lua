@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.0.28"
+Overlord.Version = "1.0.29"
 -- Forever uses one global community. The beta relay remains enabled in parallel
 -- so non-members and temporarily unavailable C_Club rosters still converge.
 Overlord.CommunityModeEnabled = true
@@ -4140,22 +4140,29 @@ function Overlord:Initialize()
 
         for _, mod in ipairs({ "Ressources", "Combat", "ManualBounty" }) do
             local moduleName = mod
-            AddLoginInitStage(moduleName, function()
-                return Overlord[moduleName]:Initialize()
-            end, moduleName == "ManualBounty")
+            -- Contrats en or desactives sur Forever : le module n'est plus charge.
+            if Overlord[moduleName] then
+                AddLoginInitStage(moduleName, function()
+                    return Overlord[moduleName]:Initialize()
+                end, moduleName == "ManualBounty")
+            end
         end
 
-        AddLoginInitStage("ManualBountyMailLedger", function()
-            return Overlord.ManualBountyMail:EnsureCodSendLedgerPrepared()
-        end, true)
+        if Overlord.ManualBountyMail then
+            AddLoginInitStage("ManualBountyMailLedger", function()
+                return Overlord.ManualBountyMail:EnsureCodSendLedgerPrepared()
+            end, true)
+        end
 
         for _, mod in ipairs({
             "ManualBountyMail", "General", "Sync", "ZoneIndicator", "Shard",
         }) do
             local moduleName = mod
-            AddLoginInitStage(moduleName, function()
-                return Overlord[moduleName]:Initialize()
-            end)
+            if Overlord[moduleName] then
+                AddLoginInitStage(moduleName, function()
+                    return Overlord[moduleName]:Initialize()
+                end)
+            end
         end
 
         AddLoginInitStage("Capture", function()

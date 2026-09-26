@@ -206,6 +206,30 @@ local function StartNetworkProbe()
         end
         if row then row.count = row.count + 1 end
     end)
+    if Overlord.Sync.GetHistoryCatchupDiagnostics then
+        for _, line in ipairs(Overlord.Sync:GetHistoryCatchupDiagnostics()) do
+            Overlord:PrintNotification("[Overlord] " .. line)
+        end
+    end
+    local sendStats = Overlord.Sync._addonSendStats
+    if sendStats then
+        local parts = {}
+        for _, chatType in ipairs({ "CHANNEL", "RAID", "PARTY", "WHISPER" }) do
+            local row = sendStats[chatType]
+            if row then
+                parts[#parts + 1] = string.format("%s %d/%d%s", chatType, row.refused, row.ok + row.refused,
+                    row.lastCode and (" (code " .. tostring(row.lastCode) .. ")") or "")
+            end
+        end
+        Overlord:PrintNotification("[Overlord] Sends refused by Blizzard throttle: "
+            .. (#parts > 0 and table.concat(parts, ", ") or "none"))
+    end
+    local relayStats = Overlord.BetaNetwork and Overlord.BetaNetwork.stats
+    if relayStats then
+        Overlord:PrintNotification(string.format(
+            "[Overlord] Relay: %d sent, %d received, %d dropped, %d refused then retried.",
+            relayStats.sent or 0, relayStats.received or 0, relayStats.dropped or 0, relayStats.refused or 0))
+    end
     Overlord:PrintNotification("[Overlord] Network observation: 30s. Use /ov sync now.")
     C_Timer.After(30, function()
         frame:UnregisterAllEvents()
