@@ -203,6 +203,24 @@ sentTo = {}
 assert(ally.BetaNetwork:Send("K", "from-ally")); drain()
 assert(gate.received[#gate.received].payload == "from-ally", "Alliance packet did not reach the gateway")
 assert(not sentTo[ally.name], "Gateway bounced a packet back to the friend on its path")
+-- Saturated bridge: a capture alert overtakes queued kills, and a full queue
+-- displaces its oldest waiting kill instead of refusing the alert.
+local rush = client("Rush Tester", "rush")
+local watch = client("Watch Tester", "rush")
+for i = 1, 60 do assert(rush.BetaNetwork:Send("K", "bulk-" .. i)) end
+assert(rush.BetaNetwork:Send("ZS", "alert-now"))
+drain()
+assert(watch.received[1] and watch.received[1].kind == "ZS",
+    "Capture alert waited behind queued kills")
+local full = client("Full Tester", "full")
+local fullWatch = client("Fullwatch Tester", "full")
+for i = 1, 128 do assert(full.BetaNetwork:Send("K", "fill-" .. i)) end
+assert(not full.BetaNetwork:Send("K", "fill-overflow"), "Bulk packet exceeded the queue bound")
+assert(full.BetaNetwork:Send("ZS", "alert-full"), "Full queue refused a capture alert")
+assert(full.BetaNetwork.stats.displaced == 1, "Alert did not displace exactly one waiting kill")
+drain()
+assert(fullWatch.received[1].payload == "alert-full", "Displacing alert was not sent first")
+assert(#fullWatch.received == 128, "Queue bound changed: " .. #fullWatch.received)
 a.BetaNetworkEnabled = false
 assert(not a.BetaNetwork:Send("K", "disabled"), "Beta transport remained active after community re-enable")
 print("Beta network: community-parallel relay, fragmentation, global routing, reply path, dedup, identity, expiry and queue bounds OK")

@@ -1,4 +1,8 @@
-1.0.22
+1.0.23
+
+**Overlord Forever 1.0.23**
+
+- Relay priority for large events: when a player's relay is saturated (for example a Horde–Alliance Battle.net bridge during a big battle), capture, keep, outpost, front, faction-call and commander messages are now sent before kills, rankings, history and economy data. Those can wait, since the periodic catch-up repairs them afterwards. The queue keeps its 128-packet bound; when it is full, an urgent message replaces the oldest waiting non-urgent one instead of being refused.
 
 **Overlord Forever 1.0.22**
 

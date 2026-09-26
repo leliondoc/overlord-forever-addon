@@ -12,7 +12,39 @@ for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF F
 end
 local MAX_PACKET, MAX_PATH, TTL = 3600, 4, 120
 local MAX_BRIDGE_FRIENDS = 5
-local queue, head, pumping = {}, 1, false
+local MAX_QUEUE = 128
+-- Two send lanes sharing one budget and one 128-packet bound. When a bridge
+-- saturates (large events), live map state and alerts go first; scores, history
+-- and economy wait, since catch-up repairs them later anyway.
+local URGENT = {}
+for kind in ("NH SH C ZS ZR CB GK GC GA G7 OP OC TV FR FC GE GP GX GD GM"):gmatch("%S+") do
+    URGENT[kind] = true
+end
+local urgentLane, bulkLane = { items = {}, head = 1 }, { items = {}, head = 1 }
+local pumping = false
+local function laneSize(lane) return #lane.items - lane.head + 1 end
+local function queuedCount() return laneSize(urgentLane) + laneSize(bulkLane) end
+local function compactLane(lane)
+    if lane.head > #lane.items then
+        lane.items, lane.head = {}, 1
+    elseif lane.head > MAX_QUEUE then
+        local remaining = {}
+        for i = lane.head, #lane.items do remaining[#remaining + 1] = lane.items[i] end
+        lane.items, lane.head = remaining, 1
+    end
+end
+-- Oldest bulk packet whose sending has not started (partially sent packets are
+-- kept so their fragments still reassemble).
+local function dropOldestWaitingBulk()
+    for i = bulkLane.head, #bulkLane.items do
+        local item = bulkLane.items[i]
+        if item and item.index == 1 then
+            table.remove(bulkLane.items, i)
+            return true
+        end
+    end
+    return false
+end
 local seen, recent, assemblies = {}, {}, {}
 local seenOrder, recentOrder, assemblyOrder, peerOrder = {}, {}, {}, {}
 local serial = 0
@@ -199,28 +231,43 @@ local function emit(task)
     return true
 end
 function net:Queue(p, immediate)
-    if #queue - head + 1 >= 128 then self.stats.dropped = self.stats.dropped + 1; return false end
+    local urgent = URGENT[p.kind] == true
+    if queuedCount() >= MAX_QUEUE then
+        -- Full: an urgent packet displaces the oldest waiting bulk packet instead
+        -- of being refused. Bulk packets are refused as before.
+        if not urgent or not dropOldestWaitingBulk() then
+            self.stats.dropped = self.stats.dropped + 1
+            return false
+        end
+        self.stats.dropped = self.stats.dropped + 1
+        self.stats.displaced = (self.stats.displaced or 0) + 1
+    end
     local wire = encode(p)
     if #wire > MAX_PACKET then return false end
     local item = { p = p, tasks = tasksFor(p, wire), index = 1 }
+    local lane = urgent and urgentLane or bulkLane
     -- A lease release may use the currently available budget synchronously before
     -- entering an instance, but never bypasses that budget.
     if immediate and p.kind == "ZR" then
         while item.tasks[item.index] and emit(item.tasks[item.index]) do item.index = item.index + 1 end
         if not item.tasks[item.index] then return true end
-        table.insert(queue, head, item)
-    else queue[#queue + 1] = item end
+        table.insert(lane.items, lane.head, item)
+    else lane.items[#lane.items + 1] = item end
     schedule()
     return true
 end
 pump = function()
     pumping = false
     if not active() then
-        if enabled() and #queue >= head then C_Timer.After(2, schedule) end
+        if enabled() and queuedCount() > 0 then C_Timer.After(2, schedule) end
         return
     end
-    local item = queue[head]
-    if not item then queue, head = {}, 1; return end
+    -- Finish a bulk packet already partly sent, otherwise urgent first.
+    local bulkHead = bulkLane.items[bulkLane.head]
+    local lane = (bulkHead and bulkHead.index > 1) and bulkLane
+        or (urgentLane.items[urgentLane.head] and urgentLane) or bulkLane
+    local item = lane.items[lane.head]
+    if not item then compactLane(urgentLane); compactLane(bulkLane); return end
     -- Drain the available shared byte budget, not just one fragment per tick.
     -- The old 10-fragment/s ceiling unnecessarily backed up full snapshots.
     for _ = 1, 16 do
@@ -232,14 +279,10 @@ pump = function()
         if not emit(task) then break end
         item.index = item.index + 1
     end
-    if item.index > #item.tasks then queue[head] = false; head = head + 1 end
-    if head > #queue then queue, head = {}, 1 end
-    if head > 128 then
-        local remaining = {}
-        for i = head, #queue do remaining[#remaining + 1] = queue[i] end
-        queue, head = remaining, 1
-    end
-    if queue[head] then schedule() end
+    if item.index > #item.tasks then lane.items[lane.head] = false; lane.head = lane.head + 1 end
+    compactLane(urgentLane)
+    compactLane(bulkLane)
+    if urgentLane.items[urgentLane.head] or bulkLane.items[bulkLane.head] then schedule() end
 end
 function net:Send(kind, payload, target, immediate)
     if not active() or not allowed[kind] or type(payload) ~= "string"
