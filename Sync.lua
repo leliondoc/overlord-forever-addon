@@ -1283,6 +1283,10 @@ function Overlord.Sync:AuthorizeLeaderboardSubject(msgType, playerName, sender, 
         and self:IsExpectedHistoryCatchupDelivery(msgType, sender, channel) then
         return true, "history"
     end
+    if self.IsExpectedPagedLeaderboardDelivery
+        and self:IsExpectedPagedLeaderboardDelivery(msgType, playerName, sender, channel) then
+        return true, "paged-history"
+    end
     if self:ConsumeExpectedFullLeaderboardResponse(msgType, sender, channel) then
         return true, "full"
     end
@@ -2765,6 +2769,13 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
     end
 
     local msgType, payload = strsplit(":", message, 2)
+    if (msgType == "HR" or msgType == "HB" or msgType == "HA")
+        and payload and payload:sub(1, 2) == "5:" then
+        if self.OnPagedLeaderboardMessage then
+            return self:OnPagedLeaderboardMessage(msgType, payload, sender, channel)
+        end
+        return
+    end
     if self.NoteRaidLateJoinCatchUpResponse then
         self:NoteRaidLateJoinCatchUpResponse(sender, msgType, channel, payload)
     end

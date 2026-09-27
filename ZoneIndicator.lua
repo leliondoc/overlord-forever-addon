@@ -206,12 +206,56 @@ function Overlord.ZoneIndicator:EnsureIndicatorLayout()
     self:RepositionInStack()
 end
 
+-- Moins de gene a l'ecran : le guidage « Prochain objectif » est plus transparent
+-- et toute la fenetre s'estompe en combat (elle reste lisible, jamais masquee).
+Overlord.ZoneIndicator.GUIDANCE_ALPHA = 0.6
+Overlord.ZoneIndicator.COMBAT_FADE_ALPHA = 0.4
+
+local function ApplyIndicatorAlpha()
+    if not indicatorFrame then return end
+    local base = indicatorFrame._hudEnabled == false and HUD_DISABLED_ALPHA or HUD_ENABLED_ALPHA
+    local factor = 1
+    if indicatorFrame._guidance then factor = Overlord.ZoneIndicator.GUIDANCE_ALPHA end
+    if Overlord.HudInCombat then
+        factor = math.min(factor, Overlord.ZoneIndicator.COMBAT_FADE_ALPHA)
+    end
+    local alpha = base * factor
+    if indicatorFrame._olAppliedAlpha ~= alpha then
+        indicatorFrame._olAppliedAlpha = alpha
+        indicatorFrame:SetAlpha(alpha)
+    end
+end
+
+function Overlord.ZoneIndicator:ApplyCombatFade()
+    ApplyIndicatorAlpha()
+end
+
+-- PLAYER_REGEN_DISABLED part avant que InCombatLockdown() ne soit vrai : l'etat
+-- vient de l'evenement lui-meme. Deux evenements par combat, cout negligeable.
+do
+    local combatFadeFrame = CreateFrame("Frame")
+    combatFadeFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
+    combatFadeFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+    combatFadeFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+    combatFadeFrame:SetScript("OnEvent", function(_, event)
+        if event == "PLAYER_ENTERING_WORLD" then
+            Overlord.HudInCombat = InCombatLockdown and InCombatLockdown() or false
+        else
+            Overlord.HudInCombat = event == "PLAYER_REGEN_DISABLED"
+        end
+        Overlord.ZoneIndicator:ApplyCombatFade()
+        if Overlord.Ressources and Overlord.Ressources.ApplyCombatFade then
+            Overlord.Ressources:ApplyCombatFade()
+        end
+    end)
+end
+
 local function SetIndicatorHudEnabled(enabled)
     if not indicatorFrame then return end
     local nextEnabled = enabled ~= false
     if indicatorFrame._hudEnabled == nextEnabled then return end
     indicatorFrame._hudEnabled = nextEnabled
-    indicatorFrame:SetAlpha(indicatorFrame._hudEnabled and HUD_ENABLED_ALPHA or HUD_DISABLED_ALPHA)
+    ApplyIndicatorAlpha()
     if indicatorFrame._hudEnabled then
         indicatorFrame:EnableMouse(true)
     else
@@ -1288,6 +1332,20 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
 end
 
 -- Affiche / met a jour le HUD midscreen selon le front et l'objectif
+-- Etat « guidage » deduit de la cle d'affichage, quelle que soit la branche suivie.
+do
+    local updateIndicatorInner = Overlord.ZoneIndicator.UpdateIndicator
+    function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
+        updateIndicatorInner(self, activeZone)
+        local guidance = type(lastZoneIndicatorKey) == "string"
+            and lastZoneIndicatorKey:sub(1, 6) == "guide|"
+        if indicatorFrame and indicatorFrame._guidance ~= guidance then
+            indicatorFrame._guidance = guidance
+            ApplyIndicatorAlpha()
+        end
+    end
+end
+
 function Overlord.ZoneIndicator:RefreshHud()
     if Overlord:IsPlayerDeadOrGhost() then
         if indicatorFrame and indicatorFrame:IsShown() then

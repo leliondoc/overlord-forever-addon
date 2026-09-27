@@ -51,6 +51,8 @@ jobs:
           lua5.1 tests/forever_panel_position.test.lua
           lua5.1 tests/forever_recovery.test.lua
           lua5.1 tests/forever_popups_persistence.test.lua
+          lua5.1 tests/forever_featured_coins.test.lua
+          lua5.1 tests/forever_leaderboard_pages.test.lua
           lua5.1 tests/forever_leaderboard.test.lua
           lua5.1 tests/forever_display_cache.test.lua
           lua5.1 tests/forever_world_kills.test.lua

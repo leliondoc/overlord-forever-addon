@@ -2,7 +2,7 @@
 assert(loadfile("tests/forever_world_kills.test.lua"))()
 local sync, lb = Overlord.Sync, Overlord.Leaderboard
 assert(Overlord.PLAUSIBLE_SYNC_KILL_CEILING == 5000)
-assert(lb.KILL_RANK_LIMIT == 500, "Score ceiling changed the ranking population")
+assert(lb.KILL_RANK_LIMIT == 5000, "Score ceiling changed the ranking population")
 local epoch = OverlordDB.lastResetTimestamp
 local live, snapshot = "Remote Tester", "Snapshot Tester"
 local function killPayload(total)

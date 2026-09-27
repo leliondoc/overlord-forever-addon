@@ -44,7 +44,7 @@ local FEATURED_FRONT_TOGGLE_H = 52
 local FEATURED_FRONT_CLOSE_SIZE = 10
 -- Chevauchement de l'onglet sur le bord gauche du main (reliure livre).
 local FEATURED_FRONT_SPINE_OVERLAP = 1
-local FEATURED_FRONT_LAYOUT_VERSION = 57
+local FEATURED_FRONT_LAYOUT_VERSION = 58
 local FEATURED_FRONT_ACTIVITY_ROW_H = 18
 local FEATURED_FRONT_ACTIVITY_ROW_GAP = 3
 local FEATURED_FRONT_ACTIVITY_MAX_ROWS = 8
@@ -1545,7 +1545,7 @@ local function GetFeaturedFrontActiveZoneFrame()
     return nil
 end
 
-local function GetFeaturedFrontActivityMatchHeight(f, bountyVisible)
+local function GetFeaturedFrontActivityMatchHeight(f, footerVisible)
     local actionsCard = GetFeaturedFrontActionsCard()
     if not actionsCard then return nil end
     local actionsH = actionsCard:GetHeight()
@@ -1557,14 +1557,14 @@ local function GetFeaturedFrontActivityMatchHeight(f, bountyVisible)
         matchH = (azFrame:GetHeight() or 64) + FEATURED_FRONT_ACTIONS_GAP + actionsH
     end
 
-    if bountyVisible and f and f.bountyBtn then
-        local bountyH = f.bountyBtn:GetHeight() or 30
+    if footerVisible and f and f.activityFooter then
+        local bountyH = f.activityFooter:GetHeight() or 30
         return math.max(0, matchH - bountyH - FEATURED_FRONT_BOUNTY_GAP)
     end
     return matchH
 end
 
-local function ApplyFeaturedFrontActivityAnchors(f, contentH, bountyVisible, verticalShift)
+local function ApplyFeaturedFrontActivityAnchors(f, contentH, footerVisible, verticalShift)
     local actionsCard = GetFeaturedFrontActionsCard()
     if not actionsCard then return end
     local azFrame = GetFeaturedFrontActiveZoneFrame()
@@ -1577,25 +1577,25 @@ local function ApplyFeaturedFrontActivityAnchors(f, contentH, bountyVisible, ver
     f.activityPanel:SetPoint("RIGHT", f, "RIGHT", -24, 0)
     f.activityPanel:SetHeight(contentH)
 
-    if bountyVisible and f.bountyBtn then
-        f.bountyBtn:SetShown(true)
-        f.bountyBtn:ClearAllPoints()
-        f.bountyBtn:SetPoint("LEFT", f, "LEFT", 24, 0)
-        f.bountyBtn:SetPoint("RIGHT", f, "RIGHT", -24, 0)
+    if footerVisible and f.activityFooter then
+        f.activityFooter:SetShown(true)
+        f.activityFooter:ClearAllPoints()
+        f.activityFooter:SetPoint("LEFT", f, "LEFT", 24, 0)
+        f.activityFooter:SetPoint("RIGHT", f, "RIGHT", -24, 0)
         if hasActiveZone then
             f.activityPanel:SetPoint("TOP", topAnchor, "TOP", 0, -verticalShift)
-            f.bountyBtn:SetPoint("TOP", f.activityPanel, "BOTTOM", 0, -FEATURED_FRONT_BOUNTY_GAP)
+            f.activityFooter:SetPoint("TOP", f.activityPanel, "BOTTOM", 0, -FEATURED_FRONT_BOUNTY_GAP)
         else
-            f.bountyBtn:SetPoint(
+            f.activityFooter:SetPoint(
                 "BOTTOM", actionsCard, "BOTTOM", 0,
                 FEATURED_FRONT_NO_ACTIVE_LIFT - verticalShift)
-            f.activityPanel:SetPoint("BOTTOM", f.bountyBtn, "TOP", 0, FEATURED_FRONT_BOUNTY_GAP)
+            f.activityPanel:SetPoint("BOTTOM", f.activityFooter, "TOP", 0, FEATURED_FRONT_BOUNTY_GAP)
         end
         return
     end
 
-    if f.bountyBtn then
-        f.bountyBtn:Hide()
+    if f.activityFooter then
+        f.activityFooter:Hide()
     end
     if hasActiveZone then
         f.activityPanel:SetPoint("TOP", topAnchor, "TOP", 0, -verticalShift)
@@ -1643,12 +1643,12 @@ local function LayoutFeaturedFrontActivityScroll(f, rowCount)
     if f.activityScroll.RefreshCleanRail then f.activityScroll:RefreshCleanRail() end
 end
 
-local function AnchorFeaturedFrontActivityBlock(f, contentH, minimumContentH, bountyVisible)
+local function AnchorFeaturedFrontActivityBlock(f, contentH, minimumContentH, footerVisible)
     -- Preserve the visual alignment with the main panel whenever it fits.  Long
     -- localized body copy can wrap to an extra line, though, so measure the real
     -- rendered bounds and move the whole activity/bounty block only as far as
     -- needed to keep a stable gap below it.
-    ApplyFeaturedFrontActivityAnchors(f, contentH, bountyVisible, 0)
+    ApplyFeaturedFrontActivityAnchors(f, contentH, footerVisible, 0)
 
     if f.IsShown and not f:IsShown() then
         -- Hidden frames do not always expose final FontString bounds.  The show
@@ -1683,7 +1683,7 @@ local function AnchorFeaturedFrontActivityBlock(f, contentH, minimumContentH, bo
             anchorShift = verticalShift - shrink
         end
         f._activityResolvedHeight = resolvedHeight
-        ApplyFeaturedFrontActivityAnchors(f, resolvedHeight, bountyVisible, anchorShift)
+        ApplyFeaturedFrontActivityAnchors(f, resolvedHeight, footerVisible, anchorShift)
     else
         f._activityResolvedHeight = contentH
     end
@@ -1693,23 +1693,23 @@ local function AnchorFeaturedFrontActivityBlock(f, contentH, minimumContentH, bo
     local frameBottom = f:GetBottom()
     local resolvedTop = f.activityPanel:GetTop()
     if frameBottom and resolvedTop then
-        local bountySpace = bountyVisible and f.bountyBtn
-            and (f.bountyBtn:GetHeight() + FEATURED_FRONT_BOUNTY_GAP) or 0
+        local footerSpace = footerVisible and f.activityFooter
+            and (f.activityFooter:GetHeight() + FEATURED_FRONT_BOUNTY_GAP) or 0
         local availableH = math.max(1,
-            resolvedTop - frameBottom - FEATURED_FRONT_BOTTOM_PAD - bountySpace)
+            resolvedTop - frameBottom - FEATURED_FRONT_BOTTOM_PAD - footerSpace)
         if f._activityResolvedHeight > availableH then
             f.activityPanel:ClearAllPoints()
             f.activityPanel:SetPoint("LEFT", f, "LEFT", 24, 0)
             f.activityPanel:SetPoint("RIGHT", f, "RIGHT", -24, 0)
             f.activityPanel:SetPoint("BOTTOM", f, "BOTTOM", 0,
-                FEATURED_FRONT_BOTTOM_PAD + bountySpace)
+                FEATURED_FRONT_BOTTOM_PAD + footerSpace)
             f.activityPanel:SetHeight(availableH)
             f._activityResolvedHeight = availableH
-            if bountyVisible and f.bountyBtn then
-                f.bountyBtn:ClearAllPoints()
-                f.bountyBtn:SetPoint("LEFT", f, "LEFT", 24, 0)
-                f.bountyBtn:SetPoint("RIGHT", f, "RIGHT", -24, 0)
-                f.bountyBtn:SetPoint("BOTTOM", f, "BOTTOM", 0, FEATURED_FRONT_BOTTOM_PAD)
+            if footerVisible and f.activityFooter then
+                f.activityFooter:ClearAllPoints()
+                f.activityFooter:SetPoint("LEFT", f, "LEFT", 24, 0)
+                f.activityFooter:SetPoint("RIGHT", f, "RIGHT", -24, 0)
+                f.activityFooter:SetPoint("BOTTOM", f, "BOTTOM", 0, FEATURED_FRONT_BOTTOM_PAD)
             end
         end
     end
@@ -1726,22 +1726,111 @@ local function ApplyFeaturedFrontActivityLayout(f, rowCount)
     local hasContracts = Overlord.ManualBounty
         and Overlord.ManualBounty.HasOpenContracts
         and Overlord.ManualBounty:HasOpenContracts()
-    local bountyVisible = hasContracts
+    local footerVisible = hasContracts or f.coinsRow ~= nil
     local minimumContentH = ComputeFeaturedFrontActivityHeight(rowCount)
     local contentH = minimumContentH
-    local matchH = GetFeaturedFrontActivityMatchHeight(f, bountyVisible)
+    local matchH = GetFeaturedFrontActivityMatchHeight(f, footerVisible)
     if matchH then
         contentH = math.max(contentH, matchH)
     end
 
     local bodyTextH = f.bodyFs and math.ceil(f.bodyFs:GetStringHeight() or 0) or 0
-    local layoutKey = rowCount .. "|" .. (bountyVisible and 1 or 0) .. "|" .. contentH .. "|" .. bodyTextH
+    local layoutKey = rowCount .. "|" .. (footerVisible and 1 or 0) .. "|" .. contentH .. "|" .. bodyTextH
         .. "|" .. (f:GetHeight() or 0) .. "|" .. (GetFeaturedFrontActiveZoneFrame() and 1 or 0)
     if f._activityLayoutKey == layoutKey and not f._activityBodyCollisionPending then return end
     f._activityLayoutKey = layoutKey
 
-    AnchorFeaturedFrontActivityBlock(f, contentH, minimumContentH, bountyVisible)
+    AnchorFeaturedFrontActivityBlock(f, contentH, minimumContentH, footerVisible)
     LayoutFeaturedFrontActivityScroll(f, rowCount)
+end
+
+function Overlord.Popups:RefreshFeaturedFrontCoins(panel)
+    local row = panel or (featuredFrontFrame and featuredFrontFrame.coinsRow)
+    local res = Overlord.Ressources
+    if not row or not row:IsVisible() or not res or not res.GetGoldActionState then return end
+    local g, maximum, cost, attackActive, reinforceActive = res:GetGoldActionState()
+    if row._olGold == g and row._olMax == maximum and row._olCost == cost
+        and row._olAttack == attackActive and row._olReinforce == reinforceActive then return end
+    row._olGold, row._olMax, row._olCost = g, maximum, cost
+    row._olAttack, row._olReinforce = attackActive, reinforceActive
+    row.coinText:SetText("|TInterface\\MoneyFrame\\UI-GoldIcon:16:16:0:0|t  "
+        .. string.format(L.GOLD_COUNTER or "Coins: %d / %d", g, maximum))
+    for _, btn in ipairs(row.buttons) do
+        local active = btn.isAttack and attackActive or (not btn.isAttack and reinforceActive)
+        local available = not active and g >= cost
+        btn._olBonusActive, btn._olCanSpend, btn._olCost = active, available, cost
+        local r, green, b = GOLD[1], GOLD[2], GOLD[3]
+        if active then r, green, b = 0.4, 0.9, 0.5
+        elseif not available then r, green, b = 0.55, 0.55, 0.58 end
+        btn:SetBackdropBorderColor(r, green, b, active and 0.85 or 0.6)
+        btn.label:SetTextColor(r, green, b)
+        local status = active and "|TInterface\\RaidFrame\\ReadyCheck-Ready:14:14|t"
+            or (cost .. " |TInterface\\MoneyFrame\\UI-GoldIcon:12:12|t")
+        btn.label:SetText(btn.actionLabel .. "  " .. status)
+    end
+end
+
+-- A dedicated footer keeps the balance clear of the two equally sized actions.
+-- All refreshes are event-driven; hidden panels catch up through OnShow.
+function Overlord.Popups:CreateFeaturedFrontCoinsPanel(parent)
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetSize(FEATURED_FRONT_PANEL_WIDTH - 48, 64)
+    row.coinText = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    row.coinText:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+    row.coinText:SetPoint("TOPRIGHT", row, "TOPRIGHT", 0, 0)
+    row.coinText:SetHeight(18)
+    row.coinText:SetJustifyH("CENTER")
+    row.coinText:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+    row.buttons = {}
+    for i = 1, 2 do
+        local isAttack = i == 2
+        local actionLabel = isAttack and (L.GOLD_REINFORCE or "Attack")
+            or (L.GOLD_BARRICADE or "Reinforce")
+        local btn = Overlord.UI.CreateWC3Button(row, 122, 34,
+            actionLabel, nil, nil, { gold = GOLD })
+        btn.isAttack = isAttack
+        btn.actionLabel = actionLabel
+        btn:SetPoint(isAttack and "BOTTOMRIGHT" or "BOTTOMLEFT", row,
+            isAttack and "BOTTOMRIGHT" or "BOTTOMLEFT", 0, 0)
+        btn.label:ClearAllPoints()
+        btn.label:SetPoint("LEFT", btn, "LEFT", 6, 0)
+        btn.label:SetPoint("RIGHT", btn, "RIGHT", -6, 0)
+        btn.label:SetHeight(20)
+        btn.label:SetFontObject("GameFontNormalSmall")
+        btn.label:SetWordWrap(false)
+        btn.label:SetJustifyH("CENTER")
+        btn.label:SetJustifyV("MIDDLE")
+        btn:SetScript("OnClick", function(self)
+            if not self._olCanSpend then return end
+            local res = Overlord.Ressources
+            if self.isAttack then res:SpendReinforce() else res:SpendBarricade() end
+            Overlord.Popups:RefreshFeaturedFrontCoins(row)
+            if GameTooltip:IsOwned(self) then self:GetScript("OnEnter")(self) end
+        end)
+        btn:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:AddLine(self.isAttack and (L.GOLD_REINFORCE or "Attack")
+                or (L.GOLD_BARRICADE or "Reinforce"), GOLD[1], GOLD[2], GOLD[3])
+            local tip = self.isAttack and L.GOLD_REINFORCE_TIP or L.GOLD_BARRICADE_TIP
+            if tip then GameTooltip:AddLine(tip, 1, 1, 1, true) end
+            if self._olBonusActive then
+                local ready = self.isAttack and L.GOLD_REINFORCE_ACTIVE or L.GOLD_BARRICADE_ACTIVE
+                GameTooltip:AddLine(ready or L.GOLD_BONUS_READY or "Ready", 0.4, 0.9, 0.5, true)
+            elseif not self._olCanSpend then
+                GameTooltip:AddLine(string.format(L.GOLD_NOT_ENOUGH or "Not enough coins (%d).",
+                    self._olCost or 25), 1, 0.45, 0.35, true)
+            end
+            GameTooltip:Show()
+        end)
+        btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        -- Preserve the status colors instead of the generic button's mouse chrome.
+        btn:SetScript("OnMouseDown", nil)
+        btn:SetScript("OnMouseUp", nil)
+        row.buttons[i] = btn
+    end
+    row:SetScript("OnShow", function(self) Overlord.Popups:RefreshFeaturedFrontCoins(self) end)
+    row:Hide()
+    return row
 end
 
 function Overlord.Popups:RefreshFeaturedFrontBountyButton()
@@ -1756,7 +1845,7 @@ ApplyFeaturedFrontActivity = function(f)
     local fa = Overlord.FrontActivity
     if not fa or not fa.GetActivityRows then
         f.activityPanel:Hide()
-        if f.bountyBtn then f.bountyBtn:Hide() end
+        if f.activityFooter then f.activityFooter:Hide() end
         return
     end
     f.activityPanel:Show()
@@ -1962,22 +2051,28 @@ EnsureFeaturedFrontFrame = function()
         FEATURED_FRONT_ACTIVITY_BOTTOM_PAD)
     f.activityScroll:Hide()
 
-    f.bountyBtn = Overlord.UI.CreateWC3Button(
-        f,
-        FEATURED_FRONT_PANEL_WIDTH - 48,
-        30,
-        L.FEATURED_FRONT_BOUNTIES_ACTIVE,
-        function()
-            if Overlord.ManualBountyUI and Overlord.ManualBountyUI.Show then
-                Overlord.ManualBountyUI:Show()
-            end
-        end,
-        "Interface\\Icons\\INV_Misc_Coin_01",
-        { gold = GOLD }
-    )
-    f.bountyBtn:SetPoint("TOP", f.activityPanel, "BOTTOM", 0, -10)
-    Overlord.UI.SetWC3ButtonActive(f.bountyBtn, true, { gold = GOLD })
-    f.bountyBtn:Hide()
+    if Overlord.ManualBounty then
+        f.bountyBtn = Overlord.UI.CreateWC3Button(
+            f,
+            FEATURED_FRONT_PANEL_WIDTH - 48,
+            30,
+            L.FEATURED_FRONT_BOUNTIES_ACTIVE,
+            function()
+                if Overlord.ManualBountyUI and Overlord.ManualBountyUI.Show then
+                    Overlord.ManualBountyUI:Show()
+                end
+            end,
+            "Interface\\Icons\\INV_Misc_Coin_01",
+            { gold = GOLD }
+        )
+        f.bountyBtn:SetPoint("TOP", f.activityPanel, "BOTTOM", 0, -10)
+        Overlord.UI.SetWC3ButtonActive(f.bountyBtn, true, { gold = GOLD })
+        f.bountyBtn:Hide()
+        f.activityFooter = f.bountyBtn
+    elseif Overlord.Ressources then
+        f.coinsRow = Overlord.Popups:CreateFeaturedFrontCoinsPanel(f)
+        f.activityFooter = f.coinsRow
+    end
 
     f.activityTitleFs = f.activityPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     f.activityTitleFs:SetPoint("TOP", f.activityPanel, "TOP", 0, -8)
@@ -2012,12 +2107,14 @@ EnsureFeaturedFrontFrame = function()
     f:SetScript("OnShow", function(self)
         StartFeaturedFrontActivityTicker()
         ApplyFeaturedFrontActivity(self)
+        Overlord.Popups:RefreshFeaturedFrontCoins()
     end)
     f:SetScript("OnHide", function()
         StopFeaturedFrontActivityTicker()
     end)
 
     featuredFrontFrame = f
+    Overlord.Popups:RefreshFeaturedFrontCoins()
     SyncFeaturedFrontPanelAnchors()
     SetFeaturedFrontExpanded(IsFeaturedFrontExpanded(), false)
     return f

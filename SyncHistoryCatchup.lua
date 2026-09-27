@@ -13,7 +13,7 @@ local PROTOCOL_VERSION = "4"
 local PREVIOUS_PROTOCOL_VERSION = "3"
 local COMPAT_PROTOCOL_VERSION = "2"
 local LEGACY_PROTOCOL_VERSION = "1"
-local MAX_SNAPSHOT_ROWS = Overlord.Leaderboard.KILL_RANK_LIMIT or 500
+local MAX_SNAPSHOT_ROWS = Overlord.Leaderboard.NETWORK_KILL_RANK_LIMIT or 500
 local MAX_SNAPSHOT_QUEUE = MAX_SNAPSHOT_ROWS + 75 + 40
 local MAX_HISTORY_QUEUE = 340
 local MAX_RACE_ROWS = 40
@@ -53,6 +53,11 @@ local NO_REPLY_SEC = 270
 local ENEMY_FACTION = { Alliance = "Horde", Horde = "Alliance" }
 
 local function PeerFaction(name)
+    -- Faction Battle.net (amis/ponts) d'abord, puis metadonnees du classement.
+    if sync.GetBetaPeerFaction then
+        local known = sync:GetBetaPeerFaction(name)
+        if known == "Alliance" or known == "Horde" then return known end
+    end
     local lb = Overlord.Leaderboard
     local info = lb and lb.GetPlayerInfo and lb:GetPlayerInfo(name)
     local faction = type(info) == "table" and info.faction or nil
@@ -192,6 +197,12 @@ local function ArmNextHistoryCatchup(delay, skipJitter)
                 and math.floor(tonumber(ack.historyAt) or 0) or 0
             local needsHistory = historyAt <= 0
                 or NowServer() - historyAt >= HISTORY_ACK_SEC
+            -- A lost v4 return ACK must not keep scheduling territorial history
+            -- forever and starve the complete paged ranking after login.
+            if sync.StartPagedLeaderboardCatchup and sync._preferPagedLeaderboardNext then
+                sync._preferPagedLeaderboardNext = nil
+                needsHistory = false
+            end
             Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(
                 true, not needsHistory)
         end
@@ -347,6 +358,17 @@ local function BuildSnapshotCapturePayload(snapshot, name, wireEpoch)
     end
     local payload = prefix .. table.concat(safeZones, ",") .. suffix
     return #payload <= 250 and payload or nil
+end
+
+-- The paged protocol reuses the exact LK serializer and attested snapshot.
+function sync:BuildPagedLeaderboardKillPayload(snapshot, name, wireEpoch)
+    local kills = snapshot and snapshot.kills and snapshot.kills[name]
+    if not self.SanitizeSyncedKillTotal or self:SanitizeSyncedKillTotal(kills) == nil then return nil end
+    return BuildSnapshotKillPayload(snapshot, name, wireEpoch)
+end
+
+function sync:GetAttestedLeaderboardSnapshot()
+    return SnapshotForCampaign(CurrentCampaign())
 end
 
 -- Seule source des pages LK/LC/LR du protocole HR. La file est plafonnee a
@@ -875,15 +897,26 @@ local function ScheduleAttempt(generation, campaignId, attempt)
                 -- l'autre faction (notre faction est deja a jour en direct) : deux
                 -- tours sur trois visent d'abord un pair adverse.
                 local enemyFirst = rotation % 3 ~= 2 and ENEMY_FACTION[Overlord.PlayerFaction]
+                -- Pair adverse : le chemin le plus court d'abord (notre propre ami
+                -- Battle.net = 1 etape). Chaque etape de relais peut perdre des lignes et
+                -- la reponse ne doit pas depasser la limite d'etapes du relais.
+                local net = Overlord.BetaNetwork
                 for pass = enemyFirst and 1 or 2, 2 do
+                    local bestHops
                     for offset = 0, total - 1 do
                         local candidate = online[((startIndex + offset - 1) % total) + 1]
                         if candidate and candidate ~= ""
                             and (not sync.IsSenderLocalPlayer
                                 or not sync:IsSenderLocalPlayer(candidate))
                             and (pass == 2 or PeerFaction(candidate) == enemyFirst) then
-                            target = candidate
-                            break
+                            if pass == 2 then
+                                target = candidate
+                                break
+                            end
+                            local hops = net and net.GetPeerHops and net:GetPeerHops(candidate) or 99
+                            if not bestHops or hops < bestHops then
+                                target, bestHops = candidate, hops
+                            end
                         end
                     end
                     if target then break end
@@ -893,6 +926,29 @@ local function ScheduleAttempt(generation, campaignId, attempt)
                 NoteHr("step", "no peer known (" .. tostring(total) .. " listed)")
                 ScheduleAttempt(generation, campaignId, attempt + 1)
                 return
+            end
+            -- Only the ladder-only round changes transport. Initial territorial
+            -- history and old peers retain v4; a v5 timeout resumes from a bucket.
+            if active.ladderOnly and not active.pagedTried and sync.StartPagedLeaderboardCatchup then
+                active.pagedTried = true
+                local started = sync:StartPagedLeaderboardCatchup(target, function(success, supported)
+                    if sync._historyCatchupPending ~= active or active.terminal then return end
+                    if not supported then
+                        ScheduleAttempt(generation, campaignId, attempt)
+                        return
+                    end
+                    active.terminal = true
+                    sync._historyCatchupPending = nil
+                    NoteHr("result", success and "paged sweep received" or "paged sweep interrupted")
+                    OverlordDB.leaderboardHistoryCatchupTargetRotation =
+                        (tonumber(OverlordDB.leaderboardHistoryCatchupTargetRotation) or 0) + 1
+                    ArmNextHistoryCatchup(success and RECENT_ACK_SEC or EXHAUSTED_RETRY_SEC)
+                end)
+                if started then
+                    NoteHr("target", target, PeerFaction(target) or "?")
+                    NoteHr("step", "paged ladder catch-up")
+                    return
+                end
             end
             local nonceSeed = HashString(table.concat({
                 tostring(identity or ""), tostring(NowServer()),
@@ -1429,6 +1485,7 @@ function sync:ScheduleLoginLeaderboardHistoryCatchUp(force, ladderOnly)
         math.floor(tonumber(self._historyCatchupWakeGeneration) or 0) + 1
     self._historyCatchupGeneration =
         math.floor(tonumber(self._historyCatchupGeneration) or 0) + 1
+    if not ladderOnly then self._preferPagedLeaderboardNext = true end
     local generation = self._historyCatchupGeneration
     self._historyCatchupPending = {
         generation = generation,

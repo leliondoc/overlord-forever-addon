@@ -1,7 +1,10 @@
 -- Leaderboard.lua - Classement des kills et captures par joueur
 Overlord = Overlord or {}
 Overlord.Leaderboard = {
-    KILL_RANK_LIMIT = 500,
+    KILL_RANK_LIMIT = 5000,
+    -- The v4 catch-up protocol and older clients certify a top 500. Keep its
+    -- wire budget independent from local display/storage capacity.
+    NETWORK_KILL_RANK_LIMIT = 500,
     kills = {},
     captures = {},
     captureCount = {},
@@ -1318,6 +1321,10 @@ function Overlord.Leaderboard:PrepareForHeavyRead(forceMerge)
 end
 
 local DISPLAY_KILL_RANK_LIMIT = Overlord.Leaderboard.KILL_RANK_LIMIT
+local DISPLAY_PREVIEW_ROW_LIMIT = 500
+function Overlord.Leaderboard:SortNetworkRows(rows, less, yieldWork)
+    return sortRowsWithYield(rows, less, yieldWork)
+end
 local DISPLAY_CAPTURE_RANK_LIMIT = 25
 -- Au-dela de ce nombre de couples (creneau, fortin), la reparation des victoires de
 -- fortin est decoupee sur plusieurs images au lieu d'un seul bloc.
@@ -1596,11 +1603,12 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             Horde = captureRows(state.hordeTop, "Horde"),
         }
 
-        -- Guildes et totaux affiches portent sur les memes joueurs que le reseau.
+        -- Count every known member once, including players outside the visible
+        -- top. A rival entering the ranking must never subtract a guild's HKs.
         local guildBuckets = {}
         local alliKills, hordeKills = 0, 0
-        for _, row in ipairs(sortedKills) do
-            local name, count = row.name, row.kills
+        if not forEach(dedupKillMaxIndex, function(key, count)
+            local name = state.canonicalIndex[key] or key
             local _, faction, guild = indexedMeta(name)
             if faction == "Alliance" then alliKills = alliKills + count
             elseif faction == "Horde" then hordeKills = hordeKills + count end
@@ -1621,8 +1629,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                     bucket._facAlliance = bucket._facAlliance + count
                 end
             end
-            yieldWork()
-        end
+        end) then return end
         local sortedGuilds = {}
         for _, bucket in pairs(guildBuckets) do
             local voted = ""
@@ -1637,6 +1644,10 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             if a.kills ~= b.kills then return a.kills > b.kills end
             return (a.guild or "") < (b.guild or "")
         end, yieldWork)
+        for i = #sortedGuilds, DISPLAY_KILL_RANK_LIMIT + 1, -1 do
+            sortedGuilds[i] = nil
+            yieldWork()
+        end
 
         if self._dedupMetaIndex ~= state.metaIndex then
             state.aborted = true
@@ -1892,7 +1903,7 @@ local function GetMatchingLeaderboardScoreBucketEpoch(campaignStart)
 end
 
 -- Presentation only: never merge this saved view into scores or relay it.
--- It contains at most 500 kills/guilds and 25 captures per faction, without
+-- It contains at most 5000 kills/guilds and 25 captures per faction, without
 -- references to the unbounded live score/metadata tables.
 function Overlord.Leaderboard:IsDisplayCacheScopeCurrent(cache)
     if type(cache) ~= "table" or not OverlordDB then return false end
@@ -1911,7 +1922,7 @@ function Overlord.Leaderboard:SaveDisplayCache(cache)
     if self._storageBound ~= true or not cache.ready or cache.fromSavedCache
         or not self:IsDisplayCacheScopeCurrent(cache) then return false end
     OverlordDB.leaderboardDisplayCache = {
-        version = 1, killLimit = self.KILL_RANK_LIMIT,
+        version = 2, killLimit = self.KILL_RANK_LIMIT,
         campaignStart = cache.campaignStart, scoreBucketEpoch = cache.scoreBucketEpoch,
         pool = cache.pool, at = (GetServerTime and GetServerTime()) or time(),
         sortedKills = cache.sortedKills, sortedGuilds = cache.sortedGuilds,
@@ -1923,7 +1934,7 @@ end
 
 function Overlord.Leaderboard:RestoreDisplayCache()
     local saved = OverlordDB and OverlordDB.leaderboardDisplayCache
-    if type(saved) ~= "table" or saved.version ~= 1
+    if type(saved) ~= "table" or saved.version ~= 2
         or saved.killLimit ~= self.KILL_RANK_LIMIT
         or not self:IsDisplayCacheScopeCurrent(saved) then return nil end
     -- Validate only bounded visible rows, never traverse arbitrary saved maps.
@@ -1959,7 +1970,9 @@ function Overlord.Leaderboard:RestoreDisplayCache()
         cache.locale[name] = locale
         return true
     end
-    for i = 1, #saved.sortedKills do
+    -- Paint a bounded preview at login. The sliced builder fills the full 5000
+    -- rows once storage is bound, without copying 5000 metadata rows in one frame.
+    for i = 1, math.min(#saved.sortedKills, DISPLAY_PREVIEW_ROW_LIMIT) do
         local row = saved.sortedKills[i]
         if type(row) ~= "table" or not count(row.kills) or not copyMeta(row.name)
             or (Overlord.Sync and Overlord.Sync.IsDeniedKillContributor
@@ -1980,7 +1993,7 @@ function Overlord.Leaderboard:RestoreDisplayCache()
             }
         end
     end
-    for i = 1, #saved.sortedGuilds do
+    for i = 1, math.min(#saved.sortedGuilds, DISPLAY_PREVIEW_ROW_LIMIT) do
         local row = saved.sortedGuilds[i]
         if type(row) ~= "table" or not text(row.guild, 128) or not count(row.kills)
             or not text(row.faction, 16) then return nil end
@@ -7479,7 +7492,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
         return true
     end
     if self._snapshotBuildPending then return true end
-    -- Share the login index builder, so aliases cannot occupy two of the 500 slots.
+    -- Share the login index builder, so aliases cannot occupy two ranking slots.
     if self:EnsureNetworkHotIndexesPrepared() ~= true then
         if self._networkHotIndexPrepFailed or (self._snapshotIndexWaitAttempts or 0) >= 120 then
             self._snapshotIndexWaitAttempts = nil
@@ -7600,7 +7613,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
             kept[r.name] = true
             yieldFinalWork()
         end
-        -- Copy metadata in slices as well as sorting, even at the 500-player cap.
+        -- Copy metadata in slices as well as sorting at the 5000-player cap.
         for name in pairs(kept) do
             local info = state.metaIndex[GetKillDedupKey(name)]
                 or (state.playerInfoSource and state.playerInfoSource[name])
@@ -8380,7 +8393,7 @@ function Overlord.Leaderboard:GetSortedGuildKills(sortedKillRows, maxRows)
     local rows = type(sortedKillRows) == "table"
         and sortedKillRows or self:MergeNameCountRowsForDisplay(self.kills)
     local buckets = {}
-    local rowCount = math.min(#rows, self.KILL_RANK_LIMIT,
+    local rowCount = math.min(#rows,
         math.max(0, math.floor(tonumber(maxRows) or #rows)))
 
     for i = 1, rowCount do

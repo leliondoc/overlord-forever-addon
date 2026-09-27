@@ -278,6 +278,38 @@ assert(full.BetaNetwork.stats.displaced == 1, "Alert did not displace exactly on
 drain()
 assert(fullWatch.received[1].payload == "alert-full", "Displacing alert was not sent first")
 assert(#fullWatch.received == 128, "Queue bound changed: " .. #fullWatch.received)
+-- A long local quota wait must not churn retry records or discard copies after
+-- three seconds. Ready BNet work behind waiting copies in BOTH lanes still runs.
+do
+    local paced = client("Paced Tester", "paced")
+    local peer = client("Pacedwatch Tester", "paced")
+    local readyAt, rejects, bnetAt = now + 8, 0, {}
+    local send = paced.Sync.SendToChannel
+    IsInGroup = function() return false end
+    paced.friends = { peer }
+    function paced.Sync:ChannelTokenReady() return now >= readyAt end
+    function paced.Sync:SendToChannel(kind, payload)
+        if now < readyAt then rejects = rejects + 1; return false, "budget" end
+        return send(self, kind, payload)
+    end
+    function paced.Sync:SendToBNet(_, _, wire)
+        bnetAt[wire:match("([^|]+)$")] = now
+        return true
+    end
+    assert(paced.BetaNetwork:Send("K", "paced-bulk"))
+    assert(paced.BetaNetwork:Send("ZS", "paced-urgent"))
+    C_Timer.After(1, function()
+        assert(paced.BetaNetwork:Send("K", "behind-bulk"))
+        assert(paced.BetaNetwork:Send("ZS", "behind-urgent"))
+    end)
+    drain()
+    assert(rejects == 4, "Quota-blocked copies were polled/reallocated on every tick")
+    assert(bnetAt["behind-bulk"] < readyAt and bnetAt["behind-urgent"] < readyAt,
+        "Blocked lane heads delayed ready BNet traffic")
+    assert(#peer.received == 4 and not paced.BetaNetwork.stats.channelSkipped,
+        "Waiting copies expired after 30 polls instead of waiting for the quota")
+    IsInGroup = function() return true end
+end
 a.BetaNetworkEnabled = false
 assert(not a.BetaNetwork:Send("K", "disabled"), "Beta transport remained active after community re-enable")
 print("Beta network: community-parallel relay, fragmentation, global routing, reply path, dedup, identity, expiry and queue bounds OK")

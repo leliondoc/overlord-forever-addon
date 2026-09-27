@@ -119,6 +119,14 @@ function net:IsPeer(name)
     local row = key and self.peers[key:lower()]
     return row ~= nil and GetTime() - row.at <= 300
 end
+-- Path length of the freshest known route to a peer (1 = heard directly from it,
+-- e.g. our own Battle.net friend). nil when unknown or stale.
+function net:GetPeerHops(name)
+    local key = canonical(name)
+    local row = key and self.peers[key:lower()]
+    if not row or GetTime() - row.at > 300 then return nil end
+    return tonumber(row.hops)
+end
 function net:GetPeers()
     local names = {}
     for _, row in pairs(self.peers) do
@@ -176,6 +184,8 @@ local function spend(bytes)
 end
 local function tasksFor(p, wire)
     local tasks, fragments = {}, {}
+    local paged = (p.kind == "HR" or p.kind == "HB" or p.kind == "HA")
+        and p.payload:sub(1, 2) == "5:"
     local count = math.ceil(#wire / 170)
     for i = 1, count do
         fragments[i] = p.id .. ":" .. i .. ":" .. count .. ":" .. wire:sub((i - 1) * 170 + 1, i * 170)
@@ -185,6 +195,9 @@ local function tasksFor(p, wire)
     if route then
         for _, name in ipairs(p.path) do if same(name, route.via) then route = nil; break end end
     end
+    -- Bulk v5 catch-up is always addressed over an established route. Never
+    -- flood the realm/group or fan out to friends to discover a missing path.
+    if paged and (p.target == "*" or not route) then return tasks end
     local function add(transport, data, kind, target)
         tasks[#tasks + 1] = { transport = transport, data = data, kind = kind, target = target,
             bytes = #data + 64, packetKind = p.kind }
@@ -195,7 +208,7 @@ local function tasksFor(p, wire)
     end
     if route and route.bnet then
         bnet(route.bnet)
-    elseif route and (route.transport == "CHANNEL" or route.transport == "WHISPER") then
+    elseif route and (paged or route.transport == "CHANNEL" or route.transport == "WHISPER") then
         for _, fragment in ipairs(fragments) do add("WHISPER", fragment, "BF", route.via) end
     else
         -- The realm channel only carries what Blizzard's ~1 msg/s allows to be useful.
@@ -303,6 +316,7 @@ function net:Queue(p, immediate)
     local wire = encode(p)
     if #wire > MAX_PACKET then return false end
     local item = { p = p, tasks = tasksFor(p, wire), index = 1 }
+    if #item.tasks == 0 then return false end
     local lane = urgent and urgentLane or bulkLane
     -- A lease release may use the currently available budget synchronously before
     -- entering an instance, but never bypasses that budget.
@@ -314,30 +328,42 @@ function net:Queue(p, immediate)
     schedule()
     return true
 end
+function net:CanSendLeaderboardPage()
+    return laneSize(urgentLane) == 0 and queuedCount() < 8
+end
 pump = function()
     pumping = false
     if not active() then
         if enabled() and queuedCount() > 0 then C_Timer.After(2, schedule) end
         return
     end
+    -- Leave quota-blocked copies in place, including when both lane heads wait.
+    -- Look for useful work behind them without allocating another retry item on
+    -- every tick. The queue bounds this scan to at most 128 entries.
+    local channelReady = not sync.ChannelTokenReady or sync:ChannelTokenReady()
+    local now = time()
+    local function readyIndex(lane)
+        for i = lane.head, #lane.items do
+            local it = lane.items[i]
+            local task = it.tasks[it.index]
+            if channelReady or now - it.p.at > TTL or not task
+                or task.transport ~= "CHANNEL" or not task.defers then return i end
+        end
+    end
+    local urgentIndex, bulkIndex = readyIndex(urgentLane), readyIndex(bulkLane)
     -- Finish a bulk packet already partly sent, otherwise urgent first.
-    local bulkHead = bulkLane.items[bulkLane.head]
-    local lane = (bulkHead and bulkHead.index > 1) and bulkLane
-        or (urgentLane.items[urgentLane.head] and urgentLane) or bulkLane
+    local lane, index = urgentLane, urgentIndex
+    if bulkIndex and (not urgentIndex or bulkLane.items[bulkIndex].index > 1) then
+        lane, index = bulkLane, bulkIndex
+    end
+    if not index then
+        if queuedCount() > 0 then schedule() end
+        return
+    end
+    if index ~= lane.head then
+        table.insert(lane.items, lane.head, table.remove(lane.items, index))
+    end
     local item = lane.items[lane.head]
-    -- A deferred channel copy cannot go while the channel budget is empty: serve
-    -- the other lane meanwhile instead of cycling it every tick (no starvation).
-    local function waitsForChannel(it)
-        local t = it and it.tasks[it.index]
-        return t ~= nil and t.transport == "CHANNEL" and t.defers ~= nil
-            and sync.ChannelTokenReady ~= nil and not sync:ChannelTokenReady()
-    end
-    if waitsForChannel(item) then
-        local other = lane == urgentLane and bulkLane or urgentLane
-        local otherItem = other.items[other.head]
-        if otherItem and not waitsForChannel(otherItem) then lane, item = other, otherItem end
-    end
-    if not item then compactLane(urgentLane); compactLane(bulkLane); return end
     -- Drain the available shared byte budget, not just one fragment per tick.
     -- The old 10-fragment/s ceiling unnecessarily backed up full snapshots.
     for _ = 1, 16 do
@@ -354,7 +380,7 @@ pump = function()
             task.deferred = nil
             task.defers = (task.defers or 0) + 1
             item.index = item.index + 1
-            if task.defers <= 30 and queuedCount() < MAX_QUEUE then
+            if queuedCount() < MAX_QUEUE then
                 local deferLane = isUrgent(item.p) and urgentLane or bulkLane
                 deferLane.items[#deferLane.items + 1] = { p = item.p, tasks = { task }, index = 1 }
             else

@@ -1808,7 +1808,26 @@ end
 -- n'a change depuis le dernier refresh (or inchange + etats renfort/barricade identiques).
 local lastGoldHudKey = nil
 
+-- Les coins sont aussi affiches dans le panneau Overlord (carte Front du jour).
+function Overlord.Ressources:GetGoldMax() return GOLD_MAX end
+function Overlord.Ressources:GetGoldSpendCost() return GOLD_SPEND_COST end
+function Overlord.Ressources:GetGoldActionState()
+    return gold, GOLD_MAX, GOLD_SPEND_COST, reinforceActive, barricadeActive
+end
+
+function Overlord.Ressources:ApplyCombatFade()
+    if not goldHudRoot then return end
+    local alpha = Overlord.HudInCombat and 0.4 or 1
+    if goldHudRoot._olCombatAlpha ~= alpha then
+        goldHudRoot._olCombatAlpha = alpha
+        goldHudRoot:SetAlpha(alpha)
+    end
+end
+
 function Overlord.Ressources:RefreshHUD()
+    if Overlord.Popups and Overlord.Popups.RefreshFeaturedFrontCoins then
+        Overlord.Popups:RefreshFeaturedFrontCoins()
+    end
     if not goldHUD then return end
 
     local g = gold
@@ -1990,6 +2009,7 @@ local function HUDZoneCheck(force)
         and Overlord.Ressources:ShouldShowGuildKeepHUD(mapID, inZone)
     local showCluster = showGold or showWood
     if showCluster then
+        Overlord.Ressources:ApplyCombatFade()
         if not goldHudRoot:IsShown() then
             goldHudRoot:Show()
         end

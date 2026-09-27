@@ -257,7 +257,8 @@ assert(not fresh.Overlord.Sync._emptySaveCatchupRounds,
     "Empty-save retry state survived successful recovery")
 assert((fresh.OverlordDB.leaderboardHistoryCatchupAck.historyAt or 0) > 0,
     "Populated peer did not certify historical catch-up")
--- Different locally retained tails must not change the displayed top or guild total.
+-- The wire top stays bounded, but locally known tails remain visible and count
+-- toward guilds. Peers cannot manufacture members they have never received.
 for _, e in ipairs({a, b, c, d, fresh}) do
     e.Overlord.Leaderboard:EnsureNetworkHotIndexesPrepared()
 end
@@ -268,13 +269,11 @@ end
 advance(1)
 for _, e in ipairs({a, b, c, d, fresh}) do
     local cache = assert(e.Overlord.Leaderboard._displayCache)
-    assert(#cache.sortedKills == 500 and cache.sortedKills[1].name == names[500]
+    local knownTail = e.Overlord.Leaderboard.kills[names[1]] or 0
+    assert(#cache.sortedKills == (knownTail > 0 and 501 or 500) and cache.sortedKills[1].name == names[500]
         and cache.sortedKills[1].kills == 5000 and cache.sortedKills[2].name == "Unique Tester")
-    for _, row in ipairs(cache.sortedKills) do
-        assert(row.name ~= names[1], "Rank 501 leaked into the displayed top")
-    end
-    assert(#cache.sortedGuilds == 1 and cache.sortedGuilds[1].kills == 1252490,
-        "Replica guild totals included players outside the common top 500")
+    assert(#cache.sortedGuilds == 1 and cache.sortedGuilds[1].kills == 1252490 + knownTail,
+        "Guild total discarded a known player outside the replicated top 500")
 end
 
 -- Old peers still receive a bounded pull they understand, without a 500-row

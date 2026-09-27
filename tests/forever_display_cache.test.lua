@@ -25,10 +25,10 @@ local function copy(value)
     return result
 end
 local names = {}
-for i = 1, 600 do
-    local name = "Cached Player" .. string.char(65 + math.floor(i / 26), 65 + i % 26)
+for i = 1, 6000 do
+    local name = "Cached Player" .. string.char(65 + math.floor(i / 676), 65 + math.floor(i / 26) % 26, 65 + i % 26)
     names[i] = name
-    lb.kills[name] = i
+    lb.kills[name] = math.ceil(i / 2)
     lb.playerInfo[name] = { class = "WARRIOR", faction = "Horde", guild = "Cache Guild",
         guildAuth = true, guildAt = time(), locale = "engb", race = "Orc", raceSex = 2, level = 2 }
 end
@@ -39,9 +39,9 @@ drain()
 assert(not lb:EnsureDisplayCache().ready)
 drain()
 local first = lb:EnsureDisplayCache()
-assert(first.ready and #first.sortedKills == 500)
+assert(first.ready and #first.sortedKills == 5000)
 local saved = assert(OverlordDB.leaderboardDisplayCache)
-assert(#saved.sortedKills == 500 and #saved.sortedGuilds == 1)
+assert(#saved.sortedKills == 5000 and #saved.sortedGuilds == 1)
 assert(saved.killSource == nil and saved.playerInfoSource == nil,
     "Persistent presentation cache references unbounded source tables")
 local disk = copy(OverlordDB)
@@ -55,7 +55,7 @@ Overlord.Sync.SendWhisper = function() networkCalls = networkCalls + 1; return t
 local preview = lb:EnsureDisplayCache()
 assert(preview.ready and preview.fromSavedCache and #preview.sortedKills == 500,
     "Reload did not immediately return the saved ranking")
-assert(preview.sortedKills[1].name == names[600] and preview.sortedKills[1].kills == 600)
+assert(preview.sortedKills[1].name == names[5999] and preview.sortedKills[1].kills == 3000)
 assert(next(lb.kills) == nil and next(lb.playerInfo) == nil,
     "Presentation cache was merged into authoritative scores")
 assert(#timers == 0 and networkCalls == 0, "Painting a saved view started unbound work or network traffic")
@@ -76,21 +76,21 @@ assert(loading.ready and loading.fromSavedCache, "Login binding blanked the cach
 for _ = 1, 50 do assert(lb:EnsureDisplayCache() == loading) end
 drain()
 local live = lb:EnsureDisplayCache()
-assert(live.ready and not live.fromSavedCache and #live.sortedKills == 500)
+assert(live.ready and not live.fromSavedCache and #live.sortedKills == 5000)
 assert(live.sortedGuilds[1].kills == first.sortedGuilds[1].kills)
 assert(networkCalls == 0, "Cache refresh queried the network")
 for _ = 1, 50 do assert(lb:EnsureDisplayCache() == live) end
 assert(#timers == 0, "Opening an unchanged ranking rebuilt it")
 
-lb:SetPlayerKills(names[101], 900, true)
+lb:SetPlayerKills(names[101], 4999, true)
 assert(lb:EnsureDisplayCache() == live, "A background update blanked the existing ranking")
 drain()
 local updated = lb:EnsureDisplayCache()
-assert(updated.sortedKills[1].name == names[101] and updated.sortedKills[1].kills == 900,
+assert(updated.sortedKills[1].name == names[101] and updated.sortedKills[1].kills == 4999,
     "Cached display stayed frozen after a real score update")
-assert(OverlordDB.leaderboardDisplayCache.sortedKills[1].kills == 900,
+assert(OverlordDB.leaderboardDisplayCache.sortedKills[1].kills == 4999,
     "Updated view was not saved for the next login")
-assert(saved.sortedKills[1].kills == 600, "Publishing a view mutated the previous saved view")
+assert(saved.sortedKills[1].kills == 3000, "Publishing a view mutated the previous saved view")
 
 -- Reject a wrong region, incompatible layout, stale week, invalid attestation,
 -- or malformed cache. Reading a cache must never repair/attest score data.
@@ -98,7 +98,7 @@ local valid = copy(OverlordDB.leaderboardDisplayCache)
 for _, mutate in ipairs({
     function(c) c.pool = "another-pool" end,
     function(c) c.version = 99 end,
-    function(c) c.killLimit = 5000 end,
+    function(c) c.killLimit = 500 end,
     function(c) c.campaignStart = campaign - 604800 end,
     function(c) c.scoreBucketEpoch = campaign - 604800 end,
     function(c) c.sortedKills[1] = "corrupt" end,

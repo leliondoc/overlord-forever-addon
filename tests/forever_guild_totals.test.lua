@@ -109,7 +109,7 @@ lb.playerInfo[me].guild, lb.playerInfo[me].guildAt = "French Guild", stamp
 lb:ForceUpdateLocalPlayer(me, "PRIEST", "Horde")
 assert(lb.playerInfo[me].guild == "French Guild", "Login erased unavailable guild metadata")
 
--- Prepare an actual sliced display cache with over 200 unrelated competitors.
+-- Prepare an actual sliced display cache at the 5000-player boundary.
 local timers = {}
 C_Timer.After = function(_, callback) timers[#timers + 1] = callback end
 local function drain()
@@ -136,8 +136,9 @@ assert(killPayload and killPayload:find(":French Guild:", 1, true),
 
 lb.kills = { ["Guild Member"] = 620, ["Guild Member-Realm"] = 620 }
 lb.playerInfo = { ["Guild Member"] = { guild = "French Guild", faction = "Horde" } }
-for i = 1, 210 do
-    local name = "Rival Player" .. string.char(65 + math.floor(i / 26), 65 + i % 26)
+for i = 1, 4999 do
+    local name = "Rival Player" .. string.char(65 + math.floor(i / 676),
+        65 + math.floor(i / 26) % 26, 65 + i % 26)
     lb.kills[name] = 1000 + i
     lb.playerInfo[name] = { guild = "Other Guild", faction = "Alliance" }
 end
@@ -147,12 +148,25 @@ lb:MarkDirty()
 assert(lb:StartDisplayCacheBuild())
 drain()
 local cache = lb._displayCache
-assert(cache and #cache.sortedKills == 211, "Full player display lost members or duplicated aliases")
+assert(cache and #cache.sortedKills == 5000, "Full player display lost members or duplicated aliases")
 local found
 for _, row in ipairs(cache.sortedGuilds) do
     if row.guild == "French Guild" then found = row.kills end
 end
-assert(found == 620, "Guild members outside top 200 disappeared or aliases were double counted")
+assert(found == 620, "Guild members disappeared or aliases were double counted")
+lb:SetPlayerKills("New Rival", 621, true)
+lb:MarkDirty()
+assert(lb:EnsureNetworkHotIndexesPrepared() ~= nil)
+drain()
+assert(lb:StartDisplayCacheBuild())
+drain()
+cache = lb._displayCache
+assert(#cache.sortedKills == 5000 and cache.sortedKills[5000].name == "New Rival")
+found = nil
+for _, row in ipairs(cache.sortedGuilds) do
+    if row.guild == "French Guild" then found = row.kills end
+end
+assert(found == 620, "Rank 5001 subtracted an existing member's HKs from the guild")
 -- Revalidate already populated legacy records with the character itself; a GR
 -- response from that character uses fresh Blizzard metadata in an owned GI.
 local whispers = {}

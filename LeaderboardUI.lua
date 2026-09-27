@@ -12,7 +12,7 @@ local outpostRows = {}
 -- Kills : 10 lignes visibles, scroll au-dela (meme principe que les listes Captures)
 local MAX_VISIBLE_KILL_ROWS = 10
 local KILL_ROW_HEIGHT = 26
--- Le cache fournit les 500 premiers ; seules les lignes visibles ont une frame.
+-- Le cache fournit les 5000 premiers ; seules les lignes visibles ont une frame.
 -- Nombre max de lignes affichables dans les listes Captures (avec scroll au-dela)
 local MAX_CAPTURE_LINES = 25
 -- Meme hauteur de ligne que le classement kills (aspect unifie)
@@ -38,12 +38,12 @@ local LB_FRAME_PAD = 16
 local LB_FRAME_W = LB_FRAME_PAD + LB_MAIN_W + LB_COL_GAP + LB_GUILD_KILLS_W + LB_COL_GAP
     + LB_GUILD_KEEP_W + LB_COL_GAP + LB_OUTPOST_W + LB_FRAME_PAD
 -- Colonnes guildes (tues) sur panneau 208. VH elargi a 58 px : les totaux de
--- guilde depassent 10 000 (5-6 chiffres) ; le rang (max "500") se contente de 28 px.
+-- guilde depassent 10 000 (5-6 chiffres) ; le rang reserve quatre chiffres.
 local LB_GUILD_COL_RANK = -76
 local LB_GUILD_COL_NAME = -10
 local LB_GUILD_COL_KILLS = 64
 local LB_GUILD_NAME_W = 92
-local LB_GUILD_RANK_W = 28
+local LB_GUILD_RANK_W = 32
 local LB_GUILD_KILLS_TEXT_W = 58
 -- Fortins : 3 colonnes equidistantes sur panneau 388 (fort -100, guilde 0, wins +100)
 local LB_GK_KEEP_LEFT = 8
@@ -78,7 +78,7 @@ local LB_ICON_SIZE = 22
 local LB_ICON_RING = 26
 local LB_HEADER_H = 24
 -- Colonnes kills : # / icones race+classe compacts, nom elargi, tues fixe (roster Blizzard).
-local LB_KILL_COL_RANK_W = 28
+local LB_KILL_COL_RANK_W = 34
 local LB_KILL_COL_ICON_W = 34
 local LB_KILL_COL_KILLS_W = 50
 -- Captures : deux icones compactes, nom lisible et compteur fixe.
@@ -1881,7 +1881,8 @@ RenderGuildKeepRows = function(force)
                     row.name:SetTextColor(P.white[1], P.white[2], P.white[3])
                 end
                 if entry.currentlyHeld and entry.keepAtlas and row.keepIcon and row.keepIcon.SetAtlas then
-                    row.keepIcon:SetAtlas(entry.keepAtlas, true)
+                    row.keepIcon:SetAtlas(entry.keepAtlas, false)
+                    row.keepIcon:SetSize(GUILD_KEEP_ICON, GUILD_KEEP_ICON)
                     row.keepIcon:Show()
                 elseif row.keepIcon then
                     row.keepIcon:Hide()
@@ -1937,7 +1938,10 @@ RenderOutpostRows = function(force)
                     row.name:SetTextColor(P.white[1], P.white[2], P.white[3])
                 end
                 if entry.currentlyHeld and entry.outpostAtlas and row.outpostIcon and row.outpostIcon.SetAtlas then
-                    row.outpostIcon:SetAtlas(entry.outpostAtlas, true)
+                    -- Taille fixe : avec la taille native de l'atlas (parfois 0 sur Forever),
+                    -- le nom du site sautait vers la gauche sur certaines lignes seulement.
+                    row.outpostIcon:SetAtlas(entry.outpostAtlas, false)
+                    row.outpostIcon:SetSize(GUILD_KEEP_ICON, GUILD_KEEP_ICON)
                     row.outpostIcon:Show()
                 elseif row.outpostIcon then
                     row.outpostIcon:Hide()

@@ -1,4 +1,14 @@
-1.0.34
+1.1.0
+
+**Overlord Forever 1.1.0**
+
+- Outpost and guild keep ranking rows now keep the site name aligned: the held-site icon uses a fixed size instead of the image's native size, which made names jump left on some rows.
+- Coins now live in a dedicated Featured Front panel: the balance sits above two wider Reinforce and Attack buttons, with their cost and a ready indicator. Unavailable actions are greyed out and hidden panels do no refresh work (the optional top coins panel remains available in settings).
+- The player ranking now displays up to 5,000 known players. Guild and faction totals include every locally known player, with aliases counted once, so falling out of the displayed ranking no longer subtracts a member's kills. Rendering stays limited to visible rows, with sorting and local snapshots built in slices. Updated peers also recover up to 5,000 players through resumable, identity-based pages; older peers retain the compatible top-500 exchange.
+- Paged catch-up compares 64 identity buckets, transfers at most 16 scores per page, verifies complete pages before applying the existing score filters, and resumes incomplete buckets after disconnects. Unchanged buckets are skipped. A shared 300 B/s estimated wire budget, relay backpressure, combat/instance pauses and sliced work protect live traffic and frame time. `/ov network` reports page progress and filtered rows.
+- Quota-blocked relay copies now wait without being recreated every tick or discarded after 30 polls. Ready Battle.net traffic can pass waiting copies in either priority lane.
+- Less clutter during fights: the floating Overlord panels fade to 40% while you are in combat, and the "Next objective" guide is shown at 60% opacity. Capture progress inside a zone stays fully visible out of combat.
+- Cross-faction leaderboard catch-up now asks the other faction's player with the shortest route first (your own Battle.net friend when you have one), and recognises the faction of Battle.net friends. Long relay routes were losing the answers.
 
 **Overlord Forever 1.0.34**
 

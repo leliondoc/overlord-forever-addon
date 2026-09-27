@@ -46,7 +46,7 @@ for i = 1, 10000 do
         guildAt = time(), faction = i % 2 == 0 and "Alliance" or "Horde", class = "PRIEST", level = 2 }
     lb.captureCount[name] = i % 25 + 1
     if i % 10 == 0 then lb.kills[name .. "-Realm"] = i end
-    if i > 9500 then total = total + i end
+    total = total + i
 end
 lb:MarkDirty()
 assert(lb:EnsureNetworkHotIndexesPrepared() == false)
@@ -61,15 +61,15 @@ local beforeDisplay = slices
 drain()
 assert(slices - beforeDisplay > 200, "Large ranking preparation did not yield")
 local cache = assert(lb._displayCache, "Large display cache was not published")
-assert(#cache.sortedKills == 500 and cache.sortedKills[1].kills == 10000)
+assert(#cache.sortedKills == 5000 and cache.sortedKills[1].kills == 10000)
 for i, row in ipairs(cache.sortedKills) do
-    assert(row.kills == 10001 - i, "Top 500 lost, duplicated or misordered a player")
+    assert(row.kills == 10001 - i, "Top 5000 lost, duplicated or misordered a player")
 end
-assert(#cache.sortedGuilds == 500 and cache.sortedGuilds[1].kills == 10000)
+assert(#cache.sortedGuilds == 5000 and cache.sortedGuilds[1].kills == 10000)
 assert(cache.alliKills + cache.hordeKills == total, "Aliases inflated faction totals")
 local guildTotal = 0
 for _, row in ipairs(cache.sortedGuilds) do guildTotal = guildTotal + row.kills end
-assert(guildTotal == total, "Guild totals differ from the displayed top 500")
+assert(guildTotal == (5001 + 10000) * 5000 / 2, "Top guild display lost known members")
 
 -- The real snapshot and its wire serializer must agree with that exact top,
 -- including aliases, without sorting 500 rows or serializing them in one frame.
@@ -80,10 +80,10 @@ lb:SnapshotCurrentCampaignBeforeReset(function(ok) snapshotDone = ok end)
 drain()
 assert(snapshotDone and slices - beforeSnapshot > 100, "Snapshot work was not sliced")
 local snapshot = assert(OverlordDB.leaderboardSnapshot)
-assert(#snapshot.killOrder == 500)
+assert(#snapshot.killOrder == 5000)
 for i, row in ipairs(cache.sortedKills) do
     assert(snapshot.killOrder[i] == row.name and snapshot.kills[row.name] == row.kills,
-        "Network and display disagree on the top 500")
+        "Snapshot and display disagree on the top 5000")
     assert(snapshot.playerInfo[row.name].guild ~= "", "Alias lost its guild metadata")
 end
 assert(loadfile("SyncHistoryCatchup.lua"))()

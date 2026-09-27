@@ -211,6 +211,9 @@ local function StartNetworkProbe()
             Overlord:PrintNotification("[Overlord] " .. line)
         end
     end
+    if Overlord.Sync.GetPagedLeaderboardDiagnostics then
+        Overlord:PrintNotification("[Overlord] " .. Overlord.Sync:GetPagedLeaderboardDiagnostics())
+    end
     local sendStats = Overlord.Sync._addonSendStats
     if sendStats then
         local parts = {}
