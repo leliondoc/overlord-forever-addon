@@ -7,7 +7,7 @@ local function widget()
 end
 function methods:IsShown() return self.shown end
 methods.IsVisible = methods.IsShown
-function methods:Show() self.shown = true end
+function methods:Show() self.shown = true; self.showCalls = (self.showCalls or 0) + 1 end
 function methods:Hide() self.shown = false end
 function methods:SetShown(shown) self.shown = shown end
 function methods:SetText(text) self.text = text; writes = writes + 1 end
@@ -157,8 +157,8 @@ Overlord.InActiveFront = false
 popups:RefreshNextObjective()
 assert(panel.vignette.texture == nil and panel.bodyFs.text == 'Enter a war front', 'Leaving a front retained stale map guidance')
 
--- Removing the guidance banner must preserve the automatic map waypoint and
--- the actual capture timer, including direct/manual UpdateIndicator callers.
+-- Both guidance and regular capture progress belong to the side panel. Keep
+-- the waypoint, but never resurrect the floating HUD through capture/manual calls.
 target, Overlord.InActiveFront = available, true
 local hud = widget()
 hud.title, hud.zoneName, hud.distance, hud.timer = widget(), widget(), widget(), widget()
@@ -173,7 +173,35 @@ target.holdTimeElapsed, target.holdTimeRequired = 30, 120
 distance, observedElapsed = 0, 30
 hud:Show()
 indicator:UpdateIndicator(target)
-assert(hud:IsShown() and hud.timer.text == '0:30 / 2:00', 'Capture timer was removed with the guidance banner')
+assert(not hud:IsShown(), 'Capture update resurrected the floating zone HUD')
+popups:RefreshNextObjective()
+assert(detailsContain('0:30 / 2:00'), 'Capture progress disappeared from the side panel')
+indicator.FindActiveZone = function() return target end
+Overlord.Zones.GetCurrentPlayerZone = function() return target end
+local beforeShows = hud.showCalls
+indicator:RefreshHud()
+indicator:Show()
+assert(not hud:IsShown() and hud.showCalls == beforeShows, 'Automatic/manual show recreated the zone HUD')
+for _, field in ipairs({ 'isContested', 'isPaused' }) do
+    target[field] = true
+    indicator:RefreshHud()
+    indicator:Show()
+    assert(not hud:IsShown() and hud.showCalls == beforeShows, 'Capture state recreated the zone HUD: ' .. field)
+    target[field] = nil
+end
+-- The keep/outpost HUD has not moved into the objective panel. Its explicit
+-- display path must still reach UpdateIndicator.
+local update = indicator.UpdateIndicator
+local squareSeen
+indicator.UpdateIndicator = function(_, zone) squareSeen = zone end
+for _, field in ipairs({ '_guildKeep', '_outpost' }) do
+    target[field] = true
+    indicator:Show()
+    assert(hud:IsShown() and squareSeen == target, 'Structure HUD was removed: ' .. field)
+    target[field] = nil
+    indicator:Hide()
+end
+indicator.UpdateIndicator = update
 
 -- The existing UI heartbeat refreshes distance and capture progress, even when
 -- no sync event or activity-list refresh occurs. No additional ticker is used.
@@ -190,4 +218,4 @@ main:Hide()
 before, readsBefore = scans, distanceReads
 ui:Update()
 assert(scans == before and distanceReads == readsBefore, 'Hidden main panel polled objective details')
-print('Next objective: travel/arrival instructions, observer timer, contested/paused state, visible UI tick, hidden idle and capture HUD OK')
+print('Next objective: panel guidance/progress, no floating zone HUD, manual/automatic paths, structure HUD and hidden idle OK')

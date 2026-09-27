@@ -1,4 +1,8 @@
-1.1.1
+1.1.2
+
+**Overlord Forever 1.1.2**
+
+- Remove the remaining floating Capture Zone window during regular captures, including manual HUD commands. Distance, instructions and progress remain in the Next Objective side panel; keep/outpost HUDs and automatic map waypoints remain available.
 
 **Overlord Forever 1.1.1**
 

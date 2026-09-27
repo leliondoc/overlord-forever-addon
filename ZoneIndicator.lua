@@ -991,9 +991,9 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
         return
     end
 
-    -- Guidance lives in the side panel. Keep the floating HUD only for actual
-    -- captures (including keeps/outposts), even when shown by a manual command.
-    if not IsSquareCaptureHud(activeZone) and activeZone.status == "available" and not activeZone.isHolding then
+    -- Regular objectives and their capture progress now live in the side panel.
+    -- Only keeps/outposts still use this floating HUD, including manual calls.
+    if not IsSquareCaptureHud(activeZone) then
         self:Hide()
         return
     end
@@ -1468,7 +1468,7 @@ function Overlord.ZoneIndicator:RefreshHud()
                 and Overlord.GuildKeep:IsSiegeWindowOpen()))
     end
 
-    if not shouldShow then
+    if not shouldShow or not IsSquareCaptureHud(activeZone) then
         if indicatorFrame and indicatorFrame:IsShown() then
             self:Hide()
         end
@@ -1488,24 +1488,21 @@ end
 
 -- Affiche l'indicateur (commande / capture)
 function Overlord.ZoneIndicator:Show()
-    if not indicatorFrame then
-        self:CreateIndicatorFrame()
-    end
     hudUserDismissed = false
-    indicatorFrame:Show()
-    SetIndicatorHudEnabled(true)
-    self:EnsureIndicatorLayout()
     self:InvalidateActiveZoneCache()
     local outVisible, _, outTarget = EvaluateOutpostHudCached()
     local keepVisible, _, keepTarget = EvaluateGuildKeepHud()
     local squareTarget = outVisible and outTarget or (keepVisible and keepTarget or nil)
-    if squareTarget then
-        SetIndicatorHudEnabled(true)
-        self:EnsureIndicatorLayout()
-        self:UpdateIndicator(squareTarget)
-    else
-        self:UpdateIndicator(self:FindActiveZone(true))
+    local target = squareTarget or self:FindActiveZone(true)
+    if not IsSquareCaptureHud(target) then
+        self:Hide()
+        return
     end
+    if not indicatorFrame then self:CreateIndicatorFrame() end
+    indicatorFrame:Show()
+    SetIndicatorHudEnabled(true)
+    self:EnsureIndicatorLayout()
+    self:UpdateIndicator(target)
 end
 
 function Overlord.ZoneIndicator:Hide()
