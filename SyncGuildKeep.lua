@@ -2953,6 +2953,10 @@ end
 local GH_DEDUP_SEC = 86400
 local GH_RECEIVE_DEDUP_MAX = 384
 local ghReceiveDedup = NewGuildKeepDedup(GH_DEDUP_SEC, GH_RECEIVE_DEDUP_MAX, true)
+-- Payload GH brut -> cle semantique deja calculee. Une meme preuve arrive par
+-- plusieurs relais ; sans ce raccourci, chaque copie refaisait normalisation,
+-- preuve locale et candidats (~2,5 ms) avant d'atteindre le dedup.
+local ghPayloadSemanticKeys, ghPayloadSemanticCount = {}, 0
 local ghSendDedup = NewGuildKeepDedup(GH_DEDUP_SEC, GH_RECEIVE_DEDUP_MAX, true)
 
 local function GuildKeepProofMatches(a, b)
@@ -3070,6 +3074,16 @@ function Overlord.Sync:OnReceiveGuildKeepDailyProof(payload, sender, sourceChann
     if version ~= GK_WIRE_SEMANTIC_VERSION then return end
     if not siteKey or not Overlord.GuildKeepSites[siteKey]
         or not dayKey or not isGuildKeepSiegeKey(dayKey) then return end
+    -- Deja traitee et terrain inchange : meme sortie que le dedup plus bas, sans
+    -- les calculs. Si l'etat du fortin a change, le chemin complet reprend.
+    local knownSemanticKey = ghPayloadSemanticKeys[payload]
+    if knownSemanticKey then
+        local seenNode = GetGuildKeepDedupNode(ghReceiveDedup, knownSemanticKey, GetTime())
+        if seenNode and seenNode.repairFingerprint ~= nil
+            and seenNode.repairFingerprint == GetStaleKeepPollEpisodeKey(siteKey) then
+            return
+        end
+    end
     remotePool = ResolveGuildKeepPayloadPool(remotePool, sender, sourceChannel)
     if not remotePool then return end
     local fac = FactionCodeToFaction(facCode)
@@ -3187,6 +3201,13 @@ function Overlord.Sync:OnReceiveGuildKeepDailyProof(payload, sender, sourceChann
 
     local dedupKey = BuildGuildKeepProofSemanticKey(siteKey, dayKey, incoming)
     if not dedupKey then return end
+    if not ghPayloadSemanticKeys[payload] then
+        if ghPayloadSemanticCount >= 512 then
+            ghPayloadSemanticKeys, ghPayloadSemanticCount = {}, 0
+        end
+        ghPayloadSemanticKeys[payload] = dedupKey
+        ghPayloadSemanticCount = ghPayloadSemanticCount + 1
+    end
     local now = GetTime()
     local seen = GetGuildKeepDedupNode(ghReceiveDedup, dedupKey, now)
     if seen then

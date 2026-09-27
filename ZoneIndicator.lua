@@ -1,4 +1,4 @@
--- ZoneIndicator.lua - HUD midscreen : prochain objectif + guidage vers la zone
+-- ZoneIndicator.lua - HUD de capture et repere automatique de prochain objectif.
 Overlord = Overlord or {}
 Overlord.ZoneIndicator = {}
 
@@ -206,16 +206,13 @@ function Overlord.ZoneIndicator:EnsureIndicatorLayout()
     self:RepositionInStack()
 end
 
--- Moins de gene a l'ecran : le guidage « Prochain objectif » est plus transparent
--- et toute la fenetre s'estompe en combat (elle reste lisible, jamais masquee).
-Overlord.ZoneIndicator.GUIDANCE_ALPHA = 0.6
+-- Le HUD de capture s'estompe en combat tout en restant lisible.
 Overlord.ZoneIndicator.COMBAT_FADE_ALPHA = 0.4
 
 local function ApplyIndicatorAlpha()
     if not indicatorFrame then return end
     local base = indicatorFrame._hudEnabled == false and HUD_DISABLED_ALPHA or HUD_ENABLED_ALPHA
     local factor = 1
-    if indicatorFrame._guidance then factor = Overlord.ZoneIndicator.GUIDANCE_ALPHA end
     if Overlord.HudInCombat then
         factor = math.min(factor, Overlord.ZoneIndicator.COMBAT_FADE_ALPHA)
     end
@@ -913,6 +910,55 @@ local function FormatTime(seconds)
     return string.format("%d:%02d", math.floor(seconds / 60), seconds % 60)
 end
 
+-- Read-only details for the next-objective panel. Use the same geometry and
+-- observer timer as the capture HUD; never start a separate capture clock.
+function Overlord.ZoneIndicator:GetObjectiveDetails(zone)
+    if not zone then return "" end
+    local dist = self:GetDistanceToZone(zone)
+    local inZone = dist ~= nil and zone.radius and dist < zone.radius
+    local alive = not (Overlord.IsPlayerDeadOrGhost and Overlord:IsPlayerDeadOrGhost())
+    local location = ""
+    if inZone and alive then
+        local blocked = Overlord.ZoneControl and Overlord.ZoneControl.IsPlayerInNonCaptureStateForSync
+            and Overlord.ZoneControl:IsPlayerInNonCaptureStateForSync()
+        if blocked then
+            local instruction = L.INDICATOR_DISMOUNT_TO_CAPTURE or "Dismount."
+            if IsStealthed and IsStealthed() then
+                instruction = L.INDICATOR_STEALTH_TO_CAPTURE or "Leave stealth to capture."
+            end
+            location = "|cFFFF8C33" .. instruction .. "|r"
+        else
+            location = "|cFF4DE64D" .. (L.IN_THE_ZONE or "You are in the zone!") .. "|r"
+        end
+    elseif dist ~= nil then
+        location = string.format(L.DISTANCE_FORMAT or "Distance: ~%.0f yards", dist * 25)
+    elseif zone.center then
+        location = string.format(L.COORDS_FORMAT or "Coords: %.1f, %.1f", zone.center[1], zone.center[2])
+    end
+
+    local detail = ""
+    if zone.status == "in_progress" then
+        local elapsed = (Overlord.Zones and Overlord.Zones.GetObserverHoldTimeElapsed)
+            and Overlord.Zones:GetObserverHoldTimeElapsed(zone) or (tonumber(zone.holdTimeElapsed) or 0)
+        local required = tonumber(zone.holdTimeRequired) or 120
+        local state, color = "", "|cFFFFD100"
+        if zone.isContested then
+            state, color = L.UI_CONTESTED or "CONTESTED", "|cFFFF4444"
+        elseif zone.isPaused then
+            state, color = L.UI_PAUSED or "PAUSED: outside zone, timer decaying", "|cFFFF8C33"
+        end
+        if required > 0 then
+            detail = color .. FormatTime(math.max(0, elapsed)) .. " / " .. FormatTime(required) .. "|r"
+        end
+        if state ~= "" then
+            detail = detail .. (detail ~= "" and "\n" or "") .. color .. state .. "|r"
+        end
+    elseif zone.status == "available" and not inZone and alive then
+        detail = L.NEXT_OBJECTIVE_GO or "Go here: stand in the zone to start the capture timer."
+    end
+    return location .. (location ~= "" and detail ~= "" and "\n" or "") .. detail
+end
+
 local function EnsureIndicatorTextAnchors()
     if not indicatorFrame or indicatorFrame._olTextAnchorsReady then return end
     indicatorFrame._olTextAnchorsReady = true
@@ -941,6 +987,13 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
     end
 
     if not activeZone then
+        self:Hide()
+        return
+    end
+
+    -- Guidance lives in the side panel. Keep the floating HUD only for actual
+    -- captures (including keeps/outposts), even when shown by a manual command.
+    if not IsSquareCaptureHud(activeZone) and activeZone.status == "available" and not activeZone.isHolding then
         self:Hide()
         return
     end
@@ -981,27 +1034,6 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
     else
         dist = self:GetDistanceToZone(activeZone)
     end
-    local guidanceOnly = not isSquareHud
-        and (activeZone.status == "available" and not activeZone.isHolding)
-
-    if guidanceOnly then
-        local guidanceKey = "guide|" .. tostring(activeZone.id or activeZone.name or "")
-        if lastZoneIndicatorKey == guidanceKey then return end
-        lastZoneIndicatorKey = guidanceKey
-        lastGkIndicatorKey = nil
-        lastOpIndicatorKey = nil
-        EnsureIndicatorTextAnchors()
-        indicatorFrame.title:SetText(L.NEXT_OBJECTIVE_HEADER or L.INDICATOR_TITLE)
-        indicatorFrame.title:SetTextColor(0.95, 0.82, 0.30)
-        indicatorFrame.zoneName:SetText(activeZone.name)
-        local o = (Overlord.MapMarkers and Overlord.MapMarkers.NEXT_OBJECTIVE_COLOR) or { 0.95, 0.82, 0.30 }
-        indicatorFrame.zoneName:SetTextColor(o[1], o[2], o[3])
-        indicatorFrame.distance:SetText("")
-        indicatorFrame.timer:Hide()
-        SetIndicatorHeight(IND_PAD_TOP + IND_PAD_BOTTOM + 16 + IND_LINE_GAP + 12)
-        return
-    end
-
     local inCaptureGeom = false
     if activeZone._guildKeep and activeZone._keepSite and Overlord.GuildKeep then
         inCaptureGeom = Overlord.GuildKeep.IsPlayerInKeepGeometryForHud
@@ -1331,21 +1363,7 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
     SetIndicatorHeight(h)
 end
 
--- Affiche / met a jour le HUD midscreen selon le front et l'objectif
--- Etat « guidage » deduit de la cle d'affichage, quelle que soit la branche suivie.
-do
-    local updateIndicatorInner = Overlord.ZoneIndicator.UpdateIndicator
-    function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
-        updateIndicatorInner(self, activeZone)
-        local guidance = type(lastZoneIndicatorKey) == "string"
-            and lastZoneIndicatorKey:sub(1, 6) == "guide|"
-        if indicatorFrame and indicatorFrame._guidance ~= guidance then
-            indicatorFrame._guidance = guidance
-            ApplyIndicatorAlpha()
-        end
-    end
-end
-
+-- Affiche / met a jour les captures ; le guidage est dans le panneau lateral.
 function Overlord.ZoneIndicator:RefreshHud()
     if Overlord:IsPlayerDeadOrGhost() then
         if indicatorFrame and indicatorFrame:IsShown() then
@@ -1439,8 +1457,9 @@ function Overlord.ZoneIndicator:RefreshHud()
         shouldShow = true
         activeZone = resolvedActiveZone or self:FindActiveZone()
     elseif nextZ and nextZ.status == "available" then
-        shouldShow = true
-        activeZone = nextZ
+        -- The waypoint remains useful; the guidance banner itself is gone.
+        self:Hide()
+        return
     else
         activeZone = resolvedActiveZone or self:FindActiveZone()
         shouldShow = activeZone and activeZone.status == "in_progress"

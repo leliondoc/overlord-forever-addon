@@ -265,7 +265,19 @@ local handler = d.Overlord.Sync.OnPagedLeaderboardMessage
 d.Overlord.Sync.OnPagedLeaderboardMessage = nil
 done, supported = nil, nil
 assert(a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function(ok, capable) done, supported = ok, capable end))
-advance(400)
+advance(212)
+local waitingDiag = a.Overlord.Sync:GetPagedLeaderboardDiagnostics()
+assert(done == nil and waitingDiag:find("awaiting reply", 1, true)
+    and waitingDiag:find("parts=0/?", 1, true), "A silent peer was presented as receiving: " .. waitingDiag)
+local waitBeforePause = waitingDiag:match("timeout=(%d+)s")
+a.InCombatLockdown = function() return true end
+advance(60)
+local pausedDiag = a.Overlord.Sync:GetPagedLeaderboardDiagnostics()
+assert(done == nil and pausedDiag:find("paused: combat/instance", 1, true)
+    and pausedDiag:match("timeout=(%d+)s") == waitBeforePause,
+    "Combat wait was hidden or consumed the response timeout: " .. pausedDiag)
+a.InCombatLockdown = function() return false end
+advance(188)
 assert(done == false and supported == false, "Old endpoint did not fall back")
 assert(not a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function() error("negative cache") end))
 d.Overlord.Sync.OnPagedLeaderboardMessage = handler
@@ -348,6 +360,33 @@ advance(2500)
 assert(done == true and reverseDone == true, "Simultaneous pulls deadlocked: "
     .. a.Overlord.Sync:GetPagedLeaderboardDiagnostics() .. " / " .. d.Overlord.Sync:GetPagedLeaderboardDiagnostics())
 assert(a.Overlord.Leaderboard.kills[names[11]] == 4999 and d.Overlord.Leaderboard.kills[names[10]] == 5000)
+
+-- The two cross-faction gateways remain busy for the entire pull. A quiet-lane
+-- prerequisite used to prevent HB pages from leaving the gateways at all.
+d.Overlord.Leaderboard:SetPlayerKills(names[12], 4997, true)
+local pressureUntil = now + 900
+local pressureSerial = 0
+local function pressure()
+    if now >= pressureUntil then return end
+    pressureSerial = pressureSerial + 1
+    for _, bridge in ipairs({ b, c }) do
+        bridge.Overlord.BetaNetwork:Send('ZS', 'busy-bridge-' .. pressureSerial)
+    end
+    later(0.2, pressure)
+end
+pressure()
+done = nil
+assert(a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function(ok) done = ok end))
+for i = 1, 8 do
+    advance(100)
+    if done ~= nil then break end
+end
+assert(done == true and a.Overlord.Leaderboard.kills[names[12]] == 4997,
+    'Paged catch-up failed through busy Horde/Alliance bridges: ' .. a.Overlord.Sync:GetPagedLeaderboardDiagnostics())
+assert(now < pressureUntil, 'Catch-up only finished after ordinary traffic stopped')
+pressureUntil = now
+advance(180)
+print('PASS: paged cross-faction catch-up completes while both gateways remain saturated')
 
 -- Exercise the production scheduler, including automatic fallback to v4.
 a.Overlord.Sync.GetOnlineEuropeanLeaderboardBridgeMembers = function() return { d.name } end

@@ -44,7 +44,7 @@ local FEATURED_FRONT_TOGGLE_H = 52
 local FEATURED_FRONT_CLOSE_SIZE = 10
 -- Chevauchement de l'onglet sur le bord gauche du main (reliure livre).
 local FEATURED_FRONT_SPINE_OVERLAP = 1
-local FEATURED_FRONT_LAYOUT_VERSION = 58
+local FEATURED_FRONT_LAYOUT_VERSION = 59
 local FEATURED_FRONT_ACTIVITY_ROW_H = 18
 local FEATURED_FRONT_ACTIVITY_ROW_GAP = 3
 local FEATURED_FRONT_ACTIVITY_MAX_ROWS = 8
@@ -52,6 +52,7 @@ local FEATURED_FRONT_ACTIVITY_VISIBLE_ROWS = 5
 local FEATURED_FRONT_ACTIVITY_TITLE_H = 28
 local FEATURED_FRONT_ACTIVITY_BOTTOM_PAD = 8
 local FEATURED_FRONT_BODY_ACTIVITY_GAP = 10
+local NEXT_OBJECTIVE_DETAILS_GAP = 8
 local FEATURED_FRONT_BOTTOM_PAD = 16
 local FEATURED_FRONT_ACTIVITY_RAIL_W = 24
 local FEATURED_FRONT_BOUNTY_GAP = 10
@@ -1195,7 +1196,7 @@ function Overlord.Popups:TryShowDailyOnLogin(attempt)
 end
 
 -- ---------------------------------------------------------------------------
--- Front du jour : extension laterale du panneau principal (repliable via onglet fleche).
+-- Prochain objectif : extension laterale du panneau principal (onglet fleche).
 -- ---------------------------------------------------------------------------
 
 -- Forward declarations (dependances circulaires entre toggle / frame / contenu).
@@ -1209,6 +1210,12 @@ local StartFeaturedFrontActivityTicker
 local StopFeaturedFrontActivityTicker
 
 local lastFeaturedFrontLoadedId = nil
+
+local function GetObjectiveFrontId()
+    if not Overlord.InActiveFront or Overlord.InstanceSuspended then return nil end
+    local front = Overlord.Fronts and Overlord.Fronts:GetCurrentFront()
+    return front and front.id
+end
 
 local function GetMainPanelFrame()
     if Overlord.UI and Overlord.UI.GetMainFrame then
@@ -1310,6 +1317,7 @@ StartFeaturedFrontActivityTicker = function()
             return
         end
         ApplyFeaturedFrontActivity(featuredFrontFrame)
+        Overlord.Popups:RefreshNextObjective()
     end)
 end
 
@@ -1658,7 +1666,8 @@ local function AnchorFeaturedFrontActivityBlock(f, contentH, minimumContentH, fo
     end
 
     local panelTop = f.activityPanel and f.activityPanel:GetTop()
-    local bodyBottom = f.bodyFs and f.bodyFs:GetBottom()
+    local bodyBottom = f.objectiveDetailsFs and f.objectiveDetailsFs:IsShown()
+        and f.objectiveDetailsFs:GetBottom() or (f.bodyFs and f.bodyFs:GetBottom())
     if not panelTop or not bodyBottom then
         f._activityBodyCollisionPending = true
         return
@@ -1735,6 +1744,10 @@ local function ApplyFeaturedFrontActivityLayout(f, rowCount)
     end
 
     local bodyTextH = f.bodyFs and math.ceil(f.bodyFs:GetStringHeight() or 0) or 0
+    if f.objectiveDetailsFs and f.objectiveDetailsFs:IsShown() then
+        bodyTextH = bodyTextH + NEXT_OBJECTIVE_DETAILS_GAP
+            + math.ceil(f.objectiveDetailsFs:GetStringHeight() or 0)
+    end
     local layoutKey = rowCount .. "|" .. (footerVisible and 1 or 0) .. "|" .. contentH .. "|" .. bodyTextH
         .. "|" .. (f:GetHeight() or 0) .. "|" .. (GetFeaturedFrontActiveZoneFrame() and 1 or 0)
     if f._activityLayoutKey == layoutKey and not f._activityBodyCollisionPending then return end
@@ -1837,6 +1850,7 @@ function Overlord.Popups:RefreshFeaturedFrontBountyButton()
     if featuredFrontFrame and ApplyFeaturedFrontActivity then
         ApplyFeaturedFrontActivity(featuredFrontFrame)
     end
+    self:RefreshNextObjective()
 end
 
 -- Bloc activite : sous-panneau WC3, une ligne par front (5 dernieres minutes).
@@ -1859,8 +1873,7 @@ ApplyFeaturedFrontActivity = function(f)
     end
 
     local rows = fa:GetActivityRows()
-    local featuredId = lastFeaturedFrontLoadedId
-        or (Overlord.Fronts and Overlord.Fronts.GetFeaturedFrontId and Overlord.Fronts:GetFeaturedFrontId())
+    local featuredId = Overlord.Fronts and Overlord.Fronts.GetFeaturedFrontId and Overlord.Fronts:GetFeaturedFrontId()
     local anyActive = false
     for _, row in ipairs(rows) do
         if row.active then anyActive = true break end
@@ -1937,7 +1950,8 @@ EnsureFeaturedFrontToggle = function(mainFrame)
     tab:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         local expanded = featuredFrontFrame and featuredFrontFrame:IsShown()
-        GameTooltip:SetText(expanded and (L.FEATURED_FRONT_COLLAPSE or "Masquer") or (L.FEATURED_FRONT_EXPAND or "Front du jour"))
+        GameTooltip:SetText(expanded and (L.NEXT_OBJECTIVE_COLLAPSE or "Hide next objective")
+            or (L.NEXT_OBJECTIVE_HEADER or "Next Objective"))
         GameTooltip:Show()
     end)
     tab:SetScript("OnLeave", function()
@@ -1997,7 +2011,7 @@ EnsureFeaturedFrontFrame = function()
     f.titleFs:SetJustifyV("MIDDLE")
     f.titleFs:SetShadowOffset(0, 0)
     f.titleFs:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
-    f.titleFs:SetText(L.FEATURED_FRONT_TITLE or "Featured Front")
+    f.titleFs:SetText(L.NEXT_OBJECTIVE_HEADER or "Next Objective")
 
     -- Nom de la zone : centre horizontal du panneau, sous le ruban.
     f.frontNameFs = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -2019,12 +2033,23 @@ EnsureFeaturedFrontFrame = function()
     f.vignette:SetPoint("CENTER", f.artFrame, "CENTER", 0, 0)
     f.vignette:SetSize(FEATURED_FRONT_PANEL_WIDTH - 56, FEATURED_FRONT_ART_HEIGHT - 8)
 
-    f.bodyFs = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    f.bodyFs = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
     f.bodyFs:SetPoint("TOPLEFT", f.artFrame, "BOTTOMLEFT", 4, -16)
     f.bodyFs:SetPoint("TOPRIGHT", f.artFrame, "BOTTOMRIGHT", -4, -16)
     f.bodyFs:SetJustifyH("CENTER")
     f.bodyFs:SetJustifyV("TOP")
     f.bodyFs:SetWordWrap(true)
+    f.bodyFs:SetTextColor(1, 1, 1)
+
+    f.objectiveDetailsFs = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    f.objectiveDetailsFs:SetPoint("TOPLEFT", f.bodyFs, "BOTTOMLEFT", 0, -NEXT_OBJECTIVE_DETAILS_GAP)
+    f.objectiveDetailsFs:SetPoint("TOPRIGHT", f.bodyFs, "BOTTOMRIGHT", 0, -NEXT_OBJECTIVE_DETAILS_GAP)
+    f.objectiveDetailsFs:SetJustifyH("CENTER")
+    f.objectiveDetailsFs:SetJustifyV("TOP")
+    f.objectiveDetailsFs:SetWordWrap(true)
+    f.objectiveDetailsFs:SetSpacing(3)
+    f.objectiveDetailsFs:SetTextColor(0.82, 0.82, 0.78)
+    f.objectiveDetailsFs:Hide()
 
     -- Bloc activite recente : hauteur recalee sur la grille d'actions (ApplyFeaturedFrontActivityLayout).
     local actionsCard = Overlord.UI.actionsCard
@@ -2107,6 +2132,7 @@ EnsureFeaturedFrontFrame = function()
     f:SetScript("OnShow", function(self)
         StartFeaturedFrontActivityTicker()
         ApplyFeaturedFrontActivity(self)
+        Overlord.Popups:RefreshNextObjective()
         Overlord.Popups:RefreshFeaturedFrontCoins()
     end)
     f:SetScript("OnHide", function()
@@ -2121,25 +2147,58 @@ EnsureFeaturedFrontFrame = function()
 end
 
 ApplyFeaturedFrontContent = function(f, frontId)
-    if not f or not frontId or not Overlord.Fronts then return false end
-    local art = Overlord.Fronts:GetFeaturedFrontArtPath(frontId)
-    local name = Overlord.Fronts:GetFeaturedFrontDisplayName(frontId)
-    if not art or not name then return false end
-    f.vignette:SetTexture(art)
-    f.vignette:SetTexCoord(0.04, 0.96, 0.10, 0.82)
-    f.frontNameFs:SetText(name)
+    if not f or not Overlord.Fronts then return false end
+    local art = frontId and Overlord.Fronts:GetFeaturedFrontArtPath(frontId)
+    local name = frontId and Overlord.Fronts:GetFeaturedFrontDisplayName(frontId)
+    local zone = frontId and Overlord.Zones and Overlord.Zones.GetNextObjectiveZone
+        and Overlord.Zones:GetNextObjectiveZone(frontId)
+    local text = zone and zone.name or (frontId and (L.NEXT_OBJECTIVE_NONE or "No objective available")
+        or (L.NEXT_OBJECTIVE_OUTSIDE_FRONT or "Enter a war front to see your next objective."))
+    local pendingSync = zone and Overlord.IsLoginZoneDisplayPending and Overlord:IsLoginZoneDisplayPending(zone)
+    if pendingSync then
+        text = L.MAP_SYNC_PENDING or "SYNC"
+    end
+    local details = ""
+    if zone and not pendingSync and Overlord.ZoneIndicator and Overlord.ZoneIndicator.GetObjectiveDetails then
+        details = Overlord.ZoneIndicator:GetObjectiveDetails(zone)
+    end
+    name = name or (L.NEXT_OBJECTIVE_NO_FRONT or "Outside a war front")
+    if f._objectiveArt ~= art then
+        f._objectiveArt = art
+        f.vignette:SetTexture(art)
+        f.vignette:SetTexCoord(0.04, 0.96, 0.10, 0.82)
+    end
+    if f._objectiveFrontName ~= name then
+        f._objectiveFrontName = name
+        f.frontNameFs:SetText(name)
+    end
+    local layoutChanged = false
+    if f._objectiveText ~= text then
+        f._objectiveText = text
+        f.bodyFs:SetText(text)
+        layoutChanged = true
+    end
+    if f.objectiveDetailsFs and f._objectiveDetails ~= details then
+        f._objectiveDetails = details
+        f.objectiveDetailsFs:SetText(details)
+        f.objectiveDetailsFs:SetShown(details ~= "")
+        layoutChanged = true
+    end
+    if layoutChanged then ApplyFeaturedFrontActivityLayout(f) end
     lastFeaturedFrontLoadedId = frontId
-    f.bodyFs:SetText(L.FEATURED_FRONT_BODY or "")
-    ApplyFeaturedFrontActivity(f)
     return true
 end
 
+-- Reuse the panel's one-second UI tick. Hidden/collapsed panels
+-- do no objective scans, and unchanged text/texture is not painted again.
+function Overlord.Popups:RefreshNextObjective()
+    if not featuredFrontFrame or not featuredFrontFrame:IsVisible() then return end
+    ApplyFeaturedFrontContent(featuredFrontFrame, GetObjectiveFrontId())
+end
+
 LoadFeaturedFrontContent = function()
-    if not Overlord.Fronts or not Overlord.Fronts.GetFeaturedFrontId then return false end
-    local frontId = Overlord.Fronts:GetFeaturedFrontId()
-    if not frontId then return false end
-    if not Overlord.Fronts:GetFeaturedFrontArtPath(frontId) then return false end
-    if not Overlord.Fronts:GetFeaturedFrontDisplayName(frontId) then return false end
+    if not Overlord.Fronts then return false end
+    local frontId = GetObjectiveFrontId()
     local f = EnsureFeaturedFrontFrame()
     if not f then return false end
     local faction = Overlord.PlayerFaction or UnitFactionGroup("player")
@@ -2175,7 +2234,7 @@ end
 
 -- Onglet fleche sur le bord gauche du panneau principal ; restaure l'etat replie/deplie.
 function Overlord.Popups:SyncFeaturedFrontDock()
-    if not Overlord.Fronts or not Overlord.Fronts.GetFeaturedFrontId then return end
+    if not Overlord.Fronts then return end
     if Overlord.UI and Overlord.UI.Initialize then
         Overlord.UI:Initialize()
     end
@@ -2186,7 +2245,7 @@ function Overlord.Popups:SyncFeaturedFrontDock()
         featuredFrontToggleBtn:Show()
     end
     if IsFeaturedFrontExpanded() then
-        local frontId = Overlord.Fronts:GetFeaturedFrontId()
+        local frontId = GetObjectiveFrontId()
         local needsLoad = not featuredFrontFrame
             or not featuredFrontFrame:IsShown()
             or lastFeaturedFrontLoadedId ~= frontId
@@ -2196,6 +2255,7 @@ function Overlord.Popups:SyncFeaturedFrontDock()
             end
         else
             SetFeaturedFrontExpanded(true, false)
+            self:RefreshNextObjective()
         end
     elseif featuredFrontFrame then
         SetFeaturedFrontExpanded(false, false)

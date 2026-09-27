@@ -148,13 +148,8 @@ local function MarkShardInviteWhisperSent(fullName)
 end
 
 local function GetShardInviteTargetFaction(fullName)
-    if Overlord.Leaderboard and Overlord.Leaderboard.GetExportPlayerMeta then
-        local _, faction = Overlord.Leaderboard:GetExportPlayerMeta(fullName)
-        if faction == "Alliance" or faction == "Horde" then
-            return faction
-        end
-    end
-    return nil
+    local sync = Overlord.Sync
+    return sync and sync.GetLivePlayerFaction and sync:GetLivePlayerFaction(fullName) or nil
 end
 
 -- Couleur nom joueur dans le popup shard (bleu Alliance, rouge Horde)
@@ -164,13 +159,12 @@ local function GetShardInviteNameColor(faction)
     elseif faction == "Horde" then
         return 1.0, 0.40, 0.27
     end
-    return nil
+    return 0.72, 0.72, 0.72
 end
 
 -- Prefix |cff pour hyperliens tooltip shard
 local function GetShardInviteNameColorEscape(faction)
     local r, g, b = GetShardInviteNameColor(faction)
-    if not r then return "|cffff7359" end
     return string.format("|cff%02x%02x%02x",
         math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5))
 end
@@ -3620,6 +3614,9 @@ function Overlord.UI:UpdateTick()
     self:UpdateZoneListTimers()
     self:RefreshForces()
     self:RefreshCommunityButton()
+    if Overlord.Popups and Overlord.Popups.RefreshNextObjective then
+        Overlord.Popups:RefreshNextObjective()
+    end
 end
 
 -- Picker « pas sur ce front » + emblemes ; forces seulement si l'etat a change (pas chaque seconde).

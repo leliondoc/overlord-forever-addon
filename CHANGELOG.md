@@ -1,4 +1,16 @@
-1.1.0
+1.1.1
+
+**Overlord Forever 1.1.1**
+
+- Paged catch-up diagnostics no longer say "receiving" before any reply. They distinguish preparation, a request waiting to enter the send queue, waiting for a peer, page reception and application, with fragment counts, the remaining response timeout and combat/instance pauses.
+- Layer tooltips and invitation lists now use recently observed player/Battle.net factions instead of historical ranking metadata. Unknown factions are neutral grey instead of red, including reused invitation buttons. Existing bounded caches are reused, with no additional network packets.
+- The floating Next Objective banner is removed. The side panel now shows Next Objective in its title ribbon, the current front's picture and the next objective's name underneath, followed by distance, capture instructions, progress and contested/paused state. Details refresh on the existing one-second UI tick, with room reserved above recent activity. Capture timers and the automatic map waypoint remain available; hidden panels do no objective refresh work.
+- Addressed leaderboard catch-up now has 16 protected queue slots and a 300 B/s service share inside the existing 1,000 B/s relay budget. Requests, acknowledgements and ranking data can progress through busy bridges without waiting for all presence and alerts to stop. The full queue stays bounded to 128 packets; old transfers can borrow idle slots, and unused bandwidth remains available to other traffic.
+- Fewer redundant presence copies: when a peer sends back the exact same signal, its still-pending personal copy is skipped. A newer unsent signal replaces the older one in place. The 90-second forwarding interval and five-minute peer lifetime are unchanged; `/ov network` reports these savings and the reserved catch-up queue.
+- Guild keep proofs cost far less CPU: the same proof reaches you through several relays, and each copy was fully re-validated (about 2.5 ms) before being recognised as already known. An identical, already processed proof is now dropped at once while the keep's state is unchanged; any change still goes through the full check.
+- Less load on Battle.net bridges: kills are no longer re-forwarded past their author's first hop, since a relayed kill is never credited anyway (anti-forgery). With regular 45-second heartbeats, only one in two presence signals is re-forwarded, using the player's emission timestamp instead of the local arrival time. Tests cover an isolated loss and variable transit delays; the earlier bridge measurement attributed about 95% of relay bytes to presence.
+- Smoother frames during map syncs: ordering a received map snapshot looked up the same zone information hundreds of times (up to ~5 ms in one frame). It is now computed once per zone, with exactly the same order.
+- The front map lookup, used thousands of times a minute by the minimap, HUD and sync, is now remembered per front instead of querying the game's map data every time.
 
 **Overlord Forever 1.1.0**
 

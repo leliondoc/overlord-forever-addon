@@ -2587,6 +2587,21 @@ function Overlord.Sync:GetBetaBNetTargetInfo(gameAccountID)
     return row.faction, row.name
 end
 
+-- Display-only lookup in the bounded, refreshed online-friend cache. Never use
+-- a gateway's faction for an earlier author, nor the session-long receive cache.
+function Overlord.Sync:GetOnlineBNetPlayerFaction(playerName)
+    if not playerName or playerName == "" then return nil end
+    local friends = GetBNetFriendsInWoW()
+    for _, id in ipairs(friends) do
+        local info = friends.info and friends.info[id]
+        if info and self:ForeverIdentitiesMatch(playerName, info.name)
+            and (info.faction == "Alliance" or info.faction == "Horde") then
+            return info.faction
+        end
+    end
+    return nil
+end
+
 function Overlord.Sync:SendToBNetFriends(msgType, data)
     if not SYNC_USE_BNET_OUTBOUND then return end
     if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then
@@ -4891,13 +4906,20 @@ end
 function Overlord.Sync:OrderZoneAllEntries(entries)
     -- Ordre stable : les territoires doivent etre poses avant les capitales,
     -- dont la validation depend de la possession du reste du front.
+    -- Capitale ou non : calcule une fois par entree, pas a chaque comparaison
+    -- (le tri faisait des centaines de strsplit + recherches de zone : pic ~5 ms).
+    local isBase = {}
+    for i = 1, #entries do
+        local text = tostring(entries[i])
+        if isBase[text] == nil then
+            isBase[text] = Overlord.Zones:GetBaseZoneFixedOwner((strsplit(":", text))) ~= nil
+        end
+    end
     table.sort(entries, function(a, b)
-        local aId = strsplit(":", a)
-        local bId = strsplit(":", b)
-        local aBase = Overlord.Zones:GetBaseZoneFixedOwner(aId) ~= nil
-        local bBase = Overlord.Zones:GetBaseZoneFixedOwner(bId) ~= nil
+        local aText, bText = tostring(a), tostring(b)
+        local aBase, bBase = isBase[aText], isBase[bText]
         if aBase ~= bBase then return not aBase end
-        return tostring(a) < tostring(b)
+        return aText < bText
     end)
     return entries
 end

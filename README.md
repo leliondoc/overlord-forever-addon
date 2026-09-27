@@ -6,7 +6,7 @@ Addon **World of Warcraft Forever** pour la capture de zones sur les fronts du m
 |---|---|
 | **Auteur** | Troma |
 | **Licence** | All Rights Reserved |
-| **Version** | 1.1.0 |
+| **Version** | 1.1.1 |
 | **Jeu** | WoW Forever (`## Interface: 16001`) |
 | **CurseForge** | https://www.curseforge.com/wow/addons/overlord-forever |
 | **Dépôt** | https://github.com/leliondoc/overlord-forever-addon |
@@ -126,11 +126,12 @@ fronts, bonus, stocks) empruntent également ce réseau.
 ### Autres systèmes
 
 - **Victoires honorables Blizzard (VH)** en monde ouvert, à tous les niveaux : une hausse du compteur officiel donne exactement autant de crédits. Les coups fatals et les cibles supposées à la mort ne donnent aucun crédit supplémentaire. Le front du jour ajoute seulement de l’or. Les instances (BG, arènes, donjons et raids) sont exclues.
-- Le classement des kills et son rattrapage réseau portent sur les **500 premiers joueurs**. Le tri, la préparation du transfert et les envois sont répartis dans le temps ; seules les lignes visibles sont dessinées.
+- Le classement affiche jusqu’à **5 000 joueurs connus**. Les clients à jour échangent jusqu’à 5 000 joueurs par pages reprenables ; les anciens échanges restent limités à 500. Le tri, la préparation du transfert et les envois sont répartis dans le temps ; seules les lignes visibles sont dessinées.
 - Les totaux reçus par synchronisation sont acceptés jusqu’à **5 000 VH par joueur et par campagne**, incluses. Au-delà, le total reçu est refusé. Les clients antérieurs à 1.0.13 refusent encore les totaux supérieurs à 1 000 ; tous les participants doivent mettre à jour pour partager ces scores. Le compteur local de VH continue de progresser indépendamment de ce seuil réseau.
 - Une fois affiché, le dernier tableau est conservé en mémoire et dans `OverlordDB`. À la prochaine connexion, ce cache borné apparaît immédiatement avec la mention « Classement en mémoire · actualisation… », pendant la préparation des données locales. Il ne déclenche aucun transfert et ne remplace jamais les scores ; les mises à jour réseau continuent en arrière-plan. Une autre campagne, un autre pool ou un format incompatible invalide ce cache. Il ne peut pas survivre au défaut de chargement de toutes les SavedVariables décrit plus haut.
-- Sur le réseau de relais bêta, chaque transfert de rattrapage émet au plus une ligne par seconde, avec le budget partagé de 1 Ko/s et la file de 128 messages. Un rattrapage complet peut donc prendre plusieurs minutes ; les versions antérieures conservent leur ancien plafond.
-- Les totaux de guilde du classement additionnent les VH des membres présents dans ce même **top 500**. Ce ne sont pas des victimes uniques. Une guilde temporairement indisponible au chargement ne supprime plus le rattachement connu.
+- Le réseau de relais bêta partage un budget estimé de 1 000 octets/s et une file de 128 messages. Le rattrapage adressé dispose de 16 places protégées et d’une part de service de 300 octets/s, afin de progresser même avec du trafic courant. Les envois inutilisés laissent leur débit disponible aux autres messages. Les pages restent vérifiées et soumises aux filtres de scores existants ; `/ov network` affiche leur progression et les copies de présence évitées.
+- Les totaux de guilde additionnent les VH de tous les membres connus, même hors du classement affiché, avec dédoublonnage des identités. Ce ne sont pas des victimes uniques. Une guilde temporairement indisponible au chargement ne supprime plus le rattachement connu.
+- Le volet latéral **Prochain objectif** remplace le bandeau flottant : vignette du front actuel et nom du prochain point à capturer. Le repère automatique sur la carte et les minuteurs de capture restent disponibles.
 - Pendant la bêta, tous les comptes utilisent la même semaine américaine (mardi 08:00 UTC, ancre commune de l’addon). Aucun reset EU le mercredi. Une sauvegarde absente au login ne déclenche plus de faux reset hebdomadaire.
 - **Avant-postes** sur les six fronts classiques, plus **Savix Chapel** dans la forêt des Pins-Argentés (61,8 / 64,4), **Aeythyr Lodge** aux Maleterres de l'Est (52,1 / 18,4) et **Lesi Bear Cave** à Sombrivage (43,4 / 45,8), capturables en permanence. Le front spécial des Contreforts de Hautebrande comporte uniquement ses deux points de capture.
 - **Forêts de bois** dans les Paluns (53,8 / 43,7) et en Orneval (33,6 / 63,6).

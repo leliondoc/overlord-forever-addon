@@ -4380,6 +4380,19 @@ function Overlord.Sync:GetObservedPlayerIdentity(playerName)
     return RefreshObservedUnitsSnapshot()[targetKey]
 end
 
+-- Current faction for layer guidance only. Ranking metadata is a historical,
+-- convergent merge (not a live roster), so it must not color live players.
+-- Reuse one bounded unit snapshot for the whole list.
+function Overlord.Sync:GetLivePlayerFaction(playerName)
+    if Overlord.InstanceSuspended or not playerName or playerName == "" then return nil end
+    local observed = self:GetObservedPlayerIdentity(playerName)
+    if observed then
+        if Overlord:SafeStringEquals(observed.faction, "Alliance") then return "Alliance" end
+        if Overlord:SafeStringEquals(observed.faction, "Horde") then return "Horde" end
+    end
+    return self.GetOnlineBNetPlayerFaction and self:GetOnlineBNetPlayerFaction(playerName) or nil
+end
+
 function Overlord.Sync:IsObservedPlayerFaction(playerName, faction)
     if not playerName or (faction ~= "Alliance" and faction ~= "Horde") then return false end
     local row = self:GetObservedPlayerIdentity(playerName)

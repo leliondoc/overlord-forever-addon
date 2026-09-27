@@ -13,11 +13,16 @@ end
 local MAX_PACKET, MAX_PATH, TTL = 3600, 4, 120
 local MAX_BRIDGE_FRIENDS = 5
 local MAX_QUEUE = 128
--- Two send lanes sharing one budget and one 128-packet bound. When a bridge
--- saturates (large events), live map state and alerts go first; scores, history
--- and economy wait, since catch-up repairs them later anyway.
+local CATCHUP_QUEUE = 16
+local CATCHUP_RATE = 300
+-- All three lanes share the same 1,000 B/s budget and 128-packet bound.
+-- Addressed ranking data has reserved slots and a 300 B/s service credit so a
+-- busy bridge cannot indefinitely evict it in favour of presence and alerts.
 local URGENT = {}
-for kind in ("NH SH C ZS ZR CB GK GC GA G7 OP OC TV FR FC GE GP GX GD GM"):gmatch("%S+") do
+-- HR/HA are the tiny catch-up requests and acknowledgements (one every few
+-- minutes). Broadcast legacy controls remain urgent; addressed exchanges use
+-- the reserved lane below, including their requests and acknowledgements.
+for kind in ("NH SH C ZS ZR CB GK GC GA G7 OP OC TV FR FC GE GP GX GD GM HR HA"):gmatch("%S+") do
     URGENT[kind] = true
 end
 -- Keeps and outposts are the lowest priority: only a siege in progress and the
@@ -30,10 +35,28 @@ local function isUrgent(p)
     if kind == "G7" then return false end
     return URGENT[kind] == true
 end
-local urgentLane, bulkLane = { items = {}, head = 1 }, { items = {}, head = 1 }
+local function isCatchup(p)
+    return p.target ~= "*" and (p.kind == "HR" or p.kind == "HB" or p.kind == "HC" or p.kind == "HA"
+        or p.kind == "LK" or p.kind == "LC" or p.kind == "LR")
+end
+local urgentLane, bulkLane, catchupLane = { items = {}, head = 1 }, { items = {}, head = 1 }, { items = {}, head = 1 }
+local pendingPresence = {}
 local pumping = false
 local function laneSize(lane) return #lane.items - lane.head + 1 end
-local function queuedCount() return laneSize(urgentLane) + laneSize(bulkLane) end
+local function queuedCount() return laneSize(urgentLane) + laneSize(bulkLane) + laneSize(catchupLane) end
+local function laneFor(p) return isCatchup(p) and catchupLane or (isUrgent(p) and urgentLane or bulkLane) end
+local function hasLaneRoom(lane)
+    if queuedCount() >= MAX_QUEUE then return false end
+    -- Legacy relays cannot propagate backpressure to the original sender. Let
+    -- short bursts borrow idle slots rather than turn the reservation into a
+    -- smaller hard cap. Local v5 producers still stop at 16 queued packets.
+    if lane == catchupLane then return true end
+    return laneSize(urgentLane) + laneSize(bulkLane) < MAX_QUEUE - CATCHUP_QUEUE
+end
+local function forgetPresence(item)
+    local key = item.p.kind == "NH" and item.p.path[1]:lower()
+    if key and pendingPresence[key] == item then pendingPresence[key] = nil end
+end
 local function compactLane(lane)
     if lane.head > #lane.items then
         lane.items, lane.head = {}, 1
@@ -45,11 +68,40 @@ local function compactLane(lane)
 end
 -- Oldest bulk packet whose sending has not started (partially sent packets are
 -- kept so their fragments still reassemble).
-local function dropOldestWaitingBulk()
+-- /ov network: relay cost per packet kind (session only, bounded to 64 kinds).
+net.kindStats = {}
+local kindStatsCount = 0
+local function kindRow(kind)
+    kind = tostring(kind or "?")
+    local row = net.kindStats[kind]
+    if not row then
+        if kindStatsCount >= 64 then return nil end
+        row = { queued = 0, dropped = 0, bytes = 0 }
+        net.kindStats[kind] = row
+        kindStatsCount = kindStatsCount + 1
+    end
+    return row
+end
+local function countKind(kind, field, amount)
+    local row = kindRow(kind)
+    if row then row[field] = row[field] + (amount or 1) end
+end
+local function dropWaitingForUrgent()
     for i = bulkLane.head, #bulkLane.items do
         local item = bulkLane.items[i]
         if item and item.index == 1 then
             table.remove(bulkLane.items, i)
+            countKind(item.p and item.p.kind, "dropped")
+            return true
+        end
+    end
+    -- Only borrowed catch-up slots can be reclaimed; the first 16 and any
+    -- partially sent packet stay protected, so their fragments can finish.
+    for i = catchupLane.head + CATCHUP_QUEUE, #catchupLane.items do
+        local item = catchupLane.items[i]
+        if item and item.index == 1 then
+            table.remove(catchupLane.items, i)
+            countKind(item.p.kind, "dropped")
             return true
         end
     end
@@ -60,6 +112,15 @@ local seen, recent, assemblies = {}, {}, {}
 -- them is already on that channel: re-emitting it there only burns the Blizzard
 -- channel throttle of every raid member.
 local channelHeard, channelHeardOrder = {}, {}
+-- Each origin's presence (NH) is re-forwarded only when its ORIGIN timestamp is at
+-- least NH_FORWARD_SEC after the last forwarded one. Measured on a 3-friend
+-- bridge, presence was ~95% of relay bytes. Deciding on the author's timestamp
+-- (identical at every hop) instead of the arrival time keeps every relay's
+-- choice the same whatever the transit delays: with 45 s heartbeats one in two
+-- is forwarded (every 90 s), and even after one lost copy plus delay a peer is
+-- heard again within ~200 s, well under the 5 min peer TTL.
+local NH_FORWARD_SEC = 90
+local nhForwarded, nhForwardedOrder = {}, {}
 local seenOrder, recentOrder, assemblyOrder, peerOrder = {}, {}, {}, {}
 local serial = 0
 local session = tostring(time()) .. "-" .. tostring(math.random(1, 2147483646))
@@ -86,11 +147,28 @@ local function remember(values, order, key, value, limit)
 end
 -- Duplicate check on the raw wire, before decode and identity work. Same key as
 -- Receive records (origin = first path node, which decode requires canonical).
-local function alreadySeen(wire)
+local function alreadySeen(wire, sender)
     if type(wire) ~= "string" then return false end
-    local _, id, _, _, path = strsplit("|", wire, 6)
+    local pool, id, at, target, path, body = strsplit("|", wire, 6)
     local origin = path and path:match("^[^,]+")
-    return id ~= nil and origin ~= nil and seen[origin:lower() .. ":" .. id] ~= nil
+    local known = id ~= nil and origin ~= nil and seen[origin:lower() .. ":" .. id] ~= nil
+    local item = known and pendingPresence[origin:lower()]
+    -- An authenticated last hop that sends back this exact presence already has
+    -- it. Cancel only that peer's remaining copy, never another peer's or the
+    -- realm/group broadcast. No change to heartbeat cadence or peer lifetime.
+    if not item or item.p.id ~= id or item.p.region ~= pool or item.p.at ~= tonumber(at)
+        or item.p.target ~= target or type(body) ~= "string" then return known end
+    local kind, payload = strsplit("|", body, 2)
+    if kind == "NH" and item.p.payload == payload and same(path:match("[^,]+$"), sender) then
+        for i = item.index, #item.tasks do
+            local task = item.tasks[i]
+            if not task.skip and not task.sending and task.recipient and same(task.recipient, sender) then
+                task.skip = true
+                net.stats.presenceCopiesSkipped = (net.stats.presenceCopiesSkipped or 0) + 1
+            end
+        end
+    end
+    return known
 end
 local function encode(p)
     return table.concat({ p.region, p.id, tostring(p.at), p.target,
@@ -161,6 +239,33 @@ function net:IsDirectLocalDispatch()
     return c ~= nil and (tonumber(c.hops) or 0) == 0
         and (c.transport == "CHANNEL" or c.transport == "RAID" or c.transport == "PARTY")
 end
+-- Rows sorted by bytes actually sent: what costs the most on the relay.
+function net:GetKindDiagnostics(maxRows)
+    local list = {}
+    for kind, row in pairs(self.kindStats) do
+        list[#list + 1] = { kind = kind, row = row }
+    end
+    table.sort(list, function(a, b)
+        if a.row.bytes ~= b.row.bytes then return a.row.bytes > b.row.bytes end
+        return a.kind < b.kind
+    end)
+    local lines = { "Relay by type (KB sent / packets / dropped):" }
+    local parts = {}
+    for i = 1, math.min(#list, tonumber(maxRows) or 12) do
+        local e = list[i]
+        parts[#parts + 1] = string.format("%s %.1f/%d/%d", e.kind, e.row.bytes / 1024, e.row.queued, e.row.dropped)
+        if #parts == 4 then
+            lines[#lines + 1] = "  " .. table.concat(parts, ", ")
+            parts = {}
+        end
+    end
+    if #parts > 0 then lines[#lines + 1] = "  " .. table.concat(parts, ", ") end
+    if #list == 0 then lines[#lines + 1] = "  nothing relayed yet" end
+    lines[#lines + 1] = string.format("Catch-up relay: %d queued (%d reserved), %d B/s reserved within 1000 B/s; NH saved: %d copies, %d replaced.",
+        laneSize(catchupLane), CATCHUP_QUEUE, CATCHUP_RATE,
+        self.stats.presenceCopiesSkipped or 0, self.stats.presenceCoalesced or 0)
+    return lines
+end
 function net:IsUrgentPacket(kind, payload) return isUrgent({ kind = kind, payload = payload }) end
 function net:IsEcho(kind, payload)
     return self.context and self.context.kind == kind and self.context.payload == payload
@@ -174,6 +279,7 @@ end
 -- One budget for all beta packets, including each BNet recipient and each
 -- group/channel copy. Never use one independent budget per gateway.
 local tokens, budgetAt = 500, GetTime()
+local catchupCredit, catchupAt = 500, GetTime()
 local function spend(bytes)
     local now = GetTime()
     tokens = math.min(500, tokens + math.max(0, now - budgetAt) * 1000)
@@ -198,18 +304,20 @@ local function tasksFor(p, wire)
     -- Bulk v5 catch-up is always addressed over an established route. Never
     -- flood the realm/group or fan out to friends to discover a missing path.
     if paged and (p.target == "*" or not route) then return tasks end
-    local function add(transport, data, kind, target)
+    local function add(transport, data, kind, target, recipient)
         tasks[#tasks + 1] = { transport = transport, data = data, kind = kind, target = target,
-            bytes = #data + 64, packetKind = p.kind }
+            bytes = #data + 64, packetKind = p.kind, recipient = recipient }
     end
     local function bnet(id)
-        if #wire <= 430 then add("BNET", wire, "BR", id)
-        else for _, fragment in ipairs(fragments) do add("BNET", fragment, "BF", id) end end
+        local _, recipient
+        if p.kind == "NH" and sync.GetBetaBNetTargetInfo then _, recipient = sync:GetBetaBNetTargetInfo(id) end
+        if #wire <= 430 then add("BNET", wire, "BR", id, recipient)
+        else for _, fragment in ipairs(fragments) do add("BNET", fragment, "BF", id, recipient) end end
     end
     if route and route.bnet then
         bnet(route.bnet)
     elseif route and (paged or route.transport == "CHANNEL" or route.transport == "WHISPER") then
-        for _, fragment in ipairs(fragments) do add("WHISPER", fragment, "BF", route.via) end
+        for _, fragment in ipairs(fragments) do add("WHISPER", fragment, "BF", route.via, route.via) end
     else
         -- The realm channel only carries what Blizzard's ~1 msg/s allows to be useful.
         local channelCopy = not p.skipChannel
@@ -266,11 +374,15 @@ local function tasksFor(p, wire)
     return tasks
 end
 local function emit(task)
+    task.spent = nil
+    if task.skip then return true end
     -- Missing optional local paths are not send failures; a throttled channel
     -- that is present must, however, retry the same fragment.
     if task.transport == "GROUP" and not IsInGroup() then return true end
     if task.transport == "CHANNEL" and not sync:GetChannelId() then return true end
     if not spend(task.bytes) then return false end
+    task.spent = task.bytes
+    task.sending = true
     local sent, reason
     if task.transport == "BNET" then sent = sync:SendToBNet(task.target, task.kind, task.data)
     elseif task.transport == "WHISPER" then sent = sync:SendWhisper(task.kind, task.data, task.target)
@@ -281,6 +393,7 @@ local function emit(task)
         sent, reason = sync:SendToChannel(task.kind, task.data, false)
         sync._channelSendKind = nil
     end
+    task.sending = nil
     if sent ~= true then
         -- A BNet recipient can log out after route selection. There is no
         -- throttling retry here; let catchup rediscover a path instead of
@@ -294,30 +407,46 @@ local function emit(task)
         task.deferred = reason == "budget"
         task.refused = not task.deferred
         -- Nothing left the client: give the shared relay bytes back to the others.
-        if task.deferred then tokens = math.min(500, tokens + task.bytes) end
+        if task.deferred then tokens = math.min(500, tokens + task.bytes); task.spent = nil end
         return false
     end
     net.stats.sent = net.stats.sent + 1
     net.stats.bytes = (net.stats.bytes or 0) + task.bytes
+    countKind(task.packetKind, "bytes", task.bytes)
     return true
 end
 function net:Queue(p, immediate)
     local urgent = isUrgent(p)
-    if queuedCount() >= MAX_QUEUE then
+    local catchup = isCatchup(p)
+    -- Keep the freshest unsent presence in its original place in the queue.
+    -- Once any copy has started, finish it instead of disrupting its fragments.
+    local presenceKey = p.kind == "NH" and p.path[1]:lower()
+    local previous = presenceKey and pendingPresence[presenceKey]
+    local replace = previous and previous.index == 1 and not previous.tasks[1].sending and p.at >= previous.p.at
+    local lane = laneFor(p)
+    if not replace and not hasLaneRoom(lane) then
         -- Full: an urgent packet displaces the oldest waiting bulk packet instead
         -- of being refused. Bulk packets are refused as before.
-        if not urgent or not dropOldestWaitingBulk() then
+        if catchup or not urgent or not dropWaitingForUrgent() then
             self.stats.dropped = self.stats.dropped + 1
+            countKind(p.kind, "dropped")
             return false
         end
         self.stats.dropped = self.stats.dropped + 1
         self.stats.displaced = (self.stats.displaced or 0) + 1
     end
+    -- Reject overload before encoding, fragment allocation and route discovery.
     local wire = encode(p)
     if #wire > MAX_PACKET then return false end
     local item = { p = p, tasks = tasksFor(p, wire), index = 1 }
     if #item.tasks == 0 then return false end
-    local lane = urgent and urgentLane or bulkLane
+    if replace then
+        previous.p, previous.tasks = p, item.tasks
+        self.stats.presenceCoalesced = (self.stats.presenceCoalesced or 0) + 1
+        return true
+    end
+    if presenceKey then pendingPresence[presenceKey] = item end
+    countKind(p.kind, "queued")
     -- A lease release may use the currently available budget synchronously before
     -- entering an instance, but never bypasses that budget.
     if immediate and p.kind == "ZR" then
@@ -329,7 +458,7 @@ function net:Queue(p, immediate)
     return true
 end
 function net:CanSendLeaderboardPage()
-    return laneSize(urgentLane) == 0 and queuedCount() < 8
+    return laneSize(catchupLane) < CATCHUP_QUEUE
 end
 pump = function()
     pumping = false
@@ -351,10 +480,24 @@ pump = function()
         end
     end
     local urgentIndex, bulkIndex = readyIndex(urgentLane), readyIndex(bulkLane)
+    local catchupIndex = readyIndex(catchupLane)
+    local stamp = GetTime()
+    catchupCredit = math.min(500, catchupCredit + math.max(0, stamp - catchupAt) * CATCHUP_RATE)
+    catchupAt = stamp
     -- Finish a bulk packet already partly sent, otherwise urgent first.
     local lane, index = urgentLane, urgentIndex
     if bulkIndex and (not urgentIndex or bulkLane.items[bulkIndex].index > 1) then
         lane, index = bulkLane, bulkIndex
+    end
+    if catchupIndex then
+        local it = catchupLane.items[catchupIndex]
+        local task = it.tasks[it.index]
+        -- The share is a minimum, not a ceiling: without live urgent traffic,
+        -- recover ranking data before routine history. Old v4 producers send
+        -- one whole row/s and cannot obey per-hop backpressure.
+        if not urgentIndex or not task or now - it.p.at > TTL or catchupCredit >= task.bytes then
+            lane, index = catchupLane, catchupIndex
+        end
     end
     if not index then
         if queuedCount() > 0 then schedule() end
@@ -369,10 +512,15 @@ pump = function()
     for _ = 1, 16 do
         local task = item.tasks[item.index]
         if time() - item.p.at > TTL or not task then
+            if task then countKind(item.p.kind, "dropped") end
             item.index = #item.tasks + 1
             break
         end
-        if emit(task) then
+        if lane == catchupLane and urgentIndex and not task.skip
+            and catchupCredit < task.bytes then break end
+        local emitted = emit(task)
+        if lane == catchupLane and task.spent then catchupCredit = math.max(0, catchupCredit - task.spent) end
+        if emitted then
             item.index = item.index + 1
         elseif task.deferred then
             -- Channel message budget empty: this copy waits at the end of its lane
@@ -380,8 +528,8 @@ pump = function()
             task.deferred = nil
             task.defers = (task.defers or 0) + 1
             item.index = item.index + 1
-            if queuedCount() < MAX_QUEUE then
-                local deferLane = isUrgent(item.p) and urgentLane or bulkLane
+            local deferLane = laneFor(item.p)
+            if hasLaneRoom(deferLane) then
                 deferLane.items[#deferLane.items + 1] = { p = item.p, tasks = { task }, index = 1 }
             else
                 net.stats.channelSkipped = (net.stats.channelSkipped or 0) + 1
@@ -393,8 +541,8 @@ pump = function()
             task.retries = (task.retries or 0) + 1
             net.stats.refused = (net.stats.refused or 0) + 1
             item.index = item.index + 1
-            if task.retries <= 3 and queuedCount() < MAX_QUEUE then
-                local retryLane = isUrgent(item.p) and urgentLane or bulkLane
+            local retryLane = laneFor(item.p)
+            if task.retries <= 3 and hasLaneRoom(retryLane) then
                 retryLane.items[#retryLane.items + 1] = { p = item.p, tasks = { task }, index = 1 }
             else
                 net.stats.dropped = net.stats.dropped + 1
@@ -405,10 +553,14 @@ pump = function()
             break
         end
     end
-    if item.index > #item.tasks then lane.items[lane.head] = false; lane.head = lane.head + 1 end
+    if item.index > #item.tasks then
+        forgetPresence(item)
+        lane.items[lane.head] = false; lane.head = lane.head + 1
+    end
     compactLane(urgentLane)
     compactLane(bulkLane)
-    if urgentLane.items[urgentLane.head] or bulkLane.items[bulkLane.head] then schedule() end
+    compactLane(catchupLane)
+    if queuedCount() > 0 then schedule() end
 end
 function net:Send(kind, payload, target, immediate)
     if not active() or not allowed[kind] or type(payload) ~= "string"
@@ -446,7 +598,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     if not active() then return false end
     -- Copies of an already processed packet (other bridges, group + channel) are
     -- rejected before any decode; the result is the same false as below.
-    if alreadySeen(wire) then return false end
+    if alreadySeen(wire, sender) then return false end
     local p = decoded or decode(wire)
     if not p or not sender or not same(p.path[#p.path], sender) then return false end
     local me = sync:GetPlayerFullName()
@@ -490,7 +642,16 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
             end
         end
     end
-    if #p.path < MAX_PATH and (p.target == "*" or not addressed) then
+    -- A relayed kill is never credited (only its author's direct copy counts, anti-
+    -- forgery since 1.0.19): forwarding it only burned relay and channel budget.
+    local forwardPresence = true
+    if p.kind == "NH" then
+        local last = nhForwarded[origin:lower()]
+        local at = tonumber(p.at) or 0
+        -- A timestamp going backwards (clock fix, stale copy) never blocks a newer one.
+        forwardPresence = not last or at - last >= NH_FORWARD_SEC or at < last - NH_FORWARD_SEC
+    end
+    if p.kind ~= "K" and forwardPresence and #p.path < MAX_PATH and (p.target == "*" or not addressed) then
         p.path[#p.path + 1] = me
         p.skipGroup = transport == "RAID" or transport == "PARTY"
         -- Whoever gave us a group copy either put it on the channel or got it from
@@ -498,7 +659,10 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         local heardAt = p.skipGroup and channelHeard[sender:lower()] or nil
         p.skipChannel = transport == "CHANNEL"
             or (heardAt ~= nil and GetTime() - heardAt <= 300)
-        self:Queue(p)
+
+        if self:Queue(p) and p.kind == "NH" then
+            remember(nhForwarded, nhForwardedOrder, origin:lower(), p.at, 512)
+        end
     end
     return true
 end
@@ -525,7 +689,7 @@ function net:ReceiveFragment(payload, sender, transport, bnetID)
     if a.got ~= count then return true end
     local wire = table.concat(a.chunks)
     -- Every later duplicate fragment of a completed packet lands here again.
-    if alreadySeen(wire) then return false end
+    if alreadySeen(wire, name) then return false end
     local p = decode(wire)
     if not p or p.id ~= id then return false end
     return self:Receive(wire, name, transport, bnetID, p)

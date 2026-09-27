@@ -253,6 +253,31 @@ do
     s.GetChannelId, IsInGroup, IsInRaid, s.SendAddonChecked = originalChannelId, originalInGroup, originalInRaid, originalChecked
     GetTime, C_Timer.After = originalGetTime, originalAfter
 end
+-- ZA ordering: capital flag computed once per entry, same order as the old
+-- comparator (territories first, then plain string order), duplicates included.
+do
+    local originalBase = Overlord.Zones.GetBaseZoneFixedOwner
+    local lookups = 0
+    Overlord.Zones.GetBaseZoneFixedOwner = function(_, id)
+        lookups = lookups + 1
+        return (id == "capA" or id == "capH") and "Alliance" or nil
+    end
+    local input = { "zc:1:A", "capH:9:H", "za:3:H", "capA:2:A", "zb:7:", "za:3:H", "capA:1:A", "zz:0:" }
+    local expected = {}
+    for i, v in ipairs(input) do expected[i] = v end
+    table.sort(expected, function(a, b)
+        local aBase = Overlord.Zones:GetBaseZoneFixedOwner((strsplit(":", a))) ~= nil
+        local bBase = Overlord.Zones:GetBaseZoneFixedOwner((strsplit(":", b))) ~= nil
+        if aBase ~= bBase then return not aBase end
+        return a < b
+    end)
+    lookups = 0
+    local ordered = s:OrderZoneAllEntries(input)
+    assert(table.concat(ordered, ",") == table.concat(expected, ","),
+        "ZA order changed: " .. table.concat(ordered, ","))
+    assert(lookups <= #input, "Capital lookups still repeated per comparison: " .. lookups)
+    Overlord.Zones.GetBaseZoneFixedOwner = originalBase
+end
 -- /ov network: channel quota use per message type, relay copies under their kind.
 s._channelKindStats = nil
 C_ChatInfo = { SendAddonMessage = function() return 8 end }

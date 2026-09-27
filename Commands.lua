@@ -232,6 +232,11 @@ local function StartNetworkProbe()
             Overlord:PrintNotification("[Overlord] " .. line)
         end
     end
+    if Overlord.BetaNetwork and Overlord.BetaNetwork.GetKindDiagnostics then
+        for _, line in ipairs(Overlord.BetaNetwork:GetKindDiagnostics(12)) do
+            Overlord:PrintNotification("[Overlord] " .. line)
+        end
+    end
     local relayStats = Overlord.BetaNetwork and Overlord.BetaNetwork.stats
     if relayStats then
         Overlord:PrintNotification(string.format(

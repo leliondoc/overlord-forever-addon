@@ -69,7 +69,11 @@ local function enqueue(job)
         refillAt = now
         -- Envelope + fragmentation overhead is deliberately charged as well.
         local cost = #packet[2] + 200
-        if tokens >= cost and (not net or not net.CanSendLeaderboardPage or net:CanSendLeaderboardPage()) then
+        -- Page data waits only for space in the reserved catch-up lane. It must
+        -- not require silence from presence/alerts to make progress.
+        local quietNeeded = packet[1] == "HB"
+        if tokens >= cost and (not quietNeeded or not net or not net.CanSendLeaderboardPage
+            or net:CanSendLeaderboardPage()) then
             tokens = tokens - cost
             if sync:SendWhisper(packet[1], packet[2], job.peer) ~= false then
                 job.index = job.index + 1
@@ -187,10 +191,12 @@ local request, tryApply
 request = function(state, retry)
     if pull ~= state then return end
     if state.epoch ~= epoch() then finish(state, false); return end
+    state.waitingForSend = true
     if paused() or outbound then C_Timer.After(2, function() request(state, retry) end); return end
     if not retry then
         state.seq = state.seq + 1
         state.tries, state.parts, state.meta, state.partCount, state.bytes = 0, {}, nil, nil, 0
+        state.replySeen = nil
     end
     state.tries = state.tries + 1
     local bucket = state.profile.buckets[state.bucket]
@@ -202,13 +208,18 @@ request = function(state, retry)
     local payload = table.concat(fields, ":")
     local seq, tries = state.seq, state.tries
     enqueue({ epoch = state.epoch, peer = state.peer, packets = { { "HR", payload } },
-        valid = function() return pull == state and state.seq == seq end })
+        valid = function() return pull == state and state.seq == seq end,
+        done = function()
+            if pull == state and state.seq == seq then state.waitingForSend = nil end
+        end })
     -- Two relay TTLs plus margin also cover a congested first request/reply.
     local remaining = state.supported and 180 or 270
+    state.timeoutRemaining = remaining
     local function timeout()
         if pull ~= state or state.seq ~= seq or state.tries ~= tries or state.applying then return end
         if state.epoch ~= epoch() then finish(state, false); return end
         if not paused() then remaining = remaining - 2 end
+        state.timeoutRemaining = remaining
         if remaining > 0 then C_Timer.After(2, timeout); return end
         if state.supported and state.tries < 3 then
             stats.retries = stats.retries + 1
@@ -360,7 +371,7 @@ function sync:StartPagedLeaderboardCatchup(peer, callback)
         if pull ~= state then return end
         if not profile then finish(state, false); return end
         state.profile = profile
-        stats.result = "receiving"
+        stats.result = "awaiting reply"
         request(state)
     end) then pull = nil; return false end
     return true
@@ -448,12 +459,26 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         state.partCount = parts
     else return end
     state.supported, state.channel = true, channel
+    state.replySeen = true
     state.context = Overlord.BetaNetwork and Overlord.BetaNetwork.context or nil
     tryApply(state)
 end
 
 function sync:GetPagedLeaderboardDiagnostics()
-    return string.format("Ladder v5: %s; pages=%d rows=%d filtered=%d retries=%d; bucket=%s/64; 300 B/s budget",
-        stats.result or "idle", stats.pages, stats.rows, stats.rejected, stats.retries,
-        pull and tostring(pull.bucket) or "-")
+    local status, details = stats.result or "idle", ""
+    if pull then
+        if not pull.profile then status = "preparing"
+        elseif pull.applying then status = "applying page"
+        elseif pull.waitingForSend then status = "waiting to queue request"
+        elseif pull.replySeen then status = "receiving page"
+        else status = "awaiting reply" end
+        if paused() then status = status .. " (paused: combat/instance)" end
+        local received = 0
+        for _ in pairs(pull.parts or {}) do received = received + 1 end
+        details = string.format("; parts=%d/%s; timeout=%ss", received,
+            tostring(pull.partCount or "?"), tostring(pull.timeoutRemaining or "-"))
+    end
+    return string.format("Ladder v5: %s; pages=%d rows=%d filtered=%d retries=%d; bucket=%s/64%s; 300 B/s budget",
+        status, stats.pages, stats.rows, stats.rejected, stats.retries,
+        pull and tostring(pull.bucket) or "-", details)
 end

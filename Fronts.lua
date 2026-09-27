@@ -603,15 +603,14 @@ function Overlord.Fronts:IsKnownZoneId(zoneId)
     return self:GetZone(zoneId) ~= nil
 end
 
-function Overlord.Fronts:GetMapID(frontId)
-    local front = self:GetFront(frontId)
-    if not front then return nil end
+-- Second retour : true quand la carte a ete validee par C_Map (resultat stable).
+local function ComputeFrontMapID(front)
     -- Les coordonnees de ce registre sont celles de la carte Vanilla.
     -- Ne pas choisir au hasard un alias Retail si les deux cartes existent.
     if front.preferredMapID then
         local ok, info = pcall(C_Map.GetMapInfo, front.preferredMapID)
         if ok and info and MapTypeAllowsFrontOverlay(info.mapType) then
-            return front.preferredMapID
+            return front.preferredMapID, true
         end
     end
     local function PickZoneMapID()
@@ -620,20 +619,38 @@ function Overlord.Fronts:GetMapID(frontId)
             fallback = fallback or mapID
             local ok, info = pcall(C_Map.GetMapInfo, mapID)
             if ok and info and MapTypeAllowsFrontOverlay(info.mapType) then
-                return mapID
+                return mapID, true
             end
         end
-        return fallback
+        return fallback, false
     end
     if front.resolvedMapID then
         local ok, info = pcall(C_Map.GetMapInfo, front.resolvedMapID)
         if ok and info and MapTypeAllowsFrontOverlay(info.mapType) then
-            return front.resolvedMapID
+            return front.resolvedMapID, true
         end
         -- resolvedMapID peut etre Kalimdor (1) via la hierarchie : preferer la Zone locale.
         return PickZoneMapID()
     end
     return PickZoneMapID()
+end
+
+-- Appele des milliers de fois par minute (minicarte, HUD, sync) : les cartes ne
+-- changent pas en session, on memorise le resultat valide par front. Un
+-- resultat non valide (donnees de carte pas encore pretes) est recalcule.
+function Overlord.Fronts:GetMapID(frontId)
+    local front = self:GetFront(frontId)
+    if not front then return nil end
+    local cacheKey = tostring(front.preferredMapID) .. "|" .. tostring(front.resolvedMapID)
+    if front._olMapIDKey == cacheKey then return front._olMapID end
+    local mapID, validated = ComputeFrontMapID(front)
+    -- Ne figer que la carte preferee (ou une carte validee s'il n'y en a pas) :
+    -- une carte de secours prise pendant que la preferee n'etait pas prete doit
+    -- ceder sa place des que la preferee est disponible.
+    if validated and (not front.preferredMapID or mapID == front.preferredMapID) then
+        front._olMapIDKey, front._olMapID = cacheKey, mapID
+    end
+    return mapID
 end
 
 function Overlord.Fronts:GetMapName(frontId)
