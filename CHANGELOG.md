@@ -1,4 +1,13 @@
-1.0.30
+1.0.31
+
+**Overlord Forever 1.0.31**
+
+- The realm channel now only carries what it can: on Forever, Blizzard accepts about one addon message per second per player on a channel, and Overlord was sending far more, so most messages (alerts included) were refused. The channel now keeps capture, capture-in-progress, victory, attack and siege alerts, presence and sync requests, paced at under one message per second.
+- Guild keeps and outposts are now the lowest priority everywhere: in the relay (Battle.net, whispers) only a siege in progress and the rare final events (keep or outpost taken, assault started) stay ahead; routine keep and outpost updates wait behind captures and alerts.
+- Removed from the channel (they were almost always refused): guild keep and outpost bookkeeping outside a siege in progress, keep proofs, outpost counters, leaderboard lines and full map snapshots. They still arrive through the raid and the targeted catch-ups.
+- Your own kill total goes on the channel at most every 30 seconds (the latest total is always sent at the end of the window). Your raid still gets every kill live.
+- New map catch-up every two and a half to three minutes: Overlord asks one player (every other time from the other faction) for the zone state, so the map is right within a few minutes even when live alerts are lost.
+- `/ov network` shows channel use per message type, the catch-up's last step and skipped channel copies.
 
 **Overlord Forever 1.0.30**
 

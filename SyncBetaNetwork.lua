@@ -20,6 +20,16 @@ local URGENT = {}
 for kind in ("NH SH C ZS ZR CB GK GC GA G7 OP OC TV FR FC GE GP GX GD GM"):gmatch("%S+") do
     URGENT[kind] = true
 end
+-- Keeps and outposts are the lowest priority: only a siege in progress and the
+-- rare final events (GC/OC/GA) stay urgent; routine snapshots and G7 fragments wait.
+local function isUrgent(p)
+    local kind = p and p.kind
+    if kind == "GK" or kind == "OP" then
+        return type(p.payload) == "string" and p.payload:match("^v%d+:[^:]*:([^:]*)") == "in_progress"
+    end
+    if kind == "G7" then return false end
+    return URGENT[kind] == true
+end
 local urgentLane, bulkLane = { items = {}, head = 1 }, { items = {}, head = 1 }
 local pumping = false
 local function laneSize(lane) return #lane.items - lane.head + 1 end
@@ -143,6 +153,7 @@ function net:IsDirectLocalDispatch()
     return c ~= nil and (tonumber(c.hops) or 0) == 0
         and (c.transport == "CHANNEL" or c.transport == "RAID" or c.transport == "PARTY")
 end
+function net:IsUrgentPacket(kind, payload) return isUrgent({ kind = kind, payload = payload }) end
 function net:IsEcho(kind, payload)
     return self.context and self.context.kind == kind and self.context.payload == payload
 end
@@ -175,7 +186,8 @@ local function tasksFor(p, wire)
         for _, name in ipairs(p.path) do if same(name, route.via) then route = nil; break end end
     end
     local function add(transport, data, kind, target)
-        tasks[#tasks + 1] = { transport = transport, data = data, kind = kind, target = target, bytes = #data + 64 }
+        tasks[#tasks + 1] = { transport = transport, data = data, kind = kind, target = target,
+            bytes = #data + 64, packetKind = p.kind }
     end
     local function bnet(id)
         if #wire <= 430 then add("BNET", wire, "BR", id)
@@ -186,9 +198,12 @@ local function tasksFor(p, wire)
     elseif route and (route.transport == "CHANNEL" or route.transport == "WHISPER") then
         for _, fragment in ipairs(fragments) do add("WHISPER", fragment, "BF", route.via) end
     else
+        -- The realm channel only carries what Blizzard's ~1 msg/s allows to be useful.
+        local channelCopy = not p.skipChannel
+            and (not sync.ChannelCarries or sync:ChannelCarries(p.kind, p.payload, #p.path == 1))
         for _, fragment in ipairs(fragments) do
             if not p.skipGroup then add("GROUP", fragment, "BF") end
-            if not p.skipChannel then add("CHANNEL", fragment, "BF") end
+            if channelCopy then add("CHANNEL", fragment, "BF") end
         end
         -- Opposite-faction friends are the only Horde/Alliance bridges: each packet
         -- reaches all of them (bounded). Same-faction friends already hear it on the
@@ -247,7 +262,12 @@ local function emit(task)
     if task.transport == "BNET" then sent = sync:SendToBNet(task.target, task.kind, task.data)
     elseif task.transport == "WHISPER" then sent = sync:SendWhisper(task.kind, task.data, task.target)
     elseif task.transport == "GROUP" then sent = sync:SendToGroup(task.kind, task.data)
-    else sent, reason = sync:SendToChannel(task.kind, task.data, false) end
+    else
+        -- /ov network: a relay copy is a BF fragment; count it under its real kind.
+        sync._channelSendKind = tostring(task.packetKind or "?") .. "*"
+        sent, reason = sync:SendToChannel(task.kind, task.data, false)
+        sync._channelSendKind = nil
+    end
     if sent ~= true then
         -- A BNet recipient can log out after route selection. There is no
         -- throttling retry here; let catchup rediscover a path instead of
@@ -256,9 +276,12 @@ local function emit(task)
             net.stats.dropped = net.stats.dropped + 1
             return true
         end
-        -- Our own 1 s channel byte budget: wait in place, as before. Only a real
-        -- refusal by the Blizzard throttle is retried later on its own.
-        task.refused = reason ~= "budget"
+        -- Our own channel message budget is empty: retry this copy later without
+        -- holding the Battle.net/whisper copies. A Blizzard refusal is retried too.
+        task.deferred = reason == "budget"
+        task.refused = not task.deferred
+        -- Nothing left the client: give the shared relay bytes back to the others.
+        if task.deferred then tokens = math.min(500, tokens + task.bytes) end
         return false
     end
     net.stats.sent = net.stats.sent + 1
@@ -266,7 +289,7 @@ local function emit(task)
     return true
 end
 function net:Queue(p, immediate)
-    local urgent = URGENT[p.kind] == true
+    local urgent = isUrgent(p)
     if queuedCount() >= MAX_QUEUE then
         -- Full: an urgent packet displaces the oldest waiting bulk packet instead
         -- of being refused. Bulk packets are refused as before.
@@ -302,6 +325,18 @@ pump = function()
     local lane = (bulkHead and bulkHead.index > 1) and bulkLane
         or (urgentLane.items[urgentLane.head] and urgentLane) or bulkLane
     local item = lane.items[lane.head]
+    -- A deferred channel copy cannot go while the channel budget is empty: serve
+    -- the other lane meanwhile instead of cycling it every tick (no starvation).
+    local function waitsForChannel(it)
+        local t = it and it.tasks[it.index]
+        return t ~= nil and t.transport == "CHANNEL" and t.defers ~= nil
+            and sync.ChannelTokenReady ~= nil and not sync:ChannelTokenReady()
+    end
+    if waitsForChannel(item) then
+        local other = lane == urgentLane and bulkLane or urgentLane
+        local otherItem = other.items[other.head]
+        if otherItem and not waitsForChannel(otherItem) then lane, item = other, otherItem end
+    end
     if not item then compactLane(urgentLane); compactLane(bulkLane); return end
     -- Drain the available shared byte budget, not just one fragment per tick.
     -- The old 10-fragment/s ceiling unnecessarily backed up full snapshots.
@@ -311,8 +346,21 @@ pump = function()
             item.index = #item.tasks + 1
             break
         end
-        if not emit(task) then
-            if not task.refused then break end
+        if emit(task) then
+            item.index = item.index + 1
+        elseif task.deferred then
+            -- Channel message budget empty: this copy waits at the end of its lane
+            -- while the item's Battle.net/whisper copies keep going in this tick.
+            task.deferred = nil
+            task.defers = (task.defers or 0) + 1
+            item.index = item.index + 1
+            if task.defers <= 30 and queuedCount() < MAX_QUEUE then
+                local deferLane = isUrgent(item.p) and urgentLane or bulkLane
+                deferLane.items[#deferLane.items + 1] = { p = item.p, tasks = { task }, index = 1 }
+            else
+                net.stats.channelSkipped = (net.stats.channelSkipped or 0) + 1
+            end
+        elseif task.refused then
             -- A refused channel/group/whisper copy must not stall the Battle.net
             -- copies behind it: retry it later on its own, at most three times.
             task.refused = nil
@@ -320,14 +368,16 @@ pump = function()
             net.stats.refused = (net.stats.refused or 0) + 1
             item.index = item.index + 1
             if task.retries <= 3 and queuedCount() < MAX_QUEUE then
-                local retryLane = URGENT[item.p.kind] and urgentLane or bulkLane
+                local retryLane = isUrgent(item.p) and urgentLane or bulkLane
                 retryLane.items[#retryLane.items + 1] = { p = item.p, tasks = { task }, index = 1 }
             else
                 net.stats.dropped = net.stats.dropped + 1
             end
             break
+        else
+            -- Shared relay byte budget: wait for the next tick.
+            break
         end
-        item.index = item.index + 1
     end
     if item.index > #item.tasks then lane.items[lane.head] = false; lane.head = lane.head + 1 end
     compactLane(urgentLane)

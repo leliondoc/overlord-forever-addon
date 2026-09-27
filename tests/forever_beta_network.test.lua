@@ -177,6 +177,16 @@ do
     assert((b.BetaNetwork.stats.refused or 0) == refusedBefore and b.BetaNetwork.stats.dropped == droppedBefore,
         "Local channel budget was treated as a Blizzard refusal")
 end
+-- Keeps/outposts are the lowest priority: only sieges in progress and rare final
+-- events stay in the urgent lane; captures and alerts keep priority.
+do
+    local n = a.BetaNetwork
+    assert(n:IsUrgentPacket("C", "x") and n:IsUrgentPacket("ZS", "x") and n:IsUrgentPacket("TV", "x"))
+    assert(n:IsUrgentPacket("GC", "x") and n:IsUrgentPacket("OC", "x") and n:IsUrgentPacket("GA", "x"))
+    assert(n:IsUrgentPacket("GK", "v9:site:in_progress:1") and n:IsUrgentPacket("OP", "v1:site:in_progress:1"))
+    assert(not n:IsUrgentPacket("GK", "v9:site:held:1") and not n:IsUrgentPacket("OP", "v1:site:neutral:1"))
+    assert(not n:IsUrgentPacket("G7", "x") and not n:IsUrgentPacket("GH", "x") and not n:IsUrgentPacket("K", "x"))
+end
 -- A channel that stays throttled must neither stall the Battle.net copy behind it
 -- nor retry forever: three bounded retries, then the copy is counted as dropped.
 b.refuseAlways = true

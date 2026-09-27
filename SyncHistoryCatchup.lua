@@ -70,6 +70,7 @@ local function NoteHr(field, value, extra)
         stats.result, stats.targetRows = "waiting", 0
     else
         stats[field] = value
+        if field == "step" then stats.stepAt = GetTime() end
     end
 end
 local recentRequesters = {}
@@ -782,6 +783,7 @@ local function ScheduleAttempt(generation, campaignId, attempt)
         -- une seule page SR:F vers le dernier pair joignable evite qu'un client
         -- 9.9.13 neuf reste vide en attendant qu'un ancien l'interroge lui-meme.
         if compatTarget then ScheduleCompatFullPull(compatTarget) end
+        NoteHr("step", "all attempts used, next round in 2 min")
         ArmNextHistoryCatchup(EXHAUSTED_RETRY_SEC)
         return false
     end
@@ -802,29 +804,35 @@ local function ScheduleAttempt(generation, campaignId, attempt)
             or pending.attemptTimerGeneration ~= attemptTimerGeneration then return end
         local startNow, idNow = CurrentCampaign()
         if idNow ~= campaignId then
+            NoteHr("step", "campaign changed, restarting")
             RestartHistoryCatchupForCurrentCampaign(pending)
             return
         end
         if not OverlordDB then return end
         if Overlord.InstanceSuspended or IsInInstance()
             or (InCombatLockdown and InCombatLockdown()) then
+            NoteHr("step", "skipped (combat or instance)")
             ScheduleAttempt(generation, campaignId, attempt + 1)
             return
         end
         local lb = Overlord.Leaderboard
         if not lb or not lb.SnapshotCurrentCampaignBeforeReset then
+            NoteHr("step", "leaderboard not ready")
             ScheduleAttempt(generation, campaignId, attempt + 1)
             return
         end
+        NoteHr("step", "preparing snapshot")
         PrepareSnapshotForNetwork(lb, function(success, preparedSnapshot)
             local active = sync._historyCatchupPending
             if not active or active.generation ~= generation or active.terminal then return end
             local currentStart, currentId = CurrentCampaign()
             if currentId ~= campaignId or currentStart ~= startNow then
+                NoteHr("step", "campaign changed during snapshot, restarting")
                 RestartHistoryCatchupForCurrentCampaign(active)
                 return
             end
             if not success then
+                NoteHr("step", "snapshot failed")
                 ScheduleAttempt(generation, campaignId, attempt + 1)
                 return
             end
@@ -881,6 +889,7 @@ local function ScheduleAttempt(generation, campaignId, attempt)
                 end
             end
             if not target then
+                NoteHr("step", "no peer known (" .. tostring(total) .. " listed)")
                 ScheduleAttempt(generation, campaignId, attempt + 1)
                 return
             end
@@ -896,6 +905,7 @@ local function ScheduleAttempt(generation, campaignId, attempt)
             }, ":")
             local targetKey = SenderKey(target)
             if targetKey == "" or sync:SendWhisper("HR", request, target) ~= true then
+                NoteHr("step", "request not sent to " .. tostring(target))
                 ScheduleAttempt(generation, campaignId, attempt + 1)
                 return
             end
@@ -914,6 +924,7 @@ local function ScheduleAttempt(generation, campaignId, attempt)
                 math.max(0, math.floor(tonumber(
                     OverlordDB.leaderboardHistoryCatchupTargetRotation) or 0)) + 1
             NoteHr("requests", 1)
+            NoteHr("step", "request sent")
             NoteHr("target", target, PeerFaction(target) or "?")
             -- Un pair qui ne repond pas du tout (demande perdue, pair parti, version
             -- ancienne) bloquait l'anti-entropie ACK_TIMEOUT_SEC (20 min). Sans ligne
@@ -1398,6 +1409,7 @@ function sync:ScheduleLoginLeaderboardHistoryCatchUp(force, ladderOnly)
     end
     local existing = self._historyCatchupPending
     if existing and existing.campaignId == campaignId and not existing.terminal then
+        NoteHr("step", "round already running")
         return false
     end
     -- Invalide le reveil periodique qui nous a eventuellement lances. Un seul
@@ -1432,5 +1444,9 @@ function sync:GetHistoryCatchupDiagnostics()
         string.format("Last peer: %s (%s), %ds ago: %s, %d rows.",
             tostring(stats.target or "?"), tostring(stats.targetFaction or "?"), age,
             tostring(stats.result or "?"), stats.targetRows or 0),
+        string.format("Last step: %s, %ds ago. Round running: %s.",
+            tostring(stats.step or "?"),
+            stats.stepAt and math.floor(GetTime() - stats.stepAt) or 0,
+            (self._historyCatchupPending and not self._historyCatchupPending.terminal) and "yes" or "no"),
     }
 end

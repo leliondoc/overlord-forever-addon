@@ -1884,6 +1884,7 @@ function Overlord.Sync:SendLoginCatchupSyncToCommunity()
         -- Sans club : meme principe que la communaute (quelques SR cibles, reponse
         -- garantie) avec les pairs decouverts par le relais beta.
         self:ScheduleBetaPeerLoginCatchup()
+        self:SchedulePeriodicMapCatchup()
         return betaSent
     end
 
@@ -1994,6 +1995,51 @@ function Overlord.Sync:RunBetaPeerLoginCatchup(attempt)
     return #targets
 end
 
+-- Rattrapage periodique de la carte : le canal ne porte plus les photos ZA. Un seul
+-- pair par tour, en whisper/pont cible (reponse garantie), un tour sur deux vers
+-- l'autre faction. La carte est juste en quelques minutes meme si des alertes se perdent.
+Overlord.Sync.BETA_MAP_CATCHUP_INTERVAL = 150
+Overlord.Sync.BETA_MAP_CATCHUP_JITTER = 30
+
+function Overlord.Sync:SchedulePeriodicMapCatchup()
+    if self._mapCatchupArmed or Overlord.BetaNetworkEnabled == false then return false end
+    self._mapCatchupArmed = true
+    C_Timer.After(self.BETA_MAP_CATCHUP_INTERVAL + math.random(0, self.BETA_MAP_CATCHUP_JITTER), function()
+        local sync = Overlord.Sync
+        if not sync then return end
+        sync._mapCatchupArmed = nil
+        pcall(sync.RunPeriodicMapCatchup, sync)
+        sync:SchedulePeriodicMapCatchup()
+    end)
+    return true
+end
+
+function Overlord.Sync:RunPeriodicMapCatchup()
+    local net = Overlord.BetaNetwork
+    if not net or Overlord.InstanceSuspended or IsInInstance() then return false end
+    local myName = self:GetPlayerFullName()
+    local myFaction = Overlord.PlayerFaction
+    local enemies, allies = {}, {}
+    for _, name in ipairs(net:GetPeers()) do
+        if name ~= "" and not self:ForeverIdentitiesMatch(name, myName) then
+            local faction = self:GetBetaPeerFaction(name)
+            if faction and myFaction and faction ~= myFaction then
+                enemies[#enemies + 1] = name
+            else
+                allies[#allies + 1] = name
+            end
+        end
+    end
+    self._mapCatchupRound = (tonumber(self._mapCatchupRound) or 0) + 1
+    local first, second = allies, enemies
+    if self._mapCatchupRound % 2 == 1 then first, second = enemies, allies end
+    local list = #first > 0 and first or second
+    if #list == 0 then return false end
+    local target = list[math.random(1, #list)]
+    self._mapCatchupLastTarget = target
+    return self:SendWhisper("SR", SRPayload("T"), target) == true
+end
+
 -- Stats communaute (utilise par la sync cross-realm)
 -- Cache de 30s : evite 200+ appels API/s quand RefreshCommunityButton est appele chaque seconde
 local cachedCommunityOnline = 0
@@ -2057,6 +2103,10 @@ function Overlord.Sync:Send(msgType, data, groupOnly)
     if SYNC_USE_REALM_CHANNEL then
         local channelId = self:GetChannelId()
         if channelId then
+            -- Meme filtre et meme budget que SendToChannel : sinon un solo envoyait
+            -- ZA/DX/ZS en rafale et les refus Blizzard tombaient sur les alertes.
+            if msgType ~= "BF" and not self:ChannelCarries(msgType, data, true) then return true end
+            if not self:TakeChannelToken() then return false end
             return self:SendAddonChecked(msg, "CHANNEL", channelId)
         end
     end
@@ -2091,7 +2141,56 @@ function Overlord.Sync:SendAddonChecked(msg, chatType, target)
         row.refused = row.refused + 1
         row.lastCode = result
     end
+    if chatType == "CHANNEL" then
+        self:NoteChannelSendKind(self._channelSendKind or msg:match("^([^:]+)") or "?", ok, #msg)
+    end
     return ok
+end
+
+-- /ov network : consommation du quota canal par type de message (session seulement).
+-- Un type suivi de * est une copie du relais beta (fragment BF de ce type).
+function Overlord.Sync:NoteChannelSendKind(kind, ok, bytes)
+    local stats = self._channelKindStats
+    if not stats then
+        stats = { since = GetTime(), rows = {}, count = 0 }
+        self._channelKindStats = stats
+    end
+    local row = stats.rows[kind]
+    if not row then
+        if stats.count >= 64 then return end
+        row = { sent = 0, refused = 0, bytes = 0 }
+        stats.rows[kind] = row
+        stats.count = stats.count + 1
+    end
+    if ok then row.sent = row.sent + 1 else row.refused = row.refused + 1 end
+    row.bytes = row.bytes + (tonumber(bytes) or 0)
+end
+
+function Overlord.Sync:GetChannelKindDiagnostics(maxRows)
+    local stats = self._channelKindStats
+    if not stats then return { "Channel by type: nothing sent yet this session." } end
+    local list = {}
+    for kind, row in pairs(stats.rows) do
+        list[#list + 1] = { kind = kind, total = row.sent + row.refused, row = row }
+    end
+    table.sort(list, function(a, b)
+        if a.total ~= b.total then return a.total > b.total end
+        return a.kind < b.kind
+    end)
+    local lines = { string.format(
+        "Channel by type over %d min (refused/attempts, * = relay copy):",
+        math.floor((GetTime() - stats.since) / 60)) }
+    local parts = {}
+    for i = 1, math.min(#list, tonumber(maxRows) or 12) do
+        local e = list[i]
+        parts[#parts + 1] = string.format("%s %d/%d", e.kind, e.row.refused, e.total)
+        if #parts == 4 then
+            lines[#lines + 1] = "  " .. table.concat(parts, ", ")
+            parts = {}
+        end
+    end
+    if #parts > 0 then lines[#lines + 1] = "  " .. table.concat(parts, ", ") end
+    return lines
 end
 
 -- Variante pour les producteurs qui envoient ensuite explicitement au canal.
@@ -2101,11 +2200,74 @@ function Overlord.Sync:SendToGroup(msgType, data)
     return self:Send(msgType, data, true)
 end
 
--- Budget de debit canal : Blizzard limite ~4096 B/s sur CHANNEL addon.
--- On se donne un plafond conservateur de 2800 B/s pour laisser une marge aux autres addons.
-local CHANNEL_BYTE_BUDGET_PER_SEC = 2800
-local channelBytesSent = 0
-local channelBudgetResetTime = 0
+-- Forever : Blizzard n'accepte qu'environ 1 message addon/s par joueur sur un
+-- canal (mesure 2026-09-27 : les joueurs en file plafonnent a 30 messages / 30 s ;
+-- au-dela, code 8). Le budget est donc un debit de messages, pas d'octets.
+-- Mesure 2026-09-27 : a 0,6 msg/s en moyenne, les rafales de 2 etaient encore
+-- refusees (20 %). Blizzard n'accepte qu'un message a la fois : pas de rafale.
+Overlord.Sync.CHANNEL_MSG_PER_SEC = 0.8
+Overlord.Sync.CHANNEL_MSG_BURST = 1
+Overlord.Sync.CHANNEL_KILL_INTERVAL = 30
+-- Donnees lentes ou deja portees par les rattrapages cibles (HR, SR whisper,
+-- rattrapage de carte) : jamais sur le canal, ou elles etaient refusees a 100 %.
+Overlord.Sync.CHANNEL_OFF_KINDS = { GH = true, LO = true, LOC = true, LK = true, LC = true, LR = true, ZA = true }
+
+function Overlord.Sync:TakeChannelToken(critical)
+    local now = GetTime()
+    local burst = self.CHANNEL_MSG_BURST
+    local tokens = math.min(burst, (self._channelTokens or burst)
+        + math.max(0, now - (self._channelTokensAt or now)) * self.CHANNEL_MSG_PER_SEC)
+    self._channelTokensAt = now
+    if tokens < 1 and not critical then
+        self._channelTokens = tokens
+        return false
+    end
+    -- Un message final critique passe quand meme ; la dette retarde les suivants.
+    self._channelTokens = math.max(-1, tokens - 1)
+    return true
+end
+
+-- Lecture seule du budget : le relais evite de faire tourner a vide ses copies canal.
+function Overlord.Sync:ChannelTokenReady()
+    local tokens = (self._channelTokens or self.CHANNEL_MSG_BURST)
+        + math.max(0, GetTime() - (self._channelTokensAt or GetTime())) * self.CHANNEL_MSG_PER_SEC
+    return tokens >= 1
+end
+
+-- Ce que le canal transporte encore. Forteresses/avant-postes : seulement un siege
+-- en cours (alerte « attaque ») ; kills : seulement les notres, un total / 30 s.
+function Overlord.Sync:ChannelCarries(kind, payload, isOrigin)
+    if self.CHANNEL_OFF_KINDS[kind] then return false end
+    if kind == "GK" or kind == "OP" then
+        local status = type(payload) == "string" and payload:match("^v%d+:[^:]*:([^:]*)") or nil
+        return status == "in_progress"
+    end
+    if kind == "EK" then return isOrigin == true end
+    if kind ~= "K" then return true end
+    if not isOrigin then return false end
+    local now = GetTime()
+    local interval = self.CHANNEL_KILL_INTERVAL
+    local lastAt = tonumber(self._channelKillAt)
+    if not lastAt or now - lastAt >= interval then
+        self._channelKillAt = now
+        self._channelKillPending = nil
+        return true
+    end
+    -- Un total est absolu : seul le dernier compte. Il part a la fin de la fenetre.
+    self._channelKillPending = payload
+    if not self._channelKillArmed then
+        self._channelKillArmed = true
+        C_Timer.After(math.max(0.1, lastAt + interval - now), function()
+            local sync = Overlord.Sync
+            if not sync then return end
+            sync._channelKillArmed = nil
+            local pending = sync._channelKillPending
+            sync._channelKillPending = nil
+            if pending then sync:SendToChannel("K", pending) end
+        end)
+    end
+    return false
+end
 
 -- Envoi supplementaire au canal (pour visibilite cross-faction : ennemis voient captures/zones en cours)
 function Overlord.Sync:SendToChannel(msgType, data, critical)
@@ -2117,17 +2279,10 @@ function Overlord.Sync:SendToChannel(msgType, data, critical)
     local msg = msgType
     if data and data ~= "" then msg = msgType .. ":" .. data end
     if #msg > 255 then return false end
-    -- Throttle de debit : refuse l'envoi si le budget seconde est epuise.
-    -- Les messages finaux critiques restent envoyes, mais leurs octets sont comptes.
-    local now = GetTime()
-    if now - channelBudgetResetTime >= 1 then
-        channelBytesSent = 0
-        channelBudgetResetTime = now
-    end
-    local msgLen = #msg + #PREFIX + 4
-    -- Second retour : budget local depasse (pas un refus Blizzard, se vide en 1 s).
-    if channelBytesSent + msgLen > CHANNEL_BYTE_BUDGET_PER_SEC and not critical then return false, "budget" end
-    channelBytesSent = channelBytesSent + msgLen
+    -- Type retire du canal : deja porte ailleurs, ce n'est pas un echec a reessayer.
+    if msgType ~= "BF" and not self:ChannelCarries(msgType, data, true) then return true end
+    -- Second retour : budget local depasse (pas un refus Blizzard, se recharge seul).
+    if not self:TakeChannelToken(critical) then return false, "budget" end
     return self:SendAddonChecked(msg, "CHANNEL", channelId)
 end
 

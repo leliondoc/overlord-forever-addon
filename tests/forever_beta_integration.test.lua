@@ -207,5 +207,64 @@ C_ChatInfo = { SendAddonMessage = function() return true end }
 assert(s:SendAddonChecked("K:x", "RAID") == true)
 local channelStats = s._addonSendStats.CHANNEL
 assert(channelStats.refused >= 1 and channelStats.lastCode == 8, "Refusal was not counted")
+-- Realm channel = only what Blizzard's ~1 msg/s makes useful: no keep/outpost
+-- bookkeeping, no leaderboard lines, no ZA photos; sieges in progress and our own
+-- kills (one absolute total per 30 s, the last one always flushed) still go.
+do
+    local clock, pendingTimers = 5000, {}
+    local originalGetTime, originalAfter = GetTime, C_Timer.After
+    GetTime = function() return clock end
+    C_Timer.After = function(delay, fn) pendingTimers[#pendingTimers + 1] = { at = clock + delay, fn = fn } end
+    s._channelKillAt, s._channelKillPending, s._channelKillArmed = nil, nil, nil
+    assert(not s:ChannelCarries("GH", "x", true) and not s:ChannelCarries("ZA", "x", true)
+        and not s:ChannelCarries("LK", "x", true) and not s:ChannelCarries("LO", "x", true))
+    assert(not s:ChannelCarries("GK", "v9:site:held:1", true) and s:ChannelCarries("GK", "v9:site:in_progress:1", true))
+    assert(not s:ChannelCarries("OP", "v1:site:neutral:1", true) and s:ChannelCarries("OP", "v1:site:in_progress:1", true))
+    assert(s:ChannelCarries("C", "x", false) and s:ChannelCarries("ZS", "x", false) and s:ChannelCarries("GC", "x", false))
+    assert(s:ChannelCarries("EK", "x", true) and not s:ChannelCarries("EK", "x", false))
+    assert(not s:ChannelCarries("K", "k1", false), "A relayed kill went back on the channel")
+    assert(s:ChannelCarries("K", "k1", true), "First own kill total was held back")
+    clock = 5010
+    assert(not s:ChannelCarries("K", "k2", true) and not s:ChannelCarries("K", "k3", true))
+    local flushed
+    local originalSendToChannel = s.SendToChannel
+    s.SendToChannel = function(_, kind, data) flushed = kind .. ":" .. data; return true end
+    clock = 5031
+    for _, t in ipairs(pendingTimers) do if t.at <= clock then t.fn() end end
+    s.SendToChannel = originalSendToChannel
+    assert(flushed == "K:k3", "Latest kill total was not flushed at the end of the window: " .. tostring(flushed))
+    -- Message budget: one at a time, then ~0.8 message per second.
+    s._channelTokens, s._channelTokensAt = nil, nil
+    assert(s:TakeChannelToken() and not s:TakeChannelToken())
+    assert(s:TakeChannelToken(true), "A critical final message was held back")
+    clock = clock + 3
+    assert(s:TakeChannelToken(), "Channel budget never refilled")
+    -- The solo fallback of Send() used to reach the channel without gate or budget.
+    local originalChannelId, originalInGroup, originalInRaid = s.GetChannelId, IsInGroup, IsInRaid
+    local channelSends = 0
+    local originalChecked = s.SendAddonChecked
+    s.GetChannelId = function() return 1 end
+    IsInGroup, IsInRaid = function() return false end, function() return false end
+    s.SendAddonChecked = function(_, _, chatType) if chatType == "CHANNEL" then channelSends = channelSends + 1 end return true end
+    assert(s:Send("ZA", "photo") == true and channelSends == 0, "Solo Send put a map photo on the channel")
+    s._channelTokens, s._channelTokensAt = nil, nil
+    assert(s:Send("C", "c1") and not s:Send("C", "c2") and channelSends == 1,
+        "Solo Send ignored the channel message budget")
+    s.GetChannelId, IsInGroup, IsInRaid, s.SendAddonChecked = originalChannelId, originalInGroup, originalInRaid, originalChecked
+    GetTime, C_Timer.After = originalGetTime, originalAfter
+end
+-- /ov network: channel quota use per message type, relay copies under their kind.
+s._channelKindStats = nil
+C_ChatInfo = { SendAddonMessage = function() return 8 end }
+s:SendAddonChecked("K:a", "CHANNEL", 1)
+C_ChatInfo = { SendAddonMessage = function() return 0 end }
+s:SendAddonChecked("K:b", "CHANNEL", 1)
+s._channelSendKind = "ZS*"
+s:SendAddonChecked("BF:fragment", "CHANNEL", 1)
+s._channelSendKind = nil
+s:SendAddonChecked("K:c", "RAID")
+local kindLines = table.concat(s:GetChannelKindDiagnostics(12), " ")
+assert(kindLines:find("K 1/2", 1, true) and kindLines:find("ZS* 0/1", 1, true)
+    and not kindLines:find("BF", 1, true), "Channel per-type counters wrong: " .. kindLines)
 C_ChatInfo = originalChatInfo
 print("Beta integration: real R2/fragmented R2, low-level kills, peer trust, no club API, unchanged community payloads OK")
