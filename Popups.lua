@@ -44,7 +44,7 @@ local FEATURED_FRONT_TOGGLE_H = 52
 local FEATURED_FRONT_CLOSE_SIZE = 10
 -- Chevauchement de l'onglet sur le bord gauche du main (reliure livre).
 local FEATURED_FRONT_SPINE_OVERLAP = 1
-local FEATURED_FRONT_LAYOUT_VERSION = 59
+local FEATURED_FRONT_LAYOUT_VERSION = 60
 local FEATURED_FRONT_ACTIVITY_ROW_H = 18
 local FEATURED_FRONT_ACTIVITY_ROW_GAP = 3
 local FEATURED_FRONT_ACTIVITY_MAX_ROWS = 8
@@ -56,7 +56,6 @@ local NEXT_OBJECTIVE_DETAILS_GAP = 8
 local FEATURED_FRONT_BOTTOM_PAD = 16
 local FEATURED_FRONT_ACTIVITY_RAIL_W = 24
 local FEATURED_FRONT_BOUNTY_GAP = 10
-local FEATURED_FRONT_NO_ACTIVE_LIFT = 10
 local FEATURED_FRONT_ACTIONS_GAP = 8
 local FEATURED_FRONT_ACTIVITY_ICON = 14
 local FEATURED_FRONT_ACTIVITY_STAR = 10
@@ -1289,9 +1288,8 @@ local function SyncFeaturedFrontPanelAnchors()
 
     if featuredFrontFrame then
         featuredFrontFrame:ClearAllPoints()
-        featuredFrontFrame:SetPoint("TOP", mainFrame, "TOP", 0, 0)
-        featuredFrontFrame:SetPoint("BOTTOM", mainFrame, "BOTTOM", 0, 0)
-        featuredFrontFrame:SetPoint("RIGHT", mainFrame, "LEFT", FEATURED_FRONT_SPINE_OVERLAP, 0)
+        featuredFrontFrame:SetPoint("TOPRIGHT", mainFrame, "TOPLEFT", FEATURED_FRONT_SPINE_OVERLAP, 0)
+        featuredFrontFrame:SetHeight(math.max(mainFrame:GetHeight() or 0, featuredFrontFrame._objectiveMinimumHeight or 0))
     end
 end
 
@@ -1572,48 +1570,6 @@ local function GetFeaturedFrontActivityMatchHeight(f, footerVisible)
     return matchH
 end
 
-local function ApplyFeaturedFrontActivityAnchors(f, contentH, footerVisible, verticalShift)
-    local actionsCard = GetFeaturedFrontActionsCard()
-    if not actionsCard then return end
-    local azFrame = GetFeaturedFrontActiveZoneFrame()
-    local hasActiveZone = azFrame ~= nil
-    local topAnchor = azFrame or actionsCard
-    verticalShift = math.max(0, verticalShift or 0)
-
-    f.activityPanel:ClearAllPoints()
-    f.activityPanel:SetPoint("LEFT", f, "LEFT", 24, 0)
-    f.activityPanel:SetPoint("RIGHT", f, "RIGHT", -24, 0)
-    f.activityPanel:SetHeight(contentH)
-
-    if footerVisible and f.activityFooter then
-        f.activityFooter:SetShown(true)
-        f.activityFooter:ClearAllPoints()
-        f.activityFooter:SetPoint("LEFT", f, "LEFT", 24, 0)
-        f.activityFooter:SetPoint("RIGHT", f, "RIGHT", -24, 0)
-        if hasActiveZone then
-            f.activityPanel:SetPoint("TOP", topAnchor, "TOP", 0, -verticalShift)
-            f.activityFooter:SetPoint("TOP", f.activityPanel, "BOTTOM", 0, -FEATURED_FRONT_BOUNTY_GAP)
-        else
-            f.activityFooter:SetPoint(
-                "BOTTOM", actionsCard, "BOTTOM", 0,
-                FEATURED_FRONT_NO_ACTIVE_LIFT - verticalShift)
-            f.activityPanel:SetPoint("BOTTOM", f.activityFooter, "TOP", 0, FEATURED_FRONT_BOUNTY_GAP)
-        end
-        return
-    end
-
-    if f.activityFooter then
-        f.activityFooter:Hide()
-    end
-    if hasActiveZone then
-        f.activityPanel:SetPoint("TOP", topAnchor, "TOP", 0, -verticalShift)
-    else
-        f.activityPanel:SetPoint(
-            "BOTTOM", actionsCard, "BOTTOM", 0,
-            FEATURED_FRONT_NO_ACTIVE_LIFT - verticalShift)
-    end
-end
-
 -- La carte garde la hauteur historique de cinq lignes. Les fronts supplementaires
 -- restent accessibles dans un vrai viewport, sans pousser le bouton Contrats sous le cadre.
 local function LayoutFeaturedFrontActivityScroll(f, rowCount)
@@ -1630,9 +1586,8 @@ local function LayoutFeaturedFrontActivityScroll(f, rowCount)
         return
     end
 
-    local viewportH = math.max(1, f.activityScroll:GetHeight()
-        or ((f.activityPanel:GetHeight() or 1)
-            - FEATURED_FRONT_ACTIVITY_TITLE_H - FEATURED_FRONT_ACTIVITY_BOTTOM_PAD))
+    local viewportH = math.max(1, (f.activityPanel:GetHeight() or 1)
+        - FEATURED_FRONT_ACTIVITY_TITLE_H - FEATURED_FRONT_ACTIVITY_BOTTOM_PAD)
     local rowStep = FEATURED_FRONT_ACTIVITY_ROW_H + FEATURED_FRONT_ACTIVITY_ROW_GAP
     local rowsH = math.max(1, rowCount * rowStep - FEATURED_FRONT_ACTIVITY_ROW_GAP)
     local contentH = math.max(viewportH, rowsH)
@@ -1651,76 +1606,47 @@ local function LayoutFeaturedFrontActivityScroll(f, rowCount)
     if f.activityScroll.RefreshCleanRail then f.activityScroll:RefreshCleanRail() end
 end
 
-local function AnchorFeaturedFrontActivityBlock(f, contentH, minimumContentH, footerVisible)
-    -- Preserve the visual alignment with the main panel whenever it fits.  Long
-    -- localized body copy can wrap to an extra line, though, so measure the real
-    -- rendered bounds and move the whole activity/bounty block only as far as
-    -- needed to keep a stable gap below it.
-    ApplyFeaturedFrontActivityAnchors(f, contentH, footerVisible, 0)
-
-    if f.IsShown and not f:IsShown() then
-        -- Hidden frames do not always expose final FontString bounds.  The show
-        -- path calls the layout again, so defer collision resolution until then.
+-- The objective dock keeps its normal picture and five-row activity viewport,
+-- even on two-point fronts whose main panel is shorter. Grow the dock instead
+-- of squeezing the title, scrollbar and coins into a single-row card.
+local function AnchorFeaturedFrontActivityBlock(f, contentH, footerVisible)
+    local top = f:GetTop()
+    local artTop = f.artFrame and f.artFrame:GetTop()
+    if not top or not artTop or not f:IsShown() then
         f._activityBodyCollisionPending = true
         return
     end
-
-    local panelTop = f.activityPanel and f.activityPanel:GetTop()
-    local bodyBottom = f.objectiveDetailsFs and f.objectiveDetailsFs:IsShown()
-        and f.objectiveDetailsFs:GetBottom() or (f.bodyFs and f.bodyFs:GetBottom())
-    if not panelTop or not bodyBottom then
-        f._activityBodyCollisionPending = true
-        return
-    end
-
     f._activityBodyCollisionPending = nil
-    local verticalShift = math.max(
-        0, math.ceil(panelTop + FEATURED_FRONT_BODY_ACTIVITY_GAP - bodyBottom))
-    f._activityBodyCollisionShift = verticalShift
-    if verticalShift > 0 then
-        -- The matching height intentionally contains blank stretch so that this
-        -- card lines up with the main-panel blocks.  Consume that stretch first:
-        -- the activity rows keep their full minimum height and the bottom edge
-        -- stays stable unless the localized copy really needs more room.
-        local shrink = math.min(
-            verticalShift, math.max(0, contentH - (minimumContentH or contentH)))
-        local resolvedHeight = contentH - shrink
-        local anchorShift = verticalShift
-        if not GetFeaturedFrontActiveZoneFrame() then
-            -- This variant is bottom-anchored, so shrinking already lowers its
-            -- top edge.  Only move the bottom for any overlap left afterward.
-            anchorShift = verticalShift - shrink
-        end
-        f._activityResolvedHeight = resolvedHeight
-        ApplyFeaturedFrontActivityAnchors(f, resolvedHeight, footerVisible, anchorShift)
-    else
-        f._activityResolvedHeight = contentH
+    local bodyH = math.ceil(f.bodyFs:GetStringHeight() or 0)
+    local detailsH = f.objectiveDetailsFs and f.objectiveDetailsFs:IsShown()
+        and (NEXT_OBJECTIVE_DETAILS_GAP + math.ceil(f.objectiveDetailsFs:GetStringHeight() or 0)) or 0
+    local footerH = footerVisible and f.activityFooter and f.activityFooter:GetHeight() or 0
+    local footerSpace = footerH > 0 and (footerH + FEATURED_FRONT_BOUNTY_GAP) or 0
+    local minActivity = ComputeFeaturedFrontActivityHeight(FEATURED_FRONT_ACTIVITY_VISIBLE_ROWS)
+    local fixedH = top - artTop + 16 + bodyH + detailsH
+        + FEATURED_FRONT_BODY_ACTIVITY_GAP + footerSpace + FEATURED_FRONT_BOTTOM_PAD
+    local main = GetMainPanelFrame()
+    local requestedH = main and main:GetHeight() or f:GetHeight()
+    f._objectiveMinimumHeight = math.ceil(fixedH + FEATURED_FRONT_ART_HEIGHT + minActivity)
+    local height = math.max(requestedH or 0, f._objectiveMinimumHeight)
+    if f:GetHeight() ~= height then f:SetHeight(height) end
+    local artH = FEATURED_FRONT_ART_HEIGHT
+    if f.artFrame:GetHeight() ~= artH then
+        f.artFrame:SetHeight(artH)
+        f.vignette:SetHeight(artH - 8)
     end
-
-    -- Le viewport peut afficher moins de cinq lignes : le bouton doit rester
-    -- dans le cadre meme quand le texte au-dessus prend davantage de place.
-    local frameBottom = f:GetBottom()
-    local resolvedTop = f.activityPanel:GetTop()
-    if frameBottom and resolvedTop then
-        local footerSpace = footerVisible and f.activityFooter
-            and (f.activityFooter:GetHeight() + FEATURED_FRONT_BOUNTY_GAP) or 0
-        local availableH = math.max(1,
-            resolvedTop - frameBottom - FEATURED_FRONT_BOTTOM_PAD - footerSpace)
-        if f._activityResolvedHeight > availableH then
-            f.activityPanel:ClearAllPoints()
-            f.activityPanel:SetPoint("LEFT", f, "LEFT", 24, 0)
-            f.activityPanel:SetPoint("RIGHT", f, "RIGHT", -24, 0)
-            f.activityPanel:SetPoint("BOTTOM", f, "BOTTOM", 0,
-                FEATURED_FRONT_BOTTOM_PAD + footerSpace)
-            f.activityPanel:SetHeight(availableH)
-            f._activityResolvedHeight = availableH
-            if footerVisible and f.activityFooter then
-                f.activityFooter:ClearAllPoints()
-                f.activityFooter:SetPoint("LEFT", f, "LEFT", 24, 0)
-                f.activityFooter:SetPoint("RIGHT", f, "RIGHT", -24, 0)
-                f.activityFooter:SetPoint("BOTTOM", f, "BOTTOM", 0, FEATURED_FRONT_BOTTOM_PAD)
-            end
-        end
+    f.vignette:SetTexCoord(0.04, 0.96, 0.10, 0.82)
+    local activityH = math.max(minActivity, math.min(contentH, height - fixedH - artH))
+    f.activityPanel:ClearAllPoints()
+    f.activityPanel:SetWidth(FEATURED_FRONT_PANEL_WIDTH - 48)
+    f.activityPanel:SetPoint("BOTTOM", f, "BOTTOM", 0, FEATURED_FRONT_BOTTOM_PAD + footerSpace)
+    f.activityPanel:SetHeight(activityH)
+    f._activityResolvedHeight = activityH
+    if f.activityFooter then
+        f.activityFooter:SetShown(footerVisible)
+        f.activityFooter:ClearAllPoints()
+        f.activityFooter:SetWidth(FEATURED_FRONT_PANEL_WIDTH - 48)
+        f.activityFooter:SetPoint("BOTTOM", f, "BOTTOM", 0, FEATURED_FRONT_BOTTOM_PAD)
     end
 end
 
@@ -1750,10 +1676,11 @@ local function ApplyFeaturedFrontActivityLayout(f, rowCount)
     end
     local layoutKey = rowCount .. "|" .. (footerVisible and 1 or 0) .. "|" .. contentH .. "|" .. bodyTextH
         .. "|" .. (f:GetHeight() or 0) .. "|" .. (GetFeaturedFrontActiveZoneFrame() and 1 or 0)
+        .. "|" .. (GetMainPanelFrame() and GetMainPanelFrame():GetHeight() or 0)
     if f._activityLayoutKey == layoutKey and not f._activityBodyCollisionPending then return end
     f._activityLayoutKey = layoutKey
 
-    AnchorFeaturedFrontActivityBlock(f, contentH, minimumContentH, footerVisible)
+    AnchorFeaturedFrontActivityBlock(f, contentH, footerVisible)
     LayoutFeaturedFrontActivityScroll(f, rowCount)
 end
 
@@ -1983,6 +1910,9 @@ EnsureFeaturedFrontFrame = function()
     local f = CreateFrame("Frame", "OverlordFeaturedFrontDialog", mainFrame, "BackdropTemplate")
     f._layoutVersion = FEATURED_FRONT_LAYOUT_VERSION
     f:SetWidth(FEATURED_FRONT_PANEL_WIDTH)
+    -- The dock can be taller than a short two-point front. Clamp it independently
+    -- so dragging the main panel down never hides the coins/activity below screen.
+    f:SetClampedToScreen(true)
     f:SetFrameLevel(mainFrame:GetFrameLevel() + 8)
     f:EnableMouse(true)
     f:Hide()
@@ -2023,11 +1953,9 @@ EnsureFeaturedFrontFrame = function()
     f.frontNameFs:SetMaxLines(1)
     f.frontNameFs:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
 
-    -- Vignette hauteur fixe (jamais etiree), sous le nom de zone.
+    -- Vignette de hauteur constante, y compris sur les fronts a deux points.
     f.artFrame = Overlord.UI.CreateWC3SubPanel(f, FEATURED_FRONT_PANEL_WIDTH - 48, FEATURED_FRONT_ART_HEIGHT)
     f.artFrame:SetPoint("TOP", f.frontNameFs, "BOTTOM", 0, -12)
-    f.artFrame:SetPoint("LEFT", f, "LEFT", 24, 0)
-    f.artFrame:SetPoint("RIGHT", f, "RIGHT", -24, 0)
 
     f.vignette = f.artFrame:CreateTexture(nil, "ARTWORK")
     f.vignette:SetPoint("CENTER", f.artFrame, "CENTER", 0, 0)
@@ -2166,25 +2094,22 @@ ApplyFeaturedFrontContent = function(f, frontId)
     if f._objectiveArt ~= art then
         f._objectiveArt = art
         f.vignette:SetTexture(art)
-        f.vignette:SetTexCoord(0.04, 0.96, 0.10, 0.82)
+        f._activityLayoutKey = nil
     end
     if f._objectiveFrontName ~= name then
         f._objectiveFrontName = name
         f.frontNameFs:SetText(name)
     end
-    local layoutChanged = false
     if f._objectiveText ~= text then
         f._objectiveText = text
         f.bodyFs:SetText(text)
-        layoutChanged = true
     end
     if f.objectiveDetailsFs and f._objectiveDetails ~= details then
         f._objectiveDetails = details
         f.objectiveDetailsFs:SetText(details)
         f.objectiveDetailsFs:SetShown(details ~= "")
-        layoutChanged = true
     end
-    if layoutChanged then ApplyFeaturedFrontActivityLayout(f) end
+    ApplyFeaturedFrontActivityLayout(f) -- cached by dimensions, including main-panel resizing
     lastFeaturedFrontLoadedId = frontId
     return true
 end

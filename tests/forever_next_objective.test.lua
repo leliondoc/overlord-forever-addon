@@ -219,3 +219,100 @@ before, readsBefore = scans, distanceReads
 ui:Update()
 assert(scans == before and distanceReads == readsBefore, 'Hidden main panel polled objective details')
 print('Next objective: panel guidance/progress, no floating zone HUD, manual/automatic paths, structure HUD and hidden idle OK')
+
+-- Exercise production layout with actual anchor arithmetic. Southshore/Tarren
+-- Mill have short main panels; long localized instructions must still fit.
+local function upvalue(fn, name)
+    for i = 1, 60 do
+        local key, value = debug.getupvalue(fn, i)
+        if not key then break end
+        if key == name then return value end
+    end
+    error('Missing layout upvalue: ' .. name)
+end
+local applyContent = upvalue(popups.RefreshNextObjective, 'ApplyFeaturedFrontContent')
+local layout = upvalue(applyContent, 'ApplyFeaturedFrontActivityLayout')
+local layoutWrites = 0
+local function box(height, fixedTop)
+    local w = widget()
+    w.height, w.fixedTop = height, fixedTop
+    function w:GetHeight() return self.height end
+    function w:GetStringHeight() return self.height end
+    function w:SetHeight(h) self.height = h; layoutWrites = layoutWrites + 1 end
+    function w:GetTop()
+        if self.fixedTop then return self.fixedTop end
+        if self.bottomAnchor then return self.bottomAnchor:GetBottom() + self.offset + self.height end
+        return self.topAnchor:GetBottom() + self.offset
+    end
+    function w:GetBottom() return self:GetTop() - self.height end
+    function w:ClearAllPoints() self.bottomAnchor, self.topAnchor = nil,nil end
+    function w:SetPoint(point, relative, relativePoint, x, y)
+        if point == 'BOTTOM' then self.bottomAnchor,self.offset = relative,y end
+    end
+    function w:SetTexCoord(...) self.crop = {...}; layoutWrites = layoutWrites + 1 end
+    return w
+end
+local f = box(500, 1000)
+f.artFrame = box(112, 800)
+f.vignette = box(104)
+f.bodyFs = box(20); f.bodyFs.topAnchor,f.bodyFs.offset = f.artFrame,-16
+f.objectiveDetailsFs = box(45); f.objectiveDetailsFs.topAnchor,f.objectiveDetailsFs.offset = f.bodyFs,-8
+f.activityPanel, f.activityFooter = box(100), box(64)
+f.coinsRow = f.activityFooter
+f.activityScroll, f.activityRowsContent = box(1), box(1)
+function f.activityScroll:GetHeight() return f.activityPanel:GetHeight() - 36 end
+function f.activityScroll:GetWidth() return 228 end
+function f.activityScroll:GetVerticalScroll() return self.scroll or 0 end
+function f.activityScroll:SetVerticalScroll(value) self.scroll = value end
+function f.activityScroll:RefreshCleanRail() self.railShown = self._overlordHasOverflow end
+local smallMain = box(500, 1000)
+Overlord.UI.GetMainFrame = function() return smallMain end
+Overlord.UI.actionsCard = box(169)
+Overlord.UI.activeZoneFrame = nil
+Overlord.ManualBounty = nil
+local firstArt
+for _, height in ipairs({ 650, 480, 420, 350, 650 }) do
+    for _, textHeight in ipairs({ 28, 60, 110 }) do
+        for _, count in ipairs({ 0, 1, 8 }) do
+            smallMain.height, f.height, f.objectiveDetailsFs.height = height,height,textHeight
+            f._activityLayoutKey = nil
+            layout(f, count)
+            assert(f.activityPanel:GetTop() <= f.objectiveDetailsFs:GetBottom() - 10 + 0.001,
+                'Recent activity overlaps objective guidance in a short panel')
+            assert(f.activityPanel:GetHeight() >= 141,
+                'Short front compressed the normal five-row activity viewport')
+            assert(f.activityFooter:GetTop() <= f.activityPanel:GetBottom() - 10 + 0.001,
+                'Coins overlap activity')
+            assert(f.activityFooter:GetBottom() >= f:GetBottom() + 16, 'Coins escape panel bottom')
+            assert(f.artFrame:GetHeight() == 112, 'Short front shrank the objective map picture')
+            assert(f.activityScroll:GetHeight() >= 105, 'Short front squeezed the activity scrollbar')
+            local overflow = count * 21 - 3 > f.activityScroll:GetHeight() + 1
+            assert(f.activityScroll.railShown == overflow, 'Activity rail disagrees with visible/content height')
+            assert((f.activityScroll:GetVerticalScroll() or 0)
+                <= math.max(0, f.activityRowsContent:GetHeight() - f.activityScroll:GetHeight()),
+                'Activity scroll offset exceeded its actual content')
+            if height == 650 and textHeight == 28 then
+                firstArt = firstArt or f.artFrame:GetHeight()
+                assert(f.artFrame:GetHeight() == firstArt, 'Returning to a tall front retained a cropped map')
+            end
+            layout(f, count) -- settle changed minimum height in cache key
+            local beforeLayout = layoutWrites
+            layout(f, count)
+            assert(layoutWrites == beforeLayout, 'Unchanged panel reapplied layout/texture coordinates')
+        end
+    end
+end
+assert(firstArt == 112)
+-- A main-panel resize alone must invalidate the dock's cached geometry, without
+-- reopening it, changing text or manually clearing the layout key.
+smallMain.height, f.height, f.objectiveDetailsFs.height = 380, 380, 28
+f._activityLayoutKey = nil
+layout(f, 8); layout(f, 8)
+local minimum = f:GetHeight()
+smallMain.height = 800
+layout(f, 8)
+assert(f:GetHeight() == 800, 'Main-panel growth did not invalidate cached dock layout')
+smallMain.height = 380
+layout(f, 8)
+assert(f:GetHeight() == minimum, 'Main-panel shrink left stale dock geometry')
+print('Next objective layout: 45 short/tall/long-text/activity cases; normal image + five-row viewport, no overlap, cached idle OK')

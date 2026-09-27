@@ -921,6 +921,45 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.subtitle:SetText(string.format(L.LB_CAMPAIGN_DATE, startDate, endDate))
     lbFrame.subtitle:SetTextColor(P.muted[1], P.muted[2], P.muted[3], 0.9)
 
+    -- Reuse the existing panel texture and fonts. No search icon/atlas or ticker.
+    local searchPanel = CreateOfficialSubPanel(lbFrame, 266, 28, P, { header = true })
+    searchPanel:SetPoint("TOPLEFT", lbFrame, "TOPLEFT", LB_FRAME_PAD, -18)
+    local searchBox = CreateFrame("EditBox", nil, searchPanel)
+    lbFrame.searchBox = searchBox
+    searchBox:SetPoint("TOPLEFT", 10, -2)
+    searchBox:SetPoint("BOTTOMRIGHT", -30, 2)
+    searchBox:SetFontObject("GameFontHighlightSmall")
+    searchBox:SetAutoFocus(false)
+    searchBox:SetMaxLetters(64)
+    local placeholder = searchBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    placeholder:SetPoint("LEFT")
+    placeholder:SetText(L.LB_SEARCH_PLACEHOLDER or "Player or guild...")
+    placeholder:SetTextColor(P.muted[1], P.muted[2], P.muted[3])
+    local clear = CreateFrame("Button", nil, searchPanel)
+    lbFrame.searchClear = clear
+    clear:SetSize(26, 24)
+    clear:SetPoint("RIGHT", -2, 0)
+    clear:SetNormalFontObject("GameFontNormal")
+    clear:SetHighlightFontObject("GameFontHighlight")
+    clear:SetText("×")
+    clear:Hide()
+    clear:SetScript("OnClick", function() searchBox:SetText(""); searchBox:ClearFocus() end)
+    searchBox:SetScript("OnTextChanged", function(box)
+        local text = box:GetText() or ""
+        placeholder:SetShown(text == "")
+        clear:SetShown(text ~= "")
+        Overlord.LeaderboardUI:SetSearchText(text)
+    end)
+    searchBox:SetScript("OnEscapePressed", function(box) box:SetText(""); box:ClearFocus() end)
+    searchBox:SetScript("OnEnterPressed", function(box) box:ClearFocus() end)
+    searchBox:SetScript("OnHide", function(box) box:ClearFocus() end)
+    lbFrame.searchStatus = searchPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    lbFrame.searchStatus:SetPoint("TOPRIGHT", searchPanel, "BOTTOMRIGHT", -2, -3)
+    lbFrame.searchStatus:SetTextColor(P.muted[1], P.muted[2], P.muted[3])
+    lbFrame:SetScript("OnHide", function()
+        if lbFrame.search then lbFrame.search:Cancel() end
+    end)
+
     -- En-tetes de colonnes (bandeau sombre, meme largeur que les lignes)
     lbFrame.leftStackAnchor = CreateFrame("Frame", nil, lbFrame)
     lbFrame.leftStackAnchor:Hide()
@@ -1767,13 +1806,14 @@ RenderKillRows = function(force)
             if locTag and locTag ~= "" then shortName = shortName .. " (" .. locTag .. ")" end
             local bountyActive = (Overlord.Bounty and Overlord.Bounty.IsActiveBountyForName
                 and Overlord.Bounty:IsActiveBountyForName(entry.name)) and 1 or 0
-            local paintKey = dataIndex .. "|" .. tostring(entry.kills) .. "|" .. tostring(class) .. "|"
+            local rank = view.ranks and view.ranks.sortedKills[dataIndex] or dataIndex
+            local paintKey = rank .. "|" .. tostring(entry.kills) .. "|" .. tostring(class) .. "|"
                 .. tostring(faction) .. "|" .. tostring(raceFile) .. "|" .. tostring(raceSex) .. "|"
                 .. shortName .. "|" .. bountyActive
             if row._lbPaintKey ~= paintKey then
                 row._lbPaintKey = paintKey
-                local medalColor = MEDAL_COLORS[dataIndex]
-                row.rank:SetText(dataIndex)
+                local medalColor = MEDAL_COLORS[rank]
+                row.rank:SetText(rank)
                 SetSecondaryTextColor(row.rank, P, medalColor)
                 if raceFile and raceFile ~= "" then
                     local raceIconShown = SetRaceIcon(row.raceIcon, raceFile, raceSex)
@@ -1817,12 +1857,13 @@ RenderGuildRows = function(force)
         if row and entry then
             used = slot
             PrepareVirtualRow(row, dataIndex, GUILD_ROW_HEIGHT, P)
-            local paintKey = dataIndex .. "|" .. tostring(entry.guild or "") .. "|"
+            local rank = lbFrame._lbView.ranks and lbFrame._lbView.ranks.sortedGuilds[dataIndex] or dataIndex
+            local paintKey = rank .. "|" .. tostring(entry.guild or "") .. "|"
                 .. tostring(entry.kills or 0) .. "|" .. tostring(entry.faction or "")
             if row._lbPaintKey ~= paintKey then
                 row._lbPaintKey = paintKey
-                local medalColor = MEDAL_COLORS[dataIndex]
-                row.rank:SetText(dataIndex)
+                local medalColor = MEDAL_COLORS[rank]
+                row.rank:SetText(rank)
                 SetSecondaryTextColor(row.rank, P, medalColor)
                 row.factionBar:Hide()
                 row.name:SetText(entry.guild or "")
@@ -1860,10 +1901,11 @@ RenderGuildKeepRows = function(force)
         if row and entry then
             used = slot
             PrepareVirtualRow(row, dataIndex, GUILD_ROW_HEIGHT, P)
-            local medalColor = MEDAL_COLORS[dataIndex]
+            local rank = lbFrame._lbView.ranks and lbFrame._lbView.ranks.sortedGuildKeeps[dataIndex] or dataIndex
+            local medalColor = MEDAL_COLORS[rank]
             local keepName = GetGuildKeepSiteDisplayName(entry.keepSiteKey)
             local wins = math.floor(tonumber(entry.wins) or 0)
-            local paintKey = dataIndex .. "|" .. tostring(entry.guild or "") .. "|"
+            local paintKey = rank .. "|" .. tostring(entry.guild or "") .. "|"
                 .. tostring(entry.faction or "") .. "|" .. tostring(entry.keepSiteKey or "") .. "|"
                 .. tostring(wins) .. "|" .. (entry.currentlyHeld and "1" or "0") .. "|"
                 .. tostring(entry.keepAtlas or "") .. "|" .. keepName
@@ -1917,10 +1959,11 @@ RenderOutpostRows = function(force)
         if row and entry then
             used = slot
             PrepareVirtualRow(row, dataIndex, GUILD_ROW_HEIGHT, P)
-            local medalColor = MEDAL_COLORS[dataIndex]
+            local rank = lbFrame._lbView.ranks and lbFrame._lbView.ranks.sortedOutposts[dataIndex] or dataIndex
+            local medalColor = MEDAL_COLORS[rank]
             local outpostName = GetOutpostSiteDisplayName(entry.outpostSiteKey)
             local captures = math.floor(tonumber(entry.captures) or 0)
-            local paintKey = dataIndex .. "|" .. tostring(entry.guild or "") .. "|"
+            local paintKey = rank .. "|" .. tostring(entry.guild or "") .. "|"
                 .. tostring(entry.faction or "") .. "|" .. tostring(entry.outpostSiteKey or "") .. "|"
                 .. tostring(captures) .. "|" .. (entry.currentlyHeld and "1" or "0") .. "|"
                 .. tostring(entry.outpostAtlas or "") .. "|" .. outpostName
@@ -1989,7 +2032,8 @@ RenderCaptureRows = function(faction, force)
             local localeLabel = (locTag and locTag ~= "") and ("(" .. locTag .. ")") or ""
             local metaClass, _, raceFile, raceSex = CachedMeta(metaCache, entry.name)
             local capClass = (metaClass and metaClass ~= "") and metaClass or entry.class or "UNKNOWN"
-            local capKey = faction .. "|" .. dataIndex .. "|" .. shortName .. "|" .. localeLabel .. "|"
+            local rank = lbFrame._lbView.ranks and lbFrame._lbView.ranks[faction][dataIndex] or dataIndex
+            local capKey = faction .. "|" .. rank .. "|" .. shortName .. "|" .. localeLabel .. "|"
                 .. capClass .. "|" .. tostring(raceFile) .. "|" .. tostring(raceSex) .. "|"
                 .. tostring(entry.count)
             if row._lbPaintKey ~= capKey then
@@ -2002,7 +2046,7 @@ RenderCaptureRows = function(faction, force)
                 row.name:SetText(shortName)
                 row.locale:SetText(localeLabel)
                 row.count:SetText(entry.count)
-                SetSecondaryTextColor(row.count, P, MEDAL_COLORS[dataIndex])
+                SetSecondaryTextColor(row.count, P, MEDAL_COLORS[rank])
                 if row.classIconHolder then row.classIconHolder:Show() end
             end
             row:Show()
@@ -2062,34 +2106,21 @@ local function ResetLeaderboardScrollPositions()
     RestoreLeaderboardScrollValue(lbFrame.scrollOutpost, 0)
 end
 
-function Overlord.LeaderboardUI:Refresh()
-    if not lbFrame or not lbFrame:IsShown() or not Overlord.Leaderboard then return end
-    local lb = Overlord.Leaderboard
-    local savedScroll = CaptureLeaderboardScrollPositions()
-    local dc = lb.EnsureDisplayCache and lb:EnsureDisplayCache()
-    if not dc then return end
-
-    local sortedGuildKeeps, sortedOutposts =
-        GetVolatileLeaderboardLists(lb, dc.sortedGuilds)
-    local view = lbFrame._lbView or {}
-    lbFrame._lbView = view
-    view.sortedKills = dc.sortedKills or {}
-    view.byFaction = dc.byFaction or { Alliance = {}, Horde = {} }
-    view.sortedGuilds = dc.sortedGuilds or {}
-    view.sortedGuildKeeps = sortedGuildKeeps or {}
-    view.sortedOutposts = sortedOutposts or {}
-    view.meta = dc.meta or {}
-    view.locale = dc.locale or {}
-    view.duplicateShortNames = dc.duplicateShortNames or {}
-
+function Overlord.LeaderboardUI:PaintView()
+    if not lbFrame or not lbFrame:IsShown() or not lbFrame._lbView then return end
+    local view = lbFrame._lbView
+    local searching = lbFrame.searchQuery and lbFrame.searchQuery ~= ""
+    local savedScroll = not lbFrame.searchResetScroll and CaptureLeaderboardScrollPositions()
+    if lbFrame.searchResetScroll then ResetLeaderboardScrollPositions() end
+    lbFrame.searchResetScroll = nil
     if lbFrame.guildEmptyHint then
-        lbFrame.guildEmptyHint:SetShown(#view.sortedGuilds == 0)
+        lbFrame.guildEmptyHint:SetShown(not searching and #view.sortedGuilds == 0)
     end
     if lbFrame.guildKeepEmptyHint then
-        lbFrame.guildKeepEmptyHint:SetShown(#view.sortedGuildKeeps == 0)
+        lbFrame.guildKeepEmptyHint:SetShown(not searching and #view.sortedGuildKeeps == 0)
     end
     if lbFrame.outpostEmptyHint then
-        lbFrame.outpostEmptyHint:SetShown(#view.sortedOutposts == 0)
+        lbFrame.outpostEmptyHint:SetShown(not searching and #view.sortedOutposts == 0)
     end
 
     LayoutLeaderboardSections()
@@ -2129,6 +2160,70 @@ function Overlord.LeaderboardUI:Refresh()
         local ui = Overlord.LeaderboardUI
         if ui and ui:IsShown() then ui:UpdateCaptureScrollIndicators() end
     end)
+end
+
+local function SetSearchStatus(text)
+    if lbFrame._searchStatus ~= text then
+        lbFrame._searchStatus = text
+        lbFrame.searchStatus:SetText(text)
+    end
+end
+
+local function PublishSearchView(view)
+    lbFrame._lbView = view
+    if lbFrame.searchQuery and lbFrame.searchQuery ~= "" then
+        local count = #view.sortedKills + #view.sortedGuilds + #view.sortedGuildKeeps
+            + #view.sortedOutposts + #view.byFaction.Alliance + #view.byFaction.Horde
+        SetSearchStatus(count == 0 and (L.LB_SEARCH_EMPTY or "No matches") or "")
+    else
+        SetSearchStatus("")
+    end
+    Overlord.LeaderboardUI:PaintView()
+end
+
+function Overlord.LeaderboardUI:ApplySearch()
+    if not self:IsShown() or not lbFrame._lbSource then return end
+    if not lbFrame.searchQuery or lbFrame.searchQuery == "" then
+        if lbFrame.search and (lbFrame.search.job or lbFrame.search.result) then
+            lbFrame.search:Request(lbFrame._lbSource, "")
+        end
+        PublishSearchView(lbFrame._lbSource)
+        return
+    end
+    if not lbFrame.search then
+        lbFrame.search = Overlord.LeaderboardSearch:New(function() return self:IsShown() end, PublishSearchView)
+    end
+    local view = lbFrame.search:Request(lbFrame._lbSource, lbFrame.searchQuery)
+    if view then PublishSearchView(view)
+    else SetSearchStatus(L.LB_SEARCH_WORKING or "Searching...") end
+end
+
+function Overlord.LeaderboardUI:SetSearchText(text)
+    if not lbFrame then return end
+    local query = Overlord.LeaderboardSearch:Normalize(text)
+    if query == (lbFrame.searchQuery or "") then return end
+    lbFrame.searchQuery = query
+    lbFrame.searchResetScroll = true
+    self:ApplySearch()
+end
+
+function Overlord.LeaderboardUI:Refresh()
+    if not lbFrame or not lbFrame:IsShown() or not Overlord.Leaderboard then return end
+    local lb = Overlord.Leaderboard
+    local dc = lb.EnsureDisplayCache and lb:EnsureDisplayCache()
+    if not dc then return end
+    local sortedGuildKeeps, sortedOutposts = GetVolatileLeaderboardLists(lb, dc.sortedGuilds)
+    local view = lbFrame._lbSource or {}
+    lbFrame._lbSource = view
+    view.sortedKills = dc.sortedKills or {}
+    view.byFaction = dc.byFaction or { Alliance = {}, Horde = {} }
+    view.sortedGuilds = dc.sortedGuilds or {}
+    view.sortedGuildKeeps = sortedGuildKeeps or {}
+    view.sortedOutposts = sortedOutposts or {}
+    view.meta = dc.meta or {}
+    view.locale = dc.locale or {}
+    view.duplicateShortNames = dc.duplicateShortNames or {}
+    self:ApplySearch()
 
     local totalFmt = string.format(L.LB_TOTAL_FORMAT, dc.alliKills or 0, dc.hordeKills or 0)
     if lbFrame._lbTotalFmt ~= totalFmt then

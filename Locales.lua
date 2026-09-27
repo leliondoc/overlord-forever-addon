@@ -391,6 +391,9 @@ L.CAPTURE_OF_STARTED     = "Capture of %s started!"
 
 -- === LeaderboardUI ===
 L.LB_TITLE         = "LEADERBOARD"
+L.LB_SEARCH_PLACEHOLDER = "Player or guild..."
+L.LB_SEARCH_EMPTY = "No matches"
+L.LB_SEARCH_WORKING = "Searching..."
 L.LB_BUTTON        = "Leaderboard"
 L.LB_BUTTON_TOOLTIP = "Open weekly kills and captures ranking"
 L.HOF_BUTTON        = "Hall of Fame"
@@ -1338,6 +1341,9 @@ L.CAPTURE_OF_STARTED     = "Capture de %s commencée !"
 
 -- LeaderboardUI
 L.LB_TITLE         = "CLASSEMENT"
+L.LB_SEARCH_PLACEHOLDER = "Joueur ou guilde..."
+L.LB_SEARCH_EMPTY = "Aucun résultat"
+L.LB_SEARCH_WORKING = "Recherche..."
 L.LB_BUTTON        = "Classement"
 L.LB_BUTTON_TOOLTIP = "Ouvrir le classement kills et captures de la semaine"
 L.HOF_BUTTON        = "Hall of Fame"
@@ -2281,6 +2287,9 @@ L.CAPTURE_OF_STARTED     = "¡Captura de %s iniciada!"
 
 -- LeaderboardUI
 L.LB_TITLE         = "CLASIFICACIÓN"
+L.LB_SEARCH_PLACEHOLDER = "Jugador o hermandad..."
+L.LB_SEARCH_EMPTY = "Sin resultados"
+L.LB_SEARCH_WORKING = "Buscando..."
 L.LB_BUTTON        = "Clasificación"
 L.LB_BUTTON_TOOLTIP = "Abrir la clasificación de eliminaciones y capturas semanal"
 L.HOF_BUTTON        = "Salón de la Fama"
@@ -3222,6 +3231,9 @@ L.CAPTURE_OF_STARTED     = "Eroberung von %s gestartet!"
 
 -- LeaderboardUI
 L.LB_TITLE         = "RANGLISTE"
+L.LB_SEARCH_PLACEHOLDER = "Spieler oder Gilde..."
+L.LB_SEARCH_EMPTY = "Keine Treffer"
+L.LB_SEARCH_WORKING = "Suche..."
 L.LB_BUTTON        = "Rangliste"
 L.LB_BUTTON_TOOLTIP = "Wöchentliche Kill- und Eroberungs-Rangliste öffnen"
 L.HOF_BUTTON        = "Ruhmeshalle"
@@ -4170,6 +4182,9 @@ L.CAPTURE_OF_STARTED     = "Захват %s начался!"
 
 -- === LeaderboardUI ===
 L.LB_TITLE         = "ТАБЛИЦА РЕКОРДОВ"
+L.LB_SEARCH_PLACEHOLDER = "Игрок или гильдия..."
+L.LB_SEARCH_EMPTY = "Нет результатов"
+L.LB_SEARCH_WORKING = "Поиск..."
 L.LB_BUTTON        = "Таблица рекордов"
 L.LB_BUTTON_TOOLTIP = "Открыть еженедельный рейтинг убийств и захватов"
 L.HOF_BUTTON        = "Зал славы"

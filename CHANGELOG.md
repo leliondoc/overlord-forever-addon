@@ -1,4 +1,9 @@
-1.1.2
+1.1.3
+
+**Overlord Forever 1.1.3**
+
+- Add a local player/guild search at the top left of the leaderboard, with debounced and sliced filtering, cached results, original ranks and unchanged faction totals. Accented Latin and Cyrillic names match regardless of case. No network queries or new art assets.
+- Next Objective keeps its full map picture and five-row recent activity viewport on short two-point fronts. Its minimum height reserves space for wrapped guidance and coins instead of compressing the activity card and scrollbar. The dock is clamped to the screen and follows main-panel height changes.
 
 **Overlord Forever 1.1.2**
 
