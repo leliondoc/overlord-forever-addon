@@ -80,6 +80,19 @@ local mapFilterTexts = {
 mapFilterTexts.esMX = mapFilterTexts.esES
 local mapFilter = mapFilterTexts[locale] or mapFilterTexts.enUS
 L.MAP_FILTER_OVERLORD, L.MAP_FILTER_SHOWN, L.MAP_FILTER_HIDDEN = mapFilter[1], mapFilter[2], mapFilter[3]
+-- Coins panel (top HUD) setting, off by default.
+local coinsHudTexts = {
+    enUS = { "Coins panel", "Show the coins counter with the Reinforce and Attack buttons at the top of the screen near coin mines. Off by default." },
+    frFR = { "Panneau des coins", "Affiche en haut de l'écran le compteur de coins et les boutons Renforcer et Attaquer près des mines. Désactivé par défaut." },
+    esES = { "Panel de monedas", "Muestra arriba de la pantalla el contador de monedas y los botones Reforzar y Atacar cerca de las minas. Desactivado por defecto." },
+    deDE = { "Münzleiste", "Zeigt oben am Bildschirm den Münzzähler mit den Knöpfen Verstärken und Angreifen in der Nähe von Minen. Standardmäßig aus." },
+    ruRU = { "Панель монет", "Показывает вверху экрана счётчик монет и кнопки «Укрепить» и «Атаковать» рядом с шахтами. По умолчанию выключено." },
+    ptBR = { "Painel de moedas", "Mostra no topo da tela o contador de moedas e os botões Reforçar e Atacar perto das minas. Desativado por padrão." },
+    zhCN = { "硬币面板", "在矿区附近于屏幕顶部显示硬币计数以及增援和进攻按钮。默认关闭。" },
+}
+coinsHudTexts.esMX = coinsHudTexts.esES
+local coinsHud = coinsHudTexts[locale] or coinsHudTexts.enUS
+L.COINS_HUD_LABEL, L.COINS_HUD_TOOLTIP = coinsHud[1], coinsHud[2]
 for index, id in ipairs({ "redridge_lakeshire", "redridge_althers_mill", "redridge_ilgalar",
     "redridge_three_corners", "redridge_lakeridge_highway", "redridge_stonewatch_falls",
     "redridge_renders_valley" }) do

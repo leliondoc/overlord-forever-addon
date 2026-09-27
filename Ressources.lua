@@ -1982,6 +1982,9 @@ local function HUDZoneCheck(force)
             showKeep = true
         end
     end
+    -- Panneau des pieces : desactive par defaut (genant a l'ecran, stream) ;
+    -- le joueur le reactive dans les reglages.
+    showGold = showGold and cfg ~= nil and cfg.showCoinsHud == true
     showWood = showWood and Overlord.Ressources:ShouldShowWoodHUD(mapID, inZone)
     showKeep = showKeep and showGold
         and Overlord.Ressources:ShouldShowGuildKeepHUD(mapID, inZone)

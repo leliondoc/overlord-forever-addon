@@ -22,6 +22,7 @@ Overlord.SettingsPanel.MapPathOpacityVariableName = "Overlord_MapPathOpacity"
 Overlord.SettingsPanel.AutoWaypointVariableName = "Overlord_AutoWaypointNextObjective"
 Overlord.SettingsPanel.ShowMinimapButtonVariableName = "Overlord_ShowMinimapButton"
 Overlord.SettingsPanel.ShowMinimapCaptureZonesVariableName = "Overlord_ShowMinimapCaptureZones"
+Overlord.SettingsPanel.ShowCoinsHudVariableName = "Overlord_ShowCoinsHud"
 Overlord.SettingsPanel.ShowMapZoneTitlesVariableName = "Overlord_ShowMapZoneTitles"
 Overlord.SettingsPanel.ShowTopHudVariableName = "Overlord_ShowTopHud"
 Overlord.SettingsPanel.TopHudModeVariableName = "Overlord_TopHudMode"
@@ -46,6 +47,7 @@ local DEFAULT_MAP_PATH_OPACITY = 1.0
 local DEFAULT_AUTO_WAYPOINT = true
 local DEFAULT_SHOW_MINIMAP_BUTTON = true
 local DEFAULT_SHOW_MINIMAP_CAPTURE_ZONES = true
+local DEFAULT_SHOW_COINS_HUD = false
 local DEFAULT_SHOW_MAP_ZONE_TITLES = true
 local DEFAULT_SHOW_TOP_HUD = true
 local DEFAULT_TOP_HUD_MODE = "auto"
@@ -381,6 +383,20 @@ local function setShowMinimapCaptureZones(value)
     notifySettingsAPI(Overlord.SettingsPanel.ShowMinimapCaptureZonesVariableName, OverlordDB.config.showMinimapCaptureZones)
 end
 
+local function getShowCoinsHud()
+    return OverlordDB and OverlordDB.config and OverlordDB.config.showCoinsHud == true or false
+end
+
+local function setShowCoinsHud(value)
+    if not OverlordDB then return end
+    OverlordDB.config = OverlordDB.config or {}
+    OverlordDB.config.showCoinsHud = value == true
+    if not settingsSuppressSideEffects and Overlord.Ressources and Overlord.Ressources.OnShowTopHudSettingChanged then
+        Overlord.Ressources:OnShowTopHudSettingChanged()
+    end
+    notifySettingsAPI(Overlord.SettingsPanel.ShowCoinsHudVariableName, OverlordDB.config.showCoinsHud)
+end
+
 local function getShowMapZoneTitles()
     if OverlordDB and OverlordDB.config and OverlordDB.config.showMapZoneTitles == false then
         return false
@@ -532,6 +548,8 @@ local Acc = {
     getShowMinimapButton = getShowMinimapButton,
     setShowMinimapButton = setShowMinimapButton,
     getShowMinimapCaptureZones = getShowMinimapCaptureZones,
+    getShowCoinsHud = getShowCoinsHud,
+    setShowCoinsHud = setShowCoinsHud,
     setShowMinimapCaptureZones = setShowMinimapCaptureZones,
     getShowMapZoneTitles = getShowMapZoneTitles,
     setShowMapZoneTitles = setShowMapZoneTitles,
@@ -560,6 +578,7 @@ function Overlord.SettingsPanel:RefreshControls()
     if self._worldDefenseEnabledRow and self._worldDefenseEnabledRow.Refresh then self._worldDefenseEnabledRow:Refresh() end
     if self._minimapButtonRow and self._minimapButtonRow.Refresh then self._minimapButtonRow:Refresh() end
     if self._minimapCaptureZonesRow and self._minimapCaptureZonesRow.Refresh then self._minimapCaptureZonesRow:Refresh() end
+    if self._coinsHudRow and self._coinsHudRow.Refresh then self._coinsHudRow:Refresh() end
     if self._mapZoneTitlesRow and self._mapZoneTitlesRow.Refresh then self._mapZoneTitlesRow:Refresh() end
 end
 
@@ -608,6 +627,7 @@ function Overlord.SettingsPanel:ResetDefaults()
     setSoundEnabled(DEFAULT_SOUND_ENABLED)
     setWorldDefenseEnabled(DEFAULT_WORLD_DEFENSE_ENABLED)
     setShowMinimapCaptureZones(DEFAULT_SHOW_MINIMAP_CAPTURE_ZONES)
+    setShowCoinsHud(DEFAULT_SHOW_COINS_HUD)
     setShowMapZoneTitles(DEFAULT_SHOW_MAP_ZONE_TITLES)
     settingsSuppressSideEffects = false
     flushSettingsMapSideEffects()
@@ -808,6 +828,18 @@ local function BuildSettingsRows(sp, rowParent, initialRowW, gold, white, placeR
         white = white,
     })
     placeRow(sp._minimapCaptureZonesRow)
+
+    sp._coinsHudRow = CreateToggleRow(rowParent, {
+        width = initialRowW,
+        height = ROW_H,
+        label = (L and L.COINS_HUD_LABEL) or "Coins panel",
+        tooltip = (L and L.COINS_HUD_TOOLTIP) or "",
+        get = Acc.getShowCoinsHud,
+        set = Acc.setShowCoinsHud,
+        gold = gold,
+        white = white,
+    })
+    placeRow(sp._coinsHudRow)
 
     sp._minimapButtonRow = CreateToggleRow(rowParent, {
         width = initialRowW,
@@ -1238,6 +1270,16 @@ local function RegisterVerticalFallback()
             setShowMinimapCaptureZones
         )
         Settings.CreateCheckbox(category, mmcSetting, (L and L.MINIMAP_CAPTURE_ZONES_TOOLTIP) or "")
+        local coinsSetting = Settings.RegisterProxySetting(
+            category,
+            Overlord.SettingsPanel.ShowCoinsHudVariableName,
+            type(DEFAULT_SHOW_COINS_HUD),
+            (L and L.COINS_HUD_LABEL) or "Coins panel",
+            DEFAULT_SHOW_COINS_HUD,
+            getShowCoinsHud,
+            setShowCoinsHud
+        )
+        Settings.CreateCheckbox(category, coinsSetting, (L and L.COINS_HUD_TOOLTIP) or "")
         local mztSetting = Settings.RegisterProxySetting(
             category,
             Overlord.SettingsPanel.ShowMapZoneTitlesVariableName,

@@ -872,8 +872,9 @@ local function ScheduleAttempt(generation, campaignId, attempt)
                     OverlordDB.leaderboardHistoryCatchupTargetRotation) or 0))
                 local startIndex = ((seed + rotation) % total) + 1
                 -- Sans communaute, nos allies ont le meme retard que nous sur
-                -- l'autre faction : un tour sur deux vise d'abord un pair adverse.
-                local enemyFirst = rotation % 2 == 0 and ENEMY_FACTION[Overlord.PlayerFaction]
+                -- l'autre faction (notre faction est deja a jour en direct) : deux
+                -- tours sur trois visent d'abord un pair adverse.
+                local enemyFirst = rotation % 3 ~= 2 and ENEMY_FACTION[Overlord.PlayerFaction]
                 for pass = enemyFirst and 1 or 2, 2 do
                     for offset = 0, total - 1 do
                         local candidate = online[((startIndex + offset - 1) % total) + 1]
@@ -1093,11 +1094,21 @@ local function StartReturnPush(pending, target)
             if push.ticker and push.ticker.Cancel then push.ticker:Cancel() end
             push.ticker = nil
             pending.awaitingPushAck = true
-            C_Timer.After(PUSH_ACK_TIMEOUT_SEC, function()
+            -- Le HA:C exige que 100 % des lignes renvoyees soient arrivees : a travers un
+            -- pont c'est rare, et l'attendre 20 min puis relancer un tour complet bloquait
+            -- l'anti-entropie ~40 min. Les deux cotes ont deja fusionne (max monotone) :
+            -- sans ACK apres NO_REPLY_SEC, le tour se termine et le suivant reprend.
+            C_Timer.After(NO_REPLY_SEC, function()
                 if sync._historyCatchupPending == pending
                     and pending.pushOutbound == push
                     and pending.awaitingPushAck and not pending.terminal then
-                    RetryHistoryCatchup(pending)
+                    NoteHr("result", "sent back, not confirmed")
+                    ClearOutboundPush(pending)
+                    pending.awaitingAck = false
+                    pending.awaitingPushAck = false
+                    pending.terminal = true
+                    sync._historyCatchupPending = nil
+                    ArmNextHistoryCatchup(RECENT_ACK_SEC)
                 end
             end)
         end)

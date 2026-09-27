@@ -396,4 +396,25 @@ lateDiag = table.concat(late.Overlord.Sync:GetHistoryCatchupDiagnostics(), " ")
 local requests = tonumber(lateDiag:match("(%d+) requests"))
 assert(requests and requests <= 4 and lateDiag:find("rows received", 1, true),
     "Catch-up hammered the bridge or lost its diagnostics: " .. lateDiag)
+-- The responder never confirms our return push (HA:C lost through a bridge):
+-- the round ends after NO_REPLY_SEC instead of waiting 20 min then pulling again.
+local origCommit = d.Overlord.Sync.OnHistoryPushCommit
+d.Overlord.Sync.OnHistoryPushCommit = function() return false end
+late.Overlord.Leaderboard.kills["Late Only"] = 777
+late.Overlord.Leaderboard.playerInfo["Late Only"] = { class = "PRIEST", faction = "Alliance", level = 2, locale = "engb" }
+for _, e in ipairs(clients) do
+    e.Overlord.Sync._historyCatchupWakeGeneration = (e.Overlord.Sync._historyCatchupWakeGeneration or 0) + 1
+    e.Overlord.Sync._historyCatchupPending = nil
+end
+late.Overlord.Sync.GetOnlineCommunityMembers = function() return { d.name } end
+assert(late.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true, true))
+lateHeartbeat = true
+announceLate()
+advance(1500)
+lateHeartbeat = false
+local pendingPush = late.Overlord.Sync._historyCatchupPending
+assert(not (pendingPush and pendingPush.awaitingPushAck),
+    "Round stayed blocked waiting for an unconfirmed return push")
+local pushDiag = table.concat(late.Overlord.Sync:GetHistoryCatchupDiagnostics(), " ")
+d.Overlord.Sync.OnHistoryPushCommit = origCommit
 print("Beta catchup: four replicas converge; late Analyst, 500-player ranking + 25 Horde captures, guilds, three hops, backpressure, paced relay queues, return union and verified ACK OK")

@@ -1,4 +1,9 @@
-1.0.32
+1.0.33
+
+**Overlord Forever 1.0.33**
+
+- The other faction's leaderboard scores now refresh every 10 to 20 minutes instead of 40 to 60. After receiving a leaderboard, Overlord sends its own back and used to wait up to 20 minutes for a confirmation that rarely arrives through a Battle.net bridge, then start a whole new exchange. It now waits 4.5 minutes and moves on; both sides have already merged the lines. Two catch-up rounds out of three now ask a player of the other faction first, since your own faction is already up to date live.
+- The coins panel (coins counter with Reinforce and Attack at the top of the screen) is now off by default. Turn on "Coins panel" in the Overlord settings to show it again.
 
 **Overlord Forever 1.0.32**
 
