@@ -67,6 +67,19 @@ local outpostNames = standaloneOutpostNames[locale] or standaloneOutpostNames.en
 L.OUTPOST_SILVERPINE_NAME = outpostNames[1]
 L.OUTPOST_AEYTHYR_LODGE_NAME = outpostNames[2]
 L.OUTPOST_LESI_BEAR_CAVE_NAME = outpostNames[3]
+-- World map filter toggle (Blizzard "Map Filters" menu and /ov map).
+local mapFilterTexts = {
+    enUS = { "Overlord zones", "World map display: on", "World map display: off" },
+    frFR = { "Zones Overlord", "Affichage sur la carte : activé", "Affichage sur la carte : désactivé" },
+    esES = { "Zonas de Overlord", "Mostrar en el mapa: activado", "Mostrar en el mapa: desactivado" },
+    deDE = { "Overlord-Zonen", "Kartenanzeige: an", "Kartenanzeige: aus" },
+    ruRU = { "Зоны Overlord", "Отображение на карте: вкл.", "Отображение на карте: выкл." },
+    ptBR = { "Zonas do Overlord", "Exibição no mapa: ativada", "Exibição no mapa: desativada" },
+    zhCN = { "Overlord 区域", "地图显示：开启", "地图显示：关闭" },
+}
+mapFilterTexts.esMX = mapFilterTexts.esES
+local mapFilter = mapFilterTexts[locale] or mapFilterTexts.enUS
+L.MAP_FILTER_OVERLORD, L.MAP_FILTER_SHOWN, L.MAP_FILTER_HIDDEN = mapFilter[1], mapFilter[2], mapFilter[3]
 for index, id in ipairs({ "redridge_lakeshire", "redridge_althers_mill", "redridge_ilgalar",
     "redridge_three_corners", "redridge_lakeridge_highway", "redridge_stonewatch_falls",
     "redridge_renders_valley" }) do

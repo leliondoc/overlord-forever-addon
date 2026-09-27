@@ -62,4 +62,23 @@ button:SetParent(bag)
 button:SetPoint("CENTER", Minimap, "CENTER", 12, 34)
 Minimap.hooks.OnShow(Minimap)
 assert(select(4, button:GetPoint()) == 12)
+
+-- World map filter: one entry in Blizzard's "Map Filters" menu toggles every
+-- Overlord world map display (saved), registered only once.
+-- Keep/outpost/mine map modules are not loaded here: missing methods are no-ops.
+GetTime = GetTime or function() return 100 end
+markers._worldMapFilterRegistered = false
+setmetatable(markers, { __index = function() return function() end end })
+local menuTag, menuBuilder
+Menu = { ModifyMenu = function(tag, fn) menuTag, menuBuilder = tag, fn end }
+assert(markers:RegisterWorldMapFilterToggle() and not markers:RegisterWorldMapFilterToggle())
+assert(menuTag == "MENU_WORLD_MAP_TRACKING", "Wrong Blizzard map filter menu")
+local checkbox
+menuBuilder(nil, { CreateDivider = function() end,
+    CreateCheckbox = function(_, text, isSelected, toggle) checkbox = { text = text, get = isSelected, set = toggle } end })
+assert(checkbox and checkbox.get() == true, "Overlord map display should be on by default")
+checkbox.set()
+assert(OverlordDB.config.showWorldMapOverlays == false and not checkbox.get(), "Filter did not hide the map displays")
+checkbox.set()
+assert(OverlordDB.config.showWorldMapOverlays == true and checkbox.get(), "Filter did not restore the map displays")
 print("Minimap button: login resize, border radius, rectangle, square, show and button collectors OK")

@@ -700,6 +700,15 @@ local function CommandHandler(msg)
     elseif cmd == "shard" then
         ShowShardDebug()
 
+    elseif cmd == "map" or cmd == "carte" then
+        local mm = Overlord.MapMarkers
+        if mm and mm.SetWorldMapOverlaysShown then
+            local shown = not mm:AreWorldMapOverlaysShown()
+            mm:SetWorldMapOverlaysShown(shown)
+            Overlord:PrintNotification("[Overlord] " .. (shown and (L.MAP_FILTER_SHOWN or "World map display: on")
+                or (L.MAP_FILTER_HIDDEN or "World map display: off")))
+        end
+
     elseif cmd == "network" or cmd == "reseau" then
         StartNetworkProbe()
 

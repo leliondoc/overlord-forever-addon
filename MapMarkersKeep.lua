@@ -1183,6 +1183,7 @@ end
 -- Rafraichit icone/libelles sans ResetMapLayoutKey (evite sautillement carte)
 function Overlord.MapMarkers:RefreshGuildKeepMapIfOpen()
     if not WorldMapFrame or not WorldMapFrame.IsShown or not WorldMapFrame:IsShown() then return end
+    if self.AreWorldMapOverlaysShown and not self:AreWorldMapOverlaysShown() then return end
     if not Overlord.GuildKeep then return end
     local mapID = GetTrackedMapID()
     local site = mapID and Overlord.GuildKeep:ResolveSiteByMapID(mapID)
@@ -1448,6 +1449,7 @@ end
 
 function Overlord.MapMarkers:RefreshOutpostMapIfOpen()
     if not WorldMapFrame or not WorldMapFrame.IsShown or not WorldMapFrame:IsShown() then return end
+    if self.AreWorldMapOverlaysShown and not self:AreWorldMapOverlaysShown() then return end
     if not Overlord.Outpost then return end
     local mapID = GetTrackedMapID()
     if not mapID then return end

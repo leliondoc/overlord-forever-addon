@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.0.31"
+Overlord.Version = "1.0.32"
 -- Forever uses one global community. The beta relay remains enabled in parallel
 -- so non-members and temporarily unavailable C_Club rosters still converge.
 Overlord.CommunityModeEnabled = true
@@ -3896,7 +3896,7 @@ function Overlord:Initialize()
         uiScale = 1.0,
         notificationChatFrame = 0,
         mapOverlayOpacity = 1.0,
-        minimapOverlayOpacity = 1.0,
+        minimapOverlayOpacity = 0.5,
         showMinimapButton = true,
         showMinimapCaptureZones = true,
         mapPathOpacity = 1.0,
@@ -3906,6 +3906,14 @@ function Overlord:Initialize()
     for k, v in pairs(CONFIG_DEFAULTS) do
         if OverlordDB.config[k] == nil then
             OverlordDB.config[k] = v
+        end
+    end
+    -- 1.0.32 : zones de la minicarte a 50 % par defaut (plaque pleine jugee genante).
+    -- Passage unique pour les installations existantes ; le choix suivant est garde.
+    if not OverlordDB.config.minimapOpacityDefault50 then
+        OverlordDB.config.minimapOpacityDefault50 = true
+        if tonumber(OverlordDB.config.minimapOverlayOpacity) == 1.0 then
+            OverlordDB.config.minimapOverlayOpacity = 0.5
         end
     end
     OverlordDB.config.popupsSeen = OverlordDB.config.popupsSeen or {}

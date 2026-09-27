@@ -605,7 +605,8 @@ local function CacheCanvas()
             if viewport.SetClipsChildren then
                 pcall(viewport.SetClipsChildren, viewport, true)
             end
-            viewport:Show()
+            -- Filtre joueur : le calque entier reste cache tant que l'affichage est coupe.
+            viewport:SetShown(Overlord.MapMarkers:AreWorldMapOverlaysShown())
 
             if worldOverlayParent and worldOverlayParent:GetParent() ~= viewport then
                 worldOverlayParent:Hide()
@@ -763,11 +764,54 @@ local function IsMinimapFrontOverlayMap(mapID)
     return Overlord.Fronts:ResolveFrontByOverlayMapID(mapID) ~= nil
 end
 
+-- Interrupteur joueur (menu Filtres de la carte, /ov map) : masque TOUT le contenu
+-- Overlord de la carte du monde. Le driver passe alors en idle (aucun calcul).
+function Overlord.MapMarkers:AreWorldMapOverlaysShown()
+    local config = OverlordDB and OverlordDB.config
+    return not config or config.showWorldMapOverlays ~= false
+end
+
+function Overlord.MapMarkers:SetWorldMapOverlaysShown(shown)
+    if not OverlordDB then return false end
+    OverlordDB.config = OverlordDB.config or {}
+    OverlordDB.config.showWorldMapOverlays = shown and true or false
+    local viewport = driverState.worldOverlayViewport
+    if viewport then viewport:SetShown(shown and true or false) end
+    if shown then
+        worldMapHiddenForNoWarMode = false
+        driverState.worldGateSlow = false
+        driverState.worldAccum = math.huge
+        if self.RequestOverlayRefresh then self:RequestOverlayRefresh() end
+    else
+        HideAllOverlordWorldMapContent()
+        worldMapHiddenForNoWarMode = true
+    end
+    return true
+end
+
+-- Case dans le menu « Filtres de la carte » de Blizzard (API Menu, carte du monde).
+function Overlord.MapMarkers:RegisterWorldMapFilterToggle()
+    if self._worldMapFilterRegistered or not Menu or not Menu.ModifyMenu then return false end
+    self._worldMapFilterRegistered = true
+    Menu.ModifyMenu("MENU_WORLD_MAP_TRACKING", function(_, rootDescription)
+        if not rootDescription or not rootDescription.CreateCheckbox then return end
+        if rootDescription.CreateDivider then rootDescription:CreateDivider() end
+        rootDescription:CreateCheckbox(L.MAP_FILTER_OVERLORD or "Overlord",
+            function() return Overlord.MapMarkers:AreWorldMapOverlaysShown() end,
+            function()
+                Overlord.MapMarkers:SetWorldMapOverlaysShown(
+                    not Overlord.MapMarkers:AreWorldMapOverlaysShown())
+            end)
+    end)
+    return true
+end
+
 function Overlord.MapMarkers:Initialize()
     if not self._minimapInitialized then
         self._minimapInitialized = true
         self:InitializeMinimap()
     end
+    pcall(self.RegisterWorldMapFilterToggle, self)
 
     if self._worldMapInitialized then return end
 
@@ -890,7 +934,7 @@ function Overlord.MapMarkers:Initialize()
         local driverElapsed = driverState.worldAccum
         driverState.worldAccum = 0
         -- Gate WM avant canvas/layout : hors WM, un seul hide puis idle (~0 alloc/frame).
-        if not IsWarModeActiveForOverlays() then
+        if not IsWarModeActiveForOverlays() or not Overlord.MapMarkers:AreWorldMapOverlaysShown() then
             driverState.worldGateSlow = true
             if not worldMapHiddenForNoWarMode then
                 HideAllOverlordWorldMapContent()

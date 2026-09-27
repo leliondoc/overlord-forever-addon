@@ -1,4 +1,9 @@
-1.0.31
+1.0.32
+
+**Overlord Forever 1.0.32**
+
+- New "Overlord zones" checkbox in Blizzard's Map Filters menu on the world map: untick it to hide every Overlord display on the world map (zones, paths, keeps, outposts, mines, forests, General), tick it to bring them back. While hidden, Overlord does no map work at all. `/ov map` does the same.
+- Capture zones on the minimap now default to 50% opacity instead of a full red/blue plate. Existing installs are moved to 50% once; set it back to 100% in the settings if you prefer.
 
 **Overlord Forever 1.0.31**
 
