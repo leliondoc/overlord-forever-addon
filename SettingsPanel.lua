@@ -397,6 +397,9 @@ local function setShowCoinsHud(value)
     notifySettingsAPI(Overlord.SettingsPanel.ShowCoinsHudVariableName, OverlordDB.config.showCoinsHud)
 end
 
+Overlord.SettingsPanel.GetShowCoinsHud = getShowCoinsHud
+Overlord.SettingsPanel.SetShowCoinsHud = setShowCoinsHud
+
 local function getShowMapZoneTitles()
     if OverlordDB and OverlordDB.config and OverlordDB.config.showMapZoneTitles == false then
         return false
@@ -1270,14 +1273,15 @@ local function RegisterVerticalFallback()
             setShowMinimapCaptureZones
         )
         Settings.CreateCheckbox(category, mmcSetting, (L and L.MINIMAP_CAPTURE_ZONES_TOOLTIP) or "")
+        -- Pas de nouvelle upvalue ici : cette fonction est deja a la limite Lua 5.1 (60).
         local coinsSetting = Settings.RegisterProxySetting(
             category,
             Overlord.SettingsPanel.ShowCoinsHudVariableName,
-            type(DEFAULT_SHOW_COINS_HUD),
+            "boolean",
             (L and L.COINS_HUD_LABEL) or "Coins panel",
-            DEFAULT_SHOW_COINS_HUD,
-            getShowCoinsHud,
-            setShowCoinsHud
+            false,
+            Overlord.SettingsPanel.GetShowCoinsHud,
+            Overlord.SettingsPanel.SetShowCoinsHud
         )
         Settings.CreateCheckbox(category, coinsSetting, (L and L.COINS_HUD_TOOLTIP) or "")
         local mztSetting = Settings.RegisterProxySetting(
