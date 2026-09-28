@@ -1092,6 +1092,9 @@ end
 
 function Overlord.Outpost:ApplyOutpostRestoreZoneView(st, view, site)
     if not st or not view then return end
+    -- This adapter also restores offline observations. Preserve their timestamp:
+    -- an inferred state at login must not supersede events that happened offline.
+    -- RevertCapture dates actual local abandon events at the producer instead.
     st.isHolding = false
     st.isPaused = false
     st.isContested = false
@@ -1121,7 +1124,6 @@ function Overlord.Outpost:ApplyOutpostRestoreZoneView(st, view, site)
         st.previousClaimedAt = 0
         st.previousExpiresAt = 0
         st.previousOwnerPool = ""
-        st.updatedAt = time()
     elseif view.status == "in_progress" then
         st.status = "in_progress"
         st.ownerFaction = view.owner
@@ -1135,14 +1137,6 @@ function Overlord.Outpost:ApplyOutpostRestoreZoneView(st, view, site)
         st.previousClaimedAt = 0
         st.previousExpiresAt = 0
         st.previousOwnerPool = ""
-        -- Date the revert like the held branch. Keeping the assault-start stamp made
-        -- the neutral OP tie with the in_progress OP peers already had, and the
-        -- equal-timestamp tie-break ("neutral" >= "in_progress") kept them stuck on
-        -- the aborted assault for good.
-        st.updatedAt = time()
-    end
-    if view._restoredInProgress then
-        st.updatedAt = time()
     end
 end
 

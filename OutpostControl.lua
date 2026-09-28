@@ -540,8 +540,10 @@ function Overlord.OutpostControl:RevertCapture(siteKey, st, allowInstanceBroadca
         st.previousOwnerGuild = ""
         st.previousOwnerFaction = nil
         st.previousOwnerPool = ""
-        st.updatedAt = time()
     end
+    -- A real local abandon must supersede the assault; offline restoration uses
+    -- the same state adapter but must retain its older observation timestamp.
+    st.updatedAt = time()
     OP:SaveOutposts()
     if Overlord.SaveState then Overlord:SaveState() end
     BroadcastOP(siteKey, true, allowInstanceBroadcast)

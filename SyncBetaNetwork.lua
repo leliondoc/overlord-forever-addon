@@ -1202,7 +1202,8 @@ function net:ReceiveFragment(payload, sender, transport, bnetID)
     if a.got ~= count then return true end
     local wire = table.concat(a.chunks)
     -- Every later duplicate fragment of a completed packet lands here again.
-    if alreadySeen(wire, name) then return false end
+    -- Let refused broadcast forwards reach Receive's retry-only path as well.
+    if alreadySeen(wire, name) and not forwardRetryKey(wire) then return false end
     local p = decode(wire)
     if not p or p.id ~= id then return false end
     return self:Receive(wire, name, transport, bnetID, p)

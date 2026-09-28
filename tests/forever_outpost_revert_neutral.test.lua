@@ -123,3 +123,24 @@ local peerFinal = OP:GetState(siteKey)
 assert(peerFinal.status == "neutral" and (peerFinal.ownerGuild or "") == "",
     "Peer stayed on the aborted assault: " .. tostring(peerFinal.status))
 print("Outpost revert to neutral: dated and applied by peers that saw the assault")
+
+-- An observer logs out during the assault, then returns after the real capture
+-- completed. Offline decay is only a local guess, never a fresh neutral event.
+local observed = snapshotRemote(sentPayloads[1])
+observed.holdTimeElapsed = 30
+OverlordDB.outposts[siteKey] = observed
+OverlordDB.lastSessionTimestamp = startTs + 30
+now = startTs + 1000
+OP:RestoreOutposts()
+local restored = snapshotRemote(OP:GetState(siteKey))
+assert(restored.status == "neutral", "Offline assault did not decay in the fixture")
+assert(restored.updatedAt == startTs,
+    "Offline decay invented a neutral event at login")
+
+-- Replay the restored snapshot to a client that saw the actual completion.
+OverlordDB.outposts[siteKey] = nil
+assert(OP:CompleteCapture(siteKey, guild, faction, startTs + 600, "global", true))
+OP:ApplyRemoteState(siteKey, restored, true)
+assert(OP:GetState(siteKey).status == "held" and OP:GetState(siteKey).ownerGuild == guild,
+    "Returning observer erased a capture completed while offline")
+print("Outpost offline restore: stale neutral preserves the real completed capture")

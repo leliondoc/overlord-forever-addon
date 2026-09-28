@@ -81,3 +81,46 @@ local late = attempts
 net:Receive(wire("origin-3", "Origin Player,Second Bridge", "C", "zone:Alliance:3"), "Second Bridge", "WHISPER")
 assert(attempts == late and delivered == 3, "An expired refused forward was retried")
 print("Beta broadcast retry: refused forward retried by a second copy, no double handling")
+
+-- Channel, group and whisper always use BF, as do larger Battle.net packets.
+-- Keep the origin timestamp identical across copies and reassemble real pieces.
+-- A downstream friend remains reachable even when a group copy already covered
+-- this realm's channel and both local broadcast copies can be skipped.
+function s:GetBetaBNetTargets() return { 1 } end
+function s:GetBetaBNetTargetInfo() return "Horde", "Downstream Player" end
+for i, transport in ipairs({ "CHANNEL", "PARTY", "WHISPER", "BNET" }) do
+    local id, authoredAt = "fragment-retry-" .. i, time()
+    local function fragments(sender)
+        local packet = table.concat({ "global", id, tostring(authoredAt), "*",
+            "Origin Player," .. sender, "C", "zone:Alliance:" .. string.rep("1", 400) }, "|")
+        local parts = {}
+        local count = math.ceil(#packet / 170)
+        assert(count > 1, "Fixture must exercise multi-fragment reassembly")
+        for part = 1, count do
+            parts[part] = id .. ":" .. part .. ":" .. count .. ":"
+                .. packet:sub((part - 1) * 170 + 1, part * 170)
+        end
+        return parts
+    end
+    local function receive(sender)
+        local parts = fragments(sender)
+        for part = #parts, 1, -1 do
+            net:ReceiveFragment(parts[part], sender, transport)
+        end
+    end
+    local handledBefore, queuedBefore = delivered, queued("C")
+    failNext = true
+    receive("First Bridge")
+    assert(delivered == handledBefore + 1 and queued("C") == queuedBefore,
+        transport .. ": first fragmented copy was not handled exactly once")
+    now = now + 5
+    receive("Second Bridge")
+    assert(delivered == handledBefore + 1, transport .. ": retry handled the event twice")
+    assert(queued("C") == queuedBefore + 1, transport .. ": fragmented copy did not retry forwarding")
+    local attemptsAfter = attempts
+    receive("Second Bridge")
+    receive("Third Bridge")
+    assert(attempts == attemptsAfter and delivered == handledBefore + 1,
+        transport .. ": already-forwarded fragments were retried or delivered again")
+end
+print("Beta broadcast retry: fragmented channel/group/whisper/BNet copies retry without double delivery")

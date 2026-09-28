@@ -1,4 +1,9 @@
-1.1.5
+1.1.6
+
+**Overlord Forever 1.1.6**
+
+- Preserve the age of outpost and fortress observations restored at login. An observer returning after an assault no longer announces an inferred neutral state as a new event that can erase a capture completed while offline. Actual local abandons remain dated and synchronized.
+- Retry refused broadcast forwards when another copy arrives through fragmented channel, group, whisper or Battle.net messages, without handling the event twice locally.
 
 **Overlord Forever 1.1.5**
 
