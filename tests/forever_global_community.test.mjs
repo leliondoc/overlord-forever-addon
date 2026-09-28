@@ -4,13 +4,16 @@ import test from "node:test";
 
 const read = (name) => readFileSync(new URL(`../${name}`, import.meta.url), "utf8");
 
-test("Forever uses one global community and keeps the fallback relay active", () => {
+test("Forever uses no community: channel + Battle.net relay only", () => {
     const core = read("Core.lua");
     const pools = read("RealmPools.lua");
     const sync = read("Sync.lua");
     const beta = read("SyncBetaNetwork.lua");
 
-    assert.match(core, /^Overlord\.CommunityModeEnabled = true$/m);
+    assert.match(core, /^Overlord\.CommunityModeEnabled = false$/m);
+    // Presence comes from the relay heartbeat only, never from a community scan.
+    const scan = sync.slice(sync.indexOf("function Overlord.Sync:ScanCommunityMembers("));
+    assert.doesNotMatch(scan.slice(0, scan.indexOf("\nend")), /Broadcast\("NH"/);
     assert.match(core, /^Overlord\.BetaNetworkEnabled = true$/m);
     assert.match(sync, /global\s*=\s*\{\s*"0m7kdXcnvR"\s*\}/);
     assert.match(pools, /function RealmPools:GetOverlordPoolTag\(\)[\s\S]*?return "global"/);

@@ -1,4 +1,12 @@
-1.1.4
+1.1.5
+
+**Overlord Forever 1.1.5**
+
+- Fortress pins show again on their zone maps (for example Wetlands), not only on the continent maps. Fortress captures measure your position on a map this client really has.
+- An interrupted outpost or fortress capture that falls back to neutral now reaches every player who saw the assault start. Before, they could stay stuck on "capturing" for the aborted guild.
+- Guild standings converge across factions: second-hand guild information now follows the most recent date, as on Retail, while a guild confirmed by the player or by a catch-up page stays protected. This fixes guild totals that differed between Horde and Alliance.
+- Overlord no longer uses communities on Forever: data travels through the faction channel, groups and Battle.net bridges only. Presence is announced every 120 seconds instead of 45, and no longer resent after each capture.
+- Relay: routine packets (outpost states, guild requests, raid alerts) can no longer wait behind presence until they expire, while presence keeps enough room to hold multi-hop routes. A capture, victory or reset event refused by a busy relay is forwarded when another copy arrives. Map replies no longer carry outposts and fortresses that were never captured.
 
 **Overlord Forever 1.1.4**
 

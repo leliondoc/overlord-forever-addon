@@ -80,10 +80,12 @@ C_Club.GetSubscribedClubs = function()
     return { { clubId = 777, name = "Overlord Forever", clubType = Enum.ClubType.Character } }
 end
 C_Club.GetClubMembers = function() return {} end
--- The Community button forces a fresh scan immediately after a mid-session join,
--- even when the preceding scan cached that no community was present.
-assert(s:FindCommunityClub(true) == 777, "Global Overlord community was not discovered after joining")
-assert(s:IsStrategicSiteCommunitySender("Remote Tester"), "Routed keep sender lost its trust context")
+-- Forever has no cross-faction community: even a subscribed "Overlord" club is
+-- never used, and trust in a routed sender comes from the relay alone.
+assert(Overlord.CommunityModeEnabled == false, "Community mode must stay off on Forever")
+assert(s:FindCommunityClub(true) == nil, "An Overlord club was used although communities are disabled")
+assert(#s:FindAllCommunityClubs() == 0, "Club scan returned clubs although communities are disabled")
+assert(s:IsStrategicSiteCommunitySender("Remote Tester"), "Routed sender lost its relay trust context")
 -- A second score through fragmented R2 reaches the same production receiver.
 local payload = killPayload("Bridge Tester", 4)
 packet = wire(2, "K", payload, "Bridge Tester")

@@ -1815,8 +1815,9 @@ end
 -- force=true : bypasse le cooldown scanInterval (utilise apres BroadcastCapture pour propagation
 -- immediate cross-realm / cross-faction sans attendre le prochain cycle de 120s).
 function Overlord.Sync:ScanCommunityMembers(force)
-    local betaSent = Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork
-        and Overlord.BetaNetwork:Broadcast("NH", Overlord.Version) or 0
+    -- Presence is announced by the relay heartbeat only. Re-sending NH here on
+    -- every capture, login and /ov sync duplicated it without adding a route.
+    local betaSent = 0
     if Overlord.CommunityModeEnabled == false then return betaSent end
     -- C_Club retourne des tables "forbidden" en instance PvP : ne pas iterer du tout
     if Overlord.InstanceSuspended then return betaSent end

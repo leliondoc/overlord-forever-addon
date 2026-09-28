@@ -1,9 +1,9 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.1.4"
--- Forever uses one global community. The beta relay remains enabled in parallel
--- so non-members and temporarily unavailable C_Club rosters still converge.
-Overlord.CommunityModeEnabled = true
+Overlord.Version = "1.1.5"
+-- Forever has no cross-faction community: Overlord never uses C_Club clubs there.
+-- Transport is the faction channel, the group, and the Battle.net relay bridges.
+Overlord.CommunityModeEnabled = false
 Overlord.BetaNetworkEnabled = true
 Overlord.IsInitialized = false
 Overlord.PlayerFaction = nil

@@ -786,8 +786,9 @@ function Overlord.Leaderboard:GetHotPlayerGuildState(playerName)
         direct and direct.guildAuth == true or false
 end
 
--- Un relais peut renseigner une guilde inconnue, pas changer une affiliation.
--- Seul le personnage concerne (GI/K) confirme un changement ou un depart.
+-- Un relais peut renseigner ou mettre a jour une guilde de seconde main (la date la
+-- plus recente gagne, comme sur Retail), jamais ecraser une guilde confirmee par le
+-- personnage (GI/K) ou par une page de rattrapage sollicitee, ni propager un depart.
 function Overlord.Leaderboard:ShouldAcceptSyncedGuild(playerName, incomingGuild, incomingGuildAt)
     incomingGuild = sanitizeGuildName(incomingGuild)
     if incomingGuild == "" then return false end
@@ -796,8 +797,12 @@ function Overlord.Leaderboard:ShouldAcceptSyncedGuild(playerName, incomingGuild,
         playerName = sync:NormalizeContributorFullName(playerName)
     end
     if not playerName or playerName == "" then return false end
-    local existing, _, authoritative = self:GetHotPlayerGuildState(playerName)
-    return existing == "" and not authoritative
+    local existing, existingAt, authoritative = self:GetHotPlayerGuildState(playerName)
+    if authoritative then return false end
+    local direct = self.playerInfo and self.playerInfo[playerName]
+    if direct and direct.guildReplica == true then return false end
+    if existing == "" then return true end
+    return guildLwwValueWins(incomingGuild, normalizeGuildAt(incomingGuildAt), existing, existingAt)
 end
 
 function Overlord.Leaderboard:IsLocalPlayerGuildTarget(playerName)
@@ -3419,17 +3424,18 @@ function Overlord.Leaderboard:MergeLeaderboardKillMetadata(
         end
     end
 
-    -- Seules les pages LK sollicitees passent en LWW entre registres forts.
-    -- Un LK tiers spontane peut toujours remplir un champ vide, mais ne peut
-    -- pas changer une guilde connue ni propager un depart. guildSnapshot doit
-    -- provenir du gate HR/pagination attendu, jamais d'un bit du paquet.
+    -- Registres forts : confirmation du personnage (guildAuth) ou page LK sollicitee
+    -- (guildReplica). Un LK tiers spontane ne peut jamais ecraser un registre fort ni
+    -- propager un depart ; entre deux informations de seconde main, la date la plus
+    -- recente gagne (regle Retail). Sinon la premiere guilde recue restait figee chez
+    -- l'autre faction, qui ne voit jamais le K direct du joueur (ecart EMPIRE).
+    -- guildSnapshot doit provenir du gate HR/pagination attendu, jamais d'un bit du paquet.
     local guildFactionCompatible = faction ~= "Alliance" and faction ~= "Horde"
         or (row.faction or "") == "" or row.faction == faction
     local snapshot = guildSnapshot == true and guildAuthoritative ~= true
     if hasGuildRegister and (guildAuthoritative == true
         or (snapshot and guildFactionCompatible)
         or (row.guildAuth ~= true and row.guildReplica ~= true
-            and sanitizeGuildName(row.guild or "") == ""
             and sanitizeGuildName(guild or "") ~= "" and guildFactionCompatible)) then
         local incomingGuild = sanitizeGuildName(guild or "")
         local incomingAt = normalizeGuildAt(guildAt)
@@ -3443,7 +3449,12 @@ function Overlord.Leaderboard:MergeLeaderboardKillMetadata(
                 and row.guildReplica ~= true then
                 wins = true
             elseif not snapshot and guildAuthoritative ~= true then
-                wins = currentGuild == "" and incomingGuild ~= ""
+                -- Seconde main contre seconde main (le filtre ci-dessus exclut un
+                -- registre fort) : une guilde vide (inconnue ou ancien faux depart
+                -- relaye) se remplit toujours ; entre deux guildes, la date la plus
+                -- recente gagne.
+                wins = incomingGuild ~= "" and (currentGuild == ""
+                    or guildLwwValueWins(incomingGuild, incomingAt, currentGuild, currentAt))
             elseif row.guildAuth == true or row.guildReplica == true or snapshot then
                 wins = guildRecordWins(incomingGuild, incomingAt,
                     guildAuthoritative == true, currentGuild, currentAt,

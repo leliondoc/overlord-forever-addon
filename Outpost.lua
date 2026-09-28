@@ -201,9 +201,47 @@ local function mapDescendsFrom(mapID, ancestorMapID)
     return false
 end
 
+-- Lowercased map name per uiMapID. The world map resolves sites every frame and
+-- map names never change during a session: one C_Map call per map, ever.
+local mapNameLowerCache = {}
+local mapExistsCache = {}
+local function lowerMapName(mapID)
+    local cached = mapNameLowerCache[mapID]
+    if cached ~= nil then return cached or nil end
+    if not C_Map or not C_Map.GetMapInfo then return nil end
+    local ok, info = pcall(C_Map.GetMapInfo, mapID)
+    if not ok or not info then return nil end -- transient while loading: retry later
+    local name = type(info.name) == "string" and info.name:lower() or false
+    mapNameLowerCache[mapID] = name
+    return name or nil
+end
+
+-- Fortress zones (e.g. Les Paluns) can be shown on a named map whose uiMapID is
+-- not listed on Forever. 1.1.3 matched these by name; keep that for fortresses
+-- only, on the map itself (never through a parent: starter camps stay excluded).
+-- Result memo per site and map (like the 1.1.3 resolver): the world map asks on
+-- every frame, so after the first answer this is a single table read.
+local fortressNameMatchMemo = {}
+local function fortressMapNameMatches(site, mapID)
+    if not site.isFortress or not site.mapNameNeedles then return false end
+    local memo = fortressNameMatchMemo[site]
+    if not memo then memo = {}; fortressNameMatchMemo[site] = memo end
+    local cached = memo[mapID]
+    if cached ~= nil then return cached end
+    local name = lowerMapName(mapID)
+    if not name then return false end -- map not loaded yet: do not memoize a miss
+    local matched = false
+    for _, needle in ipairs(site.mapNameNeedles) do
+        if name:find(needle:lower(), 1, true) then matched = true; break end
+    end
+    memo[mapID] = matched
+    return matched
+end
+
 local function standaloneSiteMatchesPlayerMap(site, mapID)
     if not site or not site.standaloneOpenWorld then return false end
     if outpostSiteMatchesMapID(site, mapID) then return true end
+    if fortressMapNameMatches(site, mapID) then return true end
     if site.includeChildMaps == false then return false end
     return mapDescendsFrom(mapID, site.mapID)
 end
@@ -313,11 +351,16 @@ function Overlord.Outpost:GetSitesForFront(frontId)
     return sitesByFront[frontId] or {}
 end
 
+-- World-map dispatch only: "is this an outpost detail map?". Fortresses are
+-- standalone sites too, but the outpost renderer skips them (GetSitesOnMap) and
+-- the fortress branch comes after this one: counting them here swallowed their
+-- zone map (e.g. Les Paluns) and left it with no pin at all.
 function Overlord.Outpost:IsStandaloneOpenWorldDisplayMap(mapID)
     if not mapID then return false end
-    if standaloneSiteByDisplayMapID[mapID] then return true end
+    local indexed = standaloneSiteByDisplayMapID[mapID]
+    if indexed and not indexed.isFortress then return true end
     for _, site in pairs(standaloneSites) do
-        if standaloneSiteMatchesDisplayMap(site, mapID) then return true end
+        if not site.isFortress and standaloneSiteMatchesDisplayMap(site, mapID) then return true end
     end
     return false
 end
@@ -513,6 +556,29 @@ function Overlord.Outpost:GetGeometryMapID(site)
     if Overlord.Fronts and site.frontId then
         local frontMapID = Overlord.Fronts:GetMapID(site.frontId)
         if frontMapID then return frontMapID end
+    end
+    -- Fortresses (as in 1.1.3): measure on the player's map when it is the site's
+    -- map (named sub-maps included), else on the first listed map this client
+    -- actually has. A hard-coded ID missing on Forever meant no position at all.
+    if site.isFortress then
+        local playerMap = self.GetPlayerMapID and self:GetPlayerMapID()
+        if playerMap and self:IsOutpostSiteDisplayMap(playerMap, site) then return playerMap end
+        -- Map existence never changes in a session; pin layout calls this while
+        -- the world map is panned, so ask C_Map once per ID.
+        local function mapExists(id)
+            if not id then return false end
+            local known = mapExistsCache[id]
+            if known ~= nil then return known end
+            if not C_Map or not C_Map.GetMapInfo then return false end
+            local ok, info = pcall(C_Map.GetMapInfo, id)
+            if not ok then return false end -- API not ready: retry later
+            mapExistsCache[id] = info ~= nil
+            return info ~= nil
+        end
+        if mapExists(site.mapID) then return site.mapID end
+        for id in pairs(site.mapIDs or {}) do
+            if mapExists(id) then return id end
+        end
     end
     return site.mapID
 end
@@ -1069,6 +1135,11 @@ function Overlord.Outpost:ApplyOutpostRestoreZoneView(st, view, site)
         st.previousClaimedAt = 0
         st.previousExpiresAt = 0
         st.previousOwnerPool = ""
+        -- Date the revert like the held branch. Keeping the assault-start stamp made
+        -- the neutral OP tie with the in_progress OP peers already had, and the
+        -- equal-timestamp tie-break ("neutral" >= "in_progress") kept them stuck on
+        -- the aborted assault for good.
+        st.updatedAt = time()
     end
     if view._restoredInProgress then
         st.updatedAt = time()

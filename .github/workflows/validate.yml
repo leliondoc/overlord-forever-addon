@@ -83,6 +83,12 @@ jobs:
           lua5.1 tests/forever_capture_locations.test.lua
           lua5.1 tests/forever_silverpine_outpost.test.lua
           lua5.1 tests/forever_fortress_outpost.test.lua
+          lua5.1 tests/forever_fortress_named_maps.test.lua
+          lua5.1 tests/forever_outpost_sr_neutral.test.lua
+          lua5.1 tests/forever_outpost_revert_neutral.test.lua
+          lua5.1 tests/forever_guild_weak_lww.test.lua
+          lua5.1 tests/forever_beta_multihop_presence.test.lua
+          lua5.1 tests/forever_beta_broadcast_retry.test.lua
           lua5.1 tests/forever_lesi_bear_cave_outpost.test.lua
           lua5.1 tests/forever_beta_sr_responders.test.lua
           lua5.1 tests/forever_beta_login_catchup.test.lua
@@ -90,6 +96,7 @@ jobs:
           lua5.1 tests/forever_map_login.test.lua
           lua5.1 tests/forever_beta_network.test.lua
           lua5.1 tests/forever_beta_presence_reservations.test.lua
+          lua5.1 tests/forever_beta_presence_cadence.test.lua
           lua5.1 tests/forever_beta_pending_duplicates.test.lua
           lua5.1 tests/forever_enemy_live_alerts.test.lua
           lua5.1 tests/forever_beta_fragment_expiry.test.lua

@@ -1290,6 +1290,15 @@ end
 -- hors ligne pendant un abandon conserverait indefiniment son ancien assaut.
 local SR_MINIMAL_OP_SITE_MAX = 16
 
+-- A neutral site that never changed state (timestamp 0) tells a receiver nothing:
+-- it is neutral there too, and a zero timestamp never wins a merge. Since 1.1.4
+-- the five fortresses start neutral, so every SR answer carried up to twelve such
+-- OP packets. A site that became neutral again (abandon) keeps its timestamp and
+-- is still sent, so peers clear their stale state.
+local function IsNeverTouchedNeutral(st)
+    return st and st.status == "neutral" and OutpostSyncTimestamp(st) <= 0
+end
+
 function Overlord.Sync:AppendOutpostToSrQueue(queue, minimalResponseOnly)
     if not queue or not Overlord.Outpost or not Overlord.OutpostSites then return end
     if minimalResponseOnly then
@@ -1319,7 +1328,7 @@ function Overlord.Sync:AppendOutpostToSrQueue(queue, minimalResponseOnly)
         for siteKey in pairs(Overlord.OutpostSites) do
             if added >= SR_MINIMAL_OP_SITE_MAX * 3 then break end
             local st = Overlord.Outpost:GetState(siteKey)
-            if st and st.status == "neutral" then
+            if st and st.status == "neutral" and not IsNeverTouchedNeutral(st) then
                 local opData = self.BuildOutpostPayload and self:BuildOutpostPayload(siteKey)
                 if opData then
                     table.insert(queue, { type = "OP", data = opData })
@@ -1330,7 +1339,9 @@ function Overlord.Sync:AppendOutpostToSrQueue(queue, minimalResponseOnly)
         return
     end
     for siteKey in pairs(Overlord.OutpostSites) do
-        local opData = self.BuildOutpostPayload and self:BuildOutpostPayload(siteKey)
+        local st = Overlord.Outpost:GetState(siteKey)
+        local opData = not IsNeverTouchedNeutral(st)
+            and self.BuildOutpostPayload and self:BuildOutpostPayload(siteKey)
         if opData then
             table.insert(queue, { type = "OP", data = opData })
         end

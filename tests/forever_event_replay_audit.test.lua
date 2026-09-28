@@ -54,8 +54,14 @@ local outpostRows = {}
 for i, status in ipairs(opStates) do
     local key = "outpost" .. i
     Overlord.OutpostSites[key] = {}
-    outpostRows[key] = { status = status, ownerGuild = status == "held" and "Empire" or "" }
+    -- A neutral that clears a stale assault is a dated abandon: an undated neutral
+    -- can never override in_progress/held (Outpost:ApplyRemoteState).
+    outpostRows[key] = { status = status, ownerGuild = status == "held" and "Empire" or "",
+        updatedAt = status == "neutral" and 1790016000 or nil }
 end
+-- A site that never changed state carries no information and is not replayed.
+Overlord.OutpostSites.untouched = {}
+outpostRows.untouched = { status = "neutral", ownerGuild = "" }
 Overlord.Outpost.GetState = function(_, key) return outpostRows[key] end
 sync.BuildOutpostPayload = function(_, key) return key end
 local queue = {}
@@ -66,9 +72,11 @@ for _, row in ipairs(queue) do
     seen[row.data] = true
 end
 for key in pairs(Overlord.OutpostSites) do
-    assert(seen[key], "Minimal SR omitted outpost " .. key)
+    if key ~= "untouched" then assert(seen[key], "Minimal SR omitted outpost " .. key) end
 end
+assert(not seen.untouched, "Minimal SR replayed a never-touched neutral site")
 assert(#queue == 7, "Minimal SR duplicated or dropped an outpost")
+Overlord.OutpostSites.untouched, outpostRows.untouched = nil, nil
 
 -- Fortress sites participate in this same replay; the retired GK queue is gone.
 for i = 1, 5 do

@@ -23,6 +23,21 @@ local MAP_CATCHUP_EXTRA = 2
 local MAP_RELAY_BATCH = 32
 local CATCHUP_RATE = 300
 local STATE_QUEUE, STATE_RATE = 24, 250
+-- Ordinary packets (routine outpost/fortress states, guild/class requests, alerts)
+-- are served after urgent ones. A continuous stream of relayed presence/progress
+-- kept them waiting until the 120 s TTL expired; after this wait one of them goes
+-- first. Terminal events (C, ZR, OC, TV...) still always pass before.
+local BULK_MAX_WAIT = 20
+-- ... but at most one such aged packet per second. Under overload every bulk item
+-- is older than 20 s: unbounded, this inverted priorities for good and the urgent
+-- lane (relayed presence included) stopped draining, so far peers lost their route.
+local BULK_AGED_SERVE_INTERVAL = 1
+local lastBulkAgedServeAt = -1000
+-- Presence keeps routes (and the ~lp6 capability) alive for multi-hop catch-up.
+-- Ordinary traffic may take back a borrowed presence slot only while presence
+-- holds more than half the queue: below that floor a busy hop evicted every
+-- relayed NH before it left and far peers lost their route for good.
+local PRESENCE_RECLAIM_FLOOR = 64
 -- All four lanes share the same 1,000 B/s budget and 128-packet bound.
 -- Addressed ranking/map data has a 300 B/s service share; bounded DX/VB
 -- snapshots have 250 B/s. Presence and timer updates use the remainder.
@@ -346,15 +361,33 @@ local channelHeard, channelHeardOrder = {}, {}
 -- least NH_FORWARD_SEC after the last forwarded one. Measured on a 3-friend
 -- bridge, presence was ~95% of relay bytes. Deciding on the author's timestamp
 -- (identical at every hop) instead of the arrival time keeps every relay's
--- choice the same whatever the transit delays: with 45 s heartbeats one in two
--- is forwarded (every 90 s), and even after one lost copy plus delay a peer is
--- heard again within ~200 s, well under the 5 min peer TTL.
+-- choice the same whatever the transit delays.
 local NH_FORWARD_SEC = 90
+-- Presence heartbeat. Any relayed packet already refreshes its origin's route,
+-- so NH only has to keep silent peers and the ~lp6 capability (both 300 s TTL,
+-- also in older clients) alive. Every 120 s heartbeat passes the 90 s forward
+-- filter; after one lost copy the peer is heard again within 240 s < 300 s.
+-- 45 s used to refresh each route six times per TTL for nothing.
+local NH_INTERVAL = 120
 local nhForwarded, nhForwardedOrder = {}, {}
 -- A presence capability is only a protocol hint, never proof of an origin's
 -- identity or authority. Generic traffic may refresh a route, but not this TTL.
 local pagedCapabilities, pagedCapabilityOrder = {}, {}
 local seenOrder, recentOrder, assemblyOrder, peerOrder = {}, {}, {}, {}
+-- Broadcast packets handled here whose forward was refused (full queue): a copy
+-- of the same origin:id arriving through another bridge may retry the forward
+-- only, without being handled locally a second time. Bounded, TTL-limited.
+local forwardRetry, forwardRetryOrder = {}, {}
+local function forwardRetryKey(wire)
+    if type(wire) ~= "string" then return nil end
+    local _, id, _, target, path = strsplit("|", wire, 6)
+    local origin = path and path:match("^[^,]+")
+    if target ~= "*" or not id or not origin then return nil end
+    local key = origin:lower() .. ":" .. id
+    local at = forwardRetry[key]
+    if at and GetTime() - at <= TTL then return key end
+    return nil
+end
 local serial = 0
 local session = tostring(time()) .. "-" .. tostring(math.random(1, 2147483646))
 local function enabled() return addon.BetaNetworkEnabled ~= false end
@@ -722,8 +755,12 @@ function net:Queue(p, immediate)
     local lane = laneFor(p)
     local wire, item
     if not replace and not hasLaneRoom(lane, p) then
-        local reclaimPresence = p.kind ~= "NH" and (catchup or urgent or lane == stateLane)
-            and hasLaneRoom(lane, p, true)
+        -- Priority lanes may always take back a slot an unsent presence borrowed.
+        -- Ordinary packets (guild/class requests, alerts, broadcast SR) only when
+        -- presence exceeds PRESENCE_RECLAIM_FLOOR, so routes keep a lane.
+        local reclaimPresence = p.kind ~= "NH" and hasLaneRoom(lane, p, true)
+            and (catchup or urgent or lane == stateLane
+                or reclaimablePresenceCount() > PRESENCE_RECLAIM_FLOOR)
         -- A malformed or unroutable map page must not evict a live progress
         -- packet just because it claimed a known target.
         if mapCatchup or lane == stateLane or reclaimPresence then
@@ -780,6 +817,7 @@ function net:Queue(p, immediate)
         return true
     end
     if presenceKey then pendingPresence[presenceKey] = item end
+    item.queuedAt = GetTime()
     countKind(p.kind, "queued")
     -- A lease release may use the currently available budget synchronously before
     -- entering an instance, but never bypasses that budget.
@@ -855,6 +893,15 @@ pump = function()
     if bulkIndex and (not urgentIndex or bulkLane.items[bulkIndex].index > 1) then
         lane, index = bulkLane, bulkIndex
     end
+    if lane == urgentLane and bulkIndex and urgentIndex
+        and not isTerminal(urgentLane.items[urgentIndex].p)
+        and stamp - lastBulkAgedServeAt >= BULK_AGED_SERVE_INTERVAL then
+        local waiting = bulkLane.items[bulkIndex]
+        if stamp - (waiting.queuedAt or stamp) >= BULK_MAX_WAIT then
+            lane, index = bulkLane, bulkIndex
+            lastBulkAgedServeAt = stamp
+        end
+    end
     local terminalReady = urgentIndex and isTerminal(urgentLane.items[urgentIndex].p)
     if stateIndex and not terminalReady then
         local it = stateLane.items[stateIndex]
@@ -915,7 +962,7 @@ pump = function()
             local deferLane = lane
             if hasLaneRoom(deferLane, item.p) then
                 deferLane.items[#deferLane.items + 1] = {
-                    p = item.p, tasks = { task }, index = 1, protected = item.protected,
+                    p = item.p, tasks = { task }, index = 1, protected = item.protected, queuedAt = item.queuedAt,
                 }
             elseif lane == stateLane or (lane == catchupLane and isPagedCatchup(item.p)) then
                 -- Keep an accepted state or paged packet's deferred copy in its
@@ -935,7 +982,7 @@ pump = function()
             local retryLane = lane
             if task.retries <= 3 and hasLaneRoom(retryLane, item.p) then
                 retryLane.items[#retryLane.items + 1] = {
-                    p = item.p, tasks = { task }, index = 1, protected = item.protected,
+                    p = item.p, tasks = { task }, index = 1, protected = item.protected, queuedAt = item.queuedAt,
                 }
             elseif task.retries <= 3 and (lane == stateLane
                 or (lane == catchupLane and isPagedCatchup(item.p))) then
@@ -1011,8 +1058,14 @@ end
 function net:Receive(wire, sender, transport, bnetID, decoded)
     if not active() then return false end
     -- Copies of an already processed packet (other bridges, group + channel) are
-    -- rejected before any decode; the result is the same false as below.
-    if alreadySeen(wire, sender) then return false end
+    -- rejected before any decode; the result is the same false as below. The one
+    -- exception is a broadcast whose forward was refused here: that copy only
+    -- retries the forward.
+    local retryForward = false
+    if alreadySeen(wire, sender) then
+        if not forwardRetryKey(wire) then return false end
+        retryForward = true
+    end
     local p = decoded or decode(wire)
     if not p or not sender or not same(p.path[#p.path], sender) then return false end
     local me = sync:GetPlayerFullName()
@@ -1021,7 +1074,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     for _, node in ipairs(p.path) do if node:lower() == meKey then return false end end
     local origin = p.path[1]
     local key = origin:lower() .. ":" .. p.id
-    if seen[key] then return false end
+    if seen[key] and not retryForward then return false end
     local addressed = p.target == "*" or same(p.target, me)
     -- An intermediate targeted hop can reject a packet after route lookup or
     -- queue admission. Do not seal origin:id until at least one forwarding task
@@ -1037,7 +1090,9 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         }, 128)
     end
     self.stats.received = self.stats.received + 1
-    if addressed and p.kind ~= "NH" then
+    if retryForward then
+        -- Already handled locally: skip delivery, capability and pulls.
+    elseif addressed and p.kind ~= "NH" then
         local previous = self.context
         self.context = { origin = origin, gateway = sender, hops = #p.path - 1,
             kind = p.kind, payload = p.payload, targeted = p.target ~= "*", transport = transport }
@@ -1097,6 +1152,13 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
             or (heardAt ~= nil and GetTime() - heardAt <= 300)
 
         forwarded = self:Queue(p) == true
+        if p.target == "*" then
+            if forwarded then
+                forwardRetry[key] = nil
+            elseif not retryForward then
+                remember(forwardRetry, forwardRetryOrder, key, GetTime(), 256)
+            end
+        end
         if forwarded then
             if pendingForward then remember(seen, seenOrder, key, GetTime(), 2048) end
             if p.kind == "NH" then
@@ -1152,5 +1214,5 @@ function net:Start()
         if active() then net:Broadcast("NH", addon.Version) end
     end
     C_Timer.After(3, hello)
-    self.ticker = C_Timer.NewTicker(45, hello)
+    self.ticker = C_Timer.NewTicker(NH_INTERVAL, hello)
 end
