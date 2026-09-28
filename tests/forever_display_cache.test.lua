@@ -6,7 +6,16 @@ local lb = Overlord.Leaderboard
 local campaign = lb:GetCurrentCampaignStart()
 function IsInInstance() return false end
 local timers, head = {}, 1
-C_Timer.After = function(_, callback) timers[#timers + 1] = callback end
+local timerNow = GetTime()
+function GetTime() return timerNow end
+C_Timer.After = function(delay, callback)
+    timers[#timers + 1] = function()
+        -- Honor delayed callbacks: the display cooldown reads GetTime when
+        -- its single deferred timer fires.
+        timerNow = timerNow + math.max(0, tonumber(delay) or 0)
+        callback()
+    end
+end
 local function drain()
     local steps = 0
     while head <= #timers do
@@ -29,6 +38,7 @@ for i = 1, 6000 do
     local name = "Cached Player" .. string.char(65 + math.floor(i / 676), 65 + math.floor(i / 26) % 26, 65 + i % 26)
     names[i] = name
     lb.kills[name] = math.ceil(i / 2)
+    lb.captureCount[name] = math.ceil(i / 20)
     lb.playerInfo[name] = { class = "WARRIOR", faction = "Horde", guild = "Cache Guild",
         guildAuth = true, guildAt = time(), locale = "engb", race = "Orc", raceSex = 2, level = 2 }
 end
@@ -40,6 +50,7 @@ assert(not lb:EnsureDisplayCache().ready)
 drain()
 local first = lb:EnsureDisplayCache()
 assert(first.ready and #first.sortedKills == 5000)
+assert(#first.byFaction.Horde == 500)
 local saved = assert(OverlordDB.leaderboardDisplayCache)
 assert(#saved.sortedKills == 5000 and #saved.sortedGuilds == 1)
 assert(saved.killSource == nil and saved.playerInfoSource == nil,
@@ -56,6 +67,7 @@ local preview = lb:EnsureDisplayCache()
 assert(preview.ready and preview.fromSavedCache and #preview.sortedKills == 500,
     "Reload did not immediately return the saved ranking")
 assert(preview.sortedKills[1].name == names[5999] and preview.sortedKills[1].kills == 3000)
+assert(#preview.byFaction.Horde == 25, "Reload synchronously copied the expanded capture list")
 assert(next(lb.kills) == nil and next(lb.playerInfo) == nil,
     "Presentation cache was merged into authoritative scores")
 assert(#timers == 0 and networkCalls == 0, "Painting a saved view started unbound work or network traffic")
@@ -77,6 +89,8 @@ for _ = 1, 50 do assert(lb:EnsureDisplayCache() == loading) end
 drain()
 local live = lb:EnsureDisplayCache()
 assert(live.ready and not live.fromSavedCache and #live.sortedKills == 5000)
+assert(#live.byFaction.Horde == 500 and live.byFaction.Horde[500].name == first.byFaction.Horde[500].name,
+    "Sliced initialization did not restore the full capture ranking")
 assert(live.sortedGuilds[1].kills == first.sortedGuilds[1].kills)
 assert(networkCalls == 0, "Cache refresh queried the network")
 for _ = 1, 50 do assert(lb:EnsureDisplayCache() == live) end

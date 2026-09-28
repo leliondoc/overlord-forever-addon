@@ -15,7 +15,7 @@ local popups = Overlord.Popups
 assert(popups:TryShowNextLoginAnnouncement() == false, "Welcome popup returned with an unloaded save")
 assert(popups:TryShowNextDailyAnnouncement() == false, "Daily popup returned with an unloaded save")
 assert(popups:TryShowFeaturedFrontOnLogin() == false, "Featured front returned with an unloaded save")
-assert(popups:TryShowGuildKeepSiegeReminder() == false, "Siege reminder returned with an unloaded save")
+assert(popups.TryShowGuildKeepSiegeReminder == nil, "Retired siege reminder is still installed")
 
 -- A valid saved table still permits unseen announcements.
 Overlord.SavedVariablesLoadedAtLogin = true

@@ -145,3 +145,13 @@ local visibleTranslationFixes = {
 }
 visibleTranslationFixes.esMX = visibleTranslationFixes.esES
 for key, value in pairs(visibleTranslationFixes[locale] or {}) do L[key] = value end
+
+-- Fortresses now follow the same rules as outposts; no timed sieges or daily awards.
+do
+    local L = Overlord.L
+    local fr = GetLocale() == "frFR"
+    L.FORTRESS_CAPTURE_AVAILABLE = fr and "Capture disponible à toute heure" or "Capture available at any time"
+    L.FORTRESS_OUTPOST_GUIDE_BODY = fr
+        and "%s\n\nComme les avant-postes : capture à toute heure en %d minutes, possession jusqu’à une reprise ou au reset de campagne. Le classement Forteresses compte les captures, dans sa colonne séparée."
+        or "%s\n\nLike outposts: capture at any time in %d minutes, ownership until recapture or campaign reset. The separate Fortresses leaderboard counts captures."
+end

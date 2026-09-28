@@ -18,10 +18,10 @@ test("Forever uses one global community and keeps the fallback relay active", ()
     assert.match(beta, /NormalizeRegionPool\(pool\)/);
 });
 
-test("Forever Guild Keeps use four realm-time siege windows", () => {
-    const keep = read("GuildKeep.lua");
-    assert.match(keep, /SIEGE_INTERVAL_MINUTE = 6 \* 60/);
-    assert.match(keep, /SIEGE_FIRST_START_MINUTE = 3 \* 60/);
-    assert.match(keep, /hour, minute = GetGameTime\(\)/);
-    assert.match(keep, /SIEGE_WINDOW_DURATION_MINUTE = 60/);
+test("Fortresses share the Outpost engine without loading siege controllers", () => {
+    const toc = read("Overlord.toc");
+    assert.match(toc, /^GuildKeepSites\.lua$/m);
+    assert.match(toc, /^OutpostControl\.lua$/m);
+    assert.doesNotMatch(toc, /GuildKeepControl|GuildKeepImmersion|SyncGuildKeep/);
+    assert.doesNotMatch(read("GuildKeep.lua"), /SIEGE_INTERVAL|SiegeWindow|DailyProof/);
 });

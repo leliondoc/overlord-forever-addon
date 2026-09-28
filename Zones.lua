@@ -334,6 +334,34 @@ function Overlord.Zones:GetBaseZoneFixedOwner(zoneId)
     return nil
 end
 
+-- ApplyFactionConfig initialise seulement le front actif. Sans SavedVariables,
+-- les capitales des six autres fronts restent owner=nil : un ZA global les
+-- serialise alors en N et chaque receveur rejette le lot entier. Completer les
+-- bases absentes APRES restore, sans toucher aux captures ni aux baux existants.
+function Overlord.Zones:InitializeMissingCapitalDefaults()
+    local fronts = Overlord.Fronts and Overlord.Fronts.Registry
+    if not fronts then return end
+    local campaignStart = (Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs())
+        or (OverlordDB and tonumber(OverlordDB.lastResetTimestamp)) or 0
+    if campaignStart <= 0 then return end
+    for frontId, front in pairs(fronts) do
+        local resetEpoch = OverlordDB and OverlordDB.frontTruceResetEpoch
+            and tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0
+        local baseline = math.max(campaignStart, resetEpoch)
+        for _, zone in ipairs(front.zones or {}) do
+            local fixedOwner = self:GetBaseZoneFixedOwner(zone.id)
+            if fixedOwner and not zone.owner and zone.status ~= "in_progress"
+                and not zone._captureFinalUnattested
+                and (tonumber(zone.capturedTime) or 0) <= 0 then
+                zone.owner = fixedOwner
+                zone.status = fixedOwner == Overlord.PlayerFaction and "captured" or "locked"
+                zone.capturedTime = baseline
+                zone.updatedAt = baseline
+            end
+        end
+    end
+end
+
 function Overlord.Zones:GetInterruptedCaptureRevertOwner(zone)
     if not zone then return nil end
     -- StartHoldTimer pose owner = PlayerFaction identique a previousOwner sur defense d'un point deja allie.

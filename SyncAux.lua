@@ -579,6 +579,18 @@ end
 
 -- Surcharge les versions de base de Sync.lua pour garder la logique passif/communaute
 -- hors du chunk principal, deja proche de la limite WoW des 200 locals.
+function Overlord.Sync:SendTargetedObserverMapRequest(zone, payload)
+    local remote = zone and zone._remoteCaptureLease
+    local origin = remote and remote.originName or (zone and zone.lastZSSender)
+    local beta = Overlord.BetaNetwork
+    if not origin or not payload or payload == "" or not beta or not beta.IsPeer
+        or not beta:IsPeer(origin) or not self.SendWhisper
+        or not self.IsValidWhisperTarget or not self:IsValidWhisperTarget(origin)
+        or (self.ForeverIdentitiesMatch and self:ForeverIdentitiesMatch(
+            origin, self:GetPlayerFullName())) then return false end
+    return self:SendWhisper("SR", payload, origin) == true
+end
+
 function Overlord.Sync:PollIfStaleObserverInProgress(secondsSinceZs, zone)
     local isLarge = self.IsLargeEvent and self:IsLargeEvent()
     local pollInterval
@@ -593,6 +605,8 @@ function Overlord.Sync:PollIfStaleObserverInProgress(secondsSinceZs, zone)
     local now = GetTime()
     if now - lastStaleObserverCommunityPoll < pollInterval then return end
     lastStaleObserverCommunityPoll = now
+    local payload = self.GetSRPayload and self:GetSRPayload("T")
+    if payload then self:SendTargetedObserverMapRequest(zone, payload) end
     self:SendSyncRequest({
         includeCommunity = true,
         allowCommunityInLargeEvent = true,
@@ -642,7 +656,12 @@ function Overlord.Sync:RequestObserverCaptureConfirmationIfComplete(zone)
     local req = tonumber(zone.holdTimeRequired) or 120
     local stored = tonumber(zone.holdTimeElapsed) or 0
     local elapsed = Overlord.Zones:GetObserverHoldTimeElapsed(zone)
-    if math.max(elapsed or 0, stored) < req then
+    local remote = zone._remoteCaptureLease
+    local nearExpectedFinish = remote and remote.lastHold
+        and remote.lastHold >= req - 5
+        and GetTime() - (remote.lastSeen or GetTime())
+            >= math.max(0, req - remote.lastHold)
+    if math.max(elapsed or 0, stored) < req and not nearExpectedFinish then
         zone._observerFinalStatePollCount = nil
         return
     end
@@ -659,6 +678,9 @@ function Overlord.Sync:RequestObserverCaptureConfirmationIfComplete(zone)
     local payload = self.GetSRPayload and self:GetSRPayload("T")
     if not payload or payload == "" then return end
 
+    -- At 100% (or a near-final stale heartbeat), ask the known origin first.
+    -- The read-only request never grants capture authority.
+    self:SendTargetedObserverMapRequest(zone, payload)
     self:Send("SR", payload)
     if IsInRaid() or IsInGroup() then
         self:SendToChannel("SR", payload, true)
@@ -1906,7 +1928,7 @@ local function CommunityRosterMatchKey(name)
 end
 
 -- Fortin : membre du club Overlord en ligne (cross-faction). Cache prolonge cote reception GK/GC.
-function Overlord.Sync:IsGuildKeepCommunitySender(sender)
+function Overlord.Sync:IsStrategicSiteCommunitySender(sender)
     if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork
         and Overlord.BetaNetwork:IsPeer(sender) then return true end
     if Overlord.CommunityModeEnabled == false then return false end
@@ -1936,7 +1958,7 @@ end
 -- Alias semantique pour les protocoles qui reutilisent cette validation O(1)
 -- sans dependre du vocabulaire historique des fortins.
 function Overlord.Sync:IsOnlineCommunitySender(sender)
-    return self:IsGuildKeepCommunitySender(sender)
+    return self:IsStrategicSiteCommunitySender(sender)
 end
 
 -- Fortin : hors raid/party (deja couverts par Send) ; tourniquet sur la liste en ligne.
@@ -1953,59 +1975,6 @@ local function BroadcastViaBeta(msgType, payload, extras)
     return Overlord.BetaNetwork:Broadcast(msgType, payload or "", extras) or 0
 end
 
-function Overlord.Sync:BroadcastGuildKeepToCommunity(
-    msgType, payload, maxMembers, whisperDelaySec, extraWhispers, onlineMembersMinTtl)
-    local betaSent = BroadcastViaBeta(msgType, payload, extraWhispers)
-    if Overlord.CommunityModeEnabled == false then
-        return betaSent
-    end
-    if not msgType or not payload or payload == "" then return betaSent end
-    if Overlord.InstanceSuspended or IsInInstance() then return betaSent end
-    if not self.HasCommunityClub or not self:HasCommunityClub() then return betaSent end
-    maxMembers = maxMembers or 4
-    whisperDelaySec = tonumber(whisperDelaySec) or 0.35
-
-    local onlineList = RefreshOnlineMembersCache(
-        self, false, tonumber(onlineMembersMinTtl))
-    if #onlineList == 0 then return betaSent end
-
-    local candidates = {}
-    for i = 1, #onlineList do
-        local name = onlineList[i]
-        if not CommunityMemberInOurGroup(name) then
-            candidates[#candidates + 1] = name
-        end
-    end
-    if #candidates == 0 then
-        candidates = onlineList
-    end
-    local n = #candidates
-    local now = GetTime()
-
-    lastCommunityDirectWhisper:Prune(now, 8)
-
-    local sent = 0
-    for attempt = 1, n do
-        if sent >= maxMembers then break end
-        local idx = ((gkCommunityRotateCursor + attempt - 1) % n) + 1
-        local memberName = candidates[idx]
-        local targetKey = memberName:lower()
-        local lastDirect = lastCommunityDirectWhisper:Get(targetKey) or 0
-        if now - lastDirect >= COMMUNITY_DIRECT_TARGET_COOLDOWN then
-            local queued = EnqueueCommunityWhisper(
-                msgType, payload, memberName, extraWhispers,
-                sent * whisperDelaySec, whisperDelaySec, false)
-            if queued then
-                lastCommunityDirectWhisper:Remember(targetKey, now)
-                sent = sent + 1
-            end
-        end
-    end
-    if sent > 0 then
-        gkCommunityRotateCursor = (gkCommunityRotateCursor + sent) % n
-    end
-    return sent + betaSent
-end
 
 -- Toutes les emissions communautaires passent par une seule pompe afin de borner
 -- les timers et de donner la priorite aux transitions contractuelles.
@@ -2230,111 +2199,13 @@ end
 
 local function CommunityWhisperPriorityRank(msgType, payload, priority)
     if not priority then return 0 end
-    if msgType == "C" or msgType == "GC" or msgType == "GA" then return 4 end
-    if msgType == "G7" then return 4 end
-    if msgType == "GK" then
-        local status = payload and (payload:match("^v%d+:[^:]+:([^:]+)")
-            or payload:match("^[^:]+:([^:]+)")) or nil
-        if status == "held" or status == "aborted" then return 4 end
-        return 2
-    end
-    return 1
+    return msgType == "C" and 4 or 1
 end
-
 local function CommunityWhisperPayloadTimestamp(msgType, payload)
-    if not payload or payload == "" then return 0 end
-    if msgType == "C" then
+    if msgType == "C" and type(payload) == "string" then
         return tonumber(payload:match("^[^:]*:[^:]*:[^:]*:([^:]*)")) or 0
     end
-    if msgType == "GC" or msgType == "GA" then
-        local body = payload:match("^v8:(.*)$")
-        return body and tonumber(body:match("^[^:]*:[^:]*:[^:]*:([^:]*)")) or 0
-    end
-    if msgType == "GK" then
-        local body = payload:gsub("^v%d+:", "")
-        local ts = select(7, strsplit(":", body))
-        return tonumber(ts) or 0
-    end
     return 0
-end
-
-local function CommunityWhisperFaction(code)
-    if code == "A" then return "Alliance" end
-    if code == "H" then return "Horde" end
-    return nil
-end
-
-local function ParseCommunityWhisperGkIdentity(msgType, payload)
-    if msgType == "GC" or msgType == "GA" then
-        local body = (payload or ""):match("^v8:(.*)$")
-        if not body then return nil end
-        local _, guild, factionCode, eventTs, baseGuild, baseFactionCode,
-            baseCaptured, shard, started, generation, player =
-            strsplit(":", body, 12)
-        return {
-            kind = msgType, guild = guild, faction = CommunityWhisperFaction(factionCode),
-            eventTs = tonumber(eventTs), baseGuild = baseGuild,
-            baseFaction = CommunityWhisperFaction(baseFactionCode),
-            baseCaptured = tonumber(baseCaptured), shard = tonumber(shard),
-            started = tonumber(started), generation = tonumber(generation), player = player,
-        }
-    end
-    if msgType ~= "GK" then return nil end
-    local body = (payload or ""):gsub("^v%d+:", "")
-    local _, status, _, guild, factionCode, claimedAt, syncTs, _, _, _,
-        baseGuild, baseFactionCode, baseCaptured, player, shard, started, generation =
-        strsplit(":", body, 18)
-    if status ~= "in_progress" and status ~= "held" and status ~= "aborted" then return nil end
-    return {
-        kind = status == "aborted" and "GA" or (status == "held" and "GC" or "GK"),
-        guild = guild, faction = CommunityWhisperFaction(factionCode),
-        eventTs = tonumber(status == "in_progress" and syncTs or claimedAt),
-        baseGuild = baseGuild, baseFaction = CommunityWhisperFaction(baseFactionCode),
-        baseCaptured = tonumber(baseCaptured), shard = tonumber(shard),
-        started = tonumber(started), generation = tonumber(generation), player = player,
-    }
-end
-
-local function CommunityWhisperGkPayloadWins(
-    candidateType, candidatePayload, currentType, currentPayload)
-    local candidate = ParseCommunityWhisperGkIdentity(candidateType, candidatePayload)
-    local current = ParseCommunityWhisperGkIdentity(currentType, currentPayload)
-    if not candidate or not current then
-        return CommunityWhisperPayloadTimestamp(candidateType, candidatePayload)
-            >= CommunityWhisperPayloadTimestamp(currentType, currentPayload)
-    end
-    local GK = Overlord.GuildKeep
-    if not GK or not GK.AssaultResolutionWins then
-        return (candidate.eventTs or 0) >= (current.eventTs or 0)
-    end
-    return GK:AssaultResolutionWins({
-        kind = candidate.kind, eventAt = candidate.eventTs,
-        guild = candidate.guild, faction = candidate.faction,
-        shard = candidate.shard, startedAt = candidate.started,
-        generationAt = candidate.generation, player = candidate.player,
-        baseGuild = candidate.baseGuild, baseFaction = candidate.baseFaction,
-        baseCapturedAt = candidate.baseCaptured,
-    }, {
-        kind = current.kind, eventAt = current.eventTs,
-        guild = current.guild, faction = current.faction,
-        shard = current.shard, startedAt = current.started,
-        generationAt = current.generation, player = current.player,
-        baseGuild = current.baseGuild, baseFaction = current.baseFaction,
-        baseCapturedAt = current.baseCaptured,
-    })
-end
-
-local function CommunityWhisperGkAttemptKey(msgType, payload)
-    local identity = ParseCommunityWhisperGkIdentity(msgType, payload)
-    local started = identity and tonumber(identity.started)
-    local shard = identity and tonumber(identity.shard)
-    local generation = identity and tonumber(identity.generation)
-    if not started or started <= 0 or not shard or shard < 0
-        or not generation or generation < 0 then return nil end
-    return table.concat({
-        tostring(math.floor(started)), tostring(math.floor(shard)),
-        tostring(math.floor(generation)),
-    }, ":")
 end
 
 local function DispatchOneCommunityWhisper(item)
@@ -2348,39 +2219,10 @@ end
 
 local function BuildCommunityWhisperCoalesceKey(msgType, payload, memberName, priority)
     payload = payload or ""
-    if msgType == "GK" then
-        local siteKey = payload:match("^v%d+:([^:]+):") or payload:match("^([^:]+):")
-        if siteKey and siteKey ~= "" then
-            local status = payload:match("^v%d+:[^:]+:([^:]+)")
-            local family = (status == "held" or status == "aborted"
-                or status == "in_progress") and "GKA" or "GKN"
-            local attemptKey = family == "GKA"
-                and CommunityWhisperGkAttemptKey(msgType, payload) or nil
-            return family .. ":" .. tostring(memberName) .. ":" .. siteKey
-                .. (attemptKey and (":" .. attemptKey) or "")
-        end
-    elseif msgType == "GC" or msgType == "GA" then
-        local siteKey = payload:match("^v8:([^:]+):")
-        if siteKey and siteKey ~= "" then
-            local attemptKey = CommunityWhisperGkAttemptKey(msgType, payload)
-            return "GKA:" .. tostring(memberName) .. ":" .. siteKey
-                .. (attemptKey and (":" .. attemptKey) or "")
-        end
-    elseif msgType == "GH" then
-        -- Deux vagues d'une meme preuve ne doivent jamais occuper deux cases par cible.
-        -- Les payloads fragmentes passent par G7, qui possede deja sa cle transactionnelle.
-        return "GH:" .. tostring(memberName) .. ":" .. payload
-    elseif msgType == "C" then
+    if msgType == "C" then
         local zoneId = payload:match("^([^:]+):")
         if zoneId and zoneId ~= "" then
             return "C:" .. tostring(memberName) .. ":" .. zoneId
-        end
-    elseif msgType == "G7" then
-        local _, innerType, fragmentId, fragmentIndex = strsplit(":", payload, 5)
-        if innerType and fragmentId and fragmentIndex then
-            return table.concat({
-                "G7", tostring(memberName), innerType, fragmentId, fragmentIndex,
-            }, ":")
         end
     elseif not priority and (msgType == "PM" or msgType == "LR") then
         local subject = msgType == "PM"
@@ -2423,8 +2265,8 @@ local function CountNewCommunityWhisperBundleItems(
 end
 
 -- Un payload fragmente est une transaction de transport : soit toute la serie tient
--- dans la file, soit aucun fragment n'est insere. Sinon G7 pouvait ajouter le debut
--- d'un lot puis perdre sa fin au plafond 256/384.
+-- dans la file, soit aucun fragment n'est insere. Un lot ne doit jamais perdre
+-- sa fin au plafond 256/384.
 local function ReserveCommunityWhisperBundle(needed, priority)
     needed = math.max(0, math.floor(tonumber(needed) or 0))
     local size = CommunityWhisperQueueSize()
@@ -2441,7 +2283,7 @@ local function ReserveCommunityWhisperBundle(needed, priority)
     local finalSize = size + needed - evictions
     if finalSize > 384 then
         local extra = finalSize - 384
-        -- Verifier toute la reservation avant la premiere eviction : un lot G7
+        -- Verifier toute la reservation avant la premiere eviction : un lot
         -- qui ne tient pas ne doit jamais modifier la file existante.
         if routineCount - evictions < extra then return false, 0 end
         evictions = evictions + extra
@@ -2505,20 +2347,12 @@ EnqueueCommunityWhisper = function(
                 local oldRank = queued.priorityRank or (queued.priority and 1 or 0)
                 -- Un ancien heartbeat ne doit jamais degrader un final deja en file. A
                 -- rang egal, conserver aussi le payload au timestamp le plus recent.
-                local gkAnchored = msgType == "GK" or msgType == "GC" or msgType == "GA"
-                if gkAnchored then
-                    -- L'identite causale prime sur la classe transport : un retry gen+1
-                    -- remplace l'ancien GA meme si ce dernier avait une priorite terminale.
-                    if not CommunityWhisperGkPayloadWins(
-                        msgType, payload, queued.msgType, queued.payload) then return true end
-                else
                     if priorityRank < oldRank then return true end
                     if priorityRank == oldRank then
                         local oldTs = CommunityWhisperPayloadTimestamp(msgType, queued.payload)
                         local newTs = CommunityWhisperPayloadTimestamp(msgType, payload)
                         if oldTs > 0 and newTs > 0 and newTs < oldTs then return true end
                     end
-                end
                 communityWhisperQueueOps.commitRoutineEvictions(reservedEvictions)
                 queued.payload = payload
                 queued.msgType = msgType
@@ -3286,9 +3120,15 @@ end
 function Overlord.Sync:InstallWhisperOfflineChatFilter()
     if whisperOfflineFilterInstalled then return end
     local ok = false
-    local add = ChatFrame_AddMessageEventFilter
-    if add then
+    -- Current clients expose the filter on ChatFrameUtil; the old global is
+    -- optional. Keep the legacy path for clients with the earlier chat API.
+    local add = ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter
+    if type(add) == "function" then
         ok = select(1, pcall(add, "CHAT_MSG_SYSTEM", SuppressAddonWhisperOfflineSystem))
+    end
+    if not ok and type(ChatFrame_AddMessageEventFilter) == "function" then
+        ok = select(1, pcall(ChatFrame_AddMessageEventFilter,
+            "CHAT_MSG_SYSTEM", SuppressAddonWhisperOfflineSystem))
     end
     if not ok and type(Chat_AddMessageEventFilter) == "function" then
         ok = select(1, pcall(Chat_AddMessageEventFilter, SuppressAddonWhisperOfflineSystem))
@@ -3725,9 +3565,6 @@ function Overlord.Sync:StartPassiveSync()
             if self.BroadcastDomination then
                 self:BroadcastDomination({ passiveOffFront = true })
             end
-        end
-        if self.BroadcastHeldGuildKeepStates then
-            self:BroadcastHeldGuildKeepStates()
         end
         if self.BroadcastHeldOutpostStates then
             self:BroadcastHeldOutpostStates()
@@ -4534,7 +4371,7 @@ end
 -- Les paquets de classement LK/LC/LR sont cadences par les pompes SR/HR : 80
 -- lignes par type sur cinq secondes laisse une marge superieure au debit legitime
 -- (~42) tout en coupant les rafales avant les allocations et mutations suivantes.
--- Les snapshots territoriaux (GK/GH/LO/LOC/ZA/ZS...) gardent leurs propres bornes.
+-- Les snapshots territoriaux (OP/LO/LOC/ZA/ZS...) gardent leurs propres bornes.
 local SCORE_BURST_TYPES = { K = true, EK = true, LK = true, LC = true, LR = true }
 local SCORE_BURST_MAX = { K = 40, EK = 40, LK = 80, LC = 80, LR = 80 }
 local senderBurstWindow = {}      -- sender -> { counts = { K=.. }, windowStart }

@@ -189,12 +189,12 @@ for _, field in ipairs({ 'isContested', 'isPaused' }) do
     assert(not hud:IsShown() and hud.showCalls == beforeShows, 'Capture state recreated the zone HUD: ' .. field)
     target[field] = nil
 end
--- The keep/outpost HUD has not moved into the objective panel. Its explicit
+-- Fortresses and outposts share _outpost and retain the capture HUD. Its explicit
 -- display path must still reach UpdateIndicator.
 local update = indicator.UpdateIndicator
 local squareSeen
 indicator.UpdateIndicator = function(_, zone) squareSeen = zone end
-for _, field in ipairs({ '_guildKeep', '_outpost' }) do
+for _, field in ipairs({ '_outpost' }) do
     target[field] = true
     indicator:Show()
     assert(hud:IsShown() and squareSeen == target, 'Structure HUD was removed: ' .. field)
@@ -315,4 +315,16 @@ assert(f:GetHeight() == 800, 'Main-panel growth did not invalidate cached dock l
 smallMain.height = 380
 layout(f, 8)
 assert(f:GetHeight() == minimum, 'Main-panel shrink left stale dock geometry')
+-- Opt-in floating guide (settings, off by default): an available objective can
+-- again appear in the small window; turning the option off removes it.
+indicator.UpdateIndicator = update
+target._guildKeep, target._outpost = nil, nil
+target.status, target.isHolding = 'available', nil
+OverlordDB.config.showFloatingObjective = true
+hud:Show()
+indicator:UpdateIndicator(target)
+assert(hud:IsShown() and hud.zoneName.text == target.name, 'Opt-in floating guide did not show the objective')
+OverlordDB.config.showFloatingObjective = false
+indicator:UpdateIndicator(target)
+assert(not hud:IsShown(), 'Floating guide stayed after the option was turned off')
 print('Next objective layout: 45 short/tall/long-text/activity cases; normal image + five-row viewport, no overlap, cached idle OK')

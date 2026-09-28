@@ -187,7 +187,7 @@ local function IsRecognizedActivitySender(sender)
     if sync.SenderIsInOurGroup and sync:SenderIsInOurGroup(sender) then return true end
     -- Reutilise le cache de roster communaute deja durci pour GK/GC. Cela exclut un
     -- inconnu du canal royaume qui tenterait d'injecter directement un FA agrege.
-    if sync.IsGuildKeepCommunitySender and sync:IsGuildKeepCommunitySender(sender) then
+    if sync.IsStrategicSiteCommunitySender and sync:IsStrategicSiteCommunitySender(sender) then
         return true
     end
     return false

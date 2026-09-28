@@ -111,7 +111,14 @@ assert(lb.playerInfo[me].guild == "French Guild", "Login erased unavailable guil
 
 -- Prepare an actual sliced display cache at the 5000-player boundary.
 local timers = {}
-C_Timer.After = function(_, callback) timers[#timers + 1] = callback end
+local timerNow = GetTime()
+function GetTime() return timerNow end
+C_Timer.After = function(delay, callback)
+    timers[#timers + 1] = function()
+        timerNow = timerNow + math.max(0, tonumber(delay) or 0)
+        callback()
+    end
+end
 local function drain()
     local count = 0
     while #timers > 0 do
@@ -158,7 +165,8 @@ lb:SetPlayerKills("New Rival", 621, true)
 lb:MarkDirty()
 assert(lb:EnsureNetworkHotIndexesPrepared() ~= nil)
 drain()
-assert(lb:StartDisplayCacheBuild())
+assert(lb:EnsureDisplayCache() == cache,
+    "Deferred guild ranking refresh blanked the previous view")
 drain()
 cache = lb._displayCache
 assert(#cache.sortedKills == 5000 and cache.sortedKills[5000].name == "New Rival")

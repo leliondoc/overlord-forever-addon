@@ -138,7 +138,7 @@ local function RememberCaptureDelivery(deliveryKey, now)
     return true
 end
 
--- Etat interne partage avec SyncAux.lua / SyncGuildKeep (pas d'export direct de la table).
+-- Etat interne partage avec SyncAux.lua / SyncStrategicSites (pas d'export direct de la table).
 function Overlord.Sync:GetPriv()
     return priv
 end
@@ -2214,7 +2214,7 @@ Overlord.Sync.CHANNEL_MSG_BURST = 1
 Overlord.Sync.CHANNEL_KILL_INTERVAL = 30
 -- Donnees lentes ou deja portees par les rattrapages cibles (HR, SR whisper,
 -- rattrapage de carte) : jamais sur le canal, ou elles etaient refusees a 100 %.
-Overlord.Sync.CHANNEL_OFF_KINDS = { GH = true, LO = true, LOC = true, LK = true, LC = true, LR = true, ZA = true }
+Overlord.Sync.CHANNEL_OFF_KINDS = { GK = true, GC = true, GA = true, GH = true, G7 = true, LO = true, LOC = true, LK = true, LC = true, LR = true, ZA = true }
 
 function Overlord.Sync:TakeChannelToken(critical)
     local now = GetTime()
@@ -2242,7 +2242,7 @@ end
 -- en cours (alerte « attaque ») ; kills : seulement les notres, un total / 30 s.
 function Overlord.Sync:ChannelCarries(kind, payload, isOrigin)
     if self.CHANNEL_OFF_KINDS[kind] then return false end
-    if kind == "GK" or kind == "OP" then
+    if kind == "OP" then
         local status = type(payload) == "string" and payload:match("^v%d+:[^:]*:([^:]*)") or nil
         return status == "in_progress"
     end
@@ -2721,21 +2721,6 @@ function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
         self:OnReceiveWoodHarvesting(payload or "", sender)
     elseif msgType == "WS" then
         self:OnReceiveWoodStock(payload or "", sender)
-    elseif msgType == "GK" then
-        local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
-        self:OnReceiveGuildKeepState(payload or "", gameplaySender, "BNET")
-    elseif msgType == "GC" then
-        local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
-        self:OnReceiveGuildKeepCapture(payload or "", gameplaySender, "BNET")
-    elseif msgType == "GA" then
-        local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
-        self:OnReceiveGuildKeepAbort(payload or "", gameplaySender, "BNET")
-    elseif msgType == "G7" then
-        local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
-        self:OnReceiveGuildKeepFragment(payload or "", gameplaySender, "BNET")
-    elseif msgType == "GH" then
-        local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
-        self:OnReceiveGuildKeepDailyProof(payload or "", gameplaySender, "BNET")
     elseif msgType == "OP" then
         self:OnReceiveOutpostState(payload or "", sender, "BNET")
     elseif msgType == "OC" then
@@ -2744,6 +2729,8 @@ function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
         self:OnReceiveDominationBoost(payload or "", sender, "BNET")
     elseif msgType == "SH" then
         self:OnReceiveShard(payload or "", sender, "BNET")
+    elseif msgType == "GW" and Overlord.GuildKillAlert then
+        Overlord.GuildKillAlert:OnReceiveNetworkAlert(payload or "", sender, "BNET")
     end
 end
 
@@ -2785,7 +2772,7 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
 
     local msgType, payload = strsplit(":", message, 2)
     if (msgType == "HR" or msgType == "HB" or msgType == "HA")
-        and payload and payload:sub(1, 2) == "5:" then
+        and payload and (payload:sub(1, 2) == "5:" or payload:sub(1, 2) == "6:") then
         if self.OnPagedLeaderboardMessage then
             return self:OnPagedLeaderboardMessage(msgType, payload, sender, channel)
         end
@@ -2910,16 +2897,6 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
         self:OnReceiveWoodHarvesting(payload or "", sender)
     elseif msgType == "WS" then
         self:OnReceiveWoodStock(payload or "", sender)
-    elseif msgType == "GK" then
-        ok, err = pcall(self.OnReceiveGuildKeepState, self, payload or "", sender, channel)
-    elseif msgType == "GC" then
-        ok, err = pcall(self.OnReceiveGuildKeepCapture, self, payload or "", sender, channel)
-    elseif msgType == "GA" then
-        ok, err = pcall(self.OnReceiveGuildKeepAbort, self, payload or "", sender, channel)
-    elseif msgType == "G7" then
-        ok, err = pcall(self.OnReceiveGuildKeepFragment, self, payload or "", sender, channel)
-    elseif msgType == "GH" then
-        ok, err = pcall(self.OnReceiveGuildKeepDailyProof, self, payload or "", sender, channel)
     elseif msgType == "OP" then
         ok, err = pcall(self.OnReceiveOutpostState, self, payload or "", sender, channel)
     elseif msgType == "OC" then
@@ -2946,6 +2923,11 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
         end
     elseif msgType == "FC" then
         self:OnReceiveFactionCall(payload or "", sender)
+    elseif msgType == "GW" then
+        if Overlord.GuildKillAlert then
+            ok, err = pcall(Overlord.GuildKillAlert.OnReceiveNetworkAlert,
+                Overlord.GuildKillAlert, payload or "", sender, channel)
+        end
     elseif msgType == "WD" then
         if Overlord.WorldDefense then
             ok, err = pcall(Overlord.WorldDefense.OnReceive,
@@ -3034,12 +3016,7 @@ end
 function Overlord.Sync:OnReceiveShard(payload, sender, channel)
     if not payload or payload == "" then return end
     local shardID = tonumber(payload)
-    if shardID == nil then
-        if Overlord.Shard and Overlord.Shard.OnKeepShardWitness then
-            Overlord.Shard:OnKeepShardWitness(payload, sender, channel)
-        end
-        return
-    end
+    if shardID == nil then return end
     if Overlord.Shard and Overlord.Shard.SetPlayerShard then
         Overlord.Shard:SetPlayerShard(sender, shardID)
     end
@@ -3593,6 +3570,12 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
     if Overlord.FrontActivity and Overlord.FrontActivity.RecordByZoneRef then
         Overlord.FrontActivity:RecordByZoneRef(zoneId, playerName)
     end
+    -- Alerte de raid de guilde : K deja valide, guilde et semaine de score du K.
+    if Overlord.GuildKillAlert and Overlord.GuildKillAlert.OnLiveKill then
+        Overlord.GuildKillAlert:OnLiveKill(playerName, faction,
+            validGuild and guildTag or nil, totalKills, zoneId,
+            ParseLeaderboardBucketEpochToken(bucketEpochToken))
+    end
     -- Le cache du ladder est deja invalide par les setters, mais un panneau ouvert
     -- n'a pas de ticker : demander explicitement le rendu de l'etat accepte.
     if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RequestRefresh then
@@ -3691,6 +3674,14 @@ local function AppendShardTagToPlayerName(nameHint, shardHint)
         return nameHint .. string.format(tag, tostring(sid))
     end
     return nameHint .. " #" .. tostring(sid)
+end
+
+-- Meme etiquette " #shard" que les alertes de capture, pour les autres modules.
+function Overlord.Sync:GetShardAlertTagForPlayer(nameHint)
+    if type(nameHint) ~= "string" or nameHint == "" then return "" end
+    local tagged = AppendShardTagToPlayerName(nameHint)
+    if not tagged or tagged == nameHint then return "" end
+    return tagged:sub(#nameHint + 1)
 end
 
 local function RememberCapturerShard(capturerName, shardId)
@@ -3924,6 +3915,12 @@ local function RequestObserverCaptureConfirmation(zone)
     if now - lastObserverCaptureConfirmationAt < TUNING.OBSERVER_CAPTURE_CONFIRMATION_COOLDOWN then return end
     zone._observerCaptureConfirmPollAt = now
     lastObserverCaptureConfirmationAt = now
+    -- The lease origin is the best source for a missed terminal C/ZS.
+    if Overlord.Sync.SendTargetedObserverMapRequest
+        and Overlord.Sync.GetSRPayload then
+        Overlord.Sync:SendTargetedObserverMapRequest(
+            zone, Overlord.Sync:GetSRPayload("T"))
+    end
     Overlord.Sync:SendSyncRequest({ territorialOnly = true })
     -- Gros event cross-faction : SendSyncRequest evite la communaute par defaut.
     -- Ici le timer est deja au seuil, donc on fait un petit SR cible pour obtenir
@@ -5352,9 +5349,6 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
             pcall(self.AppendFrontActivityToSrQueue, self, queue)
         end
         -- Etat live immediat : les timers/tenants ne doivent pas attendre les historiques.
-        if self.AppendGuildKeepToSrQueue then
-            pcall(self.AppendGuildKeepToSrQueue, self, queue, minimalResponseOnly)
-        end
         -- Une reponse territoriale reprend toutes les captures du front actif.
         -- Les six places supplementaires couvrent les vagues recentes des fronts
         -- inactifs sans refaire une reponse SR complete.
@@ -5412,16 +5406,6 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
             if self.AppendLeaderboardOutpostCountToSrQueue then
                 pcall(self.AppendLeaderboardOutpostCountToSrQueue, self,
                     queue, senderEvidencePage, hasEvidencePage)
-            end
-            -- Apres les snapshots territoriaux prioritaires, reconstruire la lignee GH puis
-            -- rejouer les six GK avec ce contexte. Le pire historique ne bloque ainsi ni ZA,
-            -- ni les timers, ni ZS/outposts pendant une minute.
-            if self.AppendLeaderboardGuildKeepDailyProofsToSrQueue then
-                local proofQueueStart = #queue
-                pcall(self.AppendLeaderboardGuildKeepDailyProofsToSrQueue, self, queue)
-                if #queue > proofQueueStart and self.AppendGuildKeepToSrQueue then
-                    pcall(self.AppendGuildKeepToSrQueue, self, queue, false)
-                end
             end
         end
         if not territorialResponseOnly
@@ -5557,10 +5541,19 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         end
         local consecutiveSendFailures = 0
         local projectedRows = #queue + (responseState.preparingLadder and 100 or 0)
+        local projectedZaPages = 0
+        for _, queued in ipairs(queue) do
+            if queued.type == "ZA" then projectedZaPages = projectedZaPages + 1 end
+        end
         responseState.messageInterval = msgInterval
+        -- A paged map response shares 300 B/s with ranking on a busy relay.
+        -- A four-hop ZA page and alternating ranking page can each occupy three
+        -- BF fragments, about six seconds together at that rate. Keep the source
+        -- ticker alive while its two protected map slots apply backpressure.
         responseState.responseDeadline = GetTime() + math.max(
             responseState.preparingLadder and 150 or 20,
-            projectedRows * msgInterval * 3)
+            projectedRows * msgInterval * 3,
+            20 + projectedZaPages * 6)
         priv.syncResponseDeadline = responseState.responseDeadline
         -- Les SR directes deja en attente ont ete recues avant que la taille exacte
         -- de cette reponse soit connue. Leur TTL doit suivre le deadline reel de la
@@ -5576,7 +5569,8 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         -- ci-dessus ne doit jamais liberer son slot au milieu puis laisser une nouvelle
         -- generation annuler le tail LK/LR/LC. Ce second filet expire seulement apres le
         -- deadline dynamique du ticker.
-        C_Timer.After(math.max(180, projectedRows * msgInterval * 4 + 130), function()
+        C_Timer.After(math.max(180, projectedRows * msgInterval * 4 + 130,
+            responseState.responseDeadline - GetTime() + 30), function()
             if syncResponseInFlight and syncResponseGeneration == responseGeneration then
                 responseState.finished = true
                 syncResponseInFlight = false
@@ -8643,6 +8637,14 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     if not self:AuthorizeLeaderboardSubject("LK", playerName, sender, channel) then return end
     local guildOwner = self.KillSyncSenderOwnsPlayer
         and self:KillSyncSenderOwnsPlayer(sender, playerName) or false
+    -- A solicited, admitted snapshot can carry the latest guild register even
+    -- while its owner is offline. Keep this distinct from owner authentication:
+    -- an arbitrary live LK must not gain snapshot privileges merely by naming
+    -- an already-known player.
+    local guildSnapshot = (self.IsExpectedHistoryCatchupDelivery
+        and self:IsExpectedHistoryCatchupDelivery("LK", sender, channel)) == true
+        or (self.IsExpectedPagedLeaderboardDelivery
+            and self:IsExpectedPagedLeaderboardDelivery("LK", playerName, sender, channel)) == true
     local observedLevelEligible = self.IsObservedPlayerKillLevelEligible
         and self:IsObservedPlayerKillLevelEligible(playerName)
     if observedLevelEligible == false then return end
@@ -8655,7 +8657,7 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
             localeClaimVerified and locTag or nil,
             validGuildRegister and guildTag or "",
             guildAt,
-            hasGuildRegister, nil, nil, nil, guildOwner)
+            hasGuildRegister, nil, nil, nil, guildOwner, guildSnapshot)
     elseif Overlord.Leaderboard.SetPlayerLevel then
         Overlord.Leaderboard:SetPlayerLevel(playerName, levelToken)
     end
@@ -8676,8 +8678,8 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
         and not Overlord.Leaderboard.MergeLeaderboardKillMetadata then
         Overlord.Leaderboard:SetPlayerLocale(playerName, locTag)
     end
-    -- Un LK tiers peut remplir une guilde inconnue. Seul le personnage concerne
-    -- peut confirmer un changement ou un depart.
+    -- Legacy fallback has no solicited-register merge. Keep its live-message
+    -- owner checks; the normal path above reconciles admitted snapshots by date.
     if not Overlord.Leaderboard.MergeLeaderboardKillMetadata
         and guildTag and guildTag ~= "" and self:IsValidGuildSyncToken(guildTag)
         and Overlord.Leaderboard.SetPlayerGuild then
@@ -8989,6 +8991,12 @@ function Overlord.Sync:BroadcastKill(zoneId, totalKills, killScoringAtEvent,
         and Overlord.Fronts and Overlord.Fronts.activeFrontId then
         zoneId = "@" .. Overlord.Fronts.activeFrontId
     end
+    -- Hors front : carte du kill "#uiMapID" (~5 octets) pour situer les alertes de
+    -- guilde. Les anciens clients ne resolvent pas ce marqueur et l'ignorent.
+    if (not zoneId or zoneId == "") and Overlord.GuildKillAlert
+        and Overlord.GuildKillAlert.GetLocalMapRef then
+        zoneId = Overlord.GuildKillAlert:GetLocalMapRef() or ""
+    end
     -- Figer l'eligibilite au moment du kill : le joueur peut changer de carte
     -- pendant le delai de coalescence sans que le relais large soit perdu.
     local killScoring = killScoringAtEvent
@@ -9061,6 +9069,11 @@ function Overlord.Sync:BroadcastKill(zoneId, totalKills, killScoringAtEvent,
             if not payload then killBroadcastData = nil; return end
             local isLarge = Overlord.Sync.IsLargeEvent and Overlord.Sync:IsLargeEvent()
             Overlord.Sync:SendKillBroadcast(payload)
+            -- Nos propres K ne nous reviennent pas : les compter ici pour notre guilde.
+            if Overlord.GuildKillAlert and Overlord.GuildKillAlert.OnLiveKill then
+                Overlord.GuildKillAlert:OnLiveKill(playerName, faction, guildTag,
+                    totalKills, d.zoneId, d.bucketEpoch)
+            end
             Overlord.Sync:MaybeBroadcastLeaderboardRaceBeacon()
             -- Canal : doublon cross-faction hors event massif (large gere dans SendKillBroadcast).
             if not isLarge and (IsInRaid() or IsInGroup()) then
@@ -10373,7 +10386,7 @@ function Overlord.Sync:ScheduleActivePeriodicCatchUp()
         sync._lastActivePeriodicSrAt = GetTime()
         local large = sync.IsLargeEvent and sync:IsLargeEvent()
         -- Une seule vague communautaire, toujours territoriale. L'ancien appel
-        -- ScanCommunityMembers ajoutait 3/10 SR completes (LK/GH historiques) et un
+        -- ScanCommunityMembers ajoutait 3/10 SR completes (historiques de classement) et un
         -- second parcours roster juste apres les 12 SR:T deja emises ici.
         sync:SendSyncRequest({
             territorialOnly = true,
@@ -10685,4 +10698,4 @@ end
 
 -- Mines (MS/MN), forets (WS), whispers communaute, appel de faction (FC), sync passive : voir SyncAux.lua
 -- Domination hebdo (DM) : voir SyncDomination.lua
--- Guild Keep (GK / GC / WB) : voir SyncGuildKeep.lua
+-- Sites OP/OC : SyncOutpost.lua ; bonus WB : SyncStrategicSites.lua

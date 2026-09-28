@@ -14,7 +14,6 @@ local cachedActiveZoneMapID = nil
 local cachedActiveZoneQx = nil
 local cachedActiveZoneQy = nil
 local FIND_ACTIVE_ZONE_CACHE_SEC = 1.0
-local lastGkIndicatorKey = nil
 local lastOpIndicatorKey = nil
 local lastZoneIndicatorKey = nil
 local lastOutpostCaptureHudSyncAt = 0
@@ -65,7 +64,6 @@ function Overlord.ZoneIndicator:InvalidateActiveZoneCache()
     cachedActiveZoneMapID = nil
     cachedActiveZoneQx = nil
     cachedActiveZoneQy = nil
-    lastGkIndicatorKey = nil
     lastOpIndicatorKey = nil
     lastZoneIndicatorKey = nil
 end
@@ -213,6 +211,7 @@ local function ApplyIndicatorAlpha()
     if not indicatorFrame then return end
     local base = indicatorFrame._hudEnabled == false and HUD_DISABLED_ALPHA or HUD_ENABLED_ALPHA
     local factor = 1
+    if indicatorFrame._guidance then factor = Overlord.ZoneIndicator.GUIDANCE_ALPHA end
     if Overlord.HudInCombat then
         factor = math.min(factor, Overlord.ZoneIndicator.COMBAT_FADE_ALPHA)
     end
@@ -225,6 +224,14 @@ end
 
 function Overlord.ZoneIndicator:ApplyCombatFade()
     ApplyIndicatorAlpha()
+end
+
+-- Fenetre flottante « Prochain objectif » : optionnelle (reglages), desactivee par
+-- defaut. L'objectif est toujours affiche dans le panneau Overlord.
+Overlord.ZoneIndicator.GUIDANCE_ALPHA = 0.6
+function Overlord.ZoneIndicator:IsFloatingObjectiveEnabled()
+    local config = OverlordDB and OverlordDB.config
+    return config ~= nil and config.showFloatingObjective == true
 end
 
 -- PLAYER_REGEN_DISABLED part avant que InCombatLockdown() ne soit vrai : l'etat
@@ -352,14 +359,6 @@ end
 local function PlaceIndicatorWaypoint()
     if not indicatorFrame then return end
     local zone = indicatorFrame.hudTarget
-    if zone and zone._guildKeep then
-        local site = zone._keepSite
-            or (Overlord.GuildKeep and Overlord.GuildKeep.GetDefaultSite and Overlord.GuildKeep:GetDefaultSite())
-        if site and Overlord.MapMarkers and Overlord.MapMarkers.SetUserWaypointForGuildKeepSite then
-            Overlord.MapMarkers:SetUserWaypointForGuildKeepSite(site)
-            return
-        end
-    end
     if zone and zone._outpost then
         local site = zone._outpostSite
             or (Overlord.Outpost and Overlord.Outpost.GetSite
@@ -379,10 +378,10 @@ local function PlaceIndicatorWaypoint()
 end
 
 local function IsLocallyHolding()
-    if Overlord.GuildKeep then
-        local onMap, site = Overlord.GuildKeep:IsPlayerOnKeepMap()
+    if Overlord.Outpost then
+        local onMap, site = Overlord.Outpost:IsPlayerOnOutpostMap()
         if onMap and site then
-            local st = Overlord.GuildKeep:GetState(site.siteKey)
+            local st = Overlord.Outpost:GetState(site.siteKey)
             if st and st.isHolding then return true end
         end
     end
@@ -416,81 +415,10 @@ local function FrontHasVisibleHudCandidate(frontId, holdingCached)
     end
     for _, zone in ipairs(Overlord.Zones:GetDisplayOrderForFront(frontId)) do
         if zone.status == "in_progress" then
-            if not zone._guildKeep then return true end
-            if Overlord.GuildKeep and Overlord.GuildKeep.IsSiegeWindowOpen
-                and Overlord.GuildKeep:IsSiegeWindowOpen() then
-                return true
-            end
+            return true
         end
     end
     return false
-end
-
--- Cible HUD midscreen pour le fortin (etat lu en direct dans UpdateIndicator)
-local function BuildGuildKeepHudTarget(site)
-    if not site then return nil end
-    return {
-        _guildKeep = true,
-        _keepSite = site,
-        _keepSiteKey = site.siteKey,
-        name = Overlord.GuildKeep:GetDisplayName(site),
-        center = site.center,
-        radius = (Overlord.GuildKeep.GetKeepCaptureHalfSizePercent
-            and Overlord.GuildKeep:GetKeepCaptureHalfSizePercent(site))
-            or site.halfSize or 1.35,
-    }
-end
-
--- Synchronise status / timer depuis GetState (evite snapshot BuildGuildKeepHudTarget)
-local function RefreshGuildKeepHudLiveFields(activeZone)
-    if not activeZone or not activeZone._guildKeep or not Overlord.GuildKeep then return activeZone end
-    local key = activeZone._keepSiteKey or (activeZone._keepSite and activeZone._keepSite.siteKey)
-    local site = activeZone._keepSite or Overlord.GuildKeep:GetSite(key)
-    local st = Overlord.GuildKeep:GetState(key)
-    if not site or not st then return activeZone end
-    activeZone._keepSite = site
-    activeZone._keepState = st
-    activeZone.status = st.status
-    activeZone.isHolding = st.isHolding
-    activeZone.isPaused = st.isPaused
-    activeZone.isContested = st.isContested or false
-    activeZone.holdTimeRequired = (Overlord.GuildKeep and Overlord.GuildKeep.GetDefaultHoldTimeRequired
-        and Overlord.GuildKeep:GetDefaultHoldTimeRequired(st, site))
-        or (Overlord.GuildKeep and Overlord.GuildKeep.DEFAULT_HOLD_TIME_REQUIRED)
-        or 900
-    return activeZone
-end
-
--- visible = panneau capture dans le carre ; monture/furtif = texte dedie (pas alpha 0.42 des fronts)
-local function EvaluateGuildKeepHud()
-    if not Overlord.GuildKeep or Overlord.InstanceSuspended then
-        return false, false, nil
-    end
-    local onMap, site
-    if Overlord.GuildKeep.GetPlayerKeepSiteForHud then
-        onMap, site = Overlord.GuildKeep:GetPlayerKeepSiteForHud()
-    else
-        onMap, site = Overlord.GuildKeep:IsPlayerOnKeepMap()
-    end
-    if not onMap or not site then return false, false, nil end
-    local st = Overlord.GuildKeep:GetState(site.siteKey)
-    if not st then return false, false, nil end
-    -- Sur la carte du fortin sans etre dans le carre = pas de HUD capture.
-    local inHudGeometry = Overlord.GuildKeep.IsPlayerInKeepGeometryForHud
-        and Overlord.GuildKeep:IsPlayerInKeepGeometryForHud(site)
-        or Overlord.GuildKeep:IsPlayerInKeepGeometry(site)
-    if not inHudGeometry then
-        return false, false, nil
-    end
-    local siteKey = site and site.siteKey
-    local canParticipate = st.isHolding or Overlord.GuildKeep:CanPlayerStartCapture(st, nil, siteKey)
-        or Overlord.GuildKeep:CanPlayerAssaultKeepState(st, siteKey)
-        or Overlord.GuildKeep:CanPlayerObserveKeepSiege(st, siteKey)
-        or Overlord.GuildKeep:IsPlayerDefendingHeldKeep(st, siteKey)
-    if not canParticipate then
-        return false, false, nil
-    end
-    return true, true, BuildGuildKeepHudTarget(site)
 end
 
 -- Cible HUD midscreen pour avant-poste (front actif ou site open-world autonome, 24/7)
@@ -566,51 +494,7 @@ local function EvaluateOutpostHudCached()
 end
 
 local function IsSquareCaptureHud(activeZone)
-    return activeZone and (activeZone._guildKeep or activeZone._outpost)
-end
-
--- Panneau capture fortin visible (meme logique que EvaluateGuildKeepHud)
-function Overlord.ZoneIndicator:ShouldRefreshGuildKeepCaptureHud()
-    return select(1, EvaluateGuildKeepHud())
-end
-
--- 1 Hz sur carte fortin : refresh timer ou masque si plus dans le carre
-function Overlord.ZoneIndicator:SyncGuildKeepCaptureHud()
-    if Overlord.InActiveFront or Overlord.InstanceSuspended then return end
-    if self:ShouldRefreshGuildKeepCaptureHud() then
-        self:RefreshHud()
-    elseif indicatorFrame and indicatorFrame:IsShown() then
-        self:Hide()
-    end
-end
-
--- Evite RefreshHud 1 Hz quand le panneau fortin n'a rien a faire (ex. capture distante)
-function Overlord.ZoneIndicator:GuildKeepHudNeedsRefresh()
-    if Overlord.InActiveFront or not Overlord.GuildKeep then return false end
-    -- Panneau ouvert : re-evaluer chaque tick pour masquer si sortie du carre / fin decay
-    if indicatorFrame and indicatorFrame:IsShown() then
-        return true
-    end
-    local onMap, site
-    if Overlord.GuildKeep.GetPlayerKeepSiteForHud then
-        onMap, site = Overlord.GuildKeep:GetPlayerKeepSiteForHud()
-    else
-        onMap, site = Overlord.GuildKeep:IsPlayerOnKeepMap()
-    end
-    if not onMap or not site then return false end
-    local inHudGeometry = Overlord.GuildKeep.IsPlayerInKeepGeometryForHud
-        and Overlord.GuildKeep:IsPlayerInKeepGeometryForHud(site)
-        or Overlord.GuildKeep:IsPlayerInKeepGeometry(site)
-    if inHudGeometry then
-        return select(1, EvaluateGuildKeepHud())
-    end
-    -- Observateur sur la carte du fortin : rafraichir si un assaut distant est connu.
-    local st = Overlord.GuildKeep:GetState(site.siteKey)
-    if st and Overlord.GuildKeep.CanPlayerObserveKeepSiege
-        and Overlord.GuildKeep:CanPlayerObserveKeepSiege(st, site.siteKey) then
-        return true
-    end
-    return false
+    return activeZone and activeZone._outpost
 end
 
 function Overlord.ZoneIndicator:SyncOutpostCaptureHud()
@@ -648,7 +532,7 @@ function Overlord.ZoneIndicator:FrontLateIndicatorNeedsRefresh()
     if not FrontHasVisibleHudCandidate(frontId, holding) then return false end
     if not indicatorFrame or not indicatorFrame:IsShown() then return true end
     local target = indicatorFrame.hudTarget
-    if not target or target._guildKeep or target._outpost then return true end
+    if not target or target._outpost then return true end
     if target.status == "available" and not holding then return false end
     return true
 end
@@ -664,22 +548,6 @@ function Overlord.ZoneIndicator:GetDistanceToOutpost(site)
     local zx, zy = site.center[1], site.center[2]
     local ar = (Overlord.Outpost and Overlord.Outpost.GetMapAspectRatio)
         and Overlord.Outpost:GetMapAspectRatio(site) or 1
-    local ok3, distance, dx, dy = pcall(ReadPlayerMapDistance, mapID, zx, zy, ar)
-    if not ok3 then return nil end
-    return distance, dx, dy
-end
-
-function Overlord.ZoneIndicator:GetDistanceToGuildKeep(site)
-    if not site or not site.center then return nil end
-    local mapID = site.mapID
-    if not mapID then
-        local ok, mid = pcall(C_Map.GetBestMapForUnit, "player")
-        if not ok or not mid then return nil end
-        mapID = mid
-    end
-    local zx, zy = site.center[1], site.center[2]
-    local ar = (Overlord.GuildKeep and Overlord.GuildKeep.GetMapAspectRatio)
-        and Overlord.GuildKeep:GetMapAspectRatio(site) or 1
     local ok3, distance, dx, dy = pcall(ReadPlayerMapDistance, mapID, zx, zy, ar)
     if not ok3 then return nil end
     return distance, dx, dy
@@ -854,7 +722,7 @@ function Overlord.ZoneIndicator:FindActiveZone(forceRefresh)
     local soleInProgress = nil
     local inProgressCount = 0
     for _, zone in ipairs(scanZones) do
-        if zone.status == "in_progress" and not zone._guildKeep then
+        if zone.status == "in_progress" then
             inProgressCount = inProgressCount + 1
             soleInProgress = zone
             if inProgressCount > 1 then break end
@@ -992,19 +860,44 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
     end
 
     -- Regular objectives and their capture progress now live in the side panel.
-    -- Only keeps/outposts still use this floating HUD, including manual calls.
+    -- Only keeps/outposts still use this floating HUD, including manual calls,
+    -- plus the optional floating next-objective guide.
     if not IsSquareCaptureHud(activeZone) then
+        if self:IsFloatingObjectiveEnabled() and activeZone.status == "available"
+            and not activeZone.isHolding then
+            if not indicatorFrame._guidance then
+                indicatorFrame._guidance = true
+                ApplyIndicatorAlpha()
+            end
+            local guidanceKey = "guide|" .. tostring(activeZone.id or activeZone.name or "")
+            if lastZoneIndicatorKey == guidanceKey then return end
+            lastZoneIndicatorKey = guidanceKey
+            lastOpIndicatorKey = nil
+            EnsureIndicatorTextAnchors()
+            indicatorFrame.title:SetText(L.NEXT_OBJECTIVE_HEADER or L.INDICATOR_TITLE)
+            indicatorFrame.title:SetTextColor(0.95, 0.82, 0.30)
+            indicatorFrame.zoneName:SetText(activeZone.name)
+            local o = (Overlord.MapMarkers and Overlord.MapMarkers.NEXT_OBJECTIVE_COLOR) or { 0.95, 0.82, 0.30 }
+            indicatorFrame.zoneName:SetTextColor(o[1], o[2], o[3])
+            indicatorFrame.distance:SetText("")
+            indicatorFrame.timer:Hide()
+            SetIndicatorHeight(IND_PAD_TOP + IND_PAD_BOTTOM + 16 + IND_LINE_GAP + 12)
+            return
+        end
         self:Hide()
         return
     end
+    if indicatorFrame._guidance then
+        indicatorFrame._guidance = false
+        ApplyIndicatorAlpha()
+    end
 
-    if not activeZone._guildKeep and not activeZone._outpost
+    if not activeZone._outpost
         and Overlord.IsLoginZoneDisplayPending
         and Overlord:IsLoginZoneDisplayPending(activeZone) then
         local pendingKey = "sync|" .. tostring(activeZone.id or activeZone.name or "")
         if lastZoneIndicatorKey == pendingKey then return end
         lastZoneIndicatorKey = pendingKey
-        lastGkIndicatorKey = nil
         lastOpIndicatorKey = nil
         EnsureIndicatorTextAnchors()
         indicatorFrame.title:SetText(L.MAP_SYNC_PENDING or "SYNC")
@@ -1017,9 +910,7 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
         return
     end
 
-    if activeZone._guildKeep then
-        activeZone = RefreshGuildKeepHudLiveFields(activeZone)
-    elseif activeZone._outpost then
+    if activeZone._outpost then
         activeZone = RefreshOutpostHudLiveFields(activeZone)
     end
 
@@ -1027,19 +918,13 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
     local dim = 0.55
 
     local dist
-    if activeZone._guildKeep and activeZone._keepSite then
-        dist = self:GetDistanceToGuildKeep(activeZone._keepSite)
-    elseif activeZone._outpost and activeZone._outpostSite then
+    if activeZone._outpost and activeZone._outpostSite then
         dist = self:GetDistanceToOutpost(activeZone._outpostSite)
     else
         dist = self:GetDistanceToZone(activeZone)
     end
     local inCaptureGeom = false
-    if activeZone._guildKeep and activeZone._keepSite and Overlord.GuildKeep then
-        inCaptureGeom = Overlord.GuildKeep.IsPlayerInKeepGeometryForHud
-            and Overlord.GuildKeep:IsPlayerInKeepGeometryForHud(activeZone._keepSite)
-            or Overlord.GuildKeep:IsPlayerInKeepGeometry(activeZone._keepSite)
-    elseif activeZone._outpost and activeZone._outpostSite and Overlord.Outpost then
+    if activeZone._outpost and activeZone._outpostSite and Overlord.Outpost then
         inCaptureGeom = Overlord.Outpost:IsPlayerInOutpostGeometry(activeZone._outpostSite)
     elseif dist ~= nil then
         inCaptureGeom = dist < activeZone.radius
@@ -1052,46 +937,7 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
         end
     end
 
-    if activeZone._guildKeep then
-        local elapsedKey = 0
-        if activeZone.status == "in_progress" and activeZone._keepState
-            and activeZone._keepSite and Overlord.GuildKeep then
-            elapsedKey = math.floor(Overlord.GuildKeep:GetObserverHoldTimeElapsed(
-                activeZone._keepState, activeZone._keepSite, inCaptureGeom))
-        end
-        local distKey = dist and math.floor(dist * 10) or (inCaptureGeom and "in" or "out")
-        local keepState = activeZone._keepState
-        local keepSiteKey = activeZone._keepSite
-            and (activeZone._keepSite.siteKey or activeZone._keepSite.id) or ""
-        local tenantGuild, tenantFaction = "", ""
-        local siegeLabel = ""
-        if keepState and Overlord.GuildKeep then
-            tenantGuild, tenantFaction = Overlord.GuildKeep:GetKeepDisplayTenant(
-                keepState, keepSiteKey)
-            if Overlord.GuildKeep.GetKeepSiegeMapLabel then
-                siegeLabel = Overlord.GuildKeep:GetKeepSiegeMapLabel(keepState, keepSiteKey) or ""
-            end
-        end
-        local localDefenseActive = keepState and keepState.gkLocalDefenseSeenAt
-            and (GetTime() - keepState.gkLocalDefenseSeenAt) < 10
-        local indicatorKey = string.format("gk|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s",
-            tostring(keepSiteKey),
-            activeZone.status or "",
-            activeZone.isContested and 1 or 0,
-            activeZone.isPaused and 1 or 0,
-            blockCap and 1 or 0,
-            inCaptureGeom and 1 or 0,
-            elapsedKey,
-            tostring(distKey),
-            tostring(activeZone.name or ""),
-            tostring(tenantGuild or ""),
-            tostring(tenantFaction or ""),
-            tostring(siegeLabel),
-            localDefenseActive and 1 or 0)
-        if lastGkIndicatorKey == indicatorKey then return end
-        lastGkIndicatorKey = indicatorKey
-        lastOpIndicatorKey = nil
-    elseif activeZone._outpost then
+    if activeZone._outpost then
         local elapsedKey = 0
         if activeZone.status == "in_progress" and activeZone._outpostState
             and activeZone._outpostSite and Overlord.Outpost then
@@ -1109,9 +955,8 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
             tostring(distKey))
         if lastOpIndicatorKey == indicatorKey then return end
         lastOpIndicatorKey = indicatorKey
-        lastGkIndicatorKey = nil
         lastZoneIndicatorKey = nil
-    elseif not activeZone._guildKeep and not activeZone._outpost then
+    elseif not activeZone._outpost then
         local elapsedKey = 0
         if activeZone.status == "in_progress" then
             if Overlord.Zones and Overlord.Zones.GetObserverHoldTimeElapsed then
@@ -1132,26 +977,14 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
             tostring(distKey))
         if lastZoneIndicatorKey == indicatorKey then return end
         lastZoneIndicatorKey = indicatorKey
-        lastGkIndicatorKey = nil
         lastOpIndicatorKey = nil
     else
-        lastGkIndicatorKey = nil
         lastOpIndicatorKey = nil
         lastZoneIndicatorKey = nil
     end
 
     EnsureIndicatorTextAnchors()
-    if activeZone._guildKeep then
-        local kstTitle = activeZone._keepState
-        if kstTitle and kstTitle.status == "held" and Overlord.GuildKeep
-            and Overlord.GuildKeep:IsPlayerDefendingHeldKeep(kstTitle,
-                activeZone._keepSite and activeZone._keepSite.siteKey) then
-            indicatorFrame.title:SetText(
-                L.GUILD_KEEP_DEFENSE_TITLE or L.GUILD_KEEP_INDICATOR_TITLE or L.INDICATOR_TITLE)
-        else
-            indicatorFrame.title:SetText(L.GUILD_KEEP_INDICATOR_TITLE or L.INDICATOR_TITLE)
-        end
-    elseif activeZone._outpost then
+    if activeZone._outpost then
         local ostTitle = activeZone._outpostState
         if ostTitle and ostTitle.status == "held" and Overlord.Outpost
             and Overlord.Outpost:IsPlayerDefendingHeldOutpost(ostTitle) then
@@ -1179,7 +1012,7 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
         indicatorFrame.zoneName:SetTextColor(1, 1, 1)
 
         local inGeomForHud = inCaptureGeom
-        if dist ~= nil and activeZone.radius and not activeZone._guildKeep and not activeZone._outpost then
+        if dist ~= nil and activeZone.radius and not activeZone._outpost then
             inGeomForHud = dist < activeZone.radius
         end
 
@@ -1192,47 +1025,7 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
             indicatorFrame.distance:SetTextColor(1, 0.55, 0.2, 1)
         elseif inCaptureGeom and not blockCap then
             local assaultReady = false
-            if activeZone._guildKeep and activeZone._keepState and Overlord.GuildKeep then
-                local kst = activeZone._keepState
-                if kst.status == "in_progress" and Overlord.GuildKeep.IsCurrentKeepSiegeState
-                    and Overlord.GuildKeep:IsCurrentKeepSiegeState(kst)
-                    and Overlord.GuildKeep.GetKeepSiegeMapLabel then
-                    local siegeLabel = Overlord.GuildKeep:GetKeepSiegeMapLabel(kst,
-                        activeZone._keepSite and activeZone._keepSite.siteKey)
-                    if siegeLabel and siegeLabel ~= "" then
-                        indicatorFrame.distance:SetText(siegeLabel)
-                        if kst.ownerFaction and Overlord.PlayerFaction and kst.ownerFaction ~= Overlord.PlayerFaction then
-                            indicatorFrame.distance:SetTextColor(1, 0.35, 0.2, 1)
-                        else
-                            indicatorFrame.distance:SetTextColor(1, 0.82, 0.2, 1)
-                        end
-                        assaultReady = true
-                    end
-                elseif kst.status == "held" and Overlord.GuildKeep:CanPlayerStartCapture(kst, nil,
-                    activeZone._keepSite and activeZone._keepSite.siteKey)
-                    and Overlord.GuildKeep:IsSiegeWindowOpen()
-                    and L.GUILD_KEEP_ASSAULT_READY then
-                    assaultReady = true
-                    local reqMin = math.floor((kst.holdTimeRequired or 900) / 60)
-                    indicatorFrame.distance:SetText(string.format(L.GUILD_KEEP_ASSAULT_READY, reqMin))
-                    indicatorFrame.distance:SetTextColor(1, 0.82, 0.2, 1)
-                elseif kst.status == "held" and Overlord.GuildKeep:IsPlayerDefendingHeldKeep(kst,
-                    activeZone._keepSite and activeZone._keepSite.siteKey)
-                    and L.GUILD_KEEP_ON_POINT then
-                    -- Defense locale : ennemis vus dans le carre (GuildKeepControl), avant
-                    -- meme que le GK in_progress ennemi soit arrive par le reseau.
-                    local underLocalAttack = kst.gkLocalDefenseSeenAt
-                        and (GetTime() - kst.gkLocalDefenseSeenAt) < 10
-                    if underLocalAttack and L.GUILD_KEEP_DEFEND_UNDER_ATTACK then
-                        indicatorFrame.distance:SetText(L.GUILD_KEEP_DEFEND_UNDER_ATTACK)
-                        indicatorFrame.distance:SetTextColor(1, 0.25, 0.25, 1)
-                    else
-                        indicatorFrame.distance:SetText(L.GUILD_KEEP_ON_POINT)
-                        indicatorFrame.distance:SetTextColor(0, 1, 0, 1)
-                    end
-                    assaultReady = true
-                end
-            elseif activeZone._outpost and activeZone._outpostState and Overlord.Outpost then
+            if activeZone._outpost and activeZone._outpostState and Overlord.Outpost then
                 local ost = activeZone._outpostState
                 if ost.status == "held" and Overlord.Outpost:CanPlayerStartCapture(ost)
                     and L.OUTPOST_ASSAULT_READY then
@@ -1264,34 +1057,7 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
 
     local showTimer = false
     local showHeldAssaultHint = false
-    if activeZone._guildKeep and activeZone._keepState and activeZone.status == "held"
-        and Overlord.GuildKeep and Overlord.GuildKeep:CanPlayerStartCapture(activeZone._keepState, nil,
-            activeZone._keepSite and activeZone._keepSite.siteKey)
-        and Overlord.GuildKeep:IsSiegeWindowOpen() and inCaptureGeom and not hudDisabled then
-        local dg = select(1, Overlord.GuildKeep:GetKeepDisplayTenant(activeZone._keepState,
-            activeZone._keepSite and activeZone._keepSite.siteKey))
-        if dg ~= "" and L.GUILD_KEEP_PANEL_HELD then
-            indicatorFrame.timer:SetText(string.format(L.GUILD_KEEP_PANEL_HELD, dg))
-            indicatorFrame.timer:SetTextColor(1, 0.82, 0.2)
-            showHeldAssaultHint = true
-        end
-    elseif activeZone._guildKeep and activeZone._keepState and activeZone.status == "held"
-        and Overlord.GuildKeep and Overlord.GuildKeep:IsPlayerDefendingHeldKeep(activeZone._keepState,
-            activeZone._keepSite and activeZone._keepSite.siteKey)
-        and inCaptureGeom and not hudDisabled then
-        local kstHeld = activeZone._keepState
-        local dg = select(1, Overlord.GuildKeep:GetKeepDisplayTenant(kstHeld,
-            activeZone._keepSite and activeZone._keepSite.siteKey))
-        if dg ~= "" and L.GUILD_KEEP_PANEL_HELD then
-            indicatorFrame.timer:SetText(string.format(L.GUILD_KEEP_PANEL_HELD, dg))
-            if kstHeld.gkLocalDefenseSeenAt and (GetTime() - kstHeld.gkLocalDefenseSeenAt) < 10 then
-                indicatorFrame.timer:SetTextColor(1, 0.25, 0.25)
-            else
-                indicatorFrame.timer:SetTextColor(0.3, 0.9, 0.3)
-            end
-            showHeldAssaultHint = true
-        end
-    elseif activeZone._outpost and activeZone._outpostState and activeZone.status == "held"
+    if activeZone._outpost and activeZone._outpostState and activeZone.status == "held"
         and Overlord.Outpost and Overlord.Outpost:IsPlayerDefendingHeldOutpost(activeZone._outpostState)
         and inCaptureGeom and not hudDisabled then
         local dg = select(1, Overlord.Outpost:GetOutpostDisplayTenant(activeZone._outpostState,
@@ -1301,16 +1067,10 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
             indicatorFrame.timer:SetTextColor(0.3, 0.9, 0.3)
             showHeldAssaultHint = true
         end
-    elseif activeZone.status == "in_progress" and not hudDisabled
-        and (not activeZone._guildKeep or not Overlord.GuildKeep
-            or (activeZone._keepState and Overlord.GuildKeep.IsCurrentKeepSiegeState
-                and Overlord.GuildKeep:IsCurrentKeepSiegeState(activeZone._keepState))) then
+    elseif activeZone.status == "in_progress" and not hudDisabled then
         local elapsed
         if activeZone._outpost and activeZone._outpostState and activeZone._outpostSite and Overlord.Outpost then
             elapsed = Overlord.Outpost:GetObserverHoldTimeElapsed(activeZone._outpostState, activeZone._outpostSite)
-        elseif activeZone._guildKeep and activeZone._keepState and activeZone._keepSite and Overlord.GuildKeep then
-            elapsed = Overlord.GuildKeep:GetObserverHoldTimeElapsed(
-                activeZone._keepState, activeZone._keepSite, inCaptureGeom)
         else
             elapsed = (Overlord.Zones and Overlord.Zones.GetObserverHoldTimeElapsed)
                 and Overlord.Zones:GetObserverHoldTimeElapsed(activeZone)
@@ -1320,8 +1080,6 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
         if not required then
             if activeZone._outpost and Overlord.Outpost then
                 required = Overlord.Outpost.DEFAULT_HOLD_TIME_REQUIRED or 300
-            elseif activeZone._guildKeep and Overlord.GuildKeep then
-                required = Overlord.GuildKeep.DEFAULT_HOLD_TIME_REQUIRED or 900
             else
                 required = 300
             end
@@ -1379,8 +1137,7 @@ function Overlord.ZoneIndicator:RefreshHud()
         return
     end
 
-    -- Sites autonomes hors front : l'avant-poste a priorite sur le fortin si les
-    -- deux detections se chevauchent exceptionnellement.
+    -- Forteresses et avant-postes partagent le meme HUD de capture.
     if not Overlord.InActiveFront then
         self:SyncAutoObjectiveWaypoint(nil, nil)
         if hudUserDismissed then
@@ -1389,10 +1146,7 @@ function Overlord.ZoneIndicator:RefreshHud()
             end
             return
         end
-        local outVisible, _, outTarget = EvaluateOutpostHudCached()
-        local keepVisible, _, keepTarget = EvaluateGuildKeepHud()
-        local visible = outVisible or keepVisible
-        local hudTarget = outVisible and outTarget or keepTarget
+        local visible, _, hudTarget = EvaluateOutpostHudCached()
         if not visible then
             self:Hide()
             return
@@ -1457,18 +1211,21 @@ function Overlord.ZoneIndicator:RefreshHud()
         shouldShow = true
         activeZone = resolvedActiveZone or self:FindActiveZone()
     elseif nextZ and nextZ.status == "available" then
-        -- The waypoint remains useful; the guidance banner itself is gone.
-        self:Hide()
-        return
+        -- The waypoint remains useful; the floating guide is an opt-in setting.
+        if not self:IsFloatingObjectiveEnabled() then
+            self:Hide()
+            return
+        end
+        shouldShow = true
+        activeZone = nextZ
     else
         activeZone = resolvedActiveZone or self:FindActiveZone()
         shouldShow = activeZone and activeZone.status == "in_progress"
-            and (not activeZone._guildKeep or (Overlord.GuildKeep
-                and Overlord.GuildKeep.IsSiegeWindowOpen
-                and Overlord.GuildKeep:IsSiegeWindowOpen()))
     end
 
-    if not shouldShow or not IsSquareCaptureHud(activeZone) then
+    local floatingGuide = shouldShow and activeZone and not holding
+        and activeZone.status == "available" and self:IsFloatingObjectiveEnabled()
+    if not shouldShow or (not IsSquareCaptureHud(activeZone) and not floatingGuide) then
         if indicatorFrame and indicatorFrame:IsShown() then
             self:Hide()
         end
@@ -1491,8 +1248,7 @@ function Overlord.ZoneIndicator:Show()
     hudUserDismissed = false
     self:InvalidateActiveZoneCache()
     local outVisible, _, outTarget = EvaluateOutpostHudCached()
-    local keepVisible, _, keepTarget = EvaluateGuildKeepHud()
-    local squareTarget = outVisible and outTarget or (keepVisible and keepTarget or nil)
+    local squareTarget = outVisible and outTarget or nil
     local target = squareTarget or self:FindActiveZone(true)
     if not IsSquareCaptureHud(target) then
         self:Hide()
@@ -1510,7 +1266,6 @@ function Overlord.ZoneIndicator:Hide()
         indicatorFrame.hudTarget = nil
         indicatorFrame:Hide()
     end
-    lastGkIndicatorKey = nil
     lastOpIndicatorKey = nil
     lastZoneIndicatorKey = nil
 end

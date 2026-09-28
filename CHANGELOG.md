@@ -1,4 +1,16 @@
-1.1.3
+1.1.4
+
+**Overlord Forever 1.1.4**
+
+- Fortresses now use the same capture, contest, decay and ownership rules as outposts. Their locations, existing icons and separate leaderboard column remain; their base capture time is 10 minutes instead of 5. Captures are available at any time, with ownership lasting until recapture or campaign reset.
+- **Fortress migration:** the old siege schedule, daily victory/proof system and its saved data are removed on first load. Fortresses start neutral and their old daily standings are cleared; the separate fortress column now counts captures. Existing outpost states and scores, and player kill scores, are preserved. Other players need this update to participate in the new fortress system.
+- Remove the old fortress network messages and daily-proof responses, including those previously generated for older clients' full sync requests. Fortress state and ranking now travel through the existing outpost protocols and catch-up.
+- Add negotiated V6 leaderboard catch-up for kills, captures and race metadata, with resumable stream/bucket checkpoints. Updated peers advertise support; older peers retain V5 kills and legacy fallback. A silent first request is retried within a bounded deadline. Leaderboard catch-up is still being monitored in live play: this release does not guarantee that every bridge or older peer will answer.
+- Keep map catch-up, ranking pages and domination/victory snapshots progressing within the existing 1,000 B/s shared relay budget. Reserve bounded queue capacity, defer paged producers under pressure, coalesce duplicate pending map requests and allow ready relay copies to pass blocked ones. Expire fragmented transfers by inactivity within their overall lifetime.
+- Reduce repeated leaderboard rebuilds and metadata scans while updates arrive with the panel open. Preserve newer guild metadata, including guild departures, when merging solicited ranking snapshots.
+- Merge domination snapshots consistently and retain bounded pending victory bonuses until the required victory/state evidence arrives, without crediting repeated events twice.
+- Add optional enemy guild raid alerts based on recent authenticated kill observations, with thresholds, bounded tracking, deduplication and a settings toggle. Live capture and commander alerts retain their existing transport paths.
+- Label the Hillsbrad front consistently, clarify the floating coins-panel setting, and add an optional floating Next Objective guide. The regular objective panel remains available and settings scroll to cover all options.
 
 **Overlord Forever 1.1.3**
 

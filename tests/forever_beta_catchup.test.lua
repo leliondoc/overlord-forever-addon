@@ -293,7 +293,9 @@ for _, version in ipairs({"2", "3"}) do
     assert(legacySync:OnHistoryCatchupRequest(table.concat({version,
         a.Overlord:TimestampToCampaignId(campaign), campaign, "plegacy" .. version, 0, 0}, ":"),
         "Legacy Tester", "WHISPER"))
-    advance(300)
+    -- The expanded Classic snapshot can now fill all 75 legacy LC slots in
+    -- addition to 200 LK and 40 LR; the beta pump sends one row per second.
+    advance(400)
     local kills = 0
     for _, packet in ipairs(sent) do
         if packet.type == "LK" then kills = kills + 1 end

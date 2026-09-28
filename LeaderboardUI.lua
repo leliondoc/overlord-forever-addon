@@ -14,7 +14,7 @@ local MAX_VISIBLE_KILL_ROWS = 10
 local KILL_ROW_HEIGHT = 26
 -- Le cache fournit les 5000 premiers ; seules les lignes visibles ont une frame.
 -- Nombre max de lignes affichables dans les listes Captures (avec scroll au-dela)
-local MAX_CAPTURE_LINES = 25
+local MAX_CAPTURE_LINES = Overlord.Leaderboard.CAPTURE_RANK_LIMIT or 500
 -- Meme hauteur de ligne que le classement kills (aspect unifie)
 local CAPTURE_ROW_HEIGHT = 30
 local GUILD_ROW_HEIGHT = 24
@@ -1151,7 +1151,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     gkhWins:SetPoint("CENTER", guildKeepHeaderBand, "CENTER", LB_GK_COL_WINS, 0)
     gkhWins:SetWidth(LB_GK_WINS_W)
     gkhWins:SetJustifyH("CENTER")
-    gkhWins:SetText(L.LB_COL_WINS or "Wins")
+    gkhWins:SetText(L.LB_COL_CAPTURES or "Captures")
     ApplyOfficialHeaderColor(gkhWins, P)
 
     local guildKeepPanel = CreateOfficialSubPanel(guildKeepBlock, LB_GUILD_KEEP_W, 400, P)

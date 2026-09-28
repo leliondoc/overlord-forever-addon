@@ -62,27 +62,51 @@ jobs:
           lua5.1 tests/forever_featured_coins.test.lua
           lua5.1 tests/forever_next_objective.test.lua
           lua5.1 tests/forever_shard_factions.test.lua
+          lua5.1 tests/forever_whisper_offline_filter.test.lua
           lua5.1 tests/forever_leaderboard_pages.test.lua
+          lua5.1 tests/audit_ranking_v6.test.lua
+          lua5.1 tests/audit_v6_silent_first_request.test.lua
+          lua5.1 tests/audit_v6_nh_capability.test.lua
           lua5.1 tests/forever_front_mapid_cache.test.lua
           lua5.1 tests/forever_leaderboard.test.lua
           lua5.1 tests/forever_display_cache.test.lua
+          lua5.1 tests/audit_lk_import_display_cost.test.lua
           lua5.1 tests/forever_leaderboard_search.test.lua
           lua5.1 tests/forever_world_kills.test.lua
           lua5.1 tests/forever_honorable_kills.test.lua
           lua5.1 tests/forever_kill_ceiling.test.lua
           lua5.1 tests/forever_guild_totals.test.lua
+          lua5.1 tests/audit_guild_lww_convergence.test.lua
+          lua5.1 tests/forever_guild_kill_alert.test.lua
+          lua5.1 tests/forever_alert_transport_audit.test.lua
+          lua5.1 tests/forever_event_replay_audit.test.lua
+          lua5.1 tests/forever_event_multihop_audit.test.lua
+          lua5.1 tests/forever_domination_pool_migration.test.lua
+          lua5.1 tests/forever_domination_two_client_convergence.test.lua
+          lua5.1 tests/forever_victory_bonus_before_tv.test.lua
           lua5.1 tests/forever_performance.test.lua
           lua5.1 tests/forever_us_reset.test.lua
           lua5.1 tests/forever_kill_row_removal.test.lua
           lua5.1 tests/forever_resource_maps.test.lua
           lua5.1 tests/forever_capture_locations.test.lua
-          lua5.1 tests/forever_siege_schedule.test.lua
           lua5.1 tests/forever_silverpine_outpost.test.lua
+          lua5.1 tests/forever_fortress_outpost.test.lua
           lua5.1 tests/forever_lesi_bear_cave_outpost.test.lua
-          lua5.1 tests/forever_guild_keep_award_slicing.test.lua
           lua5.1 tests/forever_beta_sr_responders.test.lua
           lua5.1 tests/forever_beta_login_catchup.test.lua
+          lua5.1 tests/forever_beta_rank_bootstrap_cycle.test.lua
+          lua5.1 tests/forever_map_login.test.lua
           lua5.1 tests/forever_beta_network.test.lua
+          lua5.1 tests/forever_beta_presence_reservations.test.lua
+          lua5.1 tests/forever_beta_pending_duplicates.test.lua
+          lua5.1 tests/forever_enemy_live_alerts.test.lua
+          lua5.1 tests/forever_beta_fragment_expiry.test.lua
+          lua5.1 tests/forever_beta_terminal_priority.test.lua
+          lua5.1 tests/forever_beta_map_catchup_queue.test.lua
+          lua5.1 tests/forever_beta_map_ranking_contention.test.lua
+          lua5.1 tests/forever_beta_paged_legacy_contention.test.lua
+          lua5.1 tests/forever_beta_relay_seen_recovery.test.lua
+          lua5.1 tests/forever_observer_terminal_catchup.test.lua
           lua5.1 tests/forever_beta_integration.test.lua
           lua5.1 tests/forever_beta_catchup.test.lua
           lua5.1 tests/forever_general.test.lua

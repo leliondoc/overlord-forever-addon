@@ -15,7 +15,6 @@ local WELCOME_FACTION_SEAL_ATLAS = {
     Horde    = "Quest-Horde-WaxSeal",
 }
 local WELCOME_POPUP_ID = "welcome_first_install"
-local GUILD_KEEP_REMINDER_POPUP_ID = "guild_keep_siege_reminder"
 local FOREVER_LAUNCH_POPUP_ID = "forever_launch_1_0_0"
 local FOREVER_NETWORK_NOTICE_ID = "forever_community_bnet_notice_1_0_17"
 local FEATURED_FRONT_POPUP_ID = "daily_featured_front"
@@ -112,8 +111,6 @@ local pendingSeenId = nil
 local pendingMarkMode = nil -- "once" | "daily"
 local pendingLoginChain = false
 local loginAnnouncements = {}
-local GUILD_KEEP_REMINDER_RECHECK_SEC = 30
-local nextGuildKeepReminderCheckAt = 0
 
 -- La beta peut ecrire OverlordDB sans le recharger. Sans etat precedent fiable,
 -- les annonces automatiques reviendraient a chaque connexion ou /reload.
@@ -156,10 +153,6 @@ end
 
 -- Cle calendaire (premiere connexion du jour, heure client WoW).
 function Overlord.Popups:GetCalendarDayKey(id)
-    if id == GUILD_KEEP_REMINDER_POPUP_ID and Overlord.GuildKeep
-        and Overlord.GuildKeep.GetServerSiegeDayKey then
-        return Overlord.GuildKeep:GetServerSiegeDayKey()
-    end
     return date("%Y%m%d", time())
 end
 
@@ -178,22 +171,17 @@ end
 
 function Overlord.Popups:HasShownFeaturedFrontToday()
     if not FEATURED_FRONT_POPUP_ID or not OverlordDB or not OverlordDB.config then return true end
-    local gk = Overlord.GuildKeep
-    if not gk or not gk.GetServerSiegeDayKey then return true end
-    local dayKey = gk.GetServerCalendarDayKey and gk:GetServerCalendarDayKey()
-        or gk:GetServerSiegeDayKey()
+    local dayKey = date("%Y%m%d", time())
     local daily = OverlordDB.config.popupsDailyShown
     return daily and daily[FEATURED_FRONT_POPUP_ID] == dayKey
 end
 
 function Overlord.Popups:MarkFeaturedFrontShownToday()
     if not OverlordDB then return end
-    local gk = Overlord.GuildKeep
-    if not gk or not gk.GetServerSiegeDayKey then return end
     OverlordDB.config = OverlordDB.config or {}
     OverlordDB.config.popupsDailyShown = OverlordDB.config.popupsDailyShown or {}
     OverlordDB.config.popupsDailyShown[FEATURED_FRONT_POPUP_ID] =
-        gk.GetServerCalendarDayKey and gk:GetServerCalendarDayKey() or gk:GetServerSiegeDayKey()
+        date("%Y%m%d", time())
 end
 
 -- Ecrit le flag one-shot / quotidien des que la popup est affichee, pas a la
@@ -561,12 +549,7 @@ local function BuildGuildKeepGuideSection()
         "|A:Warfronts-BaseMapIcons-Empty-MainHall:18:18|a", L.GUILD_KEEP_NEUTRAL or "Unclaimed",
         "|A:Warfronts-BaseMapIcons-Alliance-MainHall:18:18|a", L.THE_ALLIANCE or "Alliance",
         "|A:Warfronts-BaseMapIcons-Horde-MainHall:18:18|a", L.THE_HORDE or "Horde")
-    local siegeRange = (gk and gk.GetSiegeWindowRangeLabel and gk:GetSiegeWindowRangeLabel()) or ""
-    local victoryTime = (gk and gk.GetSiegeWindowEndLabel and gk:GetSiegeWindowEndLabel()) or ""
-    local body = string.format(
-        L.GUIDE_GUILD_KEEP_BODY,
-        iconLine, siegeRange, capMin, victoryTime
-    )
+    local body = string.format(L.FORTRESS_OUTPOST_GUIDE_BODY, iconLine, capMin)
     return FormatGuideSection(L.GUIDE_SECTION_GUILD_KEEP, body)
 end
 
@@ -1025,35 +1008,8 @@ local function IsPlayerOnActiveFront()
     return false
 end
 
-local function IsPlayerOnSiegeReminderMap()
-    return IsPlayerOnActiveFront() or IsPlayerOnFrontMap() or IsPlayerOnGuildKeepMap()
-end
 
-local function GetServerMinuteOfDay()
-    local gk = Overlord.GuildKeep
-    if gk and gk.GetSiegeMinuteOfDay then
-        return gk:GetSiegeMinuteOfDay()
-    end
-    if GetGameTime then
-        local h, m = GetGameTime()
-        h = tonumber(h) or 0
-        m = tonumber(m) or 0
-        return h * 60 + m
-    end
-    local d = date("*t", time())
-    return (tonumber(d.hour) or 0) * 60 + (tonumber(d.min) or 0)
-end
 
-local function IsGuildKeepReminderWindow()
-    local gk = Overlord.GuildKeep
-    if gk and gk.IsSiegeReminderWindow then return gk:IsSiegeReminderWindow() end
-    if not gk or not gk.GetSiegeReminderStartMinute or not gk.GetSiegeWindowStartMinute then
-        return false
-    end
-    local minute = GetServerMinuteOfDay()
-    return minute >= gk:GetSiegeReminderStartMinute()
-        and minute < gk:GetSiegeWindowStartMinute()
-end
 
 -- Corps du rapport de bataille (nil si aucune stat a afficher).
 local battleReportBodyCache = nil
@@ -2238,40 +2194,7 @@ Overlord.Popups:RegisterLoginAnnouncement({
     opts = { showFactionSeal = true, addonSoundKey = "faction_call", dialogLayout = "patchNotes" },
 })
 
-local function BuildGuildKeepReminderBody()
-    if not Overlord.GuildKeep or not Overlord.GuildKeep.GetGuildHeldSiteForPlayer then return nil end
-    local st, site = Overlord.GuildKeep:GetGuildHeldSiteForPlayer()
-    if not st or not site then return nil end
-    local keepName = Overlord.GuildKeep.GetDisplayName
-        and Overlord.GuildKeep:GetDisplayName(site) or ((L and L.GUILD_KEEP_SHORT) or "Guild Keep")
-    local siegeStart = (Overlord.GuildKeep.GetSiegeWindowStartLabel
-        and Overlord.GuildKeep:GetSiegeWindowStartLabel()) or ""
-    return string.format(L.POPUP_GUILD_KEEP_REMINDER_BODY or "", keepName, siegeStart)
-end
 
-function Overlord.Popups:TryShowGuildKeepSiegeReminder()
-    if not CanAutoShowPersistentPopup() then return false end
-    if Overlord.InstanceSuspended or not Overlord.IsInitialized then return false end
-    if InCombatLockdown and InCombatLockdown() then return false end
-    if dialogFrame and dialogFrame:IsShown() then return false end
-    local now = GetTime and GetTime() or 0
-    if now > 0 and now < nextGuildKeepReminderCheckAt then return false end
-    if now > 0 then nextGuildKeepReminderCheckAt = now + GUILD_KEEP_REMINDER_RECHECK_SEC end
-    MigrateLegacyPopupFlags()
-    if self:HasShownToday(GUILD_KEEP_REMINDER_POPUP_ID) then return false end
-    if not IsGuildKeepReminderWindow() then return false end
-    if not IsPlayerOnSiegeReminderMap() then return false end
-    local body = BuildGuildKeepReminderBody()
-    if not body then return false end
-    self:ShowDialog(
-        GUILD_KEEP_REMINDER_POPUP_ID,
-        L.POPUP_GUILD_KEEP_REMINDER_TITLE,
-        body,
-        "daily",
-        { showFactionSeal = true, addonSoundKey = "faction_call", okText = L.POPUP_FACTION_CALL_OK }
-    )
-    return true
-end
 
 Overlord.Popups:RegisterLoginAnnouncement({
     id = "daily_battle_report",

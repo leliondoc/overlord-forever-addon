@@ -38,7 +38,7 @@ local hillsbradNames = {
 hillsbradNames.esMX = hillsbradNames.esES
 local h = hillsbradNames[locale] or hillsbradNames.enUS
 L.FRONT_HILLSBRAD_NAME = h[1]
-L.FRONT_HILLSBRAD_DROPDOWN = h[2]
+L.FRONT_HILLSBRAD_DROPDOWN = h[1]
 L.ZONE_NAMES.hillsbrad_southshore = h[3]
 L.ZONE_NAMES.hillsbrad_tarren_mill = h[4]
 local forestNames = {
@@ -80,19 +80,73 @@ local mapFilterTexts = {
 mapFilterTexts.esMX = mapFilterTexts.esES
 local mapFilter = mapFilterTexts[locale] or mapFilterTexts.enUS
 L.MAP_FILTER_OVERLORD, L.MAP_FILTER_SHOWN, L.MAP_FILTER_HIDDEN = mapFilter[1], mapFilter[2], mapFilter[3]
--- Coins panel (top HUD) setting, off by default.
-local coinsHudTexts = {
-    enUS = { "Coins panel", "Show the coins counter with the Reinforce and Attack buttons at the top of the screen near coin mines. Off by default." },
-    frFR = { "Panneau des coins", "Affiche en haut de l'écran le compteur de coins et les boutons Renforcer et Attaquer près des mines. Désactivé par défaut." },
-    esES = { "Panel de monedas", "Muestra arriba de la pantalla el contador de monedas y los botones Reforzar y Atacar cerca de las minas. Desactivado por defecto." },
-    deDE = { "Münzleiste", "Zeigt oben am Bildschirm den Münzzähler mit den Knöpfen Verstärken und Angreifen in der Nähe von Minen. Standardmäßig aus." },
-    ruRU = { "Панель монет", "Показывает вверху экрана счётчик монет и кнопки «Укрепить» и «Атаковать» рядом с шахтами. По умолчанию выключено." },
-    ptBR = { "Painel de moedas", "Mostra no topo da tela o contador de moedas e os botões Reforçar e Atacar perto das minas. Desativado por padrão." },
-    zhCN = { "硬币面板", "在矿区附近于屏幕顶部显示硬币计数以及增援和进攻按钮。默认关闭。" },
+-- Settings texts that describe where things now live (coins and next objective
+-- are always in the Overlord panel; floating versions are opt-in).
+-- { coins label, coins tooltip, floating objective label, floating objective tooltip,
+--   top HUD tooltip, tutorial book tooltip }
+local settingsTexts = {
+    enUS = {
+        "Floating coins panel",
+        "Your coins, Reinforce and Attack are always in the Overlord panel (Next Objective card). Turn on to also show them at the top of the screen near coin mines. Off by default.",
+        "Floating next objective",
+        "The next objective is always shown in the Overlord panel. Turn on to also show it in a small window in the middle of the screen when you are not capturing. Off by default.",
+        "Auto shows the relevant top panels near forests and guild keeps (and near coin mines if the floating coins panel is on). Always shows them on eligible maps; Never hides them.",
+        "Shows the tutorial book icon on the top HUD. Turn off to hide only that icon.",
+    },
+    frFR = {
+        "Panneau des coins flottant",
+        "Vos coins, Renforcer et Attaquer sont toujours dans le panneau Overlord (carte Prochain objectif). Activez pour les afficher aussi en haut de l'écran près des mines de coins. Désactivé par défaut.",
+        "Prochain objectif flottant",
+        "Le prochain objectif est toujours affiché dans le panneau Overlord. Activez pour l'afficher aussi dans une petite fenêtre au milieu de l'écran quand vous ne capturez pas. Désactivé par défaut.",
+        "Auto affiche les panneaux du haut utiles près des forêts et des fortins (et des mines de coins si le panneau des coins flottant est activé). Toujours les affiche sur les cartes concernées ; Jamais les masque.",
+        "Affiche l'icône livre du tutoriel sur le HUD du haut. Désactivez pour masquer uniquement cette icône.",
+    },
+    esES = {
+        "Panel de monedas flotante",
+        "Tus monedas, Reforzar y Atacar están siempre en el panel de Overlord (tarjeta Próximo objetivo). Actívalo para mostrarlos también arriba de la pantalla cerca de las minas. Desactivado por defecto.",
+        "Próximo objetivo flotante",
+        "El próximo objetivo se muestra siempre en el panel de Overlord. Actívalo para mostrarlo también en una pequeña ventana en el centro de la pantalla cuando no estés capturando. Desactivado por defecto.",
+        "Auto muestra los paneles superiores útiles cerca de bosques y fortalezas (y de las minas si el panel de monedas flotante está activado). Siempre los muestra en los mapas correspondientes; Nunca los oculta.",
+        "Muestra el icono del libro tutorial en el HUD superior. Desactívalo para ocultar solo ese icono.",
+    },
+    deDE = {
+        "Schwebende Münzleiste",
+        "Deine Münzen, Verstärken und Angreifen sind immer im Overlord-Fenster (Karte Nächstes Ziel). Aktivieren, um sie zusätzlich oben am Bildschirm in der Nähe von Minen zu zeigen. Standardmäßig aus.",
+        "Schwebendes nächstes Ziel",
+        "Das nächste Ziel steht immer im Overlord-Fenster. Aktivieren, um es zusätzlich in einem kleinen Fenster in der Bildschirmmitte zu zeigen, wenn du nicht eroberst. Standardmäßig aus.",
+        "Auto zeigt die passenden oberen Leisten in der Nähe von Wäldern und Gildenfestungen (und von Minen, wenn die schwebende Münzleiste aktiv ist). Immer zeigt sie auf passenden Karten; Nie blendet sie aus.",
+        "Zeigt das Tutorial-Buch-Symbol im oberen HUD. Deaktivieren, um nur dieses Symbol auszublenden.",
+    },
+    ruRU = {
+        "Плавающая панель монет",
+        "Монеты, «Укрепить» и «Атаковать» всегда есть в окне Overlord (карточка «Следующая цель»). Включите, чтобы также показывать их вверху экрана рядом с шахтами. По умолчанию выключено.",
+        "Плавающая следующая цель",
+        "Следующая цель всегда показана в окне Overlord. Включите, чтобы также показывать её в маленьком окне в центре экрана, когда вы не захватываете. По умолчанию выключено.",
+        "«Авто» показывает нужные верхние панели рядом с лесами и крепостями гильдий (и рядом с шахтами, если включена плавающая панель монет). «Всегда» показывает их на подходящих картах; «Никогда» скрывает.",
+        "Показывает значок книги обучения на верхнем HUD. Выключите, чтобы скрыть только этот значок.",
+    },
+    ptBR = {
+        "Painel de moedas flutuante",
+        "Suas moedas, Reforçar e Atacar estão sempre no painel do Overlord (cartão Próximo objetivo). Ative para mostrá-los também no topo da tela perto das minas. Desativado por padrão.",
+        "Próximo objetivo flutuante",
+        "O próximo objetivo é sempre mostrado no painel do Overlord. Ative para mostrá-lo também numa pequena janela no meio da tela quando você não estiver capturando. Desativado por padrão.",
+        "Auto mostra os painéis superiores úteis perto de florestas e fortalezas (e das minas se o painel de moedas flutuante estiver ativo). Sempre os mostra nos mapas correspondentes; Nunca os oculta.",
+        "Mostra o ícone do livro do tutorial no HUD superior. Desative para ocultar apenas esse ícone.",
+    },
+    zhCN = {
+        "浮动硬币面板",
+        "你的硬币、加固和进攻按钮始终在 Overlord 面板中（下一目标卡片）。开启后，在硬币矿区附近也会显示在屏幕顶部。默认关闭。",
+        "浮动下一目标",
+        "下一目标始终显示在 Overlord 面板中。开启后，在你未占领时也会在屏幕中央的小窗口中显示。默认关闭。",
+        "自动：在森林和公会要塞附近（若开启浮动硬币面板，也包括硬币矿区）显示相关顶部面板。始终：在相关地图上一直显示；从不：隐藏。",
+        "在顶部 HUD 显示教程书图标。关闭后仅隐藏该图标。",
+    },
 }
-coinsHudTexts.esMX = coinsHudTexts.esES
-local coinsHud = coinsHudTexts[locale] or coinsHudTexts.enUS
-L.COINS_HUD_LABEL, L.COINS_HUD_TOOLTIP = coinsHud[1], coinsHud[2]
+settingsTexts.esMX = settingsTexts.esES
+local st = settingsTexts[locale] or settingsTexts.enUS
+L.COINS_HUD_LABEL, L.COINS_HUD_TOOLTIP = st[1], st[2]
+L.FLOATING_OBJECTIVE_LABEL, L.FLOATING_OBJECTIVE_TOOLTIP = st[3], st[4]
+L.SHOW_TOP_HUD_TOOLTIP, L.SHOW_TUTORIAL_BOOK_TOOLTIP = st[5], st[6]
 local goldBonusReady = {
     enUS = "Ready", frFR = "Prêt", esES = "Listo", esMX = "Listo",
     deDE = "Bereit", ruRU = "Готово", ptBR = "Pronto", zhCN = "就绪",

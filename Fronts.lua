@@ -523,7 +523,7 @@ Overlord.Fronts.Registry = {
         id = "hillsbrad",
         preferredMapID = 1424,
         mapName = L.FRONT_HILLSBRAD_NAME or "Hillsbrad Foothills",
-        dropdownLabel = L.FRONT_HILLSBRAD_DROPDOWN or "Southshore / Tarren Mill",
+        dropdownLabel = L.FRONT_HILLSBRAD_DROPDOWN or "Hillsbrad Foothills",
         mapIDs = { [25] = true, [1424] = true },
         excludedMapIDs = { [623] = true }, -- Southshore vs. Tarren Mill battleground
         mapNameNeedles = { "hillsbrad", "hautebrande", "laderas de trabalomas",
@@ -844,10 +844,7 @@ local function ResolveFeaturedFrontIndex(dayKey, rotationCount)
 end
 
 function Overlord.Fronts:GetFeaturedFrontId()
-    local gk = Overlord.GuildKeep
-    if not gk or not gk.GetServerSiegeDayKey then return nil end
-    local dayKey = gk.GetServerCalendarDayKey and gk:GetServerCalendarDayKey()
-        or gk:GetServerSiegeDayKey()
+    local dayKey = date("%Y%m%d", time())
     if not dayKey or dayKey == "" then return nil end
     if featuredFrontCacheDayKey == dayKey and featuredFrontCacheId then
         return featuredFrontCacheId

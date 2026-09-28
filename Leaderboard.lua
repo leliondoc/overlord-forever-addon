@@ -2,6 +2,7 @@
 Overlord = Overlord or {}
 Overlord.Leaderboard = {
     KILL_RANK_LIMIT = 5000,
+    CAPTURE_RANK_LIMIT = 500,
     -- The v4 catch-up protocol and older clients certify a top 500. Keep its
     -- wire budget independent from local display/storage capacity.
     NETWORK_KILL_RANK_LIMIT = 500,
@@ -15,12 +16,6 @@ Overlord.Leaderboard = {
     targetRevision = 0,
 }
 
-local function isGuildKeepSiegeKey(key)
-    if type(key) ~= "string" or not key:match("^%d+$") then return false end
-    if #key == 8 then return true end -- historical daily proofs
-    local hour = #key == 10 and tonumber(key:sub(9, 10))
-    return hour == 3 or hour == 9 or hour == 15 or hour == 21
-end
 
 -- Plafond de plausibilite du compteur de captures d'un avant-poste par (site, guilde).
 -- Un avant-poste ne peut etre repris qu'apres expiration du hold (>= 5 min) : le maximum
@@ -231,11 +226,6 @@ local function currentSavedVarsPool()
     return "global"
 end
 
-local function guildKeepLbPoolMatchesCurrent(pool)
-    pool = normalizeSavedVarsPool(pool)
-    if pool == "" then return false end
-    return pool == currentSavedVarsPool()
-end
 
 -- Ladder outpost : pool local ou lien FR<->EU (aligne sync OP/OC/LO/LOC).
 local function outpostLbPoolMatchesCurrent(pool)
@@ -267,15 +257,6 @@ local function outpostCaptureRowKey(siteKey, guildKey, poolTag)
     return siteKey .. ":" .. poolTag .. ":" .. guildKey
 end
 
-local function ensureGuildKeepLeaderboardTables(lb)
-    if not OverlordDB then return 0 end
-    local epoch = lb and lb.GetCurrentCampaignStart and lb:GetCurrentCampaignStart() or 0
-    OverlordDB.guildKeepSiegeWinAwards = OverlordDB.guildKeepSiegeWinAwards or {}
-    OverlordDB.guildKeepTenants = OverlordDB.guildKeepTenants or {}
-    OverlordDB.guildKeepOfficialTenants = OverlordDB.guildKeepOfficialTenants or {}
-    OverlordDB.guildKeepCutoffSnapshots = OverlordDB.guildKeepCutoffSnapshots or {}
-    return epoch
-end
 
 -- Retire les caracteres qui cassent le protocole LK (|:=,)
 local function sanitizeGuildName(name)
@@ -475,103 +456,6 @@ local function localGuildRosterMatches(name)
     local dk = sync and sync.GetCaptureContributorDedupKey and sync:GetCaptureContributorDedupKey(name)
     if not dk or dk == "" then return false end
     return localGuildRosterKeys[dk] == true
-end
-
-local function isValidGuildKeepSite(siteKey)
-    return siteKey ~= "" and Overlord.GuildKeepSites and Overlord.GuildKeepSites[siteKey] ~= nil
-end
-
-local function isGuildKeepWinDayClosed(gk, dayKey)
-    if not gk or not gk.GetServerSiegeDayKey then return false end
-    dayKey = tostring(dayKey or "")
-    if not isGuildKeepSiegeKey(dayKey) then return false end
-    local today = gk:GetServerSiegeDayKey()
-    if dayKey > today then return false end
-    if dayKey == today and gk.IsSiegeWindowClosedForToday
-        and not gk:IsSiegeWindowClosedForToday() then
-        return false
-    end
-    return true
-end
-
--- Le reset protocole v8 arme GH sur la campagne courante ; aucun mode historique ne coexiste.
-local function isGuildKeepDailyProofCampaignActive(lb)
-    if not OverlordDB or not lb or not lb.GetCurrentCampaignStart then return false end
-    local campaignStart = math.floor(tonumber(lb:GetCurrentCampaignStart()) or 0)
-    local proofEpoch = math.floor(tonumber(OverlordDB.guildKeepDailyProofEpoch) or 0)
-    if campaignStart <= 0 or proofEpoch <= 0 then return false end
-    if campaignStart == proofEpoch then return true end
-    return Overlord.CampaignEpochsMatch
-        and Overlord:CampaignEpochsMatch(campaignStart, proofEpoch) or false
-end
-
-function Overlord.Leaderboard:IsGuildKeepDailyProofCampaignActive()
-    return isGuildKeepDailyProofCampaignActive(self)
-end
-
-local function getValidGuildKeepAward(lb, awardKey, award)
-    if type(award) ~= "table" or not guildKeepLbPoolMatchesCurrent(award.pool) then return nil end
-    local gk = Overlord.GuildKeep
-    if not gk or not gk.GetServerSiegeDayKey then return nil end
-    local siteKey = tostring(award.siteKey or "")
-    if not isValidGuildKeepSite(siteKey) then return nil end
-    local guild = sanitizeGuildName(award.guild or "")
-    local guildKey = guild:lower()
-    local faction = award.faction or ""
-    local dayKey = tostring(awardKey or ""):match("^([^:]+):") or ""
-    local keyedSite = tostring(awardKey or ""):match("^[^:]+:(.+)$") or ""
-    if guild == "" or guildKey == "" or (faction ~= "Alliance" and faction ~= "Horde")
-        or not isGuildKeepSiegeKey(dayKey) or keyedSite ~= siteKey then
-        return nil
-    end
-    if not isGuildKeepWinDayClosed(gk, dayKey) then return nil end
-    local canonical = lb and lb.GetGuildKeepDailyProofForDay
-        and lb:GetGuildKeepDailyProofForDay(siteKey, dayKey) or nil
-    if not canonical or canonical.status ~= "held"
-        or canonical.resultGuildKey ~= guildKey
-        or canonical.resultFaction ~= faction then return nil end
-    local winTs = math.floor(tonumber(award.winTs) or tonumber(canonical.eventAt) or 0)
-    local campaignStart = lb and lb.GetCurrentCampaignStart and lb:GetCurrentCampaignStart() or 0
-    if winTs <= 0 or not lb:IsTimestampInCurrentCampaign(winTs, campaignStart)
-        or winTs > leaderboardServerNow() + 300 then return nil end
-    local captureClaimedAt = math.floor(tonumber(canonical.claimedAt) or 0)
-    if captureClaimedAt <= 0 then return nil end
-    -- Jamais de substitution par winTs : l'heure de score/cloture n'est pas une capture
-    -- et ne peut donc ni elire ni rajeunir le tenant du fort.
-    local claimedAt = captureClaimedAt
-    return {
-        siteKey = siteKey,
-        guild = guild,
-        guildKey = guildKey,
-        faction = faction,
-        winTs = winTs,
-        claimedAt = claimedAt,
-        captureClaimedAt = captureClaimedAt,
-        pool = award.pool,
-    }
-end
-
-local function getValidGuildKeepTenantRow(lb, siteKey, row)
-    siteKey = tostring(siteKey or "")
-    if not isValidGuildKeepSite(siteKey) or type(row) ~= "table" then return nil end
-    local guild = sanitizeGuildName(row.guild or "")
-    local faction = row.faction or ""
-    local claimedAt = math.floor(tonumber(row.claimedAt) or 0)
-    if guild == "" or (faction ~= "Alliance" and faction ~= "Horde") or claimedAt <= 0 then
-        return nil
-    end
-    if not guildKeepLbPoolMatchesCurrent(row.pool) then return nil end
-    local campaignStart = lb and lb.GetCurrentCampaignStart and lb:GetCurrentCampaignStart() or 0
-    if not lb:IsTimestampInCurrentCampaign(claimedAt, campaignStart) then return nil end
-    if claimedAt > leaderboardServerNow() + 300 then return nil end
-    return {
-        siteKey = siteKey,
-        guild = guild,
-        guildKey = guild:lower(),
-        faction = faction,
-        claimedAt = claimedAt,
-        pool = row.pool,
-    }
 end
 
 local function isValidOutpostSite(siteKey)
@@ -774,8 +658,18 @@ local function guildLwwValueWins(newGuild, newAt, curGuild, curAt)
     return guildNameTieWins(newGuild, curGuild)
 end
 
-local function guildRecordWins(newGuild, newAt, newAuth, curGuild, curAt, curAuth)
-    if (newAuth == true) ~= (curAuth == true) then return newAuth == true end
+local function guildRecordWins(newGuild, newAt, newAuth, curGuild, curAt, curAuth,
+    newReplica, curReplica)
+    local newStrong = newAuth == true or newReplica == true
+    local curStrong = curAuth == true or curReplica == true
+    if newStrong ~= curStrong then return newStrong end
+    -- Un snapshot LK sollicite est une replique admise, pas une preuve directe
+    -- d'identite. Entre cette replique et une observation proprietaire, la date
+    -- prime pour eviter qu'un ancien heartbeat ressuscite une ancienne guilde.
+    if newStrong and curStrong then
+        newAt, curAt = normalizeGuildAt(newAt), normalizeGuildAt(curAt)
+        if newAt ~= curAt then return newAt > curAt end
+    end
     return guildLwwValueWins(newGuild, newAt, curGuild, curAt)
 end
 
@@ -836,6 +730,8 @@ function Overlord.Leaderboard:PatchDedupMetaGuildForPlayer(playerName, guild, fo
     b.guild = guild
     b.guildRank = newRank
     b.guildAuth = (sameValue and b.guildAuth == true) or force == true or nil
+    b.guildReplica = force ~= true and self.playerInfo and self.playerInfo[playerName]
+        and self.playerInfo[playerName].guildReplica == true or nil
     b.guildAt = guildAt
     b._guildSeen = true
     -- Le vote de faction est derive des lignes playerInfo, pas de l'alias LWW.
@@ -981,20 +877,24 @@ function Overlord.Leaderboard:RebuildDedupMetaIndex(yieldWork, onName)
                 if g ~= "" or ts > 0 then
                     local r = guildAliasRank(n, self)
                     local candidateAuth = inf.guildAuth == true
+                    local candidateReplica = inf.guildReplica == true
                     local previousGuild = sanitizeGuildName(b.guild or "")
                     local previousAt = normalizeGuildAt(b.guildAt)
                     local sameValue = previousGuild:lower() == g:lower()
                     local accept = not b._guildSeen
                         or guildRecordWins(g, ts, candidateAuth,
-                            previousGuild, previousAt, b.guildAuth)
+                            previousGuild, previousAt, b.guildAuth,
+                            candidateReplica, b.guildReplica)
                     if accept then
                         b.guild = g
                         b.guildRank = r
                         b.guildAt = ts
                         b.guildAuth = candidateAuth or nil
+                        b.guildReplica = candidateReplica or nil
                         b._guildSeen = true
                     elseif sameValue and ts == previousAt then
                         b.guildAuth = (b.guildAuth == true or candidateAuth) or nil
+                        b.guildReplica = (b.guildReplica == true or candidateReplica) or nil
                         if r > (b.guildRank or 0) then b.guildRank = r end
                         b._guildSeen = true
                     end
@@ -1315,9 +1215,6 @@ function Overlord.Leaderboard:PrepareForHeavyRead(forceMerge)
     if self.EnrichMissingRacesFromVisibleUnits then
         self:EnrichMissingRacesFromVisibleUnits()
     end
-    if self.MaybeAwardGuildKeepDailyWins then
-        self:MaybeAwardGuildKeepDailyWins()
-    end
 end
 
 local DISPLAY_KILL_RANK_LIMIT = Overlord.Leaderboard.KILL_RANK_LIMIT
@@ -1325,7 +1222,8 @@ local DISPLAY_PREVIEW_ROW_LIMIT = 500
 function Overlord.Leaderboard:SortNetworkRows(rows, less, yieldWork)
     return sortRowsWithYield(rows, less, yieldWork)
 end
-local DISPLAY_CAPTURE_RANK_LIMIT = 25
+local DISPLAY_CAPTURE_RANK_LIMIT = Overlord.Leaderboard.CAPTURE_RANK_LIMIT
+local DISPLAY_CAPTURE_PREVIEW_LIMIT = 25
 -- Au-dela de ce nombre de couples (creneau, fortin), la reparation des victoires de
 -- fortin est decoupee sur plusieurs images au lieu d'un seul bloc.
 Overlord.Leaderboard.GK_AWARD_REPAIR_SYNC_MAX = 16
@@ -1433,6 +1331,30 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
     if self._storageBound ~= true then return false end
     if self._displayCacheBuildPending then return false end
     if not C_Timer or not C_Timer.After then return false end
+    -- An incoming LK can invalidate metadata before a sliced build finishes.
+    -- Pace attempts as well as completed builds while an older view is usable;
+    -- otherwise each UI refresh can restart the full scan after an abort.
+    local cache = self._displayCache
+    if displayCacheSourcesMatch(cache, self) and cache.ready then
+        local last = math.max(tonumber(self._displayCacheLastBuildAt) or -math.huge,
+            tonumber(self._displayCacheLastAttemptAt) or -math.huge)
+        local gap = (self.DISPLAY_CACHE_MIN_REBUILD_SEC or 3) - (GetTime() - last)
+        if gap > 0 then
+            if not self._displayCacheDeferredBuild then
+                self._displayCacheDeferredBuild = true
+                C_Timer.After(gap, function()
+                    self._displayCacheDeferredBuild = nil
+                    local current = self._displayCache
+                    if not displayCacheSourcesMatch(current, self)
+                        or current.epoch ~= (self._displayCacheEpoch or 0) then
+                        self:StartDisplayCacheBuild()
+                    end
+                end)
+            end
+            return false
+        end
+    end
+    self._displayCacheLastAttemptAt = GetTime()
 
     local state = {
         epoch = self._displayCacheEpoch or 0,
@@ -1592,10 +1514,10 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                 }
                 yieldWork()
             end
-            table.sort(rows, function(a, b)
+            sortRowsWithYield(rows, function(a, b)
                 if a.count ~= b.count then return a.count > b.count end
                 return (a.name or "") < (b.name or "")
-            end)
+            end, yieldWork)
             return rows
         end
         local byFaction = {
@@ -1825,23 +1747,8 @@ function Overlord.Leaderboard:EnsureDisplayCache()
         cache = self:RestoreDisplayCache()
         self._displayCache = cache
     end
-    -- Sous un flux continu de kills, chaque build publiait une vue deja perimee qui
-    -- relancait aussitot le suivant : ~1 ms par image tant que le panneau restait
-    -- ouvert. Une vue valide deja affichee est gardee au plus quelques secondes ;
-    -- un build differe unique publie ensuite l'etat le plus recent.
-    local lastBuildAt = self._displayCacheLastBuildAt
-    local minGap = self.DISPLAY_CACHE_MIN_REBUILD_SEC or 3
-    if displayCacheSourcesMatch(cache, self) and lastBuildAt
-        and GetTime() - lastBuildAt < minGap and C_Timer and C_Timer.After then
-        if not self._displayCacheDeferredBuild then
-            self._displayCacheDeferredBuild = true
-            C_Timer.After(math.max(0, minGap - (GetTime() - lastBuildAt)), function()
-                self._displayCacheDeferredBuild = false
-                self:StartDisplayCacheBuild()
-            end)
-        end
-        return cache
-    end
+    -- StartDisplayCacheBuild owns the single cooldown timer, including when a
+    -- previous attempt was aborted by metadata arriving during its scan.
     self:StartDisplayCacheBuild()
     if displayCacheSourcesMatch(cache, self) then return cache end
 
@@ -1984,7 +1891,8 @@ function Overlord.Leaderboard:RestoreDisplayCache()
     for _, faction in ipairs({"Alliance", "Horde"}) do
         local rows = saved.byFaction[faction]
         if type(rows) ~= "table" or #rows > DISPLAY_CAPTURE_RANK_LIMIT then return nil end
-        for i = 1, #rows do
+        -- Keep login work at the old 25-row preview; the sliced builder fills 500.
+        for i = 1, math.min(#rows, DISPLAY_CAPTURE_PREVIEW_LIMIT) do
             local row = rows[i]
             if type(row) ~= "table" or not count(row.count) or row.faction ~= faction
                 or not text(row.class, 32) or not copyMeta(row.name) then return nil end
@@ -2026,84 +1934,12 @@ local function MarkLeaderboardScoreBucketAttested(bucket)
     end
 end
 
-local function GuildKeepCampaignHasData()
-    if not OverlordDB then return false end
-    for _, field in ipairs({
-        "guildKeepSiegeWinAwards", "guildKeepTenants",
-        "guildKeepOfficialTenants", "guildKeepCutoffSnapshots",
-    }) do
-        local rows = OverlordDB[field]
-        if type(rows) == "table" and next(rows) ~= nil then return true end
-    end
-    for siteKey in pairs(Overlord.GuildKeepSites or {}) do
-        local st = type(OverlordDB.guildKeeps) == "table"
-            and OverlordDB.guildKeeps[siteKey] or nil
-        if type(st) == "table" and (st.status ~= "neutral"
-            or (st.ownerGuild or "") ~= ""
-            or (tonumber(st.finalAssaultCapturedAt) or 0) > 0
-            or (tonumber(st.abortedAssaultAt) or 0) > 0) then return true end
-    end
-    return false
-end
-
-function Overlord.Leaderboard:GuildKeepCampaignNeedsReset(campaignStart)
-    if not OverlordDB or not GuildKeepCampaignHasData() then return false end
-    campaignStart = math.floor(tonumber(campaignStart) or self:GetCurrentCampaignStart() or 0)
-    if campaignStart <= 0 then return false end
-    local proofEpoch = math.floor(tonumber(OverlordDB.guildKeepDailyProofEpoch) or 0)
-    if proofEpoch > 0 and not LeaderboardCampaignEpochsMatch(proofEpoch, campaignStart) then
-        return true
-    end
-    for siteKey in pairs(Overlord.GuildKeepSites or {}) do
-        local st = type(OverlordDB.guildKeeps) == "table"
-            and OverlordDB.guildKeeps[siteKey] or nil
-        if type(st) == "table" then
-            local terminalAt = math.max(
-                tonumber(st.claimedAt) or 0,
-                tonumber(st.finalAssaultCapturedAt) or 0,
-                tonumber(st.abortedAssaultAt) or 0)
-            if terminalAt > 0 and terminalAt < campaignStart
-                and not LeaderboardCampaignEpochsMatch(terminalAt, campaignStart) then return true end
-        end
-    end
-    return false
-end
-
--- Frontiere GK unique utilisee par le reset normal et les deux recoveries de login.
--- Sans ce helper, un crash entre ResetAll et Leaderboard:Reset pouvait garder un ancien
--- tenant/award tout en estampillant deja le bucket generique sur la nouvelle semaine.
-function Overlord.Leaderboard:ResetGuildKeepCampaignData()
+-- Fortress captures share the outpost campaign and event ledger.
+function Overlord.Leaderboard:ResetStrategicSiteCampaignData()
     if not OverlordDB then return end
-    OverlordDB.guildKeepLbTenure = nil
-    OverlordDB.guildKeepLbTenureEpoch = nil
-    OverlordDB.guildKeepLbPeaks = nil
-    OverlordDB.guildKeepLbPeaksEpoch = nil
-    OverlordDB.guildKeepSiegeWinAwards = {}
-    OverlordDB.guildKeepTenants = {}
-    OverlordDB.guildKeepOfficialTenants = {}
-    OverlordDB.guildKeepCutoffSnapshots = {}
-    self._guildKeepProofLedgerPrepared = false
-    self._guildKeepProofLedgerDirty = true
-    self._guildKeepProofLedgerSource = nil
-    self._guildKeepProofDaysBySite = nil
-    self._guildKeepProofSyncRows = nil
     OverlordDB.dominationBoostPct = { Alliance = 0, Horde = 0 }
     OverlordDB.dominationBoostEvents = nil
-    local proofEpoch = math.floor(tonumber(self:GetCurrentCampaignStart()) or 0)
-    OverlordDB.guildKeepDailyProofEpoch = proofEpoch > 0 and proofEpoch or nil
-    if Overlord.GuildKeep and Overlord.GuildKeep.ResetKeepsForCampaign then
-        Overlord.GuildKeep:ResetKeepsForCampaign()
-        if Overlord.GuildKeep.InvalidateOfficialKeepTenantCache then
-            Overlord.GuildKeep:InvalidateOfficialKeepTenantCache()
-        end
-    else
-        -- Leaderboard.lua est charge avant GuildKeep.lua ; ce fallback reste valide si une
-        -- recovery exceptionnelle s'execute pendant l'initialisation des modules.
-        OverlordDB.guildKeeps = {}
-    end
-    if self.InvalidateGuildKeepDailyAwardStable then
-        self:InvalidateGuildKeepDailyAwardStable()
-    end
+    if Overlord.Outpost then Overlord.Outpost:ResetOutpostsForCampaign() end
 end
 
 -- Reset hebdo manque (crash entre lastResetTimestamp et Leaderboard:Reset) : archive puis wipe.
@@ -2118,8 +1954,7 @@ function Overlord.Leaderboard:RecoverMissedWeeklyResetIfNeeded(bucket)
     if calendarReset <= 0 or lastCampaign < calendarReset then return false end
     local campaignStart = self:GetCurrentCampaignStart()
     local hasScores = LeaderboardBucketHasScores(bucket)
-    local staleGuildKeep = self:GuildKeepCampaignNeedsReset(campaignStart)
-    if not hasScores and not staleGuildKeep then return false end
+    if not hasScores then return false end
     local bucketStart = tonumber(bucket.campaignStart) or 0
     local resetEpoch = GetLeaderboardResetEpoch()
     local archiveEpoch = nil
@@ -2139,9 +1974,6 @@ function Overlord.Leaderboard:RecoverMissedWeeklyResetIfNeeded(bucket)
             return false
         end
         archiveEpoch = lastCampaign - 604800
-        if archiveEpoch <= 0 then archiveEpoch = lastCampaign end
-    elseif staleGuildKeep then
-        archiveEpoch = bucketStart > 0 and bucketStart or (lastCampaign - 604800)
         if archiveEpoch <= 0 then archiveEpoch = lastCampaign end
     else
         return false
@@ -2861,6 +2693,12 @@ function Overlord.Leaderboard:ForceUpdateLocalPlayer(playerName, class, faction)
         or sanitizeGuildName(identity)
     local poolTag = normalizeSavedVarsPool(Overlord:GetCurrentSavedVarsPool() or "")
     local guildAt = identity == nil and normalizeGuildAt(prev and prev.guildAt) or time()
+    local keepReplica = prev and prev.guildReplica == true
+        and guildAt < normalizeGuildAt(prev.guildAt)
+    if keepReplica then
+        guildTag = sanitizeGuildName(prev.guild)
+        guildAt = normalizeGuildAt(prev.guildAt)
+    end
     local raceFile = (prev and prev.race) or ""
     local raceSex = (prev and tonumber(prev.raceSex)) or 0
     local raceAt = (prev and tonumber(prev.raceAt)) or 0
@@ -2884,7 +2722,10 @@ function Overlord.Leaderboard:ForceUpdateLocalPlayer(playerName, class, faction)
         factionAt = leaderboardServerNow(),
         locale = locTag,
         guild = guildTag,
-        guildAuth = identity ~= nil or (prev and prev.guildAuth == true) or nil,
+        guildAuth = not keepReplica
+            and (identity ~= nil or (prev and prev.guildAuth == true)) or nil,
+        guildReplica = keepReplica or (identity == nil and prev
+            and prev.guildReplica == true) or nil,
         guildAt = guildAt,
         pool = poolTag,
         race = raceFile,
@@ -2976,14 +2817,18 @@ local function lbMergeTwoPlayerInfoRows(self, bestKey, otherKey)
     local gO = sanitizeGuildName(iO.guild or "")
     local gAtT, gAtO = normalizeGuildAt(iT.guildAt), normalizeGuildAt(iO.guildAt)
     local mergedGuild, mergedGuildAuth, mergedGuildAt
-    if guildRecordWins(gO, gAtO, iO.guildAuth, gT, gAtT, iT.guildAuth) then
+    local mergedGuildReplica
+    if guildRecordWins(gO, gAtO, iO.guildAuth, gT, gAtT, iT.guildAuth,
+        iO.guildReplica, iT.guildReplica) then
         mergedGuild = gO
         mergedGuildAt = gAtO
         mergedGuildAuth = iO.guildAuth == true or nil
+        mergedGuildReplica = iO.guildReplica == true or nil
     else
         mergedGuild = gT
         mergedGuildAt = gAtT
         mergedGuildAuth = iT.guildAuth == true or nil
+        mergedGuildReplica = iT.guildReplica == true or nil
     end
     local pT = normalizeSavedVarsPool(iT.pool)
     local pO = normalizeSavedVarsPool(iO.pool)
@@ -3006,6 +2851,7 @@ local function lbMergeTwoPlayerInfoRows(self, bestKey, otherKey)
         locale = mergedLocale or "",
         guild = mergedGuild,
         guildAuth = mergedGuildAuth or nil,
+        guildReplica = mergedGuildReplica or nil,
         guildAt = mergedGuildAt,
         pool = mergedPool,
         race = mergedRace or "",
@@ -3110,6 +2956,10 @@ function Overlord.Leaderboard:SetPlayerGuild(playerName, guild, fromSync, author
     local prev = self.playerInfo[playerName]
     local prevGuild = sanitizeGuildName((prev and prev.guild) or "")
     local prevAt = normalizeGuildAt(prev and prev.guildAt)
+    if prev and prev.guildReplica == true then
+        if fromSync and not authoritative then return end
+        if authoritative and incAt < prevAt then return end
+    end
     if fromSync and authoritative and prev and prevGuild == "" and prevAt > 0
         and incAt > 0 and incAt <= prevAt then
         return
@@ -3125,6 +2975,7 @@ function Overlord.Leaderboard:SetPlayerGuild(playerName, guild, fromSync, author
             else
                 if not prev.guildAuth or incAt >= prevAt then prev.guildAt = incAt end
                 prev.guildAuth = true
+                prev.guildReplica = nil
             end
             if self:PatchDedupMetaGuildForPlayer(playerName, guild, true, false, incAt) then
                 return
@@ -3135,7 +2986,8 @@ function Overlord.Leaderboard:SetPlayerGuild(playerName, guild, fromSync, author
         if incAt <= prevAt then return end
     end
     if prev and prevGuild ~= guild
-        and not ((authoritative or prevGuild == "") and not prev.guildAuth)
+        and not ((authoritative or prevGuild == "") and not prev.guildAuth
+            and not prev.guildReplica)
         and not guildLwwValueWins(guild, incAt, prevGuild, prevAt) then
         return
     end
@@ -3148,6 +3000,7 @@ function Overlord.Leaderboard:SetPlayerGuild(playerName, guild, fromSync, author
     else
         prev.guild = guild
         prev.guildAuth = authoritative == true or nil
+        prev.guildReplica = nil
         prev.guildAt = incAt
         if prev.pool == nil then prev.pool = "" end
     end
@@ -3183,7 +3036,8 @@ function Overlord.Leaderboard:ClearPlayerGuild(playerName, fromSync, verifiedOwn
             guildAt = clearedAt, guildAuth = true, pool = "",
         }
         NoteDedupCanonicalName(self, playerName)
-    elseif row.guildAuth == true and clearedAt < previousAt then
+    elseif (row.guildAuth == true or row.guildReplica == true)
+        and clearedAt < previousAt then
         return false
     else
         if (row.guild or "") == "" and row.guildAuth == true and clearedAt == previousAt then
@@ -3191,6 +3045,7 @@ function Overlord.Leaderboard:ClearPlayerGuild(playerName, fromSync, verifiedOwn
         end
         row.guild = ""
         row.guildAuth = true
+        row.guildReplica = nil
         row.guildAt = clearedAt
         if row.pool == nil then row.pool = "" end
     end
@@ -3215,6 +3070,7 @@ function Overlord.Leaderboard:ClearPlayerGuild(playerName, fromSync, verifiedOwn
             or guildLwwValueWins("", clearedAt, bucketGuild, bucketAt) then
             bucket.guild = ""
             bucket.guildAuth = true
+            bucket.guildReplica = nil
             bucket.guildAt = clearedAt
             bucket._guildSeen = true
         end
@@ -3304,6 +3160,7 @@ function Overlord.Leaderboard:SetPlayerInfo(playerName, class, faction, localeOp
     local guildKeep = sanitizeGuildName((prev and prev.guild) or "")
     local guildAtKeep = normalizeGuildAt(prev and prev.guildAt)
     local prevAuth = prev and prev.guildAuth == true
+    local prevReplica = prev and prev.guildReplica == true
     local poolKeep = normalizeSavedVarsPool((prev and prev.pool) or "")
     -- Locale seule : inference pool uniquement hors Americas (cf. SavedVarsPoolFromLocaleTag).
     if poolKeep == "" and locKeep ~= "" and Overlord.SavedVarsPoolFromLocaleTag then
@@ -3318,6 +3175,7 @@ function Overlord.Leaderboard:SetPlayerInfo(playerName, class, faction, localeOp
         locale = locKeep,
         guild = guildKeep,
         guildAuth = prevAuth or nil,
+        guildReplica = prevReplica or nil,
         guildAt = guildAtKeep,
         pool = poolKeep,
         race = (prev and prev.race) or "",
@@ -3503,7 +3361,7 @@ end
 -- Cette voie n'effectue aucun scan global et n'invalide qu'une fois.
 function Overlord.Leaderboard:MergeLeaderboardKillMetadata(
     playerName, level, classToken, faction, localeTag, guild, guildAt, hasGuildRegister,
-    raceFile, raceSexOpt, raceAtOpt, guildAuthoritative)
+    raceFile, raceSexOpt, raceAtOpt, guildAuthoritative, guildSnapshot)
     if not playerName or playerName == "" then return false end
     level = math.floor(tonumber(level) or 0)
     if level < 1 or level > 90 then return false end
@@ -3561,18 +3419,35 @@ function Overlord.Leaderboard:MergeLeaderboardKillMetadata(
         end
     end
 
+    -- Seules les pages LK sollicitees passent en LWW entre registres forts.
+    -- Un LK tiers spontane peut toujours remplir un champ vide, mais ne peut
+    -- pas changer une guilde connue ni propager un depart. guildSnapshot doit
+    -- provenir du gate HR/pagination attendu, jamais d'un bit du paquet.
+    local guildFactionCompatible = faction ~= "Alliance" and faction ~= "Horde"
+        or (row.faction or "") == "" or row.faction == faction
+    local snapshot = guildSnapshot == true and guildAuthoritative ~= true
     if hasGuildRegister and (guildAuthoritative == true
-        or (sanitizeGuildName(row.guild or "") == "" and row.guildAuth ~= true
-            and sanitizeGuildName(guild or "") ~= "")) then
+        or (snapshot and guildFactionCompatible)
+        or (row.guildAuth ~= true and row.guildReplica ~= true
+            and sanitizeGuildName(row.guild or "") == ""
+            and sanitizeGuildName(guild or "") ~= "" and guildFactionCompatible)) then
         local incomingGuild = sanitizeGuildName(guild or "")
         local incomingAt = normalizeGuildAt(guildAt)
         if incomingAt <= leaderboardServerNow() + 300 then
             local currentGuild = sanitizeGuildName(row.guild or "")
             local currentAt = normalizeGuildAt(row.guildAt)
             local wins = false
-            if row.guildAuth ~= true
-                and (guildAuthoritative == true or currentGuild == "") then
+            if guildAuthoritative ~= true and not snapshot and incomingGuild == "" then
+                wins = false
+            elseif guildAuthoritative == true and row.guildAuth ~= true
+                and row.guildReplica ~= true then
                 wins = true
+            elseif not snapshot and guildAuthoritative ~= true then
+                wins = currentGuild == "" and incomingGuild ~= ""
+            elseif row.guildAuth == true or row.guildReplica == true or snapshot then
+                wins = guildRecordWins(incomingGuild, incomingAt,
+                    guildAuthoritative == true, currentGuild, currentAt,
+                    row.guildAuth == true, snapshot, row.guildReplica == true)
             elseif incomingGuild:lower() == currentGuild:lower() then
                 wins = incomingAt > currentAt
                     or (incomingAt == currentAt and incomingGuild < currentGuild)
@@ -3583,10 +3458,13 @@ function Overlord.Leaderboard:MergeLeaderboardKillMetadata(
                 row.guild = incomingGuild
                 row.guildAt = incomingAt
                 row.guildAuth = guildAuthoritative == true or nil
+                row.guildReplica = snapshot or nil
                 changed = true
             elseif incomingGuild:lower() == currentGuild:lower()
-                and guildAuthoritative == true and row.guildAuth ~= true then
+                and guildAuthoritative == true and row.guildAuth ~= true
+                and (row.guildReplica ~= true or incomingAt >= currentAt) then
                 row.guildAuth = true
+                row.guildReplica = nil
                 changed = true
             end
         end
@@ -3661,8 +3539,11 @@ function Overlord.Leaderboard:MergeOwnedGuildMetadata(playerName, guild, guildAt
     local currentAt = normalizeGuildAt(row.guildAt)
     local sameGuild = incomingGuild:lower() == currentGuild:lower()
     local valueWins
-    if row.guildAuth ~= true then
+    if row.guildAuth ~= true and row.guildReplica ~= true then
         valueWins = true
+    elseif row.guildReplica == true then
+        valueWins = guildRecordWins(incomingGuild, incomingAt, true,
+            currentGuild, currentAt, row.guildAuth, false, true)
     elseif sameGuild then
         valueWins = incomingAt > currentAt
             or (incomingAt == currentAt and incomingGuild < currentGuild)
@@ -3670,12 +3551,14 @@ function Overlord.Leaderboard:MergeOwnedGuildMetadata(playerName, guild, guildAt
         valueWins = guildLwwValueWins(incomingGuild, incomingAt, currentGuild, currentAt)
     end
     local authorityOnly = sameGuild and row.guildAuth ~= true
+        and (row.guildReplica ~= true or incomingAt >= currentAt)
     if not valueWins and not authorityOnly then return false end
     if valueWins then
         row.guild = incomingGuild
         row.guildAt = incomingAt
     end
     row.guildAuth = true
+    row.guildReplica = nil
     self:MarkMetaDirty()
     return true
 end
@@ -3985,6 +3868,7 @@ function Overlord.Leaderboard:HealPropagateGuildAcrossDedupAliases(yieldWork)
                         guild = g,
                         guildAt = guildAt,
                         guildAuth = inf.guildAuth == true,
+                        guildReplica = inf.guildReplica == true,
                         rank = guildAliasRank(k, self),
                     }
                     local previous = bestByDk[dkKey]
@@ -3993,10 +3877,12 @@ function Overlord.Leaderboard:HealPropagateGuildAcrossDedupAliases(yieldWork)
                         and previous.guildAt == candidate.guildAt
                     if not previous or guildRecordWins(
                         candidate.guild, candidate.guildAt, candidate.guildAuth,
-                        previous.guild, previous.guildAt, previous.guildAuth) then
+                        previous.guild, previous.guildAt, previous.guildAuth,
+                        candidate.guildReplica, previous.guildReplica) then
                         bestByDk[dkKey] = candidate
                     elseif sameValue then
                         previous.guildAuth = previous.guildAuth or candidate.guildAuth
+                        previous.guildReplica = previous.guildReplica or candidate.guildReplica
                         previous.rank = math.max(previous.rank or 0, candidate.rank or 0)
                     end
                 end
@@ -4015,11 +3901,14 @@ function Overlord.Leaderboard:HealPropagateGuildAcrossDedupAliases(yieldWork)
                     local cur = sanitizeGuildName(inf.guild or "")
                     local curAt = normalizeGuildAt(inf.guildAt)
                     local curAuth = inf.guildAuth == true
+                    local curReplica = inf.guildReplica == true
                     if cur:lower() ~= best.guild:lower()
-                        or curAt ~= best.guildAt or curAuth ~= best.guildAuth then
+                        or curAt ~= best.guildAt or curAuth ~= best.guildAuth
+                        or curReplica ~= best.guildReplica then
                         inf.guild = best.guild
                         inf.guildAt = best.guildAt
                         inf.guildAuth = best.guildAuth or nil
+                        inf.guildReplica = best.guildReplica or nil
                         if inf.pool == nil then inf.pool = "" end
                         updated = true
                     end
@@ -4449,7 +4338,7 @@ function Overlord.Leaderboard:Reset(archivingStartOverride, resetEpochOverride, 
         if type(marker) == "table"
             and tonumber(marker.resetEpoch) == resetEpoch
             and marker.leaderboardSideEffectsApplied ~= true then
-            self:ResetGuildKeepCampaignData()
+            self:ResetStrategicSiteCampaignData()
             self:Save()
             OverlordDB.lastLeaderboardResetAt = (GetServerTime and GetServerTime()) or time()
             marker.leaderboardSideEffectsApplied = true
@@ -4460,7 +4349,7 @@ function Overlord.Leaderboard:Reset(archivingStartOverride, resetEpochOverride, 
 
     -- Donnees campagne fixes/petites : elles basculent dans la meme frame logique
     -- que le bucket afin qu'une capture post-frontiere ne puisse jamais etre effacee.
-    self:ResetGuildKeepCampaignData()
+    self:ResetStrategicSiteCampaignData()
     self:Save()
     if OverlordDB then
         OverlordDB.lastLeaderboardResetAt = (GetServerTime and GetServerTime()) or time()
@@ -4474,117 +4363,6 @@ function Overlord.Leaderboard:Reset(archivingStartOverride, resetEpochOverride, 
     end
     self:ResumePendingWeeklyArchive()
     return true
-end
-
--- Tenants fortin projetes depuis les terminaux GK v8 acceptes.
-function Overlord.Leaderboard:GetGuildKeepTenantsTable()
-    if not OverlordDB then return {} end
-    ensureGuildKeepLeaderboardTables(self)
-    return OverlordDB.guildKeepTenants
-end
-
--- Projection classement du terminal v8 deja valide par GuildKeep.
-function Overlord.Leaderboard:ApplyGuildKeepTenant(siteKey, guild, faction, claimedAt, poolTag, force)
-    siteKey = tostring(siteKey or "")
-    guild = sanitizeGuildName(guild or "")
-    claimedAt = math.floor(tonumber(claimedAt) or 0)
-    poolTag = normalizeSavedVarsPool(poolTag) or ""
-    if poolTag == "" then return false end
-    if not guildKeepLbPoolMatchesCurrent(poolTag) then return false end
-    if siteKey == "" or not Overlord.GuildKeepSites or not Overlord.GuildKeepSites[siteKey] then
-        return false
-    end
-    if guild == "" or claimedAt <= 0 then return false end
-    local campaignStart = self:GetCurrentCampaignStart()
-    if not self:IsTimestampInCurrentCampaign(claimedAt, campaignStart) then return false end
-    if faction ~= "Alliance" and faction ~= "Horde" then return false end
-    local gk = Overlord.GuildKeep
-    if gk and gk.IsSiegeGameplayTimestampAllowed and not gk:IsSiegeGameplayTimestampAllowed(claimedAt) then
-        return false
-    end
-    force = force == true
-    if not force then
-        local st = gk and gk.GetState and gk:GetState(siteKey)
-        local heldGuild = st and sanitizeGuildName(st.ownerGuild or "") or ""
-        local heldClaimedAt = math.floor(tonumber(st and st.claimedAt) or 0)
-        -- Sans force, seule une projection exacte de l'etat terrain est acceptee.
-        if not st or st.status ~= "held" or heldGuild:lower() ~= guild:lower()
-            or st.ownerFaction ~= faction or heldClaimedAt ~= claimedAt then return false end
-    end
-    local tenants = self:GetGuildKeepTenantsTable()
-    local prev = tenants[siteKey]
-    local prevTs = prev and math.floor(tonumber(prev.claimedAt) or 0) or 0
-    local guildKey = guild:lower()
-    if not force and prev and prevTs > claimedAt then return false end
-    if not force and prev and prevTs == claimedAt and (prev.guildKey or "") == guildKey then
-        return false
-    end
-    tenants[siteKey] = {
-        guild = guild,
-        guildKey = guildKey,
-        faction = faction,
-        claimedAt = claimedAt,
-        pool = poolTag,
-    }
-    if gk and gk.RecordOfficialKeepTenant then
-        gk:RecordOfficialKeepTenant(siteKey, guild, faction, claimedAt, poolTag, force)
-    end
-    if self.InvalidateGuildKeepDailyAwardStable then
-        self:InvalidateGuildKeepDailyAwardStable()
-    end
-    self:MarkDirty()
-    if self.RequestGuildKeepProofLedgerRebuild then
-        self:RequestGuildKeepProofLedgerRebuild()
-    end
-    -- CompleteCapture local ne recoit pas son propre GC. Invalider aussi la liste de sites
-    -- (cache UI independant 30 s), sinon un panneau ouvert pouvait garder l'ancien tenant.
-    if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
-        Overlord.LeaderboardUI:RefreshIfVisible()
-    end
-    return true
-end
-
--- Capture locale : ecrit le tenant classement avant emission GC/GK.
-function Overlord.Leaderboard:SetGuildKeepTenantLocal(siteKey, guild, faction, claimedAt, force)
-    return self:ApplyGuildKeepTenant(
-        siteKey, guild, faction, claimedAt, currentSavedVarsPool(), force)
-end
-
-function Overlord.Leaderboard:ClearGuildKeepTenantLocal(siteKey)
-    siteKey = tostring(siteKey or "")
-    if not isValidGuildKeepSite(siteKey) then return false end
-    ensureGuildKeepLeaderboardTables(self)
-    local previous = OverlordDB.guildKeepTenants[siteKey]
-    OverlordDB.guildKeepTenants[siteKey] = nil
-    local changed = previous ~= nil
-    local gk = Overlord.GuildKeep
-    if gk and gk.ClearOfficialKeepTenant then
-        changed = gk:ClearOfficialKeepTenant(siteKey) or changed
-    end
-    local claimedAt = math.floor(tonumber(previous and previous.claimedAt) or 0)
-    local dayKey = claimedAt > 0 and gk and gk.GetServerSiegeDayKey
-        and gk:GetServerSiegeDayKey(claimedAt) or nil
-    if dayKey then
-        local awardKey = dayKey .. ":" .. siteKey
-        local award = OverlordDB.guildKeepSiegeWinAwards[awardKey]
-        if award then
-            OverlordDB.guildKeepSiegeWinAwards[awardKey] = nil
-            changed = true
-        end
-    end
-    if changed then
-        if self.InvalidateGuildKeepDailyAwardStable then
-            self:InvalidateGuildKeepDailyAwardStable()
-        end
-        self:MarkDirty()
-        if self.RequestGuildKeepProofLedgerRebuild then
-            self:RequestGuildKeepProofLedgerRebuild()
-        end
-        if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
-            Overlord.LeaderboardUI:RefreshIfVisible()
-        end
-    end
-    return changed
 end
 
 -- Lignes LO pour reponses SR (tenants avant-postes, max 4 sites).
@@ -5171,1541 +4949,13 @@ function Overlord.Leaderboard:ApplyOutpostCaptureCountSync(siteKey, guild, facti
     return anchorChanged or mergedCount > current or factionChanged
 end
 
-function Overlord.Leaderboard:GetGuildKeepSiegeWinAwardsTable()
-    if not OverlordDB then return {} end
-    ensureGuildKeepLeaderboardTables(self)
-    return OverlordDB.guildKeepSiegeWinAwards
-end
-
-local function normalizeGuildKeepDailyProof(lb, siteKey, dayKey, row)
-    if type(row) ~= "table" then return nil end
-    local gk = Overlord.GuildKeep
-    if not gk or not gk.GetServerSiegeDayKey or not gk.AssaultIdentityWins
-        or not gk.GetAssaultAttemptStartedAt then return nil end
-    siteKey, dayKey = tostring(siteKey or ""), tostring(dayKey or "")
-    if not isValidGuildKeepSite(siteKey)
-        or not isGuildKeepSiegeKey(dayKey) then return nil end
-    local kind = row.kind
-    local guild = sanitizeGuildName(row.guild or "")
-    local faction = row.faction
-    local shard = tonumber(row.shard)
-    local rawStartedAt = tonumber(row.startedAt)
-    local rawGenerationAt = tonumber(row.generationAt)
-    local rawEventAt = tonumber(row.eventAt)
-    local startedAt = math.floor(rawStartedAt or 0)
-    local generationAt = math.floor(rawGenerationAt or -1)
-    local player = tostring(row.player or ""):match("^%s*(.-)%s*$") or ""
-    local eventAt = math.floor(rawEventAt or 0)
-    local baseGuild = sanitizeGuildName(row.baseGuild or "")
-    local baseFaction = row.baseFaction
-    local rawBaseCapturedAt = tonumber(row.baseCapturedAt)
-    local baseCapturedAt = math.floor(rawBaseCapturedAt or 0)
-    local pool = normalizeSavedVarsPool(row.pool) or ""
-    local campaignStart = lb and lb.GetCurrentCampaignStart and lb:GetCurrentCampaignStart() or 0
-    local site = gk.GetSite and gk:GetSite(siteKey) or nil
-    local required = gk.GetDefaultHoldTimeRequired
-        and math.floor(tonumber(gk:GetDefaultHoldTimeRequired(nil, site)) or 900) or 900
-    local maxTimestamp = leaderboardServerNow() + 300
-    if (kind ~= "GC" and kind ~= "GA")
-        or not shard or shard ~= math.floor(shard)
-        or rawStartedAt ~= startedAt or rawGenerationAt ~= generationAt
-        or rawEventAt ~= eventAt or rawBaseCapturedAt ~= baseCapturedAt
-        or startedAt <= 0 or startedAt > maxTimestamp
-        or generationAt < 0 or generationAt > 1000000
-        or eventAt <= 0 or eventAt > maxTimestamp
-        or baseCapturedAt < 0 or baseCapturedAt > maxTimestamp then return nil end
-    local attemptStartedAt = math.floor(tonumber(
-        gk:GetAssaultAttemptStartedAt(startedAt, generationAt)) or 0)
-    local startedDay = gk:GetServerSiegeDayKey(startedAt)
-    local eventDay = gk:GetServerSiegeDayKey(eventAt)
-    local validIdentity = gk:AssaultIdentityWins(
-        guild, faction, shard, startedAt, generationAt, player,
-        baseGuild, baseFaction, baseCapturedAt,
-        "", nil, nil, 0, 0, "", "", nil, 0)
-    if not validIdentity or attemptStartedAt <= 0 or eventAt < attemptStartedAt
-        or not lb:IsTimestampInCurrentCampaign(startedAt, campaignStart)
-        or not lb:IsTimestampInCurrentCampaign(attemptStartedAt, campaignStart)
-        or not lb:IsTimestampInCurrentCampaign(eventAt, campaignStart)
-        or (baseCapturedAt > 0
-            and not lb:IsTimestampInCurrentCampaign(baseCapturedAt, campaignStart))
-        or (gk.IsSiegeGameplayTimestampAllowed
-            and not gk:IsSiegeGameplayTimestampAllowed(startedAt))
-        or (kind == "GC" and ((eventAt - attemptStartedAt) < math.max(0, required - 1)
-            or (gk.IsSiegeCaptureTimestampAllowed
-                and not gk:IsSiegeCaptureTimestampAllowed(eventAt))))
-        or startedDay ~= eventDay or startedDay > dayKey or eventDay > dayKey
-        or pool == "" or not guildKeepLbPoolMatchesCurrent(pool) then return nil end
-
-    local status, resultGuild, resultFaction, claimedAt
-    if kind == "GC" then
-        status, resultGuild, resultFaction, claimedAt = "held", guild, faction, eventAt
-    elseif baseGuild ~= "" then
-        status, resultGuild, resultFaction, claimedAt =
-            "held", baseGuild, baseFaction, baseCapturedAt
-    else
-        status, resultGuild, resultFaction, claimedAt = "neutral", "", nil, 0
-    end
-    return {
-        kind = kind, eventAt = eventAt, guild = guild, faction = faction,
-        shard = shard, startedAt = startedAt, generationAt = generationAt, player = player,
-        baseGuild = baseGuild, baseFaction = baseFaction, baseCapturedAt = baseCapturedAt,
-        status = status, resultGuild = resultGuild,
-        resultGuildKey = resultGuild:lower(), resultFaction = resultFaction,
-        claimedAt = claimedAt, pool = pool,
-    }
-end
-
-local function guildKeepDailyProofWins(candidate, current)
-    if not candidate then return false end
-    if not current then return true end
-    local gk = Overlord.GuildKeep
-    return gk and gk.AssaultResolutionWins and gk:AssaultResolutionWins({
-        kind = candidate.kind, eventAt = candidate.eventAt,
-        guild = candidate.guild, faction = candidate.faction,
-        shard = candidate.shard, startedAt = candidate.startedAt,
-        generationAt = candidate.generationAt, player = candidate.player,
-        baseGuild = candidate.baseGuild, baseFaction = candidate.baseFaction,
-        baseCapturedAt = candidate.baseCapturedAt,
-    }, {
-        kind = current.kind, eventAt = current.eventAt,
-        guild = current.guild, faction = current.faction,
-        shard = current.shard, startedAt = current.startedAt,
-        generationAt = current.generationAt, player = current.player,
-        baseGuild = current.baseGuild, baseFaction = current.baseFaction,
-        baseCapturedAt = current.baseCapturedAt,
-    }) or false
-end
-
-local function guildKeepDailyProofMatches(a, b)
-    if not a or not b then return false end
-    return a.kind == b.kind and a.eventAt == b.eventAt
-        and a.guild:lower() == b.guild:lower() and a.faction == b.faction
-        and a.shard == b.shard and a.startedAt == b.startedAt
-        and a.generationAt == b.generationAt
-        and a.player:lower() == b.player:lower()
-        and a.baseGuild:lower() == b.baseGuild:lower()
-        and a.baseFaction == b.baseFaction
-        and a.baseCapturedAt == b.baseCapturedAt and a.pool == b.pool
-end
-
--- Registre brut GH : un seul winner total-order par keep/jour. Il ne doit jamais etre
--- reecrit par une correction d'un autre jour, sinon un GA J1 arrive apres coup ne peut plus
--- restaurer le vrai GC J2 qui avait ete ecrase. Les pairs echangent toujours cette forme.
-local function getRawGuildKeepDailyProofForDay(lb, siteKey, dayKey)
-    if not isGuildKeepDailyProofCampaignActive(lb) then return nil end
-    local snapshots = OverlordDB and OverlordDB.guildKeepCutoffSnapshots
-    local snapByDay = type(snapshots) == "table" and snapshots[tostring(dayKey or "")]
-    local row = type(snapByDay) == "table" and snapByDay[tostring(siteKey or "")] or nil
-    return normalizeGuildKeepDailyProof(lb, siteKey, dayKey, row)
-end
-
-local function guildKeepTenureKey(guild, faction, capturedAt)
-    guild = sanitizeGuildName(guild or "")
-    capturedAt = math.floor(tonumber(capturedAt) or 0)
-    if guild == "" or capturedAt <= 0
-        or (faction ~= "Alliance" and faction ~= "Horde") then return "" end
-    return guild:lower() .. "\31" .. faction .. "\31" .. tostring(capturedAt)
-end
-
-local GK_DAILY_PROOF_BASES_MAX = 6
-
-local function guildKeepDailyProofBaseKey(proof)
-    if not proof then return nil end
-    if proof.baseGuild == "" and proof.baseCapturedAt == 0 then return "_neutral" end
-    local key = guildKeepTenureKey(
-        proof.baseGuild, proof.baseFaction, proof.baseCapturedAt)
-    return key ~= "" and key or nil
-end
-
--- Le meme tri est utilise a l'ecriture et pour les projections hypothetiques. Sans cette
--- frontiere commune, une septieme branche rejetee du disque pouvait encore influencer
--- WouldGuildKeepCaptureWinOwnDay, puis produire un terrain different apres Apply.
-local function pruneGuildKeepDailyProofCandidatesByBase(byBase)
-    local keys = {}
-    for baseKey in pairs(byBase or {}) do keys[#keys + 1] = baseKey end
-    table.sort(keys, function(a, b)
-        local ar, br = byBase[a], byBase[b]
-        local at = math.floor(tonumber(ar and ar.baseCapturedAt) or 0)
-        local bt = math.floor(tonumber(br and br.baseCapturedAt) or 0)
-        if at ~= bt then return at < bt end
-        return a < b
-    end)
-    for i = GK_DAILY_PROOF_BASES_MAX + 1, #keys do
-        byBase[keys[i]] = nil
-    end
-    return keys
-end
-
-local function copyGuildKeepDailyProofRow(proof)
-    if not proof then return nil end
-    return {
-        kind = proof.kind, eventAt = proof.eventAt,
-        guild = proof.guild, faction = proof.faction,
-        shard = proof.shard, startedAt = proof.startedAt,
-        generationAt = proof.generationAt, player = proof.player,
-        baseGuild = proof.baseGuild, baseFaction = proof.baseFaction,
-        baseCapturedAt = proof.baseCapturedAt, pool = proof.pool,
-    }
-end
-
--- Frontiere publique unique pour le wire GH : un transport historique approuve ne doit
--- jamais contourner les memes validations root+offset que le registre persistant.
-function Overlord.Leaderboard:NormalizeGuildKeepDailyProof(siteKey, dayKey, row)
-    return normalizeGuildKeepDailyProof(self, siteKey, dayKey, row)
-end
-
--- Un winner pur PAR tenure de depart. Garder uniquement le winner global perdait une
--- branche valide E(base X) derriere une branche D(base C) ensuite invalidee par le fold.
--- Six bases couvrent les quatre recaptures physiques possibles dans l'heure plus deux
--- branches concurrentes. Le pire cas campagne (6 keeps x 7 jours x 6) reste aussi sous
--- le cache GH de 256 entre les deux vagues, tout en
--- bornant SavedVariables et les reponses SR.
-local function getRawGuildKeepDailyProofCandidatesForDay(
-    lb, siteKey, dayKey, snapshotsOverride, yieldWork)
-    if not isGuildKeepDailyProofCampaignActive(lb) then return {} end
-    siteKey, dayKey = tostring(siteKey or ""), tostring(dayKey or "")
-    local snapshots = snapshotsOverride or (OverlordDB and OverlordDB.guildKeepCutoffSnapshots)
-    local snapshot = type(snapshots) == "table" and snapshots[dayKey] or nil
-    local stored = type(snapshot) == "table" and snapshot[siteKey] or nil
-    if type(stored) ~= "table" then return {} end
-    local byBase = {}
-    local function consider(raw)
-        local proof = normalizeGuildKeepDailyProof(lb, siteKey, dayKey, raw)
-        local baseKey = guildKeepDailyProofBaseKey(proof)
-        local current = baseKey and byBase[baseKey] or nil
-        if baseKey and (not current or guildKeepDailyProofWins(proof, current)) then
-            byBase[baseKey] = proof
-        end
-    end
-    consider(stored)
-    if type(stored.byBase) == "table" then
-        for _, raw in pairs(stored.byBase) do
-            consider(raw)
-            if yieldWork then yieldWork() end
-        end
-    end
-    pruneGuildKeepDailyProofCandidatesByBase(byBase)
-    local keys = {}
-    for baseKey in pairs(byBase) do
-        keys[#keys + 1] = baseKey
-        if yieldWork then yieldWork() end
-    end
-    table.sort(keys)
-    local rows = {}
-    for _, baseKey in ipairs(keys) do rows[#rows + 1] = byBase[baseKey] end
-    return rows
-end
-
--- Projection reversible des registres bruts. Le fold est minuscule (au plus les jours de
--- la campagne pour un keep) et resout le cas partitionne sans nouveau protocole :
---   A=GC J1 rend C=GC J2 sur l'ancienne base impossible ;
---   si B=GA J1, ancre gagnante, remplace ensuite A dans le registre brut J1, C redevient
---   automatiquement valide puisque le brut J2 n'a jamais ete detruit.
-local function getGuildKeepDailyProofForDay(
-    lb, siteKey, dayKey, overlay, snapshotsOverride, dayIndexOverride, yieldWork)
-    if not isGuildKeepDailyProofCampaignActive(lb) then return nil end
-    siteKey, dayKey = tostring(siteKey or ""), tostring(dayKey or "")
-    local snapshots = snapshotsOverride or (OverlordDB and OverlordDB.guildKeepCutoffSnapshots)
-    if type(snapshots) ~= "table" then return nil end
-    local dayIndex = dayIndexOverride or lb._guildKeepProofDaysBySite
-    if not dayIndexOverride and (not lb._guildKeepProofLedgerPrepared
-        or type(dayIndex) ~= "table") then
-        if lb.EnsureGuildKeepProofLedgerPrepared then
-            lb:EnsureGuildKeepProofLedgerPrepared(false)
-        end
-        return nil
-    end
-    local days, daySeen, targetHasProof = {}, {}, false
-    for _, candidateDay in ipairs(dayIndex[siteKey] or {}) do
-        if candidateDay <= dayKey then
-            days[#days + 1] = candidateDay
-            daySeen[candidateDay] = true
-        end
-    end
-    if overlay and overlay.dayKey and overlay.dayKey <= dayKey
-        and not daySeen[overlay.dayKey] then
-        days[#days + 1] = overlay.dayKey
-        daySeen[overlay.dayKey] = true
-        -- Index campagne borne (7 jours) : insertion stable sans table.sort.
-        local insertAt = #days
-        while insertAt > 1 and days[insertAt] < days[insertAt - 1] do
-            days[insertAt], days[insertAt - 1] = days[insertAt - 1], days[insertAt]
-            insertAt = insertAt - 1
-        end
-    end
-
-    local current
-    local currentProofDay = ""
-    local overlayConsumed = false
-    local function currentTenureKey()
-        if current and current.status == "held" then
-            local key = guildKeepTenureKey(
-                current.resultGuild, current.resultFaction, current.claimedAt)
-            if key ~= "" then return key end
-        end
-        return "_neutral"
-    end
-    for _, candidateDay in ipairs(days) do
-        local candidates = getRawGuildKeepDailyProofCandidatesForDay(
-            lb, siteKey, candidateDay, snapshotsOverride, yieldWork)
-        if overlay and overlay.dayKey == candidateDay and overlay.proof then
-            local byBase = {}
-            for _, proof in ipairs(candidates) do
-                local baseKey = guildKeepDailyProofBaseKey(proof)
-                if baseKey then byBase[baseKey] = proof end
-            end
-            local overlayKey = guildKeepDailyProofBaseKey(overlay.proof)
-            local previous = overlayKey and byBase[overlayKey] or nil
-            if overlayKey and (not previous
-                or guildKeepDailyProofWins(overlay.proof, previous)) then
-                byBase[overlayKey] = overlay.proof
-            end
-            pruneGuildKeepDailyProofCandidatesByBase(byBase)
-            candidates = {}
-            for _, proof in pairs(byBase) do candidates[#candidates + 1] = proof end
-        end
-        if #candidates > 0 then
-            if candidateDay == dayKey then targetHasProof = true end
-            local remaining = {}
-            for _, candidate in ipairs(candidates) do
-                local baseKey = guildKeepDailyProofBaseKey(candidate)
-                -- Un assaut ancre avant le terminal effectif courant ne peut plus etre
-                -- son descendant. Le filtrer ici evite qu'un paquet stale consomme une
-                -- iteration du petit fold et masque une branche intermediaire valide.
-                if baseKey and (not current
-                    or guildKeepDailyProofMatches(candidate, current)
-                    or candidate.startedAt >= current.eventAt) then
-                    remaining[baseKey] = candidate
-                end
-            end
-
-            -- Le snapshot quotidien peut contenir le terminal de defense (A, base X)
-            -- et une nouvelle attaque (B, base A). Consommer d'abord la repetition exacte,
-            -- puis suivre la chaine de bases, une capture a la fois.
-            if current then
-                for baseKey, candidate in pairs(remaining) do
-                    if guildKeepDailyProofMatches(candidate, current) then
-                        if overlay and overlay.proof
-                            and guildKeepDailyProofMatches(candidate, overlay.proof) then
-                            overlayConsumed = true
-                        end
-                        remaining[baseKey] = nil
-                        break
-                    end
-                end
-            end
-
-            local transitioned = false
-            for _ = 1, GK_DAILY_PROOF_BASES_MAX do
-                local baseKey = currentTenureKey()
-                local candidate = remaining[baseKey]
-                if not candidate then
-                    -- Rattrapage d'une tenure intermediaire dont aucun cutoff n'est connu.
-                    -- Des qu'un jour deja scelle contredit cette base, elle n'est plus
-                    -- admissible. Ne faire ce saut qu'avant toute transition explicite du jour.
-                    if transitioned then break end
-                    for candidateKey, possible in pairs(remaining) do
-                        local baseDay = possible.baseCapturedAt > 0
-                            and Overlord.GuildKeep:GetServerSiegeDayKey(
-                                possible.baseCapturedAt) or ""
-                        local contradiction = baseDay ~= "" and currentProofDay ~= ""
-                            and currentProofDay >= baseDay and candidateKey ~= baseKey
-                        if not contradiction and (not candidate
-                            or guildKeepDailyProofWins(possible, candidate)) then
-                            candidate, baseKey = possible, candidateKey
-                        end
-                    end
-                end
-                if not candidate then break end
-                remaining[baseKey] = nil
-                if not current or candidate.startedAt >= current.eventAt then
-                    current = candidate
-                    transitioned = true
-                    if overlay and overlay.proof
-                        and guildKeepDailyProofMatches(candidate, overlay.proof) then
-                        overlayConsumed = true
-                    end
-                    if candidate.kind ~= "GC" then break end
-                end
-            end
-            currentProofDay = candidateDay
-        end
-        if yieldWork then yieldWork() end
-    end
-    return targetHasProof and current or nil, overlayConsumed
-end
-
-function Overlord.Leaderboard:GetGuildKeepDailyProofForDay(siteKey, dayKey)
-    return getGuildKeepDailyProofForDay(self, siteKey, dayKey)
-end
-
-function Overlord.Leaderboard:GetRawGuildKeepDailyProofCandidatesForDay(siteKey, dayKey)
-    return getRawGuildKeepDailyProofCandidatesForDay(self, siteKey, dayKey)
-end
-
-function Overlord.Leaderboard:WouldGuildKeepCaptureWinOwnDay(siteKey, capture)
-    local gk = Overlord.GuildKeep
-    if not gk or not gk.GetServerSiegeDayKey or type(capture) ~= "table" then return false end
-    local dayKey = gk:GetServerSiegeDayKey(capture.eventAt)
-    local candidate = normalizeGuildKeepDailyProof(self, siteKey, dayKey, capture)
-    if not candidate then return false end
-    local candidateBase = guildKeepDailyProofBaseKey(candidate)
-    local byBase = {}
-    for _, raw in ipairs(getRawGuildKeepDailyProofCandidatesForDay(
-        self, siteKey, dayKey)) do
-        local baseKey = guildKeepDailyProofBaseKey(raw)
-        if baseKey then byBase[baseKey] = raw end
-    end
-    local previous = candidateBase and byBase[candidateBase] or nil
-    if not candidateBase or (previous
-        and not guildKeepDailyProofMatches(candidate, previous)
-        and not guildKeepDailyProofWins(candidate, previous)) then return false end
-    byBase[candidateBase] = candidate
-    pruneGuildKeepDailyProofCandidatesByBase(byBase)
-    if not byBase[candidateBase] then return false end
-    local projected, candidateConsumed = getGuildKeepDailyProofForDay(self, siteKey, dayKey, {
-        dayKey = dayKey, proof = candidate,
-    })
-    -- Une correction intermediaire A peut etre indispensable a la chaine A -> B tout en
-    -- n'etant pas le terminal final B du jour. Ce qui compte pour le rebase live est que A
-    -- ait reellement ete consommee par la projection bornee, pas qu'elle soit la derniere.
-    return projected ~= nil and candidateConsumed
-end
-
-local function getGuildKeepCanonicalTenantForDay(lb, siteKey, dayKey)
-    local sealed = getGuildKeepDailyProofForDay(lb, siteKey, dayKey)
-    if sealed and sealed.status == "held" then
-        return {
-            guild = sealed.resultGuild, guildKey = sealed.resultGuildKey,
-            faction = sealed.resultFaction, claimedAt = sealed.claimedAt, pool = sealed.pool,
-            proof = sealed,
-        }
-    end
-    return nil
-end
-
-function Overlord.Leaderboard:GetCanonicalGuildKeepTenantForDay(siteKey, dayKey)
-    return getGuildKeepCanonicalTenantForDay(self, tostring(siteKey or ""), tostring(dayKey or ""))
-end
-
-function Overlord.Leaderboard:ApplyGuildKeepDailyProofSync(
-    siteKey, dayKey, kind, eventAt, guild, faction, shard, startedAt,
-    generationAt, player, baseGuild, baseFaction, baseCapturedAt, poolTag)
-    if not isGuildKeepDailyProofCampaignActive(self) then return false end
-    local candidate = normalizeGuildKeepDailyProof(self, siteKey, dayKey, {
-        kind = kind, eventAt = eventAt, guild = guild, faction = faction,
-        shard = shard, startedAt = startedAt, generationAt = generationAt, player = player,
-        baseGuild = baseGuild, baseFaction = baseFaction,
-        baseCapturedAt = baseCapturedAt, pool = poolTag,
-    })
-    local gk = Overlord.GuildKeep
-    if not candidate or not isGuildKeepWinDayClosed(gk, tostring(dayKey or "")) then return false end
-
-    ensureGuildKeepLeaderboardTables(self)
-    local snapshots = OverlordDB.guildKeepCutoffSnapshots
-    local snap = snapshots[dayKey]
-    if type(snap) ~= "table" then
-        snap = {}
-        snapshots[dayKey] = snap
-    end
-    local byBase, baseCount = {}, 0
-    for _, raw in ipairs(getRawGuildKeepDailyProofCandidatesForDay(
-        self, siteKey, dayKey)) do
-        local baseKey = guildKeepDailyProofBaseKey(raw)
-        if baseKey and not byBase[baseKey] then
-            byBase[baseKey] = copyGuildKeepDailyProofRow(raw)
-            baseCount = baseCount + 1
-        end
-    end
-    local candidateBase = guildKeepDailyProofBaseKey(candidate)
-    if not candidateBase then return false end
-    local previousBase = normalizeGuildKeepDailyProof(
-        self, siteKey, dayKey, byBase[candidateBase])
-    if previousBase and not guildKeepDailyProofWins(candidate, previousBase) then
-        return false
-    end
-    if not previousBase then baseCount = baseCount + 1 end
-    byBase[candidateBase] = copyGuildKeepDailyProofRow(candidate)
-
-    if baseCount > GK_DAILY_PROOF_BASES_MAX then
-        pruneGuildKeepDailyProofCandidatesByBase(byBase)
-        if not byBase[candidateBase] then return false end
-    end
-
-    local winner
-    for _, raw in pairs(byBase) do
-        local proof = normalizeGuildKeepDailyProof(self, siteKey, dayKey, raw)
-        if proof and (not winner or guildKeepDailyProofWins(proof, winner)) then
-            winner = proof
-        end
-    end
-    if not winner then return false end
-    local storedWinner = copyGuildKeepDailyProofRow(winner)
-    storedWinner.byBase = byBase
-    snap[siteKey] = storedWinner
-    self:MarkDirty()
-    if self.RequestGuildKeepProofLedgerRebuild then
-        self:RequestGuildKeepProofLedgerRebuild(siteKey, tostring(dayKey or ""))
-    end
-    if self.InvalidateGuildKeepDailyAwardStable then
-        self:InvalidateGuildKeepDailyAwardStable()
-    end
-    if gk.InvalidateOfficialKeepTenantCache then
-        gk:InvalidateOfficialKeepTenantCache(siteKey)
-    end
-
-    return true
-end
-
-function Overlord.Leaderboard:BuildGuildKeepDailyProofForState(siteKey, dayKey)
-    local gk = Overlord.GuildKeep
-    local st = gk and gk.GetState and gk:GetState(siteKey)
-    local terminal = st and gk.GetCurrentTerminalProof and gk:GetCurrentTerminalProof(st)
-    if not terminal then return nil end
-    terminal.pool = terminal.pool ~= "" and terminal.pool or currentSavedVarsPool()
-    return normalizeGuildKeepDailyProof(self, siteKey, dayKey, terminal)
-end
-
--- Une correction live tardive scelle le GC dans le registre brut de SON jour. La projection
--- ci-dessus recalcule les jours suivants sans les ecraser : elle reste donc reversible si le
--- vrai winner concurrent de J1 (par exemple un GA) arrive ensuite.
-function Overlord.Leaderboard:RepairGuildKeepDailyProofsAfterLineageCorrection(siteKey)
-    if not isGuildKeepDailyProofCampaignActive(self) then return false end
-    local gk = Overlord.GuildKeep
-    local st = gk and gk.GetState and gk:GetState(siteKey)
-    local terminal = st and gk.GetCurrentTerminalProof and gk:GetCurrentTerminalProof(st)
-    if not terminal or terminal.kind ~= "GC" then return false end
-    terminal.pool = terminal.pool ~= "" and terminal.pool or currentSavedVarsPool()
-    local terminalDay = gk.GetServerSiegeDayKey
-        and gk:GetServerSiegeDayKey(terminal.eventAt) or ""
-    local applied = self:ApplyGuildKeepDailyProofSync(
-        siteKey, terminalDay, terminal.kind, terminal.eventAt,
-        terminal.guild, terminal.faction, terminal.shard,
-        terminal.startedAt, terminal.generationAt, terminal.player,
-        terminal.baseGuild, terminal.baseFaction,
-        terminal.baseCapturedAt, terminal.pool)
-    local changed = applied
-    if self.ReconcileGuildKeepDailyAwardsFromDay
-        and self:ReconcileGuildKeepDailyAwardsFromDay(siteKey, terminalDay) then
-        changed = true
-    end
-    local terminalProof = normalizeGuildKeepDailyProof(
-        self, siteKey, terminalDay, terminal)
-    local hasTerminal = false
-    for _, raw in ipairs(getRawGuildKeepDailyProofCandidatesForDay(
-        self, siteKey, terminalDay)) do
-        if guildKeepDailyProofMatches(raw, terminalProof) then
-            hasTerminal = true
-            break
-        end
-    end
-    if hasTerminal
-        and self.ShouldBroadcastLocalGuildKeepProof
-        and self:ShouldBroadcastLocalGuildKeepProof(terminalProof, siteKey)
-        and Overlord.Sync and Overlord.Sync.BroadcastGuildKeepDailyProof then
-        Overlord.Sync:BroadcastGuildKeepDailyProof(siteKey, terminalDay, applied)
-    end
-    return changed
-end
-
-function Overlord.Leaderboard:BuildGuildKeepDailyProofSyncRows()
-    local prepared = self:EnsureGuildKeepProofLedgerPrepared(false)
-    if prepared ~= true then return {} end
-    return self._guildKeepProofSyncRows or {}
-end
-
-function Overlord.Leaderboard:RequestGuildKeepProofLedgerRebuild(siteKey, dayKey)
-    self._guildKeepProofLedgerRevision =
-        (tonumber(self._guildKeepProofLedgerRevision) or 0) + 1
-    self._guildKeepProofLedgerDirty = true
-    -- L'index de jours deja publie peut etre complete en O(7) sans scanner la racine.
-    local index = self._guildKeepProofDaysBySite
-    siteKey, dayKey = tostring(siteKey or ""), tostring(dayKey or "")
-    if self._guildKeepProofLedgerPrepared and type(index) == "table"
-        and isValidGuildKeepSite(siteKey) and isGuildKeepSiegeKey(dayKey) then
-        local days = index[siteKey]
-        if not days then days = {}; index[siteKey] = days end
-        local seen = false
-        for _, existing in ipairs(days) do if existing == dayKey then seen = true; break end end
-        if not seen then
-            local insertAt = #days + 1
-            while insertAt > 1 and days[insertAt - 1] > dayKey do
-                days[insertAt] = days[insertAt - 1]
-                insertAt = insertAt - 1
-            end
-            days[insertAt] = dayKey
-        end
-    end
-    if not self._guildKeepProofLedgerPrepared or self._guildKeepProofLedgerPrepPending
-        or self._guildKeepProofLedgerRetryScheduled or self._guildKeepProofLedgerWakePending
-        or not C_Timer or not C_Timer.After then return end
-    self._guildKeepProofLedgerWakePending = true
-    C_Timer.After(0, function()
-        if not Overlord.Leaderboard then return end
-        Overlord.Leaderboard._guildKeepProofLedgerWakePending = nil
-        Overlord.Leaderboard:EnsureGuildKeepProofLedgerPrepared(false)
-    end)
-end
-
--- Sanitation/index GH requise avant Sync. Les quatre racines sont reconstruites hors
--- handlers, puis publiees ensemble ; une mutation concurrente annule le commit afin de
--- ne jamais perdre un terminal ou un award arrive pendant une tranche.
-function Overlord.Leaderboard:EnsureGuildKeepProofLedgerPrepared(requireCurrent)
-    if not OverlordDB or not Overlord.GuildKeep then return "blocked" end
-    ensureGuildKeepLeaderboardTables(self)
-    local sourceSnapshots = OverlordDB.guildKeepCutoffSnapshots
-    local sourceLegacySnapshots = OverlordDB.guildKeepProtocol7SnapshotsPending
-    local sourceTenants = OverlordDB.guildKeepTenants
-    local sourceOfficial = OverlordDB.guildKeepOfficialTenants
-    local sourceAwards = OverlordDB.guildKeepSiegeWinAwards
-    if self._guildKeepProofLedgerSource ~= sourceSnapshots
-        or self._guildKeepProofLegacySource ~= sourceLegacySnapshots then
-        self._guildKeepProofLedgerPrepared = false
-        self._guildKeepProofLedgerDirty = true
-        self._guildKeepProofLedgerFailed = nil
-    end
-    if self._guildKeepProofLedgerFailed then return "blocked" end
-    if self._guildKeepProofLedgerPrepPending then
-        if self._guildKeepProofLedgerPrepared and not requireCurrent then return true end
-        return false
-    end
-    if self._guildKeepProofLedgerRetryScheduled then
-        if self._guildKeepProofLedgerPrepared and not requireCurrent then return true end
-        return "waiting"
-    end
-    if self._guildKeepProofLedgerPrepared and not self._guildKeepProofLedgerDirty then return true end
-    if not C_Timer or not C_Timer.After or not coroutine or not coroutine.create then
-        self._guildKeepProofLedgerFailed = true
-        return "blocked"
-    end
-
-    self._guildKeepProofLedgerPrepPending = true
-    local generation = (tonumber(self._guildKeepProofLedgerGeneration) or 0) + 1
-    local buildRevision = tonumber(self._guildKeepProofLedgerRevision) or 0
-    local initialBuild = not self._guildKeepProofLedgerPrepared
-    self._guildKeepProofLedgerGeneration = generation
-    local budgetOps, budgetStarted = 0, 0
-    local function clockMs()
-        if debugprofilestop then return debugprofilestop() end
-        return ((GetTime and GetTime()) or 0) * 1000
-    end
-    local function yieldWork()
-        budgetOps = budgetOps + 1
-        if budgetOps < 64 and (clockMs() - budgetStarted) < 1.25 then return end
-        coroutine.yield()
-        budgetOps, budgetStarted = 0, clockMs()
-    end
-    local worker = coroutine.create(function()
-        budgetStarted = clockMs()
-        local migrationFrom = normalizeSavedVarsPool(
-            self._guildKeepLbMigrationFrom
-                or (OverlordDB and OverlordDB.guildKeepLbMigrationFrom))
-        local currentPool = currentSavedVarsPool()
-        local function filterSiteRoot(source)
-            local target = {}
-            for key in pairs(Overlord.GuildKeepSites or {}) do
-                local row = source[key]
-                if type(row) == "table" then
-                    local pool = normalizeSavedVarsPool(row.pool)
-                    if migrationFrom ~= "" and pool == migrationFrom then
-                        row.pool = currentPool
-                        pool = currentPool
-                    end
-                    local valid = getValidGuildKeepTenantRow(self, key, row)
-                    if valid and guildKeepLbPoolMatchesCurrent(pool) then target[key] = row end
-                end
-                yieldWork()
-            end
-            return target
-        end
-        local tenants = filterSiteRoot(sourceTenants)
-        local official = filterSiteRoot(sourceOfficial)
-
-        local compact, daysBySite, syncRows = {}, {}, {}
-        local epoch = math.floor(tonumber(OverlordDB.lastResetTimestamp) or 0)
-        local allowedDays = {}
-        local nowTs = leaderboardServerNow()
-        for dayOffset = 0, 36 do
-            local key = Overlord.GuildKeep:GetServerSiegeDayKey(nowTs - dayOffset * 21600)
-            if type(key) == "string" and isGuildKeepSiegeKey(key) then
-                allowedDays[key] = true
-            end
-        end
-        local snapshotSources = { { root = sourceSnapshots, legacy = false } }
-        if type(sourceLegacySnapshots) == "table"
-            and sourceLegacySnapshots ~= sourceSnapshots then
-            snapshotSources[#snapshotSources + 1] = {
-                root = sourceLegacySnapshots, legacy = true,
-            }
-        end
-        for _, snapshotSource in ipairs(snapshotSources) do
-        local snapshotRoot, legacyOnly = snapshotSource.root, snapshotSource.legacy
-        local dayCursor = nil
-        while true do
-            local okDay, dayKey, snapshot = pcall(next, snapshotRoot, dayCursor)
-            if not okDay then error(dayKey) end
-            dayCursor = dayKey
-            if dayKey == nil then break end
-            dayKey = tostring(dayKey or "")
-            if allowedDays[dayKey] and type(snapshot) == "table" then
-                local siteCursor = nil
-                while true do
-                    local okSite, siteKey, stored = pcall(next, snapshot, siteCursor)
-                    if not okSite then error(siteKey) end
-                    siteCursor = siteKey
-                    if siteKey == nil then break end
-                    siteKey = tostring(siteKey or "")
-                    if siteKey == "elwynn" then siteKey = "redridge"
-                    elseif siteKey == "echo_isles" then siteKey = "crossroads" end
-                    if isValidGuildKeepSite(siteKey) and type(stored) == "table" then
-                        local byBase, baseCount = {}, 0
-                        local function retainedBefore(aKey, a, bKey, b)
-                            local at = math.floor(tonumber(a and a.baseCapturedAt) or 0)
-                            local bt = math.floor(tonumber(b and b.baseCapturedAt) or 0)
-                            return at ~= bt and at < bt or (at == bt and aKey < bKey)
-                        end
-                        local function consider(raw, requireGenerationZero)
-                            if type(raw) ~= "table" then return end
-                            if requireGenerationZero and tonumber(raw.generationAt) ~= 0 then return end
-                            if migrationFrom ~= ""
-                                and normalizeSavedVarsPool(raw.pool) == migrationFrom then
-                                raw = copyGuildKeepDailyProofRow(raw)
-                                raw.pool = currentPool
-                            end
-                            local proof = normalizeGuildKeepDailyProof(self, siteKey, dayKey, raw)
-                            local baseKey = guildKeepDailyProofBaseKey(proof)
-                            if not baseKey then return end
-                            local previous = byBase[baseKey]
-                            if previous then
-                                if guildKeepDailyProofWins(proof, previous) then byBase[baseKey] = proof end
-                                return
-                            end
-                            if baseCount < GK_DAILY_PROOF_BASES_MAX then
-                                byBase[baseKey], baseCount = proof, baseCount + 1
-                                return
-                            end
-                            local worstKey, worst
-                            for candidateKey, candidate in pairs(byBase) do
-                                if not worst or retainedBefore(worstKey, worst, candidateKey, candidate) then
-                                    worstKey, worst = candidateKey, candidate
-                                end
-                            end
-                            if retainedBefore(baseKey, proof, worstKey, worst) then
-                                byBase[worstKey] = nil
-                                byBase[baseKey] = proof
-                            end
-                        end
-                        local previousStored = compact[dayKey] and compact[dayKey][siteKey]
-                        if type(previousStored) == "table" then
-                            consider(previousStored, false)
-                            if type(previousStored.byBase) == "table" then
-                                for _, raw in pairs(previousStored.byBase) do
-                                    consider(raw, false)
-                                    yieldWork()
-                                end
-                            end
-                        end
-                        consider(stored, legacyOnly)
-                        if type(stored.byBase) == "table" then
-                            local baseCursor = nil
-                            while true do
-                                local okBase, baseKey, raw = pcall(next, stored.byBase, baseCursor)
-                                if not okBase then error(baseKey) end
-                                baseCursor = baseKey
-                                if baseKey == nil then break end
-                                consider(raw, legacyOnly)
-                                yieldWork()
-                            end
-                        end
-                        local winner, storedByBase = nil, {}
-                        for baseKey, proof in pairs(byBase) do
-                            storedByBase[baseKey] = copyGuildKeepDailyProofRow(proof)
-                            if not winner or guildKeepDailyProofWins(proof, winner) then winner = proof end
-                            yieldWork()
-                        end
-                        if winner then
-                            compact[dayKey] = compact[dayKey] or {}
-                            local storedWinner = copyGuildKeepDailyProofRow(winner)
-                            storedWinner.byBase = storedByBase
-                            compact[dayKey][siteKey] = storedWinner
-                        end
-                    end
-                    yieldWork()
-                end
-            end
-            yieldWork()
-        end
-        end
-        for compactDay, snapshot in pairs(compact) do
-            for compactSite, stored in pairs(snapshot) do
-                daysBySite[compactSite] = daysBySite[compactSite] or {}
-                daysBySite[compactSite][#daysBySite[compactSite] + 1] = compactDay
-                if epoch > 0 and isGuildKeepWinDayClosed(Overlord.GuildKeep, compactDay) then
-                    for _, proof in pairs(stored.byBase or {}) do
-                        syncRows[#syncRows + 1] = {
-                            siteKey = compactSite, dayKey = compactDay, guild = proof.guild,
-                            faction = proof.faction, kind = proof.kind, eventAt = proof.eventAt,
-                            shard = proof.shard, startedAt = proof.startedAt,
-                            generationAt = proof.generationAt, player = proof.player,
-                            baseGuild = proof.baseGuild, baseFaction = proof.baseFaction,
-                            baseCapturedAt = proof.baseCapturedAt, epoch = epoch, pool = proof.pool,
-                        }
-                        yieldWork()
-                    end
-                end
-                yieldWork()
-            end
-        end
-        for _, days in pairs(daysBySite) do
-            sortRowsWithYield(days, function(a, b) return a < b end, yieldWork)
-        end
-        sortRowsWithYield(syncRows, function(a, b)
-            if a.dayKey ~= b.dayKey then return a.dayKey < b.dayKey end
-            if a.siteKey ~= b.siteKey then return a.siteKey < b.siteKey end
-            if a.baseCapturedAt ~= b.baseCapturedAt then return a.baseCapturedAt < b.baseCapturedAt end
-            return a.guild < b.guild
-        end, yieldWork)
-        local awards = {}
-        if type(sourceLegacySnapshots) == "table" then
-            -- v7 ne transporte pas ses awards comme autorite. Les reconstruire depuis la
-            -- projection gen0 valide conserve le score historique sans faire de scan login.
-            for siteKey, days in pairs(daysBySite) do
-                for _, dayKey in ipairs(days) do
-                    if isGuildKeepWinDayClosed(Overlord.GuildKeep, dayKey) then
-                        local canonical = getGuildKeepDailyProofForDay(
-                            self, siteKey, dayKey, nil, compact, daysBySite, yieldWork)
-                        if canonical and canonical.status == "held" then
-                            awards[dayKey .. ":" .. siteKey] = {
-                                siteKey = siteKey, guild = canonical.resultGuild,
-                                guildKey = canonical.resultGuildKey,
-                                faction = canonical.resultFaction,
-                                winTs = canonical.eventAt, claimedAt = canonical.claimedAt,
-                                pool = canonical.pool,
-                            }
-                        end
-                    end
-                    yieldWork()
-                end
-            end
-        end
-        local awardCursor = nil
-        while true do
-            local okAward, awardKey, award = pcall(next, sourceAwards, awardCursor)
-            if not okAward then error(awardKey) end
-            awardCursor = awardKey
-            if awardKey == nil then break end
-            local dayKey, rawSiteKey = tostring(awardKey or ""):match("^(%d+):(.+)$")
-            local siteKey = rawSiteKey
-            if siteKey == "elwynn" then siteKey = "redridge"
-            elseif siteKey == "echo_isles" then siteKey = "crossroads" end
-            local proofRow = dayKey and siteKey and compact[dayKey] and compact[dayKey][siteKey]
-            if isGuildKeepSiegeKey(dayKey) and type(award) == "table" and proofRow then
-                local pool = normalizeSavedVarsPool(award.pool)
-                if migrationFrom ~= "" and pool == migrationFrom then
-                    pool = currentPool
-                end
-                local guild = sanitizeGuildName(award.guild or "")
-                local faction = award.faction
-                local winTs = math.floor(tonumber(award.winTs) or 0)
-                local storedSiteKey = tostring(award.siteKey or rawSiteKey or "")
-                if storedSiteKey == "elwynn" then storedSiteKey = "redridge"
-                elseif storedSiteKey == "echo_isles" then storedSiteKey = "crossroads" end
-                if guild ~= "" and storedSiteKey == siteKey
-                    and (faction == "Alliance" or faction == "Horde")
-                    and guildKeepLbPoolMatchesCurrent(pool) and winTs > 0
-                    and self:IsTimestampInCurrentCampaign(winTs, epoch) then
-                    local canonical = getGuildKeepDailyProofForDay(
-                        self, siteKey, dayKey, nil, compact, daysBySite, yieldWork)
-                    if canonical and canonical.status == "held"
-                        and canonical.resultGuildKey == guild:lower()
-                        and canonical.resultFaction == faction then
-                        local canonicalKey = dayKey .. ":" .. siteKey
-                        local candidate = {
-                            siteKey = siteKey, guild = canonical.resultGuild,
-                            guildKey = canonical.resultGuildKey,
-                            faction = canonical.resultFaction, winTs = winTs,
-                            claimedAt = canonical.claimedAt, pool = canonical.pool,
-                        }
-                        local previous = awards[canonicalKey]
-                        if not previous or candidate.winTs < previous.winTs
-                            or (candidate.winTs == previous.winTs
-                                and candidate.guildKey < previous.guildKey) then
-                            awards[canonicalKey] = candidate
-                        end
-                    end
-                end
-            end
-            yieldWork()
-        end
-        return compact, daysBySite, syncRows, tenants, official, awards
-    end)
-
-    local function fail(err)
-        if self._guildKeepProofLedgerGeneration ~= generation then return end
-        self._guildKeepProofLedgerPrepPending = false
-        local attempts = (tonumber(self._guildKeepProofLedgerAttempts) or 0) + 1
-        self._guildKeepProofLedgerAttempts = attempts
-        if attempts < 3 then
-            self._guildKeepProofLedgerRetryScheduled = true
-            C_Timer.After(attempts * 5, function()
-                if not Overlord.Leaderboard
-                    or Overlord.Leaderboard._guildKeepProofLedgerGeneration ~= generation then return end
-                Overlord.Leaderboard._guildKeepProofLedgerRetryScheduled = nil
-                Overlord.Leaderboard:EnsureGuildKeepProofLedgerPrepared(initialBuild)
-            end)
-        elseif initialBuild then
-            self._guildKeepProofLedgerFailed = true
-        else
-            self._guildKeepProofLedgerMaintenanceFailed = tostring(err or "GK_PROOF_BUILD_FAILED")
-        end
-    end
-    local function resumeWorker()
-        if self._guildKeepProofLedgerGeneration ~= generation then return end
-        budgetStarted = clockMs()
-        local result = { coroutine.resume(worker) }
-        if not result[1] then fail(result[2]); return end
-        if coroutine.status(worker) ~= "dead" then C_Timer.After(0, resumeWorker); return end
-        if (tonumber(self._guildKeepProofLedgerRevision) or 0) ~= buildRevision
-            or OverlordDB.guildKeepCutoffSnapshots ~= sourceSnapshots
-            or OverlordDB.guildKeepTenants ~= sourceTenants
-            or OverlordDB.guildKeepOfficialTenants ~= sourceOfficial
-            or OverlordDB.guildKeepSiegeWinAwards ~= sourceAwards
-            or OverlordDB.guildKeepProtocol7SnapshotsPending ~= sourceLegacySnapshots then
-            self._guildKeepProofLedgerPrepPending = false
-            self._guildKeepProofLedgerDirty = true
-            C_Timer.After(0, function()
-                if Overlord.Leaderboard then
-                    Overlord.Leaderboard:EnsureGuildKeepProofLedgerPrepared(initialBuild)
-                end
-            end)
-            return
-        end
-        OverlordDB.guildKeepCutoffSnapshots = result[2]
-        OverlordDB.guildKeepTenants = result[5]
-        OverlordDB.guildKeepOfficialTenants = result[6]
-        OverlordDB.guildKeepSiegeWinAwards = result[7]
-        OverlordDB.guildKeepProofSanitizeVersion = 1
-        self._guildKeepProofDaysBySite = result[3]
-        self._guildKeepProofSyncRows = result[4]
-        self._guildKeepProofLedgerSource = result[2]
-        self._guildKeepProofLegacySource = nil
-        self._guildKeepProofLedgerPrepared = true
-        self._guildKeepProofLedgerDirty = false
-        self._guildKeepProofLedgerPrepPending = false
-        self._guildKeepProofLedgerRetryScheduled = nil
-        self._guildKeepProofLedgerAttempts = 0
-        self._guildKeepProofLedgerMaintenanceFailed = nil
-        self._guildKeepLbMigrationFrom = nil
-        OverlordDB.guildKeepLbMigrationFrom = nil
-        OverlordDB.guildKeepProtocol7SnapshotsPending = nil
-        self:MarkDirty()
-    end
-    C_Timer.After(0, resumeWorker)
-    if self._guildKeepProofLedgerPrepared and not requireCurrent then return true end
-    return false
-end
-
-function Overlord.Leaderboard:ReconcileGuildKeepDailyAward(siteKey, dayKey)
-    local proof = getGuildKeepDailyProofForDay(self, siteKey, dayKey)
-    if not proof then return false end
-    local awards = self:GetGuildKeepSiegeWinAwardsTable()
-    local awardKey = tostring(dayKey) .. ":" .. tostring(siteKey)
-    if proof.status == "held" then
-        return self:RecordGuildKeepSiegeWin(
-            proof.resultGuild, proof.resultFaction, siteKey, dayKey,
-            proof.eventAt, proof.pool)
-    end
-    local previous = awards[awardKey]
-    if type(previous) ~= "table" then return false end
-    awards[awardKey] = nil
-    self:MarkDirty()
-    if self.InvalidateGuildKeepDailyAwardStable then
-        self:InvalidateGuildKeepDailyAwardStable()
-    end
-    return true
-end
-
--- Une mutation brute ancienne peut changer la projection de tous les jours suivants du
--- meme keep. Six sites x sept jours au maximum : une passe ciblee est moins couteuse et
--- beaucoup plus lisible qu'un cache d'invalidation supplementaire.
--- Creneaux (ordre croissant) de ce fortin a partir de fromDayKey.
-function Overlord.Leaderboard:CollectGuildKeepAwardDaysFrom(siteKey, fromDayKey)
-    local days = {}
-    for dayKey, snapshot in pairs(OverlordDB and OverlordDB.guildKeepCutoffSnapshots or {}) do
-        dayKey = tostring(dayKey or "")
-        if dayKey >= fromDayKey and type(snapshot) == "table"
-            and snapshot[siteKey] ~= nil then
-            days[#days + 1] = dayKey
-        end
-    end
-    table.sort(days)
-    return days
-end
-
-function Overlord.Leaderboard:ReconcileGuildKeepDailyAwardsFromDay(siteKey, fromDayKey)
-    if not OverlordDB then return false end
-    siteKey, fromDayKey = tostring(siteKey or ""), tostring(fromDayKey or "")
-    local changed = false
-    for _, dayKey in ipairs(self:CollectGuildKeepAwardDaysFrom(siteKey, fromDayKey)) do
-        if self:ReconcileGuildKeepDailyAward(siteKey, dayKey) then changed = true end
-    end
-    return changed
-end
-
--- Reception GH : /ov perf mesurait ~19 ms par preuve (tous les creneaux suivants du
--- fortin) dans le handler reseau, et une rafale s'additionnait dans une seule image.
--- Demandes coalescees par fortin (creneau le plus ancien, qui couvre les suivants),
--- puis memes reconciliations dans le meme ordre, ~1 ms par image.
-function Overlord.Leaderboard:RequestGuildKeepAwardsReconcileFromDay(siteKey, fromDayKey)
-    siteKey, fromDayKey = tostring(siteKey or ""), tostring(fromDayKey or "")
-    if siteKey == "" or not OverlordDB then return end
-    if not (C_Timer and C_Timer.After) then
-        self:ReconcileGuildKeepDailyAwardsFromDay(siteKey, fromDayKey)
-        return
-    end
-    local pending = self._gkReconcilePending or {}
-    self._gkReconcilePending = pending
-    if not pending[siteKey] or fromDayKey < pending[siteKey] then pending[siteKey] = fromDayKey end
-    if self._gkReconcileScheduled then return end
-    self._gkReconcileScheduled = true
-    C_Timer.After(self.GK_RECONCILE_DEBOUNCE_SEC or 10, function() self:RunPendingGuildKeepAwardReconciles() end)
-end
-
-function Overlord.Leaderboard:RunPendingGuildKeepAwardReconciles()
-    if self:ShouldPostponeGuildKeepWork() then
-        C_Timer.After(self.GK_WORK_POSTPONE_RETRY or 2, function() self:RunPendingGuildKeepAwardReconciles() end)
-        return
-    end
-    local queue = self._gkReconcileQueue
-    if not queue or queue.index > #queue.items then
-        queue = { items = {}, index = 1 }
-        local pending = self._gkReconcilePending or {}
-        self._gkReconcilePending = nil
-        local sites = {}
-        for siteKey in pairs(pending) do sites[#sites + 1] = siteKey end
-        table.sort(sites)
-        for _, siteKey in ipairs(sites) do
-            for _, dayKey in ipairs(self:CollectGuildKeepAwardDaysFrom(siteKey, pending[siteKey])) do
-                queue.items[#queue.items + 1] = { siteKey = siteKey, dayKey = dayKey }
-            end
-        end
-        self._gkReconcileQueue = queue
-    end
-    local steps, changed = 0, false
-    while queue.index <= #queue.items do
-        local item = queue.items[queue.index]
-        queue.index = queue.index + 1
-        steps = steps + 1
-        if self:ReconcileGuildKeepDailyAward(item.siteKey, item.dayKey) then changed = true end
-        if steps >= 1 then break end
-    end
-    if changed and Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
-        Overlord.LeaderboardUI:RefreshIfVisible()
-    end
-    if queue.index <= #queue.items or self._gkReconcilePending then
-        C_Timer.After(self.GK_WORK_STEP_INTERVAL or 0.1, function() self:RunPendingGuildKeepAwardReconciles() end)
-        return
-    end
-    self._gkReconcileQueue = nil
-    self._gkReconcileScheduled = false
-end
-
--- Enregistre uniquement le score couvert par la preuve quotidienne causale GH.
-function Overlord.Leaderboard:RecordGuildKeepSiegeWin(
-    guildName, faction, siteKey, dayKey, winTs, poolTag)
-    local gk = Overlord.GuildKeep
-    guildName = sanitizeGuildName(guildName)
-    siteKey = tostring(siteKey or "")
-    poolTag = normalizeSavedVarsPool(poolTag) or ""
-    if poolTag == "" or not guildKeepLbPoolMatchesCurrent(poolTag) then return false end
-    if guildName == "" or not isValidGuildKeepSite(siteKey)
-        or not gk or not gk.GetServerSiegeDayKey then return false end
-    dayKey = tostring(dayKey or "")
-    winTs = math.floor(tonumber(winTs) or 0)
-    local campaignStart = self:GetCurrentCampaignStart()
-    if not isGuildKeepSiegeKey(dayKey) or winTs <= 0
-        or not self:IsTimestampInCurrentCampaign(winTs, campaignStart)
-        or winTs > leaderboardServerNow() + 300 then return false end
-    if not isGuildKeepWinDayClosed(gk, dayKey) then return false end
-
-    local canonical = getGuildKeepDailyProofForDay(self, siteKey, dayKey)
-    if not canonical or canonical.status ~= "held"
-        or canonical.resultGuildKey ~= guildName:lower() then return false end
-    guildName = canonical.resultGuild
-    faction = canonical.resultFaction
-    poolTag = canonical.pool ~= "" and canonical.pool or poolTag
-    if not guildKeepLbPoolMatchesCurrent(poolTag) then return false end
-    local canonicalClaimedAt = math.floor(tonumber(canonical.claimedAt) or 0)
-    if canonicalClaimedAt <= 0 then return false end
-
-    local awards = self:GetGuildKeepSiegeWinAwardsTable()
-    local awardKey = dayKey .. ":" .. siteKey
-    local guildKey = canonical.resultGuildKey
-    local previous = awards[awardKey]
-    local previousGuildKey = previous and (previous.guildKey
-        or sanitizeGuildName(previous.guild or ""):lower()) or ""
-    local previousWinTs = math.floor(tonumber(previous and previous.winTs) or 0)
-    local storedWinTs = winTs
-    if previousWinTs > 0 then storedWinTs = math.min(previousWinTs, winTs) end
-
-    local unchanged = previousGuildKey == guildKey
-        and math.floor(tonumber(previous and previous.claimedAt) or 0) == canonicalClaimedAt
-        and (previous and previous.faction or "") == faction
-        and normalizeSavedVarsPool(previous and previous.pool) == normalizeSavedVarsPool(poolTag)
-        and previousWinTs == storedWinTs
-    if unchanged then return false end
-
-    awards[awardKey] = {
-        guildKey = guildKey,
-        guild = guildName,
-        faction = faction,
-        siteKey = siteKey,
-        pool = poolTag,
-        winTs = storedWinTs,
-        claimedAt = canonicalClaimedAt,
-    }
-    self:MarkDirty()
-    if self.RequestGuildKeepProofLedgerRebuild then
-        self:RequestGuildKeepProofLedgerRebuild(siteKey, dayKey)
-    end
-    if self.InvalidateGuildKeepDailyAwardStable then
-        self:InvalidateGuildKeepDailyAwardStable()
-    end
-    return true
-end
-
--- Apres convergence post-cloture, eviter le scan Repair/Award a 1 Hz pendant ~23 h.
-local GK_DAILY_AWARD_RECHECK_SEC = 30
-
-function Overlord.Leaderboard:InvalidateGuildKeepDailyAwardStable()
-    -- Compteur lu par la passe decoupee : une mutation pendant la passe l'empeche
-    -- de se declarer stable pour 30 s, le tick suivant la relance.
-    self._gkAwardInvalidations = (self._gkAwardInvalidations or 0) + 1
-    self._gkAwardStable = false
-    self._gkAwardStableDayKey = nil
-    self._gkAwardNextCheckAt = nil
-end
-
--- Au plus deux emetteurs GH : l'autorite terminale exacte (Anchor en fallback) et le leader.
--- Le second couvre les raids mixtes ou l'autorite encore en ligne utilise un ancien patch ;
--- le dedup payload absorbe son doublon. L'ancien fanout par guilde faisait emettre chaque membre.
-local function shouldBroadcastLocalGuildKeepProof(proof, siteKey)
-    local gk, sync = Overlord.GuildKeep, Overlord.Sync
-    if not proof or not gk or not sync or not sync.GetPlayerFullName
-        or not sync.GetCaptureContributorDedupKey then return false end
-    local st = gk.GetState and gk:GetState(siteKey)
-    local emitter = proof.player or ""
-    if st and proof.kind == "GC" and st.finalAssaultAuthorityPlayer
-        and st.finalAssaultAuthorityPlayer ~= "" then
-        emitter = st.finalAssaultAuthorityPlayer
-    elseif st and proof.kind == "GA" and st.abortedAssaultAuthorityPlayer
-        and st.abortedAssaultAuthorityPlayer ~= "" then
-        emitter = st.abortedAssaultAuthorityPlayer
-    end
-    local selfName = sync:GetPlayerFullName() or ""
-    local selfKey = sync:GetCaptureContributorDedupKey(selfName)
-    local emitterKey = sync:GetCaptureContributorDedupKey(emitter)
-    if not selfKey or selfKey == "" or not emitterKey or emitterKey == "" then return false end
-    if selfKey == emitterKey then return true end
-
-    -- Le roster ne prouve ni la version de l'addon ni meme sa presence. Une autorite 9.9.1
-    -- encore en ligne faisait donc taire le seul client capable d'emettre GH 9.9.2. Le leader
-    -- reste un second relais borne ; le dedup payload absorbe le doublon de l'autorite a jour.
-    return type(IsInGroup) == "function" and IsInGroup()
-        and type(UnitIsGroupLeader) == "function" and UnitIsGroupLeader("player") == true
-end
-
-function Overlord.Leaderboard:ShouldBroadcastLocalGuildKeepProof(proof, siteKey)
-    return shouldBroadcastLocalGuildKeepProof(proof, siteKey)
-end
-
--- Un fortin a la fois (~10 ms chacun en fin de semaine) : la passe decoupee les
--- enchaine image par image ; le chemin court les appelle d'affilee comme avant.
-function Overlord.Leaderboard:AwardHeldGuildKeepWinForSite(siteKey, dayKey, winTs)
-    local lb = self
-    local changed = false
-    do
-        local localProof = lb.BuildGuildKeepDailyProofForState
-            and lb:BuildGuildKeepDailyProofForState(siteKey, dayKey) or nil
-        if localProof then
-            local proofApplied = lb:ApplyGuildKeepDailyProofSync(
-                siteKey, dayKey, localProof.kind, localProof.eventAt,
-                localProof.guild, localProof.faction, localProof.shard,
-                localProof.startedAt, localProof.generationAt, localProof.player,
-                localProof.baseGuild, localProof.baseFaction,
-                localProof.baseCapturedAt, localProof.pool)
-            local proof = getGuildKeepDailyProofForDay(lb, siteKey, dayKey)
-            local rawProof = getRawGuildKeepDailyProofForDay(lb, siteKey, dayKey)
-            local awardChanged = proof and lb:ReconcileGuildKeepDailyAward(
-                siteKey, dayKey) or false
-            if proofApplied or awardChanged then changed = true end
-            if rawProof and localProof
-                and shouldBroadcastLocalGuildKeepProof(localProof, siteKey)
-                and Overlord.Sync and Overlord.Sync.BroadcastGuildKeepDailyProof then
-                Overlord.Sync:BroadcastGuildKeepDailyProof(siteKey, dayKey, false)
-            end
-            if proof and proof.status == "held"
-                and Overlord.GuildKeepImmersion and Overlord.GuildKeepImmersion.OnDailyDefense then
-                local tenant = getGuildKeepCanonicalTenantForDay(lb, siteKey, dayKey)
-                if tenant then
-                    Overlord.GuildKeepImmersion:OnDailyDefense(siteKey, tenant.guild,
-                        tenant.faction, winTs, tenant.claimedAt, proof.kind)
-                end
-            end
-        end
-    end
-    return changed
-end
-
--- Dernier siege termine + campagne : ne change qu'a la fin d'un siege (toutes les
--- 6 h) ou au reset hebdomadaire. Siege en cours ou a venir : le precedent (6 h avant).
-function Overlord.Leaderboard:GetGuildKeepAwardWindowSignature()
-    local gk = Overlord.GuildKeep
-    if not gk or not gk.IsSiegeWindowClosedForToday then return "" end
-    local slotKey = gk.ComputeServerSiegeDayKey or gk.GetServerSiegeDayKey
-    if not slotKey then return "" end
-    local now = leaderboardServerNow()
-    local lastClosed = gk:IsSiegeWindowClosedForToday() and slotKey(gk, now)
-        or slotKey(gk, now - 6 * 3600)
-    return tostring(lastClosed) .. "|" .. tostring(self:GetCurrentCampaignStart() or 0)
-end
-
--- Force une passe complete au prochain tick (tests, reinitialisations).
-function Overlord.Leaderboard:RequestFullGuildKeepAwardPass()
-    self._gkAwardPassSignature = nil
-    self._gkAwardNextCheckAt = nil
-end
-
--- Taches (fortin, jour) de la fin de passe, dans l'ordre de l'ancien corps :
--- rattrapage de la veille d'abord, puis la cloture du jour.
-function Overlord.Leaderboard:CollectHeldGuildKeepAwardTasks()
-    local gk = Overlord.GuildKeep
-    local tasks = {}
-    if not gk or not Overlord.GuildKeepSites or not gk.GetServerSiegeDayKey then return tasks end
-    local now = leaderboardServerNow()
-    local function addAll(winTs)
-        local dayKey = gk:GetServerSiegeDayKey(winTs)
-        for siteKey in pairs(Overlord.GuildKeepSites) do
-            tasks[#tasks + 1] = { siteKey = siteKey, dayKey = dayKey, winTs = winTs }
-        end
-    end
-    -- Rattrapage login : avant le siege du jour, le tenant courant est encore
-    -- celui qui devait recevoir la victoire de defense de la veille.
-    if gk.IsSiegeWindowOpen and not gk:IsSiegeWindowOpen() and not gk:IsSiegeWindowClosedForToday() then
-        local prevTs = now - 86400
-        if prevTs >= (self:GetCurrentCampaignStart() or 0) then addAll(prevTs) end
-    end
-    if gk:IsSiegeWindowClosedForToday() then addAll(now) end
-    return tasks
-end
-
--- Reprojette chaque registre causal GH vers l'award additif correspondant. Un GA neutral
--- retire aussi un ancien award fantome deja recu.
-local function RepairGuildKeepAwardsFromDailyProofs(lb)
-    local gk = Overlord.GuildKeep
-    if not lb or not gk or not gk.GetServerSiegeDayKey then return false end
-    local repaired = false
-    for dayKey, snapshot in pairs(OverlordDB.guildKeepCutoffSnapshots or {}) do
-        if type(snapshot) == "table" and isGuildKeepWinDayClosed(gk, dayKey) then
-            for siteKey in pairs(snapshot) do
-                local proof = getGuildKeepDailyProofForDay(lb, siteKey, dayKey)
-                if proof then
-                    if lb:ReconcileGuildKeepDailyAward(siteKey, dayKey) then
-                        repaired = true
-                    end
-                end
-            end
-        end
-    end
-    return repaired
-end
-
-function Overlord.Leaderboard:MaybeAwardGuildKeepDailyWins()
-    if not self._guildKeepProofLedgerPrepared then
-        if self.EnsureGuildKeepProofLedgerPrepared then
-            self:EnsureGuildKeepProofLedgerPrepared(false)
-        end
-        return false
-    end
-    -- Ne jamais sceller une preuve depuis les SavedVariables avant le catch-up login.
-    -- La passe 1 Hz reprendra automatiquement des que la gate est levee.
-    if Overlord.WaitingForSync
-        or (Overlord.IsCaptureSyncPending and Overlord:IsCaptureSyncPending()) then return false end
-    local gk = Overlord.GuildKeep
-    if not gk or not Overlord.GuildKeepSites or not gk.IsSiegeWindowClosedForToday then return false end
-    local nowClock = GetTime and GetTime() or 0
-    -- Garde monotone avant tout calcul calendaire : GetServerSiegeDayKey traverse les
-    -- conversions DST et allouait plusieurs tables date() sur le ticker global 1 Hz.
-    if nowClock > 0 and self._gkAwardNextCheckAt and nowClock < self._gkAwardNextCheckAt then
-        return false
-    end
-    -- Sieges toutes les 6 h. Une victoire n'est creee qu'a la cloture d'un siege ; une
-    -- preuve recue ou appliquee declenche deja une reconciliation ciblee (ce fortin, a
-    -- partir de ce creneau) sur tous ses chemins (GH direct/historique, publication,
-    -- correction de lignee, migration). La passe complete ne tourne donc qu'une fois
-    -- a la connexion puis a la fin de chaque siege (signature = dernier siege termine
-    -- + campagne) ; le coup d'oeil toutes les 30 s ne compare que cette signature.
-    local signature = self:GetGuildKeepAwardWindowSignature()
-    if self._gkAwardPassSignature ~= nil and self._gkAwardPassSignature == signature then
-        if nowClock > 0 then self._gkAwardNextCheckAt = nowClock + GK_DAILY_AWARD_RECHECK_SEC end
-        return false
-    end
-    local dayKey = gk.GetServerSiegeDayKey and gk:GetServerSiegeDayKey() or ""
-    -- Une passe propre suffit dans toutes les phases de la journee. Les mutations terrain
-    -- invalident explicitement ce cache, donc le ticker 1 Hz reste reactif sans rescanner
-    -- les preuves et les six fortins chaque seconde pendant des heures.
-    -- Une passe de reparation deja decoupee sur plusieurs images est en cours : attendre.
-    if self._gkAwardRepairJob then return false end
-    -- Priorite basse : pas de nouvelle passe en combat ni en gros event (tick suivant).
-    if self:ShouldPostponeGuildKeepWork() then return false end
-    -- Fin de campagne : ~28 creneaux x 6 fortins, ~3,7 ms par reconciliation, soit
-    -- ~350 ms dans une seule image (mesure en jeu via /ov perf). Au-dela d'un petit
-    -- lot, la reparation est decoupee (~1 ms par image) puis la passe se termine ici.
-    local repairPairs = self:CollectGuildKeepAwardRepairPairs()
-    if #repairPairs > (self.GK_AWARD_REPAIR_SYNC_MAX or 16) and C_Timer and C_Timer.After then
-        self:StartGuildKeepAwardRepairJob(repairPairs, dayKey, signature)
-        return false
-    end
-    local changed = self:RunGuildKeepAwardRepairPairs(repairPairs, 1, #repairPairs)
-    return self:FinishGuildKeepDailyAwardPass(dayKey, changed, signature)
-end
-
--- Combat ou gros event : le travail fortin attend (il sera refait a l'identique).
-function Overlord.Leaderboard:ShouldPostponeGuildKeepWork()
-    if InCombatLockdown and InCombatLockdown() then return true end
-    local sync = Overlord.Sync
-    if not sync or not sync.IsLargeEvent then return false end
-    local ok, large = pcall(sync.IsLargeEvent, sync)
-    return ok and large == true
-end
-
--- Couples (creneau ferme, fortin) dont la preuve du jour existe. Lecture seule, rapide.
-function Overlord.Leaderboard:CollectGuildKeepAwardRepairPairs()
-    local gk = Overlord.GuildKeep
-    local pairsList = {}
-    for dayKey, snapshot in pairs(OverlordDB.guildKeepCutoffSnapshots or {}) do
-        if type(snapshot) == "table" and isGuildKeepWinDayClosed(gk, dayKey) then
-            for siteKey in pairs(snapshot) do
-                pairsList[#pairsList + 1] = { dayKey = dayKey, siteKey = siteKey }
-            end
-        end
-    end
-    return pairsList
-end
-
--- Meme travail que RepairGuildKeepAwardsFromDailyProofs, sur une tranche de la liste.
--- Chaque couple est reverifie au moment de son traitement (la table peut changer).
-function Overlord.Leaderboard:RunGuildKeepAwardRepairPairs(repairPairs, first, last)
-    local repaired = false
-    local snapshots = OverlordDB.guildKeepCutoffSnapshots or {}
-    for i = first, last do
-        local item = repairPairs[i]
-        local snapshot = item and snapshots[item.dayKey]
-        if type(snapshot) == "table" and snapshot[item.siteKey] ~= nil
-            and getGuildKeepDailyProofForDay(self, item.siteKey, item.dayKey)
-            and self:ReconcileGuildKeepDailyAward(item.siteKey, item.dayKey) then
-            repaired = true
-        end
-    end
-    return repaired
-end
-
-function Overlord.Leaderboard:StartGuildKeepAwardRepairJob(repairPairs, dayKey, signature)
-    local job = { pairs = repairPairs, index = 1, changed = false, dayKey = dayKey,
-        signature = signature }
-    self._gkAwardRepairJob = job
-    local lb = self
-    local function slice()
-        if lb._gkAwardRepairJob ~= job then return end
-        if lb:ShouldPostponeGuildKeepWork() then
-            C_Timer.After(lb.GK_WORK_POSTPONE_RETRY or 2, slice)
-            return
-        end
-        local steps = 0
-        repeat
-            steps = steps + 1
-            if job.index <= #job.pairs then
-                if lb:RunGuildKeepAwardRepairPairs(job.pairs, job.index, job.index) then
-                    job.changed = true
-                end
-                job.index = job.index + 1
-            else
-                -- Fin de passe : taches collectees apres la reparation, comme avant.
-                job.tasks = job.tasks or lb:CollectHeldGuildKeepAwardTasks()
-                job.taskIndex = job.taskIndex or 1
-                local task = job.tasks[job.taskIndex]
-                if not task then break end
-                if lb:AwardHeldGuildKeepWinForSite(task.siteKey, task.dayKey, task.winTs) then
-                    job.changed = true
-                end
-                job.taskIndex = job.taskIndex + 1
-            end
-        until steps >= 1
-        if job.index <= #job.pairs or not job.tasks or job.tasks[job.taskIndex] then
-            C_Timer.After(lb.GK_WORK_STEP_INTERVAL or 0.1, slice)
-            return
-        end
-        lb._gkAwardRepairJob = nil
-        lb:CompleteGuildKeepDailyAwardPass(job.dayKey, job.changed, job.signature)
-    end
-    C_Timer.After(0, slice)
-end
-
--- Suite de la passe apres la reparation des preuves (identique a l'ancien corps).
-function Overlord.Leaderboard:FinishGuildKeepDailyAwardPass(dayKey, changed, signature)
-    if not Overlord.GuildKeep then return changed end
-    for _, task in ipairs(self:CollectHeldGuildKeepAwardTasks()) do
-        changed = self:AwardHeldGuildKeepWinForSite(task.siteKey, task.dayKey, task.winTs) or changed
-    end
-    return self:CompleteGuildKeepDailyAwardPass(dayKey, changed, signature)
-end
-
--- La signature est celle du debut de passe : un siege qui se termine pendant la
--- passe (decoupee sur ~17 s) en relance une nouvelle ensuite.
-function Overlord.Leaderboard:CompleteGuildKeepDailyAwardPass(dayKey, changed, signature)
-    local nowClock = GetTime and GetTime() or 0
-    -- Plus de backfill multi-jours depuis la tenure (RepairHeldGuildKeepWinsSinceTenure) :
-    -- c'etait la source des victoires fantomes (il creditait CHAQUE jour entre la capture et
-    -- aujourd'hui en supposant une tenure continue, meme jamais observee a la cloture). Un
-    -- jour de victoire n'est desormais credite QUE pour le fort reellement tenu a la cloture
-    -- de CE jour (award du jour ci-dessus + rattrapage login d'un seul jour, lui-meme borne
-    -- par claimedAt <= jour). Modele convergent identique aux outposts.
-    if changed then
-        -- Le ticker de cloture peut creer/reparer un award sans paquet GH entrant.
-        -- Dans ce cas aucun handler sync ne demandera le repaint : invalider aussi
-        -- la liste de sites cachee, meme si le panneau est actuellement ferme.
-        if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
-            Overlord.LeaderboardUI:RefreshIfVisible()
-        end
-    end
-    self._gkAwardPassSignature = signature or self:GetGuildKeepAwardWindowSignature()
-    self._gkAwardStableDayKey = dayKey
-    if nowClock > 0 then self._gkAwardNextCheckAt = nowClock + GK_DAILY_AWARD_RECHECK_SEC end
-    return changed
-end
-
--- Victoires de siege par couple fort+guilde : l'award elu est la source de verite
--- unique pour le jour. Les compteurs additifs legacy ne pilotent plus l'affichage,
--- sinon un ancien tenant cross-faction continue a gagner chez les clients deja corriges.
-local function BuildGuildKeepWinCountsFromAwards(lb, yieldWork)
-    local counts = {}
-    local awards, cursor = lb:GetGuildKeepSiegeWinAwardsTable(), nil
-    while true do
-        local ok, awardKey, award = pcall(next, awards, cursor)
-        if not ok then error(awardKey) end
-        cursor = awardKey
-        if awardKey == nil then break end
-        local valid = getValidGuildKeepAward(lb, awardKey, award)
-        if valid then
-            local rowKey = valid.siteKey .. ":" .. valid.guildKey
-            local bucket = counts[rowKey]
-            if not bucket then
-                bucket = {
-                    count = 0,
-                    guild = valid.guild,
-                    faction = valid.faction,
-                    siteKey = valid.siteKey,
-                }
-                counts[rowKey] = bucket
-            end
-            bucket.count = bucket.count + 1
-            if valid.guild < bucket.guild then bucket.guild = valid.guild end
-            if valid.faction < bucket.faction then bucket.faction = valid.faction end
-        end
-        if yieldWork then yieldWork() end
-    end
-    -- Convergence calquee sur les kills : les wins ne sortent QUE des awards derives de GH
-    -- (additifs, un par couple jour+fort, rejoues dans chaque SR). On ne rajoute plus
-    -- de projection locale basee sur le tenant cru localement : c'etait la source de
-    -- divergence (chaque client inventait un nombre, voire une ligne, selon SON
-    -- detenteur). Les awards du jour sont de toute facon generes avant lecture par
-    -- MaybeAwardGuildKeepDailyWins (PrepareForHeavyRead), donc aucun sous-comptage pour
-    -- un fort reellement tenu, et tout le monde voit pareil.
-    return counts
-end
-
--- Classement fortins : terminal v8 pour l'icone, preuve GH pour les wins.
+-- Separate presentation column; the storage, scoring and tie-breaks are shared.
 function Overlord.Leaderboard:GetSortedGuildKeeps(sortedGuildKillsForNames, yieldWork)
-    local gk = Overlord.GuildKeep
-    local winCounts = BuildGuildKeepWinCountsFromAwards(self, yieldWork)
-    local tenants = self:GetGuildKeepTenantsTable()
-    local sorted = {}
-    local rowKeys = {}
-
-    if Overlord.GuildKeepSites then
-        for siteKey in pairs(Overlord.GuildKeepSites) do
-            if yieldWork then yieldWork() end
-            local t = getValidGuildKeepTenantRow(self, siteKey, tenants[siteKey])
-            local guild = t and t.guild or ""
-            local fac = t and (t.faction or "") or ""
-            local tenantClaimedAt = math.floor(tonumber(t and t.claimedAt) or 0)
-            if gk then
-                local function preferTenant(row)
-                    if not row then return end
-                    local claimedAt = math.floor(tonumber(row.claimedAt) or 0)
-                    if claimedAt <= 0 then return end
-                    if guild == "" or claimedAt >= tenantClaimedAt then
-                        guild = row.guild
-                        fac = row.faction or ""
-                        tenantClaimedAt = claimedAt
-                    end
-                end
-                -- Le tenant officiel est ecrit au moment exact de la capture et evite
-                -- qu'une projection stale affiche une autre guilde pendant le fight suivant.
-                local official = gk.GetOfficialKeepTenant and gk:GetOfficialKeepTenant(siteKey)
-                if official then
-                    official = getValidGuildKeepTenantRow(self, siteKey, official)
-                end
-                preferTenant(official)
-                -- Le score quotidien reste absent de cette election : il ajoute des wins,
-                -- mais ne peut jamais changer l'icone de tenant du ladder.
-            end
-            if guild ~= "" and (fac == "Alliance" or fac == "Horde") then
-                local key = guild:lower()
-                local rowKey = siteKey .. ":" .. key
-                rowKeys[rowKey] = true
-                local bucket = winCounts[rowKey]
-                local wins = bucket and bucket.count or 0
-                sorted[#sorted + 1] = {
-                    guild = guild,
-                    faction = fac,
-                    keepAtlas = gk and gk.GetMainHallAtlasForFaction
-                        and gk:GetMainHallAtlasForFaction(fac),
-                    keepSiteKey = siteKey,
-                    wins = wins,
-                    currentlyHeld = true,
-                }
-            end
-        end
+    local rows = self:GetSortedOutposts(sortedGuildKillsForNames, yieldWork, true)
+    for _, row in ipairs(rows) do
+        row.keepSiteKey, row.keepAtlas, row.wins = row.outpostSiteKey, row.outpostAtlas, row.captures
     end
-
-    for rowKey, bucket in pairs(winCounts) do
-        if yieldWork then yieldWork() end
-        if not rowKeys[rowKey] and bucket.count > 0 and bucket.guild ~= "" then
-            rowKeys[rowKey] = true
-            sorted[#sorted + 1] = {
-                guild = bucket.guild,
-                faction = bucket.faction or "",
-                keepAtlas = nil,
-                keepSiteKey = bucket.siteKey,
-                wins = bucket.count,
-                currentlyHeld = false,
-            }
-        end
-    end
-
-    sortRowsWithYield(sorted, function(a, b)
-        local wa, wb = a.wins or 0, b.wins or 0
-        if wa ~= wb then return wa > wb end
-        if (a.currentlyHeld and 1 or 0) ~= (b.currentlyHeld and 1 or 0) then
-            return a.currentlyHeld and not b.currentlyHeld
-        end
-        if (a.guild or "") ~= (b.guild or "") then
-            return (a.guild or "") < (b.guild or "")
-        end
-        return (a.keepSiteKey or "") < (b.keepSiteKey or "")
-    end, yieldWork)
-    return sorted
+    return rows
 end
 
 function Overlord.Leaderboard:GetOutpostTenantsTable()
@@ -6883,12 +5133,16 @@ function Overlord.Leaderboard:RecordOutpostCapture(siteKey, guild, faction, capt
     return incremented
 end
 
-function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldWork)
+function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldWork, fortressOnly)
     local op = Overlord.Outpost
     local captureCounts = self:GetOutpostCaptureCountsTable()
     local tenants = self:GetOutpostTenantsTable()
     local sorted = {}
     local rowKeys = {}
+    local function includeSite(key)
+        local site = Overlord.OutpostSites and Overlord.OutpostSites[key]
+        return site and (site.isFortress == true) == (fortressOnly == true)
+    end
 
     if Overlord.OutpostSites then
         for siteKey in pairs(Overlord.OutpostSites) do
@@ -6913,7 +5167,7 @@ function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldW
                 rowPool = resolveOutpostLbPoolTag(t.pool)
             end
             local currentlyHeld = guild ~= ""
-            if guild ~= "" and (fac == "Alliance" or fac == "Horde") then
+            if includeSite(siteKey) and guild ~= "" and (fac == "Alliance" or fac == "Horde") then
                 local key = guild:lower()
                 local rowKey = outpostCaptureRowKey(siteKey, key, rowPool)
                 rowKeys[rowKey] = true
@@ -6923,7 +5177,7 @@ function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldW
                     guild = guild,
                     faction = fac,
                     outpostAtlas = op and op.GetMainHallAtlasForFaction
-                        and op:GetMainHallAtlasForFaction(fac),
+                        and op:GetMainHallAtlasForFaction(fac, op:GetSite(siteKey)),
                     outpostSiteKey = siteKey,
                     captures = captures,
                     currentlyHeld = currentlyHeld,
@@ -6939,7 +5193,7 @@ function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldW
         if not ok then error(rowKey) end
         captureCursor = rowKey
         if rowKey == nil then break end
-        if type(bucket) == "table" and not rowKeys[rowKey] then
+        if type(bucket) == "table" and includeSite(bucket.siteKey) and not rowKeys[rowKey] then
             local captures = math.floor(tonumber(bucket.count) or 0)
             if captures > 0 and sanitizeGuildName(bucket.guild or "") ~= ""
                 and outpostLbPoolMatchesCurrent(resolveOutpostLbPoolTag(bucket.pool)) then
@@ -7060,11 +5314,11 @@ end
 -- (snapshot = ancienne semaine) ne ressuscite jamais d'anciennes donnees, alors qu'un faux
 -- reset mid-week (snapshot = semaine courante) reste recuperable.
 local LADDER_SNAPSHOT_MAX_KILL_PLAYERS = Overlord.Leaderboard.KILL_RANK_LIMIT
-local LADDER_SNAPSHOT_MAX_CAPTURE_PLAYERS_PER_FACTION = 25
+local LADDER_SNAPSHOT_MAX_CAPTURE_PLAYERS_PER_FACTION = Overlord.Leaderboard.CAPTURE_RANK_LIMIT
 local LADDER_SNAPSHOT_WORK_PER_SLICE = 80
 local LADDER_SNAPSHOT_SLICE_BUDGET_MS = 1
-local LADDER_SNAPSHOT_MAX_ZONES_PER_PLAYER = 32
-local LADDER_SNAPSHOT_MAX_ZONE_BYTES_PER_PLAYER = 120
+local LADDER_SNAPSHOT_MAX_ZONES_PER_PLAYER = 128
+local LADDER_SNAPSHOT_MAX_ZONE_BYTES_PER_PLAYER = 3000
 
 local function SnapshotRowIsBetter(a, b)
     if a.count ~= b.count then return a.count > b.count end
@@ -7532,6 +5786,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
         scoreBucketEpoch = scoreBucketEpoch,
         killHeap = newDisplayTopK(LADDER_SNAPSHOT_MAX_KILL_PLAYERS),
         killIndex = dedupKillMaxIndex,
+        captureIndex = dedupCaptureMaxIndex,
         canonicalIndex = dedupCanonicalIndex,
         canonicalGeneration = dedupCanonicalGeneration,
         metaIndex = self._dedupMetaIndex,
@@ -7547,6 +5802,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
         captureSource = self.captureCount,
         playerInfoSource = self.playerInfo,
         capturesSource = self.captures,
+        zoneNamesByDedup = {},
     }
     self._snapshotBuildPending = state
 
@@ -7625,6 +5881,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
                     locale = info.locale or "",
                     guild = info.guild or "",
                     guildAuth = info.guildAuth == true or nil,
+                    guildReplica = info.guildReplica == true or nil,
                     guildAt = tonumber(info.guildAt) or 0,
                     pool = info.pool or "",
                     race = info.race or "",
@@ -7638,29 +5895,36 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
         -- Seules les zones des meilleurs capteurs visibles de chaque faction sont utiles.
         -- Chaque joueur est borne a la fois en nombre et en octets pour que le
         -- snapshot et les futurs LC restent independants de l'historique complet.
+        -- Les scores sont dedupes: les zones peuvent encore vivre sous plusieurs
+        -- alias. La phase "zones" a construit leur index en tranches une seule fois.
         for i = 1, #captureOrder do
             local name = captureOrder[i]
-            local zones = state.capturesSource and state.capturesSource[name]
-            if type(zones) == "table" then
+            local sourceNames = state.zoneNamesByDedup[GetKillDedupKey(name)]
+            if sourceNames then
                 local copy, selected = {}, {}
-                for j = 1, #zones do
-                    local zoneId = tostring(zones[j] or "")
-                    if zoneId ~= "" and IsValidLeaderboardZone(zoneId)
-                        and not selected[zoneId] then
-                        local insertAt = #copy + 1
-                        for k = 1, #copy do
-                            if zoneId < copy[k] then insertAt = k; break end
-                        end
-                        if insertAt <= LADDER_SNAPSHOT_MAX_ZONES_PER_PLAYER then
-                            table.insert(copy, insertAt, zoneId)
-                            selected[zoneId] = true
-                            if #copy > LADDER_SNAPSHOT_MAX_ZONES_PER_PLAYER then
-                                local removed = table.remove(copy)
-                                selected[removed] = nil
+                for sourceIndex = 1, #sourceNames do
+                    local zones = state.capturesSource[sourceNames[sourceIndex]]
+                    if type(zones) == "table" then
+                        for j = 1, #zones do
+                            local zoneId = tostring(zones[j] or "")
+                            if zoneId ~= "" and IsValidLeaderboardZone(zoneId)
+                                and not selected[zoneId] then
+                                local insertAt = #copy + 1
+                                for k = 1, #copy do
+                                    if zoneId < copy[k] then insertAt = k; break end
+                                end
+                                if insertAt <= LADDER_SNAPSHOT_MAX_ZONES_PER_PLAYER then
+                                    table.insert(copy, insertAt, zoneId)
+                                    selected[zoneId] = true
+                                    if #copy > LADDER_SNAPSHOT_MAX_ZONES_PER_PLAYER then
+                                        local removed = table.remove(copy)
+                                        selected[removed] = nil
+                                    end
+                                end
                             end
+                            yieldFinalWork()
                         end
                     end
-                    yieldFinalWork()
                 end
                 local bytes, keep = 0, 0
                 for j = 1, #copy do
@@ -7721,7 +5985,9 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
         local processed = 0
         local sliceStarted = debugprofilestop and debugprofilestop() or nil
         while budget > 0 do
-            local source = state.phase == "kills" and state.killIndex or state.captureSource
+            local source = state.phase == "kills" and state.killIndex
+                or state.phase == "captures" and state.captureIndex
+                or state.capturesSource
             -- Une compaction exceptionnelle peut retirer le curseur entre deux
             -- frames. Elle annule proprement cette passe; les simples increments
             -- et insertions, eux, ne provoquent plus d'abandon systematique.
@@ -7734,6 +6000,9 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
             if key == nil then
                 if state.phase == "kills" then
                     state.phase = "captures"
+                    state.key = nil
+                elseif state.phase == "captures" then
+                    state.phase = "zones"
                     state.key = nil
                 else
                     state.finalizer = coroutine.create(finishSnapshot)
@@ -7748,13 +6017,26 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
                         name = Overlord.Sync:StripPipeLeakFromContributorName(name)
                     end
                     offerDisplayTopK(self, state.killHeap, key, name, value)
-                else
-                    local info = self.playerInfo and self.playerInfo[key]
+                elseif state.phase == "captures" then
+                    local name = state.canonicalIndex[key] or key
+                    local info = state.metaIndex[key]
                     local faction = type(info) == "table" and info.faction or ""
                     local heap = faction == "Alliance" and state.capHeapAlliance
                         or faction == "Horde" and state.capHeapHorde
                         or state.capHeapUnknown
-                    self:OfferTopSnapshotRow(heap, key, value)
+                    self:OfferTopSnapshotRow(heap, name, value)
+                else
+                    if type(value) == "table" then
+                        local dedup = GetKillDedupKey(key)
+                        if dedup then
+                            local names = state.zoneNamesByDedup[dedup]
+                            if not names then
+                                names = {}
+                                state.zoneNamesByDedup[dedup] = names
+                            end
+                            names[#names + 1] = key
+                        end
+                    end
                 end
                 budget = budget - 1
                 processed = processed + 1
@@ -7851,6 +6133,7 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
                 locale = snapshotLocale,
                 guild = snapshotGuild,
                 guildAuth = info.guildAuth == true or nil,
+                guildReplica = info.guildReplica == true or nil,
                 guildAt = snapshotGuildAt,
                 pool = snapshotPool,
                 race = snapshotRace,
@@ -7874,9 +6157,11 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
                 local currentGuildAt = normalizeGuildAt(current.guildAt)
                 if type(info.guild) == "string" and guildRecordWins(
                     snapshotGuild, snapshotGuildAt, info.guildAuth,
-                    currentGuild, currentGuildAt, current.guildAuth) then
+                    currentGuild, currentGuildAt, current.guildAuth,
+                    info.guildReplica, current.guildReplica) then
                     current.guild = snapshotGuild
                     current.guildAuth = info.guildAuth == true or nil
+                    current.guildReplica = info.guildReplica == true or nil
                     current.guildAt = snapshotGuildAt
                     dirty = true
                 end

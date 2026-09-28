@@ -116,7 +116,7 @@ local d = client("Dwarf Tester", "two")
 local us = client("Other Tester", "us", "us")
 b.friends, c.friends = { c, us }, { b }
 local kinds = {}
-for kind in ("SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR DX VB MN MS WN WS GK GC GA G7 GH OP OC WB SH HR HB HC HA LD CR CA GR GY GI FC GE GP GX GD GM BQ BR PB PK MK PX PP PM"):gmatch("%S+") do
+for kind in ("SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR DX VB MN MS WN WS OP OC WB SH HR HB HC HA LD CR CA GR GY GI FC GE GP GX GD GM BQ BR PB PK MK PX PP PM"):gmatch("%S+") do
     -- K is never re-forwarded: a relayed kill is never credited (anti-forgery).
     if kind ~= "SR" and kind ~= "K" then kinds[#kinds + 1] = kind end
 end
@@ -183,8 +183,8 @@ end
 do
     local n = a.BetaNetwork
     assert(n:IsUrgentPacket("C", "x") and n:IsUrgentPacket("ZS", "x") and n:IsUrgentPacket("TV", "x"))
-    assert(n:IsUrgentPacket("GC", "x") and n:IsUrgentPacket("OC", "x") and n:IsUrgentPacket("GA", "x"))
-    assert(n:IsUrgentPacket("GK", "v9:site:in_progress:1") and n:IsUrgentPacket("OP", "v1:site:in_progress:1"))
+    assert(n:IsUrgentPacket("OC", "x"))
+    assert(n:IsUrgentPacket("OP", "v1:site:in_progress:1"))
     assert(not n:IsUrgentPacket("GK", "v9:site:held:1") and not n:IsUrgentPacket("OP", "v1:site:neutral:1"))
     assert(not n:IsUrgentPacket("G7", "x") and not n:IsUrgentPacket("GH", "x") and not n:IsUrgentPacket("K", "x"))
 end
@@ -319,7 +319,7 @@ assert(not c.BetaNetwork:Receive(b.lastWire, b.name), "Expired packet was replay
 -- Hard queue bound under overload; producers receive an explicit false result.
 local accepted = 0
 for i = 1, 200 do if a.BetaNetwork:Send("K", tostring(i)) then accepted = accepted + 1 end end
-assert(accepted == 112 and a.BetaNetwork.stats.dropped >= 88, "Ordinary traffic consumed reserved catch-up slots")
+assert(accepted == 84 and a.BetaNetwork.stats.dropped >= 116, "Ordinary traffic consumed reserved catch-up/state/paged slots")
 drain()
 -- A Horde gateway with five Horde friends and one Alliance friend (listed last)
 -- must hand every packet to the Alliance bridge, not one packet in two.
@@ -368,7 +368,7 @@ assert(watch.received[1] and watch.received[1].kind == "ZS",
     "Capture alert waited behind queued kills")
 local full = client("Full Tester", "full")
 local fullWatch = client("Fullwatch Tester", "full")
-for i = 1, 112 do assert(full.BetaNetwork:Send("K", "fill-" .. i)) end
+for i = 1, 84 do assert(full.BetaNetwork:Send("K", "fill-" .. i)) end
 local fullTargets = full.Sync.GetBetaBNetTargets
 full.Sync.GetBetaBNetTargets = function() error('Refused packet still allocated routes/fragments') end
 assert(not full.BetaNetwork:Send("K", "fill-overflow"), "Bulk packet exceeded the queue bound")
@@ -377,12 +377,12 @@ assert(full.BetaNetwork:Send("ZS", "alert-full"), "Full queue refused a capture 
 assert(full.BetaNetwork.stats.displaced == 1, "Alert did not displace exactly one waiting kill")
 drain()
 assert(fullWatch.received[1].payload == "alert-full", "Displacing alert was not sent first")
-assert(#fullWatch.received == 112, "Ordinary queue bound changed: " .. #fullWatch.received)
+assert(#fullWatch.received == 84, "Ordinary queue bound changed: " .. #fullWatch.received)
 -- A busy bridge (queue full of bulk) must still send its catch-up request and ack.
 do
     local busy = client("Busy Tester", "busy")
     client("Busywatch Tester", "busy")
-    for i = 1, 112 do assert(busy.BetaNetwork:Send("K", "busy-fill-" .. i)) end
+    for i = 1, 84 do assert(busy.BetaNetwork:Send("K", "busy-fill-" .. i)) end
     assert(busy.BetaNetwork:Send("HR", "catch-up-request"), "Full relay queue refused a catch-up request")
     assert(busy.BetaNetwork:Send("HA", "catch-up-ack"), "Full relay queue refused a catch-up acknowledgement")
     assert(busy.BetaNetwork:IsUrgentPacket("HR", "x") and not busy.BetaNetwork:IsUrgentPacket("HB", "x")
@@ -427,11 +427,12 @@ do
     local fair = client("Fair Tester", "fair")
     local receiver = client("Fairwatch Tester", "fair")
     fair.BetaNetwork.peers[receiver.name:lower()] = { via = receiver.name, transport = "CHANNEL", at = now }
-    for i = 1, 112 do assert(fair.BetaNetwork:Send("ZS", "pressure-" .. i)) end
+    for i = 1, 84 do assert(fair.BetaNetwork:Send("ZS", "pressure-" .. i)) end
     assert(fair.BetaNetwork:CanSendLeaderboardPage(), "A busy alert lane blocked page admission")
     for i = 1, 16 do assert(fair.BetaNetwork:Send("LK", "reserved-score-" .. i, receiver.name)) end
     assert(not fair.BetaNetwork:Send("LK", "reserved-overflow", receiver.name), "Catch-up queue is unbounded")
-    assert(not fair.BetaNetwork:CanSendLeaderboardPage(), "Full page lane accepted more work")
+    assert(fair.BetaNetwork:CanSendLeaderboardPage(),
+        "Legacy LK backlog blocked reserved v5/v6 page admission")
     local start = now
     for i = 1, 225 do
         C_Timer.After(i * 0.2, function() fair.BetaNetwork:Send("ZS", "continuous-alert-" .. i) end)
@@ -490,12 +491,12 @@ do
     IsInGroup = function() return true end
 end
 -- Sixteen slots are reserved, not a smaller hard cap. A legacy burst may borrow
--- idle slots; a live alert reclaims an excess slot while the total stays at 128.
+-- idle slots up to the non-state allotment; a live alert reclaims an excess slot.
 do
     local burst = client("Burst Tester", "burst")
     local receiver = client("Burstwatch Tester", "burst")
     burst.BetaNetwork.peers[receiver.name:lower()] = { via = receiver.name, transport = "CHANNEL", at = now }
-    for i = 1, 128 do assert(burst.BetaNetwork:Send("LK", "burst-score-" .. i, receiver.name)) end
+    for i = 1, 100 do assert(burst.BetaNetwork:Send("LK", "burst-score-" .. i, receiver.name)) end
     assert(not burst.BetaNetwork:Send("LK", "burst-overflow", receiver.name), "Borrowing exceeded the total queue bound")
     assert(burst.BetaNetwork:Send("ZS", "burst-alert"), "Borrowed catch-up capacity blocked a live alert")
     drain()
@@ -504,7 +505,36 @@ do
         if row.kind == "LK" then kept[row.payload] = true else alerts = alerts + 1 end
     end
     for i = 1, 16 do assert(kept['burst-score-' .. i], 'Reserved catch-up slot was reclaimed') end
-    assert(#receiver.received == 128 and alerts == 1, 'Borrowed queue capacity was not bounded/reclaimed correctly')
+    assert(#receiver.received == 100 and alerts == 1, 'Borrowed queue capacity was not bounded/reclaimed correctly')
+end
+-- Retail's login requests only the map; ranking has its own paged catch-up.
+-- Discovering a peer must not start another full ranking response on the bridge.
+do
+    local joiner = client("Joiner Tester", "joiner")
+    local request
+    function joiner.Sync:SendSyncRequest(opts) request = opts; return true end
+    local hello = "global|map-hello|" .. time() .. "|*|Veteran Tester|NH|1.1.1"
+    assert(joiner.BetaNetwork:Receive(hello, "Veteran Tester", "CHANNEL"))
+    assert(request and request.betaTarget == "Veteran Tester", "No targeted map request on discovery")
+    assert(not request.fullResponse and not request.stateResponse,
+        "Peer discovery still requests a full ranking instead of the map")
+    drain()
+end
+-- Old clients may keep sending fortress siege packets during the transition.
+-- They cannot occupy the new relay queue, deliver data or evict useful traffic.
+do
+    local modern = client("Modern Tester", "modern")
+    local beforeDrops = modern.BetaNetwork.stats.dropped
+    for _, kind in ipairs({ "GK", "GC", "GA", "GH", "G7" }) do
+        assert(not modern.BetaNetwork:Send(kind, "old-fortress"), "Retired producer accepted: " .. kind)
+        local packet = { kind = kind, payload = "old-fortress", target = "*", path = { "Legacy Tester" } }
+        assert(not modern.BetaNetwork:Queue(packet), "Retired packet queued: " .. kind)
+        local wire = "global|retired-" .. kind .. "|" .. time() .. "|*|Legacy Tester|" .. kind .. "|old-fortress"
+        assert(not modern.BetaNetwork:Receive(wire, "Legacy Tester", "CHANNEL"),
+            "Retired packet received: " .. kind)
+    end
+    assert(#modern.received == 0 and modern.BetaNetwork.stats.dropped == beforeDrops,
+        "Retired messages consumed admission capacity")
 end
 a.BetaNetworkEnabled = false
 assert(not a.BetaNetwork:Send("K", "disabled"), "Beta transport remained active after community re-enable")

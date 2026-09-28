@@ -23,6 +23,7 @@ Overlord.SettingsPanel.AutoWaypointVariableName = "Overlord_AutoWaypointNextObje
 Overlord.SettingsPanel.ShowMinimapButtonVariableName = "Overlord_ShowMinimapButton"
 Overlord.SettingsPanel.ShowMinimapCaptureZonesVariableName = "Overlord_ShowMinimapCaptureZones"
 Overlord.SettingsPanel.ShowCoinsHudVariableName = "Overlord_ShowCoinsHud"
+Overlord.SettingsPanel.ShowFloatingObjectiveVariableName = "Overlord_ShowFloatingObjective"
 Overlord.SettingsPanel.ShowMapZoneTitlesVariableName = "Overlord_ShowMapZoneTitles"
 Overlord.SettingsPanel.ShowTopHudVariableName = "Overlord_ShowTopHud"
 Overlord.SettingsPanel.TopHudModeVariableName = "Overlord_TopHudMode"
@@ -400,6 +401,28 @@ end
 Overlord.SettingsPanel.GetShowCoinsHud = getShowCoinsHud
 Overlord.SettingsPanel.SetShowCoinsHud = setShowCoinsHud
 
+-- Fenetre flottante « Prochain objectif » (desactivee par defaut). Accesseurs
+-- exposes par champs : les fonctions d'enregistrement sont a la limite d'upvalues.
+function Overlord.SettingsPanel.GetShowFloatingObjective()
+    return OverlordDB and OverlordDB.config and OverlordDB.config.showFloatingObjective == true or false
+end
+
+function Overlord.SettingsPanel.SetShowFloatingObjective(value)
+    if not OverlordDB then return end
+    OverlordDB.config = OverlordDB.config or {}
+    OverlordDB.config.showFloatingObjective = value == true
+    if Overlord.ZoneIndicator and Overlord.ZoneIndicator.RefreshHud then
+        pcall(Overlord.ZoneIndicator.RefreshHud, Overlord.ZoneIndicator)
+    end
+    if Settings and Settings.GetSetting then
+        local setting = Settings.GetSetting(Overlord.SettingsPanel.ShowFloatingObjectiveVariableName)
+        if setting and setting.GetValue and setting:GetValue() ~= OverlordDB.config.showFloatingObjective
+            and setting.SetValue then
+            pcall(setting.SetValue, setting, OverlordDB.config.showFloatingObjective)
+        end
+    end
+end
+
 local function getShowMapZoneTitles()
     if OverlordDB and OverlordDB.config and OverlordDB.config.showMapZoneTitles == false then
         return false
@@ -579,9 +602,11 @@ function Overlord.SettingsPanel:RefreshControls()
     if self._showTutorialBookRow and self._showTutorialBookRow.Refresh then self._showTutorialBookRow:Refresh() end
     if self._soundEnabledRow and self._soundEnabledRow.Refresh then self._soundEnabledRow:Refresh() end
     if self._worldDefenseEnabledRow and self._worldDefenseEnabledRow.Refresh then self._worldDefenseEnabledRow:Refresh() end
+    if self._guildKillAlertRow and self._guildKillAlertRow.Refresh then self._guildKillAlertRow:Refresh() end
     if self._minimapButtonRow and self._minimapButtonRow.Refresh then self._minimapButtonRow:Refresh() end
     if self._minimapCaptureZonesRow and self._minimapCaptureZonesRow.Refresh then self._minimapCaptureZonesRow:Refresh() end
     if self._coinsHudRow and self._coinsHudRow.Refresh then self._coinsHudRow:Refresh() end
+    if self._floatingObjectiveRow and self._floatingObjectiveRow.Refresh then self._floatingObjectiveRow:Refresh() end
     if self._mapZoneTitlesRow and self._mapZoneTitlesRow.Refresh then self._mapZoneTitlesRow:Refresh() end
 end
 
@@ -629,8 +654,10 @@ function Overlord.SettingsPanel:ResetDefaults()
     setShowTutorialBook(DEFAULT_SHOW_TUTORIAL_BOOK)
     setSoundEnabled(DEFAULT_SOUND_ENABLED)
     setWorldDefenseEnabled(DEFAULT_WORLD_DEFENSE_ENABLED)
+    if Overlord.GuildKillAlert then Overlord.GuildKillAlert:ResetDefaults() end
     setShowMinimapCaptureZones(DEFAULT_SHOW_MINIMAP_CAPTURE_ZONES)
     setShowCoinsHud(DEFAULT_SHOW_COINS_HUD)
+    Overlord.SettingsPanel.SetShowFloatingObjective(false)
     setShowMapZoneTitles(DEFAULT_SHOW_MAP_ZONE_TITLES)
     settingsSuppressSideEffects = false
     flushSettingsMapSideEffects()
@@ -782,6 +809,21 @@ local function BuildSettingsRows(sp, rowParent, initialRowW, gold, white, placeR
     })
     placeRow(sp._worldDefenseEnabledRow)
 
+    local gka = Overlord.GuildKillAlert
+    if gka then
+        sp._guildKillAlertRow = CreateToggleRow(rowParent, {
+            width = initialRowW,
+            height = ROW_H,
+            label = (L and L.GUILD_KILL_ALERT_ENABLED_LABEL) or "Enemy guild raid alerts",
+            tooltip = (L and L.GUILD_KILL_ALERT_ENABLED_TOOLTIP) or "",
+            get = function() return gka:IsEnabled() end,
+            set = function(value) gka:SetEnabled(value) end,
+            gold = gold,
+            white = white,
+        })
+        placeRow(sp._guildKillAlertRow)
+    end
+
     sp._opacityRow = UI.CreateWC3StepperSlider(rowParent, {
         width = initialRowW,
         height = ROW_H,
@@ -843,6 +885,18 @@ local function BuildSettingsRows(sp, rowParent, initialRowW, gold, white, placeR
         white = white,
     })
     placeRow(sp._coinsHudRow)
+
+    sp._floatingObjectiveRow = CreateToggleRow(rowParent, {
+        width = initialRowW,
+        height = ROW_H,
+        label = (L and L.FLOATING_OBJECTIVE_LABEL) or "Floating next objective",
+        tooltip = (L and L.FLOATING_OBJECTIVE_TOOLTIP) or "",
+        get = Overlord.SettingsPanel.GetShowFloatingObjective,
+        set = Overlord.SettingsPanel.SetShowFloatingObjective,
+        gold = gold,
+        white = white,
+    })
+    placeRow(sp._floatingObjectiveRow)
 
     sp._minimapButtonRow = CreateToggleRow(rowParent, {
         width = initialRowW,
@@ -1113,6 +1167,8 @@ function Overlord.SettingsPanel:EnsureFrame()
     end
 
     BuildSettingsRows(self, rowParent, initialRowW, gold, white, placeRow)
+    -- La hauteur fixe ne couvrait pas toutes les lignes : suivre le nombre reel.
+    contentScrollH = math.max(contentScrollH, 24 + (ROW_H + ROW_GAP) * #f._settingsRows)
 
     if scrollChild then
         scrollChild:SetHeight(contentScrollH)
@@ -1284,6 +1340,16 @@ local function RegisterVerticalFallback()
             Overlord.SettingsPanel.SetShowCoinsHud
         )
         Settings.CreateCheckbox(category, coinsSetting, (L and L.COINS_HUD_TOOLTIP) or "")
+        local floatingObjectiveSetting = Settings.RegisterProxySetting(
+            category,
+            Overlord.SettingsPanel.ShowFloatingObjectiveVariableName,
+            "boolean",
+            (L and L.FLOATING_OBJECTIVE_LABEL) or "Floating next objective",
+            false,
+            Overlord.SettingsPanel.GetShowFloatingObjective,
+            Overlord.SettingsPanel.SetShowFloatingObjective
+        )
+        Settings.CreateCheckbox(category, floatingObjectiveSetting, (L and L.FLOATING_OBJECTIVE_TOOLTIP) or "")
         local mztSetting = Settings.RegisterProxySetting(
             category,
             Overlord.SettingsPanel.ShowMapZoneTitlesVariableName,

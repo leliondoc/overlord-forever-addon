@@ -417,7 +417,7 @@ local function ShouldAcceptOutpostCapture(siteKey, guild, fac, remoteTs, sender,
         or Overlord.Outpost:GetEffectiveGuildFaction(guild, fac)
     if not effectiveFac then return false end
     if not Overlord.Outpost:IsCaptureTakeoverAllowed(
-        st, guild, effectiveFac, remoteTs) then return false end
+        st, guild, effectiveFac, remoteTs, Overlord.Outpost:GetSite(siteKey)) then return false end
 
     if st.status == "held" then
         local heldGuild = Overlord.Outpost:SanitizeGuildName(st.ownerGuild or "")
@@ -448,8 +448,8 @@ local function ShouldAcceptOutpostCapture(siteKey, guild, fac, remoteTs, sender,
 
     if not OcSenderMatchesPayloadGuild(sender, guild, fac) then
         local fromChannel = sourceChannel == "CHANNEL"
-        if not fromChannel and (not Overlord.Sync.IsGuildKeepCommunitySender
-            or not Overlord.Sync:IsGuildKeepCommunitySender(sender)) then
+        if not fromChannel and (not Overlord.Sync.IsStrategicSiteCommunitySender
+            or not Overlord.Sync:IsStrategicSiteCommunitySender(sender)) then
             return false
         end
         if not OcHasLocalCaptureEvidence(st, guild, fac, remoteTs) then
@@ -1007,7 +1007,7 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
     local remotePool = OutpostPayloadPoolAcceptable(poolStr, sender, channel)
     if not remotePool then return end
     local ownerSourceVerified = OcSenderMatchesPayloadGuild(sender or "", guild or "", remoteFac)
-    if not ownerSourceVerified and not self:IsGuildKeepSenderTrusted(sender or "", remoteFac, channel, "OP", status) then
+    if not ownerSourceVerified and not self:IsStrategicSiteSenderTrusted(sender or "", remoteFac, channel, "OP", status) then
         return
     end
     local hadTs = tsStr and tsStr ~= ""
@@ -1015,8 +1015,8 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
     if hadTs and not remoteTs then return end
     if not remoteTs then remoteTs = 0 end
     if IsStaleCampaignTimestamp(remoteTs) then return end
-    local communitySource = self.IsGuildKeepCommunitySender
-        and self:IsGuildKeepCommunitySender(sender or "") or false
+    local communitySource = self.IsStrategicSiteCommunitySender
+        and self:IsStrategicSiteCommunitySender(sender or "") or false
     if communitySource and not ownerSourceVerified and remoteTs <= 0 then
         return
     end
@@ -1288,7 +1288,7 @@ end
 -- Il existe sept sites : une SR territoriale doit pouvoir transporter
 -- les sept etats simultanes, y compris neutral. Sans le terminal neutre, un client
 -- hors ligne pendant un abandon conserverait indefiniment son ancien assaut.
-local SR_MINIMAL_OP_SITE_MAX = 7
+local SR_MINIMAL_OP_SITE_MAX = 16
 
 function Overlord.Sync:AppendOutpostToSrQueue(queue, minimalResponseOnly)
     if not queue or not Overlord.Outpost or not Overlord.OutpostSites then return end
@@ -1471,7 +1471,7 @@ function Overlord.Sync:OnReceiveLeaderboardOutpostTenant(payload, sender, source
         and Overlord.Outpost:SanitizeGuildName(guild or "") or (guild or "")
     if guild == "" then return end
     if not SenderRealmMatchesCurrentOutpostPool(sender or "", sourceChannel) then return end
-    if not self:IsGuildKeepSenderTrusted(sender or "", fac, sourceChannel, "LO") then return end
+    if not self:IsStrategicSiteSenderTrusted(sender or "", fac, sourceChannel, "LO") then return end
     local dedupKey = string.format("%s:%s:%s:%d:%s",
         siteKey, guild, facCode or "", claimedAt, remotePool)
     local now = GetTime()
@@ -1541,7 +1541,7 @@ function Overlord.Sync:OnReceiveLeaderboardOutpostCount(payload, sender, sourceC
         and Overlord.Outpost:SanitizeGuildName(guild or "") or (guild or "")
     if guild == "" then return end
     if not SenderRealmMatchesCurrentOutpostPool(sender or "", sourceChannel) then return end
-    if not self:IsGuildKeepSenderTrusted(sender or "", fac, sourceChannel, "LOC") then return end
+    if not self:IsStrategicSiteSenderTrusted(sender or "", fac, sourceChannel, "LOC") then return end
     local dedupKey = string.format("%s:%s:%s:%d:%d:%s",
         siteKey, guild, facCode or "", count, latestTs, remotePool)
     local now = GetTime()

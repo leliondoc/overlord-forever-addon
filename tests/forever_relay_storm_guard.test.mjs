@@ -8,12 +8,9 @@ const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf
 // outpost states to raid + channel, and re-authored OC/WB into the relay.
 test("Keep and outpost states are re-sent only for targeted beta deliveries", () => {
     const targeted = /== "BETA" and Overlord\.BetaNetwork and Overlord\.BetaNetwork:IsTargetedDispatch\(\)\)/g;
-    const keep = read("SyncGuildKeep.lua");
     const outpost = read("SyncOutpost.lua");
-    assert.equal(keep.match(targeted)?.length, 5, "Guild keep rebroadcast sites");
     assert.equal(outpost.match(targeted)?.length, 4, "Outpost rebroadcast sites");
     for (const [name, source, send] of [
-        ["SyncGuildKeep.lua", keep, /BroadcastGuildKeepToGroup\("(GK|GH)"/],
         ["SyncOutpost.lua", outpost, /BroadcastOutpostToGroup\("(OP|OC|LO|LOC)"/],
     ]) {
         const lines = source.split("\n");

@@ -201,4 +201,41 @@ ui:Show(); drain()
 assert(#frame._lbView.sortedKills == 4999, 'Reopening lost pending query')
 frame.searchBox.scripts.OnEscapePressed(frame.searchBox); drain()
 assert(frame._lbView == frame._lbSource and pending() == 0)
+-- Expanding from 25 to 500 captures must reuse the same visible row pool.
+for _, faction in ipairs({ 'Alliance', 'Horde' }) do
+    source.byFaction[faction] = {}
+    for i = 1, 25 do
+        source.byFaction[faction][i] = { name = faction .. ' Capturer ' .. i,
+            count = 501 - i, class = 'UNKNOWN', faction = faction }
+    end
+end
+ui:Refresh(); drain()
+local captureFrameCount = #frames
+local alliancePool, hordePool = #frame.alliLines, #frame.hordeLines
+for _, faction in ipairs({ 'Alliance', 'Horde' }) do
+    for i = 26, 500 do
+        source.byFaction[faction][i] = { name = faction .. ' Capturer ' .. i,
+            count = 501 - i, class = 'UNKNOWN', faction = faction }
+    end
+end
+ui:Refresh(); drain()
+assert(#frames == captureFrameCount and #frame.alliLines == alliancePool and #frame.hordeLines == hordePool,
+    'Top 500 allocated frames beyond the visible capture rows')
+for _, scroll in ipairs({ frame.scrollAlli, frame.scrollHorde }) do
+    scroll:SetVerticalScroll(scroll:GetVerticalScrollRange())
+end
+local function hasLast(pool, faction)
+    for _, r in ipairs(pool) do
+        if r:IsShown() and r.name.text == faction .. ' Capturer 500' and r.count.text == 1 then return true end
+    end
+    return false
+end
+assert(hasLast(frame.alliLines, 'Alliance') and hasLast(frame.hordeLines, 'Horde'),
+    'Scrolling cannot reach the 500th capture row')
+assert(#frames == captureFrameCount, 'Scrolling allocated more capture frames')
+frame.searchBox:SetText('Capturer 500'); drain()
+assert(#frame._lbView.byFaction.Alliance == 1 and #frame._lbView.byFaction.Horde == 1,
+    'Search missed captures outside the old top 25')
+frame.searchClear.scripts.OnClick(); drain()
+assert(pending() == 0 and #frames == captureFrameCount)
 print('Search UI: actual edit box/clear/Escape, bounded frames, original rank, scroll reset, totals, no data reads on typing OK')

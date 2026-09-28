@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.1.3"
+Overlord.Version = "1.1.4"
 -- Forever uses one global community. The beta relay remains enabled in parallel
 -- so non-members and temporarily unavailable C_Club rosters still converge.
 Overlord.CommunityModeEnabled = true
@@ -52,7 +52,6 @@ local captureSyncGate = {
     notified = false,
     notifiedZoneId = nil,
     receivedDuringGate = false,
-    gkReceivedDuringGate = false,
 }
 
 -- Apres timeout gate sans sync : updatedAt=0 pour que le premier ZS distant gagne (solo login).
@@ -69,17 +68,6 @@ local function ZeroActiveFrontZonesForSyncCatchup()
     if Overlord.MarkDirty then Overlord:MarkDirty() end
 end
 
-local function ZeroGuildKeepsForSyncCatchup()
-    if not OverlordDB or not OverlordDB.guildKeeps then return end
-    for _, saved in pairs(OverlordDB.guildKeeps) do
-        if type(saved) == "table" and saved.status ~= "in_progress" then
-            saved.updatedAt = 0
-        end
-    end
-    if Overlord.GuildKeep and Overlord.GuildKeep.MarkDirty then
-        Overlord.GuildKeep:MarkDirty()
-    end
-end
 
 local function ClearLoginUnconfirmedZoneState()
     local seen = {}
@@ -208,7 +196,7 @@ function Overlord:RequireCaptureSync(reason, timeoutSeconds)
         captureSyncGate.notified = false
         captureSyncGate.notifiedZoneId = nil
         captureSyncGate.receivedDuringGate = false
-        captureSyncGate.gkReceivedDuringGate = false
+
     end
     -- Le ticker principal dort hors front. Sans ce one-shot, le predicat visuel
     -- expirait bien mais une carte deja ouverte ne recevait jamais le repaint.
@@ -254,9 +242,6 @@ function Overlord:MarkCaptureSyncReceived(snapshotComplete, confirmedFrontId)
                 Overlord:RefreshCaptureSyncVisuals()
             end
         end)
-    end
-    if Overlord.Sync and Overlord.Sync.FlushPendingGuildKeepCriticalBroadcasts then
-        Overlord.Sync:FlushPendingGuildKeepCriticalBroadcasts()
     end
     if Overlord.Sync and Overlord.Sync.FlushPendingOutpostRestoreBroadcasts then
         Overlord.Sync:FlushPendingOutpostRestoreBroadcasts()
@@ -309,10 +294,6 @@ function Overlord:IsCaptureSyncPending()
         if needsCatchup then
             ZeroActiveFrontZonesForSyncCatchup()
         end
-        -- GK/GC ont leur propre catchup ; ne pas rendre stale un fortin deja confirme.
-        if not captureSyncGate.gkReceivedDuringGate then
-            ZeroGuildKeepsForSyncCatchup()
-        end
         captureSyncGate.active = false
         captureSyncGate.reason = nil
         captureSyncGate.expiresAt = 0
@@ -320,7 +301,7 @@ function Overlord:IsCaptureSyncPending()
         captureSyncGate.remoteAdoptResetUntil = 0
         captureSyncGate.notified = false
         captureSyncGate.notifiedZoneId = nil
-        captureSyncGate.gkReceivedDuringGate = false
+
         -- La quarantaine de login est bornee comme en 9.3.1. updatedAt a deja
         -- ete neutralise pour le rattrapage : retirer maintenant les flags rend
         -- a nouveau carte, domination et capture locale canoniques, sans donner
@@ -330,9 +311,6 @@ function Overlord:IsCaptureSyncPending()
             self:RefreshCaptureSyncGameplayAvailability()
         elseif self.RefreshCaptureSyncVisuals then
             self:RefreshCaptureSyncVisuals()
-        end
-        if Overlord.Sync and Overlord.Sync.FlushPendingGuildKeepCriticalBroadcasts then
-            Overlord.Sync:FlushPendingGuildKeepCriticalBroadcasts()
         end
         if Overlord.Sync and Overlord.Sync.FlushPendingOutpostRestoreBroadcasts then
             Overlord.Sync:FlushPendingOutpostRestoreBroadcasts()
@@ -379,9 +357,6 @@ function Overlord:IsLoginCaptureSyncGateActive()
     return self:IsCaptureSyncGateReasonActive("login")
 end
 
-function Overlord:MarkGuildKeepSyncReceived()
-    captureSyncGate.gkReceivedDuringGate = true
-end
 
 function Overlord:NotifyCaptureSyncPending(zone)
     if not self:IsCaptureSyncPending() then return end
@@ -841,7 +816,6 @@ function Overlord.Shard:Update(skipIfFresh)
             Overlord.Sync:BroadcastShard(newShard)
         end
     end
-    if self.currentShardID == nil then self:RequestKeepShardWitness() end
     if ScheduleNextShardScan then
         ScheduleNextShardScan(self.currentShardID ~= nil)
     end
@@ -1095,14 +1069,6 @@ function Overlord.Shard:SyncLocalContext()
         self:RefreshLocalContext("", true)
         return false
     end
-    if Overlord.GuildKeep and Overlord.GuildKeep.IsPlayerOnKeepMap then
-        local onKeep, site, known = Overlord.GuildKeep:IsPlayerOnKeepMap()
-        if onKeep and site then
-            self:RefreshLocalContext("keep:" .. tostring(site.siteKey or site.id), true)
-            return true
-        end
-        if known == false then return false end
-    end
     if Overlord.Outpost and Overlord.Outpost.IsPlayerOnOutpostMap then
         local onOutpost, site = Overlord.Outpost:IsPlayerOnOutpostMap()
         if onOutpost and site then
@@ -1180,89 +1146,16 @@ function Overlord.Shard:GetCaptureLocalShardID(expectedContextKey, maxAge)
     end
     local shardID = self:GetFreshLocalShardID(maxAge)
     if shardID ~= nil then return shardID end
-    if self.currentShardID == nil then self:RequestKeepShardWitness() end
     return self:GetContextLocalShardID(expectedContextKey)
 end
 
 -- PLAYER_LOGOUT ne dit pas s'il precede un /reload ou une vraie deconnexion. On garde donc
 -- un bail exact tres court, mais il ne sera consomme que si PLAYER_ENTERING_WORLD confirme
 -- `isReloadingUi=true`. Un login normal ou UNIT_PHASE ne reutilise jamais cette mesure.
-function Overlord.Shard:PersistGuildKeepReloadShardLease()
-    if not OverlordDB or not Overlord.GuildKeep then return false end
-    local contextKey = tostring(self.localContextKey or "")
-    local siteKey = contextKey:match("^keep:([%w_%-]+)$")
-    local st = siteKey and Overlord.GuildKeep:GetState(siteKey) or nil
-    local shardId = self:GetContextLocalShardID()
-    if not st or st.status ~= "in_progress" or not st.holdAuthorityLocal
-        or not (st.isHolding or st.isPaused) or shardId == nil
-        or not Overlord.GuildKeep:HasAssaultShardAnchor(st)
-        or tonumber(Overlord.GuildKeep:GetAssaultShardId(st)) ~= tonumber(shardId) then
-        OverlordDB.guildKeepReloadShardLease = nil
-        return false
-    end
-    OverlordDB.guildKeepReloadShardLease = {
-        serverTs = (GetServerTime and GetServerTime()) or time(),
-        contextKey = contextKey, siteKey = siteKey, shardId = shardId,
-        guild = st.assaultShardGuild, faction = st.assaultShardFaction,
-        startedAt = st.assaultShardStartedAt, generationAt = st.assaultGenerationAt,
-        player = st.assaultShardPlayer, baseGuild = st.assaultBaseGuild,
-        baseFaction = st.assaultBaseFaction, baseCapturedAt = st.assaultBaseCapturedAt,
-    }
-    return true
-end
 
-function Overlord.Shard:RestoreGuildKeepReloadShardLease(isReloadingUi)
-    local row = OverlordDB and OverlordDB.guildKeepReloadShardLease
-    if OverlordDB then OverlordDB.guildKeepReloadShardLease = nil end
-    if isReloadingUi ~= true or type(row) ~= "table" or not Overlord.GuildKeep then
-        return false
-    end
-    local now = (GetServerTime and GetServerTime()) or time()
-    local savedAt = math.floor(tonumber(row.serverTs) or 0)
-    local shardId = CoerceShardId(row.shardId)
-    local siteKey = tostring(row.siteKey or "")
-    local contextKey = tostring(row.contextKey or "")
-    local st = Overlord.GuildKeep:GetState(siteKey)
-    if savedAt <= 0 or now < savedAt or now - savedAt > 20 or shardId == nil
-        or contextKey ~= "keep:" .. siteKey or not Overlord.GuildKeepSites
-        or not Overlord.GuildKeepSites[siteKey] or not st
-        or not Overlord.GuildKeep:ActiveAssaultAnchorMatches(
-            st, row.guild, row.faction, shardId, row.startedAt, row.generationAt,
-            row.player, row.baseGuild, row.baseFaction, row.baseCapturedAt) then return false end
-    self.localContextKey = contextKey
-    self.localContextStartedAt = GetTime()
-    self.currentShardID = shardId
-    self.lastUpdateAt = GetTime()
-    self.lastScanAttemptAt = GetTime()
-    self.localShardSource = "reload"
-    if ScheduleNextShardScan then ScheduleNextShardScan(true) end
-    return true
-end
 
 -- Lien Guild Keep dans le chat : le joueur en retard demande a l'ancre de
 -- l'inviter. Il ne doit jamais inviter l'ancre et la tirer sur sa propre shard.
-function Overlord.Shard:BuildKeepInviteRequestHyperlink(
-    playerName, siteKey, shardId, colorEsc, displayText)
-    if not playerName or playerName == "" then return "" end
-    playerName = tostring(playerName)
-    if playerName:find("[%c:|]") then return "" end
-    siteKey = tostring(siteKey or "")
-    shardId = tonumber(shardId)
-    if not siteKey:match("^[%w_%-]+$") or not Overlord.GuildKeepSites
-        or not Overlord.GuildKeepSites[siteKey]
-        or not shardId or shardId ~= math.floor(shardId) then return "" end
-    colorEsc = colorEsc or "|cffffffff"
-    displayText = displayText or playerName
-    return string.format(
-        "%s|H%s%s:%d:%s|h[%s]|h|r",
-        colorEsc,
-        self.KEEP_INVITE_REQUEST_LINK_PREFIX,
-        siteKey,
-        shardId,
-        playerName,
-        displayText
-    )
-end
 
 -- Clefs sync non invitables (pas de joueur WoW lisible pour InviteUnit)
 function Overlord.Shard:PartyInviteTargetIsUsable(sender)
@@ -1316,103 +1209,8 @@ end
 local KEEP_SHARD_WITNESS_GAP = 8
 local KEEP_SHARD_WITNESS_RANGE_SQ = 100 * 100
 
-function Overlord.Shard:GetNearbyKeepGroupUnit(sender, siteKey)
-    local site = Overlord.GuildKeepSites and Overlord.GuildKeepSites[siteKey]
-    if not site or not IsInGroup or not IsInGroup()
-        or not UnitFullName or not UnitPhaseReason or not UnitDistanceSquared
-        or not UnitIsVisible or not C_Map or not C_Map.GetPlayerMapPosition then return nil end
-    local ok, unit = pcall(function()
-        local sync = Overlord.Sync
-        local targetKey = sync and sync.GetCaptureContributorDedupKey
-            and sync:GetCaptureContributorDedupKey(sender) or nil
-        if not targetKey then return nil end
-        local prefix = IsInRaid() and "raid" or "party"
-        local count = prefix == "raid" and math.min(GetNumGroupMembers(), 40) or 4
-        for i = 1, count do
-            local token = prefix .. i
-            if UnitExists(token) and not UnitIsUnit(token, "player") then
-                local unitName = sync.CanonicalForeverNameFromUnit
-                    and sync:CanonicalForeverNameFromUnit(token)
-                local unitKey = unitName and sync:GetCaptureContributorDedupKey(unitName) or nil
-                if unitKey and unitKey == targetKey then
-                    if not UnitIsVisible(token) or UnitPhaseReason(token) ~= nil then return nil end
-                    local distance, checked = UnitDistanceSquared(token)
-                    if checked ~= true or not distance or distance < 0
-                        or distance > KEEP_SHARD_WITNESS_RANGE_SQ then return nil end
-                    local pos = C_Map.GetPlayerMapPosition(site.mapID, token)
-                    if not pos then return nil end
-                    local x, y = pos:GetXY()
-                    if not x or not y or (x == 0 and y == 0)
-                        or x < 0 or x > 1 or y < 0 or y > 1 then return nil end
-                    return token
-                end
-            end
-        end
-    end)
-    return ok and unit or nil
-end
 
-function Overlord.Shard:RequestKeepShardWitness()
-    local sync = Overlord.Sync
-    local siteKey = tostring(self.localContextKey or ""):match("^keep:([%w_%-]+)$")
-    if not siteKey or self.currentShardID ~= nil or not sync or not sync.SendToGroup
-        or not IsInGroup or not IsInGroup() then return false end
-    local now = GetTime()
-    if now < (self.nextKeepShardRequestAt or 0) then return false end
-    local site = Overlord.GuildKeepSites and Overlord.GuildKeepSites[siteKey]
-    if not site or not Overlord.GuildKeep:IsPlayerInKeepGeometry(site) then return false end
-    self.nextKeepShardRequestAt = now + KEEP_SHARD_WITNESS_GAP
-    self.keepShardRequestSequence = (self.keepShardRequestSequence or 0) + 1
-    local nonce = tostring(GetServerTime()) .. "-" .. tostring(self.keepShardRequestSequence)
-    self.keepShardRequest = { siteKey = siteKey, nonce = nonce, sentAt = now,
-        contextAt = self.localContextStartedAt }
-    -- Les anciennes versions ignorent Q/A (tonumber renvoie nil) et continuent de
-    -- recevoir le SH numerique inchange. Aucun changement du protocole d'assaut GK.
-    sync:SendToGroup("SH", "Q:" .. siteKey .. ":" .. nonce)
-    return true
-end
 
-function Overlord.Shard:OnKeepShardWitness(payload, sender, channel)
-    if channel ~= "PARTY" and channel ~= "RAID" and channel ~= "WHISPER" then return false end
-    if type(payload) ~= "string" or #payload > 120 or type(sender) ~= "string"
-        or not self:SyncLocalContext() then return false end
-    local kind, siteKey, nonce, shardText = strsplit(":", payload)
-    if (kind ~= "Q" and kind ~= "A") or not siteKey or not nonce
-        or #nonce > 40 or not nonce:match("^%d+%-%d+$")
-        or self.localContextKey ~= "keep:" .. siteKey then return false end
-    local now = GetTime()
-    local request = self.keepShardRequest
-    if kind == "A" and (not request or request.siteKey ~= siteKey or request.nonce ~= nonce
-        or request.contextAt ~= self.localContextStartedAt or now < request.sentAt
-        or now - request.sentAt > KEEP_SHARD_WITNESS_GAP or self.currentShardID ~= nil) then
-        return false
-    end
-    local unit = self:GetNearbyKeepGroupUnit(sender, siteKey)
-    if not unit then return false end
-    if kind == "Q" then
-        local shardID = self:GetContextLocalShardID("keep:" .. siteKey)
-        -- Une reponse apprise d'un pair ne peut pas engendrer une chaine de preuves.
-        if shardID == nil or self.localShardSource ~= "guid" then return false end
-        self.keepShardReplyAt = self.keepShardReplyAt or {}
-        if now < (self.keepShardReplyAt[unit] or 0) then return false end
-        self.keepShardReplyAt[unit] = now + KEEP_SHARD_WITNESS_GAP
-        if Overlord.Sync and Overlord.Sync.SendWhisper then
-            Overlord.Sync:SendWhisper("SH", "A:" .. siteKey .. ":" .. nonce .. ":" .. shardID, sender)
-            return true
-        end
-        return false
-    end
-    local shardID = tonumber(shardText)
-    if not shardID or shardID < 0 or shardID >= SHARD_LAYER_ID_MAX
-        or shardID ~= math.floor(shardID) then return false end
-    self.currentShardID = shardID
-    self.lastUpdateAt = now
-    self.lastScanAttemptAt = now
-    self.localShardSource = "group"
-    self.keepShardRequest = nil
-    if ScheduleNextShardScan then ScheduleNextShardScan(true) end
-    return true
-end
 
 -- Shard connu pour un joueur sync (nil si expire ou absent).
 function Overlord.Shard:GetKnownPlayerShard(playerName)
@@ -1708,267 +1506,6 @@ end
 
 -- Entre deux tentatives v8, le GA conserve le shard Anchor requis. Le rendre visible ici
 -- evite qu'un joueur sur une autre couche voie simplement son tag refuse sans hop possible.
-local function GetGkEntryRetryInfo(st)
-    local gk = Overlord.GuildKeep
-    if not st or not gk or not gk.GetRequiredRetryShardInfo then return nil end
-    return gk:GetRequiredRetryShardInfo(
-        st, st.abortedAssaultBaseGuild, st.abortedAssaultBaseFaction,
-        st.abortedAssaultBaseCapturedAt,
-        (GetServerTime and GetServerTime()) or time())
-end
-
-local function GetGkEntryAssaultFaction(st)
-    if st and st.status == "in_progress" then return st.ownerFaction end
-    local _, _, retryFaction = GetGkEntryRetryInfo(st)
-    return retryFaction
-end
-
-local function GkEntryIsEnemyPush(st)
-    local enemyFac = GetEnemyFactionForShardPrompt()
-    return enemyFac and GetGkEntryAssaultFaction(st) == enemyFac
-end
-
-local function GkEntryIsAllyPush(st)
-    local playerFac = Overlord.PlayerFaction
-    return playerFac and GetGkEntryAssaultFaction(st) == playerFac
-end
-
-local function GetGkEntryCapturerName(st)
-    if not st or not Overlord.GuildKeep then return "" end
-    if st.status ~= "in_progress" then
-        local _, retryPlayer = GetGkEntryRetryInfo(st)
-        return NormalizeShardPlayerName(retryPlayer)
-    end
-    -- Le relay est l'autorite transportee par le dernier GK. L'officiel direct peut rester
-    -- l'ancien porteur apres un handoff si ce client n'a pas vu le heartbeat du successeur.
-    local relay = NormalizeShardPlayerName(st.gkRelayCapturerName)
-    if relay ~= "" then return relay end
-    if Overlord.GuildKeep.GetEffectiveCapturerName then
-        local active = NormalizeShardPlayerName(Overlord.GuildKeep:GetEffectiveCapturerName(st))
-        if active ~= "" then return active end
-    end
-    if Overlord.GuildKeep.GetAssaultShardPlayer then
-        local anchorPlayer = NormalizeShardPlayerName(Overlord.GuildKeep:GetAssaultShardPlayer(st))
-        if anchorPlayer ~= "" then return anchorPlayer end
-    end
-    return ""
-end
-
-function Overlord.Shard:BuildGkEntryInviteRows(st, siteKey)
-    local myShard
-    if siteKey and self.GetCaptureLocalShardID then
-        myShard = self:GetCaptureLocalShardID("keep:" .. tostring(siteKey), 8)
-    elseif self.GetFreshLocalShardID then
-        myShard = self:GetFreshLocalShardID(8)
-    else
-        myShard = CoerceShardId(self.currentShardID)
-    end
-    if myShard == nil or not st then return {} end
-    local assaultShard = Overlord.GuildKeep and Overlord.GuildKeep.GetAssaultShardId
-        and Overlord.GuildKeep:GetAssaultShardId(st) or nil
-    if not assaultShard then assaultShard = GetGkEntryRetryInfo(st) end
-    if not assaultShard or tonumber(assaultShard) == myShard then return {} end
-    local targetFac, capturer = GetGkEntryAssaultFaction(st), GetGkEntryCapturerName(st)
-    local anchorContact = ""
-    if capturer ~= "" then
-        if st.status ~= "in_progress" then
-            -- Le helper n'expose ici qu'un GA terminal courant/rejouable.
-            anchorContact = capturer
-        else
-        local serverNow = (GetServerTime and GetServerTime()) or time()
-        local updatedAt = math.floor(tonumber(st.updatedAt) or 0)
-        -- En Large Event, SH peut etre volontairement coupe alors que le GK relayé est frais.
-        -- Le nom d'autorite de ce GK reste un contact sûr : le lien lui DEMANDE une invitation
-        -- et ne peut donc jamais tirer l'Anchor sur notre mauvaise couche.
-        if updatedAt > 0 and updatedAt <= serverNow + 300 and serverNow - updatedAt <= 20 then
-            anchorContact = capturer
-        end
-        end
-    end
-    local anchorKey = capturer:lower()
-    return {
-        _overlordShardRowSource = true,
-        source = self.knownShards,
-        targetShard = assaultShard,
-        anchorPlayer = anchorContact ~= "" and anchorContact or nil,
-        anchorShard = assaultShard,
-        getRevision = function() return tonumber(self._gkPromptPeerRevision) or 0 end,
-        accept = function(player, _, isSyntheticAnchor)
-            player = NormalizeShardPlayerName(player)
-            if player == "" or IsSelfShardInviteTarget(player) then return false, false end
-        if self:IsPlayerAlreadyGrouped(player) then
-                return false, true
-        end
-        local playerFac = ShardTargetFaction(player)
-            local isAnchorPlayer = isSyntheticAnchor or (anchorKey ~= ""
-                and player:lower() == anchorKey)
-            if targetFac and playerFac ~= targetFac
-                and not (isAnchorPlayer and not playerFac) then return false, false end
-            return true, false
-        end,
-        less = function(a, b)
-            local ac = anchorKey ~= "" and a.player:lower() == anchorKey
-            local bc = anchorKey ~= "" and b.player:lower() == anchorKey
-        if ac ~= bc then return ac end
-        return a.player:lower() < b.player:lower()
-        end,
-    }
-end
-
-local shownGkOutdatedVersion
-
-local function MaybeWarnOutdatedOnGuildKeepEntry()
-    local newer = Overlord.Sync and Overlord.Sync.GetKnownNewerVersion
-        and Overlord.Sync:GetKnownNewerVersion()
-    if not newer or newer == shownGkOutdatedVersion
-        or not Overlord.Popups or not Overlord.Popups.ShowOutdatedVersion then return end
-    shownGkOutdatedVersion = newer
-    Overlord.Popups:ShowOutdatedVersion(newer)
-end
-
-function Overlord.Shard:TryAutoPromptOnGuildKeepEntry(siteKey, site, st)
-    if not siteKey or not site or not st then return end
-    -- Un client pre-v8 ou reste sur l'ancien 9.9.1 ignore le tuple root+offset. Le prevenir ici permet de
-    -- distinguer immediatement un addon obsolete d'un vrai bug de timer/Anchor.
-    MaybeWarnOutdatedOnGuildKeepEntry()
-    -- Capture GK en monde ouvert Forever (pas de Warmode).
-    if not (Overlord.IsShardHelperActive and Overlord:IsShardHelperActive()) then return end
-    -- Contrairement aux zones ordinaires, le raid est le cas principal des Guild Keeps.
-    -- Les gardes ci-dessous filtrent deja la shard courante et les contacts groupes.
-    local localShard = self.GetCaptureLocalShardID
-        and self:GetCaptureLocalShardID("keep:" .. tostring(siteKey), 8)
-    if not localShard then return end
-    if not GkEntryIsEnemyPush(st) and not GkEntryIsAllyPush(st) then return end
-    local assaultShard = Overlord.GuildKeep and Overlord.GuildKeep.GetAssaultShardId
-        and Overlord.GuildKeep:GetAssaultShardId(st) or tonumber(st.assaultShardId)
-    local retryShard, retryPlayer
-    if not assaultShard then
-        retryShard, retryPlayer = GetGkEntryRetryInfo(st)
-        assaultShard = retryShard
-    end
-    -- Cas ultra-majoritaire : deja sur l'Anchor. Eviter de reconstruire une identite et de
-    -- rescanner les contacts connus a chaque tick pour tout le raid.
-    if not assaultShard or tonumber(localShard) == tonumber(assaultShard) then return end
-    local now = GetTime()
-    local anchorIdentity = table.concat({
-        tostring(assaultShard or ""),
-        tostring(math.floor(tonumber(retryShard and st.abortedAssaultStartedAt
-            or st.assaultShardStartedAt) or 0)),
-        tostring(math.floor(tonumber(retryShard and st.abortedAssaultGenerationAt
-            or st.assaultGenerationAt) or 0)),
-        tostring(retryPlayer or st.assaultShardPlayer or ""),
-    }, ":")
-    local peerRevision = tonumber(self._gkPromptPeerRevision) or 0
-    local samePromptIdentity = lastShardKeepPromptIdentity[siteKey] == anchorIdentity
-    if samePromptIdentity and lastShardKeepPromptRevision[siteKey] == peerRevision
-        and now - (lastShardKeepPromptAt[siteKey] or 0) < SHARD_ZONE_PROMPT_COOLDOWN then return end
-    local sameProbeIdentity = lastShardKeepProbeIdentity[siteKey] == anchorIdentity
-    if sameProbeIdentity and lastShardKeepProbeRevision[siteKey] == peerRevision
-        and now - (lastShardKeepProbeAt[siteKey] or 0) < SHARD_KEEP_NEGATIVE_PROBE_COOLDOWN then
-        return
-    end
-    lastShardKeepProbeAt[siteKey] = now
-    lastShardKeepProbeRevision[siteKey] = peerRevision
-    lastShardKeepProbeIdentity[siteKey] = anchorIdentity
-
-    local rowSource = self:BuildGkEntryInviteRows(st, siteKey)
-    local function FinishGkPrompt(rows, groupedContact)
-        rows = type(rows) == "table" and rows or {}
-        groupedContact = groupedContact or ""
-    if rows[1] and rows[1].player then
-        local expectedFac = GetGkEntryAssaultFaction(st)
-        if expectedFac then
-            local pf = ShardTargetFaction(rows[1].player)
-            if pf and pf ~= expectedFac then return end
-        end
-    end
-
-    lastShardKeepPromptAt[siteKey] = now
-    lastShardKeepPromptIdentity[siteKey] = anchorIdentity
-    lastShardKeepPromptRevision[siteKey] = peerRevision
-    if Overlord.UI and Overlord.UI.OpenShardMismatchPopup then
-        local label = (Overlord.GuildKeep and Overlord.GuildKeep.GetDisplayName)
-            and Overlord.GuildKeep:GetDisplayName(site) or siteKey
-        assaultShard = assaultShard or (rows[1] and rows[1].shard)
-        local shardLabel = "#" .. tostring(assaultShard or "?")
-        if assaultShard and self.GetShardReference then
-            local _, realm = self:GetShardReference(assaultShard)
-            if realm and realm ~= "" then
-                shardLabel = shardLabel .. " " .. string.format(L.SHARD_BADGE_REFERENCE, realm)
-            end
-        end
-        if groupedContact ~= "" then
-            local currentShard = self:GetCurrentShardID() or "?"
-            local guidance = string.format(
-                L.GUILD_KEEP_GROUPED_WRONG_SHARD,
-                groupedContact, tostring(currentShard), tostring(assaultShard or "?"))
-            Overlord.UI:OpenShardMismatchPopup(nil, {
-                zoneEntry = true,
-                zoneName = label,
-                rows = {},
-                rowsReady = true,
-                promptKind = GkEntryIsAllyPush(st) and "ally" or "enemy",
-                subText = guidance,
-                hintText = L.GUILD_KEEP_GROUPED_WRONG_SHARD_HINT,
-                emptyText = L.GUILD_KEEP_GROUPED_WRONG_SHARD_EMPTY,
-            })
-            return
-        end
-        if #rows == 0 then
-            -- L'Anchor est connue mais aucun contact compatible n'est encore visible.
-            -- Informer tout de suite le retardataire et lancer un petit rattrapage ; une
-            -- revision de peers rouvrira ce meme popup avec le bouton de demande d'invite.
-            Overlord.UI:OpenShardMismatchPopup(nil, {
-                zoneEntry = true,
-                zoneName = label,
-                rows = {},
-                rowsReady = true,
-                promptKind = GkEntryIsAllyPush(st) and "ally" or "enemy",
-                requestInvite = true,
-                targetShard = assaultShard,
-                subText = string.format(
-                    L.GUILD_KEEP_ANCHOR_CONTACT_PENDING,
-                    label, shardLabel),
-                hintText = L.GUILD_KEEP_ANCHOR_CONTACT_HINT,
-                emptyText = L.GUILD_KEEP_ANCHOR_CONTACT_EMPTY,
-            })
-            if Overlord.Sync and Overlord.Sync.SendSyncRequest then
-                Overlord.Sync:SendSyncRequest({
-                    includeCommunity = true,
-                    allowCommunityInLargeEvent = true,
-                    communityMax = 3,
-                    communityDelay = 1.0,
-                    criticalChannel = true,
-                    territorialOnly = true,
-                })
-            end
-            return
-        end
-        local contact = rows[1].player
-        Overlord.UI:OpenShardMismatchPopup(nil, {
-            zoneEntry = true,
-            zoneName = label,
-            rows = rows,
-            rowsReady = true,
-            promptKind = GkEntryIsAllyPush(st) and "ally" or "enemy",
-            requestInvite = true,
-            targetShard = assaultShard,
-            subText = string.format(L.SHARD_POPUP_KEEP_JOIN_SUB, label, shardLabel, contact),
-        })
-    end
-    end
-    if rowSource and rowSource._overlordShardRowSource
-        and Overlord.UI and Overlord.UI.RequestShardMismatchRowsBuild then
-        Overlord.UI:RequestShardMismatchRowsBuild(rowSource,
-            "prepare:gk:" .. tostring(siteKey) .. ":" .. anchorIdentity,
-            function(rows, meta)
-                FinishGkPrompt(rows, meta and meta.groupedContact)
-            end)
-    else
-        FinishGkPrompt(rowSource, "")
-    end
-end
-
 local function OpEntryIsEnemyPush(st)
     local enemyFac = GetEnemyFactionForShardPrompt()
     return st and st.status == "in_progress" and enemyFac and st.ownerFaction == enemyFac
@@ -2682,7 +2219,7 @@ local function CompleteResumeFromInstance(reason)
     SchedulePostInstanceWorldRecovery()
     -- Si le joueur sort en ville, le ticker n'est pas actif -> le relancer ici.
     if StartDominationTicker then StartDominationTicker() end
-    Overlord:StartGuildKeepLoop()
+    Overlord:StartStrategicSiteLoop()
     if Overlord._loginFactionChangeDeferred and Overlord.RequestFactionChangeReconcile then
         Overlord:RequestFactionChangeReconcile()
     end
@@ -2765,9 +2302,6 @@ function Overlord:SuspendForInstance()
     if self.ZoneControl and self.ZoneControl.OnInstanceSuspend then
         self.ZoneControl:OnInstanceSuspend()
     end
-    if self.GuildKeepControl and self.GuildKeepControl.OnInstanceSuspend then
-        self.GuildKeepControl:OnInstanceSuspend()
-    end
     if self.OutpostControl and self.OutpostControl.OnInstanceSuspend then
         self.OutpostControl:OnInstanceSuspend()
     end
@@ -2792,7 +2326,7 @@ function Overlord:SuspendForInstance()
         self.ZoneControl:Suspend()
     end
     self:StopUpdateLoop()
-    self:StopGuildKeepLoop()
+    self:StopStrategicSiteLoop()
     if StopDominationTicker then StopDominationTicker() end
     if self.UI then
         if self.UI.StopSpectatorMode then self.UI:StopSpectatorMode() end
@@ -3662,10 +3196,30 @@ function Overlord:Initialize()
         end
         OverlordDB.frontDominationPoolVersion = 1
     end
-    -- 1.0.3 briefly split Forever into US/EU. Merge every current legacy bucket
-    -- by monotonic maxima, then remove aliases only after the global table exists.
+    -- 1.0.3 briefly split Forever into US/EU. Each front is a complete
+    -- territorial snapshot: taking max(Alliance) and max(Horde) separately
+    -- invents time that neither pool observed. Use the same total ordering as
+    -- DX, with the pool name as a final stable tie-breaker for equal snapshots.
     if (tonumber(OverlordDB.globalDominationUnifiedVersion) or 0) < 1 then
         local global = OverlordDB.frontDominationTimeByPool.global or {}
+        local selectedPool = {}
+        local function snapshotWins(candidate, current, candidatePool, currentPool)
+            local candidateAlly = tonumber(candidate.Alliance) or 0
+            local candidateHorde = tonumber(candidate.Horde) or 0
+            local currentAlly = tonumber(current.Alliance) or 0
+            local currentHorde = tonumber(current.Horde) or 0
+            local candidateTotal = candidateAlly + candidateHorde
+            local currentTotal = currentAlly + currentHorde
+            if candidateTotal ~= currentTotal then return candidateTotal > currentTotal end
+            local candidateSeq = math.floor(tonumber(candidate.scoreSeq) or 0)
+            local currentSeq = math.floor(tonumber(current.scoreSeq) or 0)
+            if candidateSeq ~= currentSeq then return candidateSeq > currentSeq end
+            local candidateSource = tostring(candidate.scoreSource or "")
+            local currentSource = tostring(current.scoreSource or "")
+            if candidateSource ~= currentSource then return candidateSource > currentSource end
+            if candidateAlly ~= currentAlly then return candidateAlly > currentAlly end
+            return candidatePool > currentPool
+        end
         for _, oldPool in ipairs({ "us", "eu", "fr", "de", "na" }) do
             local source = OverlordDB.frontDominationTimeByPool[oldPool]
             if type(source) == "table" then
@@ -3674,14 +3228,11 @@ function Overlord:Initialize()
                         local targetRow = global[frontId]
                         if type(targetRow) ~= "table" then
                             global[frontId] = sourceRow
-                        elseif targetRow ~= sourceRow then
-                            for key, value in pairs(sourceRow) do
-                                if type(value) == "number" then
-                                    targetRow[key] = math.max(tonumber(targetRow[key]) or 0, value)
-                                elseif targetRow[key] == nil then
-                                    targetRow[key] = value
-                                end
-                            end
+                            selectedPool[frontId] = oldPool
+                        elseif targetRow ~= sourceRow and snapshotWins(
+                            sourceRow, targetRow, oldPool, selectedPool[frontId] or "global") then
+                            global[frontId] = sourceRow
+                            selectedPool[frontId] = oldPool
                         end
                     end
                 end
@@ -3934,7 +3485,6 @@ function Overlord:Initialize()
     self:RequireCaptureSync("login")
     self.Zones:ApplyFactionConfig(self.PlayerFaction)
     -- Fortin : restore in_progress apres PlayerFaction (decroissance offline = meme moteur que les fronts)
-    if Overlord.GuildKeep then Overlord.GuildKeep:RestoreKeeps() end
     if Overlord.Outpost then Overlord.Outpost:RestoreOutposts() end
 
     -- Changement de faction (ex: deconnexion Alliance, reconnexion Horde) : l'etat des zones
@@ -3975,10 +3525,6 @@ function Overlord:Initialize()
             OverlordDB.leaderboard or EmptyLeaderboardBucket()
     end
     self:UnifyEuropeanLeaderboardBuckets()
-    -- Reprendre uniquement une migration deja journalisee par une ancienne version.
-    if Overlord.Leaderboard and OverlordDB.guildKeepLbMigrationFrom then
-        Overlord.Leaderboard._guildKeepLbMigrationFrom = OverlordDB.guildKeepLbMigrationFrom
-    end
     OverlordDB.leaderboard = OverlordDB.leaderboardsByPool[currentLeaderboardPool]
     if lastPool ~= "" and lastPool ~= currentPool then
         poolChanged = true
@@ -3995,10 +3541,6 @@ function Overlord:Initialize()
             if not ((zone.owner == "Alliance" or zone.owner == "Horde") and ct > 0) then
                 zone.updatedAt = 0
             end
-        end
-        ZeroGuildKeepsForSyncCatchup()
-        if Overlord.GuildKeep and Overlord.GuildKeep.ClearForeignPoolHeldStates then
-            Overlord.GuildKeep:ClearForeignPoolHeldStates()
         end
         -- Le bucket domination actif vient lui aussi de changer. Le burst login
         -- demandera le pool correct ; le repush differe ne peut plus re-etiqueter
@@ -4068,17 +3610,6 @@ function Overlord:Initialize()
         AddLoginInitStage("Leaderboard", function()
             if Overlord._europeanLeaderboardUnionPending then return false end
             return Overlord.Leaderboard:Initialize(true)
-        end, true)
-
-        -- Tenants/awards/preuves GH sont sanities, bornes et indexes par une
-        -- coroutine avant Campaign/Sync. Les migrations de pool ci-dessus ne font
-        -- plus aucun scan SavedVariables dans Initialize.
-        AddLoginInitStage("GuildKeepLedger", function()
-            if not Overlord.Leaderboard
-                or not Overlord.Leaderboard.EnsureGuildKeepProofLedgerPrepared then return true end
-            local prepared = Overlord.Leaderboard:EnsureGuildKeepProofLedgerPrepared(true)
-            if prepared ~= true then return prepared end
-            return true
         end, true)
 
         AddLoginInitStage("Campaign", function()
@@ -4182,7 +3713,7 @@ function Overlord:Initialize()
             Overlord._syncDeferredInitDone = true
             Overlord._loginChannelPending = nil
             if Overlord.InstanceSuspended or IsInInstance() then return end
-            Overlord:StartGuildKeepLoop()
+            Overlord:StartStrategicSiteLoop()
             -- Join canal tot : le SR a +1,5 s passait souvent avant GetChannelId() (PLAYER_LOGIN +5 s).
             if Overlord.Sync.JoinChannel then Overlord.Sync:JoinChannel(1) end
             if Overlord.Sync.StartChannelRetryLoop then Overlord.Sync:StartChannelRetryLoop() end
@@ -4938,13 +4469,19 @@ function Overlord:RestoreZoneState()
                 end
             end
         end
+    end
 
-        -- Statuts local-only des fronts inactifs : les SV peuvent garder un "Verrouillee"
-        -- fige d'une session precedente alors que le prerequis a ete capture entre-temps.
-        if Overlord.Fronts and Overlord.Zones and Overlord.Zones.RefreshInactiveFrontAvailability then
-            for _, frontId in ipairs(Overlord.Fronts.Order or {}) do
-                Overlord.Zones:RefreshInactiveFrontAvailability(frontId)
-            end
+    -- Les fronts sans ligne disque ont aussi besoin de leurs capitales de base
+    -- avant le premier ZA global (notamment quand la beta ne charge aucune SV).
+    if self.Zones and self.Zones.InitializeMissingCapitalDefaults then
+        self.Zones:InitializeMissingCapitalDefaults()
+    end
+
+    -- Statuts local-only des fronts inactifs : les SV peuvent garder un "Verrouillee"
+    -- fige d'une session precedente alors que le prerequis a ete capture entre-temps.
+    if Overlord.Fronts and Overlord.Zones and Overlord.Zones.RefreshInactiveFrontAvailability then
+        for _, frontId in ipairs(Overlord.Fronts.Order or {}) do
+            Overlord.Zones:RefreshInactiveFrontAvailability(frontId)
         end
     end
 
@@ -5055,7 +4592,6 @@ function Overlord:SaveState()
     
     -- Sauvegarde ressources (or, bois, stocks) et bonus actifs
     if Overlord.Ressources then Overlord.Ressources:SaveResources() end
-    if Overlord.GuildKeep then Overlord.GuildKeep:SaveKeeps() end
     if Overlord.Fronts then
         OverlordDB.activeFrontId = Overlord.Fronts.activeFrontId
     end
@@ -5939,8 +5475,8 @@ local REMOTE_OBSERVER_INTERVAL = 0.5
 local updateTicker = nil
 local frontTickPhase = 0
 local truceExpireTicker = nil
--- Guild Keep : ticker independant du front actif (captures / stale observers)
-local guildKeepTicker = nil
+-- Forteresses et avant-postes : ticker independant du front actif.
+local strategicSiteTicker = nil
 -- Interpolation des minuteurs (capture ennemie a distance), ~4 Hz ; ZoneControl:Update reste a 1/s.
 local remoteObserverTicker = nil
 local remoteObserverState = {
@@ -5981,7 +5517,7 @@ function Overlord:GetRemoteObserverZones(frontIdOverride)
     return GetRemoteObserverZones(frontIdOverride)
 end
 
-local function RunGuildKeepTick(deltaTime)
+local function RunStrategicSiteTick(deltaTime)
     if not Overlord.IsInitialized or Overlord.InstanceSuspended then return end
     deltaTime = math.max(0, math.min(tonumber(deltaTime) or 1, 3))
     -- Filet de fraicheur campagne (1 Hz, cout negligible : quelques comparaisons, pas de boucle).
@@ -5990,63 +5526,15 @@ local function RunGuildKeepTick(deltaTime)
     -- un joueur qui reste plante dans le meme front toute la semaine n'avait plus aucun rattrapage
     -- si ScheduleNextReset venait a se desarmer (voir regression ladder NA non resete).
     Overlord:EnsureLeaderboardCampaignFresh()
-    if Overlord.GuildKeep then
-        Overlord.GuildKeep:TickMaintenance()
-        if Overlord.Leaderboard and Overlord.Leaderboard.MaybeAwardGuildKeepDailyWins then
-            Overlord.Leaderboard:MaybeAwardGuildKeepDailyWins()
-        end
-        if Overlord.Popups and Overlord.Popups.TryShowGuildKeepSiegeReminder then
-            Overlord.Popups:TryShowGuildKeepSiegeReminder()
-        end
-        if Overlord.GuildKeepImmersion and Overlord.GuildKeepImmersion.Tick then
-            Overlord.GuildKeepImmersion:Tick()
-        end
-    end
     local onOutpost, curOutpostSite = false, nil
     if Overlord.Outpost and Overlord.Outpost.IsPlayerOnOutpostMap then
         onOutpost, curOutpostSite = Overlord.Outpost:IsPlayerOnOutpostMap()
-        if onOutpost then Overlord.Outpost:TickMaintenance() end
+        Overlord.Outpost:TickMaintenance()
     end
     if Overlord.MapMarkers and Overlord.MapMarkers.CheckOutpostMinimap
         and onOutpost ~= (Overlord.MapMarkers._mmOutpostMapActive == true) then
         -- Detecte aussi l'entree/sortie Party Sync ou Chromie Time sans changement de carte.
         Overlord.MapMarkers:CheckOutpostMinimap()
-    end
-    if Overlord.GuildKeepControl and Overlord.GuildKeep then
-        local onKeep, curKeepSite, keepMapSampleKnown = Overlord.GuildKeep:IsPlayerOnKeepMap()
-        if Overlord.Shard and Overlord.Shard.SyncLocalContext then
-            Overlord.Shard:SyncLocalContext()
-            if Overlord.Shard.localContextKey ~= "" and Overlord.Shard.lastScanAttemptAt == 0 then
-                Overlord.Shard:Update()
-            end
-        end
-        if onKeep then
-            Overlord.GuildKeepControl:Update(deltaTime)
-            local excludeKey = curKeepSite and curKeepSite.siteKey
-            if not Overlord.GuildKeepControl.HasLocalAuthority
-                or Overlord.GuildKeepControl:HasLocalAuthority(excludeKey) then
-                Overlord.GuildKeepControl:TickOffMapAuthority(
-                    deltaTime, curKeepSite and curKeepSite.siteKey)
-            end
-        else
-            -- Un nil/0,0 C_Map n'est pas une sortie : geler le timer ce tick.
-            -- Seule une carte connue differente autorise le decay hors fortin.
-            if keepMapSampleKnown then
-                if Overlord.GuildKeepControl.OnKnownKeepMapExit then
-                    Overlord.GuildKeepControl:OnKnownKeepMapExit()
-                end
-                if not Overlord.GuildKeepControl.HasLocalAuthority
-                    or Overlord.GuildKeepControl:HasLocalAuthority() then
-                    Overlord.GuildKeepControl:TickOffMapAuthority(deltaTime)
-                end
-            end
-            if not Overlord.InActiveFront and Overlord.ZoneIndicator
-                and Overlord.ZoneIndicator.SyncGuildKeepCaptureHud
-                and Overlord.ZoneIndicator.GuildKeepHudNeedsRefresh
-                and Overlord.ZoneIndicator:GuildKeepHudNeedsRefresh() then
-                Overlord.ZoneIndicator:SyncGuildKeepCaptureHud()
-            end
-        end
     end
     -- Les avant-postes de front restent sur le tick de front a 1 Hz. Le site
     -- temporaire des Vaults doit continuer a capturer/decroitre hors front.
@@ -6070,24 +5558,24 @@ local function RunGuildKeepTick(deltaTime)
     end
 end
 
-function Overlord:StartGuildKeepLoop()
-    if guildKeepTicker then guildKeepTicker:Cancel() end
+function Overlord:StartStrategicSiteLoop()
+    if strategicSiteTicker then strategicSiteTicker:Cancel() end
     local lastTickAt = GetTime()
-    guildKeepTicker = C_Timer.NewTicker(1, function()
+    strategicSiteTicker = C_Timer.NewTicker(1, function()
         local now = GetTime()
         local deltaTime = now - lastTickAt
         lastTickAt = now
-        local ok, err = pcall(RunGuildKeepTick, deltaTime)
+        local ok, err = pcall(RunStrategicSiteTick, deltaTime)
         if not ok and OverlordDB and OverlordDB.config and OverlordDB.config.debug then
-            print("|cFFFF4444[Overlord:dbg]|r GuildKeep ticker: " .. tostring(err))
+            print("|cFFFF4444[Overlord:dbg]|r Strategic site ticker: " .. tostring(err))
         end
     end)
 end
 
-function Overlord:StopGuildKeepLoop()
-    if guildKeepTicker then
-        guildKeepTicker:Cancel()
-        guildKeepTicker = nil
+function Overlord:StopStrategicSiteLoop()
+    if strategicSiteTicker then
+        strategicSiteTicker:Cancel()
+        strategicSiteTicker = nil
     end
 end
 
@@ -6275,7 +5763,6 @@ function Overlord:ResetAll()
     Overlord.Zones:UpdateAvailableZones()
     -- Reset ressources (or, bois, stocks) et bonus actifs
     if Overlord.Ressources then Overlord.Ressources:ResetResources() end
-    if Overlord.GuildKeep then Overlord.GuildKeep:ResetKeepsForCampaign() end
     if Overlord.Outpost then Overlord.Outpost:ResetOutpostsForCampaign() end
     OverlordDB.dominationTime    = { Alliance = 0, Horde = 0 }
     OverlordDB.frontDominationTimeByPool =
@@ -6499,9 +5986,6 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
             end
             OverlordDB.lastSessionTimestamp = time()
         end
-        if Overlord.Shard and Overlord.Shard.PersistGuildKeepReloadShardLease then
-            Overlord.Shard:PersistGuildKeepReloadShardLease()
-        end
         if Overlord.Popups and Overlord.Popups.CommitPendingPopupMark then
             Overlord.Popups:CommitPendingPopupMark()
         end
@@ -6529,14 +6013,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
             Overlord.Shard:InvalidateLocalContext()
         end
     elseif event == "ZONE_CHANGED_NEW_AREA" or event == "PLAYER_ENTERING_WORLD" or event == "WAR_MODE_STATUS_UPDATE" then
-        local restoredReloadShard = false
-        if event == "PLAYER_ENTERING_WORLD" and Overlord.Shard
-            and Overlord.Shard.RestoreGuildKeepReloadShardLease then
-            local _, isReloadingUi = ...
-            restoredReloadShard = Overlord.Shard:RestoreGuildKeepReloadShardLease(
-                isReloadingUi == true)
-        end
-        if event ~= "WAR_MODE_STATUS_UPDATE" and not restoredReloadShard and Overlord.Shard
+        if event ~= "WAR_MODE_STATUS_UPDATE" and Overlord.Shard
             and Overlord.Shard.InvalidateLocalContext then
             Overlord.Shard:InvalidateLocalContext()
         end

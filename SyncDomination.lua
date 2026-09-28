@@ -211,7 +211,7 @@ end
 
 function Overlord.Sync:IsDominationChannelSenderVerified(sender)
     if self.SenderIsInOurGroup and self:SenderIsInOurGroup(sender or "") then return true end
-    if self.IsGuildKeepCommunitySender and self:IsGuildKeepCommunitySender(sender or "") then return true end
+    if self.IsStrategicSiteCommunitySender and self:IsStrategicSiteCommunitySender(sender or "") then return true end
     return false
 end
 
@@ -294,6 +294,9 @@ function Overlord.Sync:OnReceiveDomination(payload, sender, sourceChannel)
     end
     if changed then
         self:ScheduleDominationSnapshotRefresh()
+        if self.RetryPendingVictoryBonusesAfterDomination then
+            self:RetryPendingVictoryBonusesAfterDomination()
+        end
     end
 end
 

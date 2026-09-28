@@ -83,7 +83,7 @@ C_Club.GetClubMembers = function() return {} end
 -- The Community button forces a fresh scan immediately after a mid-session join,
 -- even when the preceding scan cached that no community was present.
 assert(s:FindCommunityClub(true) == 777, "Global Overlord community was not discovered after joining")
-assert(s:IsGuildKeepCommunitySender("Remote Tester"), "Routed keep sender lost its trust context")
+assert(s:IsStrategicSiteCommunitySender("Remote Tester"), "Routed keep sender lost its trust context")
 -- A second score through fragmented R2 reaches the same production receiver.
 local payload = killPayload("Bridge Tester", 4)
 packet = wire(2, "K", payload, "Bridge Tester")
@@ -95,7 +95,7 @@ end
 assert(Overlord.Leaderboard.kills["Bridge Tester"] == 4, "Fragmented production R2 failed")
 s:OnBNetMessage("R2:Forever_us_A:BR:" .. wire(3, "K", payload, "Bridge Tester"), 123)
 assert(net.stats.received >= 3, "Legacy US bridge tag was not accepted by the global pool")
-assert(loadfile("SyncGuildKeep.lua"))()
+assert(loadfile("SyncStrategicSites.lua"))()
 assert(loadfile("SyncOutpost.lua"))()
 Overlord.GuildKeepSites = { fixture = {} }
 Overlord.OutpostSites = { fixture = {} }
@@ -112,7 +112,7 @@ Overlord.Outpost = {
 }
 s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(4, "GK",
     "v9:fixture:neutral:0:::0:" .. time() .. ":120:eu:0:::0::0:0:0:"), 123)
-assert(keep and keep.pool == "global" and keep.communitySource, "Real keep receiver rejected routed snapshot")
+assert(keep == nil, "Retired fortress protocol changed state")
 s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(5, "OP",
     "v1:fixture:neutral:0:::0:0:" .. time() .. ":120:eu:0"), 123)
 assert(outpost and outpost.pool == "global", "Real outpost receiver rejected routed snapshot")
@@ -158,10 +158,10 @@ s:OnBNetMessage("R2:Forever_eu_A:BR:" .. wire(10, "BR", "contract-refresh"), 123
 assert(refreshSender == "Remote Tester", "Contract BR collided with the BNet relay envelope")
 local sent = {}
 net.Broadcast = function(_, kind, data) sent[#sent + 1] = { kind, data }; return 1 end
-for _, method in ipairs({ "BroadcastToCommunity", "BroadcastGuildKeepToCommunity",
+for _, method in ipairs({ "BroadcastToCommunity",
     "BroadcastToEnemyFactionCommunity", "BroadcastGeneralToFactionCommunity" }) do
-    assert(s[method](s, "GK", "unchanged"), method .. " lost its replacement route")
-    assert(sent[#sent][1] == "GK" and sent[#sent][2] == "unchanged")
+    assert(s[method](s, "OP", "unchanged"), method .. " lost its replacement route")
+    assert(sent[#sent][1] == "OP" and sent[#sent][2] == "unchanged")
 end
 -- Even the large-event branch must use the replacement community relay.
 s.IsLargeEvent = function() return true end
@@ -174,7 +174,6 @@ net.Broadcast = function(_, _, _, actual)
     return 1
 end
 assert(s:BroadcastToCommunity("DX", "first-front", 12, 0.3, true, extras))
-assert(s:BroadcastGuildKeepToCommunity("GK", "keep", 12, 0.3, extras) == 1)
 
 -- A broadcast LK line from our HR target is not part of its addressed snapshot:
 -- counting it would break the digest proof and force an endless retry.
@@ -218,9 +217,9 @@ do
     s._channelKillAt, s._channelKillPending, s._channelKillArmed = nil, nil, nil
     assert(not s:ChannelCarries("GH", "x", true) and not s:ChannelCarries("ZA", "x", true)
         and not s:ChannelCarries("LK", "x", true) and not s:ChannelCarries("LO", "x", true))
-    assert(not s:ChannelCarries("GK", "v9:site:held:1", true) and s:ChannelCarries("GK", "v9:site:in_progress:1", true))
+    assert(not s:ChannelCarries("GK", "v9:site:held:1", true) and not s:ChannelCarries("GK", "v9:site:in_progress:1", true))
     assert(not s:ChannelCarries("OP", "v1:site:neutral:1", true) and s:ChannelCarries("OP", "v1:site:in_progress:1", true))
-    assert(s:ChannelCarries("C", "x", false) and s:ChannelCarries("ZS", "x", false) and s:ChannelCarries("GC", "x", false))
+    assert(s:ChannelCarries("C", "x", false) and s:ChannelCarries("ZS", "x", false) and s:ChannelCarries("OC", "x", false))
     assert(s:ChannelCarries("EK", "x", true) and not s:ChannelCarries("EK", "x", false))
     assert(not s:ChannelCarries("K", "k1", false), "A relayed kill went back on the channel")
     assert(s:ChannelCarries("K", "k1", true), "First own kill total was held back")

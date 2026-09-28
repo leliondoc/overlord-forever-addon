@@ -1,15 +1,18 @@
--- Targeted, resumable anti-entropy for 5,000 kills. HR/HB/HA stay routable
--- through v4 bridges; old endpoints ignore version 5 and use the v4 fallback.
+-- Targeted, resumable anti-entropy: v5 covers 5,000 kills; v6 also pages
+-- 500 capture rows per faction and race metadata for attested contributors.
+-- Old endpoints ignore v6 and use the v5 kill sweep plus bounded v4 fallback.
 local Overlord = _G.Overlord
 if not Overlord or not Overlord.Sync then return end
 local sync, lb = Overlord.Sync, Overlord.Leaderboard
 local BUCKETS, PAGE_ROWS, CHUNK, MAX_PARTS = 64, 16, 170, 24
+local STREAMS = { "LK", "LC", "LR" }
+local STREAM_LIMITS = { LK = 5000, LC = 1500, LR = 6500 }
 local MOD, RATE, BURST = 2147483647, 300, 500
 local pull, serving, outbound, wake, building
 local profiles = setmetatable({}, { __mode = "k" })
 local unsupported, unsupportedOrder = {}, {}
 local serial, tokens, refillAt = 0, BURST, 0
-local stats = { pages = 0, rows = 0, rejected = 0, retries = 0, bytes = 0 }
+local stats = { pages = 0, rows = 0, rejected = 0, deferred = 0, retries = 0, bytes = 0 }
 sync._leaderboardPageStats = stats
 
 local function epoch()
@@ -93,7 +96,8 @@ local function enqueue(job)
 end
 
 -- All scans and sorting yield after 32 work units and a ~1 ms slice.
--- Only complete immutable profiles are published; a snapshot has at most 5,000 rows.
+-- Only complete immutable profiles are published: at most 5,000 LK,
+-- 1,500 LC, and 6,500 LR source identities.
 local function prepare(callback)
     if building then return false end
     building = true
@@ -102,7 +106,11 @@ local function prepare(callback)
         local snapshot = ok and sync:GetAttestedLeaderboardSnapshot()
         if not snapshot or wanted ~= epoch() then building = nil; callback(nil); return end
         if profiles[snapshot] then building = nil; callback(profiles[snapshot]); return end
-        local result = { epoch = wanted, buckets = {}, count = 0, hash = 0 }
+        local result = { epoch = wanted, streams = {} }
+        for _, kind in ipairs(STREAMS) do
+            result.streams[kind] = { buckets = {}, count = 0, hash = 0 }
+        end
+        result.buckets = result.streams.LK.buckets
         local units, sliceAt = 0, 0
         local function work()
             units = units + 1
@@ -111,29 +119,40 @@ local function prepare(callback)
             end
         end
         local co = coroutine.create(function()
-            for i = 1, BUCKETS do result.buckets[i] = { hash = 0 }; work() end
-            local count = 0
-            for name in pairs(snapshot.kills or {}) do
-                count = count + 1
-                if count > 5000 then error("oversized attested snapshot") end
-                local payload = sync:BuildPagedLeaderboardKillPayload(snapshot, name, wanted)
-                local identity = payload and key(name)
-                if identity and validCursor(identity) then
-                    local bucket = result.buckets[hash(identity) % BUCKETS + 1]
-                    bucket[#bucket + 1] = { key = identity, payload = payload }
-                end
-                work()
-            end
-            for i = 1, BUCKETS do
-                local bucket = result.buckets[i]
-                lb:SortNetworkRows(bucket, function(a, b) return a.key < b.key end, work)
-                for j = 1, #bucket do
-                    bucket.hash = (bucket.hash + hash(bucket[j].payload)) % MOD
+            local sources = { LK = snapshot.kills, LC = snapshot.captureCount,
+                LR = snapshot.playerInfo }
+            local serializers = {
+                LK = sync.BuildPagedLeaderboardKillPayload,
+                LC = sync.BuildPagedLeaderboardCapturePayload,
+                LR = sync.BuildPagedLeaderboardRacePayload,
+            }
+            for _, kind in ipairs(STREAMS) do
+                local profile, source, count = result.streams[kind], sources[kind] or {}, 0
+                for i = 1, BUCKETS do profile.buckets[i] = { hash = 0 }; work() end
+                for name in pairs(source) do
+                    count = count + 1
+                    if count > STREAM_LIMITS[kind] then error("oversized attested snapshot") end
+                    local serialize = serializers[kind]
+                    local payload = serialize and serialize(sync, snapshot, name, wanted)
+                    local identity = payload and key(name)
+                    if identity and validCursor(identity) then
+                        local bucket = profile.buckets[hash(identity) % BUCKETS + 1]
+                        bucket[#bucket + 1] = { key = identity, payload = payload }
+                    end
                     work()
                 end
-                result.count = result.count + #bucket
-                result.hash = (result.hash + bucket.hash) % MOD
+                for i = 1, BUCKETS do
+                    local bucket = profile.buckets[i]
+                    lb:SortNetworkRows(bucket, function(a, b) return a.key < b.key end, work)
+                    for j = 1, #bucket do
+                        bucket.hash = (bucket.hash + hash(bucket[j].payload)) % MOD
+                        work()
+                    end
+                    profile.count = profile.count + #bucket
+                    profile.hash = (profile.hash + bucket.hash) % MOD
+                end
             end
+            result.count, result.hash = result.streams.LK.count, result.streams.LK.hash
         end)
         local function step()
             if wanted ~= epoch() then building = nil; callback(nil); return end
@@ -155,13 +174,26 @@ end
 local function checkpoints()
     local saved = OverlordDB.leaderboardPageProgress
     if type(saved) ~= "table" or saved.epoch ~= epoch() or type(saved.peers) ~= "table" then
-        saved = { epoch = epoch(), peers = {} }
+        saved = { version = 2, epoch = epoch(), peers = {} }
         OverlordDB.leaderboardPageProgress = saved
+    elseif saved.version ~= 2 then
+        -- Old checkpoints only had an LK bucket; resume it from its beginning.
+        for _, row in pairs(saved.peers) do
+            if type(row) == "table" then row.stream = "LK" end
+        end
+        saved.version = 2
     end
     return saved.peers
 end
 local function checkpoint(state)
     local peers, count, oldest, oldestAt = checkpoints(), 0, nil, math.huge
+    local previous = peers[state.peer]
+    if not state.extended and type(previous) == "table"
+        and (previous.stream == "LC" or previous.stream == "LR") then
+        -- A compatibility LK pass must not erase a v6 capture/race resume point.
+        previous.at = GetServerTime()
+        return
+    end
     for name, row in pairs(peers) do
         count = count + 1
         local at = type(row) == "table" and tonumber(row.at) or 0
@@ -170,14 +202,15 @@ local function checkpoint(state)
     if not peers[state.peer] and count >= 8 and oldest then peers[oldest] = nil end
     -- Restart the current bucket after reload: a new snapshot may have changed
     -- its order. Persisting its cursor would silently skip inserted identities.
-    peers[state.peer] = { bucket = state.bucket, at = GetServerTime() }
+    peers[state.peer] = { stream = state.stream or "LK", bucket = state.bucket,
+        at = GetServerTime() }
 end
 local function finish(state, success, unsupportedPeer)
     if pull ~= state then return end
     checkpoint(state)
     pull = nil
     stats.result = success and "sweep received" or "interrupted; bucket retained"
-    if unsupportedPeer then
+    if unsupportedPeer and not state.extended then
         if not unsupported[state.peer] then
             unsupportedOrder[#unsupportedOrder + 1] = state.peer
             if #unsupportedOrder > 8 then unsupported[table.remove(unsupportedOrder, 1)] = nil end
@@ -199,11 +232,13 @@ request = function(state, retry)
         state.replySeen = nil
     end
     state.tries = state.tries + 1
-    local bucket = state.profile.buckets[state.bucket]
-    local fields = { "5", "Q", state.epoch, state.nonce, state.seq,
+    local profile = state.extended and state.profile.streams[state.stream] or state.profile
+    local bucket = profile.buckets[state.bucket]
+    local fields = { state.extended and "6" or "5", "Q", state.epoch, state.nonce, state.seq,
         state.bucket, state.cursor, #bucket, bucket.hash }
-    if state.seq == 1 then
-        fields[#fields + 1], fields[#fields + 2] = state.profile.count, state.profile.hash
+    if state.extended then fields[#fields + 1] = state.stream end
+    if state.seq == 1 or (state.extended and state.completed == 0) then
+        fields[#fields + 1], fields[#fields + 2] = profile.count, profile.hash
     end
     local payload = table.concat(fields, ":")
     local seq, tries = state.seq, state.tries
@@ -215,11 +250,30 @@ request = function(state, retry)
     -- Two relay TTLs plus margin also cover a congested first request/reply.
     local remaining = state.supported and 180 or 270
     state.timeoutRemaining = remaining
+    -- The first request can be admitted locally yet disappear in a relay, or
+    -- arrive while the responder is briefly busy. Probe with the exact same
+    -- frozen request. Active watchdog time keeps probes spaced across combat.
+    local nextProbeAt, probesSent = 90, 0
     local function timeout()
         if pull ~= state or state.seq ~= seq or state.tries ~= tries or state.applying then return end
         if state.epoch ~= epoch() then finish(state, false); return end
         if not paused() then remaining = remaining - 2 end
         state.timeoutRemaining = remaining
+        if tries == 1 and not state.supported and not state.replySeen
+            and not paused() and not outbound and remaining > 0
+            and probesSent < 2 and 270 - remaining >= nextProbeAt then
+            local elapsed = 270 - remaining
+            if enqueue({ epoch = state.epoch, peer = state.peer,
+                packets = { { "HR", payload } },
+                valid = function()
+                    return pull == state and state.seq == seq and state.tries == tries
+                        and not state.replySeen and not state.supported
+                end }) then
+                stats.retries = stats.retries + 1
+                probesSent = probesSent + 1
+                nextProbeAt = elapsed + 90
+            end
+        end
         if remaining > 0 then C_Timer.After(2, timeout); return end
         if state.supported and state.tries < 3 then
             stats.retries = stats.retries + 1
@@ -236,9 +290,21 @@ local function nextPage(state, cursor)
     end
     state.cursor = cursor
     if state.completed == BUCKETS then
+        if state.extended and state.stream ~= "LR" then
+            state.stream = state.stream == "LK" and "LC" or "LR"
+            state.bucket, state.completed, state.cursor = 1, 0, "-"
+            checkpoint(state)
+            request(state)
+            return
+        end
+        if state.extended then
+            state.stream, state.bucket = "LK", 1
+            checkpoint(state)
+        end
         if not outbound then
             enqueue({ epoch = state.epoch, peer = state.peer, packets = { { "HR",
-                table.concat({ "5", "F", state.epoch, state.nonce, state.seq }, ":") } } })
+                table.concat({ state.extended and "6" or "5", "F",
+                    state.epoch, state.nonce, state.seq }, ":") } } })
         end
         finish(state, true)
         return
@@ -248,7 +314,7 @@ end
 
 function sync:IsExpectedPagedLeaderboardDelivery(kind, name, sender, channel)
     local delivery = self._pagedDelivery
-    return kind == "LK" and delivery and delivery.sender == sender
+    return delivery and kind == delivery.kind and delivery.sender == sender
         and delivery.channel == channel and delivery.key == key(name)
 end
 
@@ -266,7 +332,9 @@ tryApply = function(state)
     for i = 1, meta.rows do
         local prefix, stop = blob:match("^(%d+)():", pos)
         -- Lua's ^ anchor is relative to init for string.find/match in 5.1.
-        local length = prefix and #prefix <= 3 and integer(prefix, 1, 250)
+        local maxRowBytes = state.extended and state.stream == "LC" and 3500 or 250
+        local length = prefix and #prefix <= (maxRowBytes > 999 and 4 or 3)
+            and integer(prefix, 1, maxRowBytes)
         if not length then return end
         pos = stop + 1
         local payload = blob:sub(pos, pos + length - 1)
@@ -278,7 +346,9 @@ tryApply = function(state)
         rows[#rows + 1] = { key = identity, payload = payload }
         last = identity
     end
-    if pos ~= #blob + 1 or (meta.cursor ~= "-" and (meta.rows ~= PAGE_ROWS or meta.cursor ~= last)) then return end
+    if pos ~= #blob + 1 or (meta.cursor ~= "-"
+        and ((not state.extended and meta.rows ~= PAGE_ROWS)
+            or meta.rows == 0 or meta.cursor ~= last)) then return end
     state.applying = true
     local index = 1
     local function apply()
@@ -293,13 +363,29 @@ tryApply = function(state)
                 nextPage(state, meta.cursor)
                 return
             end
+            local kind = state.stream or "LK"
+            if sync.SenderBurstShouldDrop and sync:SenderBurstShouldDrop(state.peer, kind) then
+                -- A temporary live-traffic limit is not a rejected score. Keep
+                -- this row and the bucket checkpoint until it can be applied.
+                -- Bound the wait so a busy peer cannot pin this session forever.
+                state.applyBlockedAt = state.applyBlockedAt or GetTime()
+                stats.deferred = stats.deferred + 1
+                if GetTime() - state.applyBlockedAt >= 30 then
+                    finish(state, false)
+                else
+                    C_Timer.After(1, apply)
+                end
+                return
+            end
+            state.applyBlockedAt = nil
             local net, previous = Overlord.BetaNetwork, nil
             if net then previous = net.context; net.context = state.context end
-            sync._pagedDelivery = { sender = state.peer, channel = state.channel, key = row.key }
-            local ok, accepted = true, false
-            if not sync.SenderBurstShouldDrop or not sync:SenderBurstShouldDrop(state.peer, "LK") then
-                ok, accepted = pcall(sync.OnReceiveLeaderboardKills, sync, row.payload, state.peer, state.channel)
-            end
+            sync._pagedDelivery = { kind = kind, sender = state.peer,
+                channel = state.channel, key = row.key }
+            local receive = kind == "LK" and sync.OnReceiveLeaderboardKills
+                or kind == "LC" and sync.OnReceiveLeaderboardCaptures
+                or sync.OnReceiveLeaderboardRace
+            local ok, accepted = pcall(receive, sync, row.payload, state.peer, state.channel)
             sync._pagedDelivery = nil
             if net then net.context = previous end
             if not ok then stats.error = tostring(accepted); finish(state, false); return end
@@ -316,15 +402,24 @@ end
 
 local function respond(session, q)
     if serving ~= session or not session.profile or outbound then return end
-    if q.seq == 1 and q.totalCount == session.profile.count and q.totalHash == session.profile.hash then
+    local profile = session.extended and session.profile.streams[q.stream] or session.profile
+    if q.totalCount ~= nil and q.totalCount == profile.count and q.totalHash == profile.hash then
         -- Steady-state convergence costs one request and one reply, not 64 polls.
+        local fields = { session.extended and "6" or "5", "S", session.epoch,
+            session.nonce, q.seq }
+        if session.extended then fields[#fields + 1] = q.stream end
+        fields[#fields + 1], fields[#fields + 2] = q.totalCount, q.totalHash
         enqueue({ epoch = session.epoch, peer = session.peer, packets = { { "HA",
-            table.concat({ "5", "S", session.epoch, session.nonce, q.seq,
-                q.totalCount, q.totalHash }, ":") } },
-            done = function() if serving == session then serving = nil end end })
+            table.concat(fields, ":") } },
+            done = function()
+                if serving == session then
+                    if session.extended and q.stream ~= "LR" then session.at = GetTime()
+                    else serving = nil end
+                end
+            end })
         return
     end
-    local bucket = session.profile.buckets[q.bucket]
+    local bucket = profile.buckets[q.bucket]
     local rows, cursor = {}, "-"
     if q.cursor == "-" and #bucket == q.count and bucket.hash == q.hash then
         -- An empty page certifies only this matching bucket.
@@ -334,38 +429,55 @@ local function respond(session, q)
             local middle = math.floor((low + high) / 2)
             if bucket[middle].key <= q.cursor and q.cursor ~= "-" then low = middle + 1 else high = middle end
         end
+        local blobBytes = 0
         for i = low, math.min(#bucket, low + PAGE_ROWS - 1) do
             local row = bucket[i]
-            rows[#rows + 1] = tostring(#row.payload) .. ":" .. row.payload
+            local encoded = tostring(#row.payload) .. ":" .. row.payload
+            if blobBytes + #encoded > 4064 then break end
+            rows[#rows + 1] = encoded
+            blobBytes = blobBytes + #encoded
         end
-        if low + PAGE_ROWS <= #bucket then cursor = bucket[low + PAGE_ROWS - 1].key end
+        if #rows == 0 and low <= #bucket then return end
+        if #rows > 0 and low + #rows <= #bucket then
+            cursor = bucket[low + #rows - 1].key
+        end
     end
     local blob = table.concat(rows)
     local partCount = math.max(1, math.ceil(#blob / CHUNK))
-    local base = table.concat({ "5", "P", session.epoch, session.nonce, q.seq, q.bucket,
+    local base = table.concat({ session.extended and "6" or "5", "P", session.epoch,
+        session.nonce, q.seq, q.bucket,
         #rows, hash(blob), cursor, partCount }, ":")
+    if session.extended then base = base .. ":" .. q.stream end
     local packets = { { "HA", base } }
     for i = 1, partCount do
-        packets[#packets + 1] = { "HB", table.concat({ "5", "D", session.epoch,
-            session.nonce, q.seq, i, partCount, blob:sub((i - 1) * CHUNK + 1, i * CHUNK) }, ":") }
+        local data = table.concat({ session.extended and "6" or "5", "D", session.epoch,
+            session.nonce, q.seq, i, partCount }, ":") .. ":"
+        if session.extended then data = data .. q.stream .. ":" end
+        packets[#packets + 1] = { "HB", data .. blob:sub((i - 1) * CHUNK + 1, i * CHUNK) }
     end
     enqueue({ epoch = session.epoch, peer = session.peer, packets = packets,
         valid = function() return serving == session end,
         done = function() session.at = GetTime() end })
 end
 
-function sync:StartPagedLeaderboardCatchup(peer, callback)
+function sync:StartPagedLeaderboardCatchup(peer, callback, extended)
     peer = self:NormalizeContributorFullName(peer)
     if pull or building or paused() or not C_Timer or not C_Timer.After or epoch() <= 0
         or not self:IsValidPlayerName(peer) or type(callback) ~= "function"
         or (unsupported[peer] or 0) > GetTime() then return false end
     serial = serial + 1
     local saved = checkpoints()[peer]
+    local savedStream = type(saved) == "table" and saved.stream or nil
     local state = { peer = peer, callback = callback, epoch = epoch(), seq = 0, completed = 0,
-        bucket = type(saved) == "table" and integer(saved.bucket, 1, BUCKETS) or 1,
+        extended = extended == true,
+        stream = extended and (savedStream == "LC" or savedStream == "LR")
+            and savedStream or "LK",
+        bucket = type(saved) == "table" and (extended or savedStream == "LK")
+            and integer(saved.bucket, 1, BUCKETS) or 1,
         cursor = "-", nonce = tostring(GetServerTime()) .. "n"
             .. tostring(math.floor(GetTime() * 1000)) .. "n" .. tostring(serial) }
     pull = state
+    stats.protocol = extended and 6 or 5
     stats.target, stats.result = peer, "preparing"
     if not prepare(function(profile)
         if pull ~= state then return end
@@ -377,12 +489,42 @@ function sync:StartPagedLeaderboardCatchup(peer, callback)
     return true
 end
 
+-- A beta NH explicitly advertises v6; older beta peers instead provide the
+-- v5 kill sweep immediately. They remain partial until the scheduler's bounded
+-- v4 LC/LR fallback (and can later receive a complete v6 sweep after updating).
+-- Community peers without a beta NH retain the previous v6-first probe.
+function sync:StartCompletePagedLeaderboardCatchup(peer, callback)
+    if type(callback) ~= "function" then return false end
+    local net = Overlord.BetaNetwork
+    if net and net.IsPeer and net:IsPeer(peer) then
+        if not net.GetPeerPagedProtocol or net:GetPeerPagedProtocol(peer) ~= 6 then
+            stats.peerProtocol = "beta v5; no fresh lp6 NH"
+            return self:StartPagedLeaderboardCatchup(peer, function()
+                callback(false, false) -- v5 LK never certifies full LK/LC/LR
+            end)
+        end
+        stats.peerProtocol = "beta v6; lp6 NH"
+    else
+        stats.peerProtocol = "community; v6 probe"
+    end
+    return self:StartPagedLeaderboardCatchup(peer, function(ok, supported)
+        if supported then callback(ok, true); return end
+        stats.peerProtocol = "v6 silent; beta/community v5 fallback"
+        local started = self:StartPagedLeaderboardCatchup(peer, function()
+            callback(false, false)
+        end)
+        if not started then callback(false, false) end
+    end, true)
+end
+
 function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
     sender = self:NormalizeContributorFullName(sender)
     if #payload > 250 or not allowed(sender, channel) then return end
     local version, op, epochStr, nonce, seqStr, a, b, c, d, e, f, g = strsplit(":", payload, 12)
     local wireEpoch, seq = integer(epochStr, 1, 9999999999), integer(seqStr, 1, 10000)
-    if version ~= "5" or wireEpoch ~= epoch() or not seq or not nonce or #nonce > 32
+    local extended = version == "6"
+    if (not extended and version ~= "5") or wireEpoch ~= epoch()
+        or not seq or not nonce or #nonce > 32
         or not nonce:match("^[%w]+$") then return end
     if kind == "HR" and op == "F" then
         if serving and serving.peer == sender and serving.nonce == nonce
@@ -390,29 +532,41 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         return
     end
     if kind == "HR" and op == "Q" then
-        local bucket, count, digest = integer(a, 1, BUCKETS), integer(c, 0, 5000), integer(d, 0, MOD - 1)
-        local totalCount, totalHash = integer(e, 0, 5000), integer(f, 0, MOD - 1)
-        if not bucket or not count or not digest or not validCursor(b) or g
-            or ((e or f) and (seq ~= 1 or not totalCount or not totalHash)) then return end
+        local bucket, digest = integer(a, 1, BUCKETS), integer(d, 0, MOD - 1)
+        local stream = extended and e or "LK"
+        if extended and not e then return end
+        local limit = STREAM_LIMITS[stream]
+        local count = integer(c, 0, limit or 0)
+        local rawTotalCount, rawTotalHash
+        if extended then rawTotalCount, rawTotalHash = f, g
+        else rawTotalCount, rawTotalHash = e, f end
+        local totalCount = integer(rawTotalCount, 0, limit or 0)
+        local totalHash = integer(rawTotalHash, 0, MOD - 1)
+        if not bucket or not count or not digest or not validCursor(b)
+            or not limit or (not extended and g)
+            or ((rawTotalCount or rawTotalHash)
+                and (not totalCount or not totalHash or (not extended and seq ~= 1))) then return end
         local session = serving
         if session and (session.epoch ~= wireEpoch or GetTime() - session.at > 300) then serving = nil; session = nil end
         if paused() or outbound then return end
-        if (session and (session.peer ~= sender or session.nonce ~= nonce))
+        if (session and (session.peer ~= sender or session.nonce ~= nonce
+                or session.extended ~= extended))
         or (not session and (seq ~= 1 or b ~= "-")) then
             -- A cursor is meaningful only inside the original frozen profile.
             -- Never continue it against a rebuilt snapshot after disconnection.
             enqueue({ epoch = wireEpoch, peer = sender, packets = { { "HA",
-                table.concat({ "5", "R", wireEpoch, nonce, seq }, ":") } } })
+                table.concat({ version, "R", wireEpoch, nonce, seq }, ":") } } })
             return
         end
         if not session then
             if building then return end
-            session = { peer = sender, nonce = nonce, epoch = wireEpoch, at = GetTime(), seq = seq }
+            session = { peer = sender, nonce = nonce, epoch = wireEpoch,
+                at = GetTime(), seq = seq, extended = extended }
             serving = session
         elseif seq < session.seq or seq > session.seq + 1 then return end
         session.at, session.seq = GetTime(), seq
         local q = { bucket = bucket, cursor = b, count = count, hash = digest, seq = seq,
-            totalCount = totalCount, totalHash = totalHash }
+            stream = stream, totalCount = totalCount, totalHash = totalHash }
         if session.profile then respond(session, q)
         else
             prepare(function(profile)
@@ -425,32 +579,53 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
     end
     local state = pull
     if not state or sender ~= state.peer or nonce ~= state.nonce or seq ~= state.seq
-        or wireEpoch ~= state.epoch or state.applying then return end
+        or wireEpoch ~= state.epoch or state.applying
+        or state.extended ~= extended then return end
     if kind == "HA" and op == "R" then
         state.supported = true
         finish(state, false)
         return
     end
     if kind == "HA" and op == "S" then
-        if seq ~= 1 or integer(a, 0, 5000) ~= state.profile.count
-            or integer(b, 0, MOD - 1) ~= state.profile.hash or c then return end
-        state.supported, state.bucket = true, 1
-        finish(state, true)
+        local stream = extended and a or "LK"
+        if extended and not a then return end
+        local profile = extended and state.profile.streams[state.stream] or state.profile
+        local count = integer(extended and b or a, 0, STREAM_LIMITS[stream] or 0)
+        local digest = integer(extended and c or b, 0, MOD - 1)
+        if stream ~= state.stream or count ~= profile.count or digest ~= profile.hash
+            or (not extended and (seq ~= 1 or c)) then return end
+        state.supported = true
+        if extended then
+            state.completed = BUCKETS - 1
+            nextPage(state, "-")
+        else
+            state.bucket = 1
+            finish(state, true)
+        end
         return
     end
     if kind == "HA" and op == "P" then
         local bucket, rows, digest, parts = integer(a, 1, BUCKETS), integer(b, 0, PAGE_ROWS),
             integer(c, 0, MOD - 1), integer(e, 1, MAX_PARTS)
-        if bucket ~= state.bucket or not rows or not digest or not parts or not validCursor(d) or f
+        local stream = extended and f or "LK"
+        if extended and not f then return end
+        if bucket ~= state.bucket or not rows or not digest or not parts
+            or not validCursor(d) or (not extended and f) or stream ~= state.stream
             or (state.partCount and state.partCount ~= parts) then return end
         state.meta = { rows = rows, hash = digest, cursor = d, parts = parts }
         state.partCount = parts
     elseif kind == "HB" and op == "D" then
         -- Parse the opaque chunk without splitting the LK payload's colons.
-        local _, _, _, _, _, partStr, partsStr, chunk = strsplit(":", payload, 8)
+        local _, _, _, _, _, partStr, partsStr, stream, chunk
+        if extended then
+            _, _, _, _, _, partStr, partsStr, stream, chunk = strsplit(":", payload, 9)
+        else
+            _, _, _, _, _, partStr, partsStr, chunk = strsplit(":", payload, 8)
+            stream = "LK"
+        end
         local part, parts = integer(partStr, 1, MAX_PARTS), integer(partsStr, 1, MAX_PARTS)
         if not part or not parts or part > parts or not chunk or #chunk > CHUNK
-            or (state.partCount and state.partCount ~= parts) then return end
+            or stream ~= state.stream or (state.partCount and state.partCount ~= parts) then return end
         if state.parts[part] and state.parts[part] ~= chunk then return end
         if not state.parts[part] then
             if state.bytes + #chunk > 4064 then return end
@@ -478,7 +653,9 @@ function sync:GetPagedLeaderboardDiagnostics()
         details = string.format("; parts=%d/%s; timeout=%ss", received,
             tostring(pull.partCount or "?"), tostring(pull.timeoutRemaining or "-"))
     end
-    return string.format("Ladder v5: %s; pages=%d rows=%d filtered=%d retries=%d; bucket=%s/64%s; 300 B/s budget",
-        status, stats.pages, stats.rows, stats.rejected, stats.retries,
-        pull and tostring(pull.bucket) or "-", details)
+    return string.format("Ladder v%d: %s; pages=%d rows=%d filtered=%d retries=%d; %s bucket=%s/64%s; peer=%s; 300 B/s budget",
+        stats.protocol or 5, status, stats.pages, stats.rows, stats.rejected,
+        stats.retries, pull and pull.stream or "LK",
+        pull and tostring(pull.bucket) or "-", details,
+        stats.peerProtocol or "unspecified")
 end

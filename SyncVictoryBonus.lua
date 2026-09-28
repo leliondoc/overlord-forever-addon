@@ -10,9 +10,12 @@ local VB_CHANNEL_REPLAY_BATCHES = 2
 local VB_DEDUP_WINDOW = 60
 local VB_MAX_FUTURE_SKEW = 300
 local VB_VICTORY_BONUS = 0.02
+local VB_PENDING_SECONDS = 2 * 60 * 60
+local VB_PENDING_LIMIT = 64
 
 local VALID_VB_POOL = { global = true }
 local victoryTransportEvidence = {}
+local pendingVictoryBonuses = {}
 local vbSrPayloadCache = nil
 local validatedVictoryStores = setmetatable({}, { __mode = "k" })
 local victoryProjectionStates = setmetatable({}, { __mode = "k" })
@@ -645,6 +648,120 @@ local function EvidenceKey(frontId, faction, victoryTs, sender, sourceChannel)
     }, ":")
 end
 
+local function PrunePendingVictoryBonuses(now)
+    local count, oldestKey, oldestAt = 0, nil, math.huge
+    for key, pending in pairs(pendingVictoryBonuses) do
+        if now - pending.at > VB_PENDING_SECONDS then
+            pendingVictoryBonuses[key] = nil
+        else
+            count = count + 1
+            if pending.at < oldestAt then
+                oldestKey, oldestAt = key, pending.at
+            end
+        end
+    end
+    return count, oldestKey
+end
+
+local function QueuePendingVictoryBonus(ev, payload, sender, sourceChannel)
+    local now = GetTime()
+    local count, oldestKey = PrunePendingVictoryBonuses(now)
+    local key = EvidenceKey(ev.frontId, ev.faction, ev.victoryTs, sender, sourceChannel)
+    local previous = pendingVictoryBonuses[key]
+    if previous and previous.totalAtApply >= ev.totalAtApply then return end
+    if not previous and count >= VB_PENDING_LIMIT and oldestKey then
+        pendingVictoryBonuses[oldestKey] = nil
+    end
+    pendingVictoryBonuses[key] = {
+        at = previous and previous.at or now,
+        frontId = ev.frontId, faction = ev.faction,
+        victoryTs = ev.victoryTs, totalAtApply = ev.totalAtApply,
+        rawId = BuildVictoryRawEventId(ev),
+        payload = payload, sender = sender, sourceChannel = sourceChannel,
+    }
+end
+
+local HasVictoryTransportEvidence
+local pendingRetryWorker = { running = false, scheduled = false, dirty = false }
+
+-- Retry after TV proof or a later territorial DX. Re-run the original VB
+-- validation with its original sender, in small slices.
+function Overlord.Sync:RetryPendingVictoryBonusForVictory()
+    if Overlord.InstanceSuspended then return end
+    local worker = pendingRetryWorker
+    worker.dirty = true
+    if worker.running then return end
+    worker.running = true
+    local retry, index
+    local function Snapshot()
+        PrunePendingVictoryBonuses(GetTime())
+        retry, index = {}, 1
+        for key, pending in pairs(pendingVictoryBonuses) do
+            retry[#retry + 1] = { key = key, pending = pending }
+        end
+        worker.dirty = false
+    end
+    local Step
+    local function Schedule()
+        if worker.scheduled then return end
+        worker.scheduled = true
+        if C_Timer and C_Timer.After then
+            C_Timer.After(0, function()
+                worker.scheduled = false
+                Step()
+            end)
+        else
+            worker.scheduled = false
+            Step()
+        end
+    end
+    Step = function()
+        if Overlord.InstanceSuspended then
+            worker.running = false
+            return
+        end
+        local processed = 0
+        while index <= #retry and processed < 4 do
+            local row = retry[index]
+            index = index + 1
+            processed = processed + 1
+            local pending = row.pending
+            if pendingVictoryBonuses[row.key] == pending
+                and (HasVictoryTransportEvidence(
+                    pending, pending.sender, pending.sourceChannel)
+                    or HasMatchingVictoryEvidence(pending)) then
+                pendingVictoryBonuses[row.key] = nil
+                local accepted = self:OnReceiveVictoryBonus(
+                    pending.payload, pending.sender, pending.sourceChannel)
+                if not (accepted and accepted[pending.rawId])
+                    and pendingVictoryBonuses[row.key] == nil then
+                    -- DX may still be missing, so totalAtApply is not yet
+                    -- plausible. Keep the original expiry until DX arrives.
+                    pendingVictoryBonuses[row.key] = pending
+                end
+            end
+        end
+        if index <= #retry then
+            Schedule()
+        elseif worker.dirty then
+            -- TV/DX arrived during this pass. Rebuild once after yielding;
+            -- never create a second independent callback chain.
+            Snapshot()
+            Schedule()
+        else
+            worker.running = false
+        end
+    end
+    Snapshot()
+    Step()
+end
+
+function Overlord.Sync:RetryPendingVictoryBonusesAfterDomination()
+    -- A VB's totalAtApply covers every front, so a DX for any front may make
+    -- a pending victory plausible.
+    self:RetryPendingVictoryBonusForVictory()
+end
+
 function Overlord.Sync:RecordVictoryBonusTransportEvidence(
     frontId, faction, victoryTs, sender, sourceChannel)
     frontId = SanitizeVictoryFrontId(frontId)
@@ -668,9 +785,10 @@ function Overlord.Sync:RecordVictoryBonusTransportEvidence(
         victoryTransportEvidence[oldestKey] = nil
     end
     victoryTransportEvidence[key] = now
+    self:RetryPendingVictoryBonusForVictory()
 end
 
-local function HasVictoryTransportEvidence(ev, sender, sourceChannel)
+HasVictoryTransportEvidence = function(ev, sender, sourceChannel)
     local key = EvidenceKey(ev.frontId, ev.faction, ev.victoryTs, sender, sourceChannel)
     local seenAt = victoryTransportEvidence[key]
     if not seenAt then return false end
@@ -684,7 +802,7 @@ end
 local function IsHistoricalReplaySenderTrusted(sync, sender, sourceChannel)
     if (sourceChannel == "WHISPER" or sourceChannel == "BETA") then
         return (sync.SenderIsInOurGroup and sync:SenderIsInOurGroup(sender or ""))
-            or (sync.IsGuildKeepCommunitySender and sync:IsGuildKeepCommunitySender(sender or ""))
+            or (sync.IsStrategicSiteCommunitySender and sync:IsStrategicSiteCommunitySender(sender or ""))
     end
     if sourceChannel == "RAID" or sourceChannel == "PARTY" then
         return sync.SenderIsInOurGroup and sync:SenderIsInOurGroup(sender or "")
@@ -876,6 +994,7 @@ function Overlord.Sync:OnReceiveVictoryBonus(payload, sender, sourceChannel)
     local events = ParseVictoryBonusPayload(payload, sender, sourceChannel)
     if not events then return end
     local changed = false
+    local accepted = {}
     for _, ev in ipairs(events) do
         local transportEvidence = HasVictoryTransportEvidence(ev, sender, sourceChannel)
         local localEvidence = HasMatchingVictoryEvidence(ev)
@@ -896,7 +1015,15 @@ function Overlord.Sync:OnReceiveVictoryBonus(payload, sender, sourceChannel)
                 deferProjection = true,
                 deferRefresh = true,
             })
-            if ok and reason ~= "duplicate" then changed = true end
+            if ok then
+                accepted[BuildVictoryRawEventId(ev)] = true
+                if reason ~= "duplicate" then changed = true end
+            end
+        elseif self.IsDominationChannelSenderVerified
+            and self:IsDominationChannelSenderVerified(sender or "") then
+            -- The TV may follow this VB over another route. Keep only a small,
+            -- short-lived candidate; it earns no bonus until TV validates it.
+            QueuePendingVictoryBonus(ev, payload, sender, sourceChannel)
         end
     end
     if changed then
@@ -907,6 +1034,7 @@ function Overlord.Sync:OnReceiveVictoryBonus(payload, sender, sourceChannel)
             Overlord.UI:RefreshDomination()
         end
     end
+    return accepted
 end
 
 function Overlord.Sync:BuildVictoryBonusPayloadForVictory(frontId, faction, victoryTs)

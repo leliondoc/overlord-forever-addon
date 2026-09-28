@@ -934,8 +934,8 @@ local function IsTrustedCatalogRequester(sender)
     if sync.IsOnlineCommunitySender then
         return sync:IsOnlineCommunitySender(sender)
     end
-    return sync.IsGuildKeepCommunitySender
-        and sync:IsGuildKeepCommunitySender(sender) or false
+    return sync.IsStrategicSiteCommunitySender
+        and sync:IsStrategicSiteCommunitySender(sender) or false
 end
 
 local function NextCatalogRequestId()

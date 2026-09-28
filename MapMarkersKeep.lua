@@ -164,11 +164,11 @@ local function ShowKeepMinimapTooltip(site)
     local hr, hg, hb = tp and tp.HL[1] or 1, tp and tp.HL[2] or 0.82, tp and tp.HL[3] or 0
     GameTooltip:AddLine(Overlord.GuildKeep:GetDisplayName(site), hr, hg, hb)
     local dg = select(1, Overlord.GuildKeep:GetKeepDisplayTenant(st, site and site.siteKey))
-    local siegeActive = st and Overlord.GuildKeep.IsCurrentKeepSiegeState
-        and Overlord.GuildKeep:IsCurrentKeepSiegeState(st)
+    local siegeActive = st and Overlord.GuildKeep.IsKeepCaptureInProgress
+        and Overlord.GuildKeep:IsKeepCaptureInProgress(st)
     if siegeActive then
-        local siegeLabel = Overlord.GuildKeep.GetKeepSiegeMapLabel
-            and Overlord.GuildKeep:GetKeepSiegeMapLabel(st, site and site.siteKey)
+        local siegeLabel = Overlord.GuildKeep.GetKeepCaptureMapLabel
+            and Overlord.GuildKeep:GetKeepCaptureMapLabel(st, site and site.siteKey)
             or (L.GUILD_KEEP_CAPTURING or "Capturing...")
         GameTooltip:AddLine(siegeLabel, 1, 0.55, 0.2)
     elseif dg ~= "" then
@@ -176,9 +176,6 @@ local function ShowKeepMinimapTooltip(site)
     else
         GameTooltip:AddLine(L.GUILD_KEEP_NEUTRAL or "Unclaimed", tp and tp.MUTED[1] or 0.7, tp and tp.MUTED[2] or 0.7, tp and tp.MUTED[3] or 0.7)
         AddKeepNeutralTooltipLines(st, tp, site and site.siteKey)
-    end
-    if Overlord.GuildKeepImmersion and Overlord.GuildKeepImmersion.AppendKeepTooltipLines then
-        Overlord.GuildKeepImmersion:AppendKeepTooltipLines(st, site, site.siteKey)
     end
     GameTooltip:Show()
 end
@@ -395,7 +392,7 @@ local function BuildOutpostMinimapDatabase(standaloneSite)
         outpostMinimapDbCacheContextKey = contextKey
         return list
     end
-    if standaloneSite then
+    if standaloneSite and not standaloneSite.isFortress then
         list[#list + 1] = standaloneSite
     elseif activeId and Overlord.InActiveFront then
         for key, site in pairs(Overlord.OutpostSites) do
@@ -604,7 +601,7 @@ local function GetKeepSiegeHintLine(st, siteKey)
         or not Overlord.GuildKeep:IsKeepNeutralForDisplay(st, siteKey) then
         return nil
     end
-    return Overlord.GuildKeep:GetKeepSiegeAvailableHint()
+    return Overlord.GuildKeep:GetKeepCaptureAvailableHint()
 end
 
 AddKeepNeutralTooltipLines = function(st, tp, siteKey)
@@ -613,7 +610,7 @@ AddKeepNeutralTooltipLines = function(st, tp, siteKey)
         or not Overlord.GuildKeep:IsKeepNeutralForDisplay(st, siteKey) then
         return
     end
-    local hint = Overlord.GuildKeep:GetKeepSiegeAvailableHint()
+    local hint = Overlord.GuildKeep:GetKeepCaptureAvailableHint()
     if not hint or hint == "" then return end
     local mr, mg, mb = 0.82, 0.82, 0.82
     if tp and tp.MUTED then
@@ -720,11 +717,11 @@ function Overlord.MapMarkers:EnsureProjectedKeepPins(canvas)
                 local tp = Overlord.UI.TooltipPalette()
                 GameTooltip:AddLine(Overlord.GuildKeep:GetDisplayName(siteRef), tp.HL[1], tp.HL[2], tp.HL[3])
                 local dg = select(1, Overlord.GuildKeep:GetKeepDisplayTenant(st, siteRef and siteRef.siteKey))
-                local siegeActive = Overlord.GuildKeep.IsCurrentKeepSiegeState
-                    and Overlord.GuildKeep:IsCurrentKeepSiegeState(st)
+                local siegeActive = Overlord.GuildKeep.IsKeepCaptureInProgress
+                    and Overlord.GuildKeep:IsKeepCaptureInProgress(st)
                 if siegeActive then
-                    local siegeLabel = Overlord.GuildKeep.GetKeepSiegeMapLabel
-                        and Overlord.GuildKeep:GetKeepSiegeMapLabel(st, siteRef and siteRef.siteKey)
+                    local siegeLabel = Overlord.GuildKeep.GetKeepCaptureMapLabel
+                        and Overlord.GuildKeep:GetKeepCaptureMapLabel(st, siteRef and siteRef.siteKey)
                         or (L.GUILD_KEEP_CAPTURING or "Capturing...")
                     GameTooltip:AddLine(siegeLabel, 1, 0.55, 0.2)
                 elseif dg ~= "" then
@@ -733,10 +730,7 @@ function Overlord.MapMarkers:EnsureProjectedKeepPins(canvas)
                     GameTooltip:AddLine(L.GUILD_KEEP_NEUTRAL or "Unclaimed", tp.MUTED[1], tp.MUTED[2], tp.MUTED[3])
                     AddKeepNeutralTooltipLines(st, tp, siteRef and siteRef.siteKey)
                 end
-                if Overlord.GuildKeepImmersion and Overlord.GuildKeepImmersion.AppendKeepTooltipLines then
-                    Overlord.GuildKeepImmersion:AppendKeepTooltipLines(st, siteRef, self.siteKey)
-                end
-                GameTooltip:Show()
+                            GameTooltip:Show()
             end
             pin:SetScript("OnEnter", function(self)
                 GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
@@ -1062,7 +1056,7 @@ local function GetKeepMapVisualKey(st, site, displayMapID)
     if not st then return "" end
     local disp = st.status or ""
     local dg, df = Overlord.GuildKeep:GetKeepDisplayTenant(st, site and site.siteKey)
-    local localCap = Overlord.GuildKeep:ShouldUseAssaultKeepMapVisual(st, site, displayMapID) and 1 or 0
+    local localCap = Overlord.Outpost:ShouldShowInProgressOnMap(st, site, displayMapID) and 1 or 0
     local contested = st.isContested and 1 or 0
     local renderedLabel = Overlord.GuildKeep.GetKeepMapSubtitle
         and Overlord.GuildKeep:GetKeepMapSubtitle(st, site, displayMapID) or ""

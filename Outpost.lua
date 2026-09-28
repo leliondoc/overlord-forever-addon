@@ -3,7 +3,6 @@ Overlord = Overlord or {}
 Overlord.Outpost = Overlord.Outpost or {}
 
 local L = Overlord.L
-local OUTPOST_HOLD_SECONDS = 86400
 local OUTPOST_CAPTURE_SECONDS = 300
 local OUTPOST_ZONE_CAPTURE_PENALTY_SECONDS = 30
 Overlord.Outpost.DEFAULT_HOLD_TIME_REQUIRED = OUTPOST_CAPTURE_SECONDS
@@ -163,6 +162,15 @@ Overlord.OutpostSites = {
     },
 }
 
+-- Fortresses use this engine, storage and wire protocol; only presentation and
+-- the capture contract differ. Registered before building the spatial indexes.
+if Overlord.FortressUsesOutposts then
+    for key, site in pairs(Overlord.GuildKeepSites or {}) do
+        assert(not Overlord.OutpostSites[key], "Duplicate strategic site: " .. key)
+        Overlord.OutpostSites[key] = site
+    end
+end
+
 local siteByKey = {}
 local sitesByFront = {}
 local standaloneSites = {}
@@ -318,7 +326,7 @@ function Overlord.Outpost:GetSitesOnMap(mapID, frontId)
     local list = {}
     if not mapID then return list end
     for _, site in pairs(standaloneSites) do
-        if standaloneSiteMatchesDisplayMap(site, mapID) then
+        if not site.isFortress and standaloneSiteMatchesDisplayMap(site, mapID) then
             list[#list + 1] = site
         end
     end
@@ -582,6 +590,14 @@ end
 
 function Overlord.Outpost:EnsureDB()
     OverlordDB = OverlordDB or {}
+    if Overlord.FortressUsesOutposts and not OverlordDB.fortressOutpostSchema then
+        -- User-requested removal: do not turn daily siege awards into captures.
+        -- The new fortress sites begin neutral; existing outposts are untouched.
+        for key in pairs(OverlordDB) do
+            if type(key) == "string" and key:match("^guildKeep") then OverlordDB[key] = nil end
+        end
+        OverlordDB.fortressOutpostSchema = 1
+    end
     if type(OverlordDB.outposts) ~= "table" then OverlordDB.outposts = {} end
     if initializedOutpostDb == OverlordDB
         and initializedOutpostRows == OverlordDB.outposts then return end
@@ -652,7 +668,7 @@ end
 
 -- L'assaut peut commencer des la prise precedente. Sa finale doit toujours
 -- respecter au moins le plus court contrat legal (attaque d'or) depuis cette prise.
-function Overlord.Outpost:IsRecaptureTerminalAllowed(st, captureTs)
+function Overlord.Outpost:IsRecaptureTerminalAllowed(st, captureTs, site)
     if not st then return false end
     local baseClaimedAt = 0
     if st.status == "held" then
@@ -662,7 +678,7 @@ function Overlord.Outpost:IsRecaptureTerminalAllowed(st, captureTs)
     end
     if baseClaimedAt <= 0 then return true end
     captureTs = math.floor(tonumber(captureTs) or time())
-    return captureTs >= baseClaimedAt + self:GetMinimumHoldTimeRequired(nil)
+    return captureTs >= baseClaimedAt + self:GetMinimumHoldTimeRequired(site)
 end
 
 local function ResolveStrategicOutpostSiteKey(zone)
@@ -719,9 +735,6 @@ function Overlord.Outpost:GetKnownGuildFaction(guild)
     if lb and lb.guildFactionCache then
         local fac = lb.guildFactionCache[guild:lower()]
         if fac == "Alliance" or fac == "Horde" then return fac end
-    end
-    if Overlord.GuildKeep and Overlord.GuildKeep.GetKnownGuildFaction then
-        return Overlord.GuildKeep:GetKnownGuildFaction(guild)
     end
     return nil
 end
@@ -816,26 +829,29 @@ local function outpostTowerAtlasForFaction(fac)
 end
 
 -- Leaderboard : icone tour (comme les nodes de zone, pas MainHall des fortins).
-function Overlord.Outpost:GetMainHallAtlasForFaction(fac)
+function Overlord.Outpost:GetMainHallAtlasForFaction(fac, site)
+    if site and site.isFortress then
+        if fac == "Alliance" then return "Warfronts-BaseMapIcons-Alliance-MainHall" end
+        if fac == "Horde" then return "Warfronts-BaseMapIcons-Horde-MainHall" end
+        return nil
+    end
     return outpostTowerAtlasForFaction(fac)
 end
 
 function Overlord.Outpost:GetOutpostMapIconAtlas(st, site, displayMapID)
-    if not st then return OUTPOST_NEUTRAL_ATLAS end
+    local neutral = site and site.isFortress
+        and "Warfronts-BaseMapIcons-Empty-MainHall" or OUTPOST_NEUTRAL_ATLAS
+    if not st then return neutral end
+    local faction
     if st.status == "held" then
-        local atlas = outpostTowerAtlasForFaction(st.ownerFaction)
-        return atlas or OUTPOST_NEUTRAL_ATLAS
-    end
-    if st.status == "in_progress" then
-        if self:IsObserverOutpostCaptureStale(st, site) then
-            local staleAtlas = outpostTowerAtlasForFaction(st.previousOwnerFaction)
-            return staleAtlas or OUTPOST_NEUTRAL_ATLAS
+        faction = st.ownerFaction
+    elseif st.status == "in_progress" then
+        faction = st.previousOwnerFaction
+        if not self:IsObserverOutpostCaptureStale(st, site) then
+            faction = faction or st.ownerFaction
         end
-        local fac = st.previousOwnerFaction or st.ownerFaction
-        local atlas = outpostTowerAtlasForFaction(fac)
-        return atlas or OUTPOST_NEUTRAL_ATLAS
     end
-    return OUTPOST_NEUTRAL_ATLAS
+    return self:GetMainHallAtlasForFaction(faction, site) or neutral
 end
 
 function Overlord.Outpost:GetOutpostIconVertexColor(st, site, displayMapID)
@@ -921,6 +937,7 @@ end
 
 -- Pin projete sur carte parente ou continent (EK / Kalimdor), pas sur la carte detail du site.
 function Overlord.Outpost:ShouldProjectOutpostPinOnMap(site, projectionMapID)
+    if site and site.isFortress then return false end
     if not site or not projectionMapID or not site.mapID then return false end
     if projectionMapID == site.mapID then return false end
     if site.mapIDs and site.mapIDs[projectionMapID] then return false end
@@ -1114,7 +1131,7 @@ function Overlord.Outpost:ResetOutpostsForCampaign()
     if OverlordDB.outpostCaptureCounts then wipe(OverlordDB.outpostCaptureCounts) end
 end
 
-function Overlord.Outpost:IsCaptureTakeoverAllowed(st, guild, faction, captureTs)
+function Overlord.Outpost:IsCaptureTakeoverAllowed(st, guild, faction, captureTs, site)
     if not st or not faction then return false end
     guild = sanitizeGuildName(guild or "")
     if guild == "" then return false end
@@ -1123,7 +1140,7 @@ function Overlord.Outpost:IsCaptureTakeoverAllowed(st, guild, faction, captureTs
     local effectiveFaction = (faction == "Alliance" or faction == "Horde")
         and faction or self:GetKnownGuildFaction(guild)
     if not effectiveFaction then return false end
-    if not self:IsRecaptureTerminalAllowed(st, captureTs) then return false end
+    if not self:IsRecaptureTerminalAllowed(st, captureTs, site) then return false end
     if st.status == "held" then
         local tg = sanitizeGuildName(st.ownerGuild or "")
         if tg ~= "" and guild == tg then return false end
@@ -1141,7 +1158,7 @@ end
 function Overlord.Outpost:CompleteCapture(siteKey, guild, faction, captureTs, capturePool, suppressLeaderboard)
     local st = self:GetState(siteKey)
     local now = (captureTs and captureTs > 0) and captureTs or time()
-    if not self:IsCaptureTakeoverAllowed(st, guild, faction, now) then return false end
+    if not self:IsCaptureTakeoverAllowed(st, guild, faction, now, self:GetSite(siteKey)) then return false end
     local newGuild = sanitizeGuildName(guild or "")
     capturePool = normalizeOutpostPoolTag(capturePool)
     if capturePool == "" then capturePool = currentOutpostPoolTag() end
@@ -1151,7 +1168,7 @@ function Overlord.Outpost:CompleteCapture(siteKey, guild, faction, captureTs, ca
     st.ownerFaction = faction
     self:ClearOpCapturerFields(st)
     st.claimedAt = now
-    st.expiresAt = now + OUTPOST_HOLD_SECONDS
+    st.expiresAt = 0
     st.holdTimeElapsed = 0
     st.holdTimeRequired = self:GetBaseHoldTimeRequired(self:GetSite(siteKey))
     st.isHolding = false
@@ -1264,7 +1281,7 @@ function Overlord.Outpost:ApplyRemoteState(siteKey, remote, fromSync)
         local captureTs = math.floor(tonumber(remote.claimedAt) or 0)
         if captureTs <= 0 then captureTs = remoteTs end
         if not stableSnapshot
-            and not self:IsCaptureTakeoverAllowed(st, remoteGuild, rFac, captureTs) then
+            and not self:IsCaptureTakeoverAllowed(st, remoteGuild, rFac, captureTs, self:GetSite(siteKey)) then
             return false
         end
     end
@@ -1508,6 +1525,18 @@ function Overlord.Outpost:RefreshOutpostPresentation(siteKey)
         and (now - lastPresentationRefresh[key]) < PRESENTATION_THROTTLE
     if not throttled then
         lastPresentationRefresh[key] = now
+        local site = siteKey and self:GetSite(siteKey)
+        if site and site.isFortress then
+            if Overlord.MapMarkers and Overlord.MapMarkers.RefreshGuildKeepMapIfOpen then
+                Overlord.MapMarkers:RefreshGuildKeepMapIfOpen()
+            end
+            if Overlord.MapMarkers and Overlord.MapMarkers.CheckGuildKeepMinimap then
+                Overlord.MapMarkers:CheckGuildKeepMinimap()
+            end
+            if Overlord.Ressources and Overlord.Ressources.RefreshGuildKeepHUD then
+                Overlord.Ressources:RefreshGuildKeepHUD()
+            end
+        end
         if Overlord.MapMarkers and Overlord.MapMarkers.RefreshOutpostMapIfOpen then
             Overlord.MapMarkers:RefreshOutpostMapIfOpen()
         end

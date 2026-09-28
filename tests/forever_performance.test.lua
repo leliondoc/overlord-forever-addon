@@ -70,6 +70,25 @@ assert(cache.alliKills + cache.hordeKills == total, "Aliases inflated faction to
 local guildTotal = 0
 for _, row in ipairs(cache.sortedGuilds) do guildTotal = guildTotal + row.kills end
 assert(guildTotal == (5001 + 10000) * 5000 / 2, "Top guild display lost known members")
+-- Compare the sliced top with an independent full sort, including tied scores.
+for _, faction in ipairs({ "Alliance", "Horde" }) do
+    local expected = {}
+    for name, count in pairs(lb.captureCount) do
+        if lb.playerInfo[name] and lb.playerInfo[name].faction == faction then
+            expected[#expected + 1] = { name = name, count = count }
+        end
+    end
+    sort(expected, function(a, b)
+        if a.count ~= b.count then return a.count > b.count end
+        return a.name < b.name
+    end)
+    local actual = cache.byFaction[faction]
+    assert(#actual == 500, "Capture display did not retain the top 500 per faction")
+    for i, row in ipairs(actual) do
+        assert(row.name == expected[i].name and row.count == expected[i].count,
+            "Capture top 500 lost or misordered a player")
+    end
+end
 
 -- The real snapshot and its wire serializer must agree with that exact top,
 -- including aliases, without sorting 500 rows or serializing them in one frame.
@@ -81,6 +100,13 @@ drain()
 assert(snapshotDone and slices - beforeSnapshot > 100, "Snapshot work was not sliced")
 local snapshot = assert(OverlordDB.leaderboardSnapshot)
 assert(#snapshot.killOrder == 5000)
+assert(#snapshot.captureOrder == 1000, "Snapshot omitted part of the displayed capture top")
+for _, faction in ipairs({ "Alliance", "Horde" }) do
+    for _, row in ipairs(cache.byFaction[faction]) do
+        assert(snapshot.captureCount[row.name] == row.count,
+            "Snapshot and display disagree on capture rank")
+    end
+end
 for i, row in ipairs(cache.sortedKills) do
     assert(snapshot.killOrder[i] == row.name and snapshot.kills[row.name] == row.kills,
         "Snapshot and display disagree on the top 5000")
@@ -93,9 +119,13 @@ Overlord.Sync:PrepareBoundedFullSrLeaderboardQueue(false, function(ok) prepared 
 drain()
 assert(prepared and slices - beforeWire > 40, "Network serialization did not yield")
 local count, _, queue = Overlord.Sync:ComputeHistoryCatchupSnapshotDigest(snapshot, snapshot.campaignStart)
-local killsSent = 0
-for _, packet in ipairs(queue) do if packet.type == "LK" then killsSent = killsSent + 1 end end
+local killsSent, capturesSent = 0, 0
+for _, packet in ipairs(queue) do
+    if packet.type == "LK" then killsSent = killsSent + 1 end
+    if packet.type == "LC" then capturesSent = capturesSent + 1 end
+end
 assert(killsSent == 500 and count <= 615, "Wire queue truncated or exceeded the top 500")
+assert(capturesSent == 75, "Legacy capture wire queue exceeded or truncated its 75-row bound")
 
 -- Identity repair must scan verified populations cooperatively and send nothing.
 assert(loadfile("SyncResolution.lua"))()

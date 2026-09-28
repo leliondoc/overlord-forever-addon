@@ -289,7 +289,7 @@ end
 local PERF_MODULES = {
     "ActionShortcut", "Button", "CaptureLease", "Combat", "FrontActivity", "Fronts",
     "General", "GeneralMap", "GeneralNameplate", "GeneralSync", "GuildKeep",
-    "GuildKeepControl", "GuildKeepImmersion", "HallOfFameUI", "Leaderboard",
+    "HallOfFameUI", "Leaderboard",
     "LeaderboardUI", "ManualBounty", "ManualBountyMail", "ManualBountyMap",
     "ManualBountySync", "ManualBountyUI", "MapMarkers", "Outpost", "OutpostControl",
     "Popups", "Ressources", "SettingsPanel", "Shard", "Sync", "UI", "ZoneControl",
@@ -415,6 +415,7 @@ local function ShowHelp()
     Overlord:PrintNotification(L.HELP_DOM)
     Overlord:PrintNotification(L.HELP_SCALE)
     Overlord:PrintNotification(L.HELP_GUIDE)
+    if L.HELP_GUILD_KILLS then Overlord:PrintNotification(L.HELP_GUILD_KILLS) end
     Overlord:PrintNotification(L.HELP_FOOTER)
 end
 
@@ -707,6 +708,9 @@ local function CommandHandler(msg)
 
     elseif cmd == "shard" then
         ShowShardDebug()
+
+    elseif cmd == "guildkills" then
+        if Overlord.GuildKillAlert then Overlord.GuildKillAlert:HandleCommand(args) end
 
     elseif cmd == "map" or cmd == "carte" then
         local mm = Overlord.MapMarkers

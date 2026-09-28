@@ -214,8 +214,8 @@ end
 local function IsKnownCommunitySender(sender)
     local sync = Overlord.Sync
     if not sync or not sender or sender == "" then return false end
-    if sync.IsGuildKeepCommunitySender then
-        return sync:IsGuildKeepCommunitySender(sender)
+    if sync.IsStrategicSiteCommunitySender then
+        return sync:IsStrategicSiteCommunitySender(sender)
     end
     return GetSenderCommunityFaction(sender) ~= nil
 end

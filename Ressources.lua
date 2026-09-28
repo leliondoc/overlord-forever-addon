@@ -861,7 +861,6 @@ function Overlord.Ressources:IsInOverlordKillZone()
     if gk and gk.ResolveSiteByMapID then
         local site = gk:ResolveSiteByMapID(mapID)
         if site then
-            if not gk.IsSiegeWindowOpen or not gk:IsSiegeWindowOpen() then return false end
             if not gk.IsPlayerInKeepGeometry or not gk:IsPlayerInKeepGeometry(site) then return false end
             return true
         end
@@ -1203,8 +1202,8 @@ local function CreateGoldHUD()
                 if dg ~= "" then
                     statusTag = "  " .. FormatKeepTenantColorCode(df) .. dg .. "|r"
                 end
-            elseif st.status == "in_progress" and Overlord.GuildKeep.IsCurrentKeepSiegeState
-                and Overlord.GuildKeep:IsCurrentKeepSiegeState(st) then
+            elseif st.status == "in_progress" and Overlord.GuildKeep.IsKeepCaptureInProgress
+                and Overlord.GuildKeep:IsKeepCaptureInProgress(st) then
                 statusTag = "  |cFFFF8800...|r"
             end
             local info = UIDropDownMenu_CreateInfo()
@@ -1245,11 +1244,11 @@ local function CreateGoldHUD()
         local t = TT()
         GameTooltip:AddLine(Overlord.GuildKeep:GetDisplayName(site), t.HL[1], t.HL[2], t.HL[3])
         local dg = select(1, Overlord.GuildKeep:GetKeepDisplayTenant(st, site and site.siteKey))
-        local siegeActive = Overlord.GuildKeep.IsCurrentKeepSiegeState
-            and Overlord.GuildKeep:IsCurrentKeepSiegeState(st)
+        local siegeActive = Overlord.GuildKeep.IsKeepCaptureInProgress
+            and Overlord.GuildKeep:IsKeepCaptureInProgress(st)
         if siegeActive then
-            local siegeLabel = Overlord.GuildKeep.GetKeepSiegeMapLabel
-                and Overlord.GuildKeep:GetKeepSiegeMapLabel(st, site and site.siteKey)
+            local siegeLabel = Overlord.GuildKeep.GetKeepCaptureMapLabel
+                and Overlord.GuildKeep:GetKeepCaptureMapLabel(st, site and site.siteKey)
                 or (L.GUILD_KEEP_CAPTURING or "Capturing...")
             GameTooltip:AddLine(siegeLabel, 1, 0.55, 0.2)
         elseif dg ~= "" then
@@ -1259,14 +1258,11 @@ local function CreateGoldHUD()
             GameTooltip:AddLine(L.GUILD_KEEP_NEUTRAL or "Unclaimed", t.BODY[1], t.BODY[2], t.BODY[3])
             if Overlord.GuildKeep.IsKeepNeutralForDisplay
                 and Overlord.GuildKeep:IsKeepNeutralForDisplay(st, site and site.siteKey) then
-                local hint = Overlord.GuildKeep:GetKeepSiegeAvailableHint()
+                local hint = Overlord.GuildKeep:GetKeepCaptureAvailableHint()
                 if hint and hint ~= "" then
                     GameTooltip:AddLine(hint, t.MUTED[1], t.MUTED[2], t.MUTED[3])
                 end
             end
-        end
-        if Overlord.GuildKeepImmersion and Overlord.GuildKeepImmersion.AppendKeepTooltipLines then
-            Overlord.GuildKeepImmersion:AppendKeepTooltipLines(st, site, site.siteKey)
         end
         -- Hint selecteur si plus d'un fortin
         local sites = Overlord.GuildKeep.GetSortedSiteList and Overlord.GuildKeep:GetSortedSiteList()
@@ -1635,10 +1631,10 @@ function Overlord.Ressources:RefreshGuildKeepHUD(force)
     local shortName = Overlord.GuildKeep:GetShortDisplayName(site)
     local label = Overlord.GuildKeep:GetKeepHudLabel(st, site, mapID)
     local activity = nil
-    local siegeActive = Overlord.GuildKeep.IsCurrentKeepSiegeState
-        and Overlord.GuildKeep:IsCurrentKeepSiegeState(st)
-    if siegeActive and Overlord.GuildKeep.GetKeepSiegeMapLabel then
-        activity = Overlord.GuildKeep:GetKeepSiegeMapLabel(st, site and site.siteKey)
+    local siegeActive = Overlord.GuildKeep.IsKeepCaptureInProgress
+        and Overlord.GuildKeep:IsKeepCaptureInProgress(st)
+    if siegeActive and Overlord.GuildKeep.GetKeepCaptureMapLabel then
+        activity = Overlord.GuildKeep:GetKeepCaptureMapLabel(st, site and site.siteKey)
         label = shortName
     end
     local dg, df = Overlord.GuildKeep:GetKeepDisplayTenant(st, site and site.siteKey)

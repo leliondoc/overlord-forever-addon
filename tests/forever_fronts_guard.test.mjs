@@ -93,7 +93,7 @@ test("Forever identity is Prenom Nom with no realm suffix", () => {
 });
 
 test("Guild keeps use vanilla map IDs and land coords", () => {
-    const keep = readFileSync(new URL("../GuildKeep.lua", import.meta.url), "utf8");
+    const keep = readFileSync(new URL("../GuildKeepSites.lua", import.meta.url), "utf8");
     assert.match(keep, /mapID = 1413/);
     assert.match(keep, /mapID = 1437/);
     assert.match(keep, /center = \{ 10\.6, 59\.6 \}/);

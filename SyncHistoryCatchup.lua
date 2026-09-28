@@ -319,14 +319,14 @@ local function BuildSnapshotKillPayload(snapshot, name, wireEpoch)
     return #payload <= 250 and payload or nil
 end
 
-local function BuildSnapshotCapturePayload(snapshot, name, wireEpoch)
+local function BuildSnapshotCapturePayload(snapshot, name, wireEpoch, full)
     if not ContributorCanRelay(name) then return nil end
     local info = type(snapshot.playerInfo) == "table" and snapshot.playerInfo[name] or nil
     info = type(info) == "table" and info or {}
     local zones, safeZones = snapshot.captures and snapshot.captures[name], {}
     if type(zones) == "table" then
-        for i = 1, math.min(#zones, 32) do
-            local zoneId = SafeWireField(zones[i], 32)
+        for i = 1, math.min(#zones, full and 128 or 32) do
+            local zoneId = SafeWireField(zones[i], full and 80 or 32)
             if zoneId ~= "" then safeZones[#safeZones + 1] = zoneId end
         end
     end
@@ -352,12 +352,32 @@ local function BuildSnapshotCapturePayload(snapshot, name, wireEpoch)
     }, ":") .. ":"
     local suffix = ":" .. SafeWireField(info.locale, 8)
         .. ":B" .. tostring(wireEpoch)
-    while #safeZones > 0
-        and #(prefix .. table.concat(safeZones, ",") .. suffix) > 250 do
-        safeZones[#safeZones] = nil
+    local maxBytes = full and 3500 or 250
+    if not full then
+        while #safeZones > 0
+            and #(prefix .. table.concat(safeZones, ",") .. suffix) > maxBytes do
+            safeZones[#safeZones] = nil
+        end
     end
     local payload = prefix .. table.concat(safeZones, ",") .. suffix
-    return #payload <= 250 and payload or nil
+    return #payload <= maxBytes and payload or nil
+end
+
+-- v6 pages read the full attested capture/race view. The v4 queue above remains
+-- fixed at 615 packets for clients that cannot understand typed pages.
+function sync:BuildPagedLeaderboardCapturePayload(snapshot, name, wireEpoch)
+    local captures = snapshot and snapshot.captureCount and snapshot.captureCount[name]
+    if not self.SanitizeSyncedCaptureCount
+        or self:SanitizeSyncedCaptureCount(captures) == nil then return nil end
+    return BuildSnapshotCapturePayload(snapshot, name, wireEpoch, true)
+end
+
+function sync:BuildPagedLeaderboardRacePayload(snapshot, name, wireEpoch)
+    local info = snapshot and snapshot.playerInfo and snapshot.playerInfo[name]
+    if type(info) ~= "table" or not ContributorCanRelay(name) then return nil end
+    if not self.BuildLeaderboardRacePayload then return nil end
+    return self:BuildLeaderboardRacePayload(
+        name, info.race, info.raceSex, wireEpoch, info.raceAt)
 end
 
 -- The paged protocol reuses the exact LK serializer and attested snapshot.
@@ -552,9 +572,6 @@ end
 
 local function BuildHistoricalQueue()
     local queue = {}
-    if sync.AppendLeaderboardGuildKeepDailyProofsToSrQueue then
-        pcall(sync.AppendLeaderboardGuildKeepDailyProofsToSrQueue, sync, queue)
-    end
     if sync.AppendLeaderboardOutpostToSrQueue then
         pcall(sync.AppendLeaderboardOutpostToSrQueue, sync, queue)
     end
@@ -928,14 +945,22 @@ local function ScheduleAttempt(generation, campaignId, attempt)
                 return
             end
             -- Only the ladder-only round changes transport. Initial territorial
-            -- history and old peers retain v4; a v5 timeout resumes from a bucket.
-            if active.ladderOnly and not active.pagedTried and sync.StartPagedLeaderboardCatchup then
+            -- history and old peers retain v4; a v6 timeout resumes from a stream/bucket.
+            if active.ladderOnly and not active.pagedTried
+                and sync.StartCompletePagedLeaderboardCatchup then
                 active.pagedTried = true
-                local started = sync:StartPagedLeaderboardCatchup(target, function(success, supported)
+                local started = sync:StartCompletePagedLeaderboardCatchup(target, function(success, supported)
                     if sync._historyCatchupPending ~= active or active.terminal then return end
                     if not supported then
                         ScheduleAttempt(generation, campaignId, attempt)
                         return
+                    end
+                    if success and OverlordDB then
+                        -- Persist only a completed v6 sweep. If the player
+                        -- reloads before the next wake, give the still-missing
+                        -- territorial v4 history its turn instead of repeating
+                        -- an already completed ranking transfer.
+                        OverlordDB.leaderboardRankFirstCompletedCampaignId = campaignId
                     end
                     active.terminal = true
                     sync._historyCatchupPending = nil
@@ -1462,6 +1487,17 @@ function sync:ScheduleLoginLeaderboardHistoryCatchUp(force, ladderOnly)
     local historyAt = ackCampaign == campaignId and type(ack) == "table"
         and math.floor(tonumber(ack.historyAt or ack.at) or 0) or 0
     local historyAge = historyAt > 0 and NowServer() - historyAt or HISTORY_ACK_SEC
+    -- A missing history ACK used to put the long v4 territorial exchange before
+    -- the complete paged ladder. On the beta relay, four partial v4 attempts
+    -- can postpone v6 for over an hour. Pull the ranking first once per login;
+    -- the next periodic wake still sees historyAt == 0 and runs v4. Map/login
+    -- SR:T has its own earlier path and is unaffected by this ordering.
+    if not force and not ladderOnly and historyAt <= 0
+        and math.floor(tonumber(OverlordDB.leaderboardRankFirstCompletedCampaignId) or 0)
+            ~= campaignId
+        and self.StartCompletePagedLeaderboardCatchup then
+        ladderOnly = true
+    end
     -- Un /reload recent doit verifier le ladder sans retransmettre les preuves
     -- GK/Outpost. Leur propre rattrapage complet reste cadence a six heures.
     if not force and not ladderOnly and ackCampaign == campaignId
@@ -1504,10 +1540,10 @@ end
 -- Lignes /ov network : dernier pair, resultat, lignes recues. Aucune mutation.
 function sync:GetHistoryCatchupDiagnostics()
     local stats = self._historyCatchupStats
-    if not stats then return { "Leaderboard catch-up: no request sent yet this session." } end
+    if not stats then return { "Legacy ladder history: no request sent yet this session (paged v6 is reported separately)." } end
     local age = stats.targetAt and math.floor(GetTime() - stats.targetAt) or 0
     return {
-        string.format("Leaderboard catch-up: %d requests, %d complete, %d rows received.",
+        string.format("Legacy ladder history: %d requests, %d complete, %d rows received (v6 counted separately).",
             stats.requests or 0, stats.completed or 0, stats.rows or 0),
         string.format("Last peer: %s (%s), %ds ago: %s, %d rows.",
             tostring(stats.target or "?"), tostring(stats.targetFaction or "?"), age,
