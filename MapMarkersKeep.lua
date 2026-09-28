@@ -165,7 +165,7 @@ local function ShowKeepMinimapTooltip(site)
     GameTooltip:AddLine(Overlord.GuildKeep:GetDisplayName(site), hr, hg, hb)
     local dg = select(1, Overlord.GuildKeep:GetKeepDisplayTenant(st, site and site.siteKey))
     local siegeActive = st and Overlord.GuildKeep.IsKeepCaptureInProgress
-        and Overlord.GuildKeep:IsKeepCaptureInProgress(st)
+        and Overlord.GuildKeep:IsKeepCaptureInProgress(st, site.siteKey)
     if siegeActive then
         local siegeLabel = Overlord.GuildKeep.GetKeepCaptureMapLabel
             and Overlord.GuildKeep:GetKeepCaptureMapLabel(st, site and site.siteKey)
@@ -718,7 +718,7 @@ function Overlord.MapMarkers:EnsureProjectedKeepPins(canvas)
                 GameTooltip:AddLine(Overlord.GuildKeep:GetDisplayName(siteRef), tp.HL[1], tp.HL[2], tp.HL[3])
                 local dg = select(1, Overlord.GuildKeep:GetKeepDisplayTenant(st, siteRef and siteRef.siteKey))
                 local siegeActive = Overlord.GuildKeep.IsKeepCaptureInProgress
-                    and Overlord.GuildKeep:IsKeepCaptureInProgress(st)
+                    and Overlord.GuildKeep:IsKeepCaptureInProgress(st, siteRef.siteKey)
                 if siegeActive then
                     local siegeLabel = Overlord.GuildKeep.GetKeepCaptureMapLabel
                         and Overlord.GuildKeep:GetKeepCaptureMapLabel(st, siteRef and siteRef.siteKey)

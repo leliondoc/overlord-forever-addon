@@ -1,4 +1,8 @@
-1.1.6
+1.1.7
+
+**Overlord Forever 1.1.7**
+
+- Fortress map/minimap tooltips and the fortress HUD no longer show "Capturing..." indefinitely for expired remote observations. They fall back to the previous defender or the unclaimed presentation, consistently with the map icon. Fresh updates and locally controlled captures remain visible; this display correction does not change or broadcast capture ownership.
 
 **Overlord Forever 1.1.6**
 

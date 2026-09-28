@@ -1245,7 +1245,7 @@ local function CreateGoldHUD()
         GameTooltip:AddLine(Overlord.GuildKeep:GetDisplayName(site), t.HL[1], t.HL[2], t.HL[3])
         local dg = select(1, Overlord.GuildKeep:GetKeepDisplayTenant(st, site and site.siteKey))
         local siegeActive = Overlord.GuildKeep.IsKeepCaptureInProgress
-            and Overlord.GuildKeep:IsKeepCaptureInProgress(st)
+            and Overlord.GuildKeep:IsKeepCaptureInProgress(st, site.siteKey)
         if siegeActive then
             local siegeLabel = Overlord.GuildKeep.GetKeepCaptureMapLabel
                 and Overlord.GuildKeep:GetKeepCaptureMapLabel(st, site and site.siteKey)
@@ -1632,7 +1632,7 @@ function Overlord.Ressources:RefreshGuildKeepHUD(force)
     local label = Overlord.GuildKeep:GetKeepHudLabel(st, site, mapID)
     local activity = nil
     local siegeActive = Overlord.GuildKeep.IsKeepCaptureInProgress
-        and Overlord.GuildKeep:IsKeepCaptureInProgress(st)
+        and Overlord.GuildKeep:IsKeepCaptureInProgress(st, site.siteKey)
     if siegeActive and Overlord.GuildKeep.GetKeepCaptureMapLabel then
         activity = Overlord.GuildKeep:GetKeepCaptureMapLabel(st, site and site.siteKey)
         label = shortName

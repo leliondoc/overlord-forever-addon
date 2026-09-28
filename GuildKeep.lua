@@ -63,12 +63,19 @@ function GK:GetMainHallAtlasForFaction(faction)
     return OP:GetMainHallAtlasForFaction(faction, self:GetDefaultSite())
 end
 function GK:GetKeepCaptureHalfSizePercent(site) return site and site.halfSize end
-function GK:IsKeepCaptureInProgress(st) return st and st.status == "in_progress" or false end
+function GK:IsKeepCaptureInProgress(st, key)
+    -- Tooltips/HUD use the same freshness window as the shared map renderer.
+    -- This is presentation only: never finalize or revert a remote observation.
+    local site = (key and self:GetSite(key)) or self:GetDefaultSite()
+    return st ~= nil and st.status == "in_progress"
+        and not OP:IsObserverOutpostCaptureStale(st, site)
+end
 function GK:IsKeepNeutralForDisplay(st, key)
-    return not st or (st.status ~= "in_progress" and select(1, self:GetKeepDisplayTenant(st, key)) == "")
+    return not st or (not self:IsKeepCaptureInProgress(st, key)
+        and select(1, self:GetKeepDisplayTenant(st, key)) == "")
 end
 function GK:GetKeepCaptureMapLabel(st, key)
-    if st and st.status == "in_progress" then return L.OUTPOST_CAPTURING or "Capturing..." end
+    if self:IsKeepCaptureInProgress(st, key) then return L.OUTPOST_CAPTURING or "Capturing..." end
 end
 function GK:GetKeepCaptureAvailableHint() return L.FORTRESS_CAPTURE_AVAILABLE or "Available at any time" end
 function GK:GetEffectiveHeldTenant(st, key)

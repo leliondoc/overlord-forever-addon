@@ -159,3 +159,38 @@ op:ResetOutpostsForCampaign()
 assert(op:GetState("badlands").status == "neutral")
 assert(#lb:GetSortedGuildKeeps() == 0, "Campaign reset retained fortress captures")
 print("Fortress remote OP/LOC replay, terminal timing and campaign reset OK")
+
+-- Map/minimap tooltips and the fortress HUD must expire remote observations
+-- like the shared engine, without inventing a neutral/captured network event.
+local tooltipSite = gk:GetSite("wetlands")
+local tooltipState = op:GetState("wetlands")
+tooltipState.status, tooltipState.ownerGuild, tooltipState.ownerFaction = "in_progress", "Attack Guild", "Horde"
+tooltipState.holdTimeElapsed, tooltipState.holdTimeRequired = 300, 600
+tooltipState.updatedAt = now
+local observedAt = now
+local function activeTooltip()
+    return gk:IsKeepCaptureInProgress(tooltipState, "wetlands")
+end
+assert(activeTooltip(), "Fresh fortress assault hidden")
+assert(gk:GetKeepCaptureMapLabel(tooltipState, "wetlands"), "Fresh capture label missing")
+assert(not gk:IsKeepNeutralForDisplay(tooltipState, "wetlands"))
+now = observedAt + 330
+assert(activeTooltip(), "Fortress observation expired before remaining time plus buffer")
+now = now + 1
+assert(not activeTooltip(), "Expired fortress still appears to be capturing in tooltip/HUD")
+assert(not gk:GetKeepCaptureMapLabel(tooltipState, "wetlands"), "Expired capture label remained visible")
+assert(gk:IsKeepNeutralForDisplay(tooltipState, "wetlands"), "Expired unowned site lacks neutral presentation")
+tooltipState.previousOwnerGuild, tooltipState.previousOwnerFaction = "Defender Guild", "Alliance"
+assert(not gk:IsKeepNeutralForDisplay(tooltipState, "wetlands"), "Expired assault hid its previous defender")
+assert(gk:GetKeepDisplayTenant(tooltipState, "wetlands") == "Defender Guild")
+assert(tooltipState.status == "in_progress" and tooltipState.updatedAt == observedAt,
+    "Presentation mutated the remote gameplay state")
+tooltipState.updatedAt = now
+assert(activeTooltip(), "Fresh heartbeat did not restore capture presentation")
+tooltipState.updatedAt = now - 3600
+tooltipState.holdAuthorityLocal, tooltipState.isHolding = true, true
+assert(activeTooltip(), "Local authoritative capture expired like a remote observation")
+tooltipState.isHolding, tooltipState.isPaused = false, true
+assert(activeTooltip(), "Local paused capture disappeared")
+op:ResetOutpostsForCampaign()
+print("Fortress presentation: remote expiry, defender/neutral fallback, fresh heartbeat and local authority OK")
