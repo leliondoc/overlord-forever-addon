@@ -174,6 +174,11 @@ d.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
     return sendWhisper(self, kind, payload, target)
 end
 assert(a.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true, true))
+-- This phase exercises one pull and its return union. The initial requester
+-- remains a responder afterward; unrelated periodic pulls would contend with
+-- the next phase's two gateway pulls according to platform-specific RNG jitter.
+-- Periodic scheduling is covered separately by the bootstrap/timeout tests.
+a.Overlord.Sync.ScheduleLoginLeaderboardHistoryCatchUp = function() return false end
 advance(1600)
 for _, name in ipairs(names) do
     assert(a.Overlord.Leaderboard.kills[name] == d.Overlord.Leaderboard.kills[name], "Missing late-login kill: " .. name)
@@ -203,7 +208,7 @@ advance(1600)
 for _, e in ipairs(clients) do
     for i = 2, #names do
         local name = names[i]
-        assert(e.Overlord.Leaderboard.kills[name] == d.Overlord.Leaderboard.kills[name], "Replica kills diverged")
+        assert(e.Overlord.Leaderboard.kills[name] == d.Overlord.Leaderboard.kills[name], "Replica kills diverged: " .. e.name .. " / " .. name .. " / got " .. tostring(e.Overlord.Leaderboard.kills[name]) .. " / expected " .. tostring(d.Overlord.Leaderboard.kills[name]) .. " / " .. table.concat(e.Overlord.Sync:GetHistoryCatchupDiagnostics(), "; "))
         if (d.Overlord.Leaderboard.captureCount[name] or 0) >= 96 then
             assert(e.Overlord.Leaderboard.captureCount[name] == d.Overlord.Leaderboard.captureCount[name], "Replica captures diverged")
         end
