@@ -24,6 +24,15 @@ fi
 
 version="${versions[0]}"
 
+# Comme sur Retail : seules les notes de la version publiee. CurseForge et
+# l'annonce Discord reprennent le fichier entier ; l'historique reste dans git.
+section_count=$(grep -cE '^\*\*Overlord Forever [0-9]' "$CHANGELOG" || true)
+if [ "$section_count" -gt 1 ]; then
+  echo "ERREUR: $CHANGELOG contient $section_count sections de version." >&2
+  echo "       Ne garder que les notes de $version (l'historique reste dans git)." >&2
+  exit 1
+fi
+
 if [ -n "$EXPECTED_TAG" ] && [ "$version" != "$EXPECTED_TAG" ]; then
   echo "ERREUR: version dans $CHANGELOG ($version) != tag Git ($EXPECTED_TAG)." >&2
   exit 1
