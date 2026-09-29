@@ -88,6 +88,8 @@ local previousKillingBlows = 0
 -- Un seul credit par VH du compteur Blizzard, sans cumul avec les coups fatals.
 local previousSessionHonorableKills = nil
 local honorableKillCounterSource = nil
+-- Reference relue (login, sortie d'instance) pas encore confirmee par un VH credite.
+local honorableKillBaselineUnconfirmed = false
 
 -- Tracking du dernier ennemi vu (nameplate) pour attribuer les morts
 local lastEnemyTarget = { name = nil, guid = nil, time = 0 }
@@ -298,6 +300,17 @@ local function GetSessionHonorableKills()
     return honorableKills, source
 end
 
+-- VH du jour (compteur de session Blizzard), nil si indisponible.
+local function GetTodayHonorableKills()
+    if type(GetPVPSessionStats) ~= "function" then return nil end
+    local ok, todayKills = pcall(GetPVPSessionStats)
+    if not ok or type(todayKills) ~= "number" then return nil end
+    if canaccessvalue and not canaccessvalue(todayKills) then return nil end
+    todayKills = math.floor(todayKills)
+    if todayKills < 0 or todayKills >= math.huge or todayKills ~= todayKills then return nil end
+    return todayKills
+end
+
 local function ResetPvpKillReconciliation()
     pendingUnknownLocalKill = nil
     lastUnknownLocalBackupQueuedAt = 0
@@ -305,6 +318,7 @@ end
 
 local function RefreshPvpKillBaselines()
     previousSessionHonorableKills, honorableKillCounterSource = GetSessionHonorableKills()
+    honorableKillBaselineUnconfirmed = true
     previousKillingBlows = GetKillingBlows()
     ResetPvpKillReconciliation()
 end
@@ -884,6 +898,22 @@ function Overlord.Combat:OnPVPKillsChanged(unitTarget)
     -- Le compteur "session" est journalier : un reset/recul rebase sans retirer
     -- les VH hebdomadaires ni importer des kills d'une ancienne session.
     if delta <= 0 then return end
+    -- Au login, le compteur a vie peut valoir 0 (ou une valeur perimee) avant l'arrivee des
+    -- donnees PvP : cette reference ferait crediter tout l'historique d'un coup (2026-09-29 :
+    -- 3434 VH de la semaine passee + 50 du jour). Le premier saut apres une relecture ne peut
+    -- pas depasser les VH du jour (+ marge de decalage entre les deux compteurs) : au-dela,
+    -- recalage sans credit. Sans compteur du jour : 1 depuis une reference 0, sinon un
+    -- plafond large qu'aucun evenement Blizzard groupe n'atteint.
+    if source == "lifetime" and (honorableKillBaselineUnconfirmed or previous == 0) then
+        local today = GetTodayHonorableKills()
+        local limit = today and (today + 10) or (previous == 0 and 1 or 50)
+        -- La valeur lue ici vient des donnees PvP chargees : elle confirme la reference.
+        honorableKillBaselineUnconfirmed = false
+        if limit and delta > limit then
+            dbg("PLAYER_PVP_KILLS_CHANGED: reference a vie tardive, recalage sans credit", delta)
+            return
+        end
+    end
     dbg("PLAYER_PVP_KILLS_CHANGED: VH Blizzard +", delta)
     self:CreditHonorableKills(delta)
 end

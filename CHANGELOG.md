@@ -1,4 +1,10 @@
-1.1.8
+1.1.9
+
+**Overlord Forever 1.1.9**
+
+- Fixed honorable kills from earlier weeks reappearing in the new week's leaderboard. At login, Blizzard's lifetime honorable kill counter can read 0 (or an outdated value) before PvP data loads, and the first real reading was then credited in one go. The first increase after a login or instance exit is now checked against the honorable kills earned today, so only real new kills count.
+- Previous-week scores can no longer be relabelled as the current week when a save happens between the weekly reset time and the reset itself: they are archived and the new week starts empty.
+- A 5000 honorable kill row posted a few hours after this week's reset is removed from the current ranking.
 
 **Overlord Forever 1.1.8**
 

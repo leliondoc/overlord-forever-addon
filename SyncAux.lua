@@ -3632,6 +3632,10 @@ local CAMPAIGN_KILL_ROW_REMOVALS = {
         ["roxymigurdia greyrat"] = true,
         ["asmon gold"] = true,
     },
+    -- 2026-09-29 : Ender Zero (druide niveau 14, 5000 VH ~7 h apres le reset).
+    [20260929] = {
+        ["ender zero"] = true,
+    },
 }
 
 function Overlord.Sync:IsDeniedKillContributor(playerName)

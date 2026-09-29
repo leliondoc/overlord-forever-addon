@@ -121,6 +121,56 @@ lifetime = 2001
 Overlord.Combat:OnPVPKillsChanged("player")
 assert(score() == 90, "Transient lifetime zero duplicated the player's history")
 
+-- 2026-09-29 : the lifetime counter can read 0 at login before PvP data arrives. The
+-- first real reading (3434 last week + 50 today) must not be credited as one delta.
+lifetime, honorableKills = 0, 50
+Overlord.Combat:Resume()
+lifetime = 3484
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 90, "Late lifetime data credited the player's whole history")
+lifetime, honorableKills = 3485, 51
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 91, "First HK after the late lifetime rebase was lost")
+-- A brand-new character really starts at 0: its first HKs still count.
+lifetime, honorableKills = 0, 0
+Overlord.Combat:Resume()
+lifetime, honorableKills = 2, 2
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 93, "A new character's first HKs were dropped")
+-- A stale non-zero lifetime read at login is not a valid reference either.
+lifetime, honorableKills = 3000, 50
+Overlord.Combat:Resume()
+lifetime = 3484
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 93, "Stale lifetime reference credited historical HKs")
+lifetime, honorableKills = 3487, 53
+Overlord.Combat:OnPVPKillsChanged("player")
+lifetime, honorableKills = 3587, 153
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 196, "Confirmed reference lost legitimate batched HKs")
+-- Without today's counter, a valid non-zero reference keeps batched HKs...
+local sessionReader = GetPVPSessionStats
+GetPVPSessionStats = function() return nil end
+Overlord.Combat:Resume()
+lifetime = 3590
+Overlord.Combat:OnPVPKillsChanged("player")
+lifetime = 3593
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 202, "Missing daily counter dropped legitimate batched HKs")
+-- ...while a zero reference still cannot import the whole history.
+lifetime = 0
+Overlord.Combat:Resume()
+lifetime = 3600
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 202, "Missing daily counter let a zero reference import history")
+-- ...and a stale non-zero reference cannot either.
+lifetime = 3000
+Overlord.Combat:Resume()
+lifetime = 3484
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 202, "Missing daily counter let a stale reference import history")
+GetPVPSessionStats = sessionReader
+
 -- Being the target or a nearby priest when someone dies is not an HK.
 Overlord.Zones.GetEnemyFaction = function() return "Alliance" end
 Overlord.Combat.IdentifyKiller = function() return "Nearby Priest", "Player-2-PRIEST" end
@@ -131,5 +181,5 @@ Overlord.Sync.BroadcastToCommunity = function() end
 Overlord.Combat:OnPlayerDead()
 assert((Overlord.Leaderboard.kills["Nearby Priest"] or 0) == 0,
     "A guessed killer received an exportable score")
-assert(score() == 90)
+assert(score() == 202)
 print("Forever HK: exact Blizzard deltas, all roles, no KB/death/x2 additions, batching, counters and instances OK")

@@ -2085,14 +2085,23 @@ end
 
 function Overlord.Leaderboard:StampCurrentCampaignBucket(bucket)
     bucket = bucket or (OverlordDB and OverlordDB.leaderboard)
-    if not bucket then return end
+    if not bucket then return false end
     local campaignStart = self:GetCurrentCampaignStart()
-    if campaignStart <= 0 then return end
+    if campaignStart <= 0 then return false end
+    -- Jamais de re-etiquetage d'une AUTRE semaine : seul le reset (archive + bucket vide)
+    -- peut faire passer ces scores a la campagne suivante. Les migrations legitimes
+    -- (mid-week, ancien decalage US) restent sous 6 jours d'ecart.
+    local bucketStart = math.floor(tonumber(bucket.campaignStart) or 0)
+    if bucketStart > 0 and math.abs(bucketStart - campaignStart) >= (604800 - 86400)
+        and LeaderboardBucketHasScores(bucket) then
+        return false
+    end
     bucket.campaignStart = campaignStart
     if Overlord.TimestampToCampaignId then
         bucket.campaignId = Overlord:TimestampToCampaignId(campaignStart)
     end
     MarkLeaderboardResetEpochSynced()
+    return true
 end
 
 local function ScheduleLocalGuildRosterEnrich(delaySec)
@@ -2129,7 +2138,7 @@ local function ScheduleLocalGuildRosterEnrich(delaySec)
     end)
 end
 
-local LEGACY_SCORE_SANITIZE_VERSION = 5
+local LEGACY_SCORE_SANITIZE_VERSION = 6
 
 -- Migration de securite globale, executee avant Sync mais repartie sur plusieurs
 -- frames. Les SavedVariables visees peuvent justement etre anormalement grosses :
@@ -2755,6 +2764,7 @@ function Overlord.Leaderboard:Save()
     OverlordDB.leaderboard.bountyTimes = self.bountyTimes
     OverlordDB.leaderboard.bountyKills = self.bountyKills
     OverlordDB.leaderboard.playerInfo = self.playerInfo
+    -- StampCurrentCampaignBucket refuse de re-etiqueter les scores d'une autre semaine.
     self:StampCurrentCampaignBucket(OverlordDB.leaderboard)
     if Overlord.GetCurrentLeaderboardSavedVarsPool then
         local pool = Overlord:GetCurrentLeaderboardSavedVarsPool()

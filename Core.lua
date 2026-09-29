@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.1.8"
+Overlord.Version = "1.1.9"
 -- Forever has no cross-faction community: Overlord never uses C_Club clubs there.
 -- Transport is the faction channel, the group, and the Battle.net relay bridges.
 Overlord.CommunityModeEnabled = false
@@ -2869,7 +2869,12 @@ function Overlord:CheckWeeklyReset()
     if resetEpoch > 0 and lastCampaign > 0 and resetEpoch < lastCampaign
         and lastReset > 0 and lastCampaign >= lastReset then
         if self.Leaderboard and self.Leaderboard.StampCurrentCampaignBucket then
-            self.Leaderboard:StampCurrentCampaignBucket(OverlordDB.leaderboard)
+            -- Stamp refuse = scores d'une autre semaine encore actifs : archiver et
+            -- vider maintenant plutot que les re-etiqueter ou bloquer jusqu'au login.
+            if self.Leaderboard:StampCurrentCampaignBucket(OverlordDB.leaderboard) == false
+                and self.Leaderboard.RecoverMissedWeeklyResetIfNeeded then
+                self.Leaderboard:RecoverMissedWeeklyResetIfNeeded(OverlordDB.leaderboard)
+            end
         else
             OverlordDB.leaderboardResetEpoch = lastCampaign
         end
@@ -2887,7 +2892,8 @@ function Overlord:CheckWeeklyReset()
         end
         local currentPool = Overlord:GetCurrentLeaderboardSavedVarsPool() or ""
         local poolBucket = OverlordDB.leaderboardsByPool and OverlordDB.leaderboardsByPool[currentPool]
-        if poolBucket then
+        -- Meme table que le bucket actif : le stamp ci-dessus a deja decide (refus inclus).
+        if poolBucket and poolBucket ~= OverlordDB.leaderboard then
             poolBucket.campaignStart = lastReset
             poolBucket.campaignId = campaignId
         end
