@@ -50,7 +50,43 @@ local COMPAT_PULL_GLOBAL_COOLDOWN_SEC = 20
 -- Au-dela, un echange sans aucune ligne ni ACK est considere perdu : la demande puis
 -- la premiere reponse ont chacune au plus le TTL relais (120 s) pour arriver.
 local NO_REPLY_SEC = 270
+-- Un transfert commence qui n'apporte plus aucune ligne pendant ce delai est
+-- abandonne : le pair est parti, en instance ou sature. Les lignes deja recues
+-- restent acquises (fusion monotone) et le tour suivant choisit un autre pair.
+local STALL_SEC = 90
+-- Un pair muet, bloque ou interrompu est ecarte du choix pendant ce delai.
+local PEER_PENALTY_SEC = 10 * 60
+-- Route recente : le pair a emis depuis peu, la reponse a une chance de revenir.
+local FRESH_PEER_SEC = 200
+local peerPenaltyUntil = {}
 local ENEMY_FACTION = { Alliance = "Horde", Horde = "Alliance" }
+
+local function PenalizePeer(name)
+    if type(name) == "string" and name ~= "" then
+        peerPenaltyUntil[name:lower()] = GetTime() + PEER_PENALTY_SEC
+    end
+end
+
+local function ForgivePeer(name)
+    if type(name) == "string" and name ~= "" then peerPenaltyUntil[name:lower()] = nil end
+end
+
+-- Candidats du tour : sans les pairs penalises, routes recentes d'abord. Si tout
+-- est penalise ou perime, la liste complete reste utilisable (jamais de blocage).
+local function FilterCatchupCandidates(online)
+    local now, net = GetTime(), Overlord.BetaNetwork
+    local usable, fresh = {}, {}
+    for _, name in ipairs(online) do
+        if type(name) == "string" and (peerPenaltyUntil[name:lower()] or 0) <= now then
+            usable[#usable + 1] = name
+            local age = net and net.GetPeerAge and net:GetPeerAge(name)
+            if age and age <= FRESH_PEER_SEC then fresh[#fresh + 1] = name end
+        end
+    end
+    if #fresh > 0 then return fresh end
+    if #usable > 0 then return usable end
+    return online
+end
 
 local function PeerFaction(name)
     -- Faction Battle.net (amis/ponts) d'abord, puis metadonnees du classement.
@@ -903,6 +939,7 @@ local function ScheduleAttempt(generation, campaignId, attempt)
                 and Overlord.BetaNetwork and Overlord.BetaNetwork.GetPeers then
                 online = Overlord.BetaNetwork:GetPeers()
             end
+            online = FilterCatchupCandidates(online)
             local total, target = #online, nil
             local identity = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
             if total > 0 then
@@ -910,33 +947,32 @@ local function ScheduleAttempt(generation, campaignId, attempt)
                 local rotation = math.max(0, math.floor(tonumber(
                     OverlordDB.leaderboardHistoryCatchupTargetRotation) or 0))
                 local startIndex = ((seed + rotation) % total) + 1
-                -- Sans communaute, nos allies ont le meme retard que nous sur
-                -- l'autre faction (notre faction est deja a jour en direct) : deux
-                -- tours sur trois visent d'abord un pair adverse.
-                local enemyFirst = rotation % 3 ~= 2 and ENEMY_FACTION[Overlord.PlayerFaction]
-                -- Pair adverse : le chemin le plus court d'abord (notre propre ami
-                -- Battle.net = 1 etape). Chaque etape de relais peut perdre des lignes et
-                -- la reponse ne doit pas depasser la limite d'etapes du relais.
+                -- Le pair le plus proche d'abord (notre ami Battle.net = 1 etape), sans
+                -- regle de faction : un allie qui a des amis Battle.net adverses detient
+                -- deja l'autre faction, alors qu'un pair adverse lointain perd des lignes
+                -- a chaque etape. Un tour sur trois garde la rotation simple.
+                local plainRotation = rotation % 3 == 2
                 local net = Overlord.BetaNetwork
-                for pass = enemyFirst and 1 or 2, 2 do
-                    local bestHops
-                    for offset = 0, total - 1 do
-                        local candidate = online[((startIndex + offset - 1) % total) + 1]
-                        if candidate and candidate ~= ""
-                            and (not sync.IsSenderLocalPlayer
-                                or not sync:IsSenderLocalPlayer(candidate))
-                            and (pass == 2 or PeerFaction(candidate) == enemyFirst) then
-                            if pass == 2 then
-                                target = candidate
-                                break
-                            end
-                            local hops = net and net.GetPeerHops and net:GetPeerHops(candidate) or 99
-                            if not bestHops or hops < bestHops then
-                                target, bestHops = candidate, hops
-                            end
+                local enemyFaction = ENEMY_FACTION[Overlord.PlayerFaction]
+                local bestHops, bestIsEnemy
+                for offset = 0, total - 1 do
+                    local candidate = online[((startIndex + offset - 1) % total) + 1]
+                    if candidate and candidate ~= ""
+                        and (not sync.IsSenderLocalPlayer
+                            or not sync:IsSenderLocalPlayer(candidate)) then
+                        if plainRotation then
+                            target = candidate
+                            break
+                        end
+                        local hops = net and net.GetPeerHops and net:GetPeerHops(candidate) or 99
+                        -- A distance egale, l'autre faction detient plus souvent ce
+                        -- qui nous manque (notre faction arrive deja en direct).
+                        local isEnemy = enemyFaction ~= nil and PeerFaction(candidate) == enemyFaction
+                        if not bestHops or hops < bestHops
+                            or (hops == bestHops and isEnemy and not bestIsEnemy) then
+                            target, bestHops, bestIsEnemy = candidate, hops, isEnemy
                         end
                     end
-                    if target then break end
                 end
             end
             if not target then
@@ -951,6 +987,14 @@ local function ScheduleAttempt(generation, campaignId, attempt)
                 active.pagedTried = true
                 local started = sync:StartCompletePagedLeaderboardCatchup(target, function(success, supported)
                     if sync._historyCatchupPending ~= active or active.terminal then return end
+                    -- v5 ne certifie jamais un tour complet : seul un balayage
+                    -- reellement interrompu (pair muet ou parti) penalise le pair.
+                    local pageStats = sync._leaderboardPageStats
+                    if success or (pageStats and pageStats.result == "sweep received") then
+                        ForgivePeer(target)
+                    else
+                        PenalizePeer(target)
+                    end
                     if not supported then
                         ScheduleAttempt(generation, campaignId, attempt)
                         return
@@ -1018,15 +1062,44 @@ local function ScheduleAttempt(generation, campaignId, attempt)
                     or not expected.awaitingAck or expected.replied
                     or math.floor(tonumber(expected.deliveryCount) or 0) > 0 then return end
                 expected.awaitingAck = false
+                PenalizePeer(target)
                 NoteHr("result", "no reply")
                 ScheduleAttempt(generation, campaignId, attempt + 1)
             end)
+            -- Transfert commence puis fige (pair parti, instance, saturation) : sans
+            -- nouvelle ligne pendant STALL_SEC, abandonner au lieu d'attendre
+            -- ACK_TIMEOUT_SEC (20 min). Les lignes recues restent acquises.
+            local lastCount, lastProgressAt = 0, GetTime()
+            local function WatchStall()
+                local expected = sync._historyCatchupPending
+                if not expected or expected.generation ~= generation
+                    or expected.nonce ~= nonce or expected.terminal
+                    or not expected.awaitingAck then return end
+                local count = math.floor(tonumber(expected.deliveryCount) or 0)
+                -- En combat/instance nous ne recevons plus : pas un blocage du pair.
+                local localPause = Overlord.InstanceSuspended
+                    or (InCombatLockdown and InCombatLockdown())
+                    or (IsInInstance and IsInInstance())
+                if count ~= lastCount or localPause then
+                    lastCount, lastProgressAt = count, GetTime()
+                end
+                if count > 0 and GetTime() - lastProgressAt >= STALL_SEC then
+                    expected.awaitingAck = false
+                    PenalizePeer(target)
+                    NoteHr("result", "stalled")
+                    ScheduleAttempt(generation, campaignId, attempt + 1)
+                    return
+                end
+                C_Timer.After(15, WatchStall)
+            end
+            C_Timer.After(15, WatchStall)
             C_Timer.After(ACK_TIMEOUT_SEC, function()
                 local expected = sync._historyCatchupPending
                 if not expected or expected.generation ~= generation
                     or expected.nonce ~= nonce or expected.terminal
                     or not expected.awaitingAck then return end
                 expected.awaitingAck = false
+                PenalizePeer(target)
                 NoteHr("result", "timeout")
                 ScheduleAttempt(generation, campaignId, attempt + 1)
             end)
@@ -1413,6 +1486,8 @@ function sync:OnHistoryCatchupAck(payload, sender, channel)
         or hash < 0 or hash >= HASH_MOD then return false end
     pending.replied = true
     if status == "B" or status == "E" then
+        -- Pair occupe ou en erreur : en essayer un autre au lieu d'y revenir.
+        PenalizePeer(pending.target)
         NoteHr("result", status == "B" and "busy" or "error")
         RetryHistoryCatchup(pending)
         return true
@@ -1445,6 +1520,7 @@ function sync:OnHistoryCatchupAck(payload, sender, channel)
         return false
     end
     pending.awaitingAck = false
+    ForgivePeer(pending.target)
     local _, currentId = CurrentCampaign()
     if currentId ~= campaignId then
         RestartHistoryCatchupForCurrentCampaign(pending)

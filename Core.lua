@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.1.9"
+Overlord.Version = "1.1.10"
 -- Forever has no cross-faction community: Overlord never uses C_Club clubs there.
 -- Transport is the faction channel, the group, and the Battle.net relay bridges.
 Overlord.CommunityModeEnabled = false
@@ -5152,7 +5152,7 @@ function Overlord:SanitizeCorruptDominationBuckets()
 end
 
 local function GetDominationScoreSeq()
-    return math.floor((time and time() or 0) / DOMINATION_INTERVAL)
+    return math.floor(((GetServerTime and GetServerTime()) or (time and time()) or 0) / DOMINATION_INTERVAL)
 end
 
 local function GetDominationScoreSource()

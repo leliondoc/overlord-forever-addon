@@ -51,8 +51,13 @@ test("TOC Forever 16001 and CurseForge 1701204", () => {
     const hofUi = readFileSync(new URL("../HallOfFameUI.lua", import.meta.url), "utf8");
     assert.match(hof, /id = "donors"/);
     assert.match(hof, /Overlord\.DonorHonorEntries/);
-    assert.doesNotMatch(hof, /PlayerHonorEntries|GuildHonorSites|HOF_CAT_GUILD|HOF_CAT_LIFETIME/);
-    assert.match(hofUi, /local selectedCategory = "donors"/);
+    // Weekly champions (top 5 players and guilds by faction) are display-only:
+    // no Retail map honor sites and no lifetime feats on Forever.
+    assert.match(hof, /Overlord\.WeeklyChampionEntries/);
+    assert.match(hof, /id = "alliance"/);
+    assert.match(hof, /id = "horde"/);
+    assert.doesNotMatch(hof, /PlayerHonorEntries|GuildHonorSites|HOF_CAT_LIFETIME/);
+    assert.match(hofUi, /local selectedCategory = "player"/);
 });
 
 test("Outposts cover six fronts and three open-world sites", () => {

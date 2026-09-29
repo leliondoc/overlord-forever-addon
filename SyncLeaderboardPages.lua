@@ -248,15 +248,24 @@ request = function(state, retry)
             if pull == state and state.seq == seq then state.waitingForSend = nil end
         end })
     -- Two relay TTLs plus margin also cover a congested first request/reply.
-    local remaining = state.supported and 180 or 270
+    -- A peer that already answered pages in this pull and then goes silent has
+    -- most likely left or zoned in: give up sooner (rows already merged stay).
+    local answered = state.completed > 0 or state.replySeen
+    local remaining = state.supported and (answered and 90 or 180) or 270
     state.timeoutRemaining = remaining
     -- The first request can be admitted locally yet disappear in a relay, or
     -- arrive while the responder is briefly busy. Probe with the exact same
     -- frozen request. Active watchdog time keeps probes spaced across combat.
     local nextProbeAt, probesSent = 90, 0
+    local seenFragmentAt = state.fragmentAt
     local function timeout()
         if pull ~= state or state.seq ~= seq or state.tries ~= tries or state.applying then return end
         if state.epoch ~= epoch() then finish(state, false); return end
+        -- Une page qui arrive encore fragment par fragment n'est pas muette.
+        if state.fragmentAt ~= seenFragmentAt then
+            seenFragmentAt = state.fragmentAt
+            if state.supported and remaining < 90 then remaining = 90 end
+        end
         if not paused() then remaining = remaining - 2 end
         state.timeoutRemaining = remaining
         if tries == 1 and not state.supported and not state.replySeen
@@ -275,7 +284,7 @@ request = function(state, retry)
             end
         end
         if remaining > 0 then C_Timer.After(2, timeout); return end
-        if state.supported and state.tries < 3 then
+        if state.supported and state.tries < (answered and 2 or 3) then
             stats.retries = stats.retries + 1
             request(state, true)
         else finish(state, false, not state.supported) end
@@ -635,6 +644,7 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
     else return end
     state.supported, state.channel = true, channel
     state.replySeen = true
+    state.fragmentAt = GetTime()
     state.context = Overlord.BetaNetwork and Overlord.BetaNetwork.context or nil
     tryApply(state)
 end

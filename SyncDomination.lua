@@ -114,7 +114,15 @@ function Overlord.Sync:BuildDominationPayload(frontId, bucket)
     -- hebdomadaire, donc tous les clients a jour d'une meme region convergent sans ambiguite de jour.
     local epoch = (Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs())
         or (OverlordDB and tonumber(OverlordDB.lastResetTimestamp)) or 0
-    local currentSeq = math.floor((time and time() or 0) / DM_SCORE_INTERVAL)
+    -- Notre reset hebdo n'est pas encore passe : ces totaux sont ceux de la semaine
+    -- precedente. Les etiqueter avec l'epoch de la nouvelle empoisonnait la barre de
+    -- tous les clients deja resets pour toute la semaine (max-register).
+    local lastReset = OverlordDB and tonumber(OverlordDB.lastResetTimestamp) or 0
+    if lastReset > 0 and epoch > 0 and Overlord.CampaignEpochsMatch
+        and not Overlord:CampaignEpochsMatch(lastReset, epoch) then
+        return nil
+    end
+    local currentSeq = math.floor(((GetServerTime and GetServerTime()) or (time and time()) or 0) / DM_SCORE_INTERVAL)
     local seq = math.floor(tonumber(bucket.scoreSeq) or 0)
     if seq <= 0 or seq > currentSeq + 1 then seq = currentSeq end
     local source = tostring(bucket.scoreSource or "")
@@ -221,7 +229,7 @@ local function MaxPlausibleDominationTotal(front, campaignEpoch)
     for _ in pairs(front.zones) do zoneCount = zoneCount + 1 end
     if zoneCount <= 0 then return 0 end
     local elapsed = math.max(0, math.min(
-        DM_SECONDS_PER_WEEK, (time and time() or 0) - campaignEpoch + 300))
+        DM_SECONDS_PER_WEEK, ((GetServerTime and GetServerTime()) or (time and time()) or 0) - campaignEpoch + 300))
     -- Le socle territorial vaut zoneCount * secondes. Les bonus bois de 1 % se
     -- composent sur le total multi-front ; x64 couvre plus de 400 depenses sans
     -- rejeter une campagne legitime, tout en gardant le plafond absolu a 50 M.
@@ -250,7 +258,7 @@ function Overlord.Sync:OnReceiveDomination(payload, sender, sourceChannel)
     local remoteEpoch = tonumber(epochStr)
     if not IsCurrentSyncCampaignEpoch(remoteEpoch) then return end
     local remoteSeq = math.floor(tonumber(seqStr) or 0)
-    local currentSeq = math.floor((time and time() or 0) / DM_SCORE_INTERVAL)
+    local currentSeq = math.floor(((GetServerTime and GetServerTime()) or (time and time()) or 0) / DM_SCORE_INTERVAL)
     local campaignFirstSeq = math.floor(remoteEpoch / DM_SCORE_INTERVAL) - 1
     if remoteSeq < campaignFirstSeq or remoteSeq > currentSeq + 1 then return end
     local remoteSource = tostring(sourceStr or sender or "")

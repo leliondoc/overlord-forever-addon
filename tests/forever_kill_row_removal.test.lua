@@ -19,12 +19,12 @@ OverlordDB.leaderboardSnapshot = {
 OverlordDB.leaderboardScoreSanitizeVersion = 3
 lb:EnsureLegacyScoreSanitized()
 local attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 6 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 7 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Score cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
 end
-assert(OverlordDB.leaderboardScoreSanitizeVersion == 6, "Score cleanup did not commit")
+assert(OverlordDB.leaderboardScoreSanitizeVersion == 7, "Score cleanup did not commit")
 assert(lb.kills[name] == nil, "Existing score was not removed")
 assert(OverlordDB.leaderboardsByPool.global.kills[name] == nil,
     "Pooled score was not removed")
@@ -53,7 +53,7 @@ assert(hasForgedGuild(), "Fixture did not place the forged guild in the guild co
 OverlordDB.leaderboardScoreSanitizeVersion = 4
 lb:EnsureLegacyScoreSanitized()
 attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 6 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 7 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Forged row cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
@@ -83,12 +83,12 @@ assert(not sync:IsDeniedKillContributor("Unrelated Player"), "Another player's s
 -- already stored it must purge it through the bumped sanitize version.
 local burst = "Ender Zero"
 assert(sync:IsDeniedKillContributor(burst), "Burst row is not excluded this week")
-assert(not sync:IsDeniedKillContributor("Enderhero Enderhero"), "Removal leaked to another character")
+assert(not sync:IsDeniedKillContributor("Enderhero Zeroth"), "Removal leaked to another character")
 lb.kills[burst] = 5000
 OverlordDB.leaderboardScoreSanitizeVersion = 5
 lb:EnsureLegacyScoreSanitized()
 attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 6 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 7 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Burst row cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
@@ -96,4 +96,21 @@ end
 assert(lb.kills[burst] == nil, "Existing burst score was not removed on upgrade")
 lb:SetPlayerKills(burst, 5000, true)
 assert(lb.kills[burst] == nil, "An old peer relayed the burst score back")
+
+-- Same player, main character, 4999 HK the same day. Clients already cleaned at
+-- version 6 (1.1.9) must purge it again when upgrading to version 7.
+local main = "Enderhero Enderhero"
+assert(sync:IsDeniedKillContributor(main), "Main character row is not excluded this week")
+lb.kills[main] = 4999
+OverlordDB.leaderboardScoreSanitizeVersion = 6
+lb:EnsureLegacyScoreSanitized()
+attempts = 0
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 7 and #timers > 0 do
+    attempts = attempts + 1
+    assert(attempts < 20, "Main row cleanup did not finish within its bounded slices")
+    table.remove(timers, 1)()
+end
+assert(lb.kills[main] == nil, "Version 6 clients kept the forged main-character row")
+lb:SetPlayerKills(main, 4999, true)
+assert(lb.kills[main] == nil, "An old peer relayed the main-character score back")
 print("Forever kill-row removal: current-week purge, stale relay rejection, next-week expiry OK")

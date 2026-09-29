@@ -733,11 +733,16 @@ function Overlord.Sync:RetryPendingVictoryBonusForVictory()
                 pendingVictoryBonuses[row.key] = nil
                 local accepted = self:OnReceiveVictoryBonus(
                     pending.payload, pending.sender, pending.sourceChannel)
-                if not (accepted and accepted[pending.rawId])
-                    and pendingVictoryBonuses[row.key] == nil then
+                if not (accepted and accepted[pending.rawId]) then
                     -- DX may still be missing, so totalAtApply is not yet
-                    -- plausible. Keep the original expiry until DX arrives.
-                    pendingVictoryBonuses[row.key] = pending
+                    -- plausible. Keep the original expiry until DX arrives,
+                    -- including when the replay re-queued the same event.
+                    local requeued = pendingVictoryBonuses[row.key]
+                    if requeued == nil then
+                        pendingVictoryBonuses[row.key] = pending
+                    else
+                        requeued.at = math.min(requeued.at, pending.at)
+                    end
                 end
             end
         end
@@ -1018,6 +1023,11 @@ function Overlord.Sync:OnReceiveVictoryBonus(payload, sender, sourceChannel)
             if ok then
                 accepted[BuildVictoryRawEventId(ev)] = true
                 if reason ~= "duplicate" then changed = true end
+            elseif reason == "implausible_total" and (transportEvidence or localEvidence) then
+                -- Preuve deja la, mais notre total DX est en retard : garder le VB
+                -- en attente. Le prochain DX le rejoue (RetryPendingVictoryBonuses
+                -- AfterDomination) au lieu de le perdre jusqu'au replay de 15 min.
+                QueuePendingVictoryBonus(ev, payload, sender, sourceChannel)
             end
         elseif self.IsDominationChannelSenderVerified
             and self:IsDominationChannelSenderVerified(sender or "") then

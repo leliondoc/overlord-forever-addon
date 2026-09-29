@@ -88,6 +88,10 @@ jobs:
           lua5.1 tests/forever_us_reset.test.lua
           lua5.1 tests/forever_kill_row_removal.test.lua
           lua5.1 tests/forever_stale_week_relabel.test.lua
+          lua5.1 tests/forever_catchup_peer_choice.test.lua
+          lua5.1 tests/forever_domination_pending_vb.test.lua
+          lua5.1 tests/forever_zone_partial_merge.test.lua
+          lua5.1 tests/forever_relay_za_lost_batch.test.lua
           lua5.1 tests/forever_resource_maps.test.lua
           lua5.1 tests/forever_capture_locations.test.lua
           lua5.1 tests/forever_silverpine_outpost.test.lua

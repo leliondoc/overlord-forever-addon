@@ -25,6 +25,15 @@ sync:OnReceiveDomination(dx, "Bridge Tester", "BETA")
 assert(bucket.Alliance == 600 and bucket.Horde == 400, "DX replay added duplicate time")
 net.context = nil
 
+-- A client whose own weekly reset has not run yet holds last week's totals: it
+-- must not stamp them with the new campaign epoch (that poisoned reset clients).
+local savedReset = OverlordDB.lastResetTimestamp
+OverlordDB.lastResetTimestamp = campaign - 604800
+assert(sync:BuildDominationPayload(frontId, source) == nil,
+    "A client not yet reset emitted last week's domination as the new week")
+OverlordDB.lastResetTimestamp = savedReset
+assert(sync:BuildDominationPayload(frontId, source), "Reset client lost its DX")
+
 -- VB carries a durable event. A late joiner with the victory proof applies it;
 -- a duplicate copy leaves the bonus unchanged.
 local victoryTs = time() - 100

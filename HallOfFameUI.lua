@@ -10,7 +10,7 @@ local recentCards = {}
 local progressBars = {}
 local categoryFrames = {}
 
-local selectedCategory = "donors"
+local selectedCategory = "player"
 local searchText = ""
 local achUILoaded = false
 
@@ -912,7 +912,7 @@ function Overlord.HallOfFameUI:Refresh()
 end
 
 local function OnCategorySelected(categoryId)
-    selectedCategory = categoryId or "donors"
+    selectedCategory = categoryId or "player"
     Overlord.HallOfFameUI:Refresh()
 end
 
@@ -1149,7 +1149,7 @@ function Overlord.HallOfFameUI:CreateFrame()
     end)
     hofFrame:EnableKeyboard(true)
 
-    selectedCategory = "donors"
+    selectedCategory = "player"
     searchText = ""
     UpdateCategoryButtons()
     hofFrame:Hide()

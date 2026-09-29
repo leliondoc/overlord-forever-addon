@@ -224,14 +224,48 @@ local function countKind(kind, field, amount)
     local row = kindRow(kind)
     if row then row[field] = row[field] + (amount or 1) end
 end
+-- Instantane ZA relaye pour un autre : le destinataire jette tout le lot s'il
+-- manque une page. Une fois une page refusee ici, les suivantes du meme lot ne
+-- servent plus a rien en aval ; les refuser d'emblee rend leur budget aux autres.
+-- Jamais pour nos propres lots (#path == 1) : le ticker SR local les relance.
+local lostZaBatches, lostZaBatchCount = {}, 0
+local LOST_ZA_BATCH_SEC = 60
+local function forwardedZaBatchKey(p)
+    if p.kind ~= "ZA" or type(p.path) ~= "table" or #p.path < 2
+        or type(p.payload) ~= "string" then return nil end
+    local id = p.payload:match("^@([%w_-]+):%d+:%d+|")
+    -- The target is part of the batch: the same page ids fan out to several
+    -- recipients, and a refusal for one of them says nothing about the others.
+    return id and (tostring(p.path[1]):lower() .. "|" .. tostring(p.target or "*"):lower()
+        .. "|" .. id) or nil
+end
+local function markZaBatchLost(p)
+    local key = forwardedZaBatchKey(p)
+    if not key then return end
+    local lostAt = lostZaBatches[key]
+    -- Only the first refusal starts the window: blocked pages must not extend it.
+    if lostAt and GetTime() - lostAt < LOST_ZA_BATCH_SEC then return end
+    if not lostAt then
+        if lostZaBatchCount >= 256 then lostZaBatches, lostZaBatchCount = {}, 0 end
+        lostZaBatchCount = lostZaBatchCount + 1
+    end
+    lostZaBatches[key] = GetTime()
+end
+local function isZaBatchLost(p)
+    local key = forwardedZaBatchKey(p)
+    local lostAt = key and lostZaBatches[key]
+    return lostAt ~= nil and GetTime() - lostAt < LOST_ZA_BATCH_SEC
+end
 local function rejectAdmission(p)
     net.stats.dropped = net.stats.dropped + 1
     local field = p.path and #p.path > 1 and "relayRejected" or "localRejected"
     net.stats[field] = (net.stats[field] or 0) + 1
     countKind(p.kind, "dropped")
+    markZaBatchLost(p)
     return false
 end
 local function rejectNoTask(p, reason)
+    markZaBatchLost(p)
     net.stats.dropped = net.stats.dropped + 1
     local side = p.path and #p.path > 1 and "forward" or "local"
     local category = reason == "loop" and "Loop"
@@ -470,6 +504,14 @@ function net:GetPeerHops(name)
     local row = key and self.peers[key:lower()]
     if not row or GetTime() - row.at > 300 then return nil end
     return tonumber(row.hops)
+end
+-- Secondes depuis le dernier paquet de ce pair (nil si inconnu ou perime).
+function net:GetPeerAge(name)
+    local key = canonical(name)
+    local row = key and self.peers[key:lower()]
+    local age = row and GetTime() - row.at
+    if not age or age > 300 then return nil end
+    return age
 end
 function net:GetPeerPagedProtocol(name)
     local key = canonical(name)
@@ -719,6 +761,10 @@ local function emit(task)
 end
 function net:Queue(p, immediate)
     if not p or not allowed[p.kind] then return false end
+    if isZaBatchLost(p) then
+        self.stats.zaBatchSkipped = (self.stats.zaBatchSkipped or 0) + 1
+        return rejectAdmission(p)
+    end
     local urgent = isUrgent(p)
     local catchup = isCatchup(p)
     local mapCatchup = catchup and isMapCatchup(p)
@@ -1122,7 +1168,11 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         if not self.pullWindow or now - self.pullWindow >= 60 then self.pullWindow, self.pulls = now, 0 end
         self.requested = self.requested or {}
         local last = self.requested[origin:lower()] or -300
-        if self.pulls < 2 and now - last >= 300 then
+        -- A complete global map arrived moments ago: another full map pulled just
+        -- because a new peer spoke would only repeat it. Periodic and login map
+        -- catch-ups are unchanged.
+        local recentFullMap = sync._lastFullZaAt and now - sync._lastFullZaAt < 45
+        if self.pulls < 2 and now - last >= 300 and not recentFullMap then
             self.pulls = self.pulls + 1
             -- Bound this cache by the same live peer population.
             self.requested = self.requested or {}

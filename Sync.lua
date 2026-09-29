@@ -854,6 +854,12 @@ end
 -- Ces essais courts couvrent le chargement progressif des transports ;
 -- le dedup communautaire evite de re-whisper les memes joueurs.
 function Overlord.Sync:StartLoginCaptureSyncBurst()
+    -- Sans communaute, le rattrapage periodique de carte n'etait arme qu'a la fin
+    -- de la gate login : une premiere ZA qui la fermait en moins d'une seconde le
+    -- laissait eteint toute la session. Idempotent (drapeau _mapCatchupArmed).
+    if Overlord.CommunityModeEnabled == false and self.SchedulePeriodicMapCatchup then
+        self:SchedulePeriodicMapCatchup()
+    end
     self._loginCaptureSyncBurstGeneration =
         (tonumber(self._loginCaptureSyncBurstGeneration) or 0) + 1
     local generation = self._loginCaptureSyncBurstGeneration
@@ -7855,6 +7861,10 @@ function Overlord.Sync:OnReceiveZoneAll(
     local runtimeGlobalRepairMode = false
     local loginPairApplyMask = {}
     local preserveRemoteLeaseMask = {}
+    -- Entree seulement plus ancienne que l'etat local : on l'ecarte au lieu de
+    -- rejeter tout le lot. Deux clients qui ont chacun rate une capture differente
+    -- se bloquaient sinon indefiniment. La vue finale garde l'owner local.
+    local staleSkipMask = {}
     local expectedGlobalZoneIds = {}
     local expectedGlobalZoneCount = 0
     if snapshotGlobal then
@@ -7877,9 +7887,13 @@ function Overlord.Sync:OnReceiveZoneAll(
         local validEntry = ts and ts > 0 and validOwnerCode and knownZone
             and not (ownerCode == "N"
                 and Overlord.Zones:GetBaseZoneFixedOwner(zoneId) ~= nil)
-            and not (ownerCode == "N"
-                and not CanNeutralZaReplaceCanonicalCapture(
-                    zoneId, stateZoneForVote, ts))
+        -- Un N non prouve face a une capture locale vient le plus souvent d'un
+        -- emetteur qui n'a jamais appris cette capture : l'ecarter (jamais
+        -- l'appliquer) au lieu de rejeter tout le lot et ses zones fraiches.
+        if validEntry and ownerCode == "N"
+            and not CanNeutralZaReplaceCanonicalCapture(zoneId, stateZoneForVote, ts) then
+            staleSkipMask[entryIndex] = true
+        end
         if validEntry then
             validEntry = not IsStaleCampaignTimestamp(ts)
                 and not ShouldRejectStaleTruceResetZone(zoneId, ts)
@@ -8013,36 +8027,32 @@ function Overlord.Sync:OnReceiveZoneAll(
                 loginPairApplyMask[entryIndex] = true
             end
 
+            local staleEntry = false
             if not skipPairMutation and ownerCode == "N" then
                 local neutralIdempotent = not stateZone.owner
                     and ts >= localCanonicalTs and stateZone.status ~= "in_progress"
                 local neutralCanApply = stateZone.status ~= "in_progress"
                     and ts > localCanonicalTs
-                if not neutralIdempotent and not neutralCanApply then
-                    snapshotConsensusComplete = false
-                    break
-                end
+                staleEntry = not neutralIdempotent and not neutralCanApply
             elseif not skipPairMutation and stateZone.status == "in_progress" then
                 -- La branche de commit ne promeut un timer observe qu'avec une
                 -- capturedTime strictement plus recente.
-                if ct <= localCapturedAt or ts <= localCanonicalTs then
-                    snapshotConsensusComplete = false
-                    break
-                end
+                staleEntry = ct <= localCapturedAt or ts <= localCanonicalTs
             elseif not skipPairMutation and stateZone.owner
                 and stateZone.owner ~= owner and not stateUnconfirmed then
                 local captureWins = ct > 0 and (localCapturedAt <= 0
                     or ct > localCapturedAt
                     or (ct == localCapturedAt
                         and self:DeterministicCaptureTieOwner(zoneId, ct) == owner))
-                if not captureWins or (localCapturedAt <= 0 and ts < localCanonicalTs) then
-                    snapshotConsensusComplete = false
-                    break
-                end
+                staleEntry = not captureWins or (localCapturedAt <= 0 and ts < localCanonicalTs)
             elseif not skipPairMutation and not stateZone.owner and not stateUnconfirmed
                 and ts < localCanonicalTs then
-                snapshotConsensusComplete = false
-                break
+                staleEntry = true
+            end
+            if staleEntry or staleSkipMask[entryIndex] then
+                staleSkipMask[entryIndex] = true
+                stagedOwners[zoneId] = stateZone.owner or false
+                stagedEntries[#stagedEntries].owner = stateZone.owner
             end
         end
 
@@ -8132,6 +8142,17 @@ function Overlord.Sync:OnReceiveZoneAll(
     -- Un lot moderne ne touche rien tant que chacune de ses zones n'a pas passe
     -- la validation atomique.
     if snapshotAtomic and not snapshotConsensusComplete then return end
+    -- Carte globale validee : le relais n'a pas besoin de redemander la carte a
+    -- chaque nouveau pair entendu dans la foulee. Une carte rejetee, ou dont chaque
+    -- zone etait plus ancienne que la notre, ne compte pas.
+    if snapshotGlobal then
+        for entryIndex = 1, #entries do
+            if not staleSkipMask[entryIndex] then
+                self._lastFullZaAt = GetTime()
+                break
+            end
+        end
+    end
 
     -- Au moins une zone avec owner : rejeter les ts d'ancienne campagne (bloc dominated, localTs==0)
     local hasAnyLocalData = false
@@ -8146,6 +8167,7 @@ function Overlord.Sync:OnReceiveZoneAll(
         local zaEntryAccepted = zaClaimVerified
             and (not loginPairRepairMode or loginPairApplyMask[entryIndex] == true)
             and not preserveRemoteLeaseMask[entryIndex]
+            and not staleSkipMask[entryIndex]
         if zaClaimVerified and preserveRemoteLeaseMask[entryIndex] then
             -- Le plan reste detache jusqu'a la fin des autres commits, dont les
             -- chemins login historiques peuvent encore refuser une application.
@@ -9256,7 +9278,11 @@ function Overlord.Sync:BroadcastCapture(zoneId, completedRequirement)
         C_Timer.After(6, retryFinalCaptureState)
 
         -- Relais communaute retarde (toutes zones) : cross-realm/RP sans C recu au premier envoi.
-        C_Timer.After(1.5, function()
+        -- Au-dela de la fenetre anti-doublon du relais (2 s) : a 1,5 s la reprise etait
+        -- absorbee et un C perdu sur le relais n'atteignait jamais l'autre faction.
+        -- Les recepteurs dedupliquent deja le C (10 s). Une seule reprise : le relais
+        -- copie aussi le C sur le canal, deja limite par Blizzard.
+        C_Timer.After(2.5, function()
             if not Overlord.InstanceSuspended and Overlord.Sync then
                 retryCaptureToCommunity()
             end

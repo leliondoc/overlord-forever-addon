@@ -2138,7 +2138,7 @@ local function ScheduleLocalGuildRosterEnrich(delaySec)
     end)
 end
 
-local LEGACY_SCORE_SANITIZE_VERSION = 6
+local LEGACY_SCORE_SANITIZE_VERSION = 7
 
 -- Migration de securite globale, executee avant Sync mais repartie sur plusieurs
 -- frames. Les SavedVariables visees peuvent justement etre anormalement grosses :

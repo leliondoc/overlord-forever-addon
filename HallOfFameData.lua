@@ -1,13 +1,41 @@
--- HallOfFameData.lua - Donateurs du Hall of Fame.
--- Forever ne reprend que les joueurs qui ont versé de l'or au trésor de guerre.
+-- HallOfFameData.lua - Hall of Fame Forever : champions de la semaine terminee
+-- (top 5 tueurs et top 5 guildes, par faction) et donateurs du tresor de guerre.
+-- Entrees curatees a la main, affichage seulement : aucun reseau, aucun repere carte.
 Overlord = Overlord or {}
 Overlord.HallOfFameData = {}
 
 local L = Overlord.L
 
 Overlord.HallOfFameData.CATEGORIES = {
+    { id = "player", labelKey = "HOF_CAT_PLAYER" },
+    { id = "guild", labelKey = "HOF_CAT_GUILD" },
+    { id = "alliance", labelKey = "HOF_CAT_ALLIANCE" },
+    { id = "horde", labelKey = "HOF_CAT_HORDE" },
     { id = "donors", labelKey = "HOF_CAT_DONORS" },
 }
+
+-- Campagne du 22/09/2026 au 29/09/2026 : top 5 final des tueurs et des guildes.
+Overlord.WeeklyChampionEntries = {
+    { kind = "player", name = "Vaio Flæk", faction = "Alliance", kills = 6017 },
+    { kind = "player", name = "Big Topher", faction = "Alliance", kills = 5000 },
+    { kind = "player", name = "Il Blasfemo", faction = "Horde", kills = 4997 },
+    { kind = "player", name = "Risky Quickie", faction = "Alliance", kills = 4182 },
+    { kind = "player", name = "Imperial Constantius", faction = "Alliance", kills = 3693 },
+    { kind = "guild", name = "EMPIRE", faction = "Alliance", kills = 107659 },
+    { kind = "guild", name = "Elfcore", faction = "Alliance", kills = 47180 },
+    { kind = "guild", name = "Kor Kron Enforcers", faction = "Horde", kills = 15084 },
+    { kind = "guild", name = "jolékip", faction = "Horde", kills = 14454 },
+    { kind = "guild", name = "B I G P P V P", faction = "Alliance", kills = 10919 },
+}
+
+-- Comme sur Retail : nom sans couleur, la faction se lit a l'icone.
+local CHAMPION_ICON = {
+    player = { Alliance = "Interface\\Icons\\Achievement_PVP_A_15",
+        Horde = "Interface\\Icons\\Achievement_PVP_H_15" },
+    guild = { Alliance = "Interface\\Icons\\Achievement_PVP_A_05",
+        Horde = "Interface\\Icons\\Achievement_PVP_H_05" },
+}
+local CHAMPION_POINTS = 10
 
 Overlord.DonorHonorEntries = {
     anadora = {
@@ -143,11 +171,76 @@ local function BuildDonorRows()
     }
 end
 
+local championRows = nil
+
+-- Position dans le classement final de la semaine (joueurs ou guildes).
+local function ChampionSubtitle(kind, rank)
+    local key = kind == "guild" and "HOF_WEEKLY_GUILD_RANK_LINE" or "HOF_WEEKLY_PLAYER_RANK_LINE"
+    local fmt = L and L[key]
+    if type(fmt) ~= "string" or not fmt:find("%d", 1, true) then
+        fmt = kind == "guild" and "Beta, weekly guilds: rank %d" or "Beta, weekly killers: rank %d"
+    end
+    return string.format(fmt, rank)
+end
+
+-- Joueurs puis guildes, chacun par VH decroissantes.
+local function BuildChampionRows()
+    local sorted = {}
+    for _, entry in ipairs(Overlord.WeeklyChampionEntries or {}) do
+        sorted[#sorted + 1] = entry
+    end
+    table.sort(sorted, function(a, b)
+        if a.kind ~= b.kind then return a.kind == "player" end
+        if a.kills ~= b.kills then return a.kills > b.kills end
+        return a.name < b.name
+    end)
+    championRows = {}
+    local rankByKind = {}
+    for i, entry in ipairs(sorted) do
+        rankByKind[entry.kind] = (rankByKind[entry.kind] or 0) + 1
+        local subtitle = ChampionSubtitle(entry.kind, rankByKind[entry.kind])
+        championRows[#championRows + 1] = {
+            kind = entry.kind,
+            data = entry,
+            faction = entry.faction,
+            sortOrder = i,
+            points = CHAMPION_POINTS,
+            title = entry.name,
+            subtitle = subtitle,
+            icon = CHAMPION_ICON[entry.kind] and CHAMPION_ICON[entry.kind][entry.faction]
+                or "Interface\\Icons\\Achievement_PVP_A_15",
+            earned = true,
+            isCurated = true,
+            earnedAt = -i,
+            searchHaystack = (entry.name .. " " .. subtitle .. " "
+                .. tostring(entry.faction)):lower(),
+        }
+    end
+end
+
 local function EnsureRows()
     if not donorRows then
         BuildDonorRows()
     end
     return donorRows
+end
+
+local function EnsureChampionRows()
+    if not championRows then BuildChampionRows() end
+    return championRows
+end
+
+local function ChampionsFor(categoryId)
+    local out = {}
+    for _, row in ipairs(EnsureChampionRows()) do
+        if (categoryId == "player" and row.kind == "player")
+            or (categoryId == "guild" and row.kind == "guild")
+            or (categoryId == "alliance" and row.faction == "Alliance")
+            or (categoryId == "horde" and row.faction == "Horde") then
+            out[#out + 1] = row
+        end
+    end
+    return out
 end
 
 local function FilterRows(rows, searchText)
@@ -167,6 +260,15 @@ end
 
 function Overlord.HallOfFameData:GetHonorView(categoryId, searchText)
     local cache = EnsureRows()
+    if categoryId == "player" or categoryId == "guild"
+        or categoryId == "alliance" or categoryId == "horde" then
+        local rows = FilterRows(ChampionsFor(categoryId), searchText)
+        return {
+            rows = rows,
+            stats = { totalCount = #rows, earnedCount = #rows,
+                totalPoints = #rows * CHAMPION_POINTS, donorCount = 0 },
+        }
+    end
     if categoryId and categoryId ~= "donors" and categoryId ~= "summary" then
         return {
             rows = {},
