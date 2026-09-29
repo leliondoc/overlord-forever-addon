@@ -116,6 +116,7 @@ end
 function methods:CreateFontString() return widget() end
 function methods:CreateTexture() return widget() end
 function methods:SetScript(key, callback) self.scripts[key] = callback end
+function methods:GetScript(key) return self.scripts[key] end
 function methods:HookScript(key, callback)
     local old = self.scripts[key]
     self.scripts[key] = function(...) if old then old(...) end; callback(...) end
@@ -238,4 +239,43 @@ assert(#frame._lbView.byFaction.Alliance == 1 and #frame._lbView.byFaction.Horde
     'Search missed captures outside the old top 25')
 frame.searchClear.scripts.OnClick(); drain()
 assert(pending() == 0 and #frames == captureFrameCount)
-print('Search UI: actual edit box/clear/Escape, bounded frames, original rank, scroll reset, totals, no data reads on typing OK')
+-- Hovering a player row shows the known guild, read from memory (same source as
+-- guild totals), and never sends anything. The mouse wheel still scrolls.
+local tip = { lines = {} }
+function tip:SetOwner(owner) self.owner, self.lines = owner, {} end
+function tip:AddLine(text) self.lines[#self.lines + 1] = text end
+function tip:Show() self.shown = true end
+function tip:Hide() self.shown = false end
+function tip:IsOwned(owner) return self.owner == owner end
+GameTooltip = tip
+local guildLookups = 0
+Overlord.Leaderboard.GetHotPlayerGuildState = function(_, name)
+    guildLookups = guildLookups + 1
+    if name == 'Player 1' then return 'Iron Watch', 0, false end
+    return '', 0, false
+end
+frame.scrollKills:SetVerticalScroll(0); drain()
+local killRow
+for _, w in ipairs(frames) do
+    if w.rank and w.name and w.kills and w:IsShown() and w._olPlayerName == 'Player 1' then killRow = w end
+end
+assert(killRow and killRow.scripts.OnEnter, 'Player row has no hover handler')
+killRow.scripts.OnEnter(killRow)
+assert(tip.shown and tip.owner == killRow and tip.lines[1] == 'Player 1', 'Hover did not name the player')
+assert(tip.lines[2] == 'Guild: Iron Watch', 'Hover did not show the guild: ' .. tostring(tip.lines[2]))
+local otherRow
+for _, w in ipairs(frames) do
+    if w.rank and w.kills and w:IsShown() and w._olPlayerName and w._olPlayerName ~= 'Player 1' then otherRow = w; break end
+end
+otherRow.scripts.OnEnter(otherRow)
+assert(tip.lines[2] == 'Guild unknown', 'Unknown guild was not stated')
+-- Wheel on a row scrolls the ranking, and a reused row refreshes its open tooltip.
+killRow.scripts.OnEnter(killRow)
+local lookupsBefore = guildLookups
+killRow.scripts.OnMouseWheel(killRow, -1); drain()
+assert(frame.scrollKills:GetVerticalScroll() > 0, 'Mouse wheel over a row no longer scrolls')
+if killRow._olPlayerName ~= 'Player 1' then
+    assert(guildLookups > lookupsBefore and tip.lines[1] ~= 'Player 1',
+        'Tooltip kept the previous player after the row was reused')
+end
+print('Search UI: actual edit box/clear/Escape, bounded frames, original rank, scroll reset, totals, no data reads on typing, guild hover OK')

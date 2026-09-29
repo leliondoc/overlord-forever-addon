@@ -1,4 +1,8 @@
-1.1.7
+1.1.8
+
+**Overlord Forever 1.1.8**
+
+- Hovering a player in the leaderboard shows their known guild (or "Guild unknown"), from the same data as the guild standings. No network traffic; the mouse wheel still scrolls the ranking and the tooltip follows the row while scrolling.
 
 **Overlord Forever 1.1.7**
 

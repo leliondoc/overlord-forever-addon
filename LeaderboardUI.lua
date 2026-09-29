@@ -1489,6 +1489,41 @@ function Overlord.LeaderboardUI:EnsureCaptureRows(faction, count)
     end
 end
 
+-- Survol d'une ligne de joueur : guilde connue, lue en memoire (meme source que
+-- les totaux de guilde). Aucun message reseau, travail uniquement a l'entree.
+function Overlord.LeaderboardUI.OnKillRowEnter(row)
+    local name = row and row._olPlayerName
+    if not name or not GameTooltip then return end
+    GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+    local r, g, b = 1, 1, 1
+    if row.name and row.name.GetTextColor then r, g, b = row.name:GetTextColor() end
+    GameTooltip:AddLine(row._olDisplayName or name, r or 1, g or 1, b or 1)
+    local lb = Overlord.Leaderboard
+    local guild = ""
+    if lb and lb.GetHotPlayerGuildState then
+        guild = lb:GetHotPlayerGuildState(name) or ""
+    elseif lb and lb.GetPlayerInfo then
+        local info = lb:GetPlayerInfo(name)
+        guild = info and info.guild or ""
+    end
+    if guild ~= "" then
+        GameTooltip:AddLine(string.format(L.LB_ROW_GUILD or "Guild: %s", guild), 0.4, 1, 0.4)
+    else
+        GameTooltip:AddLine(L.LB_ROW_NO_GUILD or "Guild unknown", 0.6, 0.6, 0.6)
+    end
+    if L.LB_KILLS_SCROLL_TOOLTIP then
+        GameTooltip:AddLine(L.LB_KILLS_SCROLL_TOOLTIP, 0.6, 0.6, 0.6, true)
+    end
+    GameTooltip:Show()
+end
+
+-- La ligne capte la souris pour le survol : la molette reste au classement.
+function Overlord.LeaderboardUI.OnKillRowWheel(_, delta)
+    local scroll = lbFrame and lbFrame.scrollKills
+    local handler = scroll and scroll:GetScript("OnMouseWheel")
+    if handler then handler(scroll, delta) end
+end
+
 function Overlord.LeaderboardUI:CreateRow(parent, index, yOffset, P)
     local row = CreateFrame("Frame", nil, parent)
     row:SetSize(LB_MAIN_W, KILL_ROW_HEIGHT)
@@ -1536,6 +1571,12 @@ function Overlord.LeaderboardUI:CreateRow(parent, index, yOffset, P)
     row.kills:SetPoint("CENTER", row, "LEFT", killCols.kills.center, 0)
     row.kills:SetWidth(killCols.kills.width)
     row.kills:SetJustifyH("CENTER")
+
+    row:EnableMouse(true)
+    row:SetScript("OnEnter", Overlord.LeaderboardUI.OnKillRowEnter)
+    row:SetScript("OnLeave", GameTooltip_Hide)
+    row:EnableMouseWheel(true)
+    row:SetScript("OnMouseWheel", Overlord.LeaderboardUI.OnKillRowWheel)
 
     row:Hide()
     return row
@@ -1804,6 +1845,15 @@ RenderKillRows = function(force)
                 and Overlord.Sync:CanonicalForeverName(nameStr)) or nameStr
             local locTag = localeCache[entry.name]
             if locTag and locTag ~= "" then shortName = shortName .. " (" .. locTag .. ")" end
+            -- Lignes virtuelles reutilisees au defilement : le survol suit le joueur affiche.
+            if row._olPlayerName ~= entry.name then
+                row._olPlayerName, row._olDisplayName = entry.name, shortName
+                if GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(row) then
+                    Overlord.LeaderboardUI.OnKillRowEnter(row)
+                end
+            else
+                row._olDisplayName = shortName
+            end
             local bountyActive = (Overlord.Bounty and Overlord.Bounty.IsActiveBountyForName
                 and Overlord.Bounty:IsActiveBountyForName(entry.name)) and 1 or 0
             local rank = view.ranks and view.ranks.sortedKills[dataIndex] or dataIndex
