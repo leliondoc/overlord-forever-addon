@@ -22,8 +22,8 @@ test("Forever fronts: seven Classic map campaigns", () => {
     assert.match(fronts, /Zone\("redridge_lakeshire", \{ center = \{25\.0, 43\.0\}/);
     assert.match(fronts, /Zone\("redridge_stonewatch_falls", \{ center = \{75\.0, 67\.0\}/);
     assert.match(fronts, /id = "hillsbrad"/);
-    assert.match(fronts, /Zone\("hillsbrad_southshore", \{ center = \{51\.2, 58\.0\}, radius = 15/);
-    assert.match(fronts, /Zone\("hillsbrad_tarren_mill", \{ center = \{61\.8, 19\.0\}, radius = 15/);
+    assert.match(fronts, /Zone\("hillsbrad_southshore", \{ center = \{51\.2, 58\.0\}, radius = 7.5/);
+    assert.match(fronts, /Zone\("hillsbrad_tarren_mill", \{ center = \{61\.8, 19\.0\}, radius = 7.5/);
     assert.doesNotMatch(fronts, /id = "gilneas"/);
     assert.doesNotMatch(fronts, /id = "southern_barrens"/);
 });
@@ -146,14 +146,26 @@ test("One-shot popups are marked seen when shown", () => {
     assert.match(core, /Overlord\.Popups:PersistSeenFlags\(\)/);
 });
 
-test("Domination credits a local capture and solo ticks", () => {
+test("Domination bar v2 counts events: no zone-time ticker, no DX producer", () => {
     const core = readFileSync(new URL("../Core.lua", import.meta.url), "utf8");
     const aux = readFileSync(new URL("../SyncAux.lua", import.meta.url), "utf8");
-    const zc = readFileSync(new URL("../ZoneControl.lua", import.meta.url), "utf8");
-    assert.match(core, /IsLoginZoneDisplayPending\(state\)/);
-    assert.match(core, /function Overlord:NotifyDominationOwnersChanged/);
-    assert.match(core, /bucketEmpty/);
-    assert.match(aux, /Solo = groupe de 1/);
+    const sync = readFileSync(new URL("../Sync.lua", import.meta.url), "utf8");
+    const res = readFileSync(new URL("../Ressources.lua", import.meta.url), "utf8");
+    const dom = readFileSync(new URL("../SyncDomination.lua", import.meta.url), "utf8");
+    assert.match(dom, /function Overlord:GetDominationBarScore/);
+    assert.match(core, /GetDominationBarScore/);
+    // The 120 s ticker, the initial grant and the passive accumulators are gone.
+    for (const dead of [/StartDominationTicker/, /DominationTick/, /TryDominationInitialGrant/,
+        /AccumulatePassiveDominationForInactiveFronts/, /NotifyDominationOwnersChanged/,
+        /ApplyWoodDominationBonusSeconds/]) {
+        assert.doesNotMatch(core, dead);
+    }
+    assert.doesNotMatch(aux, /ShouldAccumulateDomination|AccumulatePassiveDomination/);
+    // No producer of DX remains: SR queue, passive sync, wood spend, snapshot pushes.
+    assert.doesNotMatch(sync, /type = "DX"|BuildDominationPayload|:BroadcastDomination\(/);
+    assert.doesNotMatch(aux, /:BroadcastDomination\(/);
+    assert.doesNotMatch(res, /BroadcastDomination\(/);
+    assert.doesNotMatch(dom, /SendToChannel\("DX"|BroadcastToCommunity\("DX"/);
     const zones = readFileSync(new URL("../Zones.lua", import.meta.url), "utf8");
     const popups = readFileSync(new URL("../Popups.lua", import.meta.url), "utf8");
     assert.match(popups, /v == true or v == 1/);

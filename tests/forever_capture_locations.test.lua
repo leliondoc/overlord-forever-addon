@@ -105,15 +105,17 @@ for _, a in ipairs(anchors) do
     end
     seen[a[1]] = true
 end
--- The special front's circles must cover the towns and their immediate approaches,
--- while leaving the open ground between them outside both captures.
+-- The special front's circles (halved in 1.1.11) cover the town cores, while
+-- the former outer ring and the open ground between them stay outside.
 local hillsbrad = Overlord.Fronts:GetFront("hillsbrad")
 Overlord.Fronts.activeFrontId = hillsbrad.id
 Overlord.ZoneDatabase = hillsbrad.zones
 currentMap = hillsbrad.preferredMapID
 for _, sample in ipairs({
-    {59.0, 58.0, "hillsbrad_southshore"},
-    {69.0, 19.0, "hillsbrad_tarren_mill"},
+    {54.5, 58.0, "hillsbrad_southshore"},
+    {64.5, 19.0, "hillsbrad_tarren_mill"},
+    {59.0, 58.0, nil},
+    {69.0, 19.0, nil},
     {56.0, 39.0, nil},
 }) do
     now, x, y = now + 1, sample[1], sample[2]

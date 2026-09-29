@@ -7,7 +7,7 @@ local sync = addon.Sync
 local net = { peers = {}, stats = { sent = 0, received = 0, dropped = 0 } }
 addon.BetaNetwork = net
 local allowed = {}
-for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR DX VB MN MS WN WS OP OC WB SH HR HB HC HA LD CR CA GR GY GI FC GW GE GP GX GD GM BQ BR PB PK MK PX PP PM"):gmatch("%S+") do
+for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR DX VB MN MS OP OC SH HR HB HC HA LD CR CA GR GY GI FC GW GE GP GX GD GM BQ BR PB PK MK PX PP PM"):gmatch("%S+") do
     allowed[kind] = true
 end
 local MAX_PACKET, MAX_PATH, TTL = 3600, 4, 120
@@ -106,6 +106,14 @@ local function isTerminal(p)
     local status = p.payload:match("^[^:]+:([^:]+):")
     return status == "captured" or status == "available" or status == "locked"
 end
+-- The first in_progress ZS of our own capture is the defenders' early warning. When the urgent lane
+-- is full of forwarded traffic it may take the slot of an unsent presence/progress copy, like a
+-- terminal event (bulk packets were already displaced for it).
+local function isOwnSiegeStart(p)
+    return p.kind == "ZS" and type(p.path) == "table" and #p.path == 1
+        and type(p.payload) == "string"
+        and (tonumber(p.payload:match("^[^:]+:in_progress:[^:]*:(%d+):")) or 999) <= 45
+end
 local urgentLane, bulkLane, catchupLane, stateLane =
     { items = {}, head = 1 }, { items = {}, head = 1 },
     { items = {}, head = 1 }, { items = {}, head = 1 }
@@ -152,6 +160,8 @@ local function laneFor(p)
     return isCatchup(p) and catchupLane
         or (isReplicatedState(p) and stateLane or (isUrgent(p) and urgentLane or bulkLane))
 end
+-- Local content coverage (see the block above tasksFor).
+local dedup = { records = {}, order = {} }
 local function reclaimablePresenceCount()
     local count = 0
     for i = urgentLane.head, #urgentLane.items do
@@ -282,6 +292,7 @@ local function dropWaitingForUrgent()
         local item = bulkLane.items[i]
         if item and item.index == 1 then
             table.remove(bulkLane.items, i)
+            dedup.abandon(item.tasks)
             countKind(item.p and item.p.kind, "dropped")
             return true
         end
@@ -333,6 +344,7 @@ local function dropWaitingForState()
         local item = bulkLane.items[i]
         if item and item.index == 1 and not item.tasks[1].sending then
             table.remove(bulkLane.items, i)
+            dedup.abandon(item.tasks)
             countKind(item.p.kind, "dropped")
             return true
         end
@@ -404,6 +416,23 @@ local NH_FORWARD_SEC = 90
 -- 45 s used to refresh each route six times per TTL for nothing.
 local NH_INTERVAL = 120
 local nhForwarded, nhForwardedOrder = {}, {}
+-- Shard presence (SH) is sent every 60 s by every active-front player and used to be
+-- forwarded by every hop with no filter, each copy taking a channel message plus
+-- group/BNet copies. Same origin-timestamp rule as NH: a hop forwards an origin's SH
+-- only when its timestamp is at least SH_FORWARD_SEC after the last forwarded one, so
+-- far peers still hear each player every ~120 s (shard peer TTL is 180 s). The origin's
+-- own direct copies are unchanged, and it is always handled locally.
+local SH_FORWARD_SEC = 90
+local shForwarded, shForwardedOrder = {}, {}
+-- Relayed presence (NH that already crossed a hop) only keeps routes and the ~lp6
+-- capability alive (both 300 s TTL, refreshed by every relayed packet of the origin).
+-- The origin's own copies keep the full fan-out. A hop forwards to every opposite-faction
+-- bridge plus NH_RELAY_SLOTS rotating friend (was up to 3), and puts it on the realm channel
+-- only for an origin that is not audible there (was every hop and every beat): channel
+-- mates already hear the origins on their channel themselves. An origin reachable only
+-- through a hop keeps one channel copy per forwarded beat: routes live 300 s and must
+-- survive one lost copy.
+local NH_RELAY_SLOTS = 1
 -- A presence capability is only a protocol hint, never proof of an origin's
 -- identity or authority. Generic traffic may refresh a route, but not this TTL.
 local pagedCapabilities, pagedCapabilityOrder = {}, {}
@@ -424,6 +453,9 @@ local function forwardRetryKey(wire)
 end
 local serial = 0
 local session = tostring(time()) .. "-" .. tostring(math.random(1, 2147483646))
+-- Packet dates use Blizzard's shared server clock: a PC clock more than 30 s
+-- ahead made every relayed packet from that player invisible to all others.
+local function serverNow() return (GetServerTime and GetServerTime()) or time() end
 local function enabled() return addon.BetaNetworkEnabled ~= false end
 local function active() return enabled() and not addon.InstanceSuspended and not IsInInstance() end
 local function region() return addon.RealmPools:GetOverlordPoolTag() end
@@ -480,7 +512,7 @@ local function decode(wire)
     at = tonumber(at)
     local normalizedPool = addon.RealmPools:NormalizeRegionPool(pool)
     if normalizedPool ~= region() or not id or #id > 64 or not id:match("^[%w%-]+$")
-        or not at or at ~= math.floor(at) or time() - at > TTL or at - time() > 30
+        or not at or at ~= math.floor(at) or serverNow() - at > TTL or at - serverNow() > 30
         or not allowed[kind] or not payload or payload:find("[%c]")
         or (target ~= "*" and canonical(target) ~= target) then return nil end
     local nodes, unique = {}, {}
@@ -588,6 +620,12 @@ function net:GetKindDiagnostics(maxRows)
         self.stats.displaced or 0, self.stats.expired or 0,
         self.stats.bnetAbandoned or 0, self.stats.retryAbandoned or 0,
         self.stats.channelSkipped or 0)
+    -- "dropped" mixes intentional refusals with real losses: break it down.
+    local noRoute = (self.stats.localNoTask or 0) + (self.stats.forwardNoTask or 0)
+    lines[#lines + 1] = string.format("Drops explained: %d copies relayed for others refused by the relay budget (incl. %d pages of already incomplete maps skipped on purpose); %d own messages refused (most are retried); %d evicted and %d expired in the queue; %d without a route.",
+        self.stats.relayRejected or 0, self.stats.zaBatchSkipped or 0,
+        self.stats.localRejected or 0, self.stats.displaced or 0,
+        self.stats.expired or 0, noRoute)
     lines[#lines + 1] = string.format("No forwarding task: local %d (route missing/stale %d, loop %d), forward %d (route missing/stale %d, loop %d); path limit %d.",
         self.stats.localNoTask or 0, self.stats.localNoTaskMissing or 0,
         self.stats.localNoTaskLoop or 0, self.stats.forwardNoTask or 0,
@@ -625,8 +663,108 @@ local function spend(bytes)
     tokens = tokens - bytes
     return true
 end
+-- Local-only content coverage for broadcast content (OP, LO, LOC, VB, TV and the
+-- legacy DX of older clients). Every origin re-broadcasts the same converged
+-- payload, and each copy used to open a complete fan-out here (channel + group +
+-- bridges + 3 rotating friends). Track per content who already has it, from what
+-- this client queued/sent or saw on a path. A later identical copy (another
+-- origin) then
+--   * replaces a rotating slot that would repeat a covered friend by the next
+--     friend that has not got the content yet, so every copy reaches new friends
+--     (this relay never reaches a friend later than before);
+--   * still repeats covered friends/channel/group exactly like before while the
+--     queue is quiet (a lost copy is retried by the next origin as before);
+--   * while the queue is busy, drops only repeats beyond COVER_COPIES per target,
+--     and the whole copy when nothing else is left. Local dispatch and the wire
+--     format are untouched.
+local DEDUP_KINDS = { OP = true, LO = true, LOC = true, VB = true, TV = true, DX = true }
+-- COVER_TTL: how long a sent copy counts. COVER_PENDING: how long a copy still
+-- waiting in the queue counts (an evicted/expired one is voided at once).
+local COVER_TTL, COVER_PENDING, COVER_RECORDS = 60, 20, 128
+-- Copies one target may still receive while busy: an older relay forwards each
+-- copy to three more of its own friends, so a friend with many friends needs more
+-- than one.
+local COVER_COPIES = 2
+function dedup.key(p)
+    if p.target ~= "*" or not DEDUP_KINDS[p.kind] or type(p.payload) ~= "string" then return nil end
+    return p.kind .. "|" .. p.payload
+end
+-- Live copies of this content already sent (or still waiting) to one target.
+function dedup.count(list, now)
+    local n = 0
+    for i = 1, list and #list or 0 do
+        local entry = list[i]
+        -- Entries keep a two-field state shared with the task, never the task itself
+        -- (a task table is ~1 KB and records live up to COVER_TTL).
+        local state = entry.state
+        local live
+        if not state then live = now - entry.at <= COVER_TTL
+        elseif state.sentAt then live = now - state.sentAt <= COVER_TTL
+        else live = not state.gone and now - entry.at <= COVER_PENDING end
+        if live then n = n + (entry.weight or 1) end
+    end
+    return n
+end
+function dedup.add(rec, field, id, entry, now)
+    local group = rec[field]
+    local list = group[id]
+    if not list then list = {}; group[id] = list end
+    if #list >= 4 then
+        local live = {}
+        for i = 1, #list do
+            if dedup.count({ list[i] }, now) > 0 then live[#live + 1] = list[i] end
+        end
+        list = live
+        group[id] = list
+    end
+    list[#list + 1] = entry
+end
+-- Half of the lane reservation is queued: an identical repeat must not take a
+-- slot a fresh packet needs.
+function dedup.busy(p)
+    local lane = laneFor(p)
+    if lane == stateLane then return laneSize(lane) * 2 >= STATE_QUEUE end
+    return laneSize(lane) * 2 >= MAX_QUEUE - CATCHUP_QUEUE - STATE_QUEUE - PAGED_QUEUE
+        or queuedCount() * 4 >= MAX_QUEUE * 3
+end
+-- Called once a packet is accepted (or skipped as fully covered), never for a
+-- refused one: the coverage must describe what is really going to be sent.
+function dedup.commit(tasks)
+    local cover = tasks and tasks.cover
+    if not cover then return end
+    local now = GetTime()
+    local rec = dedup.records[cover.key]
+    if not rec or now - rec.at > COVER_TTL then
+        rec = { at = now, friends = {}, carriers = {} }
+        remember(dedup.records, dedup.order, cover.key, rec, COVER_RECORDS)
+    end
+    -- Friends on the path already hold it: as good as COVER_COPIES copies.
+    for _, id in ipairs(cover.path or {}) do
+        dedup.add(rec, "friends", id, { at = now, weight = COVER_COPIES }, now)
+    end
+    -- One copy per target, whatever the number of fragments.
+    local counted = {}
+    for _, task in ipairs(tasks) do
+        local field, id = "friends", task.covId
+        if id == nil then field, id = "carriers", task.covCarrier end
+        if id ~= nil and not counted[field .. tostring(id)] then
+            counted[field .. tostring(id)] = true
+            local state = task.covState
+            if not state then state = {}; task.covState = state end
+            dedup.add(rec, field, id, { at = now, state = state }, now)
+        end
+    end
+end
+function dedup.abandon(tasks, from)
+    for i = from or 1, #tasks do
+        local task = tasks[i]
+        task.data = nil
+        if task.covState then task.covState.gone = true end
+    end
+end
 local function tasksFor(p, wire)
     local tasks, fragments = {}, {}
+    local ckey, pathFriends, trimmed, coverId, coverCarrier
     local pageVersion = p.payload:sub(1, 2)
     local paged = (p.kind == "HR" or p.kind == "HB" or p.kind == "HA")
         and (pageVersion == "5:" or pageVersion == "6:")
@@ -648,8 +786,11 @@ local function tasksFor(p, wire)
         return tasks, p.target == "*" and "untargeted" or routeFailure
     end
     local function add(transport, data, kind, target, recipient)
-        tasks[#tasks + 1] = { transport = transport, data = data, kind = kind, target = target,
-            bytes = #data + 64, packetKind = p.kind, recipient = recipient }
+        local task = { transport = transport, data = data, kind = kind, target = target,
+            bytes = #data + 64, packetKind = p.kind, recipient = recipient,
+            covId = coverId, covCarrier = coverCarrier }
+        tasks[#tasks + 1] = task
+        return task
     end
     local function bnet(id)
         local _, recipient
@@ -665,10 +806,44 @@ local function tasksFor(p, wire)
         -- The realm channel only carries what Blizzard's ~1 msg/s allows to be useful.
         local channelCopy = not p.skipChannel
             and (not sync.ChannelCarries or sync:ChannelCarries(p.kind, p.payload, #p.path == 1))
-        for _, fragment in ipairs(fragments) do
-            if not p.skipGroup then add("GROUP", fragment, "BF") end
-            if channelCopy then add("CHANNEL", fragment, "BF") end
+        local relayedPresence = p.kind == "NH" and #p.path > 1
+        if channelCopy and relayedPresence then
+            -- An origin we hear ourselves on the channel is heard by every channel mate too.
+            local heard = channelHeard[p.path[1]:lower()]
+            channelCopy = not (heard ~= nil and GetTime() - heard <= 300)
         end
+        -- A presence packet (SH) whose content the channel already carries (we sent it
+        -- directly and Blizzard accepted it, or a peer's identical message was heard there)
+        -- would be one more message on the same ~1 msg/s quota. Decided once per packet when
+        -- its first channel fragment is due (see emit). Alerts and terminal events keep every
+        -- copy: the relay copy is what channel hearers forward to their own friends and
+        -- groups, hence to the other faction. (Separate from the content dedup below, which
+        -- only handles OP/LO/LOC/VB/TV/DX.)
+        local chanCover = channelCopy and not isTerminal(p)
+            and { kind = p.kind, payload = p.payload, origin = p.path[1] } or nil
+        local now, rec, trim, groupAgain, channelAgain = GetTime()
+        ckey = dedup.key(p)
+        if ckey then
+            rec = dedup.records[ckey]
+            pathFriends, trimmed = {}, 0
+            -- Only copies relayed for others are trimmed, never our own broadcast.
+            trim = #p.path > 1 and dedup.busy(p)
+            groupAgain = rec ~= nil and dedup.count(rec.carriers.group, now) >= COVER_COPIES
+            channelAgain = rec ~= nil and dedup.count(rec.carriers.channel, now) >= COVER_COPIES
+        end
+        for _, fragment in ipairs(fragments) do
+            if not p.skipGroup then
+                if trim and groupAgain then trimmed = trimmed + 1
+                elseif not (trim and not IsInGroup()) then coverCarrier = "group"; add("GROUP", fragment, "BF") end
+            end
+            if channelCopy then
+                if trim and channelAgain then trimmed = trimmed + 1
+                elseif not (trim and sync.GetChannelId and not sync:GetChannelId()) then
+                    coverCarrier = "channel"; add("CHANNEL", fragment, "BF").chanCover = chanCover
+                end
+            end
+        end
+        coverCarrier = nil
         -- Opposite-faction friends are the only Horde/Alliance bridges: each packet
         -- reaches all of them (bounded). Same-faction friends already hear it on the
         -- channel and share the remaining rotating slots. Friends already on the path
@@ -683,7 +858,9 @@ local function tasksFor(p, wire)
             if sync.GetBetaBNetTargetInfo then faction, character = sync:GetBetaBNetTargetInfo(id) end
             -- Friend names and path nodes are canonical Forever names.
             local onPath = type(character) == "string" and pathKeys[character:lower()] == true
-            if not onPath then
+            if onPath then
+                if pathFriends then pathFriends[#pathFriends + 1] = id end
+            else
                 if #bridges < MAX_BRIDGE_FRIENDS and (faction == "Alliance" or faction == "Horde")
                     and (myFaction == "Alliance" or myFaction == "Horde") and faction ~= myFaction then
                     bridges[#bridges + 1] = id
@@ -692,11 +869,53 @@ local function tasksFor(p, wire)
                 end
             end
         end
-        for _, id in ipairs(bridges) do bnet(id) end
+        -- Same selection as ever: every bridge, then `slots` rotating friends
+        -- (the cursor advances identically). Coverage only adds substitutes and,
+        -- while busy, removes repeats.
+        local entries, picked = {}, {}
+        for _, id in ipairs(bridges) do entries[#entries + 1] = { id = id } end
         local total, slots = #others, math.max(1, 3 - #bridges)
+        if relayedPresence then slots = NH_RELAY_SLOTS end
         local cursor = net.friendCursor or 0
-        for i = 1, math.min(slots, total) do bnet(others[(cursor + i - 1) % total + 1]) end
+        for i = 1, math.min(slots, total) do
+            local id = others[(cursor + i - 1) % total + 1]
+            picked[id] = true
+            entries[#entries + 1] = { id = id }
+        end
         if total > 0 then net.friendCursor = (cursor + math.min(slots, total)) % total end
+        if rec then
+            local spare = 0
+            for _, entry in ipairs(entries) do
+                local copies = dedup.count(rec.friends[entry.id], now)
+                entry.again = copies >= COVER_COPIES
+                entry.covered = copies >= 1 and picked[entry.id] == true
+                if entry.covered then spare = spare + 1 end
+            end
+            -- A rotating slot that would repeat a covered friend goes to the next
+            -- friend, in rotation order, that has not got this content yet.
+            local first = cursor + math.min(slots, total)
+            local step, swapped = 0, 0
+            while swapped < spare and step < total do
+                local id = others[(first + step) % total + 1]
+                if not picked[id] and dedup.count(rec.friends[id], now) == 0 then
+                    picked[id] = true
+                    entries[#entries + 1] = { id = id }
+                    swapped = swapped + 1
+                end
+                step = step + 1
+            end
+            -- Busy: the covered friend that was replaced is not repeated.
+            for _, entry in ipairs(entries) do
+                if swapped > 0 and entry.covered and trim then
+                    entry.again, swapped = true, swapped - 1
+                end
+            end
+        end
+        for _, entry in ipairs(entries) do
+            if trim and entry.again then trimmed = trimmed + 1
+            else coverId = entry.id; bnet(entry.id) end
+        end
+        coverId = nil
         -- R1 fallback to a known gateway when there is no local broadcast path.
         if sync.FindBridgeForEnemyFaction and sync.GetChannelId and not sync:GetChannelId()
             and not IsInGroup() then
@@ -714,6 +933,12 @@ local function tasksFor(p, wire)
             end
         end
     end
+    if ckey then tasks.cover = { key = ckey, path = pathFriends } end
+    if trimmed and trimmed > 0 then
+        -- Everything this copy would send is already covered and the queue is busy.
+        if #tasks == 0 then return tasks, "redundant" end
+        net.stats.contentDedupTrimmed = (net.stats.contentDedupTrimmed or 0) + trimmed
+    end
     return tasks, #tasks == 0 and (routeFailure or "no_transport") or nil
 end
 local function emit(task)
@@ -723,6 +948,17 @@ local function emit(task)
     -- that is present must, however, retry the same fragment.
     if task.transport == "GROUP" and not IsInGroup() then return true end
     if task.transport == "CHANNEL" and not sync:GetChannelId() then return true end
+    local cover = task.transport == "CHANNEL" and task.chanCover or nil
+    if cover then
+        if cover.skip == nil then
+            cover.skip = sync.ChannelAlreadyCovers ~= nil
+                and sync:ChannelAlreadyCovers(cover.kind, cover.payload, cover.origin) == true
+            if cover.skip then
+                net.stats.channelCoveredSkipped = (net.stats.channelCoveredSkipped or 0) + 1
+            end
+        end
+        if cover.skip then return true end
+    end
     if not spend(task.bytes) then return false end
     task.spent = task.bytes
     task.sending = true
@@ -742,6 +978,7 @@ local function emit(task)
         -- throttling retry here; let catchup rediscover a path instead of
         -- blocking every other peer behind a dead friend for the full TTL.
         if task.transport == "BNET" then
+            if task.covState then task.covState.gone = true end
             net.stats.dropped = net.stats.dropped + 1
             net.stats.bnetAbandoned = (net.stats.bnetAbandoned or 0) + 1
             return true
@@ -754,9 +991,21 @@ local function emit(task)
         if task.deferred then tokens = math.min(500, tokens + task.bytes); task.spent = nil end
         return false
     end
+    -- A sent task is never sent again: release its text; content dedup only needs
+    -- the send time, kept in the small shared state.
+    task.data = nil
+    if task.covState then task.covState.sentAt = GetTime() end
     net.stats.sent = net.stats.sent + 1
     net.stats.bytes = (net.stats.bytes or 0) + task.bytes
     countKind(task.packetKind, "bytes", task.bytes)
+    return true
+end
+-- A relayed copy whose fan-out is entirely covered is not a failure: it is
+-- handled (like a forwarded one) and the coverage of its path is kept.
+local function noTask(p, tasks, reason)
+    if reason ~= "redundant" then return rejectNoTask(p, reason) end
+    dedup.commit(tasks)
+    net.stats.contentDedupSkipped = (net.stats.contentDedupSkipped or 0) + 1
     return true
 end
 function net:Queue(p, immediate)
@@ -816,7 +1065,7 @@ function net:Queue(p, immediate)
             item = { p = p, tasks = tasks, index = 1,
                 protected = mapCatchup or lane == stateLane or isPagedCatchup(p)
                     or (catchup and laneSize(catchupLane) < CATCHUP_QUEUE) }
-            if #item.tasks == 0 then return rejectNoTask(p, reason) end
+            if #item.tasks == 0 then return noTask(p, tasks, reason) end
         end
         -- Full: an urgent packet displaces the oldest waiting bulk packet instead
         -- of being refused. Bulk packets are refused as before.
@@ -830,7 +1079,7 @@ function net:Queue(p, immediate)
                 or MAP_RELAY_BATCH)
                 and dropWaitingForTerminal())
             or (urgent and p.kind ~= "NH" and not catchup and (dropWaitingForUrgent()
-                or (isTerminal(p) and dropWaitingForTerminal())))) then
+                or ((isTerminal(p) or isOwnSiegeStart(p)) and dropWaitingForTerminal())))) then
             return rejectAdmission(p)
         end
         self.stats.dropped = self.stats.dropped + 1
@@ -846,9 +1095,11 @@ function net:Queue(p, immediate)
                 or (catchup and (laneSize(catchupLane) < CATCHUP_QUEUE
                 or (p.kind == "ZA" and mapCatchup and queuedZaCount() < (localMap and MAP_CATCHUP_EXTRA
                     or MAP_RELAY_BATCH)))) }
-        if #item.tasks == 0 then return rejectNoTask(p, reason) end
+        if #item.tasks == 0 then return noTask(p, tasks, reason) end
     end
     if replace then
+        dedup.abandon(previous.tasks)
+        dedup.commit(item.tasks)
         previous.p, previous.tasks = p, item.tasks
         if requestPrevious then
             if mapControl then previous.protected = true end
@@ -864,6 +1115,7 @@ function net:Queue(p, immediate)
     end
     if presenceKey then pendingPresence[presenceKey] = item end
     item.queuedAt = GetTime()
+    dedup.commit(item.tasks)
     countKind(p.kind, "queued")
     -- A lease release may use the currently available budget synchronously before
     -- entering an instance, but never bypasses that budget.
@@ -892,7 +1144,7 @@ pump = function()
     -- Look for useful work behind them without allocating another retry item on
     -- every tick. The queue bounds this scan to at most 128 entries.
     local channelReady = not sync.ChannelTokenReady or sync:ChannelTokenReady()
-    local now = time()
+    local now = serverNow()
     local function readyIndex(lane, predicate)
         local firstReady
         for i = lane.head, #lane.items do
@@ -982,8 +1234,9 @@ pump = function()
     -- The old 10-fragment/s ceiling unnecessarily backed up full snapshots.
     for _ = 1, 16 do
         local task = item.tasks[item.index]
-        if time() - item.p.at > TTL or not task then
+        if serverNow() - item.p.at > TTL or not task then
             if task then
+                dedup.abandon(item.tasks, item.index)
                 countKind(item.p.kind, "dropped")
                 net.stats.expired = (net.stats.expired or 0) + 1
             end
@@ -1083,7 +1336,7 @@ function net:Send(kind, payload, target, immediate)
     local now = GetTime()
     if recent[key] and now - recent[key] < 2 then return true end
     serial = serial + 1
-    local p = { region = region(), id = session .. "-" .. serial, at = time(),
+    local p = { region = region(), id = session .. "-" .. serial, at = serverNow(),
         target = target, path = { name }, kind = kind, payload = payload }
     if not self:Queue(p, immediate) then return false end
     remember(recent, recentOrder, key, now, 512)
@@ -1185,11 +1438,12 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     -- A relayed kill is never credited (only its author's direct copy counts, anti-
     -- forgery since 1.0.19): forwarding it only burned relay and channel budget.
     local forwardPresence = true
-    if p.kind == "NH" then
-        local last = nhForwarded[origin:lower()]
+    if p.kind == "NH" or p.kind == "SH" then
+        local window = p.kind == "NH" and NH_FORWARD_SEC or SH_FORWARD_SEC
+        local last = (p.kind == "NH" and nhForwarded or shForwarded)[origin:lower()]
         local at = tonumber(p.at) or 0
         -- A timestamp going backwards (clock fix, stale copy) never blocks a newer one.
-        forwardPresence = not last or at - last >= NH_FORWARD_SEC or at < last - NH_FORWARD_SEC
+        forwardPresence = not last or at - last >= window or at < last - window
     end
     local forwarded = false
     if p.kind ~= "K" and forwardPresence and #p.path < MAX_PATH and (p.target == "*" or not addressed) then
@@ -1213,6 +1467,8 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
             if pendingForward then remember(seen, seenOrder, key, GetTime(), 2048) end
             if p.kind == "NH" then
                 remember(nhForwarded, nhForwardedOrder, origin:lower(), p.at, 512)
+            elseif p.kind == "SH" then
+                remember(shForwarded, shForwardedOrder, origin:lower(), p.at, 512)
             end
         end
     end
@@ -1257,6 +1513,153 @@ function net:ReceiveFragment(payload, sender, transport, bnetID)
     local p = decode(wire)
     if not p or p.id ~= id then return false end
     return self:Receive(wire, name, transport, bnetID, p)
+end
+-- Same-faction peers reachable by a plain whisper: heard directly (hops == 1) and
+-- recently, on a transport that is same-faction by construction (channel, group,
+-- whisper) or with a known same-faction character (Battle.net friend). Whispers
+-- never cross factions, and a peer routed through a bridge is not one hop away.
+local LOCAL_PEER_FRESH = 200
+function net:GetLocalPeers(exclude)
+    local now, mine, out = GetTime(), addon.PlayerFaction, {}
+    for key, row in pairs(self.peers) do
+        if now - row.at <= LOCAL_PEER_FRESH and tonumber(row.hops) == 1
+            and not (exclude and exclude[key]) then
+            local t = row.transport
+            local direct = t == "CHANNEL" or t == "WHISPER" or t == "RAID" or t == "PARTY"
+            local faction = sync.GetBetaPeerFaction and sync:GetBetaPeerFaction(row.name)
+            if ((faction ~= nil and faction == mine) or (faction == nil and direct))
+                and not (sync.SenderIsInOurGroup and sync:SenderIsInOurGroup(row.name)) then
+                out[#out + 1] = row.name
+            end
+        end
+    end
+    return out
+end
+-- Live-score bridge. An opposite-faction player's live total (K) only reaches that
+-- player's own Battle.net friends: a relayed K is never credited, and channel and
+-- group copies stay on the other faction. The friend that accepted the owner's own
+-- K (hop 0, sender == subject) re-emits that same total as a plain LK row, a form
+-- every client since 1.1.0 accepts for a subject it already knows, to a few
+-- same-faction peers. Bounded: one row per subject per 60 s (newest total wins), at
+-- most 6 rows/min for the whole client, 3 peers per row (least recently served
+-- first). Only totals accepted from the owner's own K are passed on, only when they
+-- grew here, and never a jump larger than 30 kills plus one per second since the
+-- last total this client vouched for.
+local BRIDGE_LK_SUBJECT_GAP, BRIDGE_LK_PER_MIN, BRIDGE_LK_FANOUT = 60, 6, 3
+local BRIDGE_LK_ALLOWANCE, BRIDGE_LK_MAX_ROWS = 30, 256
+local bridgeLK = { rows = {}, order = {}, queue = {}, sent = {}, peerAt = {}, peerOrder = {} }
+local bridgeLKFlush
+function net:EmitBridgeLK(row, payload)
+    local now = GetTime()
+    local candidates = self:GetLocalPeers({ [row.key] = true })
+    -- Spread the load: the peers that got a row from this client longest ago first.
+    for i = #candidates, 2, -1 do
+        local j = math.random(1, i)
+        candidates[i], candidates[j] = candidates[j], candidates[i]
+    end
+    table.sort(candidates, function(a, b)
+        return (bridgeLK.peerAt[a:lower()] or -1) < (bridgeLK.peerAt[b:lower()] or -1)
+    end)
+    local reached = 0
+    for i = 1, math.min(BRIDGE_LK_FANOUT, #candidates) do
+        local name = candidates[i]
+        if sync:SendWhisper("LK", payload, name, true) then
+            remember(bridgeLK.peerAt, bridgeLK.peerOrder, name:lower(), now, 256)
+            bridgeLK.peerAt[name:lower()] = now
+            reached = reached + 1
+        end
+    end
+    if IsInGroup() and sync:SendToGroup("LK", payload) then reached = reached + 1 end
+    self.stats.bridgeLK = (self.stats.bridgeLK or 0) + (reached > 0 and 1 or 0)
+    return reached > 0
+end
+-- One timer chain at most: only its own firing clears `armed`. Direct calls from
+-- NoteOwnerKill flush what is ready now and never start a second chain.
+local function onBridgeLKTimer()
+    bridgeLK.armed = false
+    bridgeLKFlush()
+end
+bridgeLKFlush = function()
+    local now, sent, wait, keep = GetTime(), bridgeLK.sent, math.huge, {}
+    while sent[1] and now - sent[1] >= 60 do table.remove(sent, 1) end
+    for _, key in ipairs(bridgeLK.queue) do
+        local row = bridgeLK.rows[key]
+        if row and row.pending and now - row.pendingAt <= 300 then
+            local ready = (row.sentAt or -math.huge) + BRIDGE_LK_SUBJECT_GAP
+            if not active() then
+                wait = math.min(wait, 10)
+                keep[#keep + 1] = key
+            elseif now < ready then
+                wait = math.min(wait, ready - now)
+                keep[#keep + 1] = key
+            elseif #sent >= BRIDGE_LK_PER_MIN then
+                wait = math.min(wait, sent[1] + 60 - now)
+                keep[#keep + 1] = key
+            else
+                local payload = row.pending
+                if net:EmitBridgeLK(row, payload) then
+                    row.pending, row.sentAt = nil, now
+                    sent[#sent + 1] = now
+                else
+                    -- nobody to tell right now (no fresh peer): try again shortly
+                    wait = math.min(wait, 5)
+                    keep[#keep + 1] = key
+                end
+            end
+        elseif row then
+            row.pending = nil
+        end
+    end
+    bridgeLK.queue = keep
+    if #keep > 0 and not bridgeLK.armed then
+        bridgeLK.armed = true
+        C_Timer.After(math.max(1, math.min(30, wait)), onBridgeLKTimer)
+    end
+end
+-- Called by Sync:OnReceiveKill once the owner's K was accepted (score raised).
+function net:NoteOwnerKill(name, faction, total, before, class, locale, epoch, bucketToken, levelToken)
+    if not active() or type(name) ~= "string" then return false end
+    local c, mine = self.context, addon.PlayerFaction
+    -- Only a K that reached us over Battle.net from its owner: the friend link is
+    -- what makes this client the bridge; channel/group copies are heard by all.
+    if not c or c.transport ~= "BNET" or (tonumber(c.hops) or 0) ~= 0 then return false end
+    if (mine ~= "Alliance" and mine ~= "Horde") or (faction ~= "Alliance" and faction ~= "Horde")
+        or faction == mine then return false end
+    total, before = math.floor(tonumber(total) or 0), math.floor(tonumber(before) or 0)
+    epoch = math.floor(tonumber(epoch) or 0)
+    levelToken, bucketToken, class, locale = tostring(levelToken or ""), tostring(bucketToken or ""),
+        tostring(class or ""), tostring(locale or "")
+    -- A subject this client did not know before, or a total that did not grow, is
+    -- not news: peers only accept rows for subjects they know anyway.
+    if before <= 0 or total <= before or epoch <= 0 then return false end
+    if not levelToken:match("^%d+$") or not bucketToken:match("^B%d+$")
+        or class:find(":", 1, true) or locale:find(":", 1, true) or name:find(":", 1, true) then return false end
+    local now, key = GetTime(), name:lower()
+    local row = bridgeLK.rows[key]
+    if not row then
+        -- First contact: vouch for what this client already held (assumed at most 5
+        -- minutes old). Created before the check so that a refused jump is remembered.
+        remember(bridgeLK.rows, bridgeLK.order, key,
+            { key = key, name = name, trusted = before, trustedAt = now - 300 }, BRIDGE_LK_MAX_ROWS)
+        row = bridgeLK.rows[key]
+    end
+    -- Plausibility against the last total this client vouched for (not against what
+    -- it merely accepted): a jump refused here stays refused on the next K, so a
+    -- forged total cannot be walked through in two steps.
+    if total - row.trusted > BRIDGE_LK_ALLOWANCE + (now - row.trustedAt) then return false end
+    local payload = table.concat({ name, tostring(total), class, faction, tostring(epoch), locale,
+        "", "0", bucketToken, levelToken }, ":")
+    if #payload > 250 then return false end
+    row.name, row.trusted, row.trustedAt = name, total, now
+    if not row.pending then bridgeLK.queue[#bridgeLK.queue + 1] = key end
+    row.pending, row.pendingAt = payload, now
+    if #bridgeLK.queue > 64 then
+        -- The dropped subject must be queueable again on its next accepted K.
+        local dropped = bridgeLK.rows[table.remove(bridgeLK.queue, 1)]
+        if dropped then dropped.pending = nil end
+    end
+    bridgeLKFlush()
+    return true
 end
 function net:Start()
     if not enabled() or self.started then return end

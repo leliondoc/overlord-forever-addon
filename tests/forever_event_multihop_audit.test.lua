@@ -76,7 +76,9 @@ bridge.nextIsProduction = true
 local frontId = "redridge"
 receiver.Fronts.Registry[frontId] = { zones = { one = {}, two = {} } }
 local campaign = OverlordDB.lastResetTimestamp
-local dx = assert(receiverSync:BuildDominationPayload(frontId, { Alliance = 730, Horde = 270 }))
+-- An old (<= 1.1.10) client's DX still crosses relays; v2 receivers must ignore it for the bar.
+local dx = string.format("730:270:%d:%s:%d:Origin Tester:global:0:0:11",
+    campaign, frontId, math.floor(time() / 120))
 local victoryTs = time() - 100
 OverlordDB.frontVictories = OverlordDB.frontVictories or {}
 OverlordDB.frontVictories[frontId] = { faction = "Alliance", timestamp = victoryTs }
@@ -86,6 +88,7 @@ local vb = assert(receiverSync:BuildVictoryBonusPayload({ {
     campaignEpoch = campaign,
 } }, campaign, "global"))
 local beforeBonus = select(1, receiver:GetDominationVictoryBonusTotals())
+local beforeBar = receiver:GetDominationBarScore()
 
 assert(origin.BetaNetwork:Broadcast("DX", dx, { { type = "VB", payload = vb } }) == 1)
 local function drain()
@@ -101,9 +104,8 @@ local function drain()
 end
 drain()
 assert(not receiverNet.stats.lastError, receiverNet.stats.lastError)
-local bucket = assert(OverlordDB.frontDominationTime[frontId], "Three-hop DX was lost")
-assert(bucket.Alliance == 730 and bucket.Horde == 270,
-    "Three-hop DX changed the absolute domination snapshot")
+assert(OverlordDB.frontDominationTime == nil or OverlordDB.frontDominationTime[frontId] == nil,
+    "Three-hop DX modified the v2 buckets")
 local firstBonus = select(1, receiver:GetDominationVictoryBonusTotals())
 assert(firstBonus == beforeBonus + 20, "Three-hop VB was lost")
 assert(receiverNet.peers["origin tester"] and receiverNet.peers["origin tester"].hops == 3,
@@ -117,8 +119,8 @@ assert(origin.BetaNetwork:Broadcast("DX", dx, { { type = "VB", payload = vb } })
 drain()
 assert(receiverNet.stats.received == firstReceived + 2,
     "Duplicate DX/VB payloads did not traverse the relay as new envelopes")
-assert(bucket.Alliance == 730 and bucket.Horde == 270,
-    "Repeated three-hop DX inflated domination time")
+assert(select(1, receiver:GetDominationBarScore()) == beforeBar + 1,
+    "Three-hop VB was not exactly +1 on the bar")
 assert(select(1, receiver:GetDominationVictoryBonusTotals()) == firstBonus,
     "Repeated three-hop VB applied the bonus twice")
-print("Forever event multihop: production DX/VB survive three relay hops and duplicate replay")
+print("Forever event multihop: production DX/VB survive three relay hops; duplicate replay counts once")

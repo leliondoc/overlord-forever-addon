@@ -1,4 +1,4 @@
--- SyncAux.lua - Mines (MS/MN), forests (WS/WN), whispers communaute, appel de faction (FC),
+-- SyncAux.lua - Mines (MS/MN), whispers communaute, appel de faction (FC),
 -- rattrapage passif SR, filtre whisper hors-ligne et anti-spoof ZS.
 -- Fichier separe de Sync.lua pour respecter la limite WoW de 200 locals par chunk.
 Overlord = Overlord or {}
@@ -940,29 +940,6 @@ function Overlord.Sync:ShouldRunPassiveStateBundle(opts)
     return true
 end
 
--- Accumulateur domination : election deterministe par fenetre de 120 s.
--- En gros event, peu de clients tickent ; en petit groupe (<=6), tout le monde tick
--- et la fusion DX (total max a seq egale) fait converger.
-function Overlord.Sync:ShouldAccumulateDomination()
-    if Overlord.InstanceSuspended or IsInInstance() then return false end
-    if Overlord.WaitingForSync then return false end
-    local isLarge = self.IsLargeEvent and self:IsLargeEvent()
-    local pct = isLarge and 15 or 35
-    -- Solo = groupe de 1 : tout le monde tick, la fusion DX fait converger.
-    -- Sans ca, un joueur seul (cas typique Forever) reste bloque a 0 %.
-    if not isLarge then
-        local n = 1
-        if IsInGroup() or IsInRaid() then
-            n = GetNumGroupMembers() or 1
-            if n < 1 then n = 1 end
-        end
-        if n <= 6 then
-            pct = 100
-        end
-    end
-    return IsControlledZoneSnapshotSender(self, 120, pct)
-end
-
 local function SanitizeFactionCallSavedTimestamps(fac)
     if not OverlordDB then return end
     OverlordDB.factionCallSharedAt = OverlordDB.factionCallSharedAt or {}
@@ -1018,105 +995,6 @@ function Overlord.Sync:OnReceiveMineStock(payload, sender)
     if not mineId or not stockStr then return end
     if Overlord.Ressources and Overlord.Ressources.ApplyRemoteMineStock then
         Overlord.Ressources:ApplyRemoteMineStock(mineId, stockStr)
-    end
-end
-
--- ============ Stock foret (WS) ============
-
-function Overlord.Sync:MaybeBroadcastWoodStock(woodId)
-    if not woodId or Overlord.WaitingForSync then return end
-    if Overlord.InstanceSuspended or IsInInstance() then return end
-    local p = self:GetPriv()
-    if not p then return end
-    local res = Overlord.Ressources
-    if not res or not res.GetWoodStock then return end
-    local now = GetTime()
-    if (p.woodStockLast[woodId] or 0) + p.woodStockInterval > now then return end
-    p.woodStockLast[woodId] = now
-    local stock = res:GetWoodStock(woodId)
-    local cap = (res.GetWoodStockMax and res:GetWoodStockMax()) or 100
-    stock = math.max(0, math.min(cap, math.floor(tonumber(stock) or 0)))
-    local payload = woodId .. ":" .. stock
-    self:SendToChannel("WS", payload)
-    if IsInGroup() or IsInRaid() then
-        self:Send("WS", payload)
-    end
-    if not self.IsLargeEvent or not self:IsLargeEvent() then
-        if (p.woodStockBNetLast[woodId] or 0) + p.woodStockBNetInterval <= now then
-            p.woodStockBNetLast[woodId] = now
-            self:SendToBNetFriends("WS", payload)
-        end
-    end
-end
-
-function Overlord.Sync:OnReceiveWoodStock(payload, sender)
-    if not payload or payload == "" then return end
-    local woodId, stockStr = strsplit(":", payload, 2)
-    if not woodId or not stockStr then return end
-    if Overlord.Ressources and Overlord.Ressources.ApplyRemoteWoodStock then
-        Overlord.Ressources:ApplyRemoteWoodStock(woodId, stockStr)
-    end
-end
-
--- ============ Recolte bois (WN) ============
-
-function Overlord.Sync:BroadcastWoodHarvesting(woodId)
-    if not woodId then return end
-    if Overlord.InstanceSuspended or IsInInstance() then return end
-    if Overlord.WaitingForSync then return end
-    if not self:GetChannelId() then
-        local now = GetTime()
-        if not self._lastWoodChannelJoinAttempt or now - self._lastWoodChannelJoinAttempt > 20 then
-            self._lastWoodChannelJoinAttempt = now
-            self:JoinChannel(1)
-        end
-    end
-    local factionCode = (Overlord.PlayerFaction == "Alliance") and "A" or "H"
-    local payload = woodId .. ":" .. factionCode
-    local extraWhispers = nil
-    local res = Overlord.Ressources
-    if res and res.GetWoodStock then
-        local stock = res:GetWoodStock(woodId)
-        local cap = (res.GetWoodStockMax and res:GetWoodStockMax()) or 100
-        stock = math.max(0, math.min(cap, math.floor(tonumber(stock) or 0)))
-        extraWhispers = { { type = "WS", payload = woodId .. ":" .. stock } }
-    end
-    self:SendToGroup("WN", payload)
-    self:SendToChannel("WN", payload)
-    if not self.IsLargeEvent or not self:IsLargeEvent() then
-        self:BroadcastToCommunity("WN", payload, MN_COMMUNITY_WHISPER_MAX, 0.5, nil, extraWhispers)
-        self:SendToBNetFriends("WN", payload)
-        if extraWhispers and extraWhispers[1] and extraWhispers[1].payload ~= "" then
-            self:SendToBNetFriends(extraWhispers[1].type, extraWhispers[1].payload)
-        end
-    end
-end
-
-function Overlord.Sync:OnReceiveWoodHarvesting(payload, sender)
-    if not payload or payload == "" then return end
-    if not Overlord.Zones then return end
-
-    local woodId, factionCode = strsplit(":", payload, 3)
-    woodId = woodId and woodId:match("^%s*(.-)%s*$") or woodId
-    if not woodId or woodId == "" then return end
-
-    local senderFaction = nil
-    if factionCode == "A" then senderFaction = "Alliance"
-    elseif factionCode == "H" then senderFaction = "Horde" end
-
-    if not senderFaction or senderFaction == Overlord.PlayerFaction then return end
-
-    local p = self:GetPriv()
-    if not p then return end
-    local now = GetTime()
-    if (p.woodAlertLast[woodId] or 0) + p.woodAlertCooldown > now then return end
-    p.woodAlertLast[woodId] = now
-    local woodZone = Overlord.Zones.GetWoodZone and Overlord.Zones:GetWoodZone(woodId)
-    local woodName = woodZone and woodZone.name or woodId
-    local line = (senderFaction == "Horde" and L and L.ENEMY_WOOD_HORDE)
-        or (senderFaction == "Alliance" and L and L.ENEMY_WOOD_ALLIANCE)
-    if line then
-        Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. line, woodName))
     end
 end
 
@@ -3448,10 +3326,8 @@ end
 local STRUCTURE_RELAY_DEDUP_MAX = 128
 local STRUCTURE_RELAY_DEDUP_TTL = 30
 local ocCaptureRelayDedup = {}
-local wbRelayDedup = {}
 local structureRelayDedupState = {
     [ocCaptureRelayDedup] = { count = 0, blockedUntil = nil },
-    [wbRelayDedup] = { count = 0, blockedUntil = nil },
 }
 
 local function RememberStructureRelay(cache, relayKey, now)
@@ -3504,26 +3380,12 @@ function Overlord.Sync:RelayOutpostCaptureToCommunitySafe(payload, relayKey, poo
     self:BroadcastToCommunity("OC", payload, maxM, OC_CAPTURE_RELAY_DELAY, true)
 end
 
-function Overlord.Sync:RelayDominationBoostToCommunitySafe(payload, relayKey, poolTag)
-    if not payload or payload == "" then return end
-    if self:StructureRelayOnlyReachesBeta() then return end
-    if not RelayPoolMatchesLocal(poolTag) then return end
-    if Overlord.InstanceSuspended or IsInInstance() then return end
-    if not self.BroadcastToCommunity then return end
-    local now = GetTime()
-    if not RememberStructureRelay(wbRelayDedup, relayKey, now) then return end
-    local isLarge = self.IsLargeEvent and self:IsLargeEvent()
-    -- WB et OC partagent le meme budget de relais. Les anciens noms CAPTURE_*
-    -- n'existaient plus dans ce chunk et activaient silencieusement les defaults.
-    local maxM = isLarge and OC_CAPTURE_RELAY_MAX_LARGE or OC_CAPTURE_RELAY_MAX_NORMAL
-    self:BroadcastToCommunity("WB", payload, maxM, OC_CAPTURE_RELAY_DELAY, true)
-end
-
 -- ==================== Sync Passive (hors instance) ====================
 -- Ticker lent (2 min) : SR canal + scan communaute + rattrapages hors front.
--- En front actif, DominationTick diffuse deja le DM ; les snapshots ZA tous fronts
--- passent par ScheduleControlledZoneSnapshot (election + cooldown) pour eviter
--- les rafales 40 joueurs sans laisser les observateurs attendre plusieurs minutes.
+-- Les snapshots ZA tous fronts passent par ScheduleControlledZoneSnapshot (election +
+-- cooldown) pour eviter les rafales 40 joueurs sans laisser les observateurs attendre
+-- plusieurs minutes. La domination (v2) ne passe plus par ce ticker : elle compte des
+-- evenements VB rejoues par les reponses SR.
 local passiveSyncTicker = nil
 local PASSIVE_SYNC_INTERVAL = 120
 
@@ -3558,12 +3420,6 @@ function Overlord.Sync:StartPassiveSync()
                     jitterMin = 1.0,
                     jitterMax = 5.0,
                 })
-            end
-            if Overlord.AccumulatePassiveDominationForInactiveFronts then
-                Overlord:AccumulatePassiveDominationForInactiveFronts(PASSIVE_SYNC_INTERVAL)
-            end
-            if self.BroadcastDomination then
-                self:BroadcastDomination({ passiveOffFront = true })
             end
         end
         if self.BroadcastHeldOutpostStates then
@@ -3607,10 +3463,11 @@ local KILLSPOOF_WINDOW = 30
 local KILLSPOOF_THRESHOLD = 5
 local KILLSPOOF_BLACKLIST_DURATION = 300
 -- Plafond plausible d'un total de kills sur une campagne hebdo : au-dela on REFUSE la
--- valeur (pas de clamp, qui figeait les injections au plafond). Accepter les joueurs
--- depassant 1000 VH sans laisser passer les 9999 injectes. Ce seuil ne change ni
--- le nombre de lignes du classement, ni les budgets/cadences de synchronisation.
-local PLAUSIBLE_KILL_CEILING = 5000
+-- valeur (pas de clamp, qui figeait les injections au plafond). 10000 depuis 1.1.11 :
+-- des joueurs honnetes depassaient 5000 en fin de semaine (6017) et disparaissaient
+-- alors de toute la synchro. Ce seuil ne change ni le nombre de lignes du classement,
+-- ni les budgets/cadences de synchronisation.
+local PLAUSIBLE_KILL_CEILING = 10000
 -- Expose le plafond pour la defense en profondeur cote Leaderboard et Sync.
 Overlord.PLAUSIBLE_SYNC_KILL_CEILING = PLAUSIBLE_KILL_CEILING
 -- Forever : tous les niveaux participent. Le champ K/LK reste valide et

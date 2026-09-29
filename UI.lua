@@ -3953,16 +3953,6 @@ end
 function Overlord.UI:RefreshDomination()
     if not self.domBar then return end
     if not OverlordDB then return end
-    local allyTime, hordeTime
-    if Overlord.GetDominationTotals then
-        allyTime, hordeTime = Overlord:GetDominationTotals()
-    else
-        local dom = OverlordDB.dominationTime
-        if not dom then return end
-        allyTime = dom.Alliance or 0
-        hordeTime = dom.Horde or 0
-    end
-    local total = allyTime + hordeTime
     local barWidth = self.domBar:GetWidth()
     local nominal = self.domBar._nominalWidth or 300
     if (not barWidth) or barWidth < 2 then
@@ -3970,20 +3960,8 @@ function Overlord.UI:RefreshDomination()
     end
     local innerWidth = math.max(1, barWidth - 6)
 
-    if total == 0 then
-        local paintKey = "zero|" .. innerWidth
-        if paintKey == lastDominationPaintKey then return end
-        lastDominationPaintKey = paintKey
-        local halfL = math.floor(innerWidth / 2)
-        local halfR = innerWidth - halfL
-        self.domBar.allyFill:SetWidth(math.max(1, halfL))
-        self.domBar.allyFill:Show()
-        self.domBar.hordeFill:SetWidth(math.max(1, halfR))
-        self.domBar.hordeFill:Show()
-        self.domBar.label:SetText(L.DOMINATION_PCT_ZERO)
-        return
-    end
-
+    -- Barre v2 : 50 % +/- victoires et depenses de bois. 50/50 est un etat normal
+    -- (aucun evenement ou evenements qui s'annulent), peint comme n'importe quel autre.
     local allyPct, hordePct = Overlord:GetDominationDisplayFractions()
     local allyW = math.floor(innerWidth * allyPct + 0.5)
     if allyW < 0 then allyW = 0 end

@@ -12,29 +12,30 @@ C_Map = {
 }
 assert(loadfile("Zones.lua"))()
 local z = Overlord.Zones
-local function visit(resource, mapID, wood)
+local function visit(resource, mapID)
     now, currentMap = now + 1, mapID
     x, y = resource.center[1], resource.center[2]
     assert(z:ResourceMatchesMap(resource, mapID), "Marker map filter rejected " .. resource.id)
     assert(z:IsResourceMapContext(mapID), "Resource ticker disabled on " .. mapID)
-    local found = wood and z:GetCurrentPlayerWoodZone() or z:GetCurrentPlayerMine()
+    local found = z:GetCurrentPlayerMine()
     assert(found == resource, "Harvesting failed for " .. resource.id .. " on " .. mapID)
     now, x, y = now + 1, 0, 0
-    found = wood and z:GetCurrentPlayerWoodZone() or z:GetCurrentPlayerMine()
+    found = z:GetCurrentPlayerMine()
     assert(found == nil, "Resource detected outside circle")
 end
 local expected = { azurelode = 1424, darrow = 1424, elemgorge = 1421,
-    stonessplinter = 1432, jasperlode = 1429, wetlands_forest = 1437,
-    ashenvale_forest = 1440 }
-for _, db in ipairs({ Overlord.MineDatabase, Overlord.WoodDatabase }) do
-    for _, resource in ipairs(db) do
-        assert(resource.mapID == expected[resource.id], "Continent projection uses a Retail map")
-        for mapID in pairs(resource.mapIDs) do visit(resource, mapID, db == Overlord.WoodDatabase) end
-    end
+    stonessplinter = 1432, jasperlode = 1429 }
+for _, resource in ipairs(Overlord.MineDatabase) do
+    assert(resource.mapID == expected[resource.id], "Continent projection uses a Retail map")
+    for mapID in pairs(resource.mapIDs) do visit(resource, mapID) end
 end
 now, currentMap, x, y = now + 1, 99999, 28.0, 57.0
 assert(z:GetCurrentPlayerMine().id == "azurelode", "Mine submap ancestry broke")
-assert(Overlord.WoodDatabase[1].center[1] == 53.8 and Overlord.WoodDatabase[1].center[2] == 43.7)
-assert(Overlord.WoodDatabase[2].center[1] == 33.6 and Overlord.WoodDatabase[2].center[2] == 63.6)
+-- 1.2.0: the wood system is gone; no forest map may enable harvesting or the resource ticker.
+assert(#Overlord.WoodDatabase == 0, "A forest is still defined")
+for _, mapID in ipairs({ 56, 1437, 63, 1440 }) do
+    assert(not z:IsWoodMapID(mapID), "Forest map still recognised: " .. mapID)
+end
+assert(z:GetCurrentPlayerWoodZone() == nil, "Wood harvesting zone still detected")
 assert(not z:IsResourceMapContext(99998), "Unrelated map enabled resource ticker")
-print("Forever resource maps: all 5 mines, two forests, map aliases, harvesting boundaries and cave ancestry OK")
+print("Forever resource maps: all 5 mines, no forest, map aliases, harvesting boundaries and cave ancestry OK")

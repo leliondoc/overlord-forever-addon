@@ -116,7 +116,7 @@ local d = client("Dwarf Tester", "two")
 local us = client("Other Tester", "us", "us")
 b.friends, c.friends = { c, us }, { b }
 local kinds = {}
-for kind in ("SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR DX VB MN MS WN WS OP OC WB SH HR HB HC HA LD CR CA GR GY GI FC GE GP GX GD GM BQ BR PB PK MK PX PP PM"):gmatch("%S+") do
+for kind in ("SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR DX VB MN MS OP OC SH HR HB HC HA LD CR CA GR GY GI FC GE GP GX GD GM BQ BR PB PK MK PX PP PM"):gmatch("%S+") do
     -- K is never re-forwarded: a relayed kill is never credited (anti-forgery).
     if kind ~= "SR" and kind ~= "K" then kinds[#kinds + 1] = kind end
 end

@@ -292,7 +292,7 @@ d.Overlord.Sync.BuildPagedLeaderboardKillPayload = function(self, snapshot, name
     local payload = serialize(self, snapshot, name, wireEpoch)
     if not payload or not invalid[name] then return payload end
     local fields = { d.strsplit(":", payload) }
-    if invalid[name] == 1 then fields[2] = "5001" end
+    if invalid[name] == 1 then fields[2] = "10001" end
     if invalid[name] == 2 then fields[10] = "999" end
     if invalid[name] == 3 then fields[5] = tostring(wireEpoch - 604800) end
     if invalid[name] == 4 then fields[9] = "B" .. tostring(wireEpoch - 604800) end

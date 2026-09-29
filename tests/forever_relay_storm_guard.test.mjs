@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 
 // 1.0.23 CPU spike: every client that received a beta broadcast re-sent keep and
-// outpost states to raid + channel, and re-authored OC/WB into the relay.
+// outpost states to raid + channel, and re-authored OC into the relay (WB was removed with the wood system in 1.2.0).
 test("Keep and outpost states are re-sent only for targeted beta deliveries", () => {
     const targeted = /== "BETA" and Overlord\.BetaNetwork and Overlord\.BetaNetwork:IsTargetedDispatch\(\)\)/g;
     const outpost = read("SyncOutpost.lua");
@@ -25,7 +25,7 @@ test("Keep and outpost states are re-sent only for targeted beta deliveries", ()
 
 test("Structure relays do not re-author packets into the beta relay without a club", () => {
     const aux = read("SyncAux.lua");
-    for (const fn of ["RelayOutpostCaptureToCommunitySafe", "RelayDominationBoostToCommunitySafe"]) {
+    for (const fn of ["RelayOutpostCaptureToCommunitySafe"]) {
         const body = aux.slice(aux.indexOf(`function Overlord.Sync:${fn}`));
         const head = body.slice(0, body.indexOf("\nend"));
         assert.match(head, /self:StructureRelayOnlyReachesBeta\(\) then return end/, fn);

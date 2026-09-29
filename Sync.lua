@@ -51,14 +51,8 @@ local priv = {
     mineStockBNetLast = {},
     mineStockInterval = 2.5,
     mineStockBNetInterval = 30,
-    woodStockLast = {},
-    woodStockBNetLast = {},
-    woodStockInterval = 2.5,
-    woodStockBNetInterval = 30,
     mineAlertLast = {},
     mineAlertCooldown = 60,
-    woodAlertLast = {},
-    woodAlertCooldown = 60,
     staleSameSecHoldSec = 20,
     fcRecvLast = {},
     recentAddonWhispers = {},
@@ -667,11 +661,6 @@ function Overlord.Sync:Initialize()
         syncFrame:RegisterEvent("BN_CHAT_MSG_ADDON")
         syncFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
         syncFrame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
-    end
-    -- Preparer hors handler le ledger WB persistant. Une ancienne table volumineuse
-    -- est nettoyee par tranches; les paquets restent fail-closed jusqu'au commit.
-    if self.EnsureDominationBoostEventLedgerPrepared then
-        self:EnsureDominationBoostEventLedgerPrepared()
     end
 end
 
@@ -2294,7 +2283,68 @@ function Overlord.Sync:SendToChannel(msgType, data, critical)
     if msgType ~= "BF" and not self:ChannelCarries(msgType, data, true) then return true end
     -- Second retour : budget local depasse (pas un refus Blizzard, se recharge seul).
     if not self:TakeChannelToken(critical) then return false, "budget" end
-    return self:SendAddonChecked(msg, "CHANNEL", channelId)
+    local sent = self:SendAddonChecked(msg, "CHANNEL", channelId)
+    -- Blizzard a accepte ce paquet : la copie de canal du relais serait un doublon.
+    if sent == true and msgType ~= "BF" then
+        self:NoteChannelCovered(msgType, data, self:GetPlayerFullName())
+    end
+    return sent
+end
+
+-- Forever : la presence SH part sur le canal une fois en direct, puis une
+-- seconde fois comme copie de canal du relais, sur le meme quota Blizzard de ~1 message/s.
+-- On note ici ce que le canal porte deja : envoye et accepte par Blizzard, entendu d'un
+-- autre joueur (message identique) ; le relais
+-- saute alors sa copie de canal. BNet, groupe et amis ne sont pas touches, et un envoi
+-- refuse n'est pas note : la copie du relais reste alors son second essai. Un SH n'a de
+-- sens que par son auteur (la charge utile est un numero de shard) : la cle l'inclut.
+Overlord.Sync.CHANNEL_COVERED_SEC = 20
+Overlord.Sync.CHANNEL_COVERED_MAX = 96
+-- Seulement la presence SH : les alertes (OP, ZS en cours) et les evenements terminaux gardent
+-- leur copie de relais, celle que les auditeurs du canal retransmettent a leurs amis BNet
+-- (et donc a l'autre faction).
+Overlord.Sync.CHANNEL_COVER_KINDS = { SH = true }
+Overlord.Sync.CHANNEL_COVER_ORIGIN_KINDS = { SH = true }
+function Overlord.Sync:ChannelCoverKey(kind, payload, origin)
+    if type(kind) ~= "string" or type(payload) ~= "string" or not self.CHANNEL_COVER_KINDS[kind] then
+        return nil
+    end
+    if self.CHANNEL_COVER_ORIGIN_KINDS[kind] then
+        if type(origin) ~= "string" or origin == "" then return nil end
+        return kind .. "|" .. (self:CanonicalForeverName(origin) or origin):lower() .. "|" .. payload
+    end
+    return kind .. "|" .. payload
+end
+function Overlord.Sync:NoteChannelCovered(kind, payload, origin)
+    local key = self:ChannelCoverKey(kind, payload, origin)
+    if not key then return end
+    local rows = self._channelCovered
+    if not rows then
+        rows = { at = {}, count = 0 }
+        self._channelCovered = rows
+    end
+    local now = GetTime()
+    if rows.at[key] == nil then
+        if rows.count >= self.CHANNEL_COVERED_MAX then
+            for k, at in pairs(rows.at) do
+                if now - at > self.CHANNEL_COVERED_SEC then
+                    rows.at[k] = nil
+                    rows.count = rows.count - 1
+                end
+            end
+            if rows.count >= self.CHANNEL_COVERED_MAX then rows.at, rows.count = {}, 0 end
+        end
+        rows.count = rows.count + 1
+    end
+    rows.at[key] = now
+end
+
+function Overlord.Sync:ChannelAlreadyCovers(kind, payload, origin)
+    local key = self:ChannelCoverKey(kind, payload, origin)
+    if not key then return false end
+    local rows = self._channelCovered
+    local at = rows and rows.at[key]
+    return at ~= nil and GetTime() - at <= self.CHANNEL_COVERED_SEC
 end
 
 -- Broadcast du shardID courant (permet de detecter si des joueurs sont sur des shards differents)
@@ -2405,8 +2455,9 @@ function Overlord.Sync:RegisterRecentWhisperTarget(target)
     self:_RememberRecentAddonWhisper(target, GetTime())
 end
 
-function Overlord.Sync:SendWhisper(msgType, data, target)
-    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork
+function Overlord.Sync:SendWhisper(msgType, data, target, direct)
+    -- direct: one raw addon whisper even to a relay peer (small unrelayed rows).
+    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork and not direct
         and msgType ~= "R1" and msgType ~= "BF" and Overlord.BetaNetwork:IsPeer(target) then
         return Overlord.BetaNetwork:Send(msgType, data or "", target)
     end
@@ -2724,16 +2775,10 @@ function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
         self:OnReceiveMining(payload or "", sender)
     elseif msgType == "MS" then
         self:OnReceiveMineStock(payload or "", sender)
-    elseif msgType == "WN" then
-        self:OnReceiveWoodHarvesting(payload or "", sender)
-    elseif msgType == "WS" then
-        self:OnReceiveWoodStock(payload or "", sender)
     elseif msgType == "OP" then
         self:OnReceiveOutpostState(payload or "", sender, "BNET")
     elseif msgType == "OC" then
         self:OnReceiveOutpostCapture(payload or "", sender, "BNET")
-    elseif msgType == "WB" then
-        self:OnReceiveDominationBoost(payload or "", sender, "BNET")
     elseif msgType == "SH" then
         self:OnReceiveShard(payload or "", sender, "BNET")
     elseif msgType == "GW" and Overlord.GuildKillAlert then
@@ -2778,6 +2823,9 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
     end
 
     local msgType, payload = strsplit(":", message, 2)
+    if channel == "CHANNEL" and payload then
+        self:NoteChannelCovered(msgType, payload, sender)
+    end
     if (msgType == "HR" or msgType == "HB" or msgType == "HA")
         and payload and (payload:sub(1, 2) == "5:" or payload:sub(1, 2) == "6:") then
         if self.OnPagedLeaderboardMessage then
@@ -2900,16 +2948,10 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
         self:OnReceiveMining(payload or "", sender)
     elseif msgType == "MS" then
         self:OnReceiveMineStock(payload or "", sender)
-    elseif msgType == "WN" then
-        self:OnReceiveWoodHarvesting(payload or "", sender)
-    elseif msgType == "WS" then
-        self:OnReceiveWoodStock(payload or "", sender)
     elseif msgType == "OP" then
         ok, err = pcall(self.OnReceiveOutpostState, self, payload or "", sender, channel)
     elseif msgType == "OC" then
         ok, err = pcall(self.OnReceiveOutpostCapture, self, payload or "", sender, channel)
-    elseif msgType == "WB" then
-        ok, err = pcall(self.OnReceiveDominationBoost, self, payload or "", sender, channel)
     elseif msgType == "SH" then
         self:OnReceiveShard(payload or "", sender, channel)
     elseif msgType == "CR" then
@@ -3544,6 +3586,7 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
         and self:SanitizeSyncedKillTotal(totalKills)
     if not sanitized then return end
     totalKills = sanitized
+    local totalBefore = Overlord.Leaderboard.kills and Overlord.Leaderboard.kills[playerName] or 0
     local guildRegister = tonumber(guildAtTag) and tonumber(guildAtTag) > 0
     local validGuild = guildTag and guildTag ~= ""
         and self.IsValidGuildSyncToken and self:IsValidGuildSyncToken(guildTag) or false
@@ -3567,6 +3610,13 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
     end
     self:MaybeRequestMissingGuild(playerName)
     Overlord.Leaderboard:SetPlayerKills(playerName, totalKills, true)
+    -- An opposite-faction owner reaches only its own Battle.net friends: this
+    -- client is the bridge and passes the accepted total on to its own faction.
+    if Overlord.BetaNetwork and Overlord.BetaNetwork.NoteOwnerKill then
+        pcall(Overlord.BetaNetwork.NoteOwnerKill, Overlord.BetaNetwork, playerName, faction,
+            totalKills, totalBefore, classVerified and class or "", localeVerified and locTag or "",
+            remoteEpoch, bucketEpochToken, levelToken)
+    end
     local killCreditNow = GetTime()
     recentKCredits:Remember(playerName:lower(),
         { ts = killCreditNow, skipZone = false }, killCreditNow, false)
@@ -5482,18 +5532,8 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
             end
         end
 
-        -- Domination hebdo par front : snapshot complet avec sequence de score si disponible.
-        if OverlordDB and OverlordDB.frontDominationTime and Overlord.Sync.BuildDominationPayload then
-            for frontId, bucket in pairs(OverlordDB.frontDominationTime) do
-                local dxPayload = Overlord.Sync:BuildDominationPayload(frontId, bucket)
-                if dxPayload then
-                    table.insert(queue, { type = "DX", data = dxPayload })
-                end
-            end
-        end
-
-        -- Bonus victoire hebdo apres DX : le late joiner dispose d'abord du socle
-        -- territorial, puis applique les evenements persistants VB.
+        -- Barre de domination v2 (plus de DX) : la barre = victoires de front.
+        -- Le journal VB est rejoue ici pour que les late joiners / reloads convergent.
         if self.AppendVictoryBonusToSrQueue and not bnetTarget then
             self:AppendVictoryBonusToSrQueue(
                 queue, minimalResponseOnly, directSR)
@@ -5508,15 +5548,6 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
                 local s = res:GetMineStock(mine.id)
                 if s < stockMax then
                     table.insert(queue, { type = "MS", data = mine.id .. ":" .. s })
-                end
-            end
-        end
-        if res and res.GetWoodStock and res.GetWoodStockMax and Overlord.WoodDatabase then
-            local woodMax = res:GetWoodStockMax()
-            for _, woodZone in ipairs(Overlord.WoodDatabase) do
-                local s = res:GetWoodStock(woodZone.id)
-                if s < woodMax then
-                    table.insert(queue, { type = "WS", data = woodZone.id .. ":" .. s })
                 end
             end
         end
@@ -8600,15 +8631,6 @@ function Overlord.Sync:OnReceiveZoneAll(
         and not loginPairRepairMode and not runtimeGlobalRepairMode then
         self:CheckTotalVictoryFromSync()
     end
-    -- Carte realignee : pousser les totaux DM pour que la barre domination reconverge entre pairs.
-    if changed and not loginPairRepairMode and not runtimeGlobalRepairMode
-        and Overlord.Sync and Overlord.Sync.BroadcastDomination
-        and not Overlord.InstanceSuspended and not IsInInstance() then
-        C_Timer.After(0.5, function()
-            if Overlord.InstanceSuspended or not Overlord.Sync then return end
-            Overlord.Sync:BroadcastDomination()
-        end)
-    end
     return snapshotComplete and snapshotConsensusComplete
         and (changed or syncUseful)
 end
@@ -9644,7 +9666,7 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel)
                     frontId, faction, rawVictoryTs, sender, sourceChannel)
             end
             if Overlord.TryGrantVictoryDominationBonus then
-                Overlord:TryGrantVictoryDominationBonus(frontId, faction, ts, false)
+                Overlord:TryGrantVictoryDominationBonus(frontId, faction, rawVictoryTs, false)
             end
         end
         local factionName = (faction == "Horde")
@@ -9685,7 +9707,8 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel)
         end
         if Overlord.TryGrantVictoryDominationBonus then
             local grantFrontId = currentFrontId or frontId
-            Overlord:TryGrantVictoryDominationBonus(grantFrontId, faction, ts, false)
+            -- Timestamp emetteur brut : meme identifiant de victoire que le VB.
+            Overlord:TryGrantVictoryDominationBonus(grantFrontId, faction, rawVictoryTs, false)
         end
     end
 
@@ -9880,7 +9903,10 @@ function Overlord.Sync:BroadcastZoneState(zone, forceBNetZS, primaryOnly)
             local now = GetTime()
             local lastForZone = lastBNetZSBroadcast[zone.id] or 0
             local largeEvent = self:IsLargeEvent()
-            local wideInterval = largeEvent and 60 or TUNING.BNET_ZS_INTERVAL
+            -- Large event: 60 s between wide copies, except during the first 45 s of a wave, so a
+            -- start notice lost on the way (queue refusal, throttled channel) is retried at 15 s.
+            local wideInterval = (largeEvent and not (status == "in_progress" and holdTime <= 45))
+                and 60 or TUNING.BNET_ZS_INTERVAL
             local isCaptureStart = (status == "in_progress" and holdTime <= 5)
             local isCaptureEnd = (status == "captured")
             -- Hors gros event : ZS captured immediate (pas d'attente 15s) pour l'observateur cross-faction.
@@ -10698,9 +10724,6 @@ function Overlord.Sync:FlushStateAfterInstance()
         else
             Overlord.Sync:BroadcastCompactZoneSnapshot()
         end
-        if Overlord.InActiveFront and Overlord.Sync.BroadcastDomination then
-            Overlord.Sync:BroadcastDomination()
-        end
     end
     C_Timer.After(2 + math.random() * 1.5, tryPushSnapshot)
 end
@@ -10723,6 +10746,6 @@ function Overlord.Sync:Resume()
     self:ResumePendingKillBroadcast()
 end
 
--- Mines (MS/MN), forets (WS), whispers communaute, appel de faction (FC), sync passive : voir SyncAux.lua
+-- Mines (MS/MN), whispers communaute, appel de faction (FC), sync passive : voir SyncAux.lua
 -- Domination hebdo (DM) : voir SyncDomination.lua
--- Sites OP/OC : SyncOutpost.lua ; bonus WB : SyncStrategicSites.lua
+-- Sites OP/OC : SyncOutpost.lua ; validation des emetteurs : SyncStrategicSites.lua

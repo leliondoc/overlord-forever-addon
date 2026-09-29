@@ -1,12 +1,19 @@
--- SyncDomination.lua - fusion/reception/emission DM (domination hebdo par front).
+-- SyncDomination.lua - barre de domination hebdo v2 (1.1.11).
+-- La barre ne bouge plus avec le temps : alliancePct = clamp(50 + (victoiresA - victoiresH),
+-- 0, 100). Une victoire de front = +1 pour le vainqueur (journal VB, SyncVictoryBonus.lua),
+-- union d'evenements identifies rejouee en anti-entropie (SR) : tous les clients
+-- convergent sur la meme barre. Le systeme de bois a ete retire en 1.2.0.
+-- DX (secondes de zone) n'est plus emis. Les DX des anciens clients (<= 1.1.10) sont
+-- valides puis ignores pour la barre ; ils servent seulement a estimer le total "ancienne
+-- formule" pour totalAtApply des VB (anciens recepteurs, voir GetLegacyDominationTotalForVB).
 -- Fichier separe de Sync.lua pour respecter la limite WoW de 200 locals par chunk.
 Overlord = Overlord or {}
 Overlord.Sync = Overlord.Sync or {}
 
 local DM_SECONDS_PER_WEEK = 7 * 24 * 60 * 60
 local DM_SCORE_INTERVAL = 120
--- v11 est volontairement incompatible avec les anciens mergeurs max(A)+max(H) :
--- ils pourraient sinon regonfler une photo canonique corrigee par un client neuf.
+local DM_BAR_BASE = 50
+-- Version de protocole DX des clients 1.1.9/1.1.10 : les autres versions sont ignorees.
 local DM_PROTOCOL_VERSION = "11"
 
 -- Identite de campagne pour la synchro domination : on se cale strictement sur la FENETRE
@@ -36,18 +43,6 @@ end
 -- distant tombe dans la meme fenetre hebdomadaire (voir IsCurrentSyncCampaignEpoch).
 -- Evite la pollution par les vieux clients (DM sans 3e champ) ou une autre campagne.
 
--- Fusion DM : snapshot complet. Les paquets 6.5.11+ portent une sequence de score
--- par front. La source tranche a sequence egale pour converger, sans laisser
--- un total local gonfle par double tick gagner indefiniment.
-Overlord.Sync._dmSanityCap = Overlord.DOMINATION_SANITY_CAP or 2147483647
-Overlord.Sync._dmChannelMaxStep = 2400
-Overlord.Sync._dmChannelSnapshotCooldown = 90
-Overlord.Sync._dmWeakChannelSnapshotAt = Overlord.Sync._dmWeakChannelSnapshotAt or {}
-local DM_COMMUNITY_COOLDOWN = 55
-local DM_COMMUNITY_MAX = 12
-local DM_COMMUNITY_MAX_LARGE = 8
-local DM_COMMUNITY_DELAY = 0.35
-local DM_COMMUNITY_DELAY_LARGE = 0.4
 local VALID_DM_POOL_TAG = { global = true }
 
 local function NormalizeDominationPoolTag(pool)
@@ -77,146 +72,6 @@ local function ResolveDominationPayloadPool(remotePool, sender, sourceChannel)
     return remotePool == localPool and localPool or nil
 end
 
-function Overlord.Sync:NormalizeDominationSyncValue(n)
-    n = tonumber(n) or 0
-    if n ~= n or n == math.huge or n == -math.huge then return 0 end
-    n = math.floor(n)
-    if n < 0 then return 0 end
-    local DM_SANITY_CAP = self._dmSanityCap or Overlord.DOMINATION_SANITY_CAP or 2147483647
-    if n > DM_SANITY_CAP then return DM_SANITY_CAP end
-    return n
-end
-
-function Overlord.Sync:ApplyDominationSnapshot(bucket, remoteAlly, remoteHorde, remoteSeq, remoteSource)
-    bucket.Alliance = remoteAlly
-    bucket.Horde = remoteHorde
-    bucket.scoreSeq = remoteSeq
-    bucket.scoreSource = remoteSource or ""
-    bucket.allowLowerDominationSnapshot = nil
-    bucket.dominationMergeVersion = 6
-    return true
-end
-
-function Overlord.Sync:ApplyDominationBoostSnapshot(remoteBoostA, remoteBoostH)
-    -- Obsolete depuis 7.1.13 : la barre suit les secondes zone, pas dominationBoostPct.
-    return false
-end
-
-function Overlord.Sync:BuildDominationPayload(frontId, bucket)
-    if not frontId or not bucket then return nil end
-    local pool = CurrentDominationPoolTag()
-    if pool == "" then return nil end
-    local a = math.floor(bucket.Alliance or 0)
-    local h = math.floor(bucket.Horde or 0)
-    if a + h <= 0 then return nil end
-    -- On emet le debut de campagne OFFICIEL (reset Blizzard, region-wide coherent), pas un epoch
-    -- "legacy mercredi" : la reception (IsCurrentSyncCampaignEpoch) compare desormais par fenetre
-    -- hebdomadaire, donc tous les clients a jour d'une meme region convergent sans ambiguite de jour.
-    local epoch = (Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs())
-        or (OverlordDB and tonumber(OverlordDB.lastResetTimestamp)) or 0
-    -- Notre reset hebdo n'est pas encore passe : ces totaux sont ceux de la semaine
-    -- precedente. Les etiqueter avec l'epoch de la nouvelle empoisonnait la barre de
-    -- tous les clients deja resets pour toute la semaine (max-register).
-    local lastReset = OverlordDB and tonumber(OverlordDB.lastResetTimestamp) or 0
-    if lastReset > 0 and epoch > 0 and Overlord.CampaignEpochsMatch
-        and not Overlord:CampaignEpochsMatch(lastReset, epoch) then
-        return nil
-    end
-    local currentSeq = math.floor(((GetServerTime and GetServerTime()) or (time and time()) or 0) / DM_SCORE_INTERVAL)
-    local seq = math.floor(tonumber(bucket.scoreSeq) or 0)
-    if seq <= 0 or seq > currentSeq + 1 then seq = currentSeq end
-    local source = tostring(bucket.scoreSource or "")
-    if source == "" and self.GetPlayerFullName then
-        source = tostring(self:GetPlayerFullName() or "")
-    end
-    local boostA = 0
-    local boostH = 0
-    return a .. ":" .. h .. ":" .. epoch .. ":" .. frontId .. ":" .. seq .. ":" .. source
-        .. ":" .. pool .. ":" .. boostA .. ":" .. boostH .. ":" .. DM_PROTOCOL_VERSION
-end
-
-function Overlord.Sync:BroadcastDominationToCommunity(payloads, forceTargets)
-    if not payloads or #payloads == 0 or not self.BroadcastToCommunity then return end
-    if Overlord.InstanceSuspended or IsInInstance() then return end
-    local isLarge = self.IsLargeEvent and self:IsLargeEvent()
-    local maxMembers = isLarge and DM_COMMUNITY_MAX_LARGE or DM_COMMUNITY_MAX
-    local delay = isLarge and DM_COMMUNITY_DELAY_LARGE or DM_COMMUNITY_DELAY
-    local firstPayload = payloads[1]
-    local extraWhispers
-    if #payloads > 1 then
-        extraWhispers = {}
-        for i = 2, #payloads do
-            extraWhispers[#extraWhispers + 1] = { type = "DX", payload = payloads[i] }
-        end
-    end
-    self:BroadcastToCommunity("DX", firstPayload, maxMembers, delay, forceTargets, extraWhispers)
-end
-
-function Overlord.Sync:MergeDominationBucket(bucket, remoteAlly, remoteHorde, remoteSeq, remoteSource, opts)
-    if not bucket then return false end
-    opts = opts or {}
-    remoteAlly = self:NormalizeDominationSyncValue(remoteAlly)
-    remoteHorde = self:NormalizeDominationSyncValue(remoteHorde)
-    local localAlly = bucket.Alliance or 0
-    local localHorde = bucket.Horde or 0
-    local remoteTotal = remoteAlly + remoteHorde
-    local localTotal = localAlly + localHorde
-    remoteSeq = math.floor(tonumber(remoteSeq) or 0)
-    remoteSource = tostring(remoteSource or "")
-    local localSeq = math.floor(tonumber(bucket.scoreSeq) or 0)
-
-    -- Anciens snapshots sans sequence : compat interne seulement. Le protocole v11
-    -- emis sur le reseau porte toujours une sequence bornee a l'horloge courante.
-    if remoteSeq <= 0 then
-        if localSeq > 0 then return false end
-        local mergedAlly = (remoteAlly > localAlly) and remoteAlly or localAlly
-        local mergedHorde = (remoteHorde > localHorde) and remoteHorde or localHorde
-        if mergedAlly ~= localAlly or mergedHorde ~= localHorde then
-            return self:ApplyDominationSnapshot(bucket, mergedAlly, mergedHorde, localSeq, bucket.scoreSource)
-        end
-        return false
-    end
-
-    -- Ordre total convergent : total, sequence, source, puis Alliance. Le total
-    -- ne baisse jamais, mais une composante peut baisser a total constant afin
-    -- d'eviter l'inflation max(A)+max(H). Deux clients qui voient les memes DX
-    -- choisissent donc toujours exactement la meme photo, quel que soit l'ordre.
-    if remoteTotal < localTotal then return false end
-    if remoteTotal == localTotal then
-        if remoteSeq < localSeq then return false end
-        if remoteSeq == localSeq then
-            local localSource = tostring(bucket.scoreSource or "")
-            if remoteSource < localSource then return false end
-            if remoteSource == localSource and remoteAlly <= localAlly then
-                return false
-            end
-        end
-    end
-    return self:ApplyDominationSnapshot(
-        bucket, remoteAlly, remoteHorde, remoteSeq, remoteSource)
-end
-
-function Overlord.Sync:ScheduleDominationSnapshotRefresh()
-    if self._dmRefreshScheduled then return end
-    self._dmRefreshScheduled = true
-    local function flush()
-        if not Overlord.Sync then return end
-        Overlord.Sync._dmRefreshScheduled = nil
-        if Overlord.RecalculateDominationTotals then
-            Overlord:RecalculateDominationTotals()
-        end
-        if Overlord.MarkDirty then Overlord:MarkDirty() end
-        if Overlord.UI and Overlord.UI.RefreshDomination then
-            Overlord.UI:RefreshDomination()
-        end
-    end
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0, flush)
-    else
-        flush()
-    end
-end
-
 function Overlord.Sync:IsDominationChannelSenderVerified(sender)
     if self.SenderIsInOurGroup and self:SenderIsInOurGroup(sender or "") then return true end
     if self.IsStrategicSiteCommunitySender and self:IsStrategicSiteCommunitySender(sender or "") then return true end
@@ -238,9 +93,30 @@ local function MaxPlausibleDominationTotal(front, campaignEpoch)
         math.max(100000, zoneCount * elapsed * 64 + 500000))
 end
 
+-- Total DX le plus haut observe par front chez les anciens clients (memoire seulement).
+function Overlord.Sync:NoteObservedLegacyDominationTotal(frontId, total)
+    local epoch = (Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs()) or 0
+    if self._legacyDxEpoch ~= epoch or type(self._legacyDxByFront) ~= "table" then
+        self._legacyDxEpoch, self._legacyDxByFront = epoch, {}
+    end
+    if (self._legacyDxByFront[frontId] or 0) < total then
+        self._legacyDxByFront[frontId] = total
+    end
+end
+
+function Overlord.Sync:GetObservedLegacyDominationTotal()
+    local epoch = (Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs()) or 0
+    if self._legacyDxEpoch ~= epoch or type(self._legacyDxByFront) ~= "table" then return 0 end
+    local total = 0
+    for _, value in pairs(self._legacyDxByFront) do total = total + value end
+    return total
+end
+
+-- DX d'un ancien client : conserve les memes gardes qu'avant (protocole, pool, epoch, seq,
+-- plausibilite, source verifiee) mais ne modifie plus aucun etat de la barre.
 function Overlord.Sync:OnReceiveDomination(payload, sender, sourceChannel)
     if not payload or not OverlordDB then return end
-    local aStr, hStr, epochStr, frontId, seqStr, sourceStr, poolStr, boostAStr, boostHStr, protocolStr =
+    local aStr, hStr, epochStr, frontId, seqStr, sourceStr, poolStr, _, _, protocolStr =
         strsplit(":", payload, 10)
     if protocolStr ~= DM_PROTOCOL_VERSION then return end
     local effectivePool = ResolveDominationPayloadPool(poolStr, sender, sourceChannel)
@@ -248,13 +124,8 @@ function Overlord.Sync:OnReceiveDomination(payload, sender, sourceChannel)
     local remoteAlly  = tonumber(aStr) or 0
     local remoteHorde = tonumber(hStr) or 0
     if remoteAlly < 0 or remoteHorde < 0 then return end
-    -- Rejet des valeurs corrompues / gonflees (cap 2^31-1, timestamp ayant fuite, ou ancien bug
-    -- d'amplification du bonus qui poussait les buckets a des centaines de millions). Les adopter
-    -- via le max() du CRDT figerait/fausserait la barre sans retour possible (bug US, Nemy/Croquette).
-    -- Seuil = plausible / front / faction (~50 M). Le pair concerne guerit de son cote (migrations 8/9).
     local corruptLimit = Overlord.DOMINATION_PLAUSIBLE_MAX or 500000000
     if remoteAlly >= corruptLimit or remoteHorde >= corruptLimit then return end
-    -- Epoch obligatoire et alignee sur la campagne locale.
     local remoteEpoch = tonumber(epochStr)
     if not IsCurrentSyncCampaignEpoch(remoteEpoch) then return end
     local remoteSeq = math.floor(tonumber(seqStr) or 0)
@@ -268,80 +139,23 @@ function Overlord.Sync:OnReceiveDomination(payload, sender, sourceChannel)
     if not front then return end
     local remoteTotal = remoteAlly + remoteHorde
     if remoteTotal > MaxPlausibleDominationTotal(front, remoteEpoch) then return end
-    OverlordDB.frontDominationTime = OverlordDB.frontDominationTime or {}
-    local changed = false
-    if frontId and frontId ~= "" then
-        local bucket = OverlordDB.frontDominationTime[frontId]
-        local localTotal = bucket
-            and ((tonumber(bucket.Alliance) or 0) + (tonumber(bucket.Horde) or 0)) or 0
-        local senderVerified = self:IsDominationChannelSenderVerified(sender or "")
-        -- Une photo DM valide vient d'une identite de groupe/communaute connue.
-        -- Les relais anonymes sont ignores : un vote local sur trois paquets
-        -- rendait la barre differente selon les messages recus par chaque client.
-        if not senderVerified then return end
-        if not bucket then
-            bucket = { Alliance = 0, Horde = 0 }
-            OverlordDB.frontDominationTime[frontId] = bucket
-        end
-        local adoptedDomination = self:MergeDominationBucket(
-            bucket, remoteAlly, remoteHorde, remoteSeq, remoteSource)
-        if adoptedDomination then
-            changed = true
-        end
-        local remoteSeqNum = remoteSeq
-        local localSeqNum = math.floor(tonumber(bucket.scoreSeq) or 0)
-        if boostAStr and boostHStr and senderVerified
-            and (adoptedDomination or remoteSeqNum >= localSeqNum)
-            and self.ApplyDominationBoostSnapshot
-            and self:ApplyDominationBoostSnapshot(boostAStr, boostHStr) then
-            changed = true
-        end
-    else
-        -- Depuis 6.5.11, DM est obligatoirement par front : A:H:epoch:frontId:seq:source.
-        return
-    end
-    if changed then
-        self:ScheduleDominationSnapshotRefresh()
-        if self.RetryPendingVictoryBonusesAfterDomination then
-            self:RetryPendingVictoryBonusesAfterDomination()
-        end
-    end
+    if not self:IsDominationChannelSenderVerified(sender or "") then return end
+    self:NoteObservedLegacyDominationTotal(frontId, remoteTotal)
 end
 
-function Overlord.Sync:BroadcastDomination(opts)
-    opts = opts or {}
-    if not OverlordDB then return end
-    if Overlord.RecalculateDominationTotals then
-        Overlord:RecalculateDominationTotals()
+-- DX n'est plus emis par aucun producteur (ticker, SR, communaute/BNet/canal, depense
+-- de bois). Conserve uniquement pour qu'un appelant tiers ne provoque pas d'erreur.
+function Overlord.Sync:BroadcastDomination()
+    return false
+end
+
+-- Valeur de la barre v2 : 50 +/- 1 par victoire de front ; pourcentages puis compteurs.
+function Overlord:GetDominationBarScore()
+    local victoriesA, victoriesH = 0, 0
+    if self.GetDominationVictoryCounts then
+        victoriesA, victoriesH = self:GetDominationVictoryCounts()
     end
-    local communityPayloads = {}
-    for frontId, bucket in pairs(OverlordDB.frontDominationTime or {}) do
-        local payload = self:BuildDominationPayload(frontId, bucket)
-        if payload then
-            if IsInGroup() or IsInRaid() then
-                self:Send("DX", payload)
-            end
-            -- Canal royaume meme en solo : chemin primaire pour les observateurs cross-faction.
-            -- DX est faible debit mais essentiel a la convergence : ne pas le laisser tomber
-            -- derriere les rafales ZS, sinon une barre stale peut rester plusieurs jours.
-            self:SendToChannel("DX", payload, true)
-            communityPayloads[#communityPayloads + 1] = payload
-        end
-    end
-    local allowCommunity = #communityPayloads > 0
-        and (Overlord.InActiveFront or opts.passiveOffFront == true)
-    if allowCommunity then
-        -- passiveOffFront : l'appelant (ticker passif) a deja passe ShouldRunPassiveStateBundle.
-        local runCommunity = opts.passiveOffFront == true
-        if not runCommunity and self.ShouldRunPassiveStateBundle then
-            runCommunity = self:ShouldRunPassiveStateBundle({
-                cooldown = DM_COMMUNITY_COOLDOWN,
-                largeElectionPct = 15,
-                smallElectionPct = 35,
-            })
-        end
-        if runCommunity then
-            self:BroadcastDominationToCommunity(communityPayloads, true)
-        end
-    end
+    local alliancePct = DM_BAR_BASE + (victoriesA - victoriesH)
+    if alliancePct < 0 then alliancePct = 0 elseif alliancePct > 100 then alliancePct = 100 end
+    return alliancePct, 100 - alliancePct, victoriesA, victoriesH
 end

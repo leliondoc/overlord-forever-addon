@@ -1522,51 +1522,16 @@ function Overlord.Zones:GetCurrentPlayerMine()
     return nil
 end
 
--- ==================== Zones de bois ====================
--- Ressource individuelle type or.
--- { id = "wood_x", name = "...", mapID = 0, center = {x, y}, radius = 4 }.
-Overlord.WoodDatabase = {
-    {
-        id = "wetlands_forest",
-        name = (L and L.WOOD_ZONE_WETLANDS_FOREST) or "Wetlands Forest",
-        mapID = 1437, mapIDs = { [56] = true, [1437] = true }, -- Les Paluns
-        center = {53.8, 43.7},
-        radius = 4,
-    },
-    {
-        id = "ashenvale_forest",
-        name = (L and L.WOOD_ZONE_ASHENVALE_FOREST) or "Ashenvale Forest",
-        mapID = 1440, mapIDs = { [63] = true, [1440] = true },
-        center = {33.6, 63.6},
-        radius = 4,
-    },
-}
+-- Le systeme de bois (forets, recolte, depense domination) a ete retire en 1.2.0.
+-- Table vide conservee : les couches carte/minimap qui l'iterent restent inertes.
+Overlord.WoodDatabase = {}
 
--- Forets : le cercle affiche correspond au rayon de gain reel.
-Overlord.WoodMapCircleScale = 1.0
-
-local WoodLookup = {}
-local woodMapIDs = {}
-for _, woodZone in ipairs(Overlord.WoodDatabase) do
-    if woodZone.id then
-        WoodLookup[woodZone.id] = woodZone
-    end
-    if woodZone.mapID then
-        woodMapIDs[woodZone.mapID] = true
-        for mapID in pairs(woodZone.mapIDs or {}) do woodMapIDs[mapID] = true end
-    end
-end
-
-function Overlord.Zones:GetWoodZone(woodId)
-    return WoodLookup[woodId]
-end
-
-function Overlord.Zones:IsWoodMapID(mapID)
-    return mapID and woodMapIDs[mapID] or false
-end
+function Overlord.Zones:GetWoodZone() return nil end
+function Overlord.Zones:IsWoodMapID() return false end
+function Overlord.Zones:GetCurrentPlayerWoodZone() return nil end
 
 -- Test de contexte leger pour couper le ticker de detection ressources partout
--- ailleurs. Les sous-cartes/grottes sont resolues comme dans les detecteurs mine/bois.
+-- ailleurs. Les sous-cartes/grottes sont resolues comme dans le detecteur de mines.
 local resourceContextByMapID = {}
 function Overlord.Zones:IsResourceMapContext(mapID)
     if not mapID then return false end
@@ -1575,7 +1540,7 @@ function Overlord.Zones:IsResourceMapContext(mapID)
     local resolvedMapID = mapID
     local depth = 0
     while resolvedMapID and depth <= 3 do
-        if mineMapIDs[resolvedMapID] or woodMapIDs[resolvedMapID] then
+        if mineMapIDs[resolvedMapID] then
             resourceContextByMapID[mapID] = true
             return true
         end
@@ -1590,56 +1555,6 @@ function Overlord.Zones:IsResourceMapContext(mapID)
     return false
 end
 
-local cachedPlayerWoodZone = nil
-local cachedPlayerWoodZoneTime = 0
-local PLAYER_WOOD_CACHE_TTL = 0.25
-
-function Overlord.Zones:GetCurrentPlayerWoodZone()
-    local now = GetTime()
-    if now - cachedPlayerWoodZoneTime < PLAYER_WOOD_CACHE_TTL then
-        return cachedPlayerWoodZone
-    end
-
-    cachedPlayerWoodZone = nil
-    cachedPlayerWoodZoneTime = now
-
-    local ok, mapID = pcall(C_Map.GetBestMapForUnit, "player")
-    if not ok or not mapID then return nil end
-
-    local resolvedMapID = mapID
-    local depth = 0
-    while not woodMapIDs[resolvedMapID] and depth < 3 do
-        local ok2, info = pcall(C_Map.GetMapInfo, resolvedMapID)
-        if not ok2 or not info or not info.parentMapID or info.parentMapID == 0 then break end
-        resolvedMapID = info.parentMapID
-        depth = depth + 1
-    end
-    if not woodMapIDs[resolvedMapID] then return nil end
-
-    local ok3, playerPos = pcall(C_Map.GetPlayerMapPosition, resolvedMapID, "player")
-    if not ok3 or not playerPos then return nil end
-
-    local ok4, px, py = pcall(playerPos.GetXY, playerPos)
-    if not ok4 or not px then return nil end
-    px = px * 100
-    py = py * 100
-
-    for _, woodZone in ipairs(Overlord.WoodDatabase) do
-        if self:ResourceMatchesMap(woodZone, resolvedMapID) and woodZone.center and woodZone.radius then
-            local dx = woodZone.center[1] - px
-            local dy = woodZone.center[2] - py
-            if dx * dx + dy * dy <= woodZone.radius * woodZone.radius then
-                cachedPlayerWoodZone = woodZone
-                return woodZone
-            end
-        end
-    end
-
-    return nil
-end
-
--- Normalise owner + statut : une zone « available » sans capturedTime n'est pas tenue
--- (owner résiduel après ZS/revert) - ne pas la promouvoir en captured (ex. Loch Modan).
 NormalizePlayerOwnedZoneStatus = function(zone, pf)
     if zone.owner ~= pf or zone.status == "in_progress" then
         return

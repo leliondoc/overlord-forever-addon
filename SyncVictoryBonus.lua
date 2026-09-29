@@ -12,6 +12,9 @@ local VB_MAX_FUTURE_SKEW = 300
 local VB_VICTORY_BONUS = 0.02
 local VB_PENDING_SECONDS = 2 * 60 * 60
 local VB_PENDING_LIMIT = 64
+-- Plancher de totalAtApply pour les VB emis/synthetises par un client v2 (voir
+-- Overlord:GetLegacyDominationTotalForVB). Le compte de victoires ne depend plus de ce champ.
+local VB_MIN_TOTAL_AT_APPLY = 2500
 
 local VALID_VB_POOL = { global = true }
 local victoryTransportEvidence = {}
@@ -684,8 +687,8 @@ end
 local HasVictoryTransportEvidence
 local pendingRetryWorker = { running = false, scheduled = false, dirty = false }
 
--- Retry after TV proof or a later territorial DX. Re-run the original VB
--- validation with its original sender, in small slices.
+-- Retry after TV proof. Re-run the original VB validation with its original
+-- sender, in small slices.
 function Overlord.Sync:RetryPendingVictoryBonusForVictory()
     if Overlord.InstanceSuspended then return end
     local worker = pendingRetryWorker
@@ -734,9 +737,9 @@ function Overlord.Sync:RetryPendingVictoryBonusForVictory()
                 local accepted = self:OnReceiveVictoryBonus(
                     pending.payload, pending.sender, pending.sourceChannel)
                 if not (accepted and accepted[pending.rawId]) then
-                    -- DX may still be missing, so totalAtApply is not yet
-                    -- plausible. Keep the original expiry until DX arrives,
-                    -- including when the replay re-queued the same event.
+                    -- Rejected for a reason other than missing proof (journal
+                    -- full, no store yet). Keep the original expiry, including
+                    -- when the replay re-queued the same event.
                     local requeued = pendingVictoryBonuses[row.key]
                     if requeued == nil then
                         pendingVictoryBonuses[row.key] = pending
@@ -749,7 +752,7 @@ function Overlord.Sync:RetryPendingVictoryBonusForVictory()
         if index <= #retry then
             Schedule()
         elseif worker.dirty then
-            -- TV/DX arrived during this pass. Rebuild once after yielding;
+            -- A TV arrived during this pass. Rebuild once after yielding;
             -- never create a second independent callback chain.
             Snapshot()
             Schedule()
@@ -759,12 +762,6 @@ function Overlord.Sync:RetryPendingVictoryBonusForVictory()
     end
     Snapshot()
     Step()
-end
-
-function Overlord.Sync:RetryPendingVictoryBonusesAfterDomination()
-    -- A VB's totalAtApply covers every front, so a DX for any front may make
-    -- a pending victory plausible.
-    self:RetryPendingVictoryBonusForVictory()
 end
 
 function Overlord.Sync:RecordVictoryBonusTransportEvidence(
@@ -815,26 +812,52 @@ local function IsHistoricalReplaySenderTrusted(sync, sender, sourceChannel)
     return false
 end
 
-local function IsRemoteVictoryTotalPlausible(ev)
-    local allyTerr, hordeTerr = Overlord:GetDominationTotals()
-    local allyBonus, hordeBonus = Overlord:GetDominationVictoryBonusTotals()
-    local localTotal = allyTerr + hordeTerr + allyBonus + hordeBonus
-    if localTotal <= 0 then return false end
-    local frontCount = 0
-    for _ in pairs((Overlord.Fronts and Overlord.Fronts.Registry) or {}) do
-        frontCount = frontCount + 1
-    end
-    local tolerance = math.max(frontCount * 2400, math.floor(localTotal * 0.05))
-    -- Un replay historique a naturellement un totalAtApply inferieur au total actuel.
-    -- Seule une valeur future trop haute est suspecte ; le plancher serait non convergent.
-    return ev.totalAtApply <= localTotal + tolerance
-end
-
 function Overlord:GetDominationVictoryBonusTotals()
     local store = EnsureVictoryEventsDB()
     if not store then return 0, 0 end
     return NormalizeFiniteInteger(store.totals.Alliance) or 0,
         NormalizeFiniteInteger(store.totals.Horde) or 0
+end
+
+-- Barre v2 : nombre de victoires DISTINCTES par faction pour la campagne courante.
+-- byEventId est la projection dedupliquee du journal (un composant par victoire, meme
+-- si plusieurs rapports concurrents ou alias existent) ; le store est par epoch, donc
+-- aucune victoire de la semaine precedente ne peut etre comptee. Mis en cache par revision.
+local victoryCountCache = setmetatable({}, { __mode = "k" })
+function Overlord:GetDominationVictoryCounts()
+    local store = EnsureVictoryEventsDB()
+    if not store then return 0, 0 end
+    local revision = NormalizeFiniteInteger(store.revision) or 0
+    local rows = store.byEventId
+    local cached = victoryCountCache[store]
+    if not cached or cached.revision ~= revision or cached.rows ~= rows then
+        cached = { revision = revision, rows = rows, Alliance = 0, Horde = 0 }
+        for _, ev in pairs(type(rows) == "table" and rows or {}) do
+            if type(ev) == "table" and (ev.faction == "Alliance" or ev.faction == "Horde") then
+                cached[ev.faction] = cached[ev.faction] + 1
+            end
+        end
+        victoryCountCache[store] = cached
+    end
+    return cached.Alliance, cached.Horde
+end
+
+-- totalAtApply des VB emis par un client v2. Il ne compte plus pour la barre v2 mais
+-- les clients <= 1.1.10 le valident (totalAtApply <= leur total + tolerance) et en tirent
+-- 2 % pour leur barre temporelle. On reprend donc le dernier total "ancienne formule"
+-- connu : buckets gels de cette semaine, ou plus grand total DX observe d'un ancien
+-- pair, avec un plancher qui reste plausible pour tout recepteur.
+function Overlord:GetLegacyDominationTotalForVB()
+    local ally, horde = 0, 0
+    if self.GetDominationTotals then ally, horde = self:GetDominationTotals() end
+    local total = (tonumber(ally) or 0) + (tonumber(horde) or 0)
+    local observed = Overlord.Sync and Overlord.Sync.GetObservedLegacyDominationTotal
+        and Overlord.Sync:GetObservedLegacyDominationTotal() or 0
+    if observed > total then total = observed end
+    if total < VB_MIN_TOTAL_AT_APPLY then total = VB_MIN_TOTAL_AT_APPLY end
+    local cap = Overlord.DOMINATION_SANITY_CAP or 2147483647
+    if total > cap then total = cap end
+    return math.floor(total)
 end
 
 function Overlord:GetDominationVictoryEventNear(frontId, faction, victoryTs)
@@ -860,9 +883,6 @@ function Overlord:ApplyDominationVictoryBonusEvent(rawEv, opts)
     local historicalReplay = opts.allowHistorical == true
         and time() - ev.victoryTs >= VB_TRUCE_SECONDS
     if not evidence and not historicalReplay then return false, "no_victory_evidence" end
-    if not opts.localEmitter and not IsRemoteVictoryTotalPlausible(ev) then
-        return false, "implausible_total"
-    end
 
     local store = EnsureVictoryEventsDB()
     if not store then return false, "no_store" end
@@ -1023,11 +1043,6 @@ function Overlord.Sync:OnReceiveVictoryBonus(payload, sender, sourceChannel)
             if ok then
                 accepted[BuildVictoryRawEventId(ev)] = true
                 if reason ~= "duplicate" then changed = true end
-            elseif reason == "implausible_total" and (transportEvidence or localEvidence) then
-                -- Preuve deja la, mais notre total DX est en retard : garder le VB
-                -- en attente. Le prochain DX le rejoue (RetryPendingVictoryBonuses
-                -- AfterDomination) au lieu de le perdre jusqu'au replay de 15 min.
-                QueuePendingVictoryBonus(ev, payload, sender, sourceChannel)
             end
         elseif self.IsDominationChannelSenderVerified
             and self:IsDominationChannelSenderVerified(sender or "") then

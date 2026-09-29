@@ -1,4 +1,4 @@
--- Ressources.lua - Systeme de ressources joueur (or + bois)
+-- Ressources.lua - Systeme de ressources joueur (or)
 -- Module autonome : accumulation passive (cercle) + bonus actif (vrai node mine),
 -- depense offensive (renfort -60s) et defensive (barricade +60s).
 -- Core.lua n'appelle que Initialize / SaveResources / RestoreResources / ResetResources.
@@ -23,12 +23,6 @@ local BARRICADE_INCREASE = 60
 local REINFORCE_MIN_HOLD = 30
 
 -- Source unique pour les textes (Locales.ApplyGoldLocaleStrings) et ZoneControl
--- Bois personnel (HUD / domination) : gagne dans les forets en drainant le stock partage.
-local WOOD_MAX = 500
-local WOOD_PASSIVE_INTERVAL = 15
-local WOOD_PASSIVE_AMOUNT = 1
-local WOOD_SPEND_COST = 250
-local DOMINATION_BOOST_PER_SPEND = 0.01
 local VICTORY_DOMINATION_BONUS = 0.02
 
 Overlord.RessourcesConstants = {
@@ -40,40 +34,23 @@ Overlord.RessourcesConstants = {
     REINFORCE_REDUCTION = REINFORCE_REDUCTION,
     BARRICADE_INCREASE = BARRICADE_INCREASE,
     REINFORCE_MIN_HOLD = REINFORCE_MIN_HOLD,
-    WOOD_MAX = WOOD_MAX,
-    WOOD_REGEN_INTERVAL = WOOD_PASSIVE_INTERVAL,
-    WOOD_REGEN_AMOUNT = WOOD_PASSIVE_AMOUNT,
-    WOOD_PASSIVE_INTERVAL = WOOD_PASSIVE_INTERVAL,
-    WOOD_PASSIVE_AMOUNT = WOOD_PASSIVE_AMOUNT,
-    WOOD_SPEND_COST = WOOD_SPEND_COST,
-    DOMINATION_BOOST_PER_SPEND = DOMINATION_BOOST_PER_SPEND,
     VICTORY_DOMINATION_BONUS = VICTORY_DOMINATION_BONUS,
 }
 
-Overlord.Ressources.WOOD_MAX = WOOD_MAX
-Overlord.Ressources.WOOD_SPEND_COST = WOOD_SPEND_COST
-Overlord.Ressources.WOOD_PASSIVE_INTERVAL = WOOD_PASSIVE_INTERVAL
-
--- Stock des mines / forets : reserve partagee par site (100 max), drainee par le farm passif.
+-- Stock des mines : reserve partagee par site (100 max), drainee par le farm passif.
 -- Regeneration : ~1 stock toutes les 36s jusqu'au max.
 local MINE_STOCK_MAX = 100
 local MINE_REGEN_INTERVAL = 36
-local WOOD_STOCK_MAX = 100
-local WOOD_STOCK_REGEN_INTERVAL = 36
 
 -- Etat local (synchronise avec OverlordDB dans Save/Restore)
 local gold = 0
-local wood = 0
 local reinforceActive = false
 local barricadeActive = false
 local mineStocks = {}          -- [mineId] = stock (0..100)
 local mineStockTimers = {}     -- [mineId] = accumulateur regen (secondes fractionnaires)
-local woodStocks = {}          -- [woodId] = stock foret partage (0..100)
-local woodStockTimers = {}     -- [woodId] = accumulateur regen
 -- Index creux : seuls les stocks réellement sous le maximum sont visites par le
 -- ticker. La cadence et la formule de regeneration restent strictement identiques.
 local depletedMineIds = {}
-local depletedWoodIds = {}
 local resourcesRestored = false
 
 -- Ticker de minage passif
@@ -81,18 +58,13 @@ local mineTicker = nil
 local resourceTickerFast = false
 local resourceTickLastAt = 0
 local mineAccumulator = 0
-local woodAccumulator = 0
 local currentMineId = nil
-local currentWoodZoneId = nil
 
 -- Cooldown alerte mine (1 par mine, evite le spam)
 local MINE_ALERT_COOLDOWN = 60
-local WOOD_ALERT_COOLDOWN = 60
 local lastMineAlert = {}
-local lastWoodAlert = {}
 -- Derniere mine pour laquelle on a envoye MN a l'entree (alerte immediate a chaque visite)
 local mineVisitForMn = nil
-local woodVisitForWn = nil
 
 -- Frame pour les events (bonus minage actif)
 local resFrame = CreateFrame("Frame")
@@ -147,17 +119,6 @@ local function ShowFloatingGold(amount)
     entry.ag:Play()
 end
 
-local function ShowFloatingWood(amount)
-    local entry = fctPool[fctIndex]
-    fctIndex = (fctIndex % FCT_POOL_SIZE) + 1
-    entry.ag:Stop()
-    local xJitter = math.random(-20, 20)
-    entry.fs:ClearAllPoints()
-    entry.fs:SetPoint("CENTER", fctAnchor, "CENTER", xJitter, 0)
-    entry.fs:SetText(string.format(L.WOOD_FCT_GAIN or "+%d wood", amount))
-    entry.ag:Play()
-end
-
 -- ==================== Accesseurs ====================
 
 function Overlord.Ressources:GetGold()
@@ -193,14 +154,6 @@ function Overlord.Ressources:GetMineStockMax()
     return MINE_STOCK_MAX
 end
 
-function Overlord.Ressources:GetWoodStock(woodId)
-    return woodStocks[woodId] or WOOD_STOCK_MAX
-end
-
-function Overlord.Ressources:GetWoodStockMax()
-    return WOOD_STOCK_MAX
-end
-
 -- Consomme du stock d'une mine, retourne le montant reellement consomme
 local function DrainMineStock(mineId, amount)
     local stock = mineStocks[mineId] or MINE_STOCK_MAX
@@ -211,18 +164,6 @@ local function DrainMineStock(mineId, amount)
     -- Sync reseau : les autres clients n'avaient pas notre consommation (stock etait 100% local)
     if consumed > 0 and Overlord.Sync and Overlord.Sync.MaybeBroadcastMineStock then
         Overlord.Sync:MaybeBroadcastMineStock(mineId)
-    end
-    return consumed
-end
-
-local function DrainWoodStock(woodId, amount)
-    local stock = woodStocks[woodId] or WOOD_STOCK_MAX
-    if stock <= 0 then return 0 end
-    local consumed = math.min(amount, stock)
-    woodStocks[woodId] = stock - consumed
-    if consumed > 0 then depletedWoodIds[woodId] = true end
-    if consumed > 0 and Overlord.Sync and Overlord.Sync.MaybeBroadcastWoodStock then
-        Overlord.Sync:MaybeBroadcastWoodStock(woodId)
     end
     return consumed
 end
@@ -240,21 +181,6 @@ function Overlord.Ressources:ApplyRemoteMineStock(mineId, remoteStock)
     -- Pas de SaveResources() ici : c'est une mise a jour reseau frequente (chaque drain distant).
     -- La prochaine consommation ou Save planifie persistera l'etat.
     self:RefreshHUD()
-    if Overlord.MapMarkers and Overlord.MapMarkers.RequestOverlayRefresh then
-        Overlord.MapMarkers:RequestOverlayRefresh(true)
-    end
-end
-
-function Overlord.Ressources:ApplyRemoteWoodStock(woodId, remoteStock)
-    if not woodId then return end
-    remoteStock = tonumber(remoteStock)
-    if remoteStock == nil then return end
-    remoteStock = math.max(0, math.min(WOOD_STOCK_MAX, math.floor(remoteStock + 0.5)))
-    local cur = woodStocks[woodId] or WOOD_STOCK_MAX
-    if remoteStock >= cur then return end
-    woodStocks[woodId] = remoteStock
-    depletedWoodIds[woodId] = true
-    self:RefreshWoodHUD()
     if Overlord.MapMarkers and Overlord.MapMarkers.RequestOverlayRefresh then
         Overlord.MapMarkers:RequestOverlayRefresh(true)
     end
@@ -281,30 +207,6 @@ local function RegenAllMineStocks(elapsed)
         else
             depletedMineIds[mineId] = nil
             mineStockTimers[mineId] = nil
-        end
-    end
-end
-
-local function RegenAllWoodStocks(elapsed)
-    elapsed = math.max(0, tonumber(elapsed) or 1)
-    for woodId in pairs(depletedWoodIds) do
-        local stock = woodStocks[woodId] or WOOD_STOCK_MAX
-        if stock < WOOD_STOCK_MAX then
-            local acc = (woodStockTimers[woodId] or 0) + elapsed
-            if acc >= WOOD_STOCK_REGEN_INTERVAL then
-                local recovered = math.floor(acc / WOOD_STOCK_REGEN_INTERVAL)
-                acc = acc - recovered * WOOD_STOCK_REGEN_INTERVAL
-                stock = math.min(WOOD_STOCK_MAX, stock + recovered)
-                woodStocks[woodId] = stock
-            end
-            woodStockTimers[woodId] = acc
-            if stock >= WOOD_STOCK_MAX then
-                depletedWoodIds[woodId] = nil
-                woodStockTimers[woodId] = nil
-            end
-        else
-            depletedWoodIds[woodId] = nil
-            woodStockTimers[woodId] = nil
         end
     end
 end
@@ -386,7 +288,6 @@ function Overlord.Ressources:SaveResources()
     -- Evite qu'un SaveState trop tot au login ecrase les SavedVariables avec l'etat local initial (0).
     if not resourcesRestored then return end
     OverlordDB.gold = gold
-    OverlordDB.wood = wood
     OverlordDB.goldReinforceActive = reinforceActive
     OverlordDB.goldBarricadeActive = barricadeActive
     -- Copie shallow : decouple l'etat runtime des SavedVariables
@@ -396,20 +297,14 @@ function Overlord.Ressources:SaveResources()
     local timers = {}
     for k, v in pairs(mineStockTimers) do timers[k] = v end
     OverlordDB.mineStockTimers = timers
-    local woodStocksCopy = {}
-    for k, v in pairs(woodStocks) do woodStocksCopy[k] = v end
-    OverlordDB.woodStocks = woodStocksCopy
-    local woodTimers = {}
-    for k, v in pairs(woodStockTimers) do woodTimers[k] = v end
-    OverlordDB.woodStockTimers = woodTimers
+    -- Systeme de bois retire (1.2.0) : purge des anciennes cles.
+    OverlordDB.wood, OverlordDB.woodStocks, OverlordDB.woodStockTimers = nil, nil, nil
 end
 
 function Overlord.Ressources:RestoreResources()
     if not OverlordDB then return end
     gold = tonumber(OverlordDB.gold) or 0
     gold = math.max(0, math.min(GOLD_MAX, gold))
-    wood = tonumber(OverlordDB.wood) or 0
-    wood = math.max(0, math.min(WOOD_MAX, wood))
     reinforceActive = OverlordDB.goldReinforceActive or false
     barricadeActive = OverlordDB.goldBarricadeActive or false
     if OverlordDB.mineStocks then
@@ -432,32 +327,17 @@ function Overlord.Ressources:RestoreResources()
             mineStockTimers[k] = math.max(0, math.min(MINE_REGEN_INTERVAL - 1, tonumber(v) or 0))
         end
     end
-    if OverlordDB.woodStocks then
-        for k, v in pairs(OverlordDB.woodStocks) do
-            woodStocks[k] = math.max(0, math.min(WOOD_STOCK_MAX, tonumber(v) or WOOD_STOCK_MAX))
-            if woodStocks[k] < WOOD_STOCK_MAX then depletedWoodIds[k] = true end
-        end
-    end
-    if OverlordDB.woodStockTimers then
-        for k, v in pairs(OverlordDB.woodStockTimers) do
-            woodStockTimers[k] = math.max(0, math.min(WOOD_STOCK_REGEN_INTERVAL - 1, tonumber(v) or 0))
-        end
-    end
     resourcesRestored = true
 end
 
 function Overlord.Ressources:ResetResources()
     resourcesRestored = true
     gold = 0
-    wood = 0
     reinforceActive = false
     barricadeActive = false
     mineStocks = {}
     mineStockTimers = {}
-    woodStocks = {}
-    woodStockTimers = {}
     depletedMineIds = {}
-    depletedWoodIds = {}
     self:SaveResources()
 end
 
@@ -555,7 +435,6 @@ end
 
 local function ClearResourceCircleState()
     mineVisitForMn = nil
-    woodVisitForWn = nil
     if currentMineId then
         local prevMine = Overlord.Zones:GetMine(currentMineId)
         if prevMine then
@@ -564,26 +443,15 @@ local function ClearResourceCircleState()
         currentMineId = nil
         mineAccumulator = 0
     end
-    if currentWoodZoneId then
-        local prevWoodZone = Overlord.Zones.GetWoodZone
-            and Overlord.Zones:GetWoodZone(currentWoodZoneId)
-        if prevWoodZone and L.WOOD_ZONE_LEFT then
-            Overlord:PrintNotification("|cFFFFD100[Overlord]|r "
-                .. string.format(L.WOOD_ZONE_LEFT, prevWoodZone.name))
-        end
-        currentWoodZoneId = nil
-        woodAccumulator = 0
-    end
 end
 
 local function MineTickerFunc(elapsed)
     if not Overlord.Zones then return end
     elapsed = math.max(0, tonumber(elapsed) or 1)
-    -- Regeneration des stocks mines / forets (meme si le joueur n'est pas dedans)
+    -- Regeneration des stocks des mines (meme si le joueur n'est pas dedans)
     RegenAllMineStocks(elapsed)
-    RegenAllWoodStocks(elapsed)
 
-    -- Hors carte mine/foret, aucun scan de position, War Mode, aura ou monture.
+    -- Hors carte mine, aucun scan de position, War Mode, aura ou monture.
     -- Les changements de zone continuent de rafraichir le HUD via resFrame.
     local okMap, mapID = pcall(C_Map.GetBestMapForUnit, "player")
     if not okMap or not mapID or not Overlord.Zones:IsResourceMapContext(mapID) then
@@ -605,13 +473,8 @@ local function MineTickerFunc(elapsed)
     -- Sinon en monture / furtif / vol on return sans jamais appeler GetCurrentPlayerMine :
     -- currentMineId reste fige jusqu'a ce que l'etat minable revienne (ex. capturer a pied).
     local mineNow = Overlord.Zones:GetCurrentPlayerMine()
-    local woodZoneNow = Overlord.Zones.GetCurrentPlayerWoodZone
-        and Overlord.Zones:GetCurrentPlayerWoodZone() or nil
     if not mineNow then
         mineVisitForMn = nil
-    end
-    if not woodZoneNow then
-        woodVisitForWn = nil
     end
     if currentMineId then
         if not mineNow or mineNow.id ~= currentMineId then
@@ -623,76 +486,7 @@ local function MineTickerFunc(elapsed)
             mineAccumulator = 0
         end
     end
-    if currentWoodZoneId then
-        if not woodZoneNow or woodZoneNow.id ~= currentWoodZoneId then
-            local prevWoodZone = Overlord.Zones.GetWoodZone and Overlord.Zones:GetWoodZone(currentWoodZoneId)
-            if prevWoodZone and L.WOOD_ZONE_LEFT then
-                Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. string.format(L.WOOD_ZONE_LEFT, prevWoodZone.name))
-            end
-            currentWoodZoneId = nil
-            woodAccumulator = 0
-        end
-    end
-
     if IsPlayerInNonMiningState() then return end
-
-    if woodZoneNow then
-        if currentWoodZoneId ~= woodZoneNow.id then
-            currentWoodZoneId = woodZoneNow.id
-            woodAccumulator = 0
-            if L.WOOD_ZONE_ENTERED then
-                Overlord:PrintNotification("|cFF00FF00[Overlord]|r " .. string.format(L.WOOD_ZONE_ENTERED, woodZoneNow.name))
-            end
-        end
-        -- Alerte WN (mode guerre deja verifie plus haut) : immediate a l'entree, puis cooldown
-        local nowWood = GetTime()
-        if woodVisitForWn ~= woodZoneNow.id then
-            woodVisitForWn = woodZoneNow.id
-            lastWoodAlert[woodZoneNow.id] = nowWood
-            if Overlord.Sync and Overlord.Sync.BroadcastWoodHarvesting then
-                Overlord.Sync:BroadcastWoodHarvesting(woodZoneNow.id)
-            end
-        else
-            local lastAlert = lastWoodAlert[woodZoneNow.id] or 0
-            if nowWood - lastAlert >= WOOD_ALERT_COOLDOWN then
-                lastWoodAlert[woodZoneNow.id] = nowWood
-                if Overlord.Sync and Overlord.Sync.BroadcastWoodHarvesting then
-                    Overlord.Sync:BroadcastWoodHarvesting(woodZoneNow.id)
-                end
-            end
-        end
-        if wood < WOOD_MAX then
-            local stock = woodStocks[woodZoneNow.id] or WOOD_STOCK_MAX
-            if stock <= 0 then
-                if not woodZoneNow._depletedNotified then
-                    woodZoneNow._depletedNotified = true
-                    if L.WOOD_DEPLETED then
-                        Overlord:PrintNotification("|cFFFFD100[Overlord]|r "
-                            .. string.format(L.WOOD_DEPLETED, woodZoneNow.name))
-                    end
-                end
-            else
-                woodZoneNow._depletedNotified = nil
-            woodAccumulator = woodAccumulator + elapsed
-                if woodAccumulator >= WOOD_PASSIVE_INTERVAL then
-                    woodAccumulator = 0
-                    local available = DrainWoodStock(woodZoneNow.id, WOOD_PASSIVE_AMOUNT)
-                    if available > 0 then
-                        local gained = math.min(available, WOOD_MAX - wood)
-                        if gained > 0 then
-                            wood = wood + gained
-                            Overlord.Ressources:SaveResources()
-                            Overlord.Ressources:RefreshWoodHUD()
-                            ShowFloatingWood(gained)
-                            if wood >= WOOD_MAX and L.WOOD_FULL then
-                                Overlord:PrintNotification("|cFFFFD700[Overlord]|r " .. L.WOOD_FULL)
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
 
     local mine = mineNow
 
@@ -763,11 +557,9 @@ end
 -- ==================== Cadre autonome WC3 (haut de l'ecran, centre) ====================
 
 local goldHUD = nil
-local woodHUD = nil
 local guildKeepHUD = nil
 local goldHudRoot = nil
 local hudTutorialPanel = nil
--- Bois personnel (HUD) ; reserves des forets = woodStocks (partagees, sync WS).
 local HUD_STACK_GAP = 6
 local HUD_PANEL_WIDTH = 280
 local TUTORIAL_PANEL_W = 52
@@ -844,9 +636,6 @@ end
 function Overlord.Ressources:IsOverlordKillZoneMap(mapID)
     if not mapID then return false end
     if Overlord.Zones and Overlord.Zones:IsWarFrontMapID(mapID) then return true end
-    if Overlord.Zones and Overlord.Zones.IsWoodMapID and Overlord.Zones:IsWoodMapID(mapID) then
-        return true
-    end
     if Overlord.Zones and Overlord.Zones.IsMineMapID and Overlord.Zones:IsMineMapID(mapID) then
         return true
     end
@@ -866,9 +655,6 @@ function Overlord.Ressources:IsInOverlordKillZone()
         end
     end
     if Overlord.Zones and Overlord.Zones:IsWarFrontMapID(mapID) then return true end
-    if Overlord.Zones and Overlord.Zones.IsWoodMapID and Overlord.Zones:IsWoodMapID(mapID) then
-        return true
-    end
     if Overlord.Zones and Overlord.Zones.IsMineMapID and Overlord.Zones:IsMineMapID(mapID) then
         return true
     end
@@ -904,10 +690,6 @@ local function IsResourceHudZone(mapID, instanceAlreadyChecked)
     return false
 end
 
-local function IsWoodHudZone()
-    return IsResourceHudZone()
-end
-
 -- Fortin icone HUD (carte / selection).
 local function GetHudKeepContext()
     if not Overlord.GuildKeep then return nil, nil end
@@ -927,30 +709,6 @@ function Overlord.Ressources:ShouldShowGuildKeepHUD(mapID, resourceZoneKnown)
     if resourceZoneKnown == nil and not IsResourceHudZone(mapID) then return false end
     local _, site = GetHudKeepContext()
     return site ~= nil
-end
-
-local function FormatWoodDominationTip()
-    if not L.WOOD_DOMINATION_TIP then return nil end
-    local pct = math.floor(DOMINATION_BOOST_PER_SPEND * 100 + 0.5)
-    return string.format(L.WOOD_DOMINATION_TIP, WOOD_SPEND_COST, pct)
-end
-
--- Tooltip bouton Domination (meme logique que Renforcer / Barricade sur l'or)
-local function ShowWoodDominationTooltip(owner)
-    GameTooltip:SetOwner(owner, "ANCHOR_BOTTOM")
-    local t = TT()
-    GameTooltip:AddLine(L.WOOD_DOMINATION_BTN or "Domination +1%", t.HL[1], t.HL[2], t.HL[3])
-    local domTip = FormatWoodDominationTip()
-    if domTip then
-        GameTooltip:AddLine(domTip, t.BODY[1], t.BODY[2], t.BODY[3], true)
-    end
-    if L.WOOD_TOOLTIP_COST then
-        GameTooltip:AddLine(string.format(L.WOOD_TOOLTIP_COST, WOOD_SPEND_COST), t.MUTED[1], t.MUTED[2], t.MUTED[3])
-    end
-    if wood < WOOD_SPEND_COST and L.WOOD_NOT_ENOUGH then
-        GameTooltip:AddLine(string.format(L.WOOD_NOT_ENOUGH, WOOD_SPEND_COST), t.HL[1], t.HL[2], t.HL[3])
-    end
-    GameTooltip:Show()
 end
 
 local function GetKeepHudWarfrontAtlas(st, mapID, site)
@@ -988,13 +746,12 @@ end
 
 -- Reancre les panneaux du cluster haut.
 local lastHudTopLayoutKey = nil
-local function LayoutHudTopRow(showKeep, showGold, showWood, showTutorial)
+local function LayoutHudTopRow(showKeep, showGold, showTutorial)
     if not goldHudRoot or not goldHUD or not hudTutorialPanel then return end
     local clusterH = 62
     if showTutorial == nil then showTutorial = true end
     local layoutKey = (showKeep and "1" or "0")
         .. (showGold and "1" or "0")
-        .. (showWood and "1" or "0")
         .. (showTutorial and "1" or "0")
     if layoutKey == lastHudTopLayoutKey
         and goldHudRoot._hudLayoutW and goldHudRoot:GetWidth() == goldHudRoot._hudLayoutW then
@@ -1025,18 +782,6 @@ local function LayoutHudTopRow(showKeep, showGold, showWood, showTutorial)
         goldHUD:Hide()
     end
 
-    if woodHUD then
-        woodHUD:ClearAllPoints()
-        if showWood then
-            local gap = (anchor == goldHudRoot) and 0 or HUD_STACK_GAP
-            woodHUD:SetPoint("TOPLEFT", anchor, fromPoint, gap, 0)
-            woodHUD:Show()
-            anchor = woodHUD
-            fromPoint = "TOPRIGHT"
-        else
-            woodHUD:Hide()
-        end
-    end
 
     if showKeep and guildKeepHUD then
         guildKeepHUD:ClearAllPoints()
@@ -1050,10 +795,6 @@ local function LayoutHudTopRow(showKeep, showGold, showWood, showTutorial)
         totalW = TUTORIAL_PANEL_W
     end
     if showGold then
-        if totalW > 0 then totalW = totalW + HUD_STACK_GAP end
-        totalW = totalW + HUD_PANEL_WIDTH
-    end
-    if showWood then
         if totalW > 0 then totalW = totalW + HUD_STACK_GAP end
         totalW = totalW + HUD_PANEL_WIDTH
     end
@@ -1133,7 +874,7 @@ local function CreateGoldHUD()
     guildKeepHUD = CreateFrame("Frame", "OverlordGuildKeepHUD", goldHudRoot, "BackdropTemplate")
     guildKeepHUD:SetSize(TUTORIAL_PANEL_W, clusterH)
     guildKeepHUD:SetPoint("TOPLEFT", tutorialPanel, "TOPRIGHT", HUD_STACK_GAP, 0)
-    -- Position finale : a droite du bois (LayoutHudTopRow)
+    -- Position finale : geree par LayoutHudTopRow
     Overlord.Ressources:ApplyTopHudChrome(guildKeepHUD, 0.9)
     guildKeepHUD:EnableMouse(true)
     guildKeepHUD:RegisterForDrag("LeftButton", "RightButton")
@@ -1495,104 +1236,6 @@ local function CreateGoldHUD()
         goldHudRoot:SetPoint(p.point or "TOP", UIParent, p.relPoint or "TOP", p.x or 0, p.y or -4)
     end
 
-    -- --- Panneau bois individuel ---
-    woodHUD = CreateFrame("Frame", "OverlordWoodHUD", goldHudRoot, "BackdropTemplate")
-    woodHUD:SetSize(HUD_PANEL_WIDTH, clusterH)
-    woodHUD:SetPoint("TOPLEFT", goldHUD, "TOPRIGHT", HUD_STACK_GAP, 0)
-    Overlord.Ressources:ApplyTopHudChrome(woodHUD, 0.9)
-    woodHUD:EnableMouse(true)
-    woodHUD:SetScript("OnMouseUp", function() end)
-    woodHUD:RegisterForDrag("LeftButton", "RightButton")
-    woodHUD:SetScript("OnDragStart", function() goldHudRoot:StartMoving() end)
-    woodHUD:SetScript("OnDragStop", OnTopHudClusterDragStop)
-
-    local woodIcon = woodHUD:CreateTexture(nil, "ARTWORK", nil, 1)
-    woodIcon:SetSize(16, 16)
-    woodIcon:SetPoint("TOP", woodHUD, "TOP", -36, -8)
-    woodIcon:SetTexture("Interface\\Icons\\INV_Tradeskillitem_03")
-    woodIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-    woodHUD.woodIcon = woodIcon
-
-    local woodText = woodHUD:CreateFontString(nil, "OVERLAY")
-    woodText:SetFont(Overlord.UI.ResolveLocalizedFontPath(GameFontNormal, "Fonts\\MORPHEUS.TTF"), 14)
-    woodText:SetPoint("LEFT", woodIcon, "RIGHT", 5, 0)
-    woodText:SetTextColor(0.76, 0.55, 0.32)
-    woodHUD.woodText = woodText
-
-    local woodBarBg = CreateFrame("Frame", nil, woodHUD)
-    woodBarBg:SetSize(250, 3)
-    woodBarBg:SetPoint("CENTER", woodHUD, "CENTER", 0, 2)
-    woodBarBg:EnableMouse(false)
-    local woodBarBgTex = woodBarBg:CreateTexture(nil, "BACKGROUND")
-    woodBarBgTex:SetAllPoints()
-    woodBarBgTex:SetColorTexture(0.12, 0.10, 0.08, 0.8)
-    local woodBarFill = woodBarBg:CreateTexture(nil, "ARTWORK")
-    woodBarFill:SetPoint("TOPLEFT")
-    woodBarFill:SetPoint("BOTTOMLEFT")
-    woodBarFill:SetWidth(1)
-    woodBarFill:SetColorTexture(0.55, 0.38, 0.18, 0.9)
-    woodHUD.barBg = woodBarBg
-    woodHUD.barFill = woodBarFill
-
-    local boostBtn = CreateFrame("Button", nil, woodHUD, "BackdropTemplate")
-    boostBtn:SetSize(200, 20)
-    boostBtn:SetPoint("BOTTOM", woodHUD, "BOTTOM", 0, 7)
-    boostBtn:SetBackdrop({
-        bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 16, edgeSize = 12,
-        insets = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    boostBtn:SetBackdropColor(0.12, 0.12, 0.18, 0.9)
-    boostBtn:SetBackdropBorderColor(borderR, borderG, borderB, 0.5)
-    local bLabel = boostBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    bLabel:SetPoint("CENTER")
-    bLabel:SetText(L.WOOD_DOMINATION_BTN or "Domination +1%")
-    bLabel:SetTextColor(accentR, accentG, accentB)
-    boostBtn.label = bLabel
-    boostBtn:EnableMouse(true)
-    local bGlow = boostBtn:CreateTexture(nil, "HIGHLIGHT")
-    bGlow:SetAllPoints()
-    bGlow:SetTexture("Interface\\BUTTONS\\UI-Panel-Button-Highlight")
-    bGlow:SetTexCoord(0, 0.625, 0, 0.6875)
-    bGlow:SetBlendMode("ADD")
-    bGlow:SetAlpha(0.15)
-    boostBtn:SetScript("OnClick", function()
-        if Overlord.Ressources then
-            Overlord.Ressources:SpendWoodDominationBoost()
-        end
-    end)
-    woodHUD:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-        local t = TT()
-        local w = wood
-        GameTooltip:AddLine(L.WOOD_COUNTER and string.format(L.WOOD_COUNTER, w, WOOD_MAX) or "Wood", t.HL[1], t.HL[2], t.HL[3])
-        if L.WOOD_COUNTER_TIP then
-            GameTooltip:AddLine(string.format(L.WOOD_COUNTER_TIP, w, WOOD_MAX, WOOD_PASSIVE_INTERVAL),
-                t.BODY[1], t.BODY[2], t.BODY[3], true)
-        end
-        GameTooltip:Show()
-    end)
-    woodHUD:SetScript("OnLeave", function() GameTooltip:Hide() end)
-
-    local woodCloseBtn = CreateFrame("Button", nil, woodHUD)
-    woodCloseBtn:SetSize(16, 16)
-    woodCloseBtn:SetPoint("TOPRIGHT", -4, -4)
-    woodCloseBtn:SetNormalFontObject("GameFontNormalSmall")
-    woodCloseBtn:SetText("X")
-    woodCloseBtn:SetScript("OnClick", HideTopHudManually)
-    woodCloseBtn:SetScript("OnEnter", function(btn) btn:SetText("|cFFFF4444X|r") end)
-    woodCloseBtn:SetScript("OnLeave", function(btn) btn:SetText("X") end)
-
-    boostBtn:SetScript("OnEnter", function(self)
-        ShowWoodDominationTooltip(self)
-    end)
-    boostBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    woodHUD.boostBtn = boostBtn
-    woodHUD._accent = { accentR, accentG, accentB }
-    woodHUD._gray = dimGray
-    woodHUD:Hide()
-
     -- Demarre cache, la visibilite est geree par le ticker de zone
     goldHudRoot:Hide()
 end
@@ -1680,125 +1323,7 @@ function Overlord.Ressources:RefreshGuildKeepHUD(force)
     end
 end
 
-function Overlord.Ressources:ShouldShowWoodHUD(mapID, resourceZoneKnown)
-    if Overlord.InstanceSuspended then return false end
-    if resourceZoneKnown == false then return false end
-    if resourceZoneKnown == nil and not (mapID and IsResourceHudZone(mapID))
-        and not IsWoodHudZone() then return false end
-    return true
-end
 
--- Couleurs bois toujours identiques ; seul le bouton Domination se grise si non utilisable.
--- Chrome (SetBackdrop + couleurs statiques) invariant tant que la faction ne change pas (jamais
--- en session hors service de changement de faction, qui force un relog) : ne le reappliquer que
--- lors du premier appel ou d'un changement reel de faction, pas a chaque refresh (jusqu'a 1x/2s
--- en continu tant que le HUD bois est visible sur front actif).
-local woodHudChromeFaction = nil
-
-local function ApplyWoodHudPanelColors()
-    if not woodHUD then return end
-    woodHUD:SetAlpha(1)
-    local pf = Overlord.PlayerFaction
-    if woodHudChromeFaction == pf then return end
-    woodHudChromeFaction = pf
-    Overlord.Ressources:ApplyTopHudChrome(woodHUD, 0.9)
-    woodHUD.woodText:SetTextColor(0.76, 0.55, 0.32)
-    if woodHUD.woodIcon then
-        woodHUD.woodIcon:SetVertexColor(1, 1, 1)
-    end
-    woodHUD.barFill:SetColorTexture(0.55, 0.38, 0.18, 0.9)
-end
-
--- Dirty-check (meme principe que RefreshGuildKeepHUD/lastGkHudBarKey) : SetText/couleurs bouton
--- sautes si rien n'a change depuis le refresh precedent. La largeur de barre reste recalculee a
--- chaque appel (cout negligeable, evite toute barre perimee si le layout HUD change entre-temps).
-local lastWoodHudKey = nil
-
-function Overlord.Ressources:RefreshWoodHUD()
-    if not woodHUD then return end
-    ApplyWoodHudPanelColors()
-    local w = wood
-    if woodHUD.barBg then woodHUD.barBg:Show() end
-    if woodHUD.barFill then
-        woodHUD.barFill:Show()
-        local pct = WOOD_MAX > 0 and (w / WOOD_MAX) or 0
-        woodHUD.barFill:SetWidth(math.max(1, woodHUD.barBg:GetWidth() * pct))
-    end
-    local canSpend = Overlord.PlayerFaction ~= nil and w >= WOOD_SPEND_COST
-    local key = w .. "|" .. (canSpend and 1 or 0)
-    if key == lastWoodHudKey then return end
-    lastWoodHudKey = key
-
-    woodHUD.woodText:SetText(string.format(L.WOOD_COUNTER or "Wood: %d / %d", w, WOOD_MAX))
-    local ac = woodHUD._accent
-    local gy = woodHUD._gray
-    local btn = woodHUD.boostBtn
-    -- Pas de SetEnabled : sous WoW le survol/tooltip ne marche pas sur un bouton desactive
-    if canSpend then
-        btn.label:SetTextColor(ac[1], ac[2], ac[3])
-        btn:SetBackdropBorderColor(ac[1], ac[2], ac[3], 0.6)
-    else
-        btn.label:SetTextColor(gy[1], gy[2], gy[3])
-        btn:SetBackdropBorderColor(gy[1], gy[2], gy[3], 0.4)
-    end
-end
-
-function Overlord.Ressources:SpendWoodDominationBoost()
-    if not OverlordDB then return end
-    if Overlord.InstanceSuspended or (IsInInstance and IsInInstance()) then return end
-    local pf = Overlord.PlayerFaction
-    if not pf then
-        if L.WOOD_DOMINATION_WRONG_FACTION then
-            Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.WOOD_DOMINATION_WRONG_FACTION)
-        end
-        return
-    end
-    if wood < WOOD_SPEND_COST then
-        if L.WOOD_NOT_ENOUGH then
-            Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r " .. L.WOOD_NOT_ENOUGH, WOOD_SPEND_COST))
-        end
-        return
-    end
-    if not Overlord.ApplyWoodDominationBonusSeconds
-        or not Overlord:ApplyWoodDominationBonusSeconds(pf, DOMINATION_BOOST_PER_SPEND) then
-        return
-    end
-    wood = wood - WOOD_SPEND_COST
-    self:SaveResources()
-    if Overlord.Sync and Overlord.Sync.BroadcastDomination then
-        Overlord.Sync:BroadcastDomination()
-    end
-    if Overlord.Sync and Overlord.Sync.BroadcastDominationBoost then
-        local eventId = Overlord.Sync.BuildDominationBoostEventId
-            and Overlord.Sync:BuildDominationBoostEventId(pf) or nil
-        if eventId and Overlord.Sync.MarkDominationBoostEventSeen then
-            Overlord.Sync:MarkDominationBoostEventSeen(pf, eventId, OverlordDB.lastResetTimestamp or 0)
-        end
-        local targetPct = DOMINATION_BOOST_PER_SPEND
-        if Overlord.GetDominationDisplayFractions then
-            local allyPct, hordePct = Overlord:GetDominationDisplayFractions()
-            targetPct = (pf == "Alliance") and allyPct or hordePct
-        end
-        -- WB : ratio cible + delta. Le recepteur applique seulement le manque.
-        Overlord.Sync:BroadcastDominationBoost(pf, targetPct, "wood_resource",
-            eventId, DOMINATION_BOOST_PER_SPEND)
-    end
-    self:RefreshWoodHUD()
-    if Overlord.UI and Overlord.UI.RefreshDomination then
-        Overlord.UI:RefreshDomination()
-    end
-    if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
-        Overlord.LeaderboardUI:RefreshIfVisible()
-    end
-    if L.WOOD_DOMINATION_SPENT then
-        Overlord:PrintNotification("|cFF00FF00[Overlord]|r " .. L.WOOD_DOMINATION_SPENT)
-    end
-    if Overlord.PlayAddonSound then
-        Overlord:PlayAddonSound("wood_spend")
-    end
-    self:RefreshGuildKeepHUD()
-    Overlord:SaveState()
-end
 
 -- Dirty-check (meme principe que RefreshGuildKeepHUD) : SetText/couleurs boutons sautes si rien
 -- n'a change depuis le dernier refresh (or inchange + etats renfort/barricade identiques).
@@ -1893,7 +1418,6 @@ local lastHUDZoneCheck = 0
 local lastHUDMapID = nil
 local AUTO_HUD_GRACE_SECONDS = 15
 local autoGoldLastRelevantAt = nil
-local autoWoodLastRelevantAt = nil
 local autoKeepLastRelevantAt = nil
 
 -- Masque le HUD or pendant les instances (CdB, donjon, etc.) - appele depuis Core:SuspendForInstance.
@@ -1901,7 +1425,6 @@ function Overlord.Ressources:HideGoldHUDForInstance()
     if goldHudRoot and goldHudRoot:IsShown() then
         goldHudRoot:Hide()
     end
-    if woodHUD then woodHUD:Hide() end
     if guildKeepHUD then guildKeepHUD:Hide() end
 end
 
@@ -1916,7 +1439,7 @@ local function IsInHUDZone()
     if okInst and instType and instType ~= "none" and instType ~= "" then
         return false, mapID
     end
-    -- Perimetre carte (front, fortin, mine, foret) : pas le carre de siege requis (reserve a
+    -- Perimetre carte (front, fortin, mine) : pas le carre de siege requis (reserve a
     -- IsInOverlordKillZone pour le classement kills fortin).
     if IsResourceHudZone(mapID, true) then
         return true, mapID
@@ -1928,7 +1451,6 @@ local function GetAutoHudContext(mapID)
     local zones = Overlord.Zones
     local inCapture = zones and zones.GetCurrentPlayerZone and zones:GetCurrentPlayerZone() ~= nil
     local inMine = zones and zones.GetCurrentPlayerMine and zones:GetCurrentPlayerMine() ~= nil
-    local inWood = zones and zones.GetCurrentPlayerWoodZone and zones:GetCurrentPlayerWoodZone() ~= nil
 
     local inKeep = false
     local keep = Overlord.GuildKeep
@@ -1944,8 +1466,7 @@ local function GetAutoHudContext(mapID)
         inOutpost = site and outpost:IsPlayerInOutpostGeometry(site) or false
     end
 
-    return inCapture or inMine or inKeep or inOutpost,
-        inWood or (inCapture and wood >= WOOD_SPEND_COST), inKeep
+    return inCapture or inMine or inKeep or inOutpost, inKeep
 end
 
 local function HUDZoneCheck(force)
@@ -1970,7 +1491,6 @@ local function HUDZoneCheck(force)
     if mapID ~= lastHUDMapID then
         lastHUDMapID = mapID
         autoGoldLastRelevantAt = nil
-        autoWoodLastRelevantAt = nil
         autoKeepLastRelevantAt = nil
     end
 
@@ -1980,44 +1500,38 @@ local function HUDZoneCheck(force)
         or (cfg and cfg.topHudMode == nil and cfg.showTopHud == false)
     local hudHidden = settingsHidden or (OverlordDB and OverlordDB.goldHUDHidden)
     local showTutorial = cfg and cfg.showTutorialBook == true or false
-    local showGold, showWood, showKeep = false, false, false
+    local showGold, showKeep = false, false
     if inZone and not hudHidden then
         if hudMode == "auto" then
-            local relevantGold, relevantWood, relevantKeep = GetAutoHudContext(mapID)
+            local relevantGold, relevantKeep = GetAutoHudContext(mapID)
             local now = GetTime()
             if relevantGold then autoGoldLastRelevantAt = now end
-            if relevantWood then autoWoodLastRelevantAt = now end
             if relevantKeep then autoKeepLastRelevantAt = now end
             showGold = autoGoldLastRelevantAt and now - autoGoldLastRelevantAt <= AUTO_HUD_GRACE_SECONDS or false
-            showWood = autoWoodLastRelevantAt and now - autoWoodLastRelevantAt <= AUTO_HUD_GRACE_SECONDS or false
             showKeep = autoKeepLastRelevantAt and now - autoKeepLastRelevantAt <= AUTO_HUD_GRACE_SECONDS or false
         else
             showGold = true
-            showWood = true
             showKeep = true
         end
     end
     -- Panneau des pieces : desactive par defaut (genant a l'ecran, stream) ;
     -- le joueur le reactive dans les reglages.
     showGold = showGold and cfg ~= nil and cfg.showCoinsHud == true
-    showWood = showWood and Overlord.Ressources:ShouldShowWoodHUD(mapID, inZone)
     showKeep = showKeep and showGold
         and Overlord.Ressources:ShouldShowGuildKeepHUD(mapID, inZone)
-    local showCluster = showGold or showWood
+    local showCluster = showGold
     if showCluster then
         Overlord.Ressources:ApplyCombatFade()
         if not goldHudRoot:IsShown() then
             goldHudRoot:Show()
         end
-        LayoutHudTopRow(showKeep, showGold, showWood, showTutorial)
+        LayoutHudTopRow(showKeep, showGold, showTutorial)
         if showGold then Overlord.Ressources:RefreshHUD() end
-        if showWood then Overlord.Ressources:RefreshWoodHUD() end
         if showKeep then Overlord.Ressources:RefreshGuildKeepHUD() end
     else
         if goldHudRoot:IsShown() then
             goldHudRoot:Hide()
         end
-        if woodHUD then woodHUD:Hide() end
         if guildKeepHUD then guildKeepHUD:Hide() end
         lastHudTopLayoutKey = nil
         NotifyHudStackLayout()
@@ -2050,7 +1564,7 @@ end
 
 -- ==================== Initialisation ====================
 
--- Une seconde est necessaire uniquement sur une carte mine/foret (gain passif et
+-- Une seconde est necessaire uniquement sur une carte mine (gain passif et
 -- sortie de cercle). Partout ailleurs, une maintenance lente suffit pour la
 -- regeneration horodatee des stocks ; les changements de zone reveillent aussitot
 -- la boucle. Cela retire un ticker permanent et ses lectures carte/HUD au repos.
@@ -2077,7 +1591,6 @@ function Overlord.Ressources:Initialize()
     -- Cadre HUD autonome (haut de l'ecran)
     CreateGoldHUD()
     self:RefreshHUD()
-    self:RefreshWoodHUD()
     self:RefreshGuildKeepHUD()
 
     resourceTickLastAt = GetTime()

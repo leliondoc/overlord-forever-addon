@@ -466,28 +466,19 @@ local function ShowStatus()
     Overlord:PrintNotification(string.format("|cFF00FF00" .. L.STATUS_TOTAL .. "|r", captured, total, pct))
 end
 
--- Diagnostic barre domination hebdo (secondes, bonus %, ratio affiche).
+-- Diagnostic barre domination hebdo v2 : victoires + depenses de bois par faction.
 local function ShowDominationDebug()
     if not OverlordDB then
         Overlord:PrintNotification("|cFFFF0000[Overlord]|r " .. L.NOT_INITIALIZED)
         return
     end
-    local allySec, hordeSec = 0, 0
+    local allyPct, hordePct, victoriesA, victoriesH = 50, 50, 0, 0
+    if Overlord.GetDominationBarScore then
+        allyPct, hordePct, victoriesA, victoriesH = Overlord:GetDominationBarScore()
+    end
+    local frozenA, frozenH = 0, 0
     if Overlord.GetDominationTotals then
-        allySec, hordeSec = Overlord:GetDominationTotals()
-    end
-    local boosts = OverlordDB.dominationBoostPct or {}
-    local legacyA = tonumber(boosts.Alliance) or 0
-    local legacyH = tonumber(boosts.Horde) or 0
-    local totalSec = allySec + hordeSec
-    local terrA, terrH = 0.5, 0.5
-    if totalSec > 0 then
-        terrA = allySec / totalSec
-        terrH = hordeSec / totalSec
-    end
-    local allyPct, hordePct = terrA, terrH
-    if Overlord.GetDominationDisplayFractions then
-        allyPct, hordePct = Overlord:GetDominationDisplayFractions()
+        frozenA, frozenH = Overlord:GetDominationTotals()
     end
     local function FmtPct(v)
         local s = string.format("%.2f", (v or 0) * 100)
@@ -497,26 +488,12 @@ local function ShowDominationDebug()
         return s
     end
     Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. (L.DOM_DEBUG_HEADER or "Weekly domination:"))
-    Overlord:PrintNotification(string.format(L.DOM_DEBUG_LINE or "sec A/H: %d / %d | territorial: %s / %s | bar: %s / %s",
-        allySec, hordeSec, FmtPct(terrA), FmtPct(terrH), FmtPct(allyPct), FmtPct(hordePct)))
-    if legacyA > 0 or legacyH > 0 then
-        Overlord:PrintNotification(string.format(L.DOM_DEBUG_LEGACY or "legacy overlay (ignored): %s / %s",
-            FmtPct(legacyA), FmtPct(legacyH)))
-    end
-    -- Detail par front + detection des buckets corrompus (valeur aberrante figeant la barre a 50/50).
-    local fdt = OverlordDB.frontDominationTime
-    if type(fdt) == "table" then
-        local limit = Overlord.DOMINATION_PLAUSIBLE_MAX or 1000000000
-        for frontId, bucket in pairs(fdt) do
-            if type(bucket) == "table" then
-                local a = math.floor(tonumber(bucket.Alliance) or 0)
-                local h = math.floor(tonumber(bucket.Horde) or 0)
-                local flag = (a >= limit or h >= limit) and " |cFFFF0000[CORROMPU]|r" or ""
-                Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r  %s: A=%d H=%d%s",
-                    tostring(frontId), a, h, flag))
-            end
-        end
-    end
+    Overlord:PrintNotification(string.format(
+        L.DOM_DEBUG_COUNTS or "A: %d victories / H: %d victories | bar: %s / %s",
+        victoriesA, victoriesH, FmtPct(allyPct / 100), FmtPct(hordePct / 100)))
+    Overlord:PrintNotification(string.format(
+        L.DOM_DEBUG_FROZEN or "legacy zone-time (frozen, not used by the bar): %d / %d",
+        frozenA, frozenH))
 end
 
 -- Diagnostic pin avant-poste sur carte monde (Warchief's Watch / Durotar, etc.).

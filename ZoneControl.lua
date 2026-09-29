@@ -1707,9 +1707,6 @@ function Overlord.ZoneControl:CaptureZone(zone)
     
     -- Sauvegarde et refresh
     Overlord:SaveState()
-    if Overlord.NotifyDominationOwnersChanged then
-        Overlord:NotifyDominationOwnersChanged()
-    end
     if Overlord.UI then
         Overlord.UI:RequestRefresh()
     end

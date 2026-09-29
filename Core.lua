@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.1.10"
+Overlord.Version = "1.2.0"
 -- Forever has no cross-faction community: Overlord never uses C_Club clubs there.
 -- Transport is the faction channel, the group, and the Battle.net relay bridges.
 Overlord.CommunityModeEnabled = false
@@ -126,9 +126,6 @@ function Overlord:RefreshCaptureSyncGameplayAvailability()
         end
     end
     self:RefreshCaptureSyncVisuals()
-    if self.NotifyDominationOwnersChanged then
-        self:NotifyDominationOwnersChanged()
-    end
 end
 
 function Overlord:ClearLoginUnconfirmedFrontState(frontId)
@@ -1832,9 +1829,8 @@ end
 -- Si un popup apparait, c'est un bug a corriger, pas a masquer.
 -- ============================================================
 
--- Forward-declare : pendingFrontEnter + ticker domination
+-- Forward-declare : pendingFrontEnter
 local pendingFrontEnter = nil
-local StartDominationTicker, StopDominationTicker, TryDominationInitialGrant
 -- Phase de rattrapage (instanceID parasite) sur carte de front : message chat une fois puis reset quand OK
 local catchUpNotified = false
 
@@ -1869,12 +1865,6 @@ local ADDON_SOUNDS = {
         120,
         SOUNDKIT and SOUNDKIT.IG_BACKPACK_COIN_OK,
         865,
-    },
-    -- Depense bois individuel (coupe / craft, repli sac si indisponible)
-    wood_spend = {
-        122698,
-        SOUNDKIT and SOUNDKIT.IG_BACKPACK_OPEN,
-        852,
     },
     lb_open = {
         SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPEN,
@@ -2128,7 +2118,6 @@ end
 -- Boucle zone + domination + pins / overlays carte (facteur commun sortie instance).
 local function RestoreFrontVisualSystems(reason)
     Overlord:StartUpdateLoop()
-    if StartDominationTicker then StartDominationTicker() end
     if Overlord.MapMarkers then
         Overlord.MapMarkers:SetMinimapPinsVisible(true)
         Overlord.MapMarkers:ResumeWorldMapOverlays()
@@ -2217,8 +2206,6 @@ local function CompleteResumeFromInstance(reason)
         Overlord.Button:EnsureCreated()
     end
     SchedulePostInstanceWorldRecovery()
-    -- Si le joueur sort en ville, le ticker n'est pas actif -> le relancer ici.
-    if StartDominationTicker then StartDominationTicker() end
     Overlord:StartStrategicSiteLoop()
     if Overlord._loginFactionChangeDeferred and Overlord.RequestFactionChangeReconcile then
         Overlord:RequestFactionChangeReconcile()
@@ -2327,7 +2314,6 @@ function Overlord:SuspendForInstance()
     end
     self:StopUpdateLoop()
     self:StopStrategicSiteLoop()
-    if StopDominationTicker then StopDominationTicker() end
     if self.UI then
         if self.UI.StopSpectatorMode then self.UI:StopSpectatorMode() end
         if self.UI.IsVisible and self.UI.Hide and self.UI:IsVisible() then self.UI:Hide(true) end
@@ -3453,7 +3439,7 @@ function Overlord:Initialize()
         uiScale = 1.0,
         notificationChatFrame = 0,
         mapOverlayOpacity = 1.0,
-        minimapOverlayOpacity = 0.5,
+        minimapOverlayOpacity = 0.2,
         showMinimapButton = true,
         showMinimapCaptureZones = true,
         mapPathOpacity = 1.0,
@@ -3470,7 +3456,17 @@ function Overlord:Initialize()
     if not OverlordDB.config.minimapOpacityDefault50 then
         OverlordDB.config.minimapOpacityDefault50 = true
         if tonumber(OverlordDB.config.minimapOverlayOpacity) == 1.0 then
-            OverlordDB.config.minimapOverlayOpacity = 0.5
+            OverlordDB.config.minimapOverlayOpacity = 0.2
+        end
+    end
+    -- 1.2.0 : systeme de bois retire ; purge des ensembles d'evenements devenus inutiles.
+    OverlordDB.dominationBoostEvents, OverlordDB.dominationWoodEvents = nil, nil
+    -- 1.2.0 : 20 % par defaut (cran le plus bas). Passage unique pour ceux restes
+    -- sur l'ancien defaut de 50 % ; toute autre valeur choisie est conservee.
+    if not OverlordDB.config.minimapOpacityDefault20 then
+        OverlordDB.config.minimapOpacityDefault20 = true
+        if tonumber(OverlordDB.config.minimapOverlayOpacity) == 0.5 then
+            OverlordDB.config.minimapOverlayOpacity = 0.2
         end
     end
     OverlordDB.config.popupsSeen = OverlordDB.config.popupsSeen or {}
@@ -3548,10 +3544,6 @@ function Overlord:Initialize()
                 zone.updatedAt = 0
             end
         end
-        -- Le bucket domination actif vient lui aussi de changer. Le burst login
-        -- demandera le pool correct ; le repush differe ne peut plus re-etiqueter
-        -- les valeurs de l'ancien pool grace a frontDominationTimeByPool.
-        OverlordDB._dominationPoolResyncPending = true
         DebugOverlord("Changement de pool : " .. lastPool .. " -> " .. currentPool .. " (updatedAt = 0)")
     end
     OverlordDB.lastSessionPool = currentPool
@@ -3674,15 +3666,6 @@ function Overlord:Initialize()
             return Overlord.Leaderboard:EnsureOutpostLedgerPrepared(true)
         end, true)
 
-        -- Une ancienne table WB peut contenir des milliers d'identifiants. La
-        -- compter/nettoyer par tranches avant Sync evite toute perte du premier
-        -- boost recu pendant la construction et garde le handler strictement O(1).
-        AddLoginInitStage("WBLedger", function()
-            if not Overlord.Sync
-                or not Overlord.Sync.EnsureDominationBoostEventLedgerPrepared then return true end
-            return Overlord.Sync:EnsureDominationBoostEventLedgerPrepared()
-        end, true)
-
         for _, mod in ipairs({ "Ressources", "Combat", "ManualBounty" }) do
             local moduleName = mod
             -- Contrats en or desactives sur Forever : le module n'est plus charge.
@@ -3728,12 +3711,7 @@ function Overlord:Initialize()
             if Overlord.Sync.StartGuildIdentityHeartbeat then
                 Overlord.Sync:StartGuildIdentityHeartbeat()
             end
-            if OverlordDB and OverlordDB._dominationPoolResyncPending then
-                OverlordDB._dominationPoolResyncPending = nil
-                if Overlord.Sync.BroadcastDomination then
-                    Overlord.Sync:BroadcastDomination({ passiveOffFront = true })
-                end
-            end
+            if OverlordDB then OverlordDB._dominationPoolResyncPending = nil end
             if Overlord.Sync.StartLoginCaptureSyncBurst then
                 Overlord.Sync:StartLoginCaptureSyncBurst()
             elseif Overlord.Sync.SendSyncRequest then
@@ -3747,12 +3725,6 @@ function Overlord:Initialize()
         AddLoginInitStage("Settings", function()
             if Overlord.SettingsPanel and Overlord.SettingsPanel.Register then
                 Overlord.SettingsPanel:Register()
-            end
-        end)
-
-        AddLoginInitStage("Domination", function()
-            if not Overlord.InstanceSuspended and not inInstanceAtInit and StartDominationTicker then
-                StartDominationTicker()
             end
         end)
 
@@ -4871,8 +4843,7 @@ function Overlord:OnLeaveFront()
     end
     -- Arrete la boucle de mise a jour pour eviter toute consommation CPU hors front
     self:StopUpdateLoop()
-    -- Ne pas arreter la domination : elle suit le nombre de zones (SavedVariables) et continue
-    -- a tick hors front + BroadcastDomination pour les autres clients.
+    -- La barre de domination v2 ne depend d'aucun ticker : elle compte des evenements.
     if self.MapMarkers and self.MapMarkers.SetMinimapPinsVisible then
         self.MapMarkers:SetMinimapPinsVisible(false)
     end
@@ -4950,9 +4921,6 @@ function Overlord:OnEnterFront()
         if not newer or not Overlord.Popups or not Overlord.Popups.ShowOutdatedVersion then return end
         Overlord.Popups:ShowOutdatedVersion(newer)
     end)
-    -- Ticker domination : deja actif hors front (idempotent si deja demarre au login)
-    if StartDominationTicker then StartDominationTicker() end
-    if TryDominationInitialGrant then TryDominationInitialGrant(true) end
     if self.MapMarkers then
         if self.MapMarkers.SetMinimapPinsVisible then
             self.MapMarkers:SetMinimapPinsVisible(true)
@@ -5053,63 +5021,11 @@ function Overlord:OnEnterFront()
     end
 end
 
--- Ticker domination hebdo : toutes les 120s (aligne sur la sync passive hors front).
--- Meme debit qu'avant (300s) : allyCount*120 chaque 120s = allyCount*300 en 300s.
--- Compte les zones par faction (etat local / sync) et accumule des zone-secondes.
-local DOMINATION_INTERVAL = 120
-local dominationTicker = nil
--- Flag session : le "tick initial" (+1 par zone possedee) ne doit s'executer qu'une
--- seule fois par front. Sans ca, chaque sortie d'instance (StopDominationTicker
--- puis StartDominationTicker) re-credite les zones et la barre de domination gonflait
--- artificiellement pour les joueurs enchainant BG / arene / donjons.
-local dominationInitialGrantDone = {}
-
-local function EnsureFrontDominationBucket(frontId)
-    if not OverlordDB or not frontId then return nil end
-    OverlordDB.frontDominationTime = OverlordDB.frontDominationTime or {}
-    local bucket = OverlordDB.frontDominationTime[frontId]
-    if not bucket then
-        bucket = { Alliance = 0, Horde = 0 }
-        OverlordDB.frontDominationTime[frontId] = bucket
-    end
-    bucket.Alliance = tonumber(bucket.Alliance) or 0
-    bucket.Horde = tonumber(bucket.Horde) or 0
-    return bucket
-end
-
-local function CountFrontOwners(front)
-    local allyCount, hordeCount = 0, 0
-    if not front or not front.zones then return allyCount, hordeCount end
-    local isActiveFront = Overlord.Fronts and front.id == Overlord.Fronts.activeFrontId
-    for _, zone in ipairs(front.zones) do
-        local owner = nil
-        local state = nil
-        if isActiveFront then
-            state = zone
-        elseif Overlord.Fronts and Overlord.Fronts.GetZone then
-            -- Front inactif : preferer l'objet zone du registre (mis a jour par sync inactive)
-            -- plutot que OverlordDB.zones seul (peut rester une campagne en retard).
-            state = select(1, Overlord.Fronts:GetZone(zone.id, front.id))
-        end
-        -- Quarantaine visuelle bornee (gate login), pas le flag brut : sinon une
-        -- carte jamais confirmee par le reseau bloque la domination a vie.
-        local loginPending = state and Overlord.IsLoginZoneDisplayPending
-            and Overlord:IsLoginZoneDisplayPending(state)
-        if state and not loginPending then
-            owner = state.owner
-        end
-        if not state and OverlordDB and OverlordDB.zones and OverlordDB.zones[zone.id] then
-            local saved = OverlordDB.zones[zone.id]
-            owner = saved.owner
-        end
-        if owner == "Alliance" then
-            allyCount = allyCount + 1
-        elseif owner == "Horde" then
-            hordeCount = hordeCount + 1
-        end
-    end
-    return allyCount, hordeCount
-end
+-- Barre de domination v2 (1.1.11) : plus de ticker ni d'accumulation de zone-secondes.
+-- alliancePct = clamp(50 + (victoiresA - victoiresH) + (boisA - boisH), 0, 100), voir
+-- SyncDomination.lua (Overlord:GetDominationBarScore). Les buckets frontDominationTime
+-- restent en SavedVariables (photo gelee de la semaine a la mise a jour) : ils ne servent
+-- plus qu'a estimer le totalAtApply des VB pour les clients <= 1.1.10.
 
 local function CapDominationValue(n)
     n = tonumber(n) or 0
@@ -5151,72 +5067,10 @@ function Overlord:SanitizeCorruptDominationBuckets()
     return healed
 end
 
-local function GetDominationScoreSeq()
-    return math.floor(((GetServerTime and GetServerTime()) or (time and time()) or 0) / DOMINATION_INTERVAL)
-end
-
-local function GetDominationScoreSource()
-    if Overlord.Sync and Overlord.Sync.GetPlayerFullName then
-        return Overlord.Sync:GetPlayerFullName() or ""
-    end
-    return UnitName and (UnitName("player") or "") or ""
-end
-
-TryDominationInitialGrant = function(forceConfirmedFront)
-    if (not forceConfirmedFront and not Overlord.InActiveFront)
-        or not Overlord.Fronts or not Overlord.Fronts.activeFrontId
-        or not Overlord.Fronts.Registry or not OverlordDB then
-        return
-    end
-    -- Entree de front / capture locale : peindre tout de suite, sans election.
-    if not forceConfirmedFront
-        and Overlord.Sync and Overlord.Sync.ShouldAccumulateDomination
-        and not Overlord.Sync:ShouldAccumulateDomination() then
-        return
-    end
-    local front = Overlord.Fronts.Registry[Overlord.Fronts.activeFrontId]
-    if not front then return end
-    local allyCount, hordeCount = CountFrontOwners(front)
-    if allyCount + hordeCount <= 0 then return end
-    local bucket = EnsureFrontDominationBucket(front.id)
-    if not bucket then return end
-    local seq = GetDominationScoreSeq()
-    local localSeq = math.floor(tonumber(bucket.scoreSeq) or 0)
-    local bucketEmpty = (tonumber(bucket.Alliance) or 0)
-        + (tonumber(bucket.Horde) or 0) <= 0
-    -- Un tick vide (zones encore en quarantaine) ne doit pas figer la barre a 0 %.
-    if dominationInitialGrantDone[front.id] and not bucketEmpty then return end
-    if localSeq >= seq and not bucketEmpty then return end
-    if bucketEmpty then
-        bucket.Alliance = CapDominationValue(allyCount)
-        bucket.Horde = CapDominationValue(hordeCount)
-    else
-        bucket.Alliance = CapDominationValue(bucket.Alliance + allyCount)
-        bucket.Horde = CapDominationValue(bucket.Horde + hordeCount)
-    end
-    bucket.scoreSeq = seq
-    bucket.scoreSource = GetDominationScoreSource()
-    dominationInitialGrantDone[front.id] = true
-    Overlord:RecalculateDominationTotals()
-    Overlord:MarkDirty()
-    if Overlord.UI and Overlord.UI.RefreshDomination then
-        Overlord.UI:RefreshDomination()
-    end
-    if Overlord.Sync and Overlord.Sync.BroadcastDomination then
-        Overlord.Sync:BroadcastDomination()
-    end
-end
-
--- Capture locale : le premier owner confirme doit peindre la barre (100 % / 0 %).
-function Overlord:NotifyDominationOwnersChanged()
-    TryDominationInitialGrant(true)
-end
-
+-- Total des buckets gels (ancienne formule temporelle) : n'alimente plus la barre.
 function Overlord:RecalculateDominationTotals()
     if not OverlordDB then return 0, 0 end
     OverlordDB.dominationTime = OverlordDB.dominationTime or { Alliance = 0, Horde = 0 }
-    -- Point de passage unique (affichage, export, construction des payloads DM) : on guerit ici
-    -- tout bucket corrompu pour qu'une valeur aberrante ne soit jamais affichee, exportee ni diffusee.
     self:SanitizeCorruptDominationBuckets()
     local allyTotal, hordeTotal = 0, 0
     for _, bucket in pairs(OverlordDB.frontDominationTime or {}) do
@@ -5236,114 +5090,13 @@ function Overlord:GetDominationTotals()
     return self:RecalculateDominationTotals()
 end
 
--- Pourcentages affiches (barre UI, export Check PvP) : territorial + journal victoire hebdo.
--- Les depenses bois restent materialisees dans frontDominationTime ; les victoires totales
--- convergent via le journal dominationVictoryEvents et le message reseau VB.
+-- Fractions affichees (barre UI, export Check PvP) : 50 % +/- victoires et depenses de bois.
+-- Voir Overlord:GetDominationBarScore (SyncDomination.lua).
 function Overlord:GetDominationDisplayFractions()
-    local allyTime, hordeTime = self:GetDominationTotals()
-    local allyVictory, hordeVictory = 0, 0
-    if self.GetDominationVictoryBonusTotals then
-        allyVictory, hordeVictory = self:GetDominationVictoryBonusTotals()
-    end
-    allyTime = allyTime + allyVictory
-    hordeTime = hordeTime + hordeVictory
-    local total = allyTime + hordeTime
-    if total <= 0 then return 0.5, 0.5 end
-    local allyPct = allyTime / total
-    if allyPct < 0 then allyPct = 0 end
-    if allyPct > 1 then allyPct = 1 end
-    return allyPct, 1 - allyPct
-end
-
--- Bonus domination bois : secondes de zone persistantes (CRDT max), pas dominationBoostPct.
--- Un overlay % peut sembler « snap back » quand la sync DM passive derive le ratio territorial
--- pendant que le bonus reste en base ; les secondes fusionnent via max() et ne reculent pas.
-function Overlord:ApplyWoodDominationBonusSeconds(faction, boostFraction)
-    if not OverlordDB or not faction then return false end
-    if faction ~= "Alliance" and faction ~= "Horde" then return false end
-    boostFraction = tonumber(boostFraction) or 0
-    if boostFraction <= 0 then return false end
-    if not Overlord.Fronts or not Overlord.Fronts.Registry then return false end
-
-    local allyTime, hordeTime = self:GetDominationTotals()
-    local total = allyTime + hordeTime
-    if total <= 0 then return false end
-
-    -- Bonus BORNE : on ajoute simplement (boostFraction x total) secondes a la faction.
-    -- On NE resout PLUS "atteindre pile currentPct + boostFraction", car cette formule
-    -- (boostSeconds = (targetPct*total - factionTime) / (1 - targetPct)) divise par (1 - targetPct)
-    -- et EXPLOSE quand la faction est deja dominante : un seul +1% pouvait ajouter ~100% du total,
-    -- et chaque depense s'amplifiait sur un total plus gros -> buckets gonfles a des centaines de
-    -- millions -> barre faussee/figee (bug US signale par Nemy/Croquette). Borne = total.
-    local bonusSeconds = math.floor(boostFraction * total + 0.5)
-    if bonusSeconds > total then bonusSeconds = total end
-    if bonusSeconds <= 0 then return false end
-
-    local frontIds = {}
-    for frontId, front in pairs(Overlord.Fronts.Registry) do
-        local ac, hc = CountFrontOwners(front)
-        if ac + hc > 0 then
-            frontIds[#frontIds + 1] = frontId
-        end
-    end
-    if #frontIds == 0 then return false end
-
-    local seq = GetDominationScoreSeq()
-    local source = GetDominationScoreSource()
-    local perFront = math.floor(bonusSeconds / #frontIds)
-    local remainder = bonusSeconds - perFront * #frontIds
-
-    for i, frontId in ipairs(frontIds) do
-        local bucket = EnsureFrontDominationBucket(frontId)
-        if bucket then
-            local add = perFront + ((i == 1) and remainder or 0)
-            if add > 0 then
-                if faction == "Alliance" then
-                    bucket.Alliance = CapDominationValue(bucket.Alliance + add)
-                else
-                    bucket.Horde = CapDominationValue(bucket.Horde + add)
-                end
-                bucket.scoreSeq = seq
-                bucket.scoreSource = source
-            end
-        end
-    end
-
-    self:RecalculateDominationTotals()
-    self:MarkDirty()
-    return true
-end
-
-function Overlord:AccumulatePassiveDominationForInactiveFronts(seconds)
-    if Overlord.InstanceSuspended or IsInInstance() then return false end
-    if Overlord.InActiveFront then return false end
-    if not OverlordDB or not Overlord.Fronts or not Overlord.Fronts.Registry then return false end
-    seconds = tonumber(seconds) or DOMINATION_INTERVAL
-    if seconds <= 0 then return false end
-    local seq = GetDominationScoreSeq()
-    local source = GetDominationScoreSource()
-    local changed = false
-    for frontId, front in pairs(Overlord.Fronts.Registry) do
-        local bucket = EnsureFrontDominationBucket(frontId)
-        if bucket and math.floor(tonumber(bucket.scoreSeq) or 0) < seq then
-            local allyCount, hordeCount = CountFrontOwners(front)
-            if allyCount + hordeCount > 0 then
-                bucket.Alliance = CapDominationValue(bucket.Alliance + allyCount * seconds)
-                bucket.Horde = CapDominationValue(bucket.Horde + hordeCount * seconds)
-                bucket.scoreSeq = seq
-                bucket.scoreSource = source
-                changed = true
-            end
-        end
-    end
-    if changed then
-        Overlord:RecalculateDominationTotals()
-        Overlord:MarkDirty()
-        if Overlord.UI and Overlord.UI.RefreshDomination then
-            Overlord.UI:RefreshDomination()
-        end
-    end
-    return changed
+    local alliancePct, hordePct
+    if self.GetDominationBarScore then alliancePct, hordePct = self:GetDominationBarScore() end
+    if not alliancePct then return 0.5, 0.5 end
+    return alliancePct / 100, hordePct / 100
 end
 
 local function GetVictoryDominationBonus()
@@ -5360,25 +5113,21 @@ local function BuildVictoryDominationEventId(frontId, victoryTs)
     return "front-victory-" .. frontId .. "-" .. victoryTs
 end
 
--- Accorde +2 % domination via journal d'evenements persistant (VB reseau).
--- broadcastSync : true uniquement pour l'emetteur local (evite le spam VB depuis chaque recepteur TV).
+-- Enregistre une victoire de front dans le journal persistant (+1 point pour le vainqueur).
+-- broadcastSync = true : emetteur local (la capitale ennemie vient d'etre prise ici) ; le VB
+-- est ensuite diffuse pour les anciens clients. false : recepteur d'une TV deja validee
+-- (preuve locale ou source verifiee) : la victoire est journalisee tout de suite au lieu
+-- d'attendre un VB qui peut se perdre ; le VB tardif fusionne sur le meme identifiant.
+-- totalAtApply n'entre plus dans le compte : il reste plausible pour les anciens recepteurs.
 function Overlord:TryGrantVictoryDominationBonus(frontId, faction, victoryTs, broadcastSync)
-    if not broadcastSync then
-        -- Recepteurs TV/sync : convergence via VB (secondes exactes de l'emetteur).
-        return true
-    end
     if not OverlordDB or not faction or not victoryTs or victoryTs <= 0 then return false end
     if faction ~= "Alliance" and faction ~= "Horde" then return false end
     frontId = frontId or ""
+    victoryTs = math.floor(victoryTs)
+    local localEmitter = broadcastSync == true
 
-    local allyTerr, hordeTerr = self:GetDominationTotals()
-    local allyVict, hordeVict = 0, 0
-    if self.GetDominationVictoryBonusTotals then
-        allyVict, hordeVict = self:GetDominationVictoryBonusTotals()
-    end
-    local totalAtApply = allyTerr + hordeTerr + allyVict + hordeVict
+    local totalAtApply = self.GetLegacyDominationTotalForVB and self:GetLegacyDominationTotalForVB() or 0
     if totalAtApply <= 0 then return false end
-
     local bonus = GetVictoryDominationBonus()
     local bonusSeconds = math.floor(bonus * totalAtApply + 0.5)
     if bonusSeconds > totalAtApply then bonusSeconds = totalAtApply end
@@ -5388,91 +5137,27 @@ function Overlord:TryGrantVictoryDominationBonus(frontId, faction, victoryTs, br
         or tonumber(OverlordDB.lastResetTimestamp) or 0
     if campaignEpoch <= 0 then return false end
 
-    local eventId = BuildVictoryDominationEventId(frontId, victoryTs)
     local ok, reason = self:ApplyDominationVictoryBonusEvent({
-        eventId = eventId,
+        eventId = BuildVictoryDominationEventId(frontId, victoryTs),
         frontId = frontId,
         faction = faction,
         victoryTs = victoryTs,
         bonusSeconds = bonusSeconds,
         totalAtApply = totalAtApply,
         campaignEpoch = campaignEpoch,
-        source = "local_emitter",
-    }, { localEmitter = true })
+        source = localEmitter and "local_emitter" or "tv_proof",
+    }, localEmitter and { localEmitter = true } or { transportEvidence = true })
     if not ok then return false end
     if reason == "pending" then return false end
 
-    if reason == "applied" and faction == self.PlayerFaction then
+    if localEmitter and reason == "applied" and faction == self.PlayerFaction then
         local L = self.L
         if L and L.VICTORY_DOMINATION_BONUS then
-            local pctDisplay = math.floor(bonus * 100 + 0.5)
-            self:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.VICTORY_DOMINATION_BONUS, pctDisplay))
+            -- Une victoire = +1 point de barre (1 %).
+            self:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.VICTORY_DOMINATION_BONUS, 1))
         end
     end
     return ok
-end
-
-local function DominationTick()
-    if Overlord.InstanceSuspended or not Overlord.IsInitialized
-        or not OverlordDB or not OverlordDB.dominationTime then
-        return
-    end
-    -- Accumulation locale uniquement sur le disque du front (owners live sync).
-    -- Hors front (ville, instance) : pas de tick local ; convergence par DM/SR/passive sync.
-    if not Overlord.InActiveFront then
-        if Overlord.UI and Overlord.UI.RefreshDomination then
-            Overlord.UI:RefreshDomination()
-        end
-        return
-    end
-    if not Overlord.Fronts or not Overlord.Fronts.activeFrontId or not Overlord.Fronts.Registry then return end
-    local shouldAccumulate = Overlord.Sync and Overlord.Sync.ShouldAccumulateDomination
-        and Overlord.Sync:ShouldAccumulateDomination()
-    local front = Overlord.Fronts.Registry[Overlord.Fronts.activeFrontId]
-    local changed = false
-    if shouldAccumulate and front then
-        local allyCount, hordeCount = CountFrontOwners(front)
-        local bucket = EnsureFrontDominationBucket(front.id)
-        local seq = GetDominationScoreSeq()
-        if bucket and math.floor(tonumber(bucket.scoreSeq) or 0) < seq then
-            bucket.Alliance = CapDominationValue(bucket.Alliance + allyCount * DOMINATION_INTERVAL)
-            bucket.Horde = CapDominationValue(bucket.Horde + hordeCount * DOMINATION_INTERVAL)
-            bucket.scoreSeq = seq
-            bucket.scoreSource = GetDominationScoreSource()
-            changed = true
-        end
-    end
-    if changed then
-        Overlord:RecalculateDominationTotals()
-        Overlord:MarkDirty()
-    end
-    if shouldAccumulate and Overlord.Sync then
-        Overlord.Sync:BroadcastDomination()
-    end
-    if Overlord.UI and Overlord.UI.RefreshDomination then
-        Overlord.UI:RefreshDomination()
-    end
-end
-
-StartDominationTicker = function()
-    -- Idempotent : ne pas recreer le ticker (evite double accumulation au OnEnterFront)
-    if dominationTicker then return end
-    if not OverlordDB or not OverlordDB.dominationTime then return end
-    -- Tick initial leger : 1 zone-seconde par zone pour peindre la barre tout de suite.
-    -- Execute une seule fois par front : les sorties d'instance rappellent cette
-    -- fonction et re-accumulaient ces secondes, gonflant la domination sans jouer.
-    local activeFrontId = Overlord.Fronts and Overlord.Fronts.activeFrontId
-    if activeFrontId and not dominationInitialGrantDone[activeFrontId] then
-        TryDominationInitialGrant()
-    end
-    dominationTicker = C_Timer.NewTicker(DOMINATION_INTERVAL, DominationTick)
-end
-
-StopDominationTicker = function()
-    if dominationTicker then
-        dominationTicker:Cancel()
-        dominationTicker = nil
-    end
 end
 
 local REMOTE_OBSERVER_INTERVAL = 0.5
@@ -5780,7 +5465,6 @@ function Overlord:ResetAll()
     end
     OverlordDB.frontDominationTime =
         OverlordDB.frontDominationTimeByPool[resetDominationPool]
-    dominationInitialGrantDone = {}
     OverlordDB.victoryDominationBonusLastTs = nil
     OverlordDB.dominationVictoryEvents = OverlordDB.dominationVictoryEvents or { byPool = {} }
     OverlordDB.dominationVictoryEvents.byPool =

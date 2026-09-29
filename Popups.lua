@@ -500,7 +500,6 @@ local function HideQuickGuide()
 end
 
 local GUIDE_MINE_ATLAS = "Warfronts-FieldMapIcons-Empty-Mine"
-local GUIDE_WOOD_ATLAS = "Warfronts-FieldMapIcons-Empty-LumberMill"
 
 local function FormatGuideSection(sectionTitle, body)
     if not body or body == "" then return "" end
@@ -573,11 +572,9 @@ local function BuildQuickGuidePageBody(page)
     end
     if page == 2 then
         local goldBody = FormatGuideResourceBody(L.GUIDE_GOLD_BODY, Overlord.MineDatabase, GUIDE_MINE_ATLAS)
-        local woodBody = FormatGuideResourceBody(L.GUIDE_WOOD_BODY, Overlord.WoodDatabase, GUIDE_WOOD_ATLAS)
         return JoinGuideSections(
             FormatGuideSection(L.GUIDE_SECTION_CONTEST, L.GUIDE_CONTEST_BODY),
             FormatGuideSection(L.GUIDE_SECTION_GOLD, goldBody),
-            FormatGuideSection(L.GUIDE_SECTION_WOOD, woodBody),
             FormatGuideSection(L.GUIDE_SECTION_SIEGE, L.GUIDE_SIEGE_BODY)
         )
     end
@@ -592,7 +589,7 @@ local function BuildQuickGuidePageBody(page)
     return ""
 end
 
--- Corps du guide mis en cache par page (evite parcours MineDatabase/WoodDatabase a chaque flip).
+-- Corps du guide mis en cache par page (evite parcours MineDatabase a chaque flip).
 local cachedGuideBody = {}
 local cachedGuideBodyLocale = nil
 local cachedGuideScrollHeights = {}
