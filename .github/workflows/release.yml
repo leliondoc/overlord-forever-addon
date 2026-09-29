@@ -125,9 +125,15 @@ jobs:
           node --test "${TEST_FILES[@]}"
 
       - name: Valider les secrets de publication
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           if [ -z "$CF_API_KEY" ]; then
             echo "CF_API_KEY absent - publication impossible." >&2
+            exit 1
+          fi
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "DISCORD_WEBHOOK_URL absent - annonce Discord impossible." >&2
             exit 1
           fi
 
@@ -157,3 +163,28 @@ jobs:
         uses: BigWigsMods/packager@v2
         with:
           args: -m .pkgmeta.ci -n "Overlord-{project-version}:Overlord-{project-version}"
+
+      - name: Annoncer sur Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          CF_URL="https://www.curseforge.com/wow/addons/overlord-forever/files/all?page=1&pageSize=20&sortBy=dateCreated&sortOrder=desc"
+
+          PAYLOAD=$(jq -n \
+            --arg title "Overlord Forever ${VERSION}" \
+            --arg url "$CF_URL" \
+            --argjson color 16766720 \
+            --rawfile changelog CHANGELOG.md \
+            '
+            ($changelog
+              | if length > 3800 then .[0:3800] + "\n\n... (full patch notes on CurseForge)" else . end) as $desc
+            | {embeds: [{title: $title, description: $desc, url: $url, color: $color}]}
+            ')
+
+          if curl -sf -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK_URL"; then
+            echo "Discord OK."
+          else
+            echo "Discord webhook failed. CurseForge release was already published." >&2
+            exit 1
+          fi
