@@ -1788,11 +1788,10 @@ bridgeFlush = function(state)
                 keep[#keep + 1] = key
             else
                 local payload, emitted = row.pending, false
-                if state.outbound then
-                    emitted = net:EmitBridgeOut(row, payload)
-                else
-                    emitted = net:EmitBridgeLK(row, payload)
-                end
+                -- An unexpected error on one row must not block the rows behind it.
+                local ok, result = pcall(state.outbound and net.EmitBridgeOut or net.EmitBridgeLK,
+                    net, row, payload)
+                emitted = ok and result == true
                 if emitted then
                     row.pending, row.sentAt = nil, now
                     sent[#sent + 1] = now
@@ -1803,7 +1802,7 @@ bridgeFlush = function(state)
                     if not state.outbound then
                         local hold = net.BridgeChannelHold or {}
                         local hi = math.floor(tonumber(hold[2]) or 0)
-                        if hi > 0 then row.holdUntil = now + math.random(2, math.max(2, math.min(6, hi))) end
+                        if hi > 0 then row.holdUntil = now + 2 + math.random() * math.max(0, math.min(6, hi) - 2) end
                     end
                     wait = math.min(wait, 5)
                     keep[#keep + 1] = key
@@ -1868,7 +1867,7 @@ local function queueBridgeRow(state, name, faction, total, before, class, locale
         -- or all heard the previous copy at the same moment stay spread out.
         if not state.outbound and hi > 0 then
             row.holdUntil = math.max(now, (row.sentAt or -math.huge) + BRIDGE_LK_SUBJECT_GAP)
-                + math.random(math.max(0, lo), hi)
+                + math.max(0, lo) + math.random() * (hi - math.max(0, lo))
         end
     end
     row.pending, row.pendingAt, row.pendingTotal = payload, now, total
