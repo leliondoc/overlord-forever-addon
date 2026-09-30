@@ -2808,6 +2808,17 @@ function Overlord.Sync:ResolveFactionCallPlace(zoneId, frontId)
     return zoneName, frontName
 end
 
+-- Message chat de victoire totale, avec le front concerne quand il est connu.
+function Overlord.Sync:FormatTotalVictoryMessage(factionName, frontId)
+    local known = frontId and frontId ~= "" and Overlord.Fronts and Overlord.Fronts.GetFront
+        and Overlord.Fronts:GetFront(frontId)
+    local frontName = known and select(2, self:ResolveFactionCallPlace("", frontId)) or ""
+    if frontName ~= "" and L.TOTAL_VICTORY_FRONT_MSG then
+        return string.format(L.TOTAL_VICTORY_FRONT_MSG, factionName, frontName)
+    end
+    return string.format(L.TOTAL_VICTORY_MSG, factionName)
+end
+
 function Overlord.Sync:OnReceiveFactionCall(payload, sender)
     if not payload or payload == "" or not sender then return end
     local facCode, zoneId, frontId = strsplit(":", payload, 4)

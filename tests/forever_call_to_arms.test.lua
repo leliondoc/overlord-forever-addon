@@ -1,4 +1,4 @@
--- Call to arms (1.2.1): one call every 4 hours for the whole faction, only from an active
+-- Call to arms (1.2.1, sound 1.2.2): one call every 4 hours for the whole faction, only from an active
 -- front, no nearby-enemy condition, sent on the faction's Overlord channel (plus relay and
 -- group), received as a raid warning without any popup. Real SyncAux on the beta fixture.
 assert(loadfile("tests/forever_beta_integration.test.lua"))()
@@ -70,4 +70,40 @@ assert(sync:GetFactionCallCooldownRemaining() > 4 * 3600 - 5, "Receiving a call 
 OverlordDB.factionCallSharedAt = {}
 sync:OnReceiveFactionCall("H:elwynn_goldshire:elwynn:5", "Enemy Herald-Realm")
 assert(#warnings == 1, "An enemy faction call was shown")
-print("Forever call to arms: 4 h faction cooldown, front only, no enemy condition, channel + raid warning OK")
+-- 6. The call plays the capital bell; if the client refuses it, a fallback still sounds.
+do
+    local played = {}
+    local savedPlaySound, savedSoundKit = PlaySound, SOUNDKIT
+    SOUNDKIT = { PVP_WARNING_ALLIANCE = 8332, PVP_WARNING_HORDE = 8174, RAID_WARNING = 8959 }
+    PlaySound = function(kit) played[#played + 1] = kit; return kit ~= 6594 and kit ~= 6595 end
+    OverlordDB.config = OverlordDB.config or {}
+    OverlordDB.config.soundEnabled = true
+    Overlord.PlayerFaction = "Alliance"
+    assert(Overlord.PlayAddonSound, "PlayAddonSound is not loaded")
+    Overlord:PlayAddonSound("faction_call")
+    assert(played[1] == 6594 and played[#played] == 8332, "Bell not tried first, or no fallback when refused")
+    played = {}
+    PlaySound = function(kit) played[#played + 1] = kit; return kit == 8959 end
+    SOUNDKIT.PVP_WARNING_ALLIANCE = nil
+    Overlord:PlayAddonSound("faction_call")
+    assert(played[#played] == 8959, "The raid warning is not the last-resort call sound")
+    for _, kit in ipairs(played) do
+        assert(kit ~= 8174, "An Alliance player was given the Horde PvP warning")
+    end
+    PlaySound, SOUNDKIT = savedPlaySound, savedSoundKit
+end
+-- 7. The total victory chat line names the front (shared place resolver).
+do
+    Overlord.L.TOTAL_VICTORY_MSG = "   TOTAL VICTORY OF %s!   "
+    Overlord.L.TOTAL_VICTORY_FRONT_MSG = "   TOTAL VICTORY OF %s! Front: %s   "
+    local savedGetFront = Overlord.Fronts.GetFront
+    Overlord.Fronts.GetFront = function(_, id) return id == "elwynn" and { mapName = "Elwynn Forest" } or nil end
+    assert(sync:FormatTotalVictoryMessage("THE ALLIANCE", "elwynn") == "   TOTAL VICTORY OF THE ALLIANCE! Front: Elwynn Forest   ",
+        "The total victory message does not name the front")
+    assert(sync:FormatTotalVictoryMessage("THE HORDE", nil) == "   TOTAL VICTORY OF THE HORDE!   ",
+        "A missing front must keep the plain message")
+    assert(sync:FormatTotalVictoryMessage("THE HORDE", "not_a_front") == "   TOTAL VICTORY OF THE HORDE!   ",
+        "An unknown front id must never be shown raw")
+    Overlord.Fronts.GetFront = savedGetFront
+end
+print("Forever call to arms: 4 h faction cooldown, front only, no enemy condition, channel + raid warning, sound fallback OK")

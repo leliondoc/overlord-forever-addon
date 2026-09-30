@@ -9418,7 +9418,8 @@ function Overlord.Sync:CheckTotalVictoryFromSync()
             if Overlord.Zones and Overlord.Zones.ForceSyncFrontToWinner then
                 Overlord.Zones:ForceSyncFrontToWinner(frontId, ef, victoryTs, true)
             end
-            Overlord:PrintNotification("|cFFFF4444[Overlord]|r " .. string.format(L.TOTAL_VICTORY_MSG, factionName))
+            Overlord:PrintNotification("|cFFFF4444[Overlord]|r "
+                .. Overlord.Sync:FormatTotalVictoryMessage(factionName, frontId))
             if Overlord.UI then
                 Overlord.UI:ShowVictoryScreen(factionName)
             end
@@ -9668,7 +9669,7 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel)
         local factionName = (faction == "Horde")
             and L.VICTORY_FACTION_HORDE or L.VICTORY_FACTION_ALLIANCE
         Overlord:PrintNotification(
-            "|cFFFFD100[Overlord]|r " .. string.format(L.TOTAL_VICTORY_MSG, factionName))
+            "|cFFFFD100[Overlord]|r " .. self:FormatTotalVictoryMessage(factionName, frontId or currentFrontId))
         -- Ne verrouiller l'anti-replay qu'apres tous les effets territoriaux.
         -- Une erreur Lua transitoire laisse ainsi le prochain TV retenter la livraison.
         if proofFrontId then priv.totalVictoryDeliveredAt[proofFrontId] = ts end
@@ -9753,7 +9754,8 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel)
             Overlord.UI:ShowVictoryScreen(factionName)
         end
     else
-        Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. string.format(L.TOTAL_VICTORY_MSG, factionName))
+        Overlord:PrintNotification("|cFFFFD100[Overlord]|r "
+            .. self:FormatTotalVictoryMessage(factionName, frontId or currentFrontId))
     end
     -- Commit de livraison en dernier : les doublons sont bloques uniquement une
     -- fois la treve, les zones et l'affichage effectivement appliques.

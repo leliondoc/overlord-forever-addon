@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.2.1"
+Overlord.Version = "1.2.2"
 -- Forever has no cross-faction community: Overlord never uses C_Club clubs there.
 -- Transport is the faction channel, the group, and the Battle.net relay bridges.
 Overlord.CommunityModeEnabled = false
@@ -1874,10 +1874,11 @@ local ADDON_SOUNDS = {
     },
 }
 
--- Appel de faction : SoundKitID Wowhead - Master, selon la faction du joueur
+-- Appel de faction : cloche de la capitale de la faction (SoundKit present dans le client
+-- Classic ; les cors Retail WoD/BfA n'existent pas dans Forever).
 local FACTION_CALL_SOUND_KIT = {
-    Horde = 123840,    -- FX_Warsong_WarHorn_6.0_LongDistance
-    Alliance = 137963, -- WorldPVP_82_Nazjatar_EventStart_Horn
+    Horde = 6595,    -- BellTollHorde (Orgrimmar / Undercity)
+    Alliance = 6594, -- BellTollAlliance (Stormwind / Ironforge)
 }
 
 -- Popup bienvenue : Bloodlust (Horde) / Heroism (Alliance shaman)
@@ -1964,9 +1965,24 @@ function Overlord:PlayAddonSound(key)
     if not OverlordDB or not OverlordDB.config then return end
     if OverlordDB.config.soundEnabled == false then return end
     if key == "faction_call" then
-        local soundId = FACTION_CALL_SOUND_KIT[Overlord.PlayerFaction]
-            or FACTION_CALL_SOUND_KIT.Horde
-        TryPlaySoundEntry(soundId, { "Master", "SFX" })
+        -- Cloche de capitale ; si le client la refuse, alerte JcJ de la faction, puis alerte
+        -- de raid. SoundKit uniquement (un ID de kit n'est pas un FileDataID).
+        local faction = Overlord.PlayerFaction
+        local pvpKey = faction == "Alliance" and "PVP_WARNING_ALLIANCE" or "PVP_WARNING_HORDE"
+        local candidates = {
+            FACTION_CALL_SOUND_KIT[faction] or FACTION_CALL_SOUND_KIT.Horde,
+            SOUNDKIT and SOUNDKIT[pvpKey],
+            (SOUNDKIT and SOUNDKIT.RAID_WARNING) or 8959,
+        }
+        for i = 1, 3 do
+            local kit = candidates[i]
+            if kit and PlaySound then
+                for _, channel in ipairs({ "Master", "SFX" }) do
+                    local ok, willPlay = pcall(PlaySound, kit, channel, false)
+                    if ok and willPlay then return end
+                end
+            end
+        end
         return
     end
     if key == "welcome_popup" then
