@@ -1,11 +1,8 @@
-1.3.1
+1.3.2
 
-**Overlord Forever 1.3.1**
+**Overlord Forever 1.3.2**
 
-- A total victory is now announced with a raid warning in the faction color instead of a full-screen window, so it no longer gets in the way of players still fighting on the front. The victory music still plays.
-- English: "TOTAL VICTORY FOR THE HORDE / FOR THE ALLIANCE" and "Lesi's Bear Cave".
-- Translations reviewed in every language:
-  - Player names in outpost names (Savix, Aeythyr, Lesi, Katrell, Sage, Renosh, Shobek'Aran) and "Overlord" are never translated or transliterated any more.
-  - Guides now use each language's outpost names; fortress help texts are translated.
-  - Fixed machine-translation errors in Chinese and Portuguese, grammar around faction names in German, Russian and Portuguese, and several German, Spanish and French wordings.
-- The "zone under control" message shows the faction name in your language.
+- Enemy kill totals now cross between factions live. Kills of the other faction used to reach you only through the slow ranking catch-up (hours), so each faction saw thousands of kills fewer for the other side.
+  - A player with a Battle.net friend in the other faction passes the kill totals heard on their own channel to that friend.
+  - That friend's addon posts each enemy total once on their faction channel, for everyone there (instead of 3 whispers to random players).
+  - Strict limits: one update per player per minute, at most 6 per minute per bridge, a random delay so several bridges do not repeat the same total, and plausibility checks. Your own kills always go first on the channel.
