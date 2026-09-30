@@ -1,6 +1,6 @@
-1.3
+1.3.0
 
-**Overlord Forever 1.3**
+**Overlord Forever 1.3.0**
 
 **Lighter, more reliable network**
 - Catch-up is now point to point: map, ranking and outpost history are only exchanged with players you reach directly (your faction channel, your group, your Battle.net friends). Replies are no longer copied across several relays, which was the main cause of lost messages at peak hours.
