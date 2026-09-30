@@ -623,7 +623,6 @@ function Overlord.SettingsPanel:RefreshControls()
     if self._showTopHudRow and self._showTopHudRow.Refresh then self._showTopHudRow:Refresh() end
     if self._showTutorialBookRow and self._showTutorialBookRow.Refresh then self._showTutorialBookRow:Refresh() end
     if self._soundEnabledRow and self._soundEnabledRow.Refresh then self._soundEnabledRow:Refresh() end
-    if self._worldDefenseEnabledRow and self._worldDefenseEnabledRow.Refresh then self._worldDefenseEnabledRow:Refresh() end
     if self._guildKillAlertRow and self._guildKillAlertRow.Refresh then self._guildKillAlertRow:Refresh() end
     if self._minimapButtonRow and self._minimapButtonRow.Refresh then self._minimapButtonRow:Refresh() end
     if self._minimapCaptureZonesRow and self._minimapCaptureZonesRow.Refresh then self._minimapCaptureZonesRow:Refresh() end

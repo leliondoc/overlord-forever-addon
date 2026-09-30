@@ -3155,6 +3155,9 @@ function Overlord:Initialize()
     OverlordDB.frontDominationTimeByPool, OverlordDB.dominationBoostPct = nil, nil
     OverlordDB.frontDominationPoolVersion, OverlordDB.globalDominationUnifiedVersion = nil, nil
     OverlordDB.frontDominationMigrated = nil
+    -- 1.2.4 : contrats en or et War Mode n'existent pas sur Forever (code retire).
+    OverlordDB.manualBountyContracts, OverlordDB.manualBountySettlementLedger = nil, nil
+    OverlordDB.config.worldDefenseEnabled = nil
     -- Migration 10 : journal d'evenements victoire separe des buckets territoriaux.
     if (tonumber(OverlordDB.dominationSyncVersion) or 0) < 10 then
         OverlordDB.dominationVictoryEvents = { byPool = {} }

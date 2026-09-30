@@ -459,6 +459,8 @@ end
 -- et VOLAIT leurs kills a leur vraie guilde (MDGA / WiH disparaissaient du classement).
 local function localGuildRosterEntry(name)
     if not localGuildRosterKeys or not name or name == "" then return nil end
+    -- Guilde quittee en instance : le cache n'y est pas vide, il ne doit plus servir.
+    if IsInGuild and not IsInGuild() then return nil end
     local sync = Overlord.Sync
     local dk = sync and sync.GetCaptureContributorDedupKey and sync:GetCaptureContributorDedupKey(name)
     if not dk or dk == "" then return nil end
@@ -2621,7 +2623,9 @@ function Overlord.Leaderboard:Initialize(loadFromDB)
             end
             -- Les vrais changements sont debounces. Les seuls rappels ulterieurs
             -- viennent du budget borne quand Blizzard renvoie encore un roster vide.
-            ScheduleLocalGuildRosterEnrich(1)
+            -- Une grande guilde emet GUILD_ROSTER_UPDATE a chaque connexion : avec un
+            -- roster deja complet (toujours lisible), une reconstruction toutes les 10 s suffit.
+            ScheduleLocalGuildRosterEnrich((event == "GUILD_ROSTER_UPDATE" and hadCompleteRoster) and 10 or 1)
         end)
     end
     localGuildRosterRetryBudget = math.max(localGuildRosterRetryBudget, 6)
@@ -4109,11 +4113,9 @@ function Overlord.Leaderboard:GetLocalGuildRosterClass(playerName)
     return entry and entry.class or nil
 end
 
--- Attribue la guilde du joueur local a tous les contributeurs kills presents dans son roster
--- de guilde. Lecture seule cote reseau : on n'envoie pas de nouveau message, on pose juste une
--- guilde autoritaire localement (comme UpdateLocalPlayerGuild pour le perso, etendu aux membres).
--- Effet de bord positif : cette autorite locale alimente ensuite les bits d'autorite GY, donc
--- ameliore la convergence du total de guilde chez les autres clients au lieu de la degrader.
+-- Complete la guilde, la classe et le niveau des contributeurs presents dans le roster de
+-- guilde local, seulement quand ils manquent. Simple indice local (guildAt = 0, pas
+-- d'autorite) : rien n'est envoye au reseau et aucun fait connu n'est ecrase.
 function Overlord.Leaderboard:EnrichGuildFromLocalRoster()
     if Overlord.InstanceSuspended or IsInInstance() then return end
     -- Un second evenement peut arriver pendant le scan tranche precedent. Ne

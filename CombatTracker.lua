@@ -920,7 +920,7 @@ end
 
 -- Nom complet Forever (Prenom Nom) de la victime, pour l'activite locale.
 local function ResolveVictimName(victimGUID, victimName)
-    local contractVictimName = Overlord.Sync and Overlord.Sync.CanonicalForeverName
+    local canonicalVictimName = Overlord.Sync and Overlord.Sync.CanonicalForeverName
         and Overlord.Sync:CanonicalForeverName(victimName) or nil
     if victimGUID then
         local cachedVictim = guidPlayerInfoCache[victimGUID]
@@ -928,18 +928,18 @@ local function ResolveVictimName(victimGUID, victimName)
         local cachedCanon = cachedName and Overlord.Sync and Overlord.Sync.CanonicalForeverName
             and Overlord.Sync:CanonicalForeverName(cachedName) or nil
         if cachedCanon then
-            contractVictimName = cachedCanon
+            canonicalVictimName = cachedCanon
         elseif UnitNameFromGUID then
             local okName, resolvedName = pcall(UnitNameFromGUID, victimGUID)
             resolvedName = okName and SafeAccessibleString(resolvedName) or nil
             local resolvedCanon = resolvedName and Overlord.Sync and Overlord.Sync.CanonicalForeverName
                 and Overlord.Sync:CanonicalForeverName(resolvedName) or nil
             if resolvedCanon then
-                contractVictimName = resolvedCanon
+                canonicalVictimName = resolvedCanon
             end
         end
     end
-    return contractVictimName
+    return canonicalVictimName
 end
 
 -- Applique les effets qui profitent d'un second événement plus précis sans

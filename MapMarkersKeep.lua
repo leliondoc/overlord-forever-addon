@@ -793,6 +793,8 @@ function Overlord.MapMarkers:RefreshProjectedKeepPins()
                                 -- Continent / region : icone seule, sans creer de libelles vides.
                                 HideKeepMapLabels(pin)
                                 pin:Show()
+                                -- A 0 %, l'icone invisible ne doit plus capter le survol (pins de quete dessous).
+                                pin:EnableMouse(Overlord.MapMarkers.GetMapIconOpacity() > 0)
                                 shownPins = shownPins + 1
                             else
                                 pin:Hide()
@@ -943,6 +945,8 @@ function Overlord.MapMarkers:RefreshProjectedOutpostPins()
                             if painted then
                                 HideKeepMapLabels(pin)
                                 pin:Show()
+                                -- A 0 %, l'icone invisible ne doit plus capter le survol (pins de quete dessous).
+                                pin:EnableMouse(Overlord.MapMarkers.GetMapIconOpacity() > 0)
                                 shownPins = shownPins + 1
                             else
                                 pin:Hide()
@@ -1369,6 +1373,8 @@ function Overlord.MapMarkers:RefreshOutpostOverlays(mapID, frontId, layoutChange
                         if painted then
                             HideKeepMapLabels(pin)
                             pin:Show()
+                            -- A 0 %, l'icone invisible ne doit plus capter le survol (pins de quete dessous).
+                            pin:EnableMouse(Overlord.MapMarkers.GetMapIconOpacity() > 0)
                             shownPins = shownPins + 1
                         else
                             pin:Hide()
