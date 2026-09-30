@@ -114,6 +114,11 @@ function Overlord.Sync:MaybeRequestMissingClass(playerName)
             cls = lb:GetHotPlayerClass(playerName)
             if cls and cls ~= "" and cls ~= "UNKNOWN" then return end
         end
+        -- A member of our own guild: the Blizzard roster already gives the class.
+        if lb.GetLocalGuildRosterClass and lb:GetLocalGuildRosterClass(playerName) then
+            if lb.MaybeEnrichGuildForKillRow then lb:MaybeEnrichGuildForKillRow(playerName) end
+            return
+        end
     end
 
     local now = GetTime()
@@ -162,6 +167,11 @@ function Overlord.Sync:FlushClassRequests()
         if lb and lb.GetHotPlayerClass then
             local cls = lb:GetHotPlayerClass(name)
             if cls and cls ~= "" and cls ~= "UNKNOWN" then stillMissing = false end
+        end
+        if stillMissing and lb and lb.GetLocalGuildRosterClass
+            and lb:GetLocalGuildRosterClass(name) then
+            stillMissing = false
+            if lb.MaybeEnrichGuildForKillRow then lb:MaybeEnrichGuildForKillRow(name) end
         end
         if stillMissing then
             names[#names + 1] = name
@@ -434,6 +444,12 @@ function Overlord.Sync:FlushGuildRequests()
         if lb and lb.GetHotPlayerGuildState then
             local _, _, authoritative = lb:GetHotPlayerGuildState(name)
             if authoritative then stillMissing = false end
+        end
+        -- A member of our own guild: the Blizzard roster already names the guild.
+        if stillMissing and lb and lb.IsLocalGuildRosterMember
+            and lb:IsLocalGuildRosterMember(name) then
+            stillMissing = false
+            if lb.MaybeEnrichGuildForKillRow then lb:MaybeEnrichGuildForKillRow(name) end
         end
         if stillMissing then
             names[#names + 1] = name

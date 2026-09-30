@@ -275,7 +275,9 @@ end
 -- couvre pas toujours, donc leurs kills tombaient du total de guilde. On ne touche a aucun
 -- format de payload sync ; l'enrichissement se fait uniquement a la lecture (UI / export).
 local LOCAL_GUILD_ROSTER_TTL = 15
-local localGuildRosterKeys = nil   -- { [cleDedup] = true } : membres du roster local, indexes par cle dedup (royaume-aware)
+-- { [cleDedup] = { class, level } } : membres du roster local, indexes par cle dedup
+-- (royaume-aware). Classe et niveau viennent du serveur Blizzard : aucun message reseau.
+local localGuildRosterKeys = nil
 local localGuildRosterKeyCount = 0
 local localGuildRosterCacheAt = 0
 local localGuildRosterCacheFresh = false
@@ -391,7 +393,8 @@ local function refreshLocalGuildRosterCache(onBuildFinished)
         local processed = 0
         local startedAt = debugprofilestop and debugprofilestop() or 0
         while state.index <= state.num and processed < LOCAL_GUILD_ROSTER_ROWS_PER_SLICE do
-            local ok, rosterName = pcall(GetGuildRosterInfo, state.index)
+            local ok, rosterName, _, _, rosterLevel, _, _, _, _, _, _, rosterClass =
+                pcall(GetGuildRosterInfo, state.index)
             state.index = state.index + 1
             processed = processed + 1
             if ok and type(rosterName) == "string" and rosterName ~= "" then
@@ -401,7 +404,11 @@ local function refreshLocalGuildRosterCache(onBuildFinished)
                 local dk = state.getDedupKey
                     and state.getDedupKey(sync, rosterName) or rosterName:lower()
                 if dk and dk ~= "" and not state.keys[dk] then
-                    state.keys[dk] = true
+                    rosterLevel = math.floor(tonumber(rosterLevel) or 0)
+                    state.keys[dk] = {
+                        class = type(rosterClass) == "string" and rosterClass:match("^%u+$") or nil,
+                        level = rosterLevel > 0 and rosterLevel <= 90 and rosterLevel or nil,
+                    }
                     state.keyCount = state.keyCount + 1
                     if state.previousKeys and not state.previousKeys[dk] then
                         state.membershipChanged = true
@@ -450,12 +457,15 @@ end
 -- donc un membre meme-royaume reste couvert SANS confondre un homonyme d'un autre royaume.
 -- L'ancienne heuristique "nom court unique" attribuait a tort la guilde locale a ces homonymes
 -- et VOLAIT leurs kills a leur vraie guilde (MDGA / WiH disparaissaient du classement).
-local function localGuildRosterMatches(name)
-    if not localGuildRosterKeys or not name or name == "" then return false end
+local function localGuildRosterEntry(name)
+    if not localGuildRosterKeys or not name or name == "" then return nil end
     local sync = Overlord.Sync
     local dk = sync and sync.GetCaptureContributorDedupKey and sync:GetCaptureContributorDedupKey(name)
-    if not dk or dk == "" then return false end
-    return localGuildRosterKeys[dk] == true
+    if not dk or dk == "" then return nil end
+    return localGuildRosterKeys[dk]
+end
+local function localGuildRosterMatches(name)
+    return localGuildRosterEntry(name) ~= nil
 end
 
 local function isValidOutpostSite(siteKey)
@@ -4051,19 +4061,14 @@ end
 
 -- Chemin incremental pour les nouveaux scores apres chargement du roster. O(1) par joueur :
 -- il remplace le scan complet qui etait auparavant declenche par chaque lecture du panneau.
+-- Le roster local donne aussi la classe et le niveau des membres : de simples
+-- indices qui ne remplissent qu'une valeur absente, jamais un fait deja connu.
 function Overlord.Leaderboard:MaybeEnrichGuildForKillRow(playerName)
-    if not localGuildRosterKeys or localGuildRosterGuild == ""
-        or not localGuildRosterMatches(playerName) then
-        return false
-    end
+    local entry = localGuildRosterGuild ~= "" and localGuildRosterEntry(playerName) or nil
+    if not entry then return false end
     local row = self.playerInfo[playerName]
-    if type(row) == "table" then
-        local currentGuild = sanitizeGuildName(row.guild or "")
-        if currentGuild:lower() == localGuildRosterGuild:lower() then return false end
-        -- Le roster local n'est qu'un hint a timestamp nul : ne jamais ecraser
-        -- un fait proprietaire GI/K plus recent.
-        if currentGuild ~= "" or normalizeGuildAt(row.guildAt) > 0 then return false end
-    else
+    local changed = false
+    if type(row) ~= "table" then
         row = {
             class = "", level = 0, faction = "", factionAt = 0,
             locale = "", guild = "", guildAt = 0, pool = "",
@@ -4071,12 +4076,37 @@ function Overlord.Leaderboard:MaybeEnrichGuildForKillRow(playerName)
         }
         self.playerInfo[playerName] = row
         NoteDedupCanonicalName(self, playerName)
+        changed = true
     end
-    row.guild = localGuildRosterGuild
-    row.guildAt = 0
-    row.guildAuth = nil
-    self:MarkMetaDirty()
-    return true
+    -- Le roster local n'est qu'un hint a timestamp nul : ne jamais ecraser
+    -- un fait proprietaire GI/K plus recent.
+    if sanitizeGuildName(row.guild or "") == "" and normalizeGuildAt(row.guildAt) <= 0 then
+        row.guild = localGuildRosterGuild
+        row.guildAt = 0
+        row.guildAuth = nil
+        changed = true
+    end
+    if entry.class and (row.class == nil or row.class == "" or row.class == "UNKNOWN") then
+        row.class = entry.class
+        changed = true
+    end
+    if entry.level and (tonumber(row.level) or 0) <= 0 then
+        row.level = entry.level
+        changed = true
+    end
+    if changed then self:MarkMetaDirty() end
+    return changed
+end
+
+-- Membre de notre propre guilde (roster Blizzard) : sa guilde et sa classe sont
+-- connues localement, inutile de les demander au reseau.
+function Overlord.Leaderboard:IsLocalGuildRosterMember(playerName)
+    return localGuildRosterGuild ~= "" and localGuildRosterMatches(playerName)
+end
+
+function Overlord.Leaderboard:GetLocalGuildRosterClass(playerName)
+    local entry = localGuildRosterEntry(playerName)
+    return entry and entry.class or nil
 end
 
 -- Attribue la guilde du joueur local a tous les contributeurs kills presents dans son roster
