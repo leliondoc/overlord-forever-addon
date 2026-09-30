@@ -2615,10 +2615,15 @@ end
 
 -- ============ Refresh logique ============
 
--- Deux decimales : avec des totaux hebdo enormes, une decimale restait figee longtemps (pas lie au warfront).
+-- Domination par victoires (1.2.0+) : des pas de 1 %, donc "58% / 42%". Une
+-- valeur non entiere garde ses decimales utiles, sans zeros de fin.
+local function FormatDominationPct(value)
+    local text = string.format("%.2f", value * 100)
+    return (text:gsub("%.?0+$", ""))
+end
 local function FormatDominationPctLine(allyPct, hordePct)
-    local a = string.format("%.2f", allyPct * 100)
-    local h = string.format("%.2f", hordePct * 100)
+    local a = FormatDominationPct(allyPct)
+    local h = FormatDominationPct(hordePct)
     if Overlord.UsesCommaDecimalLocale and Overlord.UsesCommaDecimalLocale() then
         a = a:gsub("%.", ",")
         h = h:gsub("%.", ",")
