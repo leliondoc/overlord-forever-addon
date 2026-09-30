@@ -103,11 +103,11 @@ L.FOREVER_NETWORK_NOTICE_BODY = notice[2]
 local replacements = {
     enUS = { { "Shard", "Layer" }, { "shard", "layer" } },
     enGB = { { "Shard", "Layer" }, { "shard", "layer" } },
-    frFR = { { "Shards", "Layers" }, { "shards", "layers" }, { "shard", "layer" } },
-    esES = { { "Shards", "Layers" }, { "shards", "layers" }, { "shard", "layer" } },
-    esMX = { { "Shards", "Layers" }, { "shards", "layers" }, { "shard", "layer" } },
+    frFR = { { "Shards", "Layers" }, { "shards", "layers" }, { "Shard", "Layer" }, { "shard", "layer" } },
+    esES = { { "Shards", "Layers" }, { "shards", "layers" }, { "Shard", "Layer" }, { "shard", "layer" } },
+    esMX = { { "Shards", "Layers" }, { "shards", "layers" }, { "Shard", "Layer" }, { "shard", "layer" } },
     deDE = { { "Shards", "Layer" }, { "Shard", "Layer" }, { "shard", "layer" } },
-    ruRU = { { "шардах", "слоях" }, { "шарда", "слоя" }, { "шард", "слой" } },
+    ruRU = { { "шардах", "слоях" }, { "шарде", "слое" }, { "шарда", "слоя" }, { "Шард", "Слой" }, { "шард", "слой" } },
     ptBR = { { "fragmentos", "layers" }, { "fragmento", "layer" }, { "Shard", "Layer" }, { "shard", "layer" } },
     zhCN = { { "分片", "layer" }, { "碎片", "layer" }, { "Shard", "Layer" }, { "shard", "layer" } },
 }
@@ -140,9 +140,23 @@ for key, value in pairs(visibleTranslationFixes[locale] or {}) do L[key] = value
 -- Fortresses now follow the same rules as outposts; no timed sieges or daily awards.
 do
     local L = Overlord.L
-    local fr = GetLocale() == "frFR"
-    L.FORTRESS_CAPTURE_AVAILABLE = fr and "Capture disponible à toute heure" or "Capture available at any time"
-    L.FORTRESS_OUTPOST_GUIDE_BODY = fr
-        and "%s\n\nComme les avant-postes : capture à toute heure en %d minutes, possession jusqu’à une reprise ou au reset de campagne. Le classement Forteresses compte les captures, dans sa colonne séparée."
-        or "%s\n\nLike outposts: capture at any time in %d minutes, ownership until recapture or campaign reset. The separate Fortresses leaderboard counts captures."
+    local fortressTexts = {
+        enUS = { "Capture available at any time",
+            "%s\n\nLike outposts: capture at any time in %d minutes, ownership until recapture or campaign reset. The separate Fortresses leaderboard counts captures." },
+        frFR = { "Capture disponible à toute heure",
+            "%s\n\nComme les avant-postes : capture à toute heure en %d minutes, possession jusqu’à une reprise ou au reset de campagne. La colonne Fort du classement compte les captures." },
+        esES = { "Captura disponible a cualquier hora",
+            "%s\n\nComo los puestos: captura a cualquier hora en %d minutos; la propiedad dura hasta una recaptura o el reinicio de la campaña. La columna Fortaleza de la clasificación cuenta las capturas." },
+        deDE = { "Eroberung jederzeit möglich",
+            "%s\n\nWie Außenposten: Eroberung jederzeit in %d Minuten, Besitz bis zur Rückeroberung oder zum Kampagnen-Reset. Die Spalte Festung der Rangliste zählt die Eroberungen." },
+        ruRU = { "Захват доступен в любое время",
+            "%s\n\nКак и аванпосты: захват в любое время за %d мин., владение сохраняется до повторного захвата или сброса кампании. Столбец «Крепость» в рейтинге учитывает захваты." },
+        ptBR = { "Captura disponível a qualquer hora",
+            "%s\n\nComo nos postos: captura a qualquer hora em %d minutos; a posse dura até uma recaptura ou o reinício da campanha. A coluna Fortaleza da classificação conta as capturas." },
+        zhCN = { "可随时占领",
+            "%s\n\n与前哨相同：可随时占领，需 %d 分钟；所有权持续到被重新占领或战役重置。排行榜的“要塞”一栏统计占领次数。" },
+    }
+    fortressTexts.esMX = fortressTexts.esES
+    local texts = fortressTexts[GetLocale()] or fortressTexts.enUS
+    L.FORTRESS_CAPTURE_AVAILABLE, L.FORTRESS_OUTPOST_GUIDE_BODY = texts[1], texts[2]
 end

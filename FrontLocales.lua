@@ -16,13 +16,13 @@ local names = {
         "Renders Tal", "Renosh-Lager" },
     ruRU = { "Красногорье", "Приозерье", "Приозерье", "Мельница Алтера",
         "Башня Илгалара", "Три Угла", "Дорога у озера", "Водопад Каменной Стражи",
-        "Долина Рендера", "Лагерь Реноша" },
+        "Долина Рендера", "Лагерь Renosh" },
     ptBR = { "Montanhas Cristarrubra", "Vila do Lago", "Vila do Lago", "Moinho de Alther",
         "Torre de Ilgalar", "Três Esquinas", "Estrada do Lago", "Cataratas da Vigília de Pedra",
         "Vale de Render", "Acampamento de Renosh" },
     zhCN = { "赤脊山", "湖畔镇", "湖畔镇", "阿尔瑟尔磨坊",
         "伊尔加拉之塔", "三岔路口", "湖边大道", "石堡瀑布",
-        "伦德山谷", "雷诺什营地" },
+        "伦德山谷", "Renosh 营地" },
 }
 names.esMX = names.esES
 local n = names[locale] or names.enUS
@@ -50,9 +50,9 @@ local standaloneOutpostNames = {
     frFR = { "Chapelle de Savix", "Pavillon d'Aeythyr", "Grotte de l'ours de Lesi" },
     esES = { "Capilla de Savix", "Pabellón de Aeythyr", "Cueva del oso de Lesi" },
     deDE = { "Kapelle von Savix", "Aeythyrs Jagdhütte", "Lesis Bärenhöhle" },
-    ruRU = { "Часовня Савикса", "Охотничий домик Эйтира", "Медвежья пещера Леси" },
+    ruRU = { "Часовня Savix", "Охотничий домик Aeythyr", "Медвежья пещера Lesi" },
     ptBR = { "Capela Savix", "Pavilhão de Aeythyr", "Caverna do Urso de Lesi" },
-    zhCN = { "萨维克斯教堂", "艾西尔小屋", "莱西熊洞" },
+    zhCN = { "Savix 教堂", "Aeythyr 小屋", "Lesi 的熊洞" },
 }
 standaloneOutpostNames.esMX = standaloneOutpostNames.esES
 local outpostNames = standaloneOutpostNames[locale] or standaloneOutpostNames.enUS
