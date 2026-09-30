@@ -557,8 +557,9 @@ end
 -- runs between direct neighbours (same channel/group/whisper, or a Battle.net
 -- friend). The relay carries live traffic only. Forwarding every exchange across
 -- up to four hops multiplied one reply into thousands of copies at evening peaks.
+-- Guild/class metadata answers (GY, GI, CA) follow the same rule as map and ranking.
 local CATCHUP_KINDS = {}
-for kind in ("SR ZA HR HA HB HC LK LC LR LO LOC OE"):gmatch("%S+") do CATCHUP_KINDS[kind] = true end
+for kind in ("SR ZA HR HA HB HC LK LC LR LO LOC OE GY GI CA"):gmatch("%S+") do CATCHUP_KINDS[kind] = true end
 local function isPointToPointCatchup(kind, target)
     return CATCHUP_KINDS[kind] == true and target ~= nil and target ~= "*"
 end
@@ -1498,10 +1499,10 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     end
     local forwarded = false
     -- Catch-up addressed to someone else is not relayed (point-to-point only).
-    -- A broadcast map request is not relayed either: only the requester's direct
-    -- neighbours answer it since 1.2.4, and they heard it first-hand.
+    -- Broadcast map and guild requests are not relayed either: only the
+    -- requester's direct neighbours answer them since 1.2.4, first-hand.
     local relayable = not isPointToPointCatchup(p.kind, p.target)
-        and not (p.kind == "SR" and p.target == "*")
+        and not ((p.kind == "SR" or p.kind == "GR") and p.target == "*")
     if not relayable and not addressed then
         self.stats.catchupNotRelayed = (self.stats.catchupNotRelayed or 0) + 1
     end

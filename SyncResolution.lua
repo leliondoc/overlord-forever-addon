@@ -487,6 +487,9 @@ end
 
 function Overlord.Sync:OnReceiveGuildRequest(payload, sender, channel)
     if (channel ~= "WHISPER" and channel ~= "BETA") then return end
+    -- Point to point (1.2.4): a request that crossed a relay is not answered.
+    local net = channel == "BETA" and Overlord.BetaNetwork
+    if net and (tonumber(net.context and net.context.hops) or 0) > 0 then return end
     if type(payload) ~= "string" or payload == "" then return end
     if #payload > CLASS_REQUEST_MAX_PAYLOAD then return end
     if Overlord.InstanceSuspended or IsInInstance() then return end

@@ -71,7 +71,7 @@ local function route()
 end
 local function wire(id, via, payload, kind)
     return table.concat({ "global", id, tostring(time()), target.name,
-        "Origin Tester," .. via, kind or "GR", payload }, "|")
+        "Origin Tester," .. via, kind or "MS", payload }, "|")
 end
 local function drain()
     local ticks = 0
@@ -89,7 +89,7 @@ route()
 -- A full queue refuses a forwarded copy without sealing origin:id, so the same
 -- packet can still arrive by another path once room is back.
 local filled = 0
-while relay.BetaNetwork:Send("GR", "local-fill-" .. filled, target.name) do filled = filled + 1 end
+while relay.BetaNetwork:Send("MS", "local-fill-" .. filled, target.name) do filled = filled + 1 end
 assert(filled > 0, "Test setup: the queue took no local packet")
 local second = "guild-request-capacity"
 assert(not relay.BetaNetwork:Receive(wire("capacity-one", "West Tester", second),
@@ -100,7 +100,7 @@ assert(relay.BetaNetwork:Receive(wire("capacity-one", "East Tester", second),
 drain()
 local delivered = 0
 for _, message in ipairs(target.received) do
-    if message == "GR:" .. second then delivered = delivered + 1 end
+    if message == "MS:" .. second then delivered = delivered + 1 end
 end
 assert(delivered == 1, "Retried origin:id did not reach the target exactly once")
 assert((relay.BetaNetwork.stats.relayRejected or 0) >= 1,

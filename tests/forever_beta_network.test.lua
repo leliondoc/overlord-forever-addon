@@ -97,9 +97,9 @@ local function client(name, channel, pool)
         a.received[#a.received + 1] = { kind = kind, payload = payload, origin = origin, at = now }
         -- A snapshot handler must not re-author the same received state.
         assert(a.BetaNetwork:Broadcast(kind, payload) == 0)
-        if kind == "GR" and a.BetaNetwork:IsTargetedDispatch() then
-            a.BetaNetwork:Send("GY", "reply", origin)
-        elseif kind ~= "GY" then
+        if kind == "MN" and a.BetaNetwork:IsTargetedDispatch() then
+            a.BetaNetwork:Send("MS", "reply", origin)
+        elseif kind ~= "MS" then
             assert(not a.BetaNetwork:IsTargetedDispatch(), "Broadcast gained direct-whisper authority")
         end
     end
@@ -117,7 +117,8 @@ b.friends, c.friends = { c, us }, { b }
 local kinds = {}
 for kind in ("SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR VB MN MS OP OC SH HR HB HC HA LD CR CA GR GY GI FC GE GP GX GD GM"):gmatch("%S+") do
     -- K is never re-forwarded: a relayed kill is never credited (anti-forgery).
-    if kind ~= "SR" and kind ~= "K" then kinds[#kinds + 1] = kind end
+    -- SR/GR broadcasts are answered by direct neighbours only (1.2.4): not relayed.
+    if kind ~= "SR" and kind ~= "K" and kind ~= "GR" then kinds[#kinds + 1] = kind end
 end
 for _, kind in ipairs(kinds) do
     assert(a.BetaNetwork:Send(kind, string.rep("x", 450)))
@@ -306,7 +307,7 @@ assert(a.BetaNetwork:Send("HB", string.rep("y", 3300))); drain()
 assert(d.received[#d.received].payload == string.rep("y", 3300), "Large history page lost fragments")
 -- Targeted request/reply traverses the reverse route without cross-faction whispers.
 local before = #a.received
-assert(a.BetaNetwork:Send("GR", "request", d.name)); drain()
+assert(a.BetaNetwork:Send("MN", "request", d.name)); drain()
 assert(#a.received == before + 1 and a.received[#a.received].payload == "reply"
     and a.received[#a.received].origin == d.name, "Routed reply did not return")
 -- Catch-up is point to point (1.2.4): never started toward a peer behind relays.
