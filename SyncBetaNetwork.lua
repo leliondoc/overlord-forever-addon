@@ -616,6 +616,14 @@ function net:GetDirectPeers()
     table.sort(names)
     return names
 end
+-- Same count as #GetDirectPeers(), without building and sorting a list (up to 512).
+function net:CountDirectPeers()
+    local count, now = 0, GetTime()
+    for _, row in pairs(self.peers) do
+        if now - row.at <= 300 and tonumber(row.hops) == 1 then count = count + 1 end
+    end
+    return count
+end
 function net:GetPeerAge(name)
     local key = canonical(name)
     local row = key and self.peers[key:lower()]

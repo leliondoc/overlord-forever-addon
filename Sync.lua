@@ -5207,8 +5207,9 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
     -- Viser ~2 repondants parmi les voisins directs du demandeur (seuls ceux-ci
     -- recoivent encore la demande en direct) ; les SR cibles restent garantis.
     if viaBetaBroadcast and not quarantinedMapOnly then
-        local directCount = Overlord.BetaNetwork and Overlord.BetaNetwork.GetDirectPeers
-            and #Overlord.BetaNetwork:GetDirectPeers() or 0
+        local betaNet = Overlord.BetaNetwork
+        local directCount = betaNet and (betaNet.CountDirectPeers and betaNet:CountDirectPeers()
+            or betaNet.GetDirectPeers and #betaNet:GetDirectPeers()) or 0
         respondChance = math.min(respondChance, math.max(0.05, 2 / math.max(1, directCount)))
         if math.random() > respondChance then return end
         -- Tirage deja fait : ne pas repasser par le tirage generique ci-dessous.
