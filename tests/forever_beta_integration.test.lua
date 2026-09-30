@@ -163,19 +163,10 @@ net.Broadcast = function(_, _, _, actual)
 end
 assert(s:BroadcastToCommunity("DX", "first-front", 12, 0.3, true, extras))
 
--- A broadcast LK line from our HR target is not part of its addressed snapshot:
--- counting it would break the digest proof and force an endless retry.
+-- The retired v4 exchange no longer counts deliveries (1.2.4, v6 only).
 assert(loadfile("SyncHistoryCatchup.lua"))()
-local lkPayload = "Remote Tester:41:WARRIOR:Alliance:1789527600:enus::0:B1789527600:2"
-s._historyCatchupPending = { awaitingAck = true, terminal = false, deliveryCount = 0, deliveryHash = 0,
-    targetKey = tostring(s:GetCaptureContributorDedupKey("Remote Tester")):lower() }
-net.context = { targeted = false }
-assert(not s:NoteHistoryCatchupDelivery("LK", lkPayload, "Remote Tester", "BETA"),
-    "A broadcast LK beacon was counted in the HR delivery digest")
-net.context = { targeted = true }
-assert(s:NoteHistoryCatchupDelivery("LK", lkPayload, "Remote Tester", "BETA")
-    and s._historyCatchupPending.deliveryCount == 1, "Addressed HR row was not counted")
-net.context, s._historyCatchupPending = nil, nil
+assert(s.NoteHistoryCatchupDelivery == nil and s.OnHistoryCatchupRequest == nil,
+    "The v4 ladder exchange is still wired")
 -- A legacy direct K/EK/SR copy is skipped once the relay queued the same packet
 -- (its channel/group copies carry it); other kinds keep their direct copy.
 assert(net:Send("K", "dedup-kill"), "Relay refused the kill")

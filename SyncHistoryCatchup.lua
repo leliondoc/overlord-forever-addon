@@ -1,126 +1,43 @@
--- Anti-entropie de classement, volontairement isolee de Sync.lua.
+-- Classement : rattrapage v6 entre voisins directs (1.2.4).
 --
--- Ce protocole ne lit jamais le classement actif pour repondre. Il attend le
--- snapshot visible tranche de Leaderboard.lua, compare un digest borne, puis
--- envoie au besoin les seules lignes du snapshot par whisper direct. Aucun
--- transport partage et aucun ticker permanent.
+-- Le classement se rattrape uniquement par le protocole pagine v6
+-- (SyncLeaderboardPages.lua), avec un voisin direct : meme canal, groupe,
+-- chuchotement ou ami Battle.net. L'ancien echange v4 (615 lignes a chaque
+-- ecart, retour de l'union, relaye sur plusieurs etapes) est retire : il
+-- saturait le relais a chaque vague de connexions. L'historique des
+-- avant-postes et forteresses (LO + LOC) passe par une demande SR "H" dediee.
+--
+-- Ce fichier conserve aussi le snapshot atteste du classement et sa
+-- serialisation, partages par les pages v6 et par la reponse manuelle SR:F.
 
 local Overlord = _G.Overlord
 if not Overlord or not Overlord.Sync then return end
 
 local sync = Overlord.Sync
-local PROTOCOL_VERSION = "4"
-local PREVIOUS_PROTOCOL_VERSION = "3"
-local COMPAT_PROTOCOL_VERSION = "2"
-local LEGACY_PROTOCOL_VERSION = "1"
 local MAX_SNAPSHOT_ROWS = Overlord.Leaderboard.NETWORK_KILL_RANK_LIMIT or 500
 local MAX_SNAPSHOT_QUEUE = MAX_SNAPSHOT_ROWS + 75 + 40
-local MAX_HISTORY_QUEUE = 340
 local MAX_RACE_ROWS = 40
 local HASH_MOD = 2147483647
--- Anti-entropie pair-a-pair : chaque echange est borne au snapshot visible deja
--- construit en tranches. Le pull initial est suivi d'un push de l'union si les
--- digests differaient, puis un nouveau pair est choisi periodiquement. Cela
--- remplace le digest global O(N) sans laisser les replicas dormir six heures.
+-- Un tour v6 reussi rearme le suivant apres deux minutes ; un tour sans voisin
+-- ou sans reponse reessaie apres deux minutes aussi.
 local RECENT_ACK_SEC = 2 * 60
-local HISTORY_ACK_SEC = 6 * 60 * 60
-local PERIODIC_JITTER_SEC = 60
 local EXHAUSTED_RETRY_SEC = 2 * 60
-local PERIODIC_ROSTER_TTL_SEC = 15 * 60
+local PERIODIC_JITTER_SEC = 60
+-- Historique avant-postes/forteresses : une demande toutes les six heures.
+local HISTORY_ACK_SEC = 6 * 60 * 60
 local CAMPAIGN_MIN_AGE_SEC = 30 * 60
 local INITIAL_DELAY_SEC = 24
 -- On the affected Forever beta, the client can omit every account SavedVariable
--- at login. Let the territorial burst finish first, then seek a durable peer
--- sooner than the normal veteran anti-entropy round.
+-- at login. Let the territorial burst finish first, then seek a peer sooner.
 local EMPTY_SAVE_INITIAL_DELAY_SEC = 16
-local EMPTY_SAVE_RETRY_SEC = 30
-local MAX_EMPTY_SAVE_ROUNDS = 3
--- Fragmentation and three relay hops share 1 KB/s. A full 615-row snapshot
--- can legitimately exceed the direct-whisper timeouts, even without loss.
-local ACK_TIMEOUT_SEC = Overlord.BetaNetworkEnabled ~= false and 1200 or 240
-local PUSH_ACK_TIMEOUT_SEC = Overlord.BetaNetworkEnabled ~= false and 1200 or 240
--- Leave room for live events and relay traffic; a larger top must not create
--- a longer burst that expires in a downstream relay's bounded queue.
-local SEND_INTERVAL_SEC = Overlord.BetaNetworkEnabled ~= false and 1 or 0.12
-local RESPONSE_WATCHDOG_SEC = Overlord.BetaNetworkEnabled ~= false and 1170 or 230
 local MAX_ATTEMPTS = 4
-local REQUESTER_COOLDOWN_SEC = 120
-local COMPAT_PULL_COOLDOWN_SEC = 2 * 60
-local COMPAT_PULL_GLOBAL_COOLDOWN_SEC = 20
--- Au-dela, un echange sans aucune ligne ni ACK est considere perdu : la demande puis
--- la premiere reponse ont chacune au plus le TTL relais (120 s) pour arriver.
-local NO_REPLY_SEC = 270
--- Un transfert commence qui n'apporte plus aucune ligne pendant ce delai est
--- abandonne : le pair est parti, en instance ou sature. Les lignes deja recues
--- restent acquises (fusion monotone) et le tour suivant choisit un autre pair.
-local STALL_SEC = 90
--- Un pair muet, bloque ou interrompu est ecarte du choix pendant ce delai.
+-- Un voisin muet (sans reponse v6) est ecarte du choix pendant ce delai.
 local PEER_PENALTY_SEC = 10 * 60
--- Route recente : le pair a emis depuis peu, la reponse a une chance de revenir.
-local FRESH_PEER_SEC = 200
+-- Garde-fou : un tour plus long que ceci est abandonne (rien n'est perdu, la
+-- reprise se fait depuis le point de controle du bucket).
+local ROUND_WATCHDOG_SEC = 15 * 60
 local peerPenaltyUntil = {}
 local ENEMY_FACTION = { Alliance = "Horde", Horde = "Alliance" }
-
-local function PenalizePeer(name)
-    if type(name) == "string" and name ~= "" then
-        peerPenaltyUntil[name:lower()] = GetTime() + PEER_PENALTY_SEC
-    end
-end
-
-local function ForgivePeer(name)
-    if type(name) == "string" and name ~= "" then peerPenaltyUntil[name:lower()] = nil end
-end
-
--- Candidats du tour : sans les pairs penalises, routes recentes d'abord. Si tout
--- est penalise ou perime, la liste complete reste utilisable (jamais de blocage).
-local function FilterCatchupCandidates(online)
-    local now, net = GetTime(), Overlord.BetaNetwork
-    local usable, fresh = {}, {}
-    for _, name in ipairs(online) do
-        if type(name) == "string" and (peerPenaltyUntil[name:lower()] or 0) <= now then
-            usable[#usable + 1] = name
-            local age = net and net.GetPeerAge and net:GetPeerAge(name)
-            if age and age <= FRESH_PEER_SEC then fresh[#fresh + 1] = name end
-        end
-    end
-    if #fresh > 0 then return fresh end
-    if #usable > 0 then return usable end
-    return online
-end
-
-local function PeerFaction(name)
-    -- Faction Battle.net (amis/ponts) d'abord, puis metadonnees du classement.
-    if sync.GetBetaPeerFaction then
-        local known = sync:GetBetaPeerFaction(name)
-        if known == "Alliance" or known == "Horde" then return known end
-    end
-    local lb = Overlord.Leaderboard
-    local info = lb and lb.GetPlayerInfo and lb:GetPlayerInfo(name)
-    local faction = type(info) == "table" and info.faction or nil
-    return (faction == "Alliance" or faction == "Horde") and faction or nil
-end
-
--- Etat du rattrapage pour /ov network (memoire de session uniquement).
-local function NoteHr(field, value, extra)
-    local stats = sync._historyCatchupStats or { requests = 0, completed = 0, rows = 0 }
-    sync._historyCatchupStats = stats
-    if field == "requests" or field == "completed" or field == "rows" then
-        stats[field] = (stats[field] or 0) + value
-    elseif field == "target" then
-        stats.target, stats.targetFaction, stats.targetAt = value, extra, GetTime()
-        stats.result, stats.targetRows = "waiting", 0
-    else
-        stats[field] = value
-        if field == "step" then stats.stepAt = GetTime() end
-    end
-end
-local recentRequesters = {}
-local recentRequesterCount = 0
-local recentCompatPulls = {}
-local recentCompatPullCount = 0
-local lastCompatPullAt = -COMPAT_PULL_GLOBAL_COOLDOWN_SEC
-local expectedHistoryPushes = {}
-local expectedHistoryPushCount = 0
 local snapshotWireCache = setmetatable({}, { __mode = "k" })
 local PrepareSnapshotForNetwork
 
@@ -139,9 +56,7 @@ local function CurrentCampaign()
 end
 
 -- Deux clients NA peuvent ancrer le meme reset hebdomadaire sur l'epoch API
--- Blizzard ou sur l'epoch de repli calendrier. Les transports de classement
--- ordinaires tolerent deja cet ecart ; l'anti-entropie doit utiliser la meme
--- equivalence sans jamais relacher l'identite de campagne.
+-- Blizzard ou sur l'epoch de repli calendrier : meme equivalence que le reste.
 local function CampaignEpochsMatch(a, b)
     if Overlord.CampaignEpochsMatch then
         return Overlord:CampaignEpochsMatch(a, b)
@@ -149,100 +64,41 @@ local function CampaignEpochsMatch(a, b)
     return math.floor(tonumber(a) or 0) == math.floor(tonumber(b) or 0)
 end
 
-local function SenderKey(sender)
-    local key = sync.GetCaptureContributorDedupKey
-        and sync:GetCaptureContributorDedupKey(sender) or tostring(sender or ""):lower()
-    return tostring(key or ""):lower()
-end
-
--- Les clients 9.9.10-9.9.12 savent repondre a SR:F par tranches rotatives,
--- mais leur HR v2 ne connait que l'ancien top-150. Lorsqu'un de ces clients
--- nous contacte, demander une seule tranche complete en retour permet de
--- recuperer progressivement sa longue traine sans entretenir un faux HB v2.
--- Une reservation par pair et une garde globale bornent strictement ce pont
--- temporaire pendant la migration du parc vers le protocole v3.
-local function ScheduleCompatFullPull(target)
-    if not C_Timer or not C_Timer.After or not sync.GetSRPayload then return false end
-    -- Un pair connu uniquement via un autre club territorial europeen ne doit
-    -- jamais recevoir SR:F : cette reponse transporte aussi C/ZA/ZS/GK/outposts.
-    -- Les bridges cross-pool restent exclusivement sur HR nonce `p`.
-    if sync.IsEuropeanLeaderboardBridgeSender
-        and sync:IsEuropeanLeaderboardBridgeSender(target)
-        and (not sync.IsOnlineCommunitySender
-            or not sync:IsOnlineCommunitySender(target))
-        and (not sync.SenderIsInOurGroup
-            or not sync:SenderIsInOurGroup(target)) then
-        return false
+local function PenalizePeer(name)
+    if type(name) == "string" and name ~= "" then
+        peerPenaltyUntil[name:lower()] = GetTime() + PEER_PENALTY_SEC
     end
-    local key = SenderKey(target)
-    if key == "" then return false end
-    local now = GetTime()
-    local previous = recentCompatPulls[key]
-    if previous and now - previous < COMPAT_PULL_COOLDOWN_SEC then return false end
-    if now - lastCompatPullAt < COMPAT_PULL_GLOBAL_COOLDOWN_SEC then return false end
-    if recentCompatPullCount >= 32 then
-        wipe(recentCompatPulls)
-        recentCompatPullCount = 0
+end
+
+local function ForgivePeer(name)
+    if type(name) == "string" and name ~= "" then peerPenaltyUntil[name:lower()] = nil end
+end
+
+local function PeerFaction(name)
+    -- Faction Battle.net (amis/ponts) d'abord, puis metadonnees du classement.
+    if sync.GetBetaPeerFaction then
+        local known = sync:GetBetaPeerFaction(name)
+        if known == "Alliance" or known == "Horde" then return known end
     end
-    if not previous then recentCompatPullCount = recentCompatPullCount + 1 end
-    recentCompatPulls[key] = now
-    lastCompatPullAt = now
-    C_Timer.After(1.5, function()
-        if not Overlord.Sync or Overlord.InstanceSuspended or IsInInstance()
-            or (InCombatLockdown and InCombatLockdown()) then
-            if recentCompatPulls[key] == now then
-                recentCompatPulls[key] = nil
-                recentCompatPullCount = math.max(0, recentCompatPullCount - 1)
-            end
-            return
-        end
-        local payload = sync:GetSRPayload("F")
-        if payload and payload ~= "" then
-            local sent = sync:SendWhisper("SR", payload, target)
-            if sent and sync.ExpectDirectFullLeaderboardResponse then
-                sync:ExpectDirectFullLeaderboardResponse(target)
-            end
-        end
-    end)
-    return true
+    local lb = Overlord.Leaderboard
+    local info = lb and lb.GetPlayerInfo and lb:GetPlayerInfo(name)
+    local faction = type(info) == "table" and info.faction or nil
+    return (faction == "Alliance" or faction == "Horde") and faction or nil
 end
 
-local function PeriodicDelay(base)
-    local jitter = math.random and math.random(0, PERIODIC_JITTER_SEC) or 0
-    return math.max(30, math.floor(tonumber(base) or RECENT_ACK_SEC) + jitter)
-end
-
--- Un C_Timer.After possede par generation : aucune boucle OnUpdate, aucun scan
--- synchrone et jamais plus d'un reveil anti-entropie arme par client.
-local function ArmNextHistoryCatchup(delay, skipJitter)
-    sync._historyCatchupWakeGeneration =
-        math.floor(tonumber(sync._historyCatchupWakeGeneration) or 0) + 1
-    local generation = sync._historyCatchupWakeGeneration
-    C_Timer.After(skipJitter and math.max(30, math.floor(tonumber(delay) or 30))
-        or PeriodicDelay(delay), function()
-        if not Overlord.Sync
-            or Overlord.Sync._historyCatchupWakeGeneration ~= generation then return end
-        if Overlord.InstanceSuspended or IsInInstance()
-            or (InCombatLockdown and InCombatLockdown()) then
-            ArmNextHistoryCatchup(EXHAUSTED_RETRY_SEC)
-            return
-        end
-        if Overlord.Sync.ScheduleLoginLeaderboardHistoryCatchUp then
-            local ack = OverlordDB and OverlordDB.leaderboardHistoryCatchupAck
-            local historyAt = type(ack) == "table"
-                and math.floor(tonumber(ack.historyAt) or 0) or 0
-            local needsHistory = historyAt <= 0
-                or NowServer() - historyAt >= HISTORY_ACK_SEC
-            -- A lost v4 return ACK must not keep scheduling territorial history
-            -- forever and starve the complete paged ranking after login.
-            if sync.StartPagedLeaderboardCatchup and sync._preferPagedLeaderboardNext then
-                sync._preferPagedLeaderboardNext = nil
-                needsHistory = false
-            end
-            Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(
-                true, not needsHistory)
-        end
-    end)
+-- Etat du rattrapage pour /ov sync (memoire de session uniquement).
+local function NoteHr(field, value, extra)
+    local stats = sync._historyCatchupStats or { requests = 0, completed = 0, rows = 0 }
+    sync._historyCatchupStats = stats
+    if field == "requests" or field == "completed" or field == "rows" then
+        stats[field] = (stats[field] or 0) + value
+    elseif field == "target" then
+        stats.target, stats.targetFaction, stats.targetAt = value, extra, GetTime()
+        stats.result = "waiting"
+    else
+        stats[field] = value
+        if field == "step" then stats.stepAt = GetTime() end
+    end
 end
 
 local function HashString(value)
@@ -606,221 +462,86 @@ PrepareSnapshotForNetwork = function(lb, callback, killLimit, requestedWireEpoch
     end)
 end
 
-local function BuildHistoricalQueue()
-    local queue = {}
-    if sync.AppendLeaderboardOutpostToSrQueue then
-        pcall(sync.AppendLeaderboardOutpostToSrQueue, sync, queue)
-    end
-    if sync.AppendLeaderboardOutpostCountToSrQueue then
-        pcall(sync.AppendLeaderboardOutpostCountToSrQueue, sync, queue, 0, true)
-    end
-    while #queue > MAX_HISTORY_QUEUE do queue[#queue] = nil end
-    return queue
-end
-
-local function TerminalAckData(state)
-    return table.concat({
-        tostring(state.protocolVersion or PROTOCOL_VERSION),
-        tostring(state.campaignId), state.nonce,
-        state.status, tostring(state.digestCount), tostring(state.digestHash),
-    }, ":")
-end
-
-local function ClearResponse(state)
-    if sync._historyCatchupResponse ~= state then return end
-    if state.ticker and state.ticker.Cancel then state.ticker:Cancel() end
-    state.ticker = nil
-    sync._historyCatchupResponse = nil
-end
-
-local function FinishResponse(state)
-    if sync._historyCatchupResponse ~= state then return end
-    -- A refused enqueue is not a delivered ACK. Retry on the next tick before
-    -- releasing the response or authorizing the return push.
-    if sync:SendWhisper("HA", TerminalAckData(state), state.target) ~= true then return end
-    -- Si les ladders differaient, le demandeur va d'abord fusionner notre
-    -- snapshot puis nous repousser cette union. N'accepter HB que pour ce nonce
-    -- precis empeche un membre de la communaute d'ouvrir un flux arbitraire.
-    if state.status == "D" and state.supportsPushPull then
-        local targetKey = SenderKey(state.target)
-        if targetKey ~= "" then
-            local now = GetTime()
-            for staleKey, row in pairs(expectedHistoryPushes) do
-                if now > (tonumber(row.expiresAt) or 0) then
-                    expectedHistoryPushes[staleKey] = nil
-                    expectedHistoryPushCount = math.max(0, expectedHistoryPushCount - 1)
-                end
-            end
-            if expectedHistoryPushCount >= 16 then
-                wipe(expectedHistoryPushes)
-                expectedHistoryPushCount = 0
-            end
-            local key = targetKey .. ":" .. tostring(state.nonce or "")
-            if not expectedHistoryPushes[key] then
-                expectedHistoryPushCount = expectedHistoryPushCount + 1
-            end
-            expectedHistoryPushes[key] = {
-                targetKey = targetKey,
-                campaignId = state.campaignId,
-                nonce = state.nonce,
-                expiresAt = now + PUSH_ACK_TIMEOUT_SEC,
-            }
+-- Voisins directs utilisables : ni nous-memes, ni penalises, ni annonces sans v6.
+local function DirectCandidates()
+    local net = Overlord.BetaNetwork
+    if Overlord.BetaNetworkEnabled == false or not net or not net.GetDirectPeers then return {} end
+    local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
+    local now, out = GetTime(), {}
+    for _, name in ipairs(net:GetDirectPeers()) do
+        if type(name) == "string" and name ~= ""
+            and not (sync.ForeverIdentitiesMatch and sync:ForeverIdentitiesMatch(name, me))
+            and (peerPenaltyUntil[name:lower()] or 0) <= now
+            and not (net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(name) == 5) then
+            out[#out + 1] = name
         end
     end
-    local compatPullTarget = state.compatibilityPull and state.target or nil
-    ClearResponse(state)
-    if compatPullTarget then ScheduleCompatFullPull(compatPullTarget) end
+    return out
 end
 
-local function SendResponseTick(state)
-    if sync._historyCatchupResponse ~= state then return end
-    local packet = state.queue and state.queue[state.index]
-    if packet then
-        if sync:SendWhisper(packet.type, packet.data, state.target) == true then
-            state.index = state.index + 1
-        end
-        return
+-- Rotation entre voisins ; deux tours sur trois, un voisin de l'autre faction
+-- (ami Battle.net) d'abord : il detient ce que notre faction ne voit pas en direct.
+local function PickDirectPeer()
+    local candidates = DirectCandidates()
+    local total = #candidates
+    if total == 0 then return nil end
+    local rotation = math.max(0, math.floor(tonumber(OverlordDB
+        and OverlordDB.leaderboardHistoryCatchupTargetRotation) or 0))
+    local start = (rotation % total) + 1
+    local enemy = rotation % 3 ~= 2 and ENEMY_FACTION[Overlord.PlayerFaction] or nil
+    local fallback
+    for offset = 0, total - 1 do
+        local name = candidates[((start + offset - 1) % total) + 1]
+        fallback = fallback or name
+        if not enemy or PeerFaction(name) == enemy then return name end
     end
-    if state.phase == "ladder" then
-        state.phase = state.includeHistory and "history" or "done"
-        state.queue = state.includeHistory and BuildHistoricalQueue() or {}
-        state.index = 1
-        return
+    return fallback
+end
+
+local function RotatePeers()
+    if OverlordDB then
+        OverlordDB.leaderboardHistoryCatchupTargetRotation =
+            math.max(0, math.floor(tonumber(OverlordDB.leaderboardHistoryCatchupTargetRotation) or 0)) + 1
     end
-    FinishResponse(state)
 end
 
-local function StartResponse(
-    target, campaignId, nonce, status, count, hash, ladderQueue, includeHistory,
-    protocolVersion, supportsPushPull, compatibilityPull)
-    local state = {
-        target = target,
-        campaignId = campaignId,
-        nonce = nonce,
-        protocolVersion = protocolVersion,
-        supportsPushPull = supportsPushPull == true,
-        compatibilityPull = compatibilityPull == true,
-        status = status,
-        digestCount = count,
-        digestHash = hash,
-        includeHistory = includeHistory == true,
-        phase = ladderQueue and "ladder" or (includeHistory and "history" or "done"),
-        queue = ladderQueue or (includeHistory and BuildHistoricalQueue() or {}),
-        index = 1,
-    }
-    sync._historyCatchupResponse = state
-    state.ticker = C_Timer.NewTicker(SEND_INTERVAL_SEC, function()
-        SendResponseTick(state)
-    end)
-    C_Timer.After(RESPONSE_WATCHDOG_SEC, function()
-        ClearResponse(state)
-    end)
-end
-
-local function BusyAck(target, campaignId, nonce, protocolVersion)
-    sync:SendWhisper("HA", table.concat({
-        tostring(protocolVersion or PROTOCOL_VERSION),
-        tostring(campaignId), nonce, "B", "0", "0",
-    }, ":"), target)
-end
-
-local function RequesterAllowed(sender, ladderOnly)
-    if sync.SenderIsInOurGroup and sync:SenderIsInOurGroup(sender) then return true end
-    if sync.IsOnlineCommunitySender and sync:IsOnlineCommunitySender(sender) then return true end
-    -- Un membre d'un club FR/DE/EU hors pool local n'est autorise que pour le
-    -- nonce periodique `p`, qui exclut toutes les preuves territoriales.
-    return ladderOnly == true and sync.IsEuropeanLeaderboardBridgeSender
-        and sync:IsEuropeanLeaderboardBridgeSender(sender) or false
-end
-
-local function AcceptRequesterRate(senderKey)
-    local now = GetTime()
-    local previous = recentRequesters[senderKey]
-    if previous and now - previous < REQUESTER_COOLDOWN_SEC then return false end
-    if recentRequesterCount >= 32 then
-        recentRequesters = {}
-        recentRequesterCount = 0
-    end
-    if not previous then recentRequesterCount = recentRequesterCount + 1 end
-    recentRequesters[senderKey] = now
+-- Historique avant-postes/forteresses : au plus une demande toutes les six heures.
+local function MaybeRequestOutpostHistory(target, force)
+    if not OverlordDB or not sync.RequestOutpostHistory then return false end
+    local _, campaignId = CurrentCampaign()
+    local ack = OverlordDB.leaderboardHistoryCatchupAck
+    local historyAt = type(ack) == "table"
+        and math.floor(tonumber(ack.campaignId) or 0) == campaignId
+        and math.floor(tonumber(ack.historyAt) or 0) or 0
+    if not force and historyAt > 0 and NowServer() - historyAt < HISTORY_ACK_SEC then return false end
+    target = target or PickDirectPeer()
+    if not target or not sync:RequestOutpostHistory(target) then return false end
+    ack = type(ack) == "table" and ack.campaignId == campaignId and ack
+        or { campaignId = campaignId, at = 0 }
+    ack.historyAt = NowServer()
+    OverlordDB.leaderboardHistoryCatchupAck = ack
+    NoteHr("step", "outpost history requested")
     return true
 end
 
-function sync:OnHistoryCatchupRequest(payload, sender, channel)
-    if (channel ~= "WHISPER" and channel ~= "BETA") or type(payload) ~= "string"
-        or not sender or sender == "" then return false end
-    local version, campaignIdStr, startStr, nonce, countStr, hashStr =
-        strsplit(":", payload, 6)
-    local campaignId = math.floor(tonumber(campaignIdStr) or 0)
-    local campaignStart = math.floor(tonumber(startStr) or 0)
-    local remoteCount = math.floor(tonumber(countStr) or -1)
-    local remoteHash = math.floor(tonumber(hashStr) or -1)
-    local ladderOnly = type(nonce) == "string" and nonce:sub(1, 1) == "p"
-    if not RequesterAllowed(sender, ladderOnly) then return false end
-    local currentStart, currentId = CurrentCampaign()
-    local supportsPushPull = version == PROTOCOL_VERSION
-    local compatibilityPull = version == COMPAT_PROTOCOL_VERSION or version == PREVIOUS_PROTOCOL_VERSION
-    if (not supportsPushPull and not compatibilityPull
-            and version ~= LEGACY_PROTOCOL_VERSION) or campaignId <= 0
-        or campaignId ~= currentId or not CampaignEpochsMatch(campaignStart, currentStart)
-        or type(nonce) ~= "string" or not nonce:match("^[%w]+$")
-        or #nonce < 6 or #nonce > 24
-        or remoteCount < 0 or remoteCount > MAX_SNAPSHOT_QUEUE
-        or remoteHash < 0 or remoteHash >= HASH_MOD then return false end
-    if self._historyCatchupResponse then
-        BusyAck(sender, campaignId, nonce, version)
-        return false
-    end
-    local senderKey = SenderKey(sender)
-    if senderKey == "" or not AcceptRequesterRate(senderKey) then
-        BusyAck(sender, campaignId, nonce, version)
-        return false
-    end
-    local lb = Overlord.Leaderboard
-    if not lb or not lb.SnapshotCurrentCampaignBeforeReset then
-        BusyAck(sender, campaignId, nonce, version)
-        return false
-    end
-    -- Reserve le responder avant le callback asynchrone afin que deux HR recus
-    -- dans la meme frame ne lancent pas deux snapshots/reponses.
-    local reservation = { target = sender, campaignId = campaignId, nonce = nonce }
-    self._historyCatchupResponse = reservation
-    local accepted = PrepareSnapshotForNetwork(lb, function(success, preparedSnapshot)
-        if sync._historyCatchupResponse ~= reservation then return end
-        sync._historyCatchupResponse = nil
-        local startNow, idNow = CurrentCampaign()
-        local snapshot = success and idNow == campaignId
-            and CampaignEpochsMatch(startNow, campaignStart)
-            and preparedSnapshot or nil
-        if not snapshot then
-            BusyAck(sender, campaignId, nonce, version)
+local ScheduleAttempt
+
+-- Un C_Timer.After possede par generation : jamais plus d'un reveil arme.
+local function ArmNextHistoryCatchup(delay)
+    sync._historyCatchupWakeGeneration =
+        math.floor(tonumber(sync._historyCatchupWakeGeneration) or 0) + 1
+    local generation = sync._historyCatchupWakeGeneration
+    local jitter = math.random and math.random(0, PERIODIC_JITTER_SEC) or 0
+    C_Timer.After(math.max(30, math.floor(tonumber(delay) or RECENT_ACK_SEC) + jitter), function()
+        if not Overlord.Sync
+            or Overlord.Sync._historyCatchupWakeGeneration ~= generation then return end
+        if Overlord.InstanceSuspended or IsInInstance()
+            or (InCombatLockdown and InCombatLockdown()) then
+            ArmNextHistoryCatchup(EXHAUSTED_RETRY_SEC)
             return
         end
-        local localCount, localHash, ladderQueue =
-            sync:ComputeHistoryCatchupSnapshotDigest(snapshot, campaignStart,
-                supportsPushPull and MAX_SNAPSHOT_ROWS or 200)
-        -- Old peers compare a top 150/200. Give them only a bounded legacy view;
-        -- never ask them to certify a 500-player union they cannot represent.
-        if compatibilityPull then
-            StartResponse(sender, campaignId, nonce, "S",
-                remoteCount, remoteHash, ladderQueue, not ladderOnly,
-                version, false, true)
-            return
-        end
-        local same = localCount == remoteCount and localHash == remoteHash
-        StartResponse(sender, campaignId, nonce, same and "S" or "D",
-            localCount, localHash, same and nil or ladderQueue, not ladderOnly,
-            version, supportsPushPull)
-    end, supportsPushPull and MAX_SNAPSHOT_ROWS or 200, campaignStart)
-    if accepted ~= true then
-        self._historyCatchupResponse = nil
-        BusyAck(sender, campaignId, nonce, version)
-        return false
-    end
-    C_Timer.After(RESPONSE_WATCHDOG_SEC, function()
-        ClearResponse(reservation)
+        Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true)
     end)
-    return true
 end
 
 local function AttemptDelay(attempt)
@@ -830,720 +551,94 @@ local function AttemptDelay(attempt)
     return 60
 end
 
-local function RestartHistoryCatchupForCurrentCampaign(pending)
-    if pending and sync._historyCatchupPending == pending then
-        local push = pending.pushOutbound
-        if push and push.ticker and push.ticker.Cancel then push.ticker:Cancel() end
-        if push then push.ticker = nil end
-        pending.terminal = true
-        sync._historyCatchupPending = nil
+local function FinishRound(pending, success, target)
+    if sync._historyCatchupPending ~= pending then return end
+    pending.terminal = true
+    sync._historyCatchupPending = nil
+    RotatePeers()
+    if success and OverlordDB then
+        local ack = OverlordDB.leaderboardHistoryCatchupAck
+        ack = type(ack) == "table" and ack.campaignId == pending.campaignId and ack
+            or { campaignId = pending.campaignId, historyAt = 0 }
+        ack.at = NowServer()
+        OverlordDB.leaderboardHistoryCatchupAck = ack
+        OverlordDB.leaderboardRankFirstCompletedCampaignId = pending.campaignId
+        NoteHr("completed", 1)
     end
-    if sync.ScheduleLoginLeaderboardHistoryCatchUp then
-        sync:ScheduleLoginLeaderboardHistoryCatchUp(true, true)
-    else
-        ArmNextHistoryCatchup(EXHAUSTED_RETRY_SEC)
-    end
+    NoteHr("result", success and "paged sweep received" or "paged sweep interrupted")
+    MaybeRequestOutpostHistory(success and target or nil, pending.forceHistory)
+    ArmNextHistoryCatchup(success and RECENT_ACK_SEC or EXHAUSTED_RETRY_SEC)
 end
 
-local function ScheduleAttempt(generation, campaignId, attempt)
+ScheduleAttempt = function(pending, attempt)
+    if sync._historyCatchupPending ~= pending or pending.terminal then return false end
     if attempt > MAX_ATTEMPTS then
-        local exhausted = sync._historyCatchupPending
-        local compatTarget = nil
-        if exhausted and exhausted.generation == generation
-            and exhausted.campaignId == campaignId and not exhausted.terminal then
-            compatTarget = exhausted.target
-            sync._historyCatchupPending = nil
-        end
-        -- Un parc encore entierement v2 ignore HR v3. Apres les essais normaux,
-        -- une seule page SR:F vers le dernier pair joignable evite qu'un client
-        -- 9.9.13 neuf reste vide en attendant qu'un ancien l'interroge lui-meme.
-        if compatTarget then ScheduleCompatFullPull(compatTarget) end
         NoteHr("step", "all attempts used, next round in 2 min")
-        ArmNextHistoryCatchup(EXHAUSTED_RETRY_SEC)
+        FinishRound(pending, false)
         return false
     end
-    if not C_Timer or not C_Timer.After then return false end
-    local owner = sync._historyCatchupPending
-    if not owner or owner.generation ~= generation
-        or owner.campaignId ~= campaignId or owner.terminal then return false end
-    -- Un ACK tardif et le watchdog peuvent tous deux demander le retry de la
-    -- meme tentative. Ce jeton invalide l'ancien callback : un seul HR pourra
-    -- etre emis, meme dans cette course.
-    owner.attemptTimerGeneration =
-        math.floor(tonumber(owner.attemptTimerGeneration) or 0) + 1
-    local attemptTimerGeneration = owner.attemptTimerGeneration
+    pending.attemptToken = (pending.attemptToken or 0) + 1
+    local token = pending.attemptToken
     C_Timer.After(AttemptDelay(attempt), function()
-        local pending = sync._historyCatchupPending
-        if not pending or pending.generation ~= generation
-            or pending.campaignId ~= campaignId or pending.terminal
-            or pending.attemptTimerGeneration ~= attemptTimerGeneration then return end
-        local startNow, idNow = CurrentCampaign()
-        if idNow ~= campaignId then
+        if sync._historyCatchupPending ~= pending or pending.terminal
+            or pending.attemptToken ~= token then return end
+        local _, campaignId = CurrentCampaign()
+        if campaignId ~= pending.campaignId then
             NoteHr("step", "campaign changed, restarting")
-            RestartHistoryCatchupForCurrentCampaign(pending)
+            pending.terminal = true
+            sync._historyCatchupPending = nil
+            sync:ScheduleLoginLeaderboardHistoryCatchUp(true)
             return
         end
-        if not OverlordDB then return end
         if Overlord.InstanceSuspended or IsInInstance()
             or (InCombatLockdown and InCombatLockdown()) then
             NoteHr("step", "skipped (combat or instance)")
-            ScheduleAttempt(generation, campaignId, attempt + 1)
+            ScheduleAttempt(pending, attempt + 1)
             return
         end
-        local lb = Overlord.Leaderboard
-        if not lb or not lb.SnapshotCurrentCampaignBeforeReset then
-            NoteHr("step", "leaderboard not ready")
-            ScheduleAttempt(generation, campaignId, attempt + 1)
+        local target = PickDirectPeer()
+        if not target then
+            NoteHr("step", "no direct neighbour")
+            ScheduleAttempt(pending, attempt + 1)
             return
         end
-        NoteHr("step", "preparing snapshot")
-        PrepareSnapshotForNetwork(lb, function(success, preparedSnapshot)
-            local active = sync._historyCatchupPending
-            if not active or active.generation ~= generation or active.terminal then return end
-            local currentStart, currentId = CurrentCampaign()
-            if currentId ~= campaignId or currentStart ~= startNow then
-                NoteHr("step", "campaign changed during snapshot, restarting")
-                RestartHistoryCatchupForCurrentCampaign(active)
-                return
-            end
-            if not success then
-                NoteHr("step", "snapshot failed")
-                ScheduleAttempt(generation, campaignId, attempt + 1)
-                return
-            end
-            local snapshot = preparedSnapshot
-            local count, hash = sync:ComputeHistoryCatchupSnapshotDigest(snapshot, currentStart)
-            -- Les rondes periodiques reutilisent le dernier roster complet. Un
-            -- candidat stale qui ne repond plus force un vrai refresh au retry,
-            -- au lieu de rescanner tous les clubs toutes les deux minutes.
-            local periodicRound = active.ladderOnly == true
-            local forceRosterRefresh = periodicRound and attempt > 1
-            local rosterTtl = periodicRound and PERIODIC_ROSTER_TTL_SEC or 30
-            -- Lorsqu'un compte est membre de plusieurs clubs FR/DE/EU, les
-            -- rondes ladder-only choisissent d'abord un pair d'un AUTRE pool.
-            -- Le roster territorial normal reste le fallback et n'est jamais
-            -- elargi par cette voie.
-            local online = periodicRound
-                and sync.GetOnlineEuropeanLeaderboardBridgeMembers
-                and sync:GetOnlineEuropeanLeaderboardBridgeMembers(
-                    forceRosterRefresh, rosterTtl) or {}
-            if #online == 0 then
-                online = sync.GetOnlineCommunityMembers
-                    and sync:GetOnlineCommunityMembers(forceRosterRefresh, rosterTtl) or {}
-            end
-            -- Communautes indisponibles sur la beta : sans club, le roster est vide et
-            -- l'anti-entropie n'avait plus aucun pair. Les joueurs decouverts par le
-            -- relais beta (toutes factions, via Battle.net) servent alors de pairs.
-            -- Seule la selection du pair change ; le protocole HR reste identique.
-            if #online == 0 and Overlord.BetaNetworkEnabled ~= false
-                and Overlord.BetaNetwork and Overlord.BetaNetwork.GetPeers then
-                online = Overlord.BetaNetwork:GetPeers()
-            end
-            online = FilterCatchupCandidates(online)
-            local total, target = #online, nil
-            local identity = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
-            if total > 0 then
-                local seed = HashString(identity)
-                local rotation = math.max(0, math.floor(tonumber(
-                    OverlordDB.leaderboardHistoryCatchupTargetRotation) or 0))
-                local startIndex = ((seed + rotation) % total) + 1
-                -- Le pair le plus proche d'abord (notre ami Battle.net = 1 etape), sans
-                -- regle de faction : un allie qui a des amis Battle.net adverses detient
-                -- deja l'autre faction, alors qu'un pair adverse lointain perd des lignes
-                -- a chaque etape. Un tour sur trois garde la rotation simple.
-                local plainRotation = rotation % 3 == 2
-                local net = Overlord.BetaNetwork
-                local enemyFaction = ENEMY_FACTION[Overlord.PlayerFaction]
-                local bestHops, bestIsEnemy
-                for offset = 0, total - 1 do
-                    local candidate = online[((startIndex + offset - 1) % total) + 1]
-                    if candidate and candidate ~= ""
-                        and (not sync.IsSenderLocalPlayer
-                            or not sync:IsSenderLocalPlayer(candidate)) then
-                        if plainRotation then
-                            target = candidate
-                            break
-                        end
-                        local hops = net and net.GetPeerHops and net:GetPeerHops(candidate) or 99
-                        -- A distance egale, l'autre faction detient plus souvent ce
-                        -- qui nous manque (notre faction arrive deja en direct).
-                        local isEnemy = enemyFaction ~= nil and PeerFaction(candidate) == enemyFaction
-                        if not bestHops or hops < bestHops
-                            or (hops == bestHops and isEnemy and not bestIsEnemy) then
-                            target, bestHops, bestIsEnemy = candidate, hops, isEnemy
-                        end
-                    end
-                end
-            end
-            if not target then
-                NoteHr("step", "no peer known (" .. tostring(total) .. " listed)")
-                ScheduleAttempt(generation, campaignId, attempt + 1)
-                return
-            end
-            -- Only the ladder-only round changes transport. Initial territorial
-            -- history and old peers retain v4; a v6 timeout resumes from a stream/bucket.
-            if active.ladderOnly and not active.pagedTried
-                and sync.StartCompletePagedLeaderboardCatchup then
-                active.pagedTried = true
-                local started = sync:StartCompletePagedLeaderboardCatchup(target, function(success, supported)
-                    if sync._historyCatchupPending ~= active or active.terminal then return end
-                    -- v5 ne certifie jamais un tour complet : seul un balayage
-                    -- reellement interrompu (pair muet ou parti) penalise le pair.
-                    local pageStats = sync._leaderboardPageStats
-                    if success or (pageStats and pageStats.result == "sweep received") then
-                        ForgivePeer(target)
-                    else
-                        PenalizePeer(target)
-                    end
-                    if not supported then
-                        ScheduleAttempt(generation, campaignId, attempt)
-                        return
-                    end
-                    if success and OverlordDB then
-                        -- Persist only a completed v6 sweep. If the player
-                        -- reloads before the next wake, give the still-missing
-                        -- territorial v4 history its turn instead of repeating
-                        -- an already completed ranking transfer.
-                        OverlordDB.leaderboardRankFirstCompletedCampaignId = campaignId
-                    end
-                    active.terminal = true
-                    sync._historyCatchupPending = nil
-                    NoteHr("result", success and "paged sweep received" or "paged sweep interrupted")
-                    OverlordDB.leaderboardHistoryCatchupTargetRotation =
-                        (tonumber(OverlordDB.leaderboardHistoryCatchupTargetRotation) or 0) + 1
-                    ArmNextHistoryCatchup(success and RECENT_ACK_SEC or EXHAUSTED_RETRY_SEC)
-                end)
-                if started then
-                    NoteHr("target", target, PeerFaction(target) or "?")
-                    NoteHr("step", "paged ladder catch-up")
+        local started = sync.StartCompletePagedLeaderboardCatchup
+            and sync:StartCompletePagedLeaderboardCatchup(target, function(success, supported)
+                if sync._historyCatchupPending ~= pending or pending.terminal then return end
+                if success then
+                    ForgivePeer(target)
+                    FinishRound(pending, true, target)
                     return
                 end
-            end
-            local nonceSeed = HashString(table.concat({
-                tostring(identity or ""), tostring(NowServer()),
-                tostring(generation), tostring(attempt), tostring(GetTime()),
-            }, ":"))
-            local nonce = (active.ladderOnly and "p" or "h")
-                .. string.format("%x%x", NowServer() % 0x7fffffff, nonceSeed)
-            local request = table.concat({
-                PROTOCOL_VERSION, tostring(campaignId), tostring(currentStart),
-                nonce, tostring(count), tostring(hash),
-            }, ":")
-            local targetKey = SenderKey(target)
-            if targetKey == "" or sync:SendWhisper("HR", request, target) ~= true then
-                NoteHr("step", "request not sent to " .. tostring(target))
-                ScheduleAttempt(generation, campaignId, attempt + 1)
-                return
-            end
-            active.attempt = attempt
-            active.target = target
-            active.targetKey = targetKey
-            active.nonce = nonce
-            active.awaitingAck = true
-            active.requestedCount = count
-            active.requestedHash = hash
-            active.deliveryCount = 0
-            active.deliveryHash = 0
-            -- Un ACK B/E d'une tentative precedente ne vaut pas reponse de ce pair.
-            active.replied = nil
-            OverlordDB.leaderboardHistoryCatchupTargetRotation =
-                math.max(0, math.floor(tonumber(
-                    OverlordDB.leaderboardHistoryCatchupTargetRotation) or 0)) + 1
-            NoteHr("requests", 1)
-            NoteHr("step", "request sent")
-            NoteHr("target", target, PeerFaction(target) or "?")
-            -- Un pair qui ne repond pas du tout (demande perdue, pair parti, version
-            -- ancienne) bloquait l'anti-entropie ACK_TIMEOUT_SEC (20 min). Sans ligne
-            -- ni ACK apres NO_REPLY_SEC, passer au pair suivant.
-            C_Timer.After(NO_REPLY_SEC, function()
-                local expected = sync._historyCatchupPending
-                if not expected or expected.generation ~= generation
-                    or expected.nonce ~= nonce or expected.terminal
-                    or not expected.awaitingAck or expected.replied
-                    or math.floor(tonumber(expected.deliveryCount) or 0) > 0 then return end
-                expected.awaitingAck = false
-                PenalizePeer(target)
-                NoteHr("result", "no reply")
-                ScheduleAttempt(generation, campaignId, attempt + 1)
+                -- Only a silent peer (no v6 answer) is set aside. A busy or
+                -- interrupted one keeps its place: the next attempt resumes its
+                -- transfer from the bucket checkpoint.
+                if not supported then PenalizePeer(target) end
+                ScheduleAttempt(pending, attempt + 1)
             end)
-            -- Transfert commence puis fige (pair parti, instance, saturation) : sans
-            -- nouvelle ligne pendant STALL_SEC, abandonner au lieu d'attendre
-            -- ACK_TIMEOUT_SEC (20 min). Les lignes recues restent acquises.
-            -- Un pair qui a repondu (ACK) sans jamais envoyer de ligne echappait aux deux
-            -- gardes (NO_REPLY exige l'absence de reponse, le stall exigeait une ligne) et
-            -- bloquait le tour ACK_TIMEOUT_SEC (20 min) : meme delai STALL_SEC apres sa reponse.
-            local lastCount, lastProgressAt, sawReply = 0, GetTime(), false
-            local function WatchStall()
-                local expected = sync._historyCatchupPending
-                if not expected or expected.generation ~= generation
-                    or expected.nonce ~= nonce or expected.terminal
-                    or not expected.awaitingAck then return end
-                local count = math.floor(tonumber(expected.deliveryCount) or 0)
-                -- En combat/instance nous ne recevons plus : pas un blocage du pair.
-                local localPause = Overlord.InstanceSuspended
-                    or (InCombatLockdown and InCombatLockdown())
-                    or (IsInInstance and IsInInstance())
-                local replied = expected.replied == true
-                if count ~= lastCount or localPause or (replied and not sawReply) then
-                    lastCount, lastProgressAt = count, GetTime()
-                end
-                sawReply = replied
-                local pushing = expected.preparingPush or expected.awaitingPushAck or expected.pushOutbound
-                if (count > 0 or replied) and not pushing
-                    and GetTime() - lastProgressAt >= STALL_SEC then
-                    expected.awaitingAck = false
-                    PenalizePeer(target)
-                    NoteHr("result", "stalled")
-                    ScheduleAttempt(generation, campaignId, attempt + 1)
-                    return
-                end
-                C_Timer.After(15, WatchStall)
-            end
-            C_Timer.After(15, WatchStall)
-            C_Timer.After(ACK_TIMEOUT_SEC, function()
-                local expected = sync._historyCatchupPending
-                if not expected or expected.generation ~= generation
-                    or expected.nonce ~= nonce or expected.terminal
-                    or not expected.awaitingAck then return end
-                expected.awaitingAck = false
-                PenalizePeer(target)
-                NoteHr("result", "timeout")
-                ScheduleAttempt(generation, campaignId, attempt + 1)
-            end)
+        if not started then
+            PenalizePeer(target)
+            NoteHr("step", "request not sent to " .. tostring(target))
+            ScheduleAttempt(pending, attempt + 1)
+            return
+        end
+        NoteHr("requests", 1)
+        NoteHr("target", target, PeerFaction(target) or "?")
+        NoteHr("step", "paged ladder catch-up")
+        C_Timer.After(ROUND_WATCHDOG_SEC, function()
+            if sync._historyCatchupPending ~= pending or pending.terminal
+                or pending.attemptToken ~= token then return end
+            NoteHr("step", "round took too long, abandoned")
+            if sync.CancelPagedLeaderboardCatchup then sync:CancelPagedLeaderboardCatchup() end
         end)
     end)
     return true
 end
 
-local function ClearOutboundPush(pending)
-    local push = pending and pending.pushOutbound
-    if push and push.ticker and push.ticker.Cancel then push.ticker:Cancel() end
-    if push then push.ticker = nil end
-    if pending then
-        pending.pushOutbound = nil
-        pending.preparingPush = nil
-        pending.awaitingPushAck = nil
-    end
-end
-
-local function RetryHistoryCatchup(pending)
-    if not pending or sync._historyCatchupPending ~= pending then return false end
-    ClearOutboundPush(pending)
-    pending.awaitingAck = false
-    local nextAttempt = math.floor(tonumber(pending.attempt) or 1) + 1
-    return ScheduleAttempt(pending.generation, pending.campaignId, nextAttempt)
-end
-
-local function CompleteHistoryCatchup(pending, count, hash)
-    if not pending or sync._historyCatchupPending ~= pending then return false end
-    local _, currentId = CurrentCampaign()
-    if currentId ~= pending.campaignId then
-        RestartHistoryCatchupForCurrentCampaign(pending)
-        return false
-    end
-    ClearOutboundPush(pending)
-    pending.awaitingAck = false
-    pending.terminal = true
-    local emptyBetaRound = Overlord.SavedVariablesLoadedAtLogin == false
-        and math.floor(tonumber(pending.requestedCount) or -1) == 0
-        and math.floor(tonumber(count) or -1) == 0
-    if OverlordDB then
-        local now = NowServer()
-        local previous = OverlordDB.leaderboardHistoryCatchupAck
-        local previousCampaign = type(previous) == "table"
-            and math.floor(tonumber(previous.campaignId) or 0) or 0
-        local historyAt = previousCampaign == pending.campaignId
-            and math.floor(tonumber(previous.historyAt or previous.at) or 0) or 0
-        if not pending.ladderOnly and not emptyBetaRound then historyAt = now end
-        OverlordDB.leaderboardHistoryCatchupAck = {
-            campaignId = pending.campaignId,
-            at = now,
-            historyAt = historyAt,
-            count = math.floor(tonumber(count) or 0),
-            hash = math.floor(tonumber(hash) or 0),
-        }
-    end
-    sync._historyCatchupPending = nil
-    NoteHr("completed", 1)
-    NoteHr("result", "complete")
-    -- A blank beta client can first meet another blank client. An empty digest
-    -- proves transport delivery, not that its lost weekly scores were recovered.
-    -- Rotate a few more peers promptly, without a broadcast or unbounded retry.
-    local emptyRounds = math.floor(tonumber(sync._emptySaveCatchupRounds) or 0)
-    if emptyBetaRound and emptyRounds < MAX_EMPTY_SAVE_ROUNDS then
-        sync._emptySaveCatchupRounds = emptyRounds + 1
-        ArmNextHistoryCatchup(EMPTY_SAVE_RETRY_SEC, true)
-    else
-        if not emptyBetaRound then sync._emptySaveCatchupRounds = nil end
-        ArmNextHistoryCatchup(RECENT_ACK_SEC)
-    end
-    return true
-end
-
-local function ReturnCommitData(pending, push)
-    return table.concat({
-        PROTOCOL_VERSION, tostring(pending.campaignId), tostring(pending.nonce),
-        tostring(push.count), tostring(push.hash),
-    }, ":")
-end
-
--- Deuxieme moitie du push-pull. Apres avoir importe le snapshot du repondeur,
--- le demandeur reconstruit en tranches son snapshot fusionne et le repousse au
--- meme pair. Les deux replicas terminent donc avec la meme union monotone.
-local function StartReturnPush(pending, target)
-    if not pending or sync._historyCatchupPending ~= pending
-        or pending.preparingPush or pending.pushOutbound then return false end
-    local lb = Overlord.Leaderboard
-    if not lb or not lb.SnapshotCurrentCampaignBeforeReset then
-        return RetryHistoryCatchup(pending)
-    end
-    pending.preparingPush = true
-    local accepted = PrepareSnapshotForNetwork(lb, function(success, preparedSnapshot)
-        if sync._historyCatchupPending ~= pending or pending.terminal then return end
-        pending.preparingPush = nil
-        local campaignStart, campaignId = CurrentCampaign()
-        if campaignId ~= pending.campaignId then
-            RestartHistoryCatchupForCurrentCampaign(pending)
-            return
-        end
-        if not success then
-            RetryHistoryCatchup(pending)
-            return
-        end
-        local snapshot = preparedSnapshot
-        local count, hash, queue =
-            sync:ComputeHistoryCatchupSnapshotDigest(snapshot, campaignStart)
-        local begin = table.concat({
-            PROTOCOL_VERSION, tostring(campaignId), tostring(campaignStart),
-            tostring(pending.nonce), tostring(count), tostring(hash),
-        }, ":")
-        if sync:SendWhisper("HB", begin, target) ~= true then
-            RetryHistoryCatchup(pending)
-            return
-        end
-        local push = {
-            target = target,
-            targetKey = SenderKey(target),
-            queue = queue,
-            index = 1,
-            count = count,
-            hash = hash,
-        }
-        pending.pushOutbound = push
-        local pushDeadline = GetTime() + RESPONSE_WATCHDOG_SEC
-        push.ticker = C_Timer.NewTicker(SEND_INTERVAL_SEC, function()
-            if sync._historyCatchupPending ~= pending
-                or pending.pushOutbound ~= push then
-                if push.ticker and push.ticker.Cancel then push.ticker:Cancel() end
-                return
-            end
-            if GetTime() > pushDeadline then
-                RetryHistoryCatchup(pending)
-                return
-            end
-            local packet = push.queue and push.queue[push.index]
-            if packet then
-                if sync:SendWhisper(packet.type, packet.data, push.target) ~= true then
-                    return
-                end
-                push.index = push.index + 1
-                return
-            end
-            if sync:SendWhisper("HC", ReturnCommitData(pending, push), push.target) ~= true then
-                return
-            end
-            if push.ticker and push.ticker.Cancel then push.ticker:Cancel() end
-            push.ticker = nil
-            pending.awaitingPushAck = true
-            -- Le HA:C exige que 100 % des lignes renvoyees soient arrivees : a travers un
-            -- pont c'est rare, et l'attendre 20 min puis relancer un tour complet bloquait
-            -- l'anti-entropie ~40 min. Les deux cotes ont deja fusionne (max monotone) :
-            -- sans ACK apres NO_REPLY_SEC, le tour se termine et le suivant reprend.
-            C_Timer.After(NO_REPLY_SEC, function()
-                if sync._historyCatchupPending == pending
-                    and pending.pushOutbound == push
-                    and pending.awaitingPushAck and not pending.terminal then
-                    NoteHr("result", "sent back, not confirmed")
-                    ClearOutboundPush(pending)
-                    pending.awaitingAck = false
-                    pending.awaitingPushAck = false
-                    pending.terminal = true
-                    sync._historyCatchupPending = nil
-                    ArmNextHistoryCatchup(RECENT_ACK_SEC)
-                end
-            end)
-        end)
-    end)
-    if accepted ~= true then
-        pending.preparingPush = nil
-        return RetryHistoryCatchup(pending)
-    end
-    return true
-end
-
-function sync:OnHistoryPushBegin(payload, sender, channel)
-    if (channel ~= "WHISPER" and channel ~= "BETA") or type(payload) ~= "string" then return false end
-    local version, campaignIdStr, startStr, nonce, countStr, hashStr =
-        strsplit(":", payload, 6)
-    local campaignId = math.floor(tonumber(campaignIdStr) or 0)
-    local campaignStart = math.floor(tonumber(startStr) or 0)
-    local count = math.floor(tonumber(countStr) or -1)
-    local hash = math.floor(tonumber(hashStr) or -1)
-    local currentStart, currentId = CurrentCampaign()
-    local senderKey = SenderKey(sender)
-    local expectedKey = senderKey .. ":" .. tostring(nonce or "")
-    local expected = expectedHistoryPushes[expectedKey]
-    local now = GetTime()
-    for key, row in pairs(expectedHistoryPushes) do
-        if now > (tonumber(row.expiresAt) or 0) then
-            expectedHistoryPushes[key] = nil
-            expectedHistoryPushCount = math.max(0, expectedHistoryPushCount - 1)
-        end
-    end
-    if version ~= PROTOCOL_VERSION or campaignId <= 0
-        or campaignId ~= currentId or not CampaignEpochsMatch(campaignStart, currentStart)
-        or not expected or expected.targetKey ~= senderKey
-        or expected.campaignId ~= campaignId or expected.nonce ~= nonce
-        or now > (tonumber(expected.expiresAt) or 0)
-        or count < 0 or count > MAX_SNAPSHOT_QUEUE
-        or hash < 0 or hash >= HASH_MOD then return false end
-    local active = self._historyCatchupPushInbound
-    if active and (active.senderKey ~= senderKey or active.nonce ~= nonce) then
-        BusyAck(sender, campaignId, nonce)
-        return false
-    end
-    expectedHistoryPushes[expectedKey] = nil
-    expectedHistoryPushCount = math.max(0, expectedHistoryPushCount - 1)
-    local state = {
-        sender = sender,
-        senderKey = senderKey,
-        campaignId = campaignId,
-        campaignStart = campaignStart,
-        nonce = nonce,
-        expectedCount = count,
-        expectedHash = hash,
-        deliveryCount = 0,
-        deliveryHash = 0,
-    }
-    self._historyCatchupPushInbound = state
-    C_Timer.After(PUSH_ACK_TIMEOUT_SEC, function()
-        if sync._historyCatchupPushInbound == state then
-            sync._historyCatchupPushInbound = nil
-        end
-    end)
-    return true
-end
-
-local function SendPushTerminal(target, campaignId, nonce, status, count, hash)
-    sync:SendWhisper("HA", table.concat({
-        PROTOCOL_VERSION, tostring(campaignId), tostring(nonce), tostring(status),
-        tostring(math.floor(tonumber(count) or 0)),
-        tostring(math.floor(tonumber(hash) or 0)),
-    }, ":"), target)
-end
-
-function sync:OnHistoryPushCommit(payload, sender, channel)
-    if (channel ~= "WHISPER" and channel ~= "BETA") or type(payload) ~= "string" then return false end
-    local version, campaignIdStr, nonce, countStr, hashStr = strsplit(":", payload, 5)
-    local campaignId = math.floor(tonumber(campaignIdStr) or 0)
-    local count = math.floor(tonumber(countStr) or -1)
-    local hash = math.floor(tonumber(hashStr) or -1)
-    local state = self._historyCatchupPushInbound
-    local senderKey = SenderKey(sender)
-    local _, currentCampaignId = CurrentCampaign()
-    if state and state.senderKey == senderKey and state.campaignId == campaignId
-        and state.nonce == nonce and state.committing then return false end
-    if version ~= PROTOCOL_VERSION or not state
-        or state.senderKey ~= senderKey or state.campaignId ~= campaignId
-        or campaignId ~= currentCampaignId
-        or state.nonce ~= nonce or count ~= state.expectedCount
-        or hash ~= state.expectedHash
-        or count ~= state.deliveryCount or hash ~= state.deliveryHash then
-        -- Un commit correspondant mais incomplet/corrompu termine cette
-        -- tentative immediatement. Sans cela, son verrou occupait le recepteur
-        -- jusqu'au watchdog et retardait inutilement la prochaine reconciliation.
-        if state and state.senderKey == senderKey
-            and state.campaignId == campaignId and state.nonce == nonce then
-            self._historyCatchupPushInbound = nil
-        end
-        if campaignId > 0 and nonce and nonce ~= "" then
-            SendPushTerminal(sender, campaignId, nonce, "E", 0, 0)
-        end
-        return false
-    end
-    -- La preuve transport ne suffit pas : LK/LC/LR peuvent etre rejetes par les
-    -- gardes locales. Recalculer le snapshot applique et ne certifier C que si
-    -- son digest final est exactement celui annonce par le demandeur.
-    state.committing = true
-    local lb = Overlord.Leaderboard
-    if not lb or not lb.SnapshotCurrentCampaignBeforeReset then
-        self._historyCatchupPushInbound = nil
-        SendPushTerminal(sender, campaignId, nonce, "E", 0, 0)
-        return false
-    end
-    local accepted = PrepareSnapshotForNetwork(lb, function(success, preparedSnapshot)
-        if sync._historyCatchupPushInbound ~= state then return end
-        local campaignStart, verifiedCampaignId = CurrentCampaign()
-        local snapshot = success and verifiedCampaignId == campaignId
-            and CampaignEpochsMatch(campaignStart, state.campaignStart)
-            and preparedSnapshot or nil
-        local finalCount, finalHash = -1, -1
-        if snapshot then
-            finalCount, finalHash =
-                sync:ComputeHistoryCatchupSnapshotDigest(snapshot, state.campaignStart)
-        end
-        sync._historyCatchupPushInbound = nil
-        if finalCount == count and finalHash == hash then
-            SendPushTerminal(sender, campaignId, nonce, "C", count, hash)
-        else
-            SendPushTerminal(sender, campaignId, nonce, "E", 0, 0)
-        end
-    end, MAX_SNAPSHOT_ROWS, state.campaignStart)
-    if accepted ~= true then
-        self._historyCatchupPushInbound = nil
-        SendPushTerminal(sender, campaignId, nonce, "E", 0, 0)
-        return false
-    end
-    return true
-end
-
--- Preuve de livraison des deux moities de l'echange. Le digest est commutatif :
--- le rythme de dispatch local n'a aucune incidence, mais chaque paquet LK/LC/LR
--- doit avoir effectivement traverse le whisper avant HA:D puis HA:C.
-function sync:NoteHistoryCatchupDelivery(msgType, payload, sender, channel)
-    if (channel ~= "WHISPER" and channel ~= "BETA") or type(payload) ~= "string"
-        or (msgType ~= "LK" and msgType ~= "LC" and msgType ~= "LR") then
-        return false
-    end
-    -- Une ligne diffusee a tous (balise LK d'un tueur) ne fait pas partie de la
-    -- reponse HR adressee : la compter fausserait le digest et forcerait un retry.
-    if channel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork.IsTargetedDispatch
-        and not Overlord.BetaNetwork:IsTargetedDispatch() then
-        return false
-    end
-    local senderKey = SenderKey(sender)
-    local recorded = false
-    local pending = self._historyCatchupPending
-    if pending and pending.awaitingAck and not pending.terminal
-        and senderKey == pending.targetKey
-        and math.floor(tonumber(pending.deliveryCount) or 0) < MAX_SNAPSHOT_QUEUE then
-        pending.deliveryCount = math.floor(tonumber(pending.deliveryCount) or 0) + 1
-        pending.deliveryHash = (
-            math.floor(tonumber(pending.deliveryHash) or 0) + HashPacket(msgType, payload)
-        ) % HASH_MOD
-        NoteHr("rows", 1)
-        NoteHr("targetRows", pending.deliveryCount)
-        recorded = true
-    end
-    local inbound = self._historyCatchupPushInbound
-    if inbound and not inbound.committing and inbound.senderKey == senderKey
-        and math.floor(tonumber(inbound.deliveryCount) or 0) < MAX_SNAPSHOT_QUEUE then
-        inbound.deliveryCount = math.floor(tonumber(inbound.deliveryCount) or 0) + 1
-        inbound.deliveryHash = (
-            math.floor(tonumber(inbound.deliveryHash) or 0) + HashPacket(msgType, payload)
-        ) % HASH_MOD
-        recorded = true
-    end
-    return recorded
-end
-
--- Gate d'admission appele avant toute mutation LK/LC/LR. Le compteur et le
--- digest restent mis a jour par NoteHistoryCatchupDelivery seulement apres que
--- le handler a accepte la ligne ; cette fonction ne consomme donc aucun budget.
-function sync:IsExpectedHistoryCatchupDelivery(msgType, sender, channel)
-    if (channel ~= "WHISPER" and channel ~= "BETA")
-        or (msgType ~= "LK" and msgType ~= "LC" and msgType ~= "LR") then
-        return false
-    end
-    -- Une ligne diffusee a tous (balise LK d'un tueur) ne fait pas partie de la
-    -- reponse HR adressee : la compter fausserait le digest et forcerait un retry.
-    if channel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork.IsTargetedDispatch
-        and not Overlord.BetaNetwork:IsTargetedDispatch() then
-        return false
-    end
-    local senderKey = SenderKey(sender)
-    if senderKey == "" then return false end
-    local pending = self._historyCatchupPending
-    if pending and pending.awaitingAck and not pending.terminal
-        and senderKey == pending.targetKey
-        and math.floor(tonumber(pending.deliveryCount) or 0) < MAX_SNAPSHOT_QUEUE then
-        return true
-    end
-    local inbound = self._historyCatchupPushInbound
-    if inbound and not inbound.committing and inbound.senderKey == senderKey then
-        local delivered = math.floor(tonumber(inbound.deliveryCount) or 0)
-        local expected = math.floor(tonumber(inbound.expectedCount) or 0)
-        return delivered < expected and delivered < MAX_SNAPSHOT_QUEUE
-    end
-    return false
-end
-
-function sync:OnHistoryCatchupAck(payload, sender, channel)
-    if (channel ~= "WHISPER" and channel ~= "BETA") or type(payload) ~= "string" then return false end
-    local version, campaignIdStr, nonce, status, countStr, hashStr =
-        strsplit(":", payload, 6)
-    local campaignId = math.floor(tonumber(campaignIdStr) or 0)
-    local count = math.floor(tonumber(countStr) or -1)
-    local hash = math.floor(tonumber(hashStr) or -1)
-    local pending = self._historyCatchupPending
-    if version ~= PROTOCOL_VERSION or not pending or pending.terminal
-        or (channel ~= "WHISPER" and channel ~= "BETA") or campaignId ~= pending.campaignId
-        or nonce ~= pending.nonce or SenderKey(sender) ~= pending.targetKey
-        or count < 0 or count > MAX_SNAPSHOT_QUEUE
-        or hash < 0 or hash >= HASH_MOD then return false end
-    pending.replied = true
-    if status == "B" or status == "E" then
-        -- Pair occupe ou en erreur : en essayer un autre au lieu d'y revenir.
-        PenalizePeer(pending.target)
-        NoteHr("result", status == "B" and "busy" or "error")
-        RetryHistoryCatchup(pending)
-        return true
-    end
-    if status == "C" then
-        local push = pending.pushOutbound
-        if not pending.awaitingPushAck or not push
-            or count ~= push.count or hash ~= push.hash then return false end
-        return CompleteHistoryCatchup(pending, count, hash)
-    end
-    if not pending.awaitingAck then return false end
-    if status ~= "S" and status ~= "D" then return false end
-    local proofComplete = status == "S"
-        and count == math.floor(tonumber(pending.requestedCount) or -1)
-        and hash == math.floor(tonumber(pending.requestedHash) or -1)
-        or status == "D"
-        and count == math.floor(tonumber(pending.deliveryCount) or -1)
-        and hash == math.floor(tonumber(pending.deliveryHash) or -1)
-    if not proofComplete then
-        NoteHr("result", "incomplete " .. tostring(pending.deliveryCount or 0) .. "/" .. tostring(count))
-        -- Les lignes recues sont deja fusionnees (max monotone). A travers un pont
-        -- Battle.net, quelques lignes perdues sont la norme : relancer aussitot
-        -- renvoyait tout le snapshot (jusqu'a 4 fois) et saturait le pont sans
-        -- jamais aboutir. Le tour se termine ; le suivant comblera l'ecart.
-        ClearOutboundPush(pending)
-        pending.awaitingAck = false
-        pending.terminal = true
-        sync._historyCatchupPending = nil
-        ArmNextHistoryCatchup(RECENT_ACK_SEC)
-        return false
-    end
-    pending.awaitingAck = false
-    ForgivePeer(pending.target)
-    local _, currentId = CurrentCampaign()
-    if currentId ~= campaignId then
-        RestartHistoryCatchupForCurrentCampaign(pending)
-        return false
-    end
-    if not OverlordDB then return false end
-    if status == "S" then
-        return CompleteHistoryCatchup(pending, count, hash)
-    end
-    -- D prouve que tout le snapshot du repondeur est arrive. Ne persister le
-    -- succes qu'apres HA:C, lorsque le repondeur aura recu l'union en retour.
-    NoteHr("result", "received, sending back")
-    return StartReturnPush(pending, sender)
-end
-
-function sync:ScheduleLoginLeaderboardHistoryCatchUp(force, ladderOnly)
+-- Point d'entree du rattrapage de classement (login, /ov sync, reveil periodique).
+-- force : ignore le delai depuis le dernier tour reussi ; forceHistory : redemande
+-- aussi l'historique avant-postes/forteresses a la fin du tour.
+function sync:ScheduleLoginLeaderboardHistoryCatchUp(force, forceHistory)
     if not C_Timer or not C_Timer.After or not OverlordDB then return false end
     local campaignStart, campaignId = CurrentCampaign()
     if campaignStart <= 0 or campaignId <= 0 then return false end
@@ -1556,66 +651,34 @@ function sync:ScheduleLoginLeaderboardHistoryCatchUp(force, ladderOnly)
         C_Timer.After(math.max(1, CAMPAIGN_MIN_AGE_SEC - age + 5), function()
             if Overlord.Sync then
                 Overlord.Sync._historyCatchupNotBeforeCampaignId = nil
-                Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(
-                    force == true, ladderOnly == true)
+                Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(force == true, forceHistory == true)
             end
         end)
         return true
     end
     local ack = OverlordDB.leaderboardHistoryCatchupAck
-    local ackCampaign = type(ack) == "table"
-        and math.floor(tonumber(ack.campaignId) or 0) or 0
-    local ackAt = type(ack) == "table" and math.floor(tonumber(ack.at) or 0) or 0
+    local ackAt = type(ack) == "table" and math.floor(tonumber(ack.campaignId) or 0) == campaignId
+        and math.floor(tonumber(ack.at) or 0) or 0
     local ackAge = ackAt > 0 and NowServer() - ackAt or RECENT_ACK_SEC
-    local historyAt = ackCampaign == campaignId and type(ack) == "table"
-        and math.floor(tonumber(ack.historyAt or ack.at) or 0) or 0
-    local historyAge = historyAt > 0 and NowServer() - historyAt or HISTORY_ACK_SEC
-    -- A missing history ACK used to put the long v4 territorial exchange before
-    -- the complete paged ladder. On the beta relay, four partial v4 attempts
-    -- can postpone v6 for over an hour. Pull the ranking first once per login;
-    -- the next periodic wake still sees historyAt == 0 and runs v4. Map/login
-    -- SR:T has its own earlier path and is unaffected by this ordering.
-    if not force and not ladderOnly and historyAt <= 0
-        and math.floor(tonumber(OverlordDB.leaderboardRankFirstCompletedCampaignId) or 0)
-            ~= campaignId
-        and self.StartCompletePagedLeaderboardCatchup then
-        ladderOnly = true
-    end
-    -- Un /reload recent doit verifier le ladder sans retransmettre les preuves
-    -- GK/Outpost. Leur propre rattrapage complet reste cadence a six heures.
-    if not force and not ladderOnly and ackCampaign == campaignId
-        and historyAge >= 0 and historyAge < HISTORY_ACK_SEC then
-        ladderOnly = true
-    end
-    if not force and type(ack) == "table"
-        and ackCampaign == campaignId
-        and ackAge >= 0 and ackAge < RECENT_ACK_SEC then
+    if not force and ackAge >= 0 and ackAge < RECENT_ACK_SEC then
         ArmNextHistoryCatchup(RECENT_ACK_SEC - ackAge)
         return true
     end
     local existing = self._historyCatchupPending
     if existing and existing.campaignId == campaignId and not existing.terminal then
+        if forceHistory then existing.forceHistory = true end
         NoteHr("step", "round already running")
         return false
     end
-    -- Invalide le reveil periodique qui nous a eventuellement lances. Un seul
-    -- handshake peut rester actif et son succes rearmera le prochain pair.
+    -- Invalide le reveil periodique eventuel : un seul tour actif a la fois.
     self._historyCatchupWakeGeneration =
         math.floor(tonumber(self._historyCatchupWakeGeneration) or 0) + 1
-    self._historyCatchupGeneration =
-        math.floor(tonumber(self._historyCatchupGeneration) or 0) + 1
-    if not ladderOnly then self._preferPagedLeaderboardNext = true end
-    local generation = self._historyCatchupGeneration
-    self._historyCatchupPending = {
-        generation = generation,
-        campaignId = campaignId,
-        ladderOnly = ladderOnly == true,
-        terminal = false,
-    }
+    local pending = { campaignId = campaignId, terminal = false, forceHistory = forceHistory == true }
+    self._historyCatchupPending = pending
     local initialDelay = Overlord.SavedVariablesLoadedAtLogin == false
         and EMPTY_SAVE_INITIAL_DELAY_SEC or INITIAL_DELAY_SEC
     C_Timer.After(initialDelay, function()
-        ScheduleAttempt(generation, campaignId, 1)
+        ScheduleAttempt(pending, 1)
     end)
     return true
 end
@@ -1632,17 +695,17 @@ function sync:GetHistoryCatchupSummary()
     }
 end
 
--- Lignes /ov network : dernier pair, resultat, lignes recues. Aucune mutation.
+-- Lignes /ov network : dernier voisin, resultat. Aucune mutation.
 function sync:GetHistoryCatchupDiagnostics()
     local stats = self._historyCatchupStats
-    if not stats then return { "Legacy ladder history: no request sent yet this session (paged v6 is reported separately)." } end
+    if not stats then return { "Ladder rounds: none yet this session (v6, direct neighbours only)." } end
     local age = stats.targetAt and math.floor(GetTime() - stats.targetAt) or 0
     return {
-        string.format("Legacy ladder history: %d requests, %d complete, %d rows received (v6 counted separately).",
-            stats.requests or 0, stats.completed or 0, stats.rows or 0),
-        string.format("Last peer: %s (%s), %ds ago: %s, %d rows.",
+        string.format("Ladder rounds: %d started, %d complete (v6, direct neighbours only).",
+            stats.requests or 0, stats.completed or 0),
+        string.format("Last peer: %s (%s), %ds ago: %s.",
             tostring(stats.target or "?"), tostring(stats.targetFaction or "?"), age,
-            tostring(stats.result or "?"), stats.targetRows or 0),
+            tostring(stats.result or "?")),
         string.format("Last step: %s, %ds ago. Round running: %s.",
             tostring(stats.step or "?"),
             stats.stepAt and math.floor(GetTime() - stats.stepAt) or 0,

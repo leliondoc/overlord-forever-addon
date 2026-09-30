@@ -1,6 +1,6 @@
--- Once a FORWARDED ZA page of a batch is refused at a relay, later pages of that
--- same batch (origin + snapshot id) are refused at once: downstream discards a
--- batch that misses a page. Local batches, other ids/origins, and expiry unaffected.
+-- Point to point (1.2.4): a map batch addressed to another player is never
+-- relayed, so no relay spends budget on pages the recipient may never complete.
+-- Local batches still flow, with the producer retrying a refused page.
 local now, pending = 100, {}
 function GetTime() return now end
 function time() return 1790016000 + math.floor(now) end
@@ -59,42 +59,13 @@ local function drain()
     end
 end
 route()
--- Saturate the addressed ZA batch allowance with one origin's batch A.
-for i = 1, 32 do assert(page("Origin Alpha", "G-1-1", i, 32), "batch A page " .. i) end
--- Batch X (other origin): page 1 is refused while A holds the allowance.
-assert(not page("Origin Bravo", "G-2-1", 1, 3), "test setup: ZA allowance not saturated")
+-- Forwarded addressed map pages are dropped at the relay, whatever the batch.
+for i = 1, 5 do
+    assert(not page("Origin Alpha", "G-1-1", i, 5), "forwarded ZA page " .. i .. " was relayed")
+end
 drain()
-route()
--- A later page of the doomed batch X must not spend downstream budget.
-assert(not page("Origin Bravo", "G-2-1", 2, 3),
-    "later page of an already-refused forwarded ZA batch was admitted")
-assert((net.stats.zaBatchSkipped or 0) >= 1, "skip not counted")
--- Target isolation: the same snapshot id addressed to another (routable) recipient is a
--- different batch; a refusal for "Reader Tester" must not block it.
-net.peers["second reader"] = { name = "Second Reader", at = now, via = "Second Reader",
-    transport = "WHISPER", hops = 1 }
-assert(page("Origin Bravo", "G-2-1", 2, 3, "Second Reader"),
-    "refusal for one target blocked the same snapshot id addressed to another target")
--- Controls: other snapshot id, other origin, and an unrelated fresh batch still flow.
-assert(page("Origin Bravo", "G-2-2", 1, 3), "different snapshot id was blocked")
-assert(page("Origin Charlie", "G-2-1", 1, 3), "same id from another origin was blocked")
-drain(); route()
--- The mark expires (60 s) so a legitimately re-sent batch is not blocked forever.
-now = now + 61
-assert(page("Origin Bravo", "G-2-1", 1, 3), "expired batch mark still blocks")
-drain(); route()
--- Non-sliding window: blocked pages must not extend the 60 s mark.
-route()
-for i = 1, 32 do assert(page("Origin Alpha", "G-3-0", i, 32), "batch A2 page " .. i) end
-local markedAt = now
-assert(not page("Origin Bravo", "G-3-1", 1, 3), "setup: batch not refused")
-drain(); route()
-assert(now - markedAt > 1 and now - markedAt < 59, "setup: drain took " .. (now - markedAt) .. " s")
-assert(not page("Origin Bravo", "G-3-1", 2, 3), "mark did not block within its window")
-now = markedAt + 61; route()
-assert(page("Origin Bravo", "G-3-1", 3, 3),
-    "a blocked page extended the mark beyond 60 s after the first refusal")
-drain(); route()
+assert(#delivered == 0, "a forwarded map page reached the wire")
+assert((net.stats.catchupNotRelayed or 0) == 5, "dropped forwarded pages were not counted")
 -- Local batches (path length 1) are never marked: producer retry succeeds after drain.
 for i = 1, 40 do
     local ok = net:Send("ZA", "@G-9-9:" .. i .. ":40|" .. string.rep("y", 120), "Reader Tester")
@@ -105,4 +76,4 @@ for i = 1, 40 do
         break
     end
 end
-print("Forever relay lost ZA batch: forwarded pages skipped, local/other/expired unaffected")
+print("Forever relay ZA batches: forwarded map pages never relayed, local batches unaffected")

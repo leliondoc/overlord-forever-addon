@@ -46,7 +46,7 @@ end
 assert(loadfile("SyncBetaNetwork.lua"))()
 local net = Overlord.BetaNetwork
 net.peers["reader tester"] = {
-    at = now, via = "Reader Tester", name = "Reader Tester", transport = "BNET", bnet = 1,
+    at = now, via = "Reader Tester", name = "Reader Tester", transport = "BNET", bnet = 1, hops = 1,
 }
 local function presence(i)
     return net:Queue({ region = "global", id = "nh" .. i, at = time(), target = "*",

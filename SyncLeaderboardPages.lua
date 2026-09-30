@@ -45,7 +45,11 @@ local function allowed(sender, channel)
     if sync.KillAntiSpoofIsBlacklisted and sync:KillAntiSpoofIsBlacklisted(sender) then return false end
     local net = Overlord.BetaNetwork
     if channel == "BETA" then
+        -- Point to point (1.2.4): an exchange that crossed a relay is ignored,
+        -- since its pages would have to cross the same relays back.
+        local context = net and net.context
         return net and net:IsDispatching(sender) and net:IsTargetedDispatch()
+            and (tonumber(context and context.hops) or 0) == 0
     end
     return channel == "WHISPER" and (
         (sync.SenderIsInOurGroup and sync:SenderIsInOurGroup(sender))
@@ -220,12 +224,20 @@ local function finish(state, success, unsupportedPeer)
     state.callback(success, state.supported == true)
 end
 
+-- Requests, probes and busy replies are a single small packet. They leave
+-- directly instead of waiting behind the page producer: a client serving a long
+-- sweep could otherwise neither ask for its own pages nor tell another requester
+-- it is busy, and that requester concluded "v6 silent" after 270 s.
+local function sendControl(kind, payload, peer)
+    return sync:SendWhisper(kind, payload, peer) ~= false
+end
+
 local request, tryApply
 request = function(state, retry)
     if pull ~= state then return end
     if state.epoch ~= epoch() then finish(state, false); return end
     state.waitingForSend = true
-    if paused() or outbound then C_Timer.After(2, function() request(state, retry) end); return end
+    if paused() then C_Timer.After(2, function() request(state, retry) end); return end
     if not retry then
         state.seq = state.seq + 1
         state.tries, state.parts, state.meta, state.partCount, state.bytes = 0, {}, nil, nil, 0
@@ -242,11 +254,15 @@ request = function(state, retry)
     end
     local payload = table.concat(fields, ":")
     local seq, tries = state.seq, state.tries
-    enqueue({ epoch = state.epoch, peer = state.peer, packets = { { "HR", payload } },
-        valid = function() return pull == state and state.seq == seq end,
-        done = function()
-            if pull == state and state.seq == seq then state.waitingForSend = nil end
-        end })
+    local function sendRequest()
+        if pull ~= state or state.seq ~= seq or state.tries ~= tries then return end
+        if paused() or not sendControl("HR", payload, state.peer) then
+            C_Timer.After(2, sendRequest)
+            return
+        end
+        state.waitingForSend = nil
+    end
+    sendRequest()
     -- Two relay TTLs plus margin also cover a congested first request/reply.
     -- A peer that already answered pages in this pull and then goes silent has
     -- most likely left or zoned in: give up sooner (rows already merged stay).
@@ -269,15 +285,10 @@ request = function(state, retry)
         if not paused() then remaining = remaining - 2 end
         state.timeoutRemaining = remaining
         if tries == 1 and not state.supported and not state.replySeen
-            and not paused() and not outbound and remaining > 0
+            and not paused() and remaining > 0
             and probesSent < 2 and 270 - remaining >= nextProbeAt then
             local elapsed = 270 - remaining
-            if enqueue({ epoch = state.epoch, peer = state.peer,
-                packets = { { "HR", payload } },
-                valid = function()
-                    return pull == state and state.seq == seq and state.tries == tries
-                        and not state.replySeen and not state.supported
-                end }) then
+            if sendControl("HR", payload, state.peer) then
                 stats.retries = stats.retries + 1
                 probesSent = probesSent + 1
                 nextProbeAt = elapsed + 90
@@ -469,6 +480,14 @@ local function respond(session, q)
         done = function() session.at = GetTime() end })
 end
 
+-- Abandon the running pull (scheduler watchdog). Rows already merged stay and
+-- the bucket checkpoint lets the next round resume.
+function sync:CancelPagedLeaderboardCatchup()
+    if not pull then return false end
+    finish(pull, false)
+    return true
+end
+
 function sync:StartPagedLeaderboardCatchup(peer, callback, extended)
     peer = self:NormalizeContributorFullName(peer)
     if pull or building or paused() or not C_Timer or not C_Timer.After or epoch() <= 0
@@ -498,36 +517,21 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended)
     return true
 end
 
--- A beta NH explicitly advertises v6; older beta peers instead provide the
--- v5 kill sweep immediately. They remain partial until the scheduler's bounded
--- v4 LC/LR fallback (and can later receive a complete v6 sweep after updating).
--- Community peers without a beta NH retain the previous v6-first probe.
+-- v6 only (1.2.4): kills, captures and races in one resumable sweep. A peer whose
+-- fresh presence advertises no lp6 is not asked; a peer that stays silent ends the
+-- round unsupported and the scheduler asks another direct neighbour. There is no
+-- v5/v4 fallback any more: every current client serves v6.
 function sync:StartCompletePagedLeaderboardCatchup(peer, callback)
     if type(callback) ~= "function" then return false end
     local net = Overlord.BetaNetwork
-    -- Only a peer whose fresh NH explicitly lacks lp6 is served v5 directly. A peer whose
-    -- capability is simply not known yet (right after login, or relayed presence thinned
-    -- by 1.2.0) gets the v6 probe, which falls back to v5 when the peer stays silent.
-    if net and net.IsPeer and net:IsPeer(peer)
-        and not (net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(peer) == nil) then
-        if not net.GetPeerPagedProtocol or net:GetPeerPagedProtocol(peer) ~= 6 then
-            stats.peerProtocol = "beta v5; NH without lp6"
-            return self:StartPagedLeaderboardCatchup(peer, function()
-                callback(false, false) -- v5 LK never certifies full LK/LC/LR
-            end)
-        end
-        stats.peerProtocol = "beta v6; lp6 NH"
-    else
-        stats.peerProtocol = (net and net.IsPeer and net:IsPeer(peer))
-            and "beta; capability unknown, v6 probe" or "community; v6 probe"
+    local capability = net and net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(peer)
+    if capability == 5 then
+        stats.peerProtocol = "beta v5; not asked (v6 only)"
+        return false
     end
+    stats.peerProtocol = capability == 6 and "beta v6; lp6 NH" or "capability unknown, v6 probe"
     return self:StartPagedLeaderboardCatchup(peer, function(ok, supported)
-        if supported then callback(ok, true); return end
-        stats.peerProtocol = "v6 silent; beta/community v5 fallback"
-        local started = self:StartPagedLeaderboardCatchup(peer, function()
-            callback(false, false)
-        end)
-        if not started then callback(false, false) end
+        callback(ok == true, supported == true)
     end, true)
 end
 
@@ -562,18 +566,22 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
                 and (not totalCount or not totalHash or (not extended and seq ~= 1))) then return end
         local session = serving
         if session and (session.epoch ~= wireEpoch or GetTime() - session.at > 300) then serving = nil; session = nil end
-        if paused() or outbound then return end
+        local busyReply = table.concat({ version, "R", wireEpoch, nonce, seq }, ":")
+        -- In combat or an instance: busy, not silent (a silent peer is dropped as v6-less).
+        if paused() then sendControl("HA", busyReply, sender); return end
         if (session and (session.peer ~= sender or session.nonce ~= nonce
                 or session.extended ~= extended))
         or (not session and (seq ~= 1 or b ~= "-")) then
-            -- A cursor is meaningful only inside the original frozen profile.
-            -- Never continue it against a rebuilt snapshot after disconnection.
-            enqueue({ epoch = wireEpoch, peer = sender, packets = { { "HA",
-                table.concat({ version, "R", wireEpoch, nonce, seq }, ":") } } })
+            -- Busy with another requester, or a cursor from a lost session (it is
+            -- meaningful only inside the original frozen profile): say so at once.
+            sendControl("HA", busyReply, sender)
             return
         end
+        -- The previous page of this same session is still leaving: its requester
+        -- asks again after its own timeout.
+        if outbound then return end
         if not session then
-            if building then return end
+            if building then sendControl("HA", busyReply, sender); return end
             session = { peer = sender, nonce = nonce, epoch = wireEpoch,
                 at = GetTime(), seq = seq, extended = extended }
             serving = session

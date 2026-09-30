@@ -19,6 +19,7 @@ Overlord.BetaNetworkEnabled = true
 Overlord.BetaNetwork = {
     Broadcast = function(_, kind) if kind == "SR" then broadcasts = broadcasts + 1 end return 1 end,
     GetPeers = function() return peers end,
+    GetDirectPeers = function() return peers end,
     IsPeer = function() return true end,
 }
 Overlord.PlayerFaction = "Horde"
@@ -43,7 +44,7 @@ assert(broadcasts == 1, "Bounded broadcast fallback removed")
 drain()
 assert(#whispers == 0 and not sync._betaLoginCatchupScheduled, "Empty peer list retried forever")
 
--- Five same-faction and three enemy peers: three targeted requests, two enemies.
+-- Five same-faction and three enemy direct neighbours: two targeted requests, one enemy.
 for i = 1, 5 do local n = "Horde Peer" .. string.char(64 + i); peers[#peers + 1] = n; factions[n] = "Horde" end
 for i = 1, 3 do local n = "Ally Peer" .. string.char(64 + i); peers[#peers + 1] = n; factions[n] = "Alliance" end
 sync:SendLoginCatchupSyncToCommunity()
@@ -52,13 +53,13 @@ assert(#timers == 1 and timers[1].delay == sync.BETA_LOGIN_CATCHUP_FIRST_DELAY,
 assert(sync:SendLoginCatchupSyncToCommunity() == 1 and #timers == 1,
     "A second login call stacked another catch-up")
 drain()
-assert(#whispers == 3, "Expected three targeted requests, got " .. #whispers)
+assert(#whispers == 2, "Expected two targeted requests, got " .. #whispers)
 local enemies = 0
 for _, w in ipairs(whispers) do
     assert(w.kind == "SR" and w.payload:match(":T$"), "Not a territorial request: " .. tostring(w.payload))
     if factions[w.target] == "Alliance" then enemies = enemies + 1 end
 end
-assert(enemies == 2, "Opposite-faction peers not preferred: " .. enemies)
+assert(enemies == 1, "Opposite-faction peer not preferred: " .. enemies)
 assert(not sync._betaLoginCatchupScheduled)
 assert(mapCatchupStarts > 0, "Periodic map catch-up was not started with the login catch-up")
 -- Periodic map catch-up: one targeted territorial request per round, alternating
@@ -75,4 +76,4 @@ sync._mapCatchupArmed = nil
 assert(sync:SchedulePeriodicMapCatchup() and not sync:SchedulePeriodicMapCatchup() and #timers == 1,
     "Map catch-up armed twice")
 assert(timers[1].delay >= sync.BETA_MAP_CATCHUP_INTERVAL)
-print("Forever beta login catch-up: targeted territorial requests, 2 opposite-faction peers, bounded retries OK")
+print("Forever beta login catch-up: 2 targeted territorial requests to direct neighbours, 1 opposite-faction, bounded retries OK")

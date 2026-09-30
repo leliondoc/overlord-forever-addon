@@ -1,6 +1,7 @@
 -- A targeted packet is not consumed at an intermediate relay until a valid
 -- forwarding task has actually entered its queue. Another authenticated path
--- may deliver the same origin:id after a route or capacity failure.
+-- may deliver the same origin:id after a capacity failure. Catch-up addressed to
+-- someone else is never relayed at all since 1.2.4 (point to point).
 local now, pending = 100, {}
 function GetTime() return now end
 function time() return 1790016000 + math.floor(now) end
@@ -68,9 +69,9 @@ local function route()
         transport = "WHISPER", hops = 1,
     }
 end
-local function wire(id, via, payload)
+local function wire(id, via, payload, kind)
     return table.concat({ "global", id, tostring(time()), target.name,
-        "Origin Tester," .. via, "HR", payload }, "|")
+        "Origin Tester," .. via, kind or "GR", payload }, "|")
 end
 local function drain()
     local ticks = 0
@@ -84,49 +85,39 @@ local function drain()
     end
 end
 
-local payload = "6:Q:1:nonce:1:1:-:0:0:LK"
-assert(not relay.BetaNetwork:Receive(wire("route-one", "West Tester", payload),
-    "West Tester", "WHISPER"), "Missing-route copy was reported forwarded")
 route()
-assert(relay.BetaNetwork:Receive(wire("route-one", "East Tester", payload),
-    "East Tester", "WHISPER"), "A valid alternate route was deduplicated")
-drain()
-local first = 0
-for _, message in ipairs(target.received) do
-    if message == "HR:" .. payload then first = first + 1 end
-end
-assert(first == 1, "Alternate route did not deliver exactly once")
-assert((relay.BetaNetwork.stats.forwardNoTaskMissing or 0) == 1,
-    "Missing route did not expose its forwarding failure")
-assert(not relay.BetaNetwork:Receive(wire("route-one", "East Tester", payload),
-    "East Tester", "WHISPER"), "An accepted alternate copy was not deduplicated")
-
-relay.BetaNetwork.peers["target tester"].via = "West Tester"
-local loopPayload = "6:Q:1:loop:1:1:-:0:0:LK"
-assert(not relay.BetaNetwork:Receive(wire("loop-one", "West Tester", loopPayload),
-    "West Tester", "WHISPER"), "Looped next hop was reported forwarded")
-route()
-assert(relay.BetaNetwork:Receive(wire("loop-one", "East Tester", loopPayload),
-    "East Tester", "WHISPER"), "A loop rejection sealed origin:id")
-drain()
-assert((relay.BetaNetwork.stats.forwardNoTaskLoop or 0) == 1,
-    "Looped route did not expose its forwarding failure")
-
-for i = 1, 4 do
-    assert(relay.BetaNetwork:Send("HB", "6:D:1:local:1:" .. i .. ":4:LK:full", target.name))
-end
-local second = "6:Q:1:fullqueue:2:1:-:0:0:LK"
+-- A full queue refuses a forwarded copy without sealing origin:id, so the same
+-- packet can still arrive by another path once room is back.
+local filled = 0
+while relay.BetaNetwork:Send("GR", "local-fill-" .. filled, target.name) do filled = filled + 1 end
+assert(filled > 0, "Test setup: the queue took no local packet")
+local second = "guild-request-capacity"
 assert(not relay.BetaNetwork:Receive(wire("capacity-one", "West Tester", second),
-    "West Tester", "WHISPER"), "Full paged lane claimed a refused relay copy")
+    "West Tester", "WHISPER"), "Full queue claimed a refused relay copy")
 drain()
 assert(relay.BetaNetwork:Receive(wire("capacity-one", "East Tester", second),
     "East Tester", "WHISPER"), "Capacity recovery was blocked by premature dedup")
 drain()
 local delivered = 0
 for _, message in ipairs(target.received) do
-    if message == "HR:" .. second then delivered = delivered + 1 end
+    if message == "GR:" .. second then delivered = delivered + 1 end
 end
 assert(delivered == 1, "Retried origin:id did not reach the target exactly once")
 assert((relay.BetaNetwork.stats.relayRejected or 0) >= 1,
-    "Full paged lane did not count the refused forward admission")
-print("Beta targeted relay: route and capacity failures allow one valid alternate copy")
+    "Full queue did not count the refused forward admission")
+
+-- Catch-up addressed to someone else is never relayed (point to point, 1.2.4).
+local before = #target.received
+assert(not relay.BetaNetwork:Receive(wire("catchup-one", "East Tester",
+    "6:Q:1:far:1:1:-:0:0:LK", "HR"), "East Tester", "WHISPER"), "A far catch-up request was relayed")
+drain()
+assert(#target.received == before and (relay.BetaNetwork.stats.catchupNotRelayed or 0) == 1,
+    "Relayed catch-up reached its target")
+-- A broadcast map request is handled locally but never forwarded further.
+local sentBefore = relay.BetaNetwork.stats.sent
+local broadcastWire = table.concat({ "global", "sr-broadcast", tostring(time()), "*",
+    "Origin Tester,East Tester", "SR", "H:1.2.4:0:::T" }, "|")
+assert(relay.BetaNetwork:Receive(broadcastWire, "East Tester", "WHISPER"))
+drain()
+assert(relay.BetaNetwork.stats.sent == sentBefore, "A broadcast map request was relayed onward")
+print("Beta targeted relay: capacity failure allows one valid alternate copy; catch-up never relayed")

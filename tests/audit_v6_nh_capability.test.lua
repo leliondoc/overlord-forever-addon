@@ -128,18 +128,14 @@ s.SendWhisper = function(_, kind, payload, target)
     return true
 end
 
-local oldResult, oldSupported
-local startedAt = now
-assert(s:StartCompletePagedLeaderboardCatchup("Old Tester", function(ok, full)
-    oldResult, oldSupported = ok, full
-end))
+-- v6 only (1.2.4): a peer whose fresh presence lacks lp6 is not asked at all.
+assert(not s:StartCompletePagedLeaderboardCatchup("Old Tester", function()
+    error("an old peer was asked")
+end), "An old beta peer was asked for a ranking sweep")
 advance(15)
-assert(sent[1] and sent[1].version == "5" and sent[1].target == "Old Tester",
-    "Old beta peer waited for a silent v6 probe before LK v5")
-assert(oldResult == false and oldSupported == false and now - startedAt < 270,
-    "v5 LK was falsely certified complete or waited for v6 timeout")
-assert(s:GetPagedLeaderboardDiagnostics():find("beta v5; NH without lp6", 1, true),
-    "Diagnostics omit the negotiated legacy choice")
+assert(#sent == 0, "An old beta peer received a ranking request")
+assert(s:GetPagedLeaderboardDiagnostics():find("beta v5; not asked (v6 only)", 1, true),
+    "Diagnostics omit the v6-only choice")
 
 sent = {}
 local newResult, newSupported
@@ -175,4 +171,4 @@ assert(probeResult == true and probeSupported == true,
     "The v6 probe of a capable peer did not complete the sweep")
 assert(s:GetPagedLeaderboardDiagnostics():find("capability unknown, v6 probe", 1, true),
     "Diagnostics omit the v6 probe of an unknown-capability peer")
-print("NH lp6 negotiation, v5 immediate fallback, typed v6, unknown-capability v6 probe and capability TTL OK")
+print("NH lp6 negotiation, old peers not asked, typed v6, unknown-capability v6 probe and capability TTL OK")

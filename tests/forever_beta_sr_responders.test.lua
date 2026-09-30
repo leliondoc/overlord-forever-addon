@@ -14,6 +14,8 @@ Overlord.BetaNetwork = {
     IsDispatching = function() return true end,
     IsTargetedDispatch = function() return targeted end,
     GetPeers = function() return peers end,
+    GetDirectPeers = function() return peers end,
+    context = { hops = 0 },
 }
 Overlord.WaitingForSync = false
 Overlord.IsCaptureSyncPending = function() return false end
@@ -44,10 +46,19 @@ sync:OnSyncRequest("Horde Joiner", payload, "BETA")
 assert(not responded(), "Broadcast request still answered by most of 30 peers")
 release()
 
-targeted, roll = false, 0.08
+targeted, roll = false, 0.05
 sync:OnSyncRequest("Horde Joiner", payload, "BETA")
 assert(responded(), "Selected peer did not answer the broadcast request")
 release()
 
+-- Point to point (1.2.4): a request that crossed a relay is never answered,
+-- targeted or not, since the reply would have to cross the same relays back.
+Overlord.BetaNetwork.context = { hops = 2 }
+targeted, roll = true, 0.01
+sync:OnSyncRequest("Far Joiner", payload, "BETA")
+assert(not responded(), "A relayed request was answered")
+release()
+Overlord.BetaNetwork.context = { hops = 0 }
+
 math.random = realRandom
-print("Forever beta SR responders: targeted requests answered, broadcast bounded to ~3 of 30 peers OK")
+print("Forever beta SR responders: targeted requests answered, broadcast bounded to ~2 of 30 direct peers, relayed requests ignored OK")

@@ -553,6 +553,26 @@ function net:GetPeerHops(name)
     return tonumber(row.hops)
 end
 -- Secondes depuis le dernier paquet de ce pair (nil si inconnu ou perime).
+-- Catch-up is point-to-point since 1.2.4: a map, ranking or history exchange only
+-- runs between direct neighbours (same channel/group/whisper, or a Battle.net
+-- friend). The relay carries live traffic only. Forwarding every exchange across
+-- up to four hops multiplied one reply into thousands of copies at evening peaks.
+local CATCHUP_KINDS = {}
+for kind in ("SR ZA HR HA HB HC LK LC LR LO LOC OE"):gmatch("%S+") do CATCHUP_KINDS[kind] = true end
+local function isPointToPointCatchup(kind, target)
+    return CATCHUP_KINDS[kind] == true and target ~= nil and target ~= "*"
+end
+function net:IsDirectPeer(name)
+    return self:GetPeerHops(name) == 1
+end
+function net:GetDirectPeers()
+    local names = {}
+    for _, row in pairs(self.peers) do
+        if GetTime() - row.at <= 300 and tonumber(row.hops) == 1 then names[#names + 1] = row.name end
+    end
+    table.sort(names)
+    return names
+end
 function net:GetPeerAge(name)
     local key = canonical(name)
     local row = key and self.peers[key:lower()]
@@ -1352,6 +1372,11 @@ function net:Send(kind, payload, target, immediate)
     if canonical(name) ~= name or name == "" then return false end
     target = target or "*"
     if target ~= "*" and canonical(target) ~= target then return false end
+    -- A catch-up exchange never starts toward a peer that is not a direct neighbour.
+    if isPointToPointCatchup(kind, target) and not self:IsDirectPeer(target) then
+        self.stats.catchupNotDirect = (self.stats.catchupNotDirect or 0) + 1
+        return false
+    end
     local key = kind .. "|" .. target .. "|" .. payload
     local now = GetTime()
     if recent[key] and now - recent[key] < 2 then return true end
@@ -1445,7 +1470,8 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         -- because a new peer spoke would only repeat it. Periodic and login map
         -- catch-ups are unchanged.
         local recentFullMap = sync._lastFullZaAt and now - sync._lastFullZaAt < 45
-        if self.pulls < 2 and now - last >= 300 and not recentFullMap then
+        -- Only a direct neighbour is asked: its map reply never needs a relay.
+        if #p.path == 1 and self.pulls < 2 and now - last >= 300 and not recentFullMap then
             self.pulls = self.pulls + 1
             -- Bound this cache by the same live peer population.
             self.requested = self.requested or {}
@@ -1466,7 +1492,16 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         forwardPresence = not last or at - last >= window or at < last - window
     end
     local forwarded = false
-    if p.kind ~= "K" and forwardPresence and #p.path < MAX_PATH and (p.target == "*" or not addressed) then
+    -- Catch-up addressed to someone else is not relayed (point-to-point only).
+    -- A broadcast map request is not relayed either: only the requester's direct
+    -- neighbours answer it since 1.2.4, and they heard it first-hand.
+    local relayable = not isPointToPointCatchup(p.kind, p.target)
+        and not (p.kind == "SR" and p.target == "*")
+    if not relayable and not addressed then
+        self.stats.catchupNotRelayed = (self.stats.catchupNotRelayed or 0) + 1
+    end
+    if relayable and p.kind ~= "K" and forwardPresence and #p.path < MAX_PATH
+        and (p.target == "*" or not addressed) then
         p.path[#p.path + 1] = me
         p.skipGroup = transport == "RAID" or transport == "PARTY"
         -- Whoever gave us a group copy either put it on the channel or got it from

@@ -1585,3 +1585,50 @@ function Overlord.Sync:OnReceiveLeaderboardOutpostEvidence(payload, sender, sour
     -- Garder le handler no-op evite une erreur avec un client intermediaire ayant connu OE.
     return
 end
+
+-- Outpost/fortress leaderboard history (1.2.4): tenants (LO) and capture counts
+-- (LOC), at most ~76 small rows, exchanged point to point with one direct
+-- neighbour through SR mode "H". Replaces the v4 ladder exchange that carried the
+-- same rows behind up to 615 ranking rows.
+local OUTPOST_HISTORY_REPLY_COOLDOWN = 600
+local OUTPOST_HISTORY_SEND_INTERVAL = 0.5
+local outpostHistoryRepliedAt = {}
+local outpostHistoryReply = nil
+
+function Overlord.Sync:RespondOutpostHistory(target, evidencePage, hasEvidencePage)
+    if type(target) ~= "string" or target == "" or outpostHistoryReply then return false end
+    if Overlord.InstanceSuspended or IsInInstance() then return false end
+    local key = target:lower()
+    local now = GetTime()
+    if now - (outpostHistoryRepliedAt[key] or -OUTPOST_HISTORY_REPLY_COOLDOWN)
+        < OUTPOST_HISTORY_REPLY_COOLDOWN then return false end
+    local queue = {}
+    pcall(self.AppendLeaderboardOutpostToSrQueue, self, queue)
+    pcall(self.AppendLeaderboardOutpostCountToSrQueue, self, queue, evidencePage, hasEvidencePage)
+    if #queue == 0 then return false end
+    outpostHistoryRepliedAt[key] = now
+    local reply = { target = target, queue = queue, index = 1, startedAt = now }
+    outpostHistoryReply = reply
+    local function tick()
+        if outpostHistoryReply ~= reply then return end
+        local packet = reply.queue[reply.index]
+        -- A refused send (queue full, target no longer direct) is retried; the
+        -- whole reply is bounded to two minutes.
+        if not packet or GetTime() - reply.startedAt > 120 then
+            outpostHistoryReply = nil
+            return
+        end
+        if Overlord.Sync:SendWhisper(packet.type, packet.data, reply.target) then
+            reply.index = reply.index + 1
+        end
+        C_Timer.After(OUTPOST_HISTORY_SEND_INTERVAL, tick)
+    end
+    tick()
+    return true
+end
+
+-- One request to one direct neighbour; the scheduler retries another peer later.
+function Overlord.Sync:RequestOutpostHistory(target)
+    if type(target) ~= "string" or target == "" or not self.GetSRPayload then return false end
+    return self:SendWhisper("SR", self:GetSRPayload("H"), target) == true
+end

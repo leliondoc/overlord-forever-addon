@@ -283,8 +283,9 @@ local function SRPayload(requestMode)
     srEvidencePageNonce = (srEvidencePageNonce + 1) % 2147483647
     if OverlordDB then OverlordDB.syncEvidencePageNonce = srEvidencePageNonce end
     local versionField = (Overlord.Version or "") .. "~" .. srEvidencePageNonce
+    -- H (1.2.4) : historique avant-postes/forteresses seul (LO + LOC), sans carte.
     local mode = (requestMode == "F" and "F")
-        or (requestMode == "S" and "S") or "T"
+        or (requestMode == "S" and "S") or (requestMode == "H" and "H") or "T"
     return (Overlord.PlayerFaction or "") .. ":" .. versionField .. ":" .. vts
         .. ":" .. vfCode .. ":" .. vfront .. ":" .. mode
 end
@@ -1267,17 +1268,13 @@ end
 
 -- Une nouvelle cle distante n'est admise que si elle appartient a l'emetteur
 -- authentifie par WoW, ou si elle arrive dans une reponse directe explicitement
--- attendue (HR v3 ou SR:F legacy). Les mises a jour des cles deja connues
+-- attendue (pages v6 ou SR:F). Les mises a jour des cles deja connues
 -- restent monotones et ne consomment aucun budget.
 function Overlord.Sync:AuthorizeLeaderboardSubject(msgType, playerName, sender, channel)
     if not self:IsValidPlayerName(playerName) then return false, "invalid-subject" end
     if self:IsKnownLeaderboardSubject(playerName) then return true, "known" end
     if self.KillSyncSenderOwnsPlayer
         and self:KillSyncSenderOwnsPlayer(sender, playerName) then return true, "owner" end
-    if self.IsExpectedHistoryCatchupDelivery
-        and self:IsExpectedHistoryCatchupDelivery(msgType, sender, channel) then
-        return true, "history"
-    end
     if self.IsExpectedPagedLeaderboardDelivery
         and self:IsExpectedPagedLeaderboardDelivery(msgType, playerName, sender, channel) then
         return true, "paged-history"
@@ -1594,7 +1591,7 @@ function Overlord.Sync:TryCommunityJoinSync(forceHistory)
         end)
     end
     if self.ScheduleLoginLeaderboardHistoryCatchUp then
-        self:ScheduleLoginLeaderboardHistoryCatchUp(forceHistory == true)
+        self:ScheduleLoginLeaderboardHistoryCatchUp(true, forceHistory == true)
     end
 end
 
@@ -1913,12 +1910,12 @@ function Overlord.Sync:SendLoginCatchupSyncToCommunity()
     return sent + betaSent
 end
 
--- Equivalent sans Communaute du rattrapage login : au plus 3 SR territoriaux cibles
--- (reponse whisper garantie, snapshot ZA seul), dont 2 vers la faction adverse qui
--- connait ses captures. Remplace l'avalanche de reponses au SR diffuse a tout le
--- reseau, qui saturait les ponts Battle.net. Les pairs viennent des hello du relais.
-Overlord.Sync.BETA_LOGIN_CATCHUP_TARGETS = 3
-Overlord.Sync.BETA_LOGIN_CATCHUP_ENEMY_TARGETS = 2
+-- Equivalent sans Communaute du rattrapage login : au plus 2 SR territoriaux cibles
+-- (reponse garantie, snapshot ZA seul) vers des voisins DIRECTS, dont 1 de la
+-- faction adverse s'il en existe (ami Battle.net). Le rattrapage est point a point
+-- depuis 1.2.4 : un pair a plusieurs relais ne recoit plus de demande.
+Overlord.Sync.BETA_LOGIN_CATCHUP_TARGETS = 2
+Overlord.Sync.BETA_LOGIN_CATCHUP_ENEMY_TARGETS = 1
 Overlord.Sync.BETA_LOGIN_CATCHUP_FIRST_DELAY = 12
 Overlord.Sync.BETA_LOGIN_CATCHUP_RETRY_DELAY = 20
 Overlord.Sync.BETA_LOGIN_CATCHUP_MAX_ATTEMPTS = 3
@@ -1952,7 +1949,7 @@ function Overlord.Sync:RunBetaPeerLoginCatchup(attempt)
     local myName = self:GetPlayerFullName()
     local myFaction = Overlord.PlayerFaction
     local enemies, others = {}, {}
-    for _, name in ipairs(net:GetPeers()) do
+    for _, name in ipairs(net:GetDirectPeers()) do
         if name ~= "" and not self:ForeverIdentitiesMatch(name, myName) then
             local faction = self:GetBetaPeerFaction(name)
             if faction and myFaction and faction ~= myFaction then
@@ -1996,8 +1993,9 @@ function Overlord.Sync:RunBetaPeerLoginCatchup(attempt)
 end
 
 -- Rattrapage periodique de la carte : le canal ne porte plus les photos ZA. Un seul
--- pair par tour, en whisper/pont cible (reponse garantie), un tour sur deux vers
--- l'autre faction. La carte est juste en quelques minutes meme si des alertes se perdent.
+-- voisin direct par tour (reponse garantie, sans relais), un tour sur deux vers
+-- l'autre faction, et aucun tour si une carte complete vient d'arriver.
+-- La carte est juste en quelques minutes meme si des alertes se perdent.
 Overlord.Sync.BETA_MAP_CATCHUP_INTERVAL = 150
 Overlord.Sync.BETA_MAP_CATCHUP_JITTER = 30
 
@@ -2017,10 +2015,13 @@ end
 function Overlord.Sync:RunPeriodicMapCatchup()
     local net = Overlord.BetaNetwork
     if not net or Overlord.InstanceSuspended or IsInInstance() then return false end
+    if self._lastFullZaAt and GetTime() - self._lastFullZaAt < self.BETA_MAP_CATCHUP_INTERVAL then
+        return false
+    end
     local myName = self:GetPlayerFullName()
     local myFaction = Overlord.PlayerFaction
     local enemies, allies = {}, {}
-    for _, name in ipairs(net:GetPeers()) do
+    for _, name in ipairs(net:GetDirectPeers()) do
         if name ~= "" and not self:ForeverIdentitiesMatch(name, myName) then
             local faction = self:GetBetaPeerFaction(name)
             if faction and myFaction and faction ~= myFaction then
@@ -2887,40 +2888,13 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
     elseif msgType == "RG" then
         OnReceiveRG(payload, sender)
     elseif msgType == "LK" then
-        local accepted = self:OnReceiveLeaderboardKills(payload, sender, channel)
-        if accepted and self.NoteHistoryCatchupDelivery then
-            self:NoteHistoryCatchupDelivery("LK", payload or "", sender, channel)
-        end
+        self:OnReceiveLeaderboardKills(payload, sender, channel)
     elseif msgType == "LR" then
-        local accepted = self:OnReceiveLeaderboardRace(payload, sender, channel)
-        if accepted and self.NoteHistoryCatchupDelivery then
-            self:NoteHistoryCatchupDelivery("LR", payload or "", sender, channel)
-        end
+        self:OnReceiveLeaderboardRace(payload, sender, channel)
     elseif msgType == "LC" then
-        local accepted = self:OnReceiveLeaderboardCaptures(payload, sender, channel)
-        if accepted and self.NoteHistoryCatchupDelivery then
-            self:NoteHistoryCatchupDelivery("LC", payload or "", sender, channel)
-        end
-    elseif msgType == "HR" then
-        if self.OnHistoryCatchupRequest then
-            ok, err = pcall(self.OnHistoryCatchupRequest,
-                self, payload or "", sender, channel)
-        end
-    elseif msgType == "HB" then
-        if self.OnHistoryPushBegin then
-            ok, err = pcall(self.OnHistoryPushBegin,
-                self, payload or "", sender, channel)
-        end
-    elseif msgType == "HC" then
-        if self.OnHistoryPushCommit then
-            ok, err = pcall(self.OnHistoryPushCommit,
-                self, payload or "", sender, channel)
-        end
-    elseif msgType == "HA" then
-        if self.OnHistoryCatchupAck then
-            ok, err = pcall(self.OnHistoryCatchupAck,
-                self, payload or "", sender, channel)
-        end
+        self:OnReceiveLeaderboardCaptures(payload, sender, channel)
+    -- HR/HB/HC/HA without a "5:"/"6:" prefix were the v4 ladder exchange, retired
+    -- in 1.2.4 (v6 pages are routed above): they are ignored.
     elseif msgType == "LD" then
         -- Digest de classement : detecteur de divergence (ne mute rien, declenche un SR existant).
         if Overlord.LadderDigest then Overlord.LadderDigest:OnReceive(payload or "", sender) end
@@ -5125,6 +5099,10 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
     local viaBetaBroadcast = false
     if channel == "BETA" then
         if not Overlord.BetaNetwork or not Overlord.BetaNetwork:IsDispatching(sender) then return end
+        -- Point-to-point catch-up (1.2.4): a request that crossed a relay is not
+        -- answered; its reply would have to cross the same relays back.
+        local context = Overlord.BetaNetwork.context
+        if (tonumber(context and context.hops) or 0) > 0 then return end
         viaBetaBroadcast = not Overlord.BetaNetwork:IsTargetedDispatch()
         channel = viaBetaBroadcast and "CHANNEL" or "WHISPER"
         replyToOverride = sender
@@ -5148,6 +5126,12 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         senderEvidencePage = math.floor(senderEvidencePage)
     end
     CheckRemoteVersion(senderVersion)
+    if senderRequestMode == "H" then
+        if directSR and self.RespondOutpostHistory then
+            self:RespondOutpostHistory(replyToOverride or sender, senderEvidencePage, hasEvidencePage)
+        end
+        return
+    end
     -- Propage la treve : prend le max(local, distant) pour que tout le monde converge
     -- IMPORTANT: on n'accepte que si la faction gagnante est fournie (evite les donnees corrompues)
     local remoteVTs = tonumber(senderVTs) or 0
@@ -5217,11 +5201,12 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
     -- chaque pair renvoyait un snapshot ZA complet au demandeur : pour un joueur de la
     -- faction adverse, ces reponses traversaient toutes le meme pont Battle.net, saturaient
     -- sa file (128 paquets) et aucun snapshot n'arrivait complet (zones restees neutres).
-    -- Viser ~3 repondants ; les SR cibles (whisper) restent garantis.
+    -- Viser ~2 repondants parmi les voisins directs du demandeur (seuls ceux-ci
+    -- recoivent encore la demande en direct) ; les SR cibles restent garantis.
     if viaBetaBroadcast and not quarantinedMapOnly then
-        local peerCount = Overlord.BetaNetwork and Overlord.BetaNetwork.GetPeers
-            and #Overlord.BetaNetwork:GetPeers() or 0
-        respondChance = math.min(respondChance, math.max(0.05, 3 / math.max(1, peerCount)))
+        local directCount = Overlord.BetaNetwork and Overlord.BetaNetwork.GetDirectPeers
+            and #Overlord.BetaNetwork:GetDirectPeers() or 0
+        respondChance = math.min(respondChance, math.max(0.05, 2 / math.max(1, directCount)))
         if math.random() > respondChance then return end
         -- Tirage deja fait : ne pas repasser par le tirage generique ci-dessous.
         respondChance = 1.0
@@ -8616,9 +8601,7 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     -- while its owner is offline. Keep this distinct from owner authentication:
     -- an arbitrary live LK must not gain snapshot privileges merely by naming
     -- an already-known player.
-    local guildSnapshot = (self.IsExpectedHistoryCatchupDelivery
-        and self:IsExpectedHistoryCatchupDelivery("LK", sender, channel)) == true
-        or (self.IsExpectedPagedLeaderboardDelivery
+    local guildSnapshot = (self.IsExpectedPagedLeaderboardDelivery
             and self:IsExpectedPagedLeaderboardDelivery("LK", playerName, sender, channel)) == true
     local observedLevelEligible = self.IsObservedPlayerKillLevelEligible
         and self:IsObservedPlayerKillLevelEligible(playerName)

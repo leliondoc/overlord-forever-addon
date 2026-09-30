@@ -136,16 +136,19 @@ local b = client("Bridge Tester", "alliance")
 local c = client("Gateway Tester", "horde")
 local d = client("Veteran Tester", "horde")
 b.friends, c.friends = { c }, { b }
+-- Catch-up is point to point (1.2.4): the puller asks its direct cross-faction
+-- Battle.net neighbour, never a peer three relays away.
+local PULLER, SOURCE = b, c
 for _, e in ipairs(clients) do e.Overlord.Sync.SendSyncRequest = function() return true end end
 local function heartbeat()
-    for _, e in ipairs(clients) do e.Overlord.BetaNetwork:Broadcast("NH", "1.0.35") end
+    for _, e in ipairs(clients) do e.Overlord.BetaNetwork:Broadcast("NH", "1.0.35~lp6") end
     later(45, heartbeat)
 end
 heartbeat()
 advance(10)
 local N = 1500
-local ceiling = d.Overlord.PLAUSIBLE_SYNC_KILL_CEILING
-assert(ceiling == 10000 and d.Overlord.Leaderboard.KILL_RANK_LIMIT >= N)
+local ceiling = SOURCE.Overlord.PLAUSIBLE_SYNC_KILL_CEILING
+assert(ceiling == 10000 and SOURCE.Overlord.Leaderboard.KILL_RANK_LIMIT >= N)
 local rows, guildTruth = {}, {}
 for i = 1, N do
     local n = i - 1
@@ -154,8 +157,8 @@ for i = 1, N do
     local guild = "Depth Guild " .. (i % 7)
     local total = 5 + math.floor((N - i) * 4990 / N)      -- 5 .. 4995, never > ceiling
     assert(total <= ceiling)
-    d.Overlord.Leaderboard.kills[name] = total
-    d.Overlord.Leaderboard.playerInfo[name] = { class = "WARRIOR", faction = "Horde", level = 2,
+    SOURCE.Overlord.Leaderboard.kills[name] = total
+    SOURCE.Overlord.Leaderboard.playerInfo[name] = { class = "WARRIOR", faction = "Horde", level = 2,
         locale = "engb", guild = guild, guildAt = 1790016000 }
     rows[i] = name
     guildTruth[guild] = (guildTruth[guild] or 0) + total
@@ -170,39 +173,39 @@ local function guildTotals(e)
     return g
 end
 local done, supported
-assert(a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function(ok, capable)
+assert(PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok, capable)
     done, supported = ok, capable end, true))
 for _ = 1, 40 do
     advance(120)
     if done ~= nil then break end
 end
-local diag = a.Overlord.Sync:GetPagedLeaderboardDiagnostics()
+local diag = PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics()
 assert(done and supported, "v6 sweep did not complete: " .. diag)
 local missing, first = 0, nil
 for i, name in ipairs(rows) do
-    if a.Overlord.Leaderboard.kills[name] ~= d.Overlord.Leaderboard.kills[name] then
+    if PULLER.Overlord.Leaderboard.kills[name] ~= SOURCE.Overlord.Leaderboard.kills[name] then
         missing = missing + 1; first = first or i
     end
 end
 assert(missing == 0, ("v6 sweep stopped short: %d of %d rows missing (first at rank %s); %s")
     :format(missing, N, tostring(first), diag))
-local got = guildTotals(a)
+local got = guildTotals(PULLER)
 for guild, total in pairs(guildTruth) do
     assert(got[guild] == total, "Guild total diverged for " .. guild)
 end
--- The legacy v4 view of the same ladder is still exactly the top 500 (wire contract).
-local lb = d.Overlord.Leaderboard
+-- The bounded SR:F view of the same ladder is still exactly the top 500 (wire contract).
+local lb = SOURCE.Overlord.Leaderboard
 local built
 lb:SnapshotCurrentCampaignBeforeReset(function(ok) built = ok end)
 advance(30)
 assert(built, "snapshot did not build")
-local snapshot = d.Overlord.Sync:GetAttestedLeaderboardSnapshot()
+local snapshot = SOURCE.Overlord.Sync:GetAttestedLeaderboardSnapshot()
 assert(snapshot, "no attested snapshot")
 local nSnapshot = 0
 for _ in pairs(snapshot.kills) do nSnapshot = nSnapshot + 1 end
 assert(nSnapshot == N, "attested snapshot must hold the whole ladder, got " .. nSnapshot)
-local queue = d.Overlord.Sync:BuildHistoryCatchupSnapshotQueue(snapshot, snapshot.campaignStart)
+local queue = SOURCE.Overlord.Sync:BuildHistoryCatchupSnapshotQueue(snapshot, snapshot.campaignStart)
 local lk = 0
 for _, packet in ipairs(queue) do if packet.type == "LK" then lk = lk + 1 end end
-assert(lk == lb.NETWORK_KILL_RANK_LIMIT and lk == 500, "v4 LK view changed: " .. lk)
-print(("PASS: v6 swept %d/%d ladder rows and guild totals (v4 view = top %d); %s"):format(N, N, lk, diag))
+assert(lk == lb.NETWORK_KILL_RANK_LIMIT and lk == 500, "SR:F LK view changed: " .. lk)
+print(("PASS: v6 swept %d/%d ladder rows and guild totals over a direct link (SR:F view = top %d); %s"):format(N, N, lk, diag))

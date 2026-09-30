@@ -121,13 +121,21 @@ assert(a.hrSent == 2 and result() == true,
 assert(a.Overlord.Sync._leaderboardPageStats.retries == 1,
     "Lost HR retry was not recorded")
 
+-- A busy responder (combat, instance, serving someone else) answers "busy" at
+-- once instead of staying silent: the pull ends as supported-but-busy within
+-- seconds, and the scheduler asks again shortly (never the 270-second timeout).
 a, b = pair()
 b.busy = true
 later(20, function() b.busy = false end)
 result = start(a, b)
+advance(5)
+local busyDone, busySupported = result()
+assert(a.hrSent == 1 and busyDone == false and busySupported == true,
+    "A briefly busy responder stayed silent instead of answering busy")
+advance(20) -- the scheduler retries 12 then 30 seconds later
+result = start(a, b)
 advance(170)
-assert(a.hrSent == 2 and result() == true,
-    "A briefly busy responder silently lost the first HR for 270 seconds")
+assert(result() == true, "The retry after a busy answer did not complete")
 
 a, b = pair()
 a.dropAllHR = true
@@ -174,4 +182,4 @@ assert(a.hrSent == 2 and result() == nil,
 advance(95)
 assert(a.hrSent == 3 and result() == nil,
     "Second probe did not preserve active-time spacing after combat")
-print("v6 silent first HR, busy peer, bounded deadline, early reply and combat pause OK")
+print("v6 silent first HR, busy peer answers busy, bounded deadline, early reply and combat pause OK")

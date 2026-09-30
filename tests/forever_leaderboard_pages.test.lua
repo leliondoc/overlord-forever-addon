@@ -1,4 +1,4 @@
--- Real HR/HB/HC/HA, LK/LC/LR admission and monotone merge through three hops.
+-- Real paged HR/HA/HB, LK admission and monotone merge between direct neighbours.
 -- Only WoW transports and clock are simulated; the sliced snapshot builder is real.
 local now, serial, pending, clients = 100, 0, {}, {}
 local appliedThisCallback, maxApplied = 0, 0
@@ -133,9 +133,12 @@ local b = client("Bridge Tester", "alliance")
 local c = client("Gateway Tester", "horde")
 local d = client("Veteran Tester", "horde")
 b.friends, c.friends = { c }, { b }
+-- Catch-up is point to point (1.2.4): the puller asks its direct cross-faction
+-- Battle.net neighbour, never a peer three relays away.
+local PULLER, SOURCE = b, c
 for _, e in ipairs(clients) do e.Overlord.Sync.SendSyncRequest = function() return true end end
 local function heartbeat()
-    for _, e in ipairs(clients) do e.Overlord.BetaNetwork:Broadcast("NH", "1.0.35") end
+    for _, e in ipairs(clients) do e.Overlord.BetaNetwork:Broadcast("NH", "1.0.35~lp6") end
     later(45, heartbeat)
 end
 heartbeat()
@@ -146,25 +149,25 @@ for i = 1, 5000 do
     local name = "Player " .. string.char(65 + math.floor(n / 676))
         .. string.char(65 + math.floor(n / 26) % 26) .. string.char(65 + n % 26)
     names[i] = name
-    local lb = d.Overlord.Leaderboard
+    local lb = SOURCE.Overlord.Leaderboard
     lb.kills[name] = i
     lb.playerInfo[name] = { class = "WARRIOR", faction = "Horde", level = 2,
         locale = "engb", guild = "Veteran Guild", guildAt = 1790016000 }
 end
 local done, supported
-local receiver = a.Overlord.Sync.OnReceiveLeaderboardKills
-a.Overlord.Sync.OnReceiveLeaderboardKills = function(self, payload, sender, channel)
+local receiver = PULLER.Overlord.Sync.OnReceiveLeaderboardKills
+PULLER.Overlord.Sync.OnReceiveLeaderboardKills = function(self, payload, sender, channel)
     appliedThisCallback = appliedThisCallback + 1
-    assert(a.Overlord.BetaNetwork:IsRelayedOrigin(sender), "Lost relay provenance during deferred application")
+    assert(not PULLER.Overlord.BetaNetwork:IsRelayedOrigin(sender), "A direct page was presented as relayed")
     return receiver(self, payload, sender, channel)
 end
-local send = d.Overlord.Sync.SendWhisper
+local send = SOURCE.Overlord.Sync.SendWhisper
 local dropped, held, duplicated, corrupted, sendAt, charged = false, nil, false, false, now, 0
-d.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
+SOURCE.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
     if payload:sub(1, 2) == "5:" then
         charged = charged + #payload + 200
         assert(charged <= 500 + (now - sendAt) * 300, "Exceeded global page byte budget")
-        local _, op, _, _, seq, part = d.strsplit(":", payload, 7)
+        local _, op, _, _, seq, part = SOURCE.strsplit(":", payload, 7)
         if op == "D" and tonumber(seq) == 2 and tonumber(part) == 2 and not dropped then
             dropped = true
             return true -- Blizzard accepted it; the packet was lost farther away.
@@ -185,54 +188,54 @@ d.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
     end
     return send(self, kind, payload, target)
 end
-assert(a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function(ok, capable) done, supported = ok, capable end))
+assert(PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok, capable) done, supported = ok, capable end))
 for i = 1, 100 do
     advance(180)
     if done ~= nil then break end
 end
-local diag = a.Overlord.Sync:GetPagedLeaderboardDiagnostics()
-assert(done and supported, diag .. " " .. tostring(a.Overlord.Sync._leaderboardPageStats.error))
+local diag = PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics()
+assert(done and supported, diag .. " " .. tostring(PULLER.Overlord.Sync._leaderboardPageStats.error))
 assert(dropped and held and duplicated and corrupted, "Fault injection never ran")
-assert(a.Overlord.Sync._leaderboardPageStats.retries >= 1, "Missing page never retried")
+assert(PULLER.Overlord.Sync._leaderboardPageStats.retries >= 1, "Missing page never retried")
 for _, name in ipairs(names) do
-    assert(a.Overlord.Leaderboard.kills[name] == d.Overlord.Leaderboard.kills[name], "Missing: " .. name)
-    assert(a.Overlord.Leaderboard.playerInfo[name].guild == "Veteran Guild", "Missing guild: " .. name)
+    assert(PULLER.Overlord.Leaderboard.kills[name] == SOURCE.Overlord.Leaderboard.kills[name], "Missing: " .. name)
+    assert(PULLER.Overlord.Leaderboard.playerInfo[name].guild == "Veteran Guild", "Missing guild: " .. name)
 end
 for _, e in ipairs(clients) do assert(e.Overlord.BetaNetwork.stats.dropped == 0, "Relay overflow") end
-assert(a.Overlord.Sync._pagedDelivery == nil, "Leaked authorization")
-assert(not a.Overlord.Sync:IsExpectedPagedLeaderboardDelivery("LK", names[1], d.name, "BETA"))
-print("PASS: 5,000 filtered LK rows through three relay hops; " .. diag)
-d.Overlord.Sync.SendWhisper = send
+assert(PULLER.Overlord.Sync._pagedDelivery == nil, "Leaked authorization")
+assert(not PULLER.Overlord.Sync:IsExpectedPagedLeaderboardDelivery("LK", names[1], SOURCE.name, "BETA"))
+print("PASS: 5,000 filtered LK rows over a direct cross-faction Battle.net link; " .. diag)
+SOURCE.Overlord.Sync.SendWhisper = send
 advance(10)
 -- A matching second sweep needs a single response, without bucket polling.
-local before = a.Overlord.Sync._leaderboardPageStats.rows
-local pagesBefore, matchingReplies = a.Overlord.Sync._leaderboardPageStats.pages, 0
-d.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
+local before = PULLER.Overlord.Sync._leaderboardPageStats.rows
+local pagesBefore, matchingReplies = PULLER.Overlord.Sync._leaderboardPageStats.pages, 0
+SOURCE.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
     if payload:sub(1, 2) == "5:" then matchingReplies = matchingReplies + 1 end
     return send(self, kind, payload, target)
 end
 done = nil
-assert(a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function(ok) done = ok end))
+assert(PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
 advance(1200)
-assert(done == true, a.Overlord.Sync:GetPagedLeaderboardDiagnostics())
-assert(a.Overlord.Sync._leaderboardPageStats.rows == before, "Equal buckets retransmitted scores")
-assert(matchingReplies == 1 and a.Overlord.Sync._leaderboardPageStats.pages == pagesBefore,
+assert(done == true, PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())
+assert(PULLER.Overlord.Sync._leaderboardPageStats.rows == before, "Equal buckets retransmitted scores")
+assert(matchingReplies == 1 and PULLER.Overlord.Sync._leaderboardPageStats.pages == pagesBefore,
     "Equal ranking did not use a single digest reply")
-d.Overlord.Sync.SendWhisper = send
+SOURCE.Overlord.Sync.SendWhisper = send
 -- Score/rank changes affect a bucket, never the page cursor of another bucket.
-d.Overlord.Leaderboard:SetPlayerKills(names[1], 4999, true)
+SOURCE.Overlord.Leaderboard:SetPlayerKills(names[1], 4999, true)
 done = nil
-assert(a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function(ok) done = ok end))
+assert(PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
 advance(1800)
-assert(done == true, a.Overlord.Sync:GetPagedLeaderboardDiagnostics())
-assert(a.Overlord.Leaderboard.kills[names[1]] == 4999, "Changed score was skipped")
-assert(a.Overlord.Sync._leaderboardPageStats.rows - before < 200, "Unchanged buckets re-sent in delta sweep")
+assert(done == true, PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())
+assert(PULLER.Overlord.Leaderboard.kills[names[1]] == 4999, "Changed score was skipped")
+assert(PULLER.Overlord.Sync._leaderboardPageStats.rows - before < 200, "Unchanged buckets re-sent in delta sweep")
 -- Interrupted transfer and reload resume the incomplete bucket from its start.
-d.Overlord.Leaderboard:SetPlayerKills(names[2], 4998, true)
+SOURCE.Overlord.Leaderboard:SetPlayerKills(names[2], 4998, true)
 local blockedBucket
-local sendRequest = a.Overlord.Sync.SendWhisper
-a.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
-    local _, op, _, _, seq, bucket = a.strsplit(":", payload, 7)
+local sendRequest = PULLER.Overlord.Sync.SendWhisper
+PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
+    local _, op, _, _, seq, bucket = PULLER.strsplit(":", payload, 7)
     if kind == "HR" and op == "Q" and tonumber(seq) == 5 then
         blockedBucket = tonumber(bucket)
         return true
@@ -240,58 +243,58 @@ a.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
     return sendRequest(self, kind, payload, target)
 end
 done = nil
-assert(a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function(ok) done = ok end))
+assert(PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
 advance(1800)
 assert(done == false and blockedBucket, "Disconnected transfer did not terminate")
-assert(a.OverlordDB.leaderboardPageProgress.peers[d.name].bucket == blockedBucket)
-a.Overlord.Sync.SendWhisper = sendRequest
-a.loadfile("SyncLeaderboardPages.lua")()
+assert(PULLER.OverlordDB.leaderboardPageProgress.peers[SOURCE.name].bucket == blockedBucket)
+PULLER.Overlord.Sync.SendWhisper = sendRequest
+PULLER.loadfile("SyncLeaderboardPages.lua")()
 local firstRequest
-a.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
+PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
     if kind == "HR" and payload:sub(1, 4) == "5:Q:" and not firstRequest then
-        firstRequest = { a.strsplit(":", payload) }
+        firstRequest = { PULLER.strsplit(":", payload) }
     end
     return sendRequest(self, kind, payload, target)
 end
 done = nil
-assert(a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function(ok) done = ok end))
+assert(PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
 advance(1800)
-assert(done == true, a.Overlord.Sync:GetPagedLeaderboardDiagnostics())
+assert(done == true, PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())
 assert(tonumber(firstRequest[6]) == blockedBucket and firstRequest[7] == "-", "Unsafe resumed cursor")
-assert(a.Overlord.Leaderboard.kills[names[2]] == 4998)
-a.Overlord.Sync.SendWhisper = sendRequest
+assert(PULLER.Overlord.Leaderboard.kills[names[2]] == 4998)
+PULLER.Overlord.Sync.SendWhisper = sendRequest
 -- Legacy endpoints do not pretend to support the extended ranking.
-local handler = d.Overlord.Sync.OnPagedLeaderboardMessage
-d.Overlord.Sync.OnPagedLeaderboardMessage = nil
+local handler = SOURCE.Overlord.Sync.OnPagedLeaderboardMessage
+SOURCE.Overlord.Sync.OnPagedLeaderboardMessage = nil
 done, supported = nil, nil
-assert(a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function(ok, capable) done, supported = ok, capable end))
+assert(PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok, capable) done, supported = ok, capable end))
 advance(212)
-local waitingDiag = a.Overlord.Sync:GetPagedLeaderboardDiagnostics()
+local waitingDiag = PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics()
 assert(done == nil and waitingDiag:find("awaiting reply", 1, true)
     and waitingDiag:find("parts=0/?", 1, true), "A silent peer was presented as receiving: " .. waitingDiag)
 local waitBeforePause = waitingDiag:match("timeout=(%d+)s")
-a.InCombatLockdown = function() return true end
+PULLER.InCombatLockdown = function() return true end
 advance(60)
-local pausedDiag = a.Overlord.Sync:GetPagedLeaderboardDiagnostics()
+local pausedDiag = PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics()
 assert(done == nil and pausedDiag:find("paused: combat/instance", 1, true)
     and pausedDiag:match("timeout=(%d+)s") == waitBeforePause,
     "Combat wait was hidden or consumed the response timeout: " .. pausedDiag)
-a.InCombatLockdown = function() return false end
+PULLER.InCombatLockdown = function() return false end
 advance(188)
 assert(done == false and supported == false, "Old endpoint did not fall back")
-assert(not a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function() error("negative cache") end))
-d.Overlord.Sync.OnPagedLeaderboardMessage = handler
+assert(not PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SOURCE.name, function() error("negative cache") end))
+SOURCE.Overlord.Sync.OnPagedLeaderboardMessage = handler
 print("PASS: delta buckets, interrupted/reloaded checkpoint, legacy fallback; max rows/callback=" .. maxApplied)
 
 advance(700)
 -- Valid page framing is not permission to import invalid LK claims.
-local serialize = d.Overlord.Sync.BuildPagedLeaderboardKillPayload
+local serialize = SOURCE.Overlord.Sync.BuildPagedLeaderboardKillPayload
 local invalid = { [names[33]] = 1, [names[34]] = 2, [names[35]] = 3, [names[36]] = 4 }
-for name in pairs(invalid) do d.Overlord.Leaderboard:SetPlayerKills(name, 4990, true) end
-d.Overlord.Sync.BuildPagedLeaderboardKillPayload = function(self, snapshot, name, wireEpoch)
+for name in pairs(invalid) do SOURCE.Overlord.Leaderboard:SetPlayerKills(name, 4990, true) end
+SOURCE.Overlord.Sync.BuildPagedLeaderboardKillPayload = function(self, snapshot, name, wireEpoch)
     local payload = serialize(self, snapshot, name, wireEpoch)
     if not payload or not invalid[name] then return payload end
-    local fields = { d.strsplit(":", payload) }
+    local fields = { SOURCE.strsplit(":", payload) }
     if invalid[name] == 1 then fields[2] = "10001" end
     if invalid[name] == 2 then fields[10] = "999" end
     if invalid[name] == 3 then fields[5] = tostring(wireEpoch - 604800) end
@@ -299,71 +302,71 @@ d.Overlord.Sync.BuildPagedLeaderboardKillPayload = function(self, snapshot, name
     return table.concat(fields, ":")
 end
 done = nil
-local rejectedBefore = a.Overlord.Sync._leaderboardPageStats.rejected
-assert(a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function(ok) done = ok end))
+local rejectedBefore = PULLER.Overlord.Sync._leaderboardPageStats.rejected
+assert(PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
 advance(2000)
-assert(done == true, a.Overlord.Sync:GetPagedLeaderboardDiagnostics())
-for i = 33, 36 do assert(a.Overlord.Leaderboard.kills[names[i]] == i, "Invalid LK bypassed filters: " .. i) end
-assert(a.Overlord.Sync._leaderboardPageStats.rejected >= rejectedBefore + 4)
-d.Overlord.Sync.BuildPagedLeaderboardKillPayload = serialize
+assert(done == true, PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())
+for i = 33, 36 do assert(PULLER.Overlord.Leaderboard.kills[names[i]] == i, "Invalid LK bypassed filters: " .. i) end
+assert(PULLER.Overlord.Sync._leaderboardPageStats.rejected >= rejectedBefore + 4)
+SOURCE.Overlord.Sync.BuildPagedLeaderboardKillPayload = serialize
 
 -- Combat stops application; an expired responder snapshot must reset the cursor.
-d.loadfile("SyncLeaderboardPages.lua")() -- remove the deliberately poisoned cached wire profile
+SOURCE.loadfile("SyncLeaderboardPages.lua")() -- remove the deliberately poisoned cached wire profile
 local inCombat, sendsDuringCombat = false, 0
-a.InCombatLockdown = function() return inCombat end
-a.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
+PULLER.InCombatLockdown = function() return inCombat end
+PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
     if inCombat and payload:sub(1, 2) == "5:" then sendsDuringCombat = sendsDuringCombat + 1 end
     return sendRequest(self, kind, payload, target)
 end
 done = nil
-assert(a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function(ok) done = ok end))
+assert(PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
 advance(2)
 inCombat = true
-local rowsBeforeCombat = a.Overlord.Sync._leaderboardPageStats.rows
+local rowsBeforeCombat = PULLER.Overlord.Sync._leaderboardPageStats.rows
 advance(400)
 assert(done == nil, "Combat incorrectly exhausted receive deadline")
-assert(sendsDuringCombat == 0 and a.Overlord.Sync._leaderboardPageStats.rows == rowsBeforeCombat, "Catchup work during combat")
+assert(sendsDuringCombat == 0 and PULLER.Overlord.Sync._leaderboardPageStats.rows == rowsBeforeCombat, "Catchup work during combat")
 inCombat = false
 advance(600)
 assert(done == false, "Expired immutable responder profile was silently replaced")
 advance(400)
 done = nil
-assert(a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function(ok) done = ok end))
+assert(PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
 advance(2000)
-assert(done == true, a.Overlord.Sync:GetPagedLeaderboardDiagnostics())
-for i = 33, 36 do assert(a.Overlord.Leaderboard.kills[names[i]] == 4990, "Reset bucket skipped a player") end
-a.Overlord.Sync.SendWhisper = sendRequest
+assert(done == true, PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())
+for i = 33, 36 do assert(PULLER.Overlord.Leaderboard.kills[names[i]] == 4990, "Reset bucket skipped a player") end
+PULLER.Overlord.Sync.SendWhisper = sendRequest
 
 -- A campaign switch invalidates outstanding pages before any more application.
-d.Overlord.Leaderboard:SetPlayerKills(names[40], 4990, true)
+SOURCE.Overlord.Leaderboard:SetPlayerKills(names[40], 4990, true)
 done = nil
-assert(a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function(ok) done = ok end))
+assert(PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
 advance(3)
-local campaign = a.Overlord.GetCurrentCampaignStartTs
-local previousEpoch = a.Overlord:GetCurrentCampaignStartTs()
-a.Overlord.GetCurrentCampaignStartTs = function() return previousEpoch + 604800 end
-local rowsAtReset = a.Overlord.Sync._leaderboardPageStats.rows
+local campaign = PULLER.Overlord.GetCurrentCampaignStartTs
+local previousEpoch = PULLER.Overlord:GetCurrentCampaignStartTs()
+PULLER.Overlord.GetCurrentCampaignStartTs = function() return previousEpoch + 604800 end
+local rowsAtReset = PULLER.Overlord.Sync._leaderboardPageStats.rows
 advance(10)
-assert(done == false and a.Overlord.Sync._leaderboardPageStats.rows == rowsAtReset, "Stale campaign imported")
-a.Overlord.GetCurrentCampaignStartTs = campaign
+assert(done == false and PULLER.Overlord.Sync._leaderboardPageStats.rows == rowsAtReset, "Stale campaign imported")
+PULLER.Overlord.GetCurrentCampaignStartTs = campaign
 print("PASS: score/level/epoch/bucket filters, combat pause, expired snapshot and campaign cancellation")
 
 advance(400)
 -- Both peers can pull at once; sending a request must not lock out its reply.
-a.Overlord.Leaderboard:SetPlayerKills(names[10], 5000, true)
-d.Overlord.Leaderboard:SetPlayerKills(names[11], 4999, true)
+PULLER.Overlord.Leaderboard:SetPlayerKills(names[10], 5000, true)
+SOURCE.Overlord.Leaderboard:SetPlayerKills(names[11], 4999, true)
 local reverseDone
 done = nil
-assert(a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function(ok) done = ok end))
-assert(d.Overlord.Sync:StartPagedLeaderboardCatchup(a.name, function(ok) reverseDone = ok end))
+assert(PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
+assert(SOURCE.Overlord.Sync:StartPagedLeaderboardCatchup(PULLER.name, function(ok) reverseDone = ok end))
 advance(2500)
 assert(done == true and reverseDone == true, "Simultaneous pulls deadlocked: "
-    .. a.Overlord.Sync:GetPagedLeaderboardDiagnostics() .. " / " .. d.Overlord.Sync:GetPagedLeaderboardDiagnostics())
-assert(a.Overlord.Leaderboard.kills[names[11]] == 4999 and d.Overlord.Leaderboard.kills[names[10]] == 5000)
+    .. PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics() .. " / " .. SOURCE.Overlord.Sync:GetPagedLeaderboardDiagnostics())
+assert(PULLER.Overlord.Leaderboard.kills[names[11]] == 4999 and SOURCE.Overlord.Leaderboard.kills[names[10]] == 5000)
 
 -- The two cross-faction gateways remain busy for the entire pull. A quiet-lane
 -- prerequisite used to prevent HB pages from leaving the gateways at all.
-d.Overlord.Leaderboard:SetPlayerKills(names[12], 4997, true)
+SOURCE.Overlord.Leaderboard:SetPlayerKills(names[12], 4997, true)
 local pressureUntil = now + 900
 local pressureSerial = 0
 local function pressure()
@@ -376,31 +379,27 @@ local function pressure()
 end
 pressure()
 done = nil
-assert(a.Overlord.Sync:StartPagedLeaderboardCatchup(d.name, function(ok) done = ok end))
+assert(PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
 for i = 1, 8 do
     advance(100)
     if done ~= nil then break end
 end
-assert(done == true and a.Overlord.Leaderboard.kills[names[12]] == 4997,
-    'Paged catch-up failed through busy Horde/Alliance bridges: ' .. a.Overlord.Sync:GetPagedLeaderboardDiagnostics())
+assert(done == true and PULLER.Overlord.Leaderboard.kills[names[12]] == 4997,
+    'Paged catch-up failed through busy Horde/Alliance bridges: ' .. PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())
 assert(now < pressureUntil, 'Catch-up only finished after ordinary traffic stopped')
 pressureUntil = now
 advance(180)
 print('PASS: paged cross-faction catch-up completes while both gateways remain saturated')
 
--- Exercise the production scheduler, including automatic fallback to v4.
-a.Overlord.Sync.GetOnlineEuropeanLeaderboardBridgeMembers = function() return { d.name } end
-a.Overlord.Sync.GetOnlineCommunityMembers = function() return { d.name } end
-local sawPaged, sawLegacy = false, false
-a.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
+-- The production scheduler asks a direct neighbour, in v6 only (1.2.4).
+local sawV6, sawOther = false, false
+PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
     if kind == "HR" then
-        if payload:sub(1, 2) == "5:" then sawPaged = true end
-        if payload:sub(1, 2) == "4:" then sawLegacy = true end
+        if payload:sub(1, 2) == "6:" then sawV6 = true else sawOther = true end
     end
     return sendRequest(self, kind, payload, target)
 end
-d.Overlord.Sync.OnPagedLeaderboardMessage = nil
-assert(a.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true, true))
+assert(PULLER.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true))
 advance(700)
-assert(sawPaged and sawLegacy, "Production scheduler failed to probe/fall back")
-print("PASS: simultaneous cross-faction pulls and scheduled v4 fallback")
+assert(sawV6 and not sawOther, "Production scheduler did not use v6 only")
+print("PASS: simultaneous cross-faction pulls and v6-only scheduler")

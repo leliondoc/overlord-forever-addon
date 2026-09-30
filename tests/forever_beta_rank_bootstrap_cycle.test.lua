@@ -1,9 +1,15 @@
--- A missing historical ACK must not put a long v4 exchange ahead of the first
--- complete v6 ranking sweep. Once v6 succeeds, a reload gives v4 its turn.
+-- Ranking bootstrap (1.2.4): every round is a complete v6 sweep with a direct
+-- neighbour; the outpost/fortress history (SR "H") follows once per six hours;
+-- a new campaign starts both over.
 local now = 1790020000
+local timers = {}
 Overlord = {
     Sync = {}, Leaderboard = { NETWORK_KILL_RANK_LIMIT = 500 },
-    BetaNetworkEnabled = true,
+    BetaNetworkEnabled = true, PlayerFaction = "Alliance",
+    BetaNetwork = {
+        GetDirectPeers = function() return { "Near Ally" } end,
+        GetPeerPagedProtocol = function() return 6 end,
+    },
 }
 function Overlord:GetCurrentCampaignStartTs() return 1790016000 end
 OverlordDB = { campaignId = 1 }
@@ -11,27 +17,41 @@ function GetTime() return 100 end
 function time() return now end
 function GetServerTime() return now end
 function IsInInstance() return false end
-C_Timer = { After = function() end }
+function InCombatLockdown() return false end
+C_Timer = { After = function(_, fn) timers[#timers + 1] = fn end }
 assert(loadfile("SyncHistoryCatchup.lua"))()
-Overlord.Sync.StartCompletePagedLeaderboardCatchup = function() return true end
+local sync = Overlord.Sync
+local sweeps, history = 0, {}
+sync.StartCompletePagedLeaderboardCatchup = function(_, peer, callback)
+    assert(peer == "Near Ally", "Ranking asked a non-direct peer: " .. tostring(peer))
+    sweeps = sweeps + 1
+    callback(true, true)
+    return true
+end
+sync.RequestOutpostHistory = function(_, peer) history[#history + 1] = peer; return true end
+local function round(force)
+    timers = {}
+    sync._historyCatchupPending = nil
+    assert(sync:ScheduleLoginLeaderboardHistoryCatchUp(force))
+    -- Initial delay, then the first attempt; later wakes are not run here.
+    table.remove(timers, 1)()
+    table.remove(timers, 1)()
+end
 
-assert(Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp())
-assert(Overlord.Sync._historyCatchupPending.ladderOnly == true,
-    "No-ACK login did not prioritise the complete paged ranking")
+round()
+assert(sweeps == 1, "Login did not start the v6 ranking")
+assert(OverlordDB.leaderboardRankFirstCompletedCampaignId == 1, "Completed sweep was not persisted")
+assert(#history == 1 and history[1] == "Near Ally", "Outpost history was not requested after the sweep")
 
--- A successful v6 round persists this campaign id before its v4 wake. A
--- simulated reload retains the DB but replaces the in-memory scheduler.
-OverlordDB.leaderboardRankFirstCompletedCampaignId = 1
-Overlord.Sync._historyCatchupPending = nil
-assert(Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp())
-assert(Overlord.Sync._historyCatchupPending.ladderOnly == false,
-    "Reload repeated v6 after it succeeded and starved historical v4")
+round(true)
+assert(sweeps == 2 and #history == 1, "Outpost history repeated within six hours")
 
--- A new campaign must begin with its own ranking sweep even when the old
--- campaign's successful marker remains in SavedVariables.
-Overlord.Sync._historyCatchupPending = nil
+now = now + 6 * 60 * 60 + 1
+round(true)
+assert(sweeps == 3 and #history == 2, "Outpost history not refreshed after six hours")
+
 OverlordDB.campaignId = 2
-assert(Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp())
-assert(Overlord.Sync._historyCatchupPending.ladderOnly == true,
-    "Old campaign marker suppressed the new campaign's complete ranking")
-print("Beta ranking bootstrap: v6 first, v4 after completed reload, new campaign v6")
+round(true)
+assert(sweeps == 4 and #history == 3, "A new campaign did not restart ranking and history")
+assert(OverlordDB.leaderboardRankFirstCompletedCampaignId == 2)
+print("Beta ranking bootstrap: v6 with a direct neighbour, outpost history every 6 h, new campaign restarts")

@@ -97,10 +97,9 @@ local function client(name, channel, pool)
         a.received[#a.received + 1] = { kind = kind, payload = payload, origin = origin, at = now }
         -- A snapshot handler must not re-author the same received state.
         assert(a.BetaNetwork:Broadcast(kind, payload) == 0)
-        if kind == "SR" then
-            assert(a.BetaNetwork:IsTargetedDispatch(), "Targeted request lost its transport semantics")
-            a.BetaNetwork:Send("LK", "reply", origin)
-        elseif kind ~= "LK" then
+        if kind == "GR" and a.BetaNetwork:IsTargetedDispatch() then
+            a.BetaNetwork:Send("GY", "reply", origin)
+        elseif kind ~= "GY" then
             assert(not a.BetaNetwork:IsTargetedDispatch(), "Broadcast gained direct-whisper authority")
         end
     end
@@ -307,9 +306,13 @@ assert(a.BetaNetwork:Send("HB", string.rep("y", 3300))); drain()
 assert(d.received[#d.received].payload == string.rep("y", 3300), "Large history page lost fragments")
 -- Targeted request/reply traverses the reverse route without cross-faction whispers.
 local before = #a.received
-assert(a.BetaNetwork:Send("SR", "request", d.name)); drain()
+assert(a.BetaNetwork:Send("GR", "request", d.name)); drain()
 assert(#a.received == before + 1 and a.received[#a.received].payload == "reply"
     and a.received[#a.received].origin == d.name, "Routed reply did not return")
+-- Catch-up is point to point (1.2.4): never started toward a peer behind relays.
+assert(not a.BetaNetwork:IsDirectPeer(d.name), "Test setup: the far peer looked direct")
+assert(not a.BetaNetwork:Send("SR", "request", d.name), "A catch-up request left for a far peer")
+assert((a.BetaNetwork.stats.catchupNotDirect or 0) >= 1, "Refused far catch-up was not counted")
 assert(not c.BetaNetwork:Receive(b.lastWire, "Forged Tester"), "Last-hop identity was not verified")
 assert(not a.BetaNetwork:Send("RESET", "all"), "Administrative mutation entered gameplay relay")
 assert(not a.BetaNetwork:Send("K", string.rep("x", 4000)), "Oversized packet was queued")
@@ -426,7 +429,7 @@ end
 do
     local fair = client("Fair Tester", "fair")
     local receiver = client("Fairwatch Tester", "fair")
-    fair.BetaNetwork.peers[receiver.name:lower()] = { via = receiver.name, transport = "CHANNEL", at = now }
+    fair.BetaNetwork.peers[receiver.name:lower()] = { via = receiver.name, transport = "CHANNEL", at = now, hops = 1 }
     for i = 1, 84 do assert(fair.BetaNetwork:Send("ZS", "pressure-" .. i)) end
     assert(fair.BetaNetwork:CanSendLeaderboardPage(), "A busy alert lane blocked page admission")
     for i = 1, 16 do assert(fair.BetaNetwork:Send("LK", "reserved-score-" .. i, receiver.name)) end
@@ -495,7 +498,7 @@ end
 do
     local burst = client("Burst Tester", "burst")
     local receiver = client("Burstwatch Tester", "burst")
-    burst.BetaNetwork.peers[receiver.name:lower()] = { via = receiver.name, transport = "CHANNEL", at = now }
+    burst.BetaNetwork.peers[receiver.name:lower()] = { via = receiver.name, transport = "CHANNEL", at = now, hops = 1 }
     for i = 1, 100 do assert(burst.BetaNetwork:Send("LK", "burst-score-" .. i, receiver.name)) end
     assert(not burst.BetaNetwork:Send("LK", "burst-overflow", receiver.name), "Borrowing exceeded the total queue bound")
     assert(burst.BetaNetwork:Send("ZS", "burst-alert"), "Borrowed catch-up capacity blocked a live alert")

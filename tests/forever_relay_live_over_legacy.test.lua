@@ -26,7 +26,7 @@ end
 assert(loadfile("SyncBetaNetwork.lua"))()
 local net = Overlord.BetaNetwork
 net.peers["reader tester"] = {
-    at = now, via = "Reader Tester", name = "Reader Tester", transport = "BNET", bnet = 1,
+    at = now, via = "Reader Tester", name = "Reader Tester", transport = "BNET", bnet = 1, hops = 1,
 }
 local function forwarded(kind, i, target, payload)
     return net:Queue({ region = "global", id = kind .. i, at = time(), target = target,
@@ -104,7 +104,7 @@ pending, sent = {}, {}
 assert(loadfile("SyncBetaNetwork.lua"))()
 net = Overlord.BetaNetwork
 net.peers["reader tester"] = {
-    at = now, via = "Reader Tester", name = "Reader Tester", transport = "BNET", bnet = 1,
+    at = now, via = "Reader Tester", name = "Reader Tester", transport = "BNET", bnet = 1, hops = 1,
 }
 for i = 1, 80 do
     assert(net:Send("LK", "own-" .. i, "Reader Tester"), "Idle borrowing refused a local row")
@@ -126,7 +126,7 @@ pending = {}
 assert(loadfile("SyncBetaNetwork.lua"))()
 net = Overlord.BetaNetwork
 net.peers["reader tester"] = {
-    at = now, via = "Reader Tester", name = "Reader Tester", transport = "BNET", bnet = 1,
+    at = now, via = "Reader Tester", name = "Reader Tester", transport = "BNET", bnet = 1, hops = 1,
 }
 for i = 1, 20 do assert(forwarded("LK", 6000 + i, "Reader Tester", "res-" .. i)) end
 local admitted = 0
