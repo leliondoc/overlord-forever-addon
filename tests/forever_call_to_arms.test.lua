@@ -94,15 +94,15 @@ do
 end
 -- 7. The total victory chat line names the front (shared place resolver).
 do
-    Overlord.L.TOTAL_VICTORY_MSG = "   TOTAL VICTORY OF %s!   "
-    Overlord.L.TOTAL_VICTORY_FRONT_MSG = "   TOTAL VICTORY OF %s! Front: %s   "
+    Overlord.L.TOTAL_VICTORY_MSG = "   TOTAL VICTORY FOR %s!   "
+    Overlord.L.TOTAL_VICTORY_FRONT_MSG = "   TOTAL VICTORY FOR %s! Front: %s   "
     local savedGetFront = Overlord.Fronts.GetFront
     Overlord.Fronts.GetFront = function(_, id) return id == "elwynn" and { mapName = "Elwynn Forest" } or nil end
-    assert(sync:FormatTotalVictoryMessage("THE ALLIANCE", "elwynn") == "   TOTAL VICTORY OF THE ALLIANCE! Front: Elwynn Forest   ",
+    assert(sync:FormatTotalVictoryMessage("THE ALLIANCE", "elwynn") == "   TOTAL VICTORY FOR THE ALLIANCE! Front: Elwynn Forest   ",
         "The total victory message does not name the front")
-    assert(sync:FormatTotalVictoryMessage("THE HORDE", nil) == "   TOTAL VICTORY OF THE HORDE!   ",
+    assert(sync:FormatTotalVictoryMessage("THE HORDE", nil) == "   TOTAL VICTORY FOR THE HORDE!   ",
         "A missing front must keep the plain message")
-    assert(sync:FormatTotalVictoryMessage("THE HORDE", "not_a_front") == "   TOTAL VICTORY OF THE HORDE!   ",
+    assert(sync:FormatTotalVictoryMessage("THE HORDE", "not_a_front") == "   TOTAL VICTORY FOR THE HORDE!   ",
         "An unknown front id must never be shown raw")
     Overlord.Fronts.GetFront = savedGetFront
 end
