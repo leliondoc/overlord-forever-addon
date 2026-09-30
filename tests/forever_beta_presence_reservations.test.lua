@@ -65,9 +65,9 @@ for i = 1, 4 do
 end
 assert(not net:Send("HB", "6:D:1:nonce:1:5:5:LK:overflow", "Reader Tester"))
 for i = 1, 24 do
-    assert(net:Send("DX", "1:1:1790016000:front" .. i .. ":1:source:global:0:0:11"))
+    assert(net:Send("VB", "1790016000:global:front" .. i .. ",A,1790016001,1790016001,20,1000"))
 end
-assert(not net:Send("DX", "1:1:1790016000:overflow:1:source:global:0:0:11"))
+assert(not net:Send("VB", "1790016000:global:overflow,A,1790016001,1790016001,20,1000"))
 assert(net.stats.displaced == 128, "Reservation recovery did not evict exactly the borrowed presence")
 local before = net.stats.displaced
 assert(not presence(130), "A full data queue admitted NH by evicting accepted data")
@@ -87,7 +87,7 @@ for _, item in ipairs(sent) do
     local row = item.wire:match("|LK|row%-(%d+)$")
     if row then rows[tonumber(row)] = true end
     if item.wire:find("|HB|", 1, true) then pages = pages + 1 end
-    if item.wire:find("|DX|", 1, true) then states = states + 1 end
+    if item.wire:find("|VB|", 1, true) then states = states + 1 end
     if item.wire:find("|C|terminal", 1, true) then
         terminals = terminals + 1
         assert(item.at - 100 < 2, "Terminal delayed by presence borrowing")

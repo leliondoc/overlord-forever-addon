@@ -265,9 +265,8 @@ for i = 1, 16 do
     assert(longRankings[i], "Long-path ranking page expired behind map batch " .. i)
 end
 
--- DX carries one absolute score per front; the periodic producer can refresh
--- the same front while its first copy still waits behind saturated progress.
--- VB events remain distinct, and neither kind may displace accepted LK/ZA.
+-- The state lane carries weekly VB events (DX was removed in 1.2.1). Distinct VB events
+-- all survive a saturated relay, and none may displace accepted LK/ZA.
 gateway.BetaNetwork.peers["reader tester"].at = now
 local stateStart = now
 for i = 1, 84 do
@@ -287,13 +286,8 @@ for i = 1, 2 do
     assert(gateway.BetaNetwork:Send("ZA", page, receiver.name))
 end
 for i = 1, 14 do
-    local front = "front" .. i
-    assert(gateway.BetaNetwork:Send("DX", "1:1:1790016000:" .. front
-        .. ":1:source:global:0:0:11", receiver.name))
+    assert(gateway.BetaNetwork:Send("VB", "1790016000:global:" .. "front" .. i .. ",A,1790016001,1790016001,20,1000", receiver.name))
 end
-local oldDx = "1:1:1790016000:front1:1:source:global:0:0:11"
-local newDx = "2:1:1790016000:front1:2:source:global:0:0:11"
-assert(gateway.BetaNetwork:Send("DX", newDx, receiver.name))
 local bonus = "1790016000:global:front1,A,1790016001,1790016001,20,1000"
 assert(gateway.BetaNetwork:Send("VB", bonus, receiver.name))
 local stateSerial = 0
@@ -314,11 +308,9 @@ local stateArrivals = {}
 for _, item in ipairs(receiver.received) do
     if item.at >= stateStart then stateArrivals[item.message] = item.at end
 end
-assert(stateArrivals["DX:" .. newDx] and not stateArrivals["DX:" .. oldDx],
-    "Waiting DX front was not coalesced to its newest sequence")
-for i = 2, 14 do
-    local payload = "1:1:1790016000:front" .. i .. ":1:source:global:0:0:11"
-    assert(stateArrivals["DX:" .. payload], "Saturated relay lost front " .. i)
+for i = 1, 14 do
+    local payload = "1790016000:global:" .. "front" .. i .. ",A,1790016001,1790016001,20,1000"
+    assert(stateArrivals["VB:" .. payload], "Saturated relay lost front " .. i)
 end
 assert(stateArrivals["VB:" .. bonus], "Saturated relay lost a distinct VB event")
 assert(stateArrivals["VB:" .. bonus] - stateStart < 120,
@@ -342,13 +334,13 @@ gateway.Sync.SendWhisper = function(self, kind, data, target)
     end
     return originalWhisper(self, kind, data, target)
 end
-local retryDx = "5:3:1790016000:retryfront:3:source:global:0:0:11"
-assert(gateway.BetaNetwork:Send("DX", retryDx, receiver.name))
+local retryVb = "1790016000:global:" .. "retryfront" .. ",A,1790016001,1790016001,20,1000"
+assert(gateway.BetaNetwork:Send("VB", retryVb, receiver.name))
 local retrySiblings = {}
 for i = 1, 23 do
-    local row = "5:3:1790016000:retry" .. i .. ":3:source:global:0:0:11"
+    local row = "1790016000:global:" .. "retry" .. i .. ",A,1790016001,1790016001,20,1000"
     retrySiblings[#retrySiblings + 1] = row
-    assert(gateway.BetaNetwork:Send("DX", row, receiver.name))
+    assert(gateway.BetaNetwork:Send("VB", row, receiver.name))
 end
 while #pending > 0 do
     ticks = ticks + 1
@@ -358,15 +350,15 @@ end
 gateway.Sync.SendWhisper = originalWhisper
 local retryArrivals = {}
 for _, item in ipairs(receiver.received) do retryArrivals[item.message] = true end
-assert(refusedOnce and retryArrivals["DX:" .. retryDx],
-    "A refused DX copy was not retried and delivered")
+assert(refusedOnce and retryArrivals["VB:" .. retryVb],
+    "A refused VB copy was not retried and delivered")
 for _, row in ipairs(retrySiblings) do
-    assert(retryArrivals["DX:" .. row], "Full state lane lost a distinct DX on retry")
+    assert(retryArrivals["VB:" .. row], "Full state lane lost a distinct VB on retry")
 end
 
 -- Relayed ranking bursts can borrow beyond their protected sixteen slots.
 -- Even 128 attempted LK rows must leave the global state reservation usable;
--- one terminal may reclaim an unprotected borrowed page, but not DX/VB or the
+-- one terminal may reclaim an unprotected borrowed page, but not VB or the
 -- sixteen protected ranking pages.
 gateway.BetaNetwork.peers["reader tester"].at = now
 local reserveStart, reserveRankings, reserveState = now, {}, {}
@@ -378,12 +370,12 @@ for i = 1, 128 do
         if i <= 16 then reserveRankings[#reserveRankings + 1] = row end
     end
 end
-assert(accepted == 100, "Ranking burst consumed the global DX/VB/paged reservation")
+assert(accepted == 100, "Ranking burst consumed the global VB/paged reservation")
 for i = 1, 14 do
-    local row = "1:1:1790016000:reservefront" .. i .. ":1:source:global:0:0:11"
-    reserveState[#reserveState + 1] = "DX:" .. row
-    assert(gateway.BetaNetwork:Send("DX", row, receiver.name),
-        "Full ranking burst refused a reserved DX")
+    local row = "1790016000:global:" .. "reservefront" .. i .. ",A,1790016001,1790016001,20,1000"
+    reserveState[#reserveState + 1] = "VB:" .. row
+    assert(gateway.BetaNetwork:Send("VB", row, receiver.name),
+        "Full ranking burst refused a reserved VB")
 end
 for i = 1, 10 do
     local row = "1790016000:global:reserve" .. i .. ",A,1790016001,1790016001,20,1000"

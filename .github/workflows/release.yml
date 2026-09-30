@@ -81,7 +81,6 @@ jobs:
           lua5.1 tests/forever_alert_transport_audit.test.lua
           lua5.1 tests/forever_event_replay_audit.test.lua
           lua5.1 tests/forever_event_multihop_audit.test.lua
-          lua5.1 tests/forever_domination_pool_migration.test.lua
           lua5.1 tests/forever_domination_two_client_convergence.test.lua
           lua5.1 tests/forever_victory_bonus_before_tv.test.lua
           lua5.1 tests/forever_performance.test.lua
@@ -91,6 +90,8 @@ jobs:
           lua5.1 tests/forever_catchup_peer_choice.test.lua
           lua5.1 tests/forever_domination_pending_vb.test.lua
           lua5.1 tests/forever_domination_v2.test.lua
+          lua5.1 tests/sync_report.test.lua
+          lua5.1 tests/forever_call_to_arms.test.lua
           lua5.1 tests/forever_zone_partial_merge.test.lua
           lua5.1 tests/forever_relay_za_lost_batch.test.lua
           lua5.1 tests/audit_paged_ladder_depth.test.lua

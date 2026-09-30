@@ -91,7 +91,9 @@ local function receive(to, fromName, kind, payload)
     if kind == "VB" then sync:OnReceiveVictoryBonus(payload, fromName, "BETA")
     elseif kind == "WB" then
         assert(sync.OnReceiveDominationBoost == nil, "The wood boost receiver is still loaded")
-    elseif kind == "DX" then sync:OnReceiveDomination(payload, fromName, "BETA")
+    elseif kind == "DX" then
+        -- 1.2.1: an old client's DX has no receiver any more (not dispatched, not relayed).
+        assert(sync.OnReceiveDomination == nil, "The legacy DX receiver is still loaded")
     elseif kind == "TV" then
         -- Each client has its own "already announced" state; the harness shares one process.
         sync:ResetVictoryFlag()
@@ -198,7 +200,7 @@ assert(sync.BroadcastDominationBoost == nil and sync.AppendWoodBoostToSrQueue ==
     "A WB producer is still loaded")
 sameBar(everyone, 51, "no wood")
 assert(emitted.DX == 0, "A DX was emitted (no producer may emit DX any more)")
-assert(sync:BroadcastDomination() == false and #outbox == 0, "BroadcastDomination is not neutralized")
+assert(sync.BroadcastDomination == nil and #outbox == 0, "A DX producer is still loaded")
 
 -- 3. Old (<= 1.1.10) clients -----------------------------------------------------------------
 -- Their DX and WB are ignored; their TV/VB count.
@@ -328,10 +330,7 @@ do
     -- A victory emitted by a v2 client carries a totalAtApply an old receiver accepts:
     -- bonus == 2% of it and totalAtApply <= their total + tolerance (max(2400 * fronts, 5%)).
     local oldTotal = 1000000
-    local dxSeq = math.floor(S / 120)
     use(A1)
-    sync:OnReceiveDomination(string.format("800000:0:%d:f1:%d:Old Client:global:0:0:11", campaign, dxSeq),
-        "Old Client", "BETA")
     outbox = {}
     victory(A1, "f4", "Alliance", S - 30)
     local vb
@@ -342,13 +341,12 @@ do
     bonus, total = tonumber(bonus), tonumber(total)
     assert(front == "f4" and bonus == math.floor(total * 0.02 + 0.5) and bonus > 0,
         "VB bonusSeconds is not 2% of totalAtApply: " .. body)
-    assert(total == 800000, "VB totalAtApply should mirror the last known old-formula total, got " .. total)
+    assert(total == 2500, "VB totalAtApply must be the fixed plausible value, got " .. total)
     assert(total <= oldTotal + math.max(4 * 2400, math.floor(oldTotal * 0.05)),
         "VB totalAtApply is implausible for an old receiver")
     outbox = {}
-    -- A fresh client with no DX known still emits a plausible floor.
+    -- Any client emits the same fixed value (the legacy zone-time is gone).
     local fresh = newClient("Fresh Emitter", "Horde")
-    sync._legacyDxByFront = nil
     use(fresh)
     assert(Overlord:GetLegacyDominationTotalForVB() == 2500, "Legacy total floor changed")
 end

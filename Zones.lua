@@ -1522,14 +1522,6 @@ function Overlord.Zones:GetCurrentPlayerMine()
     return nil
 end
 
--- Le systeme de bois (forets, recolte, depense domination) a ete retire en 1.2.0.
--- Table vide conservee : les couches carte/minimap qui l'iterent restent inertes.
-Overlord.WoodDatabase = {}
-
-function Overlord.Zones:GetWoodZone() return nil end
-function Overlord.Zones:IsWoodMapID() return false end
-function Overlord.Zones:GetCurrentPlayerWoodZone() return nil end
-
 -- Test de contexte leger pour couper le ticker de detection ressources partout
 -- ailleurs. Les sous-cartes/grottes sont resolues comme dans le detecteur de mines.
 local resourceContextByMapID = {}

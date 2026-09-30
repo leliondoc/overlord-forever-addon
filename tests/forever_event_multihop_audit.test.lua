@@ -76,9 +76,10 @@ bridge.nextIsProduction = true
 local frontId = "redridge"
 receiver.Fronts.Registry[frontId] = { zones = { one = {}, two = {} } }
 local campaign = OverlordDB.lastResetTimestamp
--- An old (<= 1.1.10) client's DX still crosses relays; v2 receivers must ignore it for the bar.
+-- 1.2.1: an old (<= 1.1.10) client's DX is no longer relayed at all.
 local dx = string.format("730:270:%d:%s:%d:Origin Tester:global:0:0:11",
     campaign, frontId, math.floor(time() / 120))
+assert(origin.BetaNetwork:Broadcast("DX", dx) == 0, "The relay still carries legacy DX")
 local victoryTs = time() - 100
 OverlordDB.frontVictories = OverlordDB.frontVictories or {}
 OverlordDB.frontVictories[frontId] = { faction = "Alliance", timestamp = victoryTs }
@@ -90,7 +91,7 @@ local vb = assert(receiverSync:BuildVictoryBonusPayload({ {
 local beforeBonus = select(1, receiver:GetDominationVictoryBonusTotals())
 local beforeBar = receiver:GetDominationBarScore()
 
-assert(origin.BetaNetwork:Broadcast("DX", dx, { { type = "VB", payload = vb } }) == 1)
+assert(origin.BetaNetwork:Broadcast("VB", vb) == 1)
 local function drain()
     local ticks = 0
     while #pending > 0 do
@@ -104,8 +105,6 @@ local function drain()
 end
 drain()
 assert(not receiverNet.stats.lastError, receiverNet.stats.lastError)
-assert(OverlordDB.frontDominationTime == nil or OverlordDB.frontDominationTime[frontId] == nil,
-    "Three-hop DX modified the v2 buckets")
 local firstBonus = select(1, receiver:GetDominationVictoryBonusTotals())
 assert(firstBonus == beforeBonus + 20, "Three-hop VB was lost")
 assert(receiverNet.peers["origin tester"] and receiverNet.peers["origin tester"].hops == 3,
@@ -115,12 +114,12 @@ assert(receiverNet.peers["origin tester"] and receiverNet.peers["origin tester"]
 -- relay dedup; an identical envelope alone would be stopped in BetaNetwork.
 local firstReceived = receiverNet.stats.received
 now = now + 3 -- exceed the sender's two-second identical-broadcast coalescing
-assert(origin.BetaNetwork:Broadcast("DX", dx, { { type = "VB", payload = vb } }) == 1)
+assert(origin.BetaNetwork:Broadcast("VB", vb) == 1)
 drain()
-assert(receiverNet.stats.received == firstReceived + 2,
-    "Duplicate DX/VB payloads did not traverse the relay as new envelopes")
+assert(receiverNet.stats.received == firstReceived + 1,
+    "Duplicate VB payload did not traverse the relay as a new envelope")
 assert(select(1, receiver:GetDominationBarScore()) == beforeBar + 1,
     "Three-hop VB was not exactly +1 on the bar")
 assert(select(1, receiver:GetDominationVictoryBonusTotals()) == firstBonus,
     "Repeated three-hop VB applied the bonus twice")
-print("Forever event multihop: production DX/VB survive three relay hops; duplicate replay counts once")
+print("Forever event multihop: production VB survives three relay hops, DX no longer relayed; duplicate replay counts once")

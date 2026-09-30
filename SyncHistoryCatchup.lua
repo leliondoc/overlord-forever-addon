@@ -1069,7 +1069,10 @@ local function ScheduleAttempt(generation, campaignId, attempt)
             -- Transfert commence puis fige (pair parti, instance, saturation) : sans
             -- nouvelle ligne pendant STALL_SEC, abandonner au lieu d'attendre
             -- ACK_TIMEOUT_SEC (20 min). Les lignes recues restent acquises.
-            local lastCount, lastProgressAt = 0, GetTime()
+            -- Un pair qui a repondu (ACK) sans jamais envoyer de ligne echappait aux deux
+            -- gardes (NO_REPLY exige l'absence de reponse, le stall exigeait une ligne) et
+            -- bloquait le tour ACK_TIMEOUT_SEC (20 min) : meme delai STALL_SEC apres sa reponse.
+            local lastCount, lastProgressAt, sawReply = 0, GetTime(), false
             local function WatchStall()
                 local expected = sync._historyCatchupPending
                 if not expected or expected.generation ~= generation
@@ -1080,10 +1083,14 @@ local function ScheduleAttempt(generation, campaignId, attempt)
                 local localPause = Overlord.InstanceSuspended
                     or (InCombatLockdown and InCombatLockdown())
                     or (IsInInstance and IsInInstance())
-                if count ~= lastCount or localPause then
+                local replied = expected.replied == true
+                if count ~= lastCount or localPause or (replied and not sawReply) then
                     lastCount, lastProgressAt = count, GetTime()
                 end
-                if count > 0 and GetTime() - lastProgressAt >= STALL_SEC then
+                sawReply = replied
+                local pushing = expected.preparingPush or expected.awaitingPushAck or expected.pushOutbound
+                if (count > 0 or replied) and not pushing
+                    and GetTime() - lastProgressAt >= STALL_SEC then
                     expected.awaitingAck = false
                     PenalizePeer(target)
                     NoteHr("result", "stalled")
@@ -1611,6 +1618,18 @@ function sync:ScheduleLoginLeaderboardHistoryCatchUp(force, ladderOnly)
         ScheduleAttempt(generation, campaignId, 1)
     end)
     return true
+end
+
+-- Forme courte pour le resume /ov sync. Aucune mutation.
+function sync:GetHistoryCatchupSummary()
+    local stats = self._historyCatchupStats
+    local pending = self._historyCatchupPending
+    return {
+        running = pending ~= nil and not pending.terminal,
+        step = stats and stats.step or nil,
+        stepAge = stats and stats.stepAt and math.floor(GetTime() - stats.stepAt) or 0,
+        rows = stats and stats.rows or 0,
+    }
 end
 
 -- Lignes /ov network : dernier pair, resultat, lignes recues. Aucune mutation.

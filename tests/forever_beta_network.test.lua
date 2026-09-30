@@ -116,7 +116,7 @@ local d = client("Dwarf Tester", "two")
 local us = client("Other Tester", "us", "us")
 b.friends, c.friends = { c, us }, { b }
 local kinds = {}
-for kind in ("SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR DX VB MN MS OP OC SH HR HB HC HA LD CR CA GR GY GI FC GE GP GX GD GM BQ BR PB PK MK PX PP PM"):gmatch("%S+") do
+for kind in ("SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR VB MN MS OP OC SH HR HB HC HA LD CR CA GR GY GI FC GE GP GX GD GM BQ BR PB PK MK PX PP PM"):gmatch("%S+") do
     -- K is never re-forwarded: a relayed kill is never credited (anti-forgery).
     if kind ~= "SR" and kind ~= "K" then kinds[#kinds + 1] = kind end
 end
@@ -131,8 +131,8 @@ assert(#d.received == #kinds, "Duplicate routes produced duplicate delivery")
 assert(#us.received == #kinds, "Global Forever data did not reach the former NA route")
 assert(#a.received == 0, "Original sender received its own forwarded event")
 a.refuseChannel = true
-assert(a.BetaNetwork:Broadcast("DX", "front-one", {
-    { type = "DX", payload = "front-two" }, { type = "VB", payload = "bonus" },
+assert(a.BetaNetwork:Broadcast("VB", "front-one", {
+    { type = "VB", payload = "front-two" }, { type = "VB", payload = "bonus" },
     { type = "MS", payload = "stock" },
 }) == 1)
 drain()
@@ -209,8 +209,8 @@ end
 -- /ov network: relay cost per kind (bytes sent, packets, drops), heaviest first.
 do
     local lines = table.concat(a.BetaNetwork:GetKindDiagnostics(12), " ")
-    assert(lines:find("Relay by type", 1, true) and a.BetaNetwork.kindStats.DX
-        and a.BetaNetwork.kindStats.DX.queued > 0 and a.BetaNetwork.kindStats.DX.bytes > 0,
+    assert(lines:find("Relay by type", 1, true) and a.BetaNetwork.kindStats.VB
+        and a.BetaNetwork.kindStats.VB.queued > 0 and a.BetaNetwork.kindStats.VB.bytes > 0,
         "Relay per-kind diagnostics missing: " .. lines)
 end
 -- Presence stays fresh across hops even with the 2-minute forward limit and one

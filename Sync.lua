@@ -2767,8 +2767,6 @@ function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
     elseif msgType == "FR" then
         local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
         self:OnReceiveFrontTruceEndReset(payload or "", gameplaySender, "BNET")
-    elseif msgType == "DX" then
-        self:OnReceiveDomination(payload or "", sender, "BNET")
     elseif msgType == "VB" then
         self:OnReceiveVictoryBonus(payload or "", sender, "BNET")
     elseif msgType == "MN" then
@@ -2940,8 +2938,6 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
         self:OnReceiveVictoryFaction(payload or "")
     elseif msgType == "FR" then
         self:OnReceiveFrontTruceEndReset(payload or "", sender, channel)
-    elseif msgType == "DX" then
-        self:OnReceiveDomination(payload or "", sender, channel)
     elseif msgType == "VB" then
         ok, err = pcall(self.OnReceiveVictoryBonus, self, payload or "", sender, channel)
     elseif msgType == "MN" then

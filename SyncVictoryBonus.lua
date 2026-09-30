@@ -842,22 +842,10 @@ function Overlord:GetDominationVictoryCounts()
     return cached.Alliance, cached.Horde
 end
 
--- totalAtApply des VB emis par un client v2. Il ne compte plus pour la barre v2 mais
--- les clients <= 1.1.10 le valident (totalAtApply <= leur total + tolerance) et en tirent
--- 2 % pour leur barre temporelle. On reprend donc le dernier total "ancienne formule"
--- connu : buckets gels de cette semaine, ou plus grand total DX observe d'un ancien
--- pair, avec un plancher qui reste plausible pour tout recepteur.
+-- totalAtApply des VB emis par un client v2. Il ne compte pas pour la barre ; il reste un
+-- champ du format VB (valide par les recepteurs). Valeur fixe, plausible pour tout recepteur.
 function Overlord:GetLegacyDominationTotalForVB()
-    local ally, horde = 0, 0
-    if self.GetDominationTotals then ally, horde = self:GetDominationTotals() end
-    local total = (tonumber(ally) or 0) + (tonumber(horde) or 0)
-    local observed = Overlord.Sync and Overlord.Sync.GetObservedLegacyDominationTotal
-        and Overlord.Sync:GetObservedLegacyDominationTotal() or 0
-    if observed > total then total = observed end
-    if total < VB_MIN_TOTAL_AT_APPLY then total = VB_MIN_TOTAL_AT_APPLY end
-    local cap = Overlord.DOMINATION_SANITY_CAP or 2147483647
-    if total > cap then total = cap end
-    return math.floor(total)
+    return VB_MIN_TOTAL_AT_APPLY
 end
 
 function Overlord:GetDominationVictoryEventNear(frontId, faction, victoryTs)

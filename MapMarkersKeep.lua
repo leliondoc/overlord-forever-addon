@@ -1025,9 +1025,6 @@ function Overlord.MapMarkers:SetWorldMapOverlayMode(mode)
     if prev == "mine" and mode ~= "mine" and mode ~= "front_mine" then
         Overlord.MapMarkers:HideMineOverlays()
     end
-    if mode ~= "wood" and mode ~= "gk" and mode ~= "mine" and not IsWarfrontOverlayMode(mode) then
-        Overlord.MapMarkers:HideWoodOverlays()
-    end
     if (prev == "ek" or prev == "kalimdor")
         and mode ~= "ek" and mode ~= "kalimdor" then
         Overlord.MapMarkers:HideEKDominance()

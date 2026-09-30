@@ -222,13 +222,10 @@ function Overlord.Sync:HasUsableOnlineMembersCache()
     return cachedOnlineMembersPrimed and #cachedOnlineMembers > 0
 end
 
-local FC_COOLDOWN_FACTION = 600
+-- Appel aux armes (1.2.1) : un appel toutes les 4 h pour toute la faction, depuis un front.
+local FC_COOLDOWN_FACTION = 4 * 3600
 local FC_COOLDOWN_RECV = 600
-local FC_COMMUNITY_MAX = 80
-local FC_WHISPER_DELAY = 0.35
-local FC_MIN_ENEMIES = 5
 local FC_COOLDOWN_EPOCH_MIN = 1000000000
-local factionCallCommunityCursor = 0
 local generalCommunityCursor = 0
 
 local function NormalizeCommunityRosterName(name)
@@ -566,7 +563,9 @@ local function CommitCommunityCharacterCache(sync, allCharactersByKey, refreshTo
     CollectRows()
 end
 
+-- Heure serveur : le delai partage est compare entre clients dont l'horloge PC differe.
 local function FactionCallCooldownNow()
+    if GetServerTime then return math.floor(tonumber(GetServerTime()) or time()) end
     return time()
 end
 
@@ -953,13 +952,6 @@ local function SanitizeFactionCallSavedTimestamps(fac)
     end
 end
 
-local function FactionCallEnemyCountOk(forceRefresh)
-    if not Overlord.InActiveFront then return false end
-    if Overlord.UI and Overlord.UI.GetNearbyEnemyCountRaw then
-        return Overlord.UI:GetNearbyEnemyCountRaw(forceRefresh) >= FC_MIN_ENEMIES
-    end
-    return false
-end
 
 -- ============ Stock mine (MS) ============
 
@@ -2787,58 +2779,19 @@ function Overlord.Sync:BuildFactionCallPayload()
     return fac .. ":" .. zoneId .. ":" .. frontId .. ":" .. epoch
 end
 
+-- Canal Overlord de la faction (tous les joueurs Overlord du royaume) + relais (amis
+-- Battle.net, multi-sauts) + groupe. Plus de communaute ni de condition d'ennemis.
 function Overlord.Sync:BroadcastFactionCall(payload)
     if not payload or payload == "" then return 0 end
     if Overlord.InstanceSuspended or IsInInstance() then return 0 end
     if not Overlord.InActiveFront then return 0 end
-    if not FactionCallEnemyCountOk(true) then return 0 end
     if self:GetFactionCallCooldownRemaining() > 0 then return 0 end
-    local playerFaction = Overlord.PlayerFaction
-    if not playerFaction then return 0 end
-
-    local betaSent = BroadcastViaBeta("FC", payload)
-    if Overlord.CommunityModeEnabled == false then
-        if betaSent > 0 then self:SetFactionCallSharedCooldown(FactionCallCooldownNow()) end
-        return betaSent
-    end
-    local onlineList = RefreshOnlineMembersCache(self, false, 15)
-    if #onlineList == 0 then
-        if betaSent > 0 then self:SetFactionCallSharedCooldown(FactionCallCooldownNow()) end
-        return betaSent
-    end
-    local sent = 0
-    local now = GetTime()
-
-    lastCommunityDirectWhisper:Prune(now, 8)
-
-    local total = #onlineList
-    for attempt = 1, total do
-        if sent >= FC_COMMUNITY_MAX then break end
-        local idx = ((factionCallCommunityCursor + attempt - 1) % total) + 1
-        local memberName = onlineList[idx]
-        if CachedMemberFactionMatches(memberName, playerFaction) then
-            local targetKey = memberName:lower()
-            local lastDirect = lastCommunityDirectWhisper:Get(targetKey) or 0
-            if now - lastDirect >= COMMUNITY_DIRECT_TARGET_COOLDOWN then
-                local queued = EnqueueCommunityWhisper(
-                    "FC", payload, memberName, nil,
-                    sent * FC_WHISPER_DELAY, FC_WHISPER_DELAY, false)
-                if queued then
-                    lastCommunityDirectWhisper:Remember(targetKey, now)
-                    sent = sent + 1
-                end
-            end
-        end
-    end
-    if sent > 0 or betaSent > 0 then
-        factionCallCommunityCursor = (factionCallCommunityCursor + sent) % total
-        self:SetFactionCallSharedCooldown(FactionCallCooldownNow())
-        self:SendToChannel("FC", payload)
-        if IsInRaid() or IsInGroup() then
-            self:Send("FC", payload)
-        end
-    end
-    return sent + betaSent
+    if not Overlord.PlayerFaction then return 0 end
+    local sent = BroadcastViaBeta("FC", payload)
+    if self:SendToChannel("FC", payload) then sent = sent + 1 end
+    if (IsInRaid() or IsInGroup()) and self:SendToGroup("FC", payload) then sent = sent + 1 end
+    if sent > 0 then self:SetFactionCallSharedCooldown(FactionCallCooldownNow()) end
+    return sent
 end
 
 function Overlord.Sync:ResolveFactionCallPlace(zoneId, frontId)
@@ -2870,7 +2823,11 @@ function Overlord.Sync:OnReceiveFactionCall(payload, sender)
     if not p then return end
     local senderKey = sender:lower()
     local now = GetTime()
-    if (p.fcRecvLast[senderKey] or 0) + FC_COOLDOWN_RECV > now then return end
+    local lastFromSender = p.fcRecvLast[senderKey]
+    if lastFromSender and lastFromSender + FC_COOLDOWN_RECV > now then return end
+    -- Un seul appel par delai de faction : les copies canal/relais du meme appel, et tout
+    -- appel envoye pendant le delai, sont ignores.
+    if self:GetFactionCallCooldownRemaining() > 0 then return end
     p.fcRecvLast[senderKey] = now
 
     self:SetFactionCallSharedCooldown(FactionCallCooldownNow())
@@ -2885,12 +2842,9 @@ function Overlord.Sync:OnReceiveFactionCall(payload, sender)
     else
         msg = string.format(L.FACTION_CALL_RECEIVED_GENERIC, senderShort)
     end
+    -- Alerte de raid au centre de l'ecran (comme le commandant), sans fenetre.
     Overlord:PrintNotification("|cFFFFD100[Overlord]|r |cFFFF4444" .. msg .. "|r")
-    if Overlord.Popups and Overlord.Popups.ShowFactionCall then
-        Overlord.Popups:ShowFactionCall(senderShort, zoneName, frontName)
-    elseif Overlord.PlayAddonSound then
-        Overlord:PlayAddonSound("faction_call")
-    end
+    Overlord:PrintRaidWarning(msg)
 end
 
 function Overlord.Sync:OnReceiveMining(payload, sender)

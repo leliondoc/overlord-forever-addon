@@ -31,11 +31,12 @@ for _, resource in ipairs(Overlord.MineDatabase) do
 end
 now, currentMap, x, y = now + 1, 99999, 28.0, 57.0
 assert(z:GetCurrentPlayerMine().id == "azurelode", "Mine submap ancestry broke")
--- 1.2.0: the wood system is gone; no forest map may enable harvesting or the resource ticker.
-assert(#Overlord.WoodDatabase == 0, "A forest is still defined")
-for _, mapID in ipairs({ 56, 1437, 63, 1440 }) do
-    assert(not z:IsWoodMapID(mapID), "Forest map still recognised: " .. mapID)
+-- The wood system is gone (1.2.0), its forest data too (1.2.1): the Wetlands and Ashenvale
+-- forests never enable the resource ticker any more.
+assert(Overlord.WoodDatabase == nil and z.IsWoodMapID == nil and z.GetCurrentPlayerWoodZone == nil,
+    "Forest data or wood zone API still loaded")
+for _, mapID in ipairs({ 56, 1437 }) do
+    assert(not z:IsResourceMapContext(mapID), "Forest map still enables the resource ticker: " .. mapID)
 end
-assert(z:GetCurrentPlayerWoodZone() == nil, "Wood harvesting zone still detected")
 assert(not z:IsResourceMapContext(99998), "Unrelated map enabled resource ticker")
 print("Forever resource maps: all 5 mines, no forest, map aliases, harvesting boundaries and cave ancestry OK")

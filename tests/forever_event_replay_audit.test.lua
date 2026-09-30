@@ -12,20 +12,11 @@ net.peers["bridge tester"] = {
     name = "Bridge Tester", at = GetTime(), via = "Bridge Tester", hops = 0,
 }
 
--- v2: DX (zone-seconds) from an old client is validated but never moves the bar or
--- the per-front buckets, however often it is replayed. No producer emits DX any more.
-local dx = string.format("600:400:%d:%s:%d:Bridge Tester:global:0:0:11",
-    campaign, frontId, math.floor(time() / 120))
-OverlordDB.frontDominationTime = {}
-net.context = { origin = "Bridge Tester", hops = 0, kind = "DX", payload = dx }
-sync:OnReceiveDomination(dx, "Bridge Tester", "BETA")
-sync:OnReceiveDomination(dx, "Bridge Tester", "BETA")
-assert(next(OverlordDB.frontDominationTime) == nil, "An old client's DX modified the local buckets")
-assert(Overlord:GetDominationBarScore() == 50, "An old client's DX moved the v2 bar")
-assert(sync:GetObservedLegacyDominationTotal() == 1000, "Old DX total was not kept for VB plausibility")
-net.context = nil
-assert(sync.BuildDominationPayload == nil and sync:BroadcastDomination() == false,
-    "A DX producer survived the v2 bar")
+-- 1.2.1: the legacy zone-time domination (DX) is gone: no receiver, no producer, no buckets.
+assert(sync.OnReceiveDomination == nil and sync.BroadcastDomination == nil
+    and sync.BuildDominationPayload == nil, "A legacy DX receiver or producer survived")
+assert(Overlord.GetDominationTotals == nil, "The frozen zone-time totals are still loaded")
+assert(Overlord:GetDominationBarScore() == 50, "A fresh week is not 50/50")
 
 -- VB carries a durable event. A late joiner with the victory proof applies it;
 -- a duplicate copy leaves the bonus unchanged.

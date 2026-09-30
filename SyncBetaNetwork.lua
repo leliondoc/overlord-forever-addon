@@ -7,7 +7,7 @@ local sync = addon.Sync
 local net = { peers = {}, stats = { sent = 0, received = 0, dropped = 0 } }
 addon.BetaNetwork = net
 local allowed = {}
-for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR DX VB MN MS OP OC SH HR HB HC HA LD CR CA GR GY GI FC GW GE GP GX GD GM BQ BR PB PK MK PX PP PM"):gmatch("%S+") do
+for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR VB MN MS OP OC SH HR HB HC HA LD CR CA GR GY GI FC GW GE GP GX GD GM BQ BR PB PK MK PX PP PM"):gmatch("%S+") do
     allowed[kind] = true
 end
 local MAX_PACKET, MAX_PATH, TTL = 3600, 4, 120
@@ -39,7 +39,7 @@ local lastBulkAgedServeAt = -1000
 -- relayed NH before it left and far peers lost their route for good.
 local PRESENCE_RECLAIM_FLOOR = 64
 -- All four lanes share the same 1,000 B/s budget and 128-packet bound.
--- Addressed ranking/map data has a 300 B/s service share; bounded DX/VB
+-- Addressed ranking/map data has a 300 B/s service share; bounded VB
 -- snapshots have 250 B/s. Presence and timer updates use the remainder.
 local URGENT = {}
 -- HR/HA are the tiny catch-up requests and acknowledgements (one every few
@@ -90,10 +90,6 @@ local function isPagedControl(p)
 end
 local function isReplicatedState(p)
     if type(p.payload) ~= "string" then return false end
-    if p.kind == "DX" then
-        return #p.payload <= 250
-            and p.payload:match("^%d+:%d+:%d+:[^:]+:%d+:") ~= nil
-    end
     return p.kind == "VB" and #p.payload <= 220
         and p.payload:match("^%d+:[^:]+:") ~= nil
 end
@@ -182,7 +178,7 @@ local function hasLaneRoom(lane, p, reclaimPresence)
     if p.kind == "NH" then return true end
     if lane == stateLane then return laneSize(stateLane) < STATE_QUEUE end
     local nonState = queuedCount() - laneSize(stateLane) - presence
-    -- Preserve 24 slots for weekly DX/VB before any producer can fill the
+    -- Preserve 24 slots for weekly VB before any producer can fill the
     -- global queue with ranking pages or terminal controls. State admission
     -- must not depend on finding a disposable NH/ZS already in the queue.
     if nonState >= MAX_QUEUE - STATE_QUEUE then return false end
@@ -383,11 +379,7 @@ local function stateKey(p)
     if not isReplicatedState(p) then return nil end
     local origin = p.path and p.path[1]
     if not origin then return nil end
-    if p.kind == "VB" then
-        return "VB|" .. origin:lower() .. "|" .. p.target .. "|" .. p.payload
-    end
-    local front = p.payload:match("^[^:]*:[^:]*:[^:]*:([^:]+):")
-    return front and ("DX|" .. origin:lower() .. "|" .. p.target .. "|" .. front) or nil
+    return "VB|" .. origin:lower() .. "|" .. p.target .. "|" .. p.payload
 end
 local function waitingStateItem(p)
     local key = stateKey(p)
@@ -631,13 +623,18 @@ function net:GetKindDiagnostics(maxRows)
         self.stats.localNoTaskLoop or 0, self.stats.forwardNoTask or 0,
         self.stats.forwardNoTaskMissing or 0, self.stats.forwardNoTaskLoop or 0,
         self.stats.forwardPathExhausted or 0)
-    lines[#lines + 1] = string.format("DX/VB relay: %d queued (max %d), %d B/s share, %d waiting updates coalesced.",
+    lines[#lines + 1] = string.format("VB relay: %d queued (max %d), %d B/s share, %d waiting updates coalesced.",
         laneSize(stateLane), STATE_QUEUE, STATE_RATE, self.stats.stateCoalesced or 0)
     lines[#lines + 1] = string.format("Waiting SR duplicates coalesced: %d (same origin/target only).",
         self.stats.mapRequestsCoalesced or 0)
     return lines
 end
 function net:IsUrgentPacket(kind, payload) return isUrgent({ kind = kind, payload = payload }) end
+-- Queue sizes for the /ov sync summary (no mutation).
+function net:GetQueueSummary()
+    return { total = queuedCount(), catchup = laneSize(catchupLane), catchupMax = CATCHUP_QUEUE,
+        state = laneSize(stateLane), stateMax = STATE_QUEUE }
+end
 function net:IsEcho(kind, payload)
     return self.context and self.context.kind == kind and self.context.payload == payload
 end
@@ -663,8 +660,8 @@ local function spend(bytes)
     tokens = tokens - bytes
     return true
 end
--- Local-only content coverage for broadcast content (OP, LO, LOC, VB, TV and the
--- legacy DX of older clients). Every origin re-broadcasts the same converged
+-- Local-only content coverage for broadcast content (OP, LO, LOC, VB and TV).
+-- Every origin re-broadcasts the same converged
 -- payload, and each copy used to open a complete fan-out here (channel + group +
 -- bridges + 3 rotating friends). Track per content who already has it, from what
 -- this client queued/sent or saw on a path. A later identical copy (another
@@ -677,7 +674,7 @@ end
 --   * while the queue is busy, drops only repeats beyond COVER_COPIES per target,
 --     and the whole copy when nothing else is left. Local dispatch and the wire
 --     format are untouched.
-local DEDUP_KINDS = { OP = true, LO = true, LOC = true, VB = true, TV = true, DX = true }
+local DEDUP_KINDS = { OP = true, LO = true, LOC = true, VB = true, TV = true }
 -- COVER_TTL: how long a sent copy counts. COVER_PENDING: how long a copy still
 -- waiting in the queue counts (an evicted/expired one is voided at once).
 local COVER_TTL, COVER_PENDING, COVER_RECORDS = 60, 20, 128
@@ -818,7 +815,7 @@ local function tasksFor(p, wire)
         -- its first channel fragment is due (see emit). Alerts and terminal events keep every
         -- copy: the relay copy is what channel hearers forward to their own friends and
         -- groups, hence to the other faction. (Separate from the content dedup below, which
-        -- only handles OP/LO/LOC/VB/TV/DX.)
+        -- only handles OP/LO/LOC/VB/TV.)
         local chanCover = channelCopy and not isTerminal(p)
             and { kind = p.kind, payload = p.payload, origin = p.path[1] } or nil
         local now, rec, trim, groupAgain, channelAgain = GetTime()
@@ -1035,11 +1032,6 @@ function net:Queue(p, immediate)
     local previous = presenceKey and pendingPresence[presenceKey]
     local statePrevious = waitingStateItem(p)
     if statePrevious and p.at < statePrevious.p.at then return true end
-    if statePrevious and p.kind == "DX" then
-        local oldSeq = tonumber(statePrevious.p.payload:match("^[^:]*:[^:]*:[^:]*:[^:]*:([^:]+):"))
-        local newSeq = tonumber(p.payload:match("^[^:]*:[^:]*:[^:]*:[^:]*:([^:]+):"))
-        if oldSeq and newSeq and newSeq < oldSeq then return true end
-    end
     local replace = previous and previous.index == 1
         and not previous.tasks[1].sending and p.at >= previous.p.at
     if statePrevious then previous, replace = statePrevious, true end

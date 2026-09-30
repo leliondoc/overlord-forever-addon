@@ -1942,7 +1942,6 @@ end
 -- Fortress captures share the outpost campaign and event ledger.
 function Overlord.Leaderboard:ResetStrategicSiteCampaignData()
     if not OverlordDB then return end
-    OverlordDB.dominationBoostPct = { Alliance = 0, Horde = 0 }
     OverlordDB.dominationBoostEvents = nil
     if Overlord.Outpost then Overlord.Outpost:ResetOutpostsForCampaign() end
 end

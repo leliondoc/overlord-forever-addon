@@ -858,37 +858,6 @@ function Overlord.Popups:ShowDialog(seenId, title, body, markMode, opts)
     dialogFrame:Show()
 end
 
-local function FormatAllyCallerName(name)
-    if not name or name == "" then return "" end
-    if Overlord.PlayerFaction == "Alliance" then
-        return "|cFF4488FF" .. name .. "|r"
-    elseif Overlord.PlayerFaction == "Horde" then
-        return "|cFFFF4444" .. name .. "|r"
-    end
-    return "|cFFFFD100" .. name .. "|r"
-end
-
--- Popup RP quand un allie sonne le cor de guerre (reception FC).
-function Overlord.Popups:ShowFactionCall(senderName, zoneName, frontName)
-    if not senderName or senderName == "" then return end
-    zoneName = zoneName or ""
-    frontName = frontName or ""
-    local caller = FormatAllyCallerName(senderName)
-    local body
-    if zoneName ~= "" and frontName ~= "" then
-        body = string.format(L.POPUP_FACTION_CALL_BODY or "", caller, zoneName, frontName)
-    elseif frontName ~= "" then
-        body = string.format(L.POPUP_FACTION_CALL_BODY_FRONT or "", caller, frontName)
-    else
-        body = string.format(L.POPUP_FACTION_CALL_BODY_GENERIC or "", caller)
-    end
-    self:ShowDialog(nil, L.POPUP_FACTION_CALL_TITLE, body, nil, {
-        showFactionSeal = true,
-        addonSoundKey = "faction_call",
-        okText = L.POPUP_FACTION_CALL_OK,
-    })
-end
-
 -- Alerte raid a chaque entree de front tant que la version reste en retard (cf. OnEnterFront).
 function Overlord.Popups:ShowOutdatedVersion(latestVersion)
     if not latestVersion or latestVersion == "" or not L.RAID_WARNING_OUTDATED then return end

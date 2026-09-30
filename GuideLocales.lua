@@ -33,7 +33,7 @@ en = {
     GUIDE_SECTION_OUTPOST = "Guild outposts",
     GUIDE_OUTPOST_BODY = "The six regular fronts have a guild outpost each. The two-point Southshore / Tarren Mill front has none. Savix Chapel in Silverpine Forest, Aeythyr Lodge in the Eastern Plaguelands and Lesi Bear Cave in Darkshore are additional outdoor outposts. Outposts are open at all times. A guild member holds the square for 5 minutes. Only the opposing faction can contest or reclaim it. While held, enemy captures on ordinary points of that front take 30 seconds longer. Ownership lasts until enemy capture or weekly reset.",
     GUIDE_SECTION_FACTION_CALL = "Call to arms and command",
-    GUIDE_FACTION_CALL_BODY = "On an active front with enemies nearby, Call to arms alerts reachable allies through Forever's sync bridges. A party or raid leader can take the Commandant role: their position appears to synced allies on the map.",
+    GUIDE_FACTION_CALL_BODY = "On an active front, Call to arms sends a raid warning to every Overlord ally of your faction (once every 4 hours for the whole faction). A party or raid leader can take the Commandant role: their position appears to synced allies on the map.",
     GUIDE_SECTION_TOOLS = "Rankings and sync",
     GUIDE_TOOLS_BODY = "The weekly leaderboard shows official open-world honorable kills, captures, guild keeps and outposts. Open it from the panel or with /ov lb. /ov sync requests a catch-up from reachable players. Gold contracts use full Forever names and manual mail/COD settlement. The Hall of Fame opens from Actions."
 },
@@ -64,7 +64,7 @@ fr = {
     GUIDE_SECTION_OUTPOST = "Avant-postes de guilde",
     GUIDE_OUTPOST_BODY = "Les six fronts classiques possèdent chacun un avant-poste. Le front à deux points Austrivage / Moulin-de-Tarren n’en a pas. La chapelle de Savix, dans la forêt des Pins-Argentés, Aeythyr Lodge, dans les Maleterres de l'Est, et Lesi Bear Cave, à Sombrivage, sont trois avant-postes extérieurs supplémentaires. Ils sont toujours ouverts. Un membre de guilde tient le carré 5 minutes. Seule la faction adverse peut le contester ou le reprendre. Tant qu'il est tenu, les captures ennemies des points ordinaires de ce front durent 30 secondes de plus. Il reste à sa guilde jusqu'à une reprise ennemie ou au reset hebdomadaire.",
     GUIDE_SECTION_FACTION_CALL = "Appel et commandement",
-    GUIDE_FACTION_CALL_BODY = "Sur un front actif avec des ennemis proches, l'Appel aux armes avertit les alliés joignables par les relais Forever. Un chef de groupe ou de raid peut devenir Commandant : sa position apparaît sur la carte des alliés synchronisés.",
+    GUIDE_FACTION_CALL_BODY = "Sur un front actif, l'Appel aux armes envoie une alerte de raid à tous les alliés Overlord de votre faction (une fois toutes les 4 heures pour toute la faction). Un chef de groupe ou de raid peut devenir Commandant : sa position apparaît sur la carte des alliés synchronisés.",
     GUIDE_SECTION_TOOLS = "Classement et synchronisation",
     GUIDE_TOOLS_BODY = "Le classement hebdomadaire montre les VH officielles en monde ouvert, les captures, les fortins et les avant-postes. Ouvrez-le dans le panneau ou avec /ov lb. /ov sync demande un rattrapage aux joueurs joignables. Les contrats en or utilisent les noms Forever complets et un règlement manuel par courrier/COD. Le Hall of Fame s'ouvre depuis Actions."
 },
@@ -95,7 +95,7 @@ es = {
     GUIDE_SECTION_OUTPOST = "Puestos de hermandad",
     GUIDE_OUTPOST_BODY = "Los seis frentes clásicos tienen un puesto cada uno. El frente de dos puntos Costasur / Molino Tarren no tiene. La Capilla de Savix en el Bosque de Argénteos, Aeythyr Lodge en las Tierras de la Peste del Este y Lesi Bear Cave en Costa Oscura son puestos exteriores adicionales. Están siempre abiertos. Un miembro de hermandad mantiene el cuadro 5 minutos. Solo la facción rival puede disputarlo o recuperarlo. Mientras esté en tu poder, las capturas enemigas de puntos normales del frente tardan 30 segundos más. Permanece hasta una captura rival o el reinicio semanal.",
     GUIDE_SECTION_FACTION_CALL = "Llamada y mando",
-    GUIDE_FACTION_CALL_BODY = "En un frente activo con enemigos cerca, Llamada a las armas avisa a aliados accesibles por los enlaces de Forever. Un líder de grupo o banda puede asumir el papel de Comandante y aparecer en el mapa de aliados sincronizados.",
+    GUIDE_FACTION_CALL_BODY = "En un frente activo, Llamada a las armas envía un aviso de banda a todos los aliados de tu facción con Overlord (una vez cada 4 horas para toda la facción). Un líder de grupo o banda puede asumir el papel de Comandante y aparecer en el mapa de aliados sincronizados.",
     GUIDE_SECTION_TOOLS = "Clasificación y sincronización",
     GUIDE_TOOLS_BODY = "La clasificación semanal muestra muertes honorables oficiales en mundo abierto, capturas, fortalezas y puestos. Ábrela desde el panel o con /ov lb. /ov sync solicita datos a jugadores accesibles. Los contratos de oro usan nombres completos Forever y pago manual por correo/COD. El Salón de la Fama se abre desde Acciones."
 },
@@ -126,7 +126,7 @@ de = {
     GUIDE_SECTION_OUTPOST = "Gilden-Außenposten",
     GUIDE_OUTPOST_BODY = "Die sechs regulären Fronten haben je einen Außenposten. Die Front mit zwei Punkten Süderstade / Tarrens Mühle hat keinen. Die Savix-Kapelle im Silberwald, die Aeythyr Lodge in den Östlichen Pestländern und die Lesi Bear Cave an der Dunkelküste sind weitere Außenposten. Sie sind immer offen. Ein Gildenmitglied hält das Quadrat 5 Minuten. Nur die Gegenfraktion kann angreifen oder zurückerobern. Solange er gehalten wird, dauern gegnerische Eroberungen normaler Frontpunkte 30 Sekunden länger. Er bleibt bis zur feindlichen Eroberung oder zum Wochenreset.",
     GUIDE_SECTION_FACTION_CALL = "Ruf und Kommando",
-    GUIDE_FACTION_CALL_BODY = "An einer aktiven Front mit nahen Feinden warnt der Ruf zu den Waffen erreichbare Verbündete über Forevers Sync-Brücken. Ein Gruppen- oder Schlachtzugleiter kann Kommandant werden und erscheint auf der Karte synchronisierter Verbündeter.",
+    GUIDE_FACTION_CALL_BODY = "An einer aktiven Front sendet der Ruf zu den Waffen eine Schlachtzugswarnung an alle Overlord-Verbündeten Eurer Fraktion (einmal alle 4 Stunden für die ganze Fraktion). Ein Gruppen- oder Schlachtzugleiter kann Kommandant werden und erscheint auf der Karte synchronisierter Verbündeter.",
     GUIDE_SECTION_TOOLS = "Rangliste und Sync",
     GUIDE_TOOLS_BODY = "Die Wochenrangliste zeigt offizielle ehrenhafte Siege in der offenen Welt, Eroberungen, Gildenfestungen und Außenposten. Öffnet sie im Panel oder mit /ov lb. /ov sync fordert Daten von erreichbaren Spielern an. Goldverträge verwenden vollständige Forever-Namen und manuelle Post-/Nachnahme-Zahlung. Die Ruhmeshalle öffnet über Aktionen."
 },
@@ -157,7 +157,7 @@ ru = {
     GUIDE_SECTION_OUTPOST = "Гильдейские аванпосты",
     GUIDE_OUTPOST_BODY = "У каждого из шести обычных фронтов есть аванпост. У фронта с двумя точками Южнобережье / Мельница Таррен его нет. Часовня Савикса в Серебряном бору, Aeythyr Lodge в Восточных Чумных землях и Lesi Bear Cave на Темных берегах — дополнительные аванпосты открытого мира. Они открыты постоянно. Член гильдии удерживает квадрат 5 минут. Только другая фракция может оспорить или вернуть пункт. Пока он удерживается, враг захватывает обычные точки фронта на 30 секунд дольше. Владение длится до вражеского захвата или недельного сброса.",
     GUIDE_SECTION_FACTION_CALL = "Призыв и командование",
-    GUIDE_FACTION_CALL_BODY = "На активном фронте при близких врагах Призыв к оружию оповещает доступных союзников через сеть Forever. Лидер группы или рейда может стать Командиром; союзники с синхронизацией видят его на карте.",
+    GUIDE_FACTION_CALL_BODY = "На активном фронте Призыв к оружию отправляет рейдовое предупреждение всем союзникам вашей фракции с Overlord (раз в 4 часа на всю фракцию). Лидер группы или рейда может стать Командиром; союзники с синхронизацией видят его на карте.",
     GUIDE_SECTION_TOOLS = "Рейтинг и синхронизация",
     GUIDE_TOOLS_BODY = "Недельный рейтинг показывает официальные почётные победы в открытом мире, захваты, крепости и аванпосты. Откройте его в панели или командой /ov lb. /ov sync запрашивает данные у доступных игроков. Золотые контракты используют полные имена Forever и ручную оплату по почте/COD. Зал славы открывается из меню действий."
 },
@@ -188,7 +188,7 @@ pt = {
     GUIDE_SECTION_OUTPOST = "Postos de guilda",
     GUIDE_OUTPOST_BODY = "Cada uma das seis frentes comuns tem um posto. A frente de dois pontos Costa Sul / Moinho Tarren não tem. A Capela de Savix na Floresta de Pinhaprata, Aeythyr Lodge nas Terras Pestilentas Orientais e Lesi Bear Cave na Costa Negra são postos adicionais no mundo aberto. Eles ficam sempre abertos. Um membro da guilda segura o quadrado por 5 minutos. Só a facção adversária pode disputar ou retomar. Enquanto ocupado, capturas inimigas dos pontos comuns da frente demoram mais 30 segundos. A posse dura até captura inimiga ou reinício semanal.",
     GUIDE_SECTION_FACTION_CALL = "Chamado e comando",
-    GUIDE_FACTION_CALL_BODY = "Em uma frente ativa com inimigos próximos, o Chamado às armas alerta aliados alcançáveis pela rede Forever. Um líder de grupo ou raide pode assumir o papel de Comandante; aliados sincronizados veem sua posição no mapa.",
+    GUIDE_FACTION_CALL_BODY = "Em uma frente ativa, o Chamado às armas envia um aviso de raide a todos os aliados Overlord da sua facção (uma vez a cada 4 horas para toda a facção). Um líder de grupo ou raide pode assumir o papel de Comandante; aliados sincronizados veem sua posição no mapa.",
     GUIDE_SECTION_TOOLS = "Classificação e sincronização",
     GUIDE_TOOLS_BODY = "A classificação semanal mostra abates honrosos oficiais no mundo aberto, capturas, fortes e postos. Abra pelo painel ou com /ov lb. /ov sync solicita dados aos jogadores alcançáveis. Contratos em ouro usam nomes Forever completos e pagamento manual por correio/COD. O Salão da Fama abre pelo menu Ações."
 },
@@ -219,7 +219,7 @@ zhCN = {
     GUIDE_SECTION_OUTPOST = "公会前哨",
     GUIDE_OUTPOST_BODY = "六条常规战线各有一处公会前哨。南海镇 / 塔伦米尔双据点战线没有前哨。银松森林的萨维克斯礼拜堂、东瘟疫之地的 Aeythyr Lodge 和黑海岸的 Lesi Bear Cave 是额外的开放世界前哨。前哨始终可争夺。公会成员守住方形区域 5 分钟即可占领。只有敌对阵营能争夺或夺回。持有前哨时，敌人占领该战线普通据点需要多 30 秒。所有权持续到敌方占领或每周重置。",
     GUIDE_SECTION_FACTION_CALL = "号召与指挥",
-    GUIDE_FACTION_CALL_BODY = "在活跃战线且附近有敌人时，“集结号令”会通过 Forever 同步网络提醒可联系的盟友。队伍或团队领袖可担任指挥官，其位置会显示在已同步盟友的地图上。",
+    GUIDE_FACTION_CALL_BODY = "在活跃战线上，“集结号令”会向你阵营中所有安装了 Overlord 的盟友发送团队警告（整个阵营每 4 小时一次）。队伍或团队领袖可担任指挥官，其位置会显示在已同步盟友的地图上。",
     GUIDE_SECTION_TOOLS = "排行与同步",
     GUIDE_TOOLS_BODY = "每周排行榜显示开放世界官方荣誉击杀、占领、公会要塞与前哨。可从面板或使用 /ov lb 打开。/ov sync 向可联系的玩家请求同步。金币悬赏使用完整的 Forever 姓名，通过邮件/COD 手动结算。名人堂可从“操作”菜单打开。"
 },

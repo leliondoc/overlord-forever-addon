@@ -68,7 +68,7 @@ local function client(name, faction)
     function s:SendSyncRequest() return false end
     function s:OnAddonMessage(_, message)
         local kind, payload = strsplit(":", message, 2)
-        if kind == "LK" or kind == "ZA" or kind == "DX" then
+        if kind == "LK" or kind == "ZA" or kind == "VB" then
             a.received[kind] = a.received[kind] or {}
             a.received[kind][payload] = true
         end
@@ -136,10 +136,11 @@ for t = 0, duration - 1, 60 do
     after(t + 0.7, function()
         local round = math.floor(t / 60)
         for front = 1, 14 do
-            local payload = (round + 1) .. ":1:1790016000:front" .. front
-                .. ":" .. (round + 1) .. ":source:global:0:0:11"
+            local victoryTs = 1790016000 + round + 1
+            local payload = "1790016000:global:front" .. front .. ",A," .. victoryTs .. ","
+                .. victoryTs .. ",20,1000"
             dxOffered = dxOffered + 1
-            if bridge.BetaNetwork:Send("DX", payload) then
+            if bridge.BetaNetwork:Send("VB", payload) then
                 dxAccepted = dxAccepted + 1
             end
         end
@@ -181,12 +182,12 @@ print(string.format("source=%s duration=%ds phased=%s NH offered=%d admitted=%d 
     lkOffered, lkAccepted, count(destination.received.LK),
     (kinds.LK or {}).bytes or 0, (kinds.LK or {}).dropped or 0,
     mapOffered, mapAccepted, count(destination.received.ZA),
-    dxOffered, dxAccepted, count(destination.received.DX),
+    dxOffered, dxAccepted, count(destination.received.VB),
     stats.sent, stats.dropped, tostring(stats.localRejected),
     tostring(stats.relayRejected), tostring(stats.displaced), tostring(stats.expired)))
 return {
     offeredLK = lkOffered, deliveredLK = count(destination.received.LK),
     deliveredZA = count(destination.received.ZA), offeredDX = dxOffered,
-    deliveredDX = count(destination.received.DX), stats = stats,
+    deliveredDX = count(destination.received.VB), stats = stats,
     kinds = kinds, friends = friends, elapsed = now - 100,
 }

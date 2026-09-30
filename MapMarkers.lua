@@ -128,8 +128,7 @@ function Overlord.MapMarkers:WorldMapNeedsPeriodicContentRefresh(mapID)
         if onCooldown then return true end
     end
     if mapID and Overlord.Zones then
-        if Overlord.Zones:IsMineMapID(mapID)
-            or (Overlord.Zones.IsWoodMapID and Overlord.Zones:IsWoodMapID(mapID)) then
+        if Overlord.Zones:IsMineMapID(mapID) then
             return true
         end
     end
@@ -188,7 +187,6 @@ local continentProbeIsEK = false
 local continentProbeIsKal = false
 local continentProbeEKValid = false
 local continentProbeKalValid = false
-local woodOverlaysFullyHidden = false
 -- Evite HideAll* a chaque layoutChanged (~60 Hz) tant que WM reste OFF carte ouverte.
 local worldMapHiddenForNoWarMode = false
 -- Un canvas invalide peut persister plusieurs frames pendant un chargement. Les couches
@@ -211,14 +209,8 @@ local function HideAllOverlordWorldMapContent()
     if Overlord.MapMarkers.HideMineOverlays then
         Overlord.MapMarkers:HideMineOverlays()
     end
-    if Overlord.MapMarkers.HideWoodOverlays then
-        Overlord.MapMarkers:HideWoodOverlays()
-    end
     if Overlord.MapMarkers.HideEKGoldMinePins then
         Overlord.MapMarkers:HideEKGoldMinePins()
-    end
-    if Overlord.MapMarkers.HideContinentWoodPins then
-        Overlord.MapMarkers:HideContinentWoodPins()
     end
     if Overlord.MapMarkers.HideProjectedOutpostPins then
         Overlord.MapMarkers:HideProjectedOutpostPins()
@@ -715,15 +707,6 @@ local function GetMineOverlayDiameter(mine, canvas, parent)
     return (mine.radius * 2 / 100) * canvasWidth * scaleRatio * circleScale
 end
 
-local function GetWoodOverlayDiameter(wood, canvas, parent)
-    if not wood then return nil end
-    local canvasWidth = canvas:GetWidth()
-    if not canvasWidth or canvasWidth == 0 then return nil end
-    local scaleRatio = GetCanvasToOverlayScaleRatio(canvas, parent)
-    local circleScale = (Overlord.WoodMapCircleScale) or 1.0
-    return (wood.radius * 2 / 100) * canvasWidth * scaleRatio * circleScale
-end
-
 local function PlaceWorldMapCircleOverlay(overlay, item, canvas, parent, diameterFunc)
     if not overlay or not item or not item.center or not diameterFunc then return nil end
     local cw = canvas and canvas:GetWidth()
@@ -883,15 +866,8 @@ function Overlord.MapMarkers:Initialize()
                         Overlord.MapMarkers:HideEKDominance()
                     end
                 end
-                if not Overlord.MapMarkers:IsEKMap(newMapID)
-                    and not Overlord.MapMarkers:IsKalimdorMap(newMapID) then
-                    Overlord.MapMarkers:HideContinentWoodPins()
-                end
                 if not Overlord.Zones:IsMineMapID(newMapID) then
                     Overlord.MapMarkers:HideMineOverlays()
-                end
-                if not (Overlord.Zones.IsWoodMapID and Overlord.Zones:IsWoodMapID(newMapID)) then
-                    Overlord.MapMarkers:HideWoodOverlays()
                 end
                 if newFront and Overlord.Sync and Overlord.Sync.RequestConsultFrontSync then
                     Overlord.Sync:RequestConsultFrontSync(newFront.id)
@@ -1139,12 +1115,6 @@ function Overlord.MapMarkers:Initialize()
                     if Overlord.Zones:IsMineMapID(mapID) and (contentRefresh or layoutChanged) then
                         Overlord.MapMarkers:RefreshMineOverlays(mapID)
                     end
-                    if Overlord.Zones.IsWoodMapID and Overlord.Zones:IsWoodMapID(mapID)
-                        and (contentRefresh or layoutChanged) then
-                        Overlord.MapMarkers:RefreshWoodOverlays(mapID)
-                    elseif Overlord.MapMarkers.HideWoodOverlays then
-                        Overlord.MapMarkers:HideWoodOverlays()
-                    end
                     if Overlord.Outpost and frontForMap
                         and (layoutChanged or contentRefresh
                             or (Overlord.MapMarkers.IsOutpostMapContentDirty
@@ -1198,31 +1168,11 @@ function Overlord.MapMarkers:Initialize()
                 or contentRefresh then
                 Overlord.MapMarkers:RefreshGuildKeepOverlays(mapID, layoutChanged, contentRefresh)
             end
-            if Overlord.Zones.IsWoodMapID and Overlord.Zones:IsWoodMapID(mapID) then
-                if contentRefresh or layoutChanged then
-                    Overlord.MapMarkers:RefreshWoodOverlays(mapID)
-                end
-            elseif Overlord.MapMarkers.HideWoodOverlays then
-                Overlord.MapMarkers:HideWoodOverlays()
-            end
         elseif Overlord.Zones:IsMineMapID(mapID) then
             Overlord.MapMarkers:SetWorldMapOverlayMode("mine")
             Overlord.MapMarkers._renderFront = nil
             if contentRefresh or layoutChanged then
                 Overlord.MapMarkers:RefreshMineOverlays(mapID)
-            end
-            if Overlord.Zones.IsWoodMapID and Overlord.Zones:IsWoodMapID(mapID) then
-                if contentRefresh or layoutChanged then
-                    Overlord.MapMarkers:RefreshWoodOverlays(mapID)
-                end
-            elseif Overlord.MapMarkers.HideWoodOverlays then
-                Overlord.MapMarkers:HideWoodOverlays()
-            end
-        elseif Overlord.Zones.IsWoodMapID and Overlord.Zones:IsWoodMapID(mapID) then
-            Overlord.MapMarkers:SetWorldMapOverlayMode("wood")
-            Overlord.MapMarkers._renderFront = nil
-            if contentRefresh or layoutChanged then
-                Overlord.MapMarkers:RefreshWoodOverlays(mapID)
             end
         elseif Overlord.MapMarkers:IsEKMap(mapID) then
             Overlord.MapMarkers:SetWorldMapOverlayMode("ek")
@@ -1245,7 +1195,6 @@ function Overlord.MapMarkers:Initialize()
             end
             if layoutChanged or contentRefresh then
                 Overlord.MapMarkers:RefreshEKGoldMinePins()
-                Overlord.MapMarkers:RefreshContinentWoodPins()
                 Overlord.MapMarkers:RefreshContinentBountyPins()
                 Overlord.MapMarkers:RefreshContinentManualBountyPins()
                 Overlord.MapMarkers:RefreshContinentGeneralPins()
@@ -1262,9 +1211,6 @@ function Overlord.MapMarkers:Initialize()
                 and Overlord.MapMarkers:IsGuildKeepMapContentDirty()
             local outpostDirty = Overlord.MapMarkers.IsOutpostMapContentDirty
                 and Overlord.MapMarkers:IsOutpostMapContentDirty()
-            if layoutChanged or contentRefresh then
-                Overlord.MapMarkers:RefreshContinentWoodPins()
-            end
             if layoutChanged or contentRefresh or keepDirty then
                 Overlord.MapMarkers:RefreshGuildKeepOverlays(mapID, layoutChanged, contentRefresh)
             end
@@ -1359,7 +1305,6 @@ function Overlord.MapMarkers:Initialize()
         Overlord.MapMarkers:HideAllOverlays()
         Overlord.MapMarkers:HideEKDominance()
         Overlord.MapMarkers:HideMineOverlays()
-        Overlord.MapMarkers:HideWoodOverlays()
         Overlord.MapMarkers:HideGuildKeepOverlays()
         if Overlord.MapMarkers.HideGuildHonorOverlays then
             Overlord.MapMarkers:HideGuildHonorOverlays()
@@ -2206,7 +2151,6 @@ local mmDataAcc = MM_DATA_INTERVAL
 -- Zones, mines et keep partagent le meme driver mmFrame (meme cache position, ~60 Hz en mouvement).
 -- mmMineMapActive : on est sur une carte a mines -> mmFrame doit tourner meme hors front actif.
 local mmMineMapActive = false
-local mmWoodMapActive = false
 -- Cache position joueur (partagee entre zones/mines/keep pour eviter appels C_Map redondants)
 local mmCachedMapID = nil
 local mmCachedPX, mmCachedPY = 0, 0
@@ -2365,7 +2309,6 @@ function Overlord.MapMarkers:InitializeMinimap()
     self:CreateMinimapButton()
     self:CreateMinimapPins()
     self:CreateMinimapMinePins()
-    self:CreateMinimapWoodPins()
     self:CreateMinimapKeepPin()
     self:CreateMinimapOutpostPin()
     self:CalcMinimapScale()
@@ -2409,7 +2352,6 @@ function Overlord.MapMarkers:InitializeMinimap()
         if not ok or not mapID then
             Overlord.MapMarkers:HideMinimapPins()
             Overlord.MapMarkers:HideMinimapMinePins()
-            Overlord.MapMarkers:HideMinimapWoodPins()
             Overlord.MapMarkers:HideMinimapKeepPin()
             Overlord.MapMarkers:HideMinimapOutpostPin()
             return
@@ -2418,7 +2360,6 @@ function Overlord.MapMarkers:InitializeMinimap()
         if not ok2 or not pos then
             Overlord.MapMarkers:HideMinimapPins()
             Overlord.MapMarkers:HideMinimapMinePins()
-            Overlord.MapMarkers:HideMinimapWoodPins()
             Overlord.MapMarkers:HideMinimapKeepPin()
             Overlord.MapMarkers:HideMinimapOutpostPin()
             return
@@ -2451,9 +2392,6 @@ function Overlord.MapMarkers:InitializeMinimap()
         if mmMineMapActive then
             Overlord.MapMarkers:UpdateMinimapMinePins(fullRefresh)
         end
-        if mmWoodMapActive then
-            Overlord.MapMarkers:UpdateMinimapWoodPins(fullRefresh)
-        end
         if Overlord.MapMarkers._mmKeepMapActive then
             Overlord.MapMarkers:UpdateMinimapKeepPin()
         end
@@ -2480,7 +2418,6 @@ function Overlord.MapMarkers:InitializeMinimap()
             Overlord.MapMarkers:HideMinimapPins()
         end
         Overlord.MapMarkers:CheckMineMinimap()
-        Overlord.MapMarkers:CheckWoodMinimap()
         Overlord.MapMarkers:CheckGuildKeepMinimap()
         Overlord.MapMarkers:CheckOutpostMinimap()
         Overlord.MapMarkers:EnsureMinimapDriverVisible()
@@ -2490,7 +2427,6 @@ function Overlord.MapMarkers:InitializeMinimap()
     if Overlord.InActiveFront and not Overlord.InstanceSuspended then mmFrame:Show() end
 
     self:CheckMineMinimap()
-    self:CheckWoodMinimap()
     self:CheckGuildKeepMinimap()
     self:CheckOutpostMinimap()
 end
@@ -2501,7 +2437,7 @@ function Overlord.MapMarkers:EnsureMinimapDriverVisible()
         mmFrame:Hide()
         return
     end
-    if Overlord.InActiveFront or mmMineMapActive or mmWoodMapActive
+    if Overlord.InActiveFront or mmMineMapActive
         or Overlord.MapMarkers._mmKeepMapActive or Overlord.MapMarkers._mmOutpostMapActive then
         if not mmFrame:IsShown() then driverState.WakeMinimapDriver() end
         mmFrame:Show()
@@ -2803,17 +2739,13 @@ function Overlord.MapMarkers:RefreshMinimapCaptureZonesVisibility()
     end
 end
 
--- ============ Pins ressources sur la minimap (mines / forets) ============
+-- ============ Pins ressources sur la minimap (mines) ============
 
 local minimapMinePins = {}
 local mineYardsPerPct = {}
-local minimapWoodPins = {}
-local woodYardsPerPct = {}
 
 local MINE_MINIMAP_FILL = { 1, 0.82, 0, 0.34 }
 local MINE_MINIMAP_BORDER = { 1, 0.82, 0, 0.58 }
-local WOOD_MINIMAP_FILL = { 0.42, 0.48, 0.16, 0.42 }
-local WOOD_MINIMAP_BORDER = { 0.82, 0.88, 0.44, 0.58 }
 
 local function ResolveResourceMinimapMapID(mapID, isResourceMapID)
     if not mapID or not isResourceMapID then return nil end
@@ -2855,18 +2787,6 @@ local function ShowMineResourceTooltip(mine)
         local stock = Overlord.Ressources:GetMineStock(mine.id)
         local stockMax = Overlord.Ressources:GetMineStockMax()
         GameTooltip:AddLine(string.format(L.MINE_STOCK, stock, stockMax), tp.HL[1], tp.HL[2], tp.HL[3])
-    end
-    GameTooltip:Show()
-end
-
-local function ShowWoodResourceTooltip(wood)
-    if not wood then return end
-    local tp = Overlord.UI.TooltipPalette()
-    GameTooltip:AddLine(wood.name, tp.HL[1], tp.HL[2], tp.HL[3])
-    if Overlord.Ressources then
-        local stock = Overlord.Ressources:GetWoodStock(wood.id)
-        local stockMax = Overlord.Ressources:GetWoodStockMax()
-        GameTooltip:AddLine(string.format(L.WOOD_STOCK, stock, stockMax), tp.HL[1], tp.HL[2], tp.HL[3])
     end
     GameTooltip:Show()
 end
@@ -2994,34 +2914,12 @@ local MINE_MINIMAP_CONFIG = {
     tooltip = ShowMineResourceTooltip,
 }
 
-local WOOD_MINIMAP_CONFIG = {
-    pins = minimapWoodPins,
-    yardsPerPct = woodYardsPerPct,
-    field = "wood",
-    fillColor = WOOD_MINIMAP_FILL,
-    borderColor = WOOD_MINIMAP_BORDER,
-    database = function() return Overlord.WoodDatabase end,
-    isMapID = function(mid)
-        return Overlord.Zones and Overlord.Zones.IsWoodMapID and Overlord.Zones:IsWoodMapID(mid)
-    end,
-    radiusScale = function() return Overlord.WoodMapCircleScale or 1.0 end,
-    tooltip = ShowWoodResourceTooltip,
-}
-
 function Overlord.MapMarkers:CalcMineYardsPerPct(mapID)
     CalcResourceYardsPerPct(mineYardsPerPct, mapID)
 end
 
-function Overlord.MapMarkers:CalcWoodYardsPerPct(mapID)
-    CalcResourceYardsPerPct(woodYardsPerPct, mapID)
-end
-
 function Overlord.MapMarkers:CreateMinimapMinePins()
     CreateResourceMinimapPins(MINE_MINIMAP_CONFIG)
-end
-
-function Overlord.MapMarkers:CreateMinimapWoodPins()
-    CreateResourceMinimapPins(WOOD_MINIMAP_CONFIG)
 end
 
 function Overlord.MapMarkers:CheckMineMinimap()
@@ -3048,39 +2946,6 @@ end
 
 function Overlord.MapMarkers:HideMinimapMinePins()
     HideResourceMinimapPins(minimapMinePins)
-end
-
-function Overlord.MapMarkers:CheckWoodMinimap()
-    if not Overlord.Zones or not Overlord.Zones.IsWoodMapID then
-        mmWoodMapActive = false
-        self:HideMinimapWoodPins()
-        self:EnsureMinimapDriverVisible()
-        return
-    end
-    local ok, mapID = pcall(C_Map.GetBestMapForUnit, "player")
-    local woodMapID = ok and ResolveResourceMinimapMapID(mapID, WOOD_MINIMAP_CONFIG.isMapID) or nil
-    if woodMapID and not Overlord.InstanceSuspended then
-        WOOD_MINIMAP_CONFIG._resolvedSourceMapID = mapID
-        WOOD_MINIMAP_CONFIG._resolvedMapID = woodMapID
-        self:CreateMinimapWoodPins()
-        self:CalcWoodYardsPerPct(woodMapID)
-        mmWoodMapActive = true
-    else
-        mmWoodMapActive = false
-        self:HideMinimapWoodPins()
-    end
-    self:EnsureMinimapDriverVisible()
-end
-
-function Overlord.MapMarkers:UpdateMinimapWoodPins(dataRefresh)
-    if not Overlord.Zones or not Overlord.Zones.IsWoodMapID
-        or not UpdateResourceMinimapPins(WOOD_MINIMAP_CONFIG, dataRefresh) then
-        self:HideMinimapWoodPins()
-    end
-end
-
-function Overlord.MapMarkers:HideMinimapWoodPins()
-    HideResourceMinimapPins(minimapWoodPins)
 end
 
 
@@ -3592,7 +3457,6 @@ end
 function Overlord.MapMarkers:HideEKDominance()
     self:HideEKDominanceLogos()
     Overlord.MapMarkers:HideEKGoldMinePins()
-    Overlord.MapMarkers:HideContinentWoodPins()
     Overlord.MapMarkers:HideContinentBountyPins()
     Overlord.MapMarkers:HideContinentManualBountyPins()
     Overlord.MapMarkers:HideContinentGeneralPins()
@@ -3778,148 +3642,14 @@ function Overlord.MapMarkers:HideEKGoldMinePins()
     end
 end
 
--- ============ Icones foret sur cartes continent (EK / Kalimdor), meme principe que les mines ============
-
-local continentWoodRoot = nil
-local continentWoodPins = {}
-
-local WOOD_CONTINENT_ICON_ATLASES = {
-    "Warfronts-FieldMapIcons-Empty-LumberMill",
-    "Warfronts-FieldMapIcons-Empty-Lumbermill",
-    "Warfronts-FieldMapIcons-Empty-Lumber",
-    "Warfronts-FieldMapIcons-Empty-Wood",
-}
-
-local function ApplyContinentWoodPinAtlas(icon)
-    if not icon then return false end
-    for _, atlas in ipairs(WOOD_CONTINENT_ICON_ATLASES) do
-        if atlas and atlas ~= "" and pcall(icon.SetAtlas, icon, atlas) then
-            return true
-        end
-    end
-    return false
-end
-
-function Overlord.MapMarkers:EnsureContinentWoodPins(canvas)
-    local parent = GetOverlayParent()
-    if not Overlord.WoodDatabase or not canvas or not parent then return end
-    if continentWoodRoot and continentWoodRoot:GetParent() ~= parent then
-        continentWoodRoot:SetParent(parent)
-    end
-    if not continentWoodRoot then
-        continentWoodRoot = CreateFrame("Frame", nil, parent)
-        continentWoodRoot:SetAllPoints()
-    end
-    continentWoodRoot:SetFrameStrata(parent:GetFrameStrata())
-    continentWoodRoot:SetFrameLevel((parent:GetFrameLevel() or 0) + 25)
-    for _, wood in ipairs(Overlord.WoodDatabase) do
-        if not continentWoodPins[wood.id] then
-            local pin = CreateFrame("Frame", nil, continentWoodRoot)
-            pin:SetFrameStrata(continentWoodRoot:GetFrameStrata())
-            pin:SetFrameLevel(continentWoodRoot:GetFrameLevel() + 1)
-            pin.wood = wood
-
-            local icon = pin:CreateTexture(nil, "OVERLAY", nil, 2)
-            icon:SetAllPoints()
-            ApplyContinentWoodPinAtlas(icon)
-            pin.icon = icon
-
-            pin:EnableMouse(true)
-            SafeSetPassThroughButtons(pin)
-            pin:SetScript("OnEnter", function(self)
-                GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
-                local tp = Overlord.UI.TooltipPalette()
-                GameTooltip:AddLine(self.wood.name, tp.HL[1], tp.HL[2], tp.HL[3])
-                local res = Overlord.Ressources
-                if res and self.wood then
-                    local stock = res:GetWoodStock(self.wood.id)
-                    local stockMax = res:GetWoodStockMax()
-                    if stock < stockMax then
-                        GameTooltip:AddLine(string.format(L.WOOD_STOCK, stock, stockMax),
-                            tp.HL[1], tp.HL[2], tp.HL[3])
-                    end
-                end
-                GameTooltip:Show()
-            end)
-            pin:SetScript("OnLeave", function() GameTooltip:Hide() end)
-            continentWoodPins[wood.id] = pin
-        end
-    end
-end
-
-function Overlord.MapMarkers:RefreshContinentWoodPins()
-    local canvas = GetCanvas()
-    local parent = GetOverlayParent()
-    if not canvas or not parent then
-        self:HideContinentWoodPins()
-        return
-    end
-    local mapID = trackedMapID
-    if not self:IsEKMap(mapID) and not self:IsKalimdorMap(mapID) then
-        self:HideContinentWoodPins()
-        return
-    end
-    local continentMapID = trackedMapID
-
-    self:EnsureContinentWoodPins(canvas)
-
-    local cw = canvas:GetWidth()
-    local ch = canvas:GetHeight()
-    if not cw or cw == 0 then return end
-
-    local iconSize = GetEKContinentMapPinSize(cw)
-
-    local anyWoodShown = false
-    for _, wood in ipairs(Overlord.WoodDatabase) do
-        local pin = continentWoodPins[wood.id]
-        if pin and pin.icon then
-            local nx, ny = GetMinePositionOnContinentMap(wood, continentMapID)
-            if nx and ny then
-                local x = nx * cw
-                local yDown = ny * ch
-                local ox, oy = GetOverlayPoint(canvas, parent, x, yDown)
-                if ox and oy then
-                    if PlaceMapPinCenter(pin, parent, ox, oy, iconSize) then
-                        anyWoodShown = true
-                    end
-                else
-                    pin:Hide()
-                end
-            else
-                pin:Hide()
-            end
-        end
-    end
-    if continentWoodRoot then
-        if anyWoodShown then
-            continentWoodRoot:Show()
-        else
-            continentWoodRoot:Hide()
-        end
-    end
-end
-
-function Overlord.MapMarkers:HideContinentWoodPins()
-    if continentWoodRoot and continentWoodRoot:IsShown() then
-        continentWoodRoot:Hide()
-    end
-    for _, pin in pairs(continentWoodPins) do
-        if pin and pin:IsShown() then pin:Hide() end
-    end
-end
-
 -- Icones sur la carte continent EK (mines d'or + logos domination) : meme principe que les pins
 
 local mineOverlays = {}
-local woodOverlays = {}
 
 local MINE_OVERLAY_FILL = { 1, 0.82, 0, 0.38 }
 local MINE_OVERLAY_TEXT = { 1, 0.82, 0 }
-local WOOD_OVERLAY_FILL = { 0.42, 0.48, 0.16, 0.40 }
-local WOOD_OVERLAY_TEXT = { 0.82, 0.88, 0.44 }
 
 local MINE_WORLD_CONFIG
-local WOOD_WORLD_CONFIG
 
 local function CreateResourceOverlay(resource, cfg)
     local canvas = GetCanvas()
@@ -4074,15 +3804,9 @@ HideResourceOverlays = function(overlayTable)
 end
 
 local function RefreshResourceOverlays(mapID, database, overlayTable, cfg)
-    if overlayTable == woodOverlays then
-        woodOverlaysFullyHidden = false
-    end
     if not database then return end
     if trackedMapID ~= mapID then
         HideResourceOverlays(overlayTable)
-        if overlayTable == woodOverlays then
-            woodOverlaysFullyHidden = true
-        end
         return
     end
     local canvas = GetCanvas()
@@ -4131,17 +3855,6 @@ local function UpdateMineOverlayText(ov, mine, diameter, subSz)
     end
 end
 
-local function UpdateWoodOverlayText(ov, wood, diameter, subSz)
-    local res = Overlord.Ressources
-    local stock = res and wood and res:GetWoodStock(wood.id) or 100
-    local stockMax = res and res:GetWoodStockMax() or 100
-    local key = tostring(stock) .. ":" .. tostring(stockMax)
-    if ov._olResourceTextKey ~= key then
-        ov._olResourceTextKey = key
-        ov.subtext:SetText(string.format(L.WOOD_STOCK, stock, stockMax))
-    end
-end
-
 MINE_WORLD_CONFIG = {
     field = "mine",
     fillColor = MINE_OVERLAY_FILL,
@@ -4152,38 +3865,14 @@ MINE_WORLD_CONFIG = {
     updateText = UpdateMineOverlayText,
 }
 
-WOOD_WORLD_CONFIG = {
-    field = "wood",
-    fillColor = WOOD_OVERLAY_FILL,
-    textColor = WOOD_OVERLAY_TEXT,
-    iconAtlases = {
-        "Warfronts-FieldMapIcons-Empty-LumberMill",
-        "Warfronts-FieldMapIcons-Empty-Lumbermill",
-        "Warfronts-FieldMapIcons-Empty-Lumber",
-        "Warfronts-FieldMapIcons-Empty-Wood",
-    },
-    diameter = GetWoodOverlayDiameter,
-    tooltip = ShowWoodResourceTooltip,
-    updateText = UpdateWoodOverlayText,
-}
-
 function Overlord.MapMarkers:RefreshMineOverlays(mapID)
     RefreshResourceOverlays(mapID, Overlord.MineDatabase, mineOverlays, MINE_WORLD_CONFIG)
-end
-
-function Overlord.MapMarkers:RefreshWoodOverlays(mapID)
-    RefreshResourceOverlays(mapID, Overlord.WoodDatabase, woodOverlays, WOOD_WORLD_CONFIG)
 end
 
 function Overlord.MapMarkers:HideMineOverlays()
     HideResourceOverlays(mineOverlays)
 end
 
-function Overlord.MapMarkers:HideWoodOverlays()
-    if woodOverlaysFullyHidden then return end
-    HideResourceOverlays(woodOverlays)
-    woodOverlaysFullyHidden = true
-end
 
 
 -- Derniere zone de front pour laquelle on a pose un repere (secours si l'API GetUserWaypoint echoue)

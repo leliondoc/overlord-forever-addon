@@ -138,7 +138,7 @@ assert(sent[1] and sent[1].version == "5" and sent[1].target == "Old Tester",
     "Old beta peer waited for a silent v6 probe before LK v5")
 assert(oldResult == false and oldSupported == false and now - startedAt < 270,
     "v5 LK was falsely certified complete or waited for v6 timeout")
-assert(s:GetPagedLeaderboardDiagnostics():find("beta v5; no fresh lp6 NH", 1, true),
+assert(s:GetPagedLeaderboardDiagnostics():find("beta v5; NH without lp6", 1, true),
     "Diagnostics omit the negotiated legacy choice")
 
 sent = {}
@@ -155,10 +155,24 @@ assert(#sent == 3 and sent[1].version == "6" and sent[1].stream == "LK"
 
 -- A new generic message may refresh the route, but cannot refresh NH's cap.
 advance(301)
-receive("New Tester", "DX", "test")
+receive("New Tester", "GY", "test")
 assert(net:IsPeer("New Tester") and net:GetPeerPagedProtocol("New Tester") == nil,
     "Non-NH traffic extended a stale lp6 capability")
 assert(s:IsExpectedPagedLeaderboardDelivery("LK", "Victim Tester",
     "New Tester", "BETA") == nil,
     "NH capability opened unsolicited row-delivery authority")
-print("NH lp6 negotiation, v5 immediate fallback, typed v6 and capability TTL OK")
+-- A known peer whose capability is not known (yet or any more) is probed with v6
+-- first instead of being served the partial v5 sweep straight away.
+sent = {}
+local probeResult, probeSupported
+assert(s:StartCompletePagedLeaderboardCatchup("New Tester", function(ok, full)
+    probeResult, probeSupported = ok, full
+end))
+advance(15)
+assert(sent[1] and sent[1].version == "6",
+    "A peer with unknown capability was not probed with v6 first")
+assert(probeResult == true and probeSupported == true,
+    "The v6 probe of a capable peer did not complete the sweep")
+assert(s:GetPagedLeaderboardDiagnostics():find("capability unknown, v6 probe", 1, true),
+    "Diagnostics omit the v6 probe of an unknown-capability peer")
+print("NH lp6 negotiation, v5 immediate fallback, typed v6, unknown-capability v6 probe and capability TTL OK")

@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.2.0"
+Overlord.Version = "1.2.1"
 -- Forever has no cross-faction community: Overlord never uses C_Club clubs there.
 -- Transport is the faction channel, the group, and the Battle.net relay bridges.
 Overlord.CommunityModeEnabled = false
@@ -9,15 +9,9 @@ Overlord.IsInitialized = false
 Overlord.PlayerFaction = nil
 Overlord.InActiveFront = false
 Overlord.InstanceSuspended = false
--- Garde-fou technique pour les secondes de domination : tres au-dessus du gameplay,
--- mais evite une valeur corrompue/infinie dans SavedVariables, sync ou export.
+-- Garde-fou technique des champs numeriques VB (totalAtApply) : evite une valeur
+-- corrompue/infinie recue du reseau.
 Overlord.DOMINATION_SANITY_CAP = 2147483647
--- Plafond absolu par front/faction. Le garde dynamique reseau reste bien plus
--- strict en debut de semaine ; 500 M permet toutefois aux bonus bois legitimes
--- de se composer lors d'une campagne tres active sans couper la convergence.
--- La migration 11 purge une derniere fois les anciens buckets >= 50 M avant
--- d'adopter ce nouveau plafond (anciens bugs d'amplification).
-Overlord.DOMINATION_PLAUSIBLE_MAX = 500000000
 
 -- Palette tooltips unifiee (accent = ligne « pas assez d'or », Ressources / mines / shard / export)
 Overlord.UI_TT = {
@@ -3172,222 +3166,17 @@ function Overlord:Initialize()
     OverlordDB.leaderboardsByPool = OverlordDB.leaderboardsByPool or {}
     OverlordDB.history = OverlordDB.history or {}
     OverlordDB.lastResetTimestamp = tonumber(OverlordDB.lastResetTimestamp) or 0
-    OverlordDB.dominationTime = OverlordDB.dominationTime or { Alliance = 0, Horde = 0 }
-    -- Forever beta uses one global domination bucket.
-    local currentDominationPool = GetCurrentPoolForSavedVars()
-    local legacyFrontDominationTime = OverlordDB.frontDominationTime
-    local legacyDominationOwnerPool = currentDominationPool
-    OverlordDB.frontDominationTimeByPool = OverlordDB.frontDominationTimeByPool or {}
-    if (tonumber(OverlordDB.frontDominationPoolVersion) or 0) < 1 then
-        local previousPool = Overlord.RealmPools:NormalizeRegionPool(OverlordDB.lastSessionPool)
-        local legacyOwnerPool = previousPool ~= "" and previousPool or currentDominationPool
-        legacyDominationOwnerPool = legacyOwnerPool
-        if type(OverlordDB.frontDominationTimeByPool[legacyOwnerPool]) ~= "table" then
-            OverlordDB.frontDominationTimeByPool[legacyOwnerPool] =
-                type(legacyFrontDominationTime) == "table" and legacyFrontDominationTime or {}
-        end
-        OverlordDB.frontDominationPoolVersion = 1
-    end
-    -- 1.0.3 briefly split Forever into US/EU. Each front is a complete
-    -- territorial snapshot: taking max(Alliance) and max(Horde) separately
-    -- invents time that neither pool observed. Use the same total ordering as
-    -- DX, with the pool name as a final stable tie-breaker for equal snapshots.
-    if (tonumber(OverlordDB.globalDominationUnifiedVersion) or 0) < 1 then
-        local global = OverlordDB.frontDominationTimeByPool.global or {}
-        local selectedPool = {}
-        local function snapshotWins(candidate, current, candidatePool, currentPool)
-            local candidateAlly = tonumber(candidate.Alliance) or 0
-            local candidateHorde = tonumber(candidate.Horde) or 0
-            local currentAlly = tonumber(current.Alliance) or 0
-            local currentHorde = tonumber(current.Horde) or 0
-            local candidateTotal = candidateAlly + candidateHorde
-            local currentTotal = currentAlly + currentHorde
-            if candidateTotal ~= currentTotal then return candidateTotal > currentTotal end
-            local candidateSeq = math.floor(tonumber(candidate.scoreSeq) or 0)
-            local currentSeq = math.floor(tonumber(current.scoreSeq) or 0)
-            if candidateSeq ~= currentSeq then return candidateSeq > currentSeq end
-            local candidateSource = tostring(candidate.scoreSource or "")
-            local currentSource = tostring(current.scoreSource or "")
-            if candidateSource ~= currentSource then return candidateSource > currentSource end
-            if candidateAlly ~= currentAlly then return candidateAlly > currentAlly end
-            return candidatePool > currentPool
-        end
-        for _, oldPool in ipairs({ "us", "eu", "fr", "de", "na" }) do
-            local source = OverlordDB.frontDominationTimeByPool[oldPool]
-            if type(source) == "table" then
-                for frontId, sourceRow in pairs(source) do
-                    if type(sourceRow) == "table" then
-                        local targetRow = global[frontId]
-                        if type(targetRow) ~= "table" then
-                            global[frontId] = sourceRow
-                            selectedPool[frontId] = oldPool
-                        elseif targetRow ~= sourceRow and snapshotWins(
-                            sourceRow, targetRow, oldPool, selectedPool[frontId] or "global") then
-                            global[frontId] = sourceRow
-                            selectedPool[frontId] = oldPool
-                        end
-                    end
-                end
-            end
-        end
-        OverlordDB.frontDominationTimeByPool.global = global
-        for _, oldPool in ipairs({ "us", "eu", "fr", "de", "na" }) do
-            OverlordDB.frontDominationTimeByPool[oldPool] = nil
-        end
-        OverlordDB.globalDominationUnifiedVersion = 1
-    end
-    if type(OverlordDB.frontDominationTimeByPool[currentDominationPool]) ~= "table" then
-        OverlordDB.frontDominationTimeByPool[currentDominationPool] = {}
-    end
-    OverlordDB.frontDominationTime =
-        OverlordDB.frontDominationTimeByPool[currentDominationPool]
-    if not OverlordDB.frontDominationMigrated and Overlord.Fronts then
-        local activeFrontId = Overlord.Fronts.activeFrontId
-        local oldDom = OverlordDB.dominationTime
-        if activeFrontId and oldDom and ((oldDom.Alliance or 0) > 0 or (oldDom.Horde or 0) > 0) then
-            local legacyBuckets = OverlordDB.frontDominationTimeByPool[legacyDominationOwnerPool]
-            if type(legacyBuckets) ~= "table" then
-                legacyBuckets = {}
-                OverlordDB.frontDominationTimeByPool[legacyDominationOwnerPool] = legacyBuckets
-            end
-            legacyBuckets[activeFrontId] = {
-                Alliance = oldDom.Alliance or 0,
-                Horde = oldDom.Horde or 0,
-            }
-        end
-        OverlordDB.frontDominationMigrated = true
-    end
-    -- Recalcul APRES la migration agregat -> front. L'ancien ordre remettait
-    -- dominationTime a zero avant d'avoir pu copier un tres vieux profil.
-    if self.RecalculateDominationTotals then
-        self:RecalculateDominationTotals()
-    end
-    local dominationSyncVersion = tonumber(OverlordDB.dominationSyncVersion) or 0
-    -- Migration domination : les buckets crees avant le tick mono-front peuvent etre gonfles.
-    -- On garde leurs valeurs, mais on autorise une baisse controlee par DM verifie une seule fois.
-    if dominationSyncVersion < 2 then
-        for _, bucket in pairs(OverlordDB.frontDominationTime or {}) do
-            if type(bucket) == "table" then
-                bucket.scoreSeq = 0
-                bucket.scoreSource = ""
-                bucket.allowLowerDominationSnapshot = true
-                bucket.dominationMergeVersion = 2
-            end
-        end
-        OverlordDB.dominationSyncVersion = 2
-        dominationSyncVersion = 2
-    end
-    -- Migration 6.5.19 : la 6.5.18 pouvait empiler plusieurs ticks locaux dans le
-    -- meme creneau apres reception d'un DM. Reouvrir une correction basse verifiee.
-    if dominationSyncVersion < 3 then
-        for _, bucket in pairs(OverlordDB.frontDominationTime or {}) do
-            if type(bucket) == "table" then
-                bucket.scoreSeq = 0
-                bucket.scoreSource = ""
-                bucket.allowLowerDominationSnapshot = true
-                bucket.dominationMergeVersion = 3
-            end
-        end
-        OverlordDB.dominationSyncVersion = 3
-        dominationSyncVersion = 3
-    end
-    -- Migration 6.5.23 : autoriser une correction basse verifiee apres le correctif accumulateur unique.
-    if dominationSyncVersion < 4 then
-        for _, bucket in pairs(OverlordDB.frontDominationTime or {}) do
-            if type(bucket) == "table" then
-                bucket.allowLowerDominationSnapshot = true
-                bucket.dominationMergeVersion = 4
-            end
-        end
-        OverlordDB.dominationSyncVersion = 4
-        dominationSyncVersion = 4
-    end
-    -- Migration 7.0.14 : les clients deja gonfles doivent pouvoir accepter une
-    -- derniere baisse verifiee, mais les futures baisses seront refusees par defaut.
-    if dominationSyncVersion < 5 then
-        for _, bucket in pairs(OverlordDB.frontDominationTime or {}) do
-            if type(bucket) == "table" then
-                bucket.allowLowerDominationSnapshot = true
-                bucket.dominationMergeVersion = 5
-            end
-        end
-        OverlordDB.dominationSyncVersion = 5
-        dominationSyncVersion = 5
-    end
-    -- Migration 7.0.15 : les baisses DX ne sont pas suffisamment fiables sans
-    -- autorite centrale. On ferme explicitement toute fenetre allowLower restante.
-    if dominationSyncVersion < 6 then
-        for _, bucket in pairs(OverlordDB.frontDominationTime or {}) do
-            if type(bucket) == "table" then
-                bucket.allowLowerDominationSnapshot = nil
-                bucket.dominationMergeVersion = 6
-            end
-        end
-        OverlordDB.dominationSyncVersion = 6
-        dominationSyncVersion = 6
-    end
-    -- Migration 7.1.13 : les overlays dominationBoostPct (WB/DM) pouvaient gonfler sans plafond
-    -- et ecraser la barre (ratio + boostA - boostH plafonne a 100/0). Source de verite = secondes.
-    if dominationSyncVersion < 7 then
-        OverlordDB.dominationBoostPct = { Alliance = 0, Horde = 0 }
-        OverlordDB.dominationSyncVersion = 7
-        dominationSyncVersion = 7
-    end
-    -- Migration 8 (bug US signale par Croquette) : purge des buckets domination corrompus. Une
-    -- valeur ecretee au cap 2^31-1 (ou un timestamp ayant fuite) rendait Alliance == Horde -> barre
-    -- figee a 50/50 cote US, et le CRDT max() interdisait toute correction. On remet ces buckets a
-    -- zero pour que le pool guerisse, et la reception DM rejette desormais ces valeurs aberrantes.
-    if dominationSyncVersion < 8 then
-        if Overlord.SanitizeCorruptDominationBuckets then
-            Overlord:SanitizeCorruptDominationBuckets()
-        end
-        OverlordDB.dominationSyncVersion = 8
-        dominationSyncVersion = 8
-    end
-    -- Migration 9 (bug d'amplification du bonus, signale par Nemy) : l'ancienne formule du bonus
-    -- bois/victoire divisait par (1 - pct) et gonflait les buckets a des CENTAINES de millions
-    -- (sous le seuil 1 milliard de la v8, donc non purges) -> total > cap 2^31-1 -> barre faussee.
-    -- Le seuil plausible est desormais ~50 M / front / faction : on repurge avec ce seuil strict.
-    if dominationSyncVersion < 9 then
-        if Overlord.SanitizeCorruptDominationBuckets then
-            Overlord:SanitizeCorruptDominationBuckets()
-        end
-        OverlordDB.dominationSyncVersion = 9
-        dominationSyncVersion = 9
-    end
+    -- 1.2.1 : l'ancienne domination au temps (buckets DX par front) est retiree ; la barre
+    -- ne compte que les victoires de front. Purge des anciennes cles et de leurs migrations.
+    OverlordDB.dominationTime, OverlordDB.frontDominationTime = nil, nil
+    OverlordDB.frontDominationTimeByPool, OverlordDB.dominationBoostPct = nil, nil
+    OverlordDB.frontDominationPoolVersion, OverlordDB.globalDominationUnifiedVersion = nil, nil
+    OverlordDB.frontDominationMigrated = nil
     -- Migration 10 : journal d'evenements victoire separe des buckets territoriaux.
-    -- Les bonus deja materialises dans frontDominationTime ne sont jamais reappliques.
-    if dominationSyncVersion < 10 then
+    if (tonumber(OverlordDB.dominationSyncVersion) or 0) < 10 then
         OverlordDB.dominationVictoryEvents = { byPool = {} }
-        OverlordDB.dominationSyncVersion = 10
-        dominationSyncVersion = 10
     end
-    -- Migration 11 : le seuil historique 50 M distinguait les anciens scores
-    -- amplifies, mais il devient atteignable avec des centaines de bonus bois
-    -- legitimes. Purger une derniere fois tous les pools AVANT de relever le
-    -- plafond runtime a 500 M, puis laisser le garde dynamique x64 arbitrer.
-    if dominationSyncVersion < 11 then
-        for _, poolBuckets in pairs(OverlordDB.frontDominationTimeByPool or {}) do
-            if type(poolBuckets) == "table" then
-                for _, bucket in pairs(poolBuckets) do
-                    local legacyAlly = type(bucket) == "table"
-                        and math.max(0, tonumber(bucket.Alliance) or 0) or 0
-                    local legacyHorde = type(bucket) == "table"
-                        and math.max(0, tonumber(bucket.Horde) or 0) or 0
-                    if type(bucket) == "table"
-                        and legacyAlly + legacyHorde >= 50000000 then
-                        bucket.Alliance = 0
-                        bucket.Horde = 0
-                        bucket.scoreSeq = 0
-                        bucket.scoreSource = ""
-                    end
-                end
-            end
-        end
-        OverlordDB.dominationSyncVersion = 11
-        dominationSyncVersion = 11
-        if self.RecalculateDominationTotals then self:RecalculateDominationTotals() end
-    end
+    OverlordDB.dominationSyncVersion = math.max(11, tonumber(OverlordDB.dominationSyncVersion) or 0)
     if type(OverlordDB.dominationVictoryEvents) ~= "table" then
         OverlordDB.dominationVictoryEvents = { byPool = {} }
     end
@@ -5021,76 +4810,10 @@ function Overlord:OnEnterFront()
     end
 end
 
--- Barre de domination v2 (1.1.11) : plus de ticker ni d'accumulation de zone-secondes.
--- alliancePct = clamp(50 + (victoiresA - victoiresH) + (boisA - boisH), 0, 100), voir
--- SyncDomination.lua (Overlord:GetDominationBarScore). Les buckets frontDominationTime
--- restent en SavedVariables (photo gelee de la semaine a la mise a jour) : ils ne servent
--- plus qu'a estimer le totalAtApply des VB pour les clients <= 1.1.10.
+-- Barre de domination v2 : alliancePct = clamp(50 + (victoiresA - victoiresH), 0, 100),
+-- voir SyncDomination.lua (Overlord:GetDominationBarScore).
 
-local function CapDominationValue(n)
-    n = tonumber(n) or 0
-    if n ~= n or n == math.huge or n == -math.huge then return 0 end
-    n = math.floor(n)
-    if n < 0 then n = 0 end
-    local cap = Overlord.DOMINATION_SANITY_CAP or 2147483647
-    if n > cap then n = cap end
-    return n
-end
-
--- Une valeur de domination >= plafond plausible est corrompue (cap 2^31 atteint, timestamp ayant
--- fuite, etc.). Impossible a distinguer d'un vrai score pour le max() du CRDT, donc indeboulonnable :
--- on la traite comme nulle plutot que de la laisser figer la barre a 50/50.
-local function IsCorruptDominationValue(n)
-    n = tonumber(n) or 0
-    if n ~= n or n == math.huge or n == -math.huge then return true end
-    return n >= (Overlord.DOMINATION_PLAUSIBLE_MAX or 1000000000)
-end
-Overlord.IsCorruptDominationValue = IsCorruptDominationValue
-
--- Purge les buckets de domination corrompus (valeur aberrante >= plafond plausible). Remet
--- Alliance/Horde a 0 et rearme le compteur de score pour que le front re-accumule proprement.
--- Indispensable car le CRDT max() ne peut jamais corriger une valeur corrompue vers le bas
--- (bug US signale par Croquette : barre figee a 50/50). Retourne le nombre de buckets nettoyes.
-function Overlord:SanitizeCorruptDominationBuckets()
-    if not OverlordDB or type(OverlordDB.frontDominationTime) ~= "table" then return 0 end
-    local healed = 0
-    for _, bucket in pairs(OverlordDB.frontDominationTime) do
-        if type(bucket) == "table"
-            and (IsCorruptDominationValue(bucket.Alliance) or IsCorruptDominationValue(bucket.Horde)) then
-            bucket.Alliance = 0
-            bucket.Horde = 0
-            bucket.scoreSeq = 0
-            bucket.scoreSource = ""
-            healed = healed + 1
-        end
-    end
-    return healed
-end
-
--- Total des buckets gels (ancienne formule temporelle) : n'alimente plus la barre.
-function Overlord:RecalculateDominationTotals()
-    if not OverlordDB then return 0, 0 end
-    OverlordDB.dominationTime = OverlordDB.dominationTime or { Alliance = 0, Horde = 0 }
-    self:SanitizeCorruptDominationBuckets()
-    local allyTotal, hordeTotal = 0, 0
-    for _, bucket in pairs(OverlordDB.frontDominationTime or {}) do
-        local bucketAlly = tonumber(bucket.Alliance) or 0
-        local bucketHorde = tonumber(bucket.Horde) or 0
-        allyTotal = allyTotal + bucketAlly
-        hordeTotal = hordeTotal + bucketHorde
-    end
-    allyTotal = CapDominationValue(allyTotal)
-    hordeTotal = CapDominationValue(hordeTotal)
-    OverlordDB.dominationTime.Alliance = allyTotal
-    OverlordDB.dominationTime.Horde = hordeTotal
-    return allyTotal, hordeTotal
-end
-
-function Overlord:GetDominationTotals()
-    return self:RecalculateDominationTotals()
-end
-
--- Fractions affichees (barre UI, export Check PvP) : 50 % +/- victoires et depenses de bois.
+-- Fractions affichees (barre UI, export Check PvP) : 50 % +/- 1 par victoire de front.
 -- Voir Overlord:GetDominationBarScore (SyncDomination.lua).
 function Overlord:GetDominationDisplayFractions()
     local alliancePct, hordePct
@@ -5452,19 +5175,9 @@ function Overlord:ResetAll()
     end
     
     Overlord.Zones:UpdateAvailableZones()
-    -- Reset ressources (or, bois, stocks) et bonus actifs
+    -- Reset ressources (or, stocks des mines) et bonus actifs
     if Overlord.Ressources then Overlord.Ressources:ResetResources() end
     if Overlord.Outpost then Overlord.Outpost:ResetOutpostsForCampaign() end
-    OverlordDB.dominationTime    = { Alliance = 0, Horde = 0 }
-    OverlordDB.frontDominationTimeByPool =
-        OverlordDB.frontDominationTimeByPool or {}
-    local resetDominationPool = GetCurrentPoolForSavedVars()
-    OverlordDB.frontDominationTimeByPool.global = {}
-    for _, oldPool in ipairs({ "fr", "eu", "de", "us", "na" }) do
-        OverlordDB.frontDominationTimeByPool[oldPool] = nil
-    end
-    OverlordDB.frontDominationTime =
-        OverlordDB.frontDominationTimeByPool[resetDominationPool]
     OverlordDB.victoryDominationBonusLastTs = nil
     OverlordDB.dominationVictoryEvents = OverlordDB.dominationVictoryEvents or { byPool = {} }
     OverlordDB.dominationVictoryEvents.byPool =

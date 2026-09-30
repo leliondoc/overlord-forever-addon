@@ -167,6 +167,65 @@ local function ShowShardDebug()
         st and tostring(math.floor(st.holdTimeElapsed or 0)) or "?"))
 end
 
+-- /ov sync : resume en tete (vert = OK, jaune = a surveiller, rouge = probleme),
+-- puis le detail technique en gris, compteurs de pertes/refus > 0 en rouge.
+-- Une seule table locale : Commands.lua reste loin de la limite de 200 locals.
+local SyncReport = {}
+do
+    local GREEN, YELLOW, RED = "|cFF40FF40", "|cFFFFD100", "|cFFFF4040"
+    local GREY, GOLD, WHITE = "|cFF9D9D9D", "|cFFFFD100", "|cFFFFFFFF"
+    local ICON = {
+        ok = "|TInterface\\RaidFrame\\ReadyCheck-Ready:14|t",
+        warn = "|TInterface\\RaidFrame\\ReadyCheck-Waiting:14|t",
+        bad = "|TInterface\\RaidFrame\\ReadyCheck-NotReady:14|t",
+    }
+    local LEVEL_COLOR = { ok = GREEN, warn = YELLOW, bad = RED }
+    local LEVEL_RANK = { ok = 1, warn = 2, bad = 3 }
+    local LEVEL_WORD = { ok = "all good", warn = "worth watching", bad = "problem" }
+    local PREFIX = GOLD .. "[Overlord]|r "
+    function SyncReport.Print(text) Overlord:PrintNotification(PREFIX .. text) end
+    function SyncReport.Worst(a, b) return LEVEL_RANK[b] > LEVEL_RANK[a] and b or a end
+    function SyncReport.Header(level)
+        SyncReport.Print(GOLD .. "===== Network status: |r" .. LEVEL_COLOR[level] .. LEVEL_WORD[level]
+            .. "|r" .. GOLD .. " =====|r")
+    end
+    function SyncReport.Status(level, title, text)
+        SyncReport.Print(ICON[level] .. " " .. LEVEL_COLOR[level] .. title .. "|r  " .. WHITE .. text .. "|r")
+    end
+    -- Nombre en rouge s'il est > 0, puis retour a la couleur de base de la ligne.
+    local function hot(n, base)
+        n = tonumber(n) or 0
+        if n > 0 then return RED .. n .. "|r" .. base end
+        return tostring(n)
+    end
+    local WORDS = { "refused", "evicted", "expired", "abandoned", "dropped" }
+    function SyncReport.Detail(line, mode)
+        local base, body = GREY, tostring(line or "")
+        if mode == "relayKinds" then
+            body = body:gsub("(%u+%*?) ([%d%.]+)/(%d+)/(%d+)", function(k, kb, ok, bad)
+                return k .. " " .. kb .. "/" .. ok .. "/" .. hot(bad, base)
+            end)
+        elseif mode == "channelKinds" then
+            body = body:gsub("(%u+%*?) (%d+)/(%d+)", function(k, bad, total)
+                return k .. " " .. hot(bad, base) .. "/" .. total
+            end)
+        else
+            for _, word in ipairs(WORDS) do
+                body = body:gsub("(" .. word .. " )(%d+)", function(w, n) return w .. hot(n, base) end)
+                body = body:gsub("(%d+)( " .. word .. ")", function(n, w) return hot(n, base) .. w end)
+            end
+        end
+        local label, rest = body:match("^([^:|]+:)(.*)$")
+        if label and body:sub(1, 2) ~= "  " then
+            body = GOLD .. label .. "|r" .. base .. rest
+        else
+            body = base .. body
+        end
+        SyncReport.Print(body .. "|r")
+    end
+    function SyncReport.Title(text) SyncReport.Print(GOLD .. text .. "|r") end
+end
+
 -- Opt-in observation of actual incoming packets, independent of the relay's
 -- preferred-route cache. No payloads, BattleTags or account IDs are displayed.
 local networkProbeRunning = false
@@ -206,51 +265,94 @@ local function StartNetworkProbe()
         end
         if row then row.count = row.count + 1 end
     end)
-    if Overlord.Sync.GetHistoryCatchupDiagnostics then
-        for _, line in ipairs(Overlord.Sync:GetHistoryCatchupDiagnostics()) do
-            Overlord:PrintNotification("[Overlord] " .. line)
+    -- Le rapport ne doit jamais empecher la fermeture de la fenetre d'observation de 30 s
+    -- (frame CHAT_MSG_ADDON enregistree plus haut) : une erreur est affichee, pas propagee.
+    local reportOk, reportErr = pcall(function()
+        local sync, net = Overlord.Sync, Overlord.BetaNetwork
+        local R = SyncReport
+        -- 1. Summary: the five things that matter, worst first in the header.
+        local rows, overall = {}, "ok"
+        local function add(level, title, text)
+            rows[#rows + 1] = { level, title, text }
+            overall = R.Worst(overall, level)
         end
-    end
-    if Overlord.Sync.GetPagedLeaderboardDiagnostics then
-        Overlord:PrintNotification("[Overlord] " .. Overlord.Sync:GetPagedLeaderboardDiagnostics())
-    end
-    local sendStats = Overlord.Sync._addonSendStats
-    if sendStats then
-        local parts = {}
-        for _, chatType in ipairs({ "CHANNEL", "RAID", "PARTY", "WHISPER" }) do
-            local row = sendStats[chatType]
-            if row then
-                parts[#parts + 1] = string.format("%s %d/%d%s", chatType, row.refused, row.ok + row.refused,
-                    row.lastCode and (" (code " .. tostring(row.lastCode) .. ")") or "")
+        local sendStats = sync._addonSendStats
+        if sendStats then
+            local refused, attempts, parts = 0, 0, {}
+            for _, chatType in ipairs({ "CHANNEL", "RAID", "PARTY", "WHISPER" }) do
+                local row = sendStats[chatType]
+                if row then
+                    refused, attempts = refused + row.refused, attempts + row.ok + row.refused
+                    parts[#parts + 1] = string.format("%s %d/%d", chatType:lower(), row.refused, row.ok + row.refused)
+                end
+            end
+            local ratio = attempts > 0 and refused / attempts or 0
+            add(refused == 0 and "ok" or (ratio < 0.05 and "warn" or "bad"), "Blizzard throttle",
+                string.format("%d refused (%s)", refused, table.concat(parts, ", ")))
+        end
+        local relayStats = net and net.stats
+        if relayStats then
+            local sent, dropped = relayStats.sent or 0, relayStats.dropped or 0
+            local pct = sent > 0 and dropped * 100 / sent or 0
+            add(pct < 1 and "ok" or (pct < 5 and "warn" or "bad"), "Relay losses",
+                string.format("%d lost of %d sent (%.1f%%), %d received", dropped, sent, pct, relayStats.received or 0))
+        end
+        if sync.GetPagedLeaderboardSummary then
+            local lb = sync:GetPagedLeaderboardSummary()
+            local stuck = lb.status:find("interrupted", 1, true) ~= nil
+            add(stuck and "warn" or "ok", "Leaderboard catch-up",
+                string.format("%s, %d pages / %d rows (v%d)", lb.status, lb.pages, lb.rows, lb.protocol))
+        end
+        if sync.GetHistoryCatchupSummary then
+            local hr = sync:GetHistoryCatchupSummary()
+            local waiting = hr.running and hr.step == "request sent" and hr.stepAge > 300
+            local text = hr.running and string.format("%s, %ds ago", tostring(hr.step or "?"), hr.stepAge) or "idle"
+            add(waiting and "warn" or "ok", "Capture history catch-up",
+                waiting and string.format("waiting on one peer for %ds", hr.stepAge) or text)
+        end
+        if net and net.GetQueueSummary then
+            local q = net:GetQueueSummary()
+            add(q.catchup >= q.catchupMax and "warn" or "ok", "Relay queue",
+                string.format("%d waiting (catch-up %d/%d, domination %d/%d)", q.total, q.catchup, q.catchupMax,
+                    q.state, q.stateMax))
+        end
+        R.Header(overall)
+        for _, row in ipairs(rows) do R.Status(row[1], row[2], row[3]) end
+
+        -- 2. Details, for debugging: grey, with any loss or refusal counter in red.
+        R.Title("Details:")
+        if sync.GetHistoryCatchupDiagnostics then
+            for _, line in ipairs(sync:GetHistoryCatchupDiagnostics()) do R.Detail(line) end
+        end
+        if sync.GetPagedLeaderboardDiagnostics then R.Detail(sync:GetPagedLeaderboardDiagnostics()) end
+        if sync.GetChannelKindDiagnostics then
+            for i, line in ipairs(sync:GetChannelKindDiagnostics(12)) do
+                R.Detail(line, i > 1 and "channelKinds" or nil)
             end
         end
-        Overlord:PrintNotification("[Overlord] Sends refused by Blizzard throttle: "
-            .. (#parts > 0 and table.concat(parts, ", ") or "none"))
-    end
-    if Overlord.Sync.GetChannelKindDiagnostics then
-        for _, line in ipairs(Overlord.Sync:GetChannelKindDiagnostics(12)) do
-            Overlord:PrintNotification("[Overlord] " .. line)
+        if net and net.GetKindDiagnostics then
+            local lines = net:GetKindDiagnostics(12)
+            for i, line in ipairs(lines) do
+                R.Detail(line, (i > 1 and line:sub(1, 2) == "  ") and "relayKinds" or nil)
+            end
         end
-    end
-    if Overlord.BetaNetwork and Overlord.BetaNetwork.GetKindDiagnostics then
-        for _, line in ipairs(Overlord.BetaNetwork:GetKindDiagnostics(12)) do
-            Overlord:PrintNotification("[Overlord] " .. line)
+        if relayStats then
+            R.Detail(string.format(
+                "Relay: %d sent, %d received, %d dropped, %d refused then retried, %d channel copies skipped.",
+                relayStats.sent or 0, relayStats.received or 0, relayStats.dropped or 0, relayStats.refused or 0,
+                relayStats.channelSkipped or 0))
         end
+        R.Detail("Network observation: 30s. Use /ov sync now.")
+    end)
+    if not reportOk then
+        Overlord:PrintNotification("|cFFFF4040[Overlord]|r /ov network report error: " .. tostring(reportErr))
     end
-    local relayStats = Overlord.BetaNetwork and Overlord.BetaNetwork.stats
-    if relayStats then
-        Overlord:PrintNotification(string.format(
-            "[Overlord] Relay: %d sent, %d received, %d dropped, %d refused then retried, %d channel copies skipped.",
-            relayStats.sent or 0, relayStats.received or 0, relayStats.dropped or 0, relayStats.refused or 0,
-            relayStats.channelSkipped or 0))
-    end
-    Overlord:PrintNotification("[Overlord] Network observation: 30s. Use /ov sync now.")
     C_Timer.After(30, function()
         frame:UnregisterAllEvents()
         frame:SetScript("OnEvent", nil)
         networkProbeRunning = false
         local function emit(text) Overlord:PrintNotification(text) end
-        emit("[Overlord] Incoming Overlord packets (30s; includes fragments, not score changes):")
+        emit("|cFFFFD100[Overlord] Incoming Overlord packets (30s; includes fragments, not score changes):|r")
         local transports = {}
         for transport in pairs(counts) do transports[#transports + 1] = transport end
         table.sort(transports)
@@ -476,10 +578,6 @@ local function ShowDominationDebug()
     if Overlord.GetDominationBarScore then
         allyPct, hordePct, victoriesA, victoriesH = Overlord:GetDominationBarScore()
     end
-    local frozenA, frozenH = 0, 0
-    if Overlord.GetDominationTotals then
-        frozenA, frozenH = Overlord:GetDominationTotals()
-    end
     local function FmtPct(v)
         local s = string.format("%.2f", (v or 0) * 100)
         if Overlord.UsesCommaDecimalLocale and Overlord.UsesCommaDecimalLocale() then
@@ -491,9 +589,6 @@ local function ShowDominationDebug()
     Overlord:PrintNotification(string.format(
         L.DOM_DEBUG_COUNTS or "A: %d victories / H: %d victories | bar: %s / %s",
         victoriesA, victoriesH, FmtPct(allyPct / 100), FmtPct(hordePct / 100)))
-    Overlord:PrintNotification(string.format(
-        L.DOM_DEBUG_FROZEN or "legacy zone-time (frozen, not used by the bar): %d / %d",
-        frozenA, frozenH))
 end
 
 -- Diagnostic pin avant-poste sur carte monde (Warchief's Watch / Durotar, etc.).

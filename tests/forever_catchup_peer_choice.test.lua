@@ -152,5 +152,32 @@ do
         #after >= 2 and after[2].at - lastRowAt < 200, #after >= 2 and (after[2].at - lastRowAt))
 end
 
+-- 4. A peer that answered (ACK) but never sent a single row is abandoned after about
+--    90 s too; neither the no-reply window nor the stall watcher used to cover it (live
+--    report 2026-09-30: "request sent, 655s ago, Round running: yes").
+do
+    local w = world({
+        { name = "Mute Ally", faction = "Alliance", hops = 1 },
+        { name = "Backup Ally", faction = "Alliance", hops = 2 },
+    }, "Alliance")
+    assert(w.start(), "round not scheduled")
+    w.advance(40)
+    local hr = w.hr()
+    assert(hr[1] and hr[1].target == "Mute Ally", "unexpected first target " .. tostring(hr[1] and hr[1].target))
+    local version, campaignId, _, nonce = w.e.strsplit(":", hr[1].payload, 6)
+    -- A stray terminal status the requester cannot use: it marks the peer as having replied.
+    w.sync:OnHistoryCatchupAck(table.concat({ version, campaignId, nonce, "C", "0", "0" }, ":"),
+        "Mute Ally", "WHISPER")
+    local repliedAt = w.now()
+    w.advance(75)
+    check("still waiting shortly after the reply", #w.hr() == 1, #w.hr())
+    w.advance(60 + 12 + 5)
+    local after = w.hr()
+    check("replied-but-silent peer abandoned, next peer asked", #after >= 2 and after[2].target == "Backup Ally",
+        #after >= 2 and after[2].target or #after)
+    check("abandoned well before the 1200 s ACK timeout",
+        #after >= 2 and after[2].at - repliedAt < 200, #after >= 2 and (after[2].at - repliedAt))
+end
+
 if #failures > 0 then error("peer choice regression:\n  " .. table.concat(failures, "\n  "), 0) end
-print("Forever catch-up peer choice: nearest peer, failed-peer skip and stalled-transfer abandon OK")
+print("Forever catch-up peer choice: nearest peer, failed-peer skip, stalled and replied-but-silent abandon OK")

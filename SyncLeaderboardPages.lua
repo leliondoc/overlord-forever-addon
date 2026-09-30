@@ -505,16 +505,21 @@ end
 function sync:StartCompletePagedLeaderboardCatchup(peer, callback)
     if type(callback) ~= "function" then return false end
     local net = Overlord.BetaNetwork
-    if net and net.IsPeer and net:IsPeer(peer) then
+    -- Only a peer whose fresh NH explicitly lacks lp6 is served v5 directly. A peer whose
+    -- capability is simply not known yet (right after login, or relayed presence thinned
+    -- by 1.2.0) gets the v6 probe, which falls back to v5 when the peer stays silent.
+    if net and net.IsPeer and net:IsPeer(peer)
+        and not (net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(peer) == nil) then
         if not net.GetPeerPagedProtocol or net:GetPeerPagedProtocol(peer) ~= 6 then
-            stats.peerProtocol = "beta v5; no fresh lp6 NH"
+            stats.peerProtocol = "beta v5; NH without lp6"
             return self:StartPagedLeaderboardCatchup(peer, function()
                 callback(false, false) -- v5 LK never certifies full LK/LC/LR
             end)
         end
         stats.peerProtocol = "beta v6; lp6 NH"
     else
-        stats.peerProtocol = "community; v6 probe"
+        stats.peerProtocol = (net and net.IsPeer and net:IsPeer(peer))
+            and "beta; capability unknown, v6 probe" or "community; v6 probe"
     end
     return self:StartPagedLeaderboardCatchup(peer, function(ok, supported)
         if supported then callback(ok, true); return end
@@ -649,15 +654,30 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
     tryApply(state)
 end
 
+local function currentPullStatus()
+    if not pull then return stats.result or "idle" end
+    local status
+    if not pull.profile then status = "preparing"
+    elseif pull.applying then status = "applying page"
+    elseif pull.waitingForSend then status = "waiting to queue request"
+    elseif pull.replySeen then status = "receiving page"
+    else status = "awaiting reply" end
+    if paused() then status = status .. " (paused: combat/instance)" end
+    return status
+end
+
+-- Short form for the /ov sync summary (no mutation).
+function sync:GetPagedLeaderboardSummary()
+    return {
+        status = currentPullStatus(), running = pull ~= nil,
+        pages = stats.pages or 0, rows = stats.rows or 0,
+        protocol = stats.protocol or 5, peer = stats.peerProtocol or "",
+    }
+end
+
 function sync:GetPagedLeaderboardDiagnostics()
-    local status, details = stats.result or "idle", ""
+    local status, details = currentPullStatus(), ""
     if pull then
-        if not pull.profile then status = "preparing"
-        elseif pull.applying then status = "applying page"
-        elseif pull.waitingForSend then status = "waiting to queue request"
-        elseif pull.replySeen then status = "receiving page"
-        else status = "awaiting reply" end
-        if paused() then status = status .. " (paused: combat/instance)" end
         local received = 0
         for _ in pairs(pull.parts or {}) do received = received + 1 end
         details = string.format("; parts=%d/%s; timeout=%ss", received,

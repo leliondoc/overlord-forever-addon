@@ -4,8 +4,6 @@ Overlord.Button = {}
 
 local L = Overlord.L
 
-local COOLDOWN_SEC = 600
-local FACTION_CALL_MIN_ENEMIES = 5
 local BTN_SIZE = 36
 local BTN_GAP = 4
 
@@ -56,8 +54,10 @@ end
 
 local function FormatCooldown(sec)
     sec = math.max(0, math.ceil(sec))
-    local m = math.floor(sec / 60)
+    local h = math.floor(sec / 3600)
+    local m = math.floor(sec % 3600 / 60)
     local s = sec % 60
+    if h > 0 then return string.format("%d:%02d:%02d", h, m, s) end
     return string.format("%d:%02d", m, s)
 end
 
@@ -68,13 +68,6 @@ local function HasCommunityClub()
         and Overlord.Sync:FindCommunityClub()
 end
 
-local function HasNearbyEnemies(forceRefresh)
-    if not Overlord.InActiveFront then return false end
-    if Overlord.UI and Overlord.UI.GetNearbyEnemyCountRaw then
-        return Overlord.UI:GetNearbyEnemyCountRaw(forceRefresh) >= FACTION_CALL_MIN_ENEMIES
-    end
-    return false
-end
 
 local function GetRedChrome()
     if Overlord.UI and Overlord.UI.GetWC3RedButtonChrome then
@@ -197,7 +190,7 @@ local function UpdateCooldownVisual()
         cdSwipeExpireAt = nil
         cdFrame:Clear()
         if cdText then cdText:Hide() end
-        if not HasCommunityClub() or not HasNearbyEnemies(false) then
+        if not HasCommunityClub() or not Overlord.InActiveFront then
             btnFrame.icon:SetDesaturated(true)
             btnFrame.icon:SetAlpha(0.35)
         else
@@ -346,8 +339,6 @@ local function WireFactionCallGridButton(btn)
             GameTooltip:AddLine(L.FACTION_CALL_TOOLTIP_NOT_IN_FRONT, t.MUTED[1], t.MUTED[2], t.MUTED[3], true)
         elseif not HasCommunityClub() then
             GameTooltip:AddLine(L.FACTION_CALL_NO_COMMUNITY, t.MUTED[1], t.MUTED[2], t.MUTED[3], true)
-        elseif not HasNearbyEnemies(false) then
-            GameTooltip:AddLine(L.FACTION_CALL_TOOLTIP_NO_ENEMIES, t.MUTED[1], t.MUTED[2], t.MUTED[3], true)
         else
             GameTooltip:AddLine(L.FACTION_CALL_TOOLTIP_SHARED, t.MUTED[1], t.MUTED[2], t.MUTED[3], true)
         end
@@ -476,10 +467,6 @@ function Overlord.Button:OnClick()
         Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.FACTION_CALL_NOT_IN_FRONT)
         return
     end
-    if not HasNearbyEnemies(true) then
-        Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.FACTION_CALL_NO_ENEMIES)
-        return
-    end
     if not HasCommunityClub() then
         Overlord:PrintNotification("|cffff6600[Overlord]|r " .. L.FACTION_CALL_NO_COMMUNITY)
         return
@@ -492,8 +479,6 @@ function Overlord.Button:OnClick()
         if remAfter > 0 then
             Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. string.format(
                 L.FACTION_CALL_COOLDOWN_SHARED, FormatCooldown(remAfter)))
-        elseif not HasNearbyEnemies(true) then
-            Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.FACTION_CALL_NO_ENEMIES)
         elseif not HasCommunityClub() then
             Overlord:PrintNotification("|cffff6600[Overlord]|r " .. L.FACTION_CALL_NO_COMMUNITY)
         else
@@ -506,7 +491,7 @@ function Overlord.Button:OnClick()
     if Overlord.PlayAddonSound then
         Overlord:PlayAddonSound("faction_call")
     end
-    Overlord:PrintNotification("|cFF00FF00[Overlord]|r " .. string.format(L.FACTION_CALL_SENT, sent))
+    Overlord:PrintNotification("|cFF00FF00[Overlord]|r " .. L.FACTION_CALL_SENT)
 end
 
 function Overlord.Button:OnGeneralClick()
