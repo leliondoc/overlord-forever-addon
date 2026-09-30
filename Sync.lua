@@ -2294,6 +2294,20 @@ function Overlord.Sync:SendToChannel(msgType, data, critical)
     return sent
 end
 
+-- Pont des scores en direct (1.3.2) : le total adverse accepte de son proprietaire
+-- part une fois sur notre canal de faction. LK reste hors canal sinon (les lignes
+-- de rattrapage sont point a point), d'ou cet envoi dedie qui evite ChannelCarries.
+function Overlord.Sync:SendBridgeLKToChannel(payload)
+    if not SYNC_USE_REALM_CHANNEL or Overlord.InstanceSuspended or IsInInstance() then return false end
+    if type(payload) ~= "string" or payload == "" then return false end
+    local channelId = self:GetChannelId()
+    if not channelId then return false end
+    local msg = "LK:" .. payload
+    if #msg > 255 then return false end
+    if not self:TakeChannelToken(false) then return false end
+    return self:SendAddonChecked(msg, "CHANNEL", channelId) == true
+end
+
 -- Forever : la presence SH part sur le canal une fois en direct, puis une
 -- seconde fois comme copie de canal du relais, sur le meme quota Blizzard de ~1 message/s.
 -- On note ici ce que le canal porte deja : envoye et accepte par Blizzard, entendu d'un

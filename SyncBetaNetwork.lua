@@ -1703,6 +1703,17 @@ local bridgeLK = { rows = {}, order = {}, queue = {}, sent = {}, peerAt = {}, pe
 local bridgeLKFlush
 function net:EmitBridgeLK(row, payload)
     local now = GetTime()
+    local reached = 0
+    -- 1.3.2: one copy on our faction channel reaches every same-faction player
+    -- there. The three whispers below date from 1.2.0, when Blizzard refused most
+    -- channel traffic; they stay the fallback when the channel is unavailable or
+    -- its send budget is spent.
+    if sync.SendBridgeLKToChannel and sync:SendBridgeLKToChannel(payload) then
+        if IsInGroup() and sync:SendToGroup("LK", payload) then reached = reached + 1 end
+        self.stats.bridgeLK = (self.stats.bridgeLK or 0) + 1
+        self.stats.bridgeLKChannel = (self.stats.bridgeLKChannel or 0) + 1
+        return true
+    end
     local candidates = self:GetLocalPeers({ [row.key] = true })
     -- Spread the load: the peers that got a row from this client longest ago first.
     for i = #candidates, 2, -1 do
@@ -1712,7 +1723,6 @@ function net:EmitBridgeLK(row, payload)
     table.sort(candidates, function(a, b)
         return (bridgeLK.peerAt[a:lower()] or -1) < (bridgeLK.peerAt[b:lower()] or -1)
     end)
-    local reached = 0
     for i = 1, math.min(BRIDGE_LK_FANOUT, #candidates) do
         local name = candidates[i]
         if sync:SendWhisper("LK", payload, name, true) then
