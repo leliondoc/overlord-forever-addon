@@ -1428,7 +1428,12 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     local pendingForward = not addressed and p.kind ~= "K"
     if not pendingForward then remember(seen, seenOrder, key, GetTime(), 2048) end
     local previousRoute = self.peers[origin:lower()]
-    if not previousRoute or GetTime() - previousRoute.at > 60 or #p.path <= previousRoute.hops then
+    -- A direct route outlives relayed copies for two presence intervals (4 min):
+    -- a peer is heard first-hand only every ~2 min, while relayed copies of the
+    -- same presence keep arriving; letting them win after 60 s made a Battle.net
+    -- friend look "far" half of the time, and catch-up only runs with direct peers.
+    local keepRoute = previousRoute and tonumber(previousRoute.hops) == 1 and 240 or 60
+    if not previousRoute or GetTime() - previousRoute.at > keepRoute or #p.path <= previousRoute.hops then
         remember(self.peers, peerOrder, origin:lower(), {
             name = origin, at = GetTime(), via = sender, transport = transport, bnet = bnetID, hops = #p.path,
         }, 128)

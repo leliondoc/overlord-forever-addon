@@ -86,6 +86,8 @@ jobs:
           lua5.1 tests/forever_call_to_arms.test.lua
           lua5.1 tests/forever_zone_partial_merge.test.lua
           lua5.1 tests/forever_relay_za_lost_batch.test.lua
+          lua5.1 tests/forever_relay_live_over_legacy.test.lua
+          lua5.1 tests/forever_direct_route_sticky.test.lua
           lua5.1 tests/audit_paged_ladder_depth.test.lua
           lua5.1 tests/forever_relay_content_dedup.test.lua
           lua5.1 tests/forever_bridge_live_score.test.lua
