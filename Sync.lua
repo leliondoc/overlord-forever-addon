@@ -2287,7 +2287,9 @@ function Overlord.Sync:SendToChannel(msgType, data, critical)
     -- Type retire du canal : deja porte ailleurs, ce n'est pas un echec a reessayer.
     if msgType ~= "BF" and not self:ChannelCarries(msgType, data, true) then return true end
     -- Second retour : budget local depasse (pas un refus Blizzard, se recharge seul).
-    if not self:TakeChannelToken(critical) then return false, "budget" end
+    -- Our own kill total (one per CHANNEL_KILL_INTERVAL at most) is always critical:
+    -- a non-critical user such as the live-score bridge must never make it wait 30 s.
+    if not self:TakeChannelToken(critical or msgType == "K") then return false, "budget" end
     local sent = self:SendAddonChecked(msg, "CHANNEL", channelId)
     -- Blizzard a accepte ce paquet : la copie de canal du relais serait un doublon.
     if sent == true and msgType ~= "BF" then
@@ -8649,7 +8651,8 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     -- 1.3.2 live-score bridge: an enemy total from a Battle.net friend goes on to our
     -- channel; a total heard on the channel cancels our own pending copy of it.
     local betaNet = Overlord.BetaNetwork
-    if betaNet and channel == "BNET" and betaNet.NoteBridgedEnemyTotal then
+    -- Solicited ranking pages (catch-up) are not live news: never bridged.
+    if betaNet and channel == "BNET" and not guildSnapshot and betaNet.NoteBridgedEnemyTotal then
         pcall(betaNet.NoteBridgedEnemyTotal, betaNet, playerName, faction, kills, killsBefore,
             classClaimVerified and class or "", localeClaimVerified and locTag or "",
             remoteEpoch, bucketEpochToken, levelToken)

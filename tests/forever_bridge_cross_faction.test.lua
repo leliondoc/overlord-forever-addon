@@ -170,10 +170,20 @@ assert(#channelRows == beforeRace, "the channel copy left without the random hol
 s:OnReceiveLeaderboardKills(lkRow("Horde Race", 72, "Horde"), "Other Bridge", "CHANNEL")
 advance(30)
 assert(#channelRows == beforeRace, "a copy heard during the hold was repeated")
--- Alone, the row still goes out within the hold.
+-- Alone, the row still goes out within the hold (fixed 10 s here for exact timings).
+net.BridgeChannelHold = { 10, 10 }
 know("Horde Alone", 80, "Horde")
 s:OnReceiveLeaderboardKills(lkRow("Horde Alone", 82, "Horde"), "BNet-9", "BNET")
 advance(16)
 assert(#channelRows == beforeRace + 1 and channelRows[#channelRows]:match("^LK:Horde Alone:82:"),
     "a row with no other bridge did not leave after its hold")
+-- The next total of the same subject waits past its 60 s gap plus a new random
+-- hold: bridges that all sent together do not all send again in the same second.
+local sentAlone = #channelRows
+s:OnReceiveLeaderboardKills(lkRow("Horde Alone", 84, "Horde"), "BNet-9", "BNET")
+advance(61)
+assert(#channelRows == sentAlone, "the next copy left right at the end of the 60 s gap")
+s:OnReceiveLeaderboardKills(lkRow("Horde Alone", 84, "Horde"), "Other Bridge", "CHANNEL")
+advance(30)
+assert(#channelRows == sentAlone, "a copy another bridge sent after the gap was repeated")
 print("Forever cross-faction bridge: own-faction totals to enemy friends, enemy totals to the channel, bounds, no loop, no duplicate OK")

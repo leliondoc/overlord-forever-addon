@@ -1849,7 +1849,12 @@ local function queueBridgeRow(state, name, faction, total, before, class, locale
         -- and the coverage rule (NoteChannelBridgeRow) never applied.
         local hold = net.BridgeChannelHold or {}
         local lo, hi = math.floor(tonumber(hold[1]) or 0), math.floor(tonumber(hold[2]) or 0)
-        if not state.outbound and hi > 0 then row.holdUntil = now + math.random(math.max(0, lo), hi) end
+        -- Counted from when the row may leave (60 s per subject): bridges that all sent
+        -- or all heard the previous copy at the same moment stay spread out.
+        if not state.outbound and hi > 0 then
+            row.holdUntil = math.max(now, (row.sentAt or -math.huge) + BRIDGE_LK_SUBJECT_GAP)
+                + math.random(math.max(0, lo), hi)
+        end
     end
     row.pending, row.pendingAt, row.pendingTotal = payload, now, total
     if #state.queue > 64 then
