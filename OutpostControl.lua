@@ -10,8 +10,6 @@ local lastNoGuildWarnAt = 0
 local lastHoldStartedNotifyAt = 0
 local NO_GUILD_WARN_GAP = 45
 local HOLD_STARTED_NOTIFY_GAP = 60
-local WAR_MODE_WARN_GAP = 45
-local lastWarModeWarnAt = 0
 local OUTPOST_CHAT_GAP = 45
 local lastOutpostLeftChatAt = {}
 local lastOutpostBackChatAt = {}
@@ -32,11 +30,6 @@ for i = 1, 40 do
     outpostUnitTokens.raid[i] = "raid" .. i
     outpostUnitTokens.nameplate[i] = "nameplate" .. i
     if i <= 4 then outpostUnitTokens.party[i] = "party" .. i end
-end
-
-local function IsWarModeActive()
-    -- Forever : pas de Warmode. Le PvP monde ouvert est toujours le contexte de capture.
-    return true
 end
 
 local function IsPlayerInNonCaptureState()
@@ -180,16 +173,6 @@ local function CanStartOutpostCapture(site, notify)
         return false
     end
     if not OP:IsGameplayContextActive(site) then return false end
-    if not IsWarModeActive() then
-        if notify then
-            local now = GetTime()
-            if (now - lastWarModeWarnAt) >= WAR_MODE_WARN_GAP and L.OUTPOST_WAR_MODE then
-                lastWarModeWarnAt = now
-                Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.OUTPOST_WAR_MODE)
-            end
-        end
-        return false
-    end
     local gateTarget = {
         id = site and (site.id or site.siteKey) or "outpost",
         name = site and OP:GetDisplayName(site) or "Outpost",
@@ -389,7 +372,6 @@ end
 
 local function CheckLocalOutpostDefense(siteKey, st, site)
     if not st or st.status ~= "held" or not OP:PlayerGuildOwnsOutpost(st) then return end
-    if not IsWarModeActive() then return end
     local _, enemyCount = ScanNearbyOutpostPlayers(site)
     local now = GetTime()
     if (enemyCount or 0) > 0 then
@@ -591,10 +573,6 @@ function Overlord.OutpostControl:UpdateHoldTimer(siteKey, st, site, deltaTime, i
     end
     local canProgress = st.holdAuthorityLocal and st.isHolding and not st.isPaused
     local canDecay = st.holdAuthorityLocal
-    if st.holdAuthorityLocal and not IsWarModeActive() then
-        self:RevertCapture(siteKey, st)
-        return
-    end
     if inGeom and IsPlayerInNonCaptureState() then
         inGeom = false
     end

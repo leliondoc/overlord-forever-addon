@@ -1063,7 +1063,7 @@ function Overlord.Sync:GetPlayerFullName()
     if cachedPlayerFullName then return cachedPlayerFullName end
     -- Sur la beta, UnitName peut omettre le nom de famille alors que
     -- GetUnitName fournit encore l'identite complete. Ne pas bloquer les
-    -- barrieres de login (notamment ManualBounty) sur la seule premiere API.
+    -- barrieres de login sur la seule premiere API.
     local canon = self:CanonicalForeverNameFromUnit("player")
     if not canon then return "" end
     cachedPlayerFullName = canon
@@ -2973,27 +2973,6 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
             ok, err = pcall(Overlord.GuildKillAlert.OnReceiveNetworkAlert,
                 Overlord.GuildKillAlert, payload or "", sender, channel)
         end
-    elseif msgType == "WD" then
-        if Overlord.WorldDefense then
-            ok, err = pcall(Overlord.WorldDefense.OnReceive,
-                Overlord.WorldDefense, payload or "", sender, channel)
-        end
-    elseif msgType == "BS" then
-        if Overlord.BountySync then
-            ok, err = pcall(Overlord.BountySync.OnReceiveBS, Overlord.BountySync, payload or "", sender)
-        end
-    elseif msgType == "BP" then
-        if Overlord.BountySync then
-            ok, err = pcall(Overlord.BountySync.OnReceiveBP, Overlord.BountySync, payload or "", sender)
-        end
-    elseif msgType == "BD" then
-        if Overlord.BountySync then
-            ok, err = pcall(Overlord.BountySync.OnReceiveBD, Overlord.BountySync, payload or "", sender)
-        end
-    elseif msgType == "BC" then
-        if Overlord.BountySync then
-            ok, err = pcall(Overlord.BountySync.OnReceiveBC, Overlord.BountySync, payload or "", sender)
-        end
     elseif msgType == "GE" then
         if Overlord.GeneralSync then
             ok, err = pcall(Overlord.GeneralSync.OnReceiveGE,
@@ -3018,38 +2997,6 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
         if Overlord.GeneralSync then
             ok, err = pcall(Overlord.GeneralSync.OnReceiveGM,
                 Overlord.GeneralSync, payload or "", sender, channel)
-        end
-    elseif msgType == "BQ" then
-        if Overlord.ManualBountySync then
-            ok, err = pcall(Overlord.ManualBountySync.OnReceiveBQ, Overlord.ManualBountySync, payload or "", sender)
-        end
-    elseif msgType == "BR" then
-        if Overlord.ManualBountySync then
-            ok, err = pcall(Overlord.ManualBountySync.OnReceiveBR, Overlord.ManualBountySync, payload or "", sender)
-        end
-    elseif msgType == "PB" then
-        if Overlord.ManualBountySync then
-            ok, err = pcall(Overlord.ManualBountySync.OnReceivePB, Overlord.ManualBountySync, payload or "", sender)
-        end
-    elseif msgType == "PK" then
-        if Overlord.ManualBountySync then
-            ok, err = pcall(Overlord.ManualBountySync.OnReceivePK, Overlord.ManualBountySync, payload or "", sender)
-        end
-    elseif msgType == "MK" then
-        if Overlord.ManualBountySync then
-            ok, err = pcall(Overlord.ManualBountySync.OnReceiveMK, Overlord.ManualBountySync, payload or "", sender)
-        end
-    elseif msgType == "PX" then
-        if Overlord.ManualBountySync then
-            ok, err = pcall(Overlord.ManualBountySync.OnReceivePX, Overlord.ManualBountySync, payload or "", sender)
-        end
-    elseif msgType == "PP" then
-        if Overlord.ManualBountySync then
-            ok, err = pcall(Overlord.ManualBountySync.OnReceivePP, Overlord.ManualBountySync, payload or "", sender)
-        end
-    elseif msgType == "PM" then
-        if Overlord.ManualBountySync then
-            ok, err = pcall(Overlord.ManualBountySync.OnReceivePM, Overlord.ManualBountySync, payload or "", sender)
         end
     end
     if not ok and OverlordDB and OverlordDB.config and OverlordDB.config.debug then
@@ -3616,9 +3563,6 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
     local killCreditNow = GetTime()
     recentKCredits:Remember(playerName:lower(),
         { ts = killCreditNow, skipZone = false }, killCreditNow, false)
-    if Overlord.BountySync and Overlord.BountySync.ReconcileKillAfterBountyPayout then
-        Overlord.BountySync:ReconcileKillAfterBountyPayout(playerName, totalKills)
-    end
     -- Activite uniquement apres toutes les validations K (epoch, identite, anti-spoof, total).
     if Overlord.FrontActivity and Overlord.FrontActivity.RecordByZoneRef then
         Overlord.FrontActivity:RecordByZoneRef(zoneId, playerName)
@@ -5462,18 +5406,8 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
             end
         end
         if not territorialResponseOnly
-            and Overlord.Bounty and Overlord.Bounty.AppendToSrQueue then
-            pcall(Overlord.Bounty.AppendToSrQueue, Overlord.Bounty,
-                queue, minimalResponseOnly)
-        end
-        if not territorialResponseOnly
             and Overlord.General and Overlord.General.AppendToSrQueue then
             pcall(Overlord.General.AppendToSrQueue, Overlord.General,
-                queue, minimalResponseOnly)
-        end
-        if not territorialResponseOnly
-            and Overlord.ManualBounty and Overlord.ManualBounty.AppendToSrQueue then
-            pcall(Overlord.ManualBounty.AppendToSrQueue, Overlord.ManualBounty,
                 queue, minimalResponseOnly)
         end
 

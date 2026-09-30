@@ -20,13 +20,6 @@ local CAPTURE_ROW_HEIGHT = 30
 local GUILD_ROW_HEIGHT = 24
 local VIRTUAL_ROW_OVERSCAN = 2
 local GUILD_KEEP_ICON = 18
-local BOUNTY_ATLAS_HORDE = "nameplates-icon-bounty-horde"
-local BOUNTY_ATLAS_ALLIANCE = "nameplates-icon-bounty-alliance"
-
-local function ResolveBountyAtlas(faction)
-    if faction == "Alliance" then return BOUNTY_ATLAS_ALLIANCE end
-    return BOUNTY_ATLAS_HORDE
-end
 -- Colonne droite : tués guildes puis fortins (deux panneaux côte à côte)
 local LB_MAIN_W = 418
 local LB_GUILD_KILLS_W = 208
@@ -261,24 +254,6 @@ local RenderGuildRows
 local RenderGuildKeepRows
 local RenderOutpostRows
 local RenderCaptureRows
-
-local function ApplyBountyIconToRow(row, entry, faction)
-    if not row or not row.bountyIcon then return end
-    if Overlord.Bounty and Overlord.Bounty.IsActiveBountyForName
-        and Overlord.Bounty:IsActiveBountyForName(entry.name) then
-        local bountyFaction = (Overlord.Bounty.GetFactionForName
-            and Overlord.Bounty:GetFactionForName(entry.name)) or faction
-        local atlas = ResolveBountyAtlas(bountyFaction)
-        if row._lbBountyAtlas ~= atlas then
-            row._lbBountyAtlas = atlas
-            pcall(row.bountyIcon.SetAtlas, row.bountyIcon, atlas)
-        end
-        row.bountyIcon:Show()
-    else
-        row._lbBountyAtlas = nil
-        row.bountyIcon:Hide()
-    end
-end
 
 local function CachedMeta(metaCache, name)
     local e = metaCache and metaCache[name]
@@ -1562,11 +1537,6 @@ function Overlord.LeaderboardUI:CreateRow(parent, index, yOffset, P)
     row.name:SetWordWrap(false)
     row.name:SetNonSpaceWrap(false)
 
-    row.bountyIcon = row:CreateTexture(nil, "OVERLAY")
-    row.bountyIcon:SetSize(14, 14)
-    row.bountyIcon:SetPoint("RIGHT", row.name, "LEFT", -3, 0)
-    row.bountyIcon:Hide()
-
     row.kills = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     row.kills:SetPoint("CENTER", row, "LEFT", killCols.kills.center, 0)
     row.kills:SetWidth(killCols.kills.width)
@@ -1854,12 +1824,10 @@ RenderKillRows = function(force)
             else
                 row._olDisplayName = shortName
             end
-            local bountyActive = (Overlord.Bounty and Overlord.Bounty.IsActiveBountyForName
-                and Overlord.Bounty:IsActiveBountyForName(entry.name)) and 1 or 0
             local rank = view.ranks and view.ranks.sortedKills[dataIndex] or dataIndex
             local paintKey = rank .. "|" .. tostring(entry.kills) .. "|" .. tostring(class) .. "|"
                 .. tostring(faction) .. "|" .. tostring(raceFile) .. "|" .. tostring(raceSex) .. "|"
-                .. shortName .. "|" .. bountyActive
+                .. shortName
             if row._lbPaintKey ~= paintKey then
                 row._lbPaintKey = paintKey
                 local medalColor = MEDAL_COLORS[rank]
@@ -1881,7 +1849,6 @@ RenderKillRows = function(force)
                 else
                     row.name:SetTextColor(P.gray[1], P.gray[2], P.gray[3])
                 end
-                ApplyBountyIconToRow(row, entry, faction)
                 row.kills:SetText(entry.kills)
                 SetSecondaryTextColor(row.kills, P, medalColor)
             end

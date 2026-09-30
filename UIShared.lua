@@ -765,38 +765,34 @@ function Overlord.UI.CreateWC3StepperSlider(parent, opts)
     local row = CreateFrame("Frame", nil, parent)
     row:SetSize(rowW, rowH)
 
-    local labelFs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    labelFs:SetPoint("TOPLEFT", 10, -2)
+    -- Meme gabarit que les lignes a bouton des options : titre + description a
+    -- gauche, commande « - valeur + » a droite, sans cadre supplementaire.
+    local labelFs = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    labelFs:SetPoint("TOPLEFT", row, "TOPLEFT", 0, -6)
+    labelFs:SetWidth(rowW - 116)
+    labelFs:SetJustifyH("LEFT")
     labelFs:SetText(opts.label or "")
     labelFs:SetTextColor(gold[1], gold[2], gold[3])
+    row.title = labelFs
 
-    local trackW = rowW - 12
-    local track = Overlord.UI.CreateWC3SubPanel(row, trackW, 30)
-    track:SetPoint("TOPLEFT", 0, -22)
-    row.track = track
+    local descFs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    descFs:SetPoint("TOPLEFT", labelFs, "BOTTOMLEFT", 0, -4)
+    descFs:SetWidth(rowW - 116)
+    descFs:SetJustifyH("LEFT")
+    descFs:SetWordWrap(true)
+    descFs:SetMaxLines(2)
+    descFs:SetText(opts.tooltip or "")
+    row.desc = descFs
 
-    local minus = Overlord.UI.CreateWC3Button(track, 28, 24, "-", nil, nil, { gold = gold, white = white })
-    minus:SetPoint("LEFT", 6, 0)
-    local plus = Overlord.UI.CreateWC3Button(track, 28, 24, "+", nil, nil, { gold = gold, white = white })
-    plus:SetPoint("RIGHT", -6, 0)
-
-    local valueFs = track:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    valueFs:SetPoint("CENTER", 0, 0)
+    local plus = Overlord.UI.CreateWC3Button(row, 24, 24, "+", nil, nil, { gold = gold, white = white })
+    plus:SetPoint("RIGHT", row, "RIGHT", 0, -2)
+    local valueFs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    valueFs:SetPoint("RIGHT", plus, "LEFT", -2, 0)
+    valueFs:SetWidth(64)
+    valueFs:SetJustifyH("CENTER")
     valueFs:SetTextColor(white[1], white[2], white[3])
-
-    local minFs = track:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    minFs:SetPoint("LEFT", minus, "RIGHT", 8, 0)
-    minFs:SetTextColor(0.55, 0.55, 0.6)
-    local maxFs = track:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    maxFs:SetPoint("RIGHT", plus, "LEFT", -8, 0)
-    maxFs:SetTextColor(0.55, 0.55, 0.6)
-
-    local function fmtBound(v, formatter)
-        if formatter then return formatter(v) end
-        return tostring(v)
-    end
-    minFs:SetText(fmtBound(minV, opts.formatMin))
-    maxFs:SetText(fmtBound(maxV, opts.formatMax))
+    local minus = Overlord.UI.CreateWC3Button(row, 24, 24, "-", nil, nil, { gold = gold, white = white })
+    minus:SetPoint("RIGHT", valueFs, "LEFT", -2, 0)
 
     local function refresh()
         if not opts.get then return end
@@ -841,10 +837,8 @@ function Overlord.UI.CreateWC3StepperSlider(parent, opts)
     function row:SetLayoutWidth(w)
         rowW = w
         self:SetWidth(w)
-        local newTrackW = w - 12
-        if self.track then
-            self.track:SetWidth(newTrackW)
-        end
+        self.title:SetWidth(w - 116)
+        self.desc:SetWidth(w - 116)
     end
     refresh()
     return row

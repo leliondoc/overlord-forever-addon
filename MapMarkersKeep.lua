@@ -787,6 +787,7 @@ function Overlord.MapMarkers:RefreshProjectedKeepPins()
                                 pin.icon:SetAtlas(GetKeepIconAtlas(st, site, projectionMapID))
                                 local vr, vg, vb = Overlord.GuildKeep:GetKeepIconVertexColor(st, site, projectionMapID)
                                 pin.icon:SetVertexColor(vr, vg, vb)
+                                pin.icon:SetAlpha(Overlord.MapMarkers.GetMapIconOpacity())
                             end)
                             if painted then
                                 -- Continent / region : icone seule, sans creer de libelles vides.
@@ -937,6 +938,7 @@ function Overlord.MapMarkers:RefreshProjectedOutpostPins()
                                 local vr, vg, vb = Overlord.Outpost:GetOutpostIconVertexColor(
                                     st, site, projectionMapID)
                                 pin.icon:SetVertexColor(vr, vg, vb)
+                                pin.icon:SetAlpha(Overlord.MapMarkers.GetMapIconOpacity())
                             end)
                             if painted then
                                 HideKeepMapLabels(pin)
@@ -1001,12 +1003,6 @@ function Overlord.MapMarkers:SetWorldMapOverlayMode(mode)
         -- Ces couches ne sont peuplees que sur une carte de front. Les masquer une
         -- seule fois a la transition evite de reparcourir leurs caches a chaque frame
         -- sur toutes les autres cartes.
-        if Overlord.BountyMap and Overlord.BountyMap.HideWorld then
-            Overlord.BountyMap:HideWorld()
-        end
-        if Overlord.ManualBountyMap and Overlord.ManualBountyMap.HideWorld then
-            Overlord.ManualBountyMap:HideWorld()
-        end
         if Overlord.GeneralMap and Overlord.GeneralMap.HideWorld then
             Overlord.GeneralMap:HideWorld()
         end
@@ -1147,6 +1143,7 @@ function Overlord.MapMarkers:UpdateGuildKeepOverlay(ov, layoutOnly)
         return true
     end
 
+    if ov.iconTex then ov.iconTex:SetAlpha(Overlord.MapMarkers.GetMapIconOpacity()) end
     if visualKey == ov._olLastVisualKey and not labelsMissing
         and ov.iconTex and ov.iconTex:IsShown() and ov._olLastIconSz == iconSz then
         return true
@@ -1367,6 +1364,7 @@ function Overlord.MapMarkers:RefreshOutpostOverlays(mapID, frontId, layoutChange
                             local vr, vg, vb = Overlord.Outpost:GetOutpostIconVertexColor(
                                 st, site, displayMapID)
                             pin.icon:SetVertexColor(vr, vg, vb)
+                            pin.icon:SetAlpha(Overlord.MapMarkers.GetMapIconOpacity())
                         end)
                         if painted then
                             HideKeepMapLabels(pin)

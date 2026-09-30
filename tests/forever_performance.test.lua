@@ -156,38 +156,3 @@ table.sort = sort
 print(string.format("Forever performance: 10000 players/guilds + 1000 aliases, %d slices, "
     .. "max %d identity lookups/slice, max %d queued callbacks, bounded guild requests OK",
     slices, maxCalls, maxQueued))
-
--- The global-pool migration introduced with the beta also traverses other alts'
--- historical settlements. It must participate in the existing login coroutine.
-assert(loadfile("tests/forever_contracts.test.lua"))()
-timers, head = {}, 1
-local writes, maxWrites, migrationSlices = 0, 0, 0
-local source = {}
-for i = 1, 5000 do source["contract" .. i] = { updatedAt = i } end
-local target = setmetatable({}, { __newindex = function(t, key, value)
-    writes = writes + 1
-    rawset(t, key, value)
-end })
-OverlordDB.manualBountySettlementLedger = {
-    eu = { ["offline tester"] = source },
-    global = { ["offline tester"] = target },
-}
-C_Timer.After = function(_, callback) timers[#timers + 1] = callback end
-assert(loadfile("ManualBounty.lua"))()
-assert(Overlord.ManualBounty:Initialize() == "waiting")
-while not Overlord.ManualBounty._initialized do
-    local callback = assert(timers[head], "Settlement migration lost its continuation")
-    timers[head], head = false, head + 1
-    writes = 0
-    callback()
-    maxWrites = math.max(maxWrites, writes)
-    assert(writes <= 64, "Settlement migration blocked a frame with the entire archive")
-    migrationSlices = migrationSlices + 1
-    assert(migrationSlices < 1000, "Settlement migration failed to finish")
-end
-for key, value in pairs(source) do
-    assert(target[key] == value, "Migration lost an existing settlement")
-end
-assert(OverlordDB.manualBountySettlementLedger.eu == nil)
-print(string.format("Forever performance: 5000 legacy settlements migrated in %d slices, "
-    .. "max %d writes/slice, no lost records", migrationSlices, maxWrites))

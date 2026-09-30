@@ -14,14 +14,6 @@ local function IsKillScoringActive()
     return Overlord.IsKillScoringActive and Overlord:IsKillScoringActive()
 end
 
-local function ResetBountyStreakOutsideFront()
-    if not Overlord.InActiveFront
-        and Overlord.Bounty and Overlord.Bounty.ResetStreak
-        and not (Overlord.Bounty.IsLocalPlayerBounty and Overlord.Bounty:IsLocalPlayerBounty()) then
-        Overlord.Bounty:ResetStreak()
-    end
-end
-
 local combatFrame = CreateFrame("Frame")
 
 -- Cache GUID -> faction, mis a jour sur GROUP_ROSTER_UPDATE
@@ -847,7 +839,6 @@ function Overlord.Combat:CreditHonorableKills(count)
     if count <= 0
         or not IsKillScoringActive() or not Overlord.Leaderboard then return 0 end
 
-    ResetBountyStreakOutsideFront()
     local playerFullName = Overlord.Sync and Overlord.Sync:GetPlayerFullName() or ""
     if not playerFullName or playerFullName == "" then return 0 end
 
@@ -864,13 +855,6 @@ function Overlord.Combat:CreditHonorableKills(count)
     end
     if Overlord.Leaderboard.UpdateLocalPlayerGuild then
         Overlord.Leaderboard:UpdateLocalPlayerGuild()
-    end
-    if Overlord.InActiveFront and Overlord.Bounty then
-        if Overlord.Bounty.OnLocalKills then
-            Overlord.Bounty:OnLocalKills(count)
-        elseif Overlord.Bounty.OnLocalKill then
-            Overlord.Bounty:OnLocalKill()
-        end
     end
 
     local currentZone = Overlord.Zones and Overlord.Zones:GetCurrentPlayerZone()
@@ -934,8 +918,8 @@ function Overlord.Combat:FindGroupMemberName(guid)
     return nil
 end
 
--- Nom victime Forever (Prenom Nom) pour le matching des contrats en or.
-local function ResolveManualBountyVictimName(victimGUID, victimName)
+-- Nom complet Forever (Prenom Nom) de la victime, pour l'activite locale.
+local function ResolveVictimName(victimGUID, victimName)
     local contractVictimName = Overlord.Sync and Overlord.Sync.CanonicalForeverName
         and Overlord.Sync:CanonicalForeverName(victimName) or nil
     if victimGUID then
@@ -968,16 +952,13 @@ local function ApplyLocalKillEvidence(killerGUID, playerGUID, victimGUID, victim
         dbg("ProcessKill: nom du joueur local indisponible, skip")
         return nil, nil
     end
-    local enrichedVictimName = ResolveManualBountyVictimName(victimGUID, victimName)
-    if Overlord.ManualBounty and Overlord.ManualBounty.OnLocalKill and Overlord.InActiveFront then
-        Overlord.ManualBounty:OnLocalKill(playerFullName, enrichedVictimName)
-    end
+    local enrichedVictimName = ResolveVictimName(victimGUID, victimName)
     return playerFullName, enrichedVictimName
 end
 
--- Une preuve de coup fatal peut servir aux contrats et a l'activite locale.
+-- Une preuve de coup fatal sert a l'activite locale.
 -- Elle ne cree aucun point de classement : seule la VH Blizzard le fait.
-function Overlord.Combat:ProcessKill(killerGUID, killerName, victimGUID, victimName, bountyProofOnly)
+function Overlord.Combat:ProcessKill(killerGUID, killerName, victimGUID, victimName, proofOnly)
     local now = GetTime()
     if WasKillRecentlyProcessed(victimGUID, victimName, now) then return false end
     CleanupRecentlyProcessedKills(now)
@@ -1030,7 +1011,7 @@ function Overlord.Combat:ProcessKill(killerGUID, killerName, victimGUID, victimN
         end
     end
     RecordProcessKillDedup(victimGUID, enrichedVictimName, victimName, now)
-    if not bountyProofOnly and Overlord.InActiveFront and victimName and victimName ~= "?" then
+    if not proofOnly and Overlord.InActiveFront and victimName and victimName ~= "?" then
         local zone = Overlord.Zones:GetCurrentPlayerZone()
         if zone and zone.status ~= "locked" then
             self:RegisterZoneKill(zone, killerGUID, killerName, victimName, Overlord.PlayerFaction)
@@ -1098,18 +1079,13 @@ function Overlord.Combat:OnPlayerDead()
     local now = GetTime()
     local killerName, killerGUID = self:IdentifyKiller()
     local killerValid = killerName and IsValidPlayerName(killerName)
-    local victimIsBounty = Overlord.Bounty and Overlord.Bounty.IsLocalPlayerBounty
-        and Overlord.Bounty:IsLocalPlayerBounty()
     local victimIsGeneral = Overlord.General and Overlord.General.IsLocalHolder
         and Overlord.General:IsLocalHolder()
 
     -- Dedup morts rapprochees ; le general local ignore la dedup pour ne pas bloquer GD
     if now - lastDeathTime < DEATH_DEDUP_WINDOW and not victimIsGeneral then
-        if not (victimIsBounty and killerValid) then
-            dbg("  dedup mort: ignore")
-            return
-        end
-        dbg("  dedup mort: retry prime avec tueur identifie")
+        dbg("  dedup mort: ignore")
+        return
     end
     lastDeathTime = now
 
@@ -1124,11 +1100,6 @@ function Overlord.Combat:OnPlayerDead()
                 Overlord.General:EmitPendingDown(nil, nil, "")
             end
         end
-        if Overlord.Bounty and Overlord.Bounty.OnLocalDeathAbort then
-            Overlord.Bounty:OnLocalDeathAbort()
-        elseif Overlord.Bounty and Overlord.Bounty.ResetStreak then
-            Overlord.Bounty:ResetStreak()
-        end
         return
     end
 
@@ -1138,10 +1109,6 @@ function Overlord.Combat:OnPlayerDead()
     local fullKillerName = killerName
     if Overlord.Sync and Overlord.Sync.NormalizeContributorFullName then
         fullKillerName = Overlord.Sync:NormalizeContributorFullName(killerName) or killerName
-    end
-
-    if Overlord.ManualBounty and Overlord.ManualBounty.OnLocalDeath then
-        Overlord.ManualBounty:OnLocalDeath(fullKillerName)
     end
 
     local enemyFaction = Overlord.Zones:GetEnemyFaction()
@@ -1156,34 +1123,15 @@ function Overlord.Combat:OnPlayerDead()
     end
     local currentZoneOnDeath = Overlord.Zones:GetCurrentPlayerZone()
     local zoneNotLocked = currentZoneOnDeath and currentZoneOnDeath.status ~= "locked"
-    local zoneIdForBounty = (zoneNotLocked and currentZoneOnDeath and currentZoneOnDeath.id) or ""
+    local zoneIdOnDeath = (zoneNotLocked and currentZoneOnDeath and currentZoneOnDeath.id) or ""
 
     if victimIsGeneral and Overlord.General.OnLocalDeath then
-        Overlord.General:OnLocalDeath(fullKillerName, killerClass, zoneIdForBounty)
+        Overlord.General:OnLocalDeath(fullKillerName, killerClass, zoneIdOnDeath)
     end
 
-    if not Overlord.InActiveFront then
-        if not victimIsBounty then
-            ResetBountyStreakOutsideFront()
-        end
-        -- Prime : reglement meme hors zone de scoring (capital, voyage, etc.).
-        if victimIsBounty then
-            if Overlord.Bounty and Overlord.Bounty.OnLocalDeath then
-                Overlord.Bounty:OnLocalDeath(fullKillerName, killerClass, enemyFaction, zoneIdForBounty)
-            end
-            return
-        end
-        if not IsKillScoringActive() then return end
-    end
+    if not Overlord.InActiveFront and not IsKillScoringActive() then return end
 
-    if victimIsBounty then
-        if Overlord.Bounty and Overlord.Bounty.OnLocalDeath then
-            Overlord.Bounty:OnLocalDeath(fullKillerName, killerClass, enemyFaction, zoneIdForBounty)
-        end
-    else
-        if Overlord.InActiveFront and Overlord.Bounty and Overlord.Bounty.ResetStreak then
-            Overlord.Bounty:ResetStreak()
-        end
+    do
         if IsKillScoringActive() then
             -- Anti-farming : la victime c'est nous ; l'attaquant est l'ennemi qui nous a tues.
             -- WoW 12.0.5 : SafeUnitName gere les secret values
@@ -1203,7 +1151,7 @@ function Overlord.Combat:OnPlayerDead()
                 if Overlord.Sync then
                     local classStr = killerClass or ""
                     local ts = time()
-                    local zoneIdForEK = zoneIdForBounty
+                    local zoneIdForEK = zoneIdOnDeath
                     local temporaryRootMapID = nil
                     if zoneIdForEK == "" and Overlord.IsInTemporaryKillScoringZone then
                         local inTemporaryZone, resolvedRootMapID =

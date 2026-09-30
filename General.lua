@@ -1030,11 +1030,6 @@ end
 function Overlord.General:TryRestoreLocalGeneral()
     if localIsGeneral then return true end
     if not OverlordDB or not OverlordDB.generalSession then return false end
-    if Overlord.ManualBounty and Overlord.ManualBounty.IsLocalPlayerTargeted
-        and Overlord.ManualBounty:IsLocalPlayerTargeted() then
-        self:ClearPersistedSession()
-        return false
-    end
     -- Pas de restauration solo : evite les annonces fantomes a chaque invitation.
     if not IsInGroup() then return false end
     if Overlord.IsCaptureSyncPending and Overlord:IsCaptureSyncPending() then
@@ -1159,13 +1154,6 @@ function Overlord.General:TryClaim(silentFail)
     if InCombatLockdown() then
         if not silentFail and L and L.GENERAL_COMBAT and Overlord.PrintNotification then
             Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.GENERAL_COMBAT)
-        end
-        return false
-    end
-    if Overlord.ManualBounty and Overlord.ManualBounty.IsLocalPlayerTargeted
-        and Overlord.ManualBounty:IsLocalPlayerTargeted() then
-        if not silentFail and L and L.GENERAL_BOUNTY_BLOCKED and Overlord.PrintNotification then
-            Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.GENERAL_BOUNTY_BLOCKED)
         end
         return false
     end

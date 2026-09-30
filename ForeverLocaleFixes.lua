@@ -12,7 +12,6 @@ if locale == "ptBR" then
     L.HELP_GUIDE = "|cFFFFFF00/ov guide|r: Abrir o guia Forever"
     L.USAGE_START = "Uso: /ov start <ponto>"
     L.UI_SCALE_TOOLTIP = "Tamanho do painel e da classificação. Também é possível usar |cffffffff/ov scale|r."
-    L.GUILD_KEEP_SHARD_UNKNOWN = "Seu layer ainda não foi detectado. Mire em um PNJ próximo ou fique perto de um membro do grupo com o Overlord atualizado. Diagnóstico: /ov shard."
     L.SHARD_TOOLTIP_TITLE = "ID do layer"
     L.SHARD_TOOLTIP_CURRENT = "Layer atual: %s"
     L.SHARD_TOOLTIP_PLAYERS_HEADER = "Jogadores em outro layer:"
@@ -30,7 +29,6 @@ elseif locale == "zhCN" then
     L.HELP_GUIDE = "|cFFFFFF00/ov guide|r：打开 Forever 指南"
     L.USAGE_START = "用法：/ov start <据点>"
     L.UI_SCALE_TOOLTIP = "调整主面板和排行榜的大小，也可以使用 |cffffffff/ov scale|r。"
-    L.GUILD_KEEP_SHARD_UNKNOWN = "尚未检测到你的 layer。请选中附近的 NPC，或靠近使用最新版 Overlord 的队友。诊断命令：/ov shard。"
     L.SHARD_TOOLTIP_TITLE = "Layer ID"
     L.SHARD_TOOLTIP_CURRENT = "当前 layer：%s"
     L.SHARD_TOOLTIP_PLAYERS_HEADER = "其他 layer 上的玩家："
@@ -126,21 +124,14 @@ end
 -- Oublis de traduction visibles (revue 1.0.29).
 local visibleTranslationFixes = {
     frFR = {
-        CHECK_PVP_BUTTON = "Exporter",
         HOF_BUTTON = "Panthéon",
         HOF_TITLE = "Panthéon",
-        GUIDE_SECTION_HOF = "Panthéon",
         LB_CAPTURES_ALLIANCE = "Alliance : captures",
         LB_CAPTURES_HORDE = "Horde : captures",
-        MB_WANTED = "RECHERCHÉ",
-        STATS_COL_STAT = "Statistique",
     },
     esES = {
-        MB_WANTED = "SE BUSCA",
     },
     deDE = {
-        CHECK_PVP_BUTTON = "Exportieren",
-        MB_WANTED = "GESUCHT",
     },
 }
 visibleTranslationFixes.esMX = visibleTranslationFixes.esES

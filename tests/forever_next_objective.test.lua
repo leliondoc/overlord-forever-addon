@@ -269,7 +269,6 @@ local smallMain = box(500, 1000)
 Overlord.UI.GetMainFrame = function() return smallMain end
 Overlord.UI.actionsCard = box(169)
 Overlord.UI.activeZoneFrame = nil
-Overlord.ManualBounty = nil
 local firstArt
 for _, height in ipairs({ 650, 480, 420, 350, 650 }) do
     for _, textHeight in ipairs({ 28, 60, 110 }) do

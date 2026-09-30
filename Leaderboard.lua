@@ -538,9 +538,6 @@ local function markIndexedMetaMutation(self)
     self._dedupMetaEpoch = (self._dedupMetaEpoch or 0) + 1
     self.targetRevision = (self.targetRevision or 0) + 1
     self.guildFactionCache = nil
-    if Overlord.ManualBountyUI and Overlord.ManualBountyUI.RequestRefresh then
-        Overlord.ManualBountyUI:RequestRefresh()
-    end
     if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RequestRefresh then
         Overlord.LeaderboardUI:RequestRefresh()
     end

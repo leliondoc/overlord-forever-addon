@@ -119,14 +119,12 @@ test("Forever capture and kill senders use complete identities", () => {
 test("Forever panel greys disabled modules", () => {
     const ui = readFileSync(new URL("../UI.lua", import.meta.url), "utf8");
     const locales = readFileSync(new URL("../Locales.lua", import.meta.url), "utf8");
-    assert.match(ui, /SetWC3ButtonUnavailable\(exportBtn/);
     assert.match(ui, /SetWC3ButtonUnavailable\(hofBtn/);
-    assert.match(ui, /SetWC3ButtonUnavailable\(mbBtn/);
     assert.match(ui, /SetWC3ButtonUnavailable\(generalBtn/);
-    assert.match(ui, /not Overlord\.Export/);
     assert.match(ui, /not Overlord\.HallOfFameUI/);
-    assert.match(ui, /not Overlord\.ManualBountyUI/);
     assert.match(ui, /not Overlord\.General/);
+    // Contracts and export do not exist on Forever: no dead button in the grid.
+    assert.doesNotMatch(ui, /mbBtn|exportBtn|ManualBountyUI|Overlord\.Export/);
     assert.match(locales, /L\.FOREVER_FEATURE_UNAVAILABLE = "Unavailable on Overlord Forever\."/);
     assert.match(locales, /L\.FOREVER_FEATURE_UNAVAILABLE = "Indisponible sur Overlord Forever\."/);
 });

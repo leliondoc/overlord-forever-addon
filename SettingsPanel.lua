@@ -29,7 +29,7 @@ Overlord.SettingsPanel.ShowTopHudVariableName = "Overlord_ShowTopHud"
 Overlord.SettingsPanel.TopHudModeVariableName = "Overlord_TopHudMode"
 Overlord.SettingsPanel.ShowTutorialBookVariableName = "Overlord_ShowTutorialBook"
 Overlord.SettingsPanel.SoundEnabledVariableName = "Overlord_SoundEnabled"
-Overlord.SettingsPanel.WorldDefenseEnabledVariableName = "Overlord_WorldDefenseEnabled"
+Overlord.SettingsPanel.MapIconOpacityVariableName = "Overlord_MapIconOpacity"
 
 local NOTIF_CHAT_MIN = 0
 local NOTIF_CHAT_STEP = 1
@@ -54,7 +54,9 @@ local DEFAULT_SHOW_TOP_HUD = true
 local DEFAULT_TOP_HUD_MODE = "auto"
 local DEFAULT_SHOW_TUTORIAL_BOOK = false
 local DEFAULT_SOUND_ENABLED = true
-local DEFAULT_WORLD_DEFENSE_ENABLED = true
+-- Icones des points de capture sur la carte du monde : a 100 % elles masquaient
+-- les points d'exclamation de quete dans les villes.
+local DEFAULT_MAP_ICON_OPACITY = 0.5
 
 local ROW_H = 58
 local ROW_GAP = 6
@@ -318,6 +320,37 @@ local function setMinimapOverlayOpacity(value)
     notifySettingsAPI(Overlord.SettingsPanel.MinimapOverlayOpacityVariableName, OverlordDB.config.minimapOverlayOpacity)
 end
 
+-- 0 = icones masquees ; sinon 10 a 100 % par pas de 10 %.
+local function clampMapIconOpacity(v)
+    v = tonumber(v) or DEFAULT_MAP_ICON_OPACITY
+    if v < 0 then v = 0 end
+    if v > MAP_OVERLAY_OPACITY_MAX then v = MAP_OVERLAY_OPACITY_MAX end
+    return math.floor(v * 10 + 0.5) / 10
+end
+
+local function formatMapIconOpacityLabel(value)
+    local v = clampMapIconOpacity(value)
+    if v <= 0 then return (L and L.SETTINGS_TOGGLE_OFF) or "Disabled" end
+    return formatMapOverlayOpacityLabel(v)
+end
+
+local function getMapIconOpacity()
+    local cfg = OverlordDB and OverlordDB.config
+    local v = cfg and cfg.mapIconOpacity
+    if v == nil then v = DEFAULT_MAP_ICON_OPACITY end
+    return clampMapIconOpacity(v)
+end
+
+local function setMapIconOpacity(value)
+    if not OverlordDB then return end
+    OverlordDB.config = OverlordDB.config or {}
+    OverlordDB.config.mapIconOpacity = clampMapIconOpacity(value)
+    if not settingsSuppressSideEffects then
+        requestMapOpacityRefresh(true)
+    end
+    notifySettingsAPI(Overlord.SettingsPanel.MapIconOpacityVariableName, OverlordDB.config.mapIconOpacity)
+end
+
 local function getMapPathOpacity()
     return clampMapPathOpacity(OverlordDB and OverlordDB.config and OverlordDB.config.mapPathOpacity)
 end
@@ -533,21 +566,6 @@ local function setSoundEnabled(value)
     notifySettingsAPI(Overlord.SettingsPanel.SoundEnabledVariableName, OverlordDB.config.soundEnabled)
 end
 
-local function getWorldDefenseEnabled()
-    if OverlordDB and OverlordDB.config and OverlordDB.config.worldDefenseEnabled == false then
-        return false
-    end
-    return true
-end
-
-local function setWorldDefenseEnabled(value)
-    if not OverlordDB then return end
-    OverlordDB.config = OverlordDB.config or {}
-    OverlordDB.config.worldDefenseEnabled = value == true
-    notifySettingsAPI(Overlord.SettingsPanel.WorldDefenseEnabledVariableName,
-        OverlordDB.config.worldDefenseEnabled)
-end
-
 -- Une seule upvalue pour tous les get/set (limite Lua 60 upvalues sur EnsureFrame).
 local Acc = {
     getScale = getScale,
@@ -565,6 +583,11 @@ local Acc = {
     formatMapOverlayOpacityLabel = formatMapOverlayOpacityLabel,
     getMinimapOverlayOpacity = getMinimapOverlayOpacity,
     setMinimapOverlayOpacity = setMinimapOverlayOpacity,
+    getMapIconOpacity = getMapIconOpacity,
+    setMapIconOpacity = setMapIconOpacity,
+    clampMapIconOpacity = clampMapIconOpacity,
+    formatMapIconOpacityLabel = formatMapIconOpacityLabel,
+    DEFAULT_MAP_ICON_OPACITY = DEFAULT_MAP_ICON_OPACITY,
     getMapPathOpacity = getMapPathOpacity,
     setMapPathOpacity = setMapPathOpacity,
     clampMapPathOpacity = clampMapPathOpacity,
@@ -587,8 +610,6 @@ local Acc = {
     setShowTutorialBook = setShowTutorialBook,
     getSoundEnabled = getSoundEnabled,
     setSoundEnabled = setSoundEnabled,
-    getWorldDefenseEnabled = getWorldDefenseEnabled,
-    setWorldDefenseEnabled = setWorldDefenseEnabled,
 }
 
 function Overlord.SettingsPanel:RefreshControls()
@@ -596,6 +617,7 @@ function Overlord.SettingsPanel:RefreshControls()
     if self._chatRow and self._chatRow.Refresh then self._chatRow:Refresh() end
     if self._opacityRow and self._opacityRow.Refresh then self._opacityRow:Refresh() end
     if self._minimapOpacityRow and self._minimapOpacityRow.Refresh then self._minimapOpacityRow:Refresh() end
+    if self._mapIconOpacityRow and self._mapIconOpacityRow.Refresh then self._mapIconOpacityRow:Refresh() end
     if self._pathOpacityRow and self._pathOpacityRow.Refresh then self._pathOpacityRow:Refresh() end
     if self._autoWaypointRow and self._autoWaypointRow.Refresh then self._autoWaypointRow:Refresh() end
     if self._showTopHudRow and self._showTopHudRow.Refresh then self._showTopHudRow:Refresh() end
@@ -631,9 +653,6 @@ function Overlord.SettingsPanel:RefreshFactionChrome()
     if f.subtitleFs and P.bright then
         f.subtitleFs:SetTextColor(P.bright[1], P.bright[2], P.bright[3])
     end
-    if f.content and f.content.SetBackdropBorderColor then
-        f.content:SetBackdropBorderColor(gold[1], gold[2], gold[3], 0.72)
-    end
     if f._woodBackdropApplied and UI.UpdateWoodDialogBorder then
         UI.UpdateWoodDialogBorder(f, { fallbackBg = P.fallbackBg, borderColor = gold, borderAlpha = 0.88 })
     elseif UI.ApplyWoodDialogBackdrop and f.SetBackdrop then
@@ -647,13 +666,13 @@ function Overlord.SettingsPanel:ResetDefaults()
     setNotificationChat(DEFAULT_NOTIF_CHAT)
     setMapOverlayOpacity(DEFAULT_MAP_OVERLAY_OPACITY)
     setMinimapOverlayOpacity(DEFAULT_MINIMAP_OVERLAY_OPACITY)
+    setMapIconOpacity(DEFAULT_MAP_ICON_OPACITY)
     setMapPathOpacity(DEFAULT_MAP_PATH_OPACITY)
     setAutoWaypoint(DEFAULT_AUTO_WAYPOINT)
     setShowMinimapButton(DEFAULT_SHOW_MINIMAP_BUTTON)
     setTopHudMode(DEFAULT_TOP_HUD_MODE)
     setShowTutorialBook(DEFAULT_SHOW_TUTORIAL_BOOK)
     setSoundEnabled(DEFAULT_SOUND_ENABLED)
-    setWorldDefenseEnabled(DEFAULT_WORLD_DEFENSE_ENABLED)
     if Overlord.GuildKillAlert then Overlord.GuildKillAlert:ResetDefaults() end
     setShowMinimapCaptureZones(DEFAULT_SHOW_MINIMAP_CAPTURE_ZONES)
     setShowCoinsHud(DEFAULT_SHOW_COINS_HUD)
@@ -771,8 +790,6 @@ local function BuildSettingsRows(sp, rowParent, initialRowW, gold, white, placeR
         set = Acc.setScale,
         snap = Acc.clampScale,
         formatValue = Acc.formatScaleLabel,
-        formatMin = Acc.formatScaleLabel,
-        formatMax = Acc.formatScaleLabel,
         gold = gold,
         white = white,
     })
@@ -790,24 +807,10 @@ local function BuildSettingsRows(sp, rowParent, initialRowW, gold, white, placeR
         set = Acc.setNotificationChat,
         snap = Acc.clampNotificationChat,
         formatValue = Acc.formatNotificationChatLabel,
-        formatMin = Acc.formatNotificationChatLabel,
-        formatMax = function(v) return tostring(v) end,
         gold = gold,
         white = white,
     })
     placeRow(sp._chatRow)
-
-    sp._worldDefenseEnabledRow = CreateToggleRow(rowParent, {
-        width = initialRowW,
-        height = ROW_H,
-        label = (L and L.WORLD_DEFENSE_ENABLED_LABEL) or "World Defense relay",
-        tooltip = (L and L.WORLD_DEFENSE_ENABLED_TOOLTIP) or "",
-        get = Acc.getWorldDefenseEnabled,
-        set = Acc.setWorldDefenseEnabled,
-        gold = gold,
-        white = white,
-    })
-    placeRow(sp._worldDefenseEnabledRow)
 
     local gka = Overlord.GuildKillAlert
     if gka then
@@ -836,12 +839,27 @@ local function BuildSettingsRows(sp, rowParent, initialRowW, gold, white, placeR
         set = Acc.setMapOverlayOpacity,
         snap = Acc.clampMapOverlayOpacity,
         formatValue = Acc.formatMapOverlayOpacityLabel,
-        formatMin = Acc.formatMapOverlayOpacityLabel,
-        formatMax = Acc.formatMapOverlayOpacityLabel,
         gold = gold,
         white = white,
     })
     placeRow(sp._opacityRow)
+
+    sp._mapIconOpacityRow = UI.CreateWC3StepperSlider(rowParent, {
+        width = initialRowW,
+        height = ROW_H,
+        label = (L and L.MAP_ICON_OPACITY_LABEL) or "Map icon opacity",
+        tooltip = (L and L.MAP_ICON_OPACITY_TOOLTIP) or "",
+        min = 0,
+        max = MAP_OVERLAY_OPACITY_MAX,
+        step = MAP_OVERLAY_OPACITY_STEP,
+        get = Acc.getMapIconOpacity,
+        set = Acc.setMapIconOpacity,
+        snap = Acc.clampMapIconOpacity,
+        formatValue = Acc.formatMapIconOpacityLabel,
+        gold = gold,
+        white = white,
+    })
+    placeRow(sp._mapIconOpacityRow)
 
     sp._minimapOpacityRow = UI.CreateWC3StepperSlider(rowParent, {
         width = initialRowW,
@@ -855,8 +873,6 @@ local function BuildSettingsRows(sp, rowParent, initialRowW, gold, white, placeR
         set = Acc.setMinimapOverlayOpacity,
         snap = Acc.clampMapOverlayOpacity,
         formatValue = Acc.formatMapOverlayOpacityLabel,
-        formatMin = Acc.formatMapOverlayOpacityLabel,
-        formatMax = Acc.formatMapOverlayOpacityLabel,
         gold = gold,
         white = white,
     })
@@ -934,8 +950,6 @@ local function BuildSettingsRows(sp, rowParent, initialRowW, gold, white, placeR
         set = Acc.setMapPathOpacity,
         snap = Acc.clampMapPathOpacity,
         formatValue = Acc.formatMapPathOpacityLabel,
-        formatMin = Acc.formatMapPathOpacityLabel,
-        formatMax = Acc.formatMapPathOpacityLabel,
         gold = gold,
         white = white,
     })
@@ -1120,17 +1134,9 @@ function Overlord.SettingsPanel:EnsureFrame()
         f.subtitleFs:SetTextColor(P.bright[1], P.bright[2], P.bright[3])
     end
 
-    f.content = UI.CreateWC3SubPanel(f.stack, initialStackW, SETTINGS_VIEWPORT_H + SETTINGS_CONTENT_INSET * 2, {
-        panelBg = P.panelBg,
-        borderColor = gold,
-        borderAlpha = 0.72,
-        insets = {
-            left = SETTINGS_CONTENT_INSET,
-            right = SETTINGS_CONTENT_INSET,
-            top = SETTINGS_CONTENT_INSET,
-            bottom = SETTINGS_CONTENT_INSET,
-        },
-    })
+    -- Zone de defilement sans bordure : le cadre bois suffit (plus de cadre dans un cadre).
+    f.content = CreateFrame("Frame", nil, f.stack)
+    f.content:SetSize(initialStackW, SETTINGS_VIEWPORT_H + SETTINGS_CONTENT_INSET * 2)
     f.content:SetPoint("TOP", f.subtitleFs, "BOTTOM", 0, -SETTINGS_GAP_HEADER_CONTENT)
     f.content:SetPoint("LEFT", f.stack, "LEFT", 0, 0)
     f.content:SetPoint("RIGHT", f.stack, "RIGHT", 0, 0)
@@ -1285,6 +1291,23 @@ local function RegisterVerticalFallback()
     end
     Settings.CreateSlider(category, mmoSetting, mmoOptions, (L and L.MINIMAP_OVERLAY_OPACITY_TOOLTIP) or "")
 
+    local miSetting = Settings.RegisterProxySetting(
+        category,
+        Overlord.SettingsPanel.MapIconOpacityVariableName,
+        type(Acc.DEFAULT_MAP_ICON_OPACITY),
+        (L and L.MAP_ICON_OPACITY_LABEL) or "Map icon opacity",
+        Acc.DEFAULT_MAP_ICON_OPACITY,
+        Acc.getMapIconOpacity,
+        Acc.setMapIconOpacity
+    )
+    local miOptions = Settings.CreateSliderOptions(0, MAP_OVERLAY_OPACITY_MAX, MAP_OVERLAY_OPACITY_STEP)
+    if miOptions and miOptions.SetLabelFormatter and Lbl then
+        pcall(function()
+            miOptions:SetLabelFormatter(Lbl.Right, Acc.formatMapIconOpacityLabel)
+        end)
+    end
+    Settings.CreateSlider(category, miSetting, miOptions, (L and L.MAP_ICON_OPACITY_TOOLTIP) or "")
+
     local poSetting = Settings.RegisterProxySetting(
         category,
         Overlord.SettingsPanel.MapPathOpacityVariableName,
@@ -1418,17 +1441,6 @@ local function RegisterVerticalFallback()
             setSoundEnabled
         )
         Settings.CreateCheckbox(category, seSetting, (L and L.SOUND_ENABLED_TOOLTIP) or "")
-        local wdSetting = Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.WorldDefenseEnabledVariableName,
-            type(DEFAULT_WORLD_DEFENSE_ENABLED),
-            (L and L.WORLD_DEFENSE_ENABLED_LABEL) or "World Defense relay",
-            DEFAULT_WORLD_DEFENSE_ENABLED,
-            getWorldDefenseEnabled,
-            setWorldDefenseEnabled
-        )
-        Settings.CreateCheckbox(category, wdSetting,
-            (L and L.WORLD_DEFENSE_ENABLED_TOOLTIP) or "")
     end
     Settings.RegisterAddOnCategory(category)
     Overlord.SettingsPanel._category = category
@@ -1491,6 +1503,15 @@ function Overlord.SettingsPanel:Register()
             DEFAULT_MINIMAP_OVERLAY_OPACITY,
             getMinimapOverlayOpacity,
             setMinimapOverlayOpacity
+        )
+        Settings.RegisterProxySetting(
+            category,
+            Overlord.SettingsPanel.MapIconOpacityVariableName,
+            type(Acc.DEFAULT_MAP_ICON_OPACITY),
+            (L and L.MAP_ICON_OPACITY_LABEL) or "Map icon opacity",
+            Acc.DEFAULT_MAP_ICON_OPACITY,
+            Acc.getMapIconOpacity,
+            Acc.setMapIconOpacity
         )
         Settings.RegisterProxySetting(
             category,
@@ -1563,15 +1584,6 @@ function Overlord.SettingsPanel:Register()
             DEFAULT_SOUND_ENABLED,
             getSoundEnabled,
             setSoundEnabled
-        )
-        Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.WorldDefenseEnabledVariableName,
-            type(DEFAULT_WORLD_DEFENSE_ENABLED),
-            (L and L.WORLD_DEFENSE_ENABLED_LABEL) or "World Defense relay",
-            DEFAULT_WORLD_DEFENSE_ENABLED,
-            getWorldDefenseEnabled,
-            setWorldDefenseEnabled
         )
 
         Settings.RegisterAddOnCategory(category)

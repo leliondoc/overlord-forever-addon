@@ -114,16 +114,15 @@ local function ShowFrontDebug()
     end
     local playerFront = Overlord.GetPlayerMapFront and Overlord:GetPlayerMapFront()
     local reason = Overlord.GetFrontDetectionBlockReason and Overlord:GetFrontDetectionBlockReason()
-    local wm = (C_PvP and C_PvP.IsWarModeActive and C_PvP.IsWarModeActive()) and "ON" or "OFF"
     Overlord:PrintNotification("|cFFFFD100[Overlord]|r Diagnostic front :")
     local killScoring = Overlord.IsKillScoringActive and Overlord:IsKillScoringActive()
     local killZone = Overlord.Ressources and Overlord.Ressources.IsInOverlordKillZone
         and Overlord.Ressources:IsInOverlordKillZone()
     local temporaryKillZone = Overlord.IsInTemporaryKillScoringZone
         and Overlord:IsInTemporaryKillScoringZone()
-    Overlord:PrintNotification(string.format("  InActiveFront=%s  KillScoring=%s  KillZone=%s  OutdoorPvPZone=%s  InstanceSuspended=%s  WarMode=%s",
+    Overlord:PrintNotification(string.format("  InActiveFront=%s  KillScoring=%s  KillZone=%s  OutdoorPvPZone=%s  InstanceSuspended=%s",
         tostring(Overlord.InActiveFront), tostring(killScoring), tostring(killZone), tostring(temporaryKillZone),
-        tostring(Overlord.InstanceSuspended), wm))
+        tostring(Overlord.InstanceSuspended)))
     Overlord:PrintNotification(string.format("  Carte=%s (UiMapID %s)  Front=%s  Actif=%s  Panel=%s",
         mapName, tostring(mapID),
         playerFront and playerFront.id or "nil",
@@ -392,8 +391,7 @@ local PERF_MODULES = {
     "ActionShortcut", "Button", "CaptureLease", "Combat", "FrontActivity", "Fronts",
     "General", "GeneralMap", "GeneralNameplate", "GeneralSync", "GuildKeep",
     "HallOfFameUI", "Leaderboard",
-    "LeaderboardUI", "ManualBounty", "ManualBountyMail", "ManualBountyMap",
-    "ManualBountySync", "ManualBountyUI", "MapMarkers", "Outpost", "OutpostControl",
+    "LeaderboardUI", "MapMarkers", "Outpost", "OutpostControl",
     "Popups", "Ressources", "SettingsPanel", "Shard", "Sync", "UI", "ZoneControl",
     "ZoneIndicator", "Zones", "BetaNetwork",
 }
@@ -513,7 +511,6 @@ local function ShowHelp()
     Overlord:PrintNotification(L.HELP_START)
     Overlord:PrintNotification(L.HELP_LB)
     Overlord:PrintNotification(L.HELP_SYNC)
-    Overlord:PrintNotification(L.HELP_EXPORT)
     Overlord:PrintNotification(L.HELP_DOM)
     Overlord:PrintNotification(L.HELP_SCALE)
     Overlord:PrintNotification(L.HELP_GUIDE)
@@ -871,30 +868,8 @@ local function CommandHandler(msg)
         end
         Overlord:PrintNotification("|cFF00FF00[Overlord]|r " .. L.POS_RESET)
 
-    elseif cmd == "export" then
-        if Overlord.Export then
-            Overlord.Export:ShowUI()
-        end
-
     elseif cmd == "scale" then
         RunScaleCommand(args)
-
-    elseif cmd == "bountytest" then
-        if not Overlord.ManualBounty then
-            Overlord:PrintNotification("|cFFFF0000[Overlord]|r Gold contract module unavailable.")
-            return
-        end
-        if not (OverlordDB and OverlordDB.config and OverlordDB.config.debug) then
-            Overlord:PrintNotification("|cFFFF0000[Overlord]|r Gold contract test requires debug mode.")
-            return
-        end
-        if args[2] and string.lower(args[2]) == "clear" then
-            Overlord.ManualBounty:DebugClear()
-            Overlord:PrintNotification("|cFF00FF00[Overlord]|r Gold contract test cleared.")
-        else
-            Overlord.ManualBounty:DebugPlaceTest()
-            Overlord:PrintNotification("|cFF00FF00[Overlord]|r Gold contract test placed on you. Use |cFFFFFF00/ov bountytest clear|r to remove.")
-        end
 
     elseif cmd == "sync" then
         if Overlord.Sync then

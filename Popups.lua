@@ -54,7 +54,7 @@ local FEATURED_FRONT_BODY_ACTIVITY_GAP = 10
 local NEXT_OBJECTIVE_DETAILS_GAP = 8
 local FEATURED_FRONT_BOTTOM_PAD = 16
 local FEATURED_FRONT_ACTIVITY_RAIL_W = 24
-local FEATURED_FRONT_BOUNTY_GAP = 10
+local FEATURED_FRONT_FOOTER_GAP = 10
 local FEATURED_FRONT_ACTIONS_GAP = 8
 local FEATURED_FRONT_ACTIVITY_ICON = 14
 local FEATURED_FRONT_ACTIVITY_STAR = 10
@@ -1486,8 +1486,8 @@ local function GetFeaturedFrontActivityMatchHeight(f, footerVisible)
     end
 
     if footerVisible and f and f.activityFooter then
-        local bountyH = f.activityFooter:GetHeight() or 30
-        return math.max(0, matchH - bountyH - FEATURED_FRONT_BOUNTY_GAP)
+        local footerH = f.activityFooter:GetHeight() or 30
+        return math.max(0, matchH - footerH - FEATURED_FRONT_FOOTER_GAP)
     end
     return matchH
 end
@@ -1543,7 +1543,7 @@ local function AnchorFeaturedFrontActivityBlock(f, contentH, footerVisible)
     local detailsH = f.objectiveDetailsFs and f.objectiveDetailsFs:IsShown()
         and (NEXT_OBJECTIVE_DETAILS_GAP + math.ceil(f.objectiveDetailsFs:GetStringHeight() or 0)) or 0
     local footerH = footerVisible and f.activityFooter and f.activityFooter:GetHeight() or 0
-    local footerSpace = footerH > 0 and (footerH + FEATURED_FRONT_BOUNTY_GAP) or 0
+    local footerSpace = footerH > 0 and (footerH + FEATURED_FRONT_FOOTER_GAP) or 0
     local minActivity = ComputeFeaturedFrontActivityHeight(FEATURED_FRONT_ACTIVITY_VISIBLE_ROWS)
     local fixedH = top - artTop + 16 + bodyH + detailsH
         + FEATURED_FRONT_BODY_ACTIVITY_GAP + footerSpace + FEATURED_FRONT_BOTTOM_PAD
@@ -1580,10 +1580,7 @@ local function ApplyFeaturedFrontActivityLayout(f, rowCount)
     local actionsCard = Overlord.UI and Overlord.UI.actionsCard
     if not actionsCard then return end
 
-    local hasContracts = Overlord.ManualBounty
-        and Overlord.ManualBounty.HasOpenContracts
-        and Overlord.ManualBounty:HasOpenContracts()
-    local footerVisible = hasContracts or f.coinsRow ~= nil
+    local footerVisible = f.coinsRow ~= nil
     local minimumContentH = ComputeFeaturedFrontActivityHeight(rowCount)
     local contentH = minimumContentH
     local matchH = GetFeaturedFrontActivityMatchHeight(f, footerVisible)
@@ -1695,7 +1692,7 @@ function Overlord.Popups:CreateFeaturedFrontCoinsPanel(parent)
     return row
 end
 
-function Overlord.Popups:RefreshFeaturedFrontBountyButton()
+function Overlord.Popups:RefreshFeaturedFrontActivity()
     if featuredFrontFrame and ApplyFeaturedFrontActivity then
         ApplyFeaturedFrontActivity(featuredFrontFrame)
     end
@@ -1926,25 +1923,7 @@ EnsureFeaturedFrontFrame = function()
         FEATURED_FRONT_ACTIVITY_BOTTOM_PAD)
     f.activityScroll:Hide()
 
-    if Overlord.ManualBounty then
-        f.bountyBtn = Overlord.UI.CreateWC3Button(
-            f,
-            FEATURED_FRONT_PANEL_WIDTH - 48,
-            30,
-            L.FEATURED_FRONT_BOUNTIES_ACTIVE,
-            function()
-                if Overlord.ManualBountyUI and Overlord.ManualBountyUI.Show then
-                    Overlord.ManualBountyUI:Show()
-                end
-            end,
-            "Interface\\Icons\\INV_Misc_Coin_01",
-            { gold = GOLD }
-        )
-        f.bountyBtn:SetPoint("TOP", f.activityPanel, "BOTTOM", 0, -10)
-        Overlord.UI.SetWC3ButtonActive(f.bountyBtn, true, { gold = GOLD })
-        f.bountyBtn:Hide()
-        f.activityFooter = f.bountyBtn
-    elseif Overlord.Ressources then
+    if Overlord.Ressources then
         f.coinsRow = Overlord.Popups:CreateFeaturedFrontCoinsPanel(f)
         f.activityFooter = f.coinsRow
     end

@@ -23,7 +23,7 @@ en = {
     GUIDE_SECTION_FEATURED = "Featured front",
     GUIDE_FEATURED_BODY = "The featured front changes daily. Each official open-world honorable kill there gives +1 Overlord coin. The leaderboard records the kill only once. Weekly rankings reset on Tuesday at 08:00 UTC during the Forever beta.",
     GUIDE_SECTION_CONTEST = "Capture and contest",
-    GUIDE_CONTEST_BODY = "Normal points require 2 minutes inside the capture circle. Leaving makes progress decay. Equal numbers of opponents freeze progress; enemy superiority pushes it back. A hostile capital takes 8 minutes, your own capital 2 minutes. A complete front victory gives +2% weekly domination and a 15-minute truce.",
+    GUIDE_CONTEST_BODY = "Normal points require 2 minutes inside the capture circle. Leaving makes progress decay. Equal numbers of opponents freeze progress; enemy superiority pushes it back. A hostile capital takes 8 minutes, your own capital 2 minutes. A complete front victory gives +1% weekly domination and a 15-minute truce.",
     GUIDE_SECTION_GOLD = "Coin mines",
     GUIDE_GOLD_BODY = "Mines on the map:\n%s\n\nInside a mine circle, gain 1 coin every 3 seconds (personal cap 100); mining an ore node grants 5. Spend 25 coins on an attack that shortens your next capture by 60 seconds, or a reinforcement that adds 60 seconds to the next enemy capture of one of your front points. Shared mine stock refills over time.",
     GUIDE_SECTION_SIEGE = "Capital victory",
@@ -35,7 +35,7 @@ en = {
     GUIDE_SECTION_FACTION_CALL = "Call to arms and command",
     GUIDE_FACTION_CALL_BODY = "On an active front, Call to arms sends a raid warning to every Overlord ally of your faction (once every 4 hours for the whole faction). A party or raid leader can take the Commandant role: their position appears to synced allies on the map.",
     GUIDE_SECTION_TOOLS = "Rankings and sync",
-    GUIDE_TOOLS_BODY = "The weekly leaderboard shows official open-world honorable kills, captures, guild keeps and outposts. Open it from the panel or with /ov lb. /ov sync requests a catch-up from reachable players. Gold contracts use full Forever names and manual mail/COD settlement. The Hall of Fame opens from Actions."
+    GUIDE_TOOLS_BODY = "The weekly leaderboard shows official open-world honorable kills, captures, guild keeps and outposts. Open it from the panel or with /ov lb. /ov sync requests a catch-up from reachable players. The Hall of Fame opens from Actions."
 },
 fr = {
     GUIDE_BTN_TOOLTIP = "Guide Forever (3 pages)",
@@ -54,7 +54,7 @@ fr = {
     GUIDE_SECTION_FEATURED = "Front du jour",
     GUIDE_FEATURED_BODY = "Le front du jour change chaque jour. Chaque VH officielle en monde ouvert sur ce front donne +1 coin Overlord. Le classement ne compte la VH qu'une fois. Pendant la bêta Forever, le classement hebdomadaire est réinitialisé le mardi à 08:00 UTC.",
     GUIDE_SECTION_CONTEST = "Capture et contestation",
-    GUIDE_CONTEST_BODY = "Un point normal demande 2 minutes dans le cercle. En sortant, la progression décroît. À nombre égal, les adversaires la figent ; en supériorité, ils la font reculer. Une capitale ennemie prend 8 minutes et votre propre capitale 2 minutes. Une victoire totale donne +2 % de domination hebdomadaire et une trêve de 15 minutes.",
+    GUIDE_CONTEST_BODY = "Un point normal demande 2 minutes dans le cercle. En sortant, la progression décroît. À nombre égal, les adversaires la figent ; en supériorité, ils la font reculer. Une capitale ennemie prend 8 minutes et votre propre capitale 2 minutes. Une victoire totale donne +1 % de domination hebdomadaire et une trêve de 15 minutes.",
     GUIDE_SECTION_GOLD = "Mines de coins",
     GUIDE_GOLD_BODY = "Mines sur la carte :\n%s\n\nDans le cercle, gagnez 1 coin toutes les 3 secondes (maximum personnel : 100) ; une veine minée en donne 5. Dépensez 25 coins pour raccourcir votre prochaine capture de 60 secondes ou allonger de 60 secondes la prochaine capture ennemie d'un de vos points. Le stock partagé des mines se régénère.",
     GUIDE_SECTION_SIEGE = "Victoire sur une capitale",
@@ -66,7 +66,7 @@ fr = {
     GUIDE_SECTION_FACTION_CALL = "Appel et commandement",
     GUIDE_FACTION_CALL_BODY = "Sur un front actif, l'Appel aux armes envoie une alerte de raid à tous les alliés Overlord de votre faction (une fois toutes les 4 heures pour toute la faction). Un chef de groupe ou de raid peut devenir Commandant : sa position apparaît sur la carte des alliés synchronisés.",
     GUIDE_SECTION_TOOLS = "Classement et synchronisation",
-    GUIDE_TOOLS_BODY = "Le classement hebdomadaire montre les VH officielles en monde ouvert, les captures, les fortins et les avant-postes. Ouvrez-le dans le panneau ou avec /ov lb. /ov sync demande un rattrapage aux joueurs joignables. Les contrats en or utilisent les noms Forever complets et un règlement manuel par courrier/COD. Le Hall of Fame s'ouvre depuis Actions."
+    GUIDE_TOOLS_BODY = "Le classement hebdomadaire montre les VH officielles en monde ouvert, les captures, les fortins et les avant-postes. Ouvrez-le dans le panneau ou avec /ov lb. /ov sync demande un rattrapage aux joueurs joignables. Le Hall of Fame s'ouvre depuis Actions."
 },
 es = {
     GUIDE_BTN_TOOLTIP = "Guía de Forever (3 páginas)",
@@ -85,7 +85,7 @@ es = {
     GUIDE_SECTION_FEATURED = "Frente del día",
     GUIDE_FEATURED_BODY = "El frente destacado cambia a diario. Cada muerte honorable oficial allí en el mundo abierto da +1 coin Overlord; la clasificación la cuenta una sola vez. Durante la beta Forever, la clasificación semanal se reinicia el martes a las 08:00 UTC.",
     GUIDE_SECTION_CONTEST = "Captura y disputa",
-    GUIDE_CONTEST_BODY = "Un punto normal requiere 2 minutos en el círculo. Al salir, el progreso disminuye. Con igual número de enemigos se detiene; con mayoría enemiga retrocede. La capital rival tarda 8 minutos y la propia 2. Una victoria total da +2 % de dominación semanal y 15 minutos de tregua.",
+    GUIDE_CONTEST_BODY = "Un punto normal requiere 2 minutos en el círculo. Al salir, el progreso disminuye. Con igual número de enemigos se detiene; con mayoría enemiga retrocede. La capital rival tarda 8 minutos y la propia 2. Una victoria total da +1 % de dominación semanal y 15 minutos de tregua.",
     GUIDE_SECTION_GOLD = "Minas de coins",
     GUIDE_GOLD_BODY = "Minas en el mapa:\n%s\n\nDentro del círculo ganas 1 coin cada 3 segundos (máximo personal: 100); extraer una veta da 5. Gasta 25 coins para reducir tu siguiente captura 60 segundos o añadir 60 segundos a la siguiente captura enemiga de uno de tus puntos. Las reservas compartidas se regeneran.",
     GUIDE_SECTION_SIEGE = "Victoria en la capital",
@@ -97,7 +97,7 @@ es = {
     GUIDE_SECTION_FACTION_CALL = "Llamada y mando",
     GUIDE_FACTION_CALL_BODY = "En un frente activo, Llamada a las armas envía un aviso de banda a todos los aliados de tu facción con Overlord (una vez cada 4 horas para toda la facción). Un líder de grupo o banda puede asumir el papel de Comandante y aparecer en el mapa de aliados sincronizados.",
     GUIDE_SECTION_TOOLS = "Clasificación y sincronización",
-    GUIDE_TOOLS_BODY = "La clasificación semanal muestra muertes honorables oficiales en mundo abierto, capturas, fortalezas y puestos. Ábrela desde el panel o con /ov lb. /ov sync solicita datos a jugadores accesibles. Los contratos de oro usan nombres completos Forever y pago manual por correo/COD. El Salón de la Fama se abre desde Acciones."
+    GUIDE_TOOLS_BODY = "La clasificación semanal muestra muertes honorables oficiales en mundo abierto, capturas, fortalezas y puestos. Ábrela desde el panel o con /ov lb. /ov sync solicita datos a jugadores accesibles. El Salón de la Fama se abre desde Acciones."
 },
 de = {
     GUIDE_BTN_TOOLTIP = "Forever-Anleitung (3 Seiten)",
@@ -116,7 +116,7 @@ de = {
     GUIDE_SECTION_FEATURED = "Front des Tages",
     GUIDE_FEATURED_BODY = "Die hervorgehobene Front wechselt täglich. Jeder offizielle ehrenhafte Sieg in der offenen Welt dort bringt +1 Overlord-Coin; die Rangliste zählt ihn nur einmal. In der Forever-Beta wird die Wochenrangliste dienstags um 08:00 UTC zurückgesetzt.",
     GUIDE_SECTION_CONTEST = "Eroberung und Gegenwehr",
-    GUIDE_CONTEST_BODY = "Ein normaler Punkt braucht 2 Minuten im Kreis. Beim Verlassen sinkt der Fortschritt. Gleich viele Gegner stoppen ihn; gegnerische Überzahl drängt ihn zurück. Die feindliche Hauptstadt braucht 8 Minuten, die eigene 2. Ein vollständiger Frontsieg gibt +2 % Wochendominanz und 15 Minuten Waffenruhe.",
+    GUIDE_CONTEST_BODY = "Ein normaler Punkt braucht 2 Minuten im Kreis. Beim Verlassen sinkt der Fortschritt. Gleich viele Gegner stoppen ihn; gegnerische Überzahl drängt ihn zurück. Die feindliche Hauptstadt braucht 8 Minuten, die eigene 2. Ein vollständiger Frontsieg gibt +1 % Wochendominanz und 15 Minuten Waffenruhe.",
     GUIDE_SECTION_GOLD = "Coin-Minen",
     GUIDE_GOLD_BODY = "Minen auf der Karte:\n%s\n\nIm Kreis gibt es alle 3 Sekunden 1 Coin (persönliches Maximum 100); ein Erzvorkommen gibt 5. Gebt 25 Coins aus, um die nächste Eroberung um 60 Sekunden zu verkürzen oder die nächste feindliche Eroberung eines eurer Punkte um 60 Sekunden zu verlängern. Gemeinsame Vorräte füllen sich wieder auf.",
     GUIDE_SECTION_SIEGE = "Sieg an der Hauptstadt",
@@ -128,7 +128,7 @@ de = {
     GUIDE_SECTION_FACTION_CALL = "Ruf und Kommando",
     GUIDE_FACTION_CALL_BODY = "An einer aktiven Front sendet der Ruf zu den Waffen eine Schlachtzugswarnung an alle Overlord-Verbündeten Eurer Fraktion (einmal alle 4 Stunden für die ganze Fraktion). Ein Gruppen- oder Schlachtzugleiter kann Kommandant werden und erscheint auf der Karte synchronisierter Verbündeter.",
     GUIDE_SECTION_TOOLS = "Rangliste und Sync",
-    GUIDE_TOOLS_BODY = "Die Wochenrangliste zeigt offizielle ehrenhafte Siege in der offenen Welt, Eroberungen, Gildenfestungen und Außenposten. Öffnet sie im Panel oder mit /ov lb. /ov sync fordert Daten von erreichbaren Spielern an. Goldverträge verwenden vollständige Forever-Namen und manuelle Post-/Nachnahme-Zahlung. Die Ruhmeshalle öffnet über Aktionen."
+    GUIDE_TOOLS_BODY = "Die Wochenrangliste zeigt offizielle ehrenhafte Siege in der offenen Welt, Eroberungen, Gildenfestungen und Außenposten. Öffnet sie im Panel oder mit /ov lb. /ov sync fordert Daten von erreichbaren Spielern an. Die Ruhmeshalle öffnet über Aktionen."
 },
 ru = {
     GUIDE_BTN_TOOLTIP = "Руководство Forever (3 страницы)",
@@ -147,7 +147,7 @@ ru = {
     GUIDE_SECTION_FEATURED = "Фронт дня",
     GUIDE_FEATURED_BODY = "Выделенный фронт меняется ежедневно. Каждая официальная почётная победа там в открытом мире даёт +1 coin Overlord; рейтинг учитывает её только один раз. Во время беты Forever недельный рейтинг сбрасывается во вторник в 08:00 UTC.",
     GUIDE_SECTION_CONTEST = "Захват и оспаривание",
-    GUIDE_CONTEST_BODY = "Обычную точку нужно удерживать в круге 2 минуты. При выходе прогресс уменьшается. Равное число врагов останавливает его, превосходство врагов откатывает. Вражеская столица требует 8 минут, своя — 2. Полная победа на фронте даёт +2 % недельного господства и 15 минут перемирия.",
+    GUIDE_CONTEST_BODY = "Обычную точку нужно удерживать в круге 2 минуты. При выходе прогресс уменьшается. Равное число врагов останавливает его, превосходство врагов откатывает. Вражеская столица требует 8 минут, своя — 2. Полная победа на фронте даёт +1 % недельного господства и 15 минут перемирия.",
     GUIDE_SECTION_GOLD = "Рудники coins",
     GUIDE_GOLD_BODY = "Рудники на карте:\n%s\n\nВ круге вы получаете 1 coin каждые 3 секунды (личный предел 100); добытая жила даёт 5. За 25 coins можно сократить следующий захват на 60 секунд либо продлить следующий захват вашей точки врагом на 60 секунд. Общий запас рудника постепенно восстанавливается.",
     GUIDE_SECTION_SIEGE = "Победа у столицы",
@@ -159,7 +159,7 @@ ru = {
     GUIDE_SECTION_FACTION_CALL = "Призыв и командование",
     GUIDE_FACTION_CALL_BODY = "На активном фронте Призыв к оружию отправляет рейдовое предупреждение всем союзникам вашей фракции с Overlord (раз в 4 часа на всю фракцию). Лидер группы или рейда может стать Командиром; союзники с синхронизацией видят его на карте.",
     GUIDE_SECTION_TOOLS = "Рейтинг и синхронизация",
-    GUIDE_TOOLS_BODY = "Недельный рейтинг показывает официальные почётные победы в открытом мире, захваты, крепости и аванпосты. Откройте его в панели или командой /ov lb. /ov sync запрашивает данные у доступных игроков. Золотые контракты используют полные имена Forever и ручную оплату по почте/COD. Зал славы открывается из меню действий."
+    GUIDE_TOOLS_BODY = "Недельный рейтинг показывает официальные почётные победы в открытом мире, захваты, крепости и аванпосты. Откройте его в панели или командой /ov lb. /ov sync запрашивает данные у доступных игроков. Зал славы открывается из меню действий."
 },
 pt = {
     GUIDE_BTN_TOOLTIP = "Guia Forever (3 páginas)",
@@ -178,7 +178,7 @@ pt = {
     GUIDE_SECTION_FEATURED = "Frente do dia",
     GUIDE_FEATURED_BODY = "A frente em destaque muda diariamente. Cada abate honroso oficial nela, no mundo aberto, concede +1 coin Overlord; a classificação conta o abate apenas uma vez. Na beta Forever, a classificação semanal reinicia na terça-feira às 08:00 UTC.",
     GUIDE_SECTION_CONTEST = "Captura e disputa",
-    GUIDE_CONTEST_BODY = "Um ponto comum exige 2 minutos dentro do círculo. Sair reduz o progresso. Números iguais de inimigos o congelam; maioria inimiga o faz recuar. A capital adversária leva 8 minutos e a própria leva 2. Uma vitória completa dá +2% de dominação semanal e 15 minutos de trégua.",
+    GUIDE_CONTEST_BODY = "Um ponto comum exige 2 minutos dentro do círculo. Sair reduz o progresso. Números iguais de inimigos o congelam; maioria inimiga o faz recuar. A capital adversária leva 8 minutos e a própria leva 2. Uma vitória completa dá +1% de dominação semanal e 15 minutos de trégua.",
     GUIDE_SECTION_GOLD = "Minas de coins",
     GUIDE_GOLD_BODY = "Minas no mapa:\n%s\n\nDentro do círculo, ganhe 1 coin a cada 3 segundos (limite pessoal 100); minerar uma jazida concede 5. Gaste 25 coins para encurtar sua próxima captura em 60 segundos ou prolongar a próxima captura inimiga de um dos seus pontos em 60 segundos. O estoque compartilhado se recompõe.",
     GUIDE_SECTION_SIEGE = "Vitória na capital",
@@ -190,7 +190,7 @@ pt = {
     GUIDE_SECTION_FACTION_CALL = "Chamado e comando",
     GUIDE_FACTION_CALL_BODY = "Em uma frente ativa, o Chamado às armas envia um aviso de raide a todos os aliados Overlord da sua facção (uma vez a cada 4 horas para toda a facção). Um líder de grupo ou raide pode assumir o papel de Comandante; aliados sincronizados veem sua posição no mapa.",
     GUIDE_SECTION_TOOLS = "Classificação e sincronização",
-    GUIDE_TOOLS_BODY = "A classificação semanal mostra abates honrosos oficiais no mundo aberto, capturas, fortes e postos. Abra pelo painel ou com /ov lb. /ov sync solicita dados aos jogadores alcançáveis. Contratos em ouro usam nomes Forever completos e pagamento manual por correio/COD. O Salão da Fama abre pelo menu Ações."
+    GUIDE_TOOLS_BODY = "A classificação semanal mostra abates honrosos oficiais no mundo aberto, capturas, fortes e postos. Abra pelo painel ou com /ov lb. /ov sync solicita dados aos jogadores alcançáveis. O Salão da Fama abre pelo menu Ações."
 },
 zhCN = {
     GUIDE_BTN_TOOLTIP = "Forever 指南（3 页）",
@@ -209,7 +209,7 @@ zhCN = {
     GUIDE_SECTION_FEATURED = "每日战线",
     GUIDE_FEATURED_BODY = "每日战线每天轮换。在该战线开放世界获得的每次官方荣誉击杀奖励 +1 Overlord coin；排行榜只记录一次击杀。Forever 测试期间，每周排行榜在周二 08:00 UTC 重置。",
     GUIDE_SECTION_CONTEST = "占领与争夺",
-    GUIDE_CONTEST_BODY = "普通据点需要在占领圈内停留 2 分钟。离开后进度会下降；敌我人数相同时进度暂停，敌方人数更多时进度倒退。敌方首府需要 8 分钟，己方首府夺回需要 2 分钟。完全赢得战线可获得 +2% 每周统治值，并开启 15 分钟停战。",
+    GUIDE_CONTEST_BODY = "普通据点需要在占领圈内停留 2 分钟。离开后进度会下降；敌我人数相同时进度暂停，敌方人数更多时进度倒退。敌方首府需要 8 分钟，己方首府夺回需要 2 分钟。完全赢得战线可获得 +1% 每周统治值，并开启 15 分钟停战。",
     GUIDE_SECTION_GOLD = "Coin 矿区",
     GUIDE_GOLD_BODY = "地图上的矿区：\n%s\n\n在矿区圈内每 3 秒获得 1 coin（个人上限 100）；开采一处矿脉获得 5 coin。花费 25 coin 可使下次占领缩短 60 秒，或使敌人下次占领你的战线据点延长 60 秒。共享矿区储量会逐渐恢复。",
     GUIDE_SECTION_SIEGE = "首府胜利",
@@ -221,7 +221,7 @@ zhCN = {
     GUIDE_SECTION_FACTION_CALL = "号召与指挥",
     GUIDE_FACTION_CALL_BODY = "在活跃战线上，“集结号令”会向你阵营中所有安装了 Overlord 的盟友发送团队警告（整个阵营每 4 小时一次）。队伍或团队领袖可担任指挥官，其位置会显示在已同步盟友的地图上。",
     GUIDE_SECTION_TOOLS = "排行与同步",
-    GUIDE_TOOLS_BODY = "每周排行榜显示开放世界官方荣誉击杀、占领、公会要塞与前哨。可从面板或使用 /ov lb 打开。/ov sync 向可联系的玩家请求同步。金币悬赏使用完整的 Forever 姓名，通过邮件/COD 手动结算。名人堂可从“操作”菜单打开。"
+    GUIDE_TOOLS_BODY = "每周排行榜显示开放世界官方荣誉击杀、占领、公会要塞与前哨。可从面板或使用 /ov lb 打开。/ov sync 向可联系的玩家请求同步。名人堂可从“操作”菜单打开。"
 },
 }
 
@@ -230,10 +230,3 @@ for key, value in pairs(selected) do L[key] = value end
 -- A single travel rule applies to both factions in Forever.
 L.GUIDE_TRAVEL_HORDE = L.GUIDE_TRAVEL_ALLIANCE
 
-if lang == "pt" then
-    L.GUILD_KEEP_SIEGE_RANGE_SIX_HOURS = "03:00–04:00, 09:00–10:00, 15:00–16:00, 21:00–22:00 (horário do servidor)"
-    L.GUILD_KEEP_SIEGE_CLOSED_SIX_HOURS = "Os fortes de guilda abrem a cada 6 horas: %s."
-elseif lang == "zhCN" then
-    L.GUILD_KEEP_SIEGE_RANGE_SIX_HOURS = "03:00–04:00、09:00–10:00、15:00–16:00、21:00–22:00（服务器时间）"
-    L.GUILD_KEEP_SIEGE_CLOSED_SIX_HOURS = "公会要塞每 6 小时开放一次：%s。"
-end

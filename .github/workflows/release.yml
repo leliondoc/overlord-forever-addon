@@ -130,8 +130,6 @@ jobs:
           lua5.1 tests/forever_beta_integration.test.lua
           lua5.1 tests/forever_beta_catchup.test.lua
           lua5.1 tests/forever_general.test.lua
-          lua5.1 tests/forever_contracts.test.lua
-          lua5.1 tests/forever_contract_mail.test.lua
 
           mapfile -t TEST_FILES < <(find tests -maxdepth 1 -type f -name '*.test.mjs' -print | sort)
           node --test "${TEST_FILES[@]}"

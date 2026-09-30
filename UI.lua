@@ -2396,7 +2396,7 @@ function Overlord.UI:CreateZoneListSection(parent)
     local btnGapY = 6
     local gridRow0Gap = 6
     local gridRowGap = 3
-    local btnRows = 5
+    local btnRows = 4
     local gridPadTop = 8
     local gridPadBottom = 6
     local actionsCardH = gridPadTop + btnRows * btnHeight
@@ -2437,15 +2437,6 @@ function Overlord.UI:CreateZoneListSection(parent)
         self.SetWC3ButtonUnavailable(communityBtn, L.COMMUNITY_BUTTON_UNAVAILABLE)
     end
 
-    local exportBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
-        L.CHECK_PVP_BUTTON, "Interface\\Icons\\INV_Misc_Note_01")
-    exportBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(4))
-    AttachGridButtonTooltip(exportBtn, L.EXPORT_TOOLTIP or L.CHECK_PVP_BUTTON)
-    exportBtn:SetScript("OnClick", function()
-        if Overlord.Export then Overlord.Export:ShowUI() end
-    end)
-    zoneListFrame.exportBtn = exportBtn
-
     local discordBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
         L.DISCORD_BUTTON, "Interface\\ChatFrame\\UIChatIcon")
     if discordBtn.icon and discordBtn.icon.SetAtlas then
@@ -2453,7 +2444,7 @@ function Overlord.UI:CreateZoneListSection(parent)
         discordBtn.icon:SetAtlas(Overlord.DISCORD_BUTTON_ATLAS or "UI-ChatIcon-Discord", false)
         discordBtn.icon:SetTexCoord(0, 1, 0, 1)
     end
-    discordBtn:SetPoint("TOPRIGHT", actionsCard, "TOPRIGHT", -4, ActionGridRowY(4))
+    discordBtn:SetPoint("TOPRIGHT", actionsCard, "TOPRIGHT", -4, ActionGridRowY(3))
     AttachGridButtonTooltip(discordBtn, L.DISCORD_BUTTON_TOOLTIP or L.DISCORD_BUTTON)
     discordBtn:SetScript("OnClick", function()
         Overlord.UI:OnDiscordButtonClick()
@@ -2471,7 +2462,7 @@ function Overlord.UI:CreateZoneListSection(parent)
 
     local tutorialBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
         L.GUIDE_BAR_LABEL, "Interface\\Icons\\INV_Misc_Book_09")
-    tutorialBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(2))
+    tutorialBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(1))
     AttachGridButtonTooltip(tutorialBtn, L.GUIDE_BTN_TOOLTIP or L.GUIDE_BAR_LABEL)
     tutorialBtn:SetScript("OnClick", function()
         if Overlord.Popups and Overlord.Popups.ToggleQuickGuide then
@@ -2493,7 +2484,7 @@ function Overlord.UI:CreateZoneListSection(parent)
         or L.GENERAL_TOOLTIP_TITLE_ALLIANCE
     local generalBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
         L.GENERAL_BUTTON, "Interface\\Icons\\Ability_Warrior_RallyingCry")
-    generalBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(3))
+    generalBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(2))
     AttachGridButtonTooltip(generalBtn, generalTip)
     zoneListFrame.factionCallBtn = hornBtn
     zoneListFrame.generalBtn = generalBtn
@@ -2503,7 +2494,7 @@ function Overlord.UI:CreateZoneListSection(parent)
 
     local settingsBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
         L.SETTINGS_BUTTON, "Interface\\Icons\\INV_Misc_Gear_01")
-    settingsBtn:SetPoint("TOPRIGHT", actionsCard, "TOPRIGHT", -4, ActionGridRowY(3))
+    settingsBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(3))
     AttachGridButtonTooltip(settingsBtn, L.SETTINGS_BUTTON_TOOLTIP or L.SETTINGS_BUTTON)
     settingsBtn:SetScript("OnClick", function()
         if Overlord.SettingsPanel and Overlord.SettingsPanel.Toggle then
@@ -2512,29 +2503,12 @@ function Overlord.UI:CreateZoneListSection(parent)
     end)
     zoneListFrame.settingsBtn = settingsBtn
 
-    local mbBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
-        L.MB_BUTTON, "Interface\\Icons\\INV_Misc_Coin_01")
-    mbBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(1))
-    AttachGridButtonTooltip(mbBtn, L.MB_BUTTON_TOOLTIP)
-    mbBtn:SetScript("OnClick", function()
-        if Overlord.ManualBountyUI and Overlord.ManualBountyUI.Toggle then
-            Overlord.ManualBountyUI:Toggle()
-        end
-    end)
-    zoneListFrame.mbBtn = mbBtn
-
     -- Keep optional module buttons unavailable only when the module is absent.
     local foreverUnavailable = L.FOREVER_FEATURE_UNAVAILABLE
         or "Unavailable on Overlord Forever."
     if self.SetWC3ButtonUnavailable then
-        if not Overlord.Export then
-            self.SetWC3ButtonUnavailable(exportBtn, foreverUnavailable)
-        end
         if not Overlord.HallOfFameUI then
             self.SetWC3ButtonUnavailable(hofBtn, foreverUnavailable)
-        end
-        if not Overlord.ManualBountyUI then
-            self.SetWC3ButtonUnavailable(mbBtn, foreverUnavailable)
         end
         if not Overlord.General then
             self.SetWC3ButtonUnavailable(generalBtn, foreverUnavailable)
@@ -2910,8 +2884,8 @@ function Overlord.UI:ApplyCommunityHintLayout(memberOfClub)
     zf:SetSize(320, zfHeight)
 
     self:SyncMainFrameHeight()
-    if Overlord.Popups and Overlord.Popups.RefreshFeaturedFrontBountyButton then
-        Overlord.Popups:RefreshFeaturedFrontBountyButton()
+    if Overlord.Popups and Overlord.Popups.RefreshFeaturedFrontActivity then
+        Overlord.Popups:RefreshFeaturedFrontActivity()
     end
 end
 
@@ -3761,8 +3735,6 @@ function Overlord.UI:RefreshActionGridActiveState()
     if not zoneListFrame or not self.SetWC3ButtonActive then return end
     local nextState = {
         lb = Overlord.LeaderboardUI and Overlord.LeaderboardUI.IsShown and Overlord.LeaderboardUI:IsShown() or false,
-        export = Overlord.Export and Overlord.Export.IsShown and Overlord.Export:IsShown() or false,
-        mb = Overlord.ManualBountyUI and Overlord.ManualBountyUI.IsShown and Overlord.ManualBountyUI:IsShown() or false,
         hof = Overlord.HallOfFameUI and Overlord.HallOfFameUI.IsShown and Overlord.HallOfFameUI:IsShown() or false,
         tutorial = Overlord.Popups and Overlord.Popups.IsQuickGuideShown and Overlord.Popups:IsQuickGuideShown() or false,
         community = communityPopupFrame and communityPopupFrame:IsShown() or false,
@@ -3809,8 +3781,6 @@ function Overlord.UI:RefreshActionGridActiveState()
         end
     end
     panelOpen(zoneListFrame.lbBtn, nextState.lb)
-    panelOpen(zoneListFrame.exportBtn, nextState.export)
-    panelOpen(zoneListFrame.mbBtn, nextState.mb)
     panelOpen(zoneListFrame.hofBtn, nextState.hof)
     panelOpen(zoneListFrame.tutorialBtn, nextState.tutorial)
     panelOpen(zoneListFrame.communityBtn, nextState.community)

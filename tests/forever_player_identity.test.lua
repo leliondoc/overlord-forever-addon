@@ -36,22 +36,4 @@ unitName = "Tro Ma"
 assert(sync:GetPlayerFullName() == "Tro Ma")
 assert(not sync:HasCompleteContributorIdentity("Tro"))
 
--- Exercise the actual login barrier which prevented the main panel from opening.
-sync = session("Tro", "Tro Ma")
-local timers = {}
-C_Timer = { After = function(_, callback) timers[#timers + 1] = callback end }
-function wipe(t) for key in pairs(t) do t[key] = nil end return t end
-function GetServerTime() return 1790272800 end
-Overlord.GetCurrentSavedVarsPool = function() return "global" end
-OverlordDB = {}
-assert(loadfile("ManualBounty.lua"))()
-assert(Overlord.ManualBounty:Initialize() == "waiting")
-local slices = 0
-while not Overlord.ManualBounty._initialized do
-    local callback = assert(table.remove(timers, 1), "Identity wait did not start the login worker")
-    callback()
-    slices = slices + 1
-    assert(slices < 20, "ManualBounty login did not finish")
-end
-assert(Overlord.ManualBounty:Initialize() == true, "Login barrier still blocks UI initialization")
 print("Forever player identity: complete API fallback, strict validation, delayed name and cache OK")

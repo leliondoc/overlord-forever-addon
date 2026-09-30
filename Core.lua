@@ -1860,9 +1860,9 @@ local WELCOME_POPUP_SOUND_KIT = {
     Alliance = 10049, -- Heroism_Cast
 }
 
--- Bouton Général : mêmes retours que le toggle Mode guerre (UI Blizzard).
-local WARMODE_ACTIVATE_SOUND = (SOUNDKIT and SOUNDKIT.UI_WARMODE_ACTIVATE) or 118563
-local WARMODE_DEACTIVATE_SOUND = (SOUNDKIT and SOUNDKIT.UI_WARMODE_DECTIVATE) or 118564
+-- Bouton Général : sons d'activation / desactivation de l'interface Blizzard.
+local GENERAL_CLAIM_SOUND = (SOUNDKIT and SOUNDKIT.UI_WARMODE_ACTIVATE) or 118563
+local GENERAL_RELEASE_SOUND = (SOUNDKIT and SOUNDKIT.UI_WARMODE_DECTIVATE) or 118564
 
 local function PlayGeneralFactionEmote()
     if InCombatLockdown() or not DoEmote then return end
@@ -1965,16 +1965,16 @@ function Overlord:PlayAddonSound(key)
         return
     end
     if key == "general_claim" then
-        TryPlaySoundEntry(WARMODE_ACTIVATE_SOUND, { "Master", "SFX" })
+        TryPlaySoundEntry(GENERAL_CLAIM_SOUND, { "Master", "SFX" })
         PlayGeneralFactionEmote()
         return
     end
     if key == "general_release" then
-        TryPlaySoundEntry(WARMODE_DEACTIVATE_SOUND, { "Master", "SFX" })
+        TryPlaySoundEntry(GENERAL_RELEASE_SOUND, { "Master", "SFX" })
         return
     end
     if key == "general_assumed" then
-        TryPlaySoundEntry(WARMODE_ACTIVATE_SOUND, { "Master", "SFX" })
+        TryPlaySoundEntry(GENERAL_CLAIM_SOUND, { "Master", "SFX" })
         return
     end
     local ids = ADDON_SOUNDS[key]
@@ -2144,9 +2144,6 @@ local function CompleteResumeFromInstance(reason)
     -- marquer la vague comme relachee sans transport. Le rejouer avant la rotation.
     if Overlord.FlushDeferredCaptureRelease then
         Overlord:FlushDeferredCaptureRelease()
-    end
-    if Overlord.ManualBountySync and Overlord.ManualBountySync.ResumeContractQueue then
-        Overlord.ManualBountySync:ResumeContractQueue()
     end
     -- WoW 12.0.5 : reactive les events ZoneControl (UNIT_AURA, INSPECT_READY)
     if Overlord.ZoneControl and Overlord.ZoneControl.Resume then
@@ -2514,9 +2511,6 @@ function Overlord:FinishFactionChangeReconcile(state)
     if self.Sync and self.Sync.SendSyncRequest then self.Sync:SendSyncRequest() end
     if self.General and self.General.OnPlayerFactionChanged then
         self.General:OnPlayerFactionChanged()
-    end
-    if self.ManualBounty and self.ManualBounty.OnPlayerIdentityChanged then
-        self.ManualBounty:OnPlayerIdentityChanged()
     end
     if self.Button and self.Button.Refresh then self.Button:Refresh() end
     if self.UI and self.UI.RefreshStatsButton then self.UI:RefreshStatsButton() end
@@ -3444,24 +3438,17 @@ function Overlord:Initialize()
             return Overlord.Leaderboard:EnsureOutpostLedgerPrepared(true)
         end, true)
 
-        for _, mod in ipairs({ "Ressources", "Combat", "ManualBounty" }) do
+        for _, mod in ipairs({ "Ressources", "Combat" }) do
             local moduleName = mod
-            -- Contrats en or desactives sur Forever : le module n'est plus charge.
             if Overlord[moduleName] then
                 AddLoginInitStage(moduleName, function()
                     return Overlord[moduleName]:Initialize()
-                end, moduleName == "ManualBounty")
+                end, false)
             end
         end
 
-        if Overlord.ManualBountyMail then
-            AddLoginInitStage("ManualBountyMailLedger", function()
-                return Overlord.ManualBountyMail:EnsureCodSendLedgerPrepared()
-            end, true)
-        end
-
         for _, mod in ipairs({
-            "ManualBountyMail", "General", "Sync", "ZoneIndicator", "Shard",
+            "General", "Sync", "ZoneIndicator", "Shard",
         }) do
             local moduleName = mod
             if Overlord[moduleName] then
@@ -3519,15 +3506,11 @@ function Overlord:Initialize()
             end
         end)
 
-        -- Les deux autres modules UI conservent chacun leur frame dediee.
-        for _, mod in ipairs({ "Button", "ManualBountyUI" }) do
-            local moduleName = mod
-            -- ManualBountyUI n'est plus charge sur Forever (contrats desactives).
-            if Overlord[moduleName] then
-                AddLoginInitStage(moduleName, function()
-                    Overlord[moduleName]:Initialize()
-                end)
-            end
+        -- Le bouton d'appel conserve sa frame dediee.
+        if Overlord.Button then
+            AddLoginInitStage("Button", function()
+                Overlord.Button:Initialize()
+            end)
         end
 
         local loginInitStageIndex = 0
@@ -4641,12 +4624,6 @@ function Overlord:OnLeaveFront()
             self.Sync:SendSyncRequest()
         end
     end
-    if self.Bounty and self.Bounty.OnLeaveFront then
-        self.Bounty:OnLeaveFront()
-    end
-    if self.ManualBounty and self.ManualBounty.OnLeaveFront then
-        self.ManualBounty:OnLeaveFront()
-    end
     if self.General and self.General.OnLeaveFront then
         self.General:OnLeaveFront()
     end
@@ -4672,12 +4649,6 @@ function Overlord:OnEnterFront()
 
     -- Redemarre la boucle OnUpdate (arretee quand on quitte un front)
     self:StartUpdateLoop()
-    if self.Bounty and self.Bounty.OnEnterFront then
-        self.Bounty:OnEnterFront()
-    end
-    if self.ManualBounty and self.ManualBounty.OnEnterFront then
-        self.ManualBounty:OnEnterFront()
-    end
     if self.General and self.General.OnEnterFront then
         self.General:OnEnterFront()
     end
@@ -5182,12 +5153,6 @@ function Overlord:ResetAll()
     if self.General and self.General.OnCampaignReset then
         self.General:OnCampaignReset()
     end
-    if self.ManualBounty and self.ManualBounty.OnCampaignReset then
-        self.ManualBounty:OnCampaignReset()
-    end
-    if self.ManualBountySync and self.ManualBountySync.OnCampaignReset then
-        self.ManualBountySync:OnCampaignReset()
-    end
     -- campaignId : recalcule dans CheckWeeklyReset via SyncCampaignIdWithCurrentWeek (date AAAAMMJJ).
     self:SaveState()
     if self.Sync and self.Sync.ResetVictoryFlag then
@@ -5289,7 +5254,6 @@ eventFrame:RegisterEvent("PLAYER_ALIVE")
 -- Re-check quand le joueur active/desactive le mode guerre
 pcall(function() eventFrame:RegisterEvent("LOADING_SCREEN_ENABLED") end)
 pcall(function() eventFrame:RegisterEvent("PLAYER_LEAVING_WORLD") end)
-pcall(function() eventFrame:RegisterEvent("WAR_MODE_STATUS_UPDATE") end)
 pcall(function() eventFrame:RegisterEvent("PARTY_INVITE_REQUEST") end)
 pcall(function() eventFrame:RegisterEvent("PLAYER_FACTION_CHANGED") end)
 pcall(function() eventFrame:RegisterEvent("PLAYER_UNGHOST") end)
@@ -5404,15 +5368,9 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
             -- Un hop de phase peut garder la meme map : invalider avant tout prochain tick/GA.
             Overlord.Shard:InvalidateLocalContext()
         end
-    elseif event == "ZONE_CHANGED_NEW_AREA" or event == "PLAYER_ENTERING_WORLD" or event == "WAR_MODE_STATUS_UPDATE" then
-        if event ~= "WAR_MODE_STATUS_UPDATE" and Overlord.Shard
-            and Overlord.Shard.InvalidateLocalContext then
+    elseif event == "ZONE_CHANGED_NEW_AREA" or event == "PLAYER_ENTERING_WORLD" then
+        if Overlord.Shard and Overlord.Shard.InvalidateLocalContext then
             Overlord.Shard:InvalidateLocalContext()
-        end
-        if event == "WAR_MODE_STATUS_UPDATE"
-            and Overlord.MapMarkers and Overlord.MapMarkers.RequestOverlayRefresh then
-            -- Masquer / reafficher les markers carte monde sans attendre le prochain tick 2 Hz.
-            Overlord.MapMarkers:RequestOverlayRefresh()
         end
         local inInstance = IsInInstance()
         -- Filet de securite GetInstanceInfo() UNIQUEMENT quand on n'est pas deja suspendu :

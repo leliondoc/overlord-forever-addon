@@ -7,7 +7,7 @@ local sync = addon.Sync
 local net = { peers = {}, stats = { sent = 0, received = 0, dropped = 0 } }
 addon.BetaNetwork = net
 local allowed = {}
-for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR VB MN MS OP OC SH HR HB HC HA LD CR CA GR GY GI FC GW GE GP GX GD GM BQ BR PB PK MK PX PP PM"):gmatch("%S+") do
+for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR VB MN MS OP OC SH HR HB HC HA LD CR CA GR GY GI FC GW GE GP GX GD GM"):gmatch("%S+") do
     allowed[kind] = true
 end
 local MAX_PACKET, MAX_PATH, TTL = 3600, 4, 120

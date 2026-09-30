@@ -187,19 +187,12 @@ local continentProbeIsEK = false
 local continentProbeIsKal = false
 local continentProbeEKValid = false
 local continentProbeKalValid = false
--- Evite HideAll* a chaque layoutChanged (~60 Hz) tant que WM reste OFF carte ouverte.
-local worldMapHiddenForNoWarMode = false
+-- Evite HideAll* a chaque layoutChanged (~60 Hz) tant que les overlays restent masques carte ouverte.
+local worldMapOverlaysHidden = false
 -- Un canvas invalide peut persister plusieurs frames pendant un chargement. Les couches
 -- sont masquees une seule fois, puis le driver ne fait que retenter la recuperation.
 -- Chromie Time / Party Sync peut rester actif longtemps : ne pas retraverser tous les
 -- overlays a chaque tick tant que le mode catch-up ne change pas.
-
--- Affichage carte monde Overlord : Mode Guerre requis (meme regle que InActiveFront / minimap).
--- Masquage UI uniquement : aucun ecrit sync / SavedVariables.
-local function IsWarModeActiveForOverlays()
-    -- Forever : pas de Warmode. Les overlays s'affichent des qu'on est sur la carte du front.
-    return true
-end
 
 local function HideAllOverlordWorldMapContent()
     Overlord.MapMarkers:SetWorldMapOverlayMode("none")
@@ -214,12 +207,6 @@ local function HideAllOverlordWorldMapContent()
     end
     if Overlord.MapMarkers.HideProjectedOutpostPins then
         Overlord.MapMarkers:HideProjectedOutpostPins()
-    end
-    if Overlord.BountyMap and Overlord.BountyMap.HideWorld then
-        Overlord.BountyMap:HideWorld()
-    end
-    if Overlord.ManualBountyMap and Overlord.ManualBountyMap.HideWorld then
-        Overlord.ManualBountyMap:HideWorld()
     end
     if Overlord.GeneralMap and Overlord.GeneralMap.HideWorld then
         Overlord.GeneralMap:HideWorld()
@@ -761,13 +748,13 @@ function Overlord.MapMarkers:SetWorldMapOverlaysShown(shown)
     local viewport = driverState.worldOverlayViewport
     if viewport then viewport:SetShown(shown and true or false) end
     if shown then
-        worldMapHiddenForNoWarMode = false
+        worldMapOverlaysHidden = false
         driverState.worldGateSlow = false
         driverState.worldAccum = math.huge
         if self.RequestOverlayRefresh then self:RequestOverlayRefresh() end
     else
         HideAllOverlordWorldMapContent()
-        worldMapHiddenForNoWarMode = true
+        worldMapOverlaysHidden = true
     end
     return true
 end
@@ -859,8 +846,6 @@ function Overlord.MapMarkers:Initialize()
                     if Overlord.MapMarkers:IsKalimdorMap(newMapID) then
                         Overlord.MapMarkers:HideEKDominanceLogos()
                         Overlord.MapMarkers:HideEKGoldMinePins()
-                        Overlord.MapMarkers:HideContinentBountyPins()
-                        Overlord.MapMarkers:HideContinentManualBountyPins()
                         Overlord.MapMarkers:HideContinentGeneralPins()
                     else
                         Overlord.MapMarkers:HideEKDominance()
@@ -910,16 +895,16 @@ function Overlord.MapMarkers:Initialize()
         local driverElapsed = driverState.worldAccum
         driverState.worldAccum = 0
         -- Gate WM avant canvas/layout : hors WM, un seul hide puis idle (~0 alloc/frame).
-        if not IsWarModeActiveForOverlays() or not Overlord.MapMarkers:AreWorldMapOverlaysShown() then
+        if not Overlord.MapMarkers:AreWorldMapOverlaysShown() then
             driverState.worldGateSlow = true
-            if not worldMapHiddenForNoWarMode then
+            if not worldMapOverlaysHidden then
                 HideAllOverlordWorldMapContent()
-                worldMapHiddenForNoWarMode = true
+                worldMapOverlaysHidden = true
             end
             return
         end
         driverState.worldGateSlow = false
-        worldMapHiddenForNoWarMode = false
+        worldMapOverlaysHidden = false
 
         local canvas = GetCanvas()
         -- Ne PAS tester canvas:IsVisible() : dans WoW 12.0+, ScrollContainer.Child
@@ -1089,12 +1074,6 @@ function Overlord.MapMarkers:Initialize()
                                 GetTime() + driverState.worldIdleInterval)
                             driverState.worldGateSlow = true
                         end
-                        if Overlord.Bounty and Overlord.Bounty.RefreshWorldMapPins then
-                            Overlord.Bounty:RefreshWorldMapPins()
-                        end
-                        if Overlord.ManualBounty and Overlord.ManualBounty.RefreshWorldMapPins then
-                            Overlord.ManualBounty:RefreshWorldMapPins()
-                        end
                         if Overlord.General and Overlord.General.RefreshWorldMapPins then
                             Overlord.General:RefreshWorldMapPins()
                         end
@@ -1102,12 +1081,6 @@ function Overlord.MapMarkers:Initialize()
                         Overlord.MapMarkers:RefreshPathLayouts()
                         Overlord.MapMarkers:RefreshOverlayLayouts()
                         -- Layout seul : pas de RefreshContinent (scan pins hors carte).
-                        if Overlord.BountyMap and Overlord.BountyMap.Refresh then
-                            Overlord.BountyMap:Refresh()
-                        end
-                        if Overlord.ManualBountyMap and Overlord.ManualBountyMap.Refresh then
-                            Overlord.ManualBountyMap:Refresh()
-                        end
                         if Overlord.GeneralMap and Overlord.GeneralMap.Refresh then
                             Overlord.GeneralMap:Refresh()
                         end
@@ -1195,8 +1168,6 @@ function Overlord.MapMarkers:Initialize()
             end
             if layoutChanged or contentRefresh then
                 Overlord.MapMarkers:RefreshEKGoldMinePins()
-                Overlord.MapMarkers:RefreshContinentBountyPins()
-                Overlord.MapMarkers:RefreshContinentManualBountyPins()
                 Overlord.MapMarkers:RefreshContinentGeneralPins()
             end
             -- Logos dominance : layout/contenu seulement (pas 60 Hz pan/zoom idle).
@@ -1220,8 +1191,6 @@ function Overlord.MapMarkers:Initialize()
                     layoutChanged, kalContent)
             end
             if layoutChanged or contentRefresh then
-                Overlord.MapMarkers:RefreshContinentBountyPins()
-                Overlord.MapMarkers:RefreshContinentManualBountyPins()
                 Overlord.MapMarkers:RefreshContinentGeneralPins()
             end
             if layoutChanged or contentRefresh then
@@ -1295,7 +1264,7 @@ function Overlord.MapMarkers:Initialize()
         -- WoW 12.0.5 : ne rien faire en instance (evite taint)
         if Overlord.InstanceSuspended then return end
         suppressFrontOverlaysUntilMapReopen = false
-        worldMapHiddenForNoWarMode = false
+        worldMapOverlaysHidden = false
         driverState.worldAccum = driverState.worldInterval
         driverState.worldGateSlow = false
         driverState.canvasInvalidHidden = false
@@ -1453,6 +1422,15 @@ local function GetMinimapOverlayOpacityScale()
     return v
 end
 
+-- Opacite des icones de point de capture sur la carte du monde (50 % par defaut :
+-- a pleine opacite elles masquaient les points de quete dans les villes).
+function Overlord.MapMarkers.GetMapIconOpacity()
+    local v = tonumber(OverlordDB and OverlordDB.config and OverlordDB.config.mapIconOpacity) or 0.5
+    if v < 0 then v = 0 end
+    if v > 1.0 then v = 1.0 end
+    return v
+end
+
 local function GetFactionZoneColors(zone)
     if Overlord.IsLoginZoneDisplayPending and Overlord:IsLoginZoneDisplayPending(zone) then
         return 0.55, 0.55, 0.48, 0.12, 0.34
@@ -1595,7 +1573,9 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
     local borderAlpha = ba * opacityScale
     local fillAlpha = fa * opacityScale
     local iconAtlas = Overlord.Zones:GetZoneMapIconAtlas(zone, true)
+    local iconAlpha = Overlord.MapMarkers.GetMapIconOpacity()
     if overlay._olPaintValid
+        and overlay._olPaintIconAlpha == iconAlpha
         and overlay._olPaintName == zone.name
         and overlay._olPaintSt == st
         and overlay._olPaintSt2 == st2
@@ -1613,6 +1593,7 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
     overlay._olPaintFillAlpha = fillAlpha
     overlay._olPaintBorderAlpha = borderAlpha
     overlay._olPaintIconAtlas = iconAtlas
+    overlay._olPaintIconAlpha = iconAlpha
     overlay.fill:Show()
     overlay.fill:SetColorTexture(r, g, b)
     overlay.fill:SetAlpha(fillAlpha)
@@ -1651,6 +1632,7 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
                 overlay.iconTex:SetSize(iconSize, iconSize)
             end
             Overlord.Zones:ApplyZoneMapIcon(overlay.iconTex, iconAtlas)
+            overlay.iconTex:SetAlpha(iconAlpha)
             overlay.iconTex:Show()
         else
             overlay.iconTex:Hide()
@@ -1773,12 +1755,6 @@ function Overlord.MapMarkers:HideAllOverlays()
     self:HideGuildKeepOverlays()
     if self.HideOutpostOverlays then self:HideOutpostOverlays() end
     self:HideProjectedKeepPins()
-    if Overlord.BountyMap and Overlord.BountyMap.Hide then
-        Overlord.BountyMap:Hide()
-    end
-    if Overlord.ManualBountyMap and Overlord.ManualBountyMap.Hide then
-        Overlord.ManualBountyMap:Hide()
-    end
     if Overlord.GeneralMap and Overlord.GeneralMap.Hide then
         Overlord.GeneralMap:Hide()
     end
@@ -2382,11 +2358,8 @@ function Overlord.MapMarkers:InitializeMinimap()
 
         if Overlord.InActiveFront then
             Overlord.MapMarkers:UpdateMinimapPins(fullRefresh)
-            -- Un seul contexte partage pour primes, contrats et generaux. Les trois couches
-            -- lisaient auparavant la meme position et recalculaient sin/cos separement par couche.
+            -- Contexte partage (position, sin/cos) pour la couche des generaux.
             local context = Overlord.MapMarkers:GetMinimapDriverContext()
-            Overlord.MapMarkers:UpdateMinimapBountyPins(context, fullRefresh)
-            Overlord.MapMarkers:UpdateMinimapManualBountyPins(context, fullRefresh)
             Overlord.MapMarkers:UpdateMinimapGeneralPins(context, fullRefresh)
         end
         if mmMineMapActive then
@@ -2711,8 +2684,6 @@ function Overlord.MapMarkers:HideMinimapPins()
     for _, pin in pairs(minimapPins) do
         if pin:IsShown() then pin:Hide() end
     end
-    self:HideMinimapBountyPins()
-    self:HideMinimapManualBountyPins()
     self:HideMinimapGeneralPins()
 end
 
@@ -3457,34 +3428,8 @@ end
 function Overlord.MapMarkers:HideEKDominance()
     self:HideEKDominanceLogos()
     Overlord.MapMarkers:HideEKGoldMinePins()
-    Overlord.MapMarkers:HideContinentBountyPins()
-    Overlord.MapMarkers:HideContinentManualBountyPins()
     Overlord.MapMarkers:HideContinentGeneralPins()
     Overlord.MapMarkers:HideProjectedKeepPins()
-end
-
-function Overlord.MapMarkers:RefreshContinentBountyPins()
-    if Overlord.BountyMap and Overlord.BountyMap.RefreshContinent then
-        Overlord.BountyMap:RefreshContinent()
-    end
-end
-
-function Overlord.MapMarkers:RefreshContinentManualBountyPins()
-    if Overlord.ManualBountyMap and Overlord.ManualBountyMap.RefreshContinent then
-        Overlord.ManualBountyMap:RefreshContinent()
-    end
-end
-
-function Overlord.MapMarkers:HideContinentBountyPins()
-    if Overlord.BountyMap and Overlord.BountyMap.HideContinent then
-        Overlord.BountyMap:HideContinent()
-    end
-end
-
-function Overlord.MapMarkers:HideContinentManualBountyPins()
-    if Overlord.ManualBountyMap and Overlord.ManualBountyMap.HideContinent then
-        Overlord.ManualBountyMap:HideContinent()
-    end
 end
 
 function Overlord.MapMarkers:RefreshContinentGeneralPins()
@@ -4145,7 +4090,7 @@ function Overlord.MapMarkers:SetUserWaypointForFrontZone(zone, frontIdForMap, op
     return true
 end
 
--- Pont vers BountyMap.lua (évite de dépasser la limite 200 locals de ce chunk)
+-- Pont vers GeneralMap.lua (évite de dépasser la limite 200 locals de ce chunk)
 function Overlord.MapMarkers:WithWorldMapPinLayer(fn)
     CacheCanvas()
     local canvas = GetCanvas()
@@ -4154,7 +4099,7 @@ function Overlord.MapMarkers:WithWorldMapPinLayer(fn)
     fn(canvas, parent, ReadDisplayedMapID())
 end
 
--- Pont placement pins (GeneralMap / BountyMap) : meme repere que zones / fortins.
+-- Pont placement pins (GeneralMap) : meme repere que zones / fortins.
 function Overlord.MapMarkers:GetWorldMapOverlayPoint(canvas, parent, x, yDown)
     return GetOverlayPoint(canvas, parent, x, yDown)
 end
@@ -4253,30 +4198,6 @@ end
 
 function Overlord.MapMarkers:QueuePassThroughButtons(frame)
     SafeSetPassThroughButtons(frame)
-end
-
-function Overlord.MapMarkers:UpdateMinimapBountyPins(context, dataRefresh)
-    if Overlord.BountyMap and Overlord.BountyMap.UpdateMinimapPins then
-        Overlord.BountyMap:UpdateMinimapPins(context, dataRefresh)
-    end
-end
-
-function Overlord.MapMarkers:UpdateMinimapManualBountyPins(context, dataRefresh)
-    if Overlord.ManualBountyMap and Overlord.ManualBountyMap.UpdateMinimapPins then
-        Overlord.ManualBountyMap:UpdateMinimapPins(context, dataRefresh)
-    end
-end
-
-function Overlord.MapMarkers:HideMinimapBountyPins()
-    if Overlord.BountyMap and Overlord.BountyMap.HideMinimapPins then
-        Overlord.BountyMap:HideMinimapPins()
-    end
-end
-
-function Overlord.MapMarkers:HideMinimapManualBountyPins()
-    if Overlord.ManualBountyMap and Overlord.ManualBountyMap.HideMinimapPins then
-        Overlord.ManualBountyMap:HideMinimapPins()
-    end
 end
 
 function Overlord.MapMarkers:UpdateMinimapGeneralPins(context, dataRefresh)

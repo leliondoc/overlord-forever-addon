@@ -10,7 +10,6 @@ local BTN_GAP = 4
 local btnFrame = nil
 local generalBtnFrame = nil
 local cdFrame = nil
-local cdText = nil
 local cdTicker = nil
 local cdSwipeExpireAt = nil -- fin du swipe CooldownFrame (GetTime() session)
 
@@ -180,16 +179,14 @@ local function UpdateCooldownVisual()
             cdSwipeExpireAt = now + rem
             cdFrame:SetCooldown(now, rem)
         end
-        if cdText then
-            cdText:SetText(FormatCooldown(rem))
-            cdText:Show()
-        end
+        -- Le chrono remplace le libelle : pose sur l'icone, il debordait sur le texte.
+        if btnFrame.label then btnFrame.label:SetText(FormatCooldown(rem)) end
         btnFrame.icon:SetDesaturated(true)
         btnFrame.icon:SetAlpha(0.45)
     else
         cdSwipeExpireAt = nil
         cdFrame:Clear()
-        if cdText then cdText:Hide() end
+        if btnFrame.label and L.FACTION_CALL_BUTTON then btnFrame.label:SetText(L.FACTION_CALL_BUTTON) end
         if not HasCommunityClub() or not Overlord.InActiveFront then
             btnFrame.icon:SetDesaturated(true)
             btnFrame.icon:SetAlpha(0.35)
@@ -302,14 +299,7 @@ local function WireFactionCallGridButton(btn)
         cdFrame:SetHideCountdownNumbers(true)
         cdFrame:EnableMouse(false)
     end
-    if not cdText then
-        cdText = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        cdText:SetPoint("CENTER", btn.icon, "CENTER", 0, 0)
-        cdText:SetFont(cdText:GetFont(), 10, "OUTLINE")
-        cdText:SetTextColor(1, 0.95, 0.75)
-        cdText:EnableMouse(false)
-        cdText:Hide()
-    end
+
 
     btn:SetScript("OnClick", function()
         Overlord.Button:OnClick()

@@ -425,12 +425,6 @@ local function CommitCommunityCharacterCache(sync, allCharactersByKey, refreshTo
         if Overlord.Leaderboard and Overlord.Leaderboard.MarkMetaDirty then
             Overlord.Leaderboard:MarkMetaDirty()
         end
-        -- Le roster est construit par lots apres l'ouverture du panneau. Sans
-        -- notification explicite, l'UI conserve sa revision initiale (souvent vide)
-        -- jusqu'a ce qu'un autre paquet reseau provoque fortuitement un refresh.
-        if Overlord.ManualBountyUI and Overlord.ManualBountyUI.RequestRefresh then
-            Overlord.ManualBountyUI:RequestRefresh()
-        end
     end
 
     BuildIndex = function()
@@ -2094,10 +2088,8 @@ local function BuildCommunityWhisperCoalesceKey(msgType, payload, memberName, pr
         if zoneId and zoneId ~= "" then
             return "C:" .. tostring(memberName) .. ":" .. zoneId
         end
-    elseif not priority and (msgType == "PM" or msgType == "LR") then
-        local subject = msgType == "PM"
-            and payload:match("^[^:]*:([^:]+)")
-            or payload:match("^([^:]+)")
+    elseif not priority and msgType == "LR" then
+        local subject = payload:match("^([^:]+)")
         return msgType .. ":" .. tostring(memberName) .. ":" .. tostring(subject)
     end
     return nil
