@@ -2396,7 +2396,7 @@ function Overlord.UI:CreateZoneListSection(parent)
     local btnGapY = 6
     local gridRow0Gap = 6
     local gridRowGap = 3
-    local btnRows = 4
+    local btnRows = 5
     local gridPadTop = 8
     local gridPadBottom = 6
     local actionsCardH = gridPadTop + btnRows * btnHeight
@@ -2444,7 +2444,7 @@ function Overlord.UI:CreateZoneListSection(parent)
         discordBtn.icon:SetAtlas(Overlord.DISCORD_BUTTON_ATLAS or "UI-ChatIcon-Discord", false)
         discordBtn.icon:SetTexCoord(0, 1, 0, 1)
     end
-    discordBtn:SetPoint("TOPRIGHT", actionsCard, "TOPRIGHT", -4, ActionGridRowY(3))
+    discordBtn:SetPoint("TOPRIGHT", actionsCard, "TOPRIGHT", -4, ActionGridRowY(4))
     AttachGridButtonTooltip(discordBtn, L.DISCORD_BUTTON_TOOLTIP or L.DISCORD_BUTTON)
     discordBtn:SetScript("OnClick", function()
         Overlord.UI:OnDiscordButtonClick()
@@ -2462,7 +2462,7 @@ function Overlord.UI:CreateZoneListSection(parent)
 
     local tutorialBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
         L.GUIDE_BAR_LABEL, "Interface\\Icons\\INV_Misc_Book_09")
-    tutorialBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(1))
+    tutorialBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(2))
     AttachGridButtonTooltip(tutorialBtn, L.GUIDE_BTN_TOOLTIP or L.GUIDE_BAR_LABEL)
     tutorialBtn:SetScript("OnClick", function()
         if Overlord.Popups and Overlord.Popups.ToggleQuickGuide then
@@ -2484,7 +2484,7 @@ function Overlord.UI:CreateZoneListSection(parent)
         or L.GENERAL_TOOLTIP_TITLE_ALLIANCE
     local generalBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
         L.GENERAL_BUTTON, "Interface\\Icons\\Ability_Warrior_RallyingCry")
-    generalBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(2))
+    generalBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(3))
     AttachGridButtonTooltip(generalBtn, generalTip)
     zoneListFrame.factionCallBtn = hornBtn
     zoneListFrame.generalBtn = generalBtn
@@ -2494,7 +2494,7 @@ function Overlord.UI:CreateZoneListSection(parent)
 
     local settingsBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
         L.SETTINGS_BUTTON, "Interface\\Icons\\INV_Misc_Gear_01")
-    settingsBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(3))
+    settingsBtn:SetPoint("TOPRIGHT", actionsCard, "TOPRIGHT", -4, ActionGridRowY(3))
     AttachGridButtonTooltip(settingsBtn, L.SETTINGS_BUTTON_TOOLTIP or L.SETTINGS_BUTTON)
     settingsBtn:SetScript("OnClick", function()
         if Overlord.SettingsPanel and Overlord.SettingsPanel.Toggle then
@@ -2506,6 +2506,19 @@ function Overlord.UI:CreateZoneListSection(parent)
     -- Keep optional module buttons unavailable only when the module is absent.
     local foreverUnavailable = L.FOREVER_FEATURE_UNAVAILABLE
         or "Unavailable on Overlord Forever."
+    -- Two greyed placeholders keep the grid balanced until new features take
+    -- their slots (no module behind them on Forever).
+    local placeholders = {
+        { L.MB_BUTTON, "Interface\\Icons\\INV_Misc_Coin_01", "TOPLEFT", 4, 1 },
+        { L.CHECK_PVP_BUTTON, "Interface\\Icons\\INV_Misc_Note_01", "TOPLEFT", 4, 4 },
+    }
+    for _, def in ipairs(placeholders) do
+        local btn = CreateWC3Button(actionsCard, btnWidth, btnHeight, def[1] or "", def[2])
+        btn:SetPoint(def[3], actionsCard, def[3], def[4], ActionGridRowY(def[5]))
+        if self.SetWC3ButtonUnavailable then
+            self.SetWC3ButtonUnavailable(btn, foreverUnavailable)
+        end
+    end
     if self.SetWC3ButtonUnavailable then
         if not Overlord.HallOfFameUI then
             self.SetWC3ButtonUnavailable(hofBtn, foreverUnavailable)

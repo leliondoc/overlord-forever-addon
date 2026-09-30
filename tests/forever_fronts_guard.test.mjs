@@ -123,8 +123,12 @@ test("Forever panel greys disabled modules", () => {
     assert.match(ui, /SetWC3ButtonUnavailable\(generalBtn/);
     assert.match(ui, /not Overlord\.HallOfFameUI/);
     assert.match(ui, /not Overlord\.General/);
-    // Contracts and export do not exist on Forever: no dead button in the grid.
+    // Contracts and export do not exist on Forever: only greyed placeholders
+    // keep the grid balanced, with no module or click handler behind them.
     assert.doesNotMatch(ui, /mbBtn|exportBtn|ManualBountyUI|Overlord\.Export/);
+    assert.match(ui, /L\.MB_BUTTON, "Interface\\\\Icons\\\\INV_Misc_Coin_01", "TOPLEFT", 4, 1/);
+    assert.match(ui, /L\.CHECK_PVP_BUTTON, "Interface\\\\Icons\\\\INV_Misc_Note_01", "TOPLEFT", 4, 4/);
+    assert.match(ui, /self\.SetWC3ButtonUnavailable\(btn, foreverUnavailable\)/);
     assert.match(locales, /L\.FOREVER_FEATURE_UNAVAILABLE = "Unavailable on Overlord Forever\."/);
     assert.match(locales, /L\.FOREVER_FEATURE_UNAVAILABLE = "Indisponible sur Overlord Forever\."/);
 });
