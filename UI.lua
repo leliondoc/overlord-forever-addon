@@ -3508,234 +3508,44 @@ function Overlord.UI:RefreshShardBadge()
     end
 end
 
--- ============ Ecran de victoire totale ============
-
-local victoryFrame = nil
-
--- Pool suffisant pour tous les fronts (ZoneDatabase au chargement peut etre plus petit qu'en jeu).
-local MAX_VICTORY_STAT_LINES = 40
+-- ============ Victoire totale ============
+-- Alerte raid au milieu de l'ecran (1.3.1) : l'ancien cadre plein ecran avec les
+-- statistiques genait les joueurs encore en combat sur le front. La musique reste.
+local lastVictoryAlertFaction, lastVictoryAlertAt = nil, 0
+local VICTORY_ALERT_COLORS = {
+    Horde = { r = 1.0, g = 0.35, b = 0.20 },
+    Alliance = { r = 0.427, g = 0.702, b = 0.949 },
+}
 
 function Overlord.UI:ShowVictoryScreen(factionName)
-    if victoryFrame and victoryFrame:IsShown() then return end
-
-    local stats = {}
-    local victorKills   = 0
-    local defeatedKills = 0
-    local isVictoryHorde  = (factionName == L.VICTORY_FACTION_HORDE)
-    local defeatedFaction = isVictoryHorde and "Alliance" or "Horde"
-
-    -- Snapshot zone uniquement : pas de GetFactionKillTotals (classement = semaine entiere, tous fronts).
-    local snap = OverlordDB and OverlordDB.lastCampaignStats
-    local currentCampaignId = OverlordDB and OverlordDB.campaignId
-    local currentFront = Overlord.Fronts and Overlord.Fronts:GetCurrentFront()
-    local currentFrontId = currentFront and currentFront.id
-    if snap then
-        if snap.campaignId ~= currentCampaignId then
-            snap = nil
-        elseif snap.frontId and currentFrontId and snap.frontId ~= currentFrontId then
-            snap = nil
+    if Overlord.InstanceSuspended or not factionName then return end
+    -- Une meme victoire arrive par plusieurs chemins (local, TV, replay SR) : une alerte.
+    local now = GetTime()
+    if lastVictoryAlertFaction == factionName and now - lastVictoryAlertAt < 30 then return end
+    lastVictoryAlertFaction, lastVictoryAlertAt = factionName, now
+    local front = Overlord.Fronts and Overlord.Fronts.GetCurrentFront and Overlord.Fronts:GetCurrentFront()
+    local text = Overlord.Sync and Overlord.Sync.FormatTotalVictoryMessage
+        and Overlord.Sync:FormatTotalVictoryMessage(factionName, front and front.id)
+        or string.format(L.TOTAL_VICTORY_MSG, factionName)
+    text = text:match("^%s*(.-)%s*$")
+    local color = VICTORY_ALERT_COLORS[factionName == L.VICTORY_FACTION_HORDE and "Horde" or "Alliance"]
+    local shown = false
+    if RaidNotice_AddMessage and RaidWarningFrame then
+        shown = pcall(RaidNotice_AddMessage, RaidWarningFrame, text, color)
+    end
+    if not shown then
+        -- Repli : meme alerte rouge que les autres avertissements Overlord (avec son).
+        if Overlord.PrintRaidWarning then Overlord:PrintRaidWarning(text) end
+        return
+    end
+    local cfg = OverlordDB and OverlordDB.config
+    if cfg == nil or cfg.soundEnabled ~= false then
+        -- Musique de fin de bataille (Retail) ; si le client ne l'a pas, son d'alerte raid.
+        local ok, willPlay = pcall(PlaySound, SOUNDKIT and SOUNDKIT.UI_WARFRONTS_BATTLE_COMPLETE or 175409)
+        if not (ok and willPlay) then
+            pcall(PlaySound, SOUNDKIT and SOUNDKIT.RAID_WARNING or 8959)
         end
     end
-    if snap and snap.zones and #snap.zones > 0 then
-        for _, entry in ipairs(snap.zones) do
-            table.insert(stats, { name = entry.name, kills = entry.kills or 0 })
-        end
-        local allyRaw  = snap.allyKills  or 0
-        local enemyRaw = snap.enemyKills or 0
-        victorKills   = isVictoryHorde and enemyRaw or allyRaw
-        defeatedKills = isVictoryHorde and allyRaw  or enemyRaw
-    end
-
-    local lineH = 17
-    local panelH = 290 + math.max(0, #stats) * lineH
-
-    -- Cree tous les elements une seule fois, stocke les refs sur victoryFrame
-    if not victoryFrame then
-        victoryFrame = CreateFrame("Frame", "OverlordVictoryFrame", UIParent)
-        victoryFrame:SetAllPoints()
-        victoryFrame:SetFrameStrata("DIALOG")
-        victoryFrame:SetFrameLevel(100)
-        victoryFrame:EnableMouse(false)
-
-        victoryFrame.bg = victoryFrame:CreateTexture(nil, "BACKGROUND")
-        victoryFrame.bg:SetAllPoints()
-        victoryFrame.bg:SetColorTexture(0, 0, 0, 0.65)
-
-        local panel = CreateFrame("Frame", nil, victoryFrame, "BackdropTemplate")
-        panel:EnableMouse(true)
-        panel:SetPoint("CENTER", 0, 30)
-        panel:SetBackdrop({
-            bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
-            edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Gold-Border",
-            tile     = true,
-            tileSize = 32,
-            edgeSize = 32,
-            insets   = { left = 8, right = 8, top = 8, bottom = 8 },
-        })
-        victoryFrame.panel = panel
-
-        panel.hdr = panel:CreateTexture(nil, "OVERLAY")
-        panel.hdr:SetTexture("Interface\\DialogFrame\\UI-DialogBox-Header")
-        panel.hdr:SetSize(280, 64)
-        panel.hdr:SetPoint("TOP", 0, 12)
-
-        panel.hdrTxt = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        panel.hdrTxt:SetPoint("TOP", 0, -1)
-        panel.hdrTxt:SetText("Overlord")
-
-        panel.glow = panel:CreateTexture(nil, "ARTWORK", nil, 0)
-        panel.glow:SetSize(100, 100)
-        panel.glow:SetPoint("TOP", 0, -28)
-        panel.glow:SetTexture("Interface\\CHARACTERFRAME\\TempPortraitAlphaMaskSmall")
-        panel.glow:SetBlendMode("ADD")
-
-        panel.fIcon = panel:CreateTexture(nil, "ARTWORK", nil, 1)
-        panel.fIcon:SetSize(64, 64)
-        panel.fIcon:SetPoint("TOP", 0, -46)
-
-        panel.line1 = panel:CreateFontString(nil, "OVERLAY", "QuestFont_Huge")
-        panel.line1:SetPoint("TOP", 0, -114)
-
-        panel.line2 = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-        panel.line2:SetPoint("TOP", panel.line1, "BOTTOM", 0, -2)
-
-        panel.sub = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        panel.sub:SetPoint("TOP", panel.line2, "BOTTOM", 0, -6)
-
-        panel.sep = panel:CreateTexture(nil, "ARTWORK")
-        panel.sep:SetSize(340, 1)
-        panel.sep:SetPoint("TOP", panel.sub, "BOTTOM", 0, -10)
-
-        panel.statsHeader = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        panel.statsHeader:SetPoint("TOP", panel.sep, "BOTTOM", 0, -8)
-
-        panel.statNames = {}
-        panel.statKills = {}
-        for i = 1, MAX_VICTORY_STAT_LINES do
-            local nm = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-            nm:SetJustifyH("LEFT")
-            panel.statNames[i] = nm
-            local kl = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-            kl:SetJustifyH("RIGHT")
-            panel.statKills[i] = kl
-        end
-
-        panel.totalText = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-
-        panel.closeBtn = CreateWC3Button(panel, 120, 28, CLOSE or "Fermer")
-        panel.closeBtn:SetPoint("BOTTOM", 0, 16)
-        panel.closeBtn:SetScript("OnClick", function()
-            if victoryFrame then victoryFrame:Hide() end
-        end)
-
-        -- ESC ferme le panneau (SetScript au lieu de UISpecialFrames pour eviter taint)
-        victoryFrame:SetScript("OnKeyDown", function(self, key)
-            if key == "ESCAPE" then
-                self:SetPropagateKeyboardInput(false)
-                self:Hide()
-            else
-                self:SetPropagateKeyboardInput(true)
-            end
-        end)
-        victoryFrame:EnableKeyboard(true)
-    end
-
-    -- Met a jour les elements avec les donnees de cette victoire
-    local panel = victoryFrame.panel
-    panel:SetSize(420, panelH)
-    panel:SetBackdropColor(C.bg[1], C.bg[2], C.bg[3], 0.97)
-    panel:SetBackdropBorderColor(1, 0.82, 0, 1)
-
-    panel.hdrTxt:SetTextColor(C.gold[1], C.gold[2], C.gold[3])
-    panel.glow:SetVertexColor(C.gold[1], C.gold[2], C.gold[3], 0.3)
-    panel.fIcon:SetTexture(isVictoryHorde
-        and "Interface\\Timer\\Horde-Logo"
-        or  "Interface\\Timer\\Alliance-Logo")
-
-    panel.line1:SetText(L.VICTORY_LINE1)
-    panel.line1:SetTextColor(C.gold[1], C.gold[2], C.gold[3])
-
-    local factionColor = isVictoryHorde
-        and {1.0, 0.35, 0.20}
-        or  {0.427, 0.702, 0.949}
-    panel.line2:SetText(string.format(L.VICTORY_LINE2, factionName))
-    panel.line2:SetTextColor(factionColor[1], factionColor[2], factionColor[3])
-
-    local frontName = Overlord.Fronts and Overlord.Fronts:GetMapName()
-    if not frontName or not L.FRONT_CONQUERED then return end
-    panel.sub:SetText(string.format(L.FRONT_CONQUERED, frontName))
-    panel.sub:SetTextColor(factionColor[1], factionColor[2], factionColor[3], 0.7)
-
-    panel.sep:SetColorTexture(C.gold[1], C.gold[2], C.gold[3], 0.4)
-    if #stats > 0 then
-        panel.sep:Show()
-        panel.statsHeader:SetText(L.CAMPAIGN_STATS)
-        panel.statsHeader:SetTextColor(C.gold[1], C.gold[2], C.gold[3], 0.8)
-        panel.statsHeader:Show()
-    else
-        panel.sep:Hide()
-        panel.statsHeader:Hide()
-    end
-
-    for i = 1, MAX_VICTORY_STAT_LINES do
-        local nm = panel.statNames[i]
-        local kl = panel.statKills[i]
-        if stats[i] then
-            nm:ClearAllPoints()
-            nm:SetPoint("TOPLEFT", panel.sep, "BOTTOMLEFT", 20, -26 - (i - 1) * lineH)
-            nm:SetText(stats[i].name)
-            nm:SetTextColor(C.white[1], C.white[2], C.white[3], 0.85)
-            nm:Show()
-            kl:ClearAllPoints()
-            kl:SetPoint("TOPRIGHT", panel.sep, "BOTTOMRIGHT", -20, -26 - (i - 1) * lineH)
-            kl:SetText(stats[i].kills .. " " .. (L.LB_COL_KILLS or "kills"))
-            kl:SetTextColor(C.gray[1], C.gray[2], C.gray[3])
-            kl:Show()
-        else
-            nm:Hide()
-            kl:Hide()
-        end
-    end
-
-    if #stats > 0 then
-        local totalY = -26 - #stats * lineH - 8
-        panel.totalText:ClearAllPoints()
-        panel.totalText:SetPoint("TOP", panel.sep, "BOTTOM", 0, totalY)
-        local victoryFaction = isVictoryHorde and "Horde" or "Alliance"
-        panel.totalText:SetText(string.format(L.STATS_TOTAL_KILLS,
-            victoryFaction,  victorKills,
-            defeatedFaction, defeatedKills))
-        panel.totalText:SetTextColor(C.gold[1], C.gold[2], C.gold[3])
-        panel.totalText:Show()
-    else
-        panel.totalText:Hide()
-    end
-
-    -- Fade-in progressif (1 seconde)
-    victoryFrame:Show()
-    victoryFrame:SetAlpha(0)
-    local fadeStart = GetTime()
-    victoryFrame:SetScript("OnUpdate", function(self)
-        local p = (GetTime() - fadeStart) / 1.0
-        if p >= 1 then
-            self:SetAlpha(1)
-            self:SetScript("OnUpdate", nil)
-        else
-            self:SetAlpha(p)
-        end
-    end)
-
-    -- Son de victoire
-    if OverlordDB and OverlordDB.config and OverlordDB.config.soundEnabled then
-        pcall(PlaySound, SOUNDKIT and SOUNDKIT.UI_WARFRONTS_BATTLE_COMPLETE or 175409)
-    end
-
-    -- Fermeture automatique apres 30s
-    C_Timer.After(30, function()
-        if victoryFrame and victoryFrame:IsShown() then
-            victoryFrame:Hide()
-        end
-    end)
 end
 
 -- ============ Mode spectateur (panel visible hors front) ============

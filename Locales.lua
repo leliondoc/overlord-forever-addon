@@ -306,11 +306,6 @@ L.ENEMY_CAPTURE_REVERSED = "Enemy capture of %s reversed! Zone secured."
 L.ZONE_CAPTURED_BY   = "%s has been captured by %s!"
 L.TOTAL_VICTORY_MSG  = "   TOTAL VICTORY FOR %s!   "
 L.TOTAL_VICTORY_FRONT_MSG = "   TOTAL VICTORY FOR %s! Front: %s   "
-L.FRONT_CONQUERED    = "  %s fully conquered!"
-L.VICTORY_LINE1      = "TOTAL VICTORY"
-L.VICTORY_LINE2      = "FOR %s!"
-L.CAMPAIGN_STATS     = "Campaign statistics:"
-L.STATS_TOTAL_KILLS  = "%s: %d kills  |  %s: %d kills"
 -- === CombatTracker ===
 L.CAPTURE_OF_STARTED     = "Capture of %s started!"
 
@@ -845,11 +840,6 @@ L.ENEMY_CAPTURE_REVERSED = "Capture ennemie de %s annulée ! Zone sécurisée."
 L.ZONE_CAPTURED_BY   = "%s a été capturée par %s !"
 L.TOTAL_VICTORY_MSG  = "   VICTOIRE TOTALE DE %s !   "
 L.TOTAL_VICTORY_FRONT_MSG = "   VICTOIRE TOTALE DE %s ! Front : %s   "
-L.FRONT_CONQUERED    = "  %s entièrement conquis !"
-L.VICTORY_LINE1      = "VICTOIRE TOTALE"
-L.VICTORY_LINE2      = "DE %s !"
-L.CAMPAIGN_STATS     = "Statistiques de la campagne :"
-L.STATS_TOTAL_KILLS  = "%s : %d tués  |  %s : %d tués"
 -- CombatTracker
 L.CAPTURE_OF_STARTED     = "Capture de %s commencée !"
 
@@ -1379,11 +1369,6 @@ L.ENEMY_CAPTURE_REVERSED = "¡Captura enemiga de %s revertida! Zona asegurada."
 L.ZONE_CAPTURED_BY   = "¡%s ha sido capturada por %s!"
 L.TOTAL_VICTORY_MSG  = "   ¡VICTORIA TOTAL DE %s!   "
 L.TOTAL_VICTORY_FRONT_MSG = "   ¡VICTORIA TOTAL DE %s! Frente: %s   "
-L.FRONT_CONQUERED    = "  ¡%s totalmente conquistado!"
-L.VICTORY_LINE1      = "VICTORIA TOTAL"
-L.VICTORY_LINE2      = "¡DE %s!"
-L.CAMPAIGN_STATS     = "Estadísticas de la campaña:"
-L.STATS_TOTAL_KILLS  = "%s: %d muertes  |  %s: %d muertes"
 L.CAPTURE_OF_STARTED     = "¡Captura de %s iniciada!"
 
 -- LeaderboardUI
@@ -1911,11 +1896,6 @@ L.ENEMY_CAPTURE_REVERSED = "Feindliche Eroberung von %s rückgängig! Zone gesic
 L.ZONE_CAPTURED_BY   = "%s wurde durch %s erobert!"
 L.TOTAL_VICTORY_MSG  = "   TOTALER SIEG: %s!   "
 L.TOTAL_VICTORY_FRONT_MSG = "   TOTALER SIEG: %s! Front: %s   "
-L.FRONT_CONQUERED    = "  %s vollständig erobert!"
-L.VICTORY_LINE1      = "TOTALER SIEG"
-L.VICTORY_LINE2      = "%s!"
-L.CAMPAIGN_STATS     = "Kampagnenstatistik:"
-L.STATS_TOTAL_KILLS  = "%s: %d Kills  |  %s: %d Kills"
 L.CAPTURE_OF_STARTED     = "Eroberung von %s gestartet!"
 
 -- LeaderboardUI
@@ -2449,11 +2429,6 @@ L.ENEMY_CAPTURE_REVERSED = "Захват %s врагом отменен! Зон�
 L.ZONE_CAPTURED_BY   = "%s захвачена %s!"
 L.TOTAL_VICTORY_MSG  = "   ПОЛНАЯ ПОБЕДА: %s!   "
 L.TOTAL_VICTORY_FRONT_MSG = "   ПОЛНАЯ ПОБЕДА: %s! Фронт: %s   "
-L.FRONT_CONQUERED    = "  %s полностью захвачена!"
-L.VICTORY_LINE1      = "ПОЛНАЯ ПОБЕДА"
-L.VICTORY_LINE2      = "%s!"
-L.CAMPAIGN_STATS     = "Статистика кампании:"
-L.STATS_TOTAL_KILLS  = "%s: убийств: %d  |  %s: убийств: %d"
 -- === CombatTracker ===
 L.CAPTURE_OF_STARTED     = "Захват %s начался!"
 
