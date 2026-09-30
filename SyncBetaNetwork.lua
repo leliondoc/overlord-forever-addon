@@ -1553,10 +1553,13 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         -- A timestamp going backwards (clock fix, stale copy) never blocks a newer one.
         forwardPresence = not last or at - last >= window or at < last - window
         -- Presence only needs to reach direct neighbours since catch-up became
-        -- point to point (1.2.4): forward a first-hand copy, or one that crossed
-        -- a Battle.net bridge from the other faction; never flood it further.
-        -- Multi-hop presence was the largest remaining share of relay drops.
-        if #p.path > 2 or (#p.path == 2 and transport ~= "BNET") then forwardPresence = false end
+        -- point to point (1.2.4), and each player already sends its own to its
+        -- channel, group and Battle.net friends: another player's NH is never
+        -- relayed (it was about half of the relay budget). Shard presence (SH,
+        -- small, feeds the layer tooltip) keeps one Battle.net hop.
+        if p.kind == "NH" or #p.path > 2 or (#p.path == 2 and transport ~= "BNET") then
+            forwardPresence = false
+        end
     end
     local forwarded = false
     -- Catch-up addressed to someone else is not relayed (point-to-point only).

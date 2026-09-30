@@ -4,9 +4,8 @@
 --      channel copy; alerts (OP in progress) and terminal events keep both; a refused direct
 --      send stays a retry; another player's identical payload never stands in for ours.
 --  (2) SH presence is forwarded by a hop at most once per 90 s per origin (like NH).
---  (3) Relayed NH (a hop forwarding somebody else's heartbeat) goes to the opposite-faction
---      bridges plus one rotating friend; it reaches the channel only for an origin that is not
---      audible there; the origin's own NH keeps the full fan-out.
+--  (3) Another player's NH is never relayed (1.2.4, about half of the relay budget);
+--      the origin's own NH keeps the full fan-out (channel, bridges, friends).
 assert(loadfile("tests/forever_beta_integration.test.lua"))()
 -- The integration fixture stubs net.Broadcast and IsLargeEvent: start from the real relay.
 assert(loadfile("SyncBetaNetwork.lua"))()
@@ -156,38 +155,24 @@ shFrom(3); pump(55)     -- t=120
 check(distinctIds("SH") == 2,
     "SH from one origin was forwarded " .. distinctIds("SH") .. " times in 120 s (expected 2: at 0 and 120)")
 
--- (3) relayed NH: bridges + one rotating friend; channel copy only for an origin that is not
--- audible on the channel
-local function nhFrom(origin, serial)
-    local wire = table.concat({ "global", "nh" .. serial, time(), "*", origin .. ",Gateway Tester", "NH", "1.1.10~lp6" }, "|")
+-- (3) another player's NH is never relayed (1.2.4): not to friends, not to the channel,
+-- whether it arrived first-hand from a Battle.net friend or already relayed once.
+local function nhFrom(path, serial)
+    local wire = table.concat({ "global", "nh" .. serial, time(), "*", path, "NH", "1.1.10~lp6" }, "|")
     net:Receive(wire, "Gateway Tester", "BNET", 5)
     pump(5)
 end
 reset()
-nhFrom("Far Origin", 1)
-local relayedNh, relayedIds = bnetCopies("NH")
-check(relayedIds[1], "the opposite-faction bridge no longer receives a relayed NH")
-check(relayedNh == 2, "a relayed NH went to " .. relayedNh .. " friends (expected the bridge + 1 rotating friend)")
-check(relayCopies("NH") == 1, "a relayed NH of an origin only reachable through us must reach the channel")
-local seenFriends = { [1] = true }
-for i = 2, 3 do -- one heartbeat per 100 s clears the 90 s NH forward filter
+nhFrom("Far Origin,Gateway Tester", 1)
+check(bnetCopies("NH") == 0, "a relayed NH was forwarded to Battle.net friends")
+check(relayCopies("NH") == 0, "a relayed NH was put on the channel")
+for i = 2, 3 do
     channel, bnetSent = {}, {}
     pump(95)
-    nhFrom("Far Origin", i * 10)
-    local n, ids = bnetCopies("NH")
-    check(n == 2, "a later relayed NH went to " .. n .. " friends")
-    for id in pairs(ids) do seenFriends[id] = true end
-    check(relayCopies("NH") == 1, "a far origin's beat did not stay on the channel (routes live 300 s)")
+    nhFrom("Gateway Tester", i * 10)
+    check(bnetCopies("NH") == 0 and relayCopies("NH") == 0,
+        "a friend's first-hand NH was relayed onward")
 end
-check(seenFriends[2] and seenFriends[3], "the rotating friend slot never reached every same-faction friend")
--- an origin heard on the channel itself needs no channel copy from us
-reset()
-local nearWire = table.concat({ "global", "near1", time(), "*", "Near Origin", "NH", "1.1.10~lp6" }, "|")
-net:ReceiveFragment("near1:1:1:" .. nearWire, "Near Origin", "CHANNEL")
-pump(5)
-channel, bnetSent = {}, {}
-nhFrom("Near Origin", 2)
-check(relayCopies("NH") == 0, "a relayed NH of an origin audible on the channel was put on the channel")
 -- the origin's own heartbeat keeps the full fan-out: channel + bridge + two friends
 reset()
 relay("NH", "1.1.10~lp6")
@@ -197,4 +182,4 @@ check(ownIds[1] and ownNh >= 3, "the origin's own NH lost part of its friend fan
 
 assert(#failures == 0, "channel/relay load regressions:" .. string.char(10) .. "  - "
     .. table.concat(failures, string.char(10) .. "  - "))
-print("Forever channel load: SH sent once on the channel, SH forward filter, relayed NH fan-out cut (bridges + 1 friend, channel only for inaudible origins), alerts keep both copies OK")
+print("Forever channel load: SH sent once on the channel, SH forward filter, others' NH never relayed, own NH full fan-out, alerts keep both copies OK")

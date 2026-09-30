@@ -188,7 +188,7 @@ do
     assert(not n:IsUrgentPacket("GK", "v9:site:held:1") and not n:IsUrgentPacket("OP", "v1:site:neutral:1"))
     assert(not n:IsUrgentPacket("G7", "x") and not n:IsUrgentPacket("GH", "x") and not n:IsUrgentPacket("K", "x"))
 end
--- A bridge re-forwards each origin's presence (NH) at most once per 2 minutes.
+-- A bridge never relays another player's presence (NH, 1.2.4).
 do
     local channelSends = 0
     local originalSendToChannel = c.Sync.SendToChannel
@@ -202,8 +202,7 @@ do
     now = now + 5
     assert(a.BetaNetwork:Send("NH", "presence-two")); drain()
     c.Sync.SendToChannel = originalSendToChannel
-    assert(afterFirst > 0, "First presence never reached the bridge's channel")
-    assert(channelSends == afterFirst, "Bridge re-emitted the same origin's presence within 2 minutes")
+    assert(afterFirst == 0 and channelSends == 0, "The bridge relayed another player's presence")
     assert(#d.received == before, "Presence was dispatched as a sync message")
 end
 -- /ov network: relay cost per kind (bytes sent, packets, drops), heaviest first.
@@ -213,19 +212,10 @@ do
         and a.BetaNetwork.kindStats.VB.queued > 0 and a.BetaNetwork.kindStats.VB.bytes > 0,
         "Relay per-kind diagnostics missing: " .. lines)
 end
--- Presence stays fresh across hops even with the 2-minute forward limit and one
--- lost copy: a far peer (a -> b -> BNet -> c -> d) never drops out of the 5 min list.
+-- 1.2.4: presence is never relayed. Over ten minutes of beats from a, its direct
+-- neighbour b keeps a fresh direct route, while the far peer d (a -> b -> BNet ->
+-- c -> d) stops knowing a once earlier routes expire: presence alone never reaches it.
 do
-    local lostOnce = false
-    local lossAfter = now + 200
-    local originalSendToBNet = b.Sync.SendToBNet
-    b.Sync.SendToBNet = function(self, other, kind, wire)
-        if not lostOnce and now > lossAfter and wire:find("|NH|", 1, true) then
-            lostOnce = true
-            return true
-        end
-        return originalSendToBNet(self, other, kind, wire)
-    end
     local startAt = now
     local nextBeat = now
     while now < startAt + 600 do
@@ -234,33 +224,31 @@ do
             nextBeat = nextBeat + 45
         end
         drain()
-        if now > startAt + 60 then
-            assert(d.BetaNetwork:IsPeer(a.name), "Far peer dropped out of the known list at +" .. math.floor(now - startAt) .. " s")
-        end
         now = now + 5
     end
-    b.Sync.SendToBNet = originalSendToBNet
-    assert(lostOnce, "Fixture never lost a presence copy")
+    assert(b.BetaNetwork:IsDirectPeer(a.name), "The direct neighbour lost the presence route")
+    assert(not d.BetaNetwork:IsPeer(a.name), "A far peer still learned a relayed presence")
 end
 -- Transit delays must not change the presence decision: it follows the author's
 -- timestamp, identical at every hop (Astra's case: 20 s late, then 75 s gap).
+-- Since 1.2.4 only shard presence (SH) is still forwarded, so the check uses SH.
 do
     local forwarded = {}
     local originalSendToBNet = b.Sync.SendToBNet
     b.Sync.SendToBNet = function(self, other, kind, wire)
-        local at = wire:match("^[^|]*|[^|]*|(%d+)|[^|]*|Delay Origin[^|]*|NH|")
+        local at = wire:match("^[^|]*|[^|]*|(%d+)|[^|]*|Delay Origin[^|]*|SH|")
         if at then forwarded[#forwarded + 1] = tonumber(at) end
         return originalSendToBNet(self, other, kind, wire)
     end
     local base = time()
     -- emitted at T (arrives 20 s late), T+45 (no forward), T+90 (arrives only 75 s after T's arrival)
-    local w1 = table.concat({ "global", "delay-1", tostring(base - 20), "*", "Delay Origin", "NH", "beat" }, "|")
+    local w1 = table.concat({ "global", "delay-1", tostring(base - 20), "*", "Delay Origin", "SH", "beat" }, "|")
     assert(b.BetaNetwork:Receive(w1, "Delay Origin", "CHANNEL")); drain()
     now = now + 45
-    local w2 = table.concat({ "global", "delay-2", tostring(base + 25), "*", "Delay Origin", "NH", "beat" }, "|")
+    local w2 = table.concat({ "global", "delay-2", tostring(base + 25), "*", "Delay Origin", "SH", "beat" }, "|")
     assert(b.BetaNetwork:Receive(w2, "Delay Origin", "CHANNEL")); drain()
     now = now + 30
-    local w3 = table.concat({ "global", "delay-3", tostring(base + 70), "*", "Delay Origin", "NH", "beat" }, "|")
+    local w3 = table.concat({ "global", "delay-3", tostring(base + 70), "*", "Delay Origin", "SH", "beat" }, "|")
     assert(b.BetaNetwork:Receive(w3, "Delay Origin", "CHANNEL")); drain()
     b.Sync.SendToBNet = originalSendToBNet
     local seenFirst, seenSecond, seenThird = false, false, false

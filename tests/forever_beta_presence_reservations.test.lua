@@ -15,7 +15,8 @@ for _, phased in ipairs({ false, true }) do
         for key in pairs(friend.BetaNetwork.peers) do
             if key:match("^origin") then origins = origins + 1 end
         end
-        assert(origins == 100, "Reducing drops lost origin discovery on a Horde bridge")
+        -- 1.2.4: presence is never relayed, a Horde bridge no longer learns far origins.
+        assert(origins == 0, "A presence was relayed to a Horde bridge")
     end
 end
 
