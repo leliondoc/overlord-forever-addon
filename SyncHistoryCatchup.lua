@@ -488,21 +488,32 @@ end
 
 -- Rotation entre voisins ; deux tours sur trois, un voisin de l'autre faction
 -- (ami Battle.net) d'abord : il detient ce que notre faction ne voit pas en direct.
+-- Chaque groupe a son propre compteur : un compteur commun au modulo 3 revenait
+-- toujours sur les memes index et ignorait un voisin (ex. 3 voisins, 1 ennemi).
 local function PickDirectPeer()
     local candidates = DirectCandidates()
-    local total = #candidates
-    if total == 0 then return nil end
+    if #candidates == 0 then return nil end
     local rotation = math.max(0, math.floor(tonumber(OverlordDB
         and OverlordDB.leaderboardHistoryCatchupTargetRotation) or 0))
-    local start = (rotation % total) + 1
-    local enemy = rotation % 3 ~= 2 and ENEMY_FACTION[Overlord.PlayerFaction] or nil
-    local fallback
-    for offset = 0, total - 1 do
-        local name = candidates[((start + offset - 1) % total) + 1]
-        fallback = fallback or name
-        if not enemy or PeerFaction(name) == enemy then return name end
+    local enemyFaction = ENEMY_FACTION[Overlord.PlayerFaction]
+    local enemies, allies = {}, {}
+    for _, name in ipairs(candidates) do
+        if enemyFaction and PeerFaction(name) == enemyFaction then
+            enemies[#enemies + 1] = name
+        else
+            allies[#allies + 1] = name
+        end
     end
-    return fallback
+    local sameRounds = math.floor(rotation / 3)
+    local pool, index
+    if #enemies == 0 then
+        pool, index = allies, rotation
+    elseif rotation % 3 == 2 and #allies > 0 then
+        pool, index = allies, sameRounds
+    else
+        pool, index = enemies, rotation - sameRounds
+    end
+    return pool[(index % #pool) + 1]
 end
 
 local function RotatePeers()
@@ -536,6 +547,9 @@ end
 
 -- An LO/LOC row from the peer we asked confirms the history round for six hours.
 function sync:NoteOutpostHistoryDelivery(sender)
+    -- A live row relayed from the same player is not the answer we asked for.
+    local context = Overlord.BetaNetwork and Overlord.BetaNetwork.context
+    if context and (tonumber(context.hops) or 0) > 0 then return false end
     local request = self._outpostHistoryRequest
     if not request or type(sender) ~= "string" or sender:lower() ~= request.peer
         or GetTime() - request.at > 300 or not OverlordDB then return false end

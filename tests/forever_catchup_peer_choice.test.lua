@@ -138,5 +138,41 @@ do
         or step == "all attempts used, next round in 2 min", step)
 end
 
+-- 4. Rotation reaches every neighbour: with three neighbours (one enemy) the
+--    old shared modulo-3 counter never asked "Ally One".
+do
+    local w = world({
+        { name = "Ally One", faction = "Alliance", hops = 1 },
+        { name = "Enemy Two", faction = "Horde", hops = 1 },
+        { name = "Ally Three", faction = "Alliance", hops = 1 },
+    }, "Alliance")
+    local function find(fn, name, depth, seen)
+        seen = seen or {}
+        if seen[fn] or depth < 0 then return nil end
+        seen[fn] = true
+        for i = 1, 200 do
+            local key, value = debug.getupvalue(fn, i)
+            if not key then break end
+            if key == name then return value end
+            if type(value) == "function" then
+                local found = find(value, name, depth - 1, seen)
+                if found then return found end
+            end
+        end
+    end
+    local pick = find(w.sync.ScheduleLoginLeaderboardHistoryCatchUp, "PickDirectPeer", 4)
+    check("PickDirectPeer reachable", pick ~= nil)
+    local asked, enemyRounds = {}, 0
+    for r = 0, 8 do
+        w.e.OverlordDB.leaderboardHistoryCatchupTargetRotation = r
+        local name = pick and pick()
+        if name then asked[name] = true end
+        if name == "Enemy Two" then enemyRounds = enemyRounds + 1 end
+    end
+    check("every neighbour asked within nine rounds", asked["Ally One"] and asked["Ally Three"]
+        and asked["Enemy Two"])
+    check("the enemy neighbour keeps two rounds out of three", enemyRounds == 6, enemyRounds)
+end
+
 if #failures > 0 then error("peer choice regression:\n  " .. table.concat(failures, "\n  "), 0) end
 print("Forever catch-up peer choice: direct neighbours only, v6, silent neighbour skipped, far peers never asked OK")

@@ -597,11 +597,12 @@ end
 -- runs between direct neighbours (same channel/group/whisper, or a Battle.net
 -- friend). The relay carries live traffic only. Forwarding every exchange across
 -- up to four hops multiplied one reply into thousands of copies at evening peaks.
--- Guild/class hints answered by many peers (GY, CA) follow the same rule. A
+-- Guild/class hints answered by many peers (GY, CA) and their targeted requests
+-- (GR, CR; a relayed one is ignored on arrival anyway) follow the same rule. A
 -- player's own identity answer (GI) stays relayable: one small authoritative
 -- reply per request, the only way a far owner can confirm its guild.
 local CATCHUP_KINDS = {}
-for kind in ("SR ZA HR HA HB HC LK LC LR LO LOC OE GY CA"):gmatch("%S+") do CATCHUP_KINDS[kind] = true end
+for kind in ("SR ZA HR HA HB HC LK LC LR LO LOC OE GY CA GR CR"):gmatch("%S+") do CATCHUP_KINDS[kind] = true end
 local function isPointToPointCatchup(kind, target)
     return CATCHUP_KINDS[kind] == true and target ~= nil and target ~= "*"
 end

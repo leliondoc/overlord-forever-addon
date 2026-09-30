@@ -289,7 +289,9 @@ request = function(state, retry)
             seenFragmentAt = state.fragmentAt
             if state.supported and remaining < 90 then remaining = 90 end
         end
-        if not paused() then remaining = remaining - 2 end
+        -- A request still waiting for our own send slot does not count as the
+        -- peer's silence (a saturated local queue punished a healthy peer 10 min).
+        if not paused() and not state.waitingForSend then remaining = remaining - 2 end
         state.timeoutRemaining = remaining
         if tries == 1 and not state.supported and not state.replySeen
             and not paused() and remaining > 0
@@ -328,11 +330,11 @@ local function nextPage(state, cursor)
             state.stream, state.bucket = "LK", 1
             checkpoint(state)
         end
-        if not outbound then
-            enqueue({ epoch = state.epoch, peer = state.peer, packets = { { "HR",
-                table.concat({ state.extended and "6" or "5", "F",
-                    state.epoch, state.nonce, state.seq }, ":") } } })
-        end
+        -- End notice leaves directly: queued behind our own outbound pages it was
+        -- dropped, and the responder kept us as its session (answering "R" to
+        -- everyone else) for five minutes.
+        sendControl("HR", table.concat({ state.extended and "6" or "5", "F",
+            state.epoch, state.nonce, state.seq }, ":"), state.peer)
         finish(state, true)
         return
     end
