@@ -96,7 +96,6 @@ jobs:
           lua5.1 tests/forever_relay_za_lost_batch.test.lua
           lua5.1 tests/forever_relay_live_over_legacy.test.lua
           lua5.1 tests/forever_relay_outpost_coalescing.test.lua
-          lua5.1 tests/forever_catchup_whisper_fallback.test.lua
           lua5.1 tests/forever_direct_route_sticky.test.lua
           lua5.1 tests/forever_guild_roster_hints.test.lua
           lua5.1 tests/audit_paged_ladder_depth.test.lua

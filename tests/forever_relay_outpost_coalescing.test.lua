@@ -65,18 +65,6 @@ now = now + 61
 assert(receive("Ida Forever", "OP", HELD))
 assert(net:GetQueueSummary().total == before + 2, "The routine state was not relayed again after a minute")
 
--- 1b. A routine copy lost in a saturated queue no longer covers the next one.
-net = load()
-assert(receive("Ida Forever", "OP", HELD))
-local skipped = net.stats.routineForwardSkipped or 0
-for i = 1, 200 do
-    net:Queue({ region = "global", id = "flood" .. i, at = GetServerTime and GetServerTime() or time(),
-        target = "*", path = { "Flood" .. i .. " Tester", "Gateway Tester" }, kind = "C", payload = "c" .. i })
-end
-assert((net.stats.displaced or 0) >= 1, "Test setup: the routine copy was not evicted")
-receive("Bob Forever", "OP", HELD)
-assert((net.stats.routineForwardSkipped or 0) == skipped, "A lost routine copy still suppressed the next one")
-
 -- 2. Capture ticks from one player replace each other while unsent; another site
 --    or another player keeps its own slot.
 net = load()

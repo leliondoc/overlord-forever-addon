@@ -2015,9 +2015,9 @@ end
 function Overlord.Sync:RunPeriodicMapCatchup()
     local net = Overlord.BetaNetwork
     if not net or Overlord.InstanceSuspended or IsInInstance() then return false end
-    -- A validated map from one peer skips at most one minute: it may have held a
-    -- single fresh zone, and the next direct peer can still be more up to date.
-    if self._lastFullZaAt and GetTime() - self._lastFullZaAt < math.min(60, self.BETA_MAP_CATCHUP_INTERVAL) then
+    -- A map received within the interval skips this pull. Tried at 60 s in 1.2.4
+    -- testing: every client pulled far more often and full replies flooded the relay.
+    if self._lastFullZaAt and GetTime() - self._lastFullZaAt < self.BETA_MAP_CATCHUP_INTERVAL then
         return false
     end
     local myName = self:GetPlayerFullName()
@@ -2460,18 +2460,12 @@ end
 
 function Overlord.Sync:SendWhisper(msgType, data, target, direct)
     -- direct: one raw addon whisper even to a relay peer (small unrelayed rows).
-    local net = Overlord.BetaNetwork
-    if Overlord.BetaNetworkEnabled ~= false and net and not direct
-        and msgType ~= "R1" and msgType ~= "BF" and net:IsPeer(target) then
-        -- Catch-up only travels point to point (1.2.4). A peer heard only through
-        -- relays gets a plain addon whisper instead (any same-faction player can
-        -- be whispered); a known enemy-faction peer cannot, so the send fails.
-        if not (net.IsPointToPointCatchupKind and net:IsPointToPointCatchupKind(msgType))
-            or net:IsDirectPeer(target) then
-            return net:Send(msgType, data or "", target)
-        end
-        local faction = self.GetLivePlayerFaction and self:GetLivePlayerFaction(target)
-        if faction and Overlord.PlayerFaction and faction ~= Overlord.PlayerFaction then return false end
+    -- A catch-up request to a peer heard only through relays is refused by the
+    -- relay (point to point). A plain-whisper fallback was tried in 1.2.4 testing:
+    -- far capturers then answered every observer in full and flooded the relay.
+    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork and not direct
+        and msgType ~= "R1" and msgType ~= "BF" and Overlord.BetaNetwork:IsPeer(target) then
+        return Overlord.BetaNetwork:Send(msgType, data or "", target)
     end
     if Overlord.InstanceSuspended or IsInInstance() then return end
     -- Cible vide / trop courte / espaces : l'API envoie quand meme et Blizzard affiche
@@ -5108,11 +5102,11 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         -- answered; its reply would have to cross the same relays back.
         local context = Overlord.BetaNetwork.context
         if (tonumber(context and context.hops) or 0) > 0 then return end
-        -- A broadcast heard over Battle.net/whisper reached only its few friends:
-        -- answer it like a whisper instead of dividing by our own channel audience.
-        local transport = context and context.transport
+        -- Always ~2 responders per broadcast, whatever the transport. Answering a
+        -- Battle.net broadcast in full (tried in 1.2.4 testing) made every friend
+        -- reply at once; the replies saturated the relay (24 % losses in 8 min).
+        -- A lone requester is still covered by its targeted login/periodic pulls.
         viaBetaBroadcast = not Overlord.BetaNetwork:IsTargetedDispatch()
-            and transport ~= "BNET" and transport ~= "WHISPER"
         channel = viaBetaBroadcast and "CHANNEL" or "WHISPER"
         replyToOverride = sender
     end
