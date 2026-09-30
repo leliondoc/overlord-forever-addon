@@ -23,9 +23,19 @@ local function paused()
     return Overlord.InstanceSuspended or (InCombatLockdown and InCombatLockdown())
         or (IsInInstance and IsInInstance())
 end
+-- Same fold as byte by byte (wire-compatible), read 8 bytes per call: a 4 KB
+-- page hashed in one frame on both sides cost ~1 ms with one call per byte.
 local function hash(value)
-    local h = 0
-    for i = 1, #value do h = (h * 31 + value:byte(i)) % MOD end
+    local h, n, i = 0, #value, 1
+    while i + 7 <= n do
+        local b1, b2, b3, b4, b5, b6, b7, b8 = value:byte(i, i + 7)
+        h = (h * 31 + b1) % MOD; h = (h * 31 + b2) % MOD
+        h = (h * 31 + b3) % MOD; h = (h * 31 + b4) % MOD
+        h = (h * 31 + b5) % MOD; h = (h * 31 + b6) % MOD
+        h = (h * 31 + b7) % MOD; h = (h * 31 + b8) % MOD
+        i = i + 8
+    end
+    for j = i, n do h = (h * 31 + value:byte(j)) % MOD end
     return h
 end
 local function key(name)

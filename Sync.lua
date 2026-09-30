@@ -2572,7 +2572,8 @@ local BNET_DELAY_PER_FRIEND = 0.4
 local WOW_CLIENT_PROGRAM = "WoW"
 local cachedBNetFriendsList = nil
 local cachedBNetFriendsAt = 0
-local BNET_FRIENDS_CACHE_TTL = 45
+-- Full rescan of every friend and game account in one frame: keep it rare.
+local BNET_FRIENDS_CACHE_TTL = 90
 
 local function IsForeverWowGameAccount(game)
     if not game or not game.isOnline or not game.characterName then return false end

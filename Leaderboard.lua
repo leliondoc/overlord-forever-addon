@@ -4074,7 +4074,9 @@ end
 -- il remplace le scan complet qui etait auparavant declenche par chaque lecture du panneau.
 -- Le roster local donne aussi la classe et le niveau des membres : de simples
 -- indices qui ne remplissent qu'une valeur absente, jamais un fait deja connu.
-function Overlord.Leaderboard:MaybeEnrichGuildForKillRow(playerName)
+-- deferDirty: the sliced roster scan marks metadata dirty once at its end
+-- (one invalidation per row relaunched the dedup rebuild ~500 times).
+function Overlord.Leaderboard:MaybeEnrichGuildForKillRow(playerName, deferDirty)
     local entry = localGuildRosterGuild ~= "" and localGuildRosterEntry(playerName) or nil
     if not entry then return false end
     local row = self.playerInfo[playerName]
@@ -4105,7 +4107,7 @@ function Overlord.Leaderboard:MaybeEnrichGuildForKillRow(playerName)
         row.level = entry.level
         changed = true
     end
-    if changed then self:MarkMetaDirty() end
+    if changed and not deferDirty then self:MarkMetaDirty() end
     return changed
 end
 
@@ -4143,7 +4145,12 @@ function Overlord.Leaderboard:EnrichGuildFromLocalRoster()
     local killRows = self.kills or {}
     local cursor
     local cursorRestartCount = 0
+    local scanChanged = false
     local function FinishScan()
+        if scanChanged then
+            scanChanged = false
+            self:MarkMetaDirty()
+        end
         self._guildRosterKillEnrichPending = false
         if self._guildRosterKillEnrichRestartRequested then
             self._guildRosterKillEnrichRestartRequested = nil
@@ -4180,7 +4187,7 @@ function Overlord.Leaderboard:EnrichGuildFromLocalRoster()
             if (kills or 0) > 0 then
                 -- Hint deterministe : remplit l'absence, sans timestamp local ni
                 -- autorite capable d'ecraser un fait proprietaire GI/K/LK.
-                self:MaybeEnrichGuildForKillRow(name)
+                if self:MaybeEnrichGuildForKillRow(name, true) then scanChanged = true end
             end
             processed = processed + 1
             if debugprofilestop and (debugprofilestop() - startedAt) >= 1.25 then break end

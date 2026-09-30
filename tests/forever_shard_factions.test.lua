@@ -106,7 +106,7 @@ check('Blue Tester', nil, '|cffb8b8b8')
 -- refreshes, a logout or a switch of character must remove the previous faction.
 friends[1].isOnline = false
 friends[2].characterName, friends[2].factionName = 'New Friend', 'Horde'
-now = now + 46
+now = now + 91
 resolve('Unknown Tester')
 drain()
 check('Bridge Tester', nil, '|cffb8b8b8')

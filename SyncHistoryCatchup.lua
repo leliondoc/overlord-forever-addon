@@ -122,7 +122,9 @@ local function HashPacket(msgType, data)
 end
 
 local function SafeWireField(value, maxBytes)
-    local text = tostring(value or ""):gsub("[:\r\n]", "")
+    -- Fast path: almost no field carries a separator; skip the gsub copy then.
+    local text = tostring(value or "")
+    if text:find("[:\r\n]") then text = text:gsub("[:\r\n]", "") end
     if maxBytes and #text > maxBytes then text = text:sub(1, maxBytes) end
     return text
 end
