@@ -343,6 +343,7 @@ L.SHARD_POPUP_MOVE_HINT        = "Drag to move. Right-click to lock or unlock th
 L.SHARD_POPUP_LOCKED           = "Shard popup position locked."
 L.SHARD_POPUP_UNLOCKED         = "Shard popup position unlocked."
 L.SHARD_INVITE_WHISPER_ALLY    = "[Overlord] Party invite: I'm on shard #%s for the war front. Accept to phase together!"
+L.SHARD_INVITE_WHISPER_ENEMY   = "[Overlord] I'm on shard #%s. Join my layer for PvP!"
 L.SHARD_INVITE_WHISPER_NEUTRAL = "[Overlord] Party invite: I'm on shard #%s. Accept to phase together."
 
 L.ASSAULT_LAUNCHED    = "Assault on %s launched!"
@@ -1273,6 +1274,7 @@ L.SHARD_POPUP_MOVE_HINT        = "Glisser pour déplacer. Clic droit pour verrou
 L.SHARD_POPUP_LOCKED           = "Position du popup shard verrouillée."
 L.SHARD_POPUP_UNLOCKED         = "Position du popup shard déverrouillée."
 L.SHARD_INVITE_WHISPER_ALLY    = "[Overlord] Invitation groupe : je suis sur la couche n°%s (front de guerre). Acceptez pour vous phaser avec moi !"
+L.SHARD_INVITE_WHISPER_ENEMY   = "[Overlord] Je suis sur la couche n°%s. Rejoignez ma phase pour du JcJ !"
 L.SHARD_INVITE_WHISPER_NEUTRAL = "[Overlord] Invitation : je suis sur la couche n°%s. Acceptez pour vous phaser ensemble."
 
 L.ASSAULT_LAUNCHED    = "Assaut sur %s lancé !"
@@ -2200,6 +2202,7 @@ L.SHARD_POPUP_MOVE_HINT        = "Arrastra para mover. Clic derecho para bloquea
 L.SHARD_POPUP_LOCKED           = "Posición del popup de shard bloqueada."
 L.SHARD_POPUP_UNLOCKED         = "Posición del popup de shard desbloqueada."
 L.SHARD_INVITE_WHISPER_ALLY    = "[Overlord] Invitación a grupo: estoy en el shard #%s para el frente de guerra. ¡Acepta para fasear juntos!"
+L.SHARD_INVITE_WHISPER_ENEMY   = "[Overlord] Estoy en el shard #%s. ¡Únete a mi capa para JcJ!"
 L.SHARD_INVITE_WHISPER_NEUTRAL = "[Overlord] Invitación a grupo: estoy en el shard #%s. ¡Acepta para fasear juntos!"
 
 L.ASSAULT_LAUNCHED    = "¡Asalto a %s iniciado!"
@@ -3124,6 +3127,7 @@ L.SHARD_POPUP_MOVE_HINT        = "Ziehen zum Verschieben. Rechtsklick zum Sperre
 L.SHARD_POPUP_LOCKED           = "Shard-Popup-Position gesperrt."
 L.SHARD_POPUP_UNLOCKED         = "Shard-Popup-Position entsperrt."
 L.SHARD_INVITE_WHISPER_ALLY    = "[Overlord] Gruppeneinladung: ich bin auf Shard #%s für die Kriegsfront. Annehmen zum Zusammenphasen!"
+L.SHARD_INVITE_WHISPER_ENEMY   = "[Overlord] Ich bin auf Shard #%s. Kommt auf meine Layer für PvP!"
 L.SHARD_INVITE_WHISPER_NEUTRAL = "[Overlord] Gruppeneinladung: ich bin auf Shard #%s. Annehmen zum Zusammenphasen!"
 
 L.ASSAULT_LAUNCHED    = "Angriff auf %s gestartet!"
@@ -4054,6 +4058,7 @@ L.SHARD_POPUP_MOVE_HINT        = "Перетаскивайте для перем
 L.SHARD_POPUP_LOCKED           = "Положение окна шардов зафиксировано."
 L.SHARD_POPUP_UNLOCKED         = "Положение окна шардов разблокировано."
 L.SHARD_INVITE_WHISPER_ALLY    = "[Overlord] Приглашение в группу: я на шарде #%s на фронте войны. Прими, чтобы объединить фазы!"
+L.SHARD_INVITE_WHISPER_ENEMY   = "[Overlord] Я на шарде #%s. Присоединяйся к моему слою для PvP!"
 L.SHARD_INVITE_WHISPER_NEUTRAL = "[Overlord] Приглашение в группу: я на шарде #%s. Прими, чтобы объединить фазы."
 
 L.ASSAULT_LAUNCHED    = "Нападение на %s началось!"

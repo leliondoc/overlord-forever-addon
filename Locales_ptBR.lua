@@ -166,6 +166,7 @@ L.SHARD_POPUP_MOVE_HINT = "Arraste para mover. Clique com o botão direito para 
 L.SHARD_POPUP_LOCKED = "Posição pop-up do layer bloqueada."
 L.SHARD_POPUP_UNLOCKED = "Posição pop-up do layer desbloqueada."
 L.SHARD_INVITE_WHISPER_ALLY = "[Overlord] Convite para grupo: Estou no layer #%s para a frente de guerra. Aceite passarmos juntos!"
+L.SHARD_INVITE_WHISPER_ENEMY = "[Overlord] Estou no layer #%s. Junte-se à minha camada para PvP!"
 L.SHARD_INVITE_WHISPER_NEUTRAL = "[Overlord] Convite para festa: estou no layer #%s. Aceite passarmos juntos."
 L.ASSAULT_LAUNCHED = "Ataque a %s lançado!"
 L.CAPTURE_LAUNCHED = "Captura de %s iniciada!"

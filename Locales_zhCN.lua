@@ -166,6 +166,7 @@ L.SHARD_POPUP_MOVE_HINT = "拖动即可移动。右键单击可锁定或解锁�
 L.SHARD_POPUP_LOCKED = "位面弹出位置已锁定。"
 L.SHARD_POPUP_UNLOCKED = "位面弹出位置已解锁。"
 L.SHARD_INVITE_WHISPER_ALLY = "[Overlord] 聚会邀请：我在战争前线的#%s 位面上。接受一起阶段！"
+L.SHARD_INVITE_WHISPER_ENEMY = "[Overlord] 我在位面 #%s 上。加入我的 PvP 层！"
 L.SHARD_INVITE_WHISPER_NEUTRAL = "[Overlord] 聚会邀请：我在位面 #%s 上。接受一起分阶段。"
 L.ASSAULT_LAUNCHED = "对%s的攻击开始了！"
 L.CAPTURE_LAUNCHED = "%s 的捕获开始了！"
