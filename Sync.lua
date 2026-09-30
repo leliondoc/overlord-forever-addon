@@ -8651,6 +8651,15 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     -- 1.3.2 live-score bridge: an enemy total from a Battle.net friend goes on to our
     -- channel; a total heard on the channel cancels our own pending copy of it.
     local betaNet = Overlord.BetaNetwork
+    -- /ov network: enemy totals that raised our ranking, by path (channel or friend).
+    if betaNet and betaNet.stats and (tonumber(kills) or 0) > killsBefore and killsBefore > 0
+        and (faction == "Alliance" or faction == "Horde") and faction ~= Overlord.PlayerFaction then
+        if channel == "CHANNEL" then
+            betaNet.stats.enemyTotalsFromChannel = (betaNet.stats.enemyTotalsFromChannel or 0) + 1
+        elseif channel == "BNET" then
+            betaNet.stats.enemyTotalsFromFriends = (betaNet.stats.enemyTotalsFromFriends or 0) + 1
+        end
+    end
     -- Solicited ranking pages (catch-up) are not live news: never bridged.
     if betaNet and channel == "BNET" and not guildSnapshot and betaNet.NoteBridgedEnemyTotal then
         pcall(betaNet.NoteBridgedEnemyTotal, betaNet, playerName, faction, kills, killsBefore,

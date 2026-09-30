@@ -721,6 +721,13 @@ function net:GetKindDiagnostics(maxRows)
         laneSize(stateLane), STATE_QUEUE, STATE_RATE, self.stats.stateCoalesced or 0)
     lines[#lines + 1] = string.format("Waiting SR duplicates coalesced: %d (same origin/target only).",
         self.stats.mapRequestsCoalesced or 0)
+    -- 1.3.2 cross-faction live totals: what reached us, and what our own bridge did.
+    lines[#lines + 1] = string.format("Enemy live totals received: %d from the channel, %d from Battle.net friends"
+        .. " (their own kills: %d). Your bridge: %d posted on the channel, %d sent to enemy friends,"
+        .. " %d skipped (already on the channel).",
+        self.stats.enemyTotalsFromChannel or 0, self.stats.enemyTotalsFromFriends or 0,
+        self.stats.enemyFriendKills or 0, self.stats.bridgeLKChannel or 0,
+        self.stats.bridgeOut or 0, self.stats.bridgeLKCovered or 0)
     return lines
 end
 function net:IsUrgentPacket(kind, payload) return isUrgent({ kind = kind, payload = payload }) end
@@ -1897,6 +1904,7 @@ function net:NoteOwnerKill(name, faction, total, before, class, locale, epoch, b
     -- Enemy owner: only a K that reached us over Battle.net from its owner (the
     -- friend link is what makes this client the bridge).
     if not c or c.transport ~= "BNET" or (tonumber(c.hops) or 0) ~= 0 then return false end
+    self.stats.enemyFriendKills = (self.stats.enemyFriendKills or 0) + 1
     return queueBridgeRow(bridgeLK, name, faction, total, before, class, locale,
         epoch, bucketToken, levelToken)
 end

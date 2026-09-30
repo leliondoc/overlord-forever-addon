@@ -201,4 +201,9 @@ s:OnReceiveLeaderboardKills(lkRow("Horde Second", 32, "Horde"), "BNet-9", "BNET"
 advance(11)
 assert(#channelRows == firstSent + 1 and channelRows[#channelRows]:match("^LK:Horde Second:32:"),
     "a near row waited behind another subject's long timer")
+-- /ov network shows where enemy totals came from and what our bridge did.
+assert((net.stats.enemyTotalsFromFriends or 0) >= 1, "enemy totals from friends not counted")
+assert((net.stats.enemyTotalsFromChannel or 0) >= 1, "enemy totals from the channel not counted")
+local report = table.concat(net:GetKindDiagnostics(12), " ")
+assert(report:find("Enemy live totals received:", 1, true), "cross-faction line missing from /ov network")
 print("Forever cross-faction bridge: own-faction totals to enemy friends, enemy totals to the channel, bounds, no loop, no duplicate OK")
