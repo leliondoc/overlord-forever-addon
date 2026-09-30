@@ -2266,7 +2266,9 @@ function Overlord.Sync:ChannelCarries(kind, payload, isOrigin)
             sync._channelKillArmed = nil
             local pending = sync._channelKillPending
             sync._channelKillPending = nil
-            if pending then sync:SendToChannel("K", pending) end
+            -- Critical: one own total per 30 s at most, never lost to other
+            -- non-critical channel users (e.g. the live-score bridge, 1.3.2).
+            if pending then sync:SendToChannel("K", pending, true) end
         end)
     end
     return false
@@ -2297,6 +2299,8 @@ end
 -- Pont des scores en direct (1.3.2) : le total adverse accepte de son proprietaire
 -- part une fois sur notre canal de faction. LK reste hors canal sinon (les lignes
 -- de rattrapage sont point a point), d'ou cet envoi dedie qui evite ChannelCarries.
+-- Second return: "wait" when the channel is only busy (our own total waiting, send
+-- budget spent, Blizzard refusal): the bridge retries later instead of whispering.
 function Overlord.Sync:SendBridgeLKToChannel(payload)
     if not SYNC_USE_REALM_CHANNEL or Overlord.InstanceSuspended or IsInInstance() then return false end
     if type(payload) ~= "string" or payload == "" then return false end
@@ -2304,8 +2308,11 @@ function Overlord.Sync:SendBridgeLKToChannel(payload)
     if not channelId then return false end
     local msg = "LK:" .. payload
     if #msg > 255 then return false end
-    if not self:TakeChannelToken(false) then return false end
-    return self:SendAddonChecked(msg, "CHANNEL", channelId) == true
+    -- Our own kill total waiting for its channel slot always goes first.
+    if self._channelKillPending then return false, "wait" end
+    if not self:TakeChannelToken(false) then return false, "wait" end
+    if self:SendAddonChecked(msg, "CHANNEL", channelId) == true then return true end
+    return false, "wait"
 end
 
 -- Forever : la presence SH part sur le canal une fois en direct, puis une

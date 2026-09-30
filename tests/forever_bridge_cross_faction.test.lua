@@ -23,6 +23,7 @@ Enum = Enum or {}; Enum.ClubType = Enum.ClubType or { Character = 1 }
 local s = Overlord.Sync
 assert(loadfile("SyncBetaNetwork.lua"))()
 local net = Overlord.BetaNetwork
+net.BridgeChannelHold = { 0, 0 } -- exact timings below
 Overlord.BetaNetworkEnabled = true
 function s:GetChannelId() return 5 end
 
@@ -157,4 +158,22 @@ s:OnReceiveLeaderboardKills(lkRow("Horde Busy", 104, "Horde"), "Other Bridge", "
 advance(80)
 assert(#channelRows == sentBusy, "a total another bridge already sent was repeated on the channel")
 assert((net.stats.bridgeLKCovered or 0) >= 1)
+-- ===== Random hold: with the real 2-15 s wait, a copy another bridge puts on the
+-- channel during our wait cancels ours, so bridges do not all send the same row.
+net.BridgeChannelHold = { 2, 15 }
+advance(120)
+know("Horde Race", 70, "Horde")
+local beforeRace = #channelRows
+s:OnReceiveLeaderboardKills(lkRow("Horde Race", 72, "Horde"), "BNet-9", "BNET")
+advance(1)
+assert(#channelRows == beforeRace, "the channel copy left without the random hold")
+s:OnReceiveLeaderboardKills(lkRow("Horde Race", 72, "Horde"), "Other Bridge", "CHANNEL")
+advance(30)
+assert(#channelRows == beforeRace, "a copy heard during the hold was repeated")
+-- Alone, the row still goes out within the hold.
+know("Horde Alone", 80, "Horde")
+s:OnReceiveLeaderboardKills(lkRow("Horde Alone", 82, "Horde"), "BNet-9", "BNET")
+advance(16)
+assert(#channelRows == beforeRace + 1 and channelRows[#channelRows]:match("^LK:Horde Alone:82:"),
+    "a row with no other bridge did not leave after its hold")
 print("Forever cross-faction bridge: own-faction totals to enemy friends, enemy totals to the channel, bounds, no loop, no duplicate OK")

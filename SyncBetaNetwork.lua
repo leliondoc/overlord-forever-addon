@@ -1705,6 +1705,8 @@ local BRIDGE_LK_ALLOWANCE, BRIDGE_LK_MAX_ROWS = 30, 256
 -- channel. Same bounds for both: one row per subject per 60 s, 6 rows/min, 3 targets.
 local bridgeLK = { rows = {}, order = {}, queue = {}, sent = {}, peerAt = {}, peerOrder = {} }
 local bridgeOut = { rows = {}, order = {}, queue = {}, sent = {}, outbound = true }
+-- Random wait before a channel copy (seconds); tests may set { 0, 0 }.
+net.BridgeChannelHold = { 2, 15 }
 local bridgeFlush
 function net:EmitBridgeLK(row, payload)
     local now = GetTime()
@@ -1713,12 +1715,17 @@ function net:EmitBridgeLK(row, payload)
     -- there. The three whispers below date from 1.2.0, when Blizzard refused most
     -- channel traffic; they stay the fallback when the channel is unavailable or
     -- its send budget is spent.
-    if sync.SendBridgeLKToChannel and sync:SendBridgeLKToChannel(payload) then
-        if IsInGroup() and sync:SendToGroup("LK", payload) then reached = reached + 1 end
+    local onChannel, why = false, nil
+    if sync.SendBridgeLKToChannel then onChannel, why = sync:SendBridgeLKToChannel(payload) end
+    if onChannel then
+        -- Group members on our channel heard it there: no second copy.
         self.stats.bridgeLK = (self.stats.bridgeLK or 0) + 1
         self.stats.bridgeLKChannel = (self.stats.bridgeLKChannel or 0) + 1
         return true
     end
+    -- Channel only busy: retry shortly (the flush waits 5 s); whisper only when the
+    -- channel is unavailable (not joined, instance).
+    if why == "wait" then return false end
     local candidates = self:GetLocalPeers({ [row.key] = true })
     -- Spread the load: the peers that got a row from this client longest ago first.
     for i = #candidates, 2, -1 do
@@ -1769,6 +1776,9 @@ bridgeFlush = function(state)
             local ready = (row.sentAt or -math.huge) + BRIDGE_LK_SUBJECT_GAP
             if not active() then
                 wait = math.min(wait, 10)
+                keep[#keep + 1] = key
+            elseif row.holdUntil and now < row.holdUntil then
+                wait = math.min(wait, row.holdUntil - now)
                 keep[#keep + 1] = key
             elseif now < ready then
                 wait = math.min(wait, ready - now)
@@ -1832,7 +1842,15 @@ local function queueBridgeRow(state, name, faction, total, before, class, locale
         "", "0", bucketToken, levelToken }, ":")
     if #payload > 250 then return false end
     row.name, row.trusted, row.trustedAt = name, total, now
-    if not row.pending then state.queue[#state.queue + 1] = key end
+    if not row.pending then
+        state.queue[#state.queue + 1] = key
+        -- Channel copies wait 2-15 s at random: every bridge hears the same kill at
+        -- the same moment, so without it they all sent before hearing each other
+        -- and the coverage rule (NoteChannelBridgeRow) never applied.
+        local hold = net.BridgeChannelHold or {}
+        local lo, hi = math.floor(tonumber(hold[1]) or 0), math.floor(tonumber(hold[2]) or 0)
+        if not state.outbound and hi > 0 then row.holdUntil = now + math.random(math.max(0, lo), hi) end
+    end
     row.pending, row.pendingAt, row.pendingTotal = payload, now, total
     if #state.queue > 64 then
         -- The dropped subject must be queueable again on its next accepted row.
@@ -1852,7 +1870,8 @@ function net:NoteOwnerKill(name, faction, total, before, class, locale, epoch, b
     if faction == mine then
         -- 1.3.2: an own-faction owner heard first-hand; worth passing on only when
         -- this client has an opposite-faction Battle.net friend to tell.
-        if #enemyBNetFriends() == 0 then return false end
+        local t, b = tonumber(total) or 0, tonumber(before) or 0
+        if b <= 0 or t <= b or #enemyBNetFriends() == 0 then return false end
         return queueBridgeRow(bridgeOut, name, faction, total, before, class, locale,
             epoch, bucketToken, levelToken)
     end

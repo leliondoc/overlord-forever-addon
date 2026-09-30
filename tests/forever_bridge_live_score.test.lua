@@ -19,6 +19,7 @@ Enum = Enum or {}; Enum.ClubType = Enum.ClubType or { Character = 1 }
 local s = Overlord.Sync
 assert(loadfile("SyncBetaNetwork.lua"))()
 local net = Overlord.BetaNetwork
+net.BridgeChannelHold = { 0, 0 } -- exact timings below
 Overlord.PlayerFaction = "Alliance"
 Overlord.BetaNetworkEnabled = true
 

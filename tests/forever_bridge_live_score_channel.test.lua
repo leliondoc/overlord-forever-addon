@@ -20,6 +20,7 @@ Enum = Enum or {}; Enum.ClubType = Enum.ClubType or { Character = 1 }
 local s = Overlord.Sync
 assert(loadfile("SyncBetaNetwork.lua"))()
 local net = Overlord.BetaNetwork
+net.BridgeChannelHold = { 0, 0 } -- exact timings below
 Overlord.PlayerFaction = "Alliance"
 Overlord.BetaNetworkEnabled = true
 function s:GetChannelId() return 5 end
@@ -103,14 +104,43 @@ advance(10)
 assert(#sent == base + 1 and sent[#sent].chatType == "CHANNEL"
     and sent[#sent].msg:match("^LK:Horde Owner:138:"), "trailing channel row missing or wrong")
 
--- 4. Channel budget spent: the row falls back to the whispers.
+-- 4. Channel only busy (send budget spent): no whisper, the row waits and then
+--    goes on the channel once the budget is back.
 advance(120)
 refreshPeers()
+local takeToken = s.TakeChannelToken
 function s:TakeChannelToken() return false end
-base = #sent
+local base = #sent
 know("Horde Other", 50)
 kOverBnet("Horde Other", 55)
 advance(1)
+assert(#sent == base, "a row was whispered while the channel was only busy")
+s.TakeChannelToken = takeToken
+advance(10)
+assert(#sent == base + 1 and sent[#sent].chatType == "CHANNEL"
+    and sent[#sent].msg:match("^LK:Horde Other:55:"), "the waiting row did not go on the channel")
+
+-- 5. Our own kill total waiting for its channel slot goes first.
+advance(120)
+refreshPeers()
+s._channelKillPending = "own-total"
+base = #sent
+know("Horde Third", 30)
+kOverBnet("Horde Third", 33)
+advance(1)
+assert(#sent == base, "a bridge row went before our own pending kill total")
+s._channelKillPending = nil
+advance(10)
+assert(#sent == base + 1 and sent[#sent].chatType == "CHANNEL", "bridge row lost after our own total")
+
+-- 6. Channel unavailable (not joined): the whispers are the fallback.
+advance(120)
+refreshPeers()
+function s:GetChannelId() return nil end
+base = #sent
+know("Horde Fourth", 40)
+kOverBnet("Horde Fourth", 44)
+advance(1)
 assert(count("CHANNEL", base + 1) == 0 and count("WHISPER", base + 1) >= 1
-    and count("WHISPER", base + 1) <= 3, "no whisper fallback when the channel budget is spent")
-print("Forever bridge live score on channel: one channel copy, accepted by receivers, 60 s gap kept, whisper fallback OK")
+    and count("WHISPER", base + 1) <= 3, "no whisper fallback without a channel")
+print("Forever bridge live score on channel: one channel copy, accepted by receivers, 60 s gap kept, busy channel waits, own total first, whisper fallback without channel OK")
