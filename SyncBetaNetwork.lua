@@ -313,7 +313,7 @@ local function dropBorrowedCatchup(anyLevel, includeLocal)
     if not i then return false end
     local item = table.remove(catchupLane.items, i)
     dedup.abandon(item.tasks)
-    countKind(item.p.kind, "dropped")
+    countKind(item.p.kind, "dropped"); item.p.relayLost = true
     return true
 end
 local function dropWaitingForUrgent()
@@ -325,6 +325,7 @@ local function dropWaitingForUrgent()
             table.remove(bulkLane.items, i)
             dedup.abandon(item.tasks)
             countKind(item.p and item.p.kind, "dropped")
+            if item.p then item.p.relayLost = true end
             return true
         end
     end
@@ -354,7 +355,7 @@ local function dropExpiredWaiting()
                 table.remove(lane.items, i)
                 forgetPresence(item)
                 dedup.abandon(item.tasks)
-                countKind(item.p.kind, "dropped")
+                countKind(item.p.kind, "dropped"); item.p.relayLost = true
                 net.stats.expired = (net.stats.expired or 0) + 1
                 return true
             end
@@ -388,7 +389,7 @@ local function dropWaitingForTerminal()
                 and item.p.payload:match("^[^:]+:([^:]+):") == "in_progress")) then
             table.remove(urgentLane.items, i)
             forgetPresence(item)
-            countKind(item.p.kind, "dropped")
+            countKind(item.p.kind, "dropped"); item.p.relayLost = true
             return true
         end
     end
@@ -403,7 +404,7 @@ local function dropWaitingForState()
         if item and item.index == 1 and not item.tasks[1].sending then
             table.remove(bulkLane.items, i)
             dedup.abandon(item.tasks)
-            countKind(item.p.kind, "dropped")
+            countKind(item.p.kind, "dropped"); item.p.relayLost = true
             return true
         end
     end
@@ -604,6 +605,7 @@ for kind in ("SR ZA HR HA HB HC LK LC LR LO LOC OE GY CA"):gmatch("%S+") do CATC
 local function isPointToPointCatchup(kind, target)
     return CATCHUP_KINDS[kind] == true and target ~= nil and target ~= "*"
 end
+function net:IsPointToPointCatchupKind(kind) return CATCHUP_KINDS[kind] == true end
 function net:IsDirectPeer(name)
     return self:GetPeerHops(name) == 1
 end
@@ -1333,7 +1335,7 @@ pump = function()
         if serverNow() - item.p.at > TTL or not task then
             if task then
                 dedup.abandon(item.tasks, item.index)
-                countKind(item.p.kind, "dropped")
+                countKind(item.p.kind, "dropped"); item.p.relayLost = true
                 net.stats.expired = (net.stats.expired or 0) + 1
             end
             item.index = #item.tasks + 1
@@ -1492,7 +1494,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     if not previousRoute or GetTime() - previousRoute.at > keepRoute or #p.path <= previousRoute.hops then
         remember(self.peers, peerOrder, origin:lower(), {
             name = origin, at = GetTime(), via = sender, transport = transport, bnet = bnetID, hops = #p.path,
-        }, 128)
+        }, 512)
     end
     self.stats.received = self.stats.received + 1
     if retryForward then
@@ -1581,18 +1583,20 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         -- The same routine outpost state (held/neutral, identical payload from any
         -- origin) already relayed within a minute is handled, not queued again.
         -- Channel receivers trust OP from any origin, so the origin is not part of
-        -- the key. It is remembered at admission: a copy lost later was lost to a
-        -- saturated queue, where a duplicate would not have fared better.
+        -- the key.
         local routineKey = p.kind == "OP" and p.target == "*" and not isUrgent(p)
             and ("OP|" .. p.payload) or nil
-        local routineAt = routineKey and routineForwarded[routineKey]
-        if routineAt and GetTime() - routineAt < ROUTINE_FORWARD_SEC then
+        -- A copy evicted or expired before leaving (relayLost) no longer covers the key.
+        local routinePrev = routineKey and routineForwarded[routineKey]
+        if routinePrev and not routinePrev.relayLost
+            and GetTime() - (routinePrev.routineAt or 0) < ROUTINE_FORWARD_SEC then
             forwarded = true
             self.stats.routineForwardSkipped = (self.stats.routineForwardSkipped or 0) + 1
         else
             forwarded = self:Queue(p) == true
             if forwarded and routineKey then
-                remember(routineForwarded, routineForwardedOrder, routineKey, GetTime(), 256)
+                p.routineAt = GetTime()
+                remember(routineForwarded, routineForwardedOrder, routineKey, p, 256)
             end
         end
         if p.target == "*" then

@@ -2855,8 +2855,12 @@ end
 
 function Overlord.UI:RefreshActionGridLabels()
     if not zoneListFrame then return end
+    -- Le libelle de l'appel aux armes porte le chrono pendant le cooldown : c'est
+    -- Button.lua qui le pose. Le reecrire ici le faisait clignoter a chaque refresh.
     local hornBtn = zoneListFrame.factionCallBtn
-    if hornBtn and hornBtn.label and L.FACTION_CALL_BUTTON then
+    if hornBtn and hornBtn.label and Overlord.Button and Overlord.Button.RefreshFactionCallLabel then
+        Overlord.Button:RefreshFactionCallLabel()
+    elseif hornBtn and hornBtn.label and L.FACTION_CALL_BUTTON then
         hornBtn.label:SetText(L.FACTION_CALL_BUTTON)
     end
     local generalBtn = zoneListFrame.generalBtn

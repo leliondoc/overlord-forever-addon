@@ -2015,7 +2015,9 @@ end
 function Overlord.Sync:RunPeriodicMapCatchup()
     local net = Overlord.BetaNetwork
     if not net or Overlord.InstanceSuspended or IsInInstance() then return false end
-    if self._lastFullZaAt and GetTime() - self._lastFullZaAt < self.BETA_MAP_CATCHUP_INTERVAL then
+    -- A validated map from one peer skips at most one minute: it may have held a
+    -- single fresh zone, and the next direct peer can still be more up to date.
+    if self._lastFullZaAt and GetTime() - self._lastFullZaAt < math.min(60, self.BETA_MAP_CATCHUP_INTERVAL) then
         return false
     end
     local myName = self:GetPlayerFullName()
@@ -2458,9 +2460,18 @@ end
 
 function Overlord.Sync:SendWhisper(msgType, data, target, direct)
     -- direct: one raw addon whisper even to a relay peer (small unrelayed rows).
-    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork and not direct
-        and msgType ~= "R1" and msgType ~= "BF" and Overlord.BetaNetwork:IsPeer(target) then
-        return Overlord.BetaNetwork:Send(msgType, data or "", target)
+    local net = Overlord.BetaNetwork
+    if Overlord.BetaNetworkEnabled ~= false and net and not direct
+        and msgType ~= "R1" and msgType ~= "BF" and net:IsPeer(target) then
+        -- Catch-up only travels point to point (1.2.4). A peer heard only through
+        -- relays gets a plain addon whisper instead (any same-faction player can
+        -- be whispered); a known enemy-faction peer cannot, so the send fails.
+        if not (net.IsPointToPointCatchupKind and net:IsPointToPointCatchupKind(msgType))
+            or net:IsDirectPeer(target) then
+            return net:Send(msgType, data or "", target)
+        end
+        local faction = self.GetLivePlayerFaction and self:GetLivePlayerFaction(target)
+        if faction and Overlord.PlayerFaction and faction ~= Overlord.PlayerFaction then return false end
     end
     if Overlord.InstanceSuspended or IsInInstance() then return end
     -- Cible vide / trop courte / espaces : l'API envoie quand meme et Blizzard affiche
@@ -5096,7 +5107,11 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         -- answered; its reply would have to cross the same relays back.
         local context = Overlord.BetaNetwork.context
         if (tonumber(context and context.hops) or 0) > 0 then return end
+        -- A broadcast heard over Battle.net/whisper reached only its few friends:
+        -- answer it like a whisper instead of dividing by our own channel audience.
+        local transport = context and context.transport
         viaBetaBroadcast = not Overlord.BetaNetwork:IsTargetedDispatch()
+            and transport ~= "BNET" and transport ~= "WHISPER"
         channel = viaBetaBroadcast and "CHANNEL" or "WHISPER"
         replyToOverride = sender
     end

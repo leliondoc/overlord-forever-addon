@@ -429,6 +429,11 @@ function Overlord.Button:Refresh()
     end
 end
 
+-- Libelle du bouton de la grille : chrono pendant le cooldown, sinon "Call to Arms".
+function Overlord.Button:RefreshFactionCallLabel()
+    UpdateCooldownVisual()
+end
+
 function Overlord.Button:Show()
     if Overlord.InstanceSuspended then return end
     self:EnsureCreated()
