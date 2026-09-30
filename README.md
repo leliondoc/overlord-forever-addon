@@ -133,7 +133,7 @@ fronts, bonus, stocks) empruntent également ce réseau.
 - Les totaux de guilde additionnent les VH de tous les membres connus, même hors du classement affiché, avec dédoublonnage des identités. Ce ne sont pas des victimes uniques. Une guilde temporairement indisponible au chargement ne supprime plus le rattachement connu.
 - Le volet latéral **Prochain objectif** remplace le bandeau flottant : vignette du front actuel et nom du prochain point à capturer. Le repère automatique sur la carte et les minuteurs de capture restent disponibles.
 - Pendant la bêta, tous les comptes utilisent la même semaine américaine (mardi 08:00 UTC, ancre commune de l’addon). Aucun reset EU le mercredi. Une sauvegarde absente au login ne déclenche plus de faux reset hebdomadaire.
-- **Avant-postes** sur les six fronts classiques, plus **Savix Chapel** dans la forêt des Pins-Argentés (61,8 / 64,4), **Aeythyr Lodge** aux Maleterres de l'Est (52,1 / 18,4) et **Lesi Bear Cave** à Sombrivage (43,4 / 45,8), capturables en permanence. Le front spécial des Contreforts de Hautebrande comporte uniquement ses deux points de capture.
+- **Avant-postes** sur les six fronts classiques, plus **Savix Chapel** dans la forêt des Pins-Argentés (61,8 / 64,4), **Aeythyr Lodge** aux Maleterres de l'Est (52,1 / 18,4) et **Lesi's Bear Cave** à Sombrivage (43,4 / 45,8), capturables en permanence. Le front spécial des Contreforts de Hautebrande comporte uniquement ses deux points de capture.
 - **Forêts de bois** dans les Paluns (53,8 / 43,7) et en Orneval (33,6 / 63,6).
 - Appel de faction pour alerter les alliés accessibles par les passerelles de synchronisation.
 - **Commandant** : rôle du chef de groupe sur un front, position sur la carte/minimap,

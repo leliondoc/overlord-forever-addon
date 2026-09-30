@@ -46,7 +46,7 @@ L.FRONT_REDRIDGE_DROPDOWN = n[1]
 L.OUTPOST_REDRIDGE_NAME = n[10]
 -- Standalone outpost names, translated per locale.
 local standaloneOutpostNames = {
-    enUS = { "Savix Chapel", "Aeythyr Lodge", "Lesi Bear Cave" },
+    enUS = { "Savix Chapel", "Aeythyr Lodge", "Lesi's Bear Cave" },
     frFR = { "Chapelle de Savix", "Pavillon d'Aeythyr", "Grotte de l'ours de Lesi" },
     esES = { "Capilla de Savix", "Pabellón de Aeythyr", "Cueva del oso de Lesi" },
     deDE = { "Kapelle von Savix", "Aeythyrs Jagdhütte", "Lesis Bärenhöhle" },
