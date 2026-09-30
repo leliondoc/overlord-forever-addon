@@ -209,10 +209,17 @@ local function checkpoint(state)
     peers[state.peer] = { stream = state.stream or "LK", bucket = state.bucket,
         at = GetServerTime() }
 end
+local sendControl
 local function finish(state, success, unsupportedPeer)
     if pull ~= state then return end
     checkpoint(state)
     pull = nil
+    -- A failed pull tells its responder to drop the session at once; otherwise the
+    -- next attempt (fresh nonce) would be answered "busy" for up to five minutes.
+    if not success and state.seq > 0 and sendControl then
+        sendControl("HR", table.concat({ state.extended and "6" or "5", "F",
+            state.epoch, state.nonce, state.seq }, ":"), state.peer)
+    end
     stats.result = success and "sweep received" or "interrupted; bucket retained"
     if unsupportedPeer and not state.extended then
         if not unsupported[state.peer] then
@@ -228,7 +235,7 @@ end
 -- directly instead of waiting behind the page producer: a client serving a long
 -- sweep could otherwise neither ask for its own pages nor tell another requester
 -- it is busy, and that requester concluded "v6 silent" after 270 s.
-local function sendControl(kind, payload, peer)
+sendControl = function(kind, payload, peer)
     return sync:SendWhisper(kind, payload, peer) ~= false
 end
 
@@ -490,9 +497,13 @@ end
 
 function sync:StartPagedLeaderboardCatchup(peer, callback, extended)
     peer = self:NormalizeContributorFullName(peer)
+    -- Second result: "local" when this client cannot start now (busy, combat,
+    -- no campaign), "unsupported" when the peer is known to lack the protocol.
+    if (unsupported[peer] or 0) > GetTime() then return false, "unsupported" end
     if pull or building or paused() or not C_Timer or not C_Timer.After or epoch() <= 0
-        or not self:IsValidPlayerName(peer) or type(callback) ~= "function"
-        or (unsupported[peer] or 0) > GetTime() then return false end
+        or not self:IsValidPlayerName(peer) or type(callback) ~= "function" then
+        return false, "local"
+    end
     serial = serial + 1
     local saved = checkpoints()[peer]
     local savedStream = type(saved) == "table" and saved.stream or nil
@@ -513,7 +524,7 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended)
         state.profile = profile
         stats.result = "awaiting reply"
         request(state)
-    end) then pull = nil; return false end
+    end) then pull = nil; return false, "local" end
     return true
 end
 
@@ -527,7 +538,7 @@ function sync:StartCompletePagedLeaderboardCatchup(peer, callback)
     local capability = net and net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(peer)
     if capability == 5 then
         stats.peerProtocol = "beta v5; not asked (v6 only)"
-        return false
+        return false, "unsupported"
     end
     stats.peerProtocol = capability == 6 and "beta v6; lp6 NH" or "capability unknown, v6 probe"
     return self:StartPagedLeaderboardCatchup(peer, function(ok, supported)
@@ -566,6 +577,10 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
                 and (not totalCount or not totalHash or (not extended and seq ~= 1))) then return end
         local session = serving
         if session and (session.epoch ~= wireEpoch or GetTime() - session.at > 300) then serving = nil; session = nil end
+        -- A fresh start from the same requester supersedes its own stale session
+        -- (interrupted pull whose end notice was lost).
+        if session and session.peer == sender and session.nonce ~= nonce
+            and seq == 1 and b == "-" then serving = nil; session = nil end
         local busyReply = table.concat({ version, "R", wireEpoch, nonce, seq }, ":")
         -- In combat or an instance: busy, not silent (a silent peer is dropped as v6-less).
         if paused() then sendControl("HA", busyReply, sender); return end
@@ -577,15 +592,16 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
             sendControl("HA", busyReply, sender)
             return
         end
-        -- The previous page of this same session is still leaving: its requester
-        -- asks again after its own timeout.
-        if outbound then return end
         if not session then
-            if building then sendControl("HA", busyReply, sender); return end
+            -- A new requester while a page (or a profile) is still being produced
+            -- for someone else: busy, never silent.
+            if building or outbound then sendControl("HA", busyReply, sender); return end
             session = { peer = sender, nonce = nonce, epoch = wireEpoch,
                 at = GetTime(), seq = seq, extended = extended }
             serving = session
-        elseif seq < session.seq or seq > session.seq + 1 then return end
+        -- The previous page of this same session is still leaving: its requester
+        -- asks again after its own timeout.
+        elseif outbound or seq < session.seq or seq > session.seq + 1 then return end
         session.at, session.seq = GetTime(), seq
         local q = { bucket = bucket, cursor = b, count = count, hash = digest, seq = seq,
             stream = stream, totalCount = totalCount, totalHash = totalHash }

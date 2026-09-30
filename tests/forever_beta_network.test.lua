@@ -117,8 +117,8 @@ b.friends, c.friends = { c, us }, { b }
 local kinds = {}
 for kind in ("SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR VB MN MS OP OC SH HR HB HC HA LD CR CA GR GY GI FC GE GP GX GD GM"):gmatch("%S+") do
     -- K is never re-forwarded: a relayed kill is never credited (anti-forgery).
-    -- SR/GR broadcasts are answered by direct neighbours only (1.2.4): not relayed.
-    if kind ~= "SR" and kind ~= "K" and kind ~= "GR" then kinds[#kinds + 1] = kind end
+    -- SR/GR/CR broadcasts are answered by direct neighbours only (1.2.4): not relayed.
+    if kind ~= "SR" and kind ~= "K" and kind ~= "GR" and kind ~= "CR" then kinds[#kinds + 1] = kind end
 end
 for _, kind in ipairs(kinds) do
     assert(a.BetaNetwork:Send(kind, string.rep("x", 450)))

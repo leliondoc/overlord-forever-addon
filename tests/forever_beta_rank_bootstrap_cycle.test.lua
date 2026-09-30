@@ -54,4 +54,31 @@ OverlordDB.campaignId = 2
 round(true)
 assert(sweeps == 4 and #history == 3, "A new campaign did not restart ranking and history")
 assert(OverlordDB.leaderboardRankFirstCompletedCampaignId == 2)
-print("Beta ranking bootstrap: v6 with a direct neighbour, outpost history every 6 h, new campaign restarts")
+
+-- Outpost history: without any row from the peer the request is retried after
+-- 15 min; once a row arrives the next request waits six hours.
+OverlordDB.campaignId = 3
+round(true)
+assert(#history == 4, "A new campaign did not request outpost history")
+now = now + 16 * 60
+round(true)
+assert(#history == 5, "An unanswered history request was not retried after 15 min")
+assert(sync:NoteOutpostHistoryDelivery("Near Ally"), "A history row from the asked peer was not noted")
+now = now + 16 * 60
+round(true)
+assert(#history == 5, "History was asked again soon after rows arrived")
+
+-- A local refusal (this client busy) does not penalise the neighbour.
+local calls = 0
+sync.StartCompletePagedLeaderboardCatchup = function(_, peer, callback)
+    calls = calls + 1
+    if calls == 1 then return false, "local" end
+    callback(true, true)
+    return true
+end
+timers = {}
+sync._historyCatchupPending = nil
+assert(sync:ScheduleLoginLeaderboardHistoryCatchUp(true))
+for _ = 1, 3 do table.remove(timers, 1)() end
+assert(calls == 2, "The neighbour was set aside after a local refusal")
+print("Beta ranking bootstrap: v6 with a direct neighbour, outpost history leased then confirmed, no penalty for local refusals")

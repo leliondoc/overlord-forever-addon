@@ -1499,10 +1499,10 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     end
     local forwarded = false
     -- Catch-up addressed to someone else is not relayed (point-to-point only).
-    -- Broadcast map and guild requests are not relayed either: only the
+    -- Broadcast map, guild and class requests are not relayed either: only the
     -- requester's direct neighbours answer them since 1.2.4, first-hand.
     local relayable = not isPointToPointCatchup(p.kind, p.target)
-        and not ((p.kind == "SR" or p.kind == "GR") and p.target == "*")
+        and not ((p.kind == "SR" or p.kind == "GR" or p.kind == "CR") and p.target == "*")
     if not relayable and not addressed then
         self.stats.catchupNotRelayed = (self.stats.catchupNotRelayed or 0) + 1
     end

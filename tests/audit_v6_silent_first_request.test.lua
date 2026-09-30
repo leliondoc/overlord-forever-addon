@@ -93,6 +93,8 @@ local function pair()
                     return true -- accepted locally, lost before the recipient
                 end
             end
+            if source.dropReplies and (kind == "HA" or kind == "HB") then return true end
+            if source.dropF and kind == "HR" and payload:match("^6:F:") then return true end
             later(0.01, function()
                 destination.Overlord.Sync:OnPagedLeaderboardMessage(
                     kind, payload, source.name, "WHISPER")
@@ -182,4 +184,20 @@ assert(a.hrSent == 2 and result() == nil,
 advance(95)
 assert(a.hrSent == 3 and result() == nil,
     "Second probe did not preserve active-time spacing after combat")
-print("v6 silent first HR, busy peer answers busy, bounded deadline, early reply and combat pause OK")
+-- A pull that fails releases its responder session (HR "F"); if that notice is
+-- lost, a fresh start from the same requester supersedes the stale session.
+-- Otherwise every retry was answered "busy" for five minutes.
+for _, lostNotice in ipairs({ false, true }) do
+    a, b = pair()
+    b.dropReplies = true
+    a.dropF = lostNotice
+    result = start(a, b)
+    advance(275)
+    assert(result() == false, "Setup: the silent pull did not end")
+    b.dropReplies = false
+    result = start(a, b)
+    advance(60)
+    assert(result() == true, "A fresh pull was refused by its own stale session (notice lost: "
+        .. tostring(lostNotice) .. ")")
+end
+print("v6 silent first HR, busy peer answers busy, bounded deadline, early reply, combat pause, stale session released OK")

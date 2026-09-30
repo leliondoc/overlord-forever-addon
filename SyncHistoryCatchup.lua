@@ -23,8 +23,12 @@ local HASH_MOD = 2147483647
 local RECENT_ACK_SEC = 2 * 60
 local EXHAUSTED_RETRY_SEC = 2 * 60
 local PERIODIC_JITTER_SEC = 60
--- Historique avant-postes/forteresses : une demande toutes les six heures.
+-- Historique avant-postes/forteresses : une demande toutes les six heures, une
+-- fois des lignes reellement recues ; sinon une nouvelle tentative apres 15 min.
 local HISTORY_ACK_SEC = 6 * 60 * 60
+local HISTORY_LEASE_SEC = 15 * 60
+-- Un voisin occupe ou interrompu cede sa place quelques instants aux autres.
+local BUSY_PEER_SEC = 45
 local CAMPAIGN_MIN_AGE_SEC = 30 * 60
 local INITIAL_DELAY_SEC = 24
 -- On the affected Forever beta, the client can omit every account SavedVariable
@@ -64,9 +68,12 @@ local function CampaignEpochsMatch(a, b)
     return math.floor(tonumber(a) or 0) == math.floor(tonumber(b) or 0)
 end
 
-local function PenalizePeer(name)
+local function PenalizePeer(name, seconds)
     if type(name) == "string" and name ~= "" then
-        peerPenaltyUntil[name:lower()] = GetTime() + PEER_PENALTY_SEC
+        local untilAt = GetTime() + (seconds or PEER_PENALTY_SEC)
+        if untilAt > (peerPenaltyUntil[name:lower()] or 0) then
+            peerPenaltyUntil[name:lower()] = untilAt
+        end
     end
 end
 
@@ -518,9 +525,24 @@ local function MaybeRequestOutpostHistory(target, force)
     if not target or not sync:RequestOutpostHistory(target) then return false end
     ack = type(ack) == "table" and ack.campaignId == campaignId and ack
         or { campaignId = campaignId, at = 0 }
-    ack.historyAt = NowServer()
+    -- Short lease: the six hours only start once rows arrive from this peer
+    -- (NoteOutpostHistoryDelivery). A silent or old (1.2.3) peer is retried soon.
+    ack.historyAt = NowServer() - HISTORY_ACK_SEC + HISTORY_LEASE_SEC
     OverlordDB.leaderboardHistoryCatchupAck = ack
+    sync._outpostHistoryRequest = { peer = target:lower(), at = GetTime(), campaignId = campaignId }
     NoteHr("step", "outpost history requested")
+    return true
+end
+
+-- An LO/LOC row from the peer we asked confirms the history round for six hours.
+function sync:NoteOutpostHistoryDelivery(sender)
+    local request = self._outpostHistoryRequest
+    if not request or type(sender) ~= "string" or sender:lower() ~= request.peer
+        or GetTime() - request.at > 300 or not OverlordDB then return false end
+    local ack = OverlordDB.leaderboardHistoryCatchupAck
+    if type(ack) ~= "table" or ack.campaignId ~= request.campaignId then return false end
+    ack.historyAt = NowServer()
+    self._outpostHistoryRequest = nil
     return true
 end
 
@@ -566,8 +588,9 @@ local function FinishRound(pending, success, target)
         NoteHr("completed", 1)
     end
     NoteHr("result", success and "paged sweep received" or "paged sweep interrupted")
-    MaybeRequestOutpostHistory(success and target or nil, pending.forceHistory)
+    -- Re-arm first: a failure in the history request must never stop the rounds.
     ArmNextHistoryCatchup(success and RECENT_ACK_SEC or EXHAUSTED_RETRY_SEC)
+    pcall(MaybeRequestOutpostHistory, success and target or nil, pending.forceHistory)
 end
 
 ScheduleAttempt = function(pending, attempt)
@@ -579,7 +602,7 @@ ScheduleAttempt = function(pending, attempt)
     end
     pending.attemptToken = (pending.attemptToken or 0) + 1
     local token = pending.attemptToken
-    C_Timer.After(AttemptDelay(attempt), function()
+    local function attemptBody()
         if sync._historyCatchupPending ~= pending or pending.terminal
             or pending.attemptToken ~= token then return end
         local _, campaignId = CurrentCampaign()
@@ -602,22 +625,26 @@ ScheduleAttempt = function(pending, attempt)
             ScheduleAttempt(pending, attempt + 1)
             return
         end
-        local started = sync.StartCompletePagedLeaderboardCatchup
-            and sync:StartCompletePagedLeaderboardCatchup(target, function(success, supported)
+        local started, refusal = false, "local"
+        if sync.StartCompletePagedLeaderboardCatchup then
+            started, refusal = sync:StartCompletePagedLeaderboardCatchup(target, function(success, supported)
                 if sync._historyCatchupPending ~= pending or pending.terminal then return end
                 if success then
                     ForgivePeer(target)
                     FinishRound(pending, true, target)
                     return
                 end
-                -- Only a silent peer (no v6 answer) is set aside. A busy or
-                -- interrupted one keeps its place: the next attempt resumes its
-                -- transfer from the bucket checkpoint.
-                if not supported then PenalizePeer(target) end
+                -- A silent peer (no v6 answer) is set aside for ten minutes. A busy
+                -- or interrupted one only yields briefly to the other neighbours; the
+                -- next attempt with it resumes from the bucket checkpoint.
+                PenalizePeer(target, not supported and PEER_PENALTY_SEC or BUSY_PEER_SEC)
                 ScheduleAttempt(pending, attempt + 1)
             end)
+        end
         if not started then
-            PenalizePeer(target)
+            -- A local refusal (this client busy building, in combat...) says
+            -- nothing about the peer: no penalty.
+            if refusal ~= "local" then PenalizePeer(target) end
             NoteHr("step", "request not sent to " .. tostring(target))
             ScheduleAttempt(pending, attempt + 1)
             return
@@ -629,8 +656,20 @@ ScheduleAttempt = function(pending, attempt)
             if sync._historyCatchupPending ~= pending or pending.terminal
                 or pending.attemptToken ~= token then return end
             NoteHr("step", "round took too long, abandoned")
-            if sync.CancelPagedLeaderboardCatchup then sync:CancelPagedLeaderboardCatchup() end
+            -- Cancelling the pull ends the attempt through its callback; with no
+            -- pull left to cancel, end the round here.
+            if not (sync.CancelPagedLeaderboardCatchup and sync:CancelPagedLeaderboardCatchup()) then
+                FinishRound(pending, false)
+            end
         end)
+    end
+    C_Timer.After(AttemptDelay(attempt), function()
+        -- An unexpected error must end the round, never leave it pending forever.
+        local ok, err = pcall(attemptBody)
+        if not ok and sync._historyCatchupPending == pending and not pending.terminal then
+            NoteHr("step", "error: " .. tostring(err))
+            FinishRound(pending, false)
+        end
     end)
     return true
 end

@@ -2753,9 +2753,11 @@ function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
         self:OnReceiveLeaderboardCaptures(payload or "", gameplaySender, "BNET")
     elseif msgType == "LO" then
         local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
+        if self.NoteOutpostHistoryDelivery then self:NoteOutpostHistoryDelivery(gameplaySender) end
         self:OnReceiveLeaderboardOutpostTenant(payload or "", gameplaySender, "BNET")
     elseif msgType == "LOC" then
         local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
+        if self.NoteOutpostHistoryDelivery then self:NoteOutpostHistoryDelivery(gameplaySender) end
         self:OnReceiveLeaderboardOutpostCount(payload or "", gameplaySender, "BNET")
     elseif msgType == "OE" then
         self:OnReceiveLeaderboardOutpostEvidence(payload or "", sender, "BNET")
@@ -2898,10 +2900,11 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
     elseif msgType == "LD" then
         -- Digest de classement : detecteur de divergence (ne mute rien, declenche un SR existant).
         if Overlord.LadderDigest then Overlord.LadderDigest:OnReceive(payload or "", sender) end
-    elseif msgType == "LO" then
-        ok, err = pcall(self.OnReceiveLeaderboardOutpostTenant, self, payload or "", sender, channel)
-    elseif msgType == "LOC" then
-        ok, err = pcall(self.OnReceiveLeaderboardOutpostCount, self, payload or "", sender, channel)
+    elseif msgType == "LO" or msgType == "LOC" then
+        -- A row from the peer asked for outpost history confirms that round.
+        if self.NoteOutpostHistoryDelivery then pcall(self.NoteOutpostHistoryDelivery, self, sender) end
+        ok, err = pcall(msgType == "LO" and self.OnReceiveLeaderboardOutpostTenant
+            or self.OnReceiveLeaderboardOutpostCount, self, payload or "", sender, channel)
     elseif msgType == "OE" then
         ok, err = pcall(self.OnReceiveLeaderboardOutpostEvidence, self, payload or "", sender, channel)
     elseif msgType == "TV" then

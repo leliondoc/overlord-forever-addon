@@ -304,7 +304,7 @@ local function StartNetworkProbe()
         end
         if sync.GetHistoryCatchupSummary then
             local hr = sync:GetHistoryCatchupSummary()
-            local waiting = hr.running and hr.step == "request sent" and hr.stepAge > 300
+            local waiting = hr.running and hr.step == "paged ladder catch-up" and hr.stepAge > 600
             local text = hr.running and string.format("%s, %ds ago", tostring(hr.step or "?"), hr.stepAge) or "idle"
             add(waiting and "warn" or "ok", "Capture history catch-up",
                 waiting and string.format("waiting on one peer for %ds", hr.stepAge) or text)

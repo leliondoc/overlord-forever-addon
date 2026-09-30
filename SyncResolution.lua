@@ -114,11 +114,6 @@ function Overlord.Sync:MaybeRequestMissingClass(playerName)
             cls = lb:GetHotPlayerClass(playerName)
             if cls and cls ~= "" and cls ~= "UNKNOWN" then return end
         end
-        -- A member of our own guild: the Blizzard roster already gives the class.
-        if lb.GetLocalGuildRosterClass and lb:GetLocalGuildRosterClass(playerName) then
-            if lb.MaybeEnrichGuildForKillRow then lb:MaybeEnrichGuildForKillRow(playerName) end
-            return
-        end
     end
 
     local now = GetTime()
@@ -126,6 +121,11 @@ function Overlord.Sync:MaybeRequestMissingClass(playerName)
     if last and (now - last) < CLASS_REQUEST_COOLDOWN then return end
 
     if pendingClassRequests[playerName] then return end
+    -- A member of our own guild: the Blizzard roster already gives the class.
+    if lb and lb.GetLocalGuildRosterClass and lb:GetLocalGuildRosterClass(playerName) then
+        if lb.MaybeEnrichGuildForKillRow then lb:MaybeEnrichGuildForKillRow(playerName) end
+        return
+    end
     if pendingClassRequestsCount >= CLASS_REQUEST_MAX_PENDING then return end
     pendingClassRequests[playerName] = now
     pendingClassRequestsCount = pendingClassRequestsCount + 1
@@ -214,6 +214,9 @@ end
 
 function Overlord.Sync:OnReceiveClassRequest(payload, sender)
     if type(payload) ~= "string" or payload == "" then return end
+    -- Point to point (1.2.4): a request that crossed a relay is not answered.
+    local net = Overlord.BetaNetwork
+    if net and net.IsRelayedOrigin and net:IsRelayedOrigin(sender) then return end
     if #payload > CLASS_REQUEST_MAX_PAYLOAD then return end
     if Overlord.InstanceSuspended or IsInInstance() then return end
     if not sender or sender == "" then return end

@@ -69,7 +69,7 @@ sync._addonSendStats = { CHANNEL = { ok = 10, refused = 0 } }
 net.stats.dropped = 0
 lines = {}
 sync.GetHistoryCatchupSummary = function()
-    return { running = true, step = "request sent", stepAge = 655, rows = 0 }
+    return { running = true, step = "paged ladder catch-up", stepAge = 655, rows = 0 }
 end
 SlashCmdList.OVERLORD("network")
 local hr = assert(find(lines, "Capture history catch-up"), "History row missing")
