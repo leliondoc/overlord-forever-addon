@@ -204,8 +204,6 @@ end
 -- Zone (id) ou le joueur etait au dernier CheckPlayerPosition : permet d'eviter de re-afficher
 -- « entre dans la zone » + minuteur quand un sync remet status=available sans quitter le disque.
 local previousCaptureCheckZoneId = nil
--- Disque capture (tous statuts) : entree cercle pour popup shard auto.
-local previousPlayerDiskZoneId = nil
 local previousCaptureCheckShardId = nil
 local pendingEntrySyncZoneId = nil
 local pendingEntrySyncUntil = 0
@@ -895,23 +893,10 @@ function Overlord.ZoneControl:CheckPlayerPosition()
         -- Un hop de shard peut conserver exactement les memes coordonnees/disque. Sans
         -- reset, crossedDiskBoundary reste faux et ce client s'auto-elit avant le premier ZS.
         previousCaptureCheckZoneId = nil
-        previousPlayerDiskZoneId = nil
         pendingEntrySyncZoneId = nil
         pendingEntrySyncUntil = 0
     end
     if currentShardId ~= nil then previousCaptureCheckShardId = currentShardId end
-
-    -- Entree cercle (shard auto-invite) : une comparaison d'id/s ; travail lourd seulement au changement.
-    if currentId then
-        if previousPlayerDiskZoneId ~= currentId then
-            if Overlord.Shard and Overlord.Shard.ScheduleAutoPromptOnZoneEntry then
-                Overlord.Shard:ScheduleAutoPromptOnZoneEntry(currentZone)
-            end
-        end
-        previousPlayerDiskZoneId = currentId
-    else
-        previousPlayerDiskZoneId = nil
-    end
 
     if not currentZone then
         previousCaptureCheckZoneId = nil

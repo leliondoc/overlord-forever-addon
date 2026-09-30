@@ -695,10 +695,6 @@ function Overlord.OutpostControl:CheckPosition(deltaTime)
         return
     end
 
-    if Overlord.Shard and Overlord.Shard.TryAutoPromptOnOutpostEntry then
-        Overlord.Shard:TryAutoPromptOnOutpostEntry(siteKey, site, st)
-    end
-
     local guild = OP:GetLocalPlayerGuild()
     if guild == "" then
         local now = GetTime()

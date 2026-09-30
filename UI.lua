@@ -1,7 +1,6 @@
 -- UI.lua - Interface Overlord, theme WC3 Human (design tokens wc3ui.banteg.xyz)
 Overlord = Overlord or {}
 Overlord.UI = Overlord.UI or {}
-Overlord.UI.SHARD_POPUP_VIRTUAL_BUTTONS = 12
 Overlord.UI.SHARD_TOOLTIP_PLAYER_MAX = 12
 Overlord.UI.SHARD_TOOLTIP_SCAN_MAX = 48
 -- Indisponibilite de l'interface d'adhesion uniquement, independante de la sync.
@@ -68,15 +67,8 @@ local C_HORDE = {
 local C = C_ALLIANCE
 
 local PANEL_LINK = "addon:Overlord:panel"
--- Hook unique sur SetItemRef pour traiter les clics sur ces liens
-local shardInviteSetItemRefHooked = false
--- Anti-spam whisper : une explication par cible toutes les 90 s
-local SHARD_INVITE_WHISPER_COOLDOWN = 90
--- Les cibles viennent du cache SH borne (512 + reserve groupe 64). Garder la
--- meme borne ici et une LRU explicite evite le full-scan `pairs()` a chaque clic.
-local SHARD_INVITE_WHISPER_MAX = 576
-local shardInviteWhisperNodes = {}
-local shardInviteWhisperHead, shardInviteWhisperTail, shardInviteWhisperCount
+-- Hook unique sur SetItemRef pour le lien d'ouverture du panneau.
+local panelLinkHookRegistered = false
 
 local function IsShardHelperActive()
     if Overlord.IsShardHelperActive then
@@ -85,75 +77,13 @@ local function IsShardHelperActive()
     return Overlord.InActiveFront == true
 end
 
--- Cibles whisper / invite (upvalues pour securecall sans closure anonyme)
-local shardInviteWhisperTarget
-local shardInviteWhisperText
-local shardInvitePartyTarget
-
-local function NormalizeShardInviteTarget(fullName)
-    if not fullName or type(fullName) ~= "string" then return nil end
-    fullName = fullName:match("^%s*(.-)%s*$") or ""
-    if fullName == "" or #fullName < 2 or #fullName > 50 then return nil end
-    if fullName:find("[%c:|]") then return nil end
-    if fullName:sub(1, 5) == "BNet-" or fullName:sub(1, 7) == "Bridge-" then return nil end
-    if Overlord.Sync and Overlord.Sync.NormalizeContributorFullName then
-        fullName = Overlord.Sync:NormalizeContributorFullName(fullName) or fullName
-    end
-    if fullName == "" or #fullName < 2 then return nil end
-    return fullName
-end
-
-local function UnlinkShardInviteWhisperNode(node)
-    if node.prev then node.prev.next = node.next else shardInviteWhisperHead = node.next end
-    if node.next then node.next.prev = node.prev else shardInviteWhisperTail = node.prev end
-    node.prev, node.next = nil, nil
-end
-
-local function RemoveShardInviteWhisperNode(node)
-    if not node then return end
-    UnlinkShardInviteWhisperNode(node)
-    shardInviteWhisperNodes[node.key] = nil
-    shardInviteWhisperCount = math.max(0, (tonumber(shardInviteWhisperCount) or 1) - 1)
-end
-
-local function ShardInviteWhisperOnCooldown(fullName)
-    local key = fullName:lower()
-    local node = shardInviteWhisperNodes[key]
-    if not node then return false end
-    if GetTime() - (tonumber(node.at) or 0) >= SHARD_INVITE_WHISPER_COOLDOWN then
-        RemoveShardInviteWhisperNode(node)
-        return false
-    end
-    return true
-end
-
-local function MarkShardInviteWhisperSent(fullName)
-    local key = fullName:lower()
-    local node = shardInviteWhisperNodes[key]
-    if node then
-        UnlinkShardInviteWhisperNode(node)
-    else
-        node = { key = key }
-        shardInviteWhisperNodes[key] = node
-        shardInviteWhisperCount = (tonumber(shardInviteWhisperCount) or 0) + 1
-    end
-    node.at = GetTime()
-    node.prev = shardInviteWhisperTail
-    if shardInviteWhisperTail then shardInviteWhisperTail.next = node
-    else shardInviteWhisperHead = node end
-    shardInviteWhisperTail = node
-    if shardInviteWhisperCount > SHARD_INVITE_WHISPER_MAX then
-        RemoveShardInviteWhisperNode(shardInviteWhisperHead)
-    end
-end
-
-local function GetShardInviteTargetFaction(fullName)
+local function GetShardPlayerFaction(fullName)
     local sync = Overlord.Sync
     return sync and sync.GetLivePlayerFaction and sync:GetLivePlayerFaction(fullName) or nil
 end
 
--- Couleur nom joueur dans le popup shard (bleu Alliance, rouge Horde)
-local function GetShardInviteNameColor(faction)
+-- Couleur nom joueur dans l'infobulle de couche (bleu Alliance, rouge Horde)
+local function GetShardPlayerNameColor(faction)
     if faction == "Alliance" then
         return 0.427, 0.702, 0.949
     elseif faction == "Horde" then
@@ -162,9 +92,9 @@ local function GetShardInviteNameColor(faction)
     return 0.72, 0.72, 0.72
 end
 
--- Prefix |cff pour hyperliens tooltip shard
-local function GetShardInviteNameColorEscape(faction)
-    local r, g, b = GetShardInviteNameColor(faction)
+-- Prefixe |cff des noms de l'infobulle de couche
+local function GetShardPlayerNameColorEscape(faction)
+    local r, g, b = GetShardPlayerNameColor(faction)
     return string.format("|cff%02x%02x%02x",
         math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5))
 end
@@ -180,159 +110,9 @@ local function BuildShardDisplayTag(shardId)
     return tag
 end
 
-local function ApplyShardInviteButtonLabel(
-    btn, playerName, shardId, defaultR, defaultG, defaultB, requestInvite)
-    local label = requestInvite
-        and string.format(L.SHARD_POPUP_REQUEST_BUTTON, playerName, BuildShardDisplayTag(shardId))
-        or string.format("%s (%s)", playerName, BuildShardDisplayTag(shardId))
-    if btn.label then
-        btn.label:SetText(label)
-    elseif btn.SetText then
-        btn:SetText(label)
-    end
-    local fs = btn.label or (btn.GetFontString and btn:GetFontString())
-    if not fs then return end
-    local fr, fg, fb = GetShardInviteNameColor(GetShardInviteTargetFaction(playerName))
-    if fr then
-        fs:SetTextColor(fr, fg, fb)
-        btn.baseTextColor = { fr, fg, fb }
-    elseif defaultR then
-        fs:SetTextColor(defaultR, defaultG, defaultB)
-        btn.baseTextColor = { defaultR, defaultG, defaultB }
-    end
-end
-
-local function ShardInviteTargetAlreadyGrouped(fullName)
+local function ShardPlayerAlreadyGrouped(fullName)
     return Overlord.Shard and Overlord.Shard.IsPlayerAlreadyGrouped
         and Overlord.Shard:IsPlayerAlreadyGrouped(fullName)
-end
-
-local function ShardInviteTargetIsOnCurrentShard(targetShardId)
-    local target = tonumber(targetShardId)
-    local current = Overlord.Shard and Overlord.Shard.GetFreshLocalShardID
-        and Overlord.Shard:GetFreshLocalShardID(8) or nil
-    return target and current and target == current or false
-end
-
-local SHARD_INVITE_WHISPER_FR = {
-    ALLY    = "[Overlord] Invitation groupe : je suis sur la couche n°%s (front de guerre). Acceptez pour vous phaser avec moi !",
-    ENEMY   = "[Overlord] Je suis sur la couche n°%s. Rejoignez ma phase pour du JcJ !",
-    NEUTRAL = "[Overlord] Invitation : je suis sur la couche n°%s. Acceptez pour vous phaser ensemble.",
-}
-
-local function ResolveShardInviteWhisperFormat(kind)
-    local loc = Overlord.L or L
-    local key = "SHARD_INVITE_WHISPER_" .. kind
-    local fmt = loc and loc[key]
-    if fmt and Overlord.IsFrenchLocale and Overlord.IsFrenchLocale() then
-        if fmt:find("Join my layer", 1, true) or fmt:find("I'm on shard", 1, true) then
-            fmt = SHARD_INVITE_WHISPER_FR[kind]
-        end
-    end
-    return fmt
-end
-
-local function BuildShardInviteWhisperText(fullName)
-    local myShard = Overlord.Shard and Overlord.Shard:GetCurrentShardID()
-    local shardStr = (myShard ~= nil) and tostring(myShard) or "?"
-    local pf = Overlord.PlayerFaction
-    local tf = GetShardInviteTargetFaction(fullName)
-    local fmt
-    if tf and pf and tf ~= pf then
-        fmt = ResolveShardInviteWhisperFormat("ENEMY")
-    elseif tf and pf and tf == pf then
-        fmt = ResolveShardInviteWhisperFormat("ALLY")
-    else
-        fmt = ResolveShardInviteWhisperFormat("NEUTRAL")
-    end
-    if fmt then
-        return string.format(fmt, shardStr)
-    end
-    return nil
-end
-
-local function ExecuteShardInviteWhisper()
-    if not SendChatMessage or not shardInviteWhisperTarget or not shardInviteWhisperText then return end
-    if InCombatLockdown and InCombatLockdown() then return end
-    -- Enregistre la cible dans le filtre d'erreurs whisper de Sync.lua :
-    -- masque "Aucun joueur nomme 'X'..." si le joueur est offline ou cross-faction hors communaute.
-    if Overlord.Sync and Overlord.Sync.RegisterRecentWhisperTarget then
-        Overlord.Sync:RegisterRecentWhisperTarget(shardInviteWhisperTarget)
-    end
-    SendChatMessage(shardInviteWhisperText, "WHISPER", nil, shardInviteWhisperTarget)
-end
-
-local function ExecuteShardPartyInvite()
-    if not shardInvitePartyTarget then return end
-    if InCombatLockdown and InCombatLockdown() then return end
-    if C_PartyInfo and C_PartyInfo.InviteUnit then
-        C_PartyInfo.InviteUnit(shardInvitePartyTarget)
-    elseif InviteUnit then
-        InviteUnit(shardInvitePartyTarget)
-    end
-end
-
--- Whisper explicatif + invitation groupe (meme faction ou faction inconnue).
-function Overlord.UI:InviteShardPlayer(fullName, targetShardId)
-    if Overlord.InstanceSuspended then return end
-    if not IsShardHelperActive() then return end
-    if IsInInstance and IsInInstance() then return end
-
-    fullName = NormalizeShardInviteTarget(fullName)
-    if not fullName then return end
-    if ShardInviteTargetAlreadyGrouped(fullName) then return end
-
-    if not ShardInviteWhisperOnCooldown(fullName) then
-        local text = BuildShardInviteWhisperText(fullName)
-        if text and text ~= "" then
-            shardInviteWhisperTarget = fullName
-            shardInviteWhisperText = text
-            securecall(ExecuteShardInviteWhisper)
-            shardInviteWhisperTarget = nil
-            shardInviteWhisperText = nil
-            MarkShardInviteWhisperSent(fullName)
-        end
-    end
-
-    -- Invite groupe meme cross-faction : phasing tire l'invite sur notre shard local.
-    shardInvitePartyTarget = fullName
-    securecall(ExecuteShardPartyInvite)
-    shardInvitePartyTarget = nil
-end
-
--- Mauvaise shard GK : le retardataire ne doit jamais inviter le porteur de l'ancre,
--- car cela tirerait ce dernier sur la mauvaise couche. Il lui demande de l'inviter.
-function Overlord.UI:RequestShardInvite(fullName, targetShardId, zoneName)
-    if Overlord.InstanceSuspended or not IsShardHelperActive() then return end
-    if IsInInstance and IsInInstance() then return end
-    if InCombatLockdown and InCombatLockdown() then return end
-    fullName = NormalizeShardInviteTarget(fullName)
-    if not fullName or ShardInviteTargetAlreadyGrouped(fullName) then return end
-    if ShardInviteTargetIsOnCurrentShard(targetShardId) then return end
-
-    if ShardInviteWhisperOnCooldown(fullName) then return end
-    local shardLabel = BuildShardDisplayTag(targetShardId or "?")
-    local text = string.format(L.SHARD_INVITE_REQUEST_WHISPER, zoneName or "?", shardLabel)
-    shardInviteWhisperTarget = fullName
-    shardInviteWhisperText = text
-    securecall(ExecuteShardInviteWhisper)
-    shardInviteWhisperTarget = nil
-    shardInviteWhisperText = nil
-    MarkShardInviteWhisperSent(fullName)
-end
-
-local function InviteShardPlayerFromUI(fullName, targetShardId)
-    if ShardInviteTargetAlreadyGrouped(fullName) then return end
-    if Overlord.UI and Overlord.UI.InviteShardPlayer then
-        Overlord.UI:InviteShardPlayer(fullName, targetShardId)
-    end
-end
-
-local function RequestShardInviteFromUI(fullName, targetShardId, zoneName)
-    if ShardInviteTargetAlreadyGrouped(fullName) then return end
-    if Overlord.UI and Overlord.UI.RequestShardInvite then
-        Overlord.UI:RequestShardInvite(fullName, targetShardId, zoneName)
-    end
 end
 
 function Overlord.UI:OpenPanelFromLink(button)
@@ -356,42 +136,19 @@ function Overlord.UI:IsPanelAddonLink(link)
     return linkType == "addon" and addonName == "Overlord" and linkData == "panel"
 end
 
-local function RegisterShardTooltipInviteLinkHandler()
-    if shardInviteSetItemRefHooked then return end
-    shardInviteSetItemRefHooked = true
+local function RegisterPanelLinkHandler()
+    if panelLinkHookRegistered then return end
+    panelLinkHookRegistered = true
     hooksecurefunc("SetItemRef", function(link, _, button)
         if button ~= "LeftButton" or type(link) ~= "string" then return end
         if Overlord.UI and Overlord.UI.IsPanelAddonLink and Overlord.UI:IsPanelAddonLink(link) then
             Overlord.UI:OpenPanelFromLink(button)
-            return
         end
-        local requestPrefix = Overlord.Shard and Overlord.Shard.KEEP_INVITE_REQUEST_LINK_PREFIX
-            or "addon:Overlord:requestkeep:"
-        if link:sub(1, #requestPrefix) == requestPrefix then
-            local siteKey, shardStr, fullName = strsplit(":", link:sub(#requestPrefix + 1), 3)
-            local targetShard = tonumber(shardStr)
-            local site = siteKey and Overlord.GuildKeepSites
-                and Overlord.GuildKeepSites[siteKey] or nil
-            fullName = NormalizeShardInviteTarget(fullName)
-            if not site or not targetShard or not fullName then return end
-            if Overlord.InstanceSuspended or not IsShardHelperActive() then return end
-            local zoneName = Overlord.GuildKeep and Overlord.GuildKeep.GetDisplayName
-                and Overlord.GuildKeep:GetDisplayName(site) or siteKey
-            RequestShardInviteFromUI(fullName, targetShard, zoneName)
-            return
-        end
-        local invitePrefix = Overlord.Shard and Overlord.Shard.INVITE_LINK_PREFIX
-            or "addon:Overlord:invite:"
-        if link:sub(1, #invitePrefix) ~= invitePrefix then return end
-        local fullName = link:sub(#invitePrefix + 1)
-        if fullName == "" then return end
-        if Overlord.InstanceSuspended or not IsShardHelperActive() then return end
-        InviteShardPlayerFromUI(fullName, nil)
     end)
 end
 
 function Overlord.UI:EnsureAddonLinkHandlers()
-    RegisterShardTooltipInviteLinkHandler()
+    RegisterPanelLinkHandler()
 end
 
 -- Scroll molette + fleches haut/bas (meme principe que LeaderboardUI).
@@ -591,703 +348,6 @@ function Overlord.UI:CreateCleanScroll(parent, width, height, wheelStep, showFad
     scroll.RefreshCleanRail = RefreshRail
     scroll.content = child
     return scroll, child
-end
-
--- Cree une fois la fenetre liste + voile clic exterieur (style WC3 comme guide / export).
-local function HideShardMismatchPopup(ui)
-    if ui._shardMismatchPopup then ui._shardMismatchPopup:Hide() end
-end
-
--- Position libre du popup shard : ne plus recentrer a chaque ouverture une fois deplace.
-local function IsShardPopupUserPlaced()
-    return OverlordDB and OverlordDB.shardPopupUserPlaced == true
-end
-
-local function IsShardPopupLocked()
-    return OverlordDB and OverlordDB.shardPopupLocked == true
-end
-
-local function SaveShardPopupPosition(f)
-    if not f or not OverlordDB then return end
-    local point, _, relPoint, x, y = f:GetPoint(1)
-    if not point then return end
-    OverlordDB.shardPopupPos = {
-        point = point,
-        relPoint = relPoint or "BOTTOMLEFT",
-        x = x or 0,
-        y = y or 0,
-    }
-    OverlordDB.shardPopupUserPlaced = true
-end
-
-local function ApplyShardPopupDefaultPosition(f)
-    f:ClearAllPoints()
-    local anchor = f._openAnchorFrame
-    -- Clic badge : sous le badge (meme famille que l'ouvreur manuel).
-    if anchor and anchor.IsShown and anchor:IsShown() then
-        f:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -6)
-        return
-    end
-    -- Meme placement que "Players on another shard" (ouvreur badge) : centre du panneau,
-    -- meme si le panneau est cache (alertes keep / cercle). Plus de milieu d'ecran.
-    if mainFrame then
-        f:SetPoint("CENTER", mainFrame, "CENTER", 0, 0)
-        return
-    end
-    -- Panneau pas encore cree : meme coin droit que UpdatePanelAnchor par defaut.
-    f:SetPoint("RIGHT", UIParent, "RIGHT", -220, 0)
-end
-
-local function ApplyShardPopupPosition(f)
-    if not f then return end
-    local pos = OverlordDB and OverlordDB.shardPopupPos
-    if IsShardPopupUserPlaced() and pos
-        and type(pos.point) == "string"
-        and type(pos.x) == "number" and type(pos.y) == "number" then
-        f:ClearAllPoints()
-        f:SetPoint(pos.point, UIParent, pos.relPoint or "BOTTOMLEFT", pos.x, pos.y)
-        return
-    end
-    ApplyShardPopupDefaultPosition(f)
-end
-
-local function ToggleShardPopupLocked()
-    if not OverlordDB then return end
-    OverlordDB.shardPopupLocked = not IsShardPopupLocked()
-    local msg = IsShardPopupLocked() and L.SHARD_POPUP_LOCKED or L.SHARD_POPUP_UNLOCKED
-    if Overlord.PrintNotification and msg then
-        Overlord:PrintNotification("|cFF00FF00[Overlord]|r " .. msg)
-    end
-end
-
-local function EnsureShardMismatchPopup(ui)
-    if ui._shardMismatchPopup then return end
-
-    local f = CreateFrame("Frame", "OverlordShardMismatchPopup", UIParent, "BackdropTemplate")
-    f:SetSize(320, 280)
-    Overlord.UI.ApplyWoodDialogBackdrop(f)
-    f:SetFrameStrata("FULLSCREEN_DIALOG")
-    f:SetFrameLevel(6100)
-    f:EnableMouse(true)
-    f:SetMovable(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", function(self)
-        if IsShardPopupLocked() then return end
-        self:StartMoving()
-    end)
-    f:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        if IsShardPopupLocked() then return end
-        SaveShardPopupPosition(self)
-    end)
-    f:SetScript("OnMouseUp", function(_, button)
-        if button == "RightButton" then
-            ToggleShardPopupLocked()
-        end
-    end)
-    f:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
-        GameTooltip:AddLine(L.SHARD_POPUP_MOVE_HINT or "", 1, 1, 1, true)
-        if IsShardPopupLocked() and L.SHARD_POPUP_LOCKED then
-            GameTooltip:AddLine(L.SHARD_POPUP_LOCKED, 1, 0.82, 0.2, true)
-        end
-        GameTooltip:Show()
-    end)
-    f:SetScript("OnLeave", function()
-        GameTooltip:Hide()
-    end)
-    f:SetClampedToScreen(true)
-    f:Hide()
-
-    tinsert(UISpecialFrames, f:GetName())
-
-    local blocker = CreateFrame("Button", nil, UIParent)
-    blocker:SetFrameStrata("FULLSCREEN_DIALOG")
-    blocker:SetFrameLevel(6098)
-    blocker:SetAllPoints(UIParent)
-    blocker:EnableMouse(true)
-    blocker:Hide()
-    blocker:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    blocker:SetScript("OnClick", function()
-        local pop = ui._shardMismatchPopup
-        -- Popup auto entree cercle : fermer seulement via Fermer / X / Echap (sauf nonBlocking).
-        if pop and pop._zoneEntryMode and not pop._nonBlocking then return end
-        HideShardMismatchPopup(ui)
-    end)
-
-    -- Modalite (blocker + strata) factorisee : OnShow ne se redeclenche PAS si la
-    -- frame est deja visible quand OpenShardMismatchPopup est rappele avec une autre modalite
-    -- (ex. popup bloquant ouvert par-dessus une alerte nonBlocking) ; il faut donc pouvoir la
-    -- re-appliquer explicitement, sinon le blocker garde l'etat de l'ancien mode.
-    f.ApplyShardPopupModality = function(self)
-        if blocker then
-            if self._nonBlocking then blocker:Hide() else blocker:Show() end
-        end
-        if self._nonBlocking then
-            self:SetFrameStrata("DIALOG")
-        else
-            self:SetFrameStrata("FULLSCREEN_DIALOG")
-        end
-    end
-    f:SetScript("OnShow", function(self)
-        self:ApplyShardPopupModality()
-        if Overlord.PlayPanelOpenSound then Overlord:PlayPanelOpenSound() end
-        if Overlord.UI and Overlord.UI.GetEffectiveUiScale then
-            self:SetScale(Overlord.UI:GetEffectiveUiScale())
-        else
-            self:SetScale(1)
-        end
-        -- Apres le scale : restaure la position joueur (sinon recentrage centre a chaque alerte).
-        ApplyShardPopupPosition(self)
-    end)
-    f:SetScript("OnHide", function()
-        ui:CancelShardMismatchRowsBuild()
-        if blocker then blocker:Hide() end
-        if Overlord.PlayPanelCloseSound then Overlord:PlayPanelCloseSound() end
-    end)
-
-    local titleFs = f:CreateFontString(nil, "OVERLAY", "Fancy24Font")
-    titleFs:SetPoint("TOPLEFT", 36, -14)
-    titleFs:SetPoint("TOPRIGHT", -36, -14)
-    titleFs:SetJustifyH("CENTER")
-    titleFs:SetTextColor(C.gold[1], C.gold[2], C.gold[3])
-    titleFs:SetShadowOffset(2, -2)
-
-    local subFs = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    subFs:SetPoint("TOPLEFT", 18, -46)
-    subFs:SetPoint("TOPRIGHT", -18, -46)
-    subFs:SetJustifyH("LEFT")
-    subFs:SetWordWrap(true)
-
-    local hintFs = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hintFs:SetPoint("TOPLEFT", subFs, "BOTTOMLEFT", 0, -8)
-    hintFs:SetPoint("TOPRIGHT", subFs, "BOTTOMRIGHT", 0, -8)
-    hintFs:SetJustifyH("LEFT")
-    hintFs:SetWordWrap(true)
-
-    local listPanel = Overlord.UI.CreateWC3SubPanel(f, 284, 160, {
-        panelBg = C.panelBg,
-        borderColor = C.goldDim,
-        borderAlpha = 0.5,
-        insets = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    listPanel:SetPoint("TOP", 0, -120)
-
-    local scroll, content, scrollIndUp, scrollIndDown = Overlord.UI:CreateWC3WheelScroll(listPanel, 248, 26)
-
-    local emptyFs = content:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    emptyFs:SetPoint("TOPLEFT", 8, -8)
-    emptyFs:SetPoint("TOPRIGHT", -8, -8)
-    emptyFs:SetJustifyH("LEFT")
-    emptyFs:SetWordWrap(true)
-
-    local closeBtn = Overlord.UI.CreateWC3Button(
-        f, 140, 28, L.GUIDE_CLOSE or L.EXPORT_CLOSE or "Close",
-        function() HideShardMismatchPopup(ui) end,
-        nil, { gold = C.gold, white = C.white }
-    )
-    closeBtn:SetPoint("BOTTOM", 0, 14)
-
-    Overlord.UI.CreateWC3CloseButton(f, function() HideShardMismatchPopup(ui) end, { gold = C.gold })
-        :SetPoint("TOPRIGHT", -8, -8)
-
-    -- ESC ferme via UISpecialFrames (deja enregistre ci-dessus), pas de EnableKeyboard/OnKeyDown :
-    -- capter le clavier bloquait TOUTES les touches (deplacement, sorts) tant que le popup restait
-    -- ouvert, car SetPropagateKeyboardInput(true) est interdit en combat (restriction WoW 10.1.5+)
-    -- et ne relachait donc plus le clavier avant un clic souris sur Fermer/X (perte de controle joueur).
-    ui._shardMismatchPopup = f
-    ui._shardMismatchPopupBlocker = blocker
-    ui._shardMismatchListPanel = listPanel
-    ui._shardMismatchTitleFs = titleFs
-    ui._shardMismatchSubFs = subFs
-    ui._shardMismatchHintFs = hintFs
-    ui._shardMismatchScroll = scroll
-    ui._shardMismatchScrollChild = content
-    ui._shardMismatchScrollIndUp = scrollIndUp
-    ui._shardMismatchScrollIndDown = scrollIndDown
-    ui._shardMismatchEmptyFs = emptyFs
-    ui._shardMismatchBtns = {}
-    scroll:HookScript("OnVerticalScroll", function()
-        if Overlord.UI and Overlord.UI.RefreshShardMismatchVirtualRows then
-            Overlord.UI:RefreshShardMismatchVirtualRows()
-        end
-    end)
-end
-
--- Creation lazy au login / entree front : evite le hitch a la premiere alerte combat.
-function Overlord.UI:PrewarmShardMismatchPopup()
-    EnsureShardMismatchPopup(self)
-end
-
-function Overlord.UI:ShardMismatchRowLess(a, b)
-    local aShard, bShard = tonumber(a and a.shard), tonumber(b and b.shard)
-    if aShard and bShard and aShard ~= bShard then return aShard < bShard end
-    local aTag, bTag = tostring(a and a.shard or ""), tostring(b and b.shard or "")
-    if aTag ~= bTag then return aTag < bTag end
-    return string.lower(tostring(a and a.player or ""))
-        < string.lower(tostring(b and b.player or ""))
-end
-
--- Publie une generation complete sans masquer l'ancienne pendant le scan/tri.
-function Overlord.UI:ApplyShardMismatchRows(rows, complete)
-    rows = type(rows) == "table" and rows or {}
-    local content, panel, frame = self._shardMismatchScrollChild,
-        self._shardMismatchListPanel, self._shardMismatchPopup
-    if not content or not frame then return end
-    self._shardMismatchRows = rows
-    if #rows == 0 then
-        self._shardMismatchEmptyFs:SetText(complete
-            and (self._shardMismatchEmptyText or L.SHARD_POPUP_EMPTY) or "...")
-        self._shardMismatchEmptyFs:Show()
-        content:SetHeight(48)
-    else
-        self._shardMismatchEmptyFs:Hide()
-        content:SetHeight(math.max(46, 8 + #rows * (self._shardMismatchRowH or 26)))
-    end
-    local listH = math.min(math.max(56, content:GetHeight() + 16), 200)
-    if panel then panel:SetHeight(listH) end
-    frame:SetHeight(math.min((self._shardMismatchListTop or 88) + listH + 56,
-        self._shardMismatchFrameMaxH or 400))
-    self:RefreshShardMismatchVirtualRows()
-    self:UpdateWheelScrollIndicators(self._shardMismatchScroll,
-        self._shardMismatchScrollIndUp, self._shardMismatchScrollIndDown)
-end
-
--- Le cache SH peut contenir plus de 500 joueurs. Scan, filtre et tri se font par
--- tranches; une mutation concurrente laisse la generation terminee visible puis
--- programme un unique rattrapage, ce qui evite la famine sous rafale SH.
-function Overlord.UI:CancelShardMismatchRowsBuild()
-    -- Les preparateurs de notifications (onComplete) sont independants. Seul
-    -- le worker du popup ferme/remplace doit cesser de scanner/trier en arriere-plan.
-    self._shardMismatchBuildToken = (tonumber(self._shardMismatchBuildToken) or 0) + 1
-    self._shardMismatchBuildPending = nil
-    self._shardMismatchFollowupPending = nil
-end
-
-function Overlord.UI:RequestShardMismatchRowsBuild(sourceRows, viewKey, onComplete)
-    if not C_Timer or not C_Timer.After or not coroutine or not coroutine.create then return end
-    local token
-    if not onComplete then
-        self._shardMismatchBuildToken = (tonumber(self._shardMismatchBuildToken) or 0) + 1
-        token = self._shardMismatchBuildToken
-    end
-    local work, started = 0, 0
-    local shard = Overlord.Shard
-    local descriptor = type(sourceRows) == "table"
-        and sourceRows._overlordShardRowSource == true and sourceRows or nil
-    local peerSource = descriptor and descriptor.source
-        or (not sourceRows and shard and shard.knownShards) or nil
-    local peerRevision = descriptor and descriptor.getRevision
-        and descriptor.getRevision() or (shard and tonumber(shard._gkPromptPeerRevision) or 0)
-    local peerCount = shard and tonumber(shard.peerCount) or 0
-    local sourceCount = not descriptor and type(sourceRows) == "table" and #sourceRows or 0
-    local worker = coroutine.create(function()
-        local rows = {}
-        local scanIncomplete = false
-        local meta, seen = { groupedContact = "" }, {}
-        local function yieldWork()
-            work = work + 1
-            if work >= 64 or (debugprofilestop and debugprofilestop() - started >= 1) then
-                coroutine.yield()
-            end
-        end
-        local function consider(player, sid, isAnchor)
-            player = type(player) == "string" and player or ""
-            local key = string.lower(player)
-            if player == "" or seen[key] then yieldWork(); return end
-            seen[key] = true
-            local accept, grouped = true, false
-            if descriptor and descriptor.accept then
-                accept, grouped = descriptor.accept(player, sid, isAnchor == true)
-            else
-                grouped = ShardInviteTargetAlreadyGrouped(player)
-                accept = not grouped
-            end
-            if grouped and meta.groupedContact == "" then meta.groupedContact = player end
-            if accept then
-                rows[#rows + 1] = { player = player, shard = sid }
-            end
-            yieldWork()
-        end
-        if descriptor and descriptor.anchorPlayer then
-            consider(descriptor.anchorPlayer, descriptor.anchorShard, true)
-        end
-        if not descriptor and type(sourceRows) == "table" then
-            for i = 1, #sourceRows do
-                local row = sourceRows[i]
-                if type(row) == "table" then consider(row.player, row.shard) else yieldWork() end
-            end
-        elseif type(peerSource) == "table" and shard then
-            local currentShard = tonumber(shard:GetCurrentShardID())
-            local cursor, restarts = nil, 0
-            while true do
-                local ok, player, sid = pcall(next, peerSource, cursor)
-                if not ok then
-                    cursor, restarts = nil, restarts + 1
-                    if restarts > 8 then scanIncomplete = true; break end
-                    yieldWork()
-                elseif player == nil then
-                    break
-                else
-                    cursor = player
-                    if not seen[string.lower(tostring(player))] then
-                        local node = shard.peerNodes and shard.peerNodes[player]
-                        local fresh = not node or (tonumber(node.expiresAt) or 0) > GetTime()
-                        local usable = not shard.PartyInviteTargetIsUsable
-                            or shard:PartyInviteTargetIsUsable(player)
-                        local targetOk = not descriptor or not descriptor.targetShard
-                            or tonumber(sid) == tonumber(descriptor.targetShard)
-                        local differentOk = not descriptor or not descriptor.differentCurrent
-                            or tonumber(sid) ~= currentShard
-                        if fresh and usable and targetOk and differentOk
-                            and (descriptor or tonumber(sid) ~= currentShard) then
-                            consider(player, sid)
-                        else
-                            seen[string.lower(tostring(player))] = true
-                            yieldWork()
-                        end
-                    else
-                        yieldWork()
-                    end
-                end
-            end
-        end
-
-        -- Merge-sort cooperatif : table.sort sur 10k lignes monopolise autrement une frame.
-        local less = descriptor and descriptor.less
-            or function(a, b) return self:ShardMismatchRowLess(a, b) end
-        local count, width, input, output = #rows, 1, rows, {}
-        while width < count do
-            local first = 1
-            while first <= count do
-                local middle = math.min(first + width, count + 1)
-                local finish = math.min(first + width * 2 - 1, count)
-                local left, right, out = first, middle, first
-                while left < middle or right <= finish do
-                    if right > finish or (left < middle
-                        and (less(input[left], input[right])
-                            or not less(input[right], input[left]))) then
-                        output[out], left = input[left], left + 1
-                    else
-                        output[out], right = input[right], right + 1
-                    end
-                    out = out + 1
-                    yieldWork()
-                end
-                first = first + width * 2
-            end
-            input, output, width = output, input, width * 2
-        end
-        if input ~= rows then
-            for i = 1, count do rows[i] = input[i]; yieldWork() end
-        end
-        return rows, scanIncomplete, meta
-    end)
-
-    local function inputChanged()
-        return not descriptor and type(sourceRows) == "table" and #sourceRows ~= sourceCount
-            or (descriptor and descriptor.getRevision
-                and descriptor.getRevision() ~= peerRevision)
-            or (not sourceRows and shard and (shard.knownShards ~= peerSource
-                or tonumber(shard._gkPromptPeerRevision) ~= peerRevision
-                or tonumber(shard.peerCount) ~= peerCount))
-    end
-
-    local function scheduleBoundedRetry()
-        self._shardMismatchBuildPending = nil
-        if onComplete then
-            C_Timer.After(0.25, function()
-                self:RequestShardMismatchRowsBuild(sourceRows, viewKey, onComplete)
-            end)
-            return
-        end
-        if self._shardMismatchViewKey == viewKey
-            and not self._shardMismatchFollowupPending then
-            self._shardMismatchFollowupPending = true
-            C_Timer.After(0.25, function()
-                self._shardMismatchFollowupPending = nil
-                if token == self._shardMismatchBuildToken
-                    and self._shardMismatchViewKey == viewKey then
-                    self:RequestShardMismatchRowsBuild(sourceRows, viewKey)
-                end
-            end)
-        end
-    end
-
-    local function runSlice()
-        if not onComplete and token ~= self._shardMismatchBuildToken then return end
-        -- Une revision changee entre deux tranches invalide aussi le curseur de
-        -- `next`. Abandonner avant de le reutiliser evite un scan partiel et un
-        -- grand nombre de redemarrages synchrones sous une rafale SH.
-        if inputChanged() then
-            scheduleBoundedRetry()
-            return
-        end
-        work, started = 0, debugprofilestop and debugprofilestop() or 0
-        local result = { coroutine.resume(worker) }
-        if not result[1] then
-            self._shardMismatchBuildPending = nil
-            return
-        end
-        if coroutine.status(worker) ~= "dead" then C_Timer.After(0, runSlice); return end
-        self._shardMismatchBuildPending = nil
-        if result[3] then
-            scheduleBoundedRetry()
-            return
-        end
-        local changed = inputChanged()
-        if onComplete then
-            if changed then
-                scheduleBoundedRetry()
-                return
-            end
-            onComplete(result[2], result[4], changed)
-            return
-        end
-        if self._shardMismatchViewKey == viewKey then self:ApplyShardMismatchRows(result[2], true) end
-        if changed and self._shardMismatchViewKey == viewKey
-            and not self._shardMismatchFollowupPending then
-            self._shardMismatchFollowupPending = true
-            C_Timer.After(0, function()
-                self._shardMismatchFollowupPending = nil
-                if self._shardMismatchViewKey == viewKey then
-                    self:RequestShardMismatchRowsBuild(sourceRows, viewKey)
-                end
-            end)
-        end
-    end
-    self._shardMismatchBuildPending = true
-    C_Timer.After(0, runSlice)
-end
-
--- Toutes les lignes restent accessibles dans le scroll, mais seuls les boutons du
--- viewport existent reellement. Un cache SH plein ne cree donc pas 576 frames au clic.
-function Overlord.UI:RefreshShardMismatchVirtualRows()
-    local rows = self._shardMismatchRows or {}
-    local scroll, content = self._shardMismatchScroll, self._shardMismatchScrollChild
-    if not scroll or not content then return end
-    local rowH = tonumber(self._shardMismatchRowH) or 26
-    local first = math.max(1, math.floor((scroll:GetVerticalScroll() or 0) / rowH) + 1)
-    local tp = Overlord.UI.TooltipPalette()
-    for slot = 1, (tonumber(self.SHARD_POPUP_VIRTUAL_BUTTONS) or 12) do
-        local rowIndex = first + slot - 1
-        local row = rows[rowIndex]
-        local btn = self._shardMismatchBtns[slot]
-        if row and not btn then
-            btn = Overlord.UI.CreateWC3Button(
-                content, self._shardMismatchBtnW or 240, self._shardMismatchBtnH or 24,
-                "", nil, nil, { gold = C.gold, white = C.white })
-            local wc3Enter = btn:GetScript("OnEnter")
-            local wc3Leave = btn:GetScript("OnLeave")
-            btn:SetScript("OnClick", function(b)
-                if Overlord.InstanceSuspended or not IsShardHelperActive() then return end
-                local name = b._inviteName
-                if name and name ~= "" and not ShardInviteTargetAlreadyGrouped(name) then
-                    if b._requestInvite then
-                        RequestShardInviteFromUI(name, b._inviteShard, b._requestZoneName)
-                    else
-                        InviteShardPlayerFromUI(name, b._inviteShard)
-                    end
-                end
-            end)
-            btn:SetScript("OnEnter", function(b)
-                if wc3Enter then wc3Enter(b) end
-                GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
-                local palette = Overlord.UI.TooltipPalette()
-                local tf = GetShardInviteTargetFaction(b._inviteName)
-                local nr, ng, nb = GetShardInviteNameColor(tf)
-                GameTooltip:SetText(b._inviteName, nr or palette.BODY[1],
-                    ng or palette.BODY[2], nb or palette.BODY[3])
-                local hint = b._requestInvite and L.SHARD_POPUP_REQUEST_HINT
-                    or L.SHARD_POPUP_BTN_HINT
-                GameTooltip:AddLine(hint, palette.HL[1], palette.HL[2], palette.HL[3], true)
-                GameTooltip:Show()
-            end)
-            btn:SetScript("OnLeave", function(b)
-                if wc3Leave then wc3Leave(b) end
-                GameTooltip:Hide()
-            end)
-            self._shardMismatchBtns[slot] = btn
-        end
-        if btn then
-            if row then
-                btn._inviteName = row.player
-                btn._inviteShard = (self._shardMismatchRequestInvite
-                    and self._shardMismatchTargetShard) or row.shard
-                btn._requestInvite = self._shardMismatchRequestInvite == true
-                btn._requestZoneName = self._shardMismatchZoneName
-                btn:ClearAllPoints()
-                btn:SetPoint("TOPLEFT", content, "TOPLEFT", 4, -4 - (rowIndex - 1) * rowH)
-                if btn.SetSize then
-                    btn:SetSize(self._shardMismatchBtnW or 240,
-                        self._shardMismatchBtnH or 24)
-                end
-                ApplyShardInviteButtonLabel(btn, row.player, btn._inviteShard,
-                    tp.BODY[1], tp.BODY[2], tp.BODY[3], btn._requestInvite)
-                btn:Show()
-            else
-                btn:Hide()
-            end
-        end
-    end
-end
-
--- Ouvre ou rafraichit la liste des joueurs sur un autre shard (invites hors tooltip).
--- anchorFrame : badge shard si clic panneau. Sinon meme ancre que l'ouvreur badge (centre panneau).
--- opts.zoneEntry + opts.rows : popup auto a l'entree cercle (capture ennemie ou alliee, shard different).
-function Overlord.UI:OpenShardMismatchPopup(anchorFrame, opts)
-    RegisterShardTooltipInviteLinkHandler()
-    if Overlord.InstanceSuspended or not IsShardHelperActive() then return end
-    EnsureShardMismatchPopup(self)
-
-    GameTooltip_Hide()
-
-    opts = opts or {}
-    -- Une vue rowsReady remplace aussi une ancienne construction de meme viewKey.
-    -- Sans annulation, son ancien resultat pouvait ecraser les contacts deja prets.
-    self:CancelShardMismatchRowsBuild()
-
-    local f = self._shardMismatchPopup
-    f._openAnchorFrame = anchorFrame
-
-    local tp = Overlord.UI.TooltipPalette()
-    self._shardMismatchHintFs:SetTextColor(tp.HL[1], tp.HL[2], tp.HL[3])
-
-    local sourceRows
-    local viewKey
-    if opts.zoneEntry and opts.rows then
-        local zoneTitle = opts.title
-            or L.SHARD_POPUP_ZONE_TITLE_ALLY
-            or L.SHARD_POPUP_TITLE
-        self._shardMismatchTitleFs:SetText(zoneTitle)
-        if opts.subText then
-            self._shardMismatchSubFs:SetText(opts.subText)
-        else
-            local zoneLabel = opts.zoneName or "?"
-            self._shardMismatchSubFs:SetText(string.format(L.SHARD_POPUP_ZONE_SUB or L.SHARD_POPUP_YOUR_SHARD, zoneLabel))
-        end
-        self._shardMismatchSubFs:SetTextColor(tp.BODY[1], tp.BODY[2], tp.BODY[3])
-        sourceRows = not opts.rowsReady and opts.rows or nil
-        viewKey = table.concat({ "zone", tostring(opts.zoneName or ""),
-            tostring(opts.targetShard or ""), tostring(opts.requestInvite == true) }, ":")
-    else
-        self._shardMismatchTitleFs:SetText(L.SHARD_POPUP_TITLE)
-        local shardMod = Overlord.Shard
-        local myShard = shardMod and shardMod:GetCurrentShardID()
-        if myShard ~= nil then
-            local _, referenceRealm = shardMod:GetCurrentShardReference()
-            local text = referenceRealm
-                and string.format(L.SHARD_POPUP_YOUR_SHARD_REFERENCE, tostring(myShard), referenceRealm)
-                or string.format(L.SHARD_POPUP_YOUR_SHARD, tostring(myShard))
-            self._shardMismatchSubFs:SetText(text)
-            self._shardMismatchSubFs:SetTextColor(tp.BODY[1], tp.BODY[2], tp.BODY[3])
-        else
-            self._shardMismatchSubFs:SetText(L.SHARD_POPUP_YOUR_UNKNOWN)
-            self._shardMismatchSubFs:SetTextColor(tp.HL[1], tp.HL[2], tp.HL[3])
-        end
-        viewKey = "all"
-    end
-    self._shardMismatchTitleFs:SetTextColor(C.gold[1], C.gold[2], C.gold[3])
-    self._shardMismatchHintFs:SetText(opts.hintText
-        or (opts.requestInvite and L.SHARD_POPUP_REQUEST_HINT or L.SHARD_POPUP_BTN_HINT))
-
-    local titleFs = self._shardMismatchTitleFs
-    local subFs = self._shardMismatchSubFs
-    local hintFs = self._shardMismatchHintFs
-    local listPanel = self._shardMismatchListPanel
-    local frameW, headerH, listTop
-
-    if opts.zoneEntry then
-        frameW = 380
-        titleFs:ClearAllPoints()
-        titleFs:SetPoint("TOPLEFT", f, "TOPLEFT", 36, -14)
-        titleFs:SetPoint("TOPRIGHT", f, "TOPRIGHT", -36, -14)
-        titleFs:SetJustifyH("CENTER")
-        titleFs:SetWordWrap(true)
-        subFs:SetWordWrap(true)
-        hintFs:SetWordWrap(true)
-        f:SetWidth(frameW)
-        subFs:SetWidth(frameW - 36)
-        hintFs:SetWidth(frameW - 36)
-        local titleH = titleFs:GetStringHeight() or 24
-        local subH = subFs:GetStringHeight() or 16
-        local hintH = hintFs:GetStringHeight() or 12
-        subFs:ClearAllPoints()
-        subFs:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -(14 + titleH + 8))
-        subFs:SetPoint("TOPRIGHT", f, "TOPRIGHT", -18, -(14 + titleH + 8))
-        hintFs:ClearAllPoints()
-        hintFs:SetPoint("TOPLEFT", subFs, "BOTTOMLEFT", 0, -8)
-        hintFs:SetPoint("TOPRIGHT", subFs, "BOTTOMRIGHT", 0, -8)
-        headerH = 14 + titleH + 8 + subH + 8 + hintH + 10
-        listTop = headerH
-    else
-        frameW = 320
-        titleFs:ClearAllPoints()
-        titleFs:SetPoint("TOP", f, "TOP", 0, -14)
-        titleFs:SetJustifyH("CENTER")
-        titleFs:SetWordWrap(false)
-        subFs:ClearAllPoints()
-        subFs:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -46)
-        subFs:SetPoint("TOPRIGHT", f, "TOPRIGHT", -18, -46)
-        subFs:SetJustifyH("LEFT")
-        subFs:SetWordWrap(false)
-        subFs:SetWidth(frameW - 36)
-        hintFs:ClearAllPoints()
-        hintFs:SetPoint("TOPLEFT", subFs, "BOTTOMLEFT", 0, -4)
-        hintFs:SetPoint("TOPRIGHT", subFs, "BOTTOMRIGHT", 0, -4)
-        hintFs:SetJustifyH("LEFT")
-        hintFs:SetWordWrap(false)
-        hintFs:SetWidth(frameW - 36)
-        f:SetWidth(frameW)
-        headerH = 88
-        listTop = 88
-    end
-
-    local content = self._shardMismatchScrollChild
-    -- Gouttiere droite reservee aux indicateurs de scroll (fleches haut/bas) ancrees au
-    -- bord droit du scroll : sans elle, les boutons d'invite s'etendaient sous les fleches.
-    local SCROLL_IND_GUTTER = 22
-    local btnW, btnH, gapY = frameW - 52 - SCROLL_IND_GUTTER, 24, -26
-
-    local sameView = self._shardMismatchViewKey == viewKey
-    local rows = opts.rowsReady and opts.rows
-        or (sameView and self._shardMismatchRows or {})
-    self._shardMismatchViewKey = viewKey
-    self._shardMismatchEmptyFs:SetTextColor(tp.MUTED[1], tp.MUTED[2], tp.MUTED[3])
-    local listH = math.min(math.max(56,
-        (#rows > 0 and (8 + #rows * (-gapY)) or 48) + 16), 200)
-    if listPanel then
-        listPanel:SetWidth(frameW - 36)
-        listPanel:SetHeight(listH)
-        listPanel:ClearAllPoints()
-        listPanel:SetPoint("TOP", f, "TOP", 0, -listTop)
-    end
-    content:SetWidth(btnW)
-    self._shardMismatchRows = rows
-    self._shardMismatchRowH = -gapY
-    self._shardMismatchBtnW = btnW
-    self._shardMismatchBtnH = btnH
-    self._shardMismatchRequestInvite = opts.requestInvite == true
-    self._shardMismatchTargetShard = opts.targetShard
-    self._shardMismatchZoneName = opts.zoneName
-    self._shardMismatchEmptyText = opts.emptyText or L.SHARD_POPUP_EMPTY
-    self._shardMismatchListTop = listTop
-    self._shardMismatchFrameMaxH = opts.zoneEntry and 440 or 400
-    pcall(function() self._shardMismatchScroll:SetVerticalScroll(0) end)
-    self:ApplyShardMismatchRows(rows, false)
-    if not opts.rowsReady then self:RequestShardMismatchRowsBuild(sourceRows, viewKey) end
-
-    f._zoneEntryMode = opts.zoneEntry and true or false
-    -- Popup auto (zone / fort) : notification ambiante, pas de voile plein ecran (souris, cam, sorts).
-    f._nonBlocking = opts.nonBlocking == true or f._zoneEntryMode
-    if f:IsShown() then
-        -- Deja visible : OnShow ne se redeclenchera pas, re-appliquer modalite + ancre.
-        f:ApplyShardPopupModality()
-        ApplyShardPopupPosition(f)
-    else
-        -- Position appliquee dans OnShow (apres SetScale).
-        f:Show()
-    end
 end
 
 -- Layout lignes de zone (2 colonnes) - declare avant SetZoneLineWarfrontIcon / LayoutZoneLineAnchors.
@@ -1856,7 +916,7 @@ local function EnsureWorldMapPanelHooks()
 end
 
 function Overlord.UI:CreateMainFrame()
-    RegisterShardTooltipInviteLinkHandler()
+    RegisterPanelLinkHandler()
     mainFrame = mainFrameShell
     userMovedPanel = mainFrame:IsUserPlaced()
     -- Largeur fixe. Hauteur initiale : sera recalculée par ApplyCommunityHintLayout (plus de vide sous la progression).
@@ -2041,7 +1101,6 @@ function Overlord.UI:CreateMainFrame()
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         local tp = Overlord.UI.TooltipPalette()
         GameTooltip:AddLine(L.SHARD_TOOLTIP_TITLE, tp.HL[1], tp.HL[2], tp.HL[3])
-        GameTooltip:AddLine(L.SHARD_TOOLTIP_CLICK_OPEN, tp.HL[1], tp.HL[2], tp.HL[3], true)
         GameTooltip:AddLine(" ", tp.BODY[1], tp.BODY[2], tp.BODY[3])
         local shardMod = Overlord.Shard
         local shardID = shardMod and shardMod:GetCurrentShardID()
@@ -2064,7 +1123,7 @@ function Overlord.UI:CreateMainFrame()
                     and tonumber(sid) ~= tonumber(shardID)
                     and (not shardMod.PartyInviteTargetIsUsable
                         or shardMod:PartyInviteTargetIsUsable(player))
-                    and not ShardInviteTargetAlreadyGrouped(player) then
+                    and not ShardPlayerAlreadyGrouped(player) then
                     count = count + 1
                     preview[#preview + 1] = { player = player, shard = sid }
                 end
@@ -2074,20 +1133,14 @@ function Overlord.UI:CreateMainFrame()
                 GameTooltip:AddLine(L.SHARD_TOOLTIP_PLAYERS_HEADER, tp.HL[1], tp.HL[2], tp.HL[3])
                 for _, row in ipairs(preview) do
                     local player, sid = row.player, row.shard
-                    local colorEsc = GetShardInviteNameColorEscape(GetShardInviteTargetFaction(player))
-                    local hl = Overlord.Shard and Overlord.Shard.BuildInviteHyperlink
-                        and Overlord.Shard:BuildInviteHyperlink(player, colorEsc) or player
+                    local hl = GetShardPlayerNameColorEscape(GetShardPlayerFaction(player)) .. player .. "|r"
                     GameTooltip:AddLine(string.format("  %s (%s)", hl, BuildShardDisplayTag(sid)), tp.MUTED[1], tp.MUTED[2], tp.MUTED[3])
                 end
                 if node then
                     GameTooltip:AddLine("  ...", tp.MUTED[1], tp.MUTED[2], tp.MUTED[3])
                 end
-                GameTooltip:AddLine(" ", tp.BODY[1], tp.BODY[2], tp.BODY[3])
-                GameTooltip:AddLine(L.SHARD_TOOLTIP_INVITE_RAID, tp.MUTED[1], tp.MUTED[2], tp.MUTED[3], true)
-                GameTooltip:AddLine(L.SHARD_TOOLTIP_CLICK_INVITE, tp.HL[1], tp.HL[2], tp.HL[3], true)
             elseif node then
-                -- Apercu volontairement borne; le clic ouvre toujours la liste complete
-                -- construite par la coroutine, donc aucun contact n'est inaccessible.
+                -- Apercu volontairement borne (scan de 48 entrees au plus).
                 GameTooltip:AddLine("  ...", tp.MUTED[1], tp.MUTED[2], tp.MUTED[3])
             else
                 GameTooltip:AddLine(L.SHARD_TOOLTIP_ALL_SAME, tp.BODY[1], tp.BODY[2], tp.BODY[3])
@@ -2098,13 +1151,8 @@ function Overlord.UI:CreateMainFrame()
         GameTooltip:Show()
     end)
     shardFrame:SetScript("OnLeave", GameTooltip_Hide)
+    -- Indicateur seulement (infobulle) : plus d'invitation de groupe depuis la couche.
     shardFrame:EnableMouse(true)
-    shardFrame:RegisterForClicks("LeftButtonUp")
-    shardFrame:SetScript("OnClick", function(sf)
-        if Overlord.UI and Overlord.UI.OpenShardMismatchPopup then
-            Overlord.UI:OpenShardMismatchPopup(sf)
-        end
-    end)
     self.shardFrame = shardFrame
     self.shardText = shardText
     self.shardRealmText = shardRealmText
@@ -4816,14 +3864,8 @@ function Overlord.UI:ResetPosition()
     if OverlordDB then
         OverlordDB.panelPos = nil
         OverlordDB.panelAnchor = nil
-        OverlordDB.shardPopupPos = nil
-        OverlordDB.shardPopupUserPlaced = nil
-        OverlordDB.shardPopupLocked = nil
     end
     self:UpdatePanelAnchor()
-    if self._shardMismatchPopup and self._shardMismatchPopup:IsShown() then
-        ApplyShardPopupPosition(self._shardMismatchPopup)
-    end
 end
 
 function Overlord.UI:Show(opts)

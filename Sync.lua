@@ -4195,16 +4195,6 @@ local function TryPrintEnemyCapturingAlert(zone, capturerName, waveTs)
     if zone.status ~= "in_progress" or zone.owner ~= efAlert then
         priv.enemyAlertEmitted[zone.id] = nil
         priv.enemyAlertSkipUntil[zone.id] = nil
-    elseif Overlord.Shard and Overlord.Shard.ScheduleAutoPromptOnZoneEntry then
-        -- Push ennemi recu alors que le joueur DEFEND deja le point : le popup shard n'etait
-        -- arme qu'a l'entree du disque (ZoneControl), donc un defenseur en place ne recevait
-        -- jamais l'invite cross-shard. Re-armer ici ; les gates internes (cooldown 60 s/zone,
-        -- capteur resolu, shard connue) empechent tout spam, et FinishAutoPromptOnZoneEntry
-        -- verifie que le joueur est bien dans cette zone avant d'ouvrir le popup.
-        local cz = Overlord.Zones.GetCurrentPlayerZone and Overlord.Zones:GetCurrentPlayerZone()
-        if cz and cz.id == zone.id then
-            Overlord.Shard:ScheduleAutoPromptOnZoneEntry(zone)
-        end
     end
     waveTs = tonumber(waveTs) or zone.updatedAt or 0
     local waveKey = zone.id .. ":" .. tostring(waveTs)

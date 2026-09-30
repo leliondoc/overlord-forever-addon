@@ -51,7 +51,7 @@ C_BattleNet = {
     GetFriendNumGameAccounts = function() return 1 end,
     GetFriendGameAccountInfo = function(i) return friends[i] end,
 }
-Overlord = { L = { SHARD_POPUP_REQUEST_BUTTON = '%s (%s)' } }
+Overlord = { L = {} }
 assert(loadfile('Core.lua'))()
 Overlord.PlayerFaction = 'Alliance'
 assert(loadfile('Sync.lua'))()
@@ -71,26 +71,17 @@ local function upvalue(fn, name)
     end
     error('Missing UI fixture binding: ' .. name)
 end
-local resolve = upvalue(Overlord.UI.CreateMainFrame, 'GetShardInviteTargetFaction')
-local color = upvalue(Overlord.UI.CreateMainFrame, 'GetShardInviteNameColorEscape')
-local paint = upvalue(Overlord.UI.RefreshShardMismatchVirtualRows, 'ApplyShardInviteButtonLabel')
+local resolve = upvalue(Overlord.UI.CreateMainFrame, 'GetShardPlayerFaction')
+local color = upvalue(Overlord.UI.CreateMainFrame, 'GetShardPlayerNameColorEscape')
 local function check(name, expected, prefix)
     assert(resolve(name) == expected, 'Wrong faction for ' .. name)
     assert(color(resolve(name)) == prefix, 'Wrong tooltip color for ' .. name)
-    local link = Overlord.Shard:BuildInviteHyperlink(name, color(resolve(name)))
-    assert(link:sub(1, 10) == prefix, 'Hyperlink dropped its faction color')
-    local button = { label = widget() }
-    paint(button, name, 66, 1, 0, 0, false)
-    return button
 end
-local red = check('Red Tester', 'Horde', '|cffff6645')
-local blue = check('Blue Tester', 'Alliance', '|cff6db3f2')
-assert(red.label.color[1] > red.label.color[3] and blue.label.color[3] > blue.label.color[1])
+check('Red Tester', 'Horde', '|cffff6645')
+check('Blue Tester', 'Alliance', '|cff6db3f2')
 check('Bridge Tester', 'Horde', '|cffff6645')
 check('Blue Friend', 'Alliance', '|cff6db3f2')
-local grey = check('Unknown Tester', nil, '|cffb8b8b8')
-assert(grey.label.color[1] == grey.label.color[2] and grey.label.color[2] == grey.label.color[3],
-    'Unknown invitation target inherited the red default')
+check('Unknown Tester', nil, '|cffb8b8b8')
 check('Retail Tester', nil, '|cffb8b8b8')
 check('Blue Stranger', nil, '|cffb8b8b8')
 check('Blue', nil, '|cffb8b8b8')
@@ -101,9 +92,6 @@ local reads, scans = unitReads, friendScans
 for _ = 1, 100 do resolve('Unknown Tester'); resolve('Red Tester') end
 assert(unitReads == reads and friendScans == scans, 'Faction lookup rescanned units/friends per row')
 
--- Existing pooled buttons must lose their old blue/red when reused for unknowns.
-paint(blue, 'Unknown Tester', 77, 1, 0, 0, false)
-assert(blue.label.color[1] == 0.72 and blue.baseTextColor[3] == 0.72)
 -- A live faction change beats old score data, in both directions.
 units.nameplate1.faction, units.nameplate2.faction = 'Alliance', 'Horde'
 now = now + 4
@@ -128,4 +116,4 @@ Overlord.InstanceSuspended = true
 reads, scans = unitReads, friendScans
 check('New Friend', nil, '|cffb8b8b8')
 assert(unitReads == reads and friendScans == scans, 'Suspended UI queried live units')
-print('Layer factions: live Alliance/Horde, stale metadata, unknown grey, relays, identity, faction changes, pooled buttons and bounded cache reads OK')
+print('Layer factions: live Alliance/Horde, stale metadata, unknown grey, relays, identity, faction changes, and bounded cache reads OK')
