@@ -2052,7 +2052,8 @@ function Overlord.UI:CreateZoneLine(parent, zone)
         elseif z.status == "in_progress" then
             Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r " .. L.ALREADY_IN_PROGRESS, z.name))
         elseif z.owner == pf then
-            Overlord:PrintNotification(string.format("|cFF4488FF[Overlord]|r " .. L.ZONE_UNDER_CONTROL, z.name, pf))
+            Overlord:PrintNotification(string.format("|cFF4488FF[Overlord]|r " .. L.ZONE_UNDER_CONTROL, z.name,
+                Overlord.Zones:GetFactionName()))
         end
     end)
 

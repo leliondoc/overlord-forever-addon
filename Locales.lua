@@ -284,7 +284,7 @@ L.ENEMY_CONTROL_MSG   = "%s is under enemy control. Capture prerequisites first.
 L.CAPTURE_BLOCKED_RULES = "%s cannot be captured yet (front truce or prerequisites)."
 L.ZONE_IS_LOCKED      = "%s is locked."
 L.ALREADY_IN_PROGRESS = "%s already in progress..."
-L.ZONE_UNDER_CONTROL  = "%s is under %s control."
+L.ZONE_UNDER_CONTROL  = "%s is controlled by %s."
 
 -- === Zones ===
 L.CAPTURE_CANCELLED  = "Capture of %s cancelled! Prerequisites lost."
@@ -818,7 +818,7 @@ L.ENEMY_CONTROL_MSG   = "%s est sous contrôle ennemi. Capturez les prérequis d
 L.CAPTURE_BLOCKED_RULES = "%s ne peut pas être capturée maintenant (trêve du front ou prérequis)."
 L.ZONE_IS_LOCKED      = "%s est verrouillée."
 L.ALREADY_IN_PROGRESS = "%s déjà en cours..."
-L.ZONE_UNDER_CONTROL  = "%s est sous contrôle %s."
+L.ZONE_UNDER_CONTROL  = "%s est sous le contrôle de %s."
 
 -- Zones
 L.CAPTURE_CANCELLED  = "Capture de %s annulée ! Prérequis perdus."
@@ -1347,7 +1347,7 @@ L.ENEMY_CONTROL_MSG   = "%s está bajo control enemigo. Captura primero los prer
 L.CAPTURE_BLOCKED_RULES = "%s aún no se puede capturar (tregua del frente o prerrequisitos)."
 L.ZONE_IS_LOCKED      = "%s está bloqueada."
 L.ALREADY_IN_PROGRESS = "%s ya en curso..."
-L.ZONE_UNDER_CONTROL  = "%s está bajo control %s."
+L.ZONE_UNDER_CONTROL  = "%s está bajo el control de %s."
 
 -- Zones
 L.CAPTURE_CANCELLED  = "¡Captura de %s cancelada! Prerrequisitos perdidos."
@@ -1874,7 +1874,7 @@ L.ENEMY_CONTROL_MSG   = "%s ist unter feindlicher Kontrolle. Erobert zuerst die 
 L.CAPTURE_BLOCKED_RULES = "%s kann noch nicht erobert werden (Front-Waffenstillstand oder Voraussetzungen)."
 L.ZONE_IS_LOCKED      = "%s ist gesperrt."
 L.ALREADY_IN_PROGRESS = "%s bereits in Bearbeitung..."
-L.ZONE_UNDER_CONTROL  = "%s steht unter %s-Kontrolle."
+L.ZONE_UNDER_CONTROL  = "%s wird durch %s kontrolliert."
 
 -- Zones
 L.CAPTURE_CANCELLED  = "Eroberung von %s abgebrochen! Voraussetzungen verloren."
@@ -2407,7 +2407,7 @@ L.ENEMY_CONTROL_MSG   = "%s находится под контролем вра�
 L.CAPTURE_BLOCKED_RULES = "%s пока не может быть захвачена (перемирие фронта или требования)."
 L.ZONE_IS_LOCKED      = "%s заблокирована."
 L.ALREADY_IN_PROGRESS = "%s уже выполняется..."
-L.ZONE_UNDER_CONTROL  = "%s находится под контролем %s."
+L.ZONE_UNDER_CONTROL  = "%s находится под контролем фракции %s."
 
 -- === Zones ===
 L.CAPTURE_CANCELLED  = "Захват %s отменен! Требования потеряны."
