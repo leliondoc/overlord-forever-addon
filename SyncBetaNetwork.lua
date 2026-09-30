@@ -192,7 +192,8 @@ local function hasLaneRoom(lane, p, reclaimPresence)
     end
     -- Legacy relays cannot propagate backpressure to the original sender. Let
     -- short bursts borrow idle slots rather than turn the reservation into a
-    -- smaller hard cap. Local v5/v6 producers stop at four queued packets.
+    -- smaller hard cap; live traffic takes a borrowed slot back (see Queue).
+    -- Local v5/v6 producers stop at four queued packets.
     if lane == catchupLane then return true end
     return laneSize(urgentLane) + laneSize(bulkLane) - presence
         < MAX_QUEUE - CATCHUP_QUEUE - STATE_QUEUE - PAGED_QUEUE
@@ -283,23 +284,33 @@ local function rejectNoTask(p, reason)
     countKind(p.kind, "dropped")
     return false
 end
+-- Catch-up admitted beyond its sixteen protected slots only borrowed idle space.
+-- Live traffic takes it back: at an evening peak, forwarded v4 rows held 94 of
+-- 128 slots and every live kill/score broadcast was refused. Protection belongs
+-- to the admitted item, not its array position: pump can move a map reply ahead
+-- of ranking pages for bounded service.
+local function dropBorrowedCatchup()
+    for i = catchupLane.head, #catchupLane.items do
+        local item = catchupLane.items[i]
+        if item and item.index == 1 and not item.protected
+            and not item.tasks[1].sending then
+            table.remove(catchupLane.items, i)
+            dedup.abandon(item.tasks)
+            countKind(item.p.kind, "dropped")
+            return true
+        end
+    end
+    return false
+end
 local function dropWaitingForUrgent()
+    -- Borrowed catch-up goes before live bulk traffic (kills, scores).
+    if dropBorrowedCatchup() then return true end
     for i = bulkLane.head, #bulkLane.items do
         local item = bulkLane.items[i]
         if item and item.index == 1 then
             table.remove(bulkLane.items, i)
             dedup.abandon(item.tasks)
             countKind(item.p and item.p.kind, "dropped")
-            return true
-        end
-    end
-    -- Protection belongs to the admitted item, not its array position: pump
-    -- can move a map reply ahead of ranking pages for bounded service.
-    for i = catchupLane.head, #catchupLane.items do
-        local item = catchupLane.items[i]
-        if item and item.index == 1 and not item.protected then
-            table.remove(catchupLane.items, i)
-            countKind(item.p.kind, "dropped")
             return true
         end
     end
@@ -1069,9 +1080,10 @@ function net:Queue(p, immediate)
             or (p.kind == "ZA" and mapCatchup
                 and queuedZaCount() < (localMap and MAP_CATCHUP_EXTRA
                 or MAP_RELAY_BATCH)
-                and dropWaitingForTerminal())
+                and (dropBorrowedCatchup() or dropWaitingForTerminal()))
             or (urgent and p.kind ~= "NH" and not catchup and (dropWaitingForUrgent()
-                or ((isTerminal(p) or isOwnSiegeStart(p)) and dropWaitingForTerminal())))) then
+                or ((isTerminal(p) or isOwnSiegeStart(p)) and dropWaitingForTerminal())))
+            or (lane == bulkLane and not catchup and dropBorrowedCatchup())) then
             return rejectAdmission(p)
         end
         self.stats.dropped = self.stats.dropped + 1
