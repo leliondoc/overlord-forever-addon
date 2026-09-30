@@ -17,6 +17,8 @@ local MAX_PACKET, MAX_PATH, TTL = 3600, 4, 120
 local ASSEMBLY_IDLE_TIMEOUT = 30
 local MAX_BRIDGE_FRIENDS = 5
 local MAX_QUEUE = 128
+local ROUTINE_FORWARD_SEC = 60
+local routineForwarded, routineForwardedOrder = {}, {}
 local CATCHUP_QUEUE = 16
 local PAGED_QUEUE = 4
 local MAP_CATCHUP_EXTRA = 2
@@ -341,6 +343,43 @@ local function dropWaitingPresence()
     end
     return false
 end
+-- A full queue first gives up an unsent item that has already outlived its TTL:
+-- pump only expires lane heads, so stale items behind them held slots for nothing.
+local function dropExpiredWaiting()
+    local now = (GetServerTime and GetServerTime()) or time()
+    for _, lane in ipairs({ bulkLane, urgentLane, catchupLane, stateLane }) do
+        for i = lane.head, #lane.items do
+            local item = lane.items[i]
+            if item and item.index == 1 and not item.tasks[1].sending and now - item.p.at > TTL then
+                table.remove(lane.items, i)
+                forgetPresence(item)
+                dedup.abandon(item.tasks)
+                countKind(item.p.kind, "dropped")
+                net.stats.expired = (net.stats.expired or 0) + 1
+                return true
+            end
+        end
+    end
+    return false
+end
+-- One unsent in-progress outpost update per (origin, site): a capture ticks
+-- every 5 s with a new hold time, so older queued ticks are only noise.
+local function outpostSite(p)
+    return p.kind == "OP" and type(p.payload) == "string" and p.payload:match("^v%d+:([^:]*):") or nil
+end
+local function waitingOutpostItem(p)
+    local site = outpostSite(p)
+    if not site or not isUrgent(p) then return nil end
+    local origin = p.path[1]:lower()
+    for i = urgentLane.head, #urgentLane.items do
+        local item = urgentLane.items[i]
+        if item and item.index == 1 and not item.tasks[1].sending and item.p.kind == "OP" and item.p.target == p.target
+            and item.p.path[1]:lower() == origin and outpostSite(item.p) == site then
+            return item
+        end
+    end
+    return nil
+end
 local function dropWaitingForTerminal()
     for i = urgentLane.head, #urgentLane.items do
         local item = urgentLane.items[i]
@@ -557,9 +596,11 @@ end
 -- runs between direct neighbours (same channel/group/whisper, or a Battle.net
 -- friend). The relay carries live traffic only. Forwarding every exchange across
 -- up to four hops multiplied one reply into thousands of copies at evening peaks.
--- Guild/class metadata answers (GY, GI, CA) follow the same rule as map and ranking.
+-- Guild/class hints answered by many peers (GY, CA) follow the same rule. A
+-- player's own identity answer (GI) stays relayable: one small authoritative
+-- reply per request, the only way a far owner can confirm its guild.
 local CATCHUP_KINDS = {}
-for kind in ("SR ZA HR HA HB HC LK LC LR LO LOC OE GY GI CA"):gmatch("%S+") do CATCHUP_KINDS[kind] = true end
+for kind in ("SR ZA HR HA HB HC LK LC LR LO LOC OE GY CA"):gmatch("%S+") do CATCHUP_KINDS[kind] = true end
 local function isPointToPointCatchup(kind, target)
     return CATCHUP_KINDS[kind] == true and target ~= nil and target ~= "*"
 end
@@ -1083,9 +1124,16 @@ function net:Queue(p, immediate)
         previous, replace = requestPrevious, p.at >= requestPrevious.p.at
         if not replace then return true end
     end
+    local outpostPrevious = not previous and waitingOutpostItem(p) or nil
+    if outpostPrevious then
+        previous, replace = outpostPrevious, p.at >= outpostPrevious.p.at
+        if not replace then return true end
+    end
     local lane = laneFor(p)
     local wire, item
-    if not replace and not hasLaneRoom(lane, p) then
+    local roomy = replace or hasLaneRoom(lane, p)
+    if not roomy and dropExpiredWaiting() then roomy = hasLaneRoom(lane, p) end
+    if not roomy then
         -- Priority lanes may always take back a slot an unsent presence borrowed.
         -- Ordinary packets (guild/class requests, alerts, broadcast SR) only when
         -- presence exceeds PRESENCE_RECLAIM_FLOOR, so routes keep a lane.
@@ -1118,7 +1166,9 @@ function net:Queue(p, immediate)
                 and queuedZaCount() < (localMap and MAP_CATCHUP_EXTRA
                 or MAP_RELAY_BATCH)
                 and (dropBorrowedCatchup(true) or dropWaitingForTerminal()))
-            or (urgent and p.kind ~= "NH" and not catchup and (dropWaitingForUrgent()
+            -- Relayed shard presence (SH) is routine: it never displaces anything.
+            or (urgent and p.kind ~= "NH" and not (p.kind == "SH" and #p.path > 1)
+                and not catchup and (dropWaitingForUrgent()
                 or ((isTerminal(p) or isOwnSiegeStart(p)) and dropWaitingForTerminal())))
             or (lane == bulkLane and not catchup and dropBorrowedCatchup())) then
             return rejectAdmission(p)
@@ -1145,6 +1195,10 @@ function net:Queue(p, immediate)
         if requestPrevious then
             if mapControl then previous.protected = true end
             self.stats.mapRequestsCoalesced = (self.stats.mapRequestsCoalesced or 0) + 1
+            return true
+        end
+        if outpostPrevious then
+            self.stats.outpostCoalesced = (self.stats.outpostCoalesced or 0) + 1
             return true
         end
         if presenceKey then
@@ -1496,6 +1550,11 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         local at = tonumber(p.at) or 0
         -- A timestamp going backwards (clock fix, stale copy) never blocks a newer one.
         forwardPresence = not last or at - last >= window or at < last - window
+        -- Presence only needs to reach direct neighbours since catch-up became
+        -- point to point (1.2.4): forward a first-hand copy, or one that crossed
+        -- a Battle.net bridge from the other faction; never flood it further.
+        -- Multi-hop presence was the largest remaining share of relay drops.
+        if #p.path > 2 or (#p.path == 2 and transport ~= "BNET") then forwardPresence = false end
     end
     local forwarded = false
     -- Catch-up addressed to someone else is not relayed (point-to-point only).
@@ -1505,6 +1564,8 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         and not ((p.kind == "SR" or p.kind == "GR" or p.kind == "CR") and p.target == "*")
     if not relayable and not addressed then
         self.stats.catchupNotRelayed = (self.stats.catchupNotRelayed or 0) + 1
+        -- Never relayed: seal it so duplicate copies are not decoded again.
+        remember(seen, seenOrder, key, GetTime(), 2048)
     end
     if relayable and p.kind ~= "K" and forwardPresence and #p.path < MAX_PATH
         and (p.target == "*" or not addressed) then
@@ -1516,7 +1577,20 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         p.skipChannel = transport == "CHANNEL"
             or (heardAt ~= nil and GetTime() - heardAt <= 300)
 
-        forwarded = self:Queue(p) == true
+        -- The same routine outpost state (held/neutral, identical payload from any
+        -- origin) already relayed within a minute is handled, not queued again.
+        local routineKey = p.kind == "OP" and p.target == "*" and not isUrgent(p)
+            and ("OP|" .. p.payload) or nil
+        local routineAt = routineKey and routineForwarded[routineKey]
+        if routineAt and GetTime() - routineAt < ROUTINE_FORWARD_SEC then
+            forwarded = true
+            self.stats.routineForwardSkipped = (self.stats.routineForwardSkipped or 0) + 1
+        else
+            forwarded = self:Queue(p) == true
+            if forwarded and routineKey then
+                remember(routineForwarded, routineForwardedOrder, routineKey, GetTime(), 256)
+            end
+        end
         if p.target == "*" then
             if forwarded then
                 forwardRetry[key] = nil

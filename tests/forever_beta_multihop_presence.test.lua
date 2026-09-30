@@ -1,7 +1,8 @@
--- Multi-hop route survival under a saturated relay (audit 2026-09-28):
--- Origin -> R1 -> R2 -> R3 -> R4. R2/R3 are flooded with ordinary GW traffic.
--- An unbounded bulk anti-starvation rule inverted priorities there, relayed NH
--- stopped being admitted and R4 lost its route (and ~lp6 capability) for good.
+-- Presence reach under a saturated relay. Origin -> R1 -> R2 -> R3 -> R4 over
+-- Battle.net; R2/R3 are flooded with ordinary GW traffic (audit 2026-09-28: an
+-- anti-starvation bug once stopped relayed NH there). Since 1.2.4 presence is
+-- only forwarded first-hand or once more after a Battle.net hop: R3 must keep
+-- its route through the busy R2, and R4 must never hear the origin at all.
 local REPO = ""
 local now, pending, seq = 100, {}, 0
 local function after(delay, fn) seq = seq + 1; pending[#pending+1] = {at = now+delay, run=fn, seq=seq} end
@@ -90,9 +91,7 @@ after(3, heartbeat)
 local established, samples, lost = false, 0, 0
 local function sample()
     if now > 100 + 900 then return end
-    local row = r4.BetaNetwork.peers["origin tester"]
-    local cap = nil
-    if r4.BetaNetwork.GetPeerPagedProtocol then cap = r4.BetaNetwork:GetPeerPagedProtocol("Origin Tester") end
+    local row = r3.BetaNetwork.peers["origin tester"]
     local haveRoute = row ~= nil and GetTime() - row.at <= 300
     if row then established = true end
     if established then
@@ -112,11 +111,11 @@ while #pending > 0 do
     now = ev.at
     ev.run()
 end
-assert(established and samples > 40, "Route to the origin was never established at R4")
-assert(lost == 0, ("R4 lost its route to the origin in %d of %d samples"):format(lost, samples))
-assert(r4.BetaNetwork:GetPeerPagedProtocol("Origin Tester") == 6, "R4 lost the origin v6 capability")
-for _, relay in ipairs({ r2, r3 }) do
-    local nh = relay.BetaNetwork.kindStats.NH or {}
-    assert((nh.queued or 0) >= 7, relay.name .. " stopped admitting relayed presence: " .. tostring(nh.queued))
-end
-print(("Beta multi-hop presence: route kept at 4 hops through saturated relays (%d samples)"):format(samples))
+assert(established and samples > 40, "Route to the origin was never established at R3")
+assert(lost == 0, ("R3 lost its route to the origin in %d of %d samples"):format(lost, samples))
+assert(r3.BetaNetwork:GetPeerPagedProtocol("Origin Tester") == 6, "R3 lost the origin v6 capability")
+local nh = r2.BetaNetwork.kindStats.NH or {}
+assert((nh.queued or 0) >= 7, "The busy R2 stopped admitting relayed presence: " .. tostring(nh.queued))
+assert(r4.BetaNetwork.peers["origin tester"] == nil, "Presence still flooded beyond one Battle.net hop")
+assert(((r3.BetaNetwork.kindStats.NH or {}).queued or 0) == 0, "R3 forwarded a presence already relayed twice")
+print(("Beta presence reach: route kept through a saturated relay, bounded to one extra hop (%d samples)"):format(samples))
