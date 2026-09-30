@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.2.2"
+Overlord.Version = "1.2.3"
 -- Forever has no cross-faction community: Overlord never uses C_Club clubs there.
 -- Transport is the faction channel, the group, and the Battle.net relay bridges.
 Overlord.CommunityModeEnabled = false
@@ -1322,36 +1322,20 @@ local function ShardTargetFaction(playerName)
     return nil
 end
 
-local function GetEnemyFactionForShardPrompt()
-    if Overlord.Zones and Overlord.Zones.GetEnemyFaction then
-        local fac = Overlord.Zones:GetEnemyFaction()
-        if fac then return fac end
-    end
-    if Overlord.PlayerFaction == "Alliance" then return "Horde" end
-    if Overlord.PlayerFaction == "Horde" then return "Alliance" end
-    return nil
-end
-
-local function ZoneEntryIsEnemyPush(zone)
-    local enemyFac = GetEnemyFactionForShardPrompt()
-    return zone and zone.status == "in_progress" and enemyFac and zone.owner == enemyFac
-end
-
+-- Popup auto entree cercle : allies seulement. Blizzard n'autorise plus l'invitation
+-- d'un ennemi depuis une autre couche, le proposer ne menait nulle part.
 local function ZoneEntryIsAllyPush(zone)
     local playerFac = Overlord.PlayerFaction
     return zone and zone.status == "in_progress" and playerFac and zone.owner == playerFac
 end
 
--- Capteur relais ZS (ennemi) ou capteur officiel allie (9e champ ZS).
+-- Capteur officiel allie (9e champ ZS).
 local function GetZoneEntryCapturerName(zone)
     if not zone then return "" end
     if not Overlord.CaptureLease or not Overlord.CaptureLease.IsFreshDirect
         or not Overlord.CaptureLease:IsFreshDirect(zone) then return "" end
     if ZoneEntryIsAllyPush(zone) then
         return NormalizeShardPlayerName(zone.zsOfficialCapturerName)
-    end
-    if ZoneEntryIsEnemyPush(zone) then
-        return NormalizeShardPlayerName(zone.zsRelayCapturerName)
     end
     return ""
 end
@@ -1388,7 +1372,7 @@ local function BuildDifferentShardRowsForFaction(shard, faction)
     }
 end
 
--- Cibles invite a l'entree cercle : capteur sync sur autre shard (ennemi relais ZS ou allie officiel).
+-- Cibles invite a l'entree cercle : capteur allie officiel sync sur autre shard.
 -- preferCache : reutilise le resolve de ScheduleAutoPromptOnZoneEntry (evite double scan knownShards).
 function Overlord.Shard:BuildZoneEntryInviteRows(zone, preferCache)
     local myShard = CoerceShardId(self.currentShardID)
@@ -1426,7 +1410,7 @@ function Overlord.Shard:ZoneQualifiesForShardPrompt(zone, rows)
     if not Overlord.InActiveFront or Overlord.InstanceSuspended then return false end
     if ShardZoneEntryAutoPromptSuppressed() then return false end
     if not ShardIdIsKnown(self.currentShardID) then return false end
-    if not ZoneEntryIsEnemyPush(zone) and not ZoneEntryIsAllyPush(zone) then return false end
+    if not ZoneEntryIsAllyPush(zone) then return false end
     if rows then return #rows > 0 end
     return #self:BuildZoneEntryInviteRows(zone) > 0
 end
@@ -1448,7 +1432,7 @@ function Overlord.Shard:FinishAutoPromptOnZoneEntry(zoneId)
     if not self:ZoneQualifiesForShardPrompt(zone, rows) then return end
 
     if rows[1] and rows[1].player then
-        if ZoneEntryIsAllyPush(zone) and IsSelfShardInviteTarget(rows[1].player) then return end
+        if IsSelfShardInviteTarget(rows[1].player) then return end
         local expectedFac = zone.owner
         if expectedFac then
             local pf = ShardTargetFaction(rows[1].player)
@@ -1462,7 +1446,6 @@ function Overlord.Shard:FinishAutoPromptOnZoneEntry(zoneId)
             zoneEntry = true,
             zoneName = zone.name or zoneId,
             rows = rows,
-            promptKind = ZoneEntryIsAllyPush(zone) and "ally" or "enemy",
         })
     end
 end
@@ -1473,10 +1456,10 @@ function Overlord.Shard:ScheduleAutoPromptOnZoneEntry(zone)
     if not Overlord.InActiveFront or Overlord.InstanceSuspended then return end
     if ShardZoneEntryAutoPromptSuppressed() then return end
     if not ShardIdIsKnown(self.currentShardID) then return end
-    if not ZoneEntryIsEnemyPush(zone) and not ZoneEntryIsAllyPush(zone) then return end
+    if not ZoneEntryIsAllyPush(zone) then return end
     local capturer = GetZoneEntryCapturerName(zone)
     if capturer == "" then return end
-    if ZoneEntryIsAllyPush(zone) and IsSelfShardInviteTarget(capturer) then return end
+    if IsSelfShardInviteTarget(capturer) then return end
     local now = GetTime()
     if now - (lastShardZonePromptAt[zone.id] or 0) < SHARD_ZONE_PROMPT_COOLDOWN then return end
 
@@ -1497,11 +1480,6 @@ end
 
 -- Entre deux tentatives v8, le GA conserve le shard Anchor requis. Le rendre visible ici
 -- evite qu'un joueur sur une autre couche voie simplement son tag refuse sans hop possible.
-local function OpEntryIsEnemyPush(st)
-    local enemyFac = GetEnemyFactionForShardPrompt()
-    return st and st.status == "in_progress" and enemyFac and st.ownerFaction == enemyFac
-end
-
 local function OpEntryIsAllyPush(st)
     local playerFac = Overlord.PlayerFaction
     return st and st.status == "in_progress" and playerFac and st.ownerFaction == playerFac
@@ -1512,9 +1490,6 @@ local function GetOpEntryCapturerName(st)
     if OpEntryIsAllyPush(st) then
         return NormalizeShardPlayerName(st.opOfficialCapturerName)
     end
-    if OpEntryIsEnemyPush(st) then
-        return NormalizeShardPlayerName(Overlord.Outpost:GetEffectiveCapturerName(st))
-    end
     return ""
 end
 
@@ -1523,8 +1498,7 @@ function Overlord.Shard:BuildOpEntryInviteRows(st)
     if myShard == nil or not st then return {} end
     local capturer = GetOpEntryCapturerName(st)
     if capturer == "" then
-        local targetFac = OpEntryIsAllyPush(st) and Overlord.PlayerFaction or GetEnemyFactionForShardPrompt()
-        return BuildDifferentShardRowsForFaction(self, targetFac)
+        return BuildDifferentShardRowsForFaction(self, Overlord.PlayerFaction)
     end
     local resolved, sid = self:ResolveKnownShardPlayer(capturer, true)
     if resolved and sid then
@@ -1541,7 +1515,7 @@ function Overlord.Shard:TryAutoPromptOnOutpostEntry(siteKey, site, st)
     if not (Overlord.IsShardHelperActive and Overlord:IsShardHelperActive()) then return end
     if ShardZoneEntryAutoPromptSuppressed() then return end
     if not ShardIdIsKnown(self.currentShardID) then return end
-    if not OpEntryIsEnemyPush(st) and not OpEntryIsAllyPush(st) then return end
+    if not OpEntryIsAllyPush(st) then return end
     local now = GetTime()
     if now - (lastShardOutpostPromptAt[siteKey] or 0) < SHARD_ZONE_PROMPT_COOLDOWN then return end
 
@@ -1550,7 +1524,7 @@ function Overlord.Shard:TryAutoPromptOnOutpostEntry(siteKey, site, st)
         rows = type(rows) == "table" and rows or {}
         if #rows == 0 then return end
     if rows[1] and rows[1].player then
-        if OpEntryIsAllyPush(st) and IsSelfShardInviteTarget(rows[1].player) then return end
+        if IsSelfShardInviteTarget(rows[1].player) then return end
         local expectedFac = st.ownerFaction
         if expectedFac then
             local pf = ShardTargetFaction(rows[1].player)
@@ -1567,7 +1541,6 @@ function Overlord.Shard:TryAutoPromptOnOutpostEntry(siteKey, site, st)
             zoneName = label,
             rows = rows,
             rowsReady = true,
-            promptKind = OpEntryIsAllyPush(st) and "ally" or "enemy",
         })
     end
     end

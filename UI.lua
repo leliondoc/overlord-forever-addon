@@ -1157,8 +1157,7 @@ function Overlord.UI:OpenShardMismatchPopup(anchorFrame, opts)
     local viewKey
     if opts.zoneEntry and opts.rows then
         local zoneTitle = opts.title
-            or (opts.promptKind == "ally" and L.SHARD_POPUP_ZONE_TITLE_ALLY)
-            or L.SHARD_POPUP_ZONE_TITLE
+            or L.SHARD_POPUP_ZONE_TITLE_ALLY
             or L.SHARD_POPUP_TITLE
         self._shardMismatchTitleFs:SetText(zoneTitle)
         if opts.subText then

@@ -16,8 +16,6 @@ local OUTPOST_CHAT_GAP = 45
 local lastOutpostLeftChatAt = {}
 local lastOutpostBackChatAt = {}
 local lastOutpostContestedChatAt = {}
-local lastOutpostBlockedAssaultAt = {}
-local OUTPOST_BLOCKED_ASSAULT_GAP = 45
 local outpostDefenseAlerted = {}
 local lastOutpostDefenseEnemyAt = {}
 local OUTPOST_DEFENSE_REARM_SECONDS = 120
@@ -737,19 +735,8 @@ function Overlord.OutpostControl:CheckPosition(deltaTime)
 
     CheckLocalOutpostDefense(siteKey, st, site)
 
-    if OP:CanPlayerStartCapture(st) then
-        if not st.isHolding then
-            self:StartHold(siteKey, st, site)
-        end
-    elseif st.status == "in_progress" and not OP:IsPlayerOutpostAssailant(st) then
-        local now = GetTime()
-        if (now - (lastOutpostBlockedAssaultAt[siteKey] or 0)) >= OUTPOST_BLOCKED_ASSAULT_GAP
-            and L and L.OUTPOST_BLOCKED_ASSAULT then
-            lastOutpostBlockedAssaultAt[siteKey] = now
-            local assaultGuild = OP:SanitizeGuildName(st.ownerGuild or "")
-            Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r " .. L.OUTPOST_BLOCKED_ASSAULT,
-                OP:GetDisplayName(site), assaultGuild))
-        end
+    if OP:CanPlayerStartCapture(st) and not st.isHolding then
+        self:StartHold(siteKey, st, site)
     end
 end
 
