@@ -1,23 +1,11 @@
-1.3.0
+1.3.1
 
-**Overlord Forever 1.3.0**
+**Overlord Forever 1.3.1**
 
-**Lighter, more reliable network**
-- Catch-up is now point to point: map, ranking and outpost history are only exchanged with players you reach directly (your faction channel, your group, your Battle.net friends). Replies are no longer copied across several relays, which was the main cause of lost messages at peak hours.
-- Other players' presence is no longer relayed. It was nearly half of the relay budget.
-- Broadcast map, guild and class requests are no longer relayed.
-- Identical outpost states are relayed at most once per minute, and live capture updates replace each other instead of piling up.
-- The ranking only uses the v6 format. A busy player now answers "busy" instead of staying silent, and every neighbour is asked in turn.
-
-**Guild roster**
-- Your own guild members' guild, class, level and race are read from the game, with no network request.
-
-**Interface**
-- New option: world map icon opacity (default 50%, 0 hides them).
-- Options and tutorial cleaned up.
-- The call to arms timer is shown in the button label and no longer flickers.
-- The domination bar shows whole percents (58% / 42%).
-- The layer indicator stays, but the "Ally on another layer" invite pop-up, invite links and whispers are removed.
-
-**Removed**
-- Gold contracts and War Mode (they do not exist on Forever). Their buttons stay greyed out.
+- A total victory is now announced with a raid warning in the faction color instead of a full-screen window, so it no longer gets in the way of players still fighting on the front. The victory music still plays.
+- English: "TOTAL VICTORY FOR THE HORDE / FOR THE ALLIANCE" and "Lesi's Bear Cave".
+- Translations reviewed in every language:
+  - Player names in outpost names (Savix, Aeythyr, Lesi, Katrell, Sage, Renosh, Shobek'Aran) and "Overlord" are never translated or transliterated any more.
+  - Guides now use each language's outpost names; fortress help texts are translated.
+  - Fixed machine-translation errors in Chinese and Portuguese, grammar around faction names in German, Russian and Portuguese, and several German, Spanish and French wordings.
+- The "zone under control" message shows the faction name in your language.
