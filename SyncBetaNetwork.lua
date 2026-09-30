@@ -289,22 +289,34 @@ end
 -- 128 slots and every live kill/score broadcast was refused. Protection belongs
 -- to the admitted item, not its array position: pump can move a map reply ahead
 -- of ranking pages for bounded service.
-local function dropBorrowedCatchup()
+-- Ordinary live traffic takes only forwarded rows: a local producer already
+-- advanced past a row once Send accepted it, whereas legacy upstream senders
+-- cannot back-pressure. Urgent packets (captures, alerts) may also take a local
+-- row, as before; the v4 digest recovers it on the next exchange. Live traffic
+-- only reclaims while the lane really exceeds its reservation; a map page
+-- replacing catch-up with catch-up (anyLevel) may go below it.
+local function borrowedCatchupIndex(anyLevel, includeLocal)
+    if not anyLevel and laneSize(catchupLane) <= CATCHUP_QUEUE then return nil end
     for i = catchupLane.head, #catchupLane.items do
         local item = catchupLane.items[i]
         if item and item.index == 1 and not item.protected
-            and not item.tasks[1].sending then
-            table.remove(catchupLane.items, i)
-            dedup.abandon(item.tasks)
-            countKind(item.p.kind, "dropped")
-            return true
+            and not item.tasks[1].sending and (includeLocal or #item.p.path > 1) then
+            return i
         end
     end
-    return false
+    return nil
+end
+local function dropBorrowedCatchup(anyLevel, includeLocal)
+    local i = borrowedCatchupIndex(anyLevel, includeLocal)
+    if not i then return false end
+    local item = table.remove(catchupLane.items, i)
+    dedup.abandon(item.tasks)
+    countKind(item.p.kind, "dropped")
+    return true
 end
 local function dropWaitingForUrgent()
     -- Borrowed catch-up goes before live bulk traffic (kills, scores).
-    if dropBorrowedCatchup() then return true end
+    if dropBorrowedCatchup(false, true) then return true end
     for i = bulkLane.head, #bulkLane.items do
         local item = bulkLane.items[i]
         if item and item.index == 1 then
@@ -1059,9 +1071,13 @@ function net:Queue(p, immediate)
         local reclaimPresence = p.kind ~= "NH" and hasLaneRoom(lane, p, true)
             and (catchup or urgent or lane == stateLane
                 or reclaimablePresenceCount() > PRESENCE_RECLAIM_FLOOR)
+        -- Live packets that may displace something are encoded first too: a
+        -- redundant or oversized copy must not evict a queued item for nothing.
+        local liveReclaim = not catchup and p.kind ~= "NH"
+            and (urgent or (lane == bulkLane and borrowedCatchupIndex() ~= nil))
         -- A malformed or unroutable map page must not evict a live progress
         -- packet just because it claimed a known target.
-        if mapCatchup or lane == stateLane or reclaimPresence then
+        if mapCatchup or lane == stateLane or reclaimPresence or liveReclaim then
             wire = encode(p)
             if #wire > MAX_PACKET then return false end
             local tasks, reason = tasksFor(p, wire)
@@ -1080,7 +1096,7 @@ function net:Queue(p, immediate)
             or (p.kind == "ZA" and mapCatchup
                 and queuedZaCount() < (localMap and MAP_CATCHUP_EXTRA
                 or MAP_RELAY_BATCH)
-                and (dropBorrowedCatchup() or dropWaitingForTerminal()))
+                and (dropBorrowedCatchup(true) or dropWaitingForTerminal()))
             or (urgent and p.kind ~= "NH" and not catchup and (dropWaitingForUrgent()
                 or ((isTerminal(p) or isOwnSiegeStart(p)) and dropWaitingForTerminal())))
             or (lane == bulkLane and not catchup and dropBorrowedCatchup())) then

@@ -58,12 +58,23 @@ for i = 1, 4 do
         "v6 pages lost their reservation")
 end
 
--- 4. The protected rows are never displaced: with no borrowed row left, a new
---    local v4 row is refused (its producer resends it) and nothing is evicted.
+-- 4. The protected rows are never displaced: once catch-up is back at its
+--    reservation, live traffic is refused instead of eroding it, and a new local
+--    v4 row is refused too (its producer resends it).
+-- 100 rows - 60 taken by live - 16 by the map batch - 16 protected = 8 borrowed.
+local catchupBefore = net:GetQueueSummary().catchup
 local before = net.stats.displaced
-for i = 1, 8 do forwarded("K", 3000 + i, "*", "more-live-" .. i) end
+local borrowedLeft = 8
+local accepted = 0
+for i = 1, borrowedLeft + 8 do
+    if forwarded("K", 3000 + i, "*", "more-live-" .. i) then accepted = accepted + 1 end
+end
+assert(net.stats.displaced - before == borrowedLeft,
+    "Live traffic did not stop at the protected catch-up rows")
+assert(net:GetQueueSummary().catchup == catchupBefore - borrowedLeft, "Protected catch-up was eroded")
+assert(accepted == borrowedLeft, "Live traffic was admitted without a free slot")
 assert(not net:Send("LK", "local-overflow", "Reader Tester"), "Local v4 row exceeded the bound")
-assert(net.stats.displaced - before <= 8, "More than the remaining borrowed rows were evicted")
+assert(net:GetQueueSummary().total <= 128, "Queue exceeded its global bound")
 
 -- 5. Everything admitted is delivered, protected rows first included.
 local steps = 0
@@ -86,5 +97,44 @@ end
 for i = 1, 16 do assert(rows[i], "Protected v4 row " .. i .. " was evicted") end
 assert(live >= 60 and pages == 4 and maps == 16, "Admitted live/map/v6 data was not delivered")
 assert((net.stats.expired or 0) == 0, "Admitted data expired")
+
+-- 6. Rows this client produced itself are never taken back (its producer has
+--    already moved on), and an oversized live copy evicts nothing.
+pending, sent = {}, {}
+assert(loadfile("SyncBetaNetwork.lua"))()
+net = Overlord.BetaNetwork
+net.peers["reader tester"] = {
+    at = now, via = "Reader Tester", name = "Reader Tester", transport = "BNET", bnet = 1,
+}
+for i = 1, 80 do
+    assert(net:Send("LK", "own-" .. i, "Reader Tester"), "Idle borrowing refused a local row")
+end
+for i = 1, 20 do assert(forwarded("LK", 5000 + i, "Reader Tester", "fwd-" .. i)) end
+assert(net:GetQueueSummary().catchup == 100, "Test setup: the queue was not full")
+assert(not forwarded("K", 4000, "*", string.rep("x", 4000)), "Oversized live copy was admitted")
+assert((net.stats.displaced or 0) == 0, "Oversized live copy evicted a borrowed row")
+for i = 1, 20 do
+    assert(forwarded("K", 4000 + i, "*", "live-own-" .. i), "Live traffic refused with forwarded rows borrowed")
+end
+assert(net.stats.displaced == 20, "Live traffic did not take exactly the forwarded rows")
+assert(not forwarded("K", 4100, "*", "live-after-own"), "Live traffic evicted a local producer's row")
+assert(net.stats.displaced == 20, "A local producer's row was evicted")
+
+-- 7. Live reclaim stops at the reservation itself: 20 forwarded rows (16 of them
+--    protected), a full live lane, then a live flood takes exactly 4 slots.
+pending = {}
+assert(loadfile("SyncBetaNetwork.lua"))()
+net = Overlord.BetaNetwork
+net.peers["reader tester"] = {
+    at = now, via = "Reader Tester", name = "Reader Tester", transport = "BNET", bnet = 1,
+}
+for i = 1, 20 do assert(forwarded("LK", 6000 + i, "Reader Tester", "res-" .. i)) end
+local admitted = 0
+for i = 1, 100 do
+    if forwarded("K", 7000 + i, "*", "flood-" .. i) then admitted = admitted + 1 end
+end
+assert(net:GetQueueSummary().catchup == 16, "Live flood went below the catch-up reservation")
+assert((net.stats.displaced or 0) == 4, "Live flood took more than the borrowed rows")
+assert(net:GetQueueSummary().total <= 128, "Queue exceeded its global bound")
 print(string.format("Relay live over legacy: idle borrowing kept, %d live packets delivered, "
-    .. "16 protected v4 rows kept, map and v6 intact", live))
+    .. "16 protected v4 rows kept, map and v6 intact, own rows and reservation never eroded", live))
