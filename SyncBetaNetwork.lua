@@ -1797,7 +1797,14 @@ bridgeFlush = function(state)
                     row.pending, row.sentAt = nil, now
                     sent[#sent + 1] = now
                 else
-                    -- nobody to tell right now (no fresh peer or friend): try again shortly
+                    -- nobody to tell right now, or the channel is busy: try again
+                    -- shortly, with a fresh random hold for channel copies so the
+                    -- bridges that were all busy do not retry in the same second.
+                    if not state.outbound then
+                        local hold = net.BridgeChannelHold or {}
+                        local hi = math.floor(tonumber(hold[2]) or 0)
+                        if hi > 0 then row.holdUntil = now + math.random(2, math.max(2, math.min(6, hi))) end
+                    end
                     wait = math.min(wait, 5)
                     keep[#keep + 1] = key
                 end
@@ -1807,12 +1814,20 @@ bridgeFlush = function(state)
         end
     end
     state.queue = keep
-    if #keep > 0 and not state.armed then
-        state.armed = true
-        C_Timer.After(math.max(1, math.min(30, wait)), function()
-            state.armed = false
-            bridgeFlush(state)
-        end)
+    -- One live timer per bridge, moved earlier when a nearer row arrives: a stale
+    -- 30 s timer let rows wait for the next kill, heard in the same second by
+    -- every bridge. Superseded timers see a newer token and do nothing.
+    if #keep > 0 then
+        local due = now + math.max(1, math.min(30, wait))
+        if not state.armed or due < (state.due or math.huge) - 0.5 then
+            local token = (state.token or 0) + 1
+            state.armed, state.due, state.token = true, due, token
+            C_Timer.After(due - now, function()
+                if state.token ~= token then return end
+                state.armed, state.due = false, nil
+                bridgeFlush(state)
+            end)
+        end
     end
 end
 local function queueBridgeRow(state, name, faction, total, before, class, locale, epoch, bucketToken, levelToken)

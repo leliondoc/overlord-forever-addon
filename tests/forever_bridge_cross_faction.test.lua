@@ -186,4 +186,19 @@ assert(#channelRows == sentAlone, "the next copy left right at the end of the 60
 s:OnReceiveLeaderboardKills(lkRow("Horde Alone", 84, "Horde"), "Other Bridge", "CHANNEL")
 advance(30)
 assert(#channelRows == sentAlone, "a copy another bridge sent after the gap was repeated")
+-- Two active subjects: a row with a near hold is not kept waiting behind the
+-- long timer of another subject (the timer moves earlier).
+advance(120)
+know("Horde First", 20, "Horde")
+know("Horde Second", 30, "Horde")
+s:OnReceiveLeaderboardKills(lkRow("Horde First", 22, "Horde"), "BNet-9", "BNET")
+advance(11)
+local firstSent = #channelRows
+assert(channelRows[firstSent]:match("^LK:Horde First:22:"), "first subject not sent after its hold")
+s:OnReceiveLeaderboardKills(lkRow("Horde First", 24, "Horde"), "BNet-9", "BNET") -- long wait (gap + hold)
+advance(1)
+s:OnReceiveLeaderboardKills(lkRow("Horde Second", 32, "Horde"), "BNet-9", "BNET") -- 10 s hold
+advance(11)
+assert(#channelRows == firstSent + 1 and channelRows[#channelRows]:match("^LK:Horde Second:32:"),
+    "a near row waited behind another subject's long timer")
 print("Forever cross-faction bridge: own-faction totals to enemy friends, enemy totals to the channel, bounds, no loop, no duplicate OK")
