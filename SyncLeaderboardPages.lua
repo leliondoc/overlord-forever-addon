@@ -273,6 +273,16 @@ request = function(state, retry)
     local seq, tries = state.seq, state.tries
     local function sendRequest()
         if pull ~= state or state.seq ~= seq or state.tries ~= tries then return end
+        -- The peer stopped being a direct neighbour (its route is now relayed):
+        -- the relay refuses catch-up toward it for good, so end this pull now
+        -- instead of retrying until the 15 min watchdog; the next round picks
+        -- another neighbour. No packet is sent.
+        local net = Overlord.BetaNetwork
+        if net and net.IsPeer and net.IsDirectPeer and net:IsPeer(state.peer)
+            and not net:IsDirectPeer(state.peer) then
+            finish(state, false)
+            return
+        end
         if paused() or not sendControl("HR", payload, state.peer) then
             C_Timer.After(2, sendRequest)
             return

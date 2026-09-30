@@ -27,6 +27,7 @@ e.GetTime = function() return now end
 e.GetServerTime = function() return 1790017000 + math.floor(now) end
 e.time = e.GetServerTime
 e.IsInInstance = function() return false end
+e.IsInGroup = function() return false end
 e.InCombatLockdown = function() return false end
 e.C_Timer = { After = later, NewTicker = function() return { Cancel = function() end } end }
 e.strsplit = function(sep, value, limit)
@@ -92,12 +93,11 @@ net.Queue = normalQueue
 local packetSerial = 0
 local function receive(origin, kind, payload, originAt)
     packetSerial = packetSerial + 1
-    -- A four-node path exercises the real old/new NH decoder while avoiding
-    -- unrelated forwarding work in this focused test.
-    local path = origin .. ",First Tester,Second Tester,Gateway Tester"
+    -- First-hand presence on the channel: since 1.2.4 the ranking is only asked
+    -- from direct neighbours (and presence is never relayed).
     local wire = table.concat({ "EU", "audit-" .. packetSerial,
-        tostring(originAt or e.time()), "*", path, kind, payload }, "|")
-    assert(net:Receive(wire, "Gateway Tester", "CHANNEL"))
+        tostring(originAt or e.time()), "*", origin, kind, payload }, "|")
+    assert(net:Receive(wire, origin, "CHANNEL"))
 end
 receive("Old Tester", "NH", "1.1.3")
 receive("New Tester", "NH", "1.1.3~lp6")
@@ -171,4 +171,17 @@ assert(probeResult == true and probeSupported == true,
     "The v6 probe of a capable peer did not complete the sweep")
 assert(s:GetPagedLeaderboardDiagnostics():find("capability unknown, v6 probe", 1, true),
     "Diagnostics omit the v6 probe of an unknown-capability peer")
-print("NH lp6 negotiation, old peers not asked, typed v6, unknown-capability v6 probe and capability TTL OK")
+-- A peer whose route became relayed (no longer a direct neighbour) ends the
+-- pull at once, without sending, instead of retrying until the 15 min watchdog.
+advance(301)
+local wire = table.concat({ "EU", "audit-far", tostring(e.time()), "*",
+    "Far Tester,Gateway Tester", "GY", "far" }, "|")
+assert(net:Receive(wire, "Gateway Tester", "CHANNEL"))
+assert(net:IsPeer("Far Tester") and not net:IsDirectPeer("Far Tester"))
+sent = {}
+local farResult
+s:StartCompletePagedLeaderboardCatchup("Far Tester", function(ok) farResult = ok end)
+advance(5)
+assert(#sent == 0, "A ranking request went toward a peer behind relays")
+assert(farResult == false, "A pull toward a peer behind relays did not end promptly")
+print("NH lp6 negotiation, old peers not asked, typed v6, unknown-capability v6 probe, capability TTL and relayed-peer early end OK")
