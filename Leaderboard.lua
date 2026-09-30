@@ -393,8 +393,9 @@ local function refreshLocalGuildRosterCache(onBuildFinished)
         local processed = 0
         local startedAt = debugprofilestop and debugprofilestop() or 0
         while state.index <= state.num and processed < LOCAL_GUILD_ROSTER_ROWS_PER_SLICE do
-            local ok, rosterName, _, _, rosterLevel, _, _, _, _, _, _, rosterClass =
-                pcall(GetGuildRosterInfo, state.index)
+            -- 17e valeur : GUID du membre (la race passe par GetPlayerInfoByGUID).
+            local ok, rosterName, _, _, rosterLevel, _, _, _, _, _, _, rosterClass,
+                _, _, _, _, _, rosterGuid = pcall(GetGuildRosterInfo, state.index)
             state.index = state.index + 1
             processed = processed + 1
             if ok and type(rosterName) == "string" and rosterName ~= "" then
@@ -408,6 +409,7 @@ local function refreshLocalGuildRosterCache(onBuildFinished)
                     state.keys[dk] = {
                         class = type(rosterClass) == "string" and rosterClass:match("^%u+$") or nil,
                         level = rosterLevel > 0 and rosterLevel <= 90 and rosterLevel or nil,
+                        guid = type(rosterGuid) == "string" and rosterGuid:match("^Player%-") and rosterGuid or nil,
                     }
                     state.keyCount = state.keyCount + 1
                     if state.previousKeys and not state.previousKeys[dk] then
@@ -4106,6 +4108,21 @@ function Overlord.Leaderboard:MaybeEnrichGuildForKillRow(playerName, deferDirty)
     if entry.level and (tonumber(row.level) or 0) <= 0 then
         row.level = entry.level
         changed = true
+    end
+    -- Race : le roster ne la donne pas, mais le GUID du membre oui. Date nulle :
+    -- toute race reellement observee (kill, GUID, communaute) l'emporte ensuite.
+    if (row.race == nil or row.race == "") and entry.guid and GetPlayerInfoByGUID then
+        local ok, _, _, _, raceFile, raceSex = pcall(GetPlayerInfoByGUID, entry.guid)
+        local sync = Overlord.Sync
+        local race = ok and sync and sync.NormalizeRaceFileToken
+            and sync:NormalizeRaceFileToken(raceFile) or nil
+        if race and race ~= "" then
+            raceSex = math.floor(tonumber(raceSex) or 0)
+            row.race = race
+            row.raceSex = (raceSex == 2 or raceSex == 3) and raceSex or 0
+            row.raceAt = 0
+            changed = true
+        end
     end
     if changed and not deferDirty then self:MarkMetaDirty() end
     return changed

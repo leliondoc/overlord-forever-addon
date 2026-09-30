@@ -20,10 +20,20 @@ function IsInGuild() return true end
 function GetChannelName() return 1 end
 function GetGuildInfo() return "French Guild" end
 local roster = {
-    { "Roster Mage", "Member", 1, 42, "Mage", "Elwynn", "", "", true, 0, "MAGE" },
-    { "Roster Priest", "Member", 1, 60, "Priest", "Elwynn", "", "", false, 0, "PRIEST" },
-    { "Roster Rogue", "Officer", 0, 25, "Rogue", "Durotar", "", "", true, 0, "ROGUE" },
+    { "Roster Mage", "Member", 1, 42, "Mage", "Elwynn", "", "", true, 0, "MAGE", 0, 0, false, false, 0, "Player-1-0000000A" },
+    { "Roster Priest", "Member", 1, 60, "Priest", "Elwynn", "", "", false, 0, "PRIEST", 0, 0, false, false, 0, "Player-1-0000000B" },
+    { "Roster Rogue", "Officer", 0, 25, "Rogue", "Durotar", "", "", true, 0, "ROGUE", 0, 0, false, false, 0, "Player-1-0000000C" },
 }
+local guidRace = { ["Player-1-0000000A"] = { "Gnome", 3 }, ["Player-1-0000000B"] = { "Dwarf", 2 },
+    ["Player-1-0000000C"] = { "Human", 2 } }
+function GetPlayerInfoByGUID(guid)
+    local r = guidRace[guid]
+    if not r then return nil end
+    return "Class", "CLASS", r[1], r[1], r[2], "Name", ""
+end
+Overlord.Sync = Overlord.Sync or {}
+Overlord.Sync.NormalizeRaceFileToken = Overlord.Sync.NormalizeRaceFileToken
+    or function(_, race) return type(race) == "string" and race:match("^%a+$") or nil end
 function GetNumGuildMembers() return #roster end
 function GetGuildRosterInfo(index) return unpack(roster[index] or {}) end
 C_GuildInfo = { GuildRoster = function() end }
@@ -34,7 +44,8 @@ lb.playerInfo["Roster Mage"] = nil
 lb.kills["Roster Priest"] = 7
 lb.playerInfo["Roster Priest"] = { class = "WARLOCK", guild = "", guildAt = 0, level = 0 }
 lb.kills["Roster Rogue"] = 9
-lb.playerInfo["Roster Rogue"] = { class = "", guild = "Other Guild", guildAt = time(), level = 30 }
+lb.playerInfo["Roster Rogue"] = { class = "", guild = "Other Guild", guildAt = time(), level = 30,
+    race = "Orc", raceSex = 2, raceAt = time() }
 lb.kills["Outside Player"] = 11
 lb.playerInfo["Outside Player"] = { class = "", guild = "", guildAt = 0, level = 0 }
 
@@ -53,6 +64,10 @@ local rogue = lb.playerInfo["Roster Rogue"]
 assert(rogue.guild == "Other Guild" and rogue.level == 30,
     "The roster overwrote a dated guild or a known level")
 assert(rogue.class == "ROGUE", "A missing class was not filled")
+assert(mage.race == "Gnome" and mage.raceSex == 3 and mage.raceAt == 0,
+    "A guild member's race was not read from its roster GUID")
+assert(priest.race == "Dwarf", "A missing race was not filled from the roster GUID")
+assert(rogue.race == "Orc", "The roster GUID overwrote a race already observed")
 local outside = lb.playerInfo["Outside Player"]
 assert(outside.guild == "" and outside.class == "", "A non-member received roster data")
 
@@ -89,4 +104,4 @@ for _, packet in ipairs(sent) do
 end
 assert(outsiderAsked, "Test setup: a non-member was not asked on the network")
 assert(lb.playerInfo["Roster Mage"].class == "MAGE", "The class request did not use the roster")
-print("Guild roster hints: guild, class and level of members filled locally, known facts kept, no GR/CR for members")
+print("Guild roster hints: guild, class, level and race (via GUID) of members filled locally, known facts kept, no GR/CR for members")
