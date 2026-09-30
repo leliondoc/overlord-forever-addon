@@ -95,7 +95,7 @@ Overlord.OutpostSites = {
         mapID = 1417,
         mapIDs = { [14] = true, [1417] = true },
         mapNameNeedles = { "arathi" },
-        -- Tour du Sage : terre, hors cercles Stromgarde / High Perch / Argorok.
+        -- Tour de Sage (Sage = pseudo de joueur) : terre, hors cercles Stromgarde / High Perch / Argorok.
         center = { 33.3, 27.8 },
         halfSize = 1.35,
     },
