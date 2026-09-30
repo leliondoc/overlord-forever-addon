@@ -95,6 +95,7 @@ jobs:
           lua5.1 tests/forever_relay_content_dedup.test.lua
           lua5.1 tests/forever_bridge_live_score.test.lua
           lua5.1 tests/forever_bridge_live_score_channel.test.lua
+          lua5.1 tests/forever_bridge_cross_faction.test.lua
           lua5.1 tests/forever_siege_start_admission.test.lua
           lua5.1 tests/forever_siege_start_cadence.test.lua
           lua5.1 tests/forever_channel_load.test.lua

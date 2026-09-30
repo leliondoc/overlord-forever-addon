@@ -8637,7 +8637,18 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     elseif Overlord.Leaderboard.SetPlayerLevel then
         Overlord.Leaderboard:SetPlayerLevel(playerName, levelToken)
     end
+    local killsBefore = Overlord.Leaderboard.kills and Overlord.Leaderboard.kills[playerName] or 0
     Overlord.Leaderboard:SetPlayerKills(playerName, kills, true)
+    -- 1.3.2 live-score bridge: an enemy total from a Battle.net friend goes on to our
+    -- channel; a total heard on the channel cancels our own pending copy of it.
+    local betaNet = Overlord.BetaNetwork
+    if betaNet and channel == "BNET" and betaNet.NoteBridgedEnemyTotal then
+        pcall(betaNet.NoteBridgedEnemyTotal, betaNet, playerName, faction, kills, killsBefore,
+            classClaimVerified and class or "", localeClaimVerified and locTag or "",
+            remoteEpoch, bucketEpochToken, levelToken)
+    elseif betaNet and channel == "CHANNEL" and betaNet.NoteChannelBridgeRow then
+        pcall(betaNet.NoteChannelBridgeRow, betaNet, playerName, kills)
+    end
     -- Classe / faction / locale ci-dessous ; la guilde (champ 7) est traitee plus bas.
     if classClaimVerified and not Overlord.Leaderboard.MergeLeaderboardKillMetadata then
         Overlord.Leaderboard:SetPlayerClassFromSync(playerName, class)

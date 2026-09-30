@@ -1699,8 +1699,13 @@ end
 -- last total this client vouched for.
 local BRIDGE_LK_SUBJECT_GAP, BRIDGE_LK_PER_MIN, BRIDGE_LK_FANOUT = 60, 6, 3
 local BRIDGE_LK_ALLOWANCE, BRIDGE_LK_MAX_ROWS = 30, 256
+-- bridgeLK: enemy totals passed on to our own faction (channel, whispers as fallback).
+-- bridgeOut (1.3.2): our own faction's totals, heard from their owners, passed on to
+-- our opposite-faction Battle.net friends, whose clients then put them on their
+-- channel. Same bounds for both: one row per subject per 60 s, 6 rows/min, 3 targets.
 local bridgeLK = { rows = {}, order = {}, queue = {}, sent = {}, peerAt = {}, peerOrder = {} }
-local bridgeLKFlush
+local bridgeOut = { rows = {}, order = {}, queue = {}, sent = {}, outbound = true }
+local bridgeFlush
 function net:EmitBridgeLK(row, payload)
     local now = GetTime()
     local reached = 0
@@ -1735,17 +1740,31 @@ function net:EmitBridgeLK(row, payload)
     self.stats.bridgeLK = (self.stats.bridgeLK or 0) + (reached > 0 and 1 or 0)
     return reached > 0
 end
--- One timer chain at most: only its own firing clears `armed`. Direct calls from
--- NoteOwnerKill flush what is ready now and never start a second chain.
-local function onBridgeLKTimer()
-    bridgeLK.armed = false
-    bridgeLKFlush()
+-- Opposite-faction Battle.net friends (game account ids), from the cached list.
+local function enemyBNetFriends()
+    local out, mine = {}, addon.PlayerFaction
+    local targets = sync.GetBetaBNetTargets and sync:GetBetaBNetTargets() or {}
+    for _, id in ipairs(targets) do
+        local faction = sync.GetBetaBNetTargetInfo and sync:GetBetaBNetTargetInfo(id)
+        if (faction == "Alliance" or faction == "Horde") and faction ~= mine then out[#out + 1] = id end
+    end
+    return out
 end
-bridgeLKFlush = function()
-    local now, sent, wait, keep = GetTime(), bridgeLK.sent, math.huge, {}
+function net:EmitBridgeOut(row, payload)
+    local friends, reached = enemyBNetFriends(), 0
+    for i = 1, math.min(BRIDGE_LK_FANOUT, #friends) do
+        if sync.SendToBNet and sync:SendToBNet(friends[i], "LK", payload) then reached = reached + 1 end
+    end
+    self.stats.bridgeOut = (self.stats.bridgeOut or 0) + (reached > 0 and 1 or 0)
+    return reached > 0
+end
+-- One timer chain at most per bridge: only its own firing clears `armed`. Direct
+-- calls from a new row flush what is ready now and never start a second chain.
+bridgeFlush = function(state)
+    local now, sent, wait, keep = GetTime(), state.sent, math.huge, {}
     while sent[1] and now - sent[1] >= 60 do table.remove(sent, 1) end
-    for _, key in ipairs(bridgeLK.queue) do
-        local row = bridgeLK.rows[key]
+    for _, key in ipairs(state.queue) do
+        local row = state.rows[key]
         if row and row.pending and now - row.pendingAt <= 300 then
             local ready = (row.sentAt or -math.huge) + BRIDGE_LK_SUBJECT_GAP
             if not active() then
@@ -1758,12 +1777,17 @@ bridgeLKFlush = function()
                 wait = math.min(wait, sent[1] + 60 - now)
                 keep[#keep + 1] = key
             else
-                local payload = row.pending
-                if net:EmitBridgeLK(row, payload) then
+                local payload, emitted = row.pending, false
+                if state.outbound then
+                    emitted = net:EmitBridgeOut(row, payload)
+                else
+                    emitted = net:EmitBridgeLK(row, payload)
+                end
+                if emitted then
                     row.pending, row.sentAt = nil, now
                     sent[#sent + 1] = now
                 else
-                    -- nobody to tell right now (no fresh peer): try again shortly
+                    -- nobody to tell right now (no fresh peer or friend): try again shortly
                     wait = math.min(wait, 5)
                     keep[#keep + 1] = key
                 end
@@ -1772,21 +1796,16 @@ bridgeLKFlush = function()
             row.pending = nil
         end
     end
-    bridgeLK.queue = keep
-    if #keep > 0 and not bridgeLK.armed then
-        bridgeLK.armed = true
-        C_Timer.After(math.max(1, math.min(30, wait)), onBridgeLKTimer)
+    state.queue = keep
+    if #keep > 0 and not state.armed then
+        state.armed = true
+        C_Timer.After(math.max(1, math.min(30, wait)), function()
+            state.armed = false
+            bridgeFlush(state)
+        end)
     end
 end
--- Called by Sync:OnReceiveKill once the owner's K was accepted (score raised).
-function net:NoteOwnerKill(name, faction, total, before, class, locale, epoch, bucketToken, levelToken)
-    if not active() or type(name) ~= "string" then return false end
-    local c, mine = self.context, addon.PlayerFaction
-    -- Only a K that reached us over Battle.net from its owner: the friend link is
-    -- what makes this client the bridge; channel/group copies are heard by all.
-    if not c or c.transport ~= "BNET" or (tonumber(c.hops) or 0) ~= 0 then return false end
-    if (mine ~= "Alliance" and mine ~= "Horde") or (faction ~= "Alliance" and faction ~= "Horde")
-        or faction == mine then return false end
+local function queueBridgeRow(state, name, faction, total, before, class, locale, epoch, bucketToken, levelToken)
     total, before = math.floor(tonumber(total) or 0), math.floor(tonumber(before) or 0)
     epoch = math.floor(tonumber(epoch) or 0)
     levelToken, bucketToken, class, locale = tostring(levelToken or ""), tostring(bucketToken or ""),
@@ -1797,30 +1816,72 @@ function net:NoteOwnerKill(name, faction, total, before, class, locale, epoch, b
     if not levelToken:match("^%d+$") or not bucketToken:match("^B%d+$")
         or class:find(":", 1, true) or locale:find(":", 1, true) or name:find(":", 1, true) then return false end
     local now, key = GetTime(), name:lower()
-    local row = bridgeLK.rows[key]
+    local row = state.rows[key]
     if not row then
         -- First contact: vouch for what this client already held (assumed at most 5
         -- minutes old). Created before the check so that a refused jump is remembered.
-        remember(bridgeLK.rows, bridgeLK.order, key,
+        remember(state.rows, state.order, key,
             { key = key, name = name, trusted = before, trustedAt = now - 300 }, BRIDGE_LK_MAX_ROWS)
-        row = bridgeLK.rows[key]
+        row = state.rows[key]
     end
     -- Plausibility against the last total this client vouched for (not against what
-    -- it merely accepted): a jump refused here stays refused on the next K, so a
+    -- it merely accepted): a jump refused here stays refused on the next row, so a
     -- forged total cannot be walked through in two steps.
     if total - row.trusted > BRIDGE_LK_ALLOWANCE + (now - row.trustedAt) then return false end
     local payload = table.concat({ name, tostring(total), class, faction, tostring(epoch), locale,
         "", "0", bucketToken, levelToken }, ":")
     if #payload > 250 then return false end
     row.name, row.trusted, row.trustedAt = name, total, now
-    if not row.pending then bridgeLK.queue[#bridgeLK.queue + 1] = key end
-    row.pending, row.pendingAt = payload, now
-    if #bridgeLK.queue > 64 then
-        -- The dropped subject must be queueable again on its next accepted K.
-        local dropped = bridgeLK.rows[table.remove(bridgeLK.queue, 1)]
+    if not row.pending then state.queue[#state.queue + 1] = key end
+    row.pending, row.pendingAt, row.pendingTotal = payload, now, total
+    if #state.queue > 64 then
+        -- The dropped subject must be queueable again on its next accepted row.
+        local dropped = state.rows[table.remove(state.queue, 1)]
         if dropped then dropped.pending = nil end
     end
-    bridgeLKFlush()
+    bridgeFlush(state)
+    return true
+end
+-- Called by Sync:OnReceiveKill once an owner's own K was accepted (score raised).
+function net:NoteOwnerKill(name, faction, total, before, class, locale, epoch, bucketToken, levelToken)
+    if not active() or type(name) ~= "string" then return false end
+    local c, mine = self.context, addon.PlayerFaction
+    if (mine ~= "Alliance" and mine ~= "Horde") or (faction ~= "Alliance" and faction ~= "Horde") then
+        return false
+    end
+    if faction == mine then
+        -- 1.3.2: an own-faction owner heard first-hand; worth passing on only when
+        -- this client has an opposite-faction Battle.net friend to tell.
+        if #enemyBNetFriends() == 0 then return false end
+        return queueBridgeRow(bridgeOut, name, faction, total, before, class, locale,
+            epoch, bucketToken, levelToken)
+    end
+    -- Enemy owner: only a K that reached us over Battle.net from its owner (the
+    -- friend link is what makes this client the bridge).
+    if not c or c.transport ~= "BNET" or (tonumber(c.hops) or 0) ~= 0 then return false end
+    return queueBridgeRow(bridgeLK, name, faction, total, before, class, locale,
+        epoch, bucketToken, levelToken)
+end
+-- 1.3.2: an enemy total that an opposite-faction Battle.net friend passed on (its
+-- own channel heard it from the owner) and that raised our ranking: put it on our
+-- channel. Rows heard on the channel never come back here, so there is no loop.
+function net:NoteBridgedEnemyTotal(name, faction, total, before, class, locale, epoch, bucketToken, levelToken)
+    if not active() or type(name) ~= "string" then return false end
+    local mine = addon.PlayerFaction
+    if (mine ~= "Alliance" and mine ~= "Horde") or (faction ~= "Alliance" and faction ~= "Horde")
+        or faction == mine then return false end
+    return queueBridgeRow(bridgeLK, name, faction, total, before, class, locale,
+        epoch, bucketToken, levelToken)
+end
+-- 1.3.2: another bridge already put this total (or a newer one) on our channel:
+-- drop our pending copy, so several bridges do not repeat the same row.
+function net:NoteChannelBridgeRow(name, total)
+    if type(name) ~= "string" then return false end
+    local row = bridgeLK.rows[name:lower()]
+    total = tonumber(total)
+    if not (row and row.pending and total and total >= (row.pendingTotal or math.huge)) then return false end
+    row.pending, row.sentAt = nil, GetTime()
+    self.stats.bridgeLKCovered = (self.stats.bridgeLKCovered or 0) + 1
     return true
 end
 function net:Start()
