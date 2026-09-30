@@ -95,6 +95,17 @@ assert(admitted < 200, "Test setup: the queue never filled")
 local displaced = net.stats.displaced or 0
 assert(not forwarded("SH", 900, "shard"), "A relayed SH was admitted into a full queue")
 assert((net.stats.displaced or 0) == displaced, "A relayed SH displaced queued traffic")
+-- Even with presence holding most of the queue, a relayed SH takes no presence slot.
+local shNet = net
+net = load()
+for i = 1, 80 do assert(forwarded("NH", 1000 + i, "1.2.4~lp6"), "Test setup: presence refused") end
+for i = 1, 200 do forwarded("K", 2000 + i, "live-" .. i) end
+local presenceSlots = net:GetQueueSummary().total
+displaced = net.stats.displaced or 0
+assert(not forwarded("SH", 902, "shard"), "A relayed SH took a presence slot")
+assert((net.stats.displaced or 0) == displaced, "A relayed SH evicted a waiting presence")
+assert(net:GetQueueSummary().total == presenceSlots)
+net = shNet
 now = now + 121
 assert(forwarded("K", 901, "fresh"), "A full queue of expired items refused fresh traffic")
 assert((net.stats.expired or 0) >= 1, "No expired item was freed")

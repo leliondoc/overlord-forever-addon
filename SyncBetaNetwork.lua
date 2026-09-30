@@ -35,7 +35,7 @@ local BULK_MAX_WAIT = 20
 -- lane (relayed presence included) stopped draining, so far peers lost their route.
 local BULK_AGED_SERVE_INTERVAL = 1
 local lastBulkAgedServeAt = -1000
--- Presence keeps routes (and the ~lp6 capability) alive for multi-hop catch-up.
+-- Presence keeps routes (and the ~lp6 capability) alive for direct catch-up.
 -- Ordinary traffic may take back a borrowed presence slot only while presence
 -- holds more than half the queue: below that floor a busy hop evicted every
 -- relayed NH before it left and far peers lost their route for good.
@@ -1137,12 +1137,14 @@ function net:Queue(p, immediate)
         -- Priority lanes may always take back a slot an unsent presence borrowed.
         -- Ordinary packets (guild/class requests, alerts, broadcast SR) only when
         -- presence exceeds PRESENCE_RECLAIM_FLOOR, so routes keep a lane.
-        local reclaimPresence = p.kind ~= "NH" and hasLaneRoom(lane, p, true)
+        -- Relayed shard presence (SH) is routine: it never displaces anything.
+        local routineShard = p.kind == "SH" and #p.path > 1
+        local reclaimPresence = p.kind ~= "NH" and not routineShard and hasLaneRoom(lane, p, true)
             and (catchup or urgent or lane == stateLane
                 or reclaimablePresenceCount() > PRESENCE_RECLAIM_FLOOR)
         -- Live packets that may displace something are encoded first too: a
         -- redundant or oversized copy must not evict a queued item for nothing.
-        local liveReclaim = not catchup and p.kind ~= "NH"
+        local liveReclaim = not catchup and p.kind ~= "NH" and not routineShard
             and (urgent or (lane == bulkLane and borrowedCatchupIndex() ~= nil))
         -- A malformed or unroutable map page must not evict a live progress
         -- packet just because it claimed a known target.
@@ -1166,8 +1168,7 @@ function net:Queue(p, immediate)
                 and queuedZaCount() < (localMap and MAP_CATCHUP_EXTRA
                 or MAP_RELAY_BATCH)
                 and (dropBorrowedCatchup(true) or dropWaitingForTerminal()))
-            -- Relayed shard presence (SH) is routine: it never displaces anything.
-            or (urgent and p.kind ~= "NH" and not (p.kind == "SH" and #p.path > 1)
+            or (urgent and p.kind ~= "NH" and not routineShard
                 and not catchup and (dropWaitingForUrgent()
                 or ((isTerminal(p) or isOwnSiegeStart(p)) and dropWaitingForTerminal())))
             or (lane == bulkLane and not catchup and dropBorrowedCatchup())) then
@@ -1579,6 +1580,9 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
 
         -- The same routine outpost state (held/neutral, identical payload from any
         -- origin) already relayed within a minute is handled, not queued again.
+        -- Channel receivers trust OP from any origin, so the origin is not part of
+        -- the key. It is remembered at admission: a copy lost later was lost to a
+        -- saturated queue, where a duplicate would not have fared better.
         local routineKey = p.kind == "OP" and p.target == "*" and not isUrgent(p)
             and ("OP|" .. p.payload) or nil
         local routineAt = routineKey and routineForwarded[routineKey]

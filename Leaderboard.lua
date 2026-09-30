@@ -2114,11 +2114,18 @@ end
 
 local function ScheduleLocalGuildRosterEnrich(delaySec)
     local lb = Overlord.Leaderboard
-    if not lb or lb._guildRosterEnrichPending then return end
+    if not lb then return end
+    local delay = math.max(0, tonumber(delaySec) or 0)
+    -- Un rappel plus proche (join/kick apres une rafale de GUILD_ROSTER_UPDATE
+    -- differee de 10 s) remplace le rappel en attente au lieu d'attendre derriere.
+    local due = GetTime() + delay
+    if lb._guildRosterEnrichPending and (lb._guildRosterEnrichDue or 0) <= due then return end
+    local token = (lb._guildRosterEnrichToken or 0) + 1
+    lb._guildRosterEnrichToken, lb._guildRosterEnrichDue = token, due
     lb._guildRosterEnrichPending = true
-    C_Timer.After(math.max(0, tonumber(delaySec) or 0), function()
+    C_Timer.After(delay, function()
         local current = Overlord.Leaderboard
-        if not current then return end
+        if not current or current._guildRosterEnrichToken ~= token then return end
         current._guildRosterEnrichPending = false
         if current.EnrichGuildForKillRows then
             current:EnrichGuildForKillRows()
