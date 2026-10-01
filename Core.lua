@@ -382,6 +382,14 @@ function Overlord:PrintNotification(text)
         print(text)
         return
     end
+    -- A closed tab keeps its ChatFrame object: lines sent there were silently lost.
+    if type(GetChatWindowInfo) == "function" then
+        local _, _, _, _, _, _, shown, _, docked = GetChatWindowInfo(idx)
+        if not shown and not docked then
+            print(text)
+            return
+        end
+    end
     local cf = _G["ChatFrame" .. idx]
     if cf and type(cf.AddMessage) == "function" then
         cf:AddMessage(text)

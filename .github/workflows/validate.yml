@@ -90,6 +90,7 @@ jobs:
           lua5.1 tests/forever_relay_outpost_coalescing.test.lua
           lua5.1 tests/forever_relay_guild_identity.test.lua
           lua5.1 tests/forever_outpost_assault_alert.test.lua
+          lua5.1 tests/forever_settings_panel.test.lua
           lua5.1 tests/forever_victory_raid_alert.test.lua
           lua5.1 tests/forever_direct_route_sticky.test.lua
           lua5.1 tests/forever_guild_roster_hints.test.lua

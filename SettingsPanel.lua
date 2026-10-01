@@ -1,13 +1,9 @@
--- SettingsPanel.lua - Esc > Options > AddOns > Overlord (canvas WC3 + API Settings retail 10+)
+-- SettingsPanel.lua - Esc > Options > AddOns > Overlord (Blizzard native vertical layout)
 Overlord = Overlord or {}
 Overlord.SettingsPanel = {}
 
 local L = Overlord.L
 
-local UI = Overlord.UI
-
-local SETTINGS_LOGO_SIZE = 46
-local SETTINGS_LOGO_TEXTURE = "Interface\\AddOns\\Overlord\\Textures\\overlord"
 
 local UI_SCALE_MIN = 0.8
 local UI_SCALE_MAX = 1.2
@@ -58,70 +54,6 @@ local DEFAULT_SOUND_ENABLED = true
 -- les points d'exclamation de quete dans les villes.
 local DEFAULT_MAP_ICON_OPACITY = 0.5
 
-local ROW_H = 58
-local ROW_GAP = 6
-local SETTINGS_ROW_COUNT = 14
-local SETTINGS_VIEWPORT_H = 536
-local SETTINGS_PAD_OUTER = 32
-local SETTINGS_PAD_INNER = 24
-local SETTINGS_HEADER_TOP = 16
-local SETTINGS_STACK_MIN_W = 460
-local SETTINGS_STACK_MAX_W = 560
-local SETTINGS_SCROLL_INSET = 12
-local SETTINGS_CONTENT_INSET = 8
-
-local function computeStackWidth(canvasW)
-    local w = (tonumber(canvasW) or 520) - SETTINGS_PAD_OUTER * 2
-    if w < SETTINGS_STACK_MIN_W then w = SETTINGS_STACK_MIN_W end
-    if w > SETTINGS_STACK_MAX_W then w = SETTINGS_STACK_MAX_W end
-    return math.floor(w)
-end
-
-local SETTINGS_HEADER_H = SETTINGS_HEADER_TOP + SETTINGS_LOGO_SIZE + 14
-local SETTINGS_GAP_HEADER_CONTENT = 12
-local SETTINGS_RESET_GAP = 14
-local SETTINGS_RESET_BTN_H = 28
-
-local function ApplySettingsLogo(texture)
-    if not texture then return end
-    if texture.SetAtlas then
-        pcall(texture.SetAtlas, texture, nil)
-    end
-    texture:SetTexture(SETTINGS_LOGO_TEXTURE)
-    texture:SetTexCoord(0, 1, 0, 1)
-    texture:SetSize(SETTINGS_LOGO_SIZE, SETTINGS_LOGO_SIZE)
-    texture:SetAlpha(1)
-    texture:Show()
-end
-
-local function computeContentScrollHeight()
-    return 12 + (ROW_H + ROW_GAP) * SETTINGS_ROW_COUNT + 12
-end
-
-local function computeFixedStackChromeH()
-    return SETTINGS_HEADER_H
-        + SETTINGS_GAP_HEADER_CONTENT
-        + SETTINGS_RESET_GAP
-        + SETTINGS_RESET_BTN_H
-        + SETTINGS_CONTENT_INSET * 2
-end
-
-local function computeIdealStackHeight()
-    return computeFixedStackChromeH() + SETTINGS_VIEWPORT_H
-end
-
-local function computeViewportHeightForStack(stackH)
-    local viewport = stackH - computeFixedStackChromeH()
-    if viewport < 0 then
-        return 0
-    end
-    return math.floor(viewport)
-end
-
-local function computeRowWidth(stackW)
-    return stackW - SETTINGS_SCROLL_INSET - SETTINGS_PAD_INNER * 2
-end
-
 local function scheduleActionGridActiveRefresh()
     local ui = Overlord.UI
     if ui and ui.ScheduleActionGridActiveRefresh then
@@ -132,8 +64,6 @@ end
 local settingsSuppressSideEffects = false
 local minimapOpacityRefreshPending = false
 local mapOpacityRefreshPending = false
-local cachedNotifChatLabelKey
-local cachedNotifChatLabel
 
 local function requestMinimapOpacityRefresh()
     if minimapOpacityRefreshPending then return end
@@ -207,28 +137,6 @@ local function clampNotificationChat(v)
     return v
 end
 
-local function formatNotificationChatLabel(value)
-    local v = clampNotificationChat(value)
-    if v <= 0 then
-        return (L and L.NOTIFICATION_CHAT_DEFAULT_SHORT) or "Default"
-    end
-    if cachedNotifChatLabelKey == v and cachedNotifChatLabel then
-        return cachedNotifChatLabel
-    end
-    local label = tostring(v)
-    if type(FCF_GetChatWindowInfo) == "function" then
-        local ok, nm = pcall(function()
-            return (select(1, FCF_GetChatWindowInfo(v)))
-        end)
-        if ok and nm and nm ~= "" then
-                label = string.format("%d : %s", v, nm)
-        end
-    end
-    cachedNotifChatLabelKey = v
-    cachedNotifChatLabel = label
-    return label
-end
-
 local function clampMapOverlayOpacity(v)
     v = tonumber(v) or DEFAULT_MAP_OVERLAY_OPACITY
     if v < MAP_OVERLAY_OPACITY_MIN then v = MAP_OVERLAY_OPACITY_MIN end
@@ -287,8 +195,6 @@ local function setNotificationChat(value)
     if not OverlordDB then return end
     OverlordDB.config = OverlordDB.config or {}
     OverlordDB.config.notificationChatFrame = clampNotificationChat(value)
-    cachedNotifChatLabelKey = nil
-    cachedNotifChatLabel = nil
     notifySettingsAPI(Overlord.SettingsPanel.NotificationChatVariableName, OverlordDB.config.notificationChatFrame)
 end
 
@@ -566,117 +472,217 @@ local function setSoundEnabled(value)
     notifySettingsAPI(Overlord.SettingsPanel.SoundEnabledVariableName, OverlordDB.config.soundEnabled)
 end
 
--- Une seule upvalue pour tous les get/set (limite Lua 60 upvalues sur EnsureFrame).
-local Acc = {
-    getScale = getScale,
-    setScale = setScale,
-    clampScale = clampScale,
-    formatScaleLabel = formatScaleLabel,
-    getNotificationChat = getNotificationChat,
-    setNotificationChat = setNotificationChat,
-    clampNotificationChat = clampNotificationChat,
-    formatNotificationChatLabel = formatNotificationChatLabel,
-    maxChatWindows = maxChatWindows,
-    getMapOverlayOpacity = getMapOverlayOpacity,
-    setMapOverlayOpacity = setMapOverlayOpacity,
-    clampMapOverlayOpacity = clampMapOverlayOpacity,
-    formatMapOverlayOpacityLabel = formatMapOverlayOpacityLabel,
-    getMinimapOverlayOpacity = getMinimapOverlayOpacity,
-    setMinimapOverlayOpacity = setMinimapOverlayOpacity,
-    getMapIconOpacity = getMapIconOpacity,
-    setMapIconOpacity = setMapIconOpacity,
-    clampMapIconOpacity = clampMapIconOpacity,
-    formatMapIconOpacityLabel = formatMapIconOpacityLabel,
-    DEFAULT_MAP_ICON_OPACITY = DEFAULT_MAP_ICON_OPACITY,
-    getMapPathOpacity = getMapPathOpacity,
-    setMapPathOpacity = setMapPathOpacity,
-    clampMapPathOpacity = clampMapPathOpacity,
-    formatMapPathOpacityLabel = formatMapPathOpacityLabel,
-    getAutoWaypoint = getAutoWaypoint,
-    setAutoWaypoint = setAutoWaypoint,
-    getShowMinimapButton = getShowMinimapButton,
-    setShowMinimapButton = setShowMinimapButton,
-    getShowMinimapCaptureZones = getShowMinimapCaptureZones,
-    getShowCoinsHud = getShowCoinsHud,
-    setShowCoinsHud = setShowCoinsHud,
-    setShowMinimapCaptureZones = setShowMinimapCaptureZones,
-    getShowMapZoneTitles = getShowMapZoneTitles,
-    setShowMapZoneTitles = setShowMapZoneTitles,
-    getShowTopHud = getShowTopHud,
-    setShowTopHud = setShowTopHud,
-    getTopHudMode = getTopHudMode,
-    setTopHudMode = setTopHudMode,
-    getShowTutorialBook = getShowTutorialBook,
-    setShowTutorialBook = setShowTutorialBook,
-    getSoundEnabled = getSoundEnabled,
-    setSoundEnabled = setSoundEnabled,
-}
+-- ==================== Native options page ====================
+-- Esc > Options > AddOns > Overlord uses Blizzard's own vertical layout, like most
+-- addons: checkboxes, sliders and dropdowns drawn by the game, one short tooltip
+-- on hover, Blizzard's "Defaults" button. Rows are declared as data so no single
+-- function approaches Lua 5.1's 60-upvalue limit.
 
-function Overlord.SettingsPanel:RefreshControls()
-    if self._scaleRow and self._scaleRow.Refresh then self._scaleRow:Refresh() end
-    if self._chatRow and self._chatRow.Refresh then self._chatRow:Refresh() end
-    if self._opacityRow and self._opacityRow.Refresh then self._opacityRow:Refresh() end
-    if self._minimapOpacityRow and self._minimapOpacityRow.Refresh then self._minimapOpacityRow:Refresh() end
-    if self._mapIconOpacityRow and self._mapIconOpacityRow.Refresh then self._mapIconOpacityRow:Refresh() end
-    if self._pathOpacityRow and self._pathOpacityRow.Refresh then self._pathOpacityRow:Refresh() end
-    if self._autoWaypointRow and self._autoWaypointRow.Refresh then self._autoWaypointRow:Refresh() end
-    if self._showTopHudRow and self._showTopHudRow.Refresh then self._showTopHudRow:Refresh() end
-    if self._showTutorialBookRow and self._showTutorialBookRow.Refresh then self._showTutorialBookRow:Refresh() end
-    if self._soundEnabledRow and self._soundEnabledRow.Refresh then self._soundEnabledRow:Refresh() end
-    if self._guildKillAlertRow and self._guildKillAlertRow.Refresh then self._guildKillAlertRow:Refresh() end
-    if self._minimapButtonRow and self._minimapButtonRow.Refresh then self._minimapButtonRow:Refresh() end
-    if self._minimapCaptureZonesRow and self._minimapCaptureZonesRow.Refresh then self._minimapCaptureZonesRow:Refresh() end
-    if self._coinsHudRow and self._coinsHudRow.Refresh then self._coinsHudRow:Refresh() end
-    if self._floatingObjectiveRow and self._floatingObjectiveRow.Refresh then self._floatingObjectiveRow:Refresh() end
-    if self._mapZoneTitlesRow and self._mapZoneTitlesRow.Refresh then self._mapZoneTitlesRow:Refresh() end
+local SP = Overlord.SettingsPanel
+SP.GuildKillAlertVariableName = "Overlord_GuildKillAlert"
+local CHAT_TAB_NAME = "Overlord"
+
+local function Lx(key, fallback)
+    return (L and L[key]) or fallback
 end
 
-function Overlord.SettingsPanel:RefreshFactionChrome()
-    local f = self._frame
-    if not f or not UI then return end
-    local P = UI.GetViewerFactionPalette and UI.GetViewerFactionPalette() or {}
-    local gold = P.gold or { 0.85, 0.68, 0.20 }
+-- A chat window the player can see: a docked tab or a shown floating window.
+local function chatWindowInUse(index)
+    if type(GetChatWindowInfo) ~= "function" then return false end
+    local name, _, _, _, _, _, shown, _, docked = GetChatWindowInfo(index)
+    return name ~= nil and name ~= "" and (shown or docked) and true or false
+end
 
-    ApplySettingsLogo(f.logo)
-
-    if f.titleFs then
-        f.titleFs:SetTextColor(gold[1], gold[2], gold[3])
+local function findChatTab(name)
+    for i = 1, maxChatWindows() do
+        if chatWindowInUse(i) and GetChatWindowInfo(i) == name then return i end
     end
-    if f.versionFs then
-        if P.bright then
-            f.versionFs:SetTextColor(P.bright[1] * 0.55, P.bright[2] * 0.55, P.bright[3] * 0.55)
-        else
-            f.versionFs:SetTextColor(0.55, 0.55, 0.55)
+    return nil
+end
+
+-- Dropdown entries: the main chat, then every visible tab by its own name.
+local function chatWindowOptions()
+    local container = Settings.CreateControlTextContainer()
+    container:Add(0, Lx("NOTIFICATION_CHAT_DEFAULT", "Main chat (default)"))
+    local current = getNotificationChat()
+    for i = 1, maxChatWindows() do
+        if chatWindowInUse(i) or i == current then
+            local name = type(GetChatWindowInfo) == "function" and GetChatWindowInfo(i) or nil
+            container:Add(i, (name and name ~= "") and name or tostring(i))
         end
     end
-    if f.subtitleFs and P.bright then
-        f.subtitleFs:SetTextColor(P.bright[1], P.bright[2], P.bright[3])
+    return container:GetData()
+end
+
+-- Opens (or reuses) a chat tab named "Overlord" and routes Overlord messages there.
+-- The player then moves, hides or closes it like any other chat tab.
+function SP:CreateOverlordChatTab()
+    local index = findChatTab(CHAT_TAB_NAME)
+    if not index and type(FCF_OpenNewWindow) == "function" then
+        pcall(FCF_OpenNewWindow, CHAT_TAB_NAME, true)
+        index = findChatTab(CHAT_TAB_NAME)
     end
-    if f._woodBackdropApplied and UI.UpdateWoodDialogBorder then
-        UI.UpdateWoodDialogBorder(f, { fallbackBg = P.fallbackBg, borderColor = gold, borderAlpha = 0.88 })
-    elseif UI.ApplyWoodDialogBackdrop and f.SetBackdrop then
-        UI.ApplyWoodDialogBackdrop(f, { fallbackBg = P.fallbackBg, borderColor = gold, borderAlpha = 0.88 })
+    if not index then
+        Overlord:PrintNotification("|cFFFF4444[Overlord]|r "
+            .. Lx("CHAT_TAB_FAILED", "No free chat tab. Close one, then try again."))
+        return false
+    end
+    setNotificationChat(index)
+    Overlord:PrintNotification("|cFFFFD100[Overlord]|r "
+        .. Lx("CHAT_TAB_READY", "Overlord messages now appear in this tab."))
+    return true
+end
+
+local function getGuildKillAlert()
+    local gka = Overlord.GuildKillAlert
+    return gka and gka.IsEnabled and gka:IsEnabled() or false
+end
+
+local function setGuildKillAlert(value)
+    local gka = Overlord.GuildKillAlert
+    if gka and gka.SetEnabled then gka:SetEnabled(value == true) end
+end
+
+local function sliderOptions(minValue, maxValue, step, formatter)
+    local options = Settings.CreateSliderOptions(minValue, maxValue, step)
+    local labels = MinimalSliderWithSteppersMixin and MinimalSliderWithSteppersMixin.Label
+    if options and options.SetLabelFormatter and labels and formatter then
+        pcall(options.SetLabelFormatter, options, labels.Right, formatter)
+    end
+    return options
+end
+
+-- kind: "header" | "button" | "checkbox" | "slider" | "dropdown".
+local ROWS = {
+    { kind = "header", label = "SETTINGS_SECTION_GENERAL", fallback = "General" },
+    { kind = "button", label = "ACTION_SHORTCUT_LABEL", fallback = "Action bar shortcut",
+        button = "ACTION_SHORTCUT_BUTTON", buttonFallback = "Pick up",
+        tooltip = "ACTION_SHORTCUT_TOOLTIP",
+        click = function()
+            if Overlord.ActionShortcut and Overlord.ActionShortcut.Pickup then
+                Overlord.ActionShortcut:Pickup()
+            end
+        end },
+    { kind = "slider", var = SP.UiScaleVariableName, label = "UI_SCALE_LABEL", fallback = "Panel scale",
+        tooltip = "UI_SCALE_TOOLTIP", default = DEFAULT_SCALE, get = getScale, set = setScale,
+        min = UI_SCALE_MIN, max = UI_SCALE_MAX, step = UI_SCALE_STEP, format = formatScaleLabel },
+    { kind = "checkbox", var = SP.SoundEnabledVariableName, label = "SOUND_ENABLED_LABEL",
+        fallback = "Overlord sounds", tooltip = "SOUND_ENABLED_TOOLTIP",
+        default = DEFAULT_SOUND_ENABLED, get = getSoundEnabled, set = setSoundEnabled },
+    { kind = "checkbox", var = SP.ShowTutorialBookVariableName, label = "SHOW_TUTORIAL_BOOK_LABEL",
+        fallback = "Tutorial book icon", tooltip = "SHOW_TUTORIAL_BOOK_TOOLTIP",
+        default = DEFAULT_SHOW_TUTORIAL_BOOK, get = getShowTutorialBook, set = setShowTutorialBook },
+
+    { kind = "header", label = "SETTINGS_SECTION_CHAT", fallback = "Chat" },
+    { kind = "dropdown", var = SP.NotificationChatVariableName, label = "NOTIFICATION_CHAT_LABEL",
+        fallback = "Overlord messages", tooltip = "NOTIFICATION_CHAT_TOOLTIP",
+        default = DEFAULT_NOTIF_CHAT, get = getNotificationChat, set = setNotificationChat,
+        options = chatWindowOptions },
+    { kind = "button", label = "CHAT_TAB_LABEL", fallback = "Overlord chat tab",
+        button = "CHAT_TAB_BUTTON", buttonFallback = "Create tab", tooltip = "CHAT_TAB_TOOLTIP",
+        click = function() SP:CreateOverlordChatTab() end },
+    { kind = "checkbox", var = SP.GuildKillAlertVariableName, label = "GUILD_KILL_ALERT_ENABLED_LABEL",
+        fallback = "Enemy guild raid alerts", tooltip = "GUILD_KILL_ALERT_ENABLED_TOOLTIP",
+        default = true, get = getGuildKillAlert, set = setGuildKillAlert },
+
+    { kind = "header", label = "SETTINGS_SECTION_MAP", fallback = "Map and minimap" },
+    { kind = "slider", var = SP.MapOverlayOpacityVariableName, label = "MAP_OVERLAY_OPACITY_LABEL",
+        fallback = "Map capture opacity", tooltip = "MAP_OVERLAY_OPACITY_TOOLTIP",
+        default = DEFAULT_MAP_OVERLAY_OPACITY, get = getMapOverlayOpacity, set = setMapOverlayOpacity,
+        min = MAP_OVERLAY_OPACITY_MIN, max = MAP_OVERLAY_OPACITY_MAX, step = MAP_OVERLAY_OPACITY_STEP,
+        format = formatMapOverlayOpacityLabel },
+    { kind = "slider", var = SP.MapIconOpacityVariableName, label = "MAP_ICON_OPACITY_LABEL",
+        fallback = "Map icon opacity", tooltip = "MAP_ICON_OPACITY_TOOLTIP",
+        default = DEFAULT_MAP_ICON_OPACITY, get = getMapIconOpacity, set = setMapIconOpacity,
+        min = 0, max = MAP_OVERLAY_OPACITY_MAX, step = MAP_OVERLAY_OPACITY_STEP,
+        format = formatMapIconOpacityLabel },
+    { kind = "slider", var = SP.MapPathOpacityVariableName, label = "MAP_PATH_OPACITY_LABEL",
+        fallback = "Map path opacity", tooltip = "MAP_PATH_OPACITY_TOOLTIP",
+        default = DEFAULT_MAP_PATH_OPACITY, get = getMapPathOpacity, set = setMapPathOpacity,
+        min = MAP_PATH_OPACITY_MIN, max = MAP_PATH_OPACITY_MAX, step = MAP_PATH_OPACITY_STEP,
+        format = formatMapPathOpacityLabel },
+    { kind = "checkbox", var = SP.ShowMapZoneTitlesVariableName, label = "MAP_ZONE_TITLES_LABEL",
+        fallback = "Map zone names", tooltip = "MAP_ZONE_TITLES_TOOLTIP",
+        default = DEFAULT_SHOW_MAP_ZONE_TITLES, get = getShowMapZoneTitles, set = setShowMapZoneTitles },
+    { kind = "checkbox", var = SP.AutoWaypointVariableName, label = "AUTO_WAYPOINT_LABEL",
+        fallback = "Auto-pin next objective", tooltip = "AUTO_WAYPOINT_TOOLTIP",
+        default = DEFAULT_AUTO_WAYPOINT, get = getAutoWaypoint, set = setAutoWaypoint },
+    { kind = "slider", var = SP.MinimapOverlayOpacityVariableName, label = "MINIMAP_OVERLAY_OPACITY_LABEL",
+        fallback = "Minimap capture opacity", tooltip = "MINIMAP_OVERLAY_OPACITY_TOOLTIP",
+        default = DEFAULT_MINIMAP_OVERLAY_OPACITY, get = getMinimapOverlayOpacity,
+        set = setMinimapOverlayOpacity, min = MAP_OVERLAY_OPACITY_MIN, max = MAP_OVERLAY_OPACITY_MAX,
+        step = MAP_OVERLAY_OPACITY_STEP, format = formatMapOverlayOpacityLabel },
+    { kind = "checkbox", var = SP.ShowMinimapCaptureZonesVariableName, label = "MINIMAP_CAPTURE_ZONES_LABEL",
+        fallback = "Minimap capture zones", tooltip = "MINIMAP_CAPTURE_ZONES_TOOLTIP",
+        default = DEFAULT_SHOW_MINIMAP_CAPTURE_ZONES, get = getShowMinimapCaptureZones,
+        set = setShowMinimapCaptureZones },
+    { kind = "checkbox", var = SP.ShowMinimapButtonVariableName, label = "MINIMAP_BUTTON_LABEL",
+        fallback = "Minimap button", tooltip = "MINIMAP_BUTTON_TOOLTIP",
+        default = DEFAULT_SHOW_MINIMAP_BUTTON, get = getShowMinimapButton, set = setShowMinimapButton },
+
+    { kind = "header", label = "SETTINGS_SECTION_HUD", fallback = "On-screen panels" },
+    { kind = "dropdown", var = SP.TopHudModeVariableName, label = "SHOW_TOP_HUD_LABEL",
+        fallback = "Top HUD", tooltip = "SHOW_TOP_HUD_TOOLTIP", default = DEFAULT_TOP_HUD_MODE,
+        get = getTopHudMode, set = setTopHudMode,
+        choices = { { "auto", "TOP_HUD_MODE_AUTO", "Auto" }, { "always", "TOP_HUD_MODE_ALWAYS", "Always" },
+            { "never", "TOP_HUD_MODE_NEVER", "Never" } } },
+    { kind = "checkbox", var = SP.ShowCoinsHudVariableName, label = "COINS_HUD_LABEL",
+        fallback = "Coins panel", tooltip = "COINS_HUD_TOOLTIP",
+        default = DEFAULT_SHOW_COINS_HUD, get = getShowCoinsHud, set = setShowCoinsHud },
+    { kind = "checkbox", var = SP.ShowFloatingObjectiveVariableName, label = "FLOATING_OBJECTIVE_LABEL",
+        fallback = "Floating next objective", tooltip = "FLOATING_OBJECTIVE_TOOLTIP", default = false,
+        get = SP.GetShowFloatingObjective, set = SP.SetShowFloatingObjective },
+}
+
+local function choiceOptions(choices)
+    return function()
+        local container = Settings.CreateControlTextContainer()
+        for _, choice in ipairs(choices) do container:Add(choice[1], Lx(choice[2], choice[3])) end
+        return container:GetData()
     end
 end
 
-function Overlord.SettingsPanel:ResetDefaults()
+local function addRow(category, layout, row)
+    local label = Lx(row.label, row.fallback)
+    local tooltip = row.tooltip and Lx(row.tooltip, "") or ""
+    if row.kind == "header" then
+        if layout and layout.AddInitializer and CreateSettingsListSectionHeaderInitializer then
+            layout:AddInitializer(CreateSettingsListSectionHeaderInitializer(label))
+        end
+        return
+    end
+    if row.kind == "button" then
+        if layout and layout.AddInitializer and CreateSettingsButtonInitializer then
+            layout:AddInitializer(CreateSettingsButtonInitializer(
+                label, Lx(row.button, row.buttonFallback), row.click, tooltip, true))
+        end
+        return
+    end
+    local setting = Settings.RegisterProxySetting(category, row.var, type(row.default), label,
+        row.default, row.get, row.set)
+    if row.kind == "checkbox" and Settings.CreateCheckbox then
+        Settings.CreateCheckbox(category, setting, tooltip)
+    elseif row.kind == "slider" and Settings.CreateSlider then
+        Settings.CreateSlider(category, setting,
+            sliderOptions(row.min, row.max, row.step, row.format), tooltip)
+    elseif row.kind == "dropdown" and Settings.CreateDropdown and Settings.CreateControlTextContainer then
+        Settings.CreateDropdown(category, setting, row.options or choiceOptions(row.choices), tooltip)
+    end
+end
+
+-- Pushes current values into the Settings controls (e.g. after /ov guildkills off).
+function SP:RefreshControls()
+    if not Settings or not self._registered then return end
+    for _, row in ipairs(ROWS) do
+        if row.var and row.get then notifySettingsAPI(row.var, row.get()) end
+    end
+end
+
+function SP:ResetDefaults()
     settingsSuppressSideEffects = true
-    setScale(DEFAULT_SCALE)
-    setNotificationChat(DEFAULT_NOTIF_CHAT)
-    setMapOverlayOpacity(DEFAULT_MAP_OVERLAY_OPACITY)
-    setMinimapOverlayOpacity(DEFAULT_MINIMAP_OVERLAY_OPACITY)
-    setMapIconOpacity(DEFAULT_MAP_ICON_OPACITY)
-    setMapPathOpacity(DEFAULT_MAP_PATH_OPACITY)
-    setAutoWaypoint(DEFAULT_AUTO_WAYPOINT)
-    setShowMinimapButton(DEFAULT_SHOW_MINIMAP_BUTTON)
-    setTopHudMode(DEFAULT_TOP_HUD_MODE)
-    setShowTutorialBook(DEFAULT_SHOW_TUTORIAL_BOOK)
-    setSoundEnabled(DEFAULT_SOUND_ENABLED)
-    if Overlord.GuildKillAlert then Overlord.GuildKillAlert:ResetDefaults() end
-    setShowMinimapCaptureZones(DEFAULT_SHOW_MINIMAP_CAPTURE_ZONES)
-    setShowCoinsHud(DEFAULT_SHOW_COINS_HUD)
-    Overlord.SettingsPanel.SetShowFloatingObjective(false)
-    setShowMapZoneTitles(DEFAULT_SHOW_MAP_ZONE_TITLES)
+    for _, row in ipairs(ROWS) do
+        if row.set and row.default ~= nil then row.set(row.default) end
+    end
     settingsSuppressSideEffects = false
     flushSettingsMapSideEffects()
     if Overlord.MapMarkers and Overlord.MapMarkers.RefreshMinimapButtonVisibility then
@@ -688,924 +694,46 @@ function Overlord.SettingsPanel:ResetDefaults()
     self:RefreshControls()
 end
 
-local function CreateToggleRow(parent, opts)
-    opts = opts or {}
-    local gold = opts.gold or { 0.85, 0.68, 0.20 }
-    local white = opts.white or { 1, 1, 1 }
-    local rowW = opts.width or computeRowWidth(SETTINGS_STACK_MIN_W)
-    local rowH = opts.height or ROW_H
-
-    local row = CreateFrame("Button", nil, parent)
-    row:SetSize(rowW, rowH)
-    row:RegisterForClicks("LeftButtonUp")
-
-    local title = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, -6)
-    title:SetWidth(rowW - 116)
-    title:SetJustifyH("LEFT")
-    title:SetText(opts.label or "")
-    title:SetTextColor(gold[1], gold[2], gold[3])
-    row.title = title
-
-    local desc = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    desc:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
-    desc:SetWidth(rowW - 116)
-    desc:SetJustifyH("LEFT")
-    desc:SetWordWrap(true)
-    desc:SetMaxLines(2)
-    desc:SetText(opts.tooltip or "")
-    row.desc = desc
-
-    local button = UI.CreateWC3Button(row, 96, 24, "", function()
-        if opts.set and opts.get then
-            opts.set(opts.nextValue and opts.nextValue(opts.get()) or not opts.get())
-            row:Refresh()
-        end
-    end, nil, { gold = gold, white = white })
-    button:SetPoint("RIGHT", row, "RIGHT", 0, -2)
-    row.valueButton = button
-
-    function row:Refresh()
-        local enabled = opts.get and opts.get() or false
-        local text = opts.formatValue and opts.formatValue(enabled) or (enabled
-            and ((L and L.SETTINGS_TOGGLE_ON) or "Enabled")
-            or ((L and L.SETTINGS_TOGGLE_OFF) or "Disabled"))
-        self.valueButton.label:SetText(text)
-        if UI and UI.SetWC3ButtonActive then
-            local active = opts.isActive and opts.isActive(enabled)
-            if active == nil then active = enabled end
-            UI.SetWC3ButtonActive(self.valueButton, active, { gold = gold, white = white })
-        end
-    end
-
-    row:SetScript("OnClick", function(self)
-        if opts.set and opts.get then
-            opts.set(opts.nextValue and opts.nextValue(opts.get()) or not opts.get())
-            self:Refresh()
-        end
-    end)
-    row:SetScript("OnEnter", function(self)
-        if not opts.tooltip or opts.tooltip == "" then return end
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText(opts.label or "", gold[1], gold[2], gold[3], 1, true)
-        GameTooltip:AddLine(opts.tooltip, 1, 1, 1, true)
-        GameTooltip:Show()
-    end)
-    row:SetScript("OnLeave", function()
-        GameTooltip:Hide()
-    end)
-    function row:SetLayoutWidth(w)
-        rowW = w
-        self:SetWidth(w)
-        self.title:SetWidth(w - 116)
-        self.desc:SetWidth(w - 116)
-    end
-
-    row:Refresh()
-    return row
-end
-
--- Construit les lignes de settings hors EnsureFrame (budget upvalues separe).
-local function BuildSettingsRows(sp, rowParent, initialRowW, gold, white, placeRow)
-    if Overlord.ActionShortcut and Overlord.ActionShortcut.CreateSettingsRow then
-        sp._actionShortcutRow = Overlord.ActionShortcut:CreateSettingsRow(rowParent, {
-            width = initialRowW,
-            height = ROW_H,
-            gold = gold,
-            white = white,
-        })
-        placeRow(sp._actionShortcutRow)
-    end
-
-    sp._scaleRow = UI.CreateWC3StepperSlider(rowParent, {
-        width = initialRowW,
-        height = ROW_H,
-        label = (L and L.UI_SCALE_LABEL) or "Panel scale",
-        tooltip = (L and L.UI_SCALE_TOOLTIP) or "",
-        min = UI_SCALE_MIN,
-        max = UI_SCALE_MAX,
-        step = UI_SCALE_STEP,
-        get = Acc.getScale,
-        set = Acc.setScale,
-        snap = Acc.clampScale,
-        formatValue = Acc.formatScaleLabel,
-        gold = gold,
-        white = white,
-    })
-    placeRow(sp._scaleRow)
-
-    sp._chatRow = UI.CreateWC3StepperSlider(rowParent, {
-        width = initialRowW,
-        height = ROW_H,
-        label = (L and L.NOTIFICATION_CHAT_LABEL) or "Notification chat tab",
-        tooltip = (L and L.NOTIFICATION_CHAT_TOOLTIP) or "",
-        min = NOTIF_CHAT_MIN,
-        max = Acc.maxChatWindows(),
-        step = NOTIF_CHAT_STEP,
-        get = Acc.getNotificationChat,
-        set = Acc.setNotificationChat,
-        snap = Acc.clampNotificationChat,
-        formatValue = Acc.formatNotificationChatLabel,
-        gold = gold,
-        white = white,
-    })
-    placeRow(sp._chatRow)
-
-    local gka = Overlord.GuildKillAlert
-    if gka then
-        sp._guildKillAlertRow = CreateToggleRow(rowParent, {
-            width = initialRowW,
-            height = ROW_H,
-            label = (L and L.GUILD_KILL_ALERT_ENABLED_LABEL) or "Enemy guild raid alerts",
-            tooltip = (L and L.GUILD_KILL_ALERT_ENABLED_TOOLTIP) or "",
-            get = function() return gka:IsEnabled() end,
-            set = function(value) gka:SetEnabled(value) end,
-            gold = gold,
-            white = white,
-        })
-        placeRow(sp._guildKillAlertRow)
-    end
-
-    sp._opacityRow = UI.CreateWC3StepperSlider(rowParent, {
-        width = initialRowW,
-        height = ROW_H,
-        label = (L and L.MAP_OVERLAY_OPACITY_LABEL) or "Map capture opacity",
-        tooltip = (L and L.MAP_OVERLAY_OPACITY_TOOLTIP) or "",
-        min = MAP_OVERLAY_OPACITY_MIN,
-        max = MAP_OVERLAY_OPACITY_MAX,
-        step = MAP_OVERLAY_OPACITY_STEP,
-        get = Acc.getMapOverlayOpacity,
-        set = Acc.setMapOverlayOpacity,
-        snap = Acc.clampMapOverlayOpacity,
-        formatValue = Acc.formatMapOverlayOpacityLabel,
-        gold = gold,
-        white = white,
-    })
-    placeRow(sp._opacityRow)
-
-    sp._mapIconOpacityRow = UI.CreateWC3StepperSlider(rowParent, {
-        width = initialRowW,
-        height = ROW_H,
-        label = (L and L.MAP_ICON_OPACITY_LABEL) or "Map icon opacity",
-        tooltip = (L and L.MAP_ICON_OPACITY_TOOLTIP) or "",
-        min = 0,
-        max = MAP_OVERLAY_OPACITY_MAX,
-        step = MAP_OVERLAY_OPACITY_STEP,
-        get = Acc.getMapIconOpacity,
-        set = Acc.setMapIconOpacity,
-        snap = Acc.clampMapIconOpacity,
-        formatValue = Acc.formatMapIconOpacityLabel,
-        gold = gold,
-        white = white,
-    })
-    placeRow(sp._mapIconOpacityRow)
-
-    sp._minimapOpacityRow = UI.CreateWC3StepperSlider(rowParent, {
-        width = initialRowW,
-        height = ROW_H,
-        label = (L and L.MINIMAP_OVERLAY_OPACITY_LABEL) or "Minimap capture opacity",
-        tooltip = (L and L.MINIMAP_OVERLAY_OPACITY_TOOLTIP) or "",
-        min = MAP_OVERLAY_OPACITY_MIN,
-        max = MAP_OVERLAY_OPACITY_MAX,
-        step = MAP_OVERLAY_OPACITY_STEP,
-        get = Acc.getMinimapOverlayOpacity,
-        set = Acc.setMinimapOverlayOpacity,
-        snap = Acc.clampMapOverlayOpacity,
-        formatValue = Acc.formatMapOverlayOpacityLabel,
-        gold = gold,
-        white = white,
-    })
-    placeRow(sp._minimapOpacityRow)
-
-    sp._minimapCaptureZonesRow = CreateToggleRow(rowParent, {
-        width = initialRowW,
-        height = ROW_H,
-        label = (L and L.MINIMAP_CAPTURE_ZONES_LABEL) or "Minimap capture zones",
-        tooltip = (L and L.MINIMAP_CAPTURE_ZONES_TOOLTIP) or "",
-        get = Acc.getShowMinimapCaptureZones,
-        set = Acc.setShowMinimapCaptureZones,
-        gold = gold,
-        white = white,
-    })
-    placeRow(sp._minimapCaptureZonesRow)
-
-    sp._coinsHudRow = CreateToggleRow(rowParent, {
-        width = initialRowW,
-        height = ROW_H,
-        label = (L and L.COINS_HUD_LABEL) or "Coins panel",
-        tooltip = (L and L.COINS_HUD_TOOLTIP) or "",
-        get = Acc.getShowCoinsHud,
-        set = Acc.setShowCoinsHud,
-        gold = gold,
-        white = white,
-    })
-    placeRow(sp._coinsHudRow)
-
-    sp._floatingObjectiveRow = CreateToggleRow(rowParent, {
-        width = initialRowW,
-        height = ROW_H,
-        label = (L and L.FLOATING_OBJECTIVE_LABEL) or "Floating next objective",
-        tooltip = (L and L.FLOATING_OBJECTIVE_TOOLTIP) or "",
-        get = Overlord.SettingsPanel.GetShowFloatingObjective,
-        set = Overlord.SettingsPanel.SetShowFloatingObjective,
-        gold = gold,
-        white = white,
-    })
-    placeRow(sp._floatingObjectiveRow)
-
-    sp._minimapButtonRow = CreateToggleRow(rowParent, {
-        width = initialRowW,
-        height = ROW_H,
-        label = (L and L.MINIMAP_BUTTON_LABEL) or "Minimap button",
-        tooltip = (L and L.MINIMAP_BUTTON_TOOLTIP) or "",
-        get = Acc.getShowMinimapButton,
-        set = Acc.setShowMinimapButton,
-        gold = gold,
-        white = white,
-    })
-    placeRow(sp._minimapButtonRow)
-
-    sp._mapZoneTitlesRow = CreateToggleRow(rowParent, {
-        width = initialRowW,
-        height = ROW_H,
-        label = (L and L.MAP_ZONE_TITLES_LABEL) or "Map zone names",
-        tooltip = (L and L.MAP_ZONE_TITLES_TOOLTIP) or "",
-        get = Acc.getShowMapZoneTitles,
-        set = Acc.setShowMapZoneTitles,
-        gold = gold,
-        white = white,
-    })
-    placeRow(sp._mapZoneTitlesRow)
-
-    sp._pathOpacityRow = UI.CreateWC3StepperSlider(rowParent, {
-        width = initialRowW,
-        height = ROW_H,
-        label = (L and L.MAP_PATH_OPACITY_LABEL) or "Map path opacity",
-        tooltip = (L and L.MAP_PATH_OPACITY_TOOLTIP) or "",
-        min = MAP_PATH_OPACITY_MIN,
-        max = MAP_PATH_OPACITY_MAX,
-        step = MAP_PATH_OPACITY_STEP,
-        get = Acc.getMapPathOpacity,
-        set = Acc.setMapPathOpacity,
-        snap = Acc.clampMapPathOpacity,
-        formatValue = Acc.formatMapPathOpacityLabel,
-        gold = gold,
-        white = white,
-    })
-    placeRow(sp._pathOpacityRow)
-
-    sp._autoWaypointRow = CreateToggleRow(rowParent, {
-        width = initialRowW,
-        height = ROW_H,
-        label = (L and L.AUTO_WAYPOINT_LABEL) or "Auto-pin next objective",
-        tooltip = (L and L.AUTO_WAYPOINT_TOOLTIP) or "",
-        get = Acc.getAutoWaypoint,
-        set = Acc.setAutoWaypoint,
-        gold = gold,
-        white = white,
-    })
-    placeRow(sp._autoWaypointRow)
-
-    sp._showTopHudRow = CreateToggleRow(rowParent, {
-        width = initialRowW,
-        height = ROW_H,
-        label = (L and L.SHOW_TOP_HUD_LABEL) or "Top HUD",
-        tooltip = (L and L.SHOW_TOP_HUD_TOOLTIP) or "",
-        get = Acc.getTopHudMode,
-        set = Acc.setTopHudMode,
-        nextValue = function(mode)
-            if mode == "auto" then return "always" end
-            if mode == "always" then return "never" end
-            return "auto"
-        end,
-        formatValue = function(mode)
-            if mode == "always" then return L.TOP_HUD_MODE_ALWAYS or "Always" end
-            if mode == "never" then return L.TOP_HUD_MODE_NEVER or "Never" end
-            return L.TOP_HUD_MODE_AUTO or "Auto"
-        end,
-        isActive = function(mode) return mode ~= "never" end,
-        gold = gold,
-        white = white,
-    })
-    placeRow(sp._showTopHudRow)
-
-    sp._showTutorialBookRow = CreateToggleRow(rowParent, {
-        width = initialRowW,
-        height = ROW_H,
-        label = (L and L.SHOW_TUTORIAL_BOOK_LABEL) or "Tutorial book icon",
-        tooltip = (L and L.SHOW_TUTORIAL_BOOK_TOOLTIP) or "",
-        get = Acc.getShowTutorialBook,
-        set = Acc.setShowTutorialBook,
-        gold = gold,
-        white = white,
-    })
-    placeRow(sp._showTutorialBookRow)
-
-    sp._soundEnabledRow = CreateToggleRow(rowParent, {
-        width = initialRowW,
-        height = ROW_H,
-        label = (L and L.SOUND_ENABLED_LABEL) or "Overlord sounds",
-        tooltip = (L and L.SOUND_ENABLED_TOOLTIP) or "",
-        get = Acc.getSoundEnabled,
-        set = Acc.setSoundEnabled,
-        gold = gold,
-        white = white,
-    })
-    placeRow(sp._soundEnabledRow)
-end
-
-function Overlord.SettingsPanel:EnsureFrame()
-    if self._frame then return self._frame end
-    if not UI or not UI.ApplyWoodDialogBackdrop or not UI.CreateWC3SubPanel or not UI.CreateWC3StepperSlider then
-        return nil
-    end
-
-    local P = UI.GetViewerFactionPalette and UI.GetViewerFactionPalette() or {}
-    local gold = P.gold or { 0.85, 0.68, 0.20 }
-    local white = P.white or { 0.925, 0.937, 0.969 }
-
-    local initialStackW = computeStackWidth(520)
-    local initialRowW = computeRowWidth(initialStackW)
-
-    local f = CreateFrame("Frame", "OverlordSettingsCanvas", nil, "BackdropTemplate")
-    local idealStackH = computeIdealStackHeight()
-    f:SetSize(initialStackW + SETTINGS_PAD_OUTER * 2, idealStackH + SETTINGS_PAD_OUTER * 2)
-    UI.ApplyWoodDialogBackdrop(f, { fallbackBg = P.fallbackBg, borderColor = gold, borderAlpha = 0.88 })
-
-    local contentScrollH = computeContentScrollHeight()
-
-    f.stack = CreateFrame("Frame", nil, f)
-    f.stack:SetHeight(idealStackH)
-    f.stack:SetPoint("TOPLEFT", f, "TOPLEFT", SETTINGS_PAD_OUTER, -SETTINGS_PAD_OUTER)
-    f.stack:SetPoint("TOPRIGHT", f, "TOPRIGHT", -SETTINGS_PAD_OUTER, -SETTINGS_PAD_OUTER)
-
-    f._settingsRows = {}
-
-    function f:RefreshSettingsLayout()
-        local pw = self:GetWidth() or 520
-        local ph = self:GetHeight() or (computeIdealStackHeight() + SETTINGS_PAD_OUTER * 2)
-        local stackW = self.stack and self.stack:GetWidth()
-        if not stackW or stackW < 100 then
-            stackW = computeStackWidth(pw)
-        end
-        local maxStackH = ph - SETTINGS_PAD_OUTER * 2
-        local stackH = math.min(computeIdealStackHeight(), maxStackH)
-        local viewportH = computeViewportHeightForStack(stackH)
-        local rowW = computeRowWidth(stackW)
-
-        self.stack:SetHeight(stackH)
-        if self.content then
-            self.content:SetHeight(viewportH + SETTINGS_CONTENT_INSET * 2)
-        end
-        if self._scrollChild then
-            self._scrollChild:SetWidth(rowW + SETTINGS_PAD_INNER * 2)
-        end
-        for _, row in ipairs(self._settingsRows) do
-            if row.SetLayoutWidth then
-                row:SetLayoutWidth(rowW)
-            end
-        end
-        if self.RefreshSettingsScroll then
-            self:RefreshSettingsScroll()
-        end
-    end
-
-    local settingsLayoutRefreshPending = false
-    function f:QueueRefreshSettingsLayout()
-        if settingsLayoutRefreshPending then return end
-        settingsLayoutRefreshPending = true
-        C_Timer.After(0, function()
-            settingsLayoutRefreshPending = false
-            if f.RefreshSettingsLayout and f:IsShown() then
-                f:RefreshSettingsLayout()
-            end
-        end)
-    end
-
-    f:SetScript("OnShow", function(self)
-        local parent = self:GetParent()
-        if parent and parent.GetWidth and parent:GetWidth() > 0 then
-            self:SetAllPoints(parent)
-        end
-        self:QueueRefreshSettingsLayout()
-        if Overlord.SettingsPanel.RefreshFactionChrome then
-            Overlord.SettingsPanel:RefreshFactionChrome()
-        end
-        if Overlord.SettingsPanel.RefreshControls then
-            Overlord.SettingsPanel:RefreshControls()
-        end
-        scheduleActionGridActiveRefresh()
-    end)
-
-    f:SetScript("OnHide", scheduleActionGridActiveRefresh)
-
-    f:SetScript("OnSizeChanged", function(self)
-        self:QueueRefreshSettingsLayout()
-    end)
-
-    f.logo = f.stack:CreateTexture(nil, "ARTWORK")
-    f.logo:SetDrawLayer("ARTWORK", 2)
-    f.logo:SetSize(SETTINGS_LOGO_SIZE, SETTINGS_LOGO_SIZE)
-    f.logo:SetPoint("TOPLEFT", f.stack, "TOPLEFT", 8, -SETTINGS_HEADER_TOP)
-
-    f.titleFs = f.stack:CreateFontString(nil, "OVERLAY", "Fancy24Font")
-    f.titleFs:SetPoint("LEFT", f.logo, "RIGHT", 10, 2)
-    f.titleFs:SetText("Overlord")
-    f.titleFs:SetTextColor(gold[1], gold[2], gold[3])
-    f.titleFs:SetShadowOffset(2, -2)
-
-    f.versionFs = f.stack:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    f.versionFs:SetPoint("RIGHT", f.stack, "RIGHT", -12, 0)
-    f.versionFs:SetPoint("BOTTOM", f.titleFs, "BOTTOM", 0, -1)
-    f.versionFs:SetJustifyH("RIGHT")
-    local addonVer = Overlord and Overlord.Version
-    f.versionFs:SetText(addonVer and ("v" .. addonVer) or "")
-
-    f.subtitleFs = f.stack:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    f.subtitleFs:SetPoint("TOPLEFT", f.titleFs, "BOTTOMLEFT", 0, -2)
-    local playerName = Overlord and Overlord.SafeUnitName and select(1, Overlord:SafeUnitName("player"))
-    if not playerName or playerName == "" then
-        playerName = (L and L.POPUP_WELCOME_NAME_FALLBACK) or "Champion"
-    end
-    local subFmt = (L and L.SETTINGS_SUBTITLE) or "%s"
-    f.subtitleFs:SetText(string.format(subFmt, playerName))
-    if P.bright then
-        f.subtitleFs:SetTextColor(P.bright[1], P.bright[2], P.bright[3])
-    end
-
-    -- Zone de defilement sans bordure : le cadre bois suffit (plus de cadre dans un cadre).
-    f.content = CreateFrame("Frame", nil, f.stack)
-    f.content:SetSize(initialStackW, SETTINGS_VIEWPORT_H + SETTINGS_CONTENT_INSET * 2)
-    f.content:SetPoint("TOP", f.subtitleFs, "BOTTOM", 0, -SETTINGS_GAP_HEADER_CONTENT)
-    f.content:SetPoint("LEFT", f.stack, "LEFT", 0, 0)
-    f.content:SetPoint("RIGHT", f.stack, "RIGHT", 0, 0)
-
-    local scroll, scrollChild, scrollIndUp, scrollIndDown
-    if UI.CreateWC3WheelScroll then
-        scroll, scrollChild, scrollIndUp, scrollIndDown = UI:CreateWC3WheelScroll(
-            f.content, initialRowW + SETTINGS_PAD_INNER * 2, ROW_H + ROW_GAP)
-    end
-    f._scrollChild = scrollChild
-    local rowParent = scrollChild or f.content
-
-    function f:RefreshSettingsScroll()
-        if not scroll or not UI.UpdateWheelScrollIndicators then return end
-        if scrollChild then
-            scrollChild:SetHeight(contentScrollH)
-        end
-        scroll:UpdateScrollChildRect()
-        UI:UpdateWheelScrollIndicators(scroll, scrollIndUp, scrollIndDown)
-    end
-
-    local anchor = rowParent
-    local first = true
-    local function placeRow(row)
-        row:SetParent(rowParent)
-        if first then
-            row:SetPoint("TOPLEFT", anchor, "TOPLEFT", SETTINGS_PAD_INNER, -12)
-            first = false
-        else
-            row:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -ROW_GAP)
-        end
-        tinsert(f._settingsRows, row)
-        anchor = row
-    end
-
-    BuildSettingsRows(self, rowParent, initialRowW, gold, white, placeRow)
-    -- La hauteur fixe ne couvrait pas toutes les lignes : suivre le nombre reel.
-    contentScrollH = math.max(contentScrollH, 24 + (ROW_H + ROW_GAP) * #f._settingsRows)
-
-    if scrollChild then
-        scrollChild:SetHeight(contentScrollH)
-    end
-
-    f.resetBtn = UI.CreateWC3Button(f.stack, 160, 28,
-        (L and L.SETTINGS_DEFAULTS_BUTTON) or "Reset to defaults",
-        function()
-            Overlord.SettingsPanel:ResetDefaults()
-        end,
-        nil,
-        { gold = gold, white = white })
-    f.resetBtn:SetPoint("TOP", f.content, "BOTTOM", 0, -SETTINGS_RESET_GAP)
-    f.resetBtn:SetPoint("LEFT", f.stack, "CENTER", -80, 0)
-
-    ApplySettingsLogo(f.logo)
-
-    f:RefreshSettingsLayout()
-
-    self._frame = f
-    return f
-end
-
--- Layout vertical Blizzard (repli si canvas indisponible)
-local function RegisterVerticalFallback()
-    local category = Settings.RegisterVerticalLayoutCategory("Overlord")
-    local Lbl = MinimalSliderWithSteppersMixin and MinimalSliderWithSteppersMixin.Label
-
-    local setting = Settings.RegisterProxySetting(
-        category,
-        Overlord.SettingsPanel.UiScaleVariableName,
-        type(DEFAULT_SCALE),
-        (L and L.UI_SCALE_LABEL) or "Panel scale",
-        DEFAULT_SCALE,
-        getScale,
-        setScale
-    )
-    local options = Settings.CreateSliderOptions(UI_SCALE_MIN, UI_SCALE_MAX, UI_SCALE_STEP)
-    if options and options.SetLabelFormatter and Lbl then
-        pcall(function()
-            options:SetLabelFormatter(Lbl.Min, function() return formatScaleLabel(UI_SCALE_MIN) end)
-            options:SetLabelFormatter(Lbl.Max, function() return formatScaleLabel(UI_SCALE_MAX) end)
-            options:SetLabelFormatter(Lbl.Right, formatScaleLabel)
-        end)
-    end
-    Settings.CreateSlider(category, setting, options, (L and L.UI_SCALE_TOOLTIP) or "")
-
-    local ncSetting = Settings.RegisterProxySetting(
-        category,
-        Overlord.SettingsPanel.NotificationChatVariableName,
-        type(DEFAULT_NOTIF_CHAT),
-        (L and L.NOTIFICATION_CHAT_LABEL) or "Notification chat tab",
-        DEFAULT_NOTIF_CHAT,
-        getNotificationChat,
-        setNotificationChat
-    )
-    local ncOptions = Settings.CreateSliderOptions(NOTIF_CHAT_MIN, maxChatWindows(), NOTIF_CHAT_STEP)
-    if ncOptions and ncOptions.SetLabelFormatter and Lbl then
-        pcall(function()
-            ncOptions:SetLabelFormatter(Lbl.Min, function()
-                return (L and L.NOTIFICATION_CHAT_DEFAULT_SHORT) or "Default"
-            end)
-            ncOptions:SetLabelFormatter(Lbl.Max, function() return tostring(maxChatWindows()) end)
-            ncOptions:SetLabelFormatter(Lbl.Right, formatNotificationChatLabel)
-        end)
-    end
-    Settings.CreateSlider(category, ncSetting, ncOptions, (L and L.NOTIFICATION_CHAT_TOOLTIP) or "")
-
-    local moSetting = Settings.RegisterProxySetting(
-        category,
-        Overlord.SettingsPanel.MapOverlayOpacityVariableName,
-        type(DEFAULT_MAP_OVERLAY_OPACITY),
-        (L and L.MAP_OVERLAY_OPACITY_LABEL) or "Map capture opacity",
-        DEFAULT_MAP_OVERLAY_OPACITY,
-        getMapOverlayOpacity,
-        setMapOverlayOpacity
-    )
-    local moOptions = Settings.CreateSliderOptions(
-        MAP_OVERLAY_OPACITY_MIN, MAP_OVERLAY_OPACITY_MAX, MAP_OVERLAY_OPACITY_STEP)
-    if moOptions and moOptions.SetLabelFormatter and Lbl then
-        pcall(function()
-            moOptions:SetLabelFormatter(Lbl.Min, function()
-                return formatMapOverlayOpacityLabel(MAP_OVERLAY_OPACITY_MIN)
-            end)
-            moOptions:SetLabelFormatter(Lbl.Max, function()
-                return formatMapOverlayOpacityLabel(MAP_OVERLAY_OPACITY_MAX)
-            end)
-            moOptions:SetLabelFormatter(Lbl.Right, formatMapOverlayOpacityLabel)
-        end)
-    end
-    Settings.CreateSlider(category, moSetting, moOptions, (L and L.MAP_OVERLAY_OPACITY_TOOLTIP) or "")
-
-    local mmoSetting = Settings.RegisterProxySetting(
-        category,
-        Overlord.SettingsPanel.MinimapOverlayOpacityVariableName,
-        type(DEFAULT_MINIMAP_OVERLAY_OPACITY),
-        (L and L.MINIMAP_OVERLAY_OPACITY_LABEL) or "Minimap capture opacity",
-        DEFAULT_MINIMAP_OVERLAY_OPACITY,
-        getMinimapOverlayOpacity,
-        setMinimapOverlayOpacity
-    )
-    local mmoOptions = Settings.CreateSliderOptions(
-        MAP_OVERLAY_OPACITY_MIN, MAP_OVERLAY_OPACITY_MAX, MAP_OVERLAY_OPACITY_STEP)
-    if mmoOptions and mmoOptions.SetLabelFormatter and Lbl then
-        pcall(function()
-            mmoOptions:SetLabelFormatter(Lbl.Min, function()
-                return formatMapOverlayOpacityLabel(MAP_OVERLAY_OPACITY_MIN)
-            end)
-            mmoOptions:SetLabelFormatter(Lbl.Max, function()
-                return formatMapOverlayOpacityLabel(MAP_OVERLAY_OPACITY_MAX)
-            end)
-            mmoOptions:SetLabelFormatter(Lbl.Right, formatMapOverlayOpacityLabel)
-        end)
-    end
-    Settings.CreateSlider(category, mmoSetting, mmoOptions, (L and L.MINIMAP_OVERLAY_OPACITY_TOOLTIP) or "")
-
-    local miSetting = Settings.RegisterProxySetting(
-        category,
-        Overlord.SettingsPanel.MapIconOpacityVariableName,
-        type(Acc.DEFAULT_MAP_ICON_OPACITY),
-        (L and L.MAP_ICON_OPACITY_LABEL) or "Map icon opacity",
-        Acc.DEFAULT_MAP_ICON_OPACITY,
-        Acc.getMapIconOpacity,
-        Acc.setMapIconOpacity
-    )
-    local miOptions = Settings.CreateSliderOptions(0, MAP_OVERLAY_OPACITY_MAX, MAP_OVERLAY_OPACITY_STEP)
-    if miOptions and miOptions.SetLabelFormatter and Lbl then
-        pcall(function()
-            miOptions:SetLabelFormatter(Lbl.Right, Acc.formatMapIconOpacityLabel)
-        end)
-    end
-    Settings.CreateSlider(category, miSetting, miOptions, (L and L.MAP_ICON_OPACITY_TOOLTIP) or "")
-
-    local poSetting = Settings.RegisterProxySetting(
-        category,
-        Overlord.SettingsPanel.MapPathOpacityVariableName,
-        type(DEFAULT_MAP_PATH_OPACITY),
-        (L and L.MAP_PATH_OPACITY_LABEL) or "Map path opacity",
-        DEFAULT_MAP_PATH_OPACITY,
-        getMapPathOpacity,
-        setMapPathOpacity
-    )
-    local poOptions = Settings.CreateSliderOptions(
-        MAP_PATH_OPACITY_MIN, MAP_PATH_OPACITY_MAX, MAP_PATH_OPACITY_STEP)
-    if poOptions and poOptions.SetLabelFormatter and Lbl then
-        pcall(function()
-            poOptions:SetLabelFormatter(Lbl.Min, function()
-                return formatMapPathOpacityLabel(MAP_PATH_OPACITY_MIN)
-            end)
-            poOptions:SetLabelFormatter(Lbl.Max, function()
-                return formatMapPathOpacityLabel(MAP_PATH_OPACITY_MAX)
-            end)
-            poOptions:SetLabelFormatter(Lbl.Right, formatMapPathOpacityLabel)
-        end)
-    end
-    Settings.CreateSlider(category, poSetting, poOptions, (L and L.MAP_PATH_OPACITY_TOOLTIP) or "")
-    if Settings.CreateCheckbox then
-        local mbSetting = Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.ShowMinimapButtonVariableName,
-            type(DEFAULT_SHOW_MINIMAP_BUTTON),
-            (L and L.MINIMAP_BUTTON_LABEL) or "Minimap button",
-            DEFAULT_SHOW_MINIMAP_BUTTON,
-            getShowMinimapButton,
-            setShowMinimapButton
-        )
-        Settings.CreateCheckbox(category, mbSetting, (L and L.MINIMAP_BUTTON_TOOLTIP) or "")
-        local mmcSetting = Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.ShowMinimapCaptureZonesVariableName,
-            type(DEFAULT_SHOW_MINIMAP_CAPTURE_ZONES),
-            (L and L.MINIMAP_CAPTURE_ZONES_LABEL) or "Minimap capture zones",
-            DEFAULT_SHOW_MINIMAP_CAPTURE_ZONES,
-            getShowMinimapCaptureZones,
-            setShowMinimapCaptureZones
-        )
-        Settings.CreateCheckbox(category, mmcSetting, (L and L.MINIMAP_CAPTURE_ZONES_TOOLTIP) or "")
-        -- Pas de nouvelle upvalue ici : cette fonction est deja a la limite Lua 5.1 (60).
-        local coinsSetting = Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.ShowCoinsHudVariableName,
-            "boolean",
-            (L and L.COINS_HUD_LABEL) or "Coins panel",
-            false,
-            Overlord.SettingsPanel.GetShowCoinsHud,
-            Overlord.SettingsPanel.SetShowCoinsHud
-        )
-        Settings.CreateCheckbox(category, coinsSetting, (L and L.COINS_HUD_TOOLTIP) or "")
-        local floatingObjectiveSetting = Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.ShowFloatingObjectiveVariableName,
-            "boolean",
-            (L and L.FLOATING_OBJECTIVE_LABEL) or "Floating next objective",
-            false,
-            Overlord.SettingsPanel.GetShowFloatingObjective,
-            Overlord.SettingsPanel.SetShowFloatingObjective
-        )
-        Settings.CreateCheckbox(category, floatingObjectiveSetting, (L and L.FLOATING_OBJECTIVE_TOOLTIP) or "")
-        local mztSetting = Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.ShowMapZoneTitlesVariableName,
-            type(DEFAULT_SHOW_MAP_ZONE_TITLES),
-            (L and L.MAP_ZONE_TITLES_LABEL) or "Map zone names",
-            DEFAULT_SHOW_MAP_ZONE_TITLES,
-            getShowMapZoneTitles,
-            setShowMapZoneTitles
-        )
-        Settings.CreateCheckbox(category, mztSetting, (L and L.MAP_ZONE_TITLES_TOOLTIP) or "")
-        local awSetting = Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.AutoWaypointVariableName,
-            type(DEFAULT_AUTO_WAYPOINT),
-            (L and L.AUTO_WAYPOINT_LABEL) or "Auto-pin next objective",
-            DEFAULT_AUTO_WAYPOINT,
-            getAutoWaypoint,
-            setAutoWaypoint
-        )
-        Settings.CreateCheckbox(category, awSetting, (L and L.AUTO_WAYPOINT_TOOLTIP) or "")
-        if Settings.CreateDropdown and Settings.CreateControlTextContainer then
-            local thSetting = Settings.RegisterProxySetting(
-                category,
-                Overlord.SettingsPanel.TopHudModeVariableName,
-                type(DEFAULT_TOP_HUD_MODE),
-                (L and L.SHOW_TOP_HUD_LABEL) or "Top HUD",
-                DEFAULT_TOP_HUD_MODE,
-                getTopHudMode,
-                setTopHudMode
-            )
-            local hudOptions = Settings.CreateControlTextContainer()
-            hudOptions:Add("auto", (L and L.TOP_HUD_MODE_AUTO) or "Auto")
-            hudOptions:Add("always", (L and L.TOP_HUD_MODE_ALWAYS) or "Always")
-            hudOptions:Add("never", (L and L.TOP_HUD_MODE_NEVER) or "Never")
-            Settings.CreateDropdown(category, thSetting, function() return hudOptions:GetData() end,
-                (L and L.SHOW_TOP_HUD_TOOLTIP) or "")
-        else
-            local thSetting = Settings.RegisterProxySetting(
-                category,
-                Overlord.SettingsPanel.ShowTopHudVariableName,
-                type(DEFAULT_SHOW_TOP_HUD),
-                (L and L.SHOW_TOP_HUD_LABEL) or "Top HUD",
-                DEFAULT_SHOW_TOP_HUD,
-                getShowTopHud,
-                setShowTopHud
-            )
-            Settings.CreateCheckbox(category, thSetting, (L and L.SHOW_TOP_HUD_TOOLTIP) or "")
-        end
-        local tbSetting = Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.ShowTutorialBookVariableName,
-            type(DEFAULT_SHOW_TUTORIAL_BOOK),
-            (L and L.SHOW_TUTORIAL_BOOK_LABEL) or "Tutorial book icon",
-            DEFAULT_SHOW_TUTORIAL_BOOK,
-            getShowTutorialBook,
-            setShowTutorialBook
-        )
-        Settings.CreateCheckbox(category, tbSetting, (L and L.SHOW_TUTORIAL_BOOK_TOOLTIP) or "")
-        local seSetting = Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.SoundEnabledVariableName,
-            type(DEFAULT_SOUND_ENABLED),
-            (L and L.SOUND_ENABLED_LABEL) or "Overlord sounds",
-            DEFAULT_SOUND_ENABLED,
-            getSoundEnabled,
-            setSoundEnabled
-        )
-        Settings.CreateCheckbox(category, seSetting, (L and L.SOUND_ENABLED_TOOLTIP) or "")
-    end
-    Settings.RegisterAddOnCategory(category)
-    Overlord.SettingsPanel._category = category
-end
-
-function Overlord.SettingsPanel:Register()
+function SP:Register()
     if self._registered then return end
-    if not Settings or not Settings.RegisterProxySetting then
+    if not Settings or not Settings.RegisterVerticalLayoutCategory or not Settings.RegisterProxySetting then
         return
     end
-
     securecall(function()
-        local category
-        if Settings.RegisterCanvasLayoutCategory then
-            local frame = Overlord.SettingsPanel:EnsureFrame()
-            if frame then
-                category = Settings.RegisterCanvasLayoutCategory(frame, "Overlord")
-            end
+        local category, layout = Settings.RegisterVerticalLayoutCategory("Overlord")
+        for _, row in ipairs(ROWS) do
+            -- One unsupported control (older client API) must not hide the others.
+            pcall(addRow, category, layout, row)
         end
-
-        if not category and Settings.RegisterVerticalLayoutCategory and Settings.CreateSlider then
-            RegisterVerticalFallback()
-            Overlord.SettingsPanel._registered = true
-            return
-        end
-        if not category then return end
-
-        Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.UiScaleVariableName,
-            type(DEFAULT_SCALE),
-            (L and L.UI_SCALE_LABEL) or "Panel scale",
-            DEFAULT_SCALE,
-            getScale,
-            setScale
-        )
-        Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.NotificationChatVariableName,
-            type(DEFAULT_NOTIF_CHAT),
-            (L and L.NOTIFICATION_CHAT_LABEL) or "Notification chat tab",
-            DEFAULT_NOTIF_CHAT,
-            getNotificationChat,
-            setNotificationChat
-        )
-        Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.MapOverlayOpacityVariableName,
-            type(DEFAULT_MAP_OVERLAY_OPACITY),
-            (L and L.MAP_OVERLAY_OPACITY_LABEL) or "Map capture opacity",
-            DEFAULT_MAP_OVERLAY_OPACITY,
-            getMapOverlayOpacity,
-            setMapOverlayOpacity
-        )
-        Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.MinimapOverlayOpacityVariableName,
-            type(DEFAULT_MINIMAP_OVERLAY_OPACITY),
-            (L and L.MINIMAP_OVERLAY_OPACITY_LABEL) or "Minimap capture opacity",
-            DEFAULT_MINIMAP_OVERLAY_OPACITY,
-            getMinimapOverlayOpacity,
-            setMinimapOverlayOpacity
-        )
-        Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.MapIconOpacityVariableName,
-            type(Acc.DEFAULT_MAP_ICON_OPACITY),
-            (L and L.MAP_ICON_OPACITY_LABEL) or "Map icon opacity",
-            Acc.DEFAULT_MAP_ICON_OPACITY,
-            Acc.getMapIconOpacity,
-            Acc.setMapIconOpacity
-        )
-        Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.MapPathOpacityVariableName,
-            type(DEFAULT_MAP_PATH_OPACITY),
-            (L and L.MAP_PATH_OPACITY_LABEL) or "Map path opacity",
-            DEFAULT_MAP_PATH_OPACITY,
-            getMapPathOpacity,
-            setMapPathOpacity
-        )
-        Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.ShowMinimapButtonVariableName,
-            type(DEFAULT_SHOW_MINIMAP_BUTTON),
-            (L and L.MINIMAP_BUTTON_LABEL) or "Minimap button",
-            DEFAULT_SHOW_MINIMAP_BUTTON,
-            getShowMinimapButton,
-            setShowMinimapButton
-        )
-        Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.ShowMinimapCaptureZonesVariableName,
-            type(DEFAULT_SHOW_MINIMAP_CAPTURE_ZONES),
-            (L and L.MINIMAP_CAPTURE_ZONES_LABEL) or "Minimap capture zones",
-            DEFAULT_SHOW_MINIMAP_CAPTURE_ZONES,
-            getShowMinimapCaptureZones,
-            setShowMinimapCaptureZones
-        )
-        Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.ShowMapZoneTitlesVariableName,
-            type(DEFAULT_SHOW_MAP_ZONE_TITLES),
-            (L and L.MAP_ZONE_TITLES_LABEL) or "Map zone names",
-            DEFAULT_SHOW_MAP_ZONE_TITLES,
-            getShowMapZoneTitles,
-            setShowMapZoneTitles
-        )
-        Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.AutoWaypointVariableName,
-            type(DEFAULT_AUTO_WAYPOINT),
-            (L and L.AUTO_WAYPOINT_LABEL) or "Auto-pin next objective",
-            DEFAULT_AUTO_WAYPOINT,
-            getAutoWaypoint,
-            setAutoWaypoint
-        )
-        Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.TopHudModeVariableName,
-            type(DEFAULT_TOP_HUD_MODE),
-            (L and L.SHOW_TOP_HUD_LABEL) or "Top HUD",
-            DEFAULT_TOP_HUD_MODE,
-            getTopHudMode,
-            setTopHudMode
-        )
-        Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.ShowTutorialBookVariableName,
-            type(DEFAULT_SHOW_TUTORIAL_BOOK),
-            (L and L.SHOW_TUTORIAL_BOOK_LABEL) or "Tutorial book icon",
-            DEFAULT_SHOW_TUTORIAL_BOOK,
-            getShowTutorialBook,
-            setShowTutorialBook
-        )
-        Settings.RegisterProxySetting(
-            category,
-            Overlord.SettingsPanel.SoundEnabledVariableName,
-            type(DEFAULT_SOUND_ENABLED),
-            (L and L.SOUND_ENABLED_LABEL) or "Overlord sounds",
-            DEFAULT_SOUND_ENABLED,
-            getSoundEnabled,
-            setSoundEnabled
-        )
-
         Settings.RegisterAddOnCategory(category)
-        Overlord.SettingsPanel._category = category
-        Overlord.SettingsPanel._registered = true
+        SP._category = category
+        SP._registered = true
     end)
+    -- The main panel's Options button lights up while this page is open.
+    local panel = _G.SettingsPanel
+    if SP._registered and panel and panel.HookScript and not SP._panelHooked then
+        SP._panelHooked = true
+        panel:HookScript("OnShow", scheduleActionGridActiveRefresh)
+        panel:HookScript("OnHide", scheduleActionGridActiveRefresh)
+    end
 end
 
-function Overlord.SettingsPanel:SyncUiScaleWithSettingsAPI()
+function SP:SyncUiScaleWithSettingsAPI()
     if not Settings then return end
     local v = Overlord.UI and Overlord.UI.GetEffectiveUiScale and Overlord.UI:GetEffectiveUiScale()
     if not v then return end
     notifySettingsAPI(self.UiScaleVariableName, clampScale(v))
-    self:RefreshControls()
 end
 
-function Overlord.SettingsPanel:IsOpen()
+function SP:IsOpen()
     local panel = _G.SettingsPanel
-    if not panel or not panel.IsShown or not panel:IsShown() then
-        return false
+    if not panel or not panel.IsShown or not panel:IsShown() then return false end
+    local category = self._category
+    if category and panel.GetCurrentCategory then
+        local ok, current = pcall(panel.GetCurrentCategory, panel)
+        if ok and current ~= nil then return current == category end
     end
-    local f = self._frame
-    return f and f.IsShown and f:IsShown()
+    return true
 end
 
 function Overlord.SettingsPanel:Close()
