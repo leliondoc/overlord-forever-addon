@@ -17,7 +17,16 @@ local MAX_PACKET, MAX_PATH, TTL = 3600, 4, 120
 local ASSEMBLY_IDLE_TIMEOUT = 30
 local MAX_BRIDGE_FRIENDS = 5
 local MAX_QUEUE = 128
-local ROUTINE_FORWARD_SEC = 60
+-- Every player re-broadcasts each held outpost every 120 s: an identical routine
+-- state is relayed once per 10 min per hop (was 1 min). Any change has a new
+-- payload and passes at once.
+local ROUTINE_FORWARD_SEC = 600
+-- A capture in progress is ticked every 5 s by EVERY player in the area, and each
+-- origin's ticks were relayed. A relayed tick never counts as capture-credit
+-- evidence (direct copies only), so far peers only need the site's progress:
+-- one forward per (site, attacking guild, faction) per OP_PROGRESS_FORWARD_SEC,
+-- whichever origin. A new attacker has another key and passes at once.
+local OP_PROGRESS_FORWARD_SEC = 15
 local routineForwarded, routineForwardedOrder = {}, {}
 local CATCHUP_QUEUE = 16
 local PAGED_QUEUE = 4
@@ -728,8 +737,9 @@ function net:GetKindDiagnostics(maxRows)
         self.stats.forwardPathExhausted or 0)
     lines[#lines + 1] = string.format("VB relay: %d queued (max %d), %d B/s share, %d waiting updates coalesced.",
         laneSize(stateLane), STATE_QUEUE, STATE_RATE, self.stats.stateCoalesced or 0)
-    lines[#lines + 1] = string.format("Waiting SR duplicates coalesced: %d (same origin/target only). Unchanged guild identities not relayed: %d.",
-        self.stats.mapRequestsCoalesced or 0, self.stats.giForwardSkipped or 0)
+    lines[#lines + 1] = string.format("Waiting SR duplicates coalesced: %d (same origin/target only). Unchanged guild identities not relayed: %d. Outpost repeats not relayed: %d routine, %d progress.",
+        self.stats.mapRequestsCoalesced or 0, self.stats.giForwardSkipped or 0,
+        self.stats.routineForwardSkipped or 0, self.stats.progressForwardSkipped or 0)
     -- 1.3.2 cross-faction live totals: what reached us, and what our own bridge did.
     lines[#lines + 1] = string.format("Enemy live totals received: %d from the channel, %d from Battle.net friends"
         .. " (their own kills: %d). Your bridge: %d posted on the channel, %d sent to enemy friends,"
@@ -1615,17 +1625,32 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
             or (heardAt ~= nil and GetTime() - heardAt <= 300)
 
         -- The same routine outpost state (held/neutral, identical payload from any
-        -- origin) already relayed within a minute is handled, not queued again.
+        -- origin) already relayed within 10 min is handled, not queued again; the
+        -- same site's progress within 15 s likewise (see OP_PROGRESS_FORWARD_SEC).
         -- Channel receivers trust OP from any origin, so the origin is not part of
         -- the key.
-        local routineKey = p.kind == "OP" and p.target == "*" and not isUrgent(p)
-            and ("OP|" .. p.payload) or nil
+        local routineKey, routineWindow
+        if p.kind == "OP" and p.target == "*" then
+            if not isUrgent(p) then
+                routineKey, routineWindow = "OP|" .. p.payload, ROUTINE_FORWARD_SEC
+            else
+                local site, guild, fac = p.payload:match("^v%d+:([^:]*):[^:]*:[^:]*:([^:]*):([^:]*)")
+                if site then
+                    routineKey = "OPP|" .. site .. "|" .. guild:lower() .. "|" .. fac
+                    routineWindow = OP_PROGRESS_FORWARD_SEC
+                end
+            end
+        end
         -- Remembered at admission, even if that copy is later evicted: under
         -- saturation, re-admitting each duplicate only churned the queue (1.2.4 test).
         local routineAt = routineKey and routineForwarded[routineKey]
-        if routineAt and GetTime() - routineAt < ROUTINE_FORWARD_SEC then
+        if routineAt and GetTime() - routineAt < routineWindow then
             forwarded = true
-            self.stats.routineForwardSkipped = (self.stats.routineForwardSkipped or 0) + 1
+            if routineWindow == OP_PROGRESS_FORWARD_SEC then
+                self.stats.progressForwardSkipped = (self.stats.progressForwardSkipped or 0) + 1
+            else
+                self.stats.routineForwardSkipped = (self.stats.routineForwardSkipped or 0) + 1
+            end
         else
             forwarded = self:Queue(p) == true
             if forwarded and routineKey then
@@ -1645,10 +1670,14 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
                 remember(nhForwarded, nhForwardedOrder, origin:lower(), p.at, 512)
             elseif p.kind == "SH" then
                 remember(shForwarded, shForwardedOrder, origin:lower(), p.at, 512)
-            elseif p.kind == "GI" and p.target == "*" then
-                remember(giForwarded, giForwardedOrder, origin:lower(),
-                    { payload = p.payload, at = tonumber(p.at) or 0 }, 512)
             end
+        end
+        -- An unchanged GI counts as handled for the hour once a forward was
+        -- attempted, even refused: under saturation every heartbeat and every
+        -- other bridge's copy retried the same identity (149 refusals live).
+        if p.kind == "GI" and p.target == "*" then
+            remember(giForwarded, giForwardedOrder, origin:lower(),
+                { payload = p.payload, at = tonumber(p.at) or 0 }, 512)
         end
     end
     if pendingForward and not forwarded then

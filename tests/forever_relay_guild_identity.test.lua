@@ -72,4 +72,15 @@ assert(receive("Ida Forever", "Ida Forever:Other Guild:2840:1790009000"))
 assert(queued() == before + 3, "A guild change was held back")
 assert(receive("Bob Forever", "Bob Forever:Some Guild:2840:1790000000"))
 assert(queued() == before + 4, "Another origin was filtered by Ida's window")
+-- 4. A full relay refuses Cid's first GI: the same unchanged identity is not
+--    retried at the next heartbeat (it churned a saturated queue live).
+local queue = net.Queue
+local attempts = 0
+net.Queue = function() attempts = attempts + 1; return false end
+receive("Cid Forever", "Cid Forever:Some Guild:2840:1790000000")
+now = now + 850
+receive("Cid Forever", "Cid Forever:Some Guild:2840:1790000000")
+net.Queue = queue
+assert(attempts == 1, "A refused unchanged GI was retried: " .. attempts)
+
 print("Relay guild identity: unchanged GI relayed once per hour, changes relayed at once, always handled locally")

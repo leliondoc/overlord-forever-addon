@@ -54,7 +54,7 @@ local function receive(origin, kind, payload)
 end
 local HELD = "v2:ashenvale_outpost:held:Alliance:0"
 
--- 1. The same routine state heard from three players is relayed once per minute.
+-- 1. The same routine state heard from three players is relayed once per 10 min.
 local before = net:GetQueueSummary().total
 assert(receive("Ida Forever", "OP", HELD))
 assert(receive("Bob Forever", "OP", HELD))
@@ -63,7 +63,29 @@ assert(net:GetQueueSummary().total == before + 1, "An identical routine outpost 
 assert(net.stats.routineForwardSkipped == 2)
 now = now + 61
 assert(receive("Ida Forever", "OP", HELD))
-assert(net:GetQueueSummary().total == before + 2, "The routine state was not relayed again after a minute")
+assert(net:GetQueueSummary().total == before + 1, "An identical held state was relayed again within 10 min")
+now = now + 540
+assert(receive("Ida Forever", "OP", HELD))
+assert(net:GetQueueSummary().total == before + 2, "The routine state was not relayed again after 10 min")
+
+-- 1b. A capture in progress ticked by several players: one forward per site and
+--     attacking guild per 15 s, whichever origin; another attacker passes at once.
+net = load()
+before = net:GetQueueSummary().total
+local function progress(guildName, hold)
+    return "v1:ashenvale_outpost:in_progress:" .. hold .. ":" .. guildName .. ":H:0:0:" .. time() .. ":300:global"
+end
+assert(receive("Ida Forever", "OP", progress("NoMercy", 10)))
+now = now + 5
+assert(receive("Bob Forever", "OP", progress("NoMercy", 15)))
+assert(receive("Cid Forever", "OP", progress("NoMercy", 15)))
+assert(net:GetQueueSummary().total == before + 1, "Every capturer's progress tick was relayed")
+assert(net.stats.progressForwardSkipped == 2)
+assert(receive("Dan Forever", "OP", progress("No Flying", 5)))
+assert(net:GetQueueSummary().total == before + 2, "A second attacking guild was held back")
+now = now + 11
+assert(receive("Bob Forever", "OP", progress("NoMercy", 30)))
+assert(net:GetQueueSummary().total == before + 3, "Progress was not relayed again after 15 s")
 
 -- 2. Capture ticks from one player replace each other while unsent; another site
 --    or another player keeps its own slot.
