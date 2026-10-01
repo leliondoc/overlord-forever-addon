@@ -93,7 +93,21 @@ assert(upvalue(lb.RebuildNetworkHotIndexes, "dedupKillMaxIndex") == published,
 same, key = sameIndex(published, expectedKillIndex())
 assert(same, "Live kill index missed a kill during the meta pass at " .. tostring(key))
 
--- 3. A real reset during the pass (duplicate-key merge) still aborts it.
+-- 3. A pass that stalls more than 5 minutes loses its journal to the next pass
+--    and must not publish (it would miss the kills it no longer journals).
+local realGetTime = GetTime
+local clock = 1000
+GetTime = function() return clock end
+local stalled = slicedRebuild(function(step)
+    if step == 2 then
+        clock = clock + 400
+        assert(lb:RebuildNetworkHotIndexes(), "Fixture: overlapping pass failed")
+    end
+end)
+GetTime = realGetTime
+assert(stalled == false, "A pass whose journal expired was published")
+
+-- 4. A real reset during the pass (duplicate-key merge) still aborts it.
 local aborted = slicedRebuild(function(step)
     if step == 2 then lb:MergeDuplicateLeaderboardKeysByDedup() end
 end)

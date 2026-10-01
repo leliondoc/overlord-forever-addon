@@ -1094,6 +1094,7 @@ function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
         if sourcesChanged() then
             self._dedupMetaIndex = nil
             self._dedupLegacyShortMetaIndex = nil
+            self._guildFactionVoteIndex = nil
             return false
         end
         self._networkHotPlayerInfoSource = playerInfoSource
@@ -1109,28 +1110,33 @@ function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
         canonicalIndex[dk] = previous
             and self:ChooseRicherPlayerName(previous, name) or name
     end
-    -- Frozen key lists (one synchronous pass, no yield): kills keep arriving
-    -- while this rebuild yields, and resuming pairs() after an insertion is
-    -- undefined in Lua (existing rows may be skipped).
+    -- One journal per running pass (the login repair and the network worker can
+    -- overlap). Every slice marks progress; a pass that stopped progressing for
+    -- 5 minutes (failed or abandoned coroutine) is dropped by the next pass, and
+    -- a pass whose journal was dropped never publishes (see below).
+    local now = GetTime and GetTime() or 0
+    for stale in pairs(hotRebuildJournals) do
+        if now - stale.progressAt > 300 then hotRebuildJournals[stale] = nil end
+    end
+    local journal = { kills = {}, captures = {}, names = {}, progressAt = now }
+    hotRebuildJournals[journal] = true
+    if owner then owner.journal = journal end
+    local function step()
+        if GetTime then journal.progressAt = GetTime() end
+        if yieldWork then yieldWork() end
+    end
+    -- Frozen key lists, each taken right before its loop (no yield while
+    -- copying): kills keep arriving while this rebuild yields, and resuming
+    -- pairs() after an insertion is undefined in Lua (existing rows may be
+    -- skipped). Keys added after a copy are covered by the journal.
     local function keysOf(source)
         local list = {}
         for name in pairs(source) do list[#list + 1] = name end
         return list
     end
-    local killNames, captureNames, captureListNames =
-        keysOf(killsSource), keysOf(captureSource), keysOf(capturesSource)
-    -- One journal per running pass (the login repair and the network worker can
-    -- overlap). A pass abandoned for more than 5 minutes is dropped, so a failed
-    -- coroutine cannot leave a journal growing forever.
-    local now = GetTime and GetTime() or 0
-    for stale in pairs(hotRebuildJournals) do
-        if now - stale.startedAt > 300 then hotRebuildJournals[stale] = nil end
-    end
-    local journal = { kills = {}, captures = {}, names = {}, startedAt = now }
-    hotRebuildJournals[journal] = true
-    if owner then owner.journal = journal end
+    local killNames = keysOf(killsSource)
     for i = 1, #killNames do
-        if yieldWork then yieldWork() end
+        step()
         local name = killNames[i]
         local count = killsSource[name]
         if count ~= nil then
@@ -1140,8 +1146,9 @@ function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
             if dk and count > (killIndex[dk] or 0) then killIndex[dk] = count end
         end
     end
+    local captureNames = keysOf(captureSource)
     for i = 1, #captureNames do
-        if yieldWork then yieldWork() end
+        step()
         local name = captureNames[i]
         local count = captureSource[name]
         if count ~= nil then
@@ -1151,16 +1158,19 @@ function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
             if dk and count > (captureIndex[dk] or 0) then captureIndex[dk] = count end
         end
     end
+    local captureListNames = keysOf(capturesSource)
     for i = 1, #captureListNames do
-        if yieldWork then yieldWork() end
+        step()
         if capturesSource[captureListNames[i]] ~= nil then RegisterCanonical(captureListNames[i]) end
     end
-    self:RebuildDedupMetaIndex(yieldWork, RegisterCanonical)
+    self:RebuildDedupMetaIndex(step, RegisterCanonical)
+    local journalKept = hotRebuildJournals[journal] == true
     hotRebuildJournals[journal] = nil
     if owner then owner.journal = nil end
-    if sourcesChanged() then
+    if not journalKept or sourcesChanged() then
         self._dedupMetaIndex = nil
         self._dedupLegacyShortMetaIndex = nil
+        self._guildFactionVoteIndex = nil
         return false
     end
     -- Replay what arrived during the pass (max semantics, like the live updaters).
