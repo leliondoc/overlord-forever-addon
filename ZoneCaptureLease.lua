@@ -720,7 +720,27 @@ local function FindCapturerMatchUnit(unit)
     return guid
 end
 
+-- Same lookup again within 1.5 s (every in-progress ZS of a siege re-ran it: up to
+-- ~90 unit tokens each, perf audit 2026-10-01) reuses the answer. A capturer's own
+-- ticks are 5 s apart, so the evidence is never older than one tick. One window at
+-- a time: the table is dropped, not grown.
+local findCapturerCache = { at = -1000, entries = {} }
+local FindCapturerOnDiskUncached
 local function FindCapturerOnDisk(zone, capturerName, owner, expectedGuid)
+    if not zone or not zone.id then return FindCapturerOnDiskUncached(zone, capturerName, owner, expectedGuid) end
+    local now = GetTime and GetTime() or 0
+    if now - findCapturerCache.at > 1.5 then
+        findCapturerCache.at, findCapturerCache.entries = now, {}
+    end
+    local key = tostring(zone.id) .. "|" .. tostring(capturerName) .. "|" .. tostring(owner)
+        .. "|" .. tostring(expectedGuid)
+    local hit = findCapturerCache.entries[key]
+    if hit ~= nil then return hit or nil end
+    local guid = FindCapturerOnDiskUncached(zone, capturerName, owner, expectedGuid)
+    findCapturerCache.entries[key] = guid or false
+    return guid
+end
+FindCapturerOnDiskUncached = function(zone, capturerName, owner, expectedGuid)
     if not zone or not zone.center or not zone.radius or not C_Map
         or type(C_Map.GetPlayerMapPosition) ~= "function"
         or type(UnitExists) ~= "function" or type(UnitIsPlayer) ~= "function"

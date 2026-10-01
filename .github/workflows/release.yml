@@ -103,6 +103,7 @@ jobs:
           lua5.1 tests/forever_guild_restamp_throttle.test.lua
           lua5.1 tests/forever_hot_index_journal.test.lua
           lua5.1 tests/forever_bridge_election.test.lua
+          lua5.1 tests/forever_bnet_friends_sliced.test.lua
           lua5.1 tests/forever_victory_raid_alert.test.lua
           lua5.1 tests/forever_direct_route_sticky.test.lua
           lua5.1 tests/forever_guild_roster_hints.test.lua

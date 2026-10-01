@@ -2606,60 +2606,80 @@ local function GetBNetFriendsInWoW()
     if cachedBNetFriendsList and (now - cachedBNetFriendsAt) < BNET_FRIENDS_CACHE_TTL then
         return cachedBNetFriendsList
     end
-    -- Liste expiree : servir l'ancienne et reconstruire a l'image suivante, jamais
-    -- au milieu du traitement d'un paquet (scan de tous les amis et comptes).
+    -- Liste expiree : servir l'ancienne et la reconstruire en tranches (25 amis par
+    -- image), jamais au milieu du traitement d'un paquet. Un seul bloc coutait
+    -- 2-4 ms avec 150-300 amis (audit perf 2026-10-01).
     if cachedBNetFriendsList and C_Timer and C_Timer.After then
         local stale = cachedBNetFriendsList
         if not stale.refreshQueued then
             stale.refreshQueued = true
-            C_Timer.After(0, function()
-                if cachedBNetFriendsList == stale then
-                    cachedBNetFriendsList = nil
-                    GetBNetFriendsInWoW()
-                end
+            local builder = coroutine.create(function()
+                return Overlord.Sync:_BuildBNetFriendsList(true)
             end)
+            local function step()
+                if cachedBNetFriendsList ~= stale then return end
+                local ok, result = coroutine.resume(builder)
+                if not ok then
+                    -- Garder l'ancienne liste ; nouvel essai apres le TTL.
+                    stale.refreshQueued = nil
+                    cachedBNetFriendsAt = GetTime()
+                    return
+                end
+                if coroutine.status(builder) == "dead" then
+                    cachedBNetFriendsList = result or { info = {} }
+                    cachedBNetFriendsAt = GetTime()
+                else
+                    C_Timer.After(0, step)
+                end
+            end
+            C_Timer.After(0, step)
         end
         return stale
     end
-    -- list.info[id] = { faction, name } : le relais beta privilegie les amis de la
-    -- faction adverse (seuls ponts Horde/Alliance). Stocke dans la liste pour ne pas
-    -- ajouter de local au chunk Sync.lua (limite WoW de 200).
+    local ok, list = pcall(Overlord.Sync._BuildBNetFriendsList, Overlord.Sync, false)
+    cachedBNetFriendsList = ok and list or { info = {} }
+    cachedBNetFriendsAt = now
+    return cachedBNetFriendsList
+end
+
+-- list.info[id] = { faction, name } : le relais beta privilegie les amis de la
+-- faction adverse (seuls ponts Horde/Alliance). Methode et non local : le chunk
+-- Sync.lua est proche de la limite WoW de 200 locals. sliced : cede la main
+-- toutes les 25 amis (appel depuis une coroutine).
+function Overlord.Sync:_BuildBNetFriendsList(sliced)
     local list = { info = {} }
-    pcall(function()
-        local numFriends = BNGetNumFriends()
-        if not numFriends or numFriends == 0 then return end
-        local bridges, sameFaction = {}, {}
-        for i = 1, numFriends do
-            local numAccounts = C_BattleNet and C_BattleNet.GetFriendNumGameAccounts and C_BattleNet.GetFriendNumGameAccounts(i)
-            if numAccounts then
-                for j = 1, numAccounts do
-                    local game = C_BattleNet.GetFriendGameAccountInfo(i, j)
-                    if game and game.gameAccountID and IsForeverWowGameAccount(game) then
-                        local faction = game.factionName
-                        list.info[game.gameAccountID] = {
-                            faction = faction,
-                            name = Overlord.Sync:CanonicalForeverName(game.characterName),
-                        }
-                        local enemy = (faction == "Alliance" or faction == "Horde")
-                            and (Overlord.PlayerFaction == "Alliance" or Overlord.PlayerFaction == "Horde")
-                            and faction ~= Overlord.PlayerFaction
-                        table.insert(enemy and bridges or sameFaction, game.gameAccountID)
-                    end
+    local numFriends = BNGetNumFriends()
+    if not numFriends or numFriends == 0 then return list end
+    local bridges, sameFaction = {}, {}
+    for i = 1, numFriends do
+        if sliced and i % 25 == 0 then coroutine.yield() end
+        local numAccounts = C_BattleNet and C_BattleNet.GetFriendNumGameAccounts and C_BattleNet.GetFriendNumGameAccounts(i)
+        if numAccounts then
+            for j = 1, numAccounts do
+                local game = C_BattleNet.GetFriendGameAccountInfo(i, j)
+                if game and game.gameAccountID and IsForeverWowGameAccount(game) then
+                    local faction = game.factionName
+                    list.info[game.gameAccountID] = {
+                        faction = faction,
+                        name = self:CanonicalForeverName(game.characterName),
+                    }
+                    local enemy = (faction == "Alliance" or faction == "Horde")
+                        and (Overlord.PlayerFaction == "Alliance" or Overlord.PlayerFaction == "Horde")
+                        and faction ~= Overlord.PlayerFaction
+                    table.insert(enemy and bridges or sameFaction, game.gameAccountID)
                 end
             end
         end
-        -- Plafond global inchange ; les ponts de faction adverse passent en premier.
-        for _, id in ipairs(bridges) do
-            if #list >= BNET_MAX_FRIENDS then break end
-            list[#list + 1] = id
-        end
-        for _, id in ipairs(sameFaction) do
-            if #list >= BNET_MAX_FRIENDS then break end
-            list[#list + 1] = id
-        end
-    end)
-    cachedBNetFriendsList = list
-    cachedBNetFriendsAt = now
+    end
+    -- Plafond global inchange ; les ponts de faction adverse passent en premier.
+    for _, id in ipairs(bridges) do
+        if #list >= BNET_MAX_FRIENDS then break end
+        list[#list + 1] = id
+    end
+    for _, id in ipairs(sameFaction) do
+        if #list >= BNET_MAX_FRIENDS then break end
+        list[#list + 1] = id
+    end
     return list
 end
 
