@@ -827,11 +827,23 @@ local HOME_ART_BY_RACE = {
 }
 local HOME_ART_BY_FACTION = { Alliance = "ElwynnForest", Horde = "Durotar" }
 
-function Overlord.Fronts:GetHomeArtPath()
+local function HomeRaceAndFaction()
     local raceFile = UnitRace and select(2, UnitRace("player"))
-    local art = raceFile and HOME_ART_BY_RACE[raceFile]
-        or HOME_ART_BY_FACTION[Overlord.PlayerFaction or UnitFactionGroup("player") or ""]
+    return raceFile, Overlord.PlayerFaction or UnitFactionGroup("player") or ""
+end
+
+function Overlord.Fronts:GetHomeArtPath()
+    local raceFile, faction = HomeRaceAndFaction()
+    local art = raceFile and HOME_ART_BY_RACE[raceFile] or HOME_ART_BY_FACTION[faction]
     return art and (HOME_ART_DIR .. art .. ".blp") or nil
+end
+
+-- Short race motto shown as the panel title outside a front (Locales HOME_MOTTOS).
+function Overlord.Fronts:GetHomeMotto()
+    local mottos = Overlord.L and Overlord.L.HOME_MOTTOS
+    if type(mottos) ~= "table" then return nil end
+    local raceFile, faction = HomeRaceAndFaction()
+    return raceFile and mottos[raceFile] or mottos[faction]
 end
 
 local FEATURED_FRONT_NAME_KEYS = {

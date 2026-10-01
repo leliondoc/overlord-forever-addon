@@ -124,6 +124,20 @@ L.NEXT_OBJECTIVE_HEADER = "下一个目标"
 L.NEXT_OBJECTIVE_COLLAPSE = "隐藏下一个目标"
 L.NEXT_OBJECTIVE_NONE = "暂无可用目标"
 L.NEXT_OBJECTIVE_NO_FRONT = "不在战线区域"
+-- Outside a war front: one short line for the player's race (faction fallback).
+L.HOME_MOTTOS = {
+    Human = "暴风城依然屹立。",
+    Dwarf = "铁炉堡永不屈服。",
+    Gnome = "诺莫瑞根终将重生！",
+    NightElf = "在艾露恩的注视下。",
+    Orc = "胜利或死亡！",
+    Troll = "灵魂在看着呢，伙计。",
+    Scourge = "黑暗女王注视着你。",
+    Tauren = "大地母亲指引着你。",
+    Skyborne = "风之歌。",
+    Alliance = "为了联盟！",
+    Horde = "为了部落！",
+}
 L.NEXT_OBJECTIVE_OUTSIDE_FRONT = "进入战线区域以查看下一个目标。"
 L.NEXT_OBJECTIVE_GO = "转到此处：站在该区域以启动占领计时器。"
 L.VICTORY_DOMINATION_BONUS = "前线总胜利：+%d%% 你的派系每周的统治力。"

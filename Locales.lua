@@ -255,6 +255,20 @@ L.NEXT_OBJECTIVE_HEADER   = "Next Objective"
 L.NEXT_OBJECTIVE_COLLAPSE = "Hide next objective"
 L.NEXT_OBJECTIVE_NONE = "No objective available"
 L.NEXT_OBJECTIVE_NO_FRONT = "Outside a war front"
+-- Outside a war front: one short line for the player's race (faction fallback).
+L.HOME_MOTTOS = {
+    Human = "Stormwind still stands.",
+    Dwarf = "Ironforge endures.",
+    Gnome = "Gnomeregan shall rise!",
+    NightElf = "Under Elune's gaze.",
+    Orc = "Lok'tar ogar!",
+    Troll = "Da spirits be watchin'.",
+    Scourge = "The Dark Lady watches.",
+    Tauren = "The Earth Mother guides.",
+    Skyborne = "The song of the winds.",
+    Alliance = "For the Alliance!",
+    Horde = "For the Horde!",
+}
 L.NEXT_OBJECTIVE_OUTSIDE_FRONT = "Enter a war front to see your next objective."
 L.NEXT_OBJECTIVE_GO         = "Go here: stand in the zone to start the capture timer."
 L.GUIDE_BAR_LABEL           = "Tutorial"
@@ -788,6 +802,20 @@ L.NEXT_OBJECTIVE_HEADER   = "Prochain objectif"
 L.NEXT_OBJECTIVE_COLLAPSE = "Masquer le prochain objectif"
 L.NEXT_OBJECTIVE_NONE = "Aucun objectif disponible"
 L.NEXT_OBJECTIVE_NO_FRONT = "Hors d’un front de guerre"
+-- Outside a war front: one short line for the player's race (faction fallback).
+L.HOME_MOTTOS = {
+    Human = "Hurlevent tient bon.",
+    Dwarf = "Forgefer ne plie jamais.",
+    Gnome = "Gnomeregan renaîtra !",
+    NightElf = "Sous le regard d'Elune.",
+    Orc = "Lok'tar ogar !",
+    Troll = "Les esprits veillent, mon.",
+    Scourge = "La Dame noire veille.",
+    Tauren = "La Terre-mère guide.",
+    Skyborne = "Le chant des vents.",
+    Alliance = "Pour l'Alliance !",
+    Horde = "Pour la Horde !",
+}
 L.NEXT_OBJECTIVE_OUTSIDE_FRONT = "Rejoignez un front pour voir votre prochain objectif."
 L.NEXT_OBJECTIVE_GO         = "Allez ici: restez dans la zone pour lancer le minuteur."
 L.GUIDE_BAR_LABEL           = "Tutoriel"
@@ -1318,6 +1346,20 @@ L.NEXT_OBJECTIVE_HEADER   = "Próximo objetivo"
 L.NEXT_OBJECTIVE_COLLAPSE = "Ocultar próximo objetivo"
 L.NEXT_OBJECTIVE_NONE = "Ningún objetivo disponible"
 L.NEXT_OBJECTIVE_NO_FRONT = "Fuera de un frente de guerra"
+-- Outside a war front: one short line for the player's race (faction fallback).
+L.HOME_MOTTOS = {
+    Human = "Ventormenta resiste.",
+    Dwarf = "Forjaz nunca se rinde.",
+    Gnome = "¡Gnomeregan resurgirá!",
+    NightElf = "Bajo la mirada de Elune.",
+    Orc = "¡Lok'tar ogar!",
+    Troll = "Los espíritus vigilan.",
+    Scourge = "La Dama Oscura vigila.",
+    Tauren = "La Madre Tierra guía.",
+    Skyborne = "El canto de los vientos.",
+    Alliance = "¡Por la Alianza!",
+    Horde = "¡Por la Horda!",
+}
 L.NEXT_OBJECTIVE_OUTSIDE_FRONT = "Entra en un frente para ver tu próximo objetivo."
 L.NEXT_OBJECTIVE_GO         = "Ve aquí: permanece en la zona para iniciar el temporizador de captura."
 L.GUIDE_BAR_LABEL           = "Guía"
@@ -1845,6 +1887,20 @@ L.NEXT_OBJECTIVE_HEADER   = "Nächstes Ziel"
 L.NEXT_OBJECTIVE_COLLAPSE = "Nächstes Ziel ausblenden"
 L.NEXT_OBJECTIVE_NONE = "Kein Ziel verfügbar"
 L.NEXT_OBJECTIVE_NO_FRONT = "Außerhalb einer Kriegsfront"
+-- Outside a war front: one short line for the player's race (faction fallback).
+L.HOME_MOTTOS = {
+    Human = "Sturmwind steht noch.",
+    Dwarf = "Eisenschmiede hält stand.",
+    Gnome = "Gnomeregan ersteht neu!",
+    NightElf = "Unter Elunes Blick.",
+    Orc = "Lok'tar ogar!",
+    Troll = "Die Geister wachen, Mann.",
+    Scourge = "Die Dunkle Fürstin wacht.",
+    Tauren = "Die Erdenmutter führt.",
+    Skyborne = "Der Gesang der Winde.",
+    Alliance = "Für die Allianz!",
+    Horde = "Für die Horde!",
+}
 L.NEXT_OBJECTIVE_OUTSIDE_FRONT = "Betritt eine Kriegsfront, um dein nächstes Ziel zu sehen."
 L.NEXT_OBJECTIVE_GO         = "Hierhin: in der Zone bleiben, um den Eroberungstimer zu starten."
 L.GUIDE_BAR_LABEL           = "Anleitung"
@@ -2378,6 +2434,20 @@ L.NEXT_OBJECTIVE_HEADER   = "Следующая цель"
 L.NEXT_OBJECTIVE_COLLAPSE = "Скрыть следующую цель"
 L.NEXT_OBJECTIVE_NONE = "Нет доступной цели"
 L.NEXT_OBJECTIVE_NO_FRONT = "Вне военного фронта"
+-- Outside a war front: one short line for the player's race (faction fallback).
+L.HOME_MOTTOS = {
+    Human = "Штормград стоит.",
+    Dwarf = "Стальгорн не сдаётся.",
+    Gnome = "Гномреган возродится!",
+    NightElf = "Под взором Элуны.",
+    Orc = "Лок'тар огар!",
+    Troll = "Духи следят, мон.",
+    Scourge = "Тёмная госпожа следит.",
+    Tauren = "Мать-Земля ведёт.",
+    Skyborne = "Песнь ветров.",
+    Alliance = "За Альянс!",
+    Horde = "За Орду!",
+}
 L.NEXT_OBJECTIVE_OUTSIDE_FRONT = "Отправляйтесь на фронт, чтобы увидеть следующую цель."
 L.NEXT_OBJECTIVE_GO         = "Идите сюда: встаньте в зону, чтобы запустить таймер захвата."
 L.GUIDE_BAR_LABEL           = "Обучение"

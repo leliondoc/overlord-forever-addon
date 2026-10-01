@@ -45,6 +45,7 @@ Overlord = {
         GetFeaturedFrontId = function() error('Objective panel used the daily featured front') end,
         GetFeaturedFrontArtPath = function(_, id) return id .. '.blp' end,
         GetHomeArtPath = function() return 'home.blp' end,
+        GetHomeMotto = function() return "Lok'tar ogar!" end,
         GetFeaturedFrontDisplayName = function(_, id) return id == 'elwynn' and 'Elwynn Forest' or 'Loch Modan' end,
     },
     Zones = {
@@ -157,6 +158,7 @@ assert(panel.objectiveDetailsFs.text == '' and not panel.objectiveDetailsFs:IsSh
 Overlord.InActiveFront = false
 popups:RefreshNextObjective()
 assert(panel.vignette.texture == 'home.blp' and panel.bodyFs.text == 'Enter a war front', 'Leaving a front did not show the homeland art')
+assert(panel.frontNameFs.text == "Lok'tar ogar!", 'Leaving a front did not show the race motto')
 
 -- Both guidance and regular capture progress belong to the side panel. Keep
 -- the waypoint, but never resurrect the floating HUD through capture/manual calls.

@@ -124,6 +124,20 @@ L.NEXT_OBJECTIVE_HEADER = "Próximo objetivo"
 L.NEXT_OBJECTIVE_COLLAPSE = "Ocultar próximo objetivo"
 L.NEXT_OBJECTIVE_NONE = "Nenhum objetivo disponível"
 L.NEXT_OBJECTIVE_NO_FRONT = "Fora de uma frente de guerra"
+-- Outside a war front: one short line for the player's race (faction fallback).
+L.HOME_MOTTOS = {
+    Human = "Ventobravo resiste.",
+    Dwarf = "Altaforja nunca se curva.",
+    Gnome = "Gnomeregan renascerá!",
+    NightElf = "Sob o olhar de Eluna.",
+    Orc = "Lok'tar ogar!",
+    Troll = "Os espíritos vigiam, mon.",
+    Scourge = "A Dama Sombria vigia.",
+    Tauren = "A Mãe Terra guia.",
+    Skyborne = "O canto dos ventos.",
+    Alliance = "Pela Aliança!",
+    Horde = "Pela Horda!",
+}
 L.NEXT_OBJECTIVE_OUTSIDE_FRONT = "Entre em uma frente para ver seu próximo objetivo."
 L.NEXT_OBJECTIVE_GO = "Vá aqui: fique na zona para iniciar o cronômetro de captura."
 L.VICTORY_DOMINATION_BONUS = "Vitória frontal total: +%d%% dominação semanal para sua facção."

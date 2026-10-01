@@ -1994,6 +1994,9 @@ ApplyFeaturedFrontContent = function(f, frontId)
     if zone and not pendingSync and Overlord.ZoneIndicator and Overlord.ZoneIndicator.GetObjectiveDetails then
         details = Overlord.ZoneIndicator:GetObjectiveDetails(zone)
     end
+    if not name and not frontId and Overlord.Fronts.GetHomeMotto then
+        name = Overlord.Fronts:GetHomeMotto()
+    end
     name = name or (L.NEXT_OBJECTIVE_NO_FRONT or "Outside a war front")
     if f._objectiveArt ~= art then
         f._objectiveArt = art
