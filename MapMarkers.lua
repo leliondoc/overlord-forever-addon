@@ -1515,6 +1515,41 @@ function Overlord.MapMarkers:UpdateOverlayLayout(overlay)
     LayoutZoneTitleRibbon(overlay)
 end
 
+-- A zone being captured "breathes": a masked glow in the zone colour fades in and
+-- out (0.9 s each way). Created on first use; animations of hidden overlays do
+-- not run, so a closed world map costs nothing.
+local function SetOverlayPulse(overlay, active, r, g, b, alpha)
+    if not active or not overlay.CreateAnimationGroup then
+        if overlay.pulse then
+            overlay.pulseAnim:Stop()
+            overlay.pulse:Hide()
+        end
+        return
+    end
+    if not overlay.pulse then
+        local pulse = overlay:CreateTexture(nil, "ARTWORK", nil, 1)
+        pulse:SetAllPoints()
+        pulse:SetColorTexture(1, 1, 1)
+        pulse:SetAlpha(0)
+        AddCircleMask(overlay, pulse)
+        local group = pulse:CreateAnimationGroup()
+        group:SetLooping("BOUNCE")
+        local fade = group:CreateAnimation("Alpha")
+        fade:SetDuration(0.9)
+        fade:SetSmoothing("IN_OUT")
+        overlay.pulse, overlay.pulseAnim, overlay.pulseFade = pulse, group, fade
+    end
+    overlay.pulse:SetColorTexture(r, g, b)
+    if overlay._olPulseAlpha ~= alpha then
+        overlay._olPulseAlpha = alpha
+        overlay.pulseAnim:Stop()
+        overlay.pulseFade:SetFromAlpha(0)
+        overlay.pulseFade:SetToAlpha(alpha)
+    end
+    overlay.pulse:Show()
+    if not overlay.pulseAnim:IsPlaying() then overlay.pulseAnim:Play() end
+end
+
 function Overlord.MapMarkers:UpdateOverlay(overlay)
     local zone = overlay.zone
     local canvas = GetCanvas()
@@ -1570,6 +1605,9 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
     end
 
     local opacityScale = GetMapOverlayOpacityScale()
+    -- Before the paint cache: the pulse follows the status even when nothing else changed.
+    SetOverlayPulse(overlay, zone.status == "in_progress" and not onTruce and not loginPending,
+        r, g, b, 0.32 * opacityScale)
     local borderAlpha = ba * opacityScale
     local fillAlpha = fa * opacityScale
     local iconAtlas = Overlord.Zones:GetZoneMapIconAtlas(zone, true)
