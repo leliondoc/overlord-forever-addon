@@ -9558,6 +9558,9 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel)
 
     -- Rejette les replays de sessions precedentes (> 2h)
     if time() - ts > 7200 then return end
+    -- Une victoire de la semaine passee (relayee juste apres le reset hebdo) ne
+    -- repeint jamais le front de la nouvelle semaine (meme garde que VT/VF).
+    if IsStaleCampaignTimestamp(ts) then return end
 
     -- Ne PAS utiliser priv.totalVictoryAnnounced ici : Initialize() le met a true des qu'il y a eu
     -- une victoire apres le reset hebdo (evite le re-pop de l'ecran au /reload). Sans ce

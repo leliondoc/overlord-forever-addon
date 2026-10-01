@@ -363,4 +363,24 @@ do
     sameBar({ upgraded }, 50, "leftover wood ledgers")
 end
 
+-- 9. A total victory of last week relayed just after the weekly reset is ignored:
+-- it must not repaint the new week's front nor journal a victory.
+do
+    local savedServer, savedStart = server, Overlord.GetCurrentCampaignStartTs
+    server = campaign + 60
+    Overlord.GetCurrentCampaignStartTs = function() return campaign end
+    local fresh = newClient("Fresh Week", "Horde")
+    local repainted = false
+    local savedForce = Overlord.Zones.ForceSyncFrontToWinner
+    Overlord.Zones.ForceSyncFrontToWinner = function() repainted = true end
+    receive(fresh, "Alliance Two", "TV", "Alliance:" .. (campaign - 60) .. ":0:0:f2")
+    assert(not repainted and fresh.db.frontVictories.f2 == nil,
+        "A previous-week total victory was applied after the weekly reset")
+    sameBar({ fresh }, 50, "previous-week TV after the reset")
+    receive(fresh, "Alliance Two", "TV", "Alliance:" .. (campaign + 30) .. ":0:0:f2")
+    assert(fresh.db.frontVictories.f2 ~= nil, "A current-week total victory was refused")
+    Overlord.Zones.ForceSyncFrontToWinner = savedForce
+    Overlord.GetCurrentCampaignStartTs, server = savedStart, savedServer
+end
+
 print("Forever domination v2: bar = 50 +/- victories, no wood, relay/BNet convergence, replay, old clients OK")
