@@ -478,6 +478,15 @@ local nhForwarded, nhForwardedOrder = {}, {}
 -- own direct copies are unchanged, and it is always handled locally.
 local SH_FORWARD_SEC = 90
 local shForwarded, shForwardedOrder = {}, {}
+-- Guild identity (GI) is re-broadcast by its owner every ~15 min and was the
+-- largest relay consumer (~27 % of relay bytes live, 2026-10-01) although guild
+-- membership almost never changes. A hop forwards an origin's broadcast GI only
+-- when its payload differs from the last one forwarded (new guild, new campaign)
+-- or at most once per GI_FORWARD_SEC of the AUTHOR's timestamp, identical at
+-- every hop. 3300 s lets every 4th or 5th heartbeat (900 +/- 120 s) pass. Direct
+-- neighbours still hear every heartbeat first-hand; no extra packet is sent.
+local GI_FORWARD_SEC = 3300
+local giForwarded, giForwardedOrder = {}, {}
 -- Relayed presence (NH that already crossed a hop) only keeps routes and the ~lp6
 -- capability alive (both 300 s TTL, refreshed by every relayed packet of the origin).
 -- The origin's own copies keep the full fan-out. A hop forwards to every opposite-faction
@@ -719,8 +728,8 @@ function net:GetKindDiagnostics(maxRows)
         self.stats.forwardPathExhausted or 0)
     lines[#lines + 1] = string.format("VB relay: %d queued (max %d), %d B/s share, %d waiting updates coalesced.",
         laneSize(stateLane), STATE_QUEUE, STATE_RATE, self.stats.stateCoalesced or 0)
-    lines[#lines + 1] = string.format("Waiting SR duplicates coalesced: %d (same origin/target only).",
-        self.stats.mapRequestsCoalesced or 0)
+    lines[#lines + 1] = string.format("Waiting SR duplicates coalesced: %d (same origin/target only). Unchanged guild identities not relayed: %d.",
+        self.stats.mapRequestsCoalesced or 0, self.stats.giForwardSkipped or 0)
     -- 1.3.2 cross-faction live totals: what reached us, and what our own bridge did.
     lines[#lines + 1] = string.format("Enemy live totals received: %d from the channel, %d from Battle.net friends"
         .. " (their own kills: %d). Your bridge: %d posted on the channel, %d sent to enemy friends,"
@@ -1575,6 +1584,14 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         if p.kind == "NH" or #p.path > 2 or (#p.path == 2 and transport ~= "BNET") then
             forwardPresence = false
         end
+    elseif p.kind == "GI" and p.target == "*" then
+        local last = giForwarded[origin:lower()]
+        local at = tonumber(p.at) or 0
+        forwardPresence = not last or last.payload ~= p.payload
+            or at - last.at >= GI_FORWARD_SEC or at < last.at - GI_FORWARD_SEC
+        if not forwardPresence then
+            self.stats.giForwardSkipped = (self.stats.giForwardSkipped or 0) + 1
+        end
     end
     local forwarded = false
     -- Catch-up addressed to someone else is not relayed (point-to-point only).
@@ -1628,6 +1645,9 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
                 remember(nhForwarded, nhForwardedOrder, origin:lower(), p.at, 512)
             elseif p.kind == "SH" then
                 remember(shForwarded, shForwardedOrder, origin:lower(), p.at, 512)
+            elseif p.kind == "GI" and p.target == "*" then
+                remember(giForwarded, giForwardedOrder, origin:lower(),
+                    { payload = p.payload, at = tonumber(p.at) or 0 }, 512)
             end
         end
     end
