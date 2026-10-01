@@ -1,7 +1,8 @@
 -- Relay saturation, 2026-09-30 (queue 123-126/128): every player near an outpost
 -- relayed the same routine outpost state, each capture tick queued another copy,
 -- and stale items behind the lane heads held slots until their TTL. Now:
---  * an identical routine OP already relayed within a minute is not queued again;
+--  * an identical routine OP already relayed within 10 min (1 min if the state
+--    changed less than 10 min ago) is not queued again;
 --  * an unsent in-progress OP of the same origin and site is replaced in place;
 --  * relayed shard presence (SH) never displaces anything;
 --  * a full queue first frees unsent items that outlived their TTL.
@@ -67,6 +68,16 @@ assert(net:GetQueueSummary().total == before + 1, "An identical held state was r
 now = now + 540
 assert(receive("Ida Forever", "OP", HELD))
 assert(net:GetQueueSummary().total == before + 2, "The routine state was not relayed again after 10 min")
+
+-- 1a. A state captured moments ago keeps the 1 min window (its first relayed
+--     copy may have been evicted under saturation).
+net = load()
+before = net:GetQueueSummary().total
+local fresh = "v1:ashenvale_outpost:held:0:NoMercy:H:" .. time() .. ":0:" .. time() .. ":300:global"
+assert(receive("Ida Forever", "OP", fresh))
+now = now + 61
+assert(receive("Bob Forever", "OP", fresh))
+assert(net:GetQueueSummary().total == before + 2, "A fresh held state waited 10 min for its second relay")
 
 -- 1b. A capture in progress ticked by several players: one forward per site and
 --     attacking guild per 15 s, whichever origin; another attacker passes at once.

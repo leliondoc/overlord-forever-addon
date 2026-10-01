@@ -21,6 +21,9 @@ local MAX_QUEUE = 128
 -- state is relayed once per 10 min per hop (was 1 min). Any change has a new
 -- payload and passes at once.
 local ROUTINE_FORWARD_SEC = 600
+-- A state changed less than 10 min ago (claimedAt/ts) keeps the old 60 s window:
+-- if its first relayed copy was evicted under saturation, the next copy may pass.
+local ROUTINE_FRESH_FORWARD_SEC, ROUTINE_FRESH_AGE = 60, 600
 -- A capture in progress is ticked every 5 s by EVERY player in the area, and each
 -- origin's ticks were relayed. A relayed tick never counts as capture-credit
 -- evidence (direct copies only), so far peers only need the site's progress:
@@ -1633,6 +1636,12 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         if p.kind == "OP" and p.target == "*" then
             if not isUrgent(p) then
                 routineKey, routineWindow = "OP|" .. p.payload, ROUTINE_FORWARD_SEC
+                local claimed, stamped = p.payload:match(
+                    "^v%d+:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:([^:]*):[^:]*:([^:]*)")
+                local changedAt = math.max(tonumber(claimed) or 0, tonumber(stamped) or 0)
+                if changedAt > 0 and (tonumber(p.at) or 0) - changedAt < ROUTINE_FRESH_AGE then
+                    routineWindow = ROUTINE_FRESH_FORWARD_SEC
+                end
             else
                 local site, guild, fac = p.payload:match("^v%d+:([^:]*):[^:]*:[^:]*:([^:]*):([^:]*)")
                 if site then
@@ -1660,7 +1669,9 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         if p.target == "*" then
             if forwarded then
                 forwardRetry[key] = nil
-            elseif not retryForward then
+            elseif not retryForward and p.kind ~= "GI" then
+                -- A refused GI is already handled for the hour (giForwarded):
+                -- a retry key would only evict other kinds' retry slots.
                 remember(forwardRetry, forwardRetryOrder, key, GetTime(), 256)
             end
         end
