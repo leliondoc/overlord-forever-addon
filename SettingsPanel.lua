@@ -481,7 +481,7 @@ end
 local SP = Overlord.SettingsPanel
 SP.GuildKillAlertVariableName = "Overlord_GuildKillAlert"
 local CHAT_TAB_NAME = "Overlord"
-local SETTINGS_TITLE_LOGO = "|TInterface\\AddOns\\Overlord\\Textures\\overlord:32:32:0:-2|t"
+local SETTINGS_TITLE_LOGO = "|TInterface\\AddOns\\Overlord\\Textures\\overlord:22:22:0:2|t"
 
 local function Lx(key, fallback)
     return (L and L[key]) or fallback
