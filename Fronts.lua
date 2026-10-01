@@ -817,19 +817,15 @@ local FEATURED_FRONT_ART = {
 -- Outside a war front: the player's homeland, same WarBoard art as the fronts.
 -- There is no capital-city WarBoard; each race's starting zone holds its capital
 -- (Elwynn/Stormwind, Durotar/Orgrimmar, Dun Morogh/Ironforge and Gnomeregan,
--- Teldrassil/Darnassus, Tirisfal/Undercity, Mulgore/Thunder Bluff...).
-local HOME_ART_DIR = "Interface\\QuestionFrame\\Answer-WarBoard-"
+-- Teldrassil/Darnassus, Tirisfal/Undercity, Mulgore/Thunder Bluff). Forever
+-- races only. Skyborne (Zephras Isle, no WarBoard art) take their faction's
+-- capital: Stormwind (Elwynn) for Alliance, Orgrimmar (Durotar) for Horde.
+local HOME_ART_DIR = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-"
 local HOME_ART_BY_RACE = {
-    Human = "Classic-ElwynnForest", Dwarf = "Classic-DunMorogh", Gnome = "Classic-DunMorogh",
-    NightElf = "Classic-Teldrassil", Draenei = "Classic-AzuremystIsle", Worgen = "Classic-Gilneas",
-    Orc = "Classic-Durotar", Troll = "Classic-Durotar", Scourge = "Classic-TirisfalGlades",
-    Tauren = "Classic-Mulgore", BloodElf = "Classic-EversongWoods", Goblin = "Classic-LostIsles",
-    Pandaren = "Classic-WanderingIsle", LightforgedDraenei = "Classic-AzuremystIsle",
-    DarkIronDwarf = "Classic-SearingGorge", Mechagnome = "Classic-DunMorogh",
-    HighmountainTauren = "Classic-Mulgore", MagharOrc = "Classic-Durotar",
-    KulTiran = "BfA-Boralus", ZandalariTroll = "BfA-Zuldazar", Vulpera = "BfA-Voldun",
+    Human = "ElwynnForest", Dwarf = "DunMorogh", Gnome = "DunMorogh", NightElf = "Teldrassil",
+    Orc = "Durotar", Troll = "Durotar", Scourge = "TirisfalGlades", Tauren = "Mulgore",
 }
-local HOME_ART_BY_FACTION = { Alliance = "Classic-ElwynnForest", Horde = "Classic-Durotar" }
+local HOME_ART_BY_FACTION = { Alliance = "ElwynnForest", Horde = "Durotar" }
 
 function Overlord.Fronts:GetHomeArtPath()
     local raceFile = UnitRace and select(2, UnitRace("player"))
