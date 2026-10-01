@@ -78,10 +78,18 @@ local dedupCanonicalGeneration = 0
 local dedupKillMaxIndex = nil
 local dedupCaptureMaxIndex = nil
 local NoteDedupCanonicalName
+-- While RebuildNetworkHotIndexes yields, every incremental kill/capture/name update
+-- is also journaled here and replayed into the new indexes before they are published.
+-- Before, any kill during the pass aborted it (and the pass restarted every 5 s,
+-- forever, in big fights). dedupHardEpoch counts the changes a journal cannot
+-- replay (index resets, key merges, score sanitize): those still abort the pass.
+local hotRebuildJournals = {}
+local dedupHardEpoch = 0
 
 local function InvalidateDedupCanonicalIndex()
     dedupCanonicalValid = false
     dedupCanonicalGeneration = dedupCanonicalGeneration + 1
+    dedupHardEpoch = dedupHardEpoch + 1
 end
 
 local function EnsureDedupCanonicalIndex(lb)
@@ -97,9 +105,16 @@ end
 
 local function UpdateDedupKillMaxIndex(name, count)
     NoteDedupCanonicalName(Overlord.Leaderboard, name)
-    if not dedupKillMaxIndex then return end
+    local journaling = next(hotRebuildJournals) ~= nil
+    if not dedupKillMaxIndex and not journaling then return end
     local dk = GetKillDedupKey(name)
     count = tonumber(count) or 0
+    if journaling and dk then
+        for journal in pairs(hotRebuildJournals) do
+            if count > (journal.kills[dk] or 0) then journal.kills[dk] = count end
+        end
+    end
+    if not dedupKillMaxIndex then return end
     if dk and count > (dedupKillMaxIndex[dk] or 0) then
         dedupKillMaxIndex[dk] = count
     end
@@ -123,9 +138,16 @@ end
 
 local function UpdateDedupCaptureMaxIndex(name, count)
     NoteDedupCanonicalName(Overlord.Leaderboard, name)
-    if not dedupCaptureMaxIndex then return end
+    local journaling = next(hotRebuildJournals) ~= nil
+    if not dedupCaptureMaxIndex and not journaling then return end
     local dk = GetKillDedupKey(name)
     count = tonumber(count) or 0
+    if journaling and dk then
+        for journal in pairs(hotRebuildJournals) do
+            if count > (journal.captures[dk] or 0) then journal.captures[dk] = count end
+        end
+    end
+    if not dedupCaptureMaxIndex then return end
     if dk and count > (dedupCaptureMaxIndex[dk] or 0) then
         dedupCaptureMaxIndex[dk] = count
     end
@@ -306,6 +328,7 @@ end
 -- a faire abandonner une construction asynchrone concurrente.
 NoteDedupCanonicalName = function(lb, name)
     if not name or name == "" then return end
+    for journal in pairs(hotRebuildJournals) do journal.names[name] = true end
     local dk = GetKillDedupKey(name)
     if not dk then return end
     local previous = dedupCanonicalIndex[dk]
@@ -1046,14 +1069,37 @@ end
 -- Construit les trois index susceptibles d'etre consultes depuis les handlers reseau.
 -- `yieldWork` rend cette operation reutilisable par la barriere login sans exposer
 -- un index partiel : kill/capture ne sont publies qu'apres la derniere tranche.
-function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork)
+function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
     local killsSource = self.kills or {}
     local captureSource = self.captureCount or {}
     local capturesSource = self.captures or {}
     local playerInfoSource = self.playerInfo or {}
-    local scoreRevision = self._snapshotRevision or 0
     local metaEpoch = self._dedupMetaEpoch or 0
-    local canonicalGeneration = dedupCanonicalGeneration
+    local hardEpoch = dedupHardEpoch
+    local function sourcesChanged()
+        return self.kills ~= killsSource or self.captureCount ~= captureSource
+            or self.captures ~= capturesSource or self.playerInfo ~= playerInfoSource
+            or (self._dedupMetaEpoch or 0) ~= metaEpoch
+            or dedupHardEpoch ~= hardEpoch
+    end
+
+    -- Scores and canonical names are maintained incrementally once built: when
+    -- only the meta index went cold (new player rows, guild/faction changes),
+    -- rebuild just that, a quarter of the work.
+    if dedupKillMaxIndex and dedupCaptureMaxIndex and dedupCanonicalValid
+        and self._networkHotKillsSource == killsSource
+        and self._networkHotCaptureSource == captureSource
+        and self._networkHotCapturesSource == capturesSource then
+        self:RebuildDedupMetaIndex(yieldWork, function(name) NoteDedupCanonicalName(self, name) end)
+        if sourcesChanged() then
+            self._dedupMetaIndex = nil
+            self._dedupLegacyShortMetaIndex = nil
+            return false
+        end
+        self._networkHotPlayerInfoSource = playerInfoSource
+        return true
+    end
+
     local killIndex, captureIndex, canonicalIndex = {}, {}, {}
     local function RegisterCanonical(name)
         if not name or name == "" then return end
@@ -1063,34 +1109,68 @@ function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork)
         canonicalIndex[dk] = previous
             and self:ChooseRicherPlayerName(previous, name) or name
     end
-    for name, count in pairs(killsSource) do
-        if yieldWork then yieldWork() end
-        RegisterCanonical(name)
-        local dk = GetKillDedupKey(name)
-        count = tonumber(count) or 0
-        if dk and count > (killIndex[dk] or 0) then killIndex[dk] = count end
+    -- Frozen key lists (one synchronous pass, no yield): kills keep arriving
+    -- while this rebuild yields, and resuming pairs() after an insertion is
+    -- undefined in Lua (existing rows may be skipped).
+    local function keysOf(source)
+        local list = {}
+        for name in pairs(source) do list[#list + 1] = name end
+        return list
     end
-    for name, count in pairs(captureSource) do
-        if yieldWork then yieldWork() end
-        RegisterCanonical(name)
-        local dk = GetKillDedupKey(name)
-        count = tonumber(count) or 0
-        if dk and count > (captureIndex[dk] or 0) then captureIndex[dk] = count end
+    local killNames, captureNames, captureListNames =
+        keysOf(killsSource), keysOf(captureSource), keysOf(capturesSource)
+    -- One journal per running pass (the login repair and the network worker can
+    -- overlap). A pass abandoned for more than 5 minutes is dropped, so a failed
+    -- coroutine cannot leave a journal growing forever.
+    local now = GetTime and GetTime() or 0
+    for stale in pairs(hotRebuildJournals) do
+        if now - stale.startedAt > 300 then hotRebuildJournals[stale] = nil end
     end
-    for name in pairs(capturesSource) do
+    local journal = { kills = {}, captures = {}, names = {}, startedAt = now }
+    hotRebuildJournals[journal] = true
+    if owner then owner.journal = journal end
+    for i = 1, #killNames do
         if yieldWork then yieldWork() end
-        RegisterCanonical(name)
+        local name = killNames[i]
+        local count = killsSource[name]
+        if count ~= nil then
+            RegisterCanonical(name)
+            local dk = GetKillDedupKey(name)
+            count = tonumber(count) or 0
+            if dk and count > (killIndex[dk] or 0) then killIndex[dk] = count end
+        end
+    end
+    for i = 1, #captureNames do
+        if yieldWork then yieldWork() end
+        local name = captureNames[i]
+        local count = captureSource[name]
+        if count ~= nil then
+            RegisterCanonical(name)
+            local dk = GetKillDedupKey(name)
+            count = tonumber(count) or 0
+            if dk and count > (captureIndex[dk] or 0) then captureIndex[dk] = count end
+        end
+    end
+    for i = 1, #captureListNames do
+        if yieldWork then yieldWork() end
+        if capturesSource[captureListNames[i]] ~= nil then RegisterCanonical(captureListNames[i]) end
     end
     self:RebuildDedupMetaIndex(yieldWork, RegisterCanonical)
-    if self.kills ~= killsSource or self.captureCount ~= captureSource
-        or self.captures ~= capturesSource or self.playerInfo ~= playerInfoSource
-        or (self._snapshotRevision or 0) ~= scoreRevision
-        or (self._dedupMetaEpoch or 0) ~= metaEpoch
-        or dedupCanonicalGeneration ~= canonicalGeneration then
+    hotRebuildJournals[journal] = nil
+    if owner then owner.journal = nil end
+    if sourcesChanged() then
         self._dedupMetaIndex = nil
         self._dedupLegacyShortMetaIndex = nil
         return false
     end
+    -- Replay what arrived during the pass (max semantics, like the live updaters).
+    for dk, count in pairs(journal.kills) do
+        if count > (killIndex[dk] or 0) then killIndex[dk] = count end
+    end
+    for dk, count in pairs(journal.captures) do
+        if count > (captureIndex[dk] or 0) then captureIndex[dk] = count end
+    end
+    for name in pairs(journal.names) do RegisterCanonical(name) end
     dedupKillMaxIndex = killIndex
     dedupCaptureMaxIndex = captureIndex
     dedupCanonicalIndex = canonicalIndex
@@ -1099,8 +1179,16 @@ function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork)
     self._networkHotCaptureSource = captureSource
     self._networkHotCapturesSource = capturesSource
     self._networkHotPlayerInfoSource = playerInfoSource
-    self._networkHotCanonicalGeneration = canonicalGeneration
+    self._networkHotCanonicalGeneration = dedupCanonicalGeneration
     return true
+end
+
+-- An abandoned or failed pass must not leave its journal registered.
+function Overlord.Leaderboard:_DropHotRebuildJournal(owner)
+    if owner and owner.journal then
+        hotRebuildJournals[owner.journal] = nil
+        owner.journal = nil
+    end
 end
 
 -- Barriere login : aucune initialisation Sync avant que les lectures LK/LC/CR/GR
@@ -1126,6 +1214,7 @@ function Overlord.Leaderboard:EnsureNetworkHotIndexesPrepared()
     local retryCount = 0
     local worker
     local ResumeWorker
+    local owner = {}
     local function StartWorker()
         if self._networkHotIndexPrepGeneration ~= generation then return end
         self._networkHotIndexPrepBackoff = nil
@@ -1141,7 +1230,7 @@ function Overlord.Leaderboard:EnsureNetworkHotIndexesPrepared()
                     started = debugprofilestop and debugprofilestop() or 0
                 end
             end
-            if not self:RebuildNetworkHotIndexes(YieldWork) then
+            if not self:RebuildNetworkHotIndexes(YieldWork, owner) then
                 error("leaderboard bucket changed while preparing network indexes")
             end
         end)
@@ -1149,9 +1238,13 @@ function Overlord.Leaderboard:EnsureNetworkHotIndexesPrepared()
     end
     ResumeWorker = function()
         if not self._networkHotIndexPrepPending
-            or self._networkHotIndexPrepGeneration ~= generation then return end
+            or self._networkHotIndexPrepGeneration ~= generation then
+            self:_DropHotRebuildJournal(owner)
+            return
+        end
         local ok, err = coroutine.resume(worker)
         if not ok then
+            self:_DropHotRebuildJournal(owner)
             retryCount = retryCount + 1
             if retryCount < 3 then
                 self._networkHotIndexPrepBackoff = true
@@ -2280,6 +2373,7 @@ function Overlord.Leaderboard:EnsureLegacyScoreSanitized()
         if changed then
             dedupKillMaxIndex = nil
             dedupCaptureMaxIndex = nil
+            dedupHardEpoch = dedupHardEpoch + 1
             self:MarkDirty()
         end
         OverlordDB.leaderboardScoreSanitizeVersion = LEGACY_SCORE_SANITIZE_VERSION
@@ -5612,6 +5706,7 @@ function Overlord.Leaderboard:OpenAtomicWeeklyBucket(archiveEpoch, resetEpoch, c
     dedupCanonicalIndex = {}
     dedupCanonicalValid = true
     dedupCanonicalGeneration = dedupCanonicalGeneration + 1
+    dedupHardEpoch = dedupHardEpoch + 1
     self._networkHotKillsSource = self.kills
     self._networkHotCaptureSource = self.captureCount
     self._networkHotCapturesSource = self.captures
