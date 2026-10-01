@@ -740,7 +740,7 @@ function Overlord.UI.CreateWC3CloseButton(parent, onClick, opts)
     end
 
     local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
-    btn:SetSize(26, 26)
+    btn:SetSize(opts.size or 26, opts.size or 26)
     btn:SetBackdrop({
         bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",

@@ -584,7 +584,23 @@ local function SetCaptureBar(bar, pct, r, g, b)
         bar:Show()
     end
     bar._olTarget = pct
-    bar:SetScript("OnUpdate", GlideCaptureBar)
+    -- Paused or contested captures keep the same value: no glide to arm, but
+    -- the spark is still placed (a bar that just appeared has none yet).
+    if math.abs(pct - bar:GetValue()) > 0.002 then
+        bar:SetScript("OnUpdate", GlideCaptureBar)
+    else
+        GlideCaptureBar(bar, 0)
+    end
+end
+
+-- Every path that hides the timer line must also drop the bar, or a stale
+-- half-filled bar stays frozen on the banner (guide / sync-pending states).
+local function HideCaptureBar(frame)
+    local bar = frame and frame.progressBar
+    if bar and bar:IsShown() then
+        bar:SetScript("OnUpdate", nil)
+        bar:Hide()
+    end
 end
 
 -- Cree le frame indicateur
@@ -922,6 +938,7 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
             indicatorFrame.zoneName:SetTextColor(o[1], o[2], o[3])
             indicatorFrame.distance:SetText("")
             indicatorFrame.timer:Hide()
+            HideCaptureBar(indicatorFrame)
             SetIndicatorHeight(IND_PAD_TOP + IND_PAD_BOTTOM + 16 + IND_LINE_GAP + 12)
             return
         end
@@ -947,6 +964,7 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
         indicatorFrame.zoneName:SetTextColor(0.65, 0.68, 0.70)
         indicatorFrame.distance:SetText("")
         indicatorFrame.timer:Hide()
+        HideCaptureBar(indicatorFrame)
         SetIndicatorHeight(IND_PAD_TOP + IND_PAD_BOTTOM + 16 + IND_LINE_GAP + 12)
         return
     end
@@ -1142,10 +1160,7 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
             end
         end
     end
-    if not showTimer and indicatorFrame.progressBar and indicatorFrame.progressBar:IsShown() then
-        indicatorFrame.progressBar:SetScript("OnUpdate", nil)
-        indicatorFrame.progressBar:Hide()
-    end
+    if not showTimer then HideCaptureBar(indicatorFrame) end
 
     local showExtraLine = showTimer or showHeldAssaultHint
     if showExtraLine then
@@ -1312,6 +1327,7 @@ end
 function Overlord.ZoneIndicator:Hide()
     if indicatorFrame then
         indicatorFrame.hudTarget = nil
+        HideCaptureBar(indicatorFrame)
         indicatorFrame:Hide()
     end
     lastOpIndicatorKey = nil
