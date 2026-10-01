@@ -185,39 +185,37 @@ local function prepare(callback)
     return true
 end
 
-local function checkpoints()
+-- One sweep position shared by every neighbour (1.3.3). Buckets are cut by
+-- identity hash, the same on every client, so a bucket certified with one peer
+-- need not be asked again of the next. Per-peer positions restarted the sweep
+-- each time the scheduler changed neighbour: rounds never reached the end of the
+-- 192 buckets and the capture/race streams were never asked. No extra traffic:
+-- only where the next pull starts changes.
+local function progress()
     local saved = OverlordDB.leaderboardPageProgress
-    if type(saved) ~= "table" or saved.epoch ~= epoch() or type(saved.peers) ~= "table" then
-        saved = { version = 2, epoch = epoch(), peers = {} }
+    if type(saved) ~= "table" or saved.version ~= 3 or saved.epoch ~= epoch() then
+        -- Older per-peer positions (version 2) are dropped: the sweep restarts once.
+        saved = { version = 3, epoch = epoch() }
         OverlordDB.leaderboardPageProgress = saved
-    elseif saved.version ~= 2 then
-        -- Old checkpoints only had an LK bucket; resume it from its beginning.
-        for _, row in pairs(saved.peers) do
-            if type(row) == "table" then row.stream = "LK" end
-        end
-        saved.version = 2
     end
-    return saved.peers
+    return saved
 end
 local function checkpoint(state)
-    local peers, count, oldest, oldestAt = checkpoints(), 0, nil, math.huge
-    local previous = peers[state.peer]
+    -- A pull of a finished campaign must not seed the new campaign's sweep.
+    if state.epoch ~= epoch() then return end
+    local saved = progress()
+    local previous = saved.shared
     if not state.extended and type(previous) == "table"
         and (previous.stream == "LC" or previous.stream == "LR") then
         -- A compatibility LK pass must not erase a v6 capture/race resume point.
         previous.at = GetServerTime()
         return
     end
-    for name, row in pairs(peers) do
-        count = count + 1
-        local at = type(row) == "table" and tonumber(row.at) or 0
-        if (at or 0) < oldestAt then oldest, oldestAt = name, at or 0 end
-    end
-    if not peers[state.peer] and count >= 8 and oldest then peers[oldest] = nil end
     -- Restart the current bucket after reload: a new snapshot may have changed
     -- its order. Persisting its cursor would silently skip inserted identities.
-    peers[state.peer] = { stream = state.stream or "LK", bucket = state.bucket,
-        at = GetServerTime() }
+    -- done: buckets of this stream already certified, whichever peer served them.
+    saved.shared = { stream = state.stream or "LK", bucket = state.bucket,
+        done = (state.completed or 0) % BUCKETS, at = GetServerTime() }
 end
 local sendControl
 local function finish(state, success, unsupportedPeer)
@@ -338,7 +336,7 @@ local function nextPage(state, cursor)
         checkpoint(state)
     end
     state.cursor = cursor
-    if state.completed == BUCKETS then
+    if state.completed >= BUCKETS then
         if state.extended and state.stream ~= "LR" then
             state.stream = state.stream == "LK" and "LC" or "LR"
             state.bucket, state.completed, state.cursor = 1, 0, "-"
@@ -347,7 +345,7 @@ local function nextPage(state, cursor)
             return
         end
         if state.extended then
-            state.stream, state.bucket = "LK", 1
+            state.stream, state.bucket, state.completed = "LK", 1, 0
             checkpoint(state)
         end
         -- End notice leaves directly: queued behind our own outbound pages it was
@@ -527,14 +525,17 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended)
         return false, "local"
     end
     serial = serial + 1
-    local saved = checkpoints()[peer]
+    local saved = progress().shared
     local savedStream = type(saved) == "table" and saved.stream or nil
-    local state = { peer = peer, callback = callback, epoch = epoch(), seq = 0, completed = 0,
-        extended = extended == true,
-        stream = extended and (savedStream == "LC" or savedStream == "LR")
-            and savedStream or "LK",
-        bucket = type(saved) == "table" and (extended or savedStream == "LK")
-            and integer(saved.bucket, 1, BUCKETS) or 1,
+    local stream = extended and (savedStream == "LC" or savedStream == "LR")
+        and savedStream or "LK"
+    local resume = type(saved) == "table" and (extended or savedStream == "LK")
+        and integer(saved.bucket, 1, BUCKETS) or nil
+    local state = { peer = peer, callback = callback, epoch = epoch(), seq = 0,
+        -- Buckets already certified in this stream count toward its end; the
+        -- first request still carries the stream digest (one reply if equal).
+        completed = resume and savedStream == stream and integer(saved.done, 0, BUCKETS - 1) or 0,
+        extended = extended == true, stream = stream, bucket = resume or 1,
         cursor = "-", nonce = tostring(GetServerTime()) .. "n"
             .. tostring(math.floor(GetTime() * 1000)) .. "n" .. tostring(serial) }
     pull = state
@@ -659,7 +660,7 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
             state.completed = BUCKETS - 1
             nextPage(state, "-")
         else
-            state.bucket = 1
+            state.bucket, state.completed = 1, 0
             finish(state, true)
         end
         return

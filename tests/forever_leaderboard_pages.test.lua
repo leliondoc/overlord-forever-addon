@@ -246,7 +246,7 @@ done = nil
 assert(PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
 advance(1800)
 assert(done == false and blockedBucket, "Disconnected transfer did not terminate")
-assert(PULLER.OverlordDB.leaderboardPageProgress.peers[SOURCE.name].bucket == blockedBucket)
+assert(PULLER.OverlordDB.leaderboardPageProgress.shared.bucket == blockedBucket)
 PULLER.Overlord.Sync.SendWhisper = sendRequest
 PULLER.loadfile("SyncLeaderboardPages.lua")()
 local firstRequest
@@ -348,6 +348,9 @@ PULLER.Overlord.GetCurrentCampaignStartTs = function() return previousEpoch + 60
 local rowsAtReset = PULLER.Overlord.Sync._leaderboardPageStats.rows
 advance(10)
 assert(done == false and PULLER.Overlord.Sync._leaderboardPageStats.rows == rowsAtReset, "Stale campaign imported")
+local progressAfter = PULLER.OverlordDB.leaderboardPageProgress
+assert(not (progressAfter and progressAfter.epoch == previousEpoch + 604800 and progressAfter.shared),
+    "A pull of the finished campaign seeded the new campaign's sweep position")
 PULLER.Overlord.GetCurrentCampaignStartTs = campaign
 print("PASS: score/level/epoch/bucket filters, combat pause, expired snapshot and campaign cancellation")
 
@@ -403,3 +406,59 @@ assert(PULLER.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true))
 advance(700)
 assert(sawV6 and not sawOther, "Production scheduler did not use v6 only")
 print("PASS: simultaneous cross-faction pulls and v6-only scheduler")
+
+-- 1.3.3: one sweep position shared by every neighbour. A pull interrupted with
+-- one peer resumes with the next peer at the same bucket, and the buckets it
+-- already certified count toward the end of the stream.
+advance(400)
+-- Stop the scheduler's periodic rounds: this section drives the pulls itself.
+PULLER.Overlord.Sync._historyCatchupWakeGeneration = (PULLER.Overlord.Sync._historyCatchupWakeGeneration or 0) + 1000
+PULLER.Overlord.Sync.SendWhisper = sendRequest
+local SECOND = a -- same channel as the puller: a second direct neighbour
+for _, field in ipairs({ "kills", "playerInfo", "captureCount" }) do
+    SECOND.Overlord.Leaderboard[field] = copy(SOURCE.Overlord.Leaderboard[field])
+end
+for i = 1, 1500 do
+    local value = (SOURCE.Overlord.Leaderboard.kills[names[i]] or 0) + 1
+    SOURCE.Overlord.Leaderboard:SetPlayerKills(names[i], value, true)
+    SECOND.Overlord.Leaderboard:SetPlayerKills(names[i], value, true)
+end
+local cutSeq, lkBuckets, firstResumed = 40, {}, nil
+PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
+    if kind == "HR" and payload:sub(1, 4) == "6:Q:" then
+        local f = { PULLER.strsplit(":", payload) }
+        if target == SOURCE.name and tonumber(f[5]) >= cutSeq then return true end -- peer gone
+        if target == SECOND.name then
+            firstResumed = firstResumed or { stream = f[10], bucket = tonumber(f[6]) }
+            if f[10] == "LK" and f[7] == "-" then lkBuckets[tonumber(f[6])] = true end
+        end
+    end
+    return sendRequest(self, kind, payload, target)
+end
+done = nil
+assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
+for _ = 1, 20 do advance(100); if done ~= nil then break end end
+assert(done == false, "the cut pull did not end")
+local shared = PULLER.OverlordDB.leaderboardPageProgress.shared
+assert(shared and shared.stream == "LK" and (shared.done or 0) >= 5,
+    "no shared position after the cut pull: " .. tostring(shared and shared.done))
+local resumeBucket, certified = shared.bucket, shared.done
+done = nil
+assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SECOND.name, function(ok) done = ok end))
+for _ = 1, 40 do advance(100); if done ~= nil then break end end
+assert(done == true, "the second neighbour did not finish the sweep: "
+    .. PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())
+assert(firstResumed and firstResumed.stream == "LK" and firstResumed.bucket == resumeBucket,
+    "the next neighbour restarted the sweep instead of resuming it")
+local asked = 0
+for _ in pairs(lkBuckets) do asked = asked + 1 end
+assert(asked == 64 - certified, "buckets certified with the first neighbour were asked again: "
+    .. asked .. " of " .. (64 - certified))
+for i = 1, 1500 do
+    assert(PULLER.Overlord.Leaderboard.kills[names[i]] == SOURCE.Overlord.Leaderboard.kills[names[i]],
+        "missing after the shared sweep: " .. names[i])
+end
+local final = PULLER.OverlordDB.leaderboardPageProgress.shared
+assert(final.stream == "LK" and final.bucket == 1 and final.done == 0, "a finished sweep did not restart from the top")
+PULLER.Overlord.Sync.SendWhisper = sendRequest
+print("PASS: sweep position shared across neighbours (" .. certified .. " buckets certified, resumed at " .. resumeBucket .. ")")

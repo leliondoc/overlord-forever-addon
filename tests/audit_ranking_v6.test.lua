@@ -308,7 +308,7 @@ assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name,
 advance(1500)
 assert(dropped >= 3 and done == false and supported == true,
     "Interrupted LC stream was falsely marked complete")
-local saved = assert(PULLER.OverlordDB.leaderboardPageProgress.peers[SOURCE.name])
+local saved = assert(PULLER.OverlordDB.leaderboardPageProgress.shared)
 assert(saved.stream == "LC" and saved.bucket == 1,
     "Interrupted typed checkpoint omitted the LC stage")
 assert(PULLER.Overlord.Leaderboard.captureCount[names[500]] == 1,
