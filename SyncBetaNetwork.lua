@@ -490,15 +490,6 @@ local nhForwarded, nhForwardedOrder = {}, {}
 -- own direct copies are unchanged, and it is always handled locally.
 local SH_FORWARD_SEC = 90
 local shForwarded, shForwardedOrder = {}, {}
--- Guild identity (GI) is re-broadcast by its owner every ~15 min and was the
--- largest relay consumer (~27 % of relay bytes live, 2026-10-01) although guild
--- membership almost never changes. A hop forwards an origin's broadcast GI only
--- when its payload differs from the last one forwarded (new guild, new campaign)
--- or at most once per GI_FORWARD_SEC of the AUTHOR's timestamp, identical at
--- every hop. 3300 s lets every 4th or 5th heartbeat (900 +/- 120 s) pass. Direct
--- neighbours still hear every heartbeat first-hand; no extra packet is sent.
-local GI_FORWARD_SEC = 3300
-local giForwarded, giForwardedOrder = {}, {}
 -- Relayed presence (NH that already crossed a hop) only keeps routes and the ~lp6
 -- capability alive (both 300 s TTL, refreshed by every relayed packet of the origin).
 -- The origin's own copies keep the full fan-out. A hop forwards to every opposite-faction
@@ -618,9 +609,12 @@ end
 -- friend). The relay carries live traffic only. Forwarding every exchange across
 -- up to four hops multiplied one reply into thousands of copies at evening peaks.
 -- Guild/class hints answered by many peers (GY, CA) and their targeted requests
--- (GR, CR; a relayed one is ignored on arrival anyway) follow the same rule. A
--- player's own identity answer (GI) stays relayable: one small authoritative
--- reply per request, the only way a far owner can confirm its guild.
+-- (GR, CR; a relayed one is ignored on arrival anyway) follow the same rule.
+-- Guild identity (GI) is never relayed either: OnReceiveGuildIdentity only
+-- applies the owner's own direct copy (KillSyncSenderOwnsPlayer rejects any relayed
+-- origin), so forwarded GI was dropped by every receiver while costing about a
+-- quarter of relay bytes (2026-10-01). The owner still sends its own copies to its
+-- channel, group and Battle.net friends.
 local CATCHUP_KINDS = {}
 for kind in ("SR ZA HR HA HB HC LK LC LR LO LOC OE GY CA GR CR"):gmatch("%S+") do CATCHUP_KINDS[kind] = true end
 local function isPointToPointCatchup(kind, target)
@@ -740,7 +734,7 @@ function net:GetKindDiagnostics(maxRows)
         self.stats.forwardPathExhausted or 0)
     lines[#lines + 1] = string.format("VB relay: %d queued (max %d), %d B/s share, %d waiting updates coalesced.",
         laneSize(stateLane), STATE_QUEUE, STATE_RATE, self.stats.stateCoalesced or 0)
-    lines[#lines + 1] = string.format("Waiting SR duplicates coalesced: %d (same origin/target only). Unchanged guild identities not relayed: %d. Outpost repeats not relayed: %d routine, %d progress.",
+    lines[#lines + 1] = string.format("Waiting SR duplicates coalesced: %d (same origin/target only). Guild identities not relayed: %d. Outpost repeats not relayed: %d routine, %d progress.",
         self.stats.mapRequestsCoalesced or 0, self.stats.giForwardSkipped or 0,
         self.stats.routineForwardSkipped or 0, self.stats.progressForwardSkipped or 0)
     -- 1.3.2 cross-faction live totals: what reached us, and what our own bridge did.
@@ -1597,14 +1591,6 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         if p.kind == "NH" or #p.path > 2 or (#p.path == 2 and transport ~= "BNET") then
             forwardPresence = false
         end
-    elseif p.kind == "GI" and p.target == "*" then
-        local last = giForwarded[origin:lower()]
-        local at = tonumber(p.at) or 0
-        forwardPresence = not last or last.payload ~= p.payload
-            or at - last.at >= GI_FORWARD_SEC or at < last.at - GI_FORWARD_SEC
-        if not forwardPresence then
-            self.stats.giForwardSkipped = (self.stats.giForwardSkipped or 0) + 1
-        end
     end
     local forwarded = false
     -- Catch-up addressed to someone else is not relayed (point-to-point only).
@@ -1612,6 +1598,10 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     -- requester's direct neighbours answer them since 1.2.4, first-hand.
     local relayable = not isPointToPointCatchup(p.kind, p.target)
         and not ((p.kind == "SR" or p.kind == "GR" or p.kind == "CR") and p.target == "*")
+        and p.kind ~= "GI"
+    if p.kind == "GI" then
+        self.stats.giForwardSkipped = (self.stats.giForwardSkipped or 0) + 1
+    end
     if not relayable and not addressed then
         self.stats.catchupNotRelayed = (self.stats.catchupNotRelayed or 0) + 1
         -- Never relayed: seal it so duplicate copies are not decoded again.
@@ -1669,9 +1659,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         if p.target == "*" then
             if forwarded then
                 forwardRetry[key] = nil
-            elseif not retryForward and p.kind ~= "GI" then
-                -- A refused GI is already handled for the hour (giForwarded):
-                -- a retry key would only evict other kinds' retry slots.
+            elseif not retryForward then
                 remember(forwardRetry, forwardRetryOrder, key, GetTime(), 256)
             end
         end
@@ -1682,13 +1670,6 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
             elseif p.kind == "SH" then
                 remember(shForwarded, shForwardedOrder, origin:lower(), p.at, 512)
             end
-        end
-        -- An unchanged GI counts as handled for the hour once a forward was
-        -- attempted, even refused: under saturation every heartbeat and every
-        -- other bridge's copy retried the same identity (149 refusals live).
-        if p.kind == "GI" and p.target == "*" then
-            remember(giForwarded, giForwardedOrder, origin:lower(),
-                { payload = p.payload, at = tonumber(p.at) or 0 }, 512)
         end
     end
     if pendingForward and not forwarded then

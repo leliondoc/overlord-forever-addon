@@ -1,7 +1,6 @@
--- Relay budget, 2026-10-01: guild identity (GI) heartbeats were ~27 % of relay
--- bytes although membership almost never changes. A hop now forwards an origin's
--- broadcast GI only when its payload changed or once per 3300 s of the author's
--- timestamp; it is still handled locally every time.
+-- Relay budget, 2026-10-01: guild identity (GI) was a quarter of relay bytes, yet
+-- every receiver drops a relayed GI (OnReceiveGuildIdentity applies only the
+-- owner's direct copy). A hop never forwards GI; it is still handled locally.
 local now = 100
 function GetTime() return now end
 function time() return 1790016000 + math.floor(now) end
@@ -49,38 +48,18 @@ end
 local function queued() return net:GetQueueSummary().total end
 local IDA = "Ida Forever:Some Guild:2840:1790000000"
 
--- 1. First heartbeat relayed, the next three (15 min apart) handled but not relayed.
+-- 1. Broadcast GI: handled locally every time, never queued for relay, even
+--    when the guild changes.
 local before = queued()
 assert(receive("Ida Forever", IDA))
-assert(queued() == before + 1, "The first guild identity was not relayed")
-for beat = 1, 3 do
-    now = now + 850
-    assert(receive("Ida Forever", IDA))
-end
-assert(queued() == before + 1, "An unchanged guild identity was relayed again within the hour")
-assert(net.stats.giForwardSkipped == 3)
-assert(delivered >= 4, "A filtered guild identity was not handled locally")
-
--- 2. The 4th heartbeat (with jitter) passes the 3300 s window.
 now = now + 850
-assert(receive("Ida Forever", IDA))
-assert(queued() == before + 2, "The hourly guild identity refresh was not relayed")
-
--- 3. A changed guild is relayed at once; another origin has its own window.
-now = now + 60
 assert(receive("Ida Forever", "Ida Forever:Other Guild:2840:1790009000"))
-assert(queued() == before + 3, "A guild change was held back")
 assert(receive("Bob Forever", "Bob Forever:Some Guild:2840:1790000000"))
-assert(queued() == before + 4, "Another origin was filtered by Ida's window")
--- 4. A full relay refuses Cid's first GI: the same unchanged identity is not
---    retried at the next heartbeat (it churned a saturated queue live).
-local queue = net.Queue
-local attempts = 0
-net.Queue = function() attempts = attempts + 1; return false end
-receive("Cid Forever", "Cid Forever:Some Guild:2840:1790000000")
-now = now + 850
-receive("Cid Forever", "Cid Forever:Some Guild:2840:1790000000")
-net.Queue = queue
-assert(attempts == 1, "A refused unchanged GI was retried: " .. attempts)
+assert(queued() == before, "A guild identity was queued for relay")
+assert(delivered == 3, "A guild identity was not handled locally: " .. delivered)
+assert(net.stats.giForwardSkipped == 3)
 
-print("Relay guild identity: unchanged GI relayed once per hour, changes relayed at once, always handled locally")
+-- 2. A GI answer addressed to someone else is not relayed either.
+assert(not receive("Cid Forever", "Cid Forever:Some Guild:2840:1790000000", "Far Asker"))
+assert(queued() == before, "An addressed guild identity was relayed")
+print("Relay guild identity: never relayed, always handled locally")
