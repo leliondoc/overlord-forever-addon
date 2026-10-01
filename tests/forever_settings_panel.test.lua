@@ -52,12 +52,18 @@ Settings = {
     CreateDropdown = function(_, s, options) s.control = "dropdown"; dropdowns[s.var] = options end,
     CreateControlTextContainer = container,
     RegisterAddOnCategory = function() end,
-    SetValue = function(var, value) values[var] = value end,
+    -- Like Blizzard's proxy settings: SetValue calls the registered setter back.
+    SetValue = function(var, value)
+        values[var] = value
+        if settings[var] then settings[var].set(value) end
+    end,
 }
 function CreateSettingsListSectionHeaderInitializer(name) return { header = name } end
 function CreateSettingsButtonInitializer(name, button, click) return { button = button, name = name, click = click } end
 
-Overlord = { L = {}, PrintNotification = function(_, text) printed[#printed + 1] = text end,
+local scaleApplied = 0
+Overlord = { UI = { ApplyUiScale = function() scaleApplied = scaleApplied + 1 end },
+    L = {}, PrintNotification = function(_, text) printed[#printed + 1] = text end,
     GuildKillAlert = { enabled = true,
         IsEnabled = function(self) return self.enabled end,
         SetEnabled = function(self, v) self.enabled = v end } }
@@ -114,5 +120,11 @@ SettingsPanel:DisplayCategory(SP._category)
 assert(title.text:find("overlord:22:22", 1, true) and title.text:find("Overlord$"), "Logo missing: " .. tostring(title.text))
 SettingsPanel:DisplayCategory({ name = "BugSack" })
 assert(title.text == "BugSack", "Logo leaked onto another addon page")
+
+-- 6. A click runs the setter (and its side effect) once: the setter's own
+--    Settings.SetValue notification must not call it back in a loop.
+settings["Overlord_UiScale"].set(1.1)
+assert(scaleApplied == 1, "Setter re-entered through Settings.SetValue: " .. scaleApplied)
+assert(OverlordDB.config.uiScale == 1.1 and values["Overlord_UiScale"] == 1.1)
 
 print("Settings panel: native layout, chat tab by name, Overlord tab creation OK")

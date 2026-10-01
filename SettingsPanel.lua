@@ -164,13 +164,19 @@ local function formatMapPathOpacityLabel(value)
     return string.format("%.2g×", v)
 end
 
+-- Pushes a value into the Settings control. Blizzard's proxy SetValue calls the
+-- registered setter again; while notifying, that call is ignored (see addRow),
+-- otherwise every click re-ran the setter and its side effects in a loop.
+local settingsNotifying = false
 local function notifySettingsAPI(varName, value)
-    if not Settings then return end
+    if not Settings or settingsNotifying then return end
+    settingsNotifying = true
     if Settings.SetValue then
         pcall(Settings.SetValue, varName, value, true)
     elseif Settings.NotifyUpdate then
         pcall(Settings.NotifyUpdate, varName)
     end
+    settingsNotifying = false
 end
 
 local function getScale()
@@ -659,8 +665,11 @@ local function addRow(category, layout, row)
         end
         return
     end
+    local set = row.set
     local setting = Settings.RegisterProxySetting(category, row.var, type(row.default), label,
-        row.default, row.get, row.set)
+        row.default, row.get, function(value)
+            if not settingsNotifying then set(value) end
+        end)
     if row.kind == "checkbox" and Settings.CreateCheckbox then
         Settings.CreateCheckbox(category, setting, tooltip)
     elseif row.kind == "slider" and Settings.CreateSlider then
@@ -677,22 +686,6 @@ function SP:RefreshControls()
     for _, row in ipairs(ROWS) do
         if row.var and row.get then notifySettingsAPI(row.var, row.get()) end
     end
-end
-
-function SP:ResetDefaults()
-    settingsSuppressSideEffects = true
-    for _, row in ipairs(ROWS) do
-        if row.set and row.default ~= nil then row.set(row.default) end
-    end
-    settingsSuppressSideEffects = false
-    flushSettingsMapSideEffects()
-    if Overlord.MapMarkers and Overlord.MapMarkers.RefreshMinimapButtonVisibility then
-        Overlord.MapMarkers:RefreshMinimapButtonVisibility()
-    end
-    if Overlord.Ressources and Overlord.Ressources.OnShowTopHudSettingChanged then
-        Overlord.Ressources:OnShowTopHudSettingChanged()
-    end
-    self:RefreshControls()
 end
 
 function SP:Register()
