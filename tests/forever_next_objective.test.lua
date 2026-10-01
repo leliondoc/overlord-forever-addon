@@ -44,6 +44,7 @@ Overlord = {
         GetCurrentFront = function() return front end,
         GetFeaturedFrontId = function() error('Objective panel used the daily featured front') end,
         GetFeaturedFrontArtPath = function(_, id) return id .. '.blp' end,
+        GetHomeArtPath = function() return 'home.blp' end,
         GetFeaturedFrontDisplayName = function(_, id) return id == 'elwynn' and 'Elwynn Forest' or 'Loch Modan' end,
     },
     Zones = {
@@ -155,7 +156,7 @@ assert(panel.bodyFs.text == 'No objective available', 'Truce retained an obsolet
 assert(panel.objectiveDetailsFs.text == '' and not panel.objectiveDetailsFs:IsShown(), 'Truce retained capture details')
 Overlord.InActiveFront = false
 popups:RefreshNextObjective()
-assert(panel.vignette.texture == nil and panel.bodyFs.text == 'Enter a war front', 'Leaving a front retained stale map guidance')
+assert(panel.vignette.texture == 'home.blp' and panel.bodyFs.text == 'Enter a war front', 'Leaving a front did not show the homeland art')
 
 -- Both guidance and regular capture progress belong to the side panel. Keep
 -- the waypoint, but never resurrect the floating HUD through capture/manual calls.

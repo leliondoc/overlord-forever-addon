@@ -1978,6 +1978,9 @@ end
 ApplyFeaturedFrontContent = function(f, frontId)
     if not f or not Overlord.Fronts then return false end
     local art = frontId and Overlord.Fronts:GetFeaturedFrontArtPath(frontId)
+    if not frontId and Overlord.Fronts.GetHomeArtPath then
+        art = Overlord.Fronts:GetHomeArtPath()
+    end
     local name = frontId and Overlord.Fronts:GetFeaturedFrontDisplayName(frontId)
     local zone = frontId and Overlord.Zones and Overlord.Zones.GetNextObjectiveZone
         and Overlord.Zones:GetNextObjectiveZone(frontId)
