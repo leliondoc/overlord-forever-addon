@@ -481,6 +481,7 @@ end
 local SP = Overlord.SettingsPanel
 SP.GuildKillAlertVariableName = "Overlord_GuildKillAlert"
 local CHAT_TAB_NAME = "Overlord"
+local SETTINGS_TITLE_LOGO = "|TInterface\\AddOns\\Overlord\\Textures\\overlord:32:32:0:-2|t"
 
 local function Lx(key, fallback)
     return (L and L[key]) or fallback
@@ -715,6 +716,22 @@ function SP:Register()
         SP._panelHooked = true
         panel:HookScript("OnShow", scheduleActionGridActiveRefresh)
         panel:HookScript("OnHide", scheduleActionGridActiveRefresh)
+        -- Overlord logo left of the page title. Blizzard rewrites the title on
+        -- every category change, so only our page carries the inline icon.
+        local function addLogo(_, category)
+            if category ~= SP._category then return end
+            local list = (panel.GetSettingsList and panel:GetSettingsList())
+                or (panel.Container and panel.Container.SettingsList)
+            local title = list and list.Header and list.Header.Title
+            if title and title.SetText then
+                title:SetText(SETTINGS_TITLE_LOGO .. " Overlord")
+            end
+        end
+        for _, method in ipairs({ "DisplayCategory", "SelectCategory" }) do
+            if hooksecurefunc and type(panel[method]) == "function" then
+                hooksecurefunc(panel, method, addLogo)
+            end
+        end
     end
 end
 

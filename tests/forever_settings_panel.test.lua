@@ -23,6 +23,14 @@ function FCF_OpenNewWindow(name)
     end
 end
 function securecall(fn, ...) return fn(...) end
+function hooksecurefunc(owner, method, hook)
+    local original = owner[method]
+    owner[method] = function(...) local r = original(...); hook(...); return r end
+end
+local title = { SetText = function(self, text) self.text = text end }
+SettingsPanel = { Container = { SettingsList = { Header = { Title = title } } },
+    HookScript = function() end,
+    DisplayCategory = function(_, category) title:SetText(category.name) end }
 C_Timer = { After = function() end }
 local function container()
     local c = { data = {} }
@@ -101,4 +109,10 @@ settings["Overlord_GuildKillAlert"].set(false)
 assert(Overlord.GuildKillAlert.enabled == false)
 SP:RefreshControls()
 assert(values["Overlord_GuildKillAlert"] == false, "RefreshControls did not push the alert state")
+-- 5. Our page title carries the Overlord logo; other categories are untouched.
+SettingsPanel:DisplayCategory(SP._category)
+assert(title.text:find("overlord:32:32", 1, true) and title.text:find("Overlord$"), "Logo missing: " .. tostring(title.text))
+SettingsPanel:DisplayCategory({ name = "BugSack" })
+assert(title.text == "BugSack", "Logo leaked onto another addon page")
+
 print("Settings panel: native layout, chat tab by name, Overlord tab creation OK")
