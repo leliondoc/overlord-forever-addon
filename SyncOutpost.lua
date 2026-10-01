@@ -23,7 +23,10 @@ local STALE_OUTPOST_OBSERVER_POLL_INTERVAL = 22
 local STALE_OUTPOST_OBSERVER_POLL_INTERVAL_LARGE = 45
 local opCaptureAlertDedup = {}
 local OP_CAPTURE_ALERT_DEDUP_SEC = 12
-local OP_ASSAULT_ALERT_COOLDOWN = 90
+-- One assault alert per site per 5 min (2026-10-01: two guilds alternating on the
+-- same site re-alerted on every flip). A guild change or a state leaving
+-- in_progress re-arms the alert but never resets this cooldown.
+local OP_ASSAULT_ALERT_COOLDOWN = 300
 local OP_DEFENDER_ALERT_COOLDOWN = 90
 local opAssaultAlertLast = {}
 local opAssaultAlertEmitted = {}
@@ -747,7 +750,6 @@ end
 
 local function ResetOutpostAssaultAlert(siteKey)
     if not siteKey then return end
-    opAssaultAlertLast[siteKey] = nil
     opAssaultAlertEmitted[siteKey] = nil
     local prefix = siteKey .. ":"
     for k in pairs(opAssaultAlertWaveKey) do
