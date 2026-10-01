@@ -1,7 +1,7 @@
-1.3.3
+1.3.4
 
-**Overlord Forever 1.3.3**
+**Overlord Forever 1.3.4**
 
-- The full ranking catch-up now finishes. It used to restart from the beginning each time it switched to another nearby player, so it never reached the end and capture and race rows were almost never synced. It now resumes where it stopped, whoever answers. No extra messages.
-- A total victory from last week, relayed just after the weekly reset, no longer repaints a front of the new week.
-- /ov network shows where enemy live kill totals come from (channel or Battle.net friends) and what your own bridge sent.
+- Outside a war front, the objective panel shows your homeland (Elwynn, Dun Morogh, Teldrassil, Durotar, Tirisfal, Mulgore...) with a short motto for your race. Skyborne get Stormwind or Orgrimmar art depending on their faction.
+- Assault alerts no longer spam: one alert per outpost every 5 minutes, even when two guilds take turns attacking it.
+- Lighter network at peak hours: unchanged guild identities and repeated outpost states are relayed far less often, and a capture in progress is relayed once per site instead of once per player standing on it. No extra messages; capture credit is unchanged.
