@@ -13,8 +13,8 @@ local FACTION_WAX_SEAL_ATLAS = {
     Horde    = "Quest-Horde-WaxSeal",
 }
 
+-- panel_wood_talent was never shipped in Textures/: only the Collections tile is probed.
 local WOOD_BG_PATHS = {
-    "Interface\\AddOns\\Overlord\\Textures\\panel_wood_talent",
     "Interface\\Collections\\CollectionsBackgroundTile",
 }
 
@@ -144,8 +144,6 @@ end
 local function ApplyWoodBackdropColors(frame, panelWoodBgFile, fallbackBg)
     if panelWoodBgFile:find("CollectionsBackgroundTile", 1, true) then
         frame:SetBackdropColor(0.82, 0.74, 0.62, 0.96)
-    elseif panelWoodBgFile:find("panel_wood_talent", 1, true) then
-        frame:SetBackdropColor(1, 1, 1, 0.94)
     else
         frame:SetBackdropColor(fallbackBg[1], fallbackBg[2], fallbackBg[3], fallbackBg[4] or 0.95)
     end
@@ -706,10 +704,40 @@ function Overlord.UI.SetWC3ButtonActive(btn, active, opts)
     end
 end
 
+-- Short fade-in each time a panel opens. The animation runs only during those
+-- 0.15 s; nothing is evaluated per frame afterwards.
+function Overlord.UI.AttachOpenFade(frame, duration)
+    if not frame or frame._olOpenFade or not frame.CreateAnimationGroup or not frame.HookScript then return end
+    local ok = pcall(function()
+        local group = frame:CreateAnimationGroup()
+        local fade = group:CreateAnimation("Alpha")
+        fade:SetFromAlpha(0)
+        fade:SetToAlpha(1)
+        fade:SetDuration(duration or 0.15)
+        fade:SetSmoothing("OUT")
+        group:SetToFinalAlpha(true)
+        frame._olOpenFade = group
+    end)
+    if not ok or not frame._olOpenFade then return end
+    frame:HookScript("OnShow", function(self)
+        self._olOpenFade:Stop()
+        self._olOpenFade:Play()
+    end)
+end
+
 -- Bouton fermer X (partage : panneau principal, classement, popups, export…)
 function Overlord.UI.CreateWC3CloseButton(parent, onClick, opts)
     opts = opts or {}
     local gold = opts.gold or DEFAULT_GOLD
+
+    -- The game's own red close cross. The NoScripts variant has no HideParent
+    -- OnClick, so it carries none of UIPanelCloseButton's taint concerns.
+    local okNative, native = pcall(CreateFrame, "Button", nil, parent, "UIPanelCloseButtonNoScripts")
+    if okNative and native then
+        native:SetSize(opts.size or 26, opts.size or 26)
+        native:SetScript("OnClick", onClick)
+        return native
+    end
 
     local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
     btn:SetSize(26, 26)

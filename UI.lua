@@ -13,6 +13,7 @@ local mainFrame = nil
 -- le cadre ici permet de le recuperer meme si les SavedVariables sont absentes ;
 -- le contenu du panneau reste construit dans l'etape UI differee.
 local mainFrameShell = CreateFrame("Frame", "OverlordMainFrame", UIParent, "BackdropTemplate")
+if Overlord.UI.AttachOpenFade then Overlord.UI.AttachOpenFade(mainFrameShell) end
 mainFrameShell:SetSize(340, 520)
 mainFrameShell:SetMovable(true)
 mainFrameShell:SetDontSavePosition(false)
@@ -1335,6 +1336,7 @@ end
 function Overlord.UI:OpenFrontPickerMenuFallback(anchor)
     if not self._frontPickerPopup then
         local f = CreateFrame("Frame", "OverlordFrontPickerPopup", UIParent, "BackdropTemplate")
+        if Overlord.UI.AttachOpenFade then Overlord.UI.AttachOpenFade(f) end
         f:SetBackdrop({
             bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
             edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -2218,6 +2220,7 @@ end
 
 local function CreateCommunityPopupFrame()
     local f = CreateFrame("Frame", "OverlordCommunityPopup", UIParent, "BackdropTemplate")
+    if Overlord.UI.AttachOpenFade then Overlord.UI.AttachOpenFade(f) end
     f:SetSize(460, 200)
     f:SetPoint("CENTER")
     f:SetBackdrop({
@@ -2351,6 +2354,7 @@ end
 
 local function CreateDiscordPopupFrame()
     local f = CreateFrame("Frame", "OverlordDiscordPopup", UIParent, "BackdropTemplate")
+    if Overlord.UI.AttachOpenFade then Overlord.UI.AttachOpenFade(f) end
     local labelW = 424
     f:SetSize(460, 168)
     f:SetPoint("CENTER")

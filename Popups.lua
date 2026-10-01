@@ -368,6 +368,7 @@ local function EnsureDialogFrame()
     end
 
     local f = CreateFrame("Frame", "OverlordPopupDialog", UIParent, "BackdropTemplate")
+    if Overlord.UI.AttachOpenFade then Overlord.UI.AttachOpenFade(f) end
     f:SetSize(420, 200)
     f:SetPoint("CENTER")
     Overlord.UI.ApplyWoodDialogBackdrop(f)
@@ -672,6 +673,7 @@ local function EnsureQuickGuideFrame()
     if quickGuideFrame then return quickGuideFrame end
 
     local f = CreateFrame("Frame", "OverlordQuickGuideFrame", UIParent, "BackdropTemplate")
+    if Overlord.UI.AttachOpenFade then Overlord.UI.AttachOpenFade(f) end
     f:SetSize(480, 500)
     f:SetPoint("CENTER")
     Overlord.UI.ApplyWoodDialogBackdrop(f)

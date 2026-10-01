@@ -863,6 +863,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     local P = GetPalette()
 
     lbFrame = CreateFrame("Frame", "OverlordLeaderboardFrame", UIParent, "BackdropTemplate")
+    if Overlord.UI.AttachOpenFade then Overlord.UI.AttachOpenFade(lbFrame) end
     lbFrame:SetSize(LB_FRAME_W, 500)
     lbFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     ApplyOfficialFrameBackdrop(lbFrame, P)

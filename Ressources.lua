@@ -1220,14 +1220,8 @@ local function CreateGoldHUD()
     goldHUD._gray = dimGray
 
     -- Bouton fermer (X)
-    local closeBtn = CreateFrame("Button", nil, goldHUD)
-    closeBtn:SetSize(16, 16)
-    closeBtn:SetPoint("TOPRIGHT", -4, -4)
-    closeBtn:SetNormalFontObject("GameFontNormalSmall")
-    closeBtn:SetText("X")
-    closeBtn:SetScript("OnClick", HideTopHudManually)
-    closeBtn:SetScript("OnEnter", function(btn) btn:SetText("|cFFFF4444X|r") end)
-    closeBtn:SetScript("OnLeave", function(btn) btn:SetText("X") end)
+    Overlord.UI.CreateWC3CloseButton(goldHUD, HideTopHudManually, { size = 20 })
+        :SetPoint("TOPRIGHT", -2, -2)
 
     -- Position sauvegardee (cluster entier, librement deplacable, n'importe ou a l'ecran)
     if OverlordDB and OverlordDB.goldHUDPos then

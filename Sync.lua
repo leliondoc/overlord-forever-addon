@@ -3753,16 +3753,16 @@ local function PrintCaptureChatOnce(zone, newOwner, capturerName, captureTs)
     -- a deux fois le nombre fixe de zones, sans besoin de rescanner a chaque chat.
 
     if newOwner == Overlord.PlayerFaction then
-        Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.SYNC_CAPTURED_FRIENDLY,
+        Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. Overlord:FactionChatIcon(Overlord.PlayerFaction) .. L.SYNC_CAPTURED_FRIENDLY,
             zone.name, Overlord.Zones:GetFactionName()))
     else
         -- Affiche le nom du capteur (avec royaume) si disponible
         if capturerName and capturerName ~= "" then
-            Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.SYNC_CAPTURED_ENEMY_BY,
+            Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.SYNC_CAPTURED_ENEMY_BY,
                 zone.name, Overlord.Zones:GetEnemyFactionName(),
                 AppendShardTagToPlayerName(capturerName, zone and zone.zsRelayCapturerShard)))
         else
-            Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.SYNC_CAPTURED_ENEMY,
+            Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.SYNC_CAPTURED_ENEMY,
                 zone.name, Overlord.Zones:GetEnemyFactionName()))
         end
     end
@@ -4251,11 +4251,11 @@ local function TryPrintEnemyCapturingAlert(zone, capturerName, waveTs)
     -- Affiche le nom du capteur (avec royaume) si disponible
     local whereLabel = Overlord.Zones:GetZoneCaptureAlertLocationLabel(zone)
     if capturerName and capturerName ~= "" then
-        Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.ENEMY_CAPTURING_BY,
+        Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.ENEMY_CAPTURING_BY,
             whereLabel, Overlord.Zones:GetEnemyFactionName(),
             AppendShardTagToPlayerName(capturerName, zone and zone.zsRelayCapturerShard)))
     else
-        Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.ENEMY_CAPTURING,
+        Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.ENEMY_CAPTURING,
             whereLabel, Overlord.Zones:GetEnemyFactionName()))
     end
 end

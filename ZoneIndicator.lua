@@ -558,6 +558,35 @@ function Overlord.ZoneIndicator:Initialize()
     self:CreateIndicatorFrame()
 end
 
+-- Capture progress bar behind the timer text. The fill glides toward the latest
+-- value (the HUD refreshes about once a second); its OnUpdate runs only while the
+-- fill is still moving and stops itself, so an idle bar costs nothing per frame.
+local function GlideCaptureBar(bar, elapsed)
+    local current, target = bar:GetValue(), bar._olTarget or 0
+    local step = (target - current) * math.min(1, elapsed * 6)
+    if math.abs(target - current) < 0.002 then
+        current = target
+        bar:SetScript("OnUpdate", nil)
+    else
+        current = current + step
+    end
+    bar:SetValue(current)
+    bar.spark:SetPoint("CENTER", bar, "LEFT", bar:GetWidth() * current, 0)
+    bar.spark:SetShown(current > 0.01 and current < 0.99)
+end
+
+local function SetCaptureBar(bar, pct, r, g, b)
+    if not bar then return end
+    bar:SetStatusBarColor(r, g, b)
+    if not bar:IsShown() then
+        -- Appearing mid-capture: start from the real value, no sweep from zero.
+        bar:SetValue(pct)
+        bar:Show()
+    end
+    bar._olTarget = pct
+    bar:SetScript("OnUpdate", GlideCaptureBar)
+end
+
 -- Cree le frame indicateur
 function Overlord.ZoneIndicator:CreateIndicatorFrame()
     if indicatorFrame then return end
@@ -639,29 +668,41 @@ function Overlord.ZoneIndicator:CreateIndicatorFrame()
     distance:SetText("")
     indicatorFrame.distance = distance
 
-    -- Timer de capture (mm:ss / mm:ss)
-    local timer = indicatorFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    -- Capture progress bar (child frame: drawn above the banner art).
+    local bar = CreateFrame("StatusBar", nil, indicatorFrame)
+    bar:SetSize(math.floor(panelW * 0.62), 14)
+    bar:SetFrameLevel(indicatorFrame:GetFrameLevel() + 2)
+    bar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    bar:SetMinMaxValues(0, 1)
+    bar:SetValue(0)
+    local barBg = bar:CreateTexture(nil, "BACKGROUND")
+    barBg:SetAllPoints()
+    barBg:SetColorTexture(0, 0, 0, 0.6)
+    local spark = bar:CreateTexture(nil, "OVERLAY")
+    spark:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
+    spark:SetBlendMode("ADD")
+    spark:SetSize(16, 30)
+    spark:Hide()
+    bar.spark = spark
+    bar:Hide()
+    indicatorFrame.progressBar = bar
+
+    -- Timer de capture (mm:ss / mm:ss), on a layer above the progress bar.
+    local timerLayer = CreateFrame("Frame", nil, indicatorFrame)
+    timerLayer:SetAllPoints()
+    timerLayer:SetFrameLevel(indicatorFrame:GetFrameLevel() + 3)
+    local timer = timerLayer:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     timer:SetPoint("TOP", distance, "BOTTOM", 0, -(IND_LINE_GAP + IND_TIMER_DROP))
     timer:SetShadowOffset(1, -1)
     timer:SetText("")
     indicatorFrame.timer = timer
+    bar:SetPoint("CENTER", timer, "CENTER", 0, 0)
 
-    -- Bouton pour cacher (custom, pas UIPanelCloseButton qui cause du taint)
-    local hideBtn = CreateFrame("Button", nil, indicatorFrame)
-    hideBtn:SetSize(16, 16)
-    hideBtn:SetPoint("TOPRIGHT", -4, -10)
-    hideBtn:SetNormalFontObject("GameFontNormalSmall")
-    hideBtn:SetText("X")
-    hideBtn:SetScript("OnClick", function()
+    -- Native red cross (NoScripts template: no HideParent, no taint).
+    Overlord.UI.CreateWC3CloseButton(indicatorFrame, function()
         hudUserDismissed = true
         Overlord.ZoneIndicator:Hide()
-    end)
-    hideBtn:SetScript("OnEnter", function(btn)
-        btn:SetText("|cFFFF4444X|r")
-    end)
-    hideBtn:SetScript("OnLeave", function(btn)
-        btn:SetText("X")
-    end)
+    end, { size = 20 }):SetPoint("TOPRIGHT", -2, -8)
 
     self:RepositionInStack()
 end
@@ -1086,17 +1127,24 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
         end
         if required > 0 then
             showTimer = true
-            local pct = math.min(elapsed / required, 1)
+            local pct = math.max(0, math.min(elapsed / required, 1))
             indicatorFrame.timer:SetText(FormatTime(elapsed) .. " / " .. FormatTime(required))
-            if pct < 0.5 then
-                indicatorFrame.timer:SetTextColor(1.0, 0.82, 0.0)
+            -- Same colour code as before (gold, then green; red when contested),
+            -- now on the bar; the text turns white to stay readable on it.
+            local r, g, b = 1.0, 0.82, 0.0
+            if pct >= 0.5 then r, g, b = 1.0 - (pct - 0.5) * 1.4, 1.0, 0.0 end
+            if activeZone.isContested then r, g, b = 1.0, 0.2, 0.2 end
+            if indicatorFrame.progressBar then
+                indicatorFrame.timer:SetTextColor(1, 1, 1)
+                SetCaptureBar(indicatorFrame.progressBar, pct, r, g, b)
             else
-                indicatorFrame.timer:SetTextColor(1.0 - (pct - 0.5) * 1.4, 1.0, 0.0)
-            end
-            if activeZone.isContested then
-                indicatorFrame.timer:SetTextColor(1.0, 0.2, 0.2)
+                indicatorFrame.timer:SetTextColor(r, g, b)
             end
         end
+    end
+    if not showTimer and indicatorFrame.progressBar and indicatorFrame.progressBar:IsShown() then
+        indicatorFrame.progressBar:SetScript("OnUpdate", nil)
+        indicatorFrame.progressBar:Hide()
     end
 
     local showExtraLine = showTimer or showHeldAssaultHint

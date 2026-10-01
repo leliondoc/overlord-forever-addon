@@ -872,14 +872,14 @@ local function TryPrintOutpostDefenderAlert(siteKey, stBefore, stAfter)
         and Overlord.Zones:GetEnemyFactionName() or rFac
     if not isOwnGuild then
         if L.OUTPOST_ALLIED_UNDER_ATTACK then
-            Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.OUTPOST_ALLIED_UNDER_ATTACK,
+            Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.OUTPOST_ALLIED_UNDER_ATTACK,
                 whereLabel, heldGuild, facLabel))
         end
     elseif rGuild ~= "" and L.OUTPOST_DEFENDER_UNDER_ATTACK_BY then
-        Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.OUTPOST_DEFENDER_UNDER_ATTACK_BY,
+        Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.OUTPOST_DEFENDER_UNDER_ATTACK_BY,
             whereLabel, rGuild, facLabel))
     else
-        Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.OUTPOST_DEFENDER_UNDER_ATTACK,
+        Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.OUTPOST_DEFENDER_UNDER_ATTACK,
             whereLabel, facLabel))
     end
 end
@@ -934,20 +934,20 @@ local function TryPrintOutpostAssaultAlert(siteKey, stBefore, stAfter)
     local pf = Overlord.PlayerFaction
     if pf and assaultFac == pf then
         if defendedGuild ~= "" and L.OUTPOST_ALLY_ASSAULT_VS then
-            Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r " .. L.OUTPOST_ALLY_ASSAULT_VS,
+            Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r " .. Overlord:FactionChatIcon(assaultFac) .. L.OUTPOST_ALLY_ASSAULT_VS,
                 whereLabel, assaultGuild, defendedGuild))
         elseif L.OUTPOST_ALLY_ASSAULT then
-            Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r " .. L.OUTPOST_ALLY_ASSAULT,
+            Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r " .. Overlord:FactionChatIcon(assaultFac) .. L.OUTPOST_ALLY_ASSAULT,
                 whereLabel, assaultGuild))
         end
     else
         local facLabel = (Overlord.Zones and Overlord.Zones.GetEnemyFactionName)
             and Overlord.Zones:GetEnemyFactionName() or assaultFac
         if defendedGuild ~= "" and L.OUTPOST_ENEMY_ASSAULT_VS then
-            Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.OUTPOST_ENEMY_ASSAULT_VS,
+            Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:FactionChatIcon(assaultFac) .. L.OUTPOST_ENEMY_ASSAULT_VS,
                 whereLabel, assaultGuild, defendedGuild, facLabel))
         elseif L.OUTPOST_ENEMY_ASSAULT then
-            Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.OUTPOST_ENEMY_ASSAULT,
+            Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:FactionChatIcon(assaultFac) .. L.OUTPOST_ENEMY_ASSAULT,
                 whereLabel, assaultGuild, facLabel))
         end
     end

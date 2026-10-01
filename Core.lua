@@ -398,6 +398,18 @@ function Overlord:PrintNotification(text)
     end
 end
 
+-- Faction crest at the start of a chat alert: the same Warfronts keep icons as the
+-- map pins, so a line reads at a glance before its text.
+function Overlord:FactionChatIcon(faction)
+    if faction ~= "Alliance" and faction ~= "Horde" then return "" end
+    return "|A:Warfronts-BaseMapIcons-" .. faction .. "-MainHall:16:16|a "
+end
+
+function Overlord:EnemyFactionChatIcon()
+    local mine = self.PlayerFaction
+    return self:FactionChatIcon(mine == "Alliance" and "Horde" or mine == "Horde" and "Alliance" or nil)
+end
+
 -- Alerte rouge milieu d'ecran (RaidNotice), comme les avertissements de raid Blizzard.
 function Overlord:PrintRaidWarning(text)
     if not text or text == "" then return end

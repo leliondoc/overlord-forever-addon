@@ -987,6 +987,7 @@ function Overlord.HallOfFameUI:CreateFrame()
     InstallBlizzardAchievementIsolation()
 
     hofFrame = CreateFrame("Frame", "OverlordHallOfFameFrame", UIParent, "BackdropTemplate")
+    if Overlord.UI.AttachOpenFade then Overlord.UI.AttachOpenFade(hofFrame) end
     hofFrame:SetSize(HOF_FRAME_W, HOF_FRAME_H)
     hofFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 40)
     ApplyAchievementBackdrop(hofFrame)
