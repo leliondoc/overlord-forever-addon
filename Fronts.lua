@@ -591,12 +591,42 @@ function Overlord.Fronts:GetZone(zoneId, frontId)
         end
         return nil
     end
-    for _, front in ipairs(OrderedFronts(self)) do
-        for _, zone in ipairs(front.zones or {}) do
-            if zone.id == zoneId then return zone, front end
+    local index = self:_ZoneIndex()
+    local zone = index.zone[zoneId]
+    if zone then return zone, index.front[zoneId] end
+    return nil
+end
+
+-- zoneId -> (zone, front) over every front in Order, first front wins (same answer
+-- as the former scan). A full-map ZA apply called GetZone hundreds of times, each
+-- allocating a fronts list and scanning ~70 zones (perf audit 2026-10-01). The
+-- signature (each front's zones table and length) rebuilds it if a list changes.
+function Overlord.Fronts:_ZoneIndex()
+    local index = self._zoneIndexCache
+    local order, registry = self.Order or {}, self.Registry or {}
+    if index then
+        local valid = index.orderLen == #order
+        for i = 1, #order do
+            if not valid then break end
+            local front = registry[order[i]]
+            local zones = front and front.zones
+            valid = index.lists[i] == zones and index.lengths[i] == (zones and #zones or 0)
+        end
+        if valid then return index end
+    end
+    index = { zone = {}, front = {}, lists = {}, lengths = {}, orderLen = #order }
+    for i = 1, #order do
+        local front = registry[order[i]]
+        local zones = front and front.zones
+        index.lists[i], index.lengths[i] = zones, zones and #zones or 0
+        for _, zone in ipairs(zones or {}) do
+            if zone.id ~= nil and index.zone[zone.id] == nil then
+                index.zone[zone.id], index.front[zone.id] = zone, front
+            end
         end
     end
-    return nil
+    self._zoneIndexCache = index
+    return index
 end
 
 function Overlord.Fronts:IsKnownZoneId(zoneId)

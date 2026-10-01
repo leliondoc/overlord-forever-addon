@@ -1031,9 +1031,11 @@ end
 -- Memo borne des fonctions pures de nom (resultat identique, recalcule ~25
 -- operations de chaine a chaque appel ; des dizaines d'appels par message recu).
 -- Stocke sur l'objet : le chunk Sync.lua est proche de la limite de 200 locals.
+-- 32768 entries (~2-3 MB per memo): a ladder pass over 10-20k names used to wipe a
+-- 2048-entry memo many times per pass, recomputing every name (perf audit 2026-10-01).
 function Overlord.Sync:_MemoNameResult(field, name, result)
     local memo = self[field]
-    if not memo or memo.n >= 2048 then
+    if not memo or memo.n >= 32768 then
         memo = { n = 0, values = {} }
         self[field] = memo
     end

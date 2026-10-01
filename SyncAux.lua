@@ -3829,7 +3829,9 @@ local lastDirectCaptureCreditAt = {}
 -- (regression 9.4+ : IsObservedPlayer* appelait GetObservedPlayerIdentity a chaque message).
 local observedUnitsSnapshot = nil
 local observedUnitsSnapshotAt = 0
-local OBSERVED_UNITS_SNAPSHOT_INTERVAL = 3
+-- 8 s (was 3): the scan (~81 unit tokens, ~1-1.5 ms) ran every 3 s through any fight;
+-- it only backs level/faction/guild hints when the ladder row lacks them.
+local OBSERVED_UNITS_SNAPSHOT_INTERVAL = 8
 
 local function RefreshObservedUnitsSnapshot()
     local now = GetTime()

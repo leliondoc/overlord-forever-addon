@@ -94,11 +94,11 @@ assert(unitReads == reads and friendScans == scans, 'Faction lookup rescanned un
 
 -- A live faction change beats old score data, in both directions.
 units.nameplate1.faction, units.nameplate2.faction = 'Alliance', 'Horde'
-now = now + 4
+now = now + 9 -- past the 8 s observed-units snapshot window
 check('Red Tester', 'Alliance', '|cff6db3f2')
 check('Blue Tester', 'Horde', '|cffff6645')
 units.nameplate1, units.nameplate2 = nil, nil
-now = now + 4
+now = now + 9 -- past the 8 s observed-units snapshot window
 check('Red Tester', nil, '|cffb8b8b8')
 check('Blue Tester', nil, '|cffb8b8b8')
 

@@ -2999,6 +2999,14 @@ function Overlord.Leaderboard:SetPlayerGuild(playerName, guild, fromSync, author
         return
     end
     if prevGuild == guild then
+        -- A groupmate's every PvP kill re-confirms the same guild: refreshing its
+        -- date each time invalidated the dedup meta index and kept the network
+        -- index rebuild from ever finishing in raids. Once a minute is enough to
+        -- keep first-hand observations ahead of older relayed claims.
+        if authoritative and not fromSync and prev and prev.guildAuth and not prev.guildReplica
+            and incAt >= prevAt and incAt - prevAt < 60 then
+            return
+        end
         if authoritative then
             if not prev then
                 self.playerInfo[playerName] = {
