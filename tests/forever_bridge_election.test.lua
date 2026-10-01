@@ -79,7 +79,7 @@ end
 net.BridgeChannelHold = { 2, 15 }
 function s:GetPlayerFullName() return "Local Tester" end
 local function copies(name, total, n)
-    for _ = 1, n do net:NoteChannelBridgeRow(name, total, "Horde") end
+    for i = 1, n do net:NoteChannelBridgeRow(name, total, "Horde", "Bridge Number" .. i) end
 end
 
 -- 1. Small scale (2-3 copies per total): share 1, nothing held back.
@@ -149,3 +149,10 @@ assert(not heardSent, "a deferred total already on the channel was posted again"
 for t = 1, 12 do copies("Crowd Horde", 300 + t, 1) end
 assert(net:GetBridgeShare() == 1, "share did not recover: " .. net:GetBridgeShare())
 print("Bridge election: unchanged at small scale, adapts to crowds, fallback never loses a total, recovers")
+
+-- 6. One sender repeating the same row counts once: it cannot drag the share down.
+for t = 1, 12 do
+    for _ = 1, 30 do net:NoteChannelBridgeRow("Spam Horde", 500 + t, "Horde", "Same Spammer") end
+end
+assert(net:GetBridgeShare() == 1, "a single sender lowered the share: " .. net:GetBridgeShare())
+print("Bridge election: one copy per sender")

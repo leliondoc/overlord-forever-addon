@@ -1795,11 +1795,17 @@ end
 -- from 1 to the floor and back.) A total seen once or not at all means bridges are
 -- scarce: the estimate shrinks and the share grows back toward 1.
 bridgeLK.bridges = ELECTION_TARGET
-local function noteBridgeCopy(name, total)
+local function noteBridgeCopy(name, total, sender)
     local key, now = name:lower(), math.floor(tonumber(total) or 0)
+    local who = type(sender) == "string" and sender:lower() or "?"
     local record = bridgeCopies[key]
     if record and record.total == now then
-        record.count = record.count + 1
+        -- One copy per sender: a single channel member repeating a row cannot
+        -- push everyone's share down.
+        if not record.senders[who] then
+            record.senders[who] = true
+            record.count = record.count + 1
+        end
         return
     end
     if record and now < record.total then return end -- an older total heard late
@@ -1812,10 +1818,18 @@ local function noteBridgeCopy(name, total)
             estimate = estimate * 0.7 + sample * 0.3
         end
         bridgeLK.bridges = estimate
-        bridgeLK.share = math.max(ELECTION_MIN_SHARE, math.min(1, ELECTION_TARGET / estimate))
+        -- Dead zone: up to twice the target the share stays exactly 1, so a stray
+        -- burst of copies never changes the behaviour of small groups of bridges.
+        if estimate <= 2 * ELECTION_TARGET then
+            bridgeLK.share = 1
+        else
+            bridgeLK.share = math.max(ELECTION_MIN_SHARE, math.min(1, ELECTION_TARGET / estimate))
+        end
     end
+    -- 1024 subjects (was 256): a crowd of active enemies evicted records before
+    -- their next total and froze the estimate exactly where it is needed.
     remember(bridgeCopies, bridgeCopiesOrder, key,
-        { total = now, count = 1, share = bridgeLK.share or 1 }, 256)
+        { total = now, count = 1, share = bridgeLK.share or 1, senders = { [who] = true } }, 1024)
 end
 function net:GetBridgeShare() return bridgeLK.share or 1 end
 local bridgeFlush
@@ -1833,7 +1847,9 @@ function net:EmitBridgeLK(row, payload)
         self.stats.bridgeLK = (self.stats.bridgeLK or 0) + 1
         self.stats.bridgeLKChannel = (self.stats.bridgeLKChannel or 0) + 1
         -- Our own copy counts too: we never receive our own channel line back.
-        if row and row.name and row.pendingTotal then noteBridgeCopy(row.name, row.pendingTotal) end
+        if row and row.name and row.pendingTotal then
+            noteBridgeCopy(row.name, row.pendingTotal, sync.GetPlayerFullName and sync:GetPlayerFullName())
+        end
         return true
     end
     -- Channel only busy: retry shortly (the flush waits 5 s); whisper only when the
@@ -1993,6 +2009,16 @@ local function queueBridgeRow(state, name, faction, total, before, class, locale
     end
     row.pending, row.pendingAt, row.pendingTotal = payload, now, total
     if #state.queue > 64 then
+        -- Rows cancelled by a copy heard meanwhile still sit in the queue until the
+        -- next flush: drop them first, before evicting a row that is still due.
+        local live = {}
+        for _, queued in ipairs(state.queue) do
+            local r = state.rows[queued]
+            if r and r.pending then live[#live + 1] = queued end
+        end
+        state.queue = live
+    end
+    if #state.queue > 64 then
         -- The dropped subject must be queueable again on its next accepted row.
         local dropped = state.rows[table.remove(state.queue, 1)]
         if dropped then dropped.pending = nil end
@@ -2035,12 +2061,12 @@ function net:NoteBridgedEnemyTotal(name, faction, total, before, class, locale, 
 end
 -- 1.3.2: another bridge already put this total (or a newer one) on our channel:
 -- drop our pending copy, so several bridges do not repeat the same row.
-function net:NoteChannelBridgeRow(name, total, faction)
+function net:NoteChannelBridgeRow(name, total, faction, sender)
     if type(name) ~= "string" then return false end
     -- Only enemy totals are bridge copies (own-faction LK on our channel is not).
     local mine = addon.PlayerFaction
     if (faction == "Alliance" or faction == "Horde") and faction ~= mine then
-        noteBridgeCopy(name, total)
+        noteBridgeCopy(name, total, sender)
     end
     local row = bridgeLK.rows[name:lower()]
     total = tonumber(total)

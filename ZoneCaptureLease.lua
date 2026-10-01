@@ -787,7 +787,8 @@ CapturerVisibleOnLocalDisk = function(zone, capturerName, owner)
 end
 
 function Lease:IsPlayerOnDisk(zone, playerName, faction, expectedGuid)
-    local guid = FindCapturerOnDisk(zone, playerName, faction, expectedGuid)
+    -- Barrier handshakes (A/C) need the position now, not the 1.5 s cached answer.
+    local guid = FindCapturerOnDiskUncached(zone, playerName, faction, expectedGuid)
     if not guid then return false end
     return expectedGuid == nil or guid == expectedGuid
 end

@@ -2657,7 +2657,9 @@ function Overlord.Sync:_BuildBNetFriendsList(sliced)
         if numAccounts then
             for j = 1, numAccounts do
                 local game = C_BattleNet.GetFriendGameAccountInfo(i, j)
-                if game and game.gameAccountID and IsForeverWowGameAccount(game) then
+                if game and game.gameAccountID and IsForeverWowGameAccount(game)
+                    and not list.info[game.gameAccountID] then
+                    -- (Indices can shift between slices: a friend seen twice counts once.)
                     local faction = game.factionName
                     list.info[game.gameAccountID] = {
                         faction = faction,
@@ -8688,7 +8690,7 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
             classClaimVerified and class or "", localeClaimVerified and locTag or "",
             remoteEpoch, bucketEpochToken, levelToken)
     elseif betaNet and channel == "CHANNEL" and betaNet.NoteChannelBridgeRow then
-        pcall(betaNet.NoteChannelBridgeRow, betaNet, playerName, kills, faction)
+        pcall(betaNet.NoteChannelBridgeRow, betaNet, playerName, kills, faction, sender)
     end
     -- Classe / faction / locale ci-dessous ; la guilde (champ 7) est traitee plus bas.
     if classClaimVerified and not Overlord.Leaderboard.MergeLeaderboardKillMetadata then
