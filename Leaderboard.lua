@@ -1069,6 +1069,21 @@ end
 -- Construit les trois index susceptibles d'etre consultes depuis les handlers reseau.
 -- `yieldWork` rend cette operation reutilisable par la barriere login sans exposer
 -- un index partiel : kill/capture ne sont publies qu'apres la derniere tranche.
+-- /ov network: how often index rebuilds finish versus restart (and why), to tell
+-- in game whether new player rows still keep them from finishing.
+local function noteHotIndexOutcome(self, outcome)
+    local stats = self._hotIndexStats
+    if not stats then
+        stats = { completed = 0, metaOnly = 0, abortedMeta = 0, abortedOther = 0 }
+        self._hotIndexStats = stats
+    end
+    stats[outcome] = (stats[outcome] or 0) + 1
+end
+
+function Overlord.Leaderboard:GetHotIndexStats()
+    return self._hotIndexStats or { completed = 0, metaOnly = 0, abortedMeta = 0, abortedOther = 0 }
+end
+
 function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
     local killsSource = self.kills or {}
     local captureSource = self.captureCount or {}
@@ -1092,12 +1107,14 @@ function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
         and self._networkHotCapturesSource == capturesSource then
         self:RebuildDedupMetaIndex(yieldWork, function(name) NoteDedupCanonicalName(self, name) end)
         if sourcesChanged() then
+            noteHotIndexOutcome(self, (self._dedupMetaEpoch or 0) ~= metaEpoch and "abortedMeta" or "abortedOther")
             self._dedupMetaIndex = nil
             self._dedupLegacyShortMetaIndex = nil
             self._guildFactionVoteIndex = nil
             return false
         end
         self._networkHotPlayerInfoSource = playerInfoSource
+        noteHotIndexOutcome(self, "metaOnly")
         return true
     end
 
@@ -1168,6 +1185,8 @@ function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
     hotRebuildJournals[journal] = nil
     if owner then owner.journal = nil end
     if not journalKept or sourcesChanged() then
+        noteHotIndexOutcome(self, (journalKept and (self._dedupMetaEpoch or 0) ~= metaEpoch)
+            and "abortedMeta" or "abortedOther")
         self._dedupMetaIndex = nil
         self._dedupLegacyShortMetaIndex = nil
         self._guildFactionVoteIndex = nil
@@ -1190,6 +1209,7 @@ function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
     self._networkHotCapturesSource = capturesSource
     self._networkHotPlayerInfoSource = playerInfoSource
     self._networkHotCanonicalGeneration = dedupCanonicalGeneration
+    noteHotIndexOutcome(self, "completed")
     return true
 end
 

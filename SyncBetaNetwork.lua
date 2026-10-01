@@ -746,6 +746,13 @@ function net:GetKindDiagnostics(maxRows)
         self.stats.bridgeOut or 0, self.stats.bridgeLKCovered or 0,
         math.floor((net.GetBridgeShare and net:GetBridgeShare() or 1) * 100 + 0.5),
         self.stats.bridgeLKDeferred or 0)
+    local lb = addon.Leaderboard
+    if lb and lb.GetHotIndexStats then
+        local h = lb:GetHotIndexStats()
+        lines[#lines + 1] = string.format("Ranking index rebuilds: %d full + %d meta-only finished;"
+            .. " restarted %d (new player data) + %d (other).",
+            h.completed or 0, h.metaOnly or 0, h.abortedMeta or 0, h.abortedOther or 0)
+    end
     return lines
 end
 function net:IsUrgentPacket(kind, payload) return isUrgent({ kind = kind, payload = payload }) end

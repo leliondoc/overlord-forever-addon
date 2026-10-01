@@ -112,4 +112,8 @@ local aborted = slicedRebuild(function(step)
     if step == 2 then lb:MergeDuplicateLeaderboardKeysByDedup() end
 end)
 assert(aborted == false, "A key merge during the pass was published")
+local h = lb:GetHotIndexStats()
+assert(h.completed >= 2 and h.metaOnly >= 1 and h.abortedOther >= 2,
+    string.format("rebuild counters wrong: %d full, %d meta, %d other", h.completed, h.metaOnly, h.abortedOther))
+
 print("Hot index journal: kills mid-pass replayed, rebuild completes, merges still abort")
