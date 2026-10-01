@@ -8668,7 +8668,7 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
             classClaimVerified and class or "", localeClaimVerified and locTag or "",
             remoteEpoch, bucketEpochToken, levelToken)
     elseif betaNet and channel == "CHANNEL" and betaNet.NoteChannelBridgeRow then
-        pcall(betaNet.NoteChannelBridgeRow, betaNet, playerName, kills)
+        pcall(betaNet.NoteChannelBridgeRow, betaNet, playerName, kills, faction)
     end
     -- Classe / faction / locale ci-dessous ; la guilde (champ 7) est traitee plus bas.
     if classClaimVerified and not Overlord.Leaderboard.MergeLeaderboardKillMetadata then

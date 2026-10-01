@@ -740,10 +740,12 @@ function net:GetKindDiagnostics(maxRows)
     -- 1.3.2 cross-faction live totals: what reached us, and what our own bridge did.
     lines[#lines + 1] = string.format("Enemy live totals received: %d from the channel, %d from Battle.net friends"
         .. " (their own kills: %d). Your bridge: %d posted on the channel, %d sent to enemy friends,"
-        .. " %d skipped (already on the channel).",
+        .. " %d skipped (already on the channel). Bridge share: %d%% (%d held back as fallback).",
         self.stats.enemyTotalsFromChannel or 0, self.stats.enemyTotalsFromFriends or 0,
         self.stats.enemyFriendKills or 0, self.stats.bridgeLKChannel or 0,
-        self.stats.bridgeOut or 0, self.stats.bridgeLKCovered or 0)
+        self.stats.bridgeOut or 0, self.stats.bridgeLKCovered or 0,
+        math.floor((net.GetBridgeShare and net:GetBridgeShare() or 1) * 100 + 0.5),
+        self.stats.bridgeLKDeferred or 0)
     return lines
 end
 function net:IsUrgentPacket(kind, payload) return isUrgent({ kind = kind, payload = payload }) end
@@ -1755,6 +1757,60 @@ local bridgeLK = { rows = {}, order = {}, queue = {}, sent = {}, peerAt = {}, pe
 local bridgeOut = { rows = {}, order = {}, queue = {}, sent = {}, outbound = true }
 -- Random wait before a channel copy (seconds); tests may set { 0, 0 }.
 net.BridgeChannelHold = { 2, 15 }
+-- Bridge election (2026-10-02). Every client that receives an enemy total over
+-- Battle.net is a channel bridge for it. With hundreds of them, the 2-15 s hold and
+-- the "already on the channel" cancel still let dozens of copies through (those sent
+-- in the same second). Each client counts the channel copies of every enemy total
+-- and adapts the share of subjects it posts first: copies ~ bridges x share, so
+-- share x TARGET / copies brings them back to about TARGET. Which subjects a client
+-- keeps is a hash of (client, subject): each client decides alone, no message.
+-- With few bridges the share stays 1, today's behaviour. A client not elected for a
+-- subject keeps its copy as a fallback 20-60 s later (spread by the same hash),
+-- cancelled as soon as another copy is heard: a total can be late, never lost.
+local ELECTION_TARGET, ELECTION_MIN_SHARE = 3, 0.005
+local ELECTION_FALLBACK_MIN, ELECTION_FALLBACK_SPAN = 20, 40
+local bridgeCopies, bridgeCopiesOrder = {}, {}
+bridgeLK.share = 1
+local function electionRoll(salt, subjectKey)
+    local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
+    local text = salt .. "|" .. tostring(me or ""):lower() .. "|" .. subjectKey
+    local h = 5381
+    for i = 1, #text do h = (h * 33 + text:byte(i)) % 2147483647 end
+    -- Golden-ratio spread: names differing only in their last letters map to
+    -- neighbouring h values, which a plain h / modulus kept clustered.
+    return (h * 0.6180339887498949) % 1
+end
+-- One more channel copy of an enemy total (heard, or our own post). When a newer
+-- total of the same subject shows up, the previous one is complete: its copies,
+-- divided by the share in force when it started, estimate how many bridges carry
+-- this subject. That estimate is smoothed and the share set to TARGET / bridges.
+-- (Scaling the share by each sample instead compounded stale samples and swung it
+-- from 1 to the floor and back.) A total seen once or not at all means bridges are
+-- scarce: the estimate shrinks and the share grows back toward 1.
+bridgeLK.bridges = ELECTION_TARGET
+local function noteBridgeCopy(name, total)
+    local key, now = name:lower(), math.floor(tonumber(total) or 0)
+    local record = bridgeCopies[key]
+    if record and record.total == now then
+        record.count = record.count + 1
+        return
+    end
+    if record and now < record.total then return end -- an older total heard late
+    if record then
+        local estimate = bridgeLK.bridges or ELECTION_TARGET
+        if record.count <= 1 then
+            estimate = math.max(ELECTION_TARGET, estimate * 0.6)
+        else
+            local sample = record.count / math.max(ELECTION_MIN_SHARE, record.share or 1)
+            estimate = estimate * 0.7 + sample * 0.3
+        end
+        bridgeLK.bridges = estimate
+        bridgeLK.share = math.max(ELECTION_MIN_SHARE, math.min(1, ELECTION_TARGET / estimate))
+    end
+    remember(bridgeCopies, bridgeCopiesOrder, key,
+        { total = now, count = 1, share = bridgeLK.share or 1 }, 256)
+end
+function net:GetBridgeShare() return bridgeLK.share or 1 end
 local bridgeFlush
 function net:EmitBridgeLK(row, payload)
     local now = GetTime()
@@ -1769,6 +1825,8 @@ function net:EmitBridgeLK(row, payload)
         -- Group members on our channel heard it there: no second copy.
         self.stats.bridgeLK = (self.stats.bridgeLK or 0) + 1
         self.stats.bridgeLKChannel = (self.stats.bridgeLKChannel or 0) + 1
+        -- Our own copy counts too: we never receive our own channel line back.
+        if row and row.name and row.pendingTotal then noteBridgeCopy(row.name, row.pendingTotal) end
         return true
     end
     -- Channel only busy: retry shortly (the flush waits 5 s); whisper only when the
@@ -1914,8 +1972,16 @@ local function queueBridgeRow(state, name, faction, total, before, class, locale
         -- Counted from when the row may leave (60 s per subject): bridges that all sent
         -- or all heard the previous copy at the same moment stay spread out.
         if not state.outbound and hi > 0 then
-            row.holdUntil = math.max(now, (row.sentAt or -math.huge) + BRIDGE_LK_SUBJECT_GAP)
-                + math.max(0, lo) + math.random() * (hi - math.max(0, lo))
+            local from = math.max(now, (row.sentAt or -math.huge) + BRIDGE_LK_SUBJECT_GAP)
+            local share = state.share or 1
+            if share < 1 and electionRoll("E", key) >= share then
+                -- Not elected for this subject: fallback copy only (see election).
+                row.holdUntil = from + ELECTION_FALLBACK_MIN
+                    + electionRoll("F", key) * ELECTION_FALLBACK_SPAN
+                net.stats.bridgeLKDeferred = (net.stats.bridgeLKDeferred or 0) + 1
+            else
+                row.holdUntil = from + math.max(0, lo) + math.random() * (hi - math.max(0, lo))
+            end
         end
     end
     row.pending, row.pendingAt, row.pendingTotal = payload, now, total
@@ -1962,8 +2028,13 @@ function net:NoteBridgedEnemyTotal(name, faction, total, before, class, locale, 
 end
 -- 1.3.2: another bridge already put this total (or a newer one) on our channel:
 -- drop our pending copy, so several bridges do not repeat the same row.
-function net:NoteChannelBridgeRow(name, total)
+function net:NoteChannelBridgeRow(name, total, faction)
     if type(name) ~= "string" then return false end
+    -- Only enemy totals are bridge copies (own-faction LK on our channel is not).
+    local mine = addon.PlayerFaction
+    if (faction == "Alliance" or faction == "Horde") and faction ~= mine then
+        noteBridgeCopy(name, total)
+    end
     local row = bridgeLK.rows[name:lower()]
     total = tonumber(total)
     if not (row and row.pending and total and total >= (row.pendingTotal or math.huge)) then return false end
