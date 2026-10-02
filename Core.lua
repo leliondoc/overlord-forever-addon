@@ -2887,6 +2887,10 @@ function Overlord:Initialize()
     end
     OverlordDB.dominationVictoryEvents.byPool = OverlordDB.dominationVictoryEvents.byPool or {}
     OverlordDB.frontVictories = OverlordDB.frontVictories or {}
+    -- 1.4.0: before any front/victory migration and before fronts, zones and
+    -- outposts are restored, swap in this ruleset's own world (every login,
+    -- cheap: also heals an alt whose data another ruleset stamped earlier).
+    self:SwapRulesetWorld(GetCurrentPoolForSavedVars())
     -- Structure seulement : migrations legacy/orphelins et logs corrompus sont
     -- exclusivement traites par la barriere Lifetime cooperative plus bas.
     OverlordDB.lifetimeStatsByCharacter = type(OverlordDB.lifetimeStatsByCharacter) == "table"
@@ -2966,10 +2970,6 @@ function Overlord:Initialize()
     OverlordDB.config.popupsSeen = OverlordDB.config.popupsSeen or {}
     OverlordDB.config.popupsDailyShown = OverlordDB.config.popupsDailyShown or {}
 
-    -- 1.4.0: before fronts, zones and outposts are restored, swap in this
-    -- ruleset's own world (every login, cheap: also heals an alt whose data
-    -- another ruleset stamped before this check existed).
-    self:SwapRulesetWorld(GetCurrentPoolForSavedVars())
 
     if Overlord.Fronts and OverlordDB.activeFrontId and Overlord.Fronts:GetFront(OverlordDB.activeFrontId) then
         Overlord.Fronts:Activate(OverlordDB.activeFrontId)
@@ -3010,7 +3010,8 @@ function Overlord:Initialize()
     -- pour accepter les syncs du nouveau pool sans message ni reset visible.
     local currentPool = GetCurrentPoolForSavedVars()
     local currentLeaderboardPool = self:GetCurrentLeaderboardSavedVarsPool()
-    local lastPool = OverlordDB.lastSessionPool
+    -- SwapRulesetWorld already saved this session's pool: compare with the one before.
+    local lastPool = self._rulesetPreviousPool or OverlordDB.lastSessionPool
     if Overlord.RealmPools and Overlord.RealmPools.NormalizeRegionPool then
         lastPool = Overlord.RealmPools:NormalizeRegionPool(lastPool or "")
     elseif type(lastPool) ~= "string" then
@@ -3552,6 +3553,8 @@ local RULESET_WORLD_KEYS = {
     "zones", "frontVictories", "frontTruceResetEpoch",
     "outposts", "outpostTenants", "outpostCaptureCounts",
 }
+-- Legacy single-victory fields still written and read as a fallback.
+local RULESET_WORLD_SCALARS = { "lastVictoryTimestamp", "lastVictoryFaction", "lastVictoryFrontId" }
 
 -- On a ruleset change, park the world we leave and bring back ours if it is
 -- from this same campaign week; otherwise start from the week's initial state.
@@ -3567,27 +3570,43 @@ function Overlord:SwapRulesetWorld(currentPool)
     local function norm(pool)
         return rp and rp.NormalizeRegionPool and rp:NormalizeRegionPool(pool or "") or ""
     end
-    -- Outpost rows carry the pool of the campaign that stamped them: trust that
-    -- over the last session (an alt first logged before this check kept PvP data).
-    local stamped
+    -- Outpost rows carry the pool of the campaign that stamped them: trust the
+    -- majority stamp over the last session (an alt first logged before this
+    -- check kept PvP data). Save this session's pool now: a logout before the
+    -- rest of Initialize must not mislabel the swapped world next time.
+    local votes, stamped, best = {}, nil, 0
     for _, st in pairs(type(OverlordDB.outposts) == "table" and OverlordDB.outposts or {}) do
         local p = type(st) == "table" and norm(st.pool) or ""
-        if p ~= "" then stamped = p; break end
+        if p ~= "" then
+            votes[p] = (votes[p] or 0) + 1
+            if votes[p] > best or (votes[p] == best and p < stamped) then
+                stamped, best = p, votes[p]
+            end
+        end
     end
-    local leaving = stamped or norm(OverlordDB.lastSessionPool)
+    local previous = norm(OverlordDB.lastSessionPool)
+    self._rulesetPreviousPool = previous
+    OverlordDB.lastSessionPool = currentPool
+    local leaving = stamped or previous
     if leaving == "" or leaving == currentPool then return false end
     local parked = type(OverlordDB.worldsByPool) == "table" and OverlordDB.worldsByPool or {}
     OverlordDB.worldsByPool = parked
     local week = tonumber(OverlordDB.lastResetTimestamp) or 0
     local leavingWorld = { epoch = week }
     for _, key in ipairs(RULESET_WORLD_KEYS) do leavingWorld[key] = OverlordDB[key] end
+    for _, key in ipairs(RULESET_WORLD_SCALARS) do leavingWorld[key] = OverlordDB[key] end
     local mine = parked[currentPool]
     parked[currentPool] = nil
     parked[leaving] = leavingWorld
-    if type(mine) ~= "table" or mine.epoch ~= week then mine = nil end
+    -- Same campaign week, with the usual tolerance (the reset anchor may be
+    -- nudged mid-week); an older world never comes back.
+    if type(mine) ~= "table" or not self:CampaignEpochsMatch(mine.epoch, week) then mine = nil end
     for _, key in ipairs(RULESET_WORLD_KEYS) do
         local value = mine and mine[key]
         OverlordDB[key] = type(value) == "table" and value or {}
+    end
+    for _, key in ipairs(RULESET_WORLD_SCALARS) do
+        OverlordDB[key] = mine and mine[key] or nil
     end
     return true
 end

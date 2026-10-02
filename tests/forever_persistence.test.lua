@@ -57,9 +57,13 @@ do
     local keys = { "zones", "frontVictories", "frontTruceResetEpoch", "outposts",
         "outpostTenants", "outpostCaptureCounts" }
     local pvp = world("pvp")
-    OverlordDB = { lastResetTimestamp = 1000, lastSessionPool = "global" }
+    OverlordDB = { lastResetTimestamp = 1000, lastSessionPool = "global",
+        lastVictoryTimestamp = 900, lastVictoryFaction = "Horde", lastVictoryFrontId = "f" }
     for _, k in ipairs(keys) do OverlordDB[k] = pvp[k] end
     assert(newSession() and Overlord:SwapRulesetWorld("normal"), "Ruleset change did not swap the world")
+    assert(OverlordDB.lastVictoryTimestamp == nil and OverlordDB.lastVictoryFaction == nil,
+        "PvE alt inherited the PvP legacy victory")
+    assert(OverlordDB.lastSessionPool == "normal", "Session pool not saved at the swap")
     for _, k in ipairs(keys) do
         assert(type(OverlordDB[k]) == "table" and next(OverlordDB[k]) == nil, "PvE alt saw PvP " .. k)
     end
@@ -67,6 +71,8 @@ do
     OverlordDB.lastSessionPool = "normal"
     assert(newSession() and Overlord:SwapRulesetWorld("global"))
     for _, k in ipairs(keys) do assert(OverlordDB[k] == pvp[k], "PvP " .. k .. " not restored") end
+    assert(OverlordDB.lastVictoryTimestamp == 900 and OverlordDB.lastVictoryFrontId == "f",
+        "PvP legacy victory not restored")
     OverlordDB.lastSessionPool = "global"
     assert(newSession() and not Overlord:SwapRulesetWorld("global"), "Same ruleset swapped the world")
     -- Initialize restarting in the same session never swaps twice.
@@ -74,8 +80,15 @@ do
     OverlordDB.lastSessionPool = "normal"
     assert(not Overlord:SwapRulesetWorld("global") and OverlordDB.zones == kept, "Second swap in one session")
     OverlordDB.lastSessionPool = "global"
+    -- A reset anchor nudged mid-week (hours) still brings the world back.
+    OverlordDB.lastSessionPool = "global"
+    assert(newSession() and Overlord:SwapRulesetWorld("normal"))
+    OverlordDB.lastResetTimestamp = 1000 + 3600
+    assert(newSession() and Overlord:SwapRulesetWorld("global"))
+    assert(OverlordDB.zones == pvp.zones, "A nudged reset anchor lost the PvP world")
+    OverlordDB.lastResetTimestamp = 1000
     -- Weekly reset while on PvP: last week's PvE world never comes back.
-    OverlordDB.lastResetTimestamp = 2000
+    OverlordDB.lastResetTimestamp = 1000 + 7 * 24 * 3600
     assert(newSession() and Overlord:SwapRulesetWorld("normal"))
     assert(next(OverlordDB.zones) == nil, "Last week's PvE map came back after the reset")
     -- A Normal alt already logged before this check (lastSessionPool = normal)
