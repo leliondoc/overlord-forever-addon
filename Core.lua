@@ -3045,6 +3045,7 @@ function Overlord:Initialize()
         for _, zone in ipairs(Overlord.ZoneDatabase or {}) do
             if zone.status ~= "in_progress" then zone.updatedAt = 0 end
         end
+        self:SwapRulesetOutposts(lastPool, currentPool)
         DebugOverlord("Changement de pool : " .. lastPool .. " -> " .. currentPool .. " (updatedAt = 0)")
     end
     OverlordDB.lastSessionPool = currentPool
@@ -3542,6 +3543,27 @@ end
 
 -- Migration sans perte vers un unique bucket EU. Les anciens buckets fr/de ne
 -- restent pas dupliques : toutes les prochaines sessions europeennes pointent sur eu.
+-- 1.4.0: outposts and fortresses (states, tenants, capture counts) belong to
+-- their ruleset, but OverlordDB is account-wide. On a ruleset change, park the
+-- world we leave and bring back ours if it is from this same campaign week;
+-- otherwise start empty (the weekly reset passed meanwhile).
+function Overlord:SwapRulesetOutposts(lastPool, currentPool)
+    if not OverlordDB or lastPool == currentPool then return end
+    local parked = OverlordDB.outpostsByPool or {}
+    OverlordDB.outpostsByPool = parked
+    local week = tonumber(OverlordDB.lastResetTimestamp) or 0
+    parked[lastPool] = {
+        epoch = week, outposts = OverlordDB.outposts,
+        tenants = OverlordDB.outpostTenants, counts = OverlordDB.outpostCaptureCounts,
+    }
+    local mine = parked[currentPool]
+    parked[currentPool] = nil
+    if type(mine) ~= "table" or mine.epoch ~= week then mine = nil end
+    OverlordDB.outposts = mine and type(mine.outposts) == "table" and mine.outposts or {}
+    OverlordDB.outpostTenants = mine and type(mine.tenants) == "table" and mine.tenants or {}
+    OverlordDB.outpostCaptureCounts = mine and type(mine.counts) == "table" and mine.counts or {}
+end
+
 function Overlord:UnifyEuropeanLeaderboardBuckets()
     if not OverlordDB or self:GetCurrentLeaderboardSavedVarsPool() ~= "global" then return end
     if self._europeanLeaderboardUnionPending then return end

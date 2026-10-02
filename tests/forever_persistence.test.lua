@@ -40,6 +40,26 @@ assert(Overlord.RealmPools:GetOverlordPoolTag() == "global")
 assert(Overlord.RealmPools:AreOutpostCrossPoolsLinked("eu", "us"))
 assert(Overlord.RealmPools:AreOutpostCrossPoolsLinked("fr", "eu"))
 assert(Overlord.RealmPools:NormalizeRegionPool("na") == "global")
+-- 1.4.0: an account-wide DB, one world per ruleset. A PvE alt parks the PvP
+-- outposts and fortresses and starts empty; back on PvP they come back intact;
+-- a world parked before the weekly reset never comes back.
+do
+    local pvpStates, pvpTenants, pvpCounts = { site = { status = "held", ownerGuild = "EMPIRE" } },
+        { site = { guild = "EMPIRE" } }, { ["site:global:empire"] = { count = 2 } }
+    OverlordDB = { lastResetTimestamp = 1000, outposts = pvpStates,
+        outpostTenants = pvpTenants, outpostCaptureCounts = pvpCounts }
+    Overlord:SwapRulesetOutposts("global", "normal")
+    assert(next(OverlordDB.outposts) == nil and next(OverlordDB.outpostTenants) == nil
+        and next(OverlordDB.outpostCaptureCounts) == nil, "PvE alt saw PvP outposts")
+    OverlordDB.outposts.site = { status = "held", ownerGuild = "Knights" }
+    Overlord:SwapRulesetOutposts("normal", "global")
+    assert(OverlordDB.outposts == pvpStates and OverlordDB.outpostTenants == pvpTenants
+        and OverlordDB.outpostCaptureCounts == pvpCounts, "PvP outposts were not restored")
+    OverlordDB.lastResetTimestamp = 2000 -- weekly reset while on PvP
+    Overlord:SwapRulesetOutposts("global", "normal")
+    assert(next(OverlordDB.outposts) == nil, "Last week's PvE outposts came back after the reset")
+    Overlord:SwapRulesetOutposts("normal", "normal")
+end
 assert(Overlord:SavedVarsPoolFromLocaleTag("frFR") == nil)
 local globalReset = Overlord:GetLastResetTimestamp()
 region = 3

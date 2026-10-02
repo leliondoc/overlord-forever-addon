@@ -5425,7 +5425,9 @@ function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldW
                 rowPool = resolveOutpostLbPoolTag(t.pool)
             end
             local currentlyHeld = guild ~= ""
-            if includeSite(siteKey) and guild ~= "" and (fac == "Alliance" or fac == "Horde") then
+            -- 1.4.0: a tenant stamped by another ruleset's campaign is not ours.
+            if includeSite(siteKey) and guild ~= "" and (fac == "Alliance" or fac == "Horde")
+                and outpostLbPoolMatchesCurrent(rowPool) then
                 local key = guild:lower()
                 local rowKey = outpostCaptureRowKey(siteKey, key, rowPool)
                 rowKeys[rowKey] = true
