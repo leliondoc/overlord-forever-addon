@@ -2891,6 +2891,7 @@ function Overlord:Initialize()
     -- outposts are restored, swap in this ruleset's own world (every login,
     -- cheap: also heals an alt whose data another ruleset stamped earlier).
     self:SwapRulesetWorld(GetCurrentPoolForSavedVars())
+    self:RecoverParkedOutpostHistory(GetCurrentPoolForSavedVars())
     -- Structure seulement : migrations legacy/orphelins et logs corrompus sont
     -- exclusivement traites par la barriere Lifetime cooperative plus bas.
     OverlordDB.lifetimeStatsByCharacter = type(OverlordDB.lifetimeStatsByCharacter) == "table"
@@ -3559,6 +3560,75 @@ local RULESET_WORLD_SCALARS = { "lastVictoryTimestamp", "lastVictoryFaction", "l
 -- On a ruleset change, park the world we leave and bring back ours if it is
 -- from this same campaign week; otherwise start from the week's initial state.
 -- Runs at the very start of the login, before zones and outposts are restored.
+-- An unreleased 1.4.0 build parked outposts alone in OverlordDB.outpostsByPool,
+-- which nothing reads any more: a PvP character came back with an empty capture
+-- history. Merge those parked rows back once (same campaign week only): capture
+-- counts keep the highest count per row, tenants only fill missing sites, and
+-- site states stay as they are (live states come from the network).
+function Overlord:RecoverParkedOutpostHistory(currentPool)
+    local legacy = OverlordDB and OverlordDB.outpostsByPool
+    if type(legacy) ~= "table" then return false end
+    OverlordDB.outpostsByPool = nil
+    local week = tonumber(OverlordDB.lastResetTimestamp) or 0
+    local function copy(t)
+        local out = {}
+        for k, v in pairs(type(t) == "table" and t or {}) do out[k] = v end
+        return out
+    end
+    local function mergeCounts(into, from)
+        for key, row in pairs(type(from) == "table" and from or {}) do
+            local cur = into[key]
+            if type(row) == "table" and (type(cur) ~= "table"
+                or (tonumber(row.count) or 0) > (tonumber(cur.count) or 0)) then
+                into[key] = row
+            end
+        end
+    end
+    local function fillMissing(into, from)
+        for key, value in pairs(type(from) == "table" and from or {}) do
+            if into[key] == nil then into[key] = value end
+        end
+    end
+    local recovered = false
+    for pool, entry in pairs(legacy) do
+        if type(entry) == "table" and self:CampaignEpochsMatch(entry.epoch, week) then
+            if pool == currentPool then
+                -- New tables: ledger caches keyed on table identity rebuild themselves.
+                local counts, tenants = copy(OverlordDB.outpostCaptureCounts), copy(OverlordDB.outpostTenants)
+                mergeCounts(counts, entry.counts)
+                fillMissing(tenants, entry.tenants)
+                OverlordDB.outpostCaptureCounts, OverlordDB.outpostTenants = counts, tenants
+            else
+                local worlds = type(OverlordDB.worldsByPool) == "table" and OverlordDB.worldsByPool or {}
+                OverlordDB.worldsByPool = worlds
+                local world = worlds[pool]
+                if type(world) ~= "table" then
+                    world = { epoch = entry.epoch }
+                    worlds[pool] = world
+                end
+                world.outpostCaptureCounts = copy(world.outpostCaptureCounts)
+                mergeCounts(world.outpostCaptureCounts, entry.counts)
+                world.outpostTenants = copy(world.outpostTenants)
+                fillMissing(world.outpostTenants, entry.tenants)
+                if type(world.outposts) ~= "table" then world.outposts = entry.outposts end
+            end
+            recovered = true
+        end
+    end
+    -- That build parked outposts but not the map: a non-PvP world built during
+    -- it may hold the PvP fronts. Before 1.4.0 only the PvP world existed, so
+    -- every other world's map, victories and truces restart from the initial state.
+    local function resetMap(t)
+        for _, key in ipairs({ "zones", "frontVictories", "frontTruceResetEpoch" }) do t[key] = {} end
+        for _, key in ipairs(RULESET_WORLD_SCALARS) do t[key] = nil end
+    end
+    if currentPool ~= "global" then resetMap(OverlordDB) end
+    for pool, world in pairs(type(OverlordDB.worldsByPool) == "table" and OverlordDB.worldsByPool or {}) do
+        if pool ~= "global" and type(world) == "table" then resetMap(world) end
+    end
+    return recovered
+end
+
 function Overlord:SwapRulesetWorld(currentPool)
     if not OverlordDB or type(currentPool) ~= "string" or currentPool == "" then return false end
     -- Once per session: Initialize can restart (faction not known yet) before

@@ -40,6 +40,51 @@ assert(Overlord.RealmPools:GetOverlordPoolTag() == "global")
 assert(Overlord.RealmPools:AreOutpostCrossPoolsLinked("eu", "us"))
 assert(Overlord.RealmPools:AreOutpostCrossPoolsLinked("fr", "eu"))
 assert(Overlord.RealmPools:NormalizeRegionPool("na") == "global")
+-- Recovery: an unreleased 1.4.0 build parked the PvP outpost history alone in
+-- outpostsByPool (live: a PvP character came back with an empty capture history).
+-- It is merged back once: highest count per row, tenants fill gaps, states stay.
+do
+    local liveState = { site = { status = "held", ownerGuild = "who pulled" } }
+    OverlordDB = {
+        lastResetTimestamp = 1790000000,
+        zones = { z = { owner = "pvp" } },
+        worldsByPool = { normal = { epoch = 1790000000, zones = { z = { owner = "pvp-misparked" } } } },
+        outposts = liveState,
+        outpostTenants = { site = { guild = "who pulled" } },
+        outpostCaptureCounts = { ["site:global:who pulled"] = { count = 0 },
+            ["b:global:empire"] = { count = 1 } },
+        outpostsByPool = {
+            global = { epoch = 1790000000, outposts = { site = { status = "held", ownerGuild = "old" } },
+                tenants = { site = { guild = "old" }, other = { guild = "Unholy" } },
+                counts = { ["site:global:who pulled"] = { count = 2 },
+                    ["site:global:kor kron enforcers"] = { count = 2 },
+                    ["b:global:empire"] = { count = 1 } } },
+            normal = { epoch = 1790000000, counts = { ["x:normal:knights"] = { count = 3 } } },
+            rp = { epoch = 1790000000 - 7 * 86400, counts = { ["x:rp:old"] = { count = 9 } } },
+        },
+    }
+    assert(Overlord:RecoverParkedOutpostHistory("global"), "Parked history not recovered")
+    local counts = OverlordDB.outpostCaptureCounts
+    assert(counts["site:global:who pulled"].count == 2 and counts["site:global:kor kron enforcers"].count == 2
+        and counts["b:global:empire"].count == 1, "Capture history not merged by highest count")
+    assert(OverlordDB.outpostTenants.site.guild == "who pulled" and OverlordDB.outpostTenants.other.guild == "Unholy",
+        "Tenants: live overwritten or gaps not filled")
+    assert(OverlordDB.outposts == liveState, "Live outpost states were replaced")
+    assert(OverlordDB.outpostsByPool == nil, "Legacy parking kept after recovery")
+    assert(OverlordDB.worldsByPool.normal.outpostCaptureCounts["x:normal:knights"].count == 3,
+        "Another ruleset's parked history was not moved to its world")
+    assert(OverlordDB.worldsByPool.rp == nil, "An older week's parked history came back")
+    assert(OverlordDB.zones.z.owner == "pvp", "Recovery touched the PvP map")
+    assert(next(OverlordDB.worldsByPool.normal.zones) == nil, "A misparked PvP map stayed in the Normal world")
+    assert(not Overlord:RecoverParkedOutpostHistory("global"), "Recovery ran twice")
+    -- Same recovery on the Normal character: its current map restarts too.
+    OverlordDB = { lastResetTimestamp = 1790000000, zones = { z = { owner = "pvp" } },
+        lastVictoryTimestamp = 1, outpostsByPool = { global = { epoch = 1790000000, counts = {} } } }
+    assert(Overlord:RecoverParkedOutpostHistory("normal"))
+    assert(next(OverlordDB.zones) == nil and OverlordDB.lastVictoryTimestamp == nil,
+        "The Normal character kept the PvP map")
+    assert(OverlordDB.worldsByPool.global and next(OverlordDB.worldsByPool.global.outpostCaptureCounts) == nil)
+end
 -- 1.4.0: an account-wide DB, one world per ruleset. A PvE alt parks the PvP
 -- world (front zones, victories, truces, outposts, fortresses) and starts from
 -- the initial state; back on PvP it comes back intact; a world parked before the
