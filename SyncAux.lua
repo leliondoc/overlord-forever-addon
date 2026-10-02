@@ -2929,7 +2929,8 @@ local function recentWhisperLooksLikeFailedTarget(quoted)
     local ql = quoted:lower()
     local qb = ql:match("^([^%-]+)") or ql
     local seenAt = math.max(tonumber(aliases[ql]) or 0, tonumber(aliases[qb]) or 0)
-    return seenAt > 0 and now - seenAt <= 18
+    -- 1.3.6: 120 s (was 18 s). Live, an error for a relay whisper still slipped through.
+    return seenAt > 0 and now - seenAt <= 120
 end
 
 local function SuppressAddonWhisperOfflineSystem(_, _, msg)

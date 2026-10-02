@@ -2418,7 +2418,7 @@ function Overlord.Sync:_RemoveRecentAddonWhisperNode(node)
 end
 
 function Overlord.Sync:_PruneRecentAddonWhispers(now, budget)
-    local cutoff = (tonumber(now) or GetTime()) - 15
+    local cutoff = (tonumber(now) or GetTime()) - 120 -- offline filter window (SyncAux)
     local removed = 0
     budget = math.max(1, math.floor(tonumber(budget) or 1))
     while priv.recentAddonWhisperHead

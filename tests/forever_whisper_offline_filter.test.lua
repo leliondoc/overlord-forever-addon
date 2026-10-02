@@ -27,7 +27,9 @@ assert(Overlord.Sync:SendWhisper("BF", "test-fragment", "Massa Zug"))
 assert(installed(nil, "CHAT_MSG_SYSTEM", message), "Actual addon whisper error was not hidden")
 assert(not installed(nil, "CHAT_MSG_SYSTEM", "Massa Zug has come online."),
     "An unrelated system event was hidden")
-now = now + 19
+now = now + 90
+assert(installed(nil, "CHAT_MSG_SYSTEM", message), "A late error (90 s) for an addon target was shown")
+now = now + 31
 assert(not installed(nil, "CHAT_MSG_SYSTEM", message), "Expired addon target still hid errors")
 
 -- Older clients still expose the global registration function.
