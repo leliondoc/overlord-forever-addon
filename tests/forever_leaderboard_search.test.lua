@@ -180,7 +180,7 @@ local frameCount, readsBefore = #frames, ensureCalls
 frame.searchBox:SetText('  player 4999  '); drain()
 assert(ensureCalls == readsBefore, 'Typing requested/rebuilt the display cache')
 assert(#frame._lbView.sortedKills == 1 and frame._lbView.ranks.sortedKills[1] == 4999)
-assert(frame.totalText.text == 'Alliance 123456 Horde 654321', 'Filter changed global totals')
+assert(frame.totalText.text:find('Alliance 123456 Horde 654321', 1, true), 'Filter changed global totals')
 local row
 for _, w in ipairs(frames) do if w.rank and w.name and w:IsShown() and w.rank.text == 4999 then row = w end end
 assert(row and row.name.text == 'Player 4999', 'Filtered UI renumbered rank to #1')

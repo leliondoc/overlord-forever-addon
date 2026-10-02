@@ -242,6 +242,32 @@ local MEDAL_COLORS = {
     {0.80, 0.50, 0.20},
 }
 
+-- Faction crests (domination bar / chat alert logos) and row glows: podium rows
+-- carry a faint medal tint, the player's own row (or guild) a gold one. Painted
+-- only when a row's paint key changes, like the rest of the virtual rows.
+local LB_CREST = {
+    Alliance = "Interface\\Timer\\Alliance-Logo",
+    Horde = "Interface\\Timer\\Horde-Logo",
+}
+local function LbCrestMarkup(faction, size)
+    local path = LB_CREST[faction]
+    return path and ("|T" .. path .. ":" .. (size or 16) .. ":" .. (size or 16) .. "|t") or ""
+end
+local function ApplyLbRowGlow(row, rank, isOwn)
+    local glow = row.glow
+    if not glow then return end
+    local medal = MEDAL_COLORS[rank]
+    if isOwn then
+        glow:SetColorTexture(1.0, 0.82, 0.0, 0.16)
+        glow:Show()
+    elseif medal then
+        glow:SetColorTexture(medal[1], medal[2], medal[3], 0.08)
+        glow:Show()
+    else
+        glow:Hide()
+    end
+end
+
 -- Rafraichissement differe (sync / nameplates / changement de zone).
 local lbRefreshPending = false
 local lbRefreshLastAt = 0
@@ -1286,7 +1312,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.captionAlli = leftCol:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     lbFrame.captionAlli:SetPoint("TOP", leftCol, "TOP", 0, -2)
     lbFrame.captionAlli:SetTextColor(P.accent[1], P.accent[2], P.accent[3])
-    lbFrame.captionAlli:SetText(L.LB_CAPTURES_ALLIANCE)
+    lbFrame.captionAlli:SetText(LbCrestMarkup("Alliance", 14) .. " " .. (L.LB_CAPTURES_ALLIANCE or "Alliance: Captures"))
 
     local captureScrollViewportH = capturesBlockH - 16 - captureScrollBottomInset
 
@@ -1334,7 +1360,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.captionHorde = rightCol:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     lbFrame.captionHorde:SetPoint("TOP", rightCol, "TOP", 0, -2)
     lbFrame.captionHorde:SetTextColor(P.accent[1], P.accent[2], P.accent[3])
-    lbFrame.captionHorde:SetText(L.LB_CAPTURES_HORDE)
+    lbFrame.captionHorde:SetText(LbCrestMarkup("Horde", 14) .. " " .. (L.LB_CAPTURES_HORDE or "Horde: Captures"))
 
     local scrollHorde = CreateFrame("ScrollFrame", "OverlordLBScrollHorde", rightCol)
     scrollHorde:SetSize(colWidth, captureScrollViewportH)
@@ -1531,9 +1557,18 @@ function Overlord.LeaderboardUI:CreateRow(parent, index, yOffset, P)
     row.classIconHolder:SetPoint("CENTER", row, "LEFT", killCols.class.center, 0)
     row.classIcon = row.classIconHolder.icon
 
+    row.glow = row:CreateTexture(nil, "BACKGROUND", nil, 1)
+    row.glow:SetAllPoints()
+    row.glow:Hide()
+
+    row.crest = row:CreateTexture(nil, "OVERLAY")
+    row.crest:SetSize(15, 15)
+    row.crest:SetPoint("LEFT", row, "LEFT", killCols.player.left + 4, 0)
+    row.crest:Hide()
+
     row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    row.name:SetPoint("LEFT", row, "LEFT", killCols.player.left + 2, 0)
-    row.name:SetPoint("RIGHT", row, "LEFT", killCols.player.right - 2, 0)
+    row.name:SetPoint("LEFT", row, "LEFT", killCols.player.left + 22, 0)
+    row.name:SetPoint("RIGHT", row, "LEFT", killCols.player.right - 6, 0)
     row.name:SetJustifyH("CENTER")
     row.name:SetWordWrap(false)
     row.name:SetNonSpaceWrap(false)
@@ -1568,6 +1603,10 @@ function Overlord.LeaderboardUI:CreateGuildRow(parent, index, yOffset, P)
     row.factionBar = row:CreateTexture(nil, "ARTWORK")
     row.factionBar:SetSize(0, 0)
     row.factionBar:Hide()
+
+    row.glow = row:CreateTexture(nil, "BACKGROUND", nil, 1)
+    row.glow:SetAllPoints()
+    row.glow:Hide()
 
     row.rank = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     row.rank:SetPoint("CENTER", row, "CENTER", LB_GUILD_COL_RANK, 0)
@@ -1802,6 +1841,9 @@ RenderKillRows = function(force)
     local metaCache = view.meta or {}
     local localeCache = view.locale or {}
     local duplicateShortNames = view.duplicateShortNames or {}
+    local sync = Overlord.Sync
+    local myName = sync and sync.GetPlayerFullName and sync:GetPlayerFullName()
+    myName = myName and sync.CanonicalForeverName and sync:CanonicalForeverName(myName) or myName
     local used = 0
     for slot = 1, poolSize do
         local dataIndex = first + slot - 1
@@ -1826,12 +1868,20 @@ RenderKillRows = function(force)
                 row._olDisplayName = shortName
             end
             local rank = view.ranks and view.ranks.sortedKills[dataIndex] or dataIndex
+            local isOwn = myName ~= nil and shortName:sub(1, #myName) == myName
+                and (#shortName == #myName or shortName:sub(#myName + 1, #myName + 2) == " (")
             local paintKey = rank .. "|" .. tostring(entry.kills) .. "|" .. tostring(class) .. "|"
                 .. tostring(faction) .. "|" .. tostring(raceFile) .. "|" .. tostring(raceSex) .. "|"
-                .. shortName
+                .. shortName .. (isOwn and "|me" or "")
             if row._lbPaintKey ~= paintKey then
                 row._lbPaintKey = paintKey
                 local medalColor = MEDAL_COLORS[rank]
+                if row.crest then
+                    local crest = LB_CREST[faction]
+                    if crest then row.crest:SetTexture(crest) end
+                    row.crest:SetShown(crest ~= nil)
+                end
+                ApplyLbRowGlow(row, rank, isOwn)
                 row.rank:SetText(rank)
                 SetSecondaryTextColor(row.rank, P, medalColor)
                 if raceFile and raceFile ~= "" then
@@ -1867,6 +1917,8 @@ RenderGuildRows = function(force)
     Overlord.LeaderboardUI:EnsureGuildRows(poolSize)
     SyncVirtualRenderWindow(lbFrame.scrollGuild, first, poolSize, total, force)
     local P = GetPalette()
+    local myGuild = Overlord.Outpost and Overlord.Outpost.GetLocalPlayerGuild
+        and Overlord.Outpost:GetLocalPlayerGuild() or ""
     local used = 0
     for slot = 1, poolSize do
         local dataIndex = first + slot - 1
@@ -1876,11 +1928,14 @@ RenderGuildRows = function(force)
             used = slot
             PrepareVirtualRow(row, dataIndex, GUILD_ROW_HEIGHT, P)
             local rank = lbFrame._lbView.ranks and lbFrame._lbView.ranks.sortedGuilds[dataIndex] or dataIndex
+            local isOwn = myGuild ~= "" and entry.guild == myGuild
             local paintKey = rank .. "|" .. tostring(entry.guild or "") .. "|"
                 .. tostring(entry.kills or 0) .. "|" .. tostring(entry.faction or "")
+                .. (isOwn and "|me" or "")
             if row._lbPaintKey ~= paintKey then
                 row._lbPaintKey = paintKey
                 local medalColor = MEDAL_COLORS[rank]
+                ApplyLbRowGlow(row, rank, isOwn)
                 row.rank:SetText(rank)
                 SetSecondaryTextColor(row.rank, P, medalColor)
                 row.factionBar:Hide()
@@ -2246,7 +2301,8 @@ function Overlord.LeaderboardUI:Refresh()
     local totalFmt = string.format(L.LB_TOTAL_FORMAT, dc.alliKills or 0, dc.hordeKills or 0)
     if lbFrame._lbTotalFmt ~= totalFmt then
         lbFrame._lbTotalFmt = totalFmt
-        lbFrame.totalText:SetText(totalFmt)
+        lbFrame.totalText:SetText(LbCrestMarkup("Alliance", 20) .. "  " .. totalFmt
+            .. "  " .. LbCrestMarkup("Horde", 20))
     end
 
     local startDate, endDate = Overlord:GetCampaignDateRange()
