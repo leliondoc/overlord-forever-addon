@@ -3626,6 +3626,15 @@ function Overlord.Leaderboard:MergeLeaderboardKillMetadata(
             else
                 wins = guildLwwValueWins(incomingGuild, incomingAt, currentGuild, currentAt)
             end
+            -- An owner's K re-dates its unchanged guild on every broadcast: applying
+            -- each one bumped the meta epoch and kept the meta index rebuild from
+            -- finishing (Sonnet audit 1.3.5). Same strong guild within a minute: no-op,
+            -- like SetPlayerGuild's re-confirmation rule.
+            if wins and guildAuthoritative == true and not snapshot and row.guildAuth == true
+                and row.guildReplica ~= true and incomingGuild:lower() == currentGuild:lower()
+                and incomingAt >= currentAt and incomingAt - currentAt < 60 then
+                wins = false
+            end
             if wins then
                 row.guild = incomingGuild
                 row.guildAt = incomingAt
@@ -3807,7 +3816,9 @@ function Overlord.Leaderboard:SetPlayerRace(
     local previousAt = prev and math.floor(tonumber(prev.raceAt) or 0) or 0
     if prev and prev.race and prev.race ~= "" and prev.race == normRace then
         if sex == 0 or (tonumber(prev.raceSex) or 0) == sex then
-            if observedAt > previousAt then
+            -- Our own unchanged race is re-observed at every kill broadcast: re-date
+            -- it at most hourly, each re-date bumped the meta epoch (audit 1.3.5).
+            if observedAt > previousAt and (fromSync or observedAt - previousAt >= 3600) then
                 prev.raceAt = observedAt
                 -- raceAt participe au tie-break de l'index et doit etre persiste.
                 self:MarkMetaDirty()

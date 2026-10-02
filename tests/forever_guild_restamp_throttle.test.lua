@@ -40,5 +40,38 @@ clock = clock + 5
 lb:SetPlayerGuild(name, "Stone Bears", false, true, clock)
 assert(row.guild == "Stone Bears", "A guild change was held back")
 
-lb.MarkMetaDirty, lb.PatchDedupMetaGuildForPlayer, time = markMetaDirty, patch, realTime
+lb.MarkMetaDirty, lb.PatchDedupMetaGuildForPlayer = markMetaDirty, patch
 print("Guild re-confirmation: at most once a minute, changes applied at once")
+local realServerTime = GetServerTime
+GetServerTime = function() return clock end
+
+-- 4. Same rule on the received-K path (MergeLeaderboardKillMetadata): an owner's K
+--    re-dates its unchanged guild every broadcast; within a minute it is a no-op.
+local owner = "Kill Owner"
+lb:MergeLeaderboardKillMetadata(owner, 30, "WARRIOR", "Alliance", nil, "Iron Wolves", clock, true,
+    nil, nil, 0, true)
+local ownerRow = lb.playerInfo[owner]
+assert(ownerRow and ownerRow.guild == "Iron Wolves" and ownerRow.guildAuth, "fixture: owner guild not stored")
+local ownerAt = ownerRow.guildAt
+dirty = 0
+lb.MarkMetaDirty = function(self, ...) dirty = dirty + 1; return markMetaDirty(self, ...) end
+for i = 1, 5 do
+    clock = clock + 5
+    lb:MergeLeaderboardKillMetadata(owner, 30, "WARRIOR", "Alliance", nil, "Iron Wolves", clock, true,
+        nil, nil, 0, true)
+end
+assert(ownerRow.guildAt == ownerAt and dirty == 0, "K re-dated an unchanged guild within the minute")
+
+-- 5. Own race re-observed at every kill: re-dated at most hourly.
+IsInGroup = IsInGroup or function() return false end
+IsInRaid = IsInRaid or function() return false end
+lb:SetPlayerRace(owner, "Orc", 2, false, clock)
+local raceAt = lb.playerInfo[owner].raceAt
+dirty = 0
+for i = 1, 5 do
+    clock = clock + 5
+    lb:SetPlayerRace(owner, "Orc", 2, false, clock)
+end
+assert(lb.playerInfo[owner].raceAt == raceAt and dirty == 0, "own race re-dated at every kill")
+lb.MarkMetaDirty, time, GetServerTime = markMetaDirty, realTime, realServerTime
+print("Guild/race re-confirmation from kills: no meta churn within the window")
