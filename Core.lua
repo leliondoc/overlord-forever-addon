@@ -398,11 +398,11 @@ function Overlord:PrintNotification(text)
     end
 end
 
--- Faction crest at the start of a chat alert: the same Warfronts keep icons as the
--- map pins, so a line reads at a glance before its text.
+-- Faction crest at the start of a chat alert (the Alliance lion / Horde emblem of
+-- the domination bar), so a line reads at a glance before its text.
 function Overlord:FactionChatIcon(faction)
     if faction ~= "Alliance" and faction ~= "Horde" then return "" end
-    return "|A:Warfronts-BaseMapIcons-" .. faction .. "-MainHall:16:16|a "
+    return "|TInterface\\Timer\\" .. faction .. "-Logo:18:18|t "
 end
 
 function Overlord:EnemyFactionChatIcon()

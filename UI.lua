@@ -1644,8 +1644,9 @@ function Overlord.UI:CreateZoneListSection(parent)
     end)
 
     -- Barre de domination hebdomadaire (Alliance vs Horde), en tete de la section.
+    -- 256 px (was 300): room on each side for the faction crests below.
     local domBar = CreateFrame("Frame", nil, zoneListFrame, "BackdropTemplate")
-    domBar:SetSize(300, 16)
+    domBar:SetSize(256, 16)
     domBar:SetPoint("TOP", zoneListFrame, "TOP", 0, -14)
     domBar:SetBackdrop({
         bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -1661,17 +1662,32 @@ function Overlord.UI:CreateZoneListSection(parent)
     domBg:SetPoint("BOTTOMRIGHT", -3, 3)
     domBg:SetColorTexture(0.1, 0.1, 0.1, 0.55)
 
+    -- Same game status-bar texture as the capture hold bar, tinted per faction.
     local domAlly = domBar:CreateTexture(nil, "ARTWORK")
     domAlly:SetPoint("TOPLEFT", 3, -3)
     domAlly:SetPoint("BOTTOMLEFT", 3, 3)
-    domAlly:SetColorTexture(0.2, 0.45, 0.85, 0.85)
+    domAlly:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    domAlly:SetVertexColor(0.2, 0.45, 0.85, 0.9)
     domBar.allyFill = domAlly
 
     local domHorde = domBar:CreateTexture(nil, "ARTWORK")
     domHorde:SetPoint("TOPRIGHT", -3, -3)
     domHorde:SetPoint("BOTTOMRIGHT", -3, 3)
-    domHorde:SetColorTexture(0.75, 0.15, 0.15, 0.85)
+    domHorde:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    domHorde:SetVertexColor(0.75, 0.15, 0.15, 0.9)
     domBar.hordeFill = domHorde
+
+    -- Alliance crest left of the blue side, Horde crest right of the red side
+    -- (the logos of the chat alerts).
+    local allyCrest = domBar:CreateTexture(nil, "OVERLAY")
+    allyCrest:SetSize(18, 18)
+    allyCrest:SetPoint("RIGHT", domBar, "LEFT", -3, 0)
+    allyCrest:SetTexture("Interface\\Timer\\Alliance-Logo")
+    local hordeCrest = domBar:CreateTexture(nil, "OVERLAY")
+    hordeCrest:SetSize(18, 18)
+    hordeCrest:SetPoint("LEFT", domBar, "RIGHT", 3, 0)
+    hordeCrest:SetTexture("Interface\\Timer\\Horde-Logo")
+    domBar.allyCrest, domBar.hordeCrest = allyCrest, hordeCrest
 
     local domLabel = domBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     domLabel:SetPoint("CENTER")
@@ -1681,7 +1697,7 @@ function Overlord.UI:CreateZoneListSection(parent)
     domBar.label = domLabel
 
     local domTitle = zoneListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    -- BOTTOMLEFT + BOTTOMRIGHT sur domBar : largeur = 300 px, texte center, pas de debordement
+    -- BOTTOMLEFT + BOTTOMRIGHT sur domBar : largeur de la barre (256 px), texte centre
     domTitle:SetPoint("BOTTOMLEFT",  domBar, "TOPLEFT",  0, 2)
     domTitle:SetPoint("BOTTOMRIGHT", domBar, "TOPRIGHT", 0, 2)
     domTitle:SetJustifyH("CENTER")
@@ -1690,7 +1706,7 @@ function Overlord.UI:CreateZoneListSection(parent)
     domTitle:SetFont(domTitle:GetFont(), 10)
 
     -- Largeur de reference : GetWidth() peut etre 0 avant layout / premier Show (barre invisible).
-    domBar._nominalWidth = 300
+    domBar._nominalWidth = 256
     Overlord.UI.domBar = domBar
     zoneListFrame.communityHintPanel = communityHintPanel
     zoneListFrame.domTitleLabel = domTitle
@@ -2124,12 +2140,53 @@ function Overlord.UI:CreateActiveZoneSection(parent)
     holdBg:SetAllPoints()
     holdBg:SetColorTexture(0.1, 0.1, 0.1, 0.6)
 
+    -- Game status-bar texture tinted by state (blue holding, orange paused or enemy,
+    -- red contested, gold complete); a spark rides its right edge and the fill
+    -- glides to each new value (OnUpdate only while it moves, then removed).
     local holdFill = holdBar:CreateTexture(nil, "ARTWORK")
     holdFill:SetPoint("TOPLEFT")
     holdFill:SetPoint("BOTTOMLEFT")
     holdFill:SetWidth(1)
-    holdFill:SetColorTexture(C.blue[1], C.blue[2], C.blue[3], 0.8)
+    holdFill:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    holdFill:SetVertexColor(C.blue[1], C.blue[2], C.blue[3], 0.8)
     holdBar.fill = holdFill
+
+    local holdSpark = holdBar:CreateTexture(nil, "OVERLAY")
+    holdSpark:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
+    holdSpark:SetBlendMode("ADD")
+    holdSpark:SetSize(12, 26)
+    holdSpark:SetPoint("CENTER", holdFill, "RIGHT", 0, 0)
+    holdSpark:Hide()
+    holdBar.spark = holdSpark
+
+    function holdBar:SetFillColor(r, g, b, a)
+        self.fill:SetVertexColor(r, g, b, a)
+    end
+    local function glide(self, elapsed)
+        local current, target = self.fill:GetWidth(), self._olTargetWidth or 1
+        if math.abs(target - current) < 0.5 then
+            self.fill:SetWidth(target)
+            self:SetScript("OnUpdate", nil)
+            return
+        end
+        self.fill:SetWidth(current + (target - current) * math.min(1, elapsed * 6))
+    end
+    -- ratio nil: empty bar at once (state change). Otherwise glide to ratio.
+    function holdBar:SetFillRatio(ratio)
+        if not ratio then
+            self._olTargetWidth = 1
+            self:SetScript("OnUpdate", nil)
+            self.fill:SetWidth(1)
+            self.spark:Hide()
+            return
+        end
+        local target = math.max(1, (self:GetWidth() or 0) * ratio)
+        self._olTargetWidth = target
+        self.spark:SetShown(ratio > 0.01 and ratio < 0.99)
+        if math.abs(target - self.fill:GetWidth()) >= 0.5 then
+            self:SetScript("OnUpdate", glide)
+        end
+    end
 
     local holdPct = holdBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     holdPct:SetPoint("CENTER")
@@ -3343,8 +3400,8 @@ function Overlord.UI:RefreshActiveZone()
         activeZoneFrame.zoneName:SetText(az.name or "?")
         activeZoneFrame.zoneName:SetTextColor(C.gray[1], C.gray[2], C.gray[3])
         activeZoneFrame.holdText:SetText(L.MAP_SYNC_PENDING or "SYNC")
-        activeZoneFrame.holdBar.fill:SetWidth(1)
-        activeZoneFrame.holdBar.fill:SetColorTexture(C.gray[1], C.gray[2], C.gray[3], 0.8)
+        activeZoneFrame.holdBar:SetFillRatio(nil)
+        activeZoneFrame.holdBar:SetFillColor(C.gray[1], C.gray[2], C.gray[3], 0.8)
         activeZoneFrame.holdBar.label:SetText("")
         activeZoneFrame.statusTag:SetText(L.MAP_SYNC_PENDING or "SYNC")
         activeZoneFrame.statusTag:SetTextColor(C.gray[1], C.gray[2], C.gray[3])
@@ -3384,15 +3441,14 @@ function Overlord.UI:RefreshActiveZone()
             if activeZoneFrame.holdText:GetText() ~= holdStr then
                 activeZoneFrame.holdText:SetText(holdStr)
             end
-            local barWidth = activeZoneFrame.holdBar:GetWidth()
-            activeZoneFrame.holdBar.fill:SetWidth(math.max(1, barWidth * ratio))
+            activeZoneFrame.holdBar:SetFillRatio(ratio)
             local pctStr = hpct .. "%"
             if activeZoneFrame.holdBar.label:GetText() ~= pctStr then
                 activeZoneFrame.holdBar.label:SetText(pctStr)
             end
         end
     elseif statusChanged then
-        activeZoneFrame.holdBar.fill:SetWidth(1)
+        activeZoneFrame.holdBar:SetFillRatio(nil)
         activeZoneFrame.holdBar.label:SetText("")
         activeZoneFrame.holdText:SetText("")
     end
@@ -3403,28 +3459,28 @@ function Overlord.UI:RefreshActiveZone()
 
     -- Couleur du fill selon l'etat
     if az.isContested then
-        activeZoneFrame.holdBar.fill:SetColorTexture(C.enemy[1], C.enemy[2], C.enemy[3], 0.8)
+        activeZoneFrame.holdBar:SetFillColor(C.enemy[1], C.enemy[2], C.enemy[3], 0.8)
         activeZoneFrame.statusTag:SetText(L.UI_CONTESTED)
         activeZoneFrame.statusTag:SetTextColor(C.enemy[1], C.enemy[2], C.enemy[3])
     elseif az.isPaused then
-        activeZoneFrame.holdBar.fill:SetColorTexture(C.orange[1], C.orange[2], C.orange[3], 0.8)
+        activeZoneFrame.holdBar:SetFillColor(C.orange[1], C.orange[2], C.orange[3], 0.8)
         activeZoneFrame.statusTag:SetText(L.UI_PAUSED)
         activeZoneFrame.statusTag:SetTextColor(C.orange[1], C.orange[2], C.orange[3])
     elseif az.isHolding then
-        activeZoneFrame.holdBar.fill:SetColorTexture(C.blue[1], C.blue[2], C.blue[3], 0.8)
+        activeZoneFrame.holdBar:SetFillColor(C.blue[1], C.blue[2], C.blue[3], 0.8)
         activeZoneFrame.statusTag:SetText(L.UI_IN_PROGRESS)
         activeZoneFrame.statusTag:SetTextColor(C.blueBright[1], C.blueBright[2], C.blueBright[3])
     elseif enemyCapturing then
-        activeZoneFrame.holdBar.fill:SetColorTexture(C.orange[1], C.orange[2], C.orange[3], 0.8)
+        activeZoneFrame.holdBar:SetFillColor(C.orange[1], C.orange[2], C.orange[3], 0.8)
         activeZoneFrame.statusTag:SetText(L.UI_ENEMY_CAPTURING)
         activeZoneFrame.statusTag:SetTextColor(C.orange[1], C.orange[2], C.orange[3])
     elseif hc >= hr and hr > 0 then
         -- Maintien plein : or du theme (pas le vert type quete WoW)
-        activeZoneFrame.holdBar.fill:SetColorTexture(C.gold[1], C.gold[2], C.gold[3], 0.85)
+        activeZoneFrame.holdBar:SetFillColor(C.gold[1], C.gold[2], C.gold[3], 0.85)
         activeZoneFrame.statusTag:SetText(L.UI_COMPLETE)
         activeZoneFrame.statusTag:SetTextColor(C.gold[1], C.gold[2], C.gold[3])
     else
-        activeZoneFrame.holdBar.fill:SetColorTexture(C.gray[1], C.gray[2], C.gray[3], 0.8)
+        activeZoneFrame.holdBar:SetFillColor(C.gray[1], C.gray[2], C.gray[3], 0.8)
         activeZoneFrame.statusTag:SetText("")
     end
     self:SyncActiveZoneFrameHeight()
