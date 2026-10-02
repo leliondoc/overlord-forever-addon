@@ -3046,7 +3046,7 @@ local function GetEKDominanceLogoSize(canvas, parent, capAssaultAtlas)
             scaleRatio = canvasScale / parentScale
         end
     end
-    local computed = cw * EK_DOMINANCE_LOGO_BASE * scaleRatio
+    local computed = cw * EK_DOMINANCE_LOGO_BASE * scaleRatio * Overlord.MapMarkers.GetMapIconScale()
     if capAssaultAtlas then
         return math.min(computed, ResolveDominanceAtlasNativeSize())
     end
