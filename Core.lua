@@ -2966,6 +2966,11 @@ function Overlord:Initialize()
     OverlordDB.config.popupsSeen = OverlordDB.config.popupsSeen or {}
     OverlordDB.config.popupsDailyShown = OverlordDB.config.popupsDailyShown or {}
 
+    -- 1.4.0: before fronts, zones and outposts are restored, swap in this
+    -- ruleset's own world (every login, cheap: also heals an alt whose data
+    -- another ruleset stamped before this check existed).
+    self:SwapRulesetWorld(GetCurrentPoolForSavedVars())
+
     if Overlord.Fronts and OverlordDB.activeFrontId and Overlord.Fronts:GetFront(OverlordDB.activeFrontId) then
         Overlord.Fronts:Activate(OverlordDB.activeFrontId)
     end
@@ -3047,9 +3052,6 @@ function Overlord:Initialize()
         end
         DebugOverlord("Changement de pool : " .. lastPool .. " -> " .. currentPool .. " (updatedAt = 0)")
     end
-    -- Every login (cheap, ~20 sites): also heals an alt whose rows another
-    -- ruleset stamped before this check existed.
-    self:SwapRulesetOutposts(lastPool, currentPool)
     OverlordDB.lastSessionPool = currentPool
     OverlordDB.lastSessionRealmKey = nil
 
@@ -3543,40 +3545,55 @@ function Overlord:MergeLeaderboardBucketInto(target, source, onDone)
     return target
 end
 
--- Migration sans perte vers un unique bucket EU. Les anciens buckets fr/de ne
--- restent pas dupliques : toutes les prochaines sessions europeennes pointent sur eu.
--- 1.4.0: outposts and fortresses (states, tenants, capture counts) belong to
--- their ruleset, but OverlordDB is account-wide. On a ruleset change, park the
--- world we leave and bring back ours if it is from this same campaign week;
--- otherwise start empty (the weekly reset passed meanwhile).
-function Overlord:SwapRulesetOutposts(lastPool, currentPool)
-    if not OverlordDB or type(currentPool) ~= "string" or currentPool == "" then return end
-    -- Rows carry the pool of the campaign that stamped them: trust that over the
-    -- last session (an alt first logged before this check kept the PvP rows).
-    local stamped
+-- 1.4.0: each ruleset is its own world, but OverlordDB is account-wide. These
+-- saved tables describe one world: front zones, front victories and truces,
+-- outposts and fortresses (states, tenants, capture counts).
+local RULESET_WORLD_KEYS = {
+    "zones", "frontVictories", "frontTruceResetEpoch",
+    "outposts", "outpostTenants", "outpostCaptureCounts",
+}
+
+-- On a ruleset change, park the world we leave and bring back ours if it is
+-- from this same campaign week; otherwise start from the week's initial state.
+-- Runs at the very start of the login, before zones and outposts are restored.
+function Overlord:SwapRulesetWorld(currentPool)
+    if not OverlordDB or type(currentPool) ~= "string" or currentPool == "" then return false end
+    -- Once per session: Initialize can restart (faction not known yet) before
+    -- lastSessionPool is saved; a second swap would park the fresh empty world
+    -- over the real one.
+    if self._rulesetWorldChecked then return false end
+    self._rulesetWorldChecked = true
     local rp = self.RealmPools
+    local function norm(pool)
+        return rp and rp.NormalizeRegionPool and rp:NormalizeRegionPool(pool or "") or ""
+    end
+    -- Outpost rows carry the pool of the campaign that stamped them: trust that
+    -- over the last session (an alt first logged before this check kept PvP data).
+    local stamped
     for _, st in pairs(type(OverlordDB.outposts) == "table" and OverlordDB.outposts or {}) do
-        local p = type(st) == "table" and rp and rp.NormalizeRegionPool
-            and rp:NormalizeRegionPool(st.pool or "") or ""
+        local p = type(st) == "table" and norm(st.pool) or ""
         if p ~= "" then stamped = p; break end
     end
-    local leaving = stamped or lastPool
-    if type(leaving) ~= "string" or leaving == "" or leaving == currentPool then return end
-    local parked = OverlordDB.outpostsByPool or {}
-    OverlordDB.outpostsByPool = parked
+    local leaving = stamped or norm(OverlordDB.lastSessionPool)
+    if leaving == "" or leaving == currentPool then return false end
+    local parked = type(OverlordDB.worldsByPool) == "table" and OverlordDB.worldsByPool or {}
+    OverlordDB.worldsByPool = parked
     local week = tonumber(OverlordDB.lastResetTimestamp) or 0
-    parked[leaving] = {
-        epoch = week, outposts = OverlordDB.outposts,
-        tenants = OverlordDB.outpostTenants, counts = OverlordDB.outpostCaptureCounts,
-    }
+    local leavingWorld = { epoch = week }
+    for _, key in ipairs(RULESET_WORLD_KEYS) do leavingWorld[key] = OverlordDB[key] end
     local mine = parked[currentPool]
     parked[currentPool] = nil
+    parked[leaving] = leavingWorld
     if type(mine) ~= "table" or mine.epoch ~= week then mine = nil end
-    OverlordDB.outposts = mine and type(mine.outposts) == "table" and mine.outposts or {}
-    OverlordDB.outpostTenants = mine and type(mine.tenants) == "table" and mine.tenants or {}
-    OverlordDB.outpostCaptureCounts = mine and type(mine.counts) == "table" and mine.counts or {}
+    for _, key in ipairs(RULESET_WORLD_KEYS) do
+        local value = mine and mine[key]
+        OverlordDB[key] = type(value) == "table" and value or {}
+    end
+    return true
 end
 
+-- Migration sans perte vers un unique bucket EU. Les anciens buckets fr/de ne
+-- restent pas dupliques : toutes les prochaines sessions europeennes pointent sur eu.
 function Overlord:UnifyEuropeanLeaderboardBuckets()
     if not OverlordDB or self:GetCurrentLeaderboardSavedVarsPool() ~= "global" then return end
     if self._europeanLeaderboardUnionPending then return end
