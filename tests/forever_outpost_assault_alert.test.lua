@@ -58,8 +58,8 @@ for _, method in ipairs({ "Send", "SendToChannel", "BroadcastToCommunity" }) do
     sync[method] = function() return true end
 end
 local L = Overlord.L
-L.OUTPOST_ENEMY_ASSAULT_VS = "ASSAULT %s %s %s %s"
-L.OUTPOST_ENEMY_ASSAULT = "ASSAULT %s %s %s"
+L.OUTPOST_ENEMY_ASSAULT_VS = "ASSAULT %s %s %s"
+L.OUTPOST_ENEMY_ASSAULT = "ASSAULT %s %s"
 local alerts = 0
 Overlord.PrintNotification = function(_, text)
     if text:find("ASSAULT", 1, true) then alerts = alerts + 1 end

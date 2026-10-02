@@ -932,23 +932,26 @@ local function TryPrintOutpostAssaultAlert(siteKey, stBefore, stAfter)
 
     local whereLabel = OutpostWhereLabel(siteKey)
     local pf = Overlord.PlayerFaction
+    -- Player feedback (2026-10-02): "(the Horde)" sat next to the Alliance guild.
+    -- Each guild now carries its own crest: "<Ruthless> [H] is assaulting <EMPIRE> [A]".
+    local holderFac = assaultFac == "Horde" and "Alliance" or assaultFac == "Alliance" and "Horde" or nil
+    local attacker = Overlord:GuildChatTag(assaultGuild, assaultFac)
+    local holder = defendedGuild ~= "" and Overlord:GuildChatTag(defendedGuild, holderFac) or nil
     if pf and assaultFac == pf then
-        if defendedGuild ~= "" and L.OUTPOST_ALLY_ASSAULT_VS then
-            Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r " .. Overlord:FactionChatIcon(assaultFac) .. L.OUTPOST_ALLY_ASSAULT_VS,
-                whereLabel, assaultGuild, defendedGuild))
+        if holder and L.OUTPOST_ALLY_ASSAULT_VS then
+            Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r " .. L.OUTPOST_ALLY_ASSAULT_VS,
+                whereLabel, attacker, holder))
         elseif L.OUTPOST_ALLY_ASSAULT then
-            Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r " .. Overlord:FactionChatIcon(assaultFac) .. L.OUTPOST_ALLY_ASSAULT,
-                whereLabel, assaultGuild))
+            Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r " .. L.OUTPOST_ALLY_ASSAULT,
+                whereLabel, attacker))
         end
     else
-        local facLabel = (Overlord.Zones and Overlord.Zones.GetEnemyFactionName)
-            and Overlord.Zones:GetEnemyFactionName() or assaultFac
-        if defendedGuild ~= "" and L.OUTPOST_ENEMY_ASSAULT_VS then
-            Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:FactionChatIcon(assaultFac) .. L.OUTPOST_ENEMY_ASSAULT_VS,
-                whereLabel, assaultGuild, defendedGuild, facLabel))
+        if holder and L.OUTPOST_ENEMY_ASSAULT_VS then
+            Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.OUTPOST_ENEMY_ASSAULT_VS,
+                whereLabel, attacker, holder))
         elseif L.OUTPOST_ENEMY_ASSAULT then
-            Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:FactionChatIcon(assaultFac) .. L.OUTPOST_ENEMY_ASSAULT,
-                whereLabel, assaultGuild, facLabel))
+            Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.OUTPOST_ENEMY_ASSAULT,
+                whereLabel, attacker))
         end
     end
 end

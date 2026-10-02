@@ -295,14 +295,10 @@ local function ResolveLocationLabel(zoneRef)
     return front and (front.dropdownLabel or front.mapName) or nil
 end
 
--- Seules les guildes ennemies sont affichees : le libelle est celui de l'ennemi.
-local function FactionLabel(faction)
-    local zones = Overlord.Zones
-    if zones and zones.GetEnemyFactionName then
-        local name = zones:GetEnemyFactionName()
-        if name and name ~= "" then return name end
-    end
-    return faction
+-- "<Guild> crest" instead of "Guild (the Horde)" (player feedback, 2026-10-02).
+local function GuildTag(guildName, faction)
+    if Overlord.GuildChatTag then return Overlord:GuildChatTag(guildName, faction) end
+    return "<" .. tostring(guildName) .. ">"
 end
 
 -- Texte identique pour le detecteur et pour chaque receveur du GW.
@@ -315,12 +311,12 @@ function GKA:BuildAlertText(guildName, faction, kills, members, zoneRef, shard)
     local location = ResolveLocationLabel(zoneRef)
     if location then
         return string.format(L.GUILD_KILL_ALERT_FRONT
-            or "Guild %s (%s): %d+ kills by %d+ members on %s%s!",
-            guildName, FactionLabel(faction), kills, members, location, shardSuffix)
+            or "Guild %s: %d+ kills by %d+ members in %s%s!",
+            GuildTag(guildName, faction), kills, members, location, shardSuffix)
     end
     return string.format(L.GUILD_KILL_ALERT
-        or "Guild %s (%s): %d+ kills by %d+ members%s!",
-        guildName, FactionLabel(faction), kills, members, shardSuffix)
+        or "Guild %s: %d+ kills by %d+ members%s!",
+        GuildTag(guildName, faction), kills, members, shardSuffix)
 end
 
 -- Memoire persistante du dernier affichage par guilde (heure serveur) : apres un

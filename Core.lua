@@ -405,6 +405,13 @@ function Overlord:FactionChatIcon(faction)
     return "|TInterface\\Timer\\" .. faction .. "-Logo:18:18|t "
 end
 
+-- "<Guild> crest" for chat alerts: each guild carries its own faction crest, so
+-- nobody has to know which of 60+ guilds is Horde or Alliance.
+function Overlord:GuildChatTag(guild, faction)
+    local icon = self:FactionChatIcon(faction)
+    return "<" .. tostring(guild or "") .. ">" .. (icon ~= "" and (" " .. icon:sub(1, -2)) or "")
+end
+
 function Overlord:EnemyFactionChatIcon()
     local mine = self.PlayerFaction
     return self:FactionChatIcon(mine == "Alliance" and "Horde" or mine == "Horde" and "Alliance" or nil)

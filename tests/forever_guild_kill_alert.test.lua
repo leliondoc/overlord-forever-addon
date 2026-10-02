@@ -171,7 +171,7 @@ reset()
 kill(NAMES[1], 30, "#1420")
 raid("#9001", 30)
 assert(alerts() == 1, "Located raid did not alert")
-assert(printed[1]:find("on Arathi Highlands (#143)!", 1, true), printed[1])
+assert(printed[1]:find("in Arathi Highlands (#143)!", 1, true), printed[1])
 flush()
 assert(sent[1][3]:find(":#9001:143:", 1, true), sent[1][3])
 
@@ -216,7 +216,7 @@ local iron = gw("Iron Watch", "Alliance", 27, 6, "#1417", 55)
 assert(GKA:OnReceiveNetworkAlert(iron, "Relay Tester", "BETA"), "Valid GW rejected")
 assert(printed[1] == "|cFFFF4444[Overlord]|r "
     .. GKA:BuildAlertText("Iron Watch", "Alliance", 27, 6, "#1417", 55), tostring(printed[1]))
-assert(printed[1]:find("27+ kills by 6+ members on Arathi Highlands (#55)!", 1, true), printed[1])
+assert(printed[1]:find("27+ kills by 6+ members in Arathi Highlands (#55)!", 1, true), printed[1])
 assert(not GKA:OnReceiveNetworkAlert(iron, "Other Tester", "CHANNEL"), "Duplicate GW printed twice")
 assert(#sent == 0, "Receiver re-broadcast the GW")
 
@@ -307,7 +307,7 @@ OverlordDB.config.guildKillAlertEnabled = nil
 local tagFn = Overlord.Sync.GetShardAlertTagForPlayer
 GKA:HandleCommand({ "guildkills", "test" })
 assert(#printed == 1 and printed[1]:find("Empire [TEST]", 1, true)
-    and printed[1]:find("20+ kills by 5+ members on Arathi Highlands (#143)!", 1, true)
+    and printed[1]:find("20+ kills by 5+ members in Arathi Highlands (#143)!", 1, true)
     and not printed[1]:find("Sim", 1, true), tostring(printed[1]))
 assert(#sent == 0 and #timers == 0, "Simulation sent network traffic")
 assert(OverlordDB.config.guildKillAlertEnabled == nil, "Simulation changed the default setting")
@@ -348,3 +348,9 @@ Overlord.Sync.SendToChannel, Overlord.Sync.SendToGroup, Overlord.Sync.BroadcastT
     realChannel, realGroup, realCommunity
 Overlord.BetaNetwork, Overlord.BetaNetworkEnabled = realBeta, realBetaEnabled
 print("Forever guild kill alert: both-faction detection, own kills, epoch, window, relay GW, provenance, dedup, reload, eviction, simulation OK")
+
+-- Player feedback (2026-10-02): the guild carries its own faction crest instead of
+-- "(the Horde)", and English reads "in <zone>".
+local tagged = GKA:BuildAlertText("Kor Kron Enforcers", "Horde", 21, 6, nil, nil)
+assert(tagged:find("<Kor Kron Enforcers> |TInterface\\Timer\\Horde-Logo:18:18|t: 21+ kills by 6+ members!", 1, true), tagged)
+assert(not tagged:find("(", 1, true), "Faction label still in brackets: " .. tagged)
