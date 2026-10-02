@@ -2423,6 +2423,14 @@ end
 -- Calcule le timestamp du dernier reset hebdomadaire reel de la region.
 function Overlord:GetLastResetTimestamp()
     local now = (GetServerTime and GetServerTime()) or time()
+    -- Fast path: called ~30 times per second by the sync handlers, and date("!*t")
+    -- below allocates a table each time (~1 KB, the largest garbage source live,
+    -- /ov perf 2026-10-02). Inside the cached reset's week and cache window the
+    -- computed value is the cached one: return it without rebuilding the date.
+    if cachedRegionalResetTs and (now - cachedRegionalResetWallAt) < REGIONAL_RESET_CACHE_SEC
+        and now >= cachedRegionalResetTs and now < cachedRegionalResetTs + SECONDS_PER_WEEK then
+        return cachedRegionalResetTs
+    end
     local resetWday, resetHour = GetFallbackWeeklyResetRule()
     local computed = GetWeeklyResetTimestampForRule(resetWday, resetHour, now)
     -- Stabilise la session : GetServerTime et untilReset ne tickent pas a la meme seconde (NA).
