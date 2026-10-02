@@ -387,6 +387,9 @@ end
 -- Opt-in profiler (/ov perf [seconds]): times every function of the Overlord
 -- modules for a bounded window, prints any single call over 50 ms immediately,
 -- then a top list, and restores the original functions. Off by default.
+-- It also sums the Lua memory each call allocates (collectgarbage("count") before
+-- and after, inclusive of nested calls; a GC step inside a call can only make the
+-- figure smaller), to find what keeps refilling the addon's garbage.
 local PERF_MODULES = {
     "ActionShortcut", "Button", "CaptureLease", "Combat", "FrontActivity", "Fronts",
     "General", "GeneralMap", "GeneralNameplate", "GeneralSync", "GuildKeep",
@@ -398,11 +401,12 @@ local PERF_MODULES = {
 local PERF_SPIKE_MS = 50
 local perfState = nil
 
-local function PerfFinish(label, startedAt, sliced, ...)
+local function PerfFinish(label, startedAt, startKb, sliced, ...)
     local state = perfState
     if state then
         if not sliced then state.depth = state.depth - 1 end
         local elapsed = debugprofilestop() - startedAt
+        local allocated = math.max(0, collectgarbage("count") - startKb)
         -- Inside a coroutine the clock also runs while the worker is paused between
         -- frames: that is elapsed wall time, not one frame. Keep it apart.
         if sliced then label = label .. " (sliced, multi-frame)" end
@@ -413,6 +417,7 @@ local function PerfFinish(label, startedAt, sliced, ...)
         end
         row.calls = row.calls + 1
         row.total = row.total + elapsed
+        row.kb = (row.kb or 0) + allocated
         if elapsed > row.max then row.max = elapsed end
         -- Only the outermost call is reported live, so one freeze prints one line.
         if not sliced and elapsed >= PERF_SPIKE_MS and state.depth == 0 then
@@ -429,7 +434,7 @@ local function PerfWrap(label, fn)
         if not state then return fn(...) end
         local sliced = coroutine.running() ~= nil
         if not sliced then state.depth = state.depth + 1 end
-        return PerfFinish(label, debugprofilestop(), sliced, fn(...))
+        return PerfFinish(label, debugprofilestop(), collectgarbage("count"), sliced, fn(...))
     end
 end
 
@@ -444,7 +449,8 @@ local function StopPerf()
     state.frame:SetScript("OnUpdate", nil)
     local rows = {}
     for label, row in pairs(state.stats) do
-        rows[#rows + 1] = { label = label, calls = row.calls, total = row.total, max = row.max }
+        rows[#rows + 1] = { label = label, calls = row.calls, total = row.total, max = row.max,
+            kb = row.kb or 0 }
     end
     -- Multi-frame (sliced) timings are wall time: excluded from both rankings.
     local frameRows = {}
@@ -463,6 +469,13 @@ local function StopPerf()
     for i = 1, math.min(8, #rows) do
         local r = rows[i]
         Overlord:PrintNotification(string.format("  %.0f ms / %d calls  %s", r.total, r.calls, r.label))
+    end
+    table.sort(rows, function(a, b) return a.kb > b.kb end)
+    Overlord:PrintNotification("[Overlord perf] Most memory allocated (KB, includes nested calls):")
+    for i = 1, math.min(10, #rows) do
+        local r = rows[i]
+        if r.kb < 1 then break end
+        Overlord:PrintNotification(string.format("  %.0f KB / %d calls  %s", r.kb, r.calls, r.label))
     end
 end
 
