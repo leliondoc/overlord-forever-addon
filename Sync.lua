@@ -9103,7 +9103,11 @@ function Overlord.Sync:BroadcastKill(zoneId, totalKills, killScoringAtEvent,
                     guildTag, locTag, guildAt, d.bucketEpoch, playerLevel,
                     withRace and raceFile or nil, withRace and raceSex or nil)
             if not payload then killBroadcastData = nil; return end
-            if withRace then syncObj._lastRaceInKillAt = GetTime() end
+            -- Counted only when the race really went out (13-field K: 12 colons);
+            -- an oversized K drops it and the next kill tries again.
+            if withRace and select(2, payload:gsub(":", ":")) >= 12 then
+                syncObj._lastRaceInKillAt = GetTime()
+            end
             local isLarge = Overlord.Sync.IsLargeEvent and Overlord.Sync:IsLargeEvent()
             Overlord.Sync:SendKillBroadcast(payload)
             -- Nos propres K ne nous reviennent pas : les compter ici pour notre guilde.

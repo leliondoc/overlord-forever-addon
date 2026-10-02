@@ -156,3 +156,13 @@ for t = 1, 12 do
 end
 assert(net:GetBridgeShare() == 1, "a single sender lowered the share: " .. net:GetBridgeShare())
 print("Bridge election: one copy per sender")
+
+-- 7. Weekly reset: totals restart low. A record older than 2 min no longer freezes
+--    the estimate (a lower total heard within 2 min is still an old copy).
+for t = 1, 25 do copies("Reset Horde", 9000 + t, math.max(1, math.floor(40 * net:GetBridgeShare() + 0.5))) end
+local frozen = net:GetBridgeShare()
+assert(frozen < 1, "fixture: share did not drop before the reset")
+advance(200)
+for t = 1, 12 do copies("Reset Horde", 10 + t, 1) end
+assert(net:GetBridgeShare() == 1, "estimate stayed frozen after the weekly reset: " .. net:GetBridgeShare())
+print("Bridge election: recovers after the weekly reset")

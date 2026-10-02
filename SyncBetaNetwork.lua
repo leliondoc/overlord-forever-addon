@@ -1808,7 +1808,11 @@ local function noteBridgeCopy(name, total, sender)
         end
         return
     end
-    if record and now < record.total then return end -- an older total heard late
+    -- A lower total is an old copy heard late, unless the record itself is old:
+    -- after the weekly reset totals restart near 0 and last week's records must
+    -- not freeze the estimate for the rest of the session.
+    if record and now < record.total and GetTime() - (record.at or 0) < 120 then return end
+    if record and now < record.total then record = nil end
     if record then
         local estimate = bridgeLK.bridges or ELECTION_TARGET
         if record.count <= 1 then
@@ -1829,7 +1833,8 @@ local function noteBridgeCopy(name, total, sender)
     -- 1024 subjects (was 256): a crowd of active enemies evicted records before
     -- their next total and froze the estimate exactly where it is needed.
     remember(bridgeCopies, bridgeCopiesOrder, key,
-        { total = now, count = 1, share = bridgeLK.share or 1, senders = { [who] = true } }, 1024)
+        { total = now, count = 1, share = bridgeLK.share or 1, senders = { [who] = true },
+            at = GetTime() }, 1024)
 end
 function net:GetBridgeShare() return bridgeLK.share or 1 end
 local bridgeFlush
