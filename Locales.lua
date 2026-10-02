@@ -149,7 +149,7 @@ L.MODULE_ERROR   = "Error module %s: %s"
 L.ADDON_LOADED   = "v%s loaded. |cFFFFFF00/ov help|r for commands."
 L.SYNC_LOGIN_WAIT = "Synchronizing zone data... Map will update shortly."
 L.ALL_ZONES_RESET = "All zones have been reset!"
-L.FRONT_TRUCE_ENDED_RESET = "%s: truce ended. Zones reset for a new round."
+L.FRONT_TRUCE_ENDED_RESET = "%s: truce ended. Each capital is back to its faction; conquered zones stay. The winner can attack the lost capital again 2 h after the victory."
 
 -- === Commands ===
 L.HELP_HEADER   = "|cFF00FF00========== Overlord: Commands ==========|r"
@@ -711,7 +711,7 @@ L.MODULE_ERROR    = "Erreur module %s : %s"
 L.ADDON_LOADED    = "v%s chargé. |cFFFFFF00/ov help|r pour les commandes."
 L.SYNC_LOGIN_WAIT = "Synchronisation des zones en cours... La carte se mettra à jour sous peu."
 L.ALL_ZONES_RESET = "Toutes les zones ont été réinitialisées !"
-L.FRONT_TRUCE_ENDED_RESET = "%s: trêve terminée. Zones réinitialisées pour une nouvelle manche."
+L.FRONT_TRUCE_ENDED_RESET = "%s : trêve terminée. Chaque capitale revient à sa faction, les zones conquises restent acquises. Le vainqueur pourra réattaquer la capitale perdue 2 h après la victoire."
 
 -- Commands
 L.HELP_HEADER   = "|cFF00FF00========== Overlord: Commandes ==========|r"
@@ -1269,7 +1269,7 @@ L.MODULE_ERROR    = "Error del módulo %s: %s"
 L.ADDON_LOADED    = "v%s cargado. |cFFFFFF00/ov help|r para ver los comandos."
 L.SYNC_LOGIN_WAIT = "Sincronizando datos de zonas... El mapa se actualizará en breve."
 L.ALL_ZONES_RESET = "¡Todas las zonas se han reiniciado!"
-L.FRONT_TRUCE_ENDED_RESET = "%s: tregua terminada. Zonas reiniciadas para una nueva ronda."
+L.FRONT_TRUCE_ENDED_RESET = "%s: tregua terminada. Cada capital vuelve a su facción; las zonas conquistadas se mantienen. El vencedor podrá atacar de nuevo la capital perdida 2 h después de la victoria."
 
 -- Commands
 L.HELP_HEADER   = "|cFF00FF00========== Overlord: Comandos ==========|r"
@@ -1824,7 +1824,7 @@ L.MODULE_ERROR    = "Modulfehler %s: %s"
 L.ADDON_LOADED    = "v%s geladen. |cFFFFFF00/ov help|r für Befehle."
 L.SYNC_LOGIN_WAIT = "Zonendaten werden synchronisiert... Die Karte wird in Kürze aktualisiert."
 L.ALL_ZONES_RESET = "Alle Zonen wurden zurückgesetzt!"
-L.FRONT_TRUCE_ENDED_RESET = "%s: Waffenstillstand beendet. Zonen für eine neue Runde zurückgesetzt."
+L.FRONT_TRUCE_ENDED_RESET = "%s: Waffenstillstand beendet. Jede Hauptstadt geht an ihre Fraktion zurück; eroberte Zonen bleiben. Der Sieger kann die verlorene Hauptstadt 2 Std. nach dem Sieg wieder angreifen."
 
 -- Commands
 L.HELP_HEADER   = "|cFF00FF00========== Overlord: Befehle ==========|r"
@@ -2384,7 +2384,7 @@ L.MODULE_ERROR   = "Ошибка модуля %s: %s"
 L.ADDON_LOADED   = "Загружена версия v%s. Введите |cFFFFFF00/ov help|r для просмотра команд."
 L.SYNC_LOGIN_WAIT = "Синхронизация данных зон... Карта скоро обновится."
 L.ALL_ZONES_RESET = "Все зоны были сброшены!"
-L.FRONT_TRUCE_ENDED_RESET = "%s: перемирие завершено. Зоны сброшены для нового раунда."
+L.FRONT_TRUCE_ENDED_RESET = "%s: перемирие завершено. Каждая столица возвращается своей фракции, захваченные зоны остаются. Победитель сможет снова атаковать потерянную столицу через 2 ч после победы."
 
 
 -- === Commands ===

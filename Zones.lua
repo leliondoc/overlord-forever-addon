@@ -85,6 +85,10 @@ end
 -- Capitales ennemies : timer fixe (8 min) + treve post-victoire.
 local CAPITAL_HOLD_TIME = 480
 local CAPITAL_VICTORY_COOLDOWN = 900 -- 15 min (anti chain-cap ; etait 30 min)
+-- 1.4.0 persistent conquest: after the truce only the capitals go back to their
+-- faction; the rest of the front stays with the winner. The winner cannot attack
+-- the capital it just lost back until 2 h after the victory (no victory farming).
+local CAPITAL_RETURN_PROTECTION = 7200 - CAPITAL_VICTORY_COOLDOWN
 if Overlord.Fronts then
     Overlord.Fronts:Activate(Overlord.Fronts.activeFrontId)
 end
@@ -173,10 +177,26 @@ function Overlord.Zones:GetPrereqZoneIdsForAttacker(zoneId, attackingFaction)
 end
 
 -- La faction attackingFaction peut-elle légalement poursuivre une capture sur zoneId ? (prérequis + toutes les zones si base ennemie)
+-- Returned capital still protected against this attacker: true, seconds left.
+-- Set only when a truce really ends (shared epoch), so clients agree without a message.
+function Overlord.Zones:IsCapitalProtectedFrom(zoneId, attackingFaction)
+    local fixedOwner = self:GetBaseZoneFixedOwner(zoneId)
+    if not fixedOwner or not attackingFaction or attackingFaction == fixedOwner
+        or not Overlord.Fronts then return false, 0 end
+    local _, front = Overlord.Fronts:GetZone(zoneId)
+    local untilTs = front and OverlordDB and OverlordDB.capitalProtectedUntil
+        and tonumber(OverlordDB.capitalProtectedUntil[front.id]) or 0
+    if untilTs <= 0 then return false, 0 end
+    local remaining = untilTs - time()
+    if remaining > 0 then return true, remaining end
+    return false, 0
+end
+
 function Overlord.Zones:FactionMeetsPrereqsForZoneCapture(zoneId, attackingFaction, localGameplay)
     if not zoneId or not attackingFaction then return true end
     local zone = self:GetZone(zoneId)
     if not zone then return true end
+    if zone.isCapital and self:IsCapitalProtectedFrom(zoneId, attackingFaction) then return false end
 
     -- Zone tenue par l'assaillant pour la chaîne globale : owner correct et pas de capture
     -- inachevée sur CETTE zone. On n'exige pas status=="captured" : UpdateAvailableZones
@@ -826,6 +846,7 @@ function Overlord.Zones:ClearFrontVictories()
     OverlordDB.lastVictoryFaction = nil
     OverlordDB.lastVictoryFrontId = nil
     OverlordDB.frontTruceResetEpoch = {}
+    OverlordDB.capitalProtectedUntil = {}
 end
 
 function Overlord.Zones:SetVictoryCooldown(frontId, winningFaction, timestamp)
@@ -923,75 +944,10 @@ end
 
 local NormalizePlayerOwnedZoneStatus
 
--- Recalcule available/locked/captured pour toutes les zones d'un front (apres fin de treve).
-function Overlord.Zones:UpdateAvailableZonesForFront(frontId)
-    self:MigrateLegacyCaptureFinalQuarantines(frontId)
-    local front = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
-    if not front or not front.zones then return end
-    local pf = Overlord.PlayerFaction
-    local prereqs = front.prereqs and front.prereqs[pf]
-
-    for _, zone in ipairs(front.zones) do
-        -- Capitales de base : seeder owner/status si le front n'a jamais eu ApplyFactionConfig
-        -- (ex. Elwynn active apres login sur un autre front).
-        local fixedOwner = self:GetBaseZoneFixedOwner(zone.id)
-        if fixedOwner and not zone.owner then
-            zone.owner = fixedOwner
-            zone.status = "captured"
-            local now = (Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs())
-                or (OverlordDB and tonumber(OverlordDB.lastResetTimestamp)) or time()
-            zone.capturedTime = zone.capturedTime or now
-            zone.updatedAt = zone.updatedAt or now
-        end
-        -- Branches : pas de proprietaire fixe ; effacer un owner ennemi residuel (post-treve)
-        if not fixedOwner and zone.owner and zone.owner ~= pf then
-            zone.owner = nil
-            zone.capturedTime = nil
-        end
-        NormalizePlayerOwnedZoneStatus(zone, pf)
-        if zone.owner == pf and zone.status == "captured" then
-            -- Deja normalise ; ne pas recalculer les prereqs.
-        elseif zone.status == "in_progress" then
-            zone.status = "locked"
-            zone.isHolding = false
-            zone.holdTimeElapsed = 0
-        else
-            local prereqIds = prereqs and prereqs[zone.id]
-            local available = prereqIds ~= nil
-            if available and prereqIds then
-                for _, prereqId in ipairs(prereqIds) do
-                    local prereq = self:GetZone(prereqId) or Overlord.Fronts:GetZone(prereqId, frontId)
-                    if not prereq or prereq.owner ~= pf or prereq.status ~= "captured"
-                        or LoginQuarantineBlocksLocalGameplay(prereq) then
-                        available = false
-                        break
-                    end
-                end
-            end
-            if available then
-                local enemyBaseId = Overlord.Fronts:GetEnemyCapitalId(pf, frontId)
-                if zone.id == enemyBaseId then
-                    for _, z in ipairs(front.zones) do
-                        if z.id ~= zone.id and (z.owner ~= pf or z.status ~= "captured"
-                            or LoginQuarantineBlocksLocalGameplay(z)) then
-                            available = false
-                            break
-                        end
-                    end
-                end
-            end
-            zone.status = available and "available" or "locked"
-            if zone.status == "available" and (not zone.capturedTime or zone.capturedTime <= 0) then
-                zone.owner = nil
-            end
-        end
-    end
-end
-
 -- Recalcule UNIQUEMENT les statuts locked/available des zones sans proprietaire d'un front
 -- INACTIF apres une sync passive (C / ZS / ZA) : un prerequis vient peut-etre d'etre (de)bloque
 -- et le statut local-only restait fige (ex. "Verrouillee" fantome alors que la chaine est verte).
--- Non destructif, contrairement a UpdateAvailableZonesForFront (reset post-treve) : ne touche
+-- Non destructif (l'ancien recalcul reset post-treve n'existe plus) : ne touche
 -- jamais owner, capturedTime, updatedAt, ni les zones possedees ou in_progress.
 function Overlord.Zones:RefreshInactiveFrontAvailability(frontId)
     if not frontId then return end
@@ -1040,65 +996,48 @@ function Overlord.Zones:RefreshInactiveFrontAvailability(frontId)
     end
 end
 
--- Remet les zones d'un front a l'etat initial (capitales tenues, branches selon prerequis).
-function Overlord.Zones:ResetFrontZonesToInitial(frontId, resetEpoch)
+-- 1.4.0: end of truce. Each capital goes back to its own faction (the loser can
+-- strike back from it); every other zone stays with whoever conquered it. Same
+-- epoch on every client (victory + truce), so the returned capitals converge.
+function Overlord.Zones:ReturnCapitalsAfterTruce(frontId, resetEpoch)
     local front = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
     if not front or not front.zones then return false end
-
-    local now = tonumber(resetEpoch) or time()
-    for _, zone in ipairs(front.zones) do
-        if Overlord.CaptureLease and Overlord.CaptureLease.Complete then
-            Overlord.CaptureLease:Complete(zone)
-        end
-        self:ClearCaptureFinalUnattestedState(zone)
-        zone.killsCurrent = 0
-        zone.allyKillsCurrent = 0
-        zone.enemyKillsCurrent = 0
-        zone.holdTimeElapsed = 0
-        zone.isHolding = false
-        zone.holdAuthorityLocal = nil
-        zone.isContested = false
-        zone.isPaused = false
-        zone.holdStartTime = nil
-        zone.capturedTime = nil
-        zone.previousOwner = nil
-        zone.zsOfficialCapturerName = nil
-        zone._zsOfficialCapturerSeenAt = nil
-        zone.zsRelayCapturerName = nil
-        zone.zsRelayCapturerShard = nil
-        zone.lastZSSender = nil
-        zone._syncGateRemoteProgress = nil
-        zone._syncGateRemoteProgressUntil = nil
-        zone.owner = nil
-        zone.status = "locked"
-        zone.holdTimeRequired = 120
-        -- Horodatage uniforme : updatedAt=0 laissait les vieux ZA (post-victoire) repasser
-        zone.updatedAt = now
-    end
-
+    local ts = tonumber(resetEpoch) or time()
     for _, zone in ipairs(front.zones) do
         local fixedOwner = self:GetBaseZoneFixedOwner(zone.id)
-        if fixedOwner then
+        if fixedOwner and (zone.owner ~= fixedOwner or zone.status ~= "captured") then
+            if Overlord.CaptureLease and Overlord.CaptureLease.Complete then
+                Overlord.CaptureLease:Complete(zone)
+            end
+            self:ClearCaptureFinalUnattestedState(zone)
+            zone.killsCurrent, zone.allyKillsCurrent, zone.enemyKillsCurrent = 0, 0, 0
+            zone.holdTimeElapsed = 0
+            zone.isHolding, zone.isContested, zone.isPaused = false, false, false
+            zone.holdAuthorityLocal = nil
+            zone.holdStartTime = nil
+            zone.previousOwner = nil
+            zone.zsOfficialCapturerName, zone._zsOfficialCapturerSeenAt = nil, nil
+            zone.zsRelayCapturerName, zone.zsRelayCapturerShard = nil, nil
+            zone.lastZSSender = nil
+            zone._syncGateRemoteProgress, zone._syncGateRemoteProgressUntil = nil, nil
+            zone.holdTimeRequired = 120
             zone.owner = fixedOwner
             zone.status = "captured"
-            zone.capturedTime = now
-            zone.updatedAt = now
+            zone.capturedTime = ts
+            zone.updatedAt = ts
         end
     end
-
-    self:UpdateAvailableZonesForFront(frontId)
-
-    if Overlord.Fronts.activeFrontId == frontId and self.RebuildZoneLookup then
-        self:RebuildZoneLookup()
-    end
+    -- Statuses are per player: only the displayed front is recomputed now (with
+    -- the capital protection); another front is recomputed when it is shown.
+    -- Never a reset-style pass: the enemy's conquered zones must stay theirs.
     if Overlord.Fronts.activeFrontId == frontId then
+        if self.RebuildZoneLookup then self:RebuildZoneLookup() end
         self:UpdateAvailableZones()
     end
-
     return true
 end
 
--- Fin de treve : reset des zones du front uniquement (pas domination / or / fortin).
+-- Fin de treve : capitales rendues, conquete conservee (pas domination / or / fortin).
 function Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, fromSync)
     if not frontId or not resetEpoch or resetEpoch <= 0 then return false end
     if not OverlordDB then return false end
@@ -1107,9 +1046,11 @@ function Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, fromSync)
         return false
     end
 
-    if not self:ResetFrontZonesToInitial(frontId, resetEpoch) then return false end
+    if not self:ReturnCapitalsAfterTruce(frontId, resetEpoch) then return false end
 
     OverlordDB.frontTruceResetEpoch[frontId] = resetEpoch
+    OverlordDB.capitalProtectedUntil = OverlordDB.capitalProtectedUntil or {}
+    OverlordDB.capitalProtectedUntil[frontId] = resetEpoch + CAPITAL_RETURN_PROTECTION
     self:ClearFrontVictory(frontId)
 
     if Overlord.Sync and Overlord.Sync.ResetVictoryFlagForFront then
@@ -1237,6 +1178,7 @@ function Overlord.Zones:IsZoneAvailable(zoneId)
 
     -- Déjà possédée par notre faction = oui
     if zone.owner == Overlord.PlayerFaction then return true end
+    if zone.isCapital and self:IsCapitalProtectedFrom(zoneId, Overlord.PlayerFaction) then return false end
 
     -- Tous les prérequis doivent être complètement capturés (owner + status == "captured")
     local prereqIds = self:GetPrereqZoneIdsForAttacker(zoneId, Overlord.PlayerFaction)
@@ -1678,8 +1620,11 @@ function Overlord.Zones:_DoUpdateAvailableZones(suppressNotifications)
         if zone.owner == pf and zone.status == "captured" then
             -- Deja normalise dans la premiere passe ; ne pas recalculer les prereqs.
         elseif zone.status == "in_progress" then
-            -- Treve : toute capture in_progress est annulee sur le front (carte fermee).
+            -- Treve : toute capture in_progress est annulee sur le front (carte fermee),
+            -- comme un assaut sur une capitale rendue encore protegee.
             local truceBlocks = select(1, self:IsFrontOnTruce(zone.id))
+                or (zone.isCapital and zone.owner ~= nil
+                    and select(1, self:IsCapitalProtectedFrom(zone.id, zone.owner)))
             -- Prerequis pour la faction qui CAPTURE (owner = assaillant pendant in_progress)
             local chainBroken = zone.owner and not self:FactionMeetsPrereqsForZoneCapture(
                 zone.id, zone.owner, zone.holdAuthorityLocal == true)
@@ -1704,7 +1649,9 @@ function Overlord.Zones:_DoUpdateAvailableZones(suppressNotifications)
             end
         else
             -- Treve : pas de zone « disponible » tant que le front est en pause (aligne carte / pointillés / capteur).
-            if select(1, self:IsFrontOnTruce(zone.id)) then
+            -- Une capitale rendue et protegee reste fermee a l'ennemi.
+            if select(1, self:IsFrontOnTruce(zone.id))
+                or (zone.isCapital and select(1, self:IsCapitalProtectedFrom(zone.id, pf))) then
                 if zone.owner == pf and zone.status == "captured" then
                     zone.status = "captured"
                 else

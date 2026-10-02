@@ -3551,7 +3551,7 @@ end
 -- saved tables describe one world: front zones, front victories and truces,
 -- outposts and fortresses (states, tenants, capture counts).
 local RULESET_WORLD_KEYS = {
-    "zones", "frontVictories", "frontTruceResetEpoch",
+    "zones", "frontVictories", "frontTruceResetEpoch", "capitalProtectedUntil",
     "outposts", "outpostTenants", "outpostCaptureCounts",
 }
 -- Legacy single-victory fields still written and read as a fallback.
