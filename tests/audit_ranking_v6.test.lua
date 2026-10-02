@@ -291,6 +291,58 @@ assert(done == true and supported == true, "Identical streams did not certify")
 assert(PULLER.Overlord.Sync._leaderboardPageStats.rows == rowsBefore,
     "Identical scores were needlessly replayed")
 
+-- Only per-client volatile metadata differs (guild membership date, level, race
+-- observation date): bucket digests ignore it, so the round still certifies at
+-- once instead of resending every bucket in full (1.3.5 live: ~35 min sweeps).
+-- The source serves a fresh attested snapshot (new table, so its paged profile
+-- is rebuilt) whose rows differ from the puller's only in those fields.
+local served = SOURCE.OverlordDB.leaderboardSnapshot
+local perturbed, touched = {}, 0
+for k, v in pairs(served) do perturbed[k] = v end
+perturbed.playerInfo = {}
+for name, info in pairs(served.playerInfo) do
+    local copy = {}
+    for k, v in pairs(info) do copy[k] = v end
+    if (tonumber(copy.guildAt) or 0) > 0 or copy.race then
+        copy.guildAt = (tonumber(copy.guildAt) or 0) + 37
+        copy.raceAt = (tonumber(copy.raceAt) or 0) + 11
+        if (tonumber(copy.level) or 0) > 25 then copy.level = copy.level - 1 end
+        touched = touched + 1
+    end
+    perturbed.playerInfo[name] = copy
+end
+assert(touched > 10, "fixture: no metadata rows to perturb")
+SOURCE.OverlordDB.leaderboardSnapshot = perturbed
+rowsBefore = PULLER.Overlord.Sync._leaderboardPageStats.rows
+local pagesBefore = PULLER.Overlord.Sync._leaderboardPageStats.pages
+done, supported = nil, nil
+assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name,
+    function(ok, capable) done, supported = ok, capable end))
+advance(1000)
+assert(done == true and supported == true, "Volatile metadata broke stream certification")
+assert(PULLER.Overlord.Sync._leaderboardPageStats.rows == rowsBefore,
+    "Volatile metadata alone made the peer resend rows: "
+    .. (PULLER.Overlord.Sync._leaderboardPageStats.rows - rowsBefore)
+    .. " rows over " .. (PULLER.Overlord.Sync._leaderboardPageStats.pages - pagesBefore) .. " pages")
+SOURCE.OverlordDB.leaderboardSnapshot = served
+-- Ranking-relevant fields still change the digest: a guild or race change is
+-- resent, only the per-client dates and level are ignored.
+local digest = PULLER.Overlord.Sync._PagedRowDigest
+local base = "Ana:12:MAGE:Alliance:1790000000:frFR:Veteran Guild:1790016000:B1790000000:42"
+assert(digest("LK", base) == digest("LK",
+    "Ana:12:MAGE:Alliance:1790000000:frFR:Veteran Guild:1790099999:B1790000000:43"))
+assert(digest("LK", base) ~= digest("LK",
+    "Ana:12:MAGE:Alliance:1790000000:frFR:Other Guild:1790016000:B1790000000:42"))
+assert(digest("LK", base) ~= digest("LK",
+    "Ana:13:MAGE:Alliance:1790000000:frFR:Veteran Guild:1790016000:B1790000000:42"))
+assert(digest("LK", "Ana:12:MAGE:Alliance:1790000000:::0:B1790000000:42")
+    == digest("LK", "Ana:12:MAGE:Alliance:1790000000:::0:B1790000000:41"),
+    "Oversized-row fallback (blank guild/locale) did not parse")
+assert(digest("LR", "Ana:Orc:2:1790000000:100") == digest("LR", "Ana:Orc:2:1790000000:900"))
+assert(digest("LR", "Ana:Orc:2:1790000000:100") ~= digest("LR", "Ana:Troll:2:1790000000:100"))
+assert(digest("LC", "Ana:A:MAGE:3:1790000000:z1,z2:frFR:B1790000000")
+    == "Ana:A:MAGE:3:1790000000:z1,z2:frFR:B1790000000")
+
 SOURCE.Overlord.Leaderboard:SetPlayerCaptureCount(names[500], 2, true)
 local normalSend = PULLER.Overlord.Sync.SendWhisper
 local dropped = 0

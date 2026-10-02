@@ -109,6 +109,27 @@ local function enqueue(job)
     return true
 end
 
+-- Bucket digests skip per-client volatile fields. Two clients with the same
+-- kills, guild, class and race used to disagree on almost every bucket because
+-- each dates a guild membership (LK guildAt), a level (LK) or a race observation
+-- (LR raceAt) at its own moment; every bucket was then sent in full and a sweep
+-- took ~35 min (16 s/page live, rounds cut at 15 min). Pages still carry the full
+-- rows, so merges are unchanged; peers on older digests simply mismatch, as before.
+local function rowDigest(kind, payload)
+    if kind == "LK" then
+        -- name:kills:class:faction:epoch:locale:guild:guildAt:Bepoch:level
+        local head, bucketToken = payload:match(
+            "^([^:]*:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*):[^:]*:([^:]*):[^:]*$")
+        if head then return head .. ":" .. bucketToken end
+    elseif kind == "LR" then
+        -- name:race:sex:epoch:observedAt
+        local head = payload:match("^([^:]*:[^:]*:[^:]*:[^:]*):[^:]*$")
+        if head then return head end
+    end
+    return payload
+end
+sync._PagedRowDigest = rowDigest
+
 -- All scans and sorting yield after 32 work units and a ~1 ms slice.
 -- Only complete immutable profiles are published: at most 5,000 LK,
 -- 1,500 LC, and 6,500 LR source identities.
@@ -159,7 +180,7 @@ local function prepare(callback)
                     local bucket = profile.buckets[i]
                     lb:SortNetworkRows(bucket, function(a, b) return a.key < b.key end, work)
                     for j = 1, #bucket do
-                        bucket.hash = (bucket.hash + hash(bucket[j].payload)) % MOD
+                        bucket.hash = (bucket.hash + hash(rowDigest(kind, bucket[j].payload))) % MOD
                         work()
                     end
                     profile.count = profile.count + #bucket
