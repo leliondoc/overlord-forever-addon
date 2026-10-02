@@ -859,11 +859,13 @@ function Overlord.Popups:ShowDialog(seenId, title, body, markMode, opts)
                 fade:SetToAlpha(0)
                 fade:SetDuration(0.4)
                 group:SetScript("OnFinished", function()
-                    HideDialog()
                     f:SetAlpha(1)
+                    -- Only the fade of the dialog still on screen may close it.
+                    if f._olFadeToken == f._olAutoCloseToken then HideDialog() end
                 end)
                 f._olFadeOut = group
             end
+            f._olFadeToken = token
             if f._olFadeOut then f._olFadeOut:Play() else HideDialog() end
         end
         C_Timer.After(opts.autoCloseSec, check)
