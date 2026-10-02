@@ -18,7 +18,8 @@ local function GameRuleActive(rule)
         return nil
     end
     local ok, active = pcall(C_GameRules.IsGameRuleActive, rule)
-    if not ok then return nil end
+    -- nil = not answered yet: unknown, never "rule off".
+    if not ok or active == nil then return nil end
     return active == true
 end
 

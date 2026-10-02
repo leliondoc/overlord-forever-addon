@@ -3019,8 +3019,14 @@ function Overlord:Initialize()
     if type(OverlordDB.leaderboardsByPool[currentLeaderboardPool]) ~= "table" then
         -- 1.4.0: a new ruleset campaign starts empty; only the PvP campaign
         -- ("global") inherits the legacy root (OverlordDB.leaderboard).
+        -- The legacy root may already be another ruleset's bucket (PvE alt first):
+        -- never let two campaigns share one table.
+        local legacyRoot = OverlordDB.leaderboard
+        for _, bucket in pairs(OverlordDB.leaderboardsByPool) do
+            if bucket == legacyRoot then legacyRoot = nil; break end
+        end
         OverlordDB.leaderboardsByPool[currentLeaderboardPool] =
-            (currentLeaderboardPool == "global" and OverlordDB.leaderboard)
+            (currentLeaderboardPool == "global" and legacyRoot)
             or EmptyLeaderboardBucket()
     end
     self:UnifyEuropeanLeaderboardBuckets()

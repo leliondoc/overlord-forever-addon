@@ -67,6 +67,13 @@ assert(detect(nil, "Somewhere"):GetRuleset() == "pvp", "Unknown must stay the hi
 -- Rules not readable yet (all false) on a realm named PvP: the name wins.
 assert(detect({}, "Classic Beta PvP"):GetRuleset() == "pvp", "Early all-false read split a PvP player")
 assert(detect({}, "Somewhere"):GetRuleset() == "normal", "All rules off on an unnamed realm is Normal")
+-- API present but not answering yet (nil), realm name unreadable: unknown, so the
+-- historical population, never Normal (that would split a PvP player away).
+Enum.GameRule = { HardcoreRuleset = 1, RPRuleset = 2, PvPRuleset = 3 }
+C_GameRules = { IsGameRuleActive = function() return nil end }
+GetRealmName = function() return "" end
+assert(loadfile("RealmPools.lua"))()
+assert(Overlord.RealmPools:GetRuleset() == "pvp", "A not-ready rule API classified the player as Normal")
 -- Detected once per session: saved buckets and wire tags never switch mid-session.
 pools = detect({}, "Classic Beta PvE 2")
 assert(pools:GetRuleset() == "normal")
