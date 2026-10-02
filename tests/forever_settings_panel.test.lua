@@ -31,7 +31,7 @@ local title = { SetText = function(self, text) self.text = text end }
 SettingsPanel = { Container = { SettingsList = { Header = { Title = title } } },
     HookScript = function() end,
     DisplayCategory = function(_, category) title:SetText(category.name) end }
-C_Timer = { After = function() end }
+C_Timer = { After = function(_, fn) fn() end } -- deferred work runs at once here
 local function container()
     local c = { data = {} }
     function c:Add(value, label) self.data[#self.data + 1] = { value = value, label = label } end

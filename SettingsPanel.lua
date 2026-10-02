@@ -587,7 +587,15 @@ local ROWS = {
         options = chatWindowOptions },
     { kind = "button", label = "CHAT_TAB_LABEL", fallback = "Overlord chat tab",
         button = "CHAT_TAB_BUTTON", buttonFallback = "Create tab", tooltip = "CHAT_TAB_TOOLTIP",
-        click = function() SP:CreateOverlordChatTab() end },
+        -- Next frame, outside Blizzard's Settings click path: FCF chat-frame code
+        -- run from that path is the usual chat taint source.
+        click = function()
+            if C_Timer and C_Timer.After then
+                C_Timer.After(0, function() SP:CreateOverlordChatTab() end)
+            else
+                SP:CreateOverlordChatTab()
+            end
+        end },
     { kind = "checkbox", var = SP.GuildKillAlertVariableName, label = "GUILD_KILL_ALERT_ENABLED_LABEL",
         fallback = "Enemy guild raid alerts", tooltip = "GUILD_KILL_ALERT_ENABLED_TOOLTIP",
         default = true, get = getGuildKillAlert, set = setGuildKillAlert },

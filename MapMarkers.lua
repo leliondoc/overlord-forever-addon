@@ -1520,7 +1520,7 @@ end
 -- not run, so a closed world map costs nothing.
 local function SetOverlayPulse(overlay, active, r, g, b, alpha)
     if not active or not overlay.CreateAnimationGroup then
-        if overlay.pulse then
+        if overlay.pulse and overlay.pulse:IsShown() then
             overlay.pulseAnim:Stop()
             overlay.pulse:Hide()
         end
