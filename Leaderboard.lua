@@ -1670,6 +1670,10 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         -- Count every known member once, including players outside the visible
         -- top. A rival entering the ranking must never subtract a guild's HKs.
         local guildBuckets = {}
+        -- 1.4.0 guild tooltip: ranked members and their top 10, gathered in this
+        -- same sliced pass (no extra scan, no table per player). Kept in memory
+        -- only: SaveDisplayCache never writes it to SavedVariables.
+        local guildMembers = {}
         local alliKills, hordeKills = 0, 0
         if not forEach(dedupKillMaxIndex, function(key, count)
             local name = state.canonicalIndex[key] or key
@@ -1691,6 +1695,24 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                 if faction == "Horde" then bucket._facHorde = bucket._facHorde + count
                 elseif faction == "Alliance" then
                     bucket._facAlliance = bucket._facAlliance + count
+                end
+                if count > 0 then
+                    local m = guildMembers[key]
+                    if not m then
+                        m = { count = 0, names = {}, kills = {} }
+                        guildMembers[key] = m
+                    end
+                    m.count = m.count + 1
+                    local names, kills = m.names, m.kills
+                    local n = #kills
+                    if n < 10 or count > kills[n] then
+                        local pos = (n < 10) and (n + 1) or n
+                        while pos > 1 and kills[pos - 1] < count do
+                            kills[pos], names[pos] = kills[pos - 1], names[pos - 1]
+                            pos = pos - 1
+                        end
+                        kills[pos], names[pos] = count, name
+                    end
                 end
             end
         end) then return end
@@ -1779,6 +1801,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             sortedKills = sortedKills,
             byFaction = byFaction,
             sortedGuilds = sortedGuilds,
+            guildMembers = guildMembers,
             alliKills = alliKills,
             hordeKills = hordeKills,
             meta = meta,
@@ -1965,6 +1988,15 @@ function Overlord.Leaderboard:IsDisplayCacheScopeCurrent(cache)
         and LeaderboardCampaignEpochsMatch(bucket.campaignStart, campaign)
         and LeaderboardCampaignEpochsMatch(cache.scoreBucketEpoch, campaign)
         and GetMatchingLeaderboardScoreBucketEpoch(campaign) > 0
+end
+
+-- Ranked members of a guild for the leaderboard tooltip: { count, names, kills }
+-- (top 10, highest first), from the last display build. Nil until one finished.
+function Overlord.Leaderboard:GetGuildMembersSummary(guild)
+    local cache = self._displayCache
+    local members = cache and cache.guildMembers
+    if type(members) ~= "table" or type(guild) ~= "string" or guild == "" then return nil end
+    return members[guild:lower()]
 end
 
 function Overlord.Leaderboard:SaveDisplayCache(cache)

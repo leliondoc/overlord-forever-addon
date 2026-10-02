@@ -1519,6 +1519,46 @@ function Overlord.LeaderboardUI.OnKillRowEnter(row)
     GameTooltip:Show()
 end
 
+-- 1.4.0: hovering a guild lists its ranked members (top 10 + how many more),
+-- read from the display cache built in the background. No network, no scan.
+function Overlord.LeaderboardUI.OnGuildRowEnter(row)
+    local entry = row and row._olGuildEntry
+    if not entry or not GameTooltip then return end
+    GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+    local r, g, b = 1, 1, 1
+    if row.name and row.name.GetTextColor then r, g, b = row.name:GetTextColor() end
+    GameTooltip:AddLine("<" .. tostring(entry.guild or "") .. ">", r or 1, g or 1, b or 1)
+    local lb = Overlord.Leaderboard
+    local summary = lb and lb.GetGuildMembersSummary and lb:GetGuildMembersSummary(entry.guild)
+    local total = tonumber(entry.kills) or 0
+    if summary then
+        GameTooltip:AddLine(string.format(L.LB_GUILD_TIP_SUMMARY or "%d ranked members, %d kills",
+            summary.count, total), 0.8, 0.8, 0.8)
+        local sync = Overlord.Sync
+        for i = 1, #summary.names do
+            local name = summary.names[i]
+            local shown = (sync and sync.CanonicalForeverName and sync:CanonicalForeverName(name)) or name
+            local class = lb.GetExportPlayerMeta and select(1, lb:GetExportPlayerMeta(name)) or nil
+            local cr, cg, cb = GetClassColor(class)
+            GameTooltip:AddDoubleLine(i .. ". " .. tostring(shown), tostring(summary.kills[i]),
+                cr or 0.85, cg or 0.85, cb or 0.85, 1, 0.82, 0)
+        end
+        local more = summary.count - #summary.names
+        if more > 0 then
+            GameTooltip:AddLine(string.format(L.LB_GUILD_TIP_MORE or "+ %d more", more), 0.6, 0.6, 0.6)
+        end
+    else
+        GameTooltip:AddLine(string.format(L.LB_GUILD_TIP_TOTAL or "%d kills", total), 0.8, 0.8, 0.8)
+    end
+    GameTooltip:Show()
+end
+
+function Overlord.LeaderboardUI.OnGuildRowWheel(_, delta)
+    local scroll = lbFrame and lbFrame.scrollGuild
+    local handler = scroll and scroll:GetScript("OnMouseWheel")
+    if handler then handler(scroll, delta) end
+end
+
 -- La ligne capte la souris pour le survol : la molette reste au classement.
 function Overlord.LeaderboardUI.OnKillRowWheel(_, delta)
     local scroll = lbFrame and lbFrame.scrollKills
@@ -1623,6 +1663,12 @@ function Overlord.LeaderboardUI:CreateGuildRow(parent, index, yOffset, P)
     row.kills:SetPoint("CENTER", row, "CENTER", LB_GUILD_COL_KILLS, 0)
     row.kills:SetWidth(LB_GUILD_KILLS_TEXT_W)
     row.kills:SetJustifyH("CENTER")
+
+    row:EnableMouse(true)
+    row:SetScript("OnEnter", Overlord.LeaderboardUI.OnGuildRowEnter)
+    row:SetScript("OnLeave", GameTooltip_Hide)
+    row:EnableMouseWheel(true)
+    row:SetScript("OnMouseWheel", Overlord.LeaderboardUI.OnGuildRowWheel)
 
     row:Hide()
     return row
@@ -1927,6 +1973,13 @@ RenderGuildRows = function(force)
         if row and entry then
             used = slot
             PrepareVirtualRow(row, dataIndex, GUILD_ROW_HEIGHT, P)
+            -- Reused virtual rows: the tooltip follows the guild shown.
+            if row._olGuildEntry ~= entry then
+                row._olGuildEntry = entry
+                if GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(row) then
+                    Overlord.LeaderboardUI.OnGuildRowEnter(row)
+                end
+            end
             local rank = lbFrame._lbView.ranks and lbFrame._lbView.ranks.sortedGuilds[dataIndex] or dataIndex
             local isOwn = myGuild ~= "" and entry.guild == myGuild
             local paintKey = rank .. "|" .. tostring(entry.guild or "") .. "|"

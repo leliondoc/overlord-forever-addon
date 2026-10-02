@@ -278,4 +278,24 @@ if killRow._olPlayerName ~= 'Player 1' then
     assert(guildLookups > lookupsBefore and tip.lines[1] ~= 'Player 1',
         'Tooltip kept the previous player after the row was reused')
 end
+-- 1.4.0: hovering a guild row lists its ranked members (top 10 + how many more)
+-- from the display cache; nothing is computed or sent on hover.
+function tip:AddDoubleLine(left, right) self.lines[#self.lines + 1] = left .. " = " .. right end
+local guildRow
+for _, w in ipairs(frames) do
+    if w._olGuildEntry and w:IsShown() then guildRow = w; break end
+end
+assert(guildRow and guildRow.scripts.OnEnter, "Guild rows do not react to the mouse")
+local asked
+Overlord.Leaderboard.GetGuildMembersSummary = function(_, guild)
+    asked = guild
+    return { count = 12, names = { "Ana Bel", "Bo Rin" }, kills = { 40, 30 } }
+end
+guildRow.scripts.OnEnter(guildRow)
+assert(asked == guildRow._olGuildEntry.guild, "Tooltip looked up another guild")
+assert(tip.lines[1] == "<" .. asked .. ">", "Guild name missing: " .. tostring(tip.lines[1]))
+assert(tip.lines[2]:find("12", 1, true), "Ranked member count missing: " .. tostring(tip.lines[2]))
+assert(tip.lines[3] == "1. Ana Bel = 40" and tip.lines[4] == "2. Bo Rin = 30", "Top members wrong")
+assert(tip.lines[5] and tip.lines[5]:find("10", 1, true), "Remaining members not stated")
+assert(guildRow.scripts.OnMouseWheel, "Mouse wheel over a guild row no longer scrolls")
 print('Search UI: actual edit box/clear/Escape, bounded frames, original rank, scroll reset, totals, no data reads on typing, guild hover OK')

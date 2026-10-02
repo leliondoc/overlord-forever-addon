@@ -161,6 +161,18 @@ for _, row in ipairs(cache.sortedGuilds) do
     if row.guild == "French Guild" then found = row.kills end
 end
 assert(found == 620, "Guild members disappeared or aliases were double counted")
+-- 1.4.0 guild tooltip: ranked members counted once (aliases merged), top 10
+-- highest first, gathered in the same pass; never written to SavedVariables.
+local french = assert(lb:GetGuildMembersSummary("French Guild"), "No member summary for a ranked guild")
+assert(french.count == 1 and #french.names == 1 and french.kills[1] == 620,
+    "Guild member summary double counted an alias: " .. french.count)
+local other = assert(lb:GetGuildMembersSummary("other guild"), "Summary lookup is case-sensitive")
+assert(other.count == 4999 and #other.names == 10, "Top 10 / member count wrong: " .. other.count)
+assert(other.kills[1] == 5999 and other.kills[10] == 5990, "Top 10 not highest first")
+for i = 2, 10 do assert(other.kills[i] < other.kills[i - 1], "Top 10 out of order at " .. i) end
+assert(lb:GetGuildMembersSummary("No Such Guild") == nil)
+local saved = OverlordDB.leaderboardDisplayCache
+assert(not saved or saved.guildMembers == nil, "Member lists leaked into SavedVariables")
 lb:SetPlayerKills("New Rival", 621, true)
 lb:MarkDirty()
 assert(lb:EnsureNetworkHotIndexesPrepared() ~= nil)
