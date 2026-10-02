@@ -1680,11 +1680,11 @@ function Overlord.UI:CreateZoneListSection(parent)
     -- Alliance crest left of the blue side, Horde crest right of the red side
     -- (the logos of the chat alerts).
     local allyCrest = domBar:CreateTexture(nil, "OVERLAY")
-    allyCrest:SetSize(18, 18)
+    allyCrest:SetSize(22, 22)
     allyCrest:SetPoint("RIGHT", domBar, "LEFT", -3, 0)
     allyCrest:SetTexture("Interface\\Timer\\Alliance-Logo")
     local hordeCrest = domBar:CreateTexture(nil, "OVERLAY")
-    hordeCrest:SetSize(18, 18)
+    hordeCrest:SetSize(22, 22)
     hordeCrest:SetPoint("LEFT", domBar, "RIGHT", 3, 0)
     hordeCrest:SetTexture("Interface\\Timer\\Horde-Logo")
     domBar.allyCrest, domBar.hordeCrest = allyCrest, hordeCrest

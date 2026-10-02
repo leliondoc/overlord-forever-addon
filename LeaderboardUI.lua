@@ -1312,7 +1312,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.captionAlli = leftCol:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     lbFrame.captionAlli:SetPoint("TOP", leftCol, "TOP", 0, -2)
     lbFrame.captionAlli:SetTextColor(P.accent[1], P.accent[2], P.accent[3])
-    lbFrame.captionAlli:SetText(LbCrestMarkup("Alliance", 14) .. " " .. (L.LB_CAPTURES_ALLIANCE or "Alliance: Captures"))
+    lbFrame.captionAlli:SetText(LbCrestMarkup("Alliance", 18) .. " " .. (L.LB_CAPTURES_ALLIANCE or "Alliance: Captures"))
 
     local captureScrollViewportH = capturesBlockH - 16 - captureScrollBottomInset
 
@@ -1360,7 +1360,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.captionHorde = rightCol:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     lbFrame.captionHorde:SetPoint("TOP", rightCol, "TOP", 0, -2)
     lbFrame.captionHorde:SetTextColor(P.accent[1], P.accent[2], P.accent[3])
-    lbFrame.captionHorde:SetText(LbCrestMarkup("Horde", 14) .. " " .. (L.LB_CAPTURES_HORDE or "Horde: Captures"))
+    lbFrame.captionHorde:SetText(LbCrestMarkup("Horde", 18) .. " " .. (L.LB_CAPTURES_HORDE or "Horde: Captures"))
 
     local scrollHorde = CreateFrame("ScrollFrame", "OverlordLBScrollHorde", rightCol)
     scrollHorde:SetSize(colWidth, captureScrollViewportH)
@@ -1562,12 +1562,12 @@ function Overlord.LeaderboardUI:CreateRow(parent, index, yOffset, P)
     row.glow:Hide()
 
     row.crest = row:CreateTexture(nil, "OVERLAY")
-    row.crest:SetSize(15, 15)
+    row.crest:SetSize(19, 19)
     row.crest:SetPoint("LEFT", row, "LEFT", killCols.player.left + 4, 0)
     row.crest:Hide()
 
     row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    row.name:SetPoint("LEFT", row, "LEFT", killCols.player.left + 22, 0)
+    row.name:SetPoint("LEFT", row, "LEFT", killCols.player.left + 26, 0)
     row.name:SetPoint("RIGHT", row, "LEFT", killCols.player.right - 6, 0)
     row.name:SetJustifyH("CENTER")
     row.name:SetWordWrap(false)
@@ -2301,8 +2301,8 @@ function Overlord.LeaderboardUI:Refresh()
     local totalFmt = string.format(L.LB_TOTAL_FORMAT, dc.alliKills or 0, dc.hordeKills or 0)
     if lbFrame._lbTotalFmt ~= totalFmt then
         lbFrame._lbTotalFmt = totalFmt
-        lbFrame.totalText:SetText(LbCrestMarkup("Alliance", 20) .. "  " .. totalFmt
-            .. "  " .. LbCrestMarkup("Horde", 20))
+        lbFrame.totalText:SetText(LbCrestMarkup("Alliance", 24) .. "  " .. totalFmt
+            .. "  " .. LbCrestMarkup("Horde", 24))
     end
 
     local startDate, endDate = Overlord:GetCampaignDateRange()

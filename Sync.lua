@@ -9092,11 +9092,18 @@ function Overlord.Sync:BroadcastKill(zoneId, totalKills, killScoringAtEvent,
             if Overlord.Leaderboard and Overlord.Leaderboard.SetPlayerLevel then
                 Overlord.Leaderboard:SetPlayerLevel(playerName, playerLevel)
             end
-            local payload = Overlord.Sync.BuildKillBroadcastPayload
-                and Overlord.Sync:BuildKillBroadcastPayload(
+            -- Our race rides along at most every 10 min (field on Sync: the chunk is
+            -- near the 200-locals limit). Communities used to supply everyone's race;
+            -- on Forever only the weekly beacon and the slow LR catch-up remained.
+            local syncObj = Overlord.Sync
+            local withRace = GetTime() - (syncObj._lastRaceInKillAt or -1000) >= 600
+            local payload = syncObj.BuildKillBroadcastPayload
+                and syncObj:BuildKillBroadcastPayload(
                     playerName, d.zoneId, totalKills, class or "", faction, d.campaignEpoch,
-                    guildTag, locTag, guildAt, d.bucketEpoch, playerLevel)
+                    guildTag, locTag, guildAt, d.bucketEpoch, playerLevel,
+                    withRace and raceFile or nil, withRace and raceSex or nil)
             if not payload then killBroadcastData = nil; return end
+            if withRace then syncObj._lastRaceInKillAt = GetTime() end
             local isLarge = Overlord.Sync.IsLargeEvent and Overlord.Sync:IsLargeEvent()
             Overlord.Sync:SendKillBroadcast(payload)
             -- Nos propres K ne nous reviennent pas : les compter ici pour notre guilde.

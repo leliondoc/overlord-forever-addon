@@ -3637,7 +3637,7 @@ function Overlord.Sync:BuildLeaderboardRacePayload(playerName, raceFile, raceSex
 end
 
 function Overlord.Sync:BuildKillBroadcastPayload(playerName, zoneId, totalKills, class, faction,
-    epoch, guild, locale, guildAt, bucketEpoch, playerLevel)
+    epoch, guild, locale, guildAt, bucketEpoch, playerLevel, raceFile, raceSex)
     playerName = tostring(playerName or "")
     zoneId = tostring(zoneId or "")
     totalKills = tostring(totalKills or "0")
@@ -3655,6 +3655,19 @@ function Overlord.Sync:BuildKillBroadcastPayload(playerName, zoneId, totalKills,
         return string.format("%s:%s:%s:%s:%s:%s:%s:%s:%d:%s:%d",
             playerName, zoneId, totalKills, class, faction, epoch, g or "", loc or "",
             normalizeKillPayloadGuildAt(ga), bucketEpochToken, playerLevel)
+    end
+    -- Optional race + sex (13-field K, the 9.7.2 layout every client still parses):
+    -- the owner's own race, sent now and then by the caller so that players who
+    -- missed the weekly race beacon learn it from a kill, at ~10 bytes. Dropped
+    -- first if the payload is too long.
+    local raceToken = raceFile and self.NormalizeRaceFileToken and self:NormalizeRaceFileToken(raceFile)
+    if raceToken and not raceToken:find(":", 1, true) then
+        local sexCode = math.floor(tonumber(raceSex) or 0)
+        if sexCode ~= 2 and sexCode ~= 3 then sexCode = 0 end
+        local withRace = string.format("%s:%s:%s:%s:%s:%s:%s:%s:%d:%s:%d:%s:%d",
+            playerName, zoneId, totalKills, class, faction, epoch, guild or "", locale or "",
+            normalizeKillPayloadGuildAt(guildAt), raceToken, sexCode, bucketEpochToken, playerLevel)
+        if #withRace <= MAX_KILL_PAYLOAD_BYTES then return withRace end
     end
     local payload = pack(guild, locale, guildAt)
     if #payload <= MAX_KILL_PAYLOAD_BYTES then return payload end
