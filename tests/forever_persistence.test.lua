@@ -59,6 +59,19 @@ do
     Overlord:SwapRulesetOutposts("global", "normal")
     assert(next(OverlordDB.outposts) == nil, "Last week's PvE outposts came back after the reset")
     Overlord:SwapRulesetOutposts("normal", "normal")
+    -- A Normal alt already logged before this check (lastPool = current) still
+    -- holds PvP-stamped rows: the stamp wins, they are parked as PvP.
+    local stale = { site = { status = "held", ownerGuild = "EMPIRE", pool = "global" } }
+    OverlordDB = { lastResetTimestamp = 3000, outposts = stale, outpostTenants = {}, outpostCaptureCounts = {} }
+    Overlord:SwapRulesetOutposts("normal", "normal")
+    assert(next(OverlordDB.outposts) == nil, "PvP-stamped rows stayed on the Normal alt")
+    Overlord:SwapRulesetOutposts("normal", "global")
+    assert(OverlordDB.outposts == stale, "PvP rows parked from the Normal alt were lost")
+    -- Unstamped rows on an unchanged pool: nothing moves (every PvP login).
+    local plain = { site = { status = "neutral" } }
+    OverlordDB = { lastResetTimestamp = 3000, outposts = plain }
+    Overlord:SwapRulesetOutposts("global", "global")
+    assert(OverlordDB.outposts == plain and OverlordDB.outpostsByPool == nil)
 end
 assert(Overlord:SavedVarsPoolFromLocaleTag("frFR") == nil)
 local globalReset = Overlord:GetLastResetTimestamp()

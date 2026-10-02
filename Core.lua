@@ -3045,9 +3045,11 @@ function Overlord:Initialize()
         for _, zone in ipairs(Overlord.ZoneDatabase or {}) do
             if zone.status ~= "in_progress" then zone.updatedAt = 0 end
         end
-        self:SwapRulesetOutposts(lastPool, currentPool)
         DebugOverlord("Changement de pool : " .. lastPool .. " -> " .. currentPool .. " (updatedAt = 0)")
     end
+    -- Every login (cheap, ~20 sites): also heals an alt whose rows another
+    -- ruleset stamped before this check existed.
+    self:SwapRulesetOutposts(lastPool, currentPool)
     OverlordDB.lastSessionPool = currentPool
     OverlordDB.lastSessionRealmKey = nil
 
@@ -3548,11 +3550,22 @@ end
 -- world we leave and bring back ours if it is from this same campaign week;
 -- otherwise start empty (the weekly reset passed meanwhile).
 function Overlord:SwapRulesetOutposts(lastPool, currentPool)
-    if not OverlordDB or lastPool == currentPool then return end
+    if not OverlordDB or type(currentPool) ~= "string" or currentPool == "" then return end
+    -- Rows carry the pool of the campaign that stamped them: trust that over the
+    -- last session (an alt first logged before this check kept the PvP rows).
+    local stamped
+    local rp = self.RealmPools
+    for _, st in pairs(type(OverlordDB.outposts) == "table" and OverlordDB.outposts or {}) do
+        local p = type(st) == "table" and rp and rp.NormalizeRegionPool
+            and rp:NormalizeRegionPool(st.pool or "") or ""
+        if p ~= "" then stamped = p; break end
+    end
+    local leaving = stamped or lastPool
+    if type(leaving) ~= "string" or leaving == "" or leaving == currentPool then return end
     local parked = OverlordDB.outpostsByPool or {}
     OverlordDB.outpostsByPool = parked
     local week = tonumber(OverlordDB.lastResetTimestamp) or 0
-    parked[lastPool] = {
+    parked[leaving] = {
         epoch = week, outposts = OverlordDB.outposts,
         tenants = OverlordDB.outpostTenants, counts = OverlordDB.outpostCaptureCounts,
     }
