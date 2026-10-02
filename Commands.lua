@@ -320,6 +320,12 @@ local function StartNetworkProbe()
 
         -- 2. Details, for debugging: grey, with any loss or refusal counter in red.
         R.Title("Details:")
+        -- 1.4.0: each Forever ruleset runs its own campaign.
+        local pools = Overlord.RealmPools
+        if pools and pools.GetRuleset then
+            R.Detail("Campaign: " .. pools:GetRuleset() .. " ruleset (pool " .. pools:GetOverlordPoolTag()
+                .. ", channel OverlordF" .. pools:GetChannelSuffix() .. ")")
+        end
         if sync.GetHistoryCatchupDiagnostics then
             for _, line in ipairs(sync:GetHistoryCatchupDiagnostics()) do R.Detail(line) end
         end

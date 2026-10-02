@@ -99,6 +99,7 @@ jobs:
           lua5.1 tests/forever_chat_faction_icon.test.lua
           lua5.1 tests/forever_kill_race_field.test.lua
           lua5.1 tests/forever_reset_timestamp_cache.test.lua
+          lua5.1 tests/forever_ruleset_campaigns.test.lua
           lua5.1 tests/forever_victory_raid_alert.test.lua
           lua5.1 tests/forever_direct_route_sticky.test.lua
           lua5.1 tests/forever_guild_roster_hints.test.lua

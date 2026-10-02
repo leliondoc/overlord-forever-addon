@@ -12,7 +12,12 @@ local TUNING = Overlord.SyncTuning
 local L = Overlord.L
 
 local PREFIX = "OverlordF"
-local CHANNEL_NAME = "OverlordF"
+-- 1.4.0: one channel per Forever ruleset. PvP keeps "OverlordF" (the current
+-- population and 1.3.x clients); Normal/RP/Hardcore use OverlordFN/R/H.
+local function ChannelName()
+    local rp = Overlord.RealmPools
+    return "OverlordF" .. (rp and rp.GetChannelSuffix and rp:GetChannelSuffix() or "")
+end
 -- Forever : canal royaume + groupe + communaute + BNet (cross-faction, pas de Warmode).
 local SYNC_USE_REALM_CHANNEL = true
 local SYNC_USE_BNET_OUTBOUND = true
@@ -672,7 +677,7 @@ function Overlord.Sync:JoinChannel(attempt, generation)
     if not SYNC_USE_REALM_CHANNEL then return end
     attempt = attempt or 1
     if not generation then
-        local existingId = GetChannelName(CHANNEL_NAME)
+        local existingId = GetChannelName(ChannelName())
         if existingId and existingId > 0 then return end
         -- Core, Resume et le ticker peuvent tous demander un join au meme moment.
         -- Une seule chaine possede les retries et les SR +15/+35.
@@ -717,14 +722,14 @@ function Overlord.Sync:JoinChannel(attempt, generation)
     end
     -- frameID 0 = canal invisible (les joueurs ne voient pas le canal dans leur chat)
     -- WoW 12.0.5 : securecall pour ne pas taint le systeme de chat
-    securecall(JoinChannelByName, CHANNEL_NAME, nil, 0, 0)
+    securecall(JoinChannelByName, ChannelName(), nil, 0, 0)
     C_Timer.After(3 * attempt, function()
         if Overlord.Sync._joinChannelAttemptPending ~= generation then return end
         if Overlord.InstanceSuspended then
             FinishJoinAttempt()
             return
         end
-        local id = GetChannelName(CHANNEL_NAME)
+        local id = GetChannelName(ChannelName())
         if id and id > 0 then
             FinishJoinAttempt()
             Overlord.Sync:SendSyncRequest()
@@ -1009,7 +1014,7 @@ end
 
 -- Retourne le canal prioritaire : groupe (cross-realm) > channel (realm uniquement)
 function Overlord.Sync:GetChannelId()
-    local id = GetChannelName(CHANNEL_NAME)
+    local id = GetChannelName(ChannelName())
     if id and id > 0 then return id end
     return nil
 end
@@ -2751,6 +2756,8 @@ function Overlord.Sync:OnBNetMessage(message, senderID)
     -- Format normal: msgType:band:payload (band = realm_A ou realm_H)
     local band, payload = strsplit(":", rest, 2)
     if band and band:match("_[AH]$") then
+        -- 1.4.0: a Battle.net friend on another ruleset plays another campaign.
+        if band:match("^Forever_") and not IsCompatibleForeverBand(band) then return end
         bnet_links[senderID] = band
     else
         payload = rest
@@ -5751,6 +5758,9 @@ function Overlord.Sync:ResolveDirectGroupTerritorialPool(remotePool, sender, sou
         pool = pool:lower():match("^%s*([a-z]+)%s*$") or ""
         if pool == "global" or pool == "na" or pool == "us" or pool == "eu"
             or pool == "fr" or pool == "de" then return "global" end
+        -- 1.4.0: one campaign per Forever ruleset (RealmPools.lua).
+        if Overlord.RealmPools and Overlord.RealmPools.RULESET_POOLS
+            and Overlord.RealmPools.RULESET_POOLS[pool] then return pool end
         return ""
     end
     local localPool = Overlord.GetCurrentSavedVarsPool

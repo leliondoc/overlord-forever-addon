@@ -16,7 +16,9 @@ test("Forever uses no community: channel + Battle.net relay only", () => {
     assert.doesNotMatch(scan.slice(0, scan.indexOf("\nend")), /Broadcast\("NH"/);
     assert.match(core, /^Overlord\.BetaNetworkEnabled = true$/m);
     assert.match(sync, /global\s*=\s*\{\s*"0m7kdXcnvR"\s*\}/);
-    assert.match(pools, /function RealmPools:GetOverlordPoolTag\(\)[\s\S]*?return "global"/);
+    // 1.4.0: one campaign per ruleset; PvP keeps the historical "global" pool.
+    assert.match(pools, /pvp = "global"/);
+    assert.match(pools, /function RealmPools:GetOverlordPoolTag\(\)[\s\S]*?RULESET_POOL\[/);
     assert.match(beta, /addon\.BetaNetworkEnabled ~= false/);
     assert.match(beta, /NormalizeRegionPool\(pool\)/);
 });

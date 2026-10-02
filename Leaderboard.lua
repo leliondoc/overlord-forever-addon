@@ -236,6 +236,9 @@ local function normalizeSavedVarsPool(pool)
     pool = pool:lower()
     if pool == "global" or pool == "na" or pool == "us" or pool == "eu"
         or pool == "fr" or pool == "de" then return "global" end
+    -- 1.4.0: one campaign per Forever ruleset (RealmPools.lua).
+    if Overlord.RealmPools and Overlord.RealmPools.RULESET_POOLS
+        and Overlord.RealmPools.RULESET_POOLS[pool] then return pool end
     if VALID_SAVED_VARS_POOLS[pool] then return pool end
     return ""
 end
@@ -5691,7 +5694,7 @@ function Overlord.Leaderboard:OpenAtomicWeeklyBucket(archiveEpoch, resetEpoch, c
     -- automatically: a real weekly reset must remain a reset.
     local recoveryPool = Overlord.GetCurrentLeaderboardSavedVarsPool
         and Overlord:GetCurrentLeaderboardSavedVarsPool() or nil
-    if recoveryPool == "global" then
+    if type(recoveryPool) == "string" and recoveryPool ~= "" then -- 1.4.0: every ruleset campaign
         OverlordDB.leaderboardPreviousCampaigns = OverlordDB.leaderboardPreviousCampaigns or {}
         OverlordDB.leaderboardPreviousCampaigns[recoveryPool] = {
             bucket = oldBucket,

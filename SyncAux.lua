@@ -3256,6 +3256,9 @@ local function NormalizeRelayPoolTag(pool)
     pool = pool:lower():match("^%s*([a-z]+)%s*$") or ""
     if pool == "global" or pool == "na" or pool == "us" or pool == "eu"
         or pool == "fr" or pool == "de" then return "global" end
+    -- 1.4.0: one campaign per Forever ruleset (RealmPools.lua).
+    if Overlord.RealmPools and Overlord.RealmPools.RULESET_POOLS
+        and Overlord.RealmPools.RULESET_POOLS[pool] then return pool end
     return ""
 end
 

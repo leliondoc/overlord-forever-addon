@@ -3017,26 +3017,27 @@ function Overlord:Initialize()
     OverlordDB.leaderboardsByPool = OverlordDB.leaderboardsByPool or {}
     -- Seed the global target with the standalone legacy root before union.
     if type(OverlordDB.leaderboardsByPool[currentLeaderboardPool]) ~= "table" then
+        -- 1.4.0: a new ruleset campaign starts empty; only the PvP campaign
+        -- ("global") inherits the legacy root (OverlordDB.leaderboard).
         OverlordDB.leaderboardsByPool[currentLeaderboardPool] =
-            OverlordDB.leaderboard or EmptyLeaderboardBucket()
+            (currentLeaderboardPool == "global" and OverlordDB.leaderboard)
+            or EmptyLeaderboardBucket()
     end
     self:UnifyEuropeanLeaderboardBuckets()
     OverlordDB.leaderboard = OverlordDB.leaderboardsByPool[currentLeaderboardPool]
     if lastPool ~= "" and lastPool ~= currentPool then
         poolChanged = true
+        -- 1.4.0: since regions merged, a pool change is a ruleset change (alt on
+        -- another ruleset, account-wide SavedVariables). That map belongs to
+        -- another world: every zone, captured ones included, yields to the first
+        -- state its own ruleset sends (updatedAt = 0).
         for _, savedData in pairs(OverlordDB.zones or {}) do
             if type(savedData) == "table" and savedData.status ~= "in_progress" then
-                local ct = tonumber(savedData.capturedTime) or 0
-                if not ((savedData.owner == "Alliance" or savedData.owner == "Horde") and ct > 0) then
-                    savedData.updatedAt = 0
-                end
+                savedData.updatedAt = 0
             end
         end
         for _, zone in ipairs(Overlord.ZoneDatabase or {}) do
-            local ct = tonumber(zone.capturedTime) or 0
-            if not ((zone.owner == "Alliance" or zone.owner == "Horde") and ct > 0) then
-                zone.updatedAt = 0
-            end
+            if zone.status ~= "in_progress" then zone.updatedAt = 0 end
         end
         DebugOverlord("Changement de pool : " .. lastPool .. " -> " .. currentPool .. " (updatedAt = 0)")
     end
@@ -4858,7 +4859,7 @@ function Overlord:ResetAll()
     OverlordDB.dominationVictoryEvents = OverlordDB.dominationVictoryEvents or { byPool = {} }
     OverlordDB.dominationVictoryEvents.byPool =
         OverlordDB.dominationVictoryEvents.byPool or {}
-    for _, oldPool in ipairs({ "fr", "eu", "de", "us", "na" }) do
+    for _, oldPool in ipairs({ "fr", "eu", "de", "us", "na", "normal", "rp", "hardcore" }) do
         OverlordDB.dominationVictoryEvents.byPool[oldPool] = nil
     end
     OverlordDB.dominationVictoryEvents.byPool.global = nil
