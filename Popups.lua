@@ -840,6 +840,34 @@ function Overlord.Popups:ShowDialog(seenId, title, body, markMode, opts)
     end
     -- Bienvenue / cor de guerre : son dedie uniquement (pas lb_open en plus).
     dialogFrame._skipPanelOpenSound = opts.addonSoundKey or opts.playFactionHorn or nil
+    -- Optional auto-close (daily Battle Report): fades out after opts.autoCloseSec,
+    -- postponed while the mouse is over the window so a player can still read it.
+    -- A newer dialog bumps the token, so an older timer never closes it.
+    local token = (dialogFrame._olAutoCloseToken or 0) + 1
+    dialogFrame._olAutoCloseToken = token
+    if dialogFrame._olFadeOut then dialogFrame._olFadeOut:Stop() end
+    dialogFrame:SetAlpha(1)
+    if opts.autoCloseSec and C_Timer and C_Timer.After then
+        local function check()
+            local f = dialogFrame
+            if not f or not f:IsShown() or f._olAutoCloseToken ~= token then return end
+            if f.IsMouseOver and f:IsMouseOver() then C_Timer.After(1, check); return end
+            if not f._olFadeOut and f.CreateAnimationGroup then
+                local group = f:CreateAnimationGroup()
+                local fade = group:CreateAnimation("Alpha")
+                fade:SetFromAlpha(1)
+                fade:SetToAlpha(0)
+                fade:SetDuration(0.4)
+                group:SetScript("OnFinished", function()
+                    HideDialog()
+                    f:SetAlpha(1)
+                end)
+                f._olFadeOut = group
+            end
+            if f._olFadeOut then f._olFadeOut:Play() else HideDialog() end
+        end
+        C_Timer.After(opts.autoCloseSec, check)
+    end
     dialogFrame:Show()
 end
 
@@ -2135,7 +2163,8 @@ Overlord.Popups:RegisterLoginAnnouncement({
 Overlord.Popups:RegisterLoginAnnouncement({
     id = "daily_battle_report",
     daily = true,
-    opts = { showFactionSeal = true },
+    -- Closes by itself after 4 s (kept open while hovered).
+    opts = { showFactionSeal = true, autoCloseSec = 4 },
     when = function()
         if not IsPlayerOnActiveFront() then return false end
         return BuildBattleReportBody() ~= nil
