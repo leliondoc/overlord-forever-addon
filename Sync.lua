@@ -5143,12 +5143,23 @@ end
 function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
     -- Routed request: delayed replies return through SendWhisper's beta route.
     local viaBetaBroadcast = false
+    local enemyFriendKey = nil
     if channel == "BETA" then
         if not Overlord.BetaNetwork or not Overlord.BetaNetwork:IsDispatching(sender) then return end
         -- Point-to-point catch-up (1.2.4): a request that crossed a relay is not
         -- answered; its reply would have to cross the same relays back.
         local context = Overlord.BetaNetwork.context
         if (tonumber(context and context.hops) or 0) > 0 then return end
+        -- 1.3.6: an opposite-faction Battle.net friend asking first-hand (its faction
+        -- comes from Battle.net, not from the packet) also gets our victories.
+        if context and context.transport == "BNET" and self.GetResolvedBNetPlayerFaction then
+            local friendFaction = self:GetResolvedBNetPlayerFaction(sender)
+            local mine = Overlord.PlayerFaction
+            if (friendFaction == "Alliance" or friendFaction == "Horde")
+                and (mine == "Alliance" or mine == "Horde") and friendFaction ~= mine then
+                enemyFriendKey = tostring(sender):lower()
+            end
+        end
         -- Always ~2 responders per broadcast, whatever the transport. Answering a
         -- Battle.net broadcast in full (tried in 1.2.4 testing) made every friend
         -- reply at once; the replies saturated the relay (24 % losses in 8 min).
@@ -5311,6 +5322,8 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
     -- tous la garde et construisent/envoient des files concurrentes.
     syncResponseGeneration = syncResponseGeneration + 1
     local responseGeneration = syncResponseGeneration
+    self._srEnemyFriend = enemyFriendKey
+        and { generation = responseGeneration, key = enemyFriendKey } or nil
     local responseTickerStarted = false
     syncResponseInFlight = true
     -- Filet de deverrouillage : une erreur Lua imprÃ©vue dans le constructeur ne doit jamais
@@ -5503,6 +5516,11 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         if self.AppendVictoryBonusToSrQueue and not bnetTarget then
             self:AppendVictoryBonusToSrQueue(
                 queue, minimalResponseOnly, directSR)
+        end
+        local enemyFriend = self._srEnemyFriend
+        if enemyFriend and enemyFriend.generation == responseGeneration
+            and self.AppendOwnFactionVictoriesForEnemyFriend then
+            self:AppendOwnFactionVictoriesForEnemyFriend(queue, enemyFriend.key)
         end
 
         -- Stocks de mines (MS) : utile aux late joiners qui voient 100/100 partout sinon.

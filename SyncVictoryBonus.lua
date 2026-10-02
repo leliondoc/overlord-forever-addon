@@ -247,7 +247,7 @@ BeginVictoryProjection = function(store, state)
     end
 
     local function Publish(rawById, rawCount, accepted, acceptedRows, byFront, latestByFront,
-        totals, payloads)
+        totals, payloads, factionPayloads)
         if state.generation ~= generation then
             C_Timer.After(0, function() BeginVictoryProjection(store, state) end)
             return
@@ -270,6 +270,7 @@ BeginVictoryProjection = function(store, state)
                 epoch = store.epoch,
                 pool = pool,
                 payloads = payloads,
+                factionPayloads = factionPayloads,
             }
         end
         if Overlord.MarkDirty then Overlord:MarkDirty() end
@@ -287,11 +288,22 @@ BeginVictoryProjection = function(store, state)
             local pool = CurrentVictoryPoolTag()
             local prefix = tostring(store.epoch) .. ":" .. pool .. ":"
             local payloads, batch, batchLen = {}, {}, 0
+            -- 1.3.6: the same rows packed per winning faction, for the opposite-faction
+            -- Battle.net friends (AppendOwnFactionVictoriesForEnemyFriend).
+            local factionPayloads = { Alliance = {}, Horde = {} }
+            local factionBatches = { Alliance = { len = 0 }, Horde = { len = 0 } }
             local cursor = 1
             local function FlushBatch()
                 if #batch == 0 then return end
                 payloads[#payloads + 1] = prefix .. table.concat(batch, "|")
                 batch, batchLen = {}, 0
+            end
+            local function FlushFaction(faction)
+                local fb = factionBatches[faction]
+                if #fb == 0 then return end
+                local list = factionPayloads[faction]
+                list[#list + 1] = prefix .. table.concat(fb, "|")
+                factionBatches[faction] = { len = 0 }
             end
             local function PackStep()
                 if state.generation ~= generation then
@@ -311,13 +323,25 @@ BeginVictoryProjection = function(store, state)
                     if batchLen + addLen > (VB_MAX_PAYLOAD - #prefix) then FlushBatch() end
                     batch[#batch + 1] = encoded
                     batchLen = batchLen + ((#batch > 1) and (#encoded + 1) or #encoded)
+                    local fb = factionBatches[ev.faction]
+                    if fb then
+                        if fb.len + ((#fb > 0) and (#encoded + 1) or #encoded)
+                            > (VB_MAX_PAYLOAD - #prefix) then
+                            FlushFaction(ev.faction)
+                            fb = factionBatches[ev.faction]
+                        end
+                        fb[#fb + 1] = encoded
+                        fb.len = fb.len + ((#fb > 1) and (#encoded + 1) or #encoded)
+                    end
                     cursor = cursor + 1
                     work = work + 1
                 end
                 if cursor <= #sortedAccepted then Continue(PackStep) return end
                 FlushBatch()
+                FlushFaction("Alliance")
+                FlushFaction("Horde")
                 Publish(rawById, rawCount, accepted, sortedAccepted, byFront,
-                    latestByFront, totals, payloads)
+                    latestByFront, totals, payloads, factionPayloads)
             end
             PackStep()
         end)
@@ -1058,6 +1082,40 @@ function Overlord.Sync:BuildVictoryBonusPayloadForVictory(frontId, faction, vict
         { ev },
         ev.campaignEpoch,
         CurrentVictoryPoolTag())
+end
+
+-- 1.3.6: each faction logs all of its own victories (its channel replays them), but
+-- learnt the other faction's only live, with local proof: a victory nobody on the
+-- other side saw was never counted there, and both bars drifted apart (live:
+-- Alliance 49/38 vs Horde 48/39). A direct opposite-faction Battle.net friend that
+-- pulls our state now gets our faction's victories; it already trusts a direct
+-- peer's historical replay, and its own channel then spreads them. Only what this
+-- friend has not had yet in this session: the rows are sorted by date, so a new
+-- victory only changes the last packet onward (an older late-learnt one resends all).
+function Overlord.Sync:AppendOwnFactionVictoriesForEnemyFriend(queue, friendKey)
+    local mine = Overlord.PlayerFaction
+    if not queue or type(friendKey) ~= "string" or (mine ~= "Alliance" and mine ~= "Horde") then
+        return 0
+    end
+    local store, pool, epoch = EnsureVictoryEventsDB()
+    local cache = vbSrPayloadCache
+    if not store or not cache or not cache.factionPayloads or cache.revision ~= store.revision
+        or cache.epoch ~= epoch or cache.pool ~= pool then return 0 end
+    local list = cache.factionPayloads[mine]
+    if not list or #list == 0 then return 0 end
+    self._vbEnemyFriendSent = self._vbEnemyFriendSent or {}
+    local sent = self._vbEnemyFriendSent[friendKey]
+    local from = 1
+    if sent and sent.epoch == epoch and sent.first == list[1] then
+        if sent.count == #list and sent.last == list[#list] then return 0 end
+        from = math.max(1, math.min(sent.count, #list))
+    end
+    self._vbEnemyFriendSent[friendKey] = {
+        epoch = epoch, first = list[1], last = list[#list], count = #list }
+    for i = from, #list do
+        queue[#queue + 1] = { type = "VB", data = list[i] }
+    end
+    return #list - from + 1
 end
 
 function Overlord.Sync:AppendVictoryBonusToSrQueue(queue, minimalResponseOnly, directSR)

@@ -383,4 +383,57 @@ do
     Overlord.GetCurrentCampaignStartTs, server = savedStart, savedServer
 end
 
+-- 10. 1.3.6 (live: Alliance 49/38 vs Horde 48/39): a victory the other faction never
+-- saw live reaches it through a direct opposite-faction Battle.net friend's state
+-- pull, then spreads on that faction's own replay. Only the friend's own faction
+-- is sent, and only what that friend has not had yet.
+do
+    server = S + 3600
+    local missedTs = S + 100
+    victory(A2, "f4", "Alliance", missedTs)
+    pump({ A1, A2 }) -- nobody of the Horde online
+    local a1A, a1H = counts(A1)
+    local h1A, h1H = counts(H1)
+    assert(h1A == a1A - 1 and h1H == a1H, "fixture: the Horde should have missed one victory")
+
+    use(A1)
+    sync:AppendVictoryBonusToSrQueue({}, true, false) -- projects A1's journal
+    local queue = {}
+    local sent = sync:AppendOwnFactionVictoriesForEnemyFriend(queue, "horde one")
+    assert(sent > 0 and #queue == sent, "No victory offered to the opposite-faction friend")
+    for _, row in ipairs(queue) do
+        assert(row.type == "VB", "Unexpected packet kind " .. tostring(row.type))
+        local events = row.data:match("^%d+:[^:]+:(.*)$")
+        for part in events:gmatch("[^|]+") do
+            assert(part:sub(1, 2) == "A,", "A Horde victory was sent to a Horde friend: " .. part)
+        end
+    end
+    assert(sync:AppendOwnFactionVictoriesForEnemyFriend({}, "horde one") == 0,
+        "The same journal was resent to the same friend")
+
+    for _, row in ipairs(queue) do receive(H1, "Alliance One", "VB", row.data) end
+    local n1A, n1H = counts(H1)
+    assert(n1A == a1A and n1H == a1H, "Horde friend still counts " .. n1A .. "/" .. n1H
+        .. " after the pull, expected " .. a1A .. "/" .. a1H)
+
+    -- The friend's own faction then learns it through its usual replay.
+    use(H1)
+    local replay = {}
+    sync:AppendVictoryBonusToSrQueue(replay, false, true)
+    for _, row in ipairs(replay) do receive(H2, "Horde One", "VB", row.data) end
+    sameBar({ A1, A2, H1, H2 }, bar(A1), "cross-faction victory catch-up")
+
+    -- A later victory: the next pull carries only the last packet onward.
+    server = S + 7200
+    victory(A1, "f2", "Alliance", S + 3700)
+    pump({ A1, A2 })
+    use(A1)
+    sync:AppendVictoryBonusToSrQueue({}, true, false)
+    local delta = {}
+    sync:AppendOwnFactionVictoriesForEnemyFriend(delta, "horde one")
+    assert(#delta >= 1 and #delta <= 2, "A new victory resent the whole journal: " .. #delta .. " packets")
+    for _, row in ipairs(delta) do receive(H1, "Alliance One", "VB", row.data) end
+    assert(bar(H1) == bar(A1), "The new victory did not reach the Horde friend")
+end
+
 print("Forever domination v2: bar = 50 +/- victories, no wood, relay/BNet convergence, replay, old clients OK")
