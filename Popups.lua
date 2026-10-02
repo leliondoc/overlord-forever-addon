@@ -104,7 +104,6 @@ local function SetupDialogHyperlinks(f)
 end
 
 local dialogFrame = nil
-local dialogBlocker = nil
 local featuredFrontFrame = nil
 local featuredFrontToggleBtn = nil
 local pendingSeenId = nil
@@ -382,18 +381,12 @@ local function EnsureDialogFrame()
     f:SetClampedToScreen(true)
     f:Hide()
 
-    dialogBlocker = CreateFrame("Button", nil, UIParent)
-    dialogBlocker:SetFrameStrata("FULLSCREEN_DIALOG")
-    dialogBlocker:SetFrameLevel(5998)
-    dialogBlocker:SetAllPoints(UIParent)
-    dialogBlocker:EnableMouse(true)
-    dialogBlocker:Hide()
-    dialogBlocker:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    -- Fond : bloque les clics jeu uniquement (fermeture = Compris, croix ou Echap)
-    dialogBlocker:SetScript("OnClick", function() end)
+    -- No full-screen click blocker any more: like Blizzard windows, the dialog
+    -- leaves the world usable (a mouse-enabled overlay over UIParent stopped
+    -- right-drag camera look while the daily Battle Report was open). It still
+    -- closes with its button, the cross or Escape.
 
     f:SetScript("OnShow", function(self)
-        if dialogBlocker then dialogBlocker:Show() end
         if not self._skipPanelOpenSound and Overlord.PlayPanelOpenSound then
             Overlord:PlayPanelOpenSound()
         end
@@ -410,7 +403,6 @@ local function EnsureDialogFrame()
             pendingSeenId = nil
             pendingMarkMode = nil
         end
-        if dialogBlocker then dialogBlocker:Hide() end
         -- File d'attente login : popup suivante apres Compris / croix / Echap.
         if pendingLoginChain then
             pendingLoginChain = false
@@ -492,7 +484,6 @@ end
 -- ---------------------------------------------------------------------------
 
 local quickGuideFrame = nil
-local quickGuideBlocker = nil
 local quickGuidePage = 1
 local GUIDE_PAGE_COUNT = 3
 
@@ -687,17 +678,10 @@ local function EnsureQuickGuideFrame()
     f:SetClampedToScreen(true)
     f:Hide()
 
-    quickGuideBlocker = CreateFrame("Button", nil, UIParent)
-    quickGuideBlocker:SetFrameStrata("FULLSCREEN_DIALOG")
-    quickGuideBlocker:SetFrameLevel(6098)
-    quickGuideBlocker:SetAllPoints(UIParent)
-    quickGuideBlocker:EnableMouse(true)
-    quickGuideBlocker:Hide()
-    quickGuideBlocker:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    quickGuideBlocker:SetScript("OnClick", HideQuickGuide)
+    -- No full-screen click-to-close overlay (it blocked camera look); the guide
+    -- closes with its cross or Escape, like Blizzard windows.
 
     f:SetScript("OnShow", function(self)
-        if quickGuideBlocker then quickGuideBlocker:Show() end
         if Overlord.PlayPanelOpenSound then Overlord:PlayPanelOpenSound() end
         if Overlord.UI and Overlord.UI.GetEffectiveUiScale then
             self:SetScale(Overlord.UI:GetEffectiveUiScale())
@@ -709,7 +693,6 @@ local function EnsureQuickGuideFrame()
         end
     end)
     f:SetScript("OnHide", function()
-        if quickGuideBlocker then quickGuideBlocker:Hide() end
         if Overlord.PlayPanelCloseSound then Overlord:PlayPanelCloseSound() end
         if Overlord.UI and Overlord.UI.ScheduleActionGridActiveRefresh then
             Overlord.UI:ScheduleActionGridActiveRefresh()
