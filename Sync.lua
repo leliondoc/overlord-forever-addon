@@ -5144,6 +5144,15 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
     -- Routed request: delayed replies return through SendWhisper's beta route.
     local viaBetaBroadcast = false
     local enemyFriendKey = nil
+    if channel ~= "BETA" and replyToOverride and self._enemyBNetRequesters then
+        local key = tostring(replyToOverride):lower()
+        local seenAt = self._enemyBNetRequesters[key]
+        if seenAt and GetTime() - seenAt <= 300 then
+            enemyFriendKey = key
+        elseif seenAt then
+            self._enemyBNetRequesters[key] = nil
+        end
+    end
     if channel == "BETA" then
         if not Overlord.BetaNetwork or not Overlord.BetaNetwork:IsDispatching(sender) then return end
         -- Point-to-point catch-up (1.2.4): a request that crossed a relay is not
@@ -5158,6 +5167,10 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
             if (friendFaction == "Alliance" or friendFaction == "Horde")
                 and (mine == "Alliance" or mine == "Horde") and friendFaction ~= mine then
                 enemyFriendKey = tostring(sender):lower()
+                -- A request postponed by the response throttle comes back as a
+                -- whisper without this context: remember the friend for 5 min.
+                self._enemyBNetRequesters = self._enemyBNetRequesters or {}
+                self._enemyBNetRequesters[enemyFriendKey] = GetTime()
             end
         end
         -- Always ~2 responders per broadcast, whatever the transport. Answering a
@@ -5520,7 +5533,9 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         local enemyFriend = self._srEnemyFriend
         if enemyFriend and enemyFriend.generation == responseGeneration
             and self.AppendOwnFactionVictoriesForEnemyFriend then
-            self:AppendOwnFactionVictoriesForEnemyFriend(queue, enemyFriend.key)
+            -- A full direct response already replays the whole journal.
+            self:AppendOwnFactionVictoriesForEnemyFriend(queue, enemyFriend.key,
+                directSR and not minimalResponseOnly)
         end
 
         -- Stocks de mines (MS) : utile aux late joiners qui voient 100/100 partout sinon.

@@ -1090,9 +1090,18 @@ end
 -- Alliance 49/38 vs Horde 48/39). A direct opposite-faction Battle.net friend that
 -- pulls our state now gets our faction's victories; it already trusts a direct
 -- peer's historical replay, and its own channel then spreads them. Only what this
--- friend has not had yet in this session: the rows are sorted by date, so a new
--- victory only changes the last packet onward (an older late-learnt one resends all).
-function Overlord.Sync:AppendOwnFactionVictoriesForEnemyFriend(queue, friendKey)
+-- friend has not had yet in this session: packets are compared one by one with the
+-- last ones sent to it and resent from the first that changed (rows are sorted by
+-- date: a new victory changes the last packet, a late-learnt older one the packet
+-- it falls in). recordOnly: the response already carries the whole journal.
+function Overlord.Sync:FirstChangedVictoryPacket(previous, list)
+    for i = 1, #list do
+        if previous[i] ~= list[i] then return i end
+    end
+    return nil
+end
+
+function Overlord.Sync:AppendOwnFactionVictoriesForEnemyFriend(queue, friendKey, recordOnly)
     local mine = Overlord.PlayerFaction
     if not queue or type(friendKey) ~= "string" or (mine ~= "Alliance" and mine ~= "Horde") then
         return 0
@@ -1106,12 +1115,15 @@ function Overlord.Sync:AppendOwnFactionVictoriesForEnemyFriend(queue, friendKey)
     self._vbEnemyFriendSent = self._vbEnemyFriendSent or {}
     local sent = self._vbEnemyFriendSent[friendKey]
     local from = 1
-    if sent and sent.epoch == epoch and sent.first == list[1] then
-        if sent.count == #list and sent.last == list[#list] then return 0 end
-        from = math.max(1, math.min(sent.count, #list))
+    if sent and sent.epoch == epoch then
+        from = self:FirstChangedVictoryPacket(sent.packets, list)
+        if not from then return 0 end
     end
-    self._vbEnemyFriendSent[friendKey] = {
-        epoch = epoch, first = list[1], last = list[#list], count = #list }
+    -- The packet strings are shared with the cache: keeping them costs one array.
+    local packets = {}
+    for i = 1, #list do packets[i] = list[i] end
+    self._vbEnemyFriendSent[friendKey] = { epoch = epoch, packets = packets }
+    if recordOnly then return 0 end
     for i = from, #list do
         queue[#queue + 1] = { type = "VB", data = list[i] }
     end

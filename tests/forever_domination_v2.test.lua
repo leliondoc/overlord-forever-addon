@@ -434,6 +434,58 @@ do
     assert(#delta >= 1 and #delta <= 2, "A new victory resent the whole journal: " .. #delta .. " packets")
     for _, row in ipairs(delta) do receive(H1, "Alliance One", "VB", row.data) end
     assert(bar(H1) == bar(A1), "The new victory did not reach the Horde friend")
+
+    -- Delta rule (audit 1.3.6): resend from the first packet that changed, so a
+    -- victory learnt late that lands mid-journal is not skipped.
+    local first = sync.FirstChangedVictoryPacket
+    assert(first(sync, { "p1", "p2", "p3" }, { "p1", "p2", "p3" }) == nil, "Unchanged journal resent")
+    assert(first(sync, { "p1", "p2", "p3" }, { "p1", "p2", "p3x" }) == 3, "New victory: last packet")
+    assert(first(sync, { "p1", "p2", "p3" }, { "p1", "p2", "p3", "p4" }) == 4, "Grown journal")
+    assert(first(sync, { "p1", "p2", "p3" }, { "p1", "p2x", "p3x" }) == 2,
+        "A mid-journal change was not resent from its packet")
+    assert(first(sync, { "p1", "p2", "p3" }, { "p1x", "p2", "p3" }) == 1, "First packet change")
+
+    -- A long journal, then an older victory learnt late (it lands mid-journal):
+    -- resent from the packet it falls in, not only the last packet (audit 1.3.6).
+    local base = S - 300000
+    local function pastVictory(frontId, ts)
+        Overlord.Fronts.Registry[frontId] = Overlord.Fronts.Registry[frontId]
+            or { id = frontId, zones = { { id = frontId .. "a" } } }
+        server = ts; victory(A1, frontId, "Alliance", ts); server = S + 7200
+    end
+    for i = 1, 16 do pastVictory("g" .. i, base + i * 7200) end
+    outbox = {}
+    use(A1)
+    sync:AppendVictoryBonusToSrQueue({}, true, false)
+    local full = {}
+    sync:AppendOwnFactionVictoriesForEnemyFriend(full, "horde two")
+    assert(#full >= 3, "fixture: journal too short to test a mid-journal change (" .. #full .. ")")
+    for _, row in ipairs(full) do receive(H2, "Alliance One", "VB", row.data) end
+    pastVictory("g8b", base + 8 * 7200 + 3600)
+    outbox = {}
+    use(A1)
+    sync:AppendVictoryBonusToSrQueue({}, true, false)
+    local late = {}
+    sync:AppendOwnFactionVictoriesForEnemyFriend(late, "horde two")
+    assert(#late >= 1 and #late < #full + 1, "Late victory: " .. #late .. " packets of " .. #full)
+    local beforeLate = counts(H2)
+    local carried = false
+    for _, row in ipairs(late) do
+        if row.data:find("A,g8b," .. (base + 8 * 7200 + 3600) .. ",", 1, true) then carried = true end
+        receive(H2, "Alliance One", "VB", row.data)
+    end
+    assert(carried, "The late-learnt older victory was not resent")
+    local afterLate = counts(H2)
+    assert(afterLate == beforeLate + 1, "Horde friend went from " .. beforeLate .. " to " .. afterLate
+        .. " Alliance victories, expected exactly one more")
+    -- A full direct response already replays everything: only recorded, nothing added.
+    pastVictory("g20", base + 20 * 7200)
+    outbox = {}
+    use(A1)
+    sync:AppendVictoryBonusToSrQueue({}, true, false)
+    assert(sync:AppendOwnFactionVictoriesForEnemyFriend({}, "horde two", true) == 0)
+    assert(sync:AppendOwnFactionVictoriesForEnemyFriend({}, "horde two") == 0,
+        "recordOnly did not record what the full response carried")
 end
 
 print("Forever domination v2: bar = 50 +/- victories, no wood, relay/BNet convergence, replay, old clients OK")
