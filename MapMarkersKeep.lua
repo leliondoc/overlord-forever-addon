@@ -678,7 +678,7 @@ local projectedKeepPins = {}
 
 -- Meme echelle que les logos domination EK (pas les pins mine ~20 px)
 local function GetProjectedKeepPinSize(canvas, parent)
-    return math.floor(GetEKDominanceLogoSize(canvas, parent) + 0.5)
+    return math.floor(GetEKDominanceLogoSize(canvas, parent) * MM.GetMapIconScale() + 0.5)
 end
 
 function Overlord.MapMarkers:EnsureProjectedKeepPins(canvas)
@@ -1046,7 +1046,7 @@ local function GetKeepMapIconSize(canvas, parent)
         end
     end
     return math.max(KEEP_MAP_ICON_MIN,
-        math.min(KEEP_MAP_ICON_MAX, cw * KEEP_MAP_ICON_FRAC * scaleRatio))
+        math.min(KEEP_MAP_ICON_MAX, cw * KEEP_MAP_ICON_FRAC * scaleRatio)) * MM.GetMapIconScale()
 end
 
 local function GetKeepMapVisualKey(st, site, displayMapID)

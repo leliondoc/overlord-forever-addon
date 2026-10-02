@@ -75,7 +75,7 @@ assert(SP._registered, "Native options page was not registered")
 
 -- 1. Every option has a native control; sections and buttons are present.
 local expected = { "Overlord_UiScale", "Overlord_NotificationChat", "Overlord_GuildKillAlert",
-    "Overlord_MapOverlayOpacity", "Overlord_MapIconOpacity", "Overlord_MapPathOpacity",
+    "Overlord_MapOverlayOpacity", "Overlord_MapIconOpacity", "Overlord_MapIconScale", "Overlord_MapPathOpacity",
     "Overlord_MinimapOverlayOpacity", "Overlord_ShowMinimapButton", "Overlord_ShowMinimapCaptureZones",
     "Overlord_ShowMapZoneTitles", "Overlord_AutoWaypointNextObjective", "Overlord_TopHudMode",
     "Overlord_ShowCoinsHud", "Overlord_ShowFloatingObjective", "Overlord_ShowTutorialBook",
@@ -128,3 +128,10 @@ assert(scaleApplied == 1, "Setter re-entered through Settings.SetValue: " .. sca
 assert(OverlordDB.config.uiScale == 1.1 and values["Overlord_UiScale"] == 1.1)
 
 print("Settings panel: native layout, chat tab by name, Overlord tab creation OK")
+
+-- 7. Map icon size (player request 1.3.6): 50-150 %, saved and clamped.
+settings["Overlord_MapIconScale"].set(0.7)
+assert(OverlordDB.config.mapIconScale == 0.7 and values["Overlord_MapIconScale"] == 0.7)
+settings["Overlord_MapIconScale"].set(3)
+assert(OverlordDB.config.mapIconScale == 1.5, "Icon size not clamped to 150 %")
+assert(settings["Overlord_MapIconScale"].get() == 1.5)

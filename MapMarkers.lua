@@ -1431,6 +1431,14 @@ function Overlord.MapMarkers.GetMapIconOpacity()
     return v
 end
 
+-- Taille des icones de carte (capitales, objectifs, forteresses, avant-postes) :
+-- 50 a 150 %, 100 % par defaut (demande joueur 1.3.6 : capitales trop grandes).
+function Overlord.MapMarkers.GetMapIconScale()
+    local v = tonumber(OverlordDB and OverlordDB.config and OverlordDB.config.mapIconScale) or 1
+    if v < 0.5 then v = 0.5 elseif v > 1.5 then v = 1.5 end
+    return v
+end
+
 local function GetFactionZoneColors(zone)
     if Overlord.IsLoginZoneDisplayPending and Overlord:IsLoginZoneDisplayPending(zone) then
         return 0.55, 0.55, 0.48, 0.12, 0.34
@@ -1506,7 +1514,7 @@ function Overlord.MapMarkers:UpdateOverlayLayout(overlay)
 
     if overlay.iconTex and overlay.iconTex:IsShown() then
         local anchorTarget = (overlay.subtext2:GetText() ~= "") and overlay.subtext2 or overlay.subtext
-        local iconSize = math.max(10, labelDiameter * 0.28)
+        local iconSize = math.max(6, labelDiameter * 0.28 * Overlord.MapMarkers.GetMapIconScale())
         overlay.iconTex:ClearAllPoints()
         overlay.iconTex:SetPoint("TOP", anchorTarget, "BOTTOM", 0, 1)
         overlay.iconTex:SetSize(iconSize, iconSize)
@@ -1659,7 +1667,7 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
     -- Icone : bannieres Warfronts (objectifs) ; MainHall (capitales) ; masquee si conteste avec owner
     if overlay.iconTex then
         if iconAtlas then
-            local iconSize = math.max(10, labelDiameter * 0.28)
+            local iconSize = math.max(6, labelDiameter * 0.28 * Overlord.MapMarkers.GetMapIconScale())
             local anchorTarget = (st2 ~= "") and overlay.subtext2 or overlay.subtext
             local iconLayoutKey = (anchorTarget == overlay.subtext2 and "2" or "1") .. ":" .. iconSize
                 .. ":" .. (iconAtlas or "")

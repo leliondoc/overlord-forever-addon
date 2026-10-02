@@ -26,6 +26,7 @@ Overlord.SettingsPanel.TopHudModeVariableName = "Overlord_TopHudMode"
 Overlord.SettingsPanel.ShowTutorialBookVariableName = "Overlord_ShowTutorialBook"
 Overlord.SettingsPanel.SoundEnabledVariableName = "Overlord_SoundEnabled"
 Overlord.SettingsPanel.MapIconOpacityVariableName = "Overlord_MapIconOpacity"
+Overlord.SettingsPanel.MapIconScaleVariableName = "Overlord_MapIconScale"
 
 local NOTIF_CHAT_MIN = 0
 local NOTIF_CHAT_STEP = 1
@@ -261,6 +262,26 @@ local function setMapIconOpacity(value)
         requestMapOpacityRefresh(true)
     end
     notifySettingsAPI(Overlord.SettingsPanel.MapIconOpacityVariableName, OverlordDB.config.mapIconOpacity)
+end
+
+-- Taille des icones de carte : 50 a 150 % par pas de 10 %.
+local function getMapIconScale()
+    local v = tonumber(OverlordDB and OverlordDB.config and OverlordDB.config.mapIconScale) or 1
+    v = math.floor(v * 10 + 0.5) / 10
+    if v < 0.5 then v = 0.5 elseif v > 1.5 then v = 1.5 end
+    return v
+end
+
+local function setMapIconScale(value)
+    if not OverlordDB then return end
+    OverlordDB.config = OverlordDB.config or {}
+    local v = math.floor((tonumber(value) or 1) * 10 + 0.5) / 10
+    if v < 0.5 then v = 0.5 elseif v > 1.5 then v = 1.5 end
+    OverlordDB.config.mapIconScale = v
+    if not settingsSuppressSideEffects then
+        requestMapOpacityRefresh(false)
+    end
+    notifySettingsAPI(Overlord.SettingsPanel.MapIconScaleVariableName, v)
 end
 
 local function getMapPathOpacity()
@@ -611,6 +632,11 @@ local ROWS = {
         default = DEFAULT_MAP_ICON_OPACITY, get = getMapIconOpacity, set = setMapIconOpacity,
         min = 0, max = MAP_OVERLAY_OPACITY_MAX, step = MAP_OVERLAY_OPACITY_STEP,
         format = formatMapIconOpacityLabel },
+    { kind = "slider", var = SP.MapIconScaleVariableName, label = "MAP_ICON_SCALE_LABEL",
+        fallback = "Map icon size", tooltip = "MAP_ICON_SCALE_TOOLTIP",
+        default = 1, get = getMapIconScale, set = setMapIconScale,
+        min = 0.5, max = 1.5, step = 0.1,
+        format = function(v) return string.format("%d%%", math.floor((tonumber(v) or 1) * 100 + 0.5)) end },
     { kind = "slider", var = SP.MapPathOpacityVariableName, label = "MAP_PATH_OPACITY_LABEL",
         fallback = "Map path opacity", tooltip = "MAP_PATH_OPACITY_TOOLTIP",
         default = DEFAULT_MAP_PATH_OPACITY, get = getMapPathOpacity, set = setMapPathOpacity,
