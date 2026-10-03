@@ -15,7 +15,7 @@ local zone = {
 }
 Overlord.ZoneDatabase = { zone }
 Overlord.Fronts.GetZone = function(_, id)
-    if id == zone.id then return zone, { id = "loch_modan" } end
+    if id == zone.id then return zone, { id = "loch_modan", mapName = "Loch Modan" } end
 end
 Overlord.Zones.GetZone = function(_, id) return id == zone.id and zone end
 Overlord.Zones.GetEnemyFaction = function() return "Horde" end
@@ -38,6 +38,8 @@ receive(1, "C", capture)
 assert(zone.owner == "Horde" and zone.status == "captured", "Relayed Horde capture did not apply")
 assert(#messages == 1 and messages[1]:find("Horde", 1, true)
     and messages[1]:find("Enemy Tester", 1, true), "Horde capture chat alert was lost")
+-- Forever announces every front: the map is named ("Zone (Loch Modan) captured by...").
+assert(messages[1]:find("(Loch Modan)", 1, true), "Capture alert does not name the map: " .. messages[1])
 receive(2, "C", capture)
 assert(#messages == 1, "Capture replay duplicated the alert")
 receive(3, "GE", "H:global:5000:5000:1417:" .. time() .. ":" .. OverlordDB.lastResetTimestamp)

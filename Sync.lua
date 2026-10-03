@@ -3783,18 +3783,30 @@ local function PrintCaptureChatOnce(zone, newOwner, capturerName, captureTs)
     -- `key` = zone connue + faction valide : cardinalite structurellement bornee
     -- a deux fois le nombre fixe de zones, sans besoin de rescanner a chaque chat.
 
+    -- Forever announces captures of every front (Retail: only the current one):
+    -- name the map, "Thunder Ridge (Durotar) has been taken by...".
+    local zoneLabel = zone.name or zone.id
+    local zoneFront
+    if Overlord.Fronts and Overlord.Fronts.GetZone then
+        zoneFront = select(2, Overlord.Fronts:GetZone(zone.id))
+    end
+    local mapName = zoneFront and zoneFront.mapName
+    if type(mapName) == "string" and mapName ~= "" and mapName ~= zoneLabel then
+        zoneLabel = zoneLabel .. " (" .. mapName .. ")"
+    end
+
     if newOwner == Overlord.PlayerFaction then
         Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. Overlord:FactionChatIcon(Overlord.PlayerFaction) .. L.SYNC_CAPTURED_FRIENDLY,
-            zone.name, Overlord.Zones:GetFactionName()))
+            zoneLabel, Overlord.Zones:GetFactionName()))
     else
         -- Affiche le nom du capteur (avec royaume) si disponible
         if capturerName and capturerName ~= "" then
             Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.SYNC_CAPTURED_ENEMY_BY,
-                zone.name, Overlord.Zones:GetEnemyFactionName(),
+                zoneLabel, Overlord.Zones:GetEnemyFactionName(),
                 AppendShardTagToPlayerName(capturerName, zone and zone.zsRelayCapturerShard)))
         else
             Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.SYNC_CAPTURED_ENEMY,
-                zone.name, Overlord.Zones:GetEnemyFactionName()))
+                zoneLabel, Overlord.Zones:GetEnemyFactionName()))
         end
     end
 end
