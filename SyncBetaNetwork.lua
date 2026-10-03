@@ -543,6 +543,49 @@ local function remember(values, order, key, value, limit)
     end
     values[key] = value
 end
+-- Bridge hold (1.4.2). A broadcast that reached this client over Battle.net reached
+-- every other bridge of the faction in the same second; each one then put its copy
+-- on the channel (the LK bridge had an election for this, nothing else had). Wait
+-- 2-15 s at random before forwarding; a copy heard on the channel meanwhile means
+-- another bridge already did it and cancels ours. Tests set BridgeChannelHold to
+-- { 0, 0 } to forward at once.
+local heldForwards, heldForwardsOrder = {}, {}
+local function holdForward(key, p)
+    local hold = net.BridgeChannelHold or {}
+    local lo, hi = tonumber(hold[1]) or 0, tonumber(hold[2]) or 0
+    -- Only a client with a channel is a bridge to it; elsewhere forward at once.
+    if hi <= 0 or not (sync.GetChannelId and sync:GetChannelId()) then return false end
+    -- One delay per (bridge, origin) pair, not per packet: packets of the same
+    -- origin keep their order through the hold (TV before VB), while different
+    -- bridges spread over the window.
+    local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
+    local text = tostring(me):lower() .. "|" .. tostring(p.path[1] or ""):lower()
+    local h = 5381
+    for i = 1, #text do h = (h * 33 + text:byte(i)) % 2147483647 end
+    local frac = (h * 0.6180339887498949) % 1
+    local entry = { p = p }
+    remember(heldForwards, heldForwardsOrder, key, entry, 64)
+    C_Timer.After(lo + frac * math.max(0, hi - lo), function()
+        if heldForwards[key] ~= entry then return end
+        heldForwards[key] = nil
+        if net:Queue(p) == true then
+            net.stats.bridgeForwardsSent = (net.stats.bridgeForwardsSent or 0) + 1
+        else
+            remember(forwardRetry, forwardRetryOrder, key, GetTime(), 256)
+        end
+    end)
+    return true
+end
+local function cancelHeldForward(wire)
+    if next(heldForwards) == nil or type(wire) ~= "string" then return end
+    local _, id, _, _, path = strsplit("|", wire, 6)
+    local origin = path and path:match("^[^,]+")
+    local key = id and origin and (origin:lower() .. ":" .. id)
+    if key and heldForwards[key] then
+        heldForwards[key] = nil
+        net.stats.bridgeForwardsCancelled = (net.stats.bridgeForwardsCancelled or 0) + 1
+    end
+end
 -- Duplicate check on the raw wire, before decode and identity work. Same key as
 -- Receive records (origin = first path node, which decode requires canonical).
 local function alreadySeen(wire, sender)
@@ -988,7 +1031,16 @@ local function tasksFor(p, wire)
                     and (myFaction == "Alliance" or myFaction == "Horde") and faction ~= myFaction then
                     bridges[#bridges + 1] = id
                 else
-                    others[#others + 1] = id
+                    -- A same-faction friend we hear on our channel heard this channel
+                    -- copy too; only friends on another realm (never on our channel)
+                    -- still need the Battle.net copy.
+                    local heardAt = p.heardOn == "CHANNEL" and type(character) == "string"
+                        and channelHeard[character:lower()] or nil
+                    if heardAt ~= nil and GetTime() - heardAt <= 300 then
+                        net.stats.friendCopiesOnChannelSkipped = (net.stats.friendCopiesOnChannelSkipped or 0) + 1
+                    else
+                        others[#others + 1] = id
+                    end
                 end
             end
         end
@@ -1503,6 +1555,8 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     -- exception is a broadcast whose forward was refused here: that copy only
     -- retries the forward.
     local retryForward = false
+    -- Heard on the channel: another bridge forwarded it, drop our held copy.
+    if transport == "CHANNEL" then cancelHeldForward(wire) end
     if alreadySeen(wire, sender) then
         if not forwardRetryKey(wire) then return false end
         retryForward = true
@@ -1619,10 +1673,13 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     if relayable and p.kind ~= "K" and forwardPresence and #p.path < MAX_PATH
         and (p.target == "*" or not addressed) then
         p.path[#p.path + 1] = me
-        p.skipGroup = transport == "RAID" or transport == "PARTY"
+        p.heardOn = transport
+        -- A copy heard on the channel was heard by our group mates too (same realm,
+        -- same faction): in a 40-man raid every hearer re-sent it to the raid.
+        p.skipGroup = transport == "RAID" or transport == "PARTY" or transport == "CHANNEL"
         -- Whoever gave us a group copy either put it on the channel or got it from
         -- there. Only a gateway we never hear on our channel (another realm) needs it.
-        local heardAt = p.skipGroup and channelHeard[sender:lower()] or nil
+        local heardAt = (transport == "RAID" or transport == "PARTY") and channelHeard[sender:lower()] or nil
         p.skipChannel = transport == "CHANNEL"
             or (heardAt ~= nil and GetTime() - heardAt <= 300)
 
@@ -1658,6 +1715,13 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
                 self.stats.progressForwardSkipped = (self.stats.progressForwardSkipped or 0) + 1
             else
                 self.stats.routineForwardSkipped = (self.stats.routineForwardSkipped or 0) + 1
+            end
+        elseif transport == "BNET" and p.target == "*" and p.kind ~= "NH" and p.kind ~= "SH"
+            and not p.skipChannel and holdForward(key, p) then
+            forwarded = true
+            self.stats.bridgeForwardsHeld = (self.stats.bridgeForwardsHeld or 0) + 1
+            if routineKey then
+                remember(routineForwarded, routineForwardedOrder, routineKey, GetTime(), 256)
             end
         else
             forwarded = self:Queue(p) == true

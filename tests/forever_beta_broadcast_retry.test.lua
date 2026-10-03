@@ -39,6 +39,7 @@ local delivered = 0
 function s:OnAddonMessage(_, message) if message:sub(1, 2) == "C:" then delivered = delivered + 1 end end
 assert(loadfile("SyncBetaNetwork.lua"))()
 local net = Overlord.BetaNetwork
+net.BridgeChannelHold = { 0, 0 } -- forward at once: this test is about retries, not bridging
 
 local realQueue, failNext, attempts = net.Queue, false, 0
 net.Queue = function(self, p, immediate)

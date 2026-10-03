@@ -3036,7 +3036,7 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
     elseif msgType == "SH" then
         self:OnReceiveShard(payload or "", sender, channel)
     elseif msgType == "CR" then
-        self:OnReceiveClassRequest(payload or "", sender)
+        self:OnReceiveClassRequest(payload or "", sender, channel)
     elseif msgType == "CA" then
         self:OnReceiveClassAnswer(payload or "", sender, channel)
     elseif msgType == "GR" then

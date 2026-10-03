@@ -12,6 +12,9 @@ local CLASS_REQUEST_MAX_PAYLOAD = 240
 local CLASS_REQUEST_RESPONSE_JITTER_MAX = 2500
 local CLASS_REQUEST_LARGE_EMIT_CHANCE = 0.15
 local CLASS_ANSWER_LARGE_RESPOND_CHANCE = 0.25
+-- Answers wanted per broadcast request. Every direct peer hears a channel request:
+-- with a fixed 25 % chance, 500 hearers sent 125 whispers to one client (1.4.2).
+local CLASS_ANSWER_TARGET_RESPONDERS = 3
 local CLASS_REQUEST_MAX_PENDING = 12
 local CLASS_REQUEST_MAX_BATCHES_LARGE = 2
 local CLASS_HEAL_MAX_NAMES_LARGE = 8
@@ -212,7 +215,23 @@ function Overlord.Sync:FlushClassRequests()
     emit(batch)
 end
 
-function Overlord.Sync:OnReceiveClassRequest(payload, sender)
+-- Probability of answering a broadcast request: about CLASS_ANSWER_TARGET_RESPONDERS
+-- answers network-wide whatever the population (SR uses the same rule), never more
+-- than the large-event share. A request addressed to this client alone is always
+-- answered.
+local function BroadcastAnswerChance(sync, channel)
+    local net = Overlord.BetaNetwork
+    if channel == "WHISPER" or (channel == "BETA" and net and net.IsTargetedDispatch
+        and net:IsTargetedDispatch()) then return 1 end
+    local population = net and net.CountDirectPeers and net:CountDirectPeers() or 0
+    local chance = math.min(1, CLASS_ANSWER_TARGET_RESPONDERS / math.max(1, population))
+    if sync.IsLargeEvent and sync:IsLargeEvent() then
+        chance = math.min(chance, CLASS_ANSWER_LARGE_RESPOND_CHANCE)
+    end
+    return chance
+end
+
+function Overlord.Sync:OnReceiveClassRequest(payload, sender, channel)
     if type(payload) ~= "string" or payload == "" then return end
     -- Point to point (1.2.4): a request that crossed a relay is not answered.
     local net = Overlord.BetaNetwork
@@ -224,8 +243,7 @@ function Overlord.Sync:OnReceiveClassRequest(payload, sender)
 
     classRequestsMaybePurge()
 
-    local isLarge = self.IsLargeEvent and self:IsLargeEvent()
-    if isLarge and math.random() > CLASS_ANSWER_LARGE_RESPOND_CHANCE then return end
+    if math.random() > BroadcastAnswerChance(self, channel) then return end
 
     local lb = Overlord.Leaderboard
     if not lb or not lb.GetHotPlayerClass then return end
@@ -517,8 +535,7 @@ function Overlord.Sync:OnReceiveGuildRequest(payload, sender, channel)
 
     guildRequestsMaybePurge()
 
-    local isLarge = self.IsLargeEvent and self:IsLargeEvent()
-    if isLarge and math.random() > CLASS_ANSWER_LARGE_RESPOND_CHANCE then return end
+    if math.random() > BroadcastAnswerChance(self, channel) then return end
 
     local lb = Overlord.Leaderboard
     if not lb or not lb.GetHotPlayerGuildState then return end
