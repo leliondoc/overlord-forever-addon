@@ -1,11 +1,9 @@
-1.3.6
+1.4.0
 
-**Overlord Forever 1.3.6**
+**Overlord Forever 1.4.0**
 
-- Weekly domination bar: both factions now see the same score. A front victory that nobody on the other side witnessed live used to be missing there for the whole week; it now reaches the other faction through Battle.net friends.
-- Clearer alerts: every guild carries its own faction crest, e.g. "Shobek'Aran: <Ruthless> [Horde] is assaulting <EMPIRE> [Alliance]!" and "Guild <Kor Kron Enforcers> [Horde]: 21+ kills by 6+ members in Duskwood!".
-- New option: map icon size (50-150 %) for capitals, capture points, fortresses and outposts on the world map.
-- Popups no longer block camera mouse-look, and the daily Battle Report closes by itself after 4 seconds (hover it to keep it open).
-- Leaderboard catch-up finishes much faster: clients no longer resend whole pages just because they saw a guild join date, level or race at a slightly different time.
-- Fewer "No player named ... is currently playing" lines in chat after Overlord messages to players who just logged off.
-- Less memory garbage during fights, and `/ov perf` now also shows the memory allocated per function.
+- One Overlord campaign per Forever ruleset: PvP, Normal, Roleplay and Hardcore each have their own leaderboard, front map, victories, domination bar, fortresses and outposts. A Normal or RP player never mixes with the PvP campaign, even through Battle.net friends. PvP players keep everything they had.
+- Characters on several rulesets: each one finds its own campaign again when you switch (same week), the other one is put aside, nothing is mixed.
+- Leaderboard: hover a guild to see its ranked members (top 10 with their kills) and how many more.
+- `/ov network` shows which campaign you are in.
+- Safer in dungeons: Overlord no longer reads chat lines, nameplates or spell casts inside instances.
