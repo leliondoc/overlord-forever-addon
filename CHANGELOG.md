@@ -3,7 +3,7 @@
 **Overlord Forever 1.4.1**
 
 - Rulesets kept fully apart: a Normal or RP player could still see part of the PvP leaderboard (old data passed between Normal/RP players). Fixed, and Normal/RP/Hardcore campaigns restart from a clean leaderboard; please update so everyone on your ruleset finds each other again. PvP players are not affected.
-- Normal, RP and Hardcore rulesets: captures now require PvP to be enabled (/pvp), so a player who cannot be attacked no longer takes objectives. The objective panel tells you when PvP is off. Nothing changes on the PvP ruleset, and mines keep generating gold everywhere.
+- Captures now require PvP to be enabled (/pvp): a player who cannot be attacked no longer takes objectives. The objective panel tells you when PvP is off. Mines keep generating gold without it.
 - Call to arms shows the real zone name ("Three Corners (Redridge Mountains)") instead of an internal id.
 - `/ov network` no longer turns red for a single refused message or a small burst at login.
 - Normal, RP and Hardcore players use new channels in 1.4.1: they meet again once everyone on their ruleset has updated.

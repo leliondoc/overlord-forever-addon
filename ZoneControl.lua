@@ -380,11 +380,6 @@ local playerNonCaptureCached = false
 -- unflagged player cannot be attacked (Normal ruleset, or own territory on PvP)
 -- and must not capture for free. Unknown API/answer = no restriction.
 function Overlord.ZoneControl:PlayerLacksPvpFlag()
-    -- PvP ruleset: players are attackable in their own territory without the flag
-    -- (UnitIsPVP stays false there), so the rule only applies where PvP needs the
-    -- player's consent (Normal, RP, Hardcore).
-    local pools = Overlord.RealmPools
-    if not pools or not pools.GetRuleset or pools:GetRuleset() == "pvp" then return false end
     if type(UnitIsPVP) ~= "function" then return false end
     local ok, flagged = pcall(UnitIsPVP, "player")
     if not ok or flagged == nil or flagged then return false end
