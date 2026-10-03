@@ -2788,9 +2788,23 @@ end
 
 function Overlord.Sync:ResolveFactionCallPlace(zoneId, frontId)
     local zoneName = ""
-    if zoneId and zoneId ~= "" and Overlord.Zones then
-        local z = Overlord.Zones:GetZone(zoneId)
-        zoneName = (z and z.name) or zoneId
+    if zoneId and zoneId ~= "" then
+        -- The call may be for another front than the one shown here: look in every
+        -- front, then the translated names; never print the raw id
+        -- ("redridge_three_corners" -> "Three Corners").
+        local z = Overlord.Zones and Overlord.Zones:GetZone(zoneId)
+        if not z and Overlord.Fronts and Overlord.Fronts.GetZone then
+            z = Overlord.Fronts:GetZone(zoneId)
+        end
+        zoneName = (z and z.name) or (L.ZONE_NAMES and L.ZONE_NAMES[zoneId]) or ""
+        if zoneName == "" then
+            local words = {}
+            local raw = zoneId:gsub("^[^_]+_", "", 1)
+            for word in raw:gmatch("[^_]+") do
+                words[#words + 1] = word:sub(1, 1):upper() .. word:sub(2)
+            end
+            zoneName = table.concat(words, " ")
+        end
     end
     local frontName = ""
     if frontId and frontId ~= "" and Overlord.Fronts then
