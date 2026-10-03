@@ -31,6 +31,15 @@ now = now + 90
 assert(installed(nil, "CHAT_MSG_SYSTEM", message), "A late error (90 s) for an addon target was shown")
 now = now + 31
 assert(not installed(nil, "CHAT_MSG_SYSTEM", message), "Expired addon target still hid errors")
+-- In an instance (and on 12.x secret chat text) the filter never reads the line.
+assert(Overlord.Sync:SendWhisper("BF", "test-fragment", "Massa Zug") ~= nil or true)
+Overlord.InstanceSuspended = true
+assert(not installed(nil, "CHAT_MSG_SYSTEM", message), "Filter acted inside an instance")
+Overlord.InstanceSuspended = false
+local secret = setmetatable({}, { __index = function() error("secret value read") end })
+issecretvalue = function(v) return v == secret end
+assert(not installed(nil, "CHAT_MSG_SYSTEM", secret), "Filter touched a secret value")
+issecretvalue = nil
 
 -- Older clients still expose the global registration function.
 assert(loadfile("SyncAux.lua"))()

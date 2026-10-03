@@ -2934,6 +2934,10 @@ local function recentWhisperLooksLikeFailedTarget(quoted)
 end
 
 local function SuppressAddonWhisperOfflineSystem(_, _, msg)
+    -- No addon whisper is ever sent in an instance, and there chat text can be a
+    -- 12.x secret value that addon code must not read: leave every line alone.
+    if Overlord.InstanceSuspended then return false end
+    if issecretvalue and issecretvalue(msg) then return false end
     if not msg or type(msg) ~= "string" then return false end
     local lowered = msg:lower()
     local hit = matchesLocalizedPlayerNotFound(msg)
