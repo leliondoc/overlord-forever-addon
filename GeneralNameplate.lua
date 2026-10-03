@@ -406,6 +406,8 @@ function Overlord.GeneralNameplate:RefreshUnit(unit)
 end
 
 function Overlord.GeneralNameplate:OnNamePlateAdded(unit)
+    -- Instances first: dungeon nameplates may expose 12.x secret values.
+    if Overlord.InstanceSuspended then return end
     if not unit or unit == "" or not UnitIsPlayer(unit) then return end
     self:RefreshUnit(unit)
     if not duelMonitorArmed or not CanMonitorGeneralDuel() then return end

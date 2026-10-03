@@ -359,6 +359,9 @@ local MINING_SPELL_IDS = {
 }
 
 local function OnSpellcastSucceeded(_, _, unit, _, spellID)
+    -- No mine in an instance; never index a table with a 12.x secret spell ID.
+    if Overlord.InstanceSuspended then return end
+    if issecretvalue and (issecretvalue(unit) or issecretvalue(spellID)) then return end
     if unit ~= "player" then return end
     if not MINING_SPELL_IDS[spellID] then return end
     if gold >= GOLD_MAX then return end
