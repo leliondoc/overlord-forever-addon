@@ -432,4 +432,5 @@ L.RP_GROUP_ACCEPTED = "Entrou em um grupo para faseamento correto (reino RP)."
     L.GUIDE_NEXT = "Próximo"
     L.GUIDE_PREV = "Anterior"
     L.GUIDE_PAGE_INDICATOR = "Página %d / %d"
+    L.CAPTURE_NEEDS_PVP = "%s: ative o PvP (/pvp) para capturar este objetivo."
 end

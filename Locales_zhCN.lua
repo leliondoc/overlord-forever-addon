@@ -432,4 +432,5 @@ L.RP_GROUP_ACCEPTED = "加入了正确定相的小组（RP 领域）。"
     L.GUIDE_NEXT = "下一页"
     L.GUIDE_PREV = "上一页"
     L.GUIDE_PAGE_INDICATOR = "第 %d / %d 页"
+    L.CAPTURE_NEEDS_PVP = "%s：开启PvP（/pvp）才能占领此目标。"
 end

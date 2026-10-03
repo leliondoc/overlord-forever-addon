@@ -376,6 +376,20 @@ local PLAYER_NON_CAPTURE_CACHE_SEC = 0.05
 local playerNonCaptureCacheAt = -1
 local playerNonCaptureCached = false
 
+-- 1.4.1 (player request): only PvP-flagged players take or hold objectives. An
+-- unflagged player cannot be attacked (Normal ruleset, or own territory on PvP)
+-- and must not capture for free. Unknown API/answer = no restriction.
+function Overlord.ZoneControl:PlayerLacksPvpFlag()
+    if type(UnitIsPVP) ~= "function" then return false end
+    local ok, flagged = pcall(UnitIsPVP, "player")
+    if not ok or flagged == nil or flagged then return false end
+    if type(UnitIsPVPFreeForAll) == "function" then
+        local okFfa, ffa = pcall(UnitIsPVPFreeForAll, "player")
+        if okFfa and ffa then return false end
+    end
+    return true
+end
+
 IsPlayerInNonCaptureState = function()
     local now = GetTime()
     local cacheAge = now - playerNonCaptureCacheAt
@@ -383,6 +397,10 @@ IsPlayerInNonCaptureState = function()
         return playerNonCaptureCached
     end
     playerNonCaptureCacheAt = now
+    if Overlord.ZoneControl:PlayerLacksPvpFlag() then
+        playerNonCaptureCached = true
+        return true
+    end
     -- Passager monture 2 places ou véhicule : bloque la capture
     if IsUnitInVehicleState("player") then
         playerNonCaptureCached = true
@@ -903,6 +921,17 @@ function Overlord.ZoneControl:CheckPlayerPosition()
         pendingEntrySyncZoneId = nil
         pendingEntrySyncUntil = 0
         return
+    end
+
+    -- Sans drapeau PvP, on explique pourquoi rien ne demarre (une fois par minute).
+    if currentZone.status == "available" and self:PlayerLacksPvpFlag() then
+        local now = GetTime()
+        if now - (self._pvpFlagHintAt or -60) >= 60 then
+            self._pvpFlagHintAt = now
+            Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r "
+                .. (L.CAPTURE_NEEDS_PVP or "%s: enable PvP (/pvp) to capture this objective."),
+                currentZone.name or ""))
+        end
     end
 
     -- Ne pas capturer en vol, forme de vol druide, ou furtivite.

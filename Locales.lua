@@ -317,6 +317,7 @@ L.ZONE_NOW_AVAILABLE = "%s is now available for capture!"
 
 -- === ZoneControl ===
 L.ENTERED_ZONE       = "You entered %s! Capture started!"
+L.CAPTURE_NEEDS_PVP = "%s: enable PvP (/pvp) to capture this objective."
 L.AUTO_DISMOUNT_CAPTURE_CIRCLE = "You are flying in %s: automatic dismount in %d seconds."
 L.AUTO_DISMOUNT_MINE_CIRCLE    = "You are flying in the %s mining circle: automatic dismount in %d seconds."
 L.HOLD_TIMER_STARTED = "Hold timer started for %s (%d:%02d). Stay in the zone!"
@@ -879,6 +880,7 @@ L.ZONE_NOW_AVAILABLE = "%s est maintenant disponible à la capture !"
 
 -- ZoneControl
 L.ENTERED_ZONE       = "Vous êtes entré dans %s ! Capture démarrée !"
+L.CAPTURE_NEEDS_PVP = "%s : activez le JcJ (/pvp) pour capturer cet objectif."
 L.AUTO_DISMOUNT_CAPTURE_CIRCLE = "Vous volez dans %s: démontage automatique dans %d secondes."
 L.AUTO_DISMOUNT_MINE_CIRCLE    = "Vous volez dans le cercle de la mine %s: démontage automatique dans %d secondes."
 L.HOLD_TIMER_STARTED = "Minuteur de maintien démarré pour %s (%d:%02d). Restez dans la zone !"
@@ -1436,6 +1438,7 @@ L.ZONE_NOW_AVAILABLE = "¡%s ya está disponible para capturar!"
 
 -- ZoneControl
 L.ENTERED_ZONE       = "¡Has entrado en %s! ¡Captura iniciada!"
+L.CAPTURE_NEEDS_PVP = "%s: activa el JcJ (/pvp) para capturar este objetivo."
 L.AUTO_DISMOUNT_CAPTURE_CIRCLE = "Estás volando en %s: desmontaje automático en %d segundos."
 L.AUTO_DISMOUNT_MINE_CIRCLE    = "Estás volando en el círculo de la mina %s: desmontaje automático en %d segundos."
 L.HOLD_TIMER_STARTED = "Temporizador de mantenimiento iniciado para %s (%d:%02d). ¡Permanece en la zona!"
@@ -1991,6 +1994,7 @@ L.ZONE_NOW_AVAILABLE = "%s ist jetzt zur Eroberung verfügbar!"
 
 -- ZoneControl
 L.ENTERED_ZONE       = "Ihr habt %s betreten! Eroberung gestartet!"
+L.CAPTURE_NEEDS_PVP = "%s: Aktiviert PvP (/pvp), um dieses Ziel zu erobern."
 L.AUTO_DISMOUNT_CAPTURE_CIRCLE = "Ihr fliegt in %s: automatisches Absteigen in %d Sekunden."
 L.AUTO_DISMOUNT_MINE_CIRCLE    = "Ihr fliegt im Minenkreis %s: automatisches Absteigen in %d Sekunden."
 L.HOLD_TIMER_STARTED = "Haltetimer für %s gestartet (%d:%02d). Bleibt in der Zone!"
@@ -2552,6 +2556,7 @@ L.ZONE_NOW_AVAILABLE = "%s теперь доступна для захвата!"
 
 -- === ZoneControl ===
 L.ENTERED_ZONE       = "Вы вошли в %s! Захват начался!"
+L.CAPTURE_NEEDS_PVP = "%s: включите PvP (/pvp), чтобы захватить эту цель."
 L.AUTO_DISMOUNT_CAPTURE_CIRCLE = "Вы летите в %s: автоматическое спешивание через %d секунд."
 L.AUTO_DISMOUNT_MINE_CIRCLE    = "Вы летите в кругу шахты %s: автоматическое спешивание через %d секунд."
 L.HOLD_TIMER_STARTED = "Таймер удержания запущен для %s (%d:%02d). Оставайтесь в зоне!"
