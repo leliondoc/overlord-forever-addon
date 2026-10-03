@@ -902,9 +902,6 @@ local function CommandHandler(msg)
 
     elseif cmd == "sync" then
         if Overlord.Sync then
-            if Overlord.Sync.InvalidateOnlineMembersCache then
-                Overlord.Sync:InvalidateOnlineMembersCache()
-            end
             -- Cible canonique Blizzard Nom-Royaume (ex. "Melicole-Hyjal").
             local target = args[2] and table.concat(args, " ", 2) or nil
             if target and target ~= "" then

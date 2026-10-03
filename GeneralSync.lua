@@ -189,61 +189,6 @@ local function SenderMatchesName(sender, name)
     return sk ~= nil and nk ~= nil and sk == nk
 end
 
-local function GetSenderCommunityFaction(sender)
-    local sync = Overlord.Sync
-    if not sync or not sync.GetOnlineCommunityMemberFaction then return nil end
-    local fac = sync:GetOnlineCommunityMemberFaction(sender)
-    if fac then return fac end
-    if sync.NormalizeContributorFullName then
-        local full = sync:NormalizeContributorFullName(sender)
-        if full and full ~= sender then
-            fac = sync:GetOnlineCommunityMemberFaction(full)
-            if fac then return fac end
-        end
-    end
-    if sync.GetCaptureContributorDedupKey then
-        local dk = sync:GetCaptureContributorDedupKey(sender)
-        if dk and dk ~= "" then
-            fac = sync:GetOnlineCommunityMemberFaction(dk)
-            if fac then return fac end
-        end
-    end
-    return nil
-end
-
-local function IsKnownCommunitySender(sender)
-    local sync = Overlord.Sync
-    if not sync or not sender or sender == "" then return false end
-    if sync.IsStrategicSiteCommunitySender then
-        return sync:IsStrategicSiteCommunitySender(sender)
-    end
-    return GetSenderCommunityFaction(sender) ~= nil
-end
-
-local function SenderFactionMatches(sender, faction, strict)
-    if not sender or not faction then return true end
-    local memberFaction = GetSenderCommunityFaction(sender)
-    if memberFaction == nil and strict then
-        if not IsKnownCommunitySender(sender) then return false end
-        local sync = Overlord.Sync
-        if sync and sync.GetOnlineCommunityMembersIfFresh then
-            sync:GetOnlineCommunityMembersIfFresh(15)
-        end
-        memberFaction = GetSenderCommunityFaction(sender)
-        if memberFaction == nil then return false end
-    elseif memberFaction == nil then
-        return true
-    end
-    local FA = Enum.PvPFaction
-    if not FA then return true end
-    if faction == "Horde" then
-        return memberFaction == FA.Horde
-    end
-    if faction == "Alliance" then
-        return memberFaction == FA.Alliance
-    end
-    return true
-end
 
 -- Faction de l'expediteur via raid/groupe (duel General cross-faction).
 local function GetRaidUnitFactionForSender(sender)
@@ -270,7 +215,9 @@ local function AcceptGeneralSender(sender, faction)
         -- Membre du groupe sans match faction explicite (dedup nom) : faire confiance au roster.
         return true
     end
-    return SenderFactionMatches(sender, faction, true)
+    -- Copie directe WoW d'un inconnu (ni relais, ni groupe) : refusee, comme avant
+    -- (la verification stricte par roster de club ne pouvait jamais reussir sur Forever).
+    return false
 end
 
 local function NormalizeName(name)

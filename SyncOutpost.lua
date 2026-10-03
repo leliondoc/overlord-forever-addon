@@ -1286,15 +1286,6 @@ function Overlord.Sync:OnReceiveOutpostCapture(payload, sender, sourceChannel)
         and OutpostPayloadHasExplicitLinkedPool(wirePool) then
         self:SendToChannel("OC", payload, true)
     end
-    -- Relais 1-hop seulement si le payload porte explicitement notre pool.
-    if (sourceChannel ~= "WHISPER" and sourceChannel ~= "BETA") and payload ~= "" and OutpostPayloadHasExplicitLinkedPool(wirePool) then
-        local relayPl, relayKey = payload, dedupKey
-        C_Timer.After(0.5, function()
-            if Overlord.Sync and Overlord.Sync.RelayOutpostCaptureToCommunitySafe then
-                Overlord.Sync:RelayOutpostCaptureToCommunitySafe(relayPl, relayKey, remotePool)
-            end
-        end)
-    end
 end
 
 -- Il existe sept sites : une SR territoriale doit pouvoir transporter

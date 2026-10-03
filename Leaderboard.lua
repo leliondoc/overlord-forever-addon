@@ -1787,17 +1787,6 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                 return
             end
             local class, faction, _, race, raceSex, localeTag, pool = indexedMeta(name)
-            -- Le cache roster communaute deja pret peut enrichir la race sans jamais
-            -- lancer le scan hors-ligne; sinon le snapshot replique reste le fallback.
-            local syncNow = Overlord.Sync
-            local community = syncNow and syncNow.GetCommunityMemberCharacterIfFresh
-                and syncNow:GetCommunityMemberCharacterIfFresh(name, 30) or nil
-            if community and community.race and community.race ~= "" then
-                local communitySex = math.floor(tonumber(community.raceSex) or 0)
-                if communitySex ~= 2 and communitySex ~= 3 then communitySex = 0 end
-                if communitySex == 0 and community.race == race then communitySex = raceSex end
-                race, raceSex = community.race, communitySex
-            end
             meta[name] = { class, faction, race, raceSex }
             localeTag = sanitizeLocaleTag(localeTag)
             if localeTag ~= "" then
@@ -3845,19 +3834,9 @@ function Overlord.Leaderboard:GetExportPlayerRace(playerName, allowCommunityRefr
         playerName = sync:NormalizeContributorFullName(playerName)
     end
     if not playerName or playerName == "" then return "", 0 end
-    -- Le roster Blizzard porte un raceID meme pour de nombreux membres hors ligne.
-    -- Il constitue donc la source locale la plus fraiche lorsqu'il connait le personnage.
-    local communityMeta = nil
-    if sync then
-        if allowCommunityRefresh == false and sync.GetCommunityMemberCharacterIfFresh then
-            communityMeta = sync:GetCommunityMemberCharacterIfFresh(playerName, 30)
-        elseif allowCommunityRefresh ~= false and sync.GetCommunityMemberCharacter then
-            communityMeta = sync:GetCommunityMemberCharacter(playerName, false, 30)
-        end
-    end
-    local communityRace = communityMeta and communityMeta.race or ""
-    local communitySex = math.floor(tonumber(communityMeta and communityMeta.raceSex) or 0)
-    if communitySex ~= 2 and communitySex ~= 3 then communitySex = 0 end
+    -- Forever n'a pas de roster de club : la race vient des K/LR repliques et des
+    -- unites observees.
+    local communityRace, communitySex = "", 0
 
     -- Les metadonnees repliquees restent indispensables entre joueurs qui ne partagent
     -- pas les memes communautes. Elles peuvent aussi completer le sexe absent du roster.

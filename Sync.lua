@@ -873,15 +873,6 @@ function Overlord.Sync:StartLoginCaptureSyncBurst()
                 or Overlord.InstanceSuspended or IsInInstance() then return end
             if Overlord.IsLoginCaptureSyncGateActive
                 and not Overlord:IsLoginCaptureSyncGateActive() then return end
-            -- C_Club peut exposer le club avant ses streams/membres. Une liste
-            -- vide lue au premier essai ne doit jamais condamner tout le burst
-            -- via le cache roster (cas observe : carte entierement en SYNC).
-            if Overlord.Sync.InvalidateOnlineMembersCache
-                and (attempt == 1
-                    or not Overlord.Sync.HasUsableOnlineMembersCache
-                    or not Overlord.Sync:HasUsableOnlineMembersCache()) then
-                Overlord.Sync:InvalidateOnlineMembersCache()
-            end
             Overlord.Sync:SendSyncRequest({
                 includeCommunity = true,
                 allowCommunityInLargeEvent = true,
@@ -937,12 +928,6 @@ function Overlord.Sync:StartInstanceCaptureSyncBurst()
     local generation = self._instanceCaptureSyncBurstGeneration
     local delays = { 0.25, 2.5, 6.5, 12.0 }
     self._instanceCaptureSyncBurstUntil = GetTime() + 18
-    -- Une seule invalidation suffit : le premier BroadcastToCommunity reconstruit
-    -- le roster, puis les essais suivants reutilisent ce cache pendant le burst.
-    -- Scanner C_Club a chaque callback provoquait cinq parcours synchrones du club.
-    if self.InvalidateOnlineMembersCache then
-        self:InvalidateOnlineMembersCache()
-    end
     for attempt, delay in ipairs(delays) do
         C_Timer.After(delay, function()
             if not Overlord.Sync
@@ -5974,9 +5959,10 @@ end
 -- receveurs ne recalculent jamais cette liste : ils valident ensuite un engagement
 -- prive, ce qui tolere leurs snapshots communautaires differents.
 function Overlord.Sync:GetCaptureNetworkWitnessTopCandidates(seed, originName)
-    if not seed or not self.GetOnlineCommunityMembersIfFresh then return {} end
-    local online = self:GetOnlineCommunityMembersIfFresh(
-        self.CAPTURE_NETWORK_WITNESS_CACHE_MAX_AGE)
+    -- Sans roster de club il n'y a pas de pool de temoins stable : aucune sonde Q.
+    -- (Les champs W/Q des ZS recus restent valides et verifies.)
+    if not seed then return {} end
+    local online = nil
     if not online then return {} end
     local originKey = self:GetCaptureNetworkWitnessIdentityKey(originName)
     if not originKey then return {} end
@@ -6041,12 +6027,7 @@ function Overlord.Sync:CaptureNetworkProbeFactionVerified(originName, owner)
     local bnetFaction = self.GetResolvedBNetPlayerFaction
         and self:GetResolvedBNetPlayerFaction(originName) or nil
     if bnetFaction then return bnetFaction == owner end
-    local rosterFaction = self.GetOnlineCommunityMemberFactionIfFresh
-        and self:GetOnlineCommunityMemberFactionIfFresh(
-            originName, self.CAPTURE_NETWORK_WITNESS_CACHE_MAX_AGE) or nil
-    local factions = Enum and Enum.PvPFaction
-    return factions and ((owner == "Alliance" and rosterFaction == factions.Alliance)
-        or (owner == "Horde" and rosterFaction == factions.Horde)) or false
+    return false
 end
 
 -- Une sonde Q ne cree aucune preuve. Elle confirme seulement que la cible est
@@ -10673,9 +10654,6 @@ function Overlord.Sync:StartPeriodicChannelSync()
         if startupGeneration ~= self._periodicChannelSyncGeneration then return end
         if Overlord.IsInitialized and Overlord.InActiveFront
             and not Overlord.InstanceSuspended and Overlord.Sync then
-            if Overlord.Sync.GetOnlineCommunityMembers then
-                Overlord.Sync:GetOnlineCommunityMembers(false, 15)
-            end
             Overlord.Sync:ScheduleActivePeriodicCatchUp()
         end
     end)
