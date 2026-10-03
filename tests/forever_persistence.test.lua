@@ -71,7 +71,8 @@ do
         leaderboardsByPool = { normal = { kills = { Leak = 9 } } } }
     assert(Overlord:DropRetiredRulesetPools("pve"))
     assert(next(OverlordDB.zones) == nil and OverlordDB.leaderboard == nil
-        and OverlordDB.leaderboardsByPool.normal == nil, "Normal alt kept the leaked ladder or map")    -- Audit: an account that only ever had a 1.4.0 Normal ladder then logs a PvP
+        and OverlordDB.leaderboardsByPool.normal == nil, "Normal alt kept the leaked ladder or map")
+    -- Audit: an account that only ever had a 1.4.0 Normal ladder then logs a PvP
     -- character: the retired ladder must not become the PvP seed.
     OverlordDB = { lastResetTimestamp = 1790000000, lastSessionPool = "normal",
         leaderboard = { kills = { Leak = 9 } }, leaderboardsByPool = { normal = { kills = { Leak = 9 } } } }

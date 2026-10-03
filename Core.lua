@@ -5062,7 +5062,7 @@ function Overlord:ResetAll()
     OverlordDB.dominationVictoryEvents = OverlordDB.dominationVictoryEvents or { byPool = {} }
     OverlordDB.dominationVictoryEvents.byPool =
         OverlordDB.dominationVictoryEvents.byPool or {}
-    for _, oldPool in ipairs({ "fr", "eu", "de", "us", "na", "normal", "rp", "hardcore" }) do
+    for _, oldPool in ipairs({ "fr", "eu", "de", "us", "na", "normal", "rp", "hardcore", "pve", "rpg", "hc" }) do
         OverlordDB.dominationVictoryEvents.byPool[oldPool] = nil
     end
     OverlordDB.dominationVictoryEvents.byPool.global = nil
