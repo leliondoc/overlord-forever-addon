@@ -6332,7 +6332,8 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
     if (tonumber(snap.campaignStart) or 0) ~= campaignStart then return false end
     if not LeaderboardCampaignEpochsMatch(
         snap.scoreBucketEpoch, snap.campaignStart) then return false end
-    local snapPool = normalizeSavedVarsPool(tostring(snap.pool or ""))
+    -- No pool = written before 1.4 = the PvP campaign (same rule as the responder).
+    local snapPool = normalizeSavedVarsPool(tostring(snap.pool or "global"))
     local curPool = (Overlord.GetCurrentLeaderboardSavedVarsPool
         and Overlord:GetCurrentLeaderboardSavedVarsPool()) or ""
     curPool = normalizeSavedVarsPool(curPool)

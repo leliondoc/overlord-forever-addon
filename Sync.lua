@@ -13,7 +13,7 @@ local L = Overlord.L
 
 local PREFIX = "OverlordF"
 -- 1.4.0: one channel per Forever ruleset. PvP keeps "OverlordF" (the current
--- population and 1.3.x clients); Normal/RP/Hardcore use OverlordFN/R/H.
+-- population and 1.3.x clients); Normal/RP/Hardcore use OverlordFE/FRP/FHC (1.4.1).
 local function ChannelName()
     local rp = Overlord.RealmPools
     return "OverlordF" .. (rp and rp.GetChannelSuffix and rp:GetChannelSuffix() or "")

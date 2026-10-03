@@ -3558,9 +3558,6 @@ local RULESET_WORLD_KEYS = {
 -- Legacy single-victory fields still written and read as a fallback.
 local RULESET_WORLD_SCALARS = { "lastVictoryTimestamp", "lastVictoryFaction", "lastVictoryFrontId" }
 
--- On a ruleset change, park the world we leave and bring back ours if it is
--- from this same campaign week; otherwise start from the week's initial state.
--- Runs at the very start of the login, before zones and outposts are restored.
 -- 1.4.1: the 1.4.0 Normal/RP/Hardcore pools may hold PvP rows (a 1.3.x snapshot
 -- served between those clients). Drop everything saved under those tags once:
 -- ladders, parked worlds, victory journals and a snapshot of that pool. If the
@@ -3605,9 +3602,9 @@ function Overlord:DropRetiredRulesetPools(currentPool)
             OverlordDB[key] = type(value) == "table" and value or {}
         end
         for _, key in ipairs(RULESET_WORLD_SCALARS) do OverlordDB[key] = mine and mine[key] or nil end
-        if type(OverlordDB.leaderboard) == "table" and currentPool ~= "global" then
-            OverlordDB.leaderboard = nil
-        end
+        -- The legacy root is that retired ladder: never let any campaign reseed
+        -- from it (Initialize reseeds the current pool's bucket just after).
+        OverlordDB.leaderboard = nil
         OverlordDB.lastSessionPool = currentPool
     end
     return true
@@ -3643,8 +3640,11 @@ function Overlord:RecoverParkedOutpostHistory(currentPool)
         end
     end
     local recovered = false
+    local retiredPools = {}
+    for _, pool in ipairs(self.RealmPools and self.RealmPools.RETIRED_POOLS or {}) do retiredPools[pool] = true end
     for pool, entry in pairs(legacy) do
-        if type(entry) == "table" and self:CampaignEpochsMatch(entry.epoch, week) then
+        if type(entry) == "table" and not retiredPools[pool]
+            and self:CampaignEpochsMatch(entry.epoch, week) then
             if pool == currentPool then
                 -- New tables: ledger caches keyed on table identity rebuild themselves.
                 local counts, tenants = copy(OverlordDB.outpostCaptureCounts), copy(OverlordDB.outpostTenants)
@@ -3682,6 +3682,9 @@ function Overlord:RecoverParkedOutpostHistory(currentPool)
     return recovered
 end
 
+-- On a ruleset change, park the world we leave and bring back ours if it is
+-- from this same campaign week; otherwise start from the week's initial state.
+-- Runs at the very start of the login, before zones and outposts are restored.
 function Overlord:SwapRulesetWorld(currentPool)
     if not OverlordDB or type(currentPool) ~= "string" or currentPool == "" then return false end
     -- Once per session: Initialize can restart (faction not known yet) before
