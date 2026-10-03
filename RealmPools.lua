@@ -90,11 +90,6 @@ function RealmPools:GetOverlordPoolTag()
     return RULESET_POOL[self:GetRuleset()] or "global"
 end
 
--- Compatibilite des lecteurs historiques : un nom ne prouve jamais une region.
-function RealmPools:InferPoolTagFromRealmName()
-    return ""
-end
-
 -- Outposts are never linked across rulesets.
 function RealmPools:AreOutpostCrossPoolsLinked(poolA, poolB)
     poolA = self:NormalizeRegionPool(poolA)

@@ -3985,42 +3985,6 @@ local function ResolveFrontWaypointMapID(frontIdForMap)
     return mapID
 end
 
--- Repere sur le centre du fortin (Les Paluns, carte separee des fronts).
-function Overlord.MapMarkers:SetUserWaypointForGuildKeepSite(site)
-    if not site or not site.center then return false end
-    local mapID, nx, ny = ResolveGuildKeepWaypointPoint(site)
-    if not mapID or not nx or not ny then
-        Overlord:PrintNotification(L.ZONE_WAYPOINT_BLOCKED)
-        return false
-    end
-    local defaultId = (Overlord.GuildKeep and Overlord.GuildKeep.GetDefaultSite
-        and (Overlord.GuildKeep:GetDefaultSite() or {}).id) or "guild_keep"
-    local pseudo = { center = { nx * 100, ny * 100 }, id = site.id or defaultId }
-    if UserWaypointMatchesFrontZone(pseudo, mapID) and C_Map.ClearUserWaypoint then
-        ClearUserWaypointTracking()
-        return true
-    end
-    if not MapAllowsUserWaypoint(mapID) then
-        Overlord:PrintNotification(L.ZONE_WAYPOINT_BLOCKED)
-        return false
-    end
-    local okCreate, mapPoint = pcall(function()
-        return UiMapPoint.CreateFromVector2D(mapID, CreateVector2D(nx, ny))
-    end)
-    if not okCreate or not mapPoint then
-        Overlord:PrintNotification(L.ZONE_WAYPOINT_FAIL)
-        return false
-    end
-    local okSet = pcall(C_Map.SetUserWaypoint, mapPoint)
-    if not okSet then
-        Overlord:PrintNotification(L.ZONE_WAYPOINT_FAIL)
-        return false
-    end
-    if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
-        pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, true)
-    end
-    return true
-end
 
 -- Repere sur le centre d'un avant-poste autonome. Les avant-postes de front
 -- continuent d'utiliser la carte de leur front via SetUserWaypointForFrontZone.

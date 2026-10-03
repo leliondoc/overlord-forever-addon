@@ -95,19 +95,6 @@ local function requestMapOpacityRefresh(contentOnly)
     end)
 end
 
-local function flushSettingsMapSideEffects()
-    if Overlord.MapMarkers then
-        if Overlord.MapMarkers.RequestOverlayRefresh then
-            Overlord.MapMarkers:RequestOverlayRefresh()
-        end
-        if Overlord.MapMarkers.RefreshMinimapOverlayOpacity then
-            Overlord.MapMarkers:RefreshMinimapOverlayOpacity()
-        end
-        if Overlord.MapMarkers.RefreshMinimapCaptureZonesVisibility then
-            Overlord.MapMarkers:RefreshMinimapCaptureZonesVisibility()
-        end
-    end
-end
 
 local function clampScale(v)
     v = tonumber(v) or DEFAULT_SCALE

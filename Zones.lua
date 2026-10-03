@@ -556,9 +556,7 @@ end
 -- ID front depuis zone.id (indépendant du front actif affiché dans ZoneDatabase).
 local function ResolveFrontIdFromZoneId(zoneId)
     if not zoneId or zoneId == "" then return nil end
-    if zoneId:sub(1, 3) == "sb_" then return "southern_barrens" end
     if zoneId:sub(1, 5) == "loch_" then return "loch_modan" end
-    if zoneId:sub(1, 8) == "gilneas_" then return "gilneas" end
     if zoneId:sub(1, 8) == "durotar_" then return "durotar" end
     if zoneId:sub(1, 4) == "ash_" then return "ashenvale" end
     if Overlord.Fronts and Overlord.Fronts.GetZone then
@@ -570,9 +568,7 @@ end
 
 function Overlord.Zones:GetFrontMapDisplayName(frontId)
     if not frontId or not L then return nil end
-    if frontId == "southern_barrens" then return L.FRONT_SOUTHERN_BARRENS_NAME end
     if frontId == "loch_modan" then return L.FRONT_LOCH_MODAN_NAME end
-    if frontId == "gilneas" then return L.FRONT_GILNEAS_NAME end
     if frontId == "arathi" then return L.FRONT_ARATHI_NAME end
     if frontId == "ashenvale" then return L.FRONT_ASHENVALE_NAME end
     if frontId == "durotar" then return L.FRONT_DUROTAR_NAME end

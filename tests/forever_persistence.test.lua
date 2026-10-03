@@ -191,7 +191,6 @@ do
     assert(newSession() and not Overlord:SwapRulesetWorld("global") and OverlordDB.zones.a == 1
         and OverlordDB.worldsByPool == nil)
 end
-assert(Overlord:SavedVarsPoolFromLocaleTag("frFR") == nil)
 local globalReset = Overlord:GetLastResetTimestamp()
 region = 3
 assert(Overlord:GetLastResetTimestamp() == globalReset, "EU and US clients chose different campaigns")

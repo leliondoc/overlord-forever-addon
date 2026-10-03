@@ -495,19 +495,6 @@ function Overlord:SafeUnitLevel(unit)
 end
 
 -- Wrapper pour GetNormalizedRealmName / GetRealmName
-function Overlord:SafeGetRealmName()
-    if Overlord.InstanceSuspended then return nil end
-    local ok, realm = pcall(GetNormalizedRealmName)
-    if not ok or not realm or realm == "" then
-        ok, realm = pcall(GetRealmName)
-        if ok and realm then
-            realm = realm:gsub("%s", "")
-        else
-            realm = nil
-        end
-    end
-    return realm
-end
 
 -- Wrapper pour GetGuildInfo (WoW 12.x : pcall + pas d'appel en instance suspendue)
 function Overlord:SafeGetGuildInfo(unit)
@@ -1765,11 +1752,6 @@ function Overlord:GetCurrentLeaderboardSavedVarsPool()
     return GetCurrentPoolForSavedVars()
 end
 
--- Une langue ne permet pas de distinguer NA et EU (frFR existe sur les deux).
-function Overlord:SavedVarsPoolFromLocaleTag(localeTag)
-    return nil
-end
-
 local function EmptyLeaderboardBucket()
     local startTs = (OverlordDB and tonumber(OverlordDB.lastResetTimestamp)) or 0
     local campaignId = (startTs > 0 and Overlord.TimestampToCampaignId) and Overlord:TimestampToCampaignId(startTs) or 0
@@ -2655,98 +2637,7 @@ function Overlord:ScheduleNextReset()
     end)
 end
 
--- Migration legacy Gilneas : un ladder ancien peut contenir des dizaines de
--- milliers de joueurs et de zones. Le scan est une barriere login budgetee ; le
--- marker n'est publie qu'apres la derniere tranche, donc un /reload au milieu
--- rejoue idempotemment les remplacements deja appliques.
-function Overlord:EnsureGilneasZoneRenamePrepared()
-    if not OverlordDB then return "blocked" end
-    if OverlordDB.gilneasZoneRename2026 then return true end
-    if self._gilneasZoneRenameFailed then return "blocked" end
-    if self._gilneasZoneRenamePending then return false end
-    if not C_Timer or not C_Timer.After then return "blocked" end
 
-    local zonesTbl = OverlordDB.zones
-    if type(zonesTbl) == "table" then
-        local function MoveZoneKey(oldId, newId)
-            if zonesTbl[oldId] and not zonesTbl[newId] then
-                zonesTbl[newId] = zonesTbl[oldId]
-            end
-            zonesTbl[oldId] = nil
-        end
-        MoveZoneKey("gilneas_gatewood", "gilneas_lighthouse")
-        MoveZoneKey("gilneas_cursed_isle", "gilneas_hayward_fisheries")
-    end
-
-    self._gilneasZoneRenamePending = true
-    local generation = (tonumber(self._gilneasZoneRenameGeneration) or 0) + 1
-    self._gilneasZoneRenameGeneration = generation
-    local processed = 0
-    local started = debugprofilestop and debugprofilestop() or 0
-    local worker = coroutine.create(function()
-        local function YieldWork()
-            processed = processed + 1
-            local elapsed = debugprofilestop and (debugprofilestop() - started) or 0
-            if processed >= 64 or elapsed >= 1.25 then
-                processed = 0
-                coroutine.yield()
-                started = debugprofilestop and debugprofilestop() or 0
-            end
-        end
-        local captureSources, seenSources = {}, {}
-        local function AddBucket(lb)
-            local captures = type(lb) == "table" and lb.captures or nil
-            if type(captures) == "table" and not seenSources[captures] then
-                seenSources[captures] = true
-                captureSources[#captureSources + 1] = captures
-            end
-        end
-        AddBucket(OverlordDB.leaderboard)
-        for _, lb in pairs(OverlordDB.leaderboardsByPool or {}) do
-            YieldWork()
-            AddBucket(lb)
-        end
-        for sourceIndex = 1, #captureSources do
-            for _, zlist in pairs(captureSources[sourceIndex]) do
-                YieldWork()
-                if type(zlist) == "table" then
-                    for i = 1, #zlist do
-                        local zid = zlist[i]
-                        if zid == "gilneas_gatewood" then
-                            zlist[i] = "gilneas_lighthouse"
-                        elseif zid == "gilneas_cursed_isle" then
-                            zlist[i] = "gilneas_hayward_fisheries"
-                        end
-                        YieldWork()
-                    end
-                end
-            end
-        end
-    end)
-
-    local ResumeWorker
-    ResumeWorker = function()
-        if self._gilneasZoneRenameGeneration ~= generation
-            or not self._gilneasZoneRenamePending then return end
-        local ok, err = coroutine.resume(worker)
-        if not ok then
-            self._gilneasZoneRenamePending = false
-            self._gilneasZoneRenameFailed = true
-            self:PrintNotification("|cFFFF0000[Overlord]|r Gilneas migration failed; /reload required: "
-                .. tostring(err))
-            return
-        end
-        if coroutine.status(worker) ~= "dead" then
-            C_Timer.After(0, ResumeWorker)
-            return
-        end
-        OverlordDB.gilneasZoneRename2026 = true
-        self._gilneasZoneRenamePending = false
-        self._gilneasZoneRenameFailed = nil
-    end
-    C_Timer.After(0, ResumeWorker)
-    return false
-end
 
 -- Les timers PLAYER_LOGIN restent actifs pendant les migrations longues, mais ne
 -- doivent ni afficher une vue partielle ni abandonner leur unique tentative. Chaque
@@ -3093,10 +2984,6 @@ function Overlord:Initialize()
                 required = required == true,
             }
         end
-
-        AddLoginInitStage("GilneasMigration", function()
-            return Overlord:EnsureGilneasZoneRenamePrepared()
-        end, true)
 
         AddLoginInitStage("Restore", function()
             Overlord:RestoreZoneState()

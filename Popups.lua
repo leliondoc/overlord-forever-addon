@@ -972,13 +972,6 @@ local function IsPlayerOnFrontMap()
     return Overlord.Zones:IsWarFrontMapID(mapID)
 end
 
-local function IsPlayerOnGuildKeepMap()
-    local ok, mapID = pcall(C_Map.GetBestMapForUnit, "player")
-    if not ok or not mapID or not Overlord.GuildKeep or not Overlord.GuildKeep.ResolveSiteByMapID then
-        return false
-    end
-    return Overlord.GuildKeep:ResolveSiteByMapID(mapID) ~= nil
-end
 
 -- Joueur sur une carte de front actif (pas en capitale / hors zone de guerre).
 local function IsPlayerOnActiveFront()

@@ -90,28 +90,6 @@ function Overlord.UI.ApplyFlyoutArrowStyle(tex, side, src, color)
     end
 end
 
--- Palette + sceau de cire (faction du joueur qui consulte l'UI).
-function Overlord.UI.GetViewerFactionPalette()
-    local fac = Overlord.PlayerFaction or UnitFactionGroup("player")
-    if fac == "Horde" then
-        return {
-            gold = { 0.82, 0.22, 0.12 },
-            goldDim = { 0.52, 0.14, 0.08 },
-            bright = { 1.0, 0.40, 0.27 },
-            white = { 0.941, 0.878, 0.753 },
-            panelBg = { 0.12, 0.05, 0.04, 0.88 },
-            fallbackBg = { 0.165, 0.122, 0.102, 0.95 },
-        }
-    end
-    return {
-        gold = DEFAULT_GOLD,
-        goldDim = DEFAULT_GOLD_DIM,
-        bright = { 0.427, 0.702, 0.949 },
-        white = DEFAULT_WHITE,
-        panelBg = DEFAULT_PANEL_BG,
-        fallbackBg = DEFAULT_FALLBACK_BG,
-    }
-end
 
 local cachedWoodBgFile
 local woodBgResolverFrame
@@ -172,19 +150,6 @@ function Overlord.UI.ApplyWoodDialogBackdrop(frame, opts)
     frame._woodBackdropApplied = true
 end
 
--- Mise à jour légère (faction) sans recréer le backdrop complet.
-function Overlord.UI.UpdateWoodDialogBorder(frame, opts)
-    if not frame or not frame.SetBackdropBorderColor then return end
-    opts = opts or {}
-    local fallbackBg = opts.fallbackBg or DEFAULT_FALLBACK_BG
-    local borderColor = opts.borderColor or DEFAULT_GOLD
-    local borderAlpha = opts.borderAlpha or 0.88
-    local panelWoodBgFile = ResolveWoodBgFile()
-    if frame.SetBackdropColor then
-        ApplyWoodBackdropColors(frame, panelWoodBgFile, fallbackBg)
-    end
-    frame:SetBackdropBorderColor(borderColor[1], borderColor[2], borderColor[3], borderAlpha)
-end
 
 -- Atlas Blizzard Trading Post (theme Horde vs Alliance) + accents Mode Guerre.
 local PERKS_CHROME_TOP_ATLAS = "perks-theme-hordevsalliance-tp-topbig"

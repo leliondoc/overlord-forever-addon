@@ -19,8 +19,6 @@ local function ChannelName()
     return "OverlordF" .. (rp and rp.GetChannelSuffix and rp:GetChannelSuffix() or "")
 end
 -- Forever : canal royaume + groupe + communaute + BNet (cross-faction, pas de Warmode).
-local SYNC_USE_REALM_CHANNEL = true
-local SYNC_USE_BNET_OUTBOUND = true
 local syncFrame = CreateFrame("Frame")
 local pendingSync = false
 local MAX_CLOCK_SKEW = 300           -- 5 min de tolerance pour le decalage d'horloge entre joueurs
@@ -565,7 +563,6 @@ end
 -- Au succes : envoie un SR immediat + 2 SR différés (15s, 35s) pour maximiser les chances d'avoir une reponse
 -- frameID = 0 : canal invisible (pas attache a un onglet chat), sync uniquement via addon messages
 function Overlord.Sync:JoinChannel(attempt, generation)
-    if not SYNC_USE_REALM_CHANNEL then return end
     attempt = attempt or 1
     if not generation then
         local existingId = GetChannelName(ChannelName())
@@ -644,7 +641,6 @@ end
 -- Relance periodique du join canal (toutes les 60s) si on n'est pas dedans (evite de rester desync si le join a rate au chargement)
 local channelRetryTicker = nil
 function Overlord.Sync:StartChannelRetryLoop()
-    if not SYNC_USE_REALM_CHANNEL then return end
     if channelRetryTicker then channelRetryTicker:Cancel() end
     channelRetryTicker = C_Timer.NewTicker(60, function()
         if not Overlord.IsInitialized then return end
@@ -693,7 +689,7 @@ function Overlord.Sync:SendSyncRequest(opts)
     end
     if not opts.targetedCommunityOnly then
         self:Send("SR", payload)
-        if SYNC_USE_REALM_CHANNEL and (IsInRaid() or IsInGroup()) and self:GetChannelId() then
+        if (IsInRaid() or IsInGroup()) and self:GetChannelId() then
             self:SendToChannel("SR", payload, opts.criticalChannel == true)
         end
     end
@@ -714,8 +710,7 @@ function Overlord.Sync:SendSyncRequest(opts)
             nil,
             opts.communityRosterMinTtl)
     end
-    if not opts.targetedCommunityOnly
-        and SYNC_USE_BNET_OUTBOUND and Overlord.InActiveFront then
+    if not opts.targetedCommunityOnly and Overlord.InActiveFront then
         local now = GetTime()
         local bnetSRCooldown = self:IsLargeEvent() and BNET_SR_COOLDOWN_LARGE or BNET_SR_COOLDOWN
         if now - lastBNetSRBroadcast >= bnetSRCooldown then
@@ -842,7 +837,7 @@ function Overlord.Sync:RequestConsultFrontSync(frontId)
     lastConsultFrontSR[frontId] = now
     local payload = SRPayload("T")
     self:Send("SR", payload)
-    if SYNC_USE_REALM_CHANNEL and (IsInRaid() or IsInGroup()) then
+    if IsInRaid() or IsInGroup() then
         self:SendToChannel("SR", payload)
     end
 end
@@ -1428,7 +1423,7 @@ function Overlord.Sync:Send(msgType, data, groupOnly)
     end
 
     if groupOnly then return false end
-    if SYNC_USE_REALM_CHANNEL then
+    do
         local channelId = self:GetChannelId()
         if channelId then
             -- Meme filtre et meme budget que SendToChannel : sinon un solo envoyait
@@ -1603,7 +1598,7 @@ end
 function Overlord.Sync:SendToChannel(msgType, data, critical)
     if Overlord.BetaNetwork and Overlord.BetaNetwork:IsEcho(msgType, data) then return false end
     if self:RelayAlreadyCarries(msgType, data) then return true end
-    if not SYNC_USE_REALM_CHANNEL or Overlord.InstanceSuspended or IsInInstance() then return false end
+    if Overlord.InstanceSuspended or IsInInstance() then return false end
     local channelId = self:GetChannelId()
     if not channelId then return false end
     local msg = msgType
@@ -1629,7 +1624,7 @@ end
 -- Second return: "wait" when the channel is only busy (our own total waiting, send
 -- budget spent, Blizzard refusal): the bridge retries later instead of whispering.
 function Overlord.Sync:SendBridgeLKToChannel(payload)
-    if not SYNC_USE_REALM_CHANNEL or Overlord.InstanceSuspended or IsInInstance() then return false end
+    if Overlord.InstanceSuspended or IsInInstance() then return false end
     if type(payload) ~= "string" or payload == "" then return false end
     local channelId = self:GetChannelId()
     if not channelId then return false end
@@ -1890,7 +1885,7 @@ function Overlord.Sync:GetResolvedBNetPlayerFaction(playerName)
 end
 
 function Overlord.Sync:SendToBNet(gameAccountID, msgType, data)
-    if not SYNC_USE_BNET_OUTBOUND or not gameAccountID or Overlord.InstanceSuspended or IsInInstance() then return end
+    if not gameAccountID or Overlord.InstanceSuspended or IsInInstance() then return end
     if not IsBNetGameAccountInCurrentRegion(gameAccountID) then return end
     local band = self:GetMyBand()
     local msg = msgType .. ":" .. band
@@ -2038,7 +2033,6 @@ function Overlord.Sync:GetOnlineBNetPlayerFaction(playerName)
 end
 
 function Overlord.Sync:SendToBNetFriends(msgType, data)
-    if not SYNC_USE_BNET_OUTBOUND then return end
     if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then
         return Overlord.BetaNetwork:Broadcast(msgType, data or "")
     end
@@ -2103,7 +2097,6 @@ function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
         local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
         self:OnReceiveCapture(payload or "", gameplaySender)
     elseif msgType == "SR" then
-        if not SYNC_USE_BNET_OUTBOUND then return end
         self:OnSyncRequest(senderID, payload or "", "BNET")
     elseif msgType == "ZS" then
         local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
@@ -5040,23 +5033,6 @@ function Overlord.Sync:GetGroupMemberFaction(sender)
     return type(value) == "string" and value or nil
 end
 
-function Overlord.Sync:GetGroupMemberGuild(sender)
-    if not sender or sender == "" or not IsInGroup() then return nil end
-    local key = self.GetCaptureContributorDedupKey
-        and self:GetCaptureContributorDedupKey(sender) or sender:lower()
-    -- Rafraichit le roster au plus une fois / 2 s, puis lit la guilde du seul
-    -- unit token correspondant (pas les 40 guildes du raid).
-    GetGroupMemberNames()
-    key = key and key:lower() or nil
-    if not key then return nil end
-    local cached = cachedGroupGuilds[key]
-    if cached ~= nil then return cached end
-    local unit = cachedGroupUnits[key]
-    if not unit or not Overlord.SafeGetGuildInfo then return nil end
-    local guild = Overlord:SafeGetGuildInfo(unit) or ""
-    cachedGroupGuilds[key] = guild
-    return guild
-end
 
 function Overlord.Sync:IsNearbyAddonSender(sender)
     if not sender or sender == "" then return false end
@@ -8585,9 +8561,7 @@ function Overlord.Sync:BroadcastCapture(zoneId, completedRequirement)
                 zoneId, waveId, originGuid, payload)
         end
         if Overlord.InActiveFront and wideCaptureRelay then
-            if SYNC_USE_BNET_OUTBOUND then
-                self:SendToBNetFriends("C", payload)
-            end
+            self:SendToBNetFriends("C", payload)
             if self.BroadcastToCommunity then
                 -- C est un terminal rare : chaque membre communautaire en ligne
                 -- doit recevoir la copie directe du capteur, y compris en gros event.
@@ -9250,9 +9224,7 @@ function Overlord.Sync:BroadcastZoneState(zone, forceBNetZS, primaryOnly)
                 local whisperDelay = largeEvent and 0.35 or TUNING.OBSERVER_CRITICAL_COMMUNITY_DELAY
                 self:BroadcastToCommunity("ZS", payload, maxCommunity, whisperDelay)
                 lastBNetZSBroadcast[zone.id] = GetTime()
-                if SYNC_USE_BNET_OUTBOUND then
-                    self:SendToBNetFriends("ZS", payload)
-                end
+                self:SendToBNetFriends("ZS", payload)
             end
         else
             local now = GetTime()
@@ -9279,9 +9251,7 @@ function Overlord.Sync:BroadcastZoneState(zone, forceBNetZS, primaryOnly)
                     whisperDelay = nil
                 end
                 self:BroadcastToCommunity("ZS", payload, maxCommunity, whisperDelay)
-                if SYNC_USE_BNET_OUTBOUND then
-                    self:SendToBNetFriends("ZS", payload)
-                end
+                self:SendToBNetFriends("ZS", payload)
             end
         end
     end
@@ -9805,7 +9775,7 @@ function Overlord.Sync:StartPeriodicChannelSync()
     -- Premier SR BNet immediat a l'entree en front (le ticker attend 30s)
     -- Passe par le cooldown global pour eviter la rafale init (JoinChannel envoie aussi)
     local now = GetTime()
-    if SYNC_USE_BNET_OUTBOUND then
+    do
         local bnetSRCooldown = self:IsLargeEvent() and BNET_SR_COOLDOWN_LARGE or BNET_SR_COOLDOWN
         if now - lastBNetSRBroadcast >= bnetSRCooldown then
             lastBNetSRBroadcast = now

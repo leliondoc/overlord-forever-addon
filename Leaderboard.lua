@@ -1005,11 +1005,6 @@ function Overlord.Leaderboard:RebuildDedupMetaIndex(yieldWork, onName)
                 -- mais calcule une seule fois pendant la construction de l'index. Les lignes
                 -- sans pool explicite peuvent toujours etre classees par leur locale sync hors US.
                 local pool = normalizeSavedVarsPool(inf.pool)
-                if pool == "" and inf.locale and inf.locale ~= ""
-                    and Overlord.SavedVarsPoolFromLocaleTag
-                    and not (GetCurrentRegion and GetCurrentRegion() == 1) then
-                    pool = normalizeSavedVarsPool(Overlord:SavedVarsPoolFromLocaleTag(inf.locale) or "")
-                end
                 if pool ~= "" then
                     local ts = tonumber(inf.factionAt) or 0
                     local sk = tostring(n)
@@ -1791,11 +1786,6 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             localeTag = sanitizeLocaleTag(localeTag)
             if localeTag ~= "" then
                 pool = normalizeSavedVarsPool(pool)
-                if pool == "" and Overlord.RealmPools
-                    and Overlord.RealmPools.InferPoolTagFromRealmName then
-                    pool = normalizeSavedVarsPool(
-                        Overlord.RealmPools:InferPoolTagFromRealmName(name) or "")
-                end
                 if Overlord.FormatLocaleTagForDisplay then
                     locale[name] = Overlord:FormatLocaleTagForDisplay(localeTag, pool)
                 else
@@ -3080,9 +3070,6 @@ local function lbMergeTwoPlayerInfoRows(self, bestKey, otherKey)
     else
         mergedPool = pT
     end
-    if mergedPool == "" and mergedLocale ~= "" and Overlord.SavedVarsPoolFromLocaleTag then
-        mergedPool = normalizeSavedVarsPool(Overlord:SavedVarsPoolFromLocaleTag(mergedLocale) or "")
-    end
     self.playerInfo[bestKey] = {
         class = mergedClass,
         level = mergedLevel,
@@ -3410,11 +3397,6 @@ function Overlord.Leaderboard:SetPlayerInfo(playerName, class, faction, localeOp
     local prevAuth = prev and prev.guildAuth == true
     local prevReplica = prev and prev.guildReplica == true
     local poolKeep = normalizeSavedVarsPool((prev and prev.pool) or "")
-    -- Locale seule : inference pool uniquement hors Americas (cf. SavedVarsPoolFromLocaleTag).
-    if poolKeep == "" and locKeep ~= "" and Overlord.SavedVarsPoolFromLocaleTag then
-        local inferred = Overlord:SavedVarsPoolFromLocaleTag(locKeep)
-        if inferred then poolKeep = normalizeSavedVarsPool(inferred) end
-    end
     self.playerInfo[playerName] = {
         class = class,
         level = (prev and math.floor(tonumber(prev.level) or 0)) or 0,
@@ -4429,19 +4411,6 @@ function Overlord.Leaderboard:EnrichGuildFromLocalRoster()
     RunSlice()
 end
 
--- Totaux kills par faction (meme logique que LeaderboardUI, pour ecran de victoire aligne)
-function Overlord.Leaderboard:GetFactionKillTotals()
-    local alliKills, hordeKills = 0, 0
-    for name, kills in pairs(self.kills or {}) do
-        local _, fac = self:GetExportPlayerMeta(name)
-        if fac == "Horde" then
-            hordeKills = hordeKills + kills
-        elseif fac == "Alliance" then
-            alliKills = alliKills + kills
-        end
-    end
-    return alliKills, hordeKills
-end
 
 -- Scanne le raid/groupe pour recuperer classe et faction de chaque membre
 -- WoW 12.0.5 : SafeUnitName gere les secret values

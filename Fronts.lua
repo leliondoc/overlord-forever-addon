@@ -57,32 +57,6 @@ local ARATHI_HORDE_PREREQS = {
     stromgarde = {"faldir", "highperch"},
 }
 
-local GILNEAS_ALLIANCE_PREREQS = {
-    gilneas_alliance_capital = {},
-    gilneas_eminence = {"gilneas_alliance_capital"},
-    gilneas_keel_harbor = {"gilneas_eminence"},
-    gilneas_lighthouse = {"gilneas_keel_harbor"},
-    gilneas_emberstone_mine = {"gilneas_lighthouse"},
-    gilneas_hayward_fisheries = {"gilneas_alliance_capital"},
-    gilneas_stormglen = {"gilneas_hayward_fisheries"},
-    gilneas_tempest_reach = {"gilneas_stormglen"},
-    gilneas_aderic_repose = {"gilneas_tempest_reach"},
-    gilneas_horde_capital = {"gilneas_emberstone_mine", "gilneas_aderic_repose"},
-}
-
-local GILNEAS_HORDE_PREREQS = {
-    gilneas_horde_capital = {},
-    gilneas_emberstone_mine = {"gilneas_horde_capital"},
-    gilneas_lighthouse = {"gilneas_emberstone_mine"},
-    gilneas_keel_harbor = {"gilneas_lighthouse"},
-    gilneas_eminence = {"gilneas_keel_harbor"},
-    gilneas_aderic_repose = {"gilneas_horde_capital"},
-    gilneas_tempest_reach = {"gilneas_aderic_repose"},
-    gilneas_stormglen = {"gilneas_tempest_reach"},
-    gilneas_hayward_fisheries = {"gilneas_stormglen"},
-    gilneas_alliance_capital = {"gilneas_eminence", "gilneas_hayward_fisheries"},
-}
-
 local LOCH_ALLIANCE_PREREQS = {
     loch_alliance_capital = {},
     loch_valley_of_kings = {"loch_alliance_capital"},
@@ -106,36 +80,8 @@ local LOCH_HORDE_PREREQS = {
     loch_algaz_post = {"loch_stonewrought_dam"},
     loch_valley_of_kings = {"loch_south_gate_pass"},
     loch_silver_stream_mine = {"loch_algaz_post"},
-    -- Meme regle que Durotar/Gilneas : les 2 sorties de la capitale adverse.
+    -- Meme regle que Durotar : les 2 sorties de la capitale adverse.
     loch_alliance_capital = {"loch_valley_of_kings", "loch_silver_stream_mine"},
-}
-
--- Tarides du Sud : Alliance part du nord (capitale), Horde des 2 approches sud/est.
--- Ancien graphe Alliance faisait bael (sud) puis remonter vers hunters (nord) : chemin inverse.
-local SB_ALLIANCE_PREREQS = {
-    sb_alliance_capital = {},
-    sb_hunters_hill = {"sb_alliance_capital"},
-    sb_the_tangle = {"sb_alliance_capital"},
-    sb_ruins_of_taurajo = {"sb_hunters_hill"},
-    sb_battlescar = {"sb_ruins_of_taurajo"},
-    sb_bael_modan = {"sb_battlescar"},
-    sb_frazzlecraz_motherlode = {"sb_bael_modan"},
-    sb_razorfen_kraul = {"sb_frazzlecraz_motherlode"},
-    sb_northwatch_hold = {"sb_the_tangle"},
-    sb_horde_capital = {"sb_northwatch_hold", "sb_razorfen_kraul"},
-}
-
-local SB_HORDE_PREREQS = {
-    sb_horde_capital = {},
-    sb_northwatch_hold = {"sb_horde_capital"},
-    sb_razorfen_kraul = {"sb_horde_capital"},
-    sb_the_tangle = {"sb_northwatch_hold"},
-    sb_frazzlecraz_motherlode = {"sb_razorfen_kraul"},
-    sb_bael_modan = {"sb_frazzlecraz_motherlode"},
-    sb_battlescar = {"sb_bael_modan"},
-    sb_ruins_of_taurajo = {"sb_battlescar"},
-    sb_hunters_hill = {"sb_ruins_of_taurajo"},
-    sb_alliance_capital = {"sb_hunters_hill", "sb_the_tangle"},
 }
 
 local DUROTAR_ALLIANCE_PREREQS = {

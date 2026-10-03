@@ -62,7 +62,6 @@ GK.GetPlayerKeepSiteForHud = GK.IsPlayerOnKeepMap
 function GK:GetMainHallAtlasForFaction(faction)
     return OP:GetMainHallAtlasForFaction(faction, self:GetDefaultSite())
 end
-function GK:GetKeepCaptureHalfSizePercent(site) return site and site.halfSize end
 function GK:IsKeepCaptureInProgress(st, key)
     -- Tooltips/HUD use the same freshness window as the shared map renderer.
     -- This is presentation only: never finalize or revert a remote observation.
