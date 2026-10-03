@@ -370,52 +370,7 @@ function Overlord.Sync:PollIfStaleObserverInProgress(secondsSinceZs, zone)
     self:SendSyncRequest()
 end
 
--- ==================== Systeme de bridges (cross-server cross-faction) ====================
 -- Band = realm_faction (ex: "MoonGuard_A", "Hyjal_H")
--- Bridge = joueur local (meme realm/faction) qui a des amis BNet de l'autre faction/realm
--- R1 = requete au bridge (whisper) ; R2 = relais via BNet ; reponse en whisper au demandeur
-
-local BRIDGE_ST_INTERVAL = 90
-local BRIDGE_EXPIRE = 180
-local bnet_links = {}       -- gameAccountID -> band (amis BNet, band appris via leurs messages)
-local bridges = { values = {}, nodes = {}, head = nil, tail = nil, count = 0, max = 512 }
-function bridges:Remove(node)
-    if not node then return end
-    if node.previous then node.previous.next = node.next else self.head = node.next end
-    if node.next then node.next.previous = node.previous else self.tail = node.previous end
-    self.nodes[node.key], self.values[node.key] = nil, nil
-    self.count = math.max(0, self.count - 1)
-end
-function bridges:Remember(key, value, now)
-    local node = self.nodes[key]
-    if node then
-        node.timestamp = now
-        self.values[key] = value
-        if node ~= self.tail then
-            if node.previous then node.previous.next = node.next else self.head = node.next end
-            if node.next then node.next.previous = node.previous end
-            node.previous, node.next = self.tail, nil
-            if self.tail then self.tail.next = node end
-            self.tail = node
-        end
-        return
-    end
-    if self.count >= self.max then self:Remove(self.head) end
-    node = { key = key, timestamp = now, previous = self.tail, next = nil }
-    if self.tail then self.tail.next = node else self.head = node end
-    self.tail = node
-    self.nodes[key], self.values[key] = node, value
-    self.count = self.count + 1
-end
-function bridges:Prune(now, budget)
-    local removed = 0
-    while self.head and now - self.head.timestamp > BRIDGE_EXPIRE * 2
-        and removed < math.max(1, math.floor(tonumber(budget) or 1)) do
-        self:Remove(self.head)
-        removed = removed + 1
-    end
-end
-local lastSTBroadcast = 0
 
 -- ==================== Decouverte via Communaute WoW (cross-realm + cross-faction) ====================
 -- Scanne les membres en ligne de la communaute "Overlord" pour envoyer des SR en whisper.
@@ -423,74 +378,8 @@ local lastSTBroadcast = 0
 -- Cross-faction : la communaute active le whisper entre ses membres, y compris cross-faction.
 -- Filtre CHAT_MSG_SYSTEM restreint (voir InstallWhisperOfflineChatFilter) : masque uniquement les erreurs
 -- Blizzard du type hors-ligne correlees aux whispers addon Overlord (recentAddonWhispers).
--- Le canal "Overlord" (realm-only, cross-faction) et les bridges BNet completent la couverture.
+-- Le canal de faction et les amis Battle.net (ponts du relais) completent la couverture.
 
-local COMMUNITY_SCAN_INTERVAL = 120
-local COMMUNITY_SR_COOLDOWN = 90
-local COMMUNITY_MAX_SR_PER_SCAN = 10
-local LOGIN_CATCHUP_SR_MAX = 40
-local LOGIN_CATCHUP_SR_MAX_LARGE = 15
-local LOGIN_CATCHUP_SR_DELAY = 0.25
-local COMMUNITY_SEARCH_INTERVAL = 300
-local communityClubId = nil
-local communityClubIds = {}
--- Clubs europeens d'un AUTRE pool territorial auxquels le compte est aussi
--- abonne. Ils restent separes de FindAllCommunityClubs : seul le protocole
--- leaderboard HR peut les consommer, jamais les transports C/ZA/ZS/GK.
-local europeanLeaderboardBridgeClubIds = {}
-local lastCommunityScan = 0
-local lastCommunitySearch = -COMMUNITY_SEARCH_INTERVAL
-local lastCommunitySR = { values = {}, nodes = {}, head = nil, tail = nil, count = 0, max = 1024 }
-function lastCommunitySR:Remove(node)
-    if not node then return end
-    if node.previous then node.previous.next = node.next else self.head = node.next end
-    if node.next then node.next.previous = node.previous else self.tail = node.previous end
-    self.nodes[node.key] = nil
-    self.values[node.key] = nil
-    self.count = math.max(0, self.count - 1)
-end
-function lastCommunitySR:Prune(now, budget)
-    local removed = 0
-    while self.head and now - self.head.timestamp > COMMUNITY_SR_COOLDOWN
-        and removed < math.max(1, math.floor(tonumber(budget) or 1)) do
-        self:Remove(self.head)
-        removed = removed + 1
-    end
-end
-function lastCommunitySR:Get(key)
-    return self.values[key]
-end
-function lastCommunitySR:Remember(key, now)
-    self:Prune(now, 8)
-    local node = self.nodes[key]
-    if node then
-        node.timestamp = now
-        self.values[key] = now
-        if node ~= self.tail then
-            if node.previous then node.previous.next = node.next else self.head = node.next end
-            if node.next then node.next.previous = node.previous end
-            node.previous, node.next = self.tail, nil
-            if self.tail then self.tail.next = node end
-            self.tail = node
-        end
-        return
-    end
-    if self.count >= self.max then self:Remove(self.head) end
-    node = { key = key, timestamp = now, previous = self.tail, next = nil }
-    if self.tail then self.tail.next = node else self.head = node end
-    self.tail = node
-    self.nodes[key] = node
-    self.values[key] = now
-    self.count = self.count + 1
-end
-local communityCachedScanCursor = 0
-
--- Retry adaptatif : au login, C_Club.GetSubscribedClubs() n'est pas pret immediatement.
--- On retente toutes les 15s pendant ~2min avant de passer au cooldown normal de 5min.
-local COMMUNITY_EARLY_RETRY = 15
-local COMMUNITY_MAX_EARLY_RETRIES = 8
-local communityEarlyRetries = 0
-local communityNotFoundWarned = false
 
 local EK_DEDUP_WINDOW    = 8
 
@@ -589,11 +478,6 @@ local NEARBY_WINDOW = 60
 local LARGE_EVENT_THRESHOLD = 15
 local nearbyAddonTimestamps = Overlord.Sync:NewBoundedSessionLedger(576, 0, NEARBY_WINDOW)
 
--- Joueurs recemment vus en front (emetteurs ZA/ZS/SR) : cibles RG sans whisper hors-zone.
-local FRONT_SENDER_TTL = 300
-local recentFrontSenders = Overlord.Sync:NewBoundedSessionLedger(512, 64, FRONT_SENDER_TTL)
-local lastRGSentWaveAt = 0
-local RG_COOLDOWN = 60
 
 -- Cache du resultat IsLargeEvent : evite d'iterer ~200 entries 10-20x/s en 100v100
 local cachedIsLarge = false
@@ -740,7 +624,6 @@ function Overlord.Sync:JoinChannel(attempt, generation)
         if id and id > 0 then
             FinishJoinAttempt()
             Overlord.Sync:SendSyncRequest()
-            Overlord.Sync:BroadcastST()
             -- Relances SR a 15s et 35s pour les late-joiners (au cas ou personne ne repond au premier)
             C_Timer.After(15, function()
                 if Overlord.InstanceSuspended
@@ -784,7 +667,6 @@ local BNET_SR_COOLDOWN = 25
 local BNET_SR_COOLDOWN_LARGE = 120
 
 -- Envoi centralise d'une Sync Request (evite duplication dans JoinChannel, OnGroupChanged, etc.)
--- Utilise les bridges si pas de lien BNet direct vers la faction adverse (cross-server cross-faction)
 function Overlord.Sync:SendSyncRequest(opts)
     opts = opts or {}
     -- Une demande automatique ne doit jamais faire trier/reconstruire le classement
@@ -840,14 +722,6 @@ function Overlord.Sync:SendSyncRequest(opts)
             lastBNetSRBroadcast = now
             self:SendToBNetFriends("SR", payload)
         end
-        if not self:HasDirectBNetToEnemyFaction() then
-            local bridge, targetBand = self:FindBridgeForEnemyFaction()
-            if bridge and targetBand then
-                local replyTo = self:GetPlayerFullName()
-                local relayPayload = "SR:" .. payload
-                self:SendWhisper("R1", targetBand .. ":" .. replyTo .. ":" .. relayPayload, bridge)
-            end
-        end
     end
 end
 
@@ -895,7 +769,7 @@ function Overlord.Sync:StartLoginCaptureSyncBurst()
     -- Une premiere SR:T peut fermer ZA en moins d'une seconde ; elle ne doit pas annuler
     -- l'unique relance cross-realm du login hors front. Cette vague territoriale est ciblee
     -- vers un seul membre communaute, repartie par le curseur local, et reste donc bornee
-    -- lors des /reload collectifs. En front, OnEnterFront lance deja ScanCommunityMembers(true).
+    -- lors des /reload collectifs.
     C_Timer.After(16 + math.random() * 4, function()
         if not Overlord.Sync
             or Overlord.Sync._loginCaptureSyncBurstGeneration ~= generation
@@ -971,37 +845,6 @@ function Overlord.Sync:RequestConsultFrontSync(frontId)
     if SYNC_USE_REALM_CHANNEL and (IsInRaid() or IsInGroup()) then
         self:SendToChannel("SR", payload)
     end
-end
-
-local lastEnemyBridgeRelay = {}
-local ENEMY_BRIDGE_RELAY_INTERVAL = 4
-local ENEMY_BRIDGE_RELAY_TTL = 90
-local lastEnemyBridgeRelayPurge = 0
-
-function Overlord.Sync:RelayToEnemyBridge(msgType, payload)
-    -- Les etats qui exigent une identite gameplay (C/ZS) sont interdits ici.
-    -- TV reste sans autorite propre : son receveur exige une preuve locale independante.
-    if msgType ~= "TV" or not SYNC_USE_BNET_OUTBOUND
-        or not Overlord.InActiveFront or not payload then return end
-    local key = msgType .. ":" .. payload
-    local now = GetTime()
-    if now - lastEnemyBridgeRelayPurge > 30 then
-        lastEnemyBridgeRelayPurge = now
-        for k, ts in pairs(lastEnemyBridgeRelay) do
-            if now - ts > ENEMY_BRIDGE_RELAY_TTL then
-                lastEnemyBridgeRelay[k] = nil
-            end
-        end
-    end
-    local last = lastEnemyBridgeRelay[key]
-    if last and now - last < ENEMY_BRIDGE_RELAY_INTERVAL then return end
-    lastEnemyBridgeRelay[key] = now
-    if self:HasDirectBNetToEnemyFaction() then return end
-    local bridge, targetBand = self:FindBridgeForEnemyFaction()
-    if not bridge or not targetBand then return end
-    local replyTo = self:GetPlayerFullName()
-    if not replyTo then return end
-    self:SendWhisper("R1", targetBand .. ":" .. replyTo .. ":" .. msgType .. ":" .. payload, bridge)
 end
 
 -- Retourne le canal prioritaire : groupe (cross-realm) > channel (realm uniquement)
@@ -1408,546 +1251,17 @@ local function IsCompatibleForeverBand(band)
         == Overlord.RealmPools:GetOverlordPoolTag()
 end
 
--- Verifie si on a un lien BNet direct vers la faction adverse (amis BNet de l'autre faction)
-function Overlord.Sync:HasDirectBNetToEnemyFaction()
-    for _, band in pairs(bnet_links) do
-        if band:match("_H$") and Overlord.PlayerFaction == "Alliance" then return true end
-        if band:match("_A$") and Overlord.PlayerFaction == "Horde" then return true end
-    end
-    return false
-end
-
--- Trouve un bridge disponible pour atteindre une band ennemie (faction adverse)
-function Overlord.Sync:FindBridgeForEnemyFaction()
-    local now = GetTime()
-    local wantH = (Overlord.PlayerFaction == "Alliance")
-    for fullname, data in pairs(bridges.values) do
-        if now - data.time < BRIDGE_EXPIRE then
-            for _, b in ipairs(data.bands or {}) do
-                if (wantH and b:match("_H$")) or (not wantH and b:match("_A$")) then
-                    return fullname, b
-                end
-            end
-        end
-    end
-    return nil, nil
-end
-
--- ==================== Decouverte via Communaute ====================
-
--- Trouve la communaute "Overlord" parmi les clubs Character souscrits (cache le resultat).
--- Re-cherche toutes les 5 min si pas trouvee (le joueur peut rejoindre en cours de session).
--- Liens d'invitation par pool (table ordonnee : dernier = shard overflow si cap Blizzard 1000).
-local COMMUNITY_INVITES = {
-    global = { "0m7kdXcnvR" },
-}
-
--- Forever beta has one global population, including US and EU players.
-local function GetPlayerRegion()
-    local rp = Overlord.RealmPools
-    if rp and rp.GetOverlordPoolTag then
-        return rp:GetOverlordPoolTag() or "global"
-    end
-    return "global"
-end
-
--- Compatibilite des appels historiques : Forever ne classe pas les royaumes RP.
-function Overlord.Sync:IsRPRealm()
-    return false
-end
-
--- Horodatage du dernier envoi RG (au moins un whisper) : auto-accept groupe cote demandeur RP.
-Overlord.Sync.lastRGSentAt = 0
-
-function Overlord.Sync:ClearRecentFrontSenders()
-    recentFrontSenders:Clear()
-end
-
--- Verifie si un joueur figure dans le cache des emetteurs front recents (utilise par PARTY_INVITE_REQUEST)
-function Overlord.Sync:IsRecentFrontSender(name)
-    if not name or name == "" then return false end
-    return recentFrontSenders:Get(name, GetTime()) ~= nil
-end
-
-local function RecordRecentFrontSender(sender)
-    if not sender or sender == "" then return end
-    if sender:find("^BNet%-", 1) then return end
-    if Overlord.Sync.IsValidWhisperTarget and not Overlord.Sync:IsValidWhisperTarget(sender) then return end
-    local now = GetTime()
-    local groupReserve = Overlord.Sync.SenderIsInOurGroup
-        and Overlord.Sync:SenderIsInOurGroup(sender) or false
-    recentFrontSenders:Remember(sender, now, now, groupReserve)
-end
-
--- Demande de groupe vers des joueurs ayant emis ZA/ZS/SR recemment.
-function Overlord.Sync:BroadcastRPGroupRequest()
-    local now = GetTime()
-    local myName = self:GetPlayerFullName()
-    if not myName or myName == "" then return end
-    recentFrontSenders:Prune(now, 8)
-    local targets, node, visited = {}, recentFrontSenders.tail, 0
-    while node and #targets < 3 and visited < 8 do
-        visited = visited + 1
-        if now - (tonumber(node.timestamp) or 0) >= FRONT_SENDER_TTL then break end
-        if node.key ~= myName then targets[#targets + 1] = node.key end
-        node = node.previous
-    end
-    if #targets == 0 then return end
-    if lastRGSentWaveAt > 0 and (now - lastRGSentWaveAt < RG_COOLDOWN) then return end
-    lastRGSentWaveAt = now
-    self.lastRGSentAt = now
-    for i = 1, math.min(3, #targets) do
-        self:SendWhisper("RG", myName, targets[i])
-    end
-    Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. (L and L.RP_GROUP_REQUEST_SENT or "RP group request sent."))
-end
-
-local function SyncCanInviteForRG()
-    if not IsInGroup() then return true end
-    local n = GetNumGroupMembers() or 0
-    if IsInRaid() then return n < 40 end
-    return n < 5
-end
-
-local function OnReceiveRG(payload, sender)
-    if not Overlord.InActiveFront or Overlord:IsInCatchUpPhase() then return end
-    if not SyncCanInviteForRG() then return end
-    local requester = (payload or ""):match("^%s*(.-)%s*$") or ""
-    if requester == "" then return end
-    -- Securite : le payload doit etre le nom du sender lui-meme (evite les RG forges)
-    if requester ~= sender then return end
-    C_Timer.After(0.5, function()
-        if Overlord.InstanceSuspended or not Overlord.InActiveFront then return end
-        pcall(InviteUnit, requester)
-    end)
-end
-
-local function GetCommunityPoolTag()
-    local rp = Overlord.RealmPools
-    if rp and rp.GetOverlordPoolTag then
-        local tag = rp:GetOverlordPoolTag()
-        if tag then return tag end
-    end
-    return GetPlayerRegion()
-end
-
-function Overlord.Sync:GetCommunityPoolTag()
-    return GetCommunityPoolTag()
-end
-
-local function GetCommunityInviteListForPool()
-    return COMMUNITY_INVITES.global
-end
-
-local function ClearCommunityClubCache()
-    wipe(communityClubIds)
-    wipe(europeanLeaderboardBridgeClubIds)
-    communityClubId = nil
-    local sync = Overlord.Sync
-    if sync then
-        sync._communityClubEmptyScans = 0
-        if sync.InvalidateOnlineMembersCache then
-            sync:InvalidateOnlineMembersCache()
-        end
-        if sync.InvalidateCommunityMemberCharactersCache then
-            sync:InvalidateCommunityMemberCharactersCache()
-        end
-        if sync.InvalidateEuropeanLeaderboardBridgeMembersCache then
-            sync:InvalidateEuropeanLeaderboardBridgeMembersCache(true)
-        end
-    end
-end
-
--- C_Club retourne parfois une liste vide pendant un refresh interne. Tant qu'un
--- club Overlord est deja connu, trois lectures forcees sont requises avant de
--- publier une perte d'adhesion. Les deux confirmations sont ponctuelles : aucun
--- polling permanent et aucun roster lourd dans le chemin UI.
-function Overlord.Sync:HandleCommunityClubSearchMiss(preserveCache)
-    if not communityClubId and #communityClubIds == 0 then return nil end
-    if preserveCache then return nil end
-    self._communityClubEmptyScans =
-        math.floor(tonumber(self._communityClubEmptyScans) or 0) + 1
-    if self._communityClubEmptyScans < 3 then
-        if not self._communityClubLossProbeScheduled and C_Timer and C_Timer.After then
-            self._communityClubLossProbeScheduled = true
-            C_Timer.After(2, function()
-                local current = Overlord.Sync
-                if not current then return end
-                current._communityClubLossProbeScheduled = false
-                current:FindCommunityClub(true)
-            end)
-        end
-        return communityClubId
-    end
-    ClearCommunityClubCache()
-    return nil
-end
-
--- Code affiche dans le popup : dernier shard (overflow) si le pool en a plusieurs.
-function Overlord.Sync:GetCommunityInviteCode()
-    local codes = GetCommunityInviteListForPool()
-    if type(codes) == "table" then
-        return codes[#codes]
-    end
-    return codes
-end
-
--- C_Club est pret ou les early retries sont epuises : on peut faire confiance a un "pas membre".
-function Overlord.Sync:IsCommunitySearchSettled()
-    if communityClubId or #communityClubIds > 0 then return true end
-    return communityEarlyRetries >= COMMUNITY_MAX_EARLY_RETRIES
-end
-
--- Membre detecte au login / migration legacy (flag absent) : pas de message ni burst SR.
-function Overlord.Sync:AdoptCommunityMembershipSilent()
-    if not OverlordDB then return end
-    OverlordDB.inCommunity = true
-end
-
--- Join commu mid-session (inCommunity == false) : SR whisper commu + canal same-faction.
-function Overlord.Sync:TryCommunityJoinSync(forceHistory)
-    if Overlord.InstanceSuspended or not OverlordDB then return end
-    if OverlordDB.inCommunity == true then return end
-    local clubId = self:FindCommunityClub()
-    if not clubId then
-        ClearCommunityClubCache()
-        lastCommunitySearch = -COMMUNITY_SEARCH_INTERVAL
-        clubId = self:FindCommunityClub()
-    end
-    if not clubId then return end
-    -- Flag absent = membre avant introduction du flag : migration silencieuse.
-    if OverlordDB.inCommunity == nil then
-        self:AdoptCommunityMembershipSilent()
-        return
-    end
-    OverlordDB.inCommunity = true
-    Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. (L.SYNC_REQUESTED or "Sync requested."))
-    -- Cross-faction : whispers commu (le canal Overlord est filtre par faction en War Mode).
-    self:ScanCommunityMembers(true)
-    for i = 1, 3 do
-        C_Timer.After((i - 1) * 2, function()
-            if Overlord.InstanceSuspended or not Overlord.Sync then return end
-            Overlord.Sync:SendSyncRequest()
-        end)
-    end
-    if self.ScheduleLoginLeaderboardHistoryCatchUp then
-        self:ScheduleLoginLeaderboardHistoryCatchUp(true, forceHistory == true)
-    end
-end
-
--- Detection commu (UI login / refresh) : sync seulement apres join explicite (flag false).
-function Overlord.Sync:HandleCommunityMembershipDetected()
-    if not OverlordDB then return end
-    if OverlordDB.inCommunity == true then return end
-    lastCommunitySearch = -COMMUNITY_SEARCH_INTERVAL
-    ClearCommunityClubCache()
-    if not self:FindCommunityClub() then return end
-    self:TryCommunityJoinSync(true)
-end
-
--- Perte commu confirmee : ne pas resetter tant que C_Club n'est pas pret au login.
-function Overlord.Sync:HandleCommunityMembershipLost()
-    if not OverlordDB then return end
-    if not self:IsCommunitySearchSettled() then return end
-    lastCommunitySearch = -COMMUNITY_SEARCH_INTERVAL
-    ClearCommunityClubCache()
-    if self:FindCommunityClub() then return end
-    OverlordDB.inCommunity = false
-    if self.CommitEmptyOnlineMembersCache then
-        self:CommitEmptyOnlineMembersCache()
-    end
-end
-
-function Overlord.Sync:FindCommunityClub(forceRefresh, preserveCacheOnMiss)
-    if Overlord.CommunityModeEnabled == false then return nil end
-    if Overlord.InstanceSuspended then return communityClubId end
-    local now = GetTime()
-
-    -- Cooldown adaptatif : au login, C_Club n'est pas pret immediatement.
-    -- On retente toutes les 15s pendant ~2min, puis on passe au cooldown normal (5min).
-    local cooldown = (communityEarlyRetries < COMMUNITY_MAX_EARLY_RETRIES)
-        and COMMUNITY_EARLY_RETRY or COMMUNITY_SEARCH_INTERVAL
-    -- Rescan periodique meme si un shard est deja connu (join US 2 mid-session, pont multi-club).
-    if not forceRefresh then
-        if communityClubId and (now - lastCommunitySearch < cooldown) then
-            return communityClubId
-        end
-        if now - lastCommunitySearch < cooldown then
-            return communityClubId
-        end
-    end
-
-    if not C_Club or not C_Club.GetSubscribedClubs then
-        -- C_Club pas encore pret au login : ne pas poser lastCommunitySearch (sinon les scans
-        -- a +12 s sont ignores alors que l'API est chargee entre-temps).
-        return communityClubId
-    end
-
-    -- Snapshot de la constante Enum pour eviter le taint lors de la comparaison
-    local CHARACTER_CLUB = Enum.ClubType.Character
-
-    -- Copie locale des infos clubs pour eviter de propager le taint de la table C_Club
-    -- (evite l'erreur "Secret values" quand le joueur ouvre le panneau Communautes)
-    local clubInfos = {}
-    securecall(function()
-        local clubs = C_Club.GetSubscribedClubs()
-        if clubs then
-            for i = 1, #clubs do
-                local c = clubs[i]
-                if c and c.name and c.clubType == CHARACTER_CLUB then
-                    clubInfos[#clubInfos + 1] = { id = c.clubId, name = c.name:lower() }
-                end
-            end
-        end
-    end)
-    if #clubInfos == 0 then
-        communityEarlyRetries = communityEarlyRetries + 1
-        -- Liste vide souvent transitoire au login : retry rapide sans bloquer 15 s.
-        if communityEarlyRetries >= COMMUNITY_MAX_EARLY_RETRIES then
-            lastCommunitySearch = now
-        end
-        return self:HandleCommunityClubSearchMiss(preserveCacheOnMiss)
-    end
-    lastCommunitySearch = now
-
-    -- Forever : club personnage dont le nom contient "overlord"
-    -- (ex. "Overlord Forever EU", "Overlord test" en beta).
-    -- Tous les clubs du pool (shards) : roster fusionne dans SyncAux pour la sync whisper.
-    local wantTag = GetCommunityPoolTag()
-    if not wantTag then
-        communityEarlyRetries = communityEarlyRetries + 1
-        return communityClubId
-    end
-    local matchedClubIds = {}
-    local subscribedEuropeanClubIds = {}
-    for _, info in ipairs(clubInfos) do
-        if info.name:find("overlord", 1, true) then
-            matchedClubIds[#matchedClubIds + 1] = info.id
-        end
-        local words = " " .. info.name:gsub("[^%w]+", " ") .. " "
-        if GetPlayerRegion() == "eu" and info.name:find("overlord", 1, true)
-            and (words:find(" fr ", 1, true) or words:find(" de ", 1, true)
-                or words:find(" eu ", 1, true)) then
-            subscribedEuropeanClubIds[#subscribedEuropeanClubIds + 1] = info.id
-        end
-    end
-    if #matchedClubIds == 0 and (communityClubId or #communityClubIds > 0) then
-        return self:HandleCommunityClubSearchMiss(preserveCacheOnMiss)
-    end
-    -- Retirer les shards du pool territorial courant : le cache communautaire
-    -- normal les couvre deja. Ce tableau ne contient donc que de vrais ponts
-    -- FR<->DE<->EU et ne peut pas elargir FindAllCommunityClubs.
-    local matchedBridgeClubIds = {}
-    local localClubSet = {}
-    for i = 1, #matchedClubIds do localClubSet[matchedClubIds[i]] = true end
-    for i = 1, #subscribedEuropeanClubIds do
-        local id = subscribedEuropeanClubIds[i]
-        if not localClubSet[id] then
-            matchedBridgeClubIds[#matchedBridgeClubIds + 1] = id
-        end
-    end
-    self._communityClubEmptyScans = 0
-    local clubsChanged = #matchedClubIds ~= #communityClubIds
-    if not clubsChanged then
-        for i = 1, #matchedClubIds do
-            if matchedClubIds[i] ~= communityClubIds[i] then
-                clubsChanged = true
-                break
-            end
-        end
-    end
-    local bridgeClubsChanged = #matchedBridgeClubIds
-        ~= #europeanLeaderboardBridgeClubIds
-    if not bridgeClubsChanged then
-        for i = 1, #matchedBridgeClubIds do
-            if matchedBridgeClubIds[i] ~= europeanLeaderboardBridgeClubIds[i] then
-                bridgeClubsChanged = true
-                break
-            end
-        end
-    end
-    -- Le rescan periodique des clubs tourne meme quand le pool n'a pas change.
-    -- Ne pas jeter les gros caches roster/characters dans ce cas.
-    if clubsChanged then
-        ClearCommunityClubCache()
-        for i = 1, #matchedClubIds do
-            communityClubIds[i] = matchedClubIds[i]
-        end
-        for i = 1, #matchedBridgeClubIds do
-            europeanLeaderboardBridgeClubIds[i] = matchedBridgeClubIds[i]
-        end
-    elseif bridgeClubsChanged then
-        wipe(europeanLeaderboardBridgeClubIds)
-        for i = 1, #matchedBridgeClubIds do
-            europeanLeaderboardBridgeClubIds[i] = matchedBridgeClubIds[i]
-        end
-        if self.InvalidateEuropeanLeaderboardBridgeMembersCache then
-            self:InvalidateEuropeanLeaderboardBridgeMembersCache(true)
-        end
-    end
-    communityClubId = communityClubIds[1]
-
-    if communityClubId then
-        -- Les retries rapides ne servent qu'au bootstrap de C_Club. Une fois le
-        -- pool trouve, rester a 15 s invaliderait les caches roster en boucle et
-        -- pourrait annuler un scan de contrats en cours. Les rescans normaux de
-        -- nouveaux shards gardent leur cadence de cinq minutes.
-        communityEarlyRetries = COMMUNITY_MAX_EARLY_RETRIES
-    else
-        communityEarlyRetries = communityEarlyRetries + 1
-        -- Avertissement unique quand les retries sont epuises (C_Club a eu le temps de charger)
-        if communityEarlyRetries >= COMMUNITY_MAX_EARLY_RETRIES
-            and not communityNotFoundWarned and Overlord.InActiveFront then
-            communityNotFoundWarned = true
-            local code = self:GetCommunityInviteCode()
-            Overlord:PrintNotification("|cffff6600[Overlord]|r " .. L.COMMUNITY_NOT_FOUND)
-            Overlord:PrintNotification("|cffff6600[Overlord]|r " .. string.format(L.COMMUNITY_JOIN_LINK, code))
-        end
-    end
-
-    return communityClubId
-end
-
--- Tous les clubs Overlord du pool local (ex. US + US 2 si le joueur y est abonne).
-function Overlord.Sync:FindAllCommunityClubs()
-    if Overlord.CommunityModeEnabled == false then return {} end
-    if not communityClubId and #communityClubIds == 0 then
-        self:FindCommunityClub()
-    end
-    return communityClubIds
-end
-
--- Clubs d'autres pools territoriaux europeens, reserves au classement. Cette
--- API retourne deliberement un cache distinct : FindAllCommunityClubs garde
--- exactement sa portee locale pour les captures, alertes et Guild Keeps.
-function Overlord.Sync:FindEuropeanLeaderboardBridgeClubs()
-    if Overlord.CommunityModeEnabled == false then return {} end
-    if GetPlayerRegion() ~= "eu" then return europeanLeaderboardBridgeClubIds end
-    if #europeanLeaderboardBridgeClubIds == 0 then
-        self:FindCommunityClub()
-    end
-    return europeanLeaderboardBridgeClubIds
-end
-
--- Reinitialise le compteur de retries au login/entree en front pour relancer la recherche.
--- Appele depuis OnEnterFront (le joueur a pu rejoindre la commu depuis la derniere session).
-function Overlord.Sync:ResetCommunitySearch()
-    communityEarlyRetries = 0
-    communityNotFoundWarned = false
-    lastCommunitySearch = -COMMUNITY_SEARCH_INTERVAL
-    self._communityClubEmptyScans = 0
-    self._communityClubLossProbeScheduled = false
-end
-
--- Scanne les membres en ligne de la communaute et envoie des SR en whisper.
--- Rotation aleatoire de l'index de depart pour couvrir tous les membres sur plusieurs scans.
--- Cross-realm ET cross-faction : la communaute active le whisper entre ses membres,
--- meme entre factions differentes sur des royaumes differents.
--- Le filtre ChatFrame masque les erreurs residuelles (joueur offline, etc).
--- force=true : bypasse le cooldown scanInterval (utilise apres BroadcastCapture pour propagation
--- immediate cross-realm / cross-faction sans attendre le prochain cycle de 120s).
-function Overlord.Sync:ScanCommunityMembers(force)
-    -- Presence is announced by the relay heartbeat only. Re-sending NH here on
-    -- every capture, login and /ov sync duplicated it without adding a route.
-    local betaSent = 0
-    if Overlord.CommunityModeEnabled == false then return betaSent end
-    -- C_Club retourne des tables "forbidden" en instance PvP : ne pas iterer du tout
-    if Overlord.InstanceSuspended then return betaSent end
-    local clubId = self:FindCommunityClub()
-    if not clubId then return betaSent end
-
-    -- En event massif (raid 20+ OU 15+ joueurs Overlord a proximite) : reduire le scan
-    local inLargeEvent = self:IsLargeEvent()
-    local scanInterval = inLargeEvent and 300 or COMMUNITY_SCAN_INTERVAL
-
-    local now = GetTime()
-    if not force and now - lastCommunityScan < scanInterval then return betaSent end
-    lastCommunityScan = now
-
-    lastCommunitySR:Prune(now, 8)
-
-    local myName = self:GetPlayerFullName()
-    local sent = 0
-    local maxSR = inLargeEvent and 3 or COMMUNITY_MAX_SR_PER_SCAN
-    local cachedOnline = self.GetOnlineCommunityMembersIfFresh and self:GetOnlineCommunityMembersIfFresh(15)
-    if cachedOnline and #cachedOnline == 0 then
-        return betaSent
-    end
-    if not cachedOnline and self.GetOnlineCommunityMembers then
-        cachedOnline = self:GetOnlineCommunityMembers(true, 15)
-    end
-    if cachedOnline and #cachedOnline == 0 then
-        return betaSent
-    end
-    if cachedOnline and #cachedOnline > 0 then
-        local startIdx = (communityCachedScanCursor % #cachedOnline) + 1
-        local scanned = 0
-        for i = 0, #cachedOnline - 1 do
-            if sent >= maxSR then break end
-            scanned = i + 1
-            local idx = ((startIdx + i - 1) % #cachedOnline) + 1
-            local memberName = cachedOnline[idx]
-            if memberName and memberName ~= "" and memberName ~= myName then
-                local lastSR = lastCommunitySR:Get(memberName) or 0
-                if now - lastSR >= COMMUNITY_SR_COOLDOWN then
-                    lastCommunitySR:Remember(memberName, now)
-                    local target = memberName
-                    C_Timer.After(sent * 0.5, function()
-                        if Overlord.Sync and not Overlord.InstanceSuspended then
-                            pcall(Overlord.Sync.SendWhisper, Overlord.Sync,
-                                "SR", SRPayload("T"), target)
-                        end
-                    end)
-                    sent = sent + 1
-                end
-            end
-        end
-        communityCachedScanCursor = (communityCachedScanCursor + math.max(1, scanned))
-            % #cachedOnline
-        return sent + betaSent
-    end
-    -- Cache froid : GetOnlineCommunityMembers a deja demarre le worker tranche de
-    -- SyncAux. Ne jamais retomber ici sur un GetClubMembers/GetMemberInfo synchrone.
-    return betaSent
-end
-
 -- Fin de gate login : SR whisper a tous les membres commu en ligne (pas 12 au hasard).
 -- Chemin fiable pour late joiner ; reponse whisper SR = 100 % ZA garanti cote receveur.
+-- Fin de gate login : une SR territoriale sur le relais, puis le rattrapage point a
+-- point vers quelques voisins directs (reponse garantie) et la carte periodique.
 function Overlord.Sync:SendLoginCatchupSyncToCommunity()
     if Overlord.InstanceSuspended or IsInInstance() then return 0 end
-    local betaSent = Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork
+    local betaSent = Overlord.BetaNetwork
         and Overlord.BetaNetwork:Broadcast("SR", SRPayload("T")) or 0
-    if Overlord.CommunityModeEnabled == false or not self:FindCommunityClub() then
-        -- Sans club : meme principe que la communaute (quelques SR cibles, reponse
-        -- garantie) avec les pairs decouverts par le relais beta.
-        self:ScheduleBetaPeerLoginCatchup()
-        self:SchedulePeriodicMapCatchup()
-        return betaSent
-    end
-
-    local myName = self:GetPlayerFullName()
-    local payload = SRPayload("T")
-    local sent = 0
-    local maxSR = (self.IsLargeEvent and self:IsLargeEvent()) and LOGIN_CATCHUP_SR_MAX_LARGE or LOGIN_CATCHUP_SR_MAX
-    -- Force un vrai relire du roster : au login, un cache vide peut provenir
-    -- d'un C_Club encore partiellement initialise, pas d'une communaute vide.
-    local onlineList = (self.GetOnlineCommunityMembers and self:GetOnlineCommunityMembers(true, 0)) or {}
-    if #onlineList == 0 then return betaSent end
-
-    for i = 1, #onlineList do
-        if sent >= maxSR then break end
-        local memberName = onlineList[i]
-        if memberName and memberName ~= "" and memberName ~= myName then
-            local target = memberName
-            C_Timer.After(sent * LOGIN_CATCHUP_SR_DELAY, function()
-                if Overlord.Sync and not Overlord.InstanceSuspended then
-                    pcall(Overlord.Sync.SendWhisper, Overlord.Sync, "SR", payload, target)
-                end
-            end)
-            sent = sent + 1
-        end
-    end
-    return sent + betaSent
+    self:ScheduleBetaPeerLoginCatchup()
+    self:SchedulePeriodicMapCatchup()
+    return betaSent
 end
 
 -- Equivalent sans Communaute du rattrapage login : au plus 2 SR territoriaux cibles
@@ -2023,7 +1337,7 @@ function Overlord.Sync:RunBetaPeerLoginCatchup(attempt)
     pick(enemies, (self.BETA_LOGIN_CATCHUP_TARGETS or 3) - #targets, targets)
     local payload = SRPayload("T")
     for index, target in ipairs(targets) do
-        C_Timer.After((index - 1) * LOGIN_CATCHUP_SR_DELAY, function()
+        C_Timer.After((index - 1) * 0.25, function()
             if Overlord.Sync and not Overlord.InstanceSuspended then
                 pcall(Overlord.Sync.SendWhisper, Overlord.Sync, "SR", payload, target)
             end
@@ -2083,35 +1397,6 @@ function Overlord.Sync:RunPeriodicMapCatchup()
     return self:SendWhisper("SR", SRPayload("T"), target) == true
 end
 
--- Stats communaute (utilise par la sync cross-realm)
--- Cache de 30s : evite 200+ appels API/s quand RefreshCommunityButton est appele chaque seconde
-local cachedCommunityOnline = 0
-local lastCommunityStatsTime = 0
-local COMMUNITY_STATS_CACHE_INTERVAL = 30
-
-function Overlord.Sync:InvalidateCommunityStatsCache()
-    cachedCommunityOnline = 0
-    lastCommunityStatsTime = 0 - COMMUNITY_STATS_CACHE_INTERVAL
-end
-
-function Overlord.Sync:GetCommunityStats()
-    if Overlord.InstanceSuspended then return false, 0 end
-    if not communityClubId and #communityClubIds == 0 then return false, 0 end
-
-    local now = GetTime()
-    if now - lastCommunityStatsTime < COMMUNITY_STATS_CACHE_INTERVAL then
-        return true, cachedCommunityOnline
-    end
-    lastCommunityStatsTime = now
-    if self.GetOnlineCommunityMemberCount then
-        cachedCommunityOnline = self:GetOnlineCommunityMemberCount(COMMUNITY_STATS_CACHE_INTERVAL)
-        return true, cachedCommunityOnline
-    end
-
-    -- SyncAux fournit le worker partage en production. Sans lui, ne jamais
-    -- retomber sur un parcours C_Club synchrone depuis le rafraichissement UI.
-    return true, cachedCommunityOnline
-end
 
 -- Envoi : priorite GROUPE (RAID/PARTY) pour que la sync marche cross-realm, sinon canal Overlord (meme royaume uniquement).
 function Overlord.Sync:Send(msgType, data, groupOnly)
@@ -2776,12 +2061,11 @@ function Overlord.Sync:OnBNetMessage(message, senderID)
     local msgType, rest = strsplit(":", message, 2)
     if not rest then return end
 
-    -- R2 = message relaye par un bridge, format: R2:replyTo:msgType:band:payload
+    -- R2 = enveloppe du relais : R2:<band>:BR|BF:<paquet>
     if msgType == "R2" then
-        if not SYNC_USE_BNET_OUTBOUND then return end
-        local replyTo, innerMsg = strsplit(":", rest, 2)
-        if replyTo and innerMsg then
-            self:OnReceiveR2Relay(senderID, replyTo, innerMsg)
+        local band, innerMsg = strsplit(":", rest, 2)
+        if band and innerMsg then
+            self:OnReceiveR2Relay(senderID, band, innerMsg)
         end
         return
     end
@@ -2791,7 +2075,6 @@ function Overlord.Sync:OnBNetMessage(message, senderID)
     if band and band:match("_[AH]$") then
         -- 1.4.0: a Battle.net friend on another ruleset plays another campaign.
         if band:match("^Forever_") and not IsCompatibleForeverBand(band) then return end
-        bnet_links[senderID] = band
     else
         payload = rest
         band = nil
@@ -2880,23 +2163,17 @@ function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
     end
 end
 
--- Beta BR/BF preserves the original author through a bounded relay envelope.
--- Earlier hops are vouched for by the BNet peer; legacy R2 remains SR/TV only.
-function Overlord.Sync:OnReceiveR2Relay(senderID, replyTo, innerMsg)
-    if innerMsg and (innerMsg:sub(1, 3) == "BR:" or innerMsg:sub(1, 3) == "BF:") and Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then
-        if not IsCompatibleForeverBand(replyTo) then return end
-        if innerMsg:sub(1, 3) == "BF:" then
-            return Overlord.BetaNetwork:ReceiveFragment(innerMsg:sub(4), ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
-        end
-        return Overlord.BetaNetwork:Receive(innerMsg:sub(4), ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
+-- Enveloppe Battle.net du relais : R2:<band>:BR|BF:<wire>. Le pair BNet authentifie
+-- le dernier saut ; l'auteur d'origine est dans le paquet relais.
+function Overlord.Sync:OnReceiveR2Relay(senderID, band, innerMsg)
+    if not innerMsg or not Overlord.BetaNetwork then return end
+    local envelope = innerMsg:sub(1, 3)
+    if envelope ~= "BR:" and envelope ~= "BF:" then return end
+    if not IsCompatibleForeverBand(band) then return end
+    if envelope == "BF:" then
+        return Overlord.BetaNetwork:ReceiveFragment(innerMsg:sub(4), ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
     end
-    local msgType, payload = strsplit(":", innerMsg, 2)
-    if msgType == "SR" then
-        -- On simule une SR et on envoie la reponse a replyTo au lieu du sender BNet.
-        self:OnSyncRequestRelayed(replyTo, payload or "")
-    elseif msgType == "TV" then
-        self:OnReceiveTotalVictory(payload or "", "Bridge-" .. tostring(senderID), "BNET")
-    end
+    return Overlord.BetaNetwork:Receive(innerMsg:sub(4), ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
 end
 
 function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
@@ -2937,17 +2214,8 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
         return
     end
 
-    -- GK/GC exclus : pas de confiance « recent front sender » (spoof cross-faction)
-    if msgType == "SR" or msgType == "ZA" or msgType == "ZS" then
-        RecordRecentFrontSender(sender)
-    end
-
     local ok, err = true, nil
-    if msgType == "ST" then
-        ok, err = pcall(self.OnReceiveST, self, sender, payload)
-    elseif msgType == "R1" then
-        ok, err = pcall(self.OnReceiveR1, self, sender, payload)
-    elseif msgType == "K" then
+    if msgType == "K" then
         self:OnReceiveKill(payload, sender)
     elseif msgType == "EK" then
         self:OnReceiveEnemyKill(payload, sender)
@@ -2980,8 +2248,6 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
             ok, err = pcall(Overlord.FrontActivity.OnReceiveSyncPayload,
                 Overlord.FrontActivity, payload or "", sender, channel)
         end
-    elseif msgType == "RG" then
-        OnReceiveRG(payload, sender)
     elseif msgType == "LK" then
         self:OnReceiveLeaderboardKills(payload, sender, channel)
     elseif msgType == "LR" then
@@ -2990,9 +2256,6 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
         self:OnReceiveLeaderboardCaptures(payload, sender, channel)
     -- HR/HB/HC/HA without a "5:"/"6:" prefix were the v4 ladder exchange, retired
     -- in 1.2.4 (v6 pages are routed above): they are ignored.
-    elseif msgType == "LD" then
-        -- Digest de classement : detecteur de divergence (ne mute rien, declenche un SR existant).
-        if Overlord.LadderDigest then Overlord.LadderDigest:OnReceive(payload or "", sender) end
     elseif msgType == "LO" or msgType == "LOC" then
         -- A row from the peer asked for outpost history confirms that round.
         if self.NoteOutpostHistoryDelivery then pcall(self.NoteOutpostHistoryDelivery, self, sender) end
@@ -3081,71 +2344,6 @@ function Overlord.Sync:OnReceiveShard(payload, sender, channel)
     if shardID == nil then return end
     if Overlord.Shard and Overlord.Shard.SetPlayerShard then
         Overlord.Shard:SetPlayerShard(sender, shardID)
-    end
-end
-
--- Recoit ST (status) : un bridge annonce sa band et celles qu'il peut atteindre via BNet
--- Format: ST:bridgeBand:targetBand1,targetBand2 (on n'utilise que les bridges de notre faction)
-function Overlord.Sync:OnReceiveST(sender, payload)
-    if not payload or payload == "" then return end
-    local bridgeBand, rest = strsplit(":", payload, 2)
-    if not bridgeBand or not rest then return end
-    -- Ne garder que les bridges de notre faction (on ne peut pas whisper aux ennemis)
-    local myBand = self:GetMyBand()
-    if bridgeBand:match("_A$") ~= myBand:match("_A$") then return end
-    local bands = {}
-    for b in string.gmatch(rest, "[^,]+") do
-        bands[#bands + 1] = b:match("^%s*(.-)%s*$") or b
-    end
-    if #bands > 0 then
-        local seenAt = GetTime()
-        bridges:Remember(sender, { bands = bands, time = seenAt }, seenAt)
-    end
-end
-
-local R1_RELAY_COOLDOWN = 2
-local R1_RELAY_MAX_PAYLOAD = 320
-local lastR1RelayBySender = Overlord.Sync:NewBoundedSessionLedger(512, 0, 60)
-
--- R1 beta accepts bounded BF envelopes; legacy R1 remains restricted to SR/TV.
-function Overlord.Sync:OnReceiveR1(sender, payload)
-    if not payload then return end
-    if #payload > R1_RELAY_MAX_PAYLOAD then return end
-    local targetBand, replyTo, rest = strsplit(":", payload, 3)
-    if not targetBand or not replyTo or not rest then return end
-    if #targetBand > 80 or targetBand:find(":", 1, true) or not targetBand:match("_[AH]$") then return end
-    if #replyTo < 2 or #replyTo > 50 or replyTo:find(":", 1, true)
-        or not self:HasCompleteContributorIdentity(replyTo) then return end
-    -- replyTo n'est pas libre : il doit etre l'identite WoW portee par le message addon direct.
-    if not self.CaptureContributorMatchesSender
-        or not self:CaptureContributorMatchesSender(replyTo, sender) then return end
-    local innerType = rest:match("^([^:]+)")
-    if innerType == "BF" and Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then
-        if not IsCompatibleForeverBand(targetBand) then return end
-        return Overlord.BetaNetwork:ReceiveFragment(rest:sub(4), sender, "WHISPER")
-    end
-    if not Overlord.InActiveFront then return end
-    if innerType ~= "SR" and innerType ~= "TV" then return end
-    local now = GetTime()
-    local relayKey = tostring(sender) .. ":" .. innerType
-    if lastR1RelayBySender:Get(relayKey, now, R1_RELAY_COOLDOWN) ~= nil then return end
-    -- Trouver un ami BNet dans targetBand
-    local gameAccountID = nil
-    for gid, band in pairs(bnet_links) do
-        if band == targetBand then
-            gameAccountID = gid
-            break
-        end
-    end
-    if not gameAccountID then return end
-    if not IsBNetGameAccountInCurrentRegion(gameAccountID) then return end
-    if not lastR1RelayBySender:Remember(relayKey, now, now, false) then return end
-    -- Envoyer R2 a notre ami BNet : il traitera la SR et repondra a replyTo en whisper
-    local msg = "R2:" .. replyTo .. ":" .. rest
-    if C_BattleNet and C_BattleNet.SendGameData then
-        securecall(C_BattleNet.SendGameData, gameAccountID, PREFIX, msg)
-    elseif BNSendGameData then
-        securecall(BNSendGameData, gameAccountID, PREFIX, msg)
     end
 end
 
@@ -9452,17 +8650,6 @@ function Overlord.Sync:BroadcastCapture(zoneId, completedRequirement)
         -- Sans ca, un joueur qui n'est ni dans le meme groupe ni ami BNet avec le capteur
         -- n'apprend la capture qu'au prochain scan communaute periodique (120s de retard).
         -- Le SR garde son role de rattrapage ZA/LK/LC/DM pour les joueurs encore incomplets.
-        C_Timer.After(2, function()
-            if not Overlord.InstanceSuspended and Overlord.InActiveFront and Overlord.Sync then
-                local nowScan = GetTime()
-                local scanCooldown = largeEvent and 30 or 12
-                if not Overlord.Sync._lastPostCaptureCommunityScan
-                    or nowScan - Overlord.Sync._lastPostCaptureCommunityScan >= scanCooldown then
-                    Overlord.Sync._lastPostCaptureCommunityScan = nowScan
-                    Overlord.Sync:ScanCommunityMembers(true)
-                end
-            end
-        end)
     end
 end
 
@@ -9660,7 +8847,6 @@ function Overlord.Sync:BroadcastTotalVictory(victoryTs, victoryBonusPayload)
         self:SendToChannel("VB", victoryBonusPayload, true)
     end
     self:SendToBNetFriends("TV", payload)
-    self:RelayToEnemyBridge("TV", payload)
     if self.BroadcastToCommunity then
         local largeEvent = self:IsLargeEvent()
         local maxCommunity = largeEvent and 20 or 40
@@ -10513,25 +9699,6 @@ function Overlord.Sync:StartProximitySync()
     self:StartProximityRescan()
 end
 
--- Broadcast ST : annonce notre band et celles qu'on peut atteindre via nos amis BNet (pour etre bridge)
-function Overlord.Sync:BroadcastST()
-    -- Annonce des ponts R1 (Retail). Sur Forever le relais beta atteint directement
-    -- les amis Battle.net ; ces annonces ne faisaient que consommer le canal.
-    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then return end
-    local now = GetTime()
-    if now - lastSTBroadcast < 10 then return end
-    local bands = {}
-    for _, band in pairs(bnet_links) do
-        bands[#bands + 1] = band
-    end
-    if #bands > 0 then
-        local myBand = self:GetMyBand()
-        local payload = myBand .. ":" .. table.concat(bands, ",")
-        self:SendToChannel("ST", payload)
-        lastSTBroadcast = now
-    end
-end
-
 -- Election periodique sans nouveau message wire : chaque client etale son callback sur
 -- la meme fenetre deterministe a partir de Nom-Royaume. Cela couvre aussi les solos et
 -- groupes differents d'un meme canal de royaume ; son premier SR annule les callbacks suivants.
@@ -10645,9 +9812,6 @@ function Overlord.Sync:StartPeriodicChannelSync()
             self:SendToBNetFriends("SR", SRPayload("T"))
         end
     end
-    if SYNC_USE_BNET_OUTBOUND then
-        self:BroadcastST()
-    end
     -- Amorcer le cache local chez tous (validation entrante O(1)), mais n'envoyer la
     -- demande communautaire que depuis l'elu.
     C_Timer.After(10, function()
@@ -10682,13 +9846,8 @@ function Overlord.Sync:StartPeriodicChannelSync()
         if self.RequestRaidLeaderboardCatchUp then
             self:RequestRaidLeaderboardCatchUp()
         end
-        -- Broadcast ST toutes les 90s si on a des liens BNet (pour etre bridge)
+        -- Purges amorties : aucune table sender complete dans le ticker.
         local now = GetTime()
-        if now - lastSTBroadcast >= BRIDGE_ST_INTERVAL then
-            self:BroadcastST()
-        end
-        -- Purges amorties : aucune table sender/bridge complete dans le ticker.
-        bridges:Prune(now, 32)
         lastSRPerSender:Prune(now, 32)
     end)
 end
@@ -10716,13 +9875,7 @@ function Overlord.Sync:Suspend()
     self:StopPeriodicChannelSync()
     self:StopPassiveSync()
     self:StopProximityRescan()
-    recentFrontSenders:Clear()
     wipe(priv.prereqGraceUntil)
-    wipe(lastEnemyBridgeRelay)
-    lastR1RelayBySender:Clear()
-    -- Remet a zero les timestamps RG pour eviter un auto-accept parasite au retour
-    lastRGSentWaveAt = 0
-    self.lastRGSentAt = 0
 end
 
 -- Reinitialise le flag de victoire (appele depuis ResetAll pour la nouvelle campagne)

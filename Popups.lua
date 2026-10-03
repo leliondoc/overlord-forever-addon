@@ -2130,9 +2130,7 @@ Overlord.Popups:RegisterLoginAnnouncement({
     id = FOREVER_NETWORK_NOTICE_ID,
     title = function() return L.FOREVER_NETWORK_NOTICE_TITLE end,
     body = function() return L.FOREVER_NETWORK_NOTICE_BODY end,
-    when = function()
-        return Overlord.UI and Overlord.UI.COMMUNITY_JOIN_AVAILABLE == false
-    end,
+    when = function() return true end,
     opts = { showWarningIcon = true },
 })
 

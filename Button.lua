@@ -60,12 +60,6 @@ local function FormatCooldown(sec)
     return string.format("%d:%02d", m, s)
 end
 
-local function HasCommunityClub()
-    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then return true end
-    if Overlord.CommunityModeEnabled == false then return false end
-    return Overlord.Sync and Overlord.Sync.FindCommunityClub
-        and Overlord.Sync:FindCommunityClub()
-end
 
 
 local function GetRedChrome()
@@ -187,7 +181,7 @@ local function UpdateCooldownVisual()
         cdSwipeExpireAt = nil
         cdFrame:Clear()
         if btnFrame.label and L.FACTION_CALL_BUTTON then btnFrame.label:SetText(L.FACTION_CALL_BUTTON) end
-        if not HasCommunityClub() or not Overlord.InActiveFront then
+        if not Overlord.InActiveFront then
             btnFrame.icon:SetDesaturated(true)
             btnFrame.icon:SetAlpha(0.35)
         else
@@ -226,7 +220,6 @@ function Overlord.Button:RefreshGeneralButton()
         or not canLead
         or slotTakenByOther
         or not IsGeneralFrontContext()
-        or not HasCommunityClub()
     )
 
     local faction = Overlord.PlayerFaction or UnitFactionGroup("player")
@@ -327,8 +320,6 @@ local function WireFactionCallGridButton(btn)
             GameTooltip:AddLine(string.format(L.FACTION_CALL_TOOLTIP_CD, FormatCooldown(rem)), t.MUTED[1], t.MUTED[2], t.MUTED[3])
         elseif not Overlord.InActiveFront then
             GameTooltip:AddLine(L.FACTION_CALL_TOOLTIP_NOT_IN_FRONT, t.MUTED[1], t.MUTED[2], t.MUTED[3], true)
-        elseif not HasCommunityClub() then
-            GameTooltip:AddLine(L.FACTION_CALL_NO_COMMUNITY, t.MUTED[1], t.MUTED[2], t.MUTED[3], true)
         else
             GameTooltip:AddLine(L.FACTION_CALL_TOOLTIP_SHARED, t.MUTED[1], t.MUTED[2], t.MUTED[3], true)
         end
@@ -388,8 +379,6 @@ local function WireGeneralGridButton(btn)
             GameTooltip:AddLine(string.format(L.GENERAL_SLOT_TAKEN or "%s", slotHolder), t.MUTED[1], t.MUTED[2], t.MUTED[3], true)
         elseif not Overlord.InActiveFront then
             GameTooltip:AddLine(L.GENERAL_NOT_ON_FRONT or "", t.MUTED[1], t.MUTED[2], t.MUTED[3], true)
-        elseif not HasCommunityClub() then
-            GameTooltip:AddLine(L.GENERAL_NOT_COMMUNITY or "", t.MUTED[1], t.MUTED[2], t.MUTED[3], true)
         end
         GameTooltip:Show()
     end)
@@ -462,10 +451,6 @@ function Overlord.Button:OnClick()
         Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.FACTION_CALL_NOT_IN_FRONT)
         return
     end
-    if not HasCommunityClub() then
-        Overlord:PrintNotification("|cffff6600[Overlord]|r " .. L.FACTION_CALL_NO_COMMUNITY)
-        return
-    end
     local payload = Overlord.Sync:BuildFactionCallPayload()
     if not payload then return end
     local sent = Overlord.Sync:BroadcastFactionCall(payload)
@@ -474,8 +459,6 @@ function Overlord.Button:OnClick()
         if remAfter > 0 then
             Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. string.format(
                 L.FACTION_CALL_COOLDOWN_SHARED, FormatCooldown(remAfter)))
-        elseif not HasCommunityClub() then
-            Overlord:PrintNotification("|cffff6600[Overlord]|r " .. L.FACTION_CALL_NO_COMMUNITY)
         else
             Overlord:PrintNotification("|cffff6600[Overlord]|r " .. L.FACTION_CALL_NO_ONLINE)
         end

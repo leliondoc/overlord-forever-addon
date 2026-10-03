@@ -302,5 +302,4 @@ assert(not sync:IsValidWhisperTarget("Troma Orcbane:payload"))
 assert(sync:GetMyBand() == "Forever_global_H")
 region = 1
 assert(sync:GetMyBand() == "Forever_global_H")
-assert(not sync:IsRPRealm())
 print("Forever identity: full names, API suffix, compact sender, accents, Cyrillic and global routing OK")

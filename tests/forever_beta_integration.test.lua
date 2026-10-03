@@ -73,18 +73,9 @@ assert(not s:KillAntiSpoofIsBlacklisted("Forged Victim"),
 local packet = wire(12, "K", killPayload("Bridge Tester", 3), "Bridge Tester")
 s:OnBNetMessage("R2:Forever_eu_A:BR:" .. packet, 123)
 assert(Overlord.Leaderboard.kills["Bridge Tester"] == 3, "Real R2 kill handler lost low-level score")
-assert(s:FindCommunityClub() == nil)
-assert(#s:FindAllCommunityClubs() == 0)
-assert(s:GetCommunityInviteCode() == "0m7kdXcnvR")
-C_Club.GetSubscribedClubs = function()
-    return { { clubId = 777, name = "Overlord Forever", clubType = Enum.ClubType.Character } }
-end
-C_Club.GetClubMembers = function() return {} end
--- Forever has no cross-faction community: even a subscribed "Overlord" club is
--- never used, and trust in a routed sender comes from the relay alone.
-assert(Overlord.CommunityModeEnabled == false, "Community mode must stay off on Forever")
-assert(s:FindCommunityClub(true) == nil, "An Overlord club was used although communities are disabled")
-assert(#s:FindAllCommunityClubs() == 0, "Club scan returned clubs although communities are disabled")
+-- Forever has no community: the C_Club transport is gone (1.4.2), trust in a routed
+-- sender comes from the relay alone.
+assert(s.FindCommunityClub == nil and s.ScanCommunityMembers == nil, "C_Club community code is still loaded")
 assert(s:IsStrategicSiteCommunitySender("Remote Tester"), "Routed sender lost its relay trust context")
 -- A second score through fragmented R2 reaches the same production receiver.
 local payload = killPayload("Bridge Tester", 4)

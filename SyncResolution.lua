@@ -79,14 +79,10 @@ local function resolutionCanBroadcast()
     return false
 end
 
--- GR/GY : uniquement via la communaute Battle.net Overlord (whispers membres en ligne).
+-- GR/GY circulent sur le relais ; rien en instance.
 local function guildResolutionCanBroadcast()
     if Overlord.InstanceSuspended or IsInInstance() then return false end
-    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then return true end
-    if Overlord.CommunityModeEnabled == false then return false end
-    local sync = Overlord.Sync
-    if not sync or not sync.FindCommunityClub then return false end
-    return sync:FindCommunityClub() ~= nil
+    return Overlord.BetaNetwork ~= nil
 end
 
 local function MaybeLeaderboardGuildRefreshFromSync()

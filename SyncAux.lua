@@ -1160,7 +1160,6 @@ function Overlord.Sync:StartPassiveSync()
                 -- Rattrapage lent mais important : ne pas le laisser tomber sur budget canal sature.
                 self:SendToChannel("SR", self:GetSRPayload("T"), true)
             end
-            self:ScanCommunityMembers()
             if self.ScheduleControlledZoneSnapshot then
                 self:ScheduleControlledZoneSnapshot("passive", {
                     cooldown = 90,

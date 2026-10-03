@@ -7,7 +7,7 @@ local sync = addon.Sync
 local net = { peers = {}, stats = { sent = 0, received = 0, dropped = 0 } }
 addon.BetaNetwork = net
 local allowed = {}
-for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR VB MN MS OP OC SH HR HB HC HA LD CR CA GR GY GI FC GW GE GP GX GD GM"):gmatch("%S+") do
+for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR VB MN MS OP OC SH HR HB HC HA CR CA GR GY GI FC GW GE GP GX GD GM"):gmatch("%S+") do
     allowed[kind] = true
 end
 local MAX_PACKET, MAX_PATH, TTL = 3600, 4, 120
@@ -1091,22 +1091,6 @@ local function tasksFor(p, wire)
             else coverId = entry.id; bnet(entry.id) end
         end
         coverId = nil
-        -- R1 fallback to a known gateway when there is no local broadcast path.
-        if sync.FindBridgeForEnemyFaction and sync.GetChannelId and not sync:GetChannelId()
-            and not IsInGroup() then
-            local bridge, band = sync:FindBridgeForEnemyFaction()
-            if bridge and band then
-                local prefix = band .. ":" .. sync:GetPlayerFullName() .. ":BF:" .. p.id .. ":"
-                local size = math.min(170, 255 - 3 - #prefix - 6)
-                if size > 0 and math.ceil(#wire / size) <= 64 then
-                    local n = math.ceil(#wire / size)
-                    for i = 1, n do
-                        local r1 = prefix .. i .. ":" .. n .. ":" .. wire:sub((i - 1) * size + 1, i * size)
-                        add("WHISPER", r1, "R1", bridge)
-                    end
-                end
-            end
-        end
     end
     if ckey then tasks.cover = { key = ckey, path = pathFriends } end
     if trimmed and trimmed > 0 then

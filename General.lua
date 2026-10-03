@@ -1061,11 +1061,6 @@ function Overlord.General:TryRestoreLocalGeneral()
     if not self:IsRaidLeader() then return false end
     -- Restauration uniquement sur la carte du front (pas InActiveFront global hors zone).
     if not IsOnOverlordFrontMap() then return false end
-    if Overlord.CommunityModeEnabled ~= false and Overlord.BetaNetworkEnabled == false
-        and (not Overlord.Sync or not Overlord.Sync.FindCommunityClub or not Overlord.Sync:FindCommunityClub()) then
-        return false
-    end
-
     local claimTs = tonumber(sess.claimTs) or 0
     if claimTs <= 0 then
         self:ClearPersistedSession()
@@ -1166,13 +1161,6 @@ function Overlord.General:TryClaim(silentFail)
     if not IsGeneralFrontContext() then
         if not silentFail and L and L.GENERAL_NOT_ON_FRONT and Overlord.PrintNotification then
             Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.GENERAL_NOT_ON_FRONT)
-        end
-        return false
-    end
-    if Overlord.CommunityModeEnabled ~= false and Overlord.BetaNetworkEnabled == false
-        and (not Overlord.Sync or not Overlord.Sync.FindCommunityClub or not Overlord.Sync:FindCommunityClub()) then
-        if not silentFail and L and L.GENERAL_NOT_COMMUNITY and Overlord.PrintNotification then
-            Overlord:PrintNotification("|cffff6600[Overlord]|r " .. L.GENERAL_NOT_COMMUNITY)
         end
         return false
     end

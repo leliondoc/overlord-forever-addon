@@ -1518,15 +1518,6 @@ local pendingFrontEnter = nil
 -- Phase de rattrapage (instanceID parasite) sur carte de front : message chat une fois puis reset quand OK
 local catchUpNotified = false
 
--- Ticker relances demande de groupe RP (annule aussi a l'entree en instance)
-local rpGroupRetryTicker = nil
-local function CancelRPGroupRetryTicker()
-    if rpGroupRetryTicker then
-        rpGroupRetryTicker:Cancel()
-        rpGroupRetryTicker = nil
-    end
-end
-
 -- Timers differees annulables (sortie instance / reprise GetInstanceInfo)
 local postInstanceRecoveryTimers = {}
 local resumeInstanceRetryTimers = {}
@@ -1973,7 +1964,6 @@ function Overlord:SuspendForInstance()
         self._postInstanceFlushGeneration =
             (tonumber(self._postInstanceFlushGeneration) or 0) + 1
         CancelAllDeferredInstanceTimers()
-        CancelRPGroupRetryTicker()
         return false
     end
     -- Invalide le callback Flush differe d'une sortie precedente avant toute
@@ -1981,7 +1971,6 @@ function Overlord:SuspendForInstance()
     self._postInstanceFlushGeneration =
         (tonumber(self._postInstanceFlushGeneration) or 0) + 1
     CancelAllDeferredInstanceTimers()
-    CancelRPGroupRetryTicker()
     -- Revert capture / broadcast AVANT InstanceSuspended (sinon GK bloque l'emission)
     if self.ZoneControl and self.ZoneControl.OnInstanceSuspend then
         self.ZoneControl:OnInstanceSuspend()
@@ -2028,9 +2017,6 @@ function Overlord:SuspendForInstance()
     if self.LeaderboardUI then self.LeaderboardUI:Hide() end
     if self.Sync then self.Sync:Suspend() end
     if self.Combat then self.Combat:Suspend() end
-    if self.Sync and self.Sync.ClearRecentFrontSenders then
-        self.Sync:ClearRecentFrontSenders()
-    end
 end
 
 function Overlord:ResumeFromInstance()
@@ -4527,21 +4513,8 @@ function Overlord:OnLeaveFront()
     if self.ZoneControl and self.ZoneControl.ReleaseLocalCaptureState then
         self.ZoneControl:ReleaseLocalCaptureState()
     end
-    CancelRPGroupRetryTicker()
-    if self.rpAutoGrouped then
-        self.rpAutoGrouped = false
-        C_Timer.After(2, function()
-            -- Evite LeaveParty si retour front / instance entre-temps (course 2 s)
-            if Overlord.InstanceSuspended or Overlord.InActiveFront then return end
-            if not IsInGroup() then return end
-            pcall(LeaveParty)
-        end)
-    end
-    if self.Sync and self.Sync.ClearRecentFrontSenders then
-        self.Sync:ClearRecentFrontSenders()
-        if self.Sync.ClearRaidLateJoinCatchUpPending then
-            self.Sync:ClearRaidLateJoinCatchUpPending()
-        end
+    if self.Sync and self.Sync.ClearRaidLateJoinCatchUpPending then
+        self.Sync:ClearRaidLateJoinCatchUpPending()
     end
     -- Arrete la boucle de mise a jour pour eviter toute consommation CPU hors front
     self:StopUpdateLoop()
@@ -4629,7 +4602,6 @@ function Overlord:OnEnterFront()
     end
     -- Re-join du canal + scan des nameplates deja visibles (sync joueurs hors royaume / hors raid)
     if self.Sync then
-        if self.Sync.ResetCommunitySearch then self.Sync:ResetCommunitySearch() end
         if self.Sync.MarkRaidLateJoinCatchUpPending then
             self.Sync:MarkRaidLateJoinCatchUpPending()
         end
@@ -4641,13 +4613,6 @@ function Overlord:OnEnterFront()
             if Overlord.InstanceSuspended then return end
             if Overlord.InActiveFront and Overlord.Sync and Overlord.Sync.ProximitySync then
                 Overlord.Sync:ProximitySync()
-            end
-        end)
-        -- Cross-realm / cross-faction : SR whisper commu des que C_Club est pret (login sur le front).
-        C_Timer.After(6, function()
-            if Overlord.InstanceSuspended or not Overlord.InActiveFront then return end
-            if Overlord.Sync and Overlord.Sync.ScanCommunityMembers then
-                Overlord.Sync:ScanCommunityMembers(true)
             end
         end)
         -- Large event : SR whisper vers chef + membre (reponse LK garantie, hors canal 18 %).
@@ -4676,32 +4641,6 @@ function Overlord:OnEnterFront()
                 Overlord.Sync:HealRequestMissingGuildsFromDB()
             end
         end)
-        -- Royaume RP : demande de groupe vers joueurs recemment vus en front (cache sync uniquement)
-        if self.Sync.IsRPRealm and self.Sync:IsRPRealm() then
-            C_Timer.After(3, function()
-                if Overlord.InstanceSuspended or not Overlord.InActiveFront then return end
-                if IsInGroup() then return end
-                if Overlord.Sync and Overlord.Sync.BroadcastRPGroupRequest then
-                    Overlord.Sync:BroadcastRPGroupRequest()
-                end
-            end)
-            CancelRPGroupRetryTicker()
-            local n = 0
-            rpGroupRetryTicker = C_Timer.NewTicker(25, function()
-                if Overlord.InstanceSuspended or not Overlord.InActiveFront or IsInGroup() then
-                    CancelRPGroupRetryTicker()
-                    return
-                end
-                n = n + 1
-                if n > 10 then
-                    CancelRPGroupRetryTicker()
-                    return
-                end
-                if Overlord.Sync and Overlord.Sync.BroadcastRPGroupRequest then
-                    Overlord.Sync:BroadcastRPGroupRequest()
-                end
-            end)
-        end
     end
 end
 
@@ -5189,7 +5128,6 @@ eventFrame:RegisterEvent("PLAYER_ALIVE")
 -- Re-check quand le joueur active/desactive le mode guerre
 pcall(function() eventFrame:RegisterEvent("LOADING_SCREEN_ENABLED") end)
 pcall(function() eventFrame:RegisterEvent("PLAYER_LEAVING_WORLD") end)
-pcall(function() eventFrame:RegisterEvent("PARTY_INVITE_REQUEST") end)
 pcall(function() eventFrame:RegisterEvent("PLAYER_FACTION_CHANGED") end)
 pcall(function() eventFrame:RegisterEvent("PLAYER_UNGHOST") end)
 pcall(function() eventFrame:RegisterEvent("UNIT_PHASE") end)
@@ -5353,24 +5291,6 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
             Overlord:FinalizeCaptureReleaseAfterWorldEntry(inInstance)
         end
         Overlord:ApplyGhostHudLayout()
-    elseif event == "PARTY_INVITE_REQUEST" then
-        if Overlord.Sync and Overlord.Sync.IsRPRealm and Overlord.Sync:IsRPRealm() then
-            local sentAt = Overlord.Sync.lastRGSentAt or 0
-            if sentAt > 0 and GetTime() - sentAt < 90 then
-                -- Securite : n'accepter que si l'inviteur est un emetteur front recent connu (cache sync)
-                local inviterName = ...
-                local fullInviter = Overlord.Sync.CanonicalForeverName
-                    and Overlord.Sync:CanonicalForeverName(inviterName) or nil
-                local known = fullInviter and Overlord.Sync.IsRecentFrontSender
-                    and (Overlord.Sync:IsRecentFrontSender(fullInviter)
-                        or Overlord.Sync:IsRecentFrontSender(inviterName))
-                if known then
-                    pcall(AcceptGroup)
-                    Overlord.rpAutoGrouped = true
-                    Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. (L and L.RP_GROUP_ACCEPTED or "Joined group for phasing."))
-                end
-            end
-        end
     end
 end)
 

@@ -1,16 +1,10 @@
--- Shared strategic-site sender validation (the wood-resource domination boost was removed in 1.2.0).
+-- Validation partagee des expediteurs d'avant-postes et de sites strategiques (LO/LOC/OE/OP/OC).
 Overlord = Overlord or {}
 Overlord.Sync = Overlord.Sync or {}
 local function SyncSenderIsInOurGroup(sender)
     return Overlord.Sync.SenderIsInOurGroup and Overlord.Sync:SenderIsInOurGroup(sender) or false
 end
 
-function Overlord.Sync:HasCommunityClub()
-    if self.FindCommunityClub then
-        return self:FindCommunityClub() ~= nil
-    end
-    return OverlordDB and OverlordDB.inCommunity == true
-end
 
 local function GetGroupSenderFaction(sender)
     return Overlord.Sync and Overlord.Sync.GetGroupMemberFaction
