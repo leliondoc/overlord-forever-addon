@@ -81,8 +81,8 @@ local sync = Overlord.Sync
 local sent = {}
 sync.SendToGroup = function(_, kind, payload) sent[#sent + 1] = { kind, payload } end
 sync.SendToChannel = function(_, kind, payload) sent[#sent + 1] = { kind, payload } end
-sync.BroadcastToCommunity = function(_, kind, payload) sent[#sent + 1] = { kind, payload } end
-sync.WhisperCommunityMembersForContributorNames = function(_, kind, payload)
+sync.BroadcastToRelay = function(_, kind, payload) sent[#sent + 1] = { kind, payload } end
+sync.SendToNamedPeers = function(_, kind, payload)
     sent[#sent + 1] = { kind, payload }
 end
 lb.playerInfo["Roster Mage"].class = ""

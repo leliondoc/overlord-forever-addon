@@ -2,10 +2,6 @@
 Overlord = Overlord or {}
 Overlord.Sync = Overlord.Sync or {}
 
-local OP_COMMUNITY_CAPTURE_MAX = 40
-local OP_COMMUNITY_CAPTURE_DELAY = 0.25
-local OP_COMMUNITY_CAPTURE_MAX_LARGE = 12
-local OP_COMMUNITY_CAPTURE_DELAY_LARGE = 0.35
 local OP_POST_CAPTURE_STATE_DELAY = 4.0
 local OP_CAPTURE_REPLAY_DELAY_1 = 1.0
 local OP_CAPTURE_REPLAY_DELAY_2 = 3.0
@@ -247,12 +243,6 @@ local function IsOpLargeEvent()
     return Overlord.Sync and Overlord.Sync.IsLargeEvent and Overlord.Sync:IsLargeEvent()
 end
 
-local function GetOcCommunityRelayLimits()
-    if IsOpLargeEvent() then
-        return OP_COMMUNITY_CAPTURE_MAX_LARGE, OP_COMMUNITY_CAPTURE_DELAY_LARGE
-    end
-    return OP_COMMUNITY_CAPTURE_MAX, OP_COMMUNITY_CAPTURE_DELAY
-end
 
 local function BroadcastOutpostToGroup(msgType, payload)
     if not payload or payload == "" then return end
@@ -262,10 +252,10 @@ local function BroadcastOutpostToGroup(msgType, payload)
     end
 end
 
-local function BroadcastOutpostCaptureToCommunity(msgType, payload, maxMembers, whisperDelaySec, forceTargets)
+local function BroadcastOutpostToRelay(msgType, payload)
     if not payload or payload == "" then return end
-    if Overlord.Sync and Overlord.Sync.BroadcastToCommunity then
-        Overlord.Sync:BroadcastToCommunity(msgType, payload, maxMembers, whisperDelaySec, forceTargets)
+    if Overlord.Sync and Overlord.Sync.BroadcastToRelay then
+        Overlord.Sync:BroadcastToRelay(msgType, payload)
     end
 end
 
@@ -458,8 +448,8 @@ local function ShouldAcceptOutpostCapture(siteKey, guild, fac, remoteTs, sender,
 
     if not OcSenderMatchesPayloadGuild(sender, guild, fac) then
         local fromChannel = sourceChannel == "CHANNEL"
-        if not fromChannel and (not Overlord.Sync.IsStrategicSiteCommunitySender
-            or not Overlord.Sync:IsStrategicSiteCommunitySender(sender)) then
+        if not fromChannel and (not Overlord.Sync.IsKnownRelayPeer
+            or not Overlord.Sync:IsKnownRelayPeer(sender)) then
             return false
         end
         if not OcHasLocalCaptureEvidence(st, guild, fac, remoteTs) then
@@ -628,13 +618,10 @@ function Overlord.Sync:BroadcastOutpostState(siteKey, forceFull, allowInstance)
     local full = forceFull and true or false
     if not full and now - last < OP_COMMUNITY_ROUTINE_INTERVAL then return end
     lastCommunityOPBroadcast[siteKey] = now
-    local maxM, delay = GetOcCommunityRelayLimits()
     if full or st.status == "held" or isCriticalStart then
-        BroadcastOutpostCaptureToCommunity("OP", payload, maxM, delay, true)
+        BroadcastOutpostToRelay("OP", payload)
     else
-        if Overlord.Sync.BroadcastToCommunity then
-            Overlord.Sync:BroadcastToCommunity("OP", payload, 4, 0.4, false)
-        end
+        BroadcastOutpostToRelay("OP", payload)
     end
 end
 
@@ -676,12 +663,11 @@ function Overlord.Sync:BroadcastOutpostCapture(siteKey, guild, faction, captureT
     captureTs = math.floor(tonumber(captureTs) or 0)
     if captureTs <= 0 then captureTs = time() end
     local payload = siteKey .. ":" .. guild .. ":" .. facCode .. ":" .. captureTs .. ":" .. pool
-    local maxM, delay = GetOcCommunityRelayLimits()
     local function emitCapture()
         if not Overlord.Sync or Overlord.InstanceSuspended or not payload or payload == "" then return end
         BroadcastOutpostToGroup("OC", payload)
         Overlord.Sync:SendToChannel("OC", payload, true)
-        BroadcastOutpostCaptureToCommunity("OC", payload, maxM, delay, true)
+        BroadcastOutpostToRelay("OC", payload)
         if Overlord.Sync.BroadcastLeaderboardOutpostTenant then
             Overlord.Sync:BroadcastLeaderboardOutpostTenant(siteKey, guild, faction, captureTs)
         end
@@ -731,12 +717,7 @@ function Overlord.Sync:PollIfStaleObserverOutpost(secondsSinceOp)
     local now = GetTime()
     if now - lastStaleOutpostObserverPoll < minInterval then return end
     lastStaleOutpostObserverPoll = now
-    local maxM, delay = GetOcCommunityRelayLimits()
     self:SendSyncRequest({
-        includeCommunity = true,
-        allowCommunityInLargeEvent = true,
-        communityMax = maxM,
-        communityDelay = delay,
         criticalChannel = true,
     })
 end
@@ -1027,8 +1008,8 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
     if hadTs and not remoteTs then return end
     if not remoteTs then remoteTs = 0 end
     if IsStaleCampaignTimestamp(remoteTs) then return end
-    local communitySource = self.IsStrategicSiteCommunitySender
-        and self:IsStrategicSiteCommunitySender(sender or "") or false
+    local communitySource = self.IsKnownRelayPeer
+        and self:IsKnownRelayPeer(sender or "") or false
     if communitySource and not ownerSourceVerified and remoteTs <= 0 then
         return
     end
@@ -1456,12 +1437,11 @@ function Overlord.Sync:BroadcastLeaderboardOutpostTenant(siteKey, guild, faction
     local now = GetTime()
     PruneOpDedup(now)
     if not AdmitOutpostDedup(loSendDedup, sendKey, now) then return end
-    local maxM, delay = GetOcCommunityRelayLimits()
     local function emitTenant()
         if not Overlord.Sync or Overlord.InstanceSuspended or not payload or payload == "" then return end
         BroadcastOutpostToGroup("LO", payload)
         Overlord.Sync:SendToChannel("LO", payload, true)
-        BroadcastOutpostCaptureToCommunity("LO", payload, maxM, delay, true)
+        BroadcastOutpostToRelay("LO", payload)
     end
     emitTenant()
     C_Timer.After(OP_CAPTURE_REPLAY_DELAY_1, emitTenant)
@@ -1525,10 +1505,9 @@ function Overlord.Sync:BroadcastLeaderboardOutpostCount(siteKey, guild, faction,
     local now = GetTime()
     PruneOpDedup(now)
     if not AdmitOutpostDedup(locSendDedup, payload, now) then return end
-    local maxM, delay = GetOcCommunityRelayLimits()
     BroadcastOutpostToGroup("LOC", payload)
     self:SendToChannel("LOC", payload, true)
-    BroadcastOutpostCaptureToCommunity("LOC", payload, maxM, delay, true)
+    BroadcastOutpostToRelay("LOC", payload)
 end
 
 function Overlord.Sync:OnReceiveLeaderboardOutpostCount(payload, sender, sourceChannel)

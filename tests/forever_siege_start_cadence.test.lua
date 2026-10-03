@@ -14,7 +14,7 @@ function s:GetPlayerFullName() return "Capper Tester" end
 local wide = {}
 function s:SendToGroup() end
 function s:SendToChannel() end
-function s:BroadcastToCommunity(kind) if kind == "ZS" then wide[#wide + 1] = clock end end
+function s:BroadcastToRelay(kind) if kind == "ZS" then wide[#wide + 1] = clock end end
 function s:SendToBNetFriends() end
 local zone = { id = "zone_a", status = "in_progress", owner = "Horde", isHolding = true,
     holdAuthorityLocal = true, holdTimeElapsed = 0, holdTimeRequired = 120, updatedAt = time() }

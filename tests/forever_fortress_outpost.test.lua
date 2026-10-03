@@ -80,7 +80,7 @@ assert(gk:ShouldProjectPinOnMap(site, 1415) and not op:ShouldProjectOutpostPinOn
 assert(#op:GetSitesOnMap(site.mapID) == 0, "Fortress gets two detail pins")
 assert(gk:GetKeepMapIconAtlas(st, site) == "Warfronts-BaseMapIcons-Empty-MainHall")
 local sent = {}
-for _, method in ipairs({ "Send", "SendToChannel", "BroadcastToCommunity" }) do
+for _, method in ipairs({ "Send", "SendToChannel", "BroadcastToRelay" }) do
     sync[method] = function(_, kind, data) sent[#sent + 1] = { kind, data }; return true end
 end
 -- First capture outside any former siege window.

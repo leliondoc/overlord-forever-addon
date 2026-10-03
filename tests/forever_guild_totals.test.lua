@@ -22,7 +22,7 @@ function IsInRaid() return false end
 function GetChannelName() return 1 end
 local emitted = {}
 Overlord.Sync.Send = function(_, kind, payload) emitted[#emitted + 1] = {kind, payload} end
-Overlord.Sync.BroadcastToCommunity = function() end
+Overlord.Sync.BroadcastToRelay = function() end
 inGuild = true
 Overlord.Sync:BroadcastGuildIdentity(true)
 assert(#emitted == 0, "Unknown membership was broadcast as a guild departure")

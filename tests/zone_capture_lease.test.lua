@@ -138,7 +138,7 @@ Overlord.Sync = {
     end,
     Send = function(_, kind, payload) sent[#sent + 1] = kind .. ":" .. payload return true end,
     SendToChannel = function(_, kind, payload) sent[#sent + 1] = kind .. ":" .. payload return true end,
-    BroadcastToCommunity = function(_, kind, payload) sent[#sent + 1] = kind .. ":" .. payload return true end,
+    BroadcastToRelay = function(_, kind, payload) sent[#sent + 1] = kind .. ":" .. payload return true end,
     BroadcastZoneState = function() sent[#sent + 1] = "ZS" end,
     BroadcastCaptureBarrier = function(_, _, _, origin, wave, guid, required)
         sent[#sent + 1] = table.concat({ "CB", origin, wave, guid, required }, ":")
@@ -1068,16 +1068,16 @@ local deferredSnapshot = Lease:SnapshotLocalRelease(zone)
 expect(deferredSnapshot and deferredSnapshot.waveId == deferredWave,
     "local release snapshot did not retain the wave")
 local oldSend, oldChannel, oldCommunity = Overlord.Sync.Send,
-    Overlord.Sync.SendToChannel, Overlord.Sync.BroadcastToCommunity
+    Overlord.Sync.SendToChannel, Overlord.Sync.BroadcastToRelay
 Overlord.Sync.Send = function() return false end
 Overlord.Sync.SendToChannel = function() return false end
-Overlord.Sync.BroadcastToCommunity = function() return false end
+Overlord.Sync.BroadcastToRelay = function() return false end
 expect(not Lease:BroadcastReleaseSnapshot(deferredSnapshot)
     and zone._captureReleaseSentWave == nil,
     "failed release transport tombstoned the local wave")
 zone._localCaptureWaveId = nil
 zone.holdAuthorityLocal = false
-Overlord.Sync.Send, Overlord.Sync.SendToChannel, Overlord.Sync.BroadcastToCommunity =
+Overlord.Sync.Send, Overlord.Sync.SendToChannel, Overlord.Sync.BroadcastToRelay =
     oldSend, oldChannel, oldCommunity
 local deferredBefore = #sent
 expect(Lease:BroadcastReleaseSnapshot(deferredSnapshot),

@@ -63,7 +63,7 @@ local function allowed(sender, channel)
     end
     return channel == "WHISPER" and (
         (sync.SenderIsInOurGroup and sync:SenderIsInOurGroup(sender))
-        or (sync.IsOnlineCommunitySender and sync:IsOnlineCommunitySender(sender)))
+        or (sync.IsKnownRelayPeer and sync:IsKnownRelayPeer(sender)))
 end
 
 -- A single producer queue, paced in estimated wire bytes, also respects live

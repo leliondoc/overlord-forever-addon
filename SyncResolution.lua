@@ -485,8 +485,8 @@ function Overlord.Sync:FlushGuildRequests()
         if batchesEmitted >= maxBatches then return end
         local payload = table.concat(b, ",")
         if #payload > 0 and #payload <= CLASS_REQUEST_MAX_PAYLOAD then
-            if self.WhisperCommunityMembersForContributorNames then
-                self:WhisperCommunityMembersForContributorNames("GR", payload, b, 0.5, false, true)
+            if self.SendToNamedPeers then
+                self:SendToNamedPeers("GR", payload, b, 0.5, false, true)
             end
             local needsPeerHints = false
             for _, n in ipairs(b) do
@@ -495,8 +495,8 @@ function Overlord.Sync:FlushGuildRequests()
             end
             -- Une guilde deja renseignee se verifie aupres du proprietaire. Un
             -- broadcast de toutes les lignes non verifiees saturerait le rattrapage.
-            if needsPeerHints and self.BroadcastToCommunity then
-                self:BroadcastToCommunity("GR", payload, maxCommunity, 0.5)
+            if needsPeerHints and self.BroadcastToRelay then
+                self:BroadcastToRelay("GR", payload, maxCommunity, 0.5)
             end
             for _, n in ipairs(b) do
                 guildRequestCooldowns[n] = now
@@ -782,10 +782,10 @@ function Overlord.Sync:BroadcastGuildIdentity(force)
     if not payload then return end
     lastGuildIdentityBroadcastAt = now
     if self.Send then self:Send("GI", payload) end
-    if self.BroadcastToCommunity then
+    if self.BroadcastToRelay then
         local isLarge = self.IsLargeEvent and self:IsLargeEvent()
         local maxM = isLarge and 1 or 2
-        self:BroadcastToCommunity("GI", payload, maxM, 0.35)
+        self:BroadcastToRelay("GI", payload, maxM, 0.35)
     end
 end
 

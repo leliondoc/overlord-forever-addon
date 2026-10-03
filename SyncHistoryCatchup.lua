@@ -481,7 +481,7 @@ end
 -- Voisins directs utilisables : ni nous-memes, ni penalises, ni annonces sans v6.
 local function DirectCandidates()
     local net = Overlord.BetaNetwork
-    if Overlord.BetaNetworkEnabled == false or not net or not net.GetDirectPeers then return {} end
+    if not net or not net.GetDirectPeers then return {} end
     local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
     local now, out = GetTime(), {}
     for _, name in ipairs(net:GetDirectPeers()) do

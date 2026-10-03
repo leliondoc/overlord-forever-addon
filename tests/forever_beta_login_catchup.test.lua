@@ -39,7 +39,7 @@ local mapCatchupStarts = 0
 sync.SchedulePeriodicMapCatchup = function() mapCatchupStarts = mapCatchupStarts + 1 end
 
 -- No peer known yet: at most three spaced attempts, then stop.
-sync:SendLoginCatchupSyncToCommunity()
+sync:SendLoginCatchupSync()
 assert(broadcasts == 1, "Bounded broadcast fallback removed")
 drain()
 assert(#whispers == 0 and not sync._betaLoginCatchupScheduled, "Empty peer list retried forever")
@@ -47,10 +47,10 @@ assert(#whispers == 0 and not sync._betaLoginCatchupScheduled, "Empty peer list 
 -- Five same-faction and three enemy direct neighbours: two targeted requests, one enemy.
 for i = 1, 5 do local n = "Horde Peer" .. string.char(64 + i); peers[#peers + 1] = n; factions[n] = "Horde" end
 for i = 1, 3 do local n = "Ally Peer" .. string.char(64 + i); peers[#peers + 1] = n; factions[n] = "Alliance" end
-sync:SendLoginCatchupSyncToCommunity()
+sync:SendLoginCatchupSync()
 assert(#timers == 1 and timers[1].delay == sync.BETA_LOGIN_CATCHUP_FIRST_DELAY,
     "Login catch-up was not delayed until peers are heard")
-assert(sync:SendLoginCatchupSyncToCommunity() == 1 and #timers == 1,
+assert(sync:SendLoginCatchupSync() == 1 and #timers == 1,
     "A second login call stacked another catch-up")
 drain()
 assert(#whispers == 2, "Expected two targeted requests, got " .. #whispers)

@@ -1303,9 +1303,8 @@ function Lease:SnapshotLocalRelease(zone)
         payload = origin and origin ~= ""
             and table.concat({ zone.id, waveId, origin }, ":") or nil,
         -- Une vague locale restauree peut exister avant que CheckActiveFrontZone
-        -- ait reconstruit InActiveFront. Le ZR critique conserve donc toujours la
-        -- voie communaute bornee, y compris pendant une longue barriere login.
-        includeCommunity = true,
+        -- ait reconstruit InActiveFront : le ZR critique part toujours sur le relais.
+        relay = true,
     }
 end
 
@@ -1339,21 +1338,15 @@ function Lease:BroadcastReleaseSnapshot(snapshot)
     if sync.SendToChannel and sync:SendToChannel("ZR", snapshot.payload, true) == true then
         emitted = true
     end
-    if snapshot.includeCommunity then
-        local large = sync.IsLargeEvent and sync:IsLargeEvent()
-        local maxMembers = large and 8 or 40
-        -- Cette voie est synchrone : la queue communautaire normale est souvent
-        -- suspendue quelques millisecondes plus tard par l'entree en instance.
-        if sync.BroadcastToCommunityImmediate
-            and (tonumber(sync:BroadcastToCommunityImmediate(
-                "ZR", snapshot.payload, maxMembers)) or 0) > 0 then
+    if snapshot.relay then
+        -- Envoi relais synchrone : la file normale peut etre suspendue quelques
+        -- millisecondes plus tard par l'entree en instance.
+        if sync.SendReleaseImmediate
+            and (tonumber(sync:SendReleaseImmediate("ZR", snapshot.payload)) or 0) > 0 then
             emitted = true
         end
-        -- Garder aussi le fan-out temporise complet lorsqu'il reste assez de
-        -- temps avant la suspension ; ReceiveRelease est idempotent.
-        if sync.BroadcastToCommunity
-            and sync:BroadcastToCommunity(
-                "ZR", snapshot.payload, maxMembers, 0.12, true) == true then
+        -- Diffusion relais ordinaire en plus ; ReceiveRelease est idempotent.
+        if sync.BroadcastToRelay and sync:BroadcastToRelay("ZR", snapshot.payload) == true then
             emitted = true
         end
     end

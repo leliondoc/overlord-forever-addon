@@ -177,7 +177,7 @@ Overlord.Combat.IdentifyKiller = function() return "Nearby Priest", "Player-2-PR
 Overlord.Combat.GetEnemyClassFromNameplate = function() return "PRIEST" end
 Overlord.Sync.SendToGroup = function() end
 Overlord.Sync.SendToChannel = function() end
-Overlord.Sync.BroadcastToCommunity = function() end
+Overlord.Sync.BroadcastToRelay = function() end
 Overlord.Combat:OnPlayerDead()
 assert((Overlord.Leaderboard.kills["Nearby Priest"] or 0) == 0,
     "A guessed killer received an exportable score")

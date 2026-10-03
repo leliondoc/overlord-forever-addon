@@ -54,7 +54,7 @@ assert(loadfile("OutpostControl.lua"))()
 assert(loadfile("SyncStrategicSites.lua"))()
 assert(loadfile("SyncOutpost.lua"))()
 local op, sync = Overlord.Outpost, Overlord.Sync
-for _, method in ipairs({ "Send", "SendToChannel", "BroadcastToCommunity" }) do
+for _, method in ipairs({ "Send", "SendToChannel", "BroadcastToRelay" }) do
     sync[method] = function() return true end
 end
 local L = Overlord.L

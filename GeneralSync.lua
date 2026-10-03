@@ -44,19 +44,8 @@ local function TouchDedupNode(state, key, expiresAt)
     state.nodes[key] = node
 end
 
-local GE_COMMUNITY_MAX = 30
-local GE_COMMUNITY_MAX_LARGE = 12
-local GE_COMMUNITY_DELAY = 0.25
-local GP_COMMUNITY_MAX = 12
-local GP_COMMUNITY_MAX_LARGE = 6
-local GP_COMMUNITY_DELAY = 0.35
-local GD_COMMUNITY_MAX = 30
-local GD_COMMUNITY_MAX_LARGE = 12
 local GD_REPLAY_DELAY_1 = 1.0
 local GD_REPLAY_DELAY_2 = 3.0
-local GM_COMMUNITY_MAX = 16
-local GM_COMMUNITY_MAX_LARGE = 8
-local GM_COMMUNITY_DELAY = 0.5
 local GM_BROADCAST_COOLDOWN = 10
 local lastGmBroadcastAt = 0
 
@@ -203,7 +192,7 @@ local function AcceptGeneralSender(sender, faction)
     if not sender or not faction then return true end
     -- Forever has no club roster. A beta envelope retains the claiming player
     -- as author; the gateway must never become the commander instead.
-    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork
+    if Overlord.BetaNetwork
         and Overlord.BetaNetwork:IsDispatching(sender) then
         return faction == "Alliance" or faction == "Horde"
     end
@@ -283,33 +272,9 @@ function Overlord.GeneralSync:BuildGMPayload(claimTs)
         PoolTag(), claimTs or 0, time(), CampaignEpoch())
 end
 
-local function EmitCommunity(msgType, payload, opts)
-    if opts.community == false then return end
-    if IsLargeEvent() and opts.communityInLarge == false then return end
-    local sync = Overlord.Sync
-    if not sync or not payload or payload == "" then return end
-    if Overlord.InstanceSuspended or (IsInInstance and IsInInstance()) then return end
-
-    local maxM = opts.communityMax or 16
-    local delay = opts.communityDelay or 0.3
-    local force = opts.communityForce == true
-
-    local function once()
-        if opts.enemyFactionOnly and sync.BroadcastToEnemyFactionCommunity then
-            sync:BroadcastToEnemyFactionCommunity(msgType, payload, maxM, delay, force)
-        elseif opts.allyFactionOnly and sync.BroadcastGeneralToFactionCommunity then
-            sync:BroadcastGeneralToFactionCommunity(msgType, payload, maxM, delay, force)
-        elseif sync.BroadcastToCommunity then
-            sync:BroadcastToCommunity(msgType, payload, maxM, delay, force)
-        end
-    end
-    once()
-    if opts.replay then
-        C_Timer.After(GD_REPLAY_DELAY_1, once)
-        C_Timer.After(GD_REPLAY_DELAY_2, once)
-    end
-end
-
+-- Groupe + canal direct, puis diffusion relais (canal de faction, groupe, ponts
+-- Battle.net : les deux factions). opts.replay repete la diffusion relais a +1 s
+-- et +3 s pour les transitions critiques.
 local function EmitAll(msgType, payload, opts)
     opts = opts or {}
     local sync = Overlord.Sync
@@ -322,25 +287,16 @@ local function EmitAll(msgType, payload, opts)
     if opts.channel ~= false and sync.SendToChannel then
         sync:SendToChannel(msgType, payload, opts.critical == true)
     end
-    if opts.allyCommunity ~= false then
-        EmitCommunity(msgType, payload, {
-            allyFactionOnly = true,
-            communityMax = opts.communityMax,
-            communityDelay = opts.communityDelay,
-            communityForce = opts.communityForce,
-            communityInLarge = opts.communityInLarge,
-            replay = opts.allyReplay ~= nil and opts.allyReplay or opts.replay,
-        })
+    local function once()
+        local live = Overlord.Sync
+        if live and live.BroadcastToRelay and not Overlord.InstanceSuspended then
+            live:BroadcastToRelay(msgType, payload)
+        end
     end
-    if opts.enemyCommunity then
-        EmitCommunity(msgType, payload, {
-            enemyFactionOnly = true,
-            communityMax = opts.enemyCommunityMax or opts.communityMax,
-            communityDelay = opts.enemyCommunityDelay or opts.communityDelay,
-            communityForce = opts.communityForce,
-            communityInLarge = opts.communityInLarge,
-            replay = opts.enemyReplay ~= nil and opts.enemyReplay or opts.replay,
-        })
+    once()
+    if opts.replay then
+        C_Timer.After(GD_REPLAY_DELAY_1, once)
+        C_Timer.After(GD_REPLAY_DELAY_2, once)
     end
 end
 
@@ -361,19 +317,7 @@ end
 
 function Overlord.GeneralSync:BroadcastClaim(mapX, mapY, mapID, claimTs)
     local payload = self:BuildGEPayload(mapX, mapY, mapID, claimTs)
-    local isLarge = IsLargeEvent()
-    EmitAll("GE", payload, {
-        critical = true,
-        communityForce = true,
-        communityInLarge = true,
-        communityMax = isLarge and GE_COMMUNITY_MAX_LARGE or GE_COMMUNITY_MAX,
-        communityDelay = GE_COMMUNITY_DELAY,
-        enemyCommunity = true,
-        enemyCommunityMax = isLarge and GE_COMMUNITY_MAX_LARGE or GE_COMMUNITY_MAX,
-        enemyCommunityDelay = GE_COMMUNITY_DELAY,
-        allyReplay = true,
-        enemyReplay = true,
-    })
+    EmitAll("GE", payload, { critical = true, replay = true })
     Dbg("GE claim " .. tostring(claimTs))
 end
 
@@ -383,54 +327,18 @@ function Overlord.GeneralSync:BroadcastPosition(mapX, mapY, mapID)
     local claimTs = gen.GetLocalClaimTs and gen:GetLocalClaimTs()
     if not claimTs then return end
     local payload = self:BuildGPPayload(mapX, mapY, mapID, claimTs)
-    local isLarge = IsLargeEvent()
-    EmitAll("GP", payload, {
-        critical = false,
-        forceTargets = false,
-        communityForce = true,
-        communityInLarge = true,
-        communityMax = isLarge and GP_COMMUNITY_MAX_LARGE or GP_COMMUNITY_MAX,
-        communityDelay = GP_COMMUNITY_DELAY,
-        allyCommunity = true,
-        enemyCommunity = true,
-        enemyCommunityMax = isLarge and GP_COMMUNITY_MAX_LARGE or GP_COMMUNITY_MAX,
-        enemyCommunityDelay = GP_COMMUNITY_DELAY,
-    })
+    EmitAll("GP", payload, { critical = false })
 end
 
 function Overlord.GeneralSync:BroadcastRelease(claimTs, faction)
     local payload = self:BuildGXPayload(claimTs, faction)
-    local isLarge = IsLargeEvent()
-    EmitAll("GX", payload, {
-        critical = true,
-        communityForce = true,
-        communityInLarge = true,
-        communityMax = isLarge and GE_COMMUNITY_MAX_LARGE or GE_COMMUNITY_MAX,
-        communityDelay = GE_COMMUNITY_DELAY,
-        allyReplay = true,
-        enemyCommunity = true,
-        enemyCommunityMax = isLarge and GE_COMMUNITY_MAX_LARGE or GE_COMMUNITY_MAX,
-        enemyCommunityDelay = GE_COMMUNITY_DELAY,
-        enemyReplay = true,
-    })
+    EmitAll("GX", payload, { critical = true, replay = true })
     Dbg("GX release " .. tostring(claimTs))
 end
 
 function Overlord.GeneralSync:BroadcastDown(claimTs, killerName, killerClass, zoneId, victimName, victimFaction)
     local payload = self:BuildGDPayload(claimTs, killerName, killerClass, zoneId, victimName, victimFaction)
-    local isLarge = IsLargeEvent()
-    EmitAll("GD", payload, {
-        critical = true,
-        communityForce = true,
-        communityInLarge = true,
-        communityMax = isLarge and GD_COMMUNITY_MAX_LARGE or GD_COMMUNITY_MAX,
-        communityDelay = GE_COMMUNITY_DELAY,
-        allyReplay = true,
-        enemyCommunity = true,
-        enemyCommunityMax = isLarge and GD_COMMUNITY_MAX_LARGE or GD_COMMUNITY_MAX,
-        enemyCommunityDelay = GE_COMMUNITY_DELAY,
-        enemyReplay = true,
-    })
+    EmitAll("GD", payload, { critical = true, replay = true })
     Dbg("GD down " .. tostring(victimName))
 end
 
@@ -446,17 +354,7 @@ function Overlord.GeneralSync:BroadcastDuelMusicPulse()
     local claimTs = gen.GetLocalClaimTs and gen:GetLocalClaimTs()
     if not claimTs then return end
     local payload = self:BuildGMPayload(claimTs)
-    local isLarge = IsLargeEvent()
-    EmitAll("GM", payload, {
-        critical = false,
-        communityForce = false,
-        communityInLarge = true,
-        communityMax = isLarge and GM_COMMUNITY_MAX_LARGE or GM_COMMUNITY_MAX,
-        communityDelay = GM_COMMUNITY_DELAY,
-        enemyCommunity = true,
-        enemyCommunityMax = isLarge and GM_COMMUNITY_MAX_LARGE or GM_COMMUNITY_MAX,
-        enemyCommunityDelay = GM_COMMUNITY_DELAY,
-    })
+    EmitAll("GM", payload, { critical = false })
     Dbg("GM duel music pulse")
 end
 

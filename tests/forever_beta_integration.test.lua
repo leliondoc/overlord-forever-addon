@@ -76,7 +76,7 @@ assert(Overlord.Leaderboard.kills["Bridge Tester"] == 3, "Real R2 kill handler l
 -- Forever has no community: the C_Club transport is gone (1.4.2), trust in a routed
 -- sender comes from the relay alone.
 assert(s.FindCommunityClub == nil and s.ScanCommunityMembers == nil, "C_Club community code is still loaded")
-assert(s:IsStrategicSiteCommunitySender("Remote Tester"), "Routed sender lost its relay trust context")
+assert(s:IsKnownRelayPeer("Remote Tester"), "Routed sender lost its relay trust context")
 -- A second score through fragmented R2 reaches the same production receiver.
 local payload = killPayload("Bridge Tester", 4)
 packet = wire(2, "K", payload, "Bridge Tester")
@@ -137,8 +137,7 @@ assert(not Overlord.General:GetSlot("Alliance"), "Relayed commander release was 
 assert(not net.stats.lastError, net.stats.lastError)
 local sent = {}
 net.Broadcast = function(_, kind, data) sent[#sent + 1] = { kind, data }; return 1 end
-for _, method in ipairs({ "BroadcastToCommunity",
-    "BroadcastToEnemyFactionCommunity", "BroadcastGeneralToFactionCommunity" }) do
+for _, method in ipairs({ "BroadcastToRelay" }) do
     assert(s[method](s, "OP", "unchanged"), method .. " lost its replacement route")
     assert(sent[#sent][1] == "OP" and sent[#sent][2] == "unchanged")
 end
@@ -152,7 +151,7 @@ net.Broadcast = function(_, _, _, actual)
     assert(actual == extras, "Community bundle lost its secondary payloads")
     return 1
 end
-assert(s:BroadcastToCommunity("DX", "first-front", 12, 0.3, true, extras))
+assert(s:BroadcastToRelay("DX", "first-front", 12, 0.3, true, extras))
 
 -- The retired v4 exchange no longer counts deliveries (1.2.4, v6 only).
 assert(loadfile("SyncHistoryCatchup.lua"))()

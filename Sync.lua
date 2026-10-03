@@ -662,7 +662,8 @@ local lastBNetSRBroadcast = 0
 local BNET_SR_COOLDOWN = 25
 local BNET_SR_COOLDOWN_LARGE = 120
 
--- Envoi centralise d'une Sync Request (evite duplication dans JoinChannel, OnGroupChanged, etc.)
+-- Envoi centralise d'une Sync Request : diffusion relais (tous les clients Overlord),
+-- puis copies directes groupe/canal/Battle.net sauf opts.targetedOnly.
 function Overlord.Sync:SendSyncRequest(opts)
     opts = opts or {}
     -- Une demande automatique ne doit jamais faire trier/reconstruire le classement
@@ -671,7 +672,7 @@ function Overlord.Sync:SendSyncRequest(opts)
     local requestMode = opts.fullResponse == true and "F"
         or (opts.stateResponse == true and "S") or "T"
     local payload = SRPayload(requestMode)
-    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then
+    if Overlord.BetaNetwork then
         if opts.betaTarget then
             local sent = Overlord.BetaNetwork:Send("SR", payload, opts.betaTarget)
             if sent and requestMode == "F" then
@@ -684,33 +685,16 @@ function Overlord.Sync:SendSyncRequest(opts)
     -- Une SR locale partagee remplit deja le role de la prochaine vague periodique.
     -- La noter avant les transports evite qu'un ticker decale de quelques secondes
     -- emette la meme demande une seconde fois.
-    if Overlord.InActiveFront and not opts.targetedCommunityOnly then
+    if Overlord.InActiveFront and not opts.targetedOnly then
         self._lastActivePeriodicSrAt = GetTime()
     end
-    if not opts.targetedCommunityOnly then
+    if not opts.targetedOnly then
         self:Send("SR", payload)
         if (IsInRaid() or IsInGroup()) and self:GetChannelId() then
             self:SendToChannel("SR", payload, opts.criticalChannel == true)
         end
     end
-    -- /ov sync doit atteindre la communaute Overlord : c'est le chemin fiable
-    -- pour les joueurs cross-faction/cross-realm. Les vagues periodiques territoriales
-    -- peuvent l'autoriser explicitement en gros event avec un nombre de cibles borne.
-    local isLarge = self.IsLargeEvent and self:IsLargeEvent()
-    local forceCommunity = opts.includeCommunity == true
-    if self.BroadcastToCommunity
-        and (Overlord.InActiveFront or forceCommunity)
-        and (not isLarge or opts.allowCommunityInLargeEvent) then
-        self:BroadcastToCommunity(
-            "SR",
-            payload,
-            opts.communityMax or 12,
-            opts.communityDelay or 0.35,
-            opts.forceCommunityTargets == true,
-            nil,
-            opts.communityRosterMinTtl)
-    end
-    if not opts.targetedCommunityOnly and Overlord.InActiveFront then
+    if not opts.targetedOnly and Overlord.InActiveFront then
         local now = GetTime()
         local bnetSRCooldown = self:IsLargeEvent() and BNET_SR_COOLDOWN_LARGE or BNET_SR_COOLDOWN
         if now - lastBNetSRBroadcast >= bnetSRCooldown then
@@ -743,20 +727,16 @@ function Overlord.Sync:StartLoginCaptureSyncBurst()
             if Overlord.IsLoginCaptureSyncGateActive
                 and not Overlord:IsLoginCaptureSyncGateActive() then return end
             Overlord.Sync:SendSyncRequest({
-                includeCommunity = true,
-                allowCommunityInLargeEvent = true,
                 criticalChannel = true,
                 -- La gate login ne demande que la carte. Une reponse ladder complete
                 -- multiplie les copies/tri O(N) lors des reloads collectifs.
                 territorialOnly = true,
-                communityMax = 12,
-                communityDelay = (attempt == 1) and 0.12 or 0.2,
             })
-            if attempt == #delays and Overlord.Sync.SendLoginCatchupSyncToCommunity
+            if attempt == #delays and Overlord.Sync.SendLoginCatchupSync
                 and Overlord:IsLoginCaptureSyncGateActive() then
                 -- Dernier filet petit-comite : au dernier essai, recontacter chaque membre
                 -- en ligne plutot que d'attendre le rattrapage historique a 45 s.
-                Overlord.Sync:SendLoginCatchupSyncToCommunity()
+                Overlord.Sync:SendLoginCatchupSync()
             end
         end)
     end
@@ -771,12 +751,7 @@ function Overlord.Sync:StartLoginCaptureSyncBurst()
             or Overlord.InstanceSuspended or IsInInstance()
             or Overlord.InActiveFront then return end
         Overlord.Sync:SendSyncRequest({
-            includeCommunity = true,
-            allowCommunityInLargeEvent = true,
-            targetedCommunityOnly = true,
-            forceCommunityTargets = true,
-            communityMax = 1,
-            communityDelay = 0.2,
+            targetedOnly = true,
         })
     end)
     -- Une campagne deja alimentee converge par K/LK/LC sans aucun travail global.
@@ -803,14 +778,9 @@ function Overlord.Sync:StartInstanceCaptureSyncBurst()
                 or Overlord.Sync._instanceCaptureSyncBurstGeneration ~= generation
                 or Overlord.InstanceSuspended or IsInInstance() then return end
             Overlord.Sync:SendSyncRequest({
-                includeCommunity = true,
-                allowCommunityInLargeEvent = true,
                 criticalChannel = true,
                 territorialOnly = true,
-                targetedCommunityOnly = true,
-                communityMax = (attempt == 1) and 3 or 1,
-                communityRosterMinTtl = 18,
-                communityDelay = (attempt == 1) and 0.12 or 0.2,
+                targetedOnly = true,
             })
         end)
     end
@@ -1250,7 +1220,7 @@ end
 -- Chemin fiable pour late joiner ; reponse whisper SR = 100 % ZA garanti cote receveur.
 -- Fin de gate login : une SR territoriale sur le relais, puis le rattrapage point a
 -- point vers quelques voisins directs (reponse garantie) et la carte periodique.
-function Overlord.Sync:SendLoginCatchupSyncToCommunity()
+function Overlord.Sync:SendLoginCatchupSync()
     if Overlord.InstanceSuspended or IsInInstance() then return 0 end
     local betaSent = Overlord.BetaNetwork
         and Overlord.BetaNetwork:Broadcast("SR", SRPayload("T")) or 0
@@ -1270,7 +1240,7 @@ Overlord.Sync.BETA_LOGIN_CATCHUP_RETRY_DELAY = 20
 Overlord.Sync.BETA_LOGIN_CATCHUP_MAX_ATTEMPTS = 3
 
 function Overlord.Sync:ScheduleBetaPeerLoginCatchup()
-    if Overlord.BetaNetworkEnabled == false or not Overlord.BetaNetwork then return false end
+    if not Overlord.BetaNetwork then return false end
     if self._betaLoginCatchupScheduled then return false end
     self._betaLoginCatchupScheduled = true
     C_Timer.After(self.BETA_LOGIN_CATCHUP_FIRST_DELAY or 12, function()
@@ -1349,7 +1319,7 @@ Overlord.Sync.BETA_MAP_CATCHUP_INTERVAL = 150
 Overlord.Sync.BETA_MAP_CATCHUP_JITTER = 30
 
 function Overlord.Sync:SchedulePeriodicMapCatchup()
-    if self._mapCatchupArmed or Overlord.BetaNetworkEnabled == false then return false end
+    if self._mapCatchupArmed then return false end
     self._mapCatchupArmed = true
     C_Timer.After(self.BETA_MAP_CATCHUP_INTERVAL + math.random(0, self.BETA_MAP_CATCHUP_JITTER), function()
         local sync = Overlord.Sync
@@ -1442,7 +1412,7 @@ end
 -- canal). Limite aux types dont le traitement ne depend pas du transport.
 Overlord.Sync.RELAY_DEDUP_KINDS = { K = true, EK = true, SR = true }
 function Overlord.Sync:RelayAlreadyCarries(msgType, data)
-    if not self.RELAY_DEDUP_KINDS[msgType] or Overlord.BetaNetworkEnabled == false then return false end
+    if not self.RELAY_DEDUP_KINDS[msgType] then return false end
     local net = Overlord.BetaNetwork
     return net ~= nil and net.CarriesBroadcast ~= nil and net:CarriesBroadcast(msgType, data) == true
 end
@@ -1705,8 +1675,8 @@ function Overlord.Sync:BroadcastShard(shardID)
     -- Raid + canal suffisent pour l'event principal ; les chemins larges restent utiles en petit groupe.
     if Overlord.IsShardHelperActive and Overlord:IsShardHelperActive()
         and (not self.IsLargeEvent or not self:IsLargeEvent()) then
-        if self.BroadcastToCommunity then
-            self:BroadcastToCommunity("SH", payload, 20, 0.5)
+        if self.BroadcastToRelay then
+            self:BroadcastToRelay("SH", payload, 20, 0.5)
         end
     end
 end
@@ -1806,7 +1776,7 @@ function Overlord.Sync:SendWhisper(msgType, data, target, direct)
     -- A catch-up request to a peer heard only through relays is refused by the
     -- relay (point to point). A plain-whisper fallback was tried in 1.2.4 testing:
     -- far capturers then answered every observer in full and flooded the relay.
-    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork and not direct
+    if Overlord.BetaNetwork and not direct
         and msgType ~= "R1" and msgType ~= "BF" and Overlord.BetaNetwork:IsPeer(target) then
         return Overlord.BetaNetwork:Send(msgType, data or "", target)
     end
@@ -1891,7 +1861,7 @@ function Overlord.Sync:SendToBNet(gameAccountID, msgType, data)
     local msg = msgType .. ":" .. band
     if data and data ~= "" then msg = msg .. ":" .. data end
     if #msg > 4000 then return end
-    if (msgType == "BR" or msgType == "BF") and Overlord.BetaNetworkEnabled ~= false then
+    if msgType == "BR" or msgType == "BF" then
         msg = "R2:" .. band .. ":" .. msgType .. ":" .. (data or "")
     end
     -- securecall au lieu de pcall : empeche le taint de se propager au systeme de chat
@@ -2033,7 +2003,7 @@ function Overlord.Sync:GetOnlineBNetPlayerFaction(playerName)
 end
 
 function Overlord.Sync:SendToBNetFriends(msgType, data)
-    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then
+    if Overlord.BetaNetwork then
         return Overlord.BetaNetwork:Broadcast(msgType, data or "")
     end
     local friends = GetBNetFriendsInWoW()
@@ -3196,8 +3166,8 @@ local function RequestObserverCaptureConfirmation(zone)
     -- Ici le timer est deja au seuil, donc on fait un petit SR cible pour obtenir
     -- un C / ZS captured reel au lieu de laisser l'observateur orange longtemps.
     if Overlord.InActiveFront and Overlord.Sync.IsLargeEvent and Overlord.Sync:IsLargeEvent()
-        and Overlord.Sync.BroadcastToCommunity then
-        Overlord.Sync:BroadcastToCommunity("SR", SRPayload("T"), 6, 0.35)
+        and Overlord.Sync.BroadcastToRelay then
+        Overlord.Sync:BroadcastToRelay("SR", SRPayload("T"), 6, 0.35)
     end
 end
 
@@ -7885,11 +7855,11 @@ function Overlord.Sync:OnReceiveZoneAll(
         -- concordante. Attendre la courte gate de stabilisation avant de republier.
         C_Timer.After(9, function()
             if Overlord.Sync and Overlord.Sync.BroadcastCompactZoneSnapshot then
-                Overlord.Sync:BroadcastCompactZoneSnapshot({ includeCommunity = true })
+                Overlord.Sync:BroadcastCompactZoneSnapshot({ relayPages = true })
                 -- En split 2/1 simultane, les deux membres deja sur la carte
                 -- gagnante n'avaient chacun qu'une voix distante. Leur redemander
                 -- un Q/G fournit la seconde vue necessaire sans baisser le seuil.
-                Overlord.Sync:SendSyncRequest({ includeCommunity = true })
+                Overlord.Sync:SendSyncRequest()
             end
         end)
     end
@@ -8239,7 +8209,7 @@ local lastBNetKillBroadcast = 0
 -- K transporte un total absolu, donc les doublons sont absorbes par SetPlayerKills(max).
 function Overlord.Sync:SendKillBroadcast(payload)
     if not payload or payload == "" then return end
-    if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork then
+    if Overlord.BetaNetwork then
         Overlord.BetaNetwork:Broadcast("K", payload)
     end
     local msg = "K:" .. payload
@@ -8434,8 +8404,8 @@ function Overlord.Sync:BroadcastKill(zoneId, totalKills, killScoringAtEvent,
                 end
                 -- Petit comité cross-faction/cross-realm : le canal/raid ne suffit pas toujours.
                 -- K est un total absolu (SetPlayerKills prend le max), donc les doublons sont sûrs.
-                if Overlord.Sync.BroadcastToCommunity then
-                    Overlord.Sync:BroadcastToCommunity("K", payload, 12, 0.35)
+                if Overlord.Sync.BroadcastToRelay then
+                    Overlord.Sync:BroadcastToRelay("K", payload, 12, 0.35)
                 end
             end
             killBroadcastData = nil
@@ -8467,8 +8437,8 @@ function Overlord.Sync:BroadcastCaptureBarrier(
     self:SendToChannel("CB", payload, true)
     local directTarget = whisperTarget or originName
     if self.SendWhisper then self:SendWhisper("CB", payload, directTarget) end
-    if self.BroadcastToCommunity then
-        self:BroadcastToCommunity("CB", payload, 12, 0.2, true)
+    if self.BroadcastToRelay then
+        self:BroadcastToRelay("CB", payload, 12, 0.2, true)
     end
     -- Le CB est une proposition en deux phases : la Barricade n'est consommee
     -- qu'apres le ZS 180 direct du capteur. Quelques retries whisper bornes
@@ -8562,24 +8532,24 @@ function Overlord.Sync:BroadcastCapture(zoneId, completedRequirement)
         end
         if Overlord.InActiveFront and wideCaptureRelay then
             self:SendToBNetFriends("C", payload)
-            if self.BroadcastToCommunity then
+            if self.BroadcastToRelay then
                 -- C est un terminal rare : chaque membre communautaire en ligne
                 -- doit recevoir la copie directe du capteur, y compris en gros event.
                 -- La pompe coalesce les retries par cible+zone et garde le debit borne.
                 local maxCommunity = 200
                 local whisperDelay = largeEvent and 0.20 or 0.18
-                self:BroadcastToCommunity("C", payload, maxCommunity, whisperDelay, true)
+                self:BroadcastToRelay("C", payload, maxCommunity, whisperDelay, true)
             end
         end
     end
 
-    local function retryCaptureToCommunity()
+    local function retryCaptureToRelay()
         -- Retry capitale leger : la premiere vague couvre deja canal/BNet/bridge.
         -- Les reprises communaute ameliorent la couverture cross-faction sans refaire le fan-out complet.
-        if not Overlord.InActiveFront or not self.BroadcastToCommunity then return end
+        if not Overlord.InActiveFront or not self.BroadcastToRelay then return end
         local maxCommunity = largeEvent and 40 or 80
         local whisperDelay = largeEvent and 0.35 or 0.25
-        self:BroadcastToCommunity("C", payload, maxCommunity, whisperDelay, true)
+        self:BroadcastToRelay("C", payload, maxCommunity, whisperDelay, true)
     end
 
     sendCapturePayload()
@@ -8607,13 +8577,13 @@ function Overlord.Sync:BroadcastCapture(zoneId, completedRequirement)
         -- copie aussi le C sur le canal, deja limite par Blizzard.
         C_Timer.After(2.5, function()
             if not Overlord.InstanceSuspended and Overlord.Sync then
-                retryCaptureToCommunity()
+                retryCaptureToRelay()
             end
         end)
         if zone and zone.isCapital then
             C_Timer.After(4, function()
                 if not Overlord.InstanceSuspended and Overlord.Sync then
-                    retryCaptureToCommunity()
+                    retryCaptureToRelay()
                 end
             end)
         end
@@ -8821,7 +8791,7 @@ function Overlord.Sync:BroadcastTotalVictory(victoryTs, victoryBonusPayload)
         self:SendToChannel("VB", victoryBonusPayload, true)
     end
     self:SendToBNetFriends("TV", payload)
-    if self.BroadcastToCommunity then
+    if self.BroadcastToRelay then
         local largeEvent = self:IsLargeEvent()
         local maxCommunity = largeEvent and 20 or 40
         local whisperDelay = largeEvent and 0.35 or 0.25
@@ -8831,7 +8801,7 @@ function Overlord.Sync:BroadcastTotalVictory(victoryTs, victoryBonusPayload)
         end
         -- Meme destinataire, ordre garanti TV puis VB : la preuve de victoire existe
         -- avant l'application du bonus, y compris cross-faction par communaute.
-        self:BroadcastToCommunity(
+        self:BroadcastToRelay(
             "TV", payload, maxCommunity, whisperDelay, true, victoryExtras)
         if OverlordDB and OverlordDB.frontVictories then
             for fid, victory in pairs(OverlordDB.frontVictories) do
@@ -8839,8 +8809,8 @@ function Overlord.Sync:BroadcastTotalVictory(victoryTs, victoryBonusPayload)
                 local vf = victory.faction
                 local vfCode = (vf == "Alliance") and "A" or (vf == "Horde") and "H" or ""
                 if vts > 0 and vfCode ~= "" and not IsStaleCampaignTimestamp(vts) then
-                    self:BroadcastToCommunity("VT", tostring(vts) .. ":" .. fid, maxCommunity, whisperDelay)
-                    self:BroadcastToCommunity("VF", vts .. ":" .. vfCode .. ":" .. fid, maxCommunity, whisperDelay)
+                    self:BroadcastToRelay("VT", tostring(vts) .. ":" .. fid, maxCommunity, whisperDelay)
+                    self:BroadcastToRelay("VF", vts .. ":" .. vfCode .. ":" .. fid, maxCommunity, whisperDelay)
                 end
             end
         end
@@ -9220,9 +9190,7 @@ function Overlord.Sync:BroadcastZoneState(zone, forceBNetZS, primaryOnly)
             local largeEvent = self:IsLargeEvent()
             local allowWideRelay = (not largeEvent) or status ~= "captured" or (math.random() <= 0.20)
             if allowWideRelay then
-                local maxCommunity = largeEvent and 8 or TUNING.OBSERVER_CRITICAL_COMMUNITY_MAX
-                local whisperDelay = largeEvent and 0.35 or TUNING.OBSERVER_CRITICAL_COMMUNITY_DELAY
-                self:BroadcastToCommunity("ZS", payload, maxCommunity, whisperDelay)
+                self:BroadcastToRelay("ZS", payload)
                 lastBNetZSBroadcast[zone.id] = GetTime()
                 self:SendToBNetFriends("ZS", payload)
             end
@@ -9239,18 +9207,7 @@ function Overlord.Sync:BroadcastZoneState(zone, forceBNetZS, primaryOnly)
             -- Hors gros event : ZS captured immediate (pas d'attente 15s) pour l'observateur cross-faction.
             if isCaptureStart or (isCaptureEnd and not largeEvent) or now - lastForZone >= wideInterval then
                 lastBNetZSBroadcast[zone.id] = now
-                local maxCommunity, whisperDelay
-                if largeEvent then
-                    maxCommunity = 8
-                    whisperDelay = 0.35
-                elseif isCaptureStart or isCaptureEnd then
-                    maxCommunity = TUNING.OBSERVER_CRITICAL_COMMUNITY_MAX
-                    whisperDelay = TUNING.OBSERVER_CRITICAL_COMMUNITY_DELAY
-                else
-                    maxCommunity = nil
-                    whisperDelay = nil
-                end
-                self:BroadcastToCommunity("ZS", payload, maxCommunity, whisperDelay)
+                self:BroadcastToRelay("ZS", payload)
                 self:SendToBNetFriends("ZS", payload)
             end
         end
@@ -9749,10 +9706,6 @@ function Overlord.Sync:ScheduleActivePeriodicCatchUp()
         -- second parcours roster juste apres les 12 SR:T deja emises ici.
         sync:SendSyncRequest({
             territorialOnly = true,
-            allowCommunityInLargeEvent = true,
-            communityMax = large and 3 or 6,
-            communityDelay = large and 0.8 or 0.6,
-            communityRosterMinTtl = 60,
         })
     end)
     return true
@@ -9868,8 +9821,8 @@ function Overlord.Sync:BroadcastFrontTruceEndReset(frontId, resetEpoch)
     local payload = frontId .. ":" .. math.floor(resetEpoch)
     self:SendToGroup("FR", payload)
     self:SendToChannel("FR", payload, true)
-    if self.BroadcastToCommunity then
-        self:BroadcastToCommunity("FR", payload, 12, 0.35)
+    if self.BroadcastToRelay then
+        self:BroadcastToRelay("FR", payload, 12, 0.35)
     end
     self:BroadcastFrontZoneSnapshot(frontId)
 end
@@ -9888,8 +9841,8 @@ function Overlord.Sync:BroadcastFrontZoneSnapshot(frontId)
         local data = zaPages[zaPageIndex]
         self:Send("ZA", data)
     end
-    if zaPageCount > 0 and self.BroadcastZoneSnapshotPagesToCommunity then
-        self:BroadcastZoneSnapshotPagesToCommunity(zaPages, 12, 0.2, true)
+    if zaPageCount > 0 and self.BroadcastZoneSnapshotPages then
+        self:BroadcastZoneSnapshotPages(zaPages)
     end
 end
 
@@ -9972,9 +9925,8 @@ function Overlord.Sync:BroadcastCompactZoneSnapshot(opts)
         end
         sent = true
     end
-    if opts.includeCommunity and zaPageCount > 0
-        and self.BroadcastZoneSnapshotPagesToCommunity then
-        self:BroadcastZoneSnapshotPagesToCommunity(zaPages, 12, 0.2, true)
+    if opts.relayPages and zaPageCount > 0 and self.BroadcastZoneSnapshotPages then
+        self:BroadcastZoneSnapshotPages(zaPages)
     end
     return sent
 end

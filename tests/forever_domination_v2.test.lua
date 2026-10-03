@@ -87,7 +87,7 @@ end
 for _, m in ipairs({ "Send", "SendToGroup", "SendToChannel", "SendToBNetFriends", "RelayToEnemyBridge" }) do
     sync[m] = function(_, kind, payload) emit(kind, payload); return true end
 end
-sync.BroadcastToCommunity = function(_, kind, payload, _, _, _, extras)
+sync.BroadcastToRelay = function(_, kind, payload, _, _, _, extras)
     emit(kind, payload)
     for _, extra in ipairs(extras or {}) do emit(extra.type, extra.payload) end
     return true

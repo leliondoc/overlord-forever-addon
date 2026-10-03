@@ -22,11 +22,11 @@ local function record(kind)
     return function(_, msgType, payload) sent[#sent + 1] = { kind, msgType, payload }; return 1 end
 end
 local realChannel, realGroup, realCommunity, realBeta, realBetaEnabled =
-    Overlord.Sync.SendToChannel, Overlord.Sync.SendToGroup, Overlord.Sync.BroadcastToCommunity,
+    Overlord.Sync.SendToChannel, Overlord.Sync.SendToGroup, Overlord.Sync.BroadcastToRelay,
     Overlord.BetaNetwork, Overlord.BetaNetworkEnabled
 Overlord.Sync.SendToChannel = record("channel")
 Overlord.Sync.SendToGroup = record("group")
-Overlord.Sync.BroadcastToCommunity = record("community")
+Overlord.Sync.BroadcastToRelay = record("community")
 Overlord.BetaNetworkEnabled = true
 Overlord.BetaNetwork = { Broadcast = record("beta") }
 -- Broadcast jitter: timers are collected and fired on demand.
@@ -344,7 +344,7 @@ assert(dispatched and dispatched[1] == channelPayload
     and dispatched[2] == "Channel Tester" and dispatched[3] == "CHANNEL",
     "Addon-message GW dispatch lost its payload, sender or channel")
 
-Overlord.Sync.SendToChannel, Overlord.Sync.SendToGroup, Overlord.Sync.BroadcastToCommunity =
+Overlord.Sync.SendToChannel, Overlord.Sync.SendToGroup, Overlord.Sync.BroadcastToRelay =
     realChannel, realGroup, realCommunity
 Overlord.BetaNetwork, Overlord.BetaNetworkEnabled = realBeta, realBetaEnabled
 print("Forever guild kill alert: both-faction detection, own kills, epoch, window, relay GW, provenance, dedup, reload, eviction, simulation OK")

@@ -318,17 +318,13 @@ function Overlord:IsCaptureSyncPending()
             C_Timer.After(0.5, function()
                 if Overlord.InstanceSuspended or not Overlord.Sync then return end
                 Overlord.Sync:SendSyncRequest({
-                    includeCommunity = wasLoginGate or wasInstanceGate,
-                    allowCommunityInLargeEvent = wasLoginGate or wasInstanceGate,
                     criticalChannel = wasLoginGate or wasInstanceGate,
                     territorialOnly = wasInstanceGate,
-                    targetedCommunityOnly = wasInstanceGate,
-                    communityMax = wasInstanceGate and 2 or nil,
-                    communityRosterMinTtl = wasInstanceGate and 18 or nil,
+                    targetedOnly = wasInstanceGate,
                 })
                 if wasLoginGate
-                    and Overlord.Sync.SendLoginCatchupSyncToCommunity then
-                    Overlord.Sync:SendLoginCatchupSyncToCommunity()
+                    and Overlord.Sync.SendLoginCatchupSync then
+                    Overlord.Sync:SendLoginCatchupSync()
                 end
             end)
         end

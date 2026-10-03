@@ -167,7 +167,7 @@ test("Domination bar v2 counts events: no zone-time ticker, no DX producer", () 
     assert.doesNotMatch(sync, /type = "DX"|BuildDominationPayload|:BroadcastDomination\(/);
     assert.doesNotMatch(aux, /:BroadcastDomination\(/);
     assert.doesNotMatch(res, /BroadcastDomination\(/);
-    assert.doesNotMatch(dom, /SendToChannel\("DX"|BroadcastToCommunity\("DX"/);
+    assert.doesNotMatch(dom, /SendToChannel\("DX"|BroadcastToRelay\("DX"/);
     const zones = readFileSync(new URL("../Zones.lua", import.meta.url), "utf8");
     const popups = readFileSync(new URL("../Popups.lua", import.meta.url), "utf8");
     assert.match(popups, /v == true or v == 1/);

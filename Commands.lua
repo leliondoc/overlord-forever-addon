@@ -867,23 +867,15 @@ local function CommandHandler(msg)
                 end
                 Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.SYNC_WHISPER_SENT, target))
             else
-                -- Trois vagues territoriales legeres. La deuxieme profite du roster
-                -- communaute amorce par la premiere ; la derniere ajoute UNE demande
-                -- historique directe au lieu de provoquer un dump chez tous les pairs.
+                -- Trois vagues territoriales legeres ; la derniere ajoute UNE demande
+                -- historique complete au lieu de provoquer un dump chez tous les pairs.
                 for i = 1, 3 do
                     local firstWave = i == 1
                     C_Timer.After((i - 1) * 2, function()
                         if not Overlord.InstanceSuspended then
-                            Overlord.Sync:SendSyncRequest({
-                                includeCommunity = i <= 2,
-                                allowCommunityInLargeEvent = true,
-                                communityMax = 6,
-                                communityDelay = 0.35,
-                            })
-                            if i == 3 and Overlord.Sync.BroadcastToCommunity then
-                                Overlord.Sync:BroadcastToCommunity(
-                                    "SR", Overlord.Sync:GetSRPayload("F"),
-                                    1, 0.35, true)
+                            Overlord.Sync:SendSyncRequest()
+                            if i == 3 and Overlord.Sync.BroadcastToRelay then
+                                Overlord.Sync:BroadcastToRelay("SR", Overlord.Sync:GetSRPayload("F"))
                             end
                             -- La premiere vague interroge aussi directement chaque porteur
                             -- de timer GK deja prouve. Cela repare le cas ou tous les pairs

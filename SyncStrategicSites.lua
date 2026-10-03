@@ -17,7 +17,7 @@ function Overlord.Sync:IsStrategicSiteSenderTrusted(sender, remoteFaction, sourc
     local pf = Overlord.PlayerFaction
     if not pf or pf == "" then return false end
 
-    if self.IsStrategicSiteCommunitySender and self:IsStrategicSiteCommunitySender(sender) then
+    if self.IsKnownRelayPeer and self:IsKnownRelayPeer(sender) then
         return true
     end
 

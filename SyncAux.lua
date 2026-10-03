@@ -19,8 +19,6 @@ TUNING.BNET_KILL_INTERVAL = 10
 TUNING.KILL_BROADCAST_INTERVAL = 2
 TUNING.KILL_BROADCAST_INTERVAL_LARGE = 3
 TUNING.BNET_ZS_INTERVAL = 15
-TUNING.OBSERVER_CRITICAL_COMMUNITY_MAX = 40
-TUNING.OBSERVER_CRITICAL_COMMUNITY_DELAY = 0.25
 TUNING.LB_CLASS_REFRESH_FROM_NP_INTERVAL = 2
 TUNING.PERIODIC_SYNC_INTERVAL = 30
 
@@ -33,8 +31,6 @@ local STALE_OBSERVER_POLL_INTERVAL_LARGE = 32
 local STALE_CAPITAL_OBSERVER_POLL_INTERVAL = 55
 local lastObserverFinalStatePoll = 0
 local OBSERVER_FINAL_STATE_POLL_INTERVAL = 8
-local OBSERVER_FINAL_STATE_ESCALATE_AFTER = 3
-local OBSERVER_FINAL_STATE_FORCE_AFTER = 5
 
 local CONSULT_FRONT_SR_COOLDOWN = 60
 local lastConsultFrontCommunitySR = {}
@@ -102,40 +98,10 @@ function Overlord.Sync:PollIfStaleObserverInProgress(secondsSinceZs, zone)
     local payload = self.GetSRPayload and self:GetSRPayload("T")
     if payload then self:SendTargetedObserverMapRequest(zone, payload) end
     self:SendSyncRequest({
-        includeCommunity = true,
-        allowCommunityInLargeEvent = true,
-        communityMax = isLarge and 3 or 8,
-        communityDelay = isLarge and 0.75 or 0.45,
         criticalChannel = true,
     })
 end
 
-local function GetObserverFinalStatePollOptions(isLarge, attempts)
-    local communityMax
-    local communityDelay
-
-    if isLarge then
-        if attempts >= OBSERVER_FINAL_STATE_FORCE_AFTER then
-            communityMax = 16
-        elseif attempts >= OBSERVER_FINAL_STATE_ESCALATE_AFTER then
-            communityMax = 10
-        else
-            communityMax = 6
-        end
-        communityDelay = 0.45
-    else
-        if attempts >= OBSERVER_FINAL_STATE_FORCE_AFTER then
-            communityMax = 32
-        elseif attempts >= OBSERVER_FINAL_STATE_ESCALATE_AFTER then
-            communityMax = 20
-        else
-            communityMax = 12
-        end
-        communityDelay = 0.30
-    end
-
-    return communityMax, communityDelay, attempts >= OBSERVER_FINAL_STATE_FORCE_AFTER
-end
 
 -- Timer observateur a 100% : on demande une vraie reponse reseau.
 -- Aucun etat local n'est promu ici, la correction vient uniquement de C, ZS captured ou ZA.
@@ -180,11 +146,8 @@ function Overlord.Sync:RequestObserverCaptureConfirmationIfComplete(zone)
         self:SendToChannel("SR", payload, true)
     end
 
-    if self.BroadcastToCommunity and Overlord.InActiveFront then
-        local isLarge = self.IsLargeEvent and self:IsLargeEvent()
-        local maxMembers, delay, forceTargets =
-            GetObserverFinalStatePollOptions(isLarge, zone._observerFinalStatePollCount)
-        self:BroadcastToCommunity("SR", payload, maxMembers, delay, forceTargets)
+    if Overlord.InActiveFront then
+        self:BroadcastToRelay("SR", payload)
     end
 end
 
@@ -236,11 +199,7 @@ function Overlord.Sync:RequestPrereqMismatchCatchup(zone)
     end
     local isLarge = self.IsLargeEvent and self:IsLargeEvent()
     self:SendSyncRequest({
-        includeCommunity = true,
-        allowCommunityInLargeEvent = true,
         territorialOnly = true,
-        communityMax = isLarge and 6 or 12,
-        communityDelay = isLarge and 0.6 or 0.35,
         criticalChannel = true,
     })
 end
@@ -301,10 +260,6 @@ function Overlord.Sync:RequestConsultFrontSync(frontId)
     if last > 0 and now - last < CONSULT_FRONT_SR_COOLDOWN then return end
     lastConsultFrontCommunitySR[frontId] = now
     self:SendSyncRequest({
-        includeCommunity = true,
-        allowCommunityInLargeEvent = true,
-        communityMax = isLarge and 4 or 8,
-        communityDelay = isLarge and 0.75 or 0.45,
     })
 end
 
@@ -524,7 +479,7 @@ function Overlord.Sync:BroadcastMining(mineId)
     self:SendToGroup("MN", payload)
     self:SendToChannel("MN", payload)
     if not self.IsLargeEvent or not self:IsLargeEvent() then
-        self:BroadcastToCommunity("MN", payload, nil, nil, nil, extraWhispers)
+        self:BroadcastToRelay("MN", payload, nil, nil, nil, extraWhispers)
         self:SendToBNetFriends("MN", payload)
         if extraWhispers and extraWhispers[1] and extraWhispers[1].payload ~= "" then
             self:SendToBNetFriends(extraWhispers[1].type, extraWhispers[1].payload)
@@ -533,8 +488,8 @@ function Overlord.Sync:BroadcastMining(mineId)
 end
 
 
--- Pairs Overlord vus recemment sur le relais (Forever n'a pas de roster de club).
-function Overlord.Sync:GetOnlineCommunityMembers()
+-- Pairs Overlord vus recemment sur le relais.
+function Overlord.Sync:GetRelayPeers()
     return Overlord.BetaNetwork and Overlord.BetaNetwork:GetPeers() or {}
 end
 
@@ -544,7 +499,7 @@ end
 -- paquet recu de son auteur lui-meme (canal, whisper, BNet, dispatch relais a 0 saut).
 -- Une origine relayee est ecrite par la passerelle et peut etre n'importe quel nom :
 -- elle ne suffit jamais a appliquer une victoire (TV) ni un bonus historique (VB).
--- A ne pas confondre avec IsStrategicSiteCommunitySender, qui repond seulement
+-- A ne pas confondre avec IsKnownRelayPeer, qui repond seulement
 -- "ce nom est un client Overlord vu recemment".
 function Overlord.Sync:IsAuthenticatedDirectSender(sender)
     if not sender or sender == "" then return false end
@@ -559,20 +514,13 @@ end
 -- Fortin : membre du club Overlord en ligne (cross-faction). Cache prolonge cote reception GK/GC.
 -- "Ce nom est un client Overlord entendu dans les 300 s" (route relais connue).
 -- Ce n'est PAS une authentification : voir IsAuthenticatedDirectSender.
-function Overlord.Sync:IsStrategicSiteCommunitySender(sender)
+function Overlord.Sync:IsKnownRelayPeer(sender)
     local net = Overlord.BetaNetwork
     return net ~= nil and net:IsPeer(sender) == true
 end
 
--- Alias semantique pour les protocoles qui reutilisent cette validation O(1)
--- sans dependre du vocabulaire historique des fortins.
-function Overlord.Sync:IsOnlineCommunitySender(sender)
-    return self:IsStrategicSiteCommunitySender(sender)
-end
-
-
 local function BroadcastViaBeta(msgType, payload, extras)
-    if Overlord.BetaNetworkEnabled == false or not Overlord.BetaNetwork then return 0 end
+    if not Overlord.BetaNetwork then return 0 end
     return Overlord.BetaNetwork:Broadcast(msgType, payload or "", extras) or 0
 end
 
@@ -580,31 +528,26 @@ end
 -- Toutes les emissions communautaires passent par une seule pompe afin de borner
 -- les timers et de donner la priorite aux transitions contractuelles.
 
--- Communaute : faction ennemie uniquement (prime de sang), meme tourniquet/cooldown que BroadcastToCommunity.
--- Diffusion relais ; l'autre faction la recoit par les ponts Battle.net.
-function Overlord.Sync:BroadcastToEnemyFactionCommunity(msgType, payload)
-    return BroadcastViaBeta(msgType, payload)
-end
+-- Communaute : faction ennemie uniquement (prime de sang), meme tourniquet/cooldown que BroadcastToRelay.
 
 
--- Diffusion a tous les clients Overlord : un seul transport, le relais
--- (canal de faction + groupe + ponts Battle.net). Les parametres historiques
--- (destinataires max, delais) ne servent plus. Les payloads "extras" partent
--- dans le meme ordre (TV puis VB).
-function Overlord.Sync:BroadcastToCommunity(msgType, payload, _, _, _, extraWhispers)
-    return BroadcastViaBeta(msgType, payload, extraWhispers)
+-- Diffusion a tous les clients Overlord par le relais (canal de faction, groupe,
+-- ponts Battle.net vers l'autre faction). Les payloads "extras" partent dans le
+-- meme ordre (TV puis VB). Les anciens parametres de fan-out (max, delai, force)
+-- sont acceptes et ignores.
+function Overlord.Sync:BroadcastToRelay(msgType, payload, _, _, _, extras)
+    return BroadcastViaBeta(msgType, payload, extras)
 end
 
 -- Message adresse aux joueurs nommes, par le relais (route connue exigee quand
--- knownBetaPeersOnly : une revalidation de guilde ne cherche pas un joueur hors ligne).
-function Overlord.Sync:WhisperCommunityMembersForContributorNames(
-    msgType, payload, contributorNames, _, _, knownBetaPeersOnly)
+-- knownPeersOnly : une revalidation de guilde ne cherche pas un joueur hors ligne).
+function Overlord.Sync:SendToNamedPeers(msgType, payload, contributorNames, _, _, knownPeersOnly)
     local net = Overlord.BetaNetwork
     if not net then return 0 end
     local sent = 0
     for i, name in ipairs(contributorNames or {}) do
         if i > 12 then break end
-        if not knownBetaPeersOnly or net:IsPeer(name) then
+        if not knownPeersOnly or net:IsPeer(name) then
             if net:Send(msgType, payload, name) then sent = sent + 1 end
         end
     end
@@ -630,8 +573,8 @@ local function PumpLeaderboardRaceQueue()
     if item.sendChannel and Overlord.Sync.SendToChannel then
         Overlord.Sync:SendToChannel("LR", item.payload, false)
     end
-    if item.communityWide and Overlord.Sync.BroadcastToCommunity then
-        Overlord.Sync:BroadcastToCommunity("LR", item.payload, 2, 0.5)
+    if item.communityWide and Overlord.Sync.BroadcastToRelay then
+        Overlord.Sync:BroadcastToRelay("LR", item.payload, 2, 0.5)
     end
 
     if #leaderboardRaceQueue > 0 then
@@ -670,10 +613,6 @@ function Overlord.Sync:EnqueueLeaderboardRaceBroadcast(payload, communityWide, s
 end
 
 -- Relais communauté Général de faction (same-faction, cache TTL long, exclusion groupe).
--- General de faction : meme diffusion relais que le reste.
-function Overlord.Sync:BroadcastGeneralToFactionCommunity(msgType, payload)
-    return BroadcastViaBeta(msgType, payload)
-end
 
 -- ============ Appel de faction (FC) ============
 
@@ -1038,7 +977,7 @@ end
 -- par page faisait tourner le curseur et produisait des lots impossibles a
 -- reassembler des qu'il y avait plus de membres que la limite d'un broadcast.
 -- Pages ZA d'un snapshot : une diffusion relais par page.
-function Overlord.Sync:BroadcastZoneSnapshotPagesToCommunity(pages)
+function Overlord.Sync:BroadcastZoneSnapshotPages(pages)
     local sent = 0
     for _, page in ipairs(type(pages) == "table" and pages or {}) do
         sent = sent + BroadcastViaBeta("ZA", page)
@@ -1050,7 +989,7 @@ end
 -- La file normale utilise C_Timer.After et peut etre suspendue avant son premier
 -- item ; quelques whispers immediats donnent au ZR une vraie voie cross-faction.
 -- Release de bail juste avant un chargement : envoi relais immediat (budget respecte).
-function Overlord.Sync:BroadcastToCommunityImmediate(msgType, payload)
+function Overlord.Sync:SendReleaseImmediate(msgType, payload)
     local net = Overlord.BetaNetwork
     if msgType ~= "ZR" or not net then return 0 end
     return net:Send(msgType, payload, nil, true) and 1 or 0
@@ -1179,9 +1118,6 @@ function Overlord.Sync:StartPassiveSync()
         if Overlord.IsInitialized and not Overlord.InstanceSuspended and Overlord.Sync then
             -- Chaque client amorce son cache de confiance entrant, sans declencher une
             -- rafale N-way de SR. Un prochain runPassiveSync echantillonne fera le fan-out.
-            if Overlord.Sync.GetOnlineCommunityMembers then
-                Overlord.Sync:GetOnlineCommunityMembers(false, 30)
-            end
         end
     end)
     C_Timer.After(math.random(10, 45), function()
