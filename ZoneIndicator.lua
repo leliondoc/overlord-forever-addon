@@ -848,7 +848,9 @@ function Overlord.ZoneIndicator:GetObjectiveDetails(zone)
             and Overlord.ZoneControl:IsPlayerInNonCaptureStateForSync()
         if blocked then
             local instruction = L.INDICATOR_DISMOUNT_TO_CAPTURE or "Dismount."
-            if IsStealthed and IsStealthed() then
+            if Overlord.ZoneControl.PlayerLacksPvpFlag and Overlord.ZoneControl:PlayerLacksPvpFlag() then
+                instruction = L.INDICATOR_ENABLE_PVP or "Enable PvP (/pvp)."
+            elseif IsStealthed and IsStealthed() then
                 instruction = L.INDICATOR_STEALTH_TO_CAPTURE or "Leave stealth to capture."
             end
             location = "|cFFFF8C33" .. instruction .. "|r"
@@ -1077,7 +1079,10 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
 
         if inGeomForHud and blockCap and (isSquareHud or activeZone.status == "in_progress") then
             local capMsg = L.INDICATOR_DISMOUNT_TO_CAPTURE
-            if IsStealthed and IsStealthed() and L.INDICATOR_STEALTH_TO_CAPTURE then
+            if Overlord.ZoneControl and Overlord.ZoneControl.PlayerLacksPvpFlag
+                and Overlord.ZoneControl:PlayerLacksPvpFlag() then
+                capMsg = L.INDICATOR_ENABLE_PVP or "Enable PvP (/pvp)."
+            elseif IsStealthed and IsStealthed() and L.INDICATOR_STEALTH_TO_CAPTURE then
                 capMsg = L.INDICATOR_STEALTH_TO_CAPTURE
             end
             indicatorFrame.distance:SetText(capMsg)

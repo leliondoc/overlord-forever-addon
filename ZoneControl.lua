@@ -390,17 +390,14 @@ function Overlord.ZoneControl:PlayerLacksPvpFlag()
     return true
 end
 
-IsPlayerInNonCaptureState = function()
+-- Mount, flight, vehicle, travel form, stealth, Lorewalking: the body cannot act.
+local function IsPlayerBodilyNonCapture()
     local now = GetTime()
     local cacheAge = now - playerNonCaptureCacheAt
     if cacheAge >= 0 and cacheAge <= PLAYER_NON_CAPTURE_CACHE_SEC then
         return playerNonCaptureCached
     end
     playerNonCaptureCacheAt = now
-    if Overlord.ZoneControl:PlayerLacksPvpFlag() then
-        playerNonCaptureCached = true
-        return true
-    end
     -- Passager monture 2 places ou véhicule : bloque la capture
     if IsUnitInVehicleState("player") then
         playerNonCaptureCached = true
@@ -450,6 +447,18 @@ IsPlayerInNonCaptureState = function()
     end
     playerNonCaptureCached = false
     return false
+end
+
+-- Captures (fronts, outposts, fortresses) also need the PvP flag (1.4.1).
+IsPlayerInNonCaptureState = function()
+    if Overlord.ZoneControl:PlayerLacksPvpFlag() then return true end
+    return IsPlayerBodilyNonCapture()
+end
+
+-- Mines generate gold without the PvP flag: only the physical rules apply.
+function Overlord.ZoneControl:IsPlayerInNonMiningStateForSync()
+    if UnitIsDead("player") or UnitIsGhost("player") then return true end
+    return IsPlayerBodilyNonCapture()
 end
 
 -- Requetes ciblees par spell ID : auras bloquantes, furtivite et formes druide.

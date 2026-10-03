@@ -25,6 +25,12 @@ assert(ZC:IsPlayerInNonCaptureStateForSync(), "Unflagged player counted as a cap
 flagged = true
 assert(not ZC:PlayerLacksPvpFlag(),
     "Flagged player blocked from capturing")
+-- Mines generate gold without the flag (audit 1.4.1): only the body rules apply.
+flagged = false
+UnitExists = UnitExists or function() return true end
+assert(ZC.IsPlayerInNonMiningStateForSync, "Mining state check missing")
+local okMine, minesBlocked = pcall(ZC.IsPlayerInNonMiningStateForSync, ZC)
+assert(okMine and minesBlocked == false, "Mining blocked by a missing PvP flag")
 flagged, ffa = false, true
 assert(not ZC:PlayerLacksPvpFlag(), "Free-for-all PvP blocked from capturing")
 -- Unknown API or answer never blocks anyone.

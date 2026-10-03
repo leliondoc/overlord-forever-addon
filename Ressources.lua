@@ -398,8 +398,9 @@ local function IsPlayerInNonMiningState()
     -- Les memes etats que la capture bloquent la recolte. Ce helper partage le
     -- cache local et les gardes d'auras 12.x ; AuraUtil.FindAuraBySpellID n'existe
     -- plus en Retail et laissait passer les formes de voyage / Lorewalking.
-    if Overlord.ZoneControl and Overlord.ZoneControl.IsPlayerInNonCaptureStateForSync then
-        return Overlord.ZoneControl:IsPlayerInNonCaptureStateForSync()
+    -- 1.4.1: the PvP flag rule is for captures only; mining income stays open.
+    if Overlord.ZoneControl and Overlord.ZoneControl.IsPlayerInNonMiningStateForSync then
+        return Overlord.ZoneControl:IsPlayerInNonMiningStateForSync()
     end
     if UnitInVehicle and UnitInVehicle("player") then return true end
     if UnitOnTaxi and UnitOnTaxi("player") then return true end
