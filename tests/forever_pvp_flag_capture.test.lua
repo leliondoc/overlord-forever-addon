@@ -6,6 +6,12 @@
 assert(loadfile("tests/forever_leaderboard.test.lua"))()
 local ZC = Overlord.ZoneControl
 assert(ZC and ZC.PlayerLacksPvpFlag, "PvP flag rule missing")
+-- Consent rulesets only (Normal/RP/Hardcore): on the PvP ruleset players are
+-- attackable in their own territory without the flag, so the rule never applies.
+Overlord.RealmPools = Overlord.RealmPools or {}
+local realRuleset = Overlord.RealmPools.GetRuleset
+local currentRuleset = "normal"
+Overlord.RealmPools.GetRuleset = function() return currentRuleset end
 
 local flagged, ffa = false, false
 UnitIsPVP = function(unit) assert(unit == "player"); return flagged end
@@ -39,4 +45,11 @@ UnitIsPVP = function() return nil end
 assert(not ZC:PlayerLacksPvpFlag(), "A nil answer blocked the capture")
 UnitIsPVP = nil
 assert(not ZC:PlayerLacksPvpFlag(), "A missing API blocked the capture")
+-- PvP ruleset: an unflagged defender in his own territory still captures.
+UnitIsPVP = function() return false end
+currentRuleset = "pvp"
+assert(not ZC:PlayerLacksPvpFlag(), "PvP-ruleset defender blocked without /pvp")
+currentRuleset = "rp"
+assert(ZC:PlayerLacksPvpFlag(), "RP ruleset lets an unflagged player capture")
+Overlord.RealmPools.GetRuleset = realRuleset
 print("PvP flag capture rule: unflagged blocked, flagged and FFA allowed, unknown never blocks")
