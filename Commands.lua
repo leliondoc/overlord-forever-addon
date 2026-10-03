@@ -282,12 +282,18 @@ local function StartNetworkProbe()
                 local row = sendStats[chatType]
                 if row then
                     refused, attempts = refused + row.refused, attempts + row.ok + row.refused
-                    parts[#parts + 1] = string.format("%s %d/%d", chatType:lower(), row.refused, row.ok + row.refused)
+                    -- Blizzard's last refusal code, to tell a throttle from a channel not joined yet.
+                    local code = row.refused > 0 and row.lastCode ~= nil
+                        and (" code " .. tostring(row.lastCode)) or ""
+                    parts[#parts + 1] = string.format("%s %d/%d%s", chatType:lower(), row.refused,
+                        row.ok + row.refused, code)
                 end
             end
             local ratio = attempts > 0 and refused / attempts or 0
-            add(refused == 0 and "ok" or (ratio < 0.05 and "warn" or "bad"), "Blizzard throttle",
-                string.format("%d refused (%s)", refused, table.concat(parts, ", ")))
+            -- A lone refusal (e.g. a send just before the channel is joined at login)
+            -- is not a problem: red only for a real, repeated throttle.
+            add(refused == 0 and "ok" or ((ratio < 0.05 or refused < 3) and "warn" or "bad"),
+                "Blizzard throttle", string.format("%d refused (%s)", refused, table.concat(parts, ", ")))
         end
         local relayStats = net and net.stats
         if relayStats then
