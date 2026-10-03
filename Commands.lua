@@ -299,7 +299,9 @@ local function StartNetworkProbe()
         if relayStats then
             local sent, dropped = relayStats.sent or 0, relayStats.dropped or 0
             local pct = sent > 0 and dropped * 100 / sent or 0
-            add(pct < 1 and "ok" or (pct < 5 and "warn" or "bad"), "Relay losses",
+            -- The login burst (map pages answering several catch-ups) can refuse a
+            -- dozen own pages out of a few hundred sends: red only on a real sample.
+            add(pct < 1 and "ok" or ((pct < 5 or sent < 500) and "warn" or "bad"), "Relay losses",
                 string.format("%d lost of %d sent (%.1f%%), %d received", dropped, sent, pct, relayStats.received or 0))
         end
         if sync.GetPagedLeaderboardSummary then
