@@ -1182,9 +1182,20 @@ function Lease:FinalSatisfiesLocalRequirement(zone, owner, originName, waveId, f
     local required = tonumber(remote.localRequired)
     if not required then return true end
     if tonumber(finalRequirement) ~= required then return false end
-    local observedDuration = (GetTime() - (remote.openedAt or GetTime()))
+    local now = GetTime()
+    local observedDuration = (now - (remote.openedAt or now))
         + math.max(0, tonumber(remote.openedHold) or 0)
-    return (tonumber(remote.lastHold) or 0) >= required - 10
+    -- Le dernier tick recu date de remote.lastSeen ; le maintien a continue depuis.
+    -- Un observateur de l'autre faction ne recoit un tick que toutes les 15 a 60 s
+    -- (pont Battle.net) : exiger lastHold brut manquait la fenetre finale et la
+    -- capture ennemie restait orange (jamais rouge). Projeter le maintien jusqu'a
+    -- maintenant, borne par la duree reellement observee.
+    local projectedHold = (tonumber(remote.lastHold) or 0)
+    if remote.lastSeen then
+        projectedHold = math.min(projectedHold + math.max(0, now - remote.lastSeen),
+            math.max(projectedHold, observedDuration))
+    end
+    return projectedHold >= required - 10
         and observedDuration >= required - 15
 end
 

@@ -830,13 +830,39 @@ end
 
 local function IsHistoricalReplaySenderTrusted(sync, sender, sourceChannel)
     if (sourceChannel == "WHISPER" or sourceChannel == "BETA") then
+        -- Auteur authentifie par WoW/BNet (groupe, ou 0 saut). Une origine relayee
+        -- n'est qu'un nom ecrit par la passerelle.
         return (sync.SenderIsInOurGroup and sync:SenderIsInOurGroup(sender or ""))
-            or (sync.IsStrategicSiteCommunitySender and sync:IsStrategicSiteCommunitySender(sender or ""))
+            or (sync.IsAuthenticatedDirectSender and sync:IsAuthenticatedDirectSender(sender or ""))
     end
     if sourceChannel == "RAID" or sourceChannel == "PARTY" then
         return sync.SenderIsInOurGroup and sync:SenderIsInOurGroup(sender or "")
     end
     return false
+end
+
+-- Rejeu historique (victoires de plus de 15 min, sans TV) : budget par expediteur.
+-- Un voisin qui nous rattrape peut rejouer toute la semaine (quelques dizaines de
+-- victoires) ; un client qui fabrique des victoires pour saturer le journal est borne.
+local VB_HISTORICAL_PER_SENDER, VB_HISTORICAL_WINDOW = 96, 3600
+local historicalBudget, historicalBudgetCount = {}, 0
+local function ConsumeHistoricalReplayBudget(sender)
+    local key = tostring(sender or ""):lower()
+    local now = GetTime()
+    local row = historicalBudget[key]
+    if not row or now - row.at > VB_HISTORICAL_WINDOW then
+        if not row then
+            if historicalBudgetCount >= 256 then
+                historicalBudget, historicalBudgetCount = {}, 0
+            end
+            historicalBudgetCount = historicalBudgetCount + 1
+        end
+        row = { at = now, n = 0 }
+        historicalBudget[key] = row
+    end
+    if row.n >= VB_HISTORICAL_PER_SENDER then return false end
+    row.n = row.n + 1
+    return true
 end
 
 function Overlord:GetDominationVictoryBonusTotals()
@@ -1047,6 +1073,13 @@ function Overlord.Sync:OnReceiveVictoryBonus(payload, sender, sourceChannel)
             -- Une source de groupe/communaute deja verifiee suffit. Un second
             -- paquet identique ne doit pas conditionner la recompense locale.
             historicalTrusted = true
+        end
+        if historicalTrusted and not transportEvidence and not localEvidence then
+            local store = EnsureVictoryEventsDB()
+            local known = store and store.rawById[BuildVictoryRawEventId(ev)] ~= nil
+            if not known and not ConsumeHistoricalReplayBudget(sender) then
+                historicalTrusted = false
+            end
         end
         if transportEvidence or localEvidence or historicalTrusted then
             local ok, reason = Overlord:ApplyDominationVictoryBonusEvent(ev, {

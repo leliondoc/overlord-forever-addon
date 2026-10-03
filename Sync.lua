@@ -151,13 +151,20 @@ function Overlord.Sync:MarkPostVictorySyncGuard(frontId)
     MarkPostVictorySyncGuard(frontId)
 end
 
+-- Horodatage distant : nil au-dela de MAX_CLOCK_SKEW (paquet casse ou forge).
+-- Entre +5 s et +300 s, le timestamp est ramene a l'heure serveur locale : un
+-- emetteur en avance (PC decale, ou ts choisi a now+299 pour bloquer la zone)
+-- ne gagne plus l'ordre LWW pendant cinq minutes contre les vraies captures.
+local FUTURE_CLAMP_SKEW = 5
 local function NormalizeRemoteTimestamp(ts)
     ts = tonumber(ts) or 0
     if ts <= 0 then return 0 end
-    local now = time()
+    local now = Overlord.ServerNow and Overlord.ServerNow() or time()
     if ts > now + MAX_CLOCK_SKEW then return nil end
+    if ts > now + FUTURE_CLAMP_SKEW then return now end
     return math.floor(ts)
 end
+Overlord.Sync.NormalizeRemoteTimestamp = NormalizeRemoteTimestamp
 
 function Overlord.Sync:DeterministicCaptureTieOwner(zoneId, capturedAt)
     -- Les anciens formats n'ont pas d'eventId. Pour deux captures opposees dans
@@ -1271,6 +1278,47 @@ function Overlord.Sync:ConsumeExpectedFullLeaderboardResponse(msgType, sender, c
         priv.expectedFullLeaderboardResponses[key] = nil
     end
     return true
+end
+
+-- Variante sans consommation : une reponse SR:F est-elle attendue de ce pair ?
+-- Sert a distinguer un total sollicite (rattrapage) d'un total live non sollicite
+-- pour un sujet deja connu.
+function Overlord.Sync:HasExpectedFullLeaderboardResponse(sender, channel)
+    if channel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsDispatching(sender)
+        and Overlord.BetaNetwork:IsTargetedDispatch() then channel = "WHISPER" end
+    if channel ~= "WHISPER" then return false end
+    local key = self:ExpectedFullLeaderboardResponseKey(sender)
+    local expected = key and priv.expectedFullLeaderboardResponses[key] or nil
+    return expected ~= nil and GetTime() <= (tonumber(expected.expiresAt) or 0)
+end
+
+-- Total LK non sollicite pour un sujet deja connu (ni son proprietaire, ni une page
+-- v6, ni une reponse SR:F attendue) : la hausse est bornee comme au pont LK
+-- (30 kills + 1 par seconde depuis le dernier total retenu pour ce sujet). Un
+-- total plus haut n'est pas rejete, il est ecrete : la convergence est plus lente,
+-- jamais perdue, et une ligne connue ne peut plus etre gonflee d'un seul paquet.
+local LK_UNSOLICITED_ALLOWANCE, LK_UNSOLICITED_RATE = 30, 1
+local subjectTotalAt, subjectTotalAtCount = {}, 0
+function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore)
+    local key = tostring(playerName or ""):lower()
+    local now = GetTime()
+    local last = subjectTotalAt[key]
+    if last == nil then
+        if subjectTotalAtCount >= 4096 then subjectTotalAt, subjectTotalAtCount = {}, 0 end
+        subjectTotalAtCount = subjectTotalAtCount + 1
+    end
+    subjectTotalAt[key] = now
+    if (killsBefore or 0) <= 0 then return kills end
+    local elapsed = last and math.max(0, now - last) or 600
+    local ceiling = killsBefore + LK_UNSOLICITED_ALLOWANCE + math.floor(elapsed * LK_UNSOLICITED_RATE)
+    if kills > ceiling then
+        local betaNet = Overlord.BetaNetwork
+        if betaNet and betaNet.stats then
+            betaNet.stats.unsolicitedTotalsClamped = (betaNet.stats.unsolicitedTotalsClamped or 0) + 1
+        end
+        return ceiling
+    end
+    return kills
 end
 
 -- Une nouvelle cle distante n'est admise que si elle appartient a l'emetteur
@@ -8757,6 +8805,10 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
         Overlord.Leaderboard:SetPlayerLevel(playerName, levelToken)
     end
     local killsBefore = Overlord.Leaderboard.kills and Overlord.Leaderboard.kills[playerName] or 0
+    if not guildOwner and not guildSnapshot
+        and not self:HasExpectedFullLeaderboardResponse(sender, channel) then
+        kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore)
+    end
     Overlord.Leaderboard:SetPlayerKills(playerName, kills, true)
     -- 1.3.2 live-score bridge: an enemy total from a Battle.net friend goes on to our
     -- channel; a total heard on the channel cancels our own pending copy of it.
@@ -9292,7 +9344,8 @@ function Overlord.Sync:BroadcastCapture(zoneId, completedRequirement)
     end
 
     local zone = Overlord.Zones and Overlord.Zones:GetZone(zoneId)
-    local ts = math.floor(tonumber(zone and zone.capturedTime) or time())
+    local ts = math.floor(tonumber(zone and zone.capturedTime)
+        or (Overlord.ServerNow and Overlord.ServerNow()) or time())
     local waveId = zone and Overlord.CaptureLease and Overlord.CaptureLease.GetWaveId
         and Overlord.CaptureLease:GetWaveId(zone) or ""
     local originGuid = type(UnitGUID) == "function" and UnitGUID("player") or ""
@@ -9659,9 +9712,34 @@ function Overlord.Sync:BuildTotalVictoryReplayPayload(frontId, victory)
     }, ":")
 end
 
+-- TV recue sans preuve locale : gardee (une par front, la plus recente) et rejouee
+-- a 5, 15, 30, 60, 120, 300 puis 600 s. Des que la capture de la capitale est
+-- arrivee par C/ZS/ZA, la preuve existe et la TV s'applique ; sinon elle expire.
+local TV_RETRY_DELAYS = { 5, 15, 30, 60, 120, 300, 600 }
+function Overlord.Sync:DeferTotalVictoryUntilEvidence(frontKey, payload, sender, sourceChannel)
+    priv.pendingTotalVictory = priv.pendingTotalVictory or {}
+    local current = priv.pendingTotalVictory[frontKey]
+    if current and current.payload == payload then return end
+    local entry = { payload = payload, sender = sender, sourceChannel = sourceChannel, step = 0 }
+    priv.pendingTotalVictory[frontKey] = entry
+    local function retry()
+        if priv.pendingTotalVictory[frontKey] ~= entry then return end
+        entry.step = entry.step + 1
+        Overlord.Sync:OnReceiveTotalVictory(entry.payload, entry.sender, entry.sourceChannel, true)
+        if priv.pendingTotalVictory[frontKey] ~= entry then return end
+        local delay = TV_RETRY_DELAYS[entry.step + 1]
+        if delay then
+            C_Timer.After(delay, retry)
+        else
+            priv.pendingTotalVictory[frontKey] = nil
+        end
+    end
+    C_Timer.After(TV_RETRY_DELAYS[1], retry)
+end
+
 -- Reception d'une victoire totale distante.
 -- Dans le warfront actif : ecran de victoire ; sinon message chat (non intrusif).
-function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel)
+function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel, retrying)
     if not payload then return end
 
     local faction, ts, allyKStr, enemyKStr, frontId = strsplit(":", payload)
@@ -9726,12 +9804,22 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel)
             localVictoryEvidence = false
         end
     end
-    local trustedVictorySource = self.IsDominationChannelSenderVerified
-        and self:IsDominationChannelSenderVerified(sender or "") or false
-    -- La carte locale reste la preuve la plus forte. A defaut, une source
-    -- groupe/communaute authentifiee applique TV immediatement ; un vote de trois
-    -- paquets dependait du chemin reseau propre a chaque client.
-    if not localVictoryEvidence and not trustedVictorySource then return end
+    -- La carte locale est la seule preuve : la capitale ennemie capturee par cette
+    -- faction a +/- 5 s du timestamp annonce. Seul un membre du groupe est cru sur
+    -- parole. Toute autre TV sans preuve attend que le C de la capitale arrive
+    -- (urgent, relaye a tout le monde) et est rejouee ; une TV forgee seule ne
+    -- repeint donc plus la carte des joueurs eloignes.
+    local trustedVictorySource = self.SenderIsInOurGroup
+        and self:SenderIsInOurGroup(sender or "") or false
+    if not localVictoryEvidence and not trustedVictorySource then
+        if not retrying then
+            self:DeferTotalVictoryUntilEvidence(proofFrontId or "", payload, sender, sourceChannel)
+        end
+        return
+    end
+    if proofFrontId and priv.pendingTotalVictory then
+        priv.pendingTotalVictory[proofFrontId] = nil
+    end
     if Overlord.WaitingForSync then Overlord.WaitingForSync = nil end
 
     -- NOTE : l'ancien check "toutes les zones doivent etre a faction" a ete retire.

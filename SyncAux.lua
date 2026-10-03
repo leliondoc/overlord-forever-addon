@@ -1791,6 +1791,22 @@ local function CommunityRosterMatchKey(name)
     return NormalizeCommunityRosterName(name)
 end
 
+-- Expediteur dont WoW ou Battle.net a authentifie le nom : membre du groupe, ou
+-- paquet recu de son auteur lui-meme (canal, whisper, BNet, dispatch relais a 0 saut).
+-- Une origine relayee est ecrite par la passerelle et peut etre n'importe quel nom :
+-- elle ne suffit jamais a appliquer une victoire (TV) ni un bonus historique (VB).
+-- A ne pas confondre avec IsStrategicSiteCommunitySender, qui repond seulement
+-- "ce nom est un client Overlord vu recemment".
+function Overlord.Sync:IsAuthenticatedDirectSender(sender)
+    if not sender or sender == "" then return false end
+    if self.SenderIsInOurGroup and self:SenderIsInOurGroup(sender) then return true end
+    local net = Overlord.BetaNetwork
+    if net and net.IsDispatching and net:IsDispatching(sender) then
+        return not (net.IsRelayedOrigin and net:IsRelayedOrigin(sender))
+    end
+    return true
+end
+
 -- Fortin : membre du club Overlord en ligne (cross-faction). Cache prolonge cote reception GK/GC.
 function Overlord.Sync:IsStrategicSiteCommunitySender(sender)
     if Overlord.BetaNetworkEnabled ~= false and Overlord.BetaNetwork

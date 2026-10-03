@@ -434,7 +434,7 @@ function Overlord.Zones:RestoreInProgressAfterOffline(zone, savedData, playerFac
                 zone.status = "captured"
                 zone.previousOwner = nil
                 zone.holdTimeRequired = 120
-                zone.capturedTime = time()
+                zone.capturedTime = Overlord.ServerNow and Overlord.ServerNow() or time()
                 zone.updatedAt = 0
                 promotedOfflineEnemyCapture = true
             end

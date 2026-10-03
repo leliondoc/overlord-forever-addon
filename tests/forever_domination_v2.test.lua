@@ -48,6 +48,13 @@ Overlord.Zones.SetVictoryCooldown = function(_, frontId, faction, ts)
     OverlordDB.frontVictories[frontId] = { faction = faction, timestamp = ts }
 end
 Overlord.Zones.ForceSyncFrontToWinner = function() end
+-- 1.4.2: a TV applies only with local proof (the enemy capital captured at +/- 5 s of its
+-- timestamp) or from a group member. The bus carries no C packets: model the capital as
+-- captured when a TV reaches a client, as the relayed capital C does in the real network.
+local capitals = {}
+Overlord.Zones.LocalStateSupportsVictoryTruce = function() return true end
+Overlord.Fronts.GetEnemyCapitalId = function(_, _, frontId) return frontId .. "-capital" end
+Overlord.Fronts.GetZone = function(_, zoneId) return capitals[zoneId] end
 
 local function newClient(name, faction)
     return { name = name, faction = faction, db = {
@@ -97,6 +104,8 @@ local function receive(to, fromName, kind, payload)
     elseif kind == "TV" then
         -- Each client has its own "already announced" state; the harness shares one process.
         sync:ResetVictoryFlag()
+        local _, ts, _, _, fid = strsplit(":", payload)
+        capitals[fid .. "-capital"] = { capturedTime = tonumber(ts) }
         sync:OnReceiveTotalVictory(payload, fromName, "BETA")
     end
 end

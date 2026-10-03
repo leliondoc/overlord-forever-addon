@@ -210,7 +210,11 @@ local function OutpostSyncBlocked(allowInstance)
     return IsInInstance and IsInInstance()
 end
 
+-- Meme regle que Sync.lua (heure serveur, futur borne) : un seul comportement
+-- pour les horodatages d'avant-poste et de zone.
 local function NormalizeRemoteTimestamp(ts)
+    local shared = Overlord.Sync and Overlord.Sync.NormalizeRemoteTimestamp
+    if shared then return shared(ts) end
     ts = tonumber(ts) or 0
     if ts <= 0 then return 0 end
     local now = time()

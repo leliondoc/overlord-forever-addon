@@ -8,10 +8,14 @@ Overlord.Sync = Overlord.Sync or {}
 
 local DM_BAR_BASE = 50
 
--- Emetteur canal verifie (groupe ou pair relais) : utilise par la validation des victoires.
+-- Emetteur verifie pour les victoires : membre du groupe, ou auteur authentifie par
+-- WoW/BNet (jamais une origine relayee). L'ancien test "pair relais connu" etait
+-- vrai pour toute origine ayant emis un paquet dans les 300 s.
 function Overlord.Sync:IsDominationChannelSenderVerified(sender)
     if self.SenderIsInOurGroup and self:SenderIsInOurGroup(sender or "") then return true end
-    if self.IsStrategicSiteCommunitySender and self:IsStrategicSiteCommunitySender(sender or "") then return true end
+    if self.IsAuthenticatedDirectSender then
+        return self:IsAuthenticatedDirectSender(sender or "")
+    end
     return false
 end
 

@@ -9,6 +9,14 @@ Overlord.IsInitialized = false
 Overlord.PlayerFaction = nil
 Overlord.InActiveFront = false
 Overlord.InstanceSuspended = false
+-- Horloge partagee : GetServerTime() est identique sur tous les clients, time() est
+-- l'horloge du PC (parfois en avance de plusieurs minutes). Tout horodatage qui
+-- circule sur le reseau (captures, victoires) doit venir d'ici.
+function Overlord.ServerNow()
+    local serverNow = GetServerTime and GetServerTime()
+    if type(serverNow) == "number" and serverNow > 0 then return math.floor(serverNow) end
+    return time()
+end
 -- Garde-fou technique des champs numeriques VB (totalAtApply) : evite une valeur
 -- corrompue/infinie recue du reseau.
 Overlord.DOMINATION_SANITY_CAP = 2147483647

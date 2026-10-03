@@ -1656,7 +1656,10 @@ function Overlord.ZoneControl:CaptureZone(zone)
     zone._zsOfficialCapturerSeenAt = nil
     zone.holdTimeElapsed = 0
     zone.holdStartTime = nil
-    local now = time()
+    -- Heure serveur : ce timestamp part dans C/ZS/ZA et sert d'ordre LWW chez tous
+    -- les clients. Avec time(), un PC en avance faisait rejeter les vraies captures
+    -- suivantes comme "stale" pendant plusieurs minutes.
+    local now = Overlord.ServerNow and Overlord.ServerNow() or time()
     zone.capturedTime = now
     zone.updatedAt = now
     zone.holdTimeRequired = 120
@@ -1812,7 +1815,7 @@ end
 -- Victoire totale (toutes les zones capturees)
 function Overlord.ZoneControl:OnTotalVictory()
     local factionUpper = (Overlord.PlayerFaction == "Horde") and L.VICTORY_FACTION_HORDE or L.VICTORY_FACTION_ALLIANCE
-    local victoryTs = time()
+    local victoryTs = Overlord.ServerNow and Overlord.ServerNow() or time()
     local front = Overlord.Fronts and Overlord.Fronts:GetCurrentFront()
     local frontId = front and front.id
     local victoryBonusGranted = false

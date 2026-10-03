@@ -140,11 +140,17 @@ s:OnReceiveLeaderboardKills(lkRow("Horde Far", 309, "Horde"), "Other Bridge", "C
 advance(70)
 assert(#channelRows == 1, "a channel row was echoed back on the channel")
 assert(Overlord.Leaderboard.kills["Horde Far"] == 309, "fixture: channel rows are still accepted")
--- Jump guard: an implausible total is accepted locally but never passed on.
+-- Jump guard: an implausible unsolicited total is clamped to 30 kills + 1/s since the
+-- last total retained for that subject (1.4.2); the full 5000 never reaches the ladder
+-- nor the channel, only the bounded value may.
 advance(10)
 s:OnReceiveLeaderboardKills(lkRow("Horde Far", 5000, "Horde"), "BNet-9", "BNET")
 advance(70)
-assert(#channelRows == 1, "an implausible jump was put on the channel")
+assert(Overlord.Leaderboard.kills["Horde Far"] <= 309 + 30 + 80,
+    "an implausible jump was accepted locally: " .. tostring(Overlord.Leaderboard.kills["Horde Far"]))
+for _, row in ipairs(channelRows) do
+    assert(not row:match(":5000:"), "an implausible jump was put on the channel")
+end
 
 -- ===== Coverage: another bridge already put the same total on the channel.
 know("Horde Busy", 100, "Horde")
