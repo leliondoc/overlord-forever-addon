@@ -782,6 +782,21 @@ zone._remoteCaptureLease.lastHold = 170
 expect(Lease:FinalSatisfiesLocalRequirement(
     zone, "Alliance", "Alice", "wrequired", 180),
     "mature local 180 requirement rejected the terminal")
+-- 1.4.2: the hold is projected since the last tick (cross-faction ticks arrive every
+-- 15-60 s), bounded by the observed duration. Without a tick date, no projection.
+mono = 900
+zone._remoteCaptureLease = {
+    owner = "Alliance", originKey = "alice", waveId = "wproj",
+    localRequired = 120, lastHold = 70, openedAt = 790, openedHold = 0,
+}
+expect(not Lease:FinalSatisfiesLocalRequirement(zone, "Alliance", "Alice", "wproj", 120),
+    "stale hold without tick date accepted a terminal")
+zone._remoteCaptureLease.lastSeen = 850
+expect(Lease:FinalSatisfiesLocalRequirement(zone, "Alliance", "Alice", "wproj", 120),
+    "hold projected since the last tick rejected the terminal")
+zone._remoteCaptureLease.openedAt = 860 -- observed 40 s only: projection cannot exceed it
+expect(not Lease:FinalSatisfiesLocalRequirement(zone, "Alliance", "Alice", "wproj", 120),
+    "projection exceeded the observed duration")
 zone.holdAuthorityLocal = true
 zone._localCaptureWaveId = "wlocal"
 expect(Lease:ShouldRejectFinal(zone, "Alice", "wforeign"),

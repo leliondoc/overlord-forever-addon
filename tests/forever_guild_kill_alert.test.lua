@@ -193,13 +193,14 @@ flush()
 assert(#sent == 0, "A scheduled GW left after the option was disabled")
 GKA:ResetDefaults()
 
--- Without the relay: direct group + channel copies, still one alert.
+-- Without the relay (not loaded yet): direct group + channel copies, still one alert.
 reset()
-Overlord.BetaNetworkEnabled = false
+local savedNet = Overlord.BetaNetwork
+Overlord.BetaNetwork = nil
 raid()
 flush()
 assert(#sent == 2 and sent[1][1] == "group" and sent[2][1] == "channel", "Fallback fan-out wrong")
-Overlord.BetaNetworkEnabled = true
+Overlord.BetaNetwork = savedNet
 
 -- Disabled: nothing printed, nothing sent.
 reset()
