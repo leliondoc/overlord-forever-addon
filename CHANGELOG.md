@@ -1,9 +1,8 @@
-1.4.0
+1.4.1
 
-**Overlord Forever 1.4.0**
+**Overlord Forever 1.4.1**
 
-- One Overlord campaign per Forever ruleset: PvP, Normal, Roleplay and Hardcore each have their own leaderboard, front map, victories, domination bar, fortresses and outposts. A Normal or RP player never mixes with the PvP campaign, even through Battle.net friends. PvP players keep everything they had.
-- Characters on several rulesets: each one finds its own campaign again when you switch (same week), the other one is put aside, nothing is mixed.
-- Leaderboard: hover a guild to see its ranked members (top 10 with their kills) and how many more.
-- `/ov network` shows which campaign you are in.
-- Safer in dungeons: Overlord no longer reads chat lines, nameplates or spell casts inside instances.
+- Rulesets kept fully apart: a Normal or RP player could still see part of the PvP leaderboard (old data passed between Normal/RP players). Fixed, and Normal/RP/Hardcore campaigns restart from a clean leaderboard; please update so everyone on your ruleset finds each other again. PvP players are not affected.
+- Captures now require PvP to be enabled (/pvp): a player who cannot be attacked no longer takes objectives. The objective panel tells you when PvP is off. Mines keep generating gold without it.
+- Call to arms shows the real zone name ("Three Corners (Redridge Mountains)") instead of an internal id.
+- `/ov network` no longer turns red for a single refused message or a small burst at login.
