@@ -1087,6 +1087,26 @@ function Overlord.Leaderboard:GetHotIndexStats()
     return self._hotIndexStats or { completed = 0, metaOnly = 0, abortedMeta = 0, abortedOther = 0 }
 end
 
+-- Metadata changed during a pass (a new player seen on a nameplate, a guild
+-- confirmed): the index built from the other rows is still valid, so publish it
+-- and refresh once, 30 s later, instead of restarting the whole pass. Under a
+-- stream of new names (launch day) the rebuild never finished: every pass was
+-- aborted and the hot index stayed cold for the whole session.
+local META_REFRESH_DELAY = 30
+local function scheduleMetaRefresh(self)
+    if self._metaRefreshScheduled then return end
+    self._metaRefreshScheduled = true
+    C_Timer.After(META_REFRESH_DELAY, function()
+        local lb = Overlord.Leaderboard
+        if lb ~= self then return end
+        self._metaRefreshScheduled = nil
+        self._dedupMetaIndex = nil
+        self._dedupLegacyShortMetaIndex = nil
+        self._guildFactionVoteIndex = nil
+        self:EnsureNetworkHotIndexesPrepared()
+    end)
+end
+
 function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
     local killsSource = self.kills or {}
     local captureSource = self.captureCount or {}
@@ -1109,14 +1129,21 @@ function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
         and self._networkHotCaptureSource == captureSource
         and self._networkHotCapturesSource == capturesSource then
         self:RebuildDedupMetaIndex(yieldWork, function(name) NoteDedupCanonicalName(self, name) end)
-        if sourcesChanged() then
-            noteHotIndexOutcome(self, (self._dedupMetaEpoch or 0) ~= metaEpoch and "abortedMeta" or "abortedOther")
+        local metaDrift = (self._dedupMetaEpoch or 0) ~= metaEpoch
+        if sourcesChanged() and not (metaDrift and self.kills == killsSource
+            and self.captureCount == captureSource and self.captures == capturesSource
+            and self.playerInfo == playerInfoSource and dedupHardEpoch == hardEpoch) then
+            noteHotIndexOutcome(self, "abortedOther")
             self._dedupMetaIndex = nil
             self._dedupLegacyShortMetaIndex = nil
             self._guildFactionVoteIndex = nil
             return false
         end
         self._networkHotPlayerInfoSource = playerInfoSource
+        if metaDrift then
+            noteHotIndexOutcome(self, "metaDrift")
+            scheduleMetaRefresh(self)
+        end
         noteHotIndexOutcome(self, "metaOnly")
         return true
     end
@@ -1187,13 +1214,20 @@ function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
     local journalKept = hotRebuildJournals[journal] == true
     hotRebuildJournals[journal] = nil
     if owner then owner.journal = nil end
-    if not journalKept or sourcesChanged() then
-        noteHotIndexOutcome(self, (journalKept and (self._dedupMetaEpoch or 0) ~= metaEpoch)
-            and "abortedMeta" or "abortedOther")
+    local metaDrift = (self._dedupMetaEpoch or 0) ~= metaEpoch
+    local onlyMetaDrift = journalKept and metaDrift and self.kills == killsSource
+        and self.captureCount == captureSource and self.captures == capturesSource
+        and self.playerInfo == playerInfoSource and dedupHardEpoch == hardEpoch
+    if not journalKept or (sourcesChanged() and not onlyMetaDrift) then
+        noteHotIndexOutcome(self, "abortedOther")
         self._dedupMetaIndex = nil
         self._dedupLegacyShortMetaIndex = nil
         self._guildFactionVoteIndex = nil
         return false
+    end
+    if onlyMetaDrift then
+        noteHotIndexOutcome(self, "metaDrift")
+        scheduleMetaRefresh(self)
     end
     -- Replay what arrived during the pass (max semantics, like the live updaters).
     for dk, count in pairs(journal.kills) do
@@ -2002,12 +2036,36 @@ end
 function Overlord.Leaderboard:SaveDisplayCache(cache)
     if self._storageBound ~= true or not cache.ready or cache.fromSavedCache
         or not self:IsDisplayCacheScopeCurrent(cache) then return false end
+    -- RestoreDisplayCache ne lit que l'apercu de login (500 lignes kills/guildes,
+    -- 25 capteurs par faction) : persister les 5000 lignes et toutes les
+    -- metadonnees ajoutait ~20 000 lignes de fichier pour rien.
+    local function head(rows, limit)
+        local out = {}
+        for i = 1, math.min(#rows, limit) do out[i] = rows[i] end
+        return out
+    end
+    local sortedKills = head(cache.sortedKills, DISPLAY_PREVIEW_ROW_LIMIT)
+    local byFaction = {}
+    for faction, rows in pairs(cache.byFaction) do
+        byFaction[faction] = head(rows, DISPLAY_CAPTURE_PREVIEW_LIMIT)
+    end
+    local meta, locale = {}, {}
+    local function keep(name)
+        if name ~= nil and cache.meta[name] ~= nil then
+            meta[name] = cache.meta[name]
+            locale[name] = cache.locale[name]
+        end
+    end
+    for _, row in ipairs(sortedKills) do keep(row.name) end
+    for _, rows in pairs(byFaction) do
+        for _, row in ipairs(rows) do keep(row.name) end
+    end
     OverlordDB.leaderboardDisplayCache = {
         version = 2, killLimit = self.KILL_RANK_LIMIT,
         campaignStart = cache.campaignStart, scoreBucketEpoch = cache.scoreBucketEpoch,
         pool = cache.pool, at = (GetServerTime and GetServerTime()) or time(),
-        sortedKills = cache.sortedKills, sortedGuilds = cache.sortedGuilds,
-        byFaction = cache.byFaction, meta = cache.meta, locale = cache.locale,
+        sortedKills = sortedKills, sortedGuilds = head(cache.sortedGuilds, DISPLAY_PREVIEW_ROW_LIMIT),
+        byFaction = byFaction, meta = meta, locale = locale,
         alliKills = cache.alliKills, hordeKills = cache.hordeKills,
     }
     return true
@@ -5721,6 +5779,27 @@ function Overlord.Leaderboard:OpenAtomicWeeklyBucket(archiveEpoch, resetEpoch, c
         campaignStart = archiveEpoch,
         campaignId = tonumber(OverlordDB.leaderboard and OverlordDB.leaderboard.campaignId) or 0,
     }
+    -- Point de reprise : scores complets, mais metadonnees (classe/guilde/niveau/race)
+    -- seulement pour les 500 meilleurs. Le bucket complet est deja dans le marker
+    -- d'archive ; une copie integrale de playerInfo doublait 26 000 lignes de fichier.
+    local function SlimRecoveryBucket(bucket)
+        local top = {}
+        for name, count in pairs(bucket.kills or {}) do top[#top + 1] = { name = name, kills = count } end
+        table.sort(top, function(a, b)
+            if a.kills ~= b.kills then return a.kills > b.kills end
+            return a.name < b.name
+        end)
+        local playerInfo, source = {}, bucket.playerInfo or {}
+        for i = 1, math.min(#top, DISPLAY_PREVIEW_ROW_LIMIT) do
+            local row = source[top[i].name]
+            if row ~= nil then playerInfo[top[i].name] = row end
+        end
+        return {
+            kills = bucket.kills, captures = bucket.captures, captureCount = bucket.captureCount,
+            bountyTimes = {}, bountyKills = {}, playerInfo = playerInfo,
+            campaignStart = bucket.campaignStart, campaignId = bucket.campaignId, slim = true,
+        }
+    end
     local oldScoreBucketEpoch = GetMatchingLeaderboardScoreBucketEpoch(archiveEpoch)
     -- Keep one complete, detached campaign per region as a recovery checkpoint.
     -- The compact history drops metadata and lower ranks; the periodic snapshot
@@ -5731,7 +5810,7 @@ function Overlord.Leaderboard:OpenAtomicWeeklyBucket(archiveEpoch, resetEpoch, c
     if type(recoveryPool) == "string" and recoveryPool ~= "" then -- 1.4.0: every ruleset campaign
         OverlordDB.leaderboardPreviousCampaigns = OverlordDB.leaderboardPreviousCampaigns or {}
         OverlordDB.leaderboardPreviousCampaigns[recoveryPool] = {
-            bucket = oldBucket,
+            bucket = SlimRecoveryBucket(oldBucket),
             scoreBucketEpoch = oldScoreBucketEpoch > 0 and oldScoreBucketEpoch or nil,
             resetEpoch = resetEpoch,
             savedAt = (GetServerTime and GetServerTime()) or time(),

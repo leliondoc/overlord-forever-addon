@@ -332,7 +332,8 @@ local function StartNetworkProbe()
         local pools = Overlord.RealmPools
         if pools and pools.GetRuleset then
             R.Detail("Campaign: " .. pools:GetRuleset() .. " ruleset (pool " .. pools:GetOverlordPoolTag()
-                .. ", channel OverlordF" .. pools:GetChannelSuffix() .. ")")
+                .. ", channel OverlordF" .. pools:GetChannelSuffix() .. ")"
+                .. (pools._rulesetAssumed and " ASSUMED: game rules and realm name gave no answer" or ""))
         end
         if sync.GetEnemyCaptureFinalDiagnostics then R.Detail(sync:GetEnemyCaptureFinalDiagnostics()) end
         if sync.GetHistoryCatchupDiagnostics then

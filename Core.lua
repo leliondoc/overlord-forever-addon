@@ -2870,8 +2870,15 @@ function Overlord:Initialize()
 
     -- Migration : assure que chaque sous-table et champ existe
     OverlordDB.config = OverlordDB.config or {}
-    OverlordDB.leaderboard = OverlordDB.leaderboard or EmptyLeaderboardBucket()
     OverlordDB.leaderboardsByPool = OverlordDB.leaderboardsByPool or {}
+    -- OverlordDB.leaderboard est un alias de leaderboardsByPool[pool]. WoW serialise
+    -- chaque reference en entier : le ladder etait ecrit deux fois (3 MB pour 2200
+    -- joueurs). La deconnexion retire l'alias et note son pool ; on le remet ici.
+    if OverlordDB.leaderboard == nil and type(OverlordDB.leaderboardAliasPool) == "string" then
+        OverlordDB.leaderboard = OverlordDB.leaderboardsByPool[OverlordDB.leaderboardAliasPool]
+    end
+    OverlordDB.leaderboardAliasPool = nil
+    OverlordDB.leaderboard = OverlordDB.leaderboard or EmptyLeaderboardBucket()
     OverlordDB.history = OverlordDB.history or {}
     OverlordDB.lastResetTimestamp = tonumber(OverlordDB.lastResetTimestamp) or 0
     -- 1.2.1 : l'ancienne domination au temps (buckets DX par front) est retiree ; la barre
@@ -5281,6 +5288,18 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
             -- Un snapshot tranche ne peut pas terminer apres PLAYER_LOGOUT. Le dernier
             -- snapshot autosave complet reste intact ; Save() persiste les buckets courants.
             Overlord.Leaderboard:Save()
+        end
+        -- Derniere ecriture : l'alias OverlordDB.leaderboard pointe sur le bucket de
+        -- pool deja persiste. Le retirer evite une seconde copie complete du ladder
+        -- dans le fichier ; Initialize() le retablit depuis leaderboardAliasPool.
+        if OverlordDB and OverlordDB.leaderboard and OverlordDB.leaderboardsByPool
+            and Overlord.GetCurrentLeaderboardSavedVarsPool then
+            local pool = Overlord:GetCurrentLeaderboardSavedVarsPool()
+            if type(pool) == "string" and pool ~= ""
+                and OverlordDB.leaderboardsByPool[pool] == OverlordDB.leaderboard then
+                OverlordDB.leaderboardAliasPool = pool
+                OverlordDB.leaderboard = nil
+            end
         end
     elseif event == "PLAYER_DEAD" or event == "PLAYER_ALIVE" or event == "PLAYER_UNGHOST" then
         if event == "PLAYER_DEAD" and Overlord.ZoneControl

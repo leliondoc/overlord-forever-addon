@@ -839,6 +839,21 @@ local function IsControlledZoneSnapshotSender(sync, windowSec, pct)
     return (hash % 100) < pct
 end
 
+-- Share of clients that emit a ZA per window. The fixed 12-25 % made the number of
+-- snapshots grow with the crowd (about one full map per second received at 500
+-- players, each re-parsed by every client). Aim for about five senders per window
+-- whatever the population, never above the configured share.
+function Overlord.Sync:ControlledZaElectionPct(opts, isLarge)
+    local pct = opts.electionPct
+        or (isLarge and (opts.largeElectionPct or 12) or (opts.smallElectionPct or 100))
+    local net = Overlord.BetaNetwork
+    local population = net and net.CountDirectPeers and net:CountDirectPeers() or 0
+    if population > 5 then
+        pct = math.min(pct, math.max(2, math.ceil(500 / population)))
+    end
+    return pct
+end
+
 function Overlord.Sync:ScheduleControlledZoneSnapshot(reason, opts)
     opts = opts or {}
     if not self.BroadcastCompactZoneSnapshot then return false end
@@ -867,8 +882,7 @@ function Overlord.Sync:ScheduleControlledZoneSnapshot(reason, opts)
 
     if active and not opts.force then
         local isLarge = self.IsLargeEvent and self:IsLargeEvent()
-        local pct = opts.electionPct
-            or (isLarge and (opts.largeElectionPct or 12) or (opts.smallElectionPct or 100))
+        local pct = self:ControlledZaElectionPct(opts, isLarge)
         if not IsControlledZoneSnapshotSender(self, cooldown, pct) then return false end
     end
 
@@ -897,8 +911,7 @@ function Overlord.Sync:ScheduleControlledZoneSnapshot(reason, opts)
         end
         if currentlyActive and not opts.force then
             local isLarge = Overlord.Sync.IsLargeEvent and Overlord.Sync:IsLargeEvent()
-            local pct = opts.electionPct
-                or (isLarge and (opts.largeElectionPct or 12) or (opts.smallElectionPct or 100))
+            local pct = Overlord.Sync:ControlledZaElectionPct(opts, isLarge)
             if not IsControlledZoneSnapshotSender(Overlord.Sync, cooldown, pct) then
                 controlledZaPending = false
                 return

@@ -7953,6 +7953,18 @@ function Overlord.Sync:OnReceiveZoneAll(
     -- claim key et ont deja force snapshotAtomic ci-dessus.
     if not snapshotAtomic then return end
 
+    -- The same validated snapshot again within 30 s (another elected sender, a
+    -- relayed copy): nothing to apply, skip the whole parse (3-8 ms per map).
+    if payload == self._lastAcceptedZaPayload
+        and GetTime() - (self._lastAcceptedZaAt or -math.huge) < 30 then
+        if snapshotGlobal then self._lastFullZaAt = GetTime() end
+        local betaNet = Overlord.BetaNetwork
+        if betaNet and betaNet.stats then
+            betaNet.stats.zaIdenticalSkipped = (betaNet.stats.zaIdenticalSkipped or 0) + 1
+        end
+        return
+    end
+
     local changed = false
     local syncUseful = false
     local touchedInactiveFronts = {}
@@ -8273,6 +8285,7 @@ function Overlord.Sync:OnReceiveZoneAll(
     -- Un lot moderne ne touche rien tant que chacune de ses zones n'a pas passe
     -- la validation atomique.
     if snapshotAtomic and not snapshotConsensusComplete then return end
+    self._lastAcceptedZaPayload, self._lastAcceptedZaAt = payload, GetTime()
     -- Carte globale validee : le relais n'a pas besoin de redemander la carte a
     -- chaque nouveau pair entendu dans la foulee. Une carte rejetee, ou dont chaque
     -- zone etait plus ancienne que la notre, ne compte pas.

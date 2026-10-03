@@ -64,6 +64,9 @@ function RealmPools:GetRuleset()
     if not ruleset or (ruleset == "normal" and fromName and fromName ~= "normal") then
         ruleset = fromName or ruleset
     end
+    -- Neither the game rules nor the realm name answered: PvP is assumed for the
+    -- session. /ov network shows it so a wrong campaign is visible at launch.
+    self._rulesetAssumed = ruleset == nil
     self._ruleset = ruleset or "pvp"
     return self._ruleset
 end

@@ -52,7 +52,12 @@ local first = lb:EnsureDisplayCache()
 assert(first.ready and #first.sortedKills == 5000)
 assert(#first.byFaction.Horde == 500)
 local saved = assert(OverlordDB.leaderboardDisplayCache)
-assert(#saved.sortedKills == 5000 and #saved.sortedGuilds == 1)
+-- 1.4.2: only the login preview is persisted (500 rows), the full 5000 live in memory.
+assert(#saved.sortedKills == 500 and #saved.sortedGuilds == 1,
+    "persisted cache rows: " .. #saved.sortedKills .. "/" .. #saved.sortedGuilds)
+local savedMetaRows = 0
+for _ in pairs(saved.meta) do savedMetaRows = savedMetaRows + 1 end
+assert(savedMetaRows <= 525, "persisted metadata rows exceed the preview: " .. savedMetaRows)
 assert(saved.killSource == nil and saved.playerInfoSource == nil,
     "Persistent presentation cache references unbounded source tables")
 local disk = copy(OverlordDB)
