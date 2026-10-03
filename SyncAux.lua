@@ -2809,7 +2809,14 @@ function Overlord.Sync:ResolveFactionCallPlace(zoneId, frontId)
     local frontName = ""
     if frontId and frontId ~= "" and Overlord.Fronts then
         local front = Overlord.Fronts:GetFront(frontId)
-        frontName = (front and front.mapName) or frontId
+        frontName = (front and front.mapName) or ""
+        if frontName == "" then
+            local words = {}
+            for word in frontId:gmatch("[^_]+") do
+                words[#words + 1] = word:sub(1, 1):upper() .. word:sub(2)
+            end
+            frontName = table.concat(words, " ")
+        end
     end
     return zoneName, frontName
 end

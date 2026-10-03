@@ -13,4 +13,6 @@ assert(frontName ~= "" and frontName ~= "redridge", "Raw front id shown: " .. to
 -- Unknown id (newer client, renamed zone): readable words, never underscores.
 local unknown = sync:ResolveFactionCallPlace("redridge_old_watch_tower", "")
 assert(unknown == "Old Watch Tower", "Unknown id not made readable: " .. tostring(unknown))
+local _, unknownFront = sync:ResolveFactionCallPlace("", "stranglethorn_vale")
+assert(unknownFront == "Stranglethorn Vale", "Unknown front id not made readable: " .. tostring(unknownFront))
 print("Call to arms: zone and front names, never raw ids")

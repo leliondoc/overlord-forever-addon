@@ -6804,7 +6804,6 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
             self:NoteEnemyCaptureFinal(owner, "ZS", "otherCapturer")
             return
         end
-        if captureFinalClaimKey then self:NoteEnemyCaptureFinal(owner, "ZS", "passed") end
         stateClaimKey = captureFinalClaimKey or table.concat({
             tostring(campaignEpoch or campaignId or 0), tostring(zoneId or ""),
             tostring(status or ""), tostring(ownerCode or ""), tostring(ts or 0),
@@ -6838,7 +6837,11 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
             self:CreditDirectCaptureFromFinalState(
                 captureFinalClaimKey, zsCapturerName, sender)
         end
-        if not terminalVerified then return end
+        if not terminalVerified then
+            if captureFinalClaimKey then self:NoteEnemyCaptureFinal(owner, "ZS", "notDirect") end
+            return
+        end
+        if captureFinalClaimKey then self:NoteEnemyCaptureFinal(owner, "ZS", "passed") end
         if captureFinalClaimKey then
             -- Le final authentifie autorise owner/status/ts uniquement. Les
             -- valeurs de gameplay du dernier paquet restent non autoritaires.

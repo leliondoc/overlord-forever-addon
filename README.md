@@ -90,7 +90,7 @@ Le panneau principal permet de basculer entre les fronts disponibles. Les pins e
 - Noms Forever en deux parties (ex. `Troma Orcbane`) acceptés dans la sync et les whispers.
 - Commande `/ov sync` pour demander un rattrapage manuel.
 
-Le canal utilisé par cette version Forever est `OverlordF`. Le classement se
+Le canal utilisé par cette version Forever est `OverlordF` sur le ruleset PvP, `OverlordFE` (Normal), `OverlordFRP` (RP) et `OverlordFHC` (Hardcore) ailleurs. Le classement se
 réconcilie aussi à la connexion par échanges ciblés entre pairs : kills,
 captures, races et métadonnées de guilde, puis retour des données fusionnées.
 Ces échanges passent par les mêmes bridges que les événements en direct, sans

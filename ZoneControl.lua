@@ -932,11 +932,14 @@ function Overlord.ZoneControl:CheckPlayerPosition()
         return
     end
 
-    -- Sans drapeau PvP, on explique pourquoi rien ne demarre (une fois par minute).
-    if currentZone.status == "available" and self:PlayerLacksPvpFlag() then
+    -- Sans drapeau PvP, on explique pourquoi rien ne demarre (une fois par minute
+    -- et par objectif ; pas pour un joueur mort ou fantome).
+    if currentZone.status == "available" and not UnitIsDead("player") and not UnitIsGhost("player")
+        and self:PlayerLacksPvpFlag() then
         local now = GetTime()
-        if now - (self._pvpFlagHintAt or -60) >= 60 then
-            self._pvpFlagHintAt = now
+        self._pvpFlagHintAt = self._pvpFlagHintAt or {}
+        if now - (self._pvpFlagHintAt[currentZone.id] or -60) >= 60 then
+            self._pvpFlagHintAt[currentZone.id] = now
             Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r "
                 .. (L.CAPTURE_NEEDS_PVP or "%s: enable PvP (/pvp) to capture this objective."),
                 currentZone.name or ""))
