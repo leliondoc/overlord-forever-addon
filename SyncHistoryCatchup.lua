@@ -141,6 +141,13 @@ local function SnapshotForCampaign(campaignStart)
     if snapshotBucket <= 0 or localBucket <= 0 or snapshotBucket ~= localBucket then
         return nil
     end
+    -- 1.4.1: never serve another ruleset's ladder (a snapshot without a pool
+    -- predates 1.4.0 and belongs to the PvP campaign).
+    local pools = Overlord.RealmPools
+    local snapPool = pools and pools:NormalizeRegionPool(snapshot.pool or "global") or "global"
+    local localPool = Overlord.GetCurrentLeaderboardSavedVarsPool
+        and Overlord:GetCurrentLeaderboardSavedVarsPool() or "global"
+    if snapPool ~= localPool then return nil end
     return snapshot
 end
 

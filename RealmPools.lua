@@ -9,9 +9,14 @@ Overlord.RealmPools = RealmPools
 -- "global": the whole current population plays there, so 1.3.x clients and the
 -- saved PvP data stay compatible. The other rulesets get their own tag; packets,
 -- Battle.net bands, the channel and saved buckets of another ruleset never mix.
-local RULESET_POOL = { pvp = "global", normal = "normal", rp = "rp", hardcore = "hardcore" }
-RealmPools.RULESET_POOLS = { normal = true, rp = true, hardcore = true }
-local CHANNEL_SUFFIX = { pvp = "", normal = "N", rp = "R", hardcore = "H" }
+-- 1.4.1: the non-PvP pools and channels were renamed. 1.4.0 Normal/RP clients
+-- could serve their old 1.3.x ("global") ladder snapshot to each other, so their
+-- ladders may hold PvP rows; the new tags make a clean break from them.
+local RULESET_POOL = { pvp = "global", normal = "pve", rp = "rpg", hardcore = "hc" }
+RealmPools.RULESET_POOLS = { pve = true, rpg = true, hc = true }
+-- Tags used by 1.4.0 only: their saved data is dropped once (Core.lua).
+RealmPools.RETIRED_POOLS = { "normal", "rp", "hardcore" }
+local CHANNEL_SUFFIX = { pvp = "", normal = "E", rp = "RP", hardcore = "HC" }
 
 local function GameRuleActive(rule)
     if rule == nil or not C_GameRules or type(C_GameRules.IsGameRuleActive) ~= "function" then

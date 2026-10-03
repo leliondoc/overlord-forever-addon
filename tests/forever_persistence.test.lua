@@ -40,6 +40,39 @@ assert(Overlord.RealmPools:GetOverlordPoolTag() == "global")
 assert(Overlord.RealmPools:AreOutpostCrossPoolsLinked("eu", "us"))
 assert(Overlord.RealmPools:AreOutpostCrossPoolsLinked("fr", "eu"))
 assert(Overlord.RealmPools:NormalizeRegionPool("na") == "global")
+-- 1.4.1: the 1.4.0 Normal/RP/Hardcore pools may hold PvP rows; they are dropped
+-- once. Back on PvP after a Normal alt, the parked PvP world comes back.
+do
+    local pvpWorld = { epoch = 1790000000, zones = { z = { owner = "pvp" } }, outposts = { s = {} } }
+    local pvpLadder = { kills = { A = 1 } }
+    OverlordDB = {
+        lastResetTimestamp = 1790000000, lastSessionPool = "normal",
+        zones = { z = { owner = "leaked" } }, outposts = { s = { pool = "normal" } },
+        leaderboard = { kills = { Leak = 9 } },
+        leaderboardsByPool = { global = pvpLadder, normal = { kills = { Leak = 9 } } },
+        worldsByPool = { global = pvpWorld, normal = {} },
+        dominationVictoryEvents = { byPool = { normal = {}, global = { kept = true } } },
+        leaderboardSnapshot = { pool = "normal" },
+    }
+    assert(Overlord:DropRetiredRulesetPools("global"))
+    assert(OverlordDB.leaderboardsByPool.normal == nil and OverlordDB.leaderboardsByPool.global == pvpLadder,
+        "Retired ladder kept or PvP ladder touched")
+    assert(OverlordDB.zones == pvpWorld.zones and OverlordDB.outposts == pvpWorld.outposts,
+        "PvP world not brought back after a 1.4.0 Normal alt")
+    assert(OverlordDB.worldsByPool.global == nil and OverlordDB.worldsByPool.normal == nil)
+    assert(OverlordDB.dominationVictoryEvents.byPool.normal == nil
+        and OverlordDB.dominationVictoryEvents.byPool.global.kept, "Victory journals wrong")
+    assert(OverlordDB.leaderboardSnapshot == nil, "Retired-pool snapshot kept")
+    assert(OverlordDB.lastSessionPool == "global")
+    assert(not Overlord:DropRetiredRulesetPools("global"), "Retired pools dropped twice")
+    -- On the Normal alt itself: its live world and ladder restart empty.
+    OverlordDB = { lastResetTimestamp = 1790000000, lastSessionPool = "normal",
+        zones = { z = { owner = "leaked" } }, leaderboard = { kills = { Leak = 9 } },
+        leaderboardsByPool = { normal = { kills = { Leak = 9 } } } }
+    assert(Overlord:DropRetiredRulesetPools("pve"))
+    assert(next(OverlordDB.zones) == nil and OverlordDB.leaderboard == nil
+        and OverlordDB.leaderboardsByPool.normal == nil, "Normal alt kept the leaked ladder or map")
+end
 -- Recovery: an unreleased 1.4.0 build parked the PvP outpost history alone in
 -- outpostsByPool (live: a PvP character came back with an empty capture history).
 -- It is merged back once: highest count per row, tenants fill gaps, states stay.
@@ -48,7 +81,7 @@ do
     OverlordDB = {
         lastResetTimestamp = 1790000000,
         zones = { z = { owner = "pvp" } },
-        worldsByPool = { normal = { epoch = 1790000000, zones = { z = { owner = "pvp-misparked" } } } },
+        worldsByPool = { pve = { epoch = 1790000000, zones = { z = { owner = "pvp-misparked" } } } },
         outposts = liveState,
         outpostTenants = { site = { guild = "who pulled" } },
         outpostCaptureCounts = { ["site:global:who pulled"] = { count = 0 },
@@ -59,7 +92,7 @@ do
                 counts = { ["site:global:who pulled"] = { count = 2 },
                     ["site:global:kor kron enforcers"] = { count = 2 },
                     ["b:global:empire"] = { count = 1 } } },
-            normal = { epoch = 1790000000, counts = { ["x:normal:knights"] = { count = 3 } } },
+            pve = { epoch = 1790000000, counts = { ["x:normal:knights"] = { count = 3 } } },
             rp = { epoch = 1790000000 - 7 * 86400, counts = { ["x:rp:old"] = { count = 9 } } },
         },
     }
@@ -71,16 +104,16 @@ do
         "Tenants: live overwritten or gaps not filled")
     assert(OverlordDB.outposts == liveState, "Live outpost states were replaced")
     assert(OverlordDB.outpostsByPool == nil, "Legacy parking kept after recovery")
-    assert(OverlordDB.worldsByPool.normal.outpostCaptureCounts["x:normal:knights"].count == 3,
+    assert(OverlordDB.worldsByPool.pve.outpostCaptureCounts["x:normal:knights"].count == 3,
         "Another ruleset's parked history was not moved to its world")
     assert(OverlordDB.worldsByPool.rp == nil, "An older week's parked history came back")
     assert(OverlordDB.zones.z.owner == "pvp", "Recovery touched the PvP map")
-    assert(next(OverlordDB.worldsByPool.normal.zones) == nil, "A misparked PvP map stayed in the Normal world")
+    assert(next(OverlordDB.worldsByPool.pve.zones) == nil, "A misparked PvP map stayed in the Normal world")
     assert(not Overlord:RecoverParkedOutpostHistory("global"), "Recovery ran twice")
     -- Same recovery on the Normal character: its current map restarts too.
     OverlordDB = { lastResetTimestamp = 1790000000, zones = { z = { owner = "pvp" } },
         lastVictoryTimestamp = 1, outpostsByPool = { global = { epoch = 1790000000, counts = {} } } }
-    assert(Overlord:RecoverParkedOutpostHistory("normal"))
+    assert(Overlord:RecoverParkedOutpostHistory("pve"))
     assert(next(OverlordDB.zones) == nil and OverlordDB.lastVictoryTimestamp == nil,
         "The Normal character kept the PvP map")
     assert(OverlordDB.worldsByPool.global and next(OverlordDB.worldsByPool.global.outpostCaptureCounts) == nil)
@@ -105,15 +138,15 @@ do
     OverlordDB = { lastResetTimestamp = 1000, lastSessionPool = "global",
         lastVictoryTimestamp = 900, lastVictoryFaction = "Horde", lastVictoryFrontId = "f" }
     for _, k in ipairs(keys) do OverlordDB[k] = pvp[k] end
-    assert(newSession() and Overlord:SwapRulesetWorld("normal"), "Ruleset change did not swap the world")
+    assert(newSession() and Overlord:SwapRulesetWorld("pve"), "Ruleset change did not swap the world")
     assert(OverlordDB.lastVictoryTimestamp == nil and OverlordDB.lastVictoryFaction == nil,
         "PvE alt inherited the PvP legacy victory")
-    assert(OverlordDB.lastSessionPool == "normal", "Session pool not saved at the swap")
+    assert(OverlordDB.lastSessionPool == "pve", "Session pool not saved at the swap")
     for _, k in ipairs(keys) do
         assert(type(OverlordDB[k]) == "table" and next(OverlordDB[k]) == nil, "PvE alt saw PvP " .. k)
     end
     OverlordDB.zones.z = { owner = "pve" }
-    OverlordDB.lastSessionPool = "normal"
+    OverlordDB.lastSessionPool = "pve"
     assert(newSession() and Overlord:SwapRulesetWorld("global"))
     for _, k in ipairs(keys) do assert(OverlordDB[k] == pvp[k], "PvP " .. k .. " not restored") end
     assert(OverlordDB.lastVictoryTimestamp == 900 and OverlordDB.lastVictoryFrontId == "f",
@@ -122,28 +155,28 @@ do
     assert(newSession() and not Overlord:SwapRulesetWorld("global"), "Same ruleset swapped the world")
     -- Initialize restarting in the same session never swaps twice.
     local kept = OverlordDB.zones
-    OverlordDB.lastSessionPool = "normal"
+    OverlordDB.lastSessionPool = "pve"
     assert(not Overlord:SwapRulesetWorld("global") and OverlordDB.zones == kept, "Second swap in one session")
     OverlordDB.lastSessionPool = "global"
     -- A reset anchor nudged mid-week (hours) still brings the world back.
     OverlordDB.lastSessionPool = "global"
-    assert(newSession() and Overlord:SwapRulesetWorld("normal"))
+    assert(newSession() and Overlord:SwapRulesetWorld("pve"))
     OverlordDB.lastResetTimestamp = 1000 + 3600
     assert(newSession() and Overlord:SwapRulesetWorld("global"))
     assert(OverlordDB.zones == pvp.zones, "A nudged reset anchor lost the PvP world")
     OverlordDB.lastResetTimestamp = 1000
     -- Weekly reset while on PvP: last week's PvE world never comes back.
     OverlordDB.lastResetTimestamp = 1000 + 7 * 24 * 3600
-    assert(newSession() and Overlord:SwapRulesetWorld("normal"))
+    assert(newSession() and Overlord:SwapRulesetWorld("pve"))
     assert(next(OverlordDB.zones) == nil, "Last week's PvE map came back after the reset")
     -- A Normal alt already logged before this check (lastSessionPool = normal)
     -- still holds PvP-stamped outposts: the stamp wins, the world is parked as PvP.
     local stale = world("pvp")
-    OverlordDB = { lastResetTimestamp = 3000, lastSessionPool = "normal" }
+    OverlordDB = { lastResetTimestamp = 3000, lastSessionPool = "pve" }
     for _, k in ipairs(keys) do OverlordDB[k] = stale[k] end
-    assert(newSession() and Overlord:SwapRulesetWorld("normal"), "PvP-stamped world stayed on the Normal alt")
+    assert(newSession() and Overlord:SwapRulesetWorld("pve"), "PvP-stamped world stayed on the Normal alt")
     assert(next(OverlordDB.zones) == nil)
-    OverlordDB.lastSessionPool = "normal"
+    OverlordDB.lastSessionPool = "pve"
     newSession(); Overlord:SwapRulesetWorld("global")
     assert(OverlordDB.zones == stale.zones and OverlordDB.outposts == stale.outposts,
         "PvP world parked from the Normal alt was lost")

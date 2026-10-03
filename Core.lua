@@ -2890,6 +2890,7 @@ function Overlord:Initialize()
     -- 1.4.0: before any front/victory migration and before fronts, zones and
     -- outposts are restored, swap in this ruleset's own world (every login,
     -- cheap: also heals an alt whose data another ruleset stamped earlier).
+    self:DropRetiredRulesetPools(GetCurrentPoolForSavedVars())
     self:SwapRulesetWorld(GetCurrentPoolForSavedVars())
     self:RecoverParkedOutpostHistory(GetCurrentPoolForSavedVars())
     -- Structure seulement : migrations legacy/orphelins et logs corrompus sont
@@ -3560,6 +3561,58 @@ local RULESET_WORLD_SCALARS = { "lastVictoryTimestamp", "lastVictoryFaction", "l
 -- On a ruleset change, park the world we leave and bring back ours if it is
 -- from this same campaign week; otherwise start from the week's initial state.
 -- Runs at the very start of the login, before zones and outposts are restored.
+-- 1.4.1: the 1.4.0 Normal/RP/Hardcore pools may hold PvP rows (a 1.3.x snapshot
+-- served between those clients). Drop everything saved under those tags once:
+-- ladders, parked worlds, victory journals and a snapshot of that pool. If the
+-- live world itself was one of them (lastSessionPool), it restarts empty.
+function Overlord:DropRetiredRulesetPools(currentPool)
+    local rp = self.RealmPools
+    if not OverlordDB or not rp or type(rp.RETIRED_POOLS) ~= "table" then return false end
+    if OverlordDB.retiredRulesetPoolsDropped == 1 then return false end
+    OverlordDB.retiredRulesetPoolsDropped = 1
+    local retired = {}
+    for _, pool in ipairs(rp.RETIRED_POOLS) do retired[pool] = true end
+    local function drop(t)
+        if type(t) ~= "table" then return end
+        for pool in pairs(retired) do t[pool] = nil end
+    end
+    drop(OverlordDB.leaderboardsByPool)
+    drop(OverlordDB.worldsByPool)
+    drop(OverlordDB.leaderboardPreviousCampaigns)
+    drop(type(OverlordDB.dominationVictoryEvents) == "table" and OverlordDB.dominationVictoryEvents.byPool)
+    local snapshot = OverlordDB.leaderboardSnapshot
+    if type(snapshot) == "table" and retired[tostring(snapshot.pool or "")] then
+        OverlordDB.leaderboardSnapshot = nil
+    end
+    local cache = OverlordDB.leaderboardDisplayCache
+    if type(cache) == "table" and retired[tostring(cache.pool or "")] then
+        OverlordDB.leaderboardDisplayCache = nil
+    end
+    local last = tostring(OverlordDB.lastSessionPool or "")
+    if retired[last] then
+        -- The live tables are that retired world: drop them and bring back this
+        -- pool's parked world if it is from this week (e.g. back on PvP after a
+        -- Normal alt), otherwise start from the week's initial state.
+        local worlds = type(OverlordDB.worldsByPool) == "table" and OverlordDB.worldsByPool or {}
+        local mine = worlds[currentPool]
+        worlds[currentPool] = nil
+        if type(mine) ~= "table"
+            or not self:CampaignEpochsMatch(mine.epoch, tonumber(OverlordDB.lastResetTimestamp) or 0) then
+            mine = nil
+        end
+        for _, key in ipairs(RULESET_WORLD_KEYS) do
+            local value = mine and mine[key]
+            OverlordDB[key] = type(value) == "table" and value or {}
+        end
+        for _, key in ipairs(RULESET_WORLD_SCALARS) do OverlordDB[key] = mine and mine[key] or nil end
+        if type(OverlordDB.leaderboard) == "table" and currentPool ~= "global" then
+            OverlordDB.leaderboard = nil
+        end
+        OverlordDB.lastSessionPool = currentPool
+    end
+    return true
+end
+
 -- An unreleased 1.4.0 build parked outposts alone in OverlordDB.outpostsByPool,
 -- which nothing reads any more: a PvP character came back with an empty capture
 -- history. Merge those parked rows back once (same campaign week only): capture

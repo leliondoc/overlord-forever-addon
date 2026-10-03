@@ -6105,9 +6105,13 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
         -- Preserve a recoverable snapshot, but publish an attested empty bucket
         -- on a fresh install so two empty peers can finish their handshake.
         local previous = OverlordDB.leaderboardSnapshot
+        -- 1.4.1: an empty ladder never keeps another ruleset's snapshot.
+        local previousPool = normalizeSavedVarsPool(type(previous) == "table"
+            and tostring(previous.pool or "global") or "")
         if #killRows == 0 and #capRows == 0 and type(previous) == "table"
             and previous.campaignStart == state.campaignStart
-            and previous.scoreBucketEpoch == state.scoreBucketEpoch then
+            and previous.scoreBucketEpoch == state.scoreBucketEpoch
+            and previousPool == currentSavedVarsPool() then
             self._snapshotDirty = changedDuringBuild
             self._snapshotBuildPending = nil
             self:ResolveSnapshotCompletion(true)

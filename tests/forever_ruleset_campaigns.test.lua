@@ -19,16 +19,16 @@ ruleset("pvp")
 local before = received()
 net:Receive(relayed("global"), "Bridge Tester", "BNET", 123)
 assert(received() == before + 1, "PvP client refused a PvP packet")
-net:Receive(relayed("normal"), "Bridge Tester", "BNET", 123)
+net:Receive(relayed("pve"), "Bridge Tester", "BNET", 123)
 assert(received() == before + 1, "PvP client accepted a Normal-ruleset packet")
 
 ruleset("normal")
 before = received()
 net:Receive(relayed("global"), "Bridge Tester", "BNET", 123)
 assert(received() == before, "Normal client accepted a PvP packet")
-net:Receive(relayed("normal"), "Bridge Tester", "BNET", 123)
+net:Receive(relayed("pve"), "Bridge Tester", "BNET", 123)
 assert(received() == before + 1, "Normal client refused its own ruleset")
-assert(s:GetMyBand() == "Forever_normal_A", "Battle.net band does not carry the ruleset: " .. s:GetMyBand())
+assert(s:GetMyBand() == "Forever_pve_A", "Battle.net band does not carry the ruleset: " .. s:GetMyBand())
 
 -- Legacy-format Battle.net messages carry the sender's band: another ruleset is dropped.
 local dispatched = 0
@@ -36,9 +36,34 @@ local realDispatch = s.DispatchBNetMessage
 s.DispatchBNetMessage = function(...) dispatched = dispatched + 1; return realDispatch(...) end
 s:OnBNetMessage("EK:Forever_global_A:x", 123)
 assert(dispatched == 0, "A PvP friend's Battle.net message reached a Normal client")
-s:OnBNetMessage("EK:Forever_normal_A:x", 123)
+s:OnBNetMessage("EK:Forever_pve_A:x", 123)
 assert(dispatched == 1, "A same-ruleset Battle.net message was dropped")
 s.DispatchBNetMessage = realDispatch
+-- 1.4.1: the 1.4.0 Normal tags are retired: their packets and bands are refused.
+before = received()
+net:Receive(relayed("normal"), "Bridge Tester", "BNET", 123)
+assert(received() == before, "A 1.4.0 Normal-ruleset packet was accepted")
+dispatched = 0
+s.DispatchBNetMessage = function(...) dispatched = dispatched + 1 end
+s:OnBNetMessage("EK:Forever_normal_A:x", 123)
+assert(dispatched == 0, "A 1.4.0 Normal band was accepted")
+s.DispatchBNetMessage = realDispatch
+
+-- 1.4.1 leak fix: the attested ladder snapshot is served only in its own pool
+-- (1.4.0 Normal clients served their old 1.3.x PvP snapshot to each other).
+if s.GetAttestedLeaderboardSnapshot and Overlord.GetCurrentCampaignStartTs then
+    local start = Overlord:GetCurrentCampaignStartTs()
+    OverlordDB.leaderboardScoreBucketEpoch = start
+    OverlordDB.campaignId = Overlord.TimestampToCampaignId and Overlord:TimestampToCampaignId(start) or 0
+    local legacy = { campaignStart = start, scoreBucketEpoch = start, kills = { ["Pvp Player"] = 5 } }
+    OverlordDB.leaderboardSnapshot = legacy
+    ruleset("pvp")
+    assert(s:GetAttestedLeaderboardSnapshot() == legacy, "PvP lost its pre-1.4 snapshot")
+    ruleset("normal")
+    assert(s:GetAttestedLeaderboardSnapshot() == nil, "A Normal client served a PvP snapshot")
+    legacy.pool = "pve"
+    assert(s:GetAttestedLeaderboardSnapshot() == legacy, "A Normal client refused its own snapshot")
+end
 ruleset("pvp")
 
 
@@ -55,8 +80,8 @@ local pools = detect({ [3] = true }, "Classic Beta PvP")
 assert(pools:GetRuleset() == "pvp" and pools:GetOverlordPoolTag() == "global"
     and pools:GetChannelSuffix() == "", "PvP ruleset must keep the historical campaign")
 pools = detect({}, "Classic Beta PvE 2")
-assert(pools:GetRuleset() == "normal" and pools:GetOverlordPoolTag() == "normal"
-    and pools:GetChannelSuffix() == "N", "No rule on = Normal ruleset")
+assert(pools:GetRuleset() == "normal" and pools:GetOverlordPoolTag() == "pve"
+    and pools:GetChannelSuffix() == "E", "No rule on = Normal ruleset")
 assert(detect({ [2] = true }, "x"):GetRuleset() == "rp")
 assert(detect({ [1] = true, [3] = true }, "x"):GetRuleset() == "hardcore", "Hardcore wins over PvP")
 -- No game-rule API: the realm name decides; never a guess beyond it.
@@ -83,10 +108,13 @@ assert(pools:GetRuleset() == "normal", "Ruleset changed mid-session")
 for _, legacy in ipairs({ "global", "na", "us", "eu", "fr", "de", "EU" }) do
     assert(pools:NormalizeRegionPool(legacy) == "global", legacy)
 end
-for _, tag in ipairs({ "normal", "rp", "hardcore" }) do
+for _, tag in ipairs({ "pve", "rpg", "hc" }) do
     assert(pools:NormalizeRegionPool(tag) == tag, tag)
 end
 assert(pools:NormalizeRegionPool("pvp") == "" and pools:NormalizeRegionPool("x1") == "")
-assert(not pools:AreOutpostCrossPoolsLinked("global", "normal"))
+for _, retired in ipairs({ "normal", "rp", "hardcore" }) do
+    assert(pools:NormalizeRegionPool(retired) == "", "Retired 1.4.0 tag still accepted: " .. retired)
+end
+assert(not pools:AreOutpostCrossPoolsLinked("global", "pve"))
 
 print("Ruleset campaigns: detection, pools, relay and Battle.net separation OK")
