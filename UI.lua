@@ -3,8 +3,6 @@ Overlord = Overlord or {}
 Overlord.UI = Overlord.UI or {}
 Overlord.UI.SHARD_TOOLTIP_PLAYER_MAX = 12
 Overlord.UI.SHARD_TOOLTIP_SCAN_MAX = 48
--- Indisponibilite de l'interface d'adhesion uniquement, independante de la sync.
-Overlord.UI.COMMUNITY_JOIN_AVAILABLE = false
 
 local L = Overlord.L
 
@@ -24,8 +22,7 @@ local activeZoneFrame = nil
 -- Partages aussi par les fonctions de creation/invalidation definies plus haut
 -- que leurs lecteurs. Une declaration tardive creerait deux caches distincts
 -- (global accidentel et upvalue locale), donc une invalidation sans effet.
-local lastCommunityLayoutKey = nil
-local lastCommunityLayoutClubState = nil
+local lastPanelLayoutKey = nil
 local lastForcesOffZone = false
 local lastForcesDisplayKey = nil
 local lastHeaderBandHeight = nil
@@ -920,7 +917,7 @@ function Overlord.UI:CreateMainFrame()
     RegisterPanelLinkHandler()
     mainFrame = mainFrameShell
     userMovedPanel = mainFrame:IsUserPlaced()
-    -- Largeur fixe. Hauteur initiale : sera recalculée par ApplyCommunityHintLayout (plus de vide sous la progression).
+    -- Largeur fixe. Hauteur initiale : recalculee par ApplyPanelLayout.
     mainFrame:SetSize(340, 520)
     self:ApplyUiScale()
     self:UpdatePanelAnchor()
@@ -1164,8 +1161,8 @@ function Overlord.UI:CreateMainFrame()
     self:CreateActiveZoneSection(mainFrame)
     self:SyncFrontPickerButtonText()
     self:SyncHeaderLayout()
-    lastCommunityLayoutKey = nil
-    self:ApplyCommunityHintLayout(lastCommunityLayoutClubState ~= false)
+    lastPanelLayoutKey = nil
+    self:ApplyPanelLayout()
 
     -- Bouton fermer WC3
     Overlord.UI.CreateWC3CloseButton(mainFrame, function() Overlord.UI:Hide() end, { gold = C.gold })
@@ -1179,22 +1176,6 @@ function Overlord.UI:CreateMainFrame()
     mainFrame:Hide()
 end
 
--- Variables partagees entre CreateZoneListSection, ApplyCommunityHintLayout et RefreshCommunityButton
-local communityBtn = nil
-local communityHintLabel = nil
-local communityHintSubLabel = nil
-local communityHintPanel = nil
-local communityHintIcon = nil
-local communityHintCta = nil
-local communitySuccessUntil = 0
-local COMMUNITY_CLUB_POLL_INTERVAL = 10
-local COMMUNITY_STATS_INTERVAL = 5
-local lastCommunityClubPollAt = 0
-local cachedCommunityClubId = nil
-local lastCommunityStatsAt = 0
-local cachedCommunityOnline = nil
-local communityMembershipEventFrame = nil
-local communityMembershipRefreshPending = false
 local GK_HUD_REFRESH_INTERVAL = 15
 local lastGkHudRefreshAt = 0
 local lastMainFrameHeight = nil
@@ -1208,9 +1189,6 @@ local cachedRefreshActiveZoneAt = 0
 local REFRESH_ACTIVE_ZONE_LOOKUP_SEC = 1.0
 local lastShardScanFromUiAt = 0
 local SHARD_UI_SCAN_INTERVAL = 3.0
--- Au login C_Club n'est pas charge immediatement : on bloque l'affichage du panneau rouge pendant 3 s
--- pour eviter le flash parasite chez les membres. Les non-membres verront le panneau apres ce delai.
-local communityCheckReady = false
 
 -- Libelle court du bouton choix de front (dropdown).
 local function FrontPickerDropdownLabel(front)
@@ -1320,7 +1298,7 @@ function Overlord.UI:OpenFrontPickerMenu(anchor)
                             if Overlord.CheckActiveFrontZone then
                                 Overlord:CheckActiveFrontZone()
                             end
-                            self:ApplyCommunityHintLayout(lastCommunityLayoutClubState ~= false)
+                            self:ApplyPanelLayout()
                             self:Refresh()
                         end)
                     end
@@ -1412,7 +1390,7 @@ function Overlord.UI:OpenFrontPickerMenuFallback(anchor)
                 if Overlord.CheckActiveFrontZone then
                     Overlord:CheckActiveFrontZone()
                 end
-                self:ApplyCommunityHintLayout(lastCommunityLayoutClubState ~= false)
+                self:ApplyPanelLayout()
                 self:ForceZoneListRefresh()
                 self:Refresh()
             end)
@@ -1429,8 +1407,7 @@ end
 -- ---------- Section liste des zones ----------
 function Overlord.UI:CreateZoneListSection(parent)
     zoneListFrame = CreateFrame("Frame", nil, parent)
-    -- +16px : bandeau rouge hors-communaute sous les boutons Classement / Communaute
-    -- Hauteur initiale provisoire, sera recalee par ApplyCommunityHintLayout
+    -- Hauteur initiale provisoire, recalee par ApplyPanelLayout.
     zoneListFrame:SetSize(320, 330)
     if self.headerBand then
         zoneListFrame:SetPoint("TOP", self.headerBand, "BOTTOM", 0, -6)
@@ -1438,7 +1415,7 @@ function Overlord.UI:CreateZoneListSection(parent)
         zoneListFrame:SetPoint("TOP", parent, "TOP", 0, -108)
     end
 
-    -- Grille d'actions placee sous l'etat du front par ApplyCommunityHintLayout.
+    -- Grille d'actions placee sous l'etat du front par ApplyPanelLayout.
     local ACTIONS_CARD_W = 304
     local btnWidth = 145
     local btnHeight = 28
@@ -1472,18 +1449,14 @@ function Overlord.UI:CreateZoneListSection(parent)
     end)
     zoneListFrame.lbBtn = lbBtn
 
-    communityBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
+    -- Emplacement reserve (grille equilibree) : Forever n'a pas de communaute,
+    -- le bouton reste grise avec son explication.
+    local communityBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
         L.COMMUNITY_BTN_JOIN, "Interface\\Icons\\Achievement_GuildPerk_EverybodysFriend")
     communityBtn:SetPoint("TOPRIGHT", actionsCard, "TOPRIGHT", -4, gridTop)
     AttachGridButtonTooltip(communityBtn, L.COMMUNITY_BTN_TOOLTIP or L.COMMUNITY_BTN_JOIN)
-    communityBtn:SetScript("OnClick", function()
-        Overlord.UI:OnCommunityButtonClick()
-    end)
     zoneListFrame.communityBtn = communityBtn
-    -- Temporairement indisponible sur la beta ; les transports communautaires
-    -- restent actifs. Reutiliser le meme rendu grise que les autres boutons.
-    if (not self.COMMUNITY_JOIN_AVAILABLE or Overlord.CommunityModeEnabled == false)
-        and self.SetWC3ButtonUnavailable then
+    if self.SetWC3ButtonUnavailable then
         self.SetWC3ButtonUnavailable(communityBtn, L.COMMUNITY_BUTTON_UNAVAILABLE)
     end
 
@@ -1582,67 +1555,6 @@ function Overlord.UI:CreateZoneListSection(parent)
         self:RefreshActionGridActiveState()
     end
 
-    -- Carte de statut communaute : placee dans l'en-tete, directement sous
-    -- les portraits et le compteur de forces, pour rester impossible a rater.
-    communityHintPanel = CreateFrame("Frame", nil, self.headerBand or zoneListFrame, "BackdropTemplate")
-    communityHintPanel:SetSize(304, 42)
-    communityHintPanel:SetPoint("TOP", self.headerBand or zoneListFrame, "TOP", 0, -68)
-    communityHintPanel:SetBackdrop({
-        bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile     = true, tileSize = 16, edgeSize = 10,
-        insets   = { left = 3, right = 3, top = 3, bottom = 3 },
-    })
-    communityHintPanel:SetBackdropColor(0.16, 0.035, 0.035, 0.96)
-    communityHintPanel:SetBackdropBorderColor(0.82, 0.22, 0.16, 0.92)
-    communityHintPanel:EnableMouse(true)
-    communityHintPanel:Hide()
-    communityHintPanel:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        if self._communitySuccess then
-            GameTooltip:SetText(L.COMMUNITY_SYNC_ACTIVE, 0.38, 1, 0.58, 1, true)
-        else
-            GameTooltip:SetText(L.COMMUNITY_HINT_TOOLTIP, 1, 0.92, 0.82, 1, true)
-        end
-        GameTooltip:Show()
-    end)
-    communityHintPanel:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    communityHintPanel:SetScript("OnMouseUp", function(_, button)
-        if button == "LeftButton" then Overlord.UI:OnCommunityButtonClick() end
-    end)
-
-    communityHintIcon = communityHintPanel:CreateTexture(nil, "ARTWORK")
-    communityHintIcon:SetSize(24, 24)
-    communityHintIcon:SetPoint("LEFT", communityHintPanel, "LEFT", 12, 0)
-    communityHintIcon:SetTexture("Interface\\DialogFrame\\UI-Dialog-Icon-AlertNew")
-    communityHintIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-
-    communityHintLabel = communityHintPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    communityHintLabel:SetPoint("TOPLEFT", communityHintIcon, "TOPRIGHT", 7, 1)
-    communityHintLabel:SetWidth(164)
-    communityHintLabel:SetJustifyH("LEFT")
-    communityHintLabel:SetWordWrap(false)
-    communityHintLabel:SetMaxLines(1)
-    communityHintLabel:SetTextColor(1, 0.38, 0.25)
-    communityHintLabel:SetShadowOffset(1, -1)
-    local _, sz = communityHintLabel:GetFont()
-    if sz then communityHintLabel:SetFont(communityHintLabel:GetFont(), math.max(10, sz)) end
-
-    communityHintSubLabel = communityHintPanel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    communityHintSubLabel:SetPoint("TOPLEFT", communityHintLabel, "BOTTOMLEFT", 0, -2)
-    communityHintSubLabel:SetWidth(164)
-    communityHintSubLabel:SetJustifyH("LEFT")
-    communityHintSubLabel:SetWordWrap(false)
-    communityHintSubLabel:SetMaxLines(1)
-    communityHintSubLabel:SetTextColor(0.92, 0.76, 0.60, 0.95)
-    communityHintSubLabel:SetShadowOffset(1, -1)
-
-    communityHintCta = CreateWC3Button(communityHintPanel, 88, 24, L.COMMUNITY_SYNC_JOIN)
-    communityHintCta:SetPoint("RIGHT", communityHintPanel, "RIGHT", -8, 0)
-    communityHintCta:SetScript("OnClick", function()
-        Overlord.UI:OnCommunityButtonClick()
-    end)
-
     -- Barre de domination hebdomadaire (Alliance vs Horde), en tete de la section.
     -- 256 px (was 300): room on each side for the faction crests below.
     local domBar = CreateFrame("Frame", nil, zoneListFrame, "BackdropTemplate")
@@ -1708,7 +1620,6 @@ function Overlord.UI:CreateZoneListSection(parent)
     -- Largeur de reference : GetWidth() peut etre 0 avant layout / premier Show (barre invisible).
     domBar._nominalWidth = 256
     Overlord.UI.domBar = domBar
-    zoneListFrame.communityHintPanel = communityHintPanel
     zoneListFrame.domTitleLabel = domTitle
     zoneListFrame.domBarFrame = domBar
 
@@ -1740,106 +1651,18 @@ function Overlord.UI:CreateZoneListSection(parent)
         table.insert(zoneListFrame.zoneLines, line)
     end
 
-    zoneListFrame._communityLayoutReady = true
+    zoneListFrame._layoutReady = true
     -- Premiere peinture des fills (CheckWeeklyReset peut avoir eu lieu avant l'init UI).
     self:RefreshDomination()
-    -- Toujours demarrer panneau cache (C_Club pas encore charge au login).
-    -- Apres 3 s C_Club est pret : on applique le vrai etat. Les non-membres voient le panneau a ce moment.
-    self:ApplyCommunityHintLayout(true)
-    lastCommunityLayoutClubState = true
-    C_Timer.After(3, function()
-        communityCheckReady = true
-        if not Overlord.UI or not zoneListFrame then return end
-        local inClub = Overlord.Sync and Overlord.Sync.HasCommunityClub
-            and Overlord.Sync:HasCommunityClub()
-        if lastCommunityLayoutClubState ~= inClub then
-            lastCommunityLayoutClubState = inClub
-            Overlord.UI:ApplyCommunityHintLayout(inClub)
-        end
-        if Overlord.Sync then
-            if inClub then
-                if Overlord.Sync.HandleCommunityMembershipDetected then
-                    Overlord.Sync:HandleCommunityMembershipDetected()
-                end
-            elseif Overlord.Sync.HandleCommunityMembershipLost then
-                Overlord.Sync:HandleCommunityMembershipLost()
-            end
-        end
-    end)
+    self:ApplyPanelLayout()
 end
 
-local function ApplyCommunityHintVisual(success)
-    if not communityHintPanel then return end
-    if success then
-        communityHintPanel._communitySuccess = true
-        communityHintPanel:SetBackdropColor(0.035, 0.13, 0.07, 0.96)
-        communityHintPanel:SetBackdropBorderColor(0.20, 0.72, 0.38, 0.92)
-        if communityHintIcon then
-            communityHintIcon:SetTexture("Interface\\RaidFrame\\ReadyCheck-Ready")
-            communityHintIcon:SetTexCoord(0, 1, 0, 1)
-        end
-        if communityHintLabel then
-            communityHintLabel:SetWidth(246)
-            communityHintLabel:SetText(L.COMMUNITY_SYNC_ACTIVE)
-            communityHintLabel:SetTextColor(0.38, 1, 0.58)
-        end
-        if communityHintSubLabel then
-            communityHintSubLabel:SetWidth(246)
-            communityHintSubLabel:SetText(L.COMMUNITY_SYNC_ACTIVE_SUB)
-            communityHintSubLabel:SetTextColor(0.68, 0.90, 0.74, 0.95)
-        end
-        if communityHintCta then communityHintCta:Hide() end
-    else
-        communityHintPanel._communitySuccess = false
-        communityHintPanel:SetBackdropColor(0.16, 0.035, 0.035, 0.96)
-        communityHintPanel:SetBackdropBorderColor(0.82, 0.22, 0.16, 0.92)
-        if communityHintIcon then
-            communityHintIcon:SetTexture("Interface\\DialogFrame\\UI-Dialog-Icon-AlertNew")
-            communityHintIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-        end
-        if communityHintLabel then
-            communityHintLabel:SetWidth(164)
-            communityHintLabel:SetText(L.COMMUNITY_SYNC_DISABLED)
-            communityHintLabel:SetTextColor(1, 0.38, 0.25)
-        end
-        if communityHintSubLabel then
-            communityHintSubLabel:SetWidth(164)
-            communityHintSubLabel:SetText(L.COMMUNITY_SYNC_REQUIRED)
-            communityHintSubLabel:SetTextColor(0.92, 0.76, 0.60, 0.95)
-        end
-        if communityHintCta then
-            communityHintCta:Show()
-            if communityHintCta.label then communityHintCta.label:SetText(L.COMMUNITY_SYNC_JOIN) end
-        end
-    end
-end
-
-local function ShowCommunityJoinSuccess()
-    communitySuccessUntil = GetTime() + 4
-    lastCommunityLayoutKey = nil
-    if C_Timer and C_Timer.After then
-        C_Timer.After(4.1, function()
-            if not Overlord.UI or GetTime() < communitySuccessUntil then return end
-            communitySuccessUntil = 0
-            lastCommunityLayoutKey = nil
-            -- Respecter l'etat courant : si l'adhesion a ete perdue pendant
-            -- l'animation verte, l'avertissement rouge doit rester visible.
-            Overlord.UI:ApplyCommunityHintLayout(lastCommunityLayoutClubState == true)
-        end)
-    end
-end
-
--- Recalcule domination, contenu principal, actions, bandeau communaute et hauteur totale.
-function Overlord.UI:ApplyCommunityHintLayout(memberOfClub)
-    if not self.COMMUNITY_JOIN_AVAILABLE or Overlord.CommunityModeEnabled == false then
-        memberOfClub = true
-        communitySuccessUntil = 0
-    end
+-- Recalcule domination, contenu principal, actions et hauteur totale du panneau.
+function Overlord.UI:ApplyPanelLayout()
     local zf = zoneListFrame
-    if not zf or not zf._communityLayoutReady or not zf.domBarFrame or not zf.domTitleLabel or not zf.zonesPanel or not zf.zoneListHeader then
+    if not zf or not zf._layoutReady or not zf.domBarFrame or not zf.domTitleLabel or not zf.zonesPanel or not zf.zoneListHeader then
         return
     end
-    local inClub = memberOfClub and true or false
     local gridBottom = zf._actionGridBottom or 102
     local actionsH = zf.actionsCard and zf.actionsCard:GetHeight() or math.max(0, gridBottom - 4)
     local nZones = 0
@@ -1856,16 +1679,13 @@ function Overlord.UI:ApplyCommunityHintLayout(memberOfClub)
     local lineH = ZONE_LINE_NORMAL_H
     local activeVisible = activeZoneFrame and activeZoneFrame:IsShown()
     local activeH = activeVisible and (activeZoneFrame:GetHeight() or 64) or 0
-    local showSuccess = inClub and GetTime() < communitySuccessUntil
-    local showCommunityHint = not inClub or showSuccess
-    local communityMode = showSuccess and "success" or (inClub and "hidden" or "warning")
-    local layoutKey = communityMode .. "|" .. gridBottom .. "|" .. nZones .. "|" .. lineH
+    local layoutKey = gridBottom .. "|" .. nZones .. "|" .. lineH
         .. "|" .. (frontOnTruce and "truce" or "normal")
         .. "|" .. (activeVisible and "1" or "0") .. "|" .. activeH
-    if layoutKey == lastCommunityLayoutKey then
+    if layoutKey == lastPanelLayoutKey then
         return
     end
-    lastCommunityLayoutKey = layoutKey
+    lastPanelLayoutKey = layoutKey
     lastMainFrameHeight = nil
     local domBar = zf.domBarFrame
     local domTitle = zf.domTitleLabel
@@ -1875,7 +1695,7 @@ function Overlord.UI:ApplyCommunityHintLayout(memberOfClub)
     local actionsGap = 8
 
     if self.headerBand then
-        self.headerBand:SetHeight(showCommunityHint and 116 or 66)
+        self.headerBand:SetHeight(66)
     end
 
     domBar:ClearAllPoints()
@@ -1883,12 +1703,6 @@ function Overlord.UI:ApplyCommunityHintLayout(memberOfClub)
     domBar:SetPoint("TOP", zf, "TOP", 0, -domTop)
     domTitle:SetPoint("BOTTOMLEFT", domBar, "TOPLEFT", 0, 1)
     domTitle:SetPoint("BOTTOMRIGHT", domBar, "TOPRIGHT", 0, 1)
-    if zf.communityHintPanel then
-        zf.communityHintPanel:SetShown(showCommunityHint)
-        if showCommunityHint then ApplyCommunityHintVisual(showSuccess) end
-    end
-    domBar:SetAlpha(inClub and 1 or 0.62)
-    domTitle:SetAlpha(inClub and 1 or 0.68)
 
     zf.zonesPanel:ClearAllPoints()
     zf.zonesPanel:SetPoint("TOP", domBar, "BOTTOM", 0, -zonesGap)
@@ -2209,7 +2023,7 @@ function Overlord.UI:CreateActiveZoneSection(parent)
     activeZoneFrame:Hide()
     zoneListFrame.activeZoneFrame = activeZoneFrame
     self.activeZoneFrame = activeZoneFrame
-    lastCommunityLayoutKey = nil
+    lastPanelLayoutKey = nil
 end
 
 -- Ajuste la hauteur du panneau zone active (pas de bande vide si pas de statut).
@@ -2224,9 +2038,9 @@ function Overlord.UI:SyncActiveZoneFrameHeight()
     if tagText == lastActiveZoneTagText and lastActiveZoneFrameHeight then
         if activeZoneFrame:GetHeight() ~= lastActiveZoneFrameHeight then
             activeZoneFrame:SetHeight(lastActiveZoneFrameHeight)
-            lastCommunityLayoutKey = nil
+            lastPanelLayoutKey = nil
             lastMainFrameHeight = nil
-            self:ApplyCommunityHintLayout(lastCommunityLayoutClubState ~= false)
+            self:ApplyPanelLayout()
         end
         return
     end
@@ -2242,158 +2056,9 @@ function Overlord.UI:SyncActiveZoneFrameHeight()
     end
     lastActiveZoneFrameHeight = h
     activeZoneFrame:SetHeight(h)
-    lastCommunityLayoutKey = nil
+    lastPanelLayoutKey = nil
     lastMainFrameHeight = nil
-    self:ApplyCommunityHintLayout(lastCommunityLayoutClubState ~= false)
-end
-
--- ---------- Bouton communaute ----------
-
--- Popup de copie du code : necessaire car le ticket doit entrer dans le flux protege
--- par une action utilisateur native. Un appel addon a CommunitiesHyperlink taint le
--- callback CLUB_TICKET_RECEIVED et Blizzard bloque GetLastTicketResponse().
-local communityPopupFrame = nil
-
-local function OpenCommunitiesAddFlow()
-    local inInstance, instanceType = IsInInstance()
-    if inInstance and (instanceType == "arena" or instanceType == "pvp") then return end
-    if InCombatLockdown() then return end
-
-    C_Timer.After(0, function()
-        if InCombatLockdown() then return end
-        if AddCommunitiesFlow_IsShown and AddCommunitiesFlow_IsShown() then return end
-
-        -- Charge l'interface Blizzard uniquement lorsque le joueur ferme la popup.
-        if UIParentLoadAddOn then
-            pcall(UIParentLoadAddOn, "Blizzard_Communities")
-        end
-
-        if AddCommunitiesFlow_IsShown and AddCommunitiesFlow_IsShown() then return end
-        if AddCommunitiesFlow_Toggle then
-            securecall(AddCommunitiesFlow_Toggle)
-        end
-    end)
-end
-
-local function CreateCommunityPopupFrame()
-    local f = CreateFrame("Frame", "OverlordCommunityPopup", UIParent, "BackdropTemplate")
-    if Overlord.UI.AttachOpenFade then Overlord.UI.AttachOpenFade(f) end
-    f:SetSize(460, 200)
-    f:SetPoint("CENTER")
-    f:SetBackdrop({
-        bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile     = true, tileSize = 32, edgeSize = 32,
-        insets   = { left = 8, right = 8, top = 8, bottom = 8 },
-    })
-    f:SetBackdropColor(0.06, 0.06, 0.10, 0.97)
-    f:SetBackdropBorderColor(0.85, 0.68, 0.20, 0.85)
-    f:SetFrameStrata("DIALOG")
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", function(self) self:StartMoving() end)
-    f:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
-    f:SetClampedToScreen(true)
-    f:Hide()
-
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("TOP", 0, -14)
-    title:SetText(L.COMMUNITY_POPUP_TITLE)
-    title:SetTextColor(0.85, 0.68, 0.20)
-
-    local step1 = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    step1:SetPoint("TOPLEFT", 18, -40)
-    step1:SetText(L.COMMUNITY_POPUP_STEP1)
-    step1:SetTextColor(0.9, 0.9, 0.9)
-
-    local step2 = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    step2:SetPoint("TOPLEFT", 18, -56)
-    step2:SetText(L.COMMUNITY_POPUP_STEP2)
-    step2:SetTextColor(0.9, 0.9, 0.9)
-
-    local step3 = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    step3:SetPoint("TOPLEFT", 18, -72)
-    step3:SetText(L.COMMUNITY_POPUP_STEP3)
-    step3:SetTextColor(0.9, 0.9, 0.9)
-
-    local hint = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hint:SetPoint("TOPLEFT", 18, -96)
-    hint:SetText(L.COMMUNITY_POPUP_HINT)
-    hint:SetTextColor(0.50, 0.50, 0.50)
-
-    local eb = CreateFrame("EditBox", nil, f, "BackdropTemplate")
-    eb:SetMultiLine(false)
-    eb:SetAutoFocus(false)
-    eb:SetFontObject(GameFontHighlightSmall)
-    eb:SetPoint("TOPLEFT",  f, "TOPLEFT",  18, -116)
-    eb:SetPoint("TOPRIGHT", f, "TOPRIGHT", -18, -116)
-    eb:SetHeight(26)
-    eb:SetTextInsets(6, 6, 2, 2)
-    eb:SetBackdrop({
-        bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile     = true, tileSize = 16, edgeSize = 12,
-        insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    eb:SetBackdropColor(0.04, 0.04, 0.06, 0.95)
-    eb:SetBackdropBorderColor(0.50, 0.42, 0.18, 0.7)
-    eb:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    eb:SetScript("OnEnterPressed",  function(self) self:ClearFocus() end)
-    f.editBox = eb
-
-    local closeBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    closeBtn:SetSize(90, 22)
-    closeBtn:SetPoint("BOTTOM", 0, 14)
-    closeBtn:SetText(L.EXPORT_CLOSE)
-    closeBtn:SetScript("OnClick", function() f:Hide() end)
-
-    Overlord.UI.CreateWC3CloseButton(f, function() f:Hide() end)
-        :SetPoint("TOPRIGHT", -8, -8)
-
-    f:SetScript("OnKeyDown", function(self, key)
-        if key == "ESCAPE" then
-            self:SetPropagateKeyboardInput(false)
-            self:Hide()
-        else
-            self:SetPropagateKeyboardInput(true)
-        end
-    end)
-    f:EnableKeyboard(true)
-    f:SetScript("OnShow", function()
-        if Overlord.PlayPanelOpenSound then Overlord:PlayPanelOpenSound() end
-        if Overlord.UI and Overlord.UI.ScheduleActionGridActiveRefresh then
-            Overlord.UI:ScheduleActionGridActiveRefresh()
-        end
-    end)
-    f:SetScript("OnHide", function()
-        if eb then eb:ClearFocus() end
-        if Overlord.PlayPanelCloseSound then Overlord:PlayPanelCloseSound() end
-        OpenCommunitiesAddFlow()
-        if Overlord.UI and Overlord.UI.ScheduleActionGridActiveRefresh then
-            Overlord.UI:ScheduleActionGridActiveRefresh()
-        end
-    end)
-
-    return f
-end
-
-function Overlord.UI:ShowCommunityPopup()
-    if not self.COMMUNITY_JOIN_AVAILABLE or Overlord.CommunityModeEnabled == false then return end
-    if not Overlord.Sync then return end
-    if not communityPopupFrame then
-        communityPopupFrame = CreateCommunityPopupFrame()
-    end
-
-    communityPopupFrame.editBox:SetText(Overlord.Sync:GetCommunityInviteCode())
-    communityPopupFrame:Show()
-
-    C_Timer.After(0.05, function()
-        if communityPopupFrame and communityPopupFrame:IsShown() then
-            communityPopupFrame.editBox:SetFocus()
-            communityPopupFrame.editBox:HighlightText()
-        end
-    end)
+    self:ApplyPanelLayout()
 end
 
 -- ---------- Popup Discord (lien a copier-coller, meme logique que l'export Check PvP) ----------
@@ -2549,131 +2214,6 @@ function Overlord.UI:OnDiscordButtonClick()
     self:ShowDiscordPopup()
 end
 
-function Overlord.UI:OnCommunityButtonClick()
-    if not self.COMMUNITY_JOIN_AVAILABLE then return end
-    if communityBtn and communityBtn._olUnavailable then return end
-    if Overlord.CommunityModeEnabled == false then return end
-    if not Overlord.Sync or not Overlord.Sync.FindCommunityClub then return end
-    lastCommunityClubPollAt = 0
-    -- A join can happen after the last background scan. The click must inspect
-    -- Blizzard's current club list instead of reusing the five-minute cache.
-    local clubId = Overlord.Sync:FindCommunityClub(true)
-    cachedCommunityClubId = clubId
-    if clubId then
-        if Overlord.Sync.HandleCommunityMembershipDetected then
-            Overlord.Sync:HandleCommunityMembershipDetected()
-        end
-        local inInstance, instanceType = IsInInstance()
-        if inInstance and (instanceType == "arena" or instanceType == "pvp") then
-            Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.CANNOT_IN_COMBAT)
-            return
-        end
-        if InCombatLockdown() then
-            Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.CANNOT_IN_COMBAT)
-            return
-        end
-        if ToggleCommunitiesFrame then
-            if not CommunitiesFrame or not CommunitiesFrame:IsShown() then
-                securecall(ToggleCommunitiesFrame)
-            end
-            if CommunitiesFrame and CommunitiesFrame.SelectClub then
-                securecall(CommunitiesFrame.SelectClub, CommunitiesFrame, clubId)
-            end
-        end
-        return
-    end
-
-    self:ShowCommunityPopup()
-end
-
-local function OnCommunityMembershipChanged()
-    if Overlord.CommunityModeEnabled == false or not Overlord.Sync
-        or communityMembershipRefreshPending then return end
-    communityMembershipRefreshPending = true
-    -- CLUB_ADDED can fire before GetSubscribedClubs has finished updating.
-    C_Timer.After(0.2, function()
-        communityMembershipRefreshPending = false
-        if not Overlord.Sync or not Overlord.UI then return end
-        Overlord.Sync:ResetCommunitySearch()
-        cachedCommunityClubId = Overlord.Sync:FindCommunityClub(true)
-        lastCommunityClubPollAt = GetTime()
-        if Overlord.UI.RefreshCommunityButton then
-            Overlord.UI:RefreshCommunityButton()
-        end
-    end)
-end
-
-communityMembershipEventFrame = CreateFrame("Frame")
-communityMembershipEventFrame:RegisterEvent("CLUB_ADDED")
-communityMembershipEventFrame:RegisterEvent("CLUB_REMOVED")
-communityMembershipEventFrame:SetScript("OnEvent", OnCommunityMembershipChanged)
-
-function Overlord.UI:RefreshCommunityButton()
-    if not self.COMMUNITY_JOIN_AVAILABLE or Overlord.CommunityModeEnabled == false then
-        if communityHintPanel then communityHintPanel:Hide() end
-        if lastCommunityLayoutClubState ~= true then
-            lastCommunityLayoutClubState = true
-            self:ApplyCommunityHintLayout(true)
-        end
-        return
-    end
-    if not communityBtn or communityBtn._olUnavailable
-        or not Overlord.Sync or not Overlord.Sync.FindCommunityClub then return end
-    local now = GetTime()
-    if now - lastCommunityClubPollAt >= COMMUNITY_CLUB_POLL_INTERVAL then
-        lastCommunityClubPollAt = now
-        cachedCommunityClubId = Overlord.Sync:FindCommunityClub()
-    end
-    local clubId = cachedCommunityClubId
-    local hovered = communityBtn:IsMouseOver()
-    if clubId then
-        if now - lastCommunityStatsAt >= COMMUNITY_STATS_INTERVAL then
-            lastCommunityStatsAt = now
-            local _, online = Overlord.Sync:GetCommunityStats()
-            cachedCommunityOnline = online
-        end
-        local online = cachedCommunityOnline
-        local btnText
-        if online and online > 0 then
-            btnText = string.format(L.COMMUNITY_BTN_ONLINE, online)
-        else
-            btnText = L.COMMUNITY_BTN_JOIN
-        end
-        if communityBtn.label:GetText() ~= btnText then
-            communityBtn.label:SetText(btnText)
-        end
-        communityBtn.baseTextColor = C.blueBright
-        if not hovered then
-            communityBtn.label:SetTextColor(C.blueBright[1], C.blueBright[2], C.blueBright[3])
-        end
-    else
-        communityBtn.label:SetText(L.COMMUNITY_BTN_JOIN)
-        communityBtn.baseTextColor = C.gold
-        if not hovered then
-            communityBtn.label:SetTextColor(C.gold[1], C.gold[2], C.gold[3])
-        end
-    end
-    -- Ne recaler les ancres que si l'etat communaute change (pas a chaque seconde).
-    -- Pendant le delai de demarrage (3 s) on n'autorise que la transition vers "membre" (masquer le panneau),
-    -- jamais vers "non-membre" (evite le flash rouge parasite au login).
-    local inClub = clubId ~= nil
-    if lastCommunityLayoutClubState ~= inClub then
-        if inClub or communityCheckReady then
-            if inClub and lastCommunityLayoutClubState == false then
-                ShowCommunityJoinSuccess()
-            end
-            lastCommunityLayoutClubState = inClub
-            self:ApplyCommunityHintLayout(inClub)
-            if Overlord.Sync then
-                if inClub and Overlord.Sync.HandleCommunityMembershipDetected then
-                    Overlord.Sync:HandleCommunityMembershipDetected()
-                elseif communityCheckReady and Overlord.Sync.HandleCommunityMembershipLost then
-                    Overlord.Sync:HandleCommunityMembershipLost()
-                end
-            end
-        end
-    end
-end
 
 -- ============ Refresh logique ============
 
@@ -2714,7 +2254,6 @@ function Overlord.UI:UpdateTick()
     self:RefreshActiveZone()
     self:UpdateZoneListTimers()
     self:RefreshForces()
-    self:RefreshCommunityButton()
     if Overlord.Popups and Overlord.Popups.RefreshNextObjective then
         Overlord.Popups:RefreshNextObjective()
     end
@@ -2865,7 +2404,7 @@ function Overlord.UI:RefreshActionGridActiveState()
         lb = Overlord.LeaderboardUI and Overlord.LeaderboardUI.IsShown and Overlord.LeaderboardUI:IsShown() or false,
         hof = Overlord.HallOfFameUI and Overlord.HallOfFameUI.IsShown and Overlord.HallOfFameUI:IsShown() or false,
         tutorial = Overlord.Popups and Overlord.Popups.IsQuickGuideShown and Overlord.Popups:IsQuickGuideShown() or false,
-        community = communityPopupFrame and communityPopupFrame:IsShown() or false,
+        community = false,
         discord = discordPopupFrame and discordPopupFrame:IsShown() or false,
         front = self._frontPickerPopup and self._frontPickerPopup:IsShown() or false,
         settings = Overlord.SettingsPanel and Overlord.SettingsPanel.IsOpen and Overlord.SettingsPanel:IsOpen() or false,
@@ -2968,7 +2507,7 @@ end
 function Overlord.UI:Refresh()
     if not mainFrame or Overlord.InstanceSuspended then return end
     -- Court-circuit si l'UI est cachee : evite RefreshForces (scan 40 nameplates)
-    -- et RefreshCommunityButton (securecalls C_Club) en combat ou hors front.
+    -- en combat ou hors front.
     if not mainFrame:IsShown() then return end
     self:RefreshPanelState()
     self:RefreshZoneListIfNeeded()
@@ -2978,7 +2517,6 @@ function Overlord.UI:Refresh()
     self:RefreshDomination()
     self:RefreshActionGridLabels()
     self:ScheduleActionGridActiveRefresh()
-    self:RefreshCommunityButton()
 end
 
 function Overlord.UI:RefreshFrontEmblems()
@@ -3292,7 +2830,7 @@ function Overlord.UI:RefreshZoneList()
     local truceLayoutChanged = zoneListFrame._lastTruceLayoutToken ~= truceToken
     if truceLayoutChanged then
         zoneListFrame._lastTruceLayoutToken = truceToken
-        lastCommunityLayoutKey = nil
+        lastPanelLayoutKey = nil
     end
 
     local orderedZones = Overlord.Zones:GetDisplayOrderForFront(viewFrontId)
@@ -3307,7 +2845,7 @@ function Overlord.UI:RefreshZoneList()
         end
     end
     if needsRebind then
-        lastCommunityLayoutKey = nil
+        lastPanelLayoutKey = nil
         for i, zone in ipairs(orderedZones) do
             local line = zoneListFrame.zoneLines[i]
             if not line then
@@ -3326,9 +2864,9 @@ function Overlord.UI:RefreshZoneList()
                 zoneListFrame.zoneLines[i]:Hide()
             end
         end
-        self:ApplyCommunityHintLayout(lastCommunityLayoutClubState ~= false)
+        self:ApplyPanelLayout()
     elseif truceLayoutChanged then
-        self:ApplyCommunityHintLayout(lastCommunityLayoutClubState ~= false)
+        self:ApplyPanelLayout()
     end
 
     local pf = Overlord.PlayerFaction
@@ -3380,17 +2918,17 @@ function Overlord.UI:RefreshActiveZone()
         lastActiveZoneTagText = ""
         lastActiveZoneFrameHeight = nil
         activeZoneFrame:Hide()
-        lastCommunityLayoutKey = nil
+        lastPanelLayoutKey = nil
         lastMainFrameHeight = nil
-        self:ApplyCommunityHintLayout(lastCommunityLayoutClubState ~= false)
+        self:ApplyPanelLayout()
         return
     end
     lastActiveZoneIdle = false
     if not activeZoneFrame:IsShown() then
         activeZoneFrame:Show()
-        lastCommunityLayoutKey = nil
+        lastPanelLayoutKey = nil
         lastMainFrameHeight = nil
-        self:ApplyCommunityHintLayout(lastCommunityLayoutClubState ~= false)
+        self:ApplyPanelLayout()
     end
 
     if Overlord.IsLoginZoneDisplayPending and Overlord:IsLoginZoneDisplayPending(az) then
@@ -3619,7 +3157,7 @@ local SPECTATOR_FULL_REFRESH_INTERVAL = 5
 local spectatorLastFullRefresh = 0
 local spectatorLastTimerTick = nil
 
--- Rafraichissement leger hors front : pas RefreshForces ni RefreshCommunityButton.
+-- Rafraichissement leger hors front : pas RefreshForces.
 function Overlord.UI:RefreshSpectatorLocal()
     if not mainFrame or not mainFrame:IsShown() then return end
     local now = GetTime()
