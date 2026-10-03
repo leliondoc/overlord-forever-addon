@@ -4514,9 +4514,11 @@ function Overlord.Sync:OnReceiveCapture(payload, sender)
             and (zone.owner == Overlord.PlayerFaction or zone.previousOwner == Overlord.PlayerFaction) then
             if ts < zone.capturedTime
                 or (ts == zone.capturedTime and not ownedDuplicateCapture) then
+                self:NoteEnemyCaptureFinal(newOwner, "C", "stale")
                 return
             end
         elseif zone.capturedTime and zone.capturedTime > ts then
+            self:NoteEnemyCaptureFinal(newOwner, "C", "stale")
             return
         end
     end
@@ -4529,24 +4531,40 @@ function Overlord.Sync:OnReceiveCapture(payload, sender)
             zoneId, newOwner == "Alliance" and "A" or "H", ts,
             triggerName, captureWaveId, captureOriginGuid,
             captureFinalRequirement) or nil
-    if not captureFinalClaimKey then return end
+    if not captureFinalClaimKey then
+        self:NoteEnemyCaptureFinal(newOwner, "C", "legacy")
+        return
+    end
     local finalRequirementZone = zone or (Overlord.Fronts and select(1, Overlord.Fronts:GetZone(zoneId)))
     local directCaptureFinal = ownedDuplicateCapture and #parsedContributors == 1
     -- Seul le C emis directement par son unique capteur peut muter owner/status.
-    if not directCaptureFinal then return end
+    if not directCaptureFinal then
+        self:NoteEnemyCaptureFinal(newOwner, "C", "notDirect")
+        return
+    end
     if Overlord.CaptureLease
         and Overlord.CaptureLease.ShouldRejectFinal
         and Overlord.CaptureLease:ShouldRejectFinal(
-            finalRequirementZone, triggerName, captureWaveId) then return end
+            finalRequirementZone, triggerName, captureWaveId) then
+        self:NoteEnemyCaptureFinal(newOwner, "C", "expiredWave")
+        return
+    end
     if Overlord.CaptureLease
         and Overlord.CaptureLease.FinalSatisfiesLocalRequirement
         and not Overlord.CaptureLease:FinalSatisfiesLocalRequirement(
             finalRequirementZone, newOwner, triggerName, captureWaveId,
-            captureFinalRequirement) then return end
+            captureFinalRequirement) then
+        self:NoteEnemyCaptureFinal(newOwner, "C", "otherCapturer")
+        return
+    end
     -- Admission fail-closed avant le moindre credit/effet. Les paquets invalides
     -- n'entretiennent plus un scan du ledger, et une saturation ne peut pas
     -- oublier une livraison encore rejouable puis doubler la capture.
-    if not EnsureCaptureDedupCapacity(captureDeliveryKey, now) then return end
+    if not EnsureCaptureDedupCapacity(captureDeliveryKey, now) then
+        self:NoteEnemyCaptureFinal(newOwner, "C", "ledgerFull")
+        return
+    end
+    self:NoteEnemyCaptureFinal(newOwner, "C", "passed")
     -- Le sender WoW est une identite de transport non choisie par le payload.
     -- Une claim moderne complete (faction, wave, GUID, requis, timestamp),
     -- apres les gardes du bail local ci-dessus, redevient canonique
@@ -6756,15 +6774,25 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
             and self:BuildCaptureFinalClaimKey(
                 zoneId, ownerCode, ts, zsCapturerName, zsWaveId, zsOriginGuid,
                 zsFinalRequirement) or nil
-        if status == "captured" and not captureFinalClaimKey then return end
+        if status == "captured" and not captureFinalClaimKey then
+            self:NoteEnemyCaptureFinal(owner, "ZS", "legacy")
+            return
+        end
         if captureFinalClaimKey and Overlord.CaptureLease and Overlord.CaptureLease.ShouldRejectFinal
             and Overlord.CaptureLease:ShouldRejectFinal(
-                knownStateZone, zsCapturerName, zsWaveId) then return end
+                knownStateZone, zsCapturerName, zsWaveId) then
+            self:NoteEnemyCaptureFinal(owner, "ZS", "expiredWave")
+            return
+        end
         if captureFinalClaimKey and Overlord.CaptureLease
             and Overlord.CaptureLease.FinalSatisfiesLocalRequirement
             and not Overlord.CaptureLease:FinalSatisfiesLocalRequirement(
                 knownStateZone, owner, zsCapturerName, zsWaveId,
-                zsFinalRequirement) then return end
+                zsFinalRequirement) then
+            self:NoteEnemyCaptureFinal(owner, "ZS", "otherCapturer")
+            return
+        end
+        if captureFinalClaimKey then self:NoteEnemyCaptureFinal(owner, "ZS", "passed") end
         stateClaimKey = captureFinalClaimKey or table.concat({
             tostring(campaignEpoch or campaignId or 0), tostring(zoneId or ""),
             tostring(status or ""), tostring(ownerCode or ""), tostring(ts or 0),

@@ -334,6 +334,7 @@ local function StartNetworkProbe()
             R.Detail("Campaign: " .. pools:GetRuleset() .. " ruleset (pool " .. pools:GetOverlordPoolTag()
                 .. ", channel OverlordF" .. pools:GetChannelSuffix() .. ")")
         end
+        if sync.GetEnemyCaptureFinalDiagnostics then R.Detail(sync:GetEnemyCaptureFinalDiagnostics()) end
         if sync.GetHistoryCatchupDiagnostics then
             for _, line in ipairs(sync:GetHistoryCatchupDiagnostics()) do R.Detail(line) end
         end

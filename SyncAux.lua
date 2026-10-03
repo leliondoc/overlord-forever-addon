@@ -2815,6 +2815,31 @@ function Overlord.Sync:ResolveFactionCallPlace(zoneId, frontId)
 end
 
 -- Message chat de victoire totale, avec le front concerne quand il est connu.
+-- 1.4.1 diagnostics: enemy capture finals (C, ZS captured) that reached this client,
+-- by outcome. Live report: Horde captures seen in progress but not turning red on
+-- Alliance maps. Counters only: no message sent, no behaviour change.
+function Overlord.Sync:NoteEnemyCaptureFinal(faction, kind, outcome)
+    if faction ~= "Alliance" and faction ~= "Horde" or faction == Overlord.PlayerFaction then return end
+    local stats = self._enemyFinalStats
+    if not stats then
+        stats = {}
+        self._enemyFinalStats = stats
+    end
+    local key = kind .. " " .. outcome
+    stats[key] = (stats[key] or 0) + 1
+end
+
+function Overlord.Sync:GetEnemyCaptureFinalDiagnostics()
+    local stats = self._enemyFinalStats
+    if not stats or next(stats) == nil then return "Enemy capture finals: none received yet." end
+    local keys = {}
+    for key in pairs(stats) do keys[#keys + 1] = key end
+    table.sort(keys)
+    local parts = {}
+    for _, key in ipairs(keys) do parts[#parts + 1] = key .. " " .. stats[key] end
+    return "Enemy capture finals (C / ZS captured): " .. table.concat(parts, ", ") .. "."
+end
+
 function Overlord.Sync:FormatTotalVictoryMessage(factionName, frontId)
     local known = frontId and frontId ~= "" and Overlord.Fronts and Overlord.Fronts.GetFront
         and Overlord.Fronts:GetFront(frontId)
