@@ -158,7 +158,7 @@ for i = 1, N do
     local total = 5 + math.floor((N - i) * 4990 / N)      -- 5 .. 4995, never > ceiling
     assert(total <= ceiling)
     SOURCE.Overlord.Leaderboard.kills[name] = total
-    SOURCE.Overlord.Leaderboard.playerInfo[name] = { class = "WARRIOR", faction = "Horde", level = 2,
+    SOURCE.Overlord.Leaderboard.playerInfo[name] = { class = "WARRIOR", faction = "Horde", level = 60,
         locale = "engb", guild = guild, guildAt = 1790016000 }
     rows[i] = name
     guildTruth[guild] = (guildTruth[guild] or 0) + total

@@ -1087,7 +1087,7 @@ end
 -- jamais perdue, et une ligne connue ne peut plus etre gonflee d'un seul paquet.
 local LK_UNSOLICITED_ALLOWANCE, LK_UNSOLICITED_RATE = 30, 1
 local subjectTotalAt, subjectTotalAtCount = {}, 0
-function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore)
+function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender)
     local key = tostring(playerName or ""):lower()
     local now = GetTime()
     local last = subjectTotalAt[key]
@@ -1097,16 +1097,136 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore)
     end
     subjectTotalAt[key] = now
     if (killsBefore or 0) <= 0 then return kills end
-    local elapsed = last and math.max(0, now - last) or 600
+    local elapsed
+    if last then
+        elapsed = math.max(0, now - last)
+    else
+        -- Premier total de ce sujet dans la session : le precedent date au plus
+        -- tard de notre derniere deconnexion, la fenetre couvre toute l'absence.
+        local serverNow = Overlord.ServerNow and Overlord.ServerNow() or time()
+        local lastSession = tonumber(OverlordDB and OverlordDB.lastSessionTimestamp) or 0
+        elapsed = math.max(600, lastSession > 0 and (serverNow - lastSession) or 600)
+    end
     local ceiling = killsBefore + LK_UNSOLICITED_ALLOWANCE + math.floor(elapsed * LK_UNSOLICITED_RATE)
     if kills > ceiling then
         local betaNet = Overlord.BetaNetwork
         if betaNet and betaNet.stats then
             betaNet.stats.unsolicitedTotalsClamped = (betaNet.stats.unsolicitedTotalsClamped or 0) + 1
         end
+        self:NoteSuspiciousSender(sender, "total clamped")
         return ceiling
     end
     return kills
+end
+
+-- Expediteurs dont un paquet a ete borne ou refuse pour implausibilite. Un compteur
+-- par nom (64 au plus), lu par /ov network : rien n'est automatique, le joueur
+-- decide quoi en faire (liste de refus, signalement).
+local suspiciousSenders, suspiciousSenderCount = {}, 0
+function Overlord.Sync:NoteSuspiciousSender(sender, reason)
+    if type(sender) ~= "string" or sender == "" or sender:find("^BNet%-", 1) then return end
+    local key = sender
+    local row = suspiciousSenders[key]
+    if not row then
+        if suspiciousSenderCount >= 64 then return end
+        suspiciousSenderCount = suspiciousSenderCount + 1
+        row = { total = 0 }
+        suspiciousSenders[key] = row
+    end
+    row.total = row.total + 1
+    row[reason] = (row[reason] or 0) + 1
+end
+function Overlord.Sync:GetSuspiciousSenderDiagnostics()
+    local rows = {}
+    for name, row in pairs(suspiciousSenders) do rows[#rows + 1] = { name = name, row = row } end
+    if #rows == 0 then return "Suspicious senders: none." end
+    table.sort(rows, function(a, b)
+        if a.row.total ~= b.row.total then return a.row.total > b.row.total end
+        return a.name < b.name
+    end)
+    local parts = {}
+    for i = 1, math.min(5, #rows) do
+        local reasons = {}
+        for reason, count in pairs(rows[i].row) do
+            if reason ~= "total" then reasons[#reasons + 1] = reason .. " " .. count end
+        end
+        table.sort(reasons)
+        parts[#parts + 1] = rows[i].name .. " (" .. table.concat(reasons, ", ") .. ")"
+    end
+    return "Suspicious senders (implausible packets, top 5): " .. table.concat(parts, "; ") .. "."
+end
+
+-- Cadence des captures finales par capteur (1.4.2). Un joueur ne termine jamais
+-- deux captures de zones differentes a moins de 45 s (maintien 120 s, trajet) ;
+-- un client modifie qui repeint la carte d'un coup est borne a une zone par
+-- 45 s. Decide sur le timestamp du paquet, identique chez tous les receveurs.
+local CAPTURE_FINAL_MIN_GAP = 45
+local lastFinalByOrigin, lastFinalByOriginCount = {}, 0
+function Overlord.Sync:AdmitCaptureFinalRate(originName, zoneId, ts, sender)
+    local key = self.GetCaptureContributorDedupKey and self:GetCaptureContributorDedupKey(originName)
+        or tostring(originName or ""):lower()
+    if not key or key == "" or not zoneId then return true end
+    ts = math.floor(tonumber(ts) or 0)
+    local last = lastFinalByOrigin[key]
+    if last and last.zoneId ~= zoneId and math.abs(ts - last.ts) < CAPTURE_FINAL_MIN_GAP then
+        self:NoteSuspiciousSender(sender, "capture rate")
+        return false
+    end
+    if not last then
+        if lastFinalByOriginCount >= 512 then lastFinalByOrigin, lastFinalByOriginCount = {}, 0 end
+        lastFinalByOriginCount = lastFinalByOriginCount + 1
+        last = {}
+        lastFinalByOrigin[key] = last
+    end
+    if ts >= (last.ts or 0) then last.ts, last.zoneId = ts, zoneId end
+    return true
+end
+
+-- Trafic en direct recu pour une zone (C, ZS, ticks) : sert a juger si un
+-- basculement propose par une carte ZA est surprenant.
+priv.liveZoneSeenAt = {}
+function Overlord.Sync:NoteLiveZoneTraffic(zoneId)
+    if zoneId then priv.liveZoneSeenAt[zoneId] = GetTime() end
+end
+
+-- Basculement de proprietaire propose par une carte ZA alors que nous recevons le
+-- trafic en direct de cette zone depuis moins de 10 min sans avoir vu la capture :
+-- une seule source ne suffit pas. Le basculement est garde en attente et applique
+-- des qu'une seconde source (autre pair, ou le C/ZS lui-meme) le confirme ; un
+-- client qui a tout manque (connexion, absence) accepte au premier coup. Un
+-- client modifie ne repeint donc plus seul la carte de ses voisins actifs.
+local ZA_FLIP_LIVE_WINDOW, ZA_FLIP_CONFIRM_WINDOW, ZA_FLIP_MAX = 600, 300, 64
+priv.zaFlipClaims = {}
+local zaFlipClaimCount = 0
+function Overlord.Sync:IsSuspiciousZaFlip(zoneId, zone, owner, ct, sender)
+    if not zone or not owner or zone.owner == owner then return false end
+    local now = GetTime()
+    local liveAt = priv.liveZoneSeenAt[zoneId]
+    if not liveAt or now - liveAt > ZA_FLIP_LIVE_WINDOW then return false end
+    if (tonumber(ct) or 0) <= (tonumber(zone.capturedTime) or 0) then return false end
+    local senderKey = tostring(sender or ""):lower()
+    local pending = priv.zaFlipClaims[zoneId]
+    if pending and now - pending.at > ZA_FLIP_CONFIRM_WINDOW then
+        priv.zaFlipClaims[zoneId] = nil
+        zaFlipClaimCount = zaFlipClaimCount - 1
+        pending = nil
+    end
+    if pending and pending.owner == owner and math.abs(pending.ct - (tonumber(ct) or 0)) <= 5
+        and pending.sender ~= senderKey then
+        priv.zaFlipClaims[zoneId] = nil
+        zaFlipClaimCount = zaFlipClaimCount - 1
+        return false
+    end
+    if not pending then
+        if zaFlipClaimCount >= ZA_FLIP_MAX then return false end
+        zaFlipClaimCount = zaFlipClaimCount + 1
+    end
+    priv.zaFlipClaims[zoneId] = { owner = owner, ct = tonumber(ct) or 0, sender = senderKey, at = now }
+    local betaNet = Overlord.BetaNetwork
+    if betaNet and betaNet.stats then
+        betaNet.stats.zaFlipsHeld = (betaNet.stats.zaFlipsHeld or 0) + 1
+    end
+    return true
 end
 
 -- Une nouvelle cle distante n'est admise que si elle appartient a l'emetteur
@@ -2750,10 +2870,18 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
         and self:IsValidCaptureClassToken(class) or false
     local localeVerified = locTag and locTag ~= ""
     local sanitized = self.SanitizeSyncedKillTotal
-        and self:SanitizeSyncedKillTotal(totalKills)
-    if not sanitized then return end
+        and self:SanitizeSyncedKillTotal(totalKills, levelToken)
+    if not sanitized then
+        self:NoteSuspiciousSender(sender, "kill ceiling")
+        return
+    end
     totalKills = sanitized
     local totalBefore = Overlord.Leaderboard.kills and Overlord.Leaderboard.kills[playerName] or 0
+    -- Meme borne de croissance que les totaux non sollicites : un proprietaire
+    -- ne peut pas se donner des milliers de kills d'un seul paquet. Un total reel
+    -- grandit bien moins vite que 30 + 1/s ; le rattrapage apres absence passe
+    -- par la fenetre "depuis la derniere session".
+    totalKills = self:BoundUnsolicitedKillTotal(playerName, totalKills, totalBefore, sender)
     local guildRegister = tonumber(guildAtTag) and tonumber(guildAtTag) > 0
     local validGuild = guildTag and guildTag ~= ""
         and self.IsValidGuildSyncToken and self:IsValidGuildSyncToken(guildTag) or false
@@ -3636,6 +3764,7 @@ function Overlord.Sync:OnReceiveCapture(payload, sender)
     end
 
     if not zoneId or not participantsStr or participantsStr == "" then return end
+    self:NoteLiveZoneTraffic(zoneId)
 
     -- Participants : "Nom,Nom2" (legacy) ou "Nom|WARRIOR,Nom2|MAGE" (WoW n'autorise ni | ni , dans les noms)
     local parsedContributors = {}
@@ -3754,6 +3883,10 @@ function Overlord.Sync:OnReceiveCapture(payload, sender)
             finalRequirementZone, newOwner, triggerName, captureWaveId,
             captureFinalRequirement) then
         self:NoteEnemyCaptureFinal(newOwner, "C", "otherCapturer")
+        return
+    end
+    if not self:AdmitCaptureFinalRate(triggerName, zoneId, ts, sender) then
+        self:NoteEnemyCaptureFinal(newOwner, "C", "rateLimited")
         return
     end
     -- Admission fail-closed avant le moindre credit/effet. Les paquets invalides
@@ -5864,6 +5997,7 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
         or (Overlord.Fronts and Overlord.Fronts.GetZone
             and select(1, Overlord.Fronts:GetZone(zoneId))))
     if not knownStateZone then return end
+    self:NoteLiveZoneTraffic(zoneId)
     local remoteSiegePhase = tonumber(siegePhaseStr) or 0
     local remoteHoldParsed = tonumber(remoteHoldReqStr)
     if remoteHoldParsed then
@@ -6005,6 +6139,10 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
         end
         if not terminalVerified then
             if captureFinalClaimKey then self:NoteEnemyCaptureFinal(owner, "ZS", "notDirect") end
+            return
+        end
+        if captureFinalClaimKey and not self:AdmitCaptureFinalRate(zsCapturerName, zoneId, ts, sender) then
+            self:NoteEnemyCaptureFinal(owner, "ZS", "rateLimited")
             return
         end
         if captureFinalClaimKey then self:NoteEnemyCaptureFinal(owner, "ZS", "passed") end
@@ -7155,6 +7293,12 @@ function Overlord.Sync:OnReceiveZoneAll(
             and not CanNeutralZaReplaceCanonicalCapture(zoneId, stateZoneForVote, ts) then
             staleSkipMask[entryIndex] = true
         end
+        -- Basculement surprenant pendant un suivi en direct : garde locale jusqu'a
+        -- une seconde source (voir IsSuspiciousZaFlip).
+        if validEntry and owner and stateZoneForVote
+            and self:IsSuspiciousZaFlip(zoneId, stateZoneForVote, owner, ct, sender) then
+            staleSkipMask[entryIndex] = true
+        end
         if validEntry then
             validEntry = not IsStaleCampaignTimestamp(ts)
                 and not ShouldRejectStaleTruceResetZone(zoneId, ts)
@@ -7903,7 +8047,7 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     local factionClaimVerified = validFaction
     local localeClaimVerified = locTag and locTag ~= ""
     local sanitizedKills = self.SanitizeSyncedKillTotal
-        and self:SanitizeSyncedKillTotal(kills)
+        and self:SanitizeSyncedKillTotal(kills, levelToken)
     if not sanitizedKills then return end
     kills = sanitizedKills
     local guildAt = tonumber(guildAtStr) or 0
@@ -7936,9 +8080,10 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
         Overlord.Leaderboard:SetPlayerLevel(playerName, levelToken)
     end
     local killsBefore = Overlord.Leaderboard.kills and Overlord.Leaderboard.kills[playerName] or 0
-    if not guildOwner and not guildSnapshot
-        and not self:HasExpectedFullLeaderboardResponse(sender, channel) then
-        kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore)
+    -- Un total non sollicite (y compris celui que le proprietaire annonce lui-meme
+    -- par LK) suit la meme borne de croissance que K.
+    if not guildSnapshot and not self:HasExpectedFullLeaderboardResponse(sender, channel) then
+        kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender)
     end
     Overlord.Leaderboard:SetPlayerKills(playerName, kills, true)
     -- 1.3.2 live-score bridge: an enemy total from a Battle.net friend goes on to our

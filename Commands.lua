@@ -289,6 +289,7 @@ local function StartNetworkProbe()
                 .. (pools._rulesetAssumed and " ASSUMED: game rules and realm name gave no answer" or ""))
         end
         if sync.GetEnemyCaptureFinalDiagnostics then R.Detail(sync:GetEnemyCaptureFinalDiagnostics()) end
+        if sync.GetSuspiciousSenderDiagnostics then R.Detail(sync:GetSuspiciousSenderDiagnostics()) end
         if sync.GetHistoryCatchupDiagnostics then
             for _, line in ipairs(sync:GetHistoryCatchupDiagnostics()) do R.Detail(line) end
         end

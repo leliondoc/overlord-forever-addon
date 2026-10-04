@@ -28,8 +28,13 @@ local net = Overlord.BetaNetwork
 Overlord.PlayerFaction = "Alliance"
 Overlord.InstanceSuspended = false
 function s:GetChannelId() return 5 end
-local channelSends = 0
-function s:SendAddonChecked(msg, chatType) if chatType == "CHANNEL" then channelSends = channelSends + 1 end return true end
+local channelWires = {}
+function s:SendAddonChecked(msg, chatType) if chatType == "CHANNEL" then channelWires[#channelWires + 1] = msg end return true end
+local function channelSendsOf(id)
+    local n = 0
+    for _, msg in ipairs(channelWires) do if msg:find("|" .. id .. "|", 1, true) then n = n + 1 end end
+    return n
+end
 function s:SendToBNet() return true end
 function s:GetBetaBNetTargets() return {} end
 
@@ -83,9 +88,17 @@ assert(Overlord.Leaderboard.kills["Far Player"] == clamped + 30 + 20,
 advance(100)
 s:OnReceiveLeaderboardKills(lkRow("Far Player", clamped + 60, "Horde"), "Some Peer", "CHANNEL")
 assert(Overlord.Leaderboard.kills["Far Player"] == clamped + 60, "plausible unsolicited growth was altered")
--- The owner's own K is never clamped.
+-- The owner's own K follows the same growth bound (+30 right after the last total).
 ownK("Far Player", 5000, "Horde")
-assert(Overlord.Leaderboard.kills["Far Player"] == 5000, "the owner's own total was clamped: " .. tostring(Overlord.Leaderboard.kills["Far Player"]))
+assert(Overlord.Leaderboard.kills["Far Player"] == clamped + 60 + 30,
+    "the owner's own jump was not bounded: " .. tostring(Overlord.Leaderboard.kills["Far Player"]))
+-- First total of a subject in this session: the window covers our whole absence,
+-- so an honest catch-up after a day away is accepted at once.
+OverlordDB.lastSessionTimestamp = time() - 86400
+know("Absent Player", 100, "Horde")
+ownK("Absent Player", 5000, "Horde")
+assert(Overlord.Leaderboard.kills["Absent Player"] == 5000, "honest catch-up after a day away was clamped")
+OverlordDB.lastSessionTimestamp = nil
 
 -- ===== (2) bridge hold on Battle.net broadcasts
 net.BridgeChannelHold = { 2, 15 }
@@ -102,19 +115,17 @@ for i = 1, chunks do
     net:ReceiveFragment("c-1:" .. i .. ":" .. chunks .. ":" .. copy:sub((i - 1) * 170 + 1, i * 170), "Other Hearer", "CHANNEL")
 end
 assert((net.stats.bridgeForwardsCancelled or 0) == 1, "channel copy did not cancel the held forward")
-local channelBefore = channelSends
 advance(16)
-assert(channelSends == channelBefore, "cancelled forward still went on the channel")
+assert(channelSendsOf("c-1") == 0, "cancelled forward still went on the channel")
 -- Without a channel copy the forward leaves after the hold.
 local wire2 = "global|c-2|" .. time() .. "|*|Horde Origin,Friend Seven|FR|f1:Horde:" .. (time() + 1)
-local sentBefore = net.stats.sent or 0
 net:Receive(wire2, "Friend Seven", "BNET", 7)
 assert((net.stats.bridgeForwardsHeld or 0) == 2)
 advance(1)
-assert(net:GetQueueSummary().total == before and (net.stats.sent or 0) == sentBefore, "forward left before the hold")
+assert(channelSendsOf("c-2") == 0, "forward left before the hold")
 advance(15)
 assert((net.stats.bridgeForwardsSent or 0) >= 1, "held forward was never sent")
-assert(channelSends > channelBefore, "forward not put on the channel after the hold")
+assert(channelSendsOf("c-2") == 1, "forward not put on the channel after the hold")
 -- A broadcast heard on the channel while grouped: the group copy waits and is
 -- dropped when a mate's copy arrives in the raid.
 IsInGroup = function() return true end

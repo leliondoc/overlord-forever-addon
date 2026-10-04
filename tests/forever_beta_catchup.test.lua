@@ -152,14 +152,14 @@ for i = 1, 500 do
     names[#names + 1] = name
     local lb = d.Overlord.Leaderboard
     lb.kills[name] = i * 10
-    lb.playerInfo[name] = { class = "WARRIOR", faction = "Horde", level = 2,
+    lb.playerInfo[name] = { class = "WARRIOR", faction = "Horde", level = 60,
         locale = "engb", guild = "Veteran Guild", guildAt = 1790016000 }
     if i > 460 then lb.playerInfo[name].race, lb.playerInfo[name].raceSex = "Orc", 2 end
     if i <= 120 then lb.captureCount[name], lb.captures[name] = i, {} end
 end
 a.Overlord.Leaderboard.kills["Unique Tester"] = 4999
 a.Overlord.Leaderboard.playerInfo["Unique Tester"] = {
-    class = "PRIEST", faction = "Alliance", level = 2, locale = "engb" }
+    class = "PRIEST", faction = "Alliance", level = 60, locale = "engb" }
 
 -- Every replica runs its own production scheduler for an hour of periodic rounds.
 for _, e in ipairs(clients) do

@@ -140,7 +140,9 @@ kOverBnet("Horde Owner", 3000)
 advance(5)
 kOverBnet("Horde Owner", 3003)
 advance(130)
-assert(Overlord.Leaderboard.kills["Horde Owner"] == 3003, "fixture: the bridge accepts the owner's K itself")
+-- 1.4.2: the owner's own jump is bounded too (+30 kills + 1/s since the last total).
+local bounded = Overlord.Leaderboard.kills["Horde Owner"]
+assert(bounded > 138 and bounded < 1000, "owner's implausible jump was not bounded: " .. tostring(bounded))
 for _, r in ipairs(lkRows(base + 1)) do assert(r.total < 1000, "an implausible total was re-emitted: " .. r.total) end
 
 -- 5. cap: 8 subjects at once -> at most 6 rows in the first minute, all delivered afterwards

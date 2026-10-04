@@ -1535,7 +1535,17 @@ end
 -- du bucket de campagne dans Sync.lua, toute replique plausible doit rejoindre
 -- le max local. Un quorum ici rendait le resultat dependant des messages recus
 -- par chaque client et bloquait notamment le rattrapage BNet/cross-realm.
-function Overlord.Sync:SanitizeSyncedKillTotal(total)
+-- Plafond par niveau (1.4.2) : 2000 + 150 par niveau (niveau 14 : 4100, niveau 30 :
+-- 6500, 10000 des le niveau 54). Un personnage de niveau 14 avec 5000 kills dans la
+-- semaine etait la triche observee. Le niveau voyage dans le paquet K/LK lui-meme :
+-- la regle est identique chez tous les receveurs, donc sans divergence.
+function Overlord.Sync:MaxPlausibleKillsForLevel(level)
+    level = tonumber(level)
+    if not level or level >= 54 then return PLAUSIBLE_KILL_CEILING end
+    return math.min(PLAUSIBLE_KILL_CEILING, 2000 + math.floor(level) * 150)
+end
+
+function Overlord.Sync:SanitizeSyncedKillTotal(total, level)
     total = math.floor(tonumber(total) or 0)
     if total <= 0 then return 0 end
     if total > PLAUSIBLE_KILL_CEILING then
@@ -1543,6 +1553,7 @@ function Overlord.Sync:SanitizeSyncedKillTotal(total)
         -- un vieux total contamine jusqu'au reset hebdomadaire.
         return nil
     end
+    if level ~= nil and total > self:MaxPlausibleKillsForLevel(level) then return nil end
     return total
 end
 

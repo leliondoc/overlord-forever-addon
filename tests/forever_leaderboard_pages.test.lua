@@ -151,7 +151,7 @@ for i = 1, 5000 do
     names[i] = name
     local lb = SOURCE.Overlord.Leaderboard
     lb.kills[name] = i
-    lb.playerInfo[name] = { class = "WARRIOR", faction = "Horde", level = 2,
+    lb.playerInfo[name] = { class = "WARRIOR", faction = "Horde", level = 60,
         locale = "engb", guild = "Veteran Guild", guildAt = 1790016000 }
 end
 local done, supported
