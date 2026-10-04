@@ -296,6 +296,14 @@ local function BuildOutpostPayload(siteKey, st)
         end
         payload = payload .. string.format(":%s:%s:%d:%d:%s",
             prevG, prevF, prevCa, prevEx, capturerName)
+    elseif status == "held" then
+        -- 1.5.1 : le capteur voyage avec l'etat tenu, dans le champ deja lu par tous
+        -- les clients (meme queue que in_progress, champs precedents vides).
+        local heldCapturer = OP.NormalizeHeldCapturerName
+            and OP:NormalizeHeldCapturerName(st.heldCapturerName) or nil
+        if heldCapturer then
+            payload = payload .. string.format(":%s:%s:%d:%d:%s", "", "", 0, 0, heldCapturer)
+        end
     end
     return payload
 end
@@ -1158,6 +1166,15 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
                 and (stBefore.status ~= "held"
                     or Overlord.Outpost:SanitizeGuildName(stBefore.ownerGuild or "") ~= heldGuild
                     or stBefore.ownerFaction ~= remoteFac)
+            -- Capteur de l'etat tenu (1.5.1) : appris d'une annonce qui le nomme ; un
+            -- changement de proprietaire sans nom efface l'ancien.
+            local namedCapturer = Overlord.Outpost.NormalizeHeldCapturerName
+                and Overlord.Outpost:NormalizeHeldCapturerName(relayCapturer) or nil
+            if stateChanged then
+                stAfter.heldCapturerName = namedCapturer
+            elseif namedCapturer and not stAfter.heldCapturerName then
+                stAfter.heldCapturerName = namedCapturer
+            end
             -- Changement ou simple confirmation d'un etat tenu : journal (borne a une
             -- ligne par 10 min pour une confirmation repetee).
             if not ownerSourceVerified then
@@ -1306,7 +1323,8 @@ function Overlord.Sync:OnReceiveOutpostCapture(payload, sender, sourceChannel)
         end
     end
 
-    if not Overlord.Outpost:CompleteCapture(siteKey, guild, fac, remoteTs, remotePool, true) then return end
+    if not Overlord.Outpost:CompleteCapture(siteKey, guild, fac, remoteTs, remotePool, true,
+        NormalizeOpCapturerName(sender)) then return end
     if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
         Overlord.LeaderboardUI:RefreshIfVisible()
     end

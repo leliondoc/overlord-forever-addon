@@ -214,3 +214,18 @@ do
     assert(sync:GetOutpostClaimDiagnostics():find("none", 1, true), "empty log not reported")
 end
 print("Outpost claim log: unverified claims named, bounded, reported")
+
+-- 1.5.1: the player who took an outpost is kept with the held state (never shown,
+-- never required yet); a name that would break the wire format is refused.
+do
+    op:ResetOutpostsForCampaign()
+    local st = op:GetState("silverpine")
+    assert(op:CompleteCapture("silverpine", "Named Guild", "Alliance", nil, nil, true, "Capper Tester"),
+        "fixture capture refused")
+    assert(st.heldCapturerName == "Capper Tester", "the capturer was not kept with the held state")
+    assert(op:NormalizeHeldCapturerName("Bad:Name") == nil and op:NormalizeHeldCapturerName("X") == nil,
+        "an unsafe capturer name was accepted")
+    op:ResetOutpostsForCampaign()
+    assert(op:GetState("silverpine").heldCapturerName == nil, "the capturer survived the campaign reset")
+end
+print("Outpost held capturer: kept on capture, sanitized, cleared at reset")

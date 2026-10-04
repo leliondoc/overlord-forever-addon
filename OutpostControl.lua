@@ -543,7 +543,7 @@ function Overlord.OutpostControl:CompleteCapture(siteKey, st, site)
     end
     local fac = st.ownerFaction or Overlord.PlayerFaction
     if not OP:IsCaptureTakeoverAllowed(st, guild, fac, time(), site) then return end
-    if not OP:CompleteCapture(siteKey, guild, fac) then return end
+    if not OP:CompleteCapture(siteKey, guild, fac, nil, nil, nil, capturer) then return end
     if capturer and capturer ~= "" and site and site.id and Overlord.Leaderboard
         and Overlord.Leaderboard.CreditPlayerObjectiveCapture then
         local _, classToken = UnitClass("player")

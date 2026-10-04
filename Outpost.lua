@@ -292,8 +292,18 @@ local function defaultState()
         opRelayCapturerName = nil,
         opRelayCapturerShard = nil,
         opOfficialCapturerName = nil,
+        heldCapturerName = nil,
         pool = "",
     }
+end
+
+-- Nom du joueur qui a pris l'avant-poste tenu (1.5.1) : garde et retransmis avec
+-- l'etat tenu, jamais affiche ni exige pour l'instant. Pas de ":" ni "|" (format fil).
+function Overlord.Outpost:NormalizeHeldCapturerName(name)
+    if type(name) ~= "string" then return nil end
+    local t = name:match("^%s*(.-)%s*$") or ""
+    if #t < 2 or #t > 50 or t:find("[:|]") then return nil end
+    return t
 end
 
 local function sanitizeOutpostState(st, site)
@@ -1234,7 +1244,7 @@ function Overlord.Outpost:IsCaptureTakeoverAllowed(st, guild, faction, captureTs
     return true
 end
 
-function Overlord.Outpost:CompleteCapture(siteKey, guild, faction, captureTs, capturePool, suppressLeaderboard)
+function Overlord.Outpost:CompleteCapture(siteKey, guild, faction, captureTs, capturePool, suppressLeaderboard, capturerName)
     local st = self:GetState(siteKey)
     local now = (captureTs and captureTs > 0) and captureTs or time()
     if not self:IsCaptureTakeoverAllowed(st, guild, faction, now, self:GetSite(siteKey)) then return false end
@@ -1246,6 +1256,7 @@ function Overlord.Outpost:CompleteCapture(siteKey, guild, faction, captureTs, ca
     st.ownerGuild = newGuild
     st.ownerFaction = faction
     self:ClearOpCapturerFields(st)
+    st.heldCapturerName = self:NormalizeHeldCapturerName(capturerName)
     st.claimedAt = now
     st.expiresAt = 0
     st.holdTimeElapsed = 0
