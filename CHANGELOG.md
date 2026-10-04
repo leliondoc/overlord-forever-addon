@@ -13,5 +13,5 @@
 - `/ov network` reports the new counters (held and cancelled bridge copies, clamped totals, skipped snapshots), names the players whose total is pushed up by other senders above their own count and who sent it, and says when the ruleset had to be assumed.
 - The Hall of Fame button tooltip no longer talks about gold donors only.
 - No more red raid warning in the middle of the screen when a newer Overlord exists: the update notice stays in chat, once per session.
-- The Next Objective panel stays aligned with the main panel: when it would run off the bottom of the screen, the main panel moves up instead of the side panel drifting on its own.
+- The Next Objective panel keeps the main panel's height (its activity list shows as many rows as fit, at least two, and scrolls) and stays aligned with it: when it would run off the bottom of the screen, the main panel moves up instead of the side panel drifting on its own.
 - `/ov network` lists the neighbours the ladder catch-up can ask, by faction, with those set aside after a silent round and which side the next round will ask.

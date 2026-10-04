@@ -1567,11 +1567,18 @@ local function AnchorFeaturedFrontActivityBlock(f, contentH, footerVisible)
         and (NEXT_OBJECTIVE_DETAILS_GAP + math.ceil(f.objectiveDetailsFs:GetStringHeight() or 0)) or 0
     local footerH = footerVisible and f.activityFooter and f.activityFooter:GetHeight() or 0
     local footerSpace = footerH > 0 and (footerH + FEATURED_FRONT_FOOTER_GAP) or 0
-    local minActivity = ComputeFeaturedFrontActivityHeight(FEATURED_FRONT_ACTIVITY_VISIBLE_ROWS)
     local fixedH = top - artTop + 16 + bodyH + detailsH
         + FEATURED_FRONT_BODY_ACTIVITY_GAP + footerSpace + FEATURED_FRONT_BOTTOM_PAD
     local main = GetMainPanelFrame()
     local requestedH = main and main:GetHeight() or f:GetHeight()
+    -- Le dock garde la hauteur du principal (bords bas alignes) : la liste
+    -- d'activite montre autant de lignes que la place le permet, deux au moins
+    -- (elle defile). 1.4.2 : le principal a perdu le bandeau Communaute (42 px)
+    -- et un minimum fixe de cinq lignes faisait depasser le dock en bas.
+    local rows = FEATURED_FRONT_ACTIVITY_VISIBLE_ROWS
+    local room = (requestedH or 0) - fixedH - FEATURED_FRONT_ART_HEIGHT
+    while rows > 2 and ComputeFeaturedFrontActivityHeight(rows) > room do rows = rows - 1 end
+    local minActivity = ComputeFeaturedFrontActivityHeight(rows)
     f._objectiveMinimumHeight = math.ceil(fixedH + FEATURED_FRONT_ART_HEIGHT + minActivity)
     local height = math.max(requestedH or 0, f._objectiveMinimumHeight)
     if f:GetHeight() ~= height then
