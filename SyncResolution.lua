@@ -316,6 +316,7 @@ function Overlord.Sync:IsValidGuildSyncToken(guild)
     guild = guild:match("^%s*(.-)%s*$") or ""
     if guild == "" or #guild > 24 then return false end
     if guild:find("|", 1, true) or guild:find(",", 1, true) or guild:find(":", 1, true) then return false end
+    if guild:find("[%c%%]") then return false end
     return true
 end
 

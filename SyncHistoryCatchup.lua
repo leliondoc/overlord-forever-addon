@@ -296,8 +296,10 @@ end
 
 -- The paged protocol reuses the exact LK serializer and attested snapshot.
 function sync:BuildPagedLeaderboardKillPayload(snapshot, name, wireEpoch)
-    local kills = snapshot and snapshot.kills and snapshot.kills[name]
-    if not self.SanitizeSyncedKillTotal or self:SanitizeSyncedKillTotal(kills) == nil then return nil end
+    -- Only garbage is refused here; the serializer clamps to the level ceiling, so
+    -- an owner above it is still served (at the ceiling) and digests stay equal.
+    local kills = tonumber(snapshot and snapshot.kills and snapshot.kills[name])
+    if not kills or kills ~= kills or kills < 0 then return nil end
     return BuildSnapshotKillPayload(snapshot, name, wireEpoch)
 end
 

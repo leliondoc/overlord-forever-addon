@@ -1124,7 +1124,8 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
         local accepted = kills
         local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
         if start > 0 then
-            local cap = FIRST_CONTACT_BASE + math.floor(math.max(0, time() - start) * FIRST_CONTACT_RATE)
+            local serverNow = Overlord.ServerNow and Overlord.ServerNow() or time()
+            local cap = FIRST_CONTACT_BASE + math.floor(math.max(0, serverNow - start) * FIRST_CONTACT_RATE)
             if kills > cap then accepted = cap; noteClamp() end
         end
         local st = SubjectState(key)
@@ -2936,8 +2937,10 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
     local classVerified = class and class ~= "" and class ~= "UNKNOWN"
         and self:IsValidCaptureClassToken(class) or false
     local localeVerified = locTag and locTag ~= ""
-    local sanitized, clampedByLevel = self.SanitizeSyncedKillTotal
-        and self:SanitizeSyncedKillTotal(totalKills, levelToken)
+    local sanitized, clampedByLevel
+    if self.SanitizeSyncedKillTotal then
+        sanitized, clampedByLevel = self:SanitizeSyncedKillTotal(totalKills, levelToken)
+    end
     if not sanitized then
         self:NoteSuspiciousSender(sender, "kill ceiling")
         return
@@ -5157,6 +5160,12 @@ end
 -- True si sender (format Name-Realm addon) est dans notre groupe / raid.
 local function SyncSenderIsInOurGroup(sender)
     if not sender or sender == "" or not IsInGroup() then return false end
+    -- Une origine relayee est un nom ecrit par la passerelle : elle n'est jamais le
+    -- membre du groupe qu'elle nomme. Les copies de groupe honnetes arrivent en
+    -- RAID/PARTY a 0 saut et ne sont pas concernees.
+    if Overlord.Sync.IsUnauthenticatedRelayOrigin and Overlord.Sync:IsUnauthenticatedRelayOrigin(sender) then
+        return false
+    end
     local want = (Overlord.Sync.GetCaptureContributorDedupKey
         and Overlord.Sync:GetCaptureContributorDedupKey(sender)) or sender:lower()
     if not want or want == "" then return false end
@@ -8142,8 +8151,10 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     local classClaimVerified = classMetadataValid
     local factionClaimVerified = validFaction
     local localeClaimVerified = locTag and locTag ~= ""
-    local sanitizedKills, killsClampedByLevel = self.SanitizeSyncedKillTotal
-        and self:SanitizeSyncedKillTotal(kills, levelToken)
+    local sanitizedKills, killsClampedByLevel
+    if self.SanitizeSyncedKillTotal then
+        sanitizedKills, killsClampedByLevel = self:SanitizeSyncedKillTotal(kills, levelToken)
+    end
     if not sanitizedKills then return end
     kills = sanitizedKills
     local guildAt = tonumber(guildAtStr) or 0
@@ -8181,6 +8192,7 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     if not guildSnapshot and not self:HasExpectedFullLeaderboardResponse(sender, channel) then
         kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, guildOwner)
     end
+    if killsClampedByLevel and guildOwner then self:NoteSuspiciousSender(sender, "kill ceiling") end
     Overlord.Leaderboard:SetPlayerKills(playerName, kills, true)
     -- 1.3.2 live-score bridge: an enemy total from a Battle.net friend goes on to our
     -- channel; a total heard on the channel cancels our own pending copy of it.
