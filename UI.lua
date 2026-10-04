@@ -1619,11 +1619,54 @@ function Overlord.UI:CreateZoneListSection(parent)
     hordeCrest:SetTexture("Interface\\Timer\\Horde-Logo")
     domBar.allyCrest, domBar.hordeCrest = allyCrest, hordeCrest
 
+    -- Tissus bleu et rouge des scenarios BfA (meme fichier que les bannieres
+    -- AllianceScenario-TitleBG du panneau), lion a gauche, blason Horde a droite.
+    -- Sans ce fichier, la barre teintee ci-dessus reste telle quelle.
+    local clothFile
+    if C_Texture and C_Texture.GetAtlasInfo then
+        local okInfo, info = pcall(C_Texture.GetAtlasInfo, "AllianceScenario-TitleBG")
+        clothFile = okInfo and type(info) == "table" and (info.file or info.filename) or nil
+    end
+    if clothFile then
+        domBar:SetHeight(28)
+        domBar:SetBackdropBorderColor(C.goldDim[1], C.goldDim[2], C.goldDim[3], 0.8)
+        domAlly:SetTexture(clothFile)
+        domAlly:SetVertexColor(1, 1, 1, 1)
+        domHorde:SetTexture(clothFile)
+        domHorde:SetVertexColor(1, 1, 1, 1)
+        -- Le tissu bleu est plus sombre que le rouge : une copie en mode additif
+        -- l'eclaircit un peu (memes coordonnees, suit la largeur du bleu).
+        local allyLift = domBar:CreateTexture(nil, "ARTWORK", nil, 1)
+        allyLift:SetPoint("TOPLEFT", domAlly, "TOPLEFT")
+        allyLift:SetPoint("BOTTOMRIGHT", domAlly, "BOTTOMRIGHT")
+        allyLift:SetTexture(clothFile)
+        allyLift:SetBlendMode("ADD")
+        allyLift:SetVertexColor(1, 1, 1, 0.22)
+        domBar.allyLift = allyLift
+        -- Jonction : un trait dore et l'etincelle de la barre de capture.
+        local seam = domBar:CreateTexture(nil, "OVERLAY", nil, 1)
+        seam:SetColorTexture(0.95, 0.78, 0.32, 0.95)
+        seam:SetWidth(2)
+        seam:SetPoint("TOP", domAlly, "TOPRIGHT", 0, 0)
+        seam:SetPoint("BOTTOM", domAlly, "BOTTOMRIGHT", 0, 0)
+        domBar.seam = seam
+        local spark = domBar:CreateTexture(nil, "OVERLAY", nil, 2)
+        spark:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
+        spark:SetBlendMode("ADD")
+        spark:SetVertexColor(1, 0.85, 0.45, 0.9)
+        spark:SetSize(14, 36)
+        spark:SetPoint("CENTER", domAlly, "RIGHT", 0, 0)
+        domBar.spark = spark
+        allyCrest:Hide()
+        hordeCrest:Hide()
+        domBar._cloth = true
+    end
+
     local domLabel = domBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     domLabel:SetPoint("CENTER")
     domLabel:SetTextColor(0.95, 0.92, 0.82)
     domLabel:SetShadowOffset(1, -1)
-    domLabel:SetFont(domLabel:GetFont(), 10)
+    domLabel:SetFont(domLabel:GetFont(), domBar._cloth and 12 or 10)
     domBar.label = domLabel
 
     local domTitle = zoneListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -2609,11 +2652,64 @@ function Overlord.UI:RefreshFrontEmblems()
     end
 end
 
+-- Partage bleu / rouge a la largeur allyW (pixels interieurs), tissus et jonction.
+local function PaintDominationSplit(bar, innerWidth, allyW)
+    allyW = math.max(0, math.min(innerWidth, allyW))
+    local hordeW = innerWidth - allyW
+    if bar._cloth then
+        -- Pixels du fichier 512x512 : tissu bleu x 5-240, rouge x 250-485, y 291-360.
+        -- Chaque tissu a l'echelle d'une demi-barre, bande centrale en hauteur ; au-dela
+        -- de la moitie il s'etire un peu. Alliance en miroir : le lion au bout gauche.
+        local scale = (innerWidth / 2) / 235
+        local innerH = math.max(1, (bar:GetHeight() or 28) - 6)
+        local halfV = math.min(34.5, innerH / scale / 2)
+        local top, bottom = (325.5 - halfV) / 512, (325.5 + halfV) / 512
+        local allyVis = math.min(235, allyW / scale)
+        local hordeVis = math.min(235, hordeW / scale)
+        bar.allyFill:SetTexCoord(240 / 512, (240 - allyVis) / 512, top, bottom)
+        bar.allyLift:SetTexCoord(240 / 512, (240 - allyVis) / 512, top, bottom)
+        bar.hordeFill:SetTexCoord((485 - hordeVis) / 512, 485 / 512, top, bottom)
+        local split = allyW >= 1 and hordeW >= 1
+        bar.seam:SetShown(split)
+        bar.spark:SetShown(split)
+    end
+    if allyW >= 1 then
+        bar.allyFill:SetWidth(allyW)
+        bar.allyFill:Show()
+    else
+        bar.allyFill:Hide()
+    end
+    if bar.allyLift then bar.allyLift:SetShown(allyW >= 1) end
+    if hordeW >= 1 then
+        bar.hordeFill:SetWidth(hordeW)
+        bar.hordeFill:Show()
+    else
+        bar.hordeFill:Hide()
+    end
+    bar._shownAllyW = allyW
+end
+
+-- La jonction glisse vers le nouveau score (~0,6 s), comme la barre de capture :
+-- OnUpdate seulement pendant le mouvement, retire ensuite.
+local DOMINATION_GLIDE_SPEED = 1.8 -- fraction de la largeur par seconde
+local function GlideDomination(bar, elapsed)
+    local target, innerWidth = bar._targetAllyW, bar._innerWidth
+    local current = bar._shownAllyW or target
+    local step = math.max(1, innerWidth * DOMINATION_GLIDE_SPEED * (elapsed or 0))
+    if math.abs(target - current) <= step then
+        bar:SetScript("OnUpdate", nil)
+        PaintDominationSplit(bar, innerWidth, target)
+        return
+    end
+    PaintDominationSplit(bar, innerWidth, current + (target > current and step or -step))
+end
+
 function Overlord.UI:RefreshDomination()
     if not self.domBar then return end
     if not OverlordDB then return end
-    local barWidth = self.domBar:GetWidth()
-    local nominal = self.domBar._nominalWidth or 300
+    local bar = self.domBar
+    local barWidth = bar:GetWidth()
+    local nominal = bar._nominalWidth or 300
     if (not barWidth) or barWidth < 2 then
         barWidth = nominal
     end
@@ -2630,19 +2726,18 @@ function Overlord.UI:RefreshDomination()
     local paintKey = label .. "|" .. allyW .. "|" .. hordeW
     if paintKey == lastDominationPaintKey then return end
     lastDominationPaintKey = paintKey
-    if allyW > 0 then
-        self.domBar.allyFill:SetWidth(allyW)
-        self.domBar.allyFill:Show()
+    bar.label:SetText(label)
+    bar._targetAllyW, bar._innerWidth = allyW, innerWidth
+    -- Premier dessin, largeur changee ou panneau cache : directement a la valeur.
+    local glide = bar._cloth and bar._shownAllyW and bar._glideInnerWidth == innerWidth
+        and bar.IsVisible and bar:IsVisible()
+    bar._glideInnerWidth = innerWidth
+    if glide then
+        bar:SetScript("OnUpdate", GlideDomination)
     else
-        self.domBar.allyFill:Hide()
+        bar:SetScript("OnUpdate", nil)
+        PaintDominationSplit(bar, innerWidth, allyW)
     end
-    if hordeW > 0 then
-        self.domBar.hordeFill:SetWidth(hordeW)
-        self.domBar.hordeFill:Show()
-    else
-        self.domBar.hordeFill:Hide()
-    end
-    self.domBar.label:SetText(label)
 end
 
 -- Cache du scan ennemis pour eviter de rescanner 40 raids+40 nameplates chaque seconde
