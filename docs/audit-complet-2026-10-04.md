@@ -288,7 +288,7 @@ suivant comblent le retard d'un honnête) ; aucun amplificateur de réponses. V�
 agents Sonnet 5.5 (convergence/désync), puis audits Fable et Opus 5.5 ; leurs trouvailles sont
 appliquées. 102 tests Lua 5.1 verts.
 
-- Plafond par niveau `MaxPlausibleKillsForLevel` (2000 + 150·niveau, 10 000 dès 54) à la
+- Plafond par niveau `MaxPlausibleKillsForLevel` (350·(niveau − 1), 2000 au moins, 10 000 dès 30, niveau max de la bêta) à la
   réception (K/LK), à l'émission (snapshot, K) et dans le nettoyeur legacy ; niveau monotone.
 - Croissance d'un total bornée par identité (`GetCaptureContributorDedupKey`, nouveau
   `Leaderboard:GetMaxKillsForDedupName`) : 1 kill/s + seau de 10 + 30 une fois par 30 s ; premier

@@ -824,19 +824,6 @@ local function RestoreFramePosition()
     return true
 end
 
--- Remonte (dy > 0) ou descend le panneau principal, en unites du panneau, et
--- sauvegarde comme un deplacement manuel. Utilise par le dock "Prochain objectif"
--- quand il deborderait sous l'ecran.
-function Overlord.UI:NudgeMainFrame(dy)
-    if not mainFrame or type(dy) ~= "number" or dy == 0 then return end
-    local left, bottom = mainFrame:GetLeft(), mainFrame:GetBottom()
-    if not left or not bottom then return end
-    mainFrame:ClearAllPoints()
-    mainFrame:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", left, bottom + dy)
-    userMovedPanel = true
-    SaveFramePosition()
-end
-
 function Overlord.UI:Initialize()
     if mainFrame then return end
     C = (Overlord.PlayerFaction == "Horde") and C_HORDE or C_ALLIANCE

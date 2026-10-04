@@ -76,9 +76,13 @@ end
 
 -- ===== (1) unsolicited LK bound
 know("Far Player", 100, "Horde")
+-- A plausible total gives the subject its in-session reference.
+s:OnReceiveLeaderboardKills(lkRow("Far Player", 105, "Horde"), "Some Peer", "CHANNEL")
+assert(Overlord.Leaderboard.kills["Far Player"] == 105, "plausible first total was altered")
+advance(600)
 s:OnReceiveLeaderboardKills(lkRow("Far Player", 5000, "Horde"), "Some Peer", "CHANNEL")
 local clamped = Overlord.Leaderboard.kills["Far Player"]
-assert(clamped == 100 + 30 + 600 + 10, "first unsolicited total not clamped to +30 + 600 s allowance: " .. tostring(clamped))
+assert(clamped == 105 + 30 + 600 + 10, "unsolicited jump not clamped to +30 + 600 s allowance: " .. tostring(clamped))
 assert((net.stats.unsolicitedTotalsClamped or 0) == 1, "clamp not counted")
 advance(20)
 s:OnReceiveLeaderboardKills(lkRow("Far Player", 6000, "Horde"), "Some Peer", "CHANNEL")
@@ -103,6 +107,18 @@ OverlordDB.lastSessionTimestamp = time() - 86400
 know("Absent Player", 100, "Horde")
 ownK("Absent Player", 5000, "Horde")
 assert(Overlord.Leaderboard.kills["Absent Player"] == 5000, "honest catch-up after a day away was clamped")
+-- Right after a /reload (PLAYER_LOGOUT rewrote lastSessionTimestamp), a saved row
+-- hours behind still catches up at once, up to the first-contact cap.
+OverlordDB.lastSessionTimestamp = time() - 5
+do
+    local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
+    local cap = 300 + math.floor(math.max(0, time() - start) * 0.03)
+    know("Stale Player", 100, "Horde")
+    s:OnReceiveLeaderboardKills(lkRow("Stale Player", 3000, "Horde"), "Some Peer", "CHANNEL")
+    local want = math.min(3000, math.max(100 + 30 + 600 + 10, cap))
+    assert(Overlord.Leaderboard.kills["Stale Player"] == want,
+        "stale row after a reload not raised to the first-contact cap: " .. tostring(Overlord.Leaderboard.kills["Stale Player"]))
+end
 OverlordDB.lastSessionTimestamp = nil
 
 -- A name never seen before: its first total is bounded by the campaign age.

@@ -1198,29 +1198,6 @@ local function CreateFeaturedFrontCloseMark(parent)
     return holder
 end
 
--- Le dock est souvent plus haut que le panneau principal (art + activite + pieces).
--- Quand le principal est bas, le dock deborderait sous l'ecran : on remonte le
--- principal (sauvegarde comme un deplacement manuel) au lieu de laisser le dock
--- se decaler seul, ce qui desalignait les deux bords superieurs.
-local function KeepFeaturedFrontPairOnScreen()
-    local mainFrame = GetMainPanelFrame()
-    local f = featuredFrontFrame
-    if not mainFrame or not f or not f:IsShown() then return end
-    if not (Overlord.UI and Overlord.UI.NudgeMainFrame) then return end
-    local bottom = f.GetBottom and f:GetBottom()
-    if type(bottom) ~= "number" or bottom >= 0 then return end
-    local overflow = -bottom
-    local top = mainFrame.GetTop and mainFrame:GetTop()
-    local scale = mainFrame.GetScale and mainFrame:GetScale() or 1
-    if scale <= 0 then scale = 1 end
-    if type(top) == "number" and UIParent and UIParent.GetHeight then
-        -- Jamais au-dela du bord superieur : le principal garde la priorite.
-        local room = (UIParent:GetHeight() / scale) - top
-        if room < overflow then overflow = math.max(0, room) end
-    end
-    if overflow > 0.5 then Overlord.UI:NudgeMainFrame(overflow) end
-end
-
 -- Panneau front colle a la reliure du main ; onglet centre verticalement sur le bord gauche.
 local function SyncFeaturedFrontPanelAnchors()
     local mainFrame = GetMainPanelFrame()
@@ -1234,7 +1211,6 @@ local function SyncFeaturedFrontPanelAnchors()
         featuredFrontFrame:ClearAllPoints()
         featuredFrontFrame:SetPoint("TOPRIGHT", mainFrame, "TOPLEFT", FEATURED_FRONT_SPINE_OVERLAP, 0)
         featuredFrontFrame:SetHeight(math.max(mainFrame:GetHeight() or 0, featuredFrontFrame._objectiveMinimumHeight or 0))
-        KeepFeaturedFrontPairOnScreen()
     end
 end
 
@@ -1581,10 +1557,7 @@ local function AnchorFeaturedFrontActivityBlock(f, contentH, footerVisible)
     local minActivity = ComputeFeaturedFrontActivityHeight(rows)
     f._objectiveMinimumHeight = math.ceil(fixedH + FEATURED_FRONT_ART_HEIGHT + minActivity)
     local height = math.max(requestedH or 0, f._objectiveMinimumHeight)
-    if f:GetHeight() ~= height then
-        f:SetHeight(height)
-        KeepFeaturedFrontPairOnScreen()
-    end
+    if f:GetHeight() ~= height then f:SetHeight(height) end
     local artH = FEATURED_FRONT_ART_HEIGHT
     if f.artFrame:GetHeight() ~= artH then
         f.artFrame:SetHeight(artH)
@@ -1797,11 +1770,6 @@ EnsureFeaturedFrontToggle = function(mainFrame)
         featuredFrontToggleBtn = nil
     end
 
-    if not mainFrame._featuredFrontDragHook and mainFrame.HookScript then
-        mainFrame._featuredFrontDragHook = true
-        mainFrame:HookScript("OnDragStop", function() KeepFeaturedFrontPairOnScreen() end)
-    end
-
     local tab = CreateFrame("Button", "OverlordFeaturedFrontToggle", mainFrame, "BackdropTemplate")
     tab._layoutVersion = FEATURED_FRONT_LAYOUT_VERSION
     tab:SetSize(FEATURED_FRONT_TOGGLE_W, FEATURED_FRONT_TOGGLE_H)
@@ -1867,9 +1835,9 @@ EnsureFeaturedFrontFrame = function()
     local f = CreateFrame("Frame", "OverlordFeaturedFrontDialog", mainFrame, "BackdropTemplate")
     f._layoutVersion = FEATURED_FRONT_LAYOUT_VERSION
     f:SetWidth(FEATURED_FRONT_PANEL_WIDTH)
-    -- Pas de clamp propre au dock : il le decalait vers le haut quand il debordait
-    -- sous l'ecran et cassait l'alignement avec le principal. Voir
-    -- KeepFeaturedFrontPairOnScreen : c'est le principal qui remonte.
+    -- Pas de clamp propre au dock : il le decalait vers le haut et cassait
+    -- l'alignement. Le dock prend la hauteur du principal (liste d'activite
+    -- reduite) ; le panneau principal n'est jamais deplace par l'addon.
     f:SetFrameLevel(mainFrame:GetFrameLevel() + 8)
     f:EnableMouse(true)
     f:Hide()

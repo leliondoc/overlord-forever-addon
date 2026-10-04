@@ -8,7 +8,8 @@ assert(lb.KILL_RANK_LIMIT == 5000, "Score ceiling changed the ranking population
 OverlordDB.lastResetTimestamp = time() - 6 * 86400
 if Overlord.ResetCampaignStartCache then Overlord:ResetCampaignStartCache() end
 local epoch = OverlordDB.lastResetTimestamp
--- 1.4.2: a total also has a per-level ceiling (2000 + 150/level, 10000 from 54) and a
+-- 1.4.2: a total also has a per-level ceiling (350 per level above 1, 2000 at least,
+-- 10000 from level 30, the beta's cap) and a
 -- growth bound per subject (+30 kills + 1/s); the ceiling itself is exercised with
 -- level-60 subjects, one fresh subject per total.
 local live, snapshot = "Remote Tester", "Snapshot Tester"
@@ -28,12 +29,16 @@ for i, total in ipairs({ 1000, 1001, 4999, 5000, 6017, 9999, 10000 }) do
     assert(lb.kills[liveName] == total, "K rejected legitimate total " .. total)
     assert(lb.kills[snapName] == total, "LK rejected legitimate total " .. total)
 end
--- Level ceiling: a level 14 character cannot hold more than 4100 kills in a week.
-sync:OnReceiveKill(killPayload(4100, "Lowbie Tester", 14), "Lowbie Tester")
-assert(lb.kills["Lowbie Tester"] == 4100, "level 14 total at the ceiling was rejected")
+-- Level ceiling: a level 14 character cannot hold more than 4550 kills in a week.
+sync:OnReceiveKill(killPayload(4550, "Lowbie Tester", 14), "Lowbie Tester")
+assert(lb.kills["Lowbie Tester"] == 4550, "level 14 total at the ceiling was rejected")
 sync:OnReceiveKill(killPayload(5000, "Lowbie Cheater", 14), "Lowbie Cheater")
-assert(lb.kills["Lowbie Cheater"] == 4100, "level 14 total above the ceiling was not clamped to it")
-assert(sync:MaxPlausibleKillsForLevel(60) == 10000 and sync:MaxPlausibleKillsForLevel(1) == 2150)
+assert(lb.kills["Lowbie Cheater"] == 4550, "level 14 total above the ceiling was not clamped to it")
+assert(sync:MaxPlausibleKillsForLevel(60) == 10000 and sync:MaxPlausibleKillsForLevel(1) == 2000)
+-- The beta is capped at level 30, where honest players near 6000 kills: full ceiling.
+assert(sync:MaxPlausibleKillsForLevel(30) == 10000 and sync:MaxPlausibleKillsForLevel(29) == 9800)
+sync:OnReceiveKill(killPayload(6017, "Capped Tester", 30), "Capped Tester")
+assert(lb.kills["Capped Tester"] == 6017, "level 30 honest total was clamped")
 live, snapshot = "Remote Testerg", "Snapshot Testerg" -- the 10000 rows above
 for _, total in ipairs({ 10001, 99999 }) do
     assert(sync:SanitizeSyncedKillTotal(total) == nil)

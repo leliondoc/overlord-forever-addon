@@ -1536,14 +1536,16 @@ end
 -- du bucket de campagne dans Sync.lua, toute replique plausible doit rejoindre
 -- le max local. Un quorum ici rendait le resultat dependant des messages recus
 -- par chaque client et bloquait notamment le rattrapage BNet/cross-realm.
--- Plafond par niveau (1.4.2) : 2000 + 150 par niveau (niveau 14 : 4100, niveau 30 :
--- 6500, 10000 des le niveau 54). Un personnage de niveau 14 avec 5000 kills dans la
--- semaine etait la triche observee. Le niveau voyage dans le paquet K/LK lui-meme :
--- la regle est identique chez tous les receveurs, donc sans divergence.
+-- Plafond par niveau (1.4.2) : 350 par niveau au-dela du premier, 2000 au moins
+-- (niveau 14 : 4550, niveau 20 : 6650, 10000 des le niveau 30). La beta est
+-- plafonnee au niveau 30 et des joueurs legit y approchent 6000 kills : le niveau
+-- maximum garde tout le plafond global. Un personnage de niveau 14 avec 5000 kills
+-- dans la semaine etait la triche observee. Le niveau voyage dans le paquet K/LK
+-- lui-meme : la regle est identique chez tous les receveurs, donc sans divergence.
 function Overlord.Sync:MaxPlausibleKillsForLevel(level)
     level = tonumber(level)
-    if not level or level >= 54 then return PLAUSIBLE_KILL_CEILING end
-    return math.min(PLAUSIBLE_KILL_CEILING, 2000 + math.floor(level) * 150)
+    if not level or level >= 30 then return PLAUSIBLE_KILL_CEILING end
+    return math.min(PLAUSIBLE_KILL_CEILING, math.max(2000, (math.floor(level) - 1) * 350))
 end
 
 -- Retourne le total retenu et true s'il a ete ecrete au plafond du niveau. Au-dela

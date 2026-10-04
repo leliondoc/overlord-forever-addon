@@ -1153,14 +1153,19 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
     -- Le dernier total retenu pour cette identite dans la session : une variante
     -- du nom ne repart jamais de zero, meme sans index chaud.
     if existing and existing.total then killsBefore = math.max(killsBefore or 0, existing.total) end
+    -- Cap de premier contact : ce qu'un honnete peut avoir fait depuis le reset.
+    local firstContactCap
+    local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
+    if start > 0 then
+        local serverNow = Overlord.ServerNow and Overlord.ServerNow() or time()
+        firstContactCap = FIRST_CONTACT_BASE + math.floor(math.max(0, serverNow - start) * FIRST_CONTACT_RATE)
+    end
     if (killsBefore or 0) <= 0 then
         local accepted = kills
-        local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
-        if start > 0 then
-            local serverNow = Overlord.ServerNow and Overlord.ServerNow() or time()
-            local cap = FIRST_CONTACT_BASE + math.floor(math.max(0, serverNow - start) * FIRST_CONTACT_RATE)
-            -- Jamais blame : un honnete tres actif en debut de semaine peut depasser le cap.
-            if kills > cap then accepted = cap; NoteClamp(self, "unsolicitedTotalsClamped", sender, false) end
+        -- Jamais blame : un honnete tres actif en debut de semaine peut depasser le cap.
+        if firstContactCap and kills > firstContactCap then
+            accepted = firstContactCap
+            NoteClamp(self, "unsolicitedTotalsClamped", sender, false)
         end
         local st = SubjectRow(subjectTotals, key, true)
         st.at, st.slack, st.slackAt = now, st.slack or LK_SLACK_MAX, st.slackAt or now
@@ -1182,6 +1187,14 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
     local timed = math.floor(elapsed * LK_UNSOLICITED_RATE)
     if elapsed >= LK_ALLOWANCE_PERIOD then timed = timed + LK_UNSOLICITED_ALLOWANCE end
     local ceiling = killsBefore + timed + math.floor(slack)
+    -- Premier total de ce sujet depuis le chargement : une ligne sauvegardee peut
+    -- dater de plusieurs heures alors qu'un /reload vient de reecrire
+    -- lastSessionTimestamp (PLAYER_LOGOUT), d'ou une fenetre de 600 s qui ecretait
+    -- chaque ligne ennemie en retard. Sans reference dans la session, la borne est
+    -- au moins le cap de premier contact, comme pour un sujet inconnu.
+    if not (existing and existing.at) and firstContactCap and firstContactCap > ceiling then
+        ceiling = firstContactCap
+    end
     local accepted = kills
     if kills > ceiling then
         accepted = ceiling
@@ -1190,7 +1203,9 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
     -- La reference n'avance que lorsqu'un total superieur est retenu : une
     -- repetition du meme total ne recharge ni le temps ni le seau.
     if accepted > killsBefore then
-        local usedSlack = math.max(0, accepted - killsBefore - timed)
+        -- Borne au seau : un rattrapage au cap de premier contact ne laisse pas un
+        -- seau negatif qui brimerait les totaux suivants.
+        local usedSlack = math.min(slack, math.max(0, accepted - killsBefore - timed))
         st.slack, st.slackAt, st.at = slack - usedSlack, now, now
     elseif not st.at then
         st.at = now
