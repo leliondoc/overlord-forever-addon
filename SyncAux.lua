@@ -502,8 +502,9 @@ end
 -- "ce nom est un client Overlord vu recemment".
 function Overlord.Sync:IsAuthenticatedDirectSender(sender)
     if not sender or sender == "" then return false end
-    if self.SenderIsInOurGroup and self:SenderIsInOurGroup(sender) then return true end
     local net = Overlord.BetaNetwork
+    -- Une origine relayee d'abord : un nom de membre du groupe ecrit par une
+    -- passerelle n'est pas ce membre.
     if net and net.IsDispatching and net:IsDispatching(sender) then
         return not (net.IsRelayedOrigin and net:IsRelayedOrigin(sender))
     end
@@ -1545,16 +1546,25 @@ function Overlord.Sync:MaxPlausibleKillsForLevel(level)
     return math.min(PLAUSIBLE_KILL_CEILING, 2000 + math.floor(level) * 150)
 end
 
+-- Retourne le total retenu et true s'il a ete ecrete au plafond du niveau. Au-dela
+-- du plafond global (ou NaN) : nil, refuse. Le plafond par niveau ecrete au lieu de
+-- refuser : tous les clients retiennent la meme valeur (le plafond), et les pages
+-- et digests de l'emetteur restent identiques aux leurs.
 function Overlord.Sync:SanitizeSyncedKillTotal(total, level)
-    total = math.floor(tonumber(total) or 0)
+    total = tonumber(total)
+    if not total or total ~= total then return nil end
+    total = math.floor(total)
     if total <= 0 then return 0 end
     if total > PLAUSIBLE_KILL_CEILING then
         -- Donnee refusee, mais pas de quarantaine : des joueurs legit peuvent relayer
         -- un vieux total contamine jusqu'au reset hebdomadaire.
         return nil
     end
-    if level ~= nil and total > self:MaxPlausibleKillsForLevel(level) then return nil end
-    return total
+    if level ~= nil then
+        local ceiling = self:MaxPlausibleKillsForLevel(level)
+        if total > ceiling then return ceiling, true end
+    end
+    return total, false
 end
 
 -- Plafond plausible des captures LC. Le bucket hebdomadaire obligatoire bloque

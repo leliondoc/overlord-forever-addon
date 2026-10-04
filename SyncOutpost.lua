@@ -390,6 +390,9 @@ local function OcSenderMatchesPayloadGuild(sender, guild, faction)
     guild = Overlord.Outpost and Overlord.Outpost:SanitizeGuildName(guild or "") or (guild or "")
     if not sender or sender == "" or guild == "" then return false end
     if sender:find("^BNet%-", 1) then return false end
+    -- Un nom d'origine ecrit par une passerelle relais n'est pas le membre du groupe.
+    if Overlord.Sync and Overlord.Sync.IsUnauthenticatedRelayOrigin
+        and Overlord.Sync:IsUnauthenticatedRelayOrigin(sender) then return false end
     if not OpSenderIsInOurGroup(sender) then return false end
     local senderGuild, senderFaction = GetOpAddonSenderGuild(sender)
     if senderGuild and senderGuild ~= "" then

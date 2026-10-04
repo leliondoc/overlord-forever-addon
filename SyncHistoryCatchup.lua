@@ -203,10 +203,10 @@ local function BuildSnapshotKillPayload(snapshot, name, wireEpoch)
         return nil
     end
     local kills = math.floor(tonumber(snapshot.kills and snapshot.kills[name]) or 0)
-    -- Same per-level ceiling as the receivers (1.4.2): a row they would refuse is
-    -- not served, so bucket digests match on both sides.
-    if sync.MaxPlausibleKillsForLevel and kills > sync:MaxPlausibleKillsForLevel(level) then
-        return nil
+    -- Same per-level ceiling as the receivers (1.4.2): serve the clamped value, so
+    -- every client holds the same number and bucket digests match on both sides.
+    if sync.MaxPlausibleKillsForLevel then
+        kills = math.min(kills, sync:MaxPlausibleKillsForLevel(level))
     end
     local guild = SafeWireField(info.guild, 96)
     if guild ~= "" and sync.IsValidGuildSyncToken

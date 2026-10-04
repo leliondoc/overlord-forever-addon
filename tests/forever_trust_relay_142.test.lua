@@ -105,6 +105,18 @@ ownK("Absent Player", 5000, "Horde")
 assert(Overlord.Leaderboard.kills["Absent Player"] == 5000, "honest catch-up after a day away was clamped")
 OverlordDB.lastSessionTimestamp = nil
 
+-- A name never seen before: its first total is bounded by the campaign age.
+do
+    local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
+    assert(start > 0, "fixture: campaign start known")
+    local cap = 1000 + math.floor(math.max(0, time() - start) * 0.05)
+    if cap < 9999 then
+        ownK("Fresh Forger", 9999, "Horde")
+        assert(Overlord.Leaderboard.kills["Fresh Forger"] == cap,
+            "first total of a new name not bounded by the campaign age: " .. tostring(Overlord.Leaderboard.kills["Fresh Forger"]))
+    end
+end
+
 -- ===== (2) bridge hold on Battle.net broadcasts
 net.BridgeChannelHold = { 2, 15 }
 local before = net:GetQueueSummary().total

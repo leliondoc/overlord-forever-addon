@@ -3579,7 +3579,9 @@ function Overlord.Leaderboard:SetPlayerLevel(playerName, level)
         }
         NoteDedupCanonicalName(self, playerName)
     else
-        if math.floor(tonumber(prev.level) or 0) == level then return true end
+        -- Monotone dans une campagne : un niveau ne baisse pas en une semaine, et
+        -- une ligne tierce perimee (ou forgee) ne doit pas abaisser le plafond.
+        if level <= math.floor(tonumber(prev.level) or 0) then return true end
         prev.level = level
     end
     self:MarkMetaDirty()
@@ -3610,7 +3612,7 @@ function Overlord.Leaderboard:MergeLeaderboardKillMetadata(
         changed = true
     end
 
-    if math.floor(tonumber(row.level) or 0) ~= level then
+    if level > math.floor(tonumber(row.level) or 0) then
         row.level = level
         changed = true
     end

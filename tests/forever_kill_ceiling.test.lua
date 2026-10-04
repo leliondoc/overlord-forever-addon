@@ -3,6 +3,10 @@ assert(loadfile("tests/forever_world_kills.test.lua"))()
 local sync, lb = Overlord.Sync, Overlord.Leaderboard
 assert(Overlord.PLAUSIBLE_SYNC_KILL_CEILING == 10000)
 assert(lb.KILL_RANK_LIMIT == 5000, "Score ceiling changed the ranking population")
+-- A six-day-old campaign: the first-contact cap (1000 + 0.05/s since the reset) is
+-- above 10000, so only the global and per-level ceilings act here.
+OverlordDB.lastResetTimestamp = time() - 6 * 86400
+if Overlord.ResetCampaignStartCache then Overlord:ResetCampaignStartCache() end
 local epoch = OverlordDB.lastResetTimestamp
 -- 1.4.2: a total also has a per-level ceiling (2000 + 150/level, 10000 from 54) and a
 -- growth bound per subject (+30 kills + 1/s); the ceiling itself is exercised with
@@ -28,7 +32,7 @@ end
 sync:OnReceiveKill(killPayload(4100, "Lowbie Tester", 14), "Lowbie Tester")
 assert(lb.kills["Lowbie Tester"] == 4100, "level 14 total at the ceiling was rejected")
 sync:OnReceiveKill(killPayload(5000, "Lowbie Cheater", 14), "Lowbie Cheater")
-assert(lb.kills["Lowbie Cheater"] == nil, "level 14 total above the ceiling was accepted")
+assert(lb.kills["Lowbie Cheater"] == 4100, "level 14 total above the ceiling was not clamped to it")
 assert(sync:MaxPlausibleKillsForLevel(60) == 10000 and sync:MaxPlausibleKillsForLevel(1) == 2150)
 live, snapshot = "Remote Testerg", "Snapshot Testerg" -- the 10000 rows above
 for _, total in ipairs({ 10001, 99999 }) do

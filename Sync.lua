@@ -1085,32 +1085,55 @@ end
 -- (30 kills + 1 par seconde depuis le dernier total retenu pour ce sujet). Un
 -- total plus haut n'est pas rejete, il est ecrete : la convergence est plus lente,
 -- jamais perdue, et une ligne connue ne peut plus etre gonflee d'un seul paquet.
--- Allocation : 1 kill par seconde depuis le dernier total retenu pour ce sujet, 10
--- kills de jeu par paquet (une rafale de zone honnete, ou K et LK du meme sujet dans
--- la meme seconde), plus 30 de marge une fois par 30 s (le K d'un proprietaire part
--- au plus toutes les 30 s, un pont LK toutes les 60 s). Un flood de paquets gagne
--- donc 10 par paquet au plus, et la quarantaine anti-rafale (8 K / 5 s par
--- expediteur, puis 120 s de silence) le ramene sous 2 kills/s : plus de saut
--- instantane, et le plafond de niveau borne le reste.
--- `blameOwner` : seul le proprietaire qui annonce son propre total est note comme
--- suspect, jamais le relais qui transmet.
-local LK_UNSOLICITED_ALLOWANCE, LK_UNSOLICITED_RATE, LK_ALLOWANCE_PERIOD, LK_PACKET_SLACK = 30, 1, 30, 10
+-- Allocation : 1 kill par seconde depuis le dernier total retenu pour ce sujet, un
+-- seau de 10 kills de jeu (une rafale de zone honnete, ou K et LK du meme sujet dans
+-- la meme seconde) recharge a 0,5/s, plus 30 de marge une fois par 30 s (le K
+-- canal d'un proprietaire part toutes les 30 s, un pont LK toutes les 60 s). Un
+-- flood de paquets ne regagne donc pas 10 kills a chaque paquet. Premier total d'un
+-- sujet jamais vu (y compris juste apres le reset) : borne par l'age de la campagne,
+-- 1000 + 0,05/s (4 h : 1720 ; 24 h : 5320), identique chez tous les receveurs.
+-- Tout est ecrete, jamais refuse : les pages de rattrapage (exemptees) et le K
+-- suivant comblent le retard d'un honnete. `blameOwner` : seul le proprietaire qui
+-- annonce son propre total est note comme suspect, jamais le relais.
+local LK_UNSOLICITED_ALLOWANCE, LK_UNSOLICITED_RATE, LK_ALLOWANCE_PERIOD = 30, 1, 30
+local LK_SLACK_MAX, LK_SLACK_REFILL = 10, 0.5
+local FIRST_CONTACT_BASE, FIRST_CONTACT_RATE = 1000, 0.05
 local subjectTotalAt, subjectTotalAtCount = {}, 0
+local function SubjectState(key)
+    local st = subjectTotalAt[key]
+    if not st then
+        if subjectTotalAtCount >= 4096 then subjectTotalAt, subjectTotalAtCount = {}, 0 end
+        subjectTotalAtCount = subjectTotalAtCount + 1
+        st = { slack = LK_SLACK_MAX, slackAt = GetTime() }
+        subjectTotalAt[key] = st
+    end
+    return st
+end
 function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, blameOwner)
     local key = tostring(playerName or ""):lower()
     local now = GetTime()
-    local last = subjectTotalAt[key]
-    if (killsBefore or 0) <= 0 then
-        if last == nil then
-            if subjectTotalAtCount >= 4096 then subjectTotalAt, subjectTotalAtCount = {}, 0 end
-            subjectTotalAtCount = subjectTotalAtCount + 1
+    local existing = subjectTotalAt[key]
+    local betaNet = Overlord.BetaNetwork
+    local function noteClamp()
+        if betaNet and betaNet.stats then
+            betaNet.stats.unsolicitedTotalsClamped = (betaNet.stats.unsolicitedTotalsClamped or 0) + 1
         end
-        subjectTotalAt[key] = now
-        return kills
+        if blameOwner then self:NoteSuspiciousSender(sender, "total clamped") end
+    end
+    if (killsBefore or 0) <= 0 then
+        local accepted = kills
+        local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
+        if start > 0 then
+            local cap = FIRST_CONTACT_BASE + math.floor(math.max(0, time() - start) * FIRST_CONTACT_RATE)
+            if kills > cap then accepted = cap; noteClamp() end
+        end
+        local st = SubjectState(key)
+        st.at = now
+        return accepted
     end
     local elapsed
-    if last then
-        elapsed = math.max(0, now - last)
+    if existing and existing.at then
+        elapsed = math.max(0, now - existing.at)
     else
         -- Premier total de ce sujet dans la session : le precedent date au plus
         -- tard de notre derniere deconnexion, la fenetre couvre toute l'absence.
@@ -1118,26 +1141,23 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
         local lastSession = tonumber(OverlordDB and OverlordDB.lastSessionTimestamp) or 0
         elapsed = math.max(600, lastSession > 0 and (time() - lastSession) or 600)
     end
-    local allowance = math.floor(elapsed * LK_UNSOLICITED_RATE) + LK_PACKET_SLACK
-    if elapsed >= LK_ALLOWANCE_PERIOD then allowance = allowance + LK_UNSOLICITED_ALLOWANCE end
-    local ceiling = killsBefore + allowance
+    local st = SubjectState(key)
+    local slack = math.min(LK_SLACK_MAX, (st.slack or LK_SLACK_MAX) + math.max(0, now - (st.slackAt or now)) * LK_SLACK_REFILL)
+    local timed = math.floor(elapsed * LK_UNSOLICITED_RATE)
+    if elapsed >= LK_ALLOWANCE_PERIOD then timed = timed + LK_UNSOLICITED_ALLOWANCE end
+    local ceiling = killsBefore + timed + math.floor(slack)
     local accepted = kills
     if kills > ceiling then
         accepted = ceiling
-        local betaNet = Overlord.BetaNetwork
-        if betaNet and betaNet.stats then
-            betaNet.stats.unsolicitedTotalsClamped = (betaNet.stats.unsolicitedTotalsClamped or 0) + 1
-        end
-        if blameOwner then self:NoteSuspiciousSender(sender, "total clamped") end
+        noteClamp()
     end
-    -- La date de reference n'avance que lorsqu'un total superieur est retenu :
-    -- une repetition du meme total ne recharge pas l'allocation.
-    if accepted > killsBefore or last == nil then
-        if last == nil then
-            if subjectTotalAtCount >= 4096 then subjectTotalAt, subjectTotalAtCount = {}, 0 end
-            subjectTotalAtCount = subjectTotalAtCount + 1
-        end
-        subjectTotalAt[key] = now
+    -- La reference n'avance que lorsqu'un total superieur est retenu : une
+    -- repetition du meme total ne recharge ni le temps ni le seau.
+    if accepted > killsBefore then
+        local usedSlack = math.max(0, accepted - killsBefore - timed)
+        st.slack, st.slackAt, st.at = slack - usedSlack, now, now
+    elseif not st.at then
+        st.at = now
     end
     return accepted
 end
@@ -1187,6 +1207,9 @@ end
 local CAPTURE_FINAL_MIN_GAP = 45
 local lastFinalByOrigin, lastFinalByOriginCount = {}, 0
 function Overlord.Sync:AdmitCaptureFinalRate(originName, zoneId, ts, sender)
+    -- Une origine relayee est un nom ecrit par la passerelle : elle ne consomme ni
+    -- n'enregistre la cadence du vrai capteur (sinon un forgeur bloquerait ses finals).
+    if self.IsUnauthenticatedRelayOrigin and self:IsUnauthenticatedRelayOrigin(sender) then return true end
     local key = self.GetCaptureContributorDedupKey and self:GetCaptureContributorDedupKey(originName)
         or tostring(originName or ""):lower()
     if not key or key == "" or not zoneId then return true end
@@ -2209,7 +2232,9 @@ function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
     elseif msgType == "BF" and Overlord.BetaNetwork then
         return Overlord.BetaNetwork:ReceiveFragment(payload, ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
     end
-    if self.SenderBurstShouldDrop and self:SenderBurstShouldDrop(sender, msgType) then return end
+    if self.SenderBurstShouldDrop
+        and not (self.IsUnauthenticatedRelayOrigin and self:IsUnauthenticatedRelayOrigin(sender))
+        and self:SenderBurstShouldDrop(sender, msgType) then return end
     if msgType == "K" then
         local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
         self:OnReceiveKill(payload or "", gameplaySender)
@@ -2325,7 +2350,10 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
 
     -- Anti-triche : ignore les rafales anormales de messages mutateurs de score.
     -- C et LC ont des seuils compatibles avec les retries et reponses SR normaux.
-    if self.SenderBurstShouldDrop and self:SenderBurstShouldDrop(sender, msgType) then
+    -- Une origine relayee (nom ecrit par la passerelle) ne compte pas contre ce nom.
+    if self.SenderBurstShouldDrop
+        and not (self.IsUnauthenticatedRelayOrigin and self:IsUnauthenticatedRelayOrigin(sender))
+        and self:SenderBurstShouldDrop(sender, msgType) then
         return
     end
 
@@ -2908,12 +2936,13 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
     local classVerified = class and class ~= "" and class ~= "UNKNOWN"
         and self:IsValidCaptureClassToken(class) or false
     local localeVerified = locTag and locTag ~= ""
-    local sanitized = self.SanitizeSyncedKillTotal
+    local sanitized, clampedByLevel = self.SanitizeSyncedKillTotal
         and self:SanitizeSyncedKillTotal(totalKills, levelToken)
     if not sanitized then
         self:NoteSuspiciousSender(sender, "kill ceiling")
         return
     end
+    if clampedByLevel then self:NoteSuspiciousSender(sender, "kill ceiling") end
     totalKills = sanitized
     local totalBefore = Overlord.Leaderboard.kills and Overlord.Leaderboard.kills[playerName] or 0
     -- Meme borne de croissance que les totaux non sollicites : un proprietaire
@@ -7295,9 +7324,12 @@ function Overlord.Sync:OnReceiveZoneAll(
     -- detection de victoire et le dry-run des prerequis portent sur le lot entier).
     local heldFlips, confirmedFlips, batchHasCapitalFlip = {}, {}, false
     for _, entry in ipairs(entries) do
-        local scanZoneId, _, _, _, scanOwner = ParseZoneAllEntry(entry)
+        local scanZoneId, _, _, scanCt, scanOwner = ParseZoneAllEntry(entry)
         local scanZone = scanZoneId and Overlord.Zones and Overlord.Zones:GetZone(scanZoneId)
-        if scanZone and scanZone.isCapital and scanOwner and scanZone.owner ~= scanOwner then
+        -- Seule une capitale qui gagnerait compte : une entree perimee (ecartee
+        -- plus loin) ne doit pas desarmer la garde du lot.
+        if scanZone and scanZone.isCapital and scanOwner and scanZone.owner ~= scanOwner
+            and (tonumber(scanCt) or 0) > (tonumber(scanZone.capturedTime) or 0) then
             batchHasCapitalFlip = true
             break
         end
@@ -7395,6 +7427,13 @@ function Overlord.Sync:OnReceiveZoneAll(
     -- Un lot atomique direct qui ne passe pas toutes les gardes echoue ferme ;
     -- une prochaine reponse SR complete retentera sans vote ni carte synthetique.
     if snapshotAtomic and snapshotConsensusComplete == false then return end
+    -- Lot valide : les basculements tenus deviennent des demandes datees des
+    -- maintenant, meme si le dry-run ci-dessous refuse le lot (sinon la limite de
+    -- 5 min ne demarrerait jamais pour une zone en siege continu).
+    if #heldFlips > 0 or next(confirmedFlips) ~= nil then
+        self:CommitZaFlipClaims(heldFlips, confirmedFlips, sender)
+        heldFlips, confirmedFlips = {}, {}
+    end
 
     -- Dry-run conservateur des lots v2. Le commit ne commence que si chaque
     -- entree peut converger depuis l'etat local actuel et si une capitale prise
@@ -7605,9 +7644,6 @@ function Overlord.Sync:OnReceiveZoneAll(
     -- la validation atomique.
     if snapshotAtomic and not snapshotConsensusComplete then return end
     self._lastAcceptedZaPayload, self._lastAcceptedZaAt = payload, GetTime()
-    if #heldFlips > 0 or next(confirmedFlips) ~= nil then
-        self:CommitZaFlipClaims(heldFlips, confirmedFlips, sender)
-    end
     -- Carte globale validee : le relais n'a pas besoin de redemander la carte a
     -- chaque nouveau pair entendu dans la foulee. Une carte rejetee, ou dont chaque
     -- zone etait plus ancienne que la notre, ne compte pas.
@@ -8106,7 +8142,7 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     local classClaimVerified = classMetadataValid
     local factionClaimVerified = validFaction
     local localeClaimVerified = locTag and locTag ~= ""
-    local sanitizedKills = self.SanitizeSyncedKillTotal
+    local sanitizedKills, killsClampedByLevel = self.SanitizeSyncedKillTotal
         and self:SanitizeSyncedKillTotal(kills, levelToken)
     if not sanitizedKills then return end
     kills = sanitizedKills
@@ -8511,12 +8547,6 @@ function Overlord.Sync:BroadcastKill(zoneId, totalKills, killScoringAtEvent,
     local campaignEpoch = math.floor(tonumber(campaignEpochAtEvent) or currentCampaignEpoch or 0)
     local bucketEpoch = math.floor(tonumber(bucketEpochAtEvent)
         or GetLocalLeaderboardBucketEpoch() or 0)
-    -- Never announce more than peers accept for our level: the row would freeze
-    -- on their side while growing here.
-    local myLevel = tonumber(UnitLevel and UnitLevel("player")) or 0
-    if myLevel > 0 and self.MaxPlausibleKillsForLevel and tonumber(totalKills) then
-        totalKills = math.min(tonumber(totalKills), self:MaxPlausibleKillsForLevel(myLevel))
-    end
     killBroadcastData = {
         zoneId = zoneId,
         totalKills = totalKills,
@@ -8557,6 +8587,11 @@ function Overlord.Sync:BroadcastKill(zoneId, totalKills, killScoringAtEvent,
             -- kills de la meme campagne ont ete fusionnes pendant le delai.
             local totalKills = (Overlord.Leaderboard and Overlord.Leaderboard.kills
                 and Overlord.Leaderboard.kills[playerName]) or d.totalKills
+            -- Never announce more than peers retain for our level (they clamp to it).
+            local myLevel = tonumber(UnitLevel and UnitLevel("player")) or 0
+            if myLevel > 0 and Overlord.Sync.MaxPlausibleKillsForLevel and tonumber(totalKills) then
+                totalKills = math.min(tonumber(totalKills), Overlord.Sync:MaxPlausibleKillsForLevel(myLevel))
+            end
             local locTag = (Overlord.GetClientLocaleTag and Overlord:GetClientLocaleTag()) or ""
             local guildTag = Overlord:GetLocalGuildIdentity()
             local guildAt = time()
