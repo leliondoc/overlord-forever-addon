@@ -6,7 +6,9 @@ local maps = {
     [1451] = { name = "Silithus", mapType = 3 },
     [1440] = { name = "Ashenvale", mapType = 3 },
     [1581] = { name = "The Deadmines", mapType = 4 },
+    [1411] = { name = "Durotar", mapType = 3 },
 }
+for id = 2000, 2024 do maps[id] = { name = "Zone " .. id, mapType = 3 } end
 C_Map = { GetMapInfo = function(id) return maps[id] end }
 wipe = wipe or function(t) for k in pairs(t) do t[k] = nil end return t end
 local serverNow = 1789530000
@@ -42,6 +44,14 @@ FA:RecordKills("#1451", 4)
 local silithus = row("#1451")
 assert(silithus and silithus.label == "Silithus" and silithus.kills == 7 and silithus.active,
     "the off-front fight in Silithus is missing")
+-- A front's own map sent as "#uiMapID" lights that front up as well.
+FA:RecordKills("#1411", 5)
+assert(row("durotar") and row("durotar").active and row("durotar").kills == 5, "front map ref did not light the front")
+-- A full list of tracked zones makes room for a new fight (oldest out), never refuses it.
+for id = 2000, 2023 do serverNow = serverNow + 1; FA:RecordKills("#" .. id, 1) end
+serverNow = serverNow + 1
+assert(FA:RecordKills("#2024", 6), "a new off-front fight was refused when the list was full")
+assert(FA:GetKillCount("#2024") == 6, "the new fight was not counted")
 
 -- Kills older than the 5 min window drop out.
 serverNow = serverNow + 200

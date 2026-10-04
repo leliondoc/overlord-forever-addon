@@ -467,7 +467,17 @@ local function ResolveWorldKillKey(zoneRef)
         cached = ok and type(info) == "table" and info.mapType == zoneType
             and type(info.name) == "string" and info.name ~= "" and info.name or false
         -- Des identifiants inventes ne font jamais grossir le cache au-dela de 256.
-        if worldNameCount >= 256 then wipe(worldNameByKey); worldNameCount = 0 end
+        -- Les noms des zones suivies sont gardes (leur ligne ne disparait pas).
+        if worldNameCount >= 256 then
+            local kept = {}
+            for tracked in pairs(killLastAtByKey) do kept[tracked] = worldNameByKey[tracked] end
+            wipe(worldNameByKey)
+            worldNameCount = 0
+            for tracked, name in pairs(kept) do
+                worldNameByKey[tracked] = name
+                worldNameCount = worldNameCount + 1
+            end
+        end
         worldNameByKey[key] = cached
         worldNameCount = worldNameCount + 1
         if not cached then return nil end
@@ -479,12 +489,22 @@ local function ResolveWorldKillKey(zoneRef)
     return key
 end
 
+-- Zones inactives retirees ; liste pleine : la zone la plus ancienne cede sa place, pour
+-- qu'un nouveau combat ne soit jamais refuse.
 local function PurgeIdleWorldKeys(now)
+    local oldestKey, oldestAt
     for key in pairs(killLastAtByKey) do
-        if now - killLastAtByKey[key] > ACTIVITY_WINDOW then
+        local lastAt = killLastAtByKey[key]
+        if now - lastAt > ACTIVITY_WINDOW then
             killLastAtByKey[key], killSlotsByFront[key] = nil, nil
             worldKeyCount = math.max(0, worldKeyCount - 1)
+        elseif not oldestAt or lastAt < oldestAt then
+            oldestKey, oldestAt = key, lastAt
         end
+    end
+    if worldKeyCount >= WORLD_KEY_MAX and oldestKey then
+        killLastAtByKey[oldestKey], killSlotsByFront[oldestKey] = nil, nil
+        worldKeyCount = worldKeyCount - 1
     end
 end
 
@@ -504,6 +524,9 @@ function FA:RecordKills(zoneRef, kills)
                 worldKeyCount = worldKeyCount + 1
             end
             killLastAtByKey[frontId] = now
+        else
+            -- Carte d'un front annoncee en "#uiMapID" : le front devient actif aussi.
+            self:Record(frontId, nil, now)
         end
     end
     local slot = math.floor(now / KILL_SLOT_SEC)
