@@ -46,7 +46,7 @@ local FEATURED_FRONT_SPINE_OVERLAP = 1
 local FEATURED_FRONT_LAYOUT_VERSION = 60
 local FEATURED_FRONT_ACTIVITY_ROW_H = 18
 local FEATURED_FRONT_ACTIVITY_ROW_GAP = 3
-local FEATURED_FRONT_ACTIVITY_MAX_ROWS = 8
+local FEATURED_FRONT_ACTIVITY_MAX_ROWS = 11
 local FEATURED_FRONT_ACTIVITY_VISIBLE_ROWS = 5
 local FEATURED_FRONT_ACTIVITY_TITLE_H = 28
 local FEATURED_FRONT_ACTIVITY_BOTTOM_PAD = 8
@@ -1433,6 +1433,10 @@ local function SetFeaturedFrontActivityRow(row, frontId, label, active, ageSecon
 
     local fronts = Overlord.Fronts
     local iconSpec = fronts and fronts.GetFrontActivityIcon and fronts:GetFrontActivityIcon(frontId)
+    -- Combat hors front ("#uiMapID") : deux epees au lieu de la vignette du front.
+    if not iconSpec and type(frontId) == "string" and frontId:sub(1, 1) == "#" then
+        iconSpec = { path = "Interface\\Icons\\Ability_DualWield", texCoord = { 0.08, 0.92, 0.08, 0.92 } }
+    end
     ApplyFrontActivityIcon(row.frontIcon, iconSpec)
 
     local br, bg, bb = GetFrontActivityAgeColor(active, ageSeconds)

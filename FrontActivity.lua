@@ -40,6 +40,16 @@ local lastWritePurgeAtByFront = {}
 local KILL_SLOT_SEC = 10
 local KILL_DELTA_MAX = 30
 local killSlotsByFront = {}
+-- Hors front : la carte de zone "#uiMapID" deja portee par le K. Nom localise en cache,
+-- au plus WORLD_KEY_MAX zones suivies, et seulement les combats d'au moins 5 kills
+-- (3 lignes au plus) dans le panneau.
+local WORLD_KEY_MAX = 24
+local WORLD_MIN_KILLS = 5
+local WORLD_ROWS_MAX = 3
+local killLastAtByKey = {}
+local worldNameByKey = {}
+local worldNameCount = 0
+local worldKeyCount = 0
 local preparedActivityRoot, preparedActorRoot = nil, nil
 
 -- Horloge commune Blizzard : contrairement a l'heure systeme du PC, elle ne derive pas
@@ -61,6 +71,8 @@ function FA:ResetForCampaign()
         OverlordDB.frontActivity, OverlordDB.frontActivityActors = {}, {}
     end
     wipe(killSlotsByFront)
+    wipe(killLastAtByKey)
+    worldKeyCount = 0
     preparedActivityRoot, preparedActorRoot = nil, nil
     wipe(lastWritePurgeAtByFront)
     activityRevision = activityRevision + 1
@@ -440,13 +452,60 @@ end
 
 -- Taille du combat : nouveaux kills deja comptes par l'alerte de guilde (delta de
 -- totaux K successifs d'un meme joueur, une copie en double ne compte pas).
+-- "#uiMapID" : le front de cette carte s'il y en a un, sinon la zone du monde (une
+-- vraie carte de zone seulement : un identifiant invente ou une instance est ignore).
+local function ResolveWorldKillKey(zoneRef)
+    local mapID = type(zoneRef) == "string" and tonumber(zoneRef:match("^#(%d+)$"))
+    if not mapID or mapID <= 0 then return nil end
+    local key = "#" .. mapID
+    local cached = worldNameByKey[key]
+    if cached == false then return nil end
+    if cached == nil then
+        local ok, info = false, nil
+        if C_Map and C_Map.GetMapInfo then ok, info = pcall(C_Map.GetMapInfo, mapID) end
+        local zoneType = Enum and Enum.UIMapType and Enum.UIMapType.Zone or 3
+        cached = ok and type(info) == "table" and info.mapType == zoneType
+            and type(info.name) == "string" and info.name ~= "" and info.name or false
+        -- Des identifiants inventes ne font jamais grossir le cache au-dela de 256.
+        if worldNameCount >= 256 then wipe(worldNameByKey); worldNameCount = 0 end
+        worldNameByKey[key] = cached
+        worldNameCount = worldNameCount + 1
+        if not cached then return nil end
+    end
+    -- Une carte de zone d'un front compte pour ce front.
+    local fronts = Overlord.Fronts
+    local front = fronts and fronts.ResolveFrontByOverlayMapID and fronts:ResolveFrontByOverlayMapID(mapID)
+    if front and IsKnownFrontId(front.id) then return front.id end
+    return key
+end
+
+local function PurgeIdleWorldKeys(now)
+    for key in pairs(killLastAtByKey) do
+        if now - killLastAtByKey[key] > ACTIVITY_WINDOW then
+            killLastAtByKey[key], killSlotsByFront[key] = nil, nil
+            worldKeyCount = math.max(0, worldKeyCount - 1)
+        end
+    end
+end
+
 function FA:RecordKills(zoneRef, kills)
     if Overlord.InstanceSuspended then return false end
     kills = tonumber(kills)
     if not kills or kills <= 0 or kills ~= kills then return false end
     local frontId = self:GetFrontIdFromZoneRef(zoneRef)
-    if not frontId then return false end
     local now = ActivityNow()
+    if not frontId then
+        frontId = ResolveWorldKillKey(zoneRef)
+        if not frontId then return false end
+        if frontId:sub(1, 1) == "#" then
+            if not killLastAtByKey[frontId] then
+                if worldKeyCount >= WORLD_KEY_MAX then PurgeIdleWorldKeys(now) end
+                if worldKeyCount >= WORLD_KEY_MAX then return false end
+                worldKeyCount = worldKeyCount + 1
+            end
+            killLastAtByKey[frontId] = now
+        end
+    end
     local slot = math.floor(now / KILL_SLOT_SEC)
     local slots = killSlotsByFront[frontId]
     if not slots then
@@ -505,6 +564,21 @@ function FA:GetActivityRows()
             }
         end
     end
+    -- Combats hors front : les plus gros d'abord, 3 lignes au plus.
+    local world = {}
+    for key, lastAt in pairs(killLastAtByKey) do
+        local age = now - lastAt
+        local kills = age <= ACTIVITY_WINDOW and self:GetKillCount(key, now) or 0
+        if kills >= WORLD_MIN_KILLS and worldNameByKey[key] then
+            world[#world + 1] = { frontId = key, label = worldNameByKey[key], lastActivityAt = lastAt,
+                ageSeconds = math.max(0, age), active = true, kills = kills, world = true }
+        end
+    end
+    table.sort(world, function(a, b)
+        if a.kills ~= b.kills then return a.kills > b.kills end
+        return a.lastActivityAt > b.lastActivityAt
+    end)
+    for i = 1, math.min(WORLD_ROWS_MAX, #world) do rows[#rows + 1] = world[i] end
     table.sort(rows, function(a, b)
         if a.active ~= b.active then return a.active end
         if a.active and a.lastActivityAt ~= b.lastActivityAt then
