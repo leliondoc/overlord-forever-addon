@@ -2439,6 +2439,9 @@ local function ComputeLeaderboardInfo(dc)
     local canon = sync and sync.CanonicalForeverName
     local myName = sync and sync.GetPlayerFullName and sync:GetPlayerFullName()
     myName = myName and canon and sync:CanonicalForeverName(myName) or myName
+    -- Seuls les noms qui commencent comme le notre sont normalises (pas 5 000 appels).
+    local myShort = type(myName) == "string" and (myName:match("^(.-)%-") or myName) or nil
+    if myShort == "" then myShort = nil end
     local meta = dc.meta or {}
     local sorted = dc.sortedKills or {}
     for i = 1, #sorted do
@@ -2447,7 +2450,8 @@ local function ComputeLeaderboardInfo(dc)
         local faction = m and m[2]
         if faction == "Alliance" then info.allianceRanked = info.allianceRanked + 1
         elseif faction == "Horde" then info.hordeRanked = info.hordeRanked + 1 end
-        if myName and not info.myRank and type(row.name) == "string" then
+        if myShort and not info.myRank and type(row.name) == "string"
+            and row.name:find(myShort, 1, true) == 1 then
             local name = canon and sync:CanonicalForeverName(row.name) or row.name
             if name == myName then
                 info.myRank, info.myKills = i, tonumber(row.kills) or 0

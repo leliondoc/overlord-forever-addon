@@ -2371,6 +2371,14 @@ function Overlord.MapMarkers:InitializeMinimap()
             return
         end
 
+        -- Option "Minimap icons" coupee : rien a dessiner, pas de lecture de position.
+        if not Overlord.MapMarkers:MinimapIconsEnabled() then
+            if not mmIconsHidden then
+                mmIconsHidden = true
+                Overlord.MapMarkers:HideAllMinimapIcons()
+            end
+            return
+        end
         -- Position joueur : une seule fois par tick, partagee entre tous les pins
         local ok, mapID = pcall(C_Map.GetBestMapForUnit, "player")
         if not ok or not mapID then
@@ -2404,15 +2412,6 @@ function Overlord.MapMarkers:InitializeMinimap()
         end
         mmCachedFacing = mmCachedRotate and facing or 0
 
-        -- Option "Minimap icons" coupee : aucune icone Overlord sur la minimap (cercles,
-        -- generaux, mines, forts, avant-postes), masquees une seule fois.
-        if not Overlord.MapMarkers:MinimapIconsEnabled() then
-            if not mmIconsHidden then
-                mmIconsHidden = true
-                Overlord.MapMarkers:HideAllMinimapIcons()
-            end
-            return
-        end
         mmIconsHidden = false
         if Overlord.InActiveFront then
             Overlord.MapMarkers:UpdateMinimapPins(fullRefresh)
