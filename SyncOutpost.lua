@@ -301,6 +301,7 @@ local function BuildOutpostPayload(siteKey, st)
         -- les clients (meme queue que in_progress, champs precedents vides).
         local heldCapturer = OP.NormalizeHeldCapturerName
             and OP:NormalizeHeldCapturerName(st.heldCapturerName) or nil
+        if heldCapturer and st.heldCapturerGuild ~= guild then heldCapturer = nil end
         if heldCapturer then
             payload = payload .. string.format(":%s:%s:%d:%d:%s", "", "", 0, 0, heldCapturer)
         end
@@ -1171,10 +1172,12 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
             -- changement de proprietaire sans nom efface l'ancien.
             local namedCapturer = Overlord.Outpost.NormalizeHeldCapturerName
                 and Overlord.Outpost:NormalizeHeldCapturerName(relayCapturer) or nil
-            if stateChanged then
+            if stateChanged or stAfter.heldCapturerGuild ~= heldGuild then
                 stAfter.heldCapturerName = namedCapturer
+                stAfter.heldCapturerGuild = namedCapturer and heldGuild or nil
             elseif namedCapturer and not stAfter.heldCapturerName then
                 stAfter.heldCapturerName = namedCapturer
+                stAfter.heldCapturerGuild = heldGuild
             end
             if tenantChanged or countChanged or stateChanged then
                 -- Seulement ce qui change quelque chose : a 1500 clients, presque toutes

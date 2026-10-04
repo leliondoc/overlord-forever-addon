@@ -1208,12 +1208,13 @@ function Overlord.Outpost:ResetOutpostsForCampaign()
     if OverlordDB.outpostTenants then wipe(OverlordDB.outpostTenants) end
     if OverlordDB.outpostCaptureCounts then wipe(OverlordDB.outpostCaptureCounts) end
     -- Pastilles, carte et HUD fortin : plus d'ancien tenant affiche apres le reset.
-    -- Une seule passe (carte, minimap, HUD) ; les forteresses ont leur propre HUD.
+    -- Passe generique (carte, minimap, HUD) puis HUD forteresse, forcees : un
+    -- rafraichissement recent ne doit pas faire sauter celui du reset.
     if self.RefreshOutpostPresentation then
-        pcall(self.RefreshOutpostPresentation, self, nil)
+        pcall(self.RefreshOutpostPresentation, self, nil, true)
         for key, site in pairs(Overlord.OutpostSites) do
             if site and site.isFortress then
-                pcall(self.RefreshOutpostPresentation, self, key)
+                pcall(self.RefreshOutpostPresentation, self, key, true)
                 break
             end
         end
@@ -1261,6 +1262,9 @@ function Overlord.Outpost:CompleteCapture(siteKey, guild, faction, captureTs, ca
         or self:NormalizeHeldCapturerName(st.opRelayCapturerName)
     self:ClearOpCapturerFields(st)
     st.heldCapturerName = heldCapturer
+    -- Le nom ne vaut que pour cette guilde : un changement de proprietaire par un
+    -- autre chemin ne retransmet jamais le capteur de l'ancien tenant.
+    st.heldCapturerGuild = heldCapturer and newGuild or nil
     st.claimedAt = now
     st.expiresAt = 0
     st.holdTimeElapsed = 0
@@ -1506,7 +1510,11 @@ function Overlord.Outpost:ApplyRemoteState(siteKey, remote, fromSync)
     if remote.previousClaimedAt then st.previousClaimedAt = math.floor(tonumber(remote.previousClaimedAt) or 0) end
     if remote.previousExpiresAt then st.previousExpiresAt = math.floor(tonumber(remote.previousExpiresAt) or 0) end
     if remote.pool then st.pool = normalizeOutpostPoolTag(remote.pool) end
-    if remote.opRelayCapturerName then st.opRelayCapturerName = remote.opRelayCapturerName end
+    -- Capteur relaye : seulement d'un assaut en cours (un etat tenu porte le capteur
+    -- de la prise precedente, qui ne doit pas devenir celui de la suivante).
+    if remote.opRelayCapturerName and remote.status == "in_progress" then
+        st.opRelayCapturerName = remote.opRelayCapturerName
+    end
     if remote.opRelayCapturerShard then st.opRelayCapturerShard = remote.opRelayCapturerShard end
     if fromSync then
         -- Ne pas retirer l'autorite locale pendant un assaut actif (aligne Guild Keep).
@@ -1612,10 +1620,10 @@ end
 local lastPresentationRefresh = {}
 local PRESENTATION_THROTTLE = 2
 
-function Overlord.Outpost:RefreshOutpostPresentation(siteKey)
+function Overlord.Outpost:RefreshOutpostPresentation(siteKey, force)
     local now = GetTime()
     local key = siteKey or ""
-    local throttled = lastPresentationRefresh[key]
+    local throttled = not force and lastPresentationRefresh[key]
         and (now - lastPresentationRefresh[key]) < PRESENTATION_THROTTLE
     if not throttled then
         lastPresentationRefresh[key] = now
