@@ -1543,7 +1543,7 @@ function net:Send(kind, payload, target, immediate)
         or payload:find("[%c]") then return false end
     -- The startup heartbeat calls Broadcast with the plain addon version.
     -- Annotate at the producer boundary.
-    if kind == "NH" and payload == tostring(addon.WireVersion and addon:WireVersion() or addon.Version or "") then
+    if kind == "NH" and payload == tostring(addon.Version or "") then
         payload = payload .. "~lp6"
     end
     -- Handlers may rebroadcast received snapshots. The existing packet is already
@@ -2194,7 +2194,7 @@ function net:Start()
     if not enabled() or self.started then return end
     self.started = true
     local function hello()
-        if active() then net:Broadcast("NH", addon.WireVersion and addon:WireVersion() or addon.Version) end
+        if active() then net:Broadcast("NH", addon.Version) end
     end
     C_Timer.After(3, hello)
     self.ticker = C_Timer.NewTicker(NH_INTERVAL, hello)

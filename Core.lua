@@ -1,14 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
 Overlord.Version = "1.4.2"
--- Version annoncee sur le reseau (NH, SR). Tant qu'une version n'est pas publiee,
--- la machine de developpement annonce la version publique (/ov announce 1.4.1),
--- sinon chaque joueur a jour recoit "nouvelle version disponible" pour rien.
-function Overlord:WireVersion()
-    local v = OverlordDB and OverlordDB.announceVersion
-    if type(v) == "string" and v:match("^%d+%.%d+%.?%d*$") then return v end
-    return self.Version
-end
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncBetaNetwork.lua).
 Overlord.BetaNetworkEnabled = true
 Overlord.IsInitialized = false
