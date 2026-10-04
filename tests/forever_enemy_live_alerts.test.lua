@@ -49,4 +49,31 @@ assert(#messages == 2 and messages[2]:find("Enemy Tester", 1, true)
     and messages[2]:find("enemy commander", 1, true), "Horde commander chat alert was lost")
 receive(4, "GE", "H:global:5000:5000:1417:" .. time() .. ":" .. OverlordDB.lastResetTimestamp)
 assert(#messages == 2, "Commander replay duplicated the alert")
-print("Horde live alerts: production BNet dispatch preserves capture/commander chat and replay dedup")
+-- Friendly captures are announced only on the map of the front you are on (Retail
+-- rule): elsewhere hundreds of allies would flood the chat. Enemy ones stay global.
+local function receiveAlly(id, payload, who)
+    who = who or "Ally Tester"
+    local wire = table.concat({ "global", "ally-alert-" .. id, tostring(time()), "*",
+        who, "C", payload }, "|")
+    net:Receive(wire, who, "CHANNEL")
+    assert(not net.stats.lastError, net.stats.lastError)
+end
+local function allyCapture(at, wave, who)
+    return table.concat({ zone.id, (who or "Ally Tester") .. "|PALADIN", "Alliance", at,
+        wave, "Player-1-ALLY" .. wave, "120" }, ":")
+end
+Overlord.L.SYNC_CAPTURED_FRIENDLY = "%s captured by %s"
+local currentFront = { id = "redridge", mapName = "Redridge Mountains", zones = {} }
+Overlord.Fronts.GetCurrentFront = function() return currentFront end
+Overlord.InActiveFront, Overlord.Fronts.activeFrontId = true, "redridge"
+local before = #messages
+receiveAlly(1, allyCapture(time() + 1, "ally-wave-1"))
+assert(zone.owner == "Alliance", "Fixture: the friendly capture did not apply")
+assert(#messages == before, "A friendly capture on another front reached the chat")
+zone.owner, zone.status, zone.capturedTime = "Horde", "captured", time() - 10
+Overlord.Fronts.activeFrontId = "loch_modan"
+currentFront = { id = "loch_modan", mapName = "Loch Modan", zones = { zone } }
+receiveAlly(2, allyCapture(time() + 2, "ally-wave-2", "Ally Second"), "Ally Second")
+assert(#messages == before + 1 and messages[#messages]:find("(Loch Modan)", 1, true),
+    "A friendly capture on our own front was not announced")
+print("Horde live alerts: production BNet dispatch preserves capture/commander chat and replay dedup; friendly alerts only on the current front")

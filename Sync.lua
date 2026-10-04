@@ -3355,6 +3355,20 @@ end
 
 local function PrintCaptureChatOnce(zone, newOwner, capturerName, captureTs)
     if not zone or not zone.id or not newOwner then return end
+    local zoneFront
+    if Overlord.Fronts and Overlord.Fronts.GetZone then
+        zoneFront = select(2, Overlord.Fronts:GetZone(zone.id))
+    end
+    -- Captures alliees : seulement sur la carte du front ou l'on se trouve (comme sur
+    -- Retail). Ailleurs, des centaines de joueurs inonderaient le chat. Les captures
+    -- ennemies restent annoncees partout : c'est un appel a defendre. Teste avant
+    -- l'anti-doublon : une alerte masquee ne doit pas en bloquer une suivante.
+    if newOwner == Overlord.PlayerFaction then
+        local activeFrontId = Overlord.Fronts and Overlord.Fronts.activeFrontId
+        if not Overlord.InActiveFront or not zoneFront or zoneFront.id ~= activeFrontId then
+            return
+        end
+    end
     local now = GetTime()
     local key = zone.id .. ":" .. newOwner
     local dedupSec = zone.isCapital and priv.captureChatDedupCapitalSec or priv.captureChatDedupSec
@@ -3369,13 +3383,9 @@ local function PrintCaptureChatOnce(zone, newOwner, capturerName, captureTs)
     -- `key` = zone connue + faction valide : cardinalite structurellement bornee
     -- a deux fois le nombre fixe de zones, sans besoin de rescanner a chaque chat.
 
-    -- Forever announces captures of every front (Retail: only the current one):
-    -- name the map, "Thunder Ridge (Durotar) has been taken by...".
+    -- Enemy captures are announced on every front: name the map,
+    -- "Thunder Ridge (Durotar) has been taken by...".
     local zoneLabel = zone.name or zone.id
-    local zoneFront
-    if Overlord.Fronts and Overlord.Fronts.GetZone then
-        zoneFront = select(2, Overlord.Fronts:GetZone(zone.id))
-    end
     local mapName = zoneFront and zoneFront.mapName
     if type(mapName) == "string" and mapName ~= "" and mapName ~= zoneLabel then
         zoneLabel = zoneLabel .. " (" .. mapName .. ")"
