@@ -618,7 +618,12 @@ local function FinishRound(pending, success, target)
         OverlordDB.leaderboardRankFirstCompletedCampaignId = pending.campaignId
         NoteHr("completed", 1)
     end
-    NoteHr("result", success and "paged sweep received" or "paged sweep interrupted")
+    -- The pull records why it stopped (peer busy, no reply, ...): show it here too.
+    local pageStats = sync._leaderboardPageStats
+    local why = not success and type(pageStats) == "table" and type(pageStats.result) == "string"
+        and pageStats.result:match("^interrupted (%b())") or ""
+    NoteHr("result", success and "paged sweep received"
+        or ("paged sweep interrupted" .. (why ~= "" and (" " .. why) or "")))
     -- Re-arm first: a failure in the history request must never stop the rounds.
     ArmNextHistoryCatchup(success and RECENT_ACK_SEC or EXHAUSTED_RETRY_SEC)
     pcall(MaybeRequestOutpostHistory, success and target or nil, pending.forceHistory)

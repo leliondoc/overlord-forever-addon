@@ -248,7 +248,9 @@ local function finish(state, success, unsupportedPeer)
         sendControl("HR", table.concat({ state.extended and "6" or "5", "F",
             state.epoch, state.nonce, state.seq }, ":"), state.peer)
     end
-    stats.result = success and "sweep received" or "interrupted; bucket retained"
+    -- /ov network: why the last pull stopped (busy responder, silence, ...).
+    stats.result = success and "sweep received"
+        or ("interrupted (" .. tostring(state.why or "?") .. "); bucket retained")
     if unsupportedPeer and not state.extended then
         if not unsupported[state.peer] then
             unsupportedOrder[#unsupportedOrder + 1] = state.peer
@@ -270,7 +272,7 @@ end
 local request, tryApply
 request = function(state, retry)
     if pull ~= state then return end
-    if state.epoch ~= epoch() then finish(state, false); return end
+    if state.epoch ~= epoch() then state.why = "campaign changed"; finish(state, false); return end
     state.waitingForSend = true
     if paused() then C_Timer.After(2, function() request(state, retry) end); return end
     if not retry then
@@ -298,6 +300,7 @@ request = function(state, retry)
         local net = Overlord.BetaNetwork
         if net and net.IsPeer and net.IsDirectPeer and net:IsPeer(state.peer)
             and not net:IsDirectPeer(state.peer) then
+            state.why = "peer no longer direct"
             finish(state, false)
             return
         end
@@ -321,7 +324,7 @@ request = function(state, retry)
     local seenFragmentAt = state.fragmentAt
     local function timeout()
         if pull ~= state or state.seq ~= seq or state.tries ~= tries or state.applying then return end
-        if state.epoch ~= epoch() then finish(state, false); return end
+        if state.epoch ~= epoch() then state.why = "campaign changed"; finish(state, false); return end
         -- Une page qui arrive encore fragment par fragment n'est pas muette.
         if state.fragmentAt ~= seenFragmentAt then
             seenFragmentAt = state.fragmentAt
@@ -345,7 +348,10 @@ request = function(state, retry)
         if state.supported and state.tries < (answered and 2 or 3) then
             stats.retries = stats.retries + 1
             request(state, true)
-        else finish(state, false, not state.supported) end
+        else
+            state.why = state.supported and "silent after replying" or "no reply"
+            finish(state, false, not state.supported)
+        end
     end
     C_Timer.After(2, timeout)
 end
@@ -420,7 +426,7 @@ tryApply = function(state)
     local index = 1
     local function apply()
         if pull ~= state then return end
-        if state.epoch ~= epoch() then finish(state, false); return end
+        if state.epoch ~= epoch() then state.why = "campaign changed"; finish(state, false); return end
         if paused() then C_Timer.After(2, apply); return end
         local sliceAt = debugprofilestop and debugprofilestop() or 0
         for _ = 1, 4 do
@@ -438,6 +444,7 @@ tryApply = function(state)
                 state.applyBlockedAt = state.applyBlockedAt or GetTime()
                 stats.deferred = stats.deferred + 1
                 if GetTime() - state.applyBlockedAt >= 30 then
+                    state.why = "burst limit"
                     finish(state, false)
                 else
                     C_Timer.After(1, apply)
@@ -455,7 +462,7 @@ tryApply = function(state)
             local ok, accepted = pcall(receive, sync, row.payload, state.peer, state.channel)
             sync._pagedDelivery = nil
             if net then net.context = previous end
-            if not ok then stats.error = tostring(accepted); finish(state, false); return end
+            if not ok then stats.error = tostring(accepted); state.why = "error"; finish(state, false); return end
             -- Local blacklist/level policy can intentionally differ. Never
             -- bypass it or describe a received sweep as identical replicas.
             if accepted then stats.rows = stats.rows + 1 else stats.rejected = stats.rejected + 1 end
@@ -531,6 +538,7 @@ end
 -- the bucket checkpoint lets the next round resume.
 function sync:CancelPagedLeaderboardCatchup()
     if not pull then return false end
+    pull.why = "round too long"
     finish(pull, false)
     return true
 end
@@ -563,7 +571,7 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended)
     stats.target, stats.result = peer, "preparing"
     if not prepare(function(profile)
         if pull ~= state then return end
-        if not profile then finish(state, false); return end
+        if not profile then state.why = "no local snapshot"; finish(state, false); return end
         state.profile = profile
         stats.result = "awaiting reply"
         request(state)
@@ -664,6 +672,7 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         or state.extended ~= extended then return end
     if kind == "HA" and op == "R" then
         state.supported = true
+        state.why = "peer busy"
         finish(state, false)
         return
     end
