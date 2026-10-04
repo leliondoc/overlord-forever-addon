@@ -4915,6 +4915,10 @@ function Overlord:ResetAll()
     if self.FrontActivity and self.FrontActivity.ResetForCampaign then
         pcall(self.FrontActivity.ResetForCampaign, self.FrontActivity)
     end
+    -- Most Wanted : plus aucun crane ni alerte pour les joueurs de la semaine passee.
+    if self.MostWanted and self.MostWanted.ResetForCampaign then
+        pcall(self.MostWanted.ResetForCampaign, self.MostWanted)
+    end
     -- campaignId : recalcule dans CheckWeeklyReset via SyncCampaignIdWithCurrentWeek (date AAAAMMJJ).
     self:SaveState()
     if self.Sync and self.Sync.ResetVictoryFlag then

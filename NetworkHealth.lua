@@ -95,7 +95,15 @@ local TEXTURE = {
 }
 local WORD_KEY = { ok = "NET_HEALTH_OK", warn = "NET_HEALTH_WARN", bad = "NET_HEALTH_BAD" }
 local WORD_FALLBACK = { ok = "All good", warn = "Worth watching", bad = "Problem" }
-local COLOR = { ok = { 0.25, 1, 0.25 }, warn = { 1, 0.82, 0 }, bad = { 1, 0.25, 0.25 } }
+local COLOR = { ok = { 0.55, 0.82, 0.55 }, warn = { 0.92, 0.76, 0.42 }, bad = { 0.88, 0.48, 0.45 } }
+
+-- Pastille Blizzard desaturee puis teintee : couleurs douces, meme forme.
+local function Tint(icon, level)
+    icon:SetTexture(TEXTURE[level] or TEXTURE.ok)
+    if icon.SetDesaturated then icon:SetDesaturated(true) end
+    local c = COLOR[level] or COLOR.ok
+    icon:SetVertexColor(c[1], c[2], c[3], 0.9)
+end
 
 local function InInstance()
     if Overlord.InstanceSuspended then return true end
@@ -110,7 +118,7 @@ local function Paint(button)
     if InInstance() then return end
     local level = NH:IndicatorLevel()
     button._level = level
-    button.icon:SetTexture(TEXTURE[level] or TEXTURE.ok)
+    Tint(button.icon, level)
 end
 
 local function ShowTooltip(button)
@@ -142,7 +150,7 @@ function NH:AttachIndicator(parent, anchor)
     end
     local icon = button:CreateTexture(nil, "OVERLAY")
     icon:SetAllPoints()
-    icon:SetTexture(TEXTURE.ok)
+    Tint(icon, "ok")
     button.icon = icon
     button:SetScript("OnEnter", ShowTooltip)
     button:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)

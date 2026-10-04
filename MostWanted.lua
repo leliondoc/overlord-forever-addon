@@ -102,6 +102,13 @@ function MW:Refresh(force)
     self.list, self.byKey = list, byKey
 end
 
+-- Reset hebdo (Overlord:ResetAll) : la liste de la semaine passee disparait tout de
+-- suite ; la prochaine lecture repart du cache de la nouvelle campagne.
+function MW:ResetForCampaign()
+    self.list, self.byKey, self.alertedAt = {}, {}, {}
+    self._refreshedAt, self._ensureAt, self._lastAlertAt = nil, nil, nil
+end
+
 -- Lecture seule pour le classement (aucun recalcul pendant le dessin des lignes).
 function MW:IsWanted(name)
     if not next(self.byKey) then return nil end

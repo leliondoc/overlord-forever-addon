@@ -362,7 +362,7 @@ function GKA:OnLiveKill(playerName, faction, guildName, totalKills, zoneId, scor
     local delta = ConsumeKillDelta(playerName:lower(), math.floor(total), tonumber(scoreEpoch), guildKey, now)
     -- Taille des combats du dock : les memes kills, avec ou sans guilde (aucun paquet).
     local fa = Overlord.FrontActivity
-    if delta > 0 and fa and fa.RecordKills and IsValidZoneRef(zoneId) then
+    if delta > 0 and not self._simulating and fa and fa.RecordKills and IsValidZoneRef(zoneId) then
         pcall(fa.RecordKills, fa, zoneId, delta)
     end
     if delta <= 0 or not hasGuild then return end

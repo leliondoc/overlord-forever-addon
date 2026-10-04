@@ -82,6 +82,12 @@ Overlord.Leaderboard.EnsureDisplayCache = function() ensured = ensured + 1 end
 MW:Refresh(true)
 assert(#MW.list == 0 and not MW:IsWanted("Horde One"), "last week's Most Wanted survived the reset")
 assert(ensured == 1, "a stale view did not ask for a fresh one")
+-- The reset itself empties the list at once (no 60 s wait for the ticker).
+lastWeek.killSource = Overlord.Leaderboard.kills
+MW:Refresh(true)
+assert(MW:IsWanted("Horde One"), "fixture: list not rebuilt")
+MW:ResetForCampaign()
+assert(#MW.list == 0 and not MW:IsWanted("Horde One"), "the weekly reset kept last week's Most Wanted")
 lastWeek.killSource = Overlord.Leaderboard.kills
 MW:Refresh(true)
 assert(#MW.list == 5, "a current view was not used")
