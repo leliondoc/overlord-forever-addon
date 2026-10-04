@@ -27,7 +27,11 @@ local LB_GUILD_KILLS_W = 208
 local LB_GUILD_KEEP_W = LB_MAIN_W
 local LB_OUTPOST_W = LB_MAIN_W
 local LB_COL_GAP = 12
-local LB_FRAME_PAD = 16
+-- Marge interieure : le cadre en bois des panneaux Blizzard est epais.
+local LB_FRAME_PAD = 26
+-- Le classement s'affiche 20 % plus grand que l'echelle de l'interface Overlord
+-- (toujours ramene a la taille de l'ecran).
+local LB_SIZE_BOOST = 1.2
 local LB_FRAME_W = LB_FRAME_PAD + LB_MAIN_W + LB_COL_GAP + LB_GUILD_KILLS_W + LB_COL_GAP
     + LB_GUILD_KEEP_W + LB_COL_GAP + LB_OUTPOST_W + LB_FRAME_PAD
 -- Colonnes guildes (tues) sur panneau 208. VH elargi a 58 px : les totaux de
@@ -809,7 +813,7 @@ local function LayoutLeaderboardSections()
     end
 
     header:ClearAllPoints()
-    header:SetPoint("TOP", lbFrame.subtitle, "BOTTOM", 0, -6)
+    header:SetPoint("TOP", lbFrame.totalText, "BOTTOM", 0, -10)
     header:SetPoint("LEFT", lbFrame, "LEFT", LB_FRAME_PAD, 0)
 
     killsP:ClearAllPoints()
@@ -862,7 +866,7 @@ local function FitLeaderboardFrameScale(preferredScale)
     local availableH = math.max(1, (UIParent:GetHeight() or 500) - 24)
     local frameH = math.max(1, lbFrame:GetHeight() or 500)
     local fittedScale = math.max(
-        0.1, math.min(preferredScale, availableW / LB_FRAME_W, availableH / frameH))
+        0.1, math.min(preferredScale * LB_SIZE_BOOST, availableW / LB_FRAME_W, availableH / frameH))
     if math.abs((lbFrame:GetScale() or 1) - fittedScale) > 0.001 then
         lbFrame:SetScale(fittedScale)
     end
@@ -874,10 +878,12 @@ local function FitLeaderboardFrameHeight()
     local frameTop = lbFrame:GetTop()
     local contentBottom = lbFrame.footerBand:GetBottom()
     if not frameTop or not contentBottom then return end
-    local bottomPad = 14
+    local bottomPad = 28
     local currentScale = lbFrame:GetScale() or 1
     if currentScale <= 0 then currentScale = 1 end
-    local h = (frameTop - contentBottom) / currentScale + bottomPad
+    -- GetTop/GetBottom du cadre et de son enfant sont deja dans l'echelle du cadre :
+    -- ne pas rediviser par l'echelle (le cadre etait trop court des qu'agrandi).
+    local h = (frameTop - contentBottom) + bottomPad
     if h > 200 and math.abs(h - (lbFrame._lbFitHeight or 0)) > 0.5 then
         lbFrame._lbFitHeight = h
         lbFrame:SetHeight(h)
@@ -910,22 +916,45 @@ function Overlord.LeaderboardUI:CreateFrame()
 
     -- Titre (or officiel Blizzard)
     local title = lbFrame:CreateFontString(nil, "OVERLAY", "Fancy24Font")
-    title:SetPoint("TOP", 0, -21)
+    title:SetPoint("TOP", 0, -27)
     title:SetText(L.LB_TITLE)
     title:SetTextColor(P.accent[1], P.accent[2], P.accent[3])
     title:SetShadowOffset(1, -1)
     title:SetShadowColor(0, 0, 0, 0.6)
 
-    -- Sous-titre : date de la campagne
-    lbFrame.subtitle = lbFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    lbFrame.subtitle:SetPoint("TOP", title, "BOTTOM", 0, -1)
+    -- Sous-titre : date de la campagne, lisible (creme, taille normale).
+    lbFrame.subtitle = lbFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    lbFrame.subtitle:SetPoint("TOP", title, "BOTTOM", 0, -3)
     local startDate, endDate = Overlord:GetCampaignDateRange()
     lbFrame.subtitle:SetText(string.format(L.LB_CAMPAIGN_DATE, startDate, endDate))
-    lbFrame.subtitle:SetTextColor(P.muted[1], P.muted[2], P.muted[3], 0.9)
+    lbFrame.subtitle:SetTextColor(0.95, 0.88, 0.70, 1)
+    lbFrame.subtitle:SetShadowOffset(1, -1)
+
+    -- Kills Alliance / Horde sous la campagne (blasons de part et d'autre).
+    lbFrame.totalText = lbFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    lbFrame.totalText:SetPoint("TOP", lbFrame.subtitle, "BOTTOM", 0, -6)
+    lbFrame.totalText:SetTextColor(P.white[1], P.white[2], P.white[3])
+    -- Cadre en bois neutre des panneaux Blizzard, sur une couche a part : le fond
+    -- actuel reste dessous.
+    if NineSliceUtil and NineSliceUtil.ApplyLayoutByName and NineSliceUtil.GetLayout then
+        local layoutName = "WoodenNeutralFrameTemplate"
+        if NineSliceUtil.GetLayout(layoutName) then
+            local border = CreateFrame("Frame", nil, lbFrame)
+            border:SetAllPoints()
+            border:SetFrameLevel(lbFrame:GetFrameLevel() + 20)
+            border:EnableMouse(false)
+            if pcall(NineSliceUtil.ApplyLayoutByName, border, layoutName) then
+                lbFrame.bgBorder = border
+                lbFrame:SetBackdropBorderColor(0, 0, 0, 0)
+            else
+                border:Hide()
+            end
+        end
+    end
 
     -- Reuse the existing panel texture and fonts. No search icon/atlas or ticker.
     local searchPanel = CreateOfficialSubPanel(lbFrame, 266, 28, P, { header = true })
-    searchPanel:SetPoint("TOPLEFT", lbFrame, "TOPLEFT", LB_FRAME_PAD, -18)
+    searchPanel:SetPoint("TOPLEFT", lbFrame, "TOPLEFT", LB_FRAME_PAD, -20)
     local searchBox = CreateFrame("EditBox", nil, searchPanel)
     lbFrame.searchBox = searchBox
     searchBox:SetPoint("TOPLEFT", 10, -2)
@@ -968,10 +997,39 @@ function Overlord.LeaderboardUI:CreateFrame()
     rulesetLabel:SetText(string.format(L.LB_RULESET_LABEL or "%s ruleset", rulesetNames[ruleset] or tostring(ruleset)))
     lbFrame.rulesetLabel = rulesetLabel
     lbFrame.searchStatus = searchPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    lbFrame.searchStatus:SetPoint("TOPRIGHT", searchPanel, "BOTTOMRIGHT", -2, -3)
+    -- A cote du ruleset (sous la recherche se trouvent les infos de campagne).
+    lbFrame.searchStatus:SetPoint("LEFT", rulesetLabel, "RIGHT", 14, 0)
     lbFrame.searchStatus:SetTextColor(P.muted[1], P.muted[2], P.muted[3])
     lbFrame:SetScript("OnHide", function()
         if lbFrame.search then lbFrame.search:Cancel() end
+        if lbFrame.infoTicker then lbFrame.infoTicker:Cancel(); lbFrame.infoTicker = nil end
+    end)
+
+    -- Infos de part et d'autre du titre (donnees deja locales, aucun paquet), sur les
+    -- deux lignes du centre (date de campagne, totaux) : a gauche la campagne, a droite
+    -- le joueur et sa guilde, meme police que le centre.
+    local function InfoLine(row, side)
+        local fs = lbFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        fs:SetPoint("TOP", row, "TOP", 0, 0)
+        if side == "LEFT" then
+            fs:SetPoint("LEFT", lbFrame, "LEFT", LB_FRAME_PAD + 4, 0)
+        else
+            fs:SetPoint("RIGHT", lbFrame, "RIGHT", -LB_FRAME_PAD - 4, 0)
+        end
+        fs:SetJustifyH(side)
+        fs:SetWidth(440)
+        fs:SetWordWrap(false)
+        fs:SetMaxLines(1)
+        fs:SetShadowOffset(1, -1)
+        return fs
+    end
+    lbFrame.infoLeft = { InfoLine(lbFrame.subtitle, "LEFT"), InfoLine(lbFrame.totalText, "LEFT") }
+    lbFrame.infoRight = { InfoLine(lbFrame.subtitle, "RIGHT"), InfoLine(lbFrame.totalText, "RIGHT") }
+    lbFrame:HookScript("OnShow", function()
+        if lbFrame.infoTicker or not (C_Timer and C_Timer.NewTicker) then return end
+        lbFrame.infoTicker = C_Timer.NewTicker(30, function()
+            if lbFrame:IsShown() then Overlord.LeaderboardUI:RefreshInfoLines() end
+        end)
     end)
 
     -- En-tetes de colonnes (bandeau sombre, meme largeur que les lignes)
@@ -1422,12 +1480,14 @@ function Overlord.LeaderboardUI:CreateFrame()
 
     self:UpdateCaptureScrollIndicators() -- kills + captures
 
-    lbFrame.totalText = footerBand:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    lbFrame.totalText:SetPoint("CENTER", footerBand, "CENTER", 0, 0)
-    lbFrame.totalText:SetTextColor(P.white[1], P.white[2], P.white[3])
+    -- Les totaux sont en haut : le pied de page ne garde que sa place (repere du bas).
+    footerBand:SetHeight(1)
+    footerBand:SetAlpha(0)
 
-    Overlord.UI.CreateWC3CloseButton(lbFrame, function() Overlord.LeaderboardUI:Hide() end, { gold = P.accent })
-        :SetPoint("TOPRIGHT", -8, -8)
+    local closeBtn = Overlord.UI.CreateWC3CloseButton(lbFrame, function() Overlord.LeaderboardUI:Hide() end, { gold = P.accent })
+    closeBtn:SetPoint("TOPRIGHT", -8, -8)
+    -- Au-dessus des coins du cadre en bois.
+    if lbFrame.bgBorder then closeBtn:SetFrameLevel(lbFrame.bgBorder:GetFrameLevel() + 5) end
 
     -- ESC ferme le panneau (SetScript au lieu de UISpecialFrames pour eviter taint)
     -- SetPropagateKeyboardInput est protegee en combat : ne pas l'appeler sous InCombatLockdown.
@@ -2350,6 +2410,109 @@ function Overlord.LeaderboardUI:SetSearchText(text)
     self:ApplySearch()
 end
 
+local function InfoNumber(value)
+    value = math.floor(tonumber(value) or 0)
+    if BreakUpLargeNumbers then
+        local ok, text = pcall(BreakUpLargeNumbers, value)
+        if ok and text then return text end
+    end
+    return tostring(value)
+end
+
+local function InfoText(label, value)
+    return "|cFFF8B700" .. label .. "|r " .. value
+end
+
+local function InfoSetLine(fs, text)
+    if not fs then return end
+    if fs._infoText ~= text then
+        fs._infoText = text
+        fs:SetText(text or "")
+    end
+end
+
+-- Un seul passage sur la liste par reconstruction du classement : rang du joueur,
+-- ecart avec le suivant, joueurs classes par faction ; guilde du joueur.
+local function ComputeLeaderboardInfo(dc)
+    local info = { allianceRanked = 0, hordeRanked = 0 }
+    local sync = Overlord.Sync
+    local canon = sync and sync.CanonicalForeverName
+    local myName = sync and sync.GetPlayerFullName and sync:GetPlayerFullName()
+    myName = myName and canon and sync:CanonicalForeverName(myName) or myName
+    local meta = dc.meta or {}
+    local sorted = dc.sortedKills or {}
+    for i = 1, #sorted do
+        local row = sorted[i]
+        local m = row and meta[row.name]
+        local faction = m and m[2]
+        if faction == "Alliance" then info.allianceRanked = info.allianceRanked + 1
+        elseif faction == "Horde" then info.hordeRanked = info.hordeRanked + 1 end
+        if myName and not info.myRank and type(row.name) == "string" then
+            local name = canon and sync:CanonicalForeverName(row.name) or row.name
+            if name == myName then
+                info.myRank, info.myKills = i, tonumber(row.kills) or 0
+                local above = sorted[i - 1]
+                if above then info.aboveKills = tonumber(above.kills) or 0 end
+            end
+        end
+    end
+    local myGuild = Overlord.Outpost and Overlord.Outpost.GetLocalPlayerGuild
+        and Overlord.Outpost:GetLocalPlayerGuild() or ""
+    if myGuild ~= "" then
+        info.guild = myGuild
+        for i, entry in ipairs(dc.sortedGuilds or {}) do
+            if entry.guild == myGuild then
+                info.guildRank, info.guildKills = i, tonumber(entry.kills) or 0
+                break
+            end
+        end
+    end
+    return info
+end
+
+function Overlord.LeaderboardUI:RefreshInfoLines(dc)
+    if not lbFrame or not lbFrame.infoLeft then return end
+    if dc and lbFrame._infoDc ~= dc then
+        lbFrame._infoDc = dc
+        lbFrame._info = ComputeLeaderboardInfo(dc)
+    end
+    local info = lbFrame._info or {}
+    local left, right = lbFrame.infoLeft, lbFrame.infoRight
+
+    -- Gauche : fin de campagne, joueurs classes.
+    local startTs = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
+    local now = (Overlord.ServerNow and Overlord.ServerNow()) or (GetServerTime and GetServerTime()) or 0
+    local remaining = (startTs > 0 and now > 0) and (startTs + 604800 - now) or 0
+    local duration
+    if remaining > 0 and SecondsToTime then
+        local ok, text = pcall(SecondsToTime, remaining - remaining % 60, true, false, 2)
+        duration = ok and text or nil
+    end
+    InfoSetLine(left[1], duration and InfoText(L.LB_INFO_ENDS or "Campaign ends in", duration) or "")
+    InfoSetLine(left[2], InfoText(L.LB_INFO_RANKED or "Ranked players:", string.format(
+        L.LB_INFO_RANKED_VALUE or "|cFF4488FF%s Alliance|r · |cFFFF4444%s Horde|r",
+        InfoNumber(info.allianceRanked), InfoNumber(info.hordeRanked))))
+
+    -- Droite : rang du joueur et ecart avec le suivant, puis sa guilde.
+    local unit = L.LB_COL_KILLS or "HK"
+    if info.myRank then
+        local nextText = info.aboveKills
+            and string.format(L.LB_INFO_NEXT or "%s HK to pass #%d",
+                InfoNumber(math.max(1, info.aboveKills - info.myKills + 1)), info.myRank - 1)
+            or (L.LB_INFO_FIRST or "You lead the ladder!")
+        InfoSetLine(right[1], InfoText(L.LB_INFO_YOU or "You:", string.format("#%d · %s %s",
+            info.myRank, InfoNumber(info.myKills), unit)) .. "  |cFFB8B8B8(" .. nextText .. ")|r")
+    else
+        InfoSetLine(right[1], InfoText(L.LB_INFO_YOU or "You:", L.LB_INFO_UNRANKED or "not ranked yet"))
+    end
+    if info.guild and info.guildRank then
+        InfoSetLine(right[2], InfoText("<" .. info.guild .. ">", string.format("#%d · %s %s",
+            info.guildRank, InfoNumber(info.guildKills), unit)))
+    else
+        InfoSetLine(right[2], "")
+    end
+end
+
 function Overlord.LeaderboardUI:Refresh()
     if not lbFrame or not lbFrame:IsShown() or not Overlord.Leaderboard then return end
     local lb = Overlord.Leaderboard
@@ -2368,6 +2531,7 @@ function Overlord.LeaderboardUI:Refresh()
     view.duplicateShortNames = dc.duplicateShortNames or {}
     self:ApplySearch()
 
+    self:RefreshInfoLines(dc)
     local totalFmt = string.format(L.LB_TOTAL_FORMAT, dc.alliKills or 0, dc.hordeKills or 0)
     if lbFrame._lbTotalFmt ~= totalFmt then
         lbFrame._lbTotalFmt = totalFmt
