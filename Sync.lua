@@ -1199,6 +1199,60 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
     return accepted
 end
 
+-- Detection (1.4.2) : un total annonce par un tiers au-dessus de ce que le
+-- proprietaire a lui-meme declare (plus 1 kill/s depuis, plus 60 de marge) ne
+-- peut pas etre honnete : les pages des pairs ne font que repeter les annonces du
+-- proprietaire. Rien n'est modifie (la borne de croissance s'applique deja) :
+-- on compte, on retient qui a parle, /ov network le montre et le joueur decide.
+local INFLATION_MARGIN, INFLATION_RATE, INFLATION_VICTIMS_MAX = 60, 1, 32
+local inflationVictims, inflationVictimCount = {}, 0
+function Overlord.Sync:NoteOwnerKillClaim(playerName, total)
+    total = tonumber(total)
+    if not total or total < 0 then return end
+    local st = SubjectRow(subjectTotals, SubjectKey(self, playerName), true)
+    st.ownClaim, st.ownAt = total, GetTime()
+end
+function Overlord.Sync:NoteThirdPartyKillTotal(playerName, total, sender)
+    total = tonumber(total)
+    if not total then return end
+    local st = SubjectRow(subjectTotals, SubjectKey(self, playerName), false)
+    if not st or not st.ownAt then return end
+    local now = GetTime()
+    local allowed = st.ownClaim + math.floor(math.max(0, now - st.ownAt) * INFLATION_RATE) + INFLATION_MARGIN
+    if total <= allowed then return false end
+    local via = self:BurstLimiterKey(sender)
+    local betaNet = Overlord.BetaNetwork
+    if betaNet and betaNet.stats then
+        betaNet.stats.thirdPartyTotalsAboveOwner = (betaNet.stats.thirdPartyTotalsAboveOwner or 0) + 1
+    end
+    self:NoteSuspiciousSender(via, "inflates others")
+    local row = inflationVictims[playerName]
+    if not row then
+        if inflationVictimCount >= INFLATION_VICTIMS_MAX then return true end
+        inflationVictimCount = inflationVictimCount + 1
+        row = { count = 0 }
+        inflationVictims[playerName] = row
+    end
+    row.count = row.count + 1
+    row.over, row.by, row.at = total - allowed, tostring(via or sender or "?"), now
+    return true
+end
+function Overlord.Sync:GetThirdPartyInflationDiagnostics()
+    if inflationVictimCount == 0 then return "Third-party totals above the owner's own count: none." end
+    local rows = {}
+    for name, row in pairs(inflationVictims) do rows[#rows + 1] = { name = name, row = row } end
+    table.sort(rows, function(a, b)
+        if a.row.count ~= b.row.count then return a.row.count > b.row.count end
+        return a.name < b.name
+    end)
+    local parts = {}
+    for i = 1, math.min(5, #rows) do
+        local r = rows[i].row
+        parts[#parts + 1] = string.format("%s (+%d over own count, x%d, last by %s)", rows[i].name, r.over, r.count, r.by)
+    end
+    return "Third-party totals above the owner's own count (top 5): " .. table.concat(parts, "; ") .. "."
+end
+
 -- Captures (non sollicitees) : 1 capture par 45 s au plus depuis le dernier compteur
 -- retenu (+2 de jeu) ; un sujet inconnu est borne par l'age de la campagne a raison
 -- d'une capture par 2 min (maintien + trajet). Ecrete, jamais refuse.
@@ -3032,6 +3086,7 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
         end
         return
     end
+    self:NoteOwnerKillClaim(playerName, totalKills)
     local observedLevelEligible = self.IsObservedPlayerKillLevelEligible
         and self:IsObservedPlayerKillLevelEligible(playerName)
     if observedLevelEligible == false then return end
@@ -8296,6 +8351,11 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     -- Un total non sollicite (y compris celui que le proprietaire annonce lui-meme
     -- par LK) suit la meme borne de croissance que K ; une ligne sollicitee n'est
     -- bornee que lorsqu'elle est inconnue ici (cap de premier contact).
+    if guildOwner then
+        self:NoteOwnerKillClaim(playerName, kills)
+    else
+        self:NoteThirdPartyKillTotal(playerName, kills, sender)
+    end
     local solicited = guildSnapshot or self:HasExpectedFullLeaderboardResponse(sender, channel)
     if not solicited or killsBefore <= 0 then
         kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, guildOwner and not solicited)

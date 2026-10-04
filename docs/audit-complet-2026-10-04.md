@@ -309,7 +309,12 @@ appliquées. 102 tests Lua 5.1 verts.
   mot ; dédoublonnage C sur l'horodatage brut ; âge TV en heure serveur ; jetons de guilde sans
   caractères de contrôle ni `%`.
 - Diagnostic : `NoteSuspiciousSender` (64 lignes, éviction du plus petit total, jamais de blâme
-  sur un écrêtage de premier contact), lu par `/ov network`.
+  sur un écrêtage de premier contact), lu par `/ov network`. Gonflage par un tiers : un total LK
+  non propriétaire au-dessus de la dernière auto-déclaration du joueur (+1/s, +60) est compté
+  (`NoteThirdPartyKillTotal`, expéditeur = dernier saut authentifié), jamais modifié ; `/ov
+  network` nomme la victime et l'expéditeur. Le gonflage reste possible à ≈2 kills/s jusqu'au
+  plafond du niveau : le fermer exigerait de baisser un total sur la parole du propriétaire,
+  donc une divergence durable entre clients.
 - Résiduel (nécessite un serveur) : niveau auto-déclaré, carte ZA forgée pour une zone sans
   trafic, C forgé à son propre nom (1 zone / 25 s), OP/LO/LOC depuis tout pair, identité GE
   cosmétique.

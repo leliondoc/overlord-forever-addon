@@ -290,6 +290,7 @@ local function StartNetworkProbe()
         end
         if sync.GetEnemyCaptureFinalDiagnostics then R.Detail(sync:GetEnemyCaptureFinalDiagnostics()) end
         if sync.GetSuspiciousSenderDiagnostics then R.Detail(sync:GetSuspiciousSenderDiagnostics()) end
+        if sync.GetThirdPartyInflationDiagnostics then R.Detail(sync:GetThirdPartyInflationDiagnostics()) end
         if sync.GetHistoryCatchupDiagnostics then
             for _, line in ipairs(sync:GetHistoryCatchupDiagnostics()) do R.Detail(line) end
         end

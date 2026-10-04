@@ -137,6 +137,25 @@ do
         "bound state was wiped by the crowd: " .. tostring(Overlord.Leaderboard.kills["Variant Player"]))
 end
 
+-- A third party pushing a known player above the player's own count is detected (never applied
+-- differently: the growth bound already caps it); a total within the owner's pace is not.
+do
+    ownK("Honest Victim", 500, "Horde")
+    local before = net.stats.thirdPartyTotalsAboveOwner or 0
+    s:OnReceiveLeaderboardKills(lkRow("Honest Victim", 540, "Horde"), "Fair Peer", "CHANNEL")
+    assert((net.stats.thirdPartyTotalsAboveOwner or 0) == before, "a total within the owner's pace was flagged")
+    s:OnReceiveLeaderboardKills(lkRow("Honest Victim", 2000, "Horde"), "Jealous Peer", "CHANNEL")
+    assert((net.stats.thirdPartyTotalsAboveOwner or 0) == before + 1, "a third-party total above the owner's count was not flagged")
+    local diag = s:GetThirdPartyInflationDiagnostics()
+    assert(diag:find("Honest Victim", 1, true) and diag:find("Jealous Peer", 1, true), "victim or sender missing: " .. diag)
+    assert(s:GetSuspiciousSenderDiagnostics():find("Jealous Peer (inflates others 1)", 1, true), "sender not listed as suspicious")
+    assert(not s:GetSuspiciousSenderDiagnostics():find("Fair Peer", 1, true), "an honest peer was listed")
+    -- The owner's next own count raises the reference: the same page is no longer above it.
+    ownK("Honest Victim", 2000, "Horde")
+    s:OnReceiveLeaderboardKills(lkRow("Honest Victim", 2000, "Horde"), "Fair Peer", "CHANNEL")
+    assert((net.stats.thirdPartyTotalsAboveOwner or 0) == before + 1, "a page matching the owner's own count was flagged")
+end
+
 -- ===== (2) bridge hold on Battle.net broadcasts
 net.BridgeChannelHold = { 2, 15 }
 local before = net:GetQueueSummary().total
