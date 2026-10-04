@@ -128,7 +128,7 @@ local function ShortName(name)
     return type(name) == "string" and (name:match("^(.-)%-") or name) or "?"
 end
 
--- Crane sur la barre de nom Blizzard, a droite de la barre de vie. Un cadre a nous par
+-- Crane sur la barre de nom Blizzard, a gauche de la barre de vie. Un cadre a nous par
 -- unite de nameplate (40 au plus), reutilise ; jamais en instance.
 MW.SKULL_SIZE = 16
 MW.skulls = MW.skulls or {}
@@ -160,7 +160,7 @@ function MW:ShowSkull(unit)
     if skull:GetParent() ~= parent or skull._anchor ~= anchor then
         skull:SetParent(parent)
         skull:ClearAllPoints()
-        skull:SetPoint("LEFT", anchor, "RIGHT", 3, 0)
+        skull:SetPoint("RIGHT", anchor, "LEFT", -3, 0)
         skull._anchor = anchor
     end
     skull:Show()
@@ -237,8 +237,41 @@ function MW:OnInstanceResume()
     self:Refresh(true)
 end
 
+-- /ov wanted test : apercu sur la cible (un loup suffit), 20 s, purement local.
+MW.TEST_SEC = 20
+function MW:RunTest()
+    local plate = not InInstance() and UnitExists and UnitExists("target")
+        and C_NamePlate and C_NamePlate.GetNamePlateForUnit and C_NamePlate.GetNamePlateForUnit("target")
+    if not plate then
+        if Overlord.PrintNotification then
+            Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. T("MW_TEST_NO_TARGET",
+                "Target a unit with a visible nameplate (a wolf will do), then type /ov wanted test."))
+        end
+        return false
+    end
+    self:ShowSkull("target")
+    local skull = self.skulls["target"]
+    self._testToken = (self._testToken or 0) + 1
+    local token = self._testToken
+    if skull and C_Timer and C_Timer.After then
+        C_Timer.After(self.TEST_SEC, function()
+            if MW._testToken == token then skull:Hide() end
+        end)
+    end
+    local name = Overlord.SafeGetUnitName and Overlord:SafeGetUnitName("target", true) or "?"
+    local factionName = Overlord.Zones and Overlord.Zones.GetEnemyFactionName
+        and Overlord.Zones:GetEnemyFactionName() or EnemyFaction() or "?"
+    if Overlord.PrintNotification then
+        Overlord:PrintNotification("|cFFFF4040[Overlord]|r " .. string.format(
+            T("MW_ALERT", "Most Wanted nearby: %s (#%d %s, %d kills this week)!"),
+            ShortName(name), 1, factionName, 999))
+    end
+    return true
+end
+
 function MW:HandleCommand(args)
     local word = args and args[2] and args[2]:lower() or ""
+    if word == "test" then return self:RunTest() end
     if word == "on" then self:SetAlertsEnabled(true)
     elseif word == "off" then self:SetAlertsEnabled(false) end
     self:RefreshPlates()
