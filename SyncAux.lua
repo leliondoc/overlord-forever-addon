@@ -447,6 +447,12 @@ function Overlord.Sync:OnReceiveMineStock(payload, sender)
     if not payload or payload == "" then return end
     local mineId, stockStr = strsplit(":", payload, 2)
     if not mineId or not stockStr then return end
+    -- MS ne porte ni campagne ni date : un stock de la semaine passee, relaye ou envoye
+    -- par un client en retard de reset, viderait les mines neuves. Ignore pendant les
+    -- premieres minutes de campagne (TTL du relais 120 s + marge).
+    local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
+    local serverNow = Overlord.ServerNow and Overlord.ServerNow() or time()
+    if start > 0 and serverNow - start < 180 then return end
     if Overlord.Ressources and Overlord.Ressources.ApplyRemoteMineStock then
         Overlord.Ressources:ApplyRemoteMineStock(mineId, stockStr)
     end
@@ -631,6 +637,10 @@ function Overlord.Sync:SetFactionCallSharedCooldown(at)
     if NormalizeFactionCallTimestamp(t) <= 0 then
         t = FactionCallCooldownNow()
     end
+    -- Un appel lance avant le reset hebdomadaire (relaye en retard) ne bloque pas la
+    -- nouvelle campagne.
+    local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
+    if start > 0 and NormalizeFactionCallTimestamp(t) < start then return end
     local prev = NormalizeFactionCallTimestamp(OverlordDB.factionCallSharedAt[fac])
     if t >= prev then
         OverlordDB.factionCallSharedAt[fac] = t

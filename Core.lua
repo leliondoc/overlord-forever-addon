@@ -4901,6 +4901,14 @@ function Overlord:ResetAll()
     if self.General and self.General.OnCampaignReset then
         self.General:OnCampaignReset()
     end
+    -- Appel aux armes : le delai partage de la semaine passee ne bloque pas la nouvelle.
+    OverlordDB.factionCallSharedAt = nil
+    OverlordDB.factionCallLastAt = nil
+    if self.Button and self.Button.Refresh then pcall(self.Button.Refresh, self.Button) end
+    -- Activite de front recente : rien de la semaine passee dans le dock.
+    if self.FrontActivity and self.FrontActivity.ResetForCampaign then
+        pcall(self.FrontActivity.ResetForCampaign, self.FrontActivity)
+    end
     -- campaignId : recalcule dans CheckWeeklyReset via SyncCampaignIdWithCurrentWeek (date AAAAMMJJ).
     self:SaveState()
     if self.Sync and self.Sync.ResetVictoryFlag then

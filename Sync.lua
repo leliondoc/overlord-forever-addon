@@ -1135,7 +1135,17 @@ local function SubjectRow(tbl, key, create)
     tbl.count = tbl.count + 1
     return row
 end
-local subjectTotals = NewSubjectStateTable()
+-- Etat lie a la campagne : apres le reset hebdomadaire, les totaux de la semaine
+-- passee ne servent plus de reference (un sujet vu avant le reset echappait sinon
+-- au cap de premier contact, et sa detection de gonflage restait aveugle).
+local subjectTotals, subjectTotalsEpoch = NewSubjectStateTable(), nil
+local function CampaignSubjects()
+    local epoch = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
+    if epoch ~= subjectTotalsEpoch then
+        subjectTotals, subjectTotalsEpoch = NewSubjectStateTable(), epoch
+    end
+    return subjectTotals
+end
 local function NoteClamp(sync, statName, sender, blameOwner, reason)
     local betaNet = Overlord.BetaNetwork
     if betaNet and betaNet.stats then betaNet.stats[statName] = (betaNet.stats[statName] or 0) + 1 end
@@ -1149,7 +1159,7 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
     if lb and lb.GetMaxKillsForDedupName then
         killsBefore = math.max(tonumber(killsBefore) or 0, lb:GetMaxKillsForDedupName(playerName))
     end
-    local existing = SubjectRow(subjectTotals, key, false)
+    local existing = SubjectRow(CampaignSubjects(), key, false)
     -- Le dernier total retenu pour cette identite dans la session : une variante
     -- du nom ne repart jamais de zero, meme sans index chaud.
     if existing and existing.total then killsBefore = math.max(killsBefore or 0, existing.total) end
@@ -1167,7 +1177,7 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
             accepted = firstContactCap
             NoteClamp(self, "unsolicitedTotalsClamped", sender, false)
         end
-        local st = SubjectRow(subjectTotals, key, true)
+        local st = SubjectRow(CampaignSubjects(), key, true)
         st.at, st.slack, st.slackAt = now, st.slack or LK_SLACK_MAX, st.slackAt or now
         st.total = math.max(st.total or 0, accepted)
         return accepted
@@ -1182,7 +1192,7 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
         local lastSession = tonumber(OverlordDB and OverlordDB.lastSessionTimestamp) or 0
         elapsed = math.max(600, lastSession > 0 and (time() - lastSession) or 600)
     end
-    local st = SubjectRow(subjectTotals, key, true)
+    local st = SubjectRow(CampaignSubjects(), key, true)
     local slack = math.min(LK_SLACK_MAX, (st.slack or LK_SLACK_MAX) + math.max(0, now - (st.slackAt or now)) * LK_SLACK_REFILL)
     local timed = math.floor(elapsed * LK_UNSOLICITED_RATE)
     if elapsed >= LK_ALLOWANCE_PERIOD then timed = timed + LK_UNSOLICITED_ALLOWANCE end
@@ -1226,13 +1236,13 @@ local inflationVictims, inflationVictimCount = {}, 0
 function Overlord.Sync:NoteOwnerKillClaim(playerName, total)
     total = tonumber(total)
     if not total or total < 0 then return end
-    local st = SubjectRow(subjectTotals, SubjectKey(self, playerName), true)
+    local st = SubjectRow(CampaignSubjects(), SubjectKey(self, playerName), true)
     st.ownClaim, st.ownAt = total, GetTime()
 end
 function Overlord.Sync:NoteThirdPartyKillTotal(playerName, total, sender)
     total = tonumber(total)
     if not total then return end
-    local st = SubjectRow(subjectTotals, SubjectKey(self, playerName), false)
+    local st = SubjectRow(CampaignSubjects(), SubjectKey(self, playerName), false)
     if not st or not st.ownAt then return end
     local now = GetTime()
     local allowed = st.ownClaim + math.floor(math.max(0, now - st.ownAt) * INFLATION_RATE) + INFLATION_MARGIN
@@ -10272,6 +10282,12 @@ end
 function Overlord.Sync:ResetVictoryFlag()
     wipe(priv.totalVictoryAnnounced)
     wipe(priv.totalVictoryDeliveredAt)
+    -- Nouvelle campagne : la memoire de la garde des bascules ZA (trafic vu, demandes
+    -- en attente, dernier ZA accepte) date de la semaine passee.
+    wipe(priv.liveZoneSeenAt)
+    priv.liveZoneLastAt = nil
+    if priv.zaFlipClaims then wipe(priv.zaFlipClaims) end
+    self._lastAcceptedZaPayload, self._lastAcceptedZaAt = nil, nil
 end
 
 function Overlord.Sync:ResetVictoryFlagForFront(frontId)

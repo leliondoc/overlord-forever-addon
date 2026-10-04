@@ -130,6 +130,18 @@ do
 end
 OverlordDB.lastSessionTimestamp = nil
 
+-- Weekly reset: last week's totals never serve as the reference of the new campaign.
+do
+    local realStart = Overlord.GetCurrentCampaignStartTs
+    s:BoundUnsolicitedKillTotal("Weekly Veteran", 4000, 3990, "Some Peer", false)
+    local freshStart = time() - 60
+    Overlord.GetCurrentCampaignStartTs = function() return freshStart end
+    local capped = s:BoundUnsolicitedKillTotal("Weekly Veteran", 9000, 0, "Some Peer", false)
+    Overlord.GetCurrentCampaignStartTs = realStart
+    assert(capped == 300 + math.floor(60 * 0.03),
+        "a subject seen before the reset escaped the first-contact cap: " .. tostring(capped))
+end
+
 -- A name never seen before: its first total is bounded by the campaign age.
 do
     local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0

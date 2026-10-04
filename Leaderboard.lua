@@ -5698,6 +5698,13 @@ local function TryClearWeeklyArchiveMarker(marker)
     if tonumber(OverlordDB.pendingWeeklyResetAt) == tonumber(marker.resetEpoch) then
         OverlordDB.pendingWeeklyResetAt = nil
     end
+    -- L'archive d'un reset plus ancien bloquait l'ouverture du bucket d'un reset plus
+    -- recent (absence couvrant deux resets) : l'ancienne semaine restait affichee
+    -- jusqu'au filet de 60 s. Ce reset en attente part des que la voie est libre.
+    local waiting = tonumber(OverlordDB.pendingWeeklyResetAt) or 0
+    if waiting > 0 and waiting ~= tonumber(marker.resetEpoch) and Overlord.CheckWeeklyReset then
+        C_Timer.After(0, function() pcall(Overlord.CheckWeeklyReset, Overlord) end)
+    end
     return true
 end
 
@@ -5795,8 +5802,10 @@ function Overlord.Leaderboard:OpenAtomicWeeklyBucket(archiveEpoch, resetEpoch, c
         and Overlord:GetCurrentLeaderboardSavedVarsPool() or nil
     if type(recoveryPool) == "string" and recoveryPool ~= "" then -- 1.4.0: every ruleset campaign
         OverlordDB.leaderboardPreviousCampaigns = OverlordDB.leaderboardPreviousCampaigns or {}
+        -- Un point de reprise rate ne doit jamais bloquer le reset lui-meme.
+        local slimOk, slim = pcall(SlimRecoveryBucket, oldBucket)
         OverlordDB.leaderboardPreviousCampaigns[recoveryPool] = {
-            bucket = SlimRecoveryBucket(oldBucket),
+            bucket = slimOk and slim or nil,
             scoreBucketEpoch = oldScoreBucketEpoch > 0 and oldScoreBucketEpoch or nil,
             resetEpoch = resetEpoch,
             savedAt = (GetServerTime and GetServerTime()) or time(),

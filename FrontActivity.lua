@@ -49,6 +49,20 @@ function FA:GetRevision()
     return activityRevision
 end
 
+-- Reset hebdomadaire : l'activite de la semaine passee disparait du dock tout de suite
+-- (au lieu de vieillir 5 min). Appele par Overlord:ResetAll.
+function FA:ResetForCampaign()
+    if OverlordDB then
+        OverlordDB.frontActivity, OverlordDB.frontActivityActors = {}, {}
+    end
+    preparedActivityRoot, preparedActorRoot = nil, nil
+    wipe(lastWritePurgeAtByFront)
+    activityRevision = activityRevision + 1
+    for _, callback in pairs(activityChangeListeners) do
+        pcall(callback, nil, activityRevision)
+    end
+end
+
 local function PublishActivityChange(frontId)
     activityRevision = activityRevision + 1
     for _, callback in pairs(activityChangeListeners) do
