@@ -407,6 +407,47 @@ local function OcSenderMatchesPayloadGuild(sender, guild, faction)
     return false
 end
 
+-- Journal des annonces d'avant-poste NON verifiees (ni membre de notre groupe dans la
+-- guilde annoncee) qui ont change un tenant, un compteur ou un etat tenu. Detection
+-- seule : rien n'est refuse, rien n'est envoye. Sauvegarde bornee (24 lignes) pour
+-- retrouver apres coup qui a annonce quoi (/ov network).
+local OUTPOST_CLAIM_LOG_MAX = 24
+function Overlord.Sync:NoteOutpostClaim(kind, siteKey, guild, faction, sender, sourceChannel, claimTs)
+    if not OverlordDB or type(sender) ~= "string" or sender == "" then return end
+    if OcSenderMatchesPayloadGuild(sender, guild or "", faction) then return end
+    local net = Overlord.BetaNetwork
+    local context = sourceChannel == "BETA" and net and net.context or nil
+    local hops = context and tonumber(context.hops) or 0
+    local log = OverlordDB.outpostClaimLog
+    if type(log) ~= "table" then log = {}; OverlordDB.outpostClaimLog = log end
+    log[#log + 1] = {
+        at = Overlord.ServerNow and Overlord.ServerNow() or time(),
+        kind = tostring(kind or ""), site = tostring(siteKey or ""),
+        guild = tostring(guild or ""), faction = tostring(faction or ""),
+        sender = sender, channel = tostring(sourceChannel or ""),
+        gateway = hops > 0 and context and tostring(context.gateway or "") or nil,
+        claimTs = tonumber(claimTs) or 0,
+    }
+    while #log > OUTPOST_CLAIM_LOG_MAX do table.remove(log, 1) end
+end
+
+function Overlord.Sync:GetOutpostClaimDiagnostics(maxRows)
+    local log = OverlordDB and OverlordDB.outpostClaimLog
+    if type(log) ~= "table" or #log == 0 then
+        return "Unverified outpost claims: none."
+    end
+    local parts = {}
+    for i = #log, math.max(1, #log - (maxRows or 6) + 1), -1 do
+        local row = log[i]
+        local when = row.at and date and date("%a %H:%M", row.at) or "?"
+        local via = row.gateway and row.gateway ~= "" and (" via " .. row.gateway) or ""
+        parts[#parts + 1] = string.format("%s %s %s (%s) by %s%s [%s] %s",
+            row.kind or "?", row.site or "?", row.guild or "?",
+            (row.faction or "?"):sub(1, 1), row.sender or "?", via, row.channel or "?", when)
+    end
+    return "Unverified outpost claims (newest first): " .. table.concat(parts, "; ") .. "."
+end
+
 local function ShouldAcceptOutpostCapture(siteKey, guild, fac, remoteTs, sender, sourceChannel)
     if not Overlord.Outpost then return false end
     local st = Overlord.Outpost:GetState(siteKey)
@@ -1106,6 +1147,9 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
                     or Overlord.Outpost:SanitizeGuildName(stBefore.ownerGuild or "") ~= heldGuild
                     or stBefore.ownerFaction ~= remoteFac)
             if tenantChanged or countChanged or stateChanged then
+                if not ownerSourceVerified then
+                    self:NoteOutpostClaim("OP", siteKey, heldGuild, remoteFac, sender, channel, heldTs)
+                end
                 if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
                     Overlord.LeaderboardUI:RefreshIfVisible()
                 end
@@ -1479,6 +1523,7 @@ function Overlord.Sync:OnReceiveLeaderboardOutpostTenant(payload, sender, source
             siteKey, guild, fac, claimedAt, remotePool) == true
     end
     if not tenantChanged and not countChanged then return end
+    self:NoteOutpostClaim("LO", siteKey, guild, fac, sender, sourceChannel, claimedAt)
     if Overlord.Outpost and Overlord.Outpost.RefreshOutpostPresentation then
         Overlord.Outpost:RefreshOutpostPresentation(siteKey)
     end
@@ -1541,6 +1586,7 @@ function Overlord.Sync:OnReceiveLeaderboardOutpostCount(payload, sender, sourceC
     if not Overlord.Leaderboard:ApplyOutpostCaptureCountSync(siteKey, guild, fac, count, latestTs, remotePool) then
         return
     end
+    self:NoteOutpostClaim("LOC", siteKey, guild, fac, sender, sourceChannel, latestTs)
     if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
         Overlord.LeaderboardUI:RefreshIfVisible()
     end

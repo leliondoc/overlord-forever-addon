@@ -194,3 +194,23 @@ tooltipState.isHolding, tooltipState.isPaused = false, true
 assert(activeTooltip(), "Local paused capture disappeared")
 op:ResetOutpostsForCampaign()
 print("Fortress presentation: remote expiry, defender/neutral fallback, fresh heartbeat and local authority OK")
+
+-- Unverified outpost claims are logged with their sender (detection only), bounded.
+do
+    local sync = Overlord.Sync
+    OverlordDB.outpostClaimLog = nil
+    sync:NoteOutpostClaim("OP", "crossroads", "Fake Guild", "Alliance", "Stranger Tester", "CHANNEL", 1790000000)
+    local log = OverlordDB.outpostClaimLog
+    assert(log and #log == 1 and log[1].sender == "Stranger Tester" and log[1].guild == "Fake Guild",
+        "unverified outpost claim was not logged with its sender")
+    local line = sync:GetOutpostClaimDiagnostics()
+    assert(line:find("Fake Guild", 1, true) and line:find("Stranger Tester", 1, true),
+        "outpost claim diagnostics do not name the guild and the sender")
+    for i = 1, 40 do
+        sync:NoteOutpostClaim("LOC", "crossroads", "Fake Guild", "Alliance", "Stranger " .. i, "CHANNEL", 1790000000)
+    end
+    assert(#OverlordDB.outpostClaimLog == 24, "outpost claim log is not bounded")
+    OverlordDB.outpostClaimLog = nil
+    assert(sync:GetOutpostClaimDiagnostics():find("none", 1, true), "empty log not reported")
+end
+print("Outpost claim log: unverified claims named, bounded, reported")
