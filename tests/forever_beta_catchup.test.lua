@@ -131,6 +131,16 @@ local b = client("Bridge Tester", "alliance")
 local c = client("Gateway Tester", "horde")
 local d = client("Veteran Tester", "horde")
 b.friends, c.friends = { c }, { b }
+-- Real factions, so the responder fair share (an other-faction requester takes over
+-- a same-faction session after two minutes) is active during the whole hour.
+for _, e in ipairs(clients) do
+    e.Overlord.PlayerFaction = e.channel == "horde" and "Horde" or "Alliance"
+    e.Overlord.Sync.GetBetaPeerFaction = function(_, peer)
+        for _, other in ipairs(clients) do
+            if other.name == peer then return other.channel == "horde" and "Horde" or "Alliance" end
+        end
+    end
+end
 for _, e in ipairs(clients) do e.Overlord.Sync.SendSyncRequest = function() return true end end
 local heartbeatActive = true
 local function heartbeat()

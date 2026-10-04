@@ -200,4 +200,40 @@ for _, lostNotice in ipairs({ false, true }) do
     assert(result() == true, "A fresh pull was refused by its own stale session (notice lost: "
         .. tostring(lostNotice) .. ")")
 end
-print("v6 silent first HR, busy peer answers busy, bounded deadline, early reply, combat pause, stale session released OK")
+-- Fair share: a same-faction requester that holds the responder (here its replies
+-- are lost, so it keeps probing) does not lock out an other-faction requester. It
+-- is told "busy" at first, then takes over once the session is two minutes old.
+do
+    local holder, other, responder = client("Holder One"), client("Second Asker"), client("Responder Tester")
+    local byName = { [holder.name] = holder, [other.name] = other, [responder.name] = responder }
+    -- The responder is Horde; the holder is a Horde neighbour, the other requester an
+    -- Alliance Battle.net friend (its only source of the Horde ranking).
+    responder.Overlord.PlayerFaction = "Horde"
+    responder.Overlord.Sync.GetBetaPeerFaction = function(_, name)
+        return name == other.name and "Alliance" or "Horde"
+    end
+    for _, source in ipairs({ holder, other, responder }) do
+        source.Overlord.Sync.SendWhisper = function(_, kind, payload, target)
+            local destination = assert(byName[target])
+            if source == responder and target == holder.name then return true end -- lost
+            later(0.01, function()
+                destination.Overlord.Sync:OnPagedLeaderboardMessage(kind, payload, source.name, "WHISPER")
+            end)
+            return true
+        end
+    end
+    local held = start(holder, responder)
+    advance(30)
+    local asked = start(other, responder)
+    advance(10)
+    local done, capable = asked()
+    assert(done == false and capable == true, "a young session was not protected (busy expected)")
+    advance(100) -- the holder's session is now older than two minutes
+    asked = start(other, responder)
+    advance(30)
+    assert(asked() == true, "a long-held responder was never shared with another requester")
+    assert((responder.Overlord.Sync._leaderboardPageStats.preempted or 0) == 1, "takeover not counted")
+    advance(300)
+    assert(held() == false, "the preempted holder never ended")
+end
+print("v6 silent first HR, busy peer answers busy, bounded deadline, early reply, combat pause, stale session released, fair share OK")

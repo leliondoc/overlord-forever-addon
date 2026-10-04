@@ -573,7 +573,9 @@ local function holdForward(key, p, mode)
     if hi <= 0 or heldCount[mode] >= HELD_FORWARD_MAX[mode] then return false end
     -- Only a client with a channel is a bridge to it; elsewhere forward at once.
     if mode == "bridge" and not (sync.GetChannelId and sync:GetChannelId()) then return false end
-    if isTerminal(p) then lo, hi = math.min(lo, 1), math.min(hi, 4) end
+    -- Terminal events and urgent ones (siege start, active capture, call to arms)
+    -- wait 1-4 s only: a Battle.net alert reached remote defenders ~8 s late.
+    if isTerminal(p) or isUrgent(p) then lo, hi = math.min(lo, 1), math.min(hi, 4) end
     -- One delay per (client, origin) pair, not per packet: packets of the same
     -- origin keep their order through the hold (TV before VB), while different
     -- clients spread over the window.
@@ -1775,7 +1777,12 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
                 kind = p.kind, payload = p.payload, groupOnly = true, skipChannel = true, heardOn = transport }
             if holdForward("G:" .. key, pg, "group") then
                 self.stats.groupCopiesHeld = (self.stats.groupCopiesHeld or 0) + 1
-            elseif self:Queue(pg) == true then
+            -- Hold table full (a crowd): only terminal events still get an immediate
+            -- group copy. Re-sending every routine packet from all 40 raid members
+            -- was the amplifier the hold removes; mates without the channel catch
+            -- routine state up through the periodic map request.
+            elseif (not ((tonumber((net.BridgeChannelHold or {})[2]) or 0) > 0) or isTerminal(p))
+                and self:Queue(pg) == true then
                 self.stats.groupCopiesSent = (self.stats.groupCopiesSent or 0) + 1
             end
         end

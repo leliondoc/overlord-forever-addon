@@ -1090,10 +1090,11 @@ end
 
 -- Metadata changed during a pass (a new player seen on a nameplate, a guild
 -- confirmed): the index built from the other rows is still valid, so publish it
--- and refresh once, 30 s later, instead of restarting the whole pass. Under a
+-- and refresh once, 90 s later (never in combat or a large event), instead of
+-- restarting the whole pass. Under a
 -- stream of new names (launch day) the rebuild never finished: every pass was
 -- aborted and the hot index stayed cold for the whole session.
-local META_REFRESH_DELAY = 30
+local META_REFRESH_DELAY = 90
 local function scheduleMetaRefresh(self)
     if self._metaRefreshScheduled then return end
     self._metaRefreshScheduled = true
@@ -1101,6 +1102,14 @@ local function scheduleMetaRefresh(self)
         local lb = Overlord.Leaderboard
         if lb ~= self then return end
         self._metaRefreshScheduled = nil
+        -- A crowd keeps naming new players: each refresh is ~80 sliced frames.
+        -- Never start one in combat or a large event; try again later.
+        local sync = Overlord.Sync
+        if (UnitAffectingCombat and UnitAffectingCombat("player"))
+            or (sync and sync.IsLargeEvent and sync:IsLargeEvent()) then
+            scheduleMetaRefresh(self)
+            return
+        end
         -- The current index stays readable while the fresh one is built.
         self._dedupMetaStale = true
         self:EnsureNetworkHotIndexesPrepared()

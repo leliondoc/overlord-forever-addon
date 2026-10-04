@@ -9,6 +9,19 @@ local STREAMS = { "LK", "LC", "LR" }
 local STREAM_LIMITS = { LK = 5000, LC = 1500, LR = 6500 }
 local MOD, RATE, BURST = 2147483647, 300, 500
 local pull, serving, outbound, wake, building
+-- Fair share (1.4.2): a Battle.net friend of the other faction is the only source
+-- of our ranking for its requesters, while requesters of its own faction have many
+-- neighbours. An enemy-faction requester therefore takes over a same-faction
+-- session once it is this old (the few bridges were held for a whole sweep while
+-- the other faction only got "busy"). Same-faction requesters never preempt each
+-- other: slicing every contended responder slowed convergence down.
+local SESSION_SHARE_SEC = 120
+local function IsOtherFaction(name)
+    local mine = Overlord.PlayerFaction
+    local theirs = sync.GetBetaPeerFaction and sync:GetBetaPeerFaction(name)
+    return (mine == "Alliance" or mine == "Horde") and (theirs == "Alliance" or theirs == "Horde")
+        and theirs ~= mine
+end
 local profiles = setmetatable({}, { __mode = "k" })
 local unsupported, unsupportedOrder = {}, {}
 local serial, tokens, refillAt = 0, BURST, 0
@@ -74,7 +87,15 @@ local function enqueue(job)
     job.at, job.index = GetTime(), 1
     local function pump()
         wake = nil
-        if outbound ~= job then return end
+        if outbound ~= job then
+            -- A preempted job hands the wake-up chain to its successor, which
+            -- was queued while this timer was pending and so never armed its own.
+            if outbound and outbound.pump and not wake then
+                wake = true
+                C_Timer.After(0.01, outbound.pump)
+            end
+            return
+        end
         if job.epoch ~= epoch() or (job.valid and not job.valid()) then outbound = nil; return end
         if paused() then job.at = GetTime(); wake = true; C_Timer.After(2, pump); return end
         if GetTime() - job.at > 240 then outbound = nil; return end
@@ -104,6 +125,7 @@ local function enqueue(job)
         wake = true
         C_Timer.After(0.5, pump)
     end
+    job.pump = pump
     if not wake then wake = true; C_Timer.After(0.01, pump) end
     return true
 end
@@ -632,6 +654,19 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         -- (interrupted pull whose end notice was lost).
         if session and session.peer == sender and session.nonce ~= nonce
             and seq == 1 and b == "-" then serving = nil; session = nil end
+        -- Fair share: a fresh start from an other-faction requester takes over a
+        -- same-faction session held for SESSION_SHARE_SEC. The previous requester
+        -- resumes later from its shared checkpoint.
+        if session and session.peer ~= sender and seq == 1 and b == "-" and not building
+            and GetTime() - (session.startedAt or session.at) >= SESSION_SHARE_SEC
+            and IsOtherFaction(sender) and not IsOtherFaction(session.peer) then
+            -- One small "busy" to the previous requester, in place of the page it
+            -- will not get: it moves on at once instead of waiting 90 s of silence.
+            sendControl("HA", table.concat({ session.extended and "6" or "5", "R",
+                session.epoch, session.nonce, session.seq }, ":"), session.peer)
+            serving, session, outbound = nil, nil, nil
+            stats.preempted = (stats.preempted or 0) + 1
+        end
         local busyReply = table.concat({ version, "R", wireEpoch, nonce, seq }, ":")
         -- In combat or an instance: busy, not silent (a silent peer is dropped as v6-less).
         if paused() then sendControl("HA", busyReply, sender); return end
@@ -648,7 +683,7 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
             -- for someone else: busy, never silent.
             if building or outbound then sendControl("HA", busyReply, sender); return end
             session = { peer = sender, nonce = nonce, epoch = wireEpoch,
-                at = GetTime(), seq = seq, extended = extended }
+                at = GetTime(), startedAt = GetTime(), seq = seq, extended = extended }
             serving = session
         -- The previous page of this same session is still leaving: its requester
         -- asks again after its own timeout.

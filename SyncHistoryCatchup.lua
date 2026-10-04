@@ -723,7 +723,10 @@ function sync:ScheduleLoginLeaderboardHistoryCatchUp(force, forceHistory)
             return false
         end
         self._historyCatchupNotBeforeCampaignId = campaignId
-        C_Timer.After(math.max(1, CAMPAIGN_MIN_AGE_SEC - age + 5), function()
+        -- Spread over a minute: every client online at the weekly reset reached
+        -- this line in the same second (a burst of requests and busy replies).
+        local spread = math.random and math.random(0, 60) or 0
+        C_Timer.After(math.max(1, CAMPAIGN_MIN_AGE_SEC - age + 5 + spread), function()
             if Overlord.Sync then
                 Overlord.Sync._historyCatchupNotBeforeCampaignId = nil
                 Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(force == true, forceHistory == true)
