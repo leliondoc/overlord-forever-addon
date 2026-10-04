@@ -1044,8 +1044,11 @@ local function tasksFor(p, wire)
             groupAgain = rec ~= nil and dedup.count(rec.carriers.group, now) >= COVER_COPIES
             channelAgain = rec ~= nil and dedup.count(rec.carriers.channel, now) >= COVER_COPIES
         end
+        -- Groupe a deux d'un changement de layer : le partenaire a deja le canal.
+        local hopGroup = not p.skipGroup and IsInGroup() and Overlord.LayerJumper
+            and Overlord.LayerJumper.IsHopGroup and Overlord.LayerJumper:IsHopGroup()
         for _, fragment in ipairs(fragments) do
-            if not p.skipGroup then
+            if not p.skipGroup and not hopGroup then
                 if trim and groupAgain then trimmed = trimmed + 1
                 elseif not (trim and not IsInGroup()) then coverCarrier = "group"; add("GROUP", fragment, "BF") end
             end
@@ -1152,7 +1155,11 @@ local function emit(task)
     if task.skip then return true end
     -- Missing optional local paths are not send failures; a throttled channel
     -- that is present must, however, retry the same fragment.
-    if task.transport == "GROUP" and not IsInGroup() then return true end
+    if task.transport == "GROUP" and (not IsInGroup()
+        or (Overlord.LayerJumper and Overlord.LayerJumper.IsHopGroup
+            and Overlord.LayerJumper:IsHopGroup())) then
+        return true
+    end
     if task.transport == "CHANNEL" and not sync:GetChannelId() then return true end
     local cover = task.transport == "CHANNEL" and task.chanCover or nil
     if cover then
@@ -1772,16 +1779,19 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         -- Group mates without the channel still need a copy: one held group-only
         -- copy per hearer, dropped as soon as a mate's copy is heard in the group.
         if transport == "CHANNEL" and p.target == "*" and p.kind ~= "NH"
-            and p.kind ~= "SH" and IsInGroup() and not retryForward then
+            and p.kind ~= "SH" and IsInGroup() and not retryForward
+            and not (Overlord.LayerJumper and Overlord.LayerJumper.IsHopGroup
+                and Overlord.LayerJumper:IsHopGroup()) then
             local pg = { region = p.region, id = p.id, at = p.at, target = p.target, path = p.path,
                 kind = p.kind, payload = p.payload, groupOnly = true, skipChannel = true, heardOn = transport }
             if holdForward("G:" .. key, pg, "group") then
                 self.stats.groupCopiesHeld = (self.stats.groupCopiesHeld or 0) + 1
-            -- Hold table full (a crowd): only terminal events still get an immediate
-            -- group copy. Re-sending every routine packet from all 40 raid members
+            -- Hold table full (a crowd): only terminal events and siege starts still
+            -- get an immediate group copy. Re-sending every routine packet from all 40 raid members
             -- was the amplifier the hold removes; mates without the channel catch
             -- routine state up through the periodic map request.
-            elseif (not ((tonumber((net.BridgeChannelHold or {})[2]) or 0) > 0) or isTerminal(p))
+            elseif (not ((tonumber((net.BridgeChannelHold or {})[2]) or 0) > 0)
+                    or isTerminal(p) or isOwnSiegeStart(p))
                 and self:Queue(pg) == true then
                 self.stats.groupCopiesSent = (self.stats.groupCopiesSent or 0) + 1
             end

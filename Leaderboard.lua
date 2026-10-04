@@ -5748,17 +5748,37 @@ function Overlord.Leaderboard:OpenAtomicWeeklyBucket(archiveEpoch, resetEpoch, c
     -- Point de reprise : scores complets, mais metadonnees (classe/guilde/niveau/race)
     -- seulement pour les 500 meilleurs. Le bucket complet est deja dans le marker
     -- d'archive ; une copie integrale de playerInfo doublait 26 000 lignes de fichier.
+    -- Sans table par ligne ni tri des lignes (gel de 100 ms et plus a 20 000 lignes,
+    -- chez tous les clients a la seconde du reset) : seuil du top 500 par histogramme
+    -- des totaux, puis une passe. Les ex aequo au seuil ne sont gardes que dans la limite.
     local function SlimRecoveryBucket(bucket)
-        local top = {}
-        for name, count in pairs(bucket.kills or {}) do top[#top + 1] = { name = name, kills = count } end
-        table.sort(top, function(a, b)
-            if a.kills ~= b.kills then return a.kills > b.kills end
-            return a.name < b.name
-        end)
-        local playerInfo, source = {}, bucket.playerInfo or {}
-        for i = 1, math.min(#top, DISPLAY_PREVIEW_ROW_LIMIT) do
-            local row = source[top[i].name]
-            if row ~= nil then playerInfo[top[i].name] = row end
+        local kills, limit = bucket.kills or {}, DISPLAY_PREVIEW_ROW_LIMIT
+        local perValue, values = {}, {}
+        for _, count in pairs(kills) do
+            count = tonumber(count) or 0
+            if not perValue[count] then values[#values + 1] = count end
+            perValue[count] = (perValue[count] or 0) + 1
+        end
+        table.sort(values)
+        local threshold, seen = -math.huge, 0
+        for i = #values, 1, -1 do
+            threshold = values[i]
+            seen = seen + perValue[threshold]
+            if seen >= limit then break end
+        end
+        local playerInfo, source, kept = {}, bucket.playerInfo or {}, 0
+        for name, count in pairs(kills) do
+            if (tonumber(count) or 0) > threshold and source[name] ~= nil then
+                playerInfo[name] = source[name]
+                kept = kept + 1
+            end
+        end
+        for name, count in pairs(kills) do
+            if kept >= limit then break end
+            if (tonumber(count) or 0) == threshold and source[name] ~= nil and playerInfo[name] == nil then
+                playerInfo[name] = source[name]
+                kept = kept + 1
+            end
         end
         return {
             kills = bucket.kills, captures = bucket.captures, captureCount = bucket.captureCount,

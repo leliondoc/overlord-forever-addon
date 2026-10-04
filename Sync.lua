@@ -1752,6 +1752,11 @@ function Overlord.Sync:Send(msgType, data, groupOnly)
         return self:SendAddonChecked(msg, "RAID")
     end
     if IsInGroup() then
+        -- Groupe a deux d'un changement de layer : le partenaire est un inconnu, rien
+        -- ne lui est envoye. Les producteurs qui ajoutent leur copie canal la gardent ;
+        -- sans copie de groupe, rien de plus ne part (pas de doublon sur le canal).
+        local jumper = Overlord.LayerJumper
+        if jumper and jumper.IsHopGroup and jumper:IsHopGroup() then return true end
         return self:SendAddonChecked(msg, "PARTY")
     end
 
@@ -5358,7 +5363,14 @@ local function SyncSenderIsInOurGroup(sender)
     local want = (Overlord.Sync.GetCaptureContributorDedupKey
         and Overlord.Sync:GetCaptureContributorDedupKey(sender)) or sender:lower()
     if not want or want == "" then return false end
-    return GetGroupMemberNames()[want:lower()] ~= nil
+    if GetGroupMemberNames()[want:lower()] == nil then return false end
+    -- Partenaire d'un changement de layer : un inconnu tire d'une liste publique,
+    -- groupe quelques secondes. Il ne gagne aucune confiance de groupe.
+    local layerJumper = Overlord.LayerJumper
+    if layerJumper and layerJumper.IsHopPartner and layerJumper:IsHopPartner(sender) then
+        return false
+    end
+    return true
 end
 
 function Overlord.Sync:SenderIsInOurGroup(sender)
@@ -8627,6 +8639,11 @@ function Overlord.Sync:OnGroupChanged()
             if not sync then return end
             local joinCatchUp = priv.groupJoinCatchUpPending
             priv.groupJoinCatchUpPending = false
+            -- Groupe a deux le temps d'un changement de layer (Layer Jumper) : meme
+            -- royaume, meme carte, aucun rattrapage. Decide ici, 3 s apres l'evenement :
+            -- le nom du partenaire est alors connu, et un vrai groupe garde son rattrapage.
+            local jumper = Overlord.LayerJumper
+            if jumper and jumper.IsHopGroup and jumper:IsHopGroup() then return end
             if sync.IsLargeEvent and sync:IsLargeEvent() and not joinCatchUp then
                 if sync.ScheduleActivePeriodicCatchUp then
                     sync:ScheduleActivePeriodicCatchUp()
@@ -8643,6 +8660,8 @@ function Overlord.Sync:OnGroupChanged()
         and self.IsLargeEvent and self:IsLargeEvent() and IsInGroup() then
         C_Timer.After(5, function()
             if Overlord.InstanceSuspended or not Overlord.InActiveFront then return end
+            local jumper = Overlord.LayerJumper
+            if jumper and jumper.IsHopGroup and jumper:IsHopGroup() then return end
             if Overlord.Sync and Overlord.Sync.RequestRaidLeaderboardCatchUp then
                 Overlord.Sync:RequestRaidLeaderboardCatchUp()
             end
@@ -8673,7 +8692,8 @@ function Overlord.Sync:SendKillBroadcast(payload)
             -- Le relais a deja mis ce K sur le groupe et le canal.
         elseif raidOk then
             self:SendAddonChecked(msg, "RAID")
-        elseif IsInGroup() then
+        elseif IsInGroup() and not (Overlord.LayerJumper and Overlord.LayerJumper.IsHopGroup
+            and Overlord.LayerJumper:IsHopGroup()) then
             self:SendAddonChecked(msg, "PARTY")
         end
         self:SendToChannel("K", payload)
@@ -10010,7 +10030,9 @@ function Overlord.Sync:OnNameplateAdded(unit)
     -- SafeStringEquals pour comparer avec les noms potentiellement secrets
     if Overlord:SafeStringEquals(fullName, myName)
         or Overlord:SafeStringEquals(fullName, myShortName)
-        or self:SenderIsInOurGroup(fullName) then return end
+        or self:SenderIsInOurGroup(fullName)
+        or (Overlord.LayerJumper and Overlord.LayerJumper.IsNamedHopPartner
+            and Overlord.LayerJumper:IsNamedHopPartner(fullName)) then return end
 
     local last = lastProximitySR:Get(fullName, now)
     if not last then

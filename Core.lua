@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.4.2"
+Overlord.Version = "1.5.0"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncBetaNetwork.lua).
 Overlord.BetaNetworkEnabled = true
 Overlord.IsInitialized = false
@@ -1953,6 +1953,9 @@ function Overlord:SuspendForInstance()
     end
     if self.General and self.General.OnInstanceSuspend then
         self.General:OnInstanceSuspend()
+    end
+    if self.LayerJumper and self.LayerJumper.OnInstanceSuspend then
+        pcall(self.LayerJumper.OnInstanceSuspend, self.LayerJumper)
     end
     self.InstanceSuspended = true
     -- HUD or : peut s'afficher sur PLAYER_ENTERING_WORLD avant que ce handler finisse - masquage immediat.

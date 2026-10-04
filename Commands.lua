@@ -500,6 +500,7 @@ local function ShowHelp()
     Overlord:PrintNotification(L.HELP_SCALE)
     Overlord:PrintNotification(L.HELP_GUIDE)
     if L.HELP_GUILD_KILLS then Overlord:PrintNotification(L.HELP_GUILD_KILLS) end
+    if L.HELP_LAYER then Overlord:PrintNotification(L.HELP_LAYER) end
     Overlord:PrintNotification(L.HELP_FOOTER)
 end
 
@@ -762,6 +763,9 @@ local function CommandHandler(msg)
 
     elseif cmd == "shard" then
         ShowShardDebug()
+
+    elseif cmd == "layer" or cmd == "hop" then
+        if Overlord.LayerJumper then Overlord.LayerJumper:HandleCommand(args) end
 
     elseif cmd == "guildkills" then
         if Overlord.GuildKillAlert then Overlord.GuildKillAlert:HandleCommand(args) end
