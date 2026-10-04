@@ -1201,14 +1201,16 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
         NoteClamp(self, "unsolicitedTotalsClamped", sender, blameOwner, "total clamped")
     end
     -- La reference n'avance que lorsqu'un total superieur est retenu : une
-    -- repetition du meme total ne recharge ni le temps ni le seau.
+    -- repetition du meme total ne recharge ni le temps ni le seau, et ne demarre
+    -- pas non plus l'horloge. Les pairs rediffusent sans cesse les lignes connues :
+    -- si la premiere repetition d'une ligne sauvegardee perimee fixait st.at, la
+    -- fenetre d'absence et le plancher de premier contact sautaient, et le vrai
+    -- total n'etait plus rattrape qu'a ~70 kills par paquet.
     if accepted > killsBefore then
         -- Borne au seau : un rattrapage au cap de premier contact ne laisse pas un
         -- seau negatif qui brimerait les totaux suivants.
         local usedSlack = math.min(slack, math.max(0, accepted - killsBefore - timed))
         st.slack, st.slackAt, st.at = slack - usedSlack, now, now
-    elseif not st.at then
-        st.at = now
     end
     st.total = math.max(st.total or 0, accepted)
     return accepted

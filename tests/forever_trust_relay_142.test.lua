@@ -118,6 +118,15 @@ do
     local want = math.min(3000, math.max(100 + 30 + 600 + 10, cap))
     assert(Overlord.Leaderboard.kills["Stale Player"] == want,
         "stale row after a reload not raised to the first-contact cap: " .. tostring(Overlord.Leaderboard.kills["Stale Player"]))
+    -- Peers keep re-broadcasting known rows: a first copy that only repeats the
+    -- stale saved total must not start the clock and cancel the catch-up.
+    know("Echoed Player", 1000, "Horde")
+    s:OnReceiveLeaderboardKills(lkRow("Echoed Player", 1000, "Horde"), "Some Peer", "CHANNEL")
+    advance(60)
+    s:OnReceiveLeaderboardKills(lkRow("Echoed Player", 2500, "Horde"), "Some Peer", "CHANNEL")
+    local echoed = math.min(2500, math.max(1000 + 30 + 600 + 10, cap))
+    assert(Overlord.Leaderboard.kills["Echoed Player"] == echoed,
+        "a repeated stale total froze the catch-up: " .. tostring(Overlord.Leaderboard.kills["Echoed Player"]))
 end
 OverlordDB.lastSessionTimestamp = nil
 
