@@ -1010,11 +1010,13 @@ function Overlord.LeaderboardUI:CreateFrame()
     -- le joueur et sa guilde, meme police que le centre.
     local function InfoLine(row, side)
         local fs = lbFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        fs:SetPoint("TOP", row, "TOP", 0, 0)
+        -- Un seul point : les lignes du centre sont centrees sur le cadre, donc leur
+        -- haut-centre est au milieu ; on se decale jusqu'a la marge.
+        local reach = LB_FRAME_W / 2 - LB_FRAME_PAD - 4
         if side == "LEFT" then
-            fs:SetPoint("LEFT", lbFrame, "LEFT", LB_FRAME_PAD + 4, 0)
+            fs:SetPoint("TOPLEFT", row, "TOP", -reach, 0)
         else
-            fs:SetPoint("RIGHT", lbFrame, "RIGHT", -LB_FRAME_PAD - 4, 0)
+            fs:SetPoint("TOPRIGHT", row, "TOP", reach, 0)
         end
         fs:SetJustifyH(side)
         fs:SetWidth(440)
@@ -2478,9 +2480,10 @@ function Overlord.LeaderboardUI:RefreshInfoLines(dc)
     if not lbFrame or not lbFrame.infoLeft then return end
     if dc and lbFrame._infoDc ~= dc then
         lbFrame._infoDc = dc
-        lbFrame._info = ComputeLeaderboardInfo(dc)
+        -- Copie sauvegardee (500 premiers) : rang et joueurs classes seraient faux.
+        lbFrame._info = not dc.fromSavedCache and ComputeLeaderboardInfo(dc) or nil
     end
-    local info = lbFrame._info or {}
+    local info = lbFrame._info
     local left, right = lbFrame.infoLeft, lbFrame.infoRight
 
     -- Gauche : fin de campagne, joueurs classes.
@@ -2493,6 +2496,12 @@ function Overlord.LeaderboardUI:RefreshInfoLines(dc)
         duration = ok and text or nil
     end
     InfoSetLine(left[1], duration and InfoText(L.LB_INFO_ENDS or "Campaign ends in", duration) or "")
+    if not info then
+        InfoSetLine(left[2], "")
+        InfoSetLine(right[1], "")
+        InfoSetLine(right[2], "")
+        return
+    end
     InfoSetLine(left[2], InfoText(L.LB_INFO_RANKED or "Ranked players:", string.format(
         L.LB_INFO_RANKED_VALUE or "|cFF4488FF%s Alliance|r · |cFFFF4444%s Horde|r",
         InfoNumber(info.allianceRanked), InfoNumber(info.hordeRanked))))
@@ -2533,15 +2542,16 @@ function Overlord.LeaderboardUI:Refresh()
     view.meta = dc.meta or {}
     view.locale = dc.locale or {}
     view.duplicateShortNames = dc.duplicateShortNames or {}
-    self:ApplySearch()
-
-    self:RefreshInfoLines(dc)
+    -- Totaux avant le dessin : la hauteur du cadre est calculee avec leur ligne.
     local totalFmt = string.format(L.LB_TOTAL_FORMAT, dc.alliKills or 0, dc.hordeKills or 0)
     if lbFrame._lbTotalFmt ~= totalFmt then
         lbFrame._lbTotalFmt = totalFmt
         lbFrame.totalText:SetText(LbCrestMarkup("Alliance", 24) .. "  " .. totalFmt
             .. "  " .. LbCrestMarkup("Horde", 24))
     end
+    self:ApplySearch()
+
+    self:RefreshInfoLines(dc)
 
     local startDate, endDate = Overlord:GetCampaignDateRange()
     local subFmt = string.format(L.LB_CAMPAIGN_DATE, startDate, endDate)
