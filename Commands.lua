@@ -777,8 +777,12 @@ local function CommandHandler(msg)
 
     elseif cmd == "announce" then
         -- Version annoncee sur le reseau avant publication (voir Overlord:WireVersion).
-        local wanted = type(args) == "string" and args:match("^%s*(%S+)") or ""
-        if wanted == "" or wanted == "off" then
+        -- args est la liste des mots ("announce", "1.4.1") : la version est args[2].
+        -- Sans argument : affiche seulement la version annoncee, sans l'effacer.
+        local wanted = args[2] and args[2]:lower() or ""
+        if wanted == "" then
+            -- rien a changer
+        elseif wanted == "off" then
             OverlordDB.announceVersion = nil
         elseif wanted:match("^%d+%.%d+%.?%d*$") then
             OverlordDB.announceVersion = wanted
