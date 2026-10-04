@@ -1410,6 +1410,9 @@ end
 -- pur : les demandes ne sont enregistrees qu'une fois le lot valide (voir
 -- CommitZaFlipClaims), sinon un lot refuse consommerait la confirmation.
 local ZA_FLIP_LIVE_WINDOW, ZA_FLIP_MAX_HOLD, ZA_FLIP_MAX = 300, 300, 64
+-- Une demande vit deux fois le plafond : purgee a 300 s, elle n'etait jamais vue
+-- au-dela du plafond, et le ZA suivant de la meme source etait tenu de nouveau.
+local ZA_FLIP_CLAIM_TTL = 2 * ZA_FLIP_MAX_HOLD
 priv.zaFlipClaims = {}
 function Overlord.Sync:IsSuspiciousZaFlip(zoneId, zone, owner, ct, sender)
     if not zone or not owner or zone.owner == owner then return false, false end
@@ -1436,8 +1439,8 @@ function Overlord.Sync:PurgeZaFlipClaims()
     if next(claims) == nil then return end
     local now = GetTime()
     for zoneId, pending in pairs(claims) do
-        local zone = Overlord.Zones and Overlord.Zones:GetZone(zoneId)
-        if now - pending.firstAt > ZA_FLIP_MAX_HOLD or (zone and zone.owner == pending.owner) then
+        local zone = Overlord.Zones and Overlord.Zones.GetZone and Overlord.Zones:GetZone(zoneId)
+        if now - pending.firstAt > ZA_FLIP_CLAIM_TTL or (zone and zone.owner == pending.owner) then
             claims[zoneId] = nil
         end
     end
@@ -1449,7 +1452,7 @@ function Overlord.Sync:CommitZaFlipClaims(held, confirmed, sender)
     local claims = priv.zaFlipClaims
     local now = GetTime()
     for zoneId, pending in pairs(claims) do
-        if now - pending.firstAt > ZA_FLIP_MAX_HOLD or confirmed[zoneId] then claims[zoneId] = nil end
+        if now - pending.firstAt > ZA_FLIP_CLAIM_TTL or confirmed[zoneId] then claims[zoneId] = nil end
     end
     local senderKey = tostring(self:BurstLimiterKey(sender) or ""):lower()
     for _, flip in ipairs(held) do
@@ -1457,11 +1460,15 @@ function Overlord.Sync:CommitZaFlipClaims(held, confirmed, sender)
         if pending and pending.owner == flip.owner and math.abs(pending.ct - flip.ct) <= 5 then
             pending.at = now
         else
-            local count = 0
-            for _ in pairs(claims) do count = count + 1 end
-            if count < ZA_FLIP_MAX then
-                claims[flip.zoneId] = { owner = flip.owner, ct = flip.ct, sender = senderKey, firstAt = now, at = now }
+            -- Table pleine : la demande la plus ancienne cede sa place (refuser la
+            -- nouvelle laissait 64 bascules forgees bloquer toute confirmation).
+            local count, oldestId, oldestAt = 0, nil, nil
+            for id, other in pairs(claims) do
+                count = count + 1
+                if not oldestAt or other.firstAt < oldestAt then oldestId, oldestAt = id, other.firstAt end
             end
+            if count >= ZA_FLIP_MAX and oldestId and not claims[flip.zoneId] then claims[oldestId] = nil end
+            claims[flip.zoneId] = { owner = flip.owner, ct = flip.ct, sender = senderKey, firstAt = now, at = now }
         end
         local betaNet = Overlord.BetaNetwork
         if betaNet and betaNet.stats then

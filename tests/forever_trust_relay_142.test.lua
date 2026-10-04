@@ -357,8 +357,24 @@ do
 end
 
 -- Absolute cap: after 5 min the pending flip applies even without a second source.
+-- Live traffic stays fresh here, so the cap itself (not the live window) must
+-- release it, and the purge run on every ZA must not drop the claim first.
 advance(301)
-held = s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 100, "Peer One")
-assert(not held, "a flip was held beyond the 5 min cap")
+s:NoteLiveZoneTraffic("zone_live")
+s:PurgeZaFlipClaims()
+held, confirmed = s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 100, "Peer One")
+assert(not held and confirmed, "a flip was held beyond the 5 min cap")
+-- A full claim table evicts its oldest claim instead of refusing new ones.
+do
+    local flips = {}
+    for i = 1, 64 do flips[#flips + 1] = { zoneId = "fill_" .. i, owner = "Horde", ct = t0 } end
+    s:CommitZaFlipClaims(flips, {}, "Flooder")
+    advance(1)
+    local fresh = { id = "zone_fresh", owner = "Alliance", capturedTime = t0 - 300 }
+    s:NoteLiveZoneTraffic("zone_fresh")
+    s:CommitZaFlipClaims({ { zoneId = "zone_fresh", owner = "Horde", ct = t0 - 100 } }, {}, "Peer One")
+    held, confirmed = s:IsSuspiciousZaFlip("zone_fresh", fresh, "Horde", t0 - 100, "Peer Two")
+    assert(not held and confirmed, "a full claim table blocked a new flip's confirmation")
+end
 
 print("1.4.2 trust and relay: LK bound, bridge hold, 3/N class answers, TV proof, final rate, ZA flips OK")
