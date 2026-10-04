@@ -1095,9 +1095,8 @@ local function scheduleMetaRefresh(self)
         local lb = Overlord.Leaderboard
         if lb ~= self then return end
         self._metaRefreshScheduled = nil
-        self._dedupMetaIndex = nil
-        self._dedupLegacyShortMetaIndex = nil
-        self._guildFactionVoteIndex = nil
+        -- The current index stays readable while the fresh one is built.
+        self._dedupMetaStale = true
         self:EnsureNetworkHotIndexesPrepared()
     end)
 end
@@ -1135,6 +1134,7 @@ function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
             return false
         end
         self._networkHotPlayerInfoSource = playerInfoSource
+        self._dedupMetaStale = nil
         if metaDrift then
             noteHotIndexOutcome(self, "metaDrift")
             scheduleMetaRefresh(self)
@@ -1241,6 +1241,7 @@ function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
     self._networkHotCapturesSource = capturesSource
     self._networkHotPlayerInfoSource = playerInfoSource
     self._networkHotCanonicalGeneration = dedupCanonicalGeneration
+    self._dedupMetaStale = nil
     noteHotIndexOutcome(self, "completed")
     return true
 end
@@ -1257,7 +1258,7 @@ end
 -- aient leurs index complets. Le travail est borne a 64 lignes ou 1,25 ms/frame.
 function Overlord.Leaderboard:EnsureNetworkHotIndexesPrepared()
     if dedupKillMaxIndex and dedupCaptureMaxIndex and dedupCanonicalValid
-        and self._dedupMetaIndex and self._guildFactionVoteIndex
+        and self._dedupMetaIndex and self._guildFactionVoteIndex and not self._dedupMetaStale
         and self._networkHotKillsSource == self.kills
         and self._networkHotCaptureSource == self.captureCount
         and self._networkHotCapturesSource == self.captures

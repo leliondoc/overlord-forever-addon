@@ -44,8 +44,9 @@ local function TouchDedupNode(state, key, expiresAt)
     state.nodes[key] = node
 end
 
-local GD_REPLAY_DELAY_1 = 1.0
-local GD_REPLAY_DELAY_2 = 3.0
+-- Above the relay's 2 s duplicate window (net:Send), otherwise the replay is absorbed.
+local GD_REPLAY_DELAY_1 = 2.5
+local GD_REPLAY_DELAY_2 = 6.0
 local GM_BROADCAST_COOLDOWN = 10
 local lastGmBroadcastAt = 0
 

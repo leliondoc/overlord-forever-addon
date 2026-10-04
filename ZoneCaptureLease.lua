@@ -1346,7 +1346,8 @@ function Lease:BroadcastReleaseSnapshot(snapshot)
             emitted = true
         end
         -- Diffusion relais ordinaire en plus ; ReceiveRelease est idempotent.
-        if sync.BroadcastToRelay and sync:BroadcastToRelay("ZR", snapshot.payload) == true then
+        if sync.BroadcastToRelay
+            and (tonumber(sync:BroadcastToRelay("ZR", snapshot.payload)) or 0) > 0 then
             emitted = true
         end
     end

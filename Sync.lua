@@ -8836,15 +8836,18 @@ function Overlord.Sync:BuildTotalVictoryReplayPayload(frontId, victory)
     }, ":")
 end
 
--- TV recue sans preuve locale : gardee (une par front, la plus recente) et rejouee
--- a 5, 15, 30, 60, 120, 300 puis 600 s. Des que la capture de la capitale est
+-- TV recue sans preuve locale : gardee (une par front, la premiere) et rejouee
+-- a 5, 15, 30, 60, 120, 240 puis 540 s cumules. Des que la capture de la capitale est
 -- arrivee par C/ZS/ZA, la preuve existe et la TV s'applique ; sinon elle expire.
-local TV_RETRY_DELAYS = { 5, 15, 30, 60, 120, 300, 600 }
-function Overlord.Sync:DeferTotalVictoryUntilEvidence(frontKey, payload, sender, sourceChannel)
+local TV_RETRY_DELAYS = { 5, 10, 15, 30, 60, 120, 300 }
+function Overlord.Sync:DeferTotalVictoryUntilEvidence(frontKey, payload, sender, sourceChannel, ts)
     priv.pendingTotalVictory = priv.pendingTotalVictory or {}
     local current = priv.pendingTotalVictory[frontKey]
-    if current and current.payload == payload then return end
-    local entry = { payload = payload, sender = sender, sourceChannel = sourceChannel, step = 0 }
+    -- The first announcement of a victory keeps its slot: a later packet for the
+    -- same moment (other totals in the payload) cannot replace it.
+    if current and (current.payload == payload
+        or math.abs((tonumber(current.ts) or 0) - (tonumber(ts) or 0)) <= 5) then return end
+    local entry = { payload = payload, sender = sender, sourceChannel = sourceChannel, step = 0, ts = ts }
     priv.pendingTotalVictory[frontKey] = entry
     local function retry()
         if priv.pendingTotalVictory[frontKey] ~= entry then return end
@@ -8937,7 +8940,11 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel, ret
         and self:SenderIsInOurGroup(sender or "") or false
     if not localVictoryEvidence and not trustedVictorySource then
         if not retrying then
-            self:DeferTotalVictoryUntilEvidence(proofFrontId or "", payload, sender, sourceChannel)
+            -- Replay with the timestamp as normalised now: a clamped future stamp
+            -- must not drift at every retry while the capital's stamp stays fixed.
+            local replay = table.concat({ faction, tostring(ts), allyKStr or "0", enemyKStr or "0",
+                frontId or "" }, ":")
+            self:DeferTotalVictoryUntilEvidence(proofFrontId or "", replay, sender, sourceChannel, ts)
         end
         return
     end

@@ -28,7 +28,8 @@ local net = Overlord.BetaNetwork
 Overlord.PlayerFaction = "Alliance"
 Overlord.InstanceSuspended = false
 function s:GetChannelId() return 5 end
-function s:SendAddonChecked() return true end
+local channelSends = 0
+function s:SendAddonChecked(msg, chatType) if chatType == "CHANNEL" then channelSends = channelSends + 1 end return true end
 function s:SendToBNet() return true end
 function s:GetBetaBNetTargets() return {} end
 
@@ -93,12 +94,17 @@ local wire1 = "global|c-1|" .. time() .. "|*|Horde Origin,Friend Seven|FR|f1:Hor
 assert(net:Receive(wire1, "Friend Seven", "BNET", 7) ~= nil)
 assert((net.stats.bridgeForwardsHeld or 0) == 1, "Battle.net broadcast was not held")
 assert(net:GetQueueSummary().total == before, "held broadcast was queued at once")
--- The same packet heard on the channel: another bridge did it, ours is cancelled.
-net:Receive("global|c-1|" .. time() .. "|*|Horde Origin,Other Hearer|FR|f1:Horde:" .. time(), "Other Hearer", "CHANNEL")
+-- The same packet heard on the channel, as the fragments WoW really delivers:
+-- another bridge did it, our channel copy is dropped.
+local copy = "global|c-1|" .. time() .. "|*|Horde Origin,Other Hearer|FR|f1:Horde:" .. time()
+local chunks = math.ceil(#copy / 170)
+for i = 1, chunks do
+    net:ReceiveFragment("c-1:" .. i .. ":" .. chunks .. ":" .. copy:sub((i - 1) * 170 + 1, i * 170), "Other Hearer", "CHANNEL")
+end
 assert((net.stats.bridgeForwardsCancelled or 0) == 1, "channel copy did not cancel the held forward")
+local channelBefore = channelSends
 advance(16)
-assert(net:GetQueueSummary().total == before, "cancelled forward was still queued")
-assert((net.stats.bridgeForwardsSent or 0) == 0)
+assert(channelSends == channelBefore, "cancelled forward still went on the channel")
 -- Without a channel copy the forward leaves after the hold.
 local wire2 = "global|c-2|" .. time() .. "|*|Horde Origin,Friend Seven|FR|f1:Horde:" .. (time() + 1)
 local sentBefore = net.stats.sent or 0
@@ -107,8 +113,27 @@ assert((net.stats.bridgeForwardsHeld or 0) == 2)
 advance(1)
 assert(net:GetQueueSummary().total == before and (net.stats.sent or 0) == sentBefore, "forward left before the hold")
 advance(15)
-assert((net.stats.bridgeForwardsSent or 0) == 1, "held forward was never sent")
-assert((net.stats.sent or 0) > sentBefore, "forward not sent after the hold")
+assert((net.stats.bridgeForwardsSent or 0) >= 1, "held forward was never sent")
+assert(channelSends > channelBefore, "forward not put on the channel after the hold")
+-- A broadcast heard on the channel while grouped: the group copy waits and is
+-- dropped when a mate's copy arrives in the raid.
+IsInGroup = function() return true end
+local groupSends = 0
+local realSendToGroup = s.SendToGroup
+s.SendToGroup = function() groupSends = groupSends + 1; return true end
+local wire3 = "global|c-3|" .. time() .. "|*|Horde Origin,Mate One|FR|f1:Horde:" .. (time() + 2)
+net:Receive(wire3, "Mate One", "CHANNEL")
+assert((net.stats.groupCopiesHeld or 0) == 1, "group copy of a channel packet was not held")
+net:Receive("global|c-3|" .. time() .. "|*|Horde Origin,Mate Two|FR|f1:Horde:" .. (time() + 2), "Mate Two", "RAID")
+assert((net.stats.groupCopiesCancelled or 0) == 1, "a mate's raid copy did not cancel the held group copy")
+advance(16)
+assert(groupSends == 0, "cancelled group copy was still sent")
+local wire4 = "global|c-4|" .. time() .. "|*|Horde Origin,Mate One|FR|f1:Horde:" .. (time() + 3)
+net:Receive(wire4, "Mate One", "CHANNEL")
+advance(16)
+assert(groupSends >= 1, "group copy never sent when no mate carried it")
+s.SendToGroup = realSendToGroup
+IsInGroup = function() return false end
 net.BridgeChannelHold = { 0, 0 }
 
 -- ===== (3) class answers scale with the population

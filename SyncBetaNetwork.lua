@@ -543,31 +543,49 @@ local function remember(values, order, key, value, limit)
     end
     values[key] = value
 end
--- Bridge hold (1.4.2). A broadcast that reached this client over Battle.net reached
--- every other bridge of the faction in the same second; each one then put its copy
--- on the channel (the LK bridge had an election for this, nothing else had). Wait
--- 2-15 s at random before forwarding; a copy heard on the channel meanwhile means
--- another bridge already did it and cancels ours. Tests set BridgeChannelHold to
--- { 0, 0 } to forward at once.
-local heldForwards, heldForwardsOrder = {}, {}
-local function holdForward(key, p)
+-- Held forwards (1.4.2). Two cases share one mechanism:
+--  * bridge: a broadcast that reached this client over Battle.net reached every
+--    other bridge of the faction in the same second; each one then put its copy on
+--    the channel (only the LK bridge had an election). Wait 2-15 s (1-4 s for a
+--    terminal event) before forwarding. A copy heard on the channel meanwhile means
+--    another bridge did it: our channel copy is dropped, the Battle.net copies to
+--    friends the channel cannot reach still go out.
+--  * group: a broadcast heard on the channel is heard by our group mates too, except
+--    the ones whose channel join failed. Instead of 40 raid copies per packet, the
+--    group copy waits the same window and is dropped if a mate's copy is heard in the
+--    raid/party first.
+-- Entries are counted, never evicted: a forward in flight is never lost; above the
+-- cap the packet is forwarded at once. Tests set BridgeChannelHold to { 0, 0 }.
+local heldForwards, heldForwardCount = {}, 0
+local HELD_FORWARD_MAX = 256
+local function holdForward(key, p, mode)
     local hold = net.BridgeChannelHold or {}
     local lo, hi = tonumber(hold[1]) or 0, tonumber(hold[2]) or 0
+    if hi <= 0 or heldForwardCount >= HELD_FORWARD_MAX then return false end
     -- Only a client with a channel is a bridge to it; elsewhere forward at once.
-    if hi <= 0 or not (sync.GetChannelId and sync:GetChannelId()) then return false end
-    -- One delay per (bridge, origin) pair, not per packet: packets of the same
+    if mode == "bridge" and not (sync.GetChannelId and sync:GetChannelId()) then return false end
+    if isTerminal(p) then lo, hi = math.min(lo, 1), math.min(hi, 4) end
+    -- One delay per (client, origin) pair, not per packet: packets of the same
     -- origin keep their order through the hold (TV before VB), while different
-    -- bridges spread over the window.
+    -- clients spread over the window.
     local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
     local text = tostring(me):lower() .. "|" .. tostring(p.path[1] or ""):lower()
     local h = 5381
     for i = 1, #text do h = (h * 33 + text:byte(i)) % 2147483647 end
     local frac = (h * 0.6180339887498949) % 1
-    local entry = { p = p }
-    remember(heldForwards, heldForwardsOrder, key, entry, 64)
+    local entry = { p = p, mode = mode }
+    heldForwards[key] = entry
+    heldForwardCount = heldForwardCount + 1
     C_Timer.After(lo + frac * math.max(0, hi - lo), function()
         if heldForwards[key] ~= entry then return end
         heldForwards[key] = nil
+        heldForwardCount = heldForwardCount - 1
+        if entry.heard then
+            if mode == "group" then return end
+            -- Keep only what the channel cannot reach: enemy bridges and friends
+            -- never heard on our channel.
+            p.skipChannel, p.skipGroup, p.heardOn = true, true, "CHANNEL"
+        end
         if net:Queue(p) == true then
             net.stats.bridgeForwardsSent = (net.stats.bridgeForwardsSent or 0) + 1
         else
@@ -576,14 +594,26 @@ local function holdForward(key, p)
     end)
     return true
 end
-local function cancelHeldForward(wire)
-    if next(heldForwards) == nil or type(wire) ~= "string" then return end
+-- A copy of a held packet heard on the channel (bridge entry) or in the group
+-- (group entry): someone else carried it there.
+local function noteHeardCopy(wire, transport)
+    if heldForwardCount == 0 or type(wire) ~= "string" then return end
     local _, id, _, _, path = strsplit("|", wire, 6)
     local origin = path and path:match("^[^,]+")
-    local key = id and origin and (origin:lower() .. ":" .. id)
-    if key and heldForwards[key] then
-        heldForwards[key] = nil
-        net.stats.bridgeForwardsCancelled = (net.stats.bridgeForwardsCancelled or 0) + 1
+    if not id or not origin then return end
+    local key = origin:lower() .. ":" .. id
+    if transport == "CHANNEL" then
+        local entry = heldForwards[key]
+        if entry and not entry.heard then
+            entry.heard = true
+            net.stats.bridgeForwardsCancelled = (net.stats.bridgeForwardsCancelled or 0) + 1
+        end
+    elseif transport == "RAID" or transport == "PARTY" then
+        local entry = heldForwards["G:" .. key]
+        if entry and not entry.heard then
+            entry.heard = true
+            net.stats.groupCopiesCancelled = (net.stats.groupCopiesCancelled or 0) + 1
+        end
     end
 end
 -- Duplicate check on the raw wire, before decode and identity work. Same key as
@@ -963,6 +993,12 @@ local function tasksFor(p, wire)
         if p.kind == "NH" and sync.GetBetaBNetTargetInfo then _, recipient = sync:GetBetaBNetTargetInfo(id) end
         if #wire <= 430 then add("BNET", wire, "BR", id, recipient)
         else for _, fragment in ipairs(fragments) do add("BNET", fragment, "BF", id, recipient) end end
+    end
+    if p.groupOnly then
+        if IsInGroup() then
+            for _, fragment in ipairs(fragments) do add("GROUP", fragment, "BF") end
+        end
+        return tasks, #tasks == 0 and "no_transport" or nil
     end
     if route and route.bnet then
         bnet(route.bnet)
@@ -1539,8 +1575,8 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     -- exception is a broadcast whose forward was refused here: that copy only
     -- retries the forward.
     local retryForward = false
-    -- Heard on the channel: another bridge forwarded it, drop our held copy.
-    if transport == "CHANNEL" then cancelHeldForward(wire) end
+    -- A copy someone else carried to the channel or the group: see holdForward.
+    noteHeardCopy(wire, transport)
     if alreadySeen(wire, sender) then
         if not forwardRetryKey(wire) then return false end
         retryForward = true
@@ -1701,7 +1737,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
                 self.stats.routineForwardSkipped = (self.stats.routineForwardSkipped or 0) + 1
             end
         elseif transport == "BNET" and p.target == "*" and p.kind ~= "NH" and p.kind ~= "SH"
-            and not p.skipChannel and holdForward(key, p) then
+            and not p.skipChannel and holdForward(key, p, "bridge") then
             forwarded = true
             self.stats.bridgeForwardsHeld = (self.stats.bridgeForwardsHeld or 0) + 1
             if routineKey then
@@ -1718,6 +1754,16 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
                 forwardRetry[key] = nil
             elseif not retryForward then
                 remember(forwardRetry, forwardRetryOrder, key, GetTime(), 256)
+            end
+        end
+        -- Group mates without the channel still need a copy: one held group-only
+        -- copy per hearer, dropped as soon as a mate's copy is heard in the group.
+        if transport == "CHANNEL" and p.target == "*" and p.kind ~= "NH"
+            and p.kind ~= "SH" and IsInGroup() and not retryForward then
+            local pg = { region = p.region, id = p.id, at = p.at, target = p.target, path = p.path,
+                kind = p.kind, payload = p.payload, groupOnly = true, skipChannel = true, heardOn = transport }
+            if holdForward("G:" .. key, pg, "group") then
+                self.stats.groupCopiesHeld = (self.stats.groupCopiesHeld or 0) + 1
             end
         end
         if forwarded then
@@ -1764,6 +1810,7 @@ function net:ReceiveFragment(payload, sender, transport, bnetID)
     end
     if a.got ~= count then return true end
     local wire = table.concat(a.chunks)
+    noteHeardCopy(wire, transport)
     -- Every later duplicate fragment of a completed packet lands here again.
     -- Let refused broadcast forwards reach Receive's retry-only path as well.
     if alreadySeen(wire, name) and not forwardRetryKey(wire) then return false end
