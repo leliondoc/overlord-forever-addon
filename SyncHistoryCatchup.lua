@@ -793,7 +793,11 @@ function sync:GetCatchupNeighbourDiagnostics()
     local rotation = math.max(0, math.floor(tonumber(OverlordDB
         and OverlordDB.leaderboardHistoryCatchupTargetRotation) or 0))
     local nextPool = (#enemies > 0 and (rotation % 3 ~= 2 or #allies == 0)) and "enemy" or "ally"
-    local function list(t) return #t > 0 and table.concat(t, ", ") or "none" end
+    local function list(t)
+        if #t == 0 then return "none" end
+        if #t <= 6 then return table.concat(t, ", ") end
+        return table.concat(t, ", ", 1, 6) .. " +" .. (#t - 6)
+    end
     return string.format("Catch-up neighbours: enemy %d (%s); ally %d (%s); set aside %d (%s); v5 only %d (%s); next round: %s.",
         #enemies, list(enemies), #allies, list(allies), #aside, list(aside), #old, list(old), nextPool)
 end

@@ -1,6 +1,14 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
 Overlord.Version = "1.4.2"
+-- Version annoncee sur le reseau (NH, SR). Tant qu'une version n'est pas publiee,
+-- la machine de developpement annonce la version publique (/ov announce 1.4.1),
+-- sinon chaque joueur a jour recoit "nouvelle version disponible" pour rien.
+function Overlord:WireVersion()
+    local v = OverlordDB and OverlordDB.announceVersion
+    if type(v) == "string" and v:match("^%d+%.%d+%.?%d*$") then return v end
+    return self.Version
+end
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncBetaNetwork.lua).
 Overlord.BetaNetworkEnabled = true
 Overlord.IsInitialized = false
@@ -4447,15 +4455,8 @@ function Overlord:OnEnterFront()
     -- Sync passive (2 min) reste active pour les autres fronts sur la carte monde.
     if self.Sync and self.Sync.StartPassiveSync then self.Sync:StartPassiveSync() end
     if self.UI and self.UI.StopSpectatorMode then self.UI:StopSpectatorMode() end
-    -- Alerte raid version obsolete : a chaque entree de zone Overlord tant que le reseau a
-    -- vu une version plus recente que la notre. Delai 1.5s pour laisser au moins un message
-    -- reseau arriver (le reload / la premiere entree du jour n'a souvent encore rien recu).
-    C_Timer.After(1.5, function()
-        if not Overlord.InActiveFront or Overlord.InstanceSuspended then return end
-        local newer = Overlord.Sync and Overlord.Sync.GetKnownNewerVersion and Overlord.Sync:GetKnownNewerVersion()
-        if not newer or not Overlord.Popups or not Overlord.Popups.ShowOutdatedVersion then return end
-        Overlord.Popups:ShowOutdatedVersion(newer)
-    end)
+    -- Version en retard : un seul message dans le chat par session (CheckRemoteVersion),
+    -- plus jamais d'alerte rouge au milieu de l'ecran a chaque entree de front.
     if self.MapMarkers then
         if self.MapMarkers.SetMinimapPinsVisible then
             self.MapMarkers:SetMinimapPinsVisible(true)

@@ -873,15 +873,6 @@ function Overlord.Popups:ShowDialog(seenId, title, body, markMode, opts)
     dialogFrame:Show()
 end
 
--- Alerte raid a chaque entree de front tant que la version reste en retard (cf. OnEnterFront).
-function Overlord.Popups:ShowOutdatedVersion(latestVersion)
-    if not latestVersion or latestVersion == "" or not L.RAID_WARNING_OUTDATED then return end
-    local msg = string.format(L.RAID_WARNING_OUTDATED, tostring(Overlord.Version or "?"), latestVersion)
-    if Overlord.PrintRaidWarning then
-        Overlord:PrintRaidWarning(msg)
-    end
-end
-
 -- Enregistre une annonce login : { id, title, body, when? }
 function Overlord.Popups:RegisterLoginAnnouncement(entry)
     if not entry or not entry.id then return end

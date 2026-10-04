@@ -775,6 +775,20 @@ local function CommandHandler(msg)
                 or (L.MAP_FILTER_HIDDEN or "World map display: off")))
         end
 
+    elseif cmd == "announce" then
+        -- Version annoncee sur le reseau avant publication (voir Overlord:WireVersion).
+        local wanted = type(args) == "string" and args:match("^%s*(%S+)") or ""
+        if wanted == "" or wanted == "off" then
+            OverlordDB.announceVersion = nil
+        elseif wanted:match("^%d+%.%d+%.?%d*$") then
+            OverlordDB.announceVersion = wanted
+        else
+            Overlord:PrintNotification("|cFFFFD100[Overlord]|r /ov announce <version|off>")
+            return
+        end
+        Overlord:PrintNotification("|cFFFFD100[Overlord]|r Version annoncée sur le réseau : "
+            .. Overlord:WireVersion() .. (OverlordDB.announceVersion and "" or " (réelle)"))
+
     elseif cmd == "network" or cmd == "reseau" then
         StartNetworkProbe()
 

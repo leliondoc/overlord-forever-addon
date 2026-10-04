@@ -292,7 +292,7 @@ local function SRPayload(requestMode)
     end
     srEvidencePageNonce = (srEvidencePageNonce + 1) % 2147483647
     if OverlordDB then OverlordDB.syncEvidencePageNonce = srEvidencePageNonce end
-    local versionField = (Overlord.Version or "") .. "~" .. srEvidencePageNonce
+    local versionField = (Overlord.WireVersion and Overlord:WireVersion() or Overlord.Version or "") .. "~" .. srEvidencePageNonce
     -- H (1.2.4) : historique avant-postes/forteresses seul (LO + LOC), sans carte.
     local mode = (requestMode == "F" and "F")
         or (requestMode == "S" and "S") or (requestMode == "H" and "H") or "T"
