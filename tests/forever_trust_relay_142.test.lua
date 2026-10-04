@@ -78,20 +78,25 @@ end
 know("Far Player", 100, "Horde")
 s:OnReceiveLeaderboardKills(lkRow("Far Player", 5000, "Horde"), "Some Peer", "CHANNEL")
 local clamped = Overlord.Leaderboard.kills["Far Player"]
-assert(clamped == 100 + 30 + 600, "first unsolicited total not clamped to +30 + 600 s allowance: " .. tostring(clamped))
+assert(clamped == 100 + 30 + 600 + 10, "first unsolicited total not clamped to +30 + 600 s allowance: " .. tostring(clamped))
 assert((net.stats.unsolicitedTotalsClamped or 0) == 1, "clamp not counted")
 advance(20)
 s:OnReceiveLeaderboardKills(lkRow("Far Player", 6000, "Horde"), "Some Peer", "CHANNEL")
-assert(Overlord.Leaderboard.kills["Far Player"] == clamped + 30 + 20,
+-- 20 s later: 1 kill/s, and the 30-kill margin only once per 30 s.
+assert(Overlord.Leaderboard.kills["Far Player"] == clamped + 20 + 10,
     "second unsolicited total not bounded by elapsed time: " .. tostring(Overlord.Leaderboard.kills["Far Player"]))
 -- A plausible growth passes untouched.
 advance(100)
 s:OnReceiveLeaderboardKills(lkRow("Far Player", clamped + 60, "Horde"), "Some Peer", "CHANNEL")
 assert(Overlord.Leaderboard.kills["Far Player"] == clamped + 60, "plausible unsolicited growth was altered")
--- The owner's own K follows the same growth bound (+30 right after the last total).
+-- The owner's own K follows the same growth bound: nothing right after an accepted total.
 ownK("Far Player", 5000, "Horde")
-assert(Overlord.Leaderboard.kills["Far Player"] == clamped + 60 + 30,
+assert(Overlord.Leaderboard.kills["Far Player"] == clamped + 60 + 10,
     "the owner's own jump was not bounded: " .. tostring(Overlord.Leaderboard.kills["Far Player"]))
+advance(31)
+ownK("Far Player", 5000, "Horde")
+assert(Overlord.Leaderboard.kills["Far Player"] == clamped + 70 + 31 + 10 + 30,
+    "owner growth after 31 s should be 31 + the 30 margin: " .. tostring(Overlord.Leaderboard.kills["Far Player"]))
 -- First total of a subject in this session: the window covers our whole absence,
 -- so an honest catch-up after a day away is accepted at once.
 OverlordDB.lastSessionTimestamp = time() - 86400
@@ -223,10 +228,21 @@ local zone = { id = "zone_live", owner = "Alliance", capturedTime = t0 - 300 }
 assert(not s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 100, "Peer One"),
     "a flip without any live traffic was held")
 s:NoteLiveZoneTraffic("zone_live")
-assert(s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 100, "Peer One"), "first source applied a surprising flip")
-assert(s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 100, "Peer One"), "the same source confirmed itself")
-assert(not s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 98, "Peer Two"), "a second source did not confirm the flip")
+local held, confirmed = s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 100, "Peer One")
+assert(held and not confirmed, "first source applied a surprising flip")
+-- The check is pure: the claim exists only once the batch is committed.
+s:CommitZaFlipClaims({ { zoneId = "zone_live", owner = "Horde", ct = t0 - 100 } }, {}, "Peer One")
+held, confirmed = s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 100, "Peer One")
+assert(held and not confirmed, "the same source confirmed itself")
+held, confirmed = s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 98, "Peer Two")
+assert(not held and confirmed, "a second source did not confirm the flip")
 assert(not s:IsSuspiciousZaFlip("zone_live", zone, "Alliance", t0 - 50, "Peer One"), "no flip (same owner) was held")
 assert(not s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 400, "Peer Three"), "an older capture time was held")
+assert(not s:IsSuspiciousZaFlip("cap_live", { id = "cap_live", owner = "Alliance", capturedTime = t0 - 300, isCapital = true },
+    "Horde", t0 - 100, "Peer One"), "a capital flip was held")
+-- Absolute cap: after 5 min the pending flip applies even without a second source.
+advance(301)
+held = s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 100, "Peer One")
+assert(not held, "a flip was held beyond the 5 min cap")
 
 print("1.4.2 trust and relay: LK bound, bridge hold, 3/N class answers, TV proof, final rate, ZA flips OK")

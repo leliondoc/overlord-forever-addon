@@ -1934,7 +1934,9 @@ end
 -- (~42) tout en coupant les rafales avant les allocations et mutations suivantes.
 -- Les snapshots territoriaux (OP/LO/LOC/ZA/ZS...) gardent leurs propres bornes.
 local SCORE_BURST_TYPES = { K = true, EK = true, LK = true, LC = true, LR = true }
-local SCORE_BURST_MAX = { K = 40, EK = 40, LK = 80, LC = 80, LR = 80 }
+-- K : un proprietaire honnete emet son total au plus toutes les 30 s (trois copies
+-- directes au plus) ; 8 par 5 s coupe un flood de totaux sans toucher au legitime.
+local SCORE_BURST_MAX = { K = 8, EK = 40, LK = 80, LC = 80, LR = 80 }
 local senderBurstWindow = {}      -- sender -> { counts = { K=.. }, windowStart }
 local senderBurstQuarantine = {}  -- sender -> msgType -> expiration (GetTime)
 local BURST_WINDOW = 5

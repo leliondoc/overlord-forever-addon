@@ -202,12 +202,18 @@ local function BuildSnapshotKillPayload(snapshot, name, wireEpoch)
         or not ContributorCanRelay(name) then
         return nil
     end
+    local kills = math.floor(tonumber(snapshot.kills and snapshot.kills[name]) or 0)
+    -- Same per-level ceiling as the receivers (1.4.2): a row they would refuse is
+    -- not served, so bucket digests match on both sides.
+    if sync.MaxPlausibleKillsForLevel and kills > sync:MaxPlausibleKillsForLevel(level) then
+        return nil
+    end
     local guild = SafeWireField(info.guild, 96)
     if guild ~= "" and sync.IsValidGuildSyncToken
         and not sync:IsValidGuildSyncToken(guild) then guild = "" end
     local fields = {
         SafeWireField(name, 80),
-        tostring(math.floor(tonumber(snapshot.kills and snapshot.kills[name]) or 0)),
+        tostring(kills),
         SafeWireField(info.class == "UNKNOWN" and "" or info.class, 24),
         SafeWireField(info.faction, 12),
         tostring(wireEpoch),

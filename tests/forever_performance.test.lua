@@ -43,7 +43,7 @@ for i = 1, 10000 do
     lb.kills[name] = i
     -- Every character in a separate guild exercises the largest possible guild sort.
     lb.playerInfo[name] = { guild = "Guild " .. suffix(i), guildAuth = true,
-        guildAt = time(), faction = i % 2 == 0 and "Alliance" or "Horde", class = "PRIEST", level = 2 }
+        guildAt = time(), faction = i % 2 == 0 and "Alliance" or "Horde", class = "PRIEST", level = 60 }
     lb.captureCount[name] = i % 25 + 1
     if i % 10 == 0 then lb.kills[name .. "-Realm"] = i end
     total = total + i

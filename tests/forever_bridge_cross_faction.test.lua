@@ -146,7 +146,7 @@ assert(Overlord.Leaderboard.kills["Horde Far"] == 309, "fixture: channel rows ar
 advance(10)
 s:OnReceiveLeaderboardKills(lkRow("Horde Far", 5000, "Horde"), "BNet-9", "BNET")
 advance(70)
-assert(Overlord.Leaderboard.kills["Horde Far"] <= 309 + 30 + 80,
+assert(Overlord.Leaderboard.kills["Horde Far"] <= 309 + 30 + 80 + 10,
     "an implausible jump was accepted locally: " .. tostring(Overlord.Leaderboard.kills["Horde Far"]))
 for _, row in ipairs(channelRows) do
     assert(not row:match(":5000:"), "an implausible jump was put on the channel")
