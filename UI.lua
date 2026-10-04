@@ -1643,20 +1643,6 @@ function Overlord.UI:CreateZoneListSection(parent)
         allyLift:SetBlendMode("ADD")
         allyLift:SetVertexColor(1, 1, 1, 0.22)
         domBar.allyLift = allyLift
-        -- Jonction : un trait dore et l'etincelle de la barre de capture.
-        local seam = domBar:CreateTexture(nil, "OVERLAY", nil, 1)
-        seam:SetColorTexture(0.95, 0.78, 0.32, 0.95)
-        seam:SetWidth(2)
-        seam:SetPoint("TOP", domAlly, "TOPRIGHT", 0, 0)
-        seam:SetPoint("BOTTOM", domAlly, "BOTTOMRIGHT", 0, 0)
-        domBar.seam = seam
-        local spark = domBar:CreateTexture(nil, "OVERLAY", nil, 2)
-        spark:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
-        spark:SetBlendMode("ADD")
-        spark:SetVertexColor(1, 0.85, 0.45, 0.9)
-        spark:SetSize(14, 36)
-        spark:SetPoint("CENTER", domAlly, "RIGHT", 0, 0)
-        domBar.spark = spark
         allyCrest:Hide()
         hordeCrest:Hide()
         domBar._cloth = true
@@ -2652,7 +2638,7 @@ function Overlord.UI:RefreshFrontEmblems()
     end
 end
 
--- Partage bleu / rouge a la largeur allyW (pixels interieurs), tissus et jonction.
+-- Partage bleu / rouge a la largeur allyW (pixels interieurs) et tissus.
 local function PaintDominationSplit(bar, innerWidth, allyW)
     allyW = math.max(0, math.min(innerWidth, allyW))
     local hordeW = innerWidth - allyW
@@ -2669,9 +2655,6 @@ local function PaintDominationSplit(bar, innerWidth, allyW)
         bar.allyFill:SetTexCoord(240 / 512, (240 - allyVis) / 512, top, bottom)
         bar.allyLift:SetTexCoord(240 / 512, (240 - allyVis) / 512, top, bottom)
         bar.hordeFill:SetTexCoord((485 - hordeVis) / 512, 485 / 512, top, bottom)
-        local split = allyW >= 1 and hordeW >= 1
-        bar.seam:SetShown(split)
-        bar.spark:SetShown(split)
     end
     if allyW >= 1 then
         bar.allyFill:SetWidth(allyW)
