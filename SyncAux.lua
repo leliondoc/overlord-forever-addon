@@ -178,7 +178,7 @@ function Overlord.Sync:RequestPrereqMismatchCatchup(zone)
     if now - lastPrereqMismatchSR < PREREQ_MISMATCH_SR_COOLDOWN then return end
     -- Capture activement entretenue par le reseau : un in_progress orphelin/stale est
     -- deja couvert par PollIfStaleObserverInProgress (pas de double source de SR).
-    local age = time() - (tonumber(zone.updatedAt) or 0)
+    local age = (Overlord.ServerNow and Overlord.ServerNow() or time()) - (tonumber(zone.updatedAt) or 0)
     if age > PREREQ_MISMATCH_MAX_ZS_AGE then return end
     local Z = Overlord.Zones
     if not Z or not Z.FactionMeetsPrereqsForZoneCapture then return end

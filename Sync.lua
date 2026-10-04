@@ -2931,7 +2931,7 @@ function Overlord.Sync:RebaseRemoteObserverDisplay(
     if not zone then return 0 end
     local req = math.max(1, tonumber(required) or 120)
     local raw = math.max(0, tonumber(holdTime) or 0)
-    local now = time()
+    local now = (Overlord.ServerNow and Overlord.ServerNow() or time())
     local displayHold = tonumber(relayedDisplayHold)
     local displayAt = tonumber(relayedDisplayAt)
     local projected
@@ -4588,7 +4588,7 @@ local function BuildSrZsPayload(zone)
     if status ~= "in_progress" and status ~= "available" and status ~= "locked" then return nil end
     local zoneTs = zone.updatedAt or 0
     if zoneTs <= 0 then return nil end
-    local age = time() - zoneTs
+    local age = (Overlord.ServerNow and Overlord.ServerNow() or time()) - zoneTs
     local maxAge = (status == "in_progress") and ((zone.holdTimeRequired or 120) + 30) or 120
     if age >= maxAge then return nil end
     local kills = zone.killsCurrent or 0
@@ -4634,7 +4634,7 @@ local function BuildSrZsPayload(zone)
         and Overlord.Zones.GetObserverHoldTimeElapsed then
         relayedDisplayHold = tostring(math.floor(
             Overlord.Zones:GetObserverHoldTimeElapsed(zone)))
-        relayedDisplayAt = tostring(time())
+        relayedDisplayAt = tostring((Overlord.ServerNow and Overlord.ServerNow() or time()))
     end
     return zone.id .. ":" .. status .. ":" .. kills .. ":" .. holdTime .. ":" .. ownerCode .. ":"
         .. zoneTs .. ":" .. siegePhase .. ":" .. holdReq .. ":" .. capturerName
@@ -9594,7 +9594,7 @@ function Overlord.Sync:BroadcastZoneState(zone, forceBNetZS, primaryOnly)
         ts = capturedAt
     else
         -- En Lua, 0 est truthy : updatedAt == 0 ne doit pas produire ts=0 pour les etats non captures.
-        ts = (ua and ua > 0) and ua or time()
+        ts = (ua and ua > 0) and ua or (Overlord.ServerNow and Overlord.ServerNow() or time())
     end
     local ownerCode = ""
     if zone.owner == "Alliance" then ownerCode = "A"
@@ -9661,7 +9661,18 @@ function Overlord.Sync:BroadcastZoneState(zone, forceBNetZS, primaryOnly)
     -- SendToChannel toujours (pas seulement si groupe) : aligne le comportement sur BroadcastCapture.
     -- Sans ca, un capteur solo n'envoie pas au canal -> les joueurs ennemis du meme canal ne voient rien.
     -- critical : captured (fin d'etat) et revert force vers available (fin d'echec de capture).
-    self:SendToChannel("ZS", payload, status == "captured" or isForcedFinalState)
+    -- Tick de notre propre capture : prioritaire au plus une fois par 15 s (meme
+    -- message, aucun envoi de plus), sinon un capteur solo voyait ses ticks refuses
+    -- par le budget du canal et les observateurs geler son minuteur.
+    local criticalTick = false
+    if status == "in_progress" and localOriginWave then
+        local nowTick = GetTime()
+        if nowTick - (zone._lastCriticalZsTickAt or 0) >= 15 then
+            zone._lastCriticalZsTickAt = nowTick
+            criticalTick = true
+        end
+    end
+    self:SendToChannel("ZS", payload, status == "captured" or isForcedFinalState or criticalTick)
     if primaryOnly then return end
     -- BNet : throttle adaptatif par zone.
     -- En event normal : 15s entre chaque ZS BNet par zone (pas de saturation).
@@ -9676,7 +9687,10 @@ function Overlord.Sync:BroadcastZoneState(zone, forceBNetZS, primaryOnly)
         if forceBNetZS then
             -- Barricade : envoi immediat communaute. Captured en event massif : echantillonne.
             local largeEvent = self:IsLargeEvent()
-            local allowWideRelay = (not largeEvent) or status ~= "captured" or (math.random() <= 0.20)
+            -- Notre propre finale part toujours (un paquet par capture) ; les recopies
+            -- d'une finale d'un autre restent echantillonnees en gros event.
+            local allowWideRelay = (not largeEvent) or status ~= "captured" or terminalLocalWave
+                or (math.random() <= 0.20)
             if allowWideRelay then
                 self:BroadcastToRelay("ZS", payload)
                 lastBNetZSBroadcast[zone.id] = GetTime()

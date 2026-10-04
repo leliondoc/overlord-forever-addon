@@ -392,16 +392,26 @@ local function waitingOutpostItem(p)
     end
     return nil
 end
+-- Place pour un terminal : d'abord une presence (NH), puis un tick de progression
+-- relaye pour un autre, et seulement en dernier recours un tick de NOTRE capture
+-- (chemin a un seul noeud) : a 60 s de cadence en gros event, le perdre annulait la
+-- vague chez les observateurs.
 local function dropWaitingForTerminal()
-    for i = urgentLane.head, #urgentLane.items do
-        local item = urgentLane.items[i]
-        if item and item.index == 1 and not item.tasks[1].sending
-            and (item.p.kind == "NH" or (item.p.kind == "ZS"
-                and item.p.payload:match("^[^:]+:([^:]+):") == "in_progress")) then
-            table.remove(urgentLane.items, i)
-            forgetPresence(item)
-            countKind(item.p.kind, "dropped")
-            return true
+    for pass = 1, 3 do
+        for i = urgentLane.head, #urgentLane.items do
+            local item = urgentLane.items[i]
+            if item and item.index == 1 and not item.tasks[1].sending then
+                local p = item.p
+                local victim = pass == 1 and p.kind == "NH"
+                    or (pass >= 2 and p.kind == "ZS" and (pass == 3 or #p.path > 1)
+                        and p.payload:match("^[^:]+:([^:]+):") == "in_progress")
+                if victim then
+                    table.remove(urgentLane.items, i)
+                    forgetPresence(item)
+                    countKind(p.kind, "dropped")
+                    return true
+                end
+            end
         end
     end
     return false

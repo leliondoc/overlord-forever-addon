@@ -219,7 +219,7 @@ expect(persisted.status == "captured" and persisted.owner == "Alliance",
     "remote overlay leaked into persistable state")
 
 -- Soft expiry fige l'affichage ; hard expiry restaure exactement le snapshot, local-only.
-mono = 21
+mono = 76
 expect(Lease:IsSoftExpired(zone), "soft expiry missing")
 -- Trois relais d'une version identique ne renouvellent ni le TTL ni l'autorite.
 mono = 50
@@ -233,7 +233,7 @@ expect(echoOne == nil and echoTwo == nil and echoThree == nil,
     "a relayed ZS entered the direct lease")
 expect(zone._remoteCaptureLease.lastSeen == 0,
     "identical replay renewed lease liveness")
-mono = 91
+mono = 151
 local sentBeforeExpire = #sent
 expect(Lease:MaybeExpire(zone), "hard expiry missing")
 expect(zone.status == "captured" and zone.owner == "Alliance" and zone.killsCurrent == 4,
@@ -245,6 +245,33 @@ runScheduled()
 expect(availabilityRefreshes == availabilityBefore + 1,
     "hard expiry did not recompute dependent availability")
 expect(not Lease:AdoptRemote(zone, "Horde", "Bob", direct), "expired wave resurrected")
+-- A wave stopped for lack of news (timeout) is not erased: its final stays valid,
+-- and a newer tick of the same capturer brings the orange back.
+expect(not Lease:ShouldRejectFinal(zone, "Bob", "wdirect"),
+    "a final was rejected because its wave had only timed out")
+local revived = Lease:ValidateProgress(
+    zone.id, "Horde", "Bob", "wdirect", wallBase + 100, 100, 2, 120, 7, "Bob")
+expect(revived and Lease:AdoptRemote(zone, "Horde", "Bob", revived),
+    "a newer tick of a timed-out wave was refused")
+Lease:ExpireRemote(zone, "release")
+expect(Lease:ShouldRejectFinal(zone, "Bob", "wdirect"),
+    "a released wave's final was still accepted")
+-- A wave replaced by another capturer keeps a valid final until the zone is really
+-- taken; after that no second capturer can be credited for the same capture.
+mono = 160
+local first = Lease:ValidateProgress(
+    zone.id, "Horde", "Bob", "wreplaced", wallBase + 160, 30, 0, 120, 7, "Bob")
+expect(first and Lease:AdoptRemote(zone, "Horde", "Bob", first), "replaced-wave fixture missing")
+mono = 236
+local second = Lease:ValidateProgress(
+    zone.id, "Horde", "Dave", "wsecond", wallBase + 236, 0, 0, 120, 7, "Dave")
+expect(second and Lease:AdoptRemote(zone, "Horde", "Dave", second),
+    "a silent capturer was not replaced after 75 s")
+expect(not Lease:ShouldRejectFinal(zone, "Bob", "wreplaced"),
+    "the replaced capturer's final was refused before the zone was taken")
+Lease:Complete(zone)
+expect(Lease:ShouldRejectFinal(zone, "Bob", "wreplaced"),
+    "a replaced wave could still be finalized after the capture completed")
 
 -- Aucun nombre de relais frais ne peut fabriquer une autorite receiver-local.
 mono = 100
@@ -679,7 +706,7 @@ zone.status, zone.owner, zone.previousOwner = "in_progress", "Alliance", "Horde"
 zone.holdTimeElapsed, zone.holdTimeRequired, zone.killsCurrent = 80, 500, 99
 expect(Lease:PromoteRemoteToLocal(zone) == nil,
     "a fresh direct lease allowed an unauthenticated local takeover")
-mono = 400
+mono = 456
 local takeoverWave = Lease:PromoteRemoteToLocal(zone)
 expect(takeoverWave and zone.status == "in_progress" and zone.owner == "Alliance"
     and zone.previousOwner == "Horde", "takeover did not start a fresh local attempt")
@@ -690,30 +717,30 @@ expect(zone._localCaptureBase and zone._localCaptureBase.owner == "Horde",
 
 -- La fin locale tombstone sa generation : un relais tardif ne la ressuscite pas.
 Lease:ClearLocal(zone)
-mono = 401
+mono = 457
 local lateLocal = Lease:ValidateProgress(
-    zone.id, "Alliance", "LocalHero", takeoverWave, wallBase + 401, 1, 0, 120, nil, "LocalHero")
+    zone.id, "Alliance", "LocalHero", takeoverWave, wallBase + 457, 1, 0, 120, nil, "LocalHero")
 expect(lateLocal == nil, "cleared local wave was not tombstoned")
 
 -- Kills/requis corroborés restent sûrs, mais un hold ancien ne survit jamais a
 -- un tick direct non corrobore : il a pu reculer pendant une contestation.
 resetZone()
-mono = 410
+mono = 470
 zone.owner = "Horde"
 Lease:ValidateProgress(
-    zone.id, "Alliance", "Alice", "wtrusted", wallBase + 410, 70, 7, 180, nil, "WitnessOne")
+    zone.id, "Alliance", "Alice", "wtrusted", wallBase + 470, 70, 7, 180, nil, "WitnessOne")
 Lease:ValidateProgress(
-    zone.id, "Alliance", "Alice", "wtrusted", wallBase + 410, 65, 6, 180, nil, "WitnessTwo")
+    zone.id, "Alliance", "Alice", "wtrusted", wallBase + 470, 65, 6, 180, nil, "WitnessTwo")
 local trustedOrigin = Lease:ValidateProgress(
-    zone.id, "Alliance", "Alice", "wtrusted", wallBase + 410, 60, 5, 180, nil, "Alice")
+    zone.id, "Alliance", "Alice", "wtrusted", wallBase + 470, 60, 5, 180, nil, "Alice")
 expect(trustedOrigin and trustedOrigin.direct, "direct takeover origin missing")
 expect(Lease:AdoptRemote(zone, "Alliance", "Alice", trustedOrigin),
     "direct takeover lease missing")
 zone.status, zone.owner, zone.previousOwner = "in_progress", "Alliance", "Horde"
 zone.holdTimeElapsed, zone.holdTimeRequired, zone.killsCurrent = 60, 180, 5
-mono = 411
+mono = 471
 local laterUntrusted = Lease:ValidateProgress(
-    zone.id, "Alliance", "Alice", "wtrusted", wallBase + 411, 65, 99, 30, nil, "Alice")
+    zone.id, "Alliance", "Alice", "wtrusted", wallBase + 471, 65, 99, 30, nil, "Alice")
 expect(laterUntrusted and laterUntrusted.direct
     and laterUntrusted.kills == 0 and laterUntrusted.holdReq == nil,
     "later direct tick did not retain normalized fields")
@@ -722,7 +749,7 @@ expect(Lease:AdoptRemote(zone, "Alliance", "Alice", laterUntrusted),
 zone.holdTimeElapsed = 65
 expect(Lease:PromoteRemoteToLocal(zone) == nil,
     "a fresh direct tick allowed an unauthenticated local takeover")
-mono = 431
+mono = 547
 Lease:PromoteRemoteToLocal(zone)
 expect(zone.holdTimeElapsed == 0 and zone.killsCurrent == 4
     and zone.holdTimeRequired == 120,
@@ -732,20 +759,20 @@ Lease:ClearLocal(zone)
 -- Un autre capteur ne peut pas evincer un bail frais sur un simple restart a 0.
 -- Si le ZR a ete rate, le handoff direct devient possible apres le soft-TTL.
 resetZone()
-mono = 440
+mono = 560
 local incumbent = Lease:ValidateProgress(
-    zone.id, "Horde", "Bob", "wfresh", wallBase + 440, 50, 0, 120, nil, "Bob")
+    zone.id, "Horde", "Bob", "wfresh", wallBase + 560, 50, 0, 120, nil, "Bob")
 expect(Lease:AdoptRemote(zone, "Horde", "Bob", incumbent), "incumbent lease missing")
 zone.status, zone.owner, zone.previousOwner = "in_progress", "Horde", "Alliance"
 zone.holdTimeElapsed = 50
-mono = 441
+mono = 561
 local freshEviction = Lease:ValidateProgress(
-    zone.id, "Horde", "Charlie", "wfresh2", wallBase + 441, 0, 0, 120, nil, "Charlie")
+    zone.id, "Horde", "Charlie", "wfresh2", wallBase + 561, 0, 0, 120, nil, "Charlie")
 expect(not Lease:AdoptRemote(zone, "Horde", "Charlie", freshEviction),
     "fresh lease was evicted by another direct origin")
-mono = 461
+mono = 636
 local softHandoff = Lease:ValidateProgress(
-    zone.id, "Horde", "Charlie", "wfresh2", wallBase + 461, 51, 0, 120, nil, "Charlie")
+    zone.id, "Horde", "Charlie", "wfresh2", wallBase + 636, 51, 0, 120, nil, "Charlie")
 expect(Lease:AdoptRemote(zone, "Horde", "Charlie", softHandoff),
     "soft-expired direct handoff was rejected")
 
@@ -755,7 +782,7 @@ physicalEnabled = true
 physicalName, physicalFaction = "Alice", "Alliance"
 zone.owner = "Horde"
 local witnessedWave = "wwitnessed"
-mono = 500
+mono = 700
 local directSample = Lease:ValidateProgress(
     zone.id, "Alliance", "Alice", witnessedWave, time(), 0, 0, 120,
     nil, "Alice")

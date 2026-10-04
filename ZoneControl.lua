@@ -523,7 +523,9 @@ local function clearHoldAuthorityLocal(zone)
 end
 
 -- Co-capture : ne pas prendre holdAuthorityLocal si un autre allie est deja capteur officiel (ZS).
-local STALE_OFFICIAL_CAPTURE_TAKEOVER_SECONDS = 18
+-- Silence du capteur officiel avant qu'un allie du disque reprenne (cadence relais
+-- jusqu'a 60 s en gros event). Un vrai depart envoie un ZR : reprise immediate.
+local STALE_OFFICIAL_CAPTURE_TAKEOVER_SECONDS = 75
 
 local function CapturerNamesMatch(a, b)
     if not a or a == "" or not b or b == "" then return false end
@@ -773,7 +775,7 @@ function Overlord.ZoneControl:TickRemoteObserverZone(zone, deltaTime)
     local remoteLease = zone._remoteCaptureLease
     local zsWatcherAge = remoteLease
         and (GetTime() - (remoteLease.lastSeen or 0))
-        or math.max(0, time() - (zone.updatedAt or 0))
+        or math.max(0, (Overlord.ServerNow and Overlord.ServerNow() or time()) - (zone.updatedAt or 0))
     local INTERPOLATION_STALE_PAUSE = 8
     local OBSERVER_DISPLAY_MAX_LEAD = 5
     local OBSERVER_DISPLAY_REWIND_RATE = 3
@@ -866,7 +868,7 @@ local function ZoneTickOne(zoneCtrl, zone, deltaTime, playerZoneId)
                     and Overlord.Sync:GetPlayerFullName() or ""
                 local joinAllyCapture = official and official ~= "" and official ~= selfName
                 local updatedAt = zone.updatedAt or 0
-                local zsAge = (updatedAt > 0) and (time() - updatedAt) or 0
+                local zsAge = (updatedAt > 0) and ((Overlord.ServerNow and Overlord.ServerNow() or time()) - updatedAt) or 0
                 if not joinAllyCapture and updatedAt > 0 and zsAge >= 15 then
                     local maxHold = zone.holdTimeRequired or 120
                     local capValue = math.min(15, maxHold - 1)
@@ -877,7 +879,7 @@ local function ZoneTickOne(zoneCtrl, zone, deltaTime, playerZoneId)
             end
             if zone._restoredInProgress and zone.holdAuthorityLocal then
                 -- Reprise physique sur le disque : ancrer le timer local (pas d'interpolation fantome).
-                zone.updatedAt = time()
+                zone.updatedAt = (Overlord.ServerNow and Overlord.ServerNow() or time())
             end
             zone._restoredInProgress = nil
             if not zone.holdStartTime then
@@ -1022,7 +1024,7 @@ function Overlord.ZoneControl:CheckPlayerPosition()
     end
     currentZone.previousOwner = currentZone.owner
     currentZone.status = "in_progress"
-    currentZone.updatedAt = time()
+    currentZone.updatedAt = (Overlord.ServerNow and Overlord.ServerNow() or time())
     self:StartHoldTimer(currentZone, not crossedDiskBoundary)
 
     if crossedDiskBoundary then
@@ -1215,7 +1217,7 @@ function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
                     local contestedFor = now - (contestedStartedAt[zone.id] or now)
                     if contestedFor < CONTEST_RESET_GRACE_SECONDS then
                         if Overlord.Sync and (not lastZSBroadcast[zone.id] or now - lastZSBroadcast[zone.id] >= ZS_BROADCAST_INTERVAL) then
-                            zone.updatedAt = time()
+                            zone.updatedAt = (Overlord.ServerNow and Overlord.ServerNow() or time())
                             Overlord.Sync:BroadcastZoneState(zone)
                             lastZSBroadcast[zone.id] = now
                         end
@@ -1250,7 +1252,7 @@ function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
                 end
                 zone._assaultFromAvailable = nil
 
-                zone.updatedAt = time()
+                zone.updatedAt = (Overlord.ServerNow and Overlord.ServerNow() or time())
                 if Overlord.Sync then
                     -- force=true : revert decide par un joueur present sur le disque = etat final
                     -- one-shot ; doit passer les gates login et le canal en critical (regle dure).
@@ -1272,7 +1274,7 @@ function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
             -- Sync periodique meme en conteste (pour que les autres voient la regression)
             local now = GetTime()
             if Overlord.Sync and (not lastZSBroadcast[zone.id] or now - lastZSBroadcast[zone.id] >= ZS_BROADCAST_INTERVAL) then
-                zone.updatedAt = time()
+                zone.updatedAt = (Overlord.ServerNow and Overlord.ServerNow() or time())
                 Overlord.Sync:BroadcastZoneState(zone)
                 lastZSBroadcast[zone.id] = now
             end
@@ -1316,7 +1318,7 @@ function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
                 end
                 zone._assaultFromAvailable = nil
 
-                zone.updatedAt = time()
+                zone.updatedAt = (Overlord.ServerNow and Overlord.ServerNow() or time())
                 if Overlord.Sync then
                     -- force=true : revert decide par un joueur present sur le disque = etat final
                     -- one-shot ; doit passer les gates login et le canal en critical (regle dure).
@@ -1338,7 +1340,7 @@ function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
             -- Sync periodique (pour que les autres voient la regression)
             local now = GetTime()
             if Overlord.Sync and (not lastZSBroadcast[zone.id] or now - lastZSBroadcast[zone.id] >= ZS_BROADCAST_INTERVAL) then
-                zone.updatedAt = time()
+                zone.updatedAt = (Overlord.ServerNow and Overlord.ServerNow() or time())
                 Overlord.Sync:BroadcastZoneState(zone)
                 lastZSBroadcast[zone.id] = now
             end
@@ -1360,7 +1362,7 @@ function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
                 -- Sync du timer aux autres joueurs
                 local now = GetTime()
                 if Overlord.Sync and (not lastZSBroadcast[zone.id] or now - lastZSBroadcast[zone.id] >= ZS_BROADCAST_INTERVAL) then
-                    zone.updatedAt = time()
+                    zone.updatedAt = (Overlord.ServerNow and Overlord.ServerNow() or time())
                     Overlord.Sync:BroadcastZoneState(zone)
                     lastZSBroadcast[zone.id] = now
                 end
@@ -1436,7 +1438,7 @@ function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
 
             -- Broadcast AVANT UpdateAvailableZones : envoie l'etat reel aux autres joueurs
             -- (captured par le proprio precedent), puis recalcule localement la disponibilite
-            zone.updatedAt = time()
+            zone.updatedAt = (Overlord.ServerNow and Overlord.ServerNow() or time())
             if Overlord.Sync then
                 Overlord.Sync:BroadcastZoneState(zone, true)
             end

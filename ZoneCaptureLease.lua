@@ -10,7 +10,13 @@ Overlord.CaptureLease = Overlord.CaptureLease or {}
 local Lease = Overlord.CaptureLease
 
 local SOFT_TTL = 20
-local HARD_TTL = 90
+-- Silence d'un capteur toleré avant de geler le minuteur ou de laisser un autre
+-- joueur reprendre la capture. Le relais n'envoie un tick que toutes les 60 s apres
+-- les 45 premieres secondes d'une vague en gros event : 20 s figeait l'affichage et
+-- laissait un allie du disque repartir a 0:00 pendant que le capteur continuait.
+local LIVE_SILENCE = 75
+-- Un tick perdu ne doit pas annuler la vague : 60 s de cadence + une perte + latence.
+local HARD_TTL = 150
 local TOMBSTONE_TTL = 600
 local MAX_ROWS = 512
 local TOMBSTONE_PURGE_INTERVAL = 60
@@ -23,6 +29,11 @@ local BASE_HOLD_REQUIRED = 120
 
 local tombstones = {}
 local tombstoneCount = 0
+-- Vagues arretees faute de nouvelles (timeout) ou relevees par un autre capteur :
+-- marque « douce ». Un tick plus recent du meme capteur la ranime, et sa finale
+-- reste acceptee (un capteur qui continue malgre une perte n'est jamais efface).
+local softTombstones = {}
+local softTombstoneCount = 0
 local lastTombstonePurgeAt = 0
 local activeLeaseZones = {}
 local activeLeaseZoneCount = 0
@@ -168,7 +179,66 @@ local function PutTombstone(zoneId, originKey, waveId)
     end
 end
 
-local function IsTombstoned(zoneId, originKey, waveId)
+local function PutSoftTombstone(zoneId, originKey, waveId, lastTs)
+    if not zoneId or not originKey or not waveId then return end
+    local now = GetTime()
+    local key = LeaseKey(zoneId, originKey, waveId)
+    if softTombstones[key] == nil then softTombstoneCount = softTombstoneCount + 1 end
+    softTombstones[key] = { lastSeen = now, ts = tonumber(lastTs) or 0 }
+    if softTombstoneCount >= MAX_ROWS then
+        softTombstoneCount = PurgeBounded(softTombstones, now, TOMBSTONE_TTL)
+    end
+end
+
+-- Marque douce encore valide qui bloque ce ts (nil = aucune, ou ts plus recent).
+local function IsSoftTombstoned(zoneId, originKey, waveId, ts)
+    local key = LeaseKey(zoneId, originKey, waveId)
+    local row = softTombstones[key]
+    if not row then return false end
+    if GetTime() - (row.lastSeen or 0) > TOMBSTONE_TTL then
+        softTombstones[key] = nil
+        softTombstoneCount = math.max(0, softTombstoneCount - 1)
+        return false
+    end
+    ts = tonumber(ts)
+    if ts and ts > (row.ts or 0) then return false end
+    return true
+end
+
+-- Fin reelle d'une capture sur cette zone : les vagues relevees ou arretees faute de
+-- nouvelles ne peuvent plus etre finalisees (sinon deux capteurs credites pour une
+-- seule prise). Balayage borne par MAX_ROWS.
+local function HardenSoftTombstonesForZone(zoneId)
+    if not zoneId or softTombstoneCount == 0 then return end
+    local prefix = tostring(zoneId) .. "|"
+    local now = GetTime()
+    for key in pairs(softTombstones) do
+        if key:sub(1, #prefix) == prefix then
+            softTombstones[key] = nil
+            softTombstoneCount = math.max(0, softTombstoneCount - 1)
+            if tombstones[key] == nil then tombstoneCount = tombstoneCount + 1 end
+            tombstones[key] = now
+        end
+    end
+end
+
+-- Marque definitive (finale, ZR, anti-spoof...) seulement.
+local function IsHardTombstoned(zoneId, originKey, waveId)
+    local key = LeaseKey(zoneId, originKey, waveId)
+    local seen = tombstones[key]
+    if not seen then return false end
+    if GetTime() - seen > TOMBSTONE_TTL then
+        tombstones[key] = nil
+        tombstoneCount = math.max(0, tombstoneCount - 1)
+        return false
+    end
+    return true
+end
+
+-- ts : horodatage du paquet examine (ticks) ; une marque douce ne bloque que les
+-- paquets qui ne sont pas plus recents que le dernier vu avant l'arret.
+local function IsTombstoned(zoneId, originKey, waveId, ts)
+    if IsSoftTombstoned(zoneId, originKey, waveId, ts) then return true end
     local key = LeaseKey(zoneId, originKey, waveId)
     local seen = tombstones[key]
     if not seen then return false end
@@ -350,7 +420,7 @@ end
 
 function Lease:NewWaveId()
     waveSequence = (waveSequence + 1) % 1000000
-    local wall = math.max(0, math.floor(time()))
+    local wall = math.max(0, math.floor((Overlord.ServerNow and Overlord.ServerNow() or time())))
     local mono = math.max(0, math.floor(GetTime() * 1000)) % 1000000000
     return string.format("w%x_%x_%x", wall, mono, waveSequence)
 end
@@ -406,10 +476,14 @@ function Lease:PromoteRemoteToLocal(zone, releasedByOrigin)
         -- tombstoner la vague authentifiee encore vivante puis repartir a zero.
         -- Seul le ZR direct de cette origine autorise une releve immediate.
         if not releasedByOrigin and remote.directValidated == true
-            and GetTime() - (remote.lastDirectSeen or 0) < SOFT_TTL then
+            and GetTime() - (remote.lastDirectSeen or 0) < LIVE_SILENCE then
             return nil
         end
-        PutTombstone(zone.id, remote.originKey, remote.waveId)
+        if releasedByOrigin then
+            PutTombstone(zone.id, remote.originKey, remote.waveId)
+        else
+            PutSoftTombstone(zone.id, remote.originKey, remote.waveId, remote.lastRemoteTs)
+        end
         local base = CopySnapshot(remote.base)
         zone._remoteCaptureLease = nil
         -- Toujours reconstruire depuis la base : les champs directs ephemeres
@@ -437,7 +511,7 @@ function Lease:PromoteRemoteToLocal(zone, releasedByOrigin)
                     Overlord.Zones:GetCapitalHoldTime(zone))
             end
         end
-        zone.updatedAt = time()
+        zone.updatedAt = (Overlord.ServerNow and Overlord.ServerNow() or time())
         zone.isHolding = true
         zone.isPaused = false
         zone.holdStartTime = GetTime()
@@ -817,7 +891,7 @@ function Lease:ValidateProgress(zoneId, owner, capturerName, rawWave, remoteTs,
         waveId = self:NormalizeWaveId(
             rawWave, zoneId, capturerName, owner, remoteTs, holdTime)
     end
-    if not waveId or IsTombstoned(zoneId, originKey, waveId) then return nil end
+    if not waveId or IsTombstoned(zoneId, originKey, waveId, remoteTs) then return nil end
 
     local knownZone = (Overlord.Zones and Overlord.Zones.GetZone
         and Overlord.Zones:GetZone(zoneId))
@@ -883,7 +957,7 @@ function Lease:ValidateProgress(zoneId, owner, capturerName, rawWave, remoteTs,
                 or (active.barrierProposalUntil and now <= active.barrierProposalUntil))
         if not barrierAllowsExtended then proofRequired = nil end
     end
-    local nowWall = time()
+    local nowWall = (Overlord.ServerNow and Overlord.ServerNow() or time())
     local observerDisplayHold = ProjectObserverDisplay(
         holdTime, remoteTs, relayedDisplayHold, relayedDisplayAt, holdReq, nowWall)
     local decision = {
@@ -1078,7 +1152,7 @@ end
 
 function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
     if not zone or not decision or zone.holdAuthorityLocal then return false end
-    if IsTombstoned(zone.id, decision.originKey, decision.waveId) then return false end
+    if IsTombstoned(zone.id, decision.originKey, decision.waveId, decision.ts) then return false end
     local now = GetTime()
     local current = zone._remoteCaptureLease
     if current and current.originKey == decision.originKey and current.owner == owner
@@ -1122,7 +1196,7 @@ function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
     if current then
         local age = now - (current.lastSeen or 0)
         local expired = age >= HARD_TTL
-        local softExpired = age >= SOFT_TTL
+        local softExpired = age >= LIVE_SILENCE
         local sameOriginDirectContinuation = decision.direct == true
             and current.owner == owner
             and current.originKey == decision.originKey
@@ -1142,7 +1216,8 @@ function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
         if not expired and not cleanRestart and not sameOriginDirectContinuation
             and not softExpiredDirectHandoff then return false end
         base = CopySnapshot(current.base)
-        PutTombstone(zone.id, current.originKey, current.waveId)
+        -- Releve par un autre capteur : marque douce (sa finale reste valable).
+        PutSoftTombstone(zone.id, current.originKey, current.waveId, current.lastRemoteTs)
         RestoreSnapshot(zone, base)
         ClearTransient(zone)
     else
@@ -1167,6 +1242,12 @@ function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
     }
     StartNetworkProof(remote, decision, now)
     zone._remoteCaptureLease = remote
+    -- Vague (re)ouverte : plus de marque douce (sinon ses Barricade P/A/C restaient refusees).
+    local reopenedKey = LeaseKey(zone.id, decision.originKey, decision.waveId)
+    if softTombstones[reopenedKey] then
+        softTombstones[reopenedKey] = nil
+        softTombstoneCount = math.max(0, softTombstoneCount - 1)
+    end
     TrackLeaseZone(zone)
     return true, true, true
 end
@@ -1177,10 +1258,12 @@ end
 function Lease:FinalSatisfiesLocalRequirement(zone, owner, originName, waveId, finalRequirement)
     local remote = zone and zone._remoteCaptureLease
     if not remote then return true end
-    if owner ~= remote.owner or CanonicalPlayer(originName) ~= remote.originKey
-        or ValidWave(waveId) ~= remote.waveId then return false end
+    -- Seule une Barricade consommee ici impose un requis local : sans elle, une
+    -- finale d'un autre capteur (releve, ou bail remplace) reste valable.
     local required = tonumber(remote.localRequired)
     if not required then return true end
+    if owner ~= remote.owner or CanonicalPlayer(originName) ~= remote.originKey
+        or ValidWave(waveId) ~= remote.waveId then return false end
     if tonumber(finalRequirement) ~= required then return false end
     local now = GetTime()
     local observedDuration = (now - (remote.openedAt or now))
@@ -1210,7 +1293,8 @@ function Lease:ShouldRejectFinal(zone, originName, waveId)
         return false
     end
     if zone.holdAuthorityLocal and zone._localCaptureWaveId ~= validWave then return true end
-    return IsTombstoned(zone.id, originKey, validWave)
+    -- Une marque douce (arret faute de nouvelles, releve) ne bloque jamais une finale.
+    return IsHardTombstoned(zone.id, originKey, validWave)
 end
 
 function Lease:TombstoneFinalWave(zoneId, originName, waveId)
@@ -1218,25 +1302,32 @@ function Lease:TombstoneFinalWave(zoneId, originName, waveId)
     local validWave = ValidWave(waveId)
     if not zoneId or not originKey or not validWave then return false end
     PutTombstone(zoneId, originKey, validWave)
+    HardenSoftTombstonesForZone(zoneId)
     return true
 end
 
 function Lease:IsSoftExpired(zone)
     local remote = zone and zone._remoteCaptureLease
-    return remote ~= nil and GetTime() - (remote.lastSeen or 0) >= SOFT_TTL
+    return remote ~= nil and GetTime() - (remote.lastSeen or 0) >= LIVE_SILENCE
 end
 
 function Lease:IsFreshDirect(zone)
     local remote = zone and zone._remoteCaptureLease
     return remote ~= nil and zone.status == "in_progress"
         and remote.directValidated == true
-        and GetTime() - (remote.lastDirectSeen or 0) < SOFT_TTL
+        and GetTime() - (remote.lastDirectSeen or 0) < LIVE_SILENCE
 end
 
 function Lease:ExpireRemote(zone, reason)
     local remote = zone and zone._remoteCaptureLease
     if not remote or zone.holdAuthorityLocal then return false end
-    PutTombstone(zone.id, remote.originKey, remote.waveId)
+    if reason == "timeout" then
+        -- Arret faute de nouvelles : le capteur peut continuer, ses ticks plus
+        -- recents et sa finale restent acceptes.
+        PutSoftTombstone(zone.id, remote.originKey, remote.waveId, remote.lastRemoteTs)
+    else
+        PutTombstone(zone.id, remote.originKey, remote.waveId)
+    end
     RestoreSnapshot(zone, remote.base)
     zone._remoteCaptureLease = nil
     ClearTransient(zone)
@@ -1263,6 +1354,7 @@ end
 
 function Lease:Complete(zone)
     if not zone then return end
+    HardenSoftTombstonesForZone(zone.id)
     local remote = zone._remoteCaptureLease
     if remote then
         PutTombstone(zone.id, remote.originKey, remote.waveId)
@@ -1441,7 +1533,7 @@ function Lease:RotateReleasedLocalWaves()
                     + LocalStrategicCapturePenalty(zone)
                 zone.holdStartTime = GetTime()
                 zone._captureReleaseSentWave = nil
-                zone.updatedAt = time()
+                zone.updatedAt = (Overlord.ServerNow and Overlord.ServerNow() or time())
                 if sync and sync.BroadcastZoneState then sync:BroadcastZoneState(zone) end
             end
         end
@@ -1635,7 +1727,7 @@ function Lease:ApplyDefensiveRequirement(zoneId, mode, originName, waveId, origi
     zone._captureBarrierOriginGuid = originGuid
     zone.holdTimeRequired = math.max(tonumber(zone.holdTimeRequired) or BASE_HOLD_REQUIRED,
         required)
-    zone.updatedAt = math.max(time(), (tonumber(zone.updatedAt) or 0) + 1)
+    zone.updatedAt = math.max((Overlord.ServerNow and Overlord.ServerNow() or time()), (tonumber(zone.updatedAt) or 0) + 1)
     if Overlord.Sync and Overlord.Sync.BroadcastZoneState then
         Overlord.Sync:BroadcastZoneState(zone, true)
     end
@@ -1710,7 +1802,7 @@ function Lease:MaybeConsumeBarricade(zone, owner, capturerName, decision, effect
     end
     remote.effectiveRequired = math.max(remote.barrierPreviousRequired, extended)
     zone.holdTimeRequired = extended
-    zone.updatedAt = time()
+    zone.updatedAt = (Overlord.ServerNow and Overlord.ServerNow() or time())
     if Overlord.Sync and Overlord.Sync.BroadcastCaptureBarrier then
         Overlord.Sync:BroadcastCaptureBarrier(
             zone, "P", capturerName, remote.waveId, originGuid, extended)
@@ -1732,7 +1824,7 @@ local function ExpireLocalBarrierProposal(zone)
     zone._captureBarrierDefenderKey = nil
     zone._captureBarrierDefenderGuid = nil
     zone._captureBarrierOriginGuid = nil
-    zone.updatedAt = math.max(time(), (tonumber(zone.updatedAt) or 0) + 1)
+    zone.updatedAt = math.max((Overlord.ServerNow and Overlord.ServerNow() or time()), (tonumber(zone.updatedAt) or 0) + 1)
     if Overlord.Sync and Overlord.Sync.BroadcastZoneState then
         Overlord.Sync:BroadcastZoneState(zone, true)
     end

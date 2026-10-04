@@ -417,7 +417,7 @@ function Overlord.Zones:RestoreInProgressAfterOffline(zone, savedData, playerFac
 
     local lastLogout = OverlordDB and tonumber(OverlordDB.lastSessionTimestamp) or nil
     local offlineSec = lastLogout and math.max(0, time() - lastLogout)
-        or math.max(0, time() - (zone.updatedAt or 0))
+        or math.max(0, (Overlord.ServerNow and Overlord.ServerNow() or time()) - (zone.updatedAt or 0))
     if offlineSec > 0 and (zone.holdTimeElapsed or 0) > 0 then
         local promotedOfflineEnemyCapture = false
         if zone.owner == playerFaction or zone.owner == nil then
@@ -535,7 +535,7 @@ function Overlord.Zones:RevertInterruptedCapture(zone, broadcast)
         zone.updatedAt = 0
         broadcast = false
     else
-        zone.updatedAt = time()
+        zone.updatedAt = (Overlord.ServerNow and Overlord.ServerNow() or time())
     end
     if broadcast and Overlord.Sync and zone.id and Overlord.Sync.BroadcastZoneState then
         Overlord.Sync:BroadcastZoneState(zone, true)
@@ -690,7 +690,7 @@ function Overlord.Zones:GetObserverHoldTimeElapsed(zone)
     if ts <= 0 then
         return base
     end
-    local age = math.max(0, time() - ts)
+    local age = math.max(0, (Overlord.ServerNow and Overlord.ServerNow() or time()) - ts)
     return math.min(req, base + age)
 end
 
