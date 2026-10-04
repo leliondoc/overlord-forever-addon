@@ -360,6 +360,11 @@ function GKA:OnLiveKill(playerName, faction, guildName, totalKills, zoneId, scor
     -- de total ne soit jamais credite plus tard a une autre guilde.
     local now = Now()
     local delta = ConsumeKillDelta(playerName:lower(), math.floor(total), tonumber(scoreEpoch), guildKey, now)
+    -- Taille des combats du dock : les memes kills, avec ou sans guilde (aucun paquet).
+    local fa = Overlord.FrontActivity
+    if delta > 0 and fa and fa.RecordKills and IsValidZoneRef(zoneId) then
+        pcall(fa.RecordKills, fa, zoneId, delta)
+    end
     if delta <= 0 or not hasGuild then return end
 
     local guild = GetGuild(guildName, faction, now)

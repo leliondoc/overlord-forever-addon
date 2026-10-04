@@ -156,6 +156,7 @@ jobs:
           lua5.1 tests/forever_layer_jumper.test.lua
           lua5.1 tests/forever_layer_jumper_sync.test.lua
           lua5.1 tests/forever_most_wanted.test.lua
+          lua5.1 tests/forever_front_fight_size.test.lua
 
           mapfile -t TEST_FILES < <(find tests -maxdepth 1 -type f -name '*.test.mjs' -print | sort)
           node --test "${TEST_FILES[@]}"

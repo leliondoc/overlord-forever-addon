@@ -1336,8 +1336,22 @@ local function GetFrontActivityAgeColor(active, ageSeconds)
     return 0.82, 0.82, 0.82
 end
 
-local function FormatFrontActivityAge(active, ageSeconds)
+-- Taille du combat par tranches : 5+, 10+, 20+, 30+... (sous 5 kills, la recence).
+local FRONT_FIGHT_BRACKETS = { 500, 300, 200, 150, 100, 75, 50, 40, 30, 20, 10, 5 }
+local function GetFrontFightBracket(kills)
+    kills = tonumber(kills) or 0
+    for _, floor in ipairs(FRONT_FIGHT_BRACKETS) do
+        if kills >= floor then return floor end
+    end
+    return nil
+end
+
+local function FormatFrontActivityAge(active, ageSeconds, kills)
     if not active then return L.FEATURED_FRONT_ACTIVITY_DASH or "..." end
+    local bracket = GetFrontFightBracket(kills)
+    if bracket then
+        return string.format(L.FEATURED_FRONT_ACTIVITY_KILLS or "%d+ kills", bracket)
+    end
     ageSeconds = math.max(0, tonumber(ageSeconds) or 0)
     if ageSeconds < 60 then
         return L.FEATURED_FRONT_ACTIVITY_JUST_NOW or "just now"
@@ -1397,10 +1411,10 @@ local function CreateFeaturedFrontActivityRow(parent)
     return row
 end
 
-local function SetFeaturedFrontActivityRow(row, frontId, label, active, ageSeconds, isFeatured)
+local function SetFeaturedFrontActivityRow(row, frontId, label, active, ageSeconds, isFeatured, kills)
     if not row then return end
     row:Show()
-    local ageText = FormatFrontActivityAge(active, ageSeconds)
+    local ageText = FormatFrontActivityAge(active, ageSeconds, kills)
     local cacheKey = (frontId or "") .. "\31" .. (label or "") .. "\31" .. ageText
         .. "\31" .. (isFeatured and "1" or "0")
     if row._activityKey == cacheKey then return end
@@ -1422,6 +1436,13 @@ local function SetFeaturedFrontActivityRow(row, frontId, label, active, ageSecon
     ApplyFrontActivityIcon(row.frontIcon, iconSpec)
 
     local br, bg, bb = GetFrontActivityAgeColor(active, ageSeconds)
+    local bracket = active and GetFrontFightBracket(kills)
+    if bracket then
+        -- Plus le combat est gros, plus c'est rouge.
+        if bracket >= 50 then br, bg, bb = 1, 0.25, 0.25
+        elseif bracket >= 20 then br, bg, bb = 1, 0.5, 0.15
+        else br, bg, bb = 1, 0.82, 0.35 end
+    end
     if active then
         row.valueFs:SetText(ageText)
         row.valueFs:SetTextColor(br, bg, bb)
@@ -1753,7 +1774,8 @@ ApplyFeaturedFrontActivity = function(f)
                 data.label,
                 data.active,
                 data.ageSeconds,
-                featuredId and data.frontId == featuredId
+                featuredId and data.frontId == featuredId,
+                data.kills
             )
             visibleRows = visibleRows + 1
         end

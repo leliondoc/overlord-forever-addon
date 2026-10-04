@@ -35,6 +35,11 @@ local expectedSenderNodes = {}
 local expectedSenderHead, expectedSenderTail, expectedSenderCount = nil, nil, 0
 local EXPECTED_SENDER_MAX = 64
 local lastWritePurgeAtByFront = {}
+-- Kills par front sur la fenetre de 5 min, en tranches de 10 s (30 au plus par front).
+-- Memoire seulement : alimente par les K deja recus et valides, aucun paquet en plus.
+local KILL_SLOT_SEC = 10
+local KILL_DELTA_MAX = 30
+local killSlotsByFront = {}
 local preparedActivityRoot, preparedActorRoot = nil, nil
 
 -- Horloge commune Blizzard : contrairement a l'heure systeme du PC, elle ne derive pas
@@ -55,6 +60,7 @@ function FA:ResetForCampaign()
     if OverlordDB then
         OverlordDB.frontActivity, OverlordDB.frontActivityActors = {}, {}
     end
+    wipe(killSlotsByFront)
     preparedActivityRoot, preparedActorRoot = nil, nil
     wipe(lastWritePurgeAtByFront)
     activityRevision = activityRevision + 1
@@ -432,6 +438,43 @@ function FA:RecordLocalByZoneRef(zoneRef, playerName, ts)
     return self:Record(frontId, playerName, ts)
 end
 
+-- Taille du combat : nouveaux kills deja comptes par l'alerte de guilde (delta de
+-- totaux K successifs d'un meme joueur, une copie en double ne compte pas).
+function FA:RecordKills(zoneRef, kills)
+    if Overlord.InstanceSuspended then return false end
+    kills = tonumber(kills)
+    if not kills or kills <= 0 or kills ~= kills then return false end
+    local frontId = self:GetFrontIdFromZoneRef(zoneRef)
+    if not frontId then return false end
+    local now = ActivityNow()
+    local slot = math.floor(now / KILL_SLOT_SEC)
+    local slots = killSlotsByFront[frontId]
+    if not slots then
+        slots = {}
+        killSlotsByFront[frontId] = slots
+    end
+    local oldest = slot - math.floor(ACTIVITY_WINDOW / KILL_SLOT_SEC)
+    for key in pairs(slots) do
+        if key <= oldest or key > slot then slots[key] = nil end
+    end
+    slots[slot] = (slots[slot] or 0) + math.min(KILL_DELTA_MAX, math.floor(kills))
+    return true
+end
+
+function FA:GetKillCount(frontId, now)
+    local slots = killSlotsByFront[frontId]
+    if not slots then return 0 end
+    now = now or ActivityNow()
+    local slot = math.floor(now / KILL_SLOT_SEC)
+    local oldest = slot - math.floor(ACTIVITY_WINDOW / KILL_SLOT_SEC)
+    local total = 0
+    for key, count in pairs(slots) do
+        if key <= oldest or key > slot then slots[key] = nil else total = total + count end
+    end
+    if not next(slots) then killSlotsByFront[frontId] = nil end
+    return total
+end
+
 local function GetFrontActivityDisplayName(front)
     if not front then return "?" end
     return front.dropdownLabel or front.mapName or front.id or "?"
@@ -458,6 +501,7 @@ function FA:GetActivityRows()
                 lastActivityAt = active and lastActivityAt or nil,
                 ageSeconds = active and ageSeconds or nil,
                 active = active,
+                kills = active and self:GetKillCount(frontId, now) or 0,
             }
         end
     end

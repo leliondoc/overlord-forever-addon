@@ -170,7 +170,7 @@ if locale == "ptBR" then
         ash_astranaar = "Astranaar", ash_iris_lake = "Lago Íris",
         ash_raynewood = "Retiro de Raynewood", ash_night_run = "Trilha Noturna",
         ash_bloodtooth_camp = "Acampamento Dentessangue", ash_silverwind = "Refúgio Ventoprata",
-        ash_mystral_lake = "Lago Mystral — margem sul", ash_fallen_sky_lake = "Lago Céu Caído",
+        ash_mystral_lake = "Lago Mystral", ash_fallen_sky_lake = "Lago Céu Caído",
         ash_dor_danil = "Covil de Dor'Danil", ash_splintertree = "Posto Lenhatriz",
     }
     for id, name in pairs(zones) do L.ZONE_NAMES[id] = name end
@@ -199,7 +199,7 @@ elseif locale == "zhCN" then
         durotar_dranosh_blockade = "奥格瑞玛入口", ash_astranaar = "阿斯特兰纳",
         ash_iris_lake = "伊瑞斯湖", ash_raynewood = "林中树居",
         ash_night_run = "夜道谷", ash_bloodtooth_camp = "血牙营地",
-        ash_silverwind = "银风避难所", ash_mystral_lake = "密斯特拉湖—南岸",
+        ash_silverwind = "银风避难所", ash_mystral_lake = "密斯特拉湖",
         ash_fallen_sky_lake = "坠星湖", ash_dor_danil = "朵丹尼尔兽穴",
         ash_splintertree = "碎木岗哨",
     }
