@@ -209,4 +209,24 @@ s:OnReceiveTotalVictory("Alliance:" .. forgedTs .. ":0:0:f1", "Forger", "BETA")
 advance(1200)
 assert(victories.f1.faction == "Horde" and victories.f1.timestamp == vts, "a TV without proof repainted the front")
 
-print("1.4.2 trust and relay: LK bound, bridge hold, 3/N class answers, TV proof OK")
+-- ===== (5) capture finals: one per capturer per 45 s across zones (packet timestamp)
+local t0 = time()
+assert(s:AdmitCaptureFinalRate("Fast Capper", "zone_a", t0, "Fast Capper"), "first final refused")
+assert(s:AdmitCaptureFinalRate("Fast Capper", "zone_a", t0 + 2, "Fast Capper"), "same zone replay refused")
+assert(not s:AdmitCaptureFinalRate("Fast Capper", "zone_b", t0 + 20, "Fast Capper"), "second zone 20 s later accepted")
+assert(s:AdmitCaptureFinalRate("Fast Capper", "zone_b", t0 + 50, "Fast Capper"), "second zone 50 s later refused")
+assert(s:AdmitCaptureFinalRate("Other Capper", "zone_c", t0 + 21, "Other Capper"), "another capturer was rate limited")
+assert(s:GetSuspiciousSenderDiagnostics():find("Fast Capper", 1, true), "rate-limited capturer not reported")
+
+-- ===== (6) ZA owner flips while live traffic is received need a second source
+local zone = { id = "zone_live", owner = "Alliance", capturedTime = t0 - 300 }
+assert(not s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 100, "Peer One"),
+    "a flip without any live traffic was held")
+s:NoteLiveZoneTraffic("zone_live")
+assert(s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 100, "Peer One"), "first source applied a surprising flip")
+assert(s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 100, "Peer One"), "the same source confirmed itself")
+assert(not s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 98, "Peer Two"), "a second source did not confirm the flip")
+assert(not s:IsSuspiciousZaFlip("zone_live", zone, "Alliance", t0 - 50, "Peer One"), "no flip (same owner) was held")
+assert(not s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 400, "Peer Three"), "an older capture time was held")
+
+print("1.4.2 trust and relay: LK bound, bridge hold, 3/N class answers, TV proof, final rate, ZA flips OK")
