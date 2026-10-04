@@ -209,7 +209,7 @@ function MW:OnNameplateAdded(unit)
     local text = string.format(T("MW_ALERT", "Most Wanted nearby: %s (#%d %s, %d kills this week)!"),
         ShortName(entry.name), entry.rank, factionName, entry.kills)
     if Overlord.PrintNotification then
-        Overlord:PrintNotification("|cFFFF4040[Overlord]|r " .. text)
+        Overlord:PrintNotification("|cFFFF4040[Overlord]|r |T" .. SKULL_TEXTURE .. ":14|t " .. text)
     end
 end
 
@@ -262,7 +262,7 @@ function MW:RunTest()
     local factionName = Overlord.Zones and Overlord.Zones.GetEnemyFactionName
         and Overlord.Zones:GetEnemyFactionName() or EnemyFaction() or "?"
     if Overlord.PrintNotification then
-        Overlord:PrintNotification("|cFFFF4040[Overlord]|r " .. string.format(
+        Overlord:PrintNotification("|cFFFF4040[Overlord]|r |T" .. SKULL_TEXTURE .. ":14|t " .. string.format(
             T("MW_ALERT", "Most Wanted nearby: %s (#%d %s, %d kills this week)!"),
             ShortName(name), 1, factionName, 999))
     end
@@ -296,6 +296,12 @@ if CreateFrame then
             pcall(MW.OnNameplateAdded, MW, unit)
         elseif event == "NAME_PLATE_UNIT_REMOVED" then
             if unit and MW.skulls[unit] then MW.skulls[unit]:Hide() end
+            -- Apercu /ov wanted test : il part avec la barre de nom de la cible.
+            local preview = MW.skulls["target"]
+            if unit and preview and preview:IsShown() and C_NamePlate and C_NamePlate.GetNamePlateForUnit then
+                local plate = C_NamePlate.GetNamePlateForUnit(unit)
+                if plate and preview:GetParent() == (plate.UnitFrame or plate) then preview:Hide() end
+            end
         elseif event == "PLAYER_ENTERING_WORLD" then
             EnsureTicker()
             if not InInstance() and C_Timer and C_Timer.After then
