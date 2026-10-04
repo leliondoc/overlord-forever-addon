@@ -269,6 +269,10 @@ expect(second and Lease:AdoptRemote(zone, "Horde", "Dave", second),
     "a silent capturer was not replaced after 75 s")
 expect(not Lease:ShouldRejectFinal(zone, "Bob", "wreplaced"),
     "the replaced capturer's final was refused before the zone was taken")
+expect(Lease:FinalSatisfiesLocalRequirement(zone, "Horde", "Bob", "wreplaced", 120),
+    "the replaced capturer's final did not satisfy the current lease")
+expect(not Lease:FinalSatisfiesLocalRequirement(zone, "Horde", "Eve", "wunknown", 120),
+    "a foreign final was accepted while another capture is followed")
 Lease:Complete(zone)
 expect(Lease:ShouldRejectFinal(zone, "Bob", "wreplaced"),
     "a replaced wave could still be finalized after the capture completed")

@@ -1255,8 +1255,12 @@ function Overlord.Outpost:CompleteCapture(siteKey, guild, faction, captureTs, ca
     st.status = "held"
     st.ownerGuild = newGuild
     st.ownerFaction = faction
+    -- Sans nom fourni (finale reseau), le capteur des heartbeats in_progress.
+    local heldCapturer = self:NormalizeHeldCapturerName(capturerName)
+        or self:NormalizeHeldCapturerName(st.opOfficialCapturerName)
+        or self:NormalizeHeldCapturerName(st.opRelayCapturerName)
     self:ClearOpCapturerFields(st)
-    st.heldCapturerName = self:NormalizeHeldCapturerName(capturerName)
+    st.heldCapturerName = heldCapturer
     st.claimedAt = now
     st.expiresAt = 0
     st.holdTimeElapsed = 0

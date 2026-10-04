@@ -1262,12 +1262,19 @@ end
 function Lease:FinalSatisfiesLocalRequirement(zone, owner, originName, waveId, finalRequirement)
     local remote = zone and zone._remoteCaptureLease
     if not remote then return true end
-    -- Seule une Barricade consommee ici impose un requis local : sans elle, une
-    -- finale d'un autre capteur (releve, ou bail remplace) reste valable.
+    local originKey, validWave = CanonicalPlayer(originName), ValidWave(waveId)
+    local sameWave = owner == remote.owner and originKey == remote.originKey
+        and validWave == remote.waveId
     local required = tonumber(remote.localRequired)
-    if not required then return true end
-    if owner ~= remote.owner or CanonicalPlayer(originName) ~= remote.originKey
-        or ValidWave(waveId) ~= remote.waveId then return false end
+    if not required then
+        -- Sans Barricade consommee ici : la finale de la vague suivie, ou celle d'une
+        -- vague relevee / arretee faute de nouvelles (marque douce). Une finale
+        -- totalement etrangere au bail frais reste refusee (pas de double credit).
+        if sameWave then return true end
+        return originKey ~= nil and validWave ~= nil
+            and IsSoftTombstoned(zone.id, originKey, validWave, nil)
+    end
+    if not sameWave then return false end
     if tonumber(finalRequirement) ~= required then return false end
     local now = GetTime()
     local observedDuration = (now - (remote.openedAt or now))

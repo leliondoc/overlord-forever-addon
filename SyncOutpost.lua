@@ -1175,12 +1175,12 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
             elseif namedCapturer and not stAfter.heldCapturerName then
                 stAfter.heldCapturerName = namedCapturer
             end
-            -- Changement ou simple confirmation d'un etat tenu : journal (borne a une
-            -- ligne par 10 min pour une confirmation repetee).
-            if not ownerSourceVerified then
-                self:NoteOutpostClaim("OP", siteKey, heldGuild, remoteFac, sender, channel, heldTs)
-            end
             if tenantChanged or countChanged or stateChanged then
+                -- Seulement ce qui change quelque chose : a 1500 clients, presque toutes
+                -- les confirmations relayees sont « non verifiees » et noyaient le journal.
+                if not ownerSourceVerified then
+                    self:NoteOutpostClaim("OP", siteKey, heldGuild, remoteFac, sender, channel, heldTs)
+                end
                 if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
                     Overlord.LeaderboardUI:RefreshIfVisible()
                 end
@@ -1323,8 +1323,9 @@ function Overlord.Sync:OnReceiveOutpostCapture(payload, sender, sourceChannel)
         end
     end
 
-    if not Overlord.Outpost:CompleteCapture(siteKey, guild, fac, remoteTs, remotePool, true,
-        NormalizeOpCapturerName(sender)) then return end
+    -- Capteur : celui des heartbeats in_progress (pas l'emetteur de ce OC, qui peut
+    -- etre un membre qui le republie) ; CompleteCapture le reprend avant d'effacer.
+    if not Overlord.Outpost:CompleteCapture(siteKey, guild, fac, remoteTs, remotePool, true) then return end
     if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
         Overlord.LeaderboardUI:RefreshIfVisible()
     end
