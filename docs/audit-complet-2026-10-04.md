@@ -255,3 +255,27 @@ LeaderboardUI ≈ 12 000 l.) et Commands/Button/ActionShortcut.
 
 Chaque étape : tests Lua 5.1 + contrôle de chargement de tous les `*.lua`, puis l'audit habituel
 avant publication.
+
+## 5. Réalisé le 2026-10-04 (main, non publié, version 1.4.2 préparée)
+
+Tout le plan de la section 4 a été appliqué, puis ré-audité par deux agents Sonnet (réseau/sécurité,
+performance/qualité) dont les trouvailles ont été corrigées. 101 tests Lua 5.1 verts. Code passé de
+76 778 à 72 342 lignes (SyncAux 4319 → 2057, Sync 10838 → ~10000, UI 3821 → 3359).
+
+- Confiance : `IsAuthenticatedDirectSender` ; TV différée jusqu'à la capture de la capitale
+  (`DeferTotalVictoryUntilEvidence`, première annonce conservée, horodatage normalisé une fois) ;
+  budget VB historique 96/h/expéditeur ; LK non sollicité borné (+30, +1/s) ; captures et victoires
+  en heure serveur ; futur borné à la réception ; projection du maintien du bail (C2).
+- Relais : copies canal des diffusions reçues par Battle.net retenues 2-15 s (1-4 s pour un
+  terminal), annulation via les fragments canal, dégradation en copies Battle.net seules ; copie
+  groupe retenue et annulée par une copie de raid ; jamais de coalescence ni d'éviction d'une copie
+  en vol ; réponses CR/GR ≈ 3/N ; rejeu GE/GX/GD au-delà de la fenêtre de dédoublonnage.
+- SavedVariables : alias du ladder retiré à la déconnexion et rétabli à l'init ; point de reprise
+  et cache d'affichage allégés. Index méta publié malgré la dérive (drapeau stale, rafraîchi 30 s
+  après). Élection ZA ≈ 5 émetteurs par fenêtre ; snapshot identique ignoré 30 s.
+- Nettoyage Tier A complet + renommages (BroadcastToRelay, IsKnownRelayPeer, SendToNamedPeers,
+  GetRelayPeers, SendLoginCatchupSync…), options de fan-out et constantes mortes supprimées.
+- Reste volontairement (Tier B, après vérification en jeu) : machinerie « secret values » 12.x,
+  `GetKillingBlows`, champs bounty, migrations régions/legacy, `GetSorted*` test-only ; C1/S3 côté
+  ZA (ts futur relayé par la carte) ; `IsKnownRelayPeer` fait encore confiance aux origines relayées
+  pour OP/LO/LOC (acceptable : états routiniers vérifiés par site/pool/campagne).
