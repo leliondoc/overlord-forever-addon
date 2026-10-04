@@ -4901,8 +4901,6 @@ function Overlord:ResetAll()
     if self.General and self.General.OnCampaignReset then
         self.General:OnCampaignReset()
     end
-    -- Journal des annonces d'avant-poste non verifiees : noms de la semaine passee.
-    OverlordDB.outpostClaimLog = nil
     -- Appel aux armes : le delai partage de la semaine passee ne bloque pas la nouvelle.
     OverlordDB.factionCallSharedAt = nil
     OverlordDB.factionCallLastAt = nil

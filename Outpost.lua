@@ -669,6 +669,8 @@ end
 
 function Overlord.Outpost:EnsureDB()
     OverlordDB = OverlordDB or {}
+    -- Journal d'annonces non verifiees (essai 1.5.1, retire) : nettoyer les sauvegardes.
+    OverlordDB.outpostClaimLog = nil
     if Overlord.FortressUsesOutposts and not OverlordDB.fortressOutpostSchema then
         -- User-requested removal: do not turn daily siege awards into captures.
         -- The new fortress sites begin neutral; existing outposts are untouched.
