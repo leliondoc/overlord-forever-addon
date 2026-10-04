@@ -92,6 +92,40 @@ lastWeek.killSource = Overlord.Leaderboard.kills
 MW:Refresh(true)
 assert(#MW.list == 5, "a current view was not used")
 
+-- Skull on the Blizzard nameplate, right of the health bar; gone when the plate is
+-- recycled, in an instance and at the weekly reset.
+local function stubFrame()
+    local f = { shown = false }
+    function f:SetSize() end
+    function f:SetPoint(_, anchor) self.anchor = anchor end
+    function f:ClearAllPoints() end
+    function f:SetParent(p) self.parent = p end
+    function f:GetParent() return self.parent end
+    function f:Show() self.shown = true end
+    function f:Hide() self.shown = false end
+    function f:CreateTexture() return { SetAllPoints = function() end, SetTexture = function() end } end
+    return f
+end
+CreateFrame = function(_, _, parent) local f = stubFrame(); f.parent = parent; return f end
+local plates = {}
+C_NamePlate = { GetNamePlateForUnit = function(unit) return plates[unit] end }
+plates["Horde Four"] = { UnitFrame = { healthBar = {} } }
+units["Horde Four"] = "Horde"
+now = now + 1000
+MW:OnNameplateAdded("Horde Four")
+local skull = MW.skulls["Horde Four"]
+assert(skull and skull.shown and skull.anchor == plates["Horde Four"].UnitFrame.healthBar,
+    "no skull next to the health bar of a Most Wanted enemy")
+MW:HideSkull("Horde Four")
+assert(not skull.shown, "the skull stayed on a recycled nameplate")
+MW:OnNameplateAdded("Horde Four")
+MW:OnInstanceSuspend()
+assert(not skull.shown, "a skull stayed visible in an instance")
+MW:OnNameplateAdded("Horde Four")
+MW:ResetForCampaign()
+assert(not skull.shown, "last week's skull survived the weekly reset")
+CreateFrame, C_NamePlate = nil, nil
+
 -- Network indicator: a stuck ladder round alone stays green; real losses turn it orange.
 assert(loadfile("NetworkHealth.lua"))()
 local NH = Overlord.NetworkHealth

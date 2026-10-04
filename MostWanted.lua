@@ -1,7 +1,7 @@
 -- MostWanted.lua : les cinq meilleurs ennemis de la semaine (Overlord Forever).
 -- Calcule localement depuis le cache deja trie du classement : aucun paquet, aucun
--- tri en plus. Une alerte dans le chat quand l'un d'eux apparait sur les barres de
--- nom, avec des delais pour ne jamais inonder. Coupe en instance, comme le reste.
+-- tri en plus. Un crane sur leur barre de nom et une alerte dans le chat quand l'un
+-- d'eux apparait, avec des delais pour ne jamais inonder. Coupe en instance.
 Overlord = Overlord or {}
 local MW = Overlord.MostWanted or {}
 Overlord.MostWanted = MW
@@ -74,6 +74,7 @@ function MW:Refresh(force)
         and (not lb.IsDisplayCacheScopeCurrent or lb:IsDisplayCacheScopeCurrent(cache))
     if not current then
         self.list, self.byKey = {}, {}
+        self:HideAllSkulls()
         local stale = type(cache) == "table" and type(cache.sortedKills) == "table"
             and #cache.sortedKills > 0
         local gap = stale and 60 or 600
@@ -99,7 +100,13 @@ function MW:Refresh(force)
             if #list >= self.SIZE then break end
         end
     end
+    -- Barres de nom deja visibles repeintes seulement si les cinq noms ont change.
+    local changed = #list ~= #self.list
+    for i = 1, #list do
+        if not changed and list[i].key ~= self.list[i].key then changed = true end
+    end
     self.list, self.byKey = list, byKey
+    if changed and self.RefreshPlates then self:RefreshPlates() end
 end
 
 -- Reset hebdo (Overlord:ResetAll) : la liste de la semaine passee disparait tout de
@@ -107,6 +114,7 @@ end
 function MW:ResetForCampaign()
     self.list, self.byKey, self.alertedAt = {}, {}, {}
     self._refreshedAt, self._ensureAt, self._lastAlertAt = nil, nil, nil
+    if self.HideAllSkulls then self:HideAllSkulls() end
 end
 
 -- Lecture seule pour le classement (aucun recalcul pendant le dessin des lignes).
@@ -120,15 +128,72 @@ local function ShortName(name)
     return type(name) == "string" and (name:match("^(.-)%-") or name) or "?"
 end
 
-function MW:OnNameplateAdded(unit)
-    if InInstance() or not self:AlertsEnabled() or not next(self.byKey) then return end
-    if not unit or not UnitExists(unit) or not UnitIsPlayer(unit) then return end
+-- Crane sur la barre de nom Blizzard, a droite de la barre de vie. Un cadre a nous par
+-- unite de nameplate (40 au plus), reutilise ; jamais en instance.
+MW.SKULL_SIZE = 16
+MW.skulls = MW.skulls or {}
+local SKULL_TEXTURE = "Interface\\TargetingFrame\\UI-TargetingFrame-Skull"
+
+function MW:HideSkull(unit)
+    local skull = unit and self.skulls[unit]
+    if skull then skull:Hide() end
+end
+
+function MW:HideAllSkulls()
+    for _, skull in pairs(self.skulls) do skull:Hide() end
+end
+
+function MW:ShowSkull(unit)
+    local plate = C_NamePlate and C_NamePlate.GetNamePlateForUnit and C_NamePlate.GetNamePlateForUnit(unit)
+    local parent = plate and (plate.UnitFrame or plate)
+    if not parent or not CreateFrame then return end
+    local anchor = parent.healthBar or parent
+    local skull = self.skulls[unit]
+    if not skull then
+        skull = CreateFrame("Frame", nil, parent)
+        skull:SetSize(self.SKULL_SIZE, self.SKULL_SIZE)
+        skull.icon = skull:CreateTexture(nil, "OVERLAY")
+        skull.icon:SetAllPoints()
+        skull.icon:SetTexture(SKULL_TEXTURE)
+        self.skulls[unit] = skull
+    end
+    if skull:GetParent() ~= parent or skull._anchor ~= anchor then
+        skull:SetParent(parent)
+        skull:ClearAllPoints()
+        skull:SetPoint("LEFT", anchor, "RIGHT", 3, 0)
+        skull._anchor = anchor
+    end
+    skull:Show()
+end
+
+-- Le Most Wanted affiche sur cette barre de nom, ou nil.
+local function WantedEntryForUnit(unit)
+    if not unit or not UnitExists(unit) or not UnitIsPlayer(unit) then return nil end
     local enemy = EnemyFaction()
-    if not enemy or UnitFactionGroup(unit) ~= enemy then return end
+    if not enemy or UnitFactionGroup(unit) ~= enemy then return nil end
     local name = Overlord.SafeGetUnitName and Overlord:SafeGetUnitName(unit, true)
     local key = KeyOf(name)
-    local entry = key and self.byKey[key]
+    return key and MW.byKey[key] or nil
+end
+
+-- Liste changee (toutes les 60 s au plus) : repeindre les barres de nom deja visibles.
+function MW:RefreshPlates()
+    self:HideAllSkulls()
+    if InInstance() or not self:AlertsEnabled() or not next(self.byKey) then return end
+    if not (C_NamePlate and C_NamePlate.GetNamePlates) then return end
+    for _, plate in ipairs(C_NamePlate.GetNamePlates() or {}) do
+        local unit = plate.namePlateUnitToken or (plate.UnitFrame and plate.UnitFrame.unit)
+        if unit and WantedEntryForUnit(unit) then self:ShowSkull(unit) end
+    end
+end
+
+function MW:OnNameplateAdded(unit)
+    self:HideSkull(unit)
+    if InInstance() or not self:AlertsEnabled() or not next(self.byKey) then return end
+    local entry = WantedEntryForUnit(unit)
     if not entry then return end
+    self:ShowSkull(unit)
+    local key = entry.key
     local now = GetTime()
     if now - (self._lastAlertAt or -1e9) < self.ALERT_GLOBAL_GAP then return end
     if now - (self.alertedAt[key] or -1e9) < self.ALERT_PER_PLAYER_SEC then return end
@@ -140,7 +205,7 @@ function MW:OnNameplateAdded(unit)
     if count >= self.ALERT_MEMORY_MAX then return end
     self.alertedAt[key] = now
     local factionName = Overlord.Zones and Overlord.Zones.GetEnemyFactionName
-        and Overlord.Zones:GetEnemyFactionName() or enemy
+        and Overlord.Zones:GetEnemyFactionName() or EnemyFaction() or "?"
     local text = string.format(T("MW_ALERT", "Most Wanted nearby: %s (#%d %s, %d kills this week)!"),
         ShortName(entry.name), entry.rank, factionName, entry.kills)
     if Overlord.PrintNotification then
@@ -150,7 +215,11 @@ end
 
 -- Instance : plus aucun evenement lu (voir Overlord:SuspendForInstance).
 function MW:OnInstanceSuspend()
-    if self.frame then self.frame:UnregisterEvent("NAME_PLATE_UNIT_ADDED") end
+    if self.frame then
+        self.frame:UnregisterEvent("NAME_PLATE_UNIT_ADDED")
+        self.frame:UnregisterEvent("NAME_PLATE_UNIT_REMOVED")
+    end
+    self:HideAllSkulls()
 end
 
 local function EnsureTicker()
@@ -160,7 +229,10 @@ end
 MW.EnsureTicker = EnsureTicker
 
 function MW:OnInstanceResume()
-    if self.frame then self.frame:RegisterEvent("NAME_PLATE_UNIT_ADDED") end
+    if self.frame then
+        self.frame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
+        self.frame:RegisterEvent("NAME_PLATE_UNIT_REMOVED")
+    end
     EnsureTicker()
     self:Refresh(true)
 end
@@ -169,6 +241,7 @@ function MW:HandleCommand(args)
     local word = args and args[2] and args[2]:lower() or ""
     if word == "on" then self:SetAlertsEnabled(true)
     elseif word == "off" then self:SetAlertsEnabled(false) end
+    self:RefreshPlates()
     if Overlord.PrintNotification then
         Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. (self:AlertsEnabled()
             and T("MW_STATE_ON", "Most Wanted alerts: on") or T("MW_STATE_OFF", "Most Wanted alerts: off")))
@@ -180,11 +253,16 @@ if CreateFrame then
     MW.frame = frame
     frame:RegisterEvent("PLAYER_ENTERING_WORLD")
     frame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
+    frame:RegisterEvent("NAME_PLATE_UNIT_REMOVED")
     frame:SetScript("OnEvent", function(_, event, unit)
         if event == "NAME_PLATE_UNIT_ADDED" then
             -- Le plus courant et le moins cher d'abord ; jamais d'unite lue en instance.
+            -- Une barre recyclee ne garde jamais le crane de l'unite precedente.
+            if unit and MW.skulls[unit] then MW.skulls[unit]:Hide() end
             if not next(MW.byKey) or not MW:AlertsEnabled() or InInstance() then return end
             pcall(MW.OnNameplateAdded, MW, unit)
+        elseif event == "NAME_PLATE_UNIT_REMOVED" then
+            if unit and MW.skulls[unit] then MW.skulls[unit]:Hide() end
         elseif event == "PLAYER_ENTERING_WORLD" then
             EnsureTicker()
             if not InInstance() and C_Timer and C_Timer.After then
