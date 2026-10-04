@@ -556,12 +556,21 @@ end
 --    raid/party first.
 -- Entries are counted, never evicted: a forward in flight is never lost; above the
 -- cap the packet is forwarded at once. Tests set BridgeChannelHold to { 0, 0 }.
-local heldForwards, heldForwardCount = {}, 0
-local HELD_FORWARD_MAX = 256
+-- djb2 over the text, spread by the golden ratio into [0, 1): names differing only
+-- in their last letters map to neighbouring hashes, which a plain modulus kept
+-- clustered. Shared by the held forwards and the LK bridge election.
+local function hashFrac(text)
+    local h = 5381
+    for i = 1, #text do h = (h * 33 + text:byte(i)) % 2147483647 end
+    return (h * 0.6180339887498949) % 1
+end
+local heldForwards, heldCount = {}, { bridge = 0, group = 0 }
+local HELD_FORWARD_MAX = { bridge = 256, group = 128 }
 local function holdForward(key, p, mode)
     local hold = net.BridgeChannelHold or {}
     local lo, hi = tonumber(hold[1]) or 0, tonumber(hold[2]) or 0
-    if hi <= 0 or heldForwardCount >= HELD_FORWARD_MAX then return false end
+    if heldForwards[key] then return true end
+    if hi <= 0 or heldCount[mode] >= HELD_FORWARD_MAX[mode] then return false end
     -- Only a client with a channel is a bridge to it; elsewhere forward at once.
     if mode == "bridge" and not (sync.GetChannelId and sync:GetChannelId()) then return false end
     if isTerminal(p) then lo, hi = math.min(lo, 1), math.min(hi, 4) end
@@ -569,17 +578,14 @@ local function holdForward(key, p, mode)
     -- origin keep their order through the hold (TV before VB), while different
     -- clients spread over the window.
     local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
-    local text = tostring(me):lower() .. "|" .. tostring(p.path[1] or ""):lower()
-    local h = 5381
-    for i = 1, #text do h = (h * 33 + text:byte(i)) % 2147483647 end
-    local frac = (h * 0.6180339887498949) % 1
+    local frac = hashFrac(tostring(me):lower() .. "|" .. tostring(p.path[1] or ""):lower())
     local entry = { p = p, mode = mode }
     heldForwards[key] = entry
-    heldForwardCount = heldForwardCount + 1
+    heldCount[mode] = heldCount[mode] + 1
     C_Timer.After(lo + frac * math.max(0, hi - lo), function()
         if heldForwards[key] ~= entry then return end
         heldForwards[key] = nil
-        heldForwardCount = heldForwardCount - 1
+        heldCount[mode] = heldCount[mode] - 1
         if entry.heard then
             if mode == "group" then return end
             -- Keep only what the channel cannot reach: enemy bridges and friends
@@ -587,20 +593,23 @@ local function holdForward(key, p, mode)
             p.skipChannel, p.skipGroup, p.heardOn = true, true, "CHANNEL"
         end
         if net:Queue(p) == true then
-            net.stats.bridgeForwardsSent = (net.stats.bridgeForwardsSent or 0) + 1
-        else
+            local stat = mode == "group" and "groupCopiesSent" or "bridgeForwardsSent"
+            net.stats[stat] = (net.stats[stat] or 0) + 1
+        elseif mode == "bridge" then
             remember(forwardRetry, forwardRetryOrder, key, GetTime(), 256)
         end
     end)
     return true
 end
 -- A copy of a held packet heard on the channel (bridge entry) or in the group
--- (group entry): someone else carried it there.
+-- (group entry): someone else carried it there. Only the id and the origin are
+-- read from the wire, without copying its body.
 local function noteHeardCopy(wire, transport)
-    if heldForwardCount == 0 or type(wire) ~= "string" then return end
-    local _, id, _, _, path = strsplit("|", wire, 6)
-    local origin = path and path:match("^[^,]+")
-    if not id or not origin then return end
+    if type(wire) ~= "string" then return end
+    if transport ~= "CHANNEL" and transport ~= "RAID" and transport ~= "PARTY" then return end
+    if heldCount.bridge + heldCount.group == 0 then return end
+    local id, origin = wire:match("^[^|]*|([^|]*)|[^|]*|[^|]*|([^|,]*)")
+    if not id or not origin or origin == "" then return end
     local key = origin:lower() .. ":" .. id
     if transport == "CHANNEL" then
         local entry = heldForwards[key]
@@ -1228,7 +1237,8 @@ function net:Queue(p, immediate)
     -- Once any copy has started, finish it instead of disrupting its fragments.
     local presenceKey = p.kind == "NH" and p.path[1]:lower()
     local previous = presenceKey and pendingPresence[presenceKey]
-    local statePrevious = waitingStateItem(p)
+    -- A held group-only copy must never replace the full forward of the same packet.
+    local statePrevious = not p.groupOnly and waitingStateItem(p) or nil
     if statePrevious and p.at < statePrevious.p.at then return true end
     local replace = previous and previous.index == 1
         and not previous.tasks[1].sending and p.at >= previous.p.at
@@ -1237,7 +1247,7 @@ function net:Queue(p, immediate)
         previous, replace = requestPrevious, p.at >= requestPrevious.p.at
         if not replace then return true end
     end
-    local outpostPrevious = not previous and waitingOutpostItem(p) or nil
+    local outpostPrevious = not previous and not p.groupOnly and waitingOutpostItem(p) or nil
     if outpostPrevious then
         previous, replace = outpostPrevious, p.at >= outpostPrevious.p.at
         if not replace then return true end
@@ -1529,8 +1539,8 @@ end
 function net:Send(kind, payload, target, immediate)
     if not active() or not allowed[kind] or type(payload) ~= "string"
         or payload:find("[%c]") then return false end
-    -- Both the startup heartbeat and community scan call Broadcast with the
-    -- plain addon version. Annotate at their common producer boundary.
+    -- The startup heartbeat calls Broadcast with the plain addon version.
+    -- Annotate at the producer boundary.
     if kind == "NH" and payload == tostring(addon.Version or "") then
         payload = payload .. "~lp6"
     end
@@ -1559,8 +1569,8 @@ function net:Send(kind, payload, target, immediate)
 end
 function net:Broadcast(kind, payload, extras)
     local sent = self:Send(kind, payload or "")
-    -- Community producers bundle further fronts, victory bonuses and resource
-    -- stocks with the first message. Preserve every payload on the beta route.
+    -- Producers bundle further payloads (victory bonus after TV, resource stocks)
+    -- with the first message. Preserve every payload and their order.
     for _, extra in ipairs(extras or {}) do
         if extra.type and extra.payload then
             if not self:Send(extra.type, extra.payload) then sent = false end
@@ -1576,7 +1586,8 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     -- retries the forward.
     local retryForward = false
     -- A copy someone else carried to the channel or the group: see holdForward.
-    noteHeardCopy(wire, transport)
+    -- (ReceiveFragment noted it already when it hands over a decoded packet.)
+    if not decoded then noteHeardCopy(wire, transport) end
     if alreadySeen(wire, sender) then
         if not forwardRetryKey(wire) then return false end
         retryForward = true
@@ -1764,6 +1775,8 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
                 kind = p.kind, payload = p.payload, groupOnly = true, skipChannel = true, heardOn = transport }
             if holdForward("G:" .. key, pg, "group") then
                 self.stats.groupCopiesHeld = (self.stats.groupCopiesHeld or 0) + 1
+            elseif self:Queue(pg) == true then
+                self.stats.groupCopiesSent = (self.stats.groupCopiesSent or 0) + 1
             end
         end
         if forwarded then
@@ -1875,12 +1888,7 @@ local bridgeCopies, bridgeCopiesOrder = {}, {}
 bridgeLK.share = 1
 local function electionRoll(salt, subjectKey)
     local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
-    local text = salt .. "|" .. tostring(me or ""):lower() .. "|" .. subjectKey
-    local h = 5381
-    for i = 1, #text do h = (h * 33 + text:byte(i)) % 2147483647 end
-    -- Golden-ratio spread: names differing only in their last letters map to
-    -- neighbouring h values, which a plain h / modulus kept clustered.
-    return (h * 0.6180339887498949) % 1
+    return hashFrac(salt .. "|" .. tostring(me or ""):lower() .. "|" .. subjectKey)
 end
 -- One more channel copy of an enemy total (heard, or our own post). When a newer
 -- total of the same subject shows up, the previous one is complete: its copies,

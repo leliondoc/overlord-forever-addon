@@ -25,7 +25,7 @@ TUNING.PERIODIC_SYNC_INTERVAL = 30
 local L = Overlord.L
 
 
-local lastStaleObserverCommunityPoll = 0
+local lastStaleObserverPoll = 0
 local STALE_OBSERVER_POLL_INTERVAL = 22
 local STALE_OBSERVER_POLL_INTERVAL_LARGE = 32
 local STALE_CAPITAL_OBSERVER_POLL_INTERVAL = 55
@@ -33,7 +33,7 @@ local lastObserverFinalStatePoll = 0
 local OBSERVER_FINAL_STATE_POLL_INTERVAL = 8
 
 local CONSULT_FRONT_SR_COOLDOWN = 60
-local lastConsultFrontCommunitySR = {}
+local lastConsultFrontSR = {}
 
 local ACTIVE_ZA_COOLDOWN = 75
 local ACTIVE_ZA_CAPTURE_COOLDOWN = 24
@@ -93,8 +93,8 @@ function Overlord.Sync:PollIfStaleObserverInProgress(secondsSinceZs, zone)
     end
     if Overlord.InstanceSuspended or not secondsSinceZs or secondsSinceZs < pollInterval then return end
     local now = GetTime()
-    if now - lastStaleObserverCommunityPoll < pollInterval then return end
-    lastStaleObserverCommunityPoll = now
+    if now - lastStaleObserverPoll < pollInterval then return end
+    lastStaleObserverPoll = now
     local payload = self.GetSRPayload and self:GetSRPayload("T")
     if payload then self:SendTargetedObserverMapRequest(zone, payload) end
     self:SendSyncRequest({
@@ -199,7 +199,6 @@ function Overlord.Sync:RequestPrereqMismatchCatchup(zone)
     end
     local isLarge = self.IsLargeEvent and self:IsLargeEvent()
     self:SendSyncRequest({
-        territorialOnly = true,
         criticalChannel = true,
     })
 end
@@ -254,11 +253,11 @@ function Overlord.Sync:RequestConsultFrontSync(frontId)
     local activeId = Overlord.Fronts and Overlord.Fronts.activeFrontId
     if activeId and frontId == activeId then return end
     local now = GetTime()
-    local last = lastConsultFrontCommunitySR[frontId] or 0
+    local last = lastConsultFrontSR[frontId] or 0
     -- 0 signifie "jamais envoye", pas "envoye au chargement": sinon le consult
     -- differe a t<60 s serait consomme sans transport apres la barriere.
     if last > 0 and now - last < CONSULT_FRONT_SR_COOLDOWN then return end
-    lastConsultFrontCommunitySR[frontId] = now
+    lastConsultFrontSR[frontId] = now
     self:SendSyncRequest({
     })
 end
@@ -511,7 +510,6 @@ function Overlord.Sync:IsAuthenticatedDirectSender(sender)
     return true
 end
 
--- Fortin : membre du club Overlord en ligne (cross-faction). Cache prolonge cote reception GK/GC.
 -- "Ce nom est un client Overlord entendu dans les 300 s" (route relais connue).
 -- Ce n'est PAS une authentification : voir IsAuthenticatedDirectSender.
 function Overlord.Sync:IsKnownRelayPeer(sender)
@@ -523,12 +521,6 @@ local function BroadcastViaBeta(msgType, payload, extras)
     if not Overlord.BetaNetwork then return 0 end
     return Overlord.BetaNetwork:Broadcast(msgType, payload or "", extras) or 0
 end
-
-
--- Toutes les emissions communautaires passent par une seule pompe afin de borner
--- les timers et de donner la priorite aux transitions contractuelles.
-
--- Communaute : faction ennemie uniquement (prime de sang), meme tourniquet/cooldown que BroadcastToRelay.
 
 
 -- Diffusion a tous les clients Overlord par le relais (canal de faction, groupe,
@@ -573,8 +565,8 @@ local function PumpLeaderboardRaceQueue()
     if item.sendChannel and Overlord.Sync.SendToChannel then
         Overlord.Sync:SendToChannel("LR", item.payload, false)
     end
-    if item.communityWide and Overlord.Sync.BroadcastToRelay then
-        Overlord.Sync:BroadcastToRelay("LR", item.payload, 2, 0.5)
+    if item.relayWide and Overlord.Sync.BroadcastToRelay then
+        Overlord.Sync:BroadcastToRelay("LR", item.payload)
     end
 
     if #leaderboardRaceQueue > 0 then
@@ -583,7 +575,7 @@ local function PumpLeaderboardRaceQueue()
     end
 end
 
-function Overlord.Sync:EnqueueLeaderboardRaceBroadcast(payload, communityWide, sendChannel)
+function Overlord.Sync:EnqueueLeaderboardRaceBroadcast(payload, relayWide, sendChannel)
     if not payload or payload == "" or Overlord.InstanceSuspended then return false end
     local subject = payload:match("^([^:]+)")
     if not subject or subject == "" then return false end
@@ -592,7 +584,7 @@ function Overlord.Sync:EnqueueLeaderboardRaceBroadcast(payload, communityWide, s
         local queued = leaderboardRaceQueue[i]
         if queued and queued.subject == subject then
             queued.payload = payload
-            queued.communityWide = communityWide == true
+            queued.relayWide = relayWide == true
             queued.sendChannel = sendChannel == true
             return true
         end
@@ -602,7 +594,7 @@ function Overlord.Sync:EnqueueLeaderboardRaceBroadcast(payload, communityWide, s
     leaderboardRaceQueue[#leaderboardRaceQueue + 1] = {
         subject = subject,
         payload = payload,
-        communityWide = communityWide == true,
+        relayWide = relayWide == true,
         sendChannel = sendChannel == true,
     }
     if not leaderboardRacePumpScheduled then
@@ -1085,13 +1077,13 @@ function Overlord.Sync:StartPassiveSync()
         if not Overlord.IsInitialized or Overlord.InstanceSuspended then return end
         -- Une seule decision d'echantillonnage gouverne le bundle local. Ce n'est pas
         -- une election universelle : plusieurs royaumes peuvent choisir un diffuseur,
-        -- mais les clients refuses s'arretent avant tout SR ou scan C_Club.
+        -- mais les clients refuses s'arretent avant tout SR.
         local passiveBroadcaster = self.ShouldRunPassiveStateBundle
             and self:ShouldRunPassiveStateBundle()
         if not passiveBroadcaster then return end
-        -- En front actif, l'election territoriale de Sync.lua couvre deja SR + communaute.
+        -- En front actif, l'election territoriale de Sync.lua couvre deja la SR.
         -- Garder ici uniquement les heartbeats held/outpost evite une seconde vague SR
-        -- complete et un second scan C_Club toutes les deux minutes.
+        -- complete toutes les deux minutes.
         if not Overlord.InActiveFront then
             local skipDuplicateSr = Overlord.UI and Overlord.UI.IsSpectatorSyncActive
                 and Overlord.UI:IsSpectatorSyncActive()
@@ -1893,9 +1885,6 @@ function Overlord.Sync:IsObservedPlayerKillLevelEligible(playerName)
     if row and (tonumber(row.level) or 0) > 0 then
         return self:IsEligibleKillContributorLevel(row.level)
     end
-    local rosterLevel = self.GetOnlineCommunityMemberLevelIfFresh
-        and self:GetOnlineCommunityMemberLevelIfFresh(playerName, 600) or nil
-    if rosterLevel then return self:IsEligibleKillContributorLevel(rosterLevel) end
     return nil
 end
 

@@ -225,11 +225,6 @@ local MAX_GUILD_NAME_LEN = 24
 local VALID_SAVED_VARS_POOLS = { global = true }
 
 -- Tags locale sync explicitement EU (front du jour / export : eviter les fantomes cross-region).
-local EU_EXPLICIT_LOCALE_TAGS = {
-    engb = true, frfr = true, dede = true, eses = true, esmx = true,
-    itit = true, ruru = true, ptpt = true, ptbr = true,
-    fr = true, de = true, es = true, it = true, ru = true, pt = true,
-}
 
 local function normalizeSavedVarsPool(pool)
     if type(pool) ~= "string" or pool == "" then return "" end
@@ -3810,19 +3805,15 @@ function Overlord.Leaderboard:MergeOwnedGuildMetadata(playerName, guild, guildAt
 end
 
 -- Race connue pour export UI / SR : Communaute en priorite, LR/K legacy en fallback.
-function Overlord.Leaderboard:GetExportPlayerRace(playerName, allowCommunityRefresh)
+function Overlord.Leaderboard:GetExportPlayerRace(playerName)
     if not playerName or playerName == "" then return "", 0 end
     local sync = Overlord.Sync
     if sync and sync.NormalizeContributorFullName then
         playerName = sync:NormalizeContributorFullName(playerName)
     end
     if not playerName or playerName == "" then return "", 0 end
-    -- Forever n'a pas de roster de club : la race vient des K/LR repliques et des
-    -- unites observees.
-    local communityRace, communitySex = "", 0
-
-    -- Les metadonnees repliquees restent indispensables entre joueurs qui ne partagent
-    -- pas les memes communautes. Elles peuvent aussi completer le sexe absent du roster.
+    -- La race vient des K/LR repliques et des unites observees (index chaud, puis
+    -- la ligne playerInfo).
     local fallbackRace, fallbackSex = "", 0
     local getDK = sync and sync.GetCaptureContributorDedupKey
     local dk = getDK and sync:GetCaptureContributorDedupKey(playerName) or playerName
@@ -3837,12 +3828,6 @@ function Overlord.Leaderboard:GetExportPlayerRace(playerName, allowCommunityRefr
     if fallbackRace == "" and pi and pi.race and pi.race ~= "" then
         fallbackRace = pi.race
         fallbackSex = tonumber(pi.raceSex) or 0
-    end
-    if communityRace ~= "" then
-        if communitySex == 0 and fallbackRace == communityRace then
-            communitySex = fallbackSex
-        end
-        return communityRace, communitySex
     end
     return fallbackRace, fallbackSex
 end
@@ -3920,7 +3905,7 @@ function Overlord.Leaderboard:EnrichMissingRacesFromVisibleUnits()
     local function needsRace(pname)
         -- Cette routine inspecte les unites deja visibles. Elle ne doit pas declencher en plus
         -- un scan asynchrone de toutes les communautes hors ligne.
-        local r = select(1, self:GetExportPlayerRace(pname, false))
+        local r = select(1, self:GetExportPlayerRace(pname))
         return r == nil or r == ""
     end
 

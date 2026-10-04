@@ -3921,58 +3921,6 @@ local function MapAllowsUserWaypoint(mapID)
     return true
 end
 
--- Carte + coords du repere fortin : EK puis Paluns puis carte joueur
-local function ResolveGuildKeepWaypointPoint(site)
-    if not site or not site.mapID or not site.center then return nil, nil, nil end
-    local zoneMapID = site.mapID
-    local nx = site.center[1] / 100
-    local ny = site.center[2] / 100
-    local candidates = {}
-
-    local ekID = Overlord.MapMarkers:ResolveEKMapID()
-    if ekID then
-        local cx, cy = GetMinePositionOnContinentMap(
-            { mapID = zoneMapID, center = site.center }, ekID)
-        if cx and cy then
-            candidates[#candidates + 1] = { ekID, cx, cy }
-        end
-    end
-    local kalID = Overlord.MapMarkers:ResolveKalimdorMapID()
-    if kalID then
-        local cx, cy = GetMinePositionOnContinentMap(
-            { mapID = zoneMapID, center = site.center }, kalID)
-        if cx and cy then
-            candidates[#candidates + 1] = { kalID, cx, cy }
-        end
-    end
-    if site.regionalMapIDs then
-        for regionalMapID in pairs(site.regionalMapIDs) do
-            local cx, cy = GetMinePositionOnContinentMap(
-                { mapID = zoneMapID, center = site.center }, regionalMapID)
-            if cx and cy then
-                candidates[#candidates + 1] = { regionalMapID, cx, cy }
-            end
-        end
-    end
-    candidates[#candidates + 1] = { zoneMapID, nx, ny }
-
-    local ok, playerMap = pcall(C_Map.GetBestMapForUnit, "player")
-    if ok and playerMap and playerMap ~= zoneMapID
-        and Overlord.GuildKeep and Overlord.GuildKeep:ResolveSiteByMapID(playerMap) then
-        candidates[#candidates + 1] = { playerMap, nx, ny }
-    end
-
-    for i = 1, #candidates do
-        local mid, x, y = candidates[i][1], candidates[i][2], candidates[i][3]
-        if MapAllowsUserWaypoint(mid) then
-            return mid, x, y
-        end
-    end
-    if candidates[1] then
-        return candidates[1][1], candidates[1][2], candidates[1][3]
-    end
-    return nil, nil, nil
-end
 
 local function ResolveFrontWaypointMapID(frontIdForMap)
     local mapID

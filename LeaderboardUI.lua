@@ -288,7 +288,7 @@ local function CachedMeta(metaCache, name)
         local c, f = Overlord.Leaderboard:GetExportPlayerMeta(name)
         local race, raceSex = "", 0
         if Overlord.Leaderboard.GetExportPlayerRace then
-            race, raceSex = Overlord.Leaderboard:GetExportPlayerRace(name, false)
+            race, raceSex = Overlord.Leaderboard:GetExportPlayerRace(name)
         end
         return c, f, race, raceSex
     end

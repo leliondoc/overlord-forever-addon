@@ -29,7 +29,6 @@ Overlord.SettingsPanel.MapIconOpacityVariableName = "Overlord_MapIconOpacity"
 Overlord.SettingsPanel.MapIconScaleVariableName = "Overlord_MapIconScale"
 
 local NOTIF_CHAT_MIN = 0
-local NOTIF_CHAT_STEP = 1
 local DEFAULT_NOTIF_CHAT = 0
 
 local MAP_OVERLAY_OPACITY_MIN = 0.2
@@ -47,7 +46,6 @@ local DEFAULT_SHOW_MINIMAP_BUTTON = true
 local DEFAULT_SHOW_MINIMAP_CAPTURE_ZONES = true
 local DEFAULT_SHOW_COINS_HUD = false
 local DEFAULT_SHOW_MAP_ZONE_TITLES = true
-local DEFAULT_SHOW_TOP_HUD = true
 local DEFAULT_TOP_HUD_MODE = "auto"
 local DEFAULT_SHOW_TUTORIAL_BOOK = false
 local DEFAULT_SOUND_ENABLED = true

@@ -8,10 +8,6 @@ local DEFAULT_PANEL_BG = { 0.118, 0.118, 0.188, 0.85 }
 local DEFAULT_FALLBACK_BG = { 0.165, 0.165, 0.227, 0.95 }
 local DEFAULT_WHITE = { 0.925, 0.937, 0.969 }
 
-local FACTION_WAX_SEAL_ATLAS = {
-    Alliance = "Quest-Alliance-WaxSeal",
-    Horde    = "Quest-Horde-WaxSeal",
-}
 
 -- panel_wood_talent was never shipped in Textures/: only the Collections tile is probed.
 local WOOD_BG_PATHS = {
@@ -154,8 +150,6 @@ end
 -- Atlas Blizzard Trading Post (theme Horde vs Alliance) + accents Mode Guerre.
 local PERKS_CHROME_TOP_ATLAS = "perks-theme-hordevsalliance-tp-topbig"
 local PERKS_CHROME_BOTTOM_ATLAS = "perks-theme-hordevsalliance-tp-bottombig"
-local PERKS_CHROME_ORB_ATLAS = "pvptalents-warmode-orb"
-local PERKS_CHROME_RING_ATLAS = "Talent-RingWithDot"
 
 -- BfA scenario Horde vs Alliance : TitleBG, partie haute seule (blason + ailes).
 local BFA_SCENARIO_ALLIANCE_TOP_ATLAS = "AllianceScenario-TitleBG"

@@ -3210,7 +3210,7 @@ function Overlord.UI:StartSpectatorMode()
     -- demander la construction du classement entier chez les receveurs idle.
     if not spectatorSyncTicker then
         if Overlord.Sync then
-            Overlord.Sync:SendSyncRequest({ territorialOnly = true })
+            Overlord.Sync:SendSyncRequest()
         end
         spectatorSyncTicker = C_Timer.NewTicker(120, function()
             if Overlord.InActiveFront or Overlord.InstanceSuspended or not Overlord.UI or not Overlord.UI:IsVisible() then
@@ -3218,7 +3218,7 @@ function Overlord.UI:StartSpectatorMode()
                 return
             end
             if Overlord.Sync then
-                Overlord.Sync:SendSyncRequest({ territorialOnly = true })
+                Overlord.Sync:SendSyncRequest()
             end
         end)
     end

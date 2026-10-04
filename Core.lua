@@ -1,9 +1,7 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
 Overlord.Version = "1.4.1"
--- Forever has no cross-faction community: Overlord never uses C_Club clubs there.
--- Transport is the faction channel, the group, and the Battle.net relay bridges.
-Overlord.CommunityModeEnabled = false
+-- Transport : canal de faction, groupe et ponts Battle.net (relais SyncBetaNetwork.lua).
 Overlord.BetaNetworkEnabled = true
 Overlord.IsInitialized = false
 Overlord.PlayerFaction = nil
@@ -319,7 +317,6 @@ function Overlord:IsCaptureSyncPending()
                 if Overlord.InstanceSuspended or not Overlord.Sync then return end
                 Overlord.Sync:SendSyncRequest({
                     criticalChannel = wasLoginGate or wasInstanceGate,
-                    territorialOnly = wasInstanceGate,
                     targetedOnly = wasInstanceGate,
                 })
                 if wasLoginGate
@@ -1188,8 +1185,6 @@ end
 
 -- Un SH historique (sans carte) n'est jamais une preuve locale. Un fortin sans PNJ
 -- demande une reponse directe, liee a cette entree, a un membre physiquement proche.
-local KEEP_SHARD_WITNESS_GAP = 8
-local KEEP_SHARD_WITNESS_RANGE_SQ = 100 * 100
 
 
 

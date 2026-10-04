@@ -5,15 +5,15 @@ Overlord.Sync = Overlord.Sync or {}
 local OP_POST_CAPTURE_STATE_DELAY = 4.0
 local OP_CAPTURE_REPLAY_DELAY_1 = 1.0
 local OP_CAPTURE_REPLAY_DELAY_2 = 3.0
-local lastCommunityOPBroadcast = {}
-local OP_COMMUNITY_ROUTINE_INTERVAL = 12
+local lastOPRelayBroadcast = {}
+local OP_ROUTINE_RELAY_INTERVAL = 12
 local VALID_OP_STATUS = { neutral = true, in_progress = true, held = true }
 local MAX_CLOCK_SKEW = 300
 local OC_DEDUP_SEC = 10
 local OP_DEDUP_SEC = 4
 local OP_DEDUP_MAX = 128
 local OC_DEDUP_MAX = 256
-local OC_COMMUNITY_ACCEPT_MAX_AGE = 900
+local OC_ACCEPT_MAX_AGE = 900
 local lastStaleOutpostObserverPoll = 0
 local STALE_OUTPOST_OBSERVER_POLL_INTERVAL = 22
 local STALE_OUTPOST_OBSERVER_POLL_INTERVAL_LARGE = 45
@@ -209,13 +209,7 @@ end
 -- Meme regle que Sync.lua (heure serveur, futur borne) : un seul comportement
 -- pour les horodatages d'avant-poste et de zone.
 local function NormalizeRemoteTimestamp(ts)
-    local shared = Overlord.Sync and Overlord.Sync.NormalizeRemoteTimestamp
-    if shared then return shared(ts) end
-    ts = tonumber(ts) or 0
-    if ts <= 0 then return 0 end
-    local now = time()
-    if ts > now + MAX_CLOCK_SKEW then return nil end
-    return math.floor(ts)
+    return Overlord.Sync.NormalizeRemoteTimestamp(ts)
 end
 
 local function IsStaleCampaignTimestamp(ts)
@@ -460,7 +454,7 @@ local function ShouldAcceptOutpostCapture(siteKey, guild, fac, remoteTs, sender,
                 return false
             end
         end
-        if remoteTs > 0 and (time() - remoteTs) > OC_COMMUNITY_ACCEPT_MAX_AGE then
+        if remoteTs > 0 and (time() - remoteTs) > OC_ACCEPT_MAX_AGE then
             return false
         end
     end
@@ -609,20 +603,15 @@ function Overlord.Sync:BroadcastOutpostState(siteKey, forceFull, allowInstance)
     local payload = BuildOutpostPayload(siteKey, st)
     if not payload then return end
     BroadcastOutpostToGroup("OP", payload)
-    local isCriticalStart = st.status == "in_progress" and (st.holdTimeElapsed or 0) <= 5
     if forceFull or st.status == "held" or st.status == "in_progress" then
         self:SendToChannel("OP", payload, forceFull or st.status == "held" or st.status == "in_progress")
     end
     local now = GetTime()
-    local last = lastCommunityOPBroadcast[siteKey] or 0
+    local last = lastOPRelayBroadcast[siteKey] or 0
     local full = forceFull and true or false
-    if not full and now - last < OP_COMMUNITY_ROUTINE_INTERVAL then return end
-    lastCommunityOPBroadcast[siteKey] = now
-    if full or st.status == "held" or isCriticalStart then
-        BroadcastOutpostToRelay("OP", payload)
-    else
-        BroadcastOutpostToRelay("OP", payload)
-    end
+    if not full and now - last < OP_ROUTINE_RELAY_INTERVAL then return end
+    lastOPRelayBroadcast[siteKey] = now
+    BroadcastOutpostToRelay("OP", payload)
 end
 
 function Overlord.Sync:BroadcastOutpostCapture(siteKey, guild, faction, captureTs)
@@ -1008,9 +997,9 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
     if hadTs and not remoteTs then return end
     if not remoteTs then remoteTs = 0 end
     if IsStaleCampaignTimestamp(remoteTs) then return end
-    local communitySource = self.IsKnownRelayPeer
+    local relayPeerSource = self.IsKnownRelayPeer
         and self:IsKnownRelayPeer(sender or "") or false
-    if communitySource and not ownerSourceVerified and remoteTs <= 0 then
+    if relayPeerSource and not ownerSourceVerified and remoteTs <= 0 then
         return
     end
     if status == "held" then

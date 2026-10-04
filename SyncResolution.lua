@@ -39,8 +39,6 @@ local guildAnswerCooldowns = {}
 local guildRequestFlushScheduled = false
 local guildRequestLastPurge = 0
 
-local GR_COMMUNITY_WHISPER_MAX = 20
-local GR_COMMUNITY_WHISPER_MAX_LARGE = 12
 
 local lastLbGuildRefreshFromGY = 0
 local LB_GUILD_REFRESH_FROM_GY_INTERVAL = 1.5
@@ -478,7 +476,6 @@ function Overlord.Sync:FlushGuildRequests()
 
     local batchesEmitted = 0
     local maxBatches = isLarge and CLASS_REQUEST_MAX_BATCHES_LARGE or math.huge
-    local maxCommunity = isLarge and GR_COMMUNITY_WHISPER_MAX_LARGE or GR_COMMUNITY_WHISPER_MAX
     local batch, batchLen = {}, 0
     local function emit(b)
         if #b == 0 then return end
@@ -486,7 +483,7 @@ function Overlord.Sync:FlushGuildRequests()
         local payload = table.concat(b, ",")
         if #payload > 0 and #payload <= CLASS_REQUEST_MAX_PAYLOAD then
             if self.SendToNamedPeers then
-                self:SendToNamedPeers("GR", payload, b, 0.5, false, true)
+                self:SendToNamedPeers("GR", payload, b, nil, nil, true)
             end
             local needsPeerHints = false
             for _, n in ipairs(b) do
@@ -496,7 +493,7 @@ function Overlord.Sync:FlushGuildRequests()
             -- Une guilde deja renseignee se verifie aupres du proprietaire. Un
             -- broadcast de toutes les lignes non verifiees saturerait le rattrapage.
             if needsPeerHints and self.BroadcastToRelay then
-                self:BroadcastToRelay("GR", payload, maxCommunity, 0.5)
+                self:BroadcastToRelay("GR", payload)
             end
             for _, n in ipairs(b) do
                 guildRequestCooldowns[n] = now
@@ -782,11 +779,7 @@ function Overlord.Sync:BroadcastGuildIdentity(force)
     if not payload then return end
     lastGuildIdentityBroadcastAt = now
     if self.Send then self:Send("GI", payload) end
-    if self.BroadcastToRelay then
-        local isLarge = self.IsLargeEvent and self:IsLargeEvent()
-        local maxM = isLarge and 1 or 2
-        self:BroadcastToRelay("GI", payload, maxM, 0.35)
-    end
+    self:BroadcastToRelay("GI", payload)
 end
 
 -- Format GI : name:guild:epoch:guildAt (autoritaire, emis par le proprietaire uniquement).

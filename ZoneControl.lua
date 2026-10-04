@@ -213,7 +213,7 @@ local function BeginZoneEntrySyncGrace(zoneId)
     pendingEntrySyncZoneId = zoneId
     pendingEntrySyncUntil = GetTime() + ZONE_ENTRY_SYNC_GRACE_SECONDS
     if Overlord.Sync and Overlord.Sync.SendSyncRequest then
-        Overlord.Sync:SendSyncRequest({ territorialOnly = true, criticalChannel = true })
+        Overlord.Sync:SendSyncRequest({ criticalChannel = true })
     end
 end
 

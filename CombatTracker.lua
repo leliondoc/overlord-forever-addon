@@ -1178,7 +1178,7 @@ function Overlord.Combat:OnPlayerDead()
                     -- Relais d'abord : ses copies canal/groupe rendent les copies
                     -- directes ci-dessous inutiles (elles sont alors sautees).
                     if Overlord.Sync.BroadcastToRelay and not largeSyncEvent then
-                        Overlord.Sync:BroadcastToRelay("EK", payload, 12, 0.35)
+                        Overlord.Sync:BroadcastToRelay("EK", payload)
                     end
                     if largeSyncEvent then
                         Overlord.Sync:Send("EK", payload)

@@ -5,7 +5,6 @@ Overlord.Button = {}
 local L = Overlord.L
 
 local BTN_SIZE = 36
-local BTN_GAP = 4
 
 local btnFrame = nil
 local generalBtnFrame = nil

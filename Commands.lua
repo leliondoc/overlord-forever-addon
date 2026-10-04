@@ -663,7 +663,7 @@ local function ShowPersistenceStatus()
     end
     if latest then emit("Latest archive: " .. tostring(latest.campaignStart) .. "; " .. totals(latest)) end
     if Overlord.SavedVariablesLoadedAtLogin == false then
-        emit("No save loaded (first login or beta loader issue). Community sync can recover shared scores.")
+        emit("No save loaded (first login or beta loader issue). Network sync can recover shared scores.")
     end
 end
 

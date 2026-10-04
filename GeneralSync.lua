@@ -274,8 +274,8 @@ function Overlord.GeneralSync:BuildGMPayload(claimTs)
 end
 
 -- Groupe + canal direct, puis diffusion relais (canal de faction, groupe, ponts
--- Battle.net : les deux factions). opts.replay repete la diffusion relais a +1 s
--- et +3 s pour les transitions critiques.
+-- Battle.net : les deux factions). opts.replay repete la diffusion relais a +2,5 s
+-- et +6 s pour les transitions critiques.
 local function EmitAll(msgType, payload, opts)
     opts = opts or {}
     local sync = Overlord.Sync
