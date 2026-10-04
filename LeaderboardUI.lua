@@ -2444,6 +2444,7 @@ local function ComputeLeaderboardInfo(dc)
     -- Seuls les noms qui commencent comme le notre sont normalises (pas 5 000 appels).
     local myShort = type(myName) == "string" and (myName:match("^(.-)%-") or myName) or nil
     if myShort == "" then myShort = nil end
+    info.nameReady = myShort ~= nil
     local meta = dc.meta or {}
     local sorted = dc.sortedKills or {}
     for i = 1, #sorted do
@@ -2479,9 +2480,15 @@ end
 function Overlord.LeaderboardUI:RefreshInfoLines(dc)
     if not lbFrame or not lbFrame.infoLeft then return end
     if dc and lbFrame._infoDc ~= dc then
-        lbFrame._infoDc = dc
-        -- Copie sauvegardee (500 premiers) : rang et joueurs classes seraient faux.
-        lbFrame._info = not dc.fromSavedCache and ComputeLeaderboardInfo(dc) or nil
+        -- Copie sauvegardee (500 premiers) ou cache pas pret : rang et joueurs classes
+        -- seraient faux. Nom du joueur pas encore connu : on recalculera au prochain rafraichissement.
+        if dc.fromSavedCache or dc.ready == false then
+            lbFrame._infoDc, lbFrame._info = dc, nil
+        else
+            local info = ComputeLeaderboardInfo(dc)
+            lbFrame._info = info
+            if info.nameReady then lbFrame._infoDc = dc end
+        end
     end
     local info = lbFrame._info
     local left, right = lbFrame.infoLeft, lbFrame.infoRight
