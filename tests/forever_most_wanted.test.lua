@@ -125,13 +125,6 @@ MW:OnNameplateAdded("Horde Four")
 MW:ResetForCampaign()
 assert(not skull.shown, "last week's skull survived the weekly reset")
 assert(skull.anchor == plates["Horde Four"].UnitFrame.healthBar, "skull not anchored on the health bar")
--- /ov wanted test: preview on the target (any mob), with a sample alert.
-local before = #printed
-assert(MW:HandleCommand({ "wanted", "test" }) == false and #printed == before + 1,
-    "no hint printed without a target nameplate")
-plates["target"], units["target"] = { UnitFrame = { healthBar = {} } }, "Neutral"
-assert(MW:HandleCommand({ "wanted", "test" }) == true, "preview refused on a targeted mob")
-assert(MW.skulls["target"].shown and printed[#printed]:find("#1", 1, true), "preview skull or sample alert missing")
 CreateFrame, C_NamePlate = nil, nil
 
 -- Network indicator: a stuck ladder round alone stays green; real losses turn it orange.

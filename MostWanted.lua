@@ -237,41 +237,8 @@ function MW:OnInstanceResume()
     self:Refresh(true)
 end
 
--- /ov wanted test : apercu sur la cible (un loup suffit), 20 s, purement local.
-MW.TEST_SEC = 20
-function MW:RunTest()
-    local plate = not InInstance() and UnitExists and UnitExists("target")
-        and C_NamePlate and C_NamePlate.GetNamePlateForUnit and C_NamePlate.GetNamePlateForUnit("target")
-    if not plate then
-        if Overlord.PrintNotification then
-            Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. T("MW_TEST_NO_TARGET",
-                "Target a unit with a visible nameplate (a wolf will do), then type /ov wanted test."))
-        end
-        return false
-    end
-    self:ShowSkull("target")
-    local skull = self.skulls["target"]
-    self._testToken = (self._testToken or 0) + 1
-    local token = self._testToken
-    if skull and C_Timer and C_Timer.After then
-        C_Timer.After(self.TEST_SEC, function()
-            if MW._testToken == token then skull:Hide() end
-        end)
-    end
-    local name = Overlord.SafeGetUnitName and Overlord:SafeGetUnitName("target", true) or "?"
-    local factionName = Overlord.Zones and Overlord.Zones.GetEnemyFactionName
-        and Overlord.Zones:GetEnemyFactionName() or EnemyFaction() or "?"
-    if Overlord.PrintNotification then
-        Overlord:PrintNotification("|cFFFF4040[Overlord]|r |T" .. SKULL_TEXTURE .. ":14|t " .. string.format(
-            T("MW_ALERT", "Most Wanted nearby: %s (#%d %s, %d kills this week)!"),
-            ShortName(name), 1, factionName, 999))
-    end
-    return true
-end
-
 function MW:HandleCommand(args)
     local word = args and args[2] and args[2]:lower() or ""
-    if word == "test" then return self:RunTest() end
     if word == "on" then self:SetAlertsEnabled(true)
     elseif word == "off" then self:SetAlertsEnabled(false) end
     self:RefreshPlates()
@@ -296,12 +263,6 @@ if CreateFrame then
             pcall(MW.OnNameplateAdded, MW, unit)
         elseif event == "NAME_PLATE_UNIT_REMOVED" then
             if unit and MW.skulls[unit] then MW.skulls[unit]:Hide() end
-            -- Apercu /ov wanted test : il part avec la barre de nom de la cible.
-            local preview = MW.skulls["target"]
-            if unit and preview and preview:IsShown() and C_NamePlate and C_NamePlate.GetNamePlateForUnit then
-                local plate = C_NamePlate.GetNamePlateForUnit(unit)
-                if plate and preview:GetParent() == (plate.UnitFrame or plate) then preview:Hide() end
-            end
         elseif event == "PLAYER_ENTERING_WORLD" then
             EnsureTicker()
             if not InInstance() and C_Timer and C_Timer.After then
