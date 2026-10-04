@@ -1141,9 +1141,11 @@ local KILLSPOOF_BLACKLIST_DURATION = 300
 -- Plafond plausible d'un total de kills sur une campagne hebdo : au-dela on REFUSE la
 -- valeur (pas de clamp, qui figeait les injections au plafond). 10000 depuis 1.1.11 :
 -- des joueurs honnetes depassaient 5000 en fin de semaine (6017) et disparaissaient
--- alors de toute la synchro. Ce seuil ne change ni le nombre de lignes du classement,
--- ni les budgets/cadences de synchronisation.
-local PLAUSIBLE_KILL_CEILING = 10000
+-- alors de toute la synchro. 15000 depuis 1.4.2 : sur la beta (niveau 30 maximum)
+-- des honnetes approchent 6000 des le dimanche, 10000 avant le reset devenait
+-- possible. Ce seuil ne change ni le nombre de lignes du classement, ni les
+-- budgets/cadences de synchronisation.
+local PLAUSIBLE_KILL_CEILING = 15000
 -- Expose le plafond pour la defense en profondeur cote Leaderboard et Sync.
 Overlord.PLAUSIBLE_SYNC_KILL_CEILING = PLAUSIBLE_KILL_CEILING
 -- Forever : tous les niveaux participent. Le champ K/LK reste valide et
@@ -1537,7 +1539,7 @@ end
 -- le max local. Un quorum ici rendait le resultat dependant des messages recus
 -- par chaque client et bloquait notamment le rattrapage BNet/cross-realm.
 -- Plafond par niveau (1.4.2) : 350 par niveau au-dela du premier, 2000 au moins
--- (niveau 14 : 4550, niveau 20 : 6650, 10000 des le niveau 30). La beta est
+-- (niveau 14 : 4550, niveau 20 : 6650, plafond global des le niveau 30). La beta est
 -- plafonnee au niveau 30 et des joueurs legit y approchent 6000 kills : le niveau
 -- maximum garde tout le plafond global. Un personnage de niveau 14 avec 5000 kills
 -- dans la semaine etait la triche observee. Le niveau voyage dans le paquet K/LK

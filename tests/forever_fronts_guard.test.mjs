@@ -87,12 +87,12 @@ test("Forever identity is Prenom Nom with no realm suffix", () => {
     assert.match(sync, /return "Forever_" \.\. Overlord\.RealmPools:GetOverlordPoolTag\(\)/);
     assert.match(sync, /local canon = self:CanonicalForeverName\(name\)/);
     assert.doesNotMatch(sync, /local localRealm = Overlord:SafeGetRealmName\(\)/);
-    assert.match(sync, /info\.name:find\("overlord", 1, true\)/);
+    // 1.4.2: no community club lookup by name any more.
+    assert.doesNotMatch(sync, /info\.name:find\("overlord"/);
     assert.doesNotMatch(
         sync,
         /info\.name:find\("overlord"\) and info\.name:find\("forever"\)/,
     );
-    assert.match(aux, /sync:CanonicalForeverName\(memberName\)/);
     assert.doesNotMatch(aux, /memberName \.\. "-" \.\. guidMeta\.realm/);
     assert.match(catchup, /HasCompleteContributorIdentity/);
 });

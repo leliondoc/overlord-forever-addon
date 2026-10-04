@@ -1,6 +1,6 @@
 -- Depth regression for the paged (v6) ladder sweep: a 1500-player weekly ladder must
 -- converge completely (rows AND guild totals) although the legacy v4 view is top-500.
--- Kill totals stay <= PLAUSIBLE_SYNC_KILL_CEILING (10000): a higher total is refused by design.
+-- Kill totals stay <= PLAUSIBLE_SYNC_KILL_CEILING (15000): a higher total is refused by design.
 -- Real HR/HB/HC/HA, LK/LC/LR admission and monotone merge through three hops.
 -- Only WoW transports and clock are simulated; the sliced snapshot builder is real.
 local now, serial, pending, clients = 100, 0, {}, {}
@@ -148,7 +148,7 @@ heartbeat()
 advance(10)
 local N = 1500
 local ceiling = SOURCE.Overlord.PLAUSIBLE_SYNC_KILL_CEILING
-assert(ceiling == 10000 and SOURCE.Overlord.Leaderboard.KILL_RANK_LIMIT >= N)
+assert(ceiling == 15000 and SOURCE.Overlord.Leaderboard.KILL_RANK_LIMIT >= N)
 local rows, guildTruth = {}, {}
 for i = 1, N do
     local n = i - 1

@@ -24,11 +24,10 @@ test("Keep and outpost states are re-sent only for targeted beta deliveries", ()
 });
 
 test("Structure relays do not re-author packets into the beta relay without a club", () => {
-    const aux = read("SyncAux.lua");
-    for (const fn of ["RelayOutpostCaptureToCommunitySafe"]) {
-        const body = aux.slice(aux.indexOf(`function Overlord.Sync:${fn}`));
-        const head = body.slice(0, body.indexOf("\nend"));
-        assert.match(head, /self:StructureRelayOnlyReachesBeta\(\) then return end/, fn);
+    // 1.4.2: the community transport is gone; no structure relay re-authors a
+    // packet through it any more (RelayOutpostCaptureToCommunitySafe removed).
+    for (const name of ["SyncAux.lua", "Sync.lua", "SyncOutpost.lua"]) {
+        assert.doesNotMatch(read(name), /ToCommunity|StructureRelayOnlyReachesBeta/, name);
     }
 });
 
