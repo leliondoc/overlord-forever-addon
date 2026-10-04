@@ -14,6 +14,7 @@ C_Timer.After = function(_, fn) fn() end -- the 30 s probe window closes at once
 local frameStub = { RegisterEvent = function() end, SetScript = function() end,
     UnregisterAllEvents = function() end }
 CreateFrame = function() return frameStub end
+assert(loadfile("NetworkHealth.lua"))() -- summary shared with the panel indicator
 assert(loadfile("Commands.lua"))()
 
 local GREEN, YELLOW, RED = "|cFF40FF40", "|cFFFFD100", "|cFFFF4040"

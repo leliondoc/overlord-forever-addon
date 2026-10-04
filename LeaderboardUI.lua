@@ -1928,9 +1928,12 @@ RenderKillRows = function(force)
             local rank = view.ranks and view.ranks.sortedKills[dataIndex] or dataIndex
             local isOwn = myName ~= nil and shortName:sub(1, #myName) == myName
                 and (#shortName == #myName or shortName:sub(#myName + 1, #myName + 2) == " (")
+            -- Most Wanted : tete de mort devant les cinq meilleurs ennemis (MostWanted.lua).
+            local wanted = Overlord.MostWanted and Overlord.MostWanted.IsWanted
+                and Overlord.MostWanted:IsWanted(entry.name) ~= nil
             local paintKey = rank .. "|" .. tostring(entry.kills) .. "|" .. tostring(class) .. "|"
                 .. tostring(faction) .. "|" .. tostring(raceFile) .. "|" .. tostring(raceSex) .. "|"
-                .. shortName .. (isOwn and "|me" or "")
+                .. shortName .. (isOwn and "|me" or "") .. (wanted and "|w" or "")
             if row._lbPaintKey ~= paintKey then
                 row._lbPaintKey = paintKey
                 local medalColor = MEDAL_COLORS[rank]
@@ -1952,7 +1955,9 @@ RenderKillRows = function(force)
                 SetClassIcon(row.classIcon, class)
                 if row.classIconHolder then row.classIconHolder:Show() end
                 local cr, cg, cb = GetClassColor(class)
-                row.name:SetText(shortName)
+                row.name:SetText(wanted
+                    and ("|TInterface\\TargetingFrame\\UI-TargetingFrame-Skull:12|t " .. shortName)
+                    or shortName)
                 if cr and cg and cb then
                     row.name:SetTextColor(cr, cg, cb)
                 else

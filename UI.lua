@@ -969,6 +969,10 @@ function Overlord.UI:CreateMainFrame()
     versionFs:SetTextColor(C.gold[1] * 0.55, C.gold[2] * 0.55, C.gold[3] * 0.55)
     mainFrame.versionFs = versionFs
     self.versionFs = versionFs
+    -- Voyant reseau (vert / orange / rouge) a droite de la version : NetworkHealth.lua.
+    if Overlord.NetworkHealth and Overlord.NetworkHealth.AttachIndicator then
+        Overlord.NetworkHealth:AttachIndicator(mainFrame, versionFs)
+    end
 
     -- Bandeau d'en-tete : selecteur de front (coin), portraits A/H, statuts.
     local emblemSize = 48

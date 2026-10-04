@@ -1821,6 +1821,9 @@ local function CompleteResumeFromInstance(reason)
     Overlord:RequireCaptureSync("instance")
     if Overlord.Combat then Overlord.Combat:Resume() end
     if Overlord.Sync then Overlord.Sync:Resume() end
+    if Overlord.MostWanted and Overlord.MostWanted.OnInstanceResume then
+        pcall(Overlord.MostWanted.OnInstanceResume, Overlord.MostWanted)
+    end
     -- Un loading survenu avant l'initialisation de Sync conserve le ZR au lieu de
     -- marquer la vague comme relachee sans transport. Le rejouer avant la rotation.
     if Overlord.FlushDeferredCaptureRelease then
@@ -1956,6 +1959,9 @@ function Overlord:SuspendForInstance()
     end
     if self.LayerJumper and self.LayerJumper.OnInstanceSuspend then
         pcall(self.LayerJumper.OnInstanceSuspend, self.LayerJumper)
+    end
+    if self.MostWanted and self.MostWanted.OnInstanceSuspend then
+        pcall(self.MostWanted.OnInstanceSuspend, self.MostWanted)
     end
     self.InstanceSuspended = true
     -- HUD or : peut s'afficher sur PLAYER_ENTERING_WORLD avant que ce handler finisse - masquage immediat.

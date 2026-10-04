@@ -57,6 +57,8 @@ GeneralNameplate.lua
 ZoneIndicator.lua
 HallOfFameData.lua
 HallOfFameUI.lua
+NetworkHealth.lua
+MostWanted.lua
 UI.lua
 ActionShortcut.lua
 Button.lua

@@ -222,62 +222,15 @@ local function StartNetworkProbe()
     local reportOk, reportErr = pcall(function()
         local sync, net = Overlord.Sync, Overlord.BetaNetwork
         local R = SyncReport
-        -- 1. Summary: the five things that matter, worst first in the header.
-        local rows, overall = {}, "ok"
-        local function add(level, title, text)
-            rows[#rows + 1] = { level, title, text }
-            overall = R.Worst(overall, level)
-        end
-        local sendStats = sync._addonSendStats
-        if sendStats then
-            local refused, attempts, parts = 0, 0, {}
-            for _, chatType in ipairs({ "CHANNEL", "RAID", "PARTY", "WHISPER" }) do
-                local row = sendStats[chatType]
-                if row then
-                    refused, attempts = refused + row.refused, attempts + row.ok + row.refused
-                    -- Blizzard's last refusal code, to tell a throttle from a channel not joined yet.
-                    local code = row.refused > 0 and row.lastCode ~= nil
-                        and (" code " .. tostring(row.lastCode)) or ""
-                    parts[#parts + 1] = string.format("%s %d/%d%s", chatType:lower(), row.refused,
-                        row.ok + row.refused, code)
-                end
-            end
-            local ratio = attempts > 0 and refused / attempts or 0
-            -- A lone refusal (e.g. a send just before the channel is joined at login)
-            -- is not a problem: red only for a real, repeated throttle.
-            add(refused == 0 and "ok" or ((ratio < 0.05 or refused < 3) and "warn" or "bad"),
-                "Blizzard throttle", string.format("%d refused (%s)", refused, table.concat(parts, ", ")))
-        end
+        -- 1. Summary: the five things that matter, worst first in the header
+        -- (shared with the main panel indicator, NetworkHealth.lua).
+        local overall, rows = "ok", {}
         local relayStats = net and net.stats
-        if relayStats then
-            local sent, dropped = relayStats.sent or 0, relayStats.dropped or 0
-            local pct = sent > 0 and dropped * 100 / sent or 0
-            -- The login burst (map pages answering several catch-ups) can refuse a
-            -- dozen own pages out of a few hundred sends: red only on a real sample.
-            add(pct < 1 and "ok" or ((pct < 5 or sent < 500) and "warn" or "bad"), "Relay losses",
-                string.format("%d lost of %d sent (%.1f%%), %d received", dropped, sent, pct, relayStats.received or 0))
-        end
-        if sync.GetPagedLeaderboardSummary then
-            local lb = sync:GetPagedLeaderboardSummary()
-            local stuck = lb.status:find("interrupted", 1, true) ~= nil
-            add(stuck and "warn" or "ok", "Leaderboard catch-up",
-                string.format("%s, %d pages / %d rows (v%d)", lb.status, lb.pages, lb.rows, lb.protocol))
-        end
-        if sync.GetHistoryCatchupSummary then
-            local hr = sync:GetHistoryCatchupSummary()
-            local waiting = hr.running and hr.step == "paged ladder catch-up" and hr.stepAge > 600
-            local text = hr.running and string.format("%s, %ds ago", tostring(hr.step or "?"), hr.stepAge) or "idle"
-            add(waiting and "warn" or "ok", "Capture history catch-up",
-                waiting and string.format("waiting on one peer for %ds", hr.stepAge) or text)
-        end
-        if net and net.GetQueueSummary then
-            local q = net:GetQueueSummary()
-            add(q.catchup >= q.catchupMax and "warn" or "ok", "Relay queue",
-                string.format("%d waiting (catch-up %d/%d, domination %d/%d)", q.total, q.catchup, q.catchupMax,
-                    q.state, q.stateMax))
+        if Overlord.NetworkHealth and Overlord.NetworkHealth.Compute then
+            overall, rows = Overlord.NetworkHealth:Compute()
         end
         R.Header(overall)
-        for _, row in ipairs(rows) do R.Status(row[1], row[2], row[3]) end
+        for _, row in ipairs(rows) do R.Status(row.level, row.title, row.text) end
 
         -- 2. Details, for debugging: grey, with any loss or refusal counter in red.
         R.Title("Details:")
@@ -501,6 +454,7 @@ local function ShowHelp()
     Overlord:PrintNotification(L.HELP_GUIDE)
     if L.HELP_GUILD_KILLS then Overlord:PrintNotification(L.HELP_GUILD_KILLS) end
     if L.HELP_LAYER then Overlord:PrintNotification(L.HELP_LAYER) end
+    if L.HELP_WANTED then Overlord:PrintNotification(L.HELP_WANTED) end
     Overlord:PrintNotification(L.HELP_FOOTER)
 end
 
@@ -763,6 +717,9 @@ local function CommandHandler(msg)
 
     elseif cmd == "shard" then
         ShowShardDebug()
+
+    elseif cmd == "wanted" then
+        if Overlord.MostWanted then Overlord.MostWanted:HandleCommand(args) end
 
     elseif cmd == "layer" or cmd == "hop" then
         if Overlord.LayerJumper then Overlord.LayerJumper:HandleCommand(args) end
