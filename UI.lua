@@ -1643,8 +1643,9 @@ function Overlord.UI:CreateZoneListSection(parent)
         allyLift:SetBlendMode("ADD")
         allyLift:SetVertexColor(1, 1, 1, 0.22)
         domBar.allyLift = allyLift
-        allyCrest:Hide()
-        hordeCrest:Hide()
+        -- Blasons de faction de part et d'autre, a la hauteur de la barre.
+        allyCrest:SetSize(28, 28)
+        hordeCrest:SetSize(28, 28)
         domBar._cloth = true
     end
 
