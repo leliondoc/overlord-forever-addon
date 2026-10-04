@@ -765,6 +765,39 @@ function sync:GetHistoryCatchupSummary()
     }
 end
 
+-- Ligne /ov network : les voisins directs du rattrapage, par faction, avec ceux
+-- mis de cote (penalite) ou trop anciens (v5) et le tour de rotation. Repond a
+-- "pourquoi pas mon ami Horde ?" sans deviner. Aucune mutation.
+function sync:GetCatchupNeighbourDiagnostics()
+    local net = Overlord.BetaNetwork
+    if not net or not net.GetDirectPeers then return "Catch-up neighbours: relay inactive." end
+    local me = self.GetPlayerFullName and self:GetPlayerFullName() or ""
+    local now = GetTime()
+    local enemyFaction = ENEMY_FACTION[Overlord.PlayerFaction]
+    local enemies, allies, aside, old = {}, {}, {}, {}
+    for _, name in ipairs(net:GetDirectPeers()) do
+        if type(name) == "string" and name ~= ""
+            and not (self.ForeverIdentitiesMatch and self:ForeverIdentitiesMatch(name, me)) then
+            local penalty = (peerPenaltyUntil[name:lower()] or 0) - now
+            if penalty > 0 then
+                aside[#aside + 1] = string.format("%s %ds", name, math.floor(penalty))
+            elseif net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(name) == 5 then
+                old[#old + 1] = name
+            elseif enemyFaction and PeerFaction(name) == enemyFaction then
+                enemies[#enemies + 1] = name
+            else
+                allies[#allies + 1] = name
+            end
+        end
+    end
+    local rotation = math.max(0, math.floor(tonumber(OverlordDB
+        and OverlordDB.leaderboardHistoryCatchupTargetRotation) or 0))
+    local nextPool = (#enemies > 0 and (rotation % 3 ~= 2 or #allies == 0)) and "enemy" or "ally"
+    local function list(t) return #t > 0 and table.concat(t, ", ") or "none" end
+    return string.format("Catch-up neighbours: enemy %d (%s); ally %d (%s); set aside %d (%s); v5 only %d (%s); next round: %s.",
+        #enemies, list(enemies), #allies, list(allies), #aside, list(aside), #old, list(old), nextPool)
+end
+
 -- Lignes /ov network : dernier voisin, resultat. Aucune mutation.
 function sync:GetHistoryCatchupDiagnostics()
     local stats = self._historyCatchupStats

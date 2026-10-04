@@ -294,6 +294,7 @@ local function StartNetworkProbe()
         if sync.GetHistoryCatchupDiagnostics then
             for _, line in ipairs(sync:GetHistoryCatchupDiagnostics()) do R.Detail(line) end
         end
+        if sync.GetCatchupNeighbourDiagnostics then R.Detail(sync:GetCatchupNeighbourDiagnostics()) end
         if sync.GetPagedLeaderboardDiagnostics then R.Detail(sync:GetPagedLeaderboardDiagnostics()) end
         if sync.GetChannelKindDiagnostics then
             for i, line in ipairs(sync:GetChannelKindDiagnostics(12)) do
