@@ -153,6 +153,17 @@ local function UpdateDedupCaptureMaxIndex(name, count)
     end
 end
 
+-- Max de kills sur toutes les variantes de nom d'une meme identite (index chaud
+-- quand il existe, sinon la ligne brute) : les bornes anti-triche raisonnent par
+-- identite, pas par orthographe.
+function Overlord.Leaderboard:GetMaxKillsForDedupName(playerName)
+    if not playerName or playerName == "" then return 0 end
+    local raw = tonumber(self.kills and self.kills[playerName]) or 0
+    local dk = GetKillDedupKey(playerName)
+    if not dk or not dedupKillMaxIndex then return raw end
+    return math.max(raw, tonumber(dedupKillMaxIndex[dk]) or 0)
+end
+
 function Overlord.Leaderboard:GetMaxCapturesForDedupName(playerName)
     if not playerName or playerName == "" then return 0 end
     local dk = GetKillDedupKey(playerName)

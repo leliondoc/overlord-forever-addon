@@ -279,3 +279,37 @@ performance/qualité) dont les trouvailles ont été corrigées. 101 tests Lua 5
   `GetKillingBlows`, champs bounty, migrations régions/legacy, `GetSorted*` test-only ; C1/S3 côté
   ZA (ts futur relayé par la carte) ; `IsKnownRelayPeer` fait encore confiance aux origines relayées
   pour OP/LO/LOC (acceptable : états routiniers vérifiés par site/pool/campagne).
+
+### Passe anti-triche (même jour, main, non publié)
+
+Objectif : fermer les triches/injections encore possibles sans casser la convergence. Principe
+retenu partout : **écrêter, jamais refuser** (max-merge conservé, les pages de rattrapage et le K
+suivant comblent le retard d'un honnête) ; aucun amplificateur de réponses. Vérifié par trois
+agents Sonnet 5.5 (convergence/désync), puis audits Fable et Opus 5.5 ; leurs trouvailles sont
+appliquées. 102 tests Lua 5.1 verts.
+
+- Plafond par niveau `MaxPlausibleKillsForLevel` (2000 + 150·niveau, 10 000 dès 54) à la
+  réception (K/LK), à l'émission (snapshot, K) et dans le nettoyeur legacy ; niveau monotone.
+- Croissance d'un total bornée par identité (`GetCaptureContributorDedupKey`, nouveau
+  `Leaderboard:GetMaxKillsForDedupName`) : 1 kill/s + seau de 10 + 30 une fois par 30 s ; premier
+  contact 300 + 0,03/s depuis le début de campagne (aussi sur les lignes sollicitées inconnues) ;
+  fenêtre d'absence `max(600, time() - lastSessionTimestamp)`. État borné à 8192 identités avec
+  éviction du plus ancien (plus de vidage global qui remettait toutes les bornes à zéro) ; une
+  variante d'orthographe hérite du dernier total retenu de l'identité.
+- Captures : `BoundUnsolicitedCaptureCount` (1/45 s + 2, premier contact 10 + 1/120 s, non
+  sollicité seulement) ; `AdmitCaptureFinalRate` 25 s par captureur toutes zones.
+- ZA : bascule de propriétaire d'une zone « vivante » (trafic C/ZS < 300 s) retenue jusqu'à une
+  seconde source dont la clé est le **dernier saut authentifié** (`BurstLimiterKey` : passerelle
+  pour une origine relayée) ou 300 s ; demandes purgées dès que la zone a basculé ou expiré
+  (`PurgeZaFlipClaims`) pour rendre le raccourci « snapshot identique ».
+- Rafales : clé `via:<passerelle>` pour les paquets relayés, budget ×4, excédent écarté sans
+  quarantaine de la passerelle ; `SCORE_BURST_MAX.K = 8`.
+- Confiance : `SyncSenderIsInOurGroup`, `OcSenderMatchesPayloadGuild`, `Has/ConsumeExpected
+  FullLeaderboardResponse` refusent une origine relayée ; TV jamais « de confiance » par le seul
+  mot ; dédoublonnage C sur l'horodatage brut ; âge TV en heure serveur ; jetons de guilde sans
+  caractères de contrôle ni `%`.
+- Diagnostic : `NoteSuspiciousSender` (64 lignes, éviction du plus petit total, jamais de blâme
+  sur un écrêtage de premier contact), lu par `/ov network`.
+- Résiduel (nécessite un serveur) : niveau auto-déclaré, carte ZA forgée pour une zone sans
+  trafic, C forgé à son propre nom (1 zone / 25 s), OP/LO/LOC depuis tout pair, identité GE
+  cosmétique.

@@ -1043,6 +1043,7 @@ function Overlord.Sync:ExpectDirectFullLeaderboardResponse(target)
 end
 
 function Overlord.Sync:ConsumeExpectedFullLeaderboardResponse(msgType, sender, channel)
+    if self.IsUnauthenticatedRelayOrigin and self:IsUnauthenticatedRelayOrigin(sender) then return false end
     if channel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsDispatching(sender)
         and Overlord.BetaNetwork:IsTargetedDispatch() then channel = "WHISPER" end
     if channel ~= "WHISPER" or (msgType ~= "LK" and msgType ~= "LC" and msgType ~= "LR") then
@@ -1072,6 +1073,7 @@ end
 -- Sert a distinguer un total sollicite (rattrapage) d'un total live non sollicite
 -- pour un sujet deja connu.
 function Overlord.Sync:HasExpectedFullLeaderboardResponse(sender, channel)
+    if self.IsUnauthenticatedRelayOrigin and self:IsUnauthenticatedRelayOrigin(sender) then return false end
     if channel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsDispatching(sender)
         and Overlord.BetaNetwork:IsTargetedDispatch() then channel = "WHISPER" end
     if channel ~= "WHISPER" then return false end
@@ -1100,38 +1102,69 @@ end
 local LK_UNSOLICITED_ALLOWANCE, LK_UNSOLICITED_RATE, LK_ALLOWANCE_PERIOD = 30, 1, 30
 local LK_SLACK_MAX, LK_SLACK_REFILL = 10, 0.5
 local FIRST_CONTACT_BASE, FIRST_CONTACT_RATE = 300, 0.03
-local subjectTotalAt, subjectTotalAtCount = {}, 0
-local function SubjectState(key)
-    local st = subjectTotalAt[key]
-    if not st then
-        if subjectTotalAtCount >= 4096 then subjectTotalAt, subjectTotalAtCount = {}, 0 end
-        subjectTotalAtCount = subjectTotalAtCount + 1
-        st = { slack = LK_SLACK_MAX, slackAt = GetTime() }
-        subjectTotalAt[key] = st
+-- Etat par identite (cle de dedup, jamais le nom brut : "Prenom Nom-Xyz" ou une
+-- casse differente designent le meme joueur). Table bornee par eviction du plus
+-- ancien, jamais videe d'un coup (un vidage remettait toutes les bornes a zero).
+local SUBJECT_STATE_MAX = 8192
+local function NewSubjectStateTable()
+    return { rows = {}, order = {}, first = 1, last = 0, count = 0 }
+end
+local function SubjectKey(sync, playerName)
+    local dk = sync.GetCaptureContributorDedupKey and sync:GetCaptureContributorDedupKey(playerName)
+    return (dk and dk ~= "" and dk or tostring(playerName or "")):lower()
+end
+local function SubjectRow(tbl, key, create)
+    local row = tbl.rows[key]
+    if row or not create then return row end
+    if tbl.count >= SUBJECT_STATE_MAX then
+        while tbl.first <= tbl.last do
+            local old = tbl.order[tbl.first]
+            tbl.order[tbl.first] = nil
+            tbl.first = tbl.first + 1
+            if old and tbl.rows[old] then
+                tbl.rows[old] = nil
+                tbl.count = tbl.count - 1
+                break
+            end
+        end
     end
-    return st
+    row = {}
+    tbl.rows[key] = row
+    tbl.last = tbl.last + 1
+    tbl.order[tbl.last] = key
+    tbl.count = tbl.count + 1
+    return row
+end
+local subjectTotals = NewSubjectStateTable()
+local function NoteClamp(sync, statName, sender, blameOwner, reason)
+    local betaNet = Overlord.BetaNetwork
+    if betaNet and betaNet.stats then betaNet.stats[statName] = (betaNet.stats[statName] or 0) + 1 end
+    if blameOwner then sync:NoteSuspiciousSender(sender, reason) end
 end
 function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, blameOwner)
-    local key = tostring(playerName or ""):lower()
+    local key = SubjectKey(self, playerName)
     local now = GetTime()
-    local existing = subjectTotalAt[key]
-    local betaNet = Overlord.BetaNetwork
-    local function noteClamp()
-        if betaNet and betaNet.stats then
-            betaNet.stats.unsolicitedTotalsClamped = (betaNet.stats.unsolicitedTotalsClamped or 0) + 1
-        end
-        if blameOwner then self:NoteSuspiciousSender(sender, "total clamped") end
+    -- Le max de l'identite, pas la ligne brute : une variante du nom ne repart pas de zero.
+    local lb = Overlord.Leaderboard
+    if lb and lb.GetMaxKillsForDedupName then
+        killsBefore = math.max(tonumber(killsBefore) or 0, lb:GetMaxKillsForDedupName(playerName))
     end
+    local existing = SubjectRow(subjectTotals, key, false)
+    -- Le dernier total retenu pour cette identite dans la session : une variante
+    -- du nom ne repart jamais de zero, meme sans index chaud.
+    if existing and existing.total then killsBefore = math.max(killsBefore or 0, existing.total) end
     if (killsBefore or 0) <= 0 then
         local accepted = kills
         local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
         if start > 0 then
             local serverNow = Overlord.ServerNow and Overlord.ServerNow() or time()
             local cap = FIRST_CONTACT_BASE + math.floor(math.max(0, serverNow - start) * FIRST_CONTACT_RATE)
-            if kills > cap then accepted = cap; noteClamp() end
+            -- Jamais blame : un honnete tres actif en debut de semaine peut depasser le cap.
+            if kills > cap then accepted = cap; NoteClamp(self, "unsolicitedTotalsClamped", sender, false) end
         end
-        local st = SubjectState(key)
-        st.at = now
+        local st = SubjectRow(subjectTotals, key, true)
+        st.at, st.slack, st.slackAt = now, st.slack or LK_SLACK_MAX, st.slackAt or now
+        st.total = math.max(st.total or 0, accepted)
         return accepted
     end
     local elapsed
@@ -1144,7 +1177,7 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
         local lastSession = tonumber(OverlordDB and OverlordDB.lastSessionTimestamp) or 0
         elapsed = math.max(600, lastSession > 0 and (time() - lastSession) or 600)
     end
-    local st = SubjectState(key)
+    local st = SubjectRow(subjectTotals, key, true)
     local slack = math.min(LK_SLACK_MAX, (st.slack or LK_SLACK_MAX) + math.max(0, now - (st.slackAt or now)) * LK_SLACK_REFILL)
     local timed = math.floor(elapsed * LK_UNSOLICITED_RATE)
     if elapsed >= LK_ALLOWANCE_PERIOD then timed = timed + LK_UNSOLICITED_ALLOWANCE end
@@ -1152,7 +1185,7 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
     local accepted = kills
     if kills > ceiling then
         accepted = ceiling
-        noteClamp()
+        NoteClamp(self, "unsolicitedTotalsClamped", sender, blameOwner, "total clamped")
     end
     -- La reference n'avance que lorsqu'un total superieur est retenu : une
     -- repetition du meme total ne recharge ni le temps ni le seau.
@@ -1162,6 +1195,7 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
     elseif not st.at then
         st.at = now
     end
+    st.total = math.max(st.total or 0, accepted)
     return accepted
 end
 
@@ -1169,41 +1203,31 @@ end
 -- retenu (+2 de jeu) ; un sujet inconnu est borne par l'age de la campagne a raison
 -- d'une capture par 2 min (maintien + trajet). Ecrete, jamais refuse.
 local LC_RATE_SECONDS, LC_PACKET_SLACK, LC_FIRST_BASE, LC_FIRST_PER_SECOND = 45, 2, 10, 1 / 120
-local subjectCapturesAt = {}
+local subjectCaptures = NewSubjectStateTable()
 function Overlord.Sync:BoundUnsolicitedCaptureCount(playerName, count, countBefore, sender, blameOwner)
-    local key = tostring(playerName or ""):lower()
+    local key = SubjectKey(self, playerName)
     local now = GetTime()
     count = math.floor(tonumber(count) or 0)
     countBefore = math.floor(tonumber(countBefore) or 0)
-    local betaNet = Overlord.BetaNetwork
-    local function noteClamp()
-        if betaNet and betaNet.stats then
-            betaNet.stats.unsolicitedCapturesClamped = (betaNet.stats.unsolicitedCapturesClamped or 0) + 1
-        end
-        if blameOwner then self:NoteSuspiciousSender(sender, "captures clamped") end
-    end
     local accepted = count
     if countBefore <= 0 then
         local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
         if start > 0 then
             local serverNow = Overlord.ServerNow and Overlord.ServerNow() or time()
             local cap = LC_FIRST_BASE + math.floor(math.max(0, serverNow - start) * LC_FIRST_PER_SECOND)
-            if count > cap then accepted = cap; noteClamp() end
+            if count > cap then accepted = cap; NoteClamp(self, "unsolicitedCapturesClamped", sender, false) end
         end
     else
-        local last = subjectCapturesAt[key]
-        local elapsed = last and math.max(0, now - last) or 86400
+        local st = SubjectRow(subjectCaptures, key, false)
+        local elapsed = st and st.at and math.max(0, now - st.at) or 86400
         local ceiling = countBefore + LC_PACKET_SLACK + math.floor(elapsed / LC_RATE_SECONDS)
-        if count > ceiling then accepted = ceiling; noteClamp() end
-    end
-    if accepted > countBefore or subjectCapturesAt[key] == nil then
-        local n = 0
-        if subjectCapturesAt[key] == nil then
-            for _ in pairs(subjectCapturesAt) do n = n + 1 end
-            if n >= 4096 then subjectCapturesAt = {} end
+        if count > ceiling then
+            accepted = ceiling
+            NoteClamp(self, "unsolicitedCapturesClamped", sender, blameOwner, "captures clamped")
         end
-        subjectCapturesAt[key] = now
     end
+    local st = SubjectRow(subjectCaptures, key, true)
+    if accepted > countBefore or not st.at then st.at = now end
     return accepted
 end
 
@@ -1227,7 +1251,16 @@ function Overlord.Sync:NoteSuspiciousSender(sender, reason)
     local key = sender
     local row = suspiciousSenders[key]
     if not row then
-        if suspiciousSenderCount >= 64 then return end
+        if suspiciousSenderCount >= 64 then
+            -- Table pleine : la ligne au plus petit total cede sa place.
+            local lowestKey, lowest = nil, math.huge
+            for name, r in pairs(suspiciousSenders) do
+                if r.total < lowest then lowestKey, lowest = name, r.total end
+            end
+            if lowest > 1 then return end
+            suspiciousSenders[lowestKey] = nil
+            suspiciousSenderCount = suspiciousSenderCount - 1
+        end
         suspiciousSenderCount = suspiciousSenderCount + 1
         row = { total = 0 }
         suspiciousSenders[key] = row
@@ -1318,10 +1351,25 @@ function Overlord.Sync:IsSuspiciousZaFlip(zoneId, zone, owner, ct, sender)
     local pending = priv.zaFlipClaims[zoneId]
     if pending then
         if now - pending.firstAt > ZA_FLIP_MAX_HOLD then return false, true end
+        -- La seconde source est le dernier saut authentifie (passerelle pour une
+        -- origine relayee) : deux origines forgees par le meme relais n'en font qu'une.
         if pending.owner == owner and math.abs(pending.ct - ct) <= 5
-            and pending.sender ~= tostring(sender or ""):lower() then return false, true end
+            and pending.sender ~= tostring(self:BurstLimiterKey(sender) or ""):lower() then return false, true end
     end
     return true, false
+end
+-- Demandes satisfaites (la zone a bascule par C/ZS) ou expirees : retirees, sinon
+-- le raccourci "snapshot identique" restait desactive toute la session.
+function Overlord.Sync:PurgeZaFlipClaims()
+    local claims = priv.zaFlipClaims
+    if next(claims) == nil then return end
+    local now = GetTime()
+    for zoneId, pending in pairs(claims) do
+        local zone = Overlord.Zones and Overlord.Zones:GetZone(zoneId)
+        if now - pending.firstAt > ZA_FLIP_MAX_HOLD or (zone and zone.owner == pending.owner) then
+            claims[zoneId] = nil
+        end
+    end
 end
 -- Apres validation d'un lot : les basculements tenus deviennent des demandes en
 -- attente (la premiere date est conservee), les basculements confirmes liberent
@@ -1332,7 +1380,7 @@ function Overlord.Sync:CommitZaFlipClaims(held, confirmed, sender)
     for zoneId, pending in pairs(claims) do
         if now - pending.firstAt > ZA_FLIP_MAX_HOLD or confirmed[zoneId] then claims[zoneId] = nil end
     end
-    local senderKey = tostring(sender or ""):lower()
+    local senderKey = tostring(self:BurstLimiterKey(sender) or ""):lower()
     for _, flip in ipairs(held) do
         local pending = claims[flip.zoneId]
         if pending and pending.owner == flip.owner and math.abs(pending.ct - flip.ct) <= 5 then
@@ -3003,7 +3051,9 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
     end
     if clampedByLevel then self:NoteSuspiciousSender(sender, "kill ceiling") end
     totalKills = sanitized
-    local totalBefore = Overlord.Leaderboard.kills and Overlord.Leaderboard.kills[playerName] or 0
+    local totalBefore = Overlord.Leaderboard.GetMaxKillsForDedupName
+        and Overlord.Leaderboard:GetMaxKillsForDedupName(playerName)
+        or (Overlord.Leaderboard.kills and Overlord.Leaderboard.kills[playerName]) or 0
     -- Meme borne de croissance que les totaux non sollicites : un proprietaire
     -- ne peut pas se donner des milliers de kills d'un seul paquet. Un total reel
     -- grandit bien moins vite que 30 + 1/s ; le rattrapage apres absence passe
@@ -7348,6 +7398,7 @@ function Overlord.Sync:OnReceiveZoneAll(
 
     -- The same validated snapshot again within 30 s (another elected sender, a
     -- relayed copy): nothing to apply, skip the whole parse (3-8 ms per map).
+    self:PurgeZaFlipClaims()
     if payload == self._lastAcceptedZaPayload
         and GetTime() - (self._lastAcceptedZaAt or -math.huge) < 30
         and next(priv.zaFlipClaims) == nil then
@@ -8239,6 +8290,9 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
         Overlord.Leaderboard:SetPlayerLevel(playerName, levelToken)
     end
     local killsBefore = Overlord.Leaderboard.kills and Overlord.Leaderboard.kills[playerName] or 0
+    if Overlord.Leaderboard.GetMaxKillsForDedupName then
+        killsBefore = math.max(killsBefore, Overlord.Leaderboard:GetMaxKillsForDedupName(playerName))
+    end
     -- Un total non sollicite (y compris celui que le proprietaire annonce lui-meme
     -- par LK) suit la meme borne de croissance que K ; une ligne sollicitee n'est
     -- bornee que lorsqu'elle est inconnue ici (cap de premier contact).
@@ -9187,7 +9241,7 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel, ret
     if ts <= 0 then return end
 
     -- Rejette les replays de sessions precedentes (> 2h)
-    if time() - ts > 7200 then return end
+    if (Overlord.ServerNow and Overlord.ServerNow() or time()) - ts > 7200 then return end
     -- Une victoire de la semaine passee (relayee juste apres le reset hebdo) ne
     -- repeint jamais le front de la nouvelle semaine (meme garde que VT/VF).
     if IsStaleCampaignTimestamp(ts) then return end

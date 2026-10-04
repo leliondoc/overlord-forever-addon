@@ -2,7 +2,8 @@
 
 **Overlord Forever 1.4.2**
 
-- Victories, scores and captures are harder to forge: a total victory applies only once your map shows the enemy capital taken (or from a group member), a suspicious jump in another player's total is capped instead of accepted, and future-dated captures no longer block the real ones.
+- Victories, scores and captures are harder to forge: a total victory applies only once your map shows the enemy capital taken (or from a group member); a player's total can only grow at a plausible pace (1 kill/s plus a small margin, and a 300-kill allowance for a name never seen that grows with the campaign age), never beyond what their level allows, whatever spelling of the name the packet uses; an owner flip of a quiet zone announced in a map snapshot needs a second source behind a different relay (or 5 minutes); a capturer finishes at most one zone per 25 s; future-dated captures no longer block the real ones. Everything is capped rather than refused, so honest players still converge to the same ladder, and suspicious senders are listed in `/ov network`. A modified client can still misreport its own level or forge the map of a zone nobody is watching: only a server could close those.
+- Command moves up next to Call to arms; Tutorial sits next to Settings. The leaderboard shows the campaign ruleset right of the search box.
 - Enemy captures that stayed orange on your map now turn red: the capture check accounts for the 15-60 s between cross-faction updates.
 - Capture and victory times use the server clock, so a PC running a few minutes ahead no longer overrides everyone else's map.
 - Lighter network in crowds: Battle.net bridges wait a few seconds and skip the channel copy when another bridge already posted it, raid members no longer re-send what the whole channel just heard, and class/guild lookups get about three answers whatever the crowd size.

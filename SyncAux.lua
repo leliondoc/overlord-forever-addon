@@ -1978,6 +1978,12 @@ function Overlord.Sync:SenderBurstShouldDrop(sender, msgType)
         senderBurstWindow[sender] = w
     end
     w.counts[msgType] = (w.counts[msgType] or 0) + 1
+    -- Cle "via:<passerelle>" (paquets relayes) : un relais honnete peut porter le
+    -- flood d'un tiers ; on laisse passer quatre fois plus et on ecarte seulement
+    -- l'excedent, sans jamais mettre la passerelle en quarantaine.
+    if sender:sub(1, 4) == "via:" then
+        return w.counts[msgType] > burstMax * 4
+    end
     if w.counts[msgType] > burstMax then
         quarantines = senderBurstQuarantine[sender]
         if not quarantines then

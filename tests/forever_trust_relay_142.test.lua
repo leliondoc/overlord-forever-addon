@@ -117,6 +117,26 @@ do
     end
 end
 
+-- A spelling variant of a known player is the same identity: no fresh start.
+do
+    know("Variant Player", 400, "Horde")
+    s:OnReceiveLeaderboardKills(lkRow("Variant Player", 401, "Horde"), "Some Peer", "CHANNEL")
+    s:OnReceiveLeaderboardKills(lkRow("variant player", 9000, "Horde"), "Some Peer", "CHANNEL")
+    local raw = Overlord.Leaderboard.kills["variant player"] or 0
+    local known = Overlord.Leaderboard.kills["Variant Player"] or 0
+    assert(raw <= 401 + 10 + 30 + 1 and known <= 401 + 10 + 30 + 1,
+        "a name variant escaped the growth bound: " .. raw .. " / " .. known)
+    -- Many subjects do not reset anyone's bound (LRU, never a full wipe).
+    for i = 1, 4200 do
+        local name = "Crowd Member" .. string.char(65 + math.floor(i / 676) % 26, 65 + math.floor(i / 26) % 26, 65 + i % 26)
+        know(name, 5, "Horde")
+        s:OnReceiveLeaderboardKills(lkRow(name, 6, "Horde"), "Some Peer", "CHANNEL")
+    end
+    s:OnReceiveLeaderboardKills(lkRow("Variant Player", 9000, "Horde"), "Some Peer", "CHANNEL")
+    assert((Overlord.Leaderboard.kills["Variant Player"] or 0) < 1000,
+        "bound state was wiped by the crowd: " .. tostring(Overlord.Leaderboard.kills["Variant Player"]))
+end
+
 -- ===== (2) bridge hold on Battle.net broadcasts
 net.BridgeChannelHold = { 2, 15 }
 local before = net:GetQueueSummary().total
@@ -252,6 +272,46 @@ assert(not s:IsSuspiciousZaFlip("zone_live", zone, "Alliance", t0 - 50, "Peer On
 assert(not s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 400, "Peer Three"), "an older capture time was held")
 assert(not s:IsSuspiciousZaFlip("cap_live", { id = "cap_live", owner = "Alliance", capturedTime = t0 - 300, isCapital = true },
     "Horde", t0 - 100, "Peer One"), "a capital flip was held")
+-- Two origins relayed by the same gateway are one source; another gateway is a second one.
+do
+    local zoneGw = { id = "zone_gw", owner = "Alliance", capturedTime = t0 - 300 }
+    s:NoteLiveZoneTraffic("zone_gw")
+    net.context = { origin = "Forged One", gateway = "Gateway Peer", hops = 1 }
+    held, confirmed = s:IsSuspiciousZaFlip("zone_gw", zoneGw, "Horde", t0 - 100, "Forged One")
+    assert(held and not confirmed, "relayed first source applied a surprising flip")
+    s:CommitZaFlipClaims({ { zoneId = "zone_gw", owner = "Horde", ct = t0 - 100 } }, {}, "Forged One")
+    net.context = { origin = "Forged Two", gateway = "Gateway Peer", hops = 1 }
+    held, confirmed = s:IsSuspiciousZaFlip("zone_gw", zoneGw, "Horde", t0 - 100, "Forged Two")
+    assert(held and not confirmed, "two origins behind one gateway confirmed each other")
+    net.context = { origin = "Forged Three", gateway = "Other Gateway", hops = 1 }
+    held, confirmed = s:IsSuspiciousZaFlip("zone_gw", zoneGw, "Horde", t0 - 100, "Forged Three")
+    assert(not held and confirmed, "a different gateway did not count as a second source")
+    net.context = nil
+    -- Once the zone really flipped (C/ZS applied it) the claim is purged: a new
+    -- source is a first source again.
+    local realGetZone = Overlord.Zones.GetZone
+    Overlord.Zones.GetZone = function(_, id)
+        if id == "zone_gw" then return { id = "zone_gw", owner = "Horde" } end
+        return realGetZone and realGetZone(Overlord.Zones, id) or nil
+    end
+    s:PurgeZaFlipClaims()
+    Overlord.Zones.GetZone = realGetZone
+    held, confirmed = s:IsSuspiciousZaFlip("zone_gw", zoneGw, "Horde", t0 - 100, "Peer Four")
+    assert(held and not confirmed, "a satisfied claim survived the purge")
+    -- Relayed packets share the gateway's burst key: four times the budget, the
+    -- excess is dropped and the gateway is never quarantined.
+    local dropped = 0
+    for _ = 1, 40 do if s:SenderBurstShouldDrop("via:Gateway Peer", "K") then dropped = dropped + 1 end end
+    assert(dropped == 8, "via: burst budget should be 4 x 8 K per window, dropped " .. dropped)
+    advance(6)
+    assert(not s:SenderBurstShouldDrop("via:Gateway Peer", "K"), "a gateway key was quarantined")
+    dropped = 0
+    for _ = 1, 40 do if s:SenderBurstShouldDrop("Direct Flooder", "K") then dropped = dropped + 1 end end
+    assert(dropped == 32, "direct sender budget should stay 8 K per window, dropped " .. dropped)
+    advance(6)
+    assert(s:SenderBurstShouldDrop("Direct Flooder", "K"), "a direct flooder was not quarantined")
+end
+
 -- Absolute cap: after 5 min the pending flip applies even without a second source.
 advance(301)
 held = s:IsSuspiciousZaFlip("zone_live", zone, "Horde", t0 - 100, "Peer One")

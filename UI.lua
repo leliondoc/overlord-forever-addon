@@ -1485,7 +1485,7 @@ function Overlord.UI:CreateZoneListSection(parent)
 
     local tutorialBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
         L.GUIDE_BAR_LABEL, "Interface\\Icons\\INV_Misc_Book_09")
-    tutorialBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(2))
+    tutorialBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(3))
     AttachGridButtonTooltip(tutorialBtn, L.GUIDE_BTN_TOOLTIP or L.GUIDE_BAR_LABEL)
     tutorialBtn:SetScript("OnClick", function()
         if Overlord.Popups and Overlord.Popups.ToggleQuickGuide then
@@ -1507,7 +1507,7 @@ function Overlord.UI:CreateZoneListSection(parent)
         or L.GENERAL_TOOLTIP_TITLE_ALLIANCE
     local generalBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
         L.GENERAL_BUTTON, "Interface\\Icons\\Ability_Warrior_RallyingCry")
-    generalBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(3))
+    generalBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(2))
     AttachGridButtonTooltip(generalBtn, generalTip)
     zoneListFrame.factionCallBtn = hornBtn
     zoneListFrame.generalBtn = generalBtn
