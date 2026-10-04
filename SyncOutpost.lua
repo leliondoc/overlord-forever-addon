@@ -426,10 +426,11 @@ local OUTPOST_CLAIM_REPEAT_SEC = 600
 local outpostClaimSeen, outpostClaimSeenCount = {}, 0
 function Overlord.Sync:NoteOutpostClaim(kind, siteKey, guild, faction, sender, sourceChannel, claimTs)
     if not OverlordDB or type(sender) ~= "string" or sender == "" then return end
-    if OcSenderMatchesPayloadGuild(sender, guild or "", faction) then return end
     local seenKey = table.concat({ tostring(kind), tostring(siteKey), tostring(guild), sender:lower() }, "|")
     local nowMono = GetTime()
     if outpostClaimSeen[seenKey] and nowMono - outpostClaimSeen[seenKey] < OUTPOST_CLAIM_REPEAT_SEC then return end
+    -- Verification du roster (jusqu'a 40 unites) seulement apres le dedoublonnage.
+    if OcSenderMatchesPayloadGuild(sender, guild or "", faction) then return end
     if not outpostClaimSeen[seenKey] then
         if outpostClaimSeenCount >= 256 then wipe(outpostClaimSeen); outpostClaimSeenCount = 0 end
         outpostClaimSeenCount = outpostClaimSeenCount + 1

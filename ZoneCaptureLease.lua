@@ -217,7 +217,7 @@ local function HardenSoftTombstonesForZone(zoneId)
     local prefix = tostring(zoneId) .. "|"
     local now = GetTime()
     for key in pairs(softTombstones) do
-        if key:sub(1, #prefix) == prefix then
+        if key:find(prefix, 1, true) == 1 then
             softTombstones[key] = nil
             softTombstoneCount = math.max(0, softTombstoneCount - 1)
             if tombstones[key] == nil then tombstoneCount = tombstoneCount + 1 end
