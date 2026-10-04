@@ -412,9 +412,21 @@ end
 -- seule : rien n'est refuse, rien n'est envoye. Sauvegarde bornee (24 lignes) pour
 -- retrouver apres coup qui a annonce quoi (/ov network).
 local OUTPOST_CLAIM_LOG_MAX = 24
+-- Une confirmation repetee (meme emetteur, site, guilde) n'est notee qu'une fois par
+-- 10 min : les heartbeats OP d'un etat deja tenu restent visibles sans noyer le journal.
+local OUTPOST_CLAIM_REPEAT_SEC = 600
+local outpostClaimSeen, outpostClaimSeenCount = {}, 0
 function Overlord.Sync:NoteOutpostClaim(kind, siteKey, guild, faction, sender, sourceChannel, claimTs)
     if not OverlordDB or type(sender) ~= "string" or sender == "" then return end
     if OcSenderMatchesPayloadGuild(sender, guild or "", faction) then return end
+    local seenKey = table.concat({ tostring(kind), tostring(siteKey), tostring(guild), sender:lower() }, "|")
+    local nowMono = GetTime()
+    if outpostClaimSeen[seenKey] and nowMono - outpostClaimSeen[seenKey] < OUTPOST_CLAIM_REPEAT_SEC then return end
+    if not outpostClaimSeen[seenKey] then
+        if outpostClaimSeenCount >= 256 then wipe(outpostClaimSeen); outpostClaimSeenCount = 0 end
+        outpostClaimSeenCount = outpostClaimSeenCount + 1
+    end
+    outpostClaimSeen[seenKey] = nowMono
     local net = Overlord.BetaNetwork
     local context = sourceChannel == "BETA" and net and net.context or nil
     local hops = context and tonumber(context.hops) or 0
@@ -1146,10 +1158,12 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
                 and (stBefore.status ~= "held"
                     or Overlord.Outpost:SanitizeGuildName(stBefore.ownerGuild or "") ~= heldGuild
                     or stBefore.ownerFaction ~= remoteFac)
+            -- Changement ou simple confirmation d'un etat tenu : journal (borne a une
+            -- ligne par 10 min pour une confirmation repetee).
+            if not ownerSourceVerified then
+                self:NoteOutpostClaim("OP", siteKey, heldGuild, remoteFac, sender, channel, heldTs)
+            end
             if tenantChanged or countChanged or stateChanged then
-                if not ownerSourceVerified then
-                    self:NoteOutpostClaim("OP", siteKey, heldGuild, remoteFac, sender, channel, heldTs)
-                end
                 if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
                     Overlord.LeaderboardUI:RefreshIfVisible()
                 end
