@@ -2173,6 +2173,8 @@ local mmDataAcc = MM_DATA_INTERVAL
 -- Zones, mines et keep partagent le meme driver mmFrame (meme cache position, ~60 Hz en mouvement).
 -- mmMineMapActive : on est sur une carte a mines -> mmFrame doit tourner meme hors front actif.
 local mmMineMapActive = false
+-- Toutes les icones minimap deja masquees par l'option (evite de les recacher a chaque tick).
+local mmIconsHidden = false
 -- Cache position joueur (partagee entre zones/mines/keep pour eviter appels C_Map redondants)
 local mmCachedMapID = nil
 local mmCachedPX, mmCachedPY = 0, 0
@@ -2402,6 +2404,16 @@ function Overlord.MapMarkers:InitializeMinimap()
         end
         mmCachedFacing = mmCachedRotate and facing or 0
 
+        -- Option "Minimap icons" coupee : aucune icone Overlord sur la minimap (cercles,
+        -- generaux, mines, forts, avant-postes), masquees une seule fois.
+        if not Overlord.MapMarkers:MinimapIconsEnabled() then
+            if not mmIconsHidden then
+                mmIconsHidden = true
+                Overlord.MapMarkers:HideAllMinimapIcons()
+            end
+            return
+        end
+        mmIconsHidden = false
         if Overlord.InActiveFront then
             Overlord.MapMarkers:UpdateMinimapPins(fullRefresh)
             -- Contexte partage (position, sin/cos) pour la couche des generaux.
@@ -2746,7 +2758,27 @@ function Overlord.MapMarkers:RefreshMinimapOverlayOpacity()
     end
 end
 
+function Overlord.MapMarkers:MinimapIconsEnabled()
+    return IsMinimapCaptureZonesEnabled()
+end
+
+function Overlord.MapMarkers:HideAllMinimapIcons()
+    for _, pin in pairs(minimapPins) do
+        if pin:IsShown() then pin:Hide() end
+    end
+    self:HideMinimapGeneralPins()
+    self:HideMinimapMinePins()
+    self:HideMinimapKeepPin()
+    self:HideMinimapOutpostPin()
+end
+
 function Overlord.MapMarkers:RefreshMinimapCaptureZonesVisibility()
+    if not IsMinimapCaptureZonesEnabled() then
+        self:HideAllMinimapIcons()
+        return
+    end
+    -- Option rallumee : le prochain tick redessine toutes les icones.
+    driverState.WakeMinimapDriver()
     if Overlord.InActiveFront then
         self:UpdateMinimapPins(false)
     else

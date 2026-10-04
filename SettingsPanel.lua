@@ -639,7 +639,7 @@ local ROWS = {
         set = setMinimapOverlayOpacity, min = MAP_OVERLAY_OPACITY_MIN, max = MAP_OVERLAY_OPACITY_MAX,
         step = MAP_OVERLAY_OPACITY_STEP, format = formatMapOverlayOpacityLabel },
     { kind = "checkbox", var = SP.ShowMinimapCaptureZonesVariableName, label = "MINIMAP_CAPTURE_ZONES_LABEL",
-        fallback = "Minimap capture zones", tooltip = "MINIMAP_CAPTURE_ZONES_TOOLTIP",
+        fallback = "Minimap icons", tooltip = "MINIMAP_CAPTURE_ZONES_TOOLTIP",
         default = DEFAULT_SHOW_MINIMAP_CAPTURE_ZONES, get = getShowMinimapCaptureZones,
         set = setShowMinimapCaptureZones },
     { kind = "checkbox", var = SP.ShowMinimapButtonVariableName, label = "MINIMAP_BUTTON_LABEL",
