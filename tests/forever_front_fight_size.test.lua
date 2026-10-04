@@ -52,6 +52,18 @@ for id = 2000, 2023 do serverNow = serverNow + 1; FA:RecordKills("#" .. id, 1) e
 serverNow = serverNow + 1
 assert(FA:RecordKills("#2024", 6), "a new off-front fight was refused when the list was full")
 assert(FA:GetKillCount("#2024") == 6, "the new fight was not counted")
+assert(FA:GetKillCount("#1451") == 0 and FA:GetKillCount("#2000") == 0 and FA:GetKillCount("#2001") == 1,
+    "the oldest zones were not the ones making room")
+-- Hundreds of invented ids trim the name cache, but a tracked zone keeps its row.
+for id = 5000, 5300 do FA:RecordKills("#" .. id, 1) end
+assert(row("#2024") and row("#2024").label == "Zone 2024", "a tracked zone lost its name in the cache trim")
+-- A real zone unreadable at login is retried after 60 s instead of ignored all session.
+maps[1452] = nil
+assert(not FA:RecordKills("#1452", 1))
+maps[1452] = { name = "Felwood", mapType = 3 }
+assert(not FA:RecordKills("#1452", 1), "retried before 60 s")
+serverNow = serverNow + 61
+assert(FA:RecordKills("#1452", 1), "a zone unreadable at login stayed ignored")
 
 -- Kills older than the 5 min window drop out.
 serverNow = serverNow + 200

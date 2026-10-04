@@ -460,12 +460,18 @@ local function ResolveWorldKillKey(zoneRef)
     local key = "#" .. mapID
     local cached = worldNameByKey[key]
     if cached == false then return nil end
+    -- Carte encore illisible (donnees pas chargees au login) : nouvel essai apres 60 s.
+    if type(cached) == "number" then
+        if GetTime() < cached then return nil end
+        cached = nil
+    end
     if cached == nil then
         local ok, info = false, nil
         if C_Map and C_Map.GetMapInfo then ok, info = pcall(C_Map.GetMapInfo, mapID) end
         local zoneType = Enum and Enum.UIMapType and Enum.UIMapType.Zone or 3
         cached = ok and type(info) == "table" and info.mapType == zoneType
             and type(info.name) == "string" and info.name ~= "" and info.name or false
+        if cached == false and not (ok and type(info) == "table") then cached = GetTime() + 60 end
         -- Des identifiants inventes ne font jamais grossir le cache au-dela de 256.
         -- Les noms des zones suivies sont gardes (leur ligne ne disparait pas).
         if worldNameCount >= 256 then
@@ -480,7 +486,7 @@ local function ResolveWorldKillKey(zoneRef)
         end
         worldNameByKey[key] = cached
         worldNameCount = worldNameCount + 1
-        if not cached then return nil end
+        if type(cached) ~= "string" then return nil end
     end
     -- Une carte de zone d'un front compte pour ce front.
     local fronts = Overlord.Fronts
