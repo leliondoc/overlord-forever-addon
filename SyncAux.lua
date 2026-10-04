@@ -91,6 +91,12 @@ function Overlord.Sync:PollIfStaleObserverInProgress(secondsSinceZs, zone)
     else
         pollInterval = STALE_OBSERVER_POLL_INTERVAL
     end
+    -- Gros event : le relais n'envoie un tick que toutes les 60 s et le bail tolere
+    -- 75 s de silence. Sonder des 32 s faisait demander l'etat a chaque observateur
+    -- relais, a chaque cycle (300 observateurs d'un siege = ~5 SR/s sur le capteur).
+    if isLarge and zone and zone._remoteCaptureLease then
+        pollInterval = math.max(pollInterval, 75)
+    end
     if Overlord.InstanceSuspended or not secondsSinceZs or secondsSinceZs < pollInterval then return end
     local now = GetTime()
     if now - lastStaleObserverPoll < pollInterval then return end
@@ -131,6 +137,9 @@ function Overlord.Sync:RequestObserverCaptureConfirmationIfComplete(zone)
     if now - (zone._observerFinalStatePollAt or 0) < OBSERVER_FINAL_STATE_POLL_INTERVAL then return end
     if now - lastObserverFinalStatePoll < OBSERVER_FINAL_STATE_POLL_INTERVAL then return end
 
+    -- Quatre demandes au plus par fin attendue : au-dela, la finale arrive par le
+    -- relais ou le rattrapage de carte (bail tenu 150 s), sans relance en boucle.
+    if (zone._observerFinalStatePollCount or 0) >= 4 then return end
     zone._observerFinalStatePollAt = now
     lastObserverFinalStatePoll = now
     zone._observerFinalStatePollCount = (zone._observerFinalStatePollCount or 0) + 1

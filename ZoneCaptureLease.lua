@@ -175,6 +175,9 @@ local function PutTombstone(zoneId, originKey, waveId)
     if tombstoneCount >= MAX_ROWS
         or now - lastTombstonePurgeAt >= TOMBSTONE_PURGE_INTERVAL then
         tombstoneCount = PurgeBounded(tombstones, now, TOMBSTONE_TTL)
+        if softTombstoneCount > 0 then
+            softTombstoneCount = PurgeBounded(softTombstones, now, TOMBSTONE_TTL)
+        end
         lastTombstonePurgeAt = now
     end
 end
@@ -192,6 +195,7 @@ end
 
 -- Marque douce encore valide qui bloque ce ts (nil = aucune, ou ts plus recent).
 local function IsSoftTombstoned(zoneId, originKey, waveId, ts)
+    if softTombstoneCount == 0 then return false end
     local key = LeaseKey(zoneId, originKey, waveId)
     local row = softTombstones[key]
     if not row then return false end

@@ -1198,8 +1198,15 @@ function Overlord.Outpost:ResetOutpostsForCampaign()
     if OverlordDB.outpostTenants then wipe(OverlordDB.outpostTenants) end
     if OverlordDB.outpostCaptureCounts then wipe(OverlordDB.outpostCaptureCounts) end
     -- Pastilles, carte et HUD fortin : plus d'ancien tenant affiche apres le reset.
+    -- Une seule passe (carte, minimap, HUD) ; les forteresses ont leur propre HUD.
     if self.RefreshOutpostPresentation then
-        for key in pairs(Overlord.OutpostSites) do pcall(self.RefreshOutpostPresentation, self, key) end
+        pcall(self.RefreshOutpostPresentation, self, nil)
+        for key, site in pairs(Overlord.OutpostSites) do
+            if site and site.isFortress then
+                pcall(self.RefreshOutpostPresentation, self, key)
+                break
+            end
+        end
     end
 end
 
