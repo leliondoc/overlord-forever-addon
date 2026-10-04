@@ -281,13 +281,15 @@ for _, height in ipairs({ 650, 480, 420, 350, 650 }) do
             layout(f, count)
             assert(f.activityPanel:GetTop() <= f.objectiveDetailsFs:GetBottom() - 10 + 0.001,
                 'Recent activity overlaps objective guidance in a short panel')
-            assert(f.activityPanel:GetHeight() >= 141,
-                'Short front compressed the normal five-row activity viewport')
+            -- 1.4.2: the dock keeps the main panel's height; a short front shows fewer
+            -- activity rows (never under two) instead of growing past the main panel.
+            assert(f.activityPanel:GetHeight() >= 78,
+                'Short front compressed the activity viewport under two rows')
             assert(f.activityFooter:GetTop() <= f.activityPanel:GetBottom() - 10 + 0.001,
                 'Coins overlap activity')
             assert(f.activityFooter:GetBottom() >= f:GetBottom() + 16, 'Coins escape panel bottom')
             assert(f.artFrame:GetHeight() == 112, 'Short front shrank the objective map picture')
-            assert(f.activityScroll:GetHeight() >= 105, 'Short front squeezed the activity scrollbar')
+            assert(f.activityScroll:GetHeight() >= 42, 'Short front squeezed the activity scrollbar')
             local overflow = count * 21 - 3 > f.activityScroll:GetHeight() + 1
             assert(f.activityScroll.railShown == overflow, 'Activity rail disagrees with visible/content height')
             assert((f.activityScroll:GetVerticalScroll() or 0)
