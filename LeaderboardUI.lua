@@ -955,6 +955,18 @@ function Overlord.LeaderboardUI:CreateFrame()
     searchBox:SetScript("OnEscapePressed", function(box) box:SetText(""); box:ClearFocus() end)
     searchBox:SetScript("OnEnterPressed", function(box) box:ClearFocus() end)
     searchBox:SetScript("OnHide", function(box) box:ClearFocus() end)
+    -- Campagne en cours (ruleset) : les joueurs savent dans quelle campagne ils sont.
+    local rulesetLabel = lbFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    rulesetLabel:SetPoint("LEFT", searchPanel, "RIGHT", 10, 0)
+    rulesetLabel:SetJustifyH("LEFT")
+    rulesetLabel:SetTextColor(P.accent[1], P.accent[2], P.accent[3])
+    local ruleset = Overlord.RealmPools and Overlord.RealmPools.GetRuleset and Overlord.RealmPools:GetRuleset() or "pvp"
+    local rulesetNames = {
+        pvp = L.RULESET_NAME_PVP or "PvP", normal = L.RULESET_NAME_NORMAL or "Normal",
+        rp = L.RULESET_NAME_RP or "RP", hardcore = L.RULESET_NAME_HARDCORE or "Hardcore",
+    }
+    rulesetLabel:SetText(string.format(L.LB_RULESET_LABEL or "%s ruleset", rulesetNames[ruleset] or tostring(ruleset)))
+    lbFrame.rulesetLabel = rulesetLabel
     lbFrame.searchStatus = searchPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     lbFrame.searchStatus:SetPoint("TOPRIGHT", searchPanel, "BOTTOMRIGHT", -2, -3)
     lbFrame.searchStatus:SetTextColor(P.muted[1], P.muted[2], P.muted[3])

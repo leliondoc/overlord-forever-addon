@@ -109,7 +109,7 @@ OverlordDB.lastSessionTimestamp = nil
 do
     local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
     assert(start > 0, "fixture: campaign start known")
-    local cap = 1000 + math.floor(math.max(0, time() - start) * 0.05)
+    local cap = 300 + math.floor(math.max(0, time() - start) * 0.03)
     if cap < 9999 then
         ownK("Fresh Forger", 9999, "Horde")
         assert(Overlord.Leaderboard.kills["Fresh Forger"] == cap,

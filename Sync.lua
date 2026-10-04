@@ -1091,13 +1091,15 @@ end
 -- canal d'un proprietaire part toutes les 30 s, un pont LK toutes les 60 s). Un
 -- flood de paquets ne regagne donc pas 10 kills a chaque paquet. Premier total d'un
 -- sujet jamais vu (y compris juste apres le reset) : borne par l'age de la campagne,
--- 1000 + 0,05/s (4 h : 1720 ; 24 h : 5320), identique chez tous les receveurs.
+-- 300 + 0,03/s (6 h : 950 ; 24 h : 2900 ; 72 h : 8080), identique chez tous.
 -- Tout est ecrete, jamais refuse : les pages de rattrapage (exemptees) et le K
--- suivant comblent le retard d'un honnete. `blameOwner` : seul le proprietaire qui
+-- suivant comblent le retard d'un honnete. Le cap de premier contact s'applique
+-- aussi aux lignes sollicitees (pages, SR:F) : sinon un seul client qui a accepte
+-- un total forge le servait a tous. `blameOwner` : seul le proprietaire qui
 -- annonce son propre total est note comme suspect, jamais le relais.
 local LK_UNSOLICITED_ALLOWANCE, LK_UNSOLICITED_RATE, LK_ALLOWANCE_PERIOD = 30, 1, 30
 local LK_SLACK_MAX, LK_SLACK_REFILL = 10, 0.5
-local FIRST_CONTACT_BASE, FIRST_CONTACT_RATE = 1000, 0.05
+local FIRST_CONTACT_BASE, FIRST_CONTACT_RATE = 300, 0.03
 local subjectTotalAt, subjectTotalAtCount = {}, 0
 local function SubjectState(key)
     local st = subjectTotalAt[key]
@@ -1163,6 +1165,59 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
     return accepted
 end
 
+-- Captures (non sollicitees) : 1 capture par 45 s au plus depuis le dernier compteur
+-- retenu (+2 de jeu) ; un sujet inconnu est borne par l'age de la campagne a raison
+-- d'une capture par 2 min (maintien + trajet). Ecrete, jamais refuse.
+local LC_RATE_SECONDS, LC_PACKET_SLACK, LC_FIRST_BASE, LC_FIRST_PER_SECOND = 45, 2, 10, 1 / 120
+local subjectCapturesAt = {}
+function Overlord.Sync:BoundUnsolicitedCaptureCount(playerName, count, countBefore, sender, blameOwner)
+    local key = tostring(playerName or ""):lower()
+    local now = GetTime()
+    count = math.floor(tonumber(count) or 0)
+    countBefore = math.floor(tonumber(countBefore) or 0)
+    local betaNet = Overlord.BetaNetwork
+    local function noteClamp()
+        if betaNet and betaNet.stats then
+            betaNet.stats.unsolicitedCapturesClamped = (betaNet.stats.unsolicitedCapturesClamped or 0) + 1
+        end
+        if blameOwner then self:NoteSuspiciousSender(sender, "captures clamped") end
+    end
+    local accepted = count
+    if countBefore <= 0 then
+        local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
+        if start > 0 then
+            local serverNow = Overlord.ServerNow and Overlord.ServerNow() or time()
+            local cap = LC_FIRST_BASE + math.floor(math.max(0, serverNow - start) * LC_FIRST_PER_SECOND)
+            if count > cap then accepted = cap; noteClamp() end
+        end
+    else
+        local last = subjectCapturesAt[key]
+        local elapsed = last and math.max(0, now - last) or 86400
+        local ceiling = countBefore + LC_PACKET_SLACK + math.floor(elapsed / LC_RATE_SECONDS)
+        if count > ceiling then accepted = ceiling; noteClamp() end
+    end
+    if accepted > countBefore or subjectCapturesAt[key] == nil then
+        local n = 0
+        if subjectCapturesAt[key] == nil then
+            for _ in pairs(subjectCapturesAt) do n = n + 1 end
+            if n >= 4096 then subjectCapturesAt = {} end
+        end
+        subjectCapturesAt[key] = now
+    end
+    return accepted
+end
+
+-- Cle du limiteur de rafale : le dernier saut authentifie. Pour une origine
+-- relayee, c'est la passerelle (context.gateway) ; sinon l'expediteur lui-meme.
+function Overlord.Sync:BurstLimiterKey(sender)
+    local net = Overlord.BetaNetwork
+    if net and net.IsRelayedOrigin and net:IsRelayedOrigin(sender) then
+        local gateway = net.context and net.context.gateway
+        if type(gateway) == "string" and gateway ~= "" then return "via:" .. gateway end
+    end
+    return sender
+end
+
 -- Expediteurs dont un paquet a ete borne ou refuse pour implausibilite. Un compteur
 -- par nom (64 au plus), lu par /ov network : rien n'est automatique, le joueur
 -- decide quoi en faire (liste de refus, signalement).
@@ -1201,11 +1256,11 @@ function Overlord.Sync:GetSuspiciousSenderDiagnostics()
 end
 
 -- Cadence des captures finales par capteur (1.4.2). Un joueur ne termine jamais
--- deux captures de zones differentes a moins de 45 s (maintien >= 60 s, trajet) ;
--- un client modifie qui repeint la carte d'un coup est borne a une zone par
--- 45 s. Decide sur le timestamp du paquet ; pour une rafale forgee, la zone
+-- deux captures de zones differentes a moins de 25 s (maintien minimal 30 s avec
+-- Renfort, plus le trajet) ; un client modifie qui repeint la carte d'un coup est
+-- borne a une zone par 25 s. Decide sur le timestamp du paquet ; pour une rafale forgee, la zone
 -- retenue depend de l'ordre d'arrivee (la carte ZA realigne ensuite).
-local CAPTURE_FINAL_MIN_GAP = 45
+local CAPTURE_FINAL_MIN_GAP = 25
 local lastFinalByOrigin, lastFinalByOriginCount = {}, 0
 function Overlord.Sync:AdmitCaptureFinalRate(originName, zoneId, ts, sender)
     -- Une origine relayee est un nom ecrit par la passerelle : elle ne consomme ni
@@ -1234,23 +1289,27 @@ end
 -- basculement propose par une carte ZA est surprenant.
 priv.liveZoneSeenAt = {}
 function Overlord.Sync:NoteLiveZoneTraffic(zoneId)
-    if zoneId then priv.liveZoneSeenAt[zoneId] = GetTime() end
+    if zoneId then
+        priv.liveZoneSeenAt[zoneId] = GetTime()
+        priv.liveZoneLastAt = priv.liveZoneSeenAt[zoneId]
+    end
 end
 
 -- Basculement de proprietaire propose par une carte ZA alors que nous recevons le
 -- trafic valide en direct de cette zone depuis moins de 5 min sans avoir vu la
 -- capture : une seule source ne suffit pas. Le basculement attend une seconde
 -- source (autre pair, ou le C/ZS lui-meme), au plus 5 min depuis la premiere
--- demande, puis s'applique de toute facon. Jamais pour une capitale (detection de
--- victoire, lot entier), ni pour une zone locale non confirmee (login, final non
--- atteste) ; un client qui a tout manque accepte au premier coup. Le controle est
+-- demande, puis s'applique de toute facon. Les capitales aussi (une carte forgee
+-- "tout a moi + capitale" declenchait la victoire chez tous) ; jamais pour une zone
+-- locale non confirmee (login, final non atteste) ; un client qui a tout manque
+-- accepte au premier coup. Le controle est
 -- pur : les demandes ne sont enregistrees qu'une fois le lot valide (voir
 -- CommitZaFlipClaims), sinon un lot refuse consommerait la confirmation.
 local ZA_FLIP_LIVE_WINDOW, ZA_FLIP_MAX_HOLD, ZA_FLIP_MAX = 300, 300, 64
 priv.zaFlipClaims = {}
 function Overlord.Sync:IsSuspiciousZaFlip(zoneId, zone, owner, ct, sender)
     if not zone or not owner or zone.owner == owner then return false, false end
-    if zone.isCapital or zone._loginSyncUnconfirmed or zone._captureFinalUnattested then return false, false end
+    if zone._loginSyncUnconfirmed or zone._captureFinalUnattested then return false, false end
     local now = GetTime()
     local liveAt = priv.liveZoneSeenAt[zoneId]
     if not liveAt or now - liveAt > ZA_FLIP_LIVE_WINDOW then return false, false end
@@ -2233,9 +2292,7 @@ function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
     elseif msgType == "BF" and Overlord.BetaNetwork then
         return Overlord.BetaNetwork:ReceiveFragment(payload, ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
     end
-    if self.SenderBurstShouldDrop
-        and not (self.IsUnauthenticatedRelayOrigin and self:IsUnauthenticatedRelayOrigin(sender))
-        and self:SenderBurstShouldDrop(sender, msgType) then return end
+    if self.SenderBurstShouldDrop and self:SenderBurstShouldDrop(self:BurstLimiterKey(sender), msgType) then return end
     if msgType == "K" then
         local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
         self:OnReceiveKill(payload or "", gameplaySender)
@@ -2351,10 +2408,9 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
 
     -- Anti-triche : ignore les rafales anormales de messages mutateurs de score.
     -- C et LC ont des seuils compatibles avec les retries et reponses SR normaux.
-    -- Une origine relayee (nom ecrit par la passerelle) ne compte pas contre ce nom.
-    if self.SenderBurstShouldDrop
-        and not (self.IsUnauthenticatedRelayOrigin and self:IsUnauthenticatedRelayOrigin(sender))
-        and self:SenderBurstShouldDrop(sender, msgType) then
+    -- Une origine relayee (nom ecrit par la passerelle) compte contre la passerelle
+    -- qui l'a livree, jamais contre le nom qu'elle porte.
+    if self.SenderBurstShouldDrop and self:SenderBurstShouldDrop(self:BurstLimiterKey(sender), msgType) then
         return
     end
 
@@ -3824,6 +3880,9 @@ function Overlord.Sync:OnReceiveCapture(payload, sender)
     local zoneId, participantsStr, faction, ts, captureWaveId, captureOriginGuid,
         captureFinalRequirement = strsplit(":", payload)
     local hadExplicitTs = ts and ts ~= ""
+    -- Cle de dedup sur le champ brut : la borne du futur donne un ts different
+    -- par receveur et par copie (groupe, canal, pont a quelques secondes).
+    local rawCaptureTsField = hadExplicitTs and ts or ""
     ts = NormalizeRemoteTimestamp(ts)
     if hadExplicitTs and not ts then return end
     if not ts or ts <= 0 then
@@ -3867,7 +3926,8 @@ function Overlord.Sync:OnReceiveCapture(payload, sender)
         sortedNames[#sortedNames + 1] = baseName:lower()
     end
     table.sort(sortedNames)
-    local captureKey = zoneId .. ":" .. table.concat(sortedNames, ",") .. ":" .. ts
+    local captureKey = zoneId .. ":" .. table.concat(sortedNames, ",") .. ":"
+        .. (rawCaptureTsField ~= "" and rawCaptureTsField or tostring(ts))
         .. ":" .. tostring(captureWaveId or "") .. ":" .. tostring(captureOriginGuid or "")
         .. ":" .. tostring(captureFinalRequirement or "")
     local now = GetTime()
@@ -7329,20 +7389,12 @@ function Overlord.Sync:OnReceiveZoneAll(
         return zoneId, ownerCode, ts, ct, owner, validOwnerCode
     end
 
-    -- Garde des basculements : jamais dans un lot qui change une capitale (la
-    -- detection de victoire et le dry-run des prerequis portent sur le lot entier).
-    local heldFlips, confirmedFlips, batchHasCapitalFlip = {}, {}, false
-    for _, entry in ipairs(entries) do
-        local scanZoneId, _, _, scanCt, scanOwner = ParseZoneAllEntry(entry)
-        local scanZone = scanZoneId and Overlord.Zones and Overlord.Zones:GetZone(scanZoneId)
-        -- Seule une capitale qui gagnerait compte : une entree perimee (ecartee
-        -- plus loin) ne doit pas desarmer la garde du lot.
-        if scanZone and scanZone.isCapital and scanOwner and scanZone.owner ~= scanOwner
-            and (tonumber(scanCt) or 0) > (tonumber(scanZone.capturedTime) or 0) then
-            batchHasCapitalFlip = true
-            break
-        end
-    end
+    -- Garde des basculements : seulement si un trafic en direct a ete vu
+    -- recemment (sinon aucune zone ne peut etre "surprise", et le controle est
+    -- evite pour toute la carte).
+    local heldFlips, confirmedFlips = {}, {}
+    local zaGuardActive = priv.liveZoneLastAt ~= nil
+        and GetTime() - priv.liveZoneLastAt <= 300
 
     -- Preflight complet avant toute mutation : un snapshot assemble et valide
     -- applique ensuite territoires et capitales dans un seul commit atomique.
@@ -7388,7 +7440,7 @@ function Overlord.Sync:OnReceiveZoneAll(
         end
         -- Basculement surprenant pendant un suivi en direct : garde locale jusqu'a
         -- une seconde source (voir IsSuspiciousZaFlip).
-        if validEntry and owner and stateZoneForVote and not batchHasCapitalFlip then
+        if zaGuardActive and validEntry and owner and stateZoneForVote then
             local held, confirmed = self:IsSuspiciousZaFlip(zoneId, stateZoneForVote, owner, ct, sender)
             if held then
                 staleSkipMask[entryIndex] = true
@@ -8188,9 +8240,11 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     end
     local killsBefore = Overlord.Leaderboard.kills and Overlord.Leaderboard.kills[playerName] or 0
     -- Un total non sollicite (y compris celui que le proprietaire annonce lui-meme
-    -- par LK) suit la meme borne de croissance que K.
-    if not guildSnapshot and not self:HasExpectedFullLeaderboardResponse(sender, channel) then
-        kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, guildOwner)
+    -- par LK) suit la meme borne de croissance que K ; une ligne sollicitee n'est
+    -- bornee que lorsqu'elle est inconnue ici (cap de premier contact).
+    local solicited = guildSnapshot or self:HasExpectedFullLeaderboardResponse(sender, channel)
+    if not solicited or killsBefore <= 0 then
+        kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, guildOwner and not solicited)
     end
     if killsClampedByLevel and guildOwner then self:NoteSuspiciousSender(sender, "kill ceiling") end
     Overlord.Leaderboard:SetPlayerKills(playerName, kills, true)
@@ -8317,6 +8371,21 @@ function Overlord.Sync:OnReceiveLeaderboardCaptures(payload, sender, channel)
     end
     local previousCaptureTotal = Overlord.Leaderboard.GetMaxCapturesForDedupName
         and Overlord.Leaderboard:GetMaxCapturesForDedupName(playerName) or 0
+    do
+        -- Meme regle que les kills : un compteur de captures d'un sujet connu ne
+        -- monte pas d'un seul paquet non sollicite, et un sujet inconnu est borne
+        -- par l'age de la campagne.
+        local lcOwner = self.KillSyncSenderOwnsPlayer and self:KillSyncSenderOwnsPlayer(sender, playerName) or false
+        local lcSolicited = (self.IsExpectedPagedLeaderboardDelivery
+                and self:IsExpectedPagedLeaderboardDelivery("LC", playerName, sender, channel)) == true
+            or self:HasExpectedFullLeaderboardResponse(sender, channel)
+        -- Les pages et SR:F sont l'historique de reference (un sujet inconnu non
+        -- sollicite est deja refuse par AuthorizeLeaderboardSubject).
+        if not lcSolicited then
+            sanitizedCap = self:BoundUnsolicitedCaptureCount(playerName, sanitizedCap,
+                tonumber(previousCaptureTotal) or 0, sender, lcOwner)
+        end
+    end
     -- Ecriture paresseuse : on stocke le nom brut sans merge dedup.
     -- La fusion se fait a la lecture (UI, SR, Export) via MergeDuplicateLeaderboardKeysByDedup.
 
@@ -9167,12 +9236,11 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel, ret
         end
     end
     -- La carte locale est la seule preuve : la capitale ennemie capturee par cette
-    -- faction a +/- 5 s du timestamp annonce. Seul un membre du groupe est cru sur
-    -- parole. Toute autre TV sans preuve attend que le C de la capitale arrive
-    -- (urgent, relaye a tout le monde) et est rejouee ; une TV forgee seule ne
-    -- repeint donc plus la carte des joueurs eloignes.
-    local trustedVictorySource = self.SenderIsInOurGroup
-        and self:SenderIsInOurGroup(sender or "") or false
+    -- faction a +/- 5 s du timestamp annonce. Personne n'est cru sur parole, pas
+    -- meme un membre du groupe (un tricheur dans le raid repeignait le front de ses
+    -- co-raiders). Toute TV sans preuve attend que le C de la capitale arrive
+    -- (urgent, relaye a tout le monde) et est rejouee.
+    local trustedVictorySource = false
     if not localVictoryEvidence and not trustedVictorySource then
         if not retrying then
             -- Replay with the timestamp as normalised now: a clamped future stamp

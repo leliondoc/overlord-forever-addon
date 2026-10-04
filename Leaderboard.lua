@@ -2429,13 +2429,18 @@ function Overlord.Leaderboard:EnsureLegacyScoreSanitized()
             end, bucket.captures)
             SanitizeMap(bucket.kills, function(name, count)
                 if not killCeiling or IsLocalName(name) then return false end
-                local ceiling = killCeiling
+                if (tonumber(count) or 0) > killCeiling then return true end
+                -- Above the level ceiling: clamp like the network does, never delete.
                 local info = type(bucket.playerInfo) == "table" and bucket.playerInfo[name] or nil
                 local level = info and tonumber(info.level) or 0
                 if level > 0 and Overlord.Sync and Overlord.Sync.MaxPlausibleKillsForLevel then
-                    ceiling = math.min(ceiling, Overlord.Sync:MaxPlausibleKillsForLevel(level))
+                    local ceiling = Overlord.Sync:MaxPlausibleKillsForLevel(level)
+                    if (tonumber(count) or 0) > ceiling then
+                        bucket.kills[name] = ceiling
+                        changed = true
+                    end
                 end
-                return (tonumber(count) or 0) > ceiling
+                return false
             end)
         end
     end)

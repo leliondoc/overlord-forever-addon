@@ -195,6 +195,8 @@ local function AcceptGeneralSender(sender, faction)
     -- as author; the gateway must never become the commander instead.
     if Overlord.BetaNetwork
         and Overlord.BetaNetwork:IsDispatching(sender) then
+        -- Commander claims travel multi-hop (a far commander must be known by all);
+        -- the author name is cosmetic here and the claim is bounded by its timestamp.
         return faction == "Alliance" or faction == "Horde"
     end
     local sync = Overlord.Sync
