@@ -1116,6 +1116,8 @@ end
 -- quand la carte locale la corrobore.
 function Overlord.Zones:GetFrontCapitalImmunity(frontId)
     if not frontId then return false, 0, 0, nil end
+    local frontDef = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
+    if frontDef and frontDef.noCapitalProtection then return false, 0, 0, nil end
     local froms = OverlordDB and OverlordDB.frontCapitalImmuneFrom
     local record = froms and froms[frontId]
     local from = type(record) == "table" and tonumber(record.from) or 0
@@ -1215,10 +1217,14 @@ function Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, fromSync, w
         return false
     end
 
-    if not (Overlord.Fronts and Overlord.Fronts:GetFront(frontId)) then return false end
+    local releasedFront = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
+    if not releasedFront then return false end
+    local protectsCapital = not releasedFront.noCapitalProtection
     -- Protection posee avant le recalcul des disponibilites fait par la liberation.
-    SetFrontCapitalImmunity(frontId, resetEpoch,
-        ResolveReleasedFaction(frontId, resetEpoch, winningFaction))
+    if protectsCapital then
+        SetFrontCapitalImmunity(frontId, resetEpoch,
+            ResolveReleasedFaction(frontId, resetEpoch, winningFaction))
+    end
     if not self:ReleaseFrontCapitals(frontId, resetEpoch) then return false end
 
     OverlordDB.frontTruceResetEpoch[frontId] = resetEpoch
@@ -1238,8 +1244,14 @@ function Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, fromSync, w
     if not fromSync then
         local mapLabel = self:GetFrontMapDisplayName(frontId) or frontId
         local untilTs = resetEpoch + CAPITAL_RELEASE_IMMUNITY
+        if not protectsCapital then
+            -- Front sans protection (Hillsbrad) : le combat reprend aussitot.
+            if L.FRONT_TRUCE_ENDED_FIGHT and resetEpoch + CAPITAL_VICTORY_COOLDOWN > ImmunityNow() then
+                Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.FRONT_TRUCE_ENDED_FIGHT,
+                    mapLabel))
+            end
         -- Connexion tardive : protection deja finie, pas d'heure passee dans le chat.
-        if L.FRONT_CAPITAL_RELEASED and untilTs > ImmunityNow() then
+        elseif L.FRONT_CAPITAL_RELEASED and untilTs > ImmunityNow() then
             Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.FRONT_CAPITAL_RELEASED,
                 mapLabel, date("%H:%M", untilTs)))
         end

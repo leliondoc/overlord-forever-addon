@@ -7,6 +7,7 @@ Overlord.L.SYNC_CAPTURED_ENEMY = "Captured by enemy"
 Overlord.L.FRONT_CAPITAL_RELEASED = "%s released until %s"
 Overlord.L.CAPITAL_PROTECTED_UNTIL = "Protected until %s"
 Overlord.L.CAPITAL_PROTECTED_SHORT = "Protected %s"
+Overlord.L.FRONT_TRUCE_ENDED_FIGHT = "%s fight resumes"
 Overlord.L.TOTAL_VICTORY_MSG = "%s won a front"
 Overlord.L.VICTORY_FACTION_ALLIANCE, Overlord.L.VICTORY_FACTION_HORDE = "Alliance", "Horde"
 Overlord.PlayerFaction = "Alliance"
@@ -352,5 +353,37 @@ Overlord.GetLatestDominationVictoryForFront = function(_, frontId)
 end
 sync:RetryPendingTruceReleases()
 assert(not select(1, zones:GetFrontCapitalImmunity("elwynn")), "Expired pending FR came back")
+Overlord.GetLatestDominationVictoryForFront = nil
+-- 18. Hillsbrad is a pure brawl: same 15-minute truce, then the fallen town comes back
+-- with no protection at all (no record, no gate, no label, its own chat line).
+zones:ClearFrontVictories()
+broadcasts, printed = {}, {}
+local hb = Overlord.Fronts:GetFront("hillsbrad")
+local southshore = select(1, Overlord.Fronts:GetZone(hb.allianceCapitalId, "hillsbrad"))
+local tarren = select(1, Overlord.Fronts:GetZone(hb.hordeCapitalId, "hillsbrad"))
+local HV = clock + 100
+clock = HV
+southshore.owner, southshore.status, southshore.capturedTime, southshore.updatedAt = "Alliance", "captured", HV - 300, HV - 300
+southshore._loginSyncUnconfirmed, tarren._loginSyncUnconfirmed = nil, nil
+zones:SetVictoryCooldown("hillsbrad", "Alliance", HV)
+zones:ForceSyncFrontToWinner("hillsbrad", "Alliance", HV, true)
+clock = HV + 901
+zones:TryExpireFrontTruces()
+assert(tarren.owner == "Horde" and tarren.capturedTime == HV + 900, "Tarren Mill did not come back after the truce")
+assert(#broadcasts == 1, "Hillsbrad truce end was not broadcast")
+local hbImmune = zones:GetFrontCapitalImmunity("hillsbrad")
+assert(not hbImmune and not select(1, zones:IsCapitalImmune(tarren.id, "hillsbrad")),
+    "Hillsbrad got a capital protection")
+assert(not (OverlordDB.frontCapitalImmuneFrom and OverlordDB.frontCapitalImmuneFrom.hillsbrad),
+    "A protection record was written for Hillsbrad")
+assert(zones:GetCapitalProtectionLabel(tarren.id, "hillsbrad") == nil, "Hillsbrad shows a protection label")
+assert(not sync:ShouldRejectImmuneCapitalChange(tarren.id, "Alliance", "in_progress", "ZS"),
+    "A siege of Tarren Mill was refused right after the truce")
+assert(#printed == 1 and printed[1]:find("fight resumes", 1, true), "Hillsbrad truce-end line missing")
+-- Even a domination-journal victory cannot protect a Hillsbrad town.
+Overlord.GetLatestDominationVictoryForFront = function(_, frontId)
+    if frontId == "hillsbrad" then return HV, "Alliance" end
+end
+assert(not select(1, zones:GetFrontCapitalImmunity("hillsbrad")), "The journal protected a Hillsbrad town")
 Overlord.GetLatestDominationVictoryForFront = nil
 print("Forever capital release: conquest kept, capital released and protected, old clients and forged sieges OK")

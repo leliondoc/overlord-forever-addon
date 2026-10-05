@@ -15,7 +15,7 @@ local guideKeys = {
     "GUIDE_ALERTS_BODY", "GUIDE_SECTION_TOOLS", "GUIDE_TOOLS_BODY",
     "GUIDE_BAR_LABEL", "GUIDE_TITLE", "GUIDE_CLOSE", "GUIDE_NEXT", "GUIDE_PREV",
     "GUIDE_PAGE_INDICATOR", "FRONT_CAPITAL_RELEASED", "CAPITAL_PROTECTED_UNTIL",
-    "CAPITAL_PROTECTED_SHORT", "FORTRESS_CAPTURE_AVAILABLE",
+    "CAPITAL_PROTECTED_SHORT", "FORTRESS_CAPTURE_AVAILABLE", "FRONT_TRUCE_ENDED_FIGHT",
 }
 
 local function countSlots(text, slot)
@@ -38,6 +38,7 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
     assert(string.format(L.GUIDE_GUILD_KEEP_BODY, "ICONS", 10):find("ICONS", 1, true))
     assert(countSlots(L.GUIDE_GOLD_BODY, "s") == 1, loc .. ": mine text needs one list slot")
     assert(countSlots(L.FRONT_CAPITAL_RELEASED, "s") == 2, loc .. ": release line needs front + time")
+    assert(countSlots(L.FRONT_TRUCE_ENDED_FIGHT, "s") == 1, loc .. ": Hillsbrad truce-end line needs the front")
     assert(string.format(L.CAPITAL_PROTECTED_UNTIL, "21:40"):find("21:40", 1, true))
     assert(string.format(L.CAPITAL_PROTECTED_SHORT, "21:40"):find("21:40", 1, true))
     -- The protection length shown to players matches the code (6 h), the call to arms 4 h.

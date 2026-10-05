@@ -10568,7 +10568,11 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
         -- doit jamais evincer la vraie fin de treve en attente de sa preuve.
         local pending = priv.pendingTruceRelease[frontId]
         local rawEpoch = math.floor(tonumber(epochStr) or 0)
+        -- Front sans protection de capitale (Hillsbrad) : rien a rattraper, la carte
+        -- converge deja par ZA.
+        local pendingFront = Overlord.Fronts:GetFront(frontId)
         if sourceChannel ~= "RETRY" and rawEpoch <= frNow + 5
+            and not (pendingFront and pendingFront.noCapitalProtection)
             and (not pending or pending.epoch < resetEpoch) then
             priv.pendingTruceRelease[frontId] = { epoch = resetEpoch, payload = payload, sender = sender }
         end
