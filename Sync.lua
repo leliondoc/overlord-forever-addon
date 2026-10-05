@@ -9128,6 +9128,15 @@ function Overlord.Sync:BroadcastCapture(zoneId, completedRequirement)
             for _, other in ipairs(Overlord.ZoneDatabase or {}) do
                 if other.holdAuthorityLocal and other.status == "in_progress" then return end
             end
+            -- Chaque copie inonde tout le relais : toujours pour une capitale (rare), et
+            -- pour un point ordinaire seulement si notre file relais est calme. Elle se
+            -- coupe d'elle-meme quand le reseau est charge (la file locale reflete la charge
+            -- globale, chaque client voit les memes inondations).
+            if not z.isCapital then
+                local net = Overlord.BetaNetwork
+                local queue = net and net.GetQueueSummary and net:GetQueueSummary()
+                if not queue or (tonumber(queue.total) or 0) > 16 then return end
+            end
             self:BroadcastToRelay("C", payload)
         end)
     end

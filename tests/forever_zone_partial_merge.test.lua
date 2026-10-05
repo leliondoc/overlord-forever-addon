@@ -192,4 +192,28 @@ beforeRetake = #relayed
 runTimersUntil(clock + 60)
 assert(#relayed == beforeRetake, "a late C copy was sent while we held another capture")
 busy.holdAuthorityLocal, busy.status = nil, "locked"
+-- Each relay copy floods the whole relay: with a busy relay queue an ordinary point
+-- keeps its immediate copy and retry but skips the late one; a capital always sends it.
+local realSummary = Overlord.BetaNetwork.GetQueueSummary
+Overlord.BetaNetwork.GetQueueSummary = function() return { total = 40 } end
+timers, relayed = {}, {}
+zone.owner, zone.status, zone.capturedTime, zone.updatedAt = "Alliance", "captured", time(), time()
+sync:BroadcastCapture(X, 120)
+runTimersUntil(clock + 10)
+beforeRetake = #relayed
+runTimersUntil(clock + 60)
+assert(#relayed == beforeRetake, "a late C copy of an ordinary point was sent on a busy relay")
+zone.isCapital = true
+timers, relayed = {}, {}
+zone.capturedTime, zone.updatedAt = time() + 1, time() + 1
+local realRequirement = Overlord.CaptureLease.NormalizeCaptureRequirement
+Overlord.CaptureLease.NormalizeCaptureRequirement = function() return 480 end
+sync:BroadcastCapture(X, 480)
+runTimersUntil(clock + 10)
+beforeRetake = #relayed
+runTimersUntil(clock + 60)
+assert(#relayed == beforeRetake + 1, "a capital lost its late C copy on a busy relay")
+Overlord.CaptureLease.NormalizeCaptureRequirement = realRequirement
+zone.isCapital = nil
+Overlord.BetaNetwork.GetQueueSummary = realSummary
 print("Forever zone partial merge: stale entries skipped per entry, guards kept, C relay retried beyond coalescing OK")
