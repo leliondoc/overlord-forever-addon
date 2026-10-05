@@ -128,10 +128,13 @@ test("Forever panel greys disabled modules", () => {
     assert.match(ui, /not Overlord\.HallOfFameUI/);
     assert.match(ui, /not Overlord\.General/);
     // Contracts and export do not exist on Forever. Layer Jumper took the
-    // Contracts slot; export stays a greyed placeholder with no handler.
+    // Contracts slot and was removed in 1.6.1: its button stays greyed and its
+    // tooltip says why; export stays a greyed placeholder with no handler.
     assert.doesNotMatch(ui, /mbBtn|exportBtn|ManualBountyUI|Overlord\.Export|L\.MB_BUTTON/);
     assert.match(ui, /layerBtn:SetPoint\("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY\(1\)\)/);
-    assert.match(ui, /Overlord\.LayerJumper:Toggle\(\)/);
+    assert.doesNotMatch(ui, /Overlord\.LayerJumper/);
+    assert.match(ui, /self\.SetWC3ButtonUnavailable\(layerBtn, L\.LAYER_JUMPER_REMOVED/);
+    assert.match(locales, /L\.LAYER_JUMPER_REMOVED = "Removed\. Part of the community misunderstood it/);
     assert.match(ui, /L\.CHECK_PVP_BUTTON, "Interface\\\\Icons\\\\INV_Misc_Note_01", "TOPLEFT", 4, 4/);
     assert.match(ui, /self\.SetWC3ButtonUnavailable\(btn, foreverUnavailable\)/);
     assert.match(locales, /L\.FOREVER_FEATURE_UNAVAILABLE = "Unavailable on Overlord Forever\."/);

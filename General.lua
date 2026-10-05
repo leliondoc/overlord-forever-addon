@@ -208,10 +208,6 @@ end
 
 function Overlord.General:IsRaidLeader()
     if not IsInGroup() then return false end
-    -- Le passeur d'un changement de layer mene un groupe de quelques secondes avec
-    -- un inconnu : ce n'est pas un groupe de commandement (pas de prise de role auto).
-    local jumper = Overlord.LayerJumper
-    if jumper and jumper.IsHopGroup and jumper:IsHopGroup() then return false end
     return UnitIsGroupLeader("player") == true
 end
 

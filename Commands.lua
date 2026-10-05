@@ -453,7 +453,6 @@ local function ShowHelp()
     Overlord:PrintNotification(L.HELP_SCALE)
     Overlord:PrintNotification(L.HELP_GUIDE)
     if L.HELP_GUILD_KILLS then Overlord:PrintNotification(L.HELP_GUILD_KILLS) end
-    if L.HELP_LAYER then Overlord:PrintNotification(L.HELP_LAYER) end
     if L.HELP_WANTED then Overlord:PrintNotification(L.HELP_WANTED) end
     Overlord:PrintNotification(L.HELP_FOOTER)
 end
@@ -722,7 +721,8 @@ local function CommandHandler(msg)
         if Overlord.MostWanted then Overlord.MostWanted:HandleCommand(args) end
 
     elseif cmd == "layer" or cmd == "hop" then
-        if Overlord.LayerJumper then Overlord.LayerJumper:HandleCommand(args) end
+        -- Layer Jumper retire (1.6.1) : la commande explique seulement pourquoi.
+        Overlord:PrintNotification("|cFF00FF00[Overlord]|r " .. (L.LAYER_JUMPER_REMOVED or ""))
 
     elseif cmd == "guildkills" then
         if Overlord.GuildKillAlert then Overlord.GuildKillAlert:HandleCommand(args) end

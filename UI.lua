@@ -1547,16 +1547,11 @@ function Overlord.UI:CreateZoneListSection(parent)
     -- Keep optional module buttons unavailable only when the module is absent.
     local foreverUnavailable = L.FOREVER_FEATURE_UNAVAILABLE
         or "Unavailable on Overlord Forever."
-    -- Layer Jumper takes the old Contracts slot (row 1, left).
+    -- Layer Jumper (old Contracts slot, row 1, left): removed in 1.6.1; the greyed
+    -- button stays and its tooltip says why.
     local layerBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
-        L.LAYER_JUMPER_BUTTON or "Layer Jumper",
-        Overlord.LayerJumper and Overlord.LayerJumper:PortalIcon()
-            or "Interface\\Icons\\Spell_Arcane_PortalStormwind")
+        L.LAYER_JUMPER_BUTTON or "Layer Jumper", "Interface\\Icons\\Spell_Arcane_PortalStormwind")
     layerBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(1))
-    AttachGridButtonTooltip(layerBtn, L.LAYER_JUMPER_TOOLTIP or L.LAYER_JUMPER_BUTTON)
-    layerBtn:SetScript("OnClick", function()
-        if Overlord.LayerJumper then Overlord.LayerJumper:Toggle() end
-    end)
     zoneListFrame.layerBtn = layerBtn
 
     -- One greyed placeholder keeps the grid balanced until a new feature takes
@@ -1578,9 +1573,7 @@ function Overlord.UI:CreateZoneListSection(parent)
         if not Overlord.General then
             self.SetWC3ButtonUnavailable(generalBtn, foreverUnavailable)
         end
-        if not Overlord.LayerJumper then
-            self.SetWC3ButtonUnavailable(layerBtn, foreverUnavailable)
-        end
+        self.SetWC3ButtonUnavailable(layerBtn, L.LAYER_JUMPER_REMOVED or foreverUnavailable)
     end
 
     if self.RefreshActionGridActiveState then
@@ -2470,7 +2463,6 @@ function Overlord.UI:RefreshActionGridActiveState()
         discord = discordPopupFrame and discordPopupFrame:IsShown() or false,
         front = self._frontPickerPopup and self._frontPickerPopup:IsShown() or false,
         settings = Overlord.SettingsPanel and Overlord.SettingsPanel.IsOpen and Overlord.SettingsPanel:IsOpen() or false,
-        layer = Overlord.LayerJumper and Overlord.LayerJumper.IsShown and Overlord.LayerJumper:IsShown() or false,
     }
     local prev = self._actionGridOpenState
     if prev then
@@ -2517,7 +2509,6 @@ function Overlord.UI:RefreshActionGridActiveState()
     panelOpen(zoneListFrame.discordBtn, nextState.discord)
     panelOpen(self.frontPickerBtn, nextState.front)
     panelOpen(zoneListFrame.settingsBtn, nextState.settings)
-    panelOpen(zoneListFrame.layerBtn, nextState.layer)
     if Overlord.Button and Overlord.Button.RefreshGeneralButton then
         Overlord.Button:RefreshGeneralButton()
     end

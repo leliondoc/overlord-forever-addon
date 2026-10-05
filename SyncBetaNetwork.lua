@@ -1055,15 +1055,12 @@ local function tasksFor(p, wire)
             groupAgain = rec ~= nil and dedup.count(rec.carriers.group, now) >= COVER_COPIES
             channelAgain = rec ~= nil and dedup.count(rec.carriers.channel, now) >= COVER_COPIES
         end
-        -- Groupe a deux d'un changement de layer : le partenaire a deja le canal.
-        local hopGroup = not p.skipGroup and IsInGroup() and Overlord.LayerJumper
-            and Overlord.LayerJumper.IsHopGroup and Overlord.LayerJumper:IsHopGroup()
         -- Meme reserve Blizzard que le canal : pas de copie de fond au groupe pour une
         -- diffusion. Un paquet adresse (reponse de rattrapage a un coequipier joint par
         -- le groupe) garde sa copie : c'est parfois sa seule livraison.
-        local groupCopy = not p.skipGroup and not hopGroup
+        local groupCopy = not p.skipGroup
             and (p.target ~= "*" or not sync.GroupCarries or sync:GroupCarries(p.kind, p.payload))
-        groupSuppressed = not p.skipGroup and not hopGroup and not groupCopy
+        groupSuppressed = not p.skipGroup and not groupCopy
         for _, fragment in ipairs(fragments) do
             if groupCopy then
                 if trim and groupAgain then trimmed = trimmed + 1
@@ -1174,9 +1171,7 @@ local function emit(task)
     if task.skip then return true end
     -- Missing optional local paths are not send failures; a throttled channel
     -- that is present must, however, retry the same fragment.
-    if task.transport == "GROUP" and (not IsInGroup()
-        or (Overlord.LayerJumper and Overlord.LayerJumper.IsHopGroup
-            and Overlord.LayerJumper:IsHopGroup())) then
+    if task.transport == "GROUP" and not IsInGroup() then
         return true
     end
     if task.transport == "CHANNEL" and not sync:GetChannelId() then return true end
@@ -1805,9 +1800,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         -- Group mates without the channel still need a copy: one held group-only
         -- copy per hearer, dropped as soon as a mate's copy is heard in the group.
         if transport == "CHANNEL" and p.target == "*" and p.kind ~= "NH"
-            and p.kind ~= "SH" and IsInGroup() and not retryForward
-            and not (Overlord.LayerJumper and Overlord.LayerJumper.IsHopGroup
-                and Overlord.LayerJumper:IsHopGroup()) then
+            and p.kind ~= "SH" and IsInGroup() and not retryForward then
             local pg = { region = p.region, id = p.id, at = p.at, target = p.target, path = p.path,
                 kind = p.kind, payload = p.payload, groupOnly = true, skipChannel = true, heardOn = transport }
             if holdForward("G:" .. key, pg, "group") then

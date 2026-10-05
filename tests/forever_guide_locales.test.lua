@@ -50,13 +50,22 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
     assert(L.GUIDE_PROGRESS_BODY:find("%f[%d]15%f[%D]"), loc .. ": guide lost the Hillsbrad note")
     -- Commands are quoted exactly as Commands.lua parses them, after every later locale
     -- fix (an old Shard -> Layer rewrite once turned /ov layer into /ov shard).
-    for _, cmd in ipairs({ { "GUIDE_SHARD_BODY", "/ov layer help on" }, { "GUIDE_SHARD_BODY", "/ov network" },
+    for _, cmd in ipairs({ { "GUIDE_SHARD_BODY", "/ov network" },
         { "GUIDE_PANEL_BODY", "/ov show" }, { "GUIDE_PANEL_BODY", "/ov guide" },
         { "GUIDE_OPTIONS_BODY", "/ov lb" }, { "GUIDE_ALERTS_BODY", "/ov wanted" },
         { "GUIDE_ALERTS_BODY", "/ov guildkills" } }) do
         assert(L[cmd[1]]:find(cmd[2], 1, true), loc .. ": " .. cmd[1] .. " lost the command " .. cmd[2])
     end
     assert(not L.GUIDE_SHARD_BODY:find("/ov shard", 1, true), loc .. ": guide points to /ov shard")
+    -- Layer Jumper removed in 1.6.1: the guide no longer sends players to it, and its
+    -- greyed button explains why in every language.
+    assert(not L.GUIDE_SHARD_BODY:find("/ov layer", 1, true)
+        and not L.GUIDE_SHARD_BODY:find("Layer Jumper", 1, true), loc .. ": guide still offers the Layer Jumper")
+    assert(not L.GUIDE_PANEL_BODY:find(L.LAYER_JUMPER_BUTTON, 1, true),
+        loc .. ": the panel guide still lists the removed Layer Jumper button")
+    assert(L.HELP_LAYER == nil, loc .. ": /ov help still advertises /ov layer")
+    assert(type(L.LAYER_JUMPER_REMOVED) == "string" and #L.LAYER_JUMPER_REMOVED > 40,
+        loc .. ": the greyed Layer Jumper button has no explanation")
     -- The guide names the buttons exactly as the panel shows them in that language
     -- (zhTW reads the zhCN guide over an English interface: skipped).
     if loc ~= "zhTW" then
@@ -71,17 +80,21 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
         mentions(L.GUIDE_PANEL_BODY, L.GOLD_BARRICADE, "Reinforce")
         mentions(L.GUIDE_PANEL_BODY, L.GOLD_REINFORCE, "Attack")
         mentions(L.GUIDE_OPTIONS_BODY, L.MINIMAP_CAPTURE_ZONES_LABEL, "Minimap icons")
-        mentions(L.GUIDE_SHARD_BODY, L.LAYER_JUMPER_BUTTON, "Layer Jumper")
-        mentions(L.GUIDE_SHARD_BODY, (L.LJ_HELP_MODE or ""):match("^(.-)%s*[:：]") or "", "Help others")
     end
     if loc == "enUS" then
         english = {}
         for _, key in ipairs(guideKeys) do english[key] = L[key] end
+        english.LAYER_JUMPER_REMOVED = L.LAYER_JUMPER_REMOVED
     else
         -- A translated locale never falls back to the English tutorial body.
         for _, key in ipairs({ "GUIDE_RULES_BODY", "GUIDE_SIEGE_BODY", "GUIDE_GUILD_KEEP_BODY",
             "GUIDE_ALERTS_BODY", "GUIDE_TOOLS_BODY" }) do
             assert(L[key] ~= english[key], loc .. " shows the English " .. key)
+        end
+        -- zhTW plays with the English interface: its greyed button reads English too.
+        if loc ~= "zhTW" then
+            assert(L.LAYER_JUMPER_REMOVED ~= english.LAYER_JUMPER_REMOVED,
+                loc .. " shows the English Layer Jumper explanation")
         end
     end
 end

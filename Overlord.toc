@@ -66,6 +66,5 @@ Popups.lua
 LeaderboardSearch.lua
 LeaderboardUI.lua
 SettingsPanel.lua
-LayerJumper.lua
 Commands.lua
 

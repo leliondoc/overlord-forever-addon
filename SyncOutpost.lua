@@ -368,10 +368,7 @@ local function OpSenderIsInOurGroup(sender)
         if UnitExists(unit) then
             local full = Overlord:SafeGetUnitName(unit, true)
             if OpRosterMatchKey(full) == want then
-                -- Partenaire d'un changement de layer : jamais de confiance de groupe.
-                local layerJumper = Overlord.LayerJumper
-                return not (layerJumper and layerJumper.IsHopPartner
-                    and layerJumper:IsHopPartner(sender))
+                return true
             end
         end
     end

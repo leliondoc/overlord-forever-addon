@@ -1957,9 +1957,6 @@ function Overlord:SuspendForInstance()
     if self.General and self.General.OnInstanceSuspend then
         self.General:OnInstanceSuspend()
     end
-    if self.LayerJumper and self.LayerJumper.OnInstanceSuspend then
-        pcall(self.LayerJumper.OnInstanceSuspend, self.LayerJumper)
-    end
     if self.MostWanted and self.MostWanted.OnInstanceSuspend then
         pcall(self.MostWanted.OnInstanceSuspend, self.MostWanted)
     end
@@ -2764,6 +2761,9 @@ function Overlord:Initialize()
     OverlordDB.frontDominationTimeByPool, OverlordDB.dominationBoostPct = nil, nil
     OverlordDB.frontDominationPoolVersion, OverlordDB.globalDominationUnifiedVersion = nil, nil
     OverlordDB.frontDominationMigrated = nil
+    -- 1.6.1 : Layer Jumper retire. Saut en cours et choix « Aider les autres » oublies.
+    OverlordDB.layerJumperHop = nil
+    if type(OverlordDB.config) == "table" then OverlordDB.config.layerHelpMode = nil end
     -- 1.2.4 : contrats en or et War Mode n'existent pas sur Forever (code retire).
     OverlordDB.manualBountyContracts, OverlordDB.manualBountySettlementLedger = nil, nil
     OverlordDB.config.worldDefenseEnabled = nil

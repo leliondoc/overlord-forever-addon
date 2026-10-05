@@ -112,7 +112,8 @@ local replacements = {
     zhCN = { { "分片", "layer" }, { "碎片", "layer" }, { "Shard", "Layer" }, { "shard", "layer" } },
 }
 for key, value in pairs(L) do
-    -- Le tutoriel (GUIDE_*) est deja ecrit en layers et cite /ov layer : ne pas le reecrire.
+    -- Le tutoriel (GUIDE_*) est deja ecrit en layers : ne pas le reecrire (une ancienne
+    -- reecriture avait change /ov layer en /ov shard).
     if type(key) == "string" and key:find("SHARD", 1, true) and not key:find("^GUIDE_")
         and type(value) == "string" then
         for _, pair in ipairs(replacements[locale] or replacements.enUS) do
