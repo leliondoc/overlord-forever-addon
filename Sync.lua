@@ -29,6 +29,8 @@ local priv = {
     totalVictoryAnnounced = {},
     totalVictoryDeliveredAt = {},
     postVictorySyncGuardUntil = {},
+    -- FR recu avant sa preuve (SR envoie FR avant le journal VB) : un par front, rejoue.
+    pendingTruceRelease = {},
     captureDedup = {},
     captureDedupCount = 0,
     captureDedupMax = 128,
@@ -10427,6 +10429,25 @@ function Overlord.Sync:BroadcastFrontZoneSnapshot(frontId)
     end
 end
 
+-- Rejoue les FR en attente de preuve (30 s ticker de treve, et apres un VB accepte).
+-- Local uniquement : aucune emission, aucune reponse.
+function Overlord.Sync:RetryPendingTruceReleases()
+    local pendingByFront = priv.pendingTruceRelease
+    if not pendingByFront or next(pendingByFront) == nil then return end
+    local now = (Overlord.ServerNow and Overlord.ServerNow()) or time()
+    local horizon = Overlord.Zones and Overlord.Zones.GetCapitalImmunitySeconds
+        and Overlord.Zones:GetCapitalImmunitySeconds() or 21600
+    for frontId, pending in pairs(pendingByFront) do
+        local applied = OverlordDB and OverlordDB.frontTruceResetEpoch
+            and tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0
+        if applied >= pending.epoch or now >= pending.epoch + horizon then
+            pendingByFront[frontId] = nil
+        else
+            self:OnReceiveFrontTruceEndReset(pending.payload, pending.sender, "RETRY")
+        end
+    end
+end
+
 function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChannel)
     if not payload or payload == "" then return end
     local frontId, epochStr = strsplit(":", payload, 2)
@@ -10524,7 +10545,21 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
     -- FR libere une capitale et pose sa protection : sans preuve locale derivable,
     -- on ignore le paquet et on attend ZA/TV. Accumuler des votes inutilises consommait CPU/memoire et
     -- donnait l'impression qu'un quorum pouvait rendre ce reset fiable.
-    if not locallyDerivedReset then return end
+    if not locallyDerivedReset then
+        -- Un seul FR en attente par front (le plus recent) : la preuve (journal VB,
+        -- carte) arrive souvent juste apres dans la meme reponse SR. Rejoue localement,
+        -- jamais rediffuse, oublie apres la duree de la protection.
+        -- Une epoque future (horloge en avance ou FR forge, ramene a maintenant) ne
+        -- doit jamais evincer la vraie fin de treve en attente de sa preuve.
+        local pending = priv.pendingTruceRelease[frontId]
+        local rawEpoch = math.floor(tonumber(epochStr) or 0)
+        if sourceChannel ~= "RETRY" and rawEpoch <= frNow + 5
+            and (not pending or pending.epoch < resetEpoch) then
+            priv.pendingTruceRelease[frontId] = { epoch = resetEpoch, payload = payload, sender = sender }
+        end
+        return
+    end
+    priv.pendingTruceRelease[frontId] = nil
     if Overlord.Zones and Overlord.Zones.ApplyFrontTruceEndReset then
         Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, true,
             derivedWinner or victoryFaction)

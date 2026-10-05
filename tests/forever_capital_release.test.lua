@@ -317,4 +317,40 @@ for _, mode in ipairs({ "journal", "pruned" }) do
         and not select(1, zones:IsCapitalImmune(hordeCap.id)), "Wrong capital protected (" .. mode .. ")")
 end
 Overlord.GetLatestDominationVictoryForFront = nil
+
+-- 16. One SR response sends FR before the VB journal: the FR cannot be proven yet,
+-- stays pending, and is replayed once the journal knows the victory (no new packet).
+zones:ClearFrontVictories()
+local PV = clock + 100
+clock = PV + 1500
+local PE = PV + 900
+hordeReleasedMap(PE)
+-- Fighting went on after the release: no conquered zone carries the epoch any more.
+for _, zone in ipairs(branches) do zone.capturedTime, zone.updatedAt = PE + 300, PE + 300 end
+sync:OnReceiveFrontTruceEndReset("elwynn:" .. PE, "Late Tester", "CHANNEL")
+assert(not select(1, zones:GetFrontCapitalImmunity("elwynn")), "FR without proof applied a protection")
+-- A future-dated FR (clock ahead or forged) never evicts the genuine pending one.
+sync:OnReceiveFrontTruceEndReset("elwynn:" .. (clock + 200), "Forger Tester", "CHANNEL")
+Overlord.GetLatestDominationVictoryForFront = function(_, frontId)
+    if frontId == "elwynn" then return PV, "Horde" end
+end
+sync:RetryPendingTruceReleases()
+local pendImmune, _, _, pendFaction = zones:GetFrontCapitalImmunity("elwynn")
+assert(pendImmune and pendFaction == "Alliance", "Pending FR was not proven once the journal arrived")
+Overlord.GetLatestDominationVictoryForFront = nil
+
+-- 17. An FR that never gets its proof stays inert and is forgotten after the protection.
+zones:ClearFrontVictories()
+local UE = clock - 100
+sync:OnReceiveFrontTruceEndReset("elwynn:" .. UE, "Unproven Tester", "CHANNEL")
+sync:RetryPendingTruceReleases()
+assert(not select(1, zones:GetFrontCapitalImmunity("elwynn")), "Unproven FR applied a protection")
+clock = UE + zones:GetCapitalImmunitySeconds() + 10
+sync:RetryPendingTruceReleases()
+Overlord.GetLatestDominationVictoryForFront = function(_, frontId)
+    if frontId == "elwynn" then return UE - 900, "Horde" end
+end
+sync:RetryPendingTruceReleases()
+assert(not select(1, zones:GetFrontCapitalImmunity("elwynn")), "Expired pending FR came back")
+Overlord.GetLatestDominationVictoryForFront = nil
 print("Forever capital release: conquest kept, capital released and protected, old clients and forged sieges OK")

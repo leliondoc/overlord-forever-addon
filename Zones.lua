@@ -1327,6 +1327,9 @@ function Overlord.Zones:TryExpireFrontTruces()
     -- Coupure en instance : ni liberation, ni message, ni FR (le ticker reprend apres).
     if Overlord.InstanceSuspended then return end
     RefreshExpiredCapitalImmunities()
+    if Overlord.Sync and Overlord.Sync.RetryPendingTruceReleases then
+        Overlord.Sync:RetryPendingTruceReleases()
+    end
     local victories = OverlordDB.frontVictories
     if not victories then return end
 

@@ -1118,6 +1118,8 @@ function Overlord.Sync:OnReceiveVictoryBonus(payload, sender, sourceChannel)
         if Overlord.UI and Overlord.UI.RefreshDomination then
             Overlord.UI:RefreshDomination()
         end
+        -- Une fin de treve recue avant ce VB peut maintenant etre prouvee.
+        if self.RetryPendingTruceReleases then self:RetryPendingTruceReleases() end
     end
     return accepted
 end
