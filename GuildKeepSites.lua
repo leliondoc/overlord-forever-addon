@@ -56,8 +56,11 @@ Overlord.GuildKeepSites = {
             "crossroads", "la croisée", "la croisee", "el cruce", "wegekreuz",
             "степ", "перекресток",
         },
-        -- La Croisee sur Les Tarides vanilla (49.2, 58.8 = Camp Taurajo / carte Retail).
-        center = { 51.5, 30.2 },
+        -- Bastion de la Savane : plaine degagee au nord-ouest de la Croisee, entre le pic
+        -- Brume-funeste et les Bassins oublies. Loin des donneurs de quetes (la Croisee, ou
+        -- le fortin se prenait par megarde, est a ~550 m) et a l'ecart des routes.
+        -- Les identifiants restent "crossroads" : la guilde qui le tient le garde.
+        center = { 47.5, 24.5 },
         halfSize = 1.35,
         holdTimeRequired = 600,
     },
@@ -69,8 +72,10 @@ Overlord.GuildKeepSites = {
         mapIDs = { [7] = true, [1412] = true },
         regionalMapIDs = { [12] = true, [1414] = true },
         mapNameNeedles = { "mulgore" },
-        -- Village de Sabot-de-Sang.
-        center = { 47.5, 60.2 },
+        -- Fort des Prairies : prairie au nord du lac, entre le village de Sabot-de-Sang et
+        -- les Rochers rouges. Aucun donneur de quete ni route a proximite (le village, ou
+        -- le fortin se prenait par megarde, est a ~700 m). Identifiants inchanges.
+        center = { 51.0, 38.5 },
         halfSize = 1.35,
         holdTimeRequired = 600,
     },
