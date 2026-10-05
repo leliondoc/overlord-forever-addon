@@ -915,6 +915,18 @@ function Overlord:GetDominationVictoryEventNear(frontId, faction, victoryTs)
     return nil
 end
 
+-- Derniere victoire projetee (dedupliquee) d'un front pour la campagne courante :
+-- source repliquee de la protection des capitales, meme hors front et au login.
+function Overlord:GetLatestDominationVictoryForFront(frontId)
+    local store = EnsureVictoryEventsDB()
+    local latest = store and type(store.latestByFront) == "table"
+        and store.latestByFront[SanitizeVictoryFrontId(frontId)]
+    if type(latest) ~= "table" then return nil end
+    local victoryTs = NormalizeFiniteInteger(latest.victoryTs)
+    if not victoryTs or victoryTs <= 0 then return nil end
+    return victoryTs, latest.faction
+end
+
 function Overlord:ApplyDominationVictoryBonusEvent(rawEv, opts)
     if not OverlordDB then return false, "no_db" end
     opts = opts or {}

@@ -585,7 +585,14 @@ local prereqClosePlan = Lease:PrepareRemoteStablePlan(
     zone.id, "A", "Alliance", wallBase - 50, wallBase - 50, "close")
 expect(prereqClosePlan and Lease:ValidateRemoteStablePlan(prereqClosePlan),
     "prerequisite-close plan was not stable through the dry-run")
+local leaseEnds = {}
+Overlord.Sync.NoteEnemyCaptureLeaseEnd = function(_, faction, outcome)
+    leaseEnds[#leaseEnds + 1] = tostring(faction) .. " " .. tostring(outcome)
+end
 Lease:CommitRemoteStablePlan(prereqClosePlan)
+Overlord.Sync.NoteEnemyCaptureLeaseEnd = nil
+expect(#leaseEnds == 1 and leaseEnds[1] == "Horde closedByMapSnapshot",
+    "a snapshot close was not counted for /ov network: " .. table.concat(leaseEnds, ","))
 expect(not zone._remoteCaptureLease and zone.status == "captured"
     and zone.owner == "Alliance" and #sent == sentBeforePrereqClose,
     "close plan did not restore the stable base locally and silently")
@@ -593,6 +600,13 @@ expect(Lease:ValidateProgress(
     zone.id, "Horde", "Bob", "wprereqclose", wallBase + 261,
     12, 0, 120, nil, "Bob") == nil,
     "closed prerequisite-invalid wave was not tombstoned")
+-- Notre carte a pu rater la prise precedente : la finale authentifiee de cette
+-- vague reste acceptee (ses ticks non), jusqu'a la vraie marque definitive.
+expect(not Lease:ShouldRejectFinal(zone, "Bob", "wprereqclose"),
+    "a snapshot-closed wave's final was refused")
+Lease:TombstoneFinalWave(zone.id, "Bob", "wprereqclose")
+expect(Lease:ShouldRejectFinal(zone, "Bob", "wprereqclose"),
+    "a finalized wave could be finalized again after a snapshot close")
 
 -- Si le owner stable exact est deja l'attaquant, l'orange est obsolete. Le
 -- rebase_close installe d'abord ce terminal certifie, puis ferme/tombstone la

@@ -570,6 +570,10 @@ end
 local function MaybeTakeOverStaleAllyCaptureAuthority(zone)
     if not zone or zone.holdAuthorityLocal then return false end
     if zone.status ~= "in_progress" or zone.owner ~= Overlord.PlayerFaction then return false end
+    if Overlord.Zones and Overlord.Zones.IsCapitalImmune
+        and select(1, Overlord.Zones:IsCapitalImmune(zone.id)) then
+        return false
+    end
     local official = zone.zsOfficialCapturerName
     if not official or official == "" then return false end
     if not Overlord.Sync or not Overlord.Sync.GetPlayerFullName then return false end

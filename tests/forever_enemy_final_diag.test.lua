@@ -11,6 +11,9 @@ s:NoteEnemyCaptureFinal("Horde", "C", "otherCapturer")
 s:NoteEnemyCaptureFinal("Horde", "ZS", "passed")
 s:NoteEnemyCaptureFinal("Alliance", "C", "passed") -- own faction: not counted
 s:NoteEnemyCaptureFinal(nil, "C", "passed")
+s:NoteEnemyCaptureLeaseEnd("Horde", "expiredWithoutFinal")
+s:NoteEnemyCaptureLeaseEnd("Alliance", "closedByMapSnapshot") -- own faction: not counted
 local line = s:GetEnemyCaptureFinalDiagnostics()
-assert(line == "Enemy capture finals (C / ZS captured): C otherCapturer 2, ZS passed 1.", line)
+assert(line == "Enemy capture finals (C / ZS captured / lease end): C otherCapturer 2, "
+    .. "ZS passed 1, lease expiredWithoutFinal 1.", line)
 print("Enemy capture final diagnostics: counted by outcome, own faction ignored")

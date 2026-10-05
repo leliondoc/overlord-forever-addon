@@ -1610,6 +1610,10 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
         elseif zone.owner then
             st = L.MAP_CAPITAL_LABEL
         end
+        -- Protection apres liberation : heure de fin statique (pas de rafraichissement 2 Hz).
+        local protectedLabel = Overlord.Zones.GetCapitalProtectionLabel
+            and Overlord.Zones:GetCapitalProtectionLabel(zone.id, renderFid)
+        if protectedLabel then st2 = protectedLabel end
     end
 
     local opacityScale = GetMapOverlayOpacityScale()

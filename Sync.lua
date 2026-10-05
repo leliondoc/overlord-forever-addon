@@ -182,7 +182,7 @@ local function IsStaleCampaignTimestamp(ts)
 end
 
 -- Pendant la treve post-victoire (15 min), ignorer les assauts et changements de proprietaire.
--- ZA/ZS anterieurs au reset post-treve : ne pas re-appliquer l'etat « tout Alliance » de la victoire.
+-- ZA/ZS anterieurs a la fin de treve (liberation) : ne pas re-appliquer l'etat « tout Alliance » de la victoire.
 local function ShouldRejectStaleTruceResetZone(zoneId, ts)
     if not OverlordDB or not zoneId or not ts or ts <= 0 then return false end
     if not Overlord.Fronts then return false end
@@ -268,6 +268,17 @@ local function ShouldRejectPostVictoryZoneOwner(zoneId, owner, status, ts, sourc
     if not inLocalGuard then return false end
 
     return true
+end
+
+-- Capitale protegee apres une liberation : ni siege, ni proprietaire non natif, ni C
+-- (un C deplacerait son horloge). Grace de 60 s en fin de protection pour les horloges.
+function Overlord.Sync:ShouldRejectImmuneCapitalChange(zoneId, owner, status, source)
+    if not zoneId or not Overlord.Zones or not Overlord.Zones.IsCapitalImmune then return false end
+    local immune, remaining = Overlord.Zones:IsCapitalImmune(zoneId)
+    if not immune or (tonumber(remaining) or 0) <= 60 then return false end
+    if source == "C" or status == "in_progress" then return true end
+    local native = Overlord.Zones:GetBaseZoneFixedOwner(zoneId)
+    return owner ~= nil and native ~= nil and owner ~= native
 end
 
 local srEvidencePageNonce = 0
@@ -4114,6 +4125,7 @@ function Overlord.Sync:OnReceiveCapture(payload, sender)
         return
     end
     if ShouldRejectPostVictoryZoneOwner(zoneId, newOwner, "captured", ts, "C") then return end
+    if self:ShouldRejectImmuneCapitalChange(zoneId, newOwner, "captured", "C") then return end
     -- Rejette un vieux "C" arrive apres une capture plus recente, meme si le proprietaire
     -- change. Sinon un paquet retarde peut reflipper la carte chez certains clients.
     if zone and not zone._captureFinalUnattested
@@ -4158,7 +4170,10 @@ function Overlord.Sync:OnReceiveCapture(payload, sender)
         and Overlord.CaptureLease.ShouldRejectFinal
         and Overlord.CaptureLease:ShouldRejectFinal(
             finalRequirementZone, triggerName, captureWaveId) then
-        self:NoteEnemyCaptureFinal(newOwner, "C", "expiredWave")
+        -- Copie d'une finale deja appliquee (reprises relais) : doublon, pas une vague refusee.
+        local alreadyApplied = finalRequirementZone and finalRequirementZone.owner == newOwner
+            and tonumber(finalRequirementZone.capturedTime) == ts
+        self:NoteEnemyCaptureFinal(newOwner, "C", alreadyApplied and "duplicate" or "expiredWave")
         return
     end
     if Overlord.CaptureLease
@@ -6312,6 +6327,7 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
     if (status == "captured" or status == "in_progress") and not owner then return end
     if ShouldRejectStaleTruceResetZone(zoneId, ts) then return end
     if ShouldRejectPostVictoryZoneOwner(zoneId, owner, status, ts, "ZS") then return end
+    if self:ShouldRejectImmuneCapitalChange(zoneId, owner, status, "ZS") then return end
     if status == "in_progress" and type(zsNetworkWitness) == "string" then
         local probeId = zsNetworkWitness:match("^Q([0-9a-f]+)$")
         if probeId and self.OnReceiveCaptureNetworkProbe then
@@ -6390,7 +6406,9 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
         if captureFinalClaimKey and Overlord.CaptureLease and Overlord.CaptureLease.ShouldRejectFinal
             and Overlord.CaptureLease:ShouldRejectFinal(
                 knownStateZone, zsCapturerName, zsWaveId) then
-            self:NoteEnemyCaptureFinal(owner, "ZS", "expiredWave")
+            local alreadyApplied = knownStateZone and knownStateZone.owner == owner
+                and tonumber(knownStateZone.capturedTime) == ts
+            self:NoteEnemyCaptureFinal(owner, "ZS", alreadyApplied and "duplicate" or "expiredWave")
             return
         end
         if captureFinalClaimKey and Overlord.CaptureLease
@@ -7600,6 +7618,12 @@ function Overlord.Sync:OnReceiveZoneAll(
             and not CanNeutralZaReplaceCanonicalCapture(zoneId, stateZoneForVote, ts) then
             staleSkipMask[entryIndex] = true
         end
+        -- Capitale protegee : ecarter l'entree, jamais tout le lot (les lots G couvrent
+        -- tous les fronts ; un ancien client ne doit pas bloquer la carte entiere).
+        if validEntry and owner
+            and self:ShouldRejectImmuneCapitalChange(zoneId, owner, "captured", "ZA") then
+            staleSkipMask[entryIndex] = true
+        end
         -- Basculement surprenant pendant un suivi en direct : garde locale jusqu'a
         -- une seconde source (voir IsSuspiciousZaFlip).
         if zaGuardActive and validEntry and owner and stateZoneForVote then
@@ -7913,7 +7937,12 @@ function Overlord.Sync:OnReceiveZoneAll(
         if zaEntryAccepted and not loginWinnerApplied then
             -- ZA est un snapshot : seul capturedTime prouve une capture recente.
             -- updatedAt peut etre frais pour un etat ancien et ne doit pas creer d'activite.
+            -- La liberation re-horodate toute la conquete a l'epoch : pas une capture.
+            local _, activityFront = Overlord.Fronts:GetZone(zoneId)
+            local releaseEpoch = activityFront and OverlordDB and OverlordDB.frontTruceResetEpoch
+                and tonumber(OverlordDB.frontTruceResetEpoch[activityFront.id]) or 0
             if not loginPairRepairMode and not runtimeGlobalRepairMode and ct > 0
+                and ct ~= releaseEpoch
                 and Overlord.FrontActivity and Overlord.FrontActivity.RecordByZoneRef then
                 Overlord.FrontActivity:RecordByZoneRef(zoneId, nil, ct)
             end
@@ -9073,6 +9102,24 @@ function Overlord.Sync:BroadcastCapture(zoneId, completedRequirement)
                 end
             end)
         end
+
+        -- L'autre faction ne recoit la fin que par les ponts Battle.net, alors que le
+        -- debut y est repete toutes les 15 s : toutes les copies ci-dessus partent en
+        -- 3 s et se perdent ensemble si un pont sature. Une reprise relais tardive
+        -- (chaque copie inonde tout le relais), envoi seul (aucune reponse demandee),
+        -- seulement si la zone porte encore cette capture. Les receveurs qui l'ont
+        -- deja l'ecartent sans bruit. Sautee si on a deja enchaine une autre capture :
+        -- sur un relais sature, ce terminal pourrait evincer notre ZS de debut de siege.
+        C_Timer.After(20, function()
+            if Overlord.InstanceSuspended or not Overlord.Sync or not Overlord.InActiveFront then return end
+            local z = Overlord.Zones and Overlord.Zones:GetZone(zoneId)
+            if not z or z.owner ~= faction or z.status == "in_progress" then return end
+            if math.floor(tonumber(z.capturedTime) or 0) ~= ts then return end
+            for _, other in ipairs(Overlord.ZoneDatabase or {}) do
+                if other.holdAuthorityLocal and other.status == "in_progress" then return end
+            end
+            self:BroadcastToRelay("C", payload)
+        end)
     end
 
     if Overlord.InActiveFront then
@@ -9099,6 +9146,15 @@ function Overlord.Sync:CheckTotalVictoryFromSync()
     local front = Overlord.Fronts and Overlord.Fronts:GetCurrentFront()
     local frontId = front and front.id
     if not frontId or priv.totalVictoryAnnounced[frontId] then return end
+    -- Conquete persistante : aucune victoire pendant la protection des capitales, et une
+    -- victoire deja liberee (ou purgee) ne se re-annonce jamais sur une carte restee au vainqueur.
+    -- (Protection lue seulement quand la carte montre une victoire : appel par paquet C/ZS.)
+    local function FrontCapitalsProtected()
+        return Overlord.Zones.GetFrontCapitalImmunity
+            and select(1, Overlord.Zones:GetFrontCapitalImmunity(frontId))
+    end
+    local releasedEpoch = OverlordDB and OverlordDB.frontTruceResetEpoch
+        and tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0
 
     -- Protection : ne pas ecraser une treve active (evite que la reprise de base par le perdant
     -- annule la treve de 15 min en cours). On ne met a jour que si pas de treve OU si c'est une
@@ -9120,6 +9176,8 @@ function Overlord.Sync:CheckTotalVictoryFromSync()
             return
         end
         local victoryTs = GetVictoryCaptureTimestamp(pf)
+        if releasedEpoch > 0 and victoryTs <= releasedEpoch + 5 then return end
+        if FrontCapitalsProtected() then return end
         if OverlordDB and (not currentTruce or currentWinner == pf) then
             Overlord.Zones:SetVictoryCooldown(frontId, pf, victoryTs)
             if Overlord.TryGrantVictoryDominationBonus then
@@ -9152,6 +9210,8 @@ function Overlord.Sync:CheckTotalVictoryFromSync()
             return
         end
         local victoryTs = GetVictoryCaptureTimestamp(ef)
+        if releasedEpoch > 0 and victoryTs <= releasedEpoch + 5 then return end
+        if FrontCapitalsProtected() then return end
         if OverlordDB and (not currentTruce or currentWinner == ef) then
             Overlord.Zones:SetVictoryCooldown(frontId, ef, victoryTs)
             if Overlord.TryGrantVictoryDominationBonus then
@@ -9388,8 +9448,14 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel, ret
         and tonumber(OverlordDB.frontTruceResetEpoch[proofFrontId]) or 0
     -- Une TV de l'ancienne victoire ne peut jamais repeindre le front apres le FR.
     if truceResetEpoch > 0 and ts < truceResetEpoch then return end
-    -- Deja livre pour l'ere courante : ignore chat + rejoue d'etat (anti-spam timestamps).
-    if deliveredTs > 0 and deliveredTs >= truceResetEpoch then
+    -- Deja livre (ou plus ancien) : ignore chat + rejoue d'etat (anti-spam timestamps).
+    -- Une nouvelle victoire sur le meme front arrive au plus tot apres treve + protection.
+    if deliveredTs > 0 and ts < deliveredTs + 900 then
+        return
+    end
+    -- Capitales protegees apres une liberation : aucune victoire possible sur ce front.
+    if proofFrontId and Overlord.Zones and Overlord.Zones.GetFrontCapitalImmunity
+        and select(1, Overlord.Zones:GetFrontCapitalImmunity(proofFrontId)) then
         return
     end
     local frontVictory = proofFrontId and OverlordDB and OverlordDB.frontVictories
@@ -10396,6 +10462,30 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
                         locallyDerivedReset = true
                         break
                     end
+                end
+            end
+        end
+    end
+    if not locallyDerivedReset and cooldown > 0 and resetEpoch <= time() + 5
+        and Overlord.Zones and Overlord.Zones.LocalStateShowsCapitalRelease then
+        -- Liberation deja recue par ZA avant ce FR (ou carte vue au login) : la capitale
+        -- du perdant porte l'epoch exact. Une trace locale independante doit dater la
+        -- meme victoire (victoire locale, purge login ou journal de domination).
+        local releasedVictoryTs = resetEpoch - cooldown
+        local prunedTs = OverlordDB and OverlordDB.frontTruceResetEpoch
+            and math.floor(tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0) or 0
+        local journalTs = Overlord.GetLatestDominationVictoryForFront
+            and Overlord:GetLatestDominationVictoryForFront(frontId) or 0
+        local corroborated = releasedVictoryTs > 0
+            and ((victoryTs > 0 and math.abs(victoryTs - releasedVictoryTs) <= 5)
+                or (prunedTs > 0 and math.abs(prunedTs - releasedVictoryTs) <= 5)
+                or (journalTs > 0 and math.abs(journalTs - releasedVictoryTs) <= 5))
+        if corroborated and not IsStaleCampaignTimestamp(releasedVictoryTs) then
+            for _, releasedFaction in ipairs({ "Alliance", "Horde" }) do
+                if Overlord.Zones:LocalStateShowsCapitalRelease(
+                    frontId, releasedFaction, resetEpoch) then
+                    locallyDerivedReset = true
+                    break
                 end
             end
         end

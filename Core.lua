@@ -3440,7 +3440,7 @@ end
 -- saved tables describe one world: front zones, front victories and truces,
 -- outposts and fortresses (states, tenants, capture counts).
 local RULESET_WORLD_KEYS = {
-    "zones", "frontVictories", "frontTruceResetEpoch",
+    "zones", "frontVictories", "frontTruceResetEpoch", "frontCapitalImmuneFrom",
     "outposts", "outpostTenants", "outpostCaptureCounts",
 }
 -- Legacy single-victory fields still written and read as a fallback.
@@ -3560,7 +3560,9 @@ function Overlord:RecoverParkedOutpostHistory(currentPool)
     -- it may hold the PvP fronts. Before 1.4.0 only the PvP world existed, so
     -- every other world's map, victories and truces restart from the initial state.
     local function resetMap(t)
-        for _, key in ipairs({ "zones", "frontVictories", "frontTruceResetEpoch" }) do t[key] = {} end
+        for _, key in ipairs({ "zones", "frontVictories", "frontTruceResetEpoch", "frontCapitalImmuneFrom" }) do
+            t[key] = {}
+        end
         for _, key in ipairs(RULESET_WORLD_SCALARS) do t[key] = nil end
     end
     if currentPool ~= "global" then resetMap(OverlordDB) end

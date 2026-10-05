@@ -385,6 +385,12 @@ local function BuildZoneLinePaintKey(z, frontOnTruce, loginPending, pf, ef)
     if frontOnTruce then
         return "truce|" .. z.id
     end
+    -- Capitale protegee : libelle statique, la cle change seulement a la liberation / expiration.
+    local protectedLabel = Overlord.Zones and Overlord.Zones.GetCapitalProtectionLabel
+        and Overlord.Zones:GetCapitalProtectionLabel(z.id, nil, true)
+    if protectedLabel then
+        return z.id .. "|prot|" .. tostring(z.owner) .. "|" .. protectedLabel
+    end
     local isEnemy = z.owner and z.owner == ef
     if z.status == "in_progress" then
         return z.id .. "|ip"
@@ -488,6 +494,14 @@ local function PaintZoneLineVisual(line, z, frontOnTruce, loginPending, pf, ef, 
         line.name:SetTextColor(C.gray[1], C.gray[2], C.gray[3])
         line.progress:SetText(L.LOCKED)
         line.progress:SetTextColor(C.gray[1], C.gray[2], C.gray[3], 0.5)
+    end
+    if not loginPending and not frontOnTruce and Overlord.Zones
+        and Overlord.Zones.GetCapitalProtectionLabel then
+        local protectedLabel = Overlord.Zones:GetCapitalProtectionLabel(z.id, nil, true)
+        if protectedLabel then
+            line.progress:SetText(protectedLabel)
+            line.progress:SetTextColor(C.gray[1], C.gray[2], C.gray[3], 0.85)
+        end
     end
 end
 

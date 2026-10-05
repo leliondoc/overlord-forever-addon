@@ -732,6 +732,12 @@ function Overlord.Sync:NoteEnemyCaptureFinal(faction, kind, outcome)
     stats[key] = (stats[key] or 0) + 1
 end
 
+-- Captures ennemies vues en cours puis terminees sans finale chez nous : expirees
+-- faute de nouvelles, ou fermees par une carte globale. Meme tableau, compteurs seuls.
+function Overlord.Sync:NoteEnemyCaptureLeaseEnd(faction, outcome)
+    self:NoteEnemyCaptureFinal(faction, "lease", outcome)
+end
+
 function Overlord.Sync:GetEnemyCaptureFinalDiagnostics()
     local stats = self._enemyFinalStats
     if not stats or next(stats) == nil then return "Enemy capture finals: none received yet." end
@@ -740,7 +746,7 @@ function Overlord.Sync:GetEnemyCaptureFinalDiagnostics()
     table.sort(keys)
     local parts = {}
     for _, key in ipairs(keys) do parts[#parts + 1] = key .. " " .. stats[key] end
-    return "Enemy capture finals (C / ZS captured): " .. table.concat(parts, ", ") .. "."
+    return "Enemy capture finals (C / ZS captured / lease end): " .. table.concat(parts, ", ") .. "."
 end
 
 -- Message chat de victoire totale, avec le front concerne quand il est connu.

@@ -141,4 +141,55 @@ assert(#relayed >= 2, "C was sent " .. #relayed .. " time(s) on the relay: the r
 for i = 2, #relayed do
     assert(relayed[i] - relayed[1] > 2.0, "Relay retry inside the 2 s coalescing window")
 end
+-- The other faction only gets the final through BNet bridges: one late relay
+-- copy (+20 s) while the zone still holds this capture.
+local function runTimersUntil(limit)
+    while true do
+        table.sort(timers, function(a, b) return a.at < b.at end)
+        local t = timers[1]
+        if not t or t.at > limit then break end
+        table.remove(timers, 1); clock = t.at
+        assert(pcall(t.fn))
+    end
+end
+local beforeLate = #relayed
+runTimersUntil(1050)
+local late = {}
+for i = beforeLate + 1, #relayed do late[#late + 1] = relayed[i] end
+assert(#late == 1 and late[1] >= 20,
+    "late C relay copy missing, early or repeated: " .. table.concat(late, ","))
+-- A recapture in between cancels the late copy of the old final.
+timers, relayed = {}, {}
+zone.owner, zone.status, zone.capturedTime, zone.updatedAt = "Alliance", "captured", time(), time()
+sync:BroadcastCapture(X, 120)
+runTimersUntil(clock + 10)
+zone.owner, zone.capturedTime = "Horde", time() + 20
+local beforeRetake = #relayed
+runTimersUntil(clock + 60)
+assert(#relayed == beforeRetake, "a late C copy was sent after the zone was retaken")
+-- A newer capture of the same zone by us also cancels the old copy.
+timers, relayed = {}, {}
+zone.owner, zone.status, zone.capturedTime, zone.updatedAt = "Alliance", "captured", time(), time()
+sync:BroadcastCapture(X, 120)
+runTimersUntil(clock + 10)
+zone.capturedTime = time() + 15
+beforeRetake = #relayed
+runTimersUntil(clock + 60)
+assert(#relayed == beforeRetake, "a late C copy was sent for an older capture of the zone")
+-- While we already hold another capture, the copy is skipped (a terminal could
+-- evict our siege-start ZS from a saturated relay queue).
+timers, relayed = {}, {}
+zone.owner, zone.status, zone.capturedTime, zone.updatedAt = "Alliance", "captured", time(), time()
+sync:BroadcastCapture(X, 120)
+runTimersUntil(clock + 10)
+local busy
+for _, other in ipairs(Overlord.ZoneDatabase or {}) do
+    if other ~= zone then busy = other; break end
+end
+assert(busy, "no second zone on the active front for the busy-capture case")
+busy.holdAuthorityLocal, busy.status = true, "in_progress"
+beforeRetake = #relayed
+runTimersUntil(clock + 60)
+assert(#relayed == beforeRetake, "a late C copy was sent while we held another capture")
+busy.holdAuthorityLocal, busy.status = nil, "locked"
 print("Forever zone partial merge: stale entries skipped per entry, guards kept, C relay retried beyond coalescing OK")

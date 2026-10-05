@@ -34,6 +34,13 @@ local tombstoneCount = 0
 -- reste acceptee (un capteur qui continue malgre une perte n'est jamais efface).
 local softTombstones = {}
 local softTombstoneCount = 0
+-- Vagues fermees par une carte globale (prerequis absents de notre vue, ou zone deja
+-- au capteur) : la marque dure bloque toujours leurs ticks, mais leur finale reste
+-- acceptee. Notre carte peut avoir rate la prise precedente ; une finale authentifiee
+-- corrige alors la zone au lieu d'etre refusee 10 min. Valeur = horodatage de la
+-- marque dure qu'elle accompagne ; toute nouvelle marque dure l'efface.
+local snapshotClosedTombstones = {}
+local snapshotClosedCount = 0
 local lastTombstonePurgeAt = 0
 local activeLeaseZones = {}
 local activeLeaseZoneCount = 0
@@ -172,13 +179,32 @@ local function PutTombstone(zoneId, originKey, waveId)
     local key = LeaseKey(zoneId, originKey, waveId)
     if tombstones[key] == nil then tombstoneCount = tombstoneCount + 1 end
     tombstones[key] = now
+    if snapshotClosedTombstones[key] ~= nil then
+        snapshotClosedTombstones[key] = nil
+        snapshotClosedCount = math.max(0, snapshotClosedCount - 1)
+    end
     if tombstoneCount >= MAX_ROWS
         or now - lastTombstonePurgeAt >= TOMBSTONE_PURGE_INTERVAL then
         tombstoneCount = PurgeBounded(tombstones, now, TOMBSTONE_TTL)
         if softTombstoneCount > 0 then
             softTombstoneCount = PurgeBounded(softTombstones, now, TOMBSTONE_TTL)
         end
+        if snapshotClosedCount > 0 then
+            snapshotClosedCount = PurgeBounded(snapshotClosedTombstones, now, TOMBSTONE_TTL)
+        end
         lastTombstonePurgeAt = now
+    end
+end
+
+-- Marque dure posee par une carte globale : bloque les ticks, pas la finale.
+local function PutSnapshotClosedTombstone(zoneId, originKey, waveId)
+    PutTombstone(zoneId, originKey, waveId)
+    if not zoneId or not originKey or not waveId then return end
+    local key = LeaseKey(zoneId, originKey, waveId)
+    snapshotClosedCount = snapshotClosedCount + 1
+    snapshotClosedTombstones[key] = tombstones[key]
+    if snapshotClosedCount >= MAX_ROWS then
+        snapshotClosedCount = PurgeBounded(snapshotClosedTombstones, GetTime(), TOMBSTONE_TTL)
     end
 end
 
@@ -222,11 +248,16 @@ local function HardenSoftTombstonesForZone(zoneId)
             softTombstoneCount = math.max(0, softTombstoneCount - 1)
             if tombstones[key] == nil then tombstoneCount = tombstoneCount + 1 end
             tombstones[key] = now
+            if snapshotClosedTombstones[key] ~= nil then
+                snapshotClosedTombstones[key] = nil
+                snapshotClosedCount = math.max(0, snapshotClosedCount - 1)
+            end
         end
     end
 end
 
--- Marque definitive (finale, ZR, anti-spoof...) seulement.
+-- Marque definitive (finale, ZR, anti-spoof...) seulement. Une fermeture par carte
+-- globale n'est pas definitive pour la finale.
 local function IsHardTombstoned(zoneId, originKey, waveId)
     local key = LeaseKey(zoneId, originKey, waveId)
     local seen = tombstones[key]
@@ -236,6 +267,7 @@ local function IsHardTombstoned(zoneId, originKey, waveId)
         tombstoneCount = math.max(0, tombstoneCount - 1)
         return false
     end
+    if snapshotClosedTombstones[key] == seen then return false end
     return true
 end
 
@@ -692,7 +724,10 @@ end
 function Lease:CommitRemoteStablePlan(plan)
     local zone, remote = plan.zone, plan.remote
     if plan.close then
-        PutTombstone(zone.id, remote.originKey, remote.waveId)
+        PutSnapshotClosedTombstone(zone.id, remote.originKey, remote.waveId)
+        if Overlord.Sync and Overlord.Sync.NoteEnemyCaptureLeaseEnd then
+            Overlord.Sync:NoteEnemyCaptureLeaseEnd(remote.owner, "closedByMapSnapshot")
+        end
         RestoreSnapshot(zone, plan.base)
         zone._remoteCaptureLease = nil
         ClearTransient(zone)
@@ -1336,6 +1371,9 @@ function Lease:ExpireRemote(zone, reason)
         -- Arret faute de nouvelles : le capteur peut continuer, ses ticks plus
         -- recents et sa finale restent acceptes.
         PutSoftTombstone(zone.id, remote.originKey, remote.waveId, remote.lastRemoteTs)
+        if Overlord.Sync and Overlord.Sync.NoteEnemyCaptureLeaseEnd then
+            Overlord.Sync:NoteEnemyCaptureLeaseEnd(remote.owner, "expiredWithoutFinal")
+        end
     else
         PutTombstone(zone.id, remote.originKey, remote.waveId)
     end
