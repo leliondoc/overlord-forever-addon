@@ -18,8 +18,50 @@ local function Worst(a, b)
 end
 NH.Worst = Worst
 
--- Lignes de resume : { id, level, title, text }, et le pire niveau. Memes seuils que
--- /ov network depuis 1.2 (un refus isole ou un debut de session n'est pas rouge).
+-- Refus Blizzard et pertes du relais jugés sur les 10 dernières minutes, pas depuis
+-- le login : une rafale (entrée dans un groupe, victoire) ne laisse plus la pastille
+-- jaune toute la session. Un relevé des compteurs au plus par minute, pris quand un
+-- message part (Sync:SendAddonChecked) : aucun minuteur, rien en instance.
+local SAMPLE_SEC, WINDOW_SEC, WINDOW_LABEL = 60, 600, " · last 10 min"
+local SEND_TYPES = { "CHANNEL", "RAID", "PARTY", "WHISPER" }
+local samples = {}
+local lastSampleAt
+
+local function CurrentTotals()
+    local sync, net = Overlord.Sync, Overlord.BetaNetwork
+    local totals = {}
+    local sendStats = sync and sync._addonSendStats
+    for _, chatType in ipairs(SEND_TYPES) do
+        local row = sendStats and sendStats[chatType]
+        totals[chatType] = row and { ok = row.ok, refused = row.refused } or { ok = 0, refused = 0 }
+    end
+    local relay = net and net.stats
+    totals.sent = relay and relay.sent or 0
+    totals.dropped = relay and relay.dropped or 0
+    totals.received = relay and relay.received or 0
+    return totals
+end
+
+function NH:NoteSend(now)
+    if lastSampleAt and now - lastSampleAt < SAMPLE_SEC then return end
+    lastSampleAt = now
+    samples[#samples + 1] = { at = now, totals = CurrentTotals() }
+    -- Garder un seul relevé antérieur au début de la fenêtre : c'est la base.
+    while #samples > 1 and samples[2].at <= now - WINDOW_SEC do table.remove(samples, 1) end
+end
+
+-- Base de la fenêtre : le relevé le plus ancien encore utile (nil = tout depuis le login).
+local function WindowBase()
+    return samples[1] and samples[1].totals or nil, samples[1] and samples[1].at or nil
+end
+
+function NH:_ResetWindow()
+    samples, lastSampleAt = {}, nil
+end
+
+-- Lignes de resume : { id, level, title, text }, et le pire niveau, partagees avec
+-- /ov network. Refus Blizzard et pertes du relais : 10 dernieres minutes ; un refus
+-- isole ou 1 % au plus reste vert.
 function NH:Compute()
     local sync, net = Overlord.Sync, Overlord.BetaNetwork
     local rows, overall = {}, "ok"
@@ -27,30 +69,43 @@ function NH:Compute()
         rows[#rows + 1] = { id = id, level = level, title = title, text = text }
         overall = Worst(overall, level)
     end
+    local base, baseAt = WindowBase()
+    local label = base and WINDOW_LABEL or ""
     local sendStats = sync and sync._addonSendStats
     if sendStats then
         local refused, attempts, parts = 0, 0, {}
-        for _, chatType in ipairs({ "CHANNEL", "RAID", "PARTY", "WHISPER" }) do
+        for _, chatType in ipairs(SEND_TYPES) do
             local row = sendStats[chatType]
             if row then
-                refused, attempts = refused + row.refused, attempts + row.ok + row.refused
+                local b = base and base[chatType]
+                local rowRefused = math.max(0, row.refused - (b and b.refused or 0))
+                local rowAttempts = math.max(rowRefused, row.ok + row.refused - (b and (b.ok + b.refused) or 0))
+                refused, attempts = refused + rowRefused, attempts + rowAttempts
                 -- Blizzard's last refusal code, to tell a throttle from a channel not joined yet.
-                local code = row.refused > 0 and row.lastCode ~= nil
+                local code = rowRefused > 0 and row.lastCode ~= nil
+                    and (not baseAt or (tonumber(row.lastCodeAt) or 0) >= baseAt)
                     and (" code " .. tostring(row.lastCode)) or ""
-                parts[#parts + 1] = string.format("%s %d/%d%s", chatType:lower(), row.refused,
-                    row.ok + row.refused, code)
+                parts[#parts + 1] = string.format("%s %d/%d%s", chatType:lower(), rowRefused,
+                    rowAttempts, code)
             end
         end
+        -- Un refus isolé ou 1 % au plus : normal (Blizzard ne laisse qu'environ un
+        -- message par seconde au groupe, au raid et au canal réunis).
         local ratio = attempts > 0 and refused / attempts or 0
-        add("throttle", refused == 0 and "ok" or ((ratio < 0.05 or refused < 3) and "warn" or "bad"),
-            "Blizzard throttle", string.format("%d refused (%s)", refused, table.concat(parts, ", ")))
+        local level = (refused <= 1 or ratio <= 0.01) and "ok"
+            or ((ratio < 0.05 or refused < 3) and "warn" or "bad")
+        add("throttle", level, "Blizzard throttle",
+            string.format("%d refused (%s)%s", refused, table.concat(parts, ", "), label))
     end
     local relayStats = net and net.stats
     if relayStats then
-        local sent, dropped = relayStats.sent or 0, relayStats.dropped or 0
+        local sent = math.max(0, (relayStats.sent or 0) - (base and base.sent or 0))
+        local dropped = math.max(0, (relayStats.dropped or 0) - (base and base.dropped or 0))
+        local received = math.max(0, (relayStats.received or 0) - (base and base.received or 0))
         local pct = sent > 0 and dropped * 100 / sent or 0
-        add("relay", pct < 1 and "ok" or ((pct < 5 or sent < 500) and "warn" or "bad"), "Relay losses",
-            string.format("%d lost of %d sent (%.1f%%), %d received", dropped, sent, pct, relayStats.received or 0))
+        add("relay", (dropped <= 1 or pct < 1) and "ok" or ((pct < 5 or sent < 500) and "warn" or "bad"),
+            "Relay losses", string.format("%d lost of %d sent (%.1f%%), %d received%s",
+                dropped, sent, pct, received, label))
     end
     if sync and sync.GetPagedLeaderboardSummary then
         local lb = sync:GetPagedLeaderboardSummary()

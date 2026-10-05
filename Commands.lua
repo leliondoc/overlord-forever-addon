@@ -262,7 +262,7 @@ local function StartNetworkProbe()
         end
         if relayStats then
             R.Detail(string.format(
-                "Relay: %d sent, %d received, %d dropped, %d refused then retried, %d channel copies skipped.",
+                "Relay since login: %d sent, %d received, %d dropped, %d refused then retried, %d channel copies skipped.",
                 relayStats.sent or 0, relayStats.received or 0, relayStats.dropped or 0, relayStats.refused or 0,
                 relayStats.channelSkipped or 0))
         end

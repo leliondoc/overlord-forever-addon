@@ -1806,8 +1806,8 @@ function Overlord.Sync:Send(msgType, data, groupOnly)
     return false
 end
 
--- Forever : le relais beta porte deja sur le canal et le groupe chaque paquet qu'il
--- diffuse. Les copies directes heritees de Retail doublaient K et, pour SR,
+-- Forever : le relais beta porte deja sur le canal et (hors fond, voir GroupCarries)
+-- sur le groupe chaque paquet qu'il diffuse. Les copies directes heritees de Retail doublaient K et, pour SR,
 -- contournaient la borne de ~3 repondants (une SR directe fait repondre ~95 % du
 -- canal). Limite aux types dont le traitement ne depend pas du transport.
 -- (EK ne passe plus par le relais : ses copies directes groupe/canal sont les seules.)
@@ -1833,11 +1833,13 @@ function Overlord.Sync:SendAddonChecked(msg, chatType, target)
         row.ok = row.ok + 1
     else
         row.refused = row.refused + 1
-        row.lastCode = result
+        row.lastCode, row.lastCodeAt = result, GetTime()
     end
     if chatType == "CHANNEL" then
         self:NoteChannelSendKind(self._channelSendKind or msg:match("^([^:]+)") or "?", ok, #msg)
     end
+    local health = Overlord.NetworkHealth
+    if health and health.NoteSend then health:NoteSend(GetTime()) end
     return ok
 end
 
@@ -1963,6 +1965,21 @@ function Overlord.Sync:ChannelCarries(kind, payload, isOrigin)
         end)
     end
     return false
+end
+
+-- Copies automatiques du relais vers le groupe ou le raid. Blizzard ne laisse qu'environ
+-- un message addon par seconde et par prefixe au groupe, au raid et au canal reunis
+-- (chuchotements exclus) : le groupe suit donc la regle du canal. Le fond (pages de
+-- carte, historiques, classement, journal de domination, avant-postes hors siege)
+-- passe deja par le relais ; les envois directs au groupe (General, captures, sieges,
+-- reponses de synchro) ne passent pas par ici.
+function Overlord.Sync:GroupCarries(kind, payload)
+    if self.CHANNEL_OFF_KINDS[kind] or kind == "VB" then return false end
+    if kind == "OP" then
+        local status = type(payload) == "string" and payload:match("^v%d+:[^:]*:([^:]*)") or nil
+        return status == "in_progress"
+    end
+    return true
 end
 
 -- Envoi supplementaire au canal (pour visibilite cross-faction : ennemis voient captures/zones en cours)

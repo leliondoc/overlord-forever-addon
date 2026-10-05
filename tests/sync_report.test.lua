@@ -77,4 +77,33 @@ local hr = assert(find(lines, "Capture history catch-up"), "History row missing"
 assert(hr:find("ReadyCheck-Waiting", 1, true) and hr:find("waiting on one peer for 655s", 1, true),
     "Stalled history catch-up not flagged: " .. hr)
 assert(lines[1]:find(YELLOW .. "worth watching", 1, true), "Header must be yellow: " .. lines[1])
+-- The indicator judges the last 10 minutes, not the session: a burst of refusals
+-- (joining a group) turns green again once it leaves the window, and a lone refusal
+-- or 1 % at most is normal.
+do
+    local NH = Overlord.NetworkHealth
+    NH:_ResetWindow()
+    sync.GetHistoryCatchupSummary = nil
+    net.stats.sent, net.stats.dropped, net.stats.received = 1000, 30, 1000
+    sync._addonSendStats = { PARTY = { ok = 175, refused = 17 }, WHISPER = { ok = 900, refused = 0 } }
+    NH:NoteSend(1000)
+    local level = NH:IndicatorLevel()
+    assert(level == "ok", "The window base must hide refusals older than the window, got " .. level)
+    sync._addonSendStats.PARTY = { ok = 175 + 100, refused = 17 + 1 }
+    net.stats.sent = 2000
+    assert(NH:IndicatorLevel() == "ok", "A lone refusal turned the indicator yellow")
+    sync._addonSendStats.PARTY = { ok = 175 + 100, refused = 17 + 6 }
+    net.stats.dropped = 30 + 40
+    local _, rows = NH:IndicatorLevel()
+    local throttle
+    for _, row in ipairs(rows) do if row.id == "throttle" then throttle = row end end
+    assert(throttle.level ~= "ok" and throttle.text:find("6 refused (party 6/106", 1, true)
+        and throttle.text:find("last 10 min", 1, true), "Recent refusals not counted: " .. throttle.text)
+    -- Ten minutes later the base moves forward and the burst is forgotten.
+    NH:NoteSend(1000 + 300)
+    assert(NH:IndicatorLevel() ~= "ok", "Refusals inside the window were forgotten too early")
+    NH:NoteSend(1000 + 900)
+    assert(NH:IndicatorLevel() == "ok", "A burst older than ten minutes kept the indicator yellow")
+    NH:_ResetWindow()
+end
 print("Sync report: colored summary, worst-level header, red non-zero counters, stalled catch-up flagged OK")

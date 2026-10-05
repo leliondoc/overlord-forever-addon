@@ -175,6 +175,14 @@ C_ChatInfo = { SendAddonMessage = function() return true end }
 assert(s:SendAddonChecked("K:x", "RAID") == true)
 local channelStats = s._addonSendStats.CHANNEL
 assert(channelStats.refused >= 1 and channelStats.lastCode == 8, "Refusal was not counted")
+-- Every addon send feeds the indicator's 10-minute window.
+do
+    local originalHealth, noted = Overlord.NetworkHealth, nil
+    Overlord.NetworkHealth = { NoteSend = function(_, at) noted = at end }
+    assert(s:SendAddonChecked("K:x", "RAID") == true)
+    Overlord.NetworkHealth = originalHealth
+    assert(noted ~= nil, "An addon send did not feed the network indicator window")
+end
 -- Realm channel = only what Blizzard's ~1 msg/s makes useful: no keep/outpost
 -- bookkeeping, no leaderboard lines, no ZA photos; sieges in progress and our own
 -- kills (one absolute total per 30 s, the last one always flushed) still go.
@@ -190,6 +198,16 @@ do
     assert(not s:ChannelCarries("OP", "v1:site:neutral:1", true) and s:ChannelCarries("OP", "v1:site:in_progress:1", true))
     assert(s:ChannelCarries("C", "x", false) and s:ChannelCarries("ZS", "x", false) and s:ChannelCarries("OC", "x", false))
     assert(s:ChannelCarries("EK", "x", true) and not s:ChannelCarries("EK", "x", false))
+    -- Relay copies to the group: same Blizzard quota as the channel, no background pages,
+    -- but captures, sieges, General and alerts keep their copy (pure check, no kill pacing).
+    for _, kind in ipairs({ "ZA", "VB", "LO", "LOC", "LK", "LC", "LR", "GK" }) do
+        assert(not s:GroupCarries(kind, "x"), "Background " .. kind .. " still copied to the group")
+    end
+    assert(not s:GroupCarries("OP", "v1:site:neutral:1") and s:GroupCarries("OP", "v1:site:in_progress:1"))
+    for _, kind in ipairs({ "C", "ZS", "ZR", "OC", "TV", "FR", "GE", "GP", "GD", "GW", "K" }) do
+        assert(s:GroupCarries(kind, "x"), kind .. " lost its group copy")
+    end
+    assert(s._channelKillAt == nil, "The group rule touched the channel kill pacing")
     assert(not s:ChannelCarries("K", "k1", false), "A relayed kill went back on the channel")
     assert(s:ChannelCarries("K", "k1", true), "First own kill total was held back")
     clock = 5010

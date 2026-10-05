@@ -982,7 +982,7 @@ function dedup.abandon(tasks, from)
 end
 local function tasksFor(p, wire)
     local tasks, fragments = {}, {}
-    local ckey, pathFriends, trimmed, coverId, coverCarrier
+    local ckey, pathFriends, trimmed, coverId, coverCarrier, groupSuppressed
     local pageVersion = p.payload:sub(1, 2)
     local paged = (p.kind == "HR" or p.kind == "HB" or p.kind == "HA")
         and (pageVersion == "5:" or pageVersion == "6:")
@@ -1058,8 +1058,14 @@ local function tasksFor(p, wire)
         -- Groupe a deux d'un changement de layer : le partenaire a deja le canal.
         local hopGroup = not p.skipGroup and IsInGroup() and Overlord.LayerJumper
             and Overlord.LayerJumper.IsHopGroup and Overlord.LayerJumper:IsHopGroup()
+        -- Meme reserve Blizzard que le canal : pas de copie de fond au groupe pour une
+        -- diffusion. Un paquet adresse (reponse de rattrapage a un coequipier joint par
+        -- le groupe) garde sa copie : c'est parfois sa seule livraison.
+        local groupCopy = not p.skipGroup and not hopGroup
+            and (p.target ~= "*" or not sync.GroupCarries or sync:GroupCarries(p.kind, p.payload))
+        groupSuppressed = not p.skipGroup and not hopGroup and not groupCopy
         for _, fragment in ipairs(fragments) do
-            if not p.skipGroup and not hopGroup then
+            if groupCopy then
                 if trim and groupAgain then trimmed = trimmed + 1
                 elseif not (trim and not IsInGroup()) then coverCarrier = "group"; add("GROUP", fragment, "BF") end
             end
@@ -1159,6 +1165,8 @@ local function tasksFor(p, wire)
         if #tasks == 0 then return tasks, "redundant" end
         net.stats.contentDedupTrimmed = (net.stats.contentDedupTrimmed or 0) + trimmed
     end
+    -- Only a background group copy was left out on purpose: not a loss.
+    if #tasks == 0 and groupSuppressed then return tasks, "suppressed" end
     return tasks, #tasks == 0 and (routeFailure or "no_transport") or nil
 end
 local function emit(task)
@@ -1227,6 +1235,10 @@ end
 -- A relayed copy whose fan-out is entirely covered is not a failure: it is
 -- handled (like a forwarded one) and the coverage of its path is kept.
 local function noTask(p, tasks, reason)
+    if reason == "suppressed" then
+        net.stats.groupCopySuppressed = (net.stats.groupCopySuppressed or 0) + 1
+        return true
+    end
     if reason ~= "redundant" then return rejectNoTask(p, reason) end
     dedup.commit(tasks)
     net.stats.contentDedupSkipped = (net.stats.contentDedupSkipped or 0) + 1

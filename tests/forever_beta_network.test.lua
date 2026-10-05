@@ -540,6 +540,46 @@ do
     assert(#modern.received == 0 and modern.BetaNetwork.stats.dropped == beforeDrops,
         "Retired messages consumed admission capacity")
 end
+-- Group and raid share Blizzard's ~1 msg/s per-prefix quota with the channel: the
+-- relay copies to the group only what Sync:GroupCarries keeps (no background pages).
+do
+    local grouped = client("Grouped Tester", "grouped")
+    local groupKinds = {}
+    function grouped.Sync:SendToGroup(kind, fragment)
+        -- Fragment = "id:i:n:" .. wire ; wire = pool|id|ts|target|origin|KIND|payload.
+        groupKinds[#groupKinds + 1] = fragment:match("^[^|]*|[^|]*|[^|]*|[^|]*|[^|]*|([%u%d]+)|") or kind
+        return true
+    end
+    function grouped.Sync:GroupCarries(kind) return kind ~= "ZA" end
+    -- As in Sync.lua: map pages never go on the channel either.
+    function grouped.Sync:ChannelCarries(kind) return kind ~= "ZA" end
+    local wasInGroup = IsInGroup
+    IsInGroup = function() return true end
+    assert(grouped.BetaNetwork:Send("ZA", "map-page"))
+    assert(grouped.BetaNetwork:Send("C", "capture-final"))
+    drain()
+    IsInGroup = wasInGroup
+    local sawZA, sawC = false, false
+    for _, k in ipairs(groupKinds) do
+        if k == "ZA" then sawZA = true elseif k == "C" then sawC = true end
+    end
+    assert(sawC, "A capture final lost its group copy")
+    assert(not sawZA, "A background map page was still copied to the group")
+    -- Leaving out a background group copy is not a relay loss.
+    assert(grouped.BetaNetwork.stats.dropped == 0, "A suppressed group copy was counted as lost")
+    -- An addressed reply to a mate known through the group keeps its group copy: it
+    -- may be the only way to reach a cross-realm or channel-less team mate.
+    IsInGroup = function() return true end
+    local hello = "global|mate-hello|" .. time() .. "|*|Mate Tester|NH|1.1.1"
+    assert(grouped.BetaNetwork:Receive(hello, "Mate Tester", "PARTY"))
+    groupKinds = {}
+    assert(grouped.BetaNetwork:Send("ZA", "map-page-for-mate", "Mate Tester"), "Addressed map page refused")
+    drain()
+    IsInGroup = wasInGroup
+    local delivered = false
+    for _, k in ipairs(groupKinds) do if k == "ZA" then delivered = true end end
+    assert(delivered, "An addressed map page to a group-only mate lost its only delivery path")
+end
 a.BetaNetworkEnabled = false
 assert(not a.BetaNetwork:Send("K", "disabled"), "Beta transport remained active after community re-enable")
 print("Beta network: community-parallel relay, fragmentation, global routing, reply path, dedup, identity, expiry and queue bounds OK")
