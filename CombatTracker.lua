@@ -1175,11 +1175,10 @@ function Overlord.Combat:OnPlayerDead()
                     end
                     local largeSyncEvent = Overlord.Sync.IsLargeEvent
                         and Overlord.Sync:IsLargeEvent()
-                    -- Relais d'abord : ses copies canal/groupe rendent les copies
-                    -- directes ci-dessous inutiles (elles sont alors sautees).
-                    if Overlord.Sync.BroadcastToRelay and not largeSyncEvent then
-                        Overlord.Sync:BroadcastToRelay("EK", payload)
-                    end
+                    -- Avis de mort : groupe et canal seulement. EK ne compte plus pour aucun
+                    -- score, il ne nourrit que l'activite de front (deja alimentee par K, C,
+                    -- ZS, ZA et les reponses SR) ; sa copie relais inondait tout le relais a
+                    -- chaque mort en JcJ (la plus grosse source de trafic a grande echelle).
                     if largeSyncEvent then
                         Overlord.Sync:Send("EK", payload)
                     elseif Overlord.Sync.SendToGroup then

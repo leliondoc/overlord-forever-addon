@@ -157,7 +157,7 @@ assert(s:BroadcastToRelay("DX", "first-front", 12, 0.3, true, extras))
 assert(loadfile("SyncHistoryCatchup.lua"))()
 assert(s.NoteHistoryCatchupDelivery == nil and s.OnHistoryCatchupRequest == nil,
     "The v4 ladder exchange is still wired")
--- A legacy direct K/EK/SR copy is skipped once the relay queued the same packet
+-- A legacy direct K/SR copy is skipped once the relay queued the same packet
 -- (its channel/group copies carry it); other kinds keep their direct copy.
 assert(net:Send("K", "dedup-kill"), "Relay refused the kill")
 assert(s:RelayAlreadyCarries("K", "dedup-kill"), "Relayed kill was not recognized")

@@ -1804,10 +1804,11 @@ function Overlord.Sync:Send(msgType, data, groupOnly)
 end
 
 -- Forever : le relais beta porte deja sur le canal et le groupe chaque paquet qu'il
--- diffuse. Les copies directes heritees de Retail doublaient K/EK et, pour SR,
+-- diffuse. Les copies directes heritees de Retail doublaient K et, pour SR,
 -- contournaient la borne de ~3 repondants (une SR directe fait repondre ~95 % du
 -- canal). Limite aux types dont le traitement ne depend pas du transport.
-Overlord.Sync.RELAY_DEDUP_KINDS = { K = true, EK = true, SR = true }
+-- (EK ne passe plus par le relais : ses copies directes groupe/canal sont les seules.)
+Overlord.Sync.RELAY_DEDUP_KINDS = { K = true, SR = true }
 function Overlord.Sync:RelayAlreadyCarries(msgType, data)
     if not self.RELAY_DEDUP_KINDS[msgType] then return false end
     local net = Overlord.BetaNetwork
@@ -9133,9 +9134,14 @@ function Overlord.Sync:BroadcastCapture(zoneId, completedRequirement)
             -- coupe d'elle-meme quand le reseau est charge (la file locale reflete la charge
             -- globale, chaque client voit les memes inondations).
             if not z.isCapital then
+                -- File relais "chaude" = urgent + bulk : les files de rattrapage et d'etat
+                -- (pages SR, VB) gonflent le total sans que le relais sature.
                 local net = Overlord.BetaNetwork
                 local queue = net and net.GetQueueSummary and net:GetQueueSummary()
-                if not queue or (tonumber(queue.total) or 0) > 16 then return end
+                if not queue then return end
+                local hot = (tonumber(queue.total) or 0) - (tonumber(queue.catchup) or 0)
+                    - (tonumber(queue.state) or 0)
+                if hot > 16 then return end
             end
             self:BroadcastToRelay("C", payload)
         end)

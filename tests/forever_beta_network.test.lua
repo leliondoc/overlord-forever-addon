@@ -117,9 +117,20 @@ b.friends, c.friends = { c, us }, { b }
 local kinds = {}
 for kind in ("SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR VB MN MS OP OC SH HR HB HC HA CR CA GR GY GI FC GE GP GX GD GM"):gmatch("%S+") do
     -- K is never re-forwarded: a relayed kill is never credited (anti-forgery).
+    -- EK (death notice, front activity only) is never re-forwarded either: it flooded
+    -- the whole relay on every PvP death.
     -- SR/GR/CR broadcasts are answered by direct neighbours only (1.2.4): not relayed.
     -- GI is never relayed: receivers apply only the owner's direct copy.
-    if kind ~= "SR" and kind ~= "K" and kind ~= "GR" and kind ~= "CR" and kind ~= "GI" then kinds[#kinds + 1] = kind end
+    if kind ~= "SR" and kind ~= "K" and kind ~= "EK" and kind ~= "GR" and kind ~= "CR"
+        and kind ~= "GI" then kinds[#kinds + 1] = kind end
+end
+-- A death notice reaches the direct neighbour (gateway) but goes no further.
+do
+    local beforeB, beforeD = #b.received, #d.received
+    assert(a.BetaNetwork:Send("EK", "death-notice"))
+    drain()
+    assert(#d.received == beforeD, "A death notice (EK) was re-forwarded through the gateway")
+    assert(#b.received == beforeB + 1, "The gateway itself lost the death notice")
 end
 for _, kind in ipairs(kinds) do
     assert(a.BetaNetwork:Send(kind, string.rep("x", 450)))

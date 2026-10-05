@@ -1626,7 +1626,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     -- is accepted, so another verified path can deliver the same packet.
     -- Local delivery, broadcasts, and the deliberately unrelayed K retain the
     -- original immediate replay seal.
-    local pendingForward = not addressed and p.kind ~= "K"
+    local pendingForward = not addressed and p.kind ~= "K" and p.kind ~= "EK"
     if not pendingForward then remember(seen, seenOrder, key, GetTime(), 2048) end
     local previousRoute = self.peers[origin:lower()]
     -- A direct route outlives relayed copies for two presence intervals (4 min):
@@ -1688,7 +1688,8 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         end
     end
     -- A relayed kill is never credited (only its author's direct copy counts, anti-
-    -- forgery since 1.0.19): forwarding it only burned relay and channel budget.
+    -- forgery since 1.0.19): forwarding it only burned relay and channel budget. The
+    -- death notice EK (front activity only) is not forwarded either.
     local forwardPresence = true
     if p.kind == "NH" or p.kind == "SH" then
         local window = p.kind == "NH" and NH_FORWARD_SEC or SH_FORWARD_SEC
@@ -1720,7 +1721,9 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         -- Never relayed: seal it so duplicate copies are not decoded again.
         remember(seen, seenOrder, key, GetTime(), 2048)
     end
-    if relayable and p.kind ~= "K" and forwardPresence and #p.path < MAX_PATH
+    -- K et EK ne sont jamais retransmis : un avis de mort d'un ancien client ne doit
+    -- plus inonder le relais a travers nous (il reste livre localement).
+    if relayable and p.kind ~= "K" and p.kind ~= "EK" and forwardPresence and #p.path < MAX_PATH
         and (p.target == "*" or not addressed) then
         p.path[#p.path + 1] = me
         p.heardOn = transport

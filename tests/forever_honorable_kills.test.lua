@@ -175,11 +175,17 @@ GetPVPSessionStats = sessionReader
 Overlord.Zones.GetEnemyFaction = function() return "Alliance" end
 Overlord.Combat.IdentifyKiller = function() return "Nearby Priest", "Player-2-PRIEST" end
 Overlord.Combat.GetEnemyClassFromNameplate = function() return "PRIEST" end
-Overlord.Sync.SendToGroup = function() end
-Overlord.Sync.SendToChannel = function() end
-Overlord.Sync.BroadcastToRelay = function() end
+local deathSends = {}
+Overlord.Sync.SendToGroup = function(_, kind) deathSends[#deathSends + 1] = "group:" .. kind end
+Overlord.Sync.SendToChannel = function(_, kind) deathSends[#deathSends + 1] = "channel:" .. kind end
+Overlord.Sync.BroadcastToRelay = function(_, kind) deathSends[#deathSends + 1] = "relay:" .. kind end
 Overlord.Combat:OnPlayerDead()
 assert((Overlord.Leaderboard.kills["Nearby Priest"] or 0) == 0,
     "A guessed killer received an exportable score")
+-- The death notice (EK) feeds front activity only: group and channel, never the
+-- relay (each relay copy flooded every Overlord player on every PvP death).
+for _, sent in ipairs(deathSends) do
+    assert(sent ~= "relay:EK", "A death notice (EK) was sent to the relay")
+end
 assert(score() == 202)
 print("Forever HK: exact Blizzard deltas, all roles, no KB/death/x2 additions, batching, counters and instances OK")

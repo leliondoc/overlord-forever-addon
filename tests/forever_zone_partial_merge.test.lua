@@ -215,5 +215,15 @@ runTimersUntil(clock + 60)
 assert(#relayed == beforeRetake + 1, "a capital lost its late C copy on a busy relay")
 Overlord.CaptureLease.NormalizeCaptureRequirement = realRequirement
 zone.isCapital = nil
+-- Catch-up and state lanes (SR pages, VB) do not make the relay hot: with a quiet
+-- urgent/bulk queue the late copy of an ordinary point is still sent.
+Overlord.BetaNetwork.GetQueueSummary = function() return { total = 40, catchup = 24, state = 12 } end
+timers, relayed = {}, {}
+zone.owner, zone.status, zone.capturedTime, zone.updatedAt = "Alliance", "captured", time() + 2, time() + 2
+sync:BroadcastCapture(X, 120)
+runTimersUntil(clock + 10)
+beforeRetake = #relayed
+runTimersUntil(clock + 60)
+assert(#relayed == beforeRetake + 1, "catch-up/state backlog suppressed the late copy of an ordinary point")
 Overlord.BetaNetwork.GetQueueSummary = realSummary
 print("Forever zone partial merge: stale entries skipped per entry, guards kept, C relay retried beyond coalescing OK")
