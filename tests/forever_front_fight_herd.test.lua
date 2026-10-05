@@ -109,20 +109,22 @@ end
 local victim = clients[1]
 simTime = simTime + 1000
 sent = {}
--- The victim announces its own fight first...
-for _ = 1, 6 do kill(victim, "#1437") end
+-- The victim announces its own fight first (6 kills: the 5+ bracket)...
+for _ = 1, 6 do kill(victim, "@redridge") end
 runUntil(simTime + 45)
--- ...then fresher brackets from many senders push it out of the table.
+-- ...then fresher brackets from many senders push it out of the table, and the fight
+-- goes on below the next bracket (9 kills at most): nothing new to announce.
+simTime = simTime + 40
 local slot = math.floor(simTime / 30)
 for id = 2000, 2040 do
     victim.FA:OnReceiveKillBracket("1:#" .. id .. ":5:" .. slot, "Filler" .. id, "BETA")
 end
-for _ = 1, 40 do
-    kill(victim, "#1437")
-    runUntil(simTime + 2)
+for _ = 1, 3 do
+    kill(victim, "@redridge")
+    runUntil(simTime + 45)
 end
 local own = 0
 for _, msg in ipairs(sent) do if msg.from == victim.name then own = own + 1 end end
-assert(own <= 2, "a client with a full table announced " .. own .. " times in two minutes")
+assert(own == 1, "a client with a full table announced " .. own .. " times for one bracket")
 print(string.format("Front fight herd: %d/%d first announcers at %d s latency, %d in a 5-min steady fight, full table safe",
     firstWave, N, LATENCY, refresh))
