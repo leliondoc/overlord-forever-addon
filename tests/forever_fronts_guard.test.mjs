@@ -102,7 +102,11 @@ test("Guild keeps use vanilla map IDs and land coords", () => {
     assert.match(keep, /mapID = 1413/);
     assert.match(keep, /mapID = 1437/);
     assert.match(keep, /center = \{ 10\.6, 59\.6 \}/);
-    assert.match(keep, /center = \{ 51\.5, 30\.2 \}/);
+    // 1.6.0: the Barrens and Mulgore keeps left the quest hubs (Crossroads, Bloodhoof).
+    assert.match(keep, /center = \{ 47\.5, 24\.5 \}/);
+    assert.match(keep, /center = \{ 51\.0, 38\.5 \}/);
+    assert.doesNotMatch(keep, /center = \{ 51\.5, 30\.2 \}/);
+    assert.doesNotMatch(keep, /center = \{ 47\.5, 60\.2 \}/);
     assert.doesNotMatch(keep, /center = \{ 21\.4, 68\.0 \}/);
     assert.doesNotMatch(keep, /center = \{ 49\.2, 58\.8 \}/);
 });
