@@ -1,10 +1,13 @@
-1.5.2
+1.6.0
 
-**Overlord Forever 1.5.2**
+**Overlord Forever 1.6.0**
 
-- **New leaderboard look**: a Blizzard wooden frame, more breathing room, and the whole board 20% larger (it still always fits your screen). The campaign dates are easier to read, and the Alliance / Horde kill totals now sit right under them.
-- **Useful info at a glance** on each side of the title: on the left, the time left until the campaign ends and how many players are ranked on each side; on the right, your rank and HK with how many you need to pass the next player, and your guild's rank and HK.
-- **New weekly domination bar**: blue and red BfA scenario cloth with the faction crests on each side, and the split glides smoothly when the score changes.
-- **Minimap icons option**: the former "Minimap capture zones" box is now "Minimap icons" and hides every Overlord icon on the minimap (capture circles, generals, mines, guild keeps, outposts). The world map keeps its own settings.
-- Fixed the leaderboard's bottom being cut off when the board is shown larger than 100%.
-- All of this is display only: no extra network traffic.
+- **Conquest now lasts**: winning a front no longer wipes the map. After the 15-minute truce the conquered zones keep your colours and only the fallen capital rises again for its faction.
+- **The fallen capital is protected for 6 hours**, against the winners only. The defeated side may retake the whole front, the winners' capital included, and win it back. Its map circle shows "Protected until HH:MM", and a chat line announces the release.
+- **Hillsbrad stays a pure brawl**: same 15-minute truce, then the fallen town comes back with no protection at all.
+- **Two guild keeps moved off quest hubs**, where questers kept starting captures by accident: the Crossroads keep is now **Savanna Bastion**, on the open plain north-west of the Crossroads, and the Bloodhoof Village keep is now **Prairie Keep**, on the grassland north of the lake. Guilds holding them keep them.
+- **Tutorial rewritten** in all 7 languages, in the leaderboard's wooden frame: rules, conquest and protection, keeps, alerts and tools, with the exact button names of your interface.
+- **Lighter network for big crowds**: death notices no longer flood the relay (they never counted for the leaderboard; kills still do), the late copy of a capture is only sent when the relay is quiet, and the end of a truce is announced once instead of by every player.
+- Players who log in after a truce still learn which capital is protected.
+- Less memory churn: the leaderboard safety copy is rebuilt every 10 minutes instead of every 2.
+- Stability and validation improvements.

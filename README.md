@@ -120,8 +120,8 @@ fronts, bonus, stocks) empruntent également ce réseau.
 
 ### Guild Keep
 
-- Fortins de guilde sur des zones dédiées (Serres-Rocheuses, Les Paluns, Terres Ingrates, La Croisée, Mulgore).
-- Capture intra-guilde, toutes les 6 heures : **03h–04h, 09h–10h, 15h–16h et 21h–22h, heure serveur**. Une victoire par fortin et par siège, avec rappels et synchronisation dédiés (`GK`).
+- Cinq fortins de guilde, à l'écart des villages de quêtes : Retraite de Roche-Soleil (Serres-Rocheuses), Donjon de Menethil (Les Paluns), Forteresse d'Angor (Terres Ingrates), Bastion de la Savane (Les Tarides) et Fort des Prairies (Mulgore).
+- Ouverts à toute heure : un membre de la guilde tient le carré 10 minutes ; seule la faction adverse peut le contester ou le prendre. Le fortin reste à sa guilde jusqu'à une prise ennemie ou le reset hebdomadaire.
 
 ### Autres systèmes
 

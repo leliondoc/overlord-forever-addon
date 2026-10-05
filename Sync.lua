@@ -10417,6 +10417,8 @@ function Overlord.Sync:ResetVictoryFlagForFront(frontId)
     end
 end
 
+local function NewerPendingFirst(a, b) return a.epoch > b.epoch end
+
 local function NoteHeardTruceRelease(frontId, epoch)
     if (priv.heardTruceRelease[frontId] or 0) < epoch then
         priv.heardTruceRelease[frontId] = epoch
@@ -10630,7 +10632,7 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
                 if own then table.remove(slots, own) end
                 slots[#slots + 1] = { epoch = resetEpoch, payload = frontId .. ":" .. resetEpoch,
                     sender = sender, senderKey = senderKey }
-                table.sort(slots, function(a, b) return a.epoch > b.epoch end)
+                table.sort(slots, NewerPendingFirst)
                 while #slots > 4 do table.remove(slots) end
                 priv.pendingTruceRelease[frontId] = slots
             end

@@ -1101,9 +1101,10 @@ end
 
 -- Vainqueur d'une liberation lu sur la carte seule (retardataire sans victoire connue) :
 -- nil si les deux factions correspondent (jamais deviner la capitale a proteger).
+local RELEASE_FACTIONS = { "Alliance", "Horde" }
 function Overlord.Zones:ReleasedWinnerFromMap(frontId, epoch)
     local winner
-    for _, faction in ipairs({ "Alliance", "Horde" }) do
+    for _, faction in ipairs(RELEASE_FACTIONS) do
         if self:LocalStateCorroboratesJournalRelease(frontId, faction, epoch) then
             if winner then return nil end
             winner = faction

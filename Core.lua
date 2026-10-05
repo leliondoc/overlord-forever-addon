@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.5.2"
+Overlord.Version = "1.6.0"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncBetaNetwork.lua).
 Overlord.BetaNetworkEnabled = true
 Overlord.IsInitialized = false
@@ -4951,7 +4951,10 @@ function Overlord:ResetAll()
 end
 
 -- Sauvegarde automatique toutes les 30s (ou immédiate si dirty)
-local autoSaveTickCount = 0
+-- Ticks depuis le dernier snapshot lance (pas depuis le login) : un tick en combat
+-- repousse le snapshot au tick suivant, pas d'un cycle entier.
+local ticksSinceLadderSnapshot = 0
+local ladderSnapshotThisSession = false
 function Overlord:RunAutoSaveTick()
     -- IsInitialized passe vrai avant les sanitizers requis. Persister pendant leur
     -- construction pourrait serialiser des racines partiellement migrees et rendre
@@ -4970,11 +4973,14 @@ function Overlord:RunAutoSaveTick()
     -- s'il est froid) laisse 2,5 a 25 Mo de dechets selon la taille du classement :
     -- toutes les 2 min, c'etait l'essentiel de la memoire affichee pour l'addon.
     -- Le reset hebdomadaire a son propre snapshot (SnapshotCurrentCampaignBeforeReset).
-    autoSaveTickCount = autoSaveTickCount + 1
-    if autoSaveTickCount % 20 == 0
+    -- Le premier de la session part apres ~2 min, pour les sessions courtes.
+    ticksSinceLadderSnapshot = ticksSinceLadderSnapshot + 1
+    if ticksSinceLadderSnapshot >= (ladderSnapshotThisSession and 20 or 4)
         and self.Leaderboard and self.Leaderboard.SnapshotCurrentCampaignFull
         and self.Leaderboard._snapshotDirty ~= false
         and not (InCombatLockdown and InCombatLockdown()) then
+        ticksSinceLadderSnapshot = 0
+        ladderSnapshotThisSession = true
         self.Leaderboard:SnapshotCurrentCampaignFull()
     end
     return true
