@@ -580,6 +580,14 @@ do
     for _, k in ipairs(groupKinds) do if k == "ZA" then delivered = true end end
     assert(delivered, "An addressed map page to a group-only mate lost its only delivery path")
 end
+-- Fight brackets (FK) travel on the relay like other broadcasts.
+do
+    local fkOne, fkTwo = client("Fkone Tester", "fk-chan"), client("Fktwo Tester", "fk-chan")
+    assert(fkOne.BetaNetwork:Send("FK", "1:arathi:30:59650000"), "A fight bracket was refused by the relay")
+    drain()
+    local got = fkTwo.received[#fkTwo.received]
+    assert(got and got.kind == "FK" and got.payload == "1:arathi:30:59650000", "A fight bracket was not delivered")
+end
 a.BetaNetworkEnabled = false
 assert(not a.BetaNetwork:Send("K", "disabled"), "Beta transport remained active after community re-enable")
 print("Beta network: community-parallel relay, fragmentation, global routing, reply path, dedup, identity, expiry and queue bounds OK")

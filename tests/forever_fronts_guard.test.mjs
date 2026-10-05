@@ -97,6 +97,15 @@ test("Forever identity is Prenom Nom with no realm suffix", () => {
     assert.match(catchup, /HasCompleteContributorIdentity/);
 });
 
+test("Shared fight brackets match the dock's brackets", () => {
+    const fa = readFileSync(new URL("../FrontActivity.lua", import.meta.url), "utf8");
+    const popups = readFileSync(new URL("../Popups.lua", import.meta.url), "utf8");
+    const shared = fa.match(/local FIGHT_BRACKETS = \{([^}]*)\}/);
+    const dock = popups.match(/local FRONT_FIGHT_BRACKETS = \{([^}]*)\}/);
+    assert.ok(shared && dock, "bracket lists not found");
+    assert.equal(shared[1].replace(/\s/g, ""), dock[1].replace(/\s/g, ""));
+});
+
 test("Guild keeps use vanilla map IDs and land coords", () => {
     const keep = readFileSync(new URL("../GuildKeepSites.lua", import.meta.url), "utf8");
     assert.match(keep, /mapID = 1413/);

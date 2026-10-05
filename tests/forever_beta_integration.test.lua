@@ -200,7 +200,7 @@ do
     assert(s:ChannelCarries("EK", "x", true) and not s:ChannelCarries("EK", "x", false))
     -- Relay copies to the group: same Blizzard quota as the channel, no background pages,
     -- but captures, sieges, General and alerts keep their copy (pure check, no kill pacing).
-    for _, kind in ipairs({ "ZA", "VB", "LO", "LOC", "LK", "LC", "LR", "GK" }) do
+    for _, kind in ipairs({ "ZA", "VB", "LO", "LOC", "LK", "LC", "LR", "GK", "FK" }) do
         assert(not s:GroupCarries(kind, "x"), "Background " .. kind .. " still copied to the group")
     end
     assert(not s:GroupCarries("OP", "v1:site:neutral:1") and s:GroupCarries("OP", "v1:site:in_progress:1"))

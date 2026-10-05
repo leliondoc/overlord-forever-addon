@@ -1969,7 +1969,8 @@ end
 -- passe deja par le relais ; les envois directs au groupe (General, captures, sieges,
 -- reponses de synchro) ne passent pas par ici.
 function Overlord.Sync:GroupCarries(kind, payload)
-    if self.CHANNEL_OFF_KINDS[kind] or kind == "VB" then return false end
+    -- FK (paliers de combat) : information de fond, deja portee par le relais.
+    if self.CHANNEL_OFF_KINDS[kind] or kind == "VB" or kind == "FK" then return false end
     if kind == "OP" then
         local status = type(payload) == "string" and payload:match("^v%d+:[^:]*:([^:]*)") or nil
         return status == "in_progress"
@@ -2534,6 +2535,8 @@ function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
         self:OnReceiveShard(payload or "", sender, "BNET")
     elseif msgType == "GW" and Overlord.GuildKillAlert then
         Overlord.GuildKillAlert:OnReceiveNetworkAlert(payload or "", sender, "BNET")
+    elseif msgType == "FK" and Overlord.FrontActivity then
+        Overlord.FrontActivity:OnReceiveKillBracket(payload or "", sender, "BNET")
     end
 end
 
@@ -2681,6 +2684,11 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
         if Overlord.GuildKillAlert then
             ok, err = pcall(Overlord.GuildKillAlert.OnReceiveNetworkAlert,
                 Overlord.GuildKillAlert, payload or "", sender, channel)
+        end
+    elseif msgType == "FK" then
+        if Overlord.FrontActivity and Overlord.FrontActivity.OnReceiveKillBracket then
+            ok, err = pcall(Overlord.FrontActivity.OnReceiveKillBracket,
+                Overlord.FrontActivity, payload or "", sender, channel)
         end
     elseif msgType == "GE" then
         if Overlord.GeneralSync then

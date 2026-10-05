@@ -1,5 +1,6 @@
 -- Fight size in the dock's recent activity: new kills per front over 5 min, fed by the
--- K deltas the guild alert already measures (no packet), bracketed 5+/10+/20+...
+-- K deltas the guild alert already measures, bracketed 5+/10+/20+... (shared between
+-- players by fight brackets: see forever_front_fight_convergence).
 Overlord = { L = setmetatable({}, { __index = function(_, k) return k end }) }
 Enum = { UIMapType = { Zone = 3, Dungeon = 4 } }
 local maps = {

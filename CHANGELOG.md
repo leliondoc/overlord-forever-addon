@@ -1,7 +1,6 @@
-1.6.1
+1.6.2
 
-**Overlord Forever 1.6.1**
+**Overlord Forever 1.6.2**
 
-- **Smoother group and raid play**: Blizzard lets an addon send only about one message per second to your group, raid and the addon channel combined. In a group, Overlord no longer copies background data there (map pages, histories, leaderboard, domination journal, outposts outside a siege), which already travels through the relay. Captures, sieges, the General, alerts and replies to your teammates keep their group copy. Fewer messages refused by Blizzard during bursts (joining a group, a victory, the end of a truce).
-- **Layer Jumper removed.** Part of the community saw it as a way to flee fights, when it was meant to find more of them, and it was much requested. I also want to respect Blizzard's layering, which tries to keep you with the same players so communities can form. The button stays greyed in the panel and its tooltip explains why; `/ov layer` only prints that explanation.
-- **Calmer network indicator**: the dot in the panel header and the summary of `/ov network` now judge Blizzard refusals and relay losses over the last 10 minutes instead of the whole session, so a short burst no longer leaves the dot yellow until your next reload. A single refusal, or 1% at most, stays green.
+- **Recent activity is the same for everyone**: each player only hears part of the kills, so two players could see different fight sizes for the same zone. Now, when a zone crosses a fight bracket (5+, 10+, 20+...), Overlord shares that bracket and every player shows the highest one, so every player on 1.6.2 sees the same panel, usually within seconds and always in under a minute. It costs a few tiny messages per fight (one per bracket crossed, then a reminder every few minutes while the fight lasts), never one per kill.
+- The Layer Jumper tooltip no longer carries a signature.

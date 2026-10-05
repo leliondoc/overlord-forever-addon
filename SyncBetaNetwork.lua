@@ -7,7 +7,7 @@ local sync = addon.Sync
 local net = { peers = {}, stats = { sent = 0, received = 0, dropped = 0 } }
 addon.BetaNetwork = net
 local allowed = {}
-for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR VB MN MS OP OC SH HR HB HC HA CR CA GR GY GI FC GW GE GP GX GD GM"):gmatch("%S+") do
+for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA FK LK LR LC LO LOC OE TV VT VF FR VB MN MS OP OC SH HR HB HC HA CR CA GR GY GI FC GW GE GP GX GD GM"):gmatch("%S+") do
     allowed[kind] = true
 end
 local MAX_PACKET, MAX_PATH, TTL = 3600, 4, 120
@@ -895,7 +895,8 @@ end
 --     and the whole copy when nothing else is left. Local dispatch and the wire
 --     format are untouched.
 -- FR : meme contenu "front:epoque" chez tous les clients qui liberent.
-local DEDUP_KINDS = { OP = true, LO = true, LOC = true, VB = true, TV = true, FR = true }
+-- FK : meme palier dans la meme tranche de 30 s chez tous ceux qui l'annoncent.
+local DEDUP_KINDS = { OP = true, LO = true, LOC = true, VB = true, TV = true, FR = true, FK = true }
 -- COVER_TTL: how long a sent copy counts. COVER_PENDING: how long a copy still
 -- waiting in the queue counts (an evicted/expired one is voided at once).
 local COVER_TTL, COVER_PENDING, COVER_RECORDS = 60, 20, 128
@@ -1042,7 +1043,7 @@ local function tasksFor(p, wire)
         -- its first channel fragment is due (see emit). Alerts and terminal events keep every
         -- copy: the relay copy is what channel hearers forward to their own friends and
         -- groups, hence to the other faction. (Separate from the content dedup below, which
-        -- only handles OP/LO/LOC/VB/TV.)
+        -- only handles DEDUP_KINDS.)
         local chanCover = channelCopy and not isTerminal(p)
             and { kind = p.kind, payload = p.payload, origin = p.path[1] } or nil
         local now, rec, trim, groupAgain, channelAgain = GetTime()
@@ -1051,7 +1052,9 @@ local function tasksFor(p, wire)
             rec = dedup.records[ckey]
             pathFriends, trimmed = {}, 0
             -- Only copies relayed for others are trimmed, never our own broadcast.
-            trim = #p.path > 1 and dedup.busy(p)
+            -- FK : copies identiques coupees meme hors charge (une rafale de joueurs
+            -- franchit le meme palier en meme temps).
+            trim = #p.path > 1 and (p.kind == "FK" or dedup.busy(p))
             groupAgain = rec ~= nil and dedup.count(rec.carriers.group, now) >= COVER_COPIES
             channelAgain = rec ~= nil and dedup.count(rec.carriers.channel, now) >= COVER_COPIES
         end
