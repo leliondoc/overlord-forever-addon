@@ -486,6 +486,8 @@ end
 local quickGuideFrame = nil
 local quickGuidePage = 1
 local GUIDE_PAGE_COUNT = 3
+-- Cadre en bois du classement : bordure epaisse, d'ou les marges interieures.
+local GUIDE_FRAME_W, GUIDE_FRAME_H, GUIDE_FRAME_PAD = 560, 580, 26
 
 local function HideQuickGuide()
     if quickGuideFrame then quickGuideFrame:Hide() end
@@ -540,7 +542,7 @@ local function BuildGuildKeepGuideSection()
         "|A:Warfronts-BaseMapIcons-Empty-MainHall:18:18|a", L.GUILD_KEEP_NEUTRAL or "Unclaimed",
         "|A:Warfronts-BaseMapIcons-Alliance-MainHall:18:18|a", L.THE_ALLIANCE or "Alliance",
         "|A:Warfronts-BaseMapIcons-Horde-MainHall:18:18|a", L.THE_HORDE or "Horde")
-    local body = string.format(L.FORTRESS_OUTPOST_GUIDE_BODY, iconLine, capMin)
+    local body = string.format(L.GUIDE_GUILD_KEEP_BODY, iconLine, capMin)
     return FormatGuideSection(L.GUIDE_SECTION_GUILD_KEEP, body)
 end
 
@@ -555,19 +557,20 @@ local function BuildQuickGuidePageBody(page)
         local travel = (Overlord.PlayerFaction == "Horde") and L.GUIDE_TRAVEL_HORDE or L.GUIDE_TRAVEL_ALLIANCE
         return JoinGuideSections(
             FormatGuideSection(L.GUIDE_SECTION_TRAVEL, travel),
-            FormatGuideSection(L.GUIDE_SECTION_SHARD, L.GUIDE_SHARD_BODY),
+            FormatGuideSection(L.GUIDE_SECTION_RULES, L.GUIDE_RULES_BODY),
             FormatGuideSection(L.GUIDE_SECTION_PROGRESS, L.GUIDE_PROGRESS_BODY),
+            FormatGuideSection(L.GUIDE_SECTION_SHARD, L.GUIDE_SHARD_BODY),
             FormatGuideSection(L.GUIDE_SECTION_PANEL, L.GUIDE_PANEL_BODY),
-            FormatGuideSection(L.GUIDE_SECTION_OPTIONS, L.GUIDE_OPTIONS_BODY),
-            FormatGuideSection(L.GUIDE_SECTION_FEATURED, L.GUIDE_FEATURED_BODY)
+            FormatGuideSection(L.GUIDE_SECTION_OPTIONS, L.GUIDE_OPTIONS_BODY)
         )
     end
     if page == 2 then
         local goldBody = FormatGuideResourceBody(L.GUIDE_GOLD_BODY, Overlord.MineDatabase, GUIDE_MINE_ATLAS)
         return JoinGuideSections(
             FormatGuideSection(L.GUIDE_SECTION_CONTEST, L.GUIDE_CONTEST_BODY),
+            FormatGuideSection(L.GUIDE_SECTION_SIEGE, L.GUIDE_SIEGE_BODY),
             FormatGuideSection(L.GUIDE_SECTION_GOLD, goldBody),
-            FormatGuideSection(L.GUIDE_SECTION_SIEGE, L.GUIDE_SIEGE_BODY)
+            FormatGuideSection(L.GUIDE_SECTION_FEATURED, L.GUIDE_FEATURED_BODY)
         )
     end
     if page == 3 then
@@ -575,6 +578,7 @@ local function BuildQuickGuidePageBody(page)
             BuildGuildKeepGuideSection(),
             FormatGuideSection(L.GUIDE_SECTION_OUTPOST, L.GUIDE_OUTPOST_BODY),
             FormatGuideSection(L.GUIDE_SECTION_FACTION_CALL, L.GUIDE_FACTION_CALL_BODY),
+            FormatGuideSection(L.GUIDE_SECTION_ALERTS, L.GUIDE_ALERTS_BODY),
             FormatGuideSection(L.GUIDE_SECTION_TOOLS, L.GUIDE_TOOLS_BODY)
         )
     end
@@ -600,13 +604,12 @@ local function GetQuickGuidePageBody(page)
     return cachedGuideBody[page]
 end
 
+-- Titre = nom de la page seul (une ligne dans le cadre en bois, meme en allemand) ;
+-- "Tutoriel · Page x / 3" passe sur la ligne en dessous.
 local function GetQuickGuideWindowTitle(page)
     local pageTitle = GUIDE_PAGE_TITLES[page] and GUIDE_PAGE_TITLES[page]() or ""
-    local base = L.GUIDE_TITLE or "Tutorial"
-    if pageTitle and pageTitle ~= "" then
-        return base .. ": " .. pageTitle
-    end
-    return base
+    if pageTitle and pageTitle ~= "" then return pageTitle end
+    return L.GUIDE_TITLE or "Tutorial"
 end
 
 local function SetupQuickGuideHyperlinks(f)
@@ -633,9 +636,20 @@ end
 local function PaintQuickGuide()
     if not quickGuideFrame then return end
     local page = quickGuidePage
-    quickGuideFrame.titleFs:SetText(GetQuickGuideWindowTitle(page))
+    local titleFs = quickGuideFrame.titleFs
+    titleFs:SetFontObject("Fancy24Font")
+    titleFs:SetText(GetQuickGuideWindowTitle(page))
+    -- Titre long (es / de) : police plus petite plutot que coupe.
+    if (titleFs:GetStringWidth() or 0) > (titleFs:GetWidth() or 0) then
+        titleFs:SetFontObject("GameFontNormalLarge")
+    end
+    -- SetFontObject reprend couleur et ombre de la police : les reposer.
+    titleFs:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+    titleFs:SetShadowOffset(1, -1)
+    titleFs:SetShadowColor(0, 0, 0, 0.6)
     if quickGuideFrame.pageFs then
-        quickGuideFrame.pageFs:SetText(string.format(L.GUIDE_PAGE_INDICATOR or "Page %d / %d", page, GUIDE_PAGE_COUNT))
+        quickGuideFrame.pageFs:SetText((L.GUIDE_TITLE or "Tutorial") .. " · "
+            .. string.format(L.GUIDE_PAGE_INDICATOR or "Page %d / %d", page, GUIDE_PAGE_COUNT))
     end
     quickGuideFrame.bodyFs:SetText(GetQuickGuidePageBody(page))
     local scrollH = quickGuideFrame.scroll:GetHeight() or 320
@@ -665,11 +679,14 @@ local function EnsureQuickGuideFrame()
 
     local f = CreateFrame("Frame", "OverlordQuickGuideFrame", UIParent, "BackdropTemplate")
     if Overlord.UI.AttachOpenFade then Overlord.UI.AttachOpenFade(f) end
-    f:SetSize(480, 500)
+    f:SetSize(GUIDE_FRAME_W, GUIDE_FRAME_H)
     f:SetPoint("CENTER")
     Overlord.UI.ApplyWoodDialogBackdrop(f)
     f:SetFrameStrata("FULLSCREEN_DIALOG")
     f:SetFrameLevel(6100)
+    -- Meme cadre en bois que le classement (bordure epaisse : marges GUIDE_FRAME_PAD),
+    -- cree apres la couche et le niveau pour rester au-dessus du contenu.
+    f.woodBorder = Overlord.UI.ApplyWoodenNeutralFrame and Overlord.UI.ApplyWoodenNeutralFrame(f)
     f:EnableMouse(true)
     f:SetMovable(true)
     f:RegisterForDrag("LeftButton")
@@ -700,21 +717,25 @@ local function EnsureQuickGuideFrame()
     end)
 
     f.titleFs = f:CreateFontString(nil, "OVERLAY", "Fancy24Font")
-    f.titleFs:SetPoint("TOP", 0, -14)
-    f.titleFs:SetWidth(440)
+    f.titleFs:SetPoint("TOP", 0, -27)
+    f.titleFs:SetWidth(GUIDE_FRAME_W - 2 * GUIDE_FRAME_PAD - 40)
+    f.titleFs:SetWordWrap(false)
+    f.titleFs:SetShadowOffset(1, -1)
+    f.titleFs:SetShadowColor(0, 0, 0, 0.6)
     f.titleFs:SetJustifyH("CENTER")
     f.titleFs:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
 
-    f.pageFs = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    f.pageFs:SetPoint("TOP", f.titleFs, "BOTTOM", 0, -2)
-    f.pageFs:SetTextColor(GOLD[1], GOLD[2], GOLD[3], 0.85)
+    f.pageFs = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    f.pageFs:SetPoint("TOP", f.titleFs, "BOTTOM", 0, -3)
+    f.pageFs:SetTextColor(0.95, 0.88, 0.70, 1)
+    f.pageFs:SetShadowOffset(1, -1)
 
     f.scroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
-    f.scroll:SetPoint("TOPLEFT", 16, -62)
-    f.scroll:SetPoint("BOTTOMRIGHT", -32, 52)
+    f.scroll:SetPoint("TOPLEFT", GUIDE_FRAME_PAD, -78)
+    f.scroll:SetPoint("BOTTOMRIGHT", -(GUIDE_FRAME_PAD + 22), GUIDE_FRAME_PAD + 40)
 
     f.scrollChild = CreateFrame("Frame", nil, f.scroll)
-    f.scrollChild:SetWidth(420)
+    f.scrollChild:SetWidth(GUIDE_FRAME_W - 2 * GUIDE_FRAME_PAD - 28)
     f.scroll:SetScrollChild(f.scrollChild)
 
     f.bodyFs = f.scrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -727,18 +748,20 @@ local function EnsureQuickGuideFrame()
     f.prevBtn = Overlord.UI.CreateWC3Button(f, 108, 28, L.GUIDE_PREV or "Previous", function()
         SetQuickGuidePage(quickGuidePage - 1)
     end)
-    f.prevBtn:SetPoint("BOTTOMLEFT", 16, 16)
+    f.prevBtn:SetPoint("BOTTOMLEFT", GUIDE_FRAME_PAD, GUIDE_FRAME_PAD)
 
     f.nextBtn = Overlord.UI.CreateWC3Button(f, 108, 28, L.GUIDE_NEXT or "Next", function()
         SetQuickGuidePage(quickGuidePage + 1)
     end)
-    f.nextBtn:SetPoint("BOTTOMRIGHT", -16, 16)
+    f.nextBtn:SetPoint("BOTTOMRIGHT", -GUIDE_FRAME_PAD, GUIDE_FRAME_PAD)
 
     f.closeBtn = Overlord.UI.CreateWC3Button(f, 120, 28, L.GUIDE_CLOSE or L.POPUP_OK, HideQuickGuide)
-    f.closeBtn:SetPoint("BOTTOM", 0, 16)
+    f.closeBtn:SetPoint("BOTTOM", 0, GUIDE_FRAME_PAD)
 
-    Overlord.UI.CreateWC3CloseButton(f, HideQuickGuide)
-        :SetPoint("TOPRIGHT", -8, -8)
+    local cross = Overlord.UI.CreateWC3CloseButton(f, HideQuickGuide)
+    cross:SetPoint("TOPRIGHT", -8, -8)
+    -- Au-dessus des coins du cadre en bois (comme le classement).
+    if f.woodBorder then cross:SetFrameLevel(f.woodBorder:GetFrameLevel() + 5) end
 
     f:SetScript("OnKeyDown", function(self, key)
         if key == "ESCAPE" then

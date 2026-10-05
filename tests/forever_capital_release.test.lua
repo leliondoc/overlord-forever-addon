@@ -1,5 +1,5 @@
 -- Persistent conquest: after the 15-minute truce the conquered zones keep their owner,
--- only the fallen capital rises again, and both capitals of the front are protected.
+-- only the fallen capital rises again and is protected against the winner (Retail model).
 assert(loadfile("tests/forever_world_kills.test.lua"))()
 Overlord.L.ZONE_NAMES = {}
 Overlord.L.SYNC_CAPTURED_FRIENDLY = "Captured"
@@ -7,6 +7,8 @@ Overlord.L.SYNC_CAPTURED_ENEMY = "Captured by enemy"
 Overlord.L.FRONT_CAPITAL_RELEASED = "%s released until %s"
 Overlord.L.CAPITAL_PROTECTED_UNTIL = "Protected until %s"
 Overlord.L.CAPITAL_PROTECTED_SHORT = "Protected %s"
+Overlord.L.TOTAL_VICTORY_MSG = "%s won a front"
+Overlord.L.VICTORY_FACTION_ALLIANCE, Overlord.L.VICTORY_FACTION_HORDE = "Alliance", "Horde"
 Overlord.PlayerFaction = "Alliance"
 assert(loadfile("Fronts.lua"))()
 assert(loadfile("Zones.lua"))()
@@ -76,13 +78,18 @@ assert(allianceCap.owner == "Alliance" and allianceCap.capturedTime == E,
 assert(OverlordDB.frontTruceResetEpoch.elwynn == E and not OverlordDB.frontVictories.elwynn,
     "Release bookkeeping missing")
 
--- 2. Both capitals are protected for four hours; branches stay contestable.
-local immune, remaining, untilTs = zones:GetFrontCapitalImmunity("elwynn")
-assert(immune and untilTs == E + zones:GetCapitalImmunitySeconds() and remaining > 0,
-    "Capitals are not protected after the release")
-assert(zones:GetCapitalImmunitySeconds() == 4 * 3600, "Protection is not four hours")
-assert(select(1, zones:IsCapitalImmune(hordeCap.id)) and select(1, zones:IsCapitalImmune(allianceCap.id)),
-    "Both capitals must be protected")
+-- 2. Only the fallen capital is protected (six hours); the losers may retake everything,
+-- the winner's capital included.
+local immune, remaining, untilTs, protectedFaction = zones:GetFrontCapitalImmunity("elwynn")
+assert(immune and protectedFaction == "Horde" and untilTs == E + zones:GetCapitalImmunitySeconds()
+    and remaining > 0, "The fallen capital is not protected after the release")
+assert(zones:GetCapitalImmunitySeconds() == 6 * 3600, "Protection is not six hours")
+assert(select(1, zones:IsCapitalImmune(hordeCap.id)), "The fallen capital must be protected")
+assert(not select(1, zones:IsCapitalImmune(allianceCap.id)), "The winner's capital must stay open")
+assert(not sync:ShouldRejectImmuneCapitalChange(allianceCap.id, "Horde", "in_progress", "ZS"),
+    "The losers cannot besiege the winner's capital during the protection")
+assert(zones:GetCapitalProtectionLabel(allianceCap.id, "elwynn") == nil,
+    "The winner's capital shows a protection label")
 assert(not select(1, zones:IsCapitalImmune(branches[1].id)), "A branch must never be protected")
 zones:UpdateAvailableZones()
 assert(not zones:IsZoneAvailable(hordeCap.id) and hordeCap.status == "locked",
@@ -161,6 +168,24 @@ clock = E + zones:GetCapitalImmunitySeconds() + 10
 sync:CheckTotalVictoryFromSync()
 assert(shown == 0, "The released victory was announced again after the protection")
 hordeCap.owner, hordeCap.capturedTime, hordeCap.updatedAt = keep.owner, keep.ct, keep.up
+
+-- 6b. Counter-victory during the protection: the losers take the winner's capital.
+clock = E + 3600
+snapshot()
+for _, zone in ipairs(elwynn.zones) do
+    zone.owner, zone.status, zone.capturedTime, zone.updatedAt = "Horde", "captured", clock - 60, clock - 60
+end
+allianceCap.capturedTime, allianceCap.updatedAt = clock, clock
+assert(select(1, zones:IsCapitalImmune(hordeCap.id)), "Protection should still run during the counter-attack")
+sync:CheckTotalVictoryFromSync()
+assert(shown == 1, "The losers' counter-victory was refused during the protection")
+assert(OverlordDB.frontVictories.elwynn and OverlordDB.frontVictories.elwynn.faction == "Horde",
+    "Counter-victory not recorded")
+restore()
+zones:ClearFrontVictory("elwynn")
+sync:ResetVictoryFlagForFront("elwynn")
+shown = 0
+clock = E + zones:GetCapitalImmunitySeconds() + 10
 Overlord.InActiveFront = false
 
 -- 7. Protection over: the enemy capital opens again for the faction holding the rest.
@@ -259,4 +284,37 @@ clock = V5 + 900 + zones:GetCapitalImmunitySeconds() + 600
 zones:TryExpireFrontTruces()
 assert(hordeCap.owner == "Horde" and #printed == 0, "Late login printed an expired protection time")
 assert(not select(1, zones:GetFrontCapitalImmunity("elwynn")), "Late login revived an expired protection")
+
+-- 15. Late joiner learns a HORDE release from the network (ZA first, then FR): after a
+-- release both capitals are native at the epoch, so the winner must come from the
+-- victory trace or the conquered zones, never from the capitals.
+local function hordeReleasedMap(epoch)
+    for _, zone in ipairs(elwynn.zones) do
+        zone.owner, zone.status, zone.capturedTime, zone.updatedAt = "Horde", "captured", epoch, epoch
+        zone._loginSyncUnconfirmed = nil
+    end
+    allianceCap.owner = "Alliance"
+end
+for _, mode in ipairs({ "journal", "pruned" }) do
+    zones:ClearFrontVictories()
+    local HV = clock + 100
+    clock = HV + 1000
+    local HE = HV + 900
+    hordeReleasedMap(HE)
+    if mode == "journal" then
+        Overlord.GetLatestDominationVictoryForFront = function(_, frontId)
+            if frontId == "elwynn" then return HV, "Horde" end
+        end
+    else
+        Overlord.GetLatestDominationVictoryForFront = nil
+        OverlordDB.frontTruceResetEpoch.elwynn = HV
+    end
+    sync:OnReceiveFrontTruceEndReset("elwynn:" .. HE, "Late Tester", "CHANNEL")
+    local lateImmune, _, _, lateProtected = zones:GetFrontCapitalImmunity("elwynn")
+    assert(lateImmune and lateProtected == "Alliance",
+        "Late joiner (" .. mode .. ") protected the winner's capital after a Horde victory")
+    assert(select(1, zones:IsCapitalImmune(allianceCap.id))
+        and not select(1, zones:IsCapitalImmune(hordeCap.id)), "Wrong capital protected (" .. mode .. ")")
+end
+Overlord.GetLatestDominationVictoryForFront = nil
 print("Forever capital release: conquest kept, capital released and protected, old clients and forged sieges OK")

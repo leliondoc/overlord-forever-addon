@@ -936,21 +936,8 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.totalText:SetTextColor(P.white[1], P.white[2], P.white[3])
     -- Cadre en bois neutre des panneaux Blizzard, sur une couche a part : le fond
     -- actuel reste dessous.
-    if NineSliceUtil and NineSliceUtil.ApplyLayoutByName and NineSliceUtil.GetLayout then
-        local layoutName = "WoodenNeutralFrameTemplate"
-        if NineSliceUtil.GetLayout(layoutName) then
-            local border = CreateFrame("Frame", nil, lbFrame)
-            border:SetAllPoints()
-            border:SetFrameLevel(lbFrame:GetFrameLevel() + 20)
-            border:EnableMouse(false)
-            if pcall(NineSliceUtil.ApplyLayoutByName, border, layoutName) then
-                lbFrame.bgBorder = border
-                lbFrame:SetBackdropBorderColor(0, 0, 0, 0)
-            else
-                border:Hide()
-            end
-        end
-    end
+    lbFrame.bgBorder = Overlord.UI.ApplyWoodenNeutralFrame
+        and Overlord.UI.ApplyWoodenNeutralFrame(lbFrame)
 
     -- Reuse the existing panel texture and fonts. No search icon/atlas or ticker.
     local searchPanel = CreateOfficialSubPanel(lbFrame, 266, 28, P, { header = true })

@@ -146,6 +146,29 @@ function Overlord.UI.ApplyWoodDialogBackdrop(frame, opts)
     frame._woodBackdropApplied = true
 end
 
+-- Cadre en bois neutre des panneaux Blizzard (classement, tutoriel), sur une couche a
+-- part au-dessus du contenu : le fond reste dessous et l'ancienne bordure est masquee.
+-- Retourne le cadre de bordure (nil si le client n'a pas ce gabarit) ; les boutons
+-- poses dans les coins doivent passer au-dessus de son niveau.
+function Overlord.UI.ApplyWoodenNeutralFrame(frame)
+    if not frame or not NineSliceUtil or not NineSliceUtil.ApplyLayoutByName
+        or not NineSliceUtil.GetLayout then
+        return nil
+    end
+    local layoutName = "WoodenNeutralFrameTemplate"
+    if not NineSliceUtil.GetLayout(layoutName) then return nil end
+    local border = CreateFrame("Frame", nil, frame)
+    border:SetAllPoints()
+    border:SetFrameLevel(frame:GetFrameLevel() + 20)
+    border:EnableMouse(false)
+    if not pcall(NineSliceUtil.ApplyLayoutByName, border, layoutName) then
+        border:Hide()
+        return nil
+    end
+    if frame.SetBackdropBorderColor then frame:SetBackdropBorderColor(0, 0, 0, 0) end
+    return border
+end
+
 
 -- Atlas Blizzard Trading Post (theme Horde vs Alliance) + accents Mode Guerre.
 local PERKS_CHROME_TOP_ATLAS = "perks-theme-hordevsalliance-tp-topbig"

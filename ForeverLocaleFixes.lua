@@ -18,7 +18,7 @@ if locale == "ptBR" then
     L.SHARD_TOOLTIP_ALL_SAME = "Todos os jogadores sincronizados estão no mesmo layer."
 elseif locale == "zhCN" then
     L.MINE_DARROW = "达罗山"
-    L.GOLD_HEADER_TIP = "在标记的区域内获得 coins。希尔斯布莱德丘陵：碧玉矿洞与达罗山；银松森林：艾伦矿洞；洛克莫丹：碎石矿洞；艾尔文森林：玉石矿洞。"
+    L.GOLD_HEADER_TIP = "在标记的区域内获得硬币。希尔斯布莱德丘陵：碧玉矿洞与达罗山；银松森林：艾伦矿洞；洛克莫丹：碎石矿洞；艾尔文森林：玉石矿洞。"
     L.HELP_HEADER = "|cFF00FF00========== Overlord：命令 ==========|r"
     L.HELP_SHOW = "|cFFFFFF00/ov show|r：显示界面"
     L.HELP_TOGGLE = "|cFFFFFF00/ov toggle|r：切换界面"
@@ -112,7 +112,9 @@ local replacements = {
     zhCN = { { "分片", "layer" }, { "碎片", "layer" }, { "Shard", "Layer" }, { "shard", "layer" } },
 }
 for key, value in pairs(L) do
-    if type(key) == "string" and key:find("SHARD", 1, true) and type(value) == "string" then
+    -- Le tutoriel (GUIDE_*) est deja ecrit en layers et cite /ov layer : ne pas le reecrire.
+    if type(key) == "string" and key:find("SHARD", 1, true) and not key:find("^GUIDE_")
+        and type(value) == "string" then
         for _, pair in ipairs(replacements[locale] or replacements.enUS) do
             value = value:gsub(pair[1], pair[2])
         end
@@ -141,22 +143,15 @@ for key, value in pairs(visibleTranslationFixes[locale] or {}) do L[key] = value
 do
     local L = Overlord.L
     local fortressTexts = {
-        enUS = { "Capture available at any time",
-            "%s\n\nLike outposts: capture at any time in %d minutes, ownership until recapture or campaign reset. The separate Fortresses leaderboard counts captures." },
-        frFR = { "Capture disponible à toute heure",
-            "%s\n\nComme les avant-postes : capture à toute heure en %d minutes, possession jusqu’à une reprise ou au reset de campagne. La colonne Fort du classement compte les captures." },
-        esES = { "Captura disponible a cualquier hora",
-            "%s\n\nComo los puestos: captura a cualquier hora en %d minutos; la propiedad dura hasta una recaptura o el reinicio de la campaña. La columna Fortaleza de la clasificación cuenta las capturas." },
-        deDE = { "Eroberung jederzeit möglich",
-            "%s\n\nWie Außenposten: Eroberung jederzeit in %d Minuten, Besitz bis zur Rückeroberung oder zum Kampagnen-Reset. Die Spalte Festung der Rangliste zählt die Eroberungen." },
-        ruRU = { "Захват доступен в любое время",
-            "%s\n\nКак и аванпосты: захват в любое время за %d мин., владение сохраняется до повторного захвата или сброса кампании. Столбец «Крепость» в рейтинге учитывает захваты." },
-        ptBR = { "Captura disponível a qualquer hora",
-            "%s\n\nComo nos postos: captura a qualquer hora em %d minutos; a posse dura até uma recaptura ou o reinício da campanha. A coluna Fortaleza da classificação conta as capturas." },
-        zhCN = { "可随时占领",
-            "%s\n\n与前哨相同：可随时占领，需 %d 分钟；所有权持续到被重新占领或战役重置。排行榜的“要塞”一栏统计占领次数。" },
+        enUS = "Capture available at any time",
+        frFR = "Capture disponible à toute heure",
+        esES = "Captura disponible a cualquier hora",
+        deDE = "Eroberung jederzeit möglich",
+        ruRU = "Захват доступен в любое время",
+        ptBR = "Captura disponível a qualquer hora",
+        zhCN = "可随时占领",
     }
     fortressTexts.esMX = fortressTexts.esES
-    local texts = fortressTexts[GetLocale()] or fortressTexts.enUS
-    L.FORTRESS_CAPTURE_AVAILABLE, L.FORTRESS_OUTPOST_GUIDE_BODY = texts[1], texts[2]
+    fortressTexts.zhTW = fortressTexts.zhCN
+    L.FORTRESS_CAPTURE_AVAILABLE = fortressTexts[GetLocale()] or fortressTexts.enUS
 end

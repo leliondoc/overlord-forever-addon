@@ -227,8 +227,10 @@ local function CanNeutralZaReplaceCanonicalCapture(zoneId, zone, ts)
     local frontId = front and front.id
     local resetEpoch = frontId and OverlordDB.frontTruceResetEpoch
         and tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0
-    -- Hors login, seul un reset de treve deja derive/applique localement peut
-    -- rendre neutre une capture courante. Le ZA doit porter le meme tombstone.
+    -- Hors login, seul un tombstone de fin de treve deja derive localement peut
+    -- rendre neutre une capture courante. Depuis la conquete persistante, la
+    -- liberation re-horodate la conquete a cet epoch : seuls les N d'anciens
+    -- clients (reset complet) arrivent ici, et ils sont ecartes.
     return resetEpoch > localClock and math.abs((tonumber(ts) or 0) - resetEpoch) <= 5
 end
 
@@ -274,11 +276,15 @@ end
 -- (un C deplacerait son horloge). Grace de 60 s en fin de protection pour les horloges.
 function Overlord.Sync:ShouldRejectImmuneCapitalChange(zoneId, owner, status, source)
     if not zoneId or not Overlord.Zones or not Overlord.Zones.IsCapitalImmune then return false end
-    local immune, remaining = Overlord.Zones:IsCapitalImmune(zoneId)
-    if not immune or (tonumber(remaining) or 0) <= 60 then return false end
-    if source == "C" or status == "in_progress" then return true end
     local native = Overlord.Zones:GetBaseZoneFixedOwner(zoneId)
-    return owner ~= nil and native ~= nil and owner ~= native
+    if not native then return false end
+    -- Seuls un C, un siege ou un proprietaire etranger peuvent etre refuses : la
+    -- protection n'est lue que pour eux (chaque entree ZA passe par ici).
+    if source ~= "C" and status ~= "in_progress" and (owner == nil or owner == native) then
+        return false
+    end
+    local immune, remaining = Overlord.Zones:IsCapitalImmune(zoneId)
+    return immune == true and (tonumber(remaining) or 0) > 60
 end
 
 local srEvidencePageNonce = 0
@@ -4870,7 +4876,8 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
     if senderVF == "A" then remoteVictoryFaction = "Alliance"
     elseif senderVF == "H" then remoteVictoryFaction = "Horde" end
     
-    if remoteVTs > 0 and remoteVictoryFaction and OverlordDB and remoteVTs <= time() + MAX_CLOCK_SKEW
+    if remoteVTs > 0 and remoteVictoryFaction and OverlordDB
+        and remoteVTs <= ((Overlord.ServerNow and Overlord.ServerNow()) or time()) + MAX_CLOCK_SKEW
         and not IsStaleCampaignTimestamp(remoteVTs) then
         local frontVictory = senderVFront and senderVFront ~= "" and OverlordDB.frontVictories and OverlordDB.frontVictories[senderVFront]
         local localVTs = (frontVictory and frontVictory.timestamp) or 0
@@ -7937,14 +7944,15 @@ function Overlord.Sync:OnReceiveZoneAll(
         if zaEntryAccepted and not loginWinnerApplied then
             -- ZA est un snapshot : seul capturedTime prouve une capture recente.
             -- updatedAt peut etre frais pour un etat ancien et ne doit pas creer d'activite.
-            -- La liberation re-horodate toute la conquete a l'epoch : pas une capture.
-            local _, activityFront = Overlord.Fronts:GetZone(zoneId)
-            local releaseEpoch = activityFront and OverlordDB and OverlordDB.frontTruceResetEpoch
-                and tonumber(OverlordDB.frontTruceResetEpoch[activityFront.id]) or 0
             if not loginPairRepairMode and not runtimeGlobalRepairMode and ct > 0
-                and ct ~= releaseEpoch
                 and Overlord.FrontActivity and Overlord.FrontActivity.RecordByZoneRef then
-                Overlord.FrontActivity:RecordByZoneRef(zoneId, nil, ct)
+                -- La liberation re-horodate toute la conquete a l'epoch : pas une capture.
+                local _, activityFront = Overlord.Fronts:GetZone(zoneId)
+                local releaseEpoch = activityFront and OverlordDB and OverlordDB.frontTruceResetEpoch
+                    and tonumber(OverlordDB.frontTruceResetEpoch[activityFront.id]) or 0
+                if ct ~= releaseEpoch then
+                    Overlord.FrontActivity:RecordByZoneRef(zoneId, nil, ct)
+                end
             end
             local zone = Overlord.Zones:GetZone(zoneId)
             if ownerCode == "N" then
@@ -9146,13 +9154,10 @@ function Overlord.Sync:CheckTotalVictoryFromSync()
     local front = Overlord.Fronts and Overlord.Fronts:GetCurrentFront()
     local frontId = front and front.id
     if not frontId or priv.totalVictoryAnnounced[frontId] then return end
-    -- Conquete persistante : aucune victoire pendant la protection des capitales, et une
-    -- victoire deja liberee (ou purgee) ne se re-annonce jamais sur une carte restee au vainqueur.
+    -- Conquete persistante : la capitale liberee ne peut pas retomber pendant sa
+    -- protection (la victoire en retour du perdant reste possible), et une victoire deja
+    -- liberee (ou purgee) ne se re-annonce jamais sur une carte restee au vainqueur.
     -- (Protection lue seulement quand la carte montre une victoire : appel par paquet C/ZS.)
-    local function FrontCapitalsProtected()
-        return Overlord.Zones.GetFrontCapitalImmunity
-            and select(1, Overlord.Zones:GetFrontCapitalImmunity(frontId))
-    end
     local releasedEpoch = OverlordDB and OverlordDB.frontTruceResetEpoch
         and tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0
 
@@ -9177,7 +9182,8 @@ function Overlord.Sync:CheckTotalVictoryFromSync()
         end
         local victoryTs = GetVictoryCaptureTimestamp(pf)
         if releasedEpoch > 0 and victoryTs <= releasedEpoch + 5 then return end
-        if FrontCapitalsProtected() then return end
+        if Overlord.Zones.IsEnemyCapitalProtectedFor
+            and Overlord.Zones:IsEnemyCapitalProtectedFor(pf, frontId) then return end
         if OverlordDB and (not currentTruce or currentWinner == pf) then
             Overlord.Zones:SetVictoryCooldown(frontId, pf, victoryTs)
             if Overlord.TryGrantVictoryDominationBonus then
@@ -9211,7 +9217,8 @@ function Overlord.Sync:CheckTotalVictoryFromSync()
         end
         local victoryTs = GetVictoryCaptureTimestamp(ef)
         if releasedEpoch > 0 and victoryTs <= releasedEpoch + 5 then return end
-        if FrontCapitalsProtected() then return end
+        if Overlord.Zones.IsEnemyCapitalProtectedFor
+            and Overlord.Zones:IsEnemyCapitalProtectedFor(ef, frontId) then return end
         if OverlordDB and (not currentTruce or currentWinner == ef) then
             Overlord.Zones:SetVictoryCooldown(frontId, ef, victoryTs)
             if Overlord.TryGrantVictoryDominationBonus then
@@ -9449,13 +9456,16 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel, ret
     -- Une TV de l'ancienne victoire ne peut jamais repeindre le front apres le FR.
     if truceResetEpoch > 0 and ts < truceResetEpoch then return end
     -- Deja livre (ou plus ancien) : ignore chat + rejoue d'etat (anti-spam timestamps).
-    -- Une nouvelle victoire sur le meme front arrive au plus tot apres treve + protection.
-    if deliveredTs > 0 and ts < deliveredTs + 900 then
+    -- Une nouvelle victoire sur le meme front arrive au plus tot apres la treve.
+    local truceSeconds = (Overlord.Zones and Overlord.Zones.GetVictoryCooldownSeconds
+        and Overlord.Zones:GetVictoryCooldownSeconds()) or 900
+    if deliveredTs > 0 and ts < deliveredTs + truceSeconds then
         return
     end
-    -- Capitales protegees apres une liberation : aucune victoire possible sur ce front.
-    if proofFrontId and Overlord.Zones and Overlord.Zones.GetFrontCapitalImmunity
-        and select(1, Overlord.Zones:GetFrontCapitalImmunity(proofFrontId)) then
+    -- Capitale liberee encore protegee : la faction qui l'a deja prise ne peut pas
+    -- regagner ce front (la victoire en retour du perdant reste livrable).
+    if proofFrontId and Overlord.Zones and Overlord.Zones.IsEnemyCapitalProtectedFor
+        and Overlord.Zones:IsEnemyCapitalProtectedFor(faction, proofFrontId) then
         return
     end
     local frontVictory = proofFrontId and OverlordDB and OverlordDB.frontVictories
@@ -10387,7 +10397,7 @@ function Overlord.Sync:ResetVictoryFlagForFront(frontId)
     end
 end
 
--- FR : fin de treve - reset des zones du front (capitales + branches initiales).
+-- FR : fin de treve - liberation de la capitale tombee (la conquete reste, capitale protegee).
 function Overlord.Sync:BroadcastFrontTruceEndReset(frontId, resetEpoch)
     if not frontId or not resetEpoch or resetEpoch <= 0 then return end
     if Overlord.InstanceSuspended or IsInInstance() then return end
@@ -10424,7 +10434,13 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
     if not frontId or not resetEpoch or resetEpoch <= 0 then return end
     if not Overlord.Fronts or not Overlord.Fronts:GetFront(frontId) then return end
     if IsStaleCampaignTimestamp(resetEpoch) then return end
+    -- Deja applique (ou plus ancien) : rien a deriver, meme sous un flot de FR.
+    local appliedEpoch = OverlordDB and OverlordDB.frontTruceResetEpoch
+        and tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0
+    if appliedEpoch >= resetEpoch then return end
+    local frNow = (Overlord.ServerNow and Overlord.ServerNow()) or time()
     local locallyDerivedReset = false
+    local derivedWinner = nil
     local victory = OverlordDB and OverlordDB.frontVictories
         and OverlordDB.frontVictories[frontId]
     local victoryTs = victory and math.floor(tonumber(victory.timestamp) or 0) or 0
@@ -10432,14 +10448,14 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
     local cooldown = Overlord.Zones and Overlord.Zones.GetVictoryCooldownSeconds
         and math.floor(tonumber(Overlord.Zones:GetVictoryCooldownSeconds()) or 0) or 0
     if victoryTs > 0 and victoryFaction and cooldown > 0
-        and resetEpoch == victoryTs + cooldown and resetEpoch <= time() + 5
+        and resetEpoch == victoryTs + cooldown and resetEpoch <= frNow + 5
         and Overlord.Zones and Overlord.Zones.LocalStateSupportsVictoryTruce
         and Overlord.Zones:LocalStateSupportsVictoryTruce(frontId, victoryFaction) then
         -- Ce FR est entierement derivable d'une victoire deja canonique locale :
         -- une voix suffit sans elargir ce qu'un sender peut inventer.
         locallyDerivedReset = true
     end
-    if not locallyDerivedReset and cooldown > 0 and resetEpoch <= time() + 5
+    if not locallyDerivedReset and cooldown > 0 and resetEpoch <= frNow + 5
         and Overlord.Zones and Overlord.Zones.LocalStateSupportsVictoryTruce then
         -- Un late joiner peut avoir recu la carte de victoire totale mais manque
         -- VT/VF. La carte elle-meme prouve alors le meme tombstone FR : toutes les
@@ -10460,13 +10476,14 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
                     if capitalTs > 0
                         and math.abs(capitalTs - inferredVictoryTs) <= 5 then
                         locallyDerivedReset = true
+                        derivedWinner = inferredFaction
                         break
                     end
                 end
             end
         end
     end
-    if not locallyDerivedReset and cooldown > 0 and resetEpoch <= time() + 5
+    if not locallyDerivedReset and cooldown > 0 and resetEpoch <= frNow + 5
         and Overlord.Zones and Overlord.Zones.LocalStateShowsCapitalRelease then
         -- Liberation deja recue par ZA avant ce FR (ou carte vue au login) : la capitale
         -- du perdant porte l'epoch exact. Une trace locale independante doit dater la
@@ -10474,28 +10491,43 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
         local releasedVictoryTs = resetEpoch - cooldown
         local prunedTs = OverlordDB and OverlordDB.frontTruceResetEpoch
             and math.floor(tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0) or 0
-        local journalTs = Overlord.GetLatestDominationVictoryForFront
-            and Overlord:GetLatestDominationVictoryForFront(frontId) or 0
-        local corroborated = releasedVictoryTs > 0
-            and ((victoryTs > 0 and math.abs(victoryTs - releasedVictoryTs) <= 5)
-                or (prunedTs > 0 and math.abs(prunedTs - releasedVictoryTs) <= 5)
-                or (journalTs > 0 and math.abs(journalTs - releasedVictoryTs) <= 5))
-        if corroborated and not IsStaleCampaignTimestamp(releasedVictoryTs) then
-            for _, releasedFaction in ipairs({ "Alliance", "Horde" }) do
-                if Overlord.Zones:LocalStateShowsCapitalRelease(
-                    frontId, releasedFaction, resetEpoch) then
-                    locallyDerivedReset = true
-                    break
-                end
+        local journalTs, journalFaction
+        if Overlord.GetLatestDominationVictoryForFront then
+            journalTs, journalFaction = Overlord:GetLatestDominationVictoryForFront(frontId)
+        end
+        journalTs = journalTs or 0
+        -- Le vainqueur vient de la trace qui date cette victoire ; apres une liberation
+        -- les deux capitales sont natives a l'epoch, la carte seule ne tranche que par
+        -- les zones conquises (sinon aucun vainqueur : pas de capitale protegee au hasard).
+        local releasedWinner
+        if releasedVictoryTs > 0 then
+            if victoryTs > 0 and math.abs(victoryTs - releasedVictoryTs) <= 5 then
+                releasedWinner = victoryFaction
+            elseif journalTs > 0 and math.abs(journalTs - releasedVictoryTs) <= 5 then
+                releasedWinner = journalFaction
+                -- Un journal contredit par les zones conquises ne choisit pas la capitale.
+                local mapWinner = Overlord.Zones.ReleasedWinnerFromMap
+                    and Overlord.Zones:ReleasedWinnerFromMap(frontId, resetEpoch)
+                if mapWinner and mapWinner ~= journalFaction then releasedWinner = nil end
+            elseif prunedTs > 0 and math.abs(prunedTs - releasedVictoryTs) <= 5
+                and Overlord.Zones.ReleasedWinnerFromMap then
+                releasedWinner = Overlord.Zones:ReleasedWinnerFromMap(frontId, resetEpoch)
             end
         end
+        if (releasedWinner == "Alliance" or releasedWinner == "Horde")
+            and not IsStaleCampaignTimestamp(releasedVictoryTs)
+            and Overlord.Zones:LocalStateShowsCapitalRelease(frontId, releasedWinner, resetEpoch) then
+            locallyDerivedReset = true
+            derivedWinner = releasedWinner
+        end
     end
-    -- FR est destructif : sans preuve locale derivable, on ignore le paquet et
-    -- on attend ZA/TV. Accumuler des votes inutilises consommait CPU/memoire et
+    -- FR libere une capitale et pose sa protection : sans preuve locale derivable,
+    -- on ignore le paquet et on attend ZA/TV. Accumuler des votes inutilises consommait CPU/memoire et
     -- donnait l'impression qu'un quorum pouvait rendre ce reset fiable.
     if not locallyDerivedReset then return end
     if Overlord.Zones and Overlord.Zones.ApplyFrontTruceEndReset then
-        Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, true)
+        Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, true,
+            derivedWinner or victoryFaction)
     end
 end
 
