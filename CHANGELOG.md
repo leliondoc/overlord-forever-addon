@@ -1,13 +1,6 @@
-1.6.0
+1.6.1
 
-**Overlord Forever 1.6.0**
+**Overlord Forever 1.6.1**
 
-- **Conquest now lasts**: winning a front no longer wipes the map. After the 15-minute truce the conquered zones keep your colours and only the fallen capital rises again for its faction.
-- **The fallen capital is protected for 6 hours**, against the winners only. The defeated side may retake the whole front, the winners' capital included, and win it back. Its map circle shows "Protected until HH:MM", and a chat line announces the release.
-- **Hillsbrad stays a pure brawl**: same 15-minute truce, then the fallen town comes back with no protection at all.
-- **Two guild keeps moved off quest hubs**, where questers kept starting captures by accident: the Crossroads keep is now **Savanna Bastion**, on the open plain north-west of the Crossroads, and the Bloodhoof Village keep is now **Prairie Keep**, on the grassland north of the lake. Guilds holding them keep them.
-- **Tutorial rewritten** in all 7 languages, in the leaderboard's wooden frame: rules, conquest and protection, keeps, alerts and tools, with the exact button names of your interface.
-- **Lighter network for big crowds**: death notices no longer flood the relay (they never counted for the leaderboard; kills still do), the late copy of a capture is only sent when the relay is quiet, and the end of a truce is announced once instead of by every player.
-- Players who log in after a truce still learn which capital is protected.
-- Less memory churn: the leaderboard safety copy is rebuilt every 10 minutes instead of every 2.
-- Stability and validation improvements.
+- **Smoother group and raid play**: Blizzard lets an addon send only about one message per second to your group, raid and the addon channel combined. In a group, Overlord no longer copies background data there (map pages, histories, leaderboard, domination journal, outposts outside a siege), which already travels through the relay. Captures, sieges, the General, alerts and replies to your teammates keep their group copy. Fewer messages refused by Blizzard during bursts (joining a group, a victory, the end of a truce).
+- **Calmer network indicator**: the dot in the panel header and the summary of `/ov network` now judge Blizzard refusals and relay losses over the last 10 minutes instead of the whole session, so a short burst no longer leaves the dot yellow until your next reload. A single refusal, or 1% at most, stays green.
