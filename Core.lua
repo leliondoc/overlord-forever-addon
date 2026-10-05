@@ -4964,10 +4964,14 @@ function Overlord:RunAutoSaveTick()
     if self.Leaderboard and self.Leaderboard.leaderboardDirty then
         self.Leaderboard:Save()
     end
-    -- Snapshot complet du classement toutes les ~2 min (filet anti-perte), mais
-    -- seulement apres mutation. Le top 150 utilise un tas a allocations bornees.
+    -- Snapshot complet du classement toutes les ~10 min (filet anti-perte), mais
+    -- seulement apres mutation. Le top 150 utilise un tas a allocations bornees,
+    -- mais le parcours de toutes les lignes (et l'index meta qu'il reconstruit
+    -- s'il est froid) laisse 2,5 a 25 Mo de dechets selon la taille du classement :
+    -- toutes les 2 min, c'etait l'essentiel de la memoire affichee pour l'addon.
+    -- Le reset hebdomadaire a son propre snapshot (SnapshotCurrentCampaignBeforeReset).
     autoSaveTickCount = autoSaveTickCount + 1
-    if autoSaveTickCount % 4 == 0
+    if autoSaveTickCount % 20 == 0
         and self.Leaderboard and self.Leaderboard.SnapshotCurrentCampaignFull
         and self.Leaderboard._snapshotDirty ~= false
         and not (InCombatLockdown and InCombatLockdown()) then

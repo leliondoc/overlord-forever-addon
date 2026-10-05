@@ -894,7 +894,8 @@ end
 --   * while the queue is busy, drops only repeats beyond COVER_COPIES per target,
 --     and the whole copy when nothing else is left. Local dispatch and the wire
 --     format are untouched.
-local DEDUP_KINDS = { OP = true, LO = true, LOC = true, VB = true, TV = true }
+-- FR : meme contenu "front:epoque" chez tous les clients qui liberent.
+local DEDUP_KINDS = { OP = true, LO = true, LOC = true, VB = true, TV = true, FR = true }
 -- COVER_TTL: how long a sent copy counts. COVER_PENDING: how long a copy still
 -- waiting in the queue counts (an evicted/expired one is voided at once).
 local COVER_TTL, COVER_PENDING, COVER_RECORDS = 60, 20, 128

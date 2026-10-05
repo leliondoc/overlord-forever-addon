@@ -31,6 +31,9 @@ local priv = {
     postVictorySyncGuardUntil = {},
     -- FR recu avant sa preuve (SR envoie FR avant le journal VB) : un par front, rejoue.
     pendingTruceRelease = {},
+    -- Derniere fin de treve entendue par front : un client qui l'a deja recue ne la
+    -- rediffuse pas (tous liberent a la meme seconde, un seul annonceur suffit).
+    heardTruceRelease = {},
     captureDedup = {},
     captureDedupCount = 0,
     captureDedupMax = 128,
@@ -10414,15 +10417,44 @@ function Overlord.Sync:ResetVictoryFlagForFront(frontId)
     end
 end
 
+local function NoteHeardTruceRelease(frontId, epoch)
+    if (priv.heardTruceRelease[frontId] or 0) < epoch then
+        priv.heardTruceRelease[frontId] = epoch
+    end
+end
+
 -- FR : fin de treve - liberation de la capitale tombee (la conquete reste, capitale protegee).
 function Overlord.Sync:BroadcastFrontTruceEndReset(frontId, resetEpoch)
     if not frontId or not resetEpoch or resetEpoch <= 0 then return end
     if Overlord.InstanceSuspended or IsInInstance() then return end
-    local payload = frontId .. ":" .. math.floor(resetEpoch)
-    self:SendToGroup("FR", payload)
-    self:SendToChannel("FR", payload, true)
-    self:BroadcastToRelay("FR", payload)
-    self:BroadcastFrontZoneSnapshot(frontId)
+    local epoch = math.floor(resetEpoch)
+    local payload = frontId .. ":" .. epoch
+    -- Tous les clients qui ont vu la victoire liberent a la meme seconde (horloge
+    -- serveur) : a 10 000 joueurs, chacun rediffusait FR + 3 pages ZA. Un annonceur
+    -- suffit : attente aleatoire de 3 a 25 s, annulee si ce FR a deja ete entendu.
+    -- La liberation locale, elle, a deja eu lieu.
+    local function announce()
+        if Overlord.InstanceSuspended or IsInInstance() then return end
+        if (priv.heardTruceRelease[frontId] or 0) >= epoch then return end
+        -- Reset hebdomadaire (ou autre liberation) entre-temps : plus rien a annoncer.
+        local applied = OverlordDB and OverlordDB.frontTruceResetEpoch
+            and tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0
+        if applied ~= epoch then return end
+        -- Les pairs se taisent des qu'ils entendent ce FR : il ne part qu'avec ses pages
+        -- ZA. Si elles ne peuvent pas partir (sync en attente), un autre client annonce.
+        if Overlord.WaitingForSync
+            or (Overlord.IsCaptureSyncPending and Overlord:IsCaptureSyncPending())
+            or (Overlord.LocalFrontAwaitingNetworkSnapshot
+                and Overlord:LocalFrontAwaitingNetworkSnapshot()) then
+            return
+        end
+        priv.heardTruceRelease[frontId] = epoch
+        self:SendToGroup("FR", payload)
+        self:SendToChannel("FR", payload, true)
+        self:BroadcastToRelay("FR", payload)
+        self:BroadcastFrontZoneSnapshot(frontId)
+    end
+    C_Timer.After(3 + math.random() * 22, announce)
 end
 
 function Overlord.Sync:BroadcastFrontZoneSnapshot(frontId)
@@ -10452,14 +10484,21 @@ function Overlord.Sync:RetryPendingTruceReleases()
     local now = (Overlord.ServerNow and Overlord.ServerNow()) or time()
     local horizon = Overlord.Zones and Overlord.Zones.GetCapitalImmunitySeconds
         and Overlord.Zones:GetCapitalImmunitySeconds() or 21600
-    for frontId, pending in pairs(pendingByFront) do
+    local retries = {}
+    for frontId, slots in pairs(pendingByFront) do
         local applied = OverlordDB and OverlordDB.frontTruceResetEpoch
             and tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0
-        if applied >= pending.epoch or now >= pending.epoch + horizon then
-            pendingByFront[frontId] = nil
-        else
-            self:OnReceiveFrontTruceEndReset(pending.payload, pending.sender, "RETRY")
+        local kept = {}
+        for _, pending in ipairs(slots) do
+            if applied < pending.epoch and now < pending.epoch + horizon then
+                kept[#kept + 1] = pending
+                retries[#retries + 1] = pending
+            end
         end
+        pendingByFront[frontId] = kept[1] and kept or nil
+    end
+    for _, pending in ipairs(retries) do
+        self:OnReceiveFrontTruceEndReset(pending.payload, pending.sender, "RETRY")
     end
 end
 
@@ -10473,7 +10512,13 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
     -- Deja applique (ou plus ancien) : rien a deriver, meme sous un flot de FR.
     local appliedEpoch = OverlordDB and OverlordDB.frontTruceResetEpoch
         and tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0
-    if appliedEpoch >= resetEpoch then return end
+    if appliedEpoch >= resetEpoch then
+        -- Un pair a annonce la meme liberation : notre annonce differee devient inutile.
+        -- Seul un FR prouve (deja applique ici, ou derive plus bas) la fait taire : un FR
+        -- invente ne doit pas empecher la vraie annonce.
+        NoteHeardTruceRelease(frontId, resetEpoch)
+        return
+    end
     local frNow = (Overlord.ServerNow and Overlord.ServerNow()) or time()
     local locallyDerivedReset = false
     local derivedWinner = nil
@@ -10561,28 +10606,49 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
     -- on ignore le paquet et on attend ZA/TV. Accumuler des votes inutilises consommait CPU/memoire et
     -- donnait l'impression qu'un quorum pouvait rendre ce reset fiable.
     if not locallyDerivedReset then
-        -- Un seul FR en attente par front (le plus recent) : la preuve (journal VB,
-        -- carte) arrive souvent juste apres dans la meme reponse SR. Rejoue localement,
-        -- jamais rediffuse, oublie apres la duree de la protection.
-        -- Une epoque future (horloge en avance ou FR forge, ramene a maintenant) ne
-        -- doit jamais evincer la vraie fin de treve en attente de sa preuve.
-        local pending = priv.pendingTruceRelease[frontId]
+        -- FR en attente de preuve : la preuve (journal VB, carte) arrive souvent juste
+        -- apres dans la meme reponse SR. Rejoue localement, jamais rediffuse, oublie
+        -- apres la duree de la protection. Une place par expediteur (son FR le plus
+        -- recent) et quatre par front (les plus recents) : un expediteur qui invente des
+        -- FR ne peut pas evincer seul le vrai. Une epoque datee dans le futur (horloge en
+        -- avance ou FR forge, avant le plafond de NormalizeRemoteTimestamp) n'est jamais
+        -- gardee.
         local rawEpoch = math.floor(tonumber(epochStr) or 0)
         -- Front sans protection de capitale (Hillsbrad) : rien a rattraper, la carte
         -- converge deja par ZA.
         local pendingFront = Overlord.Fronts:GetFront(frontId)
         if sourceChannel ~= "RETRY" and rawEpoch <= frNow + 5
-            and not (pendingFront and pendingFront.noCapitalProtection)
-            and (not pending or pending.epoch < resetEpoch) then
-            priv.pendingTruceRelease[frontId] = { epoch = resetEpoch, payload = payload, sender = sender }
+            and not (pendingFront and pendingFront.noCapitalProtection) then
+            local slots = priv.pendingTruceRelease[frontId] or {}
+            local senderKey = tostring(sender or ""):lower()
+            local known, own = false, nil
+            for i, pending in ipairs(slots) do
+                if pending.epoch == resetEpoch then known = true end
+                if pending.senderKey == senderKey then own = i end
+            end
+            if not known and not (own and slots[own].epoch > resetEpoch) then
+                if own then table.remove(slots, own) end
+                slots[#slots + 1] = { epoch = resetEpoch, payload = frontId .. ":" .. resetEpoch,
+                    sender = sender, senderKey = senderKey }
+                table.sort(slots, function(a, b) return a.epoch > b.epoch end)
+                while #slots > 4 do table.remove(slots) end
+                priv.pendingTruceRelease[frontId] = slots
+            end
         end
         return
     end
     priv.pendingTruceRelease[frontId] = nil
+    NoteHeardTruceRelease(frontId, resetEpoch)
     if Overlord.Zones and Overlord.Zones.ApplyFrontTruceEndReset then
         Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, true,
             derivedWinner or victoryFaction)
     end
+end
+
+-- Reset hebdomadaire : les FR en attente et entendus appartiennent a l'ancienne semaine.
+function Overlord.Sync:ClearTruceReleaseState()
+    priv.pendingTruceRelease = {}
+    priv.heardTruceRelease = {}
 end
 
 -- Snapshot ZA compact (owners, tous les fronts) : canal + groupe, comme DM en sync passive.

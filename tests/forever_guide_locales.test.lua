@@ -42,8 +42,12 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
     assert(string.format(L.CAPITAL_PROTECTED_UNTIL, "21:40"):find("21:40", 1, true))
     assert(string.format(L.CAPITAL_PROTECTED_SHORT, "21:40"):find("21:40", 1, true))
     -- The protection length shown to players matches the code (6 h), the call to arms 4 h.
-    assert(L.GUIDE_SIEGE_BODY:find("6", 1, true), loc .. ": siege text lost the protection length")
-    assert(L.GUIDE_FACTION_CALL_BODY:find("4", 1, true), loc .. ": call to arms lost its cooldown")
+    -- Whole numbers only (a "16" or "24" would not do).
+    assert(L.GUIDE_SIEGE_BODY:find("%f[%d]6%f[%D]"), loc .. ": siege text lost the protection length")
+    assert(L.GUIDE_FACTION_CALL_BODY:find("%f[%d]4%f[%D]"), loc .. ": call to arms lost its cooldown")
+    -- The 15-minute truce, on every front and on the Hillsbrad brawl (no protection there).
+    assert(L.GUIDE_SIEGE_BODY:find("%f[%d]15%f[%D]"), loc .. ": siege text lost the truce length")
+    assert(L.GUIDE_PROGRESS_BODY:find("%f[%d]15%f[%D]"), loc .. ": guide lost the Hillsbrad note")
     -- Commands are quoted exactly as Commands.lua parses them, after every later locale
     -- fix (an old Shard -> Layer rewrite once turned /ov layer into /ov shard).
     for _, cmd in ipairs({ { "GUIDE_SHARD_BODY", "/ov layer help on" }, { "GUIDE_SHARD_BODY", "/ov network" },

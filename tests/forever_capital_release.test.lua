@@ -23,6 +23,7 @@ Overlord.SaveState = function() end
 Overlord.MarkDirty = function() end
 Overlord.PrintNotification = function() end
 local broadcasts = {}
+local realBroadcastFR = sync.BroadcastFrontTruceEndReset
 sync.BroadcastFrontTruceEndReset = function(_, frontId, epoch)
     broadcasts[#broadcasts + 1] = { frontId = frontId, epoch = epoch }
 end
@@ -353,6 +354,13 @@ Overlord.GetLatestDominationVictoryForFront = function(_, frontId)
 end
 sync:RetryPendingTruceReleases()
 assert(not select(1, zones:GetFrontCapitalImmunity("elwynn")), "Expired pending FR came back")
+-- The slot itself is gone: back inside the window with full proof, nothing is replayed.
+clock = UE + 60
+hordeReleasedMap(UE)
+for _, zone in ipairs(branches) do zone.capturedTime, zone.updatedAt = UE + 30, UE + 30 end
+sync:RetryPendingTruceReleases()
+assert(not OverlordDB.frontTruceResetEpoch.elwynn, "An expired pending FR was kept and replayed")
+clock = UE + zones:GetCapitalImmunitySeconds() + 10
 Overlord.GetLatestDominationVictoryForFront = nil
 -- 18. Hillsbrad is a pure brawl: same 15-minute truce, then the fallen town comes back
 -- with no protection at all (no record, no gate, no label, its own chat line).
@@ -385,5 +393,91 @@ Overlord.GetLatestDominationVictoryForFront = function(_, frontId)
     if frontId == "hillsbrad" then return HV, "Alliance" end
 end
 assert(not select(1, zones:GetFrontCapitalImmunity("hillsbrad")), "The journal protected a Hillsbrad town")
+Overlord.GetLatestDominationVictoryForFront = nil
+-- 19. Truce-end herd: every client releases at the same second, one announcer is
+-- enough. The announce waits 3-25 s and is cancelled once the same FR was heard.
+local fired, timersFR = {}, {}
+local realAfter = C_Timer.After
+C_Timer.After = function(delay, fn) timersFR[#timersFR + 1] = { delay = delay, fn = fn } end
+local savedSend = { sync.SendToGroup, sync.SendToChannel, sync.BroadcastToRelay, sync.BroadcastFrontZoneSnapshot }
+sync.SendToGroup = function(_, kind) fired[#fired + 1] = "group:" .. kind end
+sync.SendToChannel = function(_, kind) fired[#fired + 1] = "channel:" .. kind end
+sync.BroadcastToRelay = function(_, kind) fired[#fired + 1] = "relay:" .. kind end
+sync.BroadcastFrontZoneSnapshot = function() fired[#fired + 1] = "za" end
+-- Login capture sync finished: the ZA pages can go with the FR.
+local realCaptureSyncPending = Overlord.IsCaptureSyncPending
+Overlord.IsCaptureSyncPending = function() return false end
+local herdEpoch = clock - 30
+-- The announce follows this client's own release (applied first, then announced).
+OverlordDB.frontTruceResetEpoch.elwynn = herdEpoch
+realBroadcastFR(sync, "elwynn", herdEpoch)
+assert(#fired == 0 and #timersFR == 1, "Truce-end announce was not deferred")
+assert(timersFR[1].delay >= 3 and timersFR[1].delay <= 25, "Announce delay outside 3-25 s")
+sync:OnReceiveFrontTruceEndReset("elwynn:" .. herdEpoch, "Faster Peer", "CHANNEL")
+timersFR[1].fn()
+assert(#fired == 0, "Truce end re-announced although the network already carried it")
+OverlordDB.frontTruceResetEpoch.redridge = herdEpoch
+realBroadcastFR(sync, "redridge", herdEpoch)
+-- A forged FR for a later epoch on the same front proves nothing and silences nobody.
+sync:OnReceiveFrontTruceEndReset("redridge:" .. (herdEpoch + 5), "Forger Peer", "CHANNEL")
+timersFR[2].fn()
+assert(#fired == 4, "Unheard truce end was not announced once (FR group/channel/relay + ZA)")
+timersFR[2].fn()
+assert(#fired == 4, "Truce end announced twice by the same client")
+-- Weekly reset (or another release) before the timer fires: nothing is announced.
+OverlordDB.frontTruceResetEpoch.ashenvale = herdEpoch
+realBroadcastFR(sync, "ashenvale", herdEpoch)
+OverlordDB.frontTruceResetEpoch.ashenvale = nil
+timersFR[#timersFR].fn()
+assert(#fired == 4, "A truce end was announced after the weekly reset")
+-- While the map waits for its login sync the ZA pages cannot go: no bare FR either.
+OverlordDB.frontTruceResetEpoch.ashenvale = herdEpoch
+realBroadcastFR(sync, "ashenvale", herdEpoch)
+Overlord.WaitingForSync = true
+timersFR[#timersFR].fn()
+Overlord.WaitingForSync = nil
+assert(#fired == 4, "A bare FR left without its ZA pages")
+OverlordDB.frontTruceResetEpoch.ashenvale = nil
+sync.SendToGroup, sync.SendToChannel, sync.BroadcastToRelay, sync.BroadcastFrontZoneSnapshot =
+    savedSend[1], savedSend[2], savedSend[3], savedSend[4]
+Overlord.IsCaptureSyncPending = realCaptureSyncPending
+C_Timer.After = realAfter
+
+-- 20. A late release (login, delayed tick) is applied locally but never re-broadcast.
+zones:ClearFrontVictories()
+broadcasts = {}
+local LV = clock - 3000
+zones:SetVictoryCooldown("elwynn", "Alliance", LV)
+for _, zone in ipairs(elwynn.zones) do
+    zone.owner, zone.status, zone.capturedTime, zone.updatedAt = "Alliance", "captured", LV, LV
+    zone._loginSyncUnconfirmed = nil
+end
+zones:TryExpireFrontTruces()
+assert(hordeCap.owner == "Horde" and OverlordDB.frontTruceResetEpoch.elwynn == LV + 900,
+    "Late release was not applied locally")
+assert(#broadcasts == 0, "A release older than 2 minutes was re-broadcast")
+
+-- 21. Pending slots (one per sender, four per front): newer unproven FRs from three
+-- senders, one of them sending several, cannot evict the genuine one.
+zones:ClearFrontVictories()
+local GV = clock + 50
+clock = GV + 1500
+local GE = GV + 900
+hordeReleasedMap(GE)
+for _, zone in ipairs(branches) do zone.capturedTime, zone.updatedAt = GE + 300, GE + 300 end
+sync:OnReceiveFrontTruceEndReset("elwynn:" .. GE, "Genuine Peer", "CHANNEL")
+for i = 1, 5 do
+    local name = (i % 2 == 0) and "FORGER PEER" or "Forger Peer"
+    sync:OnReceiveFrontTruceEndReset("elwynn:" .. (clock - 60 + i), name, "CHANNEL")
+end
+for i = 1, 2 do
+    sync:OnReceiveFrontTruceEndReset("elwynn:" .. (clock - 30 + i), "Forger " .. i, "CHANNEL")
+end
+Overlord.GetLatestDominationVictoryForFront = function(_, frontId)
+    if frontId == "elwynn" then return GV, "Horde" end
+end
+sync:RetryPendingTruceReleases()
+local slotImmune, _, _, slotFaction = zones:GetFrontCapitalImmunity("elwynn")
+assert(slotImmune and slotFaction == "Alliance", "A newer unproven FR evicted the genuine pending one")
 Overlord.GetLatestDominationVictoryForFront = nil
 print("Forever capital release: conquest kept, capital released and protected, old clients and forged sieges OK")

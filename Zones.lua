@@ -828,6 +828,9 @@ function Overlord.Zones:ClearFrontVictories()
     OverlordDB.lastVictoryFrontId = nil
     OverlordDB.frontTruceResetEpoch = {}
     OverlordDB.frontCapitalImmuneFrom = {}
+    if Overlord.Sync and Overlord.Sync.ClearTruceReleaseState then
+        Overlord.Sync:ClearTruceReleaseState()
+    end
 end
 
 function Overlord.Zones:SetVictoryCooldown(frontId, winningFaction, timestamp)
@@ -1244,18 +1247,23 @@ function Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, fromSync, w
     if not fromSync then
         local mapLabel = self:GetFrontMapDisplayName(frontId) or frontId
         local untilTs = resetEpoch + CAPITAL_RELEASE_IMMUNITY
+        -- Connexion tardive : pas d'annonce perimee dans le chat. Sans protection
+        -- (Hillsbrad), la ligne n'a de sens que dans les 15 min qui suivent ; ailleurs,
+        -- tant que la protection dure (jamais d'heure deja passee).
         if not protectsCapital then
             -- Front sans protection (Hillsbrad) : le combat reprend aussitot.
             if L.FRONT_TRUCE_ENDED_FIGHT and resetEpoch + CAPITAL_VICTORY_COOLDOWN > ImmunityNow() then
                 Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.FRONT_TRUCE_ENDED_FIGHT,
                     mapLabel))
             end
-        -- Connexion tardive : protection deja finie, pas d'heure passee dans le chat.
         elseif L.FRONT_CAPITAL_RELEASED and untilTs > ImmunityNow() then
             Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.FRONT_CAPITAL_RELEASED,
                 mapLabel, date("%H:%M", untilTs)))
         end
-        if Overlord.Sync and Overlord.Sync.BroadcastFrontTruceEndReset then
+        -- Liberation ancienne (connexion tardive, tick en retard) : le reseau l'a deja,
+        -- ne pas la rediffuser.
+        if Overlord.Sync and Overlord.Sync.BroadcastFrontTruceEndReset
+            and ImmunityNow() - resetEpoch <= 120 then
             Overlord.Sync:BroadcastFrontTruceEndReset(frontId, resetEpoch)
         end
     end
