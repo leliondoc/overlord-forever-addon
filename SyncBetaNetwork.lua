@@ -725,6 +725,8 @@ function net:GetDirectPeers()
     table.sort(names)
     return names
 end
+-- Relais en service (option activee) : la taille des combats est alors partagee.
+function net:IsEnabled() return enabled() end
 -- Same count as #GetDirectPeers(), without building and sorting a list (up to 512).
 function net:CountDirectPeers()
     local count, now = 0, GetTime()
@@ -1803,7 +1805,8 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         -- Group mates without the channel still need a copy: one held group-only
         -- copy per hearer, dropped as soon as a mate's copy is heard in the group.
         if transport == "CHANNEL" and p.target == "*" and p.kind ~= "NH"
-            and p.kind ~= "SH" and IsInGroup() and not retryForward then
+            and p.kind ~= "SH" and IsInGroup() and not retryForward
+            and (not sync.GroupCarries or sync:GroupCarries(p.kind, p.payload)) then
             local pg = { region = p.region, id = p.id, at = p.at, target = p.target, path = p.path,
                 kind = p.kind, payload = p.payload, groupOnly = true, skipChannel = true, heardOn = transport }
             if holdForward("G:" .. key, pg, "group") then

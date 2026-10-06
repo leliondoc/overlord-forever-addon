@@ -3230,8 +3230,8 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
     recentKCredits:Remember(playerName:lower(),
         { ts = killCreditNow, skipZone = false }, killCreditNow, false)
     -- Activite uniquement apres toutes les validations K (epoch, identite, anti-spoof, total).
-    if Overlord.FrontActivity and Overlord.FrontActivity.RecordByZoneRef then
-        Overlord.FrontActivity:RecordByZoneRef(zoneId, playerName)
+    if Overlord.FrontActivity and Overlord.FrontActivity.RecordKillActivity then
+        Overlord.FrontActivity:RecordKillActivity(zoneId, playerName)
     end
     -- Alerte de raid de guilde : K deja valide, guilde et semaine de score du K.
     if Overlord.GuildKillAlert and Overlord.GuildKillAlert.OnLiveKill then
@@ -3310,7 +3310,11 @@ function Overlord.Sync:OnReceiveEnemyKill(payload, sender)
     if recentEKs:Get(key, now) ~= nil then return end
     if not recentEKs:Remember(key, now, now, false) then return end
     -- EK est une preuve de combat non autoritaire pour le score, mais valide pour le panneau.
-    Overlord.FrontActivity:RecordByZoneRef(zoneId, playerName, tsStr)
+    if Overlord.FrontActivity.RecordKillActivity then
+        Overlord.FrontActivity:RecordKillActivity(zoneId, playerName, tsStr)
+    else
+        Overlord.FrontActivity:RecordByZoneRef(zoneId, playerName, tsStr)
+    end
     -- EK entrant est volontairement non autoritaire : pas de leaderboard, pas de prime,
     -- pas de metadonnees et pas de compteurs zone depuis une simple affirmation de victime.
     return
@@ -5095,7 +5099,7 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
             end
         end
         if not territorialResponseOnly and self.AppendFrontActivityToSrQueue then
-            pcall(self.AppendFrontActivityToSrQueue, self, queue)
+            pcall(self.AppendFrontActivityToSrQueue, self, queue, directSR)
         end
         -- Etat live immediat : les timers/tenants ne doivent pas attendre les historiques.
         -- Une reponse territoriale reprend toutes les captures du front actif.

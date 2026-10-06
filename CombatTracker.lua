@@ -1170,8 +1170,8 @@ function Overlord.Combat:OnPlayerDead()
                         or (Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs())
                         or (OverlordDB and OverlordDB.lastResetTimestamp) or 0
                     local payload = fullKillerName .. ":" .. classStr .. ":" .. (enemyFaction or "") .. ":" .. ts .. ":" .. zoneIdForEK .. ":" .. epoch
-                    if Overlord.FrontActivity and Overlord.FrontActivity.RecordLocalByZoneRef then
-                        Overlord.FrontActivity:RecordLocalByZoneRef(zoneIdForEK, fullKillerName)
+                    if Overlord.FrontActivity and Overlord.FrontActivity.RecordKillActivity then
+                        Overlord.FrontActivity:RecordKillActivity(zoneIdForEK, fullKillerName, nil, true)
                     end
                     local largeSyncEvent = Overlord.Sync.IsLargeEvent
                         and Overlord.Sync:IsLargeEvent()

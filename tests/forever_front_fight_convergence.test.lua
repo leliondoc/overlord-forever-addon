@@ -58,12 +58,19 @@ local function shown(kills)
     for _, floor in ipairs(BRACKETS) do if kills >= floor then return floor .. "+" end end
     return kills > 0 and "active" or "-"
 end
+-- Exactly what the dock prints (Popups.lua FormatFrontActivityAge), in row order.
 local function panel(client)
     local out = {}
     for _, row in ipairs(client.FA:GetActivityRows()) do
-        if row.active then out[#out + 1] = row.frontId .. "=" .. shown(row.kills) end
+        if row.active then
+            local text = shown(row.kills)
+            if text == "active" or text == "-" then
+                local age = math.max(0, tonumber(row.ageSeconds) or 0)
+                text = age < 60 and "now" or (math.min(5, math.floor(age / 60)) .. "min")
+            end
+            out[#out + 1] = row.frontId .. "=" .. text
+        end
     end
-    table.sort(out)
     return table.concat(out, " ")
 end
 
@@ -85,11 +92,11 @@ local function runTimers()
     end
 end
 
--- As Sync:OnReceiveKill does: the K marks its front active, then the guild alert's
--- delta feeds the fight size.
+-- As Sync:OnReceiveKill does: the K is kill evidence (it no longer dates the row while
+-- brackets are shared), then the guild alert's delta feeds the fight size.
 local function kills(client, zoneRef, n)
     for _ = 1, n do
-        client.FA:RecordByZoneRef(zoneRef, "Killer Tester")
+        client.FA:RecordKillActivity(zoneRef, "Killer Tester")
         assert(client.FA:RecordKills(zoneRef, 1))
     end
 end
@@ -106,7 +113,7 @@ kills(c, "@ashenvale", 2)
 runTimers()
 local expected = panel(a)
 assert(expected:find("hillsbrad=30+", 1, true) and expected:find("#1437=5+", 1, true)
-    and expected:find("ashenvale=active", 1, true), "Alpha's own panel is wrong: " .. expected)
+    and expected:find("ashenvale=now", 1, true), "Alpha's own panel is wrong: " .. expected)
 for _, client in ipairs(clients) do
     assert(panel(client) == expected, client.name .. " sees " .. panel(client) .. " instead of " .. expected)
 end
@@ -165,6 +172,101 @@ do
     assert(panel(best) == panel(watcher), "best and watcher disagree: " .. panel(best) .. " / " .. panel(watcher))
 end
 
+-- End of a fight: the panel stays identical every 30 s until the rows expire, whether
+-- a client heard the kills or only the shared brackets.
+do
+    for _, client in ipairs(clients) do client.FA:ResetForCampaign() end
+    local hearer, other = newClient("End Hearer"), newClient("End Other")
+    -- 12 kills (10+ announced), then a trickle that stays under the next bracket and
+    -- stops before the refresh: the hearer still holds 5 recent kills when the shared
+    -- bracket expires. Neither its count nor its own clock may show on its panel.
+    kills(hearer, "@arathi", 12)
+    runTimers()
+    for _ = 1, 5 do
+        serverNow = serverNow + 30
+        kills(hearer, "@arathi", 1)
+        runTimers()
+    end
+    for _ = 1, 14 do
+        assert(panel(hearer) == panel(other), "end of fight differs: " .. panel(hearer) .. " / " .. panel(other))
+        serverNow = serverNow + 30
+    end
+    assert(panel(hearer) == "" and panel(other) == "", "rows did not expire together")
+end
+
+-- A K carrying a front's own map ("#uiMapID") does not date that front locally either:
+-- nothing shows before the shared bracket, then the same panel everywhere.
+do
+    for _, client in ipairs(clients) do client.FA:ResetForCampaign() end
+    local mapHearer, mapOther = newClient("Map Hearer"), newClient("Map Other")
+    kills(mapHearer, "#1424", 3)
+    assert(panel(mapHearer) == "", "a front map K dated the row locally: " .. panel(mapHearer))
+    runTimers()
+    assert(panel(mapHearer) ~= "" and panel(mapHearer) == panel(mapOther),
+        "front map K: " .. panel(mapHearer) .. " / " .. panel(mapOther))
+end
+
+-- Same bracket: rows are ordered by front id, never by the translated name, so a
+-- French and an English player list them in the same order.
+do
+    for _, client in ipairs(clients) do client.FA:ResetForCampaign() end
+    local viewer = newClient("Order Viewer")
+    -- A translated name that sorts last (as "Hautes-terres d'Arathi" would among others).
+    viewer.env.Overlord.Fronts:GetFront("arathi").dropdownLabel = "Zz Arathi"
+    local s30 = math.floor(serverNow / 30)
+    for _, id in ipairs({ "redridge", "arathi", "hillsbrad" }) do
+        assert(viewer.FA:OnReceiveKillBracket("1:" .. id .. ":10:" .. s30, "Order " .. id, "BETA"))
+    end
+    assert(panel(viewer) == "arathi=10+ hillsbrad=10+ redridge=10+", "tie order: " .. panel(viewer))
+end
+
+-- A send refused by a saturated relay covers nothing: the client tries again later,
+-- and the others get the bracket once the relay accepts it.
+do
+    for _, client in ipairs(clients) do client.FA:ResetForCampaign() end
+    local busy, peer = newClient("Busy Sender"), newClient("Busy Peer")
+    local realBroadcast = busy.env.Overlord.BetaNetwork.Broadcast
+    busy.env.Overlord.BetaNetwork.Broadcast = function() return 0 end
+    kills(busy, "@redridge", 12)
+    runTimers()
+    assert(panel(peer) == "", "a refused bracket reached the others")
+    busy.env.Overlord.BetaNetwork.Broadcast = realBroadcast
+    serverNow = serverNow + 25
+    kills(busy, "@redridge", 1)
+    runTimers()
+    assert(panel(peer) == "redridge=10+" and panel(busy) == panel(peer),
+        "the refused bracket was never sent again: " .. panel(peer) .. " / " .. panel(busy))
+end
+
+-- A raw FK posted on the channel or in a group by a stranger is ignored.
+do
+    local fa = d.FA
+    fa:ResetForCampaign()
+    local s30 = math.floor(serverNow / 30)
+    assert(not fa:OnReceiveKillBracket("1:hillsbrad:500:" .. s30, "Stranger Tester", "CHANNEL"),
+        "a raw channel FK was accepted")
+    assert(not fa:OnReceiveKillBracket("1:hillsbrad:500:" .. s30, "Stranger Tester", "PARTY"),
+        "a raw party FK was accepted")
+    assert(panel(d) == "", "a stranger's raw FK reached the panel")
+end
+
+-- A client that logs in mid-fight gets the current brackets in the sync reply and
+-- shows the same panel right away.
+do
+    for _, client in ipairs(clients) do client.FA:ResetForCampaign() end
+    local veteran = newClient("Sync Veteran")
+    kills(veteran, "@ashenvale", 22)
+    kills(veteran, "#1437", 7)
+    runTimers()
+    local joiner = newClient("Sync Joiner")
+    local entries = veteran.FA:BuildKillBracketSyncEntries()
+    assert(#entries >= 2, "no brackets offered in the sync reply")
+    for _, payload in ipairs(entries) do
+        joiner.FA:OnReceiveKillBracket(payload, veteran.name, "BETA")
+    end
+    assert(panel(joiner) == panel(veteran), "the joiner sees " .. panel(joiner) .. " instead of " .. panel(veteran))
+end
+
 -- At scale: 40 clients, four fronts fought for 10 minutes, each kill heard by a random
 -- quarter of the clients. Everyone shows the same panel all along, and the network
 -- carries a handful of announcements per front, not one per kill.
@@ -183,7 +285,7 @@ do
                     killCount = killCount + 1
                     for _, client in ipairs(crowd) do
                         if math.random() < 0.25 then
-                            client.FA:RecordByZoneRef(ref, "Killer Tester")
+                            client.FA:RecordKillActivity(ref, "Killer Tester")
                             client.FA:RecordKills(ref, 1)
                         end
                     end
@@ -215,14 +317,14 @@ assert(not fa:OnReceiveKillBracket("1:hillsbrad:10:" .. (slot + 3), "X", "BETA")
 assert(not fa:OnReceiveKillBracket("1:hillsbrad:10:" .. slot .. string.rep("0", 60), "X", "BETA"),
     "an oversized payload accepted")
 assert(fa:OnReceiveKillBracket("1:hillsbrad:10:" .. slot, "X", "BETA"), "a valid announcement refused")
--- One sender flooding announcements is cut after its budget (10 per minute).
+-- One sender flooding announcements is cut after its budget (20 per minute).
 local accepted = 0
 for i = 1, 30 do
     if fa:OnReceiveKillBracket("1:arathi:" .. (i % 2 == 0 and 20 or 30) .. ":" .. (slot - (i % 9)), "Flood Tester", "BETA") then
         accepted = accepted + 1
     end
 end
-assert(accepted <= 10, "a flooding sender got " .. accepted .. " announcements accepted")
+assert(accepted <= 20, "a flooding sender got " .. accepted .. " announcements accepted")
 fa:ResetForCampaign()
 -- Hundreds of honest senders in one minute are never locked out (oldest make room).
 for i = 1, 300 do

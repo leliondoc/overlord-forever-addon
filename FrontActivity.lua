@@ -56,9 +56,49 @@ local preparedActivityRoot, preparedActorRoot = nil, nil
 -- Paliers de combat annonces (FK), voir plus bas : zone -> { [palier] = expiration }.
 local reportedByKey = {}
 local reportedCount = 0
+local reportRevision = 0
 local ownSentByKey = {}
-local originBudget = {}
-local originCount = 0
+-- Budget glissant par cle (expediteur, passerelle) : `limit` annonces par fenetre,
+-- `maxKeys` cles suivies, la plus ancienne cede sa place (jamais de refus en bloc).
+local function NewLimiter(limit, window, maxKeys)
+    local entries, count = {}, 0
+    local limiter = {}
+    function limiter.take(key, now)
+        local entry = entries[key]
+        if not entry or now - entry.since >= window or now < entry.since then
+            if not entry then
+                if count >= maxKeys then
+                    local oldest, oldestSince
+                    for name, e in pairs(entries) do
+                        if now - e.since >= window then
+                            entries[name] = nil
+                            count = count - 1
+                        elseif not oldestSince or e.since < oldestSince then
+                            oldest, oldestSince = name, e.since
+                        end
+                    end
+                    if count >= maxKeys and oldest then
+                        entries[oldest] = nil
+                        count = count - 1
+                    end
+                end
+                count = count + 1
+            end
+            entry = { since = now, used = 0 }
+            entries[key] = entry
+        end
+        if entry.used >= limit then return false end
+        entry.used = entry.used + 1
+        return true
+    end
+    function limiter.reset() wipe(entries); count = 0 end
+    return limiter
+end
+-- A la reception : 20 annonces par expediteur et par minute (une reponse de synchro en
+-- porte jusqu'a 10), 80 par passerelle (le
+-- dernier saut authentifie : un faussaire qui change de nom passe par la meme).
+local originLimiter = NewLimiter(20, 60, 256)
+local gatewayLimiter = NewLimiter(80, 60, 256)
 
 -- Horloge commune Blizzard : contrairement a l'heure systeme du PC, elle ne derive pas
 -- entre deux joueurs. Le fallback ne sert que pendant une indisponibilite API improbable.
@@ -84,8 +124,9 @@ function FA:ResetForCampaign()
     wipe(reportedByKey)
     reportedCount = 0
     wipe(ownSentByKey)
-    wipe(originBudget)
-    originCount = 0
+    reportRevision = reportRevision + 1
+    originLimiter.reset()
+    gatewayLimiter.reset()
     preparedActivityRoot, preparedActorRoot = nil, nil
     wipe(lastWritePurgeAtByFront)
     activityRevision = activityRevision + 1
@@ -99,6 +140,13 @@ local function PublishActivityChange(frontId)
     for _, callback in pairs(activityChangeListeners) do
         pcall(callback, frontId, activityRevision)
     end
+end
+
+-- Paliers de combat partages (relais en service) : le panneau ne montre alors que
+-- l'etat partage, le meme chez tous (voir FK plus bas).
+local function SharingActive()
+    local net = Overlord.BetaNetwork
+    return net ~= nil and net.Broadcast ~= nil and (not net.IsEnabled or net:IsEnabled())
 end
 
 local function IsKnownFrontId(frontId)
@@ -397,7 +445,7 @@ end
 
 -- Enregistre une activite deja validee. playerName est optionnel : FA/ZA transportent
 -- un timestamp fiable sans necessairement connaitre l'acteur d'origine.
-function FA:Record(frontId, playerName, ts)
+function FA:Record(frontId, playerName, ts, actorOnly)
     if not IsKnownFrontId(frontId) then return false end
     local activity, actors = GetStores()
     if not activity then return false end
@@ -414,7 +462,7 @@ function FA:Record(frontId, playerName, ts)
         end
     end
     local previous = tonumber(activity[frontId]) or 0
-    if ts > previous then
+    if not actorOnly and ts > previous then
         activity[frontId] = ts
         changed = true
     end
@@ -463,6 +511,16 @@ function FA:RecordLocalByZoneRef(zoneRef, playerName, ts)
     return self:Record(frontId, playerName, ts)
 end
 
+-- Preuve de combat entendue seulement par ce client (K recu, notre kill, avis de mort) :
+-- quand les paliers sont partages (relais actif), elle ne date plus la ligne du
+-- panneau. L'activite des combats arrive alors par les paliers FK, les memes chez tous.
+function FA:RecordKillActivity(zoneRef, playerName, ts, isLocal)
+    local frontId
+    if isLocal then frontId = self:GetLocalFrontId(zoneRef) else frontId = self:GetFrontIdFromZoneRef(zoneRef) end
+    if not frontId then return false end
+    return self:Record(frontId, playerName, ts, SharingActive())
+end
+
 -- Taille du combat : nouveaux kills deja comptes par l'alerte de guilde (delta de
 -- totaux K successifs d'un meme joueur, une copie en double ne compte pas).
 -- "#uiMapID" : le front de cette carte s'il y en a un, sinon la zone du monde (une
@@ -490,6 +548,10 @@ local function ResolveWorldKillKey(zoneRef)
         if worldNameCount >= 256 then
             local kept = {}
             for tracked in pairs(killLastAtByKey) do kept[tracked] = worldNameByKey[tracked] end
+            -- Zones dont un palier partage est affiche : leur nom reste aussi.
+            for tracked in pairs(reportedByKey) do
+                if kept[tracked] == nil then kept[tracked] = worldNameByKey[tracked] end
+            end
             wipe(worldNameByKey)
             worldNameCount = 0
             for tracked, name in pairs(kept) do
@@ -553,8 +615,9 @@ function FA:RecordKills(zoneRef, kills)
         if frontId:sub(1, 1) == "#" then
             if not TrackWorldKey(frontId, now, now) then return false end
         else
-            -- Carte d'un front annoncee en "#uiMapID" : le front devient actif aussi.
-            self:Record(frontId, nil, now)
+            -- Carte d'un front annoncee en "#uiMapID" : le front devient actif aussi
+            -- (sauf quand les paliers sont partages : c'est alors le palier qui le date).
+            self:Record(frontId, nil, now, SharingActive())
         end
     end
     local slot = math.floor(now / KILL_SLOT_SEC)
@@ -607,9 +670,6 @@ local REPORT_SLOT_SEC = 30
 local REPORT_REFRESH_MARGIN = 90
 local REPORT_MAX_KEYS = 32
 local REPORT_MAX_PAYLOAD = 48
--- A la reception : 10 annonces acceptees par expediteur et par minute (un client honnete
--- n'en emet que quelques-unes), 256 expediteurs suivis (le plus ancien cede sa place).
-local ORIGIN_BUDGET, ORIGIN_WINDOW, ORIGIN_MAX = 10, 60, 256
 local pendingReport = {}
 
 local function IsWorldKey(key)
@@ -681,12 +741,17 @@ local function StoreReport(key, bracket, expiresAt, now)
     end
     if (entries[bracket] or 0) >= expiresAt then return false end
     entries[bracket] = expiresAt
+    reportRevision = reportRevision + 1
     return true
 end
 
 -- Couvert : un palier au moins egal reste valable plus de 90 s.
 local function ReportCovers(key, bracket, now)
     local own = ownSentByKey[key]
+    if own and own.expiresAt <= now then
+        ownSentByKey[key] = nil
+        own = nil
+    end
     if own and own.bracket >= bracket and own.expiresAt - now > REPORT_REFRESH_MARGIN then
         return true
     end
@@ -710,7 +775,9 @@ local function ReportDelay()
         local ok, peers = pcall(net.GetDirectPeers, net)
         if ok and type(peers) == "table" then crowd = #peers + 1 end
     end
-    local early = math.min(1, 4 / crowd)
+    -- Plancher : sans maillage dense (peu de voisins directs), beaucoup de clients
+    -- franchissent quand meme le palier ensemble ; mieux vaut converger un peu plus tard.
+    local early = math.min(1, 4 / math.max(crowd, 100))
     local roll = math.random()
     if roll < early then return 1 + math.random() * 5 end
     if roll < math.min(1, early * 8) then return 10 + math.random() * 8 end
@@ -720,23 +787,28 @@ end
 local function SendReport(key, bracket, now)
     local slot = math.floor(now / REPORT_SLOT_SEC)
     local expiresAt = slot * REPORT_SLOT_SEC + ACTIVITY_WINDOW
+    local payload = "1:" .. key .. ":" .. bracket .. ":" .. slot
+    local net = Overlord.BetaNetwork
+    if not (net and net.Broadcast) or (net:Broadcast("FK", payload) or 0) <= 0 then
+        -- Refuse (relais sature ou absent) : rien n'est couvert ni affiche, nouvel essai
+        -- dans 20 s au plus tot (pas a chaque kill).
+        ownSentByKey[key] = { bracket = bracket, expiresAt = now + REPORT_REFRESH_MARGIN + 20 }
+        return false
+    end
     -- Notre envoi couvre ce palier meme si la table des paliers recus est pleine.
     ownSentByKey[key] = { bracket = bracket, expiresAt = expiresAt }
     StoreReport(key, bracket, expiresAt, now)
-    local payload = "1:" .. key .. ":" .. bracket .. ":" .. slot
-    local net = Overlord.BetaNetwork
-    -- Relais present (meme sature) : pas de copies directes de plus sur le quota partage.
-    if net and net.Broadcast then return (net:Broadcast("FK", payload) or 0) > 0 end
-    local sync = Overlord.Sync
-    if not sync then return false end
-    local sent = false
-    if sync.SendToGroup and sync:SendToGroup("FK", payload) then sent = true end
-    if sync.SendToChannel and sync:SendToChannel("FK", payload) then sent = true end
-    return sent
+    if IsWorldKey(key) then
+        TrackWorldKey(key, slot * REPORT_SLOT_SEC, now)
+        PublishActivityChange(key)
+    else
+        FA:Record(key, nil, slot * REPORT_SLOT_SEC)
+    end
+    return true
 end
 
 MaybeScheduleReport = function(key, now)
-    if pendingReport[key] or Overlord.InstanceSuspended then return end
+    if pendingReport[key] or Overlord.InstanceSuspended or not SharingActive() then return end
     local bracket = ReportBracket(key, FA:GetKillCount(key, now))
     if bracket <= 0 or ReportCovers(key, bracket, now) then return end
     if not (C_Timer and C_Timer.After) then return end
@@ -752,12 +824,65 @@ MaybeScheduleReport = function(key, now)
 end
 
 -- Kills affiches : le compte local, ou le plus haut palier frais annonce s'il est plus grand.
+-- Kills affiches. Relais actif : seulement les paliers partages (les memes chez tous ;
+-- notre compte local sert a annoncer). Sans relais : le compte local, comme avant.
 function FA:GetDisplayKillCount(key, now)
     now = now or ActivityNow()
-    local localCount = self:GetKillCount(key, now)
     local top = TopBracket(key, now)
+    if SharingActive() then return top end
+    local localCount = self:GetKillCount(key, now)
     if top > localCount then return top end
     return localCount
+end
+
+-- Heure (serveur) du palier frais le plus recent d'une zone, ou nil.
+local function LatestReportAt(key, now)
+    local entries = FreshBrackets(key, now)
+    if not entries then return nil end
+    local latest
+    for _, expiresAt in pairs(entries) do
+        local at = expiresAt - ACTIVITY_WINDOW
+        if not latest or at > latest then latest = at end
+    end
+    return latest
+end
+
+-- Paliers frais a transmettre dans une reponse de synchronisation (connexion, reload,
+-- retour d'instance). Par zone : le plus haut, et celui qui vit le plus longtemps s'il
+-- est different (sinon la zone disparaitrait plus tot chez l'arrivant). 10 au plus.
+local syncEntriesCache, syncEntriesAt, syncEntriesRevision = nil, 0, -1
+function FA:BuildKillBracketSyncEntries()
+    local now = ActivityNow()
+    -- Une vague de connexions demande souvent la meme liste : gardee 10 s tant
+    -- qu'aucun palier n'a change.
+    if syncEntriesCache and syncEntriesRevision == reportRevision and now - syncEntriesAt < 10 then
+        return syncEntriesCache
+    end
+    local out = {}
+    for key in pairs(reportedByKey) do
+        local entries = FreshBrackets(key, now)
+        if entries then
+            local top, topAt, last, lastAt = 0, 0, 0, 0
+            for bracket, at in pairs(entries) do
+                if bracket > top then top, topAt = bracket, at end
+                if at > lastAt or (at == lastAt and bracket > last) then last, lastAt = bracket, at end
+            end
+            out[#out + 1] = { key = key, bracket = top, rank = top, at = topAt }
+            if last ~= top then out[#out + 1] = { key = key, bracket = last, rank = top, at = lastAt } end
+        end
+    end
+    table.sort(out, function(a, b)
+        if a.rank ~= b.rank then return a.rank > b.rank end
+        if a.key ~= b.key then return a.key < b.key end
+        return a.bracket > b.bracket
+    end)
+    local payloads = {}
+    for i = 1, math.min(10, #out) do
+        local slot = math.floor((out[i].at - ACTIVITY_WINDOW) / REPORT_SLOT_SEC)
+        payloads[i] = "1:" .. out[i].key .. ":" .. out[i].bracket .. ":" .. slot
+    end
+    syncEntriesCache, syncEntriesAt, syncEntriesRevision = payloads, now, reportRevision
+    return payloads
 end
 
 function FA:OnReceiveKillBracket(payload, sender, sourceChannel)
@@ -768,38 +893,24 @@ function FA:OnReceiveKillBracket(payload, sender, sourceChannel)
     if not key or not REPORT_BRACKET_OK[bracket] or not slot then return false end
     -- Hors front, seuls les combats listes (5+) : rejete avant toute recherche de carte.
     if bracket < 5 and IsWorldKey(key) then return false end
-    local now = ActivityNow()
-    -- Budget par expediteur : un emetteur qui inonde ne remplit ni la table ni le panneau.
-    local origin = type(sender) == "string" and sender:lower() or "?"
-    local budget = originBudget[origin]
-    if not budget or now - budget.since >= ORIGIN_WINDOW then
-        if not budget then
-            if originCount >= ORIGIN_MAX then
-                local oldest, oldestSince
-                for name, b in pairs(originBudget) do
-                    if now - b.since >= ORIGIN_WINDOW then
-                        originBudget[name] = nil
-                        originCount = originCount - 1
-                    elseif not oldestSince or b.since < oldestSince then
-                        oldest, oldestSince = name, b.since
-                    end
-                end
-                -- Toujours de la place pour un nouvel expediteur : jamais de refus en bloc.
-                if originCount >= ORIGIN_MAX and oldest then
-                    originBudget[oldest] = nil
-                    originCount = originCount - 1
-                end
-            end
-            originCount = originCount + 1
-        end
-        budget = { since = now, used = 0 }
-        originBudget[origin] = budget
+    -- Seulement par le relais (ou dans la reponse a notre demande de synchro) : un FK
+    -- brut pose sur le canal ou le groupe par un inconnu est ignore.
+    if sourceChannel ~= "BETA" and not IsTrustedAggregateSender(sender, sourceChannel) then
+        return false
     end
-    if budget.used >= ORIGIN_BUDGET then return false end
-    budget.used = budget.used + 1
+    local now = ActivityNow()
     local at = slot * REPORT_SLOT_SEC
     if at > now + 60 or now - at > ACTIVITY_WINDOW then return false end
     at = math.min(at, now)
+    -- Budgets avant toute recherche de carte : la passerelle d'abord (un faussaire qui
+    -- change de nom passe par la meme), puis l'expediteur.
+    local sync = Overlord.Sync
+    local gateway = sync and sync.BurstLimiterKey and sync:BurstLimiterKey(sender) or sender
+    gateway = type(gateway) == "string" and gateway:lower() or "?"
+    if not gatewayLimiter.take(gateway, now) then return false end
+    if not originLimiter.take(type(sender) == "string" and sender:lower() or "?", now) then
+        return false
+    end
     local resolved
     if key:match("^#%d+$") then
         resolved = ResolveWorldKillKey(key)
@@ -817,6 +928,21 @@ function FA:OnReceiveKillBracket(payload, sender, sourceChannel)
     return true
 end
 
+local function WorldRowBefore(a, b)
+    if a.bracket ~= b.bracket then return a.bracket > b.bracket end
+    return a.frontId < b.frontId
+end
+
+local function ActivityRowBefore(a, b)
+    if a.active ~= b.active then return a.active end
+    if a.active then
+        if a.bracket ~= b.bracket then return a.bracket > b.bracket end
+        -- Identifiant, pas le nom traduit : meme ordre quelle que soit la langue.
+        return a.frontId < b.frontId
+    end
+    return a.label < b.label
+end
+
 local function GetFrontActivityDisplayName(front)
     if not front then return "?" end
     return front.dropdownLabel or front.mapName or front.id or "?"
@@ -831,10 +957,13 @@ function FA:GetActivityRows()
     local now = ActivityNow()
     if activity then PurgeAll(activity, actors, now) end
 
+    local sharing = SharingActive()
     for _, frontId in ipairs(GetActivitySourceOrder()) do
         local front = fronts:GetFront(frontId)
         if front then
             local lastActivityAt = activity and tonumber(activity[frontId]) or nil
+            local reportAt = LatestReportAt(frontId, now)
+            if reportAt and (not lastActivityAt or reportAt > lastActivityAt) then lastActivityAt = reportAt end
             local ageSeconds = lastActivityAt and math.max(0, now - lastActivityAt) or nil
             local active = ageSeconds ~= nil and ageSeconds <= ACTIVITY_WINDOW
             rows[#rows + 1] = {
@@ -849,31 +978,35 @@ function FA:GetActivityRows()
     end
     -- Combats hors front : les plus gros d'abord, 3 lignes au plus.
     local world = {}
-    for key, lastAt in pairs(killLastAtByKey) do
-        local age = now - lastAt
-        local kills = age <= ACTIVITY_WINDOW and self:GetDisplayKillCount(key, now) or 0
-        if kills >= WORLD_MIN_KILLS and worldNameByKey[key] then
-            world[#world + 1] = { frontId = key, label = worldNameByKey[key], lastActivityAt = lastAt,
-                ageSeconds = math.max(0, age), active = true, kills = kills, world = true }
+    if sharing then
+        -- Relais actif : les zones hors front annoncees (5+), les memes chez tous.
+        for key in pairs(reportedByKey) do
+            local kills = IsWorldKey(key) and TopBracket(key, now) or 0
+            local name = worldNameByKey[key]
+            if kills >= WORLD_MIN_KILLS and type(name) == "string" then
+                local at = LatestReportAt(key, now) or now
+                world[#world + 1] = { frontId = key, label = name, lastActivityAt = at,
+                    ageSeconds = math.max(0, now - at), active = true, kills = kills, world = true }
+            end
+        end
+    else
+        for key, lastAt in pairs(killLastAtByKey) do
+            local age = now - lastAt
+            local kills = age <= ACTIVITY_WINDOW and self:GetDisplayKillCount(key, now) or 0
+            if kills >= WORLD_MIN_KILLS and worldNameByKey[key] then
+                world[#world + 1] = { frontId = key, label = worldNameByKey[key], lastActivityAt = lastAt,
+                    ageSeconds = math.max(0, age), active = true, kills = kills, world = true }
+            end
         end
     end
     -- Meme ordre chez tous : palier affiche, puis carte (jamais l'heure locale).
-    table.sort(world, function(a, b)
-        local ba, bb = ReportBracket(a.frontId, a.kills), ReportBracket(b.frontId, b.kills)
-        if ba ~= bb then return ba > bb end
-        return a.frontId < b.frontId
-    end)
+    for _, row in ipairs(world) do row.bracket = ReportBracket(row.frontId, row.kills) end
+    table.sort(world, WorldRowBefore)
     for i = 1, math.min(WORLD_ROWS_MAX, #world) do rows[#rows + 1] = world[i] end
     -- Fronts actifs d'abord, les plus gros combats en tete (palier affiche, le meme chez
     -- tous grace aux annonces FK), puis par nom : l'ordre ne depend pas de l'heure locale.
-    table.sort(rows, function(a, b)
-        if a.active ~= b.active then return a.active end
-        if a.active then
-            local ba, bb = ReportBracket(a.frontId, a.kills), ReportBracket(b.frontId, b.kills)
-            if ba ~= bb then return ba > bb end
-        end
-        return a.label < b.label
-    end)
+    for _, row in ipairs(rows) do row.bracket = row.bracket or ReportBracket(row.frontId, row.kills) end
+    table.sort(rows, ActivityRowBefore)
     return rows
 end
 
@@ -953,7 +1086,7 @@ if Sync then
         if not isPendingReplay then
             local myName = self.GetPlayerFullName and self:GetPlayerFullName()
             if myName and myName ~= "" then
-                FA:RecordLocalByZoneRef(zoneId, myName)
+                FA:RecordKillActivity(zoneId, myName, nil, true)
             end
         end
         return origBroadcastKill(self, zoneId, totalKills, killScoringAtEvent,
@@ -981,11 +1114,19 @@ if Sync then
         return origBroadcastZoneState(self, zone, forceBNetZS, primaryOnly)
     end
 
-    function Sync:AppendFrontActivityToSrQueue(queue)
+    function Sync:AppendFrontActivityToSrQueue(queue, directReply)
         if type(queue) ~= "table" then return end
         local payload = FA:BuildSyncPayload()
         if payload then
             queue[#queue + 1] = { type = "FA", data = payload }
+        end
+        -- Paliers de combat en cours : un client qui arrive voit tout de suite les
+        -- memes combats que les autres (les anciens clients ignorent FK). Reponse
+        -- directe seulement : rien de plus sur le quota partage du groupe et du canal.
+        if directReply then
+            for _, entry in ipairs(FA:BuildKillBracketSyncEntries()) do
+                queue[#queue + 1] = { type = "FK", data = entry }
+            end
         end
     end
 end

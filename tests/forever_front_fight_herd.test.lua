@@ -72,7 +72,7 @@ local function runUntil(limit)
 end
 
 local function kill(client, ref)
-    client.FA:RecordByZoneRef(ref, "Killer Tester")
+    client.FA:RecordKillActivity(ref, "Killer Tester")
     client.FA:RecordKills(ref, 1)
 end
 
