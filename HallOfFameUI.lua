@@ -10,7 +10,8 @@ local recentCards = {}
 local progressBars = {}
 local categoryFrames = {}
 
-local selectedCategory = "player"
+local selectedCategory = nil -- HallOfFameData:GetDefaultCategory() a la creation
+local betaExpanded = false -- semaines beta repliees a l'ouverture, comme sur Retail
 local searchText = ""
 local achUILoaded = false
 
@@ -725,10 +726,85 @@ local function SetCategorySelected(catFrame, selected)
     end
 end
 
+local CATEGORY_ROW_STEP = 28
+local CATEGORY_CHILD_INDENT = 15
+local OnCategoryButtonClick
+
+-- Comme Blizzard pour une sous-categorie : bouton plus etroit, texte blanc, fond assombri.
+-- L'etat d'origine du template est releve une fois et restaure tel quel pour une
+-- categorie principale. Le decalage n'est applique qu'a un bouton ancre par un seul
+-- point et de largeur connue (ancre a droite : reduire la largeur suffit).
+local function StyleCategoryButton(catFrame, isChild)
+    local button = catFrame.Button
+    if not button or catFrame._hofIsChild == isChild then return end
+    if catFrame._hofIsChild == nil then
+        catFrame._hofBaseWidth = button:GetWidth()
+        catFrame._hofAnchor = button:GetNumPoints() == 1 and { button:GetPoint(1) } or nil
+        if button.Label and button.Label.GetTextColor then
+            catFrame._hofLabelColor = { button.Label:GetTextColor() }
+        end
+        if button.Background and button.Background.GetVertexColor then
+            catFrame._hofBgColor = { button.Background:GetVertexColor() }
+        end
+    end
+    catFrame._hofIsChild = isChild
+    local baseWidth, anchor = catFrame._hofBaseWidth, catFrame._hofAnchor
+    if anchor and baseWidth and baseWidth > CATEGORY_CHILD_INDENT * 2 then
+        button:SetWidth(isChild and (baseWidth - CATEGORY_CHILD_INDENT) or baseWidth)
+        local point, rel, relPoint, x, y = anchor[1], anchor[2], anchor[3], anchor[4], anchor[5]
+        if point and not point:find("RIGHT", 1, true) then
+            button:ClearAllPoints()
+            button:SetPoint(point, rel or catFrame, relPoint or point,
+                (x or 0) + (isChild and CATEGORY_CHILD_INDENT or 0), y or 0)
+        end
+    end
+    local labelColor = catFrame._hofLabelColor
+    if labelColor and labelColor[3] then
+        if isChild then
+            button.Label:SetTextColor(1, 1, 1, labelColor[4])
+        else
+            button.Label:SetTextColor(labelColor[1], labelColor[2], labelColor[3], labelColor[4])
+        end
+    end
+    local bgColor = catFrame._hofBgColor
+    if bgColor and bgColor[3] then
+        local shade = isChild and 0.6 or 1
+        button.Background:SetVertexColor(bgColor[1] * shade, bgColor[2] * shade, bgColor[3] * shade,
+            bgColor[4])
+    end
+end
+
 local function UpdateCategoryButtons()
-    for i = 1, #categoryFrames do
-        local cf = categoryFrames[i]
-        SetCategorySelected(cf, cf._hofCategoryId == selectedCategory)
+    local sidebar = hofFrame and hofFrame.sidebar
+    local data = Overlord.HallOfFameData
+    if not sidebar or not data then return end
+    local entries = data:GetSidebarEntries(betaExpanded)
+    -- Une semaine beta sans bouton visible (beta repliee, ou une seule semaine) :
+    -- la beta reste surlignee.
+    local selectedVisible = false
+    for _, entry in ipairs(entries) do
+        if entry.id == selectedCategory then selectedVisible = true end
+    end
+    local betaHighlighted = not selectedVisible and data:IsBetaWeek(selectedCategory)
+    for i, entry in ipairs(entries) do
+        local catFrame = categoryFrames[i]
+        if not catFrame then
+            catFrame = CreateFrame("Frame", nil, sidebar, "AchievementCategoryTemplate")
+            catFrame:SetSize(158, 24)
+            catFrame:SetPoint("TOPLEFT", 4, -((i - 1) * CATEGORY_ROW_STEP + 6))
+            catFrame.Button:SetScript("OnClick", OnCategoryButtonClick)
+            categoryFrames[i] = catFrame
+        end
+        catFrame._hofCategoryId = entry.id
+        catFrame.Button._hofCategoryId = entry.id
+        catFrame.Button.Label:SetText(entry.label)
+        StyleCategoryButton(catFrame, entry.isChild and true or false)
+        catFrame:Show()
+        SetCategorySelected(catFrame, entry.id == selectedCategory
+            or (betaHighlighted and entry.id == "beta"))
+    end
+    for i = #entries + 1, #categoryFrames do
+        categoryFrames[i]:Hide()
     end
 end
 
@@ -911,12 +987,30 @@ function Overlord.HallOfFameUI:Refresh()
     end
 end
 
+-- Comme sur Retail : un clic sur la beta la deplie (en gardant la semaine affichee,
+-- sinon la plus recente), un second clic la replie sans changer de semaine ; une
+-- autre categorie principale la replie.
 local function OnCategorySelected(categoryId)
-    selectedCategory = categoryId or "player"
+    local data = Overlord.HallOfFameData
+    if categoryId == "beta" then
+        if betaExpanded and data:IsBetaWeek(selectedCategory) then
+            betaExpanded = false
+        else
+            betaExpanded = true
+            if not data:IsBetaWeek(selectedCategory) then
+                selectedCategory = data:ResolveCategory("beta")
+            end
+        end
+    elseif data:IsBetaWeek(categoryId) then
+        selectedCategory = categoryId
+    else
+        betaExpanded = false
+        selectedCategory = categoryId and data:ResolveCategory(categoryId) or data:GetDefaultCategory()
+    end
     Overlord.HallOfFameUI:Refresh()
 end
 
-local function OnCategoryButtonClick(self)
+function OnCategoryButtonClick(self)
     OnCategorySelected(self._hofCategoryId)
 end
 
@@ -1023,18 +1117,7 @@ function Overlord.HallOfFameUI:CreateFrame()
     sidebar:SetWidth(175)
     hofFrame.sidebar = sidebar
 
-    local cats = Overlord.HallOfFameData and Overlord.HallOfFameData.CATEGORIES or {}
-    for i = 1, #cats do
-        local catDef = cats[i]
-        local catFrame = CreateFrame("Frame", nil, sidebar, "AchievementCategoryTemplate")
-        catFrame:SetSize(158, 24)
-        catFrame:SetPoint("TOPLEFT", 4, -((i - 1) * 28 + 6))
-        catFrame._hofCategoryId = catDef.id
-        catFrame.Button.Label:SetText(L[catDef.labelKey] or catDef.id)
-        catFrame.Button._hofCategoryId = catDef.id
-        catFrame.Button:SetScript("OnClick", OnCategoryButtonClick)
-        categoryFrames[i] = catFrame
-    end
+    -- Boutons crees et places par UpdateCategoryButtons (categories visibles, semaines beta).
 
     -- Panneau résumé (clone AchievementFrameSummary)
     local summaryPanel = CreateFrame("Frame", nil, hofFrame)
@@ -1150,7 +1233,8 @@ function Overlord.HallOfFameUI:CreateFrame()
     end)
     hofFrame:EnableKeyboard(true)
 
-    selectedCategory = "player"
+    selectedCategory = Overlord.HallOfFameData:GetDefaultCategory()
+    betaExpanded = false
     searchText = ""
     UpdateCategoryButtons()
     hofFrame:Hide()

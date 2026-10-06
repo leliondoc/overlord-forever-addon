@@ -96,6 +96,8 @@ jobs:
           lua5.1 tests/forever_zone_partial_merge.test.lua
           lua5.1 tests/forever_capital_release.test.lua
           lua5.1 tests/forever_guide_locales.test.lua
+          lua5.1 tests/forever_hall_of_fame_beta.test.lua
+          lua5.1 tests/forever_hall_of_fame_sidebar.test.lua
           lua5.1 tests/forever_relay_za_lost_batch.test.lua
           lua5.1 tests/forever_relay_live_over_legacy.test.lua
           lua5.1 tests/forever_relay_outpost_coalescing.test.lua

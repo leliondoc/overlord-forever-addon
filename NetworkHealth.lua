@@ -27,6 +27,15 @@ local SEND_TYPES = { "CHANNEL", "RAID", "PARTY", "WHISPER" }
 local samples = {}
 local lastSampleAt
 
+-- Copies d'autres joueurs que le relais refuse de faire suivre, volontairement :
+-- destinataire sans route (parti, route de plus de 5 min ou boucle) ou budget du
+-- relais. Aucune donnee du joueur n'est perdue : l'expediteur repasse par un autre
+-- voisin. Comptees dans "dropped", elles ne colorent pas le voyant.
+local function NotForwarded(stats)
+    if not stats then return 0 end
+    return (tonumber(stats.forwardNoTask) or 0) + (tonumber(stats.relayRejected) or 0)
+end
+
 local function CurrentTotals()
     local sync, net = Overlord.Sync, Overlord.BetaNetwork
     local totals = {}
@@ -39,6 +48,7 @@ local function CurrentTotals()
     totals.sent = relay and relay.sent or 0
     totals.dropped = relay and relay.dropped or 0
     totals.received = relay and relay.received or 0
+    totals.notForwarded = NotForwarded(relay)
     return totals
 end
 
@@ -100,12 +110,16 @@ function NH:Compute()
     local relayStats = net and net.stats
     if relayStats then
         local sent = math.max(0, (relayStats.sent or 0) - (base and base.sent or 0))
-        local dropped = math.max(0, (relayStats.dropped or 0) - (base and base.dropped or 0))
+        local notForwarded = math.max(0, NotForwarded(relayStats) - (base and base.notForwarded or 0))
+        -- Pertes du joueur seulement : les copies d'autrui non relayees sont a part.
+        local dropped = math.max(0, (relayStats.dropped or 0) - (base and base.dropped or 0) - notForwarded)
         local received = math.max(0, (relayStats.received or 0) - (base and base.received or 0))
         local pct = sent > 0 and dropped * 100 / sent or 0
+        local others = notForwarded > 0
+            and string.format(", %d copies for others not forwarded", notForwarded) or ""
         add("relay", (dropped <= 1 or pct < 1) and "ok" or ((pct < 5 or sent < 500) and "warn" or "bad"),
-            "Relay losses", string.format("%d lost of %d sent (%.1f%%), %d received%s",
-                dropped, sent, pct, received, label))
+            "Relay losses", string.format("%d lost of %d sent (%.1f%%), %d received%s%s",
+                dropped, sent, pct, received, others, label))
     end
     if sync and sync.GetPagedLeaderboardSummary then
         local lb = sync:GetPagedLeaderboardSummary()

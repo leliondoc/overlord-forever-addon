@@ -51,13 +51,15 @@ test("TOC Forever 16001 and CurseForge 1701204", () => {
     const hofUi = readFileSync(new URL("../HallOfFameUI.lua", import.meta.url), "utf8");
     assert.match(hof, /id = "donors"/);
     assert.match(hof, /Overlord\.DonorHonorEntries/);
-    // Weekly champions (top 5 players and guilds by faction) are display-only:
-    // no Retail map honor sites and no lifetime feats on Forever.
+    // Weekly champions (top 5 killers, guilds and capturers) are display-only:
+    // no Retail map honor sites and no lifetime feats on Forever. Beta weeks live in
+    // their own category; launch categories stay hidden while empty.
     assert.match(hof, /Overlord\.WeeklyChampionEntries/);
-    assert.match(hof, /id = "alliance"/);
-    assert.match(hof, /id = "horde"/);
+    assert.match(hof, /Overlord\.BetaChampionEntries/);
+    assert.match(hof, /id = "alliance", labelKey = "HOF_CAT_ALLIANCE", hideWhenEmpty = true/);
+    assert.match(hof, /id = "horde", labelKey = "HOF_CAT_HORDE", hideWhenEmpty = true/);
     assert.doesNotMatch(hof, /PlayerHonorEntries|GuildHonorSites|HOF_CAT_LIFETIME/);
-    assert.match(hofUi, /local selectedCategory = "player"/);
+    assert.match(hofUi, /selectedCategory = Overlord\.HallOfFameData:GetDefaultCategory\(\)/);
 });
 
 test("Outposts cover six fronts and three open-world sites", () => {

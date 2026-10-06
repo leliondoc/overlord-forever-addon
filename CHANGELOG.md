@@ -1,6 +1,6 @@
-1.6.2
+1.6.3
 
-**Overlord Forever 1.6.2**
+**Overlord Forever 1.6.3**
 
-- **Recent activity is the same for everyone**: each player only hears part of the kills, so two players could see different fight sizes for the same zone. Now, when a zone crosses a fight bracket (5+, 10+, 20+...), Overlord shares that bracket and every player shows the highest one, so every player on 1.6.2 sees the same panel, usually within seconds and always in under a minute. It costs a few tiny messages per fight (one per bracket crossed, then a reminder every few minutes while the fight lasts), never one per kill.
-- The Layer Jumper tooltip no longer carries a signature.
+- **Hall of Fame, Beta section**: the beta champions now have their own category, showing week 1's top 5 killers, top 5 guilds and, new, top 5 capturers. The full beta history stays on the website. Player, guild, Alliance and Horde honors stay hidden until the first launch champions.
+- **Network indicator**: other players' messages that the relay cannot pass on (recipient gone or route too old) are no longer counted as "Relay losses". They are listed apart in /ov network and no longer turn the indicator red. Nothing changes in what Overlord sends.

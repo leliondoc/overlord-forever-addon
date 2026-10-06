@@ -106,4 +106,45 @@ do
     assert(NH:IndicatorLevel() == "ok", "A burst older than ten minutes kept the indicator yellow")
     NH:_ResetWindow()
 end
+-- Copies of other players' packets the relay refuses to forward (no route to the
+-- target, loop, relay budget) lose none of the player's data: they are reported
+-- apart and never color the indicator (2026-10-06: 65 of 1230, all without a
+-- route, turned the header red). The player's own losses still do.
+do
+    local NH = Overlord.NetworkHealth
+    NH:_ResetWindow()
+    sync._addonSendStats = { CHANNEL = { ok = 73, refused = 0 }, WHISPER = { ok = 1061, refused = 0 } }
+    net.stats.sent, net.stats.received, net.stats.dropped = 1230, 2317, 65
+    net.stats.localRejected, net.stats.relayRejected = 0, 0
+    net.stats.forwardNoTask, net.stats.forwardNoTaskMissing, net.stats.forwardNoTaskLoop = 65, 57, 8
+    local level, rows = NH:IndicatorLevel()
+    local relayRow
+    for _, row in ipairs(rows) do if row.id == "relay" then relayRow = row end end
+    assert(level == "ok" and relayRow.level == "ok", "Unforwarded copies for others colored the indicator")
+    assert(relayRow.text:find("0 lost of 1230 sent (0.0%), 2317 received, 65 copies for others not forwarded", 1, true),
+        "Relay row must report copies for others apart: " .. relayRow.text)
+    -- Relay budget refusals of copies for others count apart too.
+    net.stats.dropped, net.stats.relayRejected = 65 + 30, 30
+    _, rows = NH:IndicatorLevel()
+    for _, row in ipairs(rows) do if row.id == "relay" then relayRow = row end end
+    assert(relayRow.level == "ok" and relayRow.text:find("0 lost of 1230", 1, true)
+        and relayRow.text:find("95 copies for others", 1, true), "Relay budget refusals: " .. relayRow.text)
+    -- 70 own messages refused on top: red again.
+    net.stats.dropped, net.stats.localRejected = 95 + 70, 70
+    _, rows = NH:IndicatorLevel()
+    for _, row in ipairs(rows) do if row.id == "relay" then relayRow = row end end
+    assert(relayRow.level == "bad" and relayRow.text:find("70 lost of 1230 sent (5.7%)", 1, true),
+        "Own losses must still turn the row red: " .. relayRow.text)
+    -- Inside the 10-minute window, earlier unforwarded copies are subtracted from the base.
+    NH:NoteSend(5000)
+    net.stats.dropped, net.stats.forwardNoTask = net.stats.dropped + 40, net.stats.forwardNoTask + 40
+    net.stats.sent = 1230 + 500
+    _, rows = NH:IndicatorLevel()
+    for _, row in ipairs(rows) do if row.id == "relay" then relayRow = row end end
+    assert(relayRow.level == "ok" and relayRow.text:find("0 lost of 500 sent", 1, true)
+        and relayRow.text:find("40 copies for others not forwarded", 1, true), "Windowed: " .. relayRow.text)
+    NH:_ResetWindow()
+    net.stats.dropped, net.stats.localRejected, net.stats.relayRejected = 0, 0, 0
+    net.stats.forwardNoTask, net.stats.forwardNoTaskMissing, net.stats.forwardNoTaskLoop = 0, 0, 0
+end
 print("Sync report: colored summary, worst-level header, red non-zero counters, stalled catch-up flagged OK")
