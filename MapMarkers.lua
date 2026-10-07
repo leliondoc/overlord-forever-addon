@@ -745,6 +745,10 @@ function Overlord.MapMarkers:SetWorldMapOverlaysShown(shown)
     if not OverlordDB then return false end
     OverlordDB.config = OverlordDB.config or {}
     OverlordDB.config.showWorldMapOverlays = shown and true or false
+    -- /ov map et le menu Filtres de la carte gardent la case des options a jour.
+    if Overlord.SettingsPanel and Overlord.SettingsPanel.RefreshControls then
+        pcall(Overlord.SettingsPanel.RefreshControls, Overlord.SettingsPanel)
+    end
     local viewport = driverState.worldOverlayViewport
     if viewport then viewport:SetShown(shown and true or false) end
     if shown then

@@ -54,6 +54,16 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
             assert(not text:find(stem, 1, true), loc .. ": " .. key .. " still mentions " .. stem)
         end
     end
+    -- Honorable kills are written like the ladder column in every language (HK, VH,
+    -- MH, ES, ПП, 击杀): they are shared by the whole group, not deaths (1.7.1).
+    local unit = L.LB_COL_KILLS
+    assert(type(unit) == "string" and unit ~= "", loc .. ": no ladder kill column label")
+    for _, key in ipairs({ "FEATURED_FRONT_ACTIVITY_KILLS", "FEATURED_FRONT_ACTIVITY_KILL_ONE",
+        "GUILD_KILL_ALERT", "GUILD_KILL_ALERT_FRONT", "GUILD_KILL_ALLY_ALERT", "GUILD_KILL_ALLY_ALERT_FRONT",
+        "LB_TOTAL_FORMAT", "LB_GUILD_TIP_TOTAL", "MW_ALERT", "POPUP_BATTLE_REPORT_GUILD" }) do
+        assert(type(L[key]) == "string" and L[key]:find(unit, 1, true),
+            loc .. ": " .. key .. " does not use " .. unit .. ": " .. tostring(L[key]))
+    end
     -- The 15-minute truce, on every front and on the Hillsbrad brawl.
     assert(L.GUIDE_SIEGE_BODY:find("%f[%d]15%f[%D]"), loc .. ": siege text lost the truce length")
     assert(L.GUIDE_PROGRESS_BODY:find("%f[%d]15%f[%D]"), loc .. ": guide lost the Hillsbrad note")

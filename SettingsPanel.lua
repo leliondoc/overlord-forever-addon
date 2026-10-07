@@ -102,11 +102,9 @@ local function clampScale(v)
 end
 
 local function formatScaleLabel(value)
+    -- En pourcentage, comme la taille des icones de la carte.
     local v = clampScale(tonumber(value) or DEFAULT_SCALE)
-    if v == math.floor(v) then
-        return tostring(math.floor(v))
-    end
-    return string.format("%.1f", v)
+    return string.format("%d%%", math.floor(v * 100 + 0.5))
 end
 
 local function maxChatWindows()
@@ -492,6 +490,9 @@ end
 
 local SP = Overlord.SettingsPanel
 SP.GuildKillAlertVariableName = "Overlord_GuildKillAlert"
+SP.GuildKillAllyAlertVariableName = "Overlord_GuildKillAllyAlert"
+SP.MostWantedAlertsVariableName = "Overlord_MostWantedAlerts"
+SP.WorldMapOverlaysVariableName = "Overlord_WorldMapOverlays"
 local CHAT_TAB_NAME = "Overlord"
 local SETTINGS_TITLE_LOGO = "|TInterface\\AddOns\\Overlord\\Textures\\overlord:22:22:0:2|t"
 
@@ -556,6 +557,39 @@ local function setGuildKillAlert(value)
     if gka and gka.SetEnabled then gka:SetEnabled(value == true) end
 end
 
+local function getMostWantedAlerts()
+    local mw = Overlord.MostWanted
+    return mw and mw.AlertsEnabled and mw:AlertsEnabled() or false
+end
+
+local function setMostWantedAlerts(value)
+    local mw = Overlord.MostWanted
+    if mw and mw.SetAlertsEnabled then
+        mw:SetAlertsEnabled(value == true)
+        if mw.RefreshPlates then pcall(mw.RefreshPlates, mw) end
+    end
+end
+
+local function getWorldMapOverlays()
+    local mm = Overlord.MapMarkers
+    return mm and mm.AreWorldMapOverlaysShown and mm:AreWorldMapOverlaysShown() or false
+end
+
+local function setWorldMapOverlays(value)
+    local mm = Overlord.MapMarkers
+    if mm and mm.SetWorldMapOverlaysShown then mm:SetWorldMapOverlaysShown(value == true) end
+end
+
+local function getGuildKillAllyAlert()
+    local gka = Overlord.GuildKillAlert
+    return gka and gka.IsAllyEnabled and gka:IsAllyEnabled() or false
+end
+
+local function setGuildKillAllyAlert(value)
+    local gka = Overlord.GuildKillAlert
+    if gka and gka.SetAllyEnabled then gka:SetAllyEnabled(value == true) end
+end
+
 local function sliderOptions(minValue, maxValue, step, formatter)
     local options = Settings.CreateSliderOptions(minValue, maxValue, step)
     local labels = MinimalSliderWithSteppersMixin and MinimalSliderWithSteppersMixin.Label
@@ -605,8 +639,17 @@ local ROWS = {
     { kind = "checkbox", var = SP.GuildKillAlertVariableName, label = "GUILD_KILL_ALERT_ENABLED_LABEL",
         fallback = "Enemy guild raid alerts", tooltip = "GUILD_KILL_ALERT_ENABLED_TOOLTIP",
         default = true, get = getGuildKillAlert, set = setGuildKillAlert },
+    { kind = "checkbox", var = SP.GuildKillAllyAlertVariableName, label = "GUILD_KILL_ALLY_ENABLED_LABEL",
+        fallback = "Allied guild rampages", tooltip = "GUILD_KILL_ALLY_ENABLED_TOOLTIP",
+        default = true, get = getGuildKillAllyAlert, set = setGuildKillAllyAlert },
+    { kind = "checkbox", var = SP.MostWantedAlertsVariableName, label = "MW_ALERTS_LABEL",
+        fallback = "Most Wanted alerts", tooltip = "MW_ALERTS_TOOLTIP",
+        default = true, get = getMostWantedAlerts, set = setMostWantedAlerts },
 
     { kind = "header", label = "SETTINGS_SECTION_MAP", fallback = "Map and minimap" },
+    { kind = "checkbox", var = SP.WorldMapOverlaysVariableName, label = "MAP_WORLD_OVERLAYS_LABEL",
+        fallback = "Overlord on the world map", tooltip = "MAP_WORLD_OVERLAYS_TOOLTIP",
+        default = true, get = getWorldMapOverlays, set = setWorldMapOverlays },
     { kind = "slider", var = SP.MapOverlayOpacityVariableName, label = "MAP_OVERLAY_OPACITY_LABEL",
         fallback = "Map capture opacity", tooltip = "MAP_OVERLAY_OPACITY_TOOLTIP",
         default = DEFAULT_MAP_OVERLAY_OPACITY, get = getMapOverlayOpacity, set = setMapOverlayOpacity,

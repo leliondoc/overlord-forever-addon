@@ -93,6 +93,24 @@ assert(upvalue(lb.RebuildNetworkHotIndexes, "dedupKillMaxIndex") == published,
 same, key = sameIndex(published, expectedKillIndex())
 assert(same, "Live kill index missed a kill during the meta pass at " .. tostring(key))
 
+-- 1.7.1 CPU: the same race re-dated (v7 LK row, then the dated LR row) patches the
+-- hot index entry instead of dropping the whole index; a new race still drops it.
+do
+    local name = playerName(7)
+    local base = (GetServerTime and GetServerTime() or time()) - 5000
+    lb:SetPlayerRace(name, "Orc", 2, true, base)
+    lb:RebuildDedupMetaIndex()
+    local index = lb._dedupMetaIndex
+    assert(type(index) == "table" and index[dk(name)] and index[dk(name)].race == "Orc", "fixture: race not indexed")
+    lb:SetPlayerRace(name, "Orc", 2, true, base + 100)
+    assert(lb._dedupMetaIndex == index, "a re-dated race dropped the hot index")
+    assert(index[dk(name)].raceAt >= base + 100, "the index entry was not re-dated")
+    assert(lb.playerInfo[name].raceAt == base + 100, "the stored race date did not move")
+    lb:SetPlayerRace(name, "Troll", 2, true, base + 200)
+    assert(lb._dedupMetaIndex == nil, "a changed race kept a stale index")
+    lb:RebuildDedupMetaIndex()
+end
+
 -- 3. A pass that stalls more than 5 minutes loses its journal to the next pass
 --    and must not publish (it would miss the kills it no longer journals).
 local realGetTime = GetTime

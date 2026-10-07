@@ -139,30 +139,36 @@ local ELWYNN_HORDE_PREREQS = {
     elwynn_westbrook = {"elwynn_goldshire", "elwynn_mirror_lake"},
 }
 
+-- 1.7.1 : Orneval couvre toute la zone (l'ouest et le sud-ouest etaient vides).
+-- Branche nord : Astranaar -> Maestra -> rivage de Zoram -> route de Sombrivage -> lac
+-- Iris -> Bois-Raide -> Bois-Brise. Branche sud : Astranaar -> sanctuaire d'Aessina ->
+-- ile de Poussiere-d'etoile -> Dor'Danil -> Bois-Brise. La Horde suit les memes chemins
+-- en sens inverse. Night Run, Bloodtooth, Silverwind, Mystral et le lac du Ciel-dechu
+-- disparaissent (entasses a l'est) : le front garde 10 points.
 local ASHENVALE_ALLIANCE_PREREQS = {
     ash_astranaar = {},
-    ash_iris_lake = {"ash_astranaar"},
+    ash_maestra = {"ash_astranaar"},
+    ash_zoram_strand = {"ash_maestra"},
+    ash_darkshore_road = {"ash_zoram_strand"},
+    ash_iris_lake = {"ash_darkshore_road"},
     ash_raynewood = {"ash_iris_lake"},
-    ash_night_run = {"ash_raynewood"},
-    ash_bloodtooth_camp = {"ash_night_run"},
-    ash_silverwind = {"ash_astranaar"},
-    ash_mystral_lake = {"ash_silverwind"},
-    ash_fallen_sky_lake = {"ash_mystral_lake"},
-    ash_dor_danil = {"ash_fallen_sky_lake"},
-    ash_splintertree = {"ash_bloodtooth_camp", "ash_dor_danil"},
+    ash_aessina = {"ash_astranaar"},
+    ash_stardust = {"ash_aessina"},
+    ash_dor_danil = {"ash_stardust"},
+    ash_splintertree = {"ash_raynewood", "ash_dor_danil"},
 }
 
 local ASHENVALE_HORDE_PREREQS = {
     ash_splintertree = {},
-    ash_bloodtooth_camp = {"ash_splintertree"},
-    ash_dor_danil = {"ash_splintertree"},
-    ash_night_run = {"ash_bloodtooth_camp"},
-    ash_fallen_sky_lake = {"ash_dor_danil"},
-    ash_raynewood = {"ash_night_run"},
-    ash_mystral_lake = {"ash_fallen_sky_lake"},
+    ash_raynewood = {"ash_splintertree"},
     ash_iris_lake = {"ash_raynewood"},
-    ash_silverwind = {"ash_mystral_lake"},
-    ash_astranaar = {"ash_iris_lake", "ash_silverwind"},
+    ash_darkshore_road = {"ash_iris_lake"},
+    ash_zoram_strand = {"ash_darkshore_road"},
+    ash_maestra = {"ash_zoram_strand"},
+    ash_dor_danil = {"ash_splintertree"},
+    ash_stardust = {"ash_dor_danil"},
+    ash_aessina = {"ash_stardust"},
+    ash_astranaar = {"ash_maestra", "ash_aessina"},
 }
 
 local function NameMatches(infoName, needles)
@@ -206,8 +212,8 @@ Overlord.Fronts.Registry = {
             Zone("goshek", { center = {61.88, 57.33}, radius = 3, prereqZones = {"witherbark"} }),
             Zone("dabyrie", { center = {54.18, 38.09}, radius = 3, prereqZones = {"goshek"} }),
             Zone("refuge", { center = {45.83, 47.56}, prereqZones = {"argorok"} }),
-            Zone("highperch", { center = {25.19, 40.13}, radius = 3, prereqZones = {"stromgarde"} }),
-            Zone("newstead", { center = {18.04, 47.22}, radius = 3, prereqZones = {"refuge"} }),
+            Zone("highperch", { center = {44.0, 79.4}, radius = 3, prereqZones = {"stromgarde"} }),
+            Zone("newstead", { center = {21.2, 34.0}, radius = 3, prereqZones = {"refuge"} }),
             Zone("hammerfell", { center = {74.18, 33.96}, radius = 5, prereqZones = {"dabyrie", "newstead"}, isCapital = true }),
             Zone("argorok", { center = {27.43, 31.39}, prereqZones = {"highperch"} }),
         },
@@ -340,15 +346,17 @@ Overlord.Fronts.Registry = {
         },
         zones = {
             Zone("ash_astranaar", { center = {35.0, 49.0}, radius = 5, status = "captured", isCapital = true }),
-            Zone("ash_iris_lake", { center = {45.82, 43.25}, prereqZones = {"ash_astranaar"} }),
+            -- Ouest (1.7.1, places sur la carte Classic) : poste de Maestra, milieu du rivage
+            -- de Zoram, route du nord vers Sombrivage, sanctuaire d'Aessina, ile au sud d'Astranaar.
+            Zone("ash_maestra", { center = {26.0, 38.5}, prereqZones = {"ash_astranaar"} }),
+            Zone("ash_zoram_strand", { center = {16.0, 23.5}, prereqZones = {"ash_maestra"} }),
+            Zone("ash_darkshore_road", { center = {27.0, 22.0}, prereqZones = {"ash_zoram_strand"} }),
+            Zone("ash_iris_lake", { center = {45.82, 43.25}, prereqZones = {"ash_darkshore_road"} }),
             Zone("ash_raynewood", { center = {60.96, 51.84}, prereqZones = {"ash_iris_lake"} }),
-            Zone("ash_night_run", { center = {66.6, 56.0}, prereqZones = {"ash_raynewood"} }),
-            Zone("ash_bloodtooth_camp", { center = {54.75, 79.62}, prereqZones = {"ash_night_run"} }),
-            Zone("ash_silverwind", { center = {50.5, 66.0}, prereqZones = {"ash_astranaar"} }),
-            Zone("ash_mystral_lake", { center = {50.84, 75.08}, prereqZones = {"ash_silverwind"} }),
-            Zone("ash_fallen_sky_lake", { center = {65.88, 80.30}, prereqZones = {"ash_mystral_lake"} }),
-            Zone("ash_dor_danil", { center = {72.0, 74.0}, prereqZones = {"ash_fallen_sky_lake"} }),
-            Zone("ash_splintertree", { center = {73.5, 61.0}, radius = 5, prereqZones = {"ash_bloodtooth_camp", "ash_dor_danil"}, isCapital = true }),
+            Zone("ash_aessina", { center = {22.0, 52.7}, prereqZones = {"ash_astranaar"} }),
+            Zone("ash_stardust", { center = {32.9, 67.2}, prereqZones = {"ash_aessina"} }),
+            Zone("ash_dor_danil", { center = {72.0, 74.0}, prereqZones = {"ash_stardust"} }),
+            Zone("ash_splintertree", { center = {73.5, 61.0}, radius = 5, prereqZones = {"ash_raynewood", "ash_dor_danil"}, isCapital = true }),
         },
         prereqs = {
             Alliance = ASHENVALE_ALLIANCE_PREREQS,
@@ -357,18 +365,18 @@ Overlord.Fronts.Registry = {
         displayOrder = {
             Alliance = {
                 "ash_astranaar",
-                "ash_iris_lake", "ash_silverwind",
-                "ash_raynewood", "ash_mystral_lake",
-                "ash_night_run", "ash_fallen_sky_lake",
-                "ash_bloodtooth_camp", "ash_dor_danil",
+                "ash_maestra", "ash_aessina",
+                "ash_zoram_strand", "ash_stardust",
+                "ash_darkshore_road", "ash_dor_danil",
+                "ash_iris_lake", "ash_raynewood",
                 "ash_splintertree",
             },
             Horde = {
                 "ash_splintertree",
-                "ash_bloodtooth_camp", "ash_dor_danil",
-                "ash_night_run", "ash_fallen_sky_lake",
-                "ash_raynewood", "ash_mystral_lake",
-                "ash_iris_lake", "ash_silverwind",
+                "ash_raynewood", "ash_dor_danil",
+                "ash_iris_lake", "ash_stardust",
+                "ash_darkshore_road", "ash_aessina",
+                "ash_zoram_strand", "ash_maestra",
                 "ash_astranaar",
             },
         },

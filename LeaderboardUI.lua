@@ -22,10 +22,11 @@ local VIRTUAL_ROW_OVERSCAN = 2
 local GUILD_KEEP_ICON = 18
 -- Colonne droite : tués guildes puis fortins (deux panneaux côte à côte)
 local LB_MAIN_W = 418
-local LB_GUILD_KILLS_W = 208
--- Fortins : meme largeur que le tableau kills joueurs (3 colonnes)
-local LB_GUILD_KEEP_W = LB_MAIN_W
-local LB_OUTPOST_W = LB_MAIN_W
+-- 1.7.1 : guildes plus larges (colonne Membres) ; fortins et avant-postes rendent
+-- 44 px chacun en gardant leurs colonnes centrees : la fenetre garde sa largeur.
+local LB_GUILD_KILLS_W = 296
+local LB_GUILD_KEEP_W = 374
+local LB_OUTPOST_W = 374
 local LB_COL_GAP = 12
 -- Marge interieure : le cadre en bois des panneaux Blizzard est epais.
 local LB_FRAME_PAD = 26
@@ -36,19 +37,23 @@ local LB_FRAME_W = LB_FRAME_PAD + LB_MAIN_W + LB_COL_GAP + LB_GUILD_KILLS_W + LB
     + LB_GUILD_KEEP_W + LB_COL_GAP + LB_OUTPOST_W + LB_FRAME_PAD
 -- Colonnes guildes (tues) sur panneau 208. VH elargi a 58 px : les totaux de
 -- guilde depassent 10 000 (5-6 chiffres) ; le rang reserve quatre chiffres.
-local LB_GUILD_COL_RANK = -76
-local LB_GUILD_COL_NAME = -10
-local LB_GUILD_COL_KILLS = 64
-local LB_GUILD_NAME_W = 92
+-- Rang 8..40, nom 44..156, membres 160..220, VH 224..282 (centre du panneau a 148).
+local LB_GUILD_COL_RANK = -124
+local LB_GUILD_COL_NAME = -48
+local LB_GUILD_COL_MEMBERS = 42
+local LB_GUILD_COL_KILLS = 105
+local LB_GUILD_NAME_W = 112
 local LB_GUILD_RANK_W = 32
+local LB_GUILD_MEMBERS_W = 60
 local LB_GUILD_KILLS_TEXT_W = 58
--- Fortins : 3 colonnes equidistantes sur panneau 388 (fort -100, guilde 0, wins +100)
+-- Fortins : 3 colonnes equidistantes (fort -100, guilde 0, captures +100). Panneau de
+-- 374 (centre a 187) : icone + nom 8..122, guilde 125..249, captures 257..317.
 local LB_GK_KEEP_LEFT = 8
 local LB_GK_KEEP_NAME_W = 92
 local LB_GK_COL_KEEP = -100
 local LB_GK_COL_GUILD = 0
 local LB_GK_COL_WINS = 100
-local LB_GK_GUILD_NAME_W = 128
+local LB_GK_GUILD_NAME_W = 124
 local LB_GK_WINS_W = 60
 -- Avant-postes : 3 colonnes (site, guilde, captures)
 local LB_OP_OUTPOST_LEFT = LB_GK_KEEP_LEFT
@@ -1132,6 +1137,13 @@ function Overlord.LeaderboardUI:CreateFrame()
     ghName:SetJustifyH("CENTER")
     ghName:SetText(L.LB_COL_GUILD or "Guild")
     ApplyOfficialHeaderColor(ghName, P)
+    -- Membres classes de la guilde : un gros total vient souvent d'une grosse guilde.
+    local ghMembers = guildHeaderBand:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    ghMembers:SetPoint("CENTER", guildHeaderBand, "CENTER", LB_GUILD_COL_MEMBERS, 0)
+    ghMembers:SetWidth(LB_GUILD_MEMBERS_W)
+    ghMembers:SetJustifyH("CENTER")
+    ghMembers:SetText(L.LB_COL_MEMBERS or "Members")
+    ApplyOfficialHeaderColor(ghMembers, P)
     local ghKills = guildHeaderBand:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     ghKills:SetPoint("CENTER", guildHeaderBand, "CENTER", LB_GUILD_COL_KILLS, 0)
     ghKills:SetWidth(LB_GUILD_KILLS_TEXT_W)
@@ -1593,7 +1605,7 @@ function Overlord.LeaderboardUI.OnGuildRowEnter(row)
     local summary = lb and lb.GetGuildMembersSummary and lb:GetGuildMembersSummary(entry.guild)
     local total = tonumber(entry.kills) or 0
     if summary then
-        GameTooltip:AddLine(string.format(L.LB_GUILD_TIP_SUMMARY or "%d ranked members, %d kills",
+        GameTooltip:AddLine(string.format(L.LB_GUILD_TIP_SUMMARY or "%d ranked members, %d HK",
             summary.count, total), 0.8, 0.8, 0.8)
         local sync = Overlord.Sync
         for i = 1, #summary.names do
@@ -1609,7 +1621,7 @@ function Overlord.LeaderboardUI.OnGuildRowEnter(row)
             GameTooltip:AddLine(string.format(L.LB_GUILD_TIP_MORE or "+ %d more", more), 0.6, 0.6, 0.6)
         end
     else
-        GameTooltip:AddLine(string.format(L.LB_GUILD_TIP_TOTAL or "%d kills", total), 0.8, 0.8, 0.8)
+        GameTooltip:AddLine(string.format(L.LB_GUILD_TIP_TOTAL or "%d HK", total), 0.8, 0.8, 0.8)
     end
     GameTooltip:Show()
 end
@@ -1719,6 +1731,11 @@ function Overlord.LeaderboardUI:CreateGuildRow(parent, index, yOffset, P)
     row.name:SetWidth(LB_GUILD_NAME_W)
     row.name:SetJustifyH("CENTER")
     row.name:SetWordWrap(false)
+
+    row.members = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.members:SetPoint("CENTER", row, "CENTER", LB_GUILD_COL_MEMBERS, 0)
+    row.members:SetWidth(LB_GUILD_MEMBERS_W)
+    row.members:SetJustifyH("CENTER")
 
     row.kills = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     row.kills:SetPoint("CENTER", row, "CENTER", LB_GUILD_COL_KILLS, 0)
@@ -2031,6 +2048,7 @@ RenderGuildRows = function(force)
     local P = GetPalette()
     local myGuild = Overlord.Outpost and Overlord.Outpost.GetLocalPlayerGuild
         and Overlord.Outpost:GetLocalPlayerGuild() or ""
+    local lbMembers = Overlord.Leaderboard
     local used = 0
     for slot = 1, poolSize do
         local dataIndex = first + slot - 1
@@ -2048,9 +2066,12 @@ RenderGuildRows = function(force)
             end
             local rank = lbFrame._lbView.ranks and lbFrame._lbView.ranks.sortedGuilds[dataIndex] or dataIndex
             local isOwn = myGuild ~= "" and entry.guild == myGuild
+            local membersSummary = lbMembers and lbMembers.GetGuildMembersSummary
+                and lbMembers:GetGuildMembersSummary(entry.guild)
+            local memberCount = membersSummary and tonumber(membersSummary.count) or nil
             local paintKey = rank .. "|" .. tostring(entry.guild or "") .. "|"
                 .. tostring(entry.kills or 0) .. "|" .. tostring(entry.faction or "")
-                .. (isOwn and "|me" or "")
+                .. "|" .. tostring(memberCount or "") .. (isOwn and "|me" or "")
             if row._lbPaintKey ~= paintKey then
                 row._lbPaintKey = paintKey
                 local medalColor = MEDAL_COLORS[rank]
@@ -2070,6 +2091,10 @@ RenderGuildRows = function(force)
                 row.kills:SetText(guildKills >= 1000000
                     and string.format("%.1fM", guildKills / 1000000) or guildKills)
                 SetSecondaryTextColor(row.kills, P, medalColor)
+                if row.members then
+                    row.members:SetText(memberCount and tostring(memberCount) or "-")
+                    row.members:SetTextColor(0.8, 0.8, 0.8)
+                end
             end
             row:Show()
         end

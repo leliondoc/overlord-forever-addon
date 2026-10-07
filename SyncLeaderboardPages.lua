@@ -201,10 +201,27 @@ end
 -- All scans and sorting yield after 32 work units and a ~1 ms slice.
 -- Only complete immutable profiles are published: at most 5,000 LK,
 -- 1,500 LC, and 6,500 LR source identities.
+-- A profile built from a copy younger than PROFILE_REUSE_SEC is served again: a
+-- client whose ranking changes all the time (a bridge, a busy fight) rebuilt the copy
+-- and its profile for every requester (~220 ms of work and ~29 MB of garbage for
+-- 5,000 players, CPU spikes). Pages are then at most 2 minutes old; the next round
+-- brings the rest.
+local PROFILE_REUSE_SEC = 120
 local function prepare(callback)
     if building then return false end
-    building = true
     local wanted = epoch()
+    local recent = sync.GetAttestedLeaderboardSnapshot and sync:GetAttestedLeaderboardSnapshot()
+    local cached = type(recent) == "table" and profiles[recent] or nil
+    local age = cached and (((GetServerTime and GetServerTime()) or time()) - (tonumber(recent.at) or 0)) or nil
+    if cached and cached.epoch == wanted and age and age >= 0 and age < PROFILE_REUSE_SEC then
+        stats.profileReused = (stats.profileReused or 0) + 1
+        C_Timer.After(0.001, function()
+            if wanted ~= epoch() then callback(nil); return end
+            callback(cached)
+        end)
+        return true
+    end
+    building = true
     local accepted = lb:SnapshotCurrentCampaignBeforeReset(function(ok)
         local snapshot = ok and sync:GetAttestedLeaderboardSnapshot()
         if not snapshot or wanted ~= epoch() then building = nil; callback(nil); return end

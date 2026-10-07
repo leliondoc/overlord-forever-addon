@@ -27,7 +27,7 @@ end
 
 -- A kill zone and a front marker both resolve; an off-front map ref does not count.
 FA:Record("ashenvale", nil, serverNow)
-assert(FA:RecordKills("ash_mystral_lake", 3))
+assert(FA:RecordKills("ash_iris_lake", 3))
 assert(FA:RecordKills("@ashenvale", 4))
 assert(FA:RecordKills("#1440", 2), "the front's own map ref was not counted")
 assert(row("ashenvale").kills == 9, "kills per front: " .. tostring(row("ashenvale").kills))

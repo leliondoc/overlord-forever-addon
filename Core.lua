@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.7.0"
+Overlord.Version = "1.7.1"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncBetaNetwork.lua).
 Overlord.BetaNetworkEnabled = true
 Overlord.IsInitialized = false
@@ -30,6 +30,8 @@ Overlord.UI_TT = {
 Overlord.DISCORD_INVITE_URL = "https://discord.com/invite/53VrYYtPz5"
 -- Atlas officiel Blizzard (Interface/ChatFrame/UIChatIcon).
 Overlord.DISCORD_BUTTON_ATLAS = "UI-ChatIcon-Discord"
+-- Contact de l'auteur (bouton Contact, ancien emplacement Export) : compte X personnel.
+Overlord.CONTACT_URL = "https://x.com/TromaFR"
 
 local L = Overlord.L
 

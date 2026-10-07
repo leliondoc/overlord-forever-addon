@@ -1,5 +1,5 @@
 -- 1.7.0 audit: the exact Recent activity text from Popups.lua, in all 7 languages:
--- kill bracket first, "1+ kill" under 5 kills, then capture brackets 1+/5+/10+;
+-- kill bracket first, "1+ HK" under 5 kills, then capture brackets 1+/5+/10+;
 -- the age only for a row without kill or capture (relay off).
 local function stub()
     return setmetatable({}, { __index = function() return function() end end,
@@ -20,9 +20,9 @@ end
 -- English (fallbacks and keys).
 local format = loadPopups({})
 assert(format(false, 30, 50, 3) == "...", "inactive row")
-assert(format(true, 30, 23, 4) == "20+ kills")
-assert(format(true, 200, 3, 12) == "1+ kill", "kills must come before captures")
-assert(format(true, 200, 1, 0) == "1+ kill", "a single kill is 1+ kill")
+assert(format(true, 30, 23, 4) == "20+ HK")
+assert(format(true, 200, 3, 12) == "1+ HK", "kills must come before captures")
+assert(format(true, 200, 1, 0) == "1+ HK", "a single kill is 1+ HK")
 assert(format(true, 200, 0, 1) == "1+ capture")
 assert(format(true, 200, 0, 4) == "1+ capture")
 assert(format(true, 200, 0, 5) == "5+ captures", "5 captures is the 5+ bracket")
@@ -108,8 +108,8 @@ assert(deUnbounded.width == #"10+ Eroberungen" * 7 + 2, "unbounded measure: " ..
 local long = paint({ FEATURED_FRONT_ACTIVITY_CAPTURES = "%d+ very long capture wording here" }, 0, 12)
 assert(long.width == 120, "the value column grew past 120 px: " .. tostring(long.width))
 local short = paint({}, 1, 0)
-assert(short.text == "1+ kill" and short.width == 92, "short text changed the column: " .. tostring(short.width))
-assert(short.color[1] == 1 and short.color[2] == 0.82, "1+ kill is not gold")
+assert(short.text == "1+ HK" and short.width == 92, "short text changed the column: " .. tostring(short.width))
+assert(short.color[1] == 1 and short.color[2] == 0.82, "1+ HK is not gold")
 local caps = paint({}, 0, 3)
 assert(caps.color[1] == 1 and caps.color[2] == 0.82, "captures are not gold")
 print("Front activity text: kills first, 1+ kill, capture brackets, relay-off age, 7 locales OK")

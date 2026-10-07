@@ -495,12 +495,55 @@ end
 
 local GUIDE_MINE_ATLAS = "Warfronts-FieldMapIcons-Empty-Mine"
 
-local function FormatGuideSection(sectionTitle, body)
+-- 1.7.1 : le guide se lit en listes courtes. Chaque section a une icone (icones
+-- Blizzard deja utilisees par Overlord, ou atlas de la carte) ; une ligne qui commence
+-- par "- " devient une puce doree, et les commandes /ov ... ressortent en bleu clair.
+local GUIDE_ICON_SIZE = 22
+local GUIDE_BULLET = "  |cFFFFD100\226\128\162|r "
+local GUIDE_COMMANDS = { show = true, hud = true, guide = true, network = true, lb = true,
+    map = true, sync = true, wanted = true, guildkills = true }
+
+local function GuideIconMarkup(icon)
+    if type(icon) ~= "string" or icon == "" then return "" end
+    if icon:find("\\Icons\\", 1, true) then
+        -- Icones carrees : rogner le bord gris (5..59 sur 64) comme les boutons d'action.
+        return string.format("|T%s:%d:%d:0:0:64:64:5:59:5:59|t ", icon, GUIDE_ICON_SIZE, GUIDE_ICON_SIZE)
+    elseif icon:find("\\", 1, true) then
+        -- Autres textures (logo Overlord, crane Most Wanted) : entieres.
+        return string.format("|T%s:%d:%d|t ", icon, GUIDE_ICON_SIZE, GUIDE_ICON_SIZE)
+    end
+    return string.format("|A:%s:%d:%d|a ", icon, GUIDE_ICON_SIZE, GUIDE_ICON_SIZE)
+end
+
+local function FormatGuideBody(body)
+    local out = {}
+    for line in (body .. "\n"):gmatch("(.-)\n") do
+        if line:sub(1, 2) == "- " then
+            line = GUIDE_BULLET .. line:sub(3)
+        end
+        out[#out + 1] = line
+    end
+    local text = table.concat(out, "\n")
+    -- Commandes en bleu clair (/ov xxx et /pvp) ; les codes |c, |T et |A n'ont pas de "/".
+    -- Seules les vraies sous-commandes : "/ov seul", "/ov alone" restent en blanc.
+    text = text:gsub("/ov (%a+)", function(word)
+        if GUIDE_COMMANDS[word] then return "|cFF7FD4FF/ov " .. word .. "|r" end
+    end)
+    text = text:gsub("(/pvp)", "|cFF7FD4FF%1|r")
+    return text
+end
+
+local function FormatGuideSection(sectionTitle, body, icon)
     if not body or body == "" then return "" end
+    body = FormatGuideBody(body)
     if sectionTitle and sectionTitle ~= "" then
-        return string.format("|cFFFFD100%s|r\n%s", sectionTitle, body)
+        return string.format("%s|cFFFFD100%s|r\n%s", GuideIconMarkup(icon), sectionTitle, body)
     end
     return body
+end
+
+local function FactionGuideIcon(alliance, horde)
+    return (Overlord.PlayerFaction == "Horde") and horde or alliance
 end
 
 local function JoinGuideSections(...)
@@ -543,7 +586,7 @@ local function BuildGuildKeepGuideSection()
         "|A:Warfronts-BaseMapIcons-Alliance-MainHall:18:18|a", L.THE_ALLIANCE or "Alliance",
         "|A:Warfronts-BaseMapIcons-Horde-MainHall:18:18|a", L.THE_HORDE or "Horde")
     local body = string.format(L.GUIDE_GUILD_KEEP_BODY, iconLine, capMin)
-    return FormatGuideSection(L.GUIDE_SECTION_GUILD_KEEP, body)
+    return FormatGuideSection(L.GUIDE_SECTION_GUILD_KEEP, body, "Warfronts-BaseMapIcons-Empty-MainHall")
 end
 
 local GUIDE_PAGE_TITLES = {
@@ -555,31 +598,41 @@ local GUIDE_PAGE_TITLES = {
 local function BuildQuickGuidePageBody(page)
     if page == 1 then
         local travel = (Overlord.PlayerFaction == "Horde") and L.GUIDE_TRAVEL_HORDE or L.GUIDE_TRAVEL_ALLIANCE
+        -- Icones reprises de l'endroit ou l'addon montre deja la meme chose : objectif de
+        -- la carte, icone JcJ de l'activite recente, badge de layer, logo Overlord, Options.
         return JoinGuideSections(
-            FormatGuideSection(L.GUIDE_SECTION_TRAVEL, travel),
-            FormatGuideSection(L.GUIDE_SECTION_RULES, L.GUIDE_RULES_BODY),
-            FormatGuideSection(L.GUIDE_SECTION_PROGRESS, L.GUIDE_PROGRESS_BODY),
-            FormatGuideSection(L.GUIDE_SECTION_SHARD, L.GUIDE_SHARD_BODY),
-            FormatGuideSection(L.GUIDE_SECTION_PANEL, L.GUIDE_PANEL_BODY),
-            FormatGuideSection(L.GUIDE_SECTION_OPTIONS, L.GUIDE_OPTIONS_BODY)
+            FormatGuideSection(L.GUIDE_SECTION_TRAVEL, travel, "Interface\\Icons\\INV_Misc_Map_01"),
+            FormatGuideSection(L.GUIDE_SECTION_RULES, L.GUIDE_RULES_BODY, "Bonus-Icon-PVP"),
+            FormatGuideSection(L.GUIDE_SECTION_PROGRESS, L.GUIDE_PROGRESS_BODY,
+                (Overlord.Zones and Overlord.Zones.OBJECTIVE_NEUTRAL_ATLAS) or "Warfronts-FieldMapIcons-Empty-Banner"),
+            FormatGuideSection(L.GUIDE_SECTION_SHARD, L.GUIDE_SHARD_BODY, "Interface\\Icons\\Spell_Arcane_PortalShattrath"),
+            FormatGuideSection(L.GUIDE_SECTION_PANEL, L.GUIDE_PANEL_BODY, "Interface\\AddOns\\Overlord\\Textures\\overlord_minimap"),
+            FormatGuideSection(L.GUIDE_SECTION_OPTIONS, L.GUIDE_OPTIONS_BODY, "Interface\\Icons\\INV_Misc_Gear_01")
         )
     end
     if page == 2 then
         local goldBody = FormatGuideResourceBody(L.GUIDE_GOLD_BODY, Overlord.MineDatabase, GUIDE_MINE_ATLAS)
         return JoinGuideSections(
-            FormatGuideSection(L.GUIDE_SECTION_CONTEST, L.GUIDE_CONTEST_BODY),
-            FormatGuideSection(L.GUIDE_SECTION_SIEGE, L.GUIDE_SIEGE_BODY),
-            FormatGuideSection(L.GUIDE_SECTION_GOLD, goldBody),
-            FormatGuideSection(L.GUIDE_SECTION_FEATURED, L.GUIDE_FEATURED_BODY)
+            -- Attaquer (bouton de la carte Prochain objectif), capitale de la carte, coin,
+            -- etoile du front du jour.
+            FormatGuideSection(L.GUIDE_SECTION_CONTEST, L.GUIDE_CONTEST_BODY,
+                "Interface\\Icons\\Ability_Warrior_OffensiveStance"),
+            FormatGuideSection(L.GUIDE_SECTION_SIEGE, L.GUIDE_SIEGE_BODY,
+                FactionGuideIcon("Warfronts-BaseMapIcons-Alliance-MainHall", "Warfronts-BaseMapIcons-Horde-MainHall")),
+            FormatGuideSection(L.GUIDE_SECTION_GOLD, goldBody, "Interface\\Icons\\INV_Misc_Coin_01"),
+            FormatGuideSection(L.GUIDE_SECTION_FEATURED, L.GUIDE_FEATURED_BODY, "QuestDailyIcon")
         )
     end
     if page == 3 then
         return JoinGuideSections(
             BuildGuildKeepGuideSection(),
-            FormatGuideSection(L.GUIDE_SECTION_OUTPOST, L.GUIDE_OUTPOST_BODY),
-            FormatGuideSection(L.GUIDE_SECTION_FACTION_CALL, L.GUIDE_FACTION_CALL_BODY),
-            FormatGuideSection(L.GUIDE_SECTION_ALERTS, L.GUIDE_ALERTS_BODY),
-            FormatGuideSection(L.GUIDE_SECTION_TOOLS, L.GUIDE_TOOLS_BODY)
+            FormatGuideSection(L.GUIDE_SECTION_OUTPOST, L.GUIDE_OUTPOST_BODY, "Warfronts-BaseMapIcons-Empty-Tower"),
+            -- Banniere du bouton Appel aux armes, crane Most Wanted, casque du bouton classement.
+            FormatGuideSection(L.GUIDE_SECTION_FACTION_CALL, L.GUIDE_FACTION_CALL_BODY,
+                FactionGuideIcon("Interface\\Icons\\INV_BannerPVP_02", "Interface\\Icons\\INV_BannerPVP_01")),
+            FormatGuideSection(L.GUIDE_SECTION_ALERTS, L.GUIDE_ALERTS_BODY,
+                "Interface\\TargetingFrame\\UI-TargetingFrame-Skull"),
+            FormatGuideSection(L.GUIDE_SECTION_TOOLS, L.GUIDE_TOOLS_BODY, "Interface\\Icons\\INV_Helmet_08")
         )
     end
     return ""
@@ -744,6 +797,8 @@ local function EnsureQuickGuideFrame()
     f.bodyFs:SetJustifyH("LEFT")
     f.bodyFs:SetJustifyV("TOP")
     f.bodyFs:SetWordWrap(true)
+    -- Un peu d'air entre les lignes : les puces et les icones respirent.
+    if f.bodyFs.SetSpacing then f.bodyFs:SetSpacing(3) end
 
     f.prevBtn = Overlord.UI.CreateWC3Button(f, 108, 28, L.GUIDE_PREV or "Previous", function()
         SetQuickGuidePage(quickGuidePage - 1)
@@ -1359,7 +1414,8 @@ local function GetFrontActivityAgeColor(active, ageSeconds)
     return 0.82, 0.82, 0.82
 end
 
--- Taille du combat par tranches : 5+, 10+, 20+, 30+... (sous 5 kills, "1+ kill").
+-- Taille du combat par tranches : 5+, 10+, 20+, 30+... (sous 5, "1+ HK" : des victoires
+-- honorables, partagees par tout le groupe, pas des morts).
 local FRONT_FIGHT_BRACKETS = { 500, 300, 200, 150, 100, 75, 50, 40, 30, 20, 10, 5 }
 local function GetFrontFightBracket(kills)
     kills = tonumber(kills) or 0
@@ -1381,16 +1437,16 @@ local function GetFrontCaptureBracket(captures)
     return bracket > 0 and bracket or nil
 end
 
--- Kills d'abord (palier partage, "1+ kill" sous 5), sinon les captures de la carte.
+-- HK d'abord (palier partage, "1+ HK" sous 5), sinon les captures de la carte.
 -- L'age ne sert plus que sans relais, pour une ligne sans kill ni capture.
 local function FormatFrontActivityAge(active, ageSeconds, kills, captures)
     if not active then return L.FEATURED_FRONT_ACTIVITY_DASH or "..." end
     local bracket = GetFrontFightBracket(kills)
     if bracket then
-        return string.format(L.FEATURED_FRONT_ACTIVITY_KILLS or "%d+ kills", bracket)
+        return string.format(L.FEATURED_FRONT_ACTIVITY_KILLS or "%d+ HK", bracket)
     end
     if (tonumber(kills) or 0) >= 1 then
-        return L.FEATURED_FRONT_ACTIVITY_KILL_ONE or "1+ kill"
+        return L.FEATURED_FRONT_ACTIVITY_KILL_ONE or "1+ HK"
     end
     local captureBracket = GetFrontCaptureBracket(captures)
     if captureBracket == 1 then

@@ -26,8 +26,8 @@ Les identifiants, prérequis, rayons et scores ne changent pas. Les sauvegardes 
 | `goshek` | 61.88, 57.33 | Hammerfall Peon (2618), 61.88 / 57.33 |
 | `dabyrie` | 54.18, 38.09 | Marcel Dabyrie (4481), 54.18 / 38.09 |
 | `refuge` | 45.83, 47.56 | Captain Nials (2700), 45.83 / 47.56 |
-| `highperch` | 25.19, 40.13 | Highland Strider (2559), 25.19 / 40.13 |
-| `newstead` | 18.04, 47.22 | Highland Thrasher (2560), 18.04 / 47.22 |
+| `highperch` | 44.0, 79.4 | Viaduc de Thandol, extrémité nord (1.7.1, relevé en jeu) |
+| `newstead` | 21.2, 34.0 | Mur de Thoradin (1.7.1, relevé en jeu) |
 | `hammerfell` | 74.18, 33.96 | Uttnar (4954), 74.18 / 33.96 |
 | `argorok` | 27.43, 31.39 | Burning Exile (2760), 27.43 / 31.39 |
 | `loch_alliance_capital` | 35.40, 46.60 | Mountaineer Ozmok (2510), 35.10 / 46.79 |
@@ -51,23 +51,24 @@ Les identifiants, prérequis, rayons et scores ne changent pas. Les sauvegardes 
 | `durotar_drygulch_ravine` | 49.10, 29.10 | Dustwind Harpy (3115), 49.96 / 27.56 |
 | `durotar_dranosh_blockade` | 46.10, 13.77 | Javnir Nashak (15012), 46.10 / 13.77 |
 | `ash_astranaar` | 35.00, 49.00 | Shindrell Swiftfire (3845), 34.67 / 48.84 |
+| `ash_maestra` | 26.00, 38.50 | Poste de Maestra (1.7.1, carte Classic) |
+| `ash_zoram_strand` | 16.00, 23.50 | Milieu du rivage de Zoram, sur la terre (1.7.1) |
+| `ash_darkshore_road` | 27.00, 22.00 | Route du nord vers Sombrivage (1.7.1) |
+| `ash_aessina` | 22.00, 52.70 | Sanctuaire d'Aessina, sud-ouest (1.7.1) |
+| `ash_stardust` | 32.90, 67.20 | Île des ruines de Poussière-d'étoile, au sud d'Astranaar (1.7.1) |
 | `ash_iris_lake` | 45.82, 43.25 | Shadethicket Moss Eater (3780), 45.82 / 43.25 |
 | `ash_raynewood` | 60.96, 51.84 | Laughing Sister (4054), 60.96 / 51.84 |
-| `ash_night_run` | 66.60, 56.00 | Site de Night Run, 66.60 / 57.00 (référence ci-dessous) |
-| `ash_bloodtooth_camp` | 54.75, 79.62 | Ran Bloodtooth (3696), 54.75 / 79.62 |
-| `ash_silverwind` | 50.50, 66.00 | Astranaar Sentinel (6087), 50.27 / 66.04 |
-| `ash_mystral_lake` | 50.84, 75.08 | Krolg (3897), 50.84 / 75.08 |
-| `ash_fallen_sky_lake` | 65.88, 80.30 | Shadethicket Bark Ripper (3784), 65.88 / 80.30 |
 | `ash_dor_danil` | 72.00, 74.00 | Ashenvale Outrunner (12856), 71.91 / 73.67 |
 | `ash_splintertree` | 73.50, 61.00 | Qeeju (15131), 73.38 / 61.02 |
 
+
+1.7.1 : Orneval est redessiné sur 10 objectifs (tracé ouest/sud-ouest ; Night Run, Bloodtooth, Silverwind, Mystral et le lac du Ciel-Déchu retirés) ; le test couvre toujours 59 objectifs.
 
 ## Extension 1.0.14 : 57 objectifs
 
 Le test couvre désormais les 57 objectifs et les cartes Classic 1429 (Elwynn) et 1433 (Carmines), ainsi que leurs alias.
 
-- [Night Run](https://classic-wow-archive.fandom.com/wiki/Night_Run) situe le camp à 66.6, 57.0. Le centre de capture est à 66.6, 56.0. Les coordonnées 72.5, 50.0 décrivent un virage du chemin d'accès et ne doivent pas servir de centre.
-- Mystral conserve la référence terrestre de Krolg, 50.84, 75.08, cohérente avec son nom « rive sud » et distincte du refuge de Vent-argent.
+- (Avant 1.7.1) Night Run et Mystral avaient leurs propres références ; ces deux objectifs ont été retirés d'Orneval en 1.7.1.
 - Les dix références d'Elwynn reprennent la disposition Retail restaurée à la demande de l'auteur. Elles vérifient la détection et le choix de carte ; elles ne constituent pas un relevé indépendant du relief Forever.
 - Les sept références des Carmines utilisent les repères de la [carte antérieure à Cataclysm](https://www.mmo4ever.com/wow/map.php?creature=3085&id=44) : Lakeshire 25/43, Alther 53/42, Ilgalar 80/49, Three Corners 18/69, Lakeridge Highway 38/73, Stonewatch Falls 75/67 et Render's Valley 73/78.
 

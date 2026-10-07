@@ -31,8 +31,8 @@ local anchors = {
     {"goshek", 61.88, 57.33}, -- NPC 2618: Hammerfall Peon
     {"dabyrie", 54.18, 38.09}, -- NPC 4481: Marcel Dabyrie
     {"refuge", 45.83, 47.56}, -- NPC 2700: Captain Nials
-    {"highperch", 25.19, 40.13}, -- NPC 2559: Highland Strider
-    {"newstead", 18.04, 47.22}, -- NPC 2560: Highland Thrasher
+    {"highperch", 44.0, 79.4}, -- Thandol Span, north end (1.7.1, picked in game)
+    {"newstead", 21.2, 34.0}, -- Thoradin's Wall (1.7.1, picked in game)
     {"hammerfell", 74.18, 33.96}, -- NPC 4954: Uttnar
     {"argorok", 27.43, 31.39}, -- NPC 2760: Burning Exile
     {"loch_alliance_capital", 35.10, 46.79}, -- NPC 2510: Mountaineer Ozmok
@@ -58,11 +58,13 @@ local anchors = {
     {"ash_astranaar", 34.67, 48.84}, -- NPC 3845: Shindrell Swiftfire
     {"ash_iris_lake", 45.82, 43.25}, -- NPC 3780: Shadethicket Moss Eater
     {"ash_raynewood", 60.96, 51.84}, -- NPC 4054: Laughing Sister
-    {"ash_night_run", 66.6, 57.0}, -- Classic WoW Wiki: Night Run settlement, not the river approach
-    {"ash_bloodtooth_camp", 54.75, 79.62}, -- NPC 3696: Ran Bloodtooth
-    {"ash_silverwind", 50.27, 66.04}, -- NPC 6087: Astranaar Sentinel
-    {"ash_mystral_lake", 50.84, 75.08}, -- NPC 3897: Krolg
-    {"ash_fallen_sky_lake", 65.88, 80.30}, -- NPC 3784: Shadethicket Bark Ripper
+    -- 1.7.1 west and south-west (Classic map): Maestra's Post, middle of the Zoram Strand,
+    -- north road to Darkshore, Shrine of Aessina, island south of Astranaar.
+    {"ash_maestra", 26.0, 38.5},
+    {"ash_zoram_strand", 16.0, 23.5},
+    {"ash_darkshore_road", 27.0, 22.0},
+    {"ash_aessina", 22.0, 52.7},
+    {"ash_stardust", 32.9, 67.2},
     {"ash_dor_danil", 71.91, 73.67}, -- NPC 12856: Ashenvale Outrunner
     {"ash_splintertree", 73.38, 61.02}, -- NPC 15131: Qeeju
     -- Elwynn: samples from the user-requested restored Retail layout.
@@ -131,7 +133,7 @@ for _, front in pairs(Overlord.Fronts.Registry) do
         count = count + 1
     end
 end
-assert(count == 59)
+assert(count == 59) -- 1.7.1: Ashenvale redrawn, still 10 points
 classicAvailable = false
 for _, front in pairs(Overlord.Fronts.Registry) do
     front.resolvedMapID = nil

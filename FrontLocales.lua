@@ -155,7 +155,7 @@ if locale == "ptBR" then
         stromgarde = "Bastilha de Stromgarde", faldir = "Enseada de Faldir",
         witherbark = "Vila Cascasseca", goshek = "Fazenda de Go'Shek",
         dabyrie = "Fazenda de Dabyrie", refuge = "Ponta do Refúgio",
-        highperch = "Planalto Ocidental", newstead = "Muralha de Thoradin",
+        highperch = "Ponte Thandol", newstead = "Muralha de Thoradin",
         hammerfell = "Martelo da Ruína", argorok = "Círculo de União Ocidental",
         loch_alliance_capital = "Thelsamar", loch_horde_capital = "Fortaleza Mo'grosh",
         loch_valley_of_kings = "Vale dos Reis", loch_south_gate_pass = "Passagem do Portão Sul",
@@ -172,6 +172,9 @@ if locale == "ptBR" then
         ash_bloodtooth_camp = "Acampamento Dentessangue", ash_silverwind = "Refúgio Ventoprata",
         ash_mystral_lake = "Lago Mystral", ash_fallen_sky_lake = "Lago Céu Caído",
         ash_dor_danil = "Covil de Dor'Danil", ash_splintertree = "Posto Lenhatriz",
+        ash_maestra = "Posto de Maestra", ash_zoram_strand = "Praia de Zoram",
+        ash_darkshore_road = "Estrada da Costa Negra", ash_aessina = "Santuário de Aessina",
+        ash_stardust = "Ruínas de Poeira Estelar",
     }
     for id, name in pairs(zones) do L.ZONE_NAMES[id] = name end
     local elwynn = { "Guarnição Riach'Oeste", "Vila D'Ouro", "Torre de Azora",
@@ -185,7 +188,7 @@ elseif locale == "zhCN" then
     local zones = {
         stromgarde = "激流堡", faldir = "法迪尔海湾", witherbark = "枯木村",
         goshek = "格沙克农场", dabyrie = "达比雷农场", refuge = "避难谷地",
-        highperch = "西部高地", newstead = "索拉丁之墙", hammerfell = "落锤镇",
+        highperch = "萨多尔大桥", newstead = "索拉丁之墙", hammerfell = "落锤镇",
         argorok = "西部禁锢法阵", loch_alliance_capital = "塞尔萨玛",
         loch_horde_capital = "莫格罗什要塞", loch_valley_of_kings = "国王谷",
         loch_south_gate_pass = "南门小径", loch_silver_stream_mine = "银泉矿洞",
@@ -201,7 +204,9 @@ elseif locale == "zhCN" then
         ash_night_run = "夜道谷", ash_bloodtooth_camp = "血牙营地",
         ash_silverwind = "银风避难所", ash_mystral_lake = "密斯特拉湖",
         ash_fallen_sky_lake = "坠星湖", ash_dor_danil = "朵丹尼尔兽穴",
-        ash_splintertree = "碎木岗哨",
+        ash_splintertree = "碎木岗哨", ash_maestra = "迈斯特拉哨站",
+        ash_zoram_strand = "佐拉姆海岸", ash_darkshore_road = "黑海岸之路",
+        ash_aessina = "艾森娜神殿", ash_stardust = "星尘废墟",
     }
     for id, name in pairs(zones) do L.ZONE_NAMES[id] = name end
     local elwynn = { "西泉要塞", "闪金镇", "阿祖拉之塔", "山脊塔楼", "水晶湖",

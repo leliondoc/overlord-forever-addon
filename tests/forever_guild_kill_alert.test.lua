@@ -5,6 +5,9 @@ assert(loadfile("tests/forever_world_kills.test.lua"))()
 assert(loadfile("GuildKillAlert.lua"))()
 local NAMES = { "Alpha Tester", "Bravo Tester", "Charlie Tester", "Delta Tester", "Echo Tester", "Foxtrot Tester" }
 local GKA = Overlord.GuildKillAlert
+-- The cases below predate the allied rampage line (1.7.1): checked with it off, then
+-- the allied section at the end turns it on.
+GKA:SetAllyEnabled(false)
 local clock, serverClock = 1000, 1789530000
 local EPOCH = 1789527600
 function GetTime() return clock end
@@ -70,7 +73,7 @@ assert(alerts() == 0, "Five duplicated kills triggered the alert")
 for m = 1, 5 do kill(NAMES[m], 4) end
 assert(alerts() == 1, "20 kills by 5 members did not alert")
 local text = printed[1]
-assert(text:find("20+ kills by 5+ members (#143)!", 1, true), text)
+assert(text:find("20+ HK by 5+ members (#143)!", 1, true), text)
 for _, name in ipairs(NAMES) do assert(not text:find(name, 1, true), "Alert named a player: " .. text) end
 
 -- The detector shares exactly one GW, after a random delay, through the relay only.
@@ -191,7 +194,7 @@ assert(#timers == 1)
 GKA:SetEnabled(false)
 flush()
 assert(#sent == 0, "A scheduled GW left after the option was disabled")
-GKA:ResetDefaults()
+GKA:ResetDefaults(); GKA:SetAllyEnabled(false)
 
 -- Without the relay (not loaded yet): direct group + channel copies, still one alert.
 reset()
@@ -208,7 +211,7 @@ GKA:SetEnabled(false)
 raid()
 flush()
 assert(alerts() == 0 and #sent == 0, "Disabled alert still printed or sent")
-GKA:ResetDefaults()
+GKA:ResetDefaults(); GKA:SetAllyEnabled(false)
 assert(GKA:IsEnabled())
 
 -- Receiving a GW prints the very same text, once per guild per 10 minutes.
@@ -217,7 +220,7 @@ local iron = gw("Iron Watch", "Alliance", 27, 6, "#1417", 55)
 assert(GKA:OnReceiveNetworkAlert(iron, "Relay Tester", "BETA"), "Valid GW rejected")
 assert(printed[1] == "|cFFFF4444[Overlord]|r "
     .. GKA:BuildAlertText("Iron Watch", "Alliance", 27, 6, "#1417", 55), tostring(printed[1]))
-assert(printed[1]:find("27+ kills by 6+ members in Arathi Highlands (#55)!", 1, true), printed[1])
+assert(printed[1]:find("27+ HK by 6+ members in Arathi Highlands (#55)!", 1, true), printed[1])
 assert(not GKA:OnReceiveNetworkAlert(iron, "Other Tester", "CHANNEL"), "Duplicate GW printed twice")
 assert(#sent == 0, "Receiver re-broadcast the GW")
 
@@ -231,6 +234,16 @@ raid()
 assert(alerts() == 2, "A received GW masked the local detection")
 flush()
 assert(#sent == 0, "Local detection re-sent a GW that already circulated")
+
+-- 1.7.1 security: whitespace variants of one name never get a fresh 10-minute slot.
+reset()
+for _, variant in ipairs({ " Empire", "Empire ", "Em  pire" }) do
+    local payload = "1:" .. variant .. ":A:20:5::" .. ":" .. tostring(GetServerTime())
+    assert(not GKA:OnReceiveNetworkAlert(payload, "Forger", "BETA"),
+        "Padded guild name '" .. variant .. "' was accepted")
+end
+assert(GKA:OnReceiveNetworkAlert(gw("Iron Wolves", "Alliance", 20, 5, "", nil), "Relay Tester", "BETA"),
+    "A real two-word guild name was refused")
 
 -- Own-faction GW: not printed, but cancels our pending send for that guild.
 reset()
@@ -308,7 +321,7 @@ OverlordDB.config.guildKillAlertEnabled = nil
 local tagFn = Overlord.Sync.GetShardAlertTagForPlayer
 GKA:HandleCommand({ "guildkills", "test" })
 assert(#printed == 1 and printed[1]:find("Empire [TEST]", 1, true)
-    and printed[1]:find("20+ kills by 5+ members in Arathi Highlands (#143)!", 1, true)
+    and printed[1]:find("20+ HK by 5+ members in Arathi Highlands (#143)!", 1, true)
     and not printed[1]:find("Sim", 1, true), tostring(printed[1]))
 assert(#sent == 0 and #timers == 0, "Simulation sent network traffic")
 assert(OverlordDB.config.guildKillAlertEnabled == nil, "Simulation changed the default setting")
@@ -316,7 +329,7 @@ assert(Overlord.Sync.GetShardAlertTagForPlayer == tagFn)
 GKA:SetEnabled(false)
 GKA:HandleCommand({ "guildkills", "test" })
 assert(#printed == 2 and OverlordDB.config.guildKillAlertEnabled == false, "Simulation did not restore false")
-GKA:ResetDefaults()
+GKA:ResetDefaults(); GKA:SetAllyEnabled(false)
 
 -- Dispatch: GW reaches the module from addon messages (with their channel) and Battle.net.
 reset()
@@ -345,13 +358,78 @@ assert(dispatched and dispatched[1] == channelPayload
     and dispatched[2] == "Channel Tester" and dispatched[3] == "CHANNEL",
     "Addon-message GW dispatch lost its payload, sender or channel")
 
+-- 1.7.1: allied guild rampages. The guild's own faction sees it too, in green, with
+-- its own option (on by default), once per guild per 30 min; nothing more is sent.
+do
+    local GREEN = "|cFF33FF66"
+    local function greens() local n = 0; for _, t in ipairs(printed) do if t:find(GREEN, 1, true) then n = n + 1 end end; return n end
+    OverlordDB.config.guildKillAllyAlertEnabled = nil
+    assert(GKA:IsAllyEnabled(), "allied rampages are not on by default")
+    -- Local detection of a Horde guild by this Horde client: one green line, and the GW
+    -- for the Alliance is still queued exactly as before.
+    reset()
+    raid("", 0, "Horde Band", "Horde")
+    assert(#printed == 1 and greens() == 1 and printed[1]:find("20+ HK by 5+ members", 1, true),
+        "own-faction rampage not shown in green: " .. tostring(printed[1]))
+    assert(#timers == 1, "the GW for the enemy faction was not queued")
+    flush()
+    assert(#sent == 1 and sent[1][2] == "GW", "the allied line changed what is sent")
+    -- The same guild again inside 10 min: nothing more.
+    clock = clock + 400
+    raid("", 100, "Horde Band", "Horde")
+    assert(greens() == 1, "an allied rampage was shown twice within 10 minutes")
+    -- Allies wait 30 min (enemies 10): a fresh rampage 15 min later stays quiet, one
+    -- after 30 min shows again.
+    clock, serverClock = clock + 500, serverClock + 900
+    raid("", 200, "Horde Band", "Horde")
+    assert(greens() == 1, "an allied rampage was shown again after 15 minutes")
+    clock, serverClock = clock + 1000, serverClock + 1000
+    raid("", 300, "Horde Band", "Horde")
+    assert(greens() == 2, "an allied rampage was not shown again after 30 minutes")
+    -- A GW for another Horde guild (detected by someone else): shown once, in green.
+    reset()
+    assert(GKA:OnReceiveNetworkAlert(gw("Horde Pack", "Horde", 25, 6, "", nil), "Horde Friend", "CHANNEL"),
+        "an allied GW was not shown")
+    assert(greens() == 1 and printed[1]:find("25+ HK by 6+ members", 1, true), tostring(printed[1]))
+    assert(not GKA:OnReceiveNetworkAlert(gw("Horde Pack", "Horde", 30, 7, "", nil), "Horde Friend", "CHANNEL"),
+        "an allied GW was shown twice")
+    -- After a /reload the 10 minutes still hold.
+    GKA:_ResetState(true)
+    printed = {}
+    assert(not GKA:OnReceiveNetworkAlert(gw("Horde Pack", "Horde", 30, 7, "", nil), "Horde Friend", "CHANNEL"),
+        "an allied GW was shown again after a reload")
+    -- Option off: no green line, but the GW for the enemy is still queued.
+    GKA:SetAllyEnabled(false)
+    reset()
+    raid("", 0, "Horde Band", "Horde")
+    assert(#printed == 0 and #timers == 1, "allied option off still printed, or stopped the GW")
+    assert(not GKA:OnReceiveNetworkAlert(gw("Horde Crew", "Horde", 25, 6, "", nil), "Horde Friend", "CHANNEL"),
+        "an allied GW was shown with the option off")
+    -- Enemy alerts off, allied on: the green line shows, nothing is sent (as before when off).
+    GKA:SetAllyEnabled(true)
+    GKA:SetEnabled(false)
+    reset()
+    raid("", 0, "Horde Band", "Horde")
+    assert(greens() == 1, "allied line missing with enemy alerts off")
+    flush()
+    assert(#sent == 0, "a GW was sent with enemy alerts off")
+    assert(not GKA:OnReceiveNetworkAlert(gw("Empire", "Alliance", 25, 6, "", nil), "x", "CHANNEL"),
+        "an enemy GW was shown with enemy alerts off")
+    GKA:SetEnabled(true)
+    -- Enemy alerts are unchanged: red line for the Alliance guild.
+    reset()
+    raid()
+    assert(alerts() == 1 and greens() == 0 and printed[1]:find("|cFFFF4444", 1, true), "enemy alert changed")
+    GKA:SetAllyEnabled(false)
+end
+
 Overlord.Sync.SendToChannel, Overlord.Sync.SendToGroup, Overlord.Sync.BroadcastToRelay =
     realChannel, realGroup, realCommunity
 Overlord.BetaNetwork, Overlord.BetaNetworkEnabled = realBeta, realBetaEnabled
-print("Forever guild kill alert: both-faction detection, own kills, epoch, window, relay GW, provenance, dedup, reload, eviction, simulation OK")
+print("Forever guild kill alert: both-faction detection, own kills, epoch, window, relay GW, provenance, dedup, reload, eviction, simulation, allied rampages OK")
 
 -- Player feedback (2026-10-02): the guild carries its own faction crest instead of
 -- "(the Horde)", and English reads "in <zone>".
 local tagged = GKA:BuildAlertText("Kor Kron Enforcers", "Horde", 21, 6, nil, nil)
-assert(tagged:find("<Kor Kron Enforcers> |TInterface\\Timer\\Horde-Logo:18:18|t: 21+ kills by 6+ members!", 1, true), tagged)
+assert(tagged:find("<Kor Kron Enforcers> |TInterface\\Timer\\Horde-Logo:18:18|t: 21+ HK by 6+ members!", 1, true), tagged)
 assert(not tagged:find("(", 1, true), "Faction label still in brackets: " .. tagged)

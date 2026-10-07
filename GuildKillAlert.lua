@@ -11,8 +11,10 @@
 -- Diffusion : le client qui detecte le raid attend 0,5 a 6 s puis emet UN message
 -- GW par le relais (groupe, canal, amis Battle.net qui font le pont vers l'autre
 -- faction, relais de proche en proche), sauf si un GW pour cette guilde a deja
--- circule. L'alerte ne s'affiche que chez la faction ENNEMIE de la guilde, avec
--- exactement le contenu recu (guilde, kills, membres, lieu, layer).
+-- circule. L'alerte s'affiche chez la faction ENNEMIE de la guilde, avec exactement
+-- le contenu recu (guilde, kills, membres, lieu, layer). Depuis la 1.7.1, la faction
+-- de la guilde voit aussi son carnage, en vert (option separee, meme seuil, une fois
+-- par guilde toutes les 10 min) : detection locale ou GW deja recu, aucun paquet en plus.
 -- GW reste hors de la file prioritaire du relais : une capture passe toujours avant.
 --
 -- GW : 1:guilde:A|H:kills:membres:lieu:shard:epochServeur
@@ -24,6 +26,9 @@ local L = Overlord.L
 
 local WINDOW = 300            -- fenetre de comptage (s)
 local ALERT_COOLDOWN = 600    -- une alerte par guilde toutes les 10 min au plus
+-- Carnage allie (1.7.1) : simple ambiance, une fois par guilde toutes les 30 min ; l'alerte
+-- ennemie, utile pour se preparer, garde ses 10 min.
+local ALLY_ALERT_COOLDOWN = 1800
 -- Une base plus vieille que la fenetre ne permet pas de dater le saut de total :
 -- au-dela, le K repart d'une base neuve et ne compte qu'un kill.
 local BASELINE_TTL = WINDOW
@@ -74,8 +79,19 @@ function GKA:SetEnabled(value)
     Config().guildKillAlertEnabled = value == true
 end
 
+-- Carnages des guildes de notre faction (1.7.1), actives par defaut.
+function GKA:IsAllyEnabled()
+    local cfg = OverlordDB and OverlordDB.config
+    return not (cfg and cfg.guildKillAllyAlertEnabled == false)
+end
+
+function GKA:SetAllyEnabled(value)
+    Config().guildKillAllyAlertEnabled = value == true
+end
+
 function GKA:ResetDefaults()
     Config().guildKillAlertEnabled = nil
+    Config().guildKillAllyAlertEnabled = nil
 end
 
 local function FactionCode(faction)
@@ -149,7 +165,20 @@ local function PruneEvents(guild, now)
     for i = #events, keep, -1 do events[i] = nil end
 end
 
-local function Recent(at, now) return at ~= nil and now - at < ALERT_COOLDOWN end
+local function Recent(at, now, cooldown) return at ~= nil and now - at < (cooldown or ALERT_COOLDOWN) end
+
+-- Delai d'affichage d'une cle "A:guilde" : 30 min pour une guilde de notre faction.
+local function CooldownForKey(key)
+    local mine = FactionCode and Overlord.PlayerFaction and FactionCode(Overlord.PlayerFaction)
+    return (mine and type(key) == "string" and key:sub(1, 2) == mine .. ":") and ALLY_ALERT_COOLDOWN
+        or ALERT_COOLDOWN
+end
+
+-- Un vrai nom de guilde n'a ni espace en bord ni espaces doubles : " Foo", "Foo " ou
+-- "Foo  Bar" contourneraient le delai par guilde (refuses a l'envoi comme a la reception).
+local function IsCleanGuildName(name)
+    return type(name) == "string" and name == name:match("^%s*(.-)%s*$") and not name:find("%s%s")
+end
 
 -- Priorite de conservation d'une guilde : une guilde en cooldown passe apres toutes
 -- les autres (math.huge), sinon on garde la plus recemment active.
@@ -302,20 +331,30 @@ local function GuildTag(guildName, faction)
 end
 
 -- Texte identique pour le detecteur et pour chaque receveur du GW.
-function GKA:BuildAlertText(guildName, faction, kills, members, zoneRef, shard)
+function GKA:BuildAlertText(guildName, faction, kills, members, zoneRef, shard, ally)
     local shardSuffix = ""
     if shard then
         local tag = string.format((L and L.SHARD_ALERT_TAG) or " #%s", tostring(shard))
         shardSuffix = " (" .. (tag:match("^%s*(.-)%s*$") or tag) .. ")"
     end
     local location = ResolveLocationLabel(zoneRef)
+    if ally then
+        if location then
+            return string.format(L.GUILD_KILL_ALLY_ALERT_FRONT
+                or "Allied guild %s on a rampage: %d+ HK by %d+ members in %s%s!",
+                GuildTag(guildName, faction), kills, members, location, shardSuffix)
+        end
+        return string.format(L.GUILD_KILL_ALLY_ALERT
+            or "Allied guild %s on a rampage: %d+ HK by %d+ members%s!",
+            GuildTag(guildName, faction), kills, members, shardSuffix)
+    end
     if location then
         return string.format(L.GUILD_KILL_ALERT_FRONT
-            or "Guild %s: %d+ kills by %d+ members in %s%s!",
+            or "Guild %s: %d+ HK by %d+ members in %s%s!",
             GuildTag(guildName, faction), kills, members, location, shardSuffix)
     end
     return string.format(L.GUILD_KILL_ALERT
-        or "Guild %s: %d+ kills by %d+ members%s!",
+        or "Guild %s: %d+ HK by %d+ members%s!",
         GuildTag(guildName, faction), kills, members, shardSuffix)
 end
 
@@ -325,7 +364,7 @@ local function AlreadyShownPersisted(key, serverNow)
     local seen = OverlordDB and OverlordDB.guildKillAlertSeen
     if type(seen) ~= "table" then return false end
     local at = tonumber(seen[key])
-    return at ~= nil and serverNow - at < ALERT_COOLDOWN
+    return at ~= nil and serverNow - at < CooldownForKey(key)
 end
 
 local function RememberShownPersisted(key, serverNow)
@@ -333,14 +372,14 @@ local function RememberShownPersisted(key, serverNow)
     local seen = type(OverlordDB.guildKillAlertSeen) == "table" and OverlordDB.guildKillAlertSeen or {}
     local count = 0
     for k, at in pairs(seen) do
-        if serverNow - (tonumber(at) or 0) >= ALERT_COOLDOWN then seen[k] = nil else count = count + 1 end
+        if serverNow - (tonumber(at) or 0) >= CooldownForKey(k) then seen[k] = nil else count = count + 1 end
     end
     if count < NETWORK_SEEN_MAX or seen[key] then seen[key] = serverNow end
     OverlordDB.guildKillAlertSeen = seen
 end
 
-local function Show(text)
-    Overlord:PrintNotification("|cFFFF4444[Overlord]|r " .. text)
+local function Show(text, ally)
+    Overlord:PrintNotification((ally and "|cFF33FF66[Overlord]|r " or "|cFFFF4444[Overlord]|r ") .. text)
 end
 
 -- Appele apres toutes les validations d'un K recu (Sync:OnReceiveKill) et pour nos
@@ -378,7 +417,9 @@ function GKA:OnLiveKill(playerName, faction, guildName, totalKills, zoneId, scor
 end
 
 function GKA:Evaluate(guild, now)
-    if not self:IsEnabled() or Overlord.InstanceSuspended then return false end
+    if Overlord.InstanceSuspended then return false end
+    local enemyOn, allyOn = self:IsEnabled(), self:IsAllyEnabled()
+    if not enemyOn and not allyOn then return false end
     if Recent(guild.detectedAt, now) then return false end
     local kills, members, zoneRef, byPlayer = Summarize(guild)
     if kills < self.KILL_THRESHOLD or members < self.MEMBER_THRESHOLD then return false end
@@ -388,12 +429,23 @@ function GKA:Evaluate(guild, now)
     guild.events = {}
     -- Detection locale corroboree : affichee meme si un GW (peut-etre forge) a deja
     -- ete montre pour cette guilde ; seul un affichage local recent la retient.
-    if guild.faction ~= Overlord.PlayerFaction and not Recent(guild.localShownAt, now) then
+    local seenKey = FactionCode(guild.faction) .. ":" .. guild.name:lower()
+    if guild.faction ~= Overlord.PlayerFaction then
+        if enemyOn and not Recent(guild.localShownAt, now) then
+            guild.localShownAt, guild.shownAt = now, now
+            RememberShownPersisted(seenKey, ServerNow())
+            Show(self:BuildAlertText(guild.name, guild.faction, kills, members, zoneRef, shard))
+        end
+    elseif allyOn and not Recent(guild.shownAt, now, ALLY_ALERT_COOLDOWN)
+        and not AlreadyShownPersisted(seenKey, ServerNow()) then
+        -- Notre faction : en vert, une fois par guilde toutes les 30 min (detection locale
+        -- ou GW recu, le premier des deux).
         guild.localShownAt, guild.shownAt = now, now
-        RememberShownPersisted(FactionCode(guild.faction) .. ":" .. guild.name:lower(), ServerNow())
-        Show(self:BuildAlertText(guild.name, guild.faction, kills, members, zoneRef, shard))
+        RememberShownPersisted(seenKey, ServerNow())
+        Show(self:BuildAlertText(guild.name, guild.faction, kills, members, zoneRef, shard, true), true)
     end
-    if not self._simulating then
+    -- L'envoi pour l'autre faction reste lie a l'alerte ennemie (comme avant).
+    if not self._simulating and enemyOn then
         self:ScheduleBroadcast(guild, kills, members, zoneRef, shard)
     end
     return true
@@ -402,6 +454,7 @@ end
 function GKA:BuildNetworkPayload(guildName, faction, kills, members, zoneRef, shard, ts)
     local sync = Overlord.Sync
     if not (sync and sync.IsValidGuildSyncToken and sync:IsValidGuildSyncToken(guildName)) then return nil end
+    if not IsCleanGuildName(guildName) then return nil end
     if not FactionCode(faction) then return nil end
     return table.concat({ "1", guildName, FactionCode(faction),
         tostring(math.floor(kills)), tostring(math.floor(members)),
@@ -460,12 +513,14 @@ end
 
 
 -- Reception d'un GW : afficher tel quel chez la faction ennemie de la guilde, une
--- fois par guilde et par 10 min. Chez la faction de la guilde, il sert seulement a
--- annuler nos propres envois en attente.
+-- fois par guilde et par 10 min. Chez la faction de la guilde, il annule nos propres
+-- envois en attente et, depuis 1.7.1, s'affiche en vert si les carnages allies sont actifs.
 function GKA:OnReceiveNetworkAlert(payload, sender, channel)
     if type(payload) ~= "string" or payload == "" or #payload > 200 then return false end
     if not GW_TRANSPORTS[channel or ""] then return false end
-    if not self:IsEnabled() or Overlord.InstanceSuspended then return false end
+    if Overlord.InstanceSuspended then return false end
+    local enemyOn, allyOn = self:IsEnabled(), self:IsAllyEnabled()
+    if not enemyOn and not allyOn then return false end
     local version, guildName, facCode, killsStr, membersStr, zoneRef, shardStr, tsStr =
         strsplit(":", payload, 8)
     if version ~= "1" then return false end
@@ -474,6 +529,7 @@ function GKA:OnReceiveNetworkAlert(payload, sender, channel)
     if not faction or not myFaction then return false end
     local sync = Overlord.Sync
     if not (sync and sync.IsValidGuildSyncToken and sync:IsValidGuildSyncToken(guildName)) then return false end
+    if not IsCleanGuildName(guildName) then return false end
     local kills, members = tonumber(killsStr), tonumber(membersStr)
     if not kills or not members or kills ~= math.floor(kills) or members ~= math.floor(members)
         or kills < self.KILL_THRESHOLD or kills > 9999
@@ -483,26 +539,29 @@ function GKA:OnReceiveNetworkAlert(payload, sender, channel)
     local shard = nil
     if shardStr and shardStr ~= "" then
         shard = tonumber(shardStr)
-        if not shard or shard ~= math.floor(shard) or shard < 0 then return false end
+        if not shard or shard ~= math.floor(shard) or shard < 0 or shard > 99999999 then return false end
     end
     local ts = tonumber(tsStr)
     local serverNow = ServerNow()
-    if not ts or ts > serverNow + NETWORK_MAX_SKEW or serverNow - ts > NETWORK_MAX_AGE then return false end
+    if not ts or ts ~= ts or ts > serverNow + NETWORK_MAX_SKEW or serverNow - ts > NETWORK_MAX_AGE then return false end
 
     local now = Now()
     local guild = GetGuild(guildName, faction, now)
     -- Memorise l'annonce pour eviter de renvoyer le meme raid, sans toucher a
     -- notre propre detection : seules nos observations la font avancer.
     guild.networkSeen = { at = now, zone = zoneRef, kills = kills }
-    -- Notre faction : l'alerte est pour l'ennemi, rien a afficher ici.
-    if faction == myFaction then return false end
+    -- Notre faction : affichee en vert seulement si l'option alliee est active ; l'alerte
+    -- rouge reste pour l'ennemi.
+    local ally = faction == myFaction
+    if (ally and not allyOn) or (not ally and not enemyOn) then return false end
     local seenKey = facCode .. ":" .. guildName:lower()
-    if Recent(guild.shownAt, now) or AlreadyShownPersisted(seenKey, serverNow) then return false end
+    if Recent(guild.shownAt, now, ally and ALLY_ALERT_COOLDOWN or nil)
+        or AlreadyShownPersisted(seenKey, serverNow) then return false end
     if not NetworkBurstAllows(now) then return false end
     networkShownAt[#networkShownAt + 1] = now
     guild.shownAt = now
     RememberShownPersisted(seenKey, serverNow)
-    Show(self:BuildAlertText(guildName, faction, kills, members, zoneRef ~= "" and zoneRef or nil, shard))
+    Show(self:BuildAlertText(guildName, faction, kills, members, zoneRef ~= "" and zoneRef or nil, shard, ally), ally)
     return true
 end
 
@@ -510,9 +569,11 @@ function GKA:PrintDiagnostics()
     local now = Now()
     local out = function(text) Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. text) end
     out(string.format(L.GUILD_KILL_DIAG_HEADER
-        or "Enemy guild raid alert: %s, threshold %d kills and %d members in 5 min.",
+        or "Enemy guild raid alert: %s, threshold %d HK and %d members in 5 min.",
         self:IsEnabled() and (L.SETTINGS_TOGGLE_ON or "Enabled") or (L.SETTINGS_TOGGLE_OFF or "Disabled"),
         self.KILL_THRESHOLD, self.MEMBER_THRESHOLD))
+    out(string.format(L.GUILD_KILL_DIAG_ALLY or "Allied guild rampages: %s.",
+        self:IsAllyEnabled() and (L.SETTINGS_TOGGLE_ON or "Enabled") or (L.SETTINGS_TOGGLE_OFF or "Disabled")))
     local rows = {}
     for _, guild in pairs(guilds) do
         PruneEvents(guild, now)
@@ -526,12 +587,12 @@ function GKA:PrintDiagnostics()
         return a.guild.name < b.guild.name
     end)
     if #rows == 0 then
-        out(L.GUILD_KILL_DIAG_EMPTY or "No guild kills received in the last 5 minutes.")
+        out(L.GUILD_KILL_DIAG_EMPTY or "No guild HK received in the last 5 minutes.")
         return
     end
     for i = 1, math.min(#rows, 10) do
         local r = rows[i]
-        out(string.format(L.GUILD_KILL_DIAG_ROW or "%s (%s): %d kills, %d members",
+        out(string.format(L.GUILD_KILL_DIAG_ROW or "%s (%s): %d HK, %d members",
             r.guild.name, r.guild.faction, r.kills, r.members))
     end
 end
@@ -591,12 +652,18 @@ function GKA:Simulate()
     if not ok then error(err) end
 end
 
--- /ov guildkills [on|off|test]
+-- /ov guildkills [on|off|allies on|allies off|test]
 function GKA:HandleCommand(args)
     local action = args[2] and args[2]:lower() or nil
+    local sub = args[3] and args[3]:lower() or nil
     if action == "test" then
         self:Simulate()
         return
+    elseif action == "allies" and (sub == "on" or sub == "off") then
+        self:SetAllyEnabled(sub == "on")
+        if Overlord.SettingsPanel and Overlord.SettingsPanel.RefreshControls then
+            Overlord.SettingsPanel:RefreshControls()
+        end
     elseif action == "on" or action == "off" then
         self:SetEnabled(action == "on")
         if Overlord.SettingsPanel and Overlord.SettingsPanel.RefreshControls then
@@ -604,7 +671,7 @@ function GKA:HandleCommand(args)
         end
     elseif action ~= nil then
         Overlord:PrintNotification("|cFFFFD100[Overlord]|r "
-            .. (L.GUILD_KILL_HELP or "/ov guildkills [on|off|test]"))
+            .. (L.GUILD_KILL_HELP or "/ov guildkills on, off, allies on, allies off, test"))
         return
     end
     self:PrintDiagnostics()

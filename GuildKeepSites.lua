@@ -56,11 +56,12 @@ Overlord.GuildKeepSites = {
             "crossroads", "la croisée", "la croisee", "el cruce", "wegekreuz",
             "степ", "перекресток",
         },
-        -- Bastion de la Savane : plaine degagee au nord-ouest de la Croisee, entre le pic
-        -- Brume-funeste et les Bassins oublies. Loin des donneurs de quetes (la Croisee, ou
-        -- le fortin se prenait par megarde, est a ~550 m) et a l'ecart des routes.
+        -- Bastion de la Savane. 1.7.1 : quitte le nord-ouest de la Croisee (47.5, 24.5, a
+        -- ~550 m de la ville Horde, renforts trop faciles) pour la plaine au sud-ouest de
+        -- l'oasis Stagnante, au centre des Tarides : ~1 100 m de la Croisee, ~850 m de
+        -- Northwatch, ~1 000 m de Cabestan, loin des donneurs de quetes et des routes.
         -- Les identifiants restent "crossroads" : la guilde qui le tient le garde.
-        center = { 47.5, 24.5 },
+        center = { 54.0, 46.0 },
         halfSize = 1.35,
         holdTimeRequired = 600,
     },

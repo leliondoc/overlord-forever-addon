@@ -34,7 +34,7 @@ Overlord = {
         NEXT_OBJECTIVE_OUTSIDE_FRONT = 'Enter a war front', MAP_SYNC_PENDING = 'SYNC',
         IN_THE_ZONE = 'On point', INDICATOR_TITLE = 'Capture', STATUS_IN_PROGRESS = 'Capturing',
         DISTANCE_FORMAT = 'Distance: ~%.0f yards', COORDS_FORMAT = 'Coords: %.1f, %.1f',
-        NEXT_OBJECTIVE_GO = 'Stand in the zone to capture.', UI_CONTESTED = 'CONTESTED',
+        UI_CONTESTED = 'CONTESTED',
         UI_PAUSED = 'PAUSED: outside zone, timer decaying',
         INDICATOR_DISMOUNT_TO_CAPTURE = 'Dismount.', INDICATOR_STEALTH_TO_CAPTURE = 'Leave stealth.' },
     InActiveFront = true, PlayerFaction = 'Alliance',
@@ -99,7 +99,9 @@ inject(popups.RefreshNextObjective, 'featuredFrontFrame', panel)
 popups:RefreshNextObjective()
 assert(panel.vignette.texture == 'elwynn.blp' and panel.frontNameFs.text == 'Elwynn Forest')
 assert(panel.bodyFs.text == 'Fargodeep Mine', 'Objective name did not replace the featured-front explanation')
-assert(detailsContain('Distance: ~300 yards') and detailsContain('Stand in the zone'), 'Travel guidance was lost')
+assert(detailsContain('Distance: ~300 yards'), 'Travel guidance was lost')
+-- 1.7.1: no "Go here" hint under the distance (its room goes to Recent activity).
+assert(not detailsContain('Go here') and not detailsContain('\n'), 'The travel hint came back')
 local before = writes
 popups:RefreshNextObjective()
 assert(writes == before and timers == 0, 'Unchanged objective repainted or started polling')
@@ -109,7 +111,7 @@ popups:RefreshNextObjective()
 assert(detailsContain('Coords: 40.0, 50.0'), 'Missing map position must fall back to target coordinates')
 distance = 0
 popups:RefreshNextObjective()
-assert(detailsContain('On point') and not detailsContain('Stand in the zone'), 'Arrival did not replace travel guidance')
+assert(detailsContain('On point') and not detailsContain('Distance'), 'Arrival did not replace travel guidance')
 blocked = true
 popups:RefreshNextObjective()
 assert(detailsContain('Dismount.') and not detailsContain('On point'), 'Blocked capture was presented as ready')

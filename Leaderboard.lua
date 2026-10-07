@@ -3872,6 +3872,23 @@ function Overlord.Leaderboard:GetExportPlayerRace(playerName)
 end
 
 -- Communaute/LR (et K legacy) : n'ecrase pas une race connue par un champ vide.
+-- Meme race simplement re-datee (flux LR apres la ligne LK v7) : si cette identite porte
+-- deja la race de son entree d'index, seule la date avance. Patcher l'entree evite de jeter
+-- l'index et de le reconstruire en entier (O(N), ~16 Mo de dechets pour 10 000 lignes).
+local function PatchIndexedRaceDate(self, playerName, race, observedAt)
+    local index = self._dedupMetaIndex
+    if type(index) ~= "table" then return false end
+    local sync = Overlord.Sync
+    local getDK = sync and sync.GetCaptureContributorDedupKey
+    local dk = (getDK and getDK(sync, playerName)) or playerName
+    local b = dk and dk ~= "" and index[dk:lower()]
+    if not b or b.race ~= race or b.raceKey ~= tostring(playerName) then return false end
+    local ts = normalizeMetadataEpoch(observedAt)
+    if ts > (b.raceAt or -1) then b.raceAt = ts end
+    markIndexedMetaMutation(self)
+    return true
+end
+
 function Overlord.Leaderboard:SetPlayerRace(
     playerName, raceFile, raceSexOpt, fromSync, observedAtOpt, verifiedOwner)
     if not playerName then return end
@@ -3900,7 +3917,9 @@ function Overlord.Leaderboard:SetPlayerRace(
             if observedAt > previousAt and (fromSync or observedAt - previousAt >= 3600) then
                 prev.raceAt = observedAt
                 -- raceAt participe au tie-break de l'index et doit etre persiste.
-                self:MarkMetaDirty()
+                if not PatchIndexedRaceDate(self, playerName, normRace, observedAt) then
+                    self:MarkMetaDirty()
+                end
             end
             return
         end

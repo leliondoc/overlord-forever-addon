@@ -1,12 +1,17 @@
-1.7.0
+1.7.1
 
-**Overlord Forever 1.7.0**
+**Overlord Forever 1.7.1**
 
-- **Conquest that holds**: after a front victory and its 15-minute truce, nothing comes back. The fallen capital stays with its conqueror until its own faction retakes it, and a "Capital liberated" line appears in chat when it does. A faction can always attack its own capital. The 6-hour capital protection is gone. Hillsbrad follows the same rule.
-- **One victory per front every 6 hours**: a capital can change hands as often as it is fought for, but a new victory on the same front (domination point, truce) only counts 6 hours after the previous one. Taking the capital sooner tells you in chat from what time a capture will count. Victories won before 1.7.0 keep their point.
-- **Race icons in the ranking**: between players on 1.7.0, a player's race now travels with their score, so the race column fills in as the ranking syncs.
-- **Recent activity**: rows show "1+ kill" under 5 kills and "1+ / 5+ / 10+ captures" for zones taken in the last 5 minutes, read from the shared map, instead of "x min ago". Every player sees the same rows in the same order, quiet fronts included. French now says "kills" everywhere.
-- **Domination icons on the continent maps**: the Eastern Kingdoms and Kalimdor maps show the domination icons again, whatever front you stand on.
-- **Ranking catch-up**: a player in combat keeps sending the ranking pages already prepared, and asks the others to wait a little instead of turning them away. New installations no longer all ask the same players first. Several cases where a catch-up stalled for minutes are fixed. Guild stamps use the server clock, so a PC clock set ahead no longer gets a guild refused.
-- **Offline captures**: an enemy capture already complete when you logged out is dated from your logout, not from your next login, so it no longer shows up as a fresh capture.
-- **Ranking and conquest protection**: more checks on ranking, victory and truce data received from other players. A fake ranking entry seen this week is removed. Other players' scores relayed to you may take a few minutes longer to catch up.
+- **Update required**: Ashenvale has new capture points, so 1.7.0 and 1.7.1 no longer share the full war map. Live captures still pass between versions, but everyone should update.
+- **Ashenvale redrawn on the real Classic map**: the front now covers the west and south-west. North path: Astranaar, Maestra's Post, Zoram Strand, Darkshore Road, Iris Lake, Raynewood Retreat, Splintertree Post. South path: Astranaar, Shrine of Aessina, Ruins of Stardust, Dor'Danil Barrow Den, Splintertree Post. The Horde follows the same paths the other way. Night Run, Bloodtooth Camp, Silverwind Refuge, Mystral Lake and Fallen Sky Lake are gone. Still 10 points.
+- **Arathi**: Western Highlands becomes Thandol Span, at the north end of the bridge. Thoradin's Wall now sits on the wall. Sage's Tower moves next to Stromgarde.
+- **Savanna Bastion** moves to the middle of the Barrens, south-west of the Stagnant Oasis, far from the Crossroads.
+- **Allied guild rampages**: when a guild of your faction racks up honorable kills, you now see it too, in green, at most once per guild every 30 minutes. Option in Settings, or `/ov guildkills allies on` / `off`. Enemy alerts are unchanged.
+- **HK everywhere**: honorable kills are written the short way in every language (HK, VH, MH, ES, ПП, 击杀) in alerts, the ranking and Recent activity.
+- **Ranking**: a new Members column in the guild table shows how many ranked players a guild has. The keep and outpost tables are a little narrower, so the window keeps its size.
+- **Tutorial rewritten**: short bullet lists with an icon per section, updated for the current features. The ranking fills in by itself in the background, even with its window closed.
+- **Settings**: new Most Wanted alerts and world map checkboxes, the panel scale is shown in percent, and the floating Next Objective no longer covers Blizzard windows.
+- **Contact**: the greyed Export button becomes Contact, with a link to the author on X.
+- **Recent activity** gets more room: the "Go here" line under the distance is gone.
+- **Performance**: fewer CPU spikes while the ranking catches up.
+- **Protection**: more checks on guild alerts received from other players.

@@ -1540,18 +1540,15 @@ function Overlord.UI:CreateZoneListSection(parent)
     layerBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(1))
     zoneListFrame.layerBtn = layerBtn
 
-    -- One greyed placeholder keeps the grid balanced until a new feature takes
-    -- its slot (no module behind it on Forever).
-    local placeholders = {
-        { L.CHECK_PVP_BUTTON, "Interface\\Icons\\INV_Misc_Note_01", "TOPLEFT", 4, 4 },
-    }
-    for _, def in ipairs(placeholders) do
-        local btn = CreateWC3Button(actionsCard, btnWidth, btnHeight, def[1] or "", def[2])
-        btn:SetPoint(def[3], actionsCard, def[3], def[4], ActionGridRowY(def[5]))
-        if self.SetWC3ButtonUnavailable then
-            self.SetWC3ButtonUnavailable(btn, foreverUnavailable)
-        end
-    end
+    -- Contact (1.7.1, ancien emplacement Export grise) : lien X de l'auteur a copier.
+    local contactBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
+        L.CONTACT_BUTTON or "Contact", "Interface\\Icons\\INV_Letter_15")
+    contactBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(4))
+    AttachGridButtonTooltip(contactBtn, L.CONTACT_BUTTON_TOOLTIP or L.CONTACT_BUTTON or "Contact")
+    contactBtn:SetScript("OnClick", function()
+        Overlord.UI:ShowContactPopup()
+    end)
+    zoneListFrame.contactBtn = contactBtn
     if self.SetWC3ButtonUnavailable then
         if not Overlord.HallOfFameUI then
             self.SetWC3ButtonUnavailable(hofBtn, foreverUnavailable)
@@ -2105,13 +2102,29 @@ end
 -- ---------- Popup Discord (lien a copier-coller, meme logique que l'export Check PvP) ----------
 
 local discordPopupFrame = nil
+-- Meme fenetre pour Discord et Contact : textes et lien suivent le bouton clique.
+local linkPopupKind = "discord"
+
+local function LinkPopupTexts()
+    if linkPopupKind == "contact" then
+        return L.CONTACT_POPUP_TITLE or "Contact the author",
+            L.CONTACT_POPUP_HINT or "Open X in your browser and paste the link below.",
+            L.CONTACT_URL_LABEL or "Author's X profile"
+    end
+    return L.DISCORD_POPUP_TITLE, L.DISCORD_POPUP_HINT, L.DISCORD_URL_LABEL
+end
 
 local function GetDiscordInviteUrl()
+    if linkPopupKind == "contact" then return Overlord.CONTACT_URL or "" end
     return Overlord.DISCORD_INVITE_URL or ""
 end
 
 local function RefreshDiscordUrlField()
     if not discordPopupFrame or not discordPopupFrame.urlEditBox then return end
+    local title, hint, label = LinkPopupTexts()
+    if discordPopupFrame.titleFs then discordPopupFrame.titleFs:SetText(title or "") end
+    if discordPopupFrame.hintFs then discordPopupFrame.hintFs:SetText(hint or "") end
+    if discordPopupFrame.urlLabelFs then discordPopupFrame.urlLabelFs:SetText(label or "") end
     discordPopupFrame.urlEditBox:SetText(GetDiscordInviteUrl())
 end
 
@@ -2142,6 +2155,7 @@ local function CreateDiscordPopupFrame()
     title:SetPoint("TOP", 0, -14)
     title:SetText(L.DISCORD_POPUP_TITLE)
     title:SetTextColor(0.85, 0.68, 0.20)
+    f.titleFs = title
 
     local hint = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hint:SetPoint("TOPLEFT", 18, -40)
@@ -2150,6 +2164,7 @@ local function CreateDiscordPopupFrame()
     hint:SetWordWrap(true)
     hint:SetText(L.DISCORD_POPUP_HINT)
     hint:SetTextColor(0.9, 0.9, 0.9)
+    f.hintFs = hint
 
     local urlLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     urlLabel:SetPoint("TOPLEFT", hint, "BOTTOMLEFT", 0, -10)
@@ -2157,6 +2172,7 @@ local function CreateDiscordPopupFrame()
     urlLabel:SetJustifyH("LEFT")
     urlLabel:SetText(L.DISCORD_URL_LABEL)
     urlLabel:SetTextColor(0.75, 0.70, 0.45)
+    f.urlLabelFs = urlLabel
 
     local urlEb = CreateFrame("EditBox", "OverlordDiscordUrlEdit", f, "BackdropTemplate")
     urlEb:SetMultiLine(false)
@@ -2252,7 +2268,23 @@ function Overlord.UI:ShowDiscordPopup()
 end
 
 function Overlord.UI:OnDiscordButtonClick()
+    if discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "discord" then
+        discordPopupFrame:Hide()
+        return
+    end
+    linkPopupKind = "discord"
     self:ShowDiscordPopup()
+    self:ScheduleActionGridActiveRefresh()
+end
+
+function Overlord.UI:ShowContactPopup()
+    if discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "contact" then
+        discordPopupFrame:Hide()
+        return
+    end
+    linkPopupKind = "contact"
+    self:ShowDiscordPopup()
+    self:ScheduleActionGridActiveRefresh()
 end
 
 
@@ -2446,7 +2478,8 @@ function Overlord.UI:RefreshActionGridActiveState()
         hof = Overlord.HallOfFameUI and Overlord.HallOfFameUI.IsShown and Overlord.HallOfFameUI:IsShown() or false,
         tutorial = Overlord.Popups and Overlord.Popups.IsQuickGuideShown and Overlord.Popups:IsQuickGuideShown() or false,
         community = false,
-        discord = discordPopupFrame and discordPopupFrame:IsShown() or false,
+        discord = discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "discord" or false,
+        contact = discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "contact" or false,
         front = self._frontPickerPopup and self._frontPickerPopup:IsShown() or false,
         settings = Overlord.SettingsPanel and Overlord.SettingsPanel.IsOpen and Overlord.SettingsPanel:IsOpen() or false,
     }
@@ -2493,6 +2526,7 @@ function Overlord.UI:RefreshActionGridActiveState()
     panelOpen(zoneListFrame.tutorialBtn, nextState.tutorial)
     panelOpen(zoneListFrame.communityBtn, nextState.community)
     panelOpen(zoneListFrame.discordBtn, nextState.discord)
+    panelOpen(zoneListFrame.contactBtn, nextState.contact)
     panelOpen(self.frontPickerBtn, nextState.front)
     panelOpen(zoneListFrame.settingsBtn, nextState.settings)
     if Overlord.Button and Overlord.Button.RefreshGeneralButton then
@@ -2521,6 +2555,10 @@ function Overlord.UI:RefreshActionGridLabels()
     local discordBtn = zoneListFrame.discordBtn
     if discordBtn and discordBtn.label and L.DISCORD_BUTTON then
         discordBtn.label:SetText(L.DISCORD_BUTTON)
+    end
+    local contactBtn = zoneListFrame.contactBtn
+    if contactBtn and contactBtn.label and L.CONTACT_BUTTON then
+        contactBtn.label:SetText(L.CONTACT_BUTTON)
     end
 end
 

@@ -206,7 +206,7 @@ function MW:OnNameplateAdded(unit)
     self.alertedAt[key] = now
     local factionName = Overlord.Zones and Overlord.Zones.GetEnemyFactionName
         and Overlord.Zones:GetEnemyFactionName() or EnemyFaction() or "?"
-    local text = string.format(T("MW_ALERT", "Most Wanted nearby: %s (#%d %s, %d kills this week)!"),
+    local text = string.format(T("MW_ALERT", "Most Wanted nearby: %s (#%d %s, %d HK this week)!"),
         ShortName(entry.name), entry.rank, factionName, entry.kills)
     if Overlord.PrintNotification then
         Overlord:PrintNotification("|cFFFF4040[Overlord]|r |T" .. SKULL_TEXTURE .. ":14|t " .. text)
@@ -242,6 +242,9 @@ function MW:HandleCommand(args)
     if word == "on" then self:SetAlertsEnabled(true)
     elseif word == "off" then self:SetAlertsEnabled(false) end
     self:RefreshPlates()
+    if Overlord.SettingsPanel and Overlord.SettingsPanel.RefreshControls then
+        Overlord.SettingsPanel:RefreshControls()
+    end
     if Overlord.PrintNotification then
         Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. (self:AlertsEnabled()
             and T("MW_STATE_ON", "Most Wanted alerts: on") or T("MW_STATE_OFF", "Most Wanted alerts: off")))

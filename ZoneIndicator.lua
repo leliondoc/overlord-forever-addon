@@ -624,7 +624,9 @@ function Overlord.ZoneIndicator:CreateIndicatorFrame()
     else
         ApplySharedHudChrome(indicatorFrame)
     end
-    indicatorFrame:SetFrameStrata("HIGH")
+    -- MEDIUM : sous les fenetres Blizzard (Options, carte) qui sont en HIGH ou plus ;
+    -- en HIGH, le prochain objectif flottant passait par-dessus la fenetre Options.
+    indicatorFrame:SetFrameStrata("MEDIUM")
     indicatorFrame:EnableMouse(true)
     indicatorFrame:SetMovable(true)
     indicatorFrame:RegisterForClicks("LeftButtonUp", "RightButtonUp")
@@ -880,9 +882,9 @@ function Overlord.ZoneIndicator:GetObjectiveDetails(zone)
         if state ~= "" then
             detail = detail .. (detail ~= "" and "\n" or "") .. color .. state .. "|r"
         end
-    elseif zone.status == "available" and not inZone and alive then
-        detail = L.NEXT_OBJECTIVE_GO or "Go here: stand in the zone to start the capture timer."
     end
+    -- 1.7.1 : plus de consigne "Allez ici..." sous la distance (evidente une fois
+    -- connue) : la place revient a la liste d'activite recente du dock.
     return location .. (location ~= "" and detail ~= "" and "\n" or "") .. detail
 end
 

@@ -471,3 +471,37 @@ local final = PULLER.OverlordDB.leaderboardPageProgress.shared
 assert(final.stream == "LK" and final.bucket == 1 and final.done == 0, "a finished sweep did not restart from the top")
 PULLER.Overlord.Sync.SendWhisper = sendRequest
 print("PASS: sweep position shared across neighbours (" .. certified .. " buckets certified, resumed at " .. resumeBucket .. ")")
+
+-- 1.7.1 CPU: a responder whose ranking keeps changing (a bridge, a busy fight) serves
+-- the page profile of a copy younger than 2 minutes instead of rebuilding the copy
+-- and its profile for every requester; an older copy is rebuilt.
+do
+    local responderStats = SOURCE.Overlord.Sync._leaderboardPageStats
+    PULLER.OverlordDB.leaderboardPageProgress = nil
+    advance(400)
+    -- First pull: the responder builds a fresh copy and profile.
+    SOURCE.Overlord.Leaderboard:SetPlayerKills(names[5], 4990, true)
+    done = nil
+    assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
+    advance(20)
+    PULLER.Overlord.Sync:CancelPagedLeaderboardCatchup()
+    advance(5)
+    local reusedBefore = responderStats.profileReused or 0
+    -- Changed again 30 s later: the next requester gets the 30-second-old profile.
+    SOURCE.Overlord.Leaderboard:SetPlayerKills(names[6], 4991, true)
+    PULLER.OverlordDB.leaderboardPageProgress = nil
+    done = nil
+    assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
+    for _ = 1, 40 do advance(100); if done ~= nil then break end end
+    assert(done == true, "pull on a reused profile failed: " .. PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())
+    assert((responderStats.profileReused or 0) == reusedBefore + 1, "a recent profile was rebuilt")
+    assert(PULLER.Overlord.Leaderboard.kills[names[5]] == 4990, "the reused profile lost an older change")
+    -- More than 2 minutes later the copy is rebuilt and carries the newer change.
+    PULLER.OverlordDB.leaderboardPageProgress = nil
+    done = nil
+    assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
+    for _ = 1, 40 do advance(100); if done ~= nil then break end end
+    assert(done == true and PULLER.Overlord.Leaderboard.kills[names[6]] == 4991,
+        "an old profile was served again: " .. tostring(PULLER.Overlord.Leaderboard.kills[names[6]]))
+end
+print("PASS: recent page profile reused, older copy rebuilt")

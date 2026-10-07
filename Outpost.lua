@@ -98,8 +98,11 @@ Overlord.OutpostSites = {
         mapID = 1417,
         mapIDs = { [14] = true, [1417] = true },
         mapNameNeedles = { "arathi" },
-        -- Tour de Sage (Sage = pseudo de joueur) : terre, hors cercles Stromgarde / High Perch / Argorok.
-        center = { 33.3, 27.8 },
+        -- Tour de Sage (Sage = pseudo de joueur). 1.7.1 : quitte le manoir de Northfold
+        -- (33.3, 27.8, coin nord-ouest plein de mobs du Syndicat) pour les abords est de
+        -- Stromgarde, comme sur Retail (point choisi en jeu par l'auteur), hors du cercle de
+        -- la capitale. Identifiants inchanges.
+        center = { 31.1, 60.2 },
         halfSize = 1.35,
     },
     loch_modan = {

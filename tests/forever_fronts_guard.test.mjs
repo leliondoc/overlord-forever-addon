@@ -64,7 +64,7 @@ test("TOC Forever 16001 and CurseForge 1701204", () => {
 
 test("Outposts cover six fronts and three open-world sites", () => {
     assert.match(outpost, /frontId = "arathi"/);
-    assert.match(outpost, /center = \{ 33\.3, 27\.8 \}/);
+    assert.match(outpost, /center = \{ 31[.]1, 60[.]2 \}/);
     assert.match(outpost, /loch_modan = \{[\s\S]*?center = \{ 40\.3, 39\.4 \}/);
     assert.match(outpost, /center = \{ 47\.8, 49\.6 \}/);
     assert.match(outpost, /center = \{ 29\.0, 32\.0 \}/);
@@ -114,7 +114,7 @@ test("Guild keeps use vanilla map IDs and land coords", () => {
     assert.match(keep, /mapID = 1437/);
     assert.match(keep, /center = \{ 10\.6, 59\.6 \}/);
     // 1.6.0: the Barrens and Mulgore keeps left the quest hubs (Crossroads, Bloodhoof).
-    assert.match(keep, /center = \{ 47\.5, 24\.5 \}/);
+    assert.match(keep, /center = { 54[.]0, 46[.]0 }/);
     assert.match(keep, /center = \{ 51\.0, 38\.5 \}/);
     assert.doesNotMatch(keep, /center = \{ 51\.5, 30\.2 \}/);
     assert.doesNotMatch(keep, /center = \{ 47\.5, 60\.2 \}/);
@@ -140,14 +140,16 @@ test("Forever panel greys disabled modules", () => {
     assert.match(ui, /not Overlord\.General/);
     // Contracts and export do not exist on Forever. Layer Jumper took the
     // Contracts slot and was removed in 1.6.1: its button stays greyed and its
-    // tooltip says why; export stays a greyed placeholder with no handler.
+    // tooltip says why. The old export placeholder became Contact (1.7.1): a link to copy.
     assert.doesNotMatch(ui, /mbBtn|exportBtn|ManualBountyUI|Overlord\.Export|L\.MB_BUTTON/);
     assert.match(ui, /layerBtn:SetPoint\("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY\(1\)\)/);
     assert.doesNotMatch(ui, /Overlord\.LayerJumper/);
     assert.match(ui, /self\.SetWC3ButtonUnavailable\(layerBtn, L\.LAYER_JUMPER_REMOVED/);
     assert.match(locales, /L\.LAYER_JUMPER_REMOVED = "Removed\. Part of the community misunderstood it/);
-    assert.match(ui, /L\.CHECK_PVP_BUTTON, "Interface\\\\Icons\\\\INV_Misc_Note_01", "TOPLEFT", 4, 4/);
-    assert.match(ui, /self\.SetWC3ButtonUnavailable\(btn, foreverUnavailable\)/);
+    assert.match(ui, /contactBtn:SetPoint\("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY\(4\)\)/);
+    assert.match(ui, /Overlord\.UI:ShowContactPopup\(\)/);
+    assert.match(readFileSync(new URL("../Core.lua", import.meta.url), "utf8"), /Overlord\.CONTACT_URL = "https:\/\/x\.com\/TromaFR"/);
+    assert.match(locales, /L\.CONTACT_BUTTON = "Contact"/);
     assert.match(locales, /L\.FOREVER_FEATURE_UNAVAILABLE = "Unavailable on Overlord Forever\."/);
     assert.match(locales, /L\.FOREVER_FEATURE_UNAVAILABLE = "Indisponible sur Overlord Forever\."/);
 });
