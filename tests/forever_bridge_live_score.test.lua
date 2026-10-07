@@ -67,6 +67,13 @@ local function distinctRows(rows)
 end
 
 local samePeers = { "Peer Alpha", "Peer Bravo", "Peer Charlie", "Peer Delta", "Peer Echo" }
+-- Only Battle.net proves another faction (1.7.0: a faction a peer claims for itself in the
+-- ladder is not trusted): "Peer Enemy" is a Battle.net-resolved Horde character.
+local realBNetFaction = s.GetResolvedBNetPlayerFaction
+s.GetResolvedBNetPlayerFaction = function(self, name)
+    if name == "Peer Enemy" then return "Horde" end
+    return realBNetFaction and realBNetFaction(self, name)
+end
 local function refreshPeers()
     for _, name in ipairs(samePeers) do
         net.peers[name:lower()] = { name = name, at = clock, via = name, transport = "CHANNEL", hops = 1 }

@@ -414,7 +414,11 @@ advance(400)
 -- Stop the scheduler's periodic rounds: this section drives the pulls itself.
 PULLER.Overlord.Sync._historyCatchupWakeGeneration = (PULLER.Overlord.Sync._historyCatchupWakeGeneration or 0) + 1000
 -- The scheduler's own round may still be sweeping (its first peer is drawn at random):
--- end it and start this section from a fresh sweep position.
+-- end the round (or cancelling its pull would start its next attempt) and its pull,
+-- and start this section from a fresh sweep position.
+local runningRound = PULLER.Overlord.Sync._historyCatchupPending
+if runningRound then runningRound.terminal = true end
+PULLER.Overlord.Sync._historyCatchupPending = nil
 PULLER.Overlord.Sync:CancelPagedLeaderboardCatchup()
 PULLER.OverlordDB.leaderboardPageProgress = nil
 PULLER.Overlord.Sync.SendWhisper = sendRequest
