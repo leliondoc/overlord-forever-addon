@@ -103,7 +103,7 @@ assert(#bnetRows == 2 and bnetRows[2].payload:match("^Horde Killer:211:"), "trai
 advance(120)
 local before = #bnetRows
 for i = 1, 9 do
-    local name = "Horde Extra" .. string.char(64 + i)
+    local name = "Horde Extra" .. string.char(96 + i)
     know(name, 50, "Horde")
     kOnChannel(name, 53, "Horde")
 end

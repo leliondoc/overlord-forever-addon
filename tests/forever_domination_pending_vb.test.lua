@@ -29,8 +29,8 @@ end
 local function use(c) OverlordDB = c.db; sync.GetPlayerFullName = function() return c.name end end
 local function peer(name) net.peers[name:lower()] = { name = name, at = GetTime(), via = name, hops = 1 } end
 local function wins(c) use(c); return (Overlord:GetDominationVictoryCounts()) end
-local function vbFor(ts, total)
-    return assert(sync:BuildVictoryBonusPayload({ { frontId = "f1", faction = "Alliance", victoryTs = ts,
+local function vbFor(ts, total, frontId)
+    return assert(sync:BuildVictoryBonusPayload({ { frontId = frontId or "f1", faction = "Alliance", victoryTs = ts,
         rangeMaxTs = ts, bonusSeconds = math.floor(total * 0.02 + 0.5), totalAtApply = total,
         campaignEpoch = OverlordDB.lastResetTimestamp } }, OverlordDB.lastResetTimestamp, "global"))
 end
@@ -63,9 +63,11 @@ clock = clock + 100000
 local L4 = client("Late Four"); use(L4); peer("Emitter One")
 local legitTs = server - 40
 sync:OnReceiveVictoryBonus(vbFor(legitTs, 10000), "Emitter One", "BETA") -- verified sender, no proof yet
+-- One front per replay: 1.7 counts one victory per front per 6 h.
 for i = 1, 70 do
     clock = clock + 1
-    sync:OnReceiveVictoryBonus(vbFor(server - 1000 - i * 901, 90000), "Emitter One", "BETA")
+    Overlord.Fronts.Registry["h" .. i] = { id = "h" .. i, zones = { { id = "h" .. i .. "z" } } }
+    sync:OnReceiveVictoryBonus(vbFor(server - 1000 - i * 901, 90000, "h" .. i), "Emitter One", "BETA")
 end
 assert(wins(L4) == 70, "Trusted historical VB replays were not all counted")
 sync:RecordVictoryBonusTransportEvidence("f1", "Alliance", legitTs, "Emitter One", "BETA")

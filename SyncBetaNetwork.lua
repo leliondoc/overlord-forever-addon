@@ -97,7 +97,7 @@ end
 local function isPagedCatchup(p)
     return p and type(p.payload) == "string"
         and (p.kind == "HR" or p.kind == "HB" or p.kind == "HA")
-        and (p.payload:sub(1, 2) == "5:" or p.payload:sub(1, 2) == "6:")
+        and (p.payload:sub(1, 2) == "5:" or p.payload:sub(1, 2) == "6:" or p.payload:sub(1, 2) == "7:")
 end
 local function isPagedControl(p)
     return isPagedCatchup(p) and (p.kind == "HR" or p.kind == "HA")
@@ -808,7 +808,7 @@ function net:GetKindDiagnostics(maxRows)
         laneSize(catchupLane), CATCHUP_QUEUE, CATCHUP_RATE,
         self.stats.presenceCopiesSkipped or 0, self.stats.presenceCoalesced or 0)
     local mapQueued, pagedQueued = queuedMapCount(), queuedPagedCount()
-    lines[#lines + 1] = string.format("Catch-up detail now: %d map, %d paged v5/v6 (max %d), %d legacy/other; paged producer backpressure checks: %d.",
+    lines[#lines + 1] = string.format("Catch-up detail now: %d map, %d paged v5-v7 (max %d), %d legacy/other; paged producer backpressure checks: %d.",
         mapQueued, pagedQueued, PAGED_QUEUE,
         laneSize(catchupLane) - mapQueued - pagedQueued,
         self.stats.pagedBackpressureChecks or 0)
@@ -896,7 +896,7 @@ end
 --   * while the queue is busy, drops only repeats beyond COVER_COPIES per target,
 --     and the whole copy when nothing else is left. Local dispatch and the wire
 --     format are untouched.
--- FR : meme contenu "front:epoque" chez tous les clients qui liberent.
+-- FR : meme contenu "front:epoque" chez tous les clients qui terminent la treve.
 -- FK : meme palier dans la meme tranche de 30 s chez tous ceux qui l'annoncent.
 local DEDUP_KINDS = { OP = true, LO = true, LOC = true, VB = true, TV = true, FR = true, FK = true }
 -- COVER_TTL: how long a sent copy counts. COVER_PENDING: how long a copy still
@@ -986,9 +986,8 @@ end
 local function tasksFor(p, wire)
     local tasks, fragments = {}, {}
     local ckey, pathFriends, trimmed, coverId, coverCarrier, groupSuppressed
-    local pageVersion = p.payload:sub(1, 2)
-    local paged = (p.kind == "HR" or p.kind == "HB" or p.kind == "HA")
-        and (pageVersion == "5:" or pageVersion == "6:")
+    -- Same test as the lanes (v5, v6 and v7 pages): a page is never broadcast.
+    local paged = isPagedCatchup(p)
     local count = math.ceil(#wire / 170)
     for i = 1, count do
         fragments[i] = p.id .. ":" .. i .. ":" .. count .. ":" .. wire:sub((i - 1) * 170 + 1, i * 170)
@@ -1573,8 +1572,10 @@ function net:Send(kind, payload, target, immediate)
         or payload:find("[%c]") then return false end
     -- The startup heartbeat calls Broadcast with the plain addon version.
     -- Annotate at the producer boundary.
+    -- "~lr" (1.7.0): ranking pages v7, race in each score row. It stays before
+    -- "~lp6" because older clients only read the suffix and still see lp6.
     if kind == "NH" and payload == tostring(addon.Version or "") then
-        payload = payload .. "~lp6"
+        payload = payload .. "~lr~lp6"
     end
     -- Handlers may rebroadcast received snapshots. The existing packet is already
     -- forwarded below; do not give that replay a fresh author or hop budget.
@@ -1670,6 +1671,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         -- A delayed older NH must not downgrade a fresher lp6 advertisement.
         local advertised = p.payload:match("~lp(%d+)$")
         local originKey, version = origin:lower(), advertised == "6" and 6 or 5
+        if version == 6 and p.payload:find("~lr~lp6", 1, true) then version = 7 end
         local previous = pagedCapabilities[originKey]
         if not previous or GetTime() - previous.at > 300
             or p.at > previous.originAt

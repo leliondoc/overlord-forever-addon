@@ -32,7 +32,7 @@ local priv = {
     -- FR recu avant sa preuve (SR envoie FR avant le journal VB) : un par front, rejoue.
     pendingTruceRelease = {},
     -- Derniere fin de treve entendue par front : un client qui l'a deja recue ne la
-    -- rediffuse pas (tous liberent a la meme seconde, un seul annonceur suffit).
+    -- rediffuse pas (tous finissent la treve a la meme seconde, un seul annonceur suffit).
     heardTruceRelease = {},
     captureDedup = {},
     captureDedupCount = 0,
@@ -187,7 +187,7 @@ local function IsStaleCampaignTimestamp(ts)
 end
 
 -- Pendant la treve post-victoire (15 min), ignorer les assauts et changements de proprietaire.
--- ZA/ZS anterieurs a la fin de treve (liberation) : ne pas re-appliquer l'etat « tout Alliance » de la victoire.
+-- ZA/ZS anterieurs a la fin de treve : ne pas re-appliquer l'etat « tout Alliance » de la victoire.
 local function ShouldRejectStaleTruceResetZone(zoneId, ts)
     if not OverlordDB or not zoneId or not ts or ts <= 0 then return false end
     if not Overlord.Fronts then return false end
@@ -234,12 +234,12 @@ local function CanNeutralZaReplaceCanonicalCapture(zoneId, zone, ts)
         and tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0
     -- Hors login, seul un tombstone de fin de treve deja derive localement peut
     -- rendre neutre une capture courante. Depuis la conquete persistante, la
-    -- liberation re-horodate la conquete a cet epoch : seuls les N d'anciens
+    -- fin de treve re-horodate la conquete a cet epoch : seuls les N d'anciens
     -- clients (reset complet) arrivent ici, et ils sont ecartes.
     return resetEpoch > localClock and math.abs((tonumber(ts) or 0) - resetEpoch) <= 5
 end
 
-local function ShouldRejectFrontTruceZoneChange(zoneId, owner, status)
+local function ShouldRejectFrontTruceZoneChange(zoneId, owner, status, ct)
     if not OverlordDB or not zoneId or not Overlord.Fronts or not Overlord.Zones then return false end
     local _, front = Overlord.Fronts:GetZone(zoneId)
     local frontId = front and front.id
@@ -250,11 +250,33 @@ local function ShouldRejectFrontTruceZoneChange(zoneId, owner, status)
     if status == "captured" and owner and owner ~= winner then return true end
     -- Pas de ZS « available » : evite de rouvrir la carte pendant la treve.
     if status == "available" then return true end
+    -- Aucune capture pendant la treve : une zone du vainqueur ne peut pas avancer apres
+    -- l'heure de la victoire avant la fin de treve. Un tel tampon (capitale a V + 1, la
+    -- signature d'une capitale gardee) privait les retardataires de la victoire.
+    ct = tonumber(ct)
+    local victory = OverlordDB.frontVictories and OverlordDB.frontVictories[frontId]
+    local victoryTs = victory and tonumber(victory.timestamp)
+    if status == "captured" and owner == winner and ct and victoryTs then
+        local cooldown = Overlord.Zones.GetVictoryCooldownSeconds
+            and tonumber(Overlord.Zones:GetVictoryCooldownSeconds()) or 900
+        -- La fenetre part du plus ancien de l'heure de victoire et du socle stable de la
+        -- capitale tombee : un paquet distant ne peut pas les avancer tous les deux.
+        local low = victoryTs
+        local capId = Overlord.Fronts.GetEnemyCapitalId and Overlord.Fronts:GetEnemyCapitalId(winner, frontId)
+        local cap = capId and select(1, Overlord.Fronts:GetZone(capId, frontId))
+        local sv = cap and (Overlord.Zones.GetStableZoneView and Overlord.Zones:GetStableZoneView(cap) or cap)
+        local capCt = sv and tonumber(sv.capturedTime)
+        if capCt and capCt > 0 and capCt < low then low = capCt end
+        if ct > low and ct < victoryTs + cooldown - 5 then return true end
+    end
     return false
 end
 
 local function ShouldRejectPostVictoryZoneOwner(zoneId, owner, status, ts, source)
-    if ShouldRejectFrontTruceZoneChange(zoneId, owner, status) then return true end
+    -- ZA : l'entree concernee est seulement ecartee plus bas (un lot atomique refuse
+    -- entier priverait les autres fronts d'un instantane honnete pendant 15 min).
+    local stampCt = source ~= "ZA" and ts or nil
+    if ShouldRejectFrontTruceZoneChange(zoneId, owner, status, stampCt) then return true end
     if not OverlordDB or not zoneId or not owner or not ts or ts <= 0 then return false end
     if owner ~= "Alliance" and owner ~= "Horde" then return false end
     if not Overlord.Fronts then return false end
@@ -275,21 +297,6 @@ local function ShouldRejectPostVictoryZoneOwner(zoneId, owner, status, ts, sourc
     if not inLocalGuard then return false end
 
     return true
-end
-
--- Capitale protegee apres une liberation : ni siege, ni proprietaire non natif, ni C
--- (un C deplacerait son horloge). Grace de 60 s en fin de protection pour les horloges.
-function Overlord.Sync:ShouldRejectImmuneCapitalChange(zoneId, owner, status, source)
-    if not zoneId or not Overlord.Zones or not Overlord.Zones.IsCapitalImmune then return false end
-    local native = Overlord.Zones:GetBaseZoneFixedOwner(zoneId)
-    if not native then return false end
-    -- Seuls un C, un siege ou un proprietaire etranger peuvent etre refuses : la
-    -- protection n'est lue que pour eux (chaque entree ZA passe par ici).
-    if source ~= "C" and status ~= "in_progress" and (owner == nil or owner == native) then
-        return false
-    end
-    local immune, remaining = Overlord.Zones:IsCapitalImmune(zoneId)
-    return immune == true and (tonumber(remaining) or 0) > 60
 end
 
 local srEvidencePageNonce = 0
@@ -980,6 +987,54 @@ function Overlord.Sync:IsValidPlayerNameSegment(segment, maxBytes, allowDigits)
     return true
 end
 
+-- Casse d'un nom de personnage : le serveur ne laisse une majuscule qu'en tete de
+-- chaque mot (2381 noms observes, aucune exception). "EMPIRE SUCKS" ou "eMPIRE"
+-- ne peuvent donc pas etre de vrais personnages. Regle pure sur la chaine, la meme
+-- chez tous les clients : un nom refuse l'est partout, sans divergence. La premiere
+-- lettre n'est exigee majuscule qu'en ASCII (des noms commencent par ß ou par une
+-- lettre sans casse). Majuscules reconnues apres la premiere lettre : ASCII,
+-- Latin-1, Latin etendu A, grec et cyrillique.
+local function IsUpperCodePoint(cp)
+    if cp >= 0xC0 and cp <= 0xDE then return cp ~= 0xD7 end
+    if cp >= 0x100 and cp <= 0x137 then return cp % 2 == 0 end
+    if cp >= 0x139 and cp <= 0x148 then return cp % 2 == 1 end
+    if cp >= 0x14A and cp <= 0x177 then return cp % 2 == 0 end
+    if cp == 0x178 or cp == 0x179 or cp == 0x17B or cp == 0x17D then return true end
+    if cp == 0x386 or (cp >= 0x388 and cp <= 0x38F and cp ~= 0x38B and cp ~= 0x38D)
+        or (cp >= 0x391 and cp <= 0x3A9 and cp ~= 0x3A2) then return true end
+    return cp >= 0x400 and cp <= 0x42F
+end
+function Overlord.Sync:HasForeverNameCase(name)
+    if type(name) ~= "string" or name == "" then return false end
+    local memo = self._nameCaseMemo
+    local hit = memo and memo.values[name]
+    if hit ~= nil then return hit end
+    local base = name:match("^([^%-]+)") or name
+    local ok, wordStart, i, length = true, true, 1, #base
+    while ok and i <= length do
+        local b1 = string.byte(base, i)
+        if b1 == 32 or b1 == 39 then
+            -- A space starts a word; after an apostrophe ("D'Arcy") either case is fine.
+            wordStart, i = b1 == 32 or "free", i + 1
+        elseif b1 < 128 then
+            if wordStart == true then
+                if b1 >= 97 and b1 <= 122 then ok = false end
+            elseif not wordStart and b1 >= 65 and b1 <= 90 then
+                ok = false
+            end
+            wordStart, i = false, i + 1
+        else
+            local width = b1 >= 240 and 4 or (b1 >= 224 and 3 or 2)
+            if not wordStart and width == 2 and i < length then
+                local cp = (b1 % 32) * 64 + (string.byte(base, i + 1) % 64)
+                if IsUpperCodePoint(cp) then ok = false end
+            end
+            wordStart, i = false, i + width
+        end
+    end
+    return self:_MemoNameResult("_nameCaseMemo", name, ok)
+end
+
 -- Cible whisper addon (SR, reponses ciblees) : refuse le bruit API ou les fragments de payload.
 function Overlord.Sync:IsValidWhisperTarget(target)
     if type(target) ~= "string" then return false end
@@ -1001,22 +1056,51 @@ function Overlord.Sync:AcceptSyncedContributorName(name)
 end
 
 -- Lookup strictement O(1). Ne jamais appeler ici EnsureDedupMetaIndex ni les
--- getters de max : la premiere ligne d'un flood ne doit pas construire un
--- index ou scanner tout le classement dans la frame reseau.
+-- getters qui construisent un index : la premiere ligne d'un flood ne doit pas
+-- construire un index ou scanner tout le classement dans la frame reseau.
+-- Seul un score rend un nom "connu" (2026-10-06). Une fiche playerInfo seule ne
+-- suffit plus : un indice de guilde (GY) tiers en creait une pour n'importe quel
+-- nom, puis un LK diffuse sur le canal installait ce faux joueur chez tous
+-- ("EMPIRE SUCKS"). Le repli par l'index meta, chaud chez certains clients
+-- seulement, rendait aussi la decision differente d'un client a l'autre.
 function Overlord.Sync:IsKnownLeaderboardSubject(playerName)
     if not self:IsValidPlayerName(playerName) then return false end
     local lb = Overlord.Leaderboard
     if not lb then return false end
     if (type(lb.kills) == "table" and lb.kills[playerName] ~= nil)
         or (type(lb.captureCount) == "table" and lb.captureCount[playerName] ~= nil)
-        or (type(lb.captures) == "table" and lb.captures[playerName] ~= nil)
-        or (type(lb.playerInfo) == "table" and lb.playerInfo[playerName] ~= nil) then
+        or (type(lb.captures) == "table" and lb.captures[playerName] ~= nil) then
         return true
     end
-    local key = self.GetCaptureContributorDedupKey
-        and self:GetCaptureContributorDedupKey(playerName) or playerName:lower()
-    local index = lb._dedupMetaIndex
-    return type(index) == "table" and key and index[key:lower()] ~= nil or false
+    -- Variante d'orthographe d'une identite deja classee (index de max, O(1)).
+    return lb.GetMaxKillsForDedupName ~= nil and lb:GetMaxKillsForDedupName(playerName) > 0
+end
+
+-- Ligne de classement en direct venant d'un tiers (ni le proprietaire, ni une page
+-- ou une reponse SR:F que nous avons demandee). Le seul emetteur honnete est le pont
+-- (1.3.2) : il recopie le total d'un joueur de l'AUTRE faction, entendu de son
+-- proprietaire. Un joueur de notre faction annonce lui-meme son total (K) et le
+-- rattrapage apporte le reste : une telle ligne de tiers est refusee. La faction
+-- connue du joueur prime sur celle que la ligne declare. Une origine relayee (nom
+-- ecrit par une passerelle) n'est jamais un pont. Tous les clients d'une faction
+-- recoivent la meme ligne du canal et decident pareil.
+function Overlord.Sync:AdmitLiveThirdPartyLeaderboardRow(playerName, rowFaction, sender)
+    if self.IsUnauthenticatedRelayOrigin and self:IsUnauthenticatedRelayOrigin(sender) then return false end
+    -- A bridge copies the owner's own K, always the canonical "Given Family": a
+    -- "-Suffix" spelling would only add an alias row that relabels a known player.
+    if self.CanonicalForeverName and self:CanonicalForeverName(playerName) ~= playerName then return false end
+    local mine = Overlord.PlayerFaction
+    if mine ~= "Alliance" and mine ~= "Horde" then return false end
+    local lb = Overlord.Leaderboard
+    local info = lb and type(lb.playerInfo) == "table" and lb.playerInfo[playerName] or nil
+    -- The faction we already hold for this ranked player decides, never the row:
+    -- without one, a forged copy could also file him on the wrong side.
+    local faction = type(info) == "table" and info.faction or nil
+    if (faction == "Alliance" or faction == "Horde") and faction ~= mine then return true end
+    if (faction == mine or rowFaction == mine) and type(sender) == "string" and sender:sub(1, 5) ~= "BNet-" then
+        self:NoteSuspiciousSender(sender, "forged ladder row")
+    end
+    return false
 end
 
 function Overlord.Sync:ExpectedFullLeaderboardResponseKey(target)
@@ -1173,7 +1257,13 @@ local function NoteClamp(sync, statName, sender, blameOwner, reason)
     if betaNet and betaNet.stats then betaNet.stats[statName] = (betaNet.stats[statName] or 0) + 1 end
     if blameOwner then sync:NoteSuspiciousSender(sender, reason) end
 end
-function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, blameOwner)
+-- liveCopy (2026-10-06): a third party's live copy (bridge). The absence window grows
+-- with our own uptime (lastSessionTimestamp is written at logout), so one forged copy
+-- could take a known enemy to the kill ceiling. A copy gets the fixed 600 s window
+-- and never the first-contact floor (one forged line reached that floor, thousands of
+-- kills, and pages then carried it everywhere): a stale row climbs at most one window
+-- per copy, and the catch-up pages bring the rest.
+function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, blameOwner, liveCopy)
     local key = SubjectKey(self, playerName)
     local now = GetTime()
     -- Le max de l'identite, pas la ligne brute : une variante du nom ne repart pas de zero.
@@ -1194,9 +1284,15 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
     end
     if (killsBefore or 0) <= 0 then
         local accepted = kills
+        -- Une copie tierce d'un sujet connu par ses seules captures : la fenetre fixe.
+        local cap = firstContactCap
+        if liveCopy then
+            local window = 600 * LK_UNSOLICITED_RATE + LK_UNSOLICITED_ALLOWANCE + LK_SLACK_MAX
+            cap = math.min(cap or window, window)
+        end
         -- Jamais blame : un honnete tres actif en debut de semaine peut depasser le cap.
-        if firstContactCap and kills > firstContactCap then
-            accepted = firstContactCap
+        if cap and kills > cap then
+            accepted = cap
             NoteClamp(self, "unsolicitedTotalsClamped", sender, false)
         end
         local st = SubjectRow(CampaignSubjects(), key, true)
@@ -1212,8 +1308,11 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
         -- tard de notre derniere deconnexion, la fenetre couvre toute l'absence.
         -- (lastSessionTimestamp est ecrit avec time(), on compare avec time().)
         local lastSession = tonumber(OverlordDB and OverlordDB.lastSessionTimestamp) or 0
-        elapsed = math.max(600, lastSession > 0 and (time() - lastSession) or 600)
+        elapsed = math.max(600, (not liveCopy and lastSession > 0) and (time() - lastSession) or 600)
     end
+    -- A third party's copy never earns more than one fixed window, however long ago this
+    -- subject last rose here (a quiet enemy for hours let one forged line add hours of kills).
+    if liveCopy then elapsed = math.min(elapsed, 600) end
     local st = SubjectRow(CampaignSubjects(), key, true)
     local slack = math.min(LK_SLACK_MAX, (st.slack or LK_SLACK_MAX) + math.max(0, now - (st.slackAt or now)) * LK_SLACK_REFILL)
     local timed = math.floor(elapsed * LK_UNSOLICITED_RATE)
@@ -1224,7 +1323,7 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
     -- lastSessionTimestamp (PLAYER_LOGOUT), d'ou une fenetre de 600 s qui ecretait
     -- chaque ligne ennemie en retard. Sans reference dans la session, la borne est
     -- au moins le cap de premier contact, comme pour un sujet inconnu.
-    if not (existing and existing.at) and firstContactCap and firstContactCap > ceiling then
+    if not liveCopy and not (existing and existing.at) and firstContactCap and firstContactCap > ceiling then
         ceiling = firstContactCap
     end
     local accepted = kills
@@ -1302,37 +1401,8 @@ function Overlord.Sync:GetThirdPartyInflationDiagnostics()
     return "Third-party totals above the owner's own count (top 5): " .. table.concat(parts, "; ") .. "."
 end
 
--- Captures (non sollicitees) : 1 capture par 45 s au plus depuis le dernier compteur
--- retenu (+2 de jeu) ; un sujet inconnu est borne par l'age de la campagne a raison
--- d'une capture par 2 min (maintien + trajet). Ecrete, jamais refuse.
-local LC_RATE_SECONDS, LC_PACKET_SLACK, LC_FIRST_BASE, LC_FIRST_PER_SECOND = 45, 2, 10, 1 / 120
-local subjectCaptures = NewSubjectStateTable()
-function Overlord.Sync:BoundUnsolicitedCaptureCount(playerName, count, countBefore, sender, blameOwner)
-    local key = SubjectKey(self, playerName)
-    local now = GetTime()
-    count = math.floor(tonumber(count) or 0)
-    countBefore = math.floor(tonumber(countBefore) or 0)
-    local accepted = count
-    if countBefore <= 0 then
-        local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
-        if start > 0 then
-            local serverNow = Overlord.ServerNow and Overlord.ServerNow() or time()
-            local cap = LC_FIRST_BASE + math.floor(math.max(0, serverNow - start) * LC_FIRST_PER_SECOND)
-            if count > cap then accepted = cap; NoteClamp(self, "unsolicitedCapturesClamped", sender, false) end
-        end
-    else
-        local st = SubjectRow(subjectCaptures, key, false)
-        local elapsed = st and st.at and math.max(0, now - st.at) or 86400
-        local ceiling = countBefore + LC_PACKET_SLACK + math.floor(elapsed / LC_RATE_SECONDS)
-        if count > ceiling then
-            accepted = ceiling
-            NoteClamp(self, "unsolicitedCapturesClamped", sender, blameOwner, "captures clamped")
-        end
-    end
-    local st = SubjectRow(subjectCaptures, key, true)
-    if accepted > countBefore or not st.at then st.at = now end
-    return accepted
-end
+-- Captures: no unsolicited bound any more. LC arrives only in pages and SR:F replies
+-- (OnReceiveLeaderboardCaptures refuses every other LC since 2026-10-06).
 
 -- Cle du limiteur de rafale : le dernier saut authentifie. Pour une origine
 -- relayee, c'est la passerelle (context.gateway) ; sinon l'expediteur lui-meme.
@@ -1430,6 +1500,10 @@ function Overlord.Sync:NoteLiveZoneTraffic(zoneId)
         priv.liveZoneLastAt = priv.liveZoneSeenAt[zoneId]
     end
 end
+function Overlord.Sync:HasRecentLiveZoneTraffic(zoneId, window)
+    local at = zoneId and priv.liveZoneSeenAt[zoneId]
+    return at ~= nil and GetTime() - at <= (window or 300)
+end
 
 -- Basculement de proprietaire propose par une carte ZA alors que nous recevons le
 -- trafic valide en direct de cette zone depuis moins de 5 min sans avoir vu la
@@ -1514,7 +1588,9 @@ end
 -- attendue (pages v6 ou SR:F). Les mises a jour des cles deja connues
 -- restent monotones et ne consomment aucun budget.
 function Overlord.Sync:AuthorizeLeaderboardSubject(msgType, playerName, sender, channel)
-    if not self:IsValidPlayerName(playerName) then return false, "invalid-subject" end
+    if not self:IsValidPlayerName(playerName) or not self:HasForeverNameCase(playerName) then
+        return false, "invalid-subject"
+    end
     if self:IsKnownLeaderboardSubject(playerName) then return true, "known" end
     if self.KillSyncSenderOwnsPlayer
         and self:KillSyncSenderOwnsPlayer(sender, playerName) then return true, "owner" end
@@ -1647,10 +1723,14 @@ end
 function Overlord.Sync:GetBetaPeerFaction(name)
     local faction = self.GetResolvedBNetPlayerFaction and self:GetResolvedBNetPlayerFaction(name)
     if faction == "Alliance" or faction == "Horde" then return faction end
+    -- The ladder faction is what the peer said about itself (its own K). It may say
+    -- "same faction", never "other faction": only Battle.net proves that (an enemy can
+    -- only reach us through a friend). A modified client claiming the other faction
+    -- was picked as catch-up responder two rounds out of three by everyone.
     local lb = Overlord.Leaderboard
     local info = lb and lb.GetPlayerInfo and lb:GetPlayerInfo(name)
     faction = info and info.faction
-    if faction == "Alliance" or faction == "Horde" then return faction end
+    if (faction == "Alliance" or faction == "Horde") and faction == Overlord.PlayerFaction then return faction end
     return nil
 end
 
@@ -2575,7 +2655,7 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
         self:NoteChannelCovered(msgType, payload, sender)
     end
     if (msgType == "HR" or msgType == "HB" or msgType == "HA")
-        and payload and (payload:sub(1, 2) == "5:" or payload:sub(1, 2) == "6:") then
+        and payload and (payload:sub(1, 2) == "5:" or payload:sub(1, 2) == "6:" or payload:sub(1, 2) == "7:") then
         if self.OnPagedLeaderboardMessage then
             return self:OnPagedLeaderboardMessage(msgType, payload, sender, channel)
         end
@@ -2633,8 +2713,8 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
         self:OnReceiveLeaderboardRace(payload, sender, channel)
     elseif msgType == "LC" then
         self:OnReceiveLeaderboardCaptures(payload, sender, channel)
-    -- HR/HB/HC/HA without a "5:"/"6:" prefix were the v4 ladder exchange, retired
-    -- in 1.2.4 (v6 pages are routed above): they are ignored.
+    -- HR/HB/HC/HA without a "5:"/"6:"/"7:" prefix were the v4 ladder exchange, retired
+    -- in 1.2.4 (v5-v7 pages are routed above): they are ignored.
     elseif msgType == "LO" or msgType == "LOC" then
         -- A row from the peer asked for outpost history confirms that round.
         if self.NoteOutpostHistoryDelivery then pcall(self.NoteOutpostHistoryDelivery, self, sender) end
@@ -3263,6 +3343,36 @@ function Overlord.Sync:OnReceiveLeaderboardRace(payload, sender, channel)
     if not playerName or playerName == "" then return end
     if not self:AcceptSyncedContributorName(playerName) then return end
     if not self:AuthorizeLeaderboardSubject("LR", playerName, sender, channel) then return end
+    -- A live LR from anyone but the player (a groupmate's observation, a beacon relayed
+    -- past the first hop) only fills a missing race, under the canonical name, dated
+    -- no later than now: a sender-chosen future date used to overwrite any race.
+    local owner = self.KillSyncSenderOwnsPlayer and self:KillSyncSenderOwnsPlayer(sender, playerName)
+    local solicited = (self.IsExpectedPagedLeaderboardDelivery
+            and self:IsExpectedPagedLeaderboardDelivery("LR", playerName, sender, channel)) == true
+        or self:HasExpectedFullLeaderboardResponse(sender, channel)
+    if not owner and not solicited then
+        if self.CanonicalForeverName and self:CanonicalForeverName(playerName) ~= playerName then return end
+        -- The exact spelling must already be ranked here: a case variant ("D'Arcy" for
+        -- "D'arcy") would otherwise add an alias row that relabels the player.
+        local lb = Overlord.Leaderboard
+        if not ((lb.kills and lb.kills[playerName] ~= nil)
+            or (lb.captureCount and lb.captureCount[playerName] ~= nil)) then return true end
+        local info = lb.playerInfo and lb.playerInfo[playerName]
+        if type(info) == "table" and (info.race or "") ~= "" then return true end
+        -- One forged line set a race for every listener and pages re-served it: two
+        -- distinct first-hand observers must agree (same rule as class and guild hints).
+        -- An observer keeps its own dated race, which the pages carry to everyone.
+        if self.IsUnauthenticatedRelayOrigin and self:IsUnauthenticatedRelayOrigin(sender) then return true end
+        local token = self.NormalizeRaceFileToken and self:NormalizeRaceFileToken(raceFile) or raceFile
+        local sexCode = math.floor(tonumber(raceSex) or 0)
+        if sexCode ~= 2 and sexCode ~= 3 then sexCode = 0 end
+        if not (token and self.ConcordantLiveHint and self:ConcordantLiveHint("R", playerName,
+            tostring(token) .. ":" .. sexCode, sender, GetTime() + 300)) then
+            return true
+        end
+        -- Undated: it fills the gap but loses to any dated observation, here or in pages.
+        observedAt = 0
+    end
     -- LR est une replique de metadata du classement : SetPlayerRace normalise
     -- le token et departage les conflits par timestamp/ordre canonique.
     Overlord.Leaderboard:SetPlayerRace(playerName, raceFile, raceSex, true, observedAt, true)
@@ -4161,7 +4271,6 @@ function Overlord.Sync:OnReceiveCapture(payload, sender)
         return
     end
     if ShouldRejectPostVictoryZoneOwner(zoneId, newOwner, "captured", ts, "C") then return end
-    if self:ShouldRejectImmuneCapitalChange(zoneId, newOwner, "captured", "C") then return end
     -- Rejette un vieux "C" arrive apres une capture plus recente, meme si le proprietaire
     -- change. Sinon un paquet retarde peut reflipper la carte chez certains clients.
     if zone and not zone._captureFinalUnattested
@@ -4912,13 +5021,10 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         local frontVictory = senderVFront and senderVFront ~= "" and OverlordDB.frontVictories and OverlordDB.frontVictories[senderVFront]
         local localVTs = (frontVictory and frontVictory.timestamp) or 0
         if remoteVTs > localVTs and senderVFront and senderVFront ~= "" then
-            -- N'appliquer la treve que si la carte locale confirme la victoire totale (capitale + tout le front).
-            -- Sinon : treve fantome avec zones encore disputees (bug « Trêve » sur toute la carte).
-            if Overlord.Zones and Overlord.Zones.LocalStateSupportsVictoryTruce
-                and Overlord.Zones:LocalStateSupportsVictoryTruce(senderVFront, remoteVictoryFaction)
-                and Overlord.Zones.SetVictoryCooldown then
-                Overlord.Zones:SetVictoryCooldown(senderVFront, remoteVictoryFaction, remoteVTs)
-            end
+            -- Memes preuves que VF (capitale a +/- 5 s, pas une capitale gardee, espacement
+            -- de 6 h, treve pas deja terminee) : en 1.7 la carte d'un front gagne reste au
+            -- vainqueur, la seule carte ne prouve plus une treve en cours.
+            self:OnReceiveVictoryFaction(math.floor(remoteVTs) .. ":" .. senderVF .. ":" .. senderVFront)
         end
     end
 
@@ -6358,7 +6464,6 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
     if (status == "captured" or status == "in_progress") and not owner then return end
     if ShouldRejectStaleTruceResetZone(zoneId, ts) then return end
     if ShouldRejectPostVictoryZoneOwner(zoneId, owner, status, ts, "ZS") then return end
-    if self:ShouldRejectImmuneCapitalChange(zoneId, owner, status, "ZS") then return end
     if status == "in_progress" and type(zsNetworkWitness) == "string" then
         local probeId = zsNetworkWitness:match("^Q([0-9a-f]+)$")
         if probeId and self.OnReceiveCaptureNetworkProbe then
@@ -7649,12 +7754,6 @@ function Overlord.Sync:OnReceiveZoneAll(
             and not CanNeutralZaReplaceCanonicalCapture(zoneId, stateZoneForVote, ts) then
             staleSkipMask[entryIndex] = true
         end
-        -- Capitale protegee : ecarter l'entree, jamais tout le lot (les lots G couvrent
-        -- tous les fronts ; un ancien client ne doit pas bloquer la carte entiere).
-        if validEntry and owner
-            and self:ShouldRejectImmuneCapitalChange(zoneId, owner, "captured", "ZA") then
-            staleSkipMask[entryIndex] = true
-        end
         -- Basculement surprenant pendant un suivi en direct : garde locale jusqu'a
         -- une seconde source (voir IsSuspiciousZaFlip).
         if zaGuardActive and validEntry and owner and stateZoneForVote then
@@ -7671,6 +7770,10 @@ function Overlord.Sync:OnReceiveZoneAll(
                 and not ShouldRejectStaleTruceResetZone(zoneId, ts)
                 and not ShouldRejectPostVictoryZoneOwner(
                     zoneId, owner, "captured", ts, "ZA")
+            -- Tampon du vainqueur avance pendant la treve : entree ecartee, le lot reste.
+            if validEntry and owner and ShouldRejectFrontTruceZoneChange(zoneId, owner, "captured", ct) then
+                staleSkipMask[entryIndex] = true
+            end
         end
         local previousIndex = zoneId and seenZaZoneIds[zoneId]
         if previousIndex then
@@ -7970,11 +8073,12 @@ function Overlord.Sync:OnReceiveZoneAll(
             -- updatedAt peut etre frais pour un etat ancien et ne doit pas creer d'activite.
             if not loginPairRepairMode and not runtimeGlobalRepairMode and ct > 0
                 and Overlord.FrontActivity and Overlord.FrontActivity.RecordByZoneRef then
-                -- La liberation re-horodate toute la conquete a l'epoch : pas une capture.
+                -- La fin de treve re-horodate la conquete (zones a l'epoch, capitale gardee
+                -- une seconde apres) : pas une capture.
                 local _, activityFront = Overlord.Fronts:GetZone(zoneId)
                 local releaseEpoch = activityFront and OverlordDB and OverlordDB.frontTruceResetEpoch
                     and tonumber(OverlordDB.frontTruceResetEpoch[activityFront.id]) or 0
-                if ct ~= releaseEpoch then
+                if ct ~= releaseEpoch and ct ~= releaseEpoch + 1 then
                     Overlord.FrontActivity:RecordByZoneRef(zoneId, nil, ct)
                 end
             end
@@ -8391,15 +8495,17 @@ function Overlord.Sync:OnReceiveZoneAll(
 end
 
 -- Recoit un entry de leaderboard kills avec classe+faction (prend le max)
--- Format : name:kills:class:faction:epoch:locale:guild:guildAt:BbucketEpoch:level
+-- Format : name:kills:class:faction:epoch:locale:guild:guildAt:BbucketEpoch:level[:race]
+-- (race : pages v7 seulement, "o2" = orc homme ; voir EncodeRaceWireField)
 -- Rejete si l'epoch calendrier ou l'epoch reel du bucket est absent/perime.
 -- Classe vide ou "UNKNOWN" : ne pas appeler SetPlayerInfo avec ca (pollution SV - voir Leaderboard entete GetExportPlayerMeta).
 function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     if not payload then return end
     -- Anti-triche : expediteur en quarantaine (faux classement diffuse via LK).
     if self.KillAntiSpoofIsBlacklisted and self:KillAntiSpoofIsBlacklisted(sender) then return end
+    -- 11th field (v7 ranking pages only): the player's race, "o2" style.
     local rawName, kills, class, faction, epochStr, locTag, guildTag, guildAtStr,
-        bucketEpochToken, levelToken = strsplit(":", payload, 10)
+        bucketEpochToken, levelToken, raceField = strsplit(":", payload, 11)
     if not rawName or not self:IsValidPlayerName(rawName) then return end
     local remoteEpoch = tonumber(epochStr)
     if not IsCurrentSyncCampaignEpoch(remoteEpoch) then return end
@@ -8445,9 +8551,41 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     -- an already-known player.
     local guildSnapshot = (self.IsExpectedPagedLeaderboardDelivery
             and self:IsExpectedPagedLeaderboardDelivery("LK", playerName, sender, channel)) == true
+    local solicited = guildSnapshot or self:HasExpectedFullLeaderboardResponse(sender, channel)
+    -- Live row from a third party: only a bridge copy of an enemy total (checked
+    -- before any metadata is merged, so a refused row changes nothing).
+    local liveCopy = not guildOwner and not solicited
+    if liveCopy and not self:AdmitLiveThirdPartyLeaderboardRow(playerName, faction, sender) then return end
     local observedLevelEligible = self.IsObservedPlayerKillLevelEligible
         and self:IsObservedPlayerKillLevelEligible(playerName)
     if observedLevelEligible == false then return end
+    -- Undated (0): any race really observed here, or dated by an LR, stays. Only
+    -- from a v7 page we asked for: a live LK never carries a race.
+    local rowRace, rowRaceSex
+    if raceField and guildSnapshot and self.DecodeRaceWireField then
+        rowRace, rowRaceSex = self:DecodeRaceWireField(raceField)
+    end
+    if liveCopy then
+        -- A bridge copy brings the total only: no guild, no faction, and its class and
+        -- locale are never taken (see below). It may raise the level we hold by two at
+        -- most (a forged copy set a fake guild on enemy players, or a level that unlocked
+        -- a higher kill ceiling; a levelling enemy still climbs).
+        local info = Overlord.Leaderboard.playerInfo and Overlord.Leaderboard.playerInfo[playerName]
+        local storedLevel = type(info) == "table" and math.floor(tonumber(info.level) or 0) or 0
+        if storedLevel >= 1 and storedLevel <= 90 then
+            levelToken = math.min(math.floor(tonumber(levelToken) or storedLevel), storedLevel + 2)
+            levelToken = math.max(levelToken, storedLevel)
+            kills = self:SanitizeSyncedKillTotal(kills, levelToken) or kills
+        end
+        -- Class and locale are never merged from a copy (one line on the channel used
+        -- to fill a missing class for every listener); a missing class comes from two
+        -- concordant CA answers or from pages. What we hold is still passed on.
+        local heldClass = type(info) == "table" and info.class or ""
+        class = (heldClass ~= "" and heldClass ~= "UNKNOWN") and heldClass or ""
+        locTag = type(info) == "table" and info.locale or ""
+        classClaimVerified, localeClaimVerified = false, false
+        factionClaimVerified, validGuildRegister, guildAt, hasGuildRegister = false, false, 0, false
+    end
     if Overlord.Leaderboard.MergeLeaderboardKillMetadata then
         Overlord.Leaderboard:MergeLeaderboardKillMetadata(
             playerName,
@@ -8457,7 +8595,7 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
             localeClaimVerified and locTag or nil,
             validGuildRegister and guildTag or "",
             guildAt,
-            hasGuildRegister, nil, nil, nil, guildOwner, guildSnapshot)
+            hasGuildRegister, rowRace, rowRaceSex, 0, guildOwner, guildSnapshot)
     elseif Overlord.Leaderboard.SetPlayerLevel then
         Overlord.Leaderboard:SetPlayerLevel(playerName, levelToken)
     end
@@ -8473,9 +8611,9 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     else
         self:NoteThirdPartyKillTotal(playerName, kills, sender)
     end
-    local solicited = guildSnapshot or self:HasExpectedFullLeaderboardResponse(sender, channel)
     if not solicited or killsBefore <= 0 then
-        kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, guildOwner and not solicited)
+        kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender,
+            guildOwner and not solicited, liveCopy)
     end
     if killsClampedByLevel and guildOwner then self:NoteSuspiciousSender(sender, "kill ceiling") end
     Overlord.Leaderboard:SetPlayerKills(playerName, kills, true)
@@ -8493,16 +8631,22 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     end
     -- Solicited ranking pages (catch-up) are not live news: never bridged.
     if betaNet and channel == "BNET" and not guildSnapshot and betaNet.NoteBridgedEnemyTotal then
+        -- Re-posted with the class and locale this client holds (a live copy no longer
+        -- merges them when known, but its channel copy must not lose them: each
+        -- listener lacking a class would send a CR for it).
+        local relayClass = (class and self:IsValidCaptureClassToken(class)) and class or ""
+        local relayLocale = (localeClaimVerified or liveCopy) and (locTag or "") or ""
         pcall(betaNet.NoteBridgedEnemyTotal, betaNet, playerName, faction, kills, killsBefore,
-            classClaimVerified and class or "", localeClaimVerified and locTag or "",
-            remoteEpoch, bucketEpochToken, levelToken)
+            relayClass, relayLocale, remoteEpoch, bucketEpochToken, levelToken)
     elseif betaNet and channel == "CHANNEL" and betaNet.NoteChannelBridgeRow then
         pcall(betaNet.NoteChannelBridgeRow, betaNet, playerName, kills, faction, sender)
     end
     -- Classe / faction / locale ci-dessous ; la guilde (champ 7) est traitee plus bas.
     if classClaimVerified and not Overlord.Leaderboard.MergeLeaderboardKillMetadata then
         Overlord.Leaderboard:SetPlayerClassFromSync(playerName, class)
-    elseif not class or class == "" or class == "UNKNOWN" then
+    elseif not liveCopy and (not class or class == "" or class == "UNKNOWN") then
+        -- Pas pour une copie de pont : chaque auditeur demanderait la meme classe a la
+        -- meme seconde ; les pages et le K du joueur l'apportent.
         if Overlord.Leaderboard.AllowClassRefetchFromSync then
             Overlord.Leaderboard:AllowClassRefetchFromSync(playerName)
         end
@@ -8529,7 +8673,9 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
         Overlord.Leaderboard:ClearPlayerGuild(playerName, true, true, guildAtStr)
     end
     -- MaybeRequestMissingGuild verifie deja la guilde connue en interne (pas de pre-check O(N)).
-    self:MaybeRequestMissingGuild(playerName)
+    -- Pas pour une copie de pont : chaque auditeur demanderait la meme guilde a la meme
+    -- seconde ; les pages (guilde forte) et le K du joueur l'apportent.
+    if not liveCopy then self:MaybeRequestMissingGuild(playerName) end
     if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RequestRefresh then
         Overlord.LeaderboardUI:RequestRefresh()
     end
@@ -8571,6 +8717,8 @@ function Overlord.Sync:OnReceiveLeaderboardCaptures(payload, sender, channel)
     if not IsCurrentLeaderboardScoreBucket(remoteEpoch, bucketEpochToken) then return end
     if not capRemote then return end
     if not self:AcceptSyncedContributorName(playerName) then return end
+    -- A removed or impossible name: consumed (an old peer still serves it), never stored.
+    if self.IsDeniedKillContributor and self:IsDeniedKillContributor(playerName) then return true end
     -- Valider l'integralite du score avant toute ecriture de metadonnees ou de zones.
     -- Un LC refuse ne doit pas pouvoir polluer faction/classe/captures malgre son total rejete.
     if factionCode ~= "H" and factionCode ~= "A" and factionCode ~= "U" then return end
@@ -8587,7 +8735,18 @@ function Overlord.Sync:OnReceiveLeaderboardCaptures(payload, sender, channel)
     local sanitizedCap = self.SanitizeSyncedCaptureCount
         and self:SanitizeSyncedCaptureCount(capRemote)
     if sanitizedCap == nil then return end
+    -- Pages and SR:F are the only senders of LC (live captures travel as C/OC, from the
+    -- capturer itself). An unsolicited LC has no honest sender: refused before any
+    -- write (it used to take a known name to 499 captures in one line, 2026-10-06).
+    -- Checked before AuthorizeLeaderboardSubject, which may spend the last unit of an
+    -- SR:F budget (the reply's 20th LC row was refused right after).
+    local lcSolicited = (self.IsExpectedPagedLeaderboardDelivery
+            and self:IsExpectedPagedLeaderboardDelivery("LC", playerName, sender, channel)) == true
+        or self:HasExpectedFullLeaderboardResponse(sender, channel)
+    if not lcSolicited then return end
     if not self:AuthorizeLeaderboardSubject("LC", playerName, sender, channel) then return end
+    local previousCaptureTotal = Overlord.Leaderboard.GetMaxCapturesForDedupName
+        and Overlord.Leaderboard:GetMaxCapturesForDedupName(playerName) or 0
     local verifiedZones = {}
     if zoneList and zoneList ~= "" then
         for zoneId in string.gmatch(zoneList, "[^,]+") do
@@ -8598,23 +8757,6 @@ function Overlord.Sync:OnReceiveLeaderboardCaptures(payload, sender, channel)
             if zoneId ~= "" and knownZone then
                 verifiedZones[#verifiedZones + 1] = zoneId
             end
-        end
-    end
-    local previousCaptureTotal = Overlord.Leaderboard.GetMaxCapturesForDedupName
-        and Overlord.Leaderboard:GetMaxCapturesForDedupName(playerName) or 0
-    do
-        -- Meme regle que les kills : un compteur de captures d'un sujet connu ne
-        -- monte pas d'un seul paquet non sollicite, et un sujet inconnu est borne
-        -- par l'age de la campagne.
-        local lcOwner = self.KillSyncSenderOwnsPlayer and self:KillSyncSenderOwnsPlayer(sender, playerName) or false
-        local lcSolicited = (self.IsExpectedPagedLeaderboardDelivery
-                and self:IsExpectedPagedLeaderboardDelivery("LC", playerName, sender, channel)) == true
-            or self:HasExpectedFullLeaderboardResponse(sender, channel)
-        -- Les pages et SR:F sont l'historique de reference (un sujet inconnu non
-        -- sollicite est deja refuse par AuthorizeLeaderboardSubject).
-        if not lcSolicited then
-            sanitizedCap = self:BoundUnsolicitedCaptureCount(playerName, sanitizedCap,
-                tonumber(previousCaptureTotal) or 0, sender, lcOwner)
         end
     end
     -- Ecriture paresseuse : on stocke le nom brut sans merge dedup.
@@ -8906,7 +9048,8 @@ function Overlord.Sync:BroadcastKill(zoneId, totalKills, killScoringAtEvent,
             end
             local locTag = (Overlord.GetClientLocaleTag and Overlord:GetClientLocaleTag()) or ""
             local guildTag = Overlord:GetLocalGuildIdentity()
-            local guildAt = time()
+            -- Server clock: peers refuse a register more than 5 min ahead of theirs.
+            local guildAt = (GetServerTime and GetServerTime()) or time()
             if guildTag == nil then
                 -- Une lecture indisponible ne publie jamais un depart de guilde.
                 local known = Overlord.Leaderboard and Overlord.Leaderboard.playerInfo
@@ -9184,10 +9327,11 @@ function Overlord.Sync:CheckTotalVictoryFromSync()
     local front = Overlord.Fronts and Overlord.Fronts:GetCurrentFront()
     local frontId = front and front.id
     if not frontId or priv.totalVictoryAnnounced[frontId] then return end
-    -- Conquete persistante : la capitale liberee ne peut pas retomber pendant sa
-    -- protection (la victoire en retour du perdant reste possible), et une victoire deja
-    -- liberee (ou purgee) ne se re-annonce jamais sur une carte restee au vainqueur.
-    -- (Protection lue seulement quand la carte montre une victoire : appel par paquet C/ZS.)
+    -- Conquete persistante (1.7) : la carte d'un front gagne reste au vainqueur, capitale
+    -- tombee comprise. Une victoire deja terminee (ou purgee) ne se re-annonce jamais, une
+    -- capitale gardee (re-horodatee a la fin de treve) n'est jamais une prise fraiche, et
+    -- une autre victoire sur ce front ne compte que 6 h apres la precedente (regle b).
+    -- (Lu seulement quand la carte montre une victoire : appel par paquet C/ZS.)
     local releasedEpoch = OverlordDB and OverlordDB.frontTruceResetEpoch
         and tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0
 
@@ -9199,7 +9343,27 @@ function Overlord.Sync:CheckTotalVictoryFromSync()
         local capId = Overlord.Fronts and Overlord.Fronts:GetEnemyCapitalId(winningFaction, frontId)
         local cap = capId and Overlord.Zones:GetZone(capId)
         local ts = tonumber(cap and cap.capturedTime) or 0
-        return (ts > 0) and ts or time()
+        return (ts > 0) and ts or time(), cap
+    end
+    local function VictoryCounts(victoryTs, capital, faction)
+        if Overlord.Zones.IsKeptCapitalStamp and Overlord.Zones:IsKeptCapitalStamp(frontId, capital) then
+            return false
+        end
+        if Overlord.Zones.IsFrontVictoryAllowed
+            and not select(1, Overlord.Zones:IsFrontVictoryAllowed(frontId, victoryTs)) then
+            return false
+        end
+        -- La carte seule ne prouve pas une victoire : une reprise trop tot (moins de 6 h
+        -- apres la precedente, que ce client peut ignorer) a la meme carte. Il faut l'annonce
+        -- du capteur (TV en attente de cette preuve, meme heure et meme camp) ou le journal.
+        -- Une TV perdue revient par les reponses SR pendant la treve (TV, VT/VF rejoues).
+        local pending = priv.pendingTotalVictory and priv.pendingTotalVictory[frontId]
+        if pending and math.abs((tonumber(pending.ts) or 0) - victoryTs) <= 5
+            and tostring(pending.payload or ""):match("^([^:]+)") == faction then
+            return true
+        end
+        return Overlord.GetDominationVictoryEventNear
+            and Overlord:GetDominationVictoryEventNear(frontId, faction, victoryTs) ~= nil or false
     end
 
     -- Victoire de notre faction : capitale ennemie capturee (owner + capturedTime via LocalStateSupportsVictoryTruce).
@@ -9210,10 +9374,9 @@ function Overlord.Sync:CheckTotalVictoryFromSync()
             and Overlord.Zones:CountZonesNotOwnedByOnFront(frontId, pf) > 0 then
             return
         end
-        local victoryTs = GetVictoryCaptureTimestamp(pf)
+        local victoryTs, capital = GetVictoryCaptureTimestamp(pf)
         if releasedEpoch > 0 and victoryTs <= releasedEpoch + 5 then return end
-        if Overlord.Zones.IsEnemyCapitalProtectedFor
-            and Overlord.Zones:IsEnemyCapitalProtectedFor(pf, frontId) then return end
+        if not VictoryCounts(victoryTs, capital, pf) then return end
         if OverlordDB and (not currentTruce or currentWinner == pf) then
             Overlord.Zones:SetVictoryCooldown(frontId, pf, victoryTs)
             if Overlord.TryGrantVictoryDominationBonus then
@@ -9245,10 +9408,9 @@ function Overlord.Sync:CheckTotalVictoryFromSync()
             and Overlord.Zones:CountZonesNotOwnedByOnFront(frontId, ef) > 0 then
             return
         end
-        local victoryTs = GetVictoryCaptureTimestamp(ef)
+        local victoryTs, capital = GetVictoryCaptureTimestamp(ef)
         if releasedEpoch > 0 and victoryTs <= releasedEpoch + 5 then return end
-        if Overlord.Zones.IsEnemyCapitalProtectedFor
-            and Overlord.Zones:IsEnemyCapitalProtectedFor(ef, frontId) then return end
+        if not VictoryCounts(victoryTs, capital, ef) then return end
         if OverlordDB and (not currentTruce or currentWinner == ef) then
             Overlord.Zones:SetVictoryCooldown(frontId, ef, victoryTs)
             if Overlord.TryGrantVictoryDominationBonus then
@@ -9287,17 +9449,12 @@ function Overlord.Sync:OnReceiveVictoryTimestamp(payload)
         OverlordDB.frontVictories = OverlordDB.frontVictories or {}
         local fv = OverlordDB.frontVictories[frontId]
         local frontTs = (fv and tonumber(fv.timestamp)) or 0
-        if ts > frontTs then
+        -- La meme victoire (a 5 s pres) garde son heure : un VT ne la pousse pas en avant
+        -- (sinon la treve s'allonge et la fenetre des tampons de treve glisse).
+        if ts > frontTs + 5 then
             local fac = fv and fv.faction
-            local capitalId = fac and Overlord.Fronts
-                and Overlord.Fronts:GetEnemyCapitalId(fac, frontId)
-            local capital = capitalId and Overlord.Fronts
-                and select(1, Overlord.Fronts:GetZone(capitalId, frontId))
-            local proofTs = math.floor(tonumber(capital and capital.capturedTime) or 0)
-            if fac and Overlord.Zones and Overlord.Zones.LocalStateSupportsVictoryTruce
-                and Overlord.Zones:LocalStateSupportsVictoryTruce(frontId, fac)
-                and proofTs > 0 and math.abs(ts - proofTs) <= 5
-                and Overlord.Zones.SetVictoryCooldown then
+            if fac and Overlord.Zones and Overlord.Zones.SetVictoryCooldown
+                and self:RemoteVictoryProven(frontId, fac, ts) then
                 Overlord.Zones:SetVictoryCooldown(frontId, fac, ts)
             end
         end
@@ -9306,6 +9463,31 @@ function Overlord.Sync:OnReceiveVictoryTimestamp(payload)
 
     -- Legacy sans front : impossible a attribuer de facon sure avec plusieurs fronts.
     return
+end
+
+-- Preuve locale d'une victoire annoncee par un pair (VF, VT, en-tete SR) : la carte montre
+-- tout le front au vainqueur et la capitale prise a +/- 5 s, ce n'est pas une capitale
+-- gardee apres une fin de treve, la treve de cette victoire n'est pas deja terminee ici
+-- et la regle des 6 h l'autorise.
+function Overlord.Sync:RemoteVictoryProven(frontId, faction, ts)
+    if not frontId or not faction or not ts or ts <= 0 or not OverlordDB then return false end
+    local zones = Overlord.Zones
+    if not zones or not zones.LocalStateSupportsVictoryTruce or not Overlord.Fronts then return false end
+    local endedEpoch = OverlordDB.frontTruceResetEpoch
+        and math.floor(tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0) or 0
+    local cooldownSec = zones.GetVictoryCooldownSeconds
+        and math.floor(tonumber(zones:GetVictoryCooldownSeconds()) or 0) or 900
+    if endedEpoch > 0 and ts + cooldownSec <= endedEpoch then return false end
+    if zones.IsFrontVictoryAllowed and not select(1, zones:IsFrontVictoryAllowed(frontId, ts)) then
+        return false
+    end
+    if not zones:LocalStateSupportsVictoryTruce(frontId, faction) then return false end
+    local capitalId = Overlord.Fronts:GetEnemyCapitalId(faction, frontId)
+    local capital = capitalId and select(1, Overlord.Fronts:GetZone(capitalId, frontId))
+    local proofTs = math.floor(tonumber(capital and capital.capturedTime) or 0)
+    if proofTs <= 0 or math.abs(ts - proofTs) > 5 then return false end
+    if zones.IsKeptCapitalStamp and zones:IsKeptCapitalStamp(frontId, capital) then return false end
+    return true
 end
 
 -- Propage la faction gagnante avec le timestamp (message VF, apres VT dans la file SR).
@@ -9333,15 +9515,10 @@ function Overlord.Sync:OnReceiveVictoryFaction(payload)
     local fv = OverlordDB.frontVictories[frontId]
     local frontTs = (fv and tonumber(fv.timestamp)) or 0
     if ts < frontTs - 30 then return end
+    -- La meme victoire deja connue (a 5 s pres) garde son heure (voir VT).
+    if frontTs > 0 and math.abs(ts - frontTs) <= 5 then return end
     if Overlord.Zones and Overlord.Zones.SetVictoryCooldown
-        and Overlord.Zones.LocalStateSupportsVictoryTruce
-        and Overlord.Zones:LocalStateSupportsVictoryTruce(frontId, fac) then
-        local capitalId = Overlord.Fronts
-            and Overlord.Fronts:GetEnemyCapitalId(fac, frontId)
-        local capital = capitalId and Overlord.Fronts
-            and select(1, Overlord.Fronts:GetZone(capitalId, frontId))
-        local proofTs = math.floor(tonumber(capital and capital.capturedTime) or 0)
-        if proofTs <= 0 or math.abs(ts - proofTs) > 5 then return end
+        and self:RemoteVictoryProven(frontId, fac, ts) then
         local appliedTs = (frontTs > ts) and frontTs or ts
         Overlord.Zones:SetVictoryCooldown(frontId, fac, appliedTs)
     end
@@ -9492,10 +9669,10 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel, ret
     if deliveredTs > 0 and ts < deliveredTs + truceSeconds then
         return
     end
-    -- Capitale liberee encore protegee : la faction qui l'a deja prise ne peut pas
-    -- regagner ce front (la victoire en retour du perdant reste livrable).
-    if proofFrontId and Overlord.Zones and Overlord.Zones.IsEnemyCapitalProtectedFor
-        and Overlord.Zones:IsEnemyCapitalProtectedFor(faction, proofFrontId) then
+    -- Regle (b) : une autre victoire sur ce front ne compte que 6 h apres la precedente
+    -- (la meme victoire, a quelques secondes pres, reste livrable).
+    if proofFrontId and Overlord.Zones and Overlord.Zones.IsFrontVictoryAllowed
+        and not select(1, Overlord.Zones:IsFrontVictoryAllowed(proofFrontId, ts)) then
         return
     end
     local frontVictory = proofFrontId and OverlordDB and OverlordDB.frontVictories
@@ -9516,6 +9693,12 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel, ret
         local capital = capitalId and select(1, Overlord.Fronts:GetZone(capitalId, proofFrontId))
         local localProofTs = math.floor(tonumber(capital and capital.capturedTime) or 0)
         if localProofTs <= 0 or math.abs(ts - localProofTs) > 5 then
+            localVictoryEvidence = false
+        elseif math.abs(ts - dbVts) > 5 and Overlord.Zones.IsKeptCapitalStamp
+            and Overlord.Zones:IsKeptCapitalStamp(proofFrontId, capital) then
+            -- Capitale gardee apres une fin de treve (epoch + 1) : pas une nouvelle victoire.
+            -- Une vraie victoire re-horodate tout le front a son heure (ZA du capteur) et
+            -- la TV en attente est alors rejouee.
             localVictoryEvidence = false
         end
     end
@@ -10433,20 +10616,20 @@ local function NoteHeardTruceRelease(frontId, epoch)
     end
 end
 
--- FR : fin de treve - liberation de la capitale tombee (la conquete reste, capitale protegee).
+-- FR : fin de treve. La conquete reste entiere, la capitale tombee comprise (epoch + 1).
 function Overlord.Sync:BroadcastFrontTruceEndReset(frontId, resetEpoch)
     if not frontId or not resetEpoch or resetEpoch <= 0 then return end
     if Overlord.InstanceSuspended or IsInInstance() then return end
     local epoch = math.floor(resetEpoch)
     local payload = frontId .. ":" .. epoch
-    -- Tous les clients qui ont vu la victoire liberent a la meme seconde (horloge
+    -- Tous les clients qui ont vu la victoire finissent la treve a la meme seconde (horloge
     -- serveur) : a 10 000 joueurs, chacun rediffusait FR + 3 pages ZA. Un annonceur
     -- suffit : attente aleatoire de 3 a 25 s, annulee si ce FR a deja ete entendu.
-    -- La liberation locale, elle, a deja eu lieu.
+    -- La fin de treve locale, elle, a deja eu lieu.
     local function announce()
         if Overlord.InstanceSuspended or IsInInstance() then return end
         if (priv.heardTruceRelease[frontId] or 0) >= epoch then return end
-        -- Reset hebdomadaire (ou autre liberation) entre-temps : plus rien a annoncer.
+        -- Reset hebdomadaire (ou autre fin de treve) entre-temps : plus rien a annoncer.
         local applied = OverlordDB and OverlordDB.frontTruceResetEpoch
             and tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0
         if applied ~= epoch then return end
@@ -10492,8 +10675,8 @@ function Overlord.Sync:RetryPendingTruceReleases()
     local pendingByFront = priv.pendingTruceRelease
     if not pendingByFront or next(pendingByFront) == nil then return end
     local now = (Overlord.ServerNow and Overlord.ServerNow()) or time()
-    local horizon = Overlord.Zones and Overlord.Zones.GetCapitalImmunitySeconds
-        and Overlord.Zones:GetCapitalImmunitySeconds() or 21600
+    local horizon = Overlord.Zones and Overlord.Zones.GetVictorySpacingSeconds
+        and Overlord.Zones:GetVictorySpacingSeconds() or 21600
     local retries = {}
     for frontId, slots in pairs(pendingByFront) do
         local applied = OverlordDB and OverlordDB.frontTruceResetEpoch
@@ -10523,7 +10706,7 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
     local appliedEpoch = OverlordDB and OverlordDB.frontTruceResetEpoch
         and tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0
     if appliedEpoch >= resetEpoch then
-        -- Un pair a annonce la meme liberation : notre annonce differee devient inutile.
+        -- Un pair a annonce la meme fin de treve : notre annonce differee devient inutile.
         -- Seul un FR prouve (deja applique ici, ou derive plus bas) la fait taire : un FR
         -- invente ne doit pas empecher la vraie annonce.
         NoteHeardTruceRelease(frontId, resetEpoch)
@@ -10531,7 +10714,6 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
     end
     local frNow = (Overlord.ServerNow and Overlord.ServerNow()) or time()
     local locallyDerivedReset = false
-    local derivedWinner = nil
     local victory = OverlordDB and OverlordDB.frontVictories
         and OverlordDB.frontVictories[frontId]
     local victoryTs = victory and math.floor(tonumber(victory.timestamp) or 0) or 0
@@ -10564,10 +10746,16 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
                         and select(1, Overlord.Fronts:GetZone(capitalId, frontId))
                     local capitalTs = math.floor(
                         tonumber(capital and capital.capturedTime) or 0)
+                    -- Une capitale gardee (epoch + 1) ou une prise refusee par l'espacement
+                    -- de 6 h n'est pas une victoire : sinon un FR invente a epoch + 900
+                    -- ferait glisser la fenetre des 6 h sans fin.
                     if capitalTs > 0
-                        and math.abs(capitalTs - inferredVictoryTs) <= 5 then
+                        and math.abs(capitalTs - inferredVictoryTs) <= 5
+                        and not (Overlord.Zones.IsKeptCapitalStamp
+                            and Overlord.Zones:IsKeptCapitalStamp(frontId, capital))
+                        and (not Overlord.Zones.IsFrontVictoryAllowed
+                            or select(1, Overlord.Zones:IsFrontVictoryAllowed(frontId, inferredVictoryTs))) then
                         locallyDerivedReset = true
-                        derivedWinner = inferredFaction
                         break
                     end
                 end
@@ -10575,10 +10763,10 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
         end
     end
     if not locallyDerivedReset and cooldown > 0 and resetEpoch <= frNow + 5
-        and Overlord.Zones and Overlord.Zones.LocalStateShowsCapitalRelease then
-        -- Liberation deja recue par ZA avant ce FR (ou carte vue au login) : la capitale
-        -- du perdant porte l'epoch exact. Une trace locale independante doit dater la
-        -- meme victoire (victoire locale, purge login ou journal de domination).
+        and Overlord.Zones and Overlord.Zones.LocalStateShowsKeptConquest then
+        -- Fin de treve deja recue par ZA avant ce FR (ou carte vue au login) : la capitale
+        -- du perdant est restee au vainqueur, une seconde apres l'epoch. Une trace locale
+        -- independante doit dater la meme victoire (victoire locale, purge login ou journal).
         local releasedVictoryTs = resetEpoch - cooldown
         local prunedTs = OverlordDB and OverlordDB.frontTruceResetEpoch
             and math.floor(tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0) or 0
@@ -10587,9 +10775,8 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
             journalTs, journalFaction = Overlord:GetLatestDominationVictoryForFront(frontId)
         end
         journalTs = journalTs or 0
-        -- Le vainqueur vient de la trace qui date cette victoire ; apres une liberation
-        -- les deux capitales sont natives a l'epoch, la carte seule ne tranche que par
-        -- les zones conquises (sinon aucun vainqueur : pas de capitale protegee au hasard).
+        -- Le vainqueur vient de la trace qui date cette victoire ; la carte seule tranche
+        -- par la capitale gardee (sinon aucun vainqueur).
         local releasedWinner
         if releasedVictoryTs > 0 then
             if victoryTs > 0 and math.abs(victoryTs - releasedVictoryTs) <= 5 then
@@ -10597,38 +10784,33 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
             elseif journalTs > 0 and math.abs(journalTs - releasedVictoryTs) <= 5 then
                 releasedWinner = journalFaction
                 -- Un journal contredit par les zones conquises ne choisit pas la capitale.
-                local mapWinner = Overlord.Zones.ReleasedWinnerFromMap
-                    and Overlord.Zones:ReleasedWinnerFromMap(frontId, resetEpoch)
+                local mapWinner = Overlord.Zones.KeptConquestWinnerFromMap
+                    and Overlord.Zones:KeptConquestWinnerFromMap(frontId, resetEpoch)
                 if mapWinner and mapWinner ~= journalFaction then releasedWinner = nil end
             elseif prunedTs > 0 and math.abs(prunedTs - releasedVictoryTs) <= 5
-                and Overlord.Zones.ReleasedWinnerFromMap then
-                releasedWinner = Overlord.Zones:ReleasedWinnerFromMap(frontId, resetEpoch)
+                and Overlord.Zones.KeptConquestWinnerFromMap then
+                releasedWinner = Overlord.Zones:KeptConquestWinnerFromMap(frontId, resetEpoch)
             end
         end
         if (releasedWinner == "Alliance" or releasedWinner == "Horde")
             and not IsStaleCampaignTimestamp(releasedVictoryTs)
-            and Overlord.Zones:LocalStateShowsCapitalRelease(frontId, releasedWinner, resetEpoch) then
+            and Overlord.Zones:LocalStateShowsKeptConquest(frontId, releasedWinner, resetEpoch) then
             locallyDerivedReset = true
-            derivedWinner = releasedWinner
         end
     end
-    -- FR libere une capitale et pose sa protection : sans preuve locale derivable,
+    -- FR clot une treve et re-horodate la carte : sans preuve locale derivable,
     -- on ignore le paquet et on attend ZA/TV. Accumuler des votes inutilises consommait CPU/memoire et
     -- donnait l'impression qu'un quorum pouvait rendre ce reset fiable.
     if not locallyDerivedReset then
         -- FR en attente de preuve : la preuve (journal VB, carte) arrive souvent juste
         -- apres dans la meme reponse SR. Rejoue localement, jamais rediffuse, oublie
-        -- apres la duree de la protection. Une place par expediteur (son FR le plus
+        -- apres 6 h (l'espacement des victoires). Une place par expediteur (son FR le plus
         -- recent) et quatre par front (les plus recents) : un expediteur qui invente des
         -- FR ne peut pas evincer seul le vrai. Une epoque datee dans le futur (horloge en
         -- avance ou FR forge, avant le plafond de NormalizeRemoteTimestamp) n'est jamais
         -- gardee.
         local rawEpoch = math.floor(tonumber(epochStr) or 0)
-        -- Front sans protection de capitale (Hillsbrad) : rien a rattraper, la carte
-        -- converge deja par ZA.
-        local pendingFront = Overlord.Fronts:GetFront(frontId)
-        if sourceChannel ~= "RETRY" and rawEpoch <= frNow + 5
-            and not (pendingFront and pendingFront.noCapitalProtection) then
+        if sourceChannel ~= "RETRY" and rawEpoch <= frNow + 5 then
             local slots = priv.pendingTruceRelease[frontId] or {}
             local senderKey = tostring(sender or ""):lower()
             local known, own = false, nil
@@ -10650,8 +10832,7 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
     priv.pendingTruceRelease[frontId] = nil
     NoteHeardTruceRelease(frontId, resetEpoch)
     if Overlord.Zones and Overlord.Zones.ApplyFrontTruceEndReset then
-        Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, true,
-            derivedWinner or victoryFaction)
+        Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, true)
     end
 end
 

@@ -30,7 +30,7 @@ local function advance(seconds)
 end
 local function suffix(i)
     return string.char(65 + math.floor(i / 676) % 26,
-        65 + math.floor(i / 26) % 26, 65 + i % 26)
+        97 + math.floor(i / 26) % 26, 97 + i % 26)
 end
 for i = 1, 4000 do
     local name = "Base " .. suffix(i)

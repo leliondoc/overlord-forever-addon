@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.6.3"
+Overlord.Version = "1.7.0"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncBetaNetwork.lua).
 Overlord.BetaNetworkEnabled = true
 Overlord.IsInitialized = false
@@ -2764,6 +2764,8 @@ function Overlord:Initialize()
     -- 1.6.1 : Layer Jumper retire. Saut en cours et choix « Aider les autres » oublies.
     OverlordDB.layerJumperHop = nil
     if type(OverlordDB.config) == "table" then OverlordDB.config.layerHelpMode = nil end
+    -- 1.7.0 : plus de protection de capitale (la conquete reste jusqu a la reprise).
+    OverlordDB.frontCapitalImmuneFrom = nil
     -- 1.2.4 : contrats en or et War Mode n'existent pas sur Forever (code retire).
     OverlordDB.manualBountyContracts, OverlordDB.manualBountySettlementLedger = nil, nil
     OverlordDB.config.worldDefenseEnabled = nil
@@ -3440,7 +3442,7 @@ end
 -- saved tables describe one world: front zones, front victories and truces,
 -- outposts and fortresses (states, tenants, capture counts).
 local RULESET_WORLD_KEYS = {
-    "zones", "frontVictories", "frontTruceResetEpoch", "frontCapitalImmuneFrom",
+    "zones", "frontVictories", "frontTruceResetEpoch",
     "outposts", "outpostTenants", "outpostCaptureCounts",
 }
 -- Legacy single-victory fields still written and read as a fallback.
@@ -3560,7 +3562,7 @@ function Overlord:RecoverParkedOutpostHistory(currentPool)
     -- it may hold the PvP fronts. Before 1.4.0 only the PvP world existed, so
     -- every other world's map, victories and truces restart from the initial state.
     local function resetMap(t)
-        for _, key in ipairs({ "zones", "frontVictories", "frontTruceResetEpoch", "frontCapitalImmuneFrom" }) do
+        for _, key in ipairs({ "zones", "frontVictories", "frontTruceResetEpoch" }) do
             t[key] = {}
         end
         for _, key in ipairs(RULESET_WORLD_SCALARS) do t[key] = nil end
@@ -4070,13 +4072,19 @@ function Overlord:RestoreZoneState()
     if self.PlayerFaction then
         -- IsOnVictoryCooldown lu une seule fois pour les deux sanity checks ci-dessous
         local vcOnCd, _, vcWinFac = Overlord.Zones:IsOnVictoryCooldown()
+        -- 1.7.0 : une capitale gardee apres une fin de treve (tampon epoch + 1) est legitime.
+        local activeFrontId = Overlord.Fronts and Overlord.Fronts.activeFrontId
+        local function keptCapital(zone)
+            return activeFrontId and Overlord.Zones.IsKeptCapitalStamp
+                and Overlord.Zones:IsKeptCapitalStamp(activeFrontId, zone) or false
+        end
 
         -- Sanity check : si la capitale ennemie est marquee comme appartenant a notre faction
         -- sans victoire active de notre cote, la donnee est probablement corrompue.
         local enemyBaseId = Overlord.Fronts and Overlord.Fronts:GetEnemyCapitalId(self.PlayerFaction)
         local enemyBase = Overlord.Zones:GetZone(enemyBaseId)
         if enemyBase and enemyBase.owner == self.PlayerFaction then
-            local legitimateVictory = vcOnCd and vcWinFac == self.PlayerFaction
+            local legitimateVictory = (vcOnCd and vcWinFac == self.PlayerFaction) or keptCapital(enemyBase)
             if not legitimateVictory then
                 -- Donnee suspecte : on garde owner/capturedTime pour l'affichage initial
                 -- mais updatedAt = 0 garantit que la sync ecrase au premier message recu
@@ -4092,7 +4100,7 @@ function Overlord:RestoreZoneState()
         local ownFixedOwner = self.PlayerFaction
         local ownBase = Overlord.Zones:GetZone(ownBaseId)
         if ownBase and ownBase.owner and ownBase.owner ~= ownFixedOwner then
-            local enemyJustWon = vcOnCd and vcWinFac ~= self.PlayerFaction
+            local enemyJustWon = (vcOnCd and vcWinFac ~= self.PlayerFaction) or keptCapital(ownBase)
             if not enemyJustWon then
                 -- Notre base est marquee ennemie sans victoire recente de l'adversaire :
                 -- donnee stale. updatedAt = 0 laisse la sync corriger l'etat reel.

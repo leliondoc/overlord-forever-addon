@@ -123,12 +123,12 @@ assert(a.hrSent == 2 and result() == true,
 assert(a.Overlord.Sync._leaderboardPageStats.retries == 1,
     "Lost HR retry was not recorded")
 
--- A busy responder (combat, instance, serving someone else) answers "busy" at
--- once instead of staying silent: the pull ends as supported-but-busy within
--- seconds, and the scheduler asks again shortly (never the 270-second timeout).
+-- A busy responder (instance, serving someone else) answers "busy" at once instead
+-- of staying silent: the pull ends as supported-but-busy within seconds, and the
+-- scheduler asks again shortly (never the 270-second timeout).
 a, b = pair()
-b.busy = true
-later(20, function() b.busy = false end)
+b.Overlord.InstanceSuspended = true
+later(20, function() b.Overlord.InstanceSuspended = false end)
 result = start(a, b)
 advance(5)
 local busyDone, busySupported = result()
@@ -138,6 +138,18 @@ advance(20) -- the scheduler retries 12 then 30 seconds later
 result = start(a, b)
 advance(170)
 assert(result() == true, "The retry after a busy answer did not complete")
+
+-- 1.7: a responder that is only fighting answers "busy: combat" at once and the
+-- requester waits for it (same peer, same place) instead of ending its pull.
+a, b = pair()
+b.busy = true
+later(20, function() b.busy = false end)
+result = start(a, b)
+advance(5)
+assert(result() == nil and (a.Overlord.Sync._leaderboardPageStats.combatWaits or 0) >= 1,
+    "A responder in combat ended the pull instead of being waited for")
+advance(170)
+assert(result() == true, "The pull did not complete after the responder's fight")
 
 a, b = pair()
 a.dropAllHR = true
@@ -236,4 +248,38 @@ do
     advance(300)
     assert(held() == false, "the preempted holder never ended")
 end
-print("v6 silent first HR, busy peer answers busy, bounded deadline, early reply, combat pause, stale session released, fair share OK")
+-- Fair share while the responder fights: the running session is not cut (its built
+-- pages go on in combat); the other-faction requester waits and takes over after.
+do
+    local holder, other, responder = client("Holder Two"), client("Third Asker"), client("Fighting Responder")
+    local byName = { [holder.name] = holder, [other.name] = other, [responder.name] = responder }
+    responder.Overlord.PlayerFaction = "Horde"
+    responder.Overlord.Sync.GetBetaPeerFaction = function(_, name)
+        return name == other.name and "Alliance" or "Horde"
+    end
+    for _, source in ipairs({ holder, other, responder }) do
+        source.Overlord.Sync.SendWhisper = function(_, kind, payload, target)
+            local destination = assert(byName[target])
+            if source == responder and target == holder.name then return true end -- lost
+            later(0.01, function()
+                destination.Overlord.Sync:OnPagedLeaderboardMessage(kind, payload, source.name, "WHISPER")
+            end)
+            return true
+        end
+    end
+    start(holder, responder)
+    advance(140) -- the holder's session is older than two minutes
+    responder.busy = true
+    local asked = start(other, responder)
+    advance(10)
+    assert((responder.Overlord.Sync._leaderboardPageStats.preempted or 0) == 0,
+        "a session was cut while the responder was fighting")
+    assert(asked() == nil and (other.Overlord.Sync._leaderboardPageStats.combatWaits or 0) >= 1,
+        "the other-faction requester did not wait for the end of the fight")
+    advance(20)
+    responder.busy = false
+    advance(120)
+    assert(asked() == true, "the waiting requester never took over after the fight")
+    assert((responder.Overlord.Sync._leaderboardPageStats.preempted or 0) == 1, "takeover after the fight not counted")
+end
+print("v6 silent first HR, busy peer answers busy, bounded deadline, early reply, combat pause, stale session released, fair share (also in combat) OK")

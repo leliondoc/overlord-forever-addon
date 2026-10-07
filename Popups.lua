@@ -1359,7 +1359,7 @@ local function GetFrontActivityAgeColor(active, ageSeconds)
     return 0.82, 0.82, 0.82
 end
 
--- Taille du combat par tranches : 5+, 10+, 20+, 30+... (sous 5 kills, la recence).
+-- Taille du combat par tranches : 5+, 10+, 20+, 30+... (sous 5 kills, "1+ kill").
 local FRONT_FIGHT_BRACKETS = { 500, 300, 200, 150, 100, 75, 50, 40, 30, 20, 10, 5 }
 local function GetFrontFightBracket(kills)
     kills = tonumber(kills) or 0
@@ -1369,11 +1369,34 @@ local function GetFrontFightBracket(kills)
     return nil
 end
 
-local function FormatFrontActivityAge(active, ageSeconds, kills)
+-- Zones prises en 5 min : 1+, 5+, 10+ (meme principe que les kills). Memes seuils que le
+-- tri des lignes (FrontActivity.GetCaptureBracket).
+local function GetFrontCaptureBracket(captures)
+    local fa = Overlord.FrontActivity
+    local bracket = fa and fa.GetCaptureBracket and fa.GetCaptureBracket(captures)
+    if bracket == nil then
+        captures = tonumber(captures) or 0
+        bracket = captures >= 10 and 10 or captures >= 5 and 5 or captures >= 1 and 1 or 0
+    end
+    return bracket > 0 and bracket or nil
+end
+
+-- Kills d'abord (palier partage, "1+ kill" sous 5), sinon les captures de la carte.
+-- L'age ne sert plus que sans relais, pour une ligne sans kill ni capture.
+local function FormatFrontActivityAge(active, ageSeconds, kills, captures)
     if not active then return L.FEATURED_FRONT_ACTIVITY_DASH or "..." end
     local bracket = GetFrontFightBracket(kills)
     if bracket then
         return string.format(L.FEATURED_FRONT_ACTIVITY_KILLS or "%d+ kills", bracket)
+    end
+    if (tonumber(kills) or 0) >= 1 then
+        return L.FEATURED_FRONT_ACTIVITY_KILL_ONE or "1+ kill"
+    end
+    local captureBracket = GetFrontCaptureBracket(captures)
+    if captureBracket == 1 then
+        return L.FEATURED_FRONT_ACTIVITY_CAPTURE_ONE or "1+ capture"
+    elseif captureBracket then
+        return string.format(L.FEATURED_FRONT_ACTIVITY_CAPTURES or "%d+ captures", captureBracket)
     end
     ageSeconds = math.max(0, tonumber(ageSeconds) or 0)
     if ageSeconds < 60 then
@@ -1382,6 +1405,8 @@ local function FormatFrontActivityAge(active, ageSeconds, kills)
     local minutes = math.min(5, math.floor(ageSeconds / 60))
     return string.format(L.FEATURED_FRONT_ACTIVITY_MIN_AGO or "%d min ago", minutes)
 end
+-- Tests: the exact text of an activity row.
+Overlord.Popups.FormatFrontActivityText = FormatFrontActivityAge
 
 -- Ligne activite : colonne etoile fixe + icone front + nom + recence, alignes a gauche.
 local function LayoutFeaturedFrontActivityRowIcons(row, isFeatured)
@@ -1434,10 +1459,10 @@ local function CreateFeaturedFrontActivityRow(parent)
     return row
 end
 
-local function SetFeaturedFrontActivityRow(row, frontId, label, active, ageSeconds, isFeatured, kills)
+local function SetFeaturedFrontActivityRow(row, frontId, label, active, ageSeconds, isFeatured, kills, captures)
     if not row then return end
     row:Show()
-    local ageText = FormatFrontActivityAge(active, ageSeconds, kills)
+    local ageText = FormatFrontActivityAge(active, ageSeconds, kills, captures)
     local cacheKey = (frontId or "") .. "\31" .. (label or "") .. "\31" .. ageText
         .. "\31" .. (isFeatured and "1" or "0")
     if row._activityKey == cacheKey then return end
@@ -1464,6 +1489,10 @@ local function SetFeaturedFrontActivityRow(row, frontId, label, active, ageSecon
 
     local br, bg, bb = GetFrontActivityAgeColor(active, ageSeconds)
     local bracket = active and GetFrontFightBracket(kills)
+    if active and not bracket and ((tonumber(kills) or 0) > 0 or (tonumber(captures) or 0) > 0) then
+        -- 1+ kill ou captures : meme or que les petits combats.
+        br, bg, bb = 1, 0.82, 0.35
+    end
     if bracket then
         -- Plus le combat est gros, plus c'est rouge.
         if bracket >= 50 then br, bg, bb = 1, 0.25, 0.25
@@ -1479,6 +1508,13 @@ local function SetFeaturedFrontActivityRow(row, frontId, label, active, ageSecon
         row.valueFs:SetTextColor(br, bg, bb)
         row.frontIcon:SetAlpha(0.72)
     end
+    -- Longer translations ("10+ Eroberungen") widen the column a little instead of
+    -- being cut; the front name gives the room.
+    -- Measured unconstrained: a width-capped FontString may report the cut width.
+    local measure = row.valueFs.GetUnboundedStringWidth or row.valueFs.GetStringWidth
+    if not row.valueFs.GetUnboundedStringWidth then row.valueFs:SetWidth(0) end
+    local textWidth = measure and tonumber(measure(row.valueFs)) or 0
+    row.valueFs:SetWidth(math.min(120, math.max(92, math.ceil(textWidth) + 2)))
     if isFeatured then
         row.nameFs:SetText("|cFFFFD100" .. label .. "|r")
     elseif active then
@@ -1489,6 +1525,8 @@ local function SetFeaturedFrontActivityRow(row, frontId, label, active, ageSecon
         row.nameFs:SetTextColor(0.58, 0.58, 0.58)
     end
 end
+-- Tests: paint one activity row (text, colour, value column width).
+Overlord.Popups.SetFeaturedFrontActivityRowForTest = SetFeaturedFrontActivityRow
 
 local function HideFeaturedFrontActivityRows(f)
     if not f or not f.activityRows then return end
@@ -1802,7 +1840,8 @@ ApplyFeaturedFrontActivity = function(f)
                 data.active,
                 data.ageSeconds,
                 featuredId and data.frontId == featuredId,
-                data.kills
+                data.kills,
+                data.captures
             )
             visibleRows = visibleRows + 1
         end

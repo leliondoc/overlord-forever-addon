@@ -108,24 +108,65 @@ know("Absent Player", 100, "Horde")
 ownK("Absent Player", 5000, "Horde")
 assert(Overlord.Leaderboard.kills["Absent Player"] == 5000, "honest catch-up after a day away was clamped")
 -- Right after a /reload (PLAYER_LOGOUT rewrote lastSessionTimestamp), a saved row
--- hours behind still catches up at once, up to the first-contact cap.
+-- hours behind: a third party's live copy climbs one fixed window (600 s + allowance
+-- + slack), never to the first-contact cap (1.7.0: one forged line reached thousands
+-- of kills that way); the catch-up pages bring the rest.
 OverlordDB.lastSessionTimestamp = time() - 5
 do
-    local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
-    local cap = 300 + math.floor(math.max(0, time() - start) * 0.03)
     know("Stale Player", 100, "Horde")
     s:OnReceiveLeaderboardKills(lkRow("Stale Player", 3000, "Horde"), "Some Peer", "CHANNEL")
-    local want = math.min(3000, math.max(100 + 30 + 600 + 10, cap))
-    assert(Overlord.Leaderboard.kills["Stale Player"] == want,
-        "stale row after a reload not raised to the first-contact cap: " .. tostring(Overlord.Leaderboard.kills["Stale Player"]))
+    assert(Overlord.Leaderboard.kills["Stale Player"] == 100 + 30 + 600 + 10,
+        "a live copy of a stale row was not bounded by the fixed window: " .. tostring(Overlord.Leaderboard.kills["Stale Player"]))
+    -- The forged-line attack itself: a known enemy at 150, one channel line at 15000.
+    know("Real Horde", 150, "Horde")
+    s:OnReceiveLeaderboardKills(lkRow("Real Horde", 15000, "Horde"), "Forger Peer", "CHANNEL")
+    assert(Overlord.Leaderboard.kills["Real Horde"] <= 150 + 30 + 600 + 10,
+        "one forged live copy inflated a known enemy: " .. tostring(Overlord.Leaderboard.kills["Real Horde"]))
+    -- A bridge copy of an enemy whose class we lack never makes us ask for it (every
+    -- listener would ask at the same second); pages and the owner's K bring it.
+    do
+        local asked = 0
+        local realAsk = s.MaybeRequestMissingClass
+        s.MaybeRequestMissingClass = function() asked = asked + 1 end
+        know("Classless Horde", 200, "Horde")
+        Overlord.Leaderboard.playerInfo["Classless Horde"].class = ""
+        s:OnReceiveLeaderboardKills(lkRow("Classless Horde", 210, "Horde"), "Bridge Peer", "CHANNEL")
+        assert(Overlord.Leaderboard.kills["Classless Horde"] == 210, "fixture: the bridge copy was not admitted")
+        assert(asked == 0, "a bridge copy made the listener ask for the class")
+        s.MaybeRequestMissingClass = realAsk
+        -- Nor for the guild (the same herd: every listener asking in the same second).
+        local askedGuild = 0
+        local realAskGuild = s.MaybeRequestMissingGuild
+        s.MaybeRequestMissingGuild = function() askedGuild = askedGuild + 1 end
+        s:OnReceiveLeaderboardKills(lkRow("Classless Horde", 220, "Horde"), "Bridge Peer", "CHANNEL")
+        assert(Overlord.Leaderboard.kills["Classless Horde"] == 220, "fixture: the second bridge copy was not admitted")
+        assert(askedGuild == 0, "a bridge copy made the listener ask for the guild")
+        s.MaybeRequestMissingGuild = realAskGuild
+    end
+    -- A subject that already rose in this session, then stayed quiet for hours: a copy
+    -- still gets one fixed window, not the hours since its last rise.
+    know("Quiet Horde", 200, "Horde")
+    s:OnReceiveLeaderboardKills(lkRow("Quiet Horde", 210, "Horde"), "Bridge Peer", "CHANNEL")
+    assert(Overlord.Leaderboard.kills["Quiet Horde"] == 210, "fixture: the honest copy was not admitted")
+    advance(4 * 3600)
+    s:OnReceiveLeaderboardKills(lkRow("Quiet Horde", 14999, "Horde"), "Forger Peer", "CHANNEL")
+    assert(Overlord.Leaderboard.kills["Quiet Horde"] <= 210 + 600 + 30 + 10,
+        "a forged copy used the hours since the subject's last rise: " .. tostring(Overlord.Leaderboard.kills["Quiet Horde"]))
+    -- A subject known only by its captures (no kill row): same fixed window for a copy.
+    Overlord.Leaderboard.captureCount = Overlord.Leaderboard.captureCount or {}
+    Overlord.Leaderboard.captureCount["Capture Horde"] = 3
+    Overlord.Leaderboard.playerInfo["Capture Horde"] = { class = "WARRIOR", faction = "Horde", level = 60,
+        locale = "enus", guild = "", guildAt = 0 }
+    s:OnReceiveLeaderboardKills(lkRow("Capture Horde", 15000, "Horde"), "Forger Peer", "CHANNEL")
+    assert((Overlord.Leaderboard.kills["Capture Horde"] or 0) <= 30 + 600 + 10,
+        "one forged live copy inflated a capture-only enemy: " .. tostring(Overlord.Leaderboard.kills["Capture Horde"]))
     -- Peers keep re-broadcasting known rows: a first copy that only repeats the
     -- stale saved total must not start the clock and cancel the catch-up.
     know("Echoed Player", 1000, "Horde")
     s:OnReceiveLeaderboardKills(lkRow("Echoed Player", 1000, "Horde"), "Some Peer", "CHANNEL")
     advance(60)
     s:OnReceiveLeaderboardKills(lkRow("Echoed Player", 2500, "Horde"), "Some Peer", "CHANNEL")
-    local echoed = math.min(2500, math.max(1000 + 30 + 600 + 10, cap))
-    assert(Overlord.Leaderboard.kills["Echoed Player"] == echoed,
+    assert(Overlord.Leaderboard.kills["Echoed Player"] == 1000 + 30 + 600 + 10,
         "a repeated stale total froze the catch-up: " .. tostring(Overlord.Leaderboard.kills["Echoed Player"]))
 end
 OverlordDB.lastSessionTimestamp = nil
@@ -165,7 +206,7 @@ do
         "a name variant escaped the growth bound: " .. raw .. " / " .. known)
     -- Many subjects do not reset anyone's bound (LRU, never a full wipe).
     for i = 1, 4200 do
-        local name = "Crowd Member" .. string.char(65 + math.floor(i / 676) % 26, 65 + math.floor(i / 26) % 26, 65 + i % 26)
+        local name = "Crowd Member" .. string.char(97 + math.floor(i / 676) % 26, 97 + math.floor(i / 26) % 26, 97 + i % 26)
         know(name, 5, "Horde")
         s:OnReceiveLeaderboardKills(lkRow(name, 6, "Horde"), "Some Peer", "CHANNEL")
     end

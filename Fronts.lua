@@ -476,9 +476,6 @@ Overlord.Fronts.Registry = {
             "hügelland", "предгорья хилсбрада", "contrafortes de eira dos montes", "希尔斯布莱德" },
         allianceCapitalId = "hillsbrad_southshore",
         hordeCapitalId = "hillsbrad_tarren_mill",
-        -- Mode a part (deux villes, combat permanent) : apres la treve de 15 min, la
-        -- ville tombee revient a sa faction sans protection de capitale.
-        noCapitalProtection = true,
         panelHeads = {
             Alliance = "HUMAN_MALE", Horde = "UNDEAD_MALE",
             faceInward = true, hordeMirror = false,

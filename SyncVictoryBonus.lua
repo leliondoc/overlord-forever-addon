@@ -5,6 +5,19 @@ Overlord.Sync = Overlord.Sync or {}
 
 local VB_SECONDS_PER_WEEK = 7 * 24 * 60 * 60
 local VB_TRUCE_SECONDS = 15 * 60
+-- 1.7 (regle b) : une autre victoire sur un front ne compte que 6 h apres la precedente.
+-- La projection triee l'applique de facon deterministe : tous les clients qui ont les
+-- memes evenements retiennent les memes victoires, dans n'importe quel ordre d'arrivee.
+local VB_VICTORY_SPACING = 6 * 3600
+-- Regle 1.7.0 seulement pour les victoires a partir de sa sortie (2026-10-07 08:00 UTC),
+-- meme constante chez tous les clients : les victoires de la semaine enregistrees en 1.6.x
+-- (espacement de 15 min) gardent leur point au lieu d'etre recomptees au premier chargement.
+local VB_VICTORY_SPACING_SINCE = 1791360000
+local function VictorySpacingFor(victoryTs)
+    return (tonumber(victoryTs) or 0) >= VB_VICTORY_SPACING_SINCE and VB_VICTORY_SPACING or VB_TRUCE_SECONDS
+end
+Overlord.Sync._VictorySpacingFor = VictorySpacingFor -- tests
+Overlord.Sync._VictorySpacingSince = VB_VICTORY_SPACING_SINCE -- tests
 local VB_MAX_PAYLOAD = 220
 local VB_CHANNEL_REPLAY_BATCHES = 2
 local VB_DEDUP_WINDOW = 60
@@ -365,7 +378,7 @@ BeginVictoryProjection = function(store, state)
             while cursor <= #rawRows and work < budget and not Expired(startedAt) do
                 local ev = rawRows[cursor]
                 local current = latestByFront[ev.frontId]
-                if not current or ev.victoryTs >= current.victoryTs + VB_TRUCE_SECONDS then
+                if not current or ev.victoryTs >= current.victoryTs + VictorySpacingFor(ev.victoryTs) then
                     local projected = {
                         eventId = BuildVictoryEventId(ev.frontId, ev.victoryTs),
                         frontId = ev.frontId,
@@ -612,7 +625,7 @@ local function ApplyVictoryProjectionFast(store, ev, hadRawEvent)
     local current = store.latestByFront[ev.frontId]
     if current and ev.victoryTs < current.victoryTs then return nil, "pending" end
 
-    if not current or ev.victoryTs >= current.victoryTs + VB_TRUCE_SECONDS then
+    if not current or ev.victoryTs >= current.victoryTs + VictorySpacingFor(ev.victoryTs) then
         local projected = {
             eventId = BuildVictoryEventId(ev.frontId, ev.victoryTs),
             frontId = ev.frontId,
@@ -916,7 +929,7 @@ function Overlord:GetDominationVictoryEventNear(frontId, faction, victoryTs)
 end
 
 -- Derniere victoire projetee (dedupliquee) d'un front pour la campagne courante :
--- source repliquee de la protection des capitales, meme hors front et au login.
+-- source repliquee de l'espacement des victoires (regle b), meme hors front et au login.
 function Overlord:GetLatestDominationVictoryForFront(frontId)
     local store = EnsureVictoryEventsDB()
     local latest = store and type(store.latestByFront) == "table"

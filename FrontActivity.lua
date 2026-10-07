@@ -4,6 +4,9 @@
 -- le dernier evenement valide observe sur chaque front et le propage dans les reponses
 -- SR via un payload compact FA. La taille des combats (kills sur 5 min) est partagee par
 -- paliers (message FK, voir plus bas) pour que tous les joueurs voient le meme panneau.
+-- Relais actif (1.7.0) : une ligne n'est allumee que par ces paliers partages et par les
+-- captures lues sur la carte commune (GetRecentCaptureCount), jamais par un evenement
+-- que ce client serait seul a avoir recu.
 -- Les compteurs d'acteurs restent internes afin de ne pas casser l'annonce de faction
 -- historique, mais ils ne pilotent plus le panneau.
 --
@@ -823,7 +826,6 @@ MaybeScheduleReport = function(key, now)
     end)
 end
 
--- Kills affiches : le compte local, ou le plus haut palier frais annonce s'il est plus grand.
 -- Kills affiches. Relais actif : seulement les paliers partages (les memes chez tous ;
 -- notre compte local sert a annoncer). Sans relais : le compte local, comme avant.
 function FA:GetDisplayKillCount(key, now)
@@ -933,14 +935,38 @@ local function WorldRowBefore(a, b)
     return a.frontId < b.frontId
 end
 
+-- Captures shown by bracket (1+, 5+, 10+, like Popups): rows are ordered by the shown
+-- bracket, never the raw count, so one capture not yet synced cannot swap two rows.
+local function CaptureBracket(captures)
+    captures = tonumber(captures) or 0
+    if captures >= 10 then return 10 elseif captures >= 5 then return 5 end
+    return captures >= 1 and 1 or 0
+end
+FA.GetCaptureBracket = CaptureBracket
+
+-- Inactive rows follow the fronts' fixed order, never the translated name.
+local function FrontOrderIndex(frontId)
+    local order = Overlord.Fronts and Overlord.Fronts.Order
+    if order then
+        for i = 1, #order do
+            if order[i] == frontId then return i end
+        end
+    end
+    return 1000
+end
+
 local function ActivityRowBefore(a, b)
     if a.active ~= b.active then return a.active end
     if a.active then
         if a.bracket ~= b.bracket then return a.bracket > b.bracket end
+        local ca, cb = CaptureBracket(a.captures), CaptureBracket(b.captures)
+        if ca ~= cb then return ca > cb end
         -- Identifiant, pas le nom traduit : meme ordre quelle que soit la langue.
         return a.frontId < b.frontId
     end
-    return a.label < b.label
+    local ia, ib = FrontOrderIndex(a.frontId), FrontOrderIndex(b.frontId)
+    if ia ~= ib then return ia < ib end
+    return tostring(a.frontId) < tostring(b.frontId)
 end
 
 local function GetFrontActivityDisplayName(front)
@@ -948,7 +974,62 @@ local function GetFrontActivityDisplayName(front)
     return front.dropdownLabel or front.mapName or front.id or "?"
 end
 
--- Retourne tous les fronts. Les actifs sont tries par recence, puis les autres par nom.
+-- Zones of a front taken in the last 5 minutes, read from the shared map: the
+-- capture time is the capture's own server time, the same on every client once
+-- the map is synced. Shared stamps that are not captures (campaign start, a
+-- truce end: zones at its epoch, the kept capital one second later) never count.
+-- Each distinct capture time counts once:
+-- a front victory stamps every zone with its time, which is one capture (the
+-- capital), not "10+". Read from the map alone, so a client missing the victory
+-- record counts the same as the others.
+local seenCaptureTimes = {}
+function FA:GetRecentCaptureCount(frontId, now)
+    local front = Overlord.Fronts and Overlord.Fronts.GetFront and Overlord.Fronts:GetFront(frontId)
+    if not front or type(front.zones) ~= "table" then return 0 end
+    now = now or ActivityNow()
+    local campaignStart = math.floor(tonumber(Overlord.GetCurrentCampaignStartTs
+        and Overlord:GetCurrentCampaignStartTs()) or 0)
+    local releaseEpoch = OverlordDB and OverlordDB.frontTruceResetEpoch
+        and math.floor(tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0) or 0
+    local count = 0
+    wipe(seenCaptureTimes)
+    -- A truce end read from the map alone (kept capital one second after the other
+    -- zones), so a client that has the map but not yet the truce end counts alike.
+    -- A capital being retaken is judged on its stable base, like every zone below: the
+    -- capture in progress is not a capture yet, and its overlay keeps the base's stamp.
+    local zonesApi = Overlord.Zones
+    local function stable(zone)
+        if zone.status ~= "in_progress" then return zone end
+        return zonesApi and zonesApi.GetStableZoneView and zonesApi:GetStableZoneView(zone) or nil
+    end
+    if zonesApi and zonesApi.IsKeptCapitalStamp then
+        for _, capId in ipairs({ front.allianceCapitalId or false, front.hordeCapitalId or false }) do
+            local cap = capId and Overlord.Fronts.GetZone and select(1, Overlord.Fronts:GetZone(capId, frontId))
+            local sv = cap and stable(cap)
+            if sv and zonesApi:IsKeptCapitalStamp(frontId,
+                { id = cap.id, owner = sv.owner, capturedTime = sv.capturedTime }) then
+                local kept = math.floor(tonumber(sv.capturedTime) or 0)
+                seenCaptureTimes[kept], seenCaptureTimes[kept - 1] = true, true
+            end
+        end
+    end
+    for _, live in ipairs(front.zones) do
+        local zone = stable(live)
+        local ct = zone and math.floor(tonumber(zone.capturedTime) or 0) or 0
+        if zone and zone.owner and not live._captureFinalUnattested and ct > 0
+            and now - ct <= ACTIVITY_WINDOW and ct <= now + MAX_FUTURE_SKEW
+            and ct ~= campaignStart and ct ~= releaseEpoch and ct ~= releaseEpoch + 1
+            and not seenCaptureTimes[ct] then
+            seenCaptureTimes[ct] = true
+            count = count + 1
+        end
+    end
+    wipe(seenCaptureTimes)
+    return count
+end
+
+-- Retourne tous les fronts. Les actifs d'abord (palier de kills, palier de captures,
+-- puis identifiant du front), puis les autres dans l'ordre fixe des fronts.
 function FA:GetActivityRows()
     local rows = {}
     local fronts = Overlord.Fronts
@@ -966,13 +1047,20 @@ function FA:GetActivityRows()
             if reportAt and (not lastActivityAt or reportAt > lastActivityAt) then lastActivityAt = reportAt end
             local ageSeconds = lastActivityAt and math.max(0, now - lastActivityAt) or nil
             local active = ageSeconds ~= nil and ageSeconds <= ACTIVITY_WINDOW
+            local kills = self:GetDisplayKillCount(frontId, now)
+            local captures = self:GetRecentCaptureCount(frontId, now)
+            -- Relay on: a row shows only shared state (kill brackets, captures on the
+            -- map), so it is active exactly when one of them is, for everyone alike.
+            if sharing then active = kills > 0 or captures > 0
+            elseif captures > 0 then active = true end
             rows[#rows + 1] = {
                 frontId = frontId,
                 label = GetFrontActivityDisplayName(front),
                 lastActivityAt = active and lastActivityAt or nil,
                 ageSeconds = active and ageSeconds or nil,
                 active = active,
-                kills = active and self:GetDisplayKillCount(frontId, now) or 0,
+                kills = active and kills or 0,
+                captures = active and captures or 0,
             }
         end
     end
@@ -1004,7 +1092,7 @@ function FA:GetActivityRows()
     table.sort(world, WorldRowBefore)
     for i = 1, math.min(WORLD_ROWS_MAX, #world) do rows[#rows + 1] = world[i] end
     -- Fronts actifs d'abord, les plus gros combats en tete (palier affiche, le meme chez
-    -- tous grace aux annonces FK), puis par nom : l'ordre ne depend pas de l'heure locale.
+    -- tous grace aux annonces FK), puis l'ordre fixe des fronts : ni l'heure locale ni la langue.
     for _, row in ipairs(rows) do row.bracket = row.bracket or ReportBracket(row.frontId, row.kills) end
     table.sort(rows, ActivityRowBefore)
     return rows

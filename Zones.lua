@@ -85,11 +85,15 @@ end
 -- Capitales ennemies : timer fixe (8 min) + treve post-victoire.
 local CAPITAL_HOLD_TIME = 480
 local CAPITAL_VICTORY_COOLDOWN = 900 -- 15 min (anti chain-cap ; etait 30 min)
--- Fin de treve : la conquete reste, seule la capitale du perdant se releve et ne peut
--- pas etre reprise par le vainqueur pendant cette duree (le perdant peut tout reprendre).
-local CAPITAL_RELEASE_IMMUNITY = 6 * 3600
--- Fenetre de tolerance (horloges) pour reconnaitre une liberation deja appliquee.
-local CAPITAL_RELEASE_STAMP_SLACK = 5
+-- 1.7 : une nouvelle victoire sur un meme front ne compte que 6 h apres la precedente
+-- (la capitale peut etre reprise entre-temps : le combat continue, sans bonus ni treve).
+local VICTORY_SPACING = 6 * 3600
+-- Fin de treve : la capitale tombee reste au vainqueur, re-horodatee une seconde apres
+-- l'epoch. Plus recente que l'etat d'un client 1.6.x (capitale rendue a l'epoch), elle
+-- l'emporte partout ; et l'ecart d'une seconde avec les autres zones (epoch) la signe.
+local CAPITAL_KEPT_STAMP_OFFSET = 1
+-- Fenetre de tolerance (horloges) pour reconnaitre une fin de treve deja appliquee.
+local CAPITAL_STAMP_SLACK = 5
 if Overlord.Fronts then
     Overlord.Fronts:Activate(Overlord.Fronts.activeFrontId)
 end
@@ -439,7 +443,12 @@ function Overlord.Zones:RestoreInProgressAfterOffline(zone, savedData, playerFac
                 zone.status = "captured"
                 zone.previousOwner = nil
                 zone.holdTimeRequired = 120
-                zone.capturedTime = Overlord.ServerNow and Overlord.ServerNow() or time()
+                -- The hold was already complete at logout (online, the client would
+                -- have finalized it): date it from the logout, in server time, not from
+                -- this login. A login stamp looked like a fresh capture in Recent
+                -- activity and went out as such in this client's ZA.
+                local serverNow = Overlord.ServerNow and Overlord.ServerNow() or time()
+                zone.capturedTime = math.max(1, math.floor(serverNow - offlineSec))
                 zone.updatedAt = 0
                 promotedOfflineEnemyCapture = true
             end
@@ -827,7 +836,7 @@ function Overlord.Zones:ClearFrontVictories()
     OverlordDB.lastVictoryFaction = nil
     OverlordDB.lastVictoryFrontId = nil
     OverlordDB.frontTruceResetEpoch = {}
-    OverlordDB.frontCapitalImmuneFrom = {}
+    OverlordDB.frontCapitalImmuneFrom = nil -- 1.7: no capital protection any more
     if Overlord.Sync and Overlord.Sync.ClearTruceReleaseState then
         Overlord.Sync:ClearTruceReleaseState()
     end
@@ -915,7 +924,7 @@ function Overlord.Zones:IsOnVictoryCooldown(frontId, forDisplay)
     if lastReset > 0 and victoryTimestamp < lastReset then
         return false, 0, nil, victoryFrontId
     end
-    -- Horloge serveur, comme la liberation et la protection.
+    -- Horloge serveur : un PC en avance ne termine pas la treve trop tot.
     local elapsed = ((Overlord.ServerNow and Overlord.ServerNow()) or time()) - victoryTimestamp
     local remaining = CAPITAL_VICTORY_COOLDOWN - elapsed
     if remaining > 0 and winningFaction then
@@ -981,7 +990,7 @@ function Overlord.Zones:RefreshInactiveFrontAvailability(frontId)
     end
 end
 
-local function ImmunityNow()
+local function NowServer()
     return (Overlord.ServerNow and Overlord.ServerNow()) or time()
 end
 
@@ -990,55 +999,47 @@ local function CurrentCampaignStartTs()
         or (OverlordDB and tonumber(OverlordDB.lastResetTimestamp)) or 0
 end
 
-function Overlord.Zones:GetCapitalImmunitySeconds()
-    return CAPITAL_RELEASE_IMMUNITY
+-- Socle stable d'une zone : elle-meme, ou l'etat confirme sous une capture en cours
+-- (bail local ou distant). nil si aucun socle fiable n'existe.
+local function StableZoneView(zone)
+    if not zone or zone.status ~= "in_progress" then return zone end
+    local base = zone._localCaptureBase
+    if not base and Overlord.CaptureLease and Overlord.CaptureLease.GetPersistableView then
+        base = Overlord.CaptureLease:GetPersistableView(zone)
+    end
+    if type(base) ~= "table" or base == zone or base.status == "in_progress" then return nil end
+    return base
 end
+function Overlord.Zones:GetStableZoneView(zone) return StableZoneView(zone) end
 
--- Fin de treve : la conquete reste au vainqueur, seule la capitale prise revient a
--- sa faction. ZA transporte capturedTime : une zone conservee sous l'epoch ferait
--- refuser le lot entier par chaque pair qui porte le tombstone, d'ou le re-horodatage.
-function Overlord.Zones:ReleaseFrontCapitals(frontId, epoch)
+-- Fin de treve (1.7) : rien ne revient. La capitale tombee reste au vainqueur jusqu'a ce
+-- que sa faction la reprenne. ZA transporte capturedTime : une zone gardee sous l'epoch
+-- ferait refuser le lot entier par chaque pair qui porte le tombstone, d'ou le
+-- re-horodatage (epoch, et une seconde de plus pour la capitale tombee).
+function Overlord.Zones:KeepFrontConquestAtTruceEnd(frontId, epoch)
     local front = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
     epoch = tonumber(epoch) or 0
     if not front or not front.zones or epoch <= 0 then return false end
 
-    local pf = Overlord.PlayerFaction
     for _, zone in ipairs(front.zones) do
         zone.killsCurrent = 0
         zone.allyKillsCurrent = 0
         zone.enemyKillsCurrent = 0
-        local fixedOwner = self:GetBaseZoneFixedOwner(zone.id)
-        if fixedOwner and (zone.owner ~= fixedOwner or zone.status == "in_progress") then
-            if Overlord.CaptureLease and Overlord.CaptureLease.Complete then
-                Overlord.CaptureLease:Complete(zone)
+        -- Une capture deja lancee a l'epoch (les defenceurs reprennent leur capitale)
+        -- re-horodate son socle : si elle echoue, la zone revient au meme etat que
+        -- chez les clients passes avant elle.
+        local target = StableZoneView(zone)
+        if target and target.owner then
+            local fixedOwner = self:GetBaseZoneFixedOwner(zone.id)
+            local floorTs = epoch
+            if fixedOwner and target.owner ~= fixedOwner then
+                floorTs = epoch + CAPITAL_KEPT_STAMP_OFFSET
             end
-            self:ClearCaptureFinalUnattestedState(zone)
-            zone.holdTimeElapsed = 0
-            zone.isHolding = false
-            zone.holdAuthorityLocal = nil
-            zone.isContested = false
-            zone.isPaused = false
-            zone.holdStartTime = nil
-            zone.previousOwner = nil
-            zone.zsOfficialCapturerName = nil
-            zone._zsOfficialCapturerSeenAt = nil
-            zone.zsRelayCapturerName = nil
-            zone.zsRelayCapturerShard = nil
-            zone.lastZSSender = nil
-            zone._syncGateRemoteProgress = nil
-            zone._syncGateRemoteProgressUntil = nil
-            zone._localCaptureBase = nil
-            zone.holdTimeRequired = 120
-            zone.owner = fixedOwner
-            zone.status = fixedOwner == pf and "captured" or "locked"
-            zone.capturedTime = epoch
-            zone.updatedAt = epoch
-        elseif zone.owner and zone.status ~= "in_progress" then
             -- Jamais d'horloge reculee : une zone reprise apres l'epoch garde la sienne.
-            zone.capturedTime = math.max(tonumber(zone.capturedTime) or 0, epoch)
-            zone.updatedAt = math.max(tonumber(zone.updatedAt) or 0, zone.capturedTime)
-        elseif not zone.owner and zone.status ~= "in_progress" then
-            zone.updatedAt = math.max(tonumber(zone.updatedAt) or 0, epoch)
+            target.capturedTime = math.max(tonumber(target.capturedTime) or 0, floorTs)
+            target.updatedAt = math.max(tonumber(target.updatedAt) or 0, target.capturedTime)
+        elseif target then
+            target.updatedAt = math.max(tonumber(target.updatedAt) or 0, epoch)
         end
     end
 
@@ -1053,36 +1054,60 @@ function Overlord.Zones:ReleaseFrontCapitals(frontId, epoch)
     return true
 end
 
-local function OtherFaction(faction)
-    if faction == "Alliance" then return "Horde" end
-    if faction == "Horde" then return "Alliance" end
-    return nil
-end
-
--- Protection de la capitale liberee (faction perdante) : ecrite seulement par une fin
--- de treve validee localement (jamais deduite d'une horloge de capitale qu'un C deplace).
--- Valeur : { from = epoch, faction = faction protegee }.
-local function SetFrontCapitalImmunity(frontId, epoch, protectedFaction)
-    if not OverlordDB or not frontId or not epoch or epoch <= 0 then return end
-    if protectedFaction ~= "Alliance" and protectedFaction ~= "Horde" then return end
-    OverlordDB.frontCapitalImmuneFrom = OverlordDB.frontCapitalImmuneFrom or {}
-    local prev = OverlordDB.frontCapitalImmuneFrom[frontId]
-    local prevFrom = type(prev) == "table" and tonumber(prev.from) or 0
-    if epoch > prevFrom then
-        OverlordDB.frontCapitalImmuneFrom[frontId] = { from = epoch, faction = protectedFaction }
+-- Derniere victoire connue sur ce front (horloge serveur) : treve en cours, fin de treve
+-- appliquee (epoch - 15 min) ou journal de domination (replique a tous, meme hors front).
+function Overlord.Zones:GetPreviousFrontVictoryTs(frontId)
+    if not frontId then return 0 end
+    local latest = 0
+    local victory = OverlordDB and OverlordDB.frontVictories and OverlordDB.frontVictories[frontId]
+    if type(victory) == "table" then
+        latest = math.max(latest, math.floor(tonumber(victory.timestamp) or 0))
     end
+    local resetEpoch = OverlordDB and OverlordDB.frontTruceResetEpoch
+        and math.floor(tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0) or 0
+    if resetEpoch > 0 then latest = math.max(latest, resetEpoch - CAPITAL_VICTORY_COOLDOWN) end
+    if Overlord.GetLatestDominationVictoryForFront then
+        local journalTs = Overlord:GetLatestDominationVictoryForFront(frontId)
+        latest = math.max(latest, math.floor(tonumber(journalTs) or 0))
+    end
+    -- Une victoire de la campagne precedente ne retient rien apres le reset hebdo.
+    local campaignStart = CurrentCampaignStartTs()
+    if campaignStart > 0 and latest < campaignStart then return 0 end
+    return latest
 end
 
--- Une zone conquise (hors capitales) encore au vainqueur porte l'epoch de la liberation.
--- Les deux capitales sont natives a cet epoch apres une liberation : seules les zones
--- conquises disent qui a gagne.
-local function FrontKeepsConquestAtEpoch(frontId, winningFaction, epoch)
+-- Regle (b) : la meme victoire (a quelques secondes pres) reste valide ; une autre sur ce
+-- front ne compte que 6 h apres la precedente. Retourne ok et l'heure a partir de laquelle
+-- une victoire comptera. Meme decision partout : capteur, TV, VB et carte.
+function Overlord.Zones:IsFrontVictoryAllowed(frontId, victoryTs)
+    victoryTs = math.floor(tonumber(victoryTs) or 0)
+    local previous = self:GetPreviousFrontVictoryTs(frontId)
+    if previous <= 0 or victoryTs <= 0 then return true, 0 end
+    if math.abs(victoryTs - previous) <= CAPITAL_STAMP_SLACK then return true, 0 end
+    local allowedFrom = previous + VICTORY_SPACING
+    return victoryTs >= allowedFrom, allowedFrom
+end
+
+function Overlord.Zones:GetVictorySpacingSeconds()
+    return VICTORY_SPACING
+end
+
+local function FrontZoneView(zone, frontId)
+    return (Overlord.Fronts and select(1, Overlord.Fronts:GetZone(zone.id, frontId))) or zone
+end
+
+-- Capitale gardee a une fin de treve, jamais une capture fraiche : elle porte une seconde
+-- de plus qu'une autre zone du front tenue par le meme camp (toutes a l'epoch). Une vraie
+-- prise de capitale suit d'au moins 8 min la derniere zone conquise.
+function Overlord.Zones:IsKeptCapitalStamp(frontId, capital)
+    local ct = math.floor(tonumber(capital and capital.capturedTime) or 0)
+    if ct <= 0 or not capital.owner then return false end
     local front = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
-    if not front then return false end
-    for _, z in ipairs(front.zones or {}) do
-        if z.id ~= front.allianceCapitalId and z.id ~= front.hordeCapitalId then
-            if z.owner == winningFaction and z.status ~= "in_progress"
-                and math.abs((tonumber(z.capturedTime) or 0) - epoch) <= CAPITAL_RELEASE_STAMP_SLACK then
+    for _, z in ipairs((front and front.zones) or {}) do
+        if z.id ~= capital.id then
+            local zd = FrontZoneView(z, frontId)
+            if zd.owner == capital.owner and zd.status ~= "in_progress"
+                and math.floor(tonumber(zd.capturedTime) or 0) == ct - CAPITAL_KEPT_STAMP_OFFSET then
                 return true
             end
         end
@@ -1090,22 +1115,23 @@ local function FrontKeepsConquestAtEpoch(frontId, winningFaction, epoch)
     return false
 end
 
--- Une victoire du journal ne protege que si la carte locale porte deja sa liberation :
--- capitale du perdant revenue a l'epoch exact ET une zone conquise du vainqueur
--- restampee a ce meme epoch. Un VB seul (forge, ou victoire d'un ancien client) ne
--- verrouille rien.
-function Overlord.Zones:LocalStateCorroboratesJournalRelease(frontId, winningFaction, epoch)
-    if not self:LocalStateShowsCapitalRelease(frontId, winningFaction, epoch) then return false end
-    return FrontKeepsConquestAtEpoch(frontId, winningFaction, epoch)
+-- Fin de treve deja recue par ZA avant FR (ou vue au login) : la capitale du perdant est
+-- restee au vainqueur, re-horodatee une seconde apres l'epoch.
+function Overlord.Zones:LocalStateShowsKeptConquest(frontId, winningFaction, resetEpoch)
+    if not frontId or not winningFaction or not resetEpoch or not Overlord.Fronts then return false end
+    local capId = Overlord.Fronts:GetEnemyCapitalId(winningFaction, frontId)
+    local cap = capId and select(1, Overlord.Fronts:GetZone(capId, frontId))
+    if not cap or cap.status == "in_progress" or cap.owner ~= winningFaction then return false end
+    return math.abs((tonumber(cap.capturedTime) or 0) - (resetEpoch + CAPITAL_KEPT_STAMP_OFFSET))
+        <= CAPITAL_STAMP_SLACK
 end
 
--- Vainqueur d'une liberation lu sur la carte seule (retardataire sans victoire connue) :
--- nil si les deux factions correspondent (jamais deviner la capitale a proteger).
-local RELEASE_FACTIONS = { "Alliance", "Horde" }
-function Overlord.Zones:ReleasedWinnerFromMap(frontId, epoch)
+-- Vainqueur d'une fin de treve lu sur la carte seule (retardataire sans victoire connue) :
+-- nil si les deux camps correspondent.
+function Overlord.Zones:KeptConquestWinnerFromMap(frontId, epoch)
     local winner
-    for _, faction in ipairs(RELEASE_FACTIONS) do
-        if self:LocalStateCorroboratesJournalRelease(frontId, faction, epoch) then
+    for _, faction in ipairs({ "Alliance", "Horde" }) do
+        if self:LocalStateShowsKeptConquest(frontId, faction, epoch) then
             if winner then return nil end
             winner = faction
         end
@@ -1113,101 +1139,8 @@ function Overlord.Zones:ReleasedWinnerFromMap(frontId, epoch)
     return winner
 end
 
--- Retourne : immune, remaining, untilTs, protectedFaction. Seule la capitale de la
--- faction protegee (le perdant) est imprenable ; le perdant peut tout reprendre, y
--- compris la capitale du vainqueur. Sources : la liberation appliquee localement, et
--- la derniere victoire du journal de domination (repliquee a tous, meme hors front)
--- quand la carte locale la corrobore.
-function Overlord.Zones:GetFrontCapitalImmunity(frontId)
-    if not frontId then return false, 0, 0, nil end
-    local frontDef = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
-    if frontDef and frontDef.noCapitalProtection then return false, 0, 0, nil end
-    local froms = OverlordDB and OverlordDB.frontCapitalImmuneFrom
-    local record = froms and froms[frontId]
-    local from = type(record) == "table" and tonumber(record.from) or 0
-    local protectedFaction = type(record) == "table" and record.faction or nil
-    if Overlord.GetLatestDominationVictoryForFront then
-        local victoryTs, faction = Overlord:GetLatestDominationVictoryForFront(frontId)
-        local epoch = victoryTs and victoryTs + CAPITAL_VICTORY_COOLDOWN or 0
-        -- A epoch egal, le journal (vainqueur reel) corrige un enregistrement local errone.
-        if OtherFaction(faction)
-            and (epoch > from or (epoch == from and OtherFaction(faction) ~= protectedFaction))
-            and self:LocalStateCorroboratesJournalRelease(frontId, faction, epoch) then
-            from = epoch
-            protectedFaction = OtherFaction(faction)
-        end
-    end
-    if from <= 0 or not protectedFaction then return false, 0, 0, nil end
-    -- Une liberation de la campagne precedente ne protege rien apres le reset hebdo.
-    local campaignStart = CurrentCampaignStartTs()
-    if campaignStart > 0 and from - CAPITAL_VICTORY_COOLDOWN < campaignStart then
-        return false, 0, 0, nil
-    end
-    local untilTs = from + CAPITAL_RELEASE_IMMUNITY
-    local now = ImmunityNow()
-    -- Avant la liberation c'est la treve qui gouverne : la capitale prise doit encore
-    -- pouvoir voyager (C / ZA de la victoire) chez les retardataires. La derniere minute
-    -- est deja couverte (horloge PC en avance : la treve locale finit plus tot).
-    if now < from - 60 then return false, 0, untilTs, protectedFaction end
-    local remaining = untilTs - now
-    if remaining > 0 then return true, remaining, untilTs, protectedFaction end
-    return false, 0, untilTs, protectedFaction
-end
-
--- Capitale protegee : immune, remaining, untilTs. Seule la capitale liberee (celle du
--- perdant) l'est. frontIdHint evite le front actif par defaut.
-function Overlord.Zones:IsCapitalImmune(zoneId, frontIdHint)
-    if not zoneId or not Overlord.Fronts then return false, 0, 0 end
-    local _, front = Overlord.Fronts:GetZone(zoneId, frontIdHint)
-    if not front then return false, 0, 0 end
-    local native = (zoneId == front.allianceCapitalId and "Alliance")
-        or (zoneId == front.hordeCapitalId and "Horde") or nil
-    if not native then return false, 0, 0 end
-    local immune, remaining, untilTs, protectedFaction = self:GetFrontCapitalImmunity(front.id)
-    if protectedFaction ~= native then return false, 0, 0 end
-    return immune, remaining, untilTs
-end
-
--- La capitale que winningFaction devrait prendre pour gagner ce front est-elle protegee ?
-function Overlord.Zones:IsEnemyCapitalProtectedFor(winningFaction, frontId)
-    local capId = Overlord.Fronts and Overlord.Fronts:GetEnemyCapitalId(winningFaction, frontId)
-    return capId ~= nil and select(1, self:IsCapitalImmune(capId, frontId)) == true
-end
-
--- Libelle statique "protegee jusqu'a HH:MM" (aucun minuteur : pas de rafraichissement
--- periodique de la carte pendant des heures). nil hors protection.
-function Overlord.Zones:GetCapitalProtectionLabel(zoneId, frontIdHint, short)
-    local immune, _, untilTs = self:IsCapitalImmune(zoneId, frontIdHint)
-    if not immune then return nil end
-    local fmt = short and L.CAPITAL_PROTECTED_SHORT or L.CAPITAL_PROTECTED_UNTIL
-    if not fmt then return nil end
-    return string.format(fmt, date("%H:%M", untilTs))
-end
-
--- Faction perdante d'une fin de treve : capitale encore tenue par l'ennemi, sinon la
--- victoire connue (appelant, enregistrement local, journal de domination a l'epoch).
-local function ResolveReleasedFaction(frontId, resetEpoch, winningFaction)
-    local front = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
-    for _, z in ipairs((front and front.zones) or {}) do
-        local native = Overlord.Zones:GetBaseZoneFixedOwner(z.id)
-        if native and z.owner and z.owner ~= native then return native end
-    end
-    if OtherFaction(winningFaction) then return OtherFaction(winningFaction) end
-    local victory = OverlordDB and OverlordDB.frontVictories and OverlordDB.frontVictories[frontId]
-    if victory and OtherFaction(victory.faction) then return OtherFaction(victory.faction) end
-    if Overlord.GetLatestDominationVictoryForFront then
-        local victoryTs, faction = Overlord:GetLatestDominationVictoryForFront(frontId)
-        if victoryTs and math.abs(victoryTs + CAPITAL_VICTORY_COOLDOWN - resetEpoch)
-            <= CAPITAL_RELEASE_STAMP_SLACK then
-            return OtherFaction(faction)
-        end
-    end
-    return nil
-end
-
--- Fin de treve : la conquete reste, la capitale du perdant se releve et reste protegee
--- contre le vainqueur (pas domination / or / fortin). winningFaction est facultatif.
-function Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, fromSync, winningFaction)
+-- Fin de treve : la conquete reste entiere, la capitale tombee comprise.
+function Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, fromSync)
     if not frontId or not resetEpoch or resetEpoch <= 0 then return false end
     if not OverlordDB then return false end
     OverlordDB.frontTruceResetEpoch = OverlordDB.frontTruceResetEpoch or {}
@@ -1220,16 +1153,7 @@ function Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, fromSync, w
     if campaignStart > 0 and resetEpoch - CAPITAL_VICTORY_COOLDOWN < campaignStart then
         return false
     end
-
-    local releasedFront = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
-    if not releasedFront then return false end
-    local protectsCapital = not releasedFront.noCapitalProtection
-    -- Protection posee avant le recalcul des disponibilites fait par la liberation.
-    if protectsCapital then
-        SetFrontCapitalImmunity(frontId, resetEpoch,
-            ResolveReleasedFaction(frontId, resetEpoch, winningFaction))
-    end
-    if not self:ReleaseFrontCapitals(frontId, resetEpoch) then return false end
+    if not self:KeepFrontConquestAtTruceEnd(frontId, resetEpoch) then return false end
 
     OverlordDB.frontTruceResetEpoch[frontId] = resetEpoch
     self:ClearFrontVictory(frontId)
@@ -1247,24 +1171,15 @@ function Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, fromSync, w
 
     if not fromSync then
         local mapLabel = self:GetFrontMapDisplayName(frontId) or frontId
-        local untilTs = resetEpoch + CAPITAL_RELEASE_IMMUNITY
-        -- Connexion tardive : pas d'annonce perimee dans le chat. Sans protection
-        -- (Hillsbrad), la ligne n'a de sens que dans les 15 min qui suivent ; ailleurs,
-        -- tant que la protection dure (jamais d'heure deja passee).
-        if not protectsCapital then
-            -- Front sans protection (Hillsbrad) : le combat reprend aussitot.
-            if L.FRONT_TRUCE_ENDED_FIGHT and resetEpoch + CAPITAL_VICTORY_COOLDOWN > ImmunityNow() then
-                Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.FRONT_TRUCE_ENDED_FIGHT,
-                    mapLabel))
-            end
-        elseif L.FRONT_CAPITAL_RELEASED and untilTs > ImmunityNow() then
-            Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.FRONT_CAPITAL_RELEASED,
-                mapLabel, date("%H:%M", untilTs)))
+        -- Connexion tardive : pas d'annonce perimee dans le chat.
+        if L.FRONT_TRUCE_ENDED_KEPT and resetEpoch + CAPITAL_VICTORY_COOLDOWN > NowServer() then
+            Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.FRONT_TRUCE_ENDED_KEPT,
+                mapLabel))
         end
-        -- Liberation ancienne (connexion tardive, tick en retard) : le reseau l'a deja,
+        -- Fin de treve ancienne (connexion tardive, tick en retard) : le reseau l'a deja,
         -- ne pas la rediffuser.
         if Overlord.Sync and Overlord.Sync.BroadcastFrontTruceEndReset
-            and ImmunityNow() - resetEpoch <= 120 then
+            and NowServer() - resetEpoch <= 120 then
             Overlord.Sync:BroadcastFrontTruceEndReset(frontId, resetEpoch)
         end
     end
@@ -1272,16 +1187,36 @@ function Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, fromSync, w
     return true
 end
 
--- Liberation deja recue par ZA avant FR (ou avant notre propre tick) : la capitale
--- du perdant porte exactement l'horloge de fin de treve de la victoire locale.
-function Overlord.Zones:LocalStateShowsCapitalRelease(frontId, winningFaction, resetEpoch)
-    if not frontId or not winningFaction or not resetEpoch or not Overlord.Fronts then return false end
-    local capId = Overlord.Fronts:GetEnemyCapitalId(winningFaction, frontId)
-    local cap = capId and select(1, Overlord.Fronts:GetZone(capId, frontId))
-    if not cap or cap.status == "in_progress" then return false end
-    local native = self:GetBaseZoneFixedOwner(capId)
-    if not native or cap.owner ~= native then return false end
-    return math.abs((tonumber(cap.capturedTime) or 0) - resetEpoch) <= CAPITAL_RELEASE_STAMP_SLACK
+-- "Capitale liberee" : une faction reprend sa propre capitale a l'ennemi. Lu sur la carte
+-- (deux capitales par front) ; seulement pour une prise recente (pas au login ni au reset
+-- hebdo) vue en direct (C/ZS recus, ou capture locale) : une carte ZA seule, d'une seule
+-- source, ne fait pas imprimer la ligne a tout le monde. Aucun trafic.
+local capitalOwnerSeen = {}
+function Overlord.Zones:CheckCapitalLiberations()
+    local fronts = Overlord.Fronts and Overlord.Fronts.Registry
+    if not fronts or Overlord.InstanceSuspended then return end
+    local now = NowServer()
+    local campaignStart = CurrentCampaignStartTs()
+    for frontId, front in pairs(fronts) do
+        for _, capId in ipairs({ front.allianceCapitalId or false, front.hordeCapitalId or false }) do
+            local zone = capId and select(1, Overlord.Fronts:GetZone(capId, frontId))
+            if zone and zone.status ~= "in_progress" and zone.owner then
+                local native = self:GetBaseZoneFixedOwner(capId)
+                local seen = capitalOwnerSeen[capId]
+                if seen and seen ~= native and zone.owner == native
+                    and now - (tonumber(zone.capturedTime) or 0) <= 120
+                    and (tonumber(zone.capturedTime) or 0) > campaignStart
+                    and (not Overlord.Sync or not Overlord.Sync.HasRecentLiveZoneTraffic
+                        or Overlord.Sync:HasRecentLiveZoneTraffic(capId, 300))
+                    and L.FRONT_CAPITAL_LIBERATED then
+                    local mapLabel = self:GetFrontMapDisplayName(frontId) or frontId
+                    Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r "
+                        .. L.FRONT_CAPITAL_LIBERATED, zone.name or capId, mapLabel))
+                end
+                capitalOwnerSeen[capId] = zone.owner
+            end
+        end
+    end
 end
 
 -- Carte disque (quarantaine login comprise) encore figee sur la victoire : le login
@@ -1298,11 +1233,43 @@ local function DiskStateShowsFrontVictory(frontId, winningFaction, victoryTs)
             return false
         end
         if z.id == capId and math.abs((tonumber(zd.capturedTime) or 0) - victoryTs)
-            > CAPITAL_RELEASE_STAMP_SLACK then
+            > CAPITAL_STAMP_SLACK then
             return false
         end
     end
     return true
+end
+
+-- Fin de treve vue apres le debut de la reprise : les defenseurs ont lance la capture de
+-- leur capitale (ou l'ont deja reprise) avant le tick de 30 s de ce client. La victoire
+-- etait reelle : la carte la montre sur le socle stable des zones en cours de capture, et
+-- une capitale revenue a sa faction a l'epoch ou apres est une liberation, pas un fantome.
+local function StableStateShowsTruceEnd(frontId, winningFaction, victoryTs, epoch)
+    local front = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
+    if not front or not front.zones then return false end
+    local capId = Overlord.Fronts:GetEnemyCapitalId(winningFaction, frontId)
+    if not capId then return false end
+    local native = Overlord.Zones:GetBaseZoneFixedOwner(capId)
+    local sawCapital = false
+    for _, z in ipairs(front.zones) do
+        local zd = FrontZoneView(z, frontId)
+        if zd._captureFinalUnattested then return false end
+        local sv = StableZoneView(zd)
+        if not sv then return false end
+        local ct = tonumber(sv.capturedTime) or 0
+        if z.id == capId then
+            -- Tenue : a l'heure de la victoire, ou deja re-horodatee par cette fin de treve
+            -- (ZA d'un pair passe avant nous, recu avant son FR).
+            local held = sv.owner == winningFaction and (math.abs(ct - victoryTs) <= CAPITAL_STAMP_SLACK
+                or math.abs(ct - (epoch + CAPITAL_KEPT_STAMP_OFFSET)) <= CAPITAL_STAMP_SLACK)
+            local liberated = native ~= nil and sv.owner == native and ct >= epoch - CAPITAL_STAMP_SLACK
+            if not held and not liberated then return false end
+            sawCapital = true
+        elseif sv.owner ~= winningFaction then
+            return false
+        end
+    end
+    return sawCapital
 end
 
 -- Victoire fantome en SavedVariables : effacer sans reset carte ni message chat.
@@ -1319,35 +1286,12 @@ local function PrunePhantomFrontVictory(frontId, victoryTs)
     end
 end
 
--- Fin de protection : rien ne recalcule la disponibilite quand l'horloge passe,
--- un seul rafraichissement local par liberation (aucun trafic).
-local immunityExpiryRefreshed = {}
-local function RefreshExpiredCapitalImmunities()
-    local fronts = Overlord.Fronts and Overlord.Fronts.Registry
-    if not fronts then return end
-    local changed = false
-    for frontId in pairs(fronts) do
-        local immune, _, untilTs = Overlord.Zones:GetFrontCapitalImmunity(frontId)
-        if not immune and untilTs > 0 and ImmunityNow() >= untilTs
-            and immunityExpiryRefreshed[frontId] ~= untilTs then
-            immunityExpiryRefreshed[frontId] = untilTs
-            changed = true
-        end
-    end
-    if not changed then return end
-    if Overlord.Zones.UpdateAvailableZones then Overlord.Zones:UpdateAvailableZones() end
-    if Overlord.UI then Overlord.UI:RequestRefresh() end
-    if Overlord.MapMarkers and Overlord.MapMarkers.RequestOverlayRefresh then
-        Overlord.MapMarkers:RequestOverlayRefresh()
-    end
-end
-
 -- Verifie tous les fronts dont la treve de 15 min est terminee.
 function Overlord.Zones:TryExpireFrontTruces()
     if not OverlordDB or not Overlord.Fronts then return end
-    -- Coupure en instance : ni liberation, ni message, ni FR (le ticker reprend apres).
+    -- Coupure en instance : ni fin de treve, ni message, ni FR (le ticker reprend apres).
     if Overlord.InstanceSuspended then return end
-    RefreshExpiredCapitalImmunities()
+    self:CheckCapitalLiberations()
     if Overlord.Sync and Overlord.Sync.RetryPendingTruceReleases then
         Overlord.Sync:RetryPendingTruceReleases()
     end
@@ -1362,8 +1306,8 @@ function Overlord.Zones:TryExpireFrontTruces()
         if victoryTs > 0 and winningFaction
             and (lastReset <= 0 or victoryTs >= lastReset)
             and victoryTs >= CurrentCampaignStartTs() then
-            -- Horloge serveur, comme la protection : un PC en avance ne libere pas trop tot.
-            if ImmunityNow() - victoryTs >= CAPITAL_VICTORY_COOLDOWN then
+            -- Horloge serveur : un PC en avance ne termine pas la treve trop tot.
+            if NowServer() - victoryTs >= CAPITAL_VICTORY_COOLDOWN then
                 toProcess[#toProcess + 1] = {
                     frontId = frontId,
                     victoryTs = victoryTs,
@@ -1375,13 +1319,15 @@ function Overlord.Zones:TryExpireFrontTruces()
 
     for _, entry in ipairs(toProcess) do
         local epoch = entry.victoryTs + CAPITAL_VICTORY_COOLDOWN
-        -- Liberation + message seulement si la carte locale confirme une vraie victoire totale (pas SR/VT fantome).
+        -- Fin de treve + message seulement si la carte locale confirme une vraie victoire totale (pas SR/VT fantome).
         if self:LocalStateSupportsVictoryTruce(entry.frontId, entry.winningFaction) then
-            self:ApplyFrontTruceEndReset(entry.frontId, epoch, false, entry.winningFaction)
-        elseif self:LocalStateShowsCapitalRelease(entry.frontId, entry.winningFaction, epoch)
+            self:ApplyFrontTruceEndReset(entry.frontId, epoch, false)
+        elseif self:LocalStateShowsKeptConquest(entry.frontId, entry.winningFaction, epoch)
             or DiskStateShowsFrontVictory(entry.frontId, entry.winningFaction, entry.victoryTs) then
-            -- Meme liberation, deja propagee ou vue au login : appliquer sans rediffuser.
-            self:ApplyFrontTruceEndReset(entry.frontId, epoch, true, entry.winningFaction)
+            -- Meme fin de treve, deja propagee ou vue au login : appliquer sans rediffuser.
+            self:ApplyFrontTruceEndReset(entry.frontId, epoch, true)
+        elseif StableStateShowsTruceEnd(entry.frontId, entry.winningFaction, entry.victoryTs, epoch) then
+            self:ApplyFrontTruceEndReset(entry.frontId, epoch, false)
         else
             PrunePhantomFrontVictory(entry.frontId, entry.victoryTs)
         end
@@ -1442,9 +1388,6 @@ function Overlord.Zones:IsZoneAvailable(zoneId)
 
     -- Déjà possédée par notre faction = oui
     if zone.owner == Overlord.PlayerFaction then return true end
-
-    -- Capitales protegees apres une liberation : aucun siege sur ce front.
-    if select(1, self:IsCapitalImmune(zoneId)) then return false end
 
     -- Tous les prérequis doivent être complètement capturés (owner + status == "captured")
     local prereqIds = self:GetPrereqZoneIdsForAttacker(zoneId, Overlord.PlayerFaction)
@@ -1887,9 +1830,7 @@ function Overlord.Zones:_DoUpdateAvailableZones(suppressNotifications)
             -- Deja normalise dans la premiere passe ; ne pas recalculer les prereqs.
         elseif zone.status == "in_progress" then
             -- Treve : toute capture in_progress est annulee sur le front (carte fermee).
-            -- Capitale protegee apres liberation : meme regle, quel que soit l'assaillant.
             local truceBlocks = select(1, self:IsFrontOnTruce(zone.id))
-                or select(1, self:IsCapitalImmune(zone.id))
             -- Prerequis pour la faction qui CAPTURE (owner = assaillant pendant in_progress)
             local chainBroken = zone.owner and not self:FactionMeetsPrereqsForZoneCapture(
                 zone.id, zone.owner, zone.holdAuthorityLocal == true)
@@ -1940,9 +1881,6 @@ function Overlord.Zones:_DoUpdateAvailableZones(suppressNotifications)
                         break
                     end
                 end
-            end
-            if prereqsMet and select(1, self:IsCapitalImmune(zone.id)) then
-                prereqsMet = false
             end
             -- L'objectif final (base ennemie) nécessite TOUTES les autres zones completement capturees
             if prereqsMet then

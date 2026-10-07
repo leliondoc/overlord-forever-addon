@@ -158,12 +158,12 @@ assert(a.Overlord.BetaNetwork:IsDirectPeer(b.name) and not a.Overlord.BetaNetwor
 
 local names = {}
 for i = 1, 500 do
-    local name = "Player " .. string.char(65 + math.floor((i - 1) / 26)) .. string.char(65 + (i - 1) % 26)
+    local name = "Player " .. string.char(65 + math.floor((i - 1) / 26)) .. string.char(97 + (i - 1) % 26)
     names[#names + 1] = name
     local lb = d.Overlord.Leaderboard
     lb.kills[name] = i * 10
     lb.playerInfo[name] = { class = "WARRIOR", faction = "Horde", level = 60,
-        locale = "engb", guild = "Veteran Guild", guildAt = 1790016000 }
+        locale = "engb", guild = "Veteran Guild", guildAt = 1790016000, guildAuth = true }
     if i > 460 then lb.playerInfo[name].race, lb.playerInfo[name].raceSex = "Orc", 2 end
     if i <= 120 then lb.captureCount[name], lb.captures[name] = i, {} end
 end

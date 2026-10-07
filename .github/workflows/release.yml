@@ -54,6 +54,7 @@ jobs:
           lua5.1 tests/lua_syntax_check.lua "${LUA_FILES[@]}"
           lua5.1 tests/zone_capture_lease.test.lua
           lua5.1 tests/forever_trust_relay_142.test.lua
+          lua5.1 tests/forever_ladder_injection.test.lua
           lua5.1 tests/forever_persistence.test.lua
           lua5.1 tests/forever_player_identity.test.lua
           lua5.1 tests/forever_minimap_button.test.lua
@@ -94,7 +95,7 @@ jobs:
           lua5.1 tests/sync_report.test.lua
           lua5.1 tests/forever_call_to_arms.test.lua
           lua5.1 tests/forever_zone_partial_merge.test.lua
-          lua5.1 tests/forever_capital_release.test.lua
+          lua5.1 tests/forever_capital_kept.test.lua
           lua5.1 tests/forever_guide_locales.test.lua
           lua5.1 tests/forever_hall_of_fame_beta.test.lua
           lua5.1 tests/forever_hall_of_fame_sidebar.test.lua
@@ -161,6 +162,13 @@ jobs:
           lua5.1 tests/forever_front_fight_size.test.lua
           lua5.1 tests/forever_front_fight_convergence.test.lua
           lua5.1 tests/forever_front_fight_herd.test.lua
+          lua5.1 tests/forever_front_activity_captures.test.lua
+          lua5.1 tests/forever_front_activity_text.test.lua
+          lua5.1 tests/forever_ladder_race_rows.test.lua
+          lua5.1 tests/forever_paged_v7_routing.test.lua
+          lua5.1 tests/forever_continent_maps.test.lua
+          lua5.1 tests/forever_offline_promotion_stamp.test.lua
+          lua5.1 tests/forever_paged_combat.test.lua
 
           mapfile -t TEST_FILES < <(find tests -maxdepth 1 -type f -name '*.test.mjs' -print | sort)
           node --test "${TEST_FILES[@]}"

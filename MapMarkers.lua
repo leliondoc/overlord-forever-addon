@@ -1610,10 +1610,6 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
         elseif zone.owner then
             st = L.MAP_CAPITAL_LABEL
         end
-        -- Protection apres liberation : heure de fin statique (pas de rafraichissement 2 Hz).
-        local protectedLabel = Overlord.Zones.GetCapitalProtectionLabel
-            and Overlord.Zones:GetCapitalProtectionLabel(zone.id, renderFid)
-        if protectedLabel then st2 = protectedLabel end
     end
 
     local opacityScale = GetMapOverlayOpacityScale()
@@ -3119,73 +3115,61 @@ local EK_FRONT_LOGO_OFFSETS = {
     gilneas = { x = 0.008, y = 0 },
 }
 
-local function IsMapUnderAncestor(mapID, ancestorMapID)
-    if not mapID or not ancestorMapID then return false end
-    local cur, depth = mapID, 0
-    while cur and cur > 0 and depth < 16 do
-        if cur == ancestorMapID then return true end
-        local ok, info = pcall(C_Map.GetMapInfo, cur)
-        if not ok or not info then return false end
-        cur = info.parentMapID
-        depth = depth + 1
+-- Continent of a zone map: first ancestor of type Continent (the zone's parent when
+-- the client gives no map type). nil when the map does not exist on this client.
+local function ContinentOfMap(mapID)
+    local continentType = Enum and Enum.UIMapType and Enum.UIMapType.Continent or 2
+    local ok, info = pcall(C_Map.GetMapInfo, mapID)
+    if not ok or not info then return nil end
+    local firstParent = info.parentMapID
+    local cur, depth = info, 0
+    while cur and depth < 8 do
+        if cur.mapType == continentType then return cur.mapID or mapID end
+        local parentID = cur.parentMapID
+        if not parentID or parentID <= 0 then break end
+        local okParent, parentInfo = pcall(C_Map.GetMapInfo, parentID)
+        if not okParent or not parentInfo then break end
+        if parentInfo.mapType == continentType then return parentID end
+        cur, depth = parentInfo, depth + 1
     end
-    return false
+    if info.mapType == nil and firstParent and firstParent > 0 then return firstParent end
+    return nil
 end
 
-function Overlord.MapMarkers:ResolveEKMapID()
-    if resolvedEKMapID then
-        local kalID = self:ResolveKalimdorMapID()
-        if kalID and resolvedEKMapID == kalID then
-            resolvedEKMapID = nil
-        else
-            return resolvedEKMapID
-        end
+-- Fixed reference zones, Classic ids first (Retail ones as a fallback): the result
+-- no longer depends on the front the player stands in. Resolving from the active
+-- front made a player on a Kalimdor front take Kalimdor for the Eastern Kingdoms,
+-- and the Retail-only Kalimdor id (via map 463) left the Classic Kalimdor map
+-- without its domination logos.
+local EK_REFERENCE_ZONES = { 1429, 1417, 1424, 1433, 37, 14, 25 }       -- Elwynn, Arathi, Hillsbrad, Redridge
+local KALIMDOR_REFERENCE_ZONES = { 1411, 1440, 1413, 1, 63, 10 }       -- Durotar, Ashenvale, Barrens
+
+local function ResolveContinentFrom(zones, other)
+    for _, zoneID in ipairs(zones) do
+        local continent = ContinentOfMap(zoneID)
+        if continent and continent ~= other then return continent end
     end
-    pcall(function()
-        local frontMapID = GetActiveFrontMapID()
-        local kalID = self:ResolveKalimdorMapID()
-        -- Front actif Kalimdor (ex. Barrens du Sud) : ne pas confondre continent EK et Kalimdor
-        if frontMapID and kalID and IsMapUnderAncestor(frontMapID, kalID) then
-            frontMapID = nil
-        end
-        -- Gilneas n'avait pas d'entree mapIDs : GetActiveFrontMapID pouvait etre nil et jamais de continent EK
-        if not frontMapID and Overlord.Fronts and Overlord.Fronts.Order and Overlord.Fronts.Registry then
-            for _, fid in ipairs(Overlord.Fronts.Order) do
-                local f = Overlord.Fronts.Registry[fid]
-                if f and f.mapIDs then
-                    for mid in pairs(f.mapIDs) do
-                        if not kalID or not IsMapUnderAncestor(mid, kalID) then
-                            frontMapID = mid
-                            break
-                        end
-                    end
-                end
-                if frontMapID then break end
-            end
-        end
-        if not frontMapID then return end
-        local info = C_Map.GetMapInfo(frontMapID)
-        if info and info.parentMapID and info.parentMapID > 0 then
-            resolvedEKMapID = info.parentMapID
-        end
-    end)
+    return nil
+end
+
+-- A failed lookup (maps unknown to this client) is retried at most every 30 s,
+-- not on every call of the map driver.
+local ekRetryAt, kalimdorRetryAt = 0, 0
+
+function Overlord.MapMarkers:ResolveEKMapID()
+    if resolvedEKMapID then return resolvedEKMapID end
+    if GetTime() < ekRetryAt then return nil end
+    local kalID = self:ResolveKalimdorMapID()
+    resolvedEKMapID = ResolveContinentFrom(EK_REFERENCE_ZONES, kalID)
+    if not resolvedEKMapID then ekRetryAt = GetTime() + 30 end
     return resolvedEKMapID
 end
 
 function Overlord.MapMarkers:ResolveKalimdorMapID()
     if resolvedKalimdorMapID then return resolvedKalimdorMapID end
-    pcall(function()
-        local info = C_Map.GetMapInfo(463)
-        if info and info.parentMapID and info.parentMapID > 0 then
-            local parentInfo = C_Map.GetMapInfo(info.parentMapID)
-            if parentInfo and parentInfo.parentMapID and parentInfo.parentMapID > 0 then
-                resolvedKalimdorMapID = parentInfo.parentMapID
-            end
-        end
-        if not resolvedKalimdorMapID then
-            resolvedKalimdorMapID = 12
-        end
-    end)
+    if GetTime() < kalimdorRetryAt then return nil end
+    resolvedKalimdorMapID = ResolveContinentFrom(KALIMDOR_REFERENCE_ZONES, nil)
+    if not resolvedKalimdorMapID then kalimdorRetryAt = GetTime() + 30 end
     return resolvedKalimdorMapID
 end
 
@@ -3255,6 +3239,8 @@ function Overlord.MapMarkers:IsEKMap(mapID)
             end
         end
     end
+    -- Continent not resolved yet: answer without caching, the next call retries.
+    if not ekID then return false end
     if continentProbeMapID ~= mapID then
         continentProbeMapID = mapID
         continentProbeKalValid = false
@@ -3288,6 +3274,7 @@ function Overlord.MapMarkers:IsKalimdorMap(mapID)
             end
         end
     end
+    if not kalID then return false end
     if continentProbeMapID ~= mapID then
         continentProbeMapID = mapID
         continentProbeEKValid = false

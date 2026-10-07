@@ -95,7 +95,7 @@ while head <= #timers do
     head = head + 1
     callback()
 end
-assert(OverlordDB.leaderboardScoreSanitizeVersion == 7)
+assert(OverlordDB.leaderboardScoreSanitizeVersion == 8)
 for _, bucket in ipairs({ OverlordDB.leaderboard, OverlordDB.leaderboardsByPool.global,
     OverlordDB.leaderboardSnapshot }) do
     assert(bucket.kills[live] >= 1001 and bucket.kills[snapshot] == 15000,

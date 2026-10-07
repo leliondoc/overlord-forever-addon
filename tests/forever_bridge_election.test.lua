@@ -109,7 +109,7 @@ advance(120)
 refreshPeers()
 local subjects, deferredStart = 200, net.stats.bridgeLKDeferred or 0
 for i = 1, subjects do
-    local name = "Enemy Number" .. string.char(65 + i % 26) .. string.char(65 + math.floor(i / 26))
+    local name = "Enemy Number" .. string.char(97 + i % 26) .. string.char(97 + math.floor(i / 26))
     know(name, 50)
     kOverBnet(name, 51)
 end
@@ -125,7 +125,7 @@ advance(400)
 refreshPeers()
 local lone, heard
 for i = 1, 400 do
-    local name = "Fallback Horde" .. string.char(65 + i % 26) .. string.char(65 + math.floor(i / 26) % 26)
+    local name = "Fallback Horde" .. string.char(97 + i % 26) .. string.char(97 + math.floor(i / 26) % 26)
     local before = net.stats.bridgeLKDeferred or 0
     know(name, 70)
     kOverBnet(name, 71)

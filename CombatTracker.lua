@@ -999,7 +999,8 @@ function Overlord.Combat:ProcessKill(killerGUID, killerName, victimGUID, victimN
             if class then Overlord.Leaderboard:SetPlayerInfo(fullName, class, faction) end
             local guild = guidAllyGuildCache[killerGUID]
             if guild and guild ~= "" then
-                Overlord.Leaderboard:SetPlayerGuild(fullName, guild, false, true, time())
+                Overlord.Leaderboard:SetPlayerGuild(fullName, guild, false, true,
+                    GetServerTime and GetServerTime() or time())
             end
         end
     end

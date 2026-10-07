@@ -44,6 +44,8 @@ function strsplit(separator, value)
 end
 function UnitExists() return false end
 local subject, peer = "Horde Member", "Alliance Peer"
+-- A live LK from a third party is a bridge copy: the listener plays the other faction.
+Overlord.PlayerFaction = "Alliance"
 local epoch = OverlordDB.lastResetTimestamp
 local campaignId = Overlord:TimestampToCampaignId(epoch)
 local stamp = time() - 100
@@ -63,12 +65,22 @@ assert(lb.playerInfo[subject].guild == "Horde Guild", "Peer erased another playe
 assert(lb.kills[subject] == 473, "Guild protection changed the score")
 
 -- An old relay tombstone cannot prevent recovery from a peer with the membership.
+-- Since 2026-10-06 a live third-party copy carries no guild: the recovery comes from
+-- a ranking page (solicited), the path that carries registers.
 lb.playerInfo[subject].guild, lb.playerInfo[subject].guildAt = "", stamp + 60
+-- Same check as SyncLeaderboardPages.lua (not loaded here): the row is the page we asked for.
+local pagedCheck = Overlord.Sync.IsExpectedPagedLeaderboardDelivery
+Overlord.Sync.IsExpectedPagedLeaderboardDelivery = function(_, kind, name, sender, channel)
+    return kind == "LK" and name == subject and sender == peer and channel == "WHISPER"
+end
 receiveGuild("Horde Guild", stamp)
+Overlord.Sync.IsExpectedPagedLeaderboardDelivery = pagedCheck
 assert(lb.playerInfo[subject].guild == "Horde Guild", "Legacy false departure blocked recovery")
 
 -- The owner can correct already polluted data even if its timestamp is older.
+-- (Second-hand pollution: no register flag, as left by an old relayed hint.)
 lb.playerInfo[subject].guild, lb.playerInfo[subject].guildAt = "Alliance Guild", stamp + 80
+lb.playerInfo[subject].guildAuth, lb.playerInfo[subject].guildReplica = nil, nil
 Overlord.Sync:OnReceiveGuildIdentity(table.concat({subject, "Horde Guild", campaignId, stamp}, ":"),
     subject, "WHISPER")
 assert(lb.playerInfo[subject].guild == "Horde Guild", "Owner could not repair polluted guild")
@@ -144,8 +156,8 @@ assert(killPayload and killPayload:find(":French Guild:", 1, true),
 lb.kills = { ["Guild Member"] = 620, ["Guild Member-Realm"] = 620 }
 lb.playerInfo = { ["Guild Member"] = { guild = "French Guild", faction = "Horde" } }
 for i = 1, 4999 do
-    local name = "Rival Player" .. string.char(65 + math.floor(i / 676),
-        65 + math.floor(i / 26) % 26, 65 + i % 26)
+    local name = "Rival Player" .. string.char(97 + math.floor(i / 676),
+        97 + math.floor(i / 26) % 26, 97 + i % 26)
     lb.kills[name] = 1000 + i
     lb.playerInfo[name] = { guild = "Other Guild", faction = "Alliance" }
 end

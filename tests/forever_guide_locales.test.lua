@@ -14,8 +14,8 @@ local guideKeys = {
     "GUIDE_SECTION_FACTION_CALL", "GUIDE_FACTION_CALL_BODY", "GUIDE_SECTION_ALERTS",
     "GUIDE_ALERTS_BODY", "GUIDE_SECTION_TOOLS", "GUIDE_TOOLS_BODY",
     "GUIDE_BAR_LABEL", "GUIDE_TITLE", "GUIDE_CLOSE", "GUIDE_NEXT", "GUIDE_PREV",
-    "GUIDE_PAGE_INDICATOR", "FRONT_CAPITAL_RELEASED", "CAPITAL_PROTECTED_UNTIL",
-    "CAPITAL_PROTECTED_SHORT", "FORTRESS_CAPTURE_AVAILABLE", "FRONT_TRUCE_ENDED_FIGHT",
+    "GUIDE_PAGE_INDICATOR", "FRONT_TRUCE_ENDED_KEPT", "FRONT_CAPITAL_LIBERATED",
+    "FRONT_VICTORY_TOO_SOON", "FORTRESS_CAPTURE_AVAILABLE",
 }
 
 local function countSlots(text, slot)
@@ -37,15 +37,24 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
         loc .. ": keep text needs one icon slot and one minutes slot")
     assert(string.format(L.GUIDE_GUILD_KEEP_BODY, "ICONS", 10):find("ICONS", 1, true))
     assert(countSlots(L.GUIDE_GOLD_BODY, "s") == 1, loc .. ": mine text needs one list slot")
-    assert(countSlots(L.FRONT_CAPITAL_RELEASED, "s") == 2, loc .. ": release line needs front + time")
-    assert(countSlots(L.FRONT_TRUCE_ENDED_FIGHT, "s") == 1, loc .. ": Hillsbrad truce-end line needs the front")
-    assert(string.format(L.CAPITAL_PROTECTED_UNTIL, "21:40"):find("21:40", 1, true))
-    assert(string.format(L.CAPITAL_PROTECTED_SHORT, "21:40"):find("21:40", 1, true))
-    -- The protection length shown to players matches the code (6 h), the call to arms 4 h.
+    -- 1.7: the fallen capital stays taken; liberation and the 6 h victory spacing.
+    assert(countSlots(L.FRONT_TRUCE_ENDED_KEPT, "s") == 1, loc .. ": truce-end line needs the front")
+    assert(countSlots(L.FRONT_CAPITAL_LIBERATED, "s") == 2, loc .. ": liberation line needs capital + front")
+    assert(countSlots(L.FRONT_VICTORY_TOO_SOON, "s") == 2, loc .. ": too-soon line needs front + time")
+    assert(string.format(L.FRONT_VICTORY_TOO_SOON, "F", "21:40"):find("21:40", 1, true))
+    -- The victory spacing shown to players matches the code (6 h), the call to arms 4 h.
     -- Whole numbers only (a "16" or "24" would not do).
-    assert(L.GUIDE_SIEGE_BODY:find("%f[%d]6%f[%D]"), loc .. ": siege text lost the protection length")
+    assert(L.GUIDE_SIEGE_BODY:find("%f[%d]6%f[%D]"), loc .. ": siege text lost the victory spacing")
     assert(L.GUIDE_FACTION_CALL_BODY:find("%f[%d]4%f[%D]"), loc .. ": call to arms lost its cooldown")
-    -- The 15-minute truce, on every front and on the Hillsbrad brawl (no protection there).
+    -- No text still promises the old capital protection (gone in 1.7.0).
+    for _, key in ipairs({ "GUIDE_SIEGE_BODY", "GUIDE_PROGRESS_BODY", "CAPTURE_BLOCKED_RULES" }) do
+        local text = L[key] or "" -- no string.lower: it can mangle UTF-8 bytes
+        for _, stem in ipairs({ "protect", "Protect", "protecc", "Protecc", "proteç", "Proteç", "protég", "Protég", "protegid", "proteg", "geschützt", "schutz", "Schutz",
+            "защищ", "защит", "保护", "immun" }) do
+            assert(not text:find(stem, 1, true), loc .. ": " .. key .. " still mentions " .. stem)
+        end
+    end
+    -- The 15-minute truce, on every front and on the Hillsbrad brawl.
     assert(L.GUIDE_SIEGE_BODY:find("%f[%d]15%f[%D]"), loc .. ": siege text lost the truce length")
     assert(L.GUIDE_PROGRESS_BODY:find("%f[%d]15%f[%D]"), loc .. ": guide lost the Hillsbrad note")
     -- Commands are quoted exactly as Commands.lua parses them, after every later locale

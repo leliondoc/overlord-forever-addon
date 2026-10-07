@@ -2366,7 +2366,7 @@ local function ScheduleLocalGuildRosterEnrich(delaySec)
     end)
 end
 
-local LEGACY_SCORE_SANITIZE_VERSION = 7
+local LEGACY_SCORE_SANITIZE_VERSION = 8
 
 -- Migration de securite globale, executee avant Sync mais repartie sur plusieurs
 -- frames. Les SavedVariables visees peuvent justement etre anormalement grosses :
@@ -2443,6 +2443,10 @@ function Overlord.Leaderboard:EnsureLegacyScoreSanitized()
                     and Overlord.Sync:IsDeniedKillContributor(name) or false
             end, bucket.bountyKills)
             SanitizeMap(bucket.captureCount, function(name, count)
+                -- v8: names no character can have (and removed rows) leave the
+                -- capture column too, not only the kill column.
+                if Overlord.Sync and Overlord.Sync.IsDeniedKillContributor
+                    and Overlord.Sync:IsDeniedKillContributor(name) then return true end
                 return captureCeiling
                     and (tonumber(count) or 0) >= captureCeiling
                     and not IsLocalName(name)
@@ -2947,7 +2951,7 @@ function Overlord.Leaderboard:ForceUpdateLocalPlayer(playerName, class, faction)
     local guildTag = identity == nil and sanitizeGuildName(prev and prev.guild)
         or sanitizeGuildName(identity)
     local poolTag = normalizeSavedVarsPool(Overlord:GetCurrentSavedVarsPool() or "")
-    local guildAt = identity == nil and normalizeGuildAt(prev and prev.guildAt) or time()
+    local guildAt = identity == nil and normalizeGuildAt(prev and prev.guildAt) or leaderboardServerNow()
     local keepReplica = prev and prev.guildReplica == true
         and guildAt < normalizeGuildAt(prev.guildAt)
     if keepReplica then
@@ -3197,7 +3201,7 @@ function Overlord.Leaderboard:SetPlayerGuild(playerName, guild, fromSync, author
     local incAt = normalizeGuildAt(guildAtOpt)
     if fromSync and incAt > leaderboardServerNow() + 300 then return end
     if authoritative and incAt <= 0 then
-        incAt = time()
+        incAt = leaderboardServerNow()
     end
     -- Bootstrap local : perso uniquement (les tiers passent par K/GY/GI reseau).
     if not fromSync and not authoritative then
@@ -3207,6 +3211,9 @@ function Overlord.Leaderboard:SetPlayerGuild(playerName, guild, fromSync, author
         if not self:ShouldAcceptSyncedGuild(playerName, guild, incAt) then return end
     end
     local prev = self.playerInfo[playerName]
+    -- A second-hand guild hint only completes a player already in the ladder; it
+    -- never creates one (a forged hint made any name "known", 2026-10-06).
+    if fromSync and not authoritative and not prev then return end
     local prevGuild = sanitizeGuildName((prev and prev.guild) or "")
     local prevAt = normalizeGuildAt(prev and prev.guildAt)
     if prev and prev.guildReplica == true then
@@ -3284,7 +3291,7 @@ function Overlord.Leaderboard:ClearPlayerGuild(playerName, fromSync, verifiedOwn
     end
     local clearedAt = normalizeGuildAt(guildAtOpt)
     if fromSync and clearedAt > leaderboardServerNow() + 300 then return false end
-    if clearedAt <= 0 then clearedAt = time() end
+    if clearedAt <= 0 then clearedAt = leaderboardServerNow() end
     local targetKey = sync and sync.GetCaptureContributorDedupKey
         and sync:GetCaptureContributorDedupKey(playerName)
     local row = self.playerInfo and self.playerInfo[playerName]
@@ -3354,7 +3361,7 @@ function Overlord.Leaderboard:UpdateLocalPlayerGuild()
         -- Debarrasser guilde obsolete apres demission / kick (evite guilde fantome au ladder).
         local previousGuild = self:GetHotPlayerGuildState(fullName)
         if previousGuild ~= "" then
-            self:ClearPlayerGuild(fullName, false, true, time())
+            self:ClearPlayerGuild(fullName, false, true, leaderboardServerNow())
         end
         return
     end
@@ -3366,7 +3373,7 @@ function Overlord.Leaderboard:UpdateLocalPlayerGuild()
     if prevInfo and prevInfo.guild == guild and prevInfo.guildAuth == true then
         return
     end
-    self:SetPlayerGuild(fullName, guild, false, true, time())
+    self:SetPlayerGuild(fullName, guild, false, true, leaderboardServerNow())
 end
 
 -- Sync K/LK et combat : ne pas faire confiance a UNKNOWN comme classe reelle (voir entete GetExportPlayerMeta).
@@ -6422,10 +6429,12 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
     local dirty = false
     for name, count in pairs(snapshotKills) do
         local n = tonumber(count) or 0
+        -- Cheap comparison first: almost no saved row is above the live one, and the
+        -- denylist (name-case walk) is then evaluated only for rows really written.
         if type(name) == "string" and name ~= "" and n > 0
+            and n > (tonumber(self.kills[name]) or 0)
             and not (Overlord.Sync and Overlord.Sync.IsDeniedKillContributor
-                and Overlord.Sync:IsDeniedKillContributor(name))
-            and n > (tonumber(self.kills[name]) or 0) then
+                and Overlord.Sync:IsDeniedKillContributor(name)) then
             self.kills[name] = n
             dirty = true
             -- L'index sera de toute facon reconstruit par NetworkIndexes apres

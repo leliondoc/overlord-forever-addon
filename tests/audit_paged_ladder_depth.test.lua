@@ -153,13 +153,13 @@ local rows, guildTruth = {}, {}
 for i = 1, N do
     local n = i - 1
     local name = "Player " .. string.char(65 + math.floor(n / 676))
-        .. string.char(65 + math.floor(n / 26) % 26) .. string.char(65 + n % 26)
+        .. string.char(97 + math.floor(n / 26) % 26) .. string.char(97 + n % 26)
     local guild = "Depth Guild " .. (i % 7)
     local total = 5 + math.floor((N - i) * 4990 / N)      -- 5 .. 4995, never > ceiling
     assert(total <= ceiling)
     SOURCE.Overlord.Leaderboard.kills[name] = total
     SOURCE.Overlord.Leaderboard.playerInfo[name] = { class = "WARRIOR", faction = "Horde", level = 60,
-        locale = "engb", guild = guild, guildAt = 1790016000 }
+        locale = "engb", guild = guild, guildAt = 1790016000, guildAuth = true }
     rows[i] = name
     guildTruth[guild] = (guildTruth[guild] or 0) + total
 end

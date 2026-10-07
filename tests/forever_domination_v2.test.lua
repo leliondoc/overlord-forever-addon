@@ -155,8 +155,9 @@ local function victory(c, frontId, faction, ts)
     -- BroadcastTotalVictory fan-out: TV precedes VB on every route; duplicate copies per route.
     emit("TV", tv); emit("VB", vb); emit("TV", tv); emit("VB", vb)
 end
--- An hour-old victory that will exist only in the journal (TV replays stop after 2 h).
-server = S - 18000
+-- An old victory that will exist only in the journal (TV replays stop after 2 h); more
+-- than 6 h before the next one on f1 (1.7: one victory per front per 6 h).
+server = S - 25000
 victory(A1, "f1", "Alliance", server)
 assert(bar(A1) == 51, "A local victory must move the bar by +1 at once")
 pump()
@@ -168,11 +169,17 @@ pump()
 sameBar(everyone, 50, "Horde victory")
 victory(A1, "f1", "Alliance", S - 60)
 pump()
-sameBar(everyone, 51, "second Alliance victory on f1 (truce elapsed)")
+sameBar(everyone, 51, "second Alliance victory on f1 (6 h elapsed)")
 do
     local vA, vH = counts(H1)
     assert(vA == 2 and vH == 1, "Horde client counts " .. vA .. "/" .. vH .. " victories, expected 2/1")
 end
+-- 1.7.0 spacing from its release day only (a fixed constant shared by every client):
+-- victories recorded under 1.6.x earlier that week keep the 15-minute spacing.
+local since = sync._VictorySpacingSince
+assert(since and since >= 1791331200, "spacing start missing or before the 1.7.0 release day")
+assert(sync._VictorySpacingFor(since - 1) == 900, "a 1.6.x victory was re-scored with the 6 h spacing")
+assert(sync._VictorySpacingFor(since) == 6 * 3600, "the 6 h spacing does not start at the 1.7.0 release")
 
 -- 1b. Evidence rule: a VB alone (its TV lost) does not count; the TV alone (VB lost) does.
 do
@@ -432,9 +439,11 @@ do
     for _, row in ipairs(replay) do receive(H2, "Horde One", "VB", row.data) end
     sameBar({ A1, A2, H1, H2 }, bar(A1), "cross-faction victory catch-up")
 
-    -- A later victory: the next pull carries only the last packet onward.
+    -- A later victory: the next pull carries only the last packet onward (on f5: f2's
+    -- previous victory is under 6 h old).
     server = S + 7200
-    victory(A1, "f2", "Alliance", S + 3700)
+    Overlord.Fronts.Registry.f5 = { id = "f5", zones = { { id = "f5a" } } }
+    victory(A1, "f5", "Alliance", S + 3700)
     pump({ A1, A2 })
     use(A1)
     sync:AppendVictoryBonusToSrQueue({}, true, false)

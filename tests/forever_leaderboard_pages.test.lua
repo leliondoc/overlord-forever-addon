@@ -147,12 +147,12 @@ local names = {}
 for i = 1, 5000 do
     local n = i - 1
     local name = "Player " .. string.char(65 + math.floor(n / 676))
-        .. string.char(65 + math.floor(n / 26) % 26) .. string.char(65 + n % 26)
+        .. string.char(97 + math.floor(n / 26) % 26) .. string.char(97 + n % 26)
     names[i] = name
     local lb = SOURCE.Overlord.Leaderboard
     lb.kills[name] = i
     lb.playerInfo[name] = { class = "WARRIOR", faction = "Horde", level = 60,
-        locale = "engb", guild = "Veteran Guild", guildAt = 1790016000 }
+        locale = "engb", guild = "Veteran Guild", guildAt = 1790016000, guildAuth = true }
 end
 local done, supported
 local receiver = PULLER.Overlord.Sync.OnReceiveLeaderboardKills
@@ -413,6 +413,10 @@ print("PASS: simultaneous cross-faction pulls and v6-only scheduler")
 advance(400)
 -- Stop the scheduler's periodic rounds: this section drives the pulls itself.
 PULLER.Overlord.Sync._historyCatchupWakeGeneration = (PULLER.Overlord.Sync._historyCatchupWakeGeneration or 0) + 1000
+-- The scheduler's own round may still be sweeping (its first peer is drawn at random):
+-- end it and start this section from a fresh sweep position.
+PULLER.Overlord.Sync:CancelPagedLeaderboardCatchup()
+PULLER.OverlordDB.leaderboardPageProgress = nil
 PULLER.Overlord.Sync.SendWhisper = sendRequest
 local SECOND = a -- same channel as the puller: a second direct neighbour
 for _, field in ipairs({ "kills", "playerInfo", "captureCount" }) do
@@ -436,7 +440,8 @@ PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
     return sendRequest(self, kind, payload, target)
 end
 done = nil
-assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
+local started, why = PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end)
+assert(started, tostring(why) .. " " .. PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())
 for _ = 1, 20 do advance(100); if done ~= nil then break end end
 assert(done == false, "the cut pull did not end")
 local shared = PULLER.OverlordDB.leaderboardPageProgress.shared

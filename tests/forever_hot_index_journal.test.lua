@@ -33,7 +33,7 @@ local function sameIndex(a, b)
 end
 
 -- 300 players with kills, indexes built once.
-local function playerName(i) return "Fighter Number" .. string.char(65 + i % 26) .. string.char(65 + math.floor(i / 26) % 26) end
+local function playerName(i) return "Fighter Number" .. string.char(97 + i % 26) .. string.char(97 + math.floor(i / 26) % 26) end
 for i = 1, 300 do lb:SetPlayerKills(playerName(i), i, true) end
 assert(lb:RebuildNetworkHotIndexes(), "Fixture: initial rebuild failed")
 

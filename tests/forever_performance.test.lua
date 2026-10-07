@@ -34,8 +34,8 @@ table.sort = function(rows, less)
     return sort(rows, less)
 end
 local function suffix(i)
-    return string.char(65 + math.floor(i / 676) % 26,
-        65 + math.floor(i / 26) % 26, 65 + i % 26)
+    return string.char(97 + math.floor(i / 676) % 26,
+        97 + math.floor(i / 26) % 26, 97 + i % 26)
 end
 local total = 0
 for i = 1, 10000 do

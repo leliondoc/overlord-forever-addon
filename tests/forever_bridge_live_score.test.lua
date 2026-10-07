@@ -148,10 +148,10 @@ for _, r in ipairs(lkRows(base + 1)) do assert(r.total < 1000, "an implausible t
 -- 5. cap: 8 subjects at once -> at most 6 rows in the first minute, all delivered afterwards
 advance(200)
 refreshPeers()
-for i = 1, 8 do know("Horde Extra" .. string.char(64 + i), 50, "Horde") end
+for i = 1, 8 do know("Horde Extra" .. string.char(96 + i), 50, "Horde") end
 base = #whispers
 local t0 = clock
-for i = 1, 8 do kOverBnet("Horde Extra" .. string.char(64 + i), 55) end
+for i = 1, 8 do kOverBnet("Horde Extra" .. string.char(96 + i), 55) end
 advance(30)
 assert(distinctRows(lkRows(base + 1)) <= 6, "more than 6 rows in a minute: " .. distinctRows(lkRows(base + 1)))
 for _ = 1, 6 do advance(30); refreshPeers() end

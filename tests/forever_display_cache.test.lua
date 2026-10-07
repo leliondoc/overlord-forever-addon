@@ -35,7 +35,7 @@ local function copy(value)
 end
 local names = {}
 for i = 1, 6000 do
-    local name = "Cached Player" .. string.char(65 + math.floor(i / 676), 65 + math.floor(i / 26) % 26, 65 + i % 26)
+    local name = "Cached Player" .. string.char(97 + math.floor(i / 676), 97 + math.floor(i / 26) % 26, 97 + i % 26)
     names[i] = name
     lb.kills[name] = math.ceil(i / 2)
     lb.captureCount[name] = math.ceil(i / 20)

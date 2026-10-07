@@ -570,10 +570,6 @@ end
 local function MaybeTakeOverStaleAllyCaptureAuthority(zone)
     if not zone or zone.holdAuthorityLocal then return false end
     if zone.status ~= "in_progress" or zone.owner ~= Overlord.PlayerFaction then return false end
-    if Overlord.Zones and Overlord.Zones.IsCapitalImmune
-        and select(1, Overlord.Zones:IsCapitalImmune(zone.id)) then
-        return false
-    end
     local official = zone.zsOfficialCapturerName
     if not official or official == "" then return false end
     if not Overlord.Sync or not Overlord.Sync.GetPlayerFullName then return false end
@@ -1669,6 +1665,10 @@ function Overlord.ZoneControl:CaptureZone(zone)
     zone.capturedTime = now
     zone.updatedAt = now
     zone.holdTimeRequired = 120
+    -- Vu en direct ici (ligne "Capitale liberee", garde des cartes ZA surprenantes).
+    if Overlord.Sync and Overlord.Sync.NoteLiveZoneTraffic then
+        Overlord.Sync:NoteLiveZoneTraffic(zone.id)
+    end
 
     -- Meme logique que Sync:OnReceiveCapture : evite +2 quand un allie envoie aussi un "C"
     -- apres son propre CaptureZone (deux joueurs sur le point).
@@ -1737,7 +1737,19 @@ function Overlord.ZoneControl:CaptureZone(zone)
     -- qui pose une treve de 2h sur la capitale ennemie et affiche l'ecran de victoire a tort).
     local enemyBaseId = Overlord.Fronts and Overlord.Fronts:GetEnemyCapitalId(Overlord.PlayerFaction)
     if zone.id == enemyBaseId then
-        self:OnTotalVictory()
+        -- Regle (b), 1.7 : une autre victoire sur ce front ne compte que 6 h apres la
+        -- precedente. La capitale est prise (le combat continue), sans bonus ni treve.
+        local front = Overlord.Fronts and Overlord.Fronts:GetCurrentFront()
+        local allowed, allowedFrom = true, 0
+        if front and Overlord.Zones.IsFrontVictoryAllowed then
+            allowed, allowedFrom = Overlord.Zones:IsFrontVictoryAllowed(front.id, capTs)
+        end
+        if allowed then
+            self:OnTotalVictory()
+        elseif L.FRONT_VICTORY_TOO_SOON then
+            Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r " .. L.FRONT_VICTORY_TOO_SOON,
+                Overlord.Zones:GetFrontMapDisplayName(front.id) or front.id, date("%H:%M", allowedFrom)))
+        end
     end
     
     -- Sauvegarde et refresh

@@ -34,6 +34,10 @@ local classRequestLastPurge = 0
 
 local pendingGuildRequests = {}
 local pendingGuildRequestsCount = 0
+-- Names this client asked a guild for (GR), until when a GY answer is accepted.
+local outstandingGuildRequests = {}
+-- Covers a GR held in the relay queue (TTL 120 s per leg) plus the answer jitter.
+local GUILD_ANSWER_WINDOW = 300
 local guildRequestCooldowns = {}
 local guildAnswerCooldowns = {}
 local guildRequestFlushScheduled = false
@@ -43,10 +47,56 @@ local guildRequestLastPurge = 0
 local lastLbGuildRefreshFromGY = 0
 local LB_GUILD_REFRESH_FROM_GY_INTERVAL = 1.5
 
+-- Live hints (CA class, GY guild) answer our own request and only fill a missing
+-- value. One peer alone cannot set it (2026-10-06): the first answer to arrive won,
+-- and a modified client answered first. A value is applied once two distinct peers
+-- gave it; each request already reaches about three answerers, so nothing is added
+-- to the traffic. Only a live path: ranking pages still bring the same data to all.
+local pendingHints = {}
+local function ConcordantHint(kind, name, value, sender, expiresAt)
+    local key = kind .. "\031" .. name
+    local row = pendingHints[key]
+    if not row or row.expiresAt < GetTime() then
+        row = { expiresAt = tonumber(expiresAt) or GetTime(), votes = {}, voters = {}, n = 0 }
+        pendingHints[key] = row
+    end
+    -- One identity, one vote: "Name-Realm" (whisper) and "Name" (relay) are the same
+    -- player, and a voter that already named a value cannot fill the other slots.
+    local voter = Overlord.Sync.GetCaptureContributorDedupKey
+        and Overlord.Sync:GetCaptureContributorDedupKey(sender)
+    if not voter then return false end
+    voter = voter:lower()
+    -- Exact value: two honest holders send the same stored spelling, and a second
+    -- voter cannot choose the applied casing.
+    local vote = value
+    local first = row.votes[vote]
+    if first and first ~= voter and not row.voters[voter] then
+        pendingHints[key] = nil
+        return true
+    end
+    if not first and not row.voters[voter] and row.n < 4 then
+        row.votes[vote], row.voters[voter], row.n = voter, true, row.n + 1
+    end
+    return false
+end
+-- The answering peer itself, one hop away (a whisper, or a targeted relay dispatch).
+local function IsDirectAnswer(sync, sender, channel)
+    if channel ~= "WHISPER" and channel ~= "BETA" then return false end
+    if sync.IsUnauthenticatedRelayOrigin and sync:IsUnauthenticatedRelayOrigin(sender) then return false end
+    local net = Overlord.BetaNetwork
+    if channel == "BETA" and not (net and net:IsDispatching(sender) and net:IsTargetedDispatch()) then
+        return false
+    end
+    return true
+end
+
 local function classRequestsMaybePurge()
     local now = GetTime()
     if now - classRequestLastPurge < 60 then return end
     classRequestLastPurge = now
+    for k, row in pairs(pendingHints) do
+        if row.expiresAt < now then pendingHints[k] = nil end
+    end
     for k, t in pairs(classRequestCooldowns) do
         if now - t > CLASS_REQUEST_COOLDOWN * 2 then classRequestCooldowns[k] = nil end
     end
@@ -68,6 +118,18 @@ local function guildRequestsMaybePurge()
     for k, t in pairs(guildAnswerCooldowns) do
         if now - t > CLASS_ANSWER_COOLDOWN * 2 then guildAnswerCooldowns[k] = nil end
     end
+    for k, expiresAt in pairs(outstandingGuildRequests) do
+        if now >= expiresAt then outstandingGuildRequests[k] = nil end
+    end
+    for k, row in pairs(pendingHints) do
+        if row.expiresAt < now then pendingHints[k] = nil end
+    end
+end
+
+-- Live hints from other files (a third party's race): same agreement rule as GY/CA.
+function Overlord.Sync:ConcordantLiveHint(kind, name, value, sender, expiresAt)
+    guildRequestsMaybePurge()
+    return ConcordantHint(kind, name, value, sender, expiresAt)
 end
 
 local function resolutionCanBroadcast()
@@ -280,7 +342,7 @@ function Overlord.Sync:OnReceiveClassRequest(payload, sender, channel)
 end
 
 function Overlord.Sync:OnReceiveClassAnswer(payload, sender, channel)
-    if (channel ~= "WHISPER" and channel ~= "BETA") then return end
+    if not IsDirectAnswer(self, sender, channel) then return end
     if type(payload) ~= "string" or payload == "" then return end
     if #payload > CLASS_REQUEST_MAX_PAYLOAD then return end
     classRequestsMaybePurge()
@@ -299,9 +361,11 @@ function Overlord.Sync:OnReceiveClassAnswer(payload, sender, channel)
                 and self:IsValidCaptureClassToken(cls) then
                 name = self:NormalizeContributorFullName(name) or name
                 if name ~= "" and outstandingClassRequests[name]
-                    and GetTime() <= outstandingClassRequests[name] then
+                    and GetTime() <= outstandingClassRequests[name]
+                    and (not self.IsKnownLeaderboardSubject or self:IsKnownLeaderboardSubject(name))
+                    and ConcordantHint("C", name, cls, sender, outstandingClassRequests[name]) then
                     -- CA ne porte qu'une meta d'affichage et repond a une requete locale
-                    -- explicite. Son setter est un join lexical : aucun quorum receiver-local.
+                    -- explicite, confirmee par deux pairs (voir ConcordantHint).
                     lb:SetPlayerClassFromSync(name, cls)
                     outstandingClassRequests[name] = nil
                 end
@@ -498,6 +562,7 @@ function Overlord.Sync:FlushGuildRequests()
             end
             for _, n in ipairs(b) do
                 guildRequestCooldowns[n] = now
+                outstandingGuildRequests[n] = now + GUILD_ANSWER_WINDOW
             end
             batchesEmitted = batchesEmitted + 1
         end
@@ -560,7 +625,11 @@ function Overlord.Sync:OnReceiveGuildRequest(payload, sender, channel)
                     end
                 else
                     local guild, _, guildAuth = lb:GetHotPlayerGuildState(trimmed)
-                    if guild and guild ~= "" and self:IsValidGuildSyncToken(guild) then
+                    -- Answer only with a confirmed register (the player's own, or one
+                    -- received in a page), never with a hint we got the same way.
+                    local held = lb.playerInfo and lb.playerInfo[trimmed]
+                    local strong = guildAuth or (type(held) == "table" and held.guildReplica == true)
+                    if strong and guild and guild ~= "" and self:IsValidGuildSyncToken(guild) then
                         local entry = trimmed .. "|" .. guild
                         local projected = (#answers == 0) and #entry or (#entry + 1)
                         local currentLen = 0
@@ -589,8 +658,12 @@ function Overlord.Sync:OnReceiveGuildRequest(payload, sender, channel)
 end
 
 function Overlord.Sync:OnReceiveGuildAnswer(payload, sender, channel)
-    -- GY : whisper (reponse GR) ou canal/groupe (batch SR AppendGuildMetadataToSrQueue).
-    if (channel ~= "WHISPER" and channel ~= "BETA") and channel ~= "CHANNEL" and channel ~= "RAID" and channel ~= "PARTY" then return end
+    -- GY is only ever the whispered answer to our own GR (2026-10-06). The channel and
+    -- group copies had no honest sender left (AppendGuildMetadataToSrQueue has no
+    -- caller) and let anyone create a ladder entry for any name: one GY on the channel,
+    -- then one LK, put "EMPIRE SUCKS" on every ranking. A relayed origin is a name
+    -- written by a gateway, never the answering peer.
+    if not IsDirectAnswer(self, sender, channel) then return end
     if type(payload) ~= "string" or payload == "" then return end
     if #payload > CLASS_REQUEST_MAX_PAYLOAD then return end
     guildRequestsMaybePurge()
@@ -632,9 +705,14 @@ function Overlord.Sync:OnReceiveGuildAnswer(payload, sender, channel)
                         if lb:ClearPlayerGuild(name, true, true, clearTs) then updated = true end
                     end
                 else
-                    -- GY/SR est un hint : remplir une absence non confirmee uniquement.
-                    if lb.ShouldAcceptSyncedGuild
-                        and lb:ShouldAcceptSyncedGuild(name, guild, 0) then
+                    -- GY est un hint : remplir une absence non confirmee uniquement,
+                    -- pour un nom que nous avons demande et qui a deja un score ici.
+                    local asked = outstandingGuildRequests[name]
+                    if asked and GetTime() < asked
+                        and self.IsKnownLeaderboardSubject and self:IsKnownLeaderboardSubject(name)
+                        and lb.ShouldAcceptSyncedGuild
+                        and lb:ShouldAcceptSyncedGuild(name, guild, 0)
+                        and ConcordantHint("G", name, guild, sender, asked) then
                         lb:SetPlayerGuild(name, guild, true, false, 0, false)
                         updated = true
                     end
@@ -750,7 +828,7 @@ function Overlord.Sync:BuildLocalGuildIdentityPayload()
     local epoch = (startTs > 0 and Overlord.TimestampToCampaignId)
         and Overlord:TimestampToCampaignId(startTs) or 0
     if epoch <= 0 then return end
-    local guildAt = time()
+    local guildAt = (GetServerTime and GetServerTime()) or time()
     if lb.GetPlayerInfo then
         local info = lb:GetPlayerInfo(playerName)
         local storedGuild = info and (info.guild or "") or ""

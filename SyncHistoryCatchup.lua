@@ -35,6 +35,8 @@ local INITIAL_DELAY_SEC = 24
 -- at login. Let the territorial burst finish first, then seek a peer sooner.
 local EMPTY_SAVE_INITIAL_DELAY_SEC = 16
 local MAX_ATTEMPTS = 4
+-- In combat or an instance, look again after this delay without spending an attempt.
+local COMBAT_RECHECK_SEC = 15
 -- Un voisin muet (sans reponse v6) est ecarte du choix pendant ce delai.
 local PEER_PENALTY_SEC = 10 * 60
 -- Garde-fou : un tour plus long que ceci est abandonne (rien n'est perdu, la
@@ -82,15 +84,13 @@ local function ForgivePeer(name)
 end
 
 local function PeerFaction(name)
-    -- Faction Battle.net (amis/ponts) d'abord, puis metadonnees du classement.
+    -- Faction Battle.net (amis/ponts) ; la faction du classement n'est que ce que le
+    -- pair dit de lui-meme : GetBetaPeerFaction ne la retient que si c'est la notre.
     if sync.GetBetaPeerFaction then
         local known = sync:GetBetaPeerFaction(name)
         if known == "Alliance" or known == "Horde" then return known end
     end
-    local lb = Overlord.Leaderboard
-    local info = lb and lb.GetPlayerInfo and lb:GetPlayerInfo(name)
-    local faction = type(info) == "table" and info.faction or nil
-    return (faction == "Alliance" or faction == "Horde") and faction or nil
+    return nil
 end
 
 -- Etat du rattrapage pour /ov sync (memoire de session uniquement).
@@ -211,6 +211,12 @@ local function BuildSnapshotKillPayload(snapshot, name, wireEpoch)
     local guild = SafeWireField(info.guild, 96)
     if guild ~= "" and sync.IsValidGuildSyncToken
         and not sync:IsValidGuildSyncToken(guild) then guild = "" end
+    -- Only a strong register goes out: confirmed by the player himself (K/GI, our
+    -- guild roster, our group) or received in a page. A second-hand hint (GY answer)
+    -- stays local: the first, possibly forged, answer was otherwise re-served as a
+    -- page register and spread a fake guild (2026-10-06).
+    local strongGuild = info.guildAuth == true or info.guildReplica == true
+    if not strongGuild then guild = "" end
     local fields = {
         SafeWireField(name, 80),
         tostring(kills),
@@ -219,7 +225,7 @@ local function BuildSnapshotKillPayload(snapshot, name, wireEpoch)
         tostring(wireEpoch),
         SafeWireField(info.locale, 8),
         guild,
-        tostring(math.floor(tonumber(info.guildAt) or 0)),
+        tostring(strongGuild and math.floor(tonumber(info.guildAt) or 0) or 0),
         "B" .. tostring(wireEpoch),
         tostring(level),
     }
@@ -234,7 +240,8 @@ local function BuildSnapshotKillPayload(snapshot, name, wireEpoch)
 end
 
 local function BuildSnapshotCapturePayload(snapshot, name, wireEpoch, full)
-    if not ContributorCanRelay(name) then return nil end
+    if not ContributorCanRelay(name)
+        or (sync.IsDeniedKillContributor and sync:IsDeniedKillContributor(name)) then return nil end
     local info = type(snapshot.playerInfo) == "table" and snapshot.playerInfo[name] or nil
     info = type(info) == "table" and info or {}
     local zones, safeZones = snapshot.captures and snapshot.captures[name], {}
@@ -510,6 +517,12 @@ end
 local function PickDirectPeer()
     local candidates = DirectCandidates()
     if #candidates == 0 then return nil end
+    -- A fresh client starts its rotation at a random place: the candidates are sorted
+    -- by name, and every new installation starting at 0 asked the same first peers
+    -- (all of them busy, at a launch). Persisted, so the walk itself is unchanged.
+    if OverlordDB and tonumber(OverlordDB.leaderboardHistoryCatchupTargetRotation) == nil then
+        OverlordDB.leaderboardHistoryCatchupTargetRotation = math.random and math.random(0, 999999) or 0
+    end
     local rotation = math.max(0, math.floor(tonumber(OverlordDB
         and OverlordDB.leaderboardHistoryCatchupTargetRotation) or 0))
     local enemyFaction = ENEMY_FACTION[Overlord.PlayerFaction]
@@ -651,8 +664,19 @@ ScheduleAttempt = function(pending, attempt)
         end
         if Overlord.InstanceSuspended or IsInInstance()
             or (InCombatLockdown and InCombatLockdown()) then
-            NoteHr("step", "skipped (combat or instance)")
-            ScheduleAttempt(pending, attempt + 1)
+            -- Not an attempt: nobody was asked. Look again shortly, same attempt (a
+            -- fighter used to spend all four in a minute and wait for the next round).
+            NoteHr("step", "waiting (combat or instance)")
+            C_Timer.After(COMBAT_RECHECK_SEC, function()
+                if sync._historyCatchupPending == pending and not pending.terminal
+                    and pending.attemptToken == token then
+                    local ok, err = pcall(attemptBody)
+                    if not ok and sync._historyCatchupPending == pending and not pending.terminal then
+                        NoteHr("step", "error: " .. tostring(err))
+                        FinishRound(pending, false)
+                    end
+                end
+            end)
             return
         end
         local target = PickDirectPeer()

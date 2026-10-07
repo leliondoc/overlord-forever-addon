@@ -81,12 +81,12 @@ local queued, normalQueue = nil, net.Queue
 net.Queue = function(_, packet) queued = packet; return true end
 net:Start()
 advance(3.1)
-assert(queued and queued.kind == "NH" and queued.payload == "1.1.3~lp6",
+assert(queued and queued.kind == "NH" and queued.payload == "1.1.3~lr~lp6",
     "Startup hello did not advertise lp6")
 advance(2.1) -- distinct community scan, outside NH duplicate suppression
 queued = nil
 assert(net:Broadcast("NH", e.Overlord.Version) == 1)
-assert(queued and queued.payload == "1.1.3~lp6",
+assert(queued and queued.payload == "1.1.3~lr~lp6",
     "Plain-version NH from the community scan lacked lp6")
 net.Queue = normalQueue
 
@@ -106,6 +106,10 @@ assert(net:IsPeer("New Tester") and net:GetPeerPagedProtocol("New Tester") == 6)
 receive("New Tester", "NH", "1.1.3", e.time() - 30)
 assert(net:GetPeerPagedProtocol("New Tester") == 6,
     "Delayed older NH downgraded a fresh lp6 announcement")
+-- 1.7.0: "~lr" (race in ranking rows) sits before the suffix that 1.6.3 reads.
+assert(("1.1.3~lr~lp6"):match("~lp(%d+)$") == "6", "1.6.3 clients would no longer see lp6")
+receive("Raced Tester", "NH", "1.1.3~lr~lp6")
+assert(net:GetPeerPagedProtocol("Raced Tester") == 7, "~lr~lp6 was not read as v7")
 
 local sent = {}
 s.SendWhisper = function(_, kind, payload, target)

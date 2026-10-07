@@ -1,6 +1,7 @@
 -- Targeted, resumable anti-entropy: v5 covers 5,000 kills; v6 also pages
--- 500 capture rows per faction and race metadata for attested contributors.
--- Old endpoints ignore v6 and use the v5 kill sweep plus bounded v4 fallback.
+-- 500 capture rows per faction and race metadata for attested contributors;
+-- v7 (1.7.0) is v6 with the race at the end of each sent kill row.
+-- Peers without v6 are not asked (1.2.4): there is no v5/v4 fallback any more.
 local Overlord = _G.Overlord
 if not Overlord or not Overlord.Sync then return end
 local sync, lb = Overlord.Sync, Overlord.Leaderboard
@@ -32,10 +33,21 @@ local function epoch()
     return math.floor(tonumber(Overlord.GetCurrentCampaignStartTs
         and Overlord:GetCurrentCampaignStartTs()) or 0)
 end
-local function paused()
-    return Overlord.InstanceSuspended or (InCombatLockdown and InCombatLockdown())
-        or (IsInInstance and IsInInstance())
+-- blocked: instance, nothing at all (every Overlord feature stops there).
+-- paused: also combat, for the heavy work (building a profile, applying rows).
+-- 1.7: a page already built still leaves in combat (sending it costs almost
+-- nothing and stays within the byte budget). In PvP everyone is in combat all
+-- the time, and a responder that went busy at every fight cut every sweep.
+local function blocked()
+    return Overlord.InstanceSuspended or (IsInInstance and IsInInstance())
 end
+local function inCombat() return InCombatLockdown and InCombatLockdown() or false end
+local function paused()
+    return blocked() or inCombat()
+end
+-- A requester told "busy: combat" waits for the same peer instead of moving on:
+-- 30-45 s per wait (spread, so the requesters of one popular peer do not ask together).
+local COMBAT_WAIT_SEC, COMBAT_WAIT_JITTER, COMBAT_WAIT_MAX = 30, 15, 5
 -- Same fold as byte by byte (wire-compatible), read 8 bytes per call: a 4 KB
 -- page hashed in one frame on both sides cost ~1 ms with one call per byte.
 local function hash(value)
@@ -97,7 +109,7 @@ local function enqueue(job)
             return
         end
         if job.epoch ~= epoch() or (job.valid and not job.valid()) then outbound = nil; return end
-        if paused() then job.at = GetTime(); wake = true; C_Timer.After(2, pump); return end
+        if blocked() then job.at = GetTime(); wake = true; C_Timer.After(2, pump); return end
         if GetTime() - job.at > 240 then outbound = nil; return end
         local packet = job.packets[job.index]
         if not packet then outbound = nil; if job.done then job.done() end; return end
@@ -151,6 +163,41 @@ local function rowDigest(kind, payload)
 end
 sync._PagedRowDigest = rowDigest
 
+-- v7 digests (1.7): each row hash goes through a non-linear mix before the sum. With a
+-- plain sum, two clients that each lead on a different row (A: X=102, Y=161; B: X=101,
+-- Y=162) could cancel exactly: "identical", no row sent. Exact in doubles (< 2^53).
+-- v6 keeps the plain sum, so 1.6.x peers still compare as before.
+local function mixRow(h)
+    return (h * 31 + (h % 9973) * (h % 10007)) % MOD
+end
+local function bucketHash(bucket, wire) return wire == "7" and bucket.hash7 or bucket.hash end
+local function streamHash(profile, wire) return wire == "7" and profile.hash7 or profile.hash end
+sync._PagedMixRow = mixRow
+
+-- v7 (1.7.0) = v6 whose LK rows end with the player's race (":o2", 3 bytes), so the
+-- race arrives with the score instead of waiting for the LR stream at the end of
+-- the sweep. Only between peers advertising it; v6 peers keep the 10-field rows.
+-- The race stays out of the digests (same as v6): race knowledge differs between
+-- peers (one saw the player, the other did not), and digesting it made buckets
+-- that only differ by a race go out in full on every sweep. It rides along with
+-- any row that is sent; the LR stream still completes the rest. Rows over the
+-- 250-byte limit go without it.
+local function raceField(snapshot, name, payload)
+    local info = snapshot and snapshot.playerInfo and snapshot.playerInfo[name]
+    local field = type(info) == "table" and sync.EncodeRaceWireField
+        and sync:EncodeRaceWireField(info.race, info.raceSex)
+    if field and #payload + 1 + #field <= 250 then return field end
+    return nil
+end
+sync._PagedRaceField = raceField
+local function raced(wire, stream) return wire == "7" and stream == "LK" end
+-- races: identity -> race field, kept beside the rows so every row stays a 2-field
+-- table (measured: ~66 B per raced row in the map, ~80 B as a third row field).
+local function rowPayload(row, races)
+    local race = races and races[row.key]
+    return race and (row.payload .. ":" .. race) or row.payload
+end
+
 -- All scans and sorting yield after 32 work units and a ~1 ms slice.
 -- Only complete immutable profiles are published: at most 5,000 LK,
 -- 1,500 LC, and 6,500 LR source identities.
@@ -162,9 +209,9 @@ local function prepare(callback)
         local snapshot = ok and sync:GetAttestedLeaderboardSnapshot()
         if not snapshot or wanted ~= epoch() then building = nil; callback(nil); return end
         if profiles[snapshot] then building = nil; callback(profiles[snapshot]); return end
-        local result = { epoch = wanted, streams = {} }
+        local result = { epoch = wanted, streams = {}, races = {} }
         for _, kind in ipairs(STREAMS) do
-            result.streams[kind] = { buckets = {}, count = 0, hash = 0 }
+            result.streams[kind] = { buckets = {}, count = 0, hash = 0, hash7 = 0 }
         end
         result.buckets = result.streams.LK.buckets
         local units, sliceAt = 0, 0
@@ -184,7 +231,8 @@ local function prepare(callback)
             }
             for _, kind in ipairs(STREAMS) do
                 local profile, source, count = result.streams[kind], sources[kind] or {}, 0
-                for i = 1, BUCKETS do profile.buckets[i] = { hash = 0 }; work() end
+                local isKills = kind == "LK"
+                for i = 1, BUCKETS do profile.buckets[i] = { hash = 0, hash7 = 0 }; work() end
                 for name in pairs(source) do
                     count = count + 1
                     if count > STREAM_LIMITS[kind] then error("oversized attested snapshot") end
@@ -194,6 +242,7 @@ local function prepare(callback)
                     if identity and validCursor(identity) then
                         local bucket = profile.buckets[hash(identity) % BUCKETS + 1]
                         bucket[#bucket + 1] = { key = identity, payload = payload }
+                        if isKills then result.races[identity] = raceField(snapshot, name, payload) end
                     end
                     work()
                 end
@@ -201,11 +250,14 @@ local function prepare(callback)
                     local bucket = profile.buckets[i]
                     lb:SortNetworkRows(bucket, function(a, b) return a.key < b.key end, work)
                     for j = 1, #bucket do
-                        bucket.hash = (bucket.hash + hash(rowDigest(kind, bucket[j].payload))) % MOD
+                        local h = hash(rowDigest(kind, bucket[j].payload))
+                        bucket.hash = (bucket.hash + h) % MOD
+                        bucket.hash7 = (bucket.hash7 + mixRow(h)) % MOD
                         work()
                     end
                     profile.count = profile.count + #bucket
                     profile.hash = (profile.hash + bucket.hash) % MOD
+                    profile.hash7 = (profile.hash7 + bucket.hash7) % MOD
                 end
             end
             result.count, result.hash = result.streams.LK.count, result.streams.LK.hash
@@ -267,7 +319,7 @@ local function finish(state, success, unsupportedPeer)
     -- A failed pull tells its responder to drop the session at once; otherwise the
     -- next attempt (fresh nonce) would be answered "busy" for up to five minutes.
     if not success and state.seq > 0 and sendControl then
-        sendControl("HR", table.concat({ state.extended and "6" or "5", "F",
+        sendControl("HR", table.concat({ state.wire, "F",
             state.epoch, state.nonce, state.seq }, ":"), state.peer)
     end
     -- /ov network: why the last pull stopped (busy responder, silence, ...).
@@ -305,13 +357,14 @@ request = function(state, retry)
     state.tries = state.tries + 1
     local profile = state.extended and state.profile.streams[state.stream] or state.profile
     local bucket = profile.buckets[state.bucket]
-    local fields = { state.extended and "6" or "5", "Q", state.epoch, state.nonce, state.seq,
-        state.bucket, state.cursor, #bucket, bucket.hash }
+    local fields = { state.wire, "Q", state.epoch, state.nonce, state.seq,
+        state.bucket, state.cursor, #bucket, bucketHash(bucket, state.wire) }
     if state.extended then fields[#fields + 1] = state.stream end
     if state.seq == 1 or (state.extended and state.completed == 0) then
-        fields[#fields + 1], fields[#fields + 2] = profile.count, profile.hash
+        fields[#fields + 1], fields[#fields + 2] = profile.count, streamHash(profile, state.wire)
     end
     local payload = table.concat(fields, ":")
+    state.lastRequest = payload
     local seq, tries = state.seq, state.tries
     local function sendRequest()
         if pull ~= state or state.seq ~= seq or state.tries ~= tries then return end
@@ -378,6 +431,7 @@ request = function(state, retry)
     C_Timer.After(2, timeout)
 end
 local function nextPage(state, cursor)
+    state.combatWaits = 0 -- progress: a later fight of the peer may be waited for again
     stats.pages = stats.pages + 1
     if cursor == "-" then
         state.bucket, state.completed = state.bucket % BUCKETS + 1, state.completed + 1
@@ -399,7 +453,7 @@ local function nextPage(state, cursor)
         -- End notice leaves directly: queued behind our own outbound pages it was
         -- dropped, and the responder kept us as its session (answering "R" to
         -- everyone else) for five minutes.
-        sendControl("HR", table.concat({ state.extended and "6" or "5", "F",
+        sendControl("HR", table.concat({ state.wire, "F",
             state.epoch, state.nonce, state.seq }, ":"), state.peer)
         finish(state, true)
         return
@@ -499,9 +553,11 @@ end
 local function respond(session, q)
     if serving ~= session or not session.profile or outbound then return end
     local profile = session.extended and session.profile.streams[q.stream] or session.profile
-    if q.totalCount ~= nil and q.totalCount == profile.count and q.totalHash == profile.hash then
+    local withRace = raced(session.wire, q.stream)
+    if q.totalCount ~= nil and q.totalCount == profile.count
+        and q.totalHash == streamHash(profile, session.wire) then
         -- Steady-state convergence costs one request and one reply, not 64 polls.
-        local fields = { session.extended and "6" or "5", "S", session.epoch,
+        local fields = { session.wire, "S", session.epoch,
             session.nonce, q.seq }
         if session.extended then fields[#fields + 1] = q.stream end
         fields[#fields + 1], fields[#fields + 2] = q.totalCount, q.totalHash
@@ -517,7 +573,7 @@ local function respond(session, q)
     end
     local bucket = profile.buckets[q.bucket]
     local rows, cursor = {}, "-"
-    if q.cursor == "-" and #bucket == q.count and bucket.hash == q.hash then
+    if q.cursor == "-" and #bucket == q.count and bucketHash(bucket, session.wire) == q.hash then
         -- An empty page certifies only this matching bucket.
     else
         local low, high = 1, #bucket + 1
@@ -527,8 +583,8 @@ local function respond(session, q)
         end
         local blobBytes = 0
         for i = low, math.min(#bucket, low + PAGE_ROWS - 1) do
-            local row = bucket[i]
-            local encoded = tostring(#row.payload) .. ":" .. row.payload
+            local payload = rowPayload(bucket[i], withRace and session.profile.races)
+            local encoded = tostring(#payload) .. ":" .. payload
             if blobBytes + #encoded > 4064 then break end
             rows[#rows + 1] = encoded
             blobBytes = blobBytes + #encoded
@@ -540,13 +596,13 @@ local function respond(session, q)
     end
     local blob = table.concat(rows)
     local partCount = math.max(1, math.ceil(#blob / CHUNK))
-    local base = table.concat({ session.extended and "6" or "5", "P", session.epoch,
+    local base = table.concat({ session.wire, "P", session.epoch,
         session.nonce, q.seq, q.bucket,
         #rows, hash(blob), cursor, partCount }, ":")
     if session.extended then base = base .. ":" .. q.stream end
     local packets = { { "HA", base } }
     for i = 1, partCount do
-        local data = table.concat({ session.extended and "6" or "5", "D", session.epoch,
+        local data = table.concat({ session.wire, "D", session.epoch,
             session.nonce, q.seq, i, partCount }, ":") .. ":"
         if session.extended then data = data .. q.stream .. ":" end
         packets[#packets + 1] = { "HB", data .. blob:sub((i - 1) * CHUNK + 1, i * CHUNK) }
@@ -565,7 +621,7 @@ function sync:CancelPagedLeaderboardCatchup()
     return true
 end
 
-function sync:StartPagedLeaderboardCatchup(peer, callback, extended)
+function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace)
     peer = self:NormalizeContributorFullName(peer)
     -- Second result: "local" when this client cannot start now (busy, combat,
     -- no campaign), "unsupported" when the peer is known to lack the protocol.
@@ -586,10 +642,11 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended)
         -- first request still carries the stream digest (one reply if equal).
         completed = resume and savedStream == stream and integer(saved.done, 0, BUCKETS - 1) or 0,
         extended = extended == true, stream = stream, bucket = resume or 1,
+        wire = extended and (withRace and "7" or "6") or "5",
         cursor = "-", nonce = tostring(GetServerTime()) .. "n"
             .. tostring(math.floor(GetTime() * 1000)) .. "n" .. tostring(serial) }
     pull = state
-    stats.protocol = extended and 6 or 5
+    stats.protocol = extended and (withRace and 7 or 6) or 5
     stats.target, stats.result = peer, "preparing"
     if not prepare(function(profile)
         if pull ~= state then return end
@@ -601,10 +658,10 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended)
     return true
 end
 
--- v6 only (1.2.4): kills, captures and races in one resumable sweep. A peer whose
--- fresh presence advertises no lp6 is not asked; a peer that stays silent ends the
--- round unsupported and the scheduler asks another direct neighbour. There is no
--- v5/v4 fallback any more: every current client serves v6.
+-- v6/v7 only (1.2.4, v7 in 1.7.0): kills, captures and races in one resumable sweep.
+-- A peer whose fresh presence advertises no lp6 is not asked; a peer that stays
+-- silent ends the round unsupported and the scheduler asks another direct
+-- neighbour. There is no v5/v4 fallback any more: every current client serves v6.
 function sync:StartCompletePagedLeaderboardCatchup(peer, callback)
     if type(callback) ~= "function" then return false end
     local net = Overlord.BetaNetwork
@@ -613,10 +670,13 @@ function sync:StartCompletePagedLeaderboardCatchup(peer, callback)
         stats.peerProtocol = "beta v5; not asked (v6 only)"
         return false, "unsupported"
     end
-    stats.peerProtocol = capability == 6 and "beta v6; lp6 NH" or "capability unknown, v6 probe"
+    -- v7 only toward a peer that announced it: an unknown peer is probed in v6,
+    -- which every current client answers.
+    stats.peerProtocol = capability == 7 and "beta v7; lr+lp6 NH"
+        or capability == 6 and "beta v6; lp6 NH" or "capability unknown, v6 probe"
     return self:StartPagedLeaderboardCatchup(peer, function(ok, supported)
         callback(ok == true, supported == true)
-    end, true)
+    end, true, capability == 7)
 end
 
 function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
@@ -624,13 +684,16 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
     if #payload > 250 or not allowed(sender, channel) then return end
     local version, op, epochStr, nonce, seqStr, a, b, c, d, e, f, g = strsplit(":", payload, 12)
     local wireEpoch, seq = integer(epochStr, 1, 9999999999), integer(seqStr, 1, 10000)
-    local extended = version == "6"
+    -- "7" is "6" with the race at the end of each LK row.
+    local extended = version == "6" or version == "7"
     if (not extended and version ~= "5") or wireEpoch ~= epoch()
         or not seq or not nonce or #nonce > 32
         or not nonce:match("^[%w]+$") then return end
     if kind == "HR" and op == "F" then
+        -- The requester counts a request before sending it: a lost last request leaves
+        -- its F one step ahead of us. Same peer and pull, same or later step: release.
         if serving and serving.peer == sender and serving.nonce == nonce
-            and serving.seq == seq then serving = nil end
+            and seq >= serving.seq then serving = nil end
         return
     end
     if kind == "HR" and op == "Q" then
@@ -660,22 +723,36 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         if session and session.peer ~= sender and seq == 1 and b == "-" and not building
             and GetTime() - (session.startedAt or session.at) >= SESSION_SHARE_SEC
             and IsOtherFaction(sender) and not IsOtherFaction(session.peer) then
+            -- In combat the running session keeps its pages; the newcomer waits for the
+            -- end of the fight ("busy: combat") and takes over then.
+            if inCombat() and not blocked() then
+                sendControl("HA", table.concat({ version, "R", wireEpoch, nonce, seq }, ":") .. ":C", sender)
+                return
+            end
             -- One small "busy" to the previous requester, in place of the page it
             -- will not get: it moves on at once instead of waiting 90 s of silence.
-            sendControl("HA", table.concat({ session.extended and "6" or "5", "R",
+            sendControl("HA", table.concat({ session.wire, "R",
                 session.epoch, session.nonce, session.seq }, ":"), session.peer)
             serving, session, outbound = nil, nil, nil
             stats.preempted = (stats.preempted or 0) + 1
         end
         local busyReply = table.concat({ version, "R", wireEpoch, nonce, seq }, ":")
-        -- In combat or an instance: busy, not silent (a silent peer is dropped as v6-less).
-        if paused() then sendControl("HA", busyReply, sender); return end
+        -- In an instance: busy, not silent (a silent peer is dropped as v6-less).
+        if blocked() then sendControl("HA", busyReply, sender); return end
         if (session and (session.peer ~= sender or session.nonce ~= nonce
-                or session.extended ~= extended))
+                or session.wire ~= version))
         or (not session and (seq ~= 1 or b ~= "-")) then
             -- Busy with another requester, or a cursor from a lost session (it is
             -- meaningful only inside the original frozen profile): say so at once.
+            -- Plain busy even in combat: waiting for us would not free us sooner.
             sendControl("HA", busyReply, sender)
+            return
+        end
+        -- In combat, a session whose profile is built goes on (its pages are cheap);
+        -- anything that would need building says "busy: combat" (6th field, ignored
+        -- by older requesters) so the requester waits for us instead of giving up.
+        if inCombat() and not (session and session.profile) then
+            sendControl("HA", busyReply .. ":C", sender)
             return
         end
         if not session then
@@ -683,7 +760,8 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
             -- for someone else: busy, never silent.
             if building or outbound then sendControl("HA", busyReply, sender); return end
             session = { peer = sender, nonce = nonce, epoch = wireEpoch,
-                at = GetTime(), startedAt = GetTime(), seq = seq, extended = extended }
+                at = GetTime(), startedAt = GetTime(), seq = seq, extended = extended,
+                wire = version }
             serving = session
         -- The previous page of this same session is still leaving: its requester
         -- asks again after its own timeout.
@@ -696,7 +774,13 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
             prepare(function(profile)
                 if serving ~= session then return end
                 session.profile = profile
-                if profile then respond(session, q) else serving = nil end
+                if profile then respond(session, q)
+                else
+                    -- Nothing to serve right now: one "busy" instead of silence (a
+                    -- silent peer costs the requester 270 s and a 10-min penalty).
+                    serving = nil
+                    sendControl("HA", busyReply, sender)
+                end
             end)
         end
         return
@@ -704,10 +788,30 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
     local state = pull
     if not state or sender ~= state.peer or nonce ~= state.nonce or seq ~= state.seq
         or wireEpoch ~= state.epoch or state.applying
-        or state.extended ~= extended then return end
+        or state.wire ~= version then return end
     if kind == "HA" and op == "R" then
         state.supported = true
-        state.why = "peer busy"
+        -- Busy only while it fights: keep our place with this peer and ask again a
+        -- little later (one small request every 30-45 s, at most 5), instead of
+        -- spending an attempt and waiting two minutes for the next round.
+        if a == "C" and (state.combatWaits or 0) < COMBAT_WAIT_MAX and state.lastRequest then
+            state.combatWaits = (state.combatWaits or 0) + 1
+            state.fragmentAt = GetTime() -- alive: the watchdog does not count this wait
+            stats.combatWaits = (stats.combatWaits or 0) + 1
+            local waitSeq, waitPayload = state.seq, state.lastRequest
+            local function askAgain()
+                -- The page already started coming: asking again would resend all of it.
+                if pull ~= state or state.seq ~= waitSeq or state.applying
+                    or state.replySeen then return end
+                -- In our own fight: ask once it ends (a local check, nothing sent).
+                if paused() then C_Timer.After(5, askAgain) return end
+                state.fragmentAt = GetTime()
+                sendControl("HR", waitPayload, state.peer)
+            end
+            C_Timer.After(COMBAT_WAIT_SEC + math.random(0, COMBAT_WAIT_JITTER), askAgain)
+            return
+        end
+        state.why = a == "C" and "peer in combat" or "peer busy"
         finish(state, false)
         return
     end
@@ -717,7 +821,7 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         local profile = extended and state.profile.streams[state.stream] or state.profile
         local count = integer(extended and b or a, 0, STREAM_LIMITS[stream] or 0)
         local digest = integer(extended and c or b, 0, MOD - 1)
-        if stream ~= state.stream or count ~= profile.count or digest ~= profile.hash
+        if stream ~= state.stream or count ~= profile.count or digest ~= streamHash(profile, state.wire)
             or (not extended and (seq ~= 1 or c)) then return end
         state.supported = true
         if extended then

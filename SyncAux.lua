@@ -1198,6 +1198,11 @@ local CAMPAIGN_KILL_ROW_REMOVALS = {
         ["ender zero"] = true,
         ["enderhero enderhero"] = true,
     },
+    -- 2026-10-06 : Empire Sucks (1088 VH injectes via un indice de guilde puis un LK
+    -- diffuses sur le canal, guilde "EMPIRE HACKS").
+    [20261006] = {
+        ["empire sucks"] = true,
+    },
 }
 
 function Overlord.Sync:IsDeniedKillContributor(playerName)
@@ -1205,6 +1210,9 @@ function Overlord.Sync:IsDeniedKillContributor(playerName)
     local normalized = self.NormalizeContributorFullName
         and self:NormalizeContributorFullName(playerName) or playerName
     if type(normalized) ~= "string" or normalized == "" then return false end
+    -- A name no character can have ("EMPIRE SUCKS") is never a ladder row, on every
+    -- client alike; the v8 cleanup removes the copies already saved.
+    if self.HasForeverNameCase and not self:HasForeverNameCase(normalized) then return true end
     local base = normalized:match("^([^%-]+)") or normalized
     local lowerBase = base:lower()
     if BLOCKED_KILL_CONTRIBUTOR_BASES[lowerBase] == true then return true end
@@ -1291,6 +1299,31 @@ function Overlord.Sync:RegisterTrustedRaceFileToken(race)
     race = RACE_FILE_ALIASES[race] or race
     VALID_RACE_FILE[race] = true
     return race
+end
+
+-- Race field of a v7 ranking page row (LK): one letter for the Classic races, the
+-- file token otherwise, then the sex digit ("o2" = male orc). Fixed letters: they
+-- are part of the wire format (bucket digests leave the race out).
+do
+    local RACE_WIRE_LETTER = { Human = "h", Dwarf = "d", NightElf = "n", Gnome = "g",
+        Orc = "o", Scourge = "u", Tauren = "t", Troll = "r" }
+    local RACE_WIRE_FILE = {}
+    for race, letter in pairs(RACE_WIRE_LETTER) do RACE_WIRE_FILE[letter] = race end
+
+    function Overlord.Sync:EncodeRaceWireField(raceFile, raceSex)
+        local race = self:NormalizeRaceFileToken(raceFile)
+        if not race or not race:match("^[A-Za-z]+$") then return nil end
+        return (RACE_WIRE_LETTER[race] or race) .. tostring(normalizeRaceSexCode(raceSex))
+    end
+
+    function Overlord.Sync:DecodeRaceWireField(field)
+        if type(field) ~= "string" or #field > 41 then return nil end
+        local token, sex = field:match("^([A-Za-z]+)([023])$")
+        if not token then return nil end
+        local race = #token == 1 and RACE_WIRE_FILE[token] or self:NormalizeRaceFileToken(token)
+        if not race then return nil end
+        return race, tonumber(sex)
+    end
 end
 local MAX_KILL_PAYLOAD_GUILD_LEN = 24
 

@@ -174,7 +174,7 @@ local names = {}
 for i = 1, 500 do
     local n = i - 1
     local name = "Captor " .. string.char(65 + math.floor(n / 676))
-        .. string.char(65 + math.floor(n / 26) % 26) .. string.char(65 + n % 26)
+        .. string.char(97 + math.floor(n / 26) % 26) .. string.char(97 + n % 26)
     names[i] = name
     local lb = SOURCE.Overlord.Leaderboard
     lb.captureCount[name] = math.max(1, 500 - i)
@@ -182,7 +182,7 @@ for i = 1, 500 do
     if i <= 100 then lb.kills[name] = i end
     lb.playerInfo[name] = { class = "WARRIOR", faction = "Horde", level = 2,
         locale = "engb", race = "Orc", raceSex = 2,
-        raceAt = 1790016000, guild = "Veteran Guild", guildAt = 1790016000 }
+        raceAt = 1790016000, guild = "Veteran Guild", guildAt = 1790016000, guildAuth = true }
 end
 -- The owner is offline. Its newer guild register (including a departure) must
 -- survive a direct cross-faction exchange and correct an old owner-confirmed record.

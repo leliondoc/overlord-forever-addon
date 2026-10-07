@@ -56,19 +56,16 @@ end
 local BRACKETS = { 500, 300, 200, 150, 100, 75, 50, 40, 30, 20, 10, 5 }
 local function shown(kills)
     for _, floor in ipairs(BRACKETS) do if kills >= floor then return floor .. "+" end end
-    return kills > 0 and "active" or "-"
+    return kills > 0 and "1+" or "-"
 end
--- Exactly what the dock prints (Popups.lua FormatFrontActivityAge), in row order.
+-- The dock's kill text, rebuilt here (the real formatter is checked in
+-- forever_front_activity_text), in row order.
+-- 1.7.0: "1+ kill" under 5 kills, no age any more.
 local function panel(client)
     local out = {}
     for _, row in ipairs(client.FA:GetActivityRows()) do
         if row.active then
-            local text = shown(row.kills)
-            if text == "active" or text == "-" then
-                local age = math.max(0, tonumber(row.ageSeconds) or 0)
-                text = age < 60 and "now" or (math.min(5, math.floor(age / 60)) .. "min")
-            end
-            out[#out + 1] = row.frontId .. "=" .. text
+            out[#out + 1] = row.frontId .. "=" .. shown(row.kills)
         end
     end
     return table.concat(out, " ")
@@ -113,7 +110,7 @@ kills(c, "@ashenvale", 2)
 runTimers()
 local expected = panel(a)
 assert(expected:find("hillsbrad=30+", 1, true) and expected:find("#1437=5+", 1, true)
-    and expected:find("ashenvale=now", 1, true), "Alpha's own panel is wrong: " .. expected)
+    and expected:find("ashenvale=1+", 1, true), "Alpha's own panel is wrong: " .. expected)
 for _, client in ipairs(clients) do
     assert(panel(client) == expected, client.name .. " sees " .. panel(client) .. " instead of " .. expected)
 end

@@ -19,12 +19,12 @@ OverlordDB.leaderboardSnapshot = {
 OverlordDB.leaderboardScoreSanitizeVersion = 3
 lb:EnsureLegacyScoreSanitized()
 local attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 7 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 8 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Score cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
 end
-assert(OverlordDB.leaderboardScoreSanitizeVersion == 7, "Score cleanup did not commit")
+assert(OverlordDB.leaderboardScoreSanitizeVersion == 8, "Score cleanup did not commit")
 assert(lb.kills[name] == nil, "Existing score was not removed")
 assert(OverlordDB.leaderboardsByPool.global.kills[name] == nil,
     "Pooled score was not removed")
@@ -53,7 +53,7 @@ assert(hasForgedGuild(), "Fixture did not place the forged guild in the guild co
 OverlordDB.leaderboardScoreSanitizeVersion = 4
 lb:EnsureLegacyScoreSanitized()
 attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 7 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 8 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Forged row cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
@@ -88,7 +88,7 @@ lb.kills[burst] = 5000
 OverlordDB.leaderboardScoreSanitizeVersion = 5
 lb:EnsureLegacyScoreSanitized()
 attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 7 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 8 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Burst row cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
@@ -105,7 +105,7 @@ lb.kills[main] = 4999
 OverlordDB.leaderboardScoreSanitizeVersion = 6
 lb:EnsureLegacyScoreSanitized()
 attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 7 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 8 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Main row cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
