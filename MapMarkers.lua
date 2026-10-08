@@ -57,6 +57,7 @@ local driverState = {
     worldTransformH = 0,
     worldOverlayViewport = nil,
     worldLayoutPending = false,
+    hoverAccum = 0,
 }
 local OVERLAY_REFRESH_INTERVAL = 0.50
 -- Les rafales sync/UI peuvent appeler RequestOverlayRefresh des dizaines de fois
@@ -227,6 +228,8 @@ local function HideZoneOverlayText(ov)
     if ov.text then ov.text:Hide() end
     if ov.subtext then ov.subtext:Hide() end
     if ov.subtext2 then ov.subtext2:Hide() end
+    ov._olHover = nil
+    if Overlord.MapMarkers._compactHover == ov then Overlord.MapMarkers._compactHover = nil end
 end
 
 -- Ruban d'en-tete des options Warboard (PlayerChoice : UI-Frame-%s-Ribbon).
@@ -322,15 +325,29 @@ local function ShouldShowMapZoneTitles()
     return true
 end
 
-local function LayoutZoneTitleRibbon(overlay)
+-- Mode compact (noms decoches) : un point de front ne garde que son cercle et son
+-- icone ; nom, ruban et statut reviennent au survol et pendant une prise.
+local function IsZoneLabelShown(overlay)
+    if ShouldShowMapZoneTitles() or overlay._olHover then return true end
+    local zone = overlay.zone
+    return zone ~= nil and zone.status == "in_progress"
+end
+
+local function LayoutZoneTitleRibbon(overlay, showTitle)
     local bg = overlay and overlay.titleBg
     local text = overlay and overlay.text
     if overlay.titleRibbonLeft then overlay.titleRibbonLeft:Hide() end
     if overlay.titleRibbonMid then overlay.titleRibbonMid:Hide() end
     if overlay.titleRibbonRight then overlay.titleRibbonRight:Hide() end
-    if not ShouldShowMapZoneTitles() then
+    if showTitle == nil then showTitle = ShouldShowMapZoneTitles() end
+    if not showTitle then
         if text then text:Hide() end
         if bg then bg:Hide() end
+        if overlay.zone then
+            if overlay.subtext then overlay.subtext:Hide() end
+            if overlay.subtext2 then overlay.subtext2:Hide() end
+            return
+        end
         -- Sans titre : recentrer le timer / statut sur le cercle.
         if overlay.subtext then
             overlay.subtext:ClearAllPoints()
@@ -760,21 +777,190 @@ function Overlord.MapMarkers:SetWorldMapOverlaysShown(shown)
         HideAllOverlordWorldMapContent()
         worldMapOverlaysHidden = true
     end
+    self:RefreshMapModeButton()
     return true
 end
 
--- Case dans le menu « Filtres de la carte » de Blizzard (API Menu, carte du monde).
+-- Trois modes joueur : complet (noms sur chaque point), compact (cercles et icones,
+-- nom au survol ou pendant une prise), masque. Compact = « noms de zones » decoches.
+local WORLD_MAP_MODES = { "full", "compact", "hidden" }
+local WORLD_MAP_MODE_TEXT = { full = "MAP_MODE_FULL", compact = "MAP_MODE_COMPACT", hidden = "MAP_MODE_HIDDEN" }
+
+function Overlord.MapMarkers:GetWorldMapDisplayMode()
+    if not self:AreWorldMapOverlaysShown() then return "hidden" end
+    return ShouldShowMapZoneTitles() and "full" or "compact"
+end
+
+function Overlord.MapMarkers.GetWorldMapModeText(mode)
+    return L[WORLD_MAP_MODE_TEXT[mode] or ""] or mode
+end
+
+function Overlord.MapMarkers:GetNextWorldMapDisplayMode()
+    local current = self:GetWorldMapDisplayMode()
+    for i, mode in ipairs(WORLD_MAP_MODES) do
+        if mode == current then return WORLD_MAP_MODES[i % #WORLD_MAP_MODES + 1] end
+    end
+    return "full"
+end
+
+function Overlord.MapMarkers:SetWorldMapDisplayMode(mode)
+    if not OverlordDB or not WORLD_MAP_MODE_TEXT[mode] then return false end
+    if mode == "hidden" then return self:SetWorldMapOverlaysShown(false) end
+    OverlordDB.config = OverlordDB.config or {}
+    OverlordDB.config.showMapZoneTitles = mode == "full"
+    if self:AreWorldMapOverlaysShown() then
+        if Overlord.SettingsPanel and Overlord.SettingsPanel.RefreshControls then
+            pcall(Overlord.SettingsPanel.RefreshControls, Overlord.SettingsPanel)
+        end
+        self:RequestOverlayRefresh()
+        self:RefreshMapModeButton()
+        return true
+    end
+    return self:SetWorldMapOverlaysShown(true)
+end
+
+-- Mode compact : le point sous la souris affiche son nom. Test geometrique sur le
+-- disque du cercle : les cercles ne prennent pas la souris et ne bloquent donc ni
+-- les infobulles de quete ni le clic sous eux.
+function Overlord.MapMarkers:UpdateCompactHover()
+    local hovered = nil
+    local viewport = driverState.worldOverlayViewport
+    if self._renderFront and not ShouldShowMapZoneTitles() and viewport
+        and viewport:IsVisible() and viewport:IsMouseOver() then
+        local cx, cy = GetCursorPosition()
+        local best = nil
+        for _, ov in pairs(overlays) do
+            if ov and ov.zone and ov:IsShown() then
+                local x, y = ov:GetCenter()
+                local s = ov:GetEffectiveScale()
+                if x and y and s and s > 0 then
+                    local dx, dy = cx / s - x, cy / s - y
+                    local r = math.max(14, (ov:GetWidth() or 0) * 0.5)
+                    local d = dx * dx + dy * dy
+                    if d <= r * r and (not best or d < best) then
+                        best, hovered = d, ov
+                    end
+                end
+            end
+        end
+    end
+    local previous = self._compactHover
+    if previous == hovered then return end
+    self._compactHover = hovered
+    if previous then
+        previous._olHover = nil
+        if previous:IsShown() and previous.zone then self:UpdateOverlay(previous) end
+    end
+    if hovered then
+        hovered._olHover = true
+        self:UpdateOverlay(hovered)
+    end
+end
+
+-- Bouton rond dans le coin de la carte du monde : un clic passe au mode suivant.
+-- Cree hors combat a l'init ; masque en instance comme tout Overlord.
+function Overlord.MapMarkers:CreateMapModeButton()
+    local container = WorldMapFrame and WorldMapFrame.ScrollContainer
+    if self._mapModeButton or not container then return self._mapModeButton end
+    local btn = CreateFrame("Button", nil, container)
+    btn:SetSize(32, 32)
+    -- 30 % plus grand que le bouton de la minicarte (meme dessin, plus lisible sur la carte).
+    btn:SetScale(1.3)
+    btn:SetFrameStrata(container:GetFrameStrata())
+    btn:SetFrameLevel(container:GetFrameLevel() + 200)
+    btn:SetPoint("TOPRIGHT", container, "TOPRIGHT", -5, -5)
+    btn:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+    local bg = btn:CreateTexture(nil, "BACKGROUND")
+    bg:SetSize(20, 20)
+    bg:SetPoint("TOPLEFT", 7, -5)
+    bg:SetTexture("Interface\\Minimap\\UI-Minimap-Background")
+    local icon = btn:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(20, 20)
+    icon:SetPoint("TOPLEFT", 7, -5)
+    icon:SetTexture("Interface\\AddOns\\Overlord\\Textures\\overlord_minimap")
+    btn.icon = icon
+    local border = btn:CreateTexture(nil, "OVERLAY")
+    border:SetSize(53, 53)
+    border:SetPoint("TOPLEFT")
+    border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+    btn:RegisterForClicks("LeftButtonUp")
+    btn:SetScript("OnClick", function(b)
+        local mm = Overlord.MapMarkers
+        mm:SetWorldMapDisplayMode(mm:GetNextWorldMapDisplayMode())
+        if PlaySound and SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON then
+            PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
+        end
+        if b:IsMouseOver() and b:GetScript("OnEnter") then b:GetScript("OnEnter")(b) end
+    end)
+    btn:SetScript("OnEnter", function(b)
+        local mm = Overlord.MapMarkers
+        GameTooltip:SetOwner(b, "ANCHOR_LEFT")
+        GameTooltip:SetText("Overlord")
+        GameTooltip:AddLine(string.format(L.MAP_MODE_STATUS or "World map display: %s",
+            mm.GetWorldMapModeText(mm:GetWorldMapDisplayMode())), 1, 1, 1)
+        GameTooltip:AddLine(string.format(L.MAP_MODE_BUTTON_NEXT or "Click: %s",
+            mm.GetWorldMapModeText(mm:GetNextWorldMapDisplayMode())), 0.82, 0.82, 0.82, true)
+        GameTooltip:Show()
+    end)
+    btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    btn:SetScript("OnShow", function(b)
+        if Overlord.InstanceSuspended then b:Hide() end
+    end)
+    self._mapModeButton = btn
+    self:RefreshMapModeButton()
+    return btn
+end
+
+function Overlord.MapMarkers:RefreshMapModeButton()
+    local btn = self._mapModeButton
+    if not btn then return end
+    btn:SetShown(not Overlord.InstanceSuspended)
+    local mode = self:GetWorldMapDisplayMode()
+    btn.icon:SetDesaturated(mode == "hidden")
+    btn.icon:SetAlpha(mode == "hidden" and 0.6 or 1)
+end
+
+-- Choix du mode dans un menu Blizzard (Filtres de la carte, suivi de la minicarte).
+local function AddWorldMapModeRadios(description)
+    for _, mode in ipairs(WORLD_MAP_MODES) do
+        description:CreateRadio(Overlord.MapMarkers.GetWorldMapModeText(mode),
+            function(m) return Overlord.MapMarkers:GetWorldMapDisplayMode() == m end,
+            function(m) Overlord.MapMarkers:SetWorldMapDisplayMode(m) end, mode)
+    end
+end
+
+-- Entrees Overlord des menus « Filtres de la carte » (carte du monde) et « Suivi »
+-- (minicarte) de Blizzard (API Menu).
 function Overlord.MapMarkers:RegisterWorldMapFilterToggle()
     if self._worldMapFilterRegistered or not Menu or not Menu.ModifyMenu then return false end
     self._worldMapFilterRegistered = true
     Menu.ModifyMenu("MENU_WORLD_MAP_TRACKING", function(_, rootDescription)
-        if not rootDescription or not rootDescription.CreateCheckbox then return end
+        if not rootDescription or not rootDescription.CreateRadio then return end
         if rootDescription.CreateDivider then rootDescription:CreateDivider() end
-        rootDescription:CreateCheckbox(L.MAP_FILTER_OVERLORD or "Overlord",
-            function() return Overlord.MapMarkers:AreWorldMapOverlaysShown() end,
+        if rootDescription.CreateTitle then
+            rootDescription:CreateTitle(L.MAP_FILTER_OVERLORD or "Overlord")
+        end
+        AddWorldMapModeRadios(rootDescription)
+    end)
+    Menu.ModifyMenu("MENU_MINIMAP_TRACKING", function(_, rootDescription)
+        if not rootDescription or not rootDescription.CreateButton then return end
+        if rootDescription.CreateDivider then rootDescription:CreateDivider() end
+        local sub = rootDescription:CreateButton("Overlord")
+        if not sub or not sub.CreateRadio then return end
+        if sub.CreateTitle then sub:CreateTitle(L.MAP_WORLD_OVERLAYS_LABEL or "World map") end
+        AddWorldMapModeRadios(sub)
+        if sub.CreateDivider then sub:CreateDivider() end
+        sub:CreateCheckbox(L.MINIMAP_CAPTURE_ZONES_LABEL or "Minimap icons",
             function()
-                Overlord.MapMarkers:SetWorldMapOverlaysShown(
-                    not Overlord.MapMarkers:AreWorldMapOverlaysShown())
+                local cfg = OverlordDB and OverlordDB.config
+                return not (cfg and cfg.showMinimapCaptureZones == false)
+            end,
+            function()
+                local sp = Overlord.SettingsPanel
+                local cfg = OverlordDB and OverlordDB.config
+                if sp and sp.SetShowMinimapCaptureZones then
+                    sp:SetShowMinimapCaptureZones(cfg and cfg.showMinimapCaptureZones == false)
+                end
             end)
     end)
     return true
@@ -825,6 +1011,8 @@ function Overlord.MapMarkers:Initialize()
             FlushPendingPassThroughFrames()
         end)
     end
+
+    self:CreateMapModeButton()
 
     -- Capture le mapID en parametre du hook (jamais de lecture de .mapID)
     if WorldMapFrame.SetMapID then
@@ -888,6 +1076,11 @@ function Overlord.MapMarkers:Initialize()
         -- Aucune resolution de front, reconstruction de pin ou lecture de contenu ici.
         if not driverState.worldGateSlow and cachedCanvas then
             Overlord.MapMarkers:SyncWorldOverlayTransform(cachedCanvas)
+            driverState.hoverAccum = driverState.hoverAccum + (elapsed or 0)
+            if driverState.hoverAccum >= 0.05 then
+                driverState.hoverAccum = 0
+                Overlord.MapMarkers:UpdateCompactHover()
+            end
         end
 
         driverState.worldAccum = driverState.worldAccum + (elapsed or 0)
@@ -1269,6 +1462,12 @@ function Overlord.MapMarkers:Initialize()
         if Overlord.InstanceSuspended then return end
         suppressFrontOverlaysUntilMapReopen = false
         worldMapOverlaysHidden = false
+        -- Pas de nom « survole » resurgi a la prochaine ouverture (mode compact).
+        local hovered = Overlord.MapMarkers._compactHover
+        if hovered then
+            hovered._olHover = nil
+            Overlord.MapMarkers._compactHover = nil
+        end
         driverState.worldAccum = driverState.worldInterval
         driverState.worldGateSlow = false
         driverState.canvasInvalidHidden = false
@@ -1338,6 +1537,8 @@ function Overlord.MapMarkers:CreateZoneOverlay(zone)
         pooled._olRibbonKey = nil
         pooled._olRibbonInit = nil
         pooled._olRibbonOk = nil
+        pooled._olHover = nil
+        if Overlord.MapMarkers._compactHover == pooled then Overlord.MapMarkers._compactHover = nil end
         if pooled.titleRibbonLeft then pooled.titleRibbonLeft:Hide() end
         if pooled.titleRibbonMid then pooled.titleRibbonMid:Hide() end
         if pooled.titleRibbonRight then pooled.titleRibbonRight:Hide() end
@@ -1474,6 +1675,23 @@ local function GetFactionZoneColors(zone)
     end
 end
 
+-- Icone sous le statut quand le nom est affiche, seule au centre du cercle sinon.
+-- Plafond 48 px (x taille d'icone), comme la police du titre plafonnee a 24 px.
+local function AnchorZoneIcon(overlay, labelDiameter, labelShown, hasSub2)
+    local scale = Overlord.MapMarkers.GetMapIconScale()
+    local iconSize = math.min(48 * scale, math.max(6, labelDiameter * 0.28 * scale))
+    local key = (labelShown and (hasSub2 and "2" or "1") or "c") .. ":" .. iconSize
+    if overlay._olIconLayoutKey == key then return end
+    overlay._olIconLayoutKey = key
+    overlay.iconTex:ClearAllPoints()
+    if labelShown then
+        overlay.iconTex:SetPoint("TOP", hasSub2 and overlay.subtext2 or overlay.subtext, "BOTTOM", 0, 1)
+    else
+        overlay.iconTex:SetPoint("CENTER", overlay, "CENTER", 0, 0)
+    end
+    overlay.iconTex:SetSize(iconSize, iconSize)
+end
+
 function Overlord.MapMarkers:UpdateOverlayLayout(overlay)
     local zone = overlay.zone
     local canvas = GetCanvas()
@@ -1484,7 +1702,7 @@ function Overlord.MapMarkers:UpdateOverlayLayout(overlay)
     if not diameter then return end
     local snapD = math.floor(diameter + 0.5)
     local labelDiameter = GetFrontOverlayLabelDiameter(zone, canvas, parent) or diameter
-    local showTitles = ShouldShowMapZoneTitles()
+    local showTitles = IsZoneLabelShown(overlay)
 
     -- Pan sans zoom : le cercle bouge seul ; texte/icone suivent le frame sans ClearAllPoints.
     if overlay._olSnapD == snapD and overlay._olLabelDiameter == labelDiameter
@@ -1516,15 +1734,12 @@ function Overlord.MapMarkers:UpdateOverlayLayout(overlay)
     overlay.subtext2:ClearAllPoints()
     overlay.subtext2:SetPoint("TOP", overlay.subtext, "BOTTOM", 0, -math.max(1, subSz * 0.06))
 
+    overlay._olIconLayoutKey = nil
     if overlay.iconTex and overlay.iconTex:IsShown() then
-        local anchorTarget = (overlay.subtext2:GetText() ~= "") and overlay.subtext2 or overlay.subtext
-        local iconSize = math.max(6, labelDiameter * 0.28 * Overlord.MapMarkers.GetMapIconScale())
-        overlay.iconTex:ClearAllPoints()
-        overlay.iconTex:SetPoint("TOP", anchorTarget, "BOTTOM", 0, 1)
-        overlay.iconTex:SetSize(iconSize, iconSize)
+        AnchorZoneIcon(overlay, labelDiameter, showTitles, overlay.subtext2:GetText() ~= "")
     end
     overlay._olRibbonKey = nil
-    LayoutZoneTitleRibbon(overlay)
+    LayoutZoneTitleRibbon(overlay, showTitles)
 end
 
 -- A zone being captured "breathes": a masked glow in the zone colour fades in and
@@ -1660,7 +1875,7 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
     overlay.text:Show()
     overlay.subtext:Show()
     overlay.subtext2:Show()
-    LayoutZoneTitleRibbon(overlay)
+    LayoutZoneTitleRibbon(overlay, overlay._olShowTitles)
     overlay.subtext:SetTextColor(ZONE_TEXT_GOLD_R, ZONE_TEXT_GOLD_G, ZONE_TEXT_GOLD_B)
     overlay.subtext:SetShadowColor(0, 0, 0, 0)
     overlay.subtext:SetShadowOffset(0, 0)
@@ -1671,16 +1886,7 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
     -- Icone : bannieres Warfronts (objectifs) ; MainHall (capitales) ; masquee si conteste avec owner
     if overlay.iconTex then
         if iconAtlas then
-            local iconSize = math.max(6, labelDiameter * 0.28 * Overlord.MapMarkers.GetMapIconScale())
-            local anchorTarget = (st2 ~= "") and overlay.subtext2 or overlay.subtext
-            local iconLayoutKey = (anchorTarget == overlay.subtext2 and "2" or "1") .. ":" .. iconSize
-                .. ":" .. (iconAtlas or "")
-            if overlay._olIconLayoutKey ~= iconLayoutKey then
-                overlay._olIconLayoutKey = iconLayoutKey
-                overlay.iconTex:ClearAllPoints()
-                overlay.iconTex:SetPoint("TOP", anchorTarget, "BOTTOM", 0, 1)
-                overlay.iconTex:SetSize(iconSize, iconSize)
-            end
+            AnchorZoneIcon(overlay, labelDiameter, overlay._olShowTitles, st2 ~= "")
             Overlord.Zones:ApplyZoneMapIcon(overlay.iconTex, iconAtlas)
             overlay.iconTex:SetAlpha(iconAlpha)
             overlay.iconTex:Show()
@@ -1846,6 +2052,7 @@ end
 -- restent caches. Cette methode rattrape ce cas.
 function Overlord.MapMarkers:ResumeWorldMapOverlays()
     if not self._updateFrame then return end
+    self:RefreshMapModeButton()
     local function kick()
         if Overlord.InstanceSuspended then return end
         if not WorldMapFrame then return end
@@ -3768,6 +3975,10 @@ local function UpdateResourceOverlayVisuals(ov, resource, diameter, cfg)
     end
     if layoutChanged then
         ov._olResourceLayoutDiameter = snappedDiameter
+        -- Infobulle sur le centre seulement : le reste du cercle laisse le survol
+        -- aux points de quete et PNJ de la carte en dessous.
+        local inset = math.max(0, diameter * 0.5 - math.max(14, diameter * 0.25))
+        ov:SetHitRectInsets(inset, inset, inset, inset)
         local titleSz = math.max(7, math.min(22, diameter * 0.22))
         local subSz = math.max(6, math.min(16, diameter * 0.16))
         local titleYOffset = math.max(10, diameter * 0.16)

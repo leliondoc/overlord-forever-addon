@@ -563,12 +563,10 @@ end
 local goldHUD = nil
 local guildKeepHUD = nil
 local goldHudRoot = nil
-local hudTutorialPanel = nil
 local HUD_STACK_GAP = 6
 local HUD_PANEL_WIDTH = 280
-local TUTORIAL_PANEL_W = 52
--- Livre ouvert : aide / guide (texture client vanilla, toujours presente)
-local TUTORIAL_ICON = "Interface\\Icons\\INV_Misc_Book_09"
+-- Largeur du bloc fortin de guilde.
+local KEEP_PANEL_W = 52
 
 -- Theme et chrome partages : panneau or, barre tutoriel, indicateur de zone.
 -- Cache par faction : la faction du joueur ne change jamais en session (hors service de
@@ -750,35 +748,24 @@ end
 
 -- Reancre les panneaux du cluster haut.
 local lastHudTopLayoutKey = nil
-local function LayoutHudTopRow(showKeep, showGold, showTutorial)
-    if not goldHudRoot or not goldHUD or not hudTutorialPanel then return end
+local function LayoutHudTopRow(showKeep, showGold)
+    if not goldHudRoot or not goldHUD then return end
     local clusterH = 62
-    if showTutorial == nil then showTutorial = true end
-    local layoutKey = (showKeep and "1" or "0")
-        .. (showGold and "1" or "0")
-        .. (showTutorial and "1" or "0")
+    local layoutKey = (showKeep and "1" or "0") .. (showGold and "1" or "0")
     if layoutKey == lastHudTopLayoutKey
         and goldHudRoot._hudLayoutW and goldHudRoot:GetWidth() == goldHudRoot._hudLayoutW then
         return
     end
     lastHudTopLayoutKey = layoutKey
 
-    if showTutorial then
-        hudTutorialPanel:ClearAllPoints()
-        hudTutorialPanel:SetPoint("TOPLEFT", goldHudRoot, "TOPLEFT", 0, 0)
-        hudTutorialPanel:Show()
-    else
-        hudTutorialPanel:Hide()
-    end
-
     if guildKeepHUD then guildKeepHUD:Hide() end
 
-    local anchor = showTutorial and hudTutorialPanel or goldHudRoot
-    local fromPoint = showTutorial and "TOPRIGHT" or "TOPLEFT"
+    local anchor = goldHudRoot
+    local fromPoint = "TOPLEFT"
 
     goldHUD:ClearAllPoints()
     if showGold then
-        goldHUD:SetPoint("TOPLEFT", anchor, fromPoint, showTutorial and HUD_STACK_GAP or 0, 0)
+        goldHUD:SetPoint("TOPLEFT", anchor, fromPoint, 0, 0)
         goldHUD:Show()
         anchor = goldHUD
         fromPoint = "TOPRIGHT"
@@ -795,18 +782,14 @@ local function LayoutHudTopRow(showKeep, showGold, showTutorial)
     end
 
     local totalW = 0
-    if showTutorial then
-        totalW = TUTORIAL_PANEL_W
-    end
     if showGold then
-        if totalW > 0 then totalW = totalW + HUD_STACK_GAP end
-        totalW = totalW + HUD_PANEL_WIDTH
+        totalW = HUD_PANEL_WIDTH
     end
     if showKeep and guildKeepHUD and guildKeepHUD:IsShown() then
         if totalW > 0 then totalW = totalW + HUD_STACK_GAP end
-        totalW = totalW + TUTORIAL_PANEL_W
+        totalW = totalW + KEEP_PANEL_W
     end
-    if totalW < 1 then totalW = TUTORIAL_PANEL_W end
+    if totalW < 1 then totalW = KEEP_PANEL_W end
     goldHudRoot:SetSize(totalW, clusterH)
     goldHudRoot._hudLayoutW = totalW
     -- Ne jamais reancrer goldHudRoot ici : ce relayout tourne toutes les ~2s (HUDZoneCheck),
@@ -815,9 +798,14 @@ local function LayoutHudTopRow(showKeep, showGold, showTutorial)
     NotifyHudStackLayout()
 end
 
+-- La croix du panneau decoche simplement « Panneau des coins flottant » (options, /ov hud).
 local function HideTopHudManually()
-    if OverlordDB then OverlordDB.goldHUDHidden = true end
-    if goldHudRoot then goldHudRoot:Hide() end
+    local sp = Overlord.SettingsPanel
+    if sp and sp.SetShowCoinsHud then
+        sp.SetShowCoinsHud(false)
+    elseif goldHudRoot then
+        goldHudRoot:Hide()
+    end
 end
 
 local function CreateGoldHUD()
@@ -830,7 +818,7 @@ local function CreateGoldHUD()
 
     local clusterH = 62
     goldHudRoot = CreateFrame("Frame", "OverlordGoldHudRoot", UIParent)
-    goldHudRoot:SetSize(HUD_PANEL_WIDTH * 2 + TUTORIAL_PANEL_W + HUD_STACK_GAP * 2, clusterH)
+    goldHudRoot:SetSize(HUD_PANEL_WIDTH + KEEP_PANEL_W + HUD_STACK_GAP, clusterH)
     goldHudRoot:SetPoint("TOP", UIParent, "TOP", 0, -4)
     goldHudRoot:SetFrameStrata("HIGH")
     goldHudRoot:EnableMouse(true)
@@ -842,42 +830,10 @@ local function CreateGoldHUD()
     end)
     goldHudRoot:SetClampedToScreen(true)
 
-    -- Bloc tutoriel (gauche) : icone livre seule, tooltip au survol
-    local tutorialPanel = CreateFrame("Button", nil, goldHudRoot, "BackdropTemplate")
-    hudTutorialPanel = tutorialPanel
-    tutorialPanel:SetSize(TUTORIAL_PANEL_W, clusterH)
-    tutorialPanel:SetPoint("TOPLEFT", goldHudRoot, "TOPLEFT", 0, 0)
-    Overlord.Ressources:ApplyTopHudChrome(tutorialPanel, 0.9)
-    local tutorialGlow = tutorialPanel:CreateTexture(nil, "HIGHLIGHT")
-    tutorialGlow:SetAllPoints()
-    tutorialGlow:SetTexture("Interface\\BUTTONS\\UI-Panel-Button-Highlight")
-    tutorialGlow:SetTexCoord(0, 0.625, 0, 0.6875)
-    tutorialGlow:SetBlendMode("ADD")
-    tutorialGlow:SetAlpha(0.12)
-    local tutorialIcon = tutorialPanel:CreateTexture(nil, "ARTWORK")
-    tutorialIcon:SetSize(40, 40)
-    tutorialIcon:SetPoint("CENTER", tutorialPanel, "CENTER", 0, 0)
-    tutorialIcon:SetTexture(TUTORIAL_ICON)
-    tutorialIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-    tutorialPanel.icon = tutorialIcon
-    tutorialPanel:SetScript("OnClick", function()
-        if Overlord.Popups then Overlord.Popups:ShowQuickGuide() end
-    end)
-    tutorialPanel:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:AddLine(L.GUIDE_BAR_LABEL or "Tutorial", 1, 0.82, 0.2)
-        GameTooltip:AddLine(L.GUIDE_BTN_TOOLTIP, 1, 1, 1, true)
-        GameTooltip:Show()
-    end)
-    tutorialPanel:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    tutorialPanel:RegisterForDrag("LeftButton", "RightButton")
-    tutorialPanel:SetScript("OnDragStart", function() goldHudRoot:StartMoving() end)
-    tutorialPanel:SetScript("OnDragStop", OnTopHudClusterDragStop)
-
     -- --- Bloc Guild Keep (meme taille que le tutoriel) ---
     guildKeepHUD = CreateFrame("Frame", "OverlordGuildKeepHUD", goldHudRoot, "BackdropTemplate")
-    guildKeepHUD:SetSize(TUTORIAL_PANEL_W, clusterH)
-    guildKeepHUD:SetPoint("TOPLEFT", tutorialPanel, "TOPRIGHT", HUD_STACK_GAP, 0)
+    guildKeepHUD:SetSize(KEEP_PANEL_W, clusterH)
+    guildKeepHUD:SetPoint("TOPLEFT", goldHudRoot, "TOPLEFT", 0, 0)
     -- Position finale : geree par LayoutHudTopRow
     Overlord.Ressources:ApplyTopHudChrome(guildKeepHUD, 0.9)
     guildKeepHUD:EnableMouse(true)
@@ -892,14 +848,14 @@ local function CreateGoldHUD()
 
     local gkGuild = guildKeepHUD:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     gkGuild:SetPoint("TOP", gkIcon, "BOTTOM", 0, -1)
-    gkGuild:SetWidth(TUTORIAL_PANEL_W - 6)
+    gkGuild:SetWidth(KEEP_PANEL_W - 6)
     gkGuild:SetJustifyH("CENTER")
     gkGuild:SetMaxLines(1)
     guildKeepHUD.guildLabel = gkGuild
 
     local gkActivity = guildKeepHUD:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     gkActivity:SetPoint("BOTTOM", guildKeepHUD, "BOTTOM", 0, 3)
-    gkActivity:SetWidth(TUTORIAL_PANEL_W - 4)
+    gkActivity:SetWidth(KEEP_PANEL_W - 4)
     gkActivity:SetJustifyH("CENTER")
     gkActivity:SetMaxLines(1)
     gkActivity:Hide()
@@ -1023,13 +979,12 @@ local function CreateGoldHUD()
     -- --- Panneau or ---
     goldHUD = CreateFrame("Frame", "OverlordGoldHUD", goldHudRoot, "BackdropTemplate")
     goldHUD:SetSize(HUD_PANEL_WIDTH, clusterH)
-    goldHUD:SetPoint("TOPLEFT", tutorialPanel, "TOPRIGHT", HUD_STACK_GAP, 0)
+    goldHUD:SetPoint("TOPLEFT", goldHudRoot, "TOPLEFT", 0, 0)
     Overlord.Ressources:ApplyTopHudChrome(goldHUD, 0.9)
     goldHUD:EnableMouse(true)
     goldHUD:RegisterForDrag("LeftButton", "RightButton")
     goldHUD:SetScript("OnDragStart", function() goldHudRoot:StartMoving() end)
     goldHUD:SetScript("OnDragStop", OnTopHudClusterDragStop)
-    goldHUD.tutorialPanel = tutorialPanel
 
     -- --- Ligne 1 : icone monnaie WoW (sac) - inchangée, nette a cette taille
     local coinIcon = goldHUD:CreateTexture(nil, "ARTWORK", nil, 1)
@@ -1492,29 +1447,18 @@ local function HUDZoneCheck(force)
         autoKeepLastRelevantAt = nil
     end
 
+    -- Panneau des coins flottant : desactive par defaut (genant a l'ecran, stream) ;
+    -- coche, il apparait pres des mines, des zones de capture et des fortins.
     local cfg = OverlordDB and OverlordDB.config
-    local hudMode = cfg and cfg.topHudMode or "auto"
-    local settingsHidden = hudMode == "never"
-        or (cfg and cfg.topHudMode == nil and cfg.showTopHud == false)
-    local hudHidden = settingsHidden or (OverlordDB and OverlordDB.goldHUDHidden)
-    local showTutorial = cfg and cfg.showTutorialBook == true or false
     local showGold, showKeep = false, false
-    if inZone and not hudHidden then
-        if hudMode == "auto" then
-            local relevantGold, relevantKeep = GetAutoHudContext(mapID)
-            local now = GetTime()
-            if relevantGold then autoGoldLastRelevantAt = now end
-            if relevantKeep then autoKeepLastRelevantAt = now end
-            showGold = autoGoldLastRelevantAt and now - autoGoldLastRelevantAt <= AUTO_HUD_GRACE_SECONDS or false
-            showKeep = autoKeepLastRelevantAt and now - autoKeepLastRelevantAt <= AUTO_HUD_GRACE_SECONDS or false
-        else
-            showGold = true
-            showKeep = true
-        end
+    if inZone and cfg and cfg.showCoinsHud == true then
+        local relevantGold, relevantKeep = GetAutoHudContext(mapID)
+        local now = GetTime()
+        if relevantGold then autoGoldLastRelevantAt = now end
+        if relevantKeep then autoKeepLastRelevantAt = now end
+        showGold = autoGoldLastRelevantAt and now - autoGoldLastRelevantAt <= AUTO_HUD_GRACE_SECONDS or false
+        showKeep = autoKeepLastRelevantAt and now - autoKeepLastRelevantAt <= AUTO_HUD_GRACE_SECONDS or false
     end
-    -- Panneau des pieces : desactive par defaut (genant a l'ecran, stream) ;
-    -- le joueur le reactive dans les reglages.
-    showGold = showGold and cfg ~= nil and cfg.showCoinsHud == true
     showKeep = showKeep and showGold
         and Overlord.Ressources:ShouldShowGuildKeepHUD(mapID, inZone)
     local showCluster = showGold
@@ -1523,7 +1467,7 @@ local function HUDZoneCheck(force)
         if not goldHudRoot:IsShown() then
             goldHudRoot:Show()
         end
-        LayoutHudTopRow(showKeep, showGold, showTutorial)
+        LayoutHudTopRow(showKeep, showGold)
         if showGold then Overlord.Ressources:RefreshHUD() end
         if showKeep then Overlord.Ressources:RefreshGuildKeepHUD() end
     else
@@ -1537,10 +1481,6 @@ local function HUDZoneCheck(force)
 end
 
 function Overlord.Ressources:OnShowTopHudSettingChanged()
-    HUDZoneCheck(true)
-end
-
-function Overlord.Ressources:OnShowTutorialBookSettingChanged()
     HUDZoneCheck(true)
 end
 

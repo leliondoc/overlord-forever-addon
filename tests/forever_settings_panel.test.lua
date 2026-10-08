@@ -71,9 +71,9 @@ Overlord = { UI = { ApplyUiScale = function() scaleApplied = scaleApplied + 1 en
         AlertsEnabled = function(self) return self.on end,
         SetAlertsEnabled = function(self, v) self.on = v end,
         RefreshPlates = function(self) self.plates = self.plates + 1 end },
-    MapMarkers = { shown = true,
-        AreWorldMapOverlaysShown = function(self) return self.shown end,
-        SetWorldMapOverlaysShown = function(self, v) self.shown = v end } }
+    MapMarkers = { mode = "full",
+        GetWorldMapDisplayMode = function(self) return self.mode end,
+        SetWorldMapDisplayMode = function(self, v) self.mode = v end } }
 OverlordDB = { config = {} }
 assert(loadfile("SettingsPanel.lua"))()
 local SP = Overlord.SettingsPanel
@@ -84,9 +84,9 @@ assert(SP._registered, "Native options page was not registered")
 local expected = { "Overlord_UiScale", "Overlord_NotificationChat", "Overlord_GuildKillAlert",
     "Overlord_MapOverlayOpacity", "Overlord_MapIconOpacity", "Overlord_MapIconScale", "Overlord_MapPathOpacity",
     "Overlord_MinimapOverlayOpacity", "Overlord_ShowMinimapButton", "Overlord_ShowMinimapCaptureZones",
-    "Overlord_ShowMapZoneTitles", "Overlord_AutoWaypointNextObjective", "Overlord_TopHudMode",
-    "Overlord_ShowCoinsHud", "Overlord_ShowFloatingObjective", "Overlord_ShowTutorialBook",
-    "Overlord_SoundEnabled", "Overlord_MostWantedAlerts", "Overlord_WorldMapOverlays" }
+    "Overlord_AutoWaypointNextObjective",
+    "Overlord_ShowCoinsHud", "Overlord_ShowFloatingObjective",
+    "Overlord_SoundEnabled", "Overlord_MostWantedAlerts", "Overlord_WorldMapMode" }
 for _, var in ipairs(expected) do
     assert(settings[var] and settings[var].control, "Missing native control: " .. var)
 end
@@ -142,12 +142,15 @@ assert(OverlordDB.config.mapIconScale == 0.7 and values["Overlord_MapIconScale"]
 settings["Overlord_MapIconScale"].set(3)
 assert(OverlordDB.config.mapIconScale == 1.5, "Icon size not clamped to 150 %")
 assert(settings["Overlord_MapIconScale"].get() == 1.5)
--- 1.7.1: Most Wanted alerts and the world map display get native checkboxes, wired to
--- their modules (default on); the panel scale reads in percent like the icon size.
-assert(settings["Overlord_MostWantedAlerts"].default == true and settings["Overlord_WorldMapOverlays"].default == true)
+-- 1.7.1: Most Wanted alerts get a native checkbox wired to its module (default on).
+-- The world map display is one dropdown (full, compact, hidden), full by default.
+assert(settings["Overlord_MostWantedAlerts"].default == true and settings["Overlord_WorldMapMode"].default == "full")
 settings["Overlord_MostWantedAlerts"].set(false)
 assert(Overlord.MostWanted.on == false and Overlord.MostWanted.plates == 1, "Most Wanted box not wired")
 assert(settings["Overlord_MostWantedAlerts"].get() == false)
-settings["Overlord_WorldMapOverlays"].set(false)
-assert(Overlord.MapMarkers.shown == false and settings["Overlord_WorldMapOverlays"].get() == false, "World map box not wired")
+settings["Overlord_WorldMapMode"].set("compact")
+assert(Overlord.MapMarkers.mode == "compact" and settings["Overlord_WorldMapMode"].get() == "compact", "World map mode not wired")
+local mapModes = {}
+for _, o in ipairs(dropdowns["Overlord_WorldMapMode"]()) do mapModes[#mapModes + 1] = o.value end
+assert(table.concat(mapModes, ",") == "full,compact,hidden", "World map modes: " .. table.concat(mapModes, ","))
 print("Settings panel: native controls, chat tab, guild alerts, Most Wanted, world map, scale OK")

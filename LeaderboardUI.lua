@@ -896,6 +896,184 @@ local function FitLeaderboardFrameHeight()
     FitLeaderboardFrameScale(lbFrame._preferredScale or currentScale)
 end
 
+-- ---------- Preneurs et rivalites de la semaine (fiefs et avant-postes) ----------
+-- Volet qui prend la place des tableaux Fiefs et Avant-postes le temps de le lire
+-- (bouton dans l'en-tete des avant-postes). Donnees : le registre des prises signees,
+-- deja local (Leaderboard:GetOutpostWeeklyStats), aucun paquet de plus.
+local SitesWeek = {
+    ROWS = 16,
+    ICON = "Interface\\Icons\\INV_Scroll_03",
+    RGB = { Alliance = { 0.427, 0.702, 0.949 }, Horde = { 1.0, 0.40, 0.27 } },
+}
+
+function SitesWeek.Colored(text, faction)
+    local c = SitesWeek.RGB[faction]
+    if not c then return text end
+    return string.format("|cFF%02X%02X%02X%s|r", c[1] * 255, c[2] * 255, c[3] * 255, text)
+end
+
+function SitesWeek.ToggleButton(parent, tipTitle, tipBody)
+    local btn = CreateFrame("Button", nil, parent)
+    btn:SetSize(20, 20)
+    btn:SetPoint("RIGHT", parent, "RIGHT", -8, 0)
+    local icon = btn:CreateTexture(nil, "ARTWORK")
+    icon:SetAllPoints()
+    icon:SetTexture(SitesWeek.ICON)
+    icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    btn:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+    btn:SetScript("OnClick", function() Overlord.LeaderboardUI:ToggleSitesWeek() end)
+    btn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine(tipTitle or "", 1, 0.82, 0)
+        if tipBody then GameTooltip:AddLine(tipBody, 1, 1, 1, true) end
+        GameTooltip:Show()
+    end)
+    btn:SetScript("OnLeave", GameTooltip_Hide)
+    return btn
+end
+
+-- Une moitie du volet : bandeau de colonnes, panneau, lignes fixes defilees a la molette.
+function SitesWeek.Half(view, P, anchorPoint, columns, emptyText)
+    local header = CreateOfficialSubPanel(view, LB_GUILD_KEEP_W, LB_HEADER_H, P, { header = true })
+    header:SetPoint(anchorPoint, view, anchorPoint, 0, 0)
+    for _, col in ipairs(columns) do
+        local fs = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        fs:SetPoint("CENTER", header, "CENTER", col.x, 0)
+        fs:SetWidth(col.w)
+        fs:SetJustifyH("CENTER")
+        fs:SetText(col.text or "")
+        ApplyOfficialHeaderColor(fs, P)
+    end
+    local panel = CreateOfficialSubPanel(view, LB_GUILD_KEEP_W, 400, P)
+    panel:SetPoint("TOP", header, "BOTTOM", 0, -LB_GAP_HEADER)
+    panel:SetPoint("BOTTOM", view, "BOTTOM", 0, 0)
+    panel:SetPoint("LEFT", header, "LEFT", 0, 0)
+    panel:SetPoint("RIGHT", header, "RIGHT", 0, 0)
+    local half = { header = header, panel = panel, rows = {}, offset = 0, list = {} }
+    for i = 1, SitesWeek.ROWS do
+        local row = CreateFrame("Frame", nil, panel)
+        row:SetSize(LB_GUILD_KEEP_W - 8, GUILD_ROW_HEIGHT)
+        row:SetPoint("TOPLEFT", panel, "TOPLEFT", 4, -4 - (i - 1) * GUILD_ROW_HEIGHT)
+        if i % 2 == 0 then
+            local bg = row:CreateTexture(nil, "BACKGROUND")
+            bg:SetAllPoints()
+            bg:SetColorTexture(P.rowEven[1], P.rowEven[2], P.rowEven[3], P.rowEven[4])
+        end
+        row.cells = {}
+        for c, col in ipairs(columns) do
+            local fs = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            fs:SetPoint("CENTER", row, "CENTER", col.x, 0)
+            fs:SetWidth(col.w)
+            fs:SetJustifyH(col.justify or "CENTER")
+            fs:SetWordWrap(false)
+            row.cells[c] = fs
+        end
+        row:Hide()
+        half.rows[i] = row
+    end
+    half.empty = panel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    half.empty:SetPoint("CENTER", panel, "CENTER", 0, 0)
+    half.empty:SetWidth(LB_GUILD_KEEP_W - 24)
+    half.empty:SetText(emptyText or "")
+    panel:EnableMouseWheel(true)
+    panel:SetScript("OnMouseWheel", function(_, delta)
+        half.offset = math.max(0, math.min(half.offset - delta * 3, #half.list - 1))
+        Overlord.LeaderboardUI:RefreshSitesWeek()
+    end)
+    return half
+end
+
+function SitesWeek.Paint(half, fill)
+    local visible = math.max(1, math.floor(((half.panel:GetHeight() or 0) - 8) / GUILD_ROW_HEIGHT))
+    visible = math.min(visible, SitesWeek.ROWS)
+    half.offset = math.max(0, math.min(half.offset, #half.list - visible))
+    for i = 1, SitesWeek.ROWS do
+        local index = half.offset + i
+        local entry = i <= visible and half.list[index] or nil
+        local row = half.rows[i]
+        if entry then
+            fill(row.cells, entry, index)
+            row:Show()
+        else
+            row:Hide()
+        end
+    end
+    half.empty:SetShown(#half.list == 0)
+end
+
+function Overlord.LeaderboardUI:CreateSitesWeekView(P)
+    if not lbFrame or lbFrame.sitesWeek then return end
+    local view = CreateFrame("Frame", nil, lbFrame)
+    view:SetPoint("TOPLEFT", lbFrame.guildKeepBlock, "TOPLEFT", 0, 0)
+    view:SetPoint("BOTTOMRIGHT", lbFrame.outpostBlock, "BOTTOMRIGHT", 0, 0)
+    view:Hide()
+    lbFrame.sitesWeek = view
+    -- Gauche : preneurs (rang, joueur, fiefs, avant-postes).
+    view.capturers = SitesWeek.Half(view, P, "TOPLEFT", {
+        { x = -150, w = 32, text = "#" },
+        { x = -40, w = 180, text = L.SITES_WEEK_COL_CAPTURERS or "Capturers this week", justify = "LEFT" },
+        { x = 80, w = 60, text = L.LB_COL_KEEP or "Keep" },
+        { x = 145, w = 60, text = L.LB_COL_OUTPOST or "Outpost" },
+    }, L.SITES_WEEK_EMPTY_CAPTURERS)
+    -- Droite : rivalites (guilde qui prend, guilde qui perd, nombre de prises).
+    view.rivalries = SitesWeek.Half(view, P, "TOPRIGHT", {
+        { x = -150, w = 32, text = "#" },
+        { x = -30, w = 200, text = L.SITES_WEEK_COL_RIVALRIES or "Rivalries this week", justify = "LEFT" },
+        { x = 110, w = 50, text = L.LB_COL_CAPTURES or "Captures" },
+    }, L.SITES_WEEK_EMPTY_RIVALRIES)
+    SitesWeek.ToggleButton(view.rivalries.header, L.SITES_WEEK_BACK or "Back")
+    SitesWeek.ToggleButton(lbFrame.outpostHeaderBand, L.SITES_WEEK_TIP_TITLE, L.SITES_WEEK_TIP_BODY)
+    lbFrame:HookScript("OnHide", function()
+        if lbFrame.sitesWeek and lbFrame.sitesWeek:IsShown() then Overlord.LeaderboardUI:ToggleSitesWeek() end
+    end)
+end
+
+function Overlord.LeaderboardUI:ToggleSitesWeek()
+    local view = lbFrame and lbFrame.sitesWeek
+    if not view then return end
+    local show = not view:IsShown()
+    view:SetShown(show)
+    lbFrame.guildKeepBlock:SetShown(not show)
+    lbFrame.outpostBlock:SetShown(not show)
+    if show then
+        view.capturers.offset, view.rivalries.offset = 0, 0
+        self:RefreshSitesWeek()
+    end
+end
+
+function Overlord.LeaderboardUI:RefreshSitesWeek()
+    local view = lbFrame and lbFrame.sitesWeek
+    local lb = Overlord.Leaderboard
+    if not view or not view:IsShown() or not lb or not lb.GetOutpostWeeklyStats then return end
+    local stats, late = lb:GetOutpostWeeklyStats()
+    if late and not view.rereadPending and C_Timer and C_Timer.After then
+        view.rereadPending = true
+        C_Timer.After(3, function()
+            view.rereadPending = nil
+            Overlord.LeaderboardUI:RefreshSitesWeek()
+        end)
+    end
+    view.capturers.list = stats.capturers or {}
+    view.rivalries.list = stats.rivalries or {}
+    local nameW = 150
+    SitesWeek.Paint(view.capturers, function(cells, c, index)
+        cells[1]:SetText(index)
+        local short = Ambiguate and Ambiguate(c.name, "short") or c.name
+        cells[2]:SetText(LbCrestMarkup(c.faction, 14) .. " "
+            .. SitesWeek.Colored(TruncateTextToWidth(short, nameW, "GameFontNormal"), c.faction))
+        cells[3]:SetText(c.keeps > 0 and c.keeps or "-")
+        cells[4]:SetText(c.outposts > 0 and c.outposts or "-")
+    end)
+    SitesWeek.Paint(view.rivalries, function(cells, r, index)
+        cells[1]:SetText(index)
+        local half = 88
+        cells[2]:SetText(SitesWeek.Colored(TruncateTextToWidth(r.taker, half, "GameFontNormal"), r.takerFaction)
+            .. " |cFFB0A080>|r "
+            .. SitesWeek.Colored(TruncateTextToWidth(r.victim, half, "GameFontNormal"), r.victimFaction))
+        cells[3]:SetText(r.count)
+    end)
+end
+
 function Overlord.LeaderboardUI:CreateFrame()
     local P = GetPalette()
 
@@ -1351,6 +1529,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.outpostEmptyHint:SetTextColor(P.gray[1], P.gray[2], P.gray[3], 0.85)
     lbFrame.outpostEmptyHint:SetText(L.LB_OUTPOST_EMPTY or "")
     lbFrame.outpostEmptyHint:Hide()
+    self:CreateSitesWeekView(P)
 
     -- Pied de page (positionne par LayoutLeaderboardSections)
     local footerBand = CreateOfficialSubPanel(lbFrame,
@@ -2473,6 +2652,10 @@ end
 
 function Overlord.LeaderboardUI:SetSearchText(text)
     if not lbFrame then return end
+    -- La recherche filtre les tableaux : le volet preneurs/rivalites leur rend la place.
+    if text and text ~= "" and lbFrame.sitesWeek and lbFrame.sitesWeek:IsShown() then
+        self:ToggleSitesWeek()
+    end
     local query = Overlord.LeaderboardSearch:Normalize(text)
     if query == (lbFrame.searchQuery or "") then return end
     lbFrame.searchQuery = query
@@ -2614,6 +2797,7 @@ function Overlord.LeaderboardUI:Refresh()
     view.sortedGuilds = dc.sortedGuilds or {}
     view.sortedGuildKeeps = sortedGuildKeeps or {}
     view.sortedOutposts = sortedOutposts or {}
+    self:RefreshSitesWeek()
     view.meta = dc.meta or {}
     view.locale = dc.locale or {}
     view.duplicateShortNames = dc.duplicateShortNames or {}

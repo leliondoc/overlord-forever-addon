@@ -8,8 +8,6 @@
 Overlord = Overlord or {}
 Overlord.Combat = {}
 
-local L = Overlord.L
-
 local function IsKillScoringActive()
     return Overlord.IsKillScoringActive and Overlord:IsKillScoringActive()
 end
@@ -861,8 +859,7 @@ function Overlord.Combat:CreditHonorableKills(count)
     if Overlord.Sync and Overlord.Sync.BroadcastKill then
         Overlord.Sync:BroadcastKill(currentZone and currentZone.id or "", totalKills, true)
     end
-    local fmt = L.HONORABLE_KILLS_CONFIRM or "+%d honorable kills: Total: %d"
-    Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. fmt, count, totalKills))
+    -- Pas de ligne de chat par VH : Blizzard l'annonce deja, le total est dans le classement.
     return totalKills
 end
 

@@ -59,86 +59,87 @@ local outpostNames = standaloneOutpostNames[locale] or standaloneOutpostNames.en
 L.OUTPOST_SILVERPINE_NAME = outpostNames[1]
 L.OUTPOST_AEYTHYR_LODGE_NAME = outpostNames[2]
 L.OUTPOST_LESI_BEAR_CAVE_NAME = outpostNames[3]
--- World map filter toggle (Blizzard "Map Filters" menu and /ov map).
-local mapFilterTexts = {
-    enUS = { "Overlord zones", "World map display: on", "World map display: off" },
-    frFR = { "Zones Overlord", "Affichage sur la carte : activé", "Affichage sur la carte : désactivé" },
-    esES = { "Zonas de Overlord", "Mostrar en el mapa: activado", "Mostrar en el mapa: desactivado" },
-    deDE = { "Overlord-Zonen", "Kartenanzeige: an", "Kartenanzeige: aus" },
-    ruRU = { "Зоны Overlord", "Отображение на карте: вкл.", "Отображение на карте: выкл." },
-    ptBR = { "Zonas do Overlord", "Exibição no mapa: ativada", "Exibição no mapa: desativada" },
-    zhCN = { "Overlord 区域", "地图显示：开启", "地图显示：关闭" },
+-- World map display modes: map corner button, Blizzard "Map Filters" and minimap
+-- tracking menus, options dropdown and /ov map.
+-- { filters title, full, compact, hidden, options tooltip, button click hint, chat/status line }
+local mapModeTexts = {
+    enUS = { "Overlord zones", "Full", "Compact (names on hover)", "Hidden",
+        "Full: a name banner on every point. Compact: circles and icons only; a point's name shows under the mouse and while it is being taken. Hidden: nothing from Overlord on the world map.\nAlso from the Overlord button in the corner of the world map, the map's Filters menu, the minimap tracking menu and /ov map.",
+        "Click: %s", "World map display: %s" },
+    frFR = { "Zones Overlord", "Complet", "Compact (noms au survol)", "Masqué",
+        "Complet : un bandeau avec le nom sur chaque point. Compact : cercles et icônes seulement ; le nom d'un point apparaît sous la souris et pendant sa prise. Masqué : rien d'Overlord sur la carte du monde.\nAussi avec le bouton Overlord dans le coin de la carte du monde, le menu Filtres de la carte, le menu de suivi de la minicarte et /ov map.",
+        "Clic : %s", "Carte du monde : %s" },
+    esES = { "Zonas de Overlord", "Completo", "Compacto (nombres al pasar el ratón)", "Oculto",
+        "Completo: un cartel con el nombre en cada punto. Compacto: solo círculos e iconos; el nombre de un punto aparece bajo el ratón y mientras se está tomando. Oculto: nada de Overlord en el mapa del mundo.\nTambién con el botón de Overlord en la esquina del mapa del mundo, el menú Filtros del mapa, el menú de seguimiento del minimapa y /ov map.",
+        "Clic: %s", "Mapa del mundo: %s" },
+    deDE = { "Overlord-Zonen", "Vollständig", "Kompakt (Namen bei Mouseover)", "Ausgeblendet",
+        "Vollständig: ein Namensbanner auf jedem Punkt. Kompakt: nur Kreise und Symbole; der Name eines Punktes erscheint unter der Maus und während er erobert wird. Ausgeblendet: nichts von Overlord auf der Weltkarte.\nAuch über den Overlord-Knopf in der Ecke der Weltkarte, das Filtermenü der Karte, das Verfolgungsmenü der Minimap und /ov map.",
+        "Klick: %s", "Weltkarte: %s" },
+    ruRU = { "Зоны Overlord", "Полный", "Компактный (названия при наведении)", "Скрыт",
+        "Полный: лента с названием на каждой точке. Компактный: только круги и значки; название точки видно под курсором и во время захвата. Скрыт: ничего от Overlord на карте мира.\nТакже кнопкой Overlord в углу карты мира, в меню фильтров карты, в меню отслеживания мини-карты и командой /ov map.",
+        "Щелчок: %s", "Карта мира: %s" },
+    ptBR = { "Zonas do Overlord", "Completo", "Compacto (nomes ao passar o mouse)", "Oculto",
+        "Completo: um banner com o nome em cada ponto. Compacto: só círculos e ícones; o nome de um ponto aparece sob o mouse e enquanto ele é tomado. Oculto: nada do Overlord no mapa-múndi.\nTambém pelo botão do Overlord no canto do mapa-múndi, no menu Filtros do mapa, no menu de rastreamento do minimapa e com /ov map.",
+        "Clique: %s", "Mapa-múndi: %s" },
+    zhCN = { "Overlord 区域", "完整", "紧凑（悬停显示名称）", "隐藏",
+        "完整：每个据点都显示名称横幅。紧凑：只显示圆圈和图标；鼠标悬停或据点正在被占领时显示名称。隐藏：世界地图上不显示任何 Overlord 内容。\n也可通过世界地图角落的 Overlord 按钮、地图的过滤菜单、小地图追踪菜单和 /ov map 切换。",
+        "点击：%s", "世界地图：%s" },
 }
-mapFilterTexts.esMX = mapFilterTexts.esES
-local mapFilter = mapFilterTexts[locale] or mapFilterTexts.enUS
-L.MAP_FILTER_OVERLORD, L.MAP_FILTER_SHOWN, L.MAP_FILTER_HIDDEN = mapFilter[1], mapFilter[2], mapFilter[3]
+mapModeTexts.esMX = mapModeTexts.esES
+local mapMode = mapModeTexts[locale] or mapModeTexts.enUS
+L.MAP_FILTER_OVERLORD, L.MAP_MODE_FULL, L.MAP_MODE_COMPACT, L.MAP_MODE_HIDDEN = mapMode[1], mapMode[2], mapMode[3], mapMode[4]
+L.MAP_MODE_TOOLTIP, L.MAP_MODE_BUTTON_NEXT, L.MAP_MODE_STATUS = mapMode[5], mapMode[6], mapMode[7]
 -- Settings texts that describe where things now live (coins and next objective
 -- are always in the Overlord panel; floating versions are opt-in).
--- { coins label, coins tooltip, floating objective label, floating objective tooltip,
---   top HUD tooltip, tutorial book tooltip }
+-- { coins label, coins tooltip, floating objective label, floating objective tooltip }
 local settingsTexts = {
     enUS = {
         "Floating coins panel",
         "Your coins, Reinforce and Attack are always in the Overlord panel (Next Objective card). Turn on to also show them at the top of the screen near coin mines. Off by default.",
         "Floating next objective",
         "The next objective is always shown in the Overlord panel. Turn on to also show it in a small window in the middle of the screen when you are not capturing. Off by default.",
-        "Auto shows the relevant top panels near coin mines, capture zones and guild keeps when the floating coins panel is on. Always shows them on eligible maps; Never hides them.",
-        "Shows the tutorial book icon on the top HUD. Turn off to hide only that icon.",
     },
     frFR = {
         "Panneau des coins flottant",
         "Vos coins, Renforcer et Attaquer sont toujours dans le panneau Overlord (carte Prochain objectif). Activez pour les afficher aussi en haut de l'écran près des mines de coins. Désactivé par défaut.",
         "Prochain objectif flottant",
         "Le prochain objectif est toujours affiché dans le panneau Overlord. Activez pour l'afficher aussi dans une petite fenêtre au milieu de l'écran quand vous ne capturez pas. Désactivé par défaut.",
-        "Auto affiche les panneaux du haut utiles près des mines de coins, des zones de capture et des fortins quand le panneau des coins flottant est activé. Toujours les affiche sur les cartes concernées ; Jamais les masque.",
-        "Affiche l'icône livre du tutoriel sur le HUD du haut. Désactivez pour masquer uniquement cette icône.",
     },
     esES = {
         "Panel de monedas flotante",
         "Tus monedas, Reforzar y Atacar están siempre en el panel de Overlord (tarjeta Próximo objetivo). Actívalo para mostrarlos también arriba de la pantalla cerca de las minas. Desactivado por defecto.",
         "Próximo objetivo flotante",
         "El próximo objetivo se muestra siempre en el panel de Overlord. Actívalo para mostrarlo también en una pequeña ventana en el centro de la pantalla cuando no estés capturando. Desactivado por defecto.",
-        "Auto muestra los paneles superiores útiles cerca de las minas, las zonas de captura y las fortalezas cuando el panel de monedas flotante está activado. Siempre los muestra en los mapas correspondientes; Nunca los oculta.",
-        "Muestra el icono del libro tutorial en el HUD superior. Desactívalo para ocultar solo ese icono.",
     },
     deDE = {
         "Schwebende Münzleiste",
         "Deine Münzen, Verstärken und Angreifen sind immer im Overlord-Fenster (Karte Nächstes Ziel). Aktivieren, um sie zusätzlich oben am Bildschirm in der Nähe von Minen zu zeigen. Standardmäßig aus.",
         "Schwebendes nächstes Ziel",
         "Das nächste Ziel steht immer im Overlord-Fenster. Aktivieren, um es zusätzlich in einem kleinen Fenster in der Bildschirmmitte zu zeigen, wenn du nicht eroberst. Standardmäßig aus.",
-        "Auto zeigt die passenden oberen Leisten in der Nähe von Minen, Eroberungszonen und Gildenfestungen, wenn die schwebende Münzleiste aktiv ist. Immer zeigt sie auf passenden Karten; Nie blendet sie aus.",
-        "Zeigt das Tutorial-Buch-Symbol im oberen HUD. Deaktivieren, um nur dieses Symbol auszublenden.",
     },
     ruRU = {
         "Плавающая панель монет",
         "Монеты, «Укрепить» и «Атаковать» всегда есть в окне Overlord (карточка «Следующая цель»). Включите, чтобы также показывать их вверху экрана рядом с шахтами. По умолчанию выключено.",
         "Плавающая следующая цель",
         "Следующая цель всегда показана в окне Overlord. Включите, чтобы также показывать её в маленьком окне в центре экрана, когда вы не захватываете. По умолчанию выключено.",
-        "«Авто» показывает нужные верхние панели рядом с шахтами, зонами захвата и крепостями гильдий, если включена плавающая панель монет. «Всегда» показывает их на подходящих картах; «Никогда» скрывает.",
-        "Показывает значок книги обучения на верхнем HUD. Выключите, чтобы скрыть только этот значок.",
     },
     ptBR = {
         "Painel de moedas flutuante",
         "Suas moedas, Reforçar e Atacar estão sempre no painel do Overlord (cartão Próximo objetivo). Ative para mostrá-los também no topo da tela perto das minas. Desativado por padrão.",
         "Próximo objetivo flutuante",
         "O próximo objetivo é sempre mostrado no painel do Overlord. Ative para mostrá-lo também numa pequena janela no meio da tela quando você não estiver capturando. Desativado por padrão.",
-        "Auto mostra os painéis superiores úteis perto das minas, das zonas de captura e das fortalezas quando o painel de moedas flutuante estiver ativo. Sempre os mostra nos mapas correspondentes; Nunca os oculta.",
-        "Mostra o ícone do livro do tutorial no HUD superior. Desative para ocultar apenas esse ícone.",
     },
     zhCN = {
         "浮动硬币面板",
         "你的硬币、加固和进攻按钮始终在 Overlord 面板中（下一目标卡片）。开启后，在硬币矿区附近也会显示在屏幕顶部。默认关闭。",
         "浮动下一目标",
         "下一目标始终显示在 Overlord 面板中。开启后，在你未占领时也会在屏幕中央的小窗口中显示。默认关闭。",
-        "自动：开启浮动硬币面板时，在硬币矿区、占领区和公会要塞附近显示相关顶部面板。始终：在相关地图上一直显示；从不：隐藏。",
-        "在顶部 HUD 显示教程书图标。关闭后仅隐藏该图标。",
     },
 }
 settingsTexts.esMX = settingsTexts.esES
 local st = settingsTexts[locale] or settingsTexts.enUS
 L.COINS_HUD_LABEL, L.COINS_HUD_TOOLTIP = st[1], st[2]
 L.FLOATING_OBJECTIVE_LABEL, L.FLOATING_OBJECTIVE_TOOLTIP = st[3], st[4]
-L.SHOW_TOP_HUD_TOOLTIP, L.SHOW_TUTORIAL_BOOK_TOOLTIP = st[5], st[6]
 local goldBonusReady = {
     enUS = "Ready", frFR = "Prêt", esES = "Listo", esMX = "Listo",
     deDE = "Bereit", ruRU = "Готово", ptBR = "Pronto", zhCN = "就绪",
@@ -216,3 +217,102 @@ elseif locale == "zhCN" then
         "elwynn_jerods_landing", "elwynn_stone_cairn", "elwynn_eastvale",
         "elwynn_invasion_camp" }) do L.ZONE_NAMES[id] = elwynn[index] end
 end
+
+-- Help lines, floating coins panel messages and the domination bar tooltip.
+-- { /ov map, /ov network, /ov hud, coins panel on, coins panel off,
+--   domination rule, victories header, no victory, "%s ago", reset line }
+local uiTexts = {
+    enUS = { "|cFFFFFF00/ov map [full|compact|off]|r: World map display (also the Overlord button in the map's corner)",
+        "|cFFFFFF00/ov network|r: Network report",
+        "|cFFFFFF00/ov hud [on|off|toggle]|r: Floating coins panel",
+        "|cFF00FF00[Overlord]|r Floating coins panel on.", "|cFF00FF00[Overlord]|r Floating coins panel off.",
+        "Taking the enemy capital wins a front: +1% for the winning faction.",
+        "Front victories this week", "No front victory yet this week.", "%s ago",
+        "Resets in %s (every Tuesday, 08:00 UTC)." },
+    frFR = { "|cFFFFFF00/ov map [full|compact|off]|r : affichage de la carte du monde (aussi le bouton Overlord dans le coin de la carte)",
+        "|cFFFFFF00/ov network|r : rapport réseau",
+        "|cFFFFFF00/ov hud [on|off|toggle]|r : panneau des coins flottant",
+        "|cFF00FF00[Overlord]|r Panneau des coins flottant activé.", "|cFF00FF00[Overlord]|r Panneau des coins flottant désactivé.",
+        "Prendre la capitale ennemie remporte un front : +1 % pour la faction gagnante.",
+        "Victoires de front cette semaine", "Aucune victoire de front cette semaine pour l'instant.", "il y a %s",
+        "Remise à zéro dans %s (chaque mardi, 08:00 UTC)." },
+    esES = { "|cFFFFFF00/ov map [full|compact|off]|r: visualización del mapa del mundo (también el botón de Overlord en la esquina del mapa)",
+        "|cFFFFFF00/ov network|r: informe de red",
+        "|cFFFFFF00/ov hud [on|off|toggle]|r: panel de monedas flotante",
+        "|cFF00FF00[Overlord]|r Panel de monedas flotante activado.", "|cFF00FF00[Overlord]|r Panel de monedas flotante desactivado.",
+        "Tomar la capital enemiga gana un frente: +1 % para la facción ganadora.",
+        "Victorias de frente esta semana", "Aún no hay victorias de frente esta semana.", "hace %s",
+        "Se reinicia en %s (cada martes, 08:00 UTC)." },
+    deDE = { "|cFFFFFF00/ov map [full|compact|off]|r: Weltkartenanzeige (auch der Overlord-Knopf in der Kartenecke)",
+        "|cFFFFFF00/ov network|r: Netzwerkbericht",
+        "|cFFFFFF00/ov hud [on|off|toggle]|r: Schwebende Münzleiste",
+        "|cFF00FF00[Overlord]|r Schwebende Münzleiste an.", "|cFF00FF00[Overlord]|r Schwebende Münzleiste aus.",
+        "Die Einnahme der feindlichen Hauptstadt gewinnt eine Front: +1 % für die siegreiche Fraktion.",
+        "Frontsiege diese Woche", "Diese Woche noch kein Frontsieg.", "vor %s",
+        "Zurückgesetzt in %s (jeden Dienstag, 08:00 UTC)." },
+    ruRU = { "|cFFFFFF00/ov map [full|compact|off]|r: отображение карты мира (также кнопка Overlord в углу карты)",
+        "|cFFFFFF00/ov network|r: отчёт о сети",
+        "|cFFFFFF00/ov hud [on|off|toggle]|r: плавающая панель монет",
+        "|cFF00FF00[Overlord]|r Плавающая панель монет включена.", "|cFF00FF00[Overlord]|r Плавающая панель монет выключена.",
+        "Взятие вражеской столицы приносит победу на фронте: +1 % победившей фракции.",
+        "Победы на фронтах на этой неделе", "На этой неделе побед на фронтах пока нет.", "%s назад",
+        "Сброс через %s (каждый вторник, 08:00 UTC)." },
+    ptBR = { "|cFFFFFF00/ov map [full|compact|off]|r: exibição do mapa-múndi (também o botão do Overlord no canto do mapa)",
+        "|cFFFFFF00/ov network|r: relatório de rede",
+        "|cFFFFFF00/ov hud [on|off|toggle]|r: painel de moedas flutuante",
+        "|cFF00FF00[Overlord]|r Painel de moedas flutuante ativado.", "|cFF00FF00[Overlord]|r Painel de moedas flutuante desativado.",
+        "Tomar a capital inimiga vence uma frente: +1 % para a facção vencedora.",
+        "Vitórias de frente nesta semana", "Nenhuma vitória de frente nesta semana ainda.", "há %s",
+        "Reinicia em %s (toda terça-feira, 08:00 UTC)." },
+    zhCN = { "|cFFFFFF00/ov map [full|compact|off]|r：世界地图显示（也可用地图角落的 Overlord 按钮）",
+        "|cFFFFFF00/ov network|r：网络报告",
+        "|cFFFFFF00/ov hud [on|off|toggle]|r：浮动硬币面板",
+        "|cFF00FF00[Overlord]|r 浮动硬币面板已开启。", "|cFF00FF00[Overlord]|r 浮动硬币面板已关闭。",
+        "攻下敌方主城即赢得该战线：获胜阵营 +1%。",
+        "本周战线胜利", "本周尚无战线胜利。", "%s前",
+        "%s后重置（每周二 08:00 UTC）。" },
+}
+uiTexts.esMX = uiTexts.esES
+local ut = uiTexts[locale] or uiTexts.enUS
+L.HELP_MAP, L.HELP_NETWORK, L.HELP_HUD, L.HUD_SHOWN, L.HUD_HIDDEN = ut[1], ut[2], ut[3], ut[4], ut[5]
+L.DOM_TIP_RULE, L.DOM_TIP_VICTORIES, L.DOM_TIP_NONE, L.DOM_TIP_AGO, L.DOM_TIP_RESET =
+    ut[6], ut[7], ut[8], ut[9], ut[10]
+
+-- Leaderboard: weekly capturers and rivalries view (keeps and outposts).
+-- { button title, button text, back, capturers column, rivalries column,
+--   no capturer, no rivalry }
+local sitesWeekTexts = {
+    enUS = { "Capturers and rivalries",
+        "This week's keep and outpost captures: who took the most, and which guild took sites from which.",
+        "Back to keeps and outposts", "Capturers this week", "Rivalries this week",
+        "No keep or outpost taken this week yet.", "No site has changed faction this week yet." },
+    frFR = { "Preneurs et rivalités",
+        "Les prises de forts et d'avant-postes de la semaine : qui en a pris le plus, et quelle guilde a pris des sites à quelle autre.",
+        "Retour aux forts et avant-postes", "Preneurs de la semaine", "Rivalités de la semaine",
+        "Aucun fort ni avant-poste pris cette semaine pour l'instant.", "Aucun site n'a encore changé de faction cette semaine." },
+    esES = { "Conquistadores y rivalidades",
+        "Las tomas de fortalezas y avanzadas de la semana: quién tomó más y qué hermandad arrebató sitios a cuál.",
+        "Volver a fortalezas y avanzadas", "Conquistadores de la semana", "Rivalidades de la semana",
+        "Aún no se ha tomado ninguna fortaleza ni avanzada esta semana.", "Ningún sitio ha cambiado de facción esta semana." },
+    deDE = { "Eroberer und Rivalitäten",
+        "Die Festungs- und Außenposteneroberungen der Woche: wer am meisten erobert hat und welche Gilde wem Orte abgenommen hat.",
+        "Zurück zu Festungen und Außenposten", "Eroberer der Woche", "Rivalitäten der Woche",
+        "Diese Woche wurde noch keine Festung und kein Außenposten erobert.", "Diese Woche hat noch kein Ort die Fraktion gewechselt." },
+    ruRU = { "Захватчики и соперничество",
+        "Захваты крепостей и аванпостов за неделю: кто захватил больше всех и какая гильдия отбирала точки у какой.",
+        "Назад к крепостям и аванпостам", "Захватчики недели", "Соперничество недели",
+        "На этой неделе ещё не захвачено ни одной крепости или аванпоста.", "На этой неделе ни одна точка ещё не сменила фракцию." },
+    ptBR = { "Conquistadores e rivalidades",
+        "As tomadas de fortalezas e postos avançados da semana: quem tomou mais e qual guilda tomou locais de qual.",
+        "Voltar a fortalezas e postos avançados", "Conquistadores da semana", "Rivalidades da semana",
+        "Nenhuma fortaleza ou posto avançado tomado nesta semana ainda.", "Nenhum local mudou de facção nesta semana ainda." },
+    zhCN = { "占领者与宿敌",
+        "本周要塞和前哨的占领情况：谁占领得最多，以及哪个公会从哪个公会手中夺走了据点。",
+        "返回要塞和前哨", "本周占领者", "本周宿敌",
+        "本周尚无要塞或前哨被占领。", "本周尚无据点易主。" },
+}
+sitesWeekTexts.esMX = sitesWeekTexts.esES
+local sw = sitesWeekTexts[locale] or sitesWeekTexts.enUS
+L.SITES_WEEK_TIP_TITLE, L.SITES_WEEK_TIP_BODY, L.SITES_WEEK_BACK = sw[1], sw[2], sw[3]
+L.SITES_WEEK_COL_CAPTURERS, L.SITES_WEEK_COL_RIVALRIES = sw[4], sw[5]
+L.SITES_WEEK_EMPTY_CAPTURERS, L.SITES_WEEK_EMPTY_RIVALRIES = sw[6], sw[7]

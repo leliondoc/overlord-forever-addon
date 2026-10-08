@@ -20,10 +20,6 @@ Overlord.SettingsPanel.ShowMinimapButtonVariableName = "Overlord_ShowMinimapButt
 Overlord.SettingsPanel.ShowMinimapCaptureZonesVariableName = "Overlord_ShowMinimapCaptureZones"
 Overlord.SettingsPanel.ShowCoinsHudVariableName = "Overlord_ShowCoinsHud"
 Overlord.SettingsPanel.ShowFloatingObjectiveVariableName = "Overlord_ShowFloatingObjective"
-Overlord.SettingsPanel.ShowMapZoneTitlesVariableName = "Overlord_ShowMapZoneTitles"
-Overlord.SettingsPanel.ShowTopHudVariableName = "Overlord_ShowTopHud"
-Overlord.SettingsPanel.TopHudModeVariableName = "Overlord_TopHudMode"
-Overlord.SettingsPanel.ShowTutorialBookVariableName = "Overlord_ShowTutorialBook"
 Overlord.SettingsPanel.SoundEnabledVariableName = "Overlord_SoundEnabled"
 Overlord.SettingsPanel.MapIconOpacityVariableName = "Overlord_MapIconOpacity"
 Overlord.SettingsPanel.MapIconScaleVariableName = "Overlord_MapIconScale"
@@ -45,9 +41,6 @@ local DEFAULT_AUTO_WAYPOINT = true
 local DEFAULT_SHOW_MINIMAP_BUTTON = true
 local DEFAULT_SHOW_MINIMAP_CAPTURE_ZONES = true
 local DEFAULT_SHOW_COINS_HUD = false
-local DEFAULT_SHOW_MAP_ZONE_TITLES = true
-local DEFAULT_TOP_HUD_MODE = "auto"
-local DEFAULT_SHOW_TUTORIAL_BOOK = false
 local DEFAULT_SOUND_ENABLED = true
 -- Icones des points de capture sur la carte du monde : a 100 % elles masquaient
 -- les points d'exclamation de quete dans les villes.
@@ -333,6 +326,11 @@ local function setShowMinimapCaptureZones(value)
     notifySettingsAPI(Overlord.SettingsPanel.ShowMinimapCaptureZonesVariableName, OverlordDB.config.showMinimapCaptureZones)
 end
 
+-- Menu « Suivi » de la minicarte (MapMarkers).
+function Overlord.SettingsPanel:SetShowMinimapCaptureZones(value)
+    setShowMinimapCaptureZones(value)
+end
+
 local function getShowCoinsHud()
     return OverlordDB and OverlordDB.config and OverlordDB.config.showCoinsHud == true or false
 end
@@ -372,90 +370,6 @@ function Overlord.SettingsPanel.SetShowFloatingObjective(value)
     end
 end
 
-local function getShowMapZoneTitles()
-    if OverlordDB and OverlordDB.config and OverlordDB.config.showMapZoneTitles == false then
-        return false
-    end
-    return true
-end
-
-local function setShowMapZoneTitles(value)
-    if not OverlordDB then return end
-    OverlordDB.config = OverlordDB.config or {}
-    OverlordDB.config.showMapZoneTitles = value == true
-    if not settingsSuppressSideEffects and Overlord.MapMarkers and Overlord.MapMarkers.RequestOverlayRefresh then
-        Overlord.MapMarkers:RequestOverlayRefresh()
-    end
-    notifySettingsAPI(Overlord.SettingsPanel.ShowMapZoneTitlesVariableName, OverlordDB.config.showMapZoneTitles)
-end
-
-local function getTopHudMode()
-    local cfg = OverlordDB and OverlordDB.config
-    if cfg and (cfg.topHudMode == "auto" or cfg.topHudMode == "always" or cfg.topHudMode == "never") then
-        return cfg.topHudMode
-    end
-    if cfg and cfg.showTopHud == false then return "never" end
-    return DEFAULT_TOP_HUD_MODE
-end
-
-local function setTopHudMode(value)
-    if not OverlordDB then return end
-    if value ~= "auto" and value ~= "always" and value ~= "never" then return end
-    OverlordDB.config = OverlordDB.config or {}
-    OverlordDB.config.topHudMode = value
-    OverlordDB.config.topHudModeUserSelected = true
-    OverlordDB.config.showTopHud = value ~= "never"
-    if value ~= "never" then
-        OverlordDB.goldHUDHidden = false
-    end
-    if not settingsSuppressSideEffects and Overlord.Ressources and Overlord.Ressources.OnShowTopHudSettingChanged then
-        Overlord.Ressources:OnShowTopHudSettingChanged()
-    end
-    notifySettingsAPI(Overlord.SettingsPanel.ShowTopHudVariableName, OverlordDB.config.showTopHud)
-    notifySettingsAPI(Overlord.SettingsPanel.TopHudModeVariableName, value)
-end
-
-local function getShowTopHud()
-    return getTopHudMode() ~= "never"
-end
-
-local function setShowTopHud(value)
-    setTopHudMode(value == true and "always" or "never")
-end
-
--- Point d'entree commun aux commandes slash et au panneau d'options.
-function Overlord.SettingsPanel:IsTopHudVisible()
-    return getShowTopHud() and not (OverlordDB and OverlordDB.goldHUDHidden)
-end
-
-function Overlord.SettingsPanel:SetTopHudVisible(value)
-    setShowTopHud(value)
-    self:RefreshControls()
-end
-
-function Overlord.SettingsPanel:SetTopHudMode(value)
-    setTopHudMode(value)
-    self:RefreshControls()
-end
-
-local function getShowTutorialBook()
-    if OverlordDB and OverlordDB.config and OverlordDB.config.showTutorialBook ~= nil then
-        return OverlordDB.config.showTutorialBook == true
-    end
-    return DEFAULT_SHOW_TUTORIAL_BOOK
-end
-
-local function setShowTutorialBook(value)
-    if not OverlordDB then return end
-    OverlordDB.config = OverlordDB.config or {}
-    OverlordDB.config.showTutorialBook = value == true
-    OverlordDB.config.showTutorialBookUserSelected = true
-    if not settingsSuppressSideEffects and Overlord.Ressources and Overlord.Ressources.OnShowTutorialBookSettingChanged then
-        Overlord.Ressources:OnShowTutorialBookSettingChanged()
-    end
-    notifySettingsAPI(Overlord.SettingsPanel.ShowTutorialBookVariableName, OverlordDB.config.showTutorialBook)
-end
-
 local function getSoundEnabled()
     if OverlordDB and OverlordDB.config and OverlordDB.config.soundEnabled == false then
         return false
@@ -492,7 +406,7 @@ local SP = Overlord.SettingsPanel
 SP.GuildKillAlertVariableName = "Overlord_GuildKillAlert"
 SP.GuildKillAllyAlertVariableName = "Overlord_GuildKillAllyAlert"
 SP.MostWantedAlertsVariableName = "Overlord_MostWantedAlerts"
-SP.WorldMapOverlaysVariableName = "Overlord_WorldMapOverlays"
+SP.WorldMapModeVariableName = "Overlord_WorldMapMode"
 local CHAT_TAB_NAME = "Overlord"
 local SETTINGS_TITLE_LOGO = "|TInterface\\AddOns\\Overlord\\Textures\\overlord:22:22:0:2|t"
 
@@ -570,14 +484,15 @@ local function setMostWantedAlerts(value)
     end
 end
 
-local function getWorldMapOverlays()
+-- Carte du monde : complet, compact (noms au survol) ou masque (MapMarkers).
+local function getWorldMapMode()
     local mm = Overlord.MapMarkers
-    return mm and mm.AreWorldMapOverlaysShown and mm:AreWorldMapOverlaysShown() or false
+    return mm and mm.GetWorldMapDisplayMode and mm:GetWorldMapDisplayMode() or "full"
 end
 
-local function setWorldMapOverlays(value)
+local function setWorldMapMode(value)
     local mm = Overlord.MapMarkers
-    if mm and mm.SetWorldMapOverlaysShown then mm:SetWorldMapOverlaysShown(value == true) end
+    if mm and mm.SetWorldMapDisplayMode then mm:SetWorldMapDisplayMode(value) end
 end
 
 local function getGuildKillAllyAlert()
@@ -616,9 +531,6 @@ local ROWS = {
     { kind = "checkbox", var = SP.SoundEnabledVariableName, label = "SOUND_ENABLED_LABEL",
         fallback = "Overlord sounds", tooltip = "SOUND_ENABLED_TOOLTIP",
         default = DEFAULT_SOUND_ENABLED, get = getSoundEnabled, set = setSoundEnabled },
-    { kind = "checkbox", var = SP.ShowTutorialBookVariableName, label = "SHOW_TUTORIAL_BOOK_LABEL",
-        fallback = "Tutorial book icon", tooltip = "SHOW_TUTORIAL_BOOK_TOOLTIP",
-        default = DEFAULT_SHOW_TUTORIAL_BOOK, get = getShowTutorialBook, set = setShowTutorialBook },
 
     { kind = "header", label = "SETTINGS_SECTION_CHAT", fallback = "Chat" },
     { kind = "dropdown", var = SP.NotificationChatVariableName, label = "NOTIFICATION_CHAT_LABEL",
@@ -647,9 +559,11 @@ local ROWS = {
         default = true, get = getMostWantedAlerts, set = setMostWantedAlerts },
 
     { kind = "header", label = "SETTINGS_SECTION_MAP", fallback = "Map and minimap" },
-    { kind = "checkbox", var = SP.WorldMapOverlaysVariableName, label = "MAP_WORLD_OVERLAYS_LABEL",
-        fallback = "Overlord on the world map", tooltip = "MAP_WORLD_OVERLAYS_TOOLTIP",
-        default = true, get = getWorldMapOverlays, set = setWorldMapOverlays },
+    { kind = "dropdown", var = SP.WorldMapModeVariableName, label = "MAP_WORLD_OVERLAYS_LABEL",
+        fallback = "Overlord on the world map", tooltip = "MAP_MODE_TOOLTIP",
+        default = "full", get = getWorldMapMode, set = setWorldMapMode,
+        choices = { { "full", "MAP_MODE_FULL", "Full" }, { "compact", "MAP_MODE_COMPACT", "Compact" },
+            { "hidden", "MAP_MODE_HIDDEN", "Hidden" } } },
     { kind = "slider", var = SP.MapOverlayOpacityVariableName, label = "MAP_OVERLAY_OPACITY_LABEL",
         fallback = "Map capture opacity", tooltip = "MAP_OVERLAY_OPACITY_TOOLTIP",
         default = DEFAULT_MAP_OVERLAY_OPACITY, get = getMapOverlayOpacity, set = setMapOverlayOpacity,
@@ -670,9 +584,6 @@ local ROWS = {
         default = DEFAULT_MAP_PATH_OPACITY, get = getMapPathOpacity, set = setMapPathOpacity,
         min = MAP_PATH_OPACITY_MIN, max = MAP_PATH_OPACITY_MAX, step = MAP_PATH_OPACITY_STEP,
         format = formatMapPathOpacityLabel },
-    { kind = "checkbox", var = SP.ShowMapZoneTitlesVariableName, label = "MAP_ZONE_TITLES_LABEL",
-        fallback = "Map zone names", tooltip = "MAP_ZONE_TITLES_TOOLTIP",
-        default = DEFAULT_SHOW_MAP_ZONE_TITLES, get = getShowMapZoneTitles, set = setShowMapZoneTitles },
     { kind = "checkbox", var = SP.AutoWaypointVariableName, label = "AUTO_WAYPOINT_LABEL",
         fallback = "Auto-pin next objective", tooltip = "AUTO_WAYPOINT_TOOLTIP",
         default = DEFAULT_AUTO_WAYPOINT, get = getAutoWaypoint, set = setAutoWaypoint },
@@ -690,11 +601,6 @@ local ROWS = {
         default = DEFAULT_SHOW_MINIMAP_BUTTON, get = getShowMinimapButton, set = setShowMinimapButton },
 
     { kind = "header", label = "SETTINGS_SECTION_HUD", fallback = "On-screen panels" },
-    { kind = "dropdown", var = SP.TopHudModeVariableName, label = "SHOW_TOP_HUD_LABEL",
-        fallback = "Top HUD", tooltip = "SHOW_TOP_HUD_TOOLTIP", default = DEFAULT_TOP_HUD_MODE,
-        get = getTopHudMode, set = setTopHudMode,
-        choices = { { "auto", "TOP_HUD_MODE_AUTO", "Auto" }, { "always", "TOP_HUD_MODE_ALWAYS", "Always" },
-            { "never", "TOP_HUD_MODE_NEVER", "Never" } } },
     { kind = "checkbox", var = SP.ShowCoinsHudVariableName, label = "COINS_HUD_LABEL",
         fallback = "Coins panel", tooltip = "COINS_HUD_TOOLTIP",
         default = DEFAULT_SHOW_COINS_HUD, get = getShowCoinsHud, set = setShowCoinsHud },

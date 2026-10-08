@@ -154,16 +154,16 @@ Alias : `/ov` et `/overlord`. Tapez **`/ov help`** en jeu pour la liste complèt
 
 | Commande | Description |
 |---|---|
-| `/ov` | Ouvre le panneau principal |
+| `/ov` | Liste les commandes |
 | `/ov show` / `hide` / `toggle` | Affiche, cache ou bascule l'interface |
-| `/ov hud auto` / `on` / `off` / `toggle` | Auto affiche les panneaux utiles près des objectifs, mines et forêts ; `on` les garde sur les cartes concernées, `off` les masque. `/ov hud` bascule aussi l'état. Utilisable dans une macro. |
+| `/ov map` / `map full` / `map compact` / `map off` | Affichage de la carte du monde : complet, compact (noms au survol) ou masqué ; sans argument, passe au mode suivant (aussi le bouton Overlord dans le coin de la carte) |
+| `/ov hud on` / `off` / `toggle` | Panneau des coins flottant (même case que les options). Utilisable dans une macro. |
 | `/ov status` | État de toutes les zones du front |
 | `/ov zones` | Zones disponibles avec coordonnées |
 | `/ov where` | Bascule l'indicateur de zone |
 | `/ov start <zone>` | Démarre la capture d'une zone |
 | `/ov lb` | Classement |
 | `/ov sync [Joueur]` | Demande une synchronisation |
-| `/ov dom` | Debug barre domination (développement) |
 | `/ov scale [0.8–1.2]` | Échelle du panneau |
 | `/ov guide` | Guide visuel rapide |
 
@@ -171,7 +171,9 @@ Alias : `/ov` et `/overlord`. Tapez **`/ov help`** en jeu pour la liste complèt
 
 **Échap → Options → AddOns → Overlord** : échelle UI, opacité des overlays carte/minimap, notifications chat, waypoint automatique, affichage minimap, etc.
 
-Le HUD du haut est en mode **Auto** par défaut, y compris après migration de l'ancien réglage « activé ». Il montre le panneau coins près d'une capture ou d'une mine, le panneau bois dans une forêt (ou près d'une capture si le bois permet une action), et le panneau fortin sur place. Les panneaux restent visibles 15 secondes après la sortie du lieu. La croix masque le groupe jusqu'à sa réactivation via les options ou `/ov hud on` / `auto`. Le livre du tutoriel est masqué par défaut en mode Auto ; le guide reste accessible dans le panneau et avec `/ov guide`.
+Carte du monde : trois modes (complet, compact avec les noms au survol, masqué), dans les options, le menu Filtres de la carte, le menu de suivi de la minicarte, le bouton Overlord dans le coin de la carte et `/ov map`.
+
+Le **panneau des coins flottant** est désactivé par défaut (tout son contenu est dans le panneau Overlord). Activé, il apparaît près d'une capture, d'une mine ou d'un fortin et reste visible 15 secondes après la sortie du lieu ; sa croix le désactive (options ou `/ov hud on` pour le rallumer). Le guide est accessible par le bouton Tutoriel du panneau et avec `/ov guide`.
 
 ## Releases
 

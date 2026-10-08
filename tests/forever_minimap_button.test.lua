@@ -63,22 +63,49 @@ button:SetPoint("CENTER", Minimap, "CENTER", 12, 34)
 Minimap.hooks.OnShow(Minimap)
 assert(select(4, button:GetPoint()) == 12)
 
--- World map filter: one entry in Blizzard's "Map Filters" menu toggles every
--- Overlord world map display (saved), registered only once.
+-- World map display: three modes (full, compact, hidden) offered in Blizzard's
+-- "Map Filters" menu and in an Overlord submenu of the minimap tracking menu,
+-- registered only once. Compact = zone names off (names on hover).
 -- Keep/outpost/mine map modules are not loaded here: missing methods are no-ops.
 GetTime = GetTime or function() return 100 end
 markers._worldMapFilterRegistered = false
+markers._mapModeButton = false -- no world map in this stub: no corner button
 setmetatable(markers, { __index = function() return function() end end })
-local menuTag, menuBuilder
-Menu = { ModifyMenu = function(tag, fn) menuTag, menuBuilder = tag, fn end }
+local builders = {}
+Menu = { ModifyMenu = function(tag, fn) builders[tag] = fn end }
 assert(markers:RegisterWorldMapFilterToggle() and not markers:RegisterWorldMapFilterToggle())
-assert(menuTag == "MENU_WORLD_MAP_TRACKING", "Wrong Blizzard map filter menu")
-local checkbox
-menuBuilder(nil, { CreateDivider = function() end,
-    CreateCheckbox = function(_, text, isSelected, toggle) checkbox = { text = text, get = isSelected, set = toggle } end })
-assert(checkbox and checkbox.get() == true, "Overlord map display should be on by default")
-checkbox.set()
-assert(OverlordDB.config.showWorldMapOverlays == false and not checkbox.get(), "Filter did not hide the map displays")
-checkbox.set()
-assert(OverlordDB.config.showWorldMapOverlays == true and checkbox.get(), "Filter did not restore the map displays")
+assert(builders.MENU_WORLD_MAP_TRACKING and builders.MENU_MINIMAP_TRACKING, "Blizzard menus not extended")
+local function menu()
+    local m = { radios = {} }
+    function m.CreateDivider() end
+    function m.CreateTitle() end
+    function m.CreateRadio(_, text, isSelected, setSelected, data)
+        m.radios[data] = { get = function() return isSelected(data) end, set = function() setSelected(data) end }
+    end
+    function m.CreateCheckbox(_, text, isSelected, toggle) m.checkbox = { get = isSelected, set = toggle } end
+    function m.CreateButton() m.sub = menu() return m.sub end
+    return m
+end
+local filters = menu()
+builders.MENU_WORLD_MAP_TRACKING(nil, filters)
+local radios = filters.radios
+assert(radios.full and radios.compact and radios.hidden, "Map filter modes missing")
+assert(radios.full.get() and not radios.compact.get(), "Full display should be the default")
+radios.compact.set()
+assert(OverlordDB.config.showMapZoneTitles == false and OverlordDB.config.showWorldMapOverlays ~= false
+    and radios.compact.get(), "Compact did not keep the map on with names off")
+radios.hidden.set()
+assert(OverlordDB.config.showWorldMapOverlays == false and radios.hidden.get(), "Filter did not hide the map displays")
+assert(markers:GetNextWorldMapDisplayMode() == "full")
+radios.full.set()
+assert(OverlordDB.config.showWorldMapOverlays == true and OverlordDB.config.showMapZoneTitles == true
+    and radios.full.get(), "Filter did not restore the full display")
+assert(markers:GetNextWorldMapDisplayMode() == "compact")
+assert(markers:SetWorldMapDisplayMode("bogus") == false and radios.full.get())
+local tracking = menu()
+builders.MENU_MINIMAP_TRACKING(nil, tracking)
+assert(tracking.sub and tracking.sub.radios.compact and tracking.sub.checkbox, "Minimap tracking submenu missing")
+tracking.sub.radios.compact.set()
+assert(filters.radios.compact.get(), "Minimap menu and map filters disagree")
+assert(tracking.sub.checkbox.get() == true, "Minimap icons should be on by default")
 print("Minimap button: login resize, border radius, rectangle, square, show and button collectors OK")

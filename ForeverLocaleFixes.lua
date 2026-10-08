@@ -39,11 +39,11 @@ end
 if locale == "ptBR" or locale == "zhCN" then
     local commands = {
         HELP_SHOW = "/ov show", HELP_HIDE = "/ov hide", HELP_TOGGLE = "/ov toggle",
-        HELP_HUD = "/ov hud [auto|on|off|toggle]", HELP_STATUS = "/ov status",
+        HELP_STATUS = "/ov status",
         HELP_ZONES = "/ov zones", HELP_WHERE = "/ov where",
         HELP_START = "/ov start <zone>", HELP_LB = "/ov lb",
         HELP_SYNC = "/ov sync [PlayerName]",
-        HELP_DOM = "/ov dom", HELP_SCALE = "/ov scale [0.8-1.2]",
+        HELP_SCALE = "/ov scale [0.8-1.2]",
         HELP_GUIDE = "/ov guide",
     }
     for key, command in pairs(commands) do

@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.7.2"
+Overlord.Version = "1.7.3"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncBetaNetwork.lua).
 Overlord.BetaNetworkEnabled = true
 Overlord.IsInitialized = false
@@ -1993,6 +1993,7 @@ function Overlord:SuspendForInstance()
         self.MapMarkers._mmOutpostMapActive = false
         if self.MapMarkers.HideMinimapOutpostPin then self.MapMarkers:HideMinimapOutpostPin() end
         if self.MapMarkers.HideEKKeepPin then self.MapMarkers:HideEKKeepPin() end
+        if self.MapMarkers.RefreshMapModeButton then self.MapMarkers:RefreshMapModeButton() end
     end
     if self.ZoneIndicator then self.ZoneIndicator:Hide() end
     if self.LeaderboardUI then self.LeaderboardUI:Hide() end
@@ -2813,21 +2814,16 @@ function Overlord:Initialize()
         end
     end
 
-    -- Initialisation de config et migration de l'ancien choix de HUD.
-    -- L'ancien showTopHud=true etait la valeur par defaut, pas un choix "Toujours".
-    -- Corrige aussi les saves deja migrees vers always avant ce changement.
+    -- Le reglage « HUD du haut » et l'icone livre n'existent plus : seule la case
+    -- « Panneau des coins flottant » reste. Un panneau regle sur Jamais ou ferme par
+    -- sa croix reste ferme (case decochee) ; les anciennes cles sont effacees.
     local hudCfg = OverlordDB.config
-    if hudCfg.topHudModeUserSelected ~= true then
-        hudCfg.topHudMode = (hudCfg.topHudMode == "never" or hudCfg.showTopHud == false)
-            and "never" or "auto"
-    elseif hudCfg.topHudMode ~= "auto"
-        and hudCfg.topHudMode ~= "always"
-        and hudCfg.topHudMode ~= "never" then
-        hudCfg.topHudMode = "auto"
+    if hudCfg.topHudMode == "never" or hudCfg.showTopHud == false or OverlordDB.goldHUDHidden then
+        hudCfg.showCoinsHud = false
     end
-    if hudCfg.topHudMode == "auto" and hudCfg.showTutorialBookUserSelected ~= true then
-        hudCfg.showTutorialBook = false
-    end
+    hudCfg.topHudMode, hudCfg.topHudModeUserSelected, hudCfg.showTopHud = nil, nil, nil
+    hudCfg.showTutorialBook, hudCfg.showTutorialBookUserSelected = nil, nil
+    OverlordDB.goldHUDHidden = nil
     local CONFIG_DEFAULTS = {
         uiVisible = true,
         soundEnabled = true,
@@ -2840,7 +2836,6 @@ function Overlord:Initialize()
         showMinimapCaptureZones = true,
         mapPathOpacity = 1.0,
         autoWaypointNextObjective = true,
-        showTopHud = true,
     }
     for k, v in pairs(CONFIG_DEFAULTS) do
         if OverlordDB.config[k] == nil then

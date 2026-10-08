@@ -1408,6 +1408,50 @@ function Overlord.UI:OpenFrontPickerMenuFallback(anchor)
     f:Show()
 end
 
+-- Infobulle de la barre de domination : la regle, les victoires de front de la
+-- semaine (les memes que compte la barre) et la remise a zero.
+function Overlord.UI.ShowDominationTooltip(owner)
+    GameTooltip:SetOwner(owner, "ANCHOR_BOTTOM")
+    GameTooltip:SetText(L.DOMINATION_LABEL or "Weekly Territory Domination", 1, 0.82, 0)
+    GameTooltip:AddLine(L.DOM_TIP_RULE or "", 1, 1, 1, true)
+    GameTooltip:AddLine(" ")
+    local list = Overlord.GetDominationVictoryList and Overlord:GetDominationVictoryList() or {}
+    local now = (Overlord.ServerNow and Overlord.ServerNow()) or (GetServerTime and GetServerTime()) or 0
+    local function Duration(seconds)
+        if not seconds or seconds < 60 or not SecondsToTime then return nil end
+        local ok, text = pcall(SecondsToTime, seconds - seconds % 60, true, false, 2)
+        return ok and text or nil
+    end
+    if #list == 0 then
+        GameTooltip:AddLine(L.DOM_TIP_NONE or "", 0.7, 0.7, 0.7, true)
+    else
+        local ally, horde = 0, 0
+        for _, ev in ipairs(list) do
+            if ev.faction == "Alliance" then ally = ally + 1 else horde = horde + 1 end
+        end
+        GameTooltip:AddDoubleLine(L.DOM_TIP_VICTORIES or "",
+            string.format("|cFF4D9EFF%d|r - |cFFFF4D4D%d|r", ally, horde), 1, 0.82, 0)
+        for i = 1, math.min(#list, 8) do
+            local ev = list[i]
+            local front = Overlord.Fronts and Overlord.Fronts:GetMapName(ev.frontId) or ""
+            if front == "" then front = tostring(ev.frontId or "?") end
+            local isAlly = ev.faction == "Alliance"
+            local who = (isAlly and "|cFF4D9EFF" or "|cFFFF4D4D")
+                .. ((isAlly and FACTION_ALLIANCE or FACTION_HORDE) or ev.faction) .. "|r"
+            local age = Duration(now - (tonumber(ev.victoryTs) or now))
+            GameTooltip:AddDoubleLine(front .. " - " .. who,
+                age and string.format(L.DOM_TIP_AGO or "%s", age) or "", 1, 1, 1, 0.7, 0.7, 0.7)
+        end
+    end
+    local startTs = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
+    local left = Duration(startTs > 0 and (startTs + 604800 - now) or 0)
+    if left then
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine(string.format(L.DOM_TIP_RESET or "%s", left), 0.7, 0.7, 0.7, true)
+    end
+    GameTooltip:Show()
+end
+
 -- ---------- Section liste des zones ----------
 function Overlord.UI:CreateZoneListSection(parent)
     zoneListFrame = CreateFrame("Frame", nil, parent)
@@ -1660,6 +1704,19 @@ function Overlord.UI:CreateZoneListSection(parent)
     Overlord.UI.domBar = domBar
     zoneListFrame.domTitleLabel = domTitle
     zoneListFrame.domBarFrame = domBar
+    domBar:EnableMouse(true)
+    domBar:SetScript("OnEnter", function(self) Overlord.UI.ShowDominationTooltip(self) end)
+    domBar:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    -- Le survol prend la souris : glisser la barre deplace toujours le panneau.
+    domBar:RegisterForDrag("LeftButton")
+    domBar:SetScript("OnDragStart", function()
+        local start = mainFrame and mainFrame:GetScript("OnDragStart")
+        if start then start(mainFrame) end
+    end)
+    domBar:SetScript("OnDragStop", function()
+        local stop = mainFrame and mainFrame:GetScript("OnDragStop")
+        if stop then stop(mainFrame) end
+    end)
 
     -- Sous-panneau zones de controle (deux colonnes)
     local zonesPanel = CreateDarkPanel(zoneListFrame, ZONES_PANEL_W, 180)

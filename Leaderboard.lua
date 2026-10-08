@@ -5490,6 +5490,104 @@ function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldW
     return sorted
 end
 
+-- Preneurs et rivalites de la semaine, lus dans le registre des prises signees (fiefs
+-- et avant-postes de la campagne courante). Le registre converge par union
+-- d'evenements : tous les clients a jour voient les memes chiffres, sans aucun paquet
+-- de plus. Une rivalite = deux prises successives d'un meme site par des guildes de
+-- factions opposees (« A a pris a B »). Recalcule quand le registre change, au plus
+-- toutes les 3 s : pendant un rattrapage, le volet garde un instant l'etat precedent.
+-- Pas de table par prise : chaque prise est un nombre ts * 1024 + numero de ligne,
+-- trie par le tri natif (registre plafonne a 512 lignes et 20 000 prises).
+local OUTPOST_WEEKLY_STATS_MIN_INTERVAL = 3
+
+function Overlord.Leaderboard:GetOutpostWeeklyStats()
+    local counts = self:GetOutpostCaptureCountsTable()
+    local stamp = tostring(counts) .. ":" .. (tonumber(self._outpostLedgerRevision) or 0)
+        .. ":" .. (tonumber(self._outpostLedgerEvents) or 0)
+    local cache = self._outpostWeeklyStats
+    if cache and cache.stamp == stamp then return cache end
+    local now = GetTime and GetTime() or 0
+    -- Second retour vrai : resultat en retard, l'appelant relit apres l'intervalle.
+    if cache and now - (cache.builtAt or 0) < OUTPOST_WEEKLY_STATS_MIN_INTERVAL then return cache, true end
+    -- Lignes retenues, numerotees dans l'ordre (site, guilde) : meme ordre sur tous les clients.
+    local rows = {}
+    for _, row in pairs(counts) do
+        local site = type(row) == "table" and Overlord.OutpostSites and Overlord.OutpostSites[row.siteKey]
+        local guild = site and sanitizeGuildName(row.guild or "") or ""
+        if guild ~= "" and type(row.events) == "table" and (row.faction == "Alliance" or row.faction == "Horde")
+            and outpostLbPoolMatchesCurrent(resolveOutpostLbPoolTag(row.pool)) then
+            rows[#rows + 1] = { row = row, siteKey = row.siteKey, guild = guild, key = guild:lower(),
+                isKeep = site.isFortress == true }
+        end
+    end
+    table.sort(rows, function(a, b)
+        if a.siteKey ~= b.siteKey then return a.siteKey < b.siteKey end
+        return a.key < b.key
+    end)
+    local byCapturer, bySite, capturerKeys = {}, {}, {}
+    for index = 1, math.min(#rows, 1023) do
+        local info = rows[index]
+        local faction = info.row.faction
+        local list = bySite[info.siteKey]
+        if not list then list = {}; bySite[info.siteKey] = list end
+        for tsKey, capturer in pairs(info.row.events) do
+            local ts = tonumber(tsKey)
+            local key = capturerKeys[capturer]
+            if key == nil then
+                local name = normalizeOutpostCapturer(capturer)
+                key = name and outpostCapturerKey(name) or false
+                capturerKeys[capturer] = key
+            end
+            -- ts * 1024 reste exact (< 2^53) pour toute date jusqu'a 1e12 s.
+            if key and ts and ts > 0 and ts < 1e12 then
+                local c = byCapturer[key]
+                if not c then
+                    c = { name = normalizeOutpostCapturer(capturer), faction = faction,
+                        keeps = 0, outposts = 0, total = 0 }
+                    byCapturer[key] = c
+                end
+                if info.isKeep then c.keeps = c.keeps + 1 else c.outposts = c.outposts + 1 end
+                c.total = c.total + 1
+                list[#list + 1] = math.floor(ts) * 1024 + index
+            end
+        end
+    end
+    local capturers = {}
+    for _, c in pairs(byCapturer) do capturers[#capturers + 1] = c end
+    table.sort(capturers, function(a, b)
+        if a.total ~= b.total then return a.total > b.total end
+        if a.keeps ~= b.keeps then return a.keeps > b.keeps end
+        return a.name < b.name
+    end)
+    local byPair = {}
+    for _, list in pairs(bySite) do
+        table.sort(list)
+        for i = 2, #list do
+            local prev, cur = rows[list[i - 1] % 1024], rows[list[i] % 1024]
+            local pf, cf = prev.row.faction, cur.row.faction
+            if cf ~= pf and cur.key ~= prev.key then
+                local pairKey = cur.key .. "\001" .. prev.key
+                local r = byPair[pairKey]
+                if not r then
+                    r = { taker = cur.guild, takerFaction = cf, victim = prev.guild, victimFaction = pf, count = 0 }
+                    byPair[pairKey] = r
+                end
+                r.count = r.count + 1
+            end
+        end
+    end
+    local rivalries = {}
+    for _, r in pairs(byPair) do rivalries[#rivalries + 1] = r end
+    table.sort(rivalries, function(a, b)
+        if a.count ~= b.count then return a.count > b.count end
+        if a.taker ~= b.taker then return a.taker < b.taker end
+        return a.victim < b.victim
+    end)
+    cache = { stamp = stamp, builtAt = now, capturers = capturers, rivalries = rivalries }
+    self._outpostWeeklyStats = cache
+    return cache
+end
+
 -- Nombre max de campagnes archivees (au-dela, les plus anciennes sont supprimees)
 local MAX_HISTORY_ENTRIES = 12
 -- Top N joueurs conserves par archive : l'historique est un souvenir compact, pas une

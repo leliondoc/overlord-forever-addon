@@ -908,6 +908,22 @@ function Overlord:GetDominationVictoryCounts()
     return cached.Alliance, cached.Horde
 end
 
+-- Victoires de front de la campagne, les memes que compte la barre, plus recente
+-- d'abord (infobulle de la barre de domination).
+function Overlord:GetDominationVictoryList()
+    local list = {}
+    local store = EnsureVictoryEventsDB()
+    local rows = store and store.byEventId
+    if type(rows) ~= "table" then return list end
+    for _, ev in pairs(rows) do
+        if type(ev) == "table" and (ev.faction == "Alliance" or ev.faction == "Horde") then
+            list[#list + 1] = ev
+        end
+    end
+    table.sort(list, function(a, b) return (tonumber(a.victoryTs) or 0) > (tonumber(b.victoryTs) or 0) end)
+    return list
+end
+
 -- totalAtApply des VB emis par un client v2. Il ne compte pas pour la barre ; il reste un
 -- champ du format VB (valide par les recepteurs). Valeur fixe, plausible pour tout recepteur.
 function Overlord:GetLegacyDominationTotalForVB()

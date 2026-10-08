@@ -187,18 +187,39 @@ local function CanStartOutpostCapture(site, notify)
     return true
 end
 
+-- Sortie du carre annoncee apres 2 s seulement (meme regle que les cercles) : un
+-- aller-retour sur le bord ne remplit plus le chat ; « de retour » ne suit qu'une
+-- sortie reellement annoncee.
+local pendingOutpostLeftChat = {}
+local announcedOutpostLeft = {}
+
 local function TryChatOutpostLeftZone(site)
     if not site or not L.LEFT_ZONE then return end
     local key = site.siteKey or site.id or "outpost"
-    local now = GetTime()
-    if (now - (lastOutpostLeftChatAt[key] or 0)) < OUTPOST_CHAT_GAP then return end
-    lastOutpostLeftChatAt[key] = now
-    Overlord:PrintNotification(string.format("|cFFFF0000[Overlord]|r " .. L.LEFT_ZONE, OP:GetDisplayName(site)))
+    local token = {}
+    pendingOutpostLeftChat[key] = token
+    announcedOutpostLeft[key] = nil
+    C_Timer.After(2, function()
+        if pendingOutpostLeftChat[key] ~= token then return end
+        pendingOutpostLeftChat[key] = nil
+        local st = OP.GetState and OP:GetState(key) or nil
+        if not (st and st.isPaused) or Overlord.InstanceSuspended then return end
+        local now = GetTime()
+        if (now - (lastOutpostLeftChatAt[key] or 0)) < OUTPOST_CHAT_GAP then return end
+        lastOutpostLeftChatAt[key] = now
+        announcedOutpostLeft[key] = true
+        Overlord:PrintNotification(string.format("|cFFFF0000[Overlord]|r " .. L.LEFT_ZONE, OP:GetDisplayName(site)))
+    end)
 end
 
-local function TryChatOutpostBackInZone(site)
+local function TryChatOutpostBackInZone(site, afterLeave)
     if not site or not L.BACK_IN_ZONE then return end
     local key = site.siteKey or site.id or "outpost"
+    if afterLeave then
+        pendingOutpostLeftChat[key] = nil
+        if not announcedOutpostLeft[key] then return end
+        announcedOutpostLeft[key] = nil
+    end
     local now = GetTime()
     if (now - (lastOutpostBackChatAt[key] or 0)) < OUTPOST_CHAT_GAP then return end
     lastOutpostBackChatAt[key] = now
@@ -638,7 +659,7 @@ function Overlord.OutpostControl:UpdateHoldTimer(siteKey, st, site, deltaTime, i
         end
         if st.isPaused then
             st.isPaused = false
-            TryChatOutpostBackInZone(site)
+            TryChatOutpostBackInZone(site, true)
         end
         if canProgress then
             st.holdTimeElapsed = (st.holdTimeElapsed or 0) + deltaTime
@@ -692,6 +713,7 @@ function Overlord.OutpostControl:CheckPosition(deltaTime)
         if st.holdAuthorityLocal and st.isHolding and not st.isPaused then
             st.isPaused = true
             st.isContested = false
+            TryChatOutpostLeftZone(site)
         end
         if ShouldTickOutpostHoldTimer(st) then
             self:UpdateHoldTimer(siteKey, st, site, deltaTime, false)

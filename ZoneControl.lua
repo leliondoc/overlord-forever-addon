@@ -275,8 +275,17 @@ local lastEnteredZoneChatAt = {}
 local lastLeftZoneChatAt = {}
 local lastBackInZoneChatAt = {}
 
+-- Sortie du cercle annoncee apres 2 s seulement : un aller-retour sur le bord ne
+-- remplit plus le chat (ni « sorti », ni « de retour »). « De retour » ne suit
+-- qu'une sortie reellement annoncee.
+local pendingLeftZoneChat = {}
+local announcedLeftZone = {}
+local LEFT_ZONE_CHAT_DELAY = 2
+
 local function TryChatEnteredZone(zone)
     if not zone or not zone.id then return end
+    pendingLeftZoneChat[zone.id] = nil
+    announcedLeftZone[zone.id] = nil
     local now = GetTime()
     local last = lastEnteredZoneChatAt[zone.id] or 0
     if now - last < ZONE_SECURED_CHAT_GAP then return end
@@ -286,15 +295,27 @@ end
 
 local function TryChatLeftZone(zone)
     if not zone or not zone.id then return end
-    local now = GetTime()
-    local last = lastLeftZoneChatAt[zone.id] or 0
-    if now - last < ZONE_SECURED_CHAT_GAP then return end
-    lastLeftZoneChatAt[zone.id] = now
-    Overlord:PrintNotification(string.format("|cFFFF0000[Overlord]|r " .. L.LEFT_ZONE, zone.name))
+    local token = {}
+    pendingLeftZoneChat[zone.id] = token
+    announcedLeftZone[zone.id] = nil
+    C_Timer.After(LEFT_ZONE_CHAT_DELAY, function()
+        if pendingLeftZoneChat[zone.id] ~= token then return end
+        pendingLeftZoneChat[zone.id] = nil
+        if not zone.isPaused or Overlord.InstanceSuspended then return end
+        local now = GetTime()
+        local last = lastLeftZoneChatAt[zone.id] or 0
+        if now - last < ZONE_SECURED_CHAT_GAP then return end
+        lastLeftZoneChatAt[zone.id] = now
+        announcedLeftZone[zone.id] = true
+        Overlord:PrintNotification(string.format("|cFFFF0000[Overlord]|r " .. L.LEFT_ZONE, zone.name))
+    end)
 end
 
 local function TryChatBackInZone(zone)
     if not zone or not zone.id then return end
+    pendingLeftZoneChat[zone.id] = nil
+    if not announcedLeftZone[zone.id] then return end
+    announcedLeftZone[zone.id] = nil
     local now = GetTime()
     local last = lastBackInZoneChatAt[zone.id] or 0
     if now - last < ZONE_SECURED_CHAT_GAP then return end

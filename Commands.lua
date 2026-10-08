@@ -449,7 +449,8 @@ local function ShowHelp()
     Overlord:PrintNotification(L.HELP_START)
     Overlord:PrintNotification(L.HELP_LB)
     Overlord:PrintNotification(L.HELP_SYNC)
-    Overlord:PrintNotification(L.HELP_DOM)
+    Overlord:PrintNotification(L.HELP_MAP)
+    Overlord:PrintNotification(L.HELP_NETWORK)
     Overlord:PrintNotification(L.HELP_SCALE)
     Overlord:PrintNotification(L.HELP_GUIDE)
     if L.HELP_GUILD_KILLS then Overlord:PrintNotification(L.HELP_GUILD_KILLS) end
@@ -647,15 +648,11 @@ local function CommandHandler(msg)
     if cmd == "hud" then
         local settings = Overlord.SettingsPanel
         if not settings then return end
+        -- /ov hud : panneau des coins flottant (meme case que les options).
         local action = args[2] and string.lower(args[2]) or "toggle"
-        if action == "auto" then
-            settings:SetTopHudMode("auto")
-            Overlord:PrintNotification(L.HUD_AUTO)
-            return
-        end
         local visible
         if action == "toggle" then
-            visible = not settings:IsTopHudVisible()
+            visible = not settings.GetShowCoinsHud()
         elseif action == "on" then
             visible = true
         elseif action == "off" then
@@ -664,7 +661,7 @@ local function CommandHandler(msg)
             Overlord:PrintNotification(L.HELP_HUD)
             return
         end
-        settings:SetTopHudVisible(visible)
+        settings.SetShowCoinsHud(visible)
         Overlord:PrintNotification(visible and L.HUD_SHOWN or L.HUD_HIDDEN)
         return
     end
@@ -720,20 +717,18 @@ local function CommandHandler(msg)
     elseif cmd == "wanted" then
         if Overlord.MostWanted then Overlord.MostWanted:HandleCommand(args) end
 
-    elseif cmd == "layer" or cmd == "hop" then
-        -- Layer Jumper retire (1.6.1) : la commande explique seulement pourquoi.
-        Overlord:PrintNotification("|cFF00FF00[Overlord]|r " .. (L.LAYER_JUMPER_REMOVED or ""))
-
     elseif cmd == "guildkills" then
         if Overlord.GuildKillAlert then Overlord.GuildKillAlert:HandleCommand(args) end
 
     elseif cmd == "map" or cmd == "carte" then
+        -- /ov map : mode suivant (complet, compact, masque) ; /ov map compact|full|off : ce mode.
         local mm = Overlord.MapMarkers
-        if mm and mm.SetWorldMapOverlaysShown then
-            local shown = not mm:AreWorldMapOverlaysShown()
-            mm:SetWorldMapOverlaysShown(shown)
-            Overlord:PrintNotification("[Overlord] " .. (shown and (L.MAP_FILTER_SHOWN or "World map display: on")
-                or (L.MAP_FILTER_HIDDEN or "World map display: off")))
+        if mm and mm.SetWorldMapDisplayMode then
+            local named = ({ full = "full", on = "full", complet = "full", compact = "compact",
+                hidden = "hidden", off = "hidden", masque = "hidden" })[string.lower(args[2] or "")]
+            mm:SetWorldMapDisplayMode(named or mm:GetNextWorldMapDisplayMode())
+            Overlord:PrintNotification("[Overlord] " .. string.format(L.MAP_MODE_STATUS or "World map display: %s",
+                mm.GetWorldMapModeText(mm:GetWorldMapDisplayMode())))
         end
 
     elseif cmd == "network" or cmd == "reseau" then
