@@ -53,31 +53,35 @@ local function receive(origin, kind, payload)
         origin, kind, payload }, "|")
     return net:Receive(wire, origin, "BNET")
 end
-local HELD = "v2:ashenvale_outpost:held:Alliance:0"
+-- A held state is a capture claim since 1.7.2 and is never relayed; the routine
+-- state that still travels is a dated release (neutral again).
+local ROUTINE = "v2:ashenvale_outpost:neutral:Alliance:0"
+assert(receive("Ida Forever", "OP", "v2:ashenvale_outpost:held:Alliance:0"))
+assert(net:GetQueueSummary().total == 0, "A held outpost state was relayed")
 
 -- 1. The same routine state heard from three players is relayed once per 10 min.
 local before = net:GetQueueSummary().total
-assert(receive("Ida Forever", "OP", HELD))
-assert(receive("Bob Forever", "OP", HELD))
-assert(receive("Cid Forever", "OP", HELD))
+assert(receive("Ida Forever", "OP", ROUTINE))
+assert(receive("Bob Forever", "OP", ROUTINE))
+assert(receive("Cid Forever", "OP", ROUTINE))
 assert(net:GetQueueSummary().total == before + 1, "An identical routine outpost state was relayed twice")
 assert(net.stats.routineForwardSkipped == 2)
 now = now + 61
-assert(receive("Ida Forever", "OP", HELD))
-assert(net:GetQueueSummary().total == before + 1, "An identical held state was relayed again within 10 min")
+assert(receive("Ida Forever", "OP", ROUTINE))
+assert(net:GetQueueSummary().total == before + 1, "An identical routine state was relayed again within 10 min")
 now = now + 540
-assert(receive("Ida Forever", "OP", HELD))
+assert(receive("Ida Forever", "OP", ROUTINE))
 assert(net:GetQueueSummary().total == before + 2, "The routine state was not relayed again after 10 min")
 
 -- 1a. A state captured moments ago keeps the 1 min window (its first relayed
 --     copy may have been evicted under saturation).
 net = load()
 before = net:GetQueueSummary().total
-local fresh = "v1:ashenvale_outpost:held:0:NoMercy:H:" .. time() .. ":0:" .. time() .. ":300:global"
+local fresh = "v1:ashenvale_outpost:neutral:0:::0:0:" .. time() .. ":300:global"
 assert(receive("Ida Forever", "OP", fresh))
 now = now + 61
 assert(receive("Bob Forever", "OP", fresh))
-assert(net:GetQueueSummary().total == before + 2, "A fresh held state waited 10 min for its second relay")
+assert(net:GetQueueSummary().total == before + 2, "A fresh routine state waited 10 min for its second relay")
 
 -- 1b. A capture in progress ticked by several players: one forward per site and
 --     attacking guild per 15 s, whichever origin; another attacker passes at once.

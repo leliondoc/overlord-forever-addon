@@ -377,10 +377,18 @@ end
 -- ========== Protocole GR / GY : resolution active des guildes manquantes ==========
 function Overlord.Sync:IsValidGuildSyncToken(guild)
     if type(guild) ~= "string" or guild == "" then return false end
+    -- Invisible or format characters would make a second, look-alike guild name
+    -- (no-break space, soft hyphen, zero-width and bidi marks, word joiners, BOM).
+    -- Checked before the trim: a locale-aware %s may eat half of such a character.
+    if guild:find("\194[\133\160\173]") or guild:find("\216\156") or guild:find("\225\160\142")
+        or guild:find("\226\128[\128-\143\168-\175]") or guild:find("\226\129[\159-\175]")
+        or guild:find("\227\128\128") or guild:find("\239\187\191") then return false end
     guild = guild:match("^%s*(.-)%s*$") or ""
     if guild == "" or #guild > 24 then return false end
     if guild:find("|", 1, true) or guild:find(",", 1, true) or guild:find(":", 1, true) then return false end
     if guild:find("[%c%%]") then return false end
+    -- A lone lead or continuation byte is never a letter.
+    if guild:find("[\192-\255]$") or guild:find("^[\128-\191]") then return false end
     return true
 end
 

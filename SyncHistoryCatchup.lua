@@ -27,6 +27,9 @@ local PERIODIC_JITTER_SEC = 60
 -- fois des lignes reellement recues ; sinon une nouvelle tentative apres 15 min.
 local HISTORY_ACK_SEC = 6 * 60 * 60
 local HISTORY_LEASE_SEC = 15 * 60
+-- A reply that brought new captures is followed by another round soon: a long
+-- history is served in slices.
+local HISTORY_FRESH_RETRY_SEC = 30 * 60
 -- Un voisin occupe ou interrompu cede sa place quelques instants aux autres.
 local BUSY_PEER_SEC = 45
 local CAMPAIGN_MIN_AGE_SEC = 30 * 60
@@ -575,18 +578,24 @@ local function MaybeRequestOutpostHistory(target, force)
     return true
 end
 
--- An LO/LOC row from the peer we asked confirms the history round for six hours.
-function sync:NoteOutpostHistoryDelivery(sender)
+-- An accepted LO/LOC row from the peer we asked confirms the history round: for
+-- six hours when the reply brought nothing new, for HISTORY_FRESH_RETRY_SEC when
+-- it did (the next round fetches the rest of a long history).
+function sync:NoteOutpostHistoryDelivery(sender, fresh)
     -- A live row relayed from the same player is not the answer we asked for.
     local context = Overlord.BetaNetwork and Overlord.BetaNetwork.context
     if context and (tonumber(context.hops) or 0) > 0 then return false end
     local request = self._outpostHistoryRequest
     if not request or type(sender) ~= "string" or sender:lower() ~= request.peer
-        or GetTime() - request.at > 300 or not OverlordDB then return false end
+        or not OverlordDB then return false end
+    if GetTime() - request.at > 300 then
+        self._outpostHistoryRequest = nil
+        return false
+    end
     local ack = OverlordDB.leaderboardHistoryCatchupAck
     if type(ack) ~= "table" or ack.campaignId ~= request.campaignId then return false end
-    ack.historyAt = NowServer()
-    self._outpostHistoryRequest = nil
+    request.fresh = request.fresh or fresh == true
+    ack.historyAt = request.fresh and (NowServer() - HISTORY_ACK_SEC + HISTORY_FRESH_RETRY_SEC) or NowServer()
     return true
 end
 

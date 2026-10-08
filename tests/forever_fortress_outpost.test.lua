@@ -95,7 +95,7 @@ assert(st.status == "held" and st.expiresAt == 0)
 assert(gk:GetKeepMapIconAtlas(st, site) == "Warfronts-BaseMapIcons-Alliance-MainHall")
 local row = assert(lb:GetOutpostCaptureCountRow("badlands", guild, "global"))
 assert(row.count == 1)
-lb:RecordOutpostCapture("badlands", guild, faction, now, "global")
+lb:RecordOutpostCapture("badlands", guild, faction, now, "global", sync:GetPlayerFullName())
 assert(row.count == 1, "Duplicate capture increased rank")
 local keeps = lb:GetSortedGuildKeeps()
 assert(#keeps == 1 and keeps[1].wins == 1 and keeps[1].keepSiteKey == "badlands"
@@ -131,34 +131,53 @@ assert(st.status == "held" and st.ownerGuild == "Fortress Guild", "Shared perman
 assert(lb:GetOutpostCaptureCountRow("badlands", "Fortress Guild", "global").count == 1)
 print("Fortresses: shared capture/decay/ownership, reload, ranking separation, icons, migration and OP/OC wire OK")
 
--- A fresh observer receives the very same OP/LOC wire, including the 600 s rule.
+-- A fresh observer receives the very same OP/LO wire from the capturer himself,
+-- including the 600 s rule. Since 1.7.2 a held state and a tenant row are capture
+-- claims: announced by anyone else than the character who took the site, they are
+-- refused (that is how a forged guild reached the keep and outpost tables).
+-- The observer is of the capturer faction (a channel sender always is).
+Overlord.PlayerFaction = "Alliance"
+local player = sync:GetPlayerFullName()
+-- The ladder knows the capturer's guild (his own K / GI): a live claim needs it.
+lb.playerInfo[player] = lb.playerInfo[player] or { class = "", faction = "Alliance", level = 0, locale = "", pool = "" }
+lb.playerInfo[player].guild, lb.playerInfo[player].guildAuth, lb.playerInfo[player].guildAt = "Fortress Guild", true, now
+lb._dedupMetaIndex = nil
 local heldPayload = assert(sync:BuildOutpostPayload("badlands"))
+assert(heldPayload:find(":" .. player .. "$"), "the held state does not name its capturer: " .. heldPayload)
 sent = {}
-sync:BroadcastLeaderboardOutpostCount("badlands", "Fortress Guild", "Alliance", 1, st.claimedAt)
-local countPayload
-for _, message in ipairs(sent) do if message[1] == "LOC" then countPayload = message[2] end end
-assert(countPayload, "Shared capture count was not sent")
+sync:BroadcastLeaderboardOutpostTenant("badlands", "Fortress Guild", "Alliance", st.claimedAt, player)
+local tenantPayload
+for _, message in ipairs(sent) do if message[1] == "LO" then tenantPayload = message[2] end end
+assert(tenantPayload and tenantPayload:find(":" .. player .. "$"), "Shared tenant row was not sent with its capturer")
 local campaign = OverlordDB.lastResetTimestamp
 OverlordDB = { lastResetTimestamp = campaign, config = {}, fortressOutpostSchema = 1 }
 op:EnsureDB()
 local observed = op:GetState("badlands")
 sync:OnReceiveOutpostState(heldPayload, "Remote Defender", "CHANNEL")
+assert(observed.status == "neutral", "a held state announced by someone else than its capturer was believed")
+sync:OnReceiveLeaderboardOutpostTenant(tenantPayload, "Remote Defender", "CHANNEL")
+assert(not lb:GetOutpostCaptureCountRow("badlands", "Fortress Guild", "global"),
+    "a tenant row announced by someone else than its capturer was counted")
+sync:OnReceiveOutpostState(heldPayload, player, "CHANNEL")
 assert(observed.status == "held" and observed.ownerGuild == "Fortress Guild",
     "Observer did not receive fortress through OP")
 assert(observed.holdTimeRequired == 600, "Receiver lost fortress capture duration")
-sync:OnReceiveOutpostState(heldPayload, "Remote Defender", "CHANNEL")
-sync:OnReceiveLeaderboardOutpostCount(countPayload, "Remote Defender", "CHANNEL")
-sync:OnReceiveLeaderboardOutpostCount(countPayload, "Remote Defender", "CHANNEL")
+assert(observed.heldCapturerName == player, "the observer lost the capturer of the held state")
+sync:OnReceiveOutpostState(heldPayload, player, "CHANNEL")
+sync:OnReceiveLeaderboardOutpostTenant(tenantPayload, player, "CHANNEL")
+sync:OnReceiveLeaderboardOutpostTenant(tenantPayload, player, "CHANNEL")
 assert(lb:GetOutpostCaptureCountRow("badlands", "Fortress Guild", "global").count == 1,
-    "OP/LOC replay inflated fortress captures")
-assert(#lb:GetSortedGuildKeeps() == 1 and #lb:GetSortedOutposts() == 0)
+    "OP/LO replay inflated fortress captures")
+local keeps = lb:GetSortedGuildKeeps()
+assert(#keeps == 1 and #lb:GetSortedOutposts() == 0)
+assert(keeps[1].capturer == player, "the keep row does not name its capturer")
 assert(not op:IsRecaptureTerminalAllowed(observed, observed.claimedAt + 300, site),
     "Fortress terminal accepted at the outpost duration")
 assert(op:IsRecaptureTerminalAllowed(observed, observed.claimedAt + 600, site))
 op:ResetOutpostsForCampaign()
 assert(op:GetState("badlands").status == "neutral")
 assert(#lb:GetSortedGuildKeeps() == 0, "Campaign reset retained fortress captures")
-print("Fortress remote OP/LOC replay, terminal timing and campaign reset OK")
+print("Fortress remote OP/LO replay, capturer-only claims, terminal timing and campaign reset OK")
 
 -- Map/minimap tooltips and the fortress HUD must expire remote observations
 -- like the shared engine, without inventing a neutral/captured network event.

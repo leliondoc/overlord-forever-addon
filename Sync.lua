@@ -161,6 +161,7 @@ end
 local FUTURE_CLAMP_SKEW = 5
 local function NormalizeRemoteTimestamp(ts)
     ts = tonumber(ts) or 0
+    if ts ~= ts then return nil end
     if ts <= 0 then return 0 end
     local now = Overlord.ServerNow and Overlord.ServerNow() or time()
     if ts > now + MAX_CLOCK_SKEW then return nil end
@@ -704,6 +705,7 @@ function Overlord.Sync:SendSyncRequest(opts)
     if Overlord.BetaNetwork then
         if opts.betaTarget then
             local sent = Overlord.BetaNetwork:Send("SR", payload, opts.betaTarget)
+            if sent and self.NoteOutpostClaimPeer then self:NoteOutpostClaimPeer(opts.betaTarget, payload) end
             if sent and requestMode == "F" then
                 self:ExpectDirectFullLeaderboardResponse(opts.betaTarget)
             end
@@ -1811,7 +1813,13 @@ function Overlord.Sync:RunPeriodicMapCatchup()
     if not net or Overlord.InstanceSuspended or IsInInstance() then return false end
     -- A map received within the interval skips this pull. Tried at 60 s in 1.2.4
     -- testing: every client pulled far more often and full replies flooded the relay.
-    if self._lastFullZaAt and GetTime() - self._lastFullZaAt < self.BETA_MAP_CATCHUP_INTERVAL then
+    -- 1.7.2: a ZA carries no keep/outpost claim and the targeted pull is the only
+    -- way to learn a capture we did not witness: a held site still waiting for
+    -- its snapshot keeps the pull.
+    local outpostWaiting = Overlord.Outpost and Overlord.Outpost.HasStateAwaitingNetwork
+        and Overlord.Outpost:HasStateAwaitingNetwork()
+    if not outpostWaiting and self._lastFullZaAt
+        and GetTime() - self._lastFullZaAt < self.BETA_MAP_CATCHUP_INTERVAL then
         return false
     end
     local myName = self:GetPlayerFullName()
@@ -2268,9 +2276,13 @@ function Overlord.Sync:SendWhisper(msgType, data, target, direct)
     -- A catch-up request to a peer heard only through relays is refused by the
     -- relay (point to point). A plain-whisper fallback was tried in 1.2.4 testing:
     -- far capturers then answered every observer in full and flooded the relay.
+    -- A map or history request opens this peer's window for keep/outpost claims
+    -- (1.7.2): only a reply we asked for may carry a capture we did not witness.
     if Overlord.BetaNetwork and not direct
         and msgType ~= "R1" and msgType ~= "BF" and Overlord.BetaNetwork:IsPeer(target) then
-        return Overlord.BetaNetwork:Send(msgType, data or "", target)
+        local queued = Overlord.BetaNetwork:Send(msgType, data or "", target)
+        if queued and msgType == "SR" and self.NoteOutpostClaimPeer then self:NoteOutpostClaimPeer(target, data) end
+        return queued
     end
     if Overlord.InstanceSuspended or IsInInstance() then return end
     -- Cible vide / trop courte / espaces : l'API envoie quand meme et Blizzard affiche
@@ -2290,7 +2302,9 @@ function Overlord.Sync:SendWhisper(msgType, data, target, direct)
     self:_RememberRecentAddonWhisper(target, now)
     -- securecall : empeche le taint addon de contaminer SetLastTellTarget
     -- (meme fix que SendToBNet, sinon "secret string value" sur les whispers entrants)
-    return self:SendAddonChecked(msg, "WHISPER", target)
+    local sentOk = self:SendAddonChecked(msg, "WHISPER", target)
+    if sentOk and msgType == "SR" and self.NoteOutpostClaimPeer then self:NoteOutpostClaimPeer(target, data) end
+    return sentOk
 end
 
 -- Envoi via Battle.net (cross-faction, cross-realm, amis BNet uniquement)
@@ -2582,16 +2596,14 @@ function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
         -- LC est maintenant fusionne comme un snapshot monotone sans quorum.
         local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
         self:OnReceiveLeaderboardCaptures(payload or "", gameplaySender, "BNET")
-    elseif msgType == "LO" then
+    elseif msgType == "LO" or msgType == "LOC" then
         local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
-        if self.NoteOutpostHistoryDelivery then self:NoteOutpostHistoryDelivery(gameplaySender) end
-        self:OnReceiveLeaderboardOutpostTenant(payload or "", gameplaySender, "BNET")
-    elseif msgType == "LOC" then
-        local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
-        if self.NoteOutpostHistoryDelivery then self:NoteOutpostHistoryDelivery(gameplaySender) end
-        self:OnReceiveLeaderboardOutpostCount(payload or "", gameplaySender, "BNET")
-    elseif msgType == "OE" then
-        self:OnReceiveLeaderboardOutpostEvidence(payload or "", sender, "BNET")
+        if msgType == "LO" then
+            self:OnReceiveLeaderboardOutpostTenant(payload or "", gameplaySender, "BNET")
+        else
+            self:OnReceiveLeaderboardOutpostCount(payload or "", gameplaySender, "BNET")
+        end
+
     elseif msgType == "TV" then
         self:OnReceiveTotalVictory(payload or "", sender, "BNET")
     elseif msgType == "VT" then
@@ -2716,12 +2728,10 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
     -- HR/HB/HC/HA without a "5:"/"6:"/"7:" prefix were the v4 ladder exchange, retired
     -- in 1.2.4 (v5-v7 pages are routed above): they are ignored.
     elseif msgType == "LO" or msgType == "LOC" then
-        -- A row from the peer asked for outpost history confirms that round.
-        if self.NoteOutpostHistoryDelivery then pcall(self.NoteOutpostHistoryDelivery, self, sender) end
+        -- The handler confirms the outpost history round itself when it accepts a row.
         ok, err = pcall(msgType == "LO" and self.OnReceiveLeaderboardOutpostTenant
             or self.OnReceiveLeaderboardOutpostCount, self, payload or "", sender, channel)
-    elseif msgType == "OE" then
-        ok, err = pcall(self.OnReceiveLeaderboardOutpostEvidence, self, payload or "", sender, channel)
+
     elseif msgType == "TV" then
         ok, err = pcall(self.OnReceiveTotalVictory, self, payload, sender, channel)
     elseif msgType == "VT" then

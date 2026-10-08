@@ -4,6 +4,10 @@ Overlord.OutpostControl = Overlord.OutpostControl or {}
 
 local L = Overlord.L
 local OP = Overlord.Outpost
+-- Shared server clock for every stamp that travels (Core.lua: time() is the PC clock).
+local function ServerNow()
+    return Overlord.ServerNow and Overlord.ServerNow() or time()
+end
 local ZS_BROADCAST_INTERVAL = 5
 local lastOPBroadcast = {}
 local lastNoGuildWarnAt = 0
@@ -391,7 +395,7 @@ local function CheckLocalOutpostDefense(siteKey, st, site)
             RefreshOutpostHud()
         end
         if Overlord.Sync and Overlord.Sync.PollIfStaleObserverOutpost then
-            Overlord.Sync:PollIfStaleObserverOutpost(time() - (tonumber(st.updatedAt) or 0))
+            Overlord.Sync:PollIfStaleObserverOutpost(ServerNow() - (tonumber(st.updatedAt) or 0))
         end
     elseif outpostDefenseAlerted[siteKey]
         and now - (lastOutpostDefenseEnemyAt[siteKey] or 0) > OUTPOST_DEFENSE_REARM_SECONDS then
@@ -464,7 +468,7 @@ function Overlord.OutpostControl:StartHold(siteKey, st, site)
     if Overlord.Sync and Overlord.Sync.GetPlayerFullName then
         st.opOfficialCapturerName = Overlord.Sync:GetPlayerFullName()
     end
-    st.updatedAt = time()
+    st.updatedAt = ServerNow()
     OP:SaveOutposts()
     Overlord:MarkDirty()
     if Overlord.FrontActivity and Overlord.FrontActivity.RecordLocalByZoneRef then
@@ -523,7 +527,7 @@ function Overlord.OutpostControl:RevertCapture(siteKey, st, allowInstanceBroadca
     end
     -- A real local abandon must supersede the assault; offline restoration uses
     -- the same state adapter but must retain its older observation timestamp.
-    st.updatedAt = time()
+    st.updatedAt = ServerNow()
     OP:SaveOutposts()
     if Overlord.SaveState then Overlord:SaveState() end
     BroadcastOP(siteKey, true, allowInstanceBroadcast)
@@ -532,17 +536,24 @@ function Overlord.OutpostControl:RevertCapture(siteKey, st, allowInstanceBroadca
 end
 
 function Overlord.OutpostControl:CompleteCapture(siteKey, st, site)
-    local capturer = st.opOfficialCapturerName
-    if (not capturer or capturer == "") and Overlord.Sync
-        and Overlord.Sync.GetPlayerFullName then
-        capturer = Overlord.Sync:GetPlayerFullName()
-    end
+    -- Signed with this character: the state is account-wide and an alt may resume
+    -- a hold started by another character of the account.
+    local capturer = Overlord.Sync and Overlord.Sync.GetPlayerFullName
+        and Overlord.Sync:GetPlayerFullName() or st.opOfficialCapturerName
     local guild = OP:SanitizeGuildName(st.ownerGuild or "")
     if guild == "" then
         guild = OP:GetLocalPlayerGuild()
     end
     local fac = st.ownerFaction or Overlord.PlayerFaction
-    if not OP:IsCaptureTakeoverAllowed(st, guild, fac, time(), site) then return end
+    if not OP:IsCaptureTakeoverAllowed(st, guild, fac, ServerNow(), site) then return end
+    -- A character signs at most one capture per contract (a hold resumed from a
+    -- guild mate may complete sooner): this character does not conclude; another
+    -- holder signs it, otherwise the hold is reverted like any unfinished capture.
+    local lb = Overlord.Leaderboard
+    if lb and lb.IsOutpostCapturerPaced and lb.GetOutpostSiteGap
+        and not lb:IsOutpostCapturerPaced(capturer, ServerNow(), lb:GetOutpostSiteGap(siteKey)) then
+        return
+    end
     if not OP:CompleteCapture(siteKey, guild, fac, nil, nil, nil, capturer) then return end
     if capturer and capturer ~= "" and site and site.id and Overlord.Leaderboard
         and Overlord.Leaderboard.CreditPlayerObjectiveCapture then
@@ -552,7 +563,7 @@ function Overlord.OutpostControl:CompleteCapture(siteKey, st, site)
     end
     BroadcastOP(siteKey, true)
     if Overlord.Sync and Overlord.Sync.BroadcastOutpostCapture then
-        Overlord.Sync:BroadcastOutpostCapture(siteKey, guild, fac, st.claimedAt)
+        Overlord.Sync:BroadcastOutpostCapture(siteKey, guild, fac, st.claimedAt, st.heldCapturerName)
     end
     if Overlord.ZoneIndicator then
         Overlord.ZoneIndicator:InvalidateActiveZoneCache()
@@ -594,7 +605,7 @@ function Overlord.OutpostControl:UpdateHoldTimer(siteKey, st, site, deltaTime, i
                 st.isPaused = false
                 TryChatOutpostContested(site, enemyCount, friendlyCount)
             end
-            st.updatedAt = time()
+            st.updatedAt = ServerNow()
             MarkDirtyIfHoldSecChanged(siteKey, st)
             if enemyCount > friendlyCount then
                 local contestPull = 1
@@ -631,7 +642,7 @@ function Overlord.OutpostControl:UpdateHoldTimer(siteKey, st, site, deltaTime, i
         end
         if canProgress then
             st.holdTimeElapsed = (st.holdTimeElapsed or 0) + deltaTime
-            st.updatedAt = time()
+            st.updatedAt = ServerNow()
             MarkDirtyIfHoldSecChanged(siteKey, st)
             BroadcastOP(siteKey, false)
             if st.holdTimeElapsed >= req then
@@ -649,7 +660,7 @@ function Overlord.OutpostControl:UpdateHoldTimer(siteKey, st, site, deltaTime, i
         end
         st.isContested = false
         st.holdTimeElapsed = (st.holdTimeElapsed or 0) - deltaTime
-        st.updatedAt = time()
+        st.updatedAt = ServerNow()
         MarkDirtyIfHoldSecChanged(siteKey, st)
         if st.holdTimeElapsed <= 0 then
             st.holdTimeElapsed = 0

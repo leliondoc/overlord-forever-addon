@@ -9,7 +9,9 @@ const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf
 test("Keep and outpost states are re-sent only for targeted beta deliveries", () => {
     const targeted = /== "BETA" and Overlord\.BetaNetwork and Overlord\.BetaNetwork:IsTargetedDispatch\(\)\)/g;
     const outpost = read("SyncOutpost.lua");
-    assert.equal(outpost.match(targeted)?.length, 4, "Outpost rebroadcast sites");
+    // 1.7.2: only an assault in progress (OP) is re-sent; a capture claim (OC, LO,
+    // LOC, held OP) is believed from its capturer alone and never re-authored.
+    assert.equal(outpost.match(targeted)?.length, 1, "Outpost rebroadcast sites");
     for (const [name, source, send] of [
         ["SyncOutpost.lua", outpost, /BroadcastOutpostToGroup\("(OP|OC|LO|LOC)"/],
     ]) {

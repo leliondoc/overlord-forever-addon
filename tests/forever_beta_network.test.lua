@@ -121,8 +121,25 @@ for kind in ("SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR V
     -- the whole relay on every PvP death.
     -- SR/GR/CR broadcasts are answered by direct neighbours only (1.2.4): not relayed.
     -- GI is never relayed: receivers apply only the owner's direct copy.
+    -- OC/LO/LOC (1.7.2): a capture claim is only believed from its capturer or in a
+    -- reply the receiver asked for, so a forwarded copy is never relayed.
     if kind ~= "SR" and kind ~= "K" and kind ~= "EK" and kind ~= "GR" and kind ~= "CR"
-        and kind ~= "GI" then kinds[#kinds + 1] = kind end
+        and kind ~= "GI" and kind ~= "OC" and kind ~= "LO" and kind ~= "LOC" then kinds[#kinds + 1] = kind end
+end
+-- A capture claim reaches the direct neighbour (gateway) but goes no further.
+for _, kind in ipairs({ "OC", "LO", "LOC" }) do
+    local beforeB, beforeD = #b.received, #d.received
+    assert(a.BetaNetwork:Send(kind, "site:Guild:A:1:global:Given Family"))
+    drain()
+    assert(#d.received == beforeD, "A capture claim (" .. kind .. ") was re-forwarded through the gateway")
+    assert(#b.received == beforeB + 1, "The gateway itself lost the capture claim " .. kind)
+end
+do
+    local beforeB, beforeD = #b.received, #d.received
+    assert(a.BetaNetwork:Send("OP", "v1:site:held:0:Guild:A:1:0:1:300:global:0:::0:0:Given Family"))
+    drain()
+    assert(#d.received == beforeD, "A held outpost state was re-forwarded through the gateway")
+    assert(#b.received == beforeB + 1, "The gateway itself lost the held state")
 end
 -- A death notice reaches the direct neighbour (gateway) but goes no further.
 do

@@ -13,8 +13,8 @@ local OC_DEDUP_SEC = 10
 local OP_DEDUP_SEC = 4
 local OP_DEDUP_MAX = 128
 local OC_DEDUP_MAX = 256
-local OC_ACCEPT_MAX_AGE = 900
 local lastStaleOutpostObserverPoll = 0
+local staleOutpostPullRound = 0
 local STALE_OUTPOST_OBSERVER_POLL_INTERVAL = 22
 local STALE_OUTPOST_OBSERVER_POLL_INTERVAL_LARGE = 45
 local opCaptureAlertDedup = {}
@@ -59,7 +59,29 @@ local ocDedup = NewOutpostDedup(OC_DEDUP_SEC, OC_DEDUP_MAX)
 local loDedup = NewOutpostDedup(LO_DEDUP_SEC, OUTPOST_LADDER_DEDUP_MAX)
 local loSendDedup = NewOutpostDedup(LO_DEDUP_SEC, OUTPOST_LADDER_DEDUP_MAX)
 local locDedup = NewOutpostDedup(LOC_DEDUP_SEC, OUTPOST_LADDER_DEDUP_MAX)
-local locSendDedup = NewOutpostDedup(LOC_DEDUP_SEC, OUTPOST_LADDER_DEDUP_MAX)
+
+-- 1.7.2: a keep/outpost capture is a claim signed by the character who made it
+-- (site, guild, faction, time, capturer). Live, only that character, as the sender
+-- WoW authenticates, can state it: a copy carried by a relay, a bridge or a group
+-- mate is refused. A reply we asked for (targeted map pull, outpost history) may
+-- carry claims we did not witness, judged by content only: a ranked capturer whose
+-- known guild is the claiming guild. The same event seen again needs no authority.
+local OUTPOST_CLAIM_PEER_WINDOW = 120
+local OUTPOST_CLAIM_HISTORY_WINDOW = 300
+local OUTPOST_CLAIM_PEER_MAX = 64
+local OUTPOST_OWNER_CLAIM_TTL = 3600
+local OUTPOST_OWNER_CLAIM_MAX = 512
+
+local OUTPOST_CLAIM_WINDOW_BUDGET = 480
+local OUTPOST_ROW_PACKETS_MAX = 3
+local OUTPOST_OWNER_CLAIMS_PER_HOUR = 16
+local OUTPOST_CLAIM_REFILL_SEC = 60
+-- Capture times come from the shared server clock: a claim further ahead is forged.
+local OUTPOST_CLAIM_FUTURE_SKEW = 30
+local outpostClaimPeers = {}
+local outpostClaimPeerCount = 0
+local ownerClaimDedup = NewOutpostDedup(OUTPOST_OWNER_CLAIM_TTL, OUTPOST_OWNER_CLAIM_MAX)
+local outpostClaimStats = { accepted = 0, refused = 0 }
 
 local function RemoveOutpostDedupNode(registry, node)
     if node.previous then node.previous.next = node.next else registry.head = node.next end
@@ -212,6 +234,21 @@ local function NormalizeRemoteTimestamp(ts)
     return Overlord.Sync.NormalizeRemoteTimestamp(ts)
 end
 
+local function ClaimServerNow()
+    return Overlord.ServerNow and Overlord.ServerNow() or time()
+end
+
+-- The time of a signed capture is its identity: kept exactly as written on every
+-- client (never brought back to the local clock); only a value beyond the clock
+-- skew (broken or forged packet) is refused.
+local function ParseClaimTimestamp(ts)
+    ts = tonumber(ts)
+    if not ts or ts ~= ts then return nil end
+    ts = math.floor(ts)
+    if ts <= 0 or ts > ClaimServerNow() + OUTPOST_CLAIM_FUTURE_SKEW then return nil end
+    return ts
+end
+
 local function IsStaleCampaignTimestamp(ts)
     local lastReset = (Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs())
         or (OverlordDB and tonumber(OverlordDB.lastResetTimestamp)) or 0
@@ -318,25 +355,14 @@ local function OpRosterMatchKey(name)
 end
 
 local function PruneOpDedup(now)
-    -- Six quotas fixes : meme sous flood, aucun handler ne rescane une table.
+    -- Cinq quotas fixes : meme sous flood, aucun handler ne rescane une table.
     PruneOutpostDedupRegistry(opDedup, now, 4)
     PruneOutpostDedupRegistry(ocDedup, now, 4)
     PruneOutpostDedupRegistry(loDedup, now, 4)
     PruneOutpostDedupRegistry(loSendDedup, now, 4)
     PruneOutpostDedupRegistry(locDedup, now, 4)
-    PruneOutpostDedupRegistry(locSendDedup, now, 4)
 end
 
-local function OcHasLocalCaptureEvidence(st, guild, fac, remoteTs)
-    if not st or st.status ~= "in_progress" or not fac then return false end
-    local op = Overlord.Outpost
-    guild = op and op:SanitizeGuildName(guild or "") or (guild or "")
-    local localGuild = op and op:SanitizeGuildName(st.ownerGuild or "") or (st.ownerGuild or "")
-    if guild == "" or localGuild ~= guild or st.ownerFaction ~= fac then return false end
-    local localTs = tonumber(st.updatedAt) or 0
-    if localTs <= 0 or remoteTs <= 0 then return true end
-    return remoteTs + 5 >= localTs
-end
 
 local function OcCaptureTimestampAcceptable(st, guild, fac, remoteTs)
     if not st or not fac or not remoteTs or remoteTs <= 0 then return true end
@@ -413,7 +439,9 @@ local function OcSenderMatchesPayloadGuild(sender, guild, faction)
     return false
 end
 
-local function ShouldAcceptOutpostCapture(siteKey, guild, fac, remoteTs, sender, sourceChannel)
+-- Map plausibility of a final the capturer himself announced (the authority of the
+-- claim is checked before, see AuthorizeOutpostClaim).
+local function ShouldAcceptOutpostCapture(siteKey, guild, fac, remoteTs)
     if not Overlord.Outpost then return false end
     local st = Overlord.Outpost:GetState(siteKey)
     if not st then return false end
@@ -450,25 +478,6 @@ local function ShouldAcceptOutpostCapture(siteKey, guild, fac, remoteTs, sender,
             return false
         end
         if effectiveFac == st.ownerFaction and guild ~= (st.ownerGuild or "") then
-            return false
-        end
-    end
-
-    if not OcSenderMatchesPayloadGuild(sender, guild, fac) then
-        local fromChannel = sourceChannel == "CHANNEL"
-        if not fromChannel and (not Overlord.Sync.IsKnownRelayPeer
-            or not Overlord.Sync:IsKnownRelayPeer(sender)) then
-            return false
-        end
-        if not OcHasLocalCaptureEvidence(st, guild, fac, remoteTs) then
-            local crossFactionTakeover = st.status == "held" and st.ownerFaction
-                and effectiveFac ~= st.ownerFaction
-            local neutralCatchup = st.status == "neutral"
-            if not crossFactionTakeover and not neutralCatchup then
-                return false
-            end
-        end
-        if remoteTs > 0 and (time() - remoteTs) > OC_ACCEPT_MAX_AGE then
             return false
         end
     end
@@ -547,50 +556,287 @@ local function SenderRealmMatchesCurrentOutpostPool(sender, sourceChannel)
     return senderPool == localPool
 end
 
-local function BuildLeaderboardOutpostTenantPayload(siteKey, guild, faction, claimedTs)
+local function BuildLeaderboardOutpostTenantPayload(siteKey, guild, faction, claimedTs, capturer)
     siteKey = tostring(siteKey or "")
     guild = Overlord.Outpost and Overlord.Outpost:SanitizeGuildName(guild or "") or (guild or "")
     local facCode = FactionToCode(faction)
     local pool = CurrentOutpostPoolTag()
-    if pool == "" or siteKey == "" or guild == "" or facCode == "" then return nil end
+    capturer = NormalizeOpCapturerName(capturer)
+    if pool == "" or siteKey == "" or guild == "" or facCode == "" or capturer == "" then return nil end
     claimedTs = math.floor(tonumber(claimedTs) or 0)
     if claimedTs <= 0 then return nil end
     local epoch = OverlordDB and tonumber(OverlordDB.lastResetTimestamp) or 0
     if epoch <= 0 or not IsOutpostLeaderboardTimestampCurrent(claimedTs, epoch) then return nil end
-    return string.format("%s:%s:%s:%d:%d:%s", siteKey, guild, facCode, claimedTs, epoch, pool)
+    return string.format("%s:%s:%s:%d:%d:%s:%s", siteKey, guild, facCode, claimedTs, epoch, pool, capturer)
 end
 
-local function OutpostTenantProjectionMatches(siteKey, guild, faction, claimedAt, pool)
-    local lb = Overlord.Leaderboard
-    if not lb or not lb.GetOutpostTenantsTable then return false end
-    local tenants = lb:GetOutpostTenantsTable()
-    local current = tenants and tenants[siteKey]
-    return type(current) == "table"
-        and current.guild == guild
-        and current.faction == faction
-        and math.floor(tonumber(current.claimedAt) or 0) == claimedAt
-        and current.pool == pool
-end
-
--- LOC : compteur de captures d'avant-poste (total additif, fusionne en max chez le receveur).
-local function BuildLeaderboardOutpostCountPayload(siteKey, guild, faction, count, latestTs)
-    siteKey = tostring(siteKey or "")
-    guild = Overlord.Outpost and Overlord.Outpost:SanitizeGuildName(guild or "") or (guild or "")
-    local facCode = FactionToCode(faction)
-    local pool = CurrentOutpostPoolTag()
-    if pool == "" or siteKey == "" or guild == "" or facCode == "" then return nil end
-    count = math.floor(tonumber(count) or 0)
-    if count <= 0 then return nil end
-    latestTs = math.floor(tonumber(latestTs) or 0)
-    if latestTs < 0 then latestTs = 0 end
-    local epoch = OverlordDB and tonumber(OverlordDB.lastResetTimestamp) or 0
-    if epoch <= 0 then return nil end
-    if latestTs > 0 and not IsOutpostLeaderboardTimestampCurrent(latestTs, epoch) then
-        latestTs = 0
+-- A reply carries the newest LOC packet of a row and up to OUTPOST_ROW_PACKETS_MAX - 1
+-- older ones, chosen by the requester's rotation so that successive replies walk
+-- through a long history instead of starving the other rows. The packets are
+-- built once per snapshot (Leaderboard.lua), never inside a reply.
+local function SelectOutpostEventPackets(packets, rotation)
+    local total = #packets
+    if total <= OUTPOST_ROW_PACKETS_MAX then return packets end
+    local picked = { packets[1] }
+    local older = total - 1
+    local start = (math.floor(tonumber(rotation) or 0) % older)
+    for i = 1, OUTPOST_ROW_PACKETS_MAX - 1 do
+        picked[#picked + 1] = packets[2 + ((start + i - 1) % older)]
     end
-    -- latestTs = ts de la capture la plus recente incluse dans ce total : permet au receveur de
-    -- ne pas re-compter via OC une capture deja contenue dans ce LOC (anti double-comptage).
-    return string.format("%s:%s:%s:%d:%d:%d:%s", siteKey, guild, facCode, count, latestTs, epoch, pool)
+    return picked
+end
+
+local function OutpostClaimPeerKey(name)
+    if type(name) ~= "string" or name == "" then return nil end
+    local sync = Overlord.Sync
+    local key = sync and sync.GetCaptureContributorDedupKey
+        and sync:GetCaptureContributorDedupKey(name) or nil
+    if key and key ~= "" then return key end
+    return name:lower()
+end
+
+-- A map or history request opens a window during which that peer's whispered or
+-- targeted reply may carry capture claims we did not witness (SendWhisper / SR),
+-- with a budget of events judged per window (an honest reply holds far fewer).
+-- Repeated requests to the same peer extend the window but refill the budget at
+-- most once a minute.
+function Overlord.Sync:NoteOutpostClaimPeer(target, srPayload)
+    local key = OutpostClaimPeerKey(target)
+    if not key then return false end
+    local window = type(srPayload) == "string" and srPayload:match(":H$")
+        and OUTPOST_CLAIM_HISTORY_WINDOW or OUTPOST_CLAIM_PEER_WINDOW
+    local now = GetTime()
+    local row = outpostClaimPeers[key]
+    if not row then
+        if outpostClaimPeerCount >= OUTPOST_CLAIM_PEER_MAX then
+            for peer, entry in pairs(outpostClaimPeers) do
+                if entry.until_ <= now then
+                    outpostClaimPeers[peer] = nil
+                    outpostClaimPeerCount = math.max(0, outpostClaimPeerCount - 1)
+                end
+            end
+            if outpostClaimPeerCount >= OUTPOST_CLAIM_PEER_MAX then return false end
+        end
+        row = { refilledAt = -OUTPOST_CLAIM_REFILL_SEC }
+        outpostClaimPeers[key] = row
+        outpostClaimPeerCount = outpostClaimPeerCount + 1
+    end
+    row.until_ = math.max(row.until_ or 0, now + window)
+    if now - row.refilledAt >= OUTPOST_CLAIM_REFILL_SEC then
+        row.left = OUTPOST_CLAIM_WINDOW_BUDGET
+        row.refilledAt = now
+    end
+    return true
+end
+
+-- One judged event of a reply we asked for; false once the window or its budget is gone.
+local function ConsumeSolicitedOutpostClaim(sender, sourceChannel)
+    if sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.BetaNetwork
+        and Overlord.BetaNetwork:IsTargetedDispatch()) then return false end
+    local sync = Overlord.Sync
+    if sync.IsUnauthenticatedRelayOrigin and sync:IsUnauthenticatedRelayOrigin(sender) then return false end
+    local key = OutpostClaimPeerKey(sender)
+    local row = key and outpostClaimPeers[key] or nil
+    if not row or GetTime() > row.until_ or (row.left or 0) <= 0 then return false end
+    row.left = row.left - 1
+    return true
+end
+
+-- The WoW-authenticated sender is the capturer himself (never a relayed origin,
+-- never a name that is not a full Forever identity).
+local function SenderIsOutpostCapturer(sender, capturer)
+    if type(sender) ~= "string" or sender == "" or capturer == "" then return false end
+    if sender:find("^BNet%-", 1) or sender:find("^Bridge%-", 1) then return false end
+    local sync = Overlord.Sync
+    if sync.IsUnauthenticatedRelayOrigin and sync:IsUnauthenticatedRelayOrigin(sender) then return false end
+    if sync.CanonicalForeverName and not sync:CanonicalForeverName(sender) then return false end
+    return sync.KillSyncSenderOwnsPlayer and sync:KillSyncSenderOwnsPlayer(sender, capturer) or false
+end
+
+-- Faction the transport proves for a live sender: the channel and whispers are
+-- faction-bound, a group mate's unit tells it, a Battle.net friend is resolved.
+-- nil when nothing proves it (the claim is then refused).
+local function LiveSenderFaction(sender, sourceChannel)
+    local sync = Overlord.Sync
+    if sourceChannel == "CHANNEL" or sourceChannel == "WHISPER" then return Overlord.PlayerFaction end
+    local transport = sourceChannel
+    if sourceChannel == "BETA" then
+        local context = Overlord.BetaNetwork and Overlord.BetaNetwork.context
+        transport = context and context.transport or "BNET"
+    end
+    if transport == "PARTY" or transport == "RAID" then
+        local faction = sync.GetGroupMemberFaction and sync:GetGroupMemberFaction(sender) or nil
+        if faction == "Alliance" or faction == "Horde" then return faction end
+        return nil
+    end
+    if transport == "CHANNEL" or transport == "WHISPER" then return Overlord.PlayerFaction end
+    local resolved = sync.GetResolvedBNetPlayerFaction and sync:GetResolvedBNetPlayerFaction(sender)
+    if resolved == "Alliance" or resolved == "Horde" then return resolved end
+    return nil
+end
+
+local function CapturerLadderGuild(capturer)
+    local lb = Overlord.Leaderboard
+    if not lb or not lb.GetHotPlayerGuildState then return "" end
+    local guild = lb:GetHotPlayerGuildState(capturer)
+    return Overlord.Outpost:SanitizeGuildName(guild or "")
+end
+
+local function CapturerLadderFaction(capturer)
+    local lb = Overlord.Leaderboard
+    local info = lb and type(lb.playerInfo) == "table" and lb.playerInfo[capturer] or nil
+    local faction = info and info.faction
+    if faction == "Alliance" or faction == "Horde" then return faction end
+    return nil
+end
+
+local function NoteOutpostClaimRefused(msgType, reason)
+    outpostClaimStats.refused = outpostClaimStats.refused + 1
+    outpostClaimStats.lastRefused = tostring(msgType) .. " " .. tostring(reason)
+end
+
+function Overlord.Sync:GetOutpostClaimStats()
+    return outpostClaimStats.accepted, outpostClaimStats.refused, outpostClaimStats.lastRefused
+end
+
+-- Shortest time a character needs before completing a capture of this site (the
+-- gold-reduced contract, minus a little clock skew), the same on every client.
+local function OutpostClaimGap(siteKey)
+    local lb = Overlord.Leaderboard
+    if lb and lb.GetOutpostSiteGap then return lb:GetOutpostSiteGap(siteKey) end
+    local OP = Overlord.Outpost
+    local site = OP:GetSite(siteKey)
+    return (OP.GetMinimumHoldTimeRequired and OP:GetMinimumHoldTimeRequired(site) or 240) - 5
+end
+
+-- Who may end an assault we only observe: its assailant, as the authenticated
+-- sender (his heartbeats named him), or anyone once the assault went quiet. A
+-- stranger cannot hide a live assault from the defenders.
+local function MayRestoreObservedAssault(siteKey, st, sender)
+    local OP = Overlord.Outpost
+    if not st or st.status ~= "in_progress" or not OP then return false end
+    local assailant = NormalizeOpCapturerName(st.opRelayCapturerName)
+    if assailant ~= "" and SenderIsOutpostCapturer(sender, assailant) then
+        -- The assailant is who his heartbeats said, and the ladder knows him in
+        -- the assaulting guild: a stranger naming himself assailant ends nothing.
+        local guild = OP:SanitizeGuildName(st.ownerGuild or "")
+        local ladderGuild = CapturerLadderGuild(assailant)
+        if guild ~= "" and ladderGuild ~= "" and ladderGuild:lower() == guild:lower() then return true end
+    end
+    return OP.IsObserverOutpostCaptureStale
+        and OP:IsObserverOutpostCaptureStale(st, OP:GetSite(siteKey), ClaimServerNow()) or false
+end
+
+-- A direct adoption is for a capture the map missed in between: a takeover by the
+-- faction the map already shows as tenant is only adopted when the ledger holds a
+-- capture of the other faction on this site newer than that tenant (the missed one).
+local function OutpostAdoptionJustified(siteKey, st, faction, lb)
+    local mapFaction = (st.status == "held" and st.ownerFaction)
+        or (st.status == "in_progress" and st.previousOwnerFaction) or nil
+    if mapFaction ~= "Alliance" and mapFaction ~= "Horde" then return true end
+    if mapFaction ~= faction then return true end
+    local mapTs = math.max(math.floor(tonumber(st.claimedAt) or 0),
+        math.floor(tonumber(st.previousClaimedAt) or 0))
+    local other = faction == "Alliance" and "Horde" or "Alliance"
+    return lb.HasOutpostEventOfFactionSince
+        and lb:HasOutpostEventOfFactionSince(siteKey, other, mapTs) or false
+end
+
+-- Decides whether one capture claim may enter the ledger and the map.
+-- Returns true, "known" | "catch-up" | "owner", canonical capturer; or false, reason.
+function Overlord.Sync:AuthorizeOutpostClaim(siteKey, guild, faction, claimTs, capturer, sender, sourceChannel, pool)
+    local OP = Overlord.Outpost
+    if not OP or (faction ~= "Alliance" and faction ~= "Horde") then return false, "faction" end
+    guild = OP:SanitizeGuildName(guild or "")
+    if guild == "" or (self.IsValidGuildSyncToken and not self:IsValidGuildSyncToken(guild)) then
+        return false, "guild"
+    end
+    -- One spelling of the capturer everywhere: Given Family, no realm suffix.
+    capturer = self.CanonicalForeverName
+        and self:CanonicalForeverName(NormalizeOpCapturerName(capturer)) or nil
+    if not capturer or capturer:find("[:|,=%c]")
+        or (self.HasForeverNameCase and not self:HasForeverNameCase(capturer))
+        or (self.IsDeniedKillContributor and self:IsDeniedKillContributor(capturer)) then
+        return false, "capturer"
+    end
+    claimTs = tonumber(claimTs)
+    if not claimTs or claimTs ~= claimTs then return false, "stale" end
+    claimTs = math.floor(claimTs)
+    if claimTs <= 0 then return false, "stale" end
+    -- Captures of the release week were stated without their capturer: none of
+    -- them can be re-announced (the saved rows were dropped on every client too).
+    local lb = Overlord.Leaderboard
+    local minTs = lb and math.floor(tonumber(lb.OUTPOST_CLAIM_MIN_TS) or 0) or 0
+    if claimTs <= minTs and minTs - claimTs < 604800 then return false, "stale" end
+    if claimTs > ClaimServerNow() + OUTPOST_CLAIM_FUTURE_SKEW then return false, "future" end
+    local knownFaction = CapturerLadderFaction(capturer)
+    if knownFaction and knownFaction ~= faction then return false, "capturer-faction" end
+    if lb and lb.IsOutpostClaimAccepted
+        and lb:IsOutpostClaimAccepted(siteKey, guild, faction, claimTs, capturer, pool) then
+        return true, "known", capturer
+    end
+    -- An event of this second already credited to another character is never
+    -- re-attributed; the ledger keeps the first capturer it accepted.
+    if lb and lb.HasOutpostEvent and lb:HasOutpostEvent(siteKey, guild, faction, claimTs, pool) then
+        return false, "event-owned"
+    end
+    -- By content, on every path: a character captures at most once per contract,
+    -- whatever the site or the guild (the ledger index of his captures decides).
+    local gap = OutpostClaimGap(siteKey)
+    if lb and lb.IsOutpostCapturerPaced and not lb:IsOutpostCapturerPaced(capturer, claimTs, gap) then
+        return false, "capturer-pace"
+    end
+    -- A reply we asked for is judged by content first: a capturer answering for his
+    -- own history is not held to the live pace.
+    local solicitedReason = nil
+    if ConsumeSolicitedOutpostClaim(sender, sourceChannel) then
+        if not self.IsKnownLeaderboardSubject or not self:IsKnownLeaderboardSubject(capturer) then
+            solicitedReason = "catch-up-unknown"
+        else
+            local ladderGuild = CapturerLadderGuild(capturer)
+            if ladderGuild == "" or ladderGuild:lower() ~= guild:lower() then
+                solicitedReason = "catch-up-guild"
+            else
+                outpostClaimStats.accepted = outpostClaimStats.accepted + 1
+                return true, "catch-up", capturer
+            end
+        end
+    end
+    if SenderIsOutpostCapturer(sender, capturer) then
+        local senderFaction = LiveSenderFaction(sender, sourceChannel)
+        if senderFaction ~= faction then return false, "owner-faction" end
+        -- Credited to the guild the ladder knows for him (his own K / GI, our roster
+        -- or group, a page): an unknown guild is not his to name live.
+        local ladderGuild = CapturerLadderGuild(capturer)
+        if ladderGuild == "" then return false, "owner-guild-unknown" end
+        if ladderGuild:lower() ~= guild:lower() then return false, "owner-guild" end
+        -- The live sender also carries a pace and an hourly budget of his own: a
+        -- repeat of the very same claim (OC, then LO, then OP) costs nothing.
+        local identity = siteKey .. "|" .. guild:lower() .. "|" .. faction .. "|" .. claimTs
+        local key = OutpostClaimPeerKey(sender)
+        local now = GetTime()
+        PruneOutpostDedupRegistry(ownerClaimDedup, now, 4)
+        local node = key and ownerClaimDedup.nodes[key] or nil
+        if node and node.expiresAt > now and node.claimTs and node.lastClaim ~= identity then
+            -- Pair rule as in the ledger: the gap of the later capture of the two.
+            local required = claimTs >= node.claimTs and gap or (node.claimGap or gap)
+            if math.abs(claimTs - node.claimTs) < required then return false, "owner-pace" end
+            if (node.hourStart or 0) + 3600 <= now then node.hourStart, node.hourCount = now, 0 end
+            if (node.hourCount or 0) >= OUTPOST_OWNER_CLAIMS_PER_HOUR then return false, "owner-budget" end
+        end
+        -- A full registry refuses rather than letting a claim through unpaced.
+        if not key or not RememberOutpostDedup(ownerClaimDedup, key, now) then return false, "owner-busy" end
+        node = ownerClaimDedup.nodes[key]
+        if node and node.lastClaim ~= identity then
+            if not node.hourStart or node.hourStart + 3600 <= now then node.hourStart, node.hourCount = now, 0 end
+            node.hourCount = (node.hourCount or 0) + 1
+            node.lastClaim = identity
+            if not node.claimTs or claimTs > node.claimTs then node.claimTs, node.claimGap = claimTs, gap end
+        end
+        outpostClaimStats.accepted = outpostClaimStats.accepted + 1
+        return true, "owner", capturer
+    end
+    return false, solicitedReason or "untrusted"
 end
 
 function Overlord.Sync:BuildOutpostPayload(siteKey)
@@ -628,13 +874,18 @@ function Overlord.Sync:BroadcastOutpostState(siteKey, forceFull, allowInstance)
     BroadcastOutpostToRelay("OP", payload)
 end
 
-function Overlord.Sync:BroadcastOutpostCapture(siteKey, guild, faction, captureTs)
+function Overlord.Sync:BroadcastOutpostCapture(siteKey, guild, faction, captureTs, capturer)
     if not siteKey or OutpostSyncBlocked() then return end
+    capturer = NormalizeOpCapturerName(capturer)
+    if capturer == "" and self.GetPlayerFullName then
+        capturer = NormalizeOpCapturerName(self:GetPlayerFullName() or "")
+    end
+    if capturer == "" then return end
     local gateBlocked = Overlord.WaitingForSync
         or (Overlord.IsCaptureSyncGateActive and Overlord:IsCaptureSyncGateActive())
     if gateBlocked then
         local restoreTs = math.floor(tonumber(captureTs) or 0)
-        if restoreTs <= 0 then restoreTs = time() end
+        if restoreTs <= 0 then restoreTs = ClaimServerNow() end
         local previous = pendingRestoreOc[siteKey]
         if not previous then
             if pendingRestoreOcCount >= PENDING_RESTORE_OC_MAX then
@@ -654,7 +905,7 @@ function Overlord.Sync:BroadcastOutpostCapture(siteKey, guild, faction, captureT
         end
         if not previous or restoreTs >= (tonumber(previous[4]) or 0) then
             pendingRestoreOc[siteKey] = {
-                siteKey, guild, faction, restoreTs, queuedAt = GetTime(),
+                siteKey, guild, faction, restoreTs, capturer, queuedAt = GetTime(),
             }
         end
         ScheduleOcFlushRetry()
@@ -664,27 +915,18 @@ function Overlord.Sync:BroadcastOutpostCapture(siteKey, guild, faction, captureT
     local pool = CurrentOutpostPoolTag()
     if pool == "" then return end
     captureTs = math.floor(tonumber(captureTs) or 0)
-    if captureTs <= 0 then captureTs = time() end
-    local payload = siteKey .. ":" .. guild .. ":" .. facCode .. ":" .. captureTs .. ":" .. pool
+    if captureTs <= 0 then captureTs = ClaimServerNow() end
+    local payload = siteKey .. ":" .. guild .. ":" .. facCode .. ":" .. captureTs .. ":" .. pool .. ":" .. capturer
     local function emitCapture()
         if not Overlord.Sync or Overlord.InstanceSuspended or not payload or payload == "" then return end
         BroadcastOutpostToGroup("OC", payload)
         Overlord.Sync:SendToChannel("OC", payload, true)
         BroadcastOutpostToRelay("OC", payload)
         if Overlord.Sync.BroadcastLeaderboardOutpostTenant then
-            Overlord.Sync:BroadcastLeaderboardOutpostTenant(siteKey, guild, faction, captureTs)
+            Overlord.Sync:BroadcastLeaderboardOutpostTenant(siteKey, guild, faction, captureTs, capturer)
         end
-        -- Propage le total de captures (LOC, fusion max) en plus du OC additif : un retardataire
-        -- ou un client cross-faction recupere le vrai compteur, pas seulement +1 / 1.
-        if Overlord.Sync.BroadcastLeaderboardOutpostCount and Overlord.Leaderboard
-            and Overlord.Leaderboard.GetOutpostCaptureCountRow then
-            local row = Overlord.Leaderboard:GetOutpostCaptureCountRow(siteKey, guild, pool)
-            local cnt = row and math.floor(tonumber(row.count) or 0) or 0
-            local lts = row and math.floor(tonumber(row.lastTs) or 0) or 0
-            if cnt > 0 then
-                Overlord.Sync:BroadcastLeaderboardOutpostCount(siteKey, guild, faction, cnt, lts)
-            end
-        end
+        -- No live count (LOC): the capturer can only vouch for his own capture, which
+        -- OC and LO already carry; the full signed history comes with catch-up replies.
     end
     emitCapture()
     C_Timer.After(OP_CAPTURE_REPLAY_DELAY_1, emitCapture)
@@ -706,23 +948,48 @@ function Overlord.Sync:FlushPendingOutpostRestoreBroadcasts()
     pendingRestoreOc = {}
     pendingRestoreOcCount = 0
     for _, e in pairs(list) do
-        local sk, g, fac, cts = e[1], e[2], e[3], e[4]
+        local sk, g, fac, cts, capturer = e[1], e[2], e[3], e[4], e[5]
         if sk and g and g ~= "" and fac then
-            self:BroadcastOutpostCapture(sk, g, fac, cts)
+            self:BroadcastOutpostCapture(sk, g, fac, cts, capturer)
         end
     end
 end
 
-function Overlord.Sync:PollIfStaleObserverOutpost(secondsSinceOp)
+-- Returns true when a request was sent (the caller bounds its attempts). Besides
+-- the channel request, withPull adds one targeted pull to a direct neighbour (the
+-- other faction first: a quiet assault is usually theirs), which opens the window
+-- through which the held final, a capture claim, may be believed (1.7.2).
+function Overlord.Sync:PollIfStaleObserverOutpost(secondsSinceOp, withPull)
     local isLarge = IsOpLargeEvent()
     local minInterval = isLarge and STALE_OUTPOST_OBSERVER_POLL_INTERVAL_LARGE or STALE_OUTPOST_OBSERVER_POLL_INTERVAL
-    if not secondsSinceOp or secondsSinceOp < minInterval then return end
+    if not secondsSinceOp or secondsSinceOp < minInterval then return false end
     local now = GetTime()
-    if now - lastStaleOutpostObserverPoll < minInterval then return end
+    if now - lastStaleOutpostObserverPoll < minInterval then return false end
     lastStaleOutpostObserverPoll = now
     self:SendSyncRequest({
         criticalChannel = true,
     })
+    local net = Overlord.BetaNetwork
+    if withPull and net and net.GetDirectPeers and self.GetBetaPeerFaction then
+        local myName, myFaction = self:GetPlayerFullName(), Overlord.PlayerFaction
+        local enemies, allies = {}, {}
+        for _, name in ipairs(net:GetDirectPeers()) do
+            if name ~= "" and not (self.ForeverIdentitiesMatch and self:ForeverIdentitiesMatch(name, myName)) then
+                local faction = self:GetBetaPeerFaction(name)
+                if faction and myFaction and faction ~= myFaction then
+                    enemies[#enemies + 1] = name
+                else
+                    allies[#allies + 1] = name
+                end
+            end
+        end
+        local list = #enemies > 0 and enemies or allies
+        if #list > 0 then
+            staleOutpostPullRound = staleOutpostPullRound + 1
+            self:SendSyncRequest({ betaTarget = list[(staleOutpostPullRound % #list) + 1] })
+        end
+    end
+    return true
 end
 
 local function OutpostWhereLabel(siteKey)
@@ -797,16 +1064,22 @@ local function OutpostAssaultTargetsHeldState(siteKey, stBefore, stAfter)
     local OP = Overlord.Outpost
     local heldGuild = OP:SanitizeGuildName(stBefore.ownerGuild or "")
     local previousGuild = OP:SanitizeGuildName(stAfter.previousOwnerGuild or "")
-    if heldGuild == "" or previousGuild ~= heldGuild then return false end
-    if not stBefore.ownerFaction or stAfter.previousOwnerFaction ~= stBefore.ownerFaction then return false end
-
-    local heldClaimedAt = math.floor(tonumber(stBefore.claimedAt) or 0)
-    local previousClaimedAt = math.floor(tonumber(stAfter.previousClaimedAt) or 0)
-    if heldClaimedAt > 0 and previousClaimedAt ~= heldClaimedAt then return false end
+    if heldGuild == "" then return false end
+    -- An assailant of the other faction may not know the tenant yet (1.7.2: a
+    -- capture reaches the other faction by catch-up only): an assault that names
+    -- no previous tenant still targets what we hold.
+    local tenantUnknown = previousGuild == "" and not stAfter.previousOwnerFaction
+    if not tenantUnknown then
+        if previousGuild ~= heldGuild then return false end
+        if not stBefore.ownerFaction or stAfter.previousOwnerFaction ~= stBefore.ownerFaction then return false end
+        local heldClaimedAt = math.floor(tonumber(stBefore.claimedAt) or 0)
+        local previousClaimedAt = math.floor(tonumber(stAfter.previousClaimedAt) or 0)
+        if heldClaimedAt > 0 and previousClaimedAt ~= heldClaimedAt then return false end
+    end
 
     local site = OP.GetSite and OP:GetSite(siteKey)
     if OP.IsObserverOutpostCaptureStale
-        and OP:IsObserverOutpostCaptureStale(stAfter, site, time()) then
+        and OP:IsObserverOutpostCaptureStale(stAfter, site, ClaimServerNow()) then
         return false
     end
     return true
@@ -1000,27 +1273,70 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
     if not siteKey or not Overlord.OutpostSites[siteKey] then return end
     if status and not VALID_OP_STATUS[status] then return end
     if facCode and facCode ~= "" and not remoteFac then return end
-    local remotePool = OutpostPayloadPoolAcceptable(poolStr, sender, channel)
-    if not remotePool then return end
-    local ownerSourceVerified = OcSenderMatchesPayloadGuild(sender or "", guild or "", remoteFac)
-    if not ownerSourceVerified and not self:IsStrategicSiteSenderTrusted(sender or "", remoteFac, channel, "OP", status) then
+    -- Guild names reach chat alerts and tooltips: a name no guild can have is a forgery.
+    guild = Overlord.Outpost:SanitizeGuildName(guild or "")
+    prevGuild = Overlord.Outpost:SanitizeGuildName(prevGuild or "")
+    if self.IsValidGuildSyncToken and ((guild ~= "" and not self:IsValidGuildSyncToken(guild))
+        or (prevGuild ~= "" and not self:IsValidGuildSyncToken(prevGuild))) then
         return
     end
+    local remotePool = OutpostPayloadPoolAcceptable(poolStr, sender, channel)
+    if not remotePool then return end
+    local ownerSourceVerified = OcSenderMatchesPayloadGuild(sender or "", guild, remoteFac)
     local hadTs = tsStr and tsStr ~= ""
     local remoteTs = NormalizeRemoteTimestamp(tsStr)
     if hadTs and not remoteTs then return end
     if not remoteTs then remoteTs = 0 end
     if IsStaleCampaignTimestamp(remoteTs) then return end
-    local relayPeerSource = self.IsKnownRelayPeer
-        and self:IsKnownRelayPeer(sender or "") or false
-    if relayPeerSource and not ownerSourceVerified and remoteTs <= 0 then
-        return
-    end
+    local relayCapturer = NormalizeOpCapturerName(capturerName)
+    local stLocal = Overlord.Outpost:GetState(siteKey)
+    local heldCaptureTs, mapClaimedAt = 0, nil
     if status == "held" then
-        local heldCaptureTs = math.floor(tonumber(caStr) or 0)
+        heldCaptureTs = math.floor(tonumber(caStr) or 0)
         if heldCaptureTs <= 0 then heldCaptureTs = remoteTs end
-        if heldCaptureTs <= 0 or heldCaptureTs > time() + MAX_CLOCK_SKEW
+        if heldCaptureTs <= 0 or heldCaptureTs > ClaimServerNow() + OUTPOST_CLAIM_FUTURE_SKEW
             or IsStaleCampaignTimestamp(heldCaptureTs) then
+            return
+        end
+        -- The assault we observed ended and its assailant put back the tenant we
+        -- already knew: nothing to judge, our own knowledge comes back. Only the
+        -- assailant himself (or anyone once the assault went quiet) may say so.
+        if MayRestoreObservedAssault(siteKey, stLocal, sender)
+            and Overlord.Outpost:RestorePreviousTenant(siteKey, stLocal, guild, remoteFac, heldCaptureTs, remoteTs) then
+            MaybeResetOutpostDefenderAlert(siteKey, stLocal)
+            MaybeResetOutpostAssaultAlert(siteKey, stLocal)
+            return
+        end
+        -- A held state is a capture claim (1.7.2): its capturer states it himself,
+        -- or we asked for it, or we already hold this exact event (routine copies).
+        local ok, reason, signedCapturer = self:AuthorizeOutpostClaim(
+            siteKey, guild, remoteFac, heldCaptureTs, relayCapturer, sender, channel, remotePool)
+        if not ok then
+            NoteOutpostClaimRefused("OP", reason)
+            return
+        end
+        relayCapturer = signedCapturer
+        -- The ledger keeps the written second; the map never runs ahead of the clock.
+        mapClaimedAt = math.min(heldCaptureTs, ClaimServerNow() + 5)
+    else
+        if not ownerSourceVerified
+            and not self:IsStrategicSiteSenderTrusted(sender or "", remoteFac, channel, "OP", status) then
+            return
+        end
+        local relayPeerSource = self.IsKnownRelayPeer
+            and self:IsKnownRelayPeer(sender or "") or false
+        if relayPeerSource and not ownerSourceVerified and remoteTs <= 0 then
+            return
+        end
+        -- A release of an assault we observe gives the site back to the tenant we
+        -- knew, when its assailant says so (or once the assault went quiet).
+        if status == "neutral" and stLocal and stLocal.status == "in_progress"
+            and Overlord.Outpost:SanitizeGuildName(stLocal.previousOwnerGuild or "") ~= "" then
+            if MayRestoreObservedAssault(siteKey, stLocal, sender)
+                and Overlord.Outpost:RestorePreviousTenant(siteKey, stLocal, nil, nil, nil, remoteTs) then
+                MaybeResetOutpostDefenderAlert(siteKey, stLocal)
+                MaybeResetOutpostAssaultAlert(siteKey, stLocal)
+            end
             return
         end
     end
@@ -1033,26 +1349,49 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
     PruneOpDedup(nowD)
     if not AdmitOutpostDedup(opDedup, deliveryKey, nowD) then return end
 
-    local stBefore = SnapshotOutpostTransitionState(
-        siteKey, Overlord.Outpost:GetState(siteKey))
+    local stBefore = SnapshotOutpostTransitionState(siteKey, stLocal)
     local remote = {
         status = status,
         holdTimeElapsed = tonumber(holdStr) or 0,
-        ownerGuild = guild or "",
+        ownerGuild = guild,
         ownerFaction = remoteFac,
-        claimedAt = tonumber(caStr) or 0,
+        claimedAt = mapClaimedAt or (tonumber(caStr) or 0),
         expiresAt = tonumber(exStr) or 0,
         updatedAt = remoteTs,
         holdTimeRequired = tonumber(holdReqStr) or nil,
         isContested = (contestedStr == "1"),
-        previousOwnerGuild = prevGuild or "",
+        previousOwnerGuild = prevGuild,
         previousOwnerFaction = FactionCodeToFaction(prevFacCode),
         previousClaimedAt = tonumber(prevCaStr) or 0,
         previousExpiresAt = tonumber(prevExStr) or 0,
         pool = remotePool,
-        opRelayCapturerName = NormalizeOpCapturerName(capturerName),
+        opRelayCapturerName = relayCapturer,
     }
-    local relayCapturer = remote.opRelayCapturerName or ""
+    if status == "in_progress" then
+        -- The previous tenant of an assault is what WE know, never what the assailant
+        -- writes (he often does not know it since 1.7.2, and a forged one would show
+        -- a tenant nobody captured). On a neutral site, only a capture the ledger holds.
+        local OP = Overlord.Outpost
+        if stLocal and stLocal.status == "held" and OP:SanitizeGuildName(stLocal.ownerGuild or "") ~= "" then
+            remote.previousOwnerGuild = stLocal.ownerGuild
+            remote.previousOwnerFaction = stLocal.ownerFaction
+            remote.previousClaimedAt = math.floor(tonumber(stLocal.claimedAt) or 0)
+            remote.previousExpiresAt = math.floor(tonumber(stLocal.expiresAt) or 0)
+        elseif stLocal and stLocal.status == "in_progress"
+            and OP:SanitizeGuildName(stLocal.previousOwnerGuild or "") ~= "" then
+            remote.previousOwnerGuild = stLocal.previousOwnerGuild
+            remote.previousOwnerFaction = stLocal.previousOwnerFaction
+            remote.previousClaimedAt = math.floor(tonumber(stLocal.previousClaimedAt) or 0)
+            remote.previousExpiresAt = math.floor(tonumber(stLocal.previousExpiresAt) or 0)
+        elseif remote.previousOwnerGuild ~= "" then
+            local lb = Overlord.Leaderboard
+            if not (lb and lb.HasOutpostEvent and lb:HasOutpostEvent(siteKey, remote.previousOwnerGuild,
+                remote.previousOwnerFaction, remote.previousClaimedAt, remotePool)) then
+                remote.previousOwnerGuild, remote.previousOwnerFaction = "", nil
+                remote.previousClaimedAt, remote.previousExpiresAt = 0, 0
+            end
+        end
+    end
     local objective = Overlord.OutpostSites[siteKey]
     if status == "in_progress" and objective and objective.id and relayCapturer ~= ""
         and ownerSourceVerified and self.RecordCaptureCreditProgressEvidence then
@@ -1070,7 +1409,24 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
             remote.opRelayCapturerShard = sid
         end
     end
-    Overlord.Outpost:ApplyRemoteState(siteKey, remote, true)
+    -- A capture the ledger holds as the newest tenant of the site is the truth the
+    -- map must follow, even when the map, which may have missed a capture in
+    -- between, would refuse the takeover on its own (same-faction rule).
+    local lb = Overlord.Leaderboard
+    local heldNewEvent, heldTenantChanged = false, false
+    if status == "held" and guild ~= "" and lb and lb.RecordOutpostCapture then
+        heldNewEvent, heldTenantChanged = lb:RecordOutpostCapture(
+            siteKey, guild, remoteFac, heldCaptureTs, remotePool, relayCapturer)
+    end
+    if status == "held" and lb and lb.IsOutpostLedgerTenant
+        and lb:IsOutpostLedgerTenant(siteKey, guild, remoteFac, heldCaptureTs)
+        and lb.OutpostLedgerAheadOfMap and lb:OutpostLedgerAheadOfMap(siteKey, stLocal)
+        and OutpostAdoptionJustified(siteKey, stLocal, remoteFac, lb)
+        and Overlord.Outpost.AdoptLedgerTenant then
+        Overlord.Outpost:AdoptLedgerTenant(siteKey, stLocal, remote)
+    else
+        Overlord.Outpost:ApplyRemoteState(siteKey, remote, true)
+    end
     local stAfter = Overlord.Outpost:GetState(siteKey)
     if (status == "in_progress" or status == "held")
         and Overlord.FrontActivity and Overlord.FrontActivity.RecordByZoneRef then
@@ -1078,73 +1434,37 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
             siteKey, relayCapturer ~= "" and relayCapturer or sender,
             remoteTs > 0 and remoteTs or nil)
     end
-    if status == "held" and stAfter and stAfter.status == "held"
-        and Overlord.Leaderboard and Overlord.Leaderboard.ApplyOutpostTenantSync then
-        local payloadGuild = Overlord.Outpost:SanitizeGuildName(guild or "")
-        local heldGuild = Overlord.Outpost:SanitizeGuildName(stAfter.ownerGuild or "")
-        local heldPool = NormalizePoolTag(stAfter.pool)
-        local heldTs = math.floor(tonumber(stAfter.claimedAt) or tonumber(remote.claimedAt) or remoteTs or 0)
-        if payloadGuild ~= "" and heldGuild == payloadGuild
-            and stAfter.ownerFaction == remoteFac and heldPool ~= "" and heldTs > 0 then
-            -- OP est repetable : il peut reparer le registre monotone du tenant sans
-            -- jamais crediter une capture. Toujours projeter le pool canonique post-merge :
-            -- un paquet stale accepte par le transport ne doit pas retagger un etat plus recent.
-            local tenantChanged = false
-            if not OutpostTenantProjectionMatches(
-                siteKey, heldGuild, remoteFac, heldTs, heldPool) then
-                tenantChanged = Overlord.Leaderboard:ApplyOutpostTenantSync(
-                    siteKey, heldGuild, remoteFac, heldTs, heldPool) == true
-            end
-            -- Un etat canonique held prouve au moins une prise pendant la campagne.
-            -- Poser un plancher LOC(1), jamais un +1 : les heartbeats OP repetes restent
-            -- idempotents et un total LOC plus riche (3, 4...) ne peut pas etre gonfle.
-            local countChanged = false
-            local countRow = Overlord.Leaderboard.GetOutpostCaptureCountRow
-                and Overlord.Leaderboard:GetOutpostCaptureCountRow(
-                    siteKey, heldGuild, heldPool) or nil
-            if (not countRow or math.floor(tonumber(countRow.count) or 0) <= 0)
-                and Overlord.Leaderboard.ApplyOutpostCaptureCountSync then
-                countChanged = Overlord.Leaderboard:ApplyOutpostCaptureCountSync(
-                    siteKey, heldGuild, remoteFac, 1, heldTs, heldPool) == true
-            end
-            local stateChanged = stBefore
-                and (stBefore.status ~= "held"
-                    or Overlord.Outpost:SanitizeGuildName(stBefore.ownerGuild or "") ~= heldGuild
-                    or stBefore.ownerFaction ~= remoteFac)
-            -- Capteur de l'etat tenu (1.5.1) : appris d'une annonce qui le nomme ; un
-            -- changement de proprietaire sans nom efface l'ancien.
-            local namedCapturer = Overlord.Outpost.NormalizeHeldCapturerName
-                and Overlord.Outpost:NormalizeHeldCapturerName(relayCapturer) or nil
-            if stateChanged or stAfter.heldCapturerGuild ~= heldGuild then
-                stAfter.heldCapturerName = namedCapturer
-                stAfter.heldCapturerGuild = namedCapturer and heldGuild or nil
-            elseif namedCapturer and not stAfter.heldCapturerName then
-                stAfter.heldCapturerName = namedCapturer
+    if status == "held" then
+        -- The authorized event entered the ledger above whatever the map decided (a
+        -- late copy of an older capture still counts); the map keeps its LWW merge.
+        local newEvent, tenantChanged = heldNewEvent, heldTenantChanged
+        local stateChanged = false
+        if stAfter and stAfter.status == "held" then
+            local heldGuild = Overlord.Outpost:SanitizeGuildName(stAfter.ownerGuild or "")
+            local heldTs = math.floor(tonumber(stAfter.claimedAt) or 0)
+            if guild ~= "" and heldGuild == guild
+                and stAfter.ownerFaction == remoteFac and heldTs == mapClaimedAt then
+                stateChanged = stBefore
+                    and (stBefore.status ~= "held"
+                        or Overlord.Outpost:SanitizeGuildName(stBefore.ownerGuild or "") ~= heldGuild
+                        or stBefore.ownerFaction ~= remoteFac
+                        or (stBefore.claimedAt or 0) ~= heldTs) or false
+                -- The map adopted this claim: it names the capturer the ledger kept
+                -- for the event (the first one accepted, never a later rename).
+                local kept = lb and lb.GetOutpostEventCapturer
+                    and lb:GetOutpostEventCapturer(siteKey, guild, remoteFac, heldCaptureTs, remotePool) or nil
+                stAfter.heldCapturerName = kept or relayCapturer
                 stAfter.heldCapturerGuild = heldGuild
-            end
-            if tenantChanged or countChanged or stateChanged then
-                if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
-                    Overlord.LeaderboardUI:RefreshIfVisible()
+                if stateChanged and stBefore and stBefore.status == "in_progress"
+                    and (ClaimServerNow() - heldTs) <= 90
+                    and self.PrintOutpostCaptureAlert then
+                    self:PrintOutpostCaptureAlert(siteKey, heldGuild, remoteFac, heldTs)
                 end
             end
         end
-    end
-    -- Alertes chat depuis la sync OP (assaut, defense, capture terminee).
-    if status == "held" and stAfter and stAfter.status == "held" then
-        local payloadGuild = Overlord.Outpost:SanitizeGuildName(guild or "")
-        local heldGuild = Overlord.Outpost:SanitizeGuildName(stAfter.ownerGuild or "")
-        local heldTs = math.floor(tonumber(stAfter.claimedAt) or tonumber(remote.claimedAt) or remoteTs or 0)
-        if payloadGuild ~= "" and heldGuild == payloadGuild
-            and stAfter.ownerFaction == remoteFac and heldTs > 0 then
-            local stateChanged = stBefore
-                and (stBefore.status ~= "held"
-                    or Overlord.Outpost:SanitizeGuildName(stBefore.ownerGuild or "") ~= heldGuild
-                    or stBefore.ownerFaction ~= remoteFac)
-            if stateChanged and stBefore and stBefore.status == "in_progress"
-                and (time() - heldTs) <= 90
-                and self.PrintOutpostCaptureAlert then
-                self:PrintOutpostCaptureAlert(siteKey, heldGuild, remoteFac, heldTs)
-            end
+        if (newEvent or tenantChanged or stateChanged)
+            and Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
+            Overlord.LeaderboardUI:RefreshIfVisible()
         end
     end
     local defenderAlertState = stAfter
@@ -1152,7 +1472,7 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
         and stAfter and stAfter.status ~= "in_progress" then
         defenderAlertState = {
             status = "in_progress",
-            ownerGuild = guild or "",
+            ownerGuild = guild,
             ownerFaction = remoteFac,
             holdTimeElapsed = remote.holdTimeElapsed,
             holdTimeRequired = remote.holdTimeRequired,
@@ -1169,120 +1489,103 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
         MaybeResetOutpostDefenderAlert(siteKey, stAfter)
     end
     MaybeResetOutpostAssaultAlert(siteKey, stAfter)
-    if (channel == "WHISPER" or (channel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) and payload and payload ~= ""
-        and OutpostPayloadHasExplicitLinkedPool(remotePool) then
-        if status == "in_progress" then
-            local payloadGuild = Overlord.Outpost:SanitizeGuildName(guild or "")
-            local adoptedProgress = stAfter and stAfter.status == "in_progress"
-                and payloadGuild ~= ""
-                and Overlord.Outpost:SanitizeGuildName(stAfter.ownerGuild or "") == payloadGuild
-                and stAfter.ownerFaction == remoteFac
-            if not adoptedProgress then return end
-            local transitioned = stBefore and stBefore.status ~= "in_progress"
-                and stAfter and stAfter.status == "in_progress"
-            local adoptedTick = stBefore and stAfter
-                and stBefore.status == "in_progress" and stAfter.status == "in_progress"
-                and (math.floor(tonumber(stAfter.holdTimeElapsed) or 0) ~= (stBefore.holdTimeElapsed or 0)
-                    or (stAfter.isContested and true or false) ~= (stBefore.isContested and true or false)
-                    or (tonumber(stAfter.updatedAt) or 0) ~= (tonumber(stBefore.updatedAt) or 0))
-            if not transitioned and not adoptedTick then return end
-            BroadcastOutpostToGroup("OP", payload)
-            self:SendToChannel("OP", payload, true)
-        elseif status == "held" and stAfter and stAfter.status == "held" then
-            local payloadGuild = Overlord.Outpost:SanitizeGuildName(guild or "")
-            local adoptedTenantChange = payloadGuild ~= ""
-                and Overlord.Outpost:SanitizeGuildName(stAfter.ownerGuild or "") == payloadGuild
-                and stAfter.ownerFaction == remoteFac
-                and stBefore
-                and (stBefore.status ~= "held"
-                    or Overlord.Outpost:SanitizeGuildName(stBefore.ownerGuild or "") ~= payloadGuild
-                    or stBefore.ownerFaction ~= remoteFac)
-            if adoptedTenantChange then
-                BroadcastOutpostToGroup("OP", payload)
-                self:SendToChannel("OP", payload, true)
-            end
-        end
+    -- An assault in progress learned from a reply is reposted on the local paths;
+    -- a held state is not: a capture claim is only believed from its capturer.
+    if status == "in_progress"
+        and (channel == "WHISPER" or (channel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch()))
+        and payload and payload ~= "" and OutpostPayloadHasExplicitLinkedPool(remotePool) then
+        local adoptedProgress = stAfter and stAfter.status == "in_progress"
+            and guild ~= ""
+            and Overlord.Outpost:SanitizeGuildName(stAfter.ownerGuild or "") == guild
+            and stAfter.ownerFaction == remoteFac
+        if not adoptedProgress then return end
+        local transitioned = stBefore and stBefore.status ~= "in_progress"
+            and stAfter and stAfter.status == "in_progress"
+        local adoptedTick = stBefore and stAfter
+            and stBefore.status == "in_progress" and stAfter.status == "in_progress"
+            and (math.floor(tonumber(stAfter.holdTimeElapsed) or 0) ~= (stBefore.holdTimeElapsed or 0)
+                or (stAfter.isContested and true or false) ~= (stBefore.isContested and true or false)
+                or (tonumber(stAfter.updatedAt) or 0) ~= (tonumber(stBefore.updatedAt) or 0))
+        if not transitioned and not adoptedTick then return end
+        BroadcastOutpostToGroup("OP", payload)
+        self:SendToChannel("OP", payload, true)
     end
 end
 
 function Overlord.Sync:OnReceiveOutpostCapture(payload, sender, sourceChannel)
-    if not payload or not Overlord.Outpost or OutpostSyncBlocked() then return end
-    local siteKey, guild, facCode, tsStr, remotePool = strsplit(":", payload, 5)
-    if not siteKey or not Overlord.OutpostSites[siteKey] then return end
+    if not payload or not Overlord.Outpost or OutpostSyncBlocked() then return false end
+    local siteKey, guild, facCode, tsStr, remotePool, capturerName = strsplit(":", payload, 6)
+    if not siteKey or not Overlord.OutpostSites[siteKey] then return false end
     local wirePool = NormalizePoolTag(remotePool)
     remotePool = OutpostPayloadPoolAcceptable(wirePool, sender, sourceChannel)
-    if not remotePool then return end
+    if not remotePool then return false end
     local fac = FactionCodeToFaction(facCode)
-    if not fac then return end
-    local hadTs = tsStr and tsStr ~= ""
-    local remoteTs = NormalizeRemoteTimestamp(tsStr)
-    if hadTs and not remoteTs then return end
-    if not remoteTs or remoteTs <= 0 then remoteTs = time() end
-    if IsStaleCampaignTimestamp(remoteTs) then return end
+    if not fac then return false end
+    -- The time is the identity of the signed event: taken as written (never
+    -- rewritten to the local clock, every client must hold the same event).
+    local remoteTs = ParseClaimTimestamp(tsStr)
+    if not remoteTs or IsStaleCampaignTimestamp(remoteTs) then return false end
     guild = Overlord.Outpost:SanitizeGuildName(guild or "")
-    local ownerSourceVerified = OcSenderMatchesPayloadGuild(sender or "", guild, fac)
-    -- OC est un evenement one-shot : seul le membre de la guilde gagnante qui
-    -- emet directement peut l'appliquer. Attendre trois recepteurs ou une preuve
-    -- murale locale faisait rater la capture et le classement aux late joiners.
-    if not ownerSourceVerified then return end
-    local captureAccepted = ShouldAcceptOutpostCapture(
-        siteKey, guild, fac, remoteTs, sender, sourceChannel)
-    if not captureAccepted then return end
-    local dedupKey = string.format("%s:%s:%s:%d:%s",
-        siteKey, guild, facCode or "", remoteTs, remotePool)
+    local capturer = NormalizeOpCapturerName(capturerName)
+    -- OC is the one-shot live final: the capturer himself states it (a group mate
+    -- or a relay copy is refused); a peer we asked may carry it by content.
+    local ok, reason, signedCapturer = self:AuthorizeOutpostClaim(
+        siteKey, guild, fac, remoteTs, capturer, sender, sourceChannel, remotePool)
+    if not ok then
+        NoteOutpostClaimRefused("OC", reason)
+        return false
+    end
+    capturer = signedCapturer
+    local dedupKey = string.format("%s:%s:%s:%d:%s:%s",
+        siteKey, guild, facCode or "", remoteTs, remotePool, capturer:lower())
     local now = GetTime()
     PruneOpDedup(now)
-    if not AdmitOutpostDedup(ocDedup, dedupKey, now) then return end
+    if not AdmitOutpostDedup(ocDedup, dedupKey, now) then return true end
     if Overlord.FrontActivity and Overlord.FrontActivity.RecordByZoneRef then
-        Overlord.FrontActivity:RecordByZoneRef(siteKey, sender, remoteTs)
+        Overlord.FrontActivity:RecordByZoneRef(siteKey, capturer, remoteTs)
     end
+    local lb = Overlord.Leaderboard
     local leaderboardChanged = false
-    if Overlord.Leaderboard and Overlord.Leaderboard.RecordOutpostCapture then
-        leaderboardChanged = Overlord.Leaderboard:RecordOutpostCapture(
-            siteKey, guild, fac, remoteTs, remotePool) == true
+    if lb and lb.RecordOutpostCapture then
+        local newEvent, tenantChanged = lb:RecordOutpostCapture(
+            siteKey, guild, fac, remoteTs, remotePool, capturer)
+        leaderboardChanged = newEvent or tenantChanged
     end
+    -- The map names the capturer the ledger kept for this event (the first accepted).
+    local keptCapturer = lb and lb.GetOutpostEventCapturer
+        and lb:GetOutpostEventCapturer(siteKey, guild, fac, remoteTs, remotePool) or capturer
     local objective = Overlord.OutpostSites[siteKey]
-    local capturer = NormalizeOpCapturerName(sender)
-    if objective and objective.id and capturer ~= "" and self.CanCreditDirectCapture
+    if objective and objective.id and self.CanCreditDirectCapture
         and self:CanCreditDirectCapture(sender, capturer, objective.id, fac)
-        and Overlord.Leaderboard and Overlord.Leaderboard.CreditPlayerObjectiveCapture then
+        and lb and lb.CreditPlayerObjectiveCapture then
         local classToken = self.ResolveContributorClassToken
             and self:ResolveContributorClassToken(capturer) or nil
-        Overlord.Leaderboard:CreditPlayerObjectiveCapture(
-            capturer, objective.id, fac, remoteTs, true, classToken)
+        lb:CreditPlayerObjectiveCapture(capturer, objective.id, fac, remoteTs, true, classToken)
     end
+    -- The ledger keeps the written second; the map never runs ahead of the clock.
+    local mapTs = math.min(remoteTs, ClaimServerNow() + 5)
+    local captureAccepted = ShouldAcceptOutpostCapture(siteKey, guild, fac, mapTs)
     local stEarly = Overlord.Outpost:GetState(siteKey)
-    if stEarly and stEarly.status == "held" then
-        local heldGuild = Overlord.Outpost:SanitizeGuildName(stEarly.ownerGuild or "")
-        local heldPool = NormalizePoolTag(stEarly.pool)
-        if heldGuild ~= "" and heldGuild == guild and stEarly.ownerFaction == fac
-            and heldPool == remotePool then
-            if leaderboardChanged and Overlord.LeaderboardUI
-                and Overlord.LeaderboardUI.RefreshIfVisible then
-                Overlord.LeaderboardUI:RefreshIfVisible()
-            end
-            return
+    if not captureAccepted or (stEarly and stEarly.status == "held"
+        and Overlord.Outpost:SanitizeGuildName(stEarly.ownerGuild or "") == guild
+        and stEarly.ownerFaction == fac and NormalizePoolTag(stEarly.pool) == remotePool) then
+        if leaderboardChanged and Overlord.LeaderboardUI
+            and Overlord.LeaderboardUI.RefreshIfVisible then
+            Overlord.LeaderboardUI:RefreshIfVisible()
         end
+        return true
     end
-
-    -- Capteur : celui des heartbeats in_progress (pas l'emetteur de ce OC, qui peut
-    -- etre un membre qui le republie) ; CompleteCapture le reprend avant d'effacer.
-    if not Overlord.Outpost:CompleteCapture(siteKey, guild, fac, remoteTs, remotePool, true) then return end
+    if not Overlord.Outpost:CompleteCapture(siteKey, guild, fac, mapTs, remotePool, true, keptCapturer) then
+        if leaderboardChanged and Overlord.LeaderboardUI
+            and Overlord.LeaderboardUI.RefreshIfVisible then
+            Overlord.LeaderboardUI:RefreshIfVisible()
+        end
+        return true
+    end
     if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
         Overlord.LeaderboardUI:RefreshIfVisible()
     end
-    -- Si la verite arrive par communaute, la republier sur les chemins primaires locaux.
-    -- Pas de re-fanout communaute ici : le relais large est 1-hop pour eviter l'explosion.
-    if (sourceChannel == "WHISPER" or (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) and payload ~= "" and OutpostPayloadHasExplicitLinkedPool(wirePool) then
-        BroadcastOutpostToGroup("OC", payload)
-        self:SendToChannel("OC", payload, true)
-    end
-    -- OC recu en raid/party (souvent Warmode mixte) : republier sur le canal meme faction
-    -- pour les guildes qui ne sont pas dans le groupe du capteur.
-    if (sourceChannel == "RAID" or sourceChannel == "PARTY") and payload ~= ""
-        and OutpostPayloadHasExplicitLinkedPool(wirePool) then
-        self:SendToChannel("OC", payload, true)
-    end
+    return true
 end
 
 -- Il existe sept sites : une SR territoriale doit pouvoir transporter
@@ -1356,19 +1659,23 @@ function Overlord.Sync:AppendLeaderboardOutpostToSrQueue(queue)
     for _, row in ipairs(rows) do
         local facCode = FactionToCode(row.faction)
         local rowPool = NormalizePoolTag(row.pool)
-        if facCode ~= "" and row.siteKey and row.guild and row.guild ~= "" and rowPool ~= "" then
-            local payload = string.format("%s:%s:%s:%d:%d:%s",
-                row.siteKey, row.guild, facCode, row.claimedAt or 0, row.epoch or 0, rowPool)
+        local capturer = NormalizeOpCapturerName(row.capturer)
+        if facCode ~= "" and row.siteKey and row.guild and row.guild ~= "" and rowPool ~= ""
+            and capturer ~= "" then
+            local payload = string.format("%s:%s:%s:%d:%d:%s:%s",
+                row.siteKey, row.guild, facCode, row.claimedAt or 0, row.epoch or 0, rowPool, capturer)
             table.insert(queue, { type = "LO", data = payload })
         end
     end
 end
 
--- LOC en SR : compteur total de captures par (avant-poste, guilde), fusionne en max.
--- Il n'existe que 7 sites d'avant-poste ; le nombre de couples (site, guilde) avec captures est
--- donc petit en pratique. La borne sert seulement de garde-fou anti-bloat : on la garde large
--- pour qu'un retardataire recoive TOUS les couples au login (convergence > rattrapage tardif),
--- la troncature ne devant jamais frapper un campagne reelle. Tri par count desc (essentiel d'abord).
+-- LOC en SR : les captures signees de chaque couple (avant-poste, guilde). Il
+-- n'existe que douze sites ; le nombre de couples reste petit en pratique. La borne
+-- (en paquets) sert de garde-fou anti-bloat : on la garde large pour qu'un
+-- retardataire recoive TOUS les couples au login (convergence > rattrapage tardif).
+-- Une ligne ne prend que quelques paquets par reponse (SelectOutpostEventPackets),
+-- les reponses suivantes parcourent le reste de son historique.
+-- Tri par nombre de captures decroissant (essentiel d'abord).
 local SR_OUTPOST_COUNT_MAX = 64
 local SR_OUTPOST_ROW_BUCKETS = 256
 local SR_OUTPOST_ROW_BUCKETS_PER_REQUEST = 16
@@ -1382,25 +1689,21 @@ function Overlord.Sync:AppendLeaderboardOutpostCountToSrQueue(
     evidencePageNonce = math.floor(tonumber(evidencePageNonce) or 0)
     local rowBlockCount = SR_OUTPOST_ROW_BUCKETS / SR_OUTPOST_ROW_BUCKETS_PER_REQUEST
     local rowBlock = evidencePageNonce % rowBlockCount
-    local emittedKeys = {}
-    local function rowStableKey(row)
-        return table.concat({ row.siteKey or "", (row.guild or ""):lower(),
-            NormalizePoolTag(row.pool) }, ":")
-    end
+    -- Rotation of the older event slices: the requester's nonce when it has one,
+    -- this responder's cursor otherwise (legacy requesters).
+    local rotation = hasEvidencePage and math.floor(evidencePageNonce / rowBlockCount)
+        or srLegacyOutpostCountCursor
     local function appendRow(row)
         if not row or emitted >= SR_OUTPOST_COUNT_MAX then return false end
-        local facCode = FactionToCode(row.faction)
-        local rowPool = NormalizePoolTag(row.pool)
-        if facCode ~= "" and row.siteKey and row.guild and row.guild ~= ""
-            and (row.count or 0) > 0 and rowPool ~= "" then
-            local payload = string.format("%s:%s:%s:%d:%d:%d:%s",
-                row.siteKey, row.guild, facCode, row.count or 0, row.lastTs or 0, row.epoch or 0, rowPool)
-            table.insert(queue, { type = "LOC", data = payload })
-            emittedKeys[rowStableKey(row)] = true
+        local packets = type(row.packets) == "table" and row.packets or nil
+        if not packets or #packets == 0 then return false end
+        packets = SelectOutpostEventPackets(packets, rotation)
+        for i = 1, #packets do
+            if emitted >= SR_OUTPOST_COUNT_MAX then break end
+            table.insert(queue, { type = "LOC", data = packets[i] })
             emitted = emitted + 1
-            return true
         end
-        return false
+        return true
     end
     local fixed = math.min(#rows, 16, SR_OUTPOST_COUNT_MAX)
     for i = 1, fixed do appendRow(rows[i]) end
@@ -1430,6 +1733,9 @@ function Overlord.Sync:AppendLeaderboardOutpostCountToSrQueue(
             if emitted >= SR_OUTPOST_COUNT_MAX then break end
             appendRow(row)
         end
+    elseif not hasEvidencePage then
+        -- No row beyond the fixed ones: still move the slice rotation along.
+        srLegacyOutpostCountCursor = srLegacyOutpostCountCursor + 1
     end
 end
 
@@ -1439,15 +1745,19 @@ function Overlord.Sync:BroadcastHeldOutpostStates()
     if Overlord.IsCaptureSyncPending and Overlord:IsCaptureSyncPending() then return end
     for siteKey in pairs(Overlord.OutpostSites) do
         local st = Overlord.Outpost:GetState(siteKey)
-        if st and st.status == "held" and (st.ownerGuild or "") ~= "" then
+        -- 1.7.2: a held state is a capture claim believed from its capturer only;
+        -- re-announcing the capture of another player costs traffic for nothing.
+        if st and st.status == "held" and (st.ownerGuild or "") ~= ""
+            and st.heldCapturerName and self.ForeverIdentitiesMatch
+            and self:ForeverIdentitiesMatch(self:GetPlayerFullName() or "", st.heldCapturerName) then
             self:BroadcastOutpostState(siteKey, false)
         end
     end
 end
 
-function Overlord.Sync:BroadcastLeaderboardOutpostTenant(siteKey, guild, faction, claimedTs)
+function Overlord.Sync:BroadcastLeaderboardOutpostTenant(siteKey, guild, faction, claimedTs, capturer)
     if not siteKey or OutpostSyncBlocked() then return end
-    local payload = BuildLeaderboardOutpostTenantPayload(siteKey, guild, faction, claimedTs)
+    local payload = BuildLeaderboardOutpostTenantPayload(siteKey, guild, faction, claimedTs, capturer)
     if not payload then return end
     local sendKey = payload
     local now = GetTime()
@@ -1463,125 +1773,112 @@ function Overlord.Sync:BroadcastLeaderboardOutpostTenant(siteKey, guild, faction
     C_Timer.After(OP_CAPTURE_REPLAY_DELAY_1, emitTenant)
 end
 
+-- LO: "site:guild:fac:claimedAt:epoch:pool:capturer", one signed capture.
+-- Returns true when the claim was accepted; an accepted row from the peer we asked
+-- for outpost history confirms that round (fresh when it brought a new event).
 function Overlord.Sync:OnReceiveLeaderboardOutpostTenant(payload, sender, sourceChannel)
-    if not payload or not Overlord.Leaderboard or OutpostSyncBlocked() then return end
-    local siteKey, guild, facCode, claimedStr, epochStr, remotePool = strsplit(":", payload, 6)
-    if not siteKey or not Overlord.OutpostSites[siteKey] then return end
+    if not payload or not Overlord.Leaderboard or OutpostSyncBlocked() then return false end
+    if not Overlord.Leaderboard.RecordOutpostCapture then return false end
+    local siteKey, guild, facCode, claimedStr, epochStr, remotePool, capturerName = strsplit(":", payload, 7)
+    if not siteKey or not Overlord.OutpostSites[siteKey] then return false end
     local wirePool = NormalizePoolTag(remotePool)
     remotePool = OutpostPayloadPoolAcceptable(wirePool, sender, sourceChannel)
-    if not remotePool then return end
+    if not remotePool then return false end
     local fac = FactionCodeToFaction(facCode)
-    if not fac then return end
+    if not fac then return false end
     local remoteEpoch = tonumber(epochStr)
-    if not IsCurrentSyncCampaignEpoch(remoteEpoch) then return end
-    local claimedAt = NormalizeRemoteTimestamp(claimedStr)
-    if not claimedAt or claimedAt <= 0 then return end
-    if not IsOutpostLeaderboardTimestampCurrent(claimedAt, remoteEpoch) then return end
+    if not IsCurrentSyncCampaignEpoch(remoteEpoch) then return false end
+    local claimedAt = ParseClaimTimestamp(claimedStr)
+    if not claimedAt or not IsOutpostLeaderboardTimestampCurrent(claimedAt, remoteEpoch) then return false end
     guild = Overlord.Outpost and Overlord.Outpost.SanitizeGuildName
         and Overlord.Outpost:SanitizeGuildName(guild or "") or (guild or "")
-    if guild == "" then return end
-    if not SenderRealmMatchesCurrentOutpostPool(sender or "", sourceChannel) then return end
-    if not self:IsStrategicSiteSenderTrusted(sender or "", fac, sourceChannel, "LO") then return end
-    local dedupKey = string.format("%s:%s:%s:%d:%s",
-        siteKey, guild, facCode or "", claimedAt, remotePool)
+    if guild == "" then return false end
+    if not SenderRealmMatchesCurrentOutpostPool(sender or "", sourceChannel) then return false end
+    local ok, reason, capturer = self:AuthorizeOutpostClaim(
+        siteKey, guild, fac, claimedAt, capturerName, sender, sourceChannel, remotePool)
+    if not ok then
+        NoteOutpostClaimRefused("LO", reason)
+        return false
+    end
+    local dedupKey = string.format("%s:%s:%s:%d:%s:%s",
+        siteKey, guild, facCode or "", claimedAt, remotePool, capturer:lower())
     local now = GetTime()
     PruneOpDedup(now)
-    if not AdmitOutpostDedup(loDedup, dedupKey, now) then return end
-
-    local tenantChanged = Overlord.Leaderboard:ApplyOutpostTenantSync(
-        siteKey, guild, fac, claimedAt, remotePool) == true
-    local countChanged = false
-    if Overlord.Leaderboard.EnsureOutpostCaptureCounted then
-        -- Le credit fallback du LO valide est independant du tenant courant : un LO ancien
-        -- recu apres un LO recent doit encore compter sa propre capture.
-        countChanged = Overlord.Leaderboard:EnsureOutpostCaptureCounted(
-            siteKey, guild, fac, claimedAt, remotePool) == true
+    local newEvent, tenantChanged = false, false
+    if AdmitOutpostDedup(loDedup, dedupKey, now) and reason ~= "known" then
+        newEvent, tenantChanged = Overlord.Leaderboard:RecordOutpostCapture(
+            siteKey, guild, fac, claimedAt, remotePool, capturer)
     end
-    if not tenantChanged and not countChanged then return end
+    if self.NoteOutpostHistoryDelivery then self:NoteOutpostHistoryDelivery(sender, newEvent) end
+    if not newEvent and not tenantChanged then return true end
     if Overlord.Outpost and Overlord.Outpost.RefreshOutpostPresentation then
         Overlord.Outpost:RefreshOutpostPresentation(siteKey)
     end
     if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
         Overlord.LeaderboardUI:RefreshIfVisible()
     end
-    if (sourceChannel == "WHISPER" or (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) and payload ~= "" and OutpostPayloadHasExplicitLinkedPool(wirePool) then
-        BroadcastOutpostToGroup("LO", payload)
-        self:SendToChannel("LO", payload, true)
-    end
-    if (sourceChannel == "RAID" or sourceChannel == "PARTY") and payload ~= ""
-        and OutpostPayloadHasExplicitLinkedPool(wirePool) then
-        self:SendToChannel("LO", payload, true)
-    end
+    return true
 end
 
-function Overlord.Sync:BroadcastLeaderboardOutpostCount(siteKey, guild, faction, count, latestTs)
-    if not siteKey or OutpostSyncBlocked() then return end
-    local payload = BuildLeaderboardOutpostCountPayload(siteKey, guild, faction, count, latestTs)
-    if not payload then return end
-    local now = GetTime()
-    PruneOpDedup(now)
-    if not AdmitOutpostDedup(locSendDedup, payload, now) then return end
-    BroadcastOutpostToGroup("LOC", payload)
-    self:SendToChannel("LOC", payload, true)
-    BroadcastOutpostToRelay("LOC", payload)
-end
-
+-- LOC: "site:guild:fac:epoch:pool:ts=Given Family,ts=...", the signed captures of
+-- one row. Each event is judged on its own: live from its capturer, or by content
+-- in a reply we asked for. Returns true when at least one event was accepted.
 function Overlord.Sync:OnReceiveLeaderboardOutpostCount(payload, sender, sourceChannel)
-    if not payload or not Overlord.Leaderboard or OutpostSyncBlocked() then return end
-    if not Overlord.Leaderboard.ApplyOutpostCaptureCountSync then return end
-    local siteKey, guild, facCode, countStr, latestTsStr, epochStr, remotePool = strsplit(":", payload, 7)
-    if not siteKey or not Overlord.OutpostSites[siteKey] then return end
+    if not payload or not Overlord.Leaderboard or OutpostSyncBlocked() then return false end
+    if not Overlord.Leaderboard.RecordOutpostCapture then return false end
+    local siteKey, guild, facCode, epochStr, remotePool, eventsStr = strsplit(":", payload, 6)
+    if not siteKey or not Overlord.OutpostSites[siteKey] then return false end
     local wirePool = NormalizePoolTag(remotePool)
     remotePool = OutpostPayloadPoolAcceptable(wirePool, sender, sourceChannel)
-    if not remotePool then return end
+    if not remotePool then return false end
     local fac = FactionCodeToFaction(facCode)
-    if not fac then return end
+    if not fac then return false end
     local remoteEpoch = tonumber(epochStr)
-    if not IsCurrentSyncCampaignEpoch(remoteEpoch) then return end
-    local count = math.floor(tonumber(countStr) or 0)
-    if count <= 0 then return end
-    -- Borne anti-poison sur latestTs : un ts absurde dans le futur ferait monter row.lastTs trop
-    -- haut et BLOQUERAIT les futurs +1 (RecordOutpostCapture n'incremente que si ts > lastTs).
-    -- On le passe par la meme normalisation que les autres ts (rejet futur lointain, clamp now).
-    local latestTs = NormalizeRemoteTimestamp(latestTsStr) or 0
-    if latestTs > 0 and not IsOutpostLeaderboardTimestampCurrent(
-        latestTs, remoteEpoch) then latestTs = 0 end
+    if not IsCurrentSyncCampaignEpoch(remoteEpoch) then return false end
     guild = Overlord.Outpost and Overlord.Outpost.SanitizeGuildName
         and Overlord.Outpost:SanitizeGuildName(guild or "") or (guild or "")
-    if guild == "" then return end
-    if not SenderRealmMatchesCurrentOutpostPool(sender or "", sourceChannel) then return end
-    if not self:IsStrategicSiteSenderTrusted(sender or "", fac, sourceChannel, "LOC") then return end
-    local dedupKey = string.format("%s:%s:%s:%d:%d:%s",
-        siteKey, guild, facCode or "", count, latestTs, remotePool)
+    if guild == "" then return false end
+    if type(eventsStr) ~= "string" or eventsStr == "" then return false end
+    if not SenderRealmMatchesCurrentOutpostPool(sender or "", sourceChannel) then return false end
+    local deliveryKey = tostring(sender or "") .. ":" .. payload
     local now = GetTime()
     PruneOpDedup(now)
-    if not AdmitOutpostDedup(locDedup, dedupKey, now) then return end
+    if OutpostDedupIsRecent(locDedup, deliveryKey, now) then return true end
 
-    if not Overlord.Leaderboard:ApplyOutpostCaptureCountSync(siteKey, guild, fac, count, latestTs, remotePool) then
-        return
+    local accepted, fresh, changed, tenantMoved, parsed = false, false, false, false, 0
+    for tsStr, name in eventsStr:gmatch("([^,=]+)=([^,]+)") do
+        parsed = parsed + 1
+        if parsed > (Overlord.Leaderboard.OUTPOST_EVENTS_PER_PACKET or 6) then break end
+        local ts = ParseClaimTimestamp(tsStr)
+        if ts and IsOutpostLeaderboardTimestampCurrent(ts, remoteEpoch) then
+            local ok, reason, capturer = self:AuthorizeOutpostClaim(
+                siteKey, guild, fac, ts, name, sender, sourceChannel, remotePool)
+            if ok then
+                accepted = true
+                if reason ~= "known" then
+                    local newEvent, tenantChanged = Overlord.Leaderboard:RecordOutpostCapture(
+                        siteKey, guild, fac, ts, remotePool, capturer)
+                    if newEvent then fresh = true end
+                    if newEvent or tenantChanged then changed = true end
+                    if tenantChanged then tenantMoved = true end
+                end
+            else
+                NoteOutpostClaimRefused("LOC", reason)
+            end
+        end
+    end
+    -- Only a packet with an accepted event is remembered: a refused copy must not
+    -- mask the same packet from its capturer a moment later.
+    if accepted then RememberOutpostDedup(locDedup, deliveryKey, now) end
+    if accepted and self.NoteOutpostHistoryDelivery then self:NoteOutpostHistoryDelivery(sender, fresh) end
+    if not changed then return accepted end
+    if tenantMoved and Overlord.Outpost and Overlord.Outpost.RefreshOutpostPresentation then
+        Overlord.Outpost:RefreshOutpostPresentation(siteKey)
     end
     if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
         Overlord.LeaderboardUI:RefreshIfVisible()
     end
-    local relayPayload = string.format("%s:%s:%s:%d:%d:%d:%s",
-        siteKey, guild, facCode or "", count, latestTs, remoteEpoch, remotePool)
-    -- Relais 1-hop comme LO : republier si le pool appartient au groupe Outpost local.
-    if (sourceChannel == "WHISPER" or (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) and payload ~= "" and OutpostPayloadHasExplicitLinkedPool(wirePool) then
-        BroadcastOutpostToGroup("LOC", relayPayload)
-        self:SendToChannel("LOC", relayPayload, true)
-    end
-    if (sourceChannel == "RAID" or sourceChannel == "PARTY") and payload ~= ""
-        and OutpostPayloadHasExplicitLinkedPool(wirePool) then
-        self:SendToChannel("LOC", relayPayload, true)
-    end
-end
-
--- OE intermediaire (pre-v5) : ignore volontairement, voir commentaire du handler.
-function Overlord.Sync:OnReceiveLeaderboardOutpostEvidence(payload, sender, sourceChannel)
-    -- v5 : les preuves brutes ne sont plus une surface reseau. LOC transporte le total
-    -- valide et son ancre temporelle, suffisants pour la convergence semantique du ladder.
-    -- Garder le handler no-op evite une erreur avec un client intermediaire ayant connu OE.
-    return
+    return true
 end
 
 -- Outpost/fortress leaderboard history (1.2.4): tenants (LO) and capture counts

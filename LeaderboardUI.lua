@@ -1626,6 +1626,36 @@ function Overlord.LeaderboardUI.OnGuildRowEnter(row)
     GameTooltip:Show()
 end
 
+-- 1.7.2: hovering a keep or outpost row names the character who took the site
+-- (the capture is signed by him on the network). Read from the row entry, no scan.
+function Overlord.LeaderboardUI.OnSiteRowEnter(row)
+    local entry = row and row._olSiteEntry
+    if not entry or not GameTooltip then return end
+    GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+    local r, g, b = 1, 1, 1
+    if row.name and row.name.GetTextColor then r, g, b = row.name:GetTextColor() end
+    GameTooltip:AddLine("<" .. tostring(entry.guild or "") .. ">", r or 1, g or 1, b or 1)
+    local siteName = entry.keepSiteKey and GetGuildKeepSiteDisplayName(entry.keepSiteKey)
+        or GetOutpostSiteDisplayName(entry.outpostSiteKey)
+    if siteName and siteName ~= "" then
+        GameTooltip:AddLine(siteName, 0.8, 0.8, 0.8)
+    end
+    local capturer = entry.capturer
+    if type(capturer) == "string" and capturer ~= "" then
+        local sync = Overlord.Sync
+        local shown = (sync and sync.CanonicalForeverName and sync:CanonicalForeverName(capturer)) or capturer
+        GameTooltip:AddLine(string.format(L.LB_OUTPOST_CAPTURED_BY or "Taken by %s", shown), 0.4, 1, 0.4)
+    end
+    GameTooltip:Show()
+end
+
+function Overlord.LeaderboardUI.OnSiteRowWheel(row, delta)
+    local scroll = lbFrame and (row and row._olSiteEntry and row._olSiteEntry.keepSiteKey
+        and lbFrame.scrollGuildKeep or lbFrame.scrollOutpost)
+    local handler = scroll and scroll:GetScript("OnMouseWheel")
+    if handler then handler(scroll, delta) end
+end
+
 function Overlord.LeaderboardUI.OnGuildRowWheel(_, delta)
     local scroll = lbFrame and lbFrame.scrollGuild
     local handler = scroll and scroll:GetScript("OnMouseWheel")
@@ -1789,6 +1819,12 @@ function Overlord.LeaderboardUI:CreateGuildKeepRow(parent, index, yOffset, P)
     row.wins:SetWidth(LB_GK_WINS_W)
     row.wins:SetJustifyH("CENTER")
 
+    row:EnableMouse(true)
+    row:SetScript("OnEnter", Overlord.LeaderboardUI.OnSiteRowEnter)
+    row:SetScript("OnLeave", GameTooltip_Hide)
+    row:EnableMouseWheel(true)
+    row:SetScript("OnMouseWheel", Overlord.LeaderboardUI.OnSiteRowWheel)
+
     row:Hide()
     return row
 end
@@ -1845,6 +1881,12 @@ function Overlord.LeaderboardUI:CreateOutpostRow(parent, index, yOffset, P)
     row.captures:SetPoint("CENTER", row, "CENTER", LB_OP_COL_CAPTURES, 0)
     row.captures:SetWidth(LB_OP_CAPTURES_W)
     row.captures:SetJustifyH("CENTER")
+
+    row:EnableMouse(true)
+    row:SetScript("OnEnter", Overlord.LeaderboardUI.OnSiteRowEnter)
+    row:SetScript("OnLeave", GameTooltip_Hide)
+    row:EnableMouseWheel(true)
+    row:SetScript("OnMouseWheel", Overlord.LeaderboardUI.OnSiteRowWheel)
 
     row:Hide()
     return row
@@ -2118,6 +2160,13 @@ RenderGuildKeepRows = function(force)
         if row and entry then
             used = slot
             PrepareVirtualRow(row, dataIndex, GUILD_ROW_HEIGHT, P)
+            -- Reused virtual rows: the tooltip follows the site shown.
+            if row._olSiteEntry ~= entry then
+                row._olSiteEntry = entry
+                if GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(row) then
+                    Overlord.LeaderboardUI.OnSiteRowEnter(row)
+                end
+            end
             local rank = lbFrame._lbView.ranks and lbFrame._lbView.ranks.sortedGuildKeeps[dataIndex] or dataIndex
             local medalColor = MEDAL_COLORS[rank]
             local keepName = GetGuildKeepSiteDisplayName(entry.keepSiteKey)
@@ -2176,6 +2225,13 @@ RenderOutpostRows = function(force)
         if row and entry then
             used = slot
             PrepareVirtualRow(row, dataIndex, GUILD_ROW_HEIGHT, P)
+            -- Reused virtual rows: the tooltip follows the site shown.
+            if row._olSiteEntry ~= entry then
+                row._olSiteEntry = entry
+                if GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(row) then
+                    Overlord.LeaderboardUI.OnSiteRowEnter(row)
+                end
+            end
             local rank = lbFrame._lbView.ranks and lbFrame._lbView.ranks.sortedOutposts[dataIndex] or dataIndex
             local medalColor = MEDAL_COLORS[rank]
             local outpostName = GetOutpostSiteDisplayName(entry.outpostSiteKey)

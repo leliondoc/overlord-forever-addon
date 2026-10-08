@@ -139,7 +139,7 @@ assert(restored.updatedAt == startTs,
 
 -- Replay the restored snapshot to a client that saw the actual completion.
 OverlordDB.outposts[siteKey] = nil
-assert(OP:CompleteCapture(siteKey, guild, faction, startTs + 600, "global", true))
+assert(OP:CompleteCapture(siteKey, guild, faction, startTs + 600, "global", true, "Tester Capper"))
 OP:ApplyRemoteState(siteKey, restored, true)
 assert(OP:GetState(siteKey).status == "held" and OP:GetState(siteKey).ownerGuild == guild,
     "Returning observer erased a capture completed while offline")

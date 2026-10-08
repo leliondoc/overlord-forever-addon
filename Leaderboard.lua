@@ -290,12 +290,29 @@ end
 
 
 -- Retire les caracteres qui cassent le protocole LK (|:=,)
+-- Drops a UTF-8 character cut in the middle by the byte limit.
+local function trimUtf8Tail(name)
+    for back = 0, 2 do
+        local at = #name - back
+        if at < 1 then break end
+        local b = string.byte(name, at)
+        if b >= 192 then
+            local width = b >= 240 and 4 or (b >= 224 and 3 or 2)
+            if at + width - 1 > #name then return name:sub(1, at - 1) end
+            break
+        elseif b < 128 then
+            break
+        end
+    end
+    return name
+end
+
 local function sanitizeGuildName(name)
     if type(name) ~= "string" or name == "" then return "" end
-    name = (name:gsub("[|=:,]", ""):match("^%s*(.-)%s*$") or "")
+    name = (name:gsub("[|=:,%c]", ""):match("^%s*(.-)%s*$") or "")
     if name == "" then return "" end
     if #name > MAX_GUILD_NAME_LEN then
-        name = name:sub(1, MAX_GUILD_NAME_LEN)
+        name = trimUtf8Tail(name:sub(1, MAX_GUILD_NAME_LEN))
     end
     return name
 end
@@ -512,9 +529,9 @@ local function ensureOutpostLeaderboardTables(lb)
     if not OverlordDB then return end
     OverlordDB.outpostTenants = OverlordDB.outpostTenants or {}
     OverlordDB.outpostCaptureCounts = OverlordDB.outpostCaptureCounts or {}
-    -- Les migrations historiques etaient ici et transformaient chaque getter en scan
-    -- SavedVariables potentiel. Elles sont maintenant executees par la barriere coopérative
-    -- EnsureOutpostLedgerPrepared avant l'activation de Sync.
+    -- Aucune migration ici (un getter ne doit jamais scanner les SavedVariables) :
+    -- la purge unique 1.7.2 et le snapshot LOC sont faits par EnsureOutpostLedgerPrepared
+    -- avant l'activation de Sync.
 end
 
 local function getValidOutpostTenantRow(lb, siteKey, row)
@@ -529,12 +546,16 @@ local function getValidOutpostTenantRow(lb, siteKey, row)
     if not outpostLbPoolMatchesCurrent(resolveOutpostLbPoolTag(row.pool)) then return nil end
     local campaignStart = lb and lb.GetCurrentCampaignStart and lb:GetCurrentCampaignStart() or 0
     if not lb:IsTimestampInCurrentCampaign(claimedAt, campaignStart) then return nil end
+    -- 1.7.2: a tenant without the character who took the site is not a tenant.
+    local capturer = type(row.capturer) == "string" and (row.capturer:match("^%s*(.-)%s*$") or "") or ""
+    if #capturer < 2 or #capturer > 50 or capturer:find("[:|,=%c]") then return nil end
     return {
         siteKey = siteKey,
         guild = guild,
         guildKey = guild:lower(),
         faction = faction,
         claimedAt = claimedAt,
+        capturer = capturer,
         pool = row.pool,
     }
 end
@@ -4673,7 +4694,387 @@ function Overlord.Leaderboard:Reset(archivingStartOverride, resetEpochOverride, 
     return true
 end
 
--- Lignes LO pour reponses SR (tenants avant-postes, max 4 sites).
+-- ===== Keep and outpost ledger (1.7.2) =====
+-- A capture is one event (site, guild, faction, timestamp) that names the character
+-- who made it. A row (site, guild, pool) is the set of its events and its count is
+-- the size of that set: sets merge by union, so two clients that accept the same
+-- events end with the same count whatever the order of arrival. The tenant of a
+-- site is its newest accepted event. Which events a client accepts is decided by
+-- SyncOutpost.lua (the capturer speaks for himself, catch-up by content).
+local OUTPOST_CAPTURER_LEDGER_VERSION = 1
+-- Growth bounds of the ledger (a week of real play stays far below): rows are
+-- (site, guild) pairs, events are captures. Beyond them a claim is refused, which
+-- every client decides alike. A rebuild of the SR snapshot waits a few seconds so
+-- a catch-up reply (hundreds of events) triggers a handful of rebuilds, not one per event.
+local OUTPOST_LEDGER_ROWS_MAX = 512
+local OUTPOST_LEDGER_EVENTS_MAX = 20000
+local OUTPOST_LEDGER_REBUILD_DEBOUNCE = 3
+-- Rows and site states of the release week (the 7 days up to this time) carry no
+-- capturer: they are dropped once at login and refused on the wire, on every client
+-- alike (2026-10-08 14:39 UTC, the 1.7.2 release).
+local OUTPOST_LEDGER_PURGE_TS = 1791470340
+Overlord.Leaderboard.OUTPOST_CLAIM_MIN_TS = OUTPOST_LEDGER_PURGE_TS
+
+local function normalizeOutpostCapturer(name)
+    if type(name) ~= "string" then return nil end
+    local t = name:match("^%s*(.-)%s*$") or ""
+    if #t < 2 or #t > 50 or t:find("[:|,=%c]") then return nil end
+    return t
+end
+
+local function outpostCapturerKey(name)
+    local sync = Overlord.Sync
+    local key = sync and sync.GetCaptureContributorDedupKey
+        and sync:GetCaptureContributorDedupKey(name) or nil
+    if key and key ~= "" then return key end
+    return tostring(name or ""):lower()
+end
+
+local function mergeOutpostRowFaction(row, faction)
+    if not row or (faction ~= "Alliance" and faction ~= "Horde") then return false end
+    local current = row.faction or ""
+    -- Une guilde WoW peut etre cross-faction. Le compteur est volontairement indexe par
+    -- guilde (pas par faction) : la faction de transport doit donc etre un join commutatif.
+    -- Le minimum lexical est stable quel que soit l'ordre A/H ; le tenant courant, lui,
+    -- conserve sa faction horodatee dans outpostTenants.
+    if current ~= "Alliance" and current ~= "Horde"
+        or faction < current then
+        row.faction = faction
+        return true
+    end
+    return false
+end
+
+local function outpostSyncStableKey(row)
+    return table.concat({ tostring(row.siteKey or ""),
+        tostring(row.guild or ""):lower(),
+        resolveOutpostLbPoolTag(row.pool) }, ":")
+end
+
+
+-- One-shot migration to the signed ledger (judged by content, so a row written by
+-- this version is never touched): tenants and events that name no capturer are
+-- dropped in every world, and the site states of the release week restart neutral.
+-- Tables keep their identity so caches keyed on them stay valid.
+function Overlord.Leaderboard:EnsureOutpostCapturerLedger()
+    if not OverlordDB then return false end
+    if (tonumber(OverlordDB.outpostCapturerLedgerVersion) or 0)
+        >= OUTPOST_CAPTURER_LEDGER_VERSION then
+        return false
+    end
+    local function purgeWorld(world)
+        if type(world) ~= "table" then return end
+        if type(world.outpostTenants) ~= "table" then world.outpostTenants = {} end
+        for siteKey, row in pairs(world.outpostTenants) do
+            if type(row) ~= "table" or not normalizeOutpostCapturer(row.capturer) then
+                world.outpostTenants[siteKey] = nil
+            end
+        end
+        if type(world.outpostCaptureCounts) ~= "table" then world.outpostCaptureCounts = {} end
+        for rowKey, row in pairs(world.outpostCaptureCounts) do
+            local signed = type(row) == "table" and type(row.events) == "table"
+            if signed then
+                for _, capturer in pairs(row.events) do
+                    if not normalizeOutpostCapturer(capturer) then signed = false; break end
+                end
+            end
+            if not signed then world.outpostCaptureCounts[rowKey] = nil end
+        end
+        if Overlord.Outpost and Overlord.Outpost.PurgeStatesForCapturerLedger then
+            Overlord.Outpost:PurgeStatesForCapturerLedger(world.outposts, OUTPOST_LEDGER_PURGE_TS)
+        end
+    end
+    purgeWorld(OverlordDB)
+    for _, world in pairs(type(OverlordDB.worldsByPool) == "table" and OverlordDB.worldsByPool or {}) do
+        purgeWorld(world)
+    end
+    OverlordDB.outpostCapturerLedgerVersion = OUTPOST_CAPTURER_LEDGER_VERSION
+    self:ResetOutpostLedgerCounters()
+    self:MarkDirty()
+    if Overlord.Outpost and Overlord.Outpost.RefreshOutpostPresentation then
+        pcall(Overlord.Outpost.RefreshOutpostPresentation, Overlord.Outpost, nil, true)
+    end
+    return true
+end
+function Overlord.Leaderboard:GetOutpostTenantsTable()
+    if not OverlordDB then return {} end
+    ensureOutpostLeaderboardTables(self)
+    return OverlordDB.outpostTenants
+end
+
+function Overlord.Leaderboard:GetOutpostCaptureCountsTable()
+    if not OverlordDB then return {} end
+    ensureOutpostLeaderboardTables(self)
+    return OverlordDB.outpostCaptureCounts
+end
+
+function Overlord.Leaderboard:GetOutpostCaptureCountRow(siteKey, guild, poolTag)
+    guild = sanitizeGuildName(guild or "")
+    poolTag = resolveOutpostLbPoolTag(poolTag)
+    local key = outpostCaptureRowKey(siteKey, guild:lower(), poolTag)
+    if key == "" then return nil end
+    return self:GetOutpostCaptureCountsTable()[key]
+end
+
+
+-- True when this exact event (same second, same capturer) is already in the ledger:
+-- a repeat of it needs no authority (routine state, SR replay).
+function Overlord.Leaderboard:IsOutpostClaimAccepted(siteKey, guild, faction, captureTs, capturer, poolTag)
+    captureTs = math.floor(tonumber(captureTs) or 0)
+    capturer = normalizeOutpostCapturer(capturer)
+    if captureTs <= 0 or not capturer then return false end
+    local row = self:GetOutpostCaptureCountRow(siteKey, guild, poolTag)
+    local stored = type(row) == "table" and type(row.events) == "table"
+        and row.events[tostring(captureTs)] or nil
+    -- The faction belongs to the event too: a copy with the other code is not it.
+    return type(stored) == "string" and row.faction == faction
+        and outpostCapturerKey(stored) == outpostCapturerKey(capturer)
+end
+
+local function applyOutpostTenant(lb, siteKey, guild, faction, claimedAt, poolTag, capturer)
+    local tenants = lb:GetOutpostTenantsTable()
+    local prev = tenants[siteKey]
+    local prevTs = prev and math.floor(tonumber(prev.claimedAt) or 0) or 0
+    local guildKey = guild:lower()
+    local prevGuildKey = prev and (prev.guildKey or "") or ""
+    local prevPool = prev and resolveOutpostLbPoolTag(prev.pool) or ""
+    local tieKey = guildKey .. ":" .. poolTag .. ":" .. faction
+    local prevTieKey = prev and (prevGuildKey .. ":" .. prevPool .. ":" .. (prev.faction or "")) or ""
+    if prev and prevTs > claimedAt then return false end
+    if prev and prevTs == claimedAt then
+        if prevTieKey == tieKey then
+            -- Same event: the tenant keeps the capturer it was first accepted with.
+            if normalizeOutpostCapturer(prev.capturer) then return false end
+            prev.capturer = capturer
+            return true
+        end
+        if tieKey >= prevTieKey then return false end
+    end
+    tenants[siteKey] = {
+        guild = guild,
+        guildKey = guildKey,
+        faction = faction,
+        claimedAt = claimedAt,
+        pool = poolTag,
+        capturer = capturer,
+    }
+    return true
+end
+
+-- Shortest time a character needs before completing a capture of this site (the
+-- gold-reduced contract minus a little clock skew), the same on every client.
+local function outpostSiteGap(siteKey)
+    local OP = Overlord.Outpost
+    local site = OP and OP.GetSite and OP:GetSite(siteKey) or nil
+    local minimum = OP and OP.GetMinimumHoldTimeRequired and OP:GetMinimumHoldTimeRequired(site) or 240
+    return math.max(1, math.floor(tonumber(minimum) or 240) - 5)
+end
+Overlord.Leaderboard.GetOutpostSiteGap = function(_, siteKey) return outpostSiteGap(siteKey) end
+
+local function outpostIndexInsert(list, ts, gap)
+    local lo, hi = 1, #list
+    while lo <= hi do
+        local mid = math.floor((lo + hi) / 2)
+        if list[mid].ts < ts then lo = mid + 1 else hi = mid - 1 end
+    end
+    table.insert(list, lo, { ts = ts, gap = gap })
+end
+
+-- Rows and events held, counted once per table (O(rows + events)) then kept
+-- incrementally, with the sorted capture times of every capturer (the pace by
+-- content: a character captures at most once per contract, on every path).
+local function ensureOutpostLedgerCounters(lb, counts)
+    if lb._outpostLedgerCountersSource == counts and lb._outpostLedgerRows then return end
+    local rows, events, index = 0, 0, {}
+    for _, row in pairs(counts) do
+        if type(row) == "table" then
+            rows = rows + 1
+            events = events + math.max(0, math.floor(tonumber(row.count) or 0))
+            if type(row.events) == "table" then
+                local gap = outpostSiteGap(row.siteKey)
+                for eventKey, capturer in pairs(row.events) do
+                    local ts = math.floor(tonumber(eventKey) or 0)
+                    if ts > 0 and type(capturer) == "string" then
+                        local key = outpostCapturerKey(capturer)
+                        local list = index[key]
+                        if not list then list = {}; index[key] = list end
+                        list[#list + 1] = { ts = ts, gap = gap }
+                    end
+                end
+            end
+        end
+    end
+    for _, list in pairs(index) do table.sort(list, function(a, b) return a.ts < b.ts end) end
+    lb._outpostLedgerCountersSource = counts
+    lb._outpostLedgerRows, lb._outpostLedgerEvents = rows, events
+    lb._outpostCapturerIndex = index
+end
+
+-- After a wipe in place (weekly reset, purge) the counters are recounted lazily.
+function Overlord.Leaderboard:ResetOutpostLedgerCounters()
+    self._outpostLedgerCountersSource = nil
+    self._outpostLedgerRows, self._outpostLedgerEvents = nil, nil
+    self._outpostCapturerIndex = nil
+end
+
+-- True when this character could have made a capture at claimTs on a site whose
+-- contract is claimGap, given his other captures in the ledger: between two
+-- captures he had to hold the LATER site for its contract, so a pair is checked
+-- with the gap of its later event, whatever the order of arrival (the ledger
+-- decides, so every client that holds the same events decides alike).
+function Overlord.Leaderboard:IsOutpostCapturerPaced(capturer, claimTs, claimGap)
+    claimTs = math.floor(tonumber(claimTs) or 0)
+    claimGap = math.floor(tonumber(claimGap) or 0)
+    if claimTs <= 0 or claimGap <= 0 then return true end
+    capturer = normalizeOutpostCapturer(capturer)
+    if not capturer then return false end
+    ensureOutpostLedgerCounters(self, self:GetOutpostCaptureCountsTable())
+    local list = self._outpostCapturerIndex and self._outpostCapturerIndex[outpostCapturerKey(capturer)]
+    if not list or #list == 0 then return true end
+    local lo, hi = 1, #list
+    while lo <= hi do
+        local mid = math.floor((lo + hi) / 2)
+        if list[mid].ts < claimTs then lo = mid + 1 else hi = mid - 1 end
+    end
+    -- list[hi] is the newest earlier capture, list[lo] the oldest later one.
+    local earlier, later = list[hi], list[lo]
+    if earlier and claimTs - earlier.ts < claimGap then return false end
+    if later and later.ts - claimTs < later.gap then return false end
+    return true
+end
+
+-- The event (site, guild, faction, second) is in the ledger, whoever made it.
+function Overlord.Leaderboard:HasOutpostEvent(siteKey, guild, faction, captureTs, poolTag)
+    captureTs = math.floor(tonumber(captureTs) or 0)
+    if captureTs <= 0 then return false end
+    local row = self:GetOutpostCaptureCountRow(siteKey, guild, poolTag)
+    return type(row) == "table" and row.faction == faction and type(row.events) == "table"
+        and type(row.events[tostring(captureTs)]) == "string"
+end
+
+-- The character the ledger credited with this event (the first one accepted).
+function Overlord.Leaderboard:GetOutpostEventCapturer(siteKey, guild, faction, captureTs, poolTag)
+    captureTs = math.floor(tonumber(captureTs) or 0)
+    if captureTs <= 0 then return nil end
+    local row = self:GetOutpostCaptureCountRow(siteKey, guild, poolTag)
+    if type(row) ~= "table" or row.faction ~= faction or type(row.events) ~= "table" then return nil end
+    return normalizeOutpostCapturer(row.events[tostring(captureTs)])
+end
+
+-- The ledger knows a capture of this site newer than anything the map holds: the
+-- held state is still to be fetched (a targeted pull brings it as a known event).
+function Overlord.Leaderboard:OutpostLedgerAheadOfMap(siteKey, st)
+    if type(st) ~= "table" then return nil end
+    local tenants = self:GetOutpostTenantsTable()
+    local t = getValidOutpostTenantRow(self, siteKey, tenants and tenants[siteKey])
+    if not t then return nil end
+    local mapTs = math.max(math.floor(tonumber(st.claimedAt) or 0),
+        math.floor(tonumber(st.previousClaimedAt) or 0))
+    if t.claimedAt > mapTs then return t.claimedAt end
+    return nil
+end
+
+-- The ledger holds a capture of this faction on the site newer than afterTs
+-- (the capture the map missed between two tenants of the other faction).
+function Overlord.Leaderboard:HasOutpostEventOfFactionSince(siteKey, faction, afterTs)
+    afterTs = math.floor(tonumber(afterTs) or 0)
+    for _, row in pairs(self:GetOutpostCaptureCountsTable()) do
+        if type(row) == "table" and row.siteKey == siteKey and row.faction == faction
+            and math.floor(tonumber(row.lastTs) or 0) > afterTs then
+            return true
+        end
+    end
+    return false
+end
+
+-- This capture is the newest tenant the ledger holds for the site.
+function Overlord.Leaderboard:IsOutpostLedgerTenant(siteKey, guild, faction, claimedAt)
+    local tenants = self:GetOutpostTenantsTable()
+    local t = getValidOutpostTenantRow(self, siteKey, tenants and tenants[siteKey])
+    if not t then return false end
+    return t.guildKey == sanitizeGuildName(guild or ""):lower() and t.faction == faction
+        and t.claimedAt == math.floor(tonumber(claimedAt) or 0)
+end
+
+-- Records one accepted capture event. Returns (newEvent, tenantChanged).
+function Overlord.Leaderboard:RecordOutpostCapture(siteKey, guild, faction, captureTs, poolTag, capturer)
+    siteKey = tostring(siteKey or "")
+    guild = sanitizeGuildName(guild or "")
+    captureTs = math.floor(tonumber(captureTs) or 0)
+    capturer = normalizeOutpostCapturer(capturer)
+    if siteKey == "" or guild == "" or captureTs <= 0 or not capturer then return false, false end
+    if faction ~= "Alliance" and faction ~= "Horde" then return false, false end
+    if not isValidOutpostSite(siteKey) then return false, false end
+    poolTag = normalizeSavedVarsPool(poolTag)
+    if poolTag == "" then poolTag = currentSavedVarsPool() end
+    if poolTag == "" or not outpostLbPoolMatchesCurrent(poolTag) then return false, false end
+    local campaignStart = self:GetCurrentCampaignStart()
+    if not self:IsTimestampInCurrentCampaign(captureTs, campaignStart) then return false, false end
+    ensureOutpostLeaderboardTables(self)
+    local guildKey = guild:lower()
+    local rowKey = outpostCaptureRowKey(siteKey, guildKey, poolTag)
+    if rowKey == "" then return false, false end
+    local counts = self:GetOutpostCaptureCountsTable()
+    ensureOutpostLedgerCounters(self, counts)
+    local row = counts[rowKey]
+    local eventKey = tostring(captureTs)
+    local stored = row and type(row.events) == "table" and row.events[eventKey] or nil
+    if type(stored) ~= "string" and (self._outpostLedgerEvents or 0) >= OUTPOST_LEDGER_EVENTS_MAX then
+        return false, false
+    end
+    if not row then
+        if (self._outpostLedgerRows or 0) >= OUTPOST_LEDGER_ROWS_MAX then return false, false end
+        row = {
+            siteKey = siteKey,
+            guild = guild,
+            guildKey = guildKey,
+            faction = faction,
+            pool = poolTag,
+            events = {},
+            count = 0,
+            lastTs = 0,
+        }
+        counts[rowKey] = row
+        self._outpostLedgerRows = (self._outpostLedgerRows or 0) + 1
+    end
+    if type(row.events) ~= "table" then row.events = {} end
+    local count = math.max(0, math.floor(tonumber(row.count) or 0))
+    local incremented, changed = false, false
+    if type(stored) ~= "string" then
+        if count >= PLAUSIBLE_OUTPOST_CAPTURE_COUNT then return false, false end
+        row.events[eventKey] = capturer
+        row.count = count + 1
+        self._outpostLedgerEvents = (self._outpostLedgerEvents or 0) + 1
+        local index = self._outpostCapturerIndex
+        if index then
+            local key = outpostCapturerKey(capturer)
+            local list = index[key]
+            if not list then list = {}; index[key] = list end
+            outpostIndexInsert(list, captureTs, outpostSiteGap(siteKey))
+        end
+        incremented, changed = true, true
+    elseif outpostCapturerKey(stored) ~= outpostCapturerKey(capturer) then
+        -- An event keeps the first capturer it was accepted with, never a rename.
+        return false, false
+    end
+    local lastTs = math.floor(tonumber(row.lastTs) or 0)
+    if captureTs > lastTs or (captureTs == lastTs and row.lastCapturer ~= row.events[eventKey]) then
+        row.lastTs = captureTs
+        row.lastCapturer = row.events[eventKey]
+        changed = true
+    end
+    row.guild = guild
+    if mergeOutpostRowFaction(row, faction) then changed = true end
+    row.pool = poolTag
+    local tenantChanged = applyOutpostTenant(self, siteKey, guild, faction, captureTs, poolTag, capturer)
+    if changed or tenantChanged then
+        self:MarkDirty()
+        self:RequestOutpostLedgerRebuild()
+    end
+    return incremented, tenantChanged
+end
+
+-- Lignes LO pour reponses SR (tenants avant-postes et fortins, un par site).
 function Overlord.Leaderboard:BuildOutpostTenantSyncRows()
     local epoch = OverlordDB and tonumber(OverlordDB.lastResetTimestamp) or 0
     if epoch <= 0 then return {} end
@@ -4687,6 +5088,7 @@ function Overlord.Leaderboard:BuildOutpostTenantSyncRows()
                 guild = t.guild,
                 faction = t.faction or "",
                 claimedAt = t.claimedAt,
+                capturer = t.capturer,
                 epoch = epoch,
                 pool = t.pool,
             }
@@ -4703,204 +5105,6 @@ function Overlord.Leaderboard:BuildOutpostTenantSyncRows()
     return rows
 end
 
--- CRDT compact des captures d'avant-poste :
---   - events = IDs temporels OC/LO explicites observes localement ;
---   - locAnchors = total confirme -> plus ancien latestTs confirme pour ce total.
--- Le total est max(anchor.total + events posterieurs a anchor.ts, nombre d'events).
--- Cette forme rend LOC->OC et OC->LOC strictement commutatifs.
-local function ensureOutpostEventLedgerV2(row, yieldWork)
-    if not row then return false end
-    if row.eventLedgerPreparedV1 == true
-        and type(row.events) == "table" and type(row.locAnchors) == "table" then
-        row.eventCount = math.max(0, math.floor(tonumber(row.eventCount) or 0))
-        row.newestEventTs = math.max(0, math.floor(tonumber(row.newestEventTs) or 0))
-        row.newestAnchorTs = math.max(0, math.floor(tonumber(row.newestAnchorTs) or 0))
-        return false
-    end
-    local changed = false
-    if type(row.events) ~= "table" then row.events, changed = {}, true end
-    if type(row.locAnchors) ~= "table" then row.locAnchors, changed = {}, true end
-    local newestKnownTs = math.max(
-        math.floor(tonumber(row.lastTs) or 0),
-        math.floor(tonumber(row.floorTs) or 0))
-    local eventCount, newestEvent = 0, 0
-    local eventKey, eventValue = next(row.events)
-    while eventKey ~= nil do
-        local okNext, nextKey, nextValue = pcall(next, row.events, eventKey)
-        if not okNext then error(nextKey) end
-        local eventTs = math.floor(tonumber(eventKey) or 0)
-        if eventTs <= 0 then
-            row.events[eventKey], changed = nil, true
-        else
-            eventCount = eventCount + 1
-            newestEvent = math.max(newestEvent, eventTs)
-            newestKnownTs = math.max(newestKnownTs, eventTs)
-        end
-        eventKey, eventValue = nextKey, nextValue
-        if yieldWork then yieldWork() end
-    end
-    if (row.faction == "Alliance" or row.faction == "Horde")
-        and math.floor(tonumber(row.factionAt) or 0) <= 0 then
-        row.factionAt = newestKnownTs
-    end
-    if row.eventLedgerVersion ~= 2 then
-        local legacyTotal = math.min(PLAUSIBLE_OUTPOST_CAPTURE_COUNT,
-            math.max(0, math.floor(tonumber(row.count) or 0)))
-        -- Le total legacy inclut deja ses events explicites. L'ancrer en entier au dernier
-        -- timestamp connu preserve exactement le score ; soustraire #events faisait baisser
-        -- count lors de la premiere recomposition (ex. 5 + event(t5) devenait 4).
-        local baseTs = newestKnownTs
-        if baseTs <= 0 then
-            baseTs = math.floor(tonumber(OverlordDB and OverlordDB.lastResetTimestamp) or 0)
-        end
-        if legacyTotal > 0 and baseTs > 0 then
-            local anchorKey = tostring(legacyTotal)
-            local previous = math.floor(tonumber(row.locAnchors[anchorKey]) or 0)
-            if previous <= 0 or baseTs < previous then row.locAnchors[anchorKey] = baseTs end
-        end
-        row.eventLedgerVersion, changed = 2, true
-    end
-    local newestAnchor = 0
-    if not row.eventLedgerBoundsV1 then
-        local totalKey, anchorValue = next(row.locAnchors)
-        while totalKey ~= nil do
-            local okNext, nextKey, nextValue = pcall(next, row.locAnchors, totalKey)
-            if not okNext then error(nextKey) end
-            local anchorTs = anchorValue
-            local total = math.floor(tonumber(totalKey) or 0)
-            anchorTs = math.floor(tonumber(anchorTs) or 0)
-            if total <= 0 or total > PLAUSIBLE_OUTPOST_CAPTURE_COUNT or anchorTs <= 0 then
-                row.locAnchors[totalKey], changed = nil, true
-            else
-                newestAnchor = math.max(newestAnchor, anchorTs)
-            end
-            totalKey, anchorValue = nextKey, nextValue
-            if yieldWork then yieldWork() end
-        end
-        if eventCount > PLAUSIBLE_OUTPOST_CAPTURE_COUNT then
-            -- Etat deja contamine avant le garde courant : compacter en une ancre bornee.
-            local total = math.min(PLAUSIBLE_OUTPOST_CAPTURE_COUNT,
-                math.max(0, math.floor(tonumber(row.count) or 0)))
-            row.events = {}
-            if total > 0 and newestEvent > 0 then
-                row.locAnchors[tostring(total)] = newestEvent
-            end
-            eventCount = 0
-            changed = true
-        end
-        row.eventLedgerBoundsV1, changed = true, true
-    else
-        local totalKey, anchorTs = next(row.locAnchors)
-        while totalKey ~= nil do
-            local okNext, nextKey, nextValue = pcall(next, row.locAnchors, totalKey)
-            if not okNext then error(nextKey) end
-            newestAnchor = math.max(newestAnchor, math.floor(tonumber(anchorTs) or 0))
-            totalKey, anchorTs = nextKey, nextValue
-            if yieldWork then yieldWork() end
-        end
-    end
-    row.eventCount = eventCount
-    row.newestEventTs = newestEvent
-    row.newestAnchorTs = newestAnchor
-    row.eventLedgerPreparedV1 = true
-    return changed
-end
-
-local function recomputeOutpostEventLedger(row, yieldWork)
-    ensureOutpostEventLedgerV2(row, yieldWork)
-    local events = row.events or {}
-    local eventTimes = {}
-    local latest = 0
-    local eventKey = next(events)
-    while eventKey ~= nil do
-        local okNext, nextKey = pcall(next, events, eventKey)
-        if not okNext then error(nextKey) end
-        local eventTs = eventKey
-        eventTs = math.floor(tonumber(eventTs) or 0)
-        if eventTs > 0 then
-            eventTimes[#eventTimes + 1] = eventTs
-            latest = math.max(latest, eventTs)
-        end
-        eventKey = nextKey
-        if yieldWork then yieldWork() end
-    end
-    sortRowsWithYield(eventTimes, function(a, b) return a < b end, yieldWork)
-    local function countEventsAfter(anchorTs)
-        local lo, hi = 1, #eventTimes
-        while lo <= hi do
-            local mid = math.floor((lo + hi) / 2)
-            if eventTimes[mid] <= anchorTs then lo = mid + 1 else hi = mid - 1 end
-        end
-        return #eventTimes - lo + 1
-    end
-    local best, newestAnchor = #eventTimes, 0
-    local anchorKey, anchorValue = next(row.locAnchors or {})
-    while anchorKey ~= nil do
-        local okNext, nextKey, nextValue = pcall(next, row.locAnchors, anchorKey)
-        if not okNext then error(nextKey) end
-        local totalKey, anchorTs = anchorKey, anchorValue
-        local anchorTotal = math.max(0, math.floor(tonumber(totalKey) or 0))
-        anchorTs = math.floor(tonumber(anchorTs) or 0)
-        best = math.max(best, anchorTotal + countEventsAfter(anchorTs))
-        latest = math.max(latest, anchorTs)
-        newestAnchor = math.max(newestAnchor, anchorTs)
-        anchorKey, anchorValue = nextKey, nextValue
-        if yieldWork then yieldWork() end
-    end
-    row.count = math.min(best, PLAUSIBLE_OUTPOST_CAPTURE_COUNT)
-    row.lastTs = math.max(math.floor(tonumber(row.lastTs) or 0), latest)
-    row.eventCount = #eventTimes
-    row.newestEventTs = eventTimes[#eventTimes] or 0
-    row.newestAnchorTs = newestAnchor
-    row.eventLedgerPreparedV1 = true
-    return row.count
-end
-
-local function countOutpostEvents(row)
-    return math.max(0, math.floor(tonumber(row and row.eventCount) or 0))
-end
-
-local function noteOutpostEventAdded(row, eventTs)
-    local previous = math.max(0, math.floor(tonumber(row.count) or 0))
-    row.eventCount = math.min(PLAUSIBLE_OUTPOST_CAPTURE_COUNT,
-        math.max(0, math.floor(tonumber(row.eventCount) or 0)) + 1)
-    row.newestEventTs = math.max(
-        math.floor(tonumber(row.newestEventTs) or 0), eventTs)
-    -- Cas courant et prouvable : un evenement posterieur a toutes les ancres LOC
-    -- ne pouvait pas deja etre inclus dans leur total. Le chemin des paquets retardes
-    -- garde un plancher sûr puis laisse le builder coopératif recomposer exactement.
-    if eventTs > math.floor(tonumber(row.newestAnchorTs) or 0) then
-        row.count = math.min(PLAUSIBLE_OUTPOST_CAPTURE_COUNT, previous + 1)
-    else
-        row.count = math.max(previous, row.eventCount)
-    end
-    row.lastTs = math.max(math.floor(tonumber(row.lastTs) or 0), eventTs)
-    return row.count > previous
-end
-
-local function mergeOutpostRowFaction(row, faction, observedAt)
-    if not row or (faction ~= "Alliance" and faction ~= "Horde") then return false end
-    observedAt = math.floor(tonumber(observedAt) or 0)
-    local current = row.faction or ""
-    -- Une guilde WoW peut etre cross-faction. Le compteur est volontairement indexe par
-    -- guilde (pas par faction) : la faction de transport doit donc etre un join commutatif.
-    -- Le minimum lexical est stable quel que soit l'ordre A/H ; le tenant courant, lui,
-    -- conserve sa faction horodatee dans outpostTenants.
-    if current ~= "Alliance" and current ~= "Horde"
-        or faction < current then
-        row.faction = faction
-        row.factionAt = observedAt
-        return true
-    end
-    return false
-end
-
-local function outpostSyncStableKey(row)
-    return table.concat({ tostring(row.siteKey or ""),
-        tostring(row.guild or ""):lower(),
-        resolveOutpostLbPoolTag(row.pool) }, ":")
-end
-
 function Overlord.Leaderboard:RequestOutpostLedgerRebuild()
     self._outpostLedgerRevision = (tonumber(self._outpostLedgerRevision) or 0) + 1
     self._outpostLedgerDirty = true
@@ -4908,11 +5112,36 @@ function Overlord.Leaderboard:RequestOutpostLedgerRebuild()
         or self._outpostLedgerPrepRetryScheduled or self._outpostLedgerPrepWakePending
         or not C_Timer or not C_Timer.After then return end
     self._outpostLedgerPrepWakePending = true
-    C_Timer.After(0, function()
+    C_Timer.After(OUTPOST_LEDGER_REBUILD_DEBOUNCE, function()
         if not Overlord.Leaderboard then return end
         Overlord.Leaderboard._outpostLedgerPrepWakePending = nil
         Overlord.Leaderboard:EnsureOutpostLedgerPrepared(false)
     end)
+end
+
+-- LOC packets of one snapshot row: "site:guild:fac:epoch:pool:ts=Given Family,...",
+-- newest first, a few events per packet, built once per snapshot (never in a reply).
+local OUTPOST_EVENTS_PER_PACKET = 6
+Overlord.Leaderboard.OUTPOST_EVENTS_PER_PACKET = OUTPOST_EVENTS_PER_PACKET
+local function buildOutpostEventPackets(syncRow, yieldWork)
+    local facCode = syncRow.faction == "Alliance" and "A" or "H"
+    local head = string.format("%s:%s:%s:%d:%s:", syncRow.siteKey, syncRow.guild, facCode,
+        syncRow.epoch, resolveOutpostLbPoolTag(syncRow.pool))
+    local packets, parts, bytes = {}, {}, 0
+    for i = 1, #syncRow.events do
+        local e = syncRow.events[i]
+        local part = e.ts .. "=" .. e.capturer
+        if #parts >= OUTPOST_EVENTS_PER_PACKET
+            or (#parts > 0 and #head + bytes + 1 + #part > 240) then
+            packets[#packets + 1] = head .. table.concat(parts, ",")
+            parts, bytes = {}, 0
+        end
+        parts[#parts + 1] = part
+        bytes = bytes + #part + (#parts > 1 and 1 or 0)
+        if yieldWork then yieldWork() end
+    end
+    if #parts > 0 then packets[#packets + 1] = head .. table.concat(parts, ",") end
+    return packets
 end
 
 -- Barriere/cached snapshot du registre LOC. Le premier build est requis avant Sync ;
@@ -4921,6 +5150,7 @@ end
 function Overlord.Leaderboard:EnsureOutpostLedgerPrepared(requireCurrent)
     if not OverlordDB then return "blocked" end
     ensureOutpostLeaderboardTables(self)
+    self:EnsureOutpostCapturerLedger()
     local source = OverlordDB.outpostCaptureCounts
     if self._outpostLedgerSource ~= source then
         self._outpostLedgerDirty = true
@@ -4963,111 +5193,60 @@ function Overlord.Leaderboard:EnsureOutpostLedgerPrepared(requireCurrent)
     local worker = coroutine.create(function()
         budgetStarted = clockMs()
         local changed = false
-        local localPool = currentSavedVarsPool()
-        local tenantNeedsPool = (tonumber(OverlordDB.outpostTenantPoolVersion) or 0) < 1
-        if tenantNeedsPool then
-            local tenants, cursor = OverlordDB.outpostTenants, nil
-            while true do
-                local okNext, key, row = pcall(next, tenants, cursor)
-                if not okNext then error(key) end
-                cursor = key
-                if key == nil then break end
-                if type(row) == "table" and normalizeSavedVarsPool(row.pool) == "" then
-                    row.pool, changed = localPool, true
-                end
-                yieldWork()
-            end
-        end
-
-        local keyMigration = (tonumber(OverlordDB.outpostCaptureCountsKeyVersion) or 0) < 2
-        local counts = buildSource
-        if keyMigration then
-            local migrated, cursor = {}, nil
-            while true do
-                local okNext, _, row = pcall(next, counts, cursor)
-                if not okNext then error(_) end
-                cursor = _
-                if cursor == nil then break end
-                if type(row) == "table" then
-                    local siteKey = tostring(row.siteKey or "")
-                    local guild = sanitizeGuildName(row.guild or "")
-                    local guildKey = (row.guildKey and tostring(row.guildKey):lower()) or guild:lower()
-                    local pool = resolveOutpostLbPoolTag(row.pool)
-                    local key = outpostCaptureRowKey(siteKey, guildKey, pool)
-                    if key ~= "" then
-                        local current = migrated[key]
-                        if not current then
-                            migrated[key] = row
-                            current = row
-                        else
-                            current.events = type(current.events) == "table" and current.events or {}
-                            if type(row.events) == "table" then
-                                for eventKey, value in pairs(row.events) do
-                                    if value then current.events[eventKey] = true end
-                                    yieldWork()
-                                end
-                            end
-                            current.locAnchors = type(current.locAnchors) == "table"
-                                and current.locAnchors or {}
-                            if type(row.locAnchors) == "table" then
-                                for totalKey, anchorTs in pairs(row.locAnchors) do
-                                    local previous = tonumber(current.locAnchors[totalKey])
-                                    anchorTs = tonumber(anchorTs)
-                                    if anchorTs and (not previous or anchorTs < previous) then
-                                        current.locAnchors[totalKey] = anchorTs
-                                    end
-                                    yieldWork()
-                                end
-                            end
-                            current.count = math.max(math.floor(tonumber(current.count) or 0),
-                                math.floor(tonumber(row.count) or 0))
-                            current.lastTs = math.max(math.floor(tonumber(current.lastTs) or 0),
-                                math.floor(tonumber(row.lastTs) or 0))
-                            current.floorTs = math.max(math.floor(tonumber(current.floorTs) or 0),
-                                math.floor(tonumber(row.floorTs) or 0))
-                            current.eventLedgerPreparedV1 = nil
-                        end
-                        current.siteKey, current.guild = siteKey, guild
-                        current.guildKey, current.pool = guildKey, pool
-                    end
-                end
-                yieldWork()
-            end
-            counts = migrated
-            -- Le marqueur reste ancien jusqu'au succes total. Une erreur/reload rejoue
-            -- donc l'union idempotente sur cette nouvelle racine sans perdre un alias.
-            OverlordDB.outpostCaptureCounts = counts
-            changed = true
-        end
-
-        local seedLastTs = not OverlordDB._locLastTsSeeded
-        local seedTs = time()
         local epoch = math.floor(tonumber(OverlordDB.lastResetTimestamp) or 0)
         local rows, cursor = {}, nil
+        -- A row mutated while this pass runs (a handler inserts between two slices)
+        -- may be traversed out of order: its counters are repaired at the end, and
+        -- only when nothing changed during the pass (otherwise the next pass does it).
+        local repairs = {}
         while true do
-            local okNext, rowKey, row = pcall(next, counts, cursor)
+            local okNext, rowKey, row = pcall(next, buildSource, cursor)
             if not okNext then error(rowKey) end
             cursor = rowKey
             if rowKey == nil then break end
             if type(row) == "table" then
-                if seedLastTs and (tonumber(row.count) or 0) > 0 and row.lastTs == nil then
-                    row.lastTs, changed = seedTs, true
+                local events = {}
+                local lastTs, lastCapturer = 0, nil
+                if type(row.events) == "table" then
+                    local eventKey, capturer = next(row.events)
+                    while eventKey ~= nil do
+                        local okEvent, nextKey, nextValue = pcall(next, row.events, eventKey)
+                        if not okEvent then error(nextKey) end
+                        local eventTs = math.floor(tonumber(eventKey) or 0)
+                        capturer = normalizeOutpostCapturer(capturer)
+                        if eventTs > 0 and capturer then
+                            events[#events + 1] = { ts = eventTs, capturer = capturer }
+                            if eventTs > lastTs then lastTs, lastCapturer = eventTs, capturer end
+                        else
+                            row.events[eventKey], changed = nil, true
+                        end
+                        eventKey, capturer = nextKey, nextValue
+                        yieldWork()
+                    end
                 end
-                local beforeCount = math.floor(tonumber(row.count) or 0)
-                if ensureOutpostEventLedgerV2(row, yieldWork) then changed = true end
-                if recomputeOutpostEventLedger(row, yieldWork) ~= beforeCount then changed = true end
+                sortRowsWithYield(events, function(a, b)
+                    if a.ts ~= b.ts then return a.ts > b.ts end
+                    return a.capturer < b.capturer
+                end, yieldWork)
+                local count = math.min(#events, PLAUSIBLE_OUTPOST_CAPTURE_COUNT)
+                if math.floor(tonumber(row.count) or 0) ~= count
+                    or math.floor(tonumber(row.lastTs) or 0) ~= lastTs
+                    or row.lastCapturer ~= lastCapturer then
+                    repairs[#repairs + 1] = { row = row, count = count, lastTs = lastTs, lastCapturer = lastCapturer }
+                end
                 local siteKey = tostring(row.siteKey or "")
                 local guild = sanitizeGuildName(row.guild or "")
                 local faction = row.faction or ""
-                local count = math.floor(tonumber(row.count) or 0)
                 if epoch > 0 and isValidOutpostSite(siteKey) and guild ~= "" and count > 0
                     and (faction == "Alliance" or faction == "Horde")
                     and outpostLbPoolMatchesCurrent(resolveOutpostLbPoolTag(row.pool)) then
                     local syncRow = {
                         siteKey = siteKey, guild = guild, faction = faction, count = count,
-                        lastTs = math.floor(tonumber(row.lastTs) or 0), epoch = epoch, pool = row.pool,
+                        lastTs = lastTs, epoch = epoch, pool = row.pool, events = events,
                     }
                     syncRow._syncKey = outpostSyncStableKey(syncRow)
+                    syncRow.packets = buildOutpostEventPackets(syncRow, yieldWork)
+                    syncRow.events = nil
                     rows[#rows + 1] = syncRow
                 end
             end
@@ -5116,8 +5295,7 @@ function Overlord.Leaderboard:EnsureOutpostLedgerPrepared(requireCurrent)
                 sortRowsWithYield(subPages[i][j], lexical, yieldWork)
             end
         end
-        return { rows = rows, blocks = blocks, subPages = subPages }, counts, changed,
-            tenantNeedsPool, keyMigration, seedLastTs
+        return { rows = rows, blocks = blocks, subPages = subPages }, buildSource, changed, repairs
     end)
 
     local function finishFailure(err)
@@ -5150,14 +5328,20 @@ function Overlord.Leaderboard:EnsureOutpostLedgerPrepared(requireCurrent)
             C_Timer.After(0, resumeWorker)
             return
         end
-        local snapshot, committedSource, changed = result[2], result[3], result[4]
+        local snapshot, committedSource, changed, repairs = result[2], result[3], result[4], result[5]
         if type(snapshot) ~= "table" or type(committedSource) ~= "table" then
             finishFailure("OUTPOST_LEDGER_EMPTY_COMMIT")
             return
         end
-        if result[5] then OverlordDB.outpostTenantPoolVersion = 1 end
-        if result[6] then OverlordDB.outpostCaptureCountsKeyVersion = 2 end
-        if result[7] then OverlordDB._locLastTsSeeded = true end
+        if type(repairs) == "table" and #repairs > 0
+            and (tonumber(self._outpostLedgerRevision) or 0) == buildRevision then
+            for i = 1, #repairs do
+                local r = repairs[i]
+                r.row.count, r.row.lastTs, r.row.lastCapturer = r.count, r.lastTs, r.lastCapturer
+            end
+            self:ResetOutpostLedgerCounters()
+            changed = true
+        end
         self._outpostSyncSnapshot = snapshot
         self._outpostLedgerSource = committedSource
         self._outpostLedgerPrepared = true
@@ -5175,10 +5359,9 @@ function Overlord.Leaderboard:EnsureOutpostLedgerPrepared(requireCurrent)
     return false
 end
 
--- Lignes LOC pour reponses SR : compteur de captures par couple (avant-poste, guilde).
--- Le compteur d'outpost n'a longtemps ete qu'additif local (OC one-shot) ; sans total sur
--- le reseau, un retardataire / cross-faction restait bloque a 0 ou 1. LOC propage le total
--- (fusionne en max() a la reception), alignant les outposts sur le modele kills (convergent).
+-- Lignes LOC pour reponses SR : chaque couple (site, guilde) avec la liste de ses
+-- captures signees, du plus recent au plus ancien. Un retardataire ou un client de
+-- l'autre faction recoit les evenements eux-memes, jamais un total a croire sur parole.
 function Overlord.Leaderboard:BuildOutpostCaptureCountSyncRows()
     local prepared = self:EnsureOutpostLedgerPrepared()
     local snapshot = self._outpostSyncSnapshot
@@ -5188,75 +5371,6 @@ function Overlord.Leaderboard:BuildOutpostCaptureCountSyncRows()
     return snapshot.rows or {}, snapshot.blocks or {}, snapshot.subPages or {}
 end
 
--- Fusion monotone d'un compteur LOC valide.
-function Overlord.Leaderboard:ApplyOutpostCaptureCountSync(siteKey, guild, faction, count, latestTs, poolTag)
-    siteKey = tostring(siteKey or "")
-    guild = sanitizeGuildName(guild or "")
-    count = math.floor(tonumber(count) or 0)
-    latestTs = math.floor(tonumber(latestTs) or 0)
-    poolTag = normalizeSavedVarsPool(poolTag) or ""
-    if poolTag == "" or not outpostLbPoolMatchesCurrent(poolTag) then return false end
-    if not isValidOutpostSite(siteKey) then return false end
-    if guild == "" or count <= 0 or latestTs <= 0 then return false end
-    -- Plafond de plausibilite (calque sur PLAUSIBLE_SYNC_KILL_CEILING des kills) : un total LOC
-    -- absurde (bug local, corruption SavedVars, emetteur falsifie) serait fige partout par max()
-    -- sans jamais redescendre. Un avant-poste ne peut etre capture qu'apres expiration du hold
-    -- (>= 5 min), donc meme une campagne longue reste tres en dessous de ce plafond.
-    if count > PLAUSIBLE_OUTPOST_CAPTURE_COUNT then return false end
-    if faction ~= "Alliance" and faction ~= "Horde" then return false end
-    ensureOutpostLeaderboardTables(self)
-    local guildKey = guild:lower()
-    local rowKey = outpostCaptureRowKey(siteKey, guildKey, poolTag)
-    if rowKey == "" then return false end
-    local counts = self:GetOutpostCaptureCountsTable()
-    local row = counts[rowKey]
-    if not row then
-        row = {
-            siteKey = siteKey,
-            guild = guild,
-            guildKey = guildKey,
-            faction = faction,
-            factionAt = latestTs,
-            count = 0,
-            lastTs = 0,
-            floorTs = 0,
-            events = {},
-            locAnchors = {},
-            eventLedgerVersion = 2,
-            eventLedgerBoundsV1 = true,
-            eventLedgerPreparedV1 = true,
-            eventCount = 0,
-            newestEventTs = 0,
-            newestAnchorTs = 0,
-            pool = poolTag,
-        }
-        counts[rowKey] = row
-    end
-    ensureOutpostEventLedgerV2(row)
-    local current = math.floor(tonumber(row.count) or 0)
-    local anchorKey = tostring(count)
-    local previousAnchor = tonumber(row.locAnchors[anchorKey])
-    local anchorChanged = false
-    if not previousAnchor or latestTs < previousAnchor then
-        row.locAnchors[anchorKey] = latestTs
-        row.newestAnchorTs = math.max(
-            math.floor(tonumber(row.newestAnchorTs) or 0), latestTs)
-        anchorChanged = true
-    end
-    local mergedCount = math.max(current, count)
-    row.count = mergedCount
-    row.floorTs = math.max(math.floor(tonumber(row.floorTs) or 0), latestTs)
-    row.lastTs = math.max(math.floor(tonumber(row.lastTs) or 0), latestTs)
-    row.guild = guild
-    local factionChanged = mergeOutpostRowFaction(row, faction, latestTs)
-    row.pool = poolTag
-    if anchorChanged or mergedCount > current or factionChanged then
-        self:MarkDirty()
-        self:RequestOutpostLedgerRebuild()
-    end
-    return anchorChanged or mergedCount > current or factionChanged
-end
-
 -- Separate presentation column; the storage, scoring and tie-breaks are shared.
 function Overlord.Leaderboard:GetSortedGuildKeeps(sortedGuildKillsForNames, yieldWork)
     local rows = self:GetSortedOutposts(sortedGuildKillsForNames, yieldWork, true)
@@ -5264,181 +5378,6 @@ function Overlord.Leaderboard:GetSortedGuildKeeps(sortedGuildKillsForNames, yiel
         row.keepSiteKey, row.keepAtlas, row.wins = row.outpostSiteKey, row.outpostAtlas, row.captures
     end
     return rows
-end
-
-function Overlord.Leaderboard:GetOutpostTenantsTable()
-    if not OverlordDB then return {} end
-    ensureOutpostLeaderboardTables(self)
-    return OverlordDB.outpostTenants
-end
-
-function Overlord.Leaderboard:GetOutpostCaptureCountsTable()
-    if not OverlordDB then return {} end
-    ensureOutpostLeaderboardTables(self)
-    return OverlordDB.outpostCaptureCounts
-end
-
-function Overlord.Leaderboard:GetOutpostCaptureCountRow(siteKey, guild, poolTag)
-    guild = sanitizeGuildName(guild or "")
-    poolTag = resolveOutpostLbPoolTag(poolTag)
-    local key = outpostCaptureRowKey(siteKey, guild:lower(), poolTag)
-    if key == "" then return nil end
-    return self:GetOutpostCaptureCountsTable()[key]
-end
-
-function Overlord.Leaderboard:ApplyOutpostTenantSync(siteKey, guild, faction, claimedAt, poolTag)
-    siteKey = tostring(siteKey or "")
-    guild = sanitizeGuildName(guild or "")
-    claimedAt = math.floor(tonumber(claimedAt) or 0)
-    poolTag = normalizeSavedVarsPool(poolTag) or ""
-    if poolTag == "" then return false end
-    if not outpostLbPoolMatchesCurrent(poolTag) then return false end
-    if siteKey == "" or not isValidOutpostSite(siteKey) then return false end
-    if guild == "" or claimedAt <= 0 then return false end
-    local campaignStart = self:GetCurrentCampaignStart()
-    if not self:IsTimestampInCurrentCampaign(claimedAt, campaignStart) then return false end
-    if faction ~= "Alliance" and faction ~= "Horde" then return false end
-    local tenants = self:GetOutpostTenantsTable()
-    local prev = tenants[siteKey]
-    local prevTs = prev and math.floor(tonumber(prev.claimedAt) or 0) or 0
-    local guildKey = guild:lower()
-    local prevGuildKey = prev and (prev.guildKey or "") or ""
-    local prevPool = prev and resolveOutpostLbPoolTag(prev.pool) or ""
-    local tieKey = guildKey .. ":" .. poolTag .. ":" .. faction
-    local prevTieKey = prev and (prevGuildKey .. ":" .. prevPool .. ":" .. (prev.faction or "")) or ""
-    if prev and prevTs > claimedAt then return false end
-    if prev and prevTs == claimedAt then
-        if prevTieKey == tieKey or tieKey >= prevTieKey then return false end
-    end
-    -- Ne pas crediter implicitement l'ancien tenant : cet effet dependait de l'ordre
-    -- d'arrivee T1/T2. Le score vient de OC/LOC, ou du LO courant valide juste apres.
-    tenants[siteKey] = {
-        guild = guild,
-        guildKey = guildKey,
-        faction = faction,
-        claimedAt = claimedAt,
-        pool = poolTag,
-    }
-    self:MarkDirty()
-    return true
-end
-
--- Credite une premiere capture manquante sans re-appliquer le tenant (evite la recursion avec ApplyOutpostTenantSync).
-function Overlord.Leaderboard:EnsureOutpostCaptureCounted(siteKey, guild, faction, captureTs, poolTag)
-    siteKey = tostring(siteKey or "")
-    guild = sanitizeGuildName(guild or "")
-    captureTs = math.floor(tonumber(captureTs) or 0)
-    if siteKey == "" or guild == "" or captureTs <= 0 then return false end
-    if faction ~= "Alliance" and faction ~= "Horde" then return false end
-    poolTag = normalizeSavedVarsPool(poolTag)
-    if poolTag == "" then poolTag = currentSavedVarsPool() end
-    if poolTag == "" or not outpostLbPoolMatchesCurrent(poolTag) then return false end
-    local campaignStart = self:GetCurrentCampaignStart()
-    if not self:IsTimestampInCurrentCampaign(captureTs, campaignStart) then return false end
-    ensureOutpostLeaderboardTables(self)
-    local guildKey = guild:lower()
-    local rowKey = outpostCaptureRowKey(siteKey, guildKey, poolTag)
-    if rowKey == "" then return false end
-    local counts = self:GetOutpostCaptureCountsTable()
-    local row = counts[rowKey]
-    if row then ensureOutpostEventLedgerV2(row) end
-    if not row then
-        row = {
-            siteKey = siteKey,
-            guild = guild,
-            guildKey = guildKey,
-            faction = faction,
-            count = 0,
-            floorTs = 0,
-            events = {},
-            locAnchors = {},
-            eventLedgerVersion = 2,
-            eventLedgerBoundsV1 = true,
-            eventLedgerPreparedV1 = true,
-            eventCount = 0,
-            newestEventTs = 0,
-            newestAnchorTs = 0,
-            pool = poolTag,
-        }
-        counts[rowKey] = row
-    end
-    local previousCount = math.floor(tonumber(row.count) or 0)
-    row.events = row.events or {}
-    local eventKey = tostring(captureTs)
-    local eventChanged = not row.events[eventKey]
-    if eventChanged and previousCount >= PLAUSIBLE_OUTPOST_CAPTURE_COUNT then return false end
-    if eventChanged and countOutpostEvents(row) >= PLAUSIBLE_OUTPOST_CAPTURE_COUNT then return false end
-    if eventChanged then row.events[eventKey] = true end
-    -- L'ID temporel rend le OC correspondant idempotent.
-    local incremented = eventChanged and noteOutpostEventAdded(row, captureTs) or false
-    row.guild = guild
-    local factionChanged = mergeOutpostRowFaction(row, faction, captureTs)
-    row.pool = poolTag
-    if eventChanged or incremented or factionChanged then
-        self:MarkDirty()
-        self:RequestOutpostLedgerRebuild()
-    end
-    return incremented
-end
-
-function Overlord.Leaderboard:RecordOutpostCapture(siteKey, guild, faction, captureTs, poolTag)
-    siteKey = tostring(siteKey or "")
-    guild = sanitizeGuildName(guild or "")
-    captureTs = math.floor(tonumber(captureTs) or 0)
-    if siteKey == "" or guild == "" or captureTs <= 0 then return false end
-    if faction ~= "Alliance" and faction ~= "Horde" then return false end
-    poolTag = normalizeSavedVarsPool(poolTag)
-    if poolTag == "" then poolTag = currentSavedVarsPool() end
-    if poolTag == "" or not outpostLbPoolMatchesCurrent(poolTag) then return false end
-    local campaignStart = self:GetCurrentCampaignStart()
-    if not self:IsTimestampInCurrentCampaign(captureTs, campaignStart) then return false end
-    ensureOutpostLeaderboardTables(self)
-    local guildKey = guild:lower()
-    local rowKey = outpostCaptureRowKey(siteKey, guildKey, poolTag)
-    if rowKey == "" then return false end
-    local counts = self:GetOutpostCaptureCountsTable()
-    local row = counts[rowKey]
-    if not row then
-        row = {
-            siteKey = siteKey,
-            guild = guild,
-            guildKey = guildKey,
-            faction = faction,
-            factionAt = captureTs,
-            count = 0,
-            floorTs = 0,
-            events = {},
-            locAnchors = {},
-            eventLedgerVersion = 2,
-            eventLedgerBoundsV1 = true,
-            eventLedgerPreparedV1 = true,
-            eventCount = 0,
-            newestEventTs = 0,
-            newestAnchorTs = 0,
-            pool = poolTag,
-        }
-        counts[rowKey] = row
-    end
-    ensureOutpostEventLedgerV2(row)
-    row.events = row.events or {}
-    local eventKey = tostring(captureTs)
-    local previousCount = math.floor(tonumber(row.count) or 0)
-    local eventChanged = not row.events[eventKey]
-    if eventChanged and previousCount >= PLAUSIBLE_OUTPOST_CAPTURE_COUNT then return false end
-    if eventChanged and countOutpostEvents(row) >= PLAUSIBLE_OUTPOST_CAPTURE_COUNT then return false end
-    if eventChanged then
-        row.events[eventKey] = true
-    end
-    local incremented = eventChanged and noteOutpostEventAdded(row, captureTs) or false
-    row.guild = guild
-    local factionChanged = mergeOutpostRowFaction(row, faction, captureTs)
-    row.pool = poolTag
-    self:ApplyOutpostTenantSync(siteKey, guild, faction, captureTs, poolTag)
-    if eventChanged or incremented or factionChanged then
-        self:MarkDirty()
-        self:RequestOutpostLedgerRebuild()
-    end
-    return incremented
 end
 
 function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldWork, fortressOnly)
@@ -5483,6 +5422,19 @@ function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldW
                 rowKeys[rowKey] = true
                 local bucket = captureCounts[rowKey]
                 local captures = bucket and math.floor(tonumber(bucket.count) or 0) or 0
+                -- Who took it: the held state names its capturer; the tenant row or the
+                -- newest event of the row otherwise.
+                local capturer = nil
+                if st and st.status == "held" and st.heldCapturerName
+                    and sanitizeGuildName(st.heldCapturerGuild or "") == guild then
+                    capturer = normalizeOutpostCapturer(st.heldCapturerName)
+                end
+                if not capturer and t and t.guildKey == key and t.faction == fac then
+                    capturer = t.capturer
+                end
+                if not capturer and bucket then
+                    capturer = normalizeOutpostCapturer(bucket.lastCapturer)
+                end
                 sorted[#sorted + 1] = {
                     guild = guild,
                     faction = fac,
@@ -5491,6 +5443,7 @@ function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldW
                     outpostSiteKey = siteKey,
                     captures = captures,
                     currentlyHeld = currentlyHeld,
+                    capturer = capturer,
                     pool = rowPool,
                 }
             end
@@ -5515,6 +5468,7 @@ function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldW
                     outpostSiteKey = bucket.siteKey,
                     captures = captures,
                     currentlyHeld = false,
+                    capturer = normalizeOutpostCapturer(bucket.lastCapturer),
                     pool = resolveOutpostLbPoolTag(bucket.pool),
                 }
             end

@@ -41,11 +41,11 @@ assert(blizzard:find("ReadyCheck-Ready", 1, true) and blizzard:find("0 refused (
     "Blizzard row wrong: " .. blizzard)
 local relay = assert(find(out, "Relay losses"), "No relay summary row")
 assert(relay:find("0 lost of 934 sent (0.0%), 1040 received", 1, true), "Relay row wrong: " .. relay)
-assert(find(out, "Leaderboard catch-up") and find(out, "Capture history catch-up") and find(out, "Relay queue"),
-    "A summary row is missing")
+assert(find(out, "Leaderboard catch-up") and find(out, "Capture history catch-up") and find(out, "Relay queue")
+    and find(out, "Keep/outpost captures"), "A summary row is missing")
 local details = 0
 for i, line in ipairs(out) do if line:find("Details:", 1, true) then details = i end end
-assert(details == 7, "Summary must be the header plus five rows before the details, got " .. details)
+assert(details == 8, "Summary must be the header plus six rows before the details, got " .. details)
 assert(not find(out, "[Overlord] [Overlord]"), "Double prefix")
 
 -- Losses: 5% of the relay sent is a problem (red), a few Blizzard refusals are worth watching.

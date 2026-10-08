@@ -10,18 +10,41 @@ Overlord.Outpost.ZONE_CAPTURE_PENALTY_SECONDS = OUTPOST_ZONE_CAPTURE_PENALTY_SEC
 Overlord.Outpost.NEUTRAL_ATLAS = "Warfronts-BaseMapIcons-Empty-Tower"
 local OUTPOST_NEUTRAL_ATLAS = Overlord.Outpost.NEUTRAL_ATLAS
 local OUTPOST_OBSERVER_STALE_BUFFER = 30
+local OUTPOST_OBSERVER_STALE_POLL_MAX = 4
+local OUTPOST_OBSERVER_PROBE_REARM_SEC = 900
+-- Periodic pulls kept for one tenant the ledger knows and the map lacks.
+local OUTPOST_LEDGER_AHEAD_PULLS_MAX = 4
+local ledgerAheadPulls = {}
 local observerStalePresentation = {}
+local observerStalePolls = {}
 local strategicSiteKeyByZoneId = {}
+
+-- Drops a UTF-8 character cut in the middle by a byte limit.
+local function trimUtf8Tail(name)
+    for back = 0, 2 do
+        local at = #name - back
+        if at < 1 then break end
+        local b = string.byte(name, at)
+        if b >= 192 then
+            local width = b >= 240 and 4 or (b >= 224 and 3 or 2)
+            if at + width - 1 > #name then return name:sub(1, at - 1) end
+            break
+        elseif b < 128 then
+            break
+        end
+    end
+    return name
+end
 
 local function sanitizeGuildName(name)
     if type(name) ~= "string" or name == "" then return "" end
-    name = (name:gsub("[|=:,]", ""):match("^%s*(.-)%s*$") or "")
+    name = (name:gsub("[|=:,%c]", ""):match("^%s*(.-)%s*$") or "")
     if name == "" then return "" end
     if utf8 and utf8.len and utf8.offset and utf8.len(name) > 24 then
         local cut = utf8.offset(name, 25)
         if cut then name = name:sub(1, cut - 1) end
     elseif #name > 24 then
-        name = name:sub(1, 24)
+        name = trimUtf8Tail(name:sub(1, 24))
     end
     return name
 end
@@ -300,8 +323,8 @@ local function defaultState()
     }
 end
 
--- Nom du joueur qui a pris l'avant-poste tenu (1.5.1) : garde et retransmis avec
--- l'etat tenu, jamais affiche ni exige pour l'instant. Pas de ":" ni "|" (format fil).
+-- Nom du joueur qui a pris le site tenu (1.5.1, exige et affiche depuis 1.7.2) : garde
+-- et retransmis avec l'etat tenu, montre dans le classement. Pas de ":" ni "|" (format fil).
 function Overlord.Outpost:NormalizeHeldCapturerName(name)
     if type(name) ~= "string" then return nil end
     local t = name:match("^%s*(.-)%s*$") or ""
@@ -987,7 +1010,7 @@ function Overlord.Outpost:IsObserverOutpostCaptureStale(st, site, now)
     if st.holdAuthorityLocal and (st.isHolding or st.isPaused) then return false end
     local ts = tonumber(st.updatedAt) or 0
     if ts <= 0 then return true end
-    now = tonumber(now) or time()
+    now = tonumber(now) or (Overlord.ServerNow and Overlord.ServerNow() or time())
     local age = math.max(0, now - ts)
     local req = self:GetDefaultHoldTimeRequired(st, site)
     local hold = math.max(0, math.min(tonumber(st.holdTimeElapsed) or 0, req))
@@ -1212,6 +1235,12 @@ function Overlord.Outpost:ResetOutpostsForCampaign()
     end
     if OverlordDB.outpostTenants then wipe(OverlordDB.outpostTenants) end
     if OverlordDB.outpostCaptureCounts then wipe(OverlordDB.outpostCaptureCounts) end
+    -- The LOC snapshot is rebuilt from the emptied tables (otherwise the rows of
+    -- the past week were still served until the first capture).
+    if Overlord.Leaderboard and Overlord.Leaderboard.RequestOutpostLedgerRebuild then
+        if Overlord.Leaderboard.ResetOutpostLedgerCounters then Overlord.Leaderboard:ResetOutpostLedgerCounters() end
+        Overlord.Leaderboard:RequestOutpostLedgerRebuild()
+    end
     -- Pastilles, carte et HUD fortin : plus d'ancien tenant affiche apres le reset.
     -- Passe generique (carte, minimap, HUD) puis HUD forteresse, forcees : un
     -- rafraichissement recent ne doit pas faire sauter celui du reset.
@@ -1252,24 +1281,25 @@ end
 
 function Overlord.Outpost:CompleteCapture(siteKey, guild, faction, captureTs, capturePool, suppressLeaderboard, capturerName)
     local st = self:GetState(siteKey)
-    local now = (captureTs and captureTs > 0) and captureTs or time()
+    local now = (captureTs and captureTs > 0) and captureTs
+        or (Overlord.ServerNow and Overlord.ServerNow() or time())
     if not self:IsCaptureTakeoverAllowed(st, guild, faction, now, self:GetSite(siteKey)) then return false end
     local newGuild = sanitizeGuildName(guild or "")
     capturePool = normalizeOutpostPoolTag(capturePool)
     if capturePool == "" then capturePool = currentOutpostPoolTag() end
     if capturePool == "" then return false end
+    -- 1.7.2: a capture without the character who made it is not a capture (the
+    -- network only accepts a claim its capturer made himself, see SyncOutpost).
+    local heldCapturer = self:NormalizeHeldCapturerName(capturerName)
+    if not heldCapturer then return false end
     st.status = "held"
     st.ownerGuild = newGuild
     st.ownerFaction = faction
-    -- Sans nom fourni (finale reseau), le capteur des heartbeats in_progress.
-    local heldCapturer = self:NormalizeHeldCapturerName(capturerName)
-        or self:NormalizeHeldCapturerName(st.opOfficialCapturerName)
-        or self:NormalizeHeldCapturerName(st.opRelayCapturerName)
     self:ClearOpCapturerFields(st)
     st.heldCapturerName = heldCapturer
     -- Le nom ne vaut que pour cette guilde : un changement de proprietaire par un
     -- autre chemin ne retransmet jamais le capteur de l'ancien tenant.
-    st.heldCapturerGuild = heldCapturer and newGuild or nil
+    st.heldCapturerGuild = newGuild
     st.claimedAt = now
     st.expiresAt = 0
     st.holdTimeElapsed = 0
@@ -1295,8 +1325,136 @@ function Overlord.Outpost:CompleteCapture(siteKey, guild, faction, captureTs, ca
         Overlord.Sync:PrintOutpostCaptureAlert(siteKey, st.ownerGuild, faction, now)
     end
     if not suppressLeaderboard and Overlord.Leaderboard and Overlord.Leaderboard.RecordOutpostCapture then
-        Overlord.Leaderboard:RecordOutpostCapture(siteKey, st.ownerGuild, faction, now, capturePool)
+        Overlord.Leaderboard:RecordOutpostCapture(siteKey, st.ownerGuild, faction, now, capturePool, heldCapturer)
     end
+    return true
+end
+
+-- A held site still waiting for its network snapshot (login): the periodic
+-- targeted pull is then never skipped. An assault only observed is not listed:
+-- its quiet end is covered by the bounded probes of TickMaintenance.
+function Overlord.Outpost:HasStateAwaitingNetwork()
+    local lb = Overlord.Leaderboard
+    local waiting = false
+    for key in pairs(Overlord.OutpostSites) do
+        local st = self:GetState(key)
+        if st.status == "held" and self:IsOutpostStateAwaitingNetworkSnapshot(st) then waiting = true end
+        -- The ledger learned a capture (history round) whose held state the map
+        -- still lacks (a capturer gone offline never re-announces it): a few pulls
+        -- per such tenant, never an endless one (the map may refuse it for good).
+        local aheadTs = lb and lb.OutpostLedgerAheadOfMap and lb:OutpostLedgerAheadOfMap(key, st) or nil
+        if aheadTs then
+            local pulls = ledgerAheadPulls[key]
+            if not pulls or pulls.claimedAt ~= aheadTs then
+                pulls = { claimedAt = aheadTs, count = 0 }
+                ledgerAheadPulls[key] = pulls
+            end
+            if pulls.count < OUTPOST_LEDGER_AHEAD_PULLS_MAX then
+                pulls.count = pulls.count + 1
+                waiting = true
+            end
+        end
+    end
+    return waiting
+end
+
+-- 1.7.2 one-shot: site states of the release week name no capturer and cannot be
+-- re-announced; they restart as never-touched neutral. Live captures come back
+-- from the network (every accepted claim is newer than the ledger cut-off).
+function Overlord.Outpost:PurgeStatesForCapturerLedger(states, cutoffTs)
+    if type(states) ~= "table" then return 0 end
+    cutoffTs = math.floor(tonumber(cutoffTs) or 0)
+    local purged = 0
+    for key in pairs(Overlord.OutpostSites) do
+        local st = states[key]
+        local stamp = type(st) == "table"
+            and math.max(tonumber(st.claimedAt) or 0, tonumber(st.updatedAt) or 0) or 0
+        -- Only the states of the release week (stamped within the 7 days before the
+        -- cut-off), or an active state that could never be re-announced (no stamp).
+        local releaseWeek = stamp > 0 and stamp <= cutoffTs and cutoffTs - stamp < 604800
+        if type(st) == "table" and (releaseWeek
+            or (stamp <= 0 and (st.status ~= "neutral" or (st.ownerGuild or "") ~= ""))) then
+            local fresh = defaultState()
+            for k in pairs(st) do st[k] = nil end
+            for k, v in pairs(fresh) do st[k] = v end
+            purged = purged + 1
+        end
+    end
+    return purged
+end
+
+-- Puts the tenant we knew back after an observed assault ended without a capture
+-- (the packet must be newer than the assault we hold: a stale copy of the tenant
+-- never cancels an assault). With a guild, a faction and a time, only that exact
+-- previous tenant is restored.
+function Overlord.Outpost:RestorePreviousTenant(siteKey, st, guild, faction, claimedAt, remoteTs)
+    if not st or st.status ~= "in_progress" then return false end
+    if st.holdAuthorityLocal and (st.isHolding or st.isPaused) then return false end
+    remoteTs = math.floor(tonumber(remoteTs) or 0)
+    if remoteTs <= math.floor(tonumber(st.updatedAt) or 0) then return false end
+    local previousGuild = sanitizeGuildName(st.previousOwnerGuild or "")
+    if previousGuild == "" or not st.previousOwnerFaction then return false end
+    local previousClaimedAt = math.floor(tonumber(st.previousClaimedAt) or 0)
+    if guild ~= nil then
+        if sanitizeGuildName(guild) ~= previousGuild or faction ~= st.previousOwnerFaction
+            or math.floor(tonumber(claimedAt) or 0) ~= previousClaimedAt then return false end
+    end
+    st.status = "held"
+    st.ownerGuild = previousGuild
+    st.ownerFaction = st.previousOwnerFaction
+    st.claimedAt = previousClaimedAt
+    st.expiresAt = math.floor(tonumber(st.previousExpiresAt) or 0)
+    local previousPool = normalizeOutpostPoolTag(st.previousOwnerPool)
+    if previousPool ~= "" then st.pool = previousPool end
+    st.holdTimeElapsed = 0
+    st.holdTimeRequired = self:GetBaseHoldTimeRequired(self:GetSite(siteKey))
+    st.isHolding, st.isPaused, st.isContested = false, false, false
+    st.holdAuthorityLocal, st.holdStartTime = false, nil
+    st.previousOwnerGuild, st.previousOwnerFaction = "", nil
+    st.previousClaimedAt, st.previousExpiresAt, st.previousOwnerPool = 0, 0, ""
+    self:ClearOpCapturerFields(st)
+    if sanitizeGuildName(st.heldCapturerGuild or "") ~= previousGuild then
+        st.heldCapturerName, st.heldCapturerGuild = nil, nil
+    end
+    st.updatedAt = remoteTs
+    self:SaveOutposts()
+    self:MarkDirty()
+    self:RefreshOutpostPresentation(siteKey)
+    return true
+end
+
+-- The ledger holds this capture as the newest tenant of the site: the map takes it
+-- as is (a capture missed in between may make the plain merge refuse it).
+function Overlord.Outpost:AdoptLedgerTenant(siteKey, st, remote)
+    if not st or not remote or remote.status ~= "held" then return false end
+    if st.holdAuthorityLocal and (st.isHolding or st.isPaused) then return false end
+    local guild = sanitizeGuildName(remote.ownerGuild or "")
+    local claimedAt = math.floor(tonumber(remote.claimedAt) or 0)
+    if guild == "" or (remote.ownerFaction ~= "Alliance" and remote.ownerFaction ~= "Horde")
+        or claimedAt <= 0 then return false end
+    st.status = "held"
+    st.ownerGuild = guild
+    st.ownerFaction = remote.ownerFaction
+    st.claimedAt = claimedAt
+    st.expiresAt = 0
+    st.holdTimeElapsed = 0
+    st.holdTimeRequired = self:GetBaseHoldTimeRequired(self:GetSite(siteKey))
+    st.isHolding, st.isPaused, st.isContested = false, false, false
+    st.holdAuthorityLocal, st.holdStartTime = false, nil
+    st.previousOwnerGuild, st.previousOwnerFaction = "", nil
+    st.previousClaimedAt, st.previousExpiresAt, st.previousOwnerPool = 0, 0, ""
+    self:ClearOpCapturerFields(st)
+    if sanitizeGuildName(st.heldCapturerGuild or "") ~= guild then
+        st.heldCapturerName, st.heldCapturerGuild = nil, nil
+    end
+    local pool = normalizeOutpostPoolTag(remote.pool)
+    if pool ~= "" then st.pool = pool end
+    st.updatedAt = math.max(math.floor(tonumber(remote.updatedAt) or 0), claimedAt)
+    st._loginSyncUnconfirmed = nil
+    sanitizeOutpostState(st, siteByKey[siteKey])
+    self:SaveOutposts()
+    self:MarkDirty()
+    self:RefreshOutpostPresentation(siteKey)
     return true
 end
 
@@ -1311,6 +1469,19 @@ function Overlord.Outpost:ApplyRemoteState(siteKey, remote, fromSync)
         and math.floor(tonumber(st.previousClaimedAt) or 0)
         or math.floor(tonumber(st.claimedAt) or 0)
     local hadLocalAuthority = st.holdAuthorityLocal and (st.isHolding or st.isPaused)
+
+    -- 1.7.2: a release (neutral) from the network never erases a tenant. A held
+    -- site only changes hands by a capture claim; an assault we observed that
+    -- ends without a capture gives the site back to the tenant we knew.
+    if fromSync and remote.status == "neutral" then
+        if st.status == "held" and sanitizeGuildName(st.ownerGuild or "") ~= "" then return false end
+        -- (the restoration of the previous tenant is decided by SyncOutpost, which
+        -- knows the sender; an unauthorized release changes nothing here)
+        if st.status == "in_progress" and not hadLocalAuthority
+            and sanitizeGuildName(st.previousOwnerGuild or "") ~= "" then
+            return false
+        end
+    end
 
     if fromSync and remoteTs > 0 and remoteTs == localTs then
         local remoteStatus, localStatus = tostring(remote.status or ""), tostring(st.status or "")
@@ -1485,6 +1656,11 @@ function Overlord.Outpost:ApplyRemoteState(siteKey, remote, fromSync)
         st.previousOwnerPool = ""
     end
     if rStatus then st.status = rStatus end
+    -- Another assailing guild: the previous assailant is not this one.
+    if rStatus == "in_progress" and rGuild
+        and sanitizeGuildName(rGuild) ~= sanitizeGuildName(st.ownerGuild or "") then
+        st.opRelayCapturerName = nil
+    end
     if rGuild then st.ownerGuild = sanitizeGuildName(rGuild) end
     if rFac then st.ownerFaction = rFac end
     if rHold then
@@ -1517,7 +1693,9 @@ function Overlord.Outpost:ApplyRemoteState(siteKey, remote, fromSync)
     if remote.pool then st.pool = normalizeOutpostPoolTag(remote.pool) end
     -- Capteur relaye : seulement d'un assaut en cours (un etat tenu porte le capteur
     -- de la prise precedente, qui ne doit pas devenir celui de la suivante).
-    if remote.opRelayCapturerName and remote.status == "in_progress" then
+    -- An observer's copy names nobody (empty field): the assailant we know stays.
+    if remote.status == "in_progress" and type(remote.opRelayCapturerName) == "string"
+        and remote.opRelayCapturerName ~= "" then
         st.opRelayCapturerName = remote.opRelayCapturerName
     end
     if remote.opRelayCapturerShard then st.opRelayCapturerShard = remote.opRelayCapturerShard end
@@ -1539,7 +1717,7 @@ function Overlord.Outpost:ApplyRemoteState(siteKey, remote, fromSync)
 end
 
 function Overlord.Outpost:TickMaintenance()
-    local now = time()
+    local now = Overlord.ServerNow and Overlord.ServerNow() or time()
     local anyChanged = false
     for key in pairs(Overlord.OutpostSites) do
         local st = self:GetState(key)
@@ -1549,10 +1727,23 @@ function Overlord.Outpost:TickMaintenance()
         elseif st.status == "in_progress" and not st.holdAuthorityLocal and not st.isHolding then
             local age = now - (tonumber(st.updatedAt) or 0)
             local stale = self:IsObserverOutpostCaptureStale(st, self:GetSite(key), now)
+            -- Observateur : poll SR uniquement, jamais d'ecriture d'etat gameplay (regression 6.3.0).
+            -- Au plus quatre sondes par assaut expire (1.7.2) : la finale d'un capteur
+            -- de l'autre faction n'arrive que par un rattrapage cible, jamais par le
+            -- canal, et chaque observateur sondait sinon toutes les 22-45 s. Les sondes
+            -- ne sont rearmees que par un autre assaut (guilde ou faction) ou apres
+            -- 15 min, jamais par un simple battement (un battement forge les rachetait).
+            local ident = sanitizeGuildName(st.ownerGuild or ""):lower() .. "|" .. tostring(st.ownerFaction or "")
+            local probes = observerStalePolls[key]
+            if not probes or probes.ident ~= ident or now - probes.armedAt > OUTPOST_OBSERVER_PROBE_REARM_SEC then
+                probes = { ident = ident, armedAt = now, count = 0 }
+                observerStalePolls[key] = probes
+            end
             if stale then
-                -- Observateur : poll SR uniquement, jamais d'ecriture d'etat gameplay (regression 6.3.0).
-                if Overlord.Sync and Overlord.Sync.PollIfStaleObserverOutpost then
-                    Overlord.Sync:PollIfStaleObserverOutpost(age)
+                if probes.count < OUTPOST_OBSERVER_STALE_POLL_MAX
+                    and Overlord.Sync and Overlord.Sync.PollIfStaleObserverOutpost
+                    and Overlord.Sync:PollIfStaleObserverOutpost(age, probes.count % 2 == 0) then
+                    probes.count = probes.count + 1
                 end
             else
                 PollIfOutpostStateNeedsCatchup(st)
@@ -1564,8 +1755,10 @@ function Overlord.Outpost:TickMaintenance()
         elseif st.status == "held" and self:IsOutpostStateAwaitingNetworkSnapshot(st) then
             PollIfOutpostStateNeedsCatchup(st)
             observerStalePresentation[key] = nil
+            observerStalePolls[key] = nil
         else
             observerStalePresentation[key] = nil
+            observerStalePolls[key] = nil
         end
     end
     if anyChanged then
@@ -1594,7 +1787,7 @@ function Overlord.Outpost:GetObserverHoldTimeElapsed(st, site)
     if ts <= 0 then
         return tonumber(st.holdTimeElapsed) or 0
     end
-    local age = time() - ts
+    local age = (Overlord.ServerNow and Overlord.ServerNow() or time()) - ts
     -- Extrapolation AFFICHAGE SEUL entre deux OP (meme garde rising que Guild Keep).
     local hold = tonumber(st.holdTimeElapsed) or 0
     local mem = self._obsHoldDisplayMem

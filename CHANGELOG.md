@@ -1,17 +1,10 @@
-1.7.1
+1.7.2
 
-**Overlord Forever 1.7.1**
+**Overlord Forever 1.7.2**
 
-- **Update required**: Ashenvale has new capture points, so 1.7.0 and 1.7.1 no longer share the full war map. Live captures still pass between versions, but everyone should update.
-- **Ashenvale redrawn on the real Classic map**: the front now covers the west and south-west. North path: Astranaar, Maestra's Post, Zoram Strand, Darkshore Road, Iris Lake, Raynewood Retreat, Splintertree Post. South path: Astranaar, Shrine of Aessina, Ruins of Stardust, Dor'Danil Barrow Den, Splintertree Post. The Horde follows the same paths the other way. Night Run, Bloodtooth Camp, Silverwind Refuge, Mystral Lake and Fallen Sky Lake are gone. Still 10 points.
-- **Arathi**: Western Highlands becomes Thandol Span, at the north end of the bridge. Thoradin's Wall now sits on the wall. Sage's Tower moves next to Stromgarde.
-- **Savanna Bastion** moves to the middle of the Barrens, south-west of the Stagnant Oasis, far from the Crossroads.
-- **Allied guild rampages**: when a guild of your faction racks up honorable kills, you now see it too, in green, at most once per guild every 30 minutes. Option in Settings, or `/ov guildkills allies on` / `off`. Enemy alerts are unchanged.
-- **HK everywhere**: honorable kills are written the short way in every language (HK, VH, MH, ES, ПП, 击杀) in alerts, the ranking and Recent activity.
-- **Ranking**: a new Members column in the guild table shows how many ranked players a guild has. The keep and outpost tables are a little narrower, so the window keeps its size.
-- **Tutorial rewritten**: short bullet lists with an icon per section, updated for the current features. The ranking fills in by itself in the background, even with its window closed.
-- **Settings**: new Most Wanted alerts and world map checkboxes, the panel scale is shown in percent, and the floating Next Objective no longer covers Blizzard windows.
-- **Contact**: the greyed Export button becomes Contact, with a link to the author on X.
-- **Recent activity** gets more room: the "Go here" line under the distance is gone.
-- **Performance**: fewer CPU spikes while the ranking catches up.
-- **Protection**: more checks on guild alerts received from other players.
+- **Update required**: keep and outpost captures use a new message format. 1.7.1 clients no longer share them with 1.7.2 clients, and there is no bridge between the two.
+- **Keep and outpost tables restart this week**: this week's keep and outpost rows are cleared for everyone and the sites start neutral again, on purpose. Captures made after updating count normally; the weekly reset is unchanged.
+- **Who took it**: every keep and outpost capture is now attributed to the character who made it. Hover a row of the keep or outpost table to see the name.
+- **Protection**: keep and outpost captures received from other players are checked much more strictly, and a fake guild seen in the keep and outpost tables this week is gone.
+- **Network**: fewer keep and outpost messages are passed on between players, and an enemy assault that goes quiet no longer makes every observer ask for the map again and again. `/ov network` shows a keep/outpost captures line.
+- **Tutorial**: the keeps section mentions the new tooltip, in 7 languages.

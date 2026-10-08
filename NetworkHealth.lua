@@ -134,6 +134,12 @@ function NH:Compute()
         add("history", waiting and "warn" or "ok", "Capture history catch-up",
             waiting and string.format("waiting on one peer for %ds", hr.stepAge) or text)
     end
+    if sync and sync.GetOutpostClaimStats then
+        local accepted, refused, last = sync:GetOutpostClaimStats()
+        add("claims", "ok", "Keep/outpost captures",
+            string.format("%d accepted, %d refused%s", accepted, refused,
+                last and (" (last: " .. last .. ")") or ""))
+    end
     if net and net.GetQueueSummary then
         local q = net:GetQueueSummary()
         add("queue", q.catchup >= q.catchupMax and "warn" or "ok", "Relay queue",

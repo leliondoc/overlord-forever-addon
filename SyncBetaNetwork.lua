@@ -1725,7 +1725,14 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     -- Catch-up addressed to someone else is not relayed (point-to-point only).
     -- Broadcast map, guild and class requests are not relayed either: only the
     -- requester's direct neighbours answer them since 1.2.4, first-hand.
-    local relayable = not isPointToPointCatchup(p.kind, p.target)
+    -- 1.7.2: a keep/outpost capture (OC, LO, LOC, held OP) is only believed from
+    -- its capturer or inside a reply the receiver asked for; a forwarded copy would
+    -- be refused by every receiver, so none is relayed. Assaults in progress and
+    -- releases (neutral) still cross factions through the relay.
+    local captureClaim = p.kind == "OC" or p.kind == "LO" or p.kind == "LOC"
+        or (p.kind == "OP" and type(p.payload) == "string"
+            and p.payload:match("^v%d+:[^:]*:([^:]*)") == "held")
+    local relayable = not captureClaim and not isPointToPointCatchup(p.kind, p.target)
         and not ((p.kind == "SR" or p.kind == "GR" or p.kind == "CR") and p.target == "*")
         and p.kind ~= "GI"
     if p.kind == "GI" then
