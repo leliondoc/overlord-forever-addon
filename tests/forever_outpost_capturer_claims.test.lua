@@ -125,10 +125,13 @@ sync:OnReceiveOutpostState(heldWire("silverpine", "Real Guild", "Alliance", ts, 
 sync:OnReceiveLeaderboardOutpostTenant(string.format("silverpine:Real Guild:A:%d:%d:global", ts, EPOCH), troll, "CHANNEL")
 sync:OnReceiveLeaderboardOutpostCount(string.format("silverpine:Real Guild:A:1:%d:%d:global", ts, EPOCH), troll, "CHANNEL")
 sync:OnReceiveOutpostCapture(string.format("silverpine:Real Guild:A:%d:global", ts), troll, "CHANNEL")
+-- A routine held copy from someone who never learnt the capturer: refused, counted apart.
+sync:OnReceiveOutpostState(heldWire("silverpine", "Real Guild", "Alliance", ts, nil), troll, "CHANNEL")
 assert(count("silverpine", "Real Guild") == 0 and op:GetState("silverpine").status == "neutral",
     "a claim without a plausible capturer was believed")
-local accepted, refused = sync:GetOutpostClaimStats()
+local accepted, refused, _, noCapturer = sync:GetOutpostClaimStats()
 assert(accepted == 0 and refused >= 8, "refusals are not counted: " .. tostring(refused))
+assert(noCapturer >= 1 and noCapturer < refused, "held copies without a capturer are not told apart: " .. tostring(noCapturer))
 print("Outpost claims: forged guild rows (LO, LOC, OP held, OC) refused from the channel, no capturer / wrong guild / impossible name refused")
 
 -- ===== (2) the capturer himself: accepted live, idempotent, named in the table

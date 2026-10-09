@@ -82,7 +82,11 @@ local OUTPOST_CLAIM_FUTURE_SKEW = 30
 local outpostClaimPeers = {}
 local outpostClaimPeerCount = 0
 local ownerClaimDedup = NewOutpostDedup(OUTPOST_OWNER_CLAIM_TTL, OUTPOST_OWNER_CLAIM_MAX)
-local outpostClaimStats = { accepted = 0, refused = 0 }
+-- noCapturer: refused held states that carried no capturer at all. Every player
+-- re-sends the outposts he sees held every 120 s, also those whose capturer he
+-- never learnt (map catch-up, old saves, older versions): harmless routine copies,
+-- shown apart so they do not read as forgeries.
+local outpostClaimStats = { accepted = 0, refused = 0, noCapturer = 0 }
 
 local function RemoveOutpostDedupNode(registry, node)
     if node.previous then node.previous.next = node.next else registry.head = node.next end
@@ -697,7 +701,8 @@ local function NoteOutpostClaimRefused(msgType, reason)
 end
 
 function Overlord.Sync:GetOutpostClaimStats()
-    return outpostClaimStats.accepted, outpostClaimStats.refused, outpostClaimStats.lastRefused
+    return outpostClaimStats.accepted, outpostClaimStats.refused, outpostClaimStats.lastRefused,
+        outpostClaimStats.noCapturer
 end
 
 -- Shortest time a character needs before completing a capture of this site (the
@@ -1346,6 +1351,9 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
             siteKey, guild, remoteFac, heldCaptureTs, relayCapturer, sender, channel, remotePool)
         if not ok then
             NoteOutpostClaimRefused("OP", reason)
+            if reason == "capturer" and (relayCapturer or "") == "" then
+                outpostClaimStats.noCapturer = outpostClaimStats.noCapturer + 1
+            end
             return
         end
         relayCapturer = signedCapturer

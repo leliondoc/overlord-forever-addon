@@ -135,9 +135,11 @@ function NH:Compute()
             waiting and string.format("waiting on one peer for %ds", hr.stepAge) or text)
     end
     if sync and sync.GetOutpostClaimStats then
-        local accepted, refused, last = sync:GetOutpostClaimStats()
+        local accepted, refused, last, noCapturer = sync:GetOutpostClaimStats()
+        noCapturer = tonumber(noCapturer) or 0
         add("claims", "ok", "Keep/outpost captures",
-            string.format("%d accepted, %d refused%s", accepted, refused,
+            string.format("%d accepted, %d refused%s%s", accepted, refused,
+                noCapturer > 0 and string.format(", of which %d routine copies without capturer", noCapturer) or "",
                 last and (" (last: " .. last .. ")") or ""))
     end
     if net and net.GetQueueSummary then
