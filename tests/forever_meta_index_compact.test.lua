@@ -1,4 +1,4 @@
--- 1.7.8 memory: the meta index publishes compact entries (values only, no tie-break
+-- 1.8.0 memory: the meta index publishes compact entries (values only, no tie-break
 -- scratch) and re-derives one player's entry from its row instead of dropping the
 -- whole index. Invariant checked here: after any sequence of setter calls, the
 -- incrementally maintained index equals a rebuild from scratch, field by field.

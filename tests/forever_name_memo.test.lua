@@ -1,4 +1,4 @@
--- 1.7.8 memory: one memo for IsForeverCharacterName, HasForeverNameCase and
+-- 1.8.0 memory: one memo for IsForeverCharacterName, HasForeverNameCase and
 -- CanonicalForeverName (three independent results packed per name). Every result,
 -- in every call order and across a memo reset, equals the uncached computation.
 assert(loadfile("tests/forever_leaderboard.test.lua"))()

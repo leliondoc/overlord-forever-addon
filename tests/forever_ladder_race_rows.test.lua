@@ -116,7 +116,7 @@ local function heartbeat()
 end
 heartbeat()
 advance(10)
--- 1.7.8: clients advertise v8 (~ld); the v7 exchange is still answered (sections 2 and below).
+-- 1.8.0: clients advertise v8 (~ld); the v7 exchange is still answered (sections 2 and below).
 assert(PULLER.Overlord.BetaNetwork:GetPeerPagedProtocol(SOURCE.name) == 8, "the source did not advertise v8")
 
 local RACES = { "Orc", "Scourge", "Tauren", "Troll" }
@@ -326,7 +326,7 @@ assert(lb:GetExportPlayerRace(liveTarget) == beforeLive, "a live LK set a race: 
 
 -- 3) Audit (performance): races stay out of the digests. Same scores, different race
 -- knowledge (the puller saw names[1] as a Troll and knows a race the source lacks):
--- a new sweep (v8 between 1.7.8 clients) re-sends nothing.
+-- a new sweep (v8 between 1.8 clients) re-sends nothing.
 lb.playerInfo[names[2]].race, lb.playerInfo[names[2]].raceSex = "Orc", 2
 SOURCE.Overlord.Leaderboard.playerInfo[names[3]].race = ""
 SOURCE.Overlord.Leaderboard:MarkMetaDirty()

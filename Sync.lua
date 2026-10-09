@@ -864,7 +864,7 @@ end
 -- Stocke sur l'objet : le chunk Sync.lua est proche de la limite de 200 locals.
 -- 32768 entries: a ladder pass over 10-20k names used to wipe a 2048-entry memo
 -- many times per pass, recomputing every name (perf audit 2026-10-01).
--- 1.7.8: ONE memo for the three functions (they see the same names): values[name]
+-- 1.8.0: ONE memo for the three functions (they see the same names): values[name]
 -- packs three independent states in base 3 / 9, so a name costs one table slot
 -- instead of three (about 1-2.6 MB at 10-20k players). Digit 0 = not computed.
 --   v % 3: IsForeverCharacterName (1 true, 2 false)

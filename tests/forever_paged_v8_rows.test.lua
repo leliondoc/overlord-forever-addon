@@ -1,4 +1,4 @@
--- 1.7.8: ranking pages v8 send only the rows that differ (bucket fingerprints, then
+-- 1.8.0: ranking pages v8 send only the rows that differ (bucket fingerprints, then
 -- row fingerprints, then the rows asked for), and from a Battle.net friend of the
 -- other faction only that faction's rows. Real HR/HA/HB, relay, BNet routes and
 -- page acceptance; only WoW transports and the clock are simulated.

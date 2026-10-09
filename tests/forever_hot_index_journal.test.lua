@@ -94,7 +94,7 @@ same, key = sameIndex(published, expectedKillIndex())
 assert(same, "Live kill index missed a kill during the meta pass at " .. tostring(key))
 
 -- 1.7.1 CPU: the same race re-dated (v7 LK row, then the dated LR row) patches the
--- hot index entry instead of dropping the whole index. Since 1.7.8 a new race of a
+-- hot index entry instead of dropping the whole index. Since 1.8.0 a new race of a
 -- single-row identity is re-derived in place too (same entry as a rebuild).
 do
     local name = playerName(7)

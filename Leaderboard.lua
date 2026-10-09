@@ -1211,7 +1211,7 @@ function Overlord.Leaderboard:GetHotIndexStats()
     return self._hotIndexStats or { completed = 0, metaOnly = 0, abortedMeta = 0, abortedOther = 0 }
 end
 
--- A change during a pass that the pass cannot replay (since 1.7.8 only an identity
+-- A change during a pass that the pass cannot replay (since 1.8.0 only an identity
 -- with several rows, or a dropped index; single rows are re-derived from the
 -- journal): the index built from the other rows is still valid, so publish it and
 -- refresh once, 90 s later (never in combat or a large event), instead of
@@ -1540,7 +1540,7 @@ Overlord.Leaderboard.GK_WORK_STEP_INTERVAL = 0.1
 Overlord.Leaderboard.GK_WORK_POSTPONE_RETRY = 2
 Overlord.Leaderboard.GK_RECONCILE_DEBOUNCE_SEC = 10
 -- Champ (pas de local) : ecart minimal entre deux builds quand une vue est affichee.
--- 1.7.8: 10 s (was 3). With live kills the view is stale almost all the time, so an
+-- 1.8.0: 10 s (was 3). With live kills the view is stale almost all the time, so an
 -- open panel rebuilt every 3 s plus the build time (~6 MB of garbage per build at
 -- 10,000 players); the ranking now refreshes within ~15 s instead of ~10 s.
 Overlord.Leaderboard.DISPLAY_CACHE_MIN_REBUILD_SEC = 10
@@ -2667,7 +2667,7 @@ function Overlord.Leaderboard:Initialize(loadFromDB)
     self._snapshotDirty = true
     self._snapshotRevision = (self._snapshotRevision or 0) + 1
     local loadedBucket = loadFromDB ~= false and OverlordDB and OverlordDB.leaderboard
-    -- 1.7.8: the copy of the previous week (no reader) leaves old saves.
+    -- 1.8.0: the copy of the previous week (no reader) leaves old saves.
     if OverlordDB then OverlordDB.leaderboardPreviousCampaigns = nil end
     if loadedBucket then
         self.kills = loadedBucket.kills or {}
@@ -4424,8 +4424,8 @@ end
 -- il remplace le scan complet qui etait auparavant declenche par chaque lecture du panneau.
 -- Le roster local donne aussi la classe et le niveau des membres : de simples
 -- indices qui ne remplissent qu'une valeur absente, jamais un fait deja connu.
--- deferDirty: the sliced roster scan marks metadata dirty once at its end
--- (one invalidation per row relaunched the dedup rebuild ~500 times).
+-- deferDirty: the caller marks the row dirty itself (the sliced roster scan does it
+-- inside its budgeted slice, one row at a time).
 function Overlord.Leaderboard:MaybeEnrichGuildForKillRow(playerName, deferDirty)
     local entry = localGuildRosterGuild ~= "" and localGuildRosterEntry(playerName) or nil
     if not entry then return false end
@@ -5899,14 +5899,8 @@ function Overlord.Leaderboard:OpenAtomicWeeklyBucket(archiveEpoch, resetEpoch, c
         campaignStart = archiveEpoch,
         campaignId = tonumber(OverlordDB.leaderboard and OverlordDB.leaderboard.campaignId) or 0,
     }
-    -- Point de reprise : scores complets, mais metadonnees (classe/guilde/niveau/race)
-    -- seulement pour les 500 meilleurs. Le bucket complet est deja dans le marker
-    -- d'archive ; une copie integrale de playerInfo doublait 26 000 lignes de fichier.
-    -- Sans table par ligne ni tri des lignes (gel de 100 ms et plus a 20 000 lignes,
-    -- chez tous les clients a la seconde du reset) : seuil du top 500 par histogramme
-    -- des totaux, puis une passe. Les ex aequo au seuil ne sont gardes que dans la limite.
     local oldScoreBucketEpoch = GetMatchingLeaderboardScoreBucketEpoch(archiveEpoch)
-    -- 1.7.8: no copy of the finished week is kept any more (it held the whole
+    -- 1.8.0: no copy of the finished week is kept any more (it held the whole
     -- previous ladder in memory and in the save for 7 days, read by no code; the
     -- full history is archived outside the game). The compact history stays.
     OverlordDB.leaderboardPreviousCampaigns = nil
@@ -6308,7 +6302,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
             yieldFinalWork()
         end
         -- Copy metadata in slices as well as sorting at the 5000-player cap.
-        -- 1.7.8: a meta index entry is never written in place (a change publishes a
+        -- 1.8.0: a meta index entry is never written in place (a change publishes a
         -- new entry), so the snapshot shares it instead of copying 13 fields per
         -- player (~4.6 MB per build at 5,000 players). Same values for every reader:
         -- the entry holds them already normalized. Entries carry no factionAt: a row

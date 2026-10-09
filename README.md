@@ -53,7 +53,7 @@ les epochs de campagne au login et après initialisation, ainsi que les totaux
 actifs et de la dernière archive.
 
 Un reset hebdomadaire ouvre normalement un nouveau classement. La semaine terminée
-n’est gardée dans le jeu que par l’historique compact (top 100) ; depuis 1.7.8 aucune
+n’est gardée dans le jeu que par l’historique compact (top 100) ; depuis 1.8.0 aucune
 copie complète n’est plus conservée (elle occupait toute la mémoire d’un classement
 pendant sept jours), l’historique complet étant archivé hors du jeu.
 

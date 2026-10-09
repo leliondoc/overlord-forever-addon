@@ -10,7 +10,7 @@ for i = 1, 200 do
     lb.playerInfo[name] = {guild='Recovery Guild', faction='Alliance', race='Dwarf'}
 end
 lb:Save()
--- 1.7.8: the finished week is no longer copied (an old copy is dropped too); its
+-- 1.8.0: the finished week is no longer copied (an old copy is dropped too); its
 -- top 100 stays in the compact history.
 OverlordDB.leaderboardPreviousCampaigns = {us={bucket={kills={['Remote Player']=7}}, resetEpoch=epoch}}
 assert(lb:OpenAtomicWeeklyBucket(epoch, epoch + 604800, 20260923))

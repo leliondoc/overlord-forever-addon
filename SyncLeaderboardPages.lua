@@ -3,7 +3,7 @@
 -- v7 (1.7.0) is v6 with the race at the end of each sent kill row.
 -- Since 1.7.5 peers before v7 are not asked (clients before 1.7.0 are left out,
 -- update required); responders still answer v5/v6 requests from old clients.
--- v8 (1.7.8) sends only the rows that differ: one fingerprint per bucket, then one
+-- v8 (1.8.0) sends only the rows that differ: one fingerprint per bucket, then one
 -- per row of a differing bucket, then the rows asked for (see the v8 block below).
 -- v8 is asked of peers advertising it, v7 of the others.
 local Overlord = _G.Overlord
@@ -205,7 +205,7 @@ local function raceField(snapshot, name, payload)
 end
 sync._PagedRaceField = raceField
 local function raced(wire, stream) return (wire == "7" or wire == "8") and stream == "LK" end
--- 1.7.8: a profile bucket holds parallel arrays (keys, payloads, digests, factions,
+-- 1.8.0: a profile bucket holds parallel arrays (keys, payloads, digests, factions,
 -- races for LK) instead of one table per row: about 100 B less per row (1.3 MB at
 -- 13,000 rows), and the per-row digests serve the v8 row lists.
 local function rowPayload(bucket, i, withRace)
@@ -229,7 +229,7 @@ end
 -- brings the rest.
 local PROFILE_REUSE_SEC = 120
 -- own: the profile is for our own pull. It is not reused once rows were applied
--- since it was built (1.7.8: rounds every 45-105 s after a v8 round would otherwise
+-- since it was built (1.8.0: rounds every 45-105 s after a v8 round would otherwise
 -- list and fetch again the rows the previous round just brought).
 local function prepare(callback, own)
     if building then return false end
@@ -356,7 +356,7 @@ local function progress()
     end
     return saved
 end
--- v8 (1.7.8): row-level anti-entropy, same budget and same single responder.
+-- v8 (1.8.0): row-level anti-entropy, same budget and same single responder.
 -- v7 sent a whole bucket (~80 rows at 5,000 players) as soon as one row differed,
 -- and with live scores almost every bucket differs: a sweep resent nearly the whole
 -- ranking (about an hour at 5,000 players). v8 per stream:

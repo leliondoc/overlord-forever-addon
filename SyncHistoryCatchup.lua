@@ -21,7 +21,7 @@ local HASH_MOD = 2147483647
 -- Un tour v6 reussi rearme le suivant apres deux minutes ; un tour sans voisin
 -- ou sans reponse reessaie apres deux minutes aussi.
 local RECENT_ACK_SEC = 2 * 60
--- 1.7.8: after a v8 round (only differing rows, an idle round is one request and
+-- 1.8.0: after a v8 round (only differing rows, an idle round is one request and
 -- one reply) the next one comes after 45-105 s: a new row of the other faction
 -- reaches every ally about 2.5 times sooner (simulated: 16 min instead of 42 for
 -- six allies and one bridge). The local profile is still rebuilt at most every

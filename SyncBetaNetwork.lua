@@ -549,7 +549,7 @@ local function remember(values, order, key, value, limit, keep)
         local first, last = order.first or 1, order.last or 0
         local count = last - first + 1
         if count >= limit then
-            -- keep (neighbour table only, 1.7.8): the peers of a running ranking
+            -- keep (neighbour table only, 1.8.0): the peers of a running ranking
             -- session move to the newest end instead of being forgotten. On a busy
             -- channel an entry lived ~12 s (5,000 members, 512 entries), shorter
             -- than a page exchange: replies left unrouted and were dropped.
@@ -1592,7 +1592,7 @@ function net:Send(kind, payload, target, immediate)
     -- Annotate at the producer boundary.
     -- "~lr" (1.7.0): ranking pages v7, race in each score row. It stays before
     -- "~lp6" because older clients only read the suffix and still see lp6.
-    -- "~ld" (1.7.8): ranking pages v8 (only differing rows); v7 clients still read v7.
+    -- "~ld" (1.8.0): ranking pages v8 (only differing rows); v7 clients still read v7.
     if kind == "NH" and payload == tostring(addon.Version or "") then
         payload = payload .. "~ld~lr~lp6"
     end
