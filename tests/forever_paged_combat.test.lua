@@ -130,7 +130,7 @@ advance(700)
 local pagesBefore = stats.pages
 done = nil
 assert(sync:StartCompletePagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
-for _ = 1, 30 do advance(1); if stats.pages > pagesBefore + 2 then break end end
+for _ = 1, 90 do advance(1); if stats.pages > pagesBefore + 2 then break end end
 assert(stats.pages > pagesBefore + 2, "the sweep did not start")
 SOURCE.combat = true
 for _ = 1, 120 do advance(60); if done ~= nil then break end end
@@ -165,7 +165,7 @@ later(70, function() PULLER.combat = false end)
 local asks, askedAt = 0, nil
 local realSendWhisper = sync.SendWhisper
 sync.SendWhisper = function(self, kind, payload, target)
-    if kind == "HR" and payload:find(":Q:", 1, true) then asks = asks + 1; askedAt = askedAt or (asks == 2 and now) end
+    if kind == "HR" and (payload:find(":Q:", 1, true) or payload:find("^8:[VLG]:")) then asks = asks + 1; askedAt = askedAt or (asks == 2 and now) end
     return realSendWhisper(self, kind, payload, target)
 end
 local startedAt = now

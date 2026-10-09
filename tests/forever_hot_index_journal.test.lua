@@ -94,7 +94,8 @@ same, key = sameIndex(published, expectedKillIndex())
 assert(same, "Live kill index missed a kill during the meta pass at " .. tostring(key))
 
 -- 1.7.1 CPU: the same race re-dated (v7 LK row, then the dated LR row) patches the
--- hot index entry instead of dropping the whole index; a new race still drops it.
+-- hot index entry instead of dropping the whole index. Since 1.7.8 a new race of a
+-- single-row identity is re-derived in place too (same entry as a rebuild).
 do
     local name = playerName(7)
     local base = (GetServerTime and GetServerTime() or time()) - 5000
@@ -107,8 +108,11 @@ do
     assert(index[dk(name)].raceAt >= base + 100, "the index entry was not re-dated")
     assert(lb.playerInfo[name].raceAt == base + 100, "the stored race date did not move")
     lb:SetPlayerRace(name, "Troll", 2, true, base + 200)
-    assert(lb._dedupMetaIndex == nil, "a changed race kept a stale index")
+    assert(lb._dedupMetaIndex == index, "a changed race dropped the hot index")
+    assert(index[dk(name)].race == "Troll" and index[dk(name)].raceAt == base + 200,
+        "a changed race kept a stale entry")
     lb:RebuildDedupMetaIndex()
+    assert(lb._dedupMetaIndex[dk(name)].race == "Troll", "rebuild disagrees with the re-derived entry")
 end
 
 -- 3. A pass that stalls more than 5 minutes loses its journal to the next pass

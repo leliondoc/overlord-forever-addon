@@ -111,7 +111,7 @@ end
 local uiStarts, uiScans = displayStarts - previousStarts,
     metadataScans - previousScans
 assert(uiStarts <= 6 and uiScans <= 6,
-    "One-second UI cadence bypassed the three-second attempt interval")
+    "One-second UI cadence bypassed the minimum attempt interval")
 advance(12)
 lb:EnsureDisplayCache()
 advance(12)

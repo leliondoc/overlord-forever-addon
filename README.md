@@ -52,11 +52,10 @@ par les pairs. Un tableau initialement vide ne prouve pas une perte sur disque.
 les epochs de campagne au login et après initialisation, ainsi que les totaux
 actifs et de la dernière archive.
 
-Un reset hebdomadaire ouvre normalement un nouveau classement. Une copie complète
-de la campagne précédente est maintenant conservée par région dans
-`leaderboardPreviousCampaigns`, avec les métadonnées et les rangs hors du top de
-l’historique compact. Cette copie ne se réinjecte jamais automatiquement dans une
-nouvelle campagne.
+Un reset hebdomadaire ouvre normalement un nouveau classement. La semaine terminée
+n’est gardée dans le jeu que par l’historique compact (top 100) ; depuis 1.7.8 aucune
+copie complète n’est plus conservée (elle occupait toute la mémoire d’un classement
+pendant sept jours), l’historique complet étant archivé hors du jeu.
 
 ## Fronts de guerre
 

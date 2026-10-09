@@ -862,26 +862,47 @@ end
 -- Memo borne des fonctions pures de nom (resultat identique, recalcule ~25
 -- operations de chaine a chaque appel ; des dizaines d'appels par message recu).
 -- Stocke sur l'objet : le chunk Sync.lua est proche de la limite de 200 locals.
--- 32768 entries (~2-3 MB per memo): a ladder pass over 10-20k names used to wipe a
--- 2048-entry memo many times per pass, recomputing every name (perf audit 2026-10-01).
-function Overlord.Sync:_MemoNameResult(field, name, result)
-    local memo = self[field]
-    if not memo or memo.n >= 32768 then
-        memo = { n = 0, values = {} }
-        self[field] = memo
+-- 32768 entries: a ladder pass over 10-20k names used to wipe a 2048-entry memo
+-- many times per pass, recomputing every name (perf audit 2026-10-01).
+-- 1.7.8: ONE memo for the three functions (they see the same names): values[name]
+-- packs three independent states in base 3 / 9, so a name costs one table slot
+-- instead of three (about 1-2.6 MB at 10-20k players). Digit 0 = not computed.
+--   v % 3: IsForeverCharacterName (1 true, 2 false)
+--   (v % 9 - v % 3) / 3: HasForeverNameCase (1 true, 2 false)
+--   (v - v % 9) / 9: CanonicalForeverName (1 = the name itself, 2 = nil,
+--     3 = another string kept in canon[name])
+-- A new name past the limit starts a fresh memo; an update never does.
+function Overlord.Sync:_NameMemoWrite(name, slot, digit, canon)
+    local memo = self._nameMemo
+    local v = memo and memo.values[name]
+    if v == nil then
+        if not memo or memo.n >= 32768 then
+            memo = { n = 0, values = {}, canon = {} }
+            self._nameMemo = memo
+        end
+        memo.n, v = memo.n + 1, 0
     end
-    if memo.values[name] == nil then memo.n = memo.n + 1 end
-    memo.values[name] = result
-    return result
+    if slot == 1 then v = v - v % 3 + digit
+    elseif slot == 2 then v = v - (v % 9 - v % 3) + 3 * digit
+    else v = v % 9 + 9 * digit end
+    memo.values[name] = v
+    if slot == 3 then memo.canon[name] = digit == 3 and canon or nil end
 end
 
 function Overlord.Sync:CanonicalForeverName(name)
-    local memo = type(name) == "string" and self._canonicalNameMemo or nil
-    local hit = memo and memo.values[name]
-    if hit ~= nil then return hit or nil end
+    local memo = type(name) == "string" and self._nameMemo or nil
+    local v = memo and memo.values[name]
+    if v then
+        local digit = (v - v % 9) / 9
+        if digit == 1 then return name end
+        if digit == 2 then return nil end
+        if digit == 3 and memo.canon[name] then return memo.canon[name] end
+    end
     local base = self:ForeverCharacterBase(name)
     local result = base and self:IsForeverCharacterName(base) and base or nil
-    if type(name) == "string" then self:_MemoNameResult("_canonicalNameMemo", name, result or false) end
+    if type(name) == "string" then
+        self:_NameMemoWrite(name, 3, result == nil and 2 or result == name and 1 or 3, result)
+    end
     return result
 end
 
@@ -913,10 +934,14 @@ end
 -- Un -Royaume eventuel (API) est ignore, il ne fait pas partie de l'identite.
 function Overlord.Sync:IsForeverCharacterName(name)
     if type(name) ~= "string" then return false end
-    local memo = self._foreverNameMemo
-    local hit = memo and memo.values[name]
-    if hit ~= nil then return hit end
-    return self:_MemoNameResult("_foreverNameMemo", name, self:_IsForeverCharacterNameUncached(name))
+    local memo = self._nameMemo
+    local v = memo and memo.values[name]
+    local digit = v and v % 3
+    if digit == 1 then return true end
+    if digit == 2 then return false end
+    local result = self:_IsForeverCharacterNameUncached(name) == true
+    self:_NameMemoWrite(name, 1, result and 1 or 2)
+    return result
 end
 
 function Overlord.Sync:_IsForeverCharacterNameUncached(name)
@@ -1008,9 +1033,11 @@ local function IsUpperCodePoint(cp)
 end
 function Overlord.Sync:HasForeverNameCase(name)
     if type(name) ~= "string" or name == "" then return false end
-    local memo = self._nameCaseMemo
-    local hit = memo and memo.values[name]
-    if hit ~= nil then return hit end
+    local memo = self._nameMemo
+    local v = memo and memo.values[name]
+    local digit = v and (v % 9 - v % 3) / 3
+    if digit == 1 then return true end
+    if digit == 2 then return false end
     local base = name:match("^([^%-]+)") or name
     -- 1.7.5 : une seule espace entre deux mots, jamais en bord ; des lettres seulement,
     -- et un seul alphabet par mot (L latin, G grec, C cyrillique, K hangul, H han).
@@ -1057,7 +1084,9 @@ function Overlord.Sync:HasForeverNameCase(name)
             wordScript, wordStart, i = script, false, i + width
         end
     end
-    return self:_MemoNameResult("_nameCaseMemo", name, ok)
+    ok = ok == true
+    self:_NameMemoWrite(name, 2, ok and 1 or 2)
+    return ok
 end
 
 -- Cible whisper addon (SR, reponses ciblees) : refuse le bruit API ou les fragments de payload.
@@ -2694,7 +2723,8 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
         self:NoteChannelCovered(msgType, payload, sender)
     end
     if (msgType == "HR" or msgType == "HB" or msgType == "HA")
-        and payload and (payload:sub(1, 2) == "5:" or payload:sub(1, 2) == "6:" or payload:sub(1, 2) == "7:") then
+        and payload and (payload:sub(1, 2) == "5:" or payload:sub(1, 2) == "6:" or payload:sub(1, 2) == "7:"
+            or payload:sub(1, 2) == "8:") then
         if self.OnPagedLeaderboardMessage then
             return self:OnPagedLeaderboardMessage(msgType, payload, sender, channel)
         end
@@ -2752,7 +2782,7 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
         self:OnReceiveLeaderboardRace(payload, sender, channel)
     elseif msgType == "LC" then
         self:OnReceiveLeaderboardCaptures(payload, sender, channel)
-    -- HR/HB/HC/HA without a "5:"/"6:"/"7:" prefix were the v4 ladder exchange, retired
+    -- HR/HB/HC/HA without a "5:"/"6:"/"7:"/"8:" prefix were the v4 ladder exchange, retired
     -- in 1.2.4 (v5-v7 pages are routed above): they are ignored.
     elseif msgType == "LO" or msgType == "LOC" then
         -- The handler confirms the outpost history round itself when it accepts a row.

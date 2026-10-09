@@ -21,6 +21,13 @@ local HASH_MOD = 2147483647
 -- Un tour v6 reussi rearme le suivant apres deux minutes ; un tour sans voisin
 -- ou sans reponse reessaie apres deux minutes aussi.
 local RECENT_ACK_SEC = 2 * 60
+-- 1.7.8: after a v8 round (only differing rows, an idle round is one request and
+-- one reply) the next one comes after 45-105 s: a new row of the other faction
+-- reaches every ally about 2.5 times sooner (simulated: 16 min instead of 42 for
+-- six allies and one bridge). The local profile is still rebuilt at most every
+-- 2 minutes (PROFILE_REUSE_SEC) unless the last round applied rows (then the
+-- profile is rebuilt, so those rows are not asked again).
+local V8_RECENT_ACK_SEC = 45
 local EXHAUSTED_RETRY_SEC = 2 * 60
 local PERIODIC_JITTER_SEC = 60
 -- Historique avant-postes/forteresses : une demande toutes les six heures, une
@@ -658,7 +665,8 @@ local function FinishRound(pending, success, target)
     NoteHr("result", success and "paged sweep received"
         or ("paged sweep interrupted" .. (why ~= "" and (" " .. why) or "")))
     -- Re-arm first: a failure in the history request must never stop the rounds.
-    ArmNextHistoryCatchup(success and RECENT_ACK_SEC or EXHAUSTED_RETRY_SEC)
+    local v8Round = success and type(pageStats) == "table" and pageStats.protocol == 8
+    ArmNextHistoryCatchup(v8Round and V8_RECENT_ACK_SEC or success and RECENT_ACK_SEC or EXHAUSTED_RETRY_SEC)
     pcall(MaybeRequestOutpostHistory, success and target or nil, pending.forceHistory)
 end
 

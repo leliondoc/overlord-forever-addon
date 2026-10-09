@@ -39,20 +39,29 @@ local function drain()
     end
 end
 
-for _, version in ipairs({ "6", "7" }) do
+for _, version in ipairs({ "6", "7", "8" }) do
     -- A direct neighbour heard through the party: its route has no whisper/channel transport.
     net.peers["party tester"] = { at = now, via = "Party Tester", name = "Party Tester",
         transport = "PARTY", hops = 1 }
     for k in pairs(sent) do sent[k] = nil end
-    for _, packet in ipairs({
+    local packets = {
         { "HR", version .. ":Q:1790016000:nonce" .. version .. ":1:1:-:0:0:LK" },
         { "HA", version .. ":P:1790016000:nonce" .. version .. ":1:1:0:0:-:1:LK" },
         { "HB", version .. ":D:1790016000:nonce" .. version .. ":1:1:1:LK:" .. string.rep("x", 120) },
-    }) do
+    }
+    if version == "8" then
+        packets = {
+            { "HR", "8:V:1790016000:nonce8:1:LK:0:0:H" },
+            { "HR", "8:G:1790016000:nonce8:2:LK:5:1:*H" },
+            { "HA", "8:P:1790016000:nonce8:1:V:0:64:0:-:2:LK" },
+            { "HB", "8:D:1790016000:nonce8:1:1:2:LK:" .. string.rep("x", 120) },
+        }
+    end
+    for _, packet in ipairs(packets) do
         assert(net:Send(packet[1], packet[2], "Party Tester"), "v" .. version .. " page refused on a route")
     end
     drain()
-    assert((sent.WHISPER or 0) >= 3, "v" .. version .. " pages not whispered: " .. tostring(sent.WHISPER))
+    assert((sent.WHISPER or 0) >= #packets, "v" .. version .. " pages not whispered: " .. tostring(sent.WHISPER))
     assert(not sent.GROUP and not sent.CHANNEL and not sent.BNET,
         ("v%s page broadcast: group %s, channel %s, bnet %s"):format(version,
             tostring(sent.GROUP), tostring(sent.CHANNEL), tostring(sent.BNET)))

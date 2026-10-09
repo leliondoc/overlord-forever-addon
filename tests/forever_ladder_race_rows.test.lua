@@ -116,7 +116,8 @@ local function heartbeat()
 end
 heartbeat()
 advance(10)
-assert(PULLER.Overlord.BetaNetwork:GetPeerPagedProtocol(SOURCE.name) == 7, "the source did not advertise v7")
+-- 1.7.8: clients advertise v8 (~ld); the v7 exchange is still answered (sections 2 and below).
+assert(PULLER.Overlord.BetaNetwork:GetPeerPagedProtocol(SOURCE.name) == 8, "the source did not advertise v8")
 
 local RACES = { "Orc", "Scourge", "Tauren", "Troll" }
 local names = {}
@@ -183,7 +184,7 @@ assert(rows.raced == 0, "a v6 pull received raced rows")
 assert(wireVersions["6"] and not wireVersions["7"], "the v6 pull was not answered in v6")
 assert(PULLER.Overlord.Leaderboard.kills[names[300]] == 300)
 
--- 2) v7 pull through the production entry point (the source advertised ~lr).
+-- 2) v7 pull (what a 1.7.0-1.7.7 client asks; v8 is covered by forever_paged_v8_rows).
 -- Reset the puller so the LK stream really has to be paged again.
 PULLER.Overlord.Leaderboard.kills = {}
 for i = 2, #names do PULLER.Overlord.Leaderboard.playerInfo[names[i]] = nil end
@@ -195,7 +196,7 @@ local v6Captures = {}
 for _, payload in ipairs(streamRows.LC) do v6Captures[payload] = true end
 streamRows.LC, streamRows.LR = {}, {}
 wireVersions, rows.raced, done = {}, 0, nil
-assert(sync:StartCompletePagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
+assert(sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end, true, true))
 for _ = 1, 120 do advance(60); if done ~= nil then break end end
 assert(done == true, "v7 pull failed: " .. sync:GetPagedLeaderboardDiagnostics())
 assert(wireVersions["7"] and not wireVersions["6"], "the v7 pull was not answered in v7")
@@ -258,7 +259,7 @@ local held = SOURCE.Overlord.Sync.OnPagedLeaderboardMessage
 SOURCE.Overlord.Sync.OnPagedLeaderboardMessage = function() end
 PULLER.OverlordDB.leaderboardPageProgress = nil
 done = nil
-assert(sync:StartCompletePagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
+assert(sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end, true, true))
 for _ = 1, 20 do if nonceSeen then break end; advance(0.5) end
 assert(nonceSeen, "no v7 request seen")
 sync:OnPagedLeaderboardMessage("HA", table.concat({ "6", "R", epochToken, nonceSeen, seqSeen }, ":"),
@@ -325,7 +326,7 @@ assert(lb:GetExportPlayerRace(liveTarget) == beforeLive, "a live LK set a race: 
 
 -- 3) Audit (performance): races stay out of the digests. Same scores, different race
 -- knowledge (the puller saw names[1] as a Troll and knows a race the source lacks):
--- a new v7 sweep re-sends nothing.
+-- a new sweep (v8 between 1.7.8 clients) re-sends nothing.
 lb.playerInfo[names[2]].race, lb.playerInfo[names[2]].raceSex = "Orc", 2
 SOURCE.Overlord.Leaderboard.playerInfo[names[3]].race = ""
 SOURCE.Overlord.Leaderboard:MarkMetaDirty()
@@ -339,7 +340,7 @@ done = nil
 advance(700) -- past the snapshot refresh
 assert(sync:StartCompletePagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
 for _ = 1, 120 do advance(60); if done ~= nil then break end end
-assert(done == true, "steady v7 pull failed: " .. sync:GetPagedLeaderboardDiagnostics())
+assert(done == true, "steady pull failed: " .. sync:GetPagedLeaderboardDiagnostics())
 assert(received == 0 and rows.raced == rowsBefore,
     "buckets differing only by race were re-sent: " .. received .. " rows")
 

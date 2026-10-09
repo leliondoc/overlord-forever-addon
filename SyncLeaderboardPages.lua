@@ -1,8 +1,11 @@
 -- Targeted, resumable anti-entropy: v5 covers 5,000 kills; v6 also pages
 -- 500 capture rows per faction and race metadata for attested contributors;
 -- v7 (1.7.0) is v6 with the race at the end of each sent kill row.
--- Since 1.7.5 only v7 peers are asked (clients before 1.7.0 are left out, update
--- required); responders still answer v5/v6 requests from old clients.
+-- Since 1.7.5 peers before v7 are not asked (clients before 1.7.0 are left out,
+-- update required); responders still answer v5/v6 requests from old clients.
+-- v8 (1.7.8) sends only the rows that differ: one fingerprint per bucket, then one
+-- per row of a differing bucket, then the rows asked for (see the v8 block below).
+-- v8 is asked of peers advertising it, v7 of the others.
 local Overlord = _G.Overlord
 if not Overlord or not Overlord.Sync then return end
 local sync, lb = Overlord.Sync, Overlord.Leaderboard
@@ -23,6 +26,16 @@ local function IsOtherFaction(name)
     local theirs = sync.GetBetaPeerFaction and sync:GetBetaPeerFaction(name)
     return (mine == "Alliance" or mine == "Horde") and (theirs == "Alliance" or theirs == "Horde")
         and theirs ~= mine
+end
+-- At least one direct neighbour that is not of the other faction (allies are the
+-- source of our own faction's rows when a pull from an enemy friend skips them).
+local function HasDirectAlly(except)
+    local net = Overlord.BetaNetwork
+    local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
+    for _, name in ipairs(net and net.GetDirectPeers and net:GetDirectPeers() or {}) do
+        if name ~= except and name ~= me and not IsOtherFaction(name) then return true end
+    end
+    return false
 end
 local profiles = setmetatable({}, { __mode = "k" })
 local unsupported, unsupportedOrder = {}, {}
@@ -171,8 +184,8 @@ sync._PagedRowDigest = rowDigest
 local function mixRow(h)
     return (h * 31 + (h % 9973) * (h % 10007)) % MOD
 end
-local function bucketHash(bucket, wire) return wire == "7" and bucket.hash7 or bucket.hash end
-local function streamHash(profile, wire) return wire == "7" and profile.hash7 or profile.hash end
+local function bucketHash(bucket, wire) return (wire == "7" or wire == "8") and bucket.hash7 or bucket.hash end
+local function streamHash(profile, wire) return (wire == "7" or wire == "8") and profile.hash7 or profile.hash end
 sync._PagedMixRow = mixRow
 
 -- v7 (1.7.0) = v6 whose LK rows end with the player's race (":o2", 3 bytes), so the
@@ -191,12 +204,19 @@ local function raceField(snapshot, name, payload)
     return nil
 end
 sync._PagedRaceField = raceField
-local function raced(wire, stream) return wire == "7" and stream == "LK" end
--- races: identity -> race field, kept beside the rows so every row stays a 2-field
--- table (measured: ~66 B per raced row in the map, ~80 B as a third row field).
-local function rowPayload(row, races)
-    local race = races and races[row.key]
-    return race and (row.payload .. ":" .. race) or row.payload
+local function raced(wire, stream) return (wire == "7" or wire == "8") and stream == "LK" end
+-- 1.7.8: a profile bucket holds parallel arrays (keys, payloads, digests, factions,
+-- races for LK) instead of one table per row: about 100 B less per row (1.3 MB at
+-- 13,000 rows), and the per-row digests serve the v8 row lists.
+local function rowPayload(bucket, i, withRace)
+    local race = withRace and bucket.races and bucket.races[i]
+    return race and (bucket.payloads[i] .. ":" .. race) or bucket.payloads[i]
+end
+-- Faction of the row's player in the attested copy, one character on the wire (v8).
+local function factionChar(snapshot, name)
+    local info = snapshot and snapshot.playerInfo and snapshot.playerInfo[name]
+    local faction = type(info) == "table" and info.faction
+    return faction == "Alliance" and "A" or faction == "Horde" and "H" or "?"
 end
 
 -- All scans and sorting yield after 32 work units and a ~1 ms slice.
@@ -208,13 +228,17 @@ end
 -- 5,000 players, CPU spikes). Pages are then at most 2 minutes old; the next round
 -- brings the rest.
 local PROFILE_REUSE_SEC = 120
-local function prepare(callback)
+-- own: the profile is for our own pull. It is not reused once rows were applied
+-- since it was built (1.7.8: rounds every 45-105 s after a v8 round would otherwise
+-- list and fetch again the rows the previous round just brought).
+local function prepare(callback, own)
     if building then return false end
     local wanted = epoch()
     local recent = sync.GetAttestedLeaderboardSnapshot and sync:GetAttestedLeaderboardSnapshot()
     local cached = type(recent) == "table" and profiles[recent] or nil
     local age = cached and (((GetServerTime and GetServerTime()) or time()) - (tonumber(recent.at) or 0)) or nil
-    if cached and cached.epoch == wanted and age and age >= 0 and age < PROFILE_REUSE_SEC then
+    if cached and cached.epoch == wanted and age and age >= 0 and age < PROFILE_REUSE_SEC
+        and not (own and cached.builtRows ~= (stats.changedRows or 0)) then
         stats.profileReused = (stats.profileReused or 0) + 1
         C_Timer.After(0.001, function()
             if wanted ~= epoch() then callback(nil); return end
@@ -223,13 +247,16 @@ local function prepare(callback)
         return true
     end
     building = true
+    -- Rows that really changed our ranking so far (taken before the copy is made).
+    local builtRows = stats.changedRows or 0
     local accepted = lb:SnapshotCurrentCampaignBeforeReset(function(ok)
         local snapshot = ok and sync:GetAttestedLeaderboardSnapshot()
         if not snapshot or wanted ~= epoch() then building = nil; callback(nil); return end
         if profiles[snapshot] then building = nil; callback(profiles[snapshot]); return end
-        local result = { epoch = wanted, streams = {}, races = {} }
+        local result = { epoch = wanted, streams = {}, builtRows = builtRows }
         for _, kind in ipairs(STREAMS) do
-            result.streams[kind] = { buckets = {}, count = 0, hash = 0, hash7 = 0 }
+            result.streams[kind] = { buckets = {}, count = 0, hash = 0, hash7 = 0,
+                countA = 0, hashA = 0, countH = 0, hashH = 0 }
         end
         result.buckets = result.streams.LK.buckets
         local units, sliceAt = 0, 0
@@ -250,7 +277,9 @@ local function prepare(callback)
             for _, kind in ipairs(STREAMS) do
                 local profile, source, count = result.streams[kind], sources[kind] or {}, 0
                 local isKills = kind == "LK"
-                for i = 1, BUCKETS do profile.buckets[i] = { hash = 0, hash7 = 0 }; work() end
+                -- Rows are gathered and sorted as small tables, then kept as arrays.
+                local pending = {}
+                for i = 1, BUCKETS do pending[i] = {}; work() end
                 for name in pairs(source) do
                     count = count + 1
                     if count > STREAM_LIMITS[kind] then error("oversized attested snapshot") end
@@ -258,27 +287,42 @@ local function prepare(callback)
                     local payload = serialize and serialize(sync, snapshot, name, wanted)
                     local identity = payload and key(name)
                     if identity and validCursor(identity) then
-                        local bucket = profile.buckets[hash(identity) % BUCKETS + 1]
-                        bucket[#bucket + 1] = { key = identity, payload = payload }
-                        if isKills then result.races[identity] = raceField(snapshot, name, payload) end
+                        local rows = pending[hash(identity) % BUCKETS + 1]
+                        rows[#rows + 1] = { key = identity, payload = payload, name = name }
                     end
                     work()
                 end
                 for i = 1, BUCKETS do
-                    local bucket = profile.buckets[i]
-                    lb:SortNetworkRows(bucket, function(a, b) return a.key < b.key end, work)
-                    for j = 1, #bucket do
-                        local h = hash(rowDigest(kind, bucket[j].payload))
+                    local rows = pending[i]
+                    lb:SortNetworkRows(rows, function(a, b) return a.key < b.key end, work)
+                    local bucket = { hash = 0, hash7 = 0, n = #rows, keys = {}, payloads = {},
+                        digests = {}, factions = {}, races = isKills and {} or nil,
+                        nA = 0, hashA = 0, nH = 0, hashH = 0 }
+                    for j = 1, #rows do
+                        local row = rows[j]
+                        local h = hash(rowDigest(kind, row.payload))
+                        local faction, mixed = factionChar(snapshot, row.name), mixRow(h)
+                        bucket.keys[j], bucket.payloads[j], bucket.digests[j] = row.key, row.payload, h
+                        bucket.factions[j] = faction
+                        if isKills then bucket.races[j] = raceField(snapshot, row.name, row.payload) or false end
                         bucket.hash = (bucket.hash + h) % MOD
-                        bucket.hash7 = (bucket.hash7 + mixRow(h)) % MOD
+                        bucket.hash7 = (bucket.hash7 + mixed) % MOD
+                        if faction ~= "H" then bucket.nA, bucket.hashA = bucket.nA + 1, (bucket.hashA + mixed) % MOD end
+                        if faction ~= "A" then bucket.nH, bucket.hashH = bucket.nH + 1, (bucket.hashH + mixed) % MOD end
                         work()
                     end
-                    profile.count = profile.count + #bucket
+                    pending[i] = nil
+                    profile.buckets[i] = bucket
+                    profile.count = profile.count + bucket.n
                     profile.hash = (profile.hash + bucket.hash) % MOD
                     profile.hash7 = (profile.hash7 + bucket.hash7) % MOD
+                    profile.countA, profile.hashA = profile.countA + bucket.nA, (profile.hashA + bucket.hashA) % MOD
+                    profile.countH, profile.hashH = profile.countH + bucket.nH, (profile.hashH + bucket.hashH) % MOD
                 end
             end
             result.count, result.hash = result.streams.LK.count, result.streams.LK.hash
+            -- Rank order of the attested copy (names, best first): a reference only.
+            result.order = type(snapshot.killOrder) == "table" and snapshot.killOrder or {}
         end)
         local function step()
             if wanted ~= epoch() then building = nil; callback(nil); return end
@@ -312,10 +356,152 @@ local function progress()
     end
     return saved
 end
+-- v8 (1.7.8): row-level anti-entropy, same budget and same single responder.
+-- v7 sent a whole bucket (~80 rows at 5,000 players) as soon as one row differed,
+-- and with live scores almost every bucket differs: a sweep resent nearly the whole
+-- ranking (about an hour at 5,000 players). v8 per stream:
+--   V: the responder sends one 4-character fingerprint per bucket (64, 3 packets);
+--   L: for each differing bucket, one fingerprint + faction character per row;
+--   G: the requester asks for the rows it lacks (bitmap), in pages of up to 24 rows.
+-- From a Battle.net friend of the other faction, only that faction's rows (and rows
+-- of unknown faction) are asked: our own faction's rows come first-hand from our
+-- channel and our allies. No extra reply: still one request, one answer, in turn.
+-- Fingerprints are salted with the pull's nonce, so a rare 24-bit collision cannot
+-- hide the same row at every sweep. Acceptance of the rows is unchanged (content only).
+local FP_SPACE, LIST_MAX_ROWS, BITMAP_MAX = 16777216, 812, 200
+local B64 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_"
+local B64BYTES, B64INDEX = { B64:byte(1, 64) }, {}
+for i = 1, 64 do B64INDEX[B64BYTES[i]] = i - 1 end
+local function encodeFp(fp)
+    local c4 = fp % 64; fp = (fp - c4) / 64
+    local c3 = fp % 64; fp = (fp - c3) / 64
+    local c2 = fp % 64
+    return string.char(B64BYTES[(fp - c2) / 64 + 1], B64BYTES[c2 + 1], B64BYTES[c3 + 1], B64BYTES[c4 + 1])
+end
+-- (x * a) % MOD without leaving exact doubles (x, a < 2^31).
+local function mulmod(x, a)
+    local hi = math.floor(a / 65536)
+    return ((x * hi) % MOD * 65536 + x * (a % 65536)) % MOD
+end
+local function saltOf(nonce)
+    local h = hash(nonce)
+    return h % (MOD - 1) + 1, (h * 7 + 13) % MOD
+end
+local function rowFp(digest, a, b) return encodeFp((mulmod(digest, a) + b) % MOD % FP_SPACE) end
+-- Count and mixed sum of a bucket or a stream, whole or restricted to one faction
+-- (rows of unknown faction belong to both): a pull from a friend of the other faction
+-- compares only that faction's rows, so a quiet ranking stays one reply per stream.
+local function subset(t, filter)
+    if filter == "A" then return t.nA or t.countA, t.hashA end
+    if filter == "H" then return t.nH or t.countH, t.hashH end
+    return t.n or t.count, t.hash7
+end
+local function bucketFp(bucket, a, b, filter)
+    local n, h = subset(bucket, filter)
+    return rowFp((h + n * 65599) % MOD, a, b)
+end
+-- One fingerprint of the three streams (same filter, same salt): sent with the
+-- first request of a pull, it lets a pair that already agrees end in a single
+-- exchange (1 request, 1 reply) instead of one per stream.
+local function profileFp(profile, a, b, filter)
+    local acc = 0
+    for _, kind in ipairs(STREAMS) do
+        local n, h = subset(profile.streams[kind], filter)
+        acc = (acc * 31 + (h + n * 65599) % MOD) % MOD
+    end
+    return rowFp(acc, a, b)
+end
+-- Wanted row indexes (ascending, 1-based) as 6 bits per character.
+local function encodeBitmap(want)
+    local values = {}
+    for _, i in ipairs(want) do
+        local k = math.floor((i - 1) / 6) + 1
+        for j = #values + 1, k do values[j] = 0 end
+        values[k] = values[k] + 2 ^ ((i - 1) % 6)
+    end
+    for j = 1, #values do values[j] = B64BYTES[values[j] + 1] end
+    return string.char(unpack(values))
+end
+-- "*" asks for every row of the bucket, "*A"/"*H" for every row of that faction
+-- (and of unknown faction): a bucket we hold nothing of needs no row list.
+local function wantedAt(bitmap, i, factions)
+    if bitmap == "*" then return true end
+    if bitmap == "*A" or bitmap == "*H" then
+        local faction = factions and factions[i]
+        return faction == bitmap:sub(2, 2) or faction == "?"
+    end
+    local k = math.floor((i - 1) / 6) + 1
+    if k > #bitmap then return false end
+    return math.floor(B64INDEX[bitmap:byte(k)] / 2 ^ ((i - 1) % 6)) % 2 == 1
+end
+-- v8 rows travel without the campaign epoch: every packet of the exchange already
+-- carries it (and it must equal ours), so the responder drops it from the row and
+-- the requester puts it back before the unchanged acceptance code reads the row.
+-- LK name:kills:class:faction:E:locale:guild:guildAt:BE:level[:race] -> without E, BE
+-- LC name:F:class:count:E:zones:locale:BE -> without E, BE; LR name:race:sex:E:at -> without E.
+-- Fields never hold ':' (SafeWireField), so the patterns are exact. About a quarter
+-- fewer bytes per row (25 % of an LK row), at the same byte budget.
+local PAGE_ROWS8, PAGE_ROWS8_MAX = 24, 32
+-- T (cold pull only): the TOP_ROWS best kill rows first, in rank order, so the
+-- visible top of the table fills in about a minute instead of across the sweep.
+-- Ranks are walked in order (at most TOP_SCAN per page), skipping rows of the other
+-- faction when the requester filters; the cursor is the next rank to look at.
+local TOP_ROWS, COLD_PULL_ROWS, TOP_SCAN = 96, 20, 256
+local function compactRow8(stream, payload, wireEpoch)
+    local e = tostring(wireEpoch)
+    if stream == "LK" then
+        local head, e1, mid, e2, level = payload:match(
+            "^([^:]*:[^:]*:[^:]*:[^:]*):([^:]*):([^:]*:[^:]*:[^:]*):([^:]*):([^:]*)$")
+        if head and e1 == e and e2 == "B" .. e then return head .. ":" .. mid .. ":" .. level end
+    elseif stream == "LC" then
+        local head, e1, mid, e2 = payload:match("^([^:]*:[^:]*:[^:]*:[^:]*):([^:]*):([^:]*:[^:]*):([^:]*)$")
+        if head and e1 == e and e2 == "B" .. e then return head .. ":" .. mid end
+    else
+        local head, e1, at = payload:match("^([^:]*:[^:]*:[^:]*):([^:]*):([^:]*)$")
+        if head and e1 == e then return head .. ":" .. at end
+    end
+    return nil
+end
+local function expandRow8(stream, row, wireEpoch)
+    local e = tostring(wireEpoch)
+    local full
+    if stream == "LK" then
+        local head, mid, level, race = row:match(
+            "^([^:]*:[^:]*:[^:]*:[^:]*):([^:]*:[^:]*:[^:]*):([^:]*):([^:]*)$")
+        if not head then
+            head, mid, level = row:match("^([^:]*:[^:]*:[^:]*:[^:]*):([^:]*:[^:]*:[^:]*):([^:]*)$")
+        end
+        if head then
+            full = head .. ":" .. e .. ":" .. mid .. ":B" .. e .. ":" .. level .. (race and (":" .. race) or "")
+        end
+        return full and #full <= 250 and full or nil
+    elseif stream == "LC" then
+        local head, mid = row:match("^([^:]*:[^:]*:[^:]*:[^:]*):([^:]*:[^:]*)$")
+        if head then full = head .. ":" .. e .. ":" .. mid .. ":B" .. e end
+        return full and #full <= 3500 and full or nil
+    end
+    local head, at = row:match("^([^:]*:[^:]*:[^:]*):([^:]*)$")
+    if head then full = head .. ":" .. e .. ":" .. at end
+    return full and #full <= 250 and full or nil
+end
+sync._PagedCompactRow8, sync._PagedExpandRow8 = compactRow8, expandRow8
+
+local function validBitmap(bitmap)
+    return bitmap == "*" or bitmap == "*A" or bitmap == "*H"
+        or (type(bitmap) == "string" and #bitmap >= 1 and #bitmap <= BITMAP_MAX
+            and not bitmap:find("[^0-9A-Za-z_-]"))
+end
+
 local function checkpoint(state)
     -- A pull of a finished campaign must not seed the new campaign's sweep.
     if state.epoch ~= epoch() then return end
     local saved = progress()
+    if state.wire == "8" then
+        -- A v8 stream restarts with its bucket fingerprints (3 packets): only the
+        -- stream is kept, and a v7 pull with another peer resumes at its start.
+        saved.shared = { stream = state.stream or "LK", bucket = 1, done = 0, at = GetServerTime() }
+        return
+    end
     local previous = saved.shared
     if not state.extended and type(previous) == "table"
         and (previous.stream == "LC" or previous.stream == "LR") then
@@ -374,12 +560,35 @@ request = function(state, retry)
     end
     state.tries = state.tries + 1
     local profile = state.extended and state.profile.streams[state.stream] or state.profile
-    local bucket = profile.buckets[state.bucket]
-    local fields = { state.wire, "Q", state.epoch, state.nonce, state.seq,
-        state.bucket, state.cursor, #bucket, bucketHash(bucket, state.wire) }
-    if state.extended then fields[#fields + 1] = state.stream end
-    if state.seq == 1 or (state.extended and state.completed == 0) then
-        fields[#fields + 1], fields[#fields + 2] = profile.count, streamHash(profile, state.wire)
+    local fields
+    if state.wire == "8" then
+        if state.phase == "V" then
+            local count, digest = subset(profile, state.factionFilter)
+            fields = { "8", "V", state.epoch, state.nonce, state.seq, state.stream, count, digest }
+            if state.seq == 1 then
+                local a, b = saltOf(state.nonce)
+                fields[#fields + 1] = state.factionFilter or "-"
+                fields[#fields + 1] = profileFp(state.profile, a, b, state.factionFilter)
+            elseif state.factionFilter then
+                fields[#fields + 1] = state.factionFilter
+            end
+        elseif state.phase == "T" then
+            fields = { "8", "T", state.epoch, state.nonce, state.seq, "LK", state.from,
+                state.factionFilter or "-" }
+        elseif state.phase == "L" then
+            fields = { "8", "L", state.epoch, state.nonce, state.seq, state.stream, state.bucket }
+        else
+            fields = { "8", "G", state.epoch, state.nonce, state.seq, state.stream, state.bucket,
+                state.from, state.bitmap }
+        end
+    else
+        local bucket = profile.buckets[state.bucket]
+        fields = { state.wire, "Q", state.epoch, state.nonce, state.seq,
+            state.bucket, state.cursor, bucket.n, bucketHash(bucket, state.wire) }
+        if state.extended then fields[#fields + 1] = state.stream end
+        if state.seq == 1 or (state.extended and state.completed == 0) then
+            fields[#fields + 1], fields[#fields + 2] = profile.count, streamHash(profile, state.wire)
+        end
     end
     local payload = table.concat(fields, ":")
     state.lastRequest = payload
@@ -479,6 +688,120 @@ local function nextPage(state, cursor)
     request(state)
 end
 
+-- v8 transitions: next stream, next differing bucket, next page of wanted rows.
+local function nextStream8(state)
+    state.combatWaits = 0
+    if state.stream ~= "LR" then
+        state.stream = state.stream == "LK" and "LC" or "LR"
+        state.phase, state.queue, state.qi, state.bucket, state.completed = "V", nil, 0, 0, 0
+        checkpoint(state)
+        request(state)
+        return
+    end
+    state.stream, state.completed = "LK", 0
+    checkpoint(state)
+    sendControl("HR", table.concat({ "8", "F", state.epoch, state.nonce, state.seq }, ":"), state.peer)
+    finish(state, true)
+end
+local function nextBucket8(state)
+    state.combatWaits = 0
+    state.qi = state.qi + 1
+    local bucketIndex = state.queue and state.queue[state.qi]
+    if not bucketIndex then nextStream8(state); return end
+    state.bucket, state.gLast = bucketIndex, nil
+    local own = state.profile.streams[state.stream].buckets[bucketIndex]
+    -- Nothing of ours in this bucket: every row is wanted (of the friend's faction
+    -- when it is of the other faction), no list needed.
+    if own.n == 0 then
+        state.phase, state.from = "G", 1
+        state.bitmap = state.factionFilter and ("*" .. state.factionFilter) or "*"
+    else
+        state.phase = "L"
+    end
+    request(state)
+end
+local function nextRows8(state, cursor)
+    stats.pages = stats.pages + 1
+    if cursor == "-" then
+        state.completed = (state.completed or 0) + 1
+        nextBucket8(state)
+        return
+    end
+    state.combatWaits = 0
+    state.from = tonumber(cursor)
+    request(state)
+end
+local function nextTop8(state, cursor)
+    stats.pages = stats.pages + 1
+    state.combatWaits = 0
+    if cursor == "-" or state.topApplied >= TOP_ROWS then
+        -- Top received: the normal sweep follows (the rows of T come again once in
+        -- it, our frozen profile does not hold them; a capped first contact is then
+        -- raised to the served value, as on any second delivery).
+        state.phase, state.bucket, state.qi, state.queue = "V", 0, 0, nil
+    else
+        state.from = tonumber(cursor)
+    end
+    request(state)
+end
+
+-- V and L answers: fixed-width blobs, compared with our own profile (same salt).
+local function applyList8(state, meta, blob)
+    local own = state.profile.streams[state.stream]
+    local a, b = saltOf(state.nonce)
+    stats.pages = stats.pages + 1
+    if meta.op == "V" then
+        if meta.rows ~= BUCKETS or #blob ~= BUCKETS * 4 then return false end
+        -- A bucket the responder holds nothing of (its fingerprint is the empty
+        -- one) teaches nothing: not listed. The walk starts at a random bucket, so
+        -- rounds cut short (busy peer, watchdog) do not always leave the same ones.
+        local queue, empty = {}, rowFp(0, a, b)
+        local start = math.random and math.random(1, BUCKETS) or 1
+        for k = 0, BUCKETS - 1 do
+            local i = (start + k - 1) % BUCKETS + 1
+            local theirs = blob:sub(4 * i - 3, 4 * i)
+            if theirs ~= empty and theirs ~= bucketFp(own.buckets[i], a, b, state.factionFilter) then
+                queue[#queue + 1] = i
+            end
+        end
+        state.queue, state.qi = queue, 0
+        stats.bucketsDiffering = (stats.bucketsDiffering or 0) + #queue
+        nextBucket8(state)
+        return true
+    end
+    if #blob ~= meta.rows * 5 then return false end
+    local bucket, mine = own.buckets[state.bucket], {}
+    for j = 1, bucket.n do mine[rowFp(bucket.digests[j], a, b)] = true end
+    local filter, want = state.factionFilter, {}
+    for i = 1, meta.rows do
+        local faction = blob:sub(5 * i, 5 * i)
+        if not mine[blob:sub(5 * i - 4, 5 * i - 1)]
+            and (not filter or faction == filter or faction == "?") then
+            want[#want + 1] = i
+        end
+    end
+    stats.listed = (stats.listed or 0) + meta.rows
+    stats.wanted = (stats.wanted or 0) + #want
+    -- A list holds at most 812 rows, a bitmap up to 1200: always encodable.
+    if #want == 0 then
+        state.completed = (state.completed or 0) + 1
+        nextBucket8(state)
+        return true
+    end
+    state.phase, state.from, state.bitmap = "G", want[1], encodeBitmap(want)
+    request(state)
+    return true
+end
+
+-- The neighbour table keeps the peer of our running pull and of the session we
+-- serve (SyncBetaNetwork remember): their replies stay routed however busy the
+-- channel is. lowerName is the table key (lower-case full name).
+function sync:IsPagedSessionPeer(lowerName)
+    if pull and type(pull.peer) == "string" and pull.peer:lower() == lowerName then return true end
+    return serving ~= nil and type(serving.peer) == "string" and serving.peer:lower() == lowerName
+        and GetTime() - (tonumber(serving.at) or 0) <= 300
+end
+
 function sync:IsExpectedPagedLeaderboardDelivery(kind, name, sender, channel)
     local delivery = self._pagedDelivery
     return delivery and kind == delivery.kind and delivery.sender == sender
@@ -495,7 +818,23 @@ tryApply = function(state)
         state.parts, state.bytes, state.partCount, state.meta = {}, 0, nil, nil
         return
     end
-    local rows, pos, last = {}, 1, state.cursor == "-" and "" or state.cursor
+    local v8 = state.wire == "8"
+    if v8 then
+        -- A v8 answer is consumed once: a duplicate fragment arriving while the next
+        -- request waits (combat) must not apply it again and skip a step.
+        state.parts, state.bytes, state.partCount, state.meta = {}, 0, nil, nil
+    end
+    if v8 and meta.op ~= "G" and meta.op ~= "T" then
+        applyList8(state, meta, blob)
+        return
+    end
+    -- v8 rows are a subset of the bucket in key order; their cursor is an index. The
+    -- G pages of one bucket follow each other in key order too (gLast): a page that
+    -- repeats rows already given in this bucket is refused.
+    local first = ""
+    if not v8 and state.cursor ~= "-" then first = state.cursor
+    elseif v8 and meta.op == "G" then first = state.gLast or "" end
+    local rows, pos, last = {}, 1, first
     for i = 1, meta.rows do
         local prefix, stop = blob:match("^(%d+)():", pos)
         -- Lua's ^ anchor is relative to init for string.find/match in 5.1.
@@ -509,13 +848,25 @@ tryApply = function(state)
         pos = pos + length
         local name = payload:match("^([^:]+):")
         local identity = name and key(name)
-        if not identity or identity <= last or hash(identity) % BUCKETS + 1 ~= state.bucket then return end
+        if meta.op == "T" then
+            -- Rank order: no key order or bucket to check, but never the same player
+            -- twice in the whole top (a looping responder gets nothing applied).
+            if not identity or state.topSeen[identity] then return end
+            for j = 1, #rows do if rows[j].key == identity then return end end
+        elseif not identity or identity <= last or hash(identity) % BUCKETS + 1 ~= state.bucket then
+            return
+        end
         rows[#rows + 1] = { key = identity, payload = payload }
         last = identity
     end
-    if pos ~= #blob + 1 or (meta.cursor ~= "-"
-        and ((not state.extended and meta.rows ~= PAGE_ROWS)
-            or meta.rows == 0 or meta.cursor ~= last)) then return end
+    if pos ~= #blob + 1 or (meta.cursor ~= "-" and ((meta.rows == 0 and meta.op ~= "T") or (not v8
+        and ((not state.extended and meta.rows ~= PAGE_ROWS) or meta.cursor ~= last)))) then return end
+    if meta.op == "T" then
+        for j = 1, #rows do state.topSeen[rows[j].key] = true end
+        state.topApplied = state.topApplied + #rows
+    elseif v8 and #rows > 0 then
+        state.gLast = rows[#rows].key
+    end
     state.applying = true
     local index = 1
     local function apply()
@@ -527,7 +878,9 @@ tryApply = function(state)
             local row = rows[index]
             if not row then
                 state.applying = nil
-                nextPage(state, meta.cursor)
+                if meta.op == "T" then nextTop8(state, meta.cursor)
+                elseif v8 then nextRows8(state, meta.cursor)
+                else nextPage(state, meta.cursor) end
                 return
             end
             local kind = state.stream or "LK"
@@ -546,16 +899,25 @@ tryApply = function(state)
                 return
             end
             state.applyBlockedAt = nil
-            local net, previous = Overlord.BetaNetwork, nil
-            if net then previous = net.context; net.context = state.context end
-            sync._pagedDelivery = { kind = kind, sender = state.peer,
-                channel = state.channel, key = row.key }
-            local receive = kind == "LK" and sync.OnReceiveLeaderboardKills
-                or kind == "LC" and sync.OnReceiveLeaderboardCaptures
-                or sync.OnReceiveLeaderboardRace
-            local ok, accepted = pcall(receive, sync, row.payload, state.peer, state.channel)
-            sync._pagedDelivery = nil
-            if net then net.context = previous end
+            -- v8: the standard row is rebuilt with our epoch (see compactRow8);
+            -- a malformed row is refused like any invalid row, the page goes on.
+            local payload = row.payload
+            if v8 then payload = expandRow8(kind, payload, state.epoch) end
+            local ok, accepted = true, false
+            if payload then
+                local net, previous = Overlord.BetaNetwork, nil
+                if net then previous = net.context; net.context = state.context end
+                sync._pagedDelivery = { kind = kind, sender = state.peer,
+                    channel = state.channel, key = row.key }
+                local receive = kind == "LK" and sync.OnReceiveLeaderboardKills
+                    or kind == "LC" and sync.OnReceiveLeaderboardCaptures
+                    or sync.OnReceiveLeaderboardRace
+                local revision = lb._snapshotRevision
+                ok, accepted = pcall(receive, sync, payload, state.peer, state.channel)
+                if lb._snapshotRevision ~= revision then stats.changedRows = (stats.changedRows or 0) + 1 end
+                sync._pagedDelivery = nil
+                if net then net.context = previous end
+            end
             if not ok then stats.error = tostring(accepted); state.why = "error"; finish(state, false); return end
             -- Local blacklist/level policy can intentionally differ. Never
             -- bypass it or describe a received sweep as identical replicas.
@@ -568,8 +930,108 @@ tryApply = function(state)
     C_Timer.After(0.001, apply)
 end
 
+local function respond8(session, q)
+    if q.op == "V" and q.whole then
+        local a, b = saltOf(session.nonce)
+        if profileFp(session.profile, a, b, q.filter) == q.whole then
+            enqueue({ epoch = session.epoch, peer = session.peer, packets = { { "HA",
+                table.concat({ "8", "S", session.epoch, session.nonce, q.seq, "*" }, ":") } },
+                done = function() if serving == session then serving = nil end end })
+            return
+        end
+    end
+    local profile = session.profile.streams[q.stream]
+    local streamCount, streamHash7 = subset(profile, q.filter)
+    if q.op == "V" and q.totalCount == streamCount and q.totalHash == streamHash7 then
+        enqueue({ epoch = session.epoch, peer = session.peer, packets = { { "HA",
+            table.concat({ "8", "S", session.epoch, session.nonce, q.seq, q.stream,
+                streamCount, streamHash7 }, ":") } },
+            done = function()
+                if serving == session then
+                    if q.stream ~= "LR" then session.at = GetTime() else serving = nil end
+                end
+            end })
+        return
+    end
+    local a, b = saltOf(session.nonce)
+    local parts, cursor, bucketIndex = {}, "-", 0
+    if q.op == "T" then
+        -- The best rows by rank (attested order), each found in its bucket, of the
+        -- friend's faction when the requester filters; TOP_SCAN ranks per page at most.
+        local order, races, bytes = session.profile.order or {}, nil, 0
+        local last, r = math.min(#order, STREAM_LIMITS.LK), q.from
+        local scanEnd = math.min(last, q.from + TOP_SCAN - 1)
+        while r <= scanEnd and #parts < PAGE_ROWS8 do
+            local identity = key(order[r])
+            local bucket = identity and profile.buckets[hash(identity) % BUCKETS + 1]
+            local keys = bucket and bucket.keys
+            local low, high = 1, (bucket and bucket.n or 0) + 1
+            while keys and low < high do
+                local middle = math.floor((low + high) / 2)
+                if keys[middle] < identity then low = middle + 1 else high = middle end
+            end
+            local faction = keys and keys[low] == identity and bucket.factions[low]
+            if faction and (not q.filter or faction == q.filter or faction == "?") then
+                local payload = compactRow8("LK", bucket.payloads[low], session.epoch)
+                races = bucket.races
+                if payload and races and races[low] then payload = payload .. ":" .. races[low] end
+                local encoded = payload and (tostring(#payload) .. ":" .. payload)
+                if encoded and bytes + #encoded > 4064 then break end
+                if encoded then parts[#parts + 1], bytes = encoded, bytes + #encoded end
+            end
+            r = r + 1
+        end
+        if r <= last then cursor = tostring(r) end
+    elseif q.op == "V" then
+        for i = 1, BUCKETS do parts[i] = bucketFp(profile.buckets[i], a, b, q.filter) end
+    elseif q.op == "L" then
+        local bucket = profile.buckets[q.bucket]
+        bucketIndex = q.bucket
+        for i = 1, math.min(bucket.n, LIST_MAX_ROWS) do
+            parts[i] = rowFp(bucket.digests[i], a, b) .. bucket.factions[i]
+        end
+    else
+        local bucket = profile.buckets[q.bucket]
+        local withRace, bytes, i = raced("8", q.stream), 0, q.from
+        bucketIndex = q.bucket
+        local factions = bucket.factions
+        local races = withRace and bucket.races
+        while i <= bucket.n do
+            if wantedAt(q.bitmap, i, factions) then
+                if #parts >= PAGE_ROWS8 then break end
+                -- Built by our own serializer with this epoch: never nil in practice;
+                -- a row that does not fit the format is left out rather than sent long.
+                local payload = compactRow8(q.stream, bucket.payloads[i], session.epoch)
+                if payload then
+                    if races and races[i] then payload = payload .. ":" .. races[i] end
+                    local encoded = tostring(#payload) .. ":" .. payload
+                    if bytes + #encoded > 4064 then break end
+                    parts[#parts + 1] = encoded
+                    bytes = bytes + #encoded
+                end
+            end
+            i = i + 1
+        end
+        while i <= bucket.n and not wantedAt(q.bitmap, i, factions) do i = i + 1 end
+        if i <= bucket.n then cursor = tostring(i) end
+        if #parts == 0 and cursor ~= "-" then return end
+    end
+    local blob = table.concat(parts)
+    local partCount = math.max(1, math.ceil(#blob / CHUNK))
+    local packets = { { "HA", table.concat({ "8", "P", session.epoch, session.nonce, q.seq,
+        q.op, bucketIndex, #parts, hash(blob), cursor, partCount, q.stream }, ":") } }
+    for k = 1, partCount do
+        packets[#packets + 1] = { "HB", table.concat({ "8", "D", session.epoch, session.nonce,
+            q.seq, k, partCount, q.stream }, ":") .. ":" .. blob:sub((k - 1) * CHUNK + 1, k * CHUNK) }
+    end
+    enqueue({ epoch = session.epoch, peer = session.peer, packets = packets,
+        valid = function() return serving == session end,
+        done = function() session.at = GetTime() end })
+end
+
 local function respond(session, q)
     if serving ~= session or not session.profile or outbound then return end
+    if session.wire == "8" then return respond8(session, q) end
     local profile = session.extended and session.profile.streams[q.stream] or session.profile
     local withRace = raced(session.wire, q.stream)
     if q.totalCount ~= nil and q.totalCount == profile.count
@@ -591,25 +1053,26 @@ local function respond(session, q)
     end
     local bucket = profile.buckets[q.bucket]
     local rows, cursor = {}, "-"
-    if q.cursor == "-" and #bucket == q.count and bucketHash(bucket, session.wire) == q.hash then
+    if q.cursor == "-" and bucket.n == q.count and bucketHash(bucket, session.wire) == q.hash then
         -- An empty page certifies only this matching bucket.
     else
-        local low, high = 1, #bucket + 1
+        local keys = bucket.keys
+        local low, high = 1, bucket.n + 1
         while low < high do
             local middle = math.floor((low + high) / 2)
-            if bucket[middle].key <= q.cursor and q.cursor ~= "-" then low = middle + 1 else high = middle end
+            if keys[middle] <= q.cursor and q.cursor ~= "-" then low = middle + 1 else high = middle end
         end
         local blobBytes = 0
-        for i = low, math.min(#bucket, low + PAGE_ROWS - 1) do
-            local payload = rowPayload(bucket[i], withRace and session.profile.races)
+        for i = low, math.min(bucket.n, low + PAGE_ROWS - 1) do
+            local payload = rowPayload(bucket, i, withRace)
             local encoded = tostring(#payload) .. ":" .. payload
             if blobBytes + #encoded > 4064 then break end
             rows[#rows + 1] = encoded
             blobBytes = blobBytes + #encoded
         end
-        if #rows == 0 and low <= #bucket then return end
-        if #rows > 0 and low + #rows <= #bucket then
-            cursor = bucket[low + #rows - 1].key
+        if #rows == 0 and low <= bucket.n then return end
+        if #rows > 0 and low + #rows <= bucket.n then
+            cursor = keys[low + #rows - 1]
         end
     end
     local blob = table.concat(rows)
@@ -639,7 +1102,7 @@ function sync:CancelPagedLeaderboardCatchup()
     return true
 end
 
-function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace)
+function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, diff)
     peer = self:NormalizeContributorFullName(peer)
     -- Second result: "local" when this client cannot start now (busy, combat,
     -- no campaign), "unsupported" when the peer is known to lack the protocol.
@@ -660,19 +1123,34 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace)
         -- first request still carries the stream digest (one reply if equal).
         completed = resume and savedStream == stream and integer(saved.done, 0, BUCKETS - 1) or 0,
         extended = extended == true, stream = stream, bucket = resume or 1,
-        wire = extended and (withRace and "7" or "6") or "5",
+        wire = extended and (diff and "8" or withRace and "7" or "6") or "5",
         cursor = "-", nonce = tostring(GetServerTime()) .. "n"
             .. tostring(math.floor(GetTime() * 1000)) .. "n" .. tostring(serial) }
+    if state.wire == "8" then
+        -- v8 starts each stream with its bucket fingerprints, whatever the saved bucket.
+        state.phase, state.bucket, state.completed, state.qi = "V", 0, 0, 0
+        local theirs = self.GetBetaPeerFaction and self:GetBetaPeerFaction(peer)
+        -- Our own faction's rows are left to our allies, so only when we have one:
+        -- a client whose only direct neighbour is an enemy friend pulls everything.
+        if IsOtherFaction(peer) and HasDirectAlly(peer) then
+            state.factionFilter = theirs == "Alliance" and "A" or "H"
+        end
+    end
     pull = state
-    stats.protocol = extended and (withRace and 7 or 6) or 5
+    stats.protocol = extended and (diff and 8 or withRace and 7 or 6) or 5
     stats.target, stats.result = peer, "preparing"
     if not prepare(function(profile)
         if pull ~= state then return end
         if not profile then state.why = "no local snapshot"; finish(state, false); return end
         state.profile = profile
         stats.result = "awaiting reply"
+        -- Cold pull (almost nothing of ours yet): the best rows first, then the sweep.
+        if state.wire == "8" and state.stream == "LK"
+            and (profile.streams.LK.count or 0) < COLD_PULL_ROWS then
+            state.phase, state.from, state.topSeen, state.topApplied = "T", 1, {}, 0
+        end
         request(state)
-    end) then pull = nil; return false, "local" end
+    end, true) then pull = nil; return false, "local" end
     return true
 end
 
@@ -689,10 +1167,12 @@ function sync:StartCompletePagedLeaderboardCatchup(peer, callback)
         stats.peerProtocol = "beta v" .. capability .. "; not asked (v7 only)"
         return false, "unsupported"
     end
-    stats.peerProtocol = capability == 7 and "beta v7; lr+lp6 NH" or "capability unknown, v7 probe"
+    stats.peerProtocol = capability == 8 and "beta v8; ld+lr+lp6 NH"
+        or capability == 7 and "beta v7; lr+lp6 NH" or "capability unknown, v7 probe"
+    -- v8 only with a peer that advertises it; others keep the v7 exchange.
     return self:StartPagedLeaderboardCatchup(peer, function(ok, supported)
         callback(ok == true, supported == true)
-    end, true, true)
+    end, true, true, capability == 8)
 end
 
 function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
@@ -700,8 +1180,8 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
     if #payload > 250 or not allowed(sender, channel) then return end
     local version, op, epochStr, nonce, seqStr, a, b, c, d, e, f, g = strsplit(":", payload, 12)
     local wireEpoch, seq = integer(epochStr, 1, 9999999999), integer(seqStr, 1, 10000)
-    -- "7" is "6" with the race at the end of each LK row.
-    local extended = version == "6" or version == "7"
+    -- "7" is "6" with the race at the end of each LK row; "8" sends only differing rows.
+    local extended = version == "6" or version == "7" or version == "8"
     if (not extended and version ~= "5") or wireEpoch ~= epoch()
         or not seq or not nonce or #nonce > 32
         or not nonce:match("^[%w]+$") then return end
@@ -712,31 +1192,64 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
             and seq >= serving.seq then serving = nil end
         return
     end
-    if kind == "HR" and op == "Q" then
-        local bucket, digest = integer(a, 1, BUCKETS), integer(d, 0, MOD - 1)
-        local stream = extended and e or "LK"
-        if extended and not e then return end
-        local limit = STREAM_LIMITS[stream]
-        local count = integer(c, 0, limit or 0)
-        local rawTotalCount, rawTotalHash
-        if extended then rawTotalCount, rawTotalHash = f, g
-        else rawTotalCount, rawTotalHash = e, f end
-        local totalCount = integer(rawTotalCount, 0, limit or 0)
-        local totalHash = integer(rawTotalHash, 0, MOD - 1)
-        if not bucket or not count or not digest or not validCursor(b)
-            or not limit or (not extended and g)
-            or ((rawTotalCount or rawTotalHash)
-                and (not totalCount or not totalHash or (not extended and seq ~= 1))) then return end
+    local v8Request = version == "8" and (op == "V" or op == "L" or op == "G" or op == "T")
+    if kind == "HR" and ((op == "Q" and version ~= "8") or v8Request) then
+        local q, fresh
+        if v8Request then
+            local stream = a
+            if not STREAM_LIMITS[stream] then return end
+            if op == "V" then
+                local totalCount = integer(b, 0, STREAM_LIMITS[stream])
+                local totalHash = integer(c, 0, MOD - 1)
+                if not totalCount or not totalHash or (d and d ~= "A" and d ~= "H" and d ~= "-")
+                    or (e and (seq ~= 1 or not e:match("^[0-9A-Za-z_-][0-9A-Za-z_-][0-9A-Za-z_-][0-9A-Za-z_-]$")))
+                    or f then return end
+                q = { op = "V", stream = stream, seq = seq, totalCount = totalCount, totalHash = totalHash,
+                    filter = d ~= "-" and d or nil, whole = e }
+            elseif op == "T" then
+                local from = integer(b, 1, STREAM_LIMITS.LK)
+                if stream ~= "LK" or not from or (c ~= "-" and c ~= "A" and c ~= "H") or d then return end
+                q = { op = "T", stream = "LK", seq = seq, from = from, filter = c ~= "-" and c or nil }
+            elseif op == "L" then
+                local bucket = integer(b, 1, BUCKETS)
+                if not bucket or c then return end
+                q = { op = "L", stream = stream, seq = seq, bucket = bucket }
+            else
+                local bucket, from = integer(b, 1, BUCKETS), integer(c, 1, STREAM_LIMITS[stream])
+                if not bucket or not from or not validBitmap(d) or e then return end
+                q = { op = "G", stream = stream, seq = seq, bucket = bucket, from = from, bitmap = d }
+            end
+            -- A v8 pull always opens with the fingerprints of its first stream.
+            fresh = (op == "V" or op == "T") and seq == 1
+        else
+            local bucket, digest = integer(a, 1, BUCKETS), integer(d, 0, MOD - 1)
+            local stream = extended and e or "LK"
+            if extended and not e then return end
+            local limit = STREAM_LIMITS[stream]
+            local count = integer(c, 0, limit or 0)
+            local rawTotalCount, rawTotalHash
+            if extended then rawTotalCount, rawTotalHash = f, g
+            else rawTotalCount, rawTotalHash = e, f end
+            local totalCount = integer(rawTotalCount, 0, limit or 0)
+            local totalHash = integer(rawTotalHash, 0, MOD - 1)
+            if not bucket or not count or not digest or not validCursor(b)
+                or not limit or (not extended and g)
+                or ((rawTotalCount or rawTotalHash)
+                    and (not totalCount or not totalHash or (not extended and seq ~= 1))) then return end
+            q = { bucket = bucket, cursor = b, count = count, hash = digest, seq = seq,
+                stream = stream, totalCount = totalCount, totalHash = totalHash }
+            fresh = seq == 1 and b == "-"
+        end
         local session = serving
         if session and (session.epoch ~= wireEpoch or GetTime() - session.at > 300) then serving = nil; session = nil end
         -- A fresh start from the same requester supersedes its own stale session
         -- (interrupted pull whose end notice was lost).
         if session and session.peer == sender and session.nonce ~= nonce
-            and seq == 1 and b == "-" then serving = nil; session = nil end
+            and fresh then serving = nil; session = nil end
         -- Fair share: a fresh start from an other-faction requester takes over a
         -- same-faction session held for SESSION_SHARE_SEC. The previous requester
         -- resumes later from its shared checkpoint.
-        if session and session.peer ~= sender and seq == 1 and b == "-" and not building
+        if session and session.peer ~= sender and fresh and not building
             and GetTime() - (session.startedAt or session.at) >= SESSION_SHARE_SEC
             and IsOtherFaction(sender) and not IsOtherFaction(session.peer) then
             -- In combat the running session keeps its pages; the newcomer waits for the
@@ -757,7 +1270,7 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         if blocked() then sendControl("HA", busyReply, sender); return end
         if (session and (session.peer ~= sender or session.nonce ~= nonce
                 or session.wire ~= version))
-        or (not session and (seq ~= 1 or b ~= "-")) then
+        or (not session and not fresh) then
             -- Busy with another requester, or a cursor from a lost session (it is
             -- meaningful only inside the original frozen profile): say so at once.
             -- Plain busy even in combat: waiting for us would not free us sooner.
@@ -783,8 +1296,6 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         -- asks again after its own timeout.
         elseif outbound or seq < session.seq or seq > session.seq + 1 then return end
         session.at, session.seq = GetTime(), seq
-        local q = { bucket = bucket, cursor = b, count = count, hash = digest, seq = seq,
-            stream = stream, totalCount = totalCount, totalHash = totalHash }
         if session.profile then respond(session, q)
         else
             prepare(function(profile)
@@ -831,16 +1342,31 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         finish(state, false)
         return
     end
+    if kind == "HA" and op == "S" and state.wire == "8" and a == "*" then
+        -- The whole ranking matched (first request only): nothing to pull, and the
+        -- responder already released its session (no end notice needed).
+        if state.phase ~= "V" or seq ~= 1 or b then return end
+        state.supported = true
+        stats.pages = stats.pages + 1
+        state.stream = "LK"
+        finish(state, true)
+        return
+    end
     if kind == "HA" and op == "S" then
         local stream = extended and a or "LK"
         if extended and not a then return end
         local profile = extended and state.profile.streams[state.stream] or state.profile
         local count = integer(extended and b or a, 0, STREAM_LIMITS[stream] or 0)
         local digest = integer(extended and c or b, 0, MOD - 1)
-        if stream ~= state.stream or count ~= profile.count or digest ~= streamHash(profile, state.wire)
+        local expectedCount, expectedHash = profile.count, streamHash(profile, state.wire)
+        if state.wire == "8" then expectedCount, expectedHash = subset(profile, state.factionFilter) end
+        if stream ~= state.stream or count ~= expectedCount or digest ~= expectedHash
             or (not extended and (seq ~= 1 or c)) then return end
         state.supported = true
-        if extended then
+        if state.wire == "8" then
+            if state.phase ~= "V" then return end
+            nextStream8(state)
+        elseif extended then
             state.completed = BUCKETS - 1
             nextPage(state, "-")
         else
@@ -849,7 +1375,24 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         end
         return
     end
-    if kind == "HA" and op == "P" then
+    if kind == "HA" and op == "P" and state.wire == "8" then
+        local bucket, rows, digest = integer(b, 0, BUCKETS), integer(c, 0, LIST_MAX_ROWS), integer(d, 0, MOD - 1)
+        local parts, cursor, stream = integer(f, 1, MAX_PARTS), e, g
+        if a ~= state.phase or stream ~= state.stream or not bucket or not rows or not digest
+            or not parts or ((a == "V" or a == "T") and bucket ~= 0)
+            or (a ~= "V" and a ~= "T" and bucket ~= state.bucket)
+            or ((a == "G" or a == "T") and rows > PAGE_ROWS8_MAX)
+            -- A T cursor is the next rank to look at: always past this page.
+            or (a == "T" and not (cursor == "-"
+                or integer(cursor, state.from + math.max(rows, 1), STREAM_LIMITS.LK)))
+            -- A G cursor is the next wanted index after the rows of this page: it
+            -- must move past them (a page that never advances is refused).
+            or not (cursor == "-" or a == "T"
+                or (a == "G" and integer(cursor, state.from + rows, STREAM_LIMITS[state.stream] or 0)))
+            or (state.partCount and state.partCount ~= parts) then return end
+        state.meta = { op = a, rows = rows, hash = digest, cursor = cursor, parts = parts }
+        state.partCount = parts
+    elseif kind == "HA" and op == "P" then
         local bucket, rows, digest, parts = integer(a, 1, BUCKETS), integer(b, 0, PAGE_ROWS),
             integer(c, 0, MOD - 1), integer(e, 1, MAX_PARTS)
         local stream = extended and f or "LK"
@@ -913,6 +1456,15 @@ function sync:GetPagedLeaderboardDiagnostics()
         for _ in pairs(pull.parts or {}) do received = received + 1 end
         details = string.format("; parts=%d/%s; timeout=%ss", received,
             tostring(pull.partCount or "?"), tostring(pull.timeoutRemaining or "-"))
+    end
+    -- v8: current step, and since login the rows asked for out of the rows listed.
+    if pull and pull.wire == "8" then
+        details = details .. string.format("; v8 step %s%s", tostring(pull.phase),
+            pull.factionFilter and (" (" .. pull.factionFilter .. " rows only)") or "")
+    end
+    if stats.listed then
+        details = details .. string.format("; v8 wanted %d/%d listed, %d buckets differing",
+            stats.wanted or 0, stats.listed, stats.bucketsDiffering or 0)
     end
     return string.format("Ladder v%d: %s; pages=%d rows=%d filtered=%d retries=%d; %s bucket=%s/64%s; peer=%s; 300 B/s budget",
         stats.protocol or 5, status, stats.pages, stats.rows, stats.rejected,

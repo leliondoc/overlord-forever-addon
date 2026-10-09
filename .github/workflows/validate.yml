@@ -61,6 +61,9 @@ jobs:
           lua5.1 tests/forever_shard_factions.test.lua
           lua5.1 tests/forever_whisper_offline_filter.test.lua
           lua5.1 tests/forever_leaderboard_pages.test.lua
+          lua5.1 tests/forever_paged_v8_rows.test.lua
+          lua5.1 tests/forever_meta_index_compact.test.lua
+          lua5.1 tests/forever_name_memo.test.lua
           lua5.1 tests/audit_ranking_v6.test.lua
           lua5.1 tests/audit_v6_silent_first_request.test.lua
           lua5.1 tests/audit_v6_nh_capability.test.lua

@@ -114,7 +114,7 @@ end
 assert(established and samples > 40, "Route to the origin was never established at R1")
 assert(lost == 0, ("R1 lost its direct route to the origin in %d of %d samples"):format(lost, samples))
 assert(r1.BetaNetwork:IsDirectPeer("Origin Tester"), "The origin's friend does not see it as direct")
-assert(r1.BetaNetwork:GetPeerPagedProtocol("Origin Tester") == 7, "R1 lost the origin v7 capability")
+assert(r1.BetaNetwork:GetPeerPagedProtocol("Origin Tester") == 8, "R1 lost the origin v8 capability")
 assert(((r1.BetaNetwork.kindStats.NH or {}).queued or 0) == 0, "R1 relayed another player's presence")
 for _, node in ipairs({ r2, r3, r4 }) do
     assert(node.BetaNetwork.peers["origin tester"] == nil, node.name .. " heard a relayed presence")

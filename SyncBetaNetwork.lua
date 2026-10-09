@@ -97,7 +97,8 @@ end
 local function isPagedCatchup(p)
     return p and type(p.payload) == "string"
         and (p.kind == "HR" or p.kind == "HB" or p.kind == "HA")
-        and (p.payload:sub(1, 2) == "5:" or p.payload:sub(1, 2) == "6:" or p.payload:sub(1, 2) == "7:")
+        and (p.payload:sub(1, 2) == "5:" or p.payload:sub(1, 2) == "6:" or p.payload:sub(1, 2) == "7:"
+            or p.payload:sub(1, 2) == "8:")
 end
 local function isPagedControl(p)
     return isPagedCatchup(p) and (p.kind == "HR" or p.kind == "HA")
@@ -514,6 +515,9 @@ local NH_RELAY_SLOTS = 1
 -- identity or authority. Generic traffic may refresh a route, but not this TTL.
 local pagedCapabilities, pagedCapabilityOrder = {}, {}
 local seenOrder, recentOrder, assemblyOrder, peerOrder = {}, {}, {}, {}
+local function IsPagedSessionPeer(key)
+    return sync.IsPagedSessionPeer ~= nil and sync:IsPagedSessionPeer(key) == true
+end
 -- Broadcast packets handled here whose forward was refused (full queue): a copy
 -- of the same origin:id arriving through another bridge may retry the forward
 -- only, without being handled locally a second time. Bounded, TTL-limited.
@@ -540,13 +544,26 @@ local function canonical(name) return sync:CanonicalForeverName(name) end
 local function same(a, b) return sync:ForeverIdentitiesMatch(a, b) end
 -- FIFO ring (order.first..order.last): same eviction order as before, but O(1).
 -- Removing the first array slot shifted up to 2048 keys for every received packet.
-local function remember(values, order, key, value, limit)
+local function remember(values, order, key, value, limit, keep)
     if values[key] == nil then
         local first, last = order.first or 1, order.last or 0
-        if last - first + 1 >= limit then
-            values[order[first]] = nil
-            order[first] = nil
-            first = first + 1
+        local count = last - first + 1
+        if count >= limit then
+            -- keep (neighbour table only, 1.7.8): the peers of a running ranking
+            -- session move to the newest end instead of being forgotten. On a busy
+            -- channel an entry lived ~12 s (5,000 members, 512 entries), shorter
+            -- than a page exchange: replies left unrouted and were dropped.
+            local rotated = 0
+            while keep and rotated < count and keep(order[first]) do
+                last = last + 1
+                order[last], order[first] = order[first], nil
+                first, rotated = first + 1, rotated + 1
+            end
+            if rotated < count then
+                values[order[first]] = nil
+                order[first] = nil
+                first = first + 1
+            end
         end
         last = last + 1
         order[last] = key
@@ -847,8 +864,8 @@ function net:GetKindDiagnostics(maxRows)
     if lb and lb.GetHotIndexStats then
         local h = lb:GetHotIndexStats()
         lines[#lines + 1] = string.format("Ranking index rebuilds: %d full + %d meta-only finished;"
-            .. " restarted %d (new player data) + %d (other).",
-            h.completed or 0, h.metaOnly or 0, h.abortedMeta or 0, h.abortedOther or 0)
+            .. " %d refreshed later (change not replayable); restarted %d.",
+            h.completed or 0, h.metaOnly or 0, h.metaDrift or 0, h.abortedOther or 0)
     end
     return lines
 end
@@ -1575,8 +1592,9 @@ function net:Send(kind, payload, target, immediate)
     -- Annotate at the producer boundary.
     -- "~lr" (1.7.0): ranking pages v7, race in each score row. It stays before
     -- "~lp6" because older clients only read the suffix and still see lp6.
+    -- "~ld" (1.7.8): ranking pages v8 (only differing rows); v7 clients still read v7.
     if kind == "NH" and payload == tostring(addon.Version or "") then
-        payload = payload .. "~lr~lp6"
+        payload = payload .. "~ld~lr~lp6"
     end
     -- Handlers may rebroadcast received snapshots. The existing packet is already
     -- forwarded below; do not give that replay a fresh author or hop budget.
@@ -1652,7 +1670,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     if not previousRoute or GetTime() - previousRoute.at > keepRoute or #p.path <= previousRoute.hops then
         remember(self.peers, peerOrder, origin:lower(), {
             name = origin, at = GetTime(), via = sender, transport = transport, bnet = bnetID, hops = #p.path,
-        }, 512)
+        }, self.PEER_RING_LIMIT or 512, IsPagedSessionPeer)
     end
     self.stats.received = self.stats.received + 1
     if retryForward then
@@ -1673,6 +1691,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         local advertised = p.payload:match("~lp(%d+)$")
         local originKey, version = origin:lower(), advertised == "6" and 6 or 5
         if version == 6 and p.payload:find("~lr~lp6", 1, true) then version = 7 end
+        if version == 7 and p.payload:find("~ld~lr~lp6", 1, true) then version = 8 end
         local previous = pagedCapabilities[originKey]
         -- 1.7.5 : seul le NH de premier ordre (envoye par le voisin lui-meme) dit sa
         -- capacite. Un relais ecrivait "Voisin,Relais" sans suffixe : le voisin honnete
