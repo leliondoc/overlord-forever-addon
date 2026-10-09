@@ -536,10 +536,17 @@ local function finish(state, success, unsupportedPeer)
         end
         unsupported[state.peer] = GetTime() + 600
     end
-    -- Leaderboard badge: a sweep from an enemy friend compares the enemy rows only.
-    stats.lastSweepFiltered = state.factionFilter ~= nil
-    -- ... and rows this sweep really changed in our ranking (0 = nothing was missing).
-    stats.lastSweepChanged = (stats.changedRows or 0) - (state.changedAtStart or 0)
+    if success then
+        -- Leaderboard badge: the sweep ends here (LR done, or the whole ranking
+        -- matched). Rows it changed in our ranking, counted from the pull that
+        -- started it at LK (0 = nothing was missing); "full" only when that start
+        -- was seen, and whether an enemy friend's pull compared enemy rows only.
+        stats.lastSweepFull = stats.sweepBase ~= nil or state.wholeMatch == true
+        stats.lastSweepChanged = (stats.changedRows or 0) - (stats.sweepBase or state.changedAtStart or 0)
+        stats.lastSweepFiltered = stats.sweepFiltered == true or state.factionFilter ~= nil
+        stats.lastSweepAt = stats.sweepAt or state.startedAt
+        stats.sweepBase, stats.sweepAt, stats.sweepFiltered = nil, nil, nil
+    end
     state.callback(success, state.supported == true)
 end
 
@@ -1142,12 +1149,25 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
         end
     end
     pull = state
+    -- Leaderboard badge: a sweep runs LK -> LC -> LR and may span several pulls (a
+    -- busy or silent peer hands over to the next one at the saved stream). It starts
+    -- with a pull at the start of LK; the rows changed are counted from there.
+    state.startedAt = GetServerTime()
+    if state.stream == "LK" and (state.wire == "8" or (state.bucket == 1 and state.completed == 0)) then
+        stats.sweepBase, stats.sweepAt = stats.changedRows or 0, state.startedAt
+        stats.sweepFiltered = state.factionFilter ~= nil
+    elseif state.factionFilter then
+        stats.sweepFiltered = true
+    end
     stats.protocol = extended and (diff and 8 or withRace and 7 or 6) or 5
     stats.target, stats.result = peer, "preparing"
     if not prepare(function(profile)
         if pull ~= state then return end
         if not profile then state.why = "no local snapshot"; finish(state, false); return end
         state.profile = profile
+        -- Ranking size, for the badge's "quiet sweep" limit.
+        stats.ladderRows = profile.streams and profile.streams.LK and profile.streams.LK.count
+            or profile.count or 0
         stats.result = "awaiting reply"
         -- Cold pull (almost nothing of ours yet): the best rows first, then the sweep.
         if state.wire == "8" and state.stream == "LK"
@@ -1353,7 +1373,7 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         if state.phase ~= "V" or seq ~= 1 or b then return end
         state.supported = true
         stats.pages = stats.pages + 1
-        state.stream = "LK"
+        state.stream, state.wholeMatch = "LK", true
         finish(state, true)
         return
     end

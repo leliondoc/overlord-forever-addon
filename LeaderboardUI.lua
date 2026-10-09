@@ -1196,6 +1196,8 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.infoLeft = { InfoLine(lbFrame.subtitle, "LEFT"), InfoLine(lbFrame.totalText, "LEFT") }
     lbFrame.infoRight = { InfoLine(lbFrame.subtitle, "RIGHT"), InfoLine(lbFrame.totalText, "RIGHT") }
     lbFrame:HookScript("OnShow", function()
+        -- Shown again by its parent (Alt+Z, cinematic): OnHide stopped the badge.
+        Overlord.LeaderboardUI:RefreshSyncBadge()
         if lbFrame.infoTicker or not (C_Timer and C_Timer.NewTicker) then return end
         lbFrame.infoTicker = C_Timer.NewTicker(30, function()
             if lbFrame:IsShown() then
@@ -2786,9 +2788,9 @@ function Overlord.LeaderboardUI:RefreshInfoLines(dc)
     end
 end
 
--- Ranking sync badge, right of the title (1.8.1): a green arrow sliding down while
--- ranking data is still arriving from allies and enemies, a green check once a full
--- comparison with a neighbour succeeded. Reads local state only (Sync
+-- Ranking sync badge, in the header between the centre lines and your rank (1.8.1):
+-- a green arrow drifting gently while ranking data is still arriving from allies and
+-- enemies, a green check once a full comparison with a neighbour succeeded. Reads local state only (Sync
 -- GetLadderCatchupState): nothing is sent; nothing runs while the panel is hidden;
 -- the arrow is an engine-driven animation.
 function Overlord.LeaderboardUI:CreateSyncBadge(title)

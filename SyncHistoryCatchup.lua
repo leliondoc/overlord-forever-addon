@@ -57,9 +57,11 @@ local ROUND_WATCHDOG_SEC = 15 * 60
 -- neighbour only hides the badge after 60 s (no flip-flop at login).
 local LADDER_STALE_SEC, LADDER_RELOAD_TRUST_SEC, LADDER_NO_PEER_GRACE_SEC = 15 * 60, 180, 60
 -- A sweep is "quiet" (nothing left to fetch) when it changed at most this many rows of
--- our ranking: the badge keeps its arrow while sweeps still bring missing entries.
+-- our ranking, or this share of it when larger: the badge keeps its arrow while sweeps
+-- still bring missing entries. Two neighbours never hold exactly the same live kills
+-- on a crowded realm, so the limit grows with the ranking (50 rows at 5,000).
 -- (Live kills keep arriving for ever and never move the badge.)
-local LADDER_QUIET_ROWS = 3
+local LADDER_QUIET_ROWS, LADDER_QUIET_SHARE = 3, 0.01
 local peerPenaltyUntil = {}
 local ENEMY_FACTION = { Alliance = "Horde", Horde = "Alliance" }
 local snapshotWireCache = setmetatable({}, { __mode = "k" })
@@ -131,6 +133,11 @@ end
 
 -- Repaints the leaderboard badge at the end of a round: a quiet round changes no
 -- row, so nothing else would refresh it. Local only, nothing is sent.
+local function LadderQuietLimit(pageStats)
+    local rows = type(pageStats) == "table" and tonumber(pageStats.ladderRows) or 0
+    return math.max(LADDER_QUIET_ROWS, math.floor(rows * LADDER_QUIET_SHARE))
+end
+
 local function NotifyLadderBadge()
     local ui = Overlord.LeaderboardUI
     if ui and ui.RefreshSyncBadge and ui.IsShown and ui:IsShown() then pcall(ui.RefreshSyncBadge, ui) end
@@ -675,15 +682,18 @@ local function FinishRound(pending, success, target)
         ack.at = NowServer()
         -- Badge: a full comparison (ally, or enemy friend without a direct ally) makes
         -- the ranking "up to date"; enemy-only sweeps count after three in a row, and
-        -- keep an already fresh state fresh.
+        -- keep an already fresh state fresh. Only a whole sweep (started at LK in this
+        -- session, after the last long instance) counts; any sweep that brought many
+        -- rows removes the check.
         local filtered = type(pageStats) == "table" and pageStats.lastSweepFiltered == true
-        local quiet = type(pageStats) == "table"
-            and (tonumber(pageStats.lastSweepChanged) or 0) <= LADDER_QUIET_ROWS
-        if not quiet then
+        local whole = type(pageStats) == "table" and pageStats.lastSweepFull == true
+            and (tonumber(pageStats.lastSweepAt) or 0) >= (sync._ladderTrustFloor or 0)
+        local changed = type(pageStats) == "table" and tonumber(pageStats.lastSweepChanged) or 0
+        if changed > LadderQuietLimit(pageStats) then
             -- Still bringing missing rows: not caught up yet (the arrow stays).
             sync._ladderFilteredWins = 0
             ack.fullAt = nil
-        else
+        elseif whole then
             sync._ladderFilteredWins = filtered and (sync._ladderFilteredWins or 0) + 1 or 0
             local fullAt = tonumber(ack.fullAt) or 0
             local fresh = fullAt > 0 and fullAt >= (sync._ladderTrustFloor or ack.at)
@@ -877,7 +887,12 @@ function sync:GetLadderCatchupState()
     local now, ack = NowServer(), OverlordDB.leaderboardHistoryCatchupAck
     local fullAt = type(ack) == "table" and math.floor(tonumber(ack.campaignId) or 0) == campaignId
         and tonumber(ack.fullAt) or 0
-    if fullAt > 0 and fullAt >= (self._ladderTrustFloor or now) and now - fullAt < LADDER_STALE_SEC then
+    -- A sweep under way that already brought many rows: still catching up.
+    local ps = self._leaderboardPageStats
+    local busySweep = type(ps) == "table" and ps.sweepBase ~= nil
+        and (tonumber(ps.changedRows) or 0) - ps.sweepBase > LadderQuietLimit(ps)
+    if fullAt > 0 and fullAt >= (self._ladderTrustFloor or now) and now - fullAt < LADDER_STALE_SEC
+        and not busySweep then
         return "UP_TO_DATE", "caught_up"
     end
     -- No round runs in the first 30 min of a campaign: nothing is downloading.

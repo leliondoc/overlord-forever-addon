@@ -452,6 +452,10 @@ local shared = PULLER.OverlordDB.leaderboardPageProgress.shared
 assert(shared and shared.stream == "LK" and (shared.done or 0) >= 5,
     "no shared position after the cut pull: " .. tostring(shared and shared.done))
 local resumeBucket, certified = shared.bucket, shared.done
+-- Badge: the cut pull already brought rows; the sweep keeps counting them.
+local pageStats = PULLER.Overlord.Sync._leaderboardPageStats
+local cutChanged = (pageStats.changedRows or 0) - (pageStats.sweepBase or 0)
+assert(pageStats.sweepBase and cutChanged > 0, "the cut pull changed no row or lost its sweep start")
 done = nil
 assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SECOND.name, function(ok) done = ok end))
 for _ = 1, 40 do advance(100); if done ~= nil then break end end
@@ -469,6 +473,12 @@ for i = 1, 1500 do
 end
 local final = PULLER.OverlordDB.leaderboardPageProgress.shared
 assert(final.stream == "LK" and final.bucket == 1 and final.done == 0, "a finished sweep did not restart from the top")
+-- The badge judges the whole sweep (both neighbours), not only its last pull.
+assert(pageStats.lastSweepFull == true and pageStats.sweepBase == nil, "the resumed sweep was not a whole one")
+-- 1,500 rows changed in all, some with each neighbour.
+assert(pageStats.lastSweepChanged >= 1500,
+    "the sweep total left out the rows of its first pull: " .. tostring(pageStats.lastSweepChanged)
+    .. " (first pull " .. cutChanged .. ")")
 PULLER.Overlord.Sync.SendWhisper = sendRequest
 print("PASS: sweep position shared across neighbours (" .. certified .. " buckets certified, resumed at " .. resumeBucket .. ")")
 

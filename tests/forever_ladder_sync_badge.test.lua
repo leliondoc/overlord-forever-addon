@@ -29,7 +29,8 @@ Overlord.LeaderboardUI = { IsShown = function() return true end, RefreshSyncBadg
 local nextSweep = { filtered = false, changed = 0 }
 sync.StartCompletePagedLeaderboardCatchup = function(_, _, callback)
     sync._leaderboardPageStats = { protocol = 8, lastSweepFiltered = nextSweep.filtered,
-        lastSweepChanged = nextSweep.changed }
+        lastSweepChanged = nextSweep.changed, lastSweepFull = nextSweep.full ~= false,
+        lastSweepAt = nextSweep.at or now, ladderRows = nextSweep.rows or 0 }
     callback(true, true)
     return true
 end
@@ -42,8 +43,10 @@ local function runUntil(done)
         table.remove(timers, 1)()
     end
 end
-local function round(filtered, changed)
+local function round(filtered, changed, opts)
     nextSweep.filtered, nextSweep.changed = filtered, changed
+    opts = opts or {}
+    nextSweep.full, nextSweep.at, nextSweep.rows = opts.full, opts.at, opts.rows
     timers = {}
     sync._historyCatchupPending = nil
     assert(sync:ScheduleLoginLeaderboardHistoryCatchUp(true))
@@ -105,6 +108,38 @@ assert(state() == "SYNCING", "a long instance kept the check")
 round(false, 0)
 assert(state() == "UP_TO_DATE", "the round after a long instance did not restore the check")
 
+-- The limit grows with the ranking: 1 % of 5,000 rows is 50.
+round(false, 0)
+assert(state() == "UP_TO_DATE")
+round(false, 50, { rows = 5000 })
+assert(state() == "UP_TO_DATE", "50 rows of a 5,000-row ranking dropped the check")
+round(false, 51, { rows = 5000 })
+assert(state() == "SYNCING", "51 rows of a 5,000-row ranking kept the check")
+round(false, 4)
+assert(state() == "SYNCING", "4 rows of a small ranking showed the check")
+
+-- Only a whole sweep counts: one resumed in the middle (its start not seen) neither
+-- shows the check nor removes it; nor does one that started before a long instance.
+round(false, 0, { full = false })
+assert(state() == "SYNCING", "a partial sweep showed the check")
+round(false, 0)
+assert(state() == "UP_TO_DATE")
+round(false, 0, { full = false })
+assert(state() == "UP_TO_DATE", "a quiet partial sweep removed the check")
+sync._ladderTrustFloor = now + 1
+now = now + 2
+round(false, 0, { at = now - 5 })
+assert(state() == "SYNCING", "a sweep started before the long instance restored the check")
+round(false, 0)
+assert(state() == "UP_TO_DATE", "a sweep started after the long instance did not restore the check")
+
+-- A sweep under way that already brought many rows shows the arrow at once.
+sync._leaderboardPageStats.sweepBase, sync._leaderboardPageStats.changedRows = 100, 104
+assert(state() == "SYNCING", "a running sweep that brought 4 rows kept the check")
+sync._leaderboardPageStats.changedRows = 103
+assert(state() == "UP_TO_DATE", "a running sweep that brought 3 rows dropped the check")
+sync._leaderboardPageStats.sweepBase = nil
+
 -- No neighbour: arrow during a 60 s grace, then hidden ("unknown"), and back as soon
 -- as a neighbour is picked.
 now = now + 20 * 60
@@ -137,4 +172,4 @@ Overlord.InstanceSuspended = true
 assert(state() == "SUSPENDED", "the badge ignored the instance")
 Overlord.InstanceSuspended = nil
 
-print("Ranking sync badge: arrow while sweeps bring rows, check after a quiet full sweep, staleness, enemy-only rule, instance, no-neighbour grace, campaign OK")
+print("Ranking sync badge: arrow while sweeps bring rows, check after a quiet whole sweep, 1 % limit, partial and pre-instance sweeps, running sweep, staleness, enemy-only rule, instance, no-neighbour grace, campaign OK")

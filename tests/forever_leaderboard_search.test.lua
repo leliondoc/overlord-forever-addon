@@ -350,5 +350,12 @@ assert(badge.anim.playing, "Badge did not come back after the instance")
 ui:Hide(); drain()
 assert(not badge.anim.playing, "Closing the panel left the arrow animating")
 assert(#frames == framesBeforeBadge and pending() == 0, "Badge created frames or timers on refresh")
+-- Shown again by its parent (Alt+Z, cinematic): the badge repaints at once, without
+-- waiting for a panel refresh.
+frame.shown = true
+frame.scripts.OnShow(frame)
+assert(badge:IsShown() and badge.arrow:IsShown() and badge.anim.playing,
+    "The badge stayed frozen when the panel came back")
+ui:Hide(); drain()
 Overlord.Sync = nil
 print('Search UI: actual edit box/clear/Escape, bounded frames, original rank, scroll reset, totals, no data reads on typing, guild hover, sync badge OK')
