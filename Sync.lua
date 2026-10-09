@@ -1300,13 +1300,9 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
     -- Le dernier total retenu pour cette identite dans la session : une variante
     -- du nom ne repart jamais de zero, meme sans index chaud.
     if existing and existing.total then killsBefore = math.max(killsBefore or 0, existing.total) end
-    -- Cap de premier contact : ce qu'un honnete peut avoir fait depuis le reset.
-    local firstContactCap
-    local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
-    if start > 0 then
-        local serverNow = Overlord.ServerNow and Overlord.ServerNow() or time()
-        firstContactCap = FIRST_CONTACT_BASE + math.floor(math.max(0, serverNow - start) * FIRST_CONTACT_RATE)
-    end
+    -- Cap de premier contact : ce qu'un honnete peut avoir fait depuis le reset (la
+    -- meme courbe que l'enveloppe de campagne, 1.7.6).
+    local firstContactCap = self:CampaignKillEnvelope()
     if (killsBefore or 0) <= 0 then
         local accepted = kills
         -- Une copie tierce d'un sujet connu par ses seules captures : la fenetre fixe.
@@ -1383,6 +1379,24 @@ function Overlord.Sync:CampaignKillEnvelope()
     if not start or start <= 0 then return nil end
     local serverNow = Overlord.ServerNow and Overlord.ServerNow() or time()
     return FIRST_CONTACT_BASE + math.floor(math.max(0, serverNow - start) * FIRST_CONTACT_RATE)
+end
+
+-- 1.7.6 : notre propre ligne relevee par un tiers (page attendue, /ov sync). Notre K
+-- la republie comme total du proprietaire : un tiers ne doit jamais la gonfler d'un
+-- coup. Premier relevement de la session : ce que nous avons pu faire pendant notre
+-- absence (meme rythme que l'enveloppe, depuis notre derniere deconnexion mesuree une
+-- fois au login), ou toute l'enveloppe si la sauvegarde n'a pas ete chargee ; un crash
+-- ou une session sur un autre PC se rattrape donc d'un coup. Ensuite la fenetre fixe
+-- des copies tierces. Regle locale : rien ne change sur le reseau ni chez les autres.
+function Overlord.Sync:BoundOwnRowRaise(playerName, kills, killsBefore, sender)
+    if self._ownRowRaisedThisSession then
+        return self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, false, true)
+    end
+    self._ownRowRaisedThisSession = true
+    local absence = Overlord.SessionAbsenceAtLogin
+    if Overlord.SavedVariablesLoadedAtLogin == false or not absence then return kills end
+    return math.min(kills, (tonumber(killsBefore) or 0) + FIRST_CONTACT_BASE
+        + math.floor(absence * FIRST_CONTACT_RATE))
 end
 
 -- Detection (1.4.2) : un total annonce par un tiers au-dessus de ce que le
@@ -3339,6 +3353,9 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
     -- grandit bien moins vite que 30 + 1/s ; le rattrapage apres absence passe
     -- par la fenetre "depuis la derniere session".
     totalKills = self:BoundUnsolicitedKillTotal(playerName, totalKills, totalBefore, sender, true)
+    -- 1.7.6 : the value kept, relayed and alerted is the one SetPlayerKills stores.
+    local envelope = self:CampaignKillEnvelope()
+    if envelope and totalKills > envelope then totalKills = envelope end
     local guildRegister = tonumber(guildAtTag) and tonumber(guildAtTag) > 0
     local validGuild = guildTag and guildTag ~= ""
         and self.IsValidGuildSyncToken and self:IsValidGuildSyncToken(guildTag) or false
@@ -8684,20 +8701,20 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
         self:NoteThirdPartyKillTotal(playerName, kills, sender)
     end
     -- 1.7.5 : notre propre ligne n'est jamais exemptee de la borne par une page : notre
-    -- K la republiait ensuite comme total du proprietaire. 1.7.6 : borne normale, comme
-    -- pour tout sujet : au premier total de la session (sauvegarde perdue ou en retard,
-    -- crash, autre PC) elle se retablit d'un coup, ensuite elle ne monte plus d'un seul
-    -- paquet ; l'enveloppe de campagne la plafonne comme toute ligne. Une reponse
-    -- /ov sync (SR:F) suit aussi la borne ; seules les pages restent exemptes pour une
-    -- ligne deja connue (jusqu'a l'enveloppe, voir SetPlayerKills).
+    -- K la republiait ensuite comme total du proprietaire (voir BoundOwnRowRaise). Une
+    -- reponse /ov sync (SR:F) suit aussi la borne ; seules les pages restent exemptes
+    -- pour une ligne deja connue (jusqu'a l'enveloppe, voir SetPlayerKills).
     if kills > killsBefore and Overlord.Leaderboard.IsLocalDisplayName
         and Overlord.Leaderboard:IsLocalDisplayName(playerName) then
-        kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, false, false)
+        kills = self:BoundOwnRowRaise(playerName, kills, killsBefore, sender)
     elseif not guildSnapshot or killsBefore <= 0 then
         kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender,
             guildOwner and not solicited, liveCopy)
     end
     if killsClampedByLevel and guildOwner then self:NoteSuspiciousSender(sender, "kill ceiling") end
+    -- 1.7.6 : the value kept, relayed (bridge) and counted is the one SetPlayerKills stores.
+    local envelope = self:CampaignKillEnvelope()
+    if envelope and kills > envelope then kills = envelope end
     Overlord.Leaderboard:SetPlayerKills(playerName, kills, true)
     -- 1.3.2 live-score bridge: an enemy total from a Battle.net friend goes on to our
     -- channel; a total heard on the channel cancels our own pending copy of it.

@@ -1,10 +1,11 @@
--- Ladder signatures (2026-10-09; envelope 1.7.6): a row "Asmon Gold", 4897 HK (the first-contact cap at
+-- Ladder signatures (2026-10-09): a row "Asmon Gold", 4897 HK (the first-contact cap at
 -- that hour), guild "EMPIRE HACKS", no class (grey name) and level 90 reached #1 again.
 -- 1.7.5 refuses what no honest client sends, on every path and on every client alike:
 -- a ladder row without a class, a level above 60, a name that is not the canonical
 -- "Given Family" spelling or that uses invisible or mixed-script letters. It also stops
--- a third party from inflating our own row (our K re-announced it as the owner's total)
--- and bounds /ov sync replies like any unsolicited total. Every rule depends only on the
+-- a third party from inflating our own row (our K re-announced it as the owner's total),
+-- bounds /ov sync replies like any unsolicited total, and (1.7.6) holds every received
+-- total to the campaign envelope. Every rule depends only on the
 -- row itself: two clients receiving the same rows by different routes end identical.
 math.randomseed(13)
 assert(loadfile("tests/forever_world_kills.test.lua"))()
@@ -145,24 +146,53 @@ assert(lb.kills["Known Row"] == envelope, "a page raised a known row above the c
 lb.kills["Additive Row"] = envelope - 5
 assert(lb:AddKills("Additive Row", 50, true) == envelope, "a synced batch crossed the campaign envelope")
 assert(lb:RegisterKill("Additive Row", true) == envelope, "a synced kill crossed the campaign envelope")
+-- A bridge passes on the value it keeps, never a total above the envelope.
+lb.kills["Enemy Bridged"] = envelope - 50
+lb.playerInfo["Enemy Bridged"] = { class = "ROGUE", faction = "Horde", level = 30, locale = "enus", guild = "", guildAt = 0 }
+local bridged
+local realBridge = Overlord.BetaNetwork.NoteBridgedEnemyTotal
+Overlord.BetaNetwork.NoteBridgedEnemyTotal = function(_, name, _, total) bridged = total end
+s:DispatchBNetMessage("LK", table.concat({ "Enemy Bridged", tostring(envelope + 400), "ROGUE", "Horde",
+    tostring(EPOCH), "enus", "", "0", BUCKET, "30" }, ":"), "BNet-77", 77)
+Overlord.BetaNetwork.NoteBridgedEnemyTotal = realBridge
+assert(lb.kills["Enemy Bridged"] == envelope, "fixture: the bridge copy was not admitted: " .. tostring(lb.kills["Enemy Bridged"]))
+assert(bridged == envelope, "a bridge passed on a total above the envelope: " .. tostring(bridged))
 -- Serving follows the same envelope, so digests stay equal on both sides.
 local served = s.BuildPagedLeaderboardKillPayload(s, { kills = { ["Known Row"] = 15000 }, playerInfo = {
     ["Known Row"] = lb.playerInfo["Known Row"] } }, "Known Row", EPOCH)
 assert(served and served:match("^[^:]+:(%d+):") == tostring(envelope), "a row above the envelope was served: "
     .. tostring(served))
--- Our own row: the first total of the session brings it back at once (stale or lost save,
--- crash, other PC); afterwards a page cannot raise it in one go (our K re-announces it).
+-- Our own row (our K re-announces it): its first raise this session is bounded by what we
+-- could do while away (same pace as the envelope, since our last logout), so a crash or a
+-- session on another PC comes back at once; later raises follow the fixed window.
+Overlord.ServerNow = function() return campaignStart + 48 * 3600 end
 local realIsLocal = lb.IsLocalDisplayName
-lb.IsLocalDisplayName = function(_, n) return n == "Stale Save" or n == "Lost Save" end
-lb.kills["Stale Save"] = 1000
-lb.playerInfo["Stale Save"] = { class = "WARRIOR", faction = "Alliance", level = 30, locale = "enus", guild = "", guildAt = 0 }
+lb.IsLocalDisplayName = function(_, n) return n == "Stale Save" or n == "Short Away" or n == "Lost Save" end
+local function ownRow(name, total)
+    lb.kills[name] = total
+    lb.playerInfo[name] = { class = "WARRIOR", faction = "Alliance", level = 30, locale = "enus", guild = "", guildAt = 0 }
+end
+Overlord.SavedVariablesLoadedAtLogin, Overlord.SessionAbsenceAtLogin = true, 20 * 3600
+s._ownRowRaisedThisSession = nil
+ownRow("Stale Save", 1000)
 pageRow(lkRow("Stale Save", 2500, "WARRIOR", 30), "Some Responder")
 assert(lb.kills["Stale Save"] == 2500, "an honest stale save did not recover at once: " .. tostring(lb.kills["Stale Save"]))
-pageRow(lkRow("Stale Save", 2800, "WARRIOR", 30), "Hostile Responder")
-assert(lb.kills["Stale Save"] <= 2500 + 10, "a page raised our own row again within the session: "
+pageRow(lkRow("Stale Save", 15000, "WARRIOR", 30), "Hostile Responder")
+assert(lb.kills["Stale Save"] <= 2500 + 600 + 30 + 10, "a later page raised our own row in one go: "
     .. tostring(lb.kills["Stale Save"]))
+-- Back after one minute: a hostile first page adds what a minute away allows, no more.
+Overlord.SessionAbsenceAtLogin = 60
+s._ownRowRaisedThisSession = nil
+ownRow("Short Away", 1000)
+pageRow(lkRow("Short Away", 15000, "WARRIOR", 30), "Hostile Responder")
+assert(lb.kills["Short Away"] == 1000 + 300 + math.floor(0.03 * 60), "the first raise ignored our time away: "
+    .. tostring(lb.kills["Short Away"]))
+-- A session without its save (loader fault, reinstall): the whole envelope, at once.
+Overlord.SavedVariablesLoadedAtLogin = false
+s._ownRowRaisedThisSession = nil
 pageRow(lkRow("Lost Save", 2000, "MAGE", 30), "Some Responder")
 assert(lb.kills["Lost Save"] == 2000, "a lost save did not get its row back: " .. tostring(lb.kills["Lost Save"]))
+Overlord.SavedVariablesLoadedAtLogin, Overlord.SessionAbsenceAtLogin = true, nil
 lb.IsLocalDisplayName = realIsLocal
 Overlord.ServerNow = realServerNow
 lb.kills[me] = 1000
@@ -223,6 +253,10 @@ lb.playerInfo[me].class = ""
 OverlordDB.leaderboardLocalKillKeys = { ["Account Alt"] = true, ["Account Big"] = true }
 OverlordDB.leaderboard = OverlordDB.leaderboard or {}
 OverlordDB.leaderboard.kills, OverlordDB.leaderboard.playerInfo = lb.kills, lb.playerInfo
+OverlordDB.leaderboardScoreBucketEpoch = campaignStart
+OverlordDB.leaderboardsByPool = { lastweek = { campaignStart = campaignStart - 604800,
+    kills = { ["Lastweek Star"] = 9000 }, playerInfo = { ["Lastweek Star"] = { class = "MAGE",
+    faction = "Alliance", level = 30, locale = "enus", guild = "", guildAt = 0 } } } }
 OverlordDB.leaderboardScoreSanitizeVersion = 9
 Overlord.ServerNow = function() return campaignStart + 24 * 3600 end
 lb:EnsureLegacyScoreSanitized()
@@ -242,8 +276,10 @@ assert(lb.playerInfo["Asmon Gold"] == nil, "a blocked name kept its metadata (gh
 assert(lb.kills["Saved Honest"] == 500, "the cleanup removed an honest row")
 assert(lb.kills["Saved Inflated"] == envelope, "a saved row above the campaign envelope was not clamped: "
     .. tostring(lb.kills["Saved Inflated"]))
+assert(OverlordDB.leaderboardsByPool.lastweek.kills["Lastweek Star"] == 9000,
+    "the cleanup clamped last week's bucket with this week's envelope")
 assert(lb.kills["Account Big"] == 9000, "the cleanup clamped one of this account's characters")
 assert(lb.kills["Saved Cased"] == 450, "the cleanup removed an honest row whose class token was not normalized yet")
 assert(lb.kills["Account Alt"] == 200, "the cleanup removed one of this account's characters")
 assert(lb.kills[me] ~= nil, "the cleanup removed our own row")
-print("Forever ladder signatures: classless and level-90 rows refused and never served, canonical names, own row bound, /ov sync bound, transports, NaN dates, v10 cleanup OK")
+print("Forever ladder signatures: classless and level-90 rows refused and never served, canonical names, campaign envelope, own row budget, /ov sync bound, transports, NaN dates, v11 cleanup OK")

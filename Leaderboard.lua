@@ -2473,10 +2473,22 @@ function Overlord.Leaderboard:EnsureLegacyScoreSanitized()
         local dk = sync and sync.GetCaptureContributorDedupKey and sync:GetCaptureContributorDedupKey(name)
         return localKeys[name] == true or (dk ~= nil and localKeys["#dk:" .. dk] == true)
     end
+    -- v11: the envelope belongs to the current campaign. At the first login after a
+    -- reset, last week's bucket is still loaded before it is archived: never clamp it.
+    local function IsCurrentCampaignBucket(bucket)
+        local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
+        local marker = tonumber(bucket.campaignStart) or tonumber(bucket.scoreBucketEpoch)
+        if not marker and bucket == OverlordDB.leaderboard then
+            marker = tonumber(OverlordDB.leaderboardScoreBucketEpoch)
+        end
+        return start > 0 and marker ~= nil and Overlord:CampaignEpochsMatch(marker, start)
+    end
     local worker = coroutine.create(function()
         for i = 1, #buckets do
             local bucket = buckets[i]
             local sync = Overlord.Sync
+            local envelope = IsCurrentCampaignBucket(bucket) and sync and sync.CampaignKillEnvelope
+                and sync:CampaignKillEnvelope() or nil
             SanitizeMap(bucket.kills, function(name)
                 if sync and sync.IsDeniedKillContributor and sync:IsDeniedKillContributor(name) then
                     return true
@@ -2518,7 +2530,6 @@ function Overlord.Leaderboard:EnsureLegacyScoreSanitized()
                     end
                 end
                 -- v11 (1.7.6): the campaign envelope, clamped like the network does.
-                local envelope = sync and sync.CampaignKillEnvelope and sync:CampaignKillEnvelope()
                 if envelope and (tonumber(bucket.kills[name]) or 0) > envelope
                     and not IsAccountRow(name) then
                     bucket.kills[name] = envelope
