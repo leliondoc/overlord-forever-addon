@@ -1178,6 +1178,17 @@ function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
         if zone.holdAuthorityLocal then
             -- Capteur officiel sur le disque en monture : pause sans decay LOSING ni ZS « reset » allie.
             if zone.owner == Overlord.PlayerFaction then
+                -- 1.7.7 : la pause etait muette (le minuteur semblait fige). On dit
+                -- pourquoi, dans le chat, au debut de la pause puis une fois par minute.
+                local now = GetTime()
+                self._pausedHintAt = self._pausedHintAt or {}
+                if now - (self._pausedHintAt[zone.id] or -60) >= 60 then
+                    self._pausedHintAt[zone.id] = now
+                    local hint = self:PlayerLacksPvpFlag()
+                        and string.format(L.CAPTURE_NEEDS_PVP or "%s: enable PvP (/pvp) to capture this objective.", zone.name or "")
+                        or ((zone.name or "") .. ": " .. (L.INDICATOR_DISMOUNT_TO_CAPTURE or "Dismount."))
+                    Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. hint)
+                end
                 return
             end
             inZone = false
