@@ -832,6 +832,47 @@ do
     now = now + 6 -- the count is cached 5 s (read for every broadcast request)
     assert(busy.Relay:CountDirectPeers() >= 1000, "Direct neighbours undercounted")
 end
+-- Map freshness: a neighbour's presence pulls our map only when it knows a newer
+-- capture than ours (older clients, which advertise nothing, are pulled as before).
+do
+    local fresh = client("Fresh Tester", "fresh-chan")
+    fresh.Fronts = { Registry = { arathi = { zones = {
+        { id = "a1", owner = "Horde", status = "captured", capturedTime = 2000 },
+        { id = "a2", owner = "Alliance", status = "in_progress", capturedTime = 9000 },
+    } } } }
+    local pulls = {}
+    function fresh.Sync:SendSyncRequest(options)
+        pulls[#pulls + 1] = options and options.betaTarget
+        return true
+    end
+    local function presence(who, suffix)
+        fresh.Relay:Receive("global|map-" .. who:gsub(" ", "") .. "|" .. time() .. "|*|" .. who
+            .. "|NH|1.0.0" .. suffix .. "~ld~lr~lp6", who, "CHANNEL")
+    end
+    presence("Same Tester", "~m1jk")   -- 2000 in base 36: nothing newer than ours
+    assert(#pulls == 0, "A neighbour with no newer capture triggered a full map pull")
+    assert((fresh.Relay.stats.mapPullsNoNews or 0) == 1, "Skipped pull not counted")
+    presence("Newer Tester", "~m2bi")  -- 3000: a capture we do not know
+    assert(pulls[1] == "Newer Tester", "A neighbour knowing a newer capture was not pulled")
+    presence("Older Tester", "")       -- no stamp (older version): pulled as before
+    assert(pulls[2] == "Older Tester", "An older neighbour lost its presence-triggered pull")
+    now = now + 61                     -- (two pulls per minute at most)
+    fresh.Fronts.Registry.arathi.zones[1].owner = nil -- a fresh week: no capture known here either
+    now = now + 6                      -- (own stamp cached 5 s)
+    presence("Empty Tester", "~m0")    -- nothing newer than an empty map
+    assert(#pulls == 2, "A neighbour with an empty map was pulled")
+    fresh.Fronts.Registry.arathi.zones[1].owner = "Horde"
+    now = now + 6
+    -- Our own presence advertises our newest confirmed capture (not the siege in progress).
+    local advertised
+    local freshChannel = fresh.Sync.SendToChannel
+    function fresh.Sync:SendToChannel(kind, fragment)
+        if fragment:find("|NH|", 1, true) then advertised = fragment end
+        return freshChannel(self, kind, fragment)
+    end
+    assert(fresh.Relay:Send("NH", "1.0.0")); drain()
+    assert(advertised and advertised:find("~m1jk~ld~lr~lp6", 1, true), "Own presence lacks the map stamp")
+end
 -- Bridge election: routine traffic heard on the channel crosses through every hearer
 -- while few bridges are known, through a hashed share of them beyond eight; the
 -- origin's own copies and terminal events always cross.

@@ -601,6 +601,28 @@ local function base36(n, width)
     return string.rep("0", (width or 0) - #out) .. out
 end
 local session = base36(time()) .. base36(math.random(0, 60466175), 5)
+-- Map freshness (1.8.1): the newest confirmed capture this client knows, by its event
+-- time (identical on every client that holds it). Own presence advertises it as
+-- "~m<base 36>"; a neighbour's presence triggers a full map pull only when it knows a
+-- newer capture (it used to pull on every new neighbour, about one full map a minute
+-- per client on a busy channel, and from whoever spoke, not from who had the news).
+local mapStampCache = { at = -1000, value = 0 }
+local function localMapStamp()
+    local now = GetTime()
+    if now - mapStampCache.at < 5 then return mapStampCache.value end
+    local best = 0
+    local registry = addon.Fronts and addon.Fronts.Registry
+    for _, front in pairs(registry or {}) do
+        for _, zone in ipairs(type(front) == "table" and front.zones or {}) do
+            if zone.owner and zone.status ~= "in_progress" and not zone._loginSyncUnconfirmed then
+                local ct = math.floor(tonumber(zone.capturedTime) or 0)
+                if ct > best then best = ct end
+            end
+        end
+    end
+    mapStampCache.at, mapStampCache.value = now, best
+    return best
+end
 -- Packet dates use Blizzard's shared server clock: a PC clock more than 30 s
 -- ahead made every relayed packet from that player invisible to all others.
 local function serverNow() return (GetServerTime and GetServerTime()) or time() end
@@ -1022,6 +1044,8 @@ function net:GetKindDiagnostics(maxRows)
     end
     lines[#lines + 1] = string.format("Battle.net bridges: %d of %d opposite-faction friends heard in the last %d min"
         .. " (the others only get rotating copies).", live, enemies, BNET_ALIVE_SEC / 60)
+    lines[#lines + 1] = string.format("Map pulls on a neighbour's presence skipped (it knew no newer capture): %d.",
+        self.stats.mapPullsNoNews or 0)
     lines[#lines + 1] = string.format("Bridge election: %d same-faction bridges heard, crossing share %d%%"
         .. " (100%% up to %d), %d enemy copies of routine traffic and %d score rows left to the elected forwarders.",
         sameFactionBridgeCount(), math.floor(crossShare() * 100 + 0.5), CROSS_FULL_BRIDGES,
@@ -1803,7 +1827,9 @@ function net:Send(kind, payload, target, immediate)
     -- "~b" (1.8.1): we hold a live opposite-faction Battle.net bridge (election
     -- below). Inserted before "~ld~lr~lp6", which older clients still find.
     if kind == "NH" and payload == tostring(addon.Version or "") then
-        payload = payload .. (self:HasLiveEnemyBridge() and "~b" or "") .. "~ld~lr~lp6"
+        local stamp = localMapStamp()
+        payload = payload .. (self:HasLiveEnemyBridge() and "~b" or "")
+            .. "~m" .. base36(stamp) .. "~ld~lr~lp6"
     end
     -- Handlers may rebroadcast received snapshots. The existing packet is already
     -- forwarded below; do not give that replay a fresh author or hop budget.
@@ -1938,8 +1964,17 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         -- because a new peer spoke would only repeat it. Periodic and login map
         -- catch-ups are unchanged.
         local recentFullMap = sync._lastFullZaAt and now - sync._lastFullZaAt < 45
+        -- A neighbour that advertises its newest capture and knows none newer than
+        -- ours has nothing a full map would add (older clients advertise nothing:
+        -- unchanged for them). Periodic and login catch-ups are unchanged.
+        local advertisedMap = p.payload:match("~m(%w+)~")
+        local peerStamp = advertisedMap and tonumber(advertisedMap, 36) or nil
+        local noNews = peerStamp ~= nil and peerStamp <= localMapStamp()
+        if noNews and #p.path == 1 and self.pulls < 2 and now - last >= 300 and not recentFullMap then
+            self.stats.mapPullsNoNews = (self.stats.mapPullsNoNews or 0) + 1
+        end
         -- Only a direct neighbour is asked: its map reply never needs a relay.
-        if #p.path == 1 and self.pulls < 2 and now - last >= 300 and not recentFullMap then
+        if #p.path == 1 and self.pulls < 2 and now - last >= 300 and not recentFullMap and not noNews then
             self.pulls = self.pulls + 1
             -- Bound this cache by the same live peer population.
             self.requested = self.requested or {}
