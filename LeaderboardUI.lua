@@ -1196,7 +1196,9 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.infoLeft = { InfoLine(lbFrame.subtitle, "LEFT"), InfoLine(lbFrame.totalText, "LEFT") }
     lbFrame.infoRight = { InfoLine(lbFrame.subtitle, "RIGHT"), InfoLine(lbFrame.totalText, "RIGHT") }
     lbFrame:HookScript("OnShow", function()
-        -- Shown again by its parent (Alt+Z, cinematic): OnHide stopped the badge.
+        -- Shown again by its parent (Alt+Z, cinematic): OnHide stopped the badge, and a
+        -- repaint while the parent was hidden must not hide that from this one.
+        if lbFrame.syncBadge then lbFrame.syncBadge._paint = nil end
         Overlord.LeaderboardUI:RefreshSyncBadge()
         if lbFrame.infoTicker or not (C_Timer and C_Timer.NewTicker) then return end
         lbFrame.infoTicker = C_Timer.NewTicker(30, function()

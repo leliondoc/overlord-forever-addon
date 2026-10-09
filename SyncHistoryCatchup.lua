@@ -534,13 +534,16 @@ end
 -- 1.7.5 : un voisin qui annonce moins que v7 (client d'avant 1.7.0) n'est plus
 -- interroge : il acceptait encore les lignes forgees (indice de guilde puis LK sur
 -- le canal) et les servait en pages. Mise a jour requise, aucun repli.
-local function IsOldPagedPeer(net, name)
+-- 1.8.1: the ranking asks capability 9 only (sync.PAGED_PROTOCOL); the keep/outpost
+-- history (SR "H") does not depend on it and still asks from v7 on.
+local HISTORY_MIN_PROTOCOL = 7
+local function IsOldPagedPeer(net, name, minProtocol)
     local capability = net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(name)
-    return capability ~= nil and capability < (sync.PAGED_PROTOCOL or 9)
+    return capability ~= nil and capability < (minProtocol or sync.PAGED_PROTOCOL or 9)
 end
 
--- Voisins directs utilisables : ni nous-memes, ni penalises, ni annonces sans v7.
-local function DirectCandidates()
+-- Voisins directs utilisables : ni nous-memes, ni penalises, ni trop anciens.
+local function DirectCandidates(minProtocol)
     local net = Overlord.Relay
     if not net or not net.GetDirectPeers then return {} end
     local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
@@ -549,7 +552,7 @@ local function DirectCandidates()
         if type(name) == "string" and name ~= ""
             and not (sync.ForeverIdentitiesMatch and sync:ForeverIdentitiesMatch(name, me))
             and (peerPenaltyUntil[name:lower()] or 0) <= now
-            and not IsOldPagedPeer(net, name) then
+            and not IsOldPagedPeer(net, name, minProtocol) then
             out[#out + 1] = name
         end
     end
@@ -560,8 +563,8 @@ end
 -- (ami Battle.net) d'abord : il detient ce que notre faction ne voit pas en direct.
 -- Chaque groupe a son propre compteur : un compteur commun au modulo 3 revenait
 -- toujours sur les memes index et ignorait un voisin (ex. 3 voisins, 1 ennemi).
-local function PickDirectPeer()
-    local candidates = DirectCandidates()
+local function PickDirectPeer(minProtocol)
+    local candidates = DirectCandidates(minProtocol)
     if #candidates == 0 then return nil end
     -- A fresh client starts its rotation at a random place: the candidates are sorted
     -- by name, and every new installation starting at 0 asked the same first peers
@@ -608,7 +611,7 @@ local function MaybeRequestOutpostHistory(target, force)
         and math.floor(tonumber(ack.campaignId) or 0) == campaignId
         and math.floor(tonumber(ack.historyAt) or 0) or 0
     if not force and historyAt > 0 and NowServer() - historyAt < HISTORY_ACK_SEC then return false end
-    target = target or PickDirectPeer()
+    target = target or PickDirectPeer(HISTORY_MIN_PROTOCOL)
     if not target or not sync:RequestOutpostHistory(target) then return false end
     ack = type(ack) == "table" and ack.campaignId == campaignId and ack
         or { campaignId = campaignId, at = 0 }

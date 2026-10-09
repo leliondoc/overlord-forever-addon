@@ -185,11 +185,19 @@ advance(5)
 -- ... and a requester whose presence advertises less is not served (an unknown
 -- requester still is).
 local ignoredBefore = s._leaderboardPageStats.oldRequestsIgnored or 0
-local answered = 0
+local answered, replies = 0, {}
 local normalSend = s.SendWhisper
 s.SendWhisper = function(self, kind, payload, target)
-    if kind == "HA" or kind == "HB" then answered = answered + 1 end
+    if kind == "HA" or kind == "HB" then
+        answered = answered + 1
+        replies[#replies + 1] = { target = target, payload = payload }
+    end
     return normalSend(self, kind, payload, target)
+end
+local function v8Request(nonce, who, count, hash)
+    s:OnPagedLeaderboardMessage("HR", table.concat({ "8", "V", sent[1].epoch, nonce, "1", "LK",
+        tostring(count or 0), tostring(hash or 0), "-" }, ":"), who, "WHISPER")
+    advance(5)
 end
 s:OnPagedLeaderboardMessage("HR", table.concat({ "8", "V", sent[1].epoch, "oldreq", "1", "LK", "0", "0", "-" }, ":"),
     "Diff Tester", "WHISPER")
@@ -199,8 +207,45 @@ assert(answered == 0 and (s._leaderboardPageStats.oldRequestsIgnored or 0) == ig
 s:OnPagedLeaderboardMessage("HR", table.concat({ "8", "V", sent[1].epoch, "newreq", "1", "LK", "0", "0", "-" }, ":"),
     "Current Tester", "WHISPER")
 advance(5)
-assert((s._leaderboardPageStats.oldRequestsIgnored or 0) == ignoredBefore + 1,
+assert(answered > 0 and (s._leaderboardPageStats.oldRequestsIgnored or 0) == ignoredBefore + 1,
     "A current requester was refused as old")
+-- A requester whose presence we have not heard (yet) is served in v8 ...
+answered = 0
+v8Request("unkreq", "Unknown Tester")
+assert(answered > 0 and (s._leaderboardPageStats.oldRequestsIgnored or 0) == ignoredBefore + 1,
+    "An unknown-capability requester was refused")
+-- ... but not in an older exchange: only clients before 1.8.1 still ask that way.
+answered = 0
+s:OnPagedLeaderboardMessage("HR", table.concat({ "7", "Q", sent[1].epoch, "oldwire", "1", "1", "-", "0", "0", "LK" }, ":"),
+    "Stranger Tester", "WHISPER")
+advance(5)
+assert(answered == 0 and (s._leaderboardPageStats.oldRequestsIgnored or 0) == ignoredBefore + 2,
+    "An unknown requester was served in the v7 exchange")
+-- A session opened for an unknown requester is released once its presence shows an
+-- older client: the next requester is served, not told "busy".
+s:OnPagedLeaderboardMessage("HR", table.concat({ "8", "F", sent[1].epoch, "newreq", "1" }, ":"),
+    "Current Tester", "WHISPER")
+advance(1)
+local function repliesTo(who)
+    local count, busy = 0, false
+    for _, r in ipairs(replies) do
+        if r.target == who then
+            count = count + 1
+            busy = busy or r.payload:find("^8:R:") ~= nil
+        end
+    end
+    return count, busy
+end
+replies = {}
+v8Request("later1", "Later Tester", 5, 123)
+local laterReplies, laterBusy = repliesTo("Later Tester")
+assert(laterReplies > 0 and not laterBusy, "fixture: the unknown requester was not served")
+receive("Later Tester", "NH", "1.1.3~m0~ld~lr~lp6")
+v8Request("later2", "Later Tester", 5, 123)
+replies = {}
+v8Request("after", "Fresh Tester", 5, 123)
+local freshReplies, freshBusy = repliesTo("Fresh Tester")
+assert(freshReplies > 0 and not freshBusy, "The next requester was told busy by a session that should be released")
 s.SendWhisper = normalSend
 
 -- 1.7.5: only the peer's own presence states its capability. A relay that writes a

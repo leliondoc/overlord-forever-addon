@@ -298,6 +298,13 @@ do
     S.PlayerFaction = "Horde"
     S.Sync.GetBetaPeerFaction = function(_, name) return name == "Enemy Tester" and "Alliance" or "Horde" end
     S.Sync.IsKnownRelayPeer = function() return true end
+    -- The enemy requester is a current client (1.8.1 serves no older one); its
+    -- request still uses the older exchange to test the busy notice's version.
+    local savedCapability = S.Relay.GetPeerPagedProtocol
+    S.Relay.GetPeerPagedProtocol = function(net, name)
+        if name == "Enemy Tester" then return 9 end
+        return savedCapability(net, name)
+    end
     local notices = {}
     local send = S.Sync.SendWhisper
     S.Sync.SendWhisper = function(self, kind, payload, target)
@@ -321,6 +328,7 @@ do
         table.concat({ "6", "F", epochToken, "enemy6", 1 }, ":"), "Enemy Tester", "WHISPER")
     S.Sync.SendWhisper = send
     S.PlayerFaction, S.Sync.GetBetaPeerFaction, S.Sync.IsKnownRelayPeer = savedFaction, savedPeerFaction, savedKnown
+    S.Relay.GetPeerPagedProtocol = savedCapability
     advance(300)
 end
 

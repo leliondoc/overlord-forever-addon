@@ -126,6 +126,13 @@ round(false, 0)
 assert(state() == "UP_TO_DATE")
 round(false, 0, { full = false })
 assert(state() == "UP_TO_DATE", "a quiet partial sweep removed the check")
+-- ... but any sweep that brought many rows removes it, partial or not.
+round(false, 40, { full = false })
+assert(state() == "SYNCING", "a partial sweep that brought 40 rows kept the check")
+round(false, 0)
+assert(state() == "UP_TO_DATE")
+round(false, 40, { at = (sync._ladderTrustFloor or 0) - 5 })
+assert(state() == "SYNCING", "a sweep from before the trust floor that brought 40 rows kept the check")
 sync._ladderTrustFloor = now + 1
 now = now + 2
 round(false, 0, { at = now - 5 })
@@ -138,6 +145,15 @@ sync._leaderboardPageStats.sweepBase, sync._leaderboardPageStats.changedRows = 1
 assert(state() == "SYNCING", "a running sweep that brought 4 rows kept the check")
 sync._leaderboardPageStats.changedRows = 103
 assert(state() == "UP_TO_DATE", "a running sweep that brought 3 rows dropped the check")
+-- The running limit grows with the ranking too (50 rows at 5,000) ...
+local ps = sync._leaderboardPageStats
+ps.ladderRows, ps.sweepBase, ps.changedRows = 5000, 100, 150
+assert(state() == "UP_TO_DATE", "a running sweep that brought 50 of 5,000 rows dropped the check")
+ps.changedRows = 151
+assert(state() == "SYNCING", "a running sweep that brought 51 of 5,000 rows kept the check")
+-- ... and with no sweep running, the session's total of applied rows means nothing.
+ps.sweepBase, ps.changedRows, ps.ladderRows = nil, 5000, 0
+assert(state() == "UP_TO_DATE", "the session's row total showed the arrow between sweeps")
 sync._leaderboardPageStats.sweepBase = nil
 
 -- No neighbour: arrow during a 60 s grace, then hidden ("unknown"), and back as soon

@@ -423,6 +423,8 @@ if runningRound then runningRound.terminal = true end
 PULLER.Overlord.Sync._historyCatchupPending = nil
 PULLER.Overlord.Sync:CancelPagedLeaderboardCatchup()
 PULLER.OverlordDB.leaderboardPageProgress = nil
+-- The cancelled scheduler pull may have opened a sweep: the cut pull below opens its own.
+PULLER.Overlord.Sync._leaderboardPageStats.sweepBase = nil
 PULLER.Overlord.Sync.SendWhisper = sendRequest
 local SECOND = a -- same channel as the puller: a second direct neighbour
 for _, field in ipairs({ "kills", "playerInfo", "captureCount" }) do

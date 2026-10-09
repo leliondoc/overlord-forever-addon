@@ -208,6 +208,10 @@ for i, name in ipairs(firstApplied) do
         .. " Horde row: " .. tostring(name))
 end
 print("v8 cold cross-faction pull: " .. #horde .. " rows, " .. sent .. " packets, " .. sentBytes .. " bytes")
+-- Badge: a whole v8 sweep, filtered (enemy friend with an ally around), all its rows.
+assert(stats.lastSweepFull == true and stats.sweepBase == nil and stats.lastSweepFiltered == true
+    and stats.lastSweepChanged >= #horde, "the cold v8 sweep was not recorded whole: "
+    .. tostring(stats.lastSweepFull) .. " " .. tostring(stats.lastSweepChanged))
 
 -- 2) Equal ranking: the first request carries one fingerprint of the three streams,
 --    the pair ends in one exchange (one request, one reply, no end notice).
@@ -219,10 +223,22 @@ PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
     if kind == "HR" then requests = requests + 1 end
     return countRequests(self, kind, payload, target)
 end
+local sweepAtBefore = stats.lastSweepAt or 0
 assert(pull(SOURCE) == true, "steady v8 pull failed")
 PULLER.Overlord.Sync.SendWhisper = countRequests
 assert(applied == 0, "an equal ranking re-sent rows: " .. applied)
+assert(stats.lastSweepFull == true and stats.lastSweepChanged == 0 and stats.lastSweepAt > sweepAtBefore
+    and stats.lastSweepAt >= PULLER.Overlord.Sync._ladderTrustFloor
+    and (stats.ladderRows or 0) >= #horde, "an equal v8 sweep was not recorded as a quiet whole one")
 assert(sent == 1 and requests == 1, "an equal ranking cost " .. requests .. " requests and " .. sent .. " replies")
+-- A pull that resumes at LC with no sweep open (after a /reload) still counts as a
+-- whole comparison when the whole ranking matches.
+advance(400)
+PULLER.OverlordDB.leaderboardPageProgress.shared = { stream = "LC", bucket = 1, done = 0, at = 0 }
+stats.sweepBase, stats.lastSweepFull = nil, nil
+assert(pull(SOURCE) == true, "resumed equal v8 pull failed")
+assert(stats.lastSweepFull == true and stats.lastSweepChanged == 0,
+    "a whole-ranking match from a resumed pull did not count as a whole sweep")
 
 -- 2b) Only a capture count differs: the combined fingerprint covers every stream,
 --     so the capture row is still pulled.
@@ -267,6 +283,34 @@ print(("delta of %d rows: v8 %d packets / %d bytes, v7 %d packets / %d bytes (%d
     #changed, v8Packets, v8Bytes, sent, sentBytes, applied))
 assert(v8Bytes * 3 < sentBytes, "v8 did not cut the delta traffic by two thirds")
 
+-- 3c) Badge: a sweep cut in LK (rows lost on the way) and restarted with the same
+--     neighbour (v8 restarts LK from its fingerprints) keeps the rows of the cut pass.
+advance(400)
+local moved = {}
+for i = 1, 60 do moved[i] = horde[i * 37] end
+for i, name in ipairs(moved) do SOURCE.Overlord.Leaderboard:SetPlayerKills(name, 2600 + i, true) end
+local gRequests = 0
+local beforeCut = PULLER.Overlord.Sync.SendWhisper
+PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
+    if kind == "HR" and payload:match("^8:G:") then
+        gRequests = gRequests + 1
+        if gRequests >= 2 then return true end -- accepted by WoW, lost farther away
+    end
+    return beforeCut(self, kind, payload, target)
+end
+local cutOk = pull(SOURCE)
+PULLER.Overlord.Sync.SendWhisper = beforeCut
+assert(cutOk == false, "the cut v8 pull did not end cut")
+local cutRows = (stats.changedRows or 0) - (stats.sweepBase or 0)
+assert(stats.sweepBase and cutRows > 0 and cutRows < #moved, "the cut pass applied " .. cutRows .. " rows")
+assert(pull(SOURCE) == true, "the restarted v8 pull failed")
+for i, name in ipairs(moved) do
+    assert(PULLER.Overlord.Leaderboard.kills[name] == 2600 + i, "moved row missed: " .. name)
+end
+assert(stats.lastSweepFull == true and stats.lastSweepChanged >= #moved,
+    "the restarted sweep left out the rows of its cut pass: " .. tostring(stats.lastSweepChanged)
+    .. " (cut pass " .. cutRows .. ")")
+
 -- 4) Same-faction neighbour: no faction filter, its Alliance rows arrive too.
 advance(400)
 for _, name in ipairs(alliance) do
@@ -281,6 +325,25 @@ for _, name in ipairs(alliance) do
     assert(PULLER.Overlord.Leaderboard.kills[name] == ALLY.Overlord.Leaderboard.kills[name], "missing ally row " .. name)
 end
 assert(applied == #alliance, "same-faction pull applied " .. applied .. " for " .. #alliance)
+
+-- 4b) Badge: an LK pass from the enemy friend (enemy rows only), cut before LC and
+--     finished by an ally, still counts as a filtered sweep (three are needed).
+advance(400)
+SOURCE.Overlord.Leaderboard:SetPlayerKills(horde[42], 2700, true)
+local beforeLC = PULLER.Overlord.Sync.SendWhisper
+PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
+    if kind == "HR" and target == SOURCE.name and payload:match("^8:V:") and payload:find(":LC:", 1, true) then
+        return true -- accepted by WoW, lost farther away
+    end
+    return beforeLC(self, kind, payload, target)
+end
+assert(pull(SOURCE) == false, "the enemy pull was not cut after LK")
+PULLER.Overlord.Sync.SendWhisper = beforeLC
+assert(PULLER.Overlord.Leaderboard.kills[horde[42]] == 2700, "the LK pass before the cut did not apply")
+assert(PULLER.OverlordDB.leaderboardPageProgress.shared.stream == "LC", "the cut pull did not keep its stream")
+assert(pull(ALLY) == true, "the ally did not finish the sweep")
+assert(stats.lastSweepFull == true and stats.lastSweepFiltered == true,
+    "an LK pass of enemy rows only counted as a full comparison")
 
 -- 5) Now holding both factions, a delta from the enemy friend still compares only
 --    its faction's rows: the buckets of our own rows are not listed.
@@ -403,6 +466,25 @@ net.GetDirectPeers = directPeers
 for _, name in ipairs(lost) do
     assert(PULLER.Overlord.Leaderboard.kills[name] == SOURCE.Overlord.Leaderboard.kills[name],
         "an own-faction row was not pulled without any ally: " .. name)
+end
+
+-- 8b) An ally too old to be asked (1.8.0, capability 8) is no source either: the
+--     enemy friend's pull is not filtered.
+advance(700)
+lost = {}
+for i = 2, #alliance, 3 do lost[#lost + 1] = alliance[i] end
+dropRows(lost)
+local capabilityOf = net.GetPeerPagedProtocol
+net.GetPeerPagedProtocol = function(self, name)
+    if name == ALLY.name then return 8 end
+    return capabilityOf(self, name)
+end
+assert(pull(SOURCE) == true, "v8 pull with an old ally failed")
+net.GetPeerPagedProtocol = capabilityOf
+assert(stats.lastSweepFiltered == false, "an ally too old to be asked still filtered the enemy friend's pull")
+for _, name in ipairs(lost) do
+    assert(PULLER.Overlord.Leaderboard.kills[name] == SOURCE.Overlord.Leaderboard.kills[name],
+        "an own-faction row was not pulled with only an old ally: " .. name)
 end
 
 -- 9) Malformed v8 requests get no answer at all (no session, no busy, no page).

@@ -81,4 +81,21 @@ sync._historyCatchupPending = nil
 assert(sync:ScheduleLoginLeaderboardHistoryCatchUp(true))
 for _ = 1, 3 do table.remove(timers, 1)() end
 assert(calls == 2, "The neighbour was set aside after a local refusal")
-print("Beta ranking bootstrap: v6 with a direct neighbour, outpost history leased then confirmed, no penalty for local refusals")
+-- 1.8.1: a neighbour too old for the ranking (capability 8) is not asked for it, but
+-- still for the keep/outpost history, which did not change.
+OverlordDB.campaignId = 4
+Overlord.Relay.GetPeerPagedProtocol = function() return 8 end
+sync.StartCompletePagedLeaderboardCatchup = function() error("a 1.8.0 neighbour was asked for the ranking") end
+local historyBefore = #history
+timers = {}
+sync._historyCatchupPending = nil
+assert(sync:ScheduleLoginLeaderboardHistoryCatchUp(true))
+local steps = 0
+while #history == historyBefore and #timers > 0 and steps < 50 do
+    steps = steps + 1
+    table.remove(timers, 1)()
+end
+assert(#history == historyBefore + 1 and history[#history] == "Near Ally",
+    "A neighbour too old for the ranking was not asked for the outpost history")
+Overlord.Relay.GetPeerPagedProtocol = function() return 9 end
+print("Beta ranking bootstrap: v6 with a direct neighbour, outpost history leased then confirmed, no penalty for local refusals, history still asked from 1.8.0")

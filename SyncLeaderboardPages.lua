@@ -33,11 +33,15 @@ local function IsOtherFaction(name)
 end
 -- At least one direct neighbour that is not of the other faction (allies are the
 -- source of our own faction's rows when a pull from an enemy friend skips them).
+-- Only one the ranking rotation may ask: an ally too old to be asked (see
+-- PAGED_PROTOCOL) is no source, and the enemy friend's pull stays unfiltered.
 local function HasDirectAlly(except)
     local net = Overlord.Relay
     local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
     for _, name in ipairs(net and net.GetDirectPeers and net:GetDirectPeers() or {}) do
-        if name ~= except and name ~= me and not IsOtherFaction(name) then return true end
+        local capability = net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(name)
+        if name ~= except and name ~= me and not IsOtherFaction(name)
+            and not (capability and capability < PAGED_PROTOCOL) then return true end
     end
     return false
 end
@@ -549,7 +553,7 @@ local function finish(state, success, unsupportedPeer)
         stats.lastSweepChanged = (stats.changedRows or 0) - (stats.sweepBase or state.changedAtStart or 0)
         stats.lastSweepFiltered = stats.sweepFiltered == true or state.factionFilter ~= nil
         stats.lastSweepAt = stats.sweepAt or state.startedAt
-        stats.sweepBase, stats.sweepAt, stats.sweepFiltered = nil, nil, nil
+        stats.sweepBase, stats.sweepAt, stats.sweepFiltered, stats.sweepEpoch = nil, nil, nil, nil
     end
     state.callback(success, state.supported == true)
 end
@@ -1156,9 +1160,12 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
     -- Leaderboard badge: a sweep runs LK -> LC -> LR and may span several pulls (a
     -- busy or silent peer hands over to the next one at the saved stream). It starts
     -- with a pull at the start of LK; the rows changed are counted from there.
+    -- A sweep stays open until a pull ends it (v8 restarts LK from its fingerprints
+    -- after a cut: the rows of the cut pass still count).
     state.startedAt = GetServerTime()
-    if state.stream == "LK" and (state.wire == "8" or (state.bucket == 1 and state.completed == 0)) then
-        stats.sweepBase, stats.sweepAt = stats.changedRows or 0, state.startedAt
+    if (stats.sweepBase == nil or stats.sweepEpoch ~= state.epoch) and state.stream == "LK"
+        and (state.wire == "8" or (state.bucket == 1 and state.completed == 0)) then
+        stats.sweepBase, stats.sweepAt, stats.sweepEpoch = stats.changedRows or 0, state.startedAt, state.epoch
         stats.sweepFiltered = state.factionFilter ~= nil
     elseif state.factionFilter then
         stats.sweepFiltered = true
@@ -1221,12 +1228,17 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         return
     end
     -- Update required: a requester whose own presence advertises an older ranking
-    -- protocol is not served (see PAGED_PROTOCOL). Unknown capability: served.
+    -- protocol is not served (see PAGED_PROTOCOL), nor an unknown one asking in an
+    -- older exchange (a current client only asks in v8). A session already opened
+    -- for it (before its presence said what it is) is released for the others.
     local net = Overlord.Relay
-    local theirs = kind == "HR" and net and net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(sender)
-    if theirs and theirs < PAGED_PROTOCOL then
-        stats.oldRequestsIgnored = (stats.oldRequestsIgnored or 0) + 1
-        return
+    if kind == "HR" and net and net.GetPeerPagedProtocol then
+        local theirs = net:GetPeerPagedProtocol(sender)
+        if (theirs and theirs < PAGED_PROTOCOL) or (not theirs and version ~= "8") then
+            stats.oldRequestsIgnored = (stats.oldRequestsIgnored or 0) + 1
+            if serving and serving.peer == sender then serving = nil end
+            return
+        end
     end
     local v8Request = version == "8" and (op == "V" or op == "L" or op == "G" or op == "T")
     if kind == "HR" and ((op == "Q" and version ~= "8") or v8Request) then
