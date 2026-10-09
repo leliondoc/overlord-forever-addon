@@ -1300,8 +1300,8 @@ function Overlord.Sync:NormalizeRaceFileToken(race)
         end
     end
     race = RACE_FILE_ALIASES[race] or race
-    -- Skyborne has one file token per faction, every one containing "skyborne":
-    -- all of them are the same race here.
+    -- Skyborne: race ids 95 (High Order, Alliance) and 96 (Windshaper, Horde) share
+    -- the file token "Skyborne"; any other spelling containing it is that race too.
     if not VALID_RACE_FILE[race] and race:lower():find("skyborne", 1, true) then race = "Skyborne" end
     if race == "" or not VALID_RACE_FILE[race] then return nil end
     return race
