@@ -30,7 +30,7 @@ local function newClient(name)
     env.OverlordDB = {}
     local client = { name = name, env = env, timers = {} }
     env.C_Timer = { After = function(delay, fn) client.timers[#client.timers + 1] = fn end }
-    env.Overlord.BetaNetwork = {
+    env.Overlord.Relay = {
         Broadcast = function(_, kind, payload)
             assert(kind == "FK")
             bus.sent[#bus.sent + 1] = { from = client, payload = payload }
@@ -222,12 +222,12 @@ end
 do
     for _, client in ipairs(clients) do client.FA:ResetForCampaign() end
     local busy, peer = newClient("Busy Sender"), newClient("Busy Peer")
-    local realBroadcast = busy.env.Overlord.BetaNetwork.Broadcast
-    busy.env.Overlord.BetaNetwork.Broadcast = function() return 0 end
+    local realBroadcast = busy.env.Overlord.Relay.Broadcast
+    busy.env.Overlord.Relay.Broadcast = function() return 0 end
     kills(busy, "@redridge", 12)
     runTimers()
     assert(panel(peer) == "", "a refused bracket reached the others")
-    busy.env.Overlord.BetaNetwork.Broadcast = realBroadcast
+    busy.env.Overlord.Relay.Broadcast = realBroadcast
     serverNow = serverNow + 25
     kills(busy, "@redridge", 1)
     runTimers()

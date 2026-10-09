@@ -11,7 +11,7 @@ local dir = FOREVER_HEAD_DIR
 for _, f in ipairs({ "Core.lua", "SyncDomination.lua", "SyncVictoryBonus.lua" }) do
     assert(loadfile((dir and (dir .. "/") or "") .. f))()
 end
-local sync, net = Overlord.Sync, Overlord.BetaNetwork
+local sync, net = Overlord.Sync, Overlord.Relay
 local server = OverlordDB.lastResetTimestamp + 400000
 time = function() return server end
 GetServerTime = function() return server end

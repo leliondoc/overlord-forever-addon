@@ -16,8 +16,8 @@ function sync:GetPlayerFullName() return "Capper Tester" end
 function sync:GetChannelId() return nil end
 function sync:GetBetaBNetTargets() return {} end
 function sync:GetBetaBNetTargetInfo() return nil end
-assert(loadfile("SyncBetaNetwork.lua"))()
-local net = Overlord.BetaNetwork
+assert(loadfile("SyncRelay.lua"))()
+local net = Overlord.Relay
 local function packet(id, path, payload)
     return { region = "global", id = id, at = time(), target = "*", path = path, kind = "ZS", payload = payload }
 end

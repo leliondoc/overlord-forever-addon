@@ -1,9 +1,9 @@
--- Deliver production DX/VB across three real BetaNetwork forwarding hops into
+-- Deliver production DX/VB across three real Relay forwarding hops into
 -- the production handlers. Duplicate envelopes must not inflate either ledger.
 assert(loadfile("tests/forever_event_replay_audit.test.lua"))()
 
 local receiver = Overlord
-local receiverNet = receiver.BetaNetwork
+local receiverNet = receiver.Relay
 local receiverSync = receiver.Sync
 local startTime = time()
 local now, pending = 100, {}
@@ -17,7 +17,7 @@ end
 local nodes = {}
 local function node(name, faction)
     local addon = {
-        Version = "1.0.0", BetaNetworkEnabled = true,
+        Version = "1.0.0", RelayEnabled = true,
         PlayerFaction = faction, name = name, Sync = {},
         RealmPools = {
             GetOverlordPoolTag = function() return "global" end,
@@ -44,7 +44,7 @@ local function node(name, faction)
     function sync:SendToBNet(_, kind, data)
         if addon.nextIsProduction then
             -- The final hop enters through the real Battle.net dispatcher,
-            -- which resolves the authenticated gateway before BetaNetwork.
+            -- which resolves the authenticated gateway before Relay.
             receiverSync:OnBNetMessage("R2:Forever_eu_A:" .. kind .. ":" .. data, 123)
             return true
         end
@@ -58,7 +58,7 @@ local function node(name, faction)
     end
     function sync:OnAddonMessage() end
     Overlord = addon
-    assert(loadfile("SyncBetaNetwork.lua"))()
+    assert(loadfile("SyncRelay.lua"))()
     nodes[#nodes + 1] = addon
     return addon
 end
@@ -67,8 +67,8 @@ local origin = node("Origin Tester", "Alliance")
 local relay = node("Relay Tester", "Horde")
 local bridge = node("Bridge Tester", "Alliance")
 Overlord = receiver
-origin.nextNet, origin.nextName, origin.nextFaction = relay.BetaNetwork, relay.name, relay.PlayerFaction
-relay.nextNet, relay.nextName, relay.nextFaction = bridge.BetaNetwork, bridge.name, bridge.PlayerFaction
+origin.nextNet, origin.nextName, origin.nextFaction = relay.Relay, relay.name, relay.PlayerFaction
+relay.nextNet, relay.nextName, relay.nextFaction = bridge.Relay, bridge.name, bridge.PlayerFaction
 bridge.nextNet, bridge.nextName, bridge.nextFaction = receiverNet,
     receiverSync:GetPlayerFullName(), receiver.PlayerFaction
 bridge.nextIsProduction = true
@@ -79,7 +79,7 @@ local campaign = OverlordDB.lastResetTimestamp
 -- 1.2.1: an old (<= 1.1.10) client's DX is no longer relayed at all.
 local dx = string.format("730:270:%d:%s:%d:Origin Tester:global:0:0:11",
     campaign, frontId, math.floor(time() / 120))
-assert(origin.BetaNetwork:Broadcast("DX", dx) == 0, "The relay still carries legacy DX")
+assert(origin.Relay:Broadcast("DX", dx) == 0, "The relay still carries legacy DX")
 local victoryTs = time() - 100
 OverlordDB.frontVictories = OverlordDB.frontVictories or {}
 OverlordDB.frontVictories[frontId] = { faction = "Alliance", timestamp = victoryTs }
@@ -91,7 +91,7 @@ local vb = assert(receiverSync:BuildVictoryBonusPayload({ {
 local beforeBonus = select(1, receiver:GetDominationVictoryBonusTotals())
 local beforeBar = receiver:GetDominationBarScore()
 
-assert(origin.BetaNetwork:Broadcast("VB", vb) == 1)
+assert(origin.Relay:Broadcast("VB", vb) == 1)
 local function drain()
     local ticks = 0
     while #pending > 0 do
@@ -111,10 +111,10 @@ assert(receiverNet.peers["origin tester"] and receiverNet.peers["origin tester"]
     "Receiver did not learn the three-hop origin route")
 
 -- New packet ids with the same payload exercise handler idempotence after
--- relay dedup; an identical envelope alone would be stopped in BetaNetwork.
+-- relay dedup; an identical envelope alone would be stopped in Relay.
 local firstReceived = receiverNet.stats.received
 now = now + 3 -- exceed the sender's two-second identical-broadcast coalescing
-assert(origin.BetaNetwork:Broadcast("VB", vb) == 1)
+assert(origin.Relay:Broadcast("VB", vb) == 1)
 drain()
 assert(receiverNet.stats.received == firstReceived + 1,
     "Duplicate VB payload did not traverse the relay as a new envelope")

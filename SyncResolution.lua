@@ -78,7 +78,7 @@ end
 local function IsDirectAnswer(sync, sender, channel)
     if channel ~= "WHISPER" and channel ~= "BETA" then return false end
     if sync.IsUnauthenticatedRelayOrigin and sync:IsUnauthenticatedRelayOrigin(sender) then return false end
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     if channel == "BETA" and not (net and net:IsDispatching(sender) and net:IsTargetedDispatch()) then
         return false
     end
@@ -137,7 +137,7 @@ end
 -- GR/GY circulent sur le relais ; rien en instance.
 local function guildResolutionCanBroadcast()
     if Overlord.InstanceSuspended or IsInInstance() then return false end
-    return Overlord.BetaNetwork ~= nil
+    return Overlord.Relay ~= nil
 end
 
 local function MaybeLeaderboardGuildRefreshFromSync()
@@ -271,7 +271,7 @@ end
 -- than the large-event share. A request addressed to this client alone is always
 -- answered.
 local function BroadcastAnswerChance(sync, channel)
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     if channel == "WHISPER" or (channel == "BETA" and net and net.IsTargetedDispatch
         and net:IsTargetedDispatch()) then return 1 end
     local population = net and net.CountDirectPeers and net:CountDirectPeers() or 0
@@ -285,7 +285,7 @@ end
 function Overlord.Sync:OnReceiveClassRequest(payload, sender, channel)
     if type(payload) ~= "string" or payload == "" then return end
     -- Point to point (1.2.4): a request that crossed a relay is not answered.
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     if net and net.IsRelayedOrigin and net:IsRelayedOrigin(sender) then return end
     if #payload > CLASS_REQUEST_MAX_PAYLOAD then return end
     if Overlord.InstanceSuspended or IsInInstance() then return end
@@ -537,7 +537,7 @@ end
 function Overlord.Sync:OnReceiveGuildRequest(payload, sender, channel)
     if (channel ~= "WHISPER" and channel ~= "BETA") then return end
     -- Point to point (1.2.4): a request that crossed a relay is not answered.
-    local net = channel == "BETA" and Overlord.BetaNetwork
+    local net = channel == "BETA" and Overlord.Relay
     if net and (tonumber(net.context and net.context.hops) or 0) > 0 then return end
     if type(payload) ~= "string" or payload == "" then return end
     if #payload > CLASS_REQUEST_MAX_PAYLOAD then return end

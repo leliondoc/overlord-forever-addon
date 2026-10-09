@@ -7,7 +7,7 @@ const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf
 // 1.0.23 CPU spike: every client that received a beta broadcast re-sent keep and
 // outpost states to raid + channel, and re-authored OC into the relay (WB was removed with the wood system in 1.2.0).
 test("Keep and outpost states are re-sent only for targeted beta deliveries", () => {
-    const targeted = /== "BETA" and Overlord\.BetaNetwork and Overlord\.BetaNetwork:IsTargetedDispatch\(\)\)/g;
+    const targeted = /== "BETA" and Overlord\.Relay and Overlord\.Relay:IsTargetedDispatch\(\)\)/g;
     const outpost = read("SyncOutpost.lua");
     // 1.7.2: only an assault in progress (OP) is re-sent; a capture claim (OC, LO,
     // LOC, held OP) is believed from its capturer alone and never re-authored.
@@ -34,7 +34,7 @@ test("Structure relays do not re-author packets into the beta relay without a cl
 });
 
 test("Relay rejects duplicates before decoding and keeps O(1) dedup memory", () => {
-    const net = read("SyncBetaNetwork.lua");
+    const net = read("SyncRelay.lua");
     const receive = net.slice(net.indexOf("function net:Receive("));
     assert.ok(receive.indexOf("alreadySeen(wire)") < receive.indexOf("decode(wire)"),
         "Receive decodes before the duplicate check");

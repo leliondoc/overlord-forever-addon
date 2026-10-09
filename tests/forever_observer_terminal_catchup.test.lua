@@ -9,7 +9,7 @@ Overlord.InstanceSuspended = false
 local displayed = 480
 Overlord.Zones.GetObserverHoldTimeElapsed = function() return displayed end
 local calls = {}
-Overlord.BetaNetwork = {
+Overlord.Relay = {
     IsPeer = function(_, name) return name == "Capper Tester" end,
 }
 sync.SendWhisper = function(_, kind, payload, target)

@@ -20,8 +20,8 @@ function sync:SendToBNet(_, kind, data)
     sent[#sent + 1] = {at=now, kind=kind, data=data}
     return true
 end
-assert(loadfile("SyncBetaNetwork.lua"))()
-local net = Overlord.BetaNetwork
+assert(loadfile("SyncRelay.lua"))()
+local net = Overlord.Relay
 for i=1,84 do
     assert(net:Send("ZS", "zone" .. i .. ":in_progress:0:477:A:" .. time()))
 end
@@ -58,8 +58,8 @@ assert(release - start < 2, "Capture completion queued behind old progress updat
 assert(otherTerminals == 4, "A structure/victory/reset terminal was lost")
 assert(#sent == 84, "Ordinary queue bound/displacement changed")
 -- Never displace route/barrier handshakes as if they were periodic progress.
-assert(loadfile("SyncBetaNetwork.lua"))()
-net = Overlord.BetaNetwork
+assert(loadfile("SyncRelay.lua"))()
+net = Overlord.Relay
 for i=1,84 do assert(net:Send("CB", "barrier-commit-" .. i)) end
 assert(not net:Send("C", "capital:no-room"), "Capture displaced an irreplaceable barrier commit")
 print("Beta terminals: full progress queue admits and delivers C/final ZS/ZR within 2 seconds")

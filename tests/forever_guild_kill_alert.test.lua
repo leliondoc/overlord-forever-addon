@@ -26,12 +26,12 @@ local function record(kind)
 end
 local realChannel, realGroup, realCommunity, realBeta, realBetaEnabled =
     Overlord.Sync.SendToChannel, Overlord.Sync.SendToGroup, Overlord.Sync.BroadcastToRelay,
-    Overlord.BetaNetwork, Overlord.BetaNetworkEnabled
+    Overlord.Relay, Overlord.RelayEnabled
 Overlord.Sync.SendToChannel = record("channel")
 Overlord.Sync.SendToGroup = record("group")
 Overlord.Sync.BroadcastToRelay = record("community")
-Overlord.BetaNetworkEnabled = true
-Overlord.BetaNetwork = { Broadcast = record("beta") }
+Overlord.RelayEnabled = true
+Overlord.Relay = { Broadcast = record("beta") }
 -- Broadcast jitter: timers are collected and fired on demand.
 local timers = {}
 GKA._After = function(delay, fn)
@@ -198,12 +198,12 @@ GKA:ResetDefaults(); GKA:SetAllyEnabled(false)
 
 -- Without the relay (not loaded yet): direct group + channel copies, still one alert.
 reset()
-local savedNet = Overlord.BetaNetwork
-Overlord.BetaNetwork = nil
+local savedNet = Overlord.Relay
+Overlord.Relay = nil
 raid()
 flush()
 assert(#sent == 2 and sent[1][1] == "group" and sent[2][1] == "channel", "Fallback fan-out wrong")
-Overlord.BetaNetwork = savedNet
+Overlord.Relay = savedNet
 
 -- Disabled: nothing printed, nothing sent.
 reset()
@@ -425,7 +425,7 @@ end
 
 Overlord.Sync.SendToChannel, Overlord.Sync.SendToGroup, Overlord.Sync.BroadcastToRelay =
     realChannel, realGroup, realCommunity
-Overlord.BetaNetwork, Overlord.BetaNetworkEnabled = realBeta, realBetaEnabled
+Overlord.Relay, Overlord.RelayEnabled = realBeta, realBetaEnabled
 print("Forever guild kill alert: both-faction detection, own kills, epoch, window, relay GW, provenance, dedup, reload, eviction, simulation, allied rampages OK")
 
 -- Player feedback (2026-10-02): the guild carries its own faction crest instead of

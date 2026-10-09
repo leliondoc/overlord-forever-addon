@@ -37,7 +37,7 @@ lb:RegisterKill(name, true)
 lb:SetPlayerKills(name, 998, true)
 assert(lb.kills[name] == nil, "An old peer restored the removed score")
 
--- 2026-09-22 : row forged through a spoofed BetaNetwork origin, and its guild.
+-- 2026-09-22 : row forged through a spoofed Relay origin, and its guild.
 local forged, forgedGuild = "Asmon Gold", "OLYMPUS RUSSIA"
 assert(sync:IsDeniedKillContributor(forged), "Forged row is not excluded this week")
 lb.kills[forged] = 4999

@@ -533,8 +533,8 @@ local function IsOutpostLeaderboardTimestampCurrent(ts, wireEpoch)
 end
 
 local function SenderRealmMatchesCurrentOutpostPool(sender, sourceChannel)
-    if sourceChannel == "BETA" and Overlord.BetaNetwork then
-        return Overlord.BetaNetwork:IsDispatching(sender)
+    if sourceChannel == "BETA" and Overlord.Relay then
+        return Overlord.Relay:IsDispatching(sender)
     end
     if type(sender) ~= "string" or sender == "" then return false end
     if (sourceChannel == "PARTY" or sourceChannel == "RAID")
@@ -630,8 +630,8 @@ end
 
 -- One judged event of a reply we asked for; false once the window or its budget is gone.
 local function ConsumeSolicitedOutpostClaim(sender, sourceChannel)
-    if sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.BetaNetwork
-        and Overlord.BetaNetwork:IsTargetedDispatch()) then return false end
+    if sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.Relay
+        and Overlord.Relay:IsTargetedDispatch()) then return false end
     local sync = Overlord.Sync
     if sync.IsUnauthenticatedRelayOrigin and sync:IsUnauthenticatedRelayOrigin(sender) then return false end
     local key = OutpostClaimPeerKey(sender)
@@ -660,7 +660,7 @@ local function LiveSenderFaction(sender, sourceChannel)
     if sourceChannel == "CHANNEL" or sourceChannel == "WHISPER" then return Overlord.PlayerFaction end
     local transport = sourceChannel
     if sourceChannel == "BETA" then
-        local context = Overlord.BetaNetwork and Overlord.BetaNetwork.context
+        local context = Overlord.Relay and Overlord.Relay.context
         transport = context and context.transport or "BNET"
     end
     if transport == "PARTY" or transport == "RAID" then
@@ -968,7 +968,7 @@ function Overlord.Sync:PollIfStaleObserverOutpost(secondsSinceOp, withPull)
     self:SendSyncRequest({
         criticalChannel = true,
     })
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     if withPull and net and net.GetDirectPeers and self.GetBetaPeerFaction then
         local myName, myFaction = self:GetPlayerFullName(), Overlord.PlayerFaction
         local enemies, allies = {}, {}
@@ -1524,7 +1524,7 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
     -- An assault in progress learned from a reply is reposted on the local paths;
     -- a held state is not: a capture claim is only believed from its capturer.
     if status == "in_progress"
-        and (channel == "WHISPER" or (channel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch()))
+        and (channel == "WHISPER" or (channel == "BETA" and Overlord.Relay and Overlord.Relay:IsTargetedDispatch()))
         and payload and payload ~= "" and OutpostPayloadHasExplicitLinkedPool(remotePool) then
         local adoptedProgress = stAfter and stAfter.status == "in_progress"
             and guild ~= ""

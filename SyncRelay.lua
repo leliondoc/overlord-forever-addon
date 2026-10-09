@@ -1,11 +1,12 @@
--- Beta transport: bounded store-and-forward over group/channel and Battle.net.
+-- Overlord relay (was "BetaNetwork" until 1.8.0; wire kinds BR/BF unchanged):
+-- bounded store-and-forward over group/channel and Battle.net.
 -- The last hop is authenticated by WoW/BNet. Earlier authors are vouched for by
 -- that peer, not cryptographically authenticated by Blizzard. Keep the original
 -- author when dispatching so relays never manufacture additional witnesses.
 local addon = Overlord
 local sync = addon.Sync
 local net = { peers = {}, stats = { sent = 0, received = 0, dropped = 0 } }
-addon.BetaNetwork = net
+addon.Relay = net
 local allowed = {}
 for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA FK LK LR LC LO LOC TV VT VF FR VB MN MS OP OC SH HR HB HA CR CA GR GY GI FC GW GE GP GX GD GM"):gmatch("%S+") do
     allowed[kind] = true
@@ -572,7 +573,7 @@ local session = tostring(time()) .. "-" .. tostring(math.random(1, 2147483646))
 -- Packet dates use Blizzard's shared server clock: a PC clock more than 30 s
 -- ahead made every relayed packet from that player invisible to all others.
 local function serverNow() return (GetServerTime and GetServerTime()) or time() end
-local function enabled() return addon.BetaNetworkEnabled ~= false end
+local function enabled() return addon.RelayEnabled ~= false end
 local function active() return enabled() and not addon.InstanceSuspended and not IsInInstance() end
 -- Battle.net friends heard from (any Overlord message, game account id -> time).
 -- Only a friend running Overlord outside an instance sends anything: those are

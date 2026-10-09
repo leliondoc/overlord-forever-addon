@@ -27,7 +27,7 @@ local function advance(seconds)
     end
     now = stop
     for _, c in ipairs(clients) do
-        assert(not c.Overlord.BetaNetwork.stats.lastError, c.Overlord.BetaNetwork.stats.lastError)
+        assert(not c.Overlord.Relay.stats.lastError, c.Overlord.Relay.stats.lastError)
     end
 end
 local function copy(t)
@@ -96,9 +96,9 @@ local function client(name, channel)
     end
     s.SendToBNet = function(_, other, kind, wire)
         if kind == "BR" then
-            other.Overlord.BetaNetwork:Receive(wire, name, "BNET", e)
+            other.Overlord.Relay:Receive(wire, name, "BNET", e)
         else
-            other.Overlord.BetaNetwork:ReceiveFragment(wire, name, "BNET", e)
+            other.Overlord.Relay:ReceiveFragment(wire, name, "BNET", e)
         end
         return true
     end
@@ -126,7 +126,7 @@ local function client(name, channel)
     lb._storageBound = true
     e.loadfile("SyncHistoryCatchup.lua")()
     e.loadfile("SyncLeaderboardPages.lua")()
-    e.loadfile("SyncBetaNetwork.lua")()
+    e.loadfile("SyncRelay.lua")()
     clients[#clients + 1] = e
     return e
 end
@@ -141,7 +141,7 @@ b.friends, c.friends = { c }, { b }
 local PULLER, SOURCE = b, c
 for _, e in ipairs(clients) do e.Overlord.Sync.SendSyncRequest = function() return true end end
 local function heartbeat()
-    for _, e in ipairs(clients) do e.Overlord.BetaNetwork:Broadcast("NH", "1.0.35~lp6") end
+    for _, e in ipairs(clients) do e.Overlord.Relay:Broadcast("NH", "1.0.35~lp6") end
     later(45, heartbeat)
 end
 heartbeat()

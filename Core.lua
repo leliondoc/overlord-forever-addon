@@ -1,8 +1,8 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
 Overlord.Version = "1.8.0"
--- Transport : canal de faction, groupe et ponts Battle.net (relais SyncBetaNetwork.lua).
-Overlord.BetaNetworkEnabled = true
+-- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
+Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
 Overlord.PlayerFaction = nil
 Overlord.InActiveFront = false

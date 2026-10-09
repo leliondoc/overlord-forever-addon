@@ -24,8 +24,8 @@ function sync:SendToBNet() sent.BNET = (sent.BNET or 0) + 1; return true end
 function sync:SendWhisper() sent.WHISPER = (sent.WHISPER or 0) + 1; return true end
 function sync:SendToGroup() sent.GROUP = (sent.GROUP or 0) + 1; return true end
 function sync:SendToChannel() sent.CHANNEL = (sent.CHANNEL or 0) + 1; return true end
-assert(loadfile("SyncBetaNetwork.lua"))()
-local net = Overlord.BetaNetwork
+assert(loadfile("SyncRelay.lua"))()
+local net = Overlord.Relay
 
 local function drain()
     local steps = 0

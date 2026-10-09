@@ -4,7 +4,7 @@ assert(loadfile("tests/forever_beta_integration.test.lua"))()
 assert(loadfile("SyncDomination.lua"))()
 assert(loadfile("SyncVictoryBonus.lua"))()
 
-local sync, net = Overlord.Sync, Overlord.BetaNetwork
+local sync, net = Overlord.Sync, Overlord.Relay
 local frontId = "test_bonus_front"
 local victoryTs = time() - 30
 Overlord.Fronts.Registry[frontId] = { zones = { a = {} } }

@@ -86,7 +86,7 @@ local function client(name)
     lb._storageBound = true
     e.loadfile("SyncHistoryCatchup.lua")()
     e.loadfile("SyncLeaderboardPages.lua")()
-    e.loadfile("SyncBetaNetwork.lua")()
+    e.loadfile("SyncRelay.lua")()
     clients[#clients + 1] = e
     return e
 end
@@ -95,7 +95,7 @@ local SOURCE = client("Source Tester")
 local PULLER = client("Puller Tester")
 local sync = PULLER.Overlord.Sync
 local function heartbeat()
-    for _, e in ipairs(clients) do e.Overlord.BetaNetwork:Broadcast("NH", e.Overlord.Version) end
+    for _, e in ipairs(clients) do e.Overlord.Relay:Broadcast("NH", e.Overlord.Version) end
     later(45, heartbeat)
 end
 heartbeat()

@@ -23,7 +23,7 @@ end
 C_Club = { GetSubscribedClubs = function() return {} end }
 Enum = Enum or {}; Enum.ClubType = Enum.ClubType or { Character = 1 }
 local s, lb = Overlord.Sync, Overlord.Leaderboard
-assert(loadfile("SyncBetaNetwork.lua"))()
+assert(loadfile("SyncRelay.lua"))()
 assert(loadfile("SyncHistoryCatchup.lua"))()
 assert(loadfile("SyncLeaderboardPages.lua"))()
 Overlord.PlayerFaction = "Alliance"

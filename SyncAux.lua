@@ -72,7 +72,7 @@ end
 function Overlord.Sync:SendTargetedObserverMapRequest(zone, payload)
     local remote = zone and zone._remoteCaptureLease
     local origin = remote and remote.originName or (zone and zone.lastZSSender)
-    local beta = Overlord.BetaNetwork
+    local beta = Overlord.Relay
     if not origin or not payload or payload == "" or not beta or not beta.IsPeer
         or not beta:IsPeer(origin) or not self.SendWhisper
         or not self.IsValidWhisperTarget or not self:IsValidWhisperTarget(origin)
@@ -310,7 +310,7 @@ end
 function Overlord.Sync:ControlledZaElectionPct(opts, isLarge)
     local pct = opts.electionPct
         or (isLarge and (opts.largeElectionPct or 12) or (opts.smallElectionPct or 100))
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     local population = net and net.CountDirectPeers and net:CountDirectPeers() or 0
     if population > 5 then
         pct = math.min(pct, math.max(2, math.ceil(500 / population)))
@@ -512,7 +512,7 @@ end
 -- "ce nom est un client Overlord vu recemment".
 function Overlord.Sync:IsAuthenticatedDirectSender(sender)
     if not sender or sender == "" then return false end
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     -- Une origine relayee d'abord : un nom de membre du groupe ecrit par une
     -- passerelle n'est pas ce membre.
     if net and net.IsDispatching and net:IsDispatching(sender) then
@@ -524,13 +524,13 @@ end
 -- "Ce nom est un client Overlord entendu dans les 300 s" (route relais connue).
 -- Ce n'est PAS une authentification : voir IsAuthenticatedDirectSender.
 function Overlord.Sync:IsKnownRelayPeer(sender)
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     return net ~= nil and net:IsPeer(sender) == true
 end
 
 local function BroadcastViaBeta(msgType, payload, extras)
-    if not Overlord.BetaNetwork then return 0 end
-    return Overlord.BetaNetwork:Broadcast(msgType, payload or "", extras) or 0
+    if not Overlord.Relay then return 0 end
+    return Overlord.Relay:Broadcast(msgType, payload or "", extras) or 0
 end
 
 
@@ -545,7 +545,7 @@ end
 -- Message adresse aux joueurs nommes, par le relais (route connue exigee quand
 -- knownPeersOnly : une revalidation de guilde ne cherche pas un joueur hors ligne).
 function Overlord.Sync:SendToNamedPeers(msgType, payload, contributorNames, _, _, knownPeersOnly)
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     if not net then return 0 end
     local sent = 0
     for i, name in ipairs(contributorNames or {}) do
@@ -1003,7 +1003,7 @@ end
 -- item ; quelques whispers immediats donnent au ZR une vraie voie cross-faction.
 -- Release de bail juste avant un chargement : envoi relais immediat (budget respecte).
 function Overlord.Sync:SendReleaseImmediate(msgType, payload)
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     if msgType ~= "ZR" or not net then return 0 end
     return net:Send(msgType, payload, nil, true) and 1 or 0
 end
@@ -1497,12 +1497,12 @@ function Overlord.Sync:KillAntiSpoofRecord(sender)
     return false
 end
 
--- Origine BetaNetwork a plus d'un saut : nom ecrit par la passerelle, pas par WoW.
+-- Origine Relay a plus d'un saut : nom ecrit par la passerelle, pas par WoW.
 -- Faille exploitee jusqu'en 1.0.18 : path = "Victime,Forgeur" faisait passer un K
 -- forge pour un K proprietaire (ex. Asmon Gold 4999). Aucun score ni credit ne
 -- doit en dependre ; l'etat de carte reste relaye normalement.
 function Overlord.Sync:IsUnauthenticatedRelayOrigin(sender)
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     return net ~= nil and net.IsRelayedOrigin ~= nil and net:IsRelayedOrigin(sender) == true
 end
 

@@ -13,7 +13,7 @@ time = os.time
 OverlordDB = { frontTruceResetEpoch = {} }
 Overlord.GetCurrentCampaignStartTs = function() return campaignStart end
 -- Relay on: rows show only shared state.
-Overlord.BetaNetwork = { Broadcast = function() end, IsEnabled = function() return true end }
+Overlord.Relay = { Broadcast = function() end, IsEnabled = function() return true end }
 assert(loadfile("Fronts.lua"))()
 assert(loadfile("FrontActivity.lua"))()
 local FA, fronts = Overlord.FrontActivity, Overlord.Fronts
@@ -201,6 +201,6 @@ do
 end
 
 -- Relay off: a capture still lights the row (local view, as before 1.7.0).
-Overlord.BetaNetwork.IsEnabled = function() return false end
+Overlord.Relay.IsEnabled = function() return false end
 assert(row("durotar").active and row("durotar").captures == 6, "relay off: capture row missing")
 print("Front activity captures: shared map count, release/campaign stamps ignored, kills first, expiry OK")

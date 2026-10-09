@@ -32,8 +32,8 @@ function sync:GetBetaBNetTargets() return {} end
 function sync:OnAddonMessage() end
 function sync:SendSyncRequest() return true end
 function sync:SendToChannel() return true end
-assert(loadfile("SyncBetaNetwork.lua"))()
-local net = Overlord.BetaNetwork
+assert(loadfile("SyncRelay.lua"))()
+local net = Overlord.Relay
 local serial = 0
 local function presence(path, sender, transport)
     serial = serial + 1

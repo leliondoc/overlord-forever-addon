@@ -21,7 +21,7 @@ Overlord.UI.GetNearbyEnemyCountRaw = function() return 0 end -- nobody around: n
 
 -- The fixture leaves a checking stub on the relay: count relay sends instead.
 local relay = 0
-Overlord.BetaNetwork.Broadcast = function(_, kind)
+Overlord.Relay.Broadcast = function(_, kind)
     if kind == "FC" then relay = relay + 1 end
     return 1
 end

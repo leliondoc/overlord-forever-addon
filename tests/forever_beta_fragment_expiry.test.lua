@@ -24,7 +24,7 @@ C_Timer = {
 local clients = {}
 local function client(name)
     local a = {
-        Version = "1.0.0", BetaNetworkEnabled = true, PlayerFaction = "Alliance",
+        Version = "1.0.0", RelayEnabled = true, PlayerFaction = "Alliance",
         RealmPools = {
             GetOverlordPoolTag = function() return "global" end,
             NormalizeRegionPool = function(_, pool) return pool == "global" and pool or "" end,
@@ -47,7 +47,7 @@ local function client(name)
         assert(kind == "BF")
         for _, other in ipairs(clients) do
             if other.name == target then
-                other.BetaNetwork:ReceiveFragment(fragment, name, "WHISPER")
+                other.Relay:ReceiveFragment(fragment, name, "WHISPER")
                 return true
             end
         end
@@ -60,27 +60,27 @@ local function client(name)
     end
     a.name = name
     Overlord = a
-    assert(loadfile("SyncBetaNetwork.lua"))()
+    assert(loadfile("SyncRelay.lua"))()
     clients[#clients + 1] = a
     return a
 end
 local sender = client("Alice Tester")
 local receiver = client("Bob Tester")
-sender.BetaNetwork.peers["bob tester"] = {
+sender.Relay.peers["bob tester"] = {
     name = receiver.name, at = now, via = receiver.name,
     transport = "WHISPER", hops = 1,
 }
 
 -- Keep urgent work continuously available for the first 20+ seconds.
 for i = 1, 82 do
-    assert(sender.BetaNetwork:Send("ZS", string.rep("u", 130) .. i))
+    assert(sender.Relay:Send("ZS", string.rep("u", 130) .. i))
 end
 local page = "5:" .. string.rep("x", 3480)
-assert(sender.BetaNetwork:Send("HB", page, receiver.name))
+assert(sender.Relay:Send("HB", page, receiver.name))
 
 local firstFragmentAt, lastFragmentAt
-local originalReceive = receiver.BetaNetwork.ReceiveFragment
-receiver.BetaNetwork.ReceiveFragment = function(self, fragment, ...)
+local originalReceive = receiver.Relay.ReceiveFragment
+receiver.Relay.ReceiveFragment = function(self, fragment, ...)
     local _, part, count = strsplit(":", fragment, 4)
     if tonumber(count) and tonumber(count) > 1 then
         if tonumber(part) == 1 then firstFragmentAt = now end
@@ -115,14 +115,14 @@ assert(#wire > 170 and #wire <= 340)
 local first = id .. ":1:2:" .. wire:sub(1, 170)
 local second = id .. ":2:2:" .. wire:sub(171)
 local before = #receiver.received
-assert(receiver.BetaNetwork:ReceiveFragment(first, "Carol Tester", "WHISPER"))
+assert(receiver.Relay:ReceiveFragment(first, "Carol Tester", "WHISPER"))
 now = now + 20
-assert(receiver.BetaNetwork:ReceiveFragment(first, "Carol Tester", "WHISPER"))
+assert(receiver.Relay:ReceiveFragment(first, "Carol Tester", "WHISPER"))
 now = now + 11
-assert(receiver.BetaNetwork:ReceiveFragment(second, "Carol Tester", "WHISPER"))
+assert(receiver.Relay:ReceiveFragment(second, "Carol Tester", "WHISPER"))
 assert(#receiver.received == before, "Duplicate fragment extended a stalled assembly")
-assert(receiver.BetaNetwork:ReceiveFragment(first, "Carol Tester", "WHISPER"))
+assert(receiver.Relay:ReceiveFragment(first, "Carol Tester", "WHISPER"))
 assert(#receiver.received == before + 1, "Fresh fragments did not reassemble after idle expiry")
-assert(not receiver.BetaNetwork:ReceiveFragment(
+assert(not receiver.Relay:ReceiveFragment(
     "bad:1:65:x", "Carol Tester", "WHISPER"), "Invalid fragment count accepted")
 print("Beta full-page catch-up survived urgent saturation and fragment spacing")

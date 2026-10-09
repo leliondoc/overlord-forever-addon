@@ -1,4 +1,4 @@
--- Ranking catch-up peer choice (real SyncHistoryCatchup/Pages/BetaNetwork modules,
+-- Ranking catch-up peer choice (real SyncHistoryCatchup/Pages/Relay modules,
 -- simulated clock and transports). Run from the addon root with Lua 5.1.
 -- Since 1.2.4 only direct neighbours (hops == 1) are asked, in v7 (1.7.5; v6 before).
 -- Set SRC_DIR to a folder holding other copies of the three modules to test them.
@@ -62,14 +62,14 @@ local function world(peers, playerFaction)
     s.SendSyncRequest = function() return true end
     lb.kills, lb.captureCount, lb.captures, lb.playerInfo = {}, {}, {}, {}
     lb._storageBound = true
-    for _, file in ipairs({ "SyncHistoryCatchup.lua", "SyncLeaderboardPages.lua", "SyncBetaNetwork.lua" }) do
+    for _, file in ipairs({ "SyncHistoryCatchup.lua", "SyncLeaderboardPages.lua", "SyncRelay.lua" }) do
         setfenv(assert(loadfile(SRC .. "/" .. file)), e)()
     end
     local factions = {}
     for _, p in ipairs(peers) do factions[p.name] = p.faction end
     s.GetBetaPeerFaction = function(_, name) return factions[name] end
     -- Peers stay "heard" (fresh routes) for the whole scenario.
-    local net = e.Overlord.BetaNetwork
+    local net = e.Overlord.Relay
     local function refresh()
         for _, p in ipairs(peers) do
             net.peers[p.name:lower()] = { name = p.name, at = now, via = p.name, hops = p.hops }
@@ -181,7 +181,7 @@ do
         { name = "Aged Ally", faction = "Alliance", hops = 1 },
         { name = "Young Ally", faction = "Alliance", hops = 1 },
     }, "Alliance")
-    w.e.Overlord.BetaNetwork.GetPeerPagedProtocol = function(_, name)
+    w.e.Overlord.Relay.GetPeerPagedProtocol = function(_, name)
         return name == "Aged Ally" and 6 or 7
     end
     assert(w.start(), "round not scheduled")

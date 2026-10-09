@@ -5,8 +5,8 @@ local now = 1790020000
 local timers = {}
 Overlord = {
     Sync = {}, Leaderboard = { NETWORK_KILL_RANK_LIMIT = 500 },
-    BetaNetworkEnabled = true, PlayerFaction = "Alliance",
-    BetaNetwork = {
+    RelayEnabled = true, PlayerFaction = "Alliance",
+    Relay = {
         GetDirectPeers = function() return { "Near Ally" } end,
         GetPeerPagedProtocol = function() return 7 end,
     },

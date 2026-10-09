@@ -32,7 +32,7 @@ local function newClient(name)
     env.OverlordDB = {}
     local client = { name = name, env = env }
     env.C_Timer = { After = function(delay, fn) schedule(simTime + delay, fn) end }
-    env.Overlord.BetaNetwork = {
+    env.Overlord.Relay = {
         GetDirectPeers = function() return peerNames end,
         Broadcast = function(_, kind, payload)
             sent[#sent + 1] = { from = name, payload = payload, at = simTime }

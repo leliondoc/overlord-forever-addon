@@ -220,7 +220,7 @@ local function StartNetworkProbe()
     -- Le rapport ne doit jamais empecher la fermeture de la fenetre d'observation de 30 s
     -- (frame CHAT_MSG_ADDON enregistree plus haut) : une erreur est affichee, pas propagee.
     local reportOk, reportErr = pcall(function()
-        local sync, net = Overlord.Sync, Overlord.BetaNetwork
+        local sync, net = Overlord.Sync, Overlord.Relay
         local R = SyncReport
         -- 1. Summary: the five things that matter, worst first in the header
         -- (shared with the main panel indicator, NetworkHealth.lua).
@@ -321,7 +321,7 @@ local PERF_MODULES = {
     "HallOfFameUI", "Leaderboard",
     "LeaderboardUI", "MapMarkers", "Outpost", "OutpostControl",
     "Popups", "Ressources", "SettingsPanel", "Shard", "Sync", "UI", "ZoneControl",
-    "ZoneIndicator", "Zones", "BetaNetwork",
+    "ZoneIndicator", "Zones", "Relay",
 }
 local PERF_SPIKE_MS = 50
 local perfState = nil

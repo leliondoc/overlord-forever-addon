@@ -148,7 +148,7 @@ end
 -- Paliers de combat partages (relais en service) : le panneau ne montre alors que
 -- l'etat partage, le meme chez tous (voir FK plus bas).
 local function SharingActive()
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     return net ~= nil and net.Broadcast ~= nil and (not net.IsEnabled or net:IsEnabled())
 end
 
@@ -770,7 +770,7 @@ end
 -- tout de suite, une part 8 fois plus grande ensuite, les autres en dernier.
 local function ReportDelay()
     local crowd = 1
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     if net and net.CountDirectPeers then
         local ok, count = pcall(net.CountDirectPeers, net)
         if ok and tonumber(count) then crowd = tonumber(count) + 1 end
@@ -791,7 +791,7 @@ local function SendReport(key, bracket, now)
     local slot = math.floor(now / REPORT_SLOT_SEC)
     local expiresAt = slot * REPORT_SLOT_SEC + ACTIVITY_WINDOW
     local payload = "1:" .. key .. ":" .. bracket .. ":" .. slot
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     if not (net and net.Broadcast) or (net:Broadcast("FK", payload) or 0) <= 0 then
         -- Refuse (relais sature ou absent) : rien n'est couvert ni affiche, nouvel essai
         -- dans 20 s au plus tot (pas a chaque kill).

@@ -30,7 +30,7 @@ end
 -- At least one direct neighbour that is not of the other faction (allies are the
 -- source of our own faction's rows when a pull from an enemy friend skips them).
 local function HasDirectAlly(except)
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
     for _, name in ipairs(net and net.GetDirectPeers and net:GetDirectPeers() or {}) do
         if name ~= except and name ~= me and not IsOtherFaction(name) then return true end
@@ -92,7 +92,7 @@ end
 local function allowed(sender, channel)
     if not sync:IsValidPlayerName(sender) then return false end
     if sync.KillAntiSpoofIsBlacklisted and sync:KillAntiSpoofIsBlacklisted(sender) then return false end
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     if channel == "BETA" then
         -- Point to point (1.2.4): an exchange that crossed a relay is ignored,
         -- since its pages would have to cross the same relays back.
@@ -127,7 +127,7 @@ local function enqueue(job)
         if GetTime() - job.at > 240 then outbound = nil; return end
         local packet = job.packets[job.index]
         if not packet then outbound = nil; if job.done then job.done() end; return end
-        local now, net = GetTime(), Overlord.BetaNetwork
+        local now, net = GetTime(), Overlord.Relay
         tokens = math.min(BURST, tokens + math.max(0, now - refillAt) * RATE)
         refillAt = now
         -- Envelope + fragmentation overhead is deliberately charged as well.
@@ -599,7 +599,7 @@ request = function(state, retry)
         -- the relay refuses catch-up toward it for good, so end this pull now
         -- instead of retrying until the 15 min watchdog; the next round picks
         -- another neighbour. No packet is sent.
-        local net = Overlord.BetaNetwork
+        local net = Overlord.Relay
         if net and net.IsPeer and net.IsDirectPeer and net:IsPeer(state.peer)
             and not net:IsDirectPeer(state.peer) then
             state.why = "peer no longer direct"
@@ -794,7 +794,7 @@ local function applyList8(state, meta, blob)
 end
 
 -- The neighbour table keeps the peer of our running pull and of the session we
--- serve (SyncBetaNetwork remember): their replies stay routed however busy the
+-- serve (SyncRelay remember): their replies stay routed however busy the
 -- channel is. lowerName is the table key (lower-case full name).
 function sync:IsPagedSessionPeer(lowerName)
     if pull and type(pull.peer) == "string" and pull.peer:lower() == lowerName then return true end
@@ -905,7 +905,7 @@ tryApply = function(state)
             if v8 then payload = expandRow8(kind, payload, state.epoch) end
             local ok, accepted = true, false
             if payload then
-                local net, previous = Overlord.BetaNetwork, nil
+                local net, previous = Overlord.Relay, nil
                 if net then previous = net.context; net.context = state.context end
                 sync._pagedDelivery = { kind = kind, sender = state.peer,
                     channel = state.channel, key = row.key }
@@ -1161,7 +1161,7 @@ end
 -- another direct neighbour. No v6 fallback (update required).
 function sync:StartCompletePagedLeaderboardCatchup(peer, callback)
     if type(callback) ~= "function" then return false end
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     local capability = net and net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(peer)
     if capability == 5 or capability == 6 then
         stats.peerProtocol = "beta v" .. capability .. "; not asked (v7 only)"
@@ -1424,7 +1424,7 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
     state.supported, state.channel = true, channel
     state.replySeen = true
     state.fragmentAt = GetTime()
-    state.context = Overlord.BetaNetwork and Overlord.BetaNetwork.context or nil
+    state.context = Overlord.Relay and Overlord.Relay.context or nil
     tryApply(state)
 end
 

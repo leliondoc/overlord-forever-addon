@@ -1,6 +1,6 @@
 -- Local content coverage for relayed broadcast content (OP, LO, LOC, VB, TV, DX).
 -- Run from the repo root under Lua 5.1: lua proposal_test.lua
--- (OVERLORD_AUDIT_BETA_SOURCE may point to another SyncBetaNetwork.lua).
+-- (OVERLORD_AUDIT_BETA_SOURCE may point to another SyncRelay.lua).
 -- Fails on 1.1.10 (sections 1 and 2), passes with proposal.diff.
 local now, pending, sentTo = 100, {}, {}
 function GetTime() return now end
@@ -29,8 +29,8 @@ function sync:SendToBNet(id, kind, wire)
     table.insert(sentTo[id], wire)
     return true
 end
-assert(loadfile(os.getenv("OVERLORD_AUDIT_BETA_SOURCE") or "SyncBetaNetwork.lua"))()
-local net, serial = Overlord.BetaNetwork, 0
+assert(loadfile(os.getenv("OVERLORD_AUDIT_BETA_SOURCE") or "SyncRelay.lua"))()
+local net, serial = Overlord.Relay, 0
 local function drain(limit)
     local steps = 0
     while #pending > 0 do

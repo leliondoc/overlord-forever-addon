@@ -3,7 +3,7 @@
 assert(loadfile("tests/forever_beta_integration.test.lua"))()
 assert(loadfile("SyncLeaderboardPages.lua"))()
 
-local sync, net = Overlord.Sync, Overlord.BetaNetwork
+local sync, net = Overlord.Sync, Overlord.Relay
 SlashCmdList = {}
 local lines = {}
 Overlord.PrintNotification = function(_, s) lines[#lines + 1] = s end

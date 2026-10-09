@@ -23,7 +23,7 @@ C_Timer = {
 local clients = {}
 local function client(name)
     local a = {
-        Version = "1.0.0", BetaNetworkEnabled = true, PlayerFaction = "Alliance",
+        Version = "1.0.0", RelayEnabled = true, PlayerFaction = "Alliance",
         RealmPools = {
             GetOverlordPoolTag = function() return "global" end,
             NormalizeRegionPool = function(_, pool) return pool == "global" and pool or "" end,
@@ -45,7 +45,7 @@ local function client(name)
         assert(kind == "BF")
         for _, other in ipairs(clients) do
             if other.name == target then
-                other.BetaNetwork:ReceiveFragment(fragment, name, "WHISPER")
+                other.Relay:ReceiveFragment(fragment, name, "WHISPER")
                 return true
             end
         end
@@ -57,27 +57,27 @@ local function client(name)
         }
     end
     Overlord = a
-    assert(loadfile("SyncBetaNetwork.lua"))()
+    assert(loadfile("SyncRelay.lua"))()
     clients[#clients + 1] = a
     return a
 end
 local gateway = client("Gateway Tester")
 local receiver = client("Reader Tester")
-gateway.BetaNetwork.peers["reader tester"] = {
+gateway.Relay.peers["reader tester"] = {
     name = receiver.name, at = now, via = receiver.name,
     transport = "WHISPER", hops = 1,
 }
 for i = 1, 84 do
-    assert(gateway.BetaNetwork:Send(
+    assert(gateway.Relay:Send(
         "ZS", "zone" .. i .. ":in_progress:" .. string.rep("u", 120)))
 end
 local request = "A:1.0.0:0::T"
 local page = "@G-1790016100-1:1:1|elwynn_blackrock_advance:A:1790016100:1790016100"
-assert(gateway.BetaNetwork:Send("SR", request, receiver.name),
+assert(gateway.Relay:Send("SR", request, receiver.name),
     "Addressed map request was refused behind progress ZS")
-assert(gateway.BetaNetwork:Send("ZA", page, receiver.name),
+assert(gateway.Relay:Send("ZA", page, receiver.name),
     "Addressed map page was refused behind progress ZS")
-assert(gateway.BetaNetwork:Send("C", "critical-final"),
+assert(gateway.Relay:Send("C", "critical-final"),
     "A terminal displaced protected addressed map catch-up")
 local ticks = 0
 while #pending > 0 do
@@ -94,14 +94,14 @@ assert(got["SR:" .. request] and got["ZA:" .. page],
     "Accepted addressed map catch-up was not delivered")
 
 -- No fresh route: targeted map packets retain ordinary-lane admission.
-gateway.BetaNetwork.peers["reader tester"] = nil
+gateway.Relay.peers["reader tester"] = nil
 for i = 1, 84 do
-    assert(gateway.BetaNetwork:Send(
+    assert(gateway.Relay:Send(
         "ZS", "zone" .. i .. ":in_progress:" .. string.rep("v", 120)))
 end
-assert(not gateway.BetaNetwork:Send("SR", request .. "2", receiver.name),
+assert(not gateway.Relay:Send("SR", request .. "2", receiver.name),
     "Unknown route borrowed catch-up reservation for an SR")
-assert(not gateway.BetaNetwork:Send("ZA", page .. "2", receiver.name),
+assert(not gateway.Relay:Send("ZA", page .. "2", receiver.name),
     "Unknown route borrowed catch-up reservation for a ZA")
 
 while #pending > 0 do
@@ -110,13 +110,13 @@ while #pending > 0 do
     now = nextItem.at
     nextItem.run()
 end
-gateway.BetaNetwork.peers["reader tester"] = {
+gateway.Relay.peers["reader tester"] = {
     name = receiver.name, at = now, via = receiver.name,
     transport = "WHISPER", hops = 1,
 }
 for i = 1, 16 do
-    assert(gateway.BetaNetwork:Send("ZA", page .. ":" .. i, receiver.name))
+    assert(gateway.Relay:Send("ZA", page .. ":" .. i, receiver.name))
 end
-assert(not gateway.BetaNetwork:Send("ZA", page .. ":overflow", receiver.name),
+assert(not gateway.Relay:Send("ZA", page .. ":overflow", receiver.name),
     "One local map producer borrowed beyond the protected catch-up slots")
 print("Beta map catch-up: addressed SR and ZA survive urgent progress backlog")

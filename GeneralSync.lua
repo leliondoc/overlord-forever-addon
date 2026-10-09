@@ -193,8 +193,8 @@ local function AcceptGeneralSender(sender, faction)
     if not sender or not faction then return true end
     -- Forever has no club roster. A beta envelope retains the claiming player
     -- as author; the gateway must never become the commander instead.
-    if Overlord.BetaNetwork
-        and Overlord.BetaNetwork:IsDispatching(sender) then
+    if Overlord.Relay
+        and Overlord.Relay:IsDispatching(sender) then
         -- Commander claims travel multi-hop (a far commander must be known by all);
         -- the author name is cosmetic here and the claim is bounded by its timestamp.
         return faction == "Alliance" or faction == "Horde"

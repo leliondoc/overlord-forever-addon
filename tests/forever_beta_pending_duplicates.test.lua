@@ -24,8 +24,8 @@ function sync:SendToBNet(_, kind, wire)
     sent[#sent + 1] = wire
     return true
 end
-assert(loadfile(os.getenv("OVERLORD_AUDIT_BETA_SOURCE") or "SyncBetaNetwork.lua"))()
-local net, serial = Overlord.BetaNetwork, 0
+assert(loadfile(os.getenv("OVERLORD_AUDIT_BETA_SOURCE") or "SyncRelay.lua"))()
+local net, serial = Overlord.Relay, 0
 for _, name in ipairs({ "Reader Tester", "Second Tester" }) do
     net.peers[name:lower()] = { at = now, via = name, name = name, transport = "BNET", bnet = 1 }
 end

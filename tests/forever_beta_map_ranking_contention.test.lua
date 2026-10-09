@@ -24,7 +24,7 @@ C_Timer = {
 local clients = {}
 local function client(name)
     local a = {
-        Version = "1.0.0", BetaNetworkEnabled = true, PlayerFaction = "Alliance",
+        Version = "1.0.0", RelayEnabled = true, PlayerFaction = "Alliance",
         RealmPools = {
             GetOverlordPoolTag = function() return "global" end,
             NormalizeRegionPool = function(_, pool) return pool == "global" and pool or "" end,
@@ -46,7 +46,7 @@ local function client(name)
         assert(kind == "BF")
         for _, other in ipairs(clients) do
             if other.name == target then
-                other.BetaNetwork:ReceiveFragment(fragment, name, "WHISPER")
+                other.Relay:ReceiveFragment(fragment, name, "WHISPER")
                 return true
             end
         end
@@ -58,39 +58,39 @@ local function client(name)
         }
     end
     Overlord = a
-    assert(loadfile("SyncBetaNetwork.lua"))()
+    assert(loadfile("SyncRelay.lua"))()
     clients[#clients + 1] = a
     return a
 end
 local gateway = client("Gateway Tester")
 local receiver = client("Reader Tester")
-gateway.BetaNetwork.peers["reader tester"] = {
+gateway.Relay.peers["reader tester"] = {
     name = receiver.name, at = now, via = receiver.name,
     transport = "WHISPER", hops = 1,
 }
 for i = 1, 84 do
-    assert(gateway.BetaNetwork:Send(
+    assert(gateway.Relay:Send(
         "ZS", "zone" .. i .. ":in_progress:" .. string.rep("u", 120)))
 end
 local rankings = {}
 for i = 1, 16 do
     local row = "6:D:ranking:" .. i .. ":" .. string.rep("h", 145)
     rankings[#rankings + 1] = row
-    assert(gateway.BetaNetwork:Send("LK", row, receiver.name))
+    assert(gateway.Relay:Send("LK", row, receiver.name))
 end
 local request = "A:1.0.0:0::T"
 local page = "@G-1790016100-1:1:1|elwynn_blackrock_advance:A:1790016100:1790016100"
-local progressDropped = gateway.BetaNetwork.kindStats.ZS.dropped
-assert(not gateway.BetaNetwork:Send("ZA", string.rep("x", 3600), receiver.name),
+local progressDropped = gateway.Relay.kindStats.ZS.dropped
+assert(not gateway.Relay:Send("ZA", string.rep("x", 3600), receiver.name),
     "Oversized map packet passed relay validation")
-assert(gateway.BetaNetwork.kindStats.ZS.dropped == progressDropped,
+assert(gateway.Relay.kindStats.ZS.dropped == progressDropped,
     "Rejected oversized map packet evicted valid progress")
-assert(gateway.BetaNetwork:Send("SR", request, receiver.name),
+assert(gateway.Relay:Send("SR", request, receiver.name),
     "Full ranking and progress queue refused addressed SR")
-assert(gateway.BetaNetwork:Send("ZA", page, receiver.name),
+assert(gateway.Relay:Send("ZA", page, receiver.name),
     "Full ranking and progress queue refused addressed ZA")
-assert(gateway.BetaNetwork:Send("ZA", page .. ":second", receiver.name))
-assert(not gateway.BetaNetwork:Send("ZA", page .. ":third", receiver.name),
+assert(gateway.Relay:Send("ZA", page .. ":second", receiver.name))
+assert(not gateway.Relay:Send("ZA", page .. ":third", receiver.name),
     "Map producer exceeded two extra protected ZA slots")
 -- Once map and ranking items have been reordered, subsequent terminal traffic
 -- must not evict one of the sixteen ranking pages shifted beyond index 16.
@@ -101,7 +101,7 @@ local function nextTick()
     nextItem.run()
 end
 for _ = 1, 30 do nextTick() end
-assert(gateway.BetaNetwork:Send("C", "final-capture"))
+assert(gateway.Relay:Send("C", "final-capture"))
 local ticks = 0
 while #pending > 0 do
     ticks = ticks + 1
@@ -127,21 +127,21 @@ end
 
 -- GW is informational. A full GW bulk lane yields to a final capture while
 -- the sixteen protected ranking packets continue to completion.
-gateway.BetaNetwork.peers["reader tester"].at = now
+gateway.Relay.peers["reader tester"].at = now
 for i = 1, 84 do
-    assert(gateway.BetaNetwork:Send("GW", "alert-" .. i .. ":" .. string.rep("g", 80)))
+    assert(gateway.Relay:Send("GW", "alert-" .. i .. ":" .. string.rep("g", 80)))
 end
 local secondRankings = {}
 for i = 1, 16 do
     local row = "6:D:second:" .. i .. ":" .. string.rep("h", 145)
     secondRankings[#secondRankings + 1] = row
-    assert(gateway.BetaNetwork:Send("LK", row, receiver.name))
+    assert(gateway.Relay:Send("LK", row, receiver.name))
 end
-assert(not gateway.BetaNetwork:IsUrgentPacket("GW", "alert"),
+assert(not gateway.Relay:IsUrgentPacket("GW", "alert"),
     "Informational GW packet entered the urgent lane")
-assert(gateway.BetaNetwork:Send("C", "second-final"),
+assert(gateway.Relay:Send("C", "second-final"),
     "Final capture could not displace an unsent GW")
-assert(gateway.BetaNetwork.kindStats.GW.dropped > 0,
+assert(gateway.Relay.kindStats.GW.dropped > 0,
     "Final capture did not reclaim a waiting GW")
 while #pending > 0 do
     ticks = ticks + 1
@@ -156,13 +156,13 @@ end
 
 -- The producer retries each page when the two extra map slots are full. All
 -- 32 pages of one atomic ZA snapshot must arrive before its scaled SR deadline.
-gateway.BetaNetwork.peers["reader tester"].at = now
+gateway.Relay.peers["reader tester"].at = now
 for i = 1, 84 do
-    assert(gateway.BetaNetwork:Send(
+    assert(gateway.Relay:Send(
         "ZS", "next" .. i .. ":in_progress:" .. string.rep("u", 120)))
 end
 for i = 1, 16 do
-    assert(gateway.BetaNetwork:Send(
+    assert(gateway.Relay:Send(
         "LK", "6:D:third:" .. i .. ":" .. string.rep("h", 145), receiver.name))
 end
 local snapshotStart, nextPage, pages = now, 1, {}
@@ -171,7 +171,7 @@ for i = 1, 32 do
 end
 local function offerPage()
     if nextPage > #pages then return end
-    if gateway.BetaNetwork:Send("ZA", pages[nextPage], receiver.name) then
+    if gateway.Relay:Send("ZA", pages[nextPage], receiver.name) then
         nextPage = nextPage + 1
     end
     if nextPage <= #pages then C_Timer.After(0.2, offerPage) end
@@ -198,19 +198,19 @@ end
 -- At the far end of a multihop bridge, long path names make each ZA page span
 -- three fragments. Keep urgent progress flowing so the 300 B/s floor, rather
 -- than idle spare bandwidth, sets the service bound.
-gateway.BetaNetwork.peers["reader tester"].at = now
+gateway.Relay.peers["reader tester"].at = now
 local longPath = {
     "Originplayer Verylongrealmname", "Relayplayer Verylongrealmname",
     "Secondrelay Verylongrealmname", gateway.name,
 }
 local function queueRelayed(kind, payload, id)
-    return gateway.BetaNetwork:Queue({
+    return gateway.Relay:Queue({
         region = "global", id = id, at = time(), target = receiver.name,
         path = longPath, kind = kind, payload = payload,
     }, false)
 end
 for i = 1, 84 do
-    assert(gateway.BetaNetwork:Send(
+    assert(gateway.Relay:Send(
         "ZS", "long" .. i .. ":in_progress:" .. string.rep("u", 120)))
 end
 for i = 1, 16 do
@@ -232,7 +232,7 @@ local urgentSerial = 0
 local function feedUrgent()
     if now - longStart >= 200 then return end
     urgentSerial = urgentSerial + 1
-    gateway.BetaNetwork:Send("ZS", "flow" .. urgentSerial
+    gateway.Relay:Send("ZS", "flow" .. urgentSerial
         .. ":in_progress:" .. string.rep("u", 120))
     C_Timer.After(0.2, feedUrgent)
 end
@@ -267,34 +267,34 @@ end
 
 -- The state lane carries weekly VB events (DX was removed in 1.2.1). Distinct VB events
 -- all survive a saturated relay, and none may displace accepted LK/ZA.
-gateway.BetaNetwork.peers["reader tester"].at = now
+gateway.Relay.peers["reader tester"].at = now
 local stateStart = now
 for i = 1, 84 do
-    assert(gateway.BetaNetwork:Send(
+    assert(gateway.Relay:Send(
         "ZS", "state" .. i .. ":in_progress:" .. string.rep("u", 120)))
 end
 local stateRankings = {}
 for i = 1, 16 do
     local row = "6:D:state:" .. i .. ":" .. string.rep("h", 145)
     stateRankings[#stateRankings + 1] = row
-    assert(gateway.BetaNetwork:Send("LK", row, receiver.name))
+    assert(gateway.Relay:Send("LK", row, receiver.name))
 end
 local statePages = {}
 for i = 1, 2 do
     local page = "@G-1790016100-state:" .. i .. ":2|" .. string.rep("z", 170)
     statePages[#statePages + 1] = page
-    assert(gateway.BetaNetwork:Send("ZA", page, receiver.name))
+    assert(gateway.Relay:Send("ZA", page, receiver.name))
 end
 for i = 1, 14 do
-    assert(gateway.BetaNetwork:Send("VB", "1790016000:global:" .. "front" .. i .. ",A,1790016001,1790016001,20,1000", receiver.name))
+    assert(gateway.Relay:Send("VB", "1790016000:global:" .. "front" .. i .. ",A,1790016001,1790016001,20,1000", receiver.name))
 end
 local bonus = "1790016000:global:front1,A,1790016001,1790016001,20,1000"
-assert(gateway.BetaNetwork:Send("VB", bonus, receiver.name))
+assert(gateway.Relay:Send("VB", bonus, receiver.name))
 local stateSerial = 0
 local function feedStateUrgent()
     if now - stateStart >= 100 then return end
     stateSerial = stateSerial + 1
-    gateway.BetaNetwork:Send("ZS", "stateflow" .. stateSerial
+    gateway.Relay:Send("ZS", "stateflow" .. stateSerial
         .. ":in_progress:" .. string.rep("u", 120))
     C_Timer.After(0.2, feedStateUrgent)
 end
@@ -324,7 +324,7 @@ end
 -- A transport refusal leaves the BF copy unsent. The bounded retry must
 -- deliver it without creating a second replicated-state entry or bypassing
 -- the shared byte budget.
-gateway.BetaNetwork.peers["reader tester"].at = now
+gateway.Relay.peers["reader tester"].at = now
 local originalWhisper = gateway.Sync.SendWhisper
 local refusedOnce = false
 gateway.Sync.SendWhisper = function(self, kind, data, target)
@@ -335,12 +335,12 @@ gateway.Sync.SendWhisper = function(self, kind, data, target)
     return originalWhisper(self, kind, data, target)
 end
 local retryVb = "1790016000:global:" .. "retryfront" .. ",A,1790016001,1790016001,20,1000"
-assert(gateway.BetaNetwork:Send("VB", retryVb, receiver.name))
+assert(gateway.Relay:Send("VB", retryVb, receiver.name))
 local retrySiblings = {}
 for i = 1, 23 do
     local row = "1790016000:global:" .. "retry" .. i .. ",A,1790016001,1790016001,20,1000"
     retrySiblings[#retrySiblings + 1] = row
-    assert(gateway.BetaNetwork:Send("VB", row, receiver.name))
+    assert(gateway.Relay:Send("VB", row, receiver.name))
 end
 while #pending > 0 do
     ticks = ticks + 1
@@ -360,12 +360,12 @@ end
 -- Even 128 attempted LK rows must leave the global state reservation usable;
 -- one terminal may reclaim an unprotected borrowed page, but not VB or the
 -- sixteen protected ranking pages.
-gateway.BetaNetwork.peers["reader tester"].at = now
+gateway.Relay.peers["reader tester"].at = now
 local reserveStart, reserveRankings, reserveState = now, {}, {}
 local accepted = 0
 for i = 1, 128 do
     local row = "6:D:reserve:" .. i .. ":" .. string.rep("h", 145)
-    if gateway.BetaNetwork:Send("LK", row, receiver.name) then
+    if gateway.Relay:Send("LK", row, receiver.name) then
         accepted = accepted + 1
         if i <= 16 then reserveRankings[#reserveRankings + 1] = row end
     end
@@ -374,19 +374,19 @@ assert(accepted == 100, "Ranking burst consumed the global VB/paged reservation"
 for i = 1, 14 do
     local row = "1790016000:global:" .. "reservefront" .. i .. ",A,1790016001,1790016001,20,1000"
     reserveState[#reserveState + 1] = "VB:" .. row
-    assert(gateway.BetaNetwork:Send("VB", row, receiver.name),
+    assert(gateway.Relay:Send("VB", row, receiver.name),
         "Full ranking burst refused a reserved VB")
 end
 for i = 1, 10 do
     local row = "1790016000:global:reserve" .. i .. ",A,1790016001,1790016001,20,1000"
     reserveState[#reserveState + 1] = "VB:" .. row
-    assert(gateway.BetaNetwork:Send("VB", row, receiver.name),
+    assert(gateway.Relay:Send("VB", row, receiver.name),
         "Full ranking burst refused a reserved VB")
 end
-assert(not gateway.BetaNetwork:Send("VB",
+assert(not gateway.Relay:Send("VB",
     "1790016000:global:overflow,A,1790016001,1790016001,20,1000", receiver.name),
     "State lane exceeded its twenty-four-slot bound")
-assert(gateway.BetaNetwork:Queue({
+assert(gateway.Relay:Queue({
     region = "global", id = "reserved-capture", at = time(),
     target = receiver.name, path = {gateway.name}, kind = "C",
     payload = "reserved-terminal",

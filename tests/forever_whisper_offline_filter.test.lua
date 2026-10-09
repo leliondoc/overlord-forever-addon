@@ -6,7 +6,7 @@ function IsInInstance() return false end
 function securecall(fn, ...) return fn(...) end
 C_ChatInfo = { SendAddonMessage = function() return true end }
 Overlord.InstanceSuspended = false
-Overlord.BetaNetwork = nil
+Overlord.Relay = nil
 ChatFrame_AddMessageEventFilter = nil
 Chat_AddMessageEventFilter = nil
 ChatFrameUtil = {

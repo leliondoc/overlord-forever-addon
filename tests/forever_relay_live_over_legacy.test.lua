@@ -23,8 +23,8 @@ function sync:SendToBNet(_, kind, wire)
     sent[#sent + 1] = { wire = wire, at = now }
     return true
 end
-assert(loadfile("SyncBetaNetwork.lua"))()
-local net = Overlord.BetaNetwork
+assert(loadfile("SyncRelay.lua"))()
+local net = Overlord.Relay
 net.peers["reader tester"] = {
     at = now, via = "Reader Tester", name = "Reader Tester", transport = "BNET", bnet = 1, hops = 1,
 }
@@ -101,8 +101,8 @@ assert((net.stats.expired or 0) == 0, "Admitted data expired")
 -- 6. Rows this client produced itself are never taken back (its producer has
 --    already moved on), and an oversized live copy evicts nothing.
 pending, sent = {}, {}
-assert(loadfile("SyncBetaNetwork.lua"))()
-net = Overlord.BetaNetwork
+assert(loadfile("SyncRelay.lua"))()
+net = Overlord.Relay
 net.peers["reader tester"] = {
     at = now, via = "Reader Tester", name = "Reader Tester", transport = "BNET", bnet = 1, hops = 1,
 }
@@ -123,8 +123,8 @@ assert(net.stats.displaced == 20, "A local producer's row was evicted")
 -- 7. Live reclaim stops at the reservation itself: 20 forwarded rows (16 of them
 --    protected), a full live lane, then a live flood takes exactly 4 slots.
 pending = {}
-assert(loadfile("SyncBetaNetwork.lua"))()
-net = Overlord.BetaNetwork
+assert(loadfile("SyncRelay.lua"))()
+net = Overlord.Relay
 net.peers["reader tester"] = {
     at = now, via = "Reader Tester", name = "Reader Tester", transport = "BNET", bnet = 1, hops = 1,
 }

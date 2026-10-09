@@ -2,7 +2,7 @@
 -- accepted LK rows even though unused reservations could hold the presence.
 local run = assert(loadfile("tests/forever_beta_head_comparison.audit.lua"))
 for _, phased in ipairs({ false, true }) do
-    local result = run({ source = "SyncBetaNetwork.lua", duration = 540, phased = phased })
+    local result = run({ source = "SyncRelay.lua", duration = 540, phased = phased })
     assert(result.deliveredLK == result.offeredLK, "Presence bursts lost accepted ranking rows")
     assert(result.deliveredZA == 32 and result.deliveredDX == result.offeredDX,
         "Preserving ranking rows starved map or domination delivery")
@@ -12,7 +12,7 @@ for _, phased in ipairs({ false, true }) do
         "Relay exceeded the shared byte budget")
     for _, friend in ipairs(result.friends) do
         local origins = 0
-        for key in pairs(friend.BetaNetwork.peers) do
+        for key in pairs(friend.Relay.peers) do
             if key:match("^origin") then origins = origins + 1 end
         end
         -- 1.2.4: presence is never relayed, a Horde bridge no longer learns far origins.
@@ -44,8 +44,8 @@ function sync:SendToBNet(_, kind, wire)
     sent[#sent + 1] = { wire = wire, at = now }
     return true
 end
-assert(loadfile("SyncBetaNetwork.lua"))()
-local net = Overlord.BetaNetwork
+assert(loadfile("SyncRelay.lua"))()
+local net = Overlord.Relay
 net.peers["reader tester"] = {
     at = now, via = "Reader Tester", name = "Reader Tester", transport = "BNET", bnet = 1, hops = 1,
 }

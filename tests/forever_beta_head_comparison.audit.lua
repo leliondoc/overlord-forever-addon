@@ -1,8 +1,8 @@
 -- Deterministic relay-load comparison, run with OVERLORD_AUDIT_BETA_SOURCE
--- pointing either at HEAD's saved source or the current SyncBetaNetwork.lua.
+-- pointing either at HEAD's saved source or the current SyncRelay.lua.
 -- This is a transport microbenchmark, not an in-game convergence assertion.
 local options = ... or {}
-local source = options.source or os.getenv("OVERLORD_AUDIT_BETA_SOURCE") or "SyncBetaNetwork.lua"
+local source = options.source or os.getenv("OVERLORD_AUDIT_BETA_SOURCE") or "SyncRelay.lua"
 local duration = options.duration or tonumber(os.getenv("OVERLORD_AUDIT_DURATION")) or 180
 local phased = options.phased
 if phased == nil then phased = os.getenv("OVERLORD_AUDIT_NH_PHASED") == "1" end
@@ -29,7 +29,7 @@ end
 C_Timer = { After = after, NewTicker = function() return { Cancel = function() end } end }
 local clients = {}
 local function client(name, faction)
-    local a = { Version = "1.0.0", BetaNetworkEnabled = true,
+    local a = { Version = "1.0.0", RelayEnabled = true,
         PlayerFaction = faction, name = name, received = {}, friends = {},
         RealmPools = {
             GetOverlordPoolTag = function() return "global" end,
@@ -51,14 +51,14 @@ local function client(name, faction)
         return friend.PlayerFaction, friend.name
     end
     function s:SendToBNet(friend, kind, wire)
-        if kind == "BR" then friend.BetaNetwork:Receive(wire, name, "BNET", a)
-        else friend.BetaNetwork:ReceiveFragment(wire, name, "BNET", a) end
+        if kind == "BR" then friend.Relay:Receive(wire, name, "BNET", a)
+        else friend.Relay:ReceiveFragment(wire, name, "BNET", a) end
         return true
     end
     function s:SendWhisper(kind, fragment, target)
         for _, other in ipairs(clients) do
             if other.name == target then
-                other.BetaNetwork:ReceiveFragment(fragment, name, "WHISPER")
+                other.Relay:ReceiveFragment(fragment, name, "WHISPER")
                 return true
             end
         end
@@ -87,7 +87,7 @@ local friends = {
 bridge.friends = friends
 local destination = friends[1]
 local function refreshDestination()
-    bridge.BetaNetwork.peers[destination.name:lower()] = {
+    bridge.Relay.peers[destination.name:lower()] = {
         name = destination.name, at = now, via = destination.name,
         transport = "BNET", bnet = destination, hops = 1,
     }
@@ -108,7 +108,7 @@ local function offerNh(i, round)
     local wire = table.concat({ "global", "nh-" .. i .. "-" .. round,
         tostring(time()), "*", origin, "NH", "1.0.0" }, "|")
     nhOffered = nhOffered + 1
-    bridge.BetaNetwork:Receive(wire, origin, "CHANNEL")
+    bridge.Relay:Receive(wire, origin, "CHANNEL")
 end
 for t = 0, duration - 1, 45 do
     local round = math.floor(t / 45)
@@ -127,7 +127,7 @@ for t = 0, duration - 1 do
     after(t + 0.4, function()
         local payload = "row-" .. t .. ":" .. string.rep("l", 115)
         lkOffered = lkOffered + 1
-        if bridge.BetaNetwork:Send("LK", payload, destination.name) then
+        if bridge.Relay:Send("LK", payload, destination.name) then
             lkAccepted = lkAccepted + 1
         end
     end)
@@ -140,7 +140,7 @@ for t = 0, duration - 1, 60 do
             local payload = "1790016000:global:front" .. front .. ",A," .. victoryTs .. ","
                 .. victoryTs .. ",20,1000"
             dxOffered = dxOffered + 1
-            if bridge.BetaNetwork:Send("VB", payload) then
+            if bridge.Relay:Send("VB", payload) then
                 dxAccepted = dxAccepted + 1
             end
         end
@@ -151,7 +151,7 @@ local function offerMap()
     if nextPage > 32 or now > 100 + duration then return end
     local payload = "@G-head-audit:" .. nextPage .. ":32|" .. string.rep("z", 170)
     mapOffered = mapOffered + 1
-    if bridge.BetaNetwork:Send("ZA", payload, destination.name) then
+    if bridge.Relay:Send("ZA", payload, destination.name) then
         mapAccepted = mapAccepted + 1
         nextPage = nextPage + 1
     end
@@ -175,7 +175,7 @@ local function count(rows)
     for _ in pairs(rows or {}) do n = n + 1 end
     return n
 end
-local stats, kinds = bridge.BetaNetwork.stats, bridge.BetaNetwork.kindStats
+local stats, kinds = bridge.Relay.stats, bridge.Relay.kindStats
 print(string.format("source=%s duration=%ds phased=%s NH offered=%d admitted=%d bytes=%d dropped=%d; LK offered=%d accepted=%d delivered=%d bytes=%d dropped=%d; ZA attempts=%d accepted=%d delivered=%d; DX offered=%d accepted=%d delivered=%d; total sent=%d dropped=%d localRejected=%s forwardRejected=%s evicted=%s expired=%s",
     source, duration, tostring(phased), nhOffered, (kinds.NH or {}).queued or 0,
     (kinds.NH or {}).bytes or 0, (kinds.NH or {}).dropped or 0,

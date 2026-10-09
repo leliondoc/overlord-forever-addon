@@ -24,7 +24,7 @@ end }
 local clients = {}
 local function client(name)
     local a = {
-        Version = "1.0.0", BetaNetworkEnabled = true,
+        Version = "1.0.0", RelayEnabled = true,
         PlayerFaction = "Alliance", name = name, received = {},
         RealmPools = {
             GetOverlordPoolTag = function() return "global" end,
@@ -47,7 +47,7 @@ local function client(name)
         assert(kind == "BF")
         for _, other in ipairs(clients) do
             if other.name == target then
-                other.BetaNetwork:ReceiveFragment(fragment, name, "WHISPER")
+                other.Relay:ReceiveFragment(fragment, name, "WHISPER")
                 return true
             end
         end
@@ -57,14 +57,14 @@ local function client(name)
         a.received[#a.received + 1] = message
     end
     Overlord = a
-    assert(loadfile("SyncBetaNetwork.lua"))()
+    assert(loadfile("SyncRelay.lua"))()
     clients[#clients + 1] = a
     return a
 end
 local relay = client("Relay Tester")
 local target = client("Target Tester")
 local function route()
-    relay.BetaNetwork.peers["target tester"] = {
+    relay.Relay.peers["target tester"] = {
         name = target.name, at = now, via = target.name,
         transport = "WHISPER", hops = 1,
     }
@@ -89,13 +89,13 @@ route()
 -- A full queue refuses a forwarded copy without sealing origin:id, so the same
 -- packet can still arrive by another path once room is back.
 local filled = 0
-while relay.BetaNetwork:Send("MS", "local-fill-" .. filled, target.name) do filled = filled + 1 end
+while relay.Relay:Send("MS", "local-fill-" .. filled, target.name) do filled = filled + 1 end
 assert(filled > 0, "Test setup: the queue took no local packet")
 local second = "guild-request-capacity"
-assert(not relay.BetaNetwork:Receive(wire("capacity-one", "West Tester", second),
+assert(not relay.Relay:Receive(wire("capacity-one", "West Tester", second),
     "West Tester", "WHISPER"), "Full queue claimed a refused relay copy")
 drain()
-assert(relay.BetaNetwork:Receive(wire("capacity-one", "East Tester", second),
+assert(relay.Relay:Receive(wire("capacity-one", "East Tester", second),
     "East Tester", "WHISPER"), "Capacity recovery was blocked by premature dedup")
 drain()
 local delivered = 0
@@ -103,21 +103,21 @@ for _, message in ipairs(target.received) do
     if message == "MS:" .. second then delivered = delivered + 1 end
 end
 assert(delivered == 1, "Retried origin:id did not reach the target exactly once")
-assert((relay.BetaNetwork.stats.relayRejected or 0) >= 1,
+assert((relay.Relay.stats.relayRejected or 0) >= 1,
     "Full queue did not count the refused forward admission")
 
 -- Catch-up addressed to someone else is never relayed (point to point, 1.2.4).
 local before = #target.received
-assert(not relay.BetaNetwork:Receive(wire("catchup-one", "East Tester",
+assert(not relay.Relay:Receive(wire("catchup-one", "East Tester",
     "6:Q:1:far:1:1:-:0:0:LK", "HR"), "East Tester", "WHISPER"), "A far catch-up request was relayed")
 drain()
-assert(#target.received == before and (relay.BetaNetwork.stats.catchupNotRelayed or 0) == 1,
+assert(#target.received == before and (relay.Relay.stats.catchupNotRelayed or 0) == 1,
     "Relayed catch-up reached its target")
 -- A broadcast map request is handled locally but never forwarded further.
-local sentBefore = relay.BetaNetwork.stats.sent
+local sentBefore = relay.Relay.stats.sent
 local broadcastWire = table.concat({ "global", "sr-broadcast", tostring(time()), "*",
     "Origin Tester,East Tester", "SR", "H:1.2.4:0:::T" }, "|")
-assert(relay.BetaNetwork:Receive(broadcastWire, "East Tester", "WHISPER"))
+assert(relay.Relay:Receive(broadcastWire, "East Tester", "WHISPER"))
 drain()
-assert(relay.BetaNetwork.stats.sent == sentBefore, "A broadcast map request was relayed onward")
+assert(relay.Relay.stats.sent == sentBefore, "A broadcast map request was relayed onward")
 print("Beta targeted relay: capacity failure allows one valid alternate copy; catch-up never relayed")

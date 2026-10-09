@@ -522,7 +522,7 @@ local function RecordNearbySender(sender)
 end
 
 function Overlord.Sync:Initialize()
-    if Overlord.BetaNetwork then Overlord.BetaNetwork:Start() end
+    if Overlord.Relay then Overlord.Relay:Start() end
     -- Restaure le flag de victoire depuis la DB (TV-2 : evite le re-fire apres /reload).
     -- Si une victoire a eu lieu apres le dernier reset hebdo, la campagne est terminee.
     if OverlordDB then
@@ -700,16 +700,16 @@ function Overlord.Sync:SendSyncRequest(opts)
     local requestMode = opts.fullResponse == true and "F"
         or (opts.stateResponse == true and "S") or "T"
     local payload = SRPayload(requestMode)
-    if Overlord.BetaNetwork then
+    if Overlord.Relay then
         if opts.betaTarget then
-            local sent = Overlord.BetaNetwork:Send("SR", payload, opts.betaTarget)
+            local sent = Overlord.Relay:Send("SR", payload, opts.betaTarget)
             if sent and self.NoteOutpostClaimPeer then self:NoteOutpostClaimPeer(opts.betaTarget, payload) end
             if sent and requestMode == "F" then
                 self:ExpectDirectFullLeaderboardResponse(opts.betaTarget)
             end
             return sent
         end
-        Overlord.BetaNetwork:Broadcast("SR", payload)
+        Overlord.Relay:Broadcast("SR", payload)
     end
     -- Une SR locale partagee remplit deja le role de la prochaine vague periodique.
     -- La noter avant les transports evite qu'un ticker decale de quelques secondes
@@ -1202,8 +1202,8 @@ end
 
 function Overlord.Sync:ConsumeExpectedFullLeaderboardResponse(msgType, sender, channel)
     if self.IsUnauthenticatedRelayOrigin and self:IsUnauthenticatedRelayOrigin(sender) then return false end
-    if channel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsDispatching(sender)
-        and Overlord.BetaNetwork:IsTargetedDispatch() then channel = "WHISPER" end
+    if channel == "BETA" and Overlord.Relay and Overlord.Relay:IsDispatching(sender)
+        and Overlord.Relay:IsTargetedDispatch() then channel = "WHISPER" end
     if channel ~= "WHISPER" or (msgType ~= "LK" and msgType ~= "LC" and msgType ~= "LR") then
         return false
     end
@@ -1232,8 +1232,8 @@ end
 -- pour un sujet deja connu.
 function Overlord.Sync:HasExpectedFullLeaderboardResponse(sender, channel)
     if self.IsUnauthenticatedRelayOrigin and self:IsUnauthenticatedRelayOrigin(sender) then return false end
-    if channel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsDispatching(sender)
-        and Overlord.BetaNetwork:IsTargetedDispatch() then channel = "WHISPER" end
+    if channel == "BETA" and Overlord.Relay and Overlord.Relay:IsDispatching(sender)
+        and Overlord.Relay:IsTargetedDispatch() then channel = "WHISPER" end
     if channel ~= "WHISPER" then return false end
     local key = self:ExpectedFullLeaderboardResponseKey(sender)
     local expected = key and priv.expectedFullLeaderboardResponses[key] or nil
@@ -1305,7 +1305,7 @@ local function CampaignSubjects()
     return subjectTotals
 end
 local function NoteClamp(sync, statName, sender, blameOwner, reason)
-    local betaNet = Overlord.BetaNetwork
+    local betaNet = Overlord.Relay
     if betaNet and betaNet.stats then betaNet.stats[statName] = (betaNet.stats[statName] or 0) + 1 end
     if blameOwner then sync:NoteSuspiciousSender(sender, reason) end
 end
@@ -1421,7 +1421,7 @@ function Overlord.Sync:NoteThirdPartyKillTotal(playerName, total, sender)
     local allowed = st.ownClaim + math.floor(math.max(0, now - st.ownAt) * INFLATION_RATE) + INFLATION_MARGIN
     if total <= allowed then return false end
     local via = self:BurstLimiterKey(sender)
-    local betaNet = Overlord.BetaNetwork
+    local betaNet = Overlord.Relay
     if betaNet and betaNet.stats then
         betaNet.stats.thirdPartyTotalsAboveOwner = (betaNet.stats.thirdPartyTotalsAboveOwner or 0) + 1
     end
@@ -1459,7 +1459,7 @@ end
 -- Cle du limiteur de rafale : le dernier saut authentifie. Pour une origine
 -- relayee, c'est la passerelle (context.gateway) ; sinon l'expediteur lui-meme.
 function Overlord.Sync:BurstLimiterKey(sender)
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     if net and net.IsRelayedOrigin and net:IsRelayedOrigin(sender) then
         local gateway = net.context and net.context.gateway
         if type(gateway) == "string" and gateway ~= "" then return "via:" .. gateway end
@@ -1628,7 +1628,7 @@ function Overlord.Sync:CommitZaFlipClaims(held, confirmed, sender)
             if count >= ZA_FLIP_MAX and oldestId and not claims[flip.zoneId] then claims[oldestId] = nil end
             claims[flip.zoneId] = { owner = flip.owner, ct = flip.ct, sender = senderKey, firstAt = now, at = now }
         end
-        local betaNet = Overlord.BetaNetwork
+        local betaNet = Overlord.Relay
         if betaNet and betaNet.stats then
             betaNet.stats.zaFlipsHeld = (betaNet.stats.zaFlipsHeld or 0) + 1
         end
@@ -1745,8 +1745,8 @@ end
 -- point vers quelques voisins directs (reponse garantie) et la carte periodique.
 function Overlord.Sync:SendLoginCatchupSync()
     if Overlord.InstanceSuspended or IsInInstance() then return 0 end
-    local betaSent = Overlord.BetaNetwork
-        and Overlord.BetaNetwork:Broadcast("SR", SRPayload("T")) or 0
+    local betaSent = Overlord.Relay
+        and Overlord.Relay:Broadcast("SR", SRPayload("T")) or 0
     self:ScheduleBetaPeerLoginCatchup()
     self:SchedulePeriodicMapCatchup()
     return betaSent
@@ -1763,7 +1763,7 @@ Overlord.Sync.BETA_LOGIN_CATCHUP_RETRY_DELAY = 20
 Overlord.Sync.BETA_LOGIN_CATCHUP_MAX_ATTEMPTS = 3
 
 function Overlord.Sync:ScheduleBetaPeerLoginCatchup()
-    if not Overlord.BetaNetwork then return false end
+    if not Overlord.Relay then return false end
     if self._betaLoginCatchupScheduled then return false end
     self._betaLoginCatchupScheduled = true
     C_Timer.After(self.BETA_LOGIN_CATCHUP_FIRST_DELAY or 12, function()
@@ -1787,7 +1787,7 @@ function Overlord.Sync:GetBetaPeerFaction(name)
 end
 
 function Overlord.Sync:RunBetaPeerLoginCatchup(attempt)
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     if not net or Overlord.InstanceSuspended or IsInInstance() then
         self._betaLoginCatchupScheduled = false
         return 0
@@ -1859,7 +1859,7 @@ function Overlord.Sync:SchedulePeriodicMapCatchup()
 end
 
 function Overlord.Sync:RunPeriodicMapCatchup()
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     if not net or Overlord.InstanceSuspended or IsInInstance() then return false end
     -- A map received within the interval skips this pull. Tried at 60 s in 1.2.4
     -- testing: every client pulled far more often and full replies flooded the relay.
@@ -1898,7 +1898,7 @@ end
 
 -- Envoi : priorite GROUPE (RAID/PARTY) pour que la sync marche cross-realm, sinon canal Overlord (meme royaume uniquement).
 function Overlord.Sync:Send(msgType, data, groupOnly)
-    if Overlord.BetaNetwork and Overlord.BetaNetwork:IsEcho(msgType, data) then return false end
+    if Overlord.Relay and Overlord.Relay:IsEcho(msgType, data) then return false end
     if self:RelayAlreadyCarries(msgType, data) then return true end
     if Overlord.InstanceSuspended then return end
     -- Filet de securite : IsInInstance/GetInstanceInfo peuvent confirmer une instance
@@ -1947,7 +1947,7 @@ end
 Overlord.Sync.RELAY_DEDUP_KINDS = { K = true, SR = true }
 function Overlord.Sync:RelayAlreadyCarries(msgType, data)
     if not self.RELAY_DEDUP_KINDS[msgType] then return false end
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     return net ~= nil and net.CarriesBroadcast ~= nil and net:CarriesBroadcast(msgType, data) == true
 end
 
@@ -2118,7 +2118,7 @@ end
 
 -- Envoi supplementaire au canal (pour visibilite cross-faction : ennemis voient captures/zones en cours)
 function Overlord.Sync:SendToChannel(msgType, data, critical)
-    if Overlord.BetaNetwork and Overlord.BetaNetwork:IsEcho(msgType, data) then return false end
+    if Overlord.Relay and Overlord.Relay:IsEcho(msgType, data) then return false end
     if self:RelayAlreadyCarries(msgType, data) then return true end
     if Overlord.InstanceSuspended or IsInInstance() then return false end
     local channelId = self:GetChannelId()
@@ -2319,9 +2319,9 @@ function Overlord.Sync:SendWhisper(msgType, data, target, direct)
     -- far capturers then answered every observer in full and flooded the relay.
     -- A map or history request opens this peer's window for keep/outpost claims
     -- (1.7.2): only a reply we asked for may carry a capture we did not witness.
-    if Overlord.BetaNetwork and not direct
-        and msgType ~= "R1" and msgType ~= "BF" and Overlord.BetaNetwork:IsPeer(target) then
-        local queued = Overlord.BetaNetwork:Send(msgType, data or "", target)
+    if Overlord.Relay and not direct
+        and msgType ~= "R1" and msgType ~= "BF" and Overlord.Relay:IsPeer(target) then
+        local queued = Overlord.Relay:Send(msgType, data or "", target)
         if queued and msgType == "SR" and self.NoteOutpostClaimPeer then self:NoteOutpostClaimPeer(target, data) end
         return queued
     end
@@ -2550,8 +2550,8 @@ function Overlord.Sync:GetOnlineBNetPlayerFaction(playerName)
 end
 
 function Overlord.Sync:SendToBNetFriends(msgType, data)
-    if Overlord.BetaNetwork then
-        return Overlord.BetaNetwork:Broadcast(msgType, data or "")
+    if Overlord.Relay then
+        return Overlord.Relay:Broadcast(msgType, data or "")
     end
     local friends = GetBNetFriendsInWoW()
     for idx, gameAccountID in ipairs(friends) do
@@ -2572,8 +2572,8 @@ function Overlord.Sync:OnBNetMessage(message, senderID)
     local msgType, rest = strsplit(":", message, 2)
     if not rest then return end
     -- Any Overlord message proves a live bridge (relay ranking of friends).
-    if Overlord.BetaNetwork and Overlord.BetaNetwork.NoteBNetHeard then
-        Overlord.BetaNetwork:NoteBNetHeard(senderID)
+    if Overlord.Relay and Overlord.Relay.NoteBNetHeard then
+        Overlord.Relay:NoteBNetHeard(senderID)
     end
 
     -- R2 = enveloppe du relais : R2:<band>:BR|BF:<paquet>
@@ -2603,10 +2603,10 @@ end
 
 -- Dispatch des messages BNet recus (appele sous pcall depuis OnBNetMessage).
 function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
-    if msgType == "BR" and Overlord.BetaNetwork then
-        return Overlord.BetaNetwork:Receive(payload, ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
-    elseif msgType == "BF" and Overlord.BetaNetwork then
-        return Overlord.BetaNetwork:ReceiveFragment(payload, ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
+    if msgType == "BR" and Overlord.Relay then
+        return Overlord.Relay:Receive(payload, ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
+    elseif msgType == "BF" and Overlord.Relay then
+        return Overlord.Relay:ReceiveFragment(payload, ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
     end
     if self.SenderBurstShouldDrop and self:SenderBurstShouldDrop(self:BurstLimiterKey(sender), msgType) then return end
     if msgType == "K" then
@@ -2680,14 +2680,14 @@ end
 -- Enveloppe Battle.net du relais : R2:<band>:BR|BF:<wire>. Le pair BNet authentifie
 -- le dernier saut ; l'auteur d'origine est dans le paquet relais.
 function Overlord.Sync:OnReceiveR2Relay(senderID, band, innerMsg)
-    if not innerMsg or not Overlord.BetaNetwork then return end
+    if not innerMsg or not Overlord.Relay then return end
     local envelope = innerMsg:sub(1, 3)
     if envelope ~= "BR:" and envelope ~= "BF:" then return end
     if not IsCompatibleForeverBand(band) then return end
     if envelope == "BF:" then
-        return Overlord.BetaNetwork:ReceiveFragment(innerMsg:sub(4), ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
+        return Overlord.Relay:ReceiveFragment(innerMsg:sub(4), ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
     end
-    return Overlord.BetaNetwork:Receive(innerMsg:sub(4), ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
+    return Overlord.Relay:Receive(innerMsg:sub(4), ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
 end
 
 function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
@@ -2696,9 +2696,9 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
     -- GUILD/SAY/YELL etait reexpedie par chaque auditeur sur le canal et le groupe.
     if channel ~= "CHANNEL" and channel ~= "WHISPER" and channel ~= "PARTY"
         and channel ~= "RAID" and channel ~= "BETA" then return end
-    if channel == "BETA" and (not Overlord.BetaNetwork or not Overlord.BetaNetwork:IsDispatching(sender)) then return end
-    if message and message:sub(1, 3) == "BF:" and Overlord.BetaNetwork then
-        return Overlord.BetaNetwork:ReceiveFragment(message:sub(4), sender, channel)
+    if channel == "BETA" and (not Overlord.Relay or not Overlord.Relay:IsDispatching(sender)) then return end
+    if message and message:sub(1, 3) == "BF:" and Overlord.Relay then
+        return Overlord.Relay:ReceiveFragment(message:sub(4), sender, channel)
     end
 
     if self:IsSenderLocalPlayer(sender) then return end
@@ -2706,8 +2706,8 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
     -- Tracker les joueurs Overlord actifs pour la detection d'events massifs (80v80 sans raid)
     -- Une copie relayee recue directement de son auteur (canal/groupe) remplace
     -- la copie directe supprimee : elle compte pour la detection d'event massif.
-    if channel ~= "BETA" or (Overlord.BetaNetwork and Overlord.BetaNetwork.IsDirectLocalDispatch
-        and Overlord.BetaNetwork:IsDirectLocalDispatch()) then
+    if channel ~= "BETA" or (Overlord.Relay and Overlord.Relay.IsDirectLocalDispatch
+        and Overlord.Relay:IsDirectLocalDispatch()) then
         RecordNearbySender(sender)
     end
 
@@ -3304,7 +3304,7 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
     -- Sans resolution fiable BNet -> personnage courant, un K BNet n'est pas une preuve
     -- d'identite. Les rattrapages cross-realm passent par les snapshots SR/LK.
     if isBNetRelay then return end
-    -- Origine BetaNetwork relayee : nom choisi par la passerelle. Ni credit, ni
+    -- Origine Relay relayee : nom choisi par la passerelle. Ni credit, ni
     -- quarantaine (elle viserait le nom usurpe, pas le forgeur). Le score d'un
     -- joueur distant arrive par les snapshots LK.
     if self.IsUnauthenticatedRelayOrigin and self:IsUnauthenticatedRelayOrigin(sender) then return end
@@ -3374,8 +3374,8 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
     Overlord.Leaderboard:SetPlayerKills(playerName, totalKills, true)
     -- An opposite-faction owner reaches only its own Battle.net friends: this
     -- client is the bridge and passes the accepted total on to its own faction.
-    if Overlord.BetaNetwork and Overlord.BetaNetwork.NoteOwnerKill then
-        pcall(Overlord.BetaNetwork.NoteOwnerKill, Overlord.BetaNetwork, playerName, faction,
+    if Overlord.Relay and Overlord.Relay.NoteOwnerKill then
+        pcall(Overlord.Relay.NoteOwnerKill, Overlord.Relay, playerName, faction,
             totalKills, totalBefore, classVerified and class or "", localeVerified and locTag or "",
             remoteEpoch, bucketEpochToken, levelToken)
     end
@@ -5031,10 +5031,10 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         end
     end
     if channel == "BETA" then
-        if not Overlord.BetaNetwork or not Overlord.BetaNetwork:IsDispatching(sender) then return end
+        if not Overlord.Relay or not Overlord.Relay:IsDispatching(sender) then return end
         -- Point-to-point catch-up (1.2.4): a request that crossed a relay is not
         -- answered; its reply would have to cross the same relays back.
-        local context = Overlord.BetaNetwork.context
+        local context = Overlord.Relay.context
         if (tonumber(context and context.hops) or 0) > 0 then return end
         -- 1.3.6: an opposite-faction Battle.net friend asking first-hand (its faction
         -- comes from Battle.net, not from the packet) also gets our victories.
@@ -5054,7 +5054,7 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         -- Battle.net broadcast in full (tried in 1.2.4 testing) made every friend
         -- reply at once; the replies saturated the relay (24 % losses in 8 min).
         -- A lone requester is still covered by its targeted login/periodic pulls.
-        viaBetaBroadcast = not Overlord.BetaNetwork:IsTargetedDispatch()
+        viaBetaBroadcast = not Overlord.Relay:IsTargetedDispatch()
         channel = viaBetaBroadcast and "CHANNEL" or "WHISPER"
         replyToOverride = sender
     end
@@ -5153,7 +5153,7 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
     -- Viser ~2 repondants parmi les voisins directs du demandeur (seuls ceux-ci
     -- recoivent encore la demande en direct) ; les SR cibles restent garantis.
     if viaBetaBroadcast and not quarantinedMapOnly then
-        local betaNet = Overlord.BetaNetwork
+        local betaNet = Overlord.Relay
         local directCount = betaNet and (betaNet.CountDirectPeers and betaNet:CountDirectPeers()
             or betaNet.GetDirectPeers and #betaNet:GetDirectPeers()) or 0
         respondChance = math.min(respondChance, math.max(0.05, 2 / math.max(1, directCount)))
@@ -5832,7 +5832,7 @@ function Overlord.Sync:OnReceiveCaptureNetworkProbe(
     holdTime, holdRequirement, captureBaseline, sender, sourceChannel)
     local baseline = tonumber(captureBaseline)
     local ceiling = tonumber(Overlord.PLAUSIBLE_SYNC_CAPTURE_CEILING) or 500
-    if (sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) or type(probeId) ~= "string"
+    if (sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.Relay and Overlord.Relay:IsTargetedDispatch())) or type(probeId) ~= "string"
         or not probeId:match("^[0-9a-f]+$") or #probeId > 24
         or (tonumber(holdTime) or 0) > 10
         or not baseline or baseline < 0 or baseline ~= math.floor(baseline)
@@ -5903,7 +5903,7 @@ function Overlord.Sync:OnReceiveCaptureNetworkProbe(
 end
 
 function Overlord.Sync:OnReceiveCaptureNetworkProbeReply(payload, sender, sourceChannel)
-    if (sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) or type(payload) ~= "string" or #payload > 80 then return end
+    if (sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.Relay and Overlord.Relay:IsTargetedDispatch())) or type(payload) ~= "string" or #payload > 80 then return end
     local probeId, waveId = strsplit(":", payload)
     if not probeId or not probeId:match("^[0-9a-f]+$")
         or not waveId or not waveId:match("^[%w_-]+$") then return end
@@ -6090,7 +6090,7 @@ function Overlord.Sync:ActivateCaptureNetworkRouteCommit(row)
 end
 
 function Overlord.Sync:OnReceiveCaptureNetworkRouteCommit(payload, sender, sourceChannel)
-    if (sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) or type(payload) ~= "string" or #payload > 240 then return end
+    if (sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.Relay and Overlord.Relay:IsTargetedDispatch())) or type(payload) ~= "string" or #payload > 240 then return end
     local probeId, routeId, waveId, slotRaw, sizeRaw, baselineRaw,
         predecessorName, successorName =
         strsplit(":", payload)
@@ -6179,7 +6179,7 @@ function Overlord.Sync:OnReceiveCaptureNetworkRouteCommit(payload, sender, sourc
 end
 
 function Overlord.Sync:OnReceiveCaptureNetworkRouteAck(payload, sender, sourceChannel)
-    if (sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) or type(payload) ~= "string" or #payload > 90 then return end
+    if (sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.Relay and Overlord.Relay:IsTargetedDispatch())) or type(payload) ~= "string" or #payload > 90 then return end
     local routeId, waveId, senderSlotRaw = strsplit(":", payload)
     local senderSlot = math.floor(tonumber(senderSlotRaw) or 0)
     if not routeId or not routeId:match("^[0-9a-f]+$")
@@ -6507,7 +6507,7 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
     -- Un W honnete est toujours un addon whisper cible. Ignorer le marqueur sur
     -- PARTY/RAID/CHANNEL/BNet empeche un diffuseur de designer tous les receveurs
     -- et garantit la borne stricte de trois temoins engages.
-    if (sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) then
+    if (sourceChannel ~= "WHISPER" and not (sourceChannel == "BETA" and Overlord.Relay and Overlord.Relay:IsTargetedDispatch())) then
         zsNetworkWitness, zsNetworkRouteId = nil, nil
     end
     local zsCapturerShard = tonumber(zsCapturerShardStr)
@@ -7743,7 +7743,7 @@ function Overlord.Sync:OnReceiveZoneAll(
         and GetTime() - (self._lastAcceptedZaAt or -math.huge) < 30
         and next(priv.zaFlipClaims) == nil then
         if snapshotGlobal then self._lastFullZaAt = GetTime() end
-        local betaNet = Overlord.BetaNetwork
+        local betaNet = Overlord.Relay
         if betaNet and betaNet.stats then
             betaNet.stats.zaIdenticalSkipped = (betaNet.stats.zaIdenticalSkipped or 0) + 1
         end
@@ -8711,7 +8711,7 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     Overlord.Leaderboard:SetPlayerKills(playerName, kills, true)
     -- 1.3.2 live-score bridge: an enemy total from a Battle.net friend goes on to our
     -- channel; a total heard on the channel cancels our own pending copy of it.
-    local betaNet = Overlord.BetaNetwork
+    local betaNet = Overlord.Relay
     -- /ov network: enemy totals that raised our ranking, by path (channel or friend).
     if betaNet and betaNet.stats and (tonumber(kills) or 0) > killsBefore and killsBefore > 0
         and (faction == "Alliance" or faction == "Horde") and faction ~= Overlord.PlayerFaction then
@@ -8983,8 +8983,8 @@ local lastBNetKillBroadcast = 0
 -- K transporte un total absolu, donc les doublons sont absorbes par SetPlayerKills(max).
 function Overlord.Sync:SendKillBroadcast(payload)
     if not payload or payload == "" then return end
-    if Overlord.BetaNetwork then
-        Overlord.BetaNetwork:Broadcast("K", payload)
+    if Overlord.Relay then
+        Overlord.Relay:Broadcast("K", payload)
     end
     local msg = "K:" .. payload
     if self:IsLargeEvent() then
@@ -9378,7 +9378,7 @@ function Overlord.Sync:BroadcastCapture(zoneId, completedRequirement)
             if not z.isCapital then
                 -- File relais "chaude" = urgent + bulk : les files de rattrapage et d'etat
                 -- (pages SR, VB) gonflent le total sans que le relais sature.
-                local net = Overlord.BetaNetwork
+                local net = Overlord.Relay
                 local queue = net and net.GetQueueSummary and net:GetQueueSummary()
                 if not queue then return end
                 local hot = (tonumber(queue.total) or 0) - (tonumber(queue.catchup) or 0)
@@ -10214,7 +10214,7 @@ end
 -- Une page ZA en whisper provenant d'une cible attendue constitue l'ACK du dump SR.
 -- Le simple succes syntaxique de SendAddonMessage ne ferme plus le rattrapage.
 function Overlord.Sync:NoteRaidLateJoinCatchUpResponse(sender, msgType, channel, payload)
-    if (channel ~= "WHISPER" and not (channel == "BETA" and Overlord.BetaNetwork and Overlord.BetaNetwork:IsTargetedDispatch())) or msgType ~= "ZA" or not sender or sender == "" then
+    if (channel ~= "WHISPER" and not (channel == "BETA" and Overlord.Relay and Overlord.Relay:IsTargetedDispatch())) or msgType ~= "ZA" or not sender or sender == "" then
         return false
     end
     local snapshotId, pageIndex, pageCount, body =

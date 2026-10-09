@@ -33,8 +33,8 @@ C_BattleNet = {
     GetFriendNumGameAccounts = function() return 1 end,
     GetFriendGameAccountInfo = function(i) return bnetGames[friendOrder[i]] end,
 }
-assert(loadfile("SyncBetaNetwork.lua"))()
-local s, net = Overlord.Sync, Overlord.BetaNetwork
+assert(loadfile("SyncRelay.lua"))()
+local s, net = Overlord.Sync, Overlord.Relay
 Overlord.PlayerFaction = "Alliance"
 local targets = s:GetBetaBNetTargets()
 assert(#targets == 2 and targets[1] == 123 and targets[2] == 789,

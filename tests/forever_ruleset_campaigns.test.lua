@@ -5,7 +5,7 @@
 
 -- 2. Relay packets and Battle.net bands of another ruleset are refused ------------
 assert(loadfile("tests/forever_beta_integration.test.lua"))()
-local s, net = Overlord.Sync, Overlord.BetaNetwork
+local s, net = Overlord.Sync, Overlord.Relay
 -- A packet passes the pool check when the relay counts it as received.
 local function received() return net.stats.received end
 local serial = 0

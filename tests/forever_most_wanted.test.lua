@@ -131,14 +131,14 @@ CreateFrame, C_NamePlate = nil, nil
 assert(loadfile("NetworkHealth.lua"))()
 local NH = Overlord.NetworkHealth
 Overlord.Sync._addonSendStats = { CHANNEL = { ok = 100, refused = 0 }, WHISPER = { ok = 50, refused = 0 } }
-Overlord.BetaNetwork = { stats = { sent = 1000, dropped = 2, received = 900 },
+Overlord.Relay = { stats = { sent = 1000, dropped = 2, received = 900 },
     GetQueueSummary = function() return { total = 1, catchup = 0, catchupMax = 16, state = 0, stateMax = 24 } end }
 Overlord.Sync.GetPagedLeaderboardSummary = function()
     return { status = "interrupted (no reply); bucket retained", pages = 3, rows = 30, protocol = 6 }
 end
 local level, rows, overall = NH:IndicatorLevel()
 assert(level == "ok" and overall == "warn" and #rows == 4, "an interrupted catch-up colored the indicator")
-Overlord.BetaNetwork.stats.dropped = 30 -- 3 % of 1000
+Overlord.Relay.stats.dropped = 30 -- 3 % of 1000
 level = NH:IndicatorLevel()
 assert(level == "warn", "relay losses did not turn the indicator orange")
 print("Most Wanted: top five enemies, alert delays, instance cutoff, toggle; network indicator levels OK")

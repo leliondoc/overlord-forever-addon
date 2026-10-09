@@ -37,7 +37,7 @@ local function NotForwarded(stats)
 end
 
 local function CurrentTotals()
-    local sync, net = Overlord.Sync, Overlord.BetaNetwork
+    local sync, net = Overlord.Sync, Overlord.Relay
     local totals = {}
     local sendStats = sync and sync._addonSendStats
     for _, chatType in ipairs(SEND_TYPES) do
@@ -73,7 +73,7 @@ end
 -- /ov network. Refus Blizzard et pertes du relais : 10 dernieres minutes ; un refus
 -- isole ou 1 % au plus reste vert.
 function NH:Compute()
-    local sync, net = Overlord.Sync, Overlord.BetaNetwork
+    local sync, net = Overlord.Sync, Overlord.Relay
     local rows, overall = {}, "ok"
     local function add(id, level, title, text)
         rows[#rows + 1] = { id = id, level = level, title = title, text = text }

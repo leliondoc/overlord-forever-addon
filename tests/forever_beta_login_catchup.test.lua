@@ -15,8 +15,8 @@ local function drain()
 end
 local peers = {}
 local broadcasts = 0
-Overlord.BetaNetworkEnabled = true
-Overlord.BetaNetwork = {
+Overlord.RelayEnabled = true
+Overlord.Relay = {
     Broadcast = function(_, kind) if kind == "SR" then broadcasts = broadcasts + 1 end return 1 end,
     GetPeers = function() return peers end,
     GetDirectPeers = function() return peers end,

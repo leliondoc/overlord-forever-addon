@@ -10,7 +10,7 @@ C_Timer.After = function(delay, callback) timers[#timers + 1] = { delay = delay,
 local targeted = false
 local peers = {}
 for i = 1, 30 do peers[i] = "Peer " .. string.char(64 + i % 26 + 1) .. "x" end
-Overlord.BetaNetwork = {
+Overlord.Relay = {
     IsDispatching = function() return true end,
     IsTargetedDispatch = function() return targeted end,
     GetPeers = function() return peers end,
@@ -53,12 +53,12 @@ release()
 
 -- Point to point (1.2.4): a request that crossed a relay is never answered,
 -- targeted or not, since the reply would have to cross the same relays back.
-Overlord.BetaNetwork.context = { hops = 2 }
+Overlord.Relay.context = { hops = 2 }
 targeted, roll = true, 0.01
 sync:OnSyncRequest("Far Joiner", payload, "BETA")
 assert(not responded(), "A relayed request was answered")
 release()
-Overlord.BetaNetwork.context = { hops = 0 }
+Overlord.Relay.context = { hops = 0 }
 
 math.random = realRandom
 print("Forever beta SR responders: targeted requests answered, broadcast bounded to ~2 of 30 direct peers, relayed requests ignored OK")

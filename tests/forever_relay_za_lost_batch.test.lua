@@ -21,7 +21,7 @@ C_Timer = { After = function(d, f) pending[#pending + 1] = { at = now + d, run =
     NewTicker = function() return {} end }
 local delivered = {}
 local function client(name)
-    local a = { Version = "1.0.0", BetaNetworkEnabled = true, PlayerFaction = "Alliance",
+    local a = { Version = "1.0.0", RelayEnabled = true, PlayerFaction = "Alliance",
         RealmPools = { GetOverlordPoolTag = function() return "global" end,
             NormalizeRegionPool = function(_, p) return p == "global" and p or "" end }, Sync = {} }
     local s = a.Sync
@@ -35,11 +35,11 @@ local function client(name)
     function s:SendWhisper(kind, fragment, target) delivered[#delivered + 1] = fragment; return true end
     function s:OnAddonMessage() end
     Overlord = a
-    assert(loadfile(os.getenv("SBN_FILE") or "SyncBetaNetwork.lua"))()
+    assert(loadfile(os.getenv("SBN_FILE") or "SyncRelay.lua"))()
     return a
 end
 local relay = client("Bridge Tester")
-local net = relay.BetaNetwork
+local net = relay.Relay
 local function route() net.peers["reader tester"] = { name = "Reader Tester", at = now,
     via = "Reader Tester", transport = "WHISPER", hops = 1 } end
 local serial = 0

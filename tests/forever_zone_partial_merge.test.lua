@@ -98,7 +98,7 @@ deliver(freshNeutralPages)
 assert(state(X) == "Alliance@" .. (EPOCH + 2000), "Unproven fresh N was applied over a local capture: " .. state(X))
 assert(state(Y) == "Horde@" .. (EPOCH + 2500), "Unproven fresh N vetoed the rest of the snapshot: " .. state(Y))
 
--- (3) C relay re-send. Real BetaNetwork, fake clock, one Battle.net bridge friend.
+-- (3) C relay re-send. Real Relay, fake clock, one Battle.net bridge friend.
 function GetChannelName() return 0 end
 securecall = securecall or function(fn, ...) return fn(...) end
 C_Club = { GetSubscribedClubs = function() return {} end }
@@ -113,8 +113,8 @@ local clock, timers = 1000, {}
 GetTime = function() return clock end
 C_Timer.After = function(delay, fn) timers[#timers + 1] = { at = clock + delay, fn = fn } end
 assert(loadfile("ZoneCaptureLease.lua"))()
-assert(loadfile("SyncBetaNetwork.lua"))()
-Overlord.BetaNetworkEnabled, Overlord.CommunityModeEnabled = true, false
+assert(loadfile("SyncRelay.lua"))()
+Overlord.RelayEnabled, Overlord.CommunityModeEnabled = true, false
 Overlord.InActiveFront, Overlord.InstanceSuspended = true, false
 local relayed = {}
 function sync:SendToBNet(_, _, data)
@@ -194,8 +194,8 @@ assert(#relayed == beforeRetake, "a late C copy was sent while we held another c
 busy.holdAuthorityLocal, busy.status = nil, "locked"
 -- Each relay copy floods the whole relay: with a busy relay queue an ordinary point
 -- keeps its immediate copy and retry but skips the late one; a capital always sends it.
-local realSummary = Overlord.BetaNetwork.GetQueueSummary
-Overlord.BetaNetwork.GetQueueSummary = function() return { total = 40 } end
+local realSummary = Overlord.Relay.GetQueueSummary
+Overlord.Relay.GetQueueSummary = function() return { total = 40 } end
 timers, relayed = {}, {}
 zone.owner, zone.status, zone.capturedTime, zone.updatedAt = "Alliance", "captured", time(), time()
 sync:BroadcastCapture(X, 120)
@@ -217,7 +217,7 @@ Overlord.CaptureLease.NormalizeCaptureRequirement = realRequirement
 zone.isCapital = nil
 -- Catch-up and state lanes (SR pages, VB) do not make the relay hot: with a quiet
 -- urgent/bulk queue the late copy of an ordinary point is still sent.
-Overlord.BetaNetwork.GetQueueSummary = function() return { total = 40, catchup = 24, state = 12 } end
+Overlord.Relay.GetQueueSummary = function() return { total = 40, catchup = 24, state = 12 } end
 timers, relayed = {}, {}
 zone.owner, zone.status, zone.capturedTime, zone.updatedAt = "Alliance", "captured", time() + 2, time() + 2
 sync:BroadcastCapture(X, 120)
@@ -225,5 +225,5 @@ runTimersUntil(clock + 10)
 beforeRetake = #relayed
 runTimersUntil(clock + 60)
 assert(#relayed == beforeRetake + 1, "catch-up/state backlog suppressed the late copy of an ordinary point")
-Overlord.BetaNetwork.GetQueueSummary = realSummary
+Overlord.Relay.GetQueueSummary = realSummary
 print("Forever zone partial merge: stale entries skipped per entry, guards kept, C relay retried beyond coalescing OK")

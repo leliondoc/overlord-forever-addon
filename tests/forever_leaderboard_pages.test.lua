@@ -24,7 +24,7 @@ local function advance(seconds)
     end
     now = stop
     for _, c in ipairs(clients) do
-        assert(not c.Overlord.BetaNetwork.stats.lastError, c.Overlord.BetaNetwork.stats.lastError)
+        assert(not c.Overlord.Relay.stats.lastError, c.Overlord.Relay.stats.lastError)
     end
 end
 local function copy(t)
@@ -93,9 +93,9 @@ local function client(name, channel)
     end
     s.SendToBNet = function(_, other, kind, wire)
         if kind == "BR" then
-            other.Overlord.BetaNetwork:Receive(wire, name, "BNET", e)
+            other.Overlord.Relay:Receive(wire, name, "BNET", e)
         else
-            other.Overlord.BetaNetwork:ReceiveFragment(wire, name, "BNET", e)
+            other.Overlord.Relay:ReceiveFragment(wire, name, "BNET", e)
         end
         return true
     end
@@ -123,7 +123,7 @@ local function client(name, channel)
     lb._storageBound = true
     e.loadfile("SyncHistoryCatchup.lua")()
     e.loadfile("SyncLeaderboardPages.lua")()
-    e.loadfile("SyncBetaNetwork.lua")()
+    e.loadfile("SyncRelay.lua")()
     clients[#clients + 1] = e
     return e
 end
@@ -138,7 +138,7 @@ b.friends, c.friends = { c }, { b }
 local PULLER, SOURCE = b, c
 for _, e in ipairs(clients) do e.Overlord.Sync.SendSyncRequest = function() return true end end
 local function heartbeat()
-    for _, e in ipairs(clients) do e.Overlord.BetaNetwork:Broadcast("NH", "1.0.35~lr~lp6") end
+    for _, e in ipairs(clients) do e.Overlord.Relay:Broadcast("NH", "1.0.35~lr~lp6") end
     later(45, heartbeat)
 end
 heartbeat()
@@ -158,7 +158,7 @@ local done, supported
 local receiver = PULLER.Overlord.Sync.OnReceiveLeaderboardKills
 PULLER.Overlord.Sync.OnReceiveLeaderboardKills = function(self, payload, sender, channel)
     appliedThisCallback = appliedThisCallback + 1
-    assert(not PULLER.Overlord.BetaNetwork:IsRelayedOrigin(sender), "A direct page was presented as relayed")
+    assert(not PULLER.Overlord.Relay:IsRelayedOrigin(sender), "A direct page was presented as relayed")
     return receiver(self, payload, sender, channel)
 end
 local send = SOURCE.Overlord.Sync.SendWhisper
@@ -201,7 +201,7 @@ for _, name in ipairs(names) do
     assert(PULLER.Overlord.Leaderboard.kills[name] == SOURCE.Overlord.Leaderboard.kills[name], "Missing: " .. name)
     assert(PULLER.Overlord.Leaderboard.playerInfo[name].guild == "Veteran Guild", "Missing guild: " .. name)
 end
-for _, e in ipairs(clients) do assert(e.Overlord.BetaNetwork.stats.dropped == 0, "Relay overflow") end
+for _, e in ipairs(clients) do assert(e.Overlord.Relay.stats.dropped == 0, "Relay overflow") end
 assert(PULLER.Overlord.Sync._pagedDelivery == nil, "Leaked authorization")
 assert(not PULLER.Overlord.Sync:IsExpectedPagedLeaderboardDelivery("LK", names[1], SOURCE.name, "BETA"))
 print("PASS: 5,000 filtered LK rows over a direct cross-faction Battle.net link; " .. diag)
@@ -376,7 +376,7 @@ local function pressure()
     if now >= pressureUntil then return end
     pressureSerial = pressureSerial + 1
     for _, bridge in ipairs({ b, c }) do
-        bridge.Overlord.BetaNetwork:Send('ZS', 'busy-bridge-' .. pressureSerial)
+        bridge.Overlord.Relay:Send('ZS', 'busy-bridge-' .. pressureSerial)
     end
     later(0.2, pressure)
 end

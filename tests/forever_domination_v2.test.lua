@@ -17,7 +17,7 @@ UIParent = frameStub()
 assert(loadfile("Ressources.lua"))()
 CreateFrame, UIParent = savedCreateFrame, savedUIParent
 
-local sync, net = Overlord.Sync, Overlord.BetaNetwork
+local sync, net = Overlord.Sync, Overlord.Relay
 local campaign = OverlordDB.lastResetTimestamp
 local S = campaign + 400000
 local server, clock = S, 5000

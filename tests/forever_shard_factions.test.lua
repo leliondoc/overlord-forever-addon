@@ -86,7 +86,7 @@ check('Retail Tester', nil, '|cffb8b8b8')
 check('Blue Stranger', nil, '|cffb8b8b8')
 check('Blue', nil, '|cffb8b8b8')
 -- A relayed Horde origin is not the Alliance character who forwarded it.
-Overlord.BetaNetwork = { context = { origin = 'Remote Tester', gateway = 'Blue Friend', hops = 2 } }
+Overlord.Relay = { context = { origin = 'Remote Tester', gateway = 'Blue Friend', hops = 2 } }
 check('Remote Tester', nil, '|cffb8b8b8')
 local reads, scans = unitReads, friendScans
 for _ = 1, 100 do resolve('Unknown Tester'); resolve('Red Tester') end

@@ -8,19 +8,19 @@ test("Forever uses no community: channel + Battle.net relay only", () => {
     const core = read("Core.lua");
     const pools = read("RealmPools.lua");
     const sync = read("Sync.lua");
-    const beta = read("SyncBetaNetwork.lua");
+    const beta = read("SyncRelay.lua");
 
     // 1.4.2: the community transport is removed, not just switched off. Presence
     // comes from the relay heartbeat only.
-    for (const [name, src] of [["Core.lua", core], ["Sync.lua", sync], ["SyncBetaNetwork.lua", beta],
+    for (const [name, src] of [["Core.lua", core], ["Sync.lua", sync], ["SyncRelay.lua", beta],
         ["SyncAux.lua", read("SyncAux.lua")]]) {
         assert.doesNotMatch(src, /CommunityModeEnabled|ScanCommunityMembers|C_Club\.\w+\(/, name);
     }
-    assert.match(core, /^Overlord\.BetaNetworkEnabled = true$/m);
+    assert.match(core, /^Overlord\.RelayEnabled = true$/m);
     // 1.4.0: one campaign per ruleset; PvP keeps the historical "global" pool.
     assert.match(pools, /pvp = "global"/);
     assert.match(pools, /function RealmPools:GetOverlordPoolTag\(\)[\s\S]*?RULESET_POOL\[/);
-    assert.match(beta, /addon\.BetaNetworkEnabled ~= false/);
+    assert.match(beta, /addon\.RelayEnabled ~= false/);
     assert.match(beta, /NormalizeRegionPool\(pool\)/);
 });
 

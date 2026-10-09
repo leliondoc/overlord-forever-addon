@@ -24,7 +24,7 @@ C_Timer = {
 local clients = {}
 local function client(name)
     local a = {
-        Version = "1.0.0", BetaNetworkEnabled = true,
+        Version = "1.0.0", RelayEnabled = true,
         PlayerFaction = "Alliance", name = name, received = {},
         RealmPools = {
             GetOverlordPoolTag = function() return "global" end,
@@ -47,7 +47,7 @@ local function client(name)
         assert(kind == "BF")
         for _, other in ipairs(clients) do
             if other.name == target then
-                other.BetaNetwork:ReceiveFragment(fragment, name, "WHISPER")
+                other.Relay:ReceiveFragment(fragment, name, "WHISPER")
                 return true
             end
         end
@@ -57,22 +57,22 @@ local function client(name)
         a.received[#a.received + 1] = { message = message, at = now }
     end
     Overlord = a
-    assert(loadfile("SyncBetaNetwork.lua"))()
+    assert(loadfile("SyncRelay.lua"))()
     clients[#clients + 1] = a
     return a
 end
 local gateway = client("Gateway Tester")
 local receiver = client("Reader Tester")
-gateway.BetaNetwork.peers["reader tester"] = {
+gateway.Relay.peers["reader tester"] = {
     name = receiver.name, at = now, via = receiver.name,
     transport = "WHISPER", hops = 1,
 }
 for i = 1, 98 do
-    assert(gateway.BetaNetwork:Send("LK", "v4-row-" .. i .. ":"
+    assert(gateway.Relay:Send("LK", "v4-row-" .. i .. ":"
         .. string.rep("l", 145), receiver.name))
 end
 local start = now
-assert(gateway.BetaNetwork:CanSendLeaderboardPage(),
+assert(gateway.Relay:CanSendLeaderboardPage(),
     "Borrowed legacy rows blocked the reserved paged stream")
 local packets = {
     { "HR", "6:Q:1:nonce:1:1:-:0:0:LK" },
@@ -81,14 +81,14 @@ local packets = {
     { "HB", "6:D:1:nonce:1:2:2:LK:two" },
 }
 for _, packet in ipairs(packets) do
-    assert(gateway.BetaNetwork:Send(packet[1], packet[2], receiver.name),
+    assert(gateway.Relay:Send(packet[1], packet[2], receiver.name),
         "Legacy LK backlog refused a paged packet")
 end
-assert(not gateway.BetaNetwork:CanSendLeaderboardPage(),
+assert(not gateway.Relay:CanSendLeaderboardPage(),
     "Paged producer bypassed its four-slot backpressure")
-assert(not gateway.BetaNetwork:Send("HB", "6:D:1:nonce:1:3:3:LK:overflow", receiver.name),
+assert(not gateway.Relay:Send("HB", "6:D:1:nonce:1:3:3:LK:overflow", receiver.name),
     "Paged packets exceeded their four-slot reservation")
-assert(gateway.BetaNetwork:Queue({
+assert(gateway.Relay:Queue({
     region = "global", id = "paged-terminal", at = time(),
     target = receiver.name, path = {gateway.name}, kind = "C",
     payload = "terminal-under-backlog",
@@ -106,13 +106,13 @@ local serial = 0
 local function feedLegacy()
     if now - start >= 40 then return end
     serial = serial + 1
-    gateway.BetaNetwork:Send("LK", "late-row-" .. serial .. ":"
+    gateway.Relay:Send("LK", "late-row-" .. serial .. ":"
         .. string.rep("l", 145), receiver.name)
     C_Timer.After(0.2, feedLegacy)
 end
 local function feedUrgent()
     if now - start >= 40 then return end
-    gateway.BetaNetwork:Send("ZS", "active:in_progress:0:400:A:" .. time())
+    gateway.Relay:Send("ZS", "active:in_progress:0:400:A:" .. time())
     C_Timer.After(0.2, feedUrgent)
 end
 C_Timer.After(0.2, feedLegacy)
@@ -135,7 +135,7 @@ for _, packet in ipairs(packets) do
 end
 assert(arrived["LK:v4-row-1:" .. string.rep("l", 145)],
     "Paged priority starved the protected legacy row")
-assert(refusedOnce and gateway.BetaNetwork.stats.refused >= 1,
+assert(refusedOnce and gateway.Relay.stats.refused >= 1,
     "Fixture did not exercise a refused copy while all four paged slots were full")
 assert(arrived["C:terminal-under-backlog"]
     and arrived["C:terminal-under-backlog"] - start < 2,
@@ -150,33 +150,33 @@ end
 -- The old source may have 32 relayed map pages and a borrowed LK tail waiting
 -- when an observer needs a fresh territorial map. A newer SR:T to the same
 -- target supersedes its unsent predecessor; no accepted ZA page is displaced.
-gateway.BetaNetwork.peers["reader tester"].at = now
+gateway.Relay.peers["reader tester"].at = now
 local mapStart, protectedLegacy, pages = now, {}, {}
 for i = 1, 16 do
     local row = "map-legacy-" .. i .. ":" .. string.rep("l", 145)
     protectedLegacy[#protectedLegacy + 1] = row
-    assert(gateway.BetaNetwork:Send("LK", row, receiver.name))
+    assert(gateway.Relay:Send("LK", row, receiver.name))
 end
 for i = 1, 32 do
     local page = "@G-sr-priority:" .. i .. ":32|" .. string.rep("z", 170)
     pages[#pages + 1] = page
-    assert(gateway.BetaNetwork:Queue({
+    assert(gateway.Relay:Queue({
         region = "global", id = "za-sr-priority-" .. i, at = time(),
         target = receiver.name, path = {"Origin Tester", gateway.name},
         kind = "ZA", payload = page,
     }, false))
 end
 for i = 1, 52 do
-    assert(gateway.BetaNetwork:Send("LK", "borrowed-" .. i .. ":"
+    assert(gateway.Relay:Send("LK", "borrowed-" .. i .. ":"
         .. string.rep("l", 145), receiver.name))
 end
 local oldRequest = "Alliance:1.0.0~1:0:::T"
 local newRequest = "Alliance:1.0.0~2:0:::T"
-assert(gateway.BetaNetwork:Send("SR", oldRequest, receiver.name),
+assert(gateway.Relay:Send("SR", oldRequest, receiver.name),
     "Full legacy/map queue refused targeted SR")
-assert(gateway.BetaNetwork:Send("SR", newRequest, receiver.name),
+assert(gateway.Relay:Send("SR", newRequest, receiver.name),
     "Repeated targeted SR was not coalesced")
-assert(gateway.BetaNetwork:Queue({
+assert(gateway.Relay:Queue({
     region = "global", id = "map-terminal", at = time(),
     target = receiver.name, path = {gateway.name}, kind = "C",
     payload = "terminal-with-map",
@@ -197,7 +197,7 @@ assert(mapArrived["SR:" .. newRequest]
     and mapArrived["SR:" .. newRequest] - mapStart < 5,
     "Targeted SR waited behind the old ZA/LK batch")
 assert(not mapArrived["SR:" .. oldRequest]
-    and (gateway.BetaNetwork.stats.mapRequestsCoalesced or 0) >= 1,
+    and (gateway.Relay.stats.mapRequestsCoalesced or 0) >= 1,
     "An unsent repeated map request was not coalesced")
 assert(mapArrived["C:terminal-with-map"]
     and mapArrived["C:terminal-with-map"] - mapStart < 2,
@@ -209,4 +209,4 @@ for i, page in ipairs(pages) do
     assert(mapArrived["ZA:" .. page], "Accepted map page was lost to SR at " .. i)
 end
 print(string.format("Beta paged/legacy contention: v6 passed 98 LK rows; %d/98 initial LK delivered, %d transport expirations; targeted SR preceded 32 ZA pages",
-    legacyDelivered, gateway.BetaNetwork.stats.expired or 0))
+    legacyDelivered, gateway.Relay.stats.expired or 0))

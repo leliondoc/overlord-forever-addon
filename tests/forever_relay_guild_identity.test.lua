@@ -33,8 +33,8 @@ function sync:SendToBNet() return true end
 function sync:OnAddonMessage(_, message) if message:find("GI", 1, true) then delivered = delivered + 1 end end
 function sync:SendSyncRequest() return true end
 function sync:SendToChannel() return true end
-assert(loadfile("SyncBetaNetwork.lua"))()
-local net = Overlord.BetaNetwork
+assert(loadfile("SyncRelay.lua"))()
+local net = Overlord.Relay
 net.peers["reader tester"] = {
     at = now, via = "Reader Tester", name = "Reader Tester", transport = "BNET", bnet = 1, hops = 1,
 }

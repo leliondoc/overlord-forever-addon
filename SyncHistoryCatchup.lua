@@ -516,7 +516,7 @@ end
 
 -- Voisins directs utilisables : ni nous-memes, ni penalises, ni annonces sans v7.
 local function DirectCandidates()
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     if not net or not net.GetDirectPeers then return {} end
     local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
     local now, out = GetTime(), {}
@@ -601,7 +601,7 @@ end
 -- it did (the next round fetches the rest of a long history).
 function sync:NoteOutpostHistoryDelivery(sender, fresh)
     -- A live row relayed from the same player is not the answer we asked for.
-    local context = Overlord.BetaNetwork and Overlord.BetaNetwork.context
+    local context = Overlord.Relay and Overlord.Relay.context
     if context and (tonumber(context.hops) or 0) > 0 then return false end
     local request = self._outpostHistoryRequest
     if not request or type(sender) ~= "string" or sender:lower() ~= request.peer
@@ -829,7 +829,7 @@ end
 -- mis de cote (penalite) ou trop anciens (v5) et le tour de rotation. Repond a
 -- "pourquoi pas mon ami Horde ?" sans deviner. Aucune mutation.
 function sync:GetCatchupNeighbourDiagnostics()
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     if not net or not net.GetDirectPeers then return "Catch-up neighbours: relay inactive." end
     local me = self.GetPlayerFullName and self:GetPlayerFullName() or ""
     local now = GetTime()

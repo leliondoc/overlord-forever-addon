@@ -22,7 +22,7 @@ local function advance(seconds)
     end
     now = stop
     for _, c in ipairs(clients) do
-        assert(not c.Overlord.BetaNetwork.stats.lastError, c.Overlord.BetaNetwork.stats.lastError)
+        assert(not c.Overlord.Relay.stats.lastError, c.Overlord.Relay.stats.lastError)
     end
 end
 local function client(name, channel, faction)
@@ -82,9 +82,9 @@ local function client(name, channel, faction)
     end
     s.SendToBNet = function(_, other, kind, wire)
         if kind == "BR" then
-            other.Overlord.BetaNetwork:Receive(wire, name, "BNET", e)
+            other.Overlord.Relay:Receive(wire, name, "BNET", e)
         else
-            other.Overlord.BetaNetwork:ReceiveFragment(wire, name, "BNET", e)
+            other.Overlord.Relay:ReceiveFragment(wire, name, "BNET", e)
         end
         return true
     end
@@ -107,7 +107,7 @@ local function client(name, channel, faction)
     lb._storageBound = true
     e.loadfile("SyncHistoryCatchup.lua")()
     e.loadfile("SyncLeaderboardPages.lua")()
-    e.loadfile("SyncBetaNetwork.lua")()
+    e.loadfile("SyncRelay.lua")()
     s.SendSyncRequest = function() return true end
     clients[#clients + 1] = e
     return e
@@ -121,13 +121,13 @@ PULLER.friends, SOURCE.friends = { SOURCE }, { PULLER }
 PULLER.Overlord.Sync.GetResolvedBNetPlayerFaction = function(_, n) return n == SOURCE.name and "Horde" or nil end
 SOURCE.Overlord.Sync.GetResolvedBNetPlayerFaction = function(_, n) return n == PULLER.name and "Alliance" or nil end
 local function heartbeat()
-    for _, e in ipairs(clients) do e.Overlord.BetaNetwork:Broadcast("NH", e.Overlord.Version) end
+    for _, e in ipairs(clients) do e.Overlord.Relay:Broadcast("NH", e.Overlord.Version) end
     later(45, heartbeat)
 end
 heartbeat()
 advance(10)
-assert(PULLER.Overlord.BetaNetwork:GetPeerPagedProtocol(SOURCE.name) == 8, "the source did not advertise v8")
-assert(PULLER.Overlord.BetaNetwork:GetPeerPagedProtocol(ALLY.name) == 8, "the ally did not advertise v8")
+assert(PULLER.Overlord.Relay:GetPeerPagedProtocol(SOURCE.name) == 8, "the source did not advertise v8")
+assert(PULLER.Overlord.Relay:GetPeerPagedProtocol(ALLY.name) == 8, "the ally did not advertise v8")
 assert(PULLER.Overlord.Sync:GetBetaPeerFaction(SOURCE.name) == "Horde", "fixture: source faction unknown")
 
 local function playerName(i)
@@ -395,7 +395,7 @@ advance(700)
 local lost = {}
 for i = 1, #alliance, 3 do lost[#lost + 1] = alliance[i] end
 dropRows(lost)
-local net = PULLER.Overlord.BetaNetwork
+local net = PULLER.Overlord.Relay
 local directPeers = net.GetDirectPeers
 net.GetDirectPeers = function() return { SOURCE.name } end
 assert(pull(SOURCE) == true, "unfiltered v8 pull failed")
@@ -556,7 +556,7 @@ end
 advance(700)
 do
     -- Same faction (whispered route, unlike a Battle.net friend): both tables churn.
-    local pullerNet, allyNet = PULLER.Overlord.BetaNetwork, ALLY.Overlord.BetaNetwork
+    local pullerNet, allyNet = PULLER.Overlord.Relay, ALLY.Overlord.Relay
     pullerNet.PEER_RING_LIMIT, allyNet.PEER_RING_LIMIT = 2, 1
     for i = 1, #alliance do
         local name = alliance[i]
@@ -582,7 +582,7 @@ do
     local quietDone
     assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(ALLY.name, function(ok) quietDone = ok end))
     advance(0.2)
-    FRESH.Overlord.BetaNetwork:Broadcast("NH", "quiet-gap-" .. now)
+    FRESH.Overlord.Relay:Broadcast("NH", "quiet-gap-" .. now)
     assert(pullerNet:IsPeer(ALLY.name), "the peer of a running pull left the neighbour table")
     for _ = 1, 60 do advance(60); if quietDone ~= nil then break end end
     assert(quietDone == true, "the pull with a pinned peer failed")

@@ -8,9 +8,9 @@
 --      the origin's own NH keeps the full fan-out (channel, bridges, friends).
 assert(loadfile("tests/forever_beta_integration.test.lua"))()
 -- The integration fixture stubs net.Broadcast and IsLargeEvent: start from the real relay.
-assert(loadfile("SyncBetaNetwork.lua"))()
+assert(loadfile("SyncRelay.lua"))()
 
-local sync, net = Overlord.Sync, Overlord.BetaNetwork
+local sync, net = Overlord.Sync, Overlord.Relay
 sync.IsLargeEvent = function() return false end
 local failures = {}
 local function check(condition, message)

@@ -135,7 +135,7 @@ function IsInInstance() return false end
 function IsInGroup() return false end
 function IsInRaid() return false end
 local sent = 0
-Overlord.BetaNetwork = {
+Overlord.Relay = {
     IsPeer = function() return true end,
     Send = function() sent = sent + 1; return true end,
 }

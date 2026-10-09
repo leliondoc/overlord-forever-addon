@@ -183,7 +183,7 @@ print("Outpost claims: the capturer himself is believed live (OC, LO, OP held), 
 
 -- ===== (3) a relayed copy is never the capturer, even under his name
 tick()
-Overlord.BetaNetwork = {
+Overlord.Relay = {
     IsRelayedOrigin = function() return true end, IsTargetedDispatch = function() return false end,
     IsPeer = function() return true end, IsDispatching = function() return true end,
     IsEcho = function() return false end, context = { hops = 1 },
@@ -194,7 +194,7 @@ sync:OnReceiveLeaderboardOutpostTenant(loWire("aeythyr_lodge", "Fortress Guild",
 sync:OnReceiveOutpostCapture(ocWire("aeythyr_lodge", "Fortress Guild", "Alliance", ts, capper), capper, "BETA")
 assert(op:GetState("aeythyr_lodge").status == "neutral" and count("aeythyr_lodge", "Fortress Guild") == 0,
     "a relayed copy written under the capturer's name was believed")
-Overlord.BetaNetwork = nil
+Overlord.Relay = nil
 print("Outpost claims: a relayed origin is never the capturer")
 
 -- ===== (4) one capture per hold time per character
@@ -448,14 +448,14 @@ local realSendSync = sync.SendSyncRequest
 sync.SendSyncRequest = function(_, opts) requests[#requests + 1] = opts; return true end
 local realPeerFaction = sync.GetBetaPeerFaction
 sync.GetBetaPeerFaction = function(_, name) return name == "Enemy Peer" and "Horde" or "Alliance" end
-Overlord.BetaNetwork = { GetDirectPeers = function() return { "Ally Peer", "Enemy Peer" } end,
+Overlord.Relay = { GetDirectPeers = function() return { "Ally Peer", "Enemy Peer" } end,
     IsRelayedOrigin = function() return false end, IsTargetedDispatch = function() return false end,
     IsPeer = function() return false end, IsDispatching = function() return false end, IsEcho = function() return false end }
 tick(100)
 assert(sync:PollIfStaleObserverOutpost(999, true) == true, "the probe was not sent")
 assert(#requests == 2 and requests[1].criticalChannel and requests[2].betaTarget == "Enemy Peer",
     "the stale probe did not pull the enemy neighbour")
-Overlord.BetaNetwork = nil
+Overlord.Relay = nil
 sync.SendSyncRequest, sync.GetBetaPeerFaction = realSendSync, realPeerFaction
 print("Outpost claims: stale assault probe also pulls a direct neighbour")
 

@@ -23,7 +23,7 @@ local function advance(seconds)
     end
     now = stop
     for _, c in ipairs(clients) do
-        assert(not c.Overlord.BetaNetwork.stats.lastError, c.Overlord.BetaNetwork.stats.lastError)
+        assert(not c.Overlord.Relay.stats.lastError, c.Overlord.Relay.stats.lastError)
     end
 end
 local function copy(t)
@@ -92,9 +92,9 @@ local function client(name, channel)
     end
     s.SendToBNet = function(_, other, kind, wire)
         if kind == "BR" then
-            other.Overlord.BetaNetwork:Receive(wire, name, "BNET", e)
+            other.Overlord.Relay:Receive(wire, name, "BNET", e)
         else
-            other.Overlord.BetaNetwork:ReceiveFragment(wire, name, "BNET", e)
+            other.Overlord.Relay:ReceiveFragment(wire, name, "BNET", e)
         end
         return true
     end
@@ -122,7 +122,7 @@ local function client(name, channel)
     lb._storageBound = true
     e.loadfile("SyncHistoryCatchup.lua")()
     e.loadfile("SyncLeaderboardPages.lua")()
-    e.loadfile("SyncBetaNetwork.lua")()
+    e.loadfile("SyncRelay.lua")()
     clients[#clients + 1] = e
     return e
 end
@@ -147,13 +147,13 @@ local function heartbeat()
     if not heartbeatActive then return end
     for _, e in ipairs(clients) do
         e.Overlord.Sync.SendSyncRequest = function() return true end
-        e.Overlord.BetaNetwork:Broadcast("NH", "1.2.4~lr~lp6")
+        e.Overlord.Relay:Broadcast("NH", "1.2.4~lr~lp6")
     end
     later(45, heartbeat)
 end
 heartbeat()
 advance(10)
-assert(a.Overlord.BetaNetwork:IsDirectPeer(b.name) and not a.Overlord.BetaNetwork:IsDirectPeer(d.name),
+assert(a.Overlord.Relay:IsDirectPeer(b.name) and not a.Overlord.Relay:IsDirectPeer(d.name),
     "Fixture topology: Analyst must reach Veteran only through relays")
 
 local names = {}
@@ -194,7 +194,7 @@ for _, e in ipairs(clients) do
     end
     assert(e.Overlord.Leaderboard.kills["Unique Tester"] == 4999,
         "The Alliance-only row never reached " .. e.name)
-    local stats = e.Overlord.BetaNetwork.stats
+    local stats = e.Overlord.Relay.stats
     assert((stats.catchupNotRelayed or 0) == 0, "Catch-up was sent through a relay by " .. e.name)
     assert((stats.catchupNotDirect or 0) == 0, "The scheduler aimed at a far peer from " .. e.name)
     assert(stats.dropped == 0, "Catch-up saturated a relay queue at " .. e.name)
@@ -213,5 +213,5 @@ for _, name in ipairs(names) do
         "Late joiner never caught up: " .. name)
 end
 assert(late.Overlord.Leaderboard.kills["Unique Tester"] == 4999, "Late joiner lost the Alliance row")
-assert((late.Overlord.BetaNetwork.stats.catchupNotDirect or 0) == 0, "Late joiner aimed at a far peer")
+assert((late.Overlord.Relay.stats.catchupNotDirect or 0) == 0, "Late joiner aimed at a far peer")
 print("Beta catchup: late joiner caught up the full ranking from direct neighbours only")

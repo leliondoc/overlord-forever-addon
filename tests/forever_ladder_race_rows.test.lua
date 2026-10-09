@@ -86,7 +86,7 @@ local function client(name)
     lb._storageBound = true
     e.loadfile("SyncHistoryCatchup.lua")()
     e.loadfile("SyncLeaderboardPages.lua")()
-    e.loadfile("SyncBetaNetwork.lua")()
+    e.loadfile("SyncRelay.lua")()
     clients[#clients + 1] = e
     return e
 end
@@ -111,13 +111,13 @@ assert(sync:DecodeRaceWireField("o5") == nil, "an invalid sex digit was accepted
 assert(sync:DecodeRaceWireField("Orc2:extra") == nil)
 
 local function heartbeat()
-    for _, e in ipairs(clients) do e.Overlord.BetaNetwork:Broadcast("NH", e.Overlord.Version) end
+    for _, e in ipairs(clients) do e.Overlord.Relay:Broadcast("NH", e.Overlord.Version) end
     later(45, heartbeat)
 end
 heartbeat()
 advance(10)
 -- 1.8.0: clients advertise v8 (~ld); the v7 exchange is still answered (sections 2 and below).
-assert(PULLER.Overlord.BetaNetwork:GetPeerPagedProtocol(SOURCE.name) == 8, "the source did not advertise v8")
+assert(PULLER.Overlord.Relay:GetPeerPagedProtocol(SOURCE.name) == 8, "the source did not advertise v8")
 
 local RACES = { "Orc", "Scourge", "Tauren", "Troll" }
 local names = {}

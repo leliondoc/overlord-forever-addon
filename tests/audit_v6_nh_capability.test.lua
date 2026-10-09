@@ -41,7 +41,7 @@ e.strsplit = function(sep, value, limit)
     return unpack(fields)
 end
 e.Overlord = {
-    Version = "1.1.3", BetaNetworkEnabled = true,
+    Version = "1.1.3", RelayEnabled = true,
     RealmPools = {
         GetOverlordPoolTag = function() return "EU" end,
         NormalizeRegionPool = function(_, value) return value end,
@@ -73,8 +73,8 @@ end
 lb.SortNetworkRows = function(_, rows, less) table.sort(rows, less) end
 e.loadfile = function(path) return setfenv(assert(loadfile(path)), e) end
 e.loadfile("SyncLeaderboardPages.lua")()
-e.loadfile("SyncBetaNetwork.lua")()
-local net = e.Overlord.BetaNetwork
+e.loadfile("SyncRelay.lua")()
+local net = e.Overlord.Relay
 
 -- Both startup and community scan call Broadcast("NH", addon.Version).
 local queued, normalQueue = nil, net.Queue

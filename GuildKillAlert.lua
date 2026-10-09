@@ -479,7 +479,7 @@ function GKA:Broadcast(guildName, faction, kills, members, zoneRef, shard)
     if not sync or Overlord.InstanceSuspended or not self:IsEnabled() then return false end
     local payload = self:BuildNetworkPayload(guildName, faction, kills, members, zoneRef, shard)
     if not payload then return false end
-    local net = Overlord.BetaNetwork
+    local net = Overlord.Relay
     if net and net.Broadcast and (net:Broadcast("GW", payload) or 0) > 0 then return true end
     local sent = false
     if sync.SendToGroup and sync:SendToGroup("GW", payload) then sent = true end

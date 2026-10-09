@@ -2,7 +2,7 @@
 -- A three-name relay path must retain the Horde author at an Alliance client.
 assert(loadfile("tests/forever_beta_integration.test.lua"))()
 assert(loadfile("ZoneCaptureLease.lua"))()
-local sync, net = Overlord.Sync, Overlord.BetaNetwork
+local sync, net = Overlord.Sync, Overlord.Relay
 OverlordDB.config.debug = true
 Overlord.PlayerFaction = "Alliance"
 Overlord.InstanceSuspended = false

@@ -25,7 +25,7 @@ local function advance(seconds)
     end
     now = stop
     for _, c in ipairs(clients) do
-        assert(not c.Overlord.BetaNetwork.stats.lastError, c.Overlord.BetaNetwork.stats.lastError)
+        assert(not c.Overlord.Relay.stats.lastError, c.Overlord.Relay.stats.lastError)
     end
 end
 local function copy(t)
@@ -94,9 +94,9 @@ local function client(name, channel)
     end
     s.SendToBNet = function(_, other, kind, wire)
         if kind == "BR" then
-            other.Overlord.BetaNetwork:Receive(wire, name, "BNET", e)
+            other.Overlord.Relay:Receive(wire, name, "BNET", e)
         else
-            other.Overlord.BetaNetwork:ReceiveFragment(wire, name, "BNET", e)
+            other.Overlord.Relay:ReceiveFragment(wire, name, "BNET", e)
         end
         return true
     end
@@ -124,7 +124,7 @@ local function client(name, channel)
     lb._storageBound = true
     e.loadfile("SyncHistoryCatchup.lua")()
     e.loadfile("SyncLeaderboardPages.lua")()
-    e.loadfile("SyncBetaNetwork.lua")()
+    e.loadfile("SyncRelay.lua")()
     clients[#clients + 1] = e
     return e
 end
@@ -163,7 +163,7 @@ for _, e in ipairs(clients) do
     end
 end
 local function heartbeat()
-    for _, e in ipairs(clients) do e.Overlord.BetaNetwork:Broadcast("NH", "1.0.35~lr~lp6") end
+    for _, e in ipairs(clients) do e.Overlord.Relay:Broadcast("NH", "1.0.35~lr~lp6") end
     later(45, heartbeat)
 end
 heartbeat()
@@ -453,7 +453,7 @@ print("PASS: v7-silent peer ends unsupported, scheduler never falls back to v5/v
 -- A new client pulls the complete v6 ranking from a direct neighbour, then asks
 -- that neighbour once for the outpost/fortress history (SR "H").
 local login = client("Login Tester", "alliance")
-login.Overlord.BetaNetwork.GetDirectPeers = function() return { b.name } end
+login.Overlord.Relay.GetDirectPeers = function() return { b.name } end
 local pagedStarted, historyTarget = false, nil
 login.Overlord.Sync.StartCompletePagedLeaderboardCatchup = function(_, peer, callback)
     assert(peer == b.name, "Ranking asked a non-direct peer: " .. tostring(peer))

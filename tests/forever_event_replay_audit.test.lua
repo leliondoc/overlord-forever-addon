@@ -3,7 +3,7 @@ assert(loadfile("tests/forever_beta_integration.test.lua"))()
 assert(loadfile("SyncDomination.lua"))()
 assert(loadfile("SyncVictoryBonus.lua"))()
 
-local sync, net = Overlord.Sync, Overlord.BetaNetwork
+local sync, net = Overlord.Sync, Overlord.Relay
 local campaign = OverlordDB.lastResetTimestamp
 local frontId = "loch_modan"
 Overlord.Fronts.Registry = Overlord.Fronts.Registry or {}

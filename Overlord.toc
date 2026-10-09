@@ -47,7 +47,7 @@ OutpostControl.lua
 SyncOutpost.lua
 SyncHistoryCatchup.lua
 SyncLeaderboardPages.lua
-SyncBetaNetwork.lua
+SyncRelay.lua
 MapMarkers.lua
 MapMarkersKeep.lua
 MapWorldEmblems.lua

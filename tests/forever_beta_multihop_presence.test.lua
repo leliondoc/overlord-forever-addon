@@ -24,7 +24,7 @@ end
 C_Timer = { After = after, NewTicker = function() return { Cancel = function() end } end }
 local nodes = {}
 local function makeNode(nm)
-    local a = { Version = "1.1.5", BetaNetworkEnabled = true, PlayerFaction = "Alliance", name = nm,
+    local a = { Version = "1.1.5", RelayEnabled = true, PlayerFaction = "Alliance", name = nm,
         RealmPools = { GetOverlordPoolTag = function() return "global" end,
             NormalizeRegionPool = function(_, p) return p == "global" and p or "" end }, Sync = {} }
     local s = a.Sync
@@ -37,20 +37,20 @@ local function makeNode(nm)
     function s:GetBetaBNetTargets() return a.friends or {} end
     function s:GetBetaBNetTargetInfo(friend) return friend.PlayerFaction, friend.name end
     function s:SendToBNet(friend, kind, wire)
-        if kind == "BR" then friend.BetaNetwork:Receive(wire, nm, "BNET", a)
-        else friend.BetaNetwork:ReceiveFragment(wire, nm, "BNET", a) end
+        if kind == "BR" then friend.Relay:Receive(wire, nm, "BNET", a)
+        else friend.Relay:ReceiveFragment(wire, nm, "BNET", a) end
         return true
     end
     function s:SendWhisper(kind, fragment, target)
         for _, other in ipairs(nodes) do
-            if other.name == target then other.BetaNetwork:ReceiveFragment(fragment, nm, "WHISPER"); return true end
+            if other.name == target then other.Relay:ReceiveFragment(fragment, nm, "WHISPER"); return true end
         end
         return true
     end
     function s:SendSyncRequest() return false end
     function s:OnAddonMessage() end
     Overlord = a
-    assert(loadfile(REPO .. "SyncBetaNetwork.lua"))()
+    assert(loadfile(REPO .. "SyncRelay.lua"))()
     nodes[#nodes+1] = a
     return a
 end
@@ -72,7 +72,7 @@ local function floodBulk(node, label)
     local function tick()
         if now > 100 + 900 then return end
         i = i + 1
-        node.BetaNetwork:Send("GW", ("1:Empire:A:20:5:#%d:143:%d"):format(i % 5000, math.floor(time())))
+        node.Relay:Send("GW", ("1:Empire:A:20:5:#%d:143:%d"):format(i % 5000, math.floor(time())))
         after(0.05, tick)
     end
     tick()
@@ -83,7 +83,7 @@ floodBulk(r3, "R3")
 -- Origin heartbeats every 120 s, as net:Start() would.
 local function heartbeat()
     if now > 100 + 900 then return end
-    origin.BetaNetwork:Broadcast("NH", origin.Version)
+    origin.Relay:Broadcast("NH", origin.Version)
     after(120, heartbeat)
 end
 after(3, heartbeat)
@@ -91,7 +91,7 @@ after(3, heartbeat)
 local established, samples, lost = false, 0, 0
 local function sample()
     if now > 100 + 900 then return end
-    local row = r1.BetaNetwork.peers["origin tester"]
+    local row = r1.Relay.peers["origin tester"]
     local haveRoute = row ~= nil and GetTime() - row.at <= 300
     if row then established = true end
     if established then
@@ -113,10 +113,10 @@ while #pending > 0 do
 end
 assert(established and samples > 40, "Route to the origin was never established at R1")
 assert(lost == 0, ("R1 lost its direct route to the origin in %d of %d samples"):format(lost, samples))
-assert(r1.BetaNetwork:IsDirectPeer("Origin Tester"), "The origin's friend does not see it as direct")
-assert(r1.BetaNetwork:GetPeerPagedProtocol("Origin Tester") == 8, "R1 lost the origin v8 capability")
-assert(((r1.BetaNetwork.kindStats.NH or {}).queued or 0) == 0, "R1 relayed another player's presence")
+assert(r1.Relay:IsDirectPeer("Origin Tester"), "The origin's friend does not see it as direct")
+assert(r1.Relay:GetPeerPagedProtocol("Origin Tester") == 8, "R1 lost the origin v8 capability")
+assert(((r1.Relay.kindStats.NH or {}).queued or 0) == 0, "R1 relayed another player's presence")
 for _, node in ipairs({ r2, r3, r4 }) do
-    assert(node.BetaNetwork.peers["origin tester"] == nil, node.name .. " heard a relayed presence")
+    assert(node.Relay.peers["origin tester"] == nil, node.name .. " heard a relayed presence")
 end
 print(("Beta presence reach: own presence reaches direct friends only, never relayed (%d samples)"):format(samples))

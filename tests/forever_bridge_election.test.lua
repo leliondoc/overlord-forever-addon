@@ -16,11 +16,11 @@ end
 C_Club = { GetSubscribedClubs = function() return {} end }
 Enum = Enum or {}; Enum.ClubType = Enum.ClubType or { Character = 1 }
 local s = Overlord.Sync
-assert(loadfile("SyncBetaNetwork.lua"))()
-local net = Overlord.BetaNetwork
+assert(loadfile("SyncRelay.lua"))()
+local net = Overlord.Relay
 net.BridgeChannelHold = { 0, 0 } -- exact timings below
 Overlord.PlayerFaction = "Alliance"
-Overlord.BetaNetworkEnabled = true
+Overlord.RelayEnabled = true
 function s:GetChannelId() return 5 end
 
 local clock = 1000

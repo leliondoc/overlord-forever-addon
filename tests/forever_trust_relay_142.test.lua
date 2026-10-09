@@ -23,8 +23,8 @@ end
 C_Club = { GetSubscribedClubs = function() return {} end }
 Enum = Enum or {}; Enum.ClubType = Enum.ClubType or { Character = 1 }
 local s = Overlord.Sync
-assert(loadfile("SyncBetaNetwork.lua"))()
-local net = Overlord.BetaNetwork
+assert(loadfile("SyncRelay.lua"))()
+local net = Overlord.Relay
 Overlord.PlayerFaction = "Alliance"
 Overlord.InstanceSuspended = false
 function s:GetChannelId() return 5 end

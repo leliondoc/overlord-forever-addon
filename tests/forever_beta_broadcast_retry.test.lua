@@ -20,7 +20,7 @@ function strsplit(sep, value, limit)
 end
 C_Timer = { After = function() end, NewTicker = function() return {} end }
 Overlord = {
-    Version = "1.1.5", BetaNetworkEnabled = true, PlayerFaction = "Alliance",
+    Version = "1.1.5", RelayEnabled = true, PlayerFaction = "Alliance",
     RealmPools = {
         GetOverlordPoolTag = function() return "global" end,
         NormalizeRegionPool = function(_, pool) return pool == "global" and pool or "" end,
@@ -37,8 +37,8 @@ function s:GetBetaBNetTargets() return {} end
 function s:SendWhisper() return false end
 local delivered = 0
 function s:OnAddonMessage(_, message) if message:sub(1, 2) == "C:" then delivered = delivered + 1 end end
-assert(loadfile("SyncBetaNetwork.lua"))()
-local net = Overlord.BetaNetwork
+assert(loadfile("SyncRelay.lua"))()
+local net = Overlord.Relay
 net.BridgeChannelHold = { 0, 0 } -- forward at once: this test is about retries, not bridging
 
 local realQueue, failNext, attempts = net.Queue, false, 0

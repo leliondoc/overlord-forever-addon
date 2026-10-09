@@ -206,7 +206,7 @@ Overlord.CommunityModeEnabled = false
 Overlord.Sync.SendWhisper = function(_, kind, payload, target)
     whispers[#whispers + 1] = { kind, payload, target }
 end
-Overlord.BetaNetwork = {
+Overlord.Relay = {
     IsPeer = function(_, name) return name == "Guild Member" end,
     Send = function(_, kind, payload, target)
         whispers[#whispers + 1] = { kind, payload, target }

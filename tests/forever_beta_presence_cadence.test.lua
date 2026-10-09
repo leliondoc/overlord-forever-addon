@@ -10,7 +10,7 @@ C_Timer = {
     After = function(delay, callback) pending[#pending + 1] = { at = now + delay, run = callback } end,
     NewTicker = function(interval, callback) ticker = { interval = interval, run = callback }; return ticker end,
 }
-Overlord = { Version = "1.1.5", PlayerFaction = "Alliance", BetaNetworkEnabled = true,
+Overlord = { Version = "1.1.5", PlayerFaction = "Alliance", RelayEnabled = true,
     RealmPools = { GetOverlordPoolTag = function() return "global" end }, Sync = {} }
 local sync = Overlord.Sync
 local sentKinds = {}
@@ -26,8 +26,8 @@ function sync:SendToBNet(_, kind, wire)
     sentKinds[#sentKinds + 1] = inner
     return true
 end
-assert(loadfile("SyncBetaNetwork.lua"))()
-local net = Overlord.BetaNetwork
+assert(loadfile("SyncRelay.lua"))()
+local net = Overlord.Relay
 
 -- Heartbeat cadence.
 net:Start()
