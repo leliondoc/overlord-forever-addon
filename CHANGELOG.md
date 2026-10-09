@@ -1,7 +1,6 @@
-1.7.5
+1.7.6
 
-**Overlord Forever 1.7.5**
+**Overlord Forever 1.7.6**
 
-- **Ranking**: forged rows are much harder to slip into the honorable kill ranking, and rows no real character could send are refused everywhere. Copies already saved are cleaned automatically at login.
-- **Update required for versions older than 1.7.0**: they no longer share the ranking catch-up with current versions. If a friend still runs one, ask them to update.
-- **Network**: Overlord only reads its messages on the channels it actually uses, which removes a source of useless relay traffic.
+- **Ranking**: scores received from other players are now held to a plausible pace since the weekly reset, the same way on every client, wherever they come from. A forged score can no longer be pushed to the top of the scale.
+- **Your own score comes back right away**: after a crash, a lost save or a session on another PC, your own row is restored at once when you log in (1.7.5 made it climb back slowly).

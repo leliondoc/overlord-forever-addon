@@ -307,13 +307,13 @@ OverlordDB.leaderboard.kills, OverlordDB.leaderboard.captureCount = lb.kills, lb
 OverlordDB.leaderboardScoreSanitizeVersion = 7
 lb:EnsureLegacyScoreSanitized()
 local guard = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 10 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 11 and #timers > 0 do
     guard = guard + 1
     assert(guard < 400, "cleanup did not finish")
     table.remove(timers, 1)()
 end
 C_Timer.After = realAfter
-assert(OverlordDB.leaderboardScoreSanitizeVersion == 10, "v10 cleanup did not commit")
+assert(OverlordDB.leaderboardScoreSanitizeVersion == 11, "v11 cleanup did not commit")
 assert(lb.kills[shout] == nil, "a saved all-caps kill row survived the cleanup")
 assert(lb.captureCount[shout] == nil, "a saved all-caps capture row survived the cleanup")
 assert(lb.kills["Faction Mate"] == 105, "the cleanup removed a real player")

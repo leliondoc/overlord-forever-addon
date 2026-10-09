@@ -1372,6 +1372,19 @@ function Overlord.Sync:BoundUnsolicitedKillTotal(playerName, kills, killsBefore,
     return accepted
 end
 
+-- 1.7.6 : enveloppe de campagne, la meme sur tous les chemins (K, LK, pages, /ov sync,
+-- service des pages, sauvegardes) : aucun total recu ne depasse ce qu'un joueur tres
+-- actif peut avoir fait depuis le reset, 300 + 0,03/s (plus de trois fois le meilleur
+-- rythme honnete observe). Ecretee, jamais refusee, comme le plafond par niveau. Ne
+-- depend que de l'horloge serveur et du debut de campagne : identique chez tous.
+-- Une page ne peut donc plus porter une ligne connue au plafond global (15000).
+function Overlord.Sync:CampaignKillEnvelope()
+    local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
+    if not start or start <= 0 then return nil end
+    local serverNow = Overlord.ServerNow and Overlord.ServerNow() or time()
+    return FIRST_CONTACT_BASE + math.floor(math.max(0, serverNow - start) * FIRST_CONTACT_RATE)
+end
+
 -- Detection (1.4.2) : un total annonce par un tiers au-dessus de ce que le
 -- proprietaire a lui-meme declare (plus 1 kill/s depuis, plus 60 de marge) ne
 -- peut pas etre honnete : les pages des pairs ne font que repeter les annonces du
@@ -8670,17 +8683,16 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     else
         self:NoteThirdPartyKillTotal(playerName, kills, sender)
     end
-    -- 1.7.5 : notre propre ligne ne monte pas d'un coup par un tiers (page, /ov sync) :
-    -- notre K la republiait ensuite comme total du proprietaire. Elle suit la fenetre
-    -- fixe des copies tierces, sauf dans une session ouverte sans sauvegarde chargee
-    -- (defaut du chargeur, reinstallation, premiere installation) : elle se retablit alors comme
-    -- tout sujet inconnu, au cap de premier contact. Aucun pair ne peut provoquer cet
-    -- etat. Seules les pages restent exemptes pour une ligne deja connue : une reponse
-    -- /ov sync (SR:F) suit la borne des totaux non sollicites.
+    -- 1.7.5 : notre propre ligne n'est jamais exemptee de la borne par une page : notre
+    -- K la republiait ensuite comme total du proprietaire. 1.7.6 : borne normale, comme
+    -- pour tout sujet : au premier total de la session (sauvegarde perdue ou en retard,
+    -- crash, autre PC) elle se retablit d'un coup, ensuite elle ne monte plus d'un seul
+    -- paquet ; l'enveloppe de campagne la plafonne comme toute ligne. Une reponse
+    -- /ov sync (SR:F) suit aussi la borne ; seules les pages restent exemptes pour une
+    -- ligne deja connue (jusqu'a l'enveloppe, voir SetPlayerKills).
     if kills > killsBefore and Overlord.Leaderboard.IsLocalDisplayName
         and Overlord.Leaderboard:IsLocalDisplayName(playerName) then
-        kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, false,
-            Overlord.SavedVariablesLoadedAtLogin ~= false)
+        kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, false, false)
     elseif not guildSnapshot or killsBefore <= 0 then
         kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender,
             guildOwner and not solicited, liveCopy)
