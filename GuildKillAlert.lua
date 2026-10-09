@@ -38,10 +38,13 @@ local EPOCH_TOLERANCE = 3 * 86400
 -- previous total of a killer was evicted before his next one (~15 s), so each K
 -- counted one kill instead of its real delta: rampages under-counted and fired
 -- late, fight sizes in the dock too small. Evicted in insertion order (O(1)).
-local MAX_PLAYERS = 4096
-local MAX_GUILDS = 512
--- A threshold (20 kills, 5 members) is reached long before; bounds memory.
-local MAX_EVENTS_PER_GUILD = 128
+-- (Not powers of two: a full Lua 5.1 table at exactly 2^k keys rehashes on every
+-- evict-and-insert.)
+local MAX_PLAYERS = 4000
+local MAX_GUILDS = 500
+-- A threshold (20 kills, 5 members) is reached long before; bounds memory
+-- (500 guilds x 64 events of ~360 B at worst).
+local MAX_EVENTS_PER_GUILD = 64
 local NETWORK_MAX_AGE = 300   -- un GW relaye plus vieux que 5 min n'est plus d'actualite
 local NETWORK_MAX_SKEW = 300
 local NETWORK_BURST_WINDOW = 60

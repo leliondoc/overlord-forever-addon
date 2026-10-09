@@ -446,7 +446,7 @@ do
     end
     local counted, live, ordered = GKA:_TrackedPlayers()
     assert(counted >= 4000, "Fixture kills were not tracked: " .. counted)
-    assert(counted == live and live <= 4096 and ordered <= 2 * 4096 + 1,
+    assert(counted == live and live <= 4000 and ordered <= 2 * 4000 + 1,
         "Player tracking unbounded or miscounted: " .. counted .. "/" .. live .. "/" .. ordered)
 end
 

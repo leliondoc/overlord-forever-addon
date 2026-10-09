@@ -1886,7 +1886,7 @@ function Overlord.Sync:RecordCaptureCreditProgressEvidence(sender, capturer, zon
     local now = GetTime()
     -- One row per capturer of a running siege: a launch-size siege (hundreds of
     -- players on the point) overflowed 256 and lost capture credit.
-    BoundSecurityEvidenceTable(captureCreditProgressEvidence, 2048, key)
+    BoundSecurityEvidenceTable(captureCreditProgressEvidence, 2000, key)
     local row = captureCreditProgressEvidence[key]
     if not row or now - (row.lastSeen or 0) > 180 then
         row = { firstSeen = now, lastSeen = now, firstHold = remoteHold, maxHold = remoteHold, lastHold = remoteHold }

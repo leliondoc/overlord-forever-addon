@@ -4521,8 +4521,9 @@ local OUTPOST_CAPTURER_LEDGER_VERSION = 1
 -- Bounded against invented guilds, sized for a launch week: ~14 sites times a few
 -- hundred active guilds exceeded 512 (site, guild) rows within days, after which
 -- new captures were refused until the reset and clients diverged by arrival order.
+-- Events keep their 20,000 cap (the login recount is unsliced; a week holds far fewer).
 local OUTPOST_LEDGER_ROWS_MAX = 4096
-local OUTPOST_LEDGER_EVENTS_MAX = 32000
+local OUTPOST_LEDGER_EVENTS_MAX = 20000
 local OUTPOST_LEDGER_REBUILD_DEBOUNCE = 3
 -- Rows and site states of the release week (the 7 days up to this time) carry no
 -- capturer: they are dropped once at login and refused on the wire, on every client
@@ -5311,8 +5312,8 @@ end
 -- de plus. Une rivalite = deux prises successives d'un meme site par des guildes de
 -- factions opposees (« A a pris a B »). Recalcule quand le registre change, au plus
 -- toutes les 3 s : pendant un rattrapage, le volet garde un instant l'etat precedent.
--- Pas de table par prise : chaque prise est un nombre ts * 1024 + numero de ligne,
--- trie par le tri natif (registre plafonne a 512 lignes et 20 000 prises).
+-- Pas de table par prise : chaque prise est un nombre ts * 8192 + numero de ligne,
+-- trie par le tri natif (registre plafonne a 4 096 lignes et 20 000 prises).
 local OUTPOST_WEEKLY_STATS_MIN_INTERVAL = 3
 
 function Overlord.Leaderboard:GetOutpostWeeklyStats()
@@ -5340,7 +5341,7 @@ function Overlord.Leaderboard:GetOutpostWeeklyStats()
         return a.key < b.key
     end)
     local byCapturer, bySite, capturerKeys = {}, {}, {}
-    for index = 1, math.min(#rows, 1023) do
+    for index = 1, math.min(#rows, 8191) do
         local info = rows[index]
         local faction = info.row.faction
         local list = bySite[info.siteKey]
@@ -5353,7 +5354,7 @@ function Overlord.Leaderboard:GetOutpostWeeklyStats()
                 key = name and outpostCapturerKey(name) or false
                 capturerKeys[capturer] = key
             end
-            -- ts * 1024 reste exact (< 2^53) pour toute date jusqu'a 1e12 s.
+            -- ts * 8192 reste exact (< 2^53) pour toute date jusqu'a 1e12 s.
             if key and ts and ts > 0 and ts < 1e12 then
                 local c = byCapturer[key]
                 if not c then
@@ -5363,7 +5364,7 @@ function Overlord.Leaderboard:GetOutpostWeeklyStats()
                 end
                 if info.isKeep then c.keeps = c.keeps + 1 else c.outposts = c.outposts + 1 end
                 c.total = c.total + 1
-                list[#list + 1] = math.floor(ts) * 1024 + index
+                list[#list + 1] = math.floor(ts) * 8192 + index
             end
         end
     end
@@ -5378,7 +5379,7 @@ function Overlord.Leaderboard:GetOutpostWeeklyStats()
     for _, list in pairs(bySite) do
         table.sort(list)
         for i = 2, #list do
-            local prev, cur = rows[list[i - 1] % 1024], rows[list[i] % 1024]
+            local prev, cur = rows[list[i - 1] % 8192], rows[list[i] % 8192]
             local pf, cf = prev.row.faction, cur.row.faction
             if cf ~= pf and cur.key ~= prev.key then
                 local pairKey = cur.key .. "\001" .. prev.key

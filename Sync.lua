@@ -559,7 +559,10 @@ function Overlord.Sync:Initialize()
     syncFrame:SetScript("OnEvent", function(_, event, ...)
         -- Every addon's messages arrive here: drop the other prefixes before any
         -- other work (IsInInstance included).
-        if (event == "CHAT_MSG_ADDON" or event == "BN_CHAT_MSG_ADDON") and (...) ~= PREFIX then return end
+        if event == "CHAT_MSG_ADDON" or event == "BN_CHAT_MSG_ADDON" then
+            local prefix = ...
+            if (not canaccessvalue or canaccessvalue(prefix)) and prefix ~= PREFIX then return end
+        end
         -- Une entree en instance pendant une migration ferme le transport
         -- immediatement, avant que le pipeline puisse appeler Suspend().
         if Overlord.InstanceSuspended or IsInInstance() then return end

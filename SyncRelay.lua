@@ -513,19 +513,21 @@ end
 -- Packets already handled (origin:id). A late copy (bridge hold, queue wait, other
 -- path) must still find its entry: at 2,048 a busy channel recycled the ring in
 -- ~10 s and duplicates were handled and forwarded again. ~1 MB at 8,192.
-local SEEN_RING = 8192
+-- Ring sizes are never a power of two: a full Lua 5.1 table holding exactly 2^k
+-- keys rehashes on every evict-and-insert (measured: ~150 us per packet at 8,192).
+local SEEN_RING = 8000
 -- Per-player memories whose rule spans minutes (heard on our channel within 300 s,
 -- presence forwarded once per 90 s): sized for a launch channel of thousands, not
 -- the beta's hundreds (256/512 recycled within seconds and the rules stopped acting).
-local PLAYER_RING = 4096
+local PLAYER_RING = 4000
 -- Neighbour routes (300 s). A map reply (up to 32 pages at the catch-up rate) lasts
 -- about 30 s and every page needs the requester's route: at 512 a launch channel
 -- recycled the table in seconds and the later pages of a map were refused, as were
 -- whispered ranking pages and activity replies from "unknown" peers (~3 MB at 8,192).
-local PEER_RING = 8192
+local PEER_RING = 8000
 -- Capabilities advertised in first-hand presence (300 s): at 512 most neighbours
 -- looked unknown and every ranking pull fell back to a full v7 sweep instead of v8.
-local CAPABILITY_RING = 8192
+local CAPABILITY_RING = 8000
 local seen, recent, assemblies = {}, {}, {}
 -- Gateways heard on our realm channel (last hop). A group copy coming from one of
 -- them is already on that channel: re-emitting it there only burns the Blizzard
@@ -797,7 +799,7 @@ local function holdForward(key, p, mode)
             local stat = mode == "group" and "groupCopiesSent" or "bridgeForwardsSent"
             net.stats[stat] = (net.stats[stat] or 0) + 1
         elseif mode == "bridge" then
-            remember(forwardRetry, forwardRetryOrder, key, GetTime(), 256)
+            remember(forwardRetry, forwardRetryOrder, key, GetTime(), 250)
         end
     end)
     return true
@@ -906,10 +908,35 @@ end
 function net:IsDirectPeer(name)
     return self:GetPeerHops(name) == 1
 end
+-- Direct neighbours to pick catch-up partners from (callers keep one to three):
+-- the most recently first-heard ones (newest end of the route ring), at most
+-- DIRECT_PEER_SAMPLE, plus every Battle.net friend's route, sorted by name. With a
+-- launch-size route table (8,000) every caller sorted and examined thousands of names.
+local DIRECT_PEER_SAMPLE = 250
 function net:GetDirectPeers()
-    local names = {}
-    for _, row in pairs(self.peers) do
-        if GetTime() - row.at <= 300 and tonumber(row.hops) == 1 then names[#names + 1] = row.name end
+    local now, names, taken = GetTime(), {}, {}
+    local function take(row)
+        if row and not taken[row] and now - row.at <= 300 and tonumber(row.hops) == 1 then
+            taken[row] = true
+            names[#names + 1] = row.name
+        end
+    end
+    local first, last = peerOrder.first or 1, peerOrder.last or 0
+    if last - first + 1 <= DIRECT_PEER_SAMPLE then
+        -- Small table: every route (cheap, and independent of the ring's order).
+        for _, row in pairs(self.peers) do take(row) end
+    else
+        for i = last, first, -1 do
+            if #names >= DIRECT_PEER_SAMPLE then break end
+            local key = peerOrder[i]
+            if key then take(self.peers[key]) end
+        end
+    end
+    local targets = sync.GetBetaBNetTargets and sync:GetBetaBNetTargets() or {}
+    for _, id in ipairs(targets) do
+        local _, character = nil, nil
+        if sync.GetBetaBNetTargetInfo then _, character = sync:GetBetaBNetTargetInfo(id) end
+        if type(character) == "string" then take(self.peers[character:lower()]) end
     end
     table.sort(names)
     return names
@@ -1850,7 +1877,7 @@ function net:Send(kind, payload, target, immediate)
     local p = { region = region(), id = session .. "-" .. serial, at = serverNow(),
         target = target, path = { name }, kind = kind, payload = payload }
     if not self:Queue(p, immediate) then return false end
-    remember(recent, recentOrder, key, now, 512)
+    remember(recent, recentOrder, key, now, 500)
     remember(seen, seenOrder, name:lower() .. ":" .. p.id, now, SEEN_RING)
     return true
 end
@@ -1936,7 +1963,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         -- Battle.net: that is the other faction): count its bridge flag.
         if #p.path == 1 and transport ~= "BNET" then
             if p.payload:find("~b~", 1, true) then
-                remember(sameFactionBridges, sameFactionBridgesOrder, originKey, GetTime(), 512)
+                remember(sameFactionBridges, sameFactionBridgesOrder, originKey, GetTime(), 500)
             elseif sameFactionBridges[originKey] then
                 sameFactionBridges[originKey] = -1000
             end
@@ -1980,7 +2007,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
             self.requested = self.requested or {}
             if not self.requestOrder then self.requestOrder = {} end
             if sync:SendSyncRequest({ betaTarget = origin }) then
-                remember(self.requested, self.requestOrder, origin:lower(), now, 128)
+                remember(self.requested, self.requestOrder, origin:lower(), now, 125)
             end
         end
     end
@@ -2078,19 +2105,19 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
             forwarded = true
             self.stats.bridgeForwardsHeld = (self.stats.bridgeForwardsHeld or 0) + 1
             if routineKey then
-                remember(routineForwarded, routineForwardedOrder, routineKey, GetTime(), 256)
+                remember(routineForwarded, routineForwardedOrder, routineKey, GetTime(), 250)
             end
         else
             forwarded = self:Queue(p) == true
             if forwarded and routineKey then
-                remember(routineForwarded, routineForwardedOrder, routineKey, GetTime(), 256)
+                remember(routineForwarded, routineForwardedOrder, routineKey, GetTime(), 250)
             end
         end
         if p.target == "*" then
             if forwarded then
                 forwardRetry[key] = nil
             elseif not retryForward then
-                remember(forwardRetry, forwardRetryOrder, key, GetTime(), 256)
+                remember(forwardRetry, forwardRetryOrder, key, GetTime(), 250)
             end
         end
         -- Group mates without the channel still need a copy: one held group-only
@@ -2157,7 +2184,7 @@ function net:ReceiveFragment(payload, sender, transport, bnetID)
             a = { at = GetTime(), lastAt = GetTime(), count = count, got = 0, chunks = {} }
             -- Only multi-fragment packets live here (singles skip it): 1,024 pending
             -- pieces cover tens of seconds of a launch channel (~0.5 MB at most).
-            remember(assemblies, assemblyOrder, key, a, 1024)
+            remember(assemblies, assemblyOrder, key, a, 1000)
         end
         if a.count ~= count then return false end
         if a.chunks[part] and a.chunks[part] ~= chunk then return false end
@@ -2322,7 +2349,7 @@ function net:EmitBridgeLK(row, payload)
     for i = 1, math.min(BRIDGE_LK_FANOUT, #candidates) do
         local name = candidates[i]
         if sync:SendWhisper("LK", payload, name, true) then
-            remember(bridgeLK.peerAt, bridgeLK.peerOrder, name:lower(), now, 256)
+            remember(bridgeLK.peerAt, bridgeLK.peerOrder, name:lower(), now, 250)
             bridgeLK.peerAt[name:lower()] = now
             reached = reached + 1
         end
@@ -2496,11 +2523,11 @@ function net:NoteOwnerKill(name, faction, total, before, class, locale, epoch, b
         -- 1.3.2: an own-faction owner heard first-hand; worth passing on only when
         -- this client has an opposite-faction Battle.net friend to tell.
         local t, b = tonumber(total) or 0, tonumber(before) or 0
-        if b <= 0 or t <= b or #enemyBNetFriends() == 0 then return false end
+        if b <= 0 or t <= b then return false end
         -- Every client of the faction hears the owner's total on the channel: with
         -- many bridges (see crossShare) only about CROSS_TARGET of them, chosen per
         -- subject by hash, pass it on. The owner's own K still reaches its own
-        -- opposite-faction friends directly.
+        -- opposite-faction friends directly. (Checked before the friend scan.)
         local share = crossShare()
         if share < 1 then
             local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
@@ -2509,6 +2536,7 @@ function net:NoteOwnerKill(name, faction, total, before, class, locale, epoch, b
                 return false
             end
         end
+        if #enemyBNetFriends() == 0 then return false end
         return queueBridgeRow(bridgeOut, name, faction, total, before, class, locale,
             epoch, bucketToken, levelToken)
     end
