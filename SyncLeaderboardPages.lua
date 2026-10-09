@@ -536,6 +536,10 @@ local function finish(state, success, unsupportedPeer)
         end
         unsupported[state.peer] = GetTime() + 600
     end
+    -- Leaderboard badge: a sweep from an enemy friend compares the enemy rows only.
+    stats.lastSweepFiltered = state.factionFilter ~= nil
+    -- ... and rows this sweep really changed in our ranking (0 = nothing was missing).
+    stats.lastSweepChanged = (stats.changedRows or 0) - (state.changedAtStart or 0)
     state.callback(success, state.supported == true)
 end
 
@@ -1123,6 +1127,7 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
         -- first request still carries the stream digest (one reply if equal).
         completed = resume and savedStream == stream and integer(saved.done, 0, BUCKETS - 1) or 0,
         extended = extended == true, stream = stream, bucket = resume or 1,
+        changedAtStart = stats.changedRows or 0,
         wire = extended and (diff and "8" or withRace and "7" or "6") or "5",
         cursor = "-", nonce = tostring(GetServerTime()) .. "n"
             .. tostring(math.floor(GetTime() * 1000)) .. "n" .. tostring(serial) }
@@ -1441,6 +1446,14 @@ local function currentPullStatus()
 end
 
 -- Short form for the /ov sync summary (no mutation).
+-- Read-only (leaderboard badge): a pull is running, its stream (1 kills,
+-- 2 captures, 3 races), and whether it is paused (combat or instance).
+function sync:GetPagedPullProgress()
+    local s = pull
+    if not s then return false end
+    return true, s.stream == "LR" and 3 or s.stream == "LC" and 2 or 1, paused()
+end
+
 function sync:GetPagedLeaderboardSummary()
     return {
         status = currentPullStatus(), running = pull ~= nil,

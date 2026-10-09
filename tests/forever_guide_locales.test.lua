@@ -37,6 +37,15 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
         loc .. ": keep text needs one icon slot and one minutes slot")
     assert(string.format(L.GUIDE_GUILD_KEEP_BODY, "ICONS", 10):find("ICONS", 1, true))
     assert(countSlots(L.GUIDE_GOLD_BODY, "s") == 1, loc .. ": mine text needs one list slot")
+    -- 1.8.1 ranking sync badge: every locale has its texts; the progress line keeps
+    -- one step number and one entry count.
+    for _, key in ipairs({ "LB_SYNC_RECEIVING", "LB_SYNC_DONE", "LB_SYNC_TIP_RECEIVING",
+        "LB_SYNC_TIP_DONE", "LB_SYNC_TIP_PROGRESS" }) do
+        assert(type(L[key]) == "string" and L[key] ~= "", loc .. " misses " .. key)
+    end
+    assert(countSlots(L.LB_SYNC_TIP_PROGRESS, "d") == 1 and countSlots(L.LB_SYNC_TIP_PROGRESS, "s") == 1,
+        loc .. ": badge progress line needs one %d and one %s")
+    assert(string.format(L.LB_SYNC_TIP_PROGRESS, 2, "1,234"):find("1,234", 1, true))
     -- 1.7: the fallen capital stays taken; liberation and the 6 h victory spacing.
     assert(countSlots(L.FRONT_TRUCE_ENDED_KEPT, "s") == 1, loc .. ": truce-end line needs the front")
     assert(countSlots(L.FRONT_CAPITAL_LIBERATED, "s") == 2, loc .. ": liberation line needs capital + front")

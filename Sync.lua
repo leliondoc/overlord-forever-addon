@@ -10687,6 +10687,7 @@ end
 
 -- Coupe toute l'activite sync (events + tickers) pour les instances
 function Overlord.Sync:Suspend()
+    self._instanceSuspendAt = GetTime()
     syncFrame:UnregisterAllEvents()
     syncResponseGeneration = syncResponseGeneration + 1
     syncResponseInFlight = false
@@ -10981,6 +10982,13 @@ end
 -- Apres sortie d'instance : demander l'etat reseau et pousser le notre (pas de ZS a la suspension).
 function Overlord.Sync:FlushStateAfterInstance()
     if Overlord.InstanceSuspended or IsInInstance() then return end
+    -- A login inside an instance skipped the login stage: the ranking rounds never
+    -- started this session. Start them once, exactly like a normal login (idempotent;
+    -- no traffic beyond that normal login round).
+    if not self._historyCatchupWakeGeneration and not self._historyCatchupPending
+        and not self._historyCatchupNotBeforeCampaignId and self.ScheduleLoginLeaderboardHistoryCatchUp then
+        self:ScheduleLoginLeaderboardHistoryCatchUp()
+    end
     if Overlord.WaitingForSync then return end
     self:StartInstanceCaptureSyncBurst()
     local attempts = 0
@@ -11038,6 +11046,12 @@ function Overlord.Sync:Resume()
     if Overlord.Relay and Overlord.Relay.ScheduleReturnPresence then
         Overlord.Relay:ScheduleReturnPresence()
     end
+    -- Ranking badge: kills seen by others during a long instance were missed; the
+    -- header shows the ranking as still syncing until the next full round.
+    if self._instanceSuspendAt and GetTime() - self._instanceSuspendAt > 180 then
+        self._ladderTrustFloor = (GetServerTime and GetServerTime()) or 0
+    end
+    self._instanceSuspendAt = nil
 end
 
 -- Mines (MS/MN), whispers communaute, appel de faction (FC), sync passive : voir SyncAux.lua

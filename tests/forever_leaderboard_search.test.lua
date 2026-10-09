@@ -114,6 +114,14 @@ local function widget(kind, name, parent)
     return w
 end
 function methods:CreateFontString() return widget() end
+function methods:CreateAnimationGroup()
+    local group = { playing = false, plays = 0 }
+    function group:Play() self.playing = true; self.plays = self.plays + 1 end
+    function group:Stop() self.playing = false end
+    function group:SetLooping() end
+    function group:CreateAnimation() return widget() end
+    return group
+end
 function methods:CreateTexture() return widget() end
 function methods:SetScript(key, callback) self.scripts[key] = callback end
 function methods:GetScript(key) return self.scripts[key] end
@@ -298,4 +306,49 @@ assert(tip.lines[2]:find("12", 1, true), "Ranked member count missing: " .. tost
 assert(tip.lines[3] == "1. Ana Bel = 40" and tip.lines[4] == "2. Bo Rin = 30", "Top members wrong")
 assert(tip.lines[5] and tip.lines[5]:find("10", 1, true), "Remaining members not stated")
 assert(guildRow.scripts.OnMouseWheel, "Mouse wheel over a guild row no longer scrolls")
-print('Search UI: actual edit box/clear/Escape, bounded frames, original rank, scroll reset, totals, no data reads on typing, guild hover OK')
+-- Ranking sync badge (1.8.1): one frame next to the title, hidden without catch-up
+-- state, arrow animated while syncing, check when up to date (pulsing when live
+-- totals grow), hidden in an instance, animation stopped when the panel closes.
+local badge = frame.syncBadge
+assert(badge and badge.arrow and badge.check and badge.text and badge.anim and badge.pulse, "Sync badge missing")
+assert(not badge:IsShown(), "Sync badge shown without any catch-up state")
+local framesBeforeBadge = #frames
+local badgeState = "SYNCING"
+Overlord.Sync = { GetLadderCatchupState = function() return badgeState end }
+ui:Refresh(); drain()
+assert(badge:IsShown() and badge.arrow:IsShown() and not badge.check:IsShown() and badge.anim.playing,
+    "Syncing badge not shown with its moving arrow")
+assert(badge.text.text == "Still receiving ranking data...", "Syncing text wrong: " .. tostring(badge.text.text))
+local badgeMutations = mutations
+ui:Refresh(); drain()
+assert(mutations == badgeMutations, "An unchanged badge state rewrote its text")
+badgeState = "UP_TO_DATE"
+ui:Refresh(); drain()
+assert(badge.check:IsShown() and not badge.arrow:IsShown() and not badge.anim.playing
+    and badge.text.text == "Ranking up to date", "Up-to-date check not shown")
+local pulses = badge.pulse.plays
+source.alliKills = source.alliKills + 5
+ui:Refresh(); drain()
+assert(badge.pulse.plays == pulses + 1 and badge.check:IsShown(), "Live totals did not pulse the check")
+now = now + 3
+ui:Refresh(); drain()
+assert(badge.pulse.plays == pulses + 1, "The check pulsed without new kills")
+badge.scripts.OnEnter(badge)
+assert(tip.lines[1] == "Ranking up to date", "Badge tooltip title wrong: " .. tostring(tip.lines[1]))
+source.fromSavedCache = true
+ui:Refresh(); drain()
+assert(badge.arrow:IsShown() and badge.anim.playing, "The saved preview did not show the arrow")
+assert(not frame.subtitle.text:find("updating", 1, true), "The subtitle still shows a second updating text")
+source.fromSavedCache = nil
+Overlord.InstanceSuspended = true
+ui:Refresh(); drain()
+assert(not badge:IsShown() and not badge.anim.playing, "Badge shown in an instance")
+Overlord.InstanceSuspended = nil
+badgeState = "SYNCING"
+ui:Refresh(); drain()
+assert(badge.anim.playing, "Badge did not come back after the instance")
+ui:Hide(); drain()
+assert(not badge.anim.playing, "Closing the panel left the arrow animating")
+assert(#frames == framesBeforeBadge and pending() == 0, "Badge created frames or timers on refresh")
+Overlord.Sync = nil
+print('Search UI: actual edit box/clear/Escape, bounded frames, original rank, scroll reset, totals, no data reads on typing, guild hover, sync badge OK')

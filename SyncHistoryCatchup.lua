@@ -52,6 +52,14 @@ local PEER_PENALTY_SEC = 10 * 60
 -- Garde-fou : un tour plus long que ceci est abandonne (rien n'est perdu, la
 -- reprise se fait depuis le point de controle du bucket).
 local ROUND_WATCHDOG_SEC = 15 * 60
+-- Leaderboard header badge (1.8.1): "up to date" lasts 15 min after a full sweep;
+-- a sweep finished up to 3 min before this session (a /reload) is trusted; a missing
+-- neighbour only hides the badge after 60 s (no flip-flop at login).
+local LADDER_STALE_SEC, LADDER_RELOAD_TRUST_SEC, LADDER_NO_PEER_GRACE_SEC = 15 * 60, 180, 60
+-- A sweep is "quiet" (nothing left to fetch) when it changed at most this many rows of
+-- our ranking: the badge keeps its arrow while sweeps still bring missing entries.
+-- (Live kills keep arriving for ever and never move the badge.)
+local LADDER_QUIET_ROWS = 3
 local peerPenaltyUntil = {}
 local ENEMY_FACTION = { Alliance = "Horde", Horde = "Alliance" }
 local snapshotWireCache = setmetatable({}, { __mode = "k" })
@@ -60,6 +68,9 @@ local PrepareSnapshotForNetwork
 local function NowServer()
     return (GetServerTime and GetServerTime()) or time()
 end
+-- Sweeps finished before this point are not trusted by the badge (session start
+-- minus the reload grace; moved forward after a long instance, see Sync:Resume).
+sync._ladderTrustFloor = ((GetServerTime and GetServerTime()) or 0) - LADDER_RELOAD_TRUST_SEC
 
 local function CurrentCampaign()
     local start = math.floor(tonumber(
@@ -116,6 +127,13 @@ local function NoteHr(field, value, extra)
         stats[field] = value
         if field == "step" then stats.stepAt = GetTime() end
     end
+end
+
+-- Repaints the leaderboard badge at the end of a round: a quiet round changes no
+-- row, so nothing else would refresh it. Local only, nothing is sent.
+local function NotifyLadderBadge()
+    local ui = Overlord.LeaderboardUI
+    if ui and ui.RefreshSyncBadge and ui.IsShown and ui:IsShown() then pcall(ui.RefreshSyncBadge, ui) end
 end
 
 local function HashString(value)
@@ -649,17 +667,34 @@ local function FinishRound(pending, success, target)
     pending.terminal = true
     sync._historyCatchupPending = nil
     RotatePeers()
+    local pageStats = sync._leaderboardPageStats
     if success and OverlordDB then
         local ack = OverlordDB.leaderboardHistoryCatchupAck
         ack = type(ack) == "table" and ack.campaignId == pending.campaignId and ack
             or { campaignId = pending.campaignId, historyAt = 0 }
         ack.at = NowServer()
+        -- Badge: a full comparison (ally, or enemy friend without a direct ally) makes
+        -- the ranking "up to date"; enemy-only sweeps count after three in a row, and
+        -- keep an already fresh state fresh.
+        local filtered = type(pageStats) == "table" and pageStats.lastSweepFiltered == true
+        local quiet = type(pageStats) == "table"
+            and (tonumber(pageStats.lastSweepChanged) or 0) <= LADDER_QUIET_ROWS
+        if not quiet then
+            -- Still bringing missing rows: not caught up yet (the arrow stays).
+            sync._ladderFilteredWins = 0
+            ack.fullAt = nil
+        else
+            sync._ladderFilteredWins = filtered and (sync._ladderFilteredWins or 0) + 1 or 0
+            local fullAt = tonumber(ack.fullAt) or 0
+            local fresh = fullAt > 0 and fullAt >= (sync._ladderTrustFloor or ack.at)
+                and ack.at - fullAt < LADDER_STALE_SEC
+            if not filtered or sync._ladderFilteredWins >= 3 or fresh then ack.fullAt = ack.at end
+        end
         OverlordDB.leaderboardHistoryCatchupAck = ack
         OverlordDB.leaderboardRankFirstCompletedCampaignId = pending.campaignId
         NoteHr("completed", 1)
     end
     -- The pull records why it stopped (peer busy, no reply, ...): show it here too.
-    local pageStats = sync._leaderboardPageStats
     local why = not success and type(pageStats) == "table" and type(pageStats.result) == "string"
         and pageStats.result:match("^interrupted (%b())") or ""
     NoteHr("result", success and "paged sweep received"
@@ -668,6 +703,7 @@ local function FinishRound(pending, success, target)
     local v8Round = success and type(pageStats) == "table" and pageStats.protocol == 8
     ArmNextHistoryCatchup(v8Round and V8_RECENT_ACK_SEC or success and RECENT_ACK_SEC or EXHAUSTED_RETRY_SEC)
     pcall(MaybeRequestOutpostHistory, success and target or nil, pending.forceHistory)
+    NotifyLadderBadge()
 end
 
 ScheduleAttempt = function(pending, attempt)
@@ -708,10 +744,16 @@ ScheduleAttempt = function(pending, attempt)
             return
         end
         local target = PickDirectPeer()
+        local hr = sync._historyCatchupStats
         if not target then
             NoteHr("step", "no direct neighbour")
+            if not (hr and hr.noPeerSince) then NoteHr("noPeerSince", GetTime()) end
             ScheduleAttempt(pending, attempt + 1)
             return
+        end
+        if hr and hr.noPeerSince then
+            NoteHr("noPeerSince", nil)
+            NotifyLadderBadge()
         end
         local started, refusal = false, "local"
         if sync.StartCompletePagedLeaderboardCatchup then
@@ -823,6 +865,32 @@ function sync:GetHistoryCatchupSummary()
         stepAge = stats and stats.stepAt and math.floor(GetTime() - stats.stepAt) or 0,
         rows = stats and stats.rows or 0,
     }
+end
+
+-- Leaderboard header badge. Read-only and O(1): nothing sent, no peer scanned.
+-- Returns state ("SYNCING" | "UP_TO_DATE" | "UNKNOWN" | "SUSPENDED"), reason, and
+-- while pulling the stream step (1 kills, 2 captures, 3 races).
+function sync:GetLadderCatchupState()
+    if Overlord.InstanceSuspended then return "SUSPENDED", "instance" end
+    local campaignStart, campaignId = CurrentCampaign()
+    if campaignStart <= 0 or campaignId <= 0 or not OverlordDB then return "UNKNOWN", "no_campaign" end
+    local now, ack = NowServer(), OverlordDB.leaderboardHistoryCatchupAck
+    local fullAt = type(ack) == "table" and math.floor(tonumber(ack.campaignId) or 0) == campaignId
+        and tonumber(ack.fullAt) or 0
+    if fullAt > 0 and fullAt >= (self._ladderTrustFloor or now) and now - fullAt < LADDER_STALE_SEC then
+        return "UP_TO_DATE", "caught_up"
+    end
+    -- No round runs in the first 30 min of a campaign: nothing is downloading.
+    if now - campaignStart < CAMPAIGN_MIN_AGE_SEC then return "UNKNOWN", "new_campaign" end
+    if self.GetPagedPullProgress then
+        local running, step, isPaused = self:GetPagedPullProgress()
+        if running then return "SYNCING", isPaused and "paused" or "pulling", step end
+    end
+    local st = self._historyCatchupStats
+    if st and st.noPeerSince and GetTime() - st.noPeerSince >= LADDER_NO_PEER_GRACE_SEC then
+        return "UNKNOWN", "no_peer"
+    end
+    return "SYNCING", (st and (st.requests or 0) > 0) and "retrying" or "starting"
 end
 
 -- Ligne /ov network : les voisins directs du rattrapage, par faction, avec ceux

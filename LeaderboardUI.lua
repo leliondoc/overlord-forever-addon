@@ -1198,9 +1198,13 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame:HookScript("OnShow", function()
         if lbFrame.infoTicker or not (C_Timer and C_Timer.NewTicker) then return end
         lbFrame.infoTicker = C_Timer.NewTicker(30, function()
-            if lbFrame:IsShown() then Overlord.LeaderboardUI:RefreshInfoLines() end
+            if lbFrame:IsShown() then
+                Overlord.LeaderboardUI:RefreshInfoLines()
+                Overlord.LeaderboardUI:RefreshSyncBadge()
+            end
         end)
     end)
+    self:CreateSyncBadge(title)
 
     -- En-tetes de colonnes (bandeau sombre, meme largeur que les lignes)
     lbFrame.leftStackAnchor = CreateFrame("Frame", nil, lbFrame)
@@ -2782,6 +2786,169 @@ function Overlord.LeaderboardUI:RefreshInfoLines(dc)
     end
 end
 
+-- Ranking sync badge, right of the title (1.8.1): a green arrow sliding down while
+-- ranking data is still arriving from allies and enemies, a green check once a full
+-- comparison with a neighbour succeeded. Reads local state only (Sync
+-- GetLadderCatchupState): nothing is sent; nothing runs while the panel is hidden;
+-- the arrow is an engine-driven animation.
+function Overlord.LeaderboardUI:CreateSyncBadge(title)
+    if not lbFrame or lbFrame.syncBadge or not title then return end
+    local badge = CreateFrame("Frame", nil, lbFrame)
+    badge:SetSize(22, 20)
+    badge:SetPoint("LEFT", title, "RIGHT", 14, 0)
+    local arrow = badge:CreateTexture(nil, "OVERLAY")
+    arrow:SetSize(18, 18)
+    arrow:SetPoint("LEFT", badge, "LEFT", 0, 0)
+    -- Blizzard's green download arrow (atlas, then file), else a tinted scroll arrow.
+    local atlas, file, shown = "UI-HUD-MicroMenu-StreamDLGreen-Up", "Interface\\Buttons\\UI-MicroStream-Green", false
+    if arrow.SetAtlas and C_Texture and C_Texture.GetAtlasInfo then
+        local ok, info = pcall(C_Texture.GetAtlasInfo, atlas)
+        shown = ok and info ~= nil and pcall(arrow.SetAtlas, arrow, atlas, false) or false
+    end
+    if not shown then
+        local ok, id = false, nil
+        if type(GetFileIDFromPath) == "function" then ok, id = pcall(GetFileIDFromPath, file) end
+        if ok and type(id) == "number" and id > 0 then
+            arrow:SetTexture(file)
+        else
+            arrow:SetTexture(SCROLL_IND_DOWN)
+            if arrow.SetDesaturated then arrow:SetDesaturated(true) end
+            arrow:SetVertexColor(0.3, 1, 0.35)
+        end
+    end
+    -- A separate texture: SetTexture after SetAtlas would keep the atlas coordinates.
+    local check = badge:CreateTexture(nil, "OVERLAY")
+    check:SetSize(18, 18)
+    check:SetPoint("LEFT", badge, "LEFT", 0, 0)
+    check:SetTexture("Interface\\RaidFrame\\ReadyCheck-Ready")
+    local text = badge:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    text:SetPoint("LEFT", badge, "LEFT", 22, 0)
+    text:SetJustifyH("LEFT")
+    text:SetWordWrap(false)
+    text:SetShadowOffset(1, -1)
+    badge.arrow, badge.check, badge.text = arrow, check, text
+    if arrow.CreateAnimationGroup then
+        local ag = arrow:CreateAnimationGroup()
+        ag:SetLooping("REPEAT")
+        local drop = ag:CreateAnimation("Translation")
+        drop:SetOffset(0, -5)
+        drop:SetDuration(1.0)
+        if drop.SetSmoothing then drop:SetSmoothing("IN") end
+        local fade = ag:CreateAnimation("Alpha")
+        fade:SetFromAlpha(1)
+        fade:SetToAlpha(0)
+        fade:SetStartDelay(0.7)
+        fade:SetDuration(0.3)
+        badge.anim = ag
+    end
+    -- Live kills once up to date: the check pulses (fades and comes back) when the
+    -- totals grow, at most every 2 s; it never goes back to the arrow for them.
+    if check.CreateAnimationGroup then
+        local pulse = check:CreateAnimationGroup()
+        local glow = pulse:CreateAnimation("Alpha")
+        glow:SetFromAlpha(0.3)
+        glow:SetToAlpha(1)
+        glow:SetDuration(0.6)
+        badge.pulse = pulse
+    end
+    -- Hover shows the tooltip; clicks still go to the panel (it stays draggable).
+    if badge.SetMouseClickEnabled and badge.SetMouseMotionEnabled then
+        badge:SetMouseClickEnabled(false)
+        badge:SetMouseMotionEnabled(true)
+    else
+        badge:EnableMouse(true)
+    end
+    badge:SetScript("OnEnter", function(owner) Overlord.LeaderboardUI:ShowSyncBadgeTooltip(owner) end)
+    badge:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+    badge:Hide()
+    lbFrame.syncBadge = badge
+    lbFrame:HookScript("OnHide", function()
+        if badge.anim then badge.anim:Stop() end
+        if badge.pulse then badge.pulse:Stop() end
+        badge._paint, badge._liveTotal = nil, nil
+    end)
+end
+
+-- Repaints the badge only when its state changes (no text/texture churn).
+function Overlord.LeaderboardUI:RefreshSyncBadge(dc)
+    local badge = lbFrame and lbFrame.syncBadge
+    if not badge or not lbFrame:IsShown() then return end
+    local liveTotal = nil
+    if dc then
+        lbFrame._lbBadgeLocal = dc.fromSavedCache == true
+        liveTotal = (tonumber(dc.alliKills) or 0) + (tonumber(dc.hordeKills) or 0)
+    end
+    local sync, state = Overlord.Sync, "UNKNOWN"
+    if Overlord.InstanceSuspended then
+        state = "SUSPENDED"
+    elseif lbFrame._lbBadgeLocal then
+        state = "SYNCING"
+    elseif sync and sync.GetLadderCatchupState then
+        state = sync:GetLadderCatchupState()
+    end
+    if state == "UP_TO_DATE" and liveTotal then
+        local previous = badge._liveTotal
+        badge._liveTotal = liveTotal
+        if badge._paint == state and previous and liveTotal > previous and badge.pulse
+            and GetTime() - (badge._pulseAt or -10) >= 2 then
+            badge._pulseAt = GetTime()
+            badge.pulse:Stop()
+            badge.pulse:Play()
+        end
+    elseif liveTotal then
+        badge._liveTotal = liveTotal
+    end
+    if badge._paint == state then return end
+    badge._paint = state
+    if state == "SYNCING" or state == "UP_TO_DATE" then
+        local done = state == "UP_TO_DATE"
+        badge.arrow:SetShown(not done)
+        badge.check:SetShown(done)
+        badge.text:SetText(done and (L.LB_SYNC_DONE or "Ranking up to date")
+            or (L.LB_SYNC_RECEIVING or "Still receiving ranking data..."))
+        if done then
+            badge.text:SetTextColor(0.45, 1, 0.45)
+        else
+            badge.text:SetTextColor(0.95, 0.88, 0.70)
+        end
+        badge:SetWidth(22 + (badge.text:GetStringWidth() or 0))
+        badge:Show()
+        if badge.anim then
+            if done then badge.anim:Stop() else badge.anim:Play() end
+        end
+    else
+        -- No neighbour yet, campaign under 30 min old, no campaign, instance: hidden.
+        if badge.anim then badge.anim:Stop() end
+        badge:Hide()
+    end
+end
+
+function Overlord.LeaderboardUI:ShowSyncBadgeTooltip(owner)
+    if not GameTooltip or not owner then return end
+    local sync = Overlord.Sync
+    local state, _, step = "UNKNOWN", nil, nil
+    if lbFrame and lbFrame._lbBadgeLocal then
+        state = "SYNCING"
+    elseif sync and sync.GetLadderCatchupState then
+        state, _, step = sync:GetLadderCatchupState()
+    end
+    GameTooltip:SetOwner(owner, "ANCHOR_BOTTOM")
+    if state == "UP_TO_DATE" then
+        GameTooltip:AddLine(L.LB_SYNC_DONE or "Ranking up to date", 0.45, 1, 0.45)
+        GameTooltip:AddLine(L.LB_SYNC_TIP_DONE or "", 1, 1, 1, true)
+    else
+        GameTooltip:AddLine(L.LB_SYNC_RECEIVING or "Still receiving ranking data...", 1, 0.82, 0)
+        local body = (lbFrame and lbFrame._lbBadgeLocal) and L.LB_CACHED_REFRESHING or L.LB_SYNC_TIP_RECEIVING
+        if body then GameTooltip:AddLine(body, 1, 1, 1, true) end
+        if type(step) == "number" and L.LB_SYNC_TIP_PROGRESS and sync and sync.GetPagedLeaderboardSummary then
+            local summary = sync:GetPagedLeaderboardSummary()
+            GameTooltip:AddLine(string.format(L.LB_SYNC_TIP_PROGRESS, step,
+                InfoNumber(summary and summary.rows or 0)), 0.7, 0.7, 0.7, true)
+        end
+    end
+    GameTooltip:Show()
+end
+
 function Overlord.LeaderboardUI:Refresh()
     if not lbFrame or not lbFrame:IsShown() or not Overlord.Leaderboard then return end
     local lb = Overlord.Leaderboard
@@ -2812,13 +2979,12 @@ function Overlord.LeaderboardUI:Refresh()
 
     local startDate, endDate = Overlord:GetCampaignDateRange()
     local subFmt = string.format(L.LB_CAMPAIGN_DATE, startDate, endDate)
-    if dc.fromSavedCache then
-        subFmt = subFmt .. "  ·  " .. (L.LB_CACHED_REFRESHING or "Saved ranking · updating…")
-    end
     if lbFrame._lbSubFmt ~= subFmt then
         lbFrame._lbSubFmt = subFmt
         lbFrame.subtitle:SetText(subFmt)
     end
+    -- The saved preview (dc.fromSavedCache) now shows as the badge's arrow.
+    self:RefreshSyncBadge(dc)
 end
 
 function Overlord.LeaderboardUI:ApplyFrameScale(scale)

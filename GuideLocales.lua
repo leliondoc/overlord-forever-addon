@@ -41,7 +41,7 @@ en = {
     GUIDE_SECTION_ALERTS = "Alerts",
     GUIDE_ALERTS_BODY = "- Most Wanted: the week's five best enemy killers wear a skull on their nameplate, and the chat warns you when one shows up (/ov wanted on or off).\n- Enemy rampage: an enemy guild racks up HK in a short time (/ov guildkills on or off).\n- Allied rampage, in green: a guild of your faction does it (/ov guildkills allies on or off).\n- Capture and outpost alerts are limited to your continent unless you tick \"Capture alerts from the whole world\" in the options; your guild's outposts, your capital, calls to arms and total victories always reach you.",
     GUIDE_SECTION_TOOLS = "Rankings and Hall of Fame",
-    GUIDE_TOOLS_BODY = "- Weekly leaderboard (/ov lb): HK, guilds with their ranked members, keeps and outposts, a search box, the time left and your rank.\n- /ov sync asks reachable players for a catch-up.\n- Hall of Fame (panel button): last week's champions, your feats and the donors."
+    GUIDE_TOOLS_BODY = "- Weekly leaderboard (/ov lb): HK, guilds with their ranked members, keeps and outposts, a search box, the time left and your rank; next to the title, a green arrow while ranking data is still arriving, then a green check once it is up to date.\n- /ov sync asks reachable players for a catch-up.\n- Hall of Fame (panel button): last week's champions, your feats and the donors."
 },
 fr = {
     GUIDE_BTN_TOOLTIP = "Guide Forever (3 pages)",
@@ -76,7 +76,7 @@ fr = {
     GUIDE_SECTION_ALERTS = "Alertes",
     GUIDE_ALERTS_BODY = "- Most Wanted : les cinq meilleurs tueurs ennemis de la semaine portent un crâne sur leur barre de nom, et le chat vous prévient quand l'un d'eux apparaît (/ov wanted on ou off).\n- Carnage ennemi : une guilde ennemie enchaîne les VH en peu de temps (/ov guildkills on ou off).\n- Carnage allié, en vert : une guilde de votre faction fait de même (/ov guildkills allies on ou off).\n- Les alertes de capture et d'avant-poste se limitent à votre continent, sauf si vous cochez « Alertes de capture du monde entier » dans les options ; les avant-postes de votre guilde, votre capitale, les appels aux armes et les victoires totales vous parviennent toujours.",
     GUIDE_SECTION_TOOLS = "Classement et Panthéon",
-    GUIDE_TOOLS_BODY = "- Classement de la semaine (/ov lb) : VH, guildes avec leurs membres classés, fortins et avant-postes, recherche, temps restant et votre rang.\n- /ov sync demande un rattrapage aux joueurs joignables.\n- Panthéon (bouton du panneau) : les champions de la semaine passée, vos exploits et les donateurs."
+    GUIDE_TOOLS_BODY = "- Classement de la semaine (/ov lb) : VH, guildes avec leurs membres classés, fortins et avant-postes, recherche, temps restant et votre rang ; à côté du titre, une flèche verte tant que les données du classement arrivent, puis une coche verte quand il est à jour.\n- /ov sync demande un rattrapage aux joueurs joignables.\n- Panthéon (bouton du panneau) : les champions de la semaine passée, vos exploits et les donateurs."
 },
 es = {
     GUIDE_BTN_TOOLTIP = "Guía de Forever (3 páginas)",
@@ -111,7 +111,7 @@ es = {
     GUIDE_SECTION_ALERTS = "Alertas",
     GUIDE_ALERTS_BODY = "- Most Wanted: los cinco mejores asesinos enemigos de la semana llevan una calavera en su placa de nombre, y el chat te avisa cuando aparece uno (/ov wanted on u off).\n- Matanza enemiga: una hermandad enemiga acumula MH en poco tiempo (/ov guildkills on u off).\n- Matanza aliada, en verde: una hermandad de tu facción hace lo mismo (/ov guildkills allies on u off).\n- Las alertas de captura y de avanzadas se limitan a tu continente, salvo que marques «Alertas de captura de todo el mundo» en las opciones; las avanzadas de tu hermandad, tu capital, los avisos del Cuerno y las victorias totales te llegan siempre.",
     GUIDE_SECTION_TOOLS = "Clasificación y Salón de la Fama",
-    GUIDE_TOOLS_BODY = "- Clasificación semanal (/ov lb): MH, hermandades con sus miembros clasificados, fortalezas y avanzadas, buscador, tiempo restante y tu puesto.\n- /ov sync pide datos a los jugadores accesibles.\n- Salón de la Fama (botón del panel): campeones de la semana pasada, tus hazañas y los donantes."
+    GUIDE_TOOLS_BODY = "- Clasificación semanal (/ov lb): MH, hermandades con sus miembros clasificados, fortalezas y avanzadas, buscador, tiempo restante y tu puesto; junto al título, una flecha verde mientras llegan datos de la clasificación y luego una marca verde cuando está al día.\n- /ov sync pide datos a los jugadores accesibles.\n- Salón de la Fama (botón del panel): campeones de la semana pasada, tus hazañas y los donantes."
 },
 de = {
     GUIDE_BTN_TOOLTIP = "Forever-Anleitung (3 Seiten)",
@@ -146,7 +146,7 @@ de = {
     GUIDE_SECTION_ALERTS = "Warnungen",
     GUIDE_ALERTS_BODY = "- Most Wanted: Die fünf besten feindlichen Kämpfer der Woche tragen einen Totenkopf auf ihrer Namensplakette, und der Chat warnt euch, wenn einer auftaucht (/ov wanted on oder off).\n- Feindliches Gemetzel: Eine feindliche Gilde sammelt in kurzer Zeit viele ES (/ov guildkills on oder off).\n- Verbündetes Gemetzel, in Grün: Eine Gilde eurer Fraktion tut es (/ov guildkills allies on oder off).\n- Eroberungs- und Außenpostenwarnungen beschränken sich auf euren Kontinent, außer ihr aktiviert „Eroberungswarnungen aus der ganzen Welt“ in den Optionen; die Außenposten eurer Gilde, eure Hauptstadt, das Kriegshorn und totale Siege erreichen euch immer.",
     GUIDE_SECTION_TOOLS = "Rangliste und Ruhmeshalle",
-    GUIDE_TOOLS_BODY = "- Wochenrangliste (/ov lb): ES, Gilden mit ihren gelisteten Mitgliedern, Festungen und Außenposten, Suchfeld, Restzeit und euer Rang.\n- /ov sync fordert Daten von erreichbaren Spielern an.\n- Ruhmeshalle (Schaltfläche im Panel): Champions der letzten Woche, eure Heldentaten und die Spender."
+    GUIDE_TOOLS_BODY = "- Wochenrangliste (/ov lb): ES, Gilden mit ihren gelisteten Mitgliedern, Festungen und Außenposten, Suchfeld, Restzeit und euer Rang; neben dem Titel ein grüner Pfeil, solange Ranglistendaten eintreffen, dann ein grüner Haken, sobald sie aktuell ist.\n- /ov sync fordert Daten von erreichbaren Spielern an.\n- Ruhmeshalle (Schaltfläche im Panel): Champions der letzten Woche, eure Heldentaten und die Spender."
 },
 ru = {
     GUIDE_BTN_TOOLTIP = "Руководство Forever (3 страницы)",
@@ -181,7 +181,7 @@ ru = {
     GUIDE_SECTION_ALERTS = "Оповещения",
     GUIDE_ALERTS_BODY = "- Most Wanted: у пяти лучших вражеских бойцов недели над головой череп, а чат предупреждает, когда один из них появляется рядом (/ov wanted on или off).\n- Вражеский разгром: вражеская гильдия быстро набирает ПП (/ov guildkills on или off).\n- Союзный разгром, зелёным: то же делает гильдия вашей фракции (/ov guildkills allies on или off).\n- Оповещения о захватах и аванпостах приходят только с вашего континента, если в настройках не отмечено «Оповещения о захватах со всего мира»; об аванпостах вашей гильдии, вашей столице, призывах «К оружию» и полных победах вы узнаёте всегда.",
     GUIDE_SECTION_TOOLS = "Рейтинг и Зал славы",
-    GUIDE_TOOLS_BODY = "- Недельный рейтинг (/ov lb): ПП, гильдии с числом участников в рейтинге, крепости и аванпосты, поиск, оставшееся время и ваше место.\n- /ov sync запрашивает данные у доступных игроков.\n- Зал славы (кнопка на панели): чемпионы прошлой недели, ваши подвиги и те, кто поддержал проект."
+    GUIDE_TOOLS_BODY = "- Недельный рейтинг (/ov lb): ПП, гильдии с числом участников в рейтинге, крепости и аванпосты, поиск, оставшееся время и ваше место; рядом с заголовком зелёная стрелка, пока приходят данные рейтинга, затем зелёная галочка, когда он актуален.\n- /ov sync запрашивает данные у доступных игроков.\n- Зал славы (кнопка на панели): чемпионы прошлой недели, ваши подвиги и те, кто поддержал проект."
 },
 pt = {
     GUIDE_BTN_TOOLTIP = "Guia Forever (3 páginas)",
@@ -216,7 +216,7 @@ pt = {
     GUIDE_SECTION_ALERTS = "Alertas",
     GUIDE_ALERTS_BODY = "- Most Wanted: os cinco melhores matadores inimigos da semana têm uma caveira na placa de nome, e o chat avisa quando um deles aparece (/ov wanted on ou off).\n- Massacre inimigo: uma guilda inimiga acumula VH em pouco tempo (/ov guildkills on ou off).\n- Massacre aliado, em verde: uma guilda da sua facção faz o mesmo (/ov guildkills allies on ou off).\n- Os alertas de captura e de postos avançados se limitam ao seu continente, a menos que você marque \"Alertas de captura do mundo inteiro\" nas opções; os postos avançados da sua guilda, sua capital, os chamados às armas e as vitórias totais sempre chegam até você.",
     GUIDE_SECTION_TOOLS = "Classificação e Hall da Fama",
-    GUIDE_TOOLS_BODY = "- Classificação semanal (/ov lb): VH, guildas com seus membros classificados, fortalezas e postos, busca, tempo restante e sua posição.\n- /ov sync pede dados aos jogadores alcançáveis.\n- Hall da Fama (botão do painel): campeões da semana passada, seus feitos e os doadores."
+    GUIDE_TOOLS_BODY = "- Classificação semanal (/ov lb): VH, guildas com seus membros classificados, fortalezas e postos, busca, tempo restante e sua posição; ao lado do título, uma seta verde enquanto os dados da classificação chegam e depois um visto verde quando ela está em dia.\n- /ov sync pede dados aos jogadores alcançáveis.\n- Hall da Fama (botão do painel): campeões da semana passada, seus feitos e os doadores."
 },
 zhCN = {
     GUIDE_BTN_TOOLTIP = "Forever 指南（3 页）",
@@ -251,7 +251,7 @@ zhCN = {
     GUIDE_SECTION_ALERTS = "警报",
     GUIDE_ALERTS_BODY = "- 头号通缉（Most Wanted）：本周击杀最多的五名敌人姓名板上显示骷髅，其中一人出现时聊天框会提醒你（/ov wanted on 或 off）。\n- 敌方屠戮：敌方公会在短时间内大量击杀（/ov guildkills on 或 off）。\n- 友方屠戮，绿色显示：本阵营公会大杀四方（/ov guildkills allies on 或 off）。\n- 占领和前哨站警报仅限你所在的大陆，除非在选项中勾选“全世界的占领警报”；你公会的前哨站、你的首都、战斗号召和全面胜利始终会通知你。",
     GUIDE_SECTION_TOOLS = "排行榜与名人堂",
-    GUIDE_TOOLS_BODY = "- 每周排行榜（/ov lb）：击杀、公会及其上榜成员数、要塞和前哨，并提供搜索、剩余时间和你的排名。\n- /ov sync 向可联系的玩家请求同步。\n- 名人堂（面板按钮）：上周冠军、你的成就和捐助者。"
+    GUIDE_TOOLS_BODY = "- 每周排行榜（/ov lb）：击杀、公会及其上榜成员数、要塞和前哨，并提供搜索、剩余时间和你的排名；标题旁的绿色箭头表示排行榜数据仍在接收，完成后显示绿色对勾。\n- /ov sync 向可联系的玩家请求同步。\n- 名人堂（面板按钮）：上周冠军、你的成就和捐助者。"
 },
 }
 
