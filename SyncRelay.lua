@@ -987,9 +987,9 @@ function net:GetKindDiagnostics(maxRows)
     lines[#lines + 1] = string.format("Battle.net bridges: %d of %d opposite-faction friends heard in the last %d min"
         .. " (the others only get rotating copies).", live, enemies, BNET_ALIVE_SEC / 60)
     lines[#lines + 1] = string.format("Bridge election: %d same-faction bridges heard, crossing share %d%%"
-        .. " (100%% up to %d), %d enemy copies of routine traffic left to the elected forwarders.",
+        .. " (100%% up to %d), %d enemy copies of routine traffic and %d score rows left to the elected forwarders.",
         sameFactionBridgeCount(), math.floor(crossShare() * 100 + 0.5), CROSS_FULL_BRIDGES,
-        self.stats.crossElectionSkipped or 0)
+        self.stats.crossElectionSkipped or 0, self.stats.bridgeOutElectedAway or 0)
     local lb = addon.Leaderboard
     if lb and lb.GetHotIndexStats then
         local h = lb:GetHotIndexStats()
