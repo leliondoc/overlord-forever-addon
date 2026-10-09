@@ -117,6 +117,29 @@ live = lb:EnsureDisplayCache()
 assert(live.meta[names[200]] == nil or live.meta[names[200]][1] == "PALADIN",
     "A ranked player's new class did not reach the view")
 
+-- A class learnt while a view is being built, after the build copied that player's
+-- row: the build may still publish its older copy, but the next view must show the
+-- new class (1.8.0 kept reusing the older copy until another change cleared it).
+local top = live.sortedKills[1].name
+lb:SetPlayerKills(names[150], 2500, true)
+lb:EnsureDisplayCache()
+local guard = 0
+while not (lb._displayCacheBuildPending and lb._displayCacheBuildPending.displayMetaGen) do
+    assert(head <= #timers, "the view build ended before copying its rows")
+    local run = timers[head]
+    timers[head], head = false, head + 1
+    run()
+    guard = guard + 1
+    assert(guard < 10000, "the view build never reached its rows")
+end
+lb:SetPlayerClassFromSync(top, "DRUID")
+drain()
+lb:EnsureDisplayCache()
+drain()
+live = lb:EnsureDisplayCache()
+assert(live.meta[top] and live.meta[top][1] == "DRUID",
+    "A class learnt during a view build stayed hidden: " .. tostring(live.meta[top] and live.meta[top][1]))
+
 lb:SetPlayerKills(names[101], 4999, true)
 assert(lb:EnsureDisplayCache() == live, "A background update blanked the existing ranking")
 drain()

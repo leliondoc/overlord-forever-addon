@@ -619,7 +619,11 @@ local function markIndexedMetaMutation(self, playerName)
         self._snapshotDirty = true
         self._snapshotRevision = (self._snapshotRevision or 0) + 1
         -- La vue precedente reste affichable jusqu'a la publication atomique de la suivante.
+        -- The generation tells a build already running that its copy of the display
+        -- meta is stale (1.8.0 kept republishing it: a race/class learnt meanwhile
+        -- stayed invisible until the next rebuild).
         self._displayMetaCache = nil
+        self._displayMetaGen = (self._displayMetaGen or 0) + 1
         self._displayCacheEpoch = (self._displayCacheEpoch or 0) + 1
     end
     if playerName then
@@ -1188,6 +1192,9 @@ function Overlord.Leaderboard:RebuildDedupMetaIndex(yieldWork, onName)
     metaRebuildJournals[journal] = nil
 
     self._dedupMetaIndex = index
+    -- A freshly built index may differ from the meta the display copied: drop the copy.
+    self._displayMetaCache = nil
+    self._displayMetaGen = (self._displayMetaGen or 0) + 1
 end
 
 function Overlord.Leaderboard:EnsureDedupMetaIndex()
@@ -1864,6 +1871,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         -- Vue meta bornee aux lignes publiees. Reutiliser les valeurs du cache
         -- precedent, mais ne jamais y accumuler tous les anciens top-K au fil du temps.
         local previousDisplayMeta = self._displayMetaCache or { meta = {}, locale = {} }
+        state.displayMetaGen = self._displayMetaGen or 0
         local displayMeta = { meta = {}, locale = {} }
         local meta, locale = displayMeta.meta, displayMeta.locale
         local function touch(name)
@@ -1992,7 +2000,10 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             local scoreEpochChanged = (self._displayCacheEpoch or 0) ~= state.epoch
             if not state.aborted and metaUnchanged and canonicalUnchanged and state.result
                 and displayCacheSourcesMatch(state.result, self) then
-                self._displayMetaCache = state.displayMeta
+                -- Keep the meta copy for reuse only if no meta changed during the build.
+                if (self._displayMetaGen or 0) == state.displayMetaGen then
+                    self._displayMetaCache = state.displayMeta
+                end
                 self._displayCache = state.result
                 self:SaveDisplayCache(state.result)
             end
