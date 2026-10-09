@@ -1705,22 +1705,42 @@ function Overlord.Sync:GetCaptureContributorDedupKey(name)
 end
 
 -- True si l'expediteur addon designe le joueur local (formats Nom vs Nom-Royaume du canal).
+-- Asked for every addon message received: the answer per sender string never changes
+-- once our own name is known, so it is memoized (bounded, wiped when full).
+local localSenderMemo, localSenderMemoCount, localSenderMemoName = {}, 0, nil
 function Overlord.Sync:IsSenderLocalPlayer(sender)
     if not sender or sender == "" then return false end
     if sender:sub(1, 5) == "BNet-" then return false end
     -- WoW 12.0.5 : SafeStringEquals pour comparer avec les noms potentiellement secrets
     local myFullName = self:GetPlayerFullName()
+    local memoUsable = type(myFullName) == "string" and myFullName ~= "" and type(sender) == "string"
+        and (not canaccessvalue or canaccessvalue(sender))
+    if memoUsable then
+        if localSenderMemoName ~= myFullName then
+            localSenderMemo, localSenderMemoCount, localSenderMemoName = {}, 0, myFullName
+        end
+        local known = localSenderMemo[sender]
+        if known ~= nil then return known end
+    end
+    local result = false
     local myShortName = Overlord:SafeUnitName("player")
     if Overlord:SafeStringEquals(sender, myFullName) or Overlord:SafeStringEquals(sender, myShortName) then
-        return true
+        result = true
+    else
+        local sk = self:GetCaptureContributorDedupKey(sender)
+        local mk = self:GetCaptureContributorDedupKey(myFullName)
+        if sk ~= nil and mk ~= nil and Overlord:SafeStringEquals(sk, mk) then
+            result = true
+        else
+            result = (self.ForeverIdentitiesMatch and self:ForeverIdentitiesMatch(sender, myFullName)) == true
+        end
     end
-    local sk = self:GetCaptureContributorDedupKey(sender)
-    local mk = self:GetCaptureContributorDedupKey(myFullName)
-    if sk ~= nil and mk ~= nil and Overlord:SafeStringEquals(sk, mk) then
-        return true
+    if memoUsable then
+        if localSenderMemoCount >= 4096 then localSenderMemo, localSenderMemoCount = {}, 0 end
+        localSenderMemo[sender] = result
+        localSenderMemoCount = localSenderMemoCount + 1
     end
-    return self.ForeverIdentitiesMatch and self:ForeverIdentitiesMatch(sender, myFullName)
-        or false
+    return result
 end
 
 -- Forever : un seul monde, pas de royaume. Band = faction pour le routage BNet.
