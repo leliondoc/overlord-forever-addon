@@ -821,6 +821,39 @@ do
     assert(critical.C == true, "A relayed capture final waited for an ordinary channel token")
     assert(critical.ZS == false, "Relayed routine progress took a priority token")
     assert(critical.Cown == false, "Our own relay copy took a priority token")
+    -- A burst of relayed terminals: one priority token per 1.25 s, the next ones wait
+    -- their ordinary turn instead of being refused by Blizzard.
+    critical = {}
+    now = now + 5
+    assert(relayer.Relay:Receive("global|crit-c2|" .. time() .. "|*|Foe Tester|C|crit-two:Alliance:x",
+        "Foe Tester", "BNET", foe))
+    assert(relayer.Relay:Receive("global|crit-c3|" .. time() .. "|*|Foe Tester|ZR|crit-three:w:Foe Tester",
+        "Foe Tester", "BNET", foe))
+    local priority = 0
+    local relayerChannel2 = relayer.Sync.SendToChannel
+    function relayer.Sync:SendToChannel(kind, fragment, isCritical)
+        if fragment:find("crit%-t") and isCritical then priority = priority + 1 end
+        return relayerChannel2(self, kind, fragment, isCritical)
+    end
+    drain()
+    assert(priority == 1, "Relayed terminals in a burst all took a priority token: " .. priority)
+end
+-- Back from an instance, one presence beat comes soon (bridges find us again).
+do
+    local back = client("Back Tester", "back-chan")
+    local beats = 0
+    local backSend = back.Relay.Send
+    back.Relay.Send = function(self, kind, ...)
+        if kind == "NH" then beats = beats + 1 end
+        return backSend(self, kind, ...)
+    end
+    back.Relay:Start()
+    drain()
+    beats = 0
+    back.Relay:ScheduleReturnPresence()
+    back.Relay:ScheduleReturnPresence()
+    drain()
+    assert(beats == 1, "Return from an instance did not send exactly one presence beat: " .. beats)
 end
 -- A neighbour's route and advertised ranking protocol survive a launch-sized channel:
 -- a map reply (~30 s of pages) and the choice of the v8 exchange need them.
@@ -952,11 +985,11 @@ do
     now = now + 11
     assert(hearer.Relay:GetCrossElection() == 8, "Bridge count wrong (enemy presence counted?)")
     crossed = 0
-    for i = 1, 10 do heard("ZS", "wetlands_" .. i .. ":in_progress:Horde:20:x") end
+    for i = 1, 10 do heard("ZS", "wetlands_" .. i .. ":in_progress:Horde:90:x") end
     assert(crossed == 10, "Eight bridges: a routine packet was already shared out: " .. crossed)
     bridgesHeard(9, 12)
     crossed = 0
-    for i = 1, 60 do heard("ZS", "loch_" .. i .. ":in_progress:Horde:20:x") end
+    for i = 1, 60 do heard("ZS", "loch_" .. i .. ":in_progress:Horde:90:x") end
     assert(crossed > 5 and crossed < 40, "Many bridges: routine crossings not shared out: " .. crossed)
     assert((hearer.Relay.stats.crossElectionSkipped or 0) == 60 - crossed, "Skipped crossings not counted")
     bridgesHeard(1, 12)
@@ -965,6 +998,11 @@ do
     for i = 1, 10 do heard("C", "ashen_" .. i .. ":Horde:x") end
     for i = 1, 10 do heard("ZS", "hills_" .. i .. ":captured:Horde:0:x") end
     assert(crossed == 20, "A terminal event was elected away: " .. crossed)
+    -- Siege starts (defenders' warning) and assaults given up are not elected either.
+    crossed = 0
+    for i = 1, 10 do heard("ZS", "start_" .. i .. ":in_progress:Horde:20:x") end
+    for i = 1, 10 do heard("OP", "v2:site_" .. i .. ":neutral:x") end
+    assert(crossed == 20, "A siege start or an abandoned assault was elected away: " .. crossed)
     crossed = 0
     for i = 1, 10 do assert(hearer.Relay:Send("ZS", "own_" .. i .. ":in_progress:Horde:20:x")); drain() end
     assert(crossed == 10, "Our own routine packets lost their Battle.net copies: " .. crossed)

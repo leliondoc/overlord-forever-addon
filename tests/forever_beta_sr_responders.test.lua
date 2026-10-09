@@ -51,6 +51,21 @@ sync:OnSyncRequest("Horde Joiner", payload, "BETA")
 assert(responded(), "Selected peer did not answer the broadcast request")
 release()
 
+-- Launch-size crowd: about eight answers in all, not 5 % of everyone (the old
+-- floor gave ~250 full maps to one player at 5,000 neighbours).
+local crowd = {}
+for i = 1, 5000 do crowd[i] = "Crowd " .. i end
+Overlord.Relay.GetDirectPeers = function() return crowd end
+targeted, roll = false, 0.01
+sync:OnSyncRequest("Horde Joiner", payload, "BETA")
+assert(not responded(), "A broadcast request was answered by 5 % of a 5,000-player crowd")
+release()
+targeted, roll = false, 0.001
+sync:OnSyncRequest("Horde Joiner", payload, "BETA")
+assert(responded(), "A crowd peer never answers a broadcast request")
+release()
+Overlord.Relay.GetDirectPeers = function() return peers end
+
 -- Point to point (1.2.4): a request that crossed a relay is never answered,
 -- targeted or not, since the reply would have to cross the same relays back.
 Overlord.Relay.context = { hops = 2 }

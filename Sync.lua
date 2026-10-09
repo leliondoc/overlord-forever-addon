@@ -2597,10 +2597,6 @@ function Overlord.Sync:OnBNetMessage(message, senderID)
     if not IsBNetGameAccountInCurrentRegion(senderID) then return end
     local msgType, rest = strsplit(":", message, 2)
     if not rest then return end
-    -- Any Overlord message proves a live bridge (relay ranking of friends).
-    if Overlord.Relay and Overlord.Relay.NoteBNetHeard then
-        Overlord.Relay:NoteBNetHeard(senderID)
-    end
 
     -- R2 = enveloppe du relais : R2:<band>:BR|BF:<paquet>
     if msgType == "R2" then
@@ -2619,6 +2615,11 @@ function Overlord.Sync:OnBNetMessage(message, senderID)
     else
         payload = rest
         band = nil
+    end
+    -- A direct message from a compatible friend proves a live bridge (relay
+    -- envelopes are noted by the relay itself, after their own band check).
+    if Overlord.Relay and Overlord.Relay.NoteBNetHeard then
+        Overlord.Relay:NoteBNetHeard(senderID)
     end
 
     local sender = "BNet-" .. tostring(senderID)
@@ -5179,7 +5180,10 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         local betaNet = Overlord.Relay
         local directCount = betaNet and (betaNet.CountDirectPeers and betaNet:CountDirectPeers()
             or betaNet.GetDirectPeers and #betaNet:GetDirectPeers()) or 0
-        respondChance = math.min(respondChance, math.max(0.05, 2 / math.max(1, directCount)))
+        -- About eight answers whatever the crowd (the old 5 % floor won above 40
+        -- neighbours: ~75 full maps per login on the beta, 500+ at launch, all to
+        -- one player). Targeted pulls stay guaranteed.
+        respondChance = math.min(respondChance, math.max(0.002, 8 / math.max(1, directCount)))
         if math.random() > respondChance then return end
         -- Tirage deja fait : ne pas repasser par le tirage generique ci-dessous.
         respondChance = 1.0
@@ -11031,6 +11035,12 @@ function Overlord.Sync:Resume()
     self:StartProximitySync()
     self:StartPassiveSync()
     self:ResumePendingKillBroadcast()
+    -- Back from an instance: Battle.net friends stopped hearing us there (the relay
+    -- is off) and drop us as a bridge after 5 min. One presence beat soon after the
+    -- return lets both sides find each other again without waiting for the 120 s beat.
+    if Overlord.Relay and Overlord.Relay.ScheduleReturnPresence then
+        Overlord.Relay:ScheduleReturnPresence()
+    end
 end
 
 -- Mines (MS/MN), whispers communaute, appel de faction (FC), sync passive : voir SyncAux.lua

@@ -760,6 +760,14 @@ local function crossShare()
 end
 local function crossElected(p)
     if #p.path < 2 or not CROSS_ELECTED_KINDS[p.kind] or isTerminal(p) then return true end
+    -- A siege start (defenders' early warning) and an assault given up (neutral
+    -- outpost) are rare and matter: never elected away either.
+    if type(p.payload) == "string" then
+        if p.kind == "ZS" and (tonumber(p.payload:match("^[^:]+:in_progress:[^:]*:(%d+):")) or 999) <= 45 then
+            return true
+        end
+        if p.kind == "OP" and p.payload:match("^v%d+:[^:]*:([^:]*)") == "neutral" then return true end
+    end
     local share = crossShare()
     if share >= 1 then return true end
     local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
@@ -1475,7 +1483,14 @@ local function emit(task)
     else
         -- /ov network: a relay copy is a BF fragment; count it under its real kind.
         sync._channelSendKind = tostring(task.packetKind or "?") .. "*"
-        sent, reason = sync:SendToChannel(task.kind, task.data, task.critical == true)
+        -- Priority token for relayed terminals, at most one every 1.25 s: a burst
+        -- (truce end, victory) would otherwise outrun Blizzard's ~1 msg/s and be refused.
+        local critical = false
+        if task.critical == true and GetTime() - (net._lastRelayCriticalAt or -10) >= 1.25 then
+            critical = true
+            net._lastRelayCriticalAt = GetTime()
+        end
+        sent, reason = sync:SendToChannel(task.kind, task.data, critical)
         sync._channelSendKind = nil
     end
     task.sending = nil
@@ -2542,7 +2557,10 @@ function net:NoteOwnerKill(name, faction, total, before, class, locale, epoch, b
         local share = crossShare()
         if share < 1 then
             local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
-            if hashFrac("O|" .. tostring(me):lower() .. "|" .. name:lower()) >= share then
+            -- The electors of a subject change every 15 min: a subject whose few
+            -- electors have no live bridge is not left out for good.
+            local bucket = math.floor(serverNow() / 900)
+            if hashFrac("O|" .. bucket .. "|" .. tostring(me):lower() .. "|" .. name:lower()) >= share then
                 self.stats.bridgeOutElectedAway = (self.stats.bridgeOutElectedAway or 0) + 1
                 return false
             end
@@ -2584,6 +2602,14 @@ function net:NoteChannelBridgeRow(name, total, faction, sender)
     row.pending, row.sentAt = nil, GetTime()
     self.stats.bridgeLKCovered = (self.stats.bridgeLKCovered or 0) + 1
     return true
+end
+function net:ScheduleReturnPresence()
+    if not enabled() or not self.started or self.returnPresencePending then return end
+    self.returnPresencePending = true
+    C_Timer.After(5 + math.random() * 10, function()
+        net.returnPresencePending = nil
+        if active() then net:Broadcast("NH", addon.Version) end
+    end)
 end
 function net:Start()
     if not enabled() or self.started then return end
