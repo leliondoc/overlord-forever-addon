@@ -502,11 +502,6 @@ function Overlord.Sync:BroadcastMining(mineId)
 end
 
 
--- Pairs Overlord vus recemment sur le relais.
-function Overlord.Sync:GetRelayPeers()
-    return Overlord.BetaNetwork and Overlord.BetaNetwork:GetPeers() or {}
-end
-
 
 
 -- Expediteur dont WoW ou Battle.net a authentifie le nom : membre du groupe, ou
@@ -1303,17 +1298,6 @@ function Overlord.Sync:NormalizeRaceFileToken(race)
     end
     race = RACE_FILE_ALIASES[race] or race
     if race == "" or not VALID_RACE_FILE[race] then return nil end
-    return race
-end
-
--- Etend sans risque la liste statique lorsqu'un nouveau token vient directement
--- de C_CreatureInfo/GetPlayerInfoByGUID (utile aux nouvelles races jouables).
-function Overlord.Sync:RegisterTrustedRaceFileToken(race)
-    if type(race) ~= "string" then return nil end
-    race = race:match("^%s*(.-)%s*$") or ""
-    if race == "" or #race > 40 or not race:match("^[A-Za-z]+$") then return nil end
-    race = RACE_FILE_ALIASES[race] or race
-    VALID_RACE_FILE[race] = true
     return race
 end
 

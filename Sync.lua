@@ -370,11 +370,6 @@ local function CheckRemoteVersion(remoteVersion)
     end
 end
 
--- Accesseur : version la plus recente connue (nil si aucune version plus recente vue encore).
-function Overlord.Sync:GetKnownNewerVersion()
-    return self._knownNewerVersion
-end
-
 -- Capture vue en observateur distant : dernier ZS peut manquer (throttle BNet/canaux).
 -- Un SR groupe/canal rafraichit ZA/ZS sans attendre approach-proximity (throttle global anti-spam).
 local lastStaleObserverPoll = 0
@@ -2312,15 +2307,6 @@ function Overlord.Sync:_RememberRecentAddonWhisper(target, now)
     priv.recentAddonWhisperAliases[key] = now
     priv.recentAddonWhisperAliases[key:match("^([^%-]+)") or key] = now
     priv.recentAddonWhisperCount = priv.recentAddonWhisperCount + 1
-end
-
--- Enregistre un nom dans le filtre d'erreurs whisper (masque "Aucun joueur nomme 'X'...").
--- Utilise par UI.lua pour les whispers en clair (SendChatMessage) du systeme d'invite shard.
-function Overlord.Sync:RegisterRecentWhisperTarget(target)
-    if not target or type(target) ~= "string" then return end
-    target = target:match("^%s*(.-)%s*$") or ""
-    if target == "" or #target < 2 then return end
-    self:_RememberRecentAddonWhisper(target, GetTime())
 end
 
 function Overlord.Sync:SendWhisper(msgType, data, target, direct)
@@ -5022,13 +5008,6 @@ local function SchedulePendingDirectSRRetry()
             SchedulePendingDirectSRRetry()
         end
     end)
-end
-
--- Appele quand on recoit R2 (relais) : on envoie la reponse en whisper a replyTo
-function Overlord.Sync:OnSyncRequestRelayed(replyTo, payload)
-    if not replyTo or replyTo == "" or #replyTo > 50 then return end
-    if not self:HasCompleteContributorIdentity(replyTo) then return end
-    self:OnSyncRequest(replyTo, payload or "", "WHISPER", replyTo)
 end
 
 function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
@@ -10591,7 +10570,6 @@ function Overlord.Sync:ScheduleActivePeriodicCatchUp()
         -- Une SR partagee d'un rang precedent (ou d'un autre groupe du front) suffit.
         if (tonumber(sync._lastActivePeriodicSrAt) or 0) >= waveStartedAt then return end
         sync._lastActivePeriodicSrAt = GetTime()
-        local large = sync.IsLargeEvent and sync:IsLargeEvent()
         -- Une seule vague, toujours territoriale (jamais d'historique de classement ici).
         sync:SendSyncRequest({
         })

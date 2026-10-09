@@ -782,7 +782,6 @@ local SHARD_NEGATIVE_FRESH_SECONDS = 2
 local SHARD_KNOWN_SCAN_INTERVAL = 30
 local SHARD_UNKNOWN_SCAN_MIN = 2
 local SHARD_UNKNOWN_SCAN_MAX = 30
-local SHARD_ON_DEMAND_RESCAN_GAP = 8
 
 -- Met a jour le shardID courant. skipIfFresh=true (evenements haute frequence) : ne rescanne pas
 -- (GetVignettes + jusqu'a 40 nameplates) si un shardID a deja ete confirme il y a moins de
@@ -1075,62 +1074,6 @@ function Overlord.Shard:InvalidateLocalContext()
     self.localShardSource = nil
     self.keepShardRequest = nil
     if StopShardScanMaintenance then StopShardScanMaintenance() end
-end
-
-function Overlord.Shard:GetFreshLocalShardID(maxAge)
-    local shardID = CoerceShardId(self.currentShardID)
-    local measuredAt = tonumber(self.lastUpdateAt) or 0
-    local contextAt = tonumber(self.localContextStartedAt) or 0
-    maxAge = tonumber(maxAge) or 15
-    local now = GetTime()
-    local stale = shardID == nil or measuredAt <= 0 or measuredAt < contextAt
-        or (now - measuredAt) > maxAge
-    -- Les consommateurs critiques (debut/reprise d'un assaut) peuvent demander une
-    -- preuve fraiche sans imposer un scan de fond toutes les cinq secondes au joueur
-    -- immobile. Le garde borne aussi les echecs dans un fortin vide.
-    if stale and Overlord.IsShardHelperActive and Overlord:IsShardHelperActive()
-        and ((tonumber(self.lastScanAttemptAt) or 0) == 0
-            or now - (tonumber(self.lastScanAttemptAt) or 0)
-                >= math.max(SHARD_ON_DEMAND_RESCAN_GAP, maxAge)) then
-        self:Update()
-        shardID = CoerceShardId(self.currentShardID)
-        measuredAt = tonumber(self.lastUpdateAt) or 0
-        contextAt = tonumber(self.localContextStartedAt) or 0
-        now = GetTime()
-    end
-    if shardID == nil or measuredAt <= 0 or measuredAt < contextAt
-        or (now - measuredAt) > maxAge then return nil end
-    return shardID
-end
-
--- Pendant un assaut deja ancre, un scan negatif ne signifie pas que le joueur a change
--- de couche : un fortin vide peut simplement ne fournir aucun GUID pendant plusieurs minutes.
--- Le contexte est invalide immediatement aux transitions monde/carte ; tant qu'il est identique,
--- conserver la derniere mesure de CE contexte sans TTL evite de geler le chrono apres 8 secondes.
-function Overlord.Shard:GetContextLocalShardID(expectedContextKey)
-    local shardID = CoerceShardId(self.currentShardID)
-    local measuredAt = tonumber(self.lastUpdateAt) or 0
-    local contextAt = tonumber(self.localContextStartedAt) or 0
-    local contextKey = tostring(self.localContextKey or "")
-    if shardID == nil or measuredAt <= 0 or measuredAt < contextAt
-        or contextKey == ""
-        or (expectedContextKey ~= nil and contextKey ~= tostring(expectedContextKey)) then return nil end
-    return shardID
-end
-
--- Identite de shard utilisable par une action de capture dans un contexte exact.
--- Une preuve de moins de maxAge secondes reste preferee, mais une mesure plus ancienne
--- du MEME contexte reste valide : ZONE_CHANGED_NEW_AREA, PLAYER_ENTERING_WORLD et
--- UNIT_PHASE invalident toutes trois ce contexte avant le prochain tick gameplay.
-function Overlord.Shard:GetCaptureLocalShardID(expectedContextKey, maxAge)
-    if not self:SyncLocalContext() then return nil end
-    expectedContextKey = tostring(expectedContextKey or "")
-    if expectedContextKey == "" or tostring(self.localContextKey or "") ~= expectedContextKey then
-        return nil
-    end
-    local shardID = self:GetFreshLocalShardID(maxAge)
-    if shardID ~= nil then return shardID end
-    return self:GetContextLocalShardID(expectedContextKey)
 end
 
 -- PLAYER_LOGOUT ne dit pas s'il precede un /reload ou une vraie deconnexion. On garde donc

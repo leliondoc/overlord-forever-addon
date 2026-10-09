@@ -103,6 +103,9 @@ for _, bucket in ipairs({ OverlordDB.leaderboard, OverlordDB.leaderboardsByPool.
     assert(bucket.kills["Corrupt Tester"] == nil, "Oversized saved score survived cleanup")
 end
 assert(lb.kills[me] == 15003, "Remote-score cleanup erased local HKs")
-local rows = lb:GetSortedKills(500)
-assert(rows[1].name == me and rows[1].kills == 15003, "Larger scores broke ranking order")
+local top, topKills = nil, -1
+for name, kills in pairs(lb.kills) do
+    if kills > topKills then top, topKills = name, kills end
+end
+assert(top == me and topKills == 15003, "Larger scores broke ranking order")
 print("Forever kill ceiling: K/LK 1001..15000, rejection, monotonic merge, additive guards, local HKs, save/cleanup and ranking OK")

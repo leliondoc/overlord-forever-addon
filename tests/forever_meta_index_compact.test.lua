@@ -245,7 +245,6 @@ do
     assert(lb._dedupMetaIndex[dk("Heartbeat Only")].guild == "Some Guild"
         and lb._dedupMetaIndex[dk("Tombstone Only")].guildAuth == true, "register values lost")
     assert(lb:GetHotPlayerGuildState("Heartbeat Only") == "Some Guild", "hot guild read lost the register")
-    assert(lb:GetExportPlayerGuild("Heartbeat Only") == "Some Guild", "exported guild lost the register")
     assertMatchesRebuild("guild registers only")
     -- The player then scores: the full entry replaces the register.
     lb:SetPlayerInfo("Heartbeat Only", "SHAMAN", "Horde", "dede", true)

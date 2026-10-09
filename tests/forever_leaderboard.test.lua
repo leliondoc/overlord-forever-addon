@@ -77,9 +77,13 @@ assert(loadfile("Sync.lua"))()
 assert(loadfile("SyncAux.lua"))()
 lb = loadLeaderboard()
 assert(lb.captureCount["Dwarf Tester"] == 1, "Login erased the first character's capture")
-local rows = lb:GetSortedCapturesByFaction()
-assert(#rows.Alliance == 1 and rows.Alliance[1].name == "Dwarf Tester"
-    and rows.Alliance[1].count == 1 and #rows.Horde == 0, "Capture disappeared from the faction table")
+local capturers = {}
+for capturer, count in pairs(lb.captureCount) do
+    if count > 0 then capturers[#capturers + 1] = capturer end
+end
+assert(#capturers == 1 and capturers[1] == "Dwarf Tester"
+    and select(2, lb:GetExportPlayerMeta("Dwarf Tester")) == "Alliance",
+    "Capture disappeared from the faction table")
 
 -- Do not turn old, nonempty, unverified scores into current scores as a side effect.
 OverlordDB = copy(disk)

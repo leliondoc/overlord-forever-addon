@@ -153,56 +153,6 @@ end
 local SCROLL_IND_UP   = "Interface\\Buttons\\UI-ScrollBar-ScrollUpButton-Up"
 local SCROLL_IND_DOWN = "Interface\\Buttons\\UI-ScrollBar-ScrollDownButton-Up"
 
-function Overlord.UI:UpdateWheelScrollIndicators(scroll, upT, downT)
-    if not scroll or not upT or not downT then return end
-    local maxS = scroll:GetVerticalScrollRange() or 0
-    local cur = scroll:GetVerticalScroll() or 0
-    local can = maxS > 2
-    downT:SetShown(can and cur < maxS - 1)
-    upT:SetShown(can and cur > 1)
-end
-
-function Overlord.UI:CreateWC3WheelScroll(parent, contentWidth, wheelStep)
-    wheelStep = wheelStep or 24
-    local scroll = CreateFrame("ScrollFrame", nil, parent)
-    scroll:SetPoint("TOPLEFT", parent, "TOPLEFT", 6, -6)
-    scroll:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -6, 6)
-    scroll:EnableMouse(true)
-
-    local scrollIndUp = parent:CreateTexture(nil, "OVERLAY", nil, 6)
-    scrollIndUp:SetTexture(SCROLL_IND_UP)
-    scrollIndUp:SetSize(18, 18)
-    scrollIndUp:SetPoint("TOPRIGHT", scroll, "TOPRIGHT", -2, -2)
-    scrollIndUp:SetAlpha(0.8)
-    scrollIndUp:Hide()
-
-    local scrollIndDown = parent:CreateTexture(nil, "OVERLAY", nil, 6)
-    scrollIndDown:SetTexture(SCROLL_IND_DOWN)
-    scrollIndDown:SetSize(18, 18)
-    scrollIndDown:SetPoint("BOTTOMRIGHT", scroll, "BOTTOMRIGHT", -2, 2)
-    scrollIndDown:SetAlpha(0.8)
-    scrollIndDown:Hide()
-
-    local ui = Overlord.UI
-    scroll:SetScript("OnMouseWheel", function(self, delta)
-        local cur = self:GetVerticalScroll()
-        local maxScroll = self:GetVerticalScrollRange()
-        local newVal = cur - delta * wheelStep
-        newVal = math.max(0, math.min(maxScroll, newVal))
-        self:SetVerticalScroll(newVal)
-        ui:UpdateWheelScrollIndicators(self, scrollIndUp, scrollIndDown)
-    end)
-    scroll:HookScript("OnVerticalScroll", function()
-        ui:UpdateWheelScrollIndicators(scroll, scrollIndUp, scrollIndDown)
-    end)
-
-    local content = CreateFrame("Frame", nil, scroll)
-    content:SetWidth(contentWidth or 248)
-    scroll:SetScrollChild(content)
-
-    return scroll, content, scrollIndUp, scrollIndDown
-end
-
 -- Scroll compact partageable : meme rail draggable que les contrats/classements,
 -- sans template Blizzard ni allocation pendant le defilement.
 function Overlord.UI:CreateCleanScroll(parent, width, height, wheelStep, showFades)
@@ -1467,8 +1417,6 @@ function Overlord.UI:CreateZoneListSection(parent)
     local ACTIONS_CARD_W = 304
     local btnWidth = 145
     local btnHeight = 28
-    local btnGapX = 6
-    local btnGapY = 6
     local gridRow0Gap = 6
     local gridRowGap = 3
     local btnRows = 5

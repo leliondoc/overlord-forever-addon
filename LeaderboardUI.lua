@@ -69,7 +69,6 @@ local LB_OP_GUILD_COL_RIGHT = LB_OP_GUILD_COL_LEFT + LB_OP_GUILD_NAME_W
 local LB_OP_OUTPOST_NAME_MAX_W = LB_OP_GUILD_COL_LEFT - 4 - (LB_OP_OUTPOST_LEFT + GUILD_KEEP_ICON + 4)
 -- Espacement vertical entre sections
 local LB_GAP_SECTION = 12
-local LB_GAP_CAPTION = 6
 local LB_GAP_HEADER = 4
 -- Disposition type roster guilde (worldofwarcraft.blizzard.com)
 local LB_ROW_PAD = 10
@@ -77,7 +76,6 @@ local LB_KILLS_SCROLL_GUTTER = 20
 local LB_KILLS_RIGHT = LB_ROW_PAD + LB_KILLS_SCROLL_GUTTER
 local LB_CAPTURE_PANEL_W = math.floor(LB_MAIN_W * 0.5)
 local LB_ICON_SIZE = 22
-local LB_ICON_RING = 26
 local LB_HEADER_H = 24
 -- Colonnes kills : # / icones race+classe compacts, nom elargi, tues fixe (roster Blizzard).
 local LB_KILL_COL_RANK_W = 34

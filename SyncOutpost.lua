@@ -8,7 +8,6 @@ local OP_CAPTURE_REPLAY_DELAY_2 = 3.0
 local lastOPRelayBroadcast = {}
 local OP_ROUTINE_RELAY_INTERVAL = 12
 local VALID_OP_STATUS = { neutral = true, in_progress = true, held = true }
-local MAX_CLOCK_SKEW = 300
 local OC_DEDUP_SEC = 10
 local OP_DEDUP_SEC = 4
 local OP_DEDUP_MAX = 128

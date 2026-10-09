@@ -247,26 +247,6 @@ local function CacheEnemyPlayerInfo(guid, name, class, race, raceSex)
     info.time = GetTime()
 end
 
--- Expose le cache en bloc pour que le Leaderboard l'utilise sans lookup O(N) par ligne.
-function Overlord.Combat:ForEachCachedPlayerInfo(callback)
-    if not callback then return end
-    for _, info in pairs(guidPlayerInfoCache) do
-        if info and info.name and info.name ~= "" then
-            callback(info.name, info.class or "")
-        end
-    end
-end
-
--- Expose separement la race pour conserver la signature historique du cache de classes.
-function Overlord.Combat:ForEachCachedPlayerRace(callback)
-    if not callback then return end
-    for _, info in pairs(guidPlayerInfoCache) do
-        if info and info.name and info.name ~= "" and info.race and info.race ~= "" then
-            callback(info.name, info.race, info.raceSex or 0)
-        end
-    end
-end
-
 local function GetKillingBlows()
     if not C_AchievementInfo or not C_AchievementInfo.GetCriteriaInfo then return 0 end
     local ok, info = pcall(C_AchievementInfo.GetCriteriaInfo, TOTAL_KB_ACHIEVEMENT_ID, 1)

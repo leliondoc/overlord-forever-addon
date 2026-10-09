@@ -1282,9 +1282,6 @@ end
 -- n'a change depuis le dernier refresh (or inchange + etats renfort/barricade identiques).
 local lastGoldHudKey = nil
 
--- Les coins sont aussi affiches dans le panneau Overlord (carte Front du jour).
-function Overlord.Ressources:GetGoldMax() return GOLD_MAX end
-function Overlord.Ressources:GetGoldSpendCost() return GOLD_SPEND_COST end
 function Overlord.Ressources:GetGoldActionState()
     return gold, GOLD_MAX, GOLD_SPEND_COST, reinforceActive, barricadeActive
 end

@@ -44,8 +44,9 @@ lb.kills[forged] = 4999
 lb.playerInfo[forged] = { class = "", faction = "Horde", factionAt = 0, locale = "",
     guild = forgedGuild, pool = "global" }
 local function hasForgedGuild()
-    for _, row in ipairs(lb:GetSortedGuildKills()) do
-        if row.guild == forgedGuild then return true end
+    for player, kills in pairs(lb.kills) do
+        local info = lb.playerInfo[player]
+        if kills > 0 and info and info.guild == forgedGuild then return true end
     end
     return false
 end

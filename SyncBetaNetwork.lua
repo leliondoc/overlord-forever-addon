@@ -753,13 +753,6 @@ function net:CountDirectPeers()
     end
     return count
 end
-function net:GetPeerAge(name)
-    local key = canonical(name)
-    local row = key and self.peers[key:lower()]
-    local age = row and GetTime() - row.at
-    if not age or age > 300 then return nil end
-    return age
-end
 function net:GetPeerPagedProtocol(name)
     local key = canonical(name)
     local row = key and pagedCapabilities[key:lower()]

@@ -18,11 +18,6 @@ local CLASS_ANSWER_TARGET_RESPONDERS = 3
 local CLASS_REQUEST_MAX_PENDING = 12
 local CLASS_REQUEST_MAX_BATCHES_LARGE = 2
 local CLASS_HEAL_MAX_NAMES_LARGE = 8
--- Convergence guilde sur SR (chemin passif, deja limite par la frequence des SR) : couvrir
--- toute la fenetre LK gros event (40 noms / 6 par batch = 7 batches) pour que la guilde des
--- tueurs ne reste pas absente chez les pairs. Distinct du throttle des requetes ACTIVES
--- CR/GR (qui reste a CLASS_REQUEST_MAX_BATCHES_LARGE pour borner le trafic en event massif).
-local SR_GUILD_META_MAX_BATCHES_LARGE = 7
 
 local pendingClassRequests = {}
 local pendingClassRequestsCount = 0
@@ -408,56 +403,6 @@ local function buildGuildAuthToken(authBits)
     if not authBits or #authBits == 0 then return nil end
     if not authBits:find("1", 1, true) then return nil end -- aucune autorite : token inutile
     return GY_AUTH_TOKEN_PREFIX .. authBits
-end
-
-function Overlord.Sync:AppendGuildMetadataToSrQueue(queue, names, isLargeEvent)
-    if not queue or not names or #names == 0 then return end
-    local lb = Overlord.Leaderboard
-    if not lb or not lb.GetHotPlayerGuildState then return end
-    local batch, batchLen, batchAuth = {}, 0, {}
-    local batchesEmitted = 0
-    local maxBatches = isLargeEvent and SR_GUILD_META_MAX_BATCHES_LARGE or math.huge
-    -- Marge reservee pour le token d'autorite final (prefixe + 1 bit/entree + virgule).
-    local maxPayload = CLASS_REQUEST_MAX_PAYLOAD - (CLASS_REQUEST_MAX_NAMES + 2)
-
-    local function flush()
-        if #batch == 0 then return end
-        if batchesEmitted >= maxBatches then return end
-        local data = table.concat(batch, ",")
-        local authToken = buildGuildAuthToken(table.concat(batchAuth))
-        if authToken then data = data .. "," .. authToken end
-        table.insert(queue, { type = "GY", data = data })
-        batchesEmitted = batchesEmitted + 1
-        batch, batchLen, batchAuth = {}, 0, {}
-    end
-
-    for _, name in ipairs(names) do
-        if batchesEmitted >= maxBatches then break end
-        if name and name ~= "" and self:IsValidPlayerName(name) then
-            local guild, guildAt, guildAuth = lb:GetHotPlayerGuildState(name)
-            local guildWire = guild
-            if (not guild or guild == "") and guildAt > 0 then
-                -- Tombstone SR : un pair absent lors du GI vide doit pouvoir oublier
-                -- l'ancienne guilde. Marqueur interdit dans un vrai nom de guilde sync.
-                guildWire = "~0@" .. tostring(math.floor(guildAt))
-            end
-            if guildWire and guildWire ~= ""
-                and ((guild and guild ~= "" and self:IsValidGuildSyncToken(guild))
-                    or guildWire:match("^~0@%d+$")) then
-                local entry = name .. "|" .. guildWire
-                local addLen = (#batch == 0) and #entry or (#entry + 1)
-                if #batch >= CLASS_REQUEST_MAX_NAMES or (batchLen + addLen) > maxPayload then
-                    flush()
-                    if batchesEmitted >= maxBatches then break end
-                    addLen = #entry
-                end
-                batch[#batch + 1] = entry
-                batchAuth[#batch] = guildAuth and "1" or "0"
-                batchLen = batchLen + addLen
-            end
-        end
-    end
-    flush()
 end
 
 function Overlord.Sync:MaybeRequestMissingGuild(playerName)

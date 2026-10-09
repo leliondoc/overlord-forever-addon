@@ -391,13 +391,6 @@ function Overlord.General:UpdatePosition(mapX, mapY, mapID, lastMoveTs)
     self:MaybePersistSession(false)
 end
 
-function Overlord.General:GetDisplayEntry()
-    local pool = self:GetPoolTag()
-    local faction = Overlord.PlayerFaction
-    if pool == "" or not faction then return nil end
-    return self:BuildDisplayEntryFromSlot(GetSlotTable(pool, faction))
-end
-
 function Overlord.General:BuildDisplayEntryFromSlot(slot)
     if not slot or not slot.holder then return nil end
     local now = GetTime()

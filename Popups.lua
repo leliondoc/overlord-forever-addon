@@ -857,20 +857,6 @@ end
 -- API publique
 -- ---------------------------------------------------------------------------
 
--- Affiche un dialogue WC3 generique (marque seenId a la fermeture).
--- markMode : "once" (defaut) ou "daily" (une fois par jour calendaire).
--- Apercu popup bienvenue (test en jeu : /run Overlord.Popups:PreviewWelcome()).
-function Overlord.Popups:PreviewWelcome()
-    EnsureDialogFrame()
-    self:ShowDialog(
-        nil,
-        GetWelcomePopupTitle(),
-        GetWelcomePopupBody(),
-        nil,
-        { showBookIcon = true, showGuideButton = true, playFactionHorn = true }
-    )
-end
-
 -- opts : showBookIcon, showGuideButton (bienvenue) ; showFactionSeal ; playFactionHorn (Bloodlust / Heroism)
 -- addonSoundKey : ex. "faction_call" (cor) ; okText : libelle bouton OK
 function Overlord.Popups:ShowDialog(seenId, title, body, markMode, opts)
@@ -1974,7 +1960,7 @@ EnsureFeaturedFrontFrame = function()
         featuredFrontFrame = nil
     end
 
-    local toggle = EnsureFeaturedFrontToggle(mainFrame)
+    EnsureFeaturedFrontToggle(mainFrame)
 
     local f = CreateFrame("Frame", "OverlordFeaturedFrontDialog", mainFrame, "BackdropTemplate")
     f._layoutVersion = FEATURED_FRONT_LAYOUT_VERSION
