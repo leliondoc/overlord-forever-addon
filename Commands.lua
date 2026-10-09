@@ -71,10 +71,8 @@ local function ShowFrontDebug()
     local killScoring = Overlord.IsKillScoringActive and Overlord:IsKillScoringActive()
     local killZone = Overlord.Ressources and Overlord.Ressources.IsInOverlordKillZone
         and Overlord.Ressources:IsInOverlordKillZone()
-    local temporaryKillZone = Overlord.IsInTemporaryKillScoringZone
-        and Overlord:IsInTemporaryKillScoringZone()
-    Overlord:PrintNotification(string.format("  InActiveFront=%s  KillScoring=%s  KillZone=%s  OutdoorPvPZone=%s  InstanceSuspended=%s",
-        tostring(Overlord.InActiveFront), tostring(killScoring), tostring(killZone), tostring(temporaryKillZone),
+    Overlord:PrintNotification(string.format("  InActiveFront=%s  KillScoring=%s  KillZone=%s  InstanceSuspended=%s",
+        tostring(Overlord.InActiveFront), tostring(killScoring), tostring(killZone),
         tostring(Overlord.InstanceSuspended)))
     Overlord:PrintNotification(string.format("  Carte=%s (UiMapID %s)  Front=%s  Actif=%s  Panel=%s",
         mapName, tostring(mapID),

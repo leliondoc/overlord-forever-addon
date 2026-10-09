@@ -1137,17 +1137,7 @@ function Overlord.Combat:OnPlayerDead()
                     local classStr = killerClass or ""
                     local ts = time()
                     local zoneIdForEK = zoneIdOnDeath
-                    local temporaryRootMapID = nil
-                    if zoneIdForEK == "" and Overlord.IsInTemporaryKillScoringZone then
-                        local inTemporaryZone, resolvedRootMapID =
-                            Overlord:IsInTemporaryKillScoringZone()
-                        if inTemporaryZone then temporaryRootMapID = resolvedRootMapID end
-                    end
-                    -- L'activite recente n'a pour l'instant qu'une ligne dediee
-                    -- a la Coiled Isle : ne pas y classer Slayer's Rise par erreur.
-                    if zoneIdForEK == "" and temporaryRootMapID == 2512 then
-                        zoneIdForEK = "@coiled_isle"
-                    elseif zoneIdForEK == "" and Overlord.InActiveFront
+                    if zoneIdForEK == "" and Overlord.InActiveFront
                         and Overlord.Fronts and Overlord.Fronts.activeFrontId then
                         zoneIdForEK = "@" .. Overlord.Fronts.activeFrontId
                     end

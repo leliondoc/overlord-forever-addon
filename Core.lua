@@ -535,48 +535,6 @@ function Overlord:IsShardHelperActive()
     return false
 end
 
--- Exceptions PvP exterieures sans front Overlord. C_Map.GetBestMapForUnit renvoie
--- la carte la plus profonde ; remonter les parents couvre les micro-cartes ajoutees
--- par Blizzard, notamment l'UiMap 2509 dont le parent API est 2512.
--- Slayer's Rise reutilise aussi son UiMap dans un champ de bataille epique, mais les
--- gardes IsInInstance/GetInstanceInfo ci-dessous refusent toujours cette version.
--- Capitales de faction : classement uniquement, sans activer un front territorial.
-local CAPITAL_KILL_SCORING_MAPS = {
-    [84] = true,   -- Stormwind
-    [85] = true,   -- Orgrimmar
-    [87] = true,   -- Ironforge
-    [88] = true,   -- Thunder Bluff
-    [89] = true,   -- Darnassus
-    [90] = true,   -- Undercity
-    [103] = true,  -- The Exodar
-    [110] = true,  -- Silvermoon (ancienne carte)
-    [1161] = true, -- Boralus
-    [1165] = true, -- Dazar'alor
-    [2393] = true, -- Silvermoon (Midnight)
-}
-
-function Overlord:ResolveTemporaryKillScoringMapID(mapID)
-    local seen = {}
-    while mapID and mapID > 0 and not seen[mapID] do
-        if mapID == 2444 or mapID == 2512 then return mapID end
-        if CAPITAL_KILL_SCORING_MAPS[mapID] then return mapID end
-        seen[mapID] = true
-        if not C_Map or not C_Map.GetMapInfo then break end
-        local ok, info = pcall(C_Map.GetMapInfo, mapID)
-        if not ok or not info then break end
-        mapID = tonumber(info.parentMapID) or 0
-    end
-    return nil
-end
-
-function Overlord:IsInTemporaryKillScoringZone()
-    if not C_Map or not C_Map.GetBestMapForUnit then return false end
-    local ok, mapID = pcall(C_Map.GetBestMapForUnit, "player")
-    if not ok then return false end
-    local rootMapID = self:ResolveTemporaryKillScoringMapID(mapID)
-    return rootMapID ~= nil, rootMapID
-end
-
 -- Contexte PvP ouvert (pas instance) requis pour compter un kill au classement.
 function Overlord:IsKillContextBlocked()
     if self.InstanceSuspended then return true end
