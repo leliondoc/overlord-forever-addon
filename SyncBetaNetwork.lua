@@ -7,7 +7,7 @@ local sync = addon.Sync
 local net = { peers = {}, stats = { sent = 0, received = 0, dropped = 0 } }
 addon.BetaNetwork = net
 local allowed = {}
-for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA FK LK LR LC LO LOC OE TV VT VF FR VB MN MS OP OC SH HR HB HC HA CR CA GR GY GI FC GW GE GP GX GD GM"):gmatch("%S+") do
+for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA FK LK LR LC LO LOC TV VT VF FR VB MN MS OP OC SH HR HB HA CR CA GR GY GI FC GW GE GP GX GD GM"):gmatch("%S+") do
     allowed[kind] = true
 end
 local MAX_PACKET, MAX_PATH, TTL = 3600, 4, 120
@@ -84,7 +84,7 @@ local function isCatchup(p)
         end
         return true
     end
-    return p.kind == "HR" or p.kind == "HB" or p.kind == "HC" or p.kind == "HA"
+    return p.kind == "HR" or p.kind == "HB" or p.kind == "HA"
         or p.kind == "LK" or p.kind == "LC" or p.kind == "LR"
 end
 local function isMapCatchup(p)
@@ -539,6 +539,36 @@ local session = tostring(time()) .. "-" .. tostring(math.random(1, 2147483646))
 local function serverNow() return (GetServerTime and GetServerTime()) or time() end
 local function enabled() return addon.BetaNetworkEnabled ~= false end
 local function active() return enabled() and not addon.InstanceSuspended and not IsInInstance() end
+-- Battle.net friends heard from (any Overlord message, game account id -> time).
+-- Only a friend running Overlord outside an instance sends anything: those are
+-- the real bridges. A friend without the addon, or one inside an instance (it
+-- drops everything it gets), only wasted the 1000 B/s budget when it sat among
+-- the first five of the friend list. Own presence goes out every 120 s, so a
+-- live bridge is heard again well within this window.
+local BNET_ALIVE_SEC = 300
+local bnetHeard, bnetHeardCount = {}, 0
+local function noteBNetHeard(id)
+    if id == nil then return end
+    if bnetHeard[id] == nil then
+        -- Bounded: game account ids of online friends only (BNet list cap 15),
+        -- but a long session sees many logins: forget the stale ones at 64.
+        if bnetHeardCount >= 64 then
+            local now = GetTime()
+            for key, at in pairs(bnetHeard) do
+                if now - at > BNET_ALIVE_SEC then bnetHeard[key] = nil; bnetHeardCount = bnetHeardCount - 1 end
+            end
+            if bnetHeardCount >= 64 then return end
+        end
+        bnetHeardCount = bnetHeardCount + 1
+    end
+    bnetHeard[id] = GetTime()
+end
+local function bnetAlive(id)
+    local at = id ~= nil and bnetHeard[id] or nil
+    return at ~= nil and GetTime() - at <= BNET_ALIVE_SEC
+end
+function net:NoteBNetHeard(id) noteBNetHeard(id) end
+function net:IsBNetFriendAlive(id) return bnetAlive(id) end
 local function region() return addon.RealmPools:GetOverlordPoolTag() end
 local function canonical(name) return sync:CanonicalForeverName(name) end
 local function same(a, b) return sync:ForeverIdentitiesMatch(a, b) end
@@ -853,6 +883,17 @@ function net:GetKindDiagnostics(maxRows)
         self.stats.bridgeOut or 0, self.stats.bridgeLKCovered or 0,
         math.floor((net.GetBridgeShare and net:GetBridgeShare() or 1) * 100 + 0.5),
         self.stats.bridgeLKDeferred or 0)
+    local enemies, live = 0, 0
+    local targets = sync.GetBetaBNetTargets and sync:GetBetaBNetTargets() or {}
+    for _, id in ipairs(targets) do
+        local faction = sync.GetBetaBNetTargetInfo and sync:GetBetaBNetTargetInfo(id)
+        if (faction == "Alliance" or faction == "Horde") and faction ~= addon.PlayerFaction then
+            enemies = enemies + 1
+            if bnetAlive(id) then live = live + 1 end
+        end
+    end
+    lines[#lines + 1] = string.format("Battle.net bridges: %d of %d opposite-faction friends heard in the last %d min"
+        .. " (the others only get rotating copies).", live, enemies, BNET_ALIVE_SEC / 60)
     local lb = addon.Leaderboard
     if lb and lb.GetHotIndexStats then
         local h = lb:GetHotIndexStats()
@@ -1090,12 +1131,18 @@ local function tasksFor(p, wire)
         end
         coverCarrier = nil
         -- Opposite-faction friends are the only Horde/Alliance bridges: each packet
-        -- reaches all of them (bounded). Same-faction friends already hear it on the
-        -- channel and share the remaining rotating slots. Friends already on the path
-        -- have the packet and are skipped.
+        -- reaches the live ones (heard from within BNET_ALIVE_SEC, bounded). The
+        -- other opposite-faction friends (no addon, in an instance, not heard yet)
+        -- join the rotating slots, so a bridge that comes online is still found.
+        -- Same-faction friends already hear it on the channel and share the same
+        -- rotating slots. Friends already on the path have the packet and are skipped.
+        -- Our own presence (one small NH every 120 s) goes to every opposite-faction
+        -- friend not heard yet: two friends running Overlord find each other within
+        -- one beat, then exchange everything as live bridges.
         local friends = sync.GetBetaBNetTargets and sync:GetBetaBNetTargets() or {}
         local myFaction = addon.PlayerFaction
-        local bridges, others = {}, {}
+        local ownPresence = p.kind == "NH" and #p.path == 1
+        local bridges, others, probes = {}, {}, {}
         local pathKeys = {}
         for _, node in ipairs(p.path) do pathKeys[node:lower()] = true end
         for _, id in ipairs(friends) do
@@ -1106,9 +1153,13 @@ local function tasksFor(p, wire)
             if onPath then
                 if pathFriends then pathFriends[#pathFriends + 1] = id end
             else
-                if #bridges < MAX_BRIDGE_FRIENDS and (faction == "Alliance" or faction == "Horde")
-                    and (myFaction == "Alliance" or myFaction == "Horde") and faction ~= myFaction then
+                local enemy = (faction == "Alliance" or faction == "Horde")
+                    and (myFaction == "Alliance" or myFaction == "Horde") and faction ~= myFaction
+                local alive = enemy and bnetAlive(id)
+                if alive and #bridges < MAX_BRIDGE_FRIENDS then
                     bridges[#bridges + 1] = id
+                elseif enemy and not alive and ownPresence then
+                    probes[#probes + 1] = id
                 else
                     -- A same-faction friend we hear on our channel heard this channel
                     -- copy too; only friends on another realm (never on our channel)
@@ -1128,6 +1179,7 @@ local function tasksFor(p, wire)
         -- while busy, removes repeats.
         local entries, picked = {}, {}
         for _, id in ipairs(bridges) do entries[#entries + 1] = { id = id } end
+        for _, id in ipairs(probes) do entries[#entries + 1] = { id = id } end
         local total, slots = #others, math.max(1, 3 - #bridges)
         if relayedPresence then slots = NH_RELAY_SLOTS end
         local cursor = net.friendCursor or 0
@@ -1625,6 +1677,7 @@ function net:Broadcast(kind, payload, extras)
 end
 function net:Receive(wire, sender, transport, bnetID, decoded)
     if not active() then return false end
+    if transport == "BNET" then noteBNetHeard(bnetID) end
     -- Copies of an already processed packet (other bridges, group + channel) are
     -- rejected before any decode; the result is the same false as below. The one
     -- exception is a broadcast whose forward was refused here: that copy only
@@ -1867,6 +1920,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
 end
 function net:ReceiveFragment(payload, sender, transport, bnetID)
     if not active() or type(payload) ~= "string" or #payload > 252 then return false end
+    if transport == "BNET" then noteBNetHeard(bnetID) end
     local id, part, count, chunk = strsplit(":", payload, 4)
     part, count = tonumber(part), tonumber(count)
     local name = canonical(sender)
@@ -2053,14 +2107,18 @@ function net:EmitBridgeLK(row, payload)
     self.stats.bridgeLK = (self.stats.bridgeLK or 0) + (reached > 0 and 1 or 0)
     return reached > 0
 end
--- Opposite-faction Battle.net friends (game account ids), from the cached list.
+-- Opposite-faction Battle.net friends (game account ids), from the cached list:
+-- the live bridges first (see bnetAlive), then the others in list order.
 local function enemyBNetFriends()
-    local out, mine = {}, addon.PlayerFaction
+    local out, quiet, mine = {}, {}, addon.PlayerFaction
     local targets = sync.GetBetaBNetTargets and sync:GetBetaBNetTargets() or {}
     for _, id in ipairs(targets) do
         local faction = sync.GetBetaBNetTargetInfo and sync:GetBetaBNetTargetInfo(id)
-        if (faction == "Alliance" or faction == "Horde") and faction ~= mine then out[#out + 1] = id end
+        if (faction == "Alliance" or faction == "Horde") and faction ~= mine then
+            if bnetAlive(id) then out[#out + 1] = id else quiet[#quiet + 1] = id end
+        end
     end
+    for _, id in ipairs(quiet) do out[#out + 1] = id end
     return out
 end
 function net:EmitBridgeOut(row, payload)

@@ -2568,6 +2568,10 @@ function Overlord.Sync:OnBNetMessage(message, senderID)
     if not IsBNetGameAccountInCurrentRegion(senderID) then return end
     local msgType, rest = strsplit(":", message, 2)
     if not rest then return end
+    -- Any Overlord message proves a live bridge (relay ranking of friends).
+    if Overlord.BetaNetwork and Overlord.BetaNetwork.NoteBNetHeard then
+        Overlord.BetaNetwork:NoteBNetHeard(senderID)
+    end
 
     -- R2 = enveloppe du relais : R2:<band>:BR|BF:<paquet>
     if msgType == "R2" then

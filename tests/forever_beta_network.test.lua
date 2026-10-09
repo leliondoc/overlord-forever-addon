@@ -115,7 +115,7 @@ local d = client("Dwarf Tester", "two")
 local us = client("Other Tester", "us", "us")
 b.friends, c.friends = { c, us }, { b }
 local kinds = {}
-for kind in ("SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC OE TV VT VF FR VB MN MS OP OC SH HR HB HC HA CR CA GR GY GI FC GE GP GX GD GM"):gmatch("%S+") do
+for kind in ("SR K EK C ZS ZR ZA CB NR NC NA FA LK LR LC LO LOC TV VT VF FR VB MN MS OP OC SH HR HB HA CR CA GR GY GI FC GE GP GX GD GM"):gmatch("%S+") do
     -- K is never re-forwarded: a relayed kill is never credited (anti-forgery).
     -- EK (death notice, front activity only) is never re-forwarded either: it flooded
     -- the whole relay on every PvP death.
@@ -342,8 +342,10 @@ local accepted = 0
 for i = 1, 200 do if a.BetaNetwork:Send("K", tostring(i)) then accepted = accepted + 1 end end
 assert(accepted == 84 and a.BetaNetwork.stats.dropped >= 116, "Ordinary traffic consumed reserved catch-up/state/paged slots")
 drain()
--- A Horde gateway with five Horde friends and one Alliance friend (listed last)
--- must hand every packet to the Alliance bridge, not one packet in two.
+-- A Horde gateway with five Horde friends and one Alliance friend (listed last).
+-- An opposite-faction friend never heard from (no addon, in an instance, not met
+-- yet) only gets the rotating copies; once its own traffic reached us it is a live
+-- bridge and must get every packet, not one packet in two.
 local gate = client("Gate Tester", "gate")
 gate.PlayerFaction = "Horde"
 local ally = client("Ally Tester", "ally")
@@ -360,6 +362,26 @@ function gate.Sync:SendToBNet(other, kind, wire)
     sentTo[other.name] = (sentTo[other.name] or 0) + 1
     return gateSend(self, other, kind, wire)
 end
+-- Our own presence beat reaches every opposite-faction friend not heard yet.
+-- (Presence is consumed by the relay itself: count the Battle.net copies.)
+assert(gate.BetaNetwork:Send("NH", "presence-probe")); drain()
+assert(sentTo[ally.name] == 1, "Own presence skipped an opposite-faction friend not heard yet")
+sentTo = {}
+for i = 1, 6 do
+    assert(gate.BetaNetwork:Send("C", "quiet-" .. i)); drain()
+end
+local probed = 0
+for _, row in ipairs(ally.received) do
+    if row.payload:match("^quiet%-") then probed = probed + 1 end
+end
+assert(probed == 3, "A friend never heard from was not limited to the rotating copies: " .. probed)
+assert(not gate.BetaNetwork:IsBNetFriendAlive(ally), "A silent friend counted as a live bridge")
+-- The ally's own traffic reaches the gateway over Battle.net.
+ally.friends = { gate }
+assert(ally.BetaNetwork:Send("C", "ally-hello")); drain()
+ally.friends = {}
+assert(gate.BetaNetwork:IsBNetFriendAlive(ally), "A friend heard over Battle.net is not a live bridge")
+sentTo = {}
 for i = 1, 10 do
     assert(gate.BetaNetwork:Send("C", "bridge-" .. i)); drain()
 end
@@ -371,6 +393,10 @@ assert(bridged == 10, "Opposite-faction friend missed packets behind same-factio
 local hordeSends = 0
 for name, count in pairs(sentTo) do if name ~= ally.name then hordeSends = hordeSends + count end end
 assert(hordeSends == 20, "Same-faction rotation no longer shares the remaining slots")
+-- Silent for longer than the window (instance, logout): back to the rotation only.
+now = now + 301
+assert(not gate.BetaNetwork:IsBNetFriendAlive(ally), "A friend silent for 5 min is still a live bridge")
+now = now - 301
 -- The friend a packet came from already has it: never bounce it back.
 ally.friends = { gate }
 gate.faction = "Horde"
