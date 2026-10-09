@@ -762,6 +762,29 @@ do
     drain()
     assert(onChannel == 0, "A raid copy from a mate heard on our channel went back to the channel")
 end
+-- A terminal event relayed for someone else (an enemy capture from Battle.net) takes
+-- a priority channel token; routine traffic and our own copies do not.
+do
+    local relayer = client("Relayer Tester", "crit-chan")
+    local foe = client("Foe Tester", "crit-foe")
+    foe.faction = "Alliance"
+    local critical = {}
+    local relayerChannel = relayer.Sync.SendToChannel
+    function relayer.Sync:SendToChannel(kind, fragment, isCritical)
+        local tag = fragment:match("|(%u%u?)|crit%-")
+        if tag then critical[tag .. (fragment:find("own%-") and "own" or "")] = isCritical == true end
+        return relayerChannel(self, kind, fragment, isCritical)
+    end
+    assert(relayer.Relay:Receive("global|crit-c|" .. time() .. "|*|Foe Tester|C|crit-zone:Alliance:x",
+        "Foe Tester", "BNET", foe))
+    assert(relayer.Relay:Receive("global|crit-zs|" .. time() .. "|*|Foe Tester|ZS|crit-zone:in_progress:Alliance:20:x",
+        "Foe Tester", "BNET", foe))
+    assert(relayer.Relay:Send("C", "crit-own-zone:Horde:x"))
+    drain()
+    assert(critical.C == true, "A relayed capture final waited for an ordinary channel token")
+    assert(critical.ZS == false, "Relayed routine progress took a priority token")
+    assert(critical.Cown == false, "Our own relay copy took a priority token")
+end
 -- Bridge election: routine traffic heard on the channel crosses through every hearer
 -- while few bridges are known, through a hashed share of them beyond eight; the
 -- origin's own copies and terminal events always cross.

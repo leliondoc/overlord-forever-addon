@@ -1195,6 +1195,10 @@ local function tasksFor(p, wire)
         -- only handles DEDUP_KINDS.)
         local chanCover = channelCopy and not isTerminal(p)
             and { kind = p.kind, payload = p.payload, origin = p.path[1] } or nil
+        -- A terminal event relayed for someone else (an enemy capture that just came
+        -- over Battle.net, typically) takes a priority channel token like the
+        -- origin's own copy: it no longer waits behind this client's routine traffic.
+        local chanCritical = channelCopy and isTerminal(p) and #p.path > 1
         local now, rec, trim, groupAgain, channelAgain = GetTime()
         ckey = dedup.key(p)
         if ckey then
@@ -1221,7 +1225,9 @@ local function tasksFor(p, wire)
             if channelCopy then
                 if trim and channelAgain then trimmed = trimmed + 1
                 elseif not (trim and sync.GetChannelId and not sync:GetChannelId()) then
-                    coverCarrier = "channel"; add("CHANNEL", fragment, "BF").chanCover = chanCover
+                    coverCarrier = "channel"
+                    local task = add("CHANNEL", fragment, "BF")
+                    task.chanCover, task.critical = chanCover, chanCritical
                 end
             end
         end
@@ -1373,7 +1379,7 @@ local function emit(task)
     else
         -- /ov network: a relay copy is a BF fragment; count it under its real kind.
         sync._channelSendKind = tostring(task.packetKind or "?") .. "*"
-        sent, reason = sync:SendToChannel(task.kind, task.data, false)
+        sent, reason = sync:SendToChannel(task.kind, task.data, task.critical == true)
         sync._channelSendKind = nil
     end
     task.sending = nil
