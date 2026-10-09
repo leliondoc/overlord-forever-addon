@@ -1778,7 +1778,8 @@ function net:Broadcast(kind, payload, extras)
     end
     return sent and 1 or 0
 end
-function net:Receive(wire, sender, transport, bnetID, decoded)
+-- seenChecked: ReceiveFragment already ran alreadySeen on this wire (its result).
+function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
     if not active() then return false end
     if transport == "BNET" then noteBNetHeard(bnetID) end
     -- Copies of an already processed packet (other bridges, group + channel) are
@@ -1789,7 +1790,9 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
     -- A copy someone else carried to the channel or the group: see holdForward.
     -- (ReceiveFragment noted it already when it hands over a decoded packet.)
     if not decoded then noteHeardCopy(wire, transport) end
-    if alreadySeen(wire, sender) then
+    local wasSeen
+    if decoded and seenChecked ~= nil then wasSeen = seenChecked else wasSeen = alreadySeen(wire, sender) end
+    if wasSeen then
         if not forwardRetryKey(wire) then return false end
         retryForward = true
     end
@@ -2039,32 +2042,43 @@ function net:ReceiveFragment(payload, sender, transport, bnetID)
     if not name or not id or #id > 64 or not id:match("^[%w%-]+$") or not chunk
         or #chunk > 170 or not part or not count or count < 1 or count > 64
         or part < 1 or part > count or part ~= math.floor(part) or count ~= math.floor(count) then return false end
+    local nameKey = name:lower()
     if transport == "CHANNEL" then
-        remember(channelHeard, channelHeardOrder, name:lower(), GetTime(), 256)
+        remember(channelHeard, channelHeardOrder, nameKey, GetTime(), 256)
     end
-    local key = name:lower() .. ":" .. id
-    local a = assemblies[key]
-    if not a or GetTime() - a.at > TTL
-        or GetTime() - (a.lastAt or a.at) > ASSEMBLY_IDLE_TIMEOUT then
-        a = { at = GetTime(), lastAt = GetTime(), count = count, got = 0, chunks = {} }
-        remember(assemblies, assemblyOrder, key, a, 64)
+    local wire
+    if count == 1 then
+        -- Most packets fit one fragment: no assembly. They used to take a slot of
+        -- the 64-entry assembly ring each, and on a busy channel evicted the
+        -- multi-fragment packets still waiting for their next piece (a capture's
+        -- second fragment comes >= 1.25 s later at the channel's pace).
+        wire = chunk
+    else
+        local key = nameKey .. ":" .. id
+        local a = assemblies[key]
+        if not a or GetTime() - a.at > TTL
+            or GetTime() - (a.lastAt or a.at) > ASSEMBLY_IDLE_TIMEOUT then
+            a = { at = GetTime(), lastAt = GetTime(), count = count, got = 0, chunks = {} }
+            remember(assemblies, assemblyOrder, key, a, 128)
+        end
+        if a.count ~= count then return false end
+        if a.chunks[part] and a.chunks[part] ~= chunk then return false end
+        if not a.chunks[part] then
+            a.chunks[part] = chunk
+            a.got = a.got + 1
+            a.lastAt = GetTime()
+        end
+        if a.got ~= count then return true end
+        wire = table.concat(a.chunks)
     end
-    if a.count ~= count then return false end
-    if a.chunks[part] and a.chunks[part] ~= chunk then return false end
-    if not a.chunks[part] then
-        a.chunks[part] = chunk
-        a.got = a.got + 1
-        a.lastAt = GetTime()
-    end
-    if a.got ~= count then return true end
-    local wire = table.concat(a.chunks)
     noteHeardCopy(wire, transport)
     -- Every later duplicate fragment of a completed packet lands here again.
     -- Let refused broadcast forwards reach Receive's retry-only path as well.
-    if alreadySeen(wire, name) and not forwardRetryKey(wire) then return false end
+    local wasSeen = alreadySeen(wire, name)
+    if wasSeen and not forwardRetryKey(wire) then return false end
     local p = decode(wire)
     if not p or p.id ~= id then return false end
-    return self:Receive(wire, name, transport, bnetID, p)
+    return self:Receive(wire, name, transport, bnetID, p, wasSeen)
 end
 -- Same-faction peers reachable by a plain whisper: heard directly (hops == 1) and
 -- recently, on a transport that is same-faction by construction (channel, group,

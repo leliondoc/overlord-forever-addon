@@ -668,6 +668,28 @@ do
     local got = fkTwo.received[#fkTwo.received]
     assert(got and got.kind == "FK" and got.payload == "1:arathi:30:59650000", "A fight bracket was not delivered")
 end
+-- A capture in two fragments survives a busy channel: single-fragment packets heard
+-- between its pieces never take its reassembly slot.
+do
+    local busy = client("Busy Tester", "busy-chan")
+    local wire = "global|twopart-1|" .. time() .. "|*|Origin Tester|C|" .. string.rep("c", 260)
+    local first, second = wire:sub(1, 170), wire:sub(171)
+    assert(#second > 0 and #second <= 170, "Fixture must need exactly two fragments")
+    assert(busy.BetaNetwork:ReceiveFragment("twopart-1:1:2:" .. first, "Origin Tester", "CHANNEL"))
+    local letters = "abcdefghijklmnopqrstuvwxyz"
+    for i = 1, 150 do
+        local who = "Noise" .. letters:sub(i % 26 + 1, i % 26 + 1) .. letters:sub(math.floor(i / 26) + 1, math.floor(i / 26) + 1) .. " Tester"
+        local single = "global|noise-" .. i .. "|" .. time() .. "|*|" .. who .. "|SH|" .. i
+        busy.BetaNetwork:ReceiveFragment("noise-" .. i .. ":1:1:" .. single, who, "CHANNEL")
+    end
+    busy.BetaNetwork:ReceiveFragment("twopart-1:2:2:" .. second, "Origin Tester", "CHANNEL")
+    drain()
+    local got = false
+    for _, row in ipairs(busy.received) do
+        if row.kind == "C" and row.payload == string.rep("c", 260) then got = true end
+    end
+    assert(got, "A two-fragment capture was lost to single-fragment traffic between its pieces")
+end
 -- Bridge election: routine traffic heard on the channel crosses through every hearer
 -- while few bridges are known, through a hashed share of them beyond eight; the
 -- origin's own copies and terminal events always cross.
