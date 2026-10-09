@@ -830,6 +830,19 @@ do
     crossed = 0
     for i = 1, 10 do assert(hearer.Relay:Send("ZS", "own_" .. i .. ":in_progress:Horde:20:x")); drain() end
     assert(crossed == 10, "Our own routine packets lost their Battle.net copies: " .. crossed)
+    -- Same share for the outbound live-score bridge (our faction's totals heard
+    -- first-hand on the channel), per subject.
+    bridgesHeard(1, 12)
+    local queued = 0
+    for i = 1, 40 do
+        local who = "Owner" .. letters:sub((i - 1) % 12 + 1, (i - 1) % 12 + 1)
+            .. letters:sub(math.floor((i - 1) / 12) + 1, math.floor((i - 1) / 12) + 1) .. " Tester"
+        if hearer.Relay:NoteOwnerKill(who, "Horde", 50, 40, "WARRIOR", "enus", 1789527600, "B1789527600", "60") then
+            queued = queued + 1
+        end
+    end
+    drain()
+    assert(queued > 3 and queued < 30, "Outbound score bridge not shared out with many bridges: " .. queued)
 end
 a.RelayEnabled = false
 assert(not a.Relay:Send("K", "disabled"), "Beta transport remained active after community re-enable")

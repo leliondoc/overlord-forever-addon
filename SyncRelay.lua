@@ -2417,6 +2417,18 @@ function net:NoteOwnerKill(name, faction, total, before, class, locale, epoch, b
         -- this client has an opposite-faction Battle.net friend to tell.
         local t, b = tonumber(total) or 0, tonumber(before) or 0
         if b <= 0 or t <= b or #enemyBNetFriends() == 0 then return false end
+        -- Every client of the faction hears the owner's total on the channel: with
+        -- many bridges (see crossShare) only about CROSS_TARGET of them, chosen per
+        -- subject by hash, pass it on. The owner's own K still reaches its own
+        -- opposite-faction friends directly.
+        local share = crossShare()
+        if share < 1 then
+            local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
+            if hashFrac("O|" .. tostring(me):lower() .. "|" .. name:lower()) >= share then
+                self.stats.bridgeOutElectedAway = (self.stats.bridgeOutElectedAway or 0) + 1
+                return false
+            end
+        end
         return queueBridgeRow(bridgeOut, name, faction, total, before, class, locale,
             epoch, bucketToken, levelToken)
     end
