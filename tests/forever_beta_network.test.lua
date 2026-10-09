@@ -690,6 +690,25 @@ do
     end
     assert(got, "A two-fragment capture was lost to single-fragment traffic between its pieces")
 end
+-- A late copy of a packet is still recognised after thousands of others (a busy
+-- channel recycled a 2,048-entry ring in seconds and handled duplicates again).
+do
+    local late = client("Late Tester", "late-chan")
+    local function deliveries(payload)
+        local n = 0
+        for _, row in ipairs(late.received) do if row.payload == payload then n = n + 1 end end
+        return n
+    end
+    local first = "global|late-1|" .. time() .. "|*|Origin Tester|SH|late-first"
+    assert(late.BetaNetwork:Receive(first, "Origin Tester", "CHANNEL"))
+    for i = 1, 3000 do
+        late.BetaNetwork:Receive("global|flood-" .. i .. "|" .. time() .. "|*|Flood Tester|SH|" .. i,
+            "Flood Tester", "CHANNEL")
+    end
+    assert(not late.BetaNetwork:Receive(first, "Origin Tester", "CHANNEL"), "A late duplicate was handled again")
+    drain()
+    assert(deliveries("late-first") == 1, "A late duplicate was delivered twice")
+end
 -- Bridge election: routine traffic heard on the channel crosses through every hearer
 -- while few bridges are known, through a hashed share of them beyond eight; the
 -- origin's own copies and terminal events always cross.

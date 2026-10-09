@@ -502,6 +502,10 @@ local function waitingStateItem(p)
             and stateKey(item.p) == key then return item end
     end
 end
+-- Packets already handled (origin:id). A late copy (bridge hold, queue wait, other
+-- path) must still find its entry: at 2,048 a busy channel recycled the ring in
+-- ~10 s and duplicates were handled and forwarded again. ~1 MB at 8,192.
+local SEEN_RING = 8192
 local seen, recent, assemblies = {}, {}, {}
 -- Gateways heard on our realm channel (last hop). A group copy coming from one of
 -- them is already on that channel: re-emitting it there only burns the Blizzard
@@ -1764,7 +1768,7 @@ function net:Send(kind, payload, target, immediate)
         target = target, path = { name }, kind = kind, payload = payload }
     if not self:Queue(p, immediate) then return false end
     remember(recent, recentOrder, key, now, 512)
-    remember(seen, seenOrder, name:lower() .. ":" .. p.id, now, 2048)
+    remember(seen, seenOrder, name:lower() .. ":" .. p.id, now, SEEN_RING)
     return true
 end
 function net:Broadcast(kind, payload, extras)
@@ -1812,7 +1816,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
     -- Local delivery, broadcasts, and the deliberately unrelayed K retain the
     -- original immediate replay seal.
     local pendingForward = not addressed and p.kind ~= "K" and p.kind ~= "EK"
-    if not pendingForward then remember(seen, seenOrder, key, GetTime(), 2048) end
+    if not pendingForward then remember(seen, seenOrder, key, GetTime(), SEEN_RING) end
     local previousRoute = self.peers[origin:lower()]
     -- A direct route outlives relayed copies for two presence intervals (4 min):
     -- a peer is heard first-hand only every ~2 min, while relayed copies of the
@@ -1927,7 +1931,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
     if not relayable and not addressed then
         self.stats.catchupNotRelayed = (self.stats.catchupNotRelayed or 0) + 1
         -- Never relayed: seal it so duplicate copies are not decoded again.
-        remember(seen, seenOrder, key, GetTime(), 2048)
+        remember(seen, seenOrder, key, GetTime(), SEEN_RING)
     end
     -- K et EK ne sont jamais retransmis : un avis de mort d'un ancien client ne doit
     -- plus inonder le relais a travers nous (il reste livre localement).
@@ -2017,7 +2021,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
             end
         end
         if forwarded then
-            if pendingForward then remember(seen, seenOrder, key, GetTime(), 2048) end
+            if pendingForward then remember(seen, seenOrder, key, GetTime(), SEEN_RING) end
             if p.kind == "NH" then
                 remember(nhForwarded, nhForwardedOrder, origin:lower(), p.at, 512)
             elseif p.kind == "SH" then
