@@ -2829,6 +2829,10 @@ function Overlord.LeaderboardUI:CreateSyncBadge(title)
     text:SetWordWrap(false)
     text:SetShadowOffset(1, -1)
     badge.arrow, badge.check, badge.text = arrow, check, text
+    -- Sub-pixel movement: textures snap to the pixel grid by default, so a 2 px drift
+    -- moved in whole-pixel jumps (jerky). Smooth, filtered positions instead.
+    if arrow.SetSnapToPixelGrid then arrow:SetSnapToPixelGrid(false) end
+    if arrow.SetTexelSnappingBias then arrow:SetTexelSnappingBias(0) end
     if arrow.CreateAnimationGroup then
         -- A slow, very small up-and-down drift (no fading, no blinking).
         local ag = arrow:CreateAnimationGroup()
