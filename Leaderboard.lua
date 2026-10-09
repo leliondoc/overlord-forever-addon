@@ -598,13 +598,30 @@ local copyPublishedMeta -- defined with the other entry helpers below
 -- With a player name, an index entry was re-derived in place: builds that read the
 -- index (display, snapshot) keep going, a running rebuild replays that name. Without
 -- one, the change cannot be replayed and counts as a structural change (as before).
+-- True only when it is certain that no spelling of this identity holds a score
+-- (both hot indexes built, no rebuild in flight). Such a player is in no ranking
+-- view and in no anti-loss snapshot: the class/faction a nameplate teaches us about
+-- him must not throw those away (every player crossed in the open world did, and
+-- the next snapshot/profile was rebuilt from scratch). His first score marks them.
+local function isUnscoredIdentity(self, playerName)
+    if not dedupKillMaxIndex or not dedupCaptureMaxIndex or next(hotRebuildJournals) ~= nil then
+        return false
+    end
+    if (self.kills and self.kills[playerName]) or (self.captureCount and self.captureCount[playerName])
+        or (self.captures and self.captures[playerName]) then return false end
+    local dk = GetKillDedupKey(playerName)
+    return dk ~= nil and dedupKillMaxIndex[dk] == nil and dedupCaptureMaxIndex[dk] == nil
+end
 local function markIndexedMetaMutation(self, playerName)
     self.leaderboardDirty = true
-    self._snapshotDirty = true
-    self._snapshotRevision = (self._snapshotRevision or 0) + 1
-    -- La vue precedente reste affichable jusqu'a la publication atomique de la suivante.
-    self._displayMetaCache = nil
-    self._displayCacheEpoch = (self._displayCacheEpoch or 0) + 1
+    local unscored = playerName ~= nil and isUnscoredIdentity(self, playerName)
+    if not unscored then
+        self._snapshotDirty = true
+        self._snapshotRevision = (self._snapshotRevision or 0) + 1
+        -- La vue precedente reste affichable jusqu'a la publication atomique de la suivante.
+        self._displayMetaCache = nil
+        self._displayCacheEpoch = (self._displayCacheEpoch or 0) + 1
+    end
     if playerName then
         for journal in pairs(metaRebuildJournals) do journal[playerName] = true end
     else
@@ -612,7 +629,7 @@ local function markIndexedMetaMutation(self, playerName)
     end
     self.targetRevision = (self.targetRevision or 0) + 1
     self.guildFactionCache = nil
-    if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RequestRefresh then
+    if not unscored and Overlord.LeaderboardUI and Overlord.LeaderboardUI.RequestRefresh then
         Overlord.LeaderboardUI:RequestRefresh()
     end
 end

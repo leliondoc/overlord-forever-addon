@@ -558,6 +558,9 @@ function Overlord.Sync:Initialize()
     -- etre proteges/tainted et une simple comparaison Lua peut ouvrir une erreur.
     -- La boucle StartChannelRetryLoop() suffit a rejoindre le canal si necessaire.
     syncFrame:SetScript("OnEvent", function(_, event, ...)
+        -- Every addon's messages arrive here: drop the other prefixes before any
+        -- other work (IsInInstance included).
+        if (event == "CHAT_MSG_ADDON" or event == "BN_CHAT_MSG_ADDON") and (...) ~= PREFIX then return end
         -- Une entree en instance pendant une migration ferme le transport
         -- immediatement, avant que le pipeline puisse appeler Suspend().
         if Overlord.InstanceSuspended or IsInInstance() then return end

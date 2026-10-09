@@ -200,8 +200,10 @@ local function GetGuild(guildName, faction, now)
     if guildCount >= MAX_GUILDS then
         local oldestKey, oldestAt
         for otherKey, other in pairs(guilds) do
-            PruneEvents(other, now)
+            -- Events are appended in time order: the last one tells whether any is
+            -- still inside the window (no need to prune 128 guilds' events here).
             local lastAt = GuildActivityAt(other, now)
+            if lastAt ~= math.huge and now - lastAt > WINDOW then lastAt = 0 end
             if lastAt == 0 then
                 guilds[otherKey] = nil
                 guildCount = guildCount - 1
@@ -421,6 +423,13 @@ function GKA:Evaluate(guild, now)
     local enemyOn, allyOn = self:IsEnabled(), self:IsAllyEnabled()
     if not enemyOn and not allyOn then return false end
     if Recent(guild.detectedAt, now) then return false end
+    -- Cheap bound first (no allocation, on every kill): fewer events than members
+    -- needed, or fewer kills than needed, cannot reach the threshold.
+    local events = guild.events
+    if #events < self.MEMBER_THRESHOLD then return false end
+    local windowKills = 0
+    for i = 1, #events do windowKills = windowKills + events[i].kills end
+    if windowKills < self.KILL_THRESHOLD then return false end
     local kills, members, zoneRef, byPlayer = Summarize(guild)
     if kills < self.KILL_THRESHOLD or members < self.MEMBER_THRESHOLD then return false end
     local shard = GuildShard(byPlayer)

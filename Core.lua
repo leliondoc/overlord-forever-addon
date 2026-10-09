@@ -1237,6 +1237,10 @@ local function ObserveShardFromGUID(guid)
     if shardID == nil then return false end
     local now = GetTime()
     local changed = shardID ~= CoerceShardId(Overlord.Shard.currentShardID)
+    -- Same layer measured under 2 s ago (every NPC mouseover, nameplate and soft
+    -- target in a crowd): nothing to update, broadcast or repaint.
+    if not changed and Overlord.Shard.localShardSource == "guid"
+        and now - (tonumber(Overlord.Shard.lastUpdateAt) or 0) < 2 then return true end
     Overlord.Shard.currentShardID = shardID
     Overlord.Shard.lastUpdateAt = now
     Overlord.Shard.lastScanAttemptAt = now
@@ -1269,18 +1273,20 @@ local function LocalShardEvidenceNeedsRefresh(maxAge)
 end
 
 local SHARD_LOCAL_KILL_UNITS = { "player", "pet", "vehicle" }
+local function CompareLocalKillAttacker(attackerGUID)
+    if type(attackerGUID) ~= "string" or attackerGUID == "" then return false end
+    for i = 1, #SHARD_LOCAL_KILL_UNITS do
+        local localGUID = UnitGUID(SHARD_LOCAL_KILL_UNITS[i])
+        if localGUID and attackerGUID == localGUID then return true end
+    end
+    return false
+end
 local function PartyKillAttackerIsLocal(attackerGUID)
     if not UnitGUID then return false end
     -- Un PARTY_KILL de raid peut provenir d'un membre sur une autre couche. La comparaison
     -- complete reste dans pcall car les GUID de combat peuvent etre secrets en 12.x.
-    local ok, isLocal = pcall(function()
-        if type(attackerGUID) ~= "string" or attackerGUID == "" then return false end
-        for i = 1, #SHARD_LOCAL_KILL_UNITS do
-            local localGUID = UnitGUID(SHARD_LOCAL_KILL_UNITS[i])
-            if localGUID and attackerGUID == localGUID then return true end
-        end
-        return false
-    end)
+    -- (Fonction nommee : pas de closure par kill, plusieurs par seconde en raid.)
+    local ok, isLocal = pcall(CompareLocalKillAttacker, attackerGUID)
     return ok and isLocal == true
 end
 
@@ -1376,6 +1382,13 @@ local function ScheduleShardUpdateFromEvent(_, event, unit)
         if Overlord.IsShardHelperActive and Overlord:IsShardHelperActive() then
             local forceScan = shardEventNeedsUnthrottledScan
             shardEventNeedsUnthrottledScan = false
+            -- In a crowd of players (their GUIDs carry no layer) every mouseover
+            -- asked for a full nameplate + vignette scan, up to 3 per second.
+            local scanNow = GetTime()
+            if forceScan and scanNow - (Overlord.Shard._lastForcedEventScanAt or -10) < 2 then
+                forceScan = false
+            end
+            if forceScan then Overlord.Shard._lastForcedEventScanAt = scanNow end
             Overlord.Shard:Update(not forceScan)
             RefreshShardBadgeAfterScan()
         end
@@ -5062,7 +5075,11 @@ pcall(function() eventFrame:RegisterEvent("LOADING_SCREEN_ENABLED") end)
 pcall(function() eventFrame:RegisterEvent("PLAYER_LEAVING_WORLD") end)
 pcall(function() eventFrame:RegisterEvent("PLAYER_FACTION_CHANGED") end)
 pcall(function() eventFrame:RegisterEvent("PLAYER_UNGHOST") end)
-pcall(function() eventFrame:RegisterEvent("UNIT_PHASE") end)
+-- Only the player's own phase matters: every unit around us fired it otherwise.
+pcall(function()
+    if eventFrame.RegisterUnitEvent then eventFrame:RegisterUnitEvent("UNIT_PHASE", "player")
+    else eventFrame:RegisterEvent("UNIT_PHASE") end
+end)
 
 eventFrame:SetScript("OnEvent", function(_, event, ...)
 

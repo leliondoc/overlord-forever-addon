@@ -101,6 +101,22 @@ assert(networkCalls == 0, "Cache refresh queried the network")
 for _ = 1, 50 do assert(lb:EnsureDisplayCache() == live) end
 assert(#timers == 0, "Opening an unchanged ranking rebuilt it")
 
+-- A player seen on a nameplate without any score is in no ranking view: his class
+-- and faction must not throw away the published view nor the anti-loss copy.
+local revision = lb._snapshotRevision
+lb:SetPlayerClassFromSync("Passing Stranger", "MAGE")
+lb:SetPlayerFaction("Passing Stranger", "Alliance")
+assert(lb.playerInfo["Passing Stranger"].class == "MAGE", "Unscored player's class was not kept")
+assert(lb:EnsureDisplayCache() == live and #timers == 0, "An unscored player's class rebuilt the ranking")
+assert(lb._snapshotRevision == revision, "An unscored player's class invalidated the anti-loss copy")
+-- A ranked player's class still does (the view shows it).
+lb:SetPlayerClassFromSync(names[200], "PALADIN")
+assert(lb._snapshotRevision ~= revision, "A ranked player's class change was not published")
+drain()
+live = lb:EnsureDisplayCache()
+assert(live.meta[names[200]] == nil or live.meta[names[200]][1] == "PALADIN",
+    "A ranked player's new class did not reach the view")
+
 lb:SetPlayerKills(names[101], 4999, true)
 assert(lb:EnsureDisplayCache() == live, "A background update blanked the existing ranking")
 drain()

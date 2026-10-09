@@ -653,38 +653,54 @@ function Overlord.Fronts:GetEnemyCapitalId(attackingFaction, frontId)
     return self:GetCapitalId(enemy, frontId)
 end
 
+-- mapID -> { front = front|false, at = resolved map id }. The registry is static and
+-- the walk does not depend on the active front, so a finished walk is final. Outside
+-- every front the walk (5 levels, map info and name needles of every front) ran on
+-- each strategic tick and each layer event. A walk cut short by missing map data
+-- (loading screen) is not remembered.
+local frontByMapID = {}
 function Overlord.Fronts:ResolveFrontByMapID(mapID)
     if not mapID then return nil end
+    local cached = frontByMapID[mapID]
+    if cached then
+        if not cached.front then return nil end
+        cached.front.resolvedMapID = cached.at
+        return cached.front
+    end
+    local function remember(front, at)
+        frontByMapID[mapID] = { front = front or false, at = at }
+        if front then front.resolvedMapID = at end
+        return front or nil
+    end
     local seen = {}
     local currentMapID = mapID
     local depth = 0
+    local fronts = OrderedFronts(self)
     while currentMapID and currentMapID > 0 and not seen[currentMapID] and depth < 5 do
         seen[currentMapID] = true
-        for _, front in ipairs(OrderedFronts(self)) do
+        for _, front in ipairs(fronts) do
             if front.excludedMapIDs and front.excludedMapIDs[currentMapID] then
-                return nil
+                return remember(nil)
             end
             if front.mapIDs and front.mapIDs[currentMapID] then
-                front.resolvedMapID = currentMapID
-                return front
+                return remember(front, currentMapID)
             end
         end
 
         local ok, info = pcall(C_Map.GetMapInfo, currentMapID)
         if not ok or not info then return nil end
         if info.name then
-            for _, front in ipairs(OrderedFronts(self)) do
+            for _, front in ipairs(fronts) do
                 if not NameMatches(info.name, front.excludedNameNeedles or {}) and NameMatches(info.name, front.mapNameNeedles or {}) then
-                    front.resolvedMapID = currentMapID
                     if front.mapIDs then front.mapIDs[currentMapID] = true end
-                    return front
+                    return remember(front, currentMapID)
                 end
             end
         end
         currentMapID = info.parentMapID or 0
         depth = depth + 1
     end
-    return nil
+    return remember(nil)
 end
 
 function Overlord.Fronts:ResolveFrontByOverlayMapID(mapID)
