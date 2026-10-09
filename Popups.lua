@@ -16,7 +16,6 @@ local WELCOME_FACTION_SEAL_ATLAS = {
 }
 local WELCOME_POPUP_ID = "welcome_first_install"
 local FOREVER_LAUNCH_POPUP_ID = "forever_launch_1_0_0"
-local FOREVER_NETWORK_NOTICE_ID = "forever_community_bnet_notice_1_0_17"
 local FEATURED_FRONT_POPUP_ID = "daily_featured_front"
 -- Vrais atlas Blizzard du systeme PlayerChoiceFrame (Interface\AddOns\Blizzard_PlayerChoice) :
 -- "Header" = blason a ailes au-dessus du cadre, "TitleLeft/Right/Middle" = ruban 3 pieces.
@@ -2245,15 +2244,6 @@ end
 -- ---------------------------------------------------------------------------
 -- Annonces enregistrees (ajouter ici les futurs popups one-shot)
 -- ---------------------------------------------------------------------------
-
--- Avertissement prioritaire, une seule fois apres une sauvegarde chargee.
-Overlord.Popups:RegisterLoginAnnouncement({
-    id = FOREVER_NETWORK_NOTICE_ID,
-    title = function() return L.FOREVER_NETWORK_NOTICE_TITLE end,
-    body = function() return L.FOREVER_NETWORK_NOTICE_BODY end,
-    when = function() return true end,
-    opts = { showWarningIcon = true },
-})
 
 -- Une fois par compte : jamais vu (nouvelle install ou veterane sans popupsSeen).
 Overlord.Popups:RegisterLoginAnnouncement({
