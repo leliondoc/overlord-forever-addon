@@ -83,8 +83,9 @@ Le panneau principal permet de basculer entre les fronts disponibles. Les pins e
 ### Synchronisation multi-joueurs
 
 - État partagé entre joueurs de la même région NA/EU (canal addon, groupe/raid et relais Battle.net).
-- Pendant la bêta, le mode communauté est grisé. Les captures, fortins, avant-postes, classements et historiques passent par ces passerelles, y compris entre factions via Battle.net.
-- Le relais conserve l'auteur initial, élimine les doublons et limite les trajets à trois relais. Son budget partagé est de 1 Ko/s, réserve de 500 octets comprise, avec 128 messages en attente au maximum. Les grosses données sont fragmentées ; trois amis Battle.net au maximum sont sélectionnés par message, à tour de rôle.
+- Les communautés ne sont pas utilisées. Les captures, fortins, avant-postes, classements et historiques passent par ces passerelles, y compris entre factions via Battle.net.
+- Le relais conserve l'auteur initial, élimine les doublons et limite les trajets à trois relais. Son budget partagé est de 1 Ko/s, réserve de 500 octets comprise, avec 128 messages en attente au maximum. Les grosses données sont fragmentées.
+- Ponts Battle.net : jusqu'à 40 amis sont pris en compte. Les amis de l'autre faction entendus récemment sous Overlord servent de ponts (cinq au plus par message), les autres reçoivent des copies à tour de rôle et la présence de chacun permet de se retrouver en deux minutes. Quand une faction compte de nombreux ponts, seule une petite partie d'entre eux fait traverser le trafic de routine ; l'auteur d'un message et les événements terminaux (captures, victoires) traversent toujours.
 - Tous les participants doivent avoir cette version et un chemin de communication entre eux. La découverte périodique permet le rattrapage ; une file saturée ou un paquet expiré peut retarder la synchronisation. Les auteurs antérieurs sont attestés par le relais, pas authentifiés directement par Blizzard. Les contrôles de campagne et de validité des données restent actifs.
 - Noms Forever en deux parties (ex. `Troma Orcbane`) acceptés dans la sync et les whispers.
 - Commande `/ov sync` pour demander un rattrapage manuel.
