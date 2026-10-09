@@ -19,6 +19,8 @@ local MAX_PACKET, MAX_PATH, TTL = 3600, 4, 120
 -- goes up in a later version once 1.8.0 is gone. A relayed capture (~185 bytes of
 -- wire) then fits one channel message instead of two.
 local FRAGMENT_CHUNK, FRAGMENT_RECEIVE_MAX = 170, 230
+-- A legal packet (<= MAX_PACKET bytes) needs at most 22 pieces of 170 bytes.
+local MAX_FRAGMENTS = 24
 -- A legal multi-fragment relay packet can span more than 15 seconds at the
 -- reserved 300 B/s share while urgent traffic is continuous. Expire stalled
 -- assemblies by inactivity and always by the packet's maximum lifetime.
@@ -830,11 +832,17 @@ local function noteHeardCopy(wire, transport)
 end
 -- Duplicate check on the raw wire, before decode and identity work. Same key as
 -- Receive records (origin = first path node, which decode requires canonical).
+-- A seal holds the packet's origin timestamp: a copy is a duplicate only when its
+-- origin:id AND its timestamp match. The origin of a relayed copy is not
+-- authenticated and ids are predictable (session + serial): a forged relayed copy
+-- carrying a victim's next ids used to seal them on every hearer and silence the
+-- victim's genuine packets.
 local function alreadySeen(wire, sender)
     if type(wire) ~= "string" then return false end
     local pool, id, at, target, path, body = strsplit("|", wire, 6)
     local origin = path and path:match("^[^,]+")
-    local known = id ~= nil and origin ~= nil and seen[origin:lower() .. ":" .. id] ~= nil
+    local sealed = id ~= nil and origin ~= nil and seen[origin:lower() .. ":" .. id] or nil
+    local known = sealed ~= nil and sealed == tonumber(at)
     local item = known and pendingPresence[origin:lower()]
     -- An authenticated last hop that sends back this exact presence already has
     -- it. Cancel only that peer's remaining copy, never another peer's or the
@@ -1878,7 +1886,7 @@ function net:Send(kind, payload, target, immediate)
         target = target, path = { name }, kind = kind, payload = payload }
     if not self:Queue(p, immediate) then return false end
     remember(recent, recentOrder, key, now, 500)
-    remember(seen, seenOrder, name:lower() .. ":" .. p.id, now, SEEN_RING)
+    remember(seen, seenOrder, name:lower() .. ":" .. p.id, p.at, SEEN_RING)
     return true
 end
 function net:Broadcast(kind, payload, extras)
@@ -1918,7 +1926,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
     for _, node in ipairs(p.path) do if node:lower() == meKey then return false end end
     local origin = p.path[1]
     local key = origin:lower() .. ":" .. p.id
-    if seen[key] and not retryForward then return false end
+    if seen[key] == p.at and not retryForward then return false end
     local addressed = p.target == "*" or same(p.target, me)
     -- An intermediate targeted hop can reject a packet after route lookup or
     -- queue admission. Do not seal origin:id until at least one forwarding task
@@ -1926,7 +1934,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
     -- Local delivery, broadcasts, and the deliberately unrelayed K retain the
     -- original immediate replay seal.
     local pendingForward = not addressed and p.kind ~= "K" and p.kind ~= "EK"
-    if not pendingForward then remember(seen, seenOrder, key, GetTime(), SEEN_RING) end
+    if not pendingForward then remember(seen, seenOrder, key, p.at, SEEN_RING) end
     local previousRoute = self.peers[origin:lower()]
     -- A direct route outlives relayed copies for two presence intervals (4 min):
     -- a peer is heard first-hand only every ~2 min, while relayed copies of the
@@ -2050,7 +2058,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
     if not relayable and not addressed then
         self.stats.catchupNotRelayed = (self.stats.catchupNotRelayed or 0) + 1
         -- Never relayed: seal it so duplicate copies are not decoded again.
-        remember(seen, seenOrder, key, GetTime(), SEEN_RING)
+        remember(seen, seenOrder, key, p.at, SEEN_RING)
     end
     -- K et EK ne sont jamais retransmis : un avis de mort d'un ancien client ne doit
     -- plus inonder le relais a travers nous (il reste livre localement).
@@ -2140,7 +2148,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
             end
         end
         if forwarded then
-            if pendingForward then remember(seen, seenOrder, key, GetTime(), SEEN_RING) end
+            if pendingForward then remember(seen, seenOrder, key, p.at, SEEN_RING) end
             if p.kind == "NH" then
                 remember(nhForwarded, nhForwardedOrder, origin:lower(), p.at, PLAYER_RING)
             elseif p.kind == "SH" then
@@ -2163,7 +2171,7 @@ function net:ReceiveFragment(payload, sender, transport, bnetID)
     part, count = tonumber(part), tonumber(count)
     local name = canonical(sender)
     if not name or not id or #id > 64 or not id:match("^[%w%-]+$") or not chunk
-        or #chunk > FRAGMENT_RECEIVE_MAX or not part or not count or count < 1 or count > 64
+        or #chunk > FRAGMENT_RECEIVE_MAX or not part or not count or count < 1 or count > MAX_FRAGMENTS
         or part < 1 or part > count or part ~= math.floor(part) or count ~= math.floor(count) then return false end
     local nameKey = name:lower()
     if transport == "CHANNEL" then
@@ -2181,16 +2189,19 @@ function net:ReceiveFragment(payload, sender, transport, bnetID)
         local a = assemblies[key]
         if not a or GetTime() - a.at > TTL
             or GetTime() - (a.lastAt or a.at) > ASSEMBLY_IDLE_TIMEOUT then
-            a = { at = GetTime(), lastAt = GetTime(), count = count, got = 0, chunks = {} }
-            -- Only multi-fragment packets live here (singles skip it): 1,024 pending
-            -- pieces cover tens of seconds of a launch channel (~0.5 MB at most).
+            a = { at = GetTime(), lastAt = GetTime(), count = count, got = 0, bytes = 0, chunks = {} }
+            -- Only multi-fragment packets live here (singles skip it): 1,000 pending
+            -- packets cover tens of seconds of a launch channel. Each holds at most
+            -- MAX_PACKET bytes (below), so a flooder cannot pin more than ~3.6 MB.
             remember(assemblies, assemblyOrder, key, a, 1000)
         end
         if a.count ~= count then return false end
         if a.chunks[part] and a.chunks[part] ~= chunk then return false end
         if not a.chunks[part] then
+            if a.bytes + #chunk > MAX_PACKET then return false end
             a.chunks[part] = chunk
             a.got = a.got + 1
+            a.bytes = a.bytes + #chunk
             a.lastAt = GetTime()
         end
         if a.got ~= count then return true end

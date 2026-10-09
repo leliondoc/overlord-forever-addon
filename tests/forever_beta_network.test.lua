@@ -742,6 +742,17 @@ do
     local tooWide = "global|wide-2|" .. time() .. "|*|Origin Tester|C|" .. string.rep("v", 200)
     assert(#tooWide > 230 and not busy.Relay:ReceiveFragment("wide-2:1:1:" .. tooWide, "Origin Tester", "CHANNEL"),
         "An oversized piece was accepted")
+    -- A flooder cannot pin memory with huge assemblies: more pieces than a legal
+    -- packet needs, or more bytes than a packet may hold, are refused.
+    assert(not busy.Relay:ReceiveFragment("many-1:1:30:" .. string.rep("m", 170), "Noise Tester", "CHANNEL"),
+        "A 30-piece packet was accepted")
+    local held = 0
+    for part = 1, 24 do
+        if busy.Relay:ReceiveFragment("heavy-1:" .. part .. ":24:" .. string.rep("z", 220), "Noise Tester", "CHANNEL") then
+            held = held + 1
+        end
+    end
+    assert(held == 16, "An assembly grew past the packet size: " .. held .. " pieces of 220 bytes")
 end
 -- A late copy of a packet is still recognised after thousands of others (a busy
 -- channel recycled a 2,048-entry ring in seconds and handled duplicates again).
@@ -872,6 +883,22 @@ do
     end
     assert(fresh.Relay:Send("NH", "1.0.0")); drain()
     assert(advertised and advertised:find("~m1jk~ld~lr~lp6", 1, true), "Own presence lacks the map stamp")
+end
+-- A forged relayed copy carrying a victim's next packet id (ids are predictable)
+-- must not seal that id: the victim's genuine packet, with its own timestamp, still
+-- gets through; a real duplicate (same id and timestamp) is still refused.
+do
+    local hearer = client("Sealed Tester", "seal-chan")
+    local genuineAt = time()
+    assert(hearer.Relay:Receive("global|victim-7|" .. (genuineAt - 40) .. "|*|Victim Tester,Cheater Tester|SH|forged",
+        "Cheater Tester", "WHISPER"))
+    local genuine = "global|victim-7|" .. genuineAt .. "|*|Victim Tester|C|zone:Alliance:real"
+    assert(hearer.Relay:Receive(genuine, "Victim Tester", "CHANNEL"), "A pre-sealed id silenced the genuine packet")
+    hearer.Relay:Receive(genuine, "Victim Tester", "CHANNEL") -- a true duplicate (at most a forward retry)
+    drain()
+    local got = 0
+    for _, row in ipairs(hearer.received) do if row.payload == "zone:Alliance:real" then got = got + 1 end end
+    assert(got == 1, "The genuine packet was not delivered exactly once: " .. got)
 end
 -- Bridge election: routine traffic heard on the channel crosses through every hearer
 -- while few bridges are known, through a hashed share of them beyond eight; the

@@ -47,8 +47,12 @@ net.Queue = function(self, p, immediate)
     if failNext then failNext = false; return false end
     return realQueue(self, p, immediate)
 end
+-- Every copy of one packet carries its origin's timestamp (the relay seals origin:id
+-- with it): stamped once per id, like the origin does.
+local stampedAt = {}
 local function wire(id, path, kind, payload)
-    return table.concat({ "global", id, tostring(time()), "*", path, kind, payload }, "|")
+    stampedAt[id] = stampedAt[id] or time()
+    return table.concat({ "global", id, tostring(stampedAt[id]), "*", path, kind, payload }, "|")
 end
 local function queued(kind) return net.kindStats[kind] and net.kindStats[kind].queued or 0 end
 
