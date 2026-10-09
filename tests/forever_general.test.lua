@@ -114,4 +114,20 @@ expect(not general:CanAcceptClaim("Horde", "Remote Tester", 10, "eu"),
 general:OnCampaignReset()
 expect(general:CanAcceptClaim("Horde", "Remote Tester", 10, "eu"),
     "campaign reset retained an old linked tombstone")
+-- 1.7.7: the general role is volunteer only. A group leader of the same faction who
+-- never pressed the button does not take command when the general dies or steps down.
+leader, grouped = true, true
+serverNow = serverNow + 10
+expect(general:ApplyRemoteClaim("Ally General", "Alliance", "eu", 1, 1, 1, serverNow, false),
+    "fixture: the allied general claim was refused")
+expect(general:ApplyRemoteDown("Ally General", "Alliance", "eu", serverNow, "Enemy Tester", "MAGE", "zone"),
+    "fixture: the general death was refused")
+drain()
+expect(not general:IsLocalHolder(), "a group leader became general when the general died, without opting in")
+serverNow = serverNow + 10
+expect(general:ApplyRemoteClaim("Ally General", "Alliance", "eu", 1, 1, 1, serverNow, false),
+    "fixture: the second allied general claim was refused")
+expect(general:ApplyRemoteRelease("Ally General", "Alliance", "eu", serverNow), "fixture: the release was refused")
+drain()
+expect(not general:IsLocalHolder(), "a group leader became general when the general stepped down, without opting in")
 print("general_team_lifecycle_runtime: OK")

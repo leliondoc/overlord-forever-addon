@@ -813,15 +813,10 @@ function Overlord.General:ApplyRemoteDown(sender, faction, pool, claimTs, killer
     end
     NotifyGeneralFallen(sender, killerName, faction, claimTs)
     OnGeneralSlotCleared()
-    if faction == Overlord.PlayerFaction and self:IsRaidLeader() and not self:IsLocalHolder() then
-        C_Timer.After(0, function()
-            if not Overlord.General then return end
-            if Overlord.General:IsRaidLeader() and not Overlord.General:IsLocalHolder()
-                and not Overlord.General:GetSlot(faction) then
-                Overlord.General:TryClaim(true)
-            end
-        end)
-    end
+    -- 1.7.7 : le role de general est uniquement volontaire (bouton). Avant, chaque chef
+    -- de groupe de la faction sur le front reprenait le slot a la mort du general, puis
+    -- le suivant a sa propre mort : des joueurs qui n'avaient rien demande devenaient
+    -- general en chaine.
     self:RequestMapRefresh()
     if Overlord.Button and Overlord.Button.RefreshGeneralButton then
         Overlord.Button:RefreshGeneralButton()
@@ -923,16 +918,8 @@ function Overlord.General:ApplyRemoteRelease(sender, faction, pool, claimTs)
         self:ClearPersistedSession()
     end
     OnGeneralSlotCleared()
-    -- Handoff : apres GX, le nouveau chef de raid local reprend le slot libere (faction locale).
-    if faction == Overlord.PlayerFaction and self:IsRaidLeader() and not self:IsLocalHolder() then
-        C_Timer.After(0, function()
-            if not Overlord.General then return end
-            if Overlord.General:IsRaidLeader() and not Overlord.General:IsLocalHolder()
-                and not Overlord.General:GetSlot(faction) then
-                Overlord.General:TryClaim(true)
-            end
-        end)
-    end
+    -- 1.7.7 : plus de reprise automatique du slot libere par un chef de groupe : le role
+    -- reste volontaire (bouton general), comme a la mort du general.
     self:RequestMapRefresh()
     if Overlord.Button and Overlord.Button.RefreshGeneralButton then
         Overlord.Button:RefreshGeneralButton()
