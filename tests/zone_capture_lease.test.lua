@@ -351,6 +351,43 @@ Overlord.Sync.IsUnauthenticatedRelayOrigin = realRelayedOrigin
 expect(zone.status == "captured" and zone.owner == "Alliance", "relayed ZR did not end the orange state")
 expect(not Lease:ShouldRejectFinal(zone, "Bob", "wrelayrel"), "a relayed ZR blocked the genuine final")
 
+-- A tick the relayed release overtook (terminals jump the queues: stamped after the
+-- last tick seen, before the release arrived) does not reopen the wave on the other
+-- faction; the origin's newer ticks still do (a forged release cannot end it).
+resetZone()
+mono = 206
+local overtakeDecision = Lease:ValidateProgress(
+    zone.id, "Horde", "Bob", "wovertake", wallBase + 200, 12, 0, 120, nil, "Bob")
+expect(Lease:AdoptRemote(zone, "Horde", "Bob", overtakeDecision), "overtaken-tick lease missing")
+zone.status, zone.owner, zone.previousOwner = "in_progress", "Horde", "Alliance"
+Overlord.Sync.IsUnauthenticatedRelayOrigin = function(_, who) return who == "Bob" end
+expect(Lease:ReceiveRelease(zone.id .. ":wovertake:Bob", "Bob"), "relayed ZR rejected")
+Overlord.Sync.IsUnauthenticatedRelayOrigin = realRelayedOrigin
+expect(zone.status == "captured", "relayed ZR did not end the orange state")
+expect(Lease:ValidateProgress(zone.id, "Horde", "Bob", "wovertake", wallBase + 204, 16, 0, 120, nil, "Bob") == nil,
+    "a tick the relayed release overtook reopened the wave")
+mono = 216
+expect(Lease:ValidateProgress(zone.id, "Horde", "Bob", "wovertake", wallBase + 215, 27, 0, 120, nil, "Bob") ~= nil,
+    "a newer tick of the origin was refused after a relayed release")
+
+-- A relayed release does not take a fresh first-hand wave away from an ally on the
+-- point either: only the origin's own release hands it over at once.
+resetZone()
+mono = 220
+zone.owner = "Horde"
+local coRelayed = Lease:ValidateProgress(
+    zone.id, "Alliance", "Alice", "wcorelay", wallBase + 220, 12, 0, 120, nil, "Alice")
+expect(Lease:AdoptRemote(zone, "Alliance", "Alice", coRelayed), "relayed co-capturer lease missing")
+zone.status, zone.owner, zone.previousOwner = "in_progress", "Alliance", "Horde"
+zone.isHolding = true
+expect(Lease:IsFreshDirect(zone), "relayed co-capturer lease was not fresh/direct")
+Overlord.Sync.IsUnauthenticatedRelayOrigin = function(_, who) return who == "Alice" end
+expect(not Lease:ReceiveRelease(zone.id .. ":wcorelay:Alice", "Alice"), "a relayed ZR took a fresh first-hand wave over")
+Overlord.Sync.IsUnauthenticatedRelayOrigin = realRelayedOrigin
+expect(zone._remoteCaptureLease and zone._remoteCaptureLease.waveId == "wcorelay"
+    and not zone.holdAuthorityLocal, "the first-hand lease was not kept after a relayed ZR")
+expect(not Lease:ShouldRejectFinal(zone, "Alice", "wcorelay"), "a relayed ZR blocked the first-hand wave's final")
+
 -- Un ZR direct autorise immediatement le co-capteur local deja sur le disque
 -- a reprendre avec une nouvelle generation, meme pendant le soft-TTL.
 resetZone()
