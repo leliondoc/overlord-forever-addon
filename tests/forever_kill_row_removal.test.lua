@@ -79,10 +79,11 @@ OverlordDB.campaignId = 20260929
 assert(not sync:IsDeniedKillContributor(name), "Player remained excluded next week")
 assert(not sync:IsDeniedKillContributor("Unrelated Player"), "Another player's score was blocked")
 
--- The two characters removed on 2026-09-29 were cleared since: that week keeps no
--- removal any more.
-assert(not sync:IsDeniedKillContributor("Ender Zero"), "A cleared character is still blocked")
+-- Of the two characters removed on 2026-09-29, the main one was cleared since; the
+-- level-14 burst row stays out on every campaign.
 assert(not sync:IsDeniedKillContributor("Enderhero Enderhero"), "A cleared character is still blocked")
+assert(sync:IsDeniedKillContributor("Ender Zero"), "The burst row is accepted again")
+assert(not sync:IsDeniedKillContributor("Enderhero Zeroth"), "The block leaked to another character")
 
 -- 2026-10-06 : campaign-scoped removal of a name with a valid case. Clients already
 -- cleaned at an older version purge their saved copy through the bumped version.
@@ -116,6 +117,7 @@ lb.kills[forged] = 4897
 lb.playerInfo[forged] = { class = "", faction = "Alliance", factionAt = 0, locale = "",
     guild = forgedGuild, pool = "global" }
 assert(hasForgedGuild(), "Fixture did not place the injected guild in the guild column")
+lb.kills["Ender Zero"] = 5000
 OverlordDB.leaderboardScoreSanitizeVersion = 8
 lb:EnsureLegacyScoreSanitized()
 attempts = 0
@@ -126,6 +128,7 @@ while OverlordDB.leaderboardScoreSanitizeVersion ~= 9 and #timers > 0 do
 end
 assert(OverlordDB.leaderboardScoreSanitizeVersion == 9, "Version 9 cleanup did not commit")
 assert(lb.kills[forged] == nil, "Version 8 clients kept the re-injected row")
+assert(lb.kills["Ender Zero"] == nil, "Version 8 clients kept the burst row")
 assert(not hasForgedGuild(), "The injected guild stayed in the guild column")
 lb:SetPlayerKills(forged, 4897, true)
 assert(lb.kills[forged] == nil, "An old peer relayed the re-injected row back")

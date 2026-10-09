@@ -1184,6 +1184,9 @@ local BLOCKED_KILL_CONTRIBUTOR_BASES = {
     -- 2026-10-09 : ligne injectee une seconde fois (deja retiree le 2026-09-22),
     -- refusee desormais sur toutes les campagnes.
     ["asmon gold"] = true,
+    -- 2026-09-29 : niveau 14 a 5000 VH quelques heures apres le reset (retire cette
+    -- semaine-la), refuse desormais sur toutes les campagnes.
+    ["ender zero"] = true,
 }
 
 -- Moderation d'un classement hebdomadaire precis (campaignId -> base-names). Un ancien
