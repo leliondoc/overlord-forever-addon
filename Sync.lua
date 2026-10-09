@@ -1214,7 +1214,7 @@ function Overlord.Sync:HasExpectedFullLeaderboardResponse(sender, channel)
 end
 
 -- Total LK non sollicite pour un sujet deja connu (ni son proprietaire, ni une page
--- v6, ni une reponse SR:F attendue) : la hausse est bornee comme au pont LK
+-- de rattrapage ; depuis 1.7.5 une reponse /ov sync l'est aussi) : la hausse est bornee comme au pont LK
 -- (30 kills + 1 par seconde depuis le dernier total retenu pour ce sujet). Un
 -- total plus haut n'est pas rejete, il est ecrete : la convergence est plus lente,
 -- jamais perdue, et une ligne connue ne peut plus etre gonflee d'un seul paquet.
@@ -3267,8 +3267,9 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
     if self.IsDeniedKillContributor and self:IsDeniedKillContributor(playerName) then return end
     if not self.IsEligibleKillContributorLevel
         or not self:IsEligibleKillContributorLevel(levelToken) then
-        -- 1.7.5 : un proprietaire au-dela du niveau 60 (les lignes forgees annoncaient 90).
-        if (tonumber(levelToken) or 0) > 60 and self:KillSyncSenderOwnsPlayer(sender, playerName) then
+        -- 1.7.5 : un proprietaire au-dela du niveau maximum (les lignes forgees annoncaient 90).
+        if (tonumber(levelToken) or 0) > (self.MAX_LADDER_LEVEL or 60)
+            and self:KillSyncSenderOwnsPlayer(sender, playerName) then
             self:NoteSuspiciousSender(sender, "over-level K")
         end
         return
@@ -3391,6 +3392,9 @@ function Overlord.Sync:OnReceiveLeaderboardRace(payload, sender, channel)
     local playerName = self:NormalizeContributorFullName(rawName)
     if not playerName or playerName == "" then return end
     if not self:AcceptSyncedContributorName(playerName) then return end
+    -- 1.7.5 : un nom refuse ou une autre graphie ne recoit pas non plus de race (une
+    -- fiche fantome, servie ensuite dans les pages LR). Comptee comme recue.
+    if self.IsDeniedKillContributor and self:IsDeniedKillContributor(playerName) then return true end
     if not self:AuthorizeLeaderboardSubject("LR", playerName, sender, channel) then return end
     -- A live LR from anyone but the player (a groupmate's observation, a beacon relayed
     -- past the first hop) only fills a missing race, under the canonical name, dated
@@ -8659,7 +8663,7 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
         killsBefore = math.max(killsBefore, Overlord.Leaderboard:GetMaxKillsForDedupName(playerName))
     end
     -- Un total non sollicite (y compris celui que le proprietaire annonce lui-meme
-    -- par LK) suit la meme borne de croissance que K ; une ligne sollicitee n'est
+    -- par LK) suit la meme borne de croissance que K ; une ligne de page n'est
     -- bornee que lorsqu'elle est inconnue ici (cap de premier contact).
     if guildOwner then
         self:NoteOwnerKillClaim(playerName, kills)
@@ -8668,12 +8672,15 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     end
     -- 1.7.5 : notre propre ligne ne monte pas d'un coup par un tiers (page, /ov sync) :
     -- notre K la republiait ensuite comme total du proprietaire. Elle suit la fenetre
-    -- fixe des copies tierces ; une perte de SavedVariables se rattrape quand meme.
-    -- Seules les pages restent exemptes pour une ligne deja connue : une reponse
+    -- fixe des copies tierces, sauf dans une session ouverte sans sauvegarde chargee
+    -- (defaut du chargeur, reinstallation, autre PC) : la ligne se retablit alors comme
+    -- tout sujet inconnu, au cap de premier contact. Aucun pair ne peut provoquer cet
+    -- etat. Seules les pages restent exemptes pour une ligne deja connue : une reponse
     -- /ov sync (SR:F) suit la borne des totaux non sollicites.
     if kills > killsBefore and Overlord.Leaderboard.IsLocalDisplayName
         and Overlord.Leaderboard:IsLocalDisplayName(playerName) then
-        kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, false, true)
+        kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, false,
+            Overlord.SavedVariablesLoadedAtLogin ~= false)
     elseif not guildSnapshot or killsBefore <= 0 then
         kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender,
             guildOwner and not solicited, liveCopy)
@@ -8705,15 +8712,9 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
         pcall(betaNet.NoteChannelBridgeRow, betaNet, playerName, kills, faction, sender)
     end
     -- Classe / faction / locale ci-dessous ; la guilde (champ 7) est traitee plus bas.
+    -- (1.7.5 : une ligne arrive toujours avec sa classe, plus de demande CR ici.)
     if classClaimVerified and not Overlord.Leaderboard.MergeLeaderboardKillMetadata then
         Overlord.Leaderboard:SetPlayerClassFromSync(playerName, class)
-    elseif not liveCopy and (not class or class == "" or class == "UNKNOWN") then
-        -- Pas pour une copie de pont : chaque auditeur demanderait la meme classe a la
-        -- meme seconde ; les pages et le K du joueur l'apportent.
-        if Overlord.Leaderboard.AllowClassRefetchFromSync then
-            Overlord.Leaderboard:AllowClassRefetchFromSync(playerName)
-        end
-        self:MaybeRequestMissingClass(playerName)
     end
     if factionClaimVerified and not Overlord.Leaderboard.MergeLeaderboardKillMetadata then
         Overlord.Leaderboard:SetPlayerFaction(playerName, faction)

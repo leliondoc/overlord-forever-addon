@@ -1176,9 +1176,9 @@ Overlord.PLAUSIBLE_SYNC_KILL_CEILING = PLAUSIBLE_KILL_CEILING
 -- Forever : tous les niveaux participent. Le champ K/LK reste valide et
 -- obligatoire, sans exiger le niveau maximum du client Retail ou de la beta.
 
--- Incident OL2 (2026-07-15) : cette ligne a injecte 480 kills. Le denylist est
--- volontairement base-name afin de couvrir toutes ses variantes Nom-Royaume et
--- d'autoriser une purge deterministe sur chaque SavedVariables deja contaminee.
+-- Incident OL2 (2026-07-15) : cette ligne a injecte 480 kills. Depuis 1.7.5 la liste
+-- compare l'identite canonique "prenom nom" (toute autre graphie est refusee avant),
+-- ce qui permet une purge deterministe sur chaque SavedVariables deja contaminee.
 local BLOCKED_KILL_CONTRIBUTOR_BASES = {
     sfvsafqw = true,
     -- 2026-10-09 : ligne injectee une seconde fois (deja retiree le 2026-09-22),
@@ -1229,12 +1229,13 @@ function Overlord.Sync:IsDeniedKillContributor(playerName)
     return removed ~= nil and removed[lowerBase] == true
 end
 
--- 1.7.5 : 60 au plus (plafond Classic ; la beta s'arrete a 30). Les lignes forgees
--- annoncaient le niveau 90 pour debloquer le plafond de kills par niveau. A relever
--- si le plafond de niveau de Forever depasse un jour 60.
+-- 1.7.5 : 60 au plus (plafond Classic de Forever ; la beta s'arrete a 30). Les lignes
+-- forgees annoncaient le niveau 90. Seule valeur a relever si Forever monte un jour
+-- au-dela de 60 (reseau, avertissement /ov network et nettoyage v10 la lisent).
+Overlord.Sync.MAX_LADDER_LEVEL = 60
 function Overlord.Sync:IsEligibleKillContributorLevel(level)
     level = tonumber(level)
-    return level ~= nil and level >= 1 and level <= 60 and level == math.floor(level)
+    return level ~= nil and level >= 1 and level <= self.MAX_LADDER_LEVEL and level == math.floor(level)
 end
 
 -- 1.7.5 : une ligne de classement porte toujours une classe : le K du joueur envoie

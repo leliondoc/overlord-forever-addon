@@ -102,7 +102,11 @@ for _, name in ipairs(variants) do
     assert(lb.kills[name] == nil, "a look-alike spelling got a row: " .. name)
 end
 for _, name in ipairs({ "\195\137lodie Marchand", "Ka\195\173n Peraxxis", "D'Arcy Lee",
-    "\208\152\208\178\208\176\208\189 \208\146\208\190\208\184\208\189" }) do
+    "\208\152\208\178\208\176\208\189 \208\146\208\190\208\184\208\189",          -- Cyrillic
+    "\206\145\206\187\206\173\206\190\206\177\206\189\206\180\207\129\206\191\207\130 \206\160\206\177\207\128\207\128\206\172\207\130", -- Greek
+    "\234\185\128 \236\178\160\236\136\152",                                      -- Hangul
+    "\230\157\142 \229\176\143\233\190\153",                                      -- Han
+    "Nguy\225\187\133n V\196\131n" }) do                                          -- Vietnamese
     assert(not s:IsDeniedKillContributor(name), "a real name was refused: " .. name)
 end
 pageRow(lkRow("\195\137lodie Marchand", 700, "PRIEST", 30), "Some Responder")
@@ -110,6 +114,16 @@ assert(lb.kills["\195\137lodie Marchand"] == 700, "an accented page row was refu
 -- The permanent blocks follow the canonical identity too.
 assert(s:IsDeniedKillContributor("Asmon  Gold") and s:IsDeniedKillContributor("Ender Zero-x"),
     "a blocked name came back under another spelling")
+assert(s:IsEligibleKillContributorLevel(60) and not s:IsEligibleKillContributorLevel(61),
+    "the level ceiling is not 60")
+-- Nor does a blocked or look-alike name get a race row (a ghost served in LR pages).
+s._pagedDelivery = { kind = "LR", sender = "Some Responder", channel = "WHISPER", key = "asmon gold" }
+s:OnReceiveLeaderboardRace("Asmon Gold:Human:2:" .. EPOCH .. ":0", "Some Responder", "WHISPER")
+s._pagedDelivery = nil
+assert(lb.playerInfo["Asmon Gold"] == nil, "a blocked name got a race row")
+local raceSnap = { playerInfo = { ["Asmon Gold"] = { race = "Human", raceSex = 2, raceAt = 0 } } }
+assert(s:BuildPagedLeaderboardRacePayload(raceSnap, "Asmon Gold", EPOCH) == nil,
+    "a blocked name's race was served")
 
 -- ===== (4) our own row is never inflated in one packet by a third party
 local me = s:GetPlayerFullName()
@@ -118,14 +132,33 @@ lb.playerInfo[me] = { class = "WARRIOR", faction = "Alliance", level = 30, local
 pageRow(lkRow(me, 15000, "WARRIOR", 30), "Hostile Responder")
 assert(lb.kills[me] > 1000 and lb.kills[me] <= 1000 + 600 + 30 + 10,
     "a page inflated our own row (our K would re-announce it): " .. tostring(lb.kills[me]))
+-- A session opened without its saved variables (loader fault, reinstall, other PC)
+-- gets its own row back at once, like any unknown subject; a normal one keeps the window.
+local realIsLocal = lb.IsLocalDisplayName
+lb.IsLocalDisplayName = function(_, n) return n == "Lost Save" or n == "Kept Save" end
+Overlord.SavedVariablesLoadedAtLogin = false
+pageRow(lkRow("Lost Save", 3000, "MAGE", 30), "Some Responder")
+assert(lb.kills["Lost Save"] == 3000, "a session without its save did not get its row back: "
+    .. tostring(lb.kills["Lost Save"]))
+Overlord.SavedVariablesLoadedAtLogin = true
+pageRow(lkRow("Kept Save", 3000, "MAGE", 30), "Some Responder")
+assert(lb.kills["Kept Save"] <= 600 + 30 + 10, "a page raised our own absent row in a normal session: "
+    .. tostring(lb.kills["Kept Save"]))
+lb.IsLocalDisplayName = realIsLocal
+-- After a weekly reset while online our recreated row had no class (so it was no longer
+-- served); the next local kill fills it like the login does.
+lb.playerInfo[me].class = ""
+lb:RegisterKill(me)
+assert(s:IsLadderRowClass(lb.playerInfo[me].class), "our own row stayed without a class after a kill: "
+    .. tostring(lb.playerInfo[me].class))
 
 -- ===== (5) a /ov sync reply follows the unsolicited bound, even for a known row
 send("K", kPayload("Synced Ally", 100, "WARRIOR"), "Synced Ally")
 assert(lb.kills["Synced Ally"] == 100, "fixture: the owner's K was refused")
 assert(s:ExpectDirectFullLeaderboardResponse("Sync Target"), "fixture: /ov sync not armed")
 send("LK", lkRow("Synced Ally", 7000, "WARRIOR", 30), "Sync Target", "WHISPER")
-assert(lb.kills["Synced Ally"] < 1000, "a /ov sync reply raised a known row without bound: "
-    .. tostring(lb.kills["Synced Ally"]))
+assert(lb.kills["Synced Ally"] > 100 and lb.kills["Synced Ally"] < 1000,
+    "a /ov sync reply was not bounded (or was dropped): " .. tostring(lb.kills["Synced Ally"]))
 
 -- ===== (6) only the transports the addon uses
 send("K", kPayload("Guild Shout", 300, "WARRIOR"), "Guild Shout", "GUILD")
@@ -153,6 +186,7 @@ end
 savedRow("Saved Ghost", 4897, "", 30)
 savedRow("Saved Ninety", 3000, "MAGE", 90)
 savedRow("Saved Honest", 500, "MAGE", 30)
+savedRow("Saved Cased", 450, "Warrior", 30) -- an old save, fixed by the login repair
 savedRow("Account Alt", 200, "", 30)
 lb.kills["Saved  Spaced"] = 800
 lb.playerInfo["Asmon Gold"] = { class = "", faction = "Alliance", level = 90, guild = "EMPIRE HACKS", guildAt = 0 }
@@ -175,6 +209,7 @@ assert(lb.kills["Saved Ninety"] == nil, "a saved level-90 row survived the clean
 assert(lb.kills["Saved  Spaced"] == nil, "a saved non-canonical spelling survived the cleanup")
 assert(lb.playerInfo["Asmon Gold"] == nil, "a blocked name kept its metadata (ghost guild)")
 assert(lb.kills["Saved Honest"] == 500, "the cleanup removed an honest row")
+assert(lb.kills["Saved Cased"] == 450, "the cleanup removed an honest row whose class token was not normalized yet")
 assert(lb.kills["Account Alt"] == 200, "the cleanup removed one of this account's characters")
 assert(lb.kills[me] ~= nil, "the cleanup removed our own row")
 print("Forever ladder signatures: classless and level-90 rows refused and never served, canonical names, own row bound, /ov sync bound, transports, NaN dates, v10 cleanup OK")

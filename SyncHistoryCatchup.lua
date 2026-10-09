@@ -301,6 +301,7 @@ end
 function sync:BuildPagedLeaderboardRacePayload(snapshot, name, wireEpoch)
     local info = snapshot and snapshot.playerInfo and snapshot.playerInfo[name]
     if type(info) ~= "table" or not ContributorCanRelay(name) then return nil end
+    if self.IsDeniedKillContributor and self:IsDeniedKillContributor(name) then return nil end
     if not self.BuildLeaderboardRacePayload then return nil end
     return self:BuildLeaderboardRacePayload(
         name, info.race, info.raceSex, wireEpoch, info.raceAt)

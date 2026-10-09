@@ -2427,7 +2427,7 @@ function Overlord.Leaderboard:EnsureLegacyScoreSanitized()
     local function YieldWork()
         processed = processed + 1
         local elapsed = debugprofilestop and (debugprofilestop() - sliceStartedAt) or 0
-        if processed >= 64 or elapsed >= 1.25 then
+        if processed >= 256 or elapsed >= 1.25 then
             processed = 0
             coroutine.yield()
             sliceStartedAt = debugprofilestop and debugprofilestop() or 0
@@ -2481,7 +2481,11 @@ function Overlord.Leaderboard:EnsureLegacyScoreSanitized()
                 end
                 local info = type(bucket.playerInfo) == "table" and bucket.playerInfo[name] or nil
                 if type(info) ~= "table" then return false end
-                return not sync:IsLadderRowClass(info.class) or (tonumber(info.level) or 0) > 60
+                -- An old save may hold "Warrior" or " MAGE": the login repair fixes the
+                -- token later, so judge the normalized one (an honest row stays).
+                local class = Overlord.Leaderboard:NormalizeClassTokenForDisplay(info.class)
+                return not sync:IsLadderRowClass(class)
+                    or (tonumber(info.level) or 0) > (sync.MAX_LADDER_LEVEL or 60)
             end, bucket.bountyKills)
             SanitizeMap(bucket.playerInfo, function(name)
                 return sync and sync.IsDeniedKillContributor
@@ -6684,6 +6688,17 @@ function Overlord.Leaderboard:RegisterKill(playerName, fromSync)
                     prev.pool = poolTag
                     localPoolChanged = true
                 end
+            end
+        end
+        -- 1.7.5 : apres un reset hebdomadaire en ligne, notre fiche recreee restait sans
+        -- classe jusqu'au login suivant, et une ligne sans classe n'est plus servie.
+        local mine = self.playerInfo[playerName]
+        if sync and sync.IsLadderRowClass and UnitClass
+            and not (type(mine) == "table" and sync:IsLadderRowClass(mine.class)) then
+            local _, classFile = UnitClass("player")
+            if sync:IsLadderRowClass(classFile) then
+                self:ForceUpdateLocalPlayer(playerName, classFile,
+                    UnitFactionGroup and UnitFactionGroup("player") or nil)
             end
         end
     end

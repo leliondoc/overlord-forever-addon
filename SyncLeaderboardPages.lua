@@ -1,7 +1,8 @@
 -- Targeted, resumable anti-entropy: v5 covers 5,000 kills; v6 also pages
 -- 500 capture rows per faction and race metadata for attested contributors;
 -- v7 (1.7.0) is v6 with the race at the end of each sent kill row.
--- Peers without v6 are not asked (1.2.4): there is no v5/v4 fallback any more.
+-- Since 1.7.5 only v7 peers are asked (clients before 1.7.0 are left out, update
+-- required); responders still answer v5/v6 requests from old clients.
 local Overlord = _G.Overlord
 if not Overlord or not Overlord.Sync then return end
 local sync, lb = Overlord.Sync, Overlord.Leaderboard

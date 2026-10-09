@@ -500,8 +500,9 @@ local nhForwarded, nhForwardedOrder = {}, {}
 -- own direct copies are unchanged, and it is always handled locally.
 local SH_FORWARD_SEC = 90
 local shForwarded, shForwardedOrder = {}, {}
--- Relayed presence (NH that already crossed a hop) only keeps routes and the ~lp6
--- capability alive (both 300 s TTL, refreshed by every relayed packet of the origin).
+-- Relayed presence (NH that already crossed a hop) only keeps routes alive (300 s TTL,
+-- refreshed by every relayed packet of the origin); since 1.7.5 the paged capability
+-- comes only from the origin's own first-hand NH.
 -- The origin's own copies keep the full fan-out. A hop forwards to every opposite-faction
 -- bridge plus NH_RELAY_SLOTS rotating friend (was up to 3), and puts it on the realm channel
 -- only for an origin that is not audible there (was every hop and every beat): channel
@@ -1679,8 +1680,10 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         if #p.path == 1 and (not previous or GetTime() - previous.at > 300
             or p.at > previous.originAt
             or (p.at == previous.originAt and version > previous.version)) then
+            -- 512 like self.peers (1.7.5): with 128, most direct neighbours of a busy
+            -- channel looked "unknown" and an old client cost a silent v7 probe.
             remember(pagedCapabilities, pagedCapabilityOrder, originKey,
-                { version = version, at = GetTime(), originAt = p.at }, 128)
+                { version = version, at = GetTime(), originAt = p.at }, 512)
         end
         -- Like Retail's community login, pull the territorial map first. Ranking
         -- already has its own paged catch-up; an SR:F on every new peer crowded
