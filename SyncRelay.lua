@@ -511,6 +511,14 @@ local SEEN_RING = 8192
 -- presence forwarded once per 90 s): sized for a launch channel of thousands, not
 -- the beta's hundreds (256/512 recycled within seconds and the rules stopped acting).
 local PLAYER_RING = 4096
+-- Neighbour routes (300 s). A map reply (up to 32 pages at the catch-up rate) lasts
+-- about 30 s and every page needs the requester's route: at 512 a launch channel
+-- recycled the table in seconds and the later pages of a map were refused, as were
+-- whispered ranking pages and activity replies from "unknown" peers (~3 MB at 8,192).
+local PEER_RING = 8192
+-- Capabilities advertised in first-hand presence (300 s): at 512 most neighbours
+-- looked unknown and every ranking pull fell back to a full v7 sweep instead of v8.
+local CAPABILITY_RING = 8192
 local seen, recent, assemblies = {}, {}, {}
 -- Gateways heard on our realm channel (last hop). A group copy coming from one of
 -- them is already on that channel: re-emitting it there only burns the Blizzard
@@ -862,7 +870,7 @@ end
 -- quarter of relay bytes (2026-10-01). The owner still sends its own copies to its
 -- channel, group and Battle.net friends.
 local CATCHUP_KINDS = {}
-for kind in ("SR ZA HR HA HB HC LK LC LR LO LOC OE GY CA GR CR"):gmatch("%S+") do CATCHUP_KINDS[kind] = true end
+for kind in ("SR ZA HR HA HB LK LC LR LO LOC GY CA GR CR"):gmatch("%S+") do CATCHUP_KINDS[kind] = true end
 local function isPointToPointCatchup(kind, target)
     return CATCHUP_KINDS[kind] == true and target ~= nil and target ~= "*"
 end
@@ -879,12 +887,20 @@ function net:GetDirectPeers()
 end
 -- Relais en service (option activee) : la taille des combats est alors partagee.
 function net:IsEnabled() return enabled() end
--- Same count as #GetDirectPeers(), without building and sorting a list (up to 512).
+-- Same count as #GetDirectPeers(), without building and sorting a list. Read for
+-- every broadcast request received (answer chance): kept 5 s, the table holds
+-- thousands of neighbours at launch.
+local directCountCache = { at = -1000, value = 0, peers = nil }
 function net:CountDirectPeers()
-    local count, now = 0, GetTime()
+    local now = GetTime()
+    if directCountCache.peers == self.peers and now - directCountCache.at < 5 then
+        return directCountCache.value
+    end
+    local count = 0
     for _, row in pairs(self.peers) do
         if now - row.at <= 300 and tonumber(row.hops) == 1 then count = count + 1 end
     end
+    directCountCache.at, directCountCache.value, directCountCache.peers = now, count, self.peers
     return count
 end
 function net:GetPeerPagedProtocol(name)
@@ -1859,7 +1875,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
     if not previousRoute or GetTime() - previousRoute.at > keepRoute or #p.path <= previousRoute.hops then
         remember(self.peers, peerOrder, origin:lower(), {
             name = origin, at = GetTime(), via = sender, transport = transport, bnet = bnetID, hops = #p.path,
-        }, self.PEER_RING_LIMIT or 512, IsPagedSessionPeer)
+        }, self.PEER_RING_LIMIT or PEER_RING, IsPagedSessionPeer)
     end
     self.stats.received = self.stats.received + 1
     if retryForward then
@@ -1897,10 +1913,10 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         if #p.path == 1 and (not previous or GetTime() - previous.at > 300
             or p.at > previous.originAt
             or (p.at == previous.originAt and version > previous.version)) then
-            -- 512 like self.peers (1.7.5): with 128, most direct neighbours of a busy
-            -- channel looked "unknown" and an old client cost a silent v7 probe.
+            -- Sized like self.peers (CAPABILITY_RING): too small, most direct neighbours
+            -- of a busy channel looked "unknown" and were asked the slower v7 sweep.
             remember(pagedCapabilities, pagedCapabilityOrder, originKey,
-                { version = version, at = GetTime(), originAt = p.at }, 512)
+                { version = version, at = GetTime(), originAt = p.at }, CAPABILITY_RING)
         end
         -- Like Retail's community login, pull the territorial map first. Ranking
         -- already has its own paged catch-up; an SR:F on every new peer crowded
@@ -2096,7 +2112,9 @@ function net:ReceiveFragment(payload, sender, transport, bnetID)
         if not a or GetTime() - a.at > TTL
             or GetTime() - (a.lastAt or a.at) > ASSEMBLY_IDLE_TIMEOUT then
             a = { at = GetTime(), lastAt = GetTime(), count = count, got = 0, chunks = {} }
-            remember(assemblies, assemblyOrder, key, a, 128)
+            -- Only multi-fragment packets live here (singles skip it): 1,024 pending
+            -- pieces cover tens of seconds of a launch channel (~0.5 MB at most).
+            remember(assemblies, assemblyOrder, key, a, 1024)
         end
         if a.count ~= count then return false end
         if a.chunks[part] and a.chunks[part] ~= chunk then return false end

@@ -719,6 +719,19 @@ do
         if row.kind == "C" and row.payload == string.rep("c", 260) then got = true end
     end
     assert(got, "A two-fragment capture was lost to single-fragment traffic between its pieces")
+    -- Hundreds of other two-piece packets started meanwhile do not evict it either.
+    local wire2 = "global|twopart-2|" .. time() .. "|*|Origin Tester|C|" .. string.rep("d", 260)
+    assert(busy.Relay:ReceiveFragment("twopart-2:1:2:" .. wire2:sub(1, 170), "Origin Tester", "CHANNEL"))
+    for i = 1, 500 do
+        busy.Relay:ReceiveFragment("half-" .. i .. ":1:2:" .. string.rep("h", 170), "Noise Tester", "CHANNEL")
+    end
+    busy.Relay:ReceiveFragment("twopart-2:2:2:" .. wire2:sub(171), "Origin Tester", "CHANNEL")
+    drain()
+    got = false
+    for _, row in ipairs(busy.received) do
+        if row.kind == "C" and row.payload == string.rep("d", 260) then got = true end
+    end
+    assert(got, "A two-fragment capture was evicted by other packets still waiting for their pieces")
 end
 -- A late copy of a packet is still recognised after thousands of others (a busy
 -- channel recycled a 2,048-entry ring in seconds and handled duplicates again).
@@ -787,6 +800,27 @@ do
     assert(critical.C == true, "A relayed capture final waited for an ordinary channel token")
     assert(critical.ZS == false, "Relayed routine progress took a priority token")
     assert(critical.Cown == false, "Our own relay copy took a priority token")
+end
+-- A neighbour's route and advertised ranking protocol survive a launch-sized channel:
+-- a map reply (~30 s of pages) and the choice of the v8 exchange need them.
+do
+    local busy = client("Router Tester", "route-chan")
+    busy.Relay:Receive("global|first-nh|" .. time() .. "|*|First Tester|NH|1.0.0~ld~lr~lp6",
+        "First Tester", "CHANNEL")
+    local letters = "abcdefghijklmnopqrstuvwxyz"
+    for i = 1, 1000 do
+        local who = "Peer" .. letters:sub(i % 26 + 1, i % 26 + 1)
+            .. letters:sub(math.floor(i / 26) % 26 + 1, math.floor(i / 26) % 26 + 1)
+            .. letters:sub(math.floor(i / 676) + 1, math.floor(i / 676) + 1) .. " Tester"
+        busy.Relay:Receive("global|peer-nh-" .. i .. "|" .. time() .. "|*|" .. who .. "|NH|1.0.0~ld~lr~lp6",
+            who, "CHANNEL")
+    end
+    drain()
+    assert(busy.Relay:IsDirectPeer("First Tester"), "A neighbour's route was forgotten on a busy channel")
+    assert(busy.Relay:GetPeerPagedProtocol("First Tester") == 8,
+        "A neighbour's v8 capability was forgotten on a busy channel")
+    now = now + 6 -- the count is cached 5 s (read for every broadcast request)
+    assert(busy.Relay:CountDirectPeers() >= 1000, "Direct neighbours undercounted")
 end
 -- Bridge election: routine traffic heard on the channel crosses through every hearer
 -- while few bridges are known, through a hashed share of them beyond eight; the
