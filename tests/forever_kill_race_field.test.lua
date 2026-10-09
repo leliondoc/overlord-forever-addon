@@ -30,4 +30,14 @@ local longName = "Averyveryverylongname Withaverylongsurname"
 local fallback = s:BuildKillBroadcastPayload(longName, string.rep("z", 120), 120, "WARRIOR", "Horde",
     EPOCH, longGuild, "enus", 0, EPOCH, 30, "Orc", 2)
 assert(fallback and #fallback <= 250, "oversized K not shrunk")
-print("K race field: 13-field layout parsed back, ~10 bytes, dropped first when too long")
+-- 4. Skyborne (Forever's ninth race, a token per faction): carried like any race,
+-- and stored for its owner when his K is received.
+local sky = s:BuildKillBroadcastPayload("Sky Walker", "", 40, "MAGE", "Alliance", EPOCH,
+    "", "engb", 0, EPOCH, 30, "SkyborneAlliance", 3)
+local _, _, _, _, _, _, _, _, _, skyRace, skySex = s:ParseKillPayload(sky)
+assert(skyRace == "Skyborne" and skySex == 3, "Skyborne race not carried in K: " .. tostring(skyRace))
+s:OnReceiveKill(sky, "Sky Walker")
+local skyInfo = Overlord.Leaderboard.playerInfo["Sky Walker"]
+assert(skyInfo and skyInfo.race == "Skyborne", "Skyborne race not stored from its owner's K: "
+    .. tostring(skyInfo and skyInfo.race))
+print("K race field: 13-field layout parsed back, ~10 bytes, dropped first when too long, Skyborne carried")

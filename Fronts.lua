@@ -829,6 +829,11 @@ local HOME_ART_BY_FACTION = { Alliance = "ElwynnForest", Horde = "Durotar" }
 
 local function HomeRaceAndFaction()
     local raceFile = UnitRace and select(2, UnitRace("player"))
+    -- One token per race (Skyborne's faction variants become "Skyborne").
+    local sync = Overlord.Sync
+    if raceFile and sync and sync.NormalizeRaceFileToken then
+        raceFile = sync:NormalizeRaceFileToken(raceFile) or raceFile
+    end
     return raceFile, Overlord.PlayerFaction or UnitFactionGroup("player") or ""
 end
 

@@ -106,6 +106,16 @@ for _, race in ipairs({ "Human", "Dwarf", "NightElf", "Gnome", "Orc", "Scourge",
         assert(back == race and backSex == sex, "race field round trip failed for " .. race)
     end
 end
+-- 1.8.1: Forever's ninth race, Skyborne (one file token per faction), is a race
+-- everywhere: normalized, sent in full on the wire and read back.
+for _, token in ipairs({ "Skyborne", "SkyborneAlliance", "Skyborne_Horde", "skyborne" }) do
+    assert(sync:NormalizeRaceFileToken(token) == "Skyborne", "Skyborne token refused: " .. token)
+end
+assert(sync:EncodeRaceWireField("SkyborneHorde", 3) == "Skyborne3")
+local skyRace, skySex = sync:DecodeRaceWireField("Skyborne2")
+assert(skyRace == "Skyborne" and skySex == 2, "Skyborne race field not read back")
+assert(sync:NormalizeRaceFileToken("Sky") == nil and sync:NormalizeRaceFileToken("Bornesky") == nil,
+    "a token merely close to Skyborne was accepted")
 assert(sync:DecodeRaceWireField("x2") == nil, "an unknown letter was accepted")
 assert(sync:DecodeRaceWireField("o5") == nil, "an invalid sex digit was accepted")
 assert(sync:DecodeRaceWireField("Orc2:extra") == nil)

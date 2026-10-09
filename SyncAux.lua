@@ -1264,6 +1264,9 @@ local VALID_RACE_FILE = {
     ZandalariTroll = true, KulTiran = true, DarkIronDwarf = true, Vulpera = true,
     MagharOrc = true, Mechagnome = true, Dracthyr = true, Earthen = true,
     EarthenDwarf = true, Haranir = true, Harronir = true, Haronir = true,
+    -- Forever's ninth race, in both factions (1.8.1: it was missing, so ~16 % of the
+    -- ranking had no race anywhere: own row, K, LR, pages, display).
+    Skyborne = true,
 }
 
 -- Alias orthographiques / typos joueurs (Haronir) vers le clientFileString canonique.
@@ -1297,6 +1300,9 @@ function Overlord.Sync:NormalizeRaceFileToken(race)
         end
     end
     race = RACE_FILE_ALIASES[race] or race
+    -- Skyborne has one file token per faction, every one containing "skyborne":
+    -- all of them are the same race here.
+    if not VALID_RACE_FILE[race] and race:lower():find("skyborne", 1, true) then race = "Skyborne" end
     if race == "" or not VALID_RACE_FILE[race] then return nil end
     return race
 end
