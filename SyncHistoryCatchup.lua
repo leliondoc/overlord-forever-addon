@@ -213,9 +213,6 @@ local function BuildSnapshotKillPayload(snapshot, name, wireEpoch)
     if sync.MaxPlausibleKillsForLevel then
         kills = math.min(kills, sync:MaxPlausibleKillsForLevel(level))
     end
-    -- 1.7.6 : same campaign envelope as the receivers (Sync:CampaignKillEnvelope).
-    local envelope = sync.CampaignKillEnvelope and sync:CampaignKillEnvelope()
-    if envelope then kills = math.min(kills, envelope) end
     local guild = SafeWireField(info.guild, 96)
     if guild ~= "" and sync.IsValidGuildSyncToken
         and not sync:IsValidGuildSyncToken(guild) then guild = "" end

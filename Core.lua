@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "1.7.6"
+Overlord.Version = "1.7.7"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncBetaNetwork.lua).
 Overlord.BetaNetworkEnabled = true
 Overlord.IsInitialized = false
@@ -2731,10 +2731,6 @@ function Overlord:Initialize()
         self.SavedVariablesLoadedAtLogin = type(OverlordDB) == "table"
         self.SavedVariablesCampaignAtLogin = type(OverlordDB) == "table"
             and tonumber(OverlordDB.lastResetTimestamp) or nil
-        -- 1.7.6 : time away since our last logout (local clock, like the stamp), the
-        -- budget for our own ladder row on its first raise this session.
-        local lastOut = type(OverlordDB) == "table" and tonumber(OverlordDB.lastSessionTimestamp) or 0
-        self.SessionAbsenceAtLogin = lastOut > 0 and math.max(0, time() - lastOut) or nil
     end
     
     -- ADDON_LOADED follows SavedVariables loading. Waiting cannot repair a client-side load failure.

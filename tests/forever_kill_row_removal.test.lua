@@ -19,12 +19,12 @@ OverlordDB.leaderboardSnapshot = {
 OverlordDB.leaderboardScoreSanitizeVersion = 3
 lb:EnsureLegacyScoreSanitized()
 local attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 11 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 10 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Score cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
 end
-assert(OverlordDB.leaderboardScoreSanitizeVersion == 11, "Score cleanup did not commit")
+assert(OverlordDB.leaderboardScoreSanitizeVersion == 10, "Score cleanup did not commit")
 assert(lb.kills[name] == nil, "Existing score was not removed")
 assert(OverlordDB.leaderboardsByPool.global.kills[name] == nil,
     "Pooled score was not removed")
@@ -53,7 +53,7 @@ assert(hasForgedGuild(), "Fixture did not place the forged guild in the guild co
 OverlordDB.leaderboardScoreSanitizeVersion = 4
 lb:EnsureLegacyScoreSanitized()
 attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 11 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 10 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Forged row cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
@@ -95,7 +95,7 @@ lb.kills[burst] = 1088
 OverlordDB.leaderboardScoreSanitizeVersion = 5
 lb:EnsureLegacyScoreSanitized()
 attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 11 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 10 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Removed row cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
@@ -121,12 +121,12 @@ lb.kills["Ender Zero"] = 5000
 OverlordDB.leaderboardScoreSanitizeVersion = 8
 lb:EnsureLegacyScoreSanitized()
 attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 11 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 10 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Re-injected row cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
 end
-assert(OverlordDB.leaderboardScoreSanitizeVersion == 11, "Version 11 cleanup did not commit")
+assert(OverlordDB.leaderboardScoreSanitizeVersion == 10, "Version 10 cleanup did not commit")
 assert(lb.kills[forged] == nil, "Version 8 clients kept the re-injected row")
 assert(lb.kills["Ender Zero"] == nil, "Version 8 clients kept the burst row")
 assert(not hasForgedGuild(), "The injected guild stayed in the guild column")

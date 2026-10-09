@@ -2393,8 +2393,7 @@ end
 -- v9 (1.7.4) : repasse une fois pour purger une ligne refusee sur toutes les campagnes.
 -- v10 (1.7.5) : graphies non canoniques et sosies, lignes sans classe ou au-dela du
 -- niveau 60, et fiches playerInfo des noms refuses (guilde fantome).
--- v11 (1.7.6) : lignes au-dessus de l'enveloppe de campagne ecretees.
-local LEGACY_SCORE_SANITIZE_VERSION = 11
+local LEGACY_SCORE_SANITIZE_VERSION = 10
 
 -- Migration de securite globale, executee avant Sync mais repartie sur plusieurs
 -- frames. Les SavedVariables visees peuvent justement etre anormalement grosses :
@@ -2463,38 +2462,23 @@ function Overlord.Leaderboard:EnsureLegacyScoreSanitized()
     end
 
     self._legacyScoreSanitizePending = true
-    -- One of this account's own characters (credited here this week), even before
-    -- the local name resolves at login: never removed nor clamped (its own count goes on).
-    local function IsAccountRow(name)
-        if IsLocalName(name) then return true end
-        local localKeys = OverlordDB.leaderboardLocalKillKeys
-        if type(localKeys) ~= "table" then return false end
-        local sync = Overlord.Sync
-        local dk = sync and sync.GetCaptureContributorDedupKey and sync:GetCaptureContributorDedupKey(name)
-        return localKeys[name] == true or (dk ~= nil and localKeys["#dk:" .. dk] == true)
-    end
-    -- v11: the envelope belongs to the current campaign. At the first login after a
-    -- reset, last week's bucket is still loaded before it is archived: never clamp it.
-    local function IsCurrentCampaignBucket(bucket)
-        local start = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
-        local marker = tonumber(bucket.campaignStart) or tonumber(bucket.scoreBucketEpoch)
-        if not marker and bucket == OverlordDB.leaderboard then
-            marker = tonumber(OverlordDB.leaderboardScoreBucketEpoch)
-        end
-        return start > 0 and marker ~= nil and Overlord:CampaignEpochsMatch(marker, start)
-    end
     local worker = coroutine.create(function()
         for i = 1, #buckets do
             local bucket = buckets[i]
             local sync = Overlord.Sync
-            local envelope = IsCurrentCampaignBucket(bucket) and sync and sync.CampaignKillEnvelope
-                and sync:CampaignKillEnvelope() or nil
             SanitizeMap(bucket.kills, function(name)
                 if sync and sync.IsDeniedKillContributor and sync:IsDeniedKillContributor(name) then
                     return true
                 end
                 -- v10: the same content rules as the network (no class, level above 60).
-                if not sync or not sync.IsLadderRowClass or IsAccountRow(name) then return false end
+                -- Never one of this account's own characters (credited here this week),
+                -- even before the local name resolves at login.
+                if not sync or not sync.IsLadderRowClass or IsLocalName(name) then return false end
+                local localKeys = OverlordDB.leaderboardLocalKillKeys
+                if type(localKeys) == "table" then
+                    local dk = sync.GetCaptureContributorDedupKey and sync:GetCaptureContributorDedupKey(name)
+                    if localKeys[name] or (dk and localKeys["#dk:" .. dk]) then return false end
+                end
                 local info = type(bucket.playerInfo) == "table" and bucket.playerInfo[name] or nil
                 if type(info) ~= "table" then return false end
                 -- An old save may hold "Warrior" or " MAGE": the login repair fixes the
@@ -2528,12 +2512,6 @@ function Overlord.Leaderboard:EnsureLegacyScoreSanitized()
                         bucket.kills[name] = ceiling
                         changed = true
                     end
-                end
-                -- v11 (1.7.6): the campaign envelope, clamped like the network does.
-                if envelope and (tonumber(bucket.kills[name]) or 0) > envelope
-                    and not IsAccountRow(name) then
-                    bucket.kills[name] = envelope
-                    changed = true
                 end
                 return false
             end)
@@ -6689,10 +6667,6 @@ function Overlord.Leaderboard:RegisterKill(playerName, fromSync)
         and (self.kills[playerName] or 0) >= Overlord.PLAUSIBLE_SYNC_KILL_CEILING then
         return self.kills[playerName] or 0
     end
-    local envelope = fromSync and sync and sync.CampaignKillEnvelope and sync:CampaignKillEnvelope()
-    if envelope and (self.kills[playerName] or 0) >= envelope then
-        return self.kills[playerName] or 0
-    end
     local isLocal = self:IsLocalDisplayName(playerName)
     local localPoolChanged = false
     if isLocal then
@@ -6764,12 +6738,9 @@ function Overlord.Leaderboard:AddKills(playerName, count, fromSync)
             Overlord.SafeUnitLevel and (Overlord:SafeUnitLevel("player") or 0) or 0) then
         return self.kills[playerName] or 0
     end
-    -- Defense en profondeur anti-triche : ne pas depasser le plafond plausible en sync
-    -- (ni, depuis 1.7.6, l'enveloppe de campagne).
+    -- Defense en profondeur anti-triche : ne pas depasser le plafond plausible en sync.
     if fromSync and Overlord.PLAUSIBLE_SYNC_KILL_CEILING then
         local ceiling = Overlord.PLAUSIBLE_SYNC_KILL_CEILING
-        local envelope = sync and sync.CampaignKillEnvelope and sync:CampaignKillEnvelope()
-        if envelope and envelope < ceiling then ceiling = envelope end
         local current = self.kills[playerName] or 0
         if current >= ceiling then return current end
         if current + count > ceiling then count = ceiling - current end
@@ -6801,12 +6772,6 @@ function Overlord.Leaderboard:SetPlayerKills(playerName, count, fromSync)
     if fromSync and Overlord.PLAUSIBLE_SYNC_KILL_CEILING
         and (tonumber(count) or 0) > Overlord.PLAUSIBLE_SYNC_KILL_CEILING then
         return
-    end
-    -- 1.7.6 : enveloppe de campagne (Sync:CampaignKillEnvelope), ecretee comme le
-    -- plafond par niveau : tous les clients retiennent la meme valeur.
-    if fromSync and sync and sync.CampaignKillEnvelope then
-        local envelope = sync:CampaignKillEnvelope()
-        if envelope and count > envelope then count = envelope end
     end
     if count > (self.kills[playerName] or 0) then
         self.kills[playerName] = count
