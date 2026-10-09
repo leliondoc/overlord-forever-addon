@@ -557,6 +557,18 @@ local ROWS = {
     { kind = "checkbox", var = SP.MostWantedAlertsVariableName, label = "MW_ALERTS_LABEL",
         fallback = "Most Wanted alerts", tooltip = "MW_ALERTS_TOOLTIP",
         default = true, get = getMostWantedAlerts, set = setMostWantedAlerts },
+    { kind = "checkbox", var = "Overlord_KillChatLine", label = "KILL_CHAT_LABEL",
+        fallback = "Chat line on each honorable kill", tooltip = "KILL_CHAT_TOOLTIP",
+        default = false,
+        get = function()
+            local cfg = OverlordDB and OverlordDB.config
+            return cfg ~= nil and cfg.killChatLine == true
+        end,
+        set = function(value)
+            if not OverlordDB then return end
+            OverlordDB.config = OverlordDB.config or {}
+            OverlordDB.config.killChatLine = value == true
+        end },
 
     { kind = "header", label = "SETTINGS_SECTION_MAP", fallback = "Map and minimap" },
     { kind = "dropdown", var = SP.WorldMapModeVariableName, label = "MAP_WORLD_OVERLAYS_LABEL",

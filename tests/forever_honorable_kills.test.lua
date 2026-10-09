@@ -59,6 +59,7 @@ for _, role in ipairs({ "DAMAGER", "HEALER", "TANK" }) do
 end
 assert(score() == 3, "Role or duplicate notification changed the official VH count")
 
+
 -- Named killing blows are evidence, never a second source of leaderboard points.
 Overlord.Combat:OnPartyKillEvent("Player-1-LOCAL", "Player-2-VICTIM_A")
 assert(score() == 3, "Killing blow added a point before Blizzard awarded an HK")
@@ -188,4 +189,23 @@ for _, sent in ipairs(deathSends) do
     assert(sent ~= "relay:EK", "A death notice (EK) was sent to the relay")
 end
 assert(score() == 202)
-print("Forever HK: exact Blizzard deltas, all roles, no KB/death/x2 additions, batching, counters and instances OK")
+-- The "+N honorable kills: Total" chat line is an option, off by default (1.7.7).
+do
+    local lines, realPrint = {}, Overlord.PrintNotification
+    Overlord.PrintNotification = function(_, msg) lines[#lines + 1] = msg end
+    OverlordDB.config = OverlordDB.config or {}
+    OverlordDB.config.killChatLine = nil
+    Overlord.InstanceSuspended = false
+    Overlord.Combat:CreditHonorableKills(1)
+    for _, msg in ipairs(lines) do
+        assert(not msg:find("Total", 1, true), "the kill chat line showed while the option is off: " .. msg)
+    end
+    OverlordDB.config.killChatLine = true
+    Overlord.Combat:CreditHonorableKills(1)
+    local shown = false
+    for _, msg in ipairs(lines) do if msg:find("Total", 1, true) then shown = true end end
+    assert(shown, "the kill chat line did not show with the option on")
+    OverlordDB.config.killChatLine = nil
+    Overlord.PrintNotification = realPrint
+end
+print("Forever HK: exact Blizzard deltas, all roles, no KB/death/x2 additions, batching, counters, instances and optional chat line OK")

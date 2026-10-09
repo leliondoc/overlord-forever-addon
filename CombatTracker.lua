@@ -859,7 +859,14 @@ function Overlord.Combat:CreditHonorableKills(count)
     if Overlord.Sync and Overlord.Sync.BroadcastKill then
         Overlord.Sync:BroadcastKill(currentZone and currentZone.id or "", totalKills, true)
     end
-    -- Pas de ligne de chat par VH : Blizzard l'annonce deja, le total est dans le classement.
+    -- Ligne de chat par VH : desactivee par defaut depuis 1.7.3 (Blizzard l'annonce
+    -- deja, le total est dans le classement) ; option "Ligne de chat a chaque VH".
+    local cfg = OverlordDB and OverlordDB.config
+    if cfg and cfg.killChatLine == true then
+        local L = Overlord.L
+        local fmt = L and L.HONORABLE_KILLS_CONFIRM or "+%d honorable kills: Total: %d"
+        Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. fmt, count, totalKills))
+    end
     return totalKills
 end
 
