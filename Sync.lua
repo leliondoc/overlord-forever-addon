@@ -349,20 +349,13 @@ local function CompareVersions(v1, v2)
     return c1 - c2
 end
 
--- Message chat one-shot (feedback immediat) + memoire de la version la plus recente vue sur le
--- reseau (pour l'alerte raid a chaque entree de front, cf. Overlord:OnEnterFront dans Core.lua).
--- Stockee sur Overlord.Sync (pas un nouveau local top-level : Sync.lua est proche de la limite des 200
--- locals par chunk).
+-- Message chat one-shot quand une version plus recente est vue sur le reseau.
 local versionNotified = false
 
 local function CheckRemoteVersion(remoteVersion)
     if not remoteVersion or remoteVersion == "" then return end
     if not Overlord.Version then return end
     if CompareVersions(remoteVersion, Overlord.Version) > 0 then
-        if not Overlord.Sync._knownNewerVersion
-            or CompareVersions(remoteVersion, Overlord.Sync._knownNewerVersion) > 0 then
-            Overlord.Sync._knownNewerVersion = remoteVersion
-        end
         if not versionNotified then
             versionNotified = true
             Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. string.format(L.VERSION_OUTDATED, remoteVersion))
@@ -2546,7 +2539,8 @@ function Overlord.Sync:_BuildBNetFriendsList(sliced)
     return list
 end
 
--- Envoi a tous les amis BNet (throttle 0.4s entre chaque, max 10 amis)
+-- Envoi aux amis BNet : par le relais (amis vivants d'abord, voir SyncRelay.lua) ;
+-- le repli direct (0,4 s entre chaque) ne sert que sans relais.
 -- Donnees addon uniquement : rien n'apparait dans le chat (BN_CHAT_MSG_ADDON)
 function Overlord.Sync:GetBetaBNetTargets()
     return GetBNetFriendsInWoW()
@@ -10385,9 +10379,8 @@ function Overlord.Sync:MaybeLeaderboardClassRefreshFromNameplate()
     local now = GetTime()
     if now - lastLbClassRefreshFromNp < TUNING.LB_CLASS_REFRESH_FROM_NP_INTERVAL then return end
     lastLbClassRefreshFromNp = now
-    -- OnNameplateAdded appelle deja SetPlayerClassFromSync pour l'unite concernee.
-    -- EnrichMissingClassesFromVisibleUnits (scan O(N) kills + 40 nameplates) reste
-    -- reserve au prep lourd du classement (ouverture / PrepareForHeavyRead).
+    -- OnNameplateAdded appelle deja SetPlayerClassFromSync pour l'unite concernee :
+    -- un simple rafraichissement suffit, aucun scan des unites visibles.
     if lbUI.RequestRefresh then
         lbUI:RequestRefresh()
     elseif lbUI.RefreshIfVisible then

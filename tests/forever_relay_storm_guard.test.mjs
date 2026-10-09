@@ -36,10 +36,15 @@ test("Structure relays do not re-author packets into the beta relay without a cl
 test("Relay rejects duplicates before decoding and keeps O(1) dedup memory", () => {
     const net = read("SyncRelay.lua");
     const receive = net.slice(net.indexOf("function net:Receive("));
-    assert.ok(receive.indexOf("alreadySeen(wire)") < receive.indexOf("decode(wire)"),
+    const seenAt = (text, call) => {
+        const at = text.indexOf(call);
+        assert.ok(at >= 0, `${call} not found`);
+        return at;
+    };
+    assert.ok(seenAt(receive, "alreadySeen(wire, sender)") < seenAt(receive, "decode(wire)"),
         "Receive decodes before the duplicate check");
     const fragment = net.slice(net.indexOf("function net:ReceiveFragment("));
-    assert.ok(fragment.indexOf("alreadySeen(wire)") < fragment.indexOf("decode(wire)"),
+    assert.ok(seenAt(fragment, "alreadySeen(wire, name)") < seenAt(fragment, "decode(wire)"),
         "ReceiveFragment decodes before the duplicate check");
     assert.match(fragment, /self:Receive\(wire, name, transport, bnetID, p, wasSeen\)/, "Packet decoded twice");
     assert.doesNotMatch(net, /table\.remove\(order, 1\)/, "O(n) dedup eviction is back");

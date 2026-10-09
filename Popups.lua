@@ -856,7 +856,10 @@ end
 -- API publique
 -- ---------------------------------------------------------------------------
 
--- opts : showBookIcon, showGuideButton (bienvenue) ; showFactionSeal ; playFactionHorn (Bloodlust / Heroism)
+-- Affiche un dialogue WC3 generique (marque seenId a la fermeture).
+-- markMode : "once" (defaut) ou "daily" (une fois par jour calendaire).
+-- opts : showBookIcon, showGuideButton (bienvenue) ; showWarningIcon (avertissement) ;
+-- showFactionSeal ; playFactionHorn (Bloodlust / Heroism)
 -- addonSoundKey : ex. "faction_call" (cor) ; okText : libelle bouton OK
 function Overlord.Popups:ShowDialog(seenId, title, body, markMode, opts)
     if type(title) ~= "string" or title == "" or type(body) ~= "string" or body == "" then return end

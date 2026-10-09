@@ -115,9 +115,6 @@ local function EpochsMatch(a, b)
     return math.abs(a - b) <= EPOCH_TOLERANCE
 end
 
--- Nombre de kills reellement nouveaux apportes par ce K. La base retient aussi la
--- guilde : un saut de total mesure pendant un changement de guilde n'est pas
--- attribuable a la nouvelle, seul un kill l'est.
 local function TrackPlayer(key, row)
     if playerTail - playerHead + 1 > MAX_PLAYERS * 2 then
         -- Compact the order (stale entries of cleared or replaced rows).
@@ -154,6 +151,9 @@ local function EvictOldestPlayer(now)
     end
 end
 
+-- Nombre de kills reellement nouveaux apportes par ce K. La base retient aussi la
+-- guilde : un saut de total mesure pendant un changement de guilde n'est pas
+-- attribuable a la nouvelle, seul un kill l'est.
 local function ConsumeKillDelta(playerKey, total, epoch, guildKey, now)
     local row = players[playerKey]
     if row and now - row.at <= BASELINE_TTL and EpochsMatch(row.epoch, epoch)

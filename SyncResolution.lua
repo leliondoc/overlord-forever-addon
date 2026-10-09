@@ -612,8 +612,8 @@ end
 
 function Overlord.Sync:OnReceiveGuildAnswer(payload, sender, channel)
     -- GY is only ever the whispered answer to our own GR (2026-10-06). The channel and
-    -- group copies had no honest sender left (AppendGuildMetadataToSrQueue has no
-    -- caller) and let anyone create a ladder entry for any name: one GY on the channel,
+    -- group copies had no honest sender left (the SR guild metadata appender is gone)
+    -- and let anyone create a ladder entry for any name: one GY on the channel,
     -- then one LK, put "EMPIRE SUCKS" on every ranking. A relayed origin is a name
     -- written by a gateway, never the answering peer.
     if not IsDirectAnswer(self, sender, channel) then return end

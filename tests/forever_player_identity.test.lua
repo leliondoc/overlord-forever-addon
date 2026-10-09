@@ -36,4 +36,17 @@ unitName = "Tro Ma"
 assert(sync:GetPlayerFullName() == "Tro Ma")
 assert(not sync:HasCompleteContributorIdentity("Tro"))
 
+-- "Is this message mine?" is memoized per sender string (asked for every addon
+-- message): same answers, and a change of our own name drops the memo.
+Overlord.SafeStringEquals = Overlord.SafeStringEquals or function(_, a, b) return a ~= nil and a == b end
+Overlord.SafeUnitName = Overlord.SafeUnitName or function() return "Tro" end
+assert(sync:IsSenderLocalPlayer("Tro Ma"), "Own name not recognised")
+assert(sync:IsSenderLocalPlayer("Tro Ma"), "Own name not recognised from the memo")
+assert(not sync:IsSenderLocalPlayer("Other Player"), "A foreign sender was taken for us")
+assert(not sync:IsSenderLocalPlayer("Other Player"), "Memo turned a foreign sender into us")
+local realFull = sync.GetPlayerFullName
+sync.GetPlayerFullName = function() return "Other Player" end
+assert(sync:IsSenderLocalPlayer("Other Player"), "Memo kept the previous identity after a name change")
+sync.GetPlayerFullName = realFull
+
 print("Forever player identity: complete API fallback, strict validation, delayed name and cache OK")

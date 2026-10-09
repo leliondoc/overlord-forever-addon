@@ -596,6 +596,8 @@ local serial = 0
 -- more captures and alerts fit one fragment (one channel message instead of two).
 local function base36(n, width)
     local digits, out = "0123456789abcdefghijklmnopqrstuvwxyz", ""
+    n = tonumber(n) or 0
+    if not (n >= 0) or n == math.huge then n = 0 end
     n = math.floor(n)
     repeat
         local d = n % 36
@@ -643,7 +645,7 @@ local bnetHeard, bnetHeardCount = {}, 0
 local function noteBNetHeard(id)
     if id == nil then return end
     if bnetHeard[id] == nil then
-        -- Bounded: game account ids of online friends only (BNet list cap 15),
+        -- Bounded: game account ids of online friends only (BNet list cap 40),
         -- but a long session sees many logins: forget the stale ones at 64.
         if bnetHeardCount >= 64 then
             local now = GetTime()

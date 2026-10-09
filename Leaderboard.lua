@@ -593,11 +593,6 @@ end
 local metaRebuildJournals = setmetatable({}, { __mode = "k" })
 local copyPublishedMeta -- defined with the other entry helpers below
 
--- Effets de bord d'une mutation metadata deja appliquee a un index chaud.
--- L'index reste valide, mais toutes ses vues derivees et sa persistance doivent suivre.
--- With a player name, an index entry was re-derived in place: builds that read the
--- index (display, snapshot) keep going, a running rebuild replays that name. Without
--- one, the change cannot be replayed and counts as a structural change (as before).
 -- True only when it is certain that no spelling of this identity holds a score
 -- (both hot indexes built, no rebuild in flight). Such a player is in no ranking
 -- view and in no anti-loss snapshot: the class/faction a nameplate teaches us about
@@ -612,6 +607,11 @@ local function isUnscoredIdentity(self, playerName)
     local dk = GetKillDedupKey(playerName)
     return dk ~= nil and dedupKillMaxIndex[dk] == nil and dedupCaptureMaxIndex[dk] == nil
 end
+-- Effets de bord d'une mutation metadata deja appliquee a un index chaud.
+-- L'index reste valide, mais toutes ses vues derivees et sa persistance doivent suivre.
+-- With a player name, an index entry was re-derived in place: builds that read the
+-- index (display, snapshot) keep going, a running rebuild replays that name. Without
+-- one, the change cannot be replayed and counts as a structural change (as before).
 local function markIndexedMetaMutation(self, playerName)
     self.leaderboardDirty = true
     local unscored = playerName ~= nil and isUnscoredIdentity(self, playerName)
@@ -668,7 +668,7 @@ end
 -- Invalide l'index meta (classe/faction/guilde/locale) + le cache d'affichage (couleurs de
 -- classe, regroupement faction). A appeler quand playerInfo change vraiment (pas sur un kill).
 -- Les sorties autoritaires (export Check PvP, payloads SR, UI) reconstruisent de toute facon
--- via PrepareForHeavyRead / EnsureDisplayCache : un index legerement en retard sur le chemin
+-- via EnsureDisplayCache : un index legerement en retard sur le chemin
 -- chaud (demande de guilde/classe opportuniste) est sans impact sur l'etat reseau.
 function Overlord.Leaderboard:MarkMetaDirty()
     markIndexedMetaMutation(self)
