@@ -41,6 +41,6 @@ test("Relay rejects duplicates before decoding and keeps O(1) dedup memory", () 
     const fragment = net.slice(net.indexOf("function net:ReceiveFragment("));
     assert.ok(fragment.indexOf("alreadySeen(wire)") < fragment.indexOf("decode(wire)"),
         "ReceiveFragment decodes before the duplicate check");
-    assert.match(fragment, /self:Receive\(wire, name, transport, bnetID, p\)/, "Packet decoded twice");
+    assert.match(fragment, /self:Receive\(wire, name, transport, bnetID, p, wasSeen\)/, "Packet decoded twice");
     assert.doesNotMatch(net, /table\.remove\(order, 1\)/, "O(n) dedup eviction is back");
 });
