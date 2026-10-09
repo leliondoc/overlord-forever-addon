@@ -4322,6 +4322,81 @@ function Overlord:IsInCatchUpPhase(allowUnlistedOpenWorldInstance)
     return IsPhasedCatchUpInstanceID(instID)
 end
 
+-- Capture and outpost alerts follow the player's continent (1.8.0).
+-- Continent root maps, Classic and Retail ids: "EK" = Eastern Kingdoms, "K" = Kalimdor.
+Overlord.ALERT_CONTINENT_ROOTS = { [1415] = "EK", [13] = "EK", [1414] = "K", [12] = "K" }
+-- mapID -> "EK" / "K". Only resolved maps are cached: map data can be missing while loading.
+Overlord.alertContinentCache = {}
+
+-- "EK", "K" or nil (unknown, unresolved or another continent).
+function Overlord:GetMapContinent(mapID)
+    mapID = tonumber(mapID)
+    if not mapID or mapID <= 0 then return nil end
+    local cached = Overlord.alertContinentCache[mapID]
+    if cached then return cached end
+    local roots = Overlord.ALERT_CONTINENT_ROOTS
+    local current = mapID
+    for _ = 1, 8 do
+        local root = roots[current]
+        if root then
+            Overlord.alertContinentCache[mapID] = root
+            return root
+        end
+        if not C_Map or not C_Map.GetMapInfo then return nil end
+        local ok, info = pcall(C_Map.GetMapInfo, current)
+        if not ok or type(info) ~= "table" then return nil end
+        current = tonumber(info.parentMapID) or 0
+        if current <= 0 then return nil end
+    end
+    return nil
+end
+
+-- Continent under the player: the map first, then the open-world instance id
+-- (0 = Eastern Kingdoms, 1 = Kalimdor). nil while unknown (loading, boat, elsewhere).
+function Overlord:GetPlayerContinent()
+    if C_Map and C_Map.GetBestMapForUnit then
+        local ok, mapID = pcall(C_Map.GetBestMapForUnit, "player")
+        local continent = ok and self:GetMapContinent(mapID) or nil
+        if continent then return continent end
+    end
+    if GetInstanceInfo then
+        local ok, _, _, _, _, _, _, _, instID = pcall(GetInstanceInfo)
+        if ok and instID == 0 then return "EK" end
+        if ok and instID == 1 then return "K" end
+    end
+    return nil
+end
+
+-- always: alert shown everywhere (own guild, own capital). The option shows the
+-- whole world; an unknown continent (place or player) shows the alert.
+function Overlord:ShouldShowPlaceAlert(mapID, always)
+    if always then return true end
+    local config = OverlordDB and OverlordDB.config
+    if config and config.worldwideAlerts == true then return true end
+    local place = self:GetMapContinent(mapID)
+    if not place then return true end
+    local here = self:GetPlayerContinent()
+    return here == nil or here == place
+end
+
+-- Zone alerts: the zone's front gives the place; our own capital is always shown.
+function Overlord:ShouldShowZoneAlert(zone)
+    local fronts = self.Fronts
+    if not zone or not zone.id or not fronts or not fronts.GetZone then return true end
+    local _, front = fronts:GetZone(zone.id)
+    if not front then return true end
+    local always = zone.isCapital and fronts.GetCapitalId
+        and fronts:GetCapitalId(self.PlayerFaction, front.id) == zone.id or false
+    if always then return true end
+    -- The registry map first; another client's alias when that one is unknown.
+    local mapID = front.preferredMapID
+    if not self:GetMapContinent(mapID) and C_Map and C_Map.GetMapInfo
+        and fronts.GetMapID and front.id then
+        mapID = fronts:GetMapID(front.id)
+    end
+    return self:ShouldShowPlaceAlert(mapID, false)
+end
+
 -- Delai de verification avant activation (secondes)
 -- IsInInstance retourne false pendant le loading screen du BG - ce delai evite le faux positif
 local FRONT_ENTER_DELAY = 1.2

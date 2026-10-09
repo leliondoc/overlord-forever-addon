@@ -12,3 +12,4 @@
 - **Paused captures explained**: when your capture pauses because your PvP flag dropped or you mounted up, Overlord now tells you in chat what to do (the timer used to look frozen with no message).
 - **Optional chat line on each honorable kill**: the "+N honorable kills: Total" line is back as an option (Options > AddOns > Overlord > Chat), off by default.
 - **General is opt-in only again**: when the General dies or steps down, command no longer passes automatically to party or raid leaders who never pressed the General button.
+- **Alerts from your continent**: capture and outpost alerts now come only from the continent you are on; your guild's outposts, your capital, calls to arms and total victories still reach you everywhere. An option (Options > AddOns > Overlord > Chat) brings back alerts from the whole world.

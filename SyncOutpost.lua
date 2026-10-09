@@ -1006,6 +1006,30 @@ local function OutpostCapturingFactionLabel(fac)
     return fac or ""
 end
 
+-- 1.8.0: outpost alerts follow the player's continent, unless one of the guilds
+-- named is the player's own (case-insensitive) or the worldwide option is on.
+local function OutpostAlertVisible(siteKey, ...)
+    if not Overlord.ShouldShowPlaceAlert then return true end
+    local OP = Overlord.Outpost
+    local own = OP and OP.GetLocalPlayerGuild and OP:GetLocalPlayerGuild() or ""
+    local always = false
+    if own ~= "" then
+        own = own:lower()
+        for i = 1, select("#", ...) do
+            local guild = select(i, ...)
+            if type(guild) == "string" and OP.SanitizeGuildName then
+                guild = OP:SanitizeGuildName(guild)
+            end
+            if type(guild) == "string" and guild ~= "" and guild:lower() == own then
+                always = true
+                break
+            end
+        end
+    end
+    local site = OP and OP.GetSite and OP:GetSite(siteKey)
+    return Overlord:ShouldShowPlaceAlert(site and site.mapID, always)
+end
+
 local function ResetOutpostAssaultAlert(siteKey)
     if not siteKey then return end
     opAssaultAlertEmitted[siteKey] = nil
@@ -1107,6 +1131,9 @@ local function TryPrintOutpostDefenderAlert(siteKey, stBefore, stAfter)
     if rGuild ~= "" and rGuild == localGuild then return end
     if not OutpostAssaultTargetsHeldState(siteKey, stBefore, stAfter) then return end
     local localOnlyAlert = stAfter._localOnlyAlert and true or false
+    -- Our guild's outpost always alerts; an allied one only on our continent.
+    -- Before the dedup: a hidden alert marks nothing.
+    if not OutpostAlertVisible(siteKey, heldGuild, rGuild) then return end
 
     local remoteTs = tonumber(stAfter.updatedAt) or 0
     local waveKey = siteKey .. ":" .. tostring(remoteTs)
@@ -1179,6 +1206,7 @@ local function TryPrintOutpostAssaultAlert(siteKey, stBefore, stAfter)
     if localGuild ~= "" and defendedGuild ~= "" and localGuild == defendedGuild then
         return
     end
+    if not OutpostAlertVisible(siteKey, assaultGuild, defendedGuild) then return end
 
     local remoteTs = tonumber(stAfter.updatedAt) or 0
     local waveKey = siteKey .. ":" .. tostring(remoteTs)
@@ -1220,7 +1248,8 @@ local function TryPrintOutpostAssaultAlert(siteKey, stBefore, stAfter)
     end
 end
 
-function Overlord.Sync:PrintOutpostCaptureAlert(siteKey, guild, faction, captureTs)
+-- previousGuild (optional): the tenant the capture took the site from.
+function Overlord.Sync:PrintOutpostCaptureAlert(siteKey, guild, faction, captureTs, previousGuild)
     if not siteKey or not faction or not Overlord.Outpost then return end
     if Overlord.WaitingForSync then return end
     local L = Overlord.L
@@ -1228,6 +1257,9 @@ function Overlord.Sync:PrintOutpostCaptureAlert(siteKey, guild, faction, capture
     local OP = Overlord.Outpost
     guild = OP.SanitizeGuildName and OP:SanitizeGuildName(guild or "") or (guild or "")
     if guild == "" then return end
+    -- Another continent stays silent (no dedup, no sound) unless our guild takes
+    -- or loses the site.
+    if not OutpostAlertVisible(siteKey, guild, previousGuild) then return end
     captureTs = tonumber(captureTs) or 0
     local dedupKey = string.format("%s:%s:%s:%d", siteKey, guild, faction, captureTs)
     local now = GetTime()
@@ -1458,7 +1490,8 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
                 if stateChanged and stBefore and stBefore.status == "in_progress"
                     and (ClaimServerNow() - heldTs) <= 90
                     and self.PrintOutpostCaptureAlert then
-                    self:PrintOutpostCaptureAlert(siteKey, heldGuild, remoteFac, heldTs)
+                    self:PrintOutpostCaptureAlert(siteKey, heldGuild, remoteFac, heldTs,
+                        stBefore.previousOwnerGuild)
                 end
             end
         end

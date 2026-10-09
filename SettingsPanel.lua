@@ -569,6 +569,19 @@ local ROWS = {
             OverlordDB.config = OverlordDB.config or {}
             OverlordDB.config.killChatLine = value == true
         end },
+    -- 1.8.0: off = capture and outpost alerts from the player's continent only.
+    { kind = "checkbox", var = "Overlord_WorldwideAlerts", label = "WORLDWIDE_ALERTS_LABEL",
+        fallback = "Capture alerts from the whole world", tooltip = "WORLDWIDE_ALERTS_TOOLTIP",
+        default = false,
+        get = function()
+            local cfg = OverlordDB and OverlordDB.config
+            return cfg ~= nil and cfg.worldwideAlerts == true
+        end,
+        set = function(value)
+            if not OverlordDB then return end
+            OverlordDB.config = OverlordDB.config or {}
+            OverlordDB.config.worldwideAlerts = value == true
+        end },
 
     { kind = "header", label = "SETTINGS_SECTION_MAP", fallback = "Map and minimap" },
     { kind = "dropdown", var = SP.WorldMapModeVariableName, label = "MAP_WORLD_OVERLAYS_LABEL",

@@ -3609,6 +3609,9 @@ local function PrintCaptureChatOnce(zone, newOwner, capturerName, captureTs)
             return
         end
     end
+    -- 1.8.0: only the player's continent (own capital excepted, or the worldwide
+    -- option). Before the dedup: a hidden alert marks nothing.
+    if Overlord.ShouldShowZoneAlert and not Overlord:ShouldShowZoneAlert(zone) then return end
     local now = GetTime()
     local key = zone.id .. ":" .. newOwner
     local dedupSec = zone.isCapital and priv.captureChatDedupCapitalSec or priv.captureChatDedupSec
@@ -4104,6 +4107,9 @@ local function TryPrintEnemyCapturingAlert(zone, capturerName, waveTs)
         priv.enemyAlertEmitted[zone.id] = nil
         priv.enemyAlertSkipUntil[zone.id] = nil
     end
+    -- 1.8.0: another continent stays silent (own capital excepted) and marks
+    -- nothing: the attack still alerts once the player reaches that continent.
+    if Overlord.ShouldShowZoneAlert and not Overlord:ShouldShowZoneAlert(zone) then return end
     waveTs = tonumber(waveTs) or zone.updatedAt or 0
     local waveKey = zone.id .. ":" .. tostring(waveTs)
     if waveTs > 0 and priv.enemyAlertWaveKey[waveKey] then
