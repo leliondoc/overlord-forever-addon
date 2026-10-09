@@ -430,6 +430,33 @@ assert(gate.Relay:Send("FC", "H:front:front")); drain()
 assert(not sentTo[ally.name], "A call to arms crossed to the other faction")
 assert((sentTo["Horde One"] or 0) + (sentTo["Horde Two"] or 0) + (sentTo["Horde Three"] or 0)
     + (sentTo["Horde Four"] or 0) + (sentTo["Horde Five"] or 0) > 0, "A call to arms lost its own-faction copies")
+-- Many opposite-faction friends not heard yet: one presence beat probes eight of
+-- them, the next beat the others (no burst of copies).
+do
+    local wide = client("Wide Tester", "wide")
+    wide.PlayerFaction = "Horde"
+    local letters = "abcdefghijkl"
+    local probedBy = {}
+    for i = 1, 12 do
+        local friend = client("Far" .. letters:sub(i, i) .. " Tester", "far " .. i)
+        friend.faction, friend.PlayerFaction = "Alliance", "Alliance"
+        wide.friends[#wide.friends + 1] = friend
+    end
+    local wideSend = wide.Sync.SendToBNet
+    function wide.Sync:SendToBNet(other, kind, wire)
+        if wire:find("|NH|", 1, true) then probedBy[other.name] = (probedBy[other.name] or 0) + 1 end
+        return wideSend(self, other, kind, wire)
+    end
+    assert(wide.Relay:Send("NH", "beat-1")); drain()
+    local first = 0
+    for _ in pairs(probedBy) do first = first + 1 end
+    assert(first == 8, "One presence beat did not probe exactly eight unheard friends: " .. first)
+    now = now + 120
+    assert(wide.Relay:Send("NH", "beat-2")); drain()
+    local covered = 0
+    for _ in pairs(probedBy) do covered = covered + 1 end
+    assert(covered == 12, "Two beats did not reach every unheard friend: " .. covered)
+end
 -- Silent for longer than the window (instance, logout): back to the rotation only.
 now = now + 301
 assert(not gate.Relay:IsBNetFriendAlive(ally), "A friend silent for 5 min is still a live bridge")

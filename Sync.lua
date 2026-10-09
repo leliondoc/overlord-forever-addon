@@ -2421,7 +2421,11 @@ function Overlord.Sync:SendToBNet(gameAccountID, msgType, data)
 end
 
 -- Liste des amis BNet connectes en WoW Forever (meme projet que le client local).
-local BNET_MAX_FRIENDS = 15
+-- 40 (was 15): at launch a player with 30-40 Forever friends, a dozen of them on
+-- Overlord, kept only the first 15 of the list and could miss every real bridge.
+-- The relay only sends to the live ones plus a few rotating slots, so a longer
+-- list costs no extra copy per packet.
+local BNET_MAX_FRIENDS = 40
 local BNET_DELAY_PER_FRIEND = 0.4
 local WOW_CLIENT_PROGRAM = "WoW"
 local cachedBNetFriendsList = nil

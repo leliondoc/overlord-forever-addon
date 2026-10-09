@@ -547,6 +547,9 @@ local shForwarded, shForwardedOrder = {}, {}
 -- through a hop keeps one channel copy per forwarded beat: routes live 300 s and must
 -- survive one lost copy.
 local NH_RELAY_SLOTS = 1
+-- Opposite-faction friends not heard yet that one own presence beat probes (in
+-- rotation): 40 friends are all probed within five beats, never in one burst.
+local PRESENCE_PROBES = 8
 -- A presence capability is only a protocol hint, never proof of an origin's
 -- identity or authority. Generic traffic may refresh a route, but not this TTL.
 local pagedCapabilities, pagedCapabilityOrder = {}, {}
@@ -1280,7 +1283,13 @@ local function tasksFor(p, wire)
         -- while busy, removes repeats.
         local entries, picked = {}, {}
         for _, id in ipairs(bridges) do entries[#entries + 1] = { id = id } end
-        for _, id in ipairs(probes) do entries[#entries + 1] = { id = id } end
+        if #probes > 0 then
+            local start = net.probeCursor or 0
+            for i = 1, math.min(PRESENCE_PROBES, #probes) do
+                entries[#entries + 1] = { id = probes[(start + i - 1) % #probes + 1] }
+            end
+            net.probeCursor = (start + math.min(PRESENCE_PROBES, #probes)) % #probes
+        end
         local total, slots = #others, math.max(1, 3 - #bridges)
         if relayedPresence then slots = NH_RELAY_SLOTS end
         local cursor = net.friendCursor or 0
