@@ -393,6 +393,33 @@ local function waitingOutpostItem(p)
     end
     return nil
 end
+-- Our own kill total (K) is absolute: in a fight it is queued every 2 s, about
+-- 1.6 KB each with five bridges, more than the 1,000 B/s budget drains. A newer
+-- unsent total for the same zone takes the waiting one's place (nothing is lost:
+-- only the latest total counts). A total carrying the owner's race (13 fields,
+-- every 10 min) is never replaced by one without it.
+local function killFieldCount(payload)
+    local _, colons = payload:gsub(":", "")
+    return colons + 1
+end
+local function waitingKillItem(p)
+    if p.kind ~= "K" or p.target ~= "*" or #p.path ~= 1 or type(p.payload) ~= "string" then return nil end
+    local zone = p.payload:match("^[^:]*:([^:]*):")
+    if not zone then return nil end
+    local withRace = killFieldCount(p.payload) >= 13
+    local origin = p.path[1]:lower()
+    for i = bulkLane.head, #bulkLane.items do
+        local item = bulkLane.items[i]
+        local q = item and item.p
+        if q and item.index == 1 and not item.tasks[1].sending and q.kind == "K" and q.target == "*"
+            and #q.path == 1 and q.path[1]:lower() == origin
+            and q.payload:match("^[^:]*:([^:]*):") == zone
+            and (withRace or killFieldCount(q.payload) < 13) then
+            return item
+        end
+    end
+    return nil
+end
 -- Place pour un terminal : d'abord une presence (NH), puis un tick de progression
 -- relaye pour un autre, et seulement en dernier recours un tick de NOTRE capture
 -- (chemin a un seul noeud) : a 60 s de cadence en gros event, le perdre annulait la
@@ -569,6 +596,18 @@ local function bnetAlive(id)
 end
 function net:NoteBNetHeard(id) noteBNetHeard(id) end
 function net:IsBNetFriendAlive(id) return bnetAlive(id) end
+function net:HasLiveEnemyBridge()
+    local mine = addon.PlayerFaction
+    if mine ~= "Alliance" and mine ~= "Horde" then return false end
+    local targets = sync.GetBetaBNetTargets and sync:GetBetaBNetTargets() or {}
+    for _, id in ipairs(targets) do
+        local faction = sync.GetBetaBNetTargetInfo and sync:GetBetaBNetTargetInfo(id)
+        if (faction == "Alliance" or faction == "Horde") and faction ~= mine and bnetAlive(id) then
+            return true
+        end
+    end
+    return false
+end
 local function region() return addon.RealmPools:GetOverlordPoolTag() end
 local function canonical(name) return sync:CanonicalForeverName(name) end
 local function same(a, b) return sync:ForeverIdentitiesMatch(a, b) end
@@ -622,6 +661,46 @@ local function hashFrac(text)
     for i = 1, #text do h = (h * 33 + text:byte(i)) % 2147483647 end
     return (h * 0.6180339887498949) % 1
 end
+-- Bridge election (launch scale). Every same-faction client that hears a broadcast
+-- forwards it once, Battle.net legs included: with hundreds of players holding a
+-- live opposite-faction friend, each routine packet crossed hundreds of times and
+-- burnt everyone's 1,000 B/s budget. Clients with a live enemy bridge say so in
+-- their own presence ("~b"); each client counts those it heard first-hand in the
+-- last 5 min. Up to CROSS_FULL_BRIDGES nothing changes (every hearer crosses, as
+-- on the beta). Above, a forwarder crosses a ROUTINE packet only when a hash of
+-- (itself, origin, packet id) falls under CROSS_TARGET / bridges: about four
+-- forwarders per packet, a different set for each packet. Never elected away: the
+-- origin's own copies, terminal events (captures, releases, victories), and the
+-- channel/group/same-faction copies. Transport only, never acceptance.
+local CROSS_FULL_BRIDGES, CROSS_TARGET, CROSS_MIN_SHARE = 8, 4, 0.02
+local CROSS_ELECTED_KINDS = { NH = true, SH = true, ZS = true, OP = true, GW = true,
+    FK = true, MN = true, MS = true, GP = true }
+local sameFactionBridges, sameFactionBridgesOrder = {}, {}
+local bridgeCountCache = { at = -1000, value = 0 }
+local function sameFactionBridgeCount()
+    local now = GetTime()
+    if now - bridgeCountCache.at < 10 then return bridgeCountCache.value end
+    local count = 0
+    for _, at in pairs(sameFactionBridges) do
+        if now - at <= 300 then count = count + 1 end
+    end
+    bridgeCountCache.at, bridgeCountCache.value = now, count
+    return count
+end
+local function crossShare()
+    local bridges = sameFactionBridgeCount()
+    if bridges <= CROSS_FULL_BRIDGES then return 1 end
+    return math.max(CROSS_TARGET / bridges, CROSS_MIN_SHARE)
+end
+local function crossElected(p)
+    if #p.path < 2 or not CROSS_ELECTED_KINDS[p.kind] or isTerminal(p) then return true end
+    local share = crossShare()
+    if share >= 1 then return true end
+    local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
+    return hashFrac(tostring(me):lower() .. "|" .. tostring(p.path[1]):lower()
+        .. "|" .. tostring(p.id)) < share
+end
+function net:GetCrossElection() return sameFactionBridgeCount(), crossShare() end
 local heldForwards, heldCount = {}, { bridge = 0, group = 0 }
 local HELD_FORWARD_MAX = { bridge = 256, group = 128 }
 local function holdForward(key, p, mode)
@@ -871,9 +950,10 @@ function net:GetKindDiagnostics(maxRows)
         self.stats.forwardPathExhausted or 0)
     lines[#lines + 1] = string.format("VB relay: %d queued (max %d), %d B/s share, %d waiting updates coalesced.",
         laneSize(stateLane), STATE_QUEUE, STATE_RATE, self.stats.stateCoalesced or 0)
-    lines[#lines + 1] = string.format("Waiting SR duplicates coalesced: %d (same origin/target only). Guild identities not relayed: %d. Outpost repeats not relayed: %d routine, %d progress.",
+    lines[#lines + 1] = string.format("Waiting SR duplicates coalesced: %d (same origin/target only). Guild identities not relayed: %d. Outpost repeats not relayed: %d routine, %d progress. Waiting kill totals replaced by a newer one: %d.",
         self.stats.mapRequestsCoalesced or 0, self.stats.giForwardSkipped or 0,
-        self.stats.routineForwardSkipped or 0, self.stats.progressForwardSkipped or 0)
+        self.stats.routineForwardSkipped or 0, self.stats.progressForwardSkipped or 0,
+        self.stats.killCoalesced or 0)
     -- 1.3.2 cross-faction live totals: what reached us, and what our own bridge did.
     lines[#lines + 1] = string.format("Enemy live totals received: %d from the channel, %d from Battle.net friends"
         .. " (their own kills: %d). Your bridge: %d posted on the channel, %d sent to enemy friends,"
@@ -894,6 +974,10 @@ function net:GetKindDiagnostics(maxRows)
     end
     lines[#lines + 1] = string.format("Battle.net bridges: %d of %d opposite-faction friends heard in the last %d min"
         .. " (the others only get rotating copies).", live, enemies, BNET_ALIVE_SEC / 60)
+    lines[#lines + 1] = string.format("Bridge election: %d same-faction bridges heard, crossing share %d%%"
+        .. " (100%% up to %d), %d enemy copies of routine traffic left to the elected forwarders.",
+        sameFactionBridgeCount(), math.floor(crossShare() * 100 + 0.5), CROSS_FULL_BRIDGES,
+        self.stats.crossElectionSkipped or 0)
     local lb = addon.Leaderboard
     if lb and lb.GetHotIndexStats then
         local h = lb:GetHotIndexStats()
@@ -1142,6 +1226,10 @@ local function tasksFor(p, wire)
         local friends = sync.GetBetaBNetTargets and sync:GetBetaBNetTargets() or {}
         local myFaction = addon.PlayerFaction
         local ownPresence = p.kind == "NH" and #p.path == 1
+        -- A call to arms (FC) is only ever shown to its own faction: the other
+        -- faction's bridges dropped it after spending budget and a channel slot.
+        local ownFactionOnly = p.kind == "FC"
+        local crossing = ownFactionOnly or crossElected(p)
         local bridges, others, probes = {}, {}, {}
         local pathKeys = {}
         for _, node in ipairs(p.path) do pathKeys[node:lower()] = true end
@@ -1156,7 +1244,11 @@ local function tasksFor(p, wire)
                 local enemy = (faction == "Alliance" or faction == "Horde")
                     and (myFaction == "Alliance" or myFaction == "Horde") and faction ~= myFaction
                 local alive = enemy and bnetAlive(id)
-                if alive and #bridges < MAX_BRIDGE_FRIENDS then
+                if enemy and ownFactionOnly then
+                    net.stats.ownFactionOnlySkipped = (net.stats.ownFactionOnlySkipped or 0) + 1
+                elseif enemy and not crossing then
+                    net.stats.crossElectionSkipped = (net.stats.crossElectionSkipped or 0) + 1
+                elseif alive and #bridges < MAX_BRIDGE_FRIENDS then
                     bridges[#bridges + 1] = id
                 elseif enemy and not alive and ownPresence then
                     probes[#probes + 1] = id
@@ -1346,6 +1438,11 @@ function net:Queue(p, immediate)
         previous, replace = outpostPrevious, p.at >= outpostPrevious.p.at
         if not replace then return true end
     end
+    local killPrevious = not previous and not p.groupOnly and waitingKillItem(p) or nil
+    if killPrevious then
+        previous, replace = killPrevious, p.at >= killPrevious.p.at
+        if not replace then return true end
+    end
     local lane = laneFor(p)
     local wire, item
     local roomy = replace or hasLaneRoom(lane, p)
@@ -1417,6 +1514,10 @@ function net:Queue(p, immediate)
         end
         if outpostPrevious then
             self.stats.outpostCoalesced = (self.stats.outpostCoalesced or 0) + 1
+            return true
+        end
+        if killPrevious then
+            self.stats.killCoalesced = (self.stats.killCoalesced or 0) + 1
             return true
         end
         if presenceKey then
@@ -1638,8 +1739,10 @@ function net:Send(kind, payload, target, immediate)
     -- "~lr" (1.7.0): ranking pages v7, race in each score row. It stays before
     -- "~lp6" because older clients only read the suffix and still see lp6.
     -- "~ld" (1.8.0): ranking pages v8 (only differing rows); v7 clients still read v7.
+    -- "~b" (1.8.1): we hold a live opposite-faction Battle.net bridge (election
+    -- below). Inserted before "~ld~lr~lp6", which older clients still find.
     if kind == "NH" and payload == tostring(addon.Version or "") then
-        payload = payload .. "~ld~lr~lp6"
+        payload = payload .. (self:HasLiveEnemyBridge() and "~b" or "") .. "~ld~lr~lp6"
     end
     -- Handlers may rebroadcast received snapshots. The existing packet is already
     -- forwarded below; do not give that replay a fresh author or hop budget.
@@ -1739,6 +1842,15 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         if version == 6 and p.payload:find("~lr~lp6", 1, true) then version = 7 end
         if version == 7 and p.payload:find("~ld~lr~lp6", 1, true) then version = 8 end
         local previous = pagedCapabilities[originKey]
+        -- First-hand presence of a same-faction player (never one that came over
+        -- Battle.net: that is the other faction): count its bridge flag.
+        if #p.path == 1 and transport ~= "BNET" then
+            if p.payload:find("~b~", 1, true) then
+                remember(sameFactionBridges, sameFactionBridgesOrder, originKey, GetTime(), 512)
+            elseif sameFactionBridges[originKey] then
+                sameFactionBridges[originKey] = -1000
+            end
+        end
         -- 1.7.5 : seul le NH de premier ordre (envoye par le voisin lui-meme) dit sa
         -- capacite. Un relais ecrivait "Voisin,Relais" sans suffixe : le voisin honnete
         -- passait en v5, n'etait plus interroge, et le relais restait seul candidat.

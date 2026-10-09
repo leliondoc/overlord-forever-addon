@@ -342,6 +342,37 @@ local accepted = 0
 for i = 1, 200 do if a.BetaNetwork:Send("K", tostring(i)) then accepted = accepted + 1 end end
 assert(accepted == 84 and a.BetaNetwork.stats.dropped >= 116, "Ordinary traffic consumed reserved catch-up/state/paged slots")
 drain()
+-- Own kill totals are absolute: a newer unsent total of the same zone replaces the
+-- waiting one; a total carrying the race is kept; another zone is not merged.
+do
+    local killer = client("Killer Tester", "kills")
+    local watcher = client("Killwatch Tester", "kills")
+    local function kills(prefix)
+        local out = {}
+        for _, row in ipairs(watcher.received) do
+            if row.kind == "K" and row.payload:sub(1, #prefix) == prefix then out[#out + 1] = row.payload end
+        end
+        return out
+    end
+    for i = 1, 20 do assert(killer.BetaNetwork:Send("K", "Killer Tester:front_a:" .. i .. ":WARRIOR")) end
+    drain()
+    local got = kills("Killer Tester:front_a:")
+    assert(#got <= 2 and got[#got] == "Killer Tester:front_a:20:WARRIOR",
+        "Waiting kill totals were not replaced by the newest: " .. #got)
+    assert((killer.BetaNetwork.stats.killCoalesced or 0) >= 18, "Kill coalescing not counted")
+    local raced = "Killer Tester:front_b:21:WARRIOR:Horde:1:G:enus:0:o:2:B1:60"
+    assert(killer.BetaNetwork:Send("K", "Killer Tester:front_b:20:WARRIOR"))
+    assert(killer.BetaNetwork:Send("K", raced))
+    assert(killer.BetaNetwork:Send("K", "Killer Tester:front_b:22:WARRIOR"))
+    assert(killer.BetaNetwork:Send("K", "Killer Tester:front_c:23:WARRIOR"))
+    drain()
+    local b = kills("Killer Tester:front_b:")
+    local hasRace = false
+    for _, payload in ipairs(b) do if payload == raced then hasRace = true end end
+    assert(hasRace, "A total carrying the race was replaced by one without it")
+    assert(#kills("Killer Tester:front_c:") == 1, "Another zone's total was merged away")
+    assert(b[#b] == "Killer Tester:front_b:22:WARRIOR", "A total was merged into another zone's")
+end
 -- A Horde gateway with five Horde friends and one Alliance friend (listed last).
 -- An opposite-faction friend never heard from (no addon, in an instance, not met
 -- yet) only gets the rotating copies; once its own traffic reached us it is a live
@@ -393,6 +424,12 @@ assert(bridged == 10, "Opposite-faction friend missed packets behind same-factio
 local hordeSends = 0
 for name, count in pairs(sentTo) do if name ~= ally.name then hordeSends = hordeSends + count end end
 assert(hordeSends == 20, "Same-faction rotation no longer shares the remaining slots")
+-- A call to arms is for its own faction only: no copy to the live enemy bridge.
+sentTo = {}
+assert(gate.BetaNetwork:Send("FC", "H:front:front")); drain()
+assert(not sentTo[ally.name], "A call to arms crossed to the other faction")
+assert((sentTo["Horde One"] or 0) + (sentTo["Horde Two"] or 0) + (sentTo["Horde Three"] or 0)
+    + (sentTo["Horde Four"] or 0) + (sentTo["Horde Five"] or 0) > 0, "A call to arms lost its own-faction copies")
 -- Silent for longer than the window (instance, logout): back to the rotation only.
 now = now + 301
 assert(not gate.BetaNetwork:IsBNetFriendAlive(ally), "A friend silent for 5 min is still a live bridge")
@@ -630,6 +667,75 @@ do
     drain()
     local got = fkTwo.received[#fkTwo.received]
     assert(got and got.kind == "FK" and got.payload == "1:arathi:30:59650000", "A fight bracket was not delivered")
+end
+-- Bridge election: routine traffic heard on the channel crosses through every hearer
+-- while few bridges are known, through a hashed share of them beyond eight; the
+-- origin's own copies and terminal events always cross.
+do
+    local hearer = client("Hearer Tester", "elect")
+    hearer.PlayerFaction = "Horde"
+    local enemy = client("Enemy Tester", "elect-enemy")
+    enemy.faction, enemy.PlayerFaction = "Alliance", "Alliance"
+    hearer.friends = { enemy }
+    hearer.BetaNetwork:NoteBNetHeard(enemy)
+    local crossed = 0
+    local hearerSend = hearer.Sync.SendToBNet
+    function hearer.Sync:SendToBNet(other, kind, wire)
+        if other == enemy then crossed = crossed + 1 end
+        return hearerSend(self, other, kind, wire)
+    end
+    local serialNo = 0
+    local function heard(kind, payload)
+        serialNo = serialNo + 1
+        local wire = "global|elect-" .. serialNo .. "|" .. time() .. "|*|Origin Tester|" .. kind .. "|" .. payload
+        assert(hearer.BetaNetwork:Receive(wire, "Origin Tester", "CHANNEL"), "Election fixture packet refused")
+        drain()
+    end
+    for i = 1, 10 do heard("ZS", "arathi_" .. i .. ":in_progress:Horde:20:x") end
+    assert(crossed == 10, "Few bridges: a routine packet did not cross through every hearer: " .. crossed)
+    -- Own presence advertises the live bridge to the channel mates.
+    assert(hearer.BetaNetwork:HasLiveEnemyBridge(), "A live enemy friend is not advertised")
+    local mate = client("Mate Tester", "elect")
+    assert(hearer.BetaNetwork:Send("NH", "1.0.0")); drain()
+    now = now + 11
+    assert(mate.BetaNetwork:GetCrossElection() == 1, "Own presence did not carry the bridge flag")
+    local letters = "abcdefghijkl"
+    local round = 0
+    local function bridgesHeard(from, to)
+        round = round + 1
+        for i = from, to do
+            local who = "Bridge" .. letters:sub(i, i) .. " Tester"
+            local wire = "global|nh-" .. round .. "-" .. i .. "|" .. time() .. "|*|" .. who .. "|NH|1.0.0~b~ld~lr~lp6"
+            hearer.BetaNetwork:Receive(wire, who, "CHANNEL")
+        end
+        drain()
+        now = now + 11
+    end
+    -- Eight same-faction bridges: still everyone crosses. The same flag heard over
+    -- Battle.net is the other faction's and is never counted.
+    bridgesHeard(1, 8)
+    hearer.BetaNetwork:Receive("global|nh-x|" .. time() .. "|*|Farside Tester|NH|1.0.0~b~ld~lr~lp6",
+        "Farside Tester", "BNET", enemy)
+    drain()
+    now = now + 11
+    assert(hearer.BetaNetwork:GetCrossElection() == 8, "Bridge count wrong (enemy presence counted?)")
+    crossed = 0
+    for i = 1, 10 do heard("ZS", "wetlands_" .. i .. ":in_progress:Horde:20:x") end
+    assert(crossed == 10, "Eight bridges: a routine packet was already shared out: " .. crossed)
+    bridgesHeard(9, 12)
+    crossed = 0
+    for i = 1, 60 do heard("ZS", "loch_" .. i .. ":in_progress:Horde:20:x") end
+    assert(crossed > 5 and crossed < 40, "Many bridges: routine crossings not shared out: " .. crossed)
+    assert((hearer.BetaNetwork.stats.crossElectionSkipped or 0) == 60 - crossed, "Skipped crossings not counted")
+    bridgesHeard(1, 12)
+    assert(hearer.BetaNetwork:GetCrossElection() == 12, "Bridge count fixture expired")
+    crossed = 0
+    for i = 1, 10 do heard("C", "ashen_" .. i .. ":Horde:x") end
+    for i = 1, 10 do heard("ZS", "hills_" .. i .. ":captured:Horde:0:x") end
+    assert(crossed == 20, "A terminal event was elected away: " .. crossed)
+    crossed = 0
+    for i = 1, 10 do assert(hearer.BetaNetwork:Send("ZS", "own_" .. i .. ":in_progress:Horde:20:x")); drain() end
+    assert(crossed == 10, "Our own routine packets lost their Battle.net copies: " .. crossed)
 end
 a.BetaNetworkEnabled = false
 assert(not a.BetaNetwork:Send("K", "disabled"), "Beta transport remained active after community re-enable")
