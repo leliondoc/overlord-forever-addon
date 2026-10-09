@@ -423,6 +423,33 @@ do
     GKA:SetAllyEnabled(false)
 end
 
+-- Launch scale: a guild's previous totals survive 600 other killers in between, so
+-- each K still counts its real delta (at 512 they were evicted and counted 1 each).
+do
+    reset()
+    for m = 1, 5 do kill(NAMES[m], 1, "", "Empire") end
+    local letters = "abcdefghijklmnopqrstuvwxyz"
+    for i = 1, 600 do
+        local who = "Bulk" .. letters:sub(i % 26 + 1, i % 26 + 1)
+            .. letters:sub(math.floor(i / 26) % 26 + 1, math.floor(i / 26) % 26 + 1) .. " Fighter"
+        kill(who, 1, "", "Crowd " .. letters:sub(i % 26 + 1, i % 26 + 1))
+    end
+    for m = 1, 5 do kill(NAMES[m], 4, "", "Empire") end
+    assert(alerts("Empire") == 1, "A guild's kill deltas were lost among many other killers")
+    -- Past the cap: bounded, counter exact, the order never grows without bound.
+    for i = 1, 4300 do
+        local a, b, c = i % 26, math.floor(i / 26) % 26, math.floor(i / 676) % 26
+        local who = "Cap" .. letters:sub(a + 1, a + 1) .. letters:sub(b + 1, b + 1)
+            .. letters:sub(c + 1, c + 1) .. " Fighter"
+        clock = clock + 400 -- each baseline is outside its window by the next insert
+        kill(who, 1, "", "Crowd")
+    end
+    local counted, live, ordered = GKA:_TrackedPlayers()
+    assert(counted >= 4000, "Fixture kills were not tracked: " .. counted)
+    assert(counted == live and live <= 4096 and ordered <= 2 * 4096 + 1,
+        "Player tracking unbounded or miscounted: " .. counted .. "/" .. live .. "/" .. ordered)
+end
+
 Overlord.Sync.SendToChannel, Overlord.Sync.SendToGroup, Overlord.Sync.BroadcastToRelay =
     realChannel, realGroup, realCommunity
 Overlord.Relay, Overlord.RelayEnabled = realBeta, realBetaEnabled

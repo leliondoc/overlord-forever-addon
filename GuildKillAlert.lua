@@ -34,9 +34,14 @@ local ALLY_ALERT_COOLDOWN = 1800
 local BASELINE_TTL = WINDOW
 local MAX_DELTA = 30          -- saut de total suspect : compte comme un seul kill
 local EPOCH_TOLERANCE = 3 * 86400
-local MAX_PLAYERS = 512
-local MAX_GUILDS = 128
-local MAX_EVENTS_PER_GUILD = 256
+-- Launch scale (1.8.1): 1,000-2,000 killers send a total every 30 s. At 512 the
+-- previous total of a killer was evicted before his next one (~15 s), so each K
+-- counted one kill instead of its real delta: rampages under-counted and fired
+-- late, fight sizes in the dock too small. Evicted in insertion order (O(1)).
+local MAX_PLAYERS = 4096
+local MAX_GUILDS = 512
+-- A threshold (20 kills, 5 members) is reached long before; bounds memory.
+local MAX_EVENTS_PER_GUILD = 128
 local NETWORK_MAX_AGE = 300   -- un GW relaye plus vieux que 5 min n'est plus d'actualite
 local NETWORK_MAX_SKEW = 300
 local NETWORK_BURST_WINDOW = 60
@@ -52,7 +57,10 @@ local GW_TRANSPORTS = { BETA = true, CHANNEL = true, PARTY = true, RAID = true, 
 GKA.KILL_THRESHOLD = 20
 GKA.MEMBER_THRESHOLD = 5
 
-local players, playerCount = {}, 0   -- [nom minuscule] = { total, at, epoch }
+local players, playerCount = {}, 0   -- [nom minuscule] = { total, at, epoch, guild, slot }
+-- Insertion order of players (row.slot = its index): oldest evicted first, a row
+-- still inside its window is moved to the back (a few at most per eviction).
+local playerOrder, playerHead, playerTail = {}, 1, 0
 local guilds, guildCount = {}, 0     -- ["A|H:guilde minuscule"] = voir GetGuild
 local networkShownAt = {}            -- horodatages des alertes reseau affichees (anti-flood)
 
@@ -107,6 +115,42 @@ end
 -- Nombre de kills reellement nouveaux apportes par ce K. La base retient aussi la
 -- guilde : un saut de total mesure pendant un changement de guilde n'est pas
 -- attribuable a la nouvelle, seul un kill l'est.
+local function TrackPlayer(key, row)
+    if playerTail - playerHead + 1 > MAX_PLAYERS * 2 then
+        -- Compact the order (stale entries of cleared or replaced rows).
+        local order, n = {}, 0
+        for i = playerHead, playerTail do
+            local k = playerOrder[i]
+            local r = k and players[k]
+            if r and r.slot == i then n = n + 1; order[n] = k; r.slot = n end
+        end
+        playerOrder, playerHead, playerTail = order, 1, n
+    end
+    playerTail = playerTail + 1
+    playerOrder[playerTail] = key
+    row.slot = playerTail
+end
+
+local function EvictOldestPlayer(now)
+    local rotated = 0
+    while playerHead <= playerTail do
+        local index, key = playerHead, playerOrder[playerHead]
+        playerOrder[index] = nil
+        playerHead = playerHead + 1
+        local row = key and players[key]
+        if row and row.slot == index then
+            if now - row.at <= BASELINE_TTL and rotated < 8 then
+                rotated = rotated + 1
+                TrackPlayer(key, row)
+            else
+                players[key] = nil
+                playerCount = playerCount - 1
+                return
+            end
+        end
+    end
+end
+
 local function ConsumeKillDelta(playerKey, total, epoch, guildKey, now)
     local row = players[playerKey]
     if row and now - row.at <= BASELINE_TTL and EpochsMatch(row.epoch, epoch)
@@ -118,21 +162,7 @@ local function ConsumeKillDelta(playerKey, total, epoch, guildKey, now)
         return delta
     end
     if not row then
-        if playerCount >= MAX_PLAYERS then
-            local oldestKey, oldestAt
-            for key, other in pairs(players) do
-                if now - other.at > BASELINE_TTL then
-                    players[key] = nil
-                    playerCount = playerCount - 1
-                elseif not oldestAt or other.at < oldestAt then
-                    oldestKey, oldestAt = key, other.at
-                end
-            end
-            if playerCount >= MAX_PLAYERS and oldestKey then
-                players[oldestKey] = nil
-                playerCount = playerCount - 1
-            end
-        end
+        if playerCount >= MAX_PLAYERS then EvictOldestPlayer(now) end
         playerCount = playerCount + 1
     end
     -- Base absente, perimee, d'une autre semaine de score ou d'une autre guilde :
@@ -141,7 +171,9 @@ local function ConsumeKillDelta(playerKey, total, epoch, guildKey, now)
     if row and total < row.total and EpochsMatch(row.epoch, epoch) and row.guild == guildKey then
         return 0
     end
-    players[playerKey] = { total = total, at = now, epoch = epoch, guild = guildKey }
+    local fresh = { total = total, at = now, epoch = epoch, guild = guildKey }
+    players[playerKey] = fresh
+    if row and row.slot then fresh.slot = row.slot else TrackPlayer(playerKey, fresh) end
     return 1
 end
 
@@ -686,9 +718,17 @@ function GKA:HandleCommand(args)
     self:PrintDiagnostics()
 end
 
+-- Tests : nombre de joueurs suivis et taille de l'ordre d'eviction.
+function GKA:_TrackedPlayers()
+    local live = 0
+    for _ in pairs(players) do live = live + 1 end
+    return playerCount, live, playerTail - playerHead + 1
+end
+
 -- Tests : remet l'etat memoire a zero (keepPersisted simule un /reload).
 function GKA:_ResetState(keepPersisted)
     players, playerCount = {}, 0
+    playerOrder, playerHead, playerTail = {}, 1, 0
     guilds, guildCount = {}, 0
     networkShownAt = {}
     if OverlordDB and not keepPersisted then OverlordDB.guildKillAlertSeen = nil end
