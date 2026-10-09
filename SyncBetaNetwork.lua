@@ -506,6 +506,10 @@ end
 -- path) must still find its entry: at 2,048 a busy channel recycled the ring in
 -- ~10 s and duplicates were handled and forwarded again. ~1 MB at 8,192.
 local SEEN_RING = 8192
+-- Per-player memories whose rule spans minutes (heard on our channel within 300 s,
+-- presence forwarded once per 90 s): sized for a launch channel of thousands, not
+-- the beta's hundreds (256/512 recycled within seconds and the rules stopped acting).
+local PLAYER_RING = 4096
 local seen, recent, assemblies = {}, {}, {}
 -- Gateways heard on our realm channel (last hop). A group copy coming from one of
 -- them is already on that channel: re-emitting it there only burns the Blizzard
@@ -2023,9 +2027,9 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         if forwarded then
             if pendingForward then remember(seen, seenOrder, key, GetTime(), SEEN_RING) end
             if p.kind == "NH" then
-                remember(nhForwarded, nhForwardedOrder, origin:lower(), p.at, 512)
+                remember(nhForwarded, nhForwardedOrder, origin:lower(), p.at, PLAYER_RING)
             elseif p.kind == "SH" then
-                remember(shForwarded, shForwardedOrder, origin:lower(), p.at, 512)
+                remember(shForwarded, shForwardedOrder, origin:lower(), p.at, PLAYER_RING)
             end
         end
     end
@@ -2048,7 +2052,7 @@ function net:ReceiveFragment(payload, sender, transport, bnetID)
         or part < 1 or part > count or part ~= math.floor(part) or count ~= math.floor(count) then return false end
     local nameKey = name:lower()
     if transport == "CHANNEL" then
-        remember(channelHeard, channelHeardOrder, nameKey, GetTime(), 256)
+        remember(channelHeard, channelHeardOrder, nameKey, GetTime(), PLAYER_RING)
     end
     local wire
     if count == 1 then

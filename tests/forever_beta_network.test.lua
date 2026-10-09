@@ -709,6 +709,32 @@ do
     drain()
     assert(deliveries("late-first") == 1, "A late duplicate was delivered twice")
 end
+-- A packet a raid mate gives us goes back to the channel only if that mate is not
+-- on our channel: still true after a thousand other players spoke there since
+-- (the 256-entry memory of a launch channel recycled in seconds).
+do
+    local hop = client("Hop Tester", "hop-chan")
+    local onChannel = 0
+    local hopChannel = hop.Sync.SendToChannel
+    function hop.Sync:SendToChannel(kind, fragment)
+        if fragment:find("raid-zs", 1, true) then onChannel = onChannel + 1 end
+        return hopChannel(self, kind, fragment)
+    end
+    hop.BetaNetwork:ReceiveFragment("heard-1:1:1:global|heard-1|" .. time() .. "|*|Mate Tester|SH|1",
+        "Mate Tester", "CHANNEL")
+    local letters = "abcdefghijklmnopqrstuvwxyz"
+    for i = 1, 1000 do
+        local who = "Chat" .. letters:sub(i % 26 + 1, i % 26 + 1)
+            .. letters:sub(math.floor(i / 26) % 26 + 1, math.floor(i / 26) % 26 + 1) .. "x Tester"
+        hop.BetaNetwork:ReceiveFragment("chat-" .. i .. ":1:1:global|chat-" .. i .. "|" .. time() .. "|*|" .. who .. "|SH|" .. i,
+            who, "CHANNEL")
+    end
+    drain()
+    assert(hop.BetaNetwork:Receive("global|raid-1|" .. time() .. "|*|Origin Tester,Mate Tester|ZS|raid-zs:in_progress:Horde:20:x",
+        "Mate Tester", "RAID"))
+    drain()
+    assert(onChannel == 0, "A raid copy from a mate heard on our channel went back to the channel")
+end
 -- Bridge election: routine traffic heard on the channel crosses through every hearer
 -- while few bridges are known, through a hashed share of them beyond eight; the
 -- origin's own copies and terminal events always cross.
