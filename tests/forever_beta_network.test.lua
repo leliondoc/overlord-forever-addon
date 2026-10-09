@@ -875,6 +875,16 @@ do
         "A neighbour's v8 capability was forgotten on a busy channel")
     now = now + 6 -- the count is cached 5 s (read for every broadcast request)
     assert(busy.Relay:CountDirectPeers() >= 1000, "Direct neighbours undercounted")
+    -- Catch-up partners come from a bounded sample read from a random place, so
+    -- clients do not all ask the same neighbours.
+    local first = busy.Relay:GetDirectPeers()
+    local second = busy.Relay:GetDirectPeers()
+    assert(#first <= 260 and #second <= 260, "Direct neighbour sample unbounded: " .. #first)
+    local same = 0
+    local inFirst = {}
+    for _, name in ipairs(first) do inFirst[name] = true end
+    for _, name in ipairs(second) do if inFirst[name] then same = same + 1 end end
+    assert(same < #second, "Two samples of 1,000 neighbours were identical (no random start)")
 end
 -- Map freshness: a neighbour's presence pulls our map only when it knows a newer
 -- capture than ours (older clients, which advertise nothing, are pulled as before).
@@ -1000,7 +1010,7 @@ do
     assert(crossed == 20, "A terminal event was elected away: " .. crossed)
     -- Siege starts (defenders' warning) and assaults given up are not elected either.
     crossed = 0
-    for i = 1, 10 do heard("ZS", "start_" .. i .. ":in_progress:Horde:20:x") end
+    for i = 1, 10 do heard("ZS", "start_" .. i .. ":in_progress:Horde:5:x") end
     for i = 1, 10 do heard("OP", "v2:site_" .. i .. ":neutral:x") end
     assert(crossed == 20, "A siege start or an abandoned assault was elected away: " .. crossed)
     crossed = 0

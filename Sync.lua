@@ -5174,10 +5174,12 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         local betaNet = Overlord.Relay
         local directCount = betaNet and (betaNet.CountDirectPeers and betaNet:CountDirectPeers()
             or betaNet.GetDirectPeers and #betaNet:GetDirectPeers()) or 0
-        -- About eight answers whatever the crowd (the old 5 % floor won above 40
-        -- neighbours: ~75 full maps per login on the beta, 500+ at launch, all to
-        -- one player). Targeted pulls stay guaranteed.
-        respondChance = math.min(respondChance, math.max(0.002, 8 / math.max(1, directCount)))
+        -- Never more answers than the old rule (about two on a small channel), and
+        -- about eight on a big one: the old 5 % floor won above 40 neighbours (~75
+        -- full maps per login on the beta, 500+ at launch, all to one player).
+        -- Targeted pulls stay guaranteed.
+        local peers = math.max(1, directCount)
+        respondChance = math.min(respondChance, math.max(0.05, 2 / peers), math.max(0.002, 8 / peers))
         if math.random() > respondChance then return end
         -- Tirage deja fait : ne pas repasser par le tirage generique ci-dessous.
         respondChance = 1.0

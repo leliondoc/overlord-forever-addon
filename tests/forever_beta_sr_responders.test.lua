@@ -51,6 +51,12 @@ sync:OnSyncRequest("Horde Joiner", payload, "BETA")
 assert(responded(), "Selected peer did not answer the broadcast request")
 release()
 
+-- A small channel never gets more answers than before (about two of 30).
+targeted, roll = false, 0.1
+sync:OnSyncRequest("Horde Joiner", payload, "BETA")
+assert(not responded(), "A small channel now answers more broadcast requests than before")
+release()
+
 -- Launch-size crowd: about eight answers in all, not 5 % of everyone (the old
 -- floor gave ~250 full maps to one player at 5,000 neighbours).
 local crowd = {}

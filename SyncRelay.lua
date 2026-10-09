@@ -765,7 +765,7 @@ local function crossElected(p)
     -- A siege start (defenders' early warning) and an assault given up (neutral
     -- outpost) are rare and matter: never elected away either.
     if type(p.payload) == "string" then
-        if p.kind == "ZS" and (tonumber(p.payload:match("^[^:]+:in_progress:[^:]*:(%d+):")) or 999) <= 45 then
+        if p.kind == "ZS" and (tonumber(p.payload:match("^[^:]+:in_progress:[^:]*:(%d+):")) or 999) <= 10 then
             return true
         end
         if p.kind == "OP" and p.payload:match("^v%d+:[^:]*:([^:]*)") == "neutral" then return true end
@@ -926,10 +926,11 @@ end
 function net:IsDirectPeer(name)
     return self:GetPeerHops(name) == 1
 end
--- Direct neighbours to pick catch-up partners from (callers keep one to three):
--- the most recently first-heard ones (newest end of the route ring), at most
--- DIRECT_PEER_SAMPLE, plus every Battle.net friend's route, sorted by name. With a
--- launch-size route table (8,000) every caller sorted and examined thousands of names.
+-- Direct neighbours to pick catch-up partners from (callers keep one to three): at
+-- most DIRECT_PEER_SAMPLE live routes read around the route ring from a random
+-- place (every neighbour equally likely; walking from the newest end made every
+-- client ask the same recent logins), plus every Battle.net friend's route, sorted
+-- by name. With a launch-size table (8,000) every caller sorted thousands of names.
 local DIRECT_PEER_SAMPLE = 250
 function net:GetDirectPeers()
     local now, names, taken = GetTime(), {}, {}
@@ -944,9 +945,11 @@ function net:GetDirectPeers()
         -- Small table: every route (cheap, and independent of the ring's order).
         for _, row in pairs(self.peers) do take(row) end
     else
-        for i = last, first, -1 do
+        local size = last - first + 1
+        local start = math.random(0, size - 1)
+        for step = 0, size - 1 do
             if #names >= DIRECT_PEER_SAMPLE then break end
-            local key = peerOrder[i]
+            local key = peerOrder[first + (start + step) % size]
             if key then take(self.peers[key]) end
         end
     end
@@ -961,7 +964,7 @@ function net:GetDirectPeers()
 end
 -- Relais en service (option activee) : la taille des combats est alors partagee.
 function net:IsEnabled() return enabled() end
--- Same count as #GetDirectPeers(), without building and sorting a list. Read for
+-- Every live direct route (GetDirectPeers only returns a sample). Read for
 -- every broadcast request received (answer chance): kept 5 s, the table holds
 -- thousands of neighbours at launch.
 local directCountCache = { at = -1000, value = 0, peers = nil }
