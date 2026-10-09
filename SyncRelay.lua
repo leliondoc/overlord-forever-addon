@@ -12,6 +12,13 @@ for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA FK LK LR LC LO LOC TV VT VF F
     allowed[kind] = true
 end
 local MAX_PACKET, MAX_PATH, TTL = 3600, 4, 120
+-- Channel/group fragment size. An addon message carries 255 bytes: "BF:" plus
+-- "<id>:<part>:<count>:" leave room for ~228 bytes of packet, but clients up to
+-- 1.8.0 refuse a piece longer than 170. Two steps so no version stops reading the
+-- others: receivers accept up to FRAGMENT_RECEIVE_MAX now (1.8.1); the sending size
+-- goes up in a later version once 1.8.0 is gone. A relayed capture (~185 bytes of
+-- wire) then fits one channel message instead of two.
+local FRAGMENT_CHUNK, FRAGMENT_RECEIVE_MAX = 170, 230
 -- A legal multi-fragment relay packet can span more than 15 seconds at the
 -- reserved 300 B/s share while urgent traffic is continuous. Expire stalled
 -- assemblies by inactivity and always by the packet's maximum lifetime.
@@ -1165,9 +1172,10 @@ local function tasksFor(p, wire)
     local ckey, pathFriends, trimmed, coverId, coverCarrier, groupSuppressed
     -- Same test as the lanes (v5, v6 and v7 pages): a page is never broadcast.
     local paged = isPagedCatchup(p)
-    local count = math.ceil(#wire / 170)
+    local count = math.ceil(#wire / FRAGMENT_CHUNK)
     for i = 1, count do
-        fragments[i] = p.id .. ":" .. i .. ":" .. count .. ":" .. wire:sub((i - 1) * 170 + 1, i * 170)
+        fragments[i] = p.id .. ":" .. i .. ":" .. count .. ":"
+            .. wire:sub((i - 1) * FRAGMENT_CHUNK + 1, i * FRAGMENT_CHUNK)
     end
     local route = p.target ~= "*" and net.peers[p.target:lower()] or nil
     local routeFailure = not route and "missing" or nil
@@ -2093,7 +2101,7 @@ function net:ReceiveFragment(payload, sender, transport, bnetID)
     part, count = tonumber(part), tonumber(count)
     local name = canonical(sender)
     if not name or not id or #id > 64 or not id:match("^[%w%-]+$") or not chunk
-        or #chunk > 170 or not part or not count or count < 1 or count > 64
+        or #chunk > FRAGMENT_RECEIVE_MAX or not part or not count or count < 1 or count > 64
         or part < 1 or part > count or part ~= math.floor(part) or count ~= math.floor(count) then return false end
     local nameKey = name:lower()
     if transport == "CHANNEL" then

@@ -732,6 +732,16 @@ do
         if row.kind == "C" and row.payload == string.rep("d", 260) then got = true end
     end
     assert(got, "A two-fragment capture was evicted by other packets still waiting for their pieces")
+    -- Pieces up to 230 bytes (the size later versions will send) are read already;
+    -- longer ones are still refused.
+    local head = "global|wide-1|" .. time() .. "|*|Origin Tester|C|"
+    local wide = head .. string.rep("w", 228 - #head)
+    assert(#wide == 228)
+    assert(busy.Relay:ReceiveFragment("wide-1:1:1:" .. wide, "Origin Tester", "CHANNEL"),
+        "A 228-byte piece from a newer sender was refused")
+    local tooWide = "global|wide-2|" .. time() .. "|*|Origin Tester|C|" .. string.rep("v", 200)
+    assert(#tooWide > 230 and not busy.Relay:ReceiveFragment("wide-2:1:1:" .. tooWide, "Origin Tester", "CHANNEL"),
+        "An oversized piece was accepted")
 end
 -- A late copy of a packet is still recognised after thousands of others (a busy
 -- channel recycled a 2,048-entry ring in seconds and handled duplicates again).
