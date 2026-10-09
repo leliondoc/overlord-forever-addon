@@ -935,7 +935,7 @@ do
         return freshChannel(self, kind, fragment)
     end
     assert(fresh.Relay:Send("NH", "1.0.0")); drain()
-    assert(advertised and advertised:find("~m1jk~ld~lr~lp6", 1, true), "Own presence lacks the map stamp")
+    assert(advertised and advertised:find("~m1jk~l9~ld~lr~lp6", 1, true), "Own presence lacks the map stamp")
 end
 -- A forged relayed copy carrying a victim's next packet id (ids are predictable)
 -- must not seal that id: the victim's genuine packet, with its own timestamp, still

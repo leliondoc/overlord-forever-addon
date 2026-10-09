@@ -8,7 +8,7 @@ Overlord = {
     RelayEnabled = true, PlayerFaction = "Alliance",
     Relay = {
         GetDirectPeers = function() return { "Near Ally" } end,
-        GetPeerPagedProtocol = function() return 7 end,
+        GetPeerPagedProtocol = function() return 9 end,
     },
 }
 function Overlord:GetCurrentCampaignStartTs() return 1790016000 end

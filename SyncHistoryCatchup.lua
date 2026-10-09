@@ -536,7 +536,7 @@ end
 -- le canal) et les servait en pages. Mise a jour requise, aucun repli.
 local function IsOldPagedPeer(net, name)
     local capability = net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(name)
-    return capability ~= nil and capability < 7
+    return capability ~= nil and capability < (sync.PAGED_PROTOCOL or 9)
 end
 
 -- Voisins directs utilisables : ni nous-memes, ni penalises, ni annonces sans v7.
@@ -941,7 +941,7 @@ function sync:GetCatchupNeighbourDiagnostics()
         if #t <= 6 then return table.concat(t, ", ") end
         return table.concat(t, ", ", 1, 6) .. " +" .. (#t - 6)
     end
-    return string.format("Catch-up neighbours: enemy %d (%s); ally %d (%s); set aside %d (%s); before 1.7 %d (%s); next round: %s.",
+    return string.format("Catch-up neighbours: enemy %d (%s); ally %d (%s); set aside %d (%s); before 1.8.1 %d (%s); next round: %s.",
         #enemies, list(enemies), #allies, list(allies), #aside, list(aside), #old, list(old), nextPool)
 end
 

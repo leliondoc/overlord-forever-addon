@@ -126,8 +126,8 @@ local function heartbeat()
 end
 heartbeat()
 advance(10)
-assert(PULLER.Overlord.Relay:GetPeerPagedProtocol(SOURCE.name) == 8, "the source did not advertise v8")
-assert(PULLER.Overlord.Relay:GetPeerPagedProtocol(ALLY.name) == 8, "the ally did not advertise v8")
+assert(PULLER.Overlord.Relay:GetPeerPagedProtocol(SOURCE.name) == 9, "the source did not advertise capability 9")
+assert(PULLER.Overlord.Relay:GetPeerPagedProtocol(ALLY.name) == 9, "the ally did not advertise capability 9")
 assert(PULLER.Overlord.Sync:GetBetaPeerFaction(SOURCE.name) == "Horde", "fixture: source faction unknown")
 
 local function playerName(i)

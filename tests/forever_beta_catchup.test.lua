@@ -147,7 +147,7 @@ local function heartbeat()
     if not heartbeatActive then return end
     for _, e in ipairs(clients) do
         e.Overlord.Sync.SendSyncRequest = function() return true end
-        e.Overlord.Relay:Broadcast("NH", "1.2.4~lr~lp6")
+        e.Overlord.Relay:Broadcast("NH", "1.2.4~l9~ld~lr~lp6")
     end
     later(45, heartbeat)
 end

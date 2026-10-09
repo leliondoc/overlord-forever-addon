@@ -5,10 +5,14 @@
 -- update required); responders still answer v5/v6 requests from old clients.
 -- v8 (1.8.0) sends only the rows that differ: one fingerprint per bucket, then one
 -- per row of a differing bucket, then the rows asked for (see the v8 block below).
--- v8 is asked of peers advertising it, v7 of the others.
+-- Capability 9 (1.8.1) is v8 between clients that know the Skyborne race: a peer
+-- advertising less is neither asked nor served (update required). Its race stream
+-- never matched ours, so every round resent the same race rows both ways.
 local Overlord = _G.Overlord
 if not Overlord or not Overlord.Sync then return end
 local sync, lb = Overlord.Sync, Overlord.Leaderboard
+local PAGED_PROTOCOL = 9
+sync.PAGED_PROTOCOL = PAGED_PROTOCOL
 local BUCKETS, PAGE_ROWS, CHUNK, MAX_PARTS = 64, 16, 170, 24
 local STREAMS = { "LK", "LC", "LR" }
 local STREAM_LIMITS = { LK = 5000, LC = 1500, LR = 6500 }
@@ -1179,25 +1183,24 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
     return true
 end
 
--- v7 only (1.7.5): kills, captures and races in one resumable sweep. A peer whose
--- fresh presence advertises v5 or v6 (before 1.7.0) is not asked: those clients
--- still accepted forged rows live and served them. An unknown peer is probed in v7;
--- an old one stays silent, ends the round unsupported, and the scheduler asks
--- another direct neighbour. No v6 fallback (update required).
+-- Kills, captures and races in one resumable v8 sweep (1.8.1). A peer whose fresh
+-- presence advertises less than PAGED_PROTOCOL is not asked (update required:
+-- before 1.7.0 they served forged rows, before 1.8.1 their races never match). An
+-- unknown peer is probed in v8; an old one stays silent or answers once, and the
+-- scheduler asks another direct neighbour once its presence says what it is.
 function sync:StartCompletePagedLeaderboardCatchup(peer, callback)
     if type(callback) ~= "function" then return false end
     local net = Overlord.Relay
     local capability = net and net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(peer)
-    if capability == 5 or capability == 6 then
-        stats.peerProtocol = "beta v" .. capability .. "; not asked (v7 only)"
+    if capability and capability < PAGED_PROTOCOL then
+        stats.peerProtocol = "beta v" .. capability .. "; not asked (update required)"
         return false, "unsupported"
     end
-    stats.peerProtocol = capability == 8 and "beta v8; ld+lr+lp6 NH"
-        or capability == 7 and "beta v7; lr+lp6 NH" or "capability unknown, v7 probe"
-    -- v8 only with a peer that advertises it; others keep the v7 exchange.
+    stats.peerProtocol = capability and ("beta v" .. capability .. "; l9+ld+lr+lp6 NH")
+        or "capability unknown, v8 probe"
     return self:StartPagedLeaderboardCatchup(peer, function(ok, supported)
         callback(ok == true, supported == true)
-    end, true, true, capability == 8)
+    end, true, true, true)
 end
 
 function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
@@ -1215,6 +1218,14 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         -- its F one step ahead of us. Same peer and pull, same or later step: release.
         if serving and serving.peer == sender and serving.nonce == nonce
             and seq >= serving.seq then serving = nil end
+        return
+    end
+    -- Update required: a requester whose own presence advertises an older ranking
+    -- protocol is not served (see PAGED_PROTOCOL). Unknown capability: served.
+    local net = Overlord.Relay
+    local theirs = kind == "HR" and net and net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(sender)
+    if theirs and theirs < PAGED_PROTOCOL then
+        stats.oldRequestsIgnored = (stats.oldRequestsIgnored or 0) + 1
         return
     end
     local v8Request = version == "8" and (op == "V" or op == "L" or op == "G" or op == "T")

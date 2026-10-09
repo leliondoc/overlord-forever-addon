@@ -138,7 +138,7 @@ b.friends, c.friends = { c }, { b }
 local PULLER, SOURCE = b, c
 for _, e in ipairs(clients) do e.Overlord.Sync.SendSyncRequest = function() return true end end
 local function heartbeat()
-    for _, e in ipairs(clients) do e.Overlord.Relay:Broadcast("NH", "1.0.35~lr~lp6") end
+    for _, e in ipairs(clients) do e.Overlord.Relay:Broadcast("NH", "1.0.35~l9~ld~lr~lp6") end
     later(45, heartbeat)
 end
 heartbeat()
@@ -394,22 +394,24 @@ pressureUntil = now
 advance(180)
 print('PASS: paged cross-faction catch-up completes while both gateways remain saturated')
 
--- The production scheduler asks a direct neighbour, in v7 only (1.7.5).
-local sawV7, sawOther = false, false
+-- The production scheduler asks a direct neighbour, in v8 only (1.8.1: every
+-- neighbour it asks advertises capability 9).
+local sawV8, sawOther = false, false
 PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
     if kind == "HR" then
-        if payload:sub(1, 2) == "7:" then sawV7 = true else sawOther = true end
+        if payload:sub(1, 2) == "8:" then sawV8 = true else sawOther = true end
     end
     return sendRequest(self, kind, payload, target)
 end
 assert(PULLER.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true))
 advance(700)
-assert(sawV7 and not sawOther, "Production scheduler did not use v7 only")
-print("PASS: simultaneous cross-faction pulls and v7-only scheduler")
+assert(sawV8 and not sawOther, "Production scheduler did not use v8 only")
+print("PASS: simultaneous cross-faction pulls and v8-only scheduler")
 
 -- 1.3.3: one sweep position shared by every neighbour. A pull interrupted with
 -- one peer resumes with the next peer at the same bucket, and the buckets it
--- already certified count toward the end of the stream.
+-- already certified count toward the end of the stream (v7 bucket resume, asked
+-- explicitly: v8 keeps only the stream).
 advance(400)
 -- Stop the scheduler's periodic rounds: this section drives the pulls itself.
 PULLER.Overlord.Sync._historyCatchupWakeGeneration = (PULLER.Overlord.Sync._historyCatchupWakeGeneration or 0) + 1000
@@ -444,7 +446,7 @@ PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
     return sendRequest(self, kind, payload, target)
 end
 done = nil
-local started, why = PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end)
+local started, why = PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end, true, true)
 assert(started, tostring(why) .. " " .. PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())
 for _ = 1, 20 do advance(100); if done ~= nil then break end end
 assert(done == false, "the cut pull did not end")
@@ -457,7 +459,7 @@ local pageStats = PULLER.Overlord.Sync._leaderboardPageStats
 local cutChanged = (pageStats.changedRows or 0) - (pageStats.sweepBase or 0)
 assert(pageStats.sweepBase and cutChanged > 0, "the cut pull changed no row or lost its sweep start")
 done = nil
-assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SECOND.name, function(ok) done = ok end))
+assert(PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(SECOND.name, function(ok) done = ok end, true, true))
 for _ = 1, 40 do advance(100); if done ~= nil then break end end
 assert(done == true, "the second neighbour did not finish the sweep: "
     .. PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())

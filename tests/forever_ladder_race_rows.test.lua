@@ -126,8 +126,9 @@ local function heartbeat()
 end
 heartbeat()
 advance(10)
--- 1.8.0: clients advertise v8 (~ld); the v7 exchange is still answered (sections 2 and below).
-assert(PULLER.Overlord.Relay:GetPeerPagedProtocol(SOURCE.name) == 8, "the source did not advertise v8")
+-- 1.8.1: clients advertise capability 9 (~l9, v8 pages); the v7 exchange, asked
+-- explicitly, is still answered between them (sections 2 and below).
+assert(PULLER.Overlord.Relay:GetPeerPagedProtocol(SOURCE.name) == 9, "the source did not advertise capability 9")
 
 local RACES = { "Orc", "Scourge", "Tauren", "Troll" }
 local names = {}

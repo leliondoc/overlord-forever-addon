@@ -141,7 +141,7 @@ b.friends, c.friends = { c }, { b }
 local PULLER, SOURCE = b, c
 for _, e in ipairs(clients) do e.Overlord.Sync.SendSyncRequest = function() return true end end
 local function heartbeat()
-    for _, e in ipairs(clients) do e.Overlord.Relay:Broadcast("NH", "1.0.35~lp6") end
+    for _, e in ipairs(clients) do e.Overlord.Relay:Broadcast("NH", "1.0.35~l9~ld~lr~lp6") end
     later(45, heartbeat)
 end
 heartbeat()

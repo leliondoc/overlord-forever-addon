@@ -1,6 +1,7 @@
 -- Ranking catch-up peer choice (real SyncHistoryCatchup/Pages/Relay modules,
 -- simulated clock and transports). Run from the addon root with Lua 5.1.
--- Since 1.2.4 only direct neighbours (hops == 1) are asked, in v7 (1.7.5; v6 before).
+-- Since 1.2.4 only direct neighbours (hops == 1) are asked, in v8 (1.8.1; v7 from
+-- 1.7.5, v6 before). A neighbour whose capability is not known yet is probed in v8.
 -- Set SRC_DIR to a folder holding other copies of the three modules to test them.
 local SRC = SRC_DIR or "."
 local function world(peers, playerFaction)
@@ -105,7 +106,7 @@ do
     check("first request sent", #hr >= 1, #hr)
     check("direct ally chosen, far enemy never asked", hr[1] and hr[1].target == "Near Ally",
         hr[1] and hr[1].target)
-    check("request is v7", hr[1] and hr[1].payload:sub(1, 2) == "7:", hr[1] and hr[1].payload)
+    check("request is v8", hr[1] and hr[1].payload:sub(1, 2) == "8:", hr[1] and hr[1].payload)
 end
 
 -- 2. A direct neighbour that stays silent is skipped by the next attempt.
@@ -115,7 +116,7 @@ do
         { name = "Other Ally", faction = "Alliance", hops = 1 },
     }, "Alliance")
     assert(w.start(), "round not scheduled")
-    w.advance(24 + 270 + 12 + 60) -- initial delay + v7 reply window + retry delay + slack
+    w.advance(24 + 270 + 12 + 60) -- initial delay + reply window + retry delay + slack
     local targets, order = {}, {}
     for _, m in ipairs(w.hr()) do
         if not targets[m.target] then targets[m.target] = true; order[#order + 1] = m.target end
@@ -174,27 +175,28 @@ do
     check("the enemy neighbour keeps two rounds out of three", enemyRounds == 6, enemyRounds)
 end
 
--- 4. 1.7.5: a neighbour announcing a protocol older than v7 (a client before 1.7.0,
--- still open to forged rows) is left out of the rotation, even when it sorts first.
+-- 4. A neighbour announcing an older ranking protocol (before 1.8.1: before 1.7.0
+-- still open to forged rows, before 1.8.1 its races never match) is left out of the
+-- rotation, even when it sorts first.
 do
     local w = world({
         { name = "Aged Ally", faction = "Alliance", hops = 1 },
         { name = "Young Ally", faction = "Alliance", hops = 1 },
     }, "Alliance")
     w.e.Overlord.Relay.GetPeerPagedProtocol = function(_, name)
-        return name == "Aged Ally" and 6 or 7
+        return name == "Aged Ally" and 8 or 9
     end
     assert(w.start(), "round not scheduled")
     w.advance(60)
     local hr = w.hr()
-    check("a v7 neighbour is asked", hr[1] and hr[1].target == "Young Ally", hr[1] and hr[1].target)
+    check("a current neighbour is asked", hr[1] and hr[1].target == "Young Ally", hr[1] and hr[1].target)
     for _, m in ipairs(hr) do
-        check("a neighbour older than 1.7.0 was asked", m.target ~= "Aged Ally", m.target)
+        check("a neighbour older than 1.8.1 was asked", m.target ~= "Aged Ally", m.target)
     end
     local diag = w.sync:GetCatchupNeighbourDiagnostics()
-    check("an old neighbour stayed in the rotation", diag:find("before 1.7 1 (Aged Ally)", 1, true)
+    check("an old neighbour stayed in the rotation", diag:find("before 1.8.1 1 (Aged Ally)", 1, true)
         and diag:find("ally 1 (Young Ally)", 1, true), diag)
 end
 
 if #failures > 0 then error("peer choice regression:\n  " .. table.concat(failures, "\n  "), 0) end
-print("Forever catch-up peer choice: direct neighbours only, v7, silent neighbour skipped, far peers never asked OK")
+print("Forever catch-up peer choice: direct neighbours only, current protocol, silent neighbour skipped, far peers never asked OK")

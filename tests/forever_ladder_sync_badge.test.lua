@@ -9,7 +9,7 @@ Overlord = {
     RelayEnabled = true, PlayerFaction = "Alliance",
     Relay = {
         GetDirectPeers = function() return peers end,
-        GetPeerPagedProtocol = function() return 8 end,
+        GetPeerPagedProtocol = function() return 9 end,
     },
 }
 local campaignStart = now - 7200

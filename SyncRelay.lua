@@ -1881,10 +1881,12 @@ function net:Send(kind, payload, target, immediate)
     -- "~ld" (1.8.0): ranking pages v8 (only differing rows); v7 clients still read v7.
     -- "~b" (1.8.1): we hold a live opposite-faction Battle.net bridge (election
     -- below). Inserted before "~ld~lr~lp6", which older clients still find.
+    -- "~l9" (1.8.1): ranking capability 9, v8 pages with the Skyborne race; peers
+    -- advertising less are neither asked nor served (SyncLeaderboardPages).
     if kind == "NH" and payload == tostring(addon.Version or "") then
         local stamp = localMapStamp()
         payload = payload .. (self:HasLiveEnemyBridge() and "~b" or "")
-            .. "~m" .. base36(stamp) .. "~ld~lr~lp6"
+            .. "~m" .. base36(stamp) .. "~l9~ld~lr~lp6"
     end
     -- Handlers may rebroadcast received snapshots. The existing packet is already
     -- forwarded below; do not give that replay a fresh author or hop budget.
@@ -1986,6 +1988,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         local originKey, version = origin:lower(), advertised == "6" and 6 or 5
         if version == 6 and p.payload:find("~lr~lp6", 1, true) then version = 7 end
         if version == 7 and p.payload:find("~ld~lr~lp6", 1, true) then version = 8 end
+        if version == 8 and p.payload:find("~l9~ld~lr~lp6", 1, true) then version = 9 end
         local previous = pagedCapabilities[originKey]
         -- First-hand presence of a same-faction player (never one that came over
         -- Battle.net: that is the other faction): count its bridge flag.

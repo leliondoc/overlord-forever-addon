@@ -163,7 +163,7 @@ for _, e in ipairs(clients) do
     end
 end
 local function heartbeat()
-    for _, e in ipairs(clients) do e.Overlord.Relay:Broadcast("NH", "1.0.35~lr~lp6") end
+    for _, e in ipairs(clients) do e.Overlord.Relay:Broadcast("NH", "1.0.35~l9~ld~lr~lp6") end
     later(45, heartbeat)
 end
 heartbeat()
@@ -235,8 +235,13 @@ PULLER.Overlord.Sync.SenderBurstShouldDrop = function(self, sender, kind)
     end
     return normalBurst and normalBurst(self, sender, kind) or false
 end
+-- This audit covers the v7 stream engine (typed LK/LC/LR buckets): asked explicitly,
+-- the production entry point uses v8 since 1.8.1.
+local function startV7(peer, callback)
+    return PULLER.Overlord.Sync:StartPagedLeaderboardCatchup(peer, callback, true, true)
+end
 local done, supported
-assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name,
+assert(startV7(SOURCE.name,
     function(ok, capable) done, supported = ok, capable end))
 for _ = 1, 50 do
     advance(180)
@@ -284,7 +289,7 @@ PULLER.Overlord.Sync.SenderBurstShouldDrop = normalBurst
 
 local rowsBefore = PULLER.Overlord.Sync._leaderboardPageStats.rows
 done, supported = nil, nil
-assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name,
+assert(startV7(SOURCE.name,
     function(ok, capable) done, supported = ok, capable end))
 advance(1000)
 assert(done == true and supported == true, "Identical streams did not certify")
@@ -316,7 +321,7 @@ SOURCE.OverlordDB.leaderboardSnapshot = perturbed
 rowsBefore = PULLER.Overlord.Sync._leaderboardPageStats.rows
 local pagesBefore = PULLER.Overlord.Sync._leaderboardPageStats.pages
 done, supported = nil, nil
-assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name,
+assert(startV7(SOURCE.name,
     function(ok, capable) done, supported = ok, capable end))
 advance(1000)
 assert(done == true and supported == true, "Volatile metadata broke stream certification")
@@ -355,7 +360,7 @@ PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
     return normalSend(self, kind, payload, target)
 end
 done, supported = nil, nil
-assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name,
+assert(startV7(SOURCE.name,
     function(ok, capable) done, supported = ok, capable end))
 advance(1500)
 assert(dropped >= 3 and done == false and supported == true,
@@ -368,7 +373,7 @@ assert(PULLER.Overlord.Leaderboard.captureCount[names[500]] == 1,
 PULLER.Overlord.Sync.SendWhisper = normalSend
 PULLER.loadfile("SyncLeaderboardPages.lua")()
 done, supported = nil, nil
-assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name,
+assert(startV7(SOURCE.name,
     function(ok, capable) done, supported = ok, capable end))
 advance(2500)
 assert(done == true and supported == true,
@@ -390,7 +395,7 @@ SOURCE.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
 end
 done, supported = nil, nil
 local retriesBefore = PULLER.Overlord.Sync._leaderboardPageStats.retries
-assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name,
+assert(startV7(SOURCE.name,
     function(ok, capable) done, supported = ok, capable end))
 advance(2000)
 assert(wrongStream and done == true and supported == true,
@@ -405,7 +410,7 @@ print("PASS: wrong-stream page rejected before LK merge")
 SOURCE.Overlord.Leaderboard:SetPlayerKills(names[1], 124, true)
 PULLER.Overlord.Sync.SenderBurstShouldDrop = function(_, _, kind) return kind == "LK" end
 done, supported = nil, nil
-assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name,
+assert(startV7(SOURCE.name,
     function(ok, capable) done, supported = ok, capable end))
 advance(1500)
 assert(done == false and supported == true,
@@ -414,7 +419,7 @@ assert(PULLER.Overlord.Leaderboard.kills[names[1]] == 123,
     "Admission policy was bypassed under pressure")
 PULLER.Overlord.Sync.SenderBurstShouldDrop = normalBurst
 done, supported = nil, nil
-assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name,
+assert(startV7(SOURCE.name,
     function(ok, capable) done, supported = ok, capable end))
 advance(2000)
 assert(done == true and PULLER.Overlord.Leaderboard.kills[names[1]] == 124,
@@ -430,7 +435,7 @@ SOURCE.Overlord.Sync.OnPagedLeaderboardMessage = function(self, kind, payload, s
 end
 local previousAck = PULLER.OverlordDB.leaderboardHistoryCatchupAck
 done, supported = nil, nil
-assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name,
+assert(startV7(SOURCE.name,
     function(ok, capable) done, supported = ok, capable end))
 advance(800)
 assert(done == false and supported == false,
@@ -440,7 +445,8 @@ assert(PULLER.OverlordDB.leaderboardHistoryCatchupAck == previousAck,
 local requesterSend = PULLER.Overlord.Sync.SendWhisper
 local legacyRequested = false
 PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
-    if kind == "HR" and payload:sub(1, 2) ~= "7:" then legacyRequested = true end
+    -- The scheduler itself only speaks v8 (1.8.1).
+    if kind == "HR" and payload:sub(1, 2) ~= "8:" then legacyRequested = true end
     return requesterSend(self, kind, payload, target)
 end
 assert(PULLER.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true))
@@ -448,7 +454,7 @@ advance(1600)
 assert(not legacyRequested, "Scheduler fell back to a legacy ladder exchange")
 PULLER.Overlord.Sync.SendWhisper = requesterSend
 SOURCE.Overlord.Sync.OnPagedLeaderboardMessage = modernReceive
-print("PASS: v7-silent peer ends unsupported, scheduler never falls back to v5/v4")
+print("PASS: v7-silent peer ends unsupported, scheduler never falls back to an older exchange")
 
 -- A new client pulls the complete v6 ranking from a direct neighbour, then asks
 -- that neighbour once for the outpost/fortress history (SR "H").
