@@ -2915,7 +2915,7 @@ function Overlord.ApplyGoldLocaleStrings()
     elseif Overlord.IsChineseLocale() then
         Loc.GOLD_FULL = string.format("Coin 已达上限（%d/%d）。", R.GOLD_MAX, R.GOLD_MAX)
         Loc.GOLD_REINFORCE_TIP = string.format(
-            "花费 %d coin。下次占领据点、前哨或公会要塞（首府除外）时缩短 %d 秒（最短需 %d 秒）。",
+            "花费 %d coin。下次占领据点、前哨或公会要塞（首都除外）时缩短 %d 秒（最短需 %d 秒）。",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
         Loc.GOLD_REINFORCE_SPENT = string.format("已花费 %d coin。下次占领缩短 %d 秒。",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)

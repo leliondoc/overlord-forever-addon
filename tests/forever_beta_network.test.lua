@@ -885,6 +885,16 @@ do
     for _, name in ipairs(first) do inFirst[name] = true end
     for _, name in ipairs(second) do if inFirst[name] then same = same + 1 end end
     assert(same < #second, "Two samples of 1,000 neighbours were identical (no random start)")
+    -- A Battle.net friend's route is always offered (the only way to an enemy peer).
+    busy.friends = { { name = "First Tester", faction = "Horde" } }
+    for _ = 1, 30 do
+        local found = false
+        for _, name in ipairs(busy.Relay:GetDirectPeers()) do
+            if name == "First Tester" then found = true end
+        end
+        assert(found, "A Battle.net friend's route was left out of the neighbour sample")
+    end
+    busy.friends = {}
 end
 -- Map freshness: a neighbour's presence pulls our map only when it knows a newer
 -- capture than ours (older clients, which advertise nothing, are pulled as before).
@@ -1013,6 +1023,12 @@ do
     for i = 1, 10 do heard("ZS", "start_" .. i .. ":in_progress:Horde:5:x") end
     for i = 1, 10 do heard("OP", "v2:site_" .. i .. ":neutral:x") end
     assert(crossed == 20, "A siege start or an abandoned assault was elected away: " .. crossed)
+    -- Past the first ticks, siege progress is routine again (shared out).
+    bridgesHeard(1, 12)
+    assert(hearer.Relay:GetCrossElection() == 12, "Bridge count fixture expired")
+    crossed = 0
+    for i = 1, 30 do heard("ZS", "later_" .. i .. ":in_progress:Horde:20:x") end
+    assert(crossed < 30, "Siege progress past its start was never elected away")
     crossed = 0
     for i = 1, 10 do assert(hearer.Relay:Send("ZS", "own_" .. i .. ":in_progress:Horde:20:x")); drain() end
     assert(crossed == 10, "Our own routine packets lost their Battle.net copies: " .. crossed)

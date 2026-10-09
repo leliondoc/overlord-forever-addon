@@ -2268,7 +2268,7 @@ end
 -- grew here, and never a jump larger than 30 kills plus one per second since the
 -- last total this client vouched for.
 local BRIDGE_LK_SUBJECT_GAP, BRIDGE_LK_PER_MIN, BRIDGE_LK_FANOUT = 60, 6, 3
-local BRIDGE_LK_ALLOWANCE, BRIDGE_LK_MAX_ROWS = 30, 256
+local BRIDGE_LK_ALLOWANCE, BRIDGE_LK_MAX_ROWS = 30, 250
 -- bridgeLK: enemy totals passed on to our own faction (channel, whispers as fallback).
 -- bridgeOut (1.3.2): our own faction's totals, heard from their owners, passed on to
 -- our opposite-faction Battle.net friends, whose clients then put them on their
@@ -2342,7 +2342,7 @@ local function noteBridgeCopy(name, total, sender)
     -- their next total and froze the estimate exactly where it is needed.
     remember(bridgeCopies, bridgeCopiesOrder, key,
         { total = now, count = 1, share = bridgeLK.share or 1, senders = { [who] = true },
-            at = GetTime() }, 1024)
+            at = GetTime() }, 1000)
 end
 function net:GetBridgeShare() return bridgeLK.share or 1 end
 local bridgeFlush

@@ -483,9 +483,9 @@ function Overlord.Sync:NewBoundedSessionLedger(maxEntries, reserve, ttl)
     return state
 end
 
-local recentEKs = Overlord.Sync:NewBoundedSessionLedger(1024, 0, EK_DEDUP_WINDOW)
-priv.zsPayloadDedup = Overlord.Sync:NewBoundedSessionLedger(512, 0, priv.zsPayloadDedupSec)
-priv.zaPendingSenderWindows = Overlord.Sync:NewBoundedSessionLedger(512, 0, 30)
+local recentEKs = Overlord.Sync:NewBoundedSessionLedger(1000, 0, EK_DEDUP_WINDOW)
+priv.zsPayloadDedup = Overlord.Sync:NewBoundedSessionLedger(500, 0, priv.zsPayloadDedupSec)
+priv.zaPendingSenderWindows = Overlord.Sync:NewBoundedSessionLedger(500, 0, 30)
 
 -- Compteur de joueurs Overlord actifs a proximite (incremente par chaque message addon recu)
 -- Sert a detecter les events massifs SANS raid (80 joueurs sans groupe)
@@ -554,7 +554,9 @@ function Overlord.Sync:Initialize()
         -- other work (IsInInstance included).
         if event == "CHAT_MSG_ADDON" or event == "BN_CHAT_MSG_ADDON" then
             local prefix = ...
-            if (not canaccessvalue or canaccessvalue(prefix)) and prefix ~= PREFIX then return end
+            -- A protected value cannot be ours (and comparing it may raise).
+            if canaccessvalue and not canaccessvalue(prefix) then return end
+            if prefix ~= PREFIX then return end
         end
         -- Une entree en instance pendant une migration ferme le transport
         -- immediatement, avant que le pipeline puisse appeler Suspend().
@@ -1258,7 +1260,7 @@ local FIRST_CONTACT_BASE, FIRST_CONTACT_RATE = 300, 0.03
 -- Etat par identite (cle de dedup, jamais le nom brut : "Prenom Nom-Xyz" ou une
 -- casse differente designent le meme joueur). Table bornee par eviction du plus
 -- ancien, jamais videe d'un coup (un vidage remettait toutes les bornes a zero).
-local SUBJECT_STATE_MAX = 8192
+local SUBJECT_STATE_MAX = 8000 -- not 2^k: a full Lua 5.1 table at 2^k keys rehashes on each insert
 local function NewSubjectStateTable()
     return { rows = {}, order = {}, first = 1, last = 0, count = 0 }
 end

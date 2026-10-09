@@ -1015,7 +1015,7 @@ function Overlord.Sync:AntiSpoofCheck(sender, zoneId, capturerName)
     local bl = spoofBlacklist[sender]
     if bl then
         if now < bl then
-            BoundSecurityEvidenceTable(spoofBlacklist, 512, sender)
+            BoundSecurityEvidenceTable(spoofBlacklist, 500, sender)
             return true
         end
         ReleaseSecurityEvidenceKey(spoofBlacklist, sender)
@@ -1028,7 +1028,7 @@ function Overlord.Sync:AntiSpoofCheck(sender, zoneId, capturerName)
     -- Origine relayee : nom potentiellement usurpe, ne jamais l'accumuler vers une quarantaine.
     if self:IsUnauthenticatedRelayOrigin(sender) then return false end
 
-    BoundSecurityEvidenceTable(senderBroadcastHistory, 512, sender)
+    BoundSecurityEvidenceTable(senderBroadcastHistory, 500, sender)
     if not senderBroadcastHistory[sender] then
         senderBroadcastHistory[sender] = {}
     end
@@ -1052,13 +1052,13 @@ function Overlord.Sync:AntiSpoofCheck(sender, zoneId, capturerName)
     end
 
     if activeZones >= ANTISPOOF_MIN_ACTIVE_ZONES then
-        BoundSecurityEvidenceTable(spoofBlacklist, 512, sender)
+        BoundSecurityEvidenceTable(spoofBlacklist, 500, sender)
         spoofBlacklist[sender] = now + ANTISPOOF_BLACKLIST_DURATION
         AntiSpoofRevertZones(sender)
         local senderShort = tostring(sender):match("^(.-)%-") or tostring(sender)
         local notifiedUntil = tonumber(spoofDetectedNotified[sender]) or 0
         if now >= notifiedUntil then
-            BoundSecurityEvidenceTable(spoofDetectedNotified, 512, sender)
+            BoundSecurityEvidenceTable(spoofDetectedNotified, 500, sender)
             spoofDetectedNotified[sender] = now + ANTISPOOF_BLACKLIST_DURATION
             Overlord:PrintNotification("|cFFFF4444[Overlord]|r " .. string.format(L.SPOOF_DETECTED, senderShort))
         end
@@ -1468,7 +1468,7 @@ function Overlord.Sync:KillAntiSpoofIsBlacklisted(sender)
     local exp = killSpoofBlacklist[sender]
     if not exp then return false end
     if GetTime() < exp then
-        BoundSecurityEvidenceTable(killSpoofBlacklist, 512, sender)
+        BoundSecurityEvidenceTable(killSpoofBlacklist, 500, sender)
         return true
     end
     ReleaseSecurityEvidenceKey(killSpoofBlacklist, sender)
@@ -1481,7 +1481,7 @@ end
 function Overlord.Sync:KillAntiSpoofRecord(sender)
     if not sender or sender == "" then return false end
     local now = GetTime()
-    BoundSecurityEvidenceTable(killSpoofCounts, 512, sender)
+    BoundSecurityEvidenceTable(killSpoofCounts, 500, sender)
     local d = killSpoofCounts[sender]
     if not d or (now - (d.firstSeen or now)) > KILLSPOOF_WINDOW then
         d = { count = 0, firstSeen = now, lastSeen = now }
@@ -1490,7 +1490,7 @@ function Overlord.Sync:KillAntiSpoofRecord(sender)
     d.count = d.count + 1
     d.lastSeen = now
     if d.count >= KILLSPOOF_THRESHOLD then
-        BoundSecurityEvidenceTable(killSpoofBlacklist, 512, sender)
+        BoundSecurityEvidenceTable(killSpoofBlacklist, 500, sender)
         killSpoofBlacklist[sender] = now + KILLSPOOF_BLACKLIST_DURATION
         return true
     end
@@ -1907,7 +1907,7 @@ function Overlord.Sync:CanCreditDirectCapture(sender, contributor, zoneId, facti
     local creditGapKey = senderKey .. ":" .. tostring(zoneId or "")
     local lastCreditAt = lastDirectCaptureCreditAt[creditGapKey] or 0
     if now - lastCreditAt < CAPTURE_CREDIT_SENDER_GAP_SEC then
-        BoundSecurityEvidenceTable(lastDirectCaptureCreditAt, 512, creditGapKey)
+        BoundSecurityEvidenceTable(lastDirectCaptureCreditAt, 500, creditGapKey)
         return false
     end
     if lastCreditAt > 0 and now - lastCreditAt > 300 then
@@ -1922,7 +1922,7 @@ function Overlord.Sync:CanCreditDirectCapture(sender, contributor, zoneId, facti
         return false
     end
     ReleaseSecurityEvidenceKey(captureCreditProgressEvidence, key)
-    BoundSecurityEvidenceTable(lastDirectCaptureCreditAt, 512, creditGapKey)
+    BoundSecurityEvidenceTable(lastDirectCaptureCreditAt, 500, creditGapKey)
     lastDirectCaptureCreditAt[creditGapKey] = now
     return true
 end
@@ -2028,7 +2028,7 @@ function Overlord.Sync:SenderBurstShouldDrop(sender, msgType)
     local exp = quarantines and quarantines[msgType]
     if exp then
         if now < exp then
-            BoundSecurityEvidenceTable(senderBurstQuarantine, 512, sender)
+            BoundSecurityEvidenceTable(senderBurstQuarantine, 500, sender)
             return true
         end
         quarantines[msgType] = nil
@@ -2037,7 +2037,7 @@ function Overlord.Sync:SenderBurstShouldDrop(sender, msgType)
             quarantines = nil
         end
     end
-    BoundSecurityEvidenceTable(senderBurstWindow, 512, sender)
+    BoundSecurityEvidenceTable(senderBurstWindow, 500, sender)
     local w = senderBurstWindow[sender]
     if not w or (now - (w.windowStart or now)) > BURST_WINDOW then
         w = { counts = {}, windowStart = now }
@@ -2053,7 +2053,7 @@ function Overlord.Sync:SenderBurstShouldDrop(sender, msgType)
     if w.counts[msgType] > burstMax then
         quarantines = senderBurstQuarantine[sender]
         if not quarantines then
-            BoundSecurityEvidenceTable(senderBurstQuarantine, 512, sender)
+            BoundSecurityEvidenceTable(senderBurstQuarantine, 500, sender)
             quarantines = {}
             senderBurstQuarantine[sender] = quarantines
         end
