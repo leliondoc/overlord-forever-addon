@@ -412,6 +412,15 @@ local function killFieldCount(payload)
     local _, colons = payload:gsub(":", "")
     return colons + 1
 end
+-- The channel takes one own total every 30 s (Sync:ChannelCarries): a waiting total
+-- holding that copy is never replaced, or the fight's first total never reached the
+-- channel (nor the score bridges that read it there).
+local function holdsChannelCopy(item)
+    for _, task in ipairs(item.tasks) do
+        if task.transport == "CHANNEL" then return true end
+    end
+    return false
+end
 local function waitingKillItem(p)
     if p.kind ~= "K" or p.target ~= "*" or #p.path ~= 1 or type(p.payload) ~= "string" then return nil end
     local zone = p.payload:match("^[^:]*:([^:]*):")
@@ -424,7 +433,7 @@ local function waitingKillItem(p)
         if q and item.index == 1 and not item.tasks[1].sending and q.kind == "K" and q.target == "*"
             and #q.path == 1 and q.path[1]:lower() == origin
             and q.payload:match("^[^:]*:([^:]*):") == zone
-            and (withRace or killFieldCount(q.payload) < 13) then
+            and (withRace or killFieldCount(q.payload) < 13) and not holdsChannelCopy(item) then
             return item
         end
     end
@@ -645,14 +654,21 @@ local bnetHeard, bnetHeardCount = {}, 0
 local function noteBNetHeard(id)
     if id == nil then return end
     if bnetHeard[id] == nil then
-        -- Bounded: game account ids of online friends only (BNet list cap 40),
-        -- but a long session sees many logins: forget the stale ones at 64.
+        -- Bounded at 64 game accounts: every Battle.net sender lands here, same-faction
+        -- friends and friends beyond our 40 included. Full: forget the stale ones, else
+        -- the one heard longest ago (a friend who just spoke is always recorded).
         if bnetHeardCount >= 64 then
-            local now = GetTime()
+            local now, oldestKey, oldestAt = GetTime(), nil, nil
             for key, at in pairs(bnetHeard) do
-                if now - at > BNET_ALIVE_SEC then bnetHeard[key] = nil; bnetHeardCount = bnetHeardCount - 1 end
+                if now - at > BNET_ALIVE_SEC then
+                    bnetHeard[key] = nil; bnetHeardCount = bnetHeardCount - 1
+                elseif not oldestAt or at < oldestAt then
+                    oldestKey, oldestAt = key, at
+                end
             end
-            if bnetHeardCount >= 64 then return end
+            if bnetHeardCount >= 64 and oldestKey then
+                bnetHeard[oldestKey] = nil; bnetHeardCount = bnetHeardCount - 1
+            end
         end
         bnetHeardCount = bnetHeardCount + 1
     end
@@ -1347,9 +1363,10 @@ local function tasksFor(p, wire)
         -- join the rotating slots, so a bridge that comes online is still found.
         -- Same-faction friends already hear it on the channel and share the same
         -- rotating slots. Friends already on the path have the packet and are skipped.
-        -- Our own presence (one small NH every 120 s) goes to every opposite-faction
-        -- friend not heard yet: two friends running Overlord find each other within
-        -- one beat, then exchange everything as live bridges.
+        -- Our own presence (one small NH every 120 s) also goes to PRESENCE_PROBES
+        -- opposite-faction friends not heard yet, in rotation: two friends running
+        -- Overlord find each other within a few beats (five with 40 silent friends),
+        -- then exchange everything as live bridges.
         local friends = sync.GetBetaBNetTargets and sync:GetBetaBNetTargets() or {}
         local myFaction = addon.PlayerFaction
         local ownPresence = p.kind == "NH" and #p.path == 1

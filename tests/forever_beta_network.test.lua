@@ -354,11 +354,22 @@ do
         end
         return out
     end
+    -- Like Sync:ChannelCarries, the channel takes the first own total only (30 s window).
+    local channelTaken = false
+    function killer.Sync:ChannelCarries(kind)
+        if kind ~= "K" then return true end
+        if channelTaken then return false end
+        channelTaken = true
+        return true
+    end
     for i = 1, 20 do assert(killer.Relay:Send("K", "Killer Tester:front_a:" .. i .. ":WARRIOR")) end
     drain()
     local got = kills("Killer Tester:front_a:")
     assert(#got <= 2 and got[#got] == "Killer Tester:front_a:20:WARRIOR",
         "Waiting kill totals were not replaced by the newest: " .. #got)
+    assert(got[1] == "Killer Tester:front_a:1:WARRIOR",
+        "The total holding the channel copy was replaced: " .. tostring(got[1]))
+    killer.Sync.ChannelCarries = nil
     assert((killer.Relay.stats.killCoalesced or 0) >= 18, "Kill coalescing not counted")
     local raced = "Killer Tester:front_b:21:WARRIOR:Horde:1:G:enus:0:o:2:B1:60"
     assert(killer.Relay:Send("K", "Killer Tester:front_b:20:WARRIOR"))
@@ -952,6 +963,17 @@ do
     local got = 0
     for _, row in ipairs(hearer.received) do if row.payload == "zone:Alliance:real" then got = got + 1 end end
     assert(got == 1, "The genuine packet was not delivered exactly once: " .. got)
+end
+-- Battle.net liveness memory is bounded (64 accounts, every Battle.net sender): when
+-- full of fresh senders, the one heard longest ago gives way, so a friend who just
+-- spoke is always recorded as a live bridge.
+do
+    local busy = client("Busybnet Tester", "bnet-full")
+    for i = 1, 64 do busy.Relay:NoteBNetHeard(1000 + i); now = now + 1 end
+    busy.Relay:NoteBNetHeard(5000)
+    assert(busy.Relay:IsBNetFriendAlive(5000), "A friend who just spoke was not recorded once 64 senders were live")
+    assert(not busy.Relay:IsBNetFriendAlive(1001), "The sender heard longest ago did not give way")
+    assert(busy.Relay:IsBNetFriendAlive(1064), "A recent sender was forgotten")
 end
 -- Bridge election: routine traffic heard on the channel crosses through every hearer
 -- while few bridges are known, through a hashed share of them beyond eight; the
