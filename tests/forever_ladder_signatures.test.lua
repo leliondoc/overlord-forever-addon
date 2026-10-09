@@ -162,34 +162,48 @@ local served = s.BuildPagedLeaderboardKillPayload(s, { kills = { ["Known Row"] =
     ["Known Row"] = lb.playerInfo["Known Row"] } }, "Known Row", EPOCH)
 assert(served and served:match("^[^:]+:(%d+):") == tostring(envelope), "a row above the envelope was served: "
     .. tostring(served))
--- Our own row (our K re-announces it): its first raise this session is bounded by what we
--- could do while away (same pace as the envelope, since our last logout), so a crash or a
--- session on another PC comes back at once; later raises follow the fixed window.
+-- Our own row (our K re-announces it): a session ceiling set at its first raise, our row
+-- then plus what we could do while away (same pace as the envelope, since our last logout),
+-- so a crash or a session on another PC comes back at once whatever the page order; above
+-- that ceiling, the fixed window.
 Overlord.ServerNow = function() return campaignStart + 48 * 3600 end
 local realIsLocal = lb.IsLocalDisplayName
-lb.IsLocalDisplayName = function(_, n) return n == "Stale Save" or n == "Short Away" or n == "Lost Save" end
+lb.IsLocalDisplayName = function(_, n)
+    return n == "Stale Save" or n == "Short Away" or n == "Lost Save" or n == "Unsure Away"
+end
 local function ownRow(name, total)
     lb.kills[name] = total
     lb.playerInfo[name] = { class = "WARRIOR", faction = "Alliance", level = 30, locale = "enus", guild = "", guildAt = 0 }
 end
-Overlord.SavedVariablesLoadedAtLogin, Overlord.SessionAbsenceAtLogin = true, 20 * 3600
-s._ownRowRaisedThisSession = nil
+local function newSession(saveLoaded, away)
+    Overlord.SavedVariablesLoadedAtLogin, Overlord.SessionAbsenceAtLogin = saveLoaded, away
+    s._ownRowSessionCap = nil
+end
+newSession(true, 20 * 3600)
 ownRow("Stale Save", 1000)
+local ceiling = 1000 + 300 + math.floor(0.03 * 20 * 3600)
+pageRow(lkRow("Stale Save", 1001, "WARRIOR", 30), "Some Responder") -- a tiny first raise
 pageRow(lkRow("Stale Save", 2500, "WARRIOR", 30), "Some Responder")
 assert(lb.kills["Stale Save"] == 2500, "an honest stale save did not recover at once: " .. tostring(lb.kills["Stale Save"]))
 pageRow(lkRow("Stale Save", 15000, "WARRIOR", 30), "Hostile Responder")
-assert(lb.kills["Stale Save"] <= 2500 + 600 + 30 + 10, "a later page raised our own row in one go: "
+assert(lb.kills["Stale Save"] == ceiling, "a page went past what we could do while away: "
     .. tostring(lb.kills["Stale Save"]))
--- Back after one minute: a hostile first page adds what a minute away allows, no more.
-Overlord.SessionAbsenceAtLogin = 60
-s._ownRowRaisedThisSession = nil
+pageRow(lkRow("Stale Save", 15000, "WARRIOR", 30), "Hostile Responder")
+assert(lb.kills["Stale Save"] <= ceiling + 600 + 30 + 10, "a page raised our own row in one go above the ceiling: "
+    .. tostring(lb.kills["Stale Save"]))
+-- Back after one minute: a hostile page adds what a minute away allows, no more.
+newSession(true, 60)
 ownRow("Short Away", 1000)
 pageRow(lkRow("Short Away", 15000, "WARRIOR", 30), "Hostile Responder")
 assert(lb.kills["Short Away"] == 1000 + 300 + math.floor(0.03 * 60), "the first raise ignored our time away: "
     .. tostring(lb.kills["Short Away"]))
+-- A loaded save whose last logout is unknown: no time away is assumed.
+newSession(true, nil)
+ownRow("Unsure Away", 1000)
+pageRow(lkRow("Unsure Away", 15000, "WARRIOR", 30), "Hostile Responder")
+assert(lb.kills["Unsure Away"] == 1300, "an unknown absence opened our own row: " .. tostring(lb.kills["Unsure Away"]))
 -- A session without its save (loader fault, reinstall): the whole envelope, at once.
-Overlord.SavedVariablesLoadedAtLogin = false
-s._ownRowRaisedThisSession = nil
+newSession(false, nil)
 pageRow(lkRow("Lost Save", 2000, "MAGE", 30), "Some Responder")
 assert(lb.kills["Lost Save"] == 2000, "a lost save did not get its row back: " .. tostring(lb.kills["Lost Save"]))
 Overlord.SavedVariablesLoadedAtLogin, Overlord.SessionAbsenceAtLogin = true, nil

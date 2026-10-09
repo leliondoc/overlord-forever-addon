@@ -1383,20 +1383,30 @@ end
 
 -- 1.7.6 : notre propre ligne relevee par un tiers (page attendue, /ov sync). Notre K
 -- la republie comme total du proprietaire : un tiers ne doit jamais la gonfler d'un
--- coup. Premier relevement de la session : ce que nous avons pu faire pendant notre
--- absence (meme rythme que l'enveloppe, depuis notre derniere deconnexion mesuree une
--- fois au login), ou toute l'enveloppe si la sauvegarde n'a pas ete chargee ; un crash
--- ou une session sur un autre PC se rattrape donc d'un coup. Ensuite la fenetre fixe
--- des copies tierces. Regle locale : rien ne change sur le reseau ni chez les autres.
+-- coup. Plafond de session fixe au premier relevement : notre ligne d'alors plus ce que
+-- nous avons pu faire pendant notre absence (meme rythme que l'enveloppe, depuis notre
+-- derniere deconnexion mesuree une fois au login ; 0 si inconnue), ou toute l'enveloppe
+-- si la sauvegarde n'a pas ete chargee. Un crash ou une session sur un autre PC se
+-- rattrape donc d'un coup, quel que soit l'ordre des pages ; au-dessus du plafond, la
+-- fenetre fixe des copies tierces. Recalcule (sans absence) a un reset en cours de
+-- session. Regle locale : rien ne change sur le reseau ni chez les autres.
 function Overlord.Sync:BoundOwnRowRaise(playerName, kills, killsBefore, sender)
-    if self._ownRowRaisedThisSession then
-        return self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, false, true)
+    killsBefore = tonumber(killsBefore) or 0
+    local campaign = Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs() or 0
+    local state = self._ownRowSessionCap
+    if not state or state.campaign ~= campaign then
+        local cap
+        if not state and Overlord.SavedVariablesLoadedAtLogin == false then
+            cap = math.huge
+        else
+            local away = not state and tonumber(Overlord.SessionAbsenceAtLogin) or 0
+            cap = killsBefore + FIRST_CONTACT_BASE + math.floor(away * FIRST_CONTACT_RATE)
+        end
+        state = { campaign = campaign, cap = cap }
+        self._ownRowSessionCap = state
     end
-    self._ownRowRaisedThisSession = true
-    local absence = Overlord.SessionAbsenceAtLogin
-    if Overlord.SavedVariablesLoadedAtLogin == false or not absence then return kills end
-    return math.min(kills, (tonumber(killsBefore) or 0) + FIRST_CONTACT_BASE
-        + math.floor(absence * FIRST_CONTACT_RATE))
+    if killsBefore < state.cap then return math.min(kills, state.cap) end
+    return self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, false, true)
 end
 
 -- Detection (1.4.2) : un total annonce par un tiers au-dessus de ce que le
