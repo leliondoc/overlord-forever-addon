@@ -81,12 +81,12 @@ local queued, normalQueue = nil, net.Queue
 net.Queue = function(_, packet) queued = packet; return true end
 net:Start()
 advance(3.1)
-assert(queued and queued.kind == "NH" and queued.payload == "1.1.3~ld~lr~lp6",
+assert(queued and queued.kind == "NH" and queued.payload == "1.1.3~m0~ld~lr~lp6",
     "Startup hello did not advertise lp6")
 advance(2.1) -- distinct community scan, outside NH duplicate suppression
 queued = nil
 assert(net:Broadcast("NH", e.Overlord.Version) == 1)
-assert(queued and queued.payload == "1.1.3~ld~lr~lp6",
+assert(queued and queued.payload == "1.1.3~m0~ld~lr~lp6",
     "Plain-version NH from the community scan lacked lp6")
 net.Queue = normalQueue
 
