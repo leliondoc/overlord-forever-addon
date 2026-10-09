@@ -79,40 +79,29 @@ OverlordDB.campaignId = 20260929
 assert(not sync:IsDeniedKillContributor(name), "Player remained excluded next week")
 assert(not sync:IsDeniedKillContributor("Unrelated Player"), "Another player's score was blocked")
 
--- 2026-09-29 : level-14 row at 5000 HK a few hours after the reset. Clients that
--- already stored it must purge it through the bumped sanitize version.
-local burst = "Ender Zero"
-assert(sync:IsDeniedKillContributor(burst), "Burst row is not excluded this week")
-assert(not sync:IsDeniedKillContributor("Enderhero Zeroth"), "Removal leaked to another character")
-lb.kills[burst] = 5000
+-- The two characters removed on 2026-09-29 were cleared since: that week keeps no
+-- removal any more.
+assert(not sync:IsDeniedKillContributor("Ender Zero"), "A cleared character is still blocked")
+assert(not sync:IsDeniedKillContributor("Enderhero Enderhero"), "A cleared character is still blocked")
+
+-- 2026-10-06 : campaign-scoped removal of a name with a valid case. Clients already
+-- cleaned at an older version purge their saved copy through the bumped version.
+OverlordDB.campaignId = 20261006
+local burst = "Empire Sucks"
+assert(sync:IsDeniedKillContributor(burst), "This week's removal is not applied")
+assert(not sync:IsDeniedKillContributor("Empire Suckling"), "Removal leaked to another character")
+lb.kills[burst] = 1088
 OverlordDB.leaderboardScoreSanitizeVersion = 5
 lb:EnsureLegacyScoreSanitized()
 attempts = 0
 while OverlordDB.leaderboardScoreSanitizeVersion ~= 9 and #timers > 0 do
     attempts = attempts + 1
-    assert(attempts < 20, "Burst row cleanup did not finish within its bounded slices")
+    assert(attempts < 20, "Removed row cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
 end
-assert(lb.kills[burst] == nil, "Existing burst score was not removed on upgrade")
-lb:SetPlayerKills(burst, 5000, true)
-assert(lb.kills[burst] == nil, "An old peer relayed the burst score back")
-
--- Same player, main character, 4999 HK the same day. Clients already cleaned at
--- version 6 (1.1.9) must purge it again when upgrading to version 7.
-local main = "Enderhero Enderhero"
-assert(sync:IsDeniedKillContributor(main), "Main character row is not excluded this week")
-lb.kills[main] = 4999
-OverlordDB.leaderboardScoreSanitizeVersion = 6
-lb:EnsureLegacyScoreSanitized()
-attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 9 and #timers > 0 do
-    attempts = attempts + 1
-    assert(attempts < 20, "Main row cleanup did not finish within its bounded slices")
-    table.remove(timers, 1)()
-end
-assert(lb.kills[main] == nil, "Version 6 clients kept the forged main-character row")
-lb:SetPlayerKills(main, 4999, true)
-assert(lb.kills[main] == nil, "An old peer relayed the main-character score back")
+assert(lb.kills[burst] == nil, "Existing removed score was not purged on upgrade")
+lb:SetPlayerKills(burst, 1088, true)
+assert(lb.kills[burst] == nil, "An old peer relayed the removed score back")
 
 -- 2026-10-09 : the row removed on 2026-09-22 was injected again in a later campaign.
 -- It is refused on every campaign now, and clients already cleaned at version 8 purge

@@ -1189,17 +1189,10 @@ local BLOCKED_KILL_CONTRIBUTOR_BASES = {
 -- Moderation d'un classement hebdomadaire precis (campaignId -> base-names). Un ancien
 -- pair peut encore relayer son total maximal : la ligne reste refusee jusqu'au reset
 -- suivant, puis le nom peut de nouveau etre credite normalement.
--- 2026-09-22 : Asmon Gold (4999 VH forges via une origine BetaNetwork usurpee).
+-- (La ligne retiree le 2026-09-22 avec celle-ci est refusee en permanence plus haut.)
 local CAMPAIGN_KILL_ROW_REMOVALS = {
     [20260922] = {
         ["roxymigurdia greyrat"] = true,
-        ["asmon gold"] = true,
-    },
-    -- 2026-09-29 : Ender Zero (druide niveau 14, 5000 VH ~7 h apres le reset), puis
-    -- Enderhero Enderhero (meme joueur, 4999 VH forges le meme jour).
-    [20260929] = {
-        ["ender zero"] = true,
-        ["enderhero enderhero"] = true,
     },
     -- 2026-10-06 : Empire Sucks (1088 VH injectes via un indice de guilde puis un LK
     -- diffuses sur le canal, guilde "EMPIRE HACKS").
