@@ -2795,7 +2795,9 @@ function Overlord.LeaderboardUI:CreateSyncBadge(title)
     if not lbFrame or lbFrame.syncBadge or not title then return end
     local badge = CreateFrame("Frame", nil, lbFrame)
     badge:SetSize(22, 20)
-    badge:SetPoint("LEFT", title, "RIGHT", 14, 0)
+    -- Placed by LayoutSyncBadge: centred in the gap between the centre lines
+    -- (campaign dates, totals) and the right lines (your rank, your guild).
+    badge:SetPoint("CENTER", lbFrame.subtitle or title, "BOTTOM", 330, -3)
     local arrow = badge:CreateTexture(nil, "OVERLAY")
     arrow:SetSize(18, 18)
     arrow:SetPoint("LEFT", badge, "LEFT", 0, 0)
@@ -2828,27 +2830,24 @@ function Overlord.LeaderboardUI:CreateSyncBadge(title)
     text:SetShadowOffset(1, -1)
     badge.arrow, badge.check, badge.text = arrow, check, text
     if arrow.CreateAnimationGroup then
+        -- A slow, very small up-and-down drift (no fading, no blinking).
         local ag = arrow:CreateAnimationGroup()
-        ag:SetLooping("REPEAT")
-        local drop = ag:CreateAnimation("Translation")
-        drop:SetOffset(0, -5)
-        drop:SetDuration(1.0)
-        if drop.SetSmoothing then drop:SetSmoothing("IN") end
-        local fade = ag:CreateAnimation("Alpha")
-        fade:SetFromAlpha(1)
-        fade:SetToAlpha(0)
-        fade:SetStartDelay(0.7)
-        fade:SetDuration(0.3)
+        ag:SetLooping("BOUNCE")
+        local drift = ag:CreateAnimation("Translation")
+        drift:SetOffset(0, -2)
+        drift:SetDuration(1.4)
+        if drift.SetSmoothing then drift:SetSmoothing("IN_OUT") end
         badge.anim = ag
     end
-    -- Live kills once up to date: the check pulses (fades and comes back) when the
-    -- totals grow, at most every 2 s; it never goes back to the arrow for them.
+    -- Live kills once up to date: the check softly brightens back when the totals
+    -- grow (at most every 2 s); it never goes back to the arrow for them.
     if check.CreateAnimationGroup then
         local pulse = check:CreateAnimationGroup()
         local glow = pulse:CreateAnimation("Alpha")
-        glow:SetFromAlpha(0.3)
+        glow:SetFromAlpha(0.7)
         glow:SetToAlpha(1)
-        glow:SetDuration(0.6)
+        glow:SetDuration(0.8)
+        if glow.SetSmoothing then glow:SetSmoothing("OUT") end
         badge.pulse = pulse
     end
     -- Hover shows the tooltip; clicks still go to the panel (it stays draggable).
@@ -2869,10 +2868,28 @@ function Overlord.LeaderboardUI:CreateSyncBadge(title)
     end)
 end
 
+-- Centres the badge in the gap between the centre lines and the right lines
+-- (widths read from the drawn texts; re-anchored only when the position moves).
+local function LayoutSyncBadge(badge)
+    local function width(fs) return fs and fs.GetStringWidth and (fs:GetStringWidth() or 0) or 0 end
+    local centreHalf = math.max(width(lbFrame.subtitle), width(lbFrame.totalText)) / 2
+    local right = lbFrame.infoRight or {}
+    local rightText = math.max(width(right[1]), width(right[2]))
+    -- Right lines end LB_FRAME_PAD + 4 from the frame edge (InfoLine).
+    local gapRight = LB_FRAME_W / 2 - LB_FRAME_PAD - 4 - rightText
+    local x = math.floor((centreHalf + gapRight) / 2 + 0.5)
+    if badge._layoutX ~= x then
+        badge._layoutX = x
+        badge:ClearAllPoints()
+        badge:SetPoint("CENTER", lbFrame.subtitle, "BOTTOM", x, -3)
+    end
+end
+
 -- Repaints the badge only when its state changes (no text/texture churn).
 function Overlord.LeaderboardUI:RefreshSyncBadge(dc)
     local badge = lbFrame and lbFrame.syncBadge
     if not badge or not lbFrame:IsShown() then return end
+    if lbFrame.subtitle then LayoutSyncBadge(badge) end
     local liveTotal = nil
     if dc then
         lbFrame._lbBadgeLocal = dc.fromSavedCache == true
