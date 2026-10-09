@@ -1993,6 +1993,7 @@ function Overlord:SuspendForInstance()
         self.MapMarkers._mmOutpostMapActive = false
         if self.MapMarkers.HideMinimapOutpostPin then self.MapMarkers:HideMinimapOutpostPin() end
         if self.MapMarkers.HideEKKeepPin then self.MapMarkers:HideEKKeepPin() end
+        if self.MapMarkers.HideWorldEmblems then self.MapMarkers:HideWorldEmblems() end
         if self.MapMarkers.RefreshMapModeButton then self.MapMarkers:RefreshMapModeButton() end
     end
     if self.ZoneIndicator then self.ZoneIndicator:Hide() end

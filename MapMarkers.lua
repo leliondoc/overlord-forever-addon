@@ -1046,6 +1046,10 @@ function Overlord.MapMarkers:Initialize()
                 if not Overlord.Zones:IsMineMapID(newMapID) then
                     Overlord.MapMarkers:HideMineOverlays()
                 end
+                -- Blasons de continent : repeints par le driver si la nouvelle carte est le monde.
+                if Overlord.MapMarkers.HideWorldEmblems then
+                    Overlord.MapMarkers:HideWorldEmblems()
+                end
                 if newFront and Overlord.Sync and Overlord.Sync.RequestConsultFrontSync then
                     Overlord.Sync:RequestConsultFrontSync(newFront.id)
                 end
@@ -1412,6 +1416,12 @@ function Overlord.MapMarkers:Initialize()
             if hadFrontRender then
                 Overlord.MapMarkers:HideWarfrontOverlays()
             end
+        end
+
+        -- Blasons de continent (carte du monde seulement) : apres la chaine, quelle que
+        -- soit la branche prise par la carte Azeroth. Hors carte du monde : une comparaison.
+        if Overlord.MapMarkers.RefreshWorldEmblems then
+            Overlord.MapMarkers:RefreshWorldEmblems(mapID, layoutChanged, contentRefresh)
         end
 
         -- Hommage guilde (Durotar, Kalimdor…) : copie exacte pins fortin.
@@ -3706,6 +3716,7 @@ end
 
 function Overlord.MapMarkers:HideEKDominance()
     self:HideEKDominanceLogos()
+    if self.HideWorldEmblems then self:HideWorldEmblems() end
     Overlord.MapMarkers:HideEKGoldMinePins()
     Overlord.MapMarkers:HideContinentGeneralPins()
     Overlord.MapMarkers:HideProjectedKeepPins()

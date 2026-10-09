@@ -50,6 +50,7 @@ SyncLeaderboardPages.lua
 SyncBetaNetwork.lua
 MapMarkers.lua
 MapMarkersKeep.lua
+MapWorldEmblems.lua
 General.lua
 GeneralSync.lua
 GeneralMap.lua
