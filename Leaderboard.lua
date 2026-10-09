@@ -2387,7 +2387,8 @@ local function ScheduleLocalGuildRosterEnrich(delaySec)
     end)
 end
 
-local LEGACY_SCORE_SANITIZE_VERSION = 8
+-- v9 (1.7.4) : repasse une fois pour purger une ligne refusee sur toutes les campagnes.
+local LEGACY_SCORE_SANITIZE_VERSION = 9
 
 -- Migration de securite globale, executee avant Sync mais repartie sur plusieurs
 -- frames. Les SavedVariables visees peuvent justement etre anormalement grosses :

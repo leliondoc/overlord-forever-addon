@@ -1181,6 +1181,9 @@ Overlord.PLAUSIBLE_SYNC_KILL_CEILING = PLAUSIBLE_KILL_CEILING
 -- d'autoriser une purge deterministe sur chaque SavedVariables deja contaminee.
 local BLOCKED_KILL_CONTRIBUTOR_BASES = {
     sfvsafqw = true,
+    -- 2026-10-09 : ligne injectee une seconde fois (deja retiree le 2026-09-22),
+    -- refusee desormais sur toutes les campagnes.
+    ["asmon gold"] = true,
 }
 
 -- Moderation d'un classement hebdomadaire precis (campaignId -> base-names). Un ancien

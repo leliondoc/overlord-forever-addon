@@ -19,12 +19,12 @@ OverlordDB.leaderboardSnapshot = {
 OverlordDB.leaderboardScoreSanitizeVersion = 3
 lb:EnsureLegacyScoreSanitized()
 local attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 8 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 9 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Score cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
 end
-assert(OverlordDB.leaderboardScoreSanitizeVersion == 8, "Score cleanup did not commit")
+assert(OverlordDB.leaderboardScoreSanitizeVersion == 9, "Score cleanup did not commit")
 assert(lb.kills[name] == nil, "Existing score was not removed")
 assert(OverlordDB.leaderboardsByPool.global.kills[name] == nil,
     "Pooled score was not removed")
@@ -53,7 +53,7 @@ assert(hasForgedGuild(), "Fixture did not place the forged guild in the guild co
 OverlordDB.leaderboardScoreSanitizeVersion = 4
 lb:EnsureLegacyScoreSanitized()
 attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 8 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 9 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Forged row cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
@@ -88,7 +88,7 @@ lb.kills[burst] = 5000
 OverlordDB.leaderboardScoreSanitizeVersion = 5
 lb:EnsureLegacyScoreSanitized()
 attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 8 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 9 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Burst row cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
@@ -105,7 +105,7 @@ lb.kills[main] = 4999
 OverlordDB.leaderboardScoreSanitizeVersion = 6
 lb:EnsureLegacyScoreSanitized()
 attempts = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 8 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 9 and #timers > 0 do
     attempts = attempts + 1
     assert(attempts < 20, "Main row cleanup did not finish within its bounded slices")
     table.remove(timers, 1)()
@@ -113,4 +113,33 @@ end
 assert(lb.kills[main] == nil, "Version 6 clients kept the forged main-character row")
 lb:SetPlayerKills(main, 4999, true)
 assert(lb.kills[main] == nil, "An old peer relayed the main-character score back")
+
+-- 2026-10-09 : the row removed on 2026-09-22 was injected again in a later campaign.
+-- It is refused on every campaign now, and clients already cleaned at version 8 purge
+-- their saved copy (and its guild) once more.
+OverlordDB.campaignId = 20261006
+assert(sync:IsDeniedKillContributor(forged), "The injected row came back in a later campaign")
+assert(sync:IsDeniedKillContributor(forged .. "-Forever"), "A realm suffix bypassed the block")
+assert(not sync:IsDeniedKillContributor("Asmon Golden"), "The block leaked to another name")
+assert(not sync:IsDeniedKillContributor("Yog Gold"), "The block leaked to another family member")
+forgedGuild = "EMPIRE HACKS"
+lb.kills[forged] = 4897
+lb.playerInfo[forged] = { class = "", faction = "Alliance", factionAt = 0, locale = "",
+    guild = forgedGuild, pool = "global" }
+assert(hasForgedGuild(), "Fixture did not place the injected guild in the guild column")
+OverlordDB.leaderboardScoreSanitizeVersion = 8
+lb:EnsureLegacyScoreSanitized()
+attempts = 0
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 9 and #timers > 0 do
+    attempts = attempts + 1
+    assert(attempts < 20, "Re-injected row cleanup did not finish within its bounded slices")
+    table.remove(timers, 1)()
+end
+assert(OverlordDB.leaderboardScoreSanitizeVersion == 9, "Version 9 cleanup did not commit")
+assert(lb.kills[forged] == nil, "Version 8 clients kept the re-injected row")
+assert(not hasForgedGuild(), "The injected guild stayed in the guild column")
+lb:SetPlayerKills(forged, 4897, true)
+assert(lb.kills[forged] == nil, "An old peer relayed the re-injected row back")
+OverlordDB.campaignId = 20261013
+assert(sync:IsDeniedKillContributor(forged), "The block expired with the campaign")
 print("Forever kill-row removal: current-week purge, stale relay rejection, next-week expiry OK")
