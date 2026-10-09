@@ -572,7 +572,20 @@ local function forwardRetryKey(wire)
     return nil
 end
 local serial = 0
-local session = tostring(time()) .. "-" .. tostring(math.random(1, 2147483646))
+-- Packet ids are "<session>-<serial>", unique per origin. Base 36 (11 characters
+-- instead of 21): ten bytes less in every packet and every fragment header, so
+-- more captures and alerts fit one fragment (one channel message instead of two).
+local function base36(n, width)
+    local digits, out = "0123456789abcdefghijklmnopqrstuvwxyz", ""
+    n = math.floor(n)
+    repeat
+        local d = n % 36
+        out = digits:sub(d + 1, d + 1) .. out
+        n = math.floor(n / 36)
+    until n == 0
+    return string.rep("0", (width or 0) - #out) .. out
+end
+local session = base36(time()) .. base36(math.random(0, 60466175), 5)
 -- Packet dates use Blizzard's shared server clock: a PC clock more than 30 s
 -- ahead made every relayed packet from that player invisible to all others.
 local function serverNow() return (GetServerTime and GetServerTime()) or time() end

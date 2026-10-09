@@ -397,6 +397,9 @@ end
 -- (Presence is consumed by the relay itself: count the Battle.net copies.)
 assert(gate.Relay:Send("NH", "presence-probe")); drain()
 assert(sentTo[ally.name] == 1, "Own presence skipped an opposite-faction friend not heard yet")
+-- Packet ids stay short (base-36 session): every byte counts against the fragment size.
+local probeId = gate.lastWire and gate.lastWire:match("^[^|]*|([^|]*)|")
+assert(probeId and probeId:match("^%w+%-%d+$") and #probeId <= 16, "Packet id too long: " .. tostring(probeId))
 sentTo = {}
 for i = 1, 6 do
     assert(gate.Relay:Send("C", "quiet-" .. i)); drain()
