@@ -2724,10 +2724,14 @@ end
 -- Initialisation de l'addon
 function Overlord:Initialize()
     if self.IsInitialized then return end
-    -- Session-only evidence captured before defaults/migrations/reset stages.
-    self.SavedVariablesLoadedAtLogin = type(OverlordDB) == "table"
-    self.SavedVariablesCampaignAtLogin = type(OverlordDB) == "table"
-        and tonumber(OverlordDB.lastResetTimestamp) or nil
+    -- Session-only evidence captured before defaults/migrations/reset stages, once:
+    -- a retry of Initialize (faction not ready yet) runs after the first call created
+    -- OverlordDB and would otherwise report a lost save as loaded.
+    if self.SavedVariablesLoadedAtLogin == nil then
+        self.SavedVariablesLoadedAtLogin = type(OverlordDB) == "table"
+        self.SavedVariablesCampaignAtLogin = type(OverlordDB) == "table"
+            and tonumber(OverlordDB.lastResetTimestamp) or nil
+    end
     
     -- ADDON_LOADED follows SavedVariables loading. Waiting cannot repair a client-side load failure.
     if not OverlordDB then

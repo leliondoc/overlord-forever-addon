@@ -111,6 +111,14 @@ assert(("1.1.3~lr~lp6"):match("~lp(%d+)$") == "6", "1.6.3 clients would no longe
 receive("Raced Tester", "NH", "1.1.3~lr~lp6")
 assert(net:GetPeerPagedProtocol("Raced Tester") == 7, "~lr~lp6 was not read as v7")
 
+-- 512 first-hand capabilities are kept (1.7.5): with 128, most direct neighbours of a
+-- busy channel looked "unknown" and an old client cost a silent probe.
+for i = 1, 200 do
+    receive("Crowd" .. string.char(97 + math.floor(i / 26) % 26) .. string.char(97 + i % 26) .. " Tester",
+        "NH", "1.1.3~lr~lp6")
+end
+assert(net:GetPeerPagedProtocol("Raced Tester") == 7, "a crowd of neighbours evicted an announced capability")
+
 local sent = {}
 s.SendWhisper = function(_, kind, payload, target)
     if kind == "HR" and payload:match("^[567]:Q:") then

@@ -151,6 +151,11 @@ lb.playerInfo[me].class = ""
 lb:RegisterKill(me)
 assert(s:IsLadderRowClass(lb.playerInfo[me].class), "our own row stayed without a class after a kill: "
     .. tostring(lb.playerInfo[me].class))
+local forced, realForce = 0, lb.ForceUpdateLocalPlayer
+lb.ForceUpdateLocalPlayer = function(...) forced = forced + 1; return realForce(...) end
+lb:RegisterKill(me)
+lb.ForceUpdateLocalPlayer = realForce
+assert(forced == 0, "a kill with a known class rebuilt our own row")
 
 -- ===== (5) a /ov sync reply follows the unsolicited bound, even for a known row
 send("K", kPayload("Synced Ally", 100, "WARRIOR"), "Synced Ally")

@@ -8673,7 +8673,7 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     -- 1.7.5 : notre propre ligne ne monte pas d'un coup par un tiers (page, /ov sync) :
     -- notre K la republiait ensuite comme total du proprietaire. Elle suit la fenetre
     -- fixe des copies tierces, sauf dans une session ouverte sans sauvegarde chargee
-    -- (defaut du chargeur, reinstallation, autre PC) : la ligne se retablit alors comme
+    -- (defaut du chargeur, reinstallation, premiere installation) : elle se retablit alors comme
     -- tout sujet inconnu, au cap de premier contact. Aucun pair ne peut provoquer cet
     -- etat. Seules les pages restent exemptes pour une ligne deja connue : une reponse
     -- /ov sync (SR:F) suit la borne des totaux non sollicites.
