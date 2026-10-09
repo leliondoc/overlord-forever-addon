@@ -205,6 +205,8 @@ local function BuildSnapshotKillPayload(snapshot, name, wireEpoch)
         or not ContributorCanRelay(name) then
         return nil
     end
+    -- 1.7.5 : une ligne sans classe n'est ni acceptee ni servie (IsLadderRowClass).
+    if sync.IsLadderRowClass and not sync:IsLadderRowClass(info.class) then return nil end
     local kills = math.floor(tonumber(snapshot.kills and snapshot.kills[name]) or 0)
     -- Same per-level ceiling as the receivers (1.4.2): serve the clamped value, so
     -- every client holds the same number and bucket digests match on both sides.
@@ -496,7 +498,15 @@ PrepareSnapshotForNetwork = function(lb, callback, killLimit, requestedWireEpoch
     end)
 end
 
--- Voisins directs utilisables : ni nous-memes, ni penalises, ni annonces sans v6.
+-- 1.7.5 : un voisin qui annonce moins que v7 (client d'avant 1.7.0) n'est plus
+-- interroge : il acceptait encore les lignes forgees (indice de guilde puis LK sur
+-- le canal) et les servait en pages. Mise a jour requise, aucun repli.
+local function IsOldPagedPeer(net, name)
+    local capability = net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(name)
+    return capability ~= nil and capability < 7
+end
+
+-- Voisins directs utilisables : ni nous-memes, ni penalises, ni annonces sans v7.
 local function DirectCandidates()
     local net = Overlord.BetaNetwork
     if not net or not net.GetDirectPeers then return {} end
@@ -506,7 +516,7 @@ local function DirectCandidates()
         if type(name) == "string" and name ~= ""
             and not (sync.ForeverIdentitiesMatch and sync:ForeverIdentitiesMatch(name, me))
             and (peerPenaltyUntil[name:lower()] or 0) <= now
-            and not (net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(name) == 5) then
+            and not IsOldPagedPeer(net, name) then
             out[#out + 1] = name
         end
     end
@@ -822,7 +832,7 @@ function sync:GetCatchupNeighbourDiagnostics()
             local penalty = (peerPenaltyUntil[name:lower()] or 0) - now
             if penalty > 0 then
                 aside[#aside + 1] = string.format("%s %ds", name, math.floor(penalty))
-            elseif net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(name) == 5 then
+            elseif IsOldPagedPeer(net, name) then
                 old[#old + 1] = name
             elseif enemyFaction and PeerFaction(name) == enemyFaction then
                 enemies[#enemies + 1] = name
@@ -839,17 +849,17 @@ function sync:GetCatchupNeighbourDiagnostics()
         if #t <= 6 then return table.concat(t, ", ") end
         return table.concat(t, ", ", 1, 6) .. " +" .. (#t - 6)
     end
-    return string.format("Catch-up neighbours: enemy %d (%s); ally %d (%s); set aside %d (%s); v5 only %d (%s); next round: %s.",
+    return string.format("Catch-up neighbours: enemy %d (%s); ally %d (%s); set aside %d (%s); before 1.7 %d (%s); next round: %s.",
         #enemies, list(enemies), #allies, list(allies), #aside, list(aside), #old, list(old), nextPool)
 end
 
 -- Lignes /ov network : dernier voisin, resultat. Aucune mutation.
 function sync:GetHistoryCatchupDiagnostics()
     local stats = self._historyCatchupStats
-    if not stats then return { "Ladder rounds: none yet this session (v6, direct neighbours only)." } end
+    if not stats then return { "Ladder rounds: none yet this session (v7, direct neighbours only)." } end
     local age = stats.targetAt and math.floor(GetTime() - stats.targetAt) or 0
     return {
-        string.format("Ladder rounds: %d started, %d complete (v6, direct neighbours only).",
+        string.format("Ladder rounds: %d started, %d complete (v7, direct neighbours only).",
             stats.requests or 0, stats.completed or 0),
         string.format("Last peer: %s (%s), %ds ago: %s.",
             tostring(stats.target or "?"), tostring(stats.targetFaction or "?"), age,

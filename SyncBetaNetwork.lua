@@ -1673,9 +1673,12 @@ function net:Receive(wire, sender, transport, bnetID, decoded)
         local originKey, version = origin:lower(), advertised == "6" and 6 or 5
         if version == 6 and p.payload:find("~lr~lp6", 1, true) then version = 7 end
         local previous = pagedCapabilities[originKey]
-        if not previous or GetTime() - previous.at > 300
+        -- 1.7.5 : seul le NH de premier ordre (envoye par le voisin lui-meme) dit sa
+        -- capacite. Un relais ecrivait "Voisin,Relais" sans suffixe : le voisin honnete
+        -- passait en v5, n'etait plus interroge, et le relais restait seul candidat.
+        if #p.path == 1 and (not previous or GetTime() - previous.at > 300
             or p.at > previous.originAt
-            or (p.at == previous.originAt and version > previous.version) then
+            or (p.at == previous.originAt and version > previous.version)) then
             remember(pagedCapabilities, pagedCapabilityOrder, originKey,
                 { version = version, at = GetTime(), originAt = p.at }, 128)
         end

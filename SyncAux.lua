@@ -1209,11 +1209,16 @@ function Overlord.Sync:IsDeniedKillContributor(playerName)
     local normalized = self.NormalizeContributorFullName
         and self:NormalizeContributorFullName(playerName) or playerName
     if type(normalized) ~= "string" or normalized == "" then return false end
-    -- A name no character can have ("EMPIRE SUCKS") is never a ladder row, on every
-    -- client alike; the v8 cleanup removes the copies already saved.
+    -- 1.7.5 : une ligne porte le nom canonique ("Prenom Nom", un seul espace, sans
+    -- suffixe). "Prenom  Nom" ou "Prenom Nom-x" designaient le meme joueur sous une
+    -- autre cle et echappaient a la liste ci-dessous. Regle pure, la meme partout ;
+    -- le nettoyage v10 retire les copies deja sauvegardees.
+    local canonical = self.CanonicalForeverName and self:CanonicalForeverName(normalized)
+    if canonical ~= normalized then return true end
+    -- A name no character can have ("EMPIRE SUCKS", invisible or mixed-script letters)
+    -- is never a ladder row, on every client alike.
     if self.HasForeverNameCase and not self:HasForeverNameCase(normalized) then return true end
-    local base = normalized:match("^([^%-]+)") or normalized
-    local lowerBase = base:lower()
+    local lowerBase = normalized:lower()
     if BLOCKED_KILL_CONTRIBUTOR_BASES[lowerBase] == true then return true end
     local campaignId = OverlordDB and tonumber(OverlordDB.campaignId)
     if not campaignId and Overlord.TimestampToCampaignId
@@ -1224,9 +1229,20 @@ function Overlord.Sync:IsDeniedKillContributor(playerName)
     return removed ~= nil and removed[lowerBase] == true
 end
 
+-- 1.7.5 : 60 au plus (plafond Classic ; la beta s'arrete a 30). Les lignes forgees
+-- annoncaient le niveau 90 pour debloquer le plafond de kills par niveau. A relever
+-- si le plafond de niveau de Forever depasse un jour 60.
 function Overlord.Sync:IsEligibleKillContributorLevel(level)
     level = tonumber(level)
-    return level ~= nil and level >= 1 and level <= 90 and level == math.floor(level)
+    return level ~= nil and level >= 1 and level <= 60 and level == math.floor(level)
+end
+
+-- 1.7.5 : une ligne de classement porte toujours une classe : le K du joueur envoie
+-- UnitClass("player") et les pages la recopient. Une ligne sans classe (nom gris) ne
+-- vient que d'un client modifie ; elle est refusee partout de la meme facon.
+function Overlord.Sync:IsLadderRowClass(class)
+    return type(class) == "string" and class ~= "" and class ~= "UNKNOWN"
+        and self:IsValidCaptureClassToken(class) == true
 end
 
 -- K wire (9.7.3+) :
@@ -1328,7 +1344,8 @@ local MAX_KILL_PAYLOAD_GUILD_LEN = 24
 
 local function normalizeKillPayloadGuildAt(ts)
     ts = math.floor(tonumber(ts) or 0)
-    if ts < 0 then return 0 end
+    -- "nan" et "inf" passent tonumber : jamais une date.
+    if ts ~= ts or ts < 0 or ts == math.huge then return 0 end
     return ts
 end
 
@@ -1992,6 +2009,7 @@ end
 -- Leaderboard:SetPlayerCaptureCount conserve le maximum connu.
 function Overlord.Sync:SanitizeSyncedCaptureCount(total)
     total = math.floor(tonumber(total) or 0)
+    if total ~= total then return nil end
     if total <= 0 then return 0 end
     if total >= PLAUSIBLE_CAPTURE_CEILING then
         return nil

@@ -1012,26 +1012,49 @@ function Overlord.Sync:HasForeverNameCase(name)
     local hit = memo and memo.values[name]
     if hit ~= nil then return hit end
     local base = name:match("^([^%-]+)") or name
-    local ok, wordStart, i, length = true, true, 1, #base
+    -- 1.7.5 : une seule espace entre deux mots, jamais en bord ; des lettres seulement,
+    -- et un seul alphabet par mot (L latin, G grec, C cyrillique, K hangul, H han).
+    -- "Asmоn" (o cyrillique), U+200B ou U+00A0 faisaient des sosies invisibles a toute
+    -- liste de noms. 1514 noms observes le 2026-10-09 : aucun refuse.
+    local ok = base:sub(1, 1) ~= " " and base:sub(-1) ~= " " and not base:find("  ", 1, true)
+    local wordStart, wordScript, i, length = true, nil, 1, #base
     while ok and i <= length do
         local b1 = string.byte(base, i)
         if b1 == 32 or b1 == 39 then
             -- A space starts a word; after an apostrophe ("D'Arcy") either case is fine.
+            if b1 == 32 then wordScript = nil end
             wordStart, i = b1 == 32 or "free", i + 1
         elseif b1 < 128 then
-            if wordStart == true then
+            if not ((b1 >= 65 and b1 <= 90) or (b1 >= 97 and b1 <= 122))
+                or (wordScript and wordScript ~= "L") then
+                ok = false
+            elseif wordStart == true then
                 if b1 >= 97 and b1 <= 122 then ok = false end
             elseif not wordStart and b1 >= 65 and b1 <= 90 then
                 ok = false
             end
-            wordStart, i = false, i + 1
+            wordScript, wordStart, i = "L", false, i + 1
         else
             local width = b1 >= 240 and 4 or (b1 >= 224 and 3 or 2)
-            if not wordStart and width == 2 and i < length then
-                local cp = (b1 % 32) * 64 + (string.byte(base, i + 1) % 64)
-                if IsUpperCodePoint(cp) then ok = false end
+            local b2, b3 = string.byte(base, i + 1), string.byte(base, i + 2)
+            local script, cp
+            if width == 2 and b2 and b2 >= 128 and b2 <= 191 then
+                cp = (b1 % 32) * 64 + (b2 % 64)
+                if cp >= 0xC0 and cp <= 0x24F and cp ~= 0xD7 and cp ~= 0xF7 then script = "L"
+                elseif cp >= 0x370 and cp <= 0x3FF then script = "G"
+                elseif cp >= 0x400 and cp <= 0x52F then script = "C" end
+            elseif width == 3 and b2 and b3 and b2 >= 128 and b2 <= 191 and b3 >= 128 and b3 <= 191 then
+                cp = (b1 % 16) * 4096 + (b2 % 64) * 64 + (b3 % 64)
+                if cp >= 0x1E00 and cp <= 0x1EFF then script = "L"
+                elseif cp >= 0xAC00 and cp <= 0xD7A3 then script = "K"
+                elseif (cp >= 0x4E00 and cp <= 0x9FFF) or (cp >= 0x3400 and cp <= 0x4DBF) then script = "H" end
             end
-            wordStart, i = false, i + width
+            if not script or (wordScript and wordScript ~= script) then
+                ok = false
+            elseif width == 2 and not wordStart and IsUpperCodePoint(cp) then
+                ok = false
+            end
+            wordScript, wordStart, i = script, false, i + width
         end
     end
     return self:_MemoNameResult("_nameCaseMemo", name, ok)
@@ -2647,6 +2670,10 @@ end
 
 function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
     if prefix ~= PREFIX then return end
+    -- 1.7.5 : seuls les transports que l'addon emploie. Un fragment relais recu en
+    -- GUILD/SAY/YELL etait reexpedie par chaque auditeur sur le canal et le groupe.
+    if channel ~= "CHANNEL" and channel ~= "WHISPER" and channel ~= "PARTY"
+        and channel ~= "RAID" and channel ~= "BETA" then return end
     if channel == "BETA" and (not Overlord.BetaNetwork or not Overlord.BetaNetwork:IsDispatching(sender)) then return end
     if message and message:sub(1, 3) == "BF:" and Overlord.BetaNetwork then
         return Overlord.BetaNetwork:ReceiveFragment(message:sub(4), sender, channel)
@@ -3239,7 +3266,13 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
     if not self:AcceptSyncedContributorName(playerName) then return end
     if self.IsDeniedKillContributor and self:IsDeniedKillContributor(playerName) then return end
     if not self.IsEligibleKillContributorLevel
-        or not self:IsEligibleKillContributorLevel(levelToken) then return end
+        or not self:IsEligibleKillContributorLevel(levelToken) then
+        -- 1.7.5 : un proprietaire au-dela du niveau 60 (les lignes forgees annoncaient 90).
+        if (tonumber(levelToken) or 0) > 60 and self:KillSyncSenderOwnsPlayer(sender, playerName) then
+            self:NoteSuspiciousSender(sender, "over-level K")
+        end
+        return
+    end
     -- Anti-injection : un K transporte toujours le total du joueur qui l'emet
     -- (BroadcastKill = GetPlayerFullName). Sur un canal direct (non BNet), seul le
     -- proprietaire peut crediter son propre nom. BNet/Bridge ne peuvent pas crediter K.
@@ -3256,6 +3289,12 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
         if sender and sender ~= "" and self.KillAntiSpoofRecord then
             self:KillAntiSpoofRecord(sender)
         end
+        return
+    end
+    -- 1.7.5 : un client honnete envoie toujours UnitClass("player"). Un K sans classe
+    -- vient d'un client modifie : refuse, et son personnage apparait dans /ov network.
+    if not self:IsLadderRowClass(class) then
+        self:NoteSuspiciousSender(sender, "classless K")
         return
     end
     self:NoteOwnerKillClaim(playerName, totalKills)
@@ -8596,6 +8635,12 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
         classClaimVerified, localeClaimVerified = false, false
         factionClaimVerified, validGuildRegister, guildAt, hasGuildRegister = false, false, 0, false
     end
+    -- 1.7.5 : sans classe, pas de ligne (voir IsLadderRowClass). Comptee comme recue,
+    -- comme une ligne retiree, pour ne pas faire echouer un rattrapage de pages.
+    if not self:IsLadderRowClass(class) then
+        if guildOwner then self:NoteSuspiciousSender(sender, "classless row") end
+        return true
+    end
     if Overlord.Leaderboard.MergeLeaderboardKillMetadata then
         Overlord.Leaderboard:MergeLeaderboardKillMetadata(
             playerName,
@@ -8621,7 +8666,15 @@ function Overlord.Sync:OnReceiveLeaderboardKills(payload, sender, channel)
     else
         self:NoteThirdPartyKillTotal(playerName, kills, sender)
     end
-    if not solicited or killsBefore <= 0 then
+    -- 1.7.5 : notre propre ligne ne monte pas d'un coup par un tiers (page, /ov sync) :
+    -- notre K la republiait ensuite comme total du proprietaire. Elle suit la fenetre
+    -- fixe des copies tierces ; une perte de SavedVariables se rattrape quand meme.
+    -- Seules les pages restent exemptes pour une ligne deja connue : une reponse
+    -- /ov sync (SR:F) suit la borne des totaux non sollicites.
+    if kills > killsBefore and Overlord.Leaderboard.IsLocalDisplayName
+        and Overlord.Leaderboard:IsLocalDisplayName(playerName) then
+        kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender, false, true)
+    elseif not guildSnapshot or killsBefore <= 0 then
         kills = self:BoundUnsolicitedKillTotal(playerName, kills, killsBefore, sender,
             guildOwner and not solicited, liveCopy)
     end

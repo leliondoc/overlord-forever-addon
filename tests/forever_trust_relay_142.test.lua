@@ -122,26 +122,24 @@ do
     s:OnReceiveLeaderboardKills(lkRow("Real Horde", 15000, "Horde"), "Forger Peer", "CHANNEL")
     assert(Overlord.Leaderboard.kills["Real Horde"] <= 150 + 30 + 600 + 10,
         "one forged live copy inflated a known enemy: " .. tostring(Overlord.Leaderboard.kills["Real Horde"]))
-    -- A bridge copy of an enemy whose class we lack never makes us ask for it (every
-    -- listener would ask at the same second); pages and the owner's K bring it.
+    -- A bridge copy never makes us ask for a class or a guild (every listener would ask
+    -- at the same second); pages and the owner's K bring them. 1.7.5: a row without a
+    -- class is no ladder row, so a copy of one is refused outright.
     do
-        local asked = 0
-        local realAsk = s.MaybeRequestMissingClass
+        local asked, askedGuild = 0, 0
+        local realAsk, realAskGuild = s.MaybeRequestMissingClass, s.MaybeRequestMissingGuild
         s.MaybeRequestMissingClass = function() asked = asked + 1 end
+        s.MaybeRequestMissingGuild = function() askedGuild = askedGuild + 1 end
         know("Classless Horde", 200, "Horde")
         Overlord.Leaderboard.playerInfo["Classless Horde"].class = ""
         s:OnReceiveLeaderboardKills(lkRow("Classless Horde", 210, "Horde"), "Bridge Peer", "CHANNEL")
-        assert(Overlord.Leaderboard.kills["Classless Horde"] == 210, "fixture: the bridge copy was not admitted")
+        assert(Overlord.Leaderboard.kills["Classless Horde"] == 200, "a bridge copy raised a row without a class")
         assert(asked == 0, "a bridge copy made the listener ask for the class")
-        s.MaybeRequestMissingClass = realAsk
-        -- Nor for the guild (the same herd: every listener asking in the same second).
-        local askedGuild = 0
-        local realAskGuild = s.MaybeRequestMissingGuild
-        s.MaybeRequestMissingGuild = function() askedGuild = askedGuild + 1 end
-        s:OnReceiveLeaderboardKills(lkRow("Classless Horde", 220, "Horde"), "Bridge Peer", "CHANNEL")
-        assert(Overlord.Leaderboard.kills["Classless Horde"] == 220, "fixture: the second bridge copy was not admitted")
+        know("Guildless Horde", 200, "Horde")
+        s:OnReceiveLeaderboardKills(lkRow("Guildless Horde", 220, "Horde"), "Bridge Peer", "CHANNEL")
+        assert(Overlord.Leaderboard.kills["Guildless Horde"] == 220, "fixture: the bridge copy was not admitted")
         assert(askedGuild == 0, "a bridge copy made the listener ask for the guild")
-        s.MaybeRequestMissingGuild = realAskGuild
+        s.MaybeRequestMissingClass, s.MaybeRequestMissingGuild = realAsk, realAskGuild
     end
     -- A subject that already rose in this session, then stayed quiet for hours: a copy
     -- still gets one fixed window, not the hours since its last rise.

@@ -675,25 +675,23 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace)
     return true
 end
 
--- v6/v7 only (1.2.4, v7 in 1.7.0): kills, captures and races in one resumable sweep.
--- A peer whose fresh presence advertises no lp6 is not asked; a peer that stays
--- silent ends the round unsupported and the scheduler asks another direct
--- neighbour. There is no v5/v4 fallback any more: every current client serves v6.
+-- v7 only (1.7.5): kills, captures and races in one resumable sweep. A peer whose
+-- fresh presence advertises v5 or v6 (before 1.7.0) is not asked: those clients
+-- still accepted forged rows live and served them. An unknown peer is probed in v7;
+-- an old one stays silent, ends the round unsupported, and the scheduler asks
+-- another direct neighbour. No v6 fallback (update required).
 function sync:StartCompletePagedLeaderboardCatchup(peer, callback)
     if type(callback) ~= "function" then return false end
     local net = Overlord.BetaNetwork
     local capability = net and net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(peer)
-    if capability == 5 then
-        stats.peerProtocol = "beta v5; not asked (v6 only)"
+    if capability == 5 or capability == 6 then
+        stats.peerProtocol = "beta v" .. capability .. "; not asked (v7 only)"
         return false, "unsupported"
     end
-    -- v7 only toward a peer that announced it: an unknown peer is probed in v6,
-    -- which every current client answers.
-    stats.peerProtocol = capability == 7 and "beta v7; lr+lp6 NH"
-        or capability == 6 and "beta v6; lp6 NH" or "capability unknown, v6 probe"
+    stats.peerProtocol = capability == 7 and "beta v7; lr+lp6 NH" or "capability unknown, v7 probe"
     return self:StartPagedLeaderboardCatchup(peer, function(ok, supported)
         callback(ok == true, supported == true)
-    end, true, capability == 7)
+    end, true, true)
 end
 
 function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)

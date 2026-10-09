@@ -138,7 +138,7 @@ b.friends, c.friends = { c }, { b }
 local PULLER, SOURCE = b, c
 for _, e in ipairs(clients) do e.Overlord.Sync.SendSyncRequest = function() return true end end
 local function heartbeat()
-    for _, e in ipairs(clients) do e.Overlord.BetaNetwork:Broadcast("NH", "1.0.35~lp6") end
+    for _, e in ipairs(clients) do e.Overlord.BetaNetwork:Broadcast("NH", "1.0.35~lr~lp6") end
     later(45, heartbeat)
 end
 heartbeat()
@@ -394,18 +394,18 @@ pressureUntil = now
 advance(180)
 print('PASS: paged cross-faction catch-up completes while both gateways remain saturated')
 
--- The production scheduler asks a direct neighbour, in v6 only (1.2.4).
-local sawV6, sawOther = false, false
+-- The production scheduler asks a direct neighbour, in v7 only (1.7.5).
+local sawV7, sawOther = false, false
 PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
     if kind == "HR" then
-        if payload:sub(1, 2) == "6:" then sawV6 = true else sawOther = true end
+        if payload:sub(1, 2) == "7:" then sawV7 = true else sawOther = true end
     end
     return sendRequest(self, kind, payload, target)
 end
 assert(PULLER.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true))
 advance(700)
-assert(sawV6 and not sawOther, "Production scheduler did not use v6 only")
-print("PASS: simultaneous cross-faction pulls and v6-only scheduler")
+assert(sawV7 and not sawOther, "Production scheduler did not use v7 only")
+print("PASS: simultaneous cross-faction pulls and v7-only scheduler")
 
 -- 1.3.3: one sweep position shared by every neighbour. A pull interrupted with
 -- one peer resumes with the next peer at the same bucket, and the buckets it
@@ -433,7 +433,7 @@ for i = 1, 1500 do
 end
 local cutSeq, lkBuckets, firstResumed = 40, {}, nil
 PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
-    if kind == "HR" and payload:sub(1, 4) == "6:Q:" then
+    if kind == "HR" and payload:sub(1, 4) == "7:Q:" then
         local f = { PULLER.strsplit(":", payload) }
         if target == SOURCE.name and tonumber(f[5]) >= cutSeq then return true end -- peer gone
         if target == SECOND.name then

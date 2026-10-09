@@ -163,7 +163,7 @@ for _, e in ipairs(clients) do
     end
 end
 local function heartbeat()
-    for _, e in ipairs(clients) do e.Overlord.BetaNetwork:Broadcast("NH", "1.0.35~lp6") end
+    for _, e in ipairs(clients) do e.Overlord.BetaNetwork:Broadcast("NH", "1.0.35~lr~lp6") end
     later(45, heartbeat)
 end
 heartbeat()
@@ -255,7 +255,7 @@ for _, index in ipairs({ 1, 26, 41, 100, 500 }) do
 end
 assert(#PULLER.Overlord.Leaderboard.captures[names[1]] == #objectives,
     "v6 LC truncated the full objective set")
-print("PASS: v6 restored rank 500 capture and race beyond legacy 40 over a direct link")
+print("PASS: v7 restored rank 500 capture and race beyond legacy 40 over a direct link")
 assert(limitedOnce and PULLER.Overlord.Sync._leaderboardPageStats.deferred > 0,
     "The transient admission limit was not exercised")
 for i = 1, 100 do
@@ -347,7 +347,7 @@ SOURCE.Overlord.Leaderboard:SetPlayerCaptureCount(names[500], 2, true)
 local normalSend = PULLER.Overlord.Sync.SendWhisper
 local dropped = 0
 PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
-    if kind == "HR" and payload:match("^6:Q:")
+    if kind == "HR" and payload:match("^7:Q:")
         and payload:find(":LC:", 1, true) then
         dropped = dropped + 1
         return true
@@ -381,7 +381,7 @@ SOURCE.Overlord.Leaderboard:SetPlayerKills(names[1], 123, true)
 local responderSend = SOURCE.Overlord.Sync.SendWhisper
 local wrongStream = false
 SOURCE.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
-    if not wrongStream and kind == "HA" and payload:match("^6:P:")
+    if not wrongStream and kind == "HA" and payload:match("^7:P:")
         and payload:sub(-3) == ":LK" then
         wrongStream = true
         return responderSend(self, kind, payload:sub(1, -3) .. "LC", target)
@@ -421,11 +421,11 @@ assert(done == true and PULLER.Overlord.Leaderboard.kills[names[1]] == 124,
     "The checkpoint skipped the previously throttled row")
 print("PASS: bounded admission wait preserves rows and resumes the interrupted bucket")
 
--- A peer that stays silent in v6 ends the round unsupported; nothing falls back
+-- A peer that stays silent in v7 ends the round unsupported; nothing falls back
 -- to v5/v4 any more (1.2.4) and no ACK is written.
 local modernReceive = SOURCE.Overlord.Sync.OnPagedLeaderboardMessage
 SOURCE.Overlord.Sync.OnPagedLeaderboardMessage = function(self, kind, payload, sender, channel)
-    if payload:sub(1, 2) == "6:" then return end
+    if payload:sub(1, 2) == "7:" then return end
     return modernReceive(self, kind, payload, sender, channel)
 end
 local previousAck = PULLER.OverlordDB.leaderboardHistoryCatchupAck
@@ -440,7 +440,7 @@ assert(PULLER.OverlordDB.leaderboardHistoryCatchupAck == previousAck,
 local requesterSend = PULLER.Overlord.Sync.SendWhisper
 local legacyRequested = false
 PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
-    if kind == "HR" and payload:sub(1, 2) ~= "6:" then legacyRequested = true end
+    if kind == "HR" and payload:sub(1, 2) ~= "7:" then legacyRequested = true end
     return requesterSend(self, kind, payload, target)
 end
 assert(PULLER.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true))
@@ -448,7 +448,7 @@ advance(1600)
 assert(not legacyRequested, "Scheduler fell back to a legacy ladder exchange")
 PULLER.Overlord.Sync.SendWhisper = requesterSend
 SOURCE.Overlord.Sync.OnPagedLeaderboardMessage = modernReceive
-print("PASS: v6-silent peer ends unsupported, scheduler never falls back to v5/v4")
+print("PASS: v7-silent peer ends unsupported, scheduler never falls back to v5/v4")
 
 -- A new client pulls the complete v6 ranking from a direct neighbour, then asks
 -- that neighbour once for the outpost/fortress history (SR "H").
@@ -475,4 +475,4 @@ historyTarget = nil
 assert(login.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true))
 advance(35)
 assert(historyTarget == nil, "Outpost history was asked again before six hours")
-print("PASS: login pulls v6 from a direct neighbour, then its outpost history once")
+print("PASS: login pulls v7 from a direct neighbour, then its outpost history once")

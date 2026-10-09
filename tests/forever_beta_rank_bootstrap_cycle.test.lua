@@ -1,4 +1,4 @@
--- Ranking bootstrap (1.2.4): every round is a complete v6 sweep with a direct
+-- Ranking bootstrap (1.2.4): every round is a complete v7 sweep (1.7.5) with a direct
 -- neighbour; the outpost/fortress history (SR "H") follows once per six hours;
 -- a new campaign starts both over.
 local now = 1790020000
@@ -8,7 +8,7 @@ Overlord = {
     BetaNetworkEnabled = true, PlayerFaction = "Alliance",
     BetaNetwork = {
         GetDirectPeers = function() return { "Near Ally" } end,
-        GetPeerPagedProtocol = function() return 6 end,
+        GetPeerPagedProtocol = function() return 7 end,
     },
 }
 function Overlord:GetCurrentCampaignStartTs() return 1790016000 end
@@ -39,7 +39,7 @@ local function round(force)
 end
 
 round()
-assert(sweeps == 1, "Login did not start the v6 ranking")
+assert(sweeps == 1, "Login did not start the v7 ranking")
 assert(OverlordDB.leaderboardRankFirstCompletedCampaignId == 1, "Completed sweep was not persisted")
 assert(#history == 1 and history[1] == "Near Ally", "Outpost history was not requested after the sweep")
 

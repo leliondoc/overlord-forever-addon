@@ -699,7 +699,9 @@ end
 -- le timestamp le plus recent gagne (comme max() pour les kills), repli hash si egalite.
 local function normalizeGuildAt(ts)
     ts = math.floor(tonumber(ts) or 0)
-    if ts < 0 then return 0 end
+    -- "nan" passe tonumber et faisait echouer toute comparaison de date ensuite (une
+    -- guilde figee pour la semaine) ; "inf" n'est pas une date non plus.
+    if ts ~= ts or ts < 0 or ts == math.huge then return 0 end
     return ts
 end
 
@@ -741,6 +743,7 @@ end
 -- valeurs ne sont comparables ni entre clients ni apres /reload ; elles valent donc "date inconnue".
 local function normalizeMetadataEpoch(ts)
     ts = math.floor(tonumber(ts) or 0)
+    if ts ~= ts or ts == math.huge or ts == -math.huge then return 0 end
     if ts > 0 and ts < 1000000000 then return 0 end
     return ts
 end
@@ -2388,7 +2391,9 @@ local function ScheduleLocalGuildRosterEnrich(delaySec)
 end
 
 -- v9 (1.7.4) : repasse une fois pour purger une ligne refusee sur toutes les campagnes.
-local LEGACY_SCORE_SANITIZE_VERSION = 9
+-- v10 (1.7.5) : graphies non canoniques et sosies, lignes sans classe ou au-dela du
+-- niveau 60, et fiches playerInfo des noms refuses (guilde fantome).
+local LEGACY_SCORE_SANITIZE_VERSION = 10
 
 -- Migration de securite globale, executee avant Sync mais repartie sur plusieurs
 -- frames. Les SavedVariables visees peuvent justement etre anormalement grosses :
@@ -2460,10 +2465,28 @@ function Overlord.Leaderboard:EnsureLegacyScoreSanitized()
     local worker = coroutine.create(function()
         for i = 1, #buckets do
             local bucket = buckets[i]
+            local sync = Overlord.Sync
             SanitizeMap(bucket.kills, function(name)
-                return Overlord.Sync and Overlord.Sync.IsDeniedKillContributor
-                    and Overlord.Sync:IsDeniedKillContributor(name) or false
+                if sync and sync.IsDeniedKillContributor and sync:IsDeniedKillContributor(name) then
+                    return true
+                end
+                -- v10: the same content rules as the network (no class, level above 60).
+                -- Never one of this account's own characters (credited here this week),
+                -- even before the local name resolves at login.
+                if not sync or not sync.IsLadderRowClass or IsLocalName(name) then return false end
+                local localKeys = OverlordDB.leaderboardLocalKillKeys
+                if type(localKeys) == "table" then
+                    local dk = sync.GetCaptureContributorDedupKey and sync:GetCaptureContributorDedupKey(name)
+                    if localKeys[name] or (dk and localKeys["#dk:" .. dk]) then return false end
+                end
+                local info = type(bucket.playerInfo) == "table" and bucket.playerInfo[name] or nil
+                if type(info) ~= "table" then return false end
+                return not sync:IsLadderRowClass(info.class) or (tonumber(info.level) or 0) > 60
             end, bucket.bountyKills)
+            SanitizeMap(bucket.playerInfo, function(name)
+                return sync and sync.IsDeniedKillContributor
+                    and sync:IsDeniedKillContributor(name) or false
+            end)
             SanitizeMap(bucket.captureCount, function(name, count)
                 -- v8: names no character can have (and removed rows) leave the
                 -- capture column too, not only the kill column.
@@ -3780,7 +3803,7 @@ function Overlord.Leaderboard:MergeLeaderboardKillMetadata(
         if sex ~= 2 and sex ~= 3 then sex = 0 end
         local observedAt = math.floor(tonumber(raceAtOpt) or 0)
         local now = leaderboardServerNow()
-        if observedAt < 0 or observedAt > now + 300 then observedAt = 0 end
+        if not (observedAt >= 0 and observedAt <= now + 300) then observedAt = 0 end
         local previousRace = row.race or ""
         local previousSex = math.floor(tonumber(row.raceSex) or 0)
         local previousAt = math.floor(tonumber(row.raceAt) or 0)
@@ -3928,7 +3951,7 @@ function Overlord.Leaderboard:SetPlayerRace(
         observedAt = (GetServerTime and GetServerTime()) or time()
     elseif fromSync then
         local now = (GetServerTime and GetServerTime()) or time()
-        if observedAt < 0 or observedAt > now + 300 then observedAt = 0 end
+        if not (observedAt >= 0 and observedAt <= now + 300) then observedAt = 0 end
     end
     local prev = self.playerInfo[playerName]
     local previousAt = prev and math.floor(tonumber(prev.raceAt) or 0) or 0

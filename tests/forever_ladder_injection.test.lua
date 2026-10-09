@@ -172,8 +172,13 @@ assert(lb.kills["Enemy Fighter-Defaced"] == nil, "a live third-party row created
 -- ===== (4b) a bridge copy brings a total, nothing else (fake guild, class, level)
 know("Enemy Star", 400, "Horde")
 lb.playerInfo["Enemy Star"].guild, lb.playerInfo["Enemy Star"].guildAt = "", 0
+-- 1.7.5: a level above 60 is no ladder row at all (forged rows announced 90).
 channel("LK", table.concat({ "Enemy Star", "420", "DEATHKNIGHT", "Horde", tostring(EPOCH), "zhcn",
     "EMPIRE HACKS", tostring(time() + 290), lkRow("Enemy Star", 1, "Horde"):match(":(B%d+):"), "90" }, ":"),
+    "Troll Player")
+assert(lb.kills["Enemy Star"] == 400, "a level-90 row was accepted: " .. tostring(lb.kills["Enemy Star"]))
+channel("LK", table.concat({ "Enemy Star", "420", "DEATHKNIGHT", "Horde", tostring(EPOCH), "zhcn",
+    "EMPIRE HACKS", tostring(time() + 290), lkRow("Enemy Star", 1, "Horde"):match(":(B%d+):"), "60" }, ":"),
     "Troll Player")
 local star = lb.playerInfo["Enemy Star"]
 assert(lb.kills["Enemy Star"] == 420, "a plausible bridge total was refused: " .. tostring(lb.kills["Enemy Star"]))
@@ -302,13 +307,13 @@ OverlordDB.leaderboard.kills, OverlordDB.leaderboard.captureCount = lb.kills, lb
 OverlordDB.leaderboardScoreSanitizeVersion = 7
 lb:EnsureLegacyScoreSanitized()
 local guard = 0
-while OverlordDB.leaderboardScoreSanitizeVersion ~= 9 and #timers > 0 do
+while OverlordDB.leaderboardScoreSanitizeVersion ~= 10 and #timers > 0 do
     guard = guard + 1
     assert(guard < 400, "cleanup did not finish")
     table.remove(timers, 1)()
 end
 C_Timer.After = realAfter
-assert(OverlordDB.leaderboardScoreSanitizeVersion == 9, "v9 cleanup did not commit")
+assert(OverlordDB.leaderboardScoreSanitizeVersion == 10, "v10 cleanup did not commit")
 assert(lb.kills[shout] == nil, "a saved all-caps kill row survived the cleanup")
 assert(lb.captureCount[shout] == nil, "a saved all-caps capture row survived the cleanup")
 assert(lb.kills["Faction Mate"] == 105, "the cleanup removed a real player")

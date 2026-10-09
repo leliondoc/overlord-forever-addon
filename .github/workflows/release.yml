@@ -55,6 +55,7 @@ jobs:
           lua5.1 tests/zone_capture_lease.test.lua
           lua5.1 tests/forever_trust_relay_142.test.lua
           lua5.1 tests/forever_ladder_injection.test.lua
+          lua5.1 tests/forever_ladder_signatures.test.lua
           lua5.1 tests/forever_outpost_capturer_claims.test.lua
           lua5.1 tests/forever_sites_week.test.lua
           lua5.1 tests/forever_persistence.test.lua
