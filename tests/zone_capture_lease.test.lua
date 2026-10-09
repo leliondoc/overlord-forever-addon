@@ -333,6 +333,23 @@ expect(not Lease:ReceiveRelease(zone.id .. ":wrelease:Bob", "Mallory"), "forged 
 expect(zone.status == "in_progress", "forged ZR changed state")
 expect(Lease:ReceiveRelease(zone.id .. ":wrelease:Bob", "Bob"), "valid ZR rejected")
 expect(zone.status == "captured" and zone.owner == "Alliance", "valid ZR did not restore base")
+expect(Lease:ShouldRejectFinal(zone, "Bob", "wrelease"), "a direct ZR no longer blocks its wave")
+
+-- 1.8.1: a release relayed for its origin (gateway-written name, not authenticated)
+-- ends the orange state too, but only softly: the origin's genuine final of that
+-- wave stays accepted (one forged ZR used to make it refused everywhere).
+resetZone()
+mono = 205
+local relayedDecision = Lease:ValidateProgress(
+    zone.id, "Horde", "Bob", "wrelayrel", wallBase + 205, 12, 0, 120, nil, "Bob")
+expect(Lease:AdoptRemote(zone, "Horde", "Bob", relayedDecision), "relayed release lease missing")
+zone.status, zone.owner, zone.previousOwner = "in_progress", "Horde", "Alliance"
+local realRelayedOrigin = Overlord.Sync.IsUnauthenticatedRelayOrigin
+Overlord.Sync.IsUnauthenticatedRelayOrigin = function(_, who) return who == "Bob" end
+expect(Lease:ReceiveRelease(zone.id .. ":wrelayrel:Bob", "Bob"), "relayed ZR rejected")
+Overlord.Sync.IsUnauthenticatedRelayOrigin = realRelayedOrigin
+expect(zone.status == "captured" and zone.owner == "Alliance", "relayed ZR did not end the orange state")
+expect(not Lease:ShouldRejectFinal(zone, "Bob", "wrelayrel"), "a relayed ZR blocked the genuine final")
 
 -- Un ZR direct autorise immediatement le co-capteur local deja sur le disque
 -- a reprendre avec une nouvelle generation, meme pendant le soft-TTL.

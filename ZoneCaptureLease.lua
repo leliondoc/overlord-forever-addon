@@ -1367,12 +1367,13 @@ end
 function Lease:ExpireRemote(zone, reason)
     local remote = zone and zone._remoteCaptureLease
     if not remote or zone.holdAuthorityLocal then return false end
-    if reason == "timeout" then
-        -- Arret faute de nouvelles : le capteur peut continuer, ses ticks plus
-        -- recents et sa finale restent acceptes.
+    if reason == "timeout" or reason == "relayedRelease" then
+        -- Arret faute de nouvelles (ou relache relayee, non authentifiee) : le
+        -- capteur peut continuer, ses ticks plus recents et sa finale restent acceptes.
         PutSoftTombstone(zone.id, remote.originKey, remote.waveId, remote.lastRemoteTs)
         if Overlord.Sync and Overlord.Sync.NoteEnemyCaptureLeaseEnd then
-            Overlord.Sync:NoteEnemyCaptureLeaseEnd(remote.owner, "expiredWithoutFinal")
+            Overlord.Sync:NoteEnemyCaptureLeaseEnd(remote.owner,
+                reason == "timeout" and "expiredWithoutFinal" or "relayedRelease")
         end
     else
         PutTombstone(zone.id, remote.originKey, remote.waveId)
@@ -1523,7 +1524,20 @@ function Lease:ReceiveRelease(payload, sender)
     local zone = Overlord.Zones and Overlord.Zones:GetZone(zoneId)
         or (Overlord.Fronts and select(1, Overlord.Fronts:GetZone(zoneId)))
     if not zone then return false end
-    PutTombstone(zoneId, originKey, waveId)
+    -- A release relayed for its origin (the name was written by a gateway, not
+    -- authenticated by WoW or Battle.net) ends the orange state like a silence: only
+    -- a soft mark, so the origin's later ticks and final stay accepted. A hard mark
+    -- let one forged release make the genuine final of that wave refused everywhere.
+    local relayed = sync.IsUnauthenticatedRelayOrigin ~= nil
+        and sync:IsUnauthenticatedRelayOrigin(sender) == true
+    if relayed then
+        local current = zone._remoteCaptureLease
+        PutSoftTombstone(zoneId, originKey, waveId,
+            current and current.originKey == originKey and current.waveId == waveId
+                and current.lastRemoteTs or nil)
+    else
+        PutTombstone(zoneId, originKey, waveId)
+    end
     local remote = zone._remoteCaptureLease
     if remote and remote.originKey == originKey and remote.waveId == waveId then
         -- Un co-capteur allie deja physiquement sur le disque reprend la vague
@@ -1540,7 +1554,7 @@ function Lease:ReceiveRelease(payload, sender)
             if sync.BroadcastZoneState then sync:BroadcastZoneState(zone) end
             return true
         end
-        return self:ExpireRemote(zone, "release")
+        return self:ExpireRemote(zone, relayed and "relayedRelease" or "release")
     end
     return true
 end
