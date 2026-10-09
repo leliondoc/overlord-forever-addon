@@ -490,7 +490,6 @@ function Overlord.Sync:NewBoundedSessionLedger(maxEntries, reserve, ttl)
     return state
 end
 
-local recentKCredits = Overlord.Sync:NewBoundedSessionLedger(1024, 64, EK_DEDUP_WINDOW)
 local recentEKs = Overlord.Sync:NewBoundedSessionLedger(1024, 0, EK_DEDUP_WINDOW)
 priv.zsPayloadDedup = Overlord.Sync:NewBoundedSessionLedger(512, 0, priv.zsPayloadDedupSec)
 priv.zaPendingSenderWindows = Overlord.Sync:NewBoundedSessionLedger(512, 0, 30)
@@ -3383,9 +3382,6 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
             totalKills, totalBefore, classVerified and class or "", localeVerified and locTag or "",
             remoteEpoch, bucketEpochToken, levelToken)
     end
-    local killCreditNow = GetTime()
-    recentKCredits:Remember(playerName:lower(),
-        { ts = killCreditNow, skipZone = false }, killCreditNow, false)
     -- Activite uniquement apres toutes les validations K (epoch, identite, anti-spoof, total).
     if Overlord.FrontActivity and Overlord.FrontActivity.RecordKillActivity then
         Overlord.FrontActivity:RecordKillActivity(zoneId, playerName)

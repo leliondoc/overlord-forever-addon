@@ -4518,8 +4518,11 @@ local OUTPOST_CAPTURER_LEDGER_VERSION = 1
 -- (site, guild) pairs, events are captures. Beyond them a claim is refused, which
 -- every client decides alike. A rebuild of the SR snapshot waits a few seconds so
 -- a catch-up reply (hundreds of events) triggers a handful of rebuilds, not one per event.
-local OUTPOST_LEDGER_ROWS_MAX = 512
-local OUTPOST_LEDGER_EVENTS_MAX = 20000
+-- Bounded against invented guilds, sized for a launch week: ~14 sites times a few
+-- hundred active guilds exceeded 512 (site, guild) rows within days, after which
+-- new captures were refused until the reset and clients diverged by arrival order.
+local OUTPOST_LEDGER_ROWS_MAX = 4096
+local OUTPOST_LEDGER_EVENTS_MAX = 32000
 local OUTPOST_LEDGER_REBUILD_DEBOUNCE = 3
 -- Rows and site states of the release week (the 7 days up to this time) carry no
 -- capturer: they are dropped once at login and refused on the wire, on every client

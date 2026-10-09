@@ -502,10 +502,10 @@ print("Outpost claims: hourly budget per character holds against backdated claim
 resetWorld()
 lb:ResetOutpostLedgerCounters()
 local created = 0
-for i = 1, 520 do
-    if lb:RecordOutpostCapture("badlands", "Guild " .. i, "Alliance", now - 5000 - i, "global", third) then created = created + 1 end
+for i = 1, 4100 do
+    if lb:RecordOutpostCapture("badlands", "Guild " .. i, "Alliance", now - 50000 - i, "global", third) then created = created + 1 end
 end
-assert(created == 512, "the ledger accepted " .. created .. " rows")
+assert(created == 4096, "the ledger accepted " .. created .. " rows")
 assert(lb:RecordOutpostCapture("badlands", "Guild 1", "Alliance", now - 100, "global", third), "an existing row refused a new event")
 resetWorld()
 lb:ResetOutpostLedgerCounters()

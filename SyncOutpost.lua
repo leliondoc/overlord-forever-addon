@@ -10,8 +10,10 @@ local OP_ROUTINE_RELAY_INTERVAL = 12
 local VALID_OP_STATUS = { neutral = true, in_progress = true, held = true }
 local OC_DEDUP_SEC = 10
 local OP_DEDUP_SEC = 4
-local OP_DEDUP_MAX = 128
-local OC_DEDUP_MAX = 256
+-- Fail-closed when full: every player of a siege area ticks OP every 5 s, so two
+-- busy sieges filled 128 entries and a new site's first assault alert was dropped.
+local OP_DEDUP_MAX = 1024
+local OC_DEDUP_MAX = 512
 local lastStaleOutpostObserverPoll = 0
 local staleOutpostPullRound = 0
 local STALE_OUTPOST_OBSERVER_POLL_INTERVAL = 22

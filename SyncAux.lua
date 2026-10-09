@@ -1884,7 +1884,9 @@ function Overlord.Sync:RecordCaptureCreditProgressEvidence(sender, capturer, zon
     if not senderKey then return end
     local key = senderKey .. ":" .. zoneId .. ":" .. faction
     local now = GetTime()
-    BoundSecurityEvidenceTable(captureCreditProgressEvidence, 256, key)
+    -- One row per capturer of a running siege: a launch-size siege (hundreds of
+    -- players on the point) overflowed 256 and lost capture credit.
+    BoundSecurityEvidenceTable(captureCreditProgressEvidence, 2048, key)
     local row = captureCreditProgressEvidence[key]
     if not row or now - (row.lastSeen or 0) > 180 then
         row = { firstSeen = now, lastSeen = now, firstHold = remoteHold, maxHold = remoteHold, lastHold = remoteHold }
