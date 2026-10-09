@@ -2835,7 +2835,7 @@ function Overlord.ApplyGoldLocaleStrings()
     if Overlord.IsFrenchLocale() then
         Loc.GOLD_FULL = string.format("Coins au maximum (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
         Loc.GOLD_REINFORCE_TIP = string.format(
-            "Coûte %d coins. Votre prochaine capture de zone, capitale, avant-poste ou fortin se termine %d s plus tôt (temps minimum de maintien : %d s).",
+            "Coûte %d coins. Votre prochaine capture de zone, avant-poste ou fortin (hors capitales) se termine %d s plus tôt (temps minimum de maintien : %d s).",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
         Loc.GOLD_REINFORCE_SPENT = string.format("%d coins dépensés. Votre prochaine capture sera %d s plus courte.",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)
@@ -2851,7 +2851,7 @@ function Overlord.ApplyGoldLocaleStrings()
     elseif Overlord.IsSpanishLocale() then
         Loc.GOLD_FULL = string.format("Coins al máximo (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
         Loc.GOLD_REINFORCE_TIP = string.format(
-            "Cuesta %d coins. Tu próxima captura de zona, capital, avanzada o fortaleza termina %d s antes (tiempo mínimo de mantenimiento: %d s).",
+            "Cuesta %d coins. Tu próxima captura de zona, avanzada o fortaleza (no capitales) termina %d s antes (tiempo mínimo de mantenimiento: %d s).",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
         Loc.GOLD_REINFORCE_SPENT = string.format("%d coins gastados. Tu próxima captura será %d s más corta.",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)
@@ -2867,7 +2867,7 @@ function Overlord.ApplyGoldLocaleStrings()
     elseif Overlord.IsGermanLocale() then
         Loc.GOLD_FULL = string.format("Coin-Maximum erreicht (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
         Loc.GOLD_REINFORCE_TIP = string.format(
-            "Kostet %d Coins. Eure nächste Zonen-, Hauptstadt-, Außenposten- oder Gildenfestungs-Eroberung endet %d s früher (Mindesthaltezeit: %d s).",
+            "Kostet %d Coins. Eure nächste Zonen-, Außenposten- oder Gildenfestungs-Eroberung (keine Hauptstädte) endet %d s früher (Mindesthaltezeit: %d s).",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
         Loc.GOLD_REINFORCE_SPENT = string.format("%d Coins ausgegeben. Nächste Eroberung dauert %d s kürzer.",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)
@@ -2883,7 +2883,7 @@ function Overlord.ApplyGoldLocaleStrings()
     elseif Overlord.IsRussianLocale() then
         Loc.GOLD_FULL = string.format("Достигнут максимум coins (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
         Loc.GOLD_REINFORCE_TIP = string.format(
-            "Стоимость: %d coins. Ваш следующий захват зоны, столицы, аванпоста или гильдейской крепости завершится на %d сек раньше (минимальное время удержания: %d сек).",
+            "Стоимость: %d coins. Ваш следующий захват зоны, аванпоста или гильдейской крепости (кроме столиц) завершится на %d сек раньше (минимальное время удержания: %d сек).",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
         Loc.GOLD_REINFORCE_SPENT = string.format("Потрачено %d coins. Следующий захват займет на %d сек меньше времени.",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)
@@ -2899,7 +2899,7 @@ function Overlord.ApplyGoldLocaleStrings()
     elseif Overlord.IsPortugueseLocale() then
         Loc.GOLD_FULL = string.format("Limite de coins atingido (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
         Loc.GOLD_REINFORCE_TIP = string.format(
-            "Custa %d coins. Sua próxima captura de ponto, capital, posto ou forte termina %d segundos antes (tempo mínimo: %d s).",
+            "Custa %d coins. Sua próxima captura de ponto, posto ou forte (exceto capitais) termina %d segundos antes (tempo mínimo: %d s).",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
         Loc.GOLD_REINFORCE_SPENT = string.format("%d coins gastos. Sua próxima captura será %d s mais curta.",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)
@@ -2915,7 +2915,7 @@ function Overlord.ApplyGoldLocaleStrings()
     elseif Overlord.IsChineseLocale() then
         Loc.GOLD_FULL = string.format("Coin 已达上限（%d/%d）。", R.GOLD_MAX, R.GOLD_MAX)
         Loc.GOLD_REINFORCE_TIP = string.format(
-            "花费 %d coin。下次占领据点、首府、前哨或公会要塞时缩短 %d 秒（最短需 %d 秒）。",
+            "花费 %d coin。下次占领据点、前哨或公会要塞（首府除外）时缩短 %d 秒（最短需 %d 秒）。",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
         Loc.GOLD_REINFORCE_SPENT = string.format("已花费 %d coin。下次占领缩短 %d 秒。",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)
@@ -2931,7 +2931,7 @@ function Overlord.ApplyGoldLocaleStrings()
     else
         Loc.GOLD_FULL = string.format("Coin cap reached (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
         Loc.GOLD_REINFORCE_TIP = string.format(
-            "Costs %d coins. Your next zone, capital, outpost, or Guild Keep capture finishes %d seconds sooner (minimum hold time %d s).",
+            "Costs %d coins. Your next zone, outpost, or Guild Keep capture (not capitals) finishes %d seconds sooner (minimum hold time %d s).",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
         Loc.GOLD_REINFORCE_SPENT = string.format("%d coins spent. Next capture will be %d s shorter.",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)

@@ -1119,8 +1119,11 @@ function Overlord.ZoneControl:StartHoldTimer(zone, suppressChat)
             zone.holdTimeRequired = 120
         end
 
-        -- Attaque d'or : reduit aussi les capitales. Calcul unique au debut de la vague.
-        if Overlord.Ressources and Overlord.Ressources.ConsumeCaptureReduction then
+        -- Attaque d'or : calcul unique au debut de la vague. Jamais sur une capitale :
+        -- le reseau n'y accepte que la duree canonique (CaptureLease
+        -- NormalizeCaptureRequirement), une capitale prise avec l'Attaque restait
+        -- capturee chez le seul capteur. L'Attaque reste prete pour la zone suivante.
+        if not zone.isCapital and Overlord.Ressources and Overlord.Ressources.ConsumeCaptureReduction then
             local minHold = (Overlord.RessourcesConstants
                 and Overlord.RessourcesConstants.REINFORCE_MIN_HOLD) or 30
             zone.holdTimeRequired = Overlord.Ressources:ConsumeCaptureReduction(
