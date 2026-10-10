@@ -184,6 +184,11 @@ jobs:
           lua5.1 tests/forever_display_new_names.test.lua
           lua5.1 tests/forever_version_notice.test.lua
           lua5.1 tests/forever_ladder_sync_badge.test.lua
+          lua5.1 tests/forever_map_login_dated_save.test.lua
+          lua5.1 tests/forever_map_content_convergence.test.lua
+          lua5.1 tests/forever_map_two_faction_hole.test.lua
+          lua5.1 tests/forever_group_capture_final.test.lua
+          lua5.1 tests/forever_map_arc_names.test.lua
 
           mapfile -t TEST_FILES < <(find tests -maxdepth 1 -type f -name '*.test.mjs' -print | sort)
           node --test "${TEST_FILES[@]}"
