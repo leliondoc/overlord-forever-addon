@@ -458,6 +458,13 @@ tick(100)
 assert(sync:PollIfStaleObserverOutpost(999, true) == true, "the probe was not sent")
 assert(#requests == 1 and requests[1].betaTarget == "Enemy Peer",
     "the stale probe did not pull the enemy neighbour alone (no broadcast herd)")
+-- A pull the relay refuses is not a spent probe (and is not replaced by a broadcast).
+sync.SendSyncRequest = function(_, opts) requests[#requests + 1] = opts; return false end
+requests = {}
+tick(100)
+assert(sync:PollIfStaleObserverOutpost(999, true) == false and #requests == 1 and requests[1].betaTarget,
+    "a refused stale pull counted as a probe or fell back to a broadcast")
+sync.SendSyncRequest = function(_, opts) requests[#requests + 1] = opts; return true end
 -- Without any direct neighbour, the broadcast request is the fallback.
 Overlord.Relay.GetDirectPeers = function() return {} end
 requests = {}

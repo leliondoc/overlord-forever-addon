@@ -961,10 +961,11 @@ function Overlord.Sync:FlushPendingOutpostRestoreBroadcasts()
     end
 end
 
--- Returns true when a request was sent (the caller bounds its attempts). Besides
--- the channel request, withPull adds one targeted pull to a direct neighbour (the
--- other faction first: a quiet assault is usually theirs), which opens the window
--- through which the held final, a capture claim, may be believed (1.7.2).
+-- Returns true when a request was sent (the caller bounds its attempts). withPull
+-- sends one targeted pull to a direct neighbour (the other faction first: a quiet
+-- assault is usually theirs), which opens the window through which the held final,
+-- a capture claim, may be believed (1.7.2). The channel request is sent only without
+-- withPull or when no neighbour is known.
 function Overlord.Sync:PollIfStaleObserverOutpost(secondsSinceOp, withPull)
     local isLarge = IsOpLargeEvent()
     local minInterval = isLarge and STALE_OUTPOST_OBSERVER_POLL_INTERVAL_LARGE or STALE_OUTPOST_OBSERVER_POLL_INTERVAL
@@ -994,8 +995,9 @@ function Overlord.Sync:PollIfStaleObserverOutpost(secondsSinceOp, withPull)
         local list = #enemies > 0 and enemies or allies
         if #list > 0 then
             staleOutpostPullRound = staleOutpostPullRound + 1
-            self:SendSyncRequest({ betaTarget = list[(staleOutpostPullRound % #list) + 1] })
-            return true
+            -- A pull the relay refused (busy map lane) is not a spent probe: the next
+            -- try waits one interval; no broadcast in its place (the herd).
+            return self:SendSyncRequest({ betaTarget = list[(staleOutpostPullRound % #list) + 1] }) and true or false
         end
     end
     self:SendSyncRequest({
