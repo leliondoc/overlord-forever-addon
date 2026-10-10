@@ -1402,7 +1402,9 @@ function Overlord.Leaderboard:_DropHotRebuildJournal(owner)
 end
 
 -- Barriere login : aucune initialisation Sync avant que les lectures LK/LC/CR/GR
--- aient leurs index complets. Le travail est borne a 64 lignes ou 1,25 ms/frame.
+-- aient leurs index complets. Le travail est borne a 1,25 ms/frame, et a 64 lignes
+-- en jeu ; pendant la barriere de login (Sync attend), 256 lignes bon marche par
+-- tranche : la barriere se leve environ quatre fois plus tot.
 function Overlord.Leaderboard:EnsureNetworkHotIndexesPrepared()
     if dedupKillMaxIndex and dedupCaptureMaxIndex and dedupCanonicalValid
         and self._dedupMetaIndex and not self._dedupMetaStale
@@ -1434,7 +1436,7 @@ function Overlord.Leaderboard:EnsureNetworkHotIndexesPrepared()
             local function YieldWork()
                 processed = processed + 1
                 local elapsed = debugprofilestop and (debugprofilestop() - started) or 0
-                if processed >= 64 or elapsed >= 1.25 then
+                if processed >= (Overlord._deferredModuleInitDone and 64 or 256) or elapsed >= 1.25 then
                     processed = 0
                     coroutine.yield()
                     started = debugprofilestop and debugprofilestop() or 0
