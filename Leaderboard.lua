@@ -5087,22 +5087,24 @@ function Overlord.Leaderboard:EnsureOutpostLedgerPrepared(requireCurrent)
         end, yieldWork)
 
         local blocks, subPages = {}, {}
-        local function stableBucket(value, bucketCount)
+        -- One djb2 hash per row, both buckets taken from it (same values as before).
+        -- A ~50-byte key hashes in a few microseconds: no yield inside (it yielded per
+        -- character, twice per row: most of this build's slices at launch size).
+        local function stableHash(value)
             local h = 5381
             value = tostring(value or "")
             for i = 1, #value do
                 h = (h * 33 + string.byte(value, i)) % 2147483647
-                yieldWork()
             end
-            return h % bucketCount
+            return h
         end
         for rowIndex, row in ipairs(rows) do
             -- Les 16 premieres lignes sont toujours emises et ne doivent pas etre
             -- recomptees dans les pages de rattrapage.
             if rowIndex > 16 then
-                local bucket = stableBucket(row._syncKey, 256)
-                local blockIndex = math.floor(bucket / 16) + 1
-                local secondary = math.floor(stableBucket(row._syncKey, 4096) / 256) % 16 + 1
+                local h = stableHash(row._syncKey)
+                local blockIndex = math.floor((h % 256) / 16) + 1
+                local secondary = math.floor((h % 4096) / 256) % 16 + 1
                 blocks[blockIndex] = blocks[blockIndex] or {}
                 subPages[blockIndex] = subPages[blockIndex] or {}
                 subPages[blockIndex][secondary] = subPages[blockIndex][secondary] or {}

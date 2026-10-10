@@ -868,4 +868,46 @@ local cut = op:SanitizeGuildName(cyrillic)
 assert(#cut <= 24 and #cut >= 20, "the cut name has an odd length: " .. #cut)
 assert(sync:IsValidGuildSyncToken(cut), "a guild name cut in the middle of a character is refused: " .. #cut)
 print("Outpost claims: byte-limited guild names stay valid")
-print("Forever outpost capturer claims: forged rows refused, capturer believed live, catch-up by content, convergent ledger, purge, bounded probes")
+-- ===== Ledger catch-up pages: every row past the first 16 sits in the block and
+-- sub-page of its key's djb2 hash (the bucketing every client shares), and the
+-- build no longer yields once per character of each key.
+do
+    local letters = "abcdefghijklmnopqrst"
+    local stamp = EPOCH + 3600
+    for i = 0, 99 do
+        local first, second = math.floor(i / 20) + 1, i % 20 + 1
+        local g = "Longnamed Guild " .. letters:sub(first, first) .. letters:sub(second, second)
+        lb:RecordOutpostCapture("badlands", g, "Alliance", stamp + i, "global", third)
+        lb:RecordOutpostCapture("silverpine", g, "Alliance", stamp + 200 + i, "global", third)
+    end
+    local slices = 0
+    local realAfterTimer = C_Timer.After
+    C_Timer.After = function(_, fn) slices = slices + 1; fn() end
+    lb._outpostLedgerPrepared = false
+    lb:EnsureOutpostLedgerPrepared(true)
+    assert(lb:EnsureOutpostLedgerPrepared(true) == true, "the ledger snapshot was not rebuilt")
+    C_Timer.After = realAfterTimer
+    local snap = assert(lb._outpostSyncSnapshot, "no ledger snapshot")
+    local function djb2(v)
+        local h = 5381
+        for i = 1, #v do h = (h * 33 + v:byte(i)) % 2147483647 end
+        return h
+    end
+    local checked, keyBytes = 0, 0
+    for i, row in ipairs(snap.rows) do
+        if i > 16 then
+            local h = djb2(row._syncKey)
+            local b, sp = math.floor((h % 256) / 16) + 1, math.floor((h % 4096) / 256) % 16 + 1
+            local inBlock, inPage = false, false
+            for _, r in ipairs(snap.blocks[b]) do if r == row then inBlock = true end end
+            for _, r in ipairs(snap.subPages[b][sp]) do if r == row then inPage = true end end
+            assert(inBlock and inPage, "a ledger row left its hash bucket: " .. row._syncKey)
+            checked, keyBytes = checked + 1, keyBytes + #row._syncKey
+        end
+    end
+    assert(checked >= 20, "fixture: too few ledger rows past the first 16: " .. checked)
+    -- Hashing alone used to cost 2 yields per key byte (64 per slice).
+    assert(slices < keyBytes / 32, "the ledger build still yields inside key hashing: " .. slices .. " slices for "
+        .. keyBytes .. " key bytes")
+end
+print("Forever outpost capturer claims: forged rows refused, capturer believed live, catch-up by content, convergent ledger, purge, bounded probes, ledger buckets")
