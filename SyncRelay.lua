@@ -1283,7 +1283,7 @@ function dedup.abandon(tasks, from)
 end
 local function tasksFor(p, wire)
     local tasks, fragments = {}, {}
-    local ckey, pathFriends, trimmed, coverId, coverCarrier, groupSuppressed
+    local ckey, pathFriends, trimmed, coverId, coverCarrier, groupSuppressed, unheard
     -- Same test as the lanes (v5, v6 and v7 pages): a page is never broadcast.
     local paged = isPagedCatchup(p)
     local count = math.ceil(#wire / FRAGMENT_CHUNK)
@@ -1449,6 +1449,15 @@ local function tasksFor(p, wire)
                         and channelHeard[character:lower()] or nil
                     if heardAt ~= nil and GetTime() - heardAt <= 300 then
                         net.stats.friendCopiesOnChannelSkipped = (net.stats.friendCopiesOnChannelSkipped or 0) + 1
+                    elseif #p.path > 1 and not bnetAlive(id) then
+                        -- A copy relayed for someone else rotates among friends heard
+                        -- under Overlord only: every hearer forwards it, and three
+                        -- copies each to friends without the addon (or on another
+                        -- ruleset, or in an instance) filled queues at launch scale.
+                        -- Our own packets keep the full rotation and the presence
+                        -- probes, which find new bridges.
+                        unheard = true
+                        net.stats.friendCopiesUnheardSkipped = (net.stats.friendCopiesUnheardSkipped or 0) + 1
                     else
                         others[#others + 1] = id
                     end
@@ -1518,6 +1527,8 @@ local function tasksFor(p, wire)
     end
     -- Only a background group copy was left out on purpose: not a loss.
     if #tasks == 0 and groupSuppressed then return tasks, "suppressed" end
+    -- Only friends never heard under Overlord were left: not a loss either.
+    if #tasks == 0 and unheard then return tasks, "unheard" end
     return tasks, #tasks == 0 and (routeFailure or "no_transport") or nil
 end
 local function emit(task)
@@ -1595,6 +1606,7 @@ local function noTask(p, tasks, reason)
         net.stats.groupCopySuppressed = (net.stats.groupCopySuppressed or 0) + 1
         return true
     end
+    if reason == "unheard" then return true end
     if reason ~= "redundant" then return rejectNoTask(p, reason) end
     dedup.commit(tasks)
     net.stats.contentDedupSkipped = (net.stats.contentDedupSkipped or 0) + 1

@@ -149,7 +149,10 @@ do
     assert(#d.received == beforeD, "A death notice (EK) was re-forwarded through the gateway")
     assert(#b.received == beforeB + 1, "The gateway itself lost the death notice")
 end
+-- The gateways' Battle.net friends run Overlord (heard): a copy relayed for someone
+-- else rotates among such friends only.
 for _, kind in ipairs(kinds) do
+    b.Relay:NoteBNetHeard(c); b.Relay:NoteBNetHeard(us); c.Relay:NoteBNetHeard(b)
     assert(a.Relay:Send(kind, string.rep("x", 450)))
     drain()
     local received = d.received[#d.received]
@@ -270,14 +273,19 @@ do
         return originalSendToBNet(self, other, kind, wire)
     end
     local base = time()
+    -- b's Battle.net friends run Overlord (heard): relayed copies rotate among them.
+    local function friendsHeard() b.Relay:NoteBNetHeard(c); b.Relay:NoteBNetHeard(us) end
     -- emitted at T (arrives 20 s late), T+45 (no forward), T+90 (arrives only 75 s after T's arrival)
     local w1 = table.concat({ "global", "delay-1", tostring(base - 20), "*", "Delay Origin", "SH", "beat" }, "|")
+    friendsHeard()
     assert(b.Relay:Receive(w1, "Delay Origin", "CHANNEL")); drain()
     now = now + 45
     local w2 = table.concat({ "global", "delay-2", tostring(base + 25), "*", "Delay Origin", "SH", "beat" }, "|")
+    friendsHeard()
     assert(b.Relay:Receive(w2, "Delay Origin", "CHANNEL")); drain()
     now = now + 30
     local w3 = table.concat({ "global", "delay-3", tostring(base + 70), "*", "Delay Origin", "SH", "beat" }, "|")
+    friendsHeard()
     assert(b.Relay:Receive(w3, "Delay Origin", "CHANNEL")); drain()
     b.Sync.SendToBNet = originalSendToBNet
     local seenFirst, seenSecond, seenThird = false, false, false
@@ -979,6 +987,44 @@ do
     for _, row in ipairs(hearer.received) do if row.payload == "zone:Alliance:real" then got = got + 1 end end
     assert(got == 1, "The genuine packet was not delivered exactly once after a same-second forgery: " .. got)
 end
+-- A copy relayed for someone else rotates among Battle.net friends heard under
+-- Overlord only (no copies to friends without the addon, on another ruleset or in an
+-- instance); skipping them is not a loss. Our own packets keep the full rotation.
+do
+    local hearer = client("Rotate Tester", "rotate")
+    hearer.PlayerFaction = "Alliance"
+    local quietAlly = client("Quietally Tester", "rotate-qa")
+    quietAlly.faction = "Alliance"
+    local liveAlly = client("Liveally Tester", "rotate-la")
+    liveAlly.faction = "Alliance"
+    local quietEnemy = client("Quietenemy Tester", "rotate-qe")
+    quietEnemy.faction, quietEnemy.PlayerFaction = "Horde", "Horde"
+    hearer.friends = { quietAlly, liveAlly, quietEnemy }
+    local got = {}
+    local send = hearer.Sync.SendToBNet
+    function hearer.Sync:SendToBNet(other, kind, wire)
+        got[other] = (got[other] or 0) + 1
+        return send(self, other, kind, wire)
+    end
+    hearer.Relay:NoteBNetHeard(liveAlly)
+    assert(hearer.Relay:Receive("global|rot-1|" .. time() .. "|*|Rotate Origin|C|rot_zone:Alliance:x",
+        "Rotate Origin", "CHANNEL"))
+    drain()
+    assert(not got[quietAlly] and not got[quietEnemy], "a relayed copy went to friends never heard under Overlord")
+    assert(got[liveAlly], "a relayed copy did not reach the friend heard under Overlord")
+    -- Only unheard friends left: no copy, and not counted as a loss.
+    hearer.friends = { quietAlly, quietEnemy }
+    got = {}
+    local dropped = hearer.Relay.stats.dropped
+    assert(hearer.Relay:Receive("global|rot-2|" .. time() .. "|*|Rotate Origin|C|rot_zone:Alliance:y",
+        "Rotate Origin", "CHANNEL"))
+    drain()
+    assert(next(got) == nil and hearer.Relay.stats.dropped == dropped,
+        "skipping friends never heard under Overlord was sent or counted as a loss")
+    -- Our own packet still rotates among every friend.
+    assert(hearer.Relay:Send("C", "own_zone:Alliance:z")); drain()
+    assert(got[quietAlly] or got[quietEnemy], "our own packet lost its rotating Battle.net copies")
+end
 -- Battle.net liveness memory is bounded (64 accounts, every Battle.net sender): when
 -- full of fresh senders, the one heard longest ago gives way, so a friend who just
 -- spoke is always recorded as a live bridge.
@@ -1008,6 +1054,7 @@ do
     end
     local serialNo = 0
     local function heard(kind, payload)
+        hearer.Relay:NoteBNetHeard(enemy) -- a live bridge for the whole block
         serialNo = serialNo + 1
         local wire = "global|elect-" .. serialNo .. "|" .. time() .. "|*|Origin Tester|" .. kind .. "|" .. payload
         assert(hearer.Relay:Receive(wire, "Origin Tester", "CHANNEL"), "Election fixture packet refused")

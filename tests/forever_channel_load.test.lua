@@ -57,7 +57,12 @@ local bnetFriends = { [1] = { "Horde", "Bridge Friend" }, [2] = { "Alliance", "A
     [3] = { "Alliance", "Ally Two" } }
 sync.GetChannelId = function() return 7 end
 sync.GetPlayerFullName = function() return "Local Tester" end
-sync.GetBetaBNetTargets = function() return { 1, 2, 3 } end
+sync.GetBetaBNetTargets = function()
+    -- These friends run Overlord (heard over Battle.net): relayed copies rotate among
+    -- such friends only.
+    if Overlord.Relay then for id = 1, 3 do Overlord.Relay:NoteBNetHeard(id) end end
+    return { 1, 2, 3 }
+end
 sync.GetBetaBNetTargetInfo = function(_, id) return bnetFriends[id][1], bnetFriends[id][2] end
 local bnetSent = {}
 sync.SendToBNet = function(_, id, _, data)

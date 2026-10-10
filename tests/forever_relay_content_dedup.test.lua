@@ -20,7 +20,12 @@ function sync:GetPlayerFullName() return "Relay Tester" end
 function sync:CanonicalForeverName(name) return name end
 function sync:ForeverIdentitiesMatch(a, b) return a:lower() == b:lower() end
 function sync:GetChannelId() return nil end
-function sync:GetBetaBNetTargets() return friends end
+function sync:GetBetaBNetTargets()
+    -- These friends run Overlord (heard over Battle.net): relayed copies rotate among
+    -- such friends only.
+    if Overlord.Relay then for _, id in ipairs(friends) do Overlord.Relay:NoteBNetHeard(id) end end
+    return friends
+end
 function sync:GetBetaBNetTargetInfo(id) return "Alliance", names[id] end
 function sync:SendToBNet(id, kind, wire)
     assert(kind == "BR")

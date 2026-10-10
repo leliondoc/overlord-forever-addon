@@ -26,6 +26,8 @@ function sync:SendToBNet(_, kind, wire)
 end
 assert(loadfile(os.getenv("OVERLORD_AUDIT_BETA_SOURCE") or "SyncRelay.lua"))()
 local net, serial = Overlord.Relay, 0
+-- The Battle.net friend runs Overlord (heard): relayed copies rotate among such friends only.
+net:NoteBNetHeard(1)
 for _, name in ipairs({ "Reader Tester", "Second Tester" }) do
     net.peers[name:lower()] = { at = now, via = name, name = name, transport = "BNET", bnet = 1 }
 end

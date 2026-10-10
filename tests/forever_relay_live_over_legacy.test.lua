@@ -17,7 +17,12 @@ function sync:GetPlayerFullName() return "Gateway Tester" end
 function sync:CanonicalForeverName(name) return name end
 function sync:ForeverIdentitiesMatch(a, b) return a:lower() == b:lower() end
 function sync:GetChannelId() return nil end
-function sync:GetBetaBNetTargets() return { 1 } end
+function sync:GetBetaBNetTargets()
+    -- The friend runs Overlord (heard over Battle.net): relayed copies rotate among
+    -- such friends only.
+    if Overlord.Relay then Overlord.Relay:NoteBNetHeard(1) end
+    return { 1 }
+end
 function sync:GetBetaBNetTargetInfo() return "Horde", "Reader Tester" end
 function sync:SendToBNet(_, kind, wire)
     sent[#sent + 1] = { wire = wire, at = now }

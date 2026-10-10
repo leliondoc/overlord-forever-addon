@@ -94,6 +94,9 @@ print("Beta broadcast retry: refused forward retried by a second copy, no double
 function s:GetBetaBNetTargets() return { 1 } end
 function s:GetBetaBNetTargetInfo() return "Horde", "Downstream Player" end
 for i, transport in ipairs({ "CHANNEL", "PARTY", "WHISPER", "BNET" }) do
+    -- The downstream friend runs Overlord (heard over Battle.net): relayed copies
+    -- rotate among such friends only.
+    net:NoteBNetHeard(1)
     local id, authoredAt = "fragment-retry-" .. i, time()
     local function fragments(sender)
         local packet = table.concat({ "global", id, tostring(authoredAt), "*",
