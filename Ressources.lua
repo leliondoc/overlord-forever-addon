@@ -170,7 +170,8 @@ end
 
 -- Applique le stock annonce par un autre joueur (meme reserve partagee : on ne fait qu'abaisser)
 function Overlord.Ressources:ApplyRemoteMineStock(mineId, remoteStock)
-    if not mineId then return end
+    -- Known mines only: invented ids were kept, saved and walked every second.
+    if not mineId or not (Overlord.Zones and Overlord.Zones.GetMine and Overlord.Zones:GetMine(mineId)) then return end
     remoteStock = tonumber(remoteStock)
     if remoteStock == nil then return end
     remoteStock = math.max(0, math.min(MINE_STOCK_MAX, math.floor(remoteStock + 0.5)))
@@ -314,8 +315,11 @@ function Overlord.Ressources:RestoreResources()
         end
         OverlordDB.mineStocks.fargodeep = nil
         for k, v in pairs(OverlordDB.mineStocks) do
-            mineStocks[k] = math.max(0, math.min(MINE_STOCK_MAX, tonumber(v) or MINE_STOCK_MAX))
-            if mineStocks[k] < MINE_STOCK_MAX then depletedMineIds[k] = true end
+            -- Saves polluted by invented ids (before 1.8.1) drop them here.
+            if not (Overlord.Zones and Overlord.Zones.GetMine) or Overlord.Zones:GetMine(k) then
+                mineStocks[k] = math.max(0, math.min(MINE_STOCK_MAX, tonumber(v) or MINE_STOCK_MAX))
+                if mineStocks[k] < MINE_STOCK_MAX then depletedMineIds[k] = true end
+            end
         end
     end
     if OverlordDB.mineStockTimers then

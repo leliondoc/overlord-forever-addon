@@ -801,6 +801,10 @@ function Overlord.Sync:OnReceiveMining(payload, sender)
     local mineId, factionCode = strsplit(":", payload, 3)
     mineId = mineId and mineId:match("^%s*(.-)%s*$") or mineId
     if not mineId or mineId == "" then return end
+    -- Only mines this addon knows: an invented id went straight into the chat line
+    -- (escape codes included) and into a cooldown table never pruned.
+    local mine = Overlord.Zones.GetMine and Overlord.Zones:GetMine(mineId)
+    if not mine then return end
 
     local senderFaction = nil
     if factionCode == "A" then senderFaction = "Alliance"
@@ -813,8 +817,7 @@ function Overlord.Sync:OnReceiveMining(payload, sender)
     local now = GetTime()
     if (p.mineAlertLast[mineId] or 0) + p.mineAlertCooldown > now then return end
     p.mineAlertLast[mineId] = now
-    local mine = Overlord.Zones:GetMine(mineId)
-    local mineName = mine and mine.name or mineId
+    local mineName = mine.name or mineId
     local line = (senderFaction == "Horde" and L and L.ENEMY_MINING_HORDE)
         or (senderFaction == "Alliance" and L and L.ENEMY_MINING_ALLIANCE)
     if line then
