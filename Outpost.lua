@@ -316,7 +316,6 @@ local function defaultState()
         previousExpiresAt = 0,
         previousOwnerPool = "",
         opRelayCapturerName = nil,
-        opRelayCapturerShard = nil,
         opOfficialCapturerName = nil,
         heldCapturerName = nil,
         pool = "",
@@ -346,7 +345,6 @@ function Overlord.Outpost:ClearOpCapturerFields(st)
     if not st then return end
     st.opOfficialCapturerName = nil
     st.opRelayCapturerName = nil
-    st.opRelayCapturerShard = nil
 end
 
 -- Nom capteur affiche (alertes, popup shard) : capteur local ou dernier relais OP.
@@ -368,18 +366,6 @@ function Overlord.Outpost:GetEffectiveCapturerName(st)
         if t ~= "" and #t >= 2 and #t <= 50 then return t end
     end
     return ""
-end
-
-function Overlord.Outpost:GetEffectiveCapturerShard(st)
-    if not st then return nil end
-    local sid = tonumber(st.opRelayCapturerShard)
-    if sid then return sid end
-    local name = self:GetEffectiveCapturerName(st)
-    if name ~= "" and Overlord.Shard and Overlord.Shard.ResolveKnownShardPlayer then
-        local _, resolvedSid = Overlord.Shard:ResolveKnownShardPlayer(name, true)
-        return tonumber(resolvedSid)
-    end
-    return nil
 end
 
 function Overlord.Outpost:GetSite(siteKey)
@@ -1698,7 +1684,6 @@ function Overlord.Outpost:ApplyRemoteState(siteKey, remote, fromSync)
         and remote.opRelayCapturerName ~= "" then
         st.opRelayCapturerName = remote.opRelayCapturerName
     end
-    if remote.opRelayCapturerShard then st.opRelayCapturerShard = remote.opRelayCapturerShard end
     if fromSync then
         -- Ne pas retirer l'autorite locale pendant un assaut actif (aligne Guild Keep).
         if not localAuthorityRejected and not localAssaultActive then

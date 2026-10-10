@@ -1439,17 +1439,6 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
         self:RecordCaptureCreditProgressEvidence(
             sender, relayCapturer, objective.id, remoteFac, remote.holdTimeElapsed)
     end
-    if relayCapturer ~= "" and Overlord.Shard and Overlord.Shard.ResolveKnownShardPlayer then
-        local _, sid = Overlord.Shard:ResolveKnownShardPlayer(relayCapturer, true)
-        if sid then remote.opRelayCapturerShard = sid end
-    end
-    if not remote.opRelayCapturerShard and sender and sender ~= ""
-        and Overlord.Shard and Overlord.Shard.GetKnownPlayerShard then
-        local sid = Overlord.Shard:GetKnownPlayerShard(sender)
-        if sid and (relayCapturer == "" or ownerSourceVerified) then
-            remote.opRelayCapturerShard = sid
-        end
-    end
     -- A capture the ledger holds as the newest tenant of the site is the truth the
     -- map must follow, even when the map, which may have missed a capture in
     -- between, would refuse the takeover on its own (same-faction rule).

@@ -19,7 +19,6 @@ local delegates = {
     GetDisplayName = "GetDisplayName", GetShortDisplayName = "GetShortDisplayName",
     SanitizeGuildName = "SanitizeGuildName", GetLocalPlayerGuild = "GetLocalPlayerGuild",
     GetEffectiveCapturerName = "GetEffectiveCapturerName",
-    GetEffectiveCapturerShard = "GetEffectiveCapturerShard",
     GetDefaultHoldTimeRequired = "GetDefaultHoldTimeRequired",
     GetBaseHoldTimeRequired = "GetBaseHoldTimeRequired",
     GetMinimumHoldTimeRequired = "GetMinimumHoldTimeRequired",
@@ -35,19 +34,13 @@ local delegates = {
     GetKeepMapSubtitle = "GetOutpostMapSubtitle", GetKeepHudLabel = "GetOutpostMapSubtitle",
     GetObserverHoldTimeElapsed = "GetObserverHoldTimeElapsed",
     CanPlayerStartCapture = "CanPlayerStartCapture",
-    CanPlayerAssaultKeepState = "CanPlayerAssaultOutpostState",
-    CanPlayerContestKeep = "CanPlayerContestOutpost",
-    IsPlayerDefendingHeldKeep = "IsPlayerDefendingHeldOutpost",
-    IsPlayerKeepAssailant = "IsPlayerOutpostAssailant",
-    IsKeepStateAwaitingNetworkSnapshot = "IsOutpostStateAwaitingNetworkSnapshot",
-    MarkDirty = "MarkDirty", SaveKeeps = "SaveOutposts",
+    MarkDirty = "MarkDirty",
 }
 for name, target in pairs(delegates) do
     local method = target
     GK[name] = function(_, ...) return OP[method](OP, ...) end
 end
 function GK:GetSite(key) return siteByKey[key] end
-function GK:GetDefaultSiteKey() return GetDefaultSiteKey() end
 function GK:GetDefaultSite() return siteByKey[GetDefaultSiteKey()] end
 function GK:ResolveSiteByMapID(mapID)
     local site = OP:ResolveSiteByMapID(mapID)
