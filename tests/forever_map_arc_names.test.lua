@@ -32,12 +32,23 @@ assert(not markers:ApplyCompactDefaultOnce() and markers:GetWorldMapDisplayMode(
     "the full display chosen after the update was reset again")
 OverlordDB.config.showMapZoneTitles = nil
 
+-- The letters live in a holder frame centred on the circle; the fake one hands its
+-- font strings to the fake overlay and records its scale.
+CreateFrame = function(_, _, parent)
+    local holder = { scale = 1 }
+    function holder:SetSize() end
+    function holder:SetPoint() end
+    function holder:SetScale(scale) self.scale = scale end
+    function holder:CreateFontString(...) return parent:CreateFontString(...) end
+    return holder
+end
+
 -- A fake overlay: a letter is half its font size wide and records where it is put.
 local function overlay(name, noRotation)
     local o = { zone = { name = name }, made = {} }
     function o:CreateFontString()
         local g = { shown = false }
-        function g:SetFont(path, size, flags) self.font, self.size, self.flags = path, size, flags end
+        function g:SetFont(path, size, flags) self.font, self.size, self.flags, self.fonts = path, size, flags, (self.fonts or 0) + 1 end
         function g:SetTextColor(r, gg, b) self.color = { r, gg, b } end
         function g:SetShadowColor() end
         function g:SetShadowOffset() end
@@ -157,6 +168,16 @@ assert(read(top) .. " " .. read(bottom) == "Garnison du Ruisseau de l'Ouest" and
 checkTop(top, 40, "long name")
 checkBottom(bottom, 40, "long name")
 assert(top[1].size < 13.5 and top[1].size >= 6, "the font was not reduced to keep the name in the circle")
+-- A name that needed a smaller font is not laid out again at every step of a zoom
+-- (it would set its fonts twice each time): its holder is scaled instead.
+do
+    local fonts = top[1].fonts
+    markers.RescaleZoneArc(long, 81, 135, true)
+    assert(near(long.arcFrame.scale, 81 / 80) and top[1].fonts == fonts,
+        "a name with a reduced font was laid out again during a zoom")
+    markers.LayoutZoneArcName(long, 80, 133, true)
+    assert(long.arcFrame.scale == 1)
+end
 -- The same name in a small circle cannot be held: against the edge, outside, two arcs.
 markers.LayoutZoneArcName(long, 36, 60, true)
 local rings, hidden = {}, 0
@@ -172,11 +193,52 @@ table.sort(rings)
 assert(hidden == 1 and rings[1] > 36 * 0.54 and not near(rings[1], rings[#rings]),
     "a name no circle can hold was not written outside on two arcs")
 
--- (4b) During an animated zoom the letters are hidden and laid out once it settles
--- (the layout used to be redone up to twenty times a second).
+-- (4b) During an animated zoom the letters stay on their circle, never hidden. While
+-- the font size does not change they are only moved to their exact place (no font,
+-- no measure); when it changes, their holder is scaled (one call per point). The
+-- exact layout is redone once the zoom has settled, at scale 1.
 do
-    local clock = 500
-    local realTime = GetTime
+    -- Same font size (small circles keep 7 pt): moved exactly, nothing else touched.
+    local small = overlay("Refuge")
+    markers.RescaleZoneArc(small, 36, 60, true)
+    assert(small.arcFrame == nil and #small.made == 0, "a zoom laid out a name that was never shown")
+    markers.LayoutZoneArcName(small, 30, 50, true)
+    local letter = small.made[1]
+    local fonts = letter.fonts
+    assert(letter.size == 7 and near(radius(letter), 15 - 1 - 3.5), "fixture: a 7 pt name inside a small circle")
+    markers.RescaleZoneArc(small, 36, 60, true)
+    assert(small.arcFrame.scale == 1 and near(radius(letter), 18 - 1 - 3.5) and #shown(small) == 6,
+        "with the same font the letters were not moved to their exact place during the zoom")
+    assert(letter.fonts == fonts, "moving the letters during a zoom set their font again")
+    -- The font size changes: the holder is scaled, no letter is touched.
+    local zoomed = overlay("Refuge")
+    markers.LayoutZoneArcName(zoomed, 60, 100, true)
+    local first = zoomed.made[1]
+    local x, y, size = first.x, first.y, first.size
+    markers.RescaleZoneArc(zoomed, 90, 150, true)
+    assert(zoomed.arcFrame.scale == 1.5, "the letters did not follow the circle during the zoom: " .. tostring(zoomed.arcFrame.scale))
+    assert(first.x == x and first.y == y and first.size == size and #shown(zoomed) == 6,
+        "letters were moved, resized or hidden while their holder was scaled")
+    markers.RescaleZoneArc(zoomed, 45, 75, true)
+    assert(zoomed.arcFrame.scale == 0.75)
+    -- The zoom settles: exact layout at the new size, holder back to scale 1.
+    markers.LayoutZoneArcName(zoomed, 90, 150, true)
+    assert(zoomed.arcFrame.scale == 1 and first.size == 15 and near(radius(first), 45 - 1 - 7.5),
+        "the settled layout kept the zoom scale or the old size")
+    -- Back to the size it was laid out at: nothing to redo, but the scale is reset.
+    markers.RescaleZoneArc(zoomed, 120, 200, true)
+    assert(zoomed.arcFrame.scale > 1.3)
+    markers.LayoutZoneArcName(zoomed, 90, 150, true)
+    assert(zoomed.arcFrame.scale == 1, "a zoom that came back to the same size left the letters scaled")
+    -- A change of size no scale should show (window resized): hidden until it settles.
+    markers.RescaleZoneArc(zoomed, 600, 1000, true)
+    assert(#shown(zoomed) == 0, "letters were scaled more than four times")
+    markers.LayoutZoneArcName(zoomed, 90, 150, true)
+    assert(#shown(zoomed) == 6 and zoomed.arcFrame.scale == 1, "the name did not come back once the size settled")
+    -- The banner shows during the zoom (hover, capture): the letters go.
+    markers.RescaleZoneArc(zoomed, 100, 166, false)
+    assert(#shown(zoomed) == 0, "the curved name stayed under the banner during a zoom")
+    local clock, realTime = 500, GetTime
     GetTime = function() return clock end
     assert(markers:SettleZoneArcs() == false, "a settle pass ran with nothing pending")
     GetTime = realTime
