@@ -173,6 +173,7 @@ jobs:
           lua5.1 tests/forever_manual_capture_guard.test.lua
           lua5.1 tests/forever_escape_keyboard.test.lua
           lua5.1 tests/forever_mine_ids.test.lua
+          lua5.1 tests/forever_version_notice.test.lua
           lua5.1 tests/forever_ladder_sync_badge.test.lua
 
           mapfile -t TEST_FILES < <(find tests -maxdepth 1 -type f -name '*.test.mjs' -print | sort)

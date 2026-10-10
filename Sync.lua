@@ -353,7 +353,10 @@ end
 local versionNotified = false
 
 local function CheckRemoteVersion(remoteVersion)
-    if not remoteVersion or remoteVersion == "" then return end
+    -- A plain x.y.z only: the field was printed raw, so a forged request could put a
+    -- multi-line "official" notice (escape codes, a link) on every channel listener.
+    if type(remoteVersion) ~= "string" or #remoteVersion > 11
+        or not remoteVersion:match("^%d+%.%d+%.%d+$") then return end
     if not Overlord.Version then return end
     if CompareVersions(remoteVersion, Overlord.Version) > 0 then
         if not versionNotified then
