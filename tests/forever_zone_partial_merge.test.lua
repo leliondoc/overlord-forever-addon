@@ -179,6 +179,53 @@ do
     set(X, "Alliance", EPOCH + 200)
     OverlordDB.frontTruceResetEpoch = savedEpochs
 end
+print("Partial merge: a truce-refused entry on an orange zone keeps its wave")
+
+-- (1h) The other per-entry refusals on an orange zone (an unproven N from a peer that
+-- never learnt the capture, a flip held while the zone is followed live) keep the
+-- wave too, and no longer get the whole map rejected.
+do
+    local function orangeX()
+        local zx = zoneOf(X)
+        local lease = { owner = "Horde", originKey = "bob tester", waveId = "w3",
+            base = { owner = "Alliance", status = "captured", capturedTime = EPOCH + 2000, updatedAt = EPOCH + 2000 } }
+        zx._remoteCaptureLease, zx.status, zx.owner, zx.previousOwner = lease, "in_progress", "Horde", "Alliance"
+        return zx, lease
+    end
+    local commitPlan = Overlord.CaptureLease.CommitRemoteStablePlan
+    Overlord.CaptureLease.CommitRemoteStablePlan = function(lease_, plan)
+        assert(type(plan) == "table", "an unplanned lease mark reached the commit: " .. tostring(plan))
+        return commitPlan(lease_, plan)
+    end
+    local cases = {
+        { "unproven N", function() setN(X, EPOCH + 5000) end, function() end },
+        { "held flip", function() set(X, "Alliance", EPOCH + 3000) end, function()
+            sync:GetPriv().zaFlipClaims[X] = nil
+            sync:NoteLiveZoneTraffic(X)
+        end },
+    }
+    for i, case in ipairs(cases) do
+        case[2](); set(Y, "Horde", EPOCH + 2600 + i)
+        local pages = snapshot()
+        set(X, "Alliance", EPOCH + 2000); set(Y, "Alliance", EPOCH + 500)
+        local zx, lease = orangeX()
+        case[3]()
+        sync._lastFullZaAt = nil
+        deliver(pages)
+        assert(state(Y) == "Horde@" .. (EPOCH + 2600 + i),
+            "an orange zone's " .. case[1] .. " rejected the whole map: " .. state(Y))
+        assert(zx._remoteCaptureLease == lease and zx.status == "in_progress"
+            and lease.base.owner == "Alliance" and lease.base.capturedTime == EPOCH + 2000,
+            "an orange zone's " .. case[1] .. " closed or rebased its wave")
+        assert(sync._lastFullZaAt, "the map with an orange zone's " .. case[1] .. " was not recorded")
+        assert(i ~= 2 or sync:GetPriv().zaFlipClaims[X], "the flip was not held (vacuous case)")
+        zx._remoteCaptureLease = nil
+        set(X, "Alliance", EPOCH + 2000)
+    end
+    sync:GetPriv().zaFlipClaims[X] = nil
+    Overlord.CaptureLease.CommitRemoteStablePlan = commitPlan
+end
+print("Partial merge: an unproven N or a held flip on an orange zone keeps its wave, the map merges")
 assert(loadfile("SyncRelay.lua"))()
 Overlord.RelayEnabled, Overlord.CommunityModeEnabled = true, false
 Overlord.InActiveFront, Overlord.InstanceSuspended = true, false

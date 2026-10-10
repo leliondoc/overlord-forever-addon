@@ -7879,7 +7879,7 @@ function Overlord.Sync:OnReceiveZoneAll(
             if validEntry and (ShouldRejectStaleTruceResetZone(zoneId, ts)
                 or ShouldRejectPostVictoryZoneOwner(zoneId, owner, "captured", ts, "ZA")
                 or (owner and ShouldRejectFrontTruceZoneChange(zoneId, owner, "captured", ct))) then
-                staleSkipMask[entryIndex] = "truce"
+                staleSkipMask[entryIndex] = true
             end
         end
         local previousIndex = zoneId and seenZaZoneIds[zoneId]
@@ -8047,17 +8047,20 @@ function Overlord.Sync:OnReceiveZoneAll(
                 staleEntry = true
             end
             if staleEntry or staleSkipMask[entryIndex] then
-                -- A truce-refused entry on an orange zone must not reach the lease plan
-                -- either (a rebase/close restored the refused value): the zone keeps
-                -- its wave, staged at its base.
-                local truceLease = staleSkipMask[entryIndex] == "truce"
+                -- An entry refused by a guard (unproven N, held flip, truce or victory)
+                -- on an orange zone builds no lease plan: the zone keeps its wave,
+                -- staged at its base. Staged at the attacker's overlay, its plan was
+                -- impossible and the whole map was rejected (or, for a truce, a close
+                -- restored the refused value). staleEntry is never set on such a zone
+                -- (skipPairMutation), so only these guards get here.
+                local refusedLease = staleSkipMask[entryIndex]
                     and stateZone.status == "in_progress" and not stateZone.holdAuthorityLocal
                     and stateZone._remoteCaptureLease or nil
-                staleSkipMask[entryIndex] = staleSkipMask[entryIndex] or true
-                if truceLease then
+                staleSkipMask[entryIndex] = true
+                if refusedLease then
                     preserveRemoteLeaseMask[entryIndex] = nil
-                    stagedOwners[zoneId] = (truceLease.base and truceLease.base.owner) or false
-                    stagedEntries[#stagedEntries].owner = truceLease.base and truceLease.base.owner
+                    stagedOwners[zoneId] = (refusedLease.base and refusedLease.base.owner) or false
+                    stagedEntries[#stagedEntries].owner = refusedLease.base and refusedLease.base.owner
                 else
                     stagedOwners[zoneId] = stateZone.owner or false
                     stagedEntries[#stagedEntries].owner = stateZone.owner
@@ -8070,7 +8073,7 @@ function Overlord.Sync:OnReceiveZoneAll(
                 if staged.zone and staged.zone.status == "in_progress"
                     and staged.zone._remoteCaptureLease
                     and not staged.zone.holdAuthorityLocal
-                    and staleSkipMask[staged.entryIndex] ~= "truce" then
+                    and not staleSkipMask[staged.entryIndex] then
                     -- Une carte globale exacte peut prouver que la wave est
                     -- impossible : cible deja possedee par l'attaquant, chaine
                     -- de prerequis absente, ou capitale ouverte trop tot. Fermer
