@@ -567,9 +567,6 @@ function Overlord.Leaderboard:MarkDirty()
     self._snapshotDirty = true
     self._snapshotRevision = (self._snapshotRevision or 0) + 1
     self:InvalidateDisplayCache()
-    if Overlord.CharacterStats and Overlord.CharacterStats.RequestRefresh then
-        Overlord.CharacterStats:RequestRefresh()
-    end
 end
 
 -- Invalide le cache d'affichage trie (kills/captures). NE touche PAS l'index meta.
@@ -4509,9 +4506,6 @@ function Overlord.Leaderboard:Reset(archivingStartOverride, resetEpochOverride, 
         if type(marker) == "table" and marker.resetEpoch == resetEpoch then
             marker.leaderboardSideEffectsApplied = true
         end
-    end
-    if Overlord.CharacterStats and Overlord.CharacterStats.Refresh then
-        Overlord.CharacterStats:Refresh()
     end
     self:ResumePendingWeeklyArchive()
     return true

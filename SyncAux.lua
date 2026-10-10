@@ -1126,13 +1126,6 @@ function Overlord.Sync:StartPassiveSync()
         end
     end
 
-    C_Timer.After(12, function()
-        if token ~= Overlord.Sync._passiveSyncToken then return end
-        if Overlord.IsInitialized and not Overlord.InstanceSuspended and Overlord.Sync then
-            -- Chaque client amorce son cache de confiance entrant, sans declencher une
-            -- rafale N-way de SR. Un prochain runPassiveSync echantillonne fera le fan-out.
-        end
-    end)
     C_Timer.After(math.random(10, 45), function()
         if token ~= Overlord.Sync._passiveSyncToken then return end
         runPassiveSync()

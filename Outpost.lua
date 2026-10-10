@@ -734,7 +734,7 @@ end
 
 function Overlord.Outpost:MarkDirty()
     -- Un heartbeat OP modifie l'etat territorial, pas le classement. Le brancher sur
-    -- Leaderboard:MarkDirty invalidait le tri, CharacterStats et le snapshot top-150
+    -- Leaderboard:MarkDirty invalidait le tri et le snapshot top-150
     -- toutes les cinq secondes pendant une capture. Les vraies mutations LO/LOC/OC
     -- se marquent deja dans leurs methodes Leaderboard respectives.
     if Overlord.MarkDirty then Overlord:MarkDirty() end

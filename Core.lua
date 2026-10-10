@@ -2113,8 +2113,6 @@ function Overlord:FinishFactionChangeReconcile(state)
         self.General:OnPlayerFactionChanged()
     end
     if self.Button and self.Button.Refresh then self.Button:Refresh() end
-    if self.UI and self.UI.RefreshStatsButton then self.UI:RefreshStatsButton() end
-    if self.CharacterStats and self.CharacterStats.Refresh then self.CharacterStats:Refresh() end
     return true
 end
 
