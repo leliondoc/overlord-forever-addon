@@ -1740,7 +1740,26 @@ function net:Queue(p, immediate)
     -- A lease release may use the currently available budget synchronously before
     -- entering an instance, but never bypasses that budget.
     if immediate and p.kind == "ZR" then
-        while item.tasks[item.index] and emit(item.tasks[item.index]) do item.index = item.index + 1 end
+        local waiting
+        while item.tasks[item.index] do
+            local task = item.tasks[item.index]
+            if emit(task) then
+                item.index = item.index + 1
+            elseif task.deferred then
+                -- The direct ZR just spent the channel token: the Battle.net copies,
+                -- the release's only way to the other faction, leave now; this copy
+                -- waits at the end of the item (as in pump). Stopping here left them
+                -- to a pump the loading screen may suspend before its first tick.
+                task.deferred = nil
+                task.defers = (task.defers or 0) + 1
+                waiting = waiting or {}
+                waiting[#waiting + 1] = task
+                item.index = item.index + 1
+            else
+                break -- shared relay byte budget or a refused copy: the pump retries
+            end
+        end
+        for i = 1, waiting and #waiting or 0 do item.tasks[#item.tasks + 1] = waiting[i] end
         if not item.tasks[item.index] then return true end
         table.insert(lane.items, lane.head, item)
     else lane.items[#lane.items + 1] = item end
@@ -1883,9 +1902,12 @@ pump = function()
                 deferLane.items[#deferLane.items + 1] = {
                     p = item.p, tasks = { task }, index = 1, protected = item.protected, queuedAt = item.queuedAt,
                 }
-            elseif lane == stateLane or (lane == catchupLane and isPagedCatchup(item.p)) then
+            elseif lane == stateLane or (lane == catchupLane and isPagedCatchup(item.p))
+                or isTerminal(item.p) then
                 -- Keep an accepted state or paged packet's deferred copy in its
-                -- bounded item while its reservation is full.
+                -- bounded item while its reservation is full. A terminal's too: a
+                -- capture's second channel fragment always meets the quota, and
+                -- dropping it wasted the first one (nobody could assemble it).
                 item.tasks[#item.tasks + 1] = task
                 break
             else
@@ -1904,7 +1926,7 @@ pump = function()
                     p = item.p, tasks = { task }, index = 1, protected = item.protected, queuedAt = item.queuedAt,
                 }
             elseif task.retries <= 3 and (lane == stateLane
-                or (lane == catchupLane and isPagedCatchup(item.p))) then
+                or (lane == catchupLane and isPagedCatchup(item.p)) or isTerminal(item.p)) then
                 item.tasks[#item.tasks + 1] = task
             else
                 net.stats.dropped = net.stats.dropped + 1
