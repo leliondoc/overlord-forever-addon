@@ -6302,74 +6302,89 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
             pcall(UpdateDedupCaptureMaxIndex, name, n)
         end
     end
+    local sync = Overlord.Sync
+    local function snapshotClassOf(info)
+        return type(info.class) == "string"
+            and (self:NormalizeClassTokenForDisplay(info.class) or "") or ""
+    end
+    local function snapshotRaceOf(info)
+        if type(info.race) ~= "string" then return "" end
+        return sync and sync.NormalizeRaceFileToken
+            and (sync:NormalizeRaceFileToken(info.race) or "") or info.race
+    end
+    local function snapshotRaceSexOf(info)
+        local raceSex = math.floor(tonumber(info.raceSex) or 0)
+        if raceSex ~= 2 and raceSex ~= 3 then raceSex = 0 end
+        return raceSex
+    end
     for name, info in pairs(snapshotPlayerInfo) do
         if type(name) == "string" and name ~= "" and type(info) == "table" then
-            local snapshotClass = type(info.class) == "string"
-                and (self:NormalizeClassTokenForDisplay(info.class) or "") or ""
-            local snapshotFaction = (info.faction == "Alliance" or info.faction == "Horde")
-                and info.faction or ""
-            local snapshotLocale = sanitizeLocaleTag(info.locale)
-            local snapshotGuild = sanitizeGuildName(info.guild)
-            local snapshotGuildAt = type(info.guild) == "string"
-                and normalizeGuildAt(info.guildAt) or 0
-            local snapshotPool = normalizeSavedVarsPool(info.pool)
-            local snapshotRace = ""
-            if type(info.race) == "string" then
-                local sync = Overlord.Sync
-                snapshotRace = sync and sync.NormalizeRaceFileToken
-                    and (sync:NormalizeRaceFileToken(info.race) or "") or info.race
-            end
-            local snapshotRaceSex = math.floor(tonumber(info.raceSex) or 0)
-            if snapshotRaceSex ~= 2 and snapshotRaceSex ~= 3 then snapshotRaceSex = 0 end
-            local snapshotRaceAt = math.max(0, math.floor(tonumber(info.raceAt) or 0))
             local snapshotLevel = math.floor(tonumber(info.level) or 0)
             if snapshotLevel < 0 or snapshotLevel > 90 then snapshotLevel = 0 end
             local current = self.playerInfo[name]
             if not current then
                 self.playerInfo[name] = {
-                class = snapshotClass,
-                faction = snapshotFaction,
+                class = snapshotClassOf(info),
+                faction = (info.faction == "Alliance" or info.faction == "Horde")
+                    and info.faction or "",
                 factionAt = math.max(0, math.floor(tonumber(info.factionAt) or 0)),
-                locale = snapshotLocale,
-                guild = snapshotGuild,
+                locale = sanitizeLocaleTag(info.locale),
+                guild = sanitizeGuildName(info.guild),
                 guildAuth = info.guildAuth == true or nil,
                 guildReplica = info.guildReplica == true or nil,
-                guildAt = snapshotGuildAt,
-                pool = snapshotPool,
-                race = snapshotRace,
-                raceSex = snapshotRaceSex,
-                raceAt = snapshotRaceAt,
+                guildAt = type(info.guild) == "string" and normalizeGuildAt(info.guildAt) or 0,
+                pool = normalizeSavedVarsPool(info.pool),
+                race = snapshotRaceOf(info),
+                raceSex = snapshotRaceSexOf(info),
+                raceAt = math.max(0, math.floor(tonumber(info.raceAt) or 0)),
                 level = snapshotLevel,
                 }
                 dirty = true
                 pcall(NoteDedupCanonicalName, self, name)
             else
-                if (current.class or "") == "" and snapshotClass ~= "" then
-                    current.class, dirty = snapshotClass, true
+                -- A saved field is normalized only when the live row can take it: on a
+                -- normal login the snapshot is a subset of the live bucket, and
+                -- normalizing every field of every entry (up to 6,500) took tens of ms
+                -- in one frame. Same writes as before.
+                if (current.class or "") == "" then
+                    local snapshotClass = snapshotClassOf(info)
+                    if snapshotClass ~= "" then current.class, dirty = snapshotClass, true end
                 end
-                if (current.race or "") == "" and snapshotRace ~= "" then
-                    current.race = snapshotRace
-                    current.raceSex = snapshotRaceSex
-                    current.raceAt = snapshotRaceAt
-                    dirty = true
+                if (current.race or "") == "" then
+                    local snapshotRace = snapshotRaceOf(info)
+                    if snapshotRace ~= "" then
+                        current.race = snapshotRace
+                        current.raceSex = snapshotRaceSexOf(info)
+                        current.raceAt = math.max(0, math.floor(tonumber(info.raceAt) or 0))
+                        dirty = true
+                    end
                 end
-                local currentGuild = sanitizeGuildName(current.guild or "")
-                local currentGuildAt = normalizeGuildAt(current.guildAt)
-                if type(info.guild) == "string" and guildRecordWins(
-                    snapshotGuild, snapshotGuildAt, info.guildAuth,
-                    currentGuild, currentGuildAt, current.guildAuth,
-                    info.guildReplica, current.guildReplica) then
-                    current.guild = snapshotGuild
-                    current.guildAuth = info.guildAuth == true or nil
-                    current.guildReplica = info.guildReplica == true or nil
-                    current.guildAt = snapshotGuildAt
-                    dirty = true
+                -- A raw-equal guild record never wins (guildRecordWins), so the usual
+                -- case skips the sanitizing.
+                if type(info.guild) == "string" and not (info.guild == current.guild
+                    and info.guildAt == current.guildAt
+                    and (info.guildAuth == true) == (current.guildAuth == true)
+                    and (info.guildReplica == true) == (current.guildReplica == true)) then
+                    local snapshotGuild = sanitizeGuildName(info.guild)
+                    local snapshotGuildAt = normalizeGuildAt(info.guildAt)
+                    if guildRecordWins(
+                        snapshotGuild, snapshotGuildAt, info.guildAuth,
+                        sanitizeGuildName(current.guild or ""), normalizeGuildAt(current.guildAt),
+                        current.guildAuth, info.guildReplica, current.guildReplica) then
+                        current.guild = snapshotGuild
+                        current.guildAuth = info.guildAuth == true or nil
+                        current.guildReplica = info.guildReplica == true or nil
+                        current.guildAt = snapshotGuildAt
+                        dirty = true
+                    end
                 end
-                if (current.locale or "") == "" and snapshotLocale ~= "" then
-                    current.locale, dirty = snapshotLocale, true
+                if (current.locale or "") == "" then
+                    local snapshotLocale = sanitizeLocaleTag(info.locale)
+                    if snapshotLocale ~= "" then current.locale, dirty = snapshotLocale, true end
                 end
-                if (current.pool or "") == "" and snapshotPool ~= "" then
-                    current.pool, dirty = snapshotPool, true
+                if (current.pool or "") == "" then
+                    local snapshotPool = normalizeSavedVarsPool(info.pool)
+                    if snapshotPool ~= "" then current.pool, dirty = snapshotPool, true end
                 end
                 if (tonumber(current.level) or 0) <= 0
                     and snapshotLevel > 0 then

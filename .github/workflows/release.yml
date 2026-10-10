@@ -181,6 +181,7 @@ jobs:
           lua5.1 tests/forever_manual_capture_guard.test.lua
           lua5.1 tests/forever_escape_keyboard.test.lua
           lua5.1 tests/forever_mine_ids.test.lua
+          lua5.1 tests/forever_snapshot_restore_lazy.test.lua
           lua5.1 tests/forever_version_notice.test.lua
           lua5.1 tests/forever_ladder_sync_badge.test.lua
 
