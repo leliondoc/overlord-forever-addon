@@ -991,6 +991,79 @@ do
     assert(not pulled("Behind Again", behind), "A map that is behind was pulled twice within 10 min")
     now = now + 301
     assert(pulled("Behind Later", behind), "A map still behind after 10 min was not pulled again")
+    -- A capture both sides learn does not restart the schedule of a difference no
+    -- reply repaired: the difference is the same one (it used to be asked again at
+    -- once after every capture anywhere on the map).
+    do
+        now = now + 61
+        local stuck = { "a9", "A", 1200 } -- held by the neighbour, refused here whatever the reply
+        local zones = fresh.Fronts.Registry.arathi.zones
+        assert(pulled("Stuck First", "~m1jk~o0" .. content({ "a1", "H", 2000 }, stuck)), "fixture: first pull")
+        now = now + 61
+        assert(pulled("Stuck Second", "~m1jk~o0" .. content({ "a1", "H", 2000 }, stuck)), "fixture: retry after 1 min")
+        -- A new capture reaches both sides: the two maps change, their difference does not.
+        zones[3] = { id = "a3", owner = "Alliance", status = "captured", capturedTime = 2600 }
+        now = now + 61
+        assert(not pulled("Stuck Third", "~m208~o0" .. content({ "a1", "H", 2000 }, { "a3", "A", 2600 }, stuck)),
+            "A capture both sides learnt restarted the retries of an unrepaired difference")
+        now = now + 61
+        assert(pulled("Stuck Fourth", "~m208~o0" .. content({ "a1", "H", 2000 }, { "a3", "A", 2600 }, stuck)),
+            "The retry of an unrepaired difference never came")
+        -- A capture only the neighbour holds is a new difference: asked at once.
+        now = now + 61
+        assert(pulled("Stuck News", "~m2bi~o0" .. content({ "a1", "H", 2000 }, { "a3", "A", 2600 }, stuck, { "a4", "H", 3000 })),
+            "A new difference waited behind the schedule of an old one")
+        zones[3] = nil
+        now = now + 6
+    end
+    -- A Battle.net friend that stays behind is pulled by us after 5 min, draw or not:
+    -- only its friends hear it.
+    do
+        now = now + 61
+        local behindFriend = "~m11s~o0" .. content({ "a1", "H", 1400 })
+        local friend = { name = "Behind Friend", faction = "Horde" }
+        fresh.Relay.MAP_DIFF_ASKERS = 0
+        assert(not pulled("Behind Friend", behindFriend, "BNET", friend), "A friend that is behind was pulled at once")
+        now = now + 301
+        assert(pulled("Behind Friend", behindFriend, "BNET", friend),
+            "A Battle.net friend that never caught up was left to a draw among channel neighbours")
+        fresh.Relay.MAP_DIFF_ASKERS = 4
+    end
+    -- A map of our own side received moments ago holds back a channel neighbour's
+    -- pull, never the pull toward a friend of the other faction (and the reverse).
+    do
+        now = now + 61
+        fresh.PlayerFaction = "Alliance"
+        function fresh.Sync:GetBetaPeerFaction(who) return who:find("^Enemy ") and "Horde" or nil end
+        local other = "~m1jk~o0" .. content({ "a1", "H", 2000 }, { "h7", "H", 1700 })
+        fresh.Sync._lastFullZaAt, fresh.Sync._lastEnemyFullZaAt = now - 10, nil
+        assert(not pulled("Recent Chan", other), "A map received moments ago did not hold back a channel pull")
+        assert(pulled("Enemy Friend", other, "BNET", { name = "Enemy Friend", faction = "Horde" }),
+            "A map of our own side held back the pull toward a friend of the other faction")
+        now = now + 61
+        local another = "~m1jk~o0" .. content({ "a1", "H", 2000 }, { "h8", "H", 1750 })
+        fresh.Sync._lastFullZaAt, fresh.Sync._lastEnemyFullZaAt = nil, now - 10
+        assert(not pulled("Enemy Second", another, "BNET", { name = "Enemy Second", faction = "Horde" }),
+            "A map of the other faction received moments ago did not hold back the pull toward it")
+        assert(pulled("Recent Other", another), "A map of the other faction held back a channel pull")
+        fresh.Sync._lastFullZaAt, fresh.Sync._lastEnemyFullZaAt = nil, nil
+        fresh.Sync.GetBetaPeerFaction, fresh.PlayerFaction = nil, nil
+    end
+    -- A 1.8.1 neighbour only says its newest capture. Newer than ours: pulled. Not
+    -- newer: it cannot tell a hole, so it is pulled, but once per 150 s for its whole
+    -- side, not on every presence (two full maps a minute during the whole rollout).
+    do
+        now = now + 61
+        assert(pulled("Stamp Newer", "~m2bi"), "A 1.8.1 neighbour knowing a newer capture was not pulled")
+        fresh.Sync._lastFullZaAt = now - 60
+        assert(not pulled("Stamp Recent", "~m1jk"), "A 1.8.1 neighbour was pulled a minute after a map")
+        fresh.Sync._lastFullZaAt = now - 151
+        assert(pulled("Stamp Later", "~m1jk"), "A 1.8.1 neighbour was never pulled for a hole")
+        now = now + 61
+        fresh.Sync._lastFullZaAt = now - 60
+        assert(pulled("Stamp News", "~m2bi"), "A newer capture of a 1.8.1 neighbour waited for the 150 s")
+        fresh.Sync._lastFullZaAt = nil
+    end
     -- The table of pairs is bounded: the pair seen longest ago gives way.
     for i = 1, 40 do
         fresh.Relay:MapDiffDue(1, 10, 1000 + i, 5, "Row Tester", now + i)

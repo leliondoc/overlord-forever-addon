@@ -1,7 +1,8 @@
 -- 1.8.2 map convergence under loss. Forty clients (two factions, two channels, two
 -- Battle.net bridges) run the real relay. Captures reach only part of them live
 -- (half of the capturer's faction, a tenth of the other one), as on a lossy bridge.
--- Each map pull is modelled as the reply it brings: a merge by capture date. Every
+-- Each map pull is modelled as the reply it brings: a merge by capture date (one
+-- reply in ten is lost or refused: nothing changes). Every
 -- map must end identical, with a bounded number of pulls, and stay silent once equal.
 -- Under the 1.8.1 rule (pull only for a capture newer than our newest) the same run
 -- left most clients with holes for good.
@@ -54,6 +55,9 @@ local function merge(into, from)
             end
         end
     end
+    -- As Sync:NoteFullMapReceived does for a map that was applied.
+    into.Sync._lastFullZaAt = now
+    if into.faction ~= from.faction then into.Sync._lastEnemyFullZaAt = now end
 end
 local function client(name, channel, faction)
     local a = { Version = "1.8.2", CommunityModeEnabled = true, RelayEnabled = true, PlayerFaction = faction,
@@ -176,15 +180,27 @@ assert(distinctMaps() == 1, "Maps did not converge 15 min after the last capture
     .. distinctMaps() .. " different maps among " .. #clients .. " clients")
 -- The final map holds the newest capture of every zone that was ever taken: nothing was lost.
 local settled = pulls
-assert(duringFights <= #clients * 2 * 30, "Pull budget exceeded during the fights: " .. duringFights)
+-- Forty captures, each missed live by half of one faction and nine tenths of the
+-- other: about 980 pulls measured, 0.6 per client and per capture. Pulling on every
+-- presence as before the stamps (one map per 45 s and per client) costs 1600 here,
+-- and the relay's own cap (2 a minute) is 2400.
+assert(duringFights <= 1200, "Pull budget exceeded during the fights: " .. duringFights)
+-- Once the fights stop, a client needs one map, two when the first one came from a
+-- neighbour that was itself behind.
+assert(settled - duringFights <= #clients * 2, "Settling cost " .. (settled - duringFights) .. " pulls")
 -- Equal maps: no pull at all, however long the presence goes on.
 runUntil(now + 1800)
 assert(pulls == settled, "Equal maps still pulled each other: " .. (pulls - settled) .. " pulls in 30 min")
 -- A late hole on one client only, older than everyone's newest capture: repaired.
 local victim = clients[7]
-local zone = victim.Fronts.Registry.f2.zones[3]
-local reference = clients[1].Fronts.Registry.f2.zones[3]
-assert(reference.owner, "fixture: the zone was never captured")
+local zone, reference
+for f = 1, FRONTS do
+    for z = 1, ZONES do
+        local held = clients[1].Fronts.Registry["f" .. f].zones[z]
+        if held.owner and not reference then zone, reference = victim.Fronts.Registry["f" .. f].zones[z], held end
+    end
+end
+assert(reference, "fixture: no zone was ever captured")
 zone.owner, zone.capturedTime = reference.owner == "Alliance" and "Horde" or "Alliance", reference.capturedTime - 500
 local before = pulls
 runUntil(now + 300)

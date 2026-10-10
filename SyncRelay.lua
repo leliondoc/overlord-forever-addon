@@ -839,16 +839,26 @@ local function crossElected(p)
         .. "|" .. tostring(p.id)) < share
 end
 function net:GetCrossElection() return sameFactionBridgeCount(), crossShare() end
--- Two maps that differ (1.8.2, see localMapStamp). Decided per pair of maps, not per
--- neighbour: a hundred neighbours holding the same other map are one question.
+-- Two maps that differ (1.8.2, see localMapStamp). Decided per difference, not per
+-- neighbour: a hundred neighbours holding the same other map are one question. The
+-- difference is known by the gap between the two digests: the digest is a sum of
+-- entry hashes, so a capture both sides learn leaves that gap unchanged. A
+-- difference no reply can repair (a keep whose capturer is not ranked here) thus
+-- keeps its place in the retry schedule through every later capture, instead of
+-- being asked again at once each time the map moves.
 --  * The neighbour's sum is not lower: it holds a capture we lack. Pull now; if our
 --    map did not change (reply lost or refused), again after 1, 2, 4... 10 min.
 --  * Its sum is lower: it lacks one of ours and pulls on our own presence. It may
 --    still hold one we lack; that shows once it has caught up (its sum passes ours).
---    Should it never catch up, a few of its neighbours, drawn afresh every 10 min
---    (about MAP_DIFF_ASKERS of them), pull it anyway after 5 min, then every 10 min.
--- Returns the pair's row when a pull is due (the caller stamps it once sent).
+--    Should it never catch up, it is pulled anyway after 5 min, then every 10 min:
+--    by about MAP_DIFF_ASKERS of the channel neighbours that hear it, drawn afresh
+--    every 10 min, or by us when it is a Battle.net friend (only its friends hear it).
+-- Returns the difference's row when a pull is due (the caller stamps it once sent).
 net.MAP_DIFF_ROWS, net.MAP_DIFF_ASKERS = 16, 4
+-- A 1.8.1 neighbour only says its newest capture: when that is not newer than ours
+-- it cannot tell a hole, and it is pulled no more than once per this many seconds
+-- for its whole side (the pace of the periodic pull), not on every presence.
+net.STAMP_ONLY_GAP = 150
 -- tonumber(text, 36) stops at 32 bits on some builds; the sum of the dates is larger.
 function net.ParseBase36(text)
     local value = 0
@@ -860,10 +870,10 @@ function net.ParseBase36(text)
     end
     return #text > 0 and value or nil
 end
-function net:MapDiffDue(digest, sum, peerDigest, peerSum, origin, now)
+function net:MapDiffDue(digest, sum, peerDigest, peerSum, origin, now, friend)
     local rows = self.mapDiffs
     if not rows then rows = {}; self.mapDiffs = rows end
-    local key = digest .. ":" .. peerDigest
+    local key = (peerDigest - digest) % 2147483647
     local row = rows[key]
     if not row then
         local count, oldestKey, oldestAt = 0, nil, nil
@@ -881,7 +891,7 @@ function net:MapDiffDue(digest, sum, peerDigest, peerSum, origin, now)
         return now - row.at >= wait and row or nil
     end
     if now - row.first < 300 or now - row.at < 600 then return nil end
-    local share = self.MAP_DIFF_ASKERS / math.max(1, self:CountDirectPeers())
+    local share = friend and 1 or self.MAP_DIFF_ASKERS / math.max(1, self:CountDirectPeers())
     if share < 1 then
         local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
         if hashFrac(tostring(me):lower() .. "|" .. tostring(origin):lower() .. "|"
@@ -2253,12 +2263,24 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         -- A complete global map arrived moments ago: another full map pulled just
         -- because a new peer spoke would only repeat it. Periodic and login map
         -- catch-ups are unchanged.
-        local recentFullMap = sync._lastFullZaAt and now - sync._lastFullZaAt < 45
+        -- For a Battle.net friend of the other faction only a map of that faction
+        -- counts: maps of our own side arrive all the time on a busy channel and
+        -- kept the only way to the other faction's map closed.
+        local friendFaction = transport == "BNET" and sync.GetBetaPeerFaction
+            and sync:GetBetaPeerFaction(origin) or nil
+        local enemyFriend = (friendFaction == "Alliance" or friendFaction == "Horde")
+            and (addon.PlayerFaction == "Alliance" or addon.PlayerFaction == "Horde")
+            and friendFaction ~= addon.PlayerFaction
+        local lastMapAt = sync._lastFullZaAt
+        if enemyFriend then lastMapAt = sync._lastEnemyFullZaAt end
+        local recentFullMap = lastMapAt and now - lastMapAt < 45
         -- A neighbour whose map holds what ours holds has nothing a full map would
         -- add; one that holds something else is pulled by whoever lacks a capture
-        -- (see MapDiffDue). A neighbour that says nothing about its content (1.8.1
-        -- and older) is pulled as before the stamps. Periodic and login catch-ups
-        -- are unchanged.
+        -- (see MapDiffDue). A 1.8.1 neighbour only says its newest capture (see
+        -- STAMP_ONLY_GAP); an older one says nothing and is pulled as before the
+        -- stamps. Periodic and login catch-ups are unchanged.
+        local advertisedMap = p.payload:match("~m(%w+)~")
+        local peerStamp = advertisedMap and tonumber(advertisedMap, 36) or nil
         local advertisedSites = p.payload:match("~o(%w+)~")
         local peerSites = advertisedSites and tonumber(advertisedSites, 36) or nil
         local content = p.payload:match("~z(%w+)~")
@@ -2268,13 +2290,15 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         if peerDigest and peerSum and peerSites ~= nil then
             local _, sum, digest = localMapStamp()
             if peerDigest ~= digest then
-                diffRow = self:MapDiffDue(digest, sum, peerDigest, peerSum, origin, now)
+                diffRow = self:MapDiffDue(digest, sum, peerDigest, peerSum, origin, now, transport == "BNET")
             end
             noNews = diffRow == nil
+        elseif peerStamp and peerStamp <= (localMapStamp()) then
+            noNews = lastMapAt ~= nil and now - lastMapAt < self.STAMP_ONLY_GAP
         end
         -- A keep or outpost capture we do not hold (see the "~o" stamp above).
         local forSites = false
-        if noNews and sync.GetOutpostMapStamps then
+        if noNews and peerSites and sync.GetOutpostMapStamps then
             local _, known = sync:GetOutpostMapStamps()
             local asked = self.sitesPull
             if peerSites > known and (not asked or peerSites > asked.stamp or now - asked.at >= 1800
