@@ -365,3 +365,44 @@ runTimersUntil(clock + 60)
 assert(#relayed == beforeRetake + 1, "catch-up/state backlog suppressed the late copy of an ordinary point")
 Overlord.Relay.GetQueueSummary = realSummary
 print("Forever zone partial merge: stale entries skipped per entry, guards kept, C relay retried beyond coalescing OK")
+
+-- (4) Map stamp (~m): an orange zone counts by the stable base our map serves for it.
+do
+    local function b36(n)
+        local digits, out = "0123456789abcdefghijklmnopqrstuvwxyz", ""
+        repeat local r = n % 36; out = digits:sub(r + 1, r + 1) .. out; n = math.floor(n / 36) until n == 0
+        return out
+    end
+    local newest = 0
+    for _, z in ipairs(zones) do newest = math.max(newest, math.floor(tonumber(z.capturedTime) or 0)) end
+    newest = newest + 1000
+    local z = zoneOf(Y)
+    z.owner, z.status, z.capturedTime, z.updatedAt = "Horde", "captured", newest, newest
+    z._remoteCaptureLease = { owner = "Alliance", originKey = "carl tester", waveId = "w9",
+        base = { owner = "Horde", status = "captured", capturedTime = newest, updatedAt = newest } }
+    z.status, z.owner, z.previousOwner = "in_progress", "Alliance", "Horde"
+    local pulls = {}
+    local realRequest = sync.SendSyncRequest
+    sync.SendSyncRequest = function(_, opts) pulls[#pulls + 1] = opts and opts.betaTarget; return true end
+    local function presence(who, stamp)
+        Overlord.Relay:Receive("global|stamp-" .. who:gsub(" ", "") .. "|" .. time() .. "|*|" .. who
+            .. "|NH|1.8.1~m" .. stamp .. "~l9~ld~lr~lp6", who, "CHANNEL")
+    end
+    sync._lastFullZaAt = nil
+    clock = clock + 10 -- (own stamp cached 5 s)
+    local skipped = Overlord.Relay.stats.mapPullsNoNews or 0
+    presence("Stamp Same", b36(newest))
+    assert(#pulls == 0 and (Overlord.Relay.stats.mapPullsNoNews or 0) == skipped + 1,
+        "a siege on our newest capture lowered our map stamp (useless pull)")
+    presence("Stamp Newer", b36(newest + 1))
+    assert(pulls[1] == "Stamp Newer", "a neighbour knowing a newer capture was not pulled")
+    -- No base under the siege: the overlay is never counted.
+    z._remoteCaptureLease = nil
+    z.capturedTime = newest + 500
+    clock = clock + 10
+    presence("Stamp Base", b36(newest))
+    assert(pulls[2] == "Stamp Base", "an in-progress zone without a base counted in the map stamp")
+    sync.SendSyncRequest = realRequest
+    z.owner, z.status, z.capturedTime, z.updatedAt, z.previousOwner = "Alliance", "captured", EPOCH + 500, EPOCH + 500, nil
+end
+print("Map stamp: an orange zone counts by its stable base, never by its overlay")

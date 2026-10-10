@@ -621,16 +621,24 @@ local session = base36(time()) .. base36(math.random(0, 60466175), 5)
 -- "~m<base 36>"; a neighbour's presence triggers a full map pull only when it knows a
 -- newer capture (it used to pull on every new neighbour, about one full map a minute
 -- per client on a busy channel, and from whoever spoke, not from who had the news).
+-- An orange zone counts by its stable base, the state our map (ZA) serves for it: a
+-- siege on the newest capture no longer lowers the stamp (pulls that bring nothing)
+-- nor hides that capture from a neighbour that missed it. No base: not counted.
 local mapStampCache = { at = -1000, value = 0 }
 local function localMapStamp()
     local now = GetTime()
     if now - mapStampCache.at < 5 then return mapStampCache.value end
     local best = 0
     local registry = addon.Fronts and addon.Fronts.Registry
+    local zonesApi = addon.Zones
     for _, front in pairs(registry or {}) do
         for _, zone in ipairs(type(front) == "table" and front.zones or {}) do
-            if zone.owner and zone.status ~= "in_progress" and not zone._loginSyncUnconfirmed then
-                local ct = math.floor(tonumber(zone.capturedTime) or 0)
+            local view = zone
+            if zone.status == "in_progress" then
+                view = zonesApi and zonesApi.GetStableZoneView and zonesApi:GetStableZoneView(zone) or nil
+            end
+            if view and view.owner and not zone._loginSyncUnconfirmed then
+                local ct = math.floor(tonumber(view.capturedTime) or 0)
                 if ct > best then best = ct end
             end
         end
