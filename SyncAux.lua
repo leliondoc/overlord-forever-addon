@@ -1820,6 +1820,11 @@ function Overlord.Sync:ForeverIdentitiesMatch(a, b)
     if type(a) ~= "string" or type(b) ~= "string" or a == "" or b == "" then
         return false
     end
+    -- Same string (almost every call on the relay receive path): same answer as below.
+    if a == b then
+        if a:match("^BNet%-") or a:match("^Bridge%-") then return false end
+        return self:CanonicalForeverName(a) ~= nil
+    end
     if a:match("^BNet%-") or b:match("^BNet%-") then return false end
     if a:match("^Bridge%-") or b:match("^Bridge%-") then return false end
     local ca = self:CanonicalForeverName(a)

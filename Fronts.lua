@@ -625,14 +625,17 @@ end
 function Overlord.Fronts:GetMapID(frontId)
     local front = self:GetFront(frontId)
     if not front then return nil end
-    local cacheKey = tostring(front.preferredMapID) .. "|" .. tostring(front.resolvedMapID)
-    if front._olMapIDKey == cacheKey then return front._olMapID end
+    -- Raw ids compared (up to ~400 calls/s while moving): no key string per call.
+    local preferred, resolved = front.preferredMapID, front.resolvedMapID
+    if front._olMapIDSet and front._olMapIDPref == preferred and front._olMapIDRes == resolved then
+        return front._olMapID
+    end
     local mapID, validated = ComputeFrontMapID(front)
     -- Ne figer que la carte preferee (ou une carte validee s'il n'y en a pas) :
     -- une carte de secours prise pendant que la preferee n'etait pas prete doit
     -- ceder sa place des que la preferee est disponible.
     if validated and (not front.preferredMapID or mapID == front.preferredMapID) then
-        front._olMapIDKey, front._olMapID = cacheKey, mapID
+        front._olMapIDSet, front._olMapIDPref, front._olMapIDRes, front._olMapID = true, preferred, resolved, mapID
     end
     return mapID
 end
