@@ -8044,9 +8044,17 @@ function Overlord.Sync:OnReceiveZoneAll(
                     -- staged view (like a stale entry): it closes no other wave.
                     do
                         local base = stateZone._remoteCaptureLease.base
-                        if ct <= (tonumber(base and base.capturedTime) or 0) then
+                        local baseAt = tonumber(base and base.capturedTime) or 0
+                        if ct <= baseAt then
                             stagedOwners[zoneId] = (base and base.owner) or false
                         end
+                        -- 1.8.2: an owner older than the capture under the wave is a
+                        -- stale entry, refused like one below (the wave and its base
+                        -- stay). When that older owner was the attacker's, the map
+                        -- "proved" the assault impossible (target already his): the
+                        -- wave was closed and the zone went back to him at the old
+                        -- date, losing the capture made since.
+                        if owner and ct < baseAt then staleSkipMask[entryIndex] = true end
                     end
                 elseif stateZone._captureFinalUnattested
                     or (Overlord.CaptureLease.RemoteStableNeedsCanonicalRebase

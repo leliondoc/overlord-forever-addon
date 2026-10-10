@@ -171,6 +171,26 @@ do
         z._remoteCaptureLease = nil
         set(Z, "Alliance", EPOCH + 800)
     end
+    -- 1.8.2: the sender still holds the attacker as owner at an older date (it missed
+    -- the capture made since, on which the attacker is now back). That entry is a
+    -- stale one: the wave and the capture under it stay. It used to "prove" the
+    -- assault impossible (target already the attacker's): the wave was closed and
+    -- the zone went back to the attacker at the old date.
+    do
+        set(Z, "Horde", EPOCH + 300); set(Y, "Horde", EPOCH + 2650)
+        local pages = snapshot()
+        set(Z, "Alliance", EPOCH + 800); set(Y, "Alliance", EPOCH + 500)
+        local z = zoneOf(Z)
+        local lease = orange(z)
+        deliver(pages)
+        assert(state(Y) == "Horde@" .. (EPOCH + 2650), "the rest of the map was not merged: " .. state(Y))
+        assert(z.status == "in_progress" and z._remoteCaptureLease == lease
+            and lease.base.owner == "Alliance" and lease.base.capturedTime == EPOCH + 800,
+            "an older owner in a neighbour's map replaced the capture under a followed assault: "
+            .. tostring(z.status) .. " " .. tostring(z.owner) .. "@" .. tostring((z.capturedTime or 0) - EPOCH))
+        z._remoteCaptureLease = nil
+        set(Z, "Alliance", EPOCH + 800)
+    end
     -- The same validated map again within 30 s is not parsed again, but it still
     -- counts as a complete map just received (the pulls on presence wait for it).
     set(Y, "Horde", EPOCH + 2700)
