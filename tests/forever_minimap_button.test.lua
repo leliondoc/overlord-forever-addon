@@ -90,7 +90,7 @@ local filters = menu()
 builders.MENU_WORLD_MAP_TRACKING(nil, filters)
 local radios = filters.radios
 assert(radios.full and radios.compact and radios.hidden, "Map filter modes missing")
-assert(radios.full.get() and not radios.compact.get(), "Full display should be the default")
+assert(radios.compact.get() and not radios.full.get(), "Compact display should be the default (1.8.2)")
 radios.compact.set()
 assert(OverlordDB.config.showMapZoneTitles == false and OverlordDB.config.showWorldMapOverlays ~= false
     and radios.compact.get(), "Compact did not keep the map on with names off")

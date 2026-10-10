@@ -217,8 +217,118 @@ local function HideAllOverlordWorldMapContent()
     end
 end
 
+-- Mode compact (1.8.2) : le nom du point suit le haut de son cercle, une lettre par
+-- FontString tournee, avec la police et la couleur du statut (« Alliance »,
+-- « Capitale »). Un cercle de capture fait 25 a 50 px : le nom s'ecrit contre son
+-- bord, a l'exterieur (a l'interieur il n'y a la place que pour une quinzaine de
+-- lettres autour de l'icone). Un nom trop long pour un arc passe sur deux arcs,
+-- coupe entre deux mots. Le survol et une prise en cours affichent le bandeau a la
+-- place (voir IsZoneLabelShown).
+local ZoneArc = { MAX_SWEEP = math.rad(210), FULL_SWEEP = math.rad(340) }
+
+function ZoneArc.Hide(overlay)
+    if not overlay then return end
+    local glyphs = overlay.arcGlyphs
+    if glyphs then
+        for i = 1, #glyphs do glyphs[i]:Hide() end
+    end
+    overlay._olArcKey = nil
+end
+
+function ZoneArc.Layout(overlay, snapD, labelDiameter, shown)
+    local name = shown and overlay.zone and overlay.zone.name or nil
+    if type(name) ~= "string" or name == "" or not snapD or not labelDiameter then
+        ZoneArc.Hide(overlay)
+        return
+    end
+    local key = name .. "|" .. snapD .. "|" .. labelDiameter
+    if overlay._olArcKey == key then return end
+    ZoneArc.Hide(overlay)
+    overlay._olArcKey = key
+    local glyphs = overlay.arcGlyphs
+    if not glyphs then glyphs = {}; overlay.arcGlyphs = glyphs end
+    -- Meme police et meme taille que le statut sous le bandeau (UpdateOverlayLayout).
+    local font = Overlord.UI.ResolveLocalizedFontPath(GameFontNormalSmall, "Fonts\\FRIZQT__.TTF")
+    -- (au demi-point pres : un zoom anime ne refait pas la police a chaque image)
+    local size = math.floor(math.max(7, math.min(18, labelDiameter * 0.10)) * 2 + 0.5) / 2
+    local widths, spaces, count = {}, {}, 0
+    for ch in name:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+        count = count + 1
+        local glyph = glyphs[count]
+        if not glyph then
+            glyph = overlay:CreateFontString(nil, "OVERLAY")
+            glyph:SetShadowOffset(0, 0)
+            glyphs[count] = glyph
+        end
+        if glyph._olSize ~= size or glyph._olChar ~= ch then
+            glyph:SetFont(font, size, "")
+            glyph:SetTextColor(ZONE_TEXT_GOLD_R, ZONE_TEXT_GOLD_G, ZONE_TEXT_GOLD_B)
+            glyph:SetShadowColor(0, 0, 0, 0)
+            glyph:SetText(ch)
+            glyph._olSize, glyph._olChar, glyph._olWidth = size, ch, glyph:GetStringWidth() or 0
+        end
+        local width = glyph._olWidth
+        if ch == " " then
+            width = size * 0.3
+            spaces[#spaces + 1] = count
+        end
+        widths[count] = width
+    end
+    if count == 0 then return end
+    -- Le bord du cercle est trace a 1,08 fois son diametre.
+    local inner = snapD * 0.54 + 1 + size * 0.5
+    if not glyphs[1].SetRotation then
+        -- Client sans rotation de texte : le nom reste droit, au-dessus du cercle.
+        glyphs[1]:SetText(name)
+        glyphs[1]._olChar = nil
+        glyphs[1]:ClearAllPoints()
+        glyphs[1]:SetPoint("BOTTOM", overlay, "CENTER", 0, inner - size * 0.5)
+        glyphs[1]:Show()
+        return
+    end
+    local gap = size * 0.06
+    local function span(first, last)
+        local total = gap * (last - first)
+        for i = first, last do total = total + widths[i] end
+        return total
+    end
+    local function place(first, last, radius)
+        local angle = -span(first, last) / (2 * radius)
+        for i = first, last do
+            local glyph = glyphs[i]
+            local middle = angle + widths[i] / (2 * radius)
+            glyph:ClearAllPoints()
+            glyph:SetPoint("CENTER", overlay, "CENTER", radius * math.sin(middle), radius * math.cos(middle))
+            glyph:SetRotation(-middle)
+            glyph:Show()
+            angle = angle + (widths[i] + gap) / radius
+        end
+    end
+    local outer = inner + size * 1.05
+    local cut = nil
+    if span(1, count) / inner > ZoneArc.MAX_SWEEP then
+        -- Deux arcs : la coupe qui laisse les deux moities les plus proches.
+        local best = nil
+        for _, at in ipairs(spaces) do
+            if at > 1 and at < count then
+                local longest = math.max(span(1, at - 1) / outer, span(at + 1, count) / inner)
+                if not best or longest < best then best, cut = longest, at end
+            end
+        end
+    end
+    if cut then
+        if span(1, cut - 1) / outer > ZoneArc.FULL_SWEEP or span(cut + 1, count) / inner > ZoneArc.FULL_SWEEP then return end
+        place(1, cut - 1, outer)
+        place(cut + 1, count, inner)
+    elseif span(1, count) / inner <= ZoneArc.FULL_SWEEP then
+        place(1, count, inner)
+    end
+end
+Overlord.MapMarkers.LayoutZoneArcName, Overlord.MapMarkers.HideZoneArcName = ZoneArc.Layout, ZoneArc.Hide
+
 local function HideZoneOverlayText(ov)
     if not ov then return end
+    ZoneArc.Hide(ov)
     ov._olPaintValid = false
     ov._olRibbonKey = nil
     if ov.titleRibbonLeft then ov.titleRibbonLeft:Hide() end
@@ -318,15 +428,14 @@ local function FormatZoneTitleTwoLines(text, rawName)
     return formatted, tw, th
 end
 
+-- 1.8.2 : compact par defaut (le nom suit le cercle) ; les bandeaux sont le choix du
+-- joueur (bouton du coin de la carte, filtres, options, /ov map).
 local function ShouldShowMapZoneTitles()
-    if OverlordDB and OverlordDB.config and OverlordDB.config.showMapZoneTitles == false then
-        return false
-    end
-    return true
+    return OverlordDB ~= nil and OverlordDB.config ~= nil and OverlordDB.config.showMapZoneTitles == true
 end
 
--- Mode compact (noms decoches) : un point de front ne garde que son cercle et son
--- icone ; nom, ruban et statut reviennent au survol et pendant une prise.
+-- Mode compact (noms decoches) : un point de front garde son cercle, son icone et
+-- son nom le long du cercle ; ruban et statut reviennent au survol et pendant une prise.
 local function IsZoneLabelShown(overlay)
     if ShouldShowMapZoneTitles() or overlay._olHover then return true end
     local zone = overlay.zone
@@ -781,8 +890,9 @@ function Overlord.MapMarkers:SetWorldMapOverlaysShown(shown)
     return true
 end
 
--- Trois modes joueur : complet (noms sur chaque point), compact (cercles et icones,
--- nom au survol ou pendant une prise), masque. Compact = « noms de zones » decoches.
+-- Trois modes joueur : complet (bandeau sur chaque point), compact (cercles, icones
+-- et nom le long du cercle ; bandeau au survol ou pendant une prise), masque.
+-- Compact = « noms de zones » decoches ; c'est le mode par defaut depuis la 1.8.2.
 local WORLD_MAP_MODES = { "full", "compact", "hidden" }
 local WORLD_MAP_MODE_TEXT = { full = "MAP_MODE_FULL", compact = "MAP_MODE_COMPACT", hidden = "MAP_MODE_HIDDEN" }
 
@@ -1548,6 +1658,7 @@ function Overlord.MapMarkers:CreateZoneOverlay(zone)
         pooled._olRibbonInit = nil
         pooled._olRibbonOk = nil
         pooled._olHover = nil
+        ZoneArc.Hide(pooled)
         if Overlord.MapMarkers._compactHover == pooled then Overlord.MapMarkers._compactHover = nil end
         if pooled.titleRibbonLeft then pooled.titleRibbonLeft:Hide() end
         if pooled.titleRibbonMid then pooled.titleRibbonMid:Hide() end
@@ -1750,6 +1861,7 @@ function Overlord.MapMarkers:UpdateOverlayLayout(overlay)
     end
     overlay._olRibbonKey = nil
     LayoutZoneTitleRibbon(overlay, showTitles)
+    ZoneArc.Layout(overlay, snapD, labelDiameter, not showTitles)
 end
 
 -- A zone being captured "breathes": a masked glow in the zone colour fades in and
@@ -1886,6 +1998,7 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
     overlay.subtext:Show()
     overlay.subtext2:Show()
     LayoutZoneTitleRibbon(overlay, overlay._olShowTitles)
+    ZoneArc.Layout(overlay, overlay._olSnapD, overlay._olLabelDiameter, not overlay._olShowTitles)
     overlay.subtext:SetTextColor(ZONE_TEXT_GOLD_R, ZONE_TEXT_GOLD_G, ZONE_TEXT_GOLD_B)
     overlay.subtext:SetShadowColor(0, 0, 0, 0)
     overlay.subtext:SetShadowOffset(0, 0)

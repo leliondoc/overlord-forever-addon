@@ -143,8 +143,8 @@ settings["Overlord_MapIconScale"].set(3)
 assert(OverlordDB.config.mapIconScale == 1.5, "Icon size not clamped to 150 %")
 assert(settings["Overlord_MapIconScale"].get() == 1.5)
 -- 1.7.1: Most Wanted alerts get a native checkbox wired to its module (default on).
--- The world map display is one dropdown (full, compact, hidden), full by default.
-assert(settings["Overlord_MostWantedAlerts"].default == true and settings["Overlord_WorldMapMode"].default == "full")
+-- The world map display is one dropdown (full, compact, hidden), compact by default (1.8.2).
+assert(settings["Overlord_MostWantedAlerts"].default == true and settings["Overlord_WorldMapMode"].default == "compact")
 settings["Overlord_MostWantedAlerts"].set(false)
 assert(Overlord.MostWanted.on == false and Overlord.MostWanted.plates == 1, "Most Wanted box not wired")
 assert(settings["Overlord_MostWantedAlerts"].get() == false)

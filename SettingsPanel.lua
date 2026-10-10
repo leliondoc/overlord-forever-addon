@@ -484,10 +484,10 @@ local function setMostWantedAlerts(value)
     end
 end
 
--- Carte du monde : complet, compact (noms au survol) ou masque (MapMarkers).
+-- Carte du monde : complet, compact (nom le long du cercle, par defaut) ou masque (MapMarkers).
 local function getWorldMapMode()
     local mm = Overlord.MapMarkers
-    return mm and mm.GetWorldMapDisplayMode and mm:GetWorldMapDisplayMode() or "full"
+    return mm and mm.GetWorldMapDisplayMode and mm:GetWorldMapDisplayMode() or "compact"
 end
 
 local function setWorldMapMode(value)
@@ -586,7 +586,7 @@ local ROWS = {
     { kind = "header", label = "SETTINGS_SECTION_MAP", fallback = "Map and minimap" },
     { kind = "dropdown", var = SP.WorldMapModeVariableName, label = "MAP_WORLD_OVERLAYS_LABEL",
         fallback = "Overlord on the world map", tooltip = "MAP_MODE_TOOLTIP",
-        default = "full", get = getWorldMapMode, set = setWorldMapMode,
+        default = "compact", get = getWorldMapMode, set = setWorldMapMode,
         choices = { { "full", "MAP_MODE_FULL", "Full" }, { "compact", "MAP_MODE_COMPACT", "Compact" },
             { "hidden", "MAP_MODE_HIDDEN", "Hidden" } } },
     { kind = "slider", var = SP.MapOverlayOpacityVariableName, label = "MAP_OVERLAY_OPACITY_LABEL",
