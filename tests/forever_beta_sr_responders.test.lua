@@ -48,8 +48,13 @@ sync:OnSyncRequest("Old Joiner", "H:1.6.3:0:::T", "BETA")
 assert(not responded(), "A client from before 1.7.0 was served the map")
 release()
 Overlord.Relay.IsOutdatedMapPeer = function(_, name) return name == "Old Joiner" end
-sync:OnSyncRequest("Old Joiner", payload, "BETA")
+sync:OnSyncRequest("Old Joiner", "H::0:::T", "BETA")
 assert(not responded(), "A neighbour whose presence is from before 1.7.0 was served the map")
+release()
+-- The version a request states decides alone: a player who has just updated is
+-- still known by its previous presence until its next one is heard.
+sync:OnSyncRequest("Old Joiner", payload, "BETA")
+assert(responded(), "A player who has just updated was refused because of its previous presence")
 release()
 sync:OnSyncRequest("Horde Joiner", payload, "BETA")
 assert(responded(), "An updated neighbour was refused next to an outdated one")

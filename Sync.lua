@@ -384,8 +384,11 @@ end
 -- request states.
 Overlord.Sync.MAP_MIN_VERSION = "1.7.0"
 function Overlord.Sync:IsOutdatedMapPeer(name, version)
-    if type(version) == "string" and version:match("^%d+%.%d+%.%d+$")
-        and CompareVersions(version, self.MAP_MIN_VERSION) < 0 then return true end
+    -- The version a request states decides alone: a player who has just updated is
+    -- still known by its previous presence until its next one is heard.
+    if type(version) == "string" and version:match("^%d+%.%d+%.%d+$") then
+        return CompareVersions(version, self.MAP_MIN_VERSION) < 0
+    end
     local net = Overlord.Relay
     return net ~= nil and net.IsOutdatedMapPeer ~= nil and net:IsOutdatedMapPeer(name) == true
 end
@@ -1898,7 +1901,11 @@ function Overlord.Sync:NoteFullMapReceived(sender)
     local now = GetTime()
     self._lastFullZaAt = now
     local theirs, mine = self:GetBetaPeerFaction(sender), Overlord.PlayerFaction
-    if theirs and mine and theirs ~= mine then self._lastEnemyFullZaAt = now end
+    if theirs and mine and theirs ~= mine then
+        self._lastEnemyFullZaAt = now
+    else
+        self._lastOwnFullZaAt = now
+    end
 end
 
 -- Rattrapage periodique de la carte : le canal ne porte plus les photos ZA. Un seul
@@ -1947,9 +1954,17 @@ function Overlord.Sync:RunPeriodicMapCatchup()
     -- faction. On a busy channel our own side's maps arrive all the time, so this
     -- pull never ran: the enemy friend, the only way to the other faction's map,
     -- was never asked, and each faction kept its own captures on its own map.
+    -- Likewise our own side's turn only looks at maps of our own side: the other
+    -- faction's reply to the previous turn used to hold it back every time.
     local round = (tonumber(self._mapCatchupRound) or 0) + 1
     local lastMapAt = self._lastFullZaAt
-    if round % 2 == 1 and #enemies > 0 then lastMapAt = self._lastEnemyFullZaAt end
+    if #enemies > 0 then
+        if (round % 2 == 1) or #allies == 0 then
+            lastMapAt = self._lastEnemyFullZaAt
+        else
+            lastMapAt = self._lastOwnFullZaAt
+        end
+    end
     local outpostWaiting = Overlord.Outpost and Overlord.Outpost.HasStateAwaitingNetwork
         and Overlord.Outpost:HasStateAwaitingNetwork()
     if not outpostWaiting and lastMapAt

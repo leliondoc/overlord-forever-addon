@@ -173,6 +173,16 @@ local function PurgeBounded(store, now, ttl)
     return count
 end
 
+-- 1.8.2: hard marks put because a capture ended on the zone (the wave we followed,
+-- waves relieved or gone quiet). Only those may still give another capture later
+-- (see ShouldRejectFinal). A wave closed by anti-spoof, by its own capturer's
+-- release or by availability stays closed whatever its final says.
+local superseded = { rows = {}, count = 0 }
+local function MarkSuperseded(key)
+    if superseded.rows[key] == nil then superseded.count = superseded.count + 1 end
+    superseded.rows[key] = tombstones[key]
+end
+
 local function PutTombstone(zoneId, originKey, waveId)
     if not zoneId or not originKey or not waveId then return end
     local now = GetTime()
@@ -183,9 +193,16 @@ local function PutTombstone(zoneId, originKey, waveId)
         snapshotClosedTombstones[key] = nil
         snapshotClosedCount = math.max(0, snapshotClosedCount - 1)
     end
+    if superseded.rows[key] ~= nil then
+        superseded.rows[key] = nil
+        superseded.count = math.max(0, superseded.count - 1)
+    end
     if tombstoneCount >= MAX_ROWS
         or now - lastTombstonePurgeAt >= TOMBSTONE_PURGE_INTERVAL then
         tombstoneCount = PurgeBounded(tombstones, now, TOMBSTONE_TTL)
+        if superseded.count > 0 then
+            superseded.count = PurgeBounded(superseded.rows, now, TOMBSTONE_TTL)
+        end
         if softTombstoneCount > 0 then
             softTombstoneCount = PurgeBounded(softTombstones, now, TOMBSTONE_TTL)
         end
@@ -255,6 +272,7 @@ local function HardenSoftTombstonesForZone(zoneId)
                 snapshotClosedTombstones[key] = nil
                 snapshotClosedCount = math.max(0, snapshotClosedCount - 1)
             end
+            MarkSuperseded(key)
         end
     end
 end
@@ -1339,7 +1357,10 @@ function Lease:ShouldRejectFinal(zone, originName, waveId, owner, ts)
     -- unless it takes the zone from another owner at a later date: then it is
     -- another capture. A final accepted while another timer is followed closes that
     -- timer: when the other faction completed first and the followed player
-    -- completes afterwards, his own capture must still count.
+    -- completes afterwards, his own capture must still count. Only for a wave closed
+    -- that way (see MarkSuperseded): never for one closed by anti-spoof or released.
+    local key = LeaseKey(zone.id, originKey, validWave)
+    if superseded.rows[key] == nil or superseded.rows[key] ~= tombstones[key] then return true end
     local at = tonumber(ts)
     if owner and at and zone.owner and zone.owner ~= owner and zone.status ~= "in_progress"
         and at > (tonumber(zone.capturedTime) or 0) then return false end
@@ -1411,6 +1432,9 @@ function Lease:Complete(zone)
     local remote = zone._remoteCaptureLease
     if remote then
         PutTombstone(zone.id, remote.originKey, remote.waveId)
+        if remote.originKey and remote.waveId then
+            MarkSuperseded(LeaseKey(zone.id, remote.originKey, remote.waveId))
+        end
         ClearTransient(zone)
     end
     TombstoneLocalWave(zone)

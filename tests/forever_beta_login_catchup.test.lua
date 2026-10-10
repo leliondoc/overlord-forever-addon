@@ -77,7 +77,7 @@ assert(factions[whispers[1].target] == "Alliance" and factions[whispers[2].targe
 -- and the enemy friend, the only way to the other faction's map, was never asked).
 whispers = {}
 sync._mapCatchupRound = 0
-sync._lastFullZaAt, sync._lastEnemyFullZaAt = GetTime(), nil
+sync._lastFullZaAt, sync._lastOwnFullZaAt, sync._lastEnemyFullZaAt = GetTime(), GetTime(), nil
 assert(sync:RunPeriodicMapCatchup() and factions[whispers[1].target] == "Alliance",
     "A map of our own side skipped the pull toward the other faction")
 assert(not sync:RunPeriodicMapCatchup() and #whispers == 1,
@@ -90,16 +90,35 @@ assert(sync:RunPeriodicMapCatchup() and #whispers == 2 and factions[whispers[2].
     "The other faction was never asked again while maps of our own side kept arriving")
 -- A map from the other faction within the interval does skip the other faction's turn.
 sync._mapCatchupRound = 0
-sync._lastFullZaAt, sync._lastEnemyFullZaAt = GetTime(), GetTime()
+sync._lastFullZaAt, sync._lastOwnFullZaAt, sync._lastEnemyFullZaAt = GetTime(), nil, GetTime()
 assert(not sync:RunPeriodicMapCatchup() and #whispers == 2 and sync._mapCatchupRound == 1,
     "A fresh map of the other faction did not skip the pull toward it")
+-- That same map (the other faction's reply to its own turn) does not hold our own
+-- side's turn back: each turn only waits for maps of the side it asks. Our own
+-- side used never to be asked while the other faction kept answering.
+assert(sync:RunPeriodicMapCatchup() and #whispers == 3 and factions[whispers[3].target] == "Horde",
+    "The other faction's reply held back the pull toward our own side")
+-- With nobody of our own side to ask, the turn goes to the other faction and waits
+-- for its maps like its own turn (no pull twice as often).
+do
+    local kept = peers
+    peers = {}
+    for _, name in ipairs(kept) do if factions[name] == "Alliance" then peers[#peers + 1] = name end end
+    sync._mapCatchupRound = 1
+    assert(not sync:RunPeriodicMapCatchup() and #whispers == 3,
+        "Without a neighbour of our own side the other faction was asked right after its map")
+    peers = kept
+end
 -- An accepted map says which side it came from.
 sync._lastFullZaAt, sync._lastEnemyFullZaAt = nil, nil
+sync._lastOwnFullZaAt = nil
 sync:NoteFullMapReceived("Horde PeerA")
-assert(sync._lastFullZaAt and not sync._lastEnemyFullZaAt, "A map of our own side counted as the other faction's")
+assert(sync._lastFullZaAt and sync._lastOwnFullZaAt and not sync._lastEnemyFullZaAt,
+    "A map of our own side counted as the other faction's")
+sync._lastOwnFullZaAt = nil
 sync:NoteFullMapReceived("Ally PeerA")
-assert(sync._lastEnemyFullZaAt, "A map of the other faction was not noted as such")
-sync._lastFullZaAt, sync._lastEnemyFullZaAt = nil, nil
+assert(sync._lastEnemyFullZaAt and not sync._lastOwnFullZaAt, "A map of the other faction was not noted as such")
+sync._lastFullZaAt, sync._lastOwnFullZaAt, sync._lastEnemyFullZaAt = nil, nil, nil
 -- 1.8.2: a client from before 1.7.0 is never asked for its map, at login or later
 -- (update required). Here every neighbour of the other faction is one.
 do

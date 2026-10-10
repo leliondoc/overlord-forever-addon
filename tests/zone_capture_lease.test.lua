@@ -256,6 +256,15 @@ expect(revived and Lease:AdoptRemote(zone, "Horde", "Bob", revived),
 Lease:ExpireRemote(zone, "release")
 expect(Lease:ShouldRejectFinal(zone, "Bob", "wdirect"),
     "a released wave's final was still accepted")
+-- 1.8.2: whatever that final says (another owner, a later date): only a wave closed
+-- by a capture ending on the zone may still give another capture.
+do
+    local owner, status, at = zone.owner, zone.status, zone.capturedTime
+    zone.owner, zone.status, zone.capturedTime = "Alliance", "captured", wallBase + 100
+    expect(Lease:ShouldRejectFinal(zone, "Bob", "wdirect", "Horde", wallBase + 5000),
+        "a wave closed without a capture (release, anti-spoof) was reopened by its final")
+    zone.owner, zone.status, zone.capturedTime = owner, status, at
+end
 -- A wave replaced by another capturer keeps a valid final until the zone is really
 -- taken; after that no second capturer can be credited for the same capture.
 mono = 160
@@ -295,6 +304,19 @@ do
     zone.status = "in_progress"
     expect(Lease:ShouldRejectFinal(zone, "Bob", "wreplaced", "Horde", wallBase + 420),
         "a closed wave's final was accepted over another assault in progress")
+    zone.owner, zone.status, zone.capturedTime = owner, status, at
+end
+-- The wave whose own final completed the capture is not one of those: it cannot
+-- complete a second time, whatever a later copy of its final says.
+do
+    local own = Lease:ValidateProgress(zone.id, "Horde", "Frank", "wown", wallBase + 500, 0, 0, 120, 7, "Frank")
+    expect(own and Lease:AdoptRemote(zone, "Horde", "Frank", own), "own-wave fixture missing")
+    Lease:Complete(zone)
+    Lease:TombstoneFinalWave(zone.id, "Frank", "wown")
+    local owner, status, at = zone.owner, zone.status, zone.capturedTime
+    zone.owner, zone.status, zone.capturedTime = "Alliance", "captured", wallBase + 700
+    expect(Lease:ShouldRejectFinal(zone, "Frank", "wown", "Horde", wallBase + 900),
+        "the wave whose final completed the capture was accepted a second time")
     zone.owner, zone.status, zone.capturedTime = owner, status, at
 end
 
@@ -355,6 +377,8 @@ expect(zone.status == "in_progress", "forged ZR changed state")
 expect(Lease:ReceiveRelease(zone.id .. ":wrelease:Bob", "Bob"), "valid ZR rejected")
 expect(zone.status == "captured" and zone.owner == "Alliance", "valid ZR did not restore base")
 expect(Lease:ShouldRejectFinal(zone, "Bob", "wrelease"), "a direct ZR no longer blocks its wave")
+expect(zone.owner == "Alliance" and Lease:ShouldRejectFinal(zone, "Bob", "wrelease", "Horde", wallBase + 5000),
+    "a wave its capturer released was reopened by a later final")
 
 -- 1.8.1: a release relayed for its origin (gateway-written name, not authenticated)
 -- ends the orange state too, but only softly: the origin's genuine final of that

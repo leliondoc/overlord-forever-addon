@@ -76,4 +76,27 @@ for i = 1, 40 do
         break
     end
 end
-print("Forever relay ZA batches: forwarded map pages never relayed, local batches unaffected")
+-- 1.8.2: a broadcast map of a client from before 1.7.0 (known by its own presence)
+-- is not passed on: a receiver one hop further does not hear that client's presence
+-- and would take its map. The same broadcast from an updated neighbour still is.
+drain()
+local channelCopies = 0
+function relay.Sync:SendToChannel() channelCopies = channelCopies + 1; return true end
+function relay.Sync:SendSyncRequest() return true end
+local function hello(who, suffix)
+    serial = serial + 1
+    assert(net:Receive(table.concat({ "global", "h" .. serial, time(), "*", who, "NH", suffix }, "|"), who, "CHANNEL"))
+end
+local function broadcastMap(who)
+    channelCopies = 0
+    page(who, "F-7-" .. serial, 1, 1, "*")
+    drain()
+    return channelCopies
+end
+hello("Updated Client", "1.7.2~lr~lp6")
+hello("Old Client", "1.6.3~lp6")
+assert(net:IsOutdatedMapPeer("Old Client") and not net:IsOutdatedMapPeer("Updated Client"), "fixture: presences not read")
+assert(broadcastMap("Updated Client") > 0, "fixture: a broadcast map of an updated neighbour is no longer passed on")
+assert(broadcastMap("Old Client") == 0, "the map of a client from before 1.7.0 was passed on")
+print("Forever relay ZA batches: forwarded map pages never relayed, local batches unaffected, "
+    .. "maps of clients before 1.7.0 not passed on")

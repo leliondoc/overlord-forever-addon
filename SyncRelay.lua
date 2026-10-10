@@ -2389,9 +2389,12 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
     local captureClaim = p.kind == "OC" or p.kind == "LO" or p.kind == "LOC"
         or (p.kind == "OP" and type(p.payload) == "string"
             and p.payload:match("^v%d+:[^:]*:([^:]*)") == "held")
+    -- 1.8.2: the map of a client from before 1.7.0 (see MAP_MIN_PROTOCOL) is not
+    -- taken here and not passed on: a receiver one hop further does not hear that
+    -- client's presence and would take it.
     local relayable = not captureClaim and not isPointToPointCatchup(p.kind, p.target)
         and not ((p.kind == "SR" or p.kind == "GR" or p.kind == "CR") and p.target == "*")
-        and p.kind ~= "GI"
+        and p.kind ~= "GI" and not (p.kind == "ZA" and self:IsOutdatedMapPeer(origin))
     if p.kind == "GI" then
         self.stats.giForwardSkipped = (self.stats.giForwardSkipped or 0) + 1
     end
