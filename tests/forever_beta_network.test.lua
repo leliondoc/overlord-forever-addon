@@ -964,6 +964,21 @@ do
     for _, row in ipairs(hearer.received) do if row.payload == "zone:Alliance:real" then got = got + 1 end end
     assert(got == 1, "The genuine packet was not delivered exactly once: " .. got)
 end
+-- ... nor a forged copy stamped in the same second: the seal also covers the content,
+-- which the forger cannot know before the victim sends it.
+do
+    local hearer = client("Samesec Tester", "seal-same")
+    local at = time()
+    assert(hearer.Relay:Receive("global|victim-9|" .. at .. "|*|Victim Tester,Cheater Tester|C|zone:Horde:forged",
+        "Cheater Tester", "WHISPER"))
+    local genuine = "global|victim-9|" .. at .. "|*|Victim Tester|C|zone:Alliance:real"
+    assert(hearer.Relay:Receive(genuine, "Victim Tester", "CHANNEL"), "A same-second pre-seal silenced the genuine packet")
+    hearer.Relay:Receive(genuine, "Victim Tester", "CHANNEL") -- a true duplicate (at most a forward retry)
+    drain()
+    local got = 0
+    for _, row in ipairs(hearer.received) do if row.payload == "zone:Alliance:real" then got = got + 1 end end
+    assert(got == 1, "The genuine packet was not delivered exactly once after a same-second forgery: " .. got)
+end
 -- Battle.net liveness memory is bounded (64 accounts, every Battle.net sender): when
 -- full of fresh senders, the one heard longest ago gives way, so a friend who just
 -- spoke is always recorded as a live bridge.
