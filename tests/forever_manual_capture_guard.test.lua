@@ -39,9 +39,15 @@ SlashCmdList.OVERLORD("start " .. zone.id)
 assert(checks == 1, "/ov start did not run the usual capture check")
 assert(starts == 0 and not zone.isHolding and zone.status == "available",
     "/ov start opened a capture without the PvP flag")
-local told = false
-for _, msg in ipairs(hints) do if msg:find("Manual Point", 1, true) then told = true end end
-assert(told, "the player was not told why the capture did not start")
+local function toldAbout(text)
+    local n = 0
+    for _, msg in ipairs(hints) do if msg:find(text, 1, true) then n = n + 1 end end
+    return n
+end
+assert(toldAbout("Manual Point") == 1, "the player was not told (once) why the capture did not start")
+-- Again within the check's one-minute hint cooldown: the command still says why.
+SlashCmdList.OVERLORD("start " .. zone.id)
+assert(toldAbout("/pvp") == 2, "a second /ov start within the hint cooldown said nothing")
 
 -- An ally's capture is running on the point: no second capturer at its elapsed time.
 flagged = true
@@ -50,7 +56,8 @@ zone.zsOfficialCapturerName = "Ally Name"
 zone._remoteCaptureLease = { directValidated = true, lastDirectSeen = GetTime(), originKey = "ally name",
     waveId = "allywave", owner = Overlord.PlayerFaction }
 SlashCmdList.OVERLORD("start " .. zone.id)
-assert(checks == 2, "/ov start did not run the usual capture check on an ally's wave")
+assert(checks == 3, "/ov start did not run the usual capture check on an ally's wave")
+assert(toldAbout("already in progress") == 1, "/ov start on an ally's wave said nothing")
 assert(starts == 0 and not zone.isHolding and zone.holdTimeElapsed == 100,
     "/ov start took over an ally's running capture")
 print("Manual capture start: /ov start runs the usual check (no PvP flag, ally's wave) OK")

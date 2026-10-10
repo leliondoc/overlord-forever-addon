@@ -934,6 +934,41 @@ function Overlord.ZoneControl:Update(deltaTime)
 end
 
 -- Verifie si le joueur est dans une zone disponible
+-- /ov start and a click on the zone row: the same start as the 1 s check (all its
+-- guards), then one chat line saying what happened (the check itself starts quietly
+-- and gives its PvP hint once a minute).
+function Overlord.ZoneControl:StartManually(zone)
+    if not zone then return false end
+    local wasHolding, owner = zone.isHolding, zone.owner
+    local hintBefore = self._pvpFlagHintAt and self._pvpFlagHintAt[zone.id]
+    self:CheckPlayerPosition()
+    local Lx = Overlord.L or {}
+    local msg, color = nil, "|cFFFFD100"
+    if zone.isHolding and zone.holdAuthorityLocal and not wasHolding then
+        color = "|cFF00FF00"
+        if owner and owner ~= Overlord.PlayerFaction then
+            msg = Lx.ASSAULT_LAUNCHED or "Assault on %s launched!"
+        else
+            msg = Lx.CAPTURE_LAUNCHED or "Capture of %s started!"
+        end
+    elseif zone.status == "in_progress" then
+        msg = Lx.ALREADY_IN_PROGRESS or "%s already in progress..."
+    elseif self:PlayerLacksPvpFlag() then
+        -- Not twice in a row when the check just gave its own hint.
+        if (self._pvpFlagHintAt and self._pvpFlagHintAt[zone.id]) == hintBefore then
+            msg = Lx.CAPTURE_NEEDS_PVP or "%s: enable PvP (/pvp) to capture this objective."
+        end
+    elseif self:IsPlayerInNonCaptureStateForSync() then
+        msg = Lx.INDICATOR_DISMOUNT_TO_CAPTURE or "Dismount."
+    else
+        msg = Lx.CAPTURE_SYNC_WAITING or "Initial sync pending: capture of %s is temporarily blocked."
+    end
+    if msg then
+        Overlord:PrintNotification(color .. "[Overlord]|r " .. string.format(msg, zone.name or ""))
+    end
+    return zone.isHolding == true
+end
+
 function Overlord.ZoneControl:CheckPlayerPosition()
     local currentZone = Overlord.Zones:GetCurrentPlayerZone()
     local currentId = currentZone and currentZone.id or nil

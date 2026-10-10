@@ -1897,16 +1897,10 @@ function Overlord.UI:CreateZoneLine(parent, zone)
                     Overlord:PrintNotification(string.format("|cFFFF0000[Overlord]|r " .. L.CAPTURE_BLOCKED_RULES, z.name))
                     return
                 end
-                local owner = z.owner
-                -- Same start as the 1 s check, with all its guards (it says why when
-                -- the PvP flag is missing); starting by hand skipped them all.
-                Overlord.ZoneControl:CheckPlayerPosition()
+                -- Same start as the 1 s check, with all its guards, and one chat line
+                -- saying what happened; starting by hand skipped them all.
+                Overlord.ZoneControl:StartManually(z)
                 Overlord.UI:Refresh()
-                if z.isHolding and z.holdAuthorityLocal then
-                    local msg = owner and owner ~= pf
-                        and L.ASSAULT_LAUNCHED or L.CAPTURE_LAUNCHED
-                    Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. msg, z.name))
-                end
             else
                 local cx, cy = z.center and z.center[1], z.center and z.center[2]
                 if cx and cy then

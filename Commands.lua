@@ -776,7 +776,7 @@ local function CommandHandler(msg)
         -- The usual 1 s check starts it, with all its guards (PvP flag, mount, death,
         -- an ally's capture already running, the entry snapshot grace); starting by
         -- hand skipped them all.
-        Overlord.ZoneControl:CheckPlayerPosition()
+        Overlord.ZoneControl:StartManually(zone)
         Overlord:MarkDirty()
         if Overlord.UI then Overlord.UI:RequestRefresh() end
         
