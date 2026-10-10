@@ -978,6 +978,58 @@ do
     for k, v in pairs(saved) do st[k] = v end
     tick(6)
 end
+-- ===== (41) keep/outpost content for the map pulls (1.8.2): every tenant with its
+-- date, so that a capture missed under a newer one is seen ("~o" only sees a newer one)
+do
+    tick(6) -- (cached 5 s)
+    local sum0, digest0 = sync:GetOutpostMapContent()
+    local st = op:GetState("silverpine")
+    local saved = {}
+    for k, v in pairs(st) do saved[k] = v end
+    for k in pairs(st) do st[k] = nil end
+    tick(6)
+    local emptySum, emptyDigest = sync:GetOutpostMapContent()
+    local older = now - 5000 -- older than other captures this map holds: "~o" would not see it
+    st.status, st.ownerGuild, st.ownerFaction, st.claimedAt, st.updatedAt = "held", "Stamp Guild", "Alliance", older, older
+    local cachedSum, cachedDigest = sync:GetOutpostMapContent()
+    assert(cachedSum == emptySum and cachedDigest == emptyDigest, "the content is rebuilt on every presence")
+    tick(6)
+    local sum, digest = sync:GetOutpostMapContent()
+    assert(sum == emptySum + older and digest ~= emptyDigest, "a held site is not in the content of our map")
+    -- Same tenant written with another case: the same content.
+    st.ownerGuild = "STAMP guild"
+    tick(6)
+    local sumCase, digestCase = sync:GetOutpostMapContent()
+    assert(sumCase == sum and digestCase == digest, "the case of a guild name changed the content")
+    -- Another tenant at the same date, or the same tenant at another date: another content.
+    st.ownerGuild = "Other Guild"
+    tick(6)
+    local _, digestOther = sync:GetOutpostMapContent()
+    assert(digestOther ~= digest, "another tenant gave the same content")
+    st.ownerGuild, st.claimedAt = "Stamp Guild", older + 1
+    tick(6)
+    local sumLater, digestLater = sync:GetOutpostMapContent()
+    assert(sumLater == sum + 1 and digestLater ~= digest, "another capture date gave the same content")
+    st.claimedAt = older
+    -- Under an observed assault the besieged tenant still counts, exactly as when held:
+    -- a neighbour that missed the assault holds the same map.
+    st.status, st.previousOwnerGuild, st.previousOwnerFaction, st.previousClaimedAt = "in_progress", "Stamp Guild", "Alliance", older
+    st.ownerGuild, st.ownerFaction, st.claimedAt = "Assault Guild", "Horde", 0
+    tick(6)
+    local sumSiege, digestSiege = sync:GetOutpostMapContent()
+    assert(sumSiege == sum and digestSiege == digest, "an observed assault changed the content of our map")
+    -- A site still waiting for its login snapshot counts for nothing.
+    st.status, st.ownerGuild, st.ownerFaction, st.claimedAt = "held", "Stamp Guild", "Alliance", older
+    st.previousOwnerGuild, st.previousClaimedAt, st._loginSyncUnconfirmed = nil, nil, true
+    tick(6)
+    local sumLogin, digestLogin = sync:GetOutpostMapContent()
+    assert(sumLogin == emptySum and digestLogin == emptyDigest, "an unconfirmed login state is in the content")
+    for k in pairs(st) do st[k] = nil end
+    for k, v in pairs(saved) do st[k] = v end
+    tick(6)
+    local sumBack, digestBack = sync:GetOutpostMapContent()
+    assert(sumBack == sum0 and digestBack == digest0, "fixture: the site was not restored")
+end
 print("Outpost claims: keep/outpost stamps (served with capturer, known with the besieged tenant)")
 -- ===== Ledger catch-up pages: every row past the first 16 sits in the block and
 -- sub-page of its key's djb2 hash (the bucketing every client shares), and the

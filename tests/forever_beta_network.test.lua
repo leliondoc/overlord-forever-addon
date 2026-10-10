@@ -1040,6 +1040,29 @@ do
     -- A truncated stamp says nothing: pulled as before the stamps.
     now = now + 61
     assert(pulled("Short Tester", "~m1jk~o0~z12345"), "A truncated content stamp was trusted")
+    -- Keeps and outposts are part of the content: the same zones with a tenant we
+    -- lack (older than our newest keep/outpost capture, which "~o" cannot see) are
+    -- another map, and ours is advertised with our own tenants.
+    do
+        local siteSum, siteDigest = 0, 0
+        function fresh.Sync:GetOutpostMapContent() return siteSum, siteDigest end
+        now = now + 61
+        assert(not pulled("Sites Equal", "~m1jk~o0" .. ours), "fixture: equal maps pulled")
+        -- zones a1 (sum 2000) plus one tenant dated 1500 on their side
+        local zoneDigest = fresh.Relay.ParseBase36(ours:sub(3, 8))
+        local theirs = "~z" .. b36((zoneDigest + 777) % 2147483647, 6) .. b36(2000 + 1500)
+        assert(pulled("Sites Hole", "~m1jk~o0" .. theirs), "A keep/outpost capture missed under a newer one was not pulled")
+        -- Once our map holds that tenant too, the two maps are equal again.
+        siteSum, siteDigest = 1500, 777
+        now = now + 61
+        assert(not pulled("Sites Held", "~m1jk~o0" .. theirs), "Our own tenants are not part of our content")
+        advertised = nil
+        assert(fresh.Relay:Send("NH", "1.0.0")); drain()
+        assert(advertised and advertised:find("~m1jk~o0" .. theirs .. "~l9~ld~lr~lp6", 1, true),
+            "Own presence does not advertise our keeps and outposts in the content")
+        fresh.Sync.GetOutpostMapContent = nil
+        now = now + 6
+    end
     -- Keeps and outposts (1.8.2): their captures ride the same map reply and are
     -- believed from no other source we did not witness. The zone stamp alone skipped
     -- the pulls that brought them, so they have their own stamp ("~o").

@@ -748,6 +748,44 @@ function Overlord.Sync:GetOutpostMapStamps()
     return served, known
 end
 
+-- What our map holds for the keeps and outposts, for the content stamp of the
+-- presence ("~z", SyncRelay localMapStamp): the sum of the capture dates and an
+-- order-free hash of every tenant with its date. The newest capture alone ("~o"
+-- above) cannot see a capture missed under a newer one, like the zones. A site
+-- under an observed assault counts by its besieged tenant, the state held by every
+-- client that missed the assault; a site still waiting for its login snapshot
+-- counts for nothing.
+local outpostMapContent = { at = -1000, sum = 0, digest = 0 }
+function Overlord.Sync:GetOutpostMapContent()
+    local now = GetTime()
+    if now - outpostMapContent.at < 5 then return outpostMapContent.sum, outpostMapContent.digest end
+    local sum, digest = 0, 0
+    local OP = Overlord.Outpost
+    if OP and OP.GetState and Overlord.OutpostSites then
+        for siteKey in pairs(Overlord.OutpostSites) do
+            local st = OP:GetState(siteKey)
+            local guild, claimedAt
+            if st.status == "held" then
+                if not OP:IsOutpostStateAwaitingNetworkSnapshot(st) then
+                    guild, claimedAt = st.ownerGuild, st.claimedAt
+                end
+            elseif st.status == "in_progress" then
+                guild, claimedAt = st.previousOwnerGuild, st.previousClaimedAt
+            end
+            guild, claimedAt = OP:SanitizeGuildName(guild or ""), math.floor(tonumber(claimedAt) or 0)
+            if guild ~= "" and claimedAt > 0 then
+                sum = sum + claimedAt
+                local text = tostring(siteKey) .. "|" .. guild:lower() .. "|" .. claimedAt
+                local hash = 5381
+                for i = 1, #text do hash = (hash * 33 + text:byte(i)) % 2147483647 end
+                digest = (digest + hash) % 2147483647
+            end
+        end
+    end
+    outpostMapContent.at, outpostMapContent.sum, outpostMapContent.digest = now, sum, digest
+    return sum, digest
+end
+
 -- Shortest time a character needs before completing a capture of this site (the
 -- gold-reduced contract, minus a little clock skew), the same on every client.
 local function OutpostClaimGap(siteKey)

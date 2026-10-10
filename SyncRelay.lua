@@ -669,6 +669,11 @@ local function localMapStamp()
             end
         end
     end
+    -- Keeps and outposts ride the same map reply: their tenants are part of the content.
+    if sync.GetOutpostMapContent then
+        local siteSum, siteDigest = sync:GetOutpostMapContent()
+        sum, digest = sum + siteSum, (digest + siteDigest) % 2147483647
+    end
     mapStampCache.at, mapStampCache.value, mapStampCache.sum, mapStampCache.digest = now, best, sum, digest
     return best, sum, digest
 end
