@@ -268,7 +268,8 @@ assert(s:IsExpectedPagedLeaderboardDelivery("LK", "Victim Tester",
 -- A known peer whose capability is not known (yet or any more) is probed in v8: an
 -- old client stays silent (or answers once) until its presence says what it is.
 sent = {}
-assert(s:StartCompletePagedLeaderboardCatchup("Raced Tester", function() end))
+local probeNotAsked
+assert(s:StartCompletePagedLeaderboardCatchup("Raced Tester", function(_, _, notAsked) probeNotAsked = notAsked end))
 advance(5)
 assert(sent[1] and sent[1].version == "8" and sent[1].target == "Raced Tester",
     "A peer with unknown capability was not probed in v8")
@@ -276,6 +277,7 @@ assert(s:GetPagedLeaderboardDiagnostics():find("capability unknown, v8 probe", 1
     "Diagnostics omit the v8 probe of an unknown-capability peer")
 assert(s:CancelPagedLeaderboardCatchup())
 advance(5)
+assert(probeNotAsked == false, "a pull cut after its request was reported as never sent")
 -- A peer whose route became relayed (no longer a direct neighbour) ends the
 -- pull at once, without sending, instead of retrying until the 15 min watchdog.
 advance(301)
@@ -284,9 +286,11 @@ local wire = table.concat({ "EU", "audit-far", tostring(e.time()), "*",
 assert(net:Receive(wire, "Gateway Tester", "CHANNEL"))
 assert(net:IsPeer("Far Tester") and not net:IsDirectPeer("Far Tester"))
 sent = {}
-local farResult
-s:StartCompletePagedLeaderboardCatchup("Far Tester", function(ok) farResult = ok end)
+local farResult, farNotAsked
+s:StartCompletePagedLeaderboardCatchup("Far Tester", function(ok, _, notAsked) farResult, farNotAsked = ok, notAsked end)
 advance(5)
 assert(#sent == 0, "A ranking request went toward a peer behind relays")
 assert(farResult == false, "A pull toward a peer behind relays did not end promptly")
+-- Nothing left for that peer: the scheduler must not set it aside for our own failure.
+assert(farNotAsked == true, "a pull that sent nothing was not reported as such")
 print("NH capability: peers before 1.8.1 neither asked nor served, capability 9 in v8, relayed presence ignored, unknown-capability v8 probe, capability TTL and relayed-peer early end OK")

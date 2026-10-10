@@ -482,3 +482,28 @@ assert(login.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true))
 advance(35)
 assert(historyTarget == nil, "Outpost history was asked again before six hours")
 print("PASS: login pulls v7 from a direct neighbour, then its outpost history once")
+
+-- A round that fails on our own side before anything was sent (our copy of the ranking
+-- could not be built) does not set the neighbour aside; a neighbour that was asked and
+-- stayed silent still is, for ten minutes.
+local blocked = client("Blocked Tester", "alliance")
+blocked.Overlord.Relay.GetDirectPeers = function() return { b.name } end
+local nothingSent, attempts = true, 0
+blocked.Overlord.Sync.StartCompletePagedLeaderboardCatchup = function(_, peer, callback)
+    attempts = attempts + 1
+    callback(false, false, nothingSent)
+    return true
+end
+assert(blocked.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp())
+advance(200)
+local neighbours = blocked.Overlord.Sync:GetCatchupNeighbourDiagnostics()
+assert(attempts >= 2, "fixture: the scheduler did not retry (" .. attempts .. ")")
+assert(neighbours:find("set aside 0 (none)", 1, true),
+    "a failure of our own set an unasked neighbour aside: " .. neighbours)
+nothingSent = false
+assert(blocked.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp(true))
+advance(200)
+neighbours = blocked.Overlord.Sync:GetCatchupNeighbourDiagnostics()
+assert(neighbours:find("set aside 1", 1, true),
+    "a neighbour asked and silent is no longer set aside: " .. neighbours)
+print("PASS: a local failure before any request does not penalise the neighbour")

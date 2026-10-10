@@ -769,7 +769,7 @@ ScheduleAttempt = function(pending, attempt)
         end
         local started, refusal = false, "local"
         if sync.StartCompletePagedLeaderboardCatchup then
-            started, refusal = sync:StartCompletePagedLeaderboardCatchup(target, function(success, supported)
+            started, refusal = sync:StartCompletePagedLeaderboardCatchup(target, function(success, supported, notAsked)
                 if sync._historyCatchupPending ~= pending or pending.terminal then return end
                 if success then
                     ForgivePeer(target)
@@ -778,8 +778,12 @@ ScheduleAttempt = function(pending, attempt)
                 end
                 -- A silent peer (no v6 answer) is set aside for ten minutes. A busy
                 -- or interrupted one only yields briefly to the other neighbours; the
-                -- next attempt with it resumes from the bucket checkpoint.
-                PenalizePeer(target, not supported and PEER_PENALTY_SEC or BUSY_PEER_SEC)
+                -- next attempt with it resumes from the bucket checkpoint. A round that
+                -- failed here before anything was sent (our own copy not ready) says
+                -- nothing about the peer: no penalty, as for a local refusal below.
+                if not notAsked then
+                    PenalizePeer(target, not supported and PEER_PENALTY_SEC or BUSY_PEER_SEC)
+                end
                 ScheduleAttempt(pending, attempt + 1)
             end)
         end

@@ -241,6 +241,7 @@ local PROFILE_REUSE_SEC = 120
 -- list and fetch again the rows the previous round just brought).
 local function prepare(callback, own)
     if building then return false end
+    stats.profileWhy = nil
     local wanted = epoch()
     local recent = sync.GetAttestedLeaderboardSnapshot and sync:GetAttestedLeaderboardSnapshot()
     local cached = type(recent) == "table" and profiles[recent] or nil
@@ -564,7 +565,9 @@ local function finish(state, success, unsupportedPeer)
         stats.lastSweepAt = stats.sweepAt or state.startedAt
         stats.sweepBase, stats.sweepAt, stats.sweepFiltered, stats.sweepEpoch = nil, nil, nil, nil
     end
-    state.callback(success, state.supported == true)
+    -- Third value: nothing ever left for this peer (our own copy could not be built,
+    -- the round was cut before its first request): the failure is ours, not its.
+    state.callback(success, state.supported == true, state.sentAny ~= true)
 end
 
 -- Requests, probes and busy replies are a single small packet. They leave
@@ -639,6 +642,7 @@ request = function(state, retry)
             return
         end
         state.waitingForSend = nil
+        state.sentAny = true
     end
     sendRequest()
     -- Two relay TTLs plus margin also cover a congested first request/reply.
@@ -1225,8 +1229,8 @@ function sync:StartCompletePagedLeaderboardCatchup(peer, callback)
     end
     stats.peerProtocol = capability and ("beta v" .. capability .. "; l9+ld+lr+lp6 NH")
         or "capability unknown, v8 probe"
-    return self:StartPagedLeaderboardCatchup(peer, function(ok, supported)
-        callback(ok == true, supported == true)
+    return self:StartPagedLeaderboardCatchup(peer, function(ok, supported, notAsked)
+        callback(ok == true, supported == true, notAsked == true)
     end, true, true, true)
 end
 
