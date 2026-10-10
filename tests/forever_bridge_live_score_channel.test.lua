@@ -133,6 +133,19 @@ s._channelKillPending = nil
 advance(10)
 assert(#sent == base + 1 and sent[#sent].chatType == "CHANNEL", "bridge row lost after our own total")
 
+-- 5b. ... but only when it is due within 2 s: a pending total due in 25 s (a fighting
+-- bridge has one most of the time) no longer holds the enemy total back.
+advance(120)
+refreshPeers()
+s._channelKillPending, s._channelKillAt = "own-total", clock - 5
+base = #sent
+know("Horde Fifth", 60)
+kOverBnet("Horde Fifth", 63)
+advance(10)
+assert(#sent == base + 1 and sent[#sent].chatType == "CHANNEL"
+    and sent[#sent].msg:match("^LK:Horde Fifth:63:"), "an own total due in 25 s held the enemy total back")
+s._channelKillPending, s._channelKillAt = nil, nil
+
 -- 6. Channel unavailable (not joined): the whispers are the fallback.
 advance(120)
 refreshPeers()

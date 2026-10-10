@@ -1083,6 +1083,8 @@ do
     -- Same share for the outbound live-score bridge (our faction's totals heard
     -- first-hand on the channel), per subject.
     bridgesHeard(1, 12)
+    -- This hearer is a live bridge (its enemy friend heard again: rows go to live friends only).
+    hearer.Relay:NoteBNetHeard(enemy)
     local queued = 0
     for i = 1, 40 do
         local who = "Owner" .. letters:sub((i - 1) % 12 + 1, (i - 1) % 12 + 1)

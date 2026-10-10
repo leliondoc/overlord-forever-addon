@@ -2169,8 +2169,13 @@ function Overlord.Sync:SendBridgeLKToChannel(payload)
     if not channelId then return false end
     local msg = "LK:" .. payload
     if #msg > 255 then return false end
-    -- Our own kill total waiting for its channel slot always goes first.
-    if self._channelKillPending then return false, "wait" end
+    -- Our own kill total waiting for its channel slot goes first, but only when it is
+    -- due within 2 s (Blizzard refuses two messages about 1 s apart): a fighting bridge
+    -- has one pending most of the time, and the enemy total waited for tens of seconds.
+    if self._channelKillPending
+        and (tonumber(self._channelKillAt) or 0) + self.CHANNEL_KILL_INTERVAL - GetTime() < 2 then
+        return false, "wait"
+    end
     if not self:TakeChannelToken(false) then return false, "wait" end
     if self:SendAddonChecked(msg, "CHANNEL", channelId) == true then return true end
     return false, "wait"

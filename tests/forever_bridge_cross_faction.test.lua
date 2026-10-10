@@ -87,8 +87,16 @@ kOnChannel("Horde Killer", 203, "Horde")
 advance(2)
 assert(Overlord.Leaderboard.kills["Horde Killer"] == 203, "fixture: the owner's K is accepted")
 assert(#bnetRows == 0, "a total was sent without any opposite-faction friend")
--- With an Alliance friend: one row to that friend.
+-- An Alliance friend never heard under Overlord (no addon, other ruleset, in an
+-- instance) gets nothing.
 friends = { 7, faction = { [7] = "Alliance" } }
+advance(70)
+kOnChannel("Horde Killer", 205, "Horde")
+advance(2)
+assert(#bnetRows == 0, "a total went to an opposite-faction friend never heard under Overlord")
+-- Heard (kept heard for the rest of this stage): one row to that friend.
+local function keepHeard() net:NoteBNetHeard(7); C_Timer.After(100, keepHeard) end
+keepHeard()
 advance(70)
 kOnChannel("Horde Killer", 206, "Horde")
 advance(2)
@@ -118,6 +126,14 @@ know("Ally Visitor", 10, "Alliance")
 s:OnReceiveLeaderboardKills(lkRow("Ally Visitor", 12, "Alliance"), "Peer Horde", "CHANNEL")
 advance(70)
 assert(#bnetRows == before, "a received total was passed on as if heard from its owner")
+-- A heard friend and a quiet one: only the heard friend gets the row.
+friends = { 7, 8, faction = { [7] = "Alliance", [8] = "Alliance" } }
+advance(70)
+before = #bnetRows
+know("Horde Pair", 80, "Horde")
+kOnChannel("Horde Pair", 83, "Horde")
+advance(2)
+assert(#bnetRows == before + 1 and bnetRows[#bnetRows].id == 7, "a row went to a quiet friend")
 
 -- ===== Stage 2: an Alliance client puts an enemy total from its Horde friend on its channel.
 Overlord.PlayerFaction = "Alliance"

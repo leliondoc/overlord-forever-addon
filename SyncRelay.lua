@@ -2469,10 +2469,14 @@ local function enemyBNetFriends()
     for _, id in ipairs(quiet) do out[#out + 1] = id end
     return out
 end
+-- Live friends only (heard under Overlord within BNET_ALIVE_SEC): a friend without
+-- the addon, on another ruleset or in an instance drops the row.
 function net:EmitBridgeOut(row, payload)
-    local friends, reached = enemyBNetFriends(), 0
-    for i = 1, math.min(BRIDGE_LK_FANOUT, #friends) do
-        if sync.SendToBNet and sync:SendToBNet(friends[i], "LK", payload) then reached = reached + 1 end
+    local reached, tried = 0, 0
+    for _, id in ipairs(enemyBNetFriends()) do
+        if tried >= BRIDGE_LK_FANOUT or not bnetAlive(id) then break end
+        tried = tried + 1
+        if sync.SendToBNet and sync:SendToBNet(id, "LK", payload) then reached = reached + 1 end
     end
     self.stats.bridgeOut = (self.stats.bridgeOut or 0) + (reached > 0 and 1 or 0)
     return reached > 0
@@ -2636,7 +2640,7 @@ function net:NoteOwnerKill(name, faction, total, before, class, locale, epoch, b
                 return false
             end
         end
-        if #enemyBNetFriends() == 0 then return false end
+        if not self:HasLiveEnemyBridge() then return false end
         return queueBridgeRow(bridgeOut, name, faction, total, before, class, locale,
             epoch, bucketToken, levelToken)
     end
