@@ -1290,12 +1290,18 @@ function Lease:FinalSatisfiesLocalRequirement(zone, owner, originName, waveId, f
         and validWave == remote.waveId
     local required = tonumber(remote.localRequired)
     if not required then
-        -- Sans Barricade consommee ici : la finale de la vague suivie, ou celle d'une
-        -- vague relevee / arretee faute de nouvelles (marque douce). Une finale
-        -- totalement etrangere au bail frais reste refusee (pas de double credit).
-        if sameWave then return true end
+        -- No Barricade consumed here: any well-formed final ends the capture we
+        -- follow, whoever signs it (1.8.2). Since 1.5.1 only the followed wave (or
+        -- one relieved or timed out here) was accepted. A point taken by a group is
+        -- often finished by another player than the one whose timer we follow (the
+        -- first one died or stepped off, and his release did not reach us, as often
+        -- across factions): his final and its retries were refused, the followed
+        -- wave then timed out and the point went back to its previous owner on this
+        -- map for good ("C otherCapturer" then "lease expiredWithoutFinal" in
+        -- /ov network; Horde captures seen in progress, never turning red). The
+        -- refusal protected nothing: with no wave followed the same final is
+        -- accepted, and the capture count comes from the capturer's own total.
         return originKey ~= nil and validWave ~= nil
-            and IsSoftTombstoned(zone.id, originKey, validWave, nil)
     end
     if not sameWave then return false end
     if tonumber(finalRequirement) ~= required then return false end

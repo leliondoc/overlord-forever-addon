@@ -271,8 +271,13 @@ expect(not Lease:ShouldRejectFinal(zone, "Bob", "wreplaced"),
     "the replaced capturer's final was refused before the zone was taken")
 expect(Lease:FinalSatisfiesLocalRequirement(zone, "Horde", "Bob", "wreplaced", 120),
     "the replaced capturer's final did not satisfy the current lease")
-expect(not Lease:FinalSatisfiesLocalRequirement(zone, "Horde", "Eve", "wunknown", 120),
-    "a foreign final was accepted while another capture is followed")
+-- 1.8.2: another capturer's final ends the capture we follow (a group's point is
+-- often finished by another player than the one whose timer we follow).
+expect(Lease:FinalSatisfiesLocalRequirement(zone, "Horde", "Eve", "wunknown", 120),
+    "another capturer's final was refused while a capture of the same point is followed")
+expect(not Lease:FinalSatisfiesLocalRequirement(zone, "Horde", "Eve", nil, 120)
+    and not Lease:FinalSatisfiesLocalRequirement(zone, "Horde", nil, "wunknown", 120),
+    "a final without its wave or its capturer was accepted")
 Lease:Complete(zone)
 expect(Lease:ShouldRejectFinal(zone, "Bob", "wreplaced"),
     "a replaced wave could still be finalized after the capture completed")
@@ -851,6 +856,10 @@ zone._remoteCaptureLease.lastHold = 170
 expect(Lease:FinalSatisfiesLocalRequirement(
     zone, "Alliance", "Alice", "wrequired", 180),
     "mature local 180 requirement rejected the terminal")
+-- A Barricade consumed here still binds the capture: another capturer's final does
+-- not end it (1.8.2 only opened the case without a Barricade).
+expect(not Lease:FinalSatisfiesLocalRequirement(zone, "Alliance", "Bob", "wother", 180),
+    "another capturer's final ended a capture held back by our Barricade")
 -- 1.4.2: the hold is projected since the last tick (cross-faction ticks arrive every
 -- 15-60 s), bounded by the observed duration. Without a tick date, no projection.
 mono = 900
