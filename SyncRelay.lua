@@ -924,13 +924,23 @@ local function decode(wire)
         or not at or at ~= math.floor(at) or serverNow() - at > TTL or at - serverNow() > 30
         or not allowed[kind] or not payload or payload:find("[%c]")
         or (target ~= "*" and canonical(target) ~= target) then return nil end
-    local nodes, unique = {}, {}
-    for name in tostring(path):gmatch("[^,]+") do
-        if canonical(name) ~= name or unique[name:lower()] then return nil end
-        nodes[#nodes + 1] = name
-        unique[name:lower()] = true
+    if type(path) ~= "string" or path == "" then return nil end
+    local nodes
+    if not path:find(",", 1, true) then
+        -- One hop (the origin heard first-hand, most packets): the loop below would
+        -- yield this single name, so its verdict is canonical(path) == path.
+        if canonical(path) ~= path then return nil end
+        nodes = { path }
+    else
+        local unique = {}
+        nodes = {}
+        for name in path:gmatch("[^,]+") do
+            if canonical(name) ~= name or unique[name:lower()] then return nil end
+            nodes[#nodes + 1] = name
+            unique[name:lower()] = true
+        end
+        if #nodes < 1 or #nodes > MAX_PATH or table.concat(nodes, ",") ~= path then return nil end
     end
-    if #nodes < 1 or #nodes > MAX_PATH or table.concat(nodes, ",") ~= path then return nil end
     return { region = normalizedPool, id = id, at = at, target = target, path = nodes, kind = kind, payload = payload }
 end
 function net:IsPeer(name)
