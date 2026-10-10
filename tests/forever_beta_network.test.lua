@@ -1063,6 +1063,12 @@ do
         fresh.Sync._lastFullZaAt = now - 60
         assert(pulled("Stamp News", "~m2bi"), "A newer capture of a 1.8.1 neighbour waited for the 150 s")
         fresh.Sync._lastFullZaAt = nil
+        -- The reply to "Stamp Later" (122 s ago) never came: still one request per
+        -- 150 s for that side, a lost or refused reply does not raise the pace.
+        now = now + 61
+        assert(not pulled("Stamp Lost", "~m1jk"), "A lost reply made a 1.8.1 neighbour be asked again before 150 s")
+        now = now + 30
+        assert(pulled("Stamp Again", "~m1jk"), "A 1.8.1 neighbour was not asked again 150 s after the last request")
     end
     -- 1.8.2: a client from before 1.7.0 (its own presence says less than v7) is
     -- never asked for its map; a 1.7.x neighbour still is.

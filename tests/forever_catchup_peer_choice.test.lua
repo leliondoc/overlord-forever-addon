@@ -213,7 +213,7 @@ do
     check("a 1.8.0 neighbour was left out of the ranking rotation",
         hr[1] and (hr[1].target == "Eighty Ally" or hr[1].target == "Eighty Enemy"), hr[1] and hr[1].target)
     local diag = w.sync:GetCatchupNeighbourDiagnostics()
-    check("1.8.0 neighbours are listed as too old", diag:find("before 1.8.0 0 (none)", 1, true)
+    check("1.8.0 neighbours are no longer listed as too old", diag:find("before 1.8.0 0 (none)", 1, true)
         and diag:find("ally 1 (Eighty Ally)", 1, true) and diag:find("enemy 1 (Eighty Enemy)", 1, true), diag)
 end
 

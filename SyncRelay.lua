@@ -2130,8 +2130,9 @@ function net:Send(kind, payload, target, immediate)
     -- "~ld" (1.8.0): ranking pages v8 (only differing rows); v7 clients still read v7.
     -- "~b" (1.8.1): we hold a live opposite-faction Battle.net bridge (election
     -- below). Inserted before "~ld~lr~lp6", which older clients still find.
-    -- "~l9" (1.8.1): ranking capability 9, v8 pages with the Skyborne race; peers
-    -- advertising less are neither asked nor served (SyncLeaderboardPages).
+    -- "~l9" (1.8.1): ranking capability 9, v8 pages with the Skyborne race. Since
+    -- 1.8.2 a peer advertising 8 (1.8.0) is asked and served kills and captures,
+    -- without the race stream; below 8, neither (SyncLeaderboardPages).
     if kind == "NH" and payload == tostring(addon.Version or "") then
         local stamp, sum, digest = localMapStamp()
         local sites = sync.GetOutpostMapStamps and sync:GetOutpostMapStamps() or 0
@@ -2304,7 +2305,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         local content = p.payload:match("~z(%w+)~")
         local peerDigest = content and #content > 6 and self.ParseBase36(content:sub(1, 6)) or nil
         local peerSum = peerDigest and self.ParseBase36(content:sub(7)) or nil
-        local noNews, diffRow = false, nil
+        local noNews, diffRow, stampOnly = false, nil, false
         if peerDigest and peerSum and peerSites ~= nil then
             local _, sum, digest = localMapStamp()
             if peerDigest ~= digest then
@@ -2312,7 +2313,12 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
             end
             noNews = diffRow == nil
         elseif peerStamp and peerStamp <= (localMapStamp()) then
-            noNews = lastMapAt ~= nil and now - lastMapAt < self.STAMP_ONLY_GAP
+            -- Counted from the last such request too, not only from the last map
+            -- received: a lost or refused reply must not raise the pace.
+            local asked = enemyFriend and self.stampPullEnemyAt or self.stampPullAt
+            noNews = (lastMapAt ~= nil and now - lastMapAt < self.STAMP_ONLY_GAP)
+                or (asked ~= nil and now - asked < self.STAMP_ONLY_GAP)
+            if not noNews then stampOnly = true end
         end
         -- A keep or outpost capture we do not hold (see the "~o" stamp above).
         local forSites = false
@@ -2343,6 +2349,9 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
             if not self.requestOrder then self.requestOrder = {} end
             if sync:SendSyncRequest({ betaTarget = origin }) then
                 remember(self.requested, self.requestOrder, origin:lower(), now, 125)
+                if stampOnly then
+                    if enemyFriend then self.stampPullEnemyAt = now else self.stampPullAt = now end
+                end
                 if diffRow and not forSites then
                     diffRow.at, diffRow.tries = now, diffRow.tries + 1
                     self.stats.mapPullsForDiff = (self.stats.mapPullsForDiff or 0) + 1
