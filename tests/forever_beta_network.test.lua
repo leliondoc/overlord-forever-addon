@@ -1066,6 +1066,17 @@ do
     crossed = 0
     for i = 1, 30 do heard("ZS", "later_" .. i .. ":in_progress:Horde:20:x") end
     assert(crossed < 30, "Siege progress past its start was never elected away")
+    -- A capture is only accepted from its author: relayed for someone else, it crosses
+    -- toward the other side only, never back to the side that made it.
+    crossed = 0
+    heard("C", "back_c1:Capper Tester|WARRIOR:Alliance:" .. time() .. ":w1:g1:120")
+    heard("ZS", "back_z1:in_progress:0:5:A:" .. time() .. ":0:120:Capper Tester")
+    heard("ZS", "back_z2:captured:0:0:A:" .. time() .. ":0:120:Capper Tester")
+    assert(crossed == 0, "An Alliance capture was sent back to the Alliance: " .. crossed)
+    assert((hearer.Relay.stats.captureBackSkipped or 0) == 3, "Captures not sent back were not counted")
+    heard("C", "fwd_c1:Capper Tester|WARRIOR:Horde:" .. time() .. ":w1:g1:120")
+    heard("ZS", "fwd_z1:in_progress:0:5:H:" .. time() .. ":0:120:Capper Tester")
+    assert(crossed == 2, "A Horde capture did not cross to the Alliance: " .. crossed)
     crossed = 0
     for i = 1, 10 do assert(hearer.Relay:Send("ZS", "own_" .. i .. ":in_progress:Horde:20:x")); drain() end
     assert(crossed == 10, "Our own routine packets lost their Battle.net copies: " .. crossed)

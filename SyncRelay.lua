@@ -1135,9 +1135,11 @@ function net:GetKindDiagnostics(maxRows)
     lines[#lines + 1] = string.format("Map pulls on a neighbour's presence skipped (it knew no newer capture): %d.",
         self.stats.mapPullsNoNews or 0)
     lines[#lines + 1] = string.format("Bridge election: %d same-faction bridges heard, crossing share %d%%"
-        .. " (100%% up to %d), %d enemy copies of routine traffic and %d score rows left to the elected forwarders.",
+        .. " (100%% up to %d), %d enemy copies of routine traffic and %d score rows left to the elected forwarders;"
+        .. " %d captures not sent back to the side that made them.",
         sameFactionBridgeCount(), math.floor(crossShare() * 100 + 0.5), CROSS_FULL_BRIDGES,
-        self.stats.crossElectionSkipped or 0, self.stats.bridgeOutElectedAway or 0)
+        self.stats.crossElectionSkipped or 0, self.stats.bridgeOutElectedAway or 0,
+        self.stats.captureBackSkipped or 0)
     local lb = addon.Leaderboard
     if lb and lb.GetHotIndexStats then
         local h = lb:GetHotIndexStats()
@@ -1397,6 +1399,23 @@ local function tasksFor(p, wire)
         -- A call to arms (FC) is only ever shown to its own faction: the other
         -- faction's bridges dropped it after spending budget and a channel slot.
         local ownFactionOnly = p.kind == "FC"
+        -- A capture (C, or ZS in progress / captured) is only ever accepted from its
+        -- author: relayed for someone else, the side that made it already has it, and
+        -- a copy sent back there over Battle.net only burnt the bridge's budget.
+        local backToCapturer = false
+        if #p.path > 1 and (p.kind == "C" or p.kind == "ZS") and type(p.payload) == "string"
+            and (myFaction == "Alliance" or myFaction == "Horde") then
+            local side
+            if p.kind == "C" then
+                side = p.payload:match("^[^:]*:[^:]*:([^:]*):")
+            else
+                local status, code = p.payload:match("^[^:]*:([^:]*):[^:]*:[^:]*:([AH]):")
+                if status == "in_progress" or status == "captured" then
+                    side = code == "A" and "Alliance" or "Horde"
+                end
+            end
+            backToCapturer = (side == "Alliance" or side == "Horde") and side ~= myFaction
+        end
         local crossing = ownFactionOnly or crossElected(p)
         local bridges, others, probes = {}, {}, {}
         local pathKeys = {}
@@ -1414,6 +1433,8 @@ local function tasksFor(p, wire)
                 local alive = enemy and bnetAlive(id)
                 if enemy and ownFactionOnly then
                     net.stats.ownFactionOnlySkipped = (net.stats.ownFactionOnlySkipped or 0) + 1
+                elseif enemy and backToCapturer then
+                    net.stats.captureBackSkipped = (net.stats.captureBackSkipped or 0) + 1
                 elseif enemy and not crossing then
                     net.stats.crossElectionSkipped = (net.stats.crossElectionSkipped or 0) + 1
                 elseif alive and #bridges < MAX_BRIDGE_FRIENDS then
