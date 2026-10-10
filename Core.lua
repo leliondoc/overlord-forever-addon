@@ -3619,7 +3619,17 @@ local function ReconcileBaseOwnershipSanity()
 
             local zoneTs = zone.updatedAt or 0
             local stateIsStaleOrOpen = (zoneTs == 0) or (now - zoneTs > 60)
-            if not allOtherZonesOwned and stateIsStaleOrOpen then
+            -- 1.8.2: a capture dated in this campaign is an event of the network, kept
+            -- and ordered by its date like any other. This repair gave such a capital
+            -- back to its faction at every login and every entry on the front whenever
+            -- our map lacked one of the conqueror's zones (two sides that missed
+            -- captures of each other): the capture vanished here, the capital waited
+            -- for a map again and no complete map could be served meanwhile. Only a
+            -- state without a date of this campaign is still repaired.
+            local capturedAt = tonumber(zone.capturedTime) or 0
+            local campaignStart = (Overlord.GetCurrentCampaignStartTs and Overlord:GetCurrentCampaignStartTs()) or 0
+            local dated = capturedAt > 0 and campaignStart > 0 and capturedAt >= campaignStart
+            if not dated and not allOtherZonesOwned and stateIsStaleOrOpen then
                 zone.owner = fixedOwner
                 zone.status = "captured"
                 zone.killsCurrent = 0

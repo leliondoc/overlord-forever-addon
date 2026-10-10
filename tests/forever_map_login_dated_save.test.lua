@@ -162,4 +162,26 @@ for _, page in ipairs(mate) do sync:OnReceiveZoneAll(page, "Stale Mate") end
 assert(byId[active[4]].owner == "Horde" and byId[active[4]].capturedTime == T2,
     "A group mate's older map took back a zone the save knew lost: "
     .. tostring(byId[active[4]].owner) .. "@" .. tostring((byId[active[4]].capturedTime or 0) - epoch))
+
+-- A capital of the front we stand on, taken at a known date while our map still shows
+-- one zone of that front with its defenders (we missed a capture of the conqueror):
+-- the login keeps the capture (it used to hand the capital back to its faction at
+-- every login and every entry on the front, and wait for a map again).
+local elwynnAllianceCapital = elwynn.allianceCapitalId
+for _, id in ipairs(active) do set(id, "Horde", T1) end
+set(elwynn.hordeCapitalId, "Horde", epoch + 10)
+set(active[1], "Alliance", T1 - 100)             -- the zone whose later capture we missed
+set(elwynnAllianceCapital, "Horde", T2)
+save()
+login()
+assert(byId[elwynnAllianceCapital].owner == "Horde" and byId[elwynnAllianceCapital].capturedTime == T2,
+    "a dated capture of a capital was handed back to its faction at login: "
+    .. tostring(byId[elwynnAllianceCapital].owner) .. "@" .. tostring(byId[elwynnAllianceCapital].capturedTime))
+-- A taken capital without any date of this campaign is still repaired (old saves).
+byId[elwynnAllianceCapital].owner, byId[elwynnAllianceCapital].capturedTime = "Horde", nil
+byId[elwynnAllianceCapital].updatedAt = 0
+save()
+login()
+assert(byId[elwynnAllianceCapital].owner == "Alliance",
+    "an undated taken capital next to a defender's zone was not repaired at login")
 print("Forever login map: a dated save keeps the newer capture, learns newer ones, repairs the neighbour")
