@@ -1750,6 +1750,13 @@ local function CompleteResumeFromInstance(reason)
     if Overlord.ZoneControl and Overlord.ZoneControl.Resume then
         Overlord.ZoneControl:Resume()
     end
+    -- Map layers skipped at a login inside an instance (before the front entry,
+    -- which needs them).
+    if Overlord._loginMapInitDeferred then
+        Overlord._loginMapInitDeferred = nil
+        if Overlord.Zones and Overlord.Zones.CalcMapAspect then Overlord.Zones:CalcMapAspect() end
+        if Overlord.MapMarkers and Overlord.MapMarkers.Initialize then Overlord.MapMarkers:Initialize() end
+    end
     Overlord:CheckActiveFrontZone()
     if Overlord.MapMarkers and Overlord.MapMarkers.CheckOutpostMinimap then
         Overlord.MapMarkers:CheckOutpostMinimap()
@@ -4995,7 +5002,9 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         end
 
         C_Timer.After(3, function()
-            if Overlord.InstanceSuspended then return end
+            -- Logged in (or /reload) inside an instance: done when leaving it (see
+            -- CompleteResumeFromInstance); nothing else creates the map layers.
+            if Overlord.InstanceSuspended then Overlord._loginMapInitDeferred = true return end
             Overlord.Zones:CalcMapAspect()
             if Overlord.MapMarkers then
                 Overlord.MapMarkers:Initialize()

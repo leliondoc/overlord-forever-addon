@@ -10999,6 +10999,10 @@ function Overlord.Sync:FlushStateAfterInstance()
         and not self._historyCatchupNotBeforeCampaignId and self.ScheduleLoginLeaderboardHistoryCatchUp then
         self:ScheduleLoginLeaderboardHistoryCatchUp()
     end
+    -- Same login skip: the periodic map pull and the guild identity heartbeat were
+    -- never armed this session (both idempotent).
+    if self.SchedulePeriodicMapCatchup then self:SchedulePeriodicMapCatchup() end
+    if self.StartGuildIdentityHeartbeat then self:StartGuildIdentityHeartbeat() end
     if Overlord.WaitingForSync then return end
     self:StartInstanceCaptureSyncBurst()
     local attempts = 0

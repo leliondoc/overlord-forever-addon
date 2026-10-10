@@ -76,4 +76,23 @@ sync._mapCatchupArmed = nil
 assert(sync:SchedulePeriodicMapCatchup() and not sync:SchedulePeriodicMapCatchup() and #timers == 1,
     "Map catch-up armed twice")
 assert(timers[1].delay >= sync.BETA_MAP_CATCHUP_INTERVAL)
-print("Forever beta login catch-up: 2 targeted territorial requests to direct neighbours, 1 opposite-faction, bounded retries OK")
+-- A login inside an instance skipped the login stage: leaving the instance arms the
+-- periodic map pull and the guild identity heartbeat once.
+timers = {}
+sync._mapCatchupArmed = nil
+local wasSuspended, wasWaiting = Overlord.InstanceSuspended, Overlord.WaitingForSync
+Overlord.InstanceSuspended, Overlord.WaitingForSync = false, true
+local heartbeats = 0
+local realHeartbeat = sync.StartGuildIdentityHeartbeat
+sync.StartGuildIdentityHeartbeat = function() heartbeats = heartbeats + 1 end
+sync:FlushStateAfterInstance()
+sync:FlushStateAfterInstance()
+local mapTimers = 0
+for _, t in ipairs(timers) do
+    if t.delay >= sync.BETA_MAP_CATCHUP_INTERVAL then mapTimers = mapTimers + 1 end
+end
+assert(sync._mapCatchupArmed and mapTimers == 1, "leaving an instance did not arm the map pull exactly once")
+assert(heartbeats >= 1, "leaving an instance did not start the guild identity heartbeat")
+sync.StartGuildIdentityHeartbeat = realHeartbeat
+Overlord.InstanceSuspended, Overlord.WaitingForSync = wasSuspended, wasWaiting
+print("Forever beta login catch-up: 2 targeted territorial requests to direct neighbours, 1 opposite-faction, bounded retries, instance exit arms the map pull OK")
