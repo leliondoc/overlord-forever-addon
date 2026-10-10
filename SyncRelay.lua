@@ -2052,10 +2052,16 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
     -- same presence keep arriving; letting them win after 60 s made a Battle.net
     -- friend look "far" half of the time, and catch-up only runs with direct peers.
     local keepRoute = previousRoute and tonumber(previousRoute.hops) == 1 and 240 or 60
-    if not previousRoute or GetTime() - previousRoute.at > keepRoute or #p.path <= previousRoute.hops then
+    if not previousRoute then
         remember(self.peers, peerOrder, origin:lower(), {
             name = origin, at = GetTime(), via = sender, transport = transport, bnet = bnetID, hops = #p.path,
         }, self.PEER_RING_LIMIT or PEER_RING, IsPagedSessionPeer)
+    elseif GetTime() - previousRoute.at > keepRoute or #p.path <= previousRoute.hops then
+        -- Refreshed in place (same values, same ring order): a new table per received
+        -- packet was tens of KB/s of garbage on a launch channel. No caller keeps a
+        -- route row from one call to the next.
+        previousRoute.name, previousRoute.at, previousRoute.via = origin, GetTime(), sender
+        previousRoute.transport, previousRoute.bnet, previousRoute.hops = transport, bnetID, #p.path
     end
     self.stats.received = self.stats.received + 1
     if retryForward then
