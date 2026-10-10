@@ -143,6 +143,21 @@ do
     end
 end
 print("Partial merge: a disputed orange zone keeps its wave and the rest of the map merges")
+
+-- (1g) A truce guard refuses one entry (stamped before the front's truce-end epoch,
+-- yet fresher than local), not the whole map: the guarded zone keeps its local value,
+-- other fronts still merge.
+do
+    local savedEpochs = OverlordDB.frontTruceResetEpoch
+    set(X, "Horde", EPOCH + 300); set(Y, "Horde", EPOCH + 1900)
+    local pages = snapshot()
+    set(X, "Alliance", EPOCH + 200); set(Y, "Alliance", EPOCH + 500)
+    OverlordDB.frontTruceResetEpoch = { elwynn = EPOCH + 1000 }
+    deliver(pages)
+    assert(state(X) == "Alliance@" .. (EPOCH + 200), "the truce guard let a pre-truce entry in: " .. state(X))
+    assert(state(Y) == "Horde@" .. (EPOCH + 1900), "one truce-guarded entry rejected the whole map: " .. state(Y))
+    OverlordDB.frontTruceResetEpoch = savedEpochs
+end
 assert(loadfile("SyncRelay.lua"))()
 Overlord.RelayEnabled, Overlord.CommunityModeEnabled = true, false
 Overlord.InActiveFront, Overlord.InstanceSuspended = true, false

@@ -7866,11 +7866,13 @@ function Overlord.Sync:OnReceiveZoneAll(
         end
         if validEntry then
             validEntry = not IsStaleCampaignTimestamp(ts)
-                and not ShouldRejectStaleTruceResetZone(zoneId, ts)
-                and not ShouldRejectPostVictoryZoneOwner(
-                    zoneId, owner, "captured", ts, "ZA")
-            -- Tampon du vainqueur avance pendant la treve : entree ecartee, le lot reste.
-            if validEntry and owner and ShouldRejectFrontTruceZoneChange(zoneId, owner, "captured", ct) then
+            -- Truce and post-victory guards refuse the entry, not the map (the refused
+            -- value stays local): a peer that had not learnt a victory yet, or a
+            -- phantom-victory epoch, got every map refused for the truce or the week,
+            -- other fronts included. Winner stamp advanced during the truce: same.
+            if validEntry and (ShouldRejectStaleTruceResetZone(zoneId, ts)
+                or ShouldRejectPostVictoryZoneOwner(zoneId, owner, "captured", ts, "ZA")
+                or (owner and ShouldRejectFrontTruceZoneChange(zoneId, owner, "captured", ct))) then
                 staleSkipMask[entryIndex] = true
             end
         end
