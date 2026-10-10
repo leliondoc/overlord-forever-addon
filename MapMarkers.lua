@@ -429,7 +429,8 @@ local function FormatZoneTitleTwoLines(text, rawName)
 end
 
 -- 1.8.2 : compact par defaut (le nom suit le cercle) ; les bandeaux sont le choix du
--- joueur (bouton du coin de la carte, filtres, options, /ov map).
+-- joueur (bouton du coin de la carte, filtres, options, /ov map). Voir aussi
+-- ApplyCompactDefaultOnce : tout le monde repart en compact une fois.
 local function ShouldShowMapZoneTitles()
     return OverlordDB ~= nil and OverlordDB.config ~= nil and OverlordDB.config.showMapZoneTitles == true
 end
@@ -1076,7 +1077,20 @@ function Overlord.MapMarkers:RegisterWorldMapFilterToggle()
     return true
 end
 
+-- 1.8.2 : le mode compact devient le mode de depart de tout le monde, une seule
+-- fois, y compris pour qui avait deja choisi un mode avec le bouton (le choix
+-- « complet » y etait enregistre). Le choix fait ensuite par le joueur est garde.
+function Overlord.MapMarkers:ApplyCompactDefaultOnce()
+    if not OverlordDB then return false end
+    OverlordDB.config = OverlordDB.config or {}
+    if OverlordDB.config.mapCompactDefaultApplied then return false end
+    OverlordDB.config.mapCompactDefaultApplied = true
+    OverlordDB.config.showMapZoneTitles = nil
+    return true
+end
+
 function Overlord.MapMarkers:Initialize()
+    self:ApplyCompactDefaultOnce()
     if not self._minimapInitialized then
         self._minimapInitialized = true
         self:InitializeMinimap()

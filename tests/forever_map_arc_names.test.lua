@@ -17,8 +17,17 @@ OverlordDB = { config = {} }
 assert(loadfile("MapMarkers.lua"))()
 local markers = Overlord.MapMarkers
 assert(markers:GetWorldMapDisplayMode() == "compact", "the compact display is not the default")
+-- A player who had used the mode button before 1.8.2 has "full" saved: everyone
+-- starts again in compact once, at the first load; a choice made afterwards is kept.
 OverlordDB.config.showMapZoneTitles = true
-assert(markers:GetWorldMapDisplayMode() == "full", "a player's choice of the full display was not kept")
+assert(markers:GetWorldMapDisplayMode() == "full")
+pcall(markers.Initialize, markers)
+assert(OverlordDB.config.mapCompactDefaultApplied == true and markers:GetWorldMapDisplayMode() == "compact",
+    "a display saved before 1.8.2 kept the full mode at the first load")
+OverlordDB.config.showMapZoneTitles = true
+pcall(markers.Initialize, markers)
+assert(not markers:ApplyCompactDefaultOnce() and markers:GetWorldMapDisplayMode() == "full",
+    "the full display chosen after the update was reset again")
 OverlordDB.config.showMapZoneTitles = nil
 
 -- A fake overlay: every letter is 4 px wide and records where it is put.
