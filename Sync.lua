@@ -5174,7 +5174,10 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
     -- sa file (128 paquets) et aucun snapshot n'arrivait complet (zones restees neutres).
     -- Viser ~2 repondants parmi les voisins directs du demandeur (seuls ceux-ci
     -- recoivent encore la demande en direct) ; les SR cibles restent garantis.
-    if viaBetaBroadcast and not quarantinedMapOnly then
+    -- 1.8.1: a raw request heard on the channel (relay fallback, or forged) is bounded
+    -- the same way: at 95 % (18 % plus short answers in a large event) every listener
+    -- answered, about the whole channel's budget for one request.
+    if channel == "CHANNEL" and not quarantinedMapOnly then
         local betaNet = Overlord.Relay
         local directCount = betaNet and (betaNet.CountDirectPeers and betaNet:CountDirectPeers()
             or betaNet.GetDirectPeers and #betaNet:GetDirectPeers()) or 0

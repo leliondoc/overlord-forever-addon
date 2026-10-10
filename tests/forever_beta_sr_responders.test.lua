@@ -81,5 +81,34 @@ assert(not responded(), "A relayed request was answered")
 release()
 Overlord.Relay.context = { hops = 0 }
 
+-- A raw request heard on the channel is bounded the same way (it used to get an
+-- answer from 95 % of listeners, or 18 % plus short answers in a large event).
+targeted = false
+for _, case in ipairs({ { 0.5, false }, { 0.1, false }, { 0.05, true } }) do
+    roll = case[1]
+    sync:OnSyncRequest("Channel Joiner", payload, "CHANNEL")
+    assert(responded() == case[2], "raw channel request with roll " .. roll .. ": answered " .. tostring(responded()))
+    release()
+end
+local realLarge = sync.IsLargeEvent
+sync.IsLargeEvent = function() return true end
+roll = 0.5
+sync:OnSyncRequest("Channel Joiner", payload, "CHANNEL")
+assert(not responded(), "a large event still answered most raw channel requests")
+release()
+sync.IsLargeEvent = realLarge
+-- Relay off (no direct neighbour known): the old 95 % rule applies.
+Overlord.Relay.GetDirectPeers = function() return {} end
+roll = 0.5
+sync:OnSyncRequest("Channel Joiner", payload, "CHANNEL")
+assert(responded(), "a raw channel request went unanswered with no neighbour known")
+release()
+Overlord.Relay.GetDirectPeers = function() return peers end
+-- A group request is not bounded.
+roll = 0.5
+sync:OnSyncRequest("Raid Joiner", payload, "RAID")
+assert(responded(), "a group request lost its answer")
+release()
+
 math.random = realRandom
-print("Forever beta SR responders: targeted requests answered, broadcast bounded to ~2 of 30 direct peers, relayed requests ignored OK")
+print("Forever beta SR responders: targeted requests answered, broadcast and raw channel requests bounded to ~2 of 30 direct peers, relayed requests ignored OK")
