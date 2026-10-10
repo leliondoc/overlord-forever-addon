@@ -61,19 +61,49 @@ set(X, "Alliance", EPOCH + 2000); set(Y, "Horde", EPOCH + 1900)
 deliver(stalePages)
 assert(state(X) .. state(Y) == before, "All-stale snapshot changed local state")
 
--- (1c) Guard kept: enemy capital captured in the snapshot while a prerequisite entry is
--- stale (local newer, still ours) must NOT flip the capital (final view is not a full sweep).
+-- (1c) 1.8.2: a taken capital is an entry like any other, ordered by its capture
+-- date. The whole map used to be refused whenever its final view held a taken capital
+-- next to a zone of that front not owned by the conqueror (here: a zone we retook,
+-- which the sender missed). Two sides that each missed captures of the other then
+-- refused every map of the other, on every front (2026-10-10, Durotar: Arathi and
+-- everything else stayed apart).
 local front = Overlord.Fronts:GetFront("elwynn")
 local ac, hc = front.allianceCapitalId, front.hordeCapitalId
 for _, z in ipairs(front.zones) do
     if z.id ~= ac and z.id ~= hc then set(z.id, "Horde", EPOCH + (z.id == X and 100 or 3000)) end
 end
 set(ac, "Horde", EPOCH + 3000)
+set(Y, "Horde", EPOCH + 2950) -- news on another front, in the same map
 local sweepPages = snapshot()
 set(ac, "Alliance", EPOCH + 50)
 set(X, "Alliance", EPOCH + 2000)
+set(Y, "Alliance", EPOCH + 500)
+local victoriesBefore = OverlordDB.frontVictories and OverlordDB.frontVictories.elwynn
 deliver(sweepPages)
-assert(zoneOf(ac).owner == "Alliance", "Capital flipped although a prerequisite stayed ours")
+assert(state(Y) == "Horde@" .. (EPOCH + 2950),
+    "a taken capital next to a zone we retook made the whole map be refused: " .. state(Y))
+assert(state(ac) == "Horde@" .. (EPOCH + 3000), "the capture of a capital, newer than what we held, was not learnt: " .. state(ac))
+assert(state(X) == "Alliance@" .. (EPOCH + 2000), "our newer capture was replaced by the map's older owner: " .. state(X))
+assert((OverlordDB.frontVictories and OverlordDB.frontVictories.elwynn) == victoriesBefore,
+    "a capital learnt from a map started a victory")
+-- The other way round: we hold the taken capital and a zone we retook (what a client
+-- that heard the capture live holds). A neighbour's map without either still merges,
+-- and our own map is accepted by a neighbour that knows neither.
+set(Y, "Horde", EPOCH + 3100)
+set(ac, "Alliance", EPOCH + 50); set(X, "Horde", EPOCH + 100)
+local neighbourPages = snapshot()                  -- the neighbour: old capital, old X, fresh Y
+set(ac, "Horde", EPOCH + 3000); set(X, "Alliance", EPOCH + 2000); set(Y, "Alliance", EPOCH + 500)
+local oursPages = snapshot()                       -- ours: taken capital, X retaken, stale Y
+deliver(neighbourPages)
+assert(state(Y) == "Horde@" .. (EPOCH + 3100), "a client holding a taken capital refused its neighbours' maps: " .. state(Y))
+assert(state(ac) == "Horde@" .. (EPOCH + 3000) and state(X) == "Alliance@" .. (EPOCH + 2000),
+    "an older map replaced the capital or the zone we hold")
+set(ac, "Alliance", EPOCH + 50); set(X, "Horde", EPOCH + 100); set(Y, "Horde", EPOCH + 3100)
+deliver(oursPages)
+assert(state(ac) == "Horde@" .. (EPOCH + 3000) and state(X) == "Alliance@" .. (EPOCH + 2000)
+    and state(Y) == "Horde@" .. (EPOCH + 3100), "the map of a client holding a taken capital was refused by its neighbour")
+-- Back to a plain front for the sections below.
+set(ac, "Alliance", EPOCH + 50)
 
 -- (1d) Neutral variant: the sender never heard of the capture (N) while it knows the
 -- other one; the receiver has the reverse. Both must merge (N is skipped, not fatal).

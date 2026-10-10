@@ -8195,30 +8195,17 @@ function Overlord.Sync:OnReceiveZoneAll(
                     end
                 end
 
-                local fixedOwner = Overlord.Zones:GetBaseZoneFixedOwner(staged.zoneId)
-                if fixedOwner and staged.owner and staged.owner ~= fixedOwner then
-                    local _, stagedFront = Overlord.Fronts:GetZone(staged.zoneId)
-                    for _, otherZone in ipairs((stagedFront and stagedFront.zones) or {}) do
-                        if otherZone.id ~= staged.zoneId then
-                            local prospectiveOwner
-                            if stagedOwnerPresent[otherZone.id] then
-                                prospectiveOwner = stagedOwners[otherZone.id]
-                            else
-                                prospectiveOwner = otherZone.owner
-                            end
-                            local omittedStateUnsafe = not stagedOwnerPresent[otherZone.id]
-                                and (otherZone.status == "in_progress"
-                                    or otherZone._captureFinalUnattested
-                                    or otherZone._loginSyncUnconfirmed)
-                            if prospectiveOwner == false then prospectiveOwner = nil end
-                            if omittedStateUnsafe or prospectiveOwner ~= staged.owner then
-                                snapshotConsensusComplete = false
-                                break
-                            end
-                        end
-                    end
-                    if not snapshotConsensusComplete then break end
-                end
+                -- 1.8.2: a taken capital is an entry like any other, ordered by its
+                -- capture date. The whole map used to be refused whenever its final
+                -- view held a taken capital next to a zone of that front not owned
+                -- by the conqueror. That never happens on maps that agree, but two
+                -- sides that each missed captures of the other are exactly there (a
+                -- capital taken by a player whose map lacked the defenders' last
+                -- captures, 2026-10-10 on Durotar): from then on every client that
+                -- knew the capture refused every map and served maps everyone
+                -- refused, on every front, and the two sides never met again. A
+                -- capital can no longer start a victory from a map alone (1.7.0),
+                -- and a surprising flip still waits for a second source.
             end
         end
     end
