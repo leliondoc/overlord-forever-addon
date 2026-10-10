@@ -444,6 +444,25 @@ do
     clock = clock + 10
     presence("Stamp Base", calm)
     assert(pulls[2] == "Stamp Base", "an in-progress zone without a base counted in the map stamp")
+    -- A final shown before the network confirmed it: the map serves the confirmed
+    -- base, and the stamp says what the map serves (a neighbour that holds our map
+    -- was otherwise pulled again and again for as long as the final stayed unconfirmed).
+    z.owner, z.status, z.capturedTime, z.updatedAt = "Alliance", "captured", newest + 900, newest + 900
+    z._captureFinalUnattested = true
+    z._captureFinalConfirmedBase = { owner = "Horde", status = "captured", capturedTime = newest, updatedAt = newest }
+    local confirmed = served()
+    clock = clock + 310 -- (own stamp cached 5 s; one pull per neighbour and 5 min)
+    local pullsBefore = #pulls
+    presence("Stamp Confirmed", confirmed)
+    assert(#pulls == pullsBefore, "an unconfirmed final changed what our presence says of the served map")
+    -- An owner without a capture date is served at its last update: counted the same.
+    z._captureFinalUnattested, z._captureFinalConfirmedBase = nil, nil
+    z.owner, z.status, z.capturedTime, z.updatedAt = "Horde", "captured", nil, newest + 40
+    local undated = served()
+    clock = clock + 10
+    presence("Stamp Undated", undated)
+    assert(#pulls == pullsBefore, "an owner without a capture date was not counted as the map serves it")
+    sync.NoteFullMapReceived(sync, nil) -- a map without a sender (tests, old paths) is noted without error
     sync.SendSyncRequest = realRequest
     z.owner, z.status, z.capturedTime, z.updatedAt, z.previousOwner = "Alliance", "captured", EPOCH + 500, EPOCH + 500, nil
 end

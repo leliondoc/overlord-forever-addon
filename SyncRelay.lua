@@ -631,7 +631,9 @@ local session = base36(time()) .. base36(math.random(0, 60466175), 5)
 -- presence now also says what the map holds, "~z<digest><sum>": the digest is a
 -- hash of every owner and capture date (two equal maps, nothing to pull); the sum
 -- adds the capture dates. A capture only ever raises its zone's date, so the client
--- that lacks one has the lower sum: it pulls, the other one waits.
+-- that lacks one has the lower sum: it pulls, the other one waits. Both are taken
+-- from the entry our map would serve for the zone (the confirmed base under a siege
+-- or under a final not confirmed yet): a neighbour that holds our map says the same.
 local mapStampCache = { at = -1000, value = 0, sum = 0, digest = 0 }
 local function localMapStamp()
     local now = GetTime()
@@ -645,12 +647,22 @@ local function localMapStamp()
             if zone.status == "in_progress" then
                 view = zonesApi and zonesApi.GetStableZoneView and zonesApi:GetStableZoneView(zone) or nil
             end
+            local code, served
             if view and view.owner and not zone._loginSyncUnconfirmed then
                 local ct = math.floor(tonumber(view.capturedTime) or 0)
                 if ct > best then best = ct end
-                sum = sum + ct
+                code, served = view.owner == "Alliance" and "A" or "H", ct
+            end
+            if sync.BuildZoneAllSnapshotPart then
+                local part = sync:BuildZoneAllSnapshotPart(zone)
+                code, served = nil, nil
+                if part then code, served = part:match("^[^:]*:([AH]):[^:]*:(%d+)$") end
+                served = tonumber(served)
+            end
+            if code and served then
+                sum = sum + served
                 -- Order-free: the registry is not walked in the same order everywhere.
-                local text = tostring(zone.id) .. (view.owner == "Alliance" and "A" or "H") .. ct
+                local text = tostring(zone.id) .. code .. served
                 local hash = 5381
                 for i = 1, #text do hash = (hash * 33 + text:byte(i)) % 2147483647 end
                 digest = (digest + hash) % 2147483647
