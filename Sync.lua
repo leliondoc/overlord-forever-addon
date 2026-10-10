@@ -7965,6 +7965,14 @@ function Overlord.Sync:OnReceiveZoneAll(
                 }, ":")
                 if not localPart or localPart ~= remotePart then
                     preserveRemoteLeaseMask[entryIndex] = "mismatch"
+                    -- A remote value no newer than the wave's base stays local in the
+                    -- staged view (like a stale entry): it closes no other wave.
+                    do
+                        local base = stateZone._remoteCaptureLease.base
+                        if ct <= (tonumber(base and base.capturedTime) or 0) then
+                            stagedOwners[zoneId] = (base and base.owner) or false
+                        end
+                    end
                 elseif stateZone._captureFinalUnattested
                     or (Overlord.CaptureLease.RemoteStableNeedsCanonicalRebase
                         and Overlord.CaptureLease:RemoteStableNeedsCanonicalRebase(
@@ -8062,8 +8070,11 @@ function Overlord.Sync:OnReceiveZoneAll(
                         if staged.loginUnconfirmed and snapshotComplete then
                             preserveRemoteLeaseMask[staged.entryIndex] = "rebase"
                         else
-                            snapshotConsensusComplete = false
-                            break
+                            -- The two maps disagree on this orange zone only (one side
+                            -- missed a capture there): keep its wave, apply the rest.
+                            -- Rejecting the whole map left every other zone unrepaired
+                            -- (and pulled again) for as long as the wave lasted.
+                            preserveRemoteLeaseMask[staged.entryIndex] = "preserve"
                         end
                     elseif preserveRemoteLeaseMask[staged.entryIndex] == "base_cleanup"
                         and snapshotComplete then

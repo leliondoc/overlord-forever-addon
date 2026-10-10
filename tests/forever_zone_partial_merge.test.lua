@@ -113,6 +113,36 @@ local clock, timers = 1000, {}
 GetTime = function() return clock end
 C_Timer.After = function(delay, fn) timers[#timers + 1] = { at = clock + delay, fn = fn } end
 assert(loadfile("ZoneCaptureLease.lua"))()
+
+-- (1f) An orange zone whose stable base differs from the sender's entry (the receiver
+-- missed a capture there) no longer rejects the whole map: that zone keeps its wave,
+-- every other entry still merges and the map counts as received.
+do
+    local Z = "elwynn_eastvale"
+    local function orange(z)
+        local lease = { owner = "Horde", originKey = "bob tester", waveId = "w1",
+            base = { owner = "Alliance", status = "captured", capturedTime = EPOCH + 800, updatedAt = EPOCH + 800 } }
+        z._remoteCaptureLease, z.status, z.owner, z.previousOwner = lease, "in_progress", "Horde", "Alliance"
+        return lease
+    end
+    for _, senderZ in ipairs({ EPOCH + 1200, EPOCH + 600 }) do -- newer, then older than the base
+        set(Z, "Alliance", senderZ); set(Y, "Horde", EPOCH + 2600)
+        local pages = snapshot()
+        set(Z, "Alliance", EPOCH + 800); set(Y, "Alliance", EPOCH + 500)
+        local z = zoneOf(Z)
+        local lease = orange(z)
+        sync._lastFullZaAt = nil
+        deliver(pages)
+        assert(state(Y) == "Horde@" .. (EPOCH + 2600),
+            "one disputed orange zone rejected the whole map (" .. (senderZ - EPOCH) .. "): " .. state(Y))
+        assert(z.status == "in_progress" and z._remoteCaptureLease == lease
+            and lease.base.capturedTime == EPOCH + 800, "the disputed orange zone lost its wave")
+        assert(sync._lastFullZaAt, "an accepted map was not recorded")
+        z._remoteCaptureLease = nil
+        set(Z, "Alliance", EPOCH + 800)
+    end
+end
+print("Partial merge: a disputed orange zone keeps its wave and the rest of the map merges")
 assert(loadfile("SyncRelay.lua"))()
 Overlord.RelayEnabled, Overlord.CommunityModeEnabled = true, false
 Overlord.InActiveFront, Overlord.InstanceSuspended = true, false
