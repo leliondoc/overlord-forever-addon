@@ -9146,7 +9146,9 @@ function Overlord.Sync:BroadcastKill(zoneId, totalKills, killScoringAtEvent,
         -- Une entree en instance ne doit pas perdre un kill open-world deja valide.
         -- Conserver le snapshot en memoire ; ResumePendingKillBroadcast le reprogramme
         -- une fois les transports reactives, sans rien emettre depuis l'instance.
-        if Overlord.InstanceSuspended then return end
+        -- Also while loading into one (IsInInstance already true, suspension not yet):
+        -- the group send below would reach the instance group.
+        if Overlord.InstanceSuspended or IsInInstance() then return end
         if killBroadcastData then
             local playerName = Overlord.Sync:GetPlayerFullName()
             local _, class = UnitClass("player")
