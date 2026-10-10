@@ -234,7 +234,11 @@ end
 -- (SettleZoneArcs).
 local ZoneArc = { TOP_SWEEP = math.rad(200), HALF_SWEEP = math.rad(165), WIDE_SWEEP = math.rad(300),
     OUT_SWEEP = math.rad(210), FULL_SWEEP = math.rad(340), SHRINK = { 1, 0.85, 0.72 }, SETTLE = 0.15,
-    MIN_ZOOM = 0.25, MAX_ZOOM = 4 }
+    MIN_ZOOM = 0.25, MAX_ZOOM = 4,
+    -- Largeur de chaque caractere par taille de police, mesuree une fois (la police
+    -- est la meme pour toute la session) : essayer une taille plus petite, ou
+    -- retracer apres un zoom, ne refait ni texte ni mesure.
+    widths = {} }
 
 function ZoneArc.Hide(overlay)
     if not overlay or overlay._olArcKey == nil then return end
@@ -269,10 +273,24 @@ function ZoneArc.FontSize(labelDiameter)
     return math.floor(math.max(7, math.min(18, labelDiameter * 0.10)) * 2 + 0.5) / 2
 end
 
--- Lettres de text dans glyphs[first...] a la taille size ; rend le dernier indice.
+function ZoneArc.SetFont(glyph, font, size)
+    if glyph._olSize == size then return end
+    glyph:SetFont(font, size, "")
+    glyph:SetTextColor(ZONE_TEXT_GOLD_R, ZONE_TEXT_GOLD_G, ZONE_TEXT_GOLD_B)
+    glyph:SetShadowColor(0, 0, 0, 0)
+    glyph._olSize = size
+end
+
+-- Lettres de text dans glyphs[first...] et leurs largeurs a la taille size ; rend le
+-- dernier indice. La police de chaque lettre est posee par put(), a la taille retenue.
 function ZoneArc.Letters(overlay, text, first, font, size, widths, spaces)
     local glyphs = overlay.arcGlyphs
     local holder = ZoneArc.Holder(overlay)
+    local known = ZoneArc.widths[size]
+    if not known then
+        known = {}
+        ZoneArc.widths[size] = known
+    end
     local index = first - 1
     for ch in text:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
         index = index + 1
@@ -280,16 +298,20 @@ function ZoneArc.Letters(overlay, text, first, font, size, widths, spaces)
         if not glyph then
             glyph = holder:CreateFontString(nil, "OVERLAY")
             glyph:SetShadowOffset(0, 0)
+            ZoneArc.SetFont(glyph, font, size)
             glyphs[index] = glyph
         end
-        if glyph._olSize ~= size or glyph._olChar ~= ch then
-            glyph:SetFont(font, size, "")
-            glyph:SetTextColor(ZONE_TEXT_GOLD_R, ZONE_TEXT_GOLD_G, ZONE_TEXT_GOLD_B)
-            glyph:SetShadowColor(0, 0, 0, 0)
+        if glyph._olChar ~= ch then
             glyph:SetText(ch)
-            glyph._olSize, glyph._olChar, glyph._olWidth = size, ch, glyph:GetStringWidth() or 0
+            glyph._olChar = ch
         end
-        local width = glyph._olWidth
+        local width = known[ch]
+        if not width then
+            -- Mesuree sur la lettre elle-meme, a cette taille ; put() lui rend la sienne.
+            ZoneArc.SetFont(glyph, font, size)
+            width = glyph:GetStringWidth() or 0
+            if width > 0 then known[ch] = width end
+        end
         if ch == " " then
             width = size * 0.3
             if spaces then spaces[#spaces + 1] = index end
@@ -317,6 +339,7 @@ function ZoneArc.Place(overlay, holder, glyphs, snapD, name, status, base, pass)
         return total
     end
     local function put(glyph, x, y, rotation)
+        ZoneArc.SetFont(glyph, font, size)
         if glyph._olAnchor ~= "CENTER" then
             glyph:ClearAllPoints()
             glyph._olAnchor = "CENTER"
@@ -352,6 +375,7 @@ function ZoneArc.Place(overlay, holder, glyphs, snapD, name, status, base, pass)
     if not glyphs[1].SetRotation then
         -- Client sans rotation de texte : le nom reste droit, en haut du cercle.
         local glyph = glyphs[1]
+        ZoneArc.SetFont(glyph, font, size)
         glyph:SetText(name)
         glyph._olChar = nil
         glyph:ClearAllPoints()
@@ -466,16 +490,15 @@ function ZoneArc.Rescale(overlay, snapD, labelDiameter, shown)
         ZoneArc.Hide(overlay)
         return
     end
+    if not snapD or snapD <= 0 or not labelDiameter then return end
     local laidOut = overlay._olArcD
-    if overlay._olArcKey == nil or not laidOut or laidOut <= 0 or not snapD or snapD <= 0 then return end
-    if overlay._olArcPlain and labelDiameter and ZoneArc.FontSize(labelDiameter) == overlay._olArcBase then
-        -- Meme police : le trace exact ne fait que deplacer les lettres.
+    local ratio = overlay._olArcKey ~= nil and laidOut and laidOut > 0 and snapD / laidOut or nil
+    if not ratio or ratio < ZoneArc.MIN_ZOOM or ratio > ZoneArc.MAX_ZOOM
+        or (overlay._olArcPlain and ZoneArc.FontSize(labelDiameter) == overlay._olArcBase) then
+        -- Trace exact : pour un nom pas encore trace (fin d'un survol pendant le zoom)
+        -- ou trop loin de la taille tracee, une fois ; avec la meme police, il ne
+        -- fait que deplacer les lettres.
         ZoneArc.Layout(overlay, snapD, labelDiameter, true)
-        return
-    end
-    local ratio = snapD / laidOut
-    if ratio < ZoneArc.MIN_ZOOM or ratio > ZoneArc.MAX_ZOOM then
-        ZoneArc.Hide(overlay)
         return
     end
     overlay.arcFrame:SetScale(ratio)
@@ -1132,6 +1155,9 @@ end
 function Overlord.MapMarkers:SettleZoneArcs()
     local at = ZoneArc.settleAt
     if not at or GetTime() < at then return false end
+    -- Un pas de zoom attend encore dans cette image (image lente au milieu d'un zoom) :
+    -- le trace exact se ferait aux anciennes tailles, pour rien.
+    if driverState.worldLayoutPending then return false end
     ZoneArc.settleAt = nil
     for _, ov in pairs(overlays) do
         if ov and ov.zone and ov:IsShown() then

@@ -53,7 +53,7 @@ local function overlay(name, noRotation)
         function g:SetShadowColor() end
         function g:SetShadowOffset() end
         function g:SetText(text) self.text = text end
-        function g:GetStringWidth() return self.size * 0.5 end
+        function g:GetStringWidth() self.measured = (self.measured or 0) + 1; return self.size * 0.5 end
         function g:ClearAllPoints() self.x, self.y = nil, nil end
         function g:SetPoint(point, _, _, x, y) self.point, self.x, self.y = point, x, y end
         function g:Show() self.shown = true end
@@ -200,9 +200,9 @@ assert(hidden == 1 and rings[1] > 36 * 0.54 and not near(rings[1], rings[#rings]
 do
     -- Same font size (small circles keep 7 pt): moved exactly, nothing else touched.
     local small = overlay("Refuge")
-    markers.RescaleZoneArc(small, 36, 60, true)
-    assert(small.arcFrame == nil and #small.made == 0, "a zoom laid out a name that was never shown")
-    markers.LayoutZoneArcName(small, 30, 50, true)
+    -- A name not laid out yet (the mouse left the point during the zoom) is laid out at once.
+    markers.RescaleZoneArc(small, 30, 50, true)
+    assert(#shown(small) == 6 and small.arcFrame.scale == 1, "a name shown again during a zoom waited for its end")
     local letter = small.made[1]
     local fonts = letter.fonts
     assert(letter.size == 7 and near(radius(letter), 15 - 1 - 3.5), "fixture: a 7 pt name inside a small circle")
@@ -230,11 +230,21 @@ do
     assert(zoomed.arcFrame.scale > 1.3)
     markers.LayoutZoneArcName(zoomed, 90, 150, true)
     assert(zoomed.arcFrame.scale == 1, "a zoom that came back to the same size left the letters scaled")
-    -- A change of size no scale should show (window resized): hidden until it settles.
+    -- A change of size no scale should show (window resized): laid out exactly, at once.
     markers.RescaleZoneArc(zoomed, 600, 1000, true)
-    assert(#shown(zoomed) == 0, "letters were scaled more than four times")
+    assert(#shown(zoomed) == 6 and zoomed.arcFrame.scale == 1 and first.size == 18 and near(radius(first), 300 - 1 - 9),
+        "letters were scaled more than four times instead of being laid out again")
     markers.LayoutZoneArcName(zoomed, 90, 150, true)
-    assert(#shown(zoomed) == 6 and zoomed.arcFrame.scale == 1, "the name did not come back once the size settled")
+    assert(#shown(zoomed) == 6 and zoomed.arcFrame.scale == 1 and first.size == 15)
+    -- A character is measured once per font size for the whole map: another point
+    -- with the same letters, or a later layout, asks for no width again.
+    local twin = overlay("Refuge")
+    markers.LayoutZoneArcName(twin, 90, 150, true)
+    for _, g in ipairs(twin.made) do
+        assert((g.measured or 0) == 0, "a character already measured at this size was measured again")
+    end
+    assert(#shown(twin) == 6 and twin.made[1].size == 15 and near(radius(twin.made[1]), radius(first)),
+        "a name laid out from cached widths is not where the measured one is")
     -- The banner shows during the zoom (hover, capture): the letters go.
     markers.RescaleZoneArc(zoomed, 100, 166, false)
     assert(#shown(zoomed) == 0, "the curved name stayed under the banner during a zoom")
