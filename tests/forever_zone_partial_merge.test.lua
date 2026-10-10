@@ -172,6 +172,23 @@ do
     set(W, "Alliance", EPOCH + 500)
 end
 
+-- (1g) 1.8.2: the map of a client from before 1.7.0 is not taken (update required);
+-- the same map from an updated neighbour is.
+do
+    set(Y, "Horde", EPOCH + 2800)
+    local pages = snapshot()
+    set(Y, "Alliance", EPOCH + 500)
+    local realRelay, stats = Overlord.Relay, {}
+    Overlord.Relay = { stats = stats, IsOutdatedMapPeer = function(_, name) return name == "Old Client" end }
+    for _, page in ipairs(pages) do sync:OnReceiveZoneAll(page, "Old Client") end
+    assert(state(Y) == "Alliance@" .. (EPOCH + 500), "the map of a client from before 1.7.0 was taken: " .. state(Y))
+    assert(stats.outdatedMaps == #pages, "map pages of a client from before 1.7.0 were not counted")
+    deliver(pages)
+    assert(state(Y) == "Horde@" .. (EPOCH + 2800), "the same map from an updated neighbour was refused: " .. state(Y))
+    Overlord.Relay = realRelay
+    set(Y, "Alliance", EPOCH + 500)
+end
+
 -- (1f) An orange zone whose stable base differs from the sender's entry (the receiver
 -- missed a capture there) no longer rejects the whole map: that zone keeps its wave,
 -- every other entry still merges and the map counts as received.

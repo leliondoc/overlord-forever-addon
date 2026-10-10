@@ -1144,6 +1144,17 @@ function net:GetPeerPagedProtocol(name)
     if not row or GetTime() - row.at > 300 then return nil end
     return row.version
 end
+-- 1.8.2: a neighbour whose own presence says less than v7 runs a client from before
+-- 1.7.0. Such a client gives a kept capital back to its faction 15 min after every
+-- truce and serves that as a newer capture. Its map is neither asked for nor taken,
+-- and it is not served ours. Update required, no fallback (as for the ranking since
+-- 1.7.5). What it sent to neighbours that are not updated yet still comes back in
+-- their maps, as any capture does.
+net.MAP_MIN_PROTOCOL = 7
+function net:IsOutdatedMapPeer(name)
+    local capability = self:GetPeerPagedProtocol(name)
+    return capability ~= nil and capability < self.MAP_MIN_PROTOCOL
+end
 function net:IsDispatching(sender)
     return self.context ~= nil and same(self.context.origin, sender)
 end
@@ -1245,6 +1256,8 @@ function net:GetKindDiagnostics(maxRows)
             if #named < 4 and type(character) == "string" and character ~= "" then
                 local capability = self:GetPeerPagedProtocol(character)
                 named[#named + 1] = character .. " [" .. (not heard and "not heard under Overlord"
+                    or capability and capability < self.MAP_MIN_PROTOCOL
+                        and "before 1.7.0: no map, no ranking (update required)"
                     or capability and capability < (sync.PAGED_ASK_PROTOCOL or 8)
                         and "live bridge; before 1.8.0: no ranking catch-up"
                     or capability and capability < (sync.PAGED_PROTOCOL or 9)
@@ -1260,6 +1273,11 @@ function net:GetKindDiagnostics(maxRows)
     lines[#lines + 1] = string.format("Map pulls on a neighbour's presence skipped (same map, or its turn to pull): %d;"
         .. " sent for a different map: %d; for a keep or outpost capture: %d.",
         self.stats.mapPullsNoNews or 0, self.stats.mapPullsForDiff or 0, self.stats.mapPullsForSites or 0)
+    if (self.stats.outdatedPresences or 0) + (self.stats.outdatedMaps or 0) + (self.stats.outdatedRequests or 0) > 0 then
+        lines[#lines + 1] = string.format("Clients before 1.7.0 (update required): %d presences not asked for a map,"
+            .. " %d map pages not taken, %d requests not answered.", self.stats.outdatedPresences or 0,
+            self.stats.outdatedMaps or 0, self.stats.outdatedRequests or 0)
+    end
     lines[#lines + 1] = string.format("Bridge election: %d same-faction bridges heard, crossing share %d%%"
         .. " (100%% up to %d), %d enemy copies of routine traffic and %d score rows left to the elected forwarders;"
         .. " %d captures not sent back to the side that made them.",
@@ -2314,8 +2332,11 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         if noNews and #p.path == 1 and (budget or friendPull) and now - last >= 300 and not recentFullMap then
             self.stats.mapPullsNoNews = (self.stats.mapPullsNoNews or 0) + 1
         end
-        -- Only a direct neighbour is asked: its map reply never needs a relay.
-        if #p.path == 1 and (budget or friendPull) and now - last >= 300 and not recentFullMap and not noNews then
+        -- Only a direct neighbour is asked: its map reply never needs a relay. A
+        -- client from before 1.7.0 is never asked (see MAP_MIN_PROTOCOL).
+        if #p.path == 1 and version < self.MAP_MIN_PROTOCOL then
+            self.stats.outdatedPresences = (self.stats.outdatedPresences or 0) + 1
+        elseif #p.path == 1 and (budget or friendPull) and now - last >= 300 and not recentFullMap and not noNews then
             if friendPull then self.friendPulls = (self.friendPulls or 0) + 1 else self.pulls = self.pulls + 1 end
             -- Bound this cache by the same live peer population.
             self.requested = self.requested or {}

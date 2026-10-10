@@ -286,7 +286,7 @@ local function askSR(responder, requester, mode)
         return true
     end
     clock = clock + 1000 -- responder and per-sender cooldowns
-    sync:OnSyncRequest(requester.name, "Alliance:0.0.1::::" .. mode, "WHISPER")
+    sync:OnSyncRequest(requester.name, "Alliance:" .. Overlord.Version .. "::::" .. mode, "WHISPER")
     for _ = 1, 2000 do
         local live = false
         for _, t in ipairs(tickers) do

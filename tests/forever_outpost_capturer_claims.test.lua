@@ -465,6 +465,14 @@ tick(100)
 assert(sync:PollIfStaleObserverOutpost(999, true) == false and #requests == 1 and requests[1].betaTarget,
     "a refused stale pull counted as a probe or fell back to a broadcast")
 sync.SendSyncRequest = function(_, opts) requests[#requests + 1] = opts; return true end
+-- 1.8.2: a client from before 1.7.0 is never asked (update required): the pull goes
+-- to the updated neighbour, here of our own side.
+Overlord.Relay.IsOutdatedMapPeer = function(_, name) return name == "Enemy Peer" end
+requests = {}
+tick(100)
+assert(sync:PollIfStaleObserverOutpost(999, true) == true and #requests == 1 and requests[1].betaTarget == "Ally Peer",
+    "the stale probe pulled a client from before 1.7.0")
+Overlord.Relay.IsOutdatedMapPeer = nil
 -- Without any direct neighbour, the broadcast request is the fallback.
 Overlord.Relay.GetDirectPeers = function() return {} end
 requests = {}

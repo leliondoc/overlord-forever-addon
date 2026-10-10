@@ -646,7 +646,7 @@ do
     local joiner = client("Joiner Tester", "joiner")
     local request
     function joiner.Sync:SendSyncRequest(opts) request = opts; return true end
-    local hello = "global|map-hello|" .. time() .. "|*|Veteran Tester|NH|1.1.1"
+    local hello = "global|map-hello|" .. time() .. "|*|Veteran Tester|NH|1.7.0~lr~lp6"
     assert(joiner.Relay:Receive(hello, "Veteran Tester", "CHANNEL"))
     assert(request and request.betaTarget == "Veteran Tester", "No targeted map request on discovery")
     assert(not request.fullResponse and not request.stateResponse,
@@ -1063,6 +1063,29 @@ do
         fresh.Sync._lastFullZaAt = now - 60
         assert(pulled("Stamp News", "~m2bi"), "A newer capture of a 1.8.1 neighbour waited for the 150 s")
         fresh.Sync._lastFullZaAt = nil
+    end
+    -- 1.8.2: a client from before 1.7.0 (its own presence says less than v7) is
+    -- never asked for its map; a 1.7.x neighbour still is.
+    do
+        now = now + 61
+        local before = #pulls
+        fresh.Relay:Receive("global|map-OldSix|" .. time() .. "|*|Old Six|NH|1.6.3~lp6", "Old Six", "CHANNEL")
+        fresh.Relay:Receive("global|map-OldFive|" .. time() .. "|*|Old Five|NH|1.5.0", "Old Five", "CHANNEL")
+        assert(#pulls == before, "A client from before 1.7.0 was asked for its map")
+        assert(fresh.Relay:IsOutdatedMapPeer("Old Six") and fresh.Relay:IsOutdatedMapPeer("Old Five"),
+            "A client from before 1.7.0 is not known as such")
+        assert(fresh.Relay.stats.outdatedPresences == 2, "Presences of clients before 1.7.0 not counted")
+        local report = fresh.Relay:GetKindDiagnostics()
+        if type(report) == "table" then report = table.concat(report, " ") end
+        assert(tostring(report):find("Clients before 1.7.0 (update required): 2 presences", 1, true),
+            "The network report does not say that clients before 1.7.0 were heard")
+        fresh.Relay:Receive("global|map-OldSeven|" .. time() .. "|*|Old Seven|NH|1.7.2~lr~lp6", "Old Seven", "CHANNEL")
+        assert(#pulls == before + 1 and pulls[#pulls] == "Old Seven", "A 1.7.x neighbour lost its map pull")
+        assert(not fresh.Relay:IsOutdatedMapPeer("Old Seven") and not fresh.Relay:IsOutdatedMapPeer("Never Heard"),
+            "A 1.7.x or unknown neighbour counts as a client from before 1.7.0")
+        -- Its presence relayed by someone else says nothing about it.
+        fresh.Relay:Receive("global|map-FarOld|" .. time() .. "|*|Far Old,Old Seven|NH|1.6.3~lp6", "Old Seven", "CHANNEL")
+        assert(not fresh.Relay:IsOutdatedMapPeer("Far Old"), "A relayed presence decided a neighbour's version")
     end
     -- The table of pairs is bounded: the pair seen longest ago gives way.
     for i = 1, 40 do

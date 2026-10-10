@@ -34,11 +34,29 @@ local function release()
     timers = {}
     clock = clock + 200
 end
-local payload = "H:1.0.25:0:::T"
+local payload = "H:" .. Overlord.Version .. ":0:::T"
 
 targeted, roll = true, 0.99
 sync:OnSyncRequest("Horde Joiner", payload, "BETA")
 assert(responded(), "Targeted beta request lost its guaranteed answer")
+release()
+
+-- 1.8.2: a client from before 1.7.0 is not answered (update required): known by the
+-- version its request states, or by its own presence.
+targeted, roll = true, 0.99
+sync:OnSyncRequest("Old Joiner", "H:1.6.3:0:::T", "BETA")
+assert(not responded(), "A client from before 1.7.0 was served the map")
+release()
+Overlord.Relay.IsOutdatedMapPeer = function(_, name) return name == "Old Joiner" end
+sync:OnSyncRequest("Old Joiner", payload, "BETA")
+assert(not responded(), "A neighbour whose presence is from before 1.7.0 was served the map")
+release()
+sync:OnSyncRequest("Horde Joiner", payload, "BETA")
+assert(responded(), "An updated neighbour was refused next to an outdated one")
+release()
+Overlord.Relay.IsOutdatedMapPeer = nil
+sync:OnSyncRequest("Seven Joiner", "H:1.7.0:0:::T", "BETA")
+assert(responded(), "A 1.7.0 client was refused")
 release()
 
 targeted, roll = false, 0.5

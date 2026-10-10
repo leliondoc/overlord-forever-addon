@@ -1064,7 +1064,8 @@ function Overlord.Sync:PollIfStaleObserverOutpost(secondsSinceOp, withPull)
         local myName, myFaction = self:GetPlayerFullName(), Overlord.PlayerFaction
         local enemies, allies = {}, {}
         for _, name in ipairs(net:GetDirectPeers()) do
-            if name ~= "" and not (self.ForeverIdentitiesMatch and self:ForeverIdentitiesMatch(name, myName)) then
+            if name ~= "" and not (self.ForeverIdentitiesMatch and self:ForeverIdentitiesMatch(name, myName))
+                and not (self.IsOutdatedMapPeer and self:IsOutdatedMapPeer(name)) then
                 local faction = self:GetBetaPeerFaction(name)
                 if faction and myFaction and faction ~= myFaction then
                     enemies[#enemies + 1] = name

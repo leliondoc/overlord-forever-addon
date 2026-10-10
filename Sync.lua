@@ -379,6 +379,21 @@ local function CheckRemoteVersion(remoteVersion)
     end
 end
 
+-- 1.8.2: a client from before 1.7.0 is no longer part of the map exchange (see
+-- Relay.MAP_MIN_PROTOCOL): known by its own presence, or by the version its
+-- request states.
+Overlord.Sync.MAP_MIN_VERSION = "1.7.0"
+function Overlord.Sync:IsOutdatedMapPeer(name, version)
+    if type(version) == "string" and version:match("^%d+%.%d+%.%d+$")
+        and CompareVersions(version, self.MAP_MIN_VERSION) < 0 then return true end
+    local net = Overlord.Relay
+    return net ~= nil and net.IsOutdatedMapPeer ~= nil and net:IsOutdatedMapPeer(name) == true
+end
+local function NoteOutdated(what)
+    local stats = Overlord.Relay and Overlord.Relay.stats
+    if stats then stats[what] = (stats[what] or 0) + 1 end
+end
+
 -- Capture vue en observateur distant : dernier ZS peut manquer (throttle BNet/canaux).
 -- Un SR groupe/canal rafraichit ZA/ZS sans attendre approach-proximity (throttle global anti-spam).
 local lastStaleObserverPoll = 0
@@ -1834,7 +1849,8 @@ function Overlord.Sync:RunBetaPeerLoginCatchup(attempt)
     local myFaction = Overlord.PlayerFaction
     local enemies, others = {}, {}
     for _, name in ipairs(net:GetDirectPeers()) do
-        if name ~= "" and not self:ForeverIdentitiesMatch(name, myName) then
+        if name ~= "" and not self:ForeverIdentitiesMatch(name, myName)
+            and not self:IsOutdatedMapPeer(name) then
             local faction = self:GetBetaPeerFaction(name)
             if faction and myFaction and faction ~= myFaction then
                 enemies[#enemies + 1] = name
@@ -1912,7 +1928,8 @@ function Overlord.Sync:RunPeriodicMapCatchup()
     local myFaction = Overlord.PlayerFaction
     local enemies, allies = {}, {}
     for _, name in ipairs(net:GetDirectPeers()) do
-        if name ~= "" and not self:ForeverIdentitiesMatch(name, myName) then
+        if name ~= "" and not self:ForeverIdentitiesMatch(name, myName)
+            and not self:IsOutdatedMapPeer(name) then
             local faction = self:GetBetaPeerFaction(name)
             if faction and myFaction and faction ~= myFaction then
                 enemies[#enemies + 1] = name
@@ -5172,6 +5189,11 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         senderEvidencePage = math.floor(senderEvidencePage)
     end
     CheckRemoteVersion(senderVersion)
+    -- 1.8.2: a client from before 1.7.0 is not answered (map, keeps, history).
+    if self:IsOutdatedMapPeer(replyToOverride or sender, senderVersion) then
+        NoteOutdated("outdatedRequests")
+        return
+    end
     if senderRequestMode == "H" then
         if directSR and self.RespondOutpostHistory then
             self:RespondOutpostHistory(replyToOverride or sender, senderEvidencePage, hasEvidencePage)
@@ -7714,6 +7736,11 @@ function Overlord.Sync:OnReceiveZoneAll(
     payload, sender, loginElectionClaimKey, runtimeElectionClaimKey)
     if not payload or payload == "" then return end
     if loginElectionClaimKey or runtimeElectionClaimKey then return end
+    -- 1.8.2: the map of a client from before 1.7.0 is not taken.
+    if self:IsOutdatedMapPeer(sender) then
+        NoteOutdated("outdatedMaps")
+        return
+    end
     local snapshotComplete = false
     local snapshotAtomic = false
     local snapshotGlobal = false

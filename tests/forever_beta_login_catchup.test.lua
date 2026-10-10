@@ -22,6 +22,8 @@ Overlord.Relay = {
     GetDirectPeers = function() return peers end,
     IsPeer = function() return true end,
 }
+local outdated = {}
+Overlord.Relay.IsOutdatedMapPeer = function(_, name) return outdated[name] == true end
 Overlord.PlayerFaction = "Horde"
 C_Club = { GetSubscribedClubs = function() return {} end }
 Enum = Enum or {}; Enum.ClubType = Enum.ClubType or { Character = 1 }
@@ -98,6 +100,30 @@ assert(sync._lastFullZaAt and not sync._lastEnemyFullZaAt, "A map of our own sid
 sync:NoteFullMapReceived("Ally PeerA")
 assert(sync._lastEnemyFullZaAt, "A map of the other faction was not noted as such")
 sync._lastFullZaAt, sync._lastEnemyFullZaAt = nil, nil
+-- 1.8.2: a client from before 1.7.0 is never asked for its map, at login or later
+-- (update required). Here every neighbour of the other faction is one.
+do
+    for name, faction in pairs(factions) do outdated[name] = faction == "Alliance" end
+    whispers = {}
+    assert(sync:RunBetaPeerLoginCatchup(1) > 0, "Login catch-up found no updated neighbour")
+    drain()
+    assert(#whispers > 0)
+    for _, w in ipairs(whispers) do
+        assert(factions[w.target] == "Horde", "The login catch-up asked a client from before 1.7.0: " .. w.target)
+    end
+    whispers = {}
+    sync._mapCatchupRound = 0
+    assert(sync:RunPeriodicMapCatchup() and sync:RunPeriodicMapCatchup() and #whispers == 2)
+    for _, w in ipairs(whispers) do
+        assert(factions[w.target] == "Horde", "The periodic map pull asked a client from before 1.7.0: " .. w.target)
+    end
+    for name in pairs(outdated) do outdated[name] = nil end
+    whispers = {}
+    sync._mapCatchupRound = 0
+    assert(sync:RunPeriodicMapCatchup() and factions[whispers[1].target] == "Alliance",
+        "fixture: updated neighbours of the other faction are asked")
+    sync._lastFullZaAt, sync._lastEnemyFullZaAt = nil, nil
+end
 timers = {}
 sync.SchedulePeriodicMapCatchup = realScheduleMapCatchup
 sync._mapCatchupArmed = nil
