@@ -1920,6 +1920,8 @@ function Overlord:SuspendForInstance()
     end
     if self.ZoneIndicator then self.ZoneIndicator:Hide() end
     if self.LeaderboardUI then self.LeaderboardUI:Hide() end
+    -- Like the ranking window (it kept its keyboard and AchievementFrame refresh in the instance).
+    if self.HallOfFameUI and self.HallOfFameUI.IsShown and self.HallOfFameUI:IsShown() then self.HallOfFameUI:Hide() end
     if self.Sync then self.Sync:Suspend() end
     if self.Combat then self.Combat:Suspend() end
 end
