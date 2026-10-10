@@ -1,16 +1,24 @@
-1.8.0
+1.8.1
 
-**Overlord Forever 1.8.0**
+**Overlord Forever 1.8.1**
 
-- **Lighter ranking**: the ranking takes about a third less memory, and seeing new players no longer rebuilds the whole ranking index again and again (that was most of the memory shown for the addon and of its garbage-collection hitches). The full copy of last week's ranking is no longer kept for seven days; the weekly history of the best players stays.
-- **Faster ranking catch-up between 1.8 players**: two updated players now exchange only the rows that differ instead of whole blocks of the ranking. A quiet round costs a single message each way, so rounds come more often and new totals spread to everyone sooner, with less network traffic.
-- **Other faction sooner**: through a Battle.net friend of the other faction, only that faction's players are asked for (your own faction comes from your allies), then they spread to your allies at the next rounds.
-- **New or lost save**: the best players of the ranking arrive first, in rank order, before the rest of the table.
-- **Steadier catch-up on busy channels**: an exchange in progress no longer loses its neighbour when the channel is crowded.
-- **Update recommended**: players on 1.7.x keep syncing with 1.8 as before, but only 1.8 players get the faster exchange.
-- **Ranking back to the 1.7.5 rules**: the 1.7.6 changes are undone. Players who farm a lot right after the weekly reset are shown with their real total again; every protection from 1.7.5 stays.
-- **Paused captures explained**: when your capture pauses because your PvP flag dropped or you mounted up, Overlord now tells you in chat what to do (the timer used to look frozen with no message).
-- **Optional chat line on each honorable kill**: the "+N honorable kills: Total" line is back as an option (Options > AddOns > Overlord > Chat), off by default.
-- **General is opt-in only again**: when the General dies or steps down, command no longer passes automatically to party or raid leaders who never pressed the General button.
-- **Continent emblems on the world map**: a large Alliance or Horde emblem over Kalimdor and over the Eastern Kingdoms shows the faction that dominates the most fronts of that continent (no emblem when they are tied).
-- **Alerts from your continent**: capture and outpost alerts now come only from the continent you are on; your guild's outposts, your capital, calls to arms and total victories still reach you everywhere. An option (Options > AddOns > Overlord > Chat) brings back alerts from the whole world.
+- **Update required**: several improvements only work between updated players, and the ranking catch-up now only pairs 1.8.1 players (1.8.0 does not know the Skyborne race, so every comparison with it resent the same rows over and over). Until the players around you have updated, your own faction's ranking stays current but the other faction's fills in slowly. Live kills, captures and alerts still reach every version.
+- **Captures cross between factions more reliably**: Battle.net friends who actually run Overlord are used as bridges first (friends without the addon, or inside an instance, used to take their place), up to 40 Battle.net friends are considered (was 15), and two friends running Overlord find each other within a few minutes, also right after leaving an instance.
+- **Captures hold up under load**: the end of a capture sent right before a loading screen reaches Battle.net friends at once (also in a group), a busy relay no longer drops the channel copy of a capture, and a capture or alert sent in two pieces is no longer lost when many other messages arrive between the pieces.
+- **Missed captures come back sooner**: when you missed a capture, the map is fetched from a neighbour who knows a newer one, instead of from whoever happened to speak. One disputed zone no longer makes a whole map from a neighbour be thrown away.
+- **Keeps and outposts**: a capture learnt from another player's history now updates the map, minimap and lists too, not only the ranking. When the end of an assault is missed, Overlord asks one neighbour directly instead of the whole channel (much less traffic at busy times).
+- **Kill totals**: enemy totals reach your channel sooner through Battle.net bridges, even while you are fighting. Your last total of a fight always goes out (it could be skipped in the last 2 seconds of the 30-second window, so the other faction never saw it), and a total waiting when you enter an instance goes out once you leave.
+- **Ranking no longer stalls when many new players appear**: the copy of the ranking that players compare, and the ranking window itself, were started over each time a new player showed up while they were being prepared. After a long absence, or with many newcomers, missing rows could stop arriving and the window could stay on an old view.
+- **Ranking sync indicator**: in the middle of the leaderboard header, a green arrow drifts gently while ranking data is still arriving from allies and enemies; it turns into a green check once a full comparison with a neighbour found (almost) nothing missing, and the check pulses softly when live kills come in. Hover it for details. Nothing is sent to show it.
+- **Skyborne race recognised**: about one ranked player in six showed no race. Their icon appears once you have seen them, or once they have updated and made a kill.
+- **Ranking display**: a class or race learnt while the ranking was being refreshed now shows at the next refresh (it could stay hidden until another change). Keep and outpost lists keep updating during assaults.
+- **Capitals and Attack**: Attack no longer applies to capitals (a capital taken with Attack was never shared with other players). Attack stays ready for your next point. Tutorial and tooltip updated.
+- **Captures**: /ov start and a click on a zone follow the same rules as an automatic start (PvP flag, mount, an ally's capture already running) and say what happened.
+- **Windows**: Overlord windows no longer cause "action blocked" errors or swallow your keys in combat; the panel no longer comes back inside an instance after a fight, and the Hall of Fame closes there like the ranking.
+- **Ready for launch crowds**: much less network traffic with thousands of players (far fewer answers to each map request, no copies to Battle.net friends who do not run Overlord, no captures sent back to the side that made them, fewer duplicate copies between factions), and the addon remembers enough to keep working on a crowded channel.
+- **Smoother framerate** in crowded zones and at login (layer detection, map lookups, ranking work for players without a score, relay memory, outpost history preparation, and a 60 ms freeze at login removed).
+- **Smaller saved file**: the saved ranking no longer stores internal fields nobody reads (about a quarter of its size), so logins parse less.
+- **/ov network**: your Battle.net friends of the other faction are named with what each can do, a ranking catch-up that stops says why, and routine outpost copies are shown apart from refused captures.
+- **Guild rampages counted correctly in big fights**.
+- **Hardening**: several protections against forged messages were tightened.
+- **Cleanup**: about 1,500 lines of unused code removed, including leftovers from the Retail version; the old "Communities and Battle.net unavailable" warning is gone.
