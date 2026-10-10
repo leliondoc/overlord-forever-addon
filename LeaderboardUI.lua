@@ -424,6 +424,7 @@ local lbVolatileLists = {
     pending = false,
     dirty = true,
     token = 0,
+    revision = 0,
 }
 local LB_VOLATILE_LISTS_TTL = 30
 local LB_VOLATILE_WORK_PER_SLICE = 64
@@ -441,6 +442,10 @@ local function GetVolatileLeaderboardLists(lb, sortedGuilds)
         lbVolatileLists.pending = true
         lbVolatileLists.token = lbVolatileLists.token + 1
         local token = lbVolatileLists.token
+        -- Mutations during the build only mark it stale (see RefreshIfVisible); a new
+        -- week throws it away.
+        local startRevision = lbVolatileLists.revision
+        local startEpoch = OverlordDB and OverlordDB.lastResetTimestamp
         local work, started = 0, 0
         local worker = coroutine.create(function()
             local function yieldWork()
@@ -474,11 +479,22 @@ local function GetVolatileLeaderboardLists(lb, sortedGuilds)
                 C_Timer.After(0, runSlice)
                 return
             end
+            lbVolatileLists.pending = false
+            if (OverlordDB and OverlordDB.lastResetTimestamp) ~= startEpoch then
+                -- A weekly reset happened during the build: keep the previous lists,
+                -- the next refresh builds the new week's.
+                lbVolatileLists.dirty = true
+                if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RequestRefresh then
+                    Overlord.LeaderboardUI:RequestRefresh()
+                end
+                return
+            end
             lbVolatileLists.keeps = type(keepsOrErr) == "table" and keepsOrErr or {}
             lbVolatileLists.outposts = type(outposts) == "table" and outposts or {}
             lbVolatileLists.at = GetTime()
-            lbVolatileLists.dirty = false
-            lbVolatileLists.pending = false
+            -- Published even when a mutation arrived meanwhile (still current enough);
+            -- that mutation leaves the lists dirty and the next refresh rebuilds them.
+            lbVolatileLists.dirty = lbVolatileLists.revision ~= startRevision
             if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RequestRefresh then
                 Overlord.LeaderboardUI:RequestRefresh()
             end
@@ -3094,10 +3110,11 @@ function Overlord.LeaderboardUI:RefreshIfVisible()
     -- Les appels de cette voie viennent des registres secondaires (GK/OP/ressources/bounty).
     -- Invalider meme panneau ferme : sinon une mutation recue entre Hide et Show pouvait
     -- reutiliser pendant 30 s la liste de sites construite avant la mutation.
-    -- Une mutation annule le worker en cours. Conserver les anciennes listes pendant
-    -- le rebuild evite un panneau vide, mais le drapeau dirty contourne bien le TTL.
-    lbVolatileLists.token = lbVolatileLists.token + 1
-    lbVolatileLists.pending = false
+    -- A mutation no longer cancels the running build (during an assault, one came every
+    -- 2 s, before any build could finish, and the lists stayed frozen): it marks the
+    -- lists dirty, and the build that finishes is followed by a fresh one. The old lists
+    -- stay shown meanwhile; the dirty flag still bypasses the 30 s TTL.
+    lbVolatileLists.revision = lbVolatileLists.revision + 1
     lbVolatileLists.dirty = true
     if not self:IsShown() then return end
     local now = GetTime()

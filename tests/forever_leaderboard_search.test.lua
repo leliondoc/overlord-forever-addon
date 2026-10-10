@@ -358,4 +358,60 @@ assert(badge:IsShown() and badge.arrow:IsShown() and badge.anim.playing,
     "The badge stayed frozen when the panel came back")
 ui:Hide(); drain()
 Overlord.Sync = nil
-print('Search UI: actual edit box/clear/Escape, bounded frames, original rank, scroll reset, totals, no data reads on typing, guild hover, sync badge OK')
+
+-- Keep/outpost lists: a mutation every few frames (an assault, a catch-up burst) no
+-- longer throws the running build away; the lists are published, then rebuilt.
+OverlordDB = OverlordDB or {}
+OverlordDB.lastResetTimestamp = 1000
+local builds, markers = 0, {}
+Overlord.Leaderboard.GetSortedGuildKeeps = function(_, _, yieldWork)
+    for _ = 1, 2000 do yieldWork() end
+    return {}
+end
+Overlord.Leaderboard.GetSortedOutposts = function(_, _, yieldWork)
+    builds = builds + 1
+    for _ = 1, 10 do yieldWork() end
+    markers[builds] = { { guild = 'Marker ' .. builds } }
+    return markers[builds]
+end
+ui:Show(); drain()
+local startBuilds = builds
+local function outposts() return frame._lbSource and frame._lbSource.sortedOutposts end
+local ticks = 0
+ui:RefreshIfVisible()
+while ticks < 400 do
+    ticks = ticks + 1
+    if ticks % 5 == 0 then ui:RefreshIfVisible() end
+    if not tick() then break end
+    local list = outposts()
+    if list and list[1] and list[1].guild and list[1].guild:find('^Marker ') and builds > startBuilds then break end
+end
+local list = outposts()
+assert(list and list[1] and list[1].guild:find('^Marker '), 'keep/outpost lists were never published while mutations kept coming')
+assert(builds - startBuilds <= 3, 'each mutation restarted the keep/outpost build: ' .. (builds - startBuilds))
+drain()
+-- A single mutation during a build: the build is published, then rebuilt at once
+-- (not after the 30 s reuse window).
+ui:RefreshIfVisible()
+ui:Refresh()
+tick(); tick()
+local before = builds
+ui:RefreshIfVisible()
+drain()
+assert(builds == before + 2, 'a mutation during the build did not trigger a rebuild: ' .. (builds - before))
+-- A weekly reset during a build throws that build away; the next one publishes.
+ui:RefreshIfVisible()
+ui:Refresh()
+tick(); tick()
+local resetBuild = builds + 1 -- the build now running (its outposts come last)
+OverlordDB.lastResetTimestamp = 2000
+ticks = 0
+while ticks < 400 do
+    ticks = ticks + 1
+    assert(outposts() ~= markers[resetBuild], 'a build that straddled the weekly reset was published')
+    if not tick() then break end
+end
+drain()
+assert(builds > resetBuild and outposts() == markers[builds], 'the lists built after the weekly reset were not published')
+ui:Hide(); drain()
+print('Search UI: actual edit box/clear/Escape, bounded frames, original rank, scroll reset, totals, no data reads on typing, guild hover, sync badge, keep/outpost lists under mutations OK')
