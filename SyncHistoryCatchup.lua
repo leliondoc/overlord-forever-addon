@@ -950,10 +950,10 @@ end
 -- Lignes /ov network : dernier voisin, resultat. Aucune mutation.
 function sync:GetHistoryCatchupDiagnostics()
     local stats = self._historyCatchupStats
-    if not stats then return { "Ladder rounds: none yet this session (v7, direct neighbours only)." } end
+    if not stats then return { "Ladder rounds: none yet this session (v8, direct 1.8.1 neighbours only)." } end
     local age = stats.targetAt and math.floor(GetTime() - stats.targetAt) or 0
     return {
-        string.format("Ladder rounds: %d started, %d complete (v7, direct neighbours only).",
+        string.format("Ladder rounds: %d started, %d complete (v8, direct 1.8.1 neighbours only).",
             stats.requests or 0, stats.completed or 0),
         string.format("Last peer: %s (%s), %ds ago: %s.",
             tostring(stats.target or "?"), tostring(stats.targetFaction or "?"), age,
