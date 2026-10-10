@@ -156,6 +156,27 @@ do
     deliver(pages)
     assert(state(X) == "Alliance@" .. (EPOCH + 200), "the truce guard let a pre-truce entry in: " .. state(X))
     assert(state(Y) == "Horde@" .. (EPOCH + 1900), "one truce-guarded entry rejected the whole map: " .. state(Y))
+    -- Same refused entry on an orange zone (the loser besieging it): nothing of it is
+    -- applied through the lease plan; the zone keeps its wave and base.
+    set(X, "Horde", EPOCH + 300); set(Y, "Horde", EPOCH + 2100)
+    pages = snapshot()
+    set(X, "Alliance", EPOCH + 200); set(Y, "Alliance", EPOCH + 500)
+    local zx = zoneOf(X)
+    local lease = { owner = "Horde", originKey = "bob tester", waveId = "w2",
+        base = { owner = "Alliance", status = "captured", capturedTime = EPOCH + 200, updatedAt = EPOCH + 200 } }
+    zx._remoteCaptureLease, zx.status, zx.owner, zx.previousOwner = lease, "in_progress", "Horde", "Alliance"
+    local commitPlan = Overlord.CaptureLease.CommitRemoteStablePlan
+    Overlord.CaptureLease.CommitRemoteStablePlan = function(lease_, plan)
+        assert(type(plan) == "table", "an unplanned lease mark reached the commit: " .. tostring(plan))
+        return commitPlan(lease_, plan)
+    end
+    deliver(pages)
+    Overlord.CaptureLease.CommitRemoteStablePlan = commitPlan
+    assert(zx._remoteCaptureLease == lease and zx.status == "in_progress" and lease.base.capturedTime == EPOCH + 200,
+        "a truce-refused entry was applied to an orange zone through the lease plan")
+    assert(state(Y) == "Horde@" .. (EPOCH + 2100), "the rest of the map did not merge: " .. state(Y))
+    zx._remoteCaptureLease = nil
+    set(X, "Alliance", EPOCH + 200)
     OverlordDB.frontTruceResetEpoch = savedEpochs
 end
 assert(loadfile("SyncRelay.lua"))()

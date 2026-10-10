@@ -7879,7 +7879,7 @@ function Overlord.Sync:OnReceiveZoneAll(
             if validEntry and (ShouldRejectStaleTruceResetZone(zoneId, ts)
                 or ShouldRejectPostVictoryZoneOwner(zoneId, owner, "captured", ts, "ZA")
                 or (owner and ShouldRejectFrontTruceZoneChange(zoneId, owner, "captured", ct))) then
-                staleSkipMask[entryIndex] = true
+                staleSkipMask[entryIndex] = "truce"
             end
         end
         local previousIndex = zoneId and seenZaZoneIds[zoneId]
@@ -8047,9 +8047,21 @@ function Overlord.Sync:OnReceiveZoneAll(
                 staleEntry = true
             end
             if staleEntry or staleSkipMask[entryIndex] then
-                staleSkipMask[entryIndex] = true
-                stagedOwners[zoneId] = stateZone.owner or false
-                stagedEntries[#stagedEntries].owner = stateZone.owner
+                -- A truce-refused entry on an orange zone must not reach the lease plan
+                -- either (a rebase/close restored the refused value): the zone keeps
+                -- its wave, staged at its base.
+                local truceLease = staleSkipMask[entryIndex] == "truce"
+                    and stateZone.status == "in_progress" and not stateZone.holdAuthorityLocal
+                    and stateZone._remoteCaptureLease or nil
+                staleSkipMask[entryIndex] = staleSkipMask[entryIndex] or true
+                if truceLease then
+                    preserveRemoteLeaseMask[entryIndex] = nil
+                    stagedOwners[zoneId] = (truceLease.base and truceLease.base.owner) or false
+                    stagedEntries[#stagedEntries].owner = truceLease.base and truceLease.base.owner
+                else
+                    stagedOwners[zoneId] = stateZone.owner or false
+                    stagedEntries[#stagedEntries].owner = stateZone.owner
+                end
             end
         end
 
@@ -8057,7 +8069,8 @@ function Overlord.Sync:OnReceiveZoneAll(
             for _, staged in ipairs(stagedEntries) do
                 if staged.zone and staged.zone.status == "in_progress"
                     and staged.zone._remoteCaptureLease
-                    and not staged.zone.holdAuthorityLocal then
+                    and not staged.zone.holdAuthorityLocal
+                    and staleSkipMask[staged.entryIndex] ~= "truce" then
                     -- Une carte globale exacte peut prouver que la wave est
                     -- impossible : cible deja possedee par l'attaquant, chaine
                     -- de prerequis absente, ou capitale ouverte trop tot. Fermer
