@@ -187,6 +187,19 @@ local function IsStaleCampaignTimestamp(ts)
     return ts and ts > 0 and lastReset > 0 and ts < lastReset
 end
 
+-- Login quarantine (1.8.2): a saved capture dated in this campaign keeps its date
+-- against the first map received. The quarantine used to compare it as never
+-- captured: a neighbour that had missed a capture gave its older owner back to every
+-- client that logged in or reloaded next to it, and the newer capture was lost there
+-- (seen in game: a keep retaken at 11:57 back to its 10:42 owner after a /reload).
+-- A save without a date, or from another campaign, still yields to any map.
+function Overlord.Sync:LoginSaveKeepsItsDate(zone)
+    if not zone or zone._loginSyncUnconfirmed ~= true or zone._captureFinalUnattested then return false end
+    if not zone.owner or zone.status == "in_progress" then return false end
+    local capturedAt = tonumber(zone.capturedTime) or 0
+    return capturedAt > 0 and not IsStaleCampaignTimestamp(capturedAt)
+end
+
 -- Pendant la treve post-victoire (15 min), ignorer les assauts et changements de proprietaire.
 -- ZA/ZS anterieurs a la fin de treve : ne pas re-appliquer l'etat « tout Alliance » de la victoire.
 local function ShouldRejectStaleTruceResetZone(zoneId, ts)
@@ -3132,6 +3145,7 @@ local function ApplyInactiveFrontCapture(zoneId, newOwner, ts)
     if IsStaleCampaignTimestamp(ts) then return false end
     local loginUnconfirmed = Overlord.IsLoginZoneStateUnconfirmed
         and Overlord:IsLoginZoneStateUnconfirmed(zone)
+        and not Overlord.Sync:LoginSaveKeepsItsDate(zone)
     local stateUnconfirmed = loginUnconfirmed or zone._captureFinalUnattested
     local localFreshness = stateUnconfirmed and 0
         or math.max(zone.updatedAt or 0, zone.capturedTime or 0)
@@ -3204,6 +3218,7 @@ local function ApplyInactiveFrontZoneState(zoneId, status, kills, holdTime, owne
     local oldStatus, oldOwner = zone.status, zone.owner
     local loginUnconfirmed = Overlord.IsLoginZoneStateUnconfirmed
         and Overlord:IsLoginZoneStateUnconfirmed(zone)
+        and not Overlord.Sync:LoginSaveKeepsItsDate(zone)
     local stateUnconfirmed = loginUnconfirmed
         or (status == "captured" and zone._captureFinalUnattested)
         or forceConvergence
@@ -7984,7 +7999,8 @@ function Overlord.Sync:OnReceiveZoneAll(
             local loginUnconfirmed = Overlord.IsLoginZoneStateUnconfirmed
                 and Overlord:IsLoginZoneStateUnconfirmed(stateZone)
             stagedEntries[#stagedEntries].loginUnconfirmed = loginUnconfirmed
-            local stateUnconfirmed = loginUnconfirmed
+            -- A dated save of this campaign is compared like a confirmed capture.
+            local stateUnconfirmed = (loginUnconfirmed and not self:LoginSaveKeepsItsDate(stateZone))
                 or stateZone._captureFinalUnattested or runtimeGlobalRepairMode
             local localCapturedAt = stateUnconfirmed and 0
                 or (tonumber(stateZone.capturedTime) or 0)
@@ -8311,7 +8327,7 @@ function Overlord.Sync:OnReceiveZoneAll(
             if zone then
                 local loginUnconfirmed = Overlord.IsLoginZoneStateUnconfirmed
                     and Overlord:IsLoginZoneStateUnconfirmed(zone)
-                local stateUnconfirmed = loginUnconfirmed
+                local stateUnconfirmed = (loginUnconfirmed and not self:LoginSaveKeepsItsDate(zone))
                     or zone._captureFinalUnattested or runtimeGlobalRepairMode
                 local localCapturedTs = stateUnconfirmed and 0
                     or (tonumber(zone.capturedTime) or 0)
