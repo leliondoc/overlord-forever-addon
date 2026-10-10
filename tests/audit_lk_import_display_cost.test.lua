@@ -112,9 +112,13 @@ local uiStarts, uiScans = displayStarts - previousStarts,
     metadataScans - previousScans
 assert(uiStarts <= 6 and uiScans <= 6,
     "One-second UI cadence bypassed the minimum attempt interval")
-advance(12)
-lb:EnsureDisplayCache()
-advance(12)
+-- 1.8.1: a build in flight is no longer aborted by the names arriving (it used to
+-- restart from scratch, and never finished while they kept coming): it publishes a
+-- view a few rows behind, then the paced follow-up build brings the last ones.
+for _ = 1, 4 do
+    advance(12)
+    lb:EnsureDisplayCache()
+end
 local cache = assert(lb._displayCache)
 assert(cache.ready and cache.epoch == lb._displayCacheEpoch,
     "Final display refresh missed the last received LK")

@@ -1617,6 +1617,9 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
     -- An incoming LK can invalidate metadata before a sliced build finishes.
     -- Pace attempts as well as completed builds while an older view is usable;
     -- otherwise each UI refresh can restart the full scan after an abort.
+    -- 1.8.1: a player learnt during the build is no longer an abort (the build walks
+    -- frozen key lists, like the snapshot pass): it took seconds, so the window stayed
+    -- frozen, or empty, for as long as new players kept arriving.
     local cache = self._displayCache
     if displayCacheSourcesMatch(cache, self) and cache.ready then
         local last = math.max(tonumber(self._displayCacheLastBuildAt) or -math.huge,
@@ -1666,19 +1669,22 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         end
     end
 
-    local function forEach(source, visit)
-        local cursor = nil
-        while true do
-            local ok, key, value = pcall(next, source or {}, cursor)
-            if not ok then
-                state.aborted = true
-                return false
-            end
-            cursor = key
-            if key == nil then return true end
-            visit(key, value)
+    -- Frozen key list, copied with no yield right before the loop (or reused): resuming
+    -- next() after an insertion is undefined in Lua (rows skipped or seen twice), and
+    -- rows are inserted while this build yields. Values are read live; a key added
+    -- after the copy is left to the next build (the view is published stale by epoch).
+    local function forEach(source, visit, keys)
+        source = source or {}
+        if not keys then
+            keys = {}
+            for key in pairs(source) do keys[#keys + 1] = key end
+        end
+        for i = 1, #keys do
+            local value = source[keys[i]]
+            if value ~= nil then visit(keys[i], value) end
             yieldWork()
         end
+        return keys
     end
 
     local function dedupKey(name)
@@ -1721,7 +1727,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             return
         end
         state.canonicalIndex = dedupCanonicalIndex
-        state.canonicalGeneration = dedupCanonicalGeneration
+        state.killIndex = dedupKillMaxIndex
         if not self._dedupMetaIndex then
             self:RebuildDedupMetaIndex(yieldWork)
             if state.metaEpoch ~= (self._dedupMetaEpoch or 0) then
@@ -1763,10 +1769,11 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         local sortedKills = {}
         local killTop = newDisplayTopK(DISPLAY_KILL_RANK_LIMIT)
         -- L'index contient deja un maximum par joueur, sans doublonner ses alias.
-        if not forEach(dedupKillMaxIndex, function(key, count)
+        -- One key list for both kill walks: the rows and the totals cover the same players.
+        local killKeys = forEach(state.killIndex, function(key, count)
             offerDisplayTopK(self, killTop, key,
                 cleanName(state.canonicalIndex[key] or key), count)
-        end) then return end
+        end)
         for _, row in ipairs(killTop.rows) do
             sortedKills[#sortedKills + 1] = { name = row.name, kills = row.count }
             yieldWork()
@@ -1806,7 +1813,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         -- only: SaveDisplayCache never writes it to SavedVariables.
         local guildMembers = {}
         local alliKills, hordeKills = 0, 0
-        if not forEach(dedupKillMaxIndex, function(key, count)
+        forEach(state.killIndex, function(key, count)
             local name = state.canonicalIndex[key] or key
             local _, faction, guild = indexedMeta(name)
             if faction == "Alliance" then alliKills = alliKills + count
@@ -1843,7 +1850,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                     end
                 end
             end
-        end) then return end
+        end, killKeys)
         local sortedGuilds = {}
         for _, bucket in pairs(guildBuckets) do
             local voted = ""
@@ -1964,8 +1971,10 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         if self.kills ~= state.killSource or self.captureCount ~= state.captureCountSource
             or self.captures ~= state.capturesSource or self.playerInfo ~= state.playerInfoSource
             or (self._dedupMetaEpoch or 0) ~= state.metaEpoch
-            or (state.canonicalGeneration and (not dedupCanonicalValid
-                or dedupCanonicalGeneration ~= state.canonicalGeneration)) then
+            -- The name index invalidated or republished; a new name alone is not one.
+            or (state.canonicalIndex and (not dedupCanonicalValid
+                or dedupCanonicalIndex ~= state.canonicalIndex
+                or dedupKillMaxIndex ~= state.killIndex)) then
             state.aborted = true
         end
         if state.aborted then
@@ -1993,7 +2002,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                 and self._dedupMetaIndex == state.metaIndex
             local canonicalUnchanged = dedupCanonicalValid
                 and dedupCanonicalIndex == state.canonicalIndex
-                and dedupCanonicalGeneration == state.canonicalGeneration
+                and dedupKillMaxIndex == state.killIndex
             -- Une mutation de score peut survenir pendant le build : publier cette vue stale
             -- reste utile, son ancien epoch declenchera simplement la passe de rattrapage.
             local scoreEpochChanged = (self._displayCacheEpoch or 0) ~= state.epoch
