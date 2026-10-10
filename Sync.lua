@@ -4491,7 +4491,7 @@ function Overlord.Sync:OnReceiveCapture(payload, sender)
     if Overlord.CaptureLease
         and Overlord.CaptureLease.ShouldRejectFinal
         and Overlord.CaptureLease:ShouldRejectFinal(
-            finalRequirementZone, triggerName, captureWaveId) then
+            finalRequirementZone, triggerName, captureWaveId, newOwner, ts) then
         -- Copie d'une finale deja appliquee (reprises relais) : doublon, pas une vague refusee.
         local alreadyApplied = finalRequirementZone and finalRequirementZone.owner == newOwner
             and tonumber(finalRequirementZone.capturedTime) == ts
@@ -6719,7 +6719,7 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
         end
         if captureFinalClaimKey and Overlord.CaptureLease and Overlord.CaptureLease.ShouldRejectFinal
             and Overlord.CaptureLease:ShouldRejectFinal(
-                knownStateZone, zsCapturerName, zsWaveId) then
+                knownStateZone, zsCapturerName, zsWaveId, owner, ts) then
             local alreadyApplied = knownStateZone and knownStateZone.owner == owner
                 and tonumber(knownStateZone.capturedTime) == ts
             self:NoteEnemyCaptureFinal(owner, "ZS", alreadyApplied and "duplicate" or "expiredWave")

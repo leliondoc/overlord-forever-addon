@@ -281,6 +281,22 @@ expect(not Lease:FinalSatisfiesLocalRequirement(zone, "Horde", "Eve", nil, 120)
 Lease:Complete(zone)
 expect(Lease:ShouldRejectFinal(zone, "Bob", "wreplaced"),
     "a replaced wave could still be finalized after the capture completed")
+-- 1.8.2: unless that final takes the zone from another owner at a later date: it is
+-- then another capture, not a repeat of the one completed.
+do
+    local owner, status, at = zone.owner, zone.status, zone.capturedTime
+    zone.owner, zone.status, zone.capturedTime = "Alliance", "captured", wallBase + 300
+    expect(not Lease:ShouldRejectFinal(zone, "Bob", "wreplaced", "Horde", wallBase + 420),
+        "a closed wave's later capture from another owner was refused")
+    expect(Lease:ShouldRejectFinal(zone, "Bob", "wreplaced", "Horde", wallBase + 300),
+        "a closed wave's final not later than the capture it follows was accepted")
+    expect(Lease:ShouldRejectFinal(zone, "Bob", "wreplaced", "Alliance", wallBase + 420),
+        "a closed wave's final for the faction already holding the zone was accepted (a repeat)")
+    zone.status = "in_progress"
+    expect(Lease:ShouldRejectFinal(zone, "Bob", "wreplaced", "Horde", wallBase + 420),
+        "a closed wave's final was accepted over another assault in progress")
+    zone.owner, zone.status, zone.capturedTime = owner, status, at
+end
 
 -- Aucun nombre de relais frais ne peut fabriquer une autorite receiver-local.
 mono = 100

@@ -149,6 +149,75 @@ finalC("faldir", "Alliance", "Ally Charlie", "wC4", "Player-1-0000CCCC")
 assert(neutral.owner == "Alliance" and neutral.status == "captured" and neutral.capturedTime == takenAt,
     "the other faction's capture of a point was refused while a timer was followed there")
 
+-- (4b) The followed player still counts afterwards. A Horde player starts on a neutral
+-- point and we follow him; an Alliance player completes there first (taken, the
+-- Horde timer closed here). When the Horde player completes afterwards, his final
+-- is another capture: accepted, although his timer was closed here.
+do
+    local point = zoneOf("witherbark")
+    point.owner, point.status, point.capturedTime, point.updatedAt = nil, "locked", nil, 0
+    advance(60)
+    progress("witherbark", "H", "Horde Delta", "wD", "Player-1-0000DDDD", 5)
+    assert(point.status == "in_progress" and point._remoteCaptureLease, "fixture: the Horde timer is not followed")
+    advance(3)
+    local allyAt = wall
+    finalC("witherbark", "Alliance", "Ally Echo", "wE", "Player-1-0000EEEE", allyAt)
+    assert(point.owner == "Alliance" and point.capturedTime == allyAt and not point._remoteCaptureLease,
+        "fixture: the other faction's capture was not taken")
+    advance(118)
+    local hordeAt = wall
+    finalC("witherbark", "Horde", "Horde Delta", "wD", "Player-1-0000DDDD")
+    assert(point.owner == "Horde" and point.capturedTime == hordeAt,
+        "the followed player's own later capture was refused after another final closed his timer: "
+        .. tostring(point.owner) .. "@" .. tostring((point.capturedTime or 0) - T0))
+    -- A copy of that same final afterwards is a repeat: nothing moves.
+    advance(5)
+    finalC("witherbark", "Horde", "Horde Delta", "wD", "Player-1-0000DDDD", hordeAt)
+    assert(point.owner == "Horde" and point.capturedTime == hordeAt)
+end
+-- The same when both captures end by their state message (ZS captured).
+do
+    local point = zoneOf("newstead")
+    point.owner, point.status, point.capturedTime, point.updatedAt = nil, "locked", nil, 0
+    advance(60)
+    progress("newstead", "H", "Horde Delta", "wD2", "Player-1-0000DDDD", 5)
+    assert(point.status == "in_progress" and point._remoteCaptureLease, "fixture: the Horde timer is not followed")
+    advance(3)
+    local allyAt = wall
+    finalZS("newstead", "A", "Ally Echo", "wE2", "Player-1-0000EEEE", allyAt)
+    assert(point.owner == "Alliance" and point.capturedTime == allyAt and not point._remoteCaptureLease,
+        "fixture: the other faction's state final was not taken")
+    advance(118)
+    local hordeAt = wall
+    finalZS("newstead", "H", "Horde Delta", "wD2", "Player-1-0000DDDD")
+    assert(point.owner == "Horde" and point.capturedTime == hordeAt,
+        "the followed player's own later state final was refused after another final closed his timer: "
+        .. tostring(point.owner) .. "@" .. tostring((point.capturedTime or 0) - T0))
+end
+
+-- (4c) A capture older than the timer we follow on a point nobody holds here (we had
+-- missed it, its retry reaches us during the assault): the assault stays shown.
+-- Should it be given up, the point is nobody's again and any map teaches the
+-- capture (see forever_zone_partial_merge 1d').
+do
+    local point = zoneOf("highperch")
+    point.owner, point.status, point.capturedTime, point.updatedAt = nil, "locked", nil, 0
+    advance(60)
+    local missedAt = wall - 1
+    progress("highperch", "H", "Horde Delta", "wD3", "Player-1-0000DDDD", 5)
+    local lease = point._remoteCaptureLease
+    assert(point.status == "in_progress" and lease, "fixture: the Horde timer is not followed")
+    advance(3)
+    finalC("highperch", "Alliance", "Ally Echo", "wE3", "Player-1-0000EEEE", missedAt)
+    assert(point.status == "in_progress" and point._remoteCaptureLease == lease,
+        "a capture older than the followed timer closed it")
+    advance(117)
+    local hordeAt = wall
+    finalC("highperch", "Horde", "Horde Delta", "wD3", "Player-1-0000DDDD")
+    assert(point.owner == "Horde" and point.status == "captured" and point.capturedTime == hordeAt,
+        "the followed capture was lost after an older final of the other faction")
+end
+
 -- (5) Still refused: a final older than what the map holds.
 finalC("faldir", "Horde", "Horde Bravo", "wB5", "Player-1-0000BBBB", takenAt - 50)
 assert(neutral.owner == "Alliance" and neutral.capturedTime == takenAt, "an older final replaced a newer capture")

@@ -1322,7 +1322,7 @@ function Lease:FinalSatisfiesLocalRequirement(zone, owner, originName, waveId, f
         and observedDuration >= required - 15
 end
 
-function Lease:ShouldRejectFinal(zone, originName, waveId)
+function Lease:ShouldRejectFinal(zone, originName, waveId, owner, ts)
     if not zone then return true end
     local originKey = CanonicalPlayer(originName)
     local validWave = ValidWave(waveId)
@@ -1334,7 +1334,16 @@ function Lease:ShouldRejectFinal(zone, originName, waveId)
     end
     if zone.holdAuthorityLocal and zone._localCaptureWaveId ~= validWave then return true end
     -- Une marque douce (arret faute de nouvelles, releve) ne bloque jamais une finale.
-    return IsHardTombstoned(zone.id, originKey, validWave)
+    if not IsHardTombstoned(zone.id, originKey, validWave) then return false end
+    -- 1.8.2: the final of a closed wave repeats a capture already taken into account,
+    -- unless it takes the zone from another owner at a later date: then it is
+    -- another capture. A final accepted while another timer is followed closes that
+    -- timer: when the other faction completed first and the followed player
+    -- completes afterwards, his own capture must still count.
+    local at = tonumber(ts)
+    if owner and at and zone.owner and zone.owner ~= owner and zone.status ~= "in_progress"
+        and at > (tonumber(zone.capturedTime) or 0) then return false end
+    return true
 end
 
 function Lease:TombstoneFinalWave(zoneId, originName, waveId)
