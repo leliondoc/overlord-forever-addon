@@ -7930,10 +7930,12 @@ function Overlord.Sync:OnReceiveZoneAll(
     if snapshotAtomic and snapshotConsensusComplete == false then return end
     -- Lot valide : les basculements tenus deviennent des demandes datees des
     -- maintenant, meme si le dry-run ci-dessous refuse le lot (sinon la limite de
-    -- 5 min ne demarrerait jamais pour une zone en siege continu).
-    if #heldFlips > 0 or next(confirmedFlips) ~= nil then
-        self:CommitZaFlipClaims(heldFlips, confirmedFlips, sender)
-        heldFlips, confirmedFlips = {}, {}
+    -- 5 min ne demarrerait jamais pour une zone en siege continu). A confirmation
+    -- only releases its claim once the map is accepted (below): a map refused by the
+    -- dry run (e.g. while we capture elsewhere) restarted the 5-minute hold.
+    if #heldFlips > 0 then
+        self:CommitZaFlipClaims(heldFlips, {}, sender)
+        heldFlips = {}
     end
 
     -- Dry-run conservateur des lots v2. Le commit ne commence que si chaque
@@ -8171,6 +8173,7 @@ function Overlord.Sync:OnReceiveZoneAll(
     -- Un lot moderne ne touche rien tant que chacune de ses zones n'a pas passe
     -- la validation atomique.
     if snapshotAtomic and not snapshotConsensusComplete then return end
+    if next(confirmedFlips) ~= nil then self:CommitZaFlipClaims({}, confirmedFlips, sender) end
     self._lastAcceptedZaPayload, self._lastAcceptedZaAt = payload, GetTime()
     -- Carte globale validee : le relais n'a pas besoin de redemander la carte a
     -- chaque nouveau pair entendu dans la foulee. Une carte rejetee, ou dont chaque

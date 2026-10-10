@@ -226,6 +226,31 @@ do
     Overlord.CaptureLease.CommitRemoteStablePlan = commitPlan
 end
 print("Partial merge: an unproven N or a held flip on an orange zone keeps its wave, the map merges")
+
+-- (1i) A flip confirmed by the 5-minute cap arrives in a map the dry run refuses (we are
+-- capturing another zone ourselves): the confirmation is kept, and the next accepted
+-- map applies the flip at once instead of holding it for another 5 minutes.
+do
+    set(X, "Horde", EPOCH + 3000); set(Y, "Horde", EPOCH + 2700)
+    local pages = snapshot()
+    set(X, "Alliance", EPOCH + 2000); set(Y, "Alliance", EPOCH + 500)
+    sync:NoteLiveZoneTraffic(X)
+    local claims = sync:GetPriv().zaFlipClaims
+    claims[X] = { owner = "Horde", ct = EPOCH + 3000, sender = "seed", firstAt = GetTime() - 301, at = GetTime() - 301 }
+    local firstAt = claims[X].firstAt
+    local zy = zoneOf(Y)
+    zy.status, zy.isHolding, zy.holdAuthorityLocal, zy.owner = "in_progress", true, true, "Alliance"
+    deliver(pages)
+    assert(state(X) == "Alliance@" .. (EPOCH + 2000), "a map refused by the dry run applied a flip: " .. state(X))
+    assert(claims[X] and claims[X].firstAt == firstAt, "a refused map consumed the flip's confirmation")
+    set(Y, "Alliance", EPOCH + 500)
+    zy.isHolding, zy.holdAuthorityLocal = false, nil
+    deliver(pages)
+    assert(state(X) == "Horde@" .. (EPOCH + 3000), "the confirmed flip was held again: " .. state(X))
+    assert(claims[X] == nil, "an applied flip kept its claim")
+    set(X, "Alliance", EPOCH + 2000); set(Y, "Alliance", EPOCH + 500)
+end
+print("Partial merge: a flip confirmation survives a map refused while we capture elsewhere")
 assert(loadfile("SyncRelay.lua"))()
 Overlord.RelayEnabled, Overlord.CommunityModeEnabled = true, false
 Overlord.InActiveFront, Overlord.InstanceSuspended = true, false
