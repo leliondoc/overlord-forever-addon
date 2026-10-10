@@ -1897,16 +1897,16 @@ function Overlord.UI:CreateZoneLine(parent, zone)
                     Overlord:PrintNotification(string.format("|cFFFF0000[Overlord]|r " .. L.CAPTURE_BLOCKED_RULES, z.name))
                     return
                 end
-                z.holdTimeElapsed = 0
-                z.holdStartTime = nil
-                z.isContested = false
-                z.isPaused = false
-                z.status = "in_progress"
-                Overlord.ZoneControl:StartHoldTimer(z)
+                local owner = z.owner
+                -- Same start as the 1 s check, with all its guards (it says why when
+                -- the PvP flag is missing); starting by hand skipped them all.
+                Overlord.ZoneControl:CheckPlayerPosition()
                 Overlord.UI:Refresh()
-                local msg = z.owner and z.owner ~= pf
-                    and L.ASSAULT_LAUNCHED or L.CAPTURE_LAUNCHED
-                Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. msg, z.name))
+                if z.isHolding and z.holdAuthorityLocal then
+                    local msg = owner and owner ~= pf
+                        and L.ASSAULT_LAUNCHED or L.CAPTURE_LAUNCHED
+                    Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. msg, z.name))
+                end
             else
                 local cx, cy = z.center and z.center[1], z.center and z.center[2]
                 if cx and cy then
@@ -3397,6 +3397,9 @@ combatFrame:SetScript("OnEvent", function(_, event)
     elseif event == "PLAYER_REGEN_ENABLED" then
         if hiddenByCombat and mainFrame then
             hiddenByCombat = false
+            -- Never inside an instance (Overlord is off there): leaving the instance
+            -- restores the panel from the saved setting.
+            if Overlord.InstanceSuspended then return end
             mainFrame:Show()
             if Overlord.UI then Overlord.UI:Refresh() end
         end

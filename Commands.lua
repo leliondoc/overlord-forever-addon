@@ -773,14 +773,10 @@ local function CommandHandler(msg)
             return
         end
 
-        if zone.status == "available" then
-            zone.holdTimeElapsed = 0
-            zone.holdStartTime = nil
-            zone.isContested = false
-            zone.isPaused = false
-        end
-        zone.status = "in_progress"
-        Overlord.ZoneControl:StartHoldTimer(zone)
+        -- The usual 1 s check starts it, with all its guards (PvP flag, mount, death,
+        -- an ally's capture already running, the entry snapshot grace); starting by
+        -- hand skipped them all.
+        Overlord.ZoneControl:CheckPlayerPosition()
         Overlord:MarkDirty()
         if Overlord.UI then Overlord.UI:RequestRefresh() end
         

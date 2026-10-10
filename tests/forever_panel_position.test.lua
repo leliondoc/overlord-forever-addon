@@ -3,12 +3,16 @@
 -- restored between file loading and the deferred UI initialization.
 local noop = function() end
 local methods = {}
+local createdFrames = {}
 local function widget(name, parent)
     local frame = setmetatable({ name = name, parent = parent, scripts = {}, scale = 1,
         width = 1, height = 1, shown = true, userPlaced = false }, { __index = methods })
     if name then _G[name] = frame end
+    createdFrames[#createdFrames + 1] = frame
     return frame
 end
+function methods:RegisterEvent(event) self.events = self.events or {}; self.events[event] = true end
+function methods:Show() self.shown = true end
 function CreateFrame(_, name, parent) return widget(name, parent) end
 function methods:SetSize(w, h) self.width, self.height = w, h end
 function methods:SetScale(s) self.scale = s end
@@ -120,4 +124,24 @@ local point, relativeFrame, relative, x = frame:GetPoint()
 assert(point == "RIGHT" and relativeFrame == UIParent and relative == "RIGHT" and x == -120)
 ui:PersistPanelPosition()
 assert(not OverlordDB.panelAnchor)
-print("Panel position: early native cache, missing saves, leftward drag, map hooks, reloads and reset OK")
+-- Combat hides the panel and leaving combat shows it again, never inside an instance.
+local combat
+for _, f in ipairs(createdFrames) do
+    if f.events and f.events.PLAYER_REGEN_DISABLED then combat = f end
+end
+assert(combat, "fixture: combat frame not found")
+ui.Refresh = noop
+frame.shown = true
+combat.scripts.OnEvent(combat, "PLAYER_REGEN_DISABLED")
+assert(not frame.shown, "combat did not hide the panel")
+Overlord.InstanceSuspended = true
+combat.scripts.OnEvent(combat, "PLAYER_REGEN_ENABLED")
+assert(not frame.shown, "leaving combat inside an instance showed the panel")
+Overlord.InstanceSuspended = nil
+combat.scripts.OnEvent(combat, "PLAYER_REGEN_ENABLED")
+assert(not frame.shown, "a second combat end showed a panel the instance had kept hidden")
+frame.shown = true
+combat.scripts.OnEvent(combat, "PLAYER_REGEN_DISABLED")
+combat.scripts.OnEvent(combat, "PLAYER_REGEN_ENABLED")
+assert(frame.shown, "leaving combat did not show the panel again")
+print("Panel position: early native cache, missing saves, leftward drag, map hooks, reloads and reset, combat hide/show outside instances OK")
