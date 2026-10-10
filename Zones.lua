@@ -110,69 +110,6 @@ local function LoginQuarantineBlocksLocalGameplay(zone)
     return true
 end
 
--- 9.5-9.6 pouvaient conserver une capture visuelle valide dans une quarantaine
--- `_captureFinalUnattested` sans borne de liveness. Le marqueur finissait alors
--- par bloquer la chaine, les compteurs et meme l'entree physique sur une zone que
--- la carte affichait pourtant disponible. Depuis le retour au comportement 9.3.1,
--- cette quarantaine terminale n'est plus un etat de gameplay persistant.
---
--- Ce nettoyage est volontairement etroit : il ne touche ni l'etat canonique de
--- la zone, ni les tombstones de vague, ni un lease local/distant en cours. Il peut
--- donc etre applique aux anciennes SavedVariables sans simuler un reset.
-local function ClearLegacyCaptureFinalQuarantine(zone)
-    if not zone then return false end
-    local changed = zone._captureFinalUnattested ~= nil
-        or zone._captureFinalUnattestedOriginKey ~= nil
-        or zone._captureFinalUnattestedWaveId ~= nil
-        or zone._captureFinalUnattestedAt ~= nil
-        or zone._captureFinalConfirmedBase ~= nil
-    if not changed then return false end
-
-    zone._captureFinalUnattested = nil
-    zone._captureFinalUnattestedOriginKey = nil
-    zone._captureFinalUnattestedWaveId = nil
-    zone._captureFinalUnattestedAt = nil
-    zone._captureFinalConfirmedBase = nil
-    return true
-end
-
-function Overlord.Zones:MigrateLegacyCaptureFinalQuarantines(frontId)
-    -- Migration one-shot session : deja faite et sans changement = skip total.
-    if not frontId and self._legacyCaptureFinalQuarantinesMigrated then
-        return false
-    end
-    local changed = false
-    local seen = {}
-
-    local function migrateZones(zones)
-        for _, zone in ipairs(zones or {}) do
-            if not seen[zone] then
-                seen[zone] = true
-                changed = ClearLegacyCaptureFinalQuarantine(zone) or changed
-            end
-        end
-    end
-
-    if frontId and Overlord.Fronts and Overlord.Fronts.GetFront then
-        local front = Overlord.Fronts:GetFront(frontId)
-        migrateZones(front and front.zones)
-    elseif Overlord.Fronts and Overlord.Fronts.Registry then
-        for _, front in pairs(Overlord.Fronts.Registry) do
-            migrateZones(front and front.zones)
-        end
-    end
-    -- Fallback et alias actif : ZoneDatabase peut exister sans Registry dans un
-    -- test, et peut aussi pointer vers les memes objets (dedupes par `seen`).
-    migrateZones(Overlord.ZoneDatabase)
-    if not frontId then
-        self._legacyCaptureFinalQuarantinesMigrated = true
-    end
-    if changed and Overlord.MarkDirty then
-        Overlord:MarkDirty()
-    end
-    return changed
-end
-
 -- Liste des prérequis pour qu'une faction attaque / tienne une capture sur zoneId (chaîne + base ennemie).
 function Overlord.Zones:GetPrereqZoneIdsForAttacker(zoneId, attackingFaction)
     local front = Overlord.Fronts and Overlord.Fronts:GetCurrentFront()
@@ -788,7 +725,6 @@ function Overlord.Zones:IsNetworkConfirmedCapture(zone)
     zone = type(zone) == "table" and zone or self:GetZone(zone)
     if not zone or not zone.owner then return false end
     if zone.status == "in_progress" then return false end
-    ClearLegacyCaptureFinalQuarantine(zone)
     if zone._loginSyncUnconfirmed then return false end
     return (tonumber(zone.capturedTime) or 0) > 0
 end
@@ -796,7 +732,6 @@ end
 -- Zones du front qui ne sont pas encore au gagnant (carte encore disputee).
 function Overlord.Zones:CountZonesNotOwnedByOnFront(frontId, faction)
     if not frontId or not faction or not Overlord.Fronts then return 999 end
-    self:MigrateLegacyCaptureFinalQuarantines(frontId)
     local front = Overlord.Fronts:GetFront(frontId)
     if not front or not front.zones then return 999 end
     local n = 0
@@ -946,7 +881,6 @@ local NormalizePlayerOwnedZoneStatus
 function Overlord.Zones:RefreshInactiveFrontAvailability(frontId)
     if not frontId then return end
     if Overlord.Fronts and Overlord.Fronts.activeFrontId == frontId then return end
-    self:MigrateLegacyCaptureFinalQuarantines(frontId)
     local front = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
     if not front or not front.zones then return end
     local pf = Overlord.PlayerFaction
@@ -1372,9 +1306,6 @@ end
 function Overlord.Zones:IsZoneAvailable(zoneId)
     local zone = self:GetZone(zoneId)
     if not zone then return false end
-    -- Accepte et nettoie les anciennes captures finales mises en quarantaine :
-    -- un marqueur affiche ATTACK/available doit toujours etre physiquement jouable.
-    self:MigrateLegacyCaptureFinalQuarantines()
     if LoginQuarantineBlocksLocalGameplay(zone) then return false end
 
     -- Treve post-victoire : aucune nouvelle capture sur le front (carte entiere fermee).
@@ -1508,7 +1439,6 @@ function Overlord.Zones:GetCurrentPlayerZone()
 end
 
 function Overlord.Zones:GetCapturedCount()
-    self:MigrateLegacyCaptureFinalQuarantines()
     local count = 0
     for _, zone in ipairs(Overlord.ZoneDatabase) do
         -- Ne compter que les zones effectivement capturees (pas celles en cours de capture)
@@ -1521,7 +1451,6 @@ function Overlord.Zones:GetCapturedCount()
 end
 
 function Overlord.Zones:GetEnemyCapturedCount()
-    self:MigrateLegacyCaptureFinalQuarantines()
     local count = 0
     local enemy = self:GetEnemyFaction()
     for _, zone in ipairs(Overlord.ZoneDatabase) do
@@ -1744,9 +1673,6 @@ function Overlord.Zones:UpdateAvailableZones(suppressNotifications)
 end
 
 function Overlord.Zones:_DoUpdateAvailableZones(suppressNotifications)
-    -- RestoreZoneState aboutit ici : la migration retire aussi les quarantaines
-    -- terminales chargees depuis une version 9.5/9.6 avant de recalculer la chaine.
-    self:MigrateLegacyCaptureFinalQuarantines()
     local pf = Overlord.PlayerFaction
 
     -- Annule un siege / une capture in_progress (prerequis, treve capitale, etc.)

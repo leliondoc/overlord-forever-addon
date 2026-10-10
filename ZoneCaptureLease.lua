@@ -665,21 +665,6 @@ local function ApplyRebasedStableBase(zone, remote, base)
     zone._captureFinalConfirmedBase = nil
 end
 
--- Un ZS valide peut ouvrir l'orange avant que le ZA global de login n'arrive.
--- Si la SavedVariable etait stale, le ZA corrige alors uniquement le socle
--- restaure/persiste sous l'overlay : la wave, son TTL et ses preuves restent
--- intacts. Cette exception n'existe que tant que le socle est en quarantaine.
-function Lease:RebaseRemoteStableByZoneId(zoneId, ownerCode, owner, rawTs, rawCt)
-    local zone = ResolveLeaseZone(zoneId)
-    local remote = zone and zone._remoteCaptureLease
-    if not zone or zone.status ~= "in_progress" or not remote
-        or zone.holdAuthorityLocal or zone._loginSyncUnconfirmed ~= true then return false end
-    local base = BuildCertifiedStableBase(zone, remote, ownerCode, owner, rawTs, rawCt)
-    if not base then return false end
-    ApplyRebasedStableBase(zone, remote, base)
-    return true
-end
-
 -- Prepare une resolution ZA totalement detachee pendant le dry-run atomique.
 -- Aucun etat live n'est modifie ici. Le commit peut ainsi fermer une wave que
 -- la carte exacte invalide sans laisser cet overlay ephemere vetoer la carte.

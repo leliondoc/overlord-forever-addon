@@ -430,38 +430,6 @@ expect(Lease:ValidateProgress(zone.id, "Alliance", "Alice", "wcorelease",
 Lease:ClearLocal(zone)
 zone.zsOfficialCapturerName, zone._zsOfficialCapturerSeenAt = nil, nil
 
--- Au login, un ZA global exact peut corriger le socle stale sous une vague
--- valide sans fermer l'orange. ZR restaure ensuite ce nouveau socle et le flag
--- brut reste en quarantaine tant que le snapshot global n'a pas fini son commit.
-resetZone()
-mono = 230
-local loginDecision = Lease:ValidateProgress(
-    zone.id, "Horde", "Bob", "wloginrebase", wallBase + 230, 8, 0, 120, nil, "Bob")
-expect(Lease:AdoptRemote(zone, "Horde", "Bob", loginDecision),
-    "login rebase lease missing")
-zone.status, zone.owner, zone.previousOwner = "in_progress", "Horde", "Alliance"
-zone.holdTimeElapsed, zone.updatedAt = 8, wallBase + 230
-zone._loginSyncUnconfirmed = true
-zone._captureFinalUnattested = true
-zone._captureFinalUnattestedOriginKey = "old"
-zone._captureFinalUnattestedWaveId = "oldwave"
-zone._captureFinalUnattestedAt = wallBase + 220
-local loginLease = zone._remoteCaptureLease
-expect(Lease:RebaseRemoteStableByZoneId(
-    zone.id, "N", nil, wallBase + 225, 0), "login stable rebase rejected")
-expect(zone._remoteCaptureLease == loginLease and zone.status == "in_progress"
-    and zone.owner == "Horde" and zone._loginSyncUnconfirmed
-    and not zone._captureFinalUnattested,
-    "login rebase closed the live overlay or cleared authority quarantine")
-local rebasedPersisted = Lease:GetPersistableView(zone)
-expect(rebasedPersisted.status == "locked" and rebasedPersisted.owner == nil
-    and rebasedPersisted.updatedAt == wallBase + 225,
-    "login rebase did not replace only the persistable stable base")
-expect(Lease:ReceiveRelease(zone.id .. ":wloginrebase:Bob", "Bob"),
-    "rebased login release rejected")
-expect(zone.status == "locked" and zone.owner == nil and zone._loginSyncUnconfirmed,
-    "release did not restore the rebased base or cleared raw quarantine")
-
 -- Le plan ZA global est prepare/valide avant le commit atomique. Une wave
 -- encore legale conserve strictement son identite et son TTL.
 resetZone()
