@@ -1741,6 +1741,9 @@ local function CompleteResumeFromInstance(reason)
     if Overlord.MostWanted and Overlord.MostWanted.OnInstanceResume then
         pcall(Overlord.MostWanted.OnInstanceResume, Overlord.MostWanted)
     end
+    if Overlord.GroupFinder and Overlord.GroupFinder.OnInstanceResume then
+        pcall(Overlord.GroupFinder.OnInstanceResume, Overlord.GroupFinder)
+    end
     -- Un loading survenu avant l'initialisation de Sync conserve le ZR au lieu de
     -- marquer la vague comme relachee sans transport. Le rejouer avant la rotation.
     if Overlord.FlushDeferredCaptureRelease then
@@ -1884,6 +1887,10 @@ function Overlord:SuspendForInstance()
     if self.MostWanted and self.MostWanted.OnInstanceSuspend then
         pcall(self.MostWanted.OnInstanceSuspend, self.MostWanted)
     end
+    -- PvP group finder: window closed, own listing, sign-ups and board dropped, events off.
+    if self.GroupFinder and self.GroupFinder.OnInstanceSuspend then
+        pcall(self.GroupFinder.OnInstanceSuspend, self.GroupFinder)
+    end
     self.InstanceSuspended = true
     -- HUD or : peut s'afficher sur PLAYER_ENTERING_WORLD avant que ce handler finisse - masquage immediat.
     if self.Ressources and self.Ressources.HideGoldHUDForInstance then
@@ -1922,6 +1929,7 @@ function Overlord:SuspendForInstance()
     if self.LeaderboardUI then self.LeaderboardUI:Hide() end
     -- Like the ranking window (it kept its keyboard and AchievementFrame refresh in the instance).
     if self.HallOfFameUI and self.HallOfFameUI.IsShown and self.HallOfFameUI:IsShown() then self.HallOfFameUI:Hide() end
+    if self.GroupFinderUI and self.GroupFinderUI.IsShown and self.GroupFinderUI:IsShown() then self.GroupFinderUI:Hide() end
     if self.Sync then self.Sync:Suspend() end
     if self.Combat then self.Combat:Suspend() end
 end

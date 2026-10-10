@@ -492,7 +492,7 @@ local GUIDE_MINE_ATLAS = "Warfronts-FieldMapIcons-Empty-Mine"
 local GUIDE_ICON_SIZE = 22
 local GUIDE_BULLET = "  |cFFFFD100\226\128\162|r "
 local GUIDE_COMMANDS = { show = true, hud = true, guide = true, network = true, lb = true,
-    map = true, sync = true, wanted = true, guildkills = true }
+    map = true, sync = true, wanted = true, guildkills = true, groups = true }
 
 local function GuideIconMarkup(icon)
     if type(icon) ~= "string" or icon == "" then return "" end
@@ -621,6 +621,9 @@ local function BuildQuickGuidePageBody(page)
             -- Banniere du bouton Appel aux armes, crane Most Wanted, casque du bouton classement.
             FormatGuideSection(L.GUIDE_SECTION_FACTION_CALL, L.GUIDE_FACTION_CALL_BODY,
                 FactionGuideIcon("Interface\\Icons\\INV_BannerPVP_02", "Interface\\Icons\\INV_BannerPVP_01")),
+            -- Icon of the PvP Groups grid button.
+            FormatGuideSection(L.GUIDE_SECTION_GROUPS, L.GUIDE_GROUPS_BODY,
+                "Interface\\Icons\\INV_Misc_GroupNeedMore"),
             FormatGuideSection(L.GUIDE_SECTION_ALERTS, L.GUIDE_ALERTS_BODY,
                 "Interface\\TargetingFrame\\UI-TargetingFrame-Skull"),
             FormatGuideSection(L.GUIDE_SECTION_TOOLS, L.GUIDE_TOOLS_BODY, "Interface\\Icons\\INV_Helmet_08")
@@ -1311,6 +1314,10 @@ local function SetFeaturedFrontExpanded(expanded, persist)
     featuredFrontFrame:SetShown(expanded)
     SyncFeaturedFrontPanelAnchors()
     ApplyFeaturedFrontToggleArrow(expanded)
+    -- The PvP groups window docks against whichever panel is leftmost.
+    if Overlord.GroupFinderUI and Overlord.GroupFinderUI.OnPanelLayoutChanged then
+        Overlord.GroupFinderUI:OnPanelLayoutChanged()
+    end
 end
 
 local function TrySetAtlas(tex, atlas)

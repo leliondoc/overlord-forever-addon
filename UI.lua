@@ -723,6 +723,9 @@ function Overlord.UI:ApplyUiScale()
     if Overlord.LeaderboardUI and Overlord.LeaderboardUI.ApplyFrameScale then
         Overlord.LeaderboardUI:ApplyFrameScale(sc)
     end
+    if Overlord.GroupFinderUI and Overlord.GroupFinderUI.ApplyFrameScale then
+        Overlord.GroupFinderUI:ApplyFrameScale(sc)
+    end
 end
 
 function Overlord.UI:UpdateUiScaleSlider()
@@ -1525,12 +1528,17 @@ function Overlord.UI:CreateZoneListSection(parent)
     -- Keep optional module buttons unavailable only when the module is absent.
     local foreverUnavailable = L.FOREVER_FEATURE_UNAVAILABLE
         or "Unavailable on Overlord Forever."
-    -- Layer Jumper (old Contracts slot, row 1, left): removed in 1.6.1; the greyed
-    -- button stays and its tooltip says why.
-    local layerBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
-        L.LAYER_JUMPER_BUTTON or "Layer Jumper", "Interface\\Icons\\Spell_Arcane_PortalStormwind")
-    layerBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(1))
-    zoneListFrame.layerBtn = layerBtn
+    -- PvP group finder (row 1, left). The label carries the number of sign-ups
+    -- waiting for the leader (GroupFinderUI:UpdateGridBadge).
+    local groupsBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
+        L.GF_BUTTON or "PvP Groups", "Interface\\Icons\\INV_Misc_GroupNeedMore")
+    groupsBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(1))
+    AttachGridButtonTooltip(groupsBtn, L.GF_BUTTON_TOOLTIP or L.GF_BUTTON or "PvP Groups")
+    groupsBtn:SetScript("OnClick", function()
+        if Overlord.GroupFinderUI then Overlord.GroupFinderUI:Toggle() end
+    end)
+    zoneListFrame.groupsBtn = groupsBtn
+    Overlord.UI.groupFinderBtn = groupsBtn
 
     -- Contact (1.7.1, ancien emplacement Export grise) : lien X de l'auteur a copier.
     local contactBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
@@ -1548,7 +1556,12 @@ function Overlord.UI:CreateZoneListSection(parent)
         if not Overlord.General then
             self.SetWC3ButtonUnavailable(generalBtn, foreverUnavailable)
         end
-        self.SetWC3ButtonUnavailable(layerBtn, L.LAYER_JUMPER_REMOVED or foreverUnavailable)
+        if not Overlord.GroupFinderUI then
+            self.SetWC3ButtonUnavailable(groupsBtn, foreverUnavailable)
+        end
+    end
+    if Overlord.GroupFinderUI and Overlord.GroupFinder then
+        Overlord.GroupFinderUI:UpdateGridBadge(#Overlord.GroupFinder.pending)
     end
 
     if self.RefreshActionGridActiveState then
@@ -1838,6 +1851,10 @@ function Overlord.UI:SyncMainFrameHeight()
     if h == lastMainFrameHeight then return end
     lastMainFrameHeight = h
     mainFrame:SetHeight(h)
+    -- The PvP groups window docks beside the panel at the same height.
+    if Overlord.GroupFinderUI and Overlord.GroupFinderUI.OnPanelLayoutChanged then
+        Overlord.GroupFinderUI:OnPanelLayoutChanged()
+    end
 end
 
 -- Guild Keep : affichage dans le cluster HUD haut (Ressources.lua)
@@ -2468,6 +2485,7 @@ function Overlord.UI:RefreshActionGridActiveState()
     local nextState = {
         lb = Overlord.LeaderboardUI and Overlord.LeaderboardUI.IsShown and Overlord.LeaderboardUI:IsShown() or false,
         hof = Overlord.HallOfFameUI and Overlord.HallOfFameUI.IsShown and Overlord.HallOfFameUI:IsShown() or false,
+        groups = Overlord.GroupFinderUI and Overlord.GroupFinderUI.IsShown and Overlord.GroupFinderUI:IsShown() or false,
         tutorial = Overlord.Popups and Overlord.Popups.IsQuickGuideShown and Overlord.Popups:IsQuickGuideShown() or false,
         community = false,
         discord = discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "discord" or false,
@@ -2515,6 +2533,7 @@ function Overlord.UI:RefreshActionGridActiveState()
     end
     panelOpen(zoneListFrame.lbBtn, nextState.lb)
     panelOpen(zoneListFrame.hofBtn, nextState.hof)
+    panelOpen(zoneListFrame.groupsBtn, nextState.groups)
     panelOpen(zoneListFrame.tutorialBtn, nextState.tutorial)
     panelOpen(zoneListFrame.communityBtn, nextState.community)
     panelOpen(zoneListFrame.discordBtn, nextState.discord)

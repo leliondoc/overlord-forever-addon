@@ -112,6 +112,7 @@ fronts, bonus, stocks) empruntent également ce réseau.
 - Barre de **domination hebdomadaire** par front (secondes de contrôle, bonus victoire/bois).
 - Compteur de forces alliées / ennemies sur le front.
 - Classement des contributeurs (captures, éliminations).
+- **Groupes JcJ** : recherche de groupe du monde ouvert. Un chef publie son groupe (objectif, lieu, taille, niveau minimum), les joueurs Overlord de sa faction le voient et s'inscrivent d'un clic ; le chef invite, automatiquement ou après validation. Les annonces passent par le canal de faction sous un préfixe à part, jamais par le relais ni Battle.net. Coupé en instance.
 
 ### Ressources et stratégie
 
@@ -167,6 +168,7 @@ Alias : `/ov` et `/overlord`. Tapez **`/ov help`** en jeu pour la liste complèt
 | `/ov sync [Joueur]` | Demande une synchronisation |
 | `/ov scale [0.8–1.2]` | Échelle du panneau |
 | `/ov guide` | Guide visuel rapide |
+| `/ov groups` | Recherche de groupe JcJ |
 
 ## Options
 

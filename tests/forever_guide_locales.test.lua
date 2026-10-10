@@ -1,7 +1,7 @@
 -- Tutorial text: every locale gets every page key in its own language, with the
 -- format slots Popups.lua fills (keep icons + hold minutes, mine list, release time).
 local files = { "Locales.lua", "GuideLocales.lua", "Locales_ptBR.lua", "Locales_zhCN.lua",
-    "ForeverLocaleFixes.lua", "FrontLocales.lua" }
+    "ForeverLocaleFixes.lua", "FrontLocales.lua", "GroupFinderLocales.lua" }
 local guideKeys = {
     "GUIDE_BTN_TOOLTIP", "GUIDE_PAGE1_TITLE", "GUIDE_PAGE2_TITLE", "GUIDE_PAGE3_TITLE",
     "GUIDE_SECTION_TRAVEL", "GUIDE_TRAVEL_ALLIANCE", "GUIDE_TRAVEL_HORDE",
@@ -13,6 +13,7 @@ local guideKeys = {
     "GUIDE_GUILD_KEEP_BODY", "GUIDE_SECTION_OUTPOST", "GUIDE_OUTPOST_BODY",
     "GUIDE_SECTION_FACTION_CALL", "GUIDE_FACTION_CALL_BODY", "GUIDE_SECTION_ALERTS",
     "GUIDE_ALERTS_BODY", "GUIDE_SECTION_TOOLS", "GUIDE_TOOLS_BODY",
+    "GUIDE_SECTION_GROUPS", "GUIDE_GROUPS_BODY",
     "GUIDE_BAR_LABEL", "GUIDE_TITLE", "GUIDE_CLOSE", "GUIDE_NEXT", "GUIDE_PREV",
     "GUIDE_PAGE_INDICATOR", "FRONT_TRUCE_ENDED_KEPT", "FRONT_CAPITAL_LIBERATED",
     "FRONT_VICTORY_TOO_SOON", "FORTRESS_CAPTURE_AVAILABLE",
@@ -85,15 +86,18 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
         assert(L[cmd[1]]:find(cmd[2], 1, true), loc .. ": " .. cmd[1] .. " lost the command " .. cmd[2])
     end
     assert(not L.GUIDE_SHARD_BODY:find("/ov shard", 1, true), loc .. ": guide points to /ov shard")
-    -- Layer Jumper removed in 1.6.1: the guide no longer sends players to it, and its
-    -- greyed button explains why in every language.
+    -- Layer Jumper removed in 1.6.1, its greyed button replaced by the PvP group finder:
+    -- no text of it is left, and the guide never sends players to it.
     assert(not L.GUIDE_SHARD_BODY:find("/ov layer", 1, true)
         and not L.GUIDE_SHARD_BODY:find("Layer Jumper", 1, true), loc .. ": guide still offers the Layer Jumper")
-    assert(not L.GUIDE_PANEL_BODY:find(L.LAYER_JUMPER_BUTTON, 1, true),
+    assert(not L.GUIDE_PANEL_BODY:find("Layer Jumper", 1, true),
         loc .. ": the panel guide still lists the removed Layer Jumper button")
     assert(L.HELP_LAYER == nil, loc .. ": /ov help still advertises /ov layer")
-    assert(type(L.LAYER_JUMPER_REMOVED) == "string" and #L.LAYER_JUMPER_REMOVED > 40,
-        loc .. ": the greyed Layer Jumper button has no explanation")
+    assert(L.LAYER_JUMPER_BUTTON == nil and L.LAYER_JUMPER_REMOVED == nil,
+        loc .. ": a Layer Jumper text is still defined")
+    -- PvP group finder: its guide section quotes the command and the five-minute rule.
+    assert(L.GUIDE_GROUPS_BODY:find("/ov groups", 1, true), loc .. ": groups section lost its command")
+    assert(L.GUIDE_GROUPS_BODY:find("%f[%d]5%f[%D]"), loc .. ": groups section lost the sign-up spacing")
     -- The guide names the buttons exactly as the panel shows them in that language
     -- (zhTW reads the zhCN guide over an English interface: skipped).
     if loc ~= "zhTW" then
@@ -108,21 +112,17 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
         mentions(L.GUIDE_PANEL_BODY, L.GOLD_BARRICADE, "Reinforce")
         mentions(L.GUIDE_PANEL_BODY, L.GOLD_REINFORCE, "Attack")
         mentions(L.GUIDE_OPTIONS_BODY, L.MINIMAP_CAPTURE_ZONES_LABEL, "Minimap icons")
+        mentions(L.GUIDE_PANEL_BODY, L.GF_BUTTON, "PvP Groups")
+        mentions(L.GUIDE_GROUPS_BODY, L.GF_BUTTON, "PvP Groups")
     end
     if loc == "enUS" then
         english = {}
         for _, key in ipairs(guideKeys) do english[key] = L[key] end
-        english.LAYER_JUMPER_REMOVED = L.LAYER_JUMPER_REMOVED
     else
         -- A translated locale never falls back to the English tutorial body.
         for _, key in ipairs({ "GUIDE_RULES_BODY", "GUIDE_SIEGE_BODY", "GUIDE_GUILD_KEEP_BODY",
-            "GUIDE_ALERTS_BODY", "GUIDE_TOOLS_BODY" }) do
+            "GUIDE_ALERTS_BODY", "GUIDE_TOOLS_BODY", "GUIDE_GROUPS_BODY" }) do
             assert(L[key] ~= english[key], loc .. " shows the English " .. key)
-        end
-        -- zhTW plays with the English interface: its greyed button reads English too.
-        if loc ~= "zhTW" then
-            assert(L.LAYER_JUMPER_REMOVED ~= english.LAYER_JUMPER_REMOVED,
-                loc .. " shows the English Layer Jumper explanation")
         end
     end
 end

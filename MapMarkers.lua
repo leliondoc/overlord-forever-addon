@@ -4531,17 +4531,26 @@ end
 
 -- Repere sur le centre d'un avant-poste autonome. Les avant-postes de front
 -- continuent d'utiliser la carte de leur front via SetUserWaypointForFrontZone.
-function Overlord.MapMarkers:SetUserWaypointForOutpostSite(site)
+-- opts (comme SetUserWaypointForFrontZone) : noToggle = un repere deja pose reste pose,
+-- silent = aucun message dans le chat.
+function Overlord.MapMarkers:SetUserWaypointForOutpostSite(site, opts)
+    opts = opts or {}
     if not site or not site.center then return false end
     if not site.standaloneOpenWorld then
-        return self:SetUserWaypointForFrontZone(site, site.frontId)
+        return self:SetUserWaypointForFrontZone(site, site.frontId, opts)
     end
     local mapID = site.mapID
     if not mapID or not MapAllowsUserWaypoint(mapID) then
-        Overlord:PrintNotification(L.ZONE_WAYPOINT_BLOCKED)
+        if not opts.silent then Overlord:PrintNotification(L.ZONE_WAYPOINT_BLOCKED) end
         return false
     end
     if UserWaypointMatchesFrontZone(site, mapID) and C_Map.ClearUserWaypoint then
+        if opts.noToggle then
+            if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
+                pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, true)
+            end
+            return true
+        end
         ClearUserWaypointTracking()
         return true
     end
@@ -4551,12 +4560,12 @@ function Overlord.MapMarkers:SetUserWaypointForOutpostSite(site)
         return UiMapPoint.CreateFromVector2D(mapID, CreateVector2D(nx, ny))
     end)
     if not okCreate or not mapPoint then
-        Overlord:PrintNotification(L.ZONE_WAYPOINT_FAIL)
+        if not opts.silent then Overlord:PrintNotification(L.ZONE_WAYPOINT_FAIL) end
         return false
     end
     local okSet = pcall(C_Map.SetUserWaypoint, mapPoint)
     if not okSet then
-        Overlord:PrintNotification(L.ZONE_WAYPOINT_FAIL)
+        if not opts.silent then Overlord:PrintNotification(L.ZONE_WAYPOINT_FAIL) end
         return false
     end
     if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then

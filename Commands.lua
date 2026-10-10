@@ -315,9 +315,9 @@ end
 -- figure smaller), to find what keeps refilling the addon's garbage.
 local PERF_MODULES = {
     "ActionShortcut", "Button", "CaptureLease", "Combat", "FrontActivity", "Fronts",
-    "General", "GeneralMap", "GeneralNameplate", "GeneralSync", "GuildKeep",
-    "HallOfFameUI", "Leaderboard",
-    "LeaderboardUI", "MapMarkers", "Outpost", "OutpostControl",
+    "General", "GeneralMap", "GeneralNameplate", "GeneralSync", "GroupFinder", "GroupFinderUI",
+    "GuildKeep", "GuildKillAlert", "HallOfFameUI", "Leaderboard",
+    "LeaderboardUI", "MapMarkers", "MostWanted", "NetworkHealth", "Outpost", "OutpostControl",
     "Popups", "Ressources", "SettingsPanel", "Shard", "Sync", "UI", "ZoneControl",
     "ZoneIndicator", "Zones", "Relay",
 }
@@ -453,6 +453,7 @@ local function ShowHelp()
     Overlord:PrintNotification(L.HELP_GUIDE)
     if L.HELP_GUILD_KILLS then Overlord:PrintNotification(L.HELP_GUILD_KILLS) end
     if L.HELP_WANTED then Overlord:PrintNotification(L.HELP_WANTED) end
+    if L.HELP_GROUPS then Overlord:PrintNotification(L.HELP_GROUPS) end
     Overlord:PrintNotification(L.HELP_FOOTER)
 end
 
@@ -714,6 +715,9 @@ local function CommandHandler(msg)
 
     elseif cmd == "wanted" then
         if Overlord.MostWanted then Overlord.MostWanted:HandleCommand(args) end
+
+    elseif cmd == "groups" or cmd == "group" then
+        if Overlord.GroupFinder then Overlord.GroupFinder:HandleCommand(args) end
 
     elseif cmd == "guildkills" then
         if Overlord.GuildKillAlert then Overlord.GuildKillAlert:HandleCommand(args) end

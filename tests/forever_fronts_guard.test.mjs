@@ -138,14 +138,16 @@ test("Forever panel greys disabled modules", () => {
     assert.match(ui, /SetWC3ButtonUnavailable\(generalBtn/);
     assert.match(ui, /not Overlord\.HallOfFameUI/);
     assert.match(ui, /not Overlord\.General/);
-    // Contracts and export do not exist on Forever. Layer Jumper took the
-    // Contracts slot and was removed in 1.6.1: its button stays greyed and its
-    // tooltip says why. The old export placeholder became Contact (1.7.1): a link to copy.
+    // Contracts and export do not exist on Forever. The Contracts slot (row 1, left)
+    // held the Layer Jumper until 1.6.1 and now opens the PvP group finder; nothing
+    // of the Layer Jumper is left. The old export placeholder became Contact (1.7.1).
     assert.doesNotMatch(ui, /mbBtn|exportBtn|ManualBountyUI|Overlord\.Export|L\.MB_BUTTON/);
-    assert.match(ui, /layerBtn:SetPoint\("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY\(1\)\)/);
-    assert.doesNotMatch(ui, /Overlord\.LayerJumper/);
-    assert.match(ui, /self\.SetWC3ButtonUnavailable\(layerBtn, L\.LAYER_JUMPER_REMOVED/);
-    assert.match(locales, /L\.LAYER_JUMPER_REMOVED = "Removed\. Part of the community misunderstood it/);
+    assert.match(ui, /groupsBtn:SetPoint\("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY\(1\)\)/);
+    assert.match(ui, /if Overlord\.GroupFinderUI then Overlord\.GroupFinderUI:Toggle\(\) end/);
+    assert.match(ui, /if not Overlord\.GroupFinderUI then\s+self\.SetWC3ButtonUnavailable\(groupsBtn, foreverUnavailable\)/);
+    assert.match(ui, /panelOpen\(zoneListFrame\.groupsBtn, nextState\.groups\)/);
+    assert.doesNotMatch(ui, /Overlord\.LayerJumper|layerBtn|LAYER_JUMPER/);
+    assert.doesNotMatch(locales, /LAYER_JUMPER/);
     assert.match(ui, /contactBtn:SetPoint\("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY\(4\)\)/);
     assert.match(ui, /Overlord\.UI:ShowContactPopup\(\)/);
     assert.match(readFileSync(new URL("../Core.lua", import.meta.url), "utf8"), /Overlord\.CONTACT_URL = "https:\/\/x\.com\/TromaFR"/);

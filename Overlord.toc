@@ -22,6 +22,7 @@ Locales_ptBR.lua
 Locales_zhCN.lua
 ForeverLocaleFixes.lua
 FrontLocales.lua
+GroupFinderLocales.lua
 Core.lua
 RealmPools.lua
 UIShared.lua
@@ -60,6 +61,8 @@ HallOfFameData.lua
 HallOfFameUI.lua
 NetworkHealth.lua
 MostWanted.lua
+GroupFinder.lua
+GroupFinderUI.lua
 UI.lua
 ActionShortcut.lua
 Button.lua
