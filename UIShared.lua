@@ -911,6 +911,10 @@ function Overlord.UI.SetRaceIcon(texture, raceFile, sex)
     }
     texture:SetVertexColor(1, 1, 1)
     if texture.SetTexture then texture:SetTexture(nil) end
+    -- A recycled texture may still carry the crop of a Classic sheet icon
+    -- (SetClassicRaceIcon); an atlas is drawn through it, so only a corner of the
+    -- portrait would show. Full coordinates first: SetAtlas then places its region.
+    if texture.SetTexCoord then texture:SetTexCoord(0, 1, 0, 1) end
     if texture.SetAtlas then
         for i = 1, #candidates do
             local atlas = candidates[i]
