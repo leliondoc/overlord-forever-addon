@@ -1673,6 +1673,11 @@ end
 -- Sinon cle "Nom-Royaume|WARRIOR" != "Nom-Royaume" et l'export Check PvP remplace | par "_" (lignes grises).
 function Overlord.Sync:StripPipeLeakFromContributorName(name)
     if type(name) ~= "string" then return name end
+    -- Fast path (almost every call): no blank at either end and no "|", nothing to do.
+    local b1, bn = name:byte(1), name:byte(-1)
+    if b1 and b1 ~= 32 and b1 ~= 9 and b1 ~= 10 and b1 ~= 13
+        and bn ~= 32 and bn ~= 9 and bn ~= 10 and bn ~= 13
+        and not name:find("|", 1, true) then return name end
     name = name:match("^[ \t\r\n]*(.-)[ \t\r\n]*$") or name
     local p = name:find("|", 1, true)
     if p then
@@ -1685,6 +1690,12 @@ end
 -- Apostrophe typographique (Vol'jin) et tirets Unicode cassaient ResolveContributorClassToken.
 function Overlord.Sync:NormalizeContributorFullName(name)
     if type(name) ~= "string" then return name end
+    -- Fast path (runs several times per received kill or ranking row): nothing to trim,
+    -- cut or replace (every replaced sequence starts with byte 194 or 226).
+    local b1, bn = name:byte(1), name:byte(-1)
+    if b1 and b1 ~= 32 and b1 ~= 9 and b1 ~= 10 and b1 ~= 13
+        and bn ~= 32 and bn ~= 9 and bn ~= 10 and bn ~= 13
+        and not name:find("[|\194\226]") then return name end
     name = self:StripPipeLeakFromContributorName(name)
     if not name or name == "" then return name end
     name = name:gsub("\226\128\152", "'"):gsub("\226\128\153", "'")
