@@ -5717,7 +5717,7 @@ function Overlord.Leaderboard:OpenAtomicWeeklyBucket(archiveEpoch, resetEpoch, c
     self._nextWritableCampaignCheckAt = resetEpoch + 518400
     self._snapshotBuildGeneration = (self._snapshotBuildGeneration or 0) + 1
     self._snapshotBuildPending = nil
-    self:ResolveSnapshotCompletion(false)
+    self:ResolveSnapshotCompletion(false, "weekly reset")
     self:MarkMetaDirty()
     if Overlord.LifetimeStats and Overlord.LifetimeStats.OnAtomicWeeklyBucketOpened then
         Overlord.LifetimeStats:OnAtomicWeeklyBucketOpened()
@@ -5901,7 +5901,10 @@ function Overlord.Leaderboard:ResumePendingWeeklyArchive()
     return true
 end
 
-function Overlord.Leaderboard:ResolveSnapshotCompletion(success)
+function Overlord.Leaderboard:ResolveSnapshotCompletion(success, why)
+    -- Why the last build failed, for /ov network (a pull says "no local snapshot").
+    if success == true then self._snapshotLastFailure = nil
+    else self._snapshotLastFailure = why or "unknown" end
     local callbacks = self._snapshotCompletionCallbacks
     self._snapshotCompletionCallbacks = nil
     if type(callbacks) ~= "table" then return end
@@ -5923,7 +5926,7 @@ end
 
 function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
     if not OverlordDB or self._storageBound ~= true then
-        self:ResolveSnapshotCompletion(false)
+        self:ResolveSnapshotCompletion(false, "storage not bound")
         return
     end
     if self._snapshotDirty == false then
@@ -5935,7 +5938,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
     if self:EnsureNetworkHotIndexesPrepared() ~= true then
         if self._networkHotIndexPrepFailed or (self._snapshotIndexWaitAttempts or 0) >= 120 then
             self._snapshotIndexWaitAttempts = nil
-            self:ResolveSnapshotCompletion(false)
+            self:ResolveSnapshotCompletion(false, self._networkHotIndexPrepFailed and "index build failed" or "index not ready in 30 s")
             return false
         end
         if not self._snapshotIndexWaitPending then
@@ -5952,12 +5955,12 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
     local campaignStart = tonumber(OverlordDB.leaderboard and OverlordDB.leaderboard.campaignStart) or 0
     if campaignStart <= 0 then campaignStart = self:GetCurrentCampaignStart() end
     if campaignStart <= 0 then
-        self:ResolveSnapshotCompletion(false)
+        self:ResolveSnapshotCompletion(false, "no campaign")
         return
     end
     local scoreBucketEpoch = GetMatchingLeaderboardScoreBucketEpoch(campaignStart)
     if scoreBucketEpoch <= 0 then
-        self:ResolveSnapshotCompletion(false)
+        self:ResolveSnapshotCompletion(false, "no score bucket")
         return
     end
 
@@ -6011,7 +6014,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
             or self.captures ~= state.capturesSource
             or not LeaderboardCampaignEpochsMatch(liveCampaignStart, state.campaignStart) then
             self._snapshotBuildPending = nil
-            self:ResolveSnapshotCompletion(false)
+            self:ResolveSnapshotCompletion(false, "ranking tables swapped")
             return
         end
         local changedDuringBuild = state.revision ~= (self._snapshotRevision or 0)
@@ -6165,15 +6168,17 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
             or self.playerInfo ~= state.playerInfoSource or self.captures ~= state.capturesSource
             or not dedupCanonicalValid or state.canonicalGeneration ~= dedupCanonicalGeneration then
             self._snapshotBuildPending = nil
-            self:ResolveSnapshotCompletion(false)
+            self:ResolveSnapshotCompletion(false, not dedupCanonicalValid and "name index invalidated"
+                or state.canonicalGeneration ~= dedupCanonicalGeneration and "new name during the build"
+                or "ranking tables swapped")
             return
         end
         if state.finalizer then
             finalWork, finalStarted = 0, debugprofilestop and debugprofilestop() or 0
-            local ok = coroutine.resume(state.finalizer)
+            local ok, finalizerError = coroutine.resume(state.finalizer)
             if not ok then
                 self._snapshotBuildPending = nil
-                self:ResolveSnapshotCompletion(false)
+                self:ResolveSnapshotCompletion(false, "finalizer error: " .. tostring(finalizerError):gsub("[%(%)]", ""))
             elseif coroutine.status(state.finalizer) ~= "dead" then
                 C_Timer.After(0, runSlice)
             end
@@ -6192,7 +6197,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
             local ok, key, value = pcall(next, source or {}, state.key)
             if not ok then
                 self._snapshotBuildPending = nil
-                self:ResolveSnapshotCompletion(false)
+                self:ResolveSnapshotCompletion(false, "cursor lost")
                 return
             end
             if key == nil then

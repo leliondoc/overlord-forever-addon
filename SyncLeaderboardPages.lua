@@ -259,7 +259,12 @@ local function prepare(callback, own)
     local builtRows = stats.changedRows or 0
     local accepted = lb:SnapshotCurrentCampaignBeforeReset(function(ok)
         local snapshot = ok and sync:GetAttestedLeaderboardSnapshot()
-        if not snapshot or wanted ~= epoch() then building = nil; callback(nil); return end
+        if not snapshot or wanted ~= epoch() then
+            -- Kept for /ov network: which step left this pull without a local copy.
+            stats.profileWhy = not ok and ("build: " .. tostring(lb._snapshotLastFailure or "?"))
+                or not snapshot and "built copy not attested" or "campaign changed"
+            building = nil; callback(nil); return
+        end
         if profiles[snapshot] then building = nil; callback(profiles[snapshot]); return end
         local result = { epoch = wanted, streams = {}, builtRows = builtRows }
         for _, kind in ipairs(STREAMS) do
@@ -337,7 +342,11 @@ local function prepare(callback, own)
             if paused() then C_Timer.After(2, step); return end
             units, sliceAt = 0, debugprofilestop and debugprofilestop() or 0
             local success, err = coroutine.resume(co)
-            if not success then stats.error = tostring(err); building = nil; callback(nil); return end
+            if not success then
+                stats.error = tostring(err)
+                stats.profileWhy = "profile error: " .. stats.error:gsub("[%(%)]", "")
+                building = nil; callback(nil); return
+            end
             if coroutine.status(co) ~= "dead" then C_Timer.After(0.001, step); return end
             profiles[snapshot] = result
             building = nil
@@ -1181,7 +1190,11 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
     stats.target, stats.result = peer, "preparing"
     if not prepare(function(profile)
         if pull ~= state then return end
-        if not profile then state.why = "no local snapshot"; finish(state, false); return end
+        if not profile then
+            state.why = "no local snapshot: " .. tostring(stats.profileWhy or "campaign changed")
+            finish(state, false); return
+        end
+        stats.profileWhy = nil
         state.profile = profile
         -- Ranking size, for the badge's "quiet sweep" limit.
         stats.ladderRows = profile.streams and profile.streams.LK and profile.streams.LK.count
