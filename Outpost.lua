@@ -10,7 +10,7 @@ Overlord.Outpost.ZONE_CAPTURE_PENALTY_SECONDS = OUTPOST_ZONE_CAPTURE_PENALTY_SEC
 Overlord.Outpost.NEUTRAL_ATLAS = "Warfronts-BaseMapIcons-Empty-Tower"
 local OUTPOST_NEUTRAL_ATLAS = Overlord.Outpost.NEUTRAL_ATLAS
 local OUTPOST_OBSERVER_STALE_BUFFER = 30
-local OUTPOST_OBSERVER_STALE_POLL_MAX = 4
+local OUTPOST_OBSERVER_STALE_POLL_MAX = 2
 local OUTPOST_OBSERVER_PROBE_REARM_SEC = 900
 -- Periodic pulls kept for one tenant the ledger knows and the map lacks.
 local OUTPOST_LEDGER_AHEAD_PULLS_MAX = 4
@@ -1713,9 +1713,10 @@ function Overlord.Outpost:TickMaintenance()
             local age = now - (tonumber(st.updatedAt) or 0)
             local stale = self:IsObserverOutpostCaptureStale(st, self:GetSite(key), now)
             -- Observateur : poll SR uniquement, jamais d'ecriture d'etat gameplay (regression 6.3.0).
-            -- Au plus quatre sondes par assaut expire (1.7.2) : la finale d'un capteur
-            -- de l'autre faction n'arrive que par un rattrapage cible, jamais par le
-            -- canal, et chaque observateur sondait sinon toutes les 22-45 s. Les sondes
+            -- Au plus deux sondes par assaut expire (1.7.2), chacune un rattrapage cible :
+            -- la finale d'un capteur de l'autre faction n'arrive que par une reponse
+            -- demandee, jamais par le canal (les reponses a une demande diffusee, tout le
+            -- canal sondant en meme temps, ne pouvaient pas la porter). Les sondes
             -- ne sont rearmees que par un autre assaut (guilde ou faction) ou apres
             -- 15 min, jamais par un simple battement (un battement forge les rachetait).
             local ident = sanitizeGuildName(st.ownerGuild or ""):lower() .. "|" .. tostring(st.ownerFaction or "")
@@ -1727,7 +1728,7 @@ function Overlord.Outpost:TickMaintenance()
             if stale then
                 if probes.count < OUTPOST_OBSERVER_STALE_POLL_MAX
                     and Overlord.Sync and Overlord.Sync.PollIfStaleObserverOutpost
-                    and Overlord.Sync:PollIfStaleObserverOutpost(age, probes.count % 2 == 0) then
+                    and Overlord.Sync:PollIfStaleObserverOutpost(age, true) then
                     probes.count = probes.count + 1
                 end
             else

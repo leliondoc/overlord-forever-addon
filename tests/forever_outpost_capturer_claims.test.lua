@@ -327,15 +327,15 @@ local polls = 0
 local realPoll = sync.PollIfStaleObserverOutpost
 sync.PollIfStaleObserverOutpost = function() polls = polls + 1; return true end
 for _ = 1, 12 do op:TickMaintenance(); tick(30) end
-assert(polls == 4, "a stale assault was probed " .. polls .. " times")
+assert(polls == 2, "a stale assault was probed " .. polls .. " times")
 stale.updatedAt = now
 op:TickMaintenance()
 stale.updatedAt = now - 1000
 tick(30)
 op:TickMaintenance()
-assert(polls == 4, "a heartbeat of the same assault re-armed the probes")
+assert(polls == 2, "a heartbeat of the same assault re-armed the probes")
 sync.PollIfStaleObserverOutpost = realPoll
-print("Outpost claims: stale assault probes bounded to four per episode")
+print("Outpost claims: stale assault probes bounded to two per episode")
 -- ===== (10) the time of a capture is its identity, even from a clock running ahead
 resetWorld()
 tick()
@@ -456,11 +456,22 @@ Overlord.Relay = { GetDirectPeers = function() return { "Ally Peer", "Enemy Peer
     IsPeer = function() return false end, IsDispatching = function() return false end, IsEcho = function() return false end }
 tick(100)
 assert(sync:PollIfStaleObserverOutpost(999, true) == true, "the probe was not sent")
-assert(#requests == 2 and requests[1].criticalChannel and requests[2].betaTarget == "Enemy Peer",
-    "the stale probe did not pull the enemy neighbour")
+assert(#requests == 1 and requests[1].betaTarget == "Enemy Peer",
+    "the stale probe did not pull the enemy neighbour alone (no broadcast herd)")
+-- Without any direct neighbour, the broadcast request is the fallback.
+Overlord.Relay.GetDirectPeers = function() return {} end
+requests = {}
+tick(100)
+assert(sync:PollIfStaleObserverOutpost(999, true) == true and #requests == 1 and requests[1].criticalChannel,
+    "without a neighbour the stale probe sent no broadcast")
+-- Callers without a pull (defence check, login snapshot) keep the broadcast.
+requests = {}
+tick(100)
+assert(sync:PollIfStaleObserverOutpost(999) == true and #requests == 1 and requests[1].criticalChannel,
+    "a probe without a pull lost its broadcast")
 Overlord.Relay = nil
 sync.SendSyncRequest, sync.GetBetaPeerFaction = realSendSync, realPeerFaction
-print("Outpost claims: stale assault probe also pulls a direct neighbour")
+print("Outpost claims: a stale assault probe pulls a direct neighbour, broadcast only without one")
 
 -- ===== (17) the weekly reset rebuilds the LOC snapshot; a waiting site keeps the periodic pull
 lb._outpostLedgerDirty = false
@@ -657,16 +668,16 @@ local probeCalls, probePulls = 0, 0
 local realProbe = sync.PollIfStaleObserverOutpost
 sync.PollIfStaleObserverOutpost = function(_, _, withPull) probeCalls = probeCalls + 1; if withPull then probePulls = probePulls + 1 end; return true end
 for _ = 1, 8 do op:TickMaintenance(); tick(30) end
-assert(probeCalls == 4 and probePulls == 2, "probes " .. probeCalls .. ", pulls " .. probePulls)
+assert(probeCalls == 2 and probePulls == 2, "probes " .. probeCalls .. ", pulls " .. probePulls)
 probeSite.updatedAt = now
 op:TickMaintenance()
 probeSite.updatedAt = now - 1000
 tick(30)
 op:TickMaintenance()
-assert(probeCalls == 4, "a heartbeat of the same assault re-armed the probes")
+assert(probeCalls == 2, "a heartbeat of the same assault re-armed the probes")
 probeSite.ownerGuild = "Other Horde Guild"
 op:TickMaintenance()
-assert(probeCalls == 5, "a new assault did not re-arm the probes")
+assert(probeCalls == 3, "a new assault did not re-arm the probes")
 sync.PollIfStaleObserverOutpost = realProbe
 print("Outpost claims: probes re-armed by a new assault only")
 

@@ -972,9 +972,11 @@ function Overlord.Sync:PollIfStaleObserverOutpost(secondsSinceOp, withPull)
     local now = GetTime()
     if now - lastStaleOutpostObserverPoll < minInterval then return false end
     lastStaleOutpostObserverPoll = now
-    self:SendSyncRequest({
-        criticalChannel = true,
-    })
+    -- A stale assault's end is only believed from a reply we asked for (1.7.2): it
+    -- pulls one direct neighbour. A broadcast request, sent by the whole channel at
+    -- once when an assault goes stale, drew a herd of full maps that could never
+    -- carry a capture we missed (and pushed back the solicited periodic pull). The
+    -- broadcast stays for the other callers and when no neighbour is known.
     local net = Overlord.Relay
     if withPull and net and net.GetDirectPeers and self.GetBetaPeerFaction then
         local myName, myFaction = self:GetPlayerFullName(), Overlord.PlayerFaction
@@ -993,8 +995,12 @@ function Overlord.Sync:PollIfStaleObserverOutpost(secondsSinceOp, withPull)
         if #list > 0 then
             staleOutpostPullRound = staleOutpostPullRound + 1
             self:SendSyncRequest({ betaTarget = list[(staleOutpostPullRound % #list) + 1] })
+            return true
         end
     end
+    self:SendSyncRequest({
+        criticalChannel = true,
+    })
     return true
 end
 
