@@ -80,4 +80,21 @@ SlashCmdList.OVERLORD("start " .. zone.id)
 assert(toldAbout("sync") == syncBefore + 1, "the initial-sync line was not printed exactly once: "
     .. (toldAbout("sync") - syncBefore))
 Overlord.IsCaptureSyncPending = realPending
-print("Manual capture start: /ov start runs the usual check (no PvP flag, ally's wave, dead, stealth, sync) OK")
+-- Just stepped onto another point: its few seconds' entry grace is not the initial
+-- sync; nothing misleading is printed and the capture starts right after.
+local entry = { id = "entry_point", name = "Entry Point", status = "available", center = { 60, 60 } }
+local realRequest = Overlord.Sync.SendSyncRequest
+Overlord.Sync.SendSyncRequest = function() return true end -- the entry snapshot request
+local realGetZone = Overlord.Zones.GetZone
+Overlord.Zones.GetZone = function(_, id) if id == entry.id then return entry end return realGetZone(_, id) end
+Overlord.Zones.GetCurrentPlayerZone = function() return entry end
+flagged = true
+local syncLines, startsBefore = toldAbout("sync"), starts
+SlashCmdList.OVERLORD("start " .. entry.id)
+assert(starts == startsBefore and toldAbout("sync") == syncLines,
+    "the entry grace was announced as the initial sync")
+clock = clock + 10
+SlashCmdList.OVERLORD("start " .. entry.id)
+assert(starts == startsBefore + 1 and entry.isHolding, "the capture did not start after the entry grace")
+Overlord.Sync.SendSyncRequest = realRequest
+print("Manual capture start: /ov start runs the usual check (no PvP flag, ally's wave, dead, stealth, sync, entry grace) OK")

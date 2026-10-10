@@ -933,7 +933,6 @@ function Overlord.ZoneControl:Update(deltaTime)
     end
 end
 
--- Verifie si le joueur est dans une zone disponible
 -- /ov start and a click on the zone row: the same start as the 1 s check (all its
 -- guards), then one chat line saying what happened (the check itself starts quietly
 -- and gives its PvP hint once a minute).
@@ -968,6 +967,10 @@ function Overlord.ZoneControl:StartManually(zone)
         else
             msg = Lx.INDICATOR_DISMOUNT_TO_CAPTURE or "Dismount."
         end
+    elseif pendingEntrySyncZoneId == zone.id and GetTime() < pendingEntrySyncUntil then
+        -- The few seconds' grace on entering the point (not the login sync): the
+        -- capture starts by itself right after; nothing misleading to say.
+        msg = nil
     elseif (Overlord._captureSyncNotices or 0) == syncNoticesBefore then
         -- Not twice in a row when the sync gate just said it itself.
         msg = Lx.CAPTURE_SYNC_WAITING or "Initial sync pending: capture of %s is temporarily blocked."
@@ -978,6 +981,7 @@ function Overlord.ZoneControl:StartManually(zone)
     return zone.isHolding == true
 end
 
+-- Verifie si le joueur est dans une zone disponible
 function Overlord.ZoneControl:CheckPlayerPosition()
     local currentZone = Overlord.Zones:GetCurrentPlayerZone()
     local currentId = currentZone and currentZone.id or nil

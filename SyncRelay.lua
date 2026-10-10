@@ -876,31 +876,33 @@ end
 -- serial): a forged relayed copy reusing a victim's next id in the same second only
 -- seals itself, the genuine packet (whose content the forger cannot know) is still
 -- handled. Every copy of one packet carries the same kind and payload.
-local SEAL_MOD = 1048573
-local function sealRange(s, from, to, h)
+-- One table for the seal helpers: this chunk is close to Lua 5.1's 200 locals.
+local sealer = { MOD = 1048573 }
+function sealer.range(s, from, to, h)
+    local mod = sealer.MOD
     local stop = math.min(to, from + 47)
-    for i = from, stop do h = (h * 31 + s:byte(i)) % SEAL_MOD end
-    for i = math.max(stop + 1, to - 47), to do h = (h * 31 + s:byte(i)) % SEAL_MOD end
-    return (h * 31 + math.max(0, to - from + 1)) % SEAL_MOD
+    for i = from, stop do h = (h * 31 + s:byte(i)) % mod end
+    for i = math.max(stop + 1, to - 47), to do h = (h * 31 + s:byte(i)) % mod end
+    return (h * 31 + math.max(0, to - from + 1)) % mod
 end
 -- origin time * 2^20 + sample (exact below 2^53 for any 21st-century date)
-local function sealOf(at, kind, payload)
-    local h = sealRange(kind, 1, #kind, 7)
-    return math.floor(tonumber(at) or 0) * 1048576 + sealRange(payload, 1, #payload, h)
+function sealer.of(at, kind, payload)
+    local h = sealer.range(kind, 1, #kind, 7)
+    return math.floor(tonumber(at) or 0) * 1048576 + sealer.range(payload, 1, #payload, h)
 end
 -- Same value from the raw wire's "kind|payload" tail, without splitting it.
-local function sealOfBody(at, body)
+function sealer.body(at, body)
     local bar = body:find("|", 1, true)
     if not bar then return nil end
-    local h = sealRange(body, 1, bar - 1, 7)
-    return math.floor(tonumber(at) or 0) * 1048576 + sealRange(body, bar + 1, #body, h)
+    local h = sealer.range(body, 1, bar - 1, 7)
+    return math.floor(tonumber(at) or 0) * 1048576 + sealer.range(body, bar + 1, #body, h)
 end
 local function alreadySeen(wire, sender)
     if type(wire) ~= "string" then return false end
     local pool, id, at, target, path, body = strsplit("|", wire, 6)
     local origin = path and path:match("^[^,]+")
     local sealed = id ~= nil and origin ~= nil and seen[origin:lower() .. ":" .. id] or nil
-    local known = sealed ~= nil and type(body) == "string" and sealed == sealOfBody(at, body)
+    local known = sealed ~= nil and type(body) == "string" and sealed == sealer.body(at, body)
     local item = known and pendingPresence[origin:lower()]
     -- An authenticated last hop that sends back this exact presence already has
     -- it. Cancel only that peer's remaining copy, never another peer's or the
@@ -2023,7 +2025,7 @@ function net:Send(kind, payload, target, immediate)
         target = target, path = { name }, kind = kind, payload = payload }
     if not self:Queue(p, immediate) then return false end
     remember(recent, recentOrder, key, now, 500)
-    remember(seen, seenOrder, name:lower() .. ":" .. p.id, sealOf(p.at, p.kind, p.payload), SEEN_RING)
+    remember(seen, seenOrder, name:lower() .. ":" .. p.id, sealer.of(p.at, p.kind, p.payload), SEEN_RING)
     return true
 end
 function net:Broadcast(kind, payload, extras)
@@ -2063,7 +2065,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
     for _, node in ipairs(p.path) do if node:lower() == meKey then return false end end
     local origin = p.path[1]
     local key = origin:lower() .. ":" .. p.id
-    local seal = sealOf(p.at, p.kind, p.payload)
+    local seal = sealer.of(p.at, p.kind, p.payload)
     if seen[key] == seal and not retryForward then return false end
     local addressed = p.target == "*" or same(p.target, me)
     -- An intermediate targeted hop can reject a packet after route lookup or

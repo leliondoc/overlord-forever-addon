@@ -6251,10 +6251,6 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
     return true
 end
 
--- Restaure le snapshot complet dans le bucket courant si (et seulement si) il appartient a la
--- campagne en cours. Fusion max() uniquement (jamais de retour en arriere) et meta seulement pour
--- les noms absents (ne pas ecraser une meta plus fraiche). Aucun rebroadcast autoritaire ici : la
--- donnee re-circulera, si besoin, par les chemins SR/LK existants (deja plafonnes / anti-spoof).
 -- PLAYER_LOGOUT only, as its last write: the saved snapshot shares the live meta index
 -- entries, whose src and raceKey (and an empty pool, read as "" anyway) no reader of
 -- the saved copy uses. About a quarter of the snapshot text, parsed at every login.
@@ -6270,6 +6266,10 @@ function Overlord.Leaderboard:SlimSavedSnapshotForLogout()
     end
 end
 
+-- Restaure le snapshot complet dans le bucket courant si (et seulement si) il appartient a la
+-- campagne en cours. Fusion max() uniquement (jamais de retour en arriere) et meta seulement pour
+-- les noms absents (ne pas ecraser une meta plus fraiche). Aucun rebroadcast autoritaire ici : la
+-- donnee re-circulera, si besoin, par les chemins SR/LK existants (deja plafonnes / anti-spoof).
 function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
     if not OverlordDB then return false end
     local snap = OverlordDB.leaderboardSnapshot

@@ -1112,8 +1112,6 @@ local function respond(session, q)
         done = function() session.at = GetTime() end })
 end
 
--- Abandon the running pull (scheduler watchdog). Rows already merged stay and
--- the bucket checkpoint lets the next round resume.
 -- Entering an instance: the session we serve is dropped (its requester gives up or
 -- moves on long before we leave); resuming it later sent pages built before the
 -- instance to a requester that had stopped waiting. A new request opens a new one.
@@ -1121,6 +1119,8 @@ function sync:DropPagedServing()
     serving, outbound = nil, nil
 end
 
+-- Abandon the running pull (scheduler watchdog). Rows already merged stay and
+-- the bucket checkpoint lets the next round resume.
 function sync:CancelPagedLeaderboardCatchup()
     if not pull then return false end
     pull.why = "round too long"

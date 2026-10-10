@@ -127,11 +127,9 @@ assert(s:TakeChannelToken(true)); assert(s:TakeChannelToken(true))
 -- A capture whose wire needs two fragments (the second one carries ENDMARK).
 local payload = "CAPTUREMARK:" .. string.rep("x", 200) .. ":ENDMARK"
 assert(net:Send("C", payload, nil), "the capture was not admitted")
-local skippedBefore = net.stats.channelSkipped or 0
 advance(30)
 assert(channelHas("CAPTUREMARK"), "the capture's first channel fragment was never sent")
 assert(channelHas("ENDMARK"), "the capture's second channel fragment was dropped (nobody can assemble it)")
-local _ = skippedBefore --
 print("Relay terminals: a full lane keeps both channel fragments of a capture")
 
 -- (3) Same full lane, and Blizzard refuses the capture's channel copy once: it is
