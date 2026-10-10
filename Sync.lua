@@ -2400,7 +2400,9 @@ local function IsBNetGameAccountInCurrentRegion(gameAccountID)
     -- Appel direct sous pcall : plus de closure creee a chaque message BNet.
     local ok, info = pcall(C_BattleNet.GetGameAccountInfoByID, gameAccountID)
     if not ok then return false end
-    return not (info and info.isInCurrentRegion == false)
+    -- Second value: the account record just read (false when absent), so the receive
+    -- path resolves the sender without a second lookup (a new ~1 KB table each).
+    return not (info and info.isInCurrentRegion == false), info or false
 end
 
 -- BNet transporte une identite de compte synthetique, mais l'API locale expose
@@ -2418,11 +2420,17 @@ function Overlord.Sync:IsForeverBNetProject(projectID)
 end
 
 local resolvedBNetFactionByPlayer = {}
-local function ResolveBNetGameplaySender(sync, gameAccountID)
-    if not sync or not gameAccountID or not C_BattleNet
-        or not C_BattleNet.GetGameAccountInfoByID then return nil end
-    local ok, info = pcall(C_BattleNet.GetGameAccountInfoByID, gameAccountID)
-    if not ok or not info or not info.characterName or info.characterName == ""
+local function ResolveBNetGameplaySender(sync, gameAccountID, info)
+    if not sync or not gameAccountID then return nil end
+    -- info: the record OnBNetMessage already read for this message (same handler,
+    -- nothing in between); read it here only when called without one.
+    if info == nil then
+        if not C_BattleNet or not C_BattleNet.GetGameAccountInfoByID then return nil end
+        local ok
+        ok, info = pcall(C_BattleNet.GetGameAccountInfoByID, gameAccountID)
+        if not ok then return nil end
+    end
+    if not info or not info.characterName or info.characterName == ""
         or (info.clientProgram and info.clientProgram ~= "WoW")
         or not sync:IsForeverBNetProject(info.wowProjectID)
         or info.isInCurrentRegion == false then return nil end
@@ -2616,7 +2624,8 @@ end
 -- Reception des messages Battle.net. Format: msgType:band:payload (band pour routage bridge)
 -- Stocke senderID -> band pour savoir quels amis BNet sont dans quelles bands
 function Overlord.Sync:OnBNetMessage(message, senderID)
-    if not IsBNetGameAccountInCurrentRegion(senderID) then return end
+    local inRegion, bnetInfo = IsBNetGameAccountInCurrentRegion(senderID)
+    if not inRegion then return end
     local msgType, rest = strsplit(":", message, 2)
     if not rest then return end
 
@@ -2624,7 +2633,7 @@ function Overlord.Sync:OnBNetMessage(message, senderID)
     if msgType == "R2" then
         local band, innerMsg = strsplit(":", rest, 2)
         if band and innerMsg then
-            self:OnReceiveR2Relay(senderID, band, innerMsg)
+            self:OnReceiveR2Relay(senderID, band, innerMsg, bnetInfo)
         end
         return
     end
@@ -2647,35 +2656,35 @@ function Overlord.Sync:OnBNetMessage(message, senderID)
     local sender = "BNet-" .. tostring(senderID)
 
     -- Dispatch via fonction nommee (evite de creer une closure pcall a chaque message BNet : GC).
-    pcall(self.DispatchBNetMessage, self, msgType, payload, sender, senderID)
+    pcall(self.DispatchBNetMessage, self, msgType, payload, sender, senderID, bnetInfo)
 end
 
 -- Dispatch des messages BNet recus (appele sous pcall depuis OnBNetMessage).
-function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
+function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID, bnetInfo)
     if msgType == "BR" and Overlord.Relay then
-        return Overlord.Relay:Receive(payload, ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
+        return Overlord.Relay:Receive(payload, ResolveBNetGameplaySender(self, senderID, bnetInfo), "BNET", senderID)
     elseif msgType == "BF" and Overlord.Relay then
-        return Overlord.Relay:ReceiveFragment(payload, ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
+        return Overlord.Relay:ReceiveFragment(payload, ResolveBNetGameplaySender(self, senderID, bnetInfo), "BNET", senderID)
     end
     if self.SenderBurstShouldDrop and self:SenderBurstShouldDrop(self:BurstLimiterKey(sender), msgType) then return end
     if msgType == "K" then
-        local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
+        local gameplaySender = ResolveBNetGameplaySender(self, senderID, bnetInfo) or sender
         self:OnReceiveKill(payload or "", gameplaySender)
     elseif msgType == "EK" then
         self:OnReceiveEnemyKill(payload or "", sender)
     elseif msgType == "C" then
-        local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
+        local gameplaySender = ResolveBNetGameplaySender(self, senderID, bnetInfo) or sender
         self:OnReceiveCapture(payload or "", gameplaySender)
     elseif msgType == "SR" then
         self:OnSyncRequest(senderID, payload or "", "BNET")
     elseif msgType == "ZS" then
-        local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
+        local gameplaySender = ResolveBNetGameplaySender(self, senderID, bnetInfo) or sender
         self:OnReceiveZoneState(payload or "", gameplaySender)
     elseif msgType == "ZA" then
         -- Comme C/ZS, ZA a besoin de l'identite Retail Name-Realm reelle pour
         -- dedupliquer les voix. Le placeholder BNet-ID est volontairement exclu
         -- des quorums et bloquait sinon toute convergence BNet-only.
-        local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
+        local gameplaySender = ResolveBNetGameplaySender(self, senderID, bnetInfo) or sender
         self:OnReceiveZoneAll(payload or "", gameplaySender)
     elseif msgType == "FA" then
         if Overlord.FrontActivity and Overlord.FrontActivity.OnReceiveSyncPayload then
@@ -2688,10 +2697,10 @@ function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
     elseif msgType == "LC" then
         -- Conserver l'identite Retail reelle quand elle est disponible, meme si
         -- LC est maintenant fusionne comme un snapshot monotone sans quorum.
-        local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
+        local gameplaySender = ResolveBNetGameplaySender(self, senderID, bnetInfo) or sender
         self:OnReceiveLeaderboardCaptures(payload or "", gameplaySender, "BNET")
     elseif msgType == "LO" or msgType == "LOC" then
-        local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
+        local gameplaySender = ResolveBNetGameplaySender(self, senderID, bnetInfo) or sender
         if msgType == "LO" then
             self:OnReceiveLeaderboardOutpostTenant(payload or "", gameplaySender, "BNET")
         else
@@ -2705,7 +2714,7 @@ function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID)
     elseif msgType == "VF" then
         self:OnReceiveVictoryFaction(payload or "")
     elseif msgType == "FR" then
-        local gameplaySender = ResolveBNetGameplaySender(self, senderID) or sender
+        local gameplaySender = ResolveBNetGameplaySender(self, senderID, bnetInfo) or sender
         self:OnReceiveFrontTruceEndReset(payload or "", gameplaySender, "BNET")
     elseif msgType == "VB" then
         self:OnReceiveVictoryBonus(payload or "", sender, "BNET")
@@ -2728,15 +2737,15 @@ end
 
 -- Enveloppe Battle.net du relais : R2:<band>:BR|BF:<wire>. Le pair BNet authentifie
 -- le dernier saut ; l'auteur d'origine est dans le paquet relais.
-function Overlord.Sync:OnReceiveR2Relay(senderID, band, innerMsg)
+function Overlord.Sync:OnReceiveR2Relay(senderID, band, innerMsg, bnetInfo)
     if not innerMsg or not Overlord.Relay then return end
     local envelope = innerMsg:sub(1, 3)
     if envelope ~= "BR:" and envelope ~= "BF:" then return end
     if not IsCompatibleForeverBand(band) then return end
     if envelope == "BF:" then
-        return Overlord.Relay:ReceiveFragment(innerMsg:sub(4), ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
+        return Overlord.Relay:ReceiveFragment(innerMsg:sub(4), ResolveBNetGameplaySender(self, senderID, bnetInfo), "BNET", senderID)
     end
-    return Overlord.Relay:Receive(innerMsg:sub(4), ResolveBNetGameplaySender(self, senderID), "BNET", senderID)
+    return Overlord.Relay:Receive(innerMsg:sub(4), ResolveBNetGameplaySender(self, senderID, bnetInfo), "BNET", senderID)
 end
 
 function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
