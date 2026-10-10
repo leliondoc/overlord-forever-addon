@@ -2815,9 +2815,10 @@ function Overlord.LeaderboardUI:CreateSyncBadge(title)
     if not lbFrame or lbFrame.syncBadge or not title then return end
     local badge = CreateFrame("Frame", nil, lbFrame)
     badge:SetSize(22, 20)
-    -- Placed by LayoutSyncBadge: centred in the gap between the centre lines
-    -- (campaign dates, totals) and the right lines (your rank, your guild).
-    badge:SetPoint("CENTER", lbFrame.subtitle or title, "BOTTOM", 330, -3)
+    -- Placed by LayoutSyncBadge: on the first header line (campaign dates, your
+    -- rank; same font, so the three texts share one baseline), centred in the gap
+    -- between the centre lines and the right lines.
+    badge:SetPoint("CENTER", lbFrame.subtitle or title, "CENTER", 330, 0)
     local arrow = badge:CreateTexture(nil, "OVERLAY")
     arrow:SetSize(18, 18)
     arrow:SetPoint("LEFT", badge, "LEFT", 0, 0)
@@ -2892,8 +2893,10 @@ function Overlord.LeaderboardUI:CreateSyncBadge(title)
     end)
 end
 
--- Centres the badge in the gap between the centre lines and the right lines
--- (widths read from the drawn texts; re-anchored only when the position moves).
+-- Centres the badge in the gap between the centre lines and the right lines, on the
+-- line of the campaign dates and of your rank (between the two lines, no text of the
+-- header shared its height). Widths are read from the drawn texts; it is re-anchored
+-- only when the position moves.
 local function LayoutSyncBadge(badge)
     local function width(fs) return fs and fs.GetStringWidth and (fs:GetStringWidth() or 0) or 0 end
     local centreHalf = math.max(width(lbFrame.subtitle), width(lbFrame.totalText)) / 2
@@ -2905,7 +2908,7 @@ local function LayoutSyncBadge(badge)
     if badge._layoutX ~= x then
         badge._layoutX = x
         badge:ClearAllPoints()
-        badge:SetPoint("CENTER", lbFrame.subtitle, "BOTTOM", x, -3)
+        badge:SetPoint("CENTER", lbFrame.subtitle, "CENTER", x, 0)
     end
 end
 

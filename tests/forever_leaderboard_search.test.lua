@@ -319,6 +319,10 @@ ui:Refresh(); drain()
 assert(badge:IsShown() and badge.arrow:IsShown() and not badge.check:IsShown() and badge.anim.playing,
     "Syncing badge not shown with its moving arrow")
 assert(badge.text.text == "Still receiving ranking data...", "Syncing text wrong: " .. tostring(badge.text.text))
+-- On the line of the campaign dates and of "You: ..." (it sat between the two header
+-- lines: no text of the header was at its height).
+assert(badge.point[1] == "CENTER" and badge.point[2] == frame.subtitle and badge.point[3] == "CENTER"
+    and badge.point[5] == 0, "The badge is not on the first header line")
 local badgeMutations = mutations
 ui:Refresh(); drain()
 assert(mutations == badgeMutations, "An unchanged badge state rewrote its text")
