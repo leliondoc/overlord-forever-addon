@@ -2830,19 +2830,6 @@ function Overlord.UI:GetNearbyEnemyCount(forceRefresh)
     return cachedEnemyCount
 end
 
--- Joueurs ennemis reels (sans multiplicateur siege) - condition appel de faction.
-function Overlord.UI:GetNearbyEnemyCountRaw(forceRefresh)
-    self:GetNearbyEnemyCount(forceRefresh)
-    if Overlord.ZoneControl and Overlord.ZoneControl.GetCachedScan then
-        local cached = Overlord.ZoneControl:GetCachedScan()
-        local zone = Overlord.Zones and Overlord.Zones:GetCurrentPlayerZone()
-        if zone and cached.zoneId == zone.id and cached.enemyRaw ~= nil then
-            return cached.enemyRaw
-        end
-    end
-    return cachedEnemyCount
-end
-
 function Overlord.UI:RefreshForces()
     if not self.forcesText then return end
     if not Overlord.InActiveFront then

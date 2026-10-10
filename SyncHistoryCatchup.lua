@@ -704,7 +704,6 @@ local function FinishRound(pending, success, target)
             if not filtered or sync._ladderFilteredWins >= 3 or fresh then ack.fullAt = ack.at end
         end
         OverlordDB.leaderboardHistoryCatchupAck = ack
-        OverlordDB.leaderboardRankFirstCompletedCampaignId = pending.campaignId
         NoteHr("completed", 1)
     end
     -- The pull records why it stopped (peer busy, no reply, ...): show it here too.

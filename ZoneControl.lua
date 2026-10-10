@@ -1583,7 +1583,7 @@ local function GetScanUnitIdentity(unit)
 end
 
 -- Cache du dernier scan pour eviter le double scan (ZoneControl:Update + UI:RefreshForces)
-local lastScanResult = { friendly = 0, enemy = 0, enemyRaw = 0, visibleEnemy = 0, time = 0, zoneId = nil }
+local lastScanResult = { friendly = 0, enemy = 0, visibleEnemy = 0, time = 0, zoneId = nil }
 local NEARBY_SCAN_CACHE_SECONDS = 2.0
 
 function Overlord.ZoneControl:GetCachedScan()
@@ -1691,7 +1691,6 @@ function Overlord.ZoneControl:ScanNearbyPlayers(zone)
         end
     end
 
-    lastScanResult.enemyRaw = enemyCount
     lastScanResult.visibleEnemy = visibleEnemyCount
 
     lastScanResult.friendly = friendlyCount

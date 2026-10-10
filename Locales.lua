@@ -467,7 +467,6 @@ L.FORCES_PRESENT = "%d %s nearby"
 L.NOT_IN_WARZONE = "Not in a war zone"
 
 -- === Combat ===
-L.CANNOT_IN_COMBAT   = "Cannot open in combat."
 
 -- === Manual gold bounty ===
 
@@ -1053,7 +1052,6 @@ L.FORCES_PRESENT = "%d %s à proximité"
 L.NOT_IN_WARZONE = "Pas dans une zone de guerre"
 
 -- Combat
-L.CANNOT_IN_COMBAT   = "Impossible en combat."
 
 -- Contrats manuels (or reel)
 
@@ -1611,7 +1609,6 @@ L.FORCES_PRESENT = "%d %s cerca"
 L.NOT_IN_WARZONE = "No estás en una zona de guerra"
 
 -- Combat
-L.CANNOT_IN_COMBAT   = "No se puede abrir en combate."
 
 -- Contratos manuales (oro real)
 
@@ -2168,7 +2165,6 @@ L.FORCES_PRESENT = "%d %s in der Nähe"
 L.NOT_IN_WARZONE = "Nicht in einer Kriegszone"
 
 -- Combat
-L.CANNOT_IN_COMBAT   = "Im Kampf nicht möglich."
 
 -- Manuelle Goldverträge
 
@@ -2710,7 +2706,6 @@ L.FORCES_PRESENT = "%d %s рядом"
 L.NOT_IN_WARZONE = "Не в зоне боевых действий"
 
 -- === Combat ===
-L.CANNOT_IN_COMBAT   = "Невозможно открыть в бою."
 
 -- === Manual gold bounty ===
 

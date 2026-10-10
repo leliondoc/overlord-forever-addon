@@ -17,7 +17,6 @@ Overlord.L.FACTION_CALL_RECEIVED = Overlord.L.FACTION_CALL_RECEIVED or "%s calls
 Overlord.L.FACTION_CALL_RECEIVED_NO_ZONE = Overlord.L.FACTION_CALL_RECEIVED_NO_ZONE or "%s calls the faction: %s!"
 Overlord.L.FACTION_CALL_RECEIVED_GENERIC = Overlord.L.FACTION_CALL_RECEIVED_GENERIC or "%s calls the faction!"
 Overlord.UI = Overlord.UI or {}
-Overlord.UI.GetNearbyEnemyCountRaw = function() return 0 end -- nobody around: no longer required
 
 -- The fixture leaves a checking stub on the relay: count relay sends instead.
 local relay = 0

@@ -386,12 +386,6 @@ function Overlord.Sync:PollIfStaleObserverInProgress(secondsSinceZs, zone)
     self:SendSyncRequest()
 end
 
--- Band = realm_faction (ex: "MoonGuard_A", "Hyjal_H")
-
--- ==================== Decouverte via Communaute WoW (cross-realm + cross-faction) ====================
--- Scanne les membres en ligne de la communaute "Overlord" pour envoyer des SR en whisper.
--- Cross-realm : le canal "Overlord" est realm-only, la communaute traverse les royaumes.
--- Cross-faction : la communaute active le whisper entre ses membres, y compris cross-faction.
 -- Filtre CHAT_MSG_SYSTEM restreint (voir InstallWhisperOfflineChatFilter) : masque uniquement les erreurs
 -- Blizzard du type hors-ligne correlees aux whispers addon Overlord (recentAddonWhispers).
 -- Le canal de faction et les amis Battle.net (ponts du relais) completent la couverture.

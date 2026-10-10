@@ -40,7 +40,7 @@ end
 
 round()
 assert(sweeps == 1, "Login did not start the v7 ranking")
-assert(OverlordDB.leaderboardRankFirstCompletedCampaignId == 1, "Completed sweep was not persisted")
+assert(OverlordDB.leaderboardHistoryCatchupAck.campaignId == 1, "Completed sweep was not persisted")
 assert(#history == 1 and history[1] == "Near Ally", "Outpost history was not requested after the sweep")
 
 round(true)
@@ -53,7 +53,7 @@ assert(sweeps == 3 and #history == 2, "Outpost history not refreshed after six h
 OverlordDB.campaignId = 2
 round(true)
 assert(sweeps == 4 and #history == 3, "A new campaign did not restart ranking and history")
-assert(OverlordDB.leaderboardRankFirstCompletedCampaignId == 2)
+assert(OverlordDB.leaderboardHistoryCatchupAck.campaignId == 2)
 
 -- Outpost history: without any row from the peer the request is retried after
 -- 15 min; once a row arrives the next request waits six hours.

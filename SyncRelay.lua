@@ -1026,14 +1026,6 @@ function net:GetPeerPagedProtocol(name)
     if not row or GetTime() - row.at > 300 then return nil end
     return row.version
 end
-function net:GetPeers()
-    local names = {}
-    for _, row in pairs(self.peers) do
-        if GetTime() - row.at <= 300 then names[#names + 1] = row.name end
-    end
-    table.sort(names)
-    return names
-end
 function net:IsDispatching(sender)
     return self.context ~= nil and same(self.context.origin, sender)
 end

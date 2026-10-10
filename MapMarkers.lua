@@ -4323,10 +4323,6 @@ function Overlord.MapMarkers:GetWorldMapCanvas()
     return GetCanvas(), GetOverlayParent()
 end
 
-function Overlord.MapMarkers:IsMinimapFrontOverlayMap(mapID)
-    return IsMinimapFrontOverlayMap(mapID)
-end
-
 function Overlord.MapMarkers:GetTrackedMapID()
     return trackedMapID
 end

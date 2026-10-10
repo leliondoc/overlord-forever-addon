@@ -473,7 +473,7 @@ assert(login.Overlord.Sync:ScheduleLoginLeaderboardHistoryCatchUp())
 local loginCampaign = login.Overlord.Sync._historyCatchupPending.campaignId
 advance(35)
 assert(pagedStarted, "Login did not start the v6 ranking")
-assert(login.OverlordDB.leaderboardRankFirstCompletedCampaignId == loginCampaign,
+assert(login.OverlordDB.leaderboardHistoryCatchupAck.campaignId == loginCampaign,
     "A completed first v6 sweep did not persist its phase")
 assert(historyTarget == b.name, "Outpost history was not requested from the direct neighbour")
 assert((login.OverlordDB.leaderboardHistoryCatchupAck.historyAt or 0) > 0)

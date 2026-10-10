@@ -2305,10 +2305,6 @@ function Overlord:CampaignEpochsMatch(a, b, toleranceSec)
     return math.abs(a - b) <= toleranceSec
 end
 
-function Overlord:IsLegacyUSResetAhead(dbReset, regionalReset)
-    return IsLegacyUSResetAhead(dbReset, regionalReset)
-end
-
 -- Epoch diffuse sur le reseau = debut de campagne OFFICIEL (reset Blizzard), identique pour toute
 -- la region. On ne diffuse plus l'ancien epoch "mercredi legacy" : tous les clients a jour emettent
 -- le meme instant, et la reception compare par fenetre hebdomadaire (IsCurrentSyncCampaignEpoch).
@@ -2686,6 +2682,8 @@ function Overlord:Initialize()
     -- 1.8.1: outposts parked by an unreleased 1.4.0 build (2026-10-03, minutes); the
     -- one-week recovery of that week can no longer match.
     OverlordDB.outpostsByPool = nil
+    -- 1.8.1: write-only since 2026-09-30 (the catch-up ack carries the campaign).
+    OverlordDB.leaderboardRankFirstCompletedCampaignId = nil
     if type(OverlordDB.config) == "table" then OverlordDB.config.layerHelpMode = nil end
     -- 1.7.0 : plus de protection de capitale (la conquete reste jusqu a la reprise).
     OverlordDB.frontCapitalImmuneFrom = nil
