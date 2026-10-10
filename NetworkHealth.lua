@@ -135,11 +135,21 @@ function NH:Compute()
             waiting and string.format("waiting on one peer for %ds", hr.stepAge) or text)
     end
     if sync and sync.GetOutpostClaimStats then
-        local accepted, refused, last, noCapturer = sync:GetOutpostClaimStats()
+        local accepted, refused, last, noCapturer, reasons = sync:GetOutpostClaimStats()
         noCapturer = tonumber(noCapturer) or 0
+        -- The other refusals by cause, most frequent first (at most four).
+        local causes = {}
+        for reason, count in pairs(reasons or {}) do causes[#causes + 1] = { reason, count } end
+        table.sort(causes, function(a, b)
+            if a[2] ~= b[2] then return a[2] > b[2] end
+            return a[1] < b[1]
+        end)
+        local parts = {}
+        for i = 1, math.min(4, #causes) do parts[i] = causes[i][1] .. " " .. causes[i][2] end
         add("claims", "ok", "Keep/outpost captures",
-            string.format("%d accepted, %d refused%s%s", accepted, refused,
+            string.format("%d accepted, %d refused%s%s%s", accepted, refused,
                 noCapturer > 0 and string.format(", of which %d routine copies without capturer", noCapturer) or "",
+                #parts > 0 and ("; by cause: " .. table.concat(parts, ", ")) or "",
                 last and (" (last: " .. last .. ")") or ""))
     end
     if net and net.GetQueueSummary then

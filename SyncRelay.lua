@@ -646,6 +646,13 @@ local function localMapStamp()
     mapStampCache.at, mapStampCache.value = now, best
     return best
 end
+-- Keeps and outposts (1.8.2): the same map reply carries their captures, and a capture
+-- missed live is believed from nothing else than a reply we asked for (1.7.2). The
+-- zone stamp alone skipped the pulls that brought them: they have their own stamp,
+-- "~o<base 36>" (Sync GetOutpostMapStamps). A neighbour that advertises none says
+-- nothing about them and is pulled as before the stamps. A capture the reply cannot
+-- make us accept (its capturer is not ranked here yet) is asked three times per half
+-- hour at most, not on every presence.
 -- Packet dates use Blizzard's shared server clock: a PC clock more than 30 s
 -- ahead made every relayed packet from that player invisible to all others.
 local function serverNow() return (GetServerTime and GetServerTime()) or time() end
@@ -1157,8 +1164,9 @@ function net:GetKindDiagnostics(maxRows)
     lines[#lines + 1] = string.format("Battle.net bridges: %d of %d opposite-faction friends heard in the last %d min"
         .. " (the others only get rotating copies)%s.", live, enemies, BNET_ALIVE_SEC / 60,
         #named > 0 and (": " .. table.concat(named, ", ") .. (enemies > #named and " ..." or "")) or "")
-    lines[#lines + 1] = string.format("Map pulls on a neighbour's presence skipped (it knew no newer capture): %d.",
-        self.stats.mapPullsNoNews or 0)
+    lines[#lines + 1] = string.format("Map pulls on a neighbour's presence skipped (it knew no newer capture): %d;"
+        .. " sent for a keep or outpost capture: %d.",
+        self.stats.mapPullsNoNews or 0, self.stats.mapPullsForSites or 0)
     lines[#lines + 1] = string.format("Bridge election: %d same-faction bridges heard, crossing share %d%%"
         .. " (100%% up to %d), %d enemy copies of routine traffic and %d score rows left to the elected forwarders;"
         .. " %d captures not sent back to the side that made them.",
@@ -2015,8 +2023,9 @@ function net:Send(kind, payload, target, immediate)
     -- advertising less are neither asked nor served (SyncLeaderboardPages).
     if kind == "NH" and payload == tostring(addon.Version or "") then
         local stamp = localMapStamp()
+        local sites = sync.GetOutpostMapStamps and sync:GetOutpostMapStamps() or 0
         payload = payload .. (self:HasLiveEnemyBridge() and "~b" or "")
-            .. "~m" .. base36(stamp) .. "~l9~ld~lr~lp6"
+            .. "~m" .. base36(stamp) .. "~o" .. base36(sites) .. "~l9~ld~lr~lp6"
     end
     -- Handlers may rebroadcast received snapshots. The existing packet is already
     -- forwarded below; do not give that replay a fresh author or hop budget.
@@ -2164,7 +2173,19 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         -- unchanged for them). Periodic and login catch-ups are unchanged.
         local advertisedMap = p.payload:match("~m(%w+)~")
         local peerStamp = advertisedMap and tonumber(advertisedMap, 36) or nil
-        local noNews = peerStamp ~= nil and peerStamp <= localMapStamp()
+        local advertisedSites = p.payload:match("~o(%w+)~")
+        local peerSites = advertisedSites and tonumber(advertisedSites, 36) or nil
+        local noNews = peerStamp ~= nil and peerSites ~= nil and peerStamp <= localMapStamp()
+        -- A keep or outpost capture we do not hold (see the "~o" stamp above).
+        local forSites = false
+        if noNews and sync.GetOutpostMapStamps then
+            local _, known = sync:GetOutpostMapStamps()
+            local asked = self.sitesPull
+            if peerSites > known and (not asked or peerSites > asked.stamp or now - asked.at >= 1800
+                or asked.tries < 3) then
+                noNews, forSites = false, true
+            end
+        end
         if noNews and #p.path == 1 and self.pulls < 2 and now - last >= 300 and not recentFullMap then
             self.stats.mapPullsNoNews = (self.stats.mapPullsNoNews or 0) + 1
         end
@@ -2176,6 +2197,15 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
             if not self.requestOrder then self.requestOrder = {} end
             if sync:SendSyncRequest({ betaTarget = origin }) then
                 remember(self.requested, self.requestOrder, origin:lower(), now, 125)
+                if forSites then
+                    local asked = self.sitesPull
+                    if not asked or peerSites > asked.stamp or now - asked.at >= 1800 then
+                        self.sitesPull = { stamp = peerSites, tries = 1, at = now }
+                    else
+                        asked.tries = asked.tries + 1
+                    end
+                    self.stats.mapPullsForSites = (self.stats.mapPullsForSites or 0) + 1
+                end
             end
         end
     end

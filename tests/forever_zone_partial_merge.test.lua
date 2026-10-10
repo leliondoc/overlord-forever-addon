@@ -386,7 +386,7 @@ do
     sync.SendSyncRequest = function(_, opts) pulls[#pulls + 1] = opts and opts.betaTarget; return true end
     local function presence(who, stamp)
         Overlord.Relay:Receive("global|stamp-" .. who:gsub(" ", "") .. "|" .. time() .. "|*|" .. who
-            .. "|NH|1.8.1~m" .. stamp .. "~l9~ld~lr~lp6", who, "CHANNEL")
+            .. "|NH|1.8.2~m" .. stamp .. "~o0~l9~ld~lr~lp6", who, "CHANNEL")
     end
     sync._lastFullZaAt = nil
     clock = clock + 10 -- (own stamp cached 5 s)

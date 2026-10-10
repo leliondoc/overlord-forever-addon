@@ -86,7 +86,8 @@ local ownerClaimDedup = NewOutpostDedup(OUTPOST_OWNER_CLAIM_TTL, OUTPOST_OWNER_C
 -- re-sends the outposts he sees held every 120 s, also those whose capturer he
 -- never learnt (map catch-up, old saves, older versions): harmless routine copies,
 -- shown apart so they do not read as forgeries.
-local outpostClaimStats = { accepted = 0, refused = 0, noCapturer = 0 }
+-- reasons: the other refusals counted by cause (a fixed vocabulary), for /ov network.
+local outpostClaimStats = { accepted = 0, refused = 0, noCapturer = 0, reasons = {} }
 
 local function RemoveOutpostDedupNode(registry, node)
     if node.previous then node.previous.next = node.next else registry.head = node.next end
@@ -695,14 +696,56 @@ local function CapturerLadderFaction(capturer)
     return nil
 end
 
-local function NoteOutpostClaimRefused(msgType, reason)
+local function NoteOutpostClaimRefused(msgType, reason, routine)
     outpostClaimStats.refused = outpostClaimStats.refused + 1
     outpostClaimStats.lastRefused = tostring(msgType) .. " " .. tostring(reason)
+    if routine then
+        outpostClaimStats.noCapturer = outpostClaimStats.noCapturer + 1
+    else
+        local reasons = outpostClaimStats.reasons
+        reason = tostring(reason)
+        reasons[reason] = (reasons[reason] or 0) + 1
+    end
 end
 
 function Overlord.Sync:GetOutpostClaimStats()
     return outpostClaimStats.accepted, outpostClaimStats.refused, outpostClaimStats.lastRefused,
-        outpostClaimStats.noCapturer
+        outpostClaimStats.noCapturer, outpostClaimStats.reasons
+end
+
+-- Keep/outpost freshness, for the map pull a neighbour's presence triggers (1.8.2;
+-- SyncRelay advertises it as "~o"). served: the newest capture a map reply of ours
+-- states with its capturer (a held site, by the rules of BuildOutpostPayload), the
+-- only form a receiver can believe. known: the newest capture our own map holds, the
+-- besieged tenant of an observed assault included. Event times, identical on every
+-- client that holds the capture.
+local outpostMapStamps = { at = -1000, served = 0, known = 0 }
+function Overlord.Sync:GetOutpostMapStamps()
+    local now = GetTime()
+    if now - outpostMapStamps.at < 5 then return outpostMapStamps.served, outpostMapStamps.known end
+    local served, known = 0, 0
+    local OP = Overlord.Outpost
+    if OP and OP.GetState and Overlord.OutpostSites then
+        for siteKey in pairs(Overlord.OutpostSites) do
+            local st = OP:GetState(siteKey)
+            if st.status == "held" then
+                local guild = OP:SanitizeGuildName(st.ownerGuild or "")
+                local claimedAt = math.floor(tonumber(st.claimedAt) or 0)
+                if guild ~= "" and claimedAt > 0 and not OP:IsOutpostStateAwaitingNetworkSnapshot(st) then
+                    if claimedAt > known then known = claimedAt end
+                    if claimedAt > served and st.heldCapturerGuild == guild
+                        and OP:NormalizeHeldCapturerName(st.heldCapturerName) then
+                        served = claimedAt
+                    end
+                end
+            elseif st.status == "in_progress" and OP:SanitizeGuildName(st.previousOwnerGuild or "") ~= "" then
+                local previous = math.floor(tonumber(st.previousClaimedAt) or 0)
+                if previous > known then known = previous end
+            end
+        end
+    end
+    outpostMapStamps.at, outpostMapStamps.served, outpostMapStamps.known = now, served, known
+    return served, known
 end
 
 -- Shortest time a character needs before completing a capture of this site (the
@@ -1387,10 +1430,7 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
         local ok, reason, signedCapturer = self:AuthorizeOutpostClaim(
             siteKey, guild, remoteFac, heldCaptureTs, relayCapturer, sender, channel, remotePool)
         if not ok then
-            NoteOutpostClaimRefused("OP", reason)
-            if reason == "capturer" and (relayCapturer or "") == "" then
-                outpostClaimStats.noCapturer = outpostClaimStats.noCapturer + 1
-            end
+            NoteOutpostClaimRefused("OP", reason, reason == "capturer" and (relayCapturer or "") == "")
             return
         end
         relayCapturer = signedCapturer

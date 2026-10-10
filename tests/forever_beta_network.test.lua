@@ -932,17 +932,17 @@ do
         fresh.Relay:Receive("global|map-" .. who:gsub(" ", "") .. "|" .. time() .. "|*|" .. who
             .. "|NH|1.0.0" .. suffix .. "~ld~lr~lp6", who, "CHANNEL")
     end
-    presence("Same Tester", "~m1jk")   -- 2000 in base 36: nothing newer than ours
+    presence("Same Tester", "~m1jk~o0") -- 2000 in base 36: nothing newer than ours
     assert(#pulls == 0, "A neighbour with no newer capture triggered a full map pull")
     assert((fresh.Relay.stats.mapPullsNoNews or 0) == 1, "Skipped pull not counted")
-    presence("Newer Tester", "~m2bi")  -- 3000: a capture we do not know
+    presence("Newer Tester", "~m2bi~o0") -- 3000: a capture we do not know
     assert(pulls[1] == "Newer Tester", "A neighbour knowing a newer capture was not pulled")
     presence("Older Tester", "")       -- no stamp (older version): pulled as before
     assert(pulls[2] == "Older Tester", "An older neighbour lost its presence-triggered pull")
     now = now + 61                     -- (two pulls per minute at most)
     fresh.Fronts.Registry.arathi.zones[1].owner = nil -- a fresh week: no capture known here either
     now = now + 6                      -- (own stamp cached 5 s)
-    presence("Empty Tester", "~m0")    -- nothing newer than an empty map
+    presence("Empty Tester", "~m0~o0") -- nothing newer than an empty map
     assert(#pulls == 2, "A neighbour with an empty map was pulled")
     fresh.Fronts.Registry.arathi.zones[1].owner = "Horde"
     now = now + 6
@@ -954,7 +954,48 @@ do
         return freshChannel(self, kind, fragment)
     end
     assert(fresh.Relay:Send("NH", "1.0.0")); drain()
-    assert(advertised and advertised:find("~m1jk~l9~ld~lr~lp6", 1, true), "Own presence lacks the map stamp")
+    assert(advertised and advertised:find("~m1jk~o0~l9~ld~lr~lp6", 1, true), "Own presence lacks the map stamp")
+    -- Keeps and outposts (1.8.2): their captures ride the same map reply and are
+    -- believed from no other source we did not witness. The zone stamp alone skipped
+    -- the pulls that brought them, so they have their own stamp ("~o").
+    local served, known = 6000, 5000
+    function fresh.Sync:GetOutpostMapStamps() return served, known end
+    local function pulled(who, suffix)
+        local before = #pulls
+        presence(who, suffix)
+        return #pulls == before + 1 and pulls[#pulls] == who
+    end
+    now = now + 61
+    local skipped = fresh.Relay.stats.mapPullsNoNews or 0
+    assert(not pulled("Sites Same", "~m1jk~o3uw"), "A neighbour with no newer keep/outpost capture was pulled") -- 5000
+    assert(fresh.Relay.stats.mapPullsNoNews == skipped + 1, "Skipped pull not counted")
+    -- 1.8.1 advertises its zones only: it says nothing about its keeps and outposts.
+    assert(pulled("Sites Legacy", "~m1jk"), "A neighbour silent about its keeps and outposts was not pulled")
+    assert((fresh.Relay.stats.mapPullsForSites or 0) == 0)
+    assert(pulled("Sites Newer", "~m1jk~o4mo"), "A newer keep/outpost capture triggered no pull")          -- 6000
+    assert(fresh.Relay.stats.mapPullsForSites == 1, "Keep/outpost pull not counted")
+    -- The reply could not make us accept it (capturer not ranked here): three pulls
+    -- for that capture per half hour, whoever advertises it, then no more.
+    now = now + 61
+    assert(pulled("Sites Second", "~m1jk~o4mo") and pulled("Sites Third", "~m1jk~o4mo"))
+    now = now + 61
+    assert(not pulled("Sites Fourth", "~m1jk~o4mo"), "An unresolved keep/outpost capture was pulled on every presence")
+    -- A newer capture is news again; the half hour over, the old one is tried again.
+    assert(pulled("Sites Higher", "~m1jk~o5eg"), "A capture newer than the unresolved one was not pulled")  -- 7000
+    assert(pulled("Sites Fifth", "~m1jk~o4mo"))
+    now = now + 61
+    assert(pulled("Sites Sixth", "~m1jk~o5eg"))
+    assert(not pulled("Sites Seventh", "~m1jk~o5eg"), "The bound of pulls per capture was lost")
+    now = now + 1801
+    assert(pulled("Sites Late", "~m1jk~o5eg"), "An unresolved capture was never asked again")
+    -- Once the map holds it, nothing is pulled; our own presence advertises what a
+    -- reply of ours would state.
+    known = 7000
+    now = now + 61
+    assert(not pulled("Sites Known", "~m1jk~o5eg"), "A capture our map holds was pulled")
+    advertised = nil
+    assert(fresh.Relay:Send("NH", "1.0.0")); drain()
+    assert(advertised and advertised:find("~m1jk~o4mo~l9~ld~lr~lp6", 1, true), "Own presence lacks the keep/outpost stamp")
 end
 -- A forged relayed copy carrying a victim's next packet id (ids are predictable)
 -- must not seal that id: the victim's genuine packet, with its own timestamp, still

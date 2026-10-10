@@ -941,6 +941,44 @@ do
     end
 end
 print("Outpost claims: a caught-up capture moves the map, never over a local capture or a live assault")
+-- ===== (40) keep/outpost stamps for the map pulls (1.8.2): what a reply of ours
+-- states with its capturer, and what our own map already holds
+do
+    tick(6) -- (stamps cached 5 s)
+    local served0, known0 = sync:GetOutpostMapStamps()
+    local st = op:GetState("silverpine")
+    local saved = {}
+    for k, v in pairs(st) do saved[k] = v end
+    local newest = math.max(known0, now) + 1000
+    st.status, st.ownerGuild, st.ownerFaction, st.claimedAt, st.updatedAt = "held", "Stamp Guild", "Alliance", newest, newest
+    st.heldCapturerName, st.heldCapturerGuild, st._loginSyncUnconfirmed = nil, nil, nil
+    local cachedServed, cachedKnown = sync:GetOutpostMapStamps()
+    assert(cachedServed == served0 and cachedKnown == known0, "the stamps are rebuilt on every presence")
+    tick(6)
+    local served, known = sync:GetOutpostMapStamps()
+    assert(known == newest, "a held site is not in our own stamp: " .. tostring(known))
+    assert(served < newest, "a held site without its capturer is advertised (no reply could state it)")
+    st.heldCapturerName, st.heldCapturerGuild = "Capper Tester", "Stamp Guild"
+    tick(6)
+    served, known = sync:GetOutpostMapStamps()
+    assert(served == newest and known == newest, "a held site with its capturer is not advertised")
+    -- A site still waiting for its login snapshot is neither served nor known.
+    st._loginSyncUnconfirmed = true
+    tick(6)
+    served, known = sync:GetOutpostMapStamps()
+    assert(served < newest and known < newest, "an unconfirmed login state is advertised")
+    st._loginSyncUnconfirmed = nil
+    -- Under assault: the besieged tenant is still what we know, but no reply states it.
+    st.status, st.previousOwnerGuild, st.previousOwnerFaction, st.previousClaimedAt = "in_progress", "Stamp Guild", "Alliance", newest
+    st.ownerGuild, st.ownerFaction, st.claimedAt = "Assault Guild", "Horde", 0
+    tick(6)
+    served, known = sync:GetOutpostMapStamps()
+    assert(known == newest and served < newest, "an observed assault hid its tenant from our stamp, or advertised it")
+    for k in pairs(st) do st[k] = nil end
+    for k, v in pairs(saved) do st[k] = v end
+    tick(6)
+end
+print("Outpost claims: keep/outpost stamps (served with capturer, known with the besieged tenant)")
 -- ===== Ledger catch-up pages: every row past the first 16 sits in the block and
 -- sub-page of its key's djb2 hash (the bucketing every client shares), and the
 -- build no longer yields once per character of each key.
