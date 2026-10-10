@@ -2098,20 +2098,32 @@ function Overlord.Sync:ChannelCarries(kind, payload, isOrigin)
     end
     -- Un total est absolu : seul le dernier compte. Il part a la fin de la fenetre.
     self._channelKillPending = payload
-    if not self._channelKillArmed then
-        self._channelKillArmed = true
-        C_Timer.After(math.max(0.1, lastAt + interval - now), function()
-            local sync = Overlord.Sync
-            if not sync then return end
-            sync._channelKillArmed = nil
-            local pending = sync._channelKillPending
-            sync._channelKillPending = nil
-            -- Critical: one own total per 30 s at most, never lost to other
-            -- non-critical channel users (e.g. the live-score bridge, 1.3.2).
-            if pending then sync:SendToChannel("K", pending, true) end
-        end)
-    end
+    self:ArmChannelKillFlush(lastAt + interval - now)
     return false
+end
+
+-- End of the window: our last own total goes on the channel (where the outbound score
+-- bridges read it for the other faction). Inside an instance nothing leaves: it stays
+-- pending and Resume flushes it once after the exit.
+function Overlord.Sync:ArmChannelKillFlush(delay)
+    if self._channelKillArmed then return end
+    self._channelKillArmed = true
+    C_Timer.After(math.max(0.1, delay), function()
+        local sync = Overlord.Sync
+        if not sync then return end
+        sync._channelKillArmed = nil
+        local pending = sync._channelKillPending
+        if not pending or Overlord.InstanceSuspended or IsInInstance() then return end
+        sync._channelKillPending = nil
+        -- The relay never carries this payload on the channel (ChannelCarries refused
+        -- its copy), so its 2 s broadcast memory must not turn the flush into a no-op:
+        -- a fight's last total queued under 2 s before the window closed was lost.
+        -- Critical: one own total per 30 s at most, never lost to other
+        -- non-critical channel users (e.g. the live-score bridge, 1.3.2).
+        sync._channelKillFlush = pending
+        sync:SendToChannel("K", pending, true)
+        sync._channelKillFlush = nil
+    end)
 end
 
 -- Copies automatiques du relais vers le groupe ou le raid. Blizzard ne laisse qu'environ
@@ -2133,7 +2145,8 @@ end
 -- Envoi supplementaire au canal (pour visibilite cross-faction : ennemis voient captures/zones en cours)
 function Overlord.Sync:SendToChannel(msgType, data, critical)
     if Overlord.Relay and Overlord.Relay:IsEcho(msgType, data) then return false end
-    if self:RelayAlreadyCarries(msgType, data) then return true end
+    if not (msgType == "K" and data == self._channelKillFlush)
+        and self:RelayAlreadyCarries(msgType, data) then return true end
     if Overlord.InstanceSuspended or IsInInstance() then return false end
     local channelId = self:GetChannelId()
     if not channelId then return false end
@@ -11081,6 +11094,9 @@ function Overlord.Sync:Resume()
     self:StartProximitySync()
     self:StartPassiveSync()
     self:ResumePendingKillBroadcast()
+    -- An own total whose channel slot fell inside the instance: once, after the channel
+    -- is back (the replayed K above may already have armed a newer one).
+    if self._channelKillPending then self:ArmChannelKillFlush(10) end
     -- Back from an instance: Battle.net friends stopped hearing us there (the relay
     -- is off) and drop us as a bridge after 5 min. One presence beat soon after the
     -- return lets both sides find each other again without waiting for the 120 s beat.
