@@ -1755,8 +1755,17 @@ function net:Queue(p, immediate)
                 waiting = waiting or {}
                 waiting[#waiting + 1] = task
                 item.index = item.index + 1
+            elseif task.refused then
+                -- A refused group copy (Blizzard's shared quota right after the direct
+                -- ZR) must not hold the Battle.net copies either: as in pump, it is
+                -- retried from the end of the item (the pump keeps its retry count).
+                task.refused = nil
+                self.stats.refused = (self.stats.refused or 0) + 1
+                waiting = waiting or {}
+                waiting[#waiting + 1] = task
+                item.index = item.index + 1
             else
-                break -- shared relay byte budget or a refused copy: the pump retries
+                break -- shared relay byte budget: the pump retries
             end
         end
         for i = 1, waiting and #waiting or 0 do item.tasks[#item.tasks + 1] = waiting[i] end

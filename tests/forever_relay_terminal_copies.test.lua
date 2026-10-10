@@ -50,11 +50,18 @@ local function advance(seconds)
     clock = stop
 end
 
-local channel, bnet, refuse = {}, {}, nil
+local channel, bnet, refuse, group, refuseGroup = {}, {}, nil, {}, nil
 function s:SendAddonChecked(msg, chatType, target)
     if chatType == "CHANNEL" and refuse and msg:find(refuse, 1, true) then
         refuse = nil -- Blizzard refuses this one attempt
         return false
+    end
+    if chatType == "PARTY" then
+        if refuseGroup and msg:find(refuseGroup, 1, true) then
+            refuseGroup = nil -- Blizzard refuses this one attempt
+            return false
+        end
+        group[#group + 1] = msg
     end
     if chatType == "CHANNEL" then channel[#channel + 1] = msg end
     return true
@@ -86,8 +93,28 @@ local skipped = net.stats.channelSkipped
 advance(3)
 assert(channelHas("RELEASEMARK"), "the release's channel copy was never sent once the token came back")
 assert(net.stats.channelSkipped == skipped, "the release's channel copy was dropped")
-friends[1], friends.faction[777] = nil, nil
 print("Relay terminals: an immediate release crosses to Battle.net at once, its channel copy follows")
+
+-- (1b) Same release from a grouped capturer whose relay group copy Blizzard refuses
+-- (the direct ZR just used the shared group/channel quota): Battle.net still at once.
+advance(10)
+bnet, group = {}, {}
+IsInGroup = function() return true end
+IsInRaid = IsInRaid or function() return false end
+refuseGroup = "GROUPMARK"
+s._channelTokens, s._channelTokensAt = nil, nil
+assert(s:TakeChannelToken(true))
+assert(net:Send("ZR", "elwynn_goldshire:wave2:Origin Tester:GROUPMARK", nil, true), "the grouped release was not queued")
+assert(refuseGroup == nil, "the group copy was never tried (vacuous case)")
+assert(#bnet >= 1 and bnet[1].id == 777, "a refused group copy held the release's Battle.net copy")
+advance(5)
+local groupCopies = 0
+for _, msg in ipairs(group) do if msg:find("GROUPMARK", 1, true) then groupCopies = groupCopies + 1 end end
+assert(groupCopies == 1, "the refused group copy was not retried exactly once: " .. groupCopies)
+assert(channelHas("GROUPMARK"), "the grouped release's channel copy was never sent")
+IsInGroup = function() return false end
+friends[1], friends.faction[777] = nil, nil
+print("Relay terminals: a refused group copy does not hold an immediate release's Battle.net copies")
 
 -- (2) Urgent lane full of unsent siege updates (no pump tick yet), channel in debt.
 advance(10)
