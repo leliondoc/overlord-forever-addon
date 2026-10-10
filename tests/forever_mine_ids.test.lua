@@ -48,7 +48,11 @@ res:ApplyRemoteMineStock("realmine", 0)
 assert(res:GetMineStock("realmine") == 0, "a real mine stock no longer drains")
 -- (4) A save polluted before 1.8.1 drops the invented ids at login.
 OverlordDB.mineStocks = { junk = 3, realmine = 40 }
+OverlordDB.mineStockTimers = { junk = 5, realmine = 7 }
 res:RestoreResources()
+res:SaveResources()
+assert(OverlordDB.mineStockTimers.junk == nil and OverlordDB.mineStocks.junk == nil,
+    "the login restore kept an invented mine id in the saved stocks or timers")
 assert(res:GetMineStock("junk") == res:GetMineStockMax() and res:GetMineStock("realmine") == 40,
     "the login restore kept an invented mine id or lost a real one")
 print("Mine ids: invented ids neither printed, remembered nor stored; real mines unchanged")

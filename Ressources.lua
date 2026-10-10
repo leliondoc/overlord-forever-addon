@@ -328,7 +328,9 @@ function Overlord.Ressources:RestoreResources()
         end
         OverlordDB.mineStockTimers.fargodeep = nil
         for k, v in pairs(OverlordDB.mineStockTimers) do
-            mineStockTimers[k] = math.max(0, math.min(MINE_REGEN_INTERVAL - 1, tonumber(v) or 0))
+            if not (Overlord.Zones and Overlord.Zones.GetMine) or Overlord.Zones:GetMine(k) then
+                mineStockTimers[k] = math.max(0, math.min(MINE_REGEN_INTERVAL - 1, tonumber(v) or 0))
+            end
         end
     end
     resourcesRestored = true
