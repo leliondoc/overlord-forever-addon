@@ -868,6 +868,61 @@ local cut = op:SanitizeGuildName(cyrillic)
 assert(#cut <= 24 and #cut >= 20, "the cut name has an odd length: " .. #cut)
 assert(sync:IsValidGuildSyncToken(cut), "a guild name cut in the middle of a character is refused: " .. #cut)
 print("Outpost claims: byte-limited guild names stay valid")
+
+-- ===== (39) a history reply that moves the ledger past the map moves the map too
+do
+    local function hordeHeld(site, at)
+        local st = op:GetState(site)
+        st.status, st.ownerGuild, st.ownerFaction, st.claimedAt, st.updatedAt = "held", "Horde Guild", "Horde", at, at
+        st.holdAuthorityLocal, st.isHolding = false, false
+        return st
+    end
+    local follower = "Follow Tester"
+    know(follower, "Fortress Guild")
+    -- (a) LO caught up: an Alliance capture newer than the Horde tenant the map shows.
+    resetWorld()
+    tick(4000)
+    local st = hordeHeld("badlands", now - 3000)
+    assert(sync:NoteOutpostClaimPeer("Helper Tester", "A:1.7.2:0::H"))
+    sync:OnReceiveLeaderboardOutpostTenant(loWire("badlands", "Fortress Guild", "Alliance", now - 100, follower), helper, "WHISPER")
+    assert(count("badlands", "Fortress Guild") == 1, "fixture: the caught-up capture was refused")
+    assert(st.status == "held" and st.ownerGuild == "Fortress Guild" and st.ownerFaction == "Alliance"
+        and st.claimedAt == now - 100 and st.heldCapturerName == follower,
+        "the map kept the old tenant after a caught-up capture: " .. tostring(st.ownerGuild))
+    assert(not op:HasStateAwaitingNetwork(), "the map follows the ledger yet still pulls")
+    -- (b) Same as (a) through LOC.
+    resetWorld()
+    tick(4000)
+    st = hordeHeld("silverpine", now - 3000)
+    assert(sync:NoteOutpostClaimPeer("Helper Tester", "A:1.7.2:0::H"))
+    sync:OnReceiveLeaderboardOutpostCount(locWire("silverpine", "Fortress Guild", "Alliance", { { now - 100, follower } }), helper, "WHISPER")
+    assert(st.ownerGuild == "Fortress Guild" and st.claimedAt == now - 100, "a caught-up LOC did not move the map")
+    -- (c) An allied swap without a missed enemy capture is not adopted.
+    resetWorld()
+    tick(4000)
+    st = hordeHeld("badlands", now - 3000)
+    st.ownerGuild, st.ownerFaction = "Old Guild", "Alliance"
+    assert(sync:NoteOutpostClaimPeer("Helper Tester", "A:1.7.2:0::H"))
+    sync:OnReceiveLeaderboardOutpostTenant(loWire("badlands", "Fortress Guild", "Alliance", now - 100, follower), helper, "WHISPER")
+    assert(st.ownerGuild == "Old Guild", "an allied swap was adopted without a missed enemy capture")
+    -- (d) A local capture and (e) a live assault on the map are left alone.
+    for _, case in ipairs({ "local", "assault" }) do
+        resetWorld()
+        tick(4000)
+        st = hordeHeld("badlands", now - 3000)
+        if case == "local" then
+            st.holdAuthorityLocal, st.isHolding = true, true
+        else
+            st.status, st.previousOwnerGuild, st.previousOwnerFaction, st.previousClaimedAt = "in_progress", "Horde Guild", "Horde", now - 3000
+            st.ownerGuild, st.ownerFaction, st.claimedAt = "Assault Guild", "Alliance", 0
+        end
+        assert(sync:NoteOutpostClaimPeer("Helper Tester", "A:1.7.2:0::H"))
+        sync:OnReceiveLeaderboardOutpostTenant(loWire("badlands", "Fortress Guild", "Alliance", now - 100, follower), helper, "WHISPER")
+        assert(count("badlands", "Fortress Guild") == 1, "fixture: the caught-up capture was refused (" .. case .. ")")
+        assert(st.ownerGuild ~= "Fortress Guild", "a caught-up capture overrode the map during a " .. case .. " capture")
+    end
+end
+print("Outpost claims: a caught-up capture moves the map, never over a local capture or a live assault")
 -- ===== Ledger catch-up pages: every row past the first 16 sits in the block and
 -- sub-page of its key's djb2 hash (the bucketing every client shares), and the
 -- build no longer yields once per character of each key.

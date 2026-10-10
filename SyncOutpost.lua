@@ -1077,6 +1077,35 @@ local function MaybeResetOutpostDefenderAlert(siteKey, stAfter)
     ResetOutpostDefenderAlert(siteKey)
 end
 
+-- A history reply we asked for moved the ledger past the map: the map takes the
+-- ledger's tenant by the rule a held OP follows (same guards, no alert, no packet).
+-- Without it the map, minimap and keep lists kept the old tenant until a map pull
+-- happened to reach a peer whose map had the capture. A site never expires once held,
+-- so the newest capture is the tenant; a live assault on the map is left alone.
+local function FollowLedgerTenant(siteKey)
+    local lb, OP = Overlord.Leaderboard, Overlord.Outpost
+    if not (lb and OP and OP.AdoptLedgerTenant and lb.OutpostLedgerAheadOfMap
+        and lb.IsOutpostLedgerTenant and lb.GetOutpostTenantsTable) then return false end
+    local st = OP:GetState(siteKey)
+    if not st or st.status == "in_progress" or not lb:OutpostLedgerAheadOfMap(siteKey, st) then return false end
+    local t = lb:GetOutpostTenantsTable()[siteKey]
+    if type(t) ~= "table" or not lb:IsOutpostLedgerTenant(siteKey, t.guild, t.faction, t.claimedAt) then
+        return false
+    end
+    if not OutpostAdoptionJustified(siteKey, st, t.faction, lb) then return false end
+    local claimedAt = math.floor(tonumber(t.claimedAt) or 0)
+    local mapTs = math.min(claimedAt, ClaimServerNow() + 5)
+    if not OP:AdoptLedgerTenant(siteKey, st, { status = "held", ownerGuild = t.guild,
+        ownerFaction = t.faction, claimedAt = mapTs, updatedAt = mapTs, pool = t.pool }) then return false end
+    local guild = OP:SanitizeGuildName(t.guild or "")
+    st.heldCapturerName = lb.GetOutpostEventCapturer
+        and lb:GetOutpostEventCapturer(siteKey, guild, t.faction, claimedAt, t.pool) or t.capturer
+    st.heldCapturerGuild = guild
+    MaybeResetOutpostDefenderAlert(siteKey, st)
+    MaybeResetOutpostAssaultAlert(siteKey, st)
+    return true
+end
+
 local function OutpostDefendedGuildFromState(stAfter)
     if not stAfter or not Overlord.Outpost then return "" end
     local OP = Overlord.Outpost
@@ -1842,6 +1871,8 @@ function Overlord.Sync:OnReceiveLeaderboardOutpostTenant(payload, sender, source
     end
     if self.NoteOutpostHistoryDelivery then self:NoteOutpostHistoryDelivery(sender, newEvent) end
     if not newEvent and not tenantChanged then return true end
+    -- A live LO from its capturer is left to its OC and held OP (they print the alert).
+    if reason == "catch-up" then FollowLedgerTenant(siteKey) end
     if Overlord.Outpost and Overlord.Outpost.RefreshOutpostPresentation then
         Overlord.Outpost:RefreshOutpostPresentation(siteKey)
     end
@@ -1877,6 +1908,7 @@ function Overlord.Sync:OnReceiveLeaderboardOutpostCount(payload, sender, sourceC
     if OutpostDedupIsRecent(locDedup, deliveryKey, now) then return true end
 
     local accepted, fresh, changed, tenantMoved, parsed = false, false, false, false, 0
+    local caughtUp = false
     for tsStr, name in eventsStr:gmatch("([^,=]+)=([^,]+)") do
         parsed = parsed + 1
         if parsed > (Overlord.Leaderboard.OUTPOST_EVENTS_PER_PACKET or 6) then break end
@@ -1892,6 +1924,7 @@ function Overlord.Sync:OnReceiveLeaderboardOutpostCount(payload, sender, sourceC
                     if newEvent then fresh = true end
                     if newEvent or tenantChanged then changed = true end
                     if tenantChanged then tenantMoved = true end
+                    if reason == "catch-up" and (newEvent or tenantChanged) then caughtUp = true end
                 end
             else
                 NoteOutpostClaimRefused("LOC", reason)
@@ -1903,6 +1936,7 @@ function Overlord.Sync:OnReceiveLeaderboardOutpostCount(payload, sender, sourceC
     if accepted then RememberOutpostDedup(locDedup, deliveryKey, now) end
     if accepted and self.NoteOutpostHistoryDelivery then self:NoteOutpostHistoryDelivery(sender, fresh) end
     if not changed then return accepted end
+    if caughtUp then FollowLedgerTenant(siteKey) end
     if tenantMoved and Overlord.Outpost and Overlord.Outpost.RefreshOutpostPresentation then
         Overlord.Outpost:RefreshOutpostPresentation(siteKey)
     end
