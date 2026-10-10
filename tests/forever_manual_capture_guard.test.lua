@@ -60,4 +60,24 @@ assert(checks == 3, "/ov start did not run the usual capture check on an ally's 
 assert(toldAbout("already in progress") == 1, "/ov start on an ally's wave said nothing")
 assert(starts == 0 and not zone.isHolding and zone.holdTimeElapsed == 100,
     "/ov start took over an ally's running capture")
-print("Manual capture start: /ov start runs the usual check (no PvP flag, ally's wave) OK")
+-- Dead (or a ghost): no misleading "Dismount." line; stealthed: told to leave stealth.
+zone.status, zone.owner, zone.zsOfficialCapturerName, zone._remoteCaptureLease = "available", nil, nil, nil
+local dead, stealthed = true, false
+UnitIsDead = function() return dead end
+IsStealthed = function() return stealthed end
+local before = #hints
+SlashCmdList.OVERLORD("start " .. zone.id)
+assert(#hints == before and toldAbout("Dismount") == 0, "a dead player was told to dismount")
+dead, stealthed = false, true
+SlashCmdList.OVERLORD("start " .. zone.id)
+assert(toldAbout("stealth") == 1 and toldAbout("Dismount") == 0, "a stealthed player was not told to leave stealth")
+-- Initial sync still pending: one line, not the gate's line and ours.
+stealthed = false
+local realPending = Overlord.IsCaptureSyncPending
+Overlord.IsCaptureSyncPending = function() return true end
+local syncBefore = toldAbout("sync")
+SlashCmdList.OVERLORD("start " .. zone.id)
+assert(toldAbout("sync") == syncBefore + 1, "the initial-sync line was not printed exactly once: "
+    .. (toldAbout("sync") - syncBefore))
+Overlord.IsCaptureSyncPending = realPending
+print("Manual capture start: /ov start runs the usual check (no PvP flag, ally's wave, dead, stealth, sync) OK")

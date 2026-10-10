@@ -941,6 +941,7 @@ function Overlord.ZoneControl:StartManually(zone)
     if not zone then return false end
     local wasHolding, owner = zone.isHolding, zone.owner
     local hintBefore = self._pvpFlagHintAt and self._pvpFlagHintAt[zone.id]
+    local syncNoticesBefore = Overlord._captureSyncNotices or 0
     self:CheckPlayerPosition()
     local Lx = Overlord.L or {}
     local msg, color = nil, "|cFFFFD100"
@@ -959,8 +960,16 @@ function Overlord.ZoneControl:StartManually(zone)
             msg = Lx.CAPTURE_NEEDS_PVP or "%s: enable PvP (/pvp) to capture this objective."
         end
     elseif self:IsPlayerInNonCaptureStateForSync() then
-        msg = Lx.INDICATOR_DISMOUNT_TO_CAPTURE or "Dismount."
-    else
+        -- Same instruction as the objective indicator: nothing for the dead.
+        if UnitIsDead("player") or UnitIsGhost("player") then
+            msg = nil
+        elseif IsStealthed and IsStealthed() then
+            msg = Lx.INDICATOR_STEALTH_TO_CAPTURE or "Leave stealth to capture."
+        else
+            msg = Lx.INDICATOR_DISMOUNT_TO_CAPTURE or "Dismount."
+        end
+    elseif (Overlord._captureSyncNotices or 0) == syncNoticesBefore then
+        -- Not twice in a row when the sync gate just said it itself.
         msg = Lx.CAPTURE_SYNC_WAITING or "Initial sync pending: capture of %s is temporarily blocked."
     end
     if msg then

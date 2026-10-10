@@ -5273,12 +5273,13 @@ function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldW
         end
     end
 
-    local captureCursor = nil
-    while true do
-        local ok, rowKey, bucket = pcall(next, captureCounts, captureCursor)
-        if not ok then error(rowKey) end
-        captureCursor = rowKey
-        if rowKey == nil then break end
+    -- Keys first (no yield; at most the ledger's rows), then each row read live: a
+    -- next() traversal resumed after rows were added between slices can skip rows
+    -- (the list builder is no longer cancelled by every new capture).
+    local captureKeys = {}
+    for rowKey in pairs(captureCounts) do captureKeys[#captureKeys + 1] = rowKey end
+    for _, rowKey in ipairs(captureKeys) do
+        local bucket = captureCounts[rowKey]
         if type(bucket) == "table" and includeSite(bucket.siteKey) and not rowKeys[rowKey] then
             local captures = math.floor(tonumber(bucket.count) or 0)
             if captures > 0 and sanitizeGuildName(bucket.guild or "") ~= ""

@@ -982,10 +982,31 @@ function Overlord.UI.BindEscapeClose(frame, onEscape)
         if key == "ESCAPE" then onEscape(self) end
     end)
     local function release(self)
-        if InCombatLockdown() then return end
+        if InCombatLockdown() then
+            -- Shown in combat (e.g. the first dialog of a session): take the keyboard
+            -- once the fight ends, or ESC would do nothing until it is reopened.
+            Overlord.UI._escapePending = Overlord.UI._escapePending or {}
+            Overlord.UI._escapePending[self] = true
+            if not Overlord.UI._escapeRegenFrame and CreateFrame then
+                local events = CreateFrame("Frame")
+                events:RegisterEvent("PLAYER_REGEN_ENABLED")
+                events:SetScript("OnEvent", function()
+                    local pending = Overlord.UI._escapePending or {}
+                    Overlord.UI._escapePending = {}
+                    for pendingFrame in pairs(pending) do
+                        if pendingFrame:IsShown() and pendingFrame._overlordEscapeRelease then
+                            pendingFrame._overlordEscapeRelease(pendingFrame)
+                        end
+                    end
+                end)
+                Overlord.UI._escapeRegenFrame = events
+            end
+            return
+        end
         self:EnableKeyboard(true)
         self:SetPropagateKeyboardInput(true)
     end
+    frame._overlordEscapeRelease = release
     frame:HookScript("OnShow", release)
     frame:HookScript("OnHide", function(self)
         if not C_Timer or not C_Timer.After then return end

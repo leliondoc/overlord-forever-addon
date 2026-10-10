@@ -357,6 +357,7 @@ function Overlord:NotifyCaptureSyncPending(zone)
     if not zone or not zone.id then return end
     if captureSyncGate.notified then return end
     captureSyncGate.notified = true
+    self._captureSyncNotices = (self._captureSyncNotices or 0) + 1
     captureSyncGate.notifiedZoneId = zone.id
     local msg = (L and L.CAPTURE_SYNC_WAITING) or "Initial sync pending: capture of %s is temporarily blocked."
     self:PrintNotification(string.format("|cFFFFD100[Overlord]|r " .. msg, zone.name or zone.id))

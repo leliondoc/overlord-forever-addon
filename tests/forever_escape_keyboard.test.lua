@@ -35,6 +35,12 @@ function frame:Show() self.shown = true; fire("OnShow") end
 function frame:Hide() self.shown = false; fire("OnHide") end
 local function press(key) if frame.keyboard then frame.scripts.OnKeyDown(frame, key) end end
 
+local regen
+function CreateFrame()
+    local events = { RegisterEvent = function() end }
+    function events:SetScript(_, fn) regen = fn end
+    return events
+end
 Overlord = {}
 assert(loadfile("UIShared.lua"))()
 local closed = 0
@@ -72,7 +78,15 @@ frame = created
 combat = true
 Overlord.UI.BindEscapeClose(frame, function(self) self:Hide() end)
 assert(not frame.keyboard, "a window created in combat took the keyboard")
-combat = false
+-- Shown in combat and still open when the fight ends: it takes the keyboard then.
 frame:Show()
-assert(frame.keyboard and frame.propagate, "the first show out of combat did not take the keyboard")
+assert(not frame.keyboard, "a window shown in combat took the keyboard")
+combat = false
+assert(regen, "no end-of-combat handler was armed")
+regen()
+assert(frame.keyboard and frame.propagate, "a window shown in combat did not take the keyboard after the fight")
+press("ESCAPE")
+assert(not frame.shown, "ESC did not close a window first shown in combat")
+frame:Show()
+assert(frame.keyboard and frame.propagate, "the next show out of combat did not take the keyboard")
 print("Escape keyboard: ESC closes, game keys pass, nothing protected changed in combat, combat-created windows OK")
