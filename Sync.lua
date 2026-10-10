@@ -3165,6 +3165,8 @@ local function ApplyInactiveFrontCapture(zoneId, newOwner, ts)
     local stateUnconfirmed = loginUnconfirmed or zone._captureFinalUnattested
     local localFreshness = stateUnconfirmed and 0
         or math.max(zone.updatedAt or 0, zone.capturedTime or 0)
+    -- A zone nobody holds here takes any dated capture (see ApplyInactiveFrontZoneState).
+    if not zone.owner and zone.status ~= "in_progress" then localFreshness = 0 end
     if localFreshness > ts then return false end
     if localFreshness == ts and zone.owner and zone.owner ~= newOwner
         and Overlord.Sync:DeterministicCaptureTieOwner(zoneId, ts) ~= newOwner then
@@ -3239,6 +3241,9 @@ local function ApplyInactiveFrontZoneState(zoneId, status, kills, holdTime, owne
         or (status == "captured" and zone._captureFinalUnattested)
         or forceConvergence
     local localTs = stateUnconfirmed and 0 or (zone.updatedAt or 0)
+    -- 1.8.2: a zone nobody holds here takes any dated capture; its last update (an
+    -- assault given up, a neutral entry merged) is not a capture date.
+    if status == "captured" and owner and not zone.owner and zone.status ~= "in_progress" then localTs = 0 end
     if (status == "captured" or status == "in_progress") and not owner then return false end
     if (status == "captured" or status == "in_progress") and IsStaleCampaignTimestamp(ts) then return false end
     -- Ne pas ecraser une capture ou une zone deja capturee par un abandon ZS distant (revert observateur SR).
@@ -8117,10 +8122,13 @@ function Overlord.Sync:OnReceiveZoneAll(
                     or (ct == localCapturedAt
                         and self:DeterministicCaptureTieOwner(zoneId, ct) == owner))
                 staleEntry = not captureWins or (localCapturedAt <= 0 and ts < localCanonicalTs)
-            elseif not skipPairMutation and not stateZone.owner and not stateUnconfirmed
-                and ts < localCanonicalTs then
-                staleEntry = true
             end
+            -- 1.8.2: a zone nobody holds on our map takes any dated capture (the
+            -- campaign and truce bounds are checked above). Its last update is not
+            -- a capture date: an assault given up there after a capture we had
+            -- missed, or a neutral entry merged from someone who did, made that
+            -- capture older than "our" zone for good, and the newer stamp spread
+            -- with every map to the whole side that had missed it.
             if staleEntry or staleSkipMask[entryIndex] then
                 -- An entry refused by a guard (unproven N, held flip, truce or victory)
                 -- on an orange zone builds no lease plan: the zone keeps its wave,
@@ -8345,6 +8353,8 @@ function Overlord.Sync:OnReceiveZoneAll(
                 local localTs = stateUnconfirmed and 0
                     or (((ct > 0 and localCapturedTs > 0)
                         and localCapturedTs) or (zone.updatedAt or 0))
+                -- A zone nobody holds here: see the dry run above.
+                if not zone.owner and zone.status ~= "in_progress" and ct > 0 then localTs = 0 end
                 if zone.owner == owner and ts > 0
                     and (ts >= localTs or (ct > 0 and ct >= (zone.capturedTime or 0))) then
                     syncUseful = true

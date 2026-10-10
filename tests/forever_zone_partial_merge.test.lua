@@ -6,6 +6,7 @@ assert(loadfile("tests/forever_world_kills.test.lua"))()
 Overlord.L.ZONE_NAMES = {}
 Overlord.L.SYNC_CAPTURED_FRIENDLY = "Captured"
 Overlord.L.SYNC_CAPTURED_ENEMY = "Captured by enemy"
+Overlord.L.SYNC_CAPTURED_ENEMY_BY = "Captured by %s"
 Overlord.PlayerFaction = "Alliance"
 assert(loadfile("Fronts.lua"))()
 assert(loadfile("Zones.lua"))()
@@ -119,6 +120,21 @@ assert(state(X) == "Alliance@" .. (EPOCH + 2000), "Neutral entry erased a newer 
 assert(state(Y) == "Horde@" .. (EPOCH + 1900),
     "Unproven neutral entry rejected the whole snapshot; fresh Y not merged: " .. state(Y))
 
+-- (1d') 1.8.2: a zone nobody holds on our map takes any dated capture, whatever its
+-- own last update. We missed a capture; later an assault was given up there (or a
+-- neutral entry was merged from someone who missed it too): the zone's last update
+-- is newer than the capture, which every map then failed to teach us, for good.
+do
+    local W = "ash_stardust"
+    set(X, "Horde", EPOCH + 1500); set(W, "Horde", EPOCH + 1500)       -- the neighbour: both captured
+    local holderPages = snapshot()
+    setN(X, EPOCH + 4000); setN(W, EPOCH + 4000)                        -- ours: touched since, nobody holds them
+    deliver(holderPages)
+    assert(state(X) == "Horde@" .. (EPOCH + 1500), "a capture older than an assault given up on our front was never learnt: " .. state(X))
+    assert(state(W) == "Horde@" .. (EPOCH + 1500), "a capture older than an assault given up on another front was never learnt: " .. state(W))
+    set(X, "Alliance", EPOCH + 2000); set(W, "Alliance", EPOCH + 500)
+end
+
 -- (1e) An unproven N with a FRESHER timestamp than the local capture (no reset proof)
 -- must never be applied over it, yet must not veto the other fresh entries.
 setN(X, EPOCH + 5000); set(Y, "Horde", EPOCH + 2500)
@@ -143,6 +159,18 @@ local clock, timers = 1000, {}
 GetTime = function() return clock end
 C_Timer.After = function(delay, fn) timers[#timers + 1] = { at = clock + delay, fn = fn } end
 assert(loadfile("ZoneCaptureLease.lua"))()
+
+-- (1d'') The same for a late live final, on another front: its date is older than
+-- the last update of a zone nobody holds here.
+do
+    local W = "ash_stardust"
+    setN(W, EPOCH + 4000)
+    sync:OnReceiveCapture(W .. ":Late Capper|WARRIOR:Horde:" .. (EPOCH + 1600) .. ":wlate:Player-1-0000ABCD:120", "Late Capper")
+    assert(state(W) == "Horde@" .. (EPOCH + 1600),
+        "a final older than the zone's last update was refused on a zone nobody holds: " .. state(W)
+        .. " / " .. tostring(sync.GetEnemyCaptureFinalDiagnostics and sync:GetEnemyCaptureFinalDiagnostics()))
+    set(W, "Alliance", EPOCH + 500)
+end
 
 -- (1f) An orange zone whose stable base differs from the sender's entry (the receiver
 -- missed a capture there) no longer rejects the whole map: that zone keeps its wave,
