@@ -920,6 +920,9 @@ function sync:GetCatchupNeighbourDiagnostics()
     local now = GetTime()
     local enemyFaction = ENEMY_FACTION[Overlord.PlayerFaction]
     local enemies, allies, aside, old = {}, {}, {}, {}
+    -- Enemy friends too old to be asked come first in the "before 1.8.1" list, named:
+    -- among dozens of old neighbours the truncated list hid the one being looked for.
+    local oldEnemies = 0
     for _, name in ipairs(net:GetDirectPeers()) do
         if type(name) == "string" and name ~= ""
             and not (self.ForeverIdentitiesMatch and self:ForeverIdentitiesMatch(name, me)) then
@@ -927,7 +930,12 @@ function sync:GetCatchupNeighbourDiagnostics()
             if penalty > 0 then
                 aside[#aside + 1] = string.format("%s %ds", name, math.floor(penalty))
             elseif IsOldPagedPeer(net, name) then
-                old[#old + 1] = name
+                if enemyFaction and PeerFaction(name) == enemyFaction then
+                    oldEnemies = oldEnemies + 1
+                    table.insert(old, oldEnemies, name .. " [enemy]")
+                else
+                    old[#old + 1] = name
+                end
             elseif enemyFaction and PeerFaction(name) == enemyFaction then
                 enemies[#enemies + 1] = name
             else

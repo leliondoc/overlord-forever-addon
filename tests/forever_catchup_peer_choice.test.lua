@@ -182,9 +182,10 @@ do
     local w = world({
         { name = "Aged Ally", faction = "Alliance", hops = 1 },
         { name = "Young Ally", faction = "Alliance", hops = 1 },
+        { name = "Zold Enemy", faction = "Horde", hops = 1 },
     }, "Alliance")
     w.e.Overlord.Relay.GetPeerPagedProtocol = function(_, name)
-        return name == "Aged Ally" and 8 or 9
+        return (name == "Aged Ally" or name == "Zold Enemy") and 8 or 9
     end
     assert(w.start(), "round not scheduled")
     w.advance(60)
@@ -194,8 +195,10 @@ do
         check("a neighbour older than 1.8.1 was asked", m.target ~= "Aged Ally", m.target)
     end
     local diag = w.sync:GetCatchupNeighbourDiagnostics()
-    check("an old neighbour stayed in the rotation", diag:find("before 1.8.1 1 (Aged Ally)", 1, true)
-        and diag:find("ally 1 (Young Ally)", 1, true), diag)
+    -- The enemy friend too old to be asked is named first, whatever its place by name.
+    check("an old neighbour stayed in the rotation, or the old enemy friend is not named first",
+        diag:find("before 1.8.1 2 (Zold Enemy [enemy], Aged Ally)", 1, true)
+        and diag:find("ally 1 (Young Ally)", 1, true) and diag:find("enemy 0 (none)", 1, true), diag)
 end
 
 if #failures > 0 then error("peer choice regression:\n  " .. table.concat(failures, "\n  "), 0) end

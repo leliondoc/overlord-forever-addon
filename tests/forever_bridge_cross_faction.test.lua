@@ -228,4 +228,8 @@ assert((net.stats.enemyTotalsFromFriends or 0) >= 1, "enemy totals from friends 
 assert((net.stats.enemyTotalsFromChannel or 0) >= 1, "enemy totals from the channel not counted")
 local report = table.concat(net:GetKindDiagnostics(12), " ")
 assert(report:find("Enemy live totals received:", 1, true), "cross-faction line missing from /ov network")
+-- The bridges line names the enemy friends and what each can do.
+local bridges = report:match("Battle.net bridges:[^.]*%.")
+assert(bridges and bridges:find("Friend ", 1, true) and bridges:find("[", 1, true),
+    "the bridges line does not name the opposite-faction friends: " .. tostring(bridges))
 print("Forever cross-faction bridge: own-faction totals to enemy friends, enemy totals to the channel, bounds, no loop, no duplicate OK")

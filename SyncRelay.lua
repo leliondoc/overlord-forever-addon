@@ -1134,16 +1134,29 @@ function net:GetKindDiagnostics(maxRows)
         math.floor((net.GetBridgeShare and net:GetBridgeShare() or 1) * 100 + 0.5),
         self.stats.bridgeLKDeferred or 0)
     local enemies, live = 0, 0
+    -- Named, with what each can do: "why no data from my friend of the other faction?"
+    local named = {}
     local targets = sync.GetBetaBNetTargets and sync:GetBetaBNetTargets() or {}
     for _, id in ipairs(targets) do
-        local faction = sync.GetBetaBNetTargetInfo and sync:GetBetaBNetTargetInfo(id)
+        local faction, character
+        if sync.GetBetaBNetTargetInfo then faction, character = sync:GetBetaBNetTargetInfo(id) end
         if (faction == "Alliance" or faction == "Horde") and faction ~= addon.PlayerFaction then
             enemies = enemies + 1
-            if bnetAlive(id) then live = live + 1 end
+            local heard = bnetAlive(id)
+            if heard then live = live + 1 end
+            if #named < 4 and type(character) == "string" and character ~= "" then
+                local capability = self:GetPeerPagedProtocol(character)
+                named[#named + 1] = character .. " [" .. (not heard and "not heard under Overlord"
+                    or capability and capability < (sync.PAGED_PROTOCOL or 9)
+                        and "live bridge; before 1.8.1: no ranking catch-up"
+                    or capability and "live bridge; ranking catch-up"
+                    or "live bridge; version not heard yet") .. "]"
+            end
         end
     end
     lines[#lines + 1] = string.format("Battle.net bridges: %d of %d opposite-faction friends heard in the last %d min"
-        .. " (the others only get rotating copies).", live, enemies, BNET_ALIVE_SEC / 60)
+        .. " (the others only get rotating copies)%s.", live, enemies, BNET_ALIVE_SEC / 60,
+        #named > 0 and (": " .. table.concat(named, ", ") .. (enemies > #named and " ..." or "")) or "")
     lines[#lines + 1] = string.format("Map pulls on a neighbour's presence skipped (it knew no newer capture): %d.",
         self.stats.mapPullsNoNews or 0)
     lines[#lines + 1] = string.format("Bridge election: %d same-faction bridges heard, crossing share %d%%"
