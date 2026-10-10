@@ -141,6 +141,19 @@ do
         z._remoteCaptureLease = nil
         set(Z, "Alliance", EPOCH + 800)
     end
+    -- The same validated map again within 30 s is not parsed again, but it still
+    -- counts as a complete map just received (the pulls on presence wait for it).
+    set(Y, "Horde", EPOCH + 2700)
+    local again = snapshot()
+    set(Y, "Alliance", EPOCH + 500)
+    deliver(again)
+    assert(state(Y) == "Horde@" .. (EPOCH + 2700), "fixture: the map was not accepted")
+    local skippedBefore = Overlord.Relay and Overlord.Relay.stats.zaIdenticalSkipped or 0
+    sync._lastFullZaAt = nil
+    deliver(again)
+    assert(sync._lastFullZaAt, "an identical map received again was not recorded")
+    assert(not Overlord.Relay or (Overlord.Relay.stats.zaIdenticalSkipped or 0) == skippedBefore + 1,
+        "fixture: the second copy was parsed again")
 end
 print("Partial merge: a disputed orange zone keeps its wave and the rest of the map merges")
 
@@ -366,41 +379,70 @@ assert(#relayed == beforeRetake + 1, "catch-up/state backlog suppressed the late
 Overlord.Relay.GetQueueSummary = realSummary
 print("Forever zone partial merge: stale entries skipped per entry, guards kept, C relay retried beyond coalescing OK")
 
--- (4) Map stamp (~m): an orange zone counts by the stable base our map serves for it.
+-- (4) Map content stamp (~z): an orange zone counts by the stable base our map serves
+-- for it, and the stamp says exactly what the map (ZA) would serve.
 do
-    local function b36(n)
+    local function b36(n, width)
         local digits, out = "0123456789abcdefghijklmnopqrstuvwxyz", ""
         repeat local r = n % 36; out = digits:sub(r + 1, r + 1) .. out; n = math.floor(n / 36) until n == 0
-        return out
+        return string.rep("0", (width or 0) - #out) .. out
     end
-    local newest = 0
-    for _, z in ipairs(zones) do newest = math.max(newest, math.floor(tonumber(z.capturedTime) or 0)) end
+    -- Rebuilt from the served map itself: every owned entry of the global snapshot.
+    local function served()
+        local sum, digest, newest = 0, 0, 0
+        for _, page in ipairs(snapshot()) do
+            for entry in page:match("|(.*)$"):gmatch("[^,]+") do
+                local id, code, _, ct = strsplit(":", entry)
+                if code == "A" or code == "H" then
+                    ct = math.floor(tonumber(ct) or 0)
+                    local text, hash = id .. code .. ct, 5381
+                    for i = 1, #text do hash = (hash * 33 + text:byte(i)) % 2147483647 end
+                    sum, digest, newest = sum + ct, (digest + hash) % 2147483647, math.max(newest, ct)
+                end
+            end
+        end
+        return "~m" .. b36(newest) .. "~o0~z" .. b36(digest, 6) .. b36(sum), newest
+    end
+    local _, newest = served()
     newest = newest + 1000
     local z = zoneOf(Y)
     z.owner, z.status, z.capturedTime, z.updatedAt = "Horde", "captured", newest, newest
+    local calm = served()
     z._remoteCaptureLease = { owner = "Alliance", originKey = "carl tester", waveId = "w9",
         base = { owner = "Horde", status = "captured", capturedTime = newest, updatedAt = newest } }
     z.status, z.owner, z.previousOwner = "in_progress", "Alliance", "Horde"
+    assert(served() == calm, "fixture: the served map changed under a siege")
     local pulls = {}
     local realRequest = sync.SendSyncRequest
     sync.SendSyncRequest = function(_, opts) pulls[#pulls + 1] = opts and opts.betaTarget; return true end
     local function presence(who, stamp)
         Overlord.Relay:Receive("global|stamp-" .. who:gsub(" ", "") .. "|" .. time() .. "|*|" .. who
-            .. "|NH|1.8.2~m" .. stamp .. "~o0~l9~ld~lr~lp6", who, "CHANNEL")
+            .. "|NH|1.8.2" .. stamp .. "~l9~ld~lr~lp6", who, "CHANNEL")
     end
     sync._lastFullZaAt = nil
     clock = clock + 10 -- (own stamp cached 5 s)
     local skipped = Overlord.Relay.stats.mapPullsNoNews or 0
-    presence("Stamp Same", b36(newest))
+    presence("Stamp Same", calm)
     assert(#pulls == 0 and (Overlord.Relay.stats.mapPullsNoNews or 0) == skipped + 1,
-        "a siege on our newest capture lowered our map stamp (useless pull)")
-    presence("Stamp Newer", b36(newest + 1))
-    assert(pulls[1] == "Stamp Newer", "a neighbour knowing a newer capture was not pulled")
-    -- No base under the siege: the overlay is never counted.
+        "a siege on a capture changed what our presence says of the map (useless pull)")
+    -- Our own presence says the same thing as the map we serve.
+    local queued, realQueue = nil, Overlord.Relay.Queue
+    Overlord.Relay.Queue = function(_, packet) if packet.kind == "NH" then queued = packet end; return true end
+    Overlord.Relay:Send("NH", tostring(Overlord.Version or ""))
+    Overlord.Relay.Queue = realQueue
+    assert(queued and queued.payload:find(calm .. "~l9~ld~lr~lp6", 1, true),
+        "own presence does not say what the served map holds: " .. tostring(queued and queued.payload))
+    -- A neighbour that also holds a capture we lack is pulled.
+    set("elwynn_goldshire", "Horde", newest + 1)
+    local richer = served()
+    set("elwynn_goldshire", "Alliance", EPOCH + 2000)
+    presence("Stamp Newer", richer)
+    assert(pulls[1] == "Stamp Newer", "a neighbour holding a capture we lack was not pulled")
+    -- No base under the siege: the overlay is never counted, the zone counts for nothing.
     z._remoteCaptureLease = nil
     z.capturedTime = newest + 500
     clock = clock + 10
-    presence("Stamp Base", b36(newest))
+    presence("Stamp Base", calm)
     assert(pulls[2] == "Stamp Base", "an in-progress zone without a base counted in the map stamp")
     sync.SendSyncRequest = realRequest
     z.owner, z.status, z.capturedTime, z.updatedAt, z.previousOwner = "Alliance", "captured", EPOCH + 500, EPOCH + 500, nil

@@ -1876,6 +1876,15 @@ function Overlord.Sync:RunBetaPeerLoginCatchup(attempt)
     return #targets
 end
 
+-- A complete map was accepted: when, and when from the other faction (the periodic
+-- pull toward the other faction only waits for those).
+function Overlord.Sync:NoteFullMapReceived(sender)
+    local now = GetTime()
+    self._lastFullZaAt = now
+    local theirs, mine = self:GetBetaPeerFaction(sender), Overlord.PlayerFaction
+    if theirs and mine and theirs ~= mine then self._lastEnemyFullZaAt = now end
+end
+
 -- Rattrapage periodique de la carte : le canal ne porte plus les photos ZA. Un seul
 -- voisin direct par tour (reponse garantie, sans relais), un tour sur deux vers
 -- l'autre faction, et aucun tour si une carte complete vient d'arriver.
@@ -1899,17 +1908,6 @@ end
 function Overlord.Sync:RunPeriodicMapCatchup()
     local net = Overlord.Relay
     if not net or Overlord.InstanceSuspended or IsInInstance() then return false end
-    -- A map received within the interval skips this pull. Tried at 60 s in 1.2.4
-    -- testing: every client pulled far more often and full replies flooded the relay.
-    -- 1.7.2: a ZA carries no keep/outpost claim and the targeted pull is the only
-    -- way to learn a capture we did not witness: a held site still waiting for
-    -- its snapshot keeps the pull.
-    local outpostWaiting = Overlord.Outpost and Overlord.Outpost.HasStateAwaitingNetwork
-        and Overlord.Outpost:HasStateAwaitingNetwork()
-    if not outpostWaiting and self._lastFullZaAt
-        and GetTime() - self._lastFullZaAt < self.BETA_MAP_CATCHUP_INTERVAL then
-        return false
-    end
     local myName = self:GetPlayerFullName()
     local myFaction = Overlord.PlayerFaction
     local enemies, allies = {}, {}
@@ -1923,7 +1921,25 @@ function Overlord.Sync:RunPeriodicMapCatchup()
             end
         end
     end
-    self._mapCatchupRound = (tonumber(self._mapCatchupRound) or 0) + 1
+    -- A map received within the interval skips this pull. Tried at 60 s in 1.2.4
+    -- testing: every client pulled far more often and full replies flooded the relay.
+    -- 1.7.2: a ZA carries no keep/outpost claim and the targeted pull is the only
+    -- way to learn a capture we did not witness: a held site still waiting for
+    -- its snapshot keeps the pull.
+    -- 1.8.2: the other faction's turn only looks at maps that came from the other
+    -- faction. On a busy channel our own side's maps arrive all the time, so this
+    -- pull never ran: the enemy friend, the only way to the other faction's map,
+    -- was never asked, and each faction kept its own captures on its own map.
+    local round = (tonumber(self._mapCatchupRound) or 0) + 1
+    local lastMapAt = self._lastFullZaAt
+    if round % 2 == 1 and #enemies > 0 then lastMapAt = self._lastEnemyFullZaAt end
+    local outpostWaiting = Overlord.Outpost and Overlord.Outpost.HasStateAwaitingNetwork
+        and Overlord.Outpost:HasStateAwaitingNetwork()
+    if not outpostWaiting and lastMapAt
+        and GetTime() - lastMapAt < self.BETA_MAP_CATCHUP_INTERVAL then
+        return false
+    end
+    self._mapCatchupRound = round
     local first, second = allies, enemies
     if self._mapCatchupRound % 2 == 1 then first, second = enemies, allies end
     local list = #first > 0 and first or second
@@ -7820,7 +7836,7 @@ function Overlord.Sync:OnReceiveZoneAll(
     if payload == self._lastAcceptedZaPayload
         and GetTime() - (self._lastAcceptedZaAt or -math.huge) < 30
         and next(priv.zaFlipClaims) == nil then
-        if snapshotGlobal then self._lastFullZaAt = GetTime() end
+        if snapshotGlobal then self:NoteFullMapReceived(sender) end
         local betaNet = Overlord.Relay
         if betaNet and betaNet.stats then
             betaNet.stats.zaIdenticalSkipped = (betaNet.stats.zaIdenticalSkipped or 0) + 1
@@ -8217,7 +8233,7 @@ function Overlord.Sync:OnReceiveZoneAll(
     if snapshotGlobal then
         for entryIndex = 1, #entries do
             if not staleSkipMask[entryIndex] then
-                self._lastFullZaAt = GetTime()
+                self:NoteFullMapReceived(sender)
                 break
             end
         end

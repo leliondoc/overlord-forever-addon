@@ -70,6 +70,28 @@ assert(sync:RunPeriodicMapCatchup() and sync:RunPeriodicMapCatchup())
 assert(#whispers == 2 and whispers[1].kind == "SR" and whispers[1].payload:match(":T$"))
 assert(factions[whispers[1].target] == "Alliance" and factions[whispers[2].target] == "Horde",
     "Map catch-up did not alternate factions")
+-- 1.8.2: a map of our own side received within the interval skips our own side's
+-- turn, never the other faction's (on a busy channel such maps arrive all the time,
+-- and the enemy friend, the only way to the other faction's map, was never asked).
+whispers = {}
+sync._mapCatchupRound = 0
+sync._lastFullZaAt, sync._lastEnemyFullZaAt = GetTime(), nil
+assert(sync:RunPeriodicMapCatchup() and factions[whispers[1].target] == "Alliance",
+    "A map of our own side skipped the pull toward the other faction")
+assert(not sync:RunPeriodicMapCatchup() and #whispers == 1 and sync._mapCatchupRound == 1,
+    "A map received within the interval did not skip our own side's turn")
+-- A map from the other faction within the interval does skip the other faction's turn.
+sync._mapCatchupRound = 0
+sync._lastFullZaAt, sync._lastEnemyFullZaAt = GetTime(), GetTime()
+assert(not sync:RunPeriodicMapCatchup() and #whispers == 1,
+    "A fresh map of the other faction did not skip the pull toward it")
+-- An accepted map says which side it came from.
+sync._lastFullZaAt, sync._lastEnemyFullZaAt = nil, nil
+sync:NoteFullMapReceived("Horde PeerA")
+assert(sync._lastFullZaAt and not sync._lastEnemyFullZaAt, "A map of our own side counted as the other faction's")
+sync:NoteFullMapReceived("Ally PeerA")
+assert(sync._lastEnemyFullZaAt, "A map of the other faction was not noted as such")
+sync._lastFullZaAt, sync._lastEnemyFullZaAt = nil, nil
 timers = {}
 sync.SchedulePeriodicMapCatchup = realScheduleMapCatchup
 sync._mapCatchupArmed = nil

@@ -624,11 +624,19 @@ local session = base36(time()) .. base36(math.random(0, 60466175), 5)
 -- An orange zone counts by its stable base, the state our map (ZA) serves for it: a
 -- siege on the newest capture no longer lowers the stamp (pulls that bring nothing)
 -- nor hides that capture from a neighbour that missed it. No base: not counted.
-local mapStampCache = { at = -1000, value = 0 }
+-- Map content (1.8.2). The newest capture alone could not see a hole: a client that
+-- missed a capture on one front but held a newer one elsewhere advertised the same
+-- date as its neighbours and never pulled again, so the older owner stayed on its
+-- map for the week (seen in game: one front frozen while the next one followed). Own
+-- presence now also says what the map holds, "~z<digest><sum>": the digest is a
+-- hash of every owner and capture date (two equal maps, nothing to pull); the sum
+-- adds the capture dates. A capture only ever raises its zone's date, so the client
+-- that lacks one has the lower sum: it pulls, the other one waits.
+local mapStampCache = { at = -1000, value = 0, sum = 0, digest = 0 }
 local function localMapStamp()
     local now = GetTime()
-    if now - mapStampCache.at < 5 then return mapStampCache.value end
-    local best = 0
+    if now - mapStampCache.at < 5 then return mapStampCache.value, mapStampCache.sum, mapStampCache.digest end
+    local best, sum, digest = 0, 0, 0
     local registry = addon.Fronts and addon.Fronts.Registry
     local zonesApi = addon.Zones
     for _, front in pairs(registry or {}) do
@@ -640,11 +648,17 @@ local function localMapStamp()
             if view and view.owner and not zone._loginSyncUnconfirmed then
                 local ct = math.floor(tonumber(view.capturedTime) or 0)
                 if ct > best then best = ct end
+                sum = sum + ct
+                -- Order-free: the registry is not walked in the same order everywhere.
+                local text = tostring(zone.id) .. (view.owner == "Alliance" and "A" or "H") .. ct
+                local hash = 5381
+                for i = 1, #text do hash = (hash * 33 + text:byte(i)) % 2147483647 end
+                digest = (digest + hash) % 2147483647
             end
         end
     end
-    mapStampCache.at, mapStampCache.value = now, best
-    return best
+    mapStampCache.at, mapStampCache.value, mapStampCache.sum, mapStampCache.digest = now, best, sum, digest
+    return best, sum, digest
 end
 -- Keeps and outposts (1.8.2): the same map reply carries their captures, and a capture
 -- missed live is believed from nothing else than a reply we asked for (1.7.2). The
@@ -808,6 +822,56 @@ local function crossElected(p)
         .. "|" .. tostring(p.id)) < share
 end
 function net:GetCrossElection() return sameFactionBridgeCount(), crossShare() end
+-- Two maps that differ (1.8.2, see localMapStamp). Decided per pair of maps, not per
+-- neighbour: a hundred neighbours holding the same other map are one question.
+--  * The neighbour's sum is not lower: it holds a capture we lack. Pull now; if our
+--    map did not change (reply lost or refused), again after 1, 2, 4... 10 min.
+--  * Its sum is lower: it lacks one of ours and pulls on our own presence. It may
+--    still hold one we lack; that shows once it has caught up (its sum passes ours).
+--    Should it never catch up, a few of its neighbours, drawn afresh every 10 min
+--    (about MAP_DIFF_ASKERS of them), pull it anyway after 5 min, then every 10 min.
+-- Returns the pair's row when a pull is due (the caller stamps it once sent).
+net.MAP_DIFF_ROWS, net.MAP_DIFF_ASKERS = 16, 4
+-- tonumber(text, 36) stops at 32 bits on some builds; the sum of the dates is larger.
+function net.ParseBase36(text)
+    local value = 0
+    for i = 1, #text do
+        local byte = text:byte(i)
+        local digit = (byte >= 48 and byte <= 57 and byte - 48) or (byte >= 97 and byte <= 122 and byte - 87) or nil
+        if not digit then return nil end
+        value = value * 36 + digit
+    end
+    return #text > 0 and value or nil
+end
+function net:MapDiffDue(digest, sum, peerDigest, peerSum, origin, now)
+    local rows = self.mapDiffs
+    if not rows then rows = {}; self.mapDiffs = rows end
+    local key = digest .. ":" .. peerDigest
+    local row = rows[key]
+    if not row then
+        local count, oldestKey, oldestAt = 0, nil, nil
+        for other, entry in pairs(rows) do
+            count = count + 1
+            if not oldestAt or entry.seen < oldestAt then oldestKey, oldestAt = other, entry.seen end
+        end
+        if count >= self.MAP_DIFF_ROWS and oldestKey then rows[oldestKey] = nil end
+        row = { first = now, seen = now, at = -100000, tries = 0 }
+        rows[key] = row
+    end
+    row.seen = now
+    if peerSum >= sum then
+        local wait = row.tries == 0 and 0 or math.min(600, 60 * 2 ^ (row.tries - 1))
+        return now - row.at >= wait and row or nil
+    end
+    if now - row.first < 300 or now - row.at < 600 then return nil end
+    local share = self.MAP_DIFF_ASKERS / math.max(1, self:CountDirectPeers())
+    if share < 1 then
+        local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
+        if hashFrac(tostring(me):lower() .. "|" .. tostring(origin):lower() .. "|"
+            .. math.floor(now / 600)) >= share then return nil end
+    end
+    return row
+end
 local heldForwards, heldCount = {}, { bridge = 0, group = 0 }
 local HELD_FORWARD_MAX = { bridge = 256, group = 128 }
 local function holdForward(key, p, mode)
@@ -1164,9 +1228,9 @@ function net:GetKindDiagnostics(maxRows)
     lines[#lines + 1] = string.format("Battle.net bridges: %d of %d opposite-faction friends heard in the last %d min"
         .. " (the others only get rotating copies)%s.", live, enemies, BNET_ALIVE_SEC / 60,
         #named > 0 and (": " .. table.concat(named, ", ") .. (enemies > #named and " ..." or "")) or "")
-    lines[#lines + 1] = string.format("Map pulls on a neighbour's presence skipped (it knew no newer capture): %d;"
-        .. " sent for a keep or outpost capture: %d.",
-        self.stats.mapPullsNoNews or 0, self.stats.mapPullsForSites or 0)
+    lines[#lines + 1] = string.format("Map pulls on a neighbour's presence skipped (same map, or its turn to pull): %d;"
+        .. " sent for a different map: %d; for a keep or outpost capture: %d.",
+        self.stats.mapPullsNoNews or 0, self.stats.mapPullsForDiff or 0, self.stats.mapPullsForSites or 0)
     lines[#lines + 1] = string.format("Bridge election: %d same-faction bridges heard, crossing share %d%%"
         .. " (100%% up to %d), %d enemy copies of routine traffic and %d score rows left to the elected forwarders;"
         .. " %d captures not sent back to the side that made them.",
@@ -2022,10 +2086,11 @@ function net:Send(kind, payload, target, immediate)
     -- "~l9" (1.8.1): ranking capability 9, v8 pages with the Skyborne race; peers
     -- advertising less are neither asked nor served (SyncLeaderboardPages).
     if kind == "NH" and payload == tostring(addon.Version or "") then
-        local stamp = localMapStamp()
+        local stamp, sum, digest = localMapStamp()
         local sites = sync.GetOutpostMapStamps and sync:GetOutpostMapStamps() or 0
         payload = payload .. (self:HasLiveEnemyBridge() and "~b" or "")
-            .. "~m" .. base36(stamp) .. "~o" .. base36(sites) .. "~l9~ld~lr~lp6"
+            .. "~m" .. base36(stamp) .. "~o" .. base36(sites)
+            .. "~z" .. base36(digest, 6) .. base36(sum) .. "~l9~ld~lr~lp6"
     end
     -- Handlers may rebroadcast received snapshots. The existing packet is already
     -- forwarded below; do not give that replay a fresh author or hop budget.
@@ -2161,21 +2226,33 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         -- the same bridge with redundant leaderboard responses during login.
         -- At most two targeted map pulls per minute, with no roster/club needed.
         local now = GetTime()
-        if not self.pullWindow or now - self.pullWindow >= 60 then self.pullWindow, self.pulls = now, 0 end
+        if not self.pullWindow or now - self.pullWindow >= 60 then
+            self.pullWindow, self.pulls, self.friendPulls = now, 0, 0
+        end
         self.requested = self.requested or {}
         local last = self.requested[origin:lower()] or -300
         -- A complete global map arrived moments ago: another full map pulled just
         -- because a new peer spoke would only repeat it. Periodic and login map
         -- catch-ups are unchanged.
         local recentFullMap = sync._lastFullZaAt and now - sync._lastFullZaAt < 45
-        -- A neighbour that advertises its newest capture and knows none newer than
-        -- ours has nothing a full map would add (older clients advertise nothing:
-        -- unchanged for them). Periodic and login catch-ups are unchanged.
-        local advertisedMap = p.payload:match("~m(%w+)~")
-        local peerStamp = advertisedMap and tonumber(advertisedMap, 36) or nil
+        -- A neighbour whose map holds what ours holds has nothing a full map would
+        -- add; one that holds something else is pulled by whoever lacks a capture
+        -- (see MapDiffDue). A neighbour that says nothing about its content (1.8.1
+        -- and older) is pulled as before the stamps. Periodic and login catch-ups
+        -- are unchanged.
         local advertisedSites = p.payload:match("~o(%w+)~")
         local peerSites = advertisedSites and tonumber(advertisedSites, 36) or nil
-        local noNews = peerStamp ~= nil and peerSites ~= nil and peerStamp <= localMapStamp()
+        local content = p.payload:match("~z(%w+)~")
+        local peerDigest = content and #content > 6 and self.ParseBase36(content:sub(1, 6)) or nil
+        local peerSum = peerDigest and self.ParseBase36(content:sub(7)) or nil
+        local noNews, diffRow = false, nil
+        if peerDigest and peerSum and peerSites ~= nil then
+            local _, sum, digest = localMapStamp()
+            if peerDigest ~= digest then
+                diffRow = self:MapDiffDue(digest, sum, peerDigest, peerSum, origin, now)
+            end
+            noNews = diffRow == nil
+        end
         -- A keep or outpost capture we do not hold (see the "~o" stamp above).
         local forSites = false
         if noNews and sync.GetOutpostMapStamps then
@@ -2186,17 +2263,26 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
                 noNews, forSites = false, true
             end
         end
-        if noNews and #p.path == 1 and self.pulls < 2 and now - last >= 300 and not recentFullMap then
+        -- A Battle.net friend is the only way to the other faction's map: its
+        -- presence (one per friend every 120 s) has one pull a minute of its own,
+        -- which a busy channel cannot use up.
+        local budget = self.pulls < 2
+        local friendPull = not budget and transport == "BNET" and (self.friendPulls or 0) < 1
+        if noNews and #p.path == 1 and (budget or friendPull) and now - last >= 300 and not recentFullMap then
             self.stats.mapPullsNoNews = (self.stats.mapPullsNoNews or 0) + 1
         end
         -- Only a direct neighbour is asked: its map reply never needs a relay.
-        if #p.path == 1 and self.pulls < 2 and now - last >= 300 and not recentFullMap and not noNews then
-            self.pulls = self.pulls + 1
+        if #p.path == 1 and (budget or friendPull) and now - last >= 300 and not recentFullMap and not noNews then
+            if friendPull then self.friendPulls = (self.friendPulls or 0) + 1 else self.pulls = self.pulls + 1 end
             -- Bound this cache by the same live peer population.
             self.requested = self.requested or {}
             if not self.requestOrder then self.requestOrder = {} end
             if sync:SendSyncRequest({ betaTarget = origin }) then
                 remember(self.requested, self.requestOrder, origin:lower(), now, 125)
+                if diffRow and not forSites then
+                    diffRow.at, diffRow.tries = now, diffRow.tries + 1
+                    self.stats.mapPullsForDiff = (self.stats.mapPullsForDiff or 0) + 1
+                end
                 if forSites then
                     local asked = self.sitesPull
                     if not asked or peerSites > asked.stamp or now - asked.at >= 1800 then

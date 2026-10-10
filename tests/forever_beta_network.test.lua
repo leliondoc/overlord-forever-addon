@@ -915,8 +915,10 @@ do
     end
     busy.friends = {}
 end
--- Map freshness: a neighbour's presence pulls our map only when it knows a newer
--- capture than ours (older clients, which advertise nothing, are pulled as before).
+-- Map content (1.8.2): a neighbour's presence pulls our map when the two maps differ,
+-- and the one that lacks a capture pulls. The newest capture alone (1.8.1) could not
+-- see a capture missed on one front under a newer one held elsewhere. Clients that
+-- say nothing about their content (1.8.1 and older) are pulled as before.
 do
     local fresh = client("Fresh Tester", "fresh-chan")
     fresh.Fronts = { Registry = { arathi = { zones = {
@@ -928,25 +930,97 @@ do
         pulls[#pulls + 1] = options and options.betaTarget
         return true
     end
-    local function presence(who, suffix)
+    local function presence(who, suffix, transport, friend)
         fresh.Relay:Receive("global|map-" .. who:gsub(" ", "") .. "|" .. time() .. "|*|" .. who
-            .. "|NH|1.0.0" .. suffix .. "~ld~lr~lp6", who, "CHANNEL")
+            .. "|NH|1.0.0" .. suffix .. "~ld~lr~lp6", who, transport or "CHANNEL", friend)
     end
-    presence("Same Tester", "~m1jk~o0") -- 2000 in base 36: nothing newer than ours
-    assert(#pulls == 0, "A neighbour with no newer capture triggered a full map pull")
+    local function b36(n, width)
+        local digits, out = "0123456789abcdefghijklmnopqrstuvwxyz", ""
+        repeat local r = n % 36; out = digits:sub(r + 1, r + 1) .. out; n = math.floor(n / 36) until n == 0
+        return string.rep("0", (width or 0) - #out) .. out
+    end
+    -- What a map holds, written as the wire says it: "~z" + digest (6) + sum.
+    local function content(...)
+        local sum, digest = 0, 0
+        for _, zone in ipairs({ ... }) do
+            local text, hash = zone[1] .. zone[2] .. zone[3], 5381
+            for i = 1, #text do hash = (hash * 33 + text:byte(i)) % 2147483647 end
+            sum, digest = sum + zone[3], (digest + hash) % 2147483647
+        end
+        return "~z" .. b36(digest, 6) .. b36(sum)
+    end
+    local function pulled(who, suffix, transport, friend)
+        local before = #pulls
+        presence(who, suffix, transport, friend)
+        return #pulls == before + 1 and pulls[#pulls] == who
+    end
+    local ours = content({ "a1", "H", 2000 }) -- the siege in progress has no base: not counted
+    assert(not pulled("Same Tester", "~m1jk~o0" .. ours), "A neighbour holding our map triggered a full map pull")
     assert((fresh.Relay.stats.mapPullsNoNews or 0) == 1, "Skipped pull not counted")
-    presence("Newer Tester", "~m2bi~o0") -- 3000: a capture we do not know
-    assert(pulls[1] == "Newer Tester", "A neighbour knowing a newer capture was not pulled")
-    presence("Older Tester", "")       -- no stamp (older version): pulled as before
-    assert(pulls[2] == "Older Tester", "An older neighbour lost its presence-triggered pull")
-    now = now + 61                     -- (two pulls per minute at most)
+    -- The hole of 2026-10-10: the same newest capture (2000) and an older one we missed.
+    local hole = "~m1jk~o0" .. content({ "a1", "H", 2000 }, { "a0", "A", 1500 })
+    assert(pulled("Hole Tester", hole), "A capture missed under a newer one was never pulled")
+    assert(fresh.Relay.stats.mapPullsForDiff == 1, "Pull for a different map not counted")
+    assert(pulled("Older Tester", ""), "An older neighbour lost its presence-triggered pull")
+    -- Our map did not change (reply lost or refused): the same other map is asked
+    -- again after 1 min, then 2, whoever advertises it.
+    now = now + 61 -- (two pulls per minute at most)
+    assert(pulled("Hole Second", hole), "A lost reply was never asked again")
+    assert(not pulled("Hole Third", hole), "The same other map was pulled on every presence")
+    now = now + 61
+    assert(not pulled("Hole Fourth", hole), "The second retry did not wait two minutes")
+    now = now + 61
+    assert(pulled("Hole Fifth", hole), "The second retry never came")
+    assert(fresh.Relay.stats.mapPullsForDiff == 3)
+    -- Same dates, another owner (two captures in one second): both sides ask.
+    assert(pulled("Tie Tester", "~m1jk~o0" .. content({ "a1", "A", 2000 })), "A tie between two maps was not pulled")
+    -- The neighbour lacks one of ours (lower sum): its turn to pull, on our presence.
+    now = now + 61
+    local behind = "~m11s~o0" .. content({ "a1", "H", 1500 })
+    local skipped = fresh.Relay.stats.mapPullsNoNews
+    assert(not pulled("Behind Tester", behind), "A neighbour that lacks our capture was pulled at once")
+    assert(fresh.Relay.stats.mapPullsNoNews == skipped + 1, "Skipped pull not counted")
+    assert(not pulled("Empty Tester", "~m0~o0~z0000000"), "A neighbour with an empty map was pulled")
+    -- It never caught up: after 5 min a few neighbours pull it anyway, then every 10 min.
+    now = now + 301
+    fresh.Relay.MAP_DIFF_ASKERS = 0
+    assert(not pulled("Behind Unpicked", behind), "A neighbour outside the draw pulled a map that is behind")
+    fresh.Relay.MAP_DIFF_ASKERS = 4
+    assert(pulled("Behind Late", behind), "A map that never caught up was never pulled")
+    now = now + 301
+    assert(not pulled("Behind Again", behind), "A map that is behind was pulled twice within 10 min")
+    now = now + 301
+    assert(pulled("Behind Later", behind), "A map still behind after 10 min was not pulled again")
+    -- The table of pairs is bounded: the pair seen longest ago gives way.
+    for i = 1, 40 do
+        fresh.Relay:MapDiffDue(1, 10, 1000 + i, 5, "Row Tester", now + i)
+    end
+    local rows = 0
+    for _ in pairs(fresh.Relay.mapDiffs) do rows = rows + 1 end
+    assert(rows == fresh.Relay.MAP_DIFF_ROWS, "Map pair table unbounded: " .. rows)
+    now = now + 61
+    -- A Battle.net friend is the way to the other faction's map: when the channel has
+    -- used both pulls of the minute, its presence still has one of its own.
+    local friendMap = "~m1jk~o0" .. content({ "a1", "H", 2000 }, { "h1", "H", 1800 })
+    assert(pulled("Chan First", "") and pulled("Chan Second", ""))
+    assert(not pulled("Chan Third", ""), "More than two channel pulls in a minute")
+    local friend = { name = "Friend Tester", faction = "Horde" }
+    assert(pulled("Friend Tester", friendMap, "BNET", friend), "A friend's different map was not pulled on a busy channel")
+    -- (another map again: the pair just asked would wait a minute anyway)
+    assert(not pulled("Friend Other", "~m1jk~o0" .. content({ "a1", "H", 2000 }, { "h2", "H", 1900 }), "BNET",
+        { name = "Friend Other", faction = "Horde" }), "More than one extra pull a minute for Battle.net friends")
+    now = now + 61
+    assert(pulled("Chan Fourth", "") and pulled("Chan Fifth", ""))
+    assert(pulled("Friend Third", "~m1jk~o0" .. content({ "a1", "H", 2000 }, { "h3", "H", 1950 }), "BNET",
+        { name = "Friend Third", faction = "Horde" }), "The friends' own pull did not come back the next minute")
+    now = now + 61
     fresh.Fronts.Registry.arathi.zones[1].owner = nil -- a fresh week: no capture known here either
     now = now + 6                      -- (own stamp cached 5 s)
-    presence("Empty Tester", "~m0~o0") -- nothing newer than an empty map
-    assert(#pulls == 2, "A neighbour with an empty map was pulled")
+    assert(not pulled("Week Tester", "~m0~o0~z0000000"), "Two empty maps were pulled")
     fresh.Fronts.Registry.arathi.zones[1].owner = "Horde"
     now = now + 6
-    -- Our own presence advertises our newest confirmed capture (not the siege in progress).
+    -- Our own presence advertises our newest confirmed capture (not the siege in
+    -- progress) and what the map holds.
     local advertised
     local freshChannel = fresh.Sync.SendToChannel
     function fresh.Sync:SendToChannel(kind, fragment)
@@ -954,19 +1028,30 @@ do
         return freshChannel(self, kind, fragment)
     end
     assert(fresh.Relay:Send("NH", "1.0.0")); drain()
-    assert(advertised and advertised:find("~m1jk~o0~l9~ld~lr~lp6", 1, true), "Own presence lacks the map stamp")
+    assert(advertised and advertised:find("~m1jk~o0" .. ours .. "~l9~ld~lr~lp6", 1, true), "Own presence lacks the map stamp")
+    -- Clients of 1.8.1 read "~m...~" and nothing else of this.
+    assert(("1.8.2~b~m1jk~o0" .. ours .. "~l9~ld~lr~lp6"):match("~m(%w+)~") == "1jk")
+    -- The sum of sixty-four capture dates is beyond 32 bits, where tonumber(text, 36)
+    -- stops on some builds: the stamp is read digit by digit.
+    assert(fresh.Relay.ParseBase36(b36(114561024000)) == 114561024000, "A sum beyond 32 bits was misread")
+    assert(fresh.Relay.ParseBase36("zik0zj") == 2147483647 and fresh.Relay.ParseBase36("0") == 0)
+    assert(fresh.Relay.ParseBase36("") == nil and fresh.Relay.ParseBase36("1Z") == nil
+        and fresh.Relay.ParseBase36("1-2") == nil, "A malformed stamp was read as a number")
+    -- A truncated stamp says nothing: pulled as before the stamps.
+    now = now + 61
+    assert(pulled("Short Tester", "~m1jk~o0~z12345"), "A truncated content stamp was trusted")
     -- Keeps and outposts (1.8.2): their captures ride the same map reply and are
     -- believed from no other source we did not witness. The zone stamp alone skipped
     -- the pulls that brought them, so they have their own stamp ("~o").
     local served, known = 6000, 5000
     function fresh.Sync:GetOutpostMapStamps() return served, known end
-    local function pulled(who, suffix)
-        local before = #pulls
-        presence(who, suffix)
-        return #pulls == before + 1 and pulls[#pulls] == who
+    local zonesOnly = pulled
+    -- From here every neighbour holds our zones: only the keeps and outposts speak.
+    pulled = function(who, suffix)
+        return zonesOnly(who, suffix:find("~o", 1, true) and (suffix .. ours) or suffix)
     end
     now = now + 61
-    local skipped = fresh.Relay.stats.mapPullsNoNews or 0
+    skipped = fresh.Relay.stats.mapPullsNoNews or 0
     assert(not pulled("Sites Same", "~m1jk~o3uw"), "A neighbour with no newer keep/outpost capture was pulled") -- 5000
     assert(fresh.Relay.stats.mapPullsNoNews == skipped + 1, "Skipped pull not counted")
     -- 1.8.1 advertises its zones only: it says nothing about its keeps and outposts.
@@ -995,7 +1080,8 @@ do
     assert(not pulled("Sites Known", "~m1jk~o5eg"), "A capture our map holds was pulled")
     advertised = nil
     assert(fresh.Relay:Send("NH", "1.0.0")); drain()
-    assert(advertised and advertised:find("~m1jk~o4mo~l9~ld~lr~lp6", 1, true), "Own presence lacks the keep/outpost stamp")
+    assert(advertised and advertised:find("~m1jk~o4mo" .. ours .. "~l9~ld~lr~lp6", 1, true),
+        "Own presence lacks the keep/outpost stamp")
 end
 -- A forged relayed copy carrying a victim's next packet id (ids are predictable)
 -- must not seal that id: the victim's genuine packet, with its own timestamp, still
