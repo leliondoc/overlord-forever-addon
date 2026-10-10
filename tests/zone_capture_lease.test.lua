@@ -287,6 +287,18 @@ expect(Lease:FinalSatisfiesLocalRequirement(zone, "Horde", "Eve", "wunknown", 12
 expect(not Lease:FinalSatisfiesLocalRequirement(zone, "Horde", "Eve", nil, 120)
     and not Lease:FinalSatisfiesLocalRequirement(zone, "Horde", nil, "wunknown", 120),
     "a final without its wave or its capturer was accepted")
+-- Still refused, because they could only cancel the assault on every observer: a
+-- final naming the very wave we follow for another owner, and one that gives the
+-- point to the faction already holding it under the assault.
+do
+    local lease = zone._remoteCaptureLease
+    expect(lease and lease.owner == "Horde" and lease.base and lease.base.owner == "Alliance",
+        "fixture: a Horde assault over an Alliance point is followed")
+    expect(not Lease:FinalSatisfiesLocalRequirement(zone, "Alliance", lease.originKey, lease.waveId, 120),
+        "the followed wave's own name was accepted for another owner")
+    expect(not Lease:FinalSatisfiesLocalRequirement(zone, "Alliance", "Mallory", "wforged", 120),
+        "a final for the faction already holding the point ended the assault")
+end
 Lease:Complete(zone)
 expect(Lease:ShouldRejectFinal(zone, "Bob", "wreplaced"),
     "a replaced wave could still be finalized after the capture completed")

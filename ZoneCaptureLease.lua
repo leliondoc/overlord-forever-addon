@@ -1319,7 +1319,18 @@ function Lease:FinalSatisfiesLocalRequirement(zone, owner, originName, waveId, f
         -- /ov network; Horde captures seen in progress, never turning red). The
         -- refusal protected nothing: with no wave followed the same final is
         -- accepted, and the capture count comes from the capturer's own total.
-        return originKey ~= nil and validWave ~= nil
+        if not originKey or not validWave then return false end
+        -- Two finals are still refused, because they could only cancel the assault
+        -- on every observer: one that names the very wave we follow for another
+        -- owner (it would also close the real capturer's wave), and one that gives
+        -- the point to the faction already holding it under the assault (not a
+        -- capture).
+        if originKey == remote.originKey and validWave == remote.waveId and owner ~= remote.owner then
+            return false
+        end
+        local base = remote.base
+        if type(base) == "table" and base.owner ~= nil and owner == base.owner then return false end
+        return true
     end
     if not sameWave then return false end
     if tonumber(finalRequirement) ~= required then return false end

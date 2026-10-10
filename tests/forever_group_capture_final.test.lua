@@ -218,6 +218,54 @@ do
         "the followed capture was lost after an older final of the other faction")
 end
 
+-- (4d) A final that could only cancel the assault we follow is refused: the point
+-- "captured" by the faction that already holds it, or the followed wave's own name
+-- used for the other faction (it would also close the real capturer's wave). The
+-- assault stays shown and its real final is then taken.
+do
+    set("refuge", "Alliance", T0 - 40000)
+    local point = zoneOf("refuge")
+    advance(60)
+    progress("refuge", "H", "Horde Delta", "wD4", "Player-1-0000DDDD", 5)
+    local lease = point._remoteCaptureLease
+    assert(point.status == "in_progress" and lease, "fixture: the Horde assault is not followed")
+    advance(3)
+    finalC("refuge", "Alliance", "Mallory Forger", "wM", "Player-1-0000FFFF")
+    assert(point.status == "in_progress" and point._remoteCaptureLease == lease,
+        "a final for the faction already holding the point cancelled the assault")
+    finalC("refuge", "Alliance", "Horde Delta", "wD4", "Player-1-0000DDDD")
+    assert(point.status == "in_progress" and point._remoteCaptureLease == lease,
+        "the followed wave's name used for the other faction cancelled the assault")
+    finalZS("refuge", "A", "Horde Delta", "wD4", "Player-1-0000DDDD")
+    assert(point.status == "in_progress" and point._remoteCaptureLease == lease,
+        "the same forged final as a state message cancelled the assault")
+    advance(115)
+    local hordeAt = wall
+    finalC("refuge", "Horde", "Horde Delta", "wD4", "Player-1-0000DDDD")
+    assert(point.owner == "Horde" and point.status == "captured" and point.capturedTime == hordeAt,
+        "the real capture was refused after a forged final: " .. tostring(point.owner) .. "/" .. tostring(point.status))
+end
+
+-- On a point nobody holds too: the followed wave's own name for the other faction is
+-- refused, while another player's capture for that faction still counts (4).
+do
+    local point = zoneOf("argorok")
+    point.owner, point.status, point.capturedTime, point.updatedAt = nil, "locked", nil, 0
+    advance(60)
+    progress("argorok", "H", "Horde Delta", "wD5", "Player-1-0000DDDD", 5)
+    local lease = point._remoteCaptureLease
+    assert(point.status == "in_progress" and lease, "fixture: the Horde assault on a free point is not followed")
+    advance(3)
+    finalC("argorok", "Alliance", "Horde Delta", "wD5", "Player-1-0000DDDD")
+    assert(point.status == "in_progress" and point._remoteCaptureLease == lease,
+        "on a free point, the followed wave's name used for the other faction cancelled the assault")
+    advance(2)
+    local allyAt = wall
+    finalC("argorok", "Alliance", "Ally Echo", "wE5", "Player-1-0000EEEE")
+    assert(point.owner == "Alliance" and point.capturedTime == allyAt,
+        "another player's capture of a free point for the other faction was refused")
+end
+
 -- (5) Still refused: a final older than what the map holds.
 finalC("faldir", "Horde", "Horde Bravo", "wB5", "Player-1-0000BBBB", takenAt - 50)
 assert(neutral.owner == "Alliance" and neutral.capturedTime == takenAt, "an older final replaced a newer capture")
