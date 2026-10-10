@@ -78,12 +78,18 @@ sync._mapCatchupRound = 0
 sync._lastFullZaAt, sync._lastEnemyFullZaAt = GetTime(), nil
 assert(sync:RunPeriodicMapCatchup() and factions[whispers[1].target] == "Alliance",
     "A map of our own side skipped the pull toward the other faction")
-assert(not sync:RunPeriodicMapCatchup() and #whispers == 1 and sync._mapCatchupRound == 1,
+assert(not sync:RunPeriodicMapCatchup() and #whispers == 1,
     "A map received within the interval did not skip our own side's turn")
+-- A skipped turn is served (that side's map came another way): the next tick is the
+-- other faction's again. The skipped turn used to be tried again forever, so the
+-- other faction was asked once per session while maps of our side kept arriving.
+assert(sync._mapCatchupRound == 2, "A skipped turn was not counted as served")
+assert(sync:RunPeriodicMapCatchup() and #whispers == 2 and factions[whispers[2].target] == "Alliance",
+    "The other faction was never asked again while maps of our own side kept arriving")
 -- A map from the other faction within the interval does skip the other faction's turn.
 sync._mapCatchupRound = 0
 sync._lastFullZaAt, sync._lastEnemyFullZaAt = GetTime(), GetTime()
-assert(not sync:RunPeriodicMapCatchup() and #whispers == 1,
+assert(not sync:RunPeriodicMapCatchup() and #whispers == 2 and sync._mapCatchupRound == 1,
     "A fresh map of the other faction did not skip the pull toward it")
 -- An accepted map says which side it came from.
 sync._lastFullZaAt, sync._lastEnemyFullZaAt = nil, nil

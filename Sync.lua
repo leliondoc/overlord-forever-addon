@@ -1937,6 +1937,10 @@ function Overlord.Sync:RunPeriodicMapCatchup()
         and Overlord.Outpost:HasStateAwaitingNetwork()
     if not outpostWaiting and lastMapAt
         and GetTime() - lastMapAt < self.BETA_MAP_CATCHUP_INTERVAL then
+        -- That side's map just came another way: its turn is served, the other
+        -- side is next (a skipped turn used to be tried again forever, so one side
+        -- whose maps kept arriving kept the other side from ever being asked).
+        self._mapCatchupRound = round
         return false
     end
     self._mapCatchupRound = round
