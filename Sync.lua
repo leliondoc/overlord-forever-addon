@@ -10708,6 +10708,7 @@ end
 -- Coupe toute l'activite sync (events + tickers) pour les instances
 function Overlord.Sync:Suspend()
     self._instanceSuspendAt = GetTime()
+    if self.DropPagedServing then self:DropPagedServing() end
     syncFrame:UnregisterAllEvents()
     syncResponseGeneration = syncResponseGeneration + 1
     syncResponseInFlight = false
