@@ -6064,7 +6064,8 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
         -- player (~4.6 MB per build at 5,000 players). Same values for every reader:
         -- the entry holds them already normalized. Entries carry no factionAt: a row
         -- restored from the snapshot gets 0 there (an older date, the safe side of the
-        -- pool tie-break); src and raceKey are saved along, unused by every reader.
+        -- pool tie-break); src and raceKey, unused by every reader of the saved copy,
+        -- are stripped at logout (SlimSavedSnapshotForLogout).
         for name in pairs(kept) do
             local entry = state.metaIndex[GetKillDedupKey(name)]
             local info = entry or (state.playerInfoSource and state.playerInfoSource[name])
@@ -6254,6 +6255,21 @@ end
 -- campagne en cours. Fusion max() uniquement (jamais de retour en arriere) et meta seulement pour
 -- les noms absents (ne pas ecraser une meta plus fraiche). Aucun rebroadcast autoritaire ici : la
 -- donnee re-circulera, si besoin, par les chemins SR/LK existants (deja plafonnes / anti-spoof).
+-- PLAYER_LOGOUT only, as its last write: the saved snapshot shares the live meta index
+-- entries, whose src and raceKey (and an empty pool, read as "" anyway) no reader of
+-- the saved copy uses. About a quarter of the snapshot text, parsed at every login.
+-- In place: the Lua state ends with this event.
+function Overlord.Leaderboard:SlimSavedSnapshotForLogout()
+    local snapshot = OverlordDB and OverlordDB.leaderboardSnapshot
+    if type(snapshot) ~= "table" or type(snapshot.playerInfo) ~= "table" then return end
+    for _, entry in pairs(snapshot.playerInfo) do
+        if type(entry) == "table" then
+            entry.src, entry.raceKey = nil, nil
+            if entry.pool == "" then entry.pool = nil end
+        end
+    end
+end
+
 function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
     if not OverlordDB then return false end
     local snap = OverlordDB.leaderboardSnapshot

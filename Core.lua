@@ -5082,6 +5082,9 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
                 OverlordDB.leaderboard = nil
             end
         end
+        if Overlord.Leaderboard and Overlord.Leaderboard.SlimSavedSnapshotForLogout then
+            Overlord.Leaderboard:SlimSavedSnapshotForLogout()
+        end
     elseif event == "PLAYER_DEAD" or event == "PLAYER_ALIVE" or event == "PLAYER_UNGHOST" then
         if event == "PLAYER_DEAD" and Overlord.ZoneControl
             and Overlord.ZoneControl.ReleaseLocalCaptureState then
