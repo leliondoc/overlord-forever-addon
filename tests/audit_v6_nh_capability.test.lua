@@ -145,9 +145,9 @@ s.SendWhisper = function(_, kind, payload, target)
     return true
 end
 
--- Update required: a peer whose fresh presence announces an older ranking protocol
--- (v5/v6 before 1.7.0, still open to forged rows; v7/v8 before 1.8.1, races that
--- never match) is not asked at all.
+-- Update required: a peer whose fresh presence announces a ranking protocol older
+-- than 1.8.0's (v5/v6 before 1.7.0, still open to forged rows; v7 without row lists)
+-- is not asked at all. A 1.8.0 peer (v8) is asked for kills and captures (1.8.2).
 assert(not s:StartCompletePagedLeaderboardCatchup("Old Tester", function()
     error("an old peer was asked")
 end), "An old beta peer was asked for a ranking sweep")
@@ -162,15 +162,23 @@ advance(15)
 assert(#sent == 0, "A peer announcing only lp6 received a ranking request")
 assert(s:GetPagedLeaderboardDiagnostics():find("beta v6; not asked (update required)", 1, true),
     "Diagnostics omit the v6 refusal")
-for _, old in ipairs({ "Raced Tester", "Diff Tester" }) do
-    assert(not s:StartCompletePagedLeaderboardCatchup(old, function()
-        error("a peer before 1.8.1 was asked")
-    end), "A peer before 1.8.1 was asked for a ranking sweep: " .. old)
-    advance(15)
-    assert(#sent == 0, "A peer before 1.8.1 received a ranking request: " .. old)
-end
-assert(s:GetPagedLeaderboardDiagnostics():find("beta v8; not asked (update required)", 1, true),
-    "Diagnostics omit the refusal of a 1.8.0 peer")
+assert(not s:StartCompletePagedLeaderboardCatchup("Raced Tester", function()
+    error("a peer before 1.8.0 was asked")
+end), "A peer before 1.8.0 was asked for a ranking sweep")
+advance(15)
+assert(#sent == 0, "A peer before 1.8.0 received a ranking request")
+assert(s:GetPagedLeaderboardDiagnostics():find("beta v7; not asked (update required)", 1, true),
+    "Diagnostics omit the refusal of a 1.7 peer")
+-- 1.8.2: a 1.8.0 peer is asked again, in v8, for its kills and captures.
+assert(s:StartCompletePagedLeaderboardCatchup("Diff Tester", function() end),
+    "A 1.8.0 peer was not asked for a ranking sweep")
+advance(5)
+assert(#sent == 1 and sent[1].version == "8" and sent[1].stream == "LK" and sent[1].target == "Diff Tester",
+    "A 1.8.0 peer was not asked in v8")
+assert(s:GetPagedLeaderboardDiagnostics():find("beta v8; kills and captures only (1.8.0)", 1, true),
+    "Diagnostics omit what a 1.8.0 peer is asked for")
+assert(s:CancelPagedLeaderboardCatchup())
+advance(5)
 
 sent = {}
 assert(s:StartCompletePagedLeaderboardCatchup("Current Tester", function() end))
@@ -182,8 +190,8 @@ assert(s:GetPagedLeaderboardDiagnostics():find("beta v9; l9+ld+lr+lp6 NH", 1, tr
 assert(s:CancelPagedLeaderboardCatchup())
 advance(5)
 
--- ... and a requester whose presence advertises less is not served (an unknown
--- requester still is).
+-- ... and a requester whose presence advertises less than 1.8.0's protocol is not
+-- served (a 1.8.0 one and an unknown one are).
 local ignoredBefore = s._leaderboardPageStats.oldRequestsIgnored or 0
 local answered, replies = 0, {}
 local normalSend = s.SendWhisper
@@ -199,11 +207,65 @@ local function v8Request(nonce, who, count, hash)
         tostring(count or 0), tostring(hash or 0), "-" }, ":"), who, "WHISPER")
     advance(5)
 end
+receive("Raced Tester", "NH", "1.1.3~lr~lp6")
 s:OnPagedLeaderboardMessage("HR", table.concat({ "8", "V", sent[1].epoch, "oldreq", "1", "LK", "0", "0", "-" }, ":"),
-    "Diff Tester", "WHISPER")
+    "Raced Tester", "WHISPER")
 advance(5)
 assert(answered == 0 and (s._leaderboardPageStats.oldRequestsIgnored or 0) == ignoredBefore + 1,
-    "A 1.8.0 requester was served")
+    "A requester before 1.8.0 was served")
+-- A 1.8.0 requester gets its kills ... (its own presence says capability 8)
+receive("Diff Tester", "NH", "1.1.3~m0~ld~lr~lp6")
+v8Request("midreq", "Diff Tester")
+assert(answered > 0 and (s._leaderboardPageStats.oldRequestsIgnored or 0) == ignoredBefore + 1,
+    "A 1.8.0 requester was not served its kills")
+-- ... and, for its race stream, "same as yours" with its own totals (it holds no
+-- Skyborne race: that stream never matches ours), which ends its sweep.
+replies = {}
+s:OnPagedLeaderboardMessage("HR", table.concat({ "8", "V", sent[1].epoch, "midreq", "2", "LR", "7", "4242", "-" }, ":"),
+    "Diff Tester", "WHISPER")
+advance(5)
+assert(#replies == 1 and replies[1].target == "Diff Tester"
+    and replies[1].payload == table.concat({ "8", "S", sent[1].epoch, "midreq", "2", "LR", "7", "4242" }, ":"),
+    "A 1.8.0 requester's race stream was not closed with its own totals: "
+    .. tostring(replies[1] and replies[1].payload))
+assert(s._leaderboardPageStats.raceStreamsSkipped == 1, "Skipped race stream not counted")
+-- That reply ends its sweep: the session is free at once for the next requester.
+replies = {}
+v8Request("midfree", "Current Tester")
+assert(#replies > 0 and not replies[1].payload:find("^8:R:"),
+    "A closed race stream kept the session from the next requester")
+s:OnPagedLeaderboardMessage("HR", table.concat({ "8", "F", sent[1].epoch, "midfree", "1" }, ":"),
+    "Current Tester", "WHISPER")
+advance(1)
+-- Nothing else is answered on that stream: a race list asked inside a session gets
+-- no page, and the session is free for the next requester.
+v8Request("midlist", "Diff Tester")
+replies = {}
+s:OnPagedLeaderboardMessage("HR", table.concat({ "8", "L", sent[1].epoch, "midlist", "2", "LR", "1" }, ":"),
+    "Diff Tester", "WHISPER")
+advance(5)
+assert(#replies == 0, "A race list was answered to a 1.8.0 requester: " .. tostring(replies[1] and replies[1].payload))
+v8Request("midnext", "Current Tester")
+local nextReplies, nextBusy = 0, false
+for _, r in ipairs(replies) do
+    if r.target == "Current Tester" then
+        nextReplies = nextReplies + 1
+        nextBusy = nextBusy or r.payload:find("^8:R:") ~= nil
+    end
+end
+assert(nextReplies > 0 and not nextBusy, "A refused race list kept the session from the next requester")
+s:OnPagedLeaderboardMessage("HR", table.concat({ "8", "F", sent[1].epoch, "midnext", "1" }, ":"),
+    "Current Tester", "WHISPER")
+advance(1)
+-- A 1.8.0 requester never asks in an older exchange: not served there.
+answered = 0
+s:OnPagedLeaderboardMessage("HR", table.concat({ "7", "Q", sent[1].epoch, "midwire", "1", "1", "-", "0", "0", "LK" }, ":"),
+    "Diff Tester", "WHISPER")
+advance(5)
+assert(answered == 0 and (s._leaderboardPageStats.oldRequestsIgnored or 0) == ignoredBefore + 2,
+    "A 1.8.0 requester was served in the v7 exchange")
+ignoredBefore = ignoredBefore + 1
+answered = 0
 s:OnPagedLeaderboardMessage("HR", table.concat({ "8", "V", sent[1].epoch, "newreq", "1", "LK", "0", "0", "-" }, ":"),
     "Current Tester", "WHISPER")
 advance(5)
@@ -214,7 +276,7 @@ answered = 0
 v8Request("unkreq", "Unknown Tester")
 assert(answered > 0 and (s._leaderboardPageStats.oldRequestsIgnored or 0) == ignoredBefore + 1,
     "An unknown-capability requester was refused")
--- ... but not in an older exchange: only clients before 1.8.1 still ask that way.
+-- ... but not in an older exchange: only clients before 1.8.0 still ask that way.
 answered = 0
 s:OnPagedLeaderboardMessage("HR", table.concat({ "7", "Q", sent[1].epoch, "oldwire", "1", "1", "-", "0", "0", "LK" }, ":"),
     "Stranger Tester", "WHISPER")
@@ -240,7 +302,7 @@ replies = {}
 v8Request("later1", "Later Tester", 5, 123)
 local laterReplies, laterBusy = repliesTo("Later Tester")
 assert(laterReplies > 0 and not laterBusy, "fixture: the unknown requester was not served")
-receive("Later Tester", "NH", "1.1.3~m0~ld~lr~lp6")
+receive("Later Tester", "NH", "1.1.3~lr~lp6")
 v8Request("later2", "Later Tester", 5, 123)
 replies = {}
 v8Request("after", "Fresh Tester", 5, 123)
@@ -293,4 +355,4 @@ assert(#sent == 0, "A ranking request went toward a peer behind relays")
 assert(farResult == false, "A pull toward a peer behind relays did not end promptly")
 -- Nothing left for that peer: the scheduler must not set it aside for our own failure.
 assert(farNotAsked == true, "a pull that sent nothing was not reported as such")
-print("NH capability: peers before 1.8.1 neither asked nor served, capability 9 in v8, relayed presence ignored, unknown-capability v8 probe, capability TTL and relayed-peer early end OK")
+print("NH capability: peers before 1.8.0 neither asked nor served, 1.8.0 peers kills and captures only, capability 9 in v8, relayed presence ignored, unknown-capability v8 probe, capability TTL and relayed-peer early end OK")

@@ -468,15 +468,15 @@ for _, name in ipairs(lost) do
         "an own-faction row was not pulled without any ally: " .. name)
 end
 
--- 8b) An ally too old to be asked (1.8.0, capability 8) is no source either: the
---     enemy friend's pull is not filtered.
+-- 8b) An ally too old to be asked (before 1.8.0, capability 7) is no source either:
+--     the enemy friend's pull is not filtered.
 advance(700)
 lost = {}
 for i = 2, #alliance, 3 do lost[#lost + 1] = alliance[i] end
 dropRows(lost)
 local capabilityOf = net.GetPeerPagedProtocol
 net.GetPeerPagedProtocol = function(self, name)
-    if name == ALLY.name then return 8 end
+    if name == ALLY.name then return 7 end
     return capabilityOf(self, name)
 end
 assert(pull(SOURCE) == true, "v8 pull with an old ally failed")
@@ -485,6 +485,113 @@ assert(stats.lastSweepFiltered == false, "an ally too old to be asked still filt
 for _, name in ipairs(lost) do
     assert(PULLER.Overlord.Leaderboard.kills[name] == SOURCE.Overlord.Leaderboard.kills[name],
         "an own-faction row was not pulled with only an old ally: " .. name)
+end
+
+-- 8b') A 1.8.0 ally (capability 8) is a source of our faction's kills and captures:
+--      the enemy friend's pull stays filtered.
+advance(700)
+net.GetPeerPagedProtocol = function(self, name)
+    if name == ALLY.name then return 8 end
+    return capabilityOf(self, name)
+end
+SOURCE.Overlord.Leaderboard:SetPlayerKills(horde[11], SOURCE.Overlord.Leaderboard.kills[horde[11]] + 50, true)
+assert(pull(SOURCE) == true, "v8 pull with a 1.8.0 ally failed")
+net.GetPeerPagedProtocol = capabilityOf
+assert(stats.lastSweepFiltered == true, "a 1.8.0 ally no longer counts as a source of our own faction's rows")
+
+-- 8c) 1.8.2, a 1.8.0 peer (capability 8): kills and captures cross both ways, the
+--     race stream stays out (a 1.8.0 client holds no Skyborne race: that stream never
+--     matched, and every round resent the same race rows both ways).
+do
+    advance(700)
+    local sourceLb, pullerLb = SOURCE.Overlord.Leaderboard, PULLER.Overlord.Leaderboard
+    local zoneId
+    for _, front in pairs(SOURCE.Overlord.Fronts.Registry or {}) do
+        if front.zones and front.zones[1] then zoneId = front.zones[1].id; break end
+    end
+    assert(zoneId, "fixture: no zone to seed a capture")
+    for _, e in ipairs(clients) do
+        e.Overlord.Zones.GetZone = e.Overlord.Zones.GetZone or function(_, id) return id == zoneId and { id = id } or nil end
+    end
+    local function differ(tag)
+        -- A kill total, a capture row and a race that only the source holds.
+        sourceLb:SetPlayerKills(horde[7], sourceLb.kills[horde[7]] + 500, true)
+        sourceLb:SetPlayerCaptureCount(horde[8], (sourceLb.captureCount[horde[8]] or 0) + 3, true)
+        sourceLb:SetPlayerRace(horde[9], tag, 2, false, SOURCE.time())
+        assert((sourceLb:GetExportPlayerRace(horde[9])) == tag, "fixture: the source did not take the race")
+    end
+    local function watch(e, kinds)
+        local seen, send = {}, e.Overlord.Sync.SendWhisper
+        e.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
+            if kinds[kind] then seen[#seen + 1] = kind .. ":" .. payload end
+            return send(self, kind, payload, target)
+        end
+        return seen, function() e.Overlord.Sync.SendWhisper = send end
+    end
+    local function raceOf(e, name) return (e.Overlord.Leaderboard:GetExportPlayerRace(name)) end
+
+    -- Asking: we see the source as a 1.8.0 client. A sweep left at the races by a
+    -- previous neighbour restarts at the kills with this one.
+    differ("Tauren")
+    PULLER.OverlordDB.leaderboardPageProgress.shared = { stream = "LR", bucket = 1, done = 0, at = 0 }
+    local asked, restoreAsked = watch(PULLER, { HR = true })
+    net.GetPeerPagedProtocol = function(self, name)
+        if name == SOURCE.name then return 8 end
+        return capabilityOf(self, name)
+    end
+    assert(pull(SOURCE) == true, "a pull from a 1.8.0 peer failed: "
+        .. PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())
+    net.GetPeerPagedProtocol = capabilityOf
+    restoreAsked()
+    local streams = {}
+    for _, request in ipairs(asked) do
+        local stream = request:match("^HR:8:[VLG]:[^:]*:[^:]*:[^:]*:(L%u)")
+        if stream then streams[stream] = true end
+    end
+    assert(streams.LK and streams.LC, "a 1.8.0 peer was not asked for its kills and captures")
+    assert(not streams.LR, "a 1.8.0 peer was asked for its races")
+    assert(pullerLb.kills[horde[7]] == sourceLb.kills[horde[7]], "kills did not cross from a 1.8.0 peer")
+    assert(pullerLb.captureCount[horde[8]] == sourceLb.captureCount[horde[8]],
+        "captures did not cross from a 1.8.0 peer")
+    assert(raceOf(PULLER, horde[9]) == "Orc", "a race crossed from a 1.8.0 peer")
+    assert(PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics():find("kills and captures only (1.8.0)", 1, true),
+        "diagnostics omit what a 1.8.0 peer gives")
+    assert(stats.lastSweepFull == true and stats.sweepBase == nil, "a sweep with a 1.8.0 peer never ends")
+
+    -- Serving: the source sees us as a 1.8.0 client (we run our usual sweep).
+    advance(700)
+    differ("Troll")
+    local sourceNet = SOURCE.Overlord.Relay
+    local sourceCapability = sourceNet.GetPeerPagedProtocol
+    sourceNet.GetPeerPagedProtocol = function(self, name)
+        if name == PULLER.name then return 8 end
+        return sourceCapability(self, name)
+    end
+    local served, restoreServed = watch(SOURCE, { HA = true, HB = true })
+    local sourceStats = SOURCE.Overlord.Sync._leaderboardPageStats
+    local skippedBefore = sourceStats.raceStreamsSkipped or 0
+    assert(pull(SOURCE) == true, "a 1.8.0 requester's sweep did not end: "
+        .. PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())
+    sourceNet.GetPeerPagedProtocol = sourceCapability
+    restoreServed()
+    local raceReplies, racePages = 0, 0
+    for _, reply in ipairs(served) do
+        if reply:find("^HA:8:S:[^:]*:[^:]*:[^:]*:LR:") then raceReplies = raceReplies + 1 end
+        if reply:find("^HA:8:P:") and reply:find(":LR$") then racePages = racePages + 1 end
+        if reply:find("^HB:8:D:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:LR:") then racePages = racePages + 1 end
+    end
+    assert(raceReplies == 1 and racePages == 0, ("a 1.8.0 requester's race stream: %d closing replies, %d pages"):format(
+        raceReplies, racePages))
+    assert(sourceStats.raceStreamsSkipped == skippedBefore + 1, "skipped race stream not counted")
+    assert(pullerLb.kills[horde[7]] == sourceLb.kills[horde[7]], "kills were not served to a 1.8.0 requester")
+    assert(pullerLb.captureCount[horde[8]] == sourceLb.captureCount[horde[8]],
+        "captures were not served to a 1.8.0 requester")
+    assert(raceOf(PULLER, horde[9]) == "Orc", "a race row was served to a 1.8.0 requester")
+    -- Between two current clients the race does cross (the stream is still served).
+    advance(700)
+    assert(pull(SOURCE) == true, "pull between current clients failed")
+    assert(raceOf(PULLER, horde[9]) == "Troll", "the race stream no longer crosses between current clients")
+    print("v8 with a 1.8.0 peer: kills and captures cross both ways, the race stream stays out")
 end
 
 -- 9) Malformed v8 requests get no answer at all (no session, no busy, no page).

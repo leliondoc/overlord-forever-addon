@@ -1218,8 +1218,10 @@ function net:GetKindDiagnostics(maxRows)
             if #named < 4 and type(character) == "string" and character ~= "" then
                 local capability = self:GetPeerPagedProtocol(character)
                 named[#named + 1] = character .. " [" .. (not heard and "not heard under Overlord"
+                    or capability and capability < (sync.PAGED_ASK_PROTOCOL or 8)
+                        and "live bridge; before 1.8.0: no ranking catch-up"
                     or capability and capability < (sync.PAGED_PROTOCOL or 9)
-                        and "live bridge; before 1.8.1: no ranking catch-up"
+                        and "live bridge; 1.8.0: kills and captures, no races"
                     or capability and "live bridge; ranking catch-up"
                     or "live bridge; version not heard yet") .. "]"
             end

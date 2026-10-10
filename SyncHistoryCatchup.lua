@@ -534,12 +534,13 @@ end
 -- 1.7.5 : un voisin qui annonce moins que v7 (client d'avant 1.7.0) n'est plus
 -- interroge : il acceptait encore les lignes forgees (indice de guilde puis LK sur
 -- le canal) et les servait en pages. Mise a jour requise, aucun repli.
--- 1.8.1: the ranking asks capability 9 only (sync.PAGED_PROTOCOL); the keep/outpost
--- history (SR "H") does not depend on it and still asks from v7 on.
+-- 1.8.2: the ranking asks from capability 8 on (sync.PAGED_ASK_PROTOCOL: 1.8.0
+-- gives kills and captures, 1.8.1 the races too); the keep/outpost history (SR "H")
+-- does not depend on it and still asks from v7 on.
 local HISTORY_MIN_PROTOCOL = 7
 local function IsOldPagedPeer(net, name, minProtocol)
     local capability = net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(name)
-    return capability ~= nil and capability < (minProtocol or sync.PAGED_PROTOCOL or 9)
+    return capability ~= nil and capability < (minProtocol or sync.PAGED_ASK_PROTOCOL or 8)
 end
 
 -- Voisins directs utilisables : ni nous-memes, ni penalises, ni trop anciens.
@@ -924,7 +925,7 @@ function sync:GetCatchupNeighbourDiagnostics()
     local now = GetTime()
     local enemyFaction = ENEMY_FACTION[Overlord.PlayerFaction]
     local enemies, allies, aside, old = {}, {}, {}, {}
-    -- Enemy friends too old to be asked come first in the "before 1.8.1" list, named:
+    -- Enemy friends too old to be asked come first in the "before 1.8.0" list, named:
     -- among dozens of old neighbours the truncated list hid the one being looked for.
     local oldEnemies = 0
     for _, name in ipairs(net:GetDirectPeers()) do
@@ -955,7 +956,7 @@ function sync:GetCatchupNeighbourDiagnostics()
         if #t <= 6 then return table.concat(t, ", ") end
         return table.concat(t, ", ", 1, 6) .. " +" .. (#t - 6)
     end
-    return string.format("Catch-up neighbours: enemy %d (%s); ally %d (%s); set aside %d (%s); before 1.8.1 %d (%s); next round: %s.",
+    return string.format("Catch-up neighbours: enemy %d (%s); ally %d (%s); set aside %d (%s); before 1.8.0 %d (%s); next round: %s.",
         #enemies, list(enemies), #allies, list(allies), #aside, list(aside), #old, list(old), nextPool)
 end
 

@@ -175,9 +175,9 @@ do
     check("the enemy neighbour keeps two rounds out of three", enemyRounds == 6, enemyRounds)
 end
 
--- 4. A neighbour announcing an older ranking protocol (before 1.8.1: before 1.7.0
--- still open to forged rows, before 1.8.1 its races never match) is left out of the
--- rotation, even when it sorts first.
+-- 4. A neighbour announcing a ranking protocol older than 1.8.0's (before 1.7.0
+-- still open to forged rows, 1.7 without row lists) is left out of the rotation,
+-- even when it sorts first. A 1.8.0 neighbour stays in it (kills and captures).
 do
     local w = world({
         { name = "Aged Ally", faction = "Alliance", hops = 1 },
@@ -185,20 +185,36 @@ do
         { name = "Zold Enemy", faction = "Horde", hops = 1 },
     }, "Alliance")
     w.e.Overlord.Relay.GetPeerPagedProtocol = function(_, name)
-        return (name == "Aged Ally" or name == "Zold Enemy") and 8 or 9
+        return (name == "Aged Ally" or name == "Zold Enemy") and 7 or 9
     end
     assert(w.start(), "round not scheduled")
     w.advance(60)
     local hr = w.hr()
     check("a current neighbour is asked", hr[1] and hr[1].target == "Young Ally", hr[1] and hr[1].target)
     for _, m in ipairs(hr) do
-        check("a neighbour older than 1.8.1 was asked", m.target ~= "Aged Ally", m.target)
+        check("a neighbour older than 1.8.0 was asked", m.target ~= "Aged Ally", m.target)
     end
     local diag = w.sync:GetCatchupNeighbourDiagnostics()
     -- The enemy friend too old to be asked is named first, whatever its place by name.
     check("an old neighbour stayed in the rotation, or the old enemy friend is not named first",
-        diag:find("before 1.8.1 2 (Zold Enemy [enemy], Aged Ally)", 1, true)
+        diag:find("before 1.8.0 2 (Zold Enemy [enemy], Aged Ally)", 1, true)
         and diag:find("ally 1 (Young Ally)", 1, true) and diag:find("enemy 0 (none)", 1, true), diag)
+end
+-- 4b. A 1.8.0 neighbour (capability 8) is asked: its kills and captures match ours.
+do
+    local w = world({
+        { name = "Eighty Ally", faction = "Alliance", hops = 1 },
+        { name = "Eighty Enemy", faction = "Horde", hops = 1 },
+    }, "Alliance")
+    w.e.Overlord.Relay.GetPeerPagedProtocol = function() return 8 end
+    assert(w.start(), "round not scheduled")
+    w.advance(60)
+    local hr = w.hr()
+    check("a 1.8.0 neighbour was left out of the ranking rotation",
+        hr[1] and (hr[1].target == "Eighty Ally" or hr[1].target == "Eighty Enemy"), hr[1] and hr[1].target)
+    local diag = w.sync:GetCatchupNeighbourDiagnostics()
+    check("1.8.0 neighbours are listed as too old", diag:find("before 1.8.0 0 (none)", 1, true)
+        and diag:find("ally 1 (Eighty Ally)", 1, true) and diag:find("enemy 1 (Eighty Enemy)", 1, true), diag)
 end
 
 if #failures > 0 then error("peer choice regression:\n  " .. table.concat(failures, "\n  "), 0) end

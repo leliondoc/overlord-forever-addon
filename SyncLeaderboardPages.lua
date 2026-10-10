@@ -5,14 +5,19 @@
 -- update required); responders still answer v5/v6 requests from old clients.
 -- v8 (1.8.0) sends only the rows that differ: one fingerprint per bucket, then one
 -- per row of a differing bucket, then the rows asked for (see the v8 block below).
--- Capability 9 (1.8.1) is v8 between clients that know the Skyborne race: a peer
--- advertising less is neither asked nor served (update required). Its race stream
--- never matched ours, so every round resent the same race rows both ways.
+-- Capability 9 (1.8.1) is v8 between clients that know the Skyborne race. A 1.8.0
+-- client (capability 8) does not hold it: its race stream never matched ours, so
+-- every round resent the same race rows both ways. 1.8.1 neither asked nor served
+-- such a client at all, and kills and captures stopped crossing between the two
+-- versions (rankings apart for as long as both were online; keep and outpost
+-- captures of players unknown to the other side refused). 1.8.2: with capability 8
+-- the sweep carries kills and captures, which do match, and leaves the races out.
+-- Below 8 (before 1.8.0) a peer is neither asked nor served (update required).
 local Overlord = _G.Overlord
 if not Overlord or not Overlord.Sync then return end
 local sync, lb = Overlord.Sync, Overlord.Leaderboard
-local PAGED_PROTOCOL = 9
-sync.PAGED_PROTOCOL = PAGED_PROTOCOL
+local PAGED_PROTOCOL, ASK_PROTOCOL = 9, 8
+sync.PAGED_PROTOCOL, sync.PAGED_ASK_PROTOCOL = PAGED_PROTOCOL, ASK_PROTOCOL
 local BUCKETS, PAGE_ROWS, CHUNK, MAX_PARTS = 64, 16, 170, 24
 local STREAMS = { "LK", "LC", "LR" }
 local STREAM_LIMITS = { LK = 5000, LC = 1500, LR = 6500 }
@@ -34,14 +39,14 @@ end
 -- At least one direct neighbour that is not of the other faction (allies are the
 -- source of our own faction's rows when a pull from an enemy friend skips them).
 -- Only one the ranking rotation may ask: an ally too old to be asked (see
--- PAGED_PROTOCOL) is no source, and the enemy friend's pull stays unfiltered.
+-- ASK_PROTOCOL) is no source, and the enemy friend's pull stays unfiltered.
 local function HasDirectAlly(except)
     local net = Overlord.Relay
     local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
     for _, name in ipairs(net and net.GetDirectPeers and net:GetDirectPeers() or {}) do
         local capability = net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(name)
         if name ~= except and name ~= me and not IsOtherFaction(name)
-            and not (capability and capability < PAGED_PROTOCOL) then return true end
+            and not (capability and capability < ASK_PROTOCOL) then return true end
     end
     return false
 end
@@ -723,7 +728,8 @@ end
 -- v8 transitions: next stream, next differing bucket, next page of wanted rows.
 local function nextStream8(state)
     state.combatWaits = 0
-    if state.stream ~= "LR" then
+    -- raceless: a 1.8.0 peer, kills and captures only (see the header).
+    if state.stream ~= "LR" and not (state.raceless and state.stream == "LC") then
         state.stream = state.stream == "LK" and "LC" or "LR"
         state.phase, state.queue, state.qi, state.bucket, state.completed = "V", nil, 0, 0, 0
         checkpoint(state)
@@ -963,6 +969,21 @@ tryApply = function(state)
 end
 
 local function respond8(session, q)
+    -- A 1.8.0 requester's race stream never matches ours (it holds no Skyborne race):
+    -- it is told "same as yours" with its own totals and ends its sweep there.
+    -- Nothing else is answered on that stream.
+    if q.raceless and q.stream == "LR" then
+        if q.op ~= "V" then
+            if serving == session then serving = nil end
+            return
+        end
+        stats.raceStreamsSkipped = (stats.raceStreamsSkipped or 0) + 1
+        enqueue({ epoch = session.epoch, peer = session.peer, packets = { { "HA",
+            table.concat({ "8", "S", session.epoch, session.nonce, q.seq, "LR",
+                q.totalCount, q.totalHash }, ":") } },
+            done = function() if serving == session then serving = nil end end })
+        return
+    end
     if q.op == "V" and q.whole then
         local a, b = saltOf(session.nonce)
         if profileFp(session.profile, a, b, q.filter) == q.whole then
@@ -1141,7 +1162,7 @@ function sync:CancelPagedLeaderboardCatchup()
     return true
 end
 
-function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, diff)
+function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, diff, raceless)
     peer = self:NormalizeContributorFullName(peer)
     -- Second result: "local" when this client cannot start now (busy, combat,
     -- no campaign), "unsupported" when the peer is known to lack the protocol.
@@ -1155,6 +1176,8 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
     local savedStream = type(saved) == "table" and saved.stream or nil
     local stream = extended and (savedStream == "LC" or savedStream == "LR")
         and savedStream or "LK"
+    -- A sweep left at the races resumes there with a current peer only.
+    if raceless and stream == "LR" then stream = "LK" end
     local resume = type(saved) == "table" and (extended or savedStream == "LK")
         and integer(saved.bucket, 1, BUCKETS) or nil
     local state = { peer = peer, callback = callback, epoch = epoch(), seq = 0,
@@ -1162,6 +1185,7 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
         -- first request still carries the stream digest (one reply if equal).
         completed = resume and savedStream == stream and integer(saved.done, 0, BUCKETS - 1) or 0,
         extended = extended == true, stream = stream, bucket = resume or 1,
+        raceless = raceless == true and diff == true or nil,
         changedAtStart = stats.changedRows or 0,
         wire = extended and (diff and "8" or withRace and "7" or "6") or "5",
         cursor = "-", nonce = tostring(GetServerTime()) .. "n"
@@ -1215,23 +1239,26 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
 end
 
 -- Kills, captures and races in one resumable v8 sweep (1.8.1). A peer whose fresh
--- presence advertises less than PAGED_PROTOCOL is not asked (update required:
--- before 1.7.0 they served forged rows, before 1.8.1 their races never match). An
+-- presence advertises less than ASK_PROTOCOL is not asked (update required: before
+-- 1.7.0 they served forged rows, and v7 has no row lists). With capability 8
+-- (1.8.0) the sweep stops after the captures: its races never match ours. An
 -- unknown peer is probed in v8; an old one stays silent or answers once, and the
 -- scheduler asks another direct neighbour once its presence says what it is.
 function sync:StartCompletePagedLeaderboardCatchup(peer, callback)
     if type(callback) ~= "function" then return false end
     local net = Overlord.Relay
     local capability = net and net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(peer)
-    if capability and capability < PAGED_PROTOCOL then
+    if capability and capability < ASK_PROTOCOL then
         stats.peerProtocol = "beta v" .. capability .. "; not asked (update required)"
         return false, "unsupported"
     end
-    stats.peerProtocol = capability and ("beta v" .. capability .. "; l9+ld+lr+lp6 NH")
+    local raceless = capability ~= nil and capability < PAGED_PROTOCOL
+    stats.peerProtocol = raceless and ("beta v" .. capability .. "; kills and captures only (1.8.0)")
+        or capability and ("beta v" .. capability .. "; l9+ld+lr+lp6 NH")
         or "capability unknown, v8 probe"
     return self:StartPagedLeaderboardCatchup(peer, function(ok, supported, notAsked)
         callback(ok == true, supported == true, notAsked == true)
-    end, true, true, true)
+    end, true, true, true, raceless)
 end
 
 function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
@@ -1251,18 +1278,21 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
             and seq >= serving.seq then serving = nil end
         return
     end
-    -- Update required: a requester whose own presence advertises an older ranking
-    -- protocol is not served (see PAGED_PROTOCOL), nor an unknown one asking in an
-    -- older exchange (a current client only asks in v8). A session already opened
-    -- for it (before its presence said what it is) is released for the others.
+    -- Update required: a requester whose own presence advertises a ranking protocol
+    -- older than ASK_PROTOCOL is not served, nor anyone asking in an exchange
+    -- older than v8 (current and 1.8.0 clients only ask in v8). A session already
+    -- opened for it (before its presence said what it is) is released for the
+    -- others. A 1.8.0 requester gets kills and captures, not the races (raceless).
     local net = Overlord.Relay
+    local raceless = false
     if kind == "HR" and net and net.GetPeerPagedProtocol then
         local theirs = net:GetPeerPagedProtocol(sender)
-        if (theirs and theirs < PAGED_PROTOCOL) or (not theirs and version ~= "8") then
+        if (theirs and theirs < ASK_PROTOCOL) or ((not theirs or theirs < PAGED_PROTOCOL) and version ~= "8") then
             stats.oldRequestsIgnored = (stats.oldRequestsIgnored or 0) + 1
             if serving and serving.peer == sender then serving = nil end
             return
         end
+        raceless = theirs ~= nil and theirs < PAGED_PROTOCOL
     end
     local v8Request = version == "8" and (op == "V" or op == "L" or op == "G" or op == "T")
     if kind == "HR" and ((op == "Q" and version ~= "8") or v8Request) then
@@ -1291,6 +1321,7 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
                 if not bucket or not from or not validBitmap(d) or e then return end
                 q = { op = "G", stream = stream, seq = seq, bucket = bucket, from = from, bitmap = d }
             end
+            q.raceless = raceless or nil
             -- A v8 pull always opens with the fingerprints of its first stream.
             fresh = (op == "V" or op == "T") and seq == 1
         else
