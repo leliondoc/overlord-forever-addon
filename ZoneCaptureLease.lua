@@ -1533,21 +1533,26 @@ function Lease:ReceiveRelease(payload, sender)
     -- let one forged release make the genuine final of that wave refused everywhere.
     local relayed = sync.IsUnauthenticatedRelayOrigin ~= nil
         and sync:IsUnauthenticatedRelayOrigin(sender) == true
+    local remote = zone._remoteCaptureLease
+    local following = remote ~= nil and remote.originKey == originKey and remote.waveId == waveId
     if relayed then
         -- Dated from its arrival, not from the last tick seen: a release jumps the
         -- queues (terminal first, priority token), so a tick it overtook is older than
         -- this and stays blocked instead of reopening the wave for 150 s. The origin's
         -- next ticks are newer and still pass (a forged release cannot end a live wave).
-        local current = zone._remoteCaptureLease
-        local seen = current and current.originKey == originKey and current.waveId == waveId
-            and tonumber(current.lastRemoteTs) or 0
-        local arrived = math.floor(tonumber(Overlord.ServerNow and Overlord.ServerNow() or time()) or 0)
-        PutSoftTombstone(zoneId, originKey, waveId, math.max(seen, arrived))
+        -- Not put while an ally on the point keeps that wave first-hand (below): the
+        -- mark would refuse the kept wave's Barricade too.
+        local keptFirstHand = following and zone.isHolding and zone.owner == Overlord.PlayerFaction
+            and self:IsFreshDirect(zone)
+        if not keptFirstHand then
+            local arrived = math.floor(tonumber(Overlord.ServerNow and Overlord.ServerNow() or time()) or 0)
+            PutSoftTombstone(zoneId, originKey, waveId,
+                math.max(following and tonumber(remote.lastRemoteTs) or 0, arrived))
+        end
     else
         PutTombstone(zoneId, originKey, waveId)
     end
-    local remote = zone._remoteCaptureLease
-    if remote and remote.originKey == originKey and remote.waveId == waveId then
+    if following then
         -- Un co-capteur allie deja physiquement sur le disque reprend la vague
         -- avec un nouvel id local au lieu de perdre tout le progres.
         if zone.isHolding and zone.owner == Overlord.PlayerFaction then
@@ -1566,6 +1571,11 @@ function Lease:ReceiveRelease(payload, sender)
         return self:ExpireRemote(zone, relayed and "relayedRelease" or "release")
     end
     return true
+end
+
+-- Tests only: is this wave blocked (hard or soft mark, ts nil = any tick)?
+function Lease._IsTombstoned(zoneId, originKey, waveId, ts)
+    return IsTombstoned(zoneId, originKey, waveId, ts)
 end
 
 function Lease:ReleaseAllLocal()

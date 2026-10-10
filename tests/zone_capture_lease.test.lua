@@ -386,6 +386,8 @@ expect(not Lease:ReceiveRelease(zone.id .. ":wcorelay:Alice", "Alice"), "a relay
 Overlord.Sync.IsUnauthenticatedRelayOrigin = realRelayedOrigin
 expect(zone._remoteCaptureLease and zone._remoteCaptureLease.waveId == "wcorelay"
     and not zone.holdAuthorityLocal, "the first-hand lease was not kept after a relayed ZR")
+expect(not Lease._IsTombstoned(zone.id, zone._remoteCaptureLease.originKey, "wcorelay"),
+    "the kept first-hand wave was marked (its Barricade would be refused)")
 expect(not Lease:ShouldRejectFinal(zone, "Alice", "wcorelay"), "a relayed ZR blocked the first-hand wave's final")
 
 -- Un ZR direct autorise immediatement le co-capteur local deja sur le disque
