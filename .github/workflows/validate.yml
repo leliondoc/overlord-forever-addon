@@ -179,6 +179,7 @@ jobs:
           lua5.1 tests/forever_channel_kill_flush.test.lua
           lua5.1 tests/forever_relay_route_refresh.test.lua
           lua5.1 tests/forever_bnet_single_lookup.test.lua
+          lua5.1 tests/forever_snapshot_new_names.test.lua
           lua5.1 tests/forever_version_notice.test.lua
           lua5.1 tests/forever_ladder_sync_badge.test.lua
 

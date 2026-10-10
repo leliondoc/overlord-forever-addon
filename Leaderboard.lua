@@ -5969,14 +5969,12 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
         generation = self._snapshotBuildGeneration,
         revision = self._snapshotRevision or 0,
         phase = "kills",
-        key = nil,
         campaignStart = campaignStart,
         scoreBucketEpoch = scoreBucketEpoch,
         killHeap = newDisplayTopK(LADDER_SNAPSHOT_MAX_KILL_PLAYERS),
         killIndex = dedupKillMaxIndex,
         captureIndex = dedupCaptureMaxIndex,
         canonicalIndex = dedupCanonicalIndex,
-        canonicalGeneration = dedupCanonicalGeneration,
         metaIndex = self._dedupMetaIndex,
         capHeapAlliance = self:NewTopSnapshotHeap(
             LADDER_SNAPSHOT_MAX_CAPTURE_PLAYERS_PER_FACTION),
@@ -6164,13 +6162,20 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
 
     local function runSlice()
         if self._snapshotBuildPending ~= state then return end
+        -- Only what a pass cannot survive ends it: the ranking tables swapped (reset),
+        -- or the name index invalidated or republished. A player learnt during the
+        -- build is no longer one of them (1.8.1): since 1.0.12 it aborted the whole
+        -- pass, which takes seconds, so the snapshot never finished while new players
+        -- kept arriving (after a night away, at launch): no ranking pull and no page
+        -- served until it calmed down. See the frozen key lists below.
+        local indexRebuilt = dedupKillMaxIndex ~= state.killIndex
+            or dedupCaptureMaxIndex ~= state.captureIndex or dedupCanonicalIndex ~= state.canonicalIndex
         if self.kills ~= state.killSource or self.captureCount ~= state.captureSource
             or self.playerInfo ~= state.playerInfoSource or self.captures ~= state.capturesSource
-            or not dedupCanonicalValid or state.canonicalGeneration ~= dedupCanonicalGeneration then
+            or not dedupCanonicalValid or indexRebuilt then
             self._snapshotBuildPending = nil
             self:ResolveSnapshotCompletion(false, not dedupCanonicalValid and "name index invalidated"
-                or state.canonicalGeneration ~= dedupCanonicalGeneration and "new name during the build"
-                or "ranking tables swapped")
+                or indexRebuilt and "name index rebuilt" or "ranking tables swapped")
             return
         end
         if state.finalizer then
@@ -6191,29 +6196,33 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
             local source = state.phase == "kills" and state.killIndex
                 or state.phase == "captures" and state.captureIndex
                 or state.capturesSource
-            -- Une compaction exceptionnelle peut retirer le curseur entre deux
-            -- frames. Elle annule proprement cette passe; les simples increments
-            -- et insertions, eux, ne provoquent plus d'abandon systematique.
-            local ok, key, value = pcall(next, source or {}, state.key)
-            if not ok then
-                self._snapshotBuildPending = nil
-                self:ResolveSnapshotCompletion(false, "cursor lost")
-                return
+            -- Frozen key list per phase, taken right before its loop with no yield
+            -- while copying (as RebuildNetworkHotIndexes does): resuming next() after
+            -- an insertion is undefined in Lua (rows skipped or seen twice). Values
+            -- are read live; a key added after the copy waits for the next pass (the
+            -- snapshot stays dirty), a key removed since is skipped.
+            if not state.keys then
+                local keys = {}
+                for key in pairs(source or {}) do keys[#keys + 1] = key end
+                state.keys, state.position = keys, 0
             end
+            state.position = state.position + 1
+            local key = state.keys[state.position]
+            local value = key ~= nil and source[key] or nil
             if key == nil then
+                state.keys = nil
                 if state.phase == "kills" then
                     state.phase = "captures"
-                    state.key = nil
                 elseif state.phase == "captures" then
                     state.phase = "zones"
-                    state.key = nil
                 else
                     state.finalizer = coroutine.create(finishSnapshot)
                     C_Timer.After(0, runSlice)
                     return
                 end
+            elseif value == nil then
+                budget = budget - 1
             else
-                state.key = key
                 if state.phase == "kills" then
                     local name = state.canonicalIndex[key] or key
                     if Overlord.Sync and Overlord.Sync.StripPipeLeakFromContributorName then
