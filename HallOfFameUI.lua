@@ -1223,15 +1223,7 @@ function Overlord.HallOfFameUI:CreateFrame()
     end
     hofFrame.tab = tab
 
-    hofFrame:SetScript("OnKeyDown", function(self, key)
-        if key == "ESCAPE" then
-            self:SetPropagateKeyboardInput(false)
-            Overlord.HallOfFameUI:Hide()
-        else
-            self:SetPropagateKeyboardInput(true)
-        end
-    end)
-    hofFrame:EnableKeyboard(true)
+    Overlord.UI.BindEscapeClose(hofFrame, function() Overlord.HallOfFameUI:Hide() end)
 
     selectedCategory = Overlord.HallOfFameData:GetDefaultCategory()
     betaExpanded = false

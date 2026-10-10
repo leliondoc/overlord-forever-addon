@@ -2223,15 +2223,6 @@ local function CreateDiscordPopupFrame()
     Overlord.UI.CreateWC3CloseButton(f, function() f:Hide() end)
         :SetPoint("TOPRIGHT", -8, -8)
 
-    f:SetScript("OnKeyDown", function(self, key)
-        if key == "ESCAPE" then
-            self:SetPropagateKeyboardInput(false)
-            self:Hide()
-        else
-            self:SetPropagateKeyboardInput(true)
-        end
-    end)
-    f:EnableKeyboard(true)
     f:SetScript("OnShow", function()
         RefreshDiscordUrlField()
         if Overlord.PlayPanelOpenSound then Overlord:PlayPanelOpenSound() end
@@ -2246,6 +2237,8 @@ local function CreateDiscordPopupFrame()
             Overlord.UI:ScheduleActionGridActiveRefresh()
         end
     end)
+    -- After its own OnShow/OnHide scripts (the helper hooks them).
+    Overlord.UI.BindEscapeClose(f, function(self) self:Hide() end)
 
     return f
 end

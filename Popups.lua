@@ -463,15 +463,7 @@ local function EnsureDialogFrame()
     Overlord.UI.CreateWC3CloseButton(f, HideDialog)
         :SetPoint("TOPRIGHT", -8, -8)
 
-    f:SetScript("OnKeyDown", function(self, key)
-        if key == "ESCAPE" then
-            self:SetPropagateKeyboardInput(false)
-            HideDialog()
-        else
-            self:SetPropagateKeyboardInput(true)
-        end
-    end)
-    f:EnableKeyboard(true)
+    Overlord.UI.BindEscapeClose(f, HideDialog)
 
     dialogFrame = f
     SetupDialogHyperlinks(f)
@@ -817,15 +809,7 @@ local function EnsureQuickGuideFrame()
     -- Au-dessus des coins du cadre en bois (comme le classement).
     if f.woodBorder then cross:SetFrameLevel(f.woodBorder:GetFrameLevel() + 5) end
 
-    f:SetScript("OnKeyDown", function(self, key)
-        if key == "ESCAPE" then
-            self:SetPropagateKeyboardInput(false)
-            HideQuickGuide()
-        else
-            self:SetPropagateKeyboardInput(true)
-        end
-    end)
-    f:EnableKeyboard(true)
+    Overlord.UI.BindEscapeClose(f, HideQuickGuide)
 
     quickGuideFrame = f
     SetupQuickGuideHyperlinks(f)

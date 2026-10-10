@@ -968,3 +968,30 @@ function Overlord.UI.CreateOfficialIconHolder(parent, size, accentRgb, opts)
     holder.ring = ring
     return holder
 end
+
+-- ESC closes an Overlord window without swallowing the game's keys. Keyboard
+-- propagation is protected in combat (ADDON_ACTION_BLOCKED on every key press): it is
+-- only changed out of combat. A window created in combat takes the keyboard on its
+-- first show out of combat; propagation is restored on show, and after a close only on
+-- the next frame (synchronously, the ESC that closed it would open the game menu too).
+-- Install after the frame's own OnShow/OnHide scripts (it hooks them).
+function Overlord.UI.BindEscapeClose(frame, onEscape)
+    if not frame then return end
+    frame:SetScript("OnKeyDown", function(self, key)
+        if not InCombatLockdown() then self:SetPropagateKeyboardInput(key ~= "ESCAPE") end
+        if key == "ESCAPE" then onEscape(self) end
+    end)
+    local function release(self)
+        if InCombatLockdown() then return end
+        self:EnableKeyboard(true)
+        self:SetPropagateKeyboardInput(true)
+    end
+    frame:HookScript("OnShow", release)
+    frame:HookScript("OnHide", function(self)
+        if not C_Timer or not C_Timer.After then return end
+        C_Timer.After(0, function()
+            if not self:IsShown() then release(self) end
+        end)
+    end)
+    release(frame)
+end
