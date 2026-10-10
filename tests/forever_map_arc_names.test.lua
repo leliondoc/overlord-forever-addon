@@ -172,6 +172,16 @@ table.sort(rings)
 assert(hidden == 1 and rings[1] > 36 * 0.54 and not near(rings[1], rings[#rings]),
     "a name no circle can hold was not written outside on two arcs")
 
+-- (4b) During an animated zoom the letters are hidden and laid out once it settles
+-- (the layout used to be redone up to twenty times a second).
+do
+    local clock = 500
+    local realTime = GetTime
+    GetTime = function() return clock end
+    assert(markers:SettleZoneArcs() == false, "a settle pass ran with nothing pending")
+    GetTime = realTime
+end
+
 -- (5) Names of other alphabets are cut by character, never by byte.
 local russian = overlay("Стена Торадина")
 markers.LayoutZoneArcName(russian, 60, 100, true)

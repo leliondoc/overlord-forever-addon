@@ -225,11 +225,14 @@ end
 -- Si rien ne tient dans le cercle meme en reduisant la police, le nom passe contre
 -- le bord, a l'exterieur. Le survol et une prise en cours affichent le bandeau a la
 -- place (voir IsZoneLabelShown).
+-- Pendant un zoom anime la taille des cercles change vingt fois par seconde : les
+-- lettres sont masquees puis retracees une seule fois, SETTLE secondes apres le
+-- dernier changement (SettleZoneArcs).
 local ZoneArc = { TOP_SWEEP = math.rad(200), HALF_SWEEP = math.rad(165), WIDE_SWEEP = math.rad(300),
-    OUT_SWEEP = math.rad(210), FULL_SWEEP = math.rad(340), SHRINK = { 1, 0.85, 0.72 } }
+    OUT_SWEEP = math.rad(210), FULL_SWEEP = math.rad(340), SHRINK = { 1, 0.85, 0.72 }, SETTLE = 0.15 }
 
 function ZoneArc.Hide(overlay)
-    if not overlay then return end
+    if not overlay or overlay._olArcKey == nil then return end
     local glyphs = overlay.arcGlyphs
     if glyphs then
         for i = 1, #glyphs do glyphs[i]:Hide() end
@@ -972,7 +975,8 @@ end
 -- Trois modes joueur : complet (bandeau sur chaque point), compact (cercles, icones
 -- et nom le long du cercle ; bandeau au survol ou pendant une prise), masque.
 -- Compact = « noms de zones » decoches ; c'est le mode par defaut depuis la 1.8.2.
-local WORLD_MAP_MODES = { "full", "compact", "hidden" }
+-- Ordre du bouton : depuis le mode de depart (compact), un clic donne les bandeaux.
+local WORLD_MAP_MODES = { "compact", "full", "hidden" }
 local WORLD_MAP_MODE_TEXT = { full = "MAP_MODE_FULL", compact = "MAP_MODE_COMPACT", hidden = "MAP_MODE_HIDDEN" }
 
 function Overlord.MapMarkers:GetWorldMapDisplayMode()
@@ -1044,6 +1048,19 @@ function Overlord.MapMarkers:UpdateCompactHover()
         hovered._olHover = true
         self:UpdateOverlay(hovered)
     end
+end
+
+-- Fin d'un zoom : les noms courbes sont retraces une fois (voir ZoneArc.SETTLE).
+function Overlord.MapMarkers:SettleZoneArcs()
+    local at = ZoneArc.settleAt
+    if not at or GetTime() < at then return false end
+    ZoneArc.settleAt = nil
+    for _, ov in pairs(overlays) do
+        if ov and ov.zone and ov:IsShown() then
+            ZoneArc.Layout(ov, ov._olSnapD, ov._olLabelDiameter, not ov._olShowTitles)
+        end
+    end
+    return true
 end
 
 -- Bouton rond dans le coin de la carte du monde : un clic passe au mode suivant.
@@ -1286,6 +1303,7 @@ function Overlord.MapMarkers:Initialize()
             if driverState.hoverAccum >= 0.05 then
                 driverState.hoverAccum = 0
                 Overlord.MapMarkers:UpdateCompactHover()
+                Overlord.MapMarkers:SettleZoneArcs()
             end
         end
 
@@ -1751,6 +1769,7 @@ function Overlord.MapMarkers:CreateZoneOverlay(zone)
         pooled._olRibbonOk = nil
         pooled._olHover = nil
         ZoneArc.Hide(pooled)
+        pooled._olArcStatus = nil
         if Overlord.MapMarkers._compactHover == pooled then Overlord.MapMarkers._compactHover = nil end
         if pooled.titleRibbonLeft then pooled.titleRibbonLeft:Hide() end
         if pooled.titleRibbonMid then pooled.titleRibbonMid:Hide() end
@@ -1916,6 +1935,9 @@ function Overlord.MapMarkers:UpdateOverlayLayout(overlay)
     local snapD = math.floor(diameter + 0.5)
     local labelDiameter = GetFrontOverlayLabelDiameter(zone, canvas, parent) or diameter
     local showTitles = IsZoneLabelShown(overlay)
+    if overlay._olSnapD and overlay._olSnapD ~= snapD then
+        ZoneArc.settleAt = GetTime() + ZoneArc.SETTLE
+    end
 
     -- Pan sans zoom : le cercle bouge seul ; texte/icone suivent le frame sans ClearAllPoints.
     if overlay._olSnapD == snapD and overlay._olLabelDiameter == labelDiameter
@@ -1953,7 +1975,11 @@ function Overlord.MapMarkers:UpdateOverlayLayout(overlay)
     end
     overlay._olRibbonKey = nil
     LayoutZoneTitleRibbon(overlay, showTitles)
-    ZoneArc.Layout(overlay, snapD, labelDiameter, not showTitles)
+    if ZoneArc.settleAt then
+        ZoneArc.Hide(overlay)
+    else
+        ZoneArc.Layout(overlay, snapD, labelDiameter, not showTitles)
+    end
 end
 
 -- A zone being captured "breathes": a masked glow in the zone colour fades in and
@@ -2092,7 +2118,9 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
     overlay.subtext:Show()
     overlay.subtext2:Show()
     LayoutZoneTitleRibbon(overlay, overlay._olShowTitles)
-    ZoneArc.Layout(overlay, overlay._olSnapD, overlay._olLabelDiameter, not overlay._olShowTitles)
+    if not ZoneArc.settleAt then
+        ZoneArc.Layout(overlay, overlay._olSnapD, overlay._olLabelDiameter, not overlay._olShowTitles)
+    end
     overlay.subtext:SetTextColor(ZONE_TEXT_GOLD_R, ZONE_TEXT_GOLD_G, ZONE_TEXT_GOLD_B)
     overlay.subtext:SetShadowColor(0, 0, 0, 0)
     overlay.subtext:SetShadowOffset(0, 0)
