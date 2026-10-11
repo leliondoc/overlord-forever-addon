@@ -33,6 +33,9 @@ local LB_FRAME_PAD = 26
 -- Le classement s'affiche 20 % plus grand que l'echelle de l'interface Overlord
 -- (toujours ramene a la taille de l'ecran).
 local LB_SIZE_BOOST = 1.2
+-- Illustration Horde contre Alliance (generique de Battle for Azeroth, 1425 x 966) en voile
+-- sur la fenetre. alpha regle sa presence : 0.12 la laisse deviner sans gener la lecture.
+local LB_KEYART = { atlas = "creditsscreen-keyart-7", alpha = 0.12, ratio = 1425 / 966 }
 local LB_FRAME_W = LB_FRAME_PAD + LB_MAIN_W + LB_COL_GAP + LB_GUILD_KILLS_W + LB_COL_GAP
     + LB_GUILD_KEEP_W + LB_COL_GAP + LB_OUTPOST_W + LB_FRAME_PAD
 -- Colonnes guildes (tues) sur panneau 208. VH elargi a 58 px : les totaux de
@@ -1103,6 +1106,9 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
     lbFrame:SetFrameStrata("HIGH")
     lbFrame:SetFrameLevel(50)
+    -- Several Overlord windows share this layer: the one shown or clicked last goes in
+    -- front, whole (without this their contents interleave where they overlap).
+    if lbFrame.SetToplevel then lbFrame:SetToplevel(true) end
     lbFrame:SetClampedToScreen(true)
     lbFrame._preferredScale = 1
     lbFrame:RegisterEvent("DISPLAY_SIZE_CHANGED")
@@ -1135,6 +1141,26 @@ function Overlord.LeaderboardUI:CreateFrame()
     -- actuel reste dessous.
     lbFrame.bgBorder = Overlord.UI.ApplyWoodenNeutralFrame
         and Overlord.UI.ApplyWoodenNeutralFrame(lbFrame)
+
+    -- Voile d'illustration : centre, a la hauteur de la fenetre, par-dessus les listes et
+    -- sous le cadre en bois. Additif : il eclaire les panneaux sombres sans assombrir le
+    -- texte, alors qu'une image posee derriere les panneaux (opaques) ne se verrait que
+    -- dans les interstices. Ne prend pas la souris.
+    local keyart = CreateFrame("Frame", nil, lbFrame)
+    keyart:SetPoint("TOPLEFT", 8, -8)
+    keyart:SetPoint("BOTTOMRIGHT", -8, 8)
+    keyart:SetFrameLevel(lbFrame:GetFrameLevel() + 15)
+    keyart:SetClipsChildren(true)
+    local keyartTex = keyart:CreateTexture(nil, "ARTWORK")
+    keyartTex:SetAtlas(LB_KEYART.atlas, false)
+    keyartTex:SetBlendMode("ADD")
+    keyartTex:SetAlpha(LB_KEYART.alpha)
+    keyartTex:SetPoint("CENTER")
+    keyartTex:SetSize(484 * LB_KEYART.ratio, 484)
+    keyart:SetScript("OnSizeChanged", function(_, _, height)
+        if height and height > 0 then keyartTex:SetSize(height * LB_KEYART.ratio, height) end
+    end)
+    lbFrame.keyart = keyart
 
     -- Reuse the existing panel texture and fonts. No search icon/atlas or ticker.
     local searchPanel = CreateOfficialSubPanel(lbFrame, 266, 28, P, { header = true })
@@ -1212,6 +1238,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.infoLeft = { InfoLine(lbFrame.subtitle, "LEFT"), InfoLine(lbFrame.totalText, "LEFT") }
     lbFrame.infoRight = { InfoLine(lbFrame.subtitle, "RIGHT"), InfoLine(lbFrame.totalText, "RIGHT") }
     lbFrame:HookScript("OnShow", function()
+        if lbFrame.Raise then lbFrame:Raise() end
         -- Shown again by its parent (Alt+Z, cinematic): OnHide stopped the badge, and a
         -- repaint while the parent was hidden must not hide that from this one.
         if lbFrame.syncBadge then lbFrame.syncBadge._paint = nil end
@@ -2265,7 +2292,7 @@ RenderKillRows = function(force)
                 if row.classIconHolder then row.classIconHolder:Show() end
                 local cr, cg, cb = GetClassColor(class)
                 row.name:SetText(wanted
-                    and ("|TInterface\\TargetingFrame\\UI-TargetingFrame-Skull:12|t " .. shortName)
+                    and (Overlord.MostWanted.CrownMarkup(13) .. " " .. shortName)
                     or shortName)
                 if cr and cg and cb then
                     row.name:SetTextColor(cr, cg, cb)

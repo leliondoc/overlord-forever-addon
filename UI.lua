@@ -311,7 +311,7 @@ local ZONES_CONTENT_TOP = -22
 local ZONES_TRUCE_CONTENT_TOP = -38
 
 -- Icone principale de ligne (gauche) : banniere Warfronts ou MainHall (capitales).
--- ApplyZoneMapIcon utilise useAtlasSize=true (carte) : ici taille fixe obligatoire.
+-- Taille fixe : celle de la ligne, pas celle de l'atlas.
 local function SetZoneLineWarfrontIcon(tex, zone)
     if not tex then return end
     local Z = Overlord.Zones
@@ -1747,7 +1747,7 @@ function Overlord.UI:ApplyPanelLayout()
     local domTitle = zf.domTitleLabel
     local domTop = 14
     local zonesGap = 8
-    local activeZoneGap = 6
+    local activeZoneGap = zonesGap
     local actionsGap = 8
 
     if self.headerBand then
@@ -1978,7 +1978,10 @@ end
 -- ---------- Section zone active ----------
 function Overlord.UI:CreateActiveZoneSection(parent)
     if not zoneListFrame then return end
-    activeZoneFrame = CreateDarkPanel(zoneListFrame, 304, 64)
+    activeZoneFrame = CreateDarkPanel(zoneListFrame, 304, 68)
+    -- Le cadre de barre du camp habille deja la carte : ni fond bleu ni lisere autour.
+    activeZoneFrame:SetBackdropColor(0, 0, 0, 0)
+    activeZoneFrame:SetBackdropBorderColor(0, 0, 0, 0)
 
     local header = activeZoneFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     header:SetPoint("TOP", 0, -6)
@@ -1990,23 +1993,60 @@ function Overlord.UI:CreateActiveZoneSection(parent)
     activeZoneFrame.zoneName:SetText(L.NO_ACTIVE_ZONE)
     activeZoneFrame.zoneName:SetTextColor(C.white[1], C.white[2], C.white[3])
 
-    -- Ligne maintien + timer (meme Y, ancres fixes sur le panneau)
-    local holdLabel = activeZoneFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    holdLabel:SetPoint("TOPLEFT", 12, -38)
-    holdLabel:SetText(L.HOLD_LABEL)
-    holdLabel:SetTextColor(C.blueBright[1], C.blueBright[2], C.blueBright[3], 0.9)
+    -- Essai : la barre seule dans son cadre, sans titre ni nom de zone. La ligne d'etat ne
+    -- s'ecrit que pour ce qui arrete ou fait reculer la barre (pause, contestee, capture
+    -- ennemie) ; quand tout va bien la couleur du remplissage suffit. Repasser showTexts a
+    -- true ramene tous les textes.
+    activeZoneFrame.showTexts = false
+    if not activeZoneFrame.showTexts then
+        header:Hide()
+        activeZoneFrame.zoneName:Hide()
+    end
 
-    activeZoneFrame.holdText = activeZoneFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    activeZoneFrame.holdText:SetPoint("TOPRIGHT", -12, -38)
-    activeZoneFrame.holdText:SetTextColor(C.white[1], C.white[2], C.white[3])
-
+    -- Barre de maintien sertie dans le cadre de barre du camp du joueur (256 x 64, a sa
+    -- taille d'origine). La fente du cadre fait 182 x 22 px a (37, 21) ; holdBar la couvre
+    -- avec 1 px de marge pour que le remplissage passe sous l'art. Libelle, pourcentage et
+    -- chrono s'ecrivent dans la fente.
+    -- L'art ne remplit pas ses 64 px : lignes 4 a 55 pour l'Alliance, 1 a 63 pour la Horde.
+    -- Sans les textes, la carte epouse l'art (pas de marge vide dessus ni dessous) ; les
+    -- ecarts avec les blocs voisins sont alors ceux du reste du panneau.
+    local playerFaction = Overlord.PlayerFaction or UnitFactionGroup("player")
+    local artTop, artBottom = 20, 44
+    if playerFaction == "Alliance" then
+        artTop, artBottom = 4, 55
+    elseif playerFaction == "Horde" then
+        artTop, artBottom = 1, 63
+    end
     local holdBar = CreateFrame("Frame", nil, activeZoneFrame)
-    holdBar:SetSize(296, 11)
-    holdBar:SetPoint("TOP", 0, -50)
+    holdBar:SetSize(184, 24)
+    holdBar:SetPoint("TOP", 0, activeZoneFrame.showTexts and -52 or -(20 - artTop))
 
     local holdBg = holdBar:CreateTexture(nil, "BACKGROUND")
     holdBg:SetAllPoints()
-    holdBg:SetColorTexture(0.1, 0.1, 0.1, 0.6)
+    holdBg:SetColorTexture(0.03, 0.03, 0.03, 0.9)
+
+    if playerFaction == "Alliance" or playerFaction == "Horde" then
+        local holdFrame = holdBar:CreateTexture(nil, "OVERLAY")
+        holdFrame:SetTexture("Interface\\UNITPOWERBARALT\\" .. playerFaction .. "_Horizontal_Frame")
+        holdFrame:SetSize(256, 64)
+        holdFrame:SetPoint("TOPLEFT", holdBar, "TOPLEFT", -36, 20)
+    end
+
+    local holdLabel = holdBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    holdLabel:SetPoint("LEFT", 7, 0)
+    holdLabel:SetText(L.HOLD_LABEL)
+    holdLabel:SetTextColor(0.92, 0.88, 0.76)
+    holdLabel:SetShadowOffset(1, -1)
+
+    activeZoneFrame.holdText = holdBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    activeZoneFrame.holdText:SetPoint("RIGHT", -7, 0)
+    activeZoneFrame.holdText:SetTextColor(C.white[1], C.white[2], C.white[3])
+    activeZoneFrame.holdText:SetShadowOffset(1, -1)
+    -- 9 pt comme le pourcentage : les trois textes tiennent dans la fente. Un libelle trop
+    -- long pour sa langue cede la place au pourcentage centre.
+    holdLabel:SetFont(holdLabel:GetFont(), 9)
+    activeZoneFrame.holdText:SetFont(activeZoneFrame.holdText:GetFont(), 9)
+    if (holdLabel:GetStringWidth() or 0) > 70 then holdLabel:Hide() end
 
     -- Game status-bar texture tinted by state (blue holding, orange paused or enemy,
     -- red contested, gold complete); a spark rides its right edge and the fill
@@ -2019,10 +2059,11 @@ function Overlord.UI:CreateActiveZoneSection(parent)
     holdFill:SetVertexColor(C.blue[1], C.blue[2], C.blue[3], 0.8)
     holdBar.fill = holdFill
 
-    local holdSpark = holdBar:CreateTexture(nil, "OVERLAY")
+    -- Sous le cadre : sa lueur ne deborde pas sur l'art.
+    local holdSpark = holdBar:CreateTexture(nil, "ARTWORK", nil, 1)
     holdSpark:SetTexture("Interface\\CastingBar\\UI-CastingBar-Spark")
     holdSpark:SetBlendMode("ADD")
-    holdSpark:SetSize(12, 26)
+    holdSpark:SetSize(14, 44)
     holdSpark:SetPoint("CENTER", holdFill, "RIGHT", 0, 0)
     holdSpark:Hide()
     holdBar.spark = holdSpark
@@ -2067,13 +2108,15 @@ function Overlord.UI:CreateActiveZoneSection(parent)
 
     -- Status indicator (en pause / actif) - sous la barre, hauteur panneau ajustee au refresh
     activeZoneFrame.statusTag = activeZoneFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    activeZoneFrame.statusTag:SetPoint("TOP", holdBar, "BOTTOM", 0, -3)
+    -- Sous le bas de l'art du cadre (qui depasse la fente), puis 3 px de marge.
+    activeZoneFrame.statusTag:SetPoint("TOP", holdBar, "BOTTOM", 0, -(artBottom - 44) - 3)
     activeZoneFrame.statusTag:SetPoint("LEFT", activeZoneFrame, "LEFT", 12, 0)
     activeZoneFrame.statusTag:SetPoint("RIGHT", activeZoneFrame, "RIGHT", -12, 0)
     activeZoneFrame.statusTag:SetWordWrap(true)
     activeZoneFrame.statusTag:SetJustifyH("CENTER")
 
-    activeZoneFrame.baseHeight = 64
+    activeZoneFrame.baseHeight = activeZoneFrame.showTexts and 98 or (artBottom - artTop)
+    activeZoneFrame:SetHeight(activeZoneFrame.baseHeight)
     activeZoneFrame:Hide()
     zoneListFrame.activeZoneFrame = activeZoneFrame
     self.activeZoneFrame = activeZoneFrame
@@ -3067,7 +3110,8 @@ function Overlord.UI:RefreshActiveZone()
         activeZoneFrame.holdBar:SetFillRatio(nil)
         activeZoneFrame.holdBar:SetFillColor(C.gray[1], C.gray[2], C.gray[3], 0.8)
         activeZoneFrame.holdBar.label:SetText("")
-        activeZoneFrame.statusTag:SetText(L.MAP_SYNC_PENDING or "SYNC")
+        -- Deja ecrit dans la barre : pas une seconde fois dessous.
+        activeZoneFrame.statusTag:SetText(activeZoneFrame.showTexts and (L.MAP_SYNC_PENDING or "SYNC") or "")
         activeZoneFrame.statusTag:SetTextColor(C.gray[1], C.gray[2], C.gray[3])
         self:SyncActiveZoneFrameHeight()
         return
@@ -3132,7 +3176,7 @@ function Overlord.UI:RefreshActiveZone()
         activeZoneFrame.statusTag:SetTextColor(C.orange[1], C.orange[2], C.orange[3])
     elseif az.isHolding then
         activeZoneFrame.holdBar:SetFillColor(C.blue[1], C.blue[2], C.blue[3], 0.8)
-        activeZoneFrame.statusTag:SetText(L.UI_IN_PROGRESS)
+        activeZoneFrame.statusTag:SetText(activeZoneFrame.showTexts and L.UI_IN_PROGRESS or "")
         activeZoneFrame.statusTag:SetTextColor(C.blueBright[1], C.blueBright[2], C.blueBright[3])
     elseif enemyCapturing then
         activeZoneFrame.holdBar:SetFillColor(C.orange[1], C.orange[2], C.orange[3], 0.8)
@@ -3141,7 +3185,7 @@ function Overlord.UI:RefreshActiveZone()
     elseif hc >= hr and hr > 0 then
         -- Maintien plein : or du theme (pas le vert type quete WoW)
         activeZoneFrame.holdBar:SetFillColor(C.gold[1], C.gold[2], C.gold[3], 0.85)
-        activeZoneFrame.statusTag:SetText(L.UI_COMPLETE)
+        activeZoneFrame.statusTag:SetText(activeZoneFrame.showTexts and L.UI_COMPLETE or "")
         activeZoneFrame.statusTag:SetTextColor(C.gold[1], C.gold[2], C.gold[3])
     else
         activeZoneFrame.holdBar:SetFillColor(C.gray[1], C.gray[2], C.gray[3], 0.8)

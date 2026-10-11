@@ -74,7 +74,7 @@ function MW:Refresh(force)
         and (not lb.IsDisplayCacheScopeCurrent or lb:IsDisplayCacheScopeCurrent(cache))
     if not current then
         self.list, self.byKey = {}, {}
-        self:HideAllSkulls()
+        self:HideAllCrowns()
         local stale = type(cache) == "table" and type(cache.sortedKills) == "table"
             and #cache.sortedKills > 0
         local gap = stale and 60 or 600
@@ -114,7 +114,7 @@ end
 function MW:ResetForCampaign()
     self.list, self.byKey, self.alertedAt = {}, {}, {}
     self._refreshedAt, self._ensureAt, self._lastAlertAt = nil, nil, nil
-    if self.HideAllSkulls then self:HideAllSkulls() end
+    if self.HideAllCrowns then self:HideAllCrowns() end
 end
 
 -- Lecture seule pour le classement (aucun recalcul pendant le dessin des lignes).
@@ -130,40 +130,48 @@ end
 
 -- Crane sur la barre de nom Blizzard, a gauche de la barre de vie. Un cadre a nous par
 -- unite de nameplate (40 au plus), reutilise ; jamais en instance.
-MW.SKULL_SIZE = 16
-MW.skulls = MW.skulls or {}
-local SKULL_TEXTURE = "Interface\\TargetingFrame\\UI-TargetingFrame-Skull"
-
-function MW:HideSkull(unit)
-    local skull = unit and self.skulls[unit]
-    if skull then skull:Hide() end
+MW.CROWN_SIZE = 18
+MW.crowns = MW.crowns or {}
+-- Couronne d'or des insignes de prestige (128 x 128). Le dessin occupe les lignes et
+-- colonnes 9 a 121 : on ne montre que ce carre, sinon la couronne flotte dans sa marge.
+local CROWN_TEXTURE = "Interface\\PvPFrame\\Icons\\prestige-icon-7-3"
+local CROWN_COORD = { 9 / 128, 121 / 128, 9 / 128, 121 / 128 }
+-- Meme image dans une ligne de texte (chat, classement) : taille en parametre.
+function MW.CrownMarkup(size)
+    return "|T" .. CROWN_TEXTURE .. ":" .. size .. ":" .. size .. ":0:0:128:128:9:121:9:121|t"
 end
 
-function MW:HideAllSkulls()
-    for _, skull in pairs(self.skulls) do skull:Hide() end
+function MW:HideCrown(unit)
+    local crown = unit and self.crowns[unit]
+    if crown then crown:Hide() end
 end
 
-function MW:ShowSkull(unit)
+function MW:HideAllCrowns()
+    for _, crown in pairs(self.crowns) do crown:Hide() end
+end
+
+function MW:ShowCrown(unit)
     local plate = C_NamePlate and C_NamePlate.GetNamePlateForUnit and C_NamePlate.GetNamePlateForUnit(unit)
     local parent = plate and (plate.UnitFrame or plate)
     if not parent or not CreateFrame then return end
     local anchor = parent.healthBar or parent
-    local skull = self.skulls[unit]
-    if not skull then
-        skull = CreateFrame("Frame", nil, parent)
-        skull:SetSize(self.SKULL_SIZE, self.SKULL_SIZE)
-        skull.icon = skull:CreateTexture(nil, "OVERLAY")
-        skull.icon:SetAllPoints()
-        skull.icon:SetTexture(SKULL_TEXTURE)
-        self.skulls[unit] = skull
+    local crown = self.crowns[unit]
+    if not crown then
+        crown = CreateFrame("Frame", nil, parent)
+        crown:SetSize(self.CROWN_SIZE, self.CROWN_SIZE)
+        crown.icon = crown:CreateTexture(nil, "OVERLAY")
+        crown.icon:SetAllPoints()
+        crown.icon:SetTexture(CROWN_TEXTURE)
+        crown.icon:SetTexCoord(CROWN_COORD[1], CROWN_COORD[2], CROWN_COORD[3], CROWN_COORD[4])
+        self.crowns[unit] = crown
     end
-    if skull:GetParent() ~= parent or skull._anchor ~= anchor then
-        skull:SetParent(parent)
-        skull:ClearAllPoints()
-        skull:SetPoint("RIGHT", anchor, "LEFT", -3, 0)
-        skull._anchor = anchor
+    if crown:GetParent() ~= parent or crown._anchor ~= anchor then
+        crown:SetParent(parent)
+        crown:ClearAllPoints()
+        crown:SetPoint("RIGHT", anchor, "LEFT", -3, 0)
+        crown._anchor = anchor
     end
-    skull:Show()
+    crown:Show()
 end
 
 -- Le Most Wanted affiche sur cette barre de nom, ou nil.
@@ -178,21 +186,21 @@ end
 
 -- Liste changee (toutes les 60 s au plus) : repeindre les barres de nom deja visibles.
 function MW:RefreshPlates()
-    self:HideAllSkulls()
+    self:HideAllCrowns()
     if InInstance() or not self:AlertsEnabled() or not next(self.byKey) then return end
     if not (C_NamePlate and C_NamePlate.GetNamePlates) then return end
     for _, plate in ipairs(C_NamePlate.GetNamePlates() or {}) do
         local unit = plate.namePlateUnitToken or (plate.UnitFrame and plate.UnitFrame.unit)
-        if unit and WantedEntryForUnit(unit) then self:ShowSkull(unit) end
+        if unit and WantedEntryForUnit(unit) then self:ShowCrown(unit) end
     end
 end
 
 function MW:OnNameplateAdded(unit)
-    self:HideSkull(unit)
+    self:HideCrown(unit)
     if InInstance() or not self:AlertsEnabled() or not next(self.byKey) then return end
     local entry = WantedEntryForUnit(unit)
     if not entry then return end
-    self:ShowSkull(unit)
+    self:ShowCrown(unit)
     local key = entry.key
     local now = GetTime()
     if now - (self._lastAlertAt or -1e9) < self.ALERT_GLOBAL_GAP then return end
@@ -209,7 +217,7 @@ function MW:OnNameplateAdded(unit)
     local text = string.format(T("MW_ALERT", "Most Wanted nearby: %s (#%d %s, %d HK this week)!"),
         ShortName(entry.name), entry.rank, factionName, entry.kills)
     if Overlord.PrintNotification then
-        Overlord:PrintNotification("|cFFFF4040[Overlord]|r |T" .. SKULL_TEXTURE .. ":14|t " .. text)
+        Overlord:PrintNotification("|cFFFF4040[Overlord]|r " .. MW.CrownMarkup(14) .. " " .. text)
     end
 end
 
@@ -219,7 +227,7 @@ function MW:OnInstanceSuspend()
         self.frame:UnregisterEvent("NAME_PLATE_UNIT_ADDED")
         self.frame:UnregisterEvent("NAME_PLATE_UNIT_REMOVED")
     end
-    self:HideAllSkulls()
+    self:HideAllCrowns()
 end
 
 local function EnsureTicker()
@@ -261,11 +269,11 @@ if CreateFrame then
         if event == "NAME_PLATE_UNIT_ADDED" then
             -- Le plus courant et le moins cher d'abord ; jamais d'unite lue en instance.
             -- Une barre recyclee ne garde jamais le crane de l'unite precedente.
-            if unit and MW.skulls[unit] then MW.skulls[unit]:Hide() end
+            if unit and MW.crowns[unit] then MW.crowns[unit]:Hide() end
             if not next(MW.byKey) or not MW:AlertsEnabled() or InInstance() then return end
             pcall(MW.OnNameplateAdded, MW, unit)
         elseif event == "NAME_PLATE_UNIT_REMOVED" then
-            if unit and MW.skulls[unit] then MW.skulls[unit]:Hide() end
+            if unit and MW.crowns[unit] then MW.crowns[unit]:Hide() end
         elseif event == "PLAYER_ENTERING_WORLD" then
             EnsureTicker()
             if not InInstance() and C_Timer and C_Timer.After then

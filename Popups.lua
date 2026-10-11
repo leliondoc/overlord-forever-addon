@@ -500,7 +500,7 @@ local function GuideIconMarkup(icon)
         -- Icones carrees : rogner le bord gris (5..59 sur 64) comme les boutons d'action.
         return string.format("|T%s:%d:%d:0:0:64:64:5:59:5:59|t ", icon, GUIDE_ICON_SIZE, GUIDE_ICON_SIZE)
     elseif icon:find("\\", 1, true) then
-        -- Autres textures (logo Overlord, crane Most Wanted) : entieres.
+        -- Autres textures (logo Overlord, couronne Most Wanted) : entieres.
         return string.format("|T%s:%d:%d|t ", icon, GUIDE_ICON_SIZE, GUIDE_ICON_SIZE)
     end
     return string.format("|A:%s:%d:%d|a ", icon, GUIDE_ICON_SIZE, GUIDE_ICON_SIZE)
@@ -618,14 +618,14 @@ local function BuildQuickGuidePageBody(page)
         return JoinGuideSections(
             BuildGuildKeepGuideSection(),
             FormatGuideSection(L.GUIDE_SECTION_OUTPOST, L.GUIDE_OUTPOST_BODY, "Warfronts-BaseMapIcons-Empty-Tower"),
-            -- Banniere du bouton Appel aux armes, crane Most Wanted, casque du bouton classement.
+            -- Banniere du bouton Appel aux armes, couronne Most Wanted, casque du bouton classement.
             FormatGuideSection(L.GUIDE_SECTION_FACTION_CALL, L.GUIDE_FACTION_CALL_BODY,
                 FactionGuideIcon("Interface\\Icons\\INV_BannerPVP_02", "Interface\\Icons\\INV_BannerPVP_01")),
             -- Icon of the PvP Groups grid button.
             FormatGuideSection(L.GUIDE_SECTION_GROUPS, L.GUIDE_GROUPS_BODY,
                 "Interface\\Icons\\INV_Misc_GroupNeedMore"),
             FormatGuideSection(L.GUIDE_SECTION_ALERTS, L.GUIDE_ALERTS_BODY,
-                "Interface\\TargetingFrame\\UI-TargetingFrame-Skull"),
+                "Interface\\PvPFrame\\Icons\\prestige-icon-7-3"),
             FormatGuideSection(L.GUIDE_SECTION_TOOLS, L.GUIDE_TOOLS_BODY, "Interface\\Icons\\INV_Helmet_08")
         )
     end

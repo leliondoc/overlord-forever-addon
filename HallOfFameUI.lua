@@ -1093,6 +1093,10 @@ function Overlord.HallOfFameUI:CreateFrame()
     hofFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
     hofFrame:SetFrameStrata("HIGH")
     hofFrame:SetFrameLevel(50)
+    -- Several Overlord windows share this layer: the one shown or clicked last goes in
+    -- front, whole (without this their contents interleave where they overlap).
+    if hofFrame.SetToplevel then hofFrame:SetToplevel(true) end
+    hofFrame:HookScript("OnShow", function(self) if self.Raise then self:Raise() end end)
     hofFrame:SetClampedToScreen(true)
     tinsert(UISpecialFrames, "OverlordHallOfFameFrame")
 

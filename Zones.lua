@@ -18,12 +18,13 @@ local function objectiveAtlasForOwner(owner)
     return Z.OBJECTIVE_NEUTRAL_ATLAS
 end
 
--- Applique un atlas d'objectif Warfronts sur une texture.
+-- Applique une icone de zone sur une texture de la carte. La taille reste celle posee par
+-- l'appelant (AnchorZoneIcon) : l'atlas ne l'impose pas.
 function Overlord.Zones:ApplyZoneMapIcon(tex, atlas)
     if not tex or not atlas or atlas == "" or not tex.SetAtlas then return false end
     tex:SetTexCoord(0, 1, 0, 1)
     tex:SetVertexColor(1, 1, 1, 1)
-    local ok, applied = pcall(tex.SetAtlas, tex, atlas, true)
+    local ok, applied = pcall(tex.SetAtlas, tex, atlas, false)
     return ok and applied
 end
 
