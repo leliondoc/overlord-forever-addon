@@ -33,9 +33,14 @@ local LB_FRAME_PAD = 26
 -- Le classement s'affiche 20 % plus grand que l'echelle de l'interface Overlord
 -- (toujours ramene a la taille de l'ecran).
 local LB_SIZE_BOOST = 1.2
--- Illustration Horde contre Alliance (generique de Battle for Azeroth, 1425 x 966) en voile
--- sur la fenetre. alpha regle sa presence : 0.12 la laisse deviner sans gener la lecture.
-local LB_KEYART = { atlas = "creditsscreen-keyart-7", alpha = 0.12, ratio = 1425 / 966 }
+-- Illustration du siege (fond de l'ecran d'accueil de Battle for Azeroth, 2048 x 1024) en
+-- voile sur la fenetre. alpha regle sa presence. L'essai precedent : l'atlas
+-- "creditsscreen-keyart-7" (orc contre humain, 1425 x 966) a 0.12.
+local LB_KEYART = {
+    texture = "Interface\\GLUES\\MODELS\\UI_MAINMENU_BFA_LOWBANDWIDTH\\UI_MainMenu_BattleForAzeroth_LowBandwidth",
+    alpha = 0.18,
+    ratio = 2,
+}
 local LB_FRAME_W = LB_FRAME_PAD + LB_MAIN_W + LB_COL_GAP + LB_GUILD_KILLS_W + LB_COL_GAP
     + LB_GUILD_KEEP_W + LB_COL_GAP + LB_OUTPOST_W + LB_FRAME_PAD
 -- Colonnes guildes (tues) sur panneau 208. VH elargi a 58 px : les totaux de
@@ -713,7 +718,7 @@ local cachedPalette = nil
 local function GetPalette()
     if cachedPalette then return cachedPalette end
     cachedPalette = {
-        bg       = {0.047, 0.047, 0.047, 0.96},
+        bg       = {0.047, 0.047, 0.047, 1},
         panel    = {0.062, 0.062, 0.062, 0.98},
         header   = {0.047, 0.047, 0.047, 0.85},
         accent   = {0.973, 0.718, 0.0},
@@ -1110,6 +1115,15 @@ function Overlord.LeaderboardUI:CreateFrame()
     -- front, whole (without this their contents interleave where they overlap).
     if lbFrame.SetToplevel then lbFrame:SetToplevel(true) end
     lbFrame:SetClampedToScreen(true)
+    -- Fond plein : la texture de fond des bulles laisse passer 9 % de ce qui est derriere
+    -- elle, meme a opacite 1. Un aplat opaque, un niveau sous la fenetre, la ferme.
+    local solid = CreateFrame("Frame", nil, lbFrame)
+    solid:SetPoint("TOPLEFT", 4, -4)
+    solid:SetPoint("BOTTOMRIGHT", -4, 4)
+    solid:SetFrameLevel(math.max(0, lbFrame:GetFrameLevel() - 1))
+    local solidFill = solid:CreateTexture(nil, "BACKGROUND")
+    solidFill:SetAllPoints()
+    solidFill:SetColorTexture(0.026, 0.026, 0.026, 1)
     lbFrame._preferredScale = 1
     lbFrame:RegisterEvent("DISPLAY_SIZE_CHANGED")
     lbFrame:RegisterEvent("UI_SCALE_CHANGED")
@@ -1142,7 +1156,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.bgBorder = Overlord.UI.ApplyWoodenNeutralFrame
         and Overlord.UI.ApplyWoodenNeutralFrame(lbFrame)
 
-    -- Voile d'illustration : centre, a la hauteur de la fenetre, par-dessus les listes et
+    -- Voile d'illustration : centre, par-dessus les listes et
     -- sous le cadre en bois. Additif : il eclaire les panneaux sombres sans assombrir le
     -- texte, alors qu'une image posee derriere les panneaux (opaques) ne se verrait que
     -- dans les interstices. Ne prend pas la souris.
@@ -1152,14 +1166,19 @@ function Overlord.LeaderboardUI:CreateFrame()
     keyart:SetFrameLevel(lbFrame:GetFrameLevel() + 15)
     keyart:SetClipsChildren(true)
     local keyartTex = keyart:CreateTexture(nil, "ARTWORK")
-    keyartTex:SetAtlas(LB_KEYART.atlas, false)
+    keyartTex:SetTexture(LB_KEYART.texture)
     keyartTex:SetBlendMode("ADD")
     keyartTex:SetAlpha(LB_KEYART.alpha)
     keyartTex:SetPoint("CENTER")
-    keyartTex:SetSize(484 * LB_KEYART.ratio, 484)
-    keyart:SetScript("OnSizeChanged", function(_, _, height)
-        if height and height > 0 then keyartTex:SetSize(height * LB_KEYART.ratio, height) end
-    end)
+    -- Elle couvre la fenetre sans se deformer : ce qui depasse est coupe par le cadre.
+    local function fitKeyart(_, width, height)
+        if not width or not height or width <= 0 or height <= 0 then return end
+        local w, h = width, width / LB_KEYART.ratio
+        if h < height then w, h = height * LB_KEYART.ratio, height end
+        keyartTex:SetSize(w, h)
+    end
+    fitKeyart(nil, LB_FRAME_W - 16, 484)
+    keyart:SetScript("OnSizeChanged", fitKeyart)
     lbFrame.keyart = keyart
 
     -- Reuse the existing panel texture and fonts. No search icon/atlas or ticker.
