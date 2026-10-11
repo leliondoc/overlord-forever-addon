@@ -600,15 +600,18 @@ function Overlord.Sync:Initialize()
             Overlord.Sync:OnGroupChanged()
         elseif event == "NAME_PLATE_UNIT_ADDED" then
             Overlord.Sync:OnNameplateAdded(...)
+        elseif event == "CHANNEL_PASSWORD_REQUEST" then
+            Overlord.Sync:OnChannelJoinRefused(...)
         end
     end)
     -- Cold /reload en arene : preparer le protocole mais ne jamais ouvrir ses
-    -- handlers avant la sortie autoritaire. Resume() reinstalle les quatre events.
+    -- handlers avant la sortie autoritaire. Resume() reinstalle ces events.
     if not Overlord.InstanceSuspended and not IsInInstance() then
         syncFrame:RegisterEvent("CHAT_MSG_ADDON")
         syncFrame:RegisterEvent("BN_CHAT_MSG_ADDON")
         syncFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
         syncFrame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
+        pcall(syncFrame.RegisterEvent, syncFrame, "CHANNEL_PASSWORD_REQUEST")
     end
 end
 
@@ -616,6 +619,15 @@ end
 -- Au succes : envoie un SR immediat + 2 SR différés (15s, 35s) pour maximiser les chances d'avoir une reponse
 -- frameID = 0 : canal invisible (pas attache a un onglet chat), sync uniquement via addon messages
 function Overlord.Sync:JoinChannel(attempt, generation)
+    -- The game answered our join with a request of its own: no join is tried again by
+    -- itself (see OnChannelJoinRefused). Inside anyway: forgotten.
+    if priv.channelClosed then
+        if (GetChannelName(ChannelName()) or 0) > 0 then
+            priv.channelClosed = nil
+        else
+            return
+        end
+    end
     attempt = attempt or 1
     if not generation then
         local existingId = GetChannelName(ChannelName())
@@ -691,13 +703,41 @@ function Overlord.Sync:JoinChannel(attempt, generation)
     end)
 end
 
+-- The game answered a join of our channel with a request of its own, shown to the
+-- player in a dialog that takes the keyboard, once per try. Joining stops there for
+-- the session: the next tries are a login, a /reload or the way out of an instance,
+-- never a timer. Any other channel's request is none of our business.
+function Overlord.Sync:OnChannelJoinRefused(name)
+    if canaccessvalue and not canaccessvalue(name) then return end
+    if type(name) ~= "string" or name:upper() ~= ChannelName():upper() then return end
+    if (GetChannelName(ChannelName()) or 0) > 0 then return end
+    if priv.channelClosed then return end
+    priv.channelClosed = true
+    self._joinChannelAttemptPending = nil
+    if not priv.channelClosedTold then
+        priv.channelClosedTold = true
+        Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. ((L and L.CHANNEL_CLOSED_NOTICE)
+            or "The Overlord channel of this realm cannot be joined right now. Leaving an instance, or /reload later, tries again."))
+    end
+    local finder = Overlord.GroupFinder
+    if finder and finder.Touch then finder:Touch() end
+end
+
+-- Refused that way, and still outside.
+function Overlord.Sync:IsChannelClosed()
+    return priv.channelClosed == true and not self:GetChannelId()
+end
+
 -- Relance periodique du join canal (toutes les 60s) si on n'est pas dedans (evite de rester desync si le join a rate au chargement)
 local channelRetryTicker = nil
 function Overlord.Sync:StartChannelRetryLoop()
     if channelRetryTicker then channelRetryTicker:Cancel() end
     channelRetryTicker = C_Timer.NewTicker(60, function()
         if not Overlord.IsInitialized then return end
-        if Overlord.Sync:GetChannelId() then return end
+        if Overlord.Sync:GetChannelId() then
+            priv.channelClosed = nil    -- inside: a refusal met earlier no longer stands
+            return
+        end
         Overlord.Sync:JoinChannel(1)
     end)
 end
@@ -11195,6 +11235,9 @@ function Overlord.Sync:Resume()
     -- Voir Initialize() : on evite CHAT_MSG_CHANNEL_NOTICE pour ne pas toucher
     -- a ses arguments proteges pendant les transitions d'instance.
     syncFrame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
+    pcall(syncFrame.RegisterEvent, syncFrame, "CHANNEL_PASSWORD_REQUEST")
+    -- Leaving an instance is one of the three moments the channel is tried again.
+    priv.channelClosed = nil
     self:JoinChannel()
     self:StartChannelRetryLoop()
     self:StartProximitySync()

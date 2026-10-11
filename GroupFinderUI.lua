@@ -62,6 +62,14 @@ local LIVE_KEY = {
     live = { "GF_LIVE_ONLINE", "Listing online", "good" },
     retry = { "GF_LIVE_RETRY", "Channel busy, trying again…", "gold" },
     channel = { "GF_LIVE_CHANNEL", "Connecting to the Overlord channel…", "gold" },
+    closed = { "GF_LIVE_CLOSED", "Overlord channel unavailable on this realm", "bad" },
+}
+-- What an empty board says, by state of the channel (GF:ChannelState).
+local EMPTY_KEY = {
+    closed = { "GF_LIVE_CLOSED", "Overlord channel unavailable on this realm" },
+    connecting = { "GF_LIVE_CHANNEL", "Connecting to the Overlord channel…" },
+    listening = { "GF_EMPTY_LISTENING", "Listening for groups…" },
+    open = { "GF_EMPTY_TITLE", "No group is recruiting right now." },
 }
 
 local frame
@@ -746,9 +754,18 @@ local function PaintList(f, gf)
         end
     end
     local empty = shown == 0
+    -- An empty board is only "nobody recruits" once the channel is open and has been
+    -- listened to for a while; before that it says what it is waiting for.
+    local channelState = empty and gf:ChannelState() or "open"
+    list.channelState = empty and channelState or nil
+    if empty and list.emptyKey ~= channelState then
+        list.emptyKey = channelState
+        local text = EMPTY_KEY[channelState] or EMPTY_KEY.open
+        list.emptyTitle:SetText(T(text[1], text[2]))
+    end
     list.emptyIcon:SetShown(empty)
     list.emptyTitle:SetShown(empty)
-    list.emptyBody:SetShown(empty)
+    list.emptyBody:SetShown(empty and channelState == "open")
     if shown > visible then
         list.page:SetText(string.format("%d-%d / %d", offset + 1, math.min(shown, offset + visible), shown))
     else
@@ -756,8 +773,11 @@ local function PaintList(f, gf)
     end
     if shown > 0 then
         f.subtitle:SetText(string.format(T("GF_SUBTITLE", "Groups: %d · Players: %d"), shown, players))
-    else
+    elseif channelState == "open" then
         f.subtitle:SetText(T("GF_SUBTITLE_NONE", "No group is recruiting"))
+    else
+        local text = EMPTY_KEY[channelState]
+        f.subtitle:SetText(T(text[1], text[2]))
     end
 end
 
@@ -1010,6 +1030,7 @@ local function PaintLive(card, gf, own)
     live.facts:SetText(facts)
     -- The invitation mode sits on the state line, which wraps (the summary does not).
     local state = LIVE_KEY[own.state] or LIVE_KEY.sending
+    if own.state == "channel" and gf:ChannelState() == "closed" then state = LIVE_KEY.closed end
     live.state:SetText(T(state[1], state[2]) .. "  ·  " .. (own.auto
         and T("GF_MODE_AUTO", "automatic invitation") or T("GF_MODE_MANUAL", "leader approves")))
     Color(live.state, state[3])
@@ -1064,6 +1085,9 @@ function GFUI:CreateFrame()
     if Overlord.UI.ApplyWoodDialogBackdrop then Overlord.UI.ApplyWoodDialogBackdrop(f) end
     f:SetFrameStrata("HIGH")
     f:SetFrameLevel(50)
+    -- Several Overlord windows share this layer: the one shown or clicked last goes in
+    -- front, whole (without this their contents interleave where they overlap).
+    f:SetToplevel(true)
     f:EnableMouse(true)
     f:SetMovable(true)
     f:RegisterForDrag("LeftButton")
@@ -1086,6 +1110,7 @@ function GFUI:CreateFrame()
     footer:SetText(T("GF_FOOTER", "Seen by the Overlord players of your faction. Off in instances."))
 
     f:SetScript("OnShow", function(self)
+        self:Raise()
         if Overlord.PlayPanelOpenSound then Overlord:PlayPanelOpenSound() end
         self:SetScale(Overlord.UI.GetEffectiveUiScale and Overlord.UI:GetEffectiveUiScale() or 1)
         if Overlord.UI.ScheduleActionGridActiveRefresh then Overlord.UI:ScheduleActionGridActiveRefresh() end
@@ -1143,6 +1168,21 @@ function GFUI:Refresh()
         self._cooldownTimer = true
         C_Timer.After(left + 0.5, function()
             GFUI._cooldownTimer = nil
+            GFUI:RequestRefresh()
+        end)
+    end
+    -- An empty board waiting on the channel looks again by itself: every 5 s until the
+    -- channel answers, then once when the listening time is over.
+    local waiting = frame.list.channelState
+    if waiting and waiting ~= "open" and not self._channelTimer then
+        local delay = 5
+        if waiting == "listening" then
+            local _, remaining = gf:ChannelState()
+            delay = (remaining or 0) + 0.5
+        end
+        self._channelTimer = true
+        C_Timer.After(delay, function()
+            GFUI._channelTimer = nil
             GFUI:RequestRefresh()
         end)
     end

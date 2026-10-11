@@ -238,6 +238,9 @@ local function StartNetworkProbe()
             R.Detail("Campaign: " .. pools:GetRuleset() .. " ruleset (pool " .. pools:GetOverlordPoolTag()
                 .. ", channel OverlordF" .. pools:GetChannelSuffix() .. ")"
                 .. (pools._rulesetAssumed and " ASSUMED: game rules and realm name gave no answer" or ""))
+            if sync.IsChannelClosed and sync:IsChannelClosed() then
+                R.Detail("Channel: cannot be joined (tried again at login, /reload or on leaving an instance)")
+            end
         end
         if sync.GetEnemyCaptureFinalDiagnostics then R.Detail(sync:GetEnemyCaptureFinalDiagnostics()) end
         if sync.GetSuspiciousSenderDiagnostics then R.Detail(sync:GetSuspiciousSenderDiagnostics()) end

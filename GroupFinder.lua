@@ -72,14 +72,20 @@ GF.PENDING_MAX = 20
 GF.PENDING_TTL = 180
 GF.DECLINE_MUTE = 300
 GF.INVITE_GAP = 0.6
-GF.INVITE_OUTSTANDING_TTL = 60
+GF.INVITE_OUTSTANDING_TTL = 60 -- an invitation holds its place as long as the game's prompt lasts
 GF.NOTIFY_GAP = 20
+GF.LISTEN_SEC = 90            -- the empty board says "listening" that long after the channel is joined
+GF.LISTEN_START_SEC = 150     -- ... and never longer than this after a login or an instance
 
 GF.APPLY_TIMEOUT = 12
 GF.APPLY_RETRY_GAP = 20
 GF.SIGNUP_BURST = 20          -- sign-ups read in a row, then SIGNUP_RATE a second
 GF.SIGNUP_RATE = 2
-GF.INVITE_CHECK_SEC = 6       -- "invited" with no invitation in sight after 6 s: the leader is told
+-- "Invited" with no invitation in sight after 45 s: the leader is told. Not sooner: on
+-- a slow server the game's invitation can come long after the leader's answer, and an
+-- early alarm sends the leader after a player who is fine. Not later: the alarm must
+-- reach the leader while he still holds the place (INVITE_OUTSTANDING_TTL).
+GF.INVITE_CHECK_SEC = 45
 -- One accepted sign-up per 5 minutes: joining a group also moves you to its layer,
 -- and this window is for playing together, not for hopping.
 GF.SIGNUP_COOLDOWN = 300
@@ -99,10 +105,13 @@ GF.pendingByKey = GF.pendingByKey or {}
 GF.outstanding = GF.outstanding or {} -- [key] = { at, raw }: invited, not in the group yet
 GF.outstandingCount = GF.outstandingCount or 0
 GF.muted = GF.muted or {}             -- [key] = time until which a declined player is ignored
+GF.declinedBy = GF.declinedBy or {}   -- [leader key] = time until which that leader's refusal stands (our side)
+GF.declinedCount = GF.declinedCount or 0
 GF.mutedCount = GF.mutedCount or 0
 GF.invitedAt = GF.invitedAt or {}     -- [key] = last invitation: no second automatic one for 5 min
 GF.invitedCount = GF.invitedCount or 0
 GF.requestSeen = GF.requestSeen or {}
+GF._invitesSeen = GF._invitesSeen or {} -- [key] = when the game's invitation of that player reached us
 GF.requestSeenCount = GF.requestSeenCount or 0
 GF.strikes = GF.strikes or {}
 GF.strikeCount = GF.strikeCount or 0
@@ -512,7 +521,28 @@ function GF:CheckPublish()
     if InInstance() then return false, "GF_ERR_INSTANCE" end
     if not self:FactionCode() or not self:PlayerName() then return false, "GF_ERR_NOT_READY" end
     if not self:CanLead() then return false, "GF_ERR_NOT_LEADER" end
+    if self:ChannelState() == "closed" then return false, "GF_LIVE_CLOSED" end
     return true
+end
+
+-- What the window says about the channel the listings travel on: "closed" (the game
+-- refuses our join), "connecting" (not inside yet), "listening" (inside for less than
+-- a minute and a half: the listings already published have not all been heard yet,
+-- nobody is asked for them) or "open". Second value: seconds of listening left.
+function GF:ChannelState()
+    local sync = Overlord.Sync
+    if sync and sync.IsChannelClosed and sync:IsChannelClosed() then
+        self._listenUntil = nil
+        return "closed"
+    end
+    if not (sync and sync.GetChannelId and sync:GetChannelId()) then
+        self._listenUntil = nil
+        return "connecting"
+    end
+    local now = GetTime()
+    if not self._listenUntil then self._listenUntil = now + self.LISTEN_SEC end
+    if now < self._listenUntil then return "listening", self._listenUntil - now end
+    return "open"
 end
 
 function GF:SaveOwn()
@@ -640,7 +670,10 @@ function GF:DoInvite(app, late)
     local invite = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit
     if not invite then return end
     local slot = self.outstanding[app.key]
-    if slot and slot.app == app then slot.sent = true end
+    if slot and slot.app == app then
+        -- The minute of its place starts when the invitation leaves, not when it queued.
+        slot.sent, slot.at = true, GetTime()
+    end
     securecall(invite, app.raw)
     self:Reply(app.name, "i", late)
 end
@@ -769,6 +802,13 @@ function GF:NotifyApplicant(app, now)
     self._notifiedAt = now
     own.told[app.key] = true
     own.toldCount = own.toldCount + 1
+    -- An automatic listing stalled at five: the leader is told what unblocks it, once.
+    if own.auto and not own.raidTold and IsAutoRequest(app)
+        and not self:IsRaid() and self:GroupSize() >= 5 then
+        own.raidTold = true
+        Notify(T("GF_NEED_RAID", "Group of five: convert to raid to keep inviting."))
+        return
+    end
     Notify(string.format(T("GF_CHAT_APPLICANT", "%s (level %d) asks to join your group. /ov groups"),
         app.name, app.level))
 end
@@ -1034,6 +1074,16 @@ function GF:OnReply(text, sender)
     if entry then entry.silent = nil end
     apply.status = status
     apply.at = GetTime()
+    if status == "declined" then
+        -- Remembered as long as the leader's client ignores us: a new click would be
+        -- a whisper into the void and a false "no answer".
+        if not self.declinedBy[apply.key] then
+            self.declinedBy, self.declinedCount = MakeRoom(self.declinedBy, self.declinedCount, 64,
+                GF.IsPast, apply.at)
+            self.declinedCount = self.declinedCount + 1
+        end
+        self.declinedBy[apply.key] = apply.at + self.DECLINE_MUTE
+    end
     if status == "invited" then
         self:StartSignupCooldown()
         C_Timer.After(self.INVITE_CHECK_SEC, function() GF:CheckInviteArrived(apply) end)
@@ -1042,21 +1092,59 @@ function GF:OnReply(text, sender)
 end
 
 -- The leader's client says "invited": the game's invitation must have reached us
--- (PARTY_INVITE_REQUEST since the click, or within the minute before it: a second
--- click on a leader who already invited us gets "invited" with no new prompt), or we
--- are already in the group. If not, the leader is told and the five-minute wait is
--- given back.
+-- (PARTY_INVITE_REQUEST from him since the click, or while he still counted it: a
+-- second click on a leader who already invited us gets "invited" with no new prompt),
+-- or we are already in the group. Somebody else's invitation does not count; one whose
+-- sender the game does not name counts by its moment. If not, the leader is told and
+-- the five-minute wait is given back.
 function GF:CheckInviteArrived(apply)
     if self.apply ~= apply or apply.status ~= "invited" or InInstance() then return end
     -- After a first loss the same test only passes for an invitation seen since.
-    if self:IsGrouped()
-        or (self._inviteSeenAt or 0) >= apply.sentAt - self.INVITE_OUTSTANDING_TTL then
+    local since = apply.sentAt - self.INVITE_OUTSTANDING_TTL
+    if self:IsGrouped() or (self._invitesSeen[apply.key] or 0) >= since
+        or (self._inviteSeenAt or 0) >= since then
         return
     end
     apply.status = "lost"
     apply.at = GetTime()
     self:ClearSignupCooldown()
     self:Whisper(apply.name, "N:" .. self.VERSION)
+    self:Touch()
+end
+
+-- An invitation of the game reached us (PARTY_INVITE_REQUEST). It is remembered under
+-- its sender's name for CheckInviteArrived; a name the game hides or does not give in
+-- full only leaves its moment.
+-- If it is the leader's and we had already told him it was lost (a server slower than
+-- our wait), it is in hand after all: our row says so, the five minutes start again
+-- and the leader's client forgets the request it had taken back.
+function GF:OnInviteSeen(inviter)
+    local now = GetTime()
+    local key
+    -- The game can hand the name back as a protected value: never tested then.
+    if (not canaccessvalue or canaccessvalue(inviter)) and type(inviter) == "string" then
+        key = self:SenderKey(inviter)
+    end
+    if not key then
+        self._inviteSeenAt = now
+        return
+    end
+    -- A handful of names at most: what is older than any request still open goes.
+    local seen, count = self._invitesSeen, 0
+    for name, at in pairs(seen) do
+        if now - at > self.SIGNUP_COOLDOWN then seen[name] = nil else count = count + 1 end
+    end
+    if count >= 16 then
+        seen = {}
+        self._invitesSeen = seen
+    end
+    seen[key] = now
+    local apply = self.apply
+    if not apply or apply.status ~= "lost" or apply.key ~= key then return end
+    apply.status = "invited"
+    apply.at = now
+    self:StartSignupCooldown()
+    self:Whisper(apply.name, "C:" .. self.VERSION)
     self:Touch()
 end
 
@@ -1127,6 +1215,8 @@ end
 function GF:GetApplyStatus(key)
     local apply = self.apply
     if apply and apply.key == key then return apply.status end
+    local declinedUntil = self.declinedBy[key]
+    if declinedUntil and declinedUntil > GetTime() then return "declined" end
     return nil
 end
 
@@ -1137,6 +1227,11 @@ function GF:CanSignUp(entry)
     if self:IsGrouped() then return false, "GF_ERR_GROUPED" end
     if entry.count >= entry.cap then return false, "GF_ERR_FULL" end
     if self:PlayerLevel() < entry.minLevel then return false, "GF_ERR_LEVEL", entry.minLevel end
+    local declinedUntil = self.declinedBy[entry.key]
+    if declinedUntil then
+        local left = declinedUntil - GetTime()
+        if left > 0 then return false, "GF_ERR_COOLDOWN", left end
+    end
     local apply = self.apply
     if apply and apply.key == entry.key then
         if apply.status == "sent" or apply.status == "pending" or apply.status == "invited" then
@@ -1210,7 +1305,9 @@ function GF:FillBoard(out)
             local place = self:TargetContinent(entry.info)
             local far = continent ~= nil and place ~= nil and place ~= continent
             local open = entry.count < entry.cap and level >= entry.minLevel
-            entry.rank = (open and 0 or 2) + (far and 1 or 0) + (entry.silent and 4 or 0)
+            local declinedUntil = self.declinedBy[entry.key]
+            entry.rank = (open and 0 or 2) + (far and 1 or 0)
+                + ((entry.silent or (declinedUntil and declinedUntil > now)) and 4 or 0)
         end
     end
     for index = #out, n + 1, -1 do out[index] = nil end
@@ -1270,14 +1367,26 @@ function GF:OnTick()
             and now - apply.at > (apply.status == "invited" and 90
                 or apply.status == "lost" and self.PENDING_TTL or self.APPLY_RETRY_GAP) then
             -- A settled answer stays on its row until a new request is allowed; an
-            -- invitation, as long as the game's own prompt lasts; a lost one, as long
-            -- as the leader keeps the request for his click.
+            -- invitation, a minute and a half (longer than INVITE_CHECK_SEC, whose
+            -- look needs the request still there); a lost one, as long as the leader
+            -- keeps the request for his click.
             self.apply = nil
             changed = true
         end
     end
+    if self.declinedCount > 0 then
+        for key, untilTime in pairs(self.declinedBy) do
+            if untilTime <= now then
+                self.declinedBy[key] = nil
+                self.declinedCount = self.declinedCount - 1
+                changed = true
+            end
+        end
+    end
     if changed then self:Touch() end
-    if self.boardCount == 0 and not self.own and not self.apply then self:StopTicker() end
+    if self.boardCount == 0 and not self.own and not self.apply and self.declinedCount == 0 then
+        self:StopTicker()
+    end
 end
 
 function GF:OnRosterSettled()
@@ -1305,6 +1414,18 @@ function GF:OnRosterSettled()
             local due = math.max(1, (own.sentAt or 0) + gap - now)
             if (own.tries or 0) == 0 and (not own.nextSendAt or own.nextSendAt - now > due) then
                 self:ScheduleSend(due)
+            end
+        end
+        -- A request sent back by a player whose invitation was only late: he is in the
+        -- group now, nothing is left to click.
+        local sync = Overlord.Sync
+        if self.pending[1] and sync and sync.SenderIsInOurGroup then
+            for index = #self.pending, 1, -1 do
+                local app = self.pending[index]
+                if sync:SenderIsInOurGroup(app.raw) then
+                    table.remove(self.pending, index)
+                    self.pendingByKey[app.key] = nil
+                end
             end
         end
         self:DrainPending()
@@ -1379,6 +1500,9 @@ function GF:OnInstanceSuspend()
     end
     self._rosterTimer = nil
     self.own, self.apply = nil, nil
+    self._listenUntil = nil
+    self.declinedBy, self.declinedCount = {}, 0
+    self._invitesSeen, self._inviteSeenAt = {}, nil
     self:ClearPending()
     for key in pairs(self.board) do self.board[key] = nil end
     self.boardCount = 0
@@ -1389,6 +1513,7 @@ function GF:OnInstanceSuspend()
 end
 
 function GF:OnInstanceResume()
+    self._listenUntil = GetTime() + self.LISTEN_START_SEC
     self:RegisterLiveEvents(true)
 end
 
@@ -1413,8 +1538,8 @@ function GF:OnEvent(event, ...)
     if event == "GROUP_ROSTER_UPDATE" or event == "PARTY_LEADER_CHANGED" then
         self:OnRosterEvent()
     elseif event == "PARTY_INVITE_REQUEST" then
-        -- Only the moment matters (no argument is read): an invitation reached us.
-        self._inviteSeenAt = GetTime()
+        -- Whatever the game hands us as a name, the moment at least is kept.
+        if not pcall(self.OnInviteSeen, self, (...)) then self._inviteSeenAt = GetTime() end
     elseif event == "PLAYER_FLAGS_CHANGED" then
         local unit = ...
         if unit == "player" and self.own and UnitIsAFK then
@@ -1446,6 +1571,7 @@ function GF:Initialize()
     -- and every handler returns before reading anything there.
     self:RegisterLiveEvents(true)
     frame:SetScript("OnEvent", function(_, event, ...) GF:OnEvent(event, ...) end)
+    self._listenUntil = GetTime() + self.LISTEN_START_SEC
 end
 
 function GF:HandleCommand()

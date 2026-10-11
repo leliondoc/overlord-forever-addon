@@ -120,6 +120,8 @@ local function newClient(name, faction, opts)
     env.UnitClass = function() return "Warrior", "WARRIOR" end
     env.UnitIsAFK = function() return client.afk and true or false end
     env.securecall = function(fn, ...) return fn(...) end
+    -- client.secret: every value the game hands over is protected (not to be read).
+    env.canaccessvalue = function() return not client.secret end
     env.C_Timer = {
         After = function(delay, fn) addTimer(delay, fn) end,
         NewTimer = function(delay, fn)
@@ -179,6 +181,7 @@ local function newClient(name, faction, opts)
             IsValidWhisperTarget = function(_, target) return canonical(target) ~= nil end,
             _RememberRecentAddonWhisper = function(_, target) client.remembered[#client.remembered + 1] = target end,
             GetChannelId = function() return client.channelId end,
+            IsChannelClosed = function() return client.channelClosed == true and not client.channelId end,
             TakeChannelToken = function(_, critical)
                 assert(critical == false, "a listing must never take a critical channel token")
                 if not client.token then return false end
@@ -537,7 +540,7 @@ do
     advance(0.3)
     assert(bob.GF:SignUp(key(alice)))
     deliver()
-    advance(30)
+    advance(46)
     assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and bob.GF:SignupCooldownRemaining() > 0)
     assert(#sentBy(bob, "WHISPER", "^N:") == 0)
     assert(#sentBy(alice, "WHISPER") + #sentBy(bob, "WHISPER") == 2, "a delivered invitation costs two whispers")
@@ -555,7 +558,11 @@ do
     assert(bob.GF:SignUp(key(alice)))
     deliver()
     assert(#alice.invites == 1 and bob.GF:GetApplyStatus(key(alice)) == "invited")
-    advance(7)
+    -- Not before 45 s: the game's invitation can be that late on a slow server.
+    advance(40)
+    assert(bob.GF.apply.status == "invited" and #sentBy(bob, "WHISPER", "^N:") == 0 and #alice.printed == 0,
+        "the alarm was raised too early")
+    advance(6)
     assert(bob.GF.apply and bob.GF.apply.status == "lost", "a lost invitation still reads 'invited'")
     assert(bob.GF:SignupCooldownRemaining() == 0 and bob.db.groupFinder.signups["Bob Stone"] == nil)
     assert(#sentBy(bob, "WHISPER", "^N:1$") == 1)
@@ -576,13 +583,40 @@ do
     advance(1)
     assert(#alice.invites == 2 and #alice.GF.pending == 1)
     -- The click works: the player reads "invited" again and his five minutes start.
+    -- Here the leader's answer comes first and the game's invitation a little later.
+    alice.invitesDropped = true
     assert(alice.GF:Accept(key(bob)))
     deliver()
     assert(#alice.invites == 3 and #alice.GF.pending == 0)
-    assert(bob.GF:GetApplyStatus(key(alice)) == "invited", "the second 'invited' was not read")
+    assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and bob.GF.apply.retried, "the second 'invited' was not read")
     assert(bob.GF:SignupCooldownRemaining() > 290)
-    advance(7)
-    assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and #sentBy(bob, "WHISPER", "^N:1$") == 1)
+    advance(10)
+    fire(bob, "PARTY_INVITE_REQUEST", "Alice Smith")
+    advance(40)
+    assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and #sentBy(bob, "WHISPER", "^N:1$") == 1,
+        "an invitation seen since the click raised a second alarm")
+    assert(#sentBy(bob, "WHISPER", "^C:") == 0)
+
+    -- Same click, the game's invitation first and the answer after it: the invitation
+    -- is in hand, one "forget my request" goes out, the leader keeps the place.
+    reset()
+    alice = newClient("Alice Smith", "Alliance")
+    bob = newClient("Bob Stone", "Alliance")
+    alice.invitesDropped = true
+    assert(alice.GF:Publish(spec({ cap = 10, auto = true })))
+    advance(0.3)
+    assert(bob.GF:SignUp(key(alice)))
+    deliver()
+    advance(46)
+    assert(bob.GF.apply.status == "lost" and #alice.GF.pending == 1)
+    alice.invitesDropped = false
+    assert(alice.GF:Accept(key(bob)))
+    assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and bob.GF:SignupCooldownRemaining() > 290)
+    deliver()
+    assert(#sentBy(bob, "WHISPER", "^C:1$") == 1 and bob.GF:GetApplyStatus(key(alice)) == "invited")
+    assert(alice.GF.outstanding[key(bob)] and alice.GF.outstandingCount == 1, "the cancel undid the invitation of the click")
+    advance(50)
+    assert(#sentBy(bob, "WHISPER", "^N:1$") == 1, "a second alarm for an invitation in hand")
 
     -- The click fails too: the leader is given the game's own command, without the
     -- player having to sign up again, and the exchange stops there.
@@ -596,11 +630,11 @@ do
     deliver()
     assert(alice.GF:Accept(key(bob)))
     deliver()
-    advance(7)
+    advance(46)
     assert(#alice.GF.pending == 1 and alice.GF.pending[1].manual)
     assert(alice.GF:Accept(key(bob)))
     deliver()
-    advance(7)
+    advance(46)
     assert(#alice.GF.pending == 0, "a request refused twice by the game must leave the list")
     assert(alice.printed[#alice.printed]:find("/invite Bob Stone", 1, true), alice.printed[#alice.printed])
     assert(bob.GF.apply.status == "lost" and bob.GF:SignupCooldownRemaining() == 0)
@@ -624,8 +658,117 @@ do
     assert(bob.GF:SignUp(key(alice)))
     deliver()
     assert(#alice.invites == 1 and bob.GF:GetApplyStatus(key(alice)) == "invited")
-    advance(7)
+    advance(46)
     assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and #sentBy(bob, "WHISPER", "^N:") == 0)
+
+    -- A slow server: the game's invitation comes half a minute after the leader's
+    -- answer. Nothing is said to anybody, the place stays held, the five minutes stand.
+    reset()
+    alice = newClient("Alice Smith", "Alliance")
+    bob = newClient("Bob Stone", "Alliance")
+    alice.invitesDropped = true
+    assert(alice.GF:Publish(spec({ cap = 10, auto = true })))
+    advance(0.3)
+    assert(bob.GF:SignUp(key(alice)))
+    deliver()
+    advance(30)
+    fire(bob, "PARTY_INVITE_REQUEST", "Alice Smith")
+    advance(20)
+    assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and bob.GF:SignupCooldownRemaining() > 0)
+    assert(#sentBy(bob, "WHISPER", "^N:") == 0 and #sentBy(bob, "WHISPER", "^C:") == 0 and #alice.printed == 0,
+        "an invitation that was only slow raised the alarm")
+    alice.GF:PruneOutstanding(now)
+    assert(alice.GF.outstandingCount == 1 and #alice.GF.pending == 0, "the place was given up before the alarm could come")
+
+    -- Somebody else's invitation does not hide a lost one: the alarm still goes out.
+    reset()
+    alice = newClient("Alice Smith", "Alliance")
+    bob = newClient("Bob Stone", "Alliance")
+    alice.invitesDropped = true
+    assert(alice.GF:Publish(spec({ cap = 10, auto = true })))
+    advance(0.3)
+    advance(5)
+    fire(bob, "PARTY_INVITE_REQUEST", "Eve Dark")     -- a friend, just before the click
+    assert(bob.GF:SignUp(key(alice)))
+    deliver()
+    advance(20)
+    fire(bob, "PARTY_INVITE_REQUEST", "Eve Dark")     -- and again while we wait
+    advance(26)
+    assert(bob.GF.apply.status == "lost" and #sentBy(bob, "WHISPER", "^N:1$") == 1,
+        "a stranger's invitation was taken for the leader's")
+    -- An invitation whose sender the game does not name counts by its moment.
+    reset()
+    alice = newClient("Alice Smith", "Alliance")
+    bob = newClient("Bob Stone", "Alliance")
+    alice.invitesDropped = true
+    assert(alice.GF:Publish(spec({ cap = 10, auto = true })))
+    advance(0.3)
+    assert(bob.GF:SignUp(key(alice)))
+    deliver()
+    advance(20)
+    fire(bob, "PARTY_INVITE_REQUEST")
+    advance(26)
+    assert(bob.GF.apply.status == "invited" and #sentBy(bob, "WHISPER", "^N:") == 0)
+    -- Same for a name handed over as a protected value: it is never read.
+    reset()
+    alice = newClient("Alice Smith", "Alliance")
+    bob = newClient("Bob Stone", "Alliance")
+    alice.invitesDropped = true
+    assert(alice.GF:Publish(spec({ cap = 10, auto = true })))
+    advance(0.3)
+    assert(bob.GF:SignUp(key(alice)))
+    deliver()
+    advance(46)
+    assert(bob.GF.apply.status == "lost")
+    bob.secret = true
+    fire(bob, "PARTY_INVITE_REQUEST", "Alice Smith")
+    bob.secret = false
+    assert(bob.GF.apply.status == "lost" and #sentBy(bob, "WHISPER", "^C:") == 0 and next(bob.GF._invitesSeen) == nil,
+        "a protected name was read")
+
+    -- Slower than our wait: the alarm went out, then the invitation comes. It is in
+    -- hand after all: the row says "invited" again, the five minutes start again and
+    -- the leader's list forgets the request it had taken back.
+    reset()
+    alice = newClient("Alice Smith", "Alliance")
+    bob = newClient("Bob Stone", "Alliance")
+    alice.invitesDropped = true
+    assert(alice.GF:Publish(spec({ cap = 10, auto = true })))
+    advance(0.3)
+    assert(bob.GF:SignUp(key(alice)))
+    deliver()
+    advance(46)
+    assert(bob.GF.apply.status == "lost" and #alice.GF.pending == 1 and bob.GF:SignupCooldownRemaining() == 0)
+    -- Somebody else's invitation, or one without a name, changes nothing.
+    fire(bob, "PARTY_INVITE_REQUEST", "Eve Dark")
+    fire(bob, "PARTY_INVITE_REQUEST")
+    assert(bob.GF.apply.status == "lost" and #sentBy(bob, "WHISPER", "^C:") == 0)
+    fire(bob, "PARTY_INVITE_REQUEST", "Alice Smith")
+    deliver()
+    assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and bob.GF:SignupCooldownRemaining() > 290,
+        "a late invitation was not taken as received")
+    assert(#sentBy(bob, "WHISPER", "^C:1$") == 1 and #alice.GF.pending == 0, "the leader still holds the request")
+    -- Known limit: the leader gave the place up when the alarm came, it is not taken back.
+    assert(alice.GF.outstandingCount == 0)
+    advance(50)
+    assert(#sentBy(bob, "WHISPER", "^N:1$") == 1, "a late invitation raised a second alarm")
+
+    -- The player's client did not tell (an older version): the request goes away by
+    -- itself once he is in the group.
+    reset()
+    alice = newClient("Alice Smith", "Alliance")
+    bob = newClient("Bob Stone", "Alliance")
+    alice.invitesDropped = true
+    assert(alice.GF:Publish(spec({ cap = 10, auto = true })))
+    advance(0.3)
+    assert(bob.GF:SignUp(key(alice)))
+    deliver()
+    advance(46)
+    assert(#alice.GF.pending == 1 and alice.GF.pending[1].manual)
+    join(alice, bob)
+    advance(1)
+    assert(#alice.GF.pending == 0 and alice.GF.pendingByKey[key(bob)] == nil,
+        "a request stays in the list for a player who is in the group")
 end
 
 -- ---------------------------------------------------------------------------
@@ -819,6 +962,23 @@ do
     assert(alice.GF.invitedAt["ben two"] == nil and alice.GF.invitedCount == 1,
         "a player who was never invited is remembered as invited")
     assert(alice.remembered[#alice.remembered] == "Ben Two", "an answer sent from a timer was not recorded")
+    -- The minute of a place starts when its invitation leaves, not when it queued: the
+    -- "not received" of the last player of a burst still finds his place.
+    reset()
+    alice = newClient("Alice Smith", "Alliance")
+    alice.group = { size = 5, raid = true, leader = true, members = {} }
+    alice.invitesDropped = true
+    three = {}
+    for i, name in ipairs({ "Ann One", "Ben Two", "Cat Tri" }) do three[i] = newClient(name, "Alliance") end
+    assert(alice.GF:Publish(spec({ cap = 40, auto = true })))
+    advance(0.3)
+    for i = 1, 3 do assert(three[i].GF:SignUp(key(alice))) end
+    deliver()
+    local queuedAt = now
+    advance(2)
+    assert(#alice.invites == 3)
+    assert(math.abs(alice.GF.outstanding["cat tri"].at - (queuedAt + 1.2)) < 0.01, "a place is dated from its turn in the queue")
+    assert(alice.GF.outstanding["ann one"].at == queuedAt)
     -- Without either, the queued invitation leaves at its turn.
     reset()
     alice = newClient("Alice Smith", "Alliance")
@@ -847,7 +1007,7 @@ do
             at = now, manual = true }
         alice.GF.pending[i], alice.GF.pendingByKey[app.key] = app, app
     end
-    advance(7)
+    advance(46)
     assert(#sentBy(bob2, "WHISPER", "^N:1$") == 1 and alice.GF.outstandingCount == 0)
     assert(#alice.GF.pending == alice.GF.PENDING_MAX and #alice.printed == 0,
         "the leader was sent to a request that is not in the window")
@@ -933,7 +1093,7 @@ do
     -- No invitation follows: "not received" goes out, to a name recorded for the
     -- offline filter (the leader may be gone).
     local recorded = #bob3.remembered
-    advance(7)
+    advance(46)
     assert(bob3.GF:GetApplyStatus(top.key) == "lost" and #sentBy(bob3, "WHISPER", "^N:1$") == 1)
     assert(#bob3.remembered == recorded + 1 and bob3.remembered[#bob3.remembered] == top.name)
 
@@ -974,14 +1134,48 @@ do
     deliver()
     assert(bob.GF:GetApplyStatus(key(alice)) == "declined")
     assert(bob.GF:SignupCooldownRemaining() == 0, "a refusal must not start the cooldown")
-    -- Declined: ignored for five minutes, the retry gets no answer.
-    advance(25)
-    assert(bob.GF:SignUp(key(alice)))
+    -- Declined: the leader's client ignores him for five minutes (a sign-up sent
+    -- anyway gets no answer) ...
     local replies = #sentBy(alice, "WHISPER")
+    advance(11)
+    fire(alice, "CHAT_MSG_ADDON", "OverlordGF", "J:1:A:a:z:stromgarde:1:60", "WHISPER", "Bob Stone")
+    assert(#sentBy(alice, "WHISPER") == replies and #alice.GF.pending == 0, "a declined player was read again")
+    -- ... and his own client knows it: no whisper into the void, the row keeps saying
+    -- "Declined" with the time left, and goes to the end of his board.
+    local whispers = #sentBy(bob, "WHISPER")
+    local okNow, why, left = bob.GF:CanSignUp(bob.GF.board[key(alice)])
+    assert(not okNow and why == "GF_ERR_COOLDOWN" and left > 280 and left <= 300, "refusal reason right after a decline: " .. tostring(why))
+    advance(25)
+    okNow, why, left = bob.GF:SignUp(key(alice))
+    assert(not okNow and why == "GF_ERR_COOLDOWN" and left > 250, "a declined player could sign up again at once")
+    assert(#sentBy(bob, "WHISPER") == whispers, "a refused click still whispered")
+    assert(bob.GF.apply == nil and bob.GF:GetApplyStatus(key(alice)) == "declined", "the refusal is forgotten after 20 s")
+    -- Same size and head count as Alice's listing, a name that sorts after hers: only
+    -- the refusal can put her below.
+    fire(bob, "CHAT_MSG_ADDON", "OverlordGF", "L:1:A:a:w::40:1:0:1:1:60:600", "CHANNEL", "Real One")
+    local shown = {}
+    bob.GF:FillBoard(shown)
+    assert(#shown == 2 and shown[1].name == "Real One" and shown[2].key == key(alice),
+        "a leader who declined us must rank after an equal listing")
+    -- A withdraw and a new listing of the same leader do not erase it.
+    assert(alice.GF:Unpublish("user"))
+    advance(20)
+    assert(alice.GF:Publish(spec({ minLevel = 40 })))
+    advance(1)
+    assert(bob.GF.board[key(alice)] and bob.GF:GetApplyStatus(key(alice)) == "declined")
+    -- After the five minutes the row is free again, repainted without any message.
+    local revision = bob.GF.revision
+    advance(260)
+    assert(bob.GF:GetApplyStatus(key(alice)) == nil and bob.GF.declinedCount == 0, "the refusal outlived its five minutes")
+    assert(bob.GF.revision > revision, "the row was not repainted when the refusal ended")
+    assert(bob.GF:SignUp(key(alice)))
     deliver()
-    assert(#sentBy(alice, "WHISPER") == replies and #alice.GF.pending == 0)
-    advance(13)
-    assert(bob.GF:GetApplyStatus(key(alice)) == "timeout")
+    assert(#alice.GF.pending == 1)
+    -- An instance wipes it with the rest.
+    bob.GF.declinedBy["someone else"], bob.GF.declinedCount = now + 300, 1
+    bob.inInstance = true
+    bob.GF:OnInstanceSuspend()
+    assert(next(bob.GF.declinedBy) == nil and bob.GF.declinedCount == 0)
 
     -- The listing changed between the board and the click.
     reset()
@@ -1461,6 +1655,100 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+-- 12b. What the window is told about the channel; the stalled automatic listing
+-- ---------------------------------------------------------------------------
+do
+    -- Not inside yet: connecting. Inside: listening for a minute and a half, then open.
+    reset()
+    local bob = newClient("Bob Stone", "Alliance")
+    bob.channelId = nil
+    assert(bob.GF:ChannelState() == "connecting")
+    advance(40)
+    assert(bob.GF:ChannelState() == "connecting")
+    bob.channelId = 5
+    local state, left = bob.GF:ChannelState()
+    assert(state == "listening" and left == 90, "listening must start when the channel is joined: " .. tostring(left))
+    advance(89)
+    assert(bob.GF:ChannelState() == "listening")
+    advance(2)
+    assert(bob.GF:ChannelState() == "open")
+    -- Already inside at login: bounded, a window opened late does not start a new wait.
+    reset()
+    bob = newClient("Bob Stone", "Alliance")
+    advance(100)
+    state, left = bob.GF:ChannelState()
+    assert(state == "listening" and left == 50, "a window opened late listens for " .. tostring(left))
+    advance(51)
+    assert(bob.GF:ChannelState() == "open")
+    advance(600)
+    assert(bob.GF:ChannelState() == "open", "an old session started listening again")
+    -- Out and in again: listens again; an instance too.
+    bob.channelId = nil
+    assert(bob.GF:ChannelState() == "connecting")
+    bob.channelId = 5
+    assert(bob.GF:ChannelState() == "listening")
+    bob.inInstance = true
+    bob.GF:OnInstanceSuspend()
+    assert(bob.GF._listenUntil == nil)
+    bob.inInstance = false
+    bob.GF:OnInstanceResume()
+    state, left = bob.GF:ChannelState()
+    assert(state == "listening" and left == 150)
+    -- Refused by the game: closed comes first, and nothing is published into it.
+    bob.channelId, bob.channelClosed = nil, true
+    assert(bob.GF:ChannelState() == "closed")
+    local okPublish, whyNot = bob.GF:Publish(spec())
+    assert(not okPublish and whyNot == "GF_LIVE_CLOSED" and bob.GF.own == nil, "a listing was published into a closed channel")
+    bob.channelId = 5            -- inside after all: the refusal no longer counts
+    assert(bob.GF:ChannelState() ~= "closed" and bob.GF:Publish(spec()))
+    -- A Sync without the accessor (another build of the fixture) is simply "not closed".
+    bob.env.Overlord.Sync.IsChannelClosed = nil
+    assert(bob.GF:ChannelState() ~= "closed")
+
+    -- An automatic listing stalled at five: the leader reads what unblocks it, once.
+    local function stalled(size, raid, auto)
+        reset()
+        local alice = newClient("Alice Smith", "Alliance")
+        alice.group = { size = size, raid = raid, leader = true, members = {} }
+        assert(alice.GF:Publish(spec({ cap = 40, auto = auto })))
+        advance(0.3)
+        fire(alice, "CHAT_MSG_ADDON", "OverlordGF", "J:1:A:a:z:stromgarde:1:60", "WHISPER", "Eve Dark")
+        return alice
+    end
+    local alice = stalled(5, false, true)
+    assert(#alice.GF.pending == 1 and #alice.printed == 1)
+    assert(alice.printed[1]:find("convert to raid", 1, true), "the leader is not told to convert: " .. alice.printed[1])
+    advance(25)
+    fire(alice, "CHAT_MSG_ADDON", "OverlordGF", "J:1:A:a:z:stromgarde:1:60", "WHISPER", "Zed Other")
+    assert(#alice.printed == 2 and alice.printed[2]:find("Zed Other", 1, true), "the raid sentence was said twice")
+    -- Not for a party below five, a raid, or a leader who approves by hand.
+    alice = stalled(5, false, false)
+    assert(#alice.printed == 1 and alice.printed[1]:find("Eve Dark", 1, true))
+    alice = stalled(5, true, true)
+    assert(#alice.printed == 0 and #alice.invites == 1)
+    alice = stalled(3, false, true)
+    assert(#alice.printed == 0 and #alice.invites == 1)
+    -- Four members and one invitation still open: the request waits, but the party is
+    -- not five yet, so the usual line is said.
+    reset()
+    alice = newClient("Alice Smith", "Alliance")
+    alice.group = { size = 4, raid = false, leader = true, members = {} }
+    assert(alice.GF:Publish(spec({ cap = 40, auto = true })))
+    advance(0.3)
+    fire(alice, "CHAT_MSG_ADDON", "OverlordGF", "J:1:A:a:z:stromgarde:1:60", "WHISPER", "Eve Dark")
+    fire(alice, "CHAT_MSG_ADDON", "OverlordGF", "J:1:A:a:z:stromgarde:1:60", "WHISPER", "Zed Other")
+    assert(#alice.invites == 1 and #alice.GF.pending == 1)
+    assert(#alice.printed == 1 and alice.printed[1]:find("Zed Other", 1, true), "the raid sentence for a party of four")
+    -- Never in a raid, whatever made the request wait.
+    alice = stalled(5, false, true)
+    alice.printed = {}
+    alice.GF.own.raidTold, alice.GF._notifiedAt = nil, nil
+    alice.group.raid = true
+    alice.GF:NotifyApplicant({ key = "new one", name = "New One", level = 60 }, now + 100)
+    assert(#alice.printed == 1 and alice.printed[1]:find("New One", 1, true), "the raid sentence in a raid")
+end
+
+-- ---------------------------------------------------------------------------
 -- 13. Views: order of the board, places
 -- ---------------------------------------------------------------------------
 do
@@ -1607,6 +1895,7 @@ do
         local text = read(workflow)
         assert(text:find("lua5.1 tests/forever_group_finder.test.lua", 1, true), workflow .. " misses the finder test")
         assert(text:find("lua5.1 tests/forever_group_finder_ui.test.lua", 1, true), workflow .. " misses the window test")
+        assert(text:find("lua5.1 tests/forever_join_chain.test.lua", 1, true), workflow .. " misses the join test")
     end
 end
 

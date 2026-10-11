@@ -138,6 +138,7 @@ local zone = { id = "stromgarde", name = "Stromgarde" }
 local arathi = { id = "arathi", mapName = "Arathi Highlands", dropdownLabel = "Arathi", preferredMapID = 1417, zones = { zone } }
 local printed = {}
 local gridRefreshes, opened, closed = 0, 0, 0
+local channelId, channelClosed = 5, false
 Overlord = {
     PlayerFaction = "Alliance", InstanceSuspended = false, L = {},
     PrintNotification = function(_, text) printed[#printed + 1] = text end,
@@ -162,7 +163,8 @@ Overlord = {
         CanonicalForeverName = function(_, n) return type(n) == "string" and n:match("^%a+ %a+$") and n or nil end,
         IsSenderLocalPlayer = function(_, n) return n == "Alice Smith" end,
         IsValidWhisperTarget = function() return true end,
-        GetChannelId = function() return 5 end,
+        GetChannelId = function() return channelId end,
+        IsChannelClosed = function() return channelClosed and not channelId end,
         TakeChannelToken = function() return true end,
         NoteChannelSendKind = function() end,
         SenderIsInOurGroup = function() return false end,
@@ -429,6 +431,50 @@ do
     -- One front in this test: the whole front, then anywhere, and round again.
     assert(count == 2 and seen["f:arathi"] and seen["w:"], "the fallback does not walk through the places")
     MenuUtil = menuUtil
+end
+
+-- An empty board says what it waits for: the channel, then the listings, and only
+-- then that nobody recruits. It looks again by itself, one timer at a time.
+do
+    for key in pairs(GF.board) do GF:RemoveEntry(key) end
+    GF._listenUntil = nil
+    channelId = nil
+    runTimers(10)
+    UI:Refresh()
+    assert(list.emptyTitle:IsShown() and list.emptyTitle:GetText() == "Connecting to the Overlord channel…", tostring(list.emptyTitle:GetText()))
+    assert(frame.subtitle:GetText() == "Connecting to the Overlord channel…" and not list.emptyBody:IsShown())
+    local armed = #timers
+    UI:Refresh()
+    UI:Refresh()
+    assert(#timers == armed, "more than one channel timer armed")
+    channelId = 5
+    runTimers(6)
+    runTimers(1)
+    assert(list.emptyTitle:GetText() == "Listening for groups…", "the board did not look again once the channel was joined: " .. tostring(list.emptyTitle:GetText()))
+    assert(not list.emptyBody:IsShown())
+    runTimers(92)
+    runTimers(1)
+    assert(list.emptyTitle:GetText() == "No group is recruiting right now." and list.emptyBody:IsShown(),
+        "the board did not repaint when the listening time ended")
+    assert(frame.subtitle:GetText() == "No group is recruiting")
+    -- Refused by the game: said on the board and on the leader's card, publishing refused.
+    channelId, channelClosed = nil, true
+    UI:Refresh()
+    assert(list.emptyTitle:GetText() == "Overlord channel unavailable on this realm" and not list.emptyBody:IsShown())
+    card.form.publish:GetScript("OnClick")(card.form.publish)
+    assert(GF.own == nil and card.form.reason:GetText() == "Overlord channel unavailable on this realm", tostring(card.form.reason:GetText()))
+    channelId, channelClosed = 5, false
+    runTimers(6)
+    runTimers(1)
+    assert(list.emptyTitle:GetText() == "Listening for groups…", "closed stays written on a working channel: " .. tostring(list.emptyTitle:GetText()))
+    -- With a listing on the board nothing of this shows, and no timer is kept running.
+    runTimers(200)
+    hear("L:1:A:a:z:stromgarde:40:12:20:1:1:60:150", "Bob Stone")
+    runTimers(1)
+    assert(not list.emptyTitle:IsShown() and frame.subtitle:GetText() == "Groups: 1 · Players: 12")
+    local idleTimers = #timers
+    UI:Refresh()
+    assert(#timers == idleTimers, "a channel timer armed with groups on the board")
 end
 
 -- Closing: sound, grid state, and no refresh left behind.
