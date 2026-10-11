@@ -34,8 +34,7 @@ local LB_FRAME_PAD = 26
 -- (toujours ramene a la taille de l'ecran).
 local LB_SIZE_BOOST = 1.2
 -- Illustration du siege (fond de l'ecran d'accueil de Battle for Azeroth, 2048 x 1024) en
--- voile sur la fenetre. alpha regle sa presence. L'essai precedent : l'atlas
--- "creditsscreen-keyart-7" (orc contre humain, 1425 x 966) a 0.12.
+-- voile sur la fenetre. alpha regle sa presence.
 local LB_KEYART = {
     texture = "Interface\\GLUES\\MODELS\\UI_MAINMENU_BFA_LOWBANDWIDTH\\UI_MainMenu_BattleForAzeroth_LowBandwidth",
     alpha = 0.18,

@@ -496,11 +496,13 @@ local GUIDE_COMMANDS = { show = true, hud = true, guide = true, network = true, 
 
 local function GuideIconMarkup(icon)
     if type(icon) ~= "string" or icon == "" then return "" end
+    -- Deja une balise de texture (couronne Most Wanted, recadree par son module).
+    if icon:sub(1, 2) == "|T" then return icon .. " " end
     if icon:find("\\Icons\\", 1, true) then
         -- Icones carrees : rogner le bord gris (5..59 sur 64) comme les boutons d'action.
         return string.format("|T%s:%d:%d:0:0:64:64:5:59:5:59|t ", icon, GUIDE_ICON_SIZE, GUIDE_ICON_SIZE)
     elseif icon:find("\\", 1, true) then
-        -- Autres textures (logo Overlord, couronne Most Wanted) : entieres.
+        -- Autres textures (logo Overlord) : entieres.
         return string.format("|T%s:%d:%d|t ", icon, GUIDE_ICON_SIZE, GUIDE_ICON_SIZE)
     end
     return string.format("|A:%s:%d:%d|a ", icon, GUIDE_ICON_SIZE, GUIDE_ICON_SIZE)
@@ -625,7 +627,7 @@ local function BuildQuickGuidePageBody(page)
             FormatGuideSection(L.GUIDE_SECTION_GROUPS, L.GUIDE_GROUPS_BODY,
                 "Interface\\Icons\\INV_Misc_GroupNeedMore"),
             FormatGuideSection(L.GUIDE_SECTION_ALERTS, L.GUIDE_ALERTS_BODY,
-                "Interface\\PvPFrame\\Icons\\prestige-icon-7-3"),
+                Overlord.MostWanted.CrownMarkup(GUIDE_ICON_SIZE)),
             FormatGuideSection(L.GUIDE_SECTION_TOOLS, L.GUIDE_TOOLS_BODY, "Interface\\Icons\\INV_Helmet_08")
         )
     end

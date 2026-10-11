@@ -1,6 +1,6 @@
 -- MostWanted.lua : les cinq meilleurs ennemis de la semaine (Overlord Forever).
 -- Calcule localement depuis le cache deja trie du classement : aucun paquet, aucun
--- tri en plus. Un crane sur leur barre de nom et une alerte dans le chat quand l'un
+-- tri en plus. Une couronne sur leur barre de nom et une alerte dans le chat quand l'un
 -- d'eux apparait, avec des delais pour ne jamais inonder. Coupe en instance.
 Overlord = Overlord or {}
 local MW = Overlord.MostWanted or {}
@@ -128,7 +128,7 @@ local function ShortName(name)
     return type(name) == "string" and (name:match("^(.-)%-") or name) or "?"
 end
 
--- Crane sur la barre de nom Blizzard, a gauche de la barre de vie. Un cadre a nous par
+-- Couronne sur la barre de nom Blizzard, a gauche de la barre de vie. Un cadre a nous par
 -- unite de nameplate (40 au plus), reutilise ; jamais en instance.
 MW.CROWN_SIZE = 18
 MW.crowns = MW.crowns or {}
@@ -137,8 +137,14 @@ MW.crowns = MW.crowns or {}
 local CROWN_TEXTURE = "Interface\\PvPFrame\\Icons\\prestige-icon-7-3"
 local CROWN_COORD = { 9 / 128, 121 / 128, 9 / 128, 121 / 128 }
 -- Meme image dans une ligne de texte (chat, classement) : taille en parametre.
+local crownMarkup = {}
 function MW.CrownMarkup(size)
-    return "|T" .. CROWN_TEXTURE .. ":" .. size .. ":" .. size .. ":0:0:128:128:9:121:9:121|t"
+    local markup = crownMarkup[size]
+    if not markup then
+        markup = "|T" .. CROWN_TEXTURE .. ":" .. size .. ":" .. size .. ":0:0:128:128:9:121:9:121|t"
+        crownMarkup[size] = markup
+    end
+    return markup
 end
 
 function MW:HideCrown(unit)
@@ -268,7 +274,7 @@ if CreateFrame then
     frame:SetScript("OnEvent", function(_, event, unit)
         if event == "NAME_PLATE_UNIT_ADDED" then
             -- Le plus courant et le moins cher d'abord ; jamais d'unite lue en instance.
-            -- Une barre recyclee ne garde jamais le crane de l'unite precedente.
+            -- Une barre recyclee ne garde jamais la couronne de l'unite precedente.
             if unit and MW.crowns[unit] then MW.crowns[unit]:Hide() end
             if not next(MW.byKey) or not MW:AlertsEnabled() or InInstance() then return end
             pcall(MW.OnNameplateAdded, MW, unit)

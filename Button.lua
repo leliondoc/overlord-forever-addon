@@ -494,8 +494,8 @@ local function CreateCallPrompt()
         GameTooltip:ClearAllPoints()
         GameTooltip:SetPoint("BOTTOM", box, "TOP", 0, 2)
         local t = Overlord.UI.TooltipPalette()
+        -- Titre et delai seulement : ce que fait l'appel est dit sur le bouton de la grille.
         GameTooltip:AddLine(L.FACTION_CALL_TOOLTIP_TITLE, t.HL[1], t.HL[2], t.HL[3])
-        GameTooltip:AddLine(L.FACTION_CALL_TOOLTIP, t.BODY[1], t.BODY[2], t.BODY[3], true)
         local rem = GetCooldownRemaining()
         if rem > 0 then
             GameTooltip:AddLine(string.format(L.FACTION_CALL_TOOLTIP_CD, FormatCooldown(rem)), t.MUTED[1], t.MUTED[2], t.MUTED[3])
