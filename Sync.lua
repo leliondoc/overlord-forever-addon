@@ -717,7 +717,7 @@ function Overlord.Sync:OnChannelJoinRefused(name)
     if not priv.channelClosedTold then
         priv.channelClosedTold = true
         Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. ((L and L.CHANNEL_CLOSED_NOTICE)
-            or "The Overlord channel of this realm cannot be joined right now. Leaving an instance, or /reload later, tries again."))
+            or "Overlord cannot reach the other players of this realm right now. Leaving an instance, or /reload later, tries again."))
     end
     local finder = Overlord.GroupFinder
     if finder and finder.Touch then finder:Touch() end

@@ -60,14 +60,14 @@ local STATE_KEY = {
 local LIVE_KEY = {
     sending = { "GF_LIVE_SENDING", "Publishing…", "gold" },
     live = { "GF_LIVE_ONLINE", "Listing online", "good" },
-    retry = { "GF_LIVE_RETRY", "Channel busy, trying again…", "gold" },
-    channel = { "GF_LIVE_CHANNEL", "Connecting to the Overlord channel…", "gold" },
-    closed = { "GF_LIVE_CLOSED", "Overlord channel unavailable on this realm", "bad" },
+    retry = { "GF_LIVE_RETRY", "Busy, trying again…", "gold" },
+    channel = { "GF_LIVE_CHANNEL", "Connecting…", "gold" },
+    closed = { "GF_LIVE_CLOSED", "Group search unavailable for now", "bad" },
 }
 -- What an empty board says, by state of the channel (GF:ChannelState).
 local EMPTY_KEY = {
-    closed = { "GF_LIVE_CLOSED", "Overlord channel unavailable on this realm" },
-    connecting = { "GF_LIVE_CHANNEL", "Connecting to the Overlord channel…" },
+    closed = { "GF_LIVE_CLOSED", "Group search unavailable for now" },
+    connecting = { "GF_LIVE_CHANNEL", "Connecting…" },
     listening = { "GF_EMPTY_LISTENING", "Listening for groups…" },
     open = { "GF_EMPTY_TITLE", "No group is recruiting right now." },
 }

@@ -441,8 +441,8 @@ do
     channelId = nil
     runTimers(10)
     UI:Refresh()
-    assert(list.emptyTitle:IsShown() and list.emptyTitle:GetText() == "Connecting to the Overlord channel…", tostring(list.emptyTitle:GetText()))
-    assert(frame.subtitle:GetText() == "Connecting to the Overlord channel…" and not list.emptyBody:IsShown())
+    assert(list.emptyTitle:IsShown() and list.emptyTitle:GetText() == "Connecting…", tostring(list.emptyTitle:GetText()))
+    assert(frame.subtitle:GetText() == "Connecting…" and not list.emptyBody:IsShown())
     local armed = #timers
     UI:Refresh()
     UI:Refresh()
@@ -460,9 +460,9 @@ do
     -- Refused by the game: said on the board and on the leader's card, publishing refused.
     channelId, channelClosed = nil, true
     UI:Refresh()
-    assert(list.emptyTitle:GetText() == "Overlord channel unavailable on this realm" and not list.emptyBody:IsShown())
+    assert(list.emptyTitle:GetText() == "Group search unavailable for now" and not list.emptyBody:IsShown())
     card.form.publish:GetScript("OnClick")(card.form.publish)
-    assert(GF.own == nil and card.form.reason:GetText() == "Overlord channel unavailable on this realm", tostring(card.form.reason:GetText()))
+    assert(GF.own == nil and card.form.reason:GetText() == "Group search unavailable for now", tostring(card.form.reason:GetText()))
     channelId, channelClosed = 5, false
     runTimers(6)
     runTimers(1)
