@@ -106,7 +106,6 @@ local dialogFrame = nil
 local featuredFrontFrame = nil
 local featuredFrontToggleBtn = nil
 local pendingSeenId = nil
-local pendingMarkMode = nil -- "once" | "daily"
 local pendingLoginChain = false
 local loginAnnouncements = {}
 
@@ -149,24 +148,6 @@ function Overlord.Popups:PersistSeenFlags()
     end
 end
 
--- Cle calendaire (premiere connexion du jour, heure client WoW).
-function Overlord.Popups:GetCalendarDayKey(id)
-    return date("%Y%m%d", time())
-end
-
-function Overlord.Popups:HasShownToday(id)
-    if not id or not OverlordDB or not OverlordDB.config then return true end
-    local daily = OverlordDB.config.popupsDailyShown
-    return daily and daily[id] == self:GetCalendarDayKey(id)
-end
-
-function Overlord.Popups:MarkShownToday(id)
-    if not id or not OverlordDB then return end
-    OverlordDB.config = OverlordDB.config or {}
-    OverlordDB.config.popupsDailyShown = OverlordDB.config.popupsDailyShown or {}
-    OverlordDB.config.popupsDailyShown[id] = self:GetCalendarDayKey(id)
-end
-
 function Overlord.Popups:HasShownFeaturedFrontToday()
     if not FEATURED_FRONT_POPUP_ID or not OverlordDB or not OverlordDB.config then return true end
     local dayKey = date("%Y%m%d", time())
@@ -182,15 +163,11 @@ function Overlord.Popups:MarkFeaturedFrontShownToday()
         date("%Y%m%d", time())
 end
 
--- Ecrit le flag one-shot / quotidien des que la popup est affichee, pas a la
+-- Ecrit le flag one-shot des que la popup est affichee, pas a la
 -- fermeture : un /reload pendant l'affichage perdait sinon popupsSeen.
 function Overlord.Popups:CommitPendingPopupMark()
     if not pendingSeenId then return end
-    if pendingMarkMode == "daily" then
-        self:MarkShownToday(pendingSeenId)
-    else
-        self:MarkSeen(pendingSeenId)
-    end
+    self:MarkSeen(pendingSeenId)
 end
 
 -- Conserver les identifiants deja vus lors des mises a jour de l'addon.
@@ -209,12 +186,11 @@ local function MigrateLegacyPopupFlags()
     if Overlord.Popups and Overlord.Popups.PersistSeenFlags then
         Overlord.Popups:PersistSeenFlags()
     end
-    if cfg.popupsDailyShown and cfg.popupsDailyShown.daily_guild_kills then
-        local dayKey = cfg.popupsDailyShown.daily_guild_kills
-        if not cfg.popupsDailyShown.daily_battle_report then
-            cfg.popupsDailyShown.daily_battle_report = dayKey
-        end
+    -- 2.0 : le rapport de bataille est retire ; ses marques sauvegardees partent.
+    if cfg.popupsDailyShown then
         cfg.popupsDailyShown.daily_guild_kills = nil
+        cfg.popupsDailyShown.daily_battle_report = nil
+        cfg.popupsDailyShown.weekly_battle_report = nil
     end
 end
 
@@ -382,8 +358,8 @@ local function EnsureDialogFrame()
 
     -- No full-screen click blocker any more: like Blizzard windows, the dialog
     -- leaves the world usable (a mouse-enabled overlay over UIParent stopped
-    -- right-drag camera look while the daily Battle Report was open). It still
-    -- closes with its button, the cross or Escape.
+    -- right-drag camera look while a dialog was open). It still closes with its
+    -- button, the cross or Escape.
 
     f:SetScript("OnShow", function(self)
         if not self._skipPanelOpenSound and Overlord.PlayPanelOpenSound then
@@ -400,7 +376,6 @@ local function EnsureDialogFrame()
         if pendingSeenId then
             Overlord.Popups:CommitPendingPopupMark()
             pendingSeenId = nil
-            pendingMarkMode = nil
         end
         -- File d'attente login : popup suivante apres Compris / croix / Echap.
         if pendingLoginChain then
@@ -628,7 +603,10 @@ local function BuildQuickGuidePageBody(page)
                 "Interface\\Icons\\INV_Misc_GroupNeedMore"),
             FormatGuideSection(L.GUIDE_SECTION_ALERTS, L.GUIDE_ALERTS_BODY,
                 Overlord.MostWanted.CrownMarkup(GUIDE_ICON_SIZE)),
-            FormatGuideSection(L.GUIDE_SECTION_TOOLS, L.GUIDE_TOOLS_BODY, "Interface\\Icons\\INV_Helmet_08")
+            FormatGuideSection(L.GUIDE_SECTION_TOOLS, L.GUIDE_TOOLS_BODY, "Interface\\Icons\\INV_Helmet_08"),
+            -- Insigne du quatrieme rang (les epees croisees) : le logo Overlord sert deja au panneau.
+            FormatGuideSection(L.GUIDE_SECTION_RANKS, L.GUIDE_RANKS_BODY,
+                "|T" .. Overlord.Ranks:GetRankIcon(4) .. ":" .. GUIDE_ICON_SIZE .. ":" .. GUIDE_ICON_SIZE .. "|t")
         )
     end
     return ""
@@ -845,20 +823,19 @@ end
 -- API publique
 -- ---------------------------------------------------------------------------
 
--- Affiche un dialogue WC3 generique (marque seenId a la fermeture).
--- markMode : "once" (defaut) ou "daily" (une fois par jour calendaire).
+-- Affiche un dialogue WC3 generique (marque seenId des l'affichage).
+-- (Le quatrieme argument, un ancien mode de marque, n'est plus lu.)
 -- opts : showBookIcon, showGuideButton (bienvenue) ; showWarningIcon (avertissement) ;
 -- showFactionSeal ; playFactionHorn (Bloodlust / Heroism)
 -- addonSoundKey : ex. "faction_call" (cor) ; okText : libelle bouton OK
-function Overlord.Popups:ShowDialog(seenId, title, body, markMode, opts)
+function Overlord.Popups:ShowDialog(seenId, title, body, _, opts)
     if type(title) ~= "string" or title == "" or type(body) ~= "string" or body == "" then return end
-    if seenId and (markMode or "once") ~= "daily" and self:HasSeen(seenId) then
+    if seenId and self:HasSeen(seenId) then
         return
     end
     EnsureDialogFrame()
     opts = opts or {}
     pendingSeenId = seenId
-    pendingMarkMode = markMode or "once"
     -- One-shot : marquer a l'affichage pour survivre a un /reload avant Compris.
     if seenId then
         self:CommitPendingPopupMark()
@@ -895,36 +872,6 @@ function Overlord.Popups:ShowDialog(seenId, title, body, markMode, opts)
     end
     -- Bienvenue / cor de guerre : son dedie uniquement (pas lb_open en plus).
     dialogFrame._skipPanelOpenSound = opts.addonSoundKey or opts.playFactionHorn or nil
-    -- Optional auto-close (daily Battle Report): fades out after opts.autoCloseSec,
-    -- postponed while the mouse is over the window so a player can still read it.
-    -- A newer dialog bumps the token, so an older timer never closes it.
-    local token = (dialogFrame._olAutoCloseToken or 0) + 1
-    dialogFrame._olAutoCloseToken = token
-    if dialogFrame._olFadeOut then dialogFrame._olFadeOut:Stop() end
-    dialogFrame:SetAlpha(1)
-    if opts.autoCloseSec and C_Timer and C_Timer.After then
-        local function check()
-            local f = dialogFrame
-            if not f or not f:IsShown() or f._olAutoCloseToken ~= token then return end
-            if f.IsMouseOver and f:IsMouseOver() then C_Timer.After(1, check); return end
-            if not f._olFadeOut and f.CreateAnimationGroup then
-                local group = f:CreateAnimationGroup()
-                local fade = group:CreateAnimation("Alpha")
-                fade:SetFromAlpha(1)
-                fade:SetToAlpha(0)
-                fade:SetDuration(0.4)
-                group:SetScript("OnFinished", function()
-                    f:SetAlpha(1)
-                    -- Only the fade of the dialog still on screen may close it.
-                    if f._olFadeToken == f._olAutoCloseToken then HideDialog() end
-                end)
-                f._olFadeOut = group
-            end
-            f._olFadeToken = token
-            if f._olFadeOut then f._olFadeOut:Play() else HideDialog() end
-        end
-        C_Timer.After(opts.autoCloseSec, check)
-    end
     dialogFrame:Show()
 end
 
@@ -941,9 +888,7 @@ function Overlord.Popups:TryShowNextLoginAnnouncement()
     MigrateLegacyPopupFlags()
 
     for _, ann in ipairs(loginAnnouncements) do
-        if ann.daily then
-            -- Rapport de bataille : TryShowDailyOnLogin (flag jour, pas popupsSeen).
-        elseif not self:HasSeen(ann.id) then
+        if not self:HasSeen(ann.id) then
             if not ann.when or ann.when() then
                 local title = type(ann.title) == "function" and ann.title() or ann.title
                 local body  = type(ann.body)  == "function" and ann.body()  or ann.body
@@ -968,47 +913,6 @@ function Overlord.Popups:TryShowOnLogin(attempt)
     self:TryShowNextLoginAnnouncement()
 end
 
-local function FormatFactionColoredName(label, faction)
-    if not label or label == "" then return "" end
-    if faction == "Alliance" then
-        return "|cFF4488FF" .. label .. "|r"
-    elseif faction == "Horde" then
-        return "|cFFFF4444" .. label .. "|r"
-    end
-    return "|cFFFFFFFF" .. label .. "|r"
-end
-
-local function FormatGuildColoredName(guild, faction)
-    return FormatFactionColoredName(guild, faction)
-end
-
-local function FormatPlayerColoredName(lb, playerName)
-    if not playerName or playerName == "" then return "" end
-    local _, faction = lb:GetExportPlayerMeta(playerName)
-    local display = playerName:match("^(.-)%-") or playerName
-    return FormatFactionColoredName(display, faction)
-end
-
-local function GetTopCapturerFromByFaction(byFaction)
-    if not byFaction then return nil end
-    local top = nil
-    for _, list in ipairs({ byFaction.Alliance, byFaction.Horde }) do
-        local entry = list and list[1]
-        if entry and entry.name and (entry.count or 0) > 0 then
-            if not top or entry.count > top.count then
-                top = entry
-            end
-        end
-    end
-    return top
-end
-
-local function GetTopCapturer(lb, dc)
-    if not lb then return nil end
-    dc = dc or (lb.EnsureDisplayCache and lb:EnsureDisplayCache())
-    return GetTopCapturerFromByFaction(dc and dc.byFaction)
-end
-
 -- Carte monde d'un front (Arathi, Gilneas, Loch, etc.).
 local function IsPlayerOnFrontMap()
     local ok, mapID = pcall(C_Map.GetBestMapForUnit, "player")
@@ -1028,130 +932,7 @@ local function IsPlayerOnActiveFront()
     return false
 end
 
-
-
-
--- Corps du rapport de bataille (nil si aucune stat a afficher).
-local battleReportBodyCache = nil
-local battleReportBodyEpoch = nil
-
-local function BuildBattleReportBody()
-    local lb = Overlord.Leaderboard
-    if not lb or not lb.EnsureDisplayCache then return nil end
-    local dc = lb:EnsureDisplayCache()
-    -- La vue initiale se construit en tranches. TryShowDailyOnLogin possede deja son
-    -- retry differe; ne jamais contourner ce chemin par un tri complet synchrone ici.
-    if not dc or dc.ready == false then return nil end
-    -- Une vue stale est volontairement affichable pendant le build. Indexer le texte
-    -- par l'epoch effectivement publie (pas l'epoch cible) permet au commit de le rafraichir.
-    local epoch = dc.epoch or 0
-    if battleReportBodyCache and battleReportBodyEpoch == epoch then
-        return battleReportBodyCache
-    end
-    local lines = {}
-
-    local sortedGuilds = dc.sortedGuilds or {}
-    local topGuild = sortedGuilds and sortedGuilds[1]
-    if topGuild and topGuild.guild and (topGuild.kills or 0) > 0 then
-        lines[#lines + 1] = string.format(
-            L.POPUP_BATTLE_REPORT_GUILD or "%s : %d",
-            FormatGuildColoredName(topGuild.guild, topGuild.faction),
-            topGuild.kills
-        )
-    end
-
-    local sortedKills = dc.sortedKills or {}
-    local topKiller = sortedKills and sortedKills[1]
-    if topKiller and topKiller.name and (topKiller.kills or 0) > 0 then
-        lines[#lines + 1] = string.format(
-            L.POPUP_BATTLE_REPORT_KILLER or "%s : %d",
-            FormatPlayerColoredName(lb, topKiller.name),
-            topKiller.kills
-        )
-    end
-
-    local topCapturer = GetTopCapturer(lb, dc)
-    if topCapturer and topCapturer.name and (topCapturer.count or 0) > 0 then
-        lines[#lines + 1] = string.format(
-            L.POPUP_BATTLE_REPORT_CAPTURER or "%s : %d",
-            FormatPlayerColoredName(lb, topCapturer.name),
-            topCapturer.count
-        )
-    end
-
-    if #lines == 0 then
-        battleReportBodyCache = nil
-        battleReportBodyEpoch = epoch
-        return nil
-    end
-    battleReportBodyCache = table.concat(lines, "\n\n")
-    battleReportBodyEpoch = epoch
-    return battleReportBodyCache
-end
-
-function Overlord.Popups:TryShowNextDailyAnnouncement(forcePreview)
-    if not forcePreview and not CanAutoShowPersistentPopup() then return false end
-    if Overlord.InstanceSuspended or not Overlord.IsInitialized then return false end
-    if dialogFrame and dialogFrame:IsShown() then return false end
-    MigrateLegacyPopupFlags()
-
-    for _, ann in ipairs(loginAnnouncements) do
-        if ann.daily and not self:HasShownToday(ann.id) then
-            if not ann.when or ann.when() then
-                local title = type(ann.title) == "function" and ann.title() or ann.title
-                local body  = type(ann.body)  == "function" and ann.body()  or ann.body
-                if type(title) == "string" and title ~= "" and type(body) == "string" and body ~= "" then
-                    self:ShowDialog(ann.id, title, body, "daily", ann.opts)
-                    return true
-                end
-            end
-        end
-    end
-    return false
-end
-
-local BATTLE_REPORT_PREVIEW_RETRY_DELAY = 0.05
-local BATTLE_REPORT_PREVIEW_RETRY_LIMIT = 120
-
--- Reaffiche le rapport de bataille (efface le flag du jour, pour tests).
-function Overlord.Popups:PreviewBattleReport(attempt)
-    attempt = math.max(0, math.floor(tonumber(attempt) or 0))
-    if not Overlord.IsInitialized then return end
-    if attempt == 0 then
-        if OverlordDB then
-            OverlordDB.config = OverlordDB.config or {}
-            OverlordDB.config.popupsDailyShown = OverlordDB.config.popupsDailyShown or {}
-            OverlordDB.config.popupsDailyShown.daily_battle_report = nil
-        end
-        if Overlord.CheckActiveFrontZone then Overlord:CheckActiveFrontZone() end
-        if not IsPlayerOnActiveFront() and not IsPlayerOnFrontMap() then
-            if Overlord.PrintNotification and L.POPUP_BATTLE_REPORT_NOT_FRONT then
-                Overlord:PrintNotification(
-                    "|cFFFFD100[Overlord]|r " .. L.POPUP_BATTLE_REPORT_NOT_FRONT)
-            end
-            return
-        end
-    end
-    local lb = Overlord.Leaderboard
-    local dc = lb and lb.EnsureDisplayCache and lb:EnsureDisplayCache() or nil
-    if dc and dc.ready == false and attempt < BATTLE_REPORT_PREVIEW_RETRY_LIMIT then
-        C_Timer.After(BATTLE_REPORT_PREVIEW_RETRY_DELAY, function()
-            local popups = Overlord.Popups
-            if popups then popups:PreviewBattleReport(attempt + 1) end
-        end)
-        return
-    end
-    if attempt > 0 then
-        if Overlord.CheckActiveFrontZone then Overlord:CheckActiveFrontZone() end
-        if not IsPlayerOnActiveFront() and not IsPlayerOnFrontMap() then return end
-    end
-    if self:TryShowNextDailyAnnouncement(true) then return end
-    if Overlord.PrintNotification and L.POPUP_BATTLE_REPORT_NO_DATA then
-        Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.POPUP_BATTLE_REPORT_NO_DATA)
-    end
-end
-
--- Popup quotidienne : retente si hors front (TP en cours) ou sync pas encore prete.
+-- Front du jour a la connexion : retente si hors front (TP en cours) ou sync pas encore prete.
 function Overlord.Popups:TryShowDailyOnLogin(attempt)
     attempt = attempt or 0
     if Overlord.InstanceSuspended or not Overlord.IsInitialized then return end
@@ -1163,7 +944,6 @@ function Overlord.Popups:TryShowDailyOnLogin(attempt)
         Overlord:CheckActiveFrontZone()
     end
     self:TryShowFeaturedFrontOnLogin()
-    if self:TryShowNextDailyAnnouncement() then return end
     -- Retente seulement sur une carte de front (chargement / sync), pas en ville.
     if attempt < 4 and (IsPlayerOnActiveFront() or IsPlayerOnFrontMap()) then
         C_Timer.After(6, function() self:TryShowDailyOnLogin(attempt + 1) end)
@@ -2263,21 +2043,4 @@ Overlord.Popups:RegisterLoginAnnouncement({
         return L.POPUP_UPDATE_FOREVER_1000_BODY
     end,
     opts = { showFactionSeal = true, addonSoundKey = "faction_call", dialogLayout = "patchNotes" },
-})
-
-
-
-Overlord.Popups:RegisterLoginAnnouncement({
-    id = "daily_battle_report",
-    daily = true,
-    -- Closes by itself after 4 s (kept open while hovered).
-    opts = { showFactionSeal = true, autoCloseSec = 4 },
-    when = function()
-        if not IsPlayerOnActiveFront() then return false end
-        return BuildBattleReportBody() ~= nil
-    end,
-    title = function()
-        return L.POPUP_BATTLE_REPORT_TITLE
-    end,
-    body = BuildBattleReportBody,
 })

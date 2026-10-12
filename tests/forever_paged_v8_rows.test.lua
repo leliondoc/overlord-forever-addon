@@ -188,8 +188,12 @@ end
 -- 1) Cold pull from the other faction's Battle.net friend: every Horde row arrives,
 --    the friend's copy of Alliance rows is never asked for.
 local stats = PULLER.Overlord.Sync._leaderboardPageStats
+-- Overlord Rank is told when the kills of an unfiltered sweep have been compared.
+local killsCompared = {}
+PULLER.Overlord.Ranks = { NoteLadderSeen = function(_, at) killsCompared[#killsCompared + 1] = at end }
 assert(pull(SOURCE) == true, "cold v8 pull failed: " .. PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics()
     .. " " .. tostring(stats.error))
+assert(#killsCompared == 0, "a sweep limited to the other faction's rows says nothing of our own places")
 assert(stats.protocol == 8, "the production entry did not use v8")
 assert(faults.dropped and faults.corrupted, "fault injection never ran")
 for _, name in ipairs(horde) do
@@ -320,7 +324,14 @@ for _, name in ipairs(alliance) do
 end
 ALLY.Overlord.Leaderboard:MarkMetaDirty()
 applied = 0
+-- (The v7 pull above was not limited to a faction: a v7 peer compares every row.)
+local toldBefore = #killsCompared
 assert(pull(ALLY) == true, "same-faction v8 pull failed")
+assert(#killsCompared == toldBefore + 1 and killsCompared[#killsCompared] > 0
+    and killsCompared[#killsCompared] <= PULLER.GetServerTime(),
+    "the kills compared in full with an ally were not told to the ranks, once: " .. #killsCompared - toldBefore)
+-- From here on the ranks throw: no pull below may notice.
+PULLER.Overlord.Ranks.NoteLadderSeen = function() error("the ranks broke") end
 for _, name in ipairs(alliance) do
     assert(PULLER.Overlord.Leaderboard.kills[name] == ALLY.Overlord.Leaderboard.kills[name], "missing ally row " .. name)
 end
@@ -782,5 +793,109 @@ end
 local fp = PULLER.Overlord.Sync
 assert(fp._leaderboardPageStats.listed and fp._leaderboardPageStats.wanted, "list counters missing")
 
+-- 13) A pull that no neighbour answered keeps no stream: the next one starts again at
+--     the kills. Seen in game on 2026-10-11: a checkpoint left at the races and silent
+--     neighbours; every later pull asked the races again, the kills were no longer
+--     compared and the ranks were never told. A neighbour that answers, even "busy",
+--     is there: the stream is kept for it or the next one.
+do
+    local stats = PULLER.Overlord.Sync._leaderboardPageStats
+    local function leaveAt(stream)
+        PULLER.OverlordDB.leaderboardPageProgress = { version = 3,
+            epoch = PULLER.Overlord:GetCurrentCampaignStartTs(),
+            shared = { stream = stream, bucket = 1, done = 0, at = 0 } }
+    end
+    local function savedStream() return PULLER.OverlordDB.leaderboardPageProgress.shared.stream end
+    local hear = ALLY.Overlord.Sync.OnPagedLeaderboardMessage
+    local asked, told = {}, #killsCompared
+    ALLY.Overlord.Sync.OnPagedLeaderboardMessage = function(self, kind, payload, ...)
+        if kind == "HR" then
+            asked[#asked + 1] = payload
+            return
+        end
+        return hear(self, kind, payload, ...)
+    end
+    advance(700)
+    leaveAt("LR")
+    local silentBefore = stats.silentPulls or 0
+    assert(pull(ALLY) == false, "fixture: a silent neighbour did not fail the pull")
+    assert(#asked >= 1 and asked[1]:find(":LR:", 1, true), "fixture: the pull did not start at the saved races")
+    assert(savedStream() == "LK", "a pull that got no answer at all kept its stream: " .. tostring(savedStream()))
+    assert(stats.silentPulls == silentBefore + 1, "the unanswered pull was not counted")
+    assert(PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics():find(
+        "unanswered pulls=" .. stats.silentPulls .. "; old requests ignored=", 1, true),
+        "/ov network does not tell the unanswered pulls: " .. PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())
+    -- The neighbour answers again: the next pull starts at the kills and tells the ranks.
+    ALLY.Overlord.Sync.OnPagedLeaderboardMessage = hear
+    advance(700)
+    asked = {}
+    local firstStream
+    local send = PULLER.Overlord.Sync.SendWhisper
+    PULLER.Overlord.Sync.SendWhisper = function(self, kind, payload, target)
+        if kind == "HR" and not firstStream then firstStream = payload:match("^8:V:[^:]+:[^:]+:[^:]+:(%u%u):") end
+        return send(self, kind, payload, target)
+    end
+    assert(pull(ALLY) == true, "the pull after a silent one failed: " .. PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())
+    PULLER.Overlord.Sync.SendWhisper = send
+    assert(firstStream == "LK", "the pull after a silent one did not start at the kills: " .. tostring(firstStream))
+    assert(#killsCompared == told, "fixture: the broken rank module of this test was called")
+    -- Busy is an answer: the stream stays where it was.
+    advance(700)
+    leaveAt("LR")
+    ALLY.Overlord.Sync.OnPagedLeaderboardMessage = function(self, kind, payload, sender, ...)
+        if kind == "HR" then
+            local version, _, wireEpoch, nonce, seq = ALLY.strsplit(":", payload)
+            ALLY.Overlord.Sync:SendWhisper("HA", table.concat({ version, "R", wireEpoch, nonce, seq }, ":"), sender)
+            return
+        end
+        return hear(self, kind, payload, sender, ...)
+    end
+    silentBefore = stats.silentPulls
+    assert(pull(ALLY) == false, "fixture: a busy neighbour did not end the pull")
+    assert(savedStream() == "LR" and stats.silentPulls == silentBefore,
+        "a busy neighbour was taken for a silent one: " .. tostring(savedStream()))
+    ALLY.Overlord.Sync.OnPagedLeaderboardMessage = hear
+    -- A pull whose request never left (our own send refused) says nothing of the
+    -- neighbour: its stream is kept and it is not counted as unanswered.
+    advance(700)
+    leaveAt("LC")
+    local send = PULLER.Overlord.Sync.SendWhisper
+    PULLER.Overlord.Sync.SendWhisper = function(self, kind, ...)
+        if kind == "HR" then return false end
+        return send(self, kind, ...)
+    end
+    silentBefore = stats.silentPulls
+    local neverSent
+    assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(ALLY.name, function(ok) neverSent = ok end))
+    advance(30)
+    assert(PULLER.Overlord.Sync:CancelPagedLeaderboardCatchup() == true, "fixture: no pull to cut")
+    PULLER.Overlord.Sync.SendWhisper = send
+    assert(neverSent == false and savedStream() == "LC" and stats.silentPulls == silentBefore,
+        "a pull that never left was taken for an unanswered one: " .. tostring(savedStream()))
+    leaveAt("LK")
+end
+
+-- 14. /ov network on the side that answers (2.0): the pulls other players opened with
+--     this client and those it took, the answers it queued and sent in full. Counters
+--     only: with them one line tells whether a client that hears nothing is also one
+--     that answers nothing.
+do
+    local served = ALLY.Overlord.Sync._leaderboardPageStats
+    local asked, taken = served.pullsAsked or 0, served.pullsTaken or 0
+    local queued, sentAll = served.repliesQueued or 0, served.repliesSent or 0
+    local lost = (served.repliesExpired or 0) + (served.repliesCancelled or 0)
+    advance(700)
+    assert(pull(ALLY) == true, "fixture: the pull failed: " .. PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())
+    assert(served.pullsAsked == asked + 1 and served.pullsTaken == taken + 1,
+        "a pull opened with us and taken is not counted once: " .. tostring(served.pullsAsked) .. "/" .. tostring(served.pullsTaken))
+    assert(served.repliesQueued > queued and served.repliesSent - sentAll == served.repliesQueued - queued
+        and (served.repliesExpired or 0) + (served.repliesCancelled or 0) == lost,
+        "every answer queued for this pull should have been sent in full")
+    local line = ALLY.Overlord.Sync:GetPagedLeaderboardDiagnostics()
+    assert(line:find(("asked by others=%d taken=%d; answers queued=%d sent=%d expired="):format(
+        served.pullsAsked, served.pullsTaken, served.repliesQueued, served.repliesSent), 1, true),
+        "/ov network does not tell what this client answered: " .. line)
+end
+
 SOURCE.Overlord.Sync.SendWhisper = sourceSend
-print("Paged v8 rows: cold cross-faction pull filtered by faction, equal ranking quiet, deltas row by row, v7 still answered OK")
+print("Paged v8 rows: a pull nobody answered restarts at the kills, cold cross-faction pull filtered by faction, equal ranking quiet, deltas row by row, v7 still answered OK")

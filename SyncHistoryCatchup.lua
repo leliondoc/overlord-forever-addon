@@ -705,6 +705,14 @@ local function FinishRound(pending, success, target)
             if not filtered or sync._ladderFilteredWins >= 3 or fresh then ack.fullAt = ack.at end
         end
         OverlordDB.leaderboardHistoryCatchupAck = ack
+        -- Overlord Rank: its weekly places ask that the whole ranking (our faction's
+        -- rows included) was compared with a neighbour during the week's last day,
+        -- whatever the sweep brought. The badge's own rule (a quiet sweep) is hardly
+        -- ever met on a busy ranking, whose top rows are settled long before.
+        -- Local, O(1), nothing is sent.
+        if Overlord.Ranks and Overlord.Ranks.NoteLadderSeen then
+            pcall(Overlord.Ranks.NoteLadderSeen, Overlord.Ranks, whole and not filtered and ack.at or nil)
+        end
         NoteHr("completed", 1)
     end
     -- The pull records why it stopped (peer busy, no reply, ...): show it here too.

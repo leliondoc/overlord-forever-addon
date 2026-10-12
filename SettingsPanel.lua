@@ -704,19 +704,37 @@ function SP:Register()
         panel:HookScript("OnHide", scheduleActionGridActiveRefresh)
         -- Overlord logo left of the page title. Blizzard rewrites the title on
         -- every category change, so only our page carries the inline icon.
-        local function addLogo(_, category)
-            if category ~= SP._category then return end
+        -- 2.0: no hooksecurefunc on the panel's methods any more. On this client a
+        -- method of a Blizzard object wrapped by an addon can start raising "attempt
+        -- to call a nil value" in Blizzard's own caller until the game is relaunched
+        -- (seen on the world map, 2026-10-11 and 12). A frame of ours, alive only
+        -- while the options window is open, puts the logo back when our page is the
+        -- one displayed: one comparison every tenth of a second, nothing otherwise.
+        local function addLogo()
+            if not SP:IsOpen() then return end
             local list = (panel.GetSettingsList and panel:GetSettingsList())
                 or (panel.Container and panel.Container.SettingsList)
             local title = list and list.Header and list.Header.Title
-            if title and title.SetText then
-                title:SetText(SETTINGS_TITLE_LOGO .. " Overlord")
-            end
+            if not (title and title.SetText and title.GetText) then return end
+            -- Only the title Blizzard wrote for our page (the category's name) gets the
+            -- logo. Any other text is left alone: a search keeps our page as the
+            -- current category while the header reads "Search Results".
+            if title:GetText() == "Overlord" then title:SetText(SETTINGS_TITLE_LOGO .. " Overlord") end
         end
-        for _, method in ipairs({ "DisplayCategory", "SelectCategory" }) do
-            if hooksecurefunc and type(panel[method]) == "function" then
-                hooksecurefunc(panel, method, addLogo)
-            end
+        local watcher = CreateFrame and CreateFrame("Frame")
+        if watcher then
+            local wait = 0
+            watcher:Hide()
+            watcher:SetScript("OnUpdate", function(_, elapsed)
+                wait = wait + (elapsed or 0)
+                if wait < 0.1 then return end
+                wait = 0
+                pcall(addLogo)
+            end)
+            panel:HookScript("OnShow", function() watcher:Show() end)
+            panel:HookScript("OnHide", function() watcher:Hide() end)
+            if panel.IsShown and panel:IsShown() then watcher:Show() end
+            SP._titleWatcher = watcher
         end
     end
 end

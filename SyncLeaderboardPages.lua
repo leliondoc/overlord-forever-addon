@@ -124,6 +124,9 @@ local function enqueue(job)
     if outbound then return false end
     outbound = job
     job.at, job.index = GetTime(), 1
+    -- 2.0, /ov network only: the answers this client owes its requesters (queued, fully
+    -- sent, given up after 240 s, cancelled) and the sends its relay refused.
+    stats.repliesQueued = (stats.repliesQueued or 0) + 1
     local function pump()
         wake = nil
         if outbound ~= job then
@@ -135,9 +138,15 @@ local function enqueue(job)
             end
             return
         end
-        if job.epoch ~= epoch() or (job.valid and not job.valid()) then outbound = nil; return end
+        if job.epoch ~= epoch() or (job.valid and not job.valid()) then
+            stats.repliesCancelled = (stats.repliesCancelled or 0) + 1
+            outbound = nil; return
+        end
         if blocked() then job.at = GetTime(); wake = true; C_Timer.After(2, pump); return end
-        if GetTime() - job.at > 240 then outbound = nil; return end
+        if GetTime() - job.at > 240 then
+            stats.repliesExpired = (stats.repliesExpired or 0) + 1
+            outbound = nil; return
+        end
         local packet = job.packets[job.index]
         if not packet then outbound = nil; if job.done then job.done() end; return end
         local now, net = GetTime(), Overlord.Relay
@@ -155,10 +164,13 @@ local function enqueue(job)
                 job.index = job.index + 1
                 stats.bytes = stats.bytes + cost
                 if job.index > #job.packets then
+                    stats.repliesSent = (stats.repliesSent or 0) + 1
                     outbound = nil
                     if job.done then job.done() end
                     return
                 end
+            else
+                stats.replySendsRefused = (stats.replySendsRefused or 0) + 1
             end
         end
         wake = true
@@ -541,6 +553,18 @@ end
 local sendControl
 local function finish(state, success, unsupportedPeer)
     if pull ~= state then return end
+    -- 2.0: a pull whose request left and never got an answer of any kind compared
+    -- nothing, so its stream is not kept: the next pull starts again at the kills (one
+    -- request and one reply when they are equal). A checkpoint left at the captures or
+    -- the races made every later pull ask that stream again, in this session and the
+    -- next ones; while the neighbours asked stayed silent the kills were no longer
+    -- compared at all. A pull that could not even ask (no local snapshot, request never
+    -- admitted) says nothing of the neighbour and keeps its stream.
+    -- Nothing is sent and no answer changes: only where the next pull starts.
+    if not success and state.wire == "8" and not state.supported and state.sentAny then
+        stats.silentPulls = (stats.silentPulls or 0) + 1
+        state.stream = "LK"
+    end
     checkpoint(state)
     pull = nil
     -- A failed pull tells its responder to drop the session at once; otherwise the
@@ -694,6 +718,18 @@ request = function(state, retry)
     end
     C_Timer.After(2, timeout)
 end
+-- Overlord Rank: the kills of a sweep have just been compared in full with this peer
+-- (the sweep was seen from its start at LK in this session, and is not limited to one
+-- faction's rows). A weekly place needs nothing else: it need not wait for the
+-- captures and the races, where a sweep can stall for long. Local, O(1), nothing sent,
+-- nothing of the pull is changed.
+local function noteKillsCompared(state)
+    if state.stream ~= "LK" or stats.sweepBase == nil or stats.sweepEpoch ~= state.epoch
+        or stats.sweepFiltered or state.factionFilter
+        or (stats.sweepAt or 0) < (sync._ladderTrustFloor or 0) then return end
+    local ranks = Overlord.Ranks
+    if ranks and ranks.NoteLadderSeen then pcall(ranks.NoteLadderSeen, ranks, GetServerTime()) end
+end
 local function nextPage(state, cursor)
     state.combatWaits = 0 -- progress: a later fight of the peer may be waited for again
     stats.pages = stats.pages + 1
@@ -704,6 +740,7 @@ local function nextPage(state, cursor)
     state.cursor = cursor
     if state.completed >= BUCKETS then
         if state.extended and state.stream ~= "LR" then
+            noteKillsCompared(state)
             state.stream = state.stream == "LK" and "LC" or "LR"
             state.bucket, state.completed, state.cursor = 1, 0, "-"
             checkpoint(state)
@@ -730,6 +767,7 @@ local function nextStream8(state)
     state.combatWaits = 0
     -- raceless: a 1.8.0 peer, kills and captures only (see the header).
     if state.stream ~= "LR" and not (state.raceless and state.stream == "LC") then
+        noteKillsCompared(state)
         state.stream = state.stream == "LK" and "LC" or "LR"
         state.phase, state.queue, state.qi, state.bucket, state.completed = "V", nil, 0, 0, 0
         checkpoint(state)
@@ -1343,6 +1381,8 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
                 stream = stream, totalCount = totalCount, totalHash = totalHash }
             fresh = seq == 1 and b == "-"
         end
+        -- (/ov network: the pulls other players opened with us, and those we took.)
+        if fresh then stats.pullsAsked = (stats.pullsAsked or 0) + 1 end
         local session = serving
         if session and (session.epoch ~= wireEpoch or GetTime() - session.at > 300) then serving = nil; session = nil end
         -- A fresh start from the same requester supersedes its own stale session
@@ -1395,6 +1435,7 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
                 at = GetTime(), startedAt = GetTime(), seq = seq, extended = extended,
                 wire = version }
             serving = session
+            stats.pullsTaken = (stats.pullsTaken or 0) + 1
         -- The previous page of this same session is still leaving: its requester
         -- asks again after its own timeout.
         elseif outbound or seq < session.seq or seq > session.seq + 1 then return end
@@ -1577,6 +1618,21 @@ function sync:GetPagedLeaderboardDiagnostics()
         details = details .. string.format("; v8 wanted %d/%d listed, %d buckets differing",
             stats.wanted or 0, stats.listed, stats.bucketsDiffering or 0)
     end
+    -- Since login: our pulls that no neighbour answered at all, the requests of old
+    -- clients we left unanswered, and the answers our own relay refused to send
+    -- because their requester was not one of our direct neighbours.
+    local net = Overlord.Relay
+    details = details .. string.format(
+        "; unanswered pulls=%d; old requests ignored=%d; answers refused (requester not direct)=%d",
+        stats.silentPulls or 0, stats.oldRequestsIgnored or 0,
+        net and net.stats and net.stats.catchupNotDirect or 0)
+    -- What this client did for the players who asked it: pulls opened with us and
+    -- taken, answers queued, fully sent, given up after 240 s, cancelled, and the
+    -- sends our relay refused (counted at each retry).
+    details = details .. string.format(
+        "; asked by others=%d taken=%d; answers queued=%d sent=%d expired=%d cancelled=%d send refusals=%d",
+        stats.pullsAsked or 0, stats.pullsTaken or 0, stats.repliesQueued or 0, stats.repliesSent or 0,
+        stats.repliesExpired or 0, stats.repliesCancelled or 0, stats.replySendsRefused or 0)
     return string.format("Ladder v%d: %s; pages=%d rows=%d filtered=%d retries=%d; %s bucket=%s/64%s; peer=%s; 300 B/s budget",
         stats.protocol or 5, status, stats.pages, stats.rows, stats.rejected,
         stats.retries, pull and pull.stream or "LK",

@@ -1,6 +1,6 @@
 -- MapMarkers.lua - Cercles de zones sur la carte du monde
 -- Overlays sur un calque visible, positions recalculees depuis le canvas.
--- Taint 12.0 : trackedMapID evite de lire WorldMapFrame.mapID,
+-- Taint 12.0 : trackedMapID evite de lire WorldMapFrame.mapID (lu par GetMapID),
 -- CacheCanvas() lit ScrollContainer.Child une seule fois (OnShow),
 -- et le popup residuel est supprime dans Core.lua (SetAlpha(0)).
 Overlord = Overlord or {}
@@ -943,16 +943,21 @@ local function PurgeStaleOverlays(oldCanvas, newCanvas, oldParent, newParent)
 end
 
 
--- Track le mapID affiche via hooksecurefunc au lieu de lire WorldMapFrame.mapID.
--- La lecture directe de .mapID taint l'execution addon en 12.0
--- et declenche un faux positif ADDON_ACTION_FORBIDDEN.
+-- La carte affichee, suivie par WorldMapFrame:GetMapID() : a l'ouverture (script OnShow)
+-- puis a chaque image par notre pilote tant que la carte est ouverte. Jamais par un
+-- hooksecurefunc sur WorldMapFrame : sur ce client, une methode d'un objet de Blizzard
+-- enveloppee par un addon peut se mettre a lever « attempt to call a nil value » dans
+-- l'appelant de Blizzard (l'original tourne, notre crochet n'est plus appele) jusqu'a
+-- la relance du jeu ; vu en jeu les 11 et 12 octobre 2026, connu d'autres addons.
+-- Jamais non plus de lecture directe de .mapID : elle teinte l'execution en 12.0 et
+-- declenche un faux positif ADDON_ACTION_FORBIDDEN.
 local trackedMapID = nil
 local suppressFrontOverlaysUntilMapReopen = false
 
 local function ReadDisplayedMapID()
-    -- Quand la carte est deja ouverte pendant un changement de zone/front, GetMapID peut suivre
-    -- la carte du joueur avant que le canvas visible ne change vraiment. Le hook SetMapID/OnShow
-    -- est la source fiable de la carte effectivement affichee : evite de dessiner Loch sur Paluns.
+    -- trackedMapID est tenu a jour par le pilote de la carte (une lecture de GetMapID a chaque
+    -- image, carte ouverte) et par le script OnShow : c'est la carte effectivement affichee.
+    -- Aucun crochet sur SetMapID (voir plus haut) ; ici, le repli tant que rien n'a ete suivi.
     if trackedMapID then return trackedMapID end
     if WorldMapFrame and WorldMapFrame.GetMapID then
         local ok, mid = pcall(WorldMapFrame.GetMapID, WorldMapFrame)
@@ -1341,8 +1346,10 @@ function Overlord.MapMarkers:Initialize()
     self:CreateMapModeButton()
 
     -- Capture le mapID en parametre du hook (jamais de lecture de .mapID)
-    if WorldMapFrame.SetMapID then
-        hooksecurefunc(WorldMapFrame, "SetMapID", function(_, newMapID)
+    -- Le traitement d'un changement de carte, appele par le pilote (plus bas) et par le
+    -- script OnShow de la carte.
+    local function OnDisplayedMapChanged(newMapID)
+        do
             if Overlord.InstanceSuspended then return end
             if trackedMapID ~= newMapID then
                 -- Coupe immédiatement les couches Overlord quand on quitte une carte de front.
@@ -1388,9 +1395,8 @@ function Overlord.MapMarkers:Initialize()
             driverState.catchUpHidden = false
             Overlord.MapMarkers:HideCatchUpBanner()
             ResetMapLayoutKey()
-        end)
+        end
     end
-
     -- OnUpdate seulement quand la carte est ouverte
     local updateFrame = CreateFrame("Frame")
     updateFrame:Hide()
@@ -1400,6 +1406,15 @@ function Overlord.MapMarkers:Initialize()
         if Overlord.InstanceSuspended then
             updateFrame:Hide()
             return
+        end
+
+        -- La carte affichee a change (clic droit vers le continent, clic sur une zone,
+        -- fil d'Ariane) : traite a l'image meme, sans attendre le passage ralenti. Un
+        -- appel et une comparaison par image, carte ouverte seulement. (Si le traitement
+        -- echoue, la carte est quand meme tenue pour vue : pas de nouvel essai a chaque image.)
+        local okShown, shownID = pcall(WorldMapFrame.GetMapID, WorldMapFrame)
+        if okShown and shownID and shownID > 0 and shownID ~= trackedMapID then
+            if not pcall(OnDisplayedMapChanged, shownID) then trackedMapID = shownID end
         end
 
         -- Chemin visuel chaud : une seule transformation de frame a chaque image.
@@ -1770,13 +1785,14 @@ function Overlord.MapMarkers:Initialize()
     WorldMapFrame:HookScript("OnShow", function()
         if Overlord.InstanceSuspended then return end
         suppressFrontOverlaysUntilMapReopen = false
-        -- Rafraichir trackedMapID sans le mettre a nil : le hook SetMapID a pu
-        -- deja fournir la bonne valeur AVANT OnShow. Un reset a nil provoquait
-        -- un clignotement (OnUpdate ne trouvait pas de front pendant ~0.3s).
+        -- La carte s'ouvre sur une autre carte que la derniere vue (Blizzard l'a changee
+        -- carte fermee, quand notre pilote ne tourne pas) : meme traitement qu'un
+        -- changement carte ouverte. trackedMapID n'est jamais remis a nil : un reset
+        -- provoquait un clignotement (OnUpdate ne trouvait pas de front pendant ~0.3s).
         if WorldMapFrame.GetMapID then
             local ok, newID = pcall(WorldMapFrame.GetMapID, WorldMapFrame)
-            if ok and newID and newID > 0 then
-                trackedMapID = newID
+            if ok and newID and newID > 0 and newID ~= trackedMapID then
+                if not pcall(OnDisplayedMapChanged, newID) then trackedMapID = newID end
             end
         end
         local oldCanvas = cachedCanvas

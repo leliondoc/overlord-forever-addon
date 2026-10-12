@@ -951,6 +951,8 @@ function Overlord.Combat:ProcessKill(killerGUID, killerName, victimGUID, victimN
     if victimGUID and victimName and victimName ~= "?" then
         if not guidPlayerInfoCache[victimGUID] then
             local victimClass, victimRace, victimSex = nil, nil, 0
+            -- (local : sans lui, les lignes ci-dessous ecrivaient la variable globale _.)
+            local _
             if UnitGUID("target") == victimGUID then
                 _, victimClass = UnitClass("target")
                 _, victimRace = UnitRace("target")

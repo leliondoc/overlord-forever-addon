@@ -64,6 +64,8 @@ jobs:
           lua5.1 tests/forever_panel_position.test.lua
           lua5.1 tests/forever_recovery.test.lua
           lua5.1 tests/forever_popups_persistence.test.lua
+          lua5.1 tests/forever_map_catchup_notice.test.lua
+          lua5.1 tests/forever_map_hook_safety.test.lua
           lua5.1 tests/forever_featured_coins.test.lua
           lua5.1 tests/forever_next_objective.test.lua
           lua5.1 tests/forever_shard_factions.test.lua
@@ -168,6 +170,11 @@ jobs:
           lua5.1 tests/forever_most_wanted.test.lua
           lua5.1 tests/forever_group_finder.test.lua
           lua5.1 tests/forever_group_finder_ui.test.lua
+          lua5.1 tests/forever_ranks.test.lua
+          lua5.1 tests/forever_ranks_seal.test.lua
+          lua5.1 tests/forever_ranks_week_close.test.lua
+          lua5.1 tests/forever_ranks_currency_panel.test.lua
+          lua5.1 tests/forever_ranks_week_rule.test.lua
           lua5.1 tests/forever_join_chain.test.lua
           lua5.1 tests/forever_front_fight_size.test.lua
           lua5.1 tests/forever_front_fight_convergence.test.lua

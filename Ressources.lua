@@ -704,7 +704,7 @@ local function GetHudKeepContext()
     return Overlord.GuildKeep:GetHudSite()
 end
 
--- Couleurs faction menus / HUD (meme hex que Popups FormatFactionColoredName).
+-- Couleurs faction menus / HUD.
 local function FormatKeepTenantColorCode(faction)
     if faction == "Alliance" then return "|cFF4488FF" end
     if faction == "Horde" then return "|cFFFF4444" end
@@ -1201,7 +1201,7 @@ end
 
 local GK_HUD_ORANGE = { 1.0, 0.82, 0.0 }
 local GK_HUD_GRAY = { 0.55, 0.55, 0.58 }
--- Memes teintes que Popups FormatFactionColoredName (|cFF4488FF| / |cFFFF4444|)
+-- Teintes de faction (|cFF4488FF| / |cFFFF4444|)
 local GK_FACTION_ALLIANCE = { 0.27, 0.53, 1.0 }
 local GK_FACTION_HORDE = { 1.0, 0.27, 0.27 }
 local lastGkHudBarKey = nil

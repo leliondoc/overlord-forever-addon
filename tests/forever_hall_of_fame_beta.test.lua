@@ -49,9 +49,9 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "deDE", "ruRU", "ptBR", "zhCN" })
 
     -- Shipped data: week 1 only (the full history is on the website), so the beta is
     -- a plain category without sub-categories, expanded or not.
-    assert(ids(data:GetSidebarEntries(false)) == "beta,donors", loc .. " " .. ids(data:GetSidebarEntries(false)))
-    assert(ids(data:GetSidebarEntries(true)) == "beta,donors", "a single week shows no sub-category")
-    assert(data:GetDefaultCategory() == "beta:1", "default opens the beta week")
+    assert(ids(data:GetSidebarEntries(false)) == "lifetime,beta,donors", loc .. " " .. ids(data:GetSidebarEntries(false)))
+    assert(ids(data:GetSidebarEntries(true)) == "lifetime,beta,donors", "a single week shows no sub-category")
+    assert(data:GetDefaultCategory() == "lifetime", "default opens the player's own feats")
     assert(data:ResolveCategory("beta") == "beta:1")
     assert(data:IsBetaWeek("beta:1") and not data:IsBetaWeek("beta") and not data:IsBetaWeek("donors"))
 
@@ -92,10 +92,10 @@ do
         week2[#week2 + 1] = copy
     end
     for _, entry in ipairs(week2) do Overlord.BetaChampionEntries[#Overlord.BetaChampionEntries + 1] = entry end
-    assert(ids(data:GetSidebarEntries(false)) == "beta,donors")
-    assert(ids(data:GetSidebarEntries(true)) == "beta,>beta:2,>beta:1,donors", ids(data:GetSidebarEntries(true)))
-    assert(data:GetSidebarEntries(true)[2].label == string.format(L.HOF_CAT_BETA_WEEK, 2), "week label")
-    assert(data:GetDefaultCategory() == "beta:2" and data:ResolveCategory("beta") == "beta:2")
+    assert(ids(data:GetSidebarEntries(false)) == "lifetime,beta,donors")
+    assert(ids(data:GetSidebarEntries(true)) == "lifetime,beta,>beta:2,>beta:1,donors", ids(data:GetSidebarEntries(true)))
+    assert(data:GetSidebarEntries(true)[3].label == string.format(L.HOF_CAT_BETA_WEEK, 2), "week label")
+    assert(data:GetDefaultCategory() == "lifetime" and data:ResolveCategory("beta") == "beta:2")
     local w1, w2 = data:GetHonorView("beta:1", ""), data:GetHonorView("beta:2", "")
     assert(#w1.rows == 15 and #w2.rows == 15, "one week per sub-category")
     assert(w2.rows[1].subtitle == string.format(L.HOF_WEEKLY_PLAYER_RANK_LINE, 2, 1))
@@ -110,9 +110,31 @@ Overlord.WeeklyChampionEntries = {
     { week = 1, kind = "guild", name = "Launch Guild", faction = "Horde", kills = 10 },
     { week = 1, kind = "capture", name = "Launch Capturer", faction = "Horde", captures = 3 },
 }
-assert(ids(data:GetSidebarEntries(false)) == "player,guild,horde,beta,donors", ids(data:GetSidebarEntries(false)))
-assert(data:GetDefaultCategory() == "player")
+assert(ids(data:GetSidebarEntries(false)) == "lifetime,player,guild,horde,beta,donors", ids(data:GetSidebarEntries(false)))
+assert(data:GetDefaultCategory() == "lifetime")
 assert(#data:GetHonorView("player", "").rows == 1, "capturers are player honors")
 assert(#data:GetHonorView("guild", "").rows == 1 and #data:GetHonorView("horde", "").rows == 2)
 
 print("Hall of Fame beta: own category, one sub-category per week, launch categories hidden while empty OK")
+
+-- Your feats: the Overlord ranks of the character, served by Ranks.lua (earned or not,
+-- with progress). The view passes through; a search filters the rows and keeps the totals.
+assert(#data:GetHonorView("lifetime").rows == 0, "no rank module, no feat, no error")
+local feats = { rows = { { title = "Recruit", searchHaystack = "recruit reach 15 glory." },
+    { title = "Veteran", searchHaystack = "veteran reach 1,500 glory." } },
+    stats = { totalCount = 2, earnedCount = 1, totalPoints = 5, donorCount = 0 } }
+Overlord.Ranks = { GetFeatView = function() return feats end }
+assert(data:GetHonorView("lifetime") == feats and data:GetHonorView("lifetime", "") == feats, "the rank feats as they are")
+local found = data:GetHonorView("lifetime", "VETER")
+assert(#found.rows == 1 and found.rows[1].title == "Veteran" and found.stats == feats.stats, "searched, totals kept")
+assert(ids(data:GetSidebarEntries(false)):find("^lifetime,"), "always first in the sidebar")
+-- This category is the window's opening view: a rank module that throws, or answers
+-- anything but a view, leaves an empty list and the window opens.
+for _, broken in ipairs({ function() error("the ranks broke") end, function() return "x" end,
+    function() return { stats = {} } end }) do
+    Overlord.Ranks = { GetFeatView = broken }
+    local ok, empty = pcall(data.GetHonorView, data, "lifetime")
+    assert(ok and #empty.rows == 0 and empty.stats.totalCount == 0, "a failing rank module broke the opening view")
+end
+Overlord.Ranks = nil
+print("Hall of Fame feats: the rank feats pass through, searchable OK")

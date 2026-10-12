@@ -76,6 +76,6 @@ La validation automatisée confirme que chaque référence sélectionne le bon o
 
 ## Extension locale : Austrivage / Moulin-de-Tarren
 
-Le front spécial des Contreforts de Hautebrande utilise la carte Classic 1424 (alias 25), avec seulement deux capitales : Austrivage à 51.2/58.0 et Moulin-de-Tarren à 61.8/19.0. Leur rayon effectif de capture est de 9 unités sur la carte, soit plus du triple du rayon habituel de 2.4. Les cercles restent séparés par la campagne centrale.
+Le front spécial des Contreforts de Hautebrande utilise la carte Classic 1424 (alias 25), avec seulement deux capitales : Austrivage à 44.9/44.5 et Moulin-de-Tarren à 54.8/26.6 (depuis la 2.0 : les deux points sont en rase campagne, hors des villes). Leur rayon effectif de capture est de 4.5 unités sur la carte (7.5 x 0.60), près du double du rayon habituel de 2.4. Les cercles restent séparés par la campagne centrale.
 
-Références des deux villes : [aubergiste d'Austrivage à 51/58](https://wowwiki-archive.fandom.com/wiki/Innkeeper_Anderson) et [Tarren Mill vers 60/19](https://classictinker.com/locations/tarren-mill/). Le test couvre les centres, les abords et la séparation des deux cercles. La carte 623 du champ de bataille homonyme est exclue du front de monde ouvert.
+Les deux villes elles-mêmes ([aubergiste d'Austrivage à 51/58](https://wowwiki-archive.fandom.com/wiki/Innkeeper_Anderson), [Tarren Mill vers 60/19](https://classictinker.com/locations/tarren-mill/)) ne sont plus des points de capture : le test couvre les centres, les abords, la séparation des deux cercles et le fait que les deux centres-villes restent en dehors. La carte 623 du champ de bataille homonyme est exclue du front de monde ouvert.

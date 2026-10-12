@@ -488,11 +488,13 @@ Overlord.Fronts.Registry = {
             Alliance = "HUMAN_MALE", Horde = "UNDEAD_MALE",
             faceInward = true, hordeMirror = false,
         },
-        -- Two town circles (halved in 1.1.11). The registry's 0.60 capture scale makes radius 7.5 = 4.5 map units.
+        -- Two circles (halved in 1.1.11). The registry's 0.60 capture scale makes radius 7.5 = 4.5 map units.
+        -- 2.0: both moved out of the towns, onto open ground (fights at the inn and the flight
+        -- master were in everybody's way). The zones keep their ids and their names.
         zones = {
-            Zone("hillsbrad_southshore", { center = {51.2, 58.0}, radius = 7.5,
+            Zone("hillsbrad_southshore", { center = {44.9, 44.5}, radius = 7.5,
                 status = "captured", isCapital = true }),
-            Zone("hillsbrad_tarren_mill", { center = {61.8, 19.0}, radius = 7.5,
+            Zone("hillsbrad_tarren_mill", { center = {54.8, 26.6}, radius = 7.5,
                 prereqZones = {"hillsbrad_southshore"}, isCapital = true }),
         },
         prereqs = {

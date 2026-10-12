@@ -252,31 +252,16 @@ function Overlord.ActionShortcut:Pickup()
     return true
 end
 
--- Depuis Midnight, la barre Blizzard repeint ses boutons via la methode du mixin
--- et non plus necessairement via les anciennes fonctions globales. Une seule fin
--- de chaine suffit; les clients plus anciens gardent le repli historique.
-local actionButtonUpdateHookTarget
-local actionButtonUpdateHookName
-if type(ActionBarActionButtonMixin) == "table"
-    and type(ActionBarActionButtonMixin.Update) == "function" then
-    actionButtonUpdateHookTarget = ActionBarActionButtonMixin
-    actionButtonUpdateHookName = "Update"
-elseif type(ActionButton_UpdateIcon) == "function" then
-    actionButtonUpdateHookName = "ActionButton_UpdateIcon"
-elseif type(ActionButton_UpdateAction) == "function" then
-    actionButtonUpdateHookName = "ActionButton_UpdateAction"
-elseif type(ActionButton_Update) == "function" then
-    actionButtonUpdateHookName = "ActionButton_Update"
-end
-if actionButtonUpdateHookName and type(hooksecurefunc) == "function" then
-    local hookArgs
-    if actionButtonUpdateHookTarget then
-        hookArgs = { actionButtonUpdateHookTarget, actionButtonUpdateHookName, SafeApplyShortcutIcon }
-    else
-        hookArgs = { actionButtonUpdateHookName, SafeApplyShortcutIcon }
-    end
-    hooksecurefunc(unpack(hookArgs))
-end
+-- 2.0 : plus de hooksecurefunc sur la methode Update des boutons d'action de Blizzard.
+-- Sur ce client, une methode d'un objet de Blizzard enveloppee par un addon peut se
+-- mettre a lever « attempt to call a nil value » dans l'appelant de Blizzard jusqu'a
+-- la relance du jeu (vu sur la carte du monde les 11 et 12 octobre 2026) : dans le code
+-- des barres d'action, ce serait une erreur a chaque repeint. (Ce crochet ne servait
+-- d'ailleurs a rien : les boutons de Blizzard recoivent leur propre copie de Update au
+-- chargement, avant nous.) Le logo est repose sur les evenements ci-dessous. Blizzard
+-- repeint aussi un bouton au survol et quand sa barre s'affiche, sans evenement : la
+-- macro montre alors son icone d'etendard, jamais un point d'interrogation, jusqu'a
+-- l'evenement suivant. Comme en 1.9.1.
 
 local actionIconEventFrame = CreateFrame("Frame")
 actionIconEventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
@@ -284,6 +269,13 @@ actionIconEventFrame:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
 actionIconEventFrame:RegisterEvent("ACTIONBAR_PAGE_CHANGED")
 actionIconEventFrame:RegisterEvent("UPDATE_MACROS")
 actionIconEventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+-- Les autres repeints d'un bouton par Blizzard : changement de forme ou de barre,
+-- grille montree pendant un glisser, icone d'un sort ou d'une macro qui change.
+-- (pcall : un evenement absent de ce client ne doit pas empecher les autres.)
+for _, event in ipairs({ "UPDATE_SHAPESHIFT_FORM", "UPDATE_BONUS_ACTIONBAR", "UPDATE_VEHICLE_ACTIONBAR",
+    "UPDATE_OVERRIDE_ACTIONBAR", "ACTIONBAR_SHOWGRID", "ACTIONBAR_HIDEGRID", "SPELL_UPDATE_ICON" }) do
+    pcall(actionIconEventFrame.RegisterEvent, actionIconEventFrame, event)
+end
 
 local actionIconRefreshPending = false
 local function ScheduleActionButtonIconRefresh()

@@ -104,26 +104,26 @@ end
 
 -- Shipped data: week 1 only, the beta is a plain category that stays highlighted.
 load(false)
-assert(sidebar() == "*beta,donors", "single week: " .. sidebar())
+assert(sidebar() == "*lifetime,beta,donors", "single week: " .. sidebar())
 assert(button("beta").Label._text == "Bêta" and button("donors").Label._text == "Donateurs")
-assert(click("beta") == "*beta,donors", "a single week has no sub-category")
-assert(click("donors") == "beta,*donors")
-assert(click("beta") == "*beta,donors", "back to the beta week")
+assert(click("beta") == "lifetime,*beta,donors", "a single week has no sub-category")
+assert(click("donors") == "lifetime,beta,*donors")
+assert(click("beta") == "lifetime,*beta,donors", "back to the beta week")
 
 -- Several weeks: collapsed at opening, expand / collapse like Retail.
 load(true)
-assert(sidebar() == "*beta,donors", "opens collapsed on the beta: " .. sidebar())
-assert(click("beta") == "beta,*beta:2,beta:1,donors", "expand opens the newest week")
+assert(sidebar() == "*lifetime,beta,donors", "opens on the player's feats, the beta collapsed: " .. sidebar())
+assert(click("beta") == "lifetime,beta,*beta:2,beta:1,donors", "expand opens the newest week")
 local week = button("beta:1")
 assert(week.Label._text == "Semaine 1" and week._width == 145 and week.Label._color[1] == 1
     and week.Background._color[1] == 0.6, "child style")
 assert(button("beta")._width == 160 and button("beta").Label._color[2] == 0.82, "parent style restored")
-assert(click("beta:1") == "beta,beta:2,*beta:1,donors")
-assert(click("beta") == "*beta,donors", "second click collapses, beta stays highlighted")
-assert(click("beta") == "beta,beta:2,*beta:1,donors", "re-expanding keeps the shown week")
-assert(click("donors") == "beta,*donors", "another category collapses the beta")
+assert(click("beta:1") == "lifetime,beta,beta:2,*beta:1,donors")
+assert(click("beta") == "lifetime,*beta,donors", "second click collapses, beta stays highlighted")
+assert(click("beta") == "lifetime,beta,beta:2,*beta:1,donors", "re-expanding keeps the shown week")
+assert(click("donors") == "lifetime,beta,*donors", "another category collapses the beta")
 assert(button("donors")._width == 160 and button("donors").Background._color[1] == 1,
     "a pooled child frame reused as a parent got its style back")
-assert(click("beta") == "beta,*beta:2,beta:1,donors", "from another category, expand opens the newest week")
+assert(click("beta") == "lifetime,beta,*beta:2,beta:1,donors", "from another category, expand opens the newest week")
 
 print("Hall of Fame sidebar: collapsed at opening, expand/collapse like Retail, child style restored OK")

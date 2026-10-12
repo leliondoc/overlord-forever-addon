@@ -22,8 +22,8 @@ test("Forever fronts: seven Classic map campaigns", () => {
     assert.match(fronts, /Zone\("redridge_lakeshire", \{ center = \{25\.0, 43\.0\}/);
     assert.match(fronts, /Zone\("redridge_stonewatch_falls", \{ center = \{75\.0, 67\.0\}/);
     assert.match(fronts, /id = "hillsbrad"/);
-    assert.match(fronts, /Zone\("hillsbrad_southshore", \{ center = \{51\.2, 58\.0\}, radius = 7.5/);
-    assert.match(fronts, /Zone\("hillsbrad_tarren_mill", \{ center = \{61\.8, 19\.0\}, radius = 7.5/);
+    assert.match(fronts, /Zone\("hillsbrad_southshore", \{ center = \{44\.9, 44\.5\}, radius = 7.5/);
+    assert.match(fronts, /Zone\("hillsbrad_tarren_mill", \{ center = \{54\.8, 26\.6\}, radius = 7.5/);
     assert.doesNotMatch(fronts, /id = "gilneas"/);
     assert.doesNotMatch(fronts, /id = "southern_barrens"/);
 });
@@ -52,13 +52,18 @@ test("TOC Forever 16001 and CurseForge 1701204", () => {
     assert.match(hof, /id = "donors"/);
     assert.match(hof, /Overlord\.DonorHonorEntries/);
     // Weekly champions (top 5 killers, guilds and capturers) are display-only:
-    // no Retail map honor sites and no lifetime feats on Forever. Beta weeks live in
+    // no Retail map honor sites and no Retail lifetime statistics on Forever. Beta weeks live in
     // their own category; launch categories stay hidden while empty.
     assert.match(hof, /Overlord\.WeeklyChampionEntries/);
     assert.match(hof, /Overlord\.BetaChampionEntries/);
     assert.match(hof, /id = "alliance", labelKey = "HOF_CAT_ALLIANCE", hideWhenEmpty = true/);
     assert.match(hof, /id = "horde", labelKey = "HOF_CAT_HORDE", hideWhenEmpty = true/);
-    assert.doesNotMatch(hof, /PlayerHonorEntries|GuildHonorSites|HOF_CAT_LIFETIME/);
+    assert.doesNotMatch(hof, /PlayerHonorEntries|GuildHonorSites|LifetimeStats|HallOfFameLifetime/);
+    // "Your feats" is back since the Overlord ranks (2026-10): its rows are the fifteen
+    // ranks served by Ranks.lua, local to the player, never the Retail lifetime module.
+    assert.match(hof, /id = "lifetime", labelKey = "HOF_CAT_LIFETIME"/);
+    assert.match(hof, /local ranks = Overlord\.Ranks/);
+    assert.match(hof, /pcall\(ranks\.GetFeatView, ranks\)/);
     assert.match(hofUi, /selectedCategory = Overlord\.HallOfFameData:GetDefaultCategory\(\)/);
 });
 

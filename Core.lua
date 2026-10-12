@@ -1744,6 +1744,9 @@ local function CompleteResumeFromInstance(reason)
     if Overlord.GroupFinder and Overlord.GroupFinder.OnInstanceResume then
         pcall(Overlord.GroupFinder.OnInstanceResume, Overlord.GroupFinder)
     end
+    if Overlord.RanksUI and Overlord.RanksUI.OnInstanceResume then
+        pcall(Overlord.RanksUI.OnInstanceResume, Overlord.RanksUI)
+    end
     -- Un loading survenu avant l'initialisation de Sync conserve le ZR au lieu de
     -- marquer la vague comme relachee sans transport. Le rejouer avant la rotation.
     if Overlord.FlushDeferredCaptureRelease then
@@ -1890,6 +1893,10 @@ function Overlord:SuspendForInstance()
     -- PvP group finder: window closed, own listing, sign-ups and board dropped, events off.
     if self.GroupFinder and self.GroupFinder.OnInstanceSuspend then
         pcall(self.GroupFinder.OnInstanceSuspend, self.GroupFinder)
+    end
+    -- Overlord Rank: the character sheet tab goes away, nothing is credited.
+    if self.RanksUI and self.RanksUI.OnInstanceSuspend then
+        pcall(self.RanksUI.OnInstanceSuspend, self.RanksUI)
     end
     self.InstanceSuspended = true
     -- HUD or : peut s'afficher sur PLAYER_ENTERING_WORLD avant que ce handler finisse - masquage immediat.

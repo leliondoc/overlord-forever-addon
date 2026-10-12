@@ -14,6 +14,7 @@ local guideKeys = {
     "GUIDE_SECTION_FACTION_CALL", "GUIDE_FACTION_CALL_BODY", "GUIDE_SECTION_ALERTS",
     "GUIDE_ALERTS_BODY", "GUIDE_SECTION_TOOLS", "GUIDE_TOOLS_BODY",
     "GUIDE_SECTION_GROUPS", "GUIDE_GROUPS_BODY",
+    "GUIDE_SECTION_RANKS", "GUIDE_RANKS_BODY",
     "GUIDE_BAR_LABEL", "GUIDE_TITLE", "GUIDE_CLOSE", "GUIDE_NEXT", "GUIDE_PREV",
     "GUIDE_PAGE_INDICATOR", "FRONT_TRUCE_ENDED_KEPT", "FRONT_CAPITAL_LIBERATED",
     "FRONT_VICTORY_TOO_SOON", "FORTRESS_CAPTURE_AVAILABLE",
@@ -70,7 +71,7 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
     assert(type(unit) == "string" and unit ~= "", loc .. ": no ladder kill column label")
     for _, key in ipairs({ "FEATURED_FRONT_ACTIVITY_KILLS", "FEATURED_FRONT_ACTIVITY_KILL_ONE",
         "GUILD_KILL_ALERT", "GUILD_KILL_ALERT_FRONT", "GUILD_KILL_ALLY_ALERT", "GUILD_KILL_ALLY_ALERT_FRONT",
-        "LB_TOTAL_FORMAT", "LB_GUILD_TIP_TOTAL", "MW_ALERT", "POPUP_BATTLE_REPORT_GUILD" }) do
+        "LB_TOTAL_FORMAT", "LB_GUILD_TIP_TOTAL", "MW_ALERT" }) do
         assert(type(L[key]) == "string" and L[key]:find(unit, 1, true),
             loc .. ": " .. key .. " does not use " .. unit .. ": " .. tostring(L[key]))
     end

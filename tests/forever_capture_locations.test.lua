@@ -87,9 +87,9 @@ local anchors = {
     {"redridge_lakeridge_highway", 38.0, 73.0},
     {"redridge_stonewatch_falls", 75.0, 67.0},
     {"redridge_renders_valley", 73.0, 78.0},
-    -- Hillsbrad town references: Southshore innkeeper (51.2/58.9) and Tarren Mill hub (61/19).
-    {"hillsbrad_southshore", 51.2, 58.9},
-    {"hillsbrad_tarren_mill", 61.0, 19.0},
+    -- Hillsbrad (2.0): the two points sit on open ground, away from the towns.
+    {"hillsbrad_southshore", 44.9, 45.4},
+    {"hillsbrad_tarren_mill", 54.0, 26.6},
 }
 local seen = {}
 for _, a in ipairs(anchors) do
@@ -107,18 +107,20 @@ for _, a in ipairs(anchors) do
     end
     seen[a[1]] = true
 end
--- The special front's circles (halved in 1.1.11) cover the town cores, while
--- the former outer ring and the open ground between them stay outside.
+-- The special front's circles (halved in 1.1.11, moved out of the towns in 2.0): the
+-- former outer ring, the open ground between them and both town cores stay outside.
 local hillsbrad = Overlord.Fronts:GetFront("hillsbrad")
 Overlord.Fronts.activeFrontId = hillsbrad.id
 Overlord.ZoneDatabase = hillsbrad.zones
 currentMap = hillsbrad.preferredMapID
 for _, sample in ipairs({
-    {54.5, 58.0, "hillsbrad_southshore"},
-    {64.5, 19.0, "hillsbrad_tarren_mill"},
-    {59.0, 58.0, nil},
-    {69.0, 19.0, nil},
-    {56.0, 39.0, nil},
+    {48.2, 44.5, "hillsbrad_southshore"},
+    {57.5, 26.6, "hillsbrad_tarren_mill"},
+    {52.7, 44.5, nil},
+    {62.0, 26.6, nil},
+    {50.0, 35.5, nil},
+    {51.2, 58.0, nil}, -- Southshore's inn: no longer a capture point
+    {61.8, 19.0, nil}, -- Tarren Mill's hub: no longer a capture point
 }) do
     now, x, y = now + 1, sample[1], sample[2]
     local found = Overlord.Zones:GetCurrentPlayerZone()

@@ -5772,6 +5772,12 @@ function Overlord.Leaderboard:ResumePendingWeeklyArchive()
         captureCountFallback = not next(bucket.captureCount or {}),
     }
     self._weeklyArchiveBuildPending = state
+    -- Rangs Overlord : notre place dans la semaine finie, comptee pendant la passe
+    -- des victoires. Une erreur de ce cote ne doit jamais arreter l'archive.
+    if Overlord.Ranks and Overlord.Ranks.BeginWeekClose then
+        local ok, probe = pcall(Overlord.Ranks.BeginWeekClose, Overlord.Ranks, marker)
+        state.rankProbe = ok and probe or nil
+    end
 
     local function finishMarker()
         if self._weeklyArchiveBuildPending ~= state
@@ -5884,6 +5890,10 @@ function Overlord.Leaderboard:ResumePendingWeeklyArchive()
                 local key, value = next(source or {}, state.key)
                 if key == nil then
                     state.key = nil
+                    if state.phase == "kills" and state.rankProbe then
+                        pcall(Overlord.Ranks.FinishWeekClose, Overlord.Ranks, state.rankProbe)
+                        state.rankProbe = nil
+                    end
                     if state.phase == "kills" then state.phase = "captures"
                     elseif state.phase == "captures" then state.phase = "bountyTimes"
                     elseif state.phase == "bountyTimes" then state.phase = "bountyKills"
@@ -5893,6 +5903,11 @@ function Overlord.Leaderboard:ResumePendingWeeklyArchive()
                     if state.captureCountFallback and state.phase == "captures"
                         and type(value) == "table" then value = #value end
                     self:OfferTopSnapshotRow(heap, key, value)
+                    if state.rankProbe and state.phase == "kills" then
+                        local okRow = pcall(Overlord.Ranks.ProbeWeekRow, Overlord.Ranks,
+                            state.rankProbe, key, value, bucket.playerInfo)
+                        if not okRow then state.rankProbe = nil end
+                    end
                     budget = budget - 1
                     processed = processed + 1
                     if sliceStarted and processed % 8 == 0
@@ -6515,6 +6530,10 @@ function Overlord.Leaderboard:RegisterKill(playerName, fromSync)
         if not self:CreditLocalLifetime("kills", 1, playerName) then
             self:RequestLifetimeFloorSyncForLocal()
         end
+        -- Rangs Overlord : uniquement ce que ce client a compte lui-meme.
+        if not fromSync and Overlord.Ranks then
+            pcall(Overlord.Ranks.CreditLocal, Overlord.Ranks, "kills", 1)
+        end
     end
     if self:IsLocalDisplayName(playerName) then
         self:UpdateLocalPlayerGuild()
@@ -6557,6 +6576,9 @@ function Overlord.Leaderboard:AddKills(playerName, count, fromSync)
     if self:IsLocalDisplayName(playerName) then
         if not self:CreditLocalLifetime("kills", count, playerName) then
             self:RequestLifetimeFloorSyncForLocal()
+        end
+        if not fromSync and Overlord.Ranks then
+            pcall(Overlord.Ranks.CreditLocal, Overlord.Ranks, "kills", count)
         end
     end
     self:MarkDirty()
@@ -6614,6 +6636,9 @@ function Overlord.Leaderboard:AddPlayerCapture(playerName, zoneId, fromSync)
     if self:IsLocalDisplayName(playerName) then
         if not self:CreditLocalLifetime("captures", 1, playerName) then
             self:RequestLifetimeFloorSyncForLocal()
+        end
+        if not fromSync and Overlord.Ranks then
+            pcall(Overlord.Ranks.CreditLocal, Overlord.Ranks, "captures", 1)
         end
     end
     self:MarkDirty()

@@ -11,6 +11,8 @@ local L = Overlord.L
 -- semaine, une sous-categorie par semaine sinon, la plus recente en haut) : ses entrees
 -- ne sont listees nulle part ailleurs.
 Overlord.HallOfFameData.CATEGORIES = {
+    -- Vos exploits : les rangs Overlord du personnage (Ranks.lua), obtenus ou a obtenir.
+    { id = "lifetime", labelKey = "HOF_CAT_LIFETIME" },
     { id = "player", labelKey = "HOF_CAT_PLAYER", hideWhenEmpty = true },
     { id = "guild", labelKey = "HOF_CAT_GUILD", hideWhenEmpty = true },
     { id = "alliance", labelKey = "HOF_CAT_ALLIANCE", hideWhenEmpty = true },
@@ -383,6 +385,19 @@ function Overlord.HallOfFameData:GetSidebarEntries(betaOpen)
 end
 
 function Overlord.HallOfFameData:GetHonorView(categoryId, searchText)
+    if categoryId == "lifetime" then
+        -- (pcall : cette categorie est la vue d'ouverture du Pantheon ; une erreur ici
+        -- ne doit pas l'empecher de s'ouvrir.)
+        local ranks = Overlord.Ranks
+        local ok, view = false, nil
+        if ranks and ranks.GetFeatView then ok, view = pcall(ranks.GetFeatView, ranks) end
+        if ok and type(view) == "table" and type(view.rows) == "table" then
+            local rows = FilterRows(view.rows, searchText)
+            if rows == view.rows then return view end
+            return { rows = rows, stats = view.stats }
+        end
+        return { rows = {}, stats = { totalCount = 0, earnedCount = 0, totalPoints = 0, donorCount = 0 } }
+    end
     local cache = EnsureRows()
     local betaWeek = BetaWeekOf(categoryId)
     if betaWeek then

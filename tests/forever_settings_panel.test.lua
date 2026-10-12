@@ -23,14 +23,39 @@ function FCF_OpenNewWindow(name)
     end
 end
 function securecall(fn, ...) return fn(...) end
-function hooksecurefunc(owner, method, hook)
-    local original = owner[method]
-    owner[method] = function(...) local r = original(...); hook(...); return r end
-end
-local title = { SetText = function(self, text) self.text = text end }
+-- No method of Blizzard's options window is wrapped (2.0).
+function hooksecurefunc(_, method) error("a method of a Blizzard object was hooked: " .. tostring(method)) end
+local title = { SetText = function(self, text) self.text = text end, GetText = function(self) return self.text end }
+local panelScripts, panelShown, currentCategory = {}, false, nil
 SettingsPanel = { Container = { SettingsList = { Header = { Title = title } } },
-    HookScript = function() end,
-    DisplayCategory = function(_, category) title:SetText(category.name) end }
+    HookScript = function(_, name, fn)
+        panelScripts[name] = panelScripts[name] or {}
+        table.insert(panelScripts[name], fn)
+    end,
+    IsShown = function() return panelShown end,
+    GetCurrentCategory = function() return currentCategory end,
+    DisplayCategory = function(_, category) currentCategory = category; title:SetText(category.name) end }
+-- Frames of the addon: scripts kept, shown state followed.
+local addonFrames = {}
+function CreateFrame()
+    local f = { scripts = {}, shown = true }
+    function f:SetScript(name, fn) self.scripts[name] = fn end
+    function f:Show() self.shown = true end
+    function f:Hide() self.shown = false end
+    function f:IsShown() return self.shown end
+    addonFrames[#addonFrames + 1] = f
+    return f
+end
+local function openPanel(open)
+    panelShown = open
+    for _, fn in ipairs(panelScripts[open and "OnShow" or "OnHide"] or {}) do fn() end
+end
+-- One tenth of a second of the addon's own frames, as the game runs them: shown only.
+local function tick()
+    for _, f in ipairs(addonFrames) do
+        if f.shown and f.scripts.OnUpdate then f.scripts.OnUpdate(f, 0.11) end
+    end
+end
 C_Timer = { After = function(_, fn) fn() end } -- deferred work runs at once here
 local function container()
     local c = { data = {} }
@@ -122,11 +147,38 @@ settings["Overlord_GuildKillAlert"].set(false)
 assert(Overlord.GuildKillAlert.enabled == false)
 SP:RefreshControls()
 assert(values["Overlord_GuildKillAlert"] == false, "RefreshControls did not push the alert state")
--- 5. Our page title carries the Overlord logo; other categories are untouched.
+-- 5. Our page title carries the Overlord logo; other categories are untouched. The
+--    logo is put back by a frame of ours that only runs while the options window is
+--    open: no method of Blizzard's window is hooked.
+assert(SP._titleWatcher and SP._titleWatcher.shown == false, "the title watcher runs with the options window closed")
 SettingsPanel:DisplayCategory(SP._category)
+tick()
+assert(title.text == "Overlord", "the title was touched with the options window closed: " .. tostring(title.text))
+openPanel(true)
+tick()
 assert(title.text:find("overlord:22:22", 1, true) and title.text:find("Overlord$"), "Logo missing: " .. tostring(title.text))
+local withLogo = title.text
+local writes, setText = 0, title.SetText
+title.SetText = function(self, text) writes = writes + 1; return setText(self, text) end
+tick(); tick()
+assert(writes == 0 and title.text == withLogo, "the title is rewritten although nothing changed")
 SettingsPanel:DisplayCategory({ name = "BugSack" })
+tick()
 assert(title.text == "BugSack", "Logo leaked onto another addon page")
+SettingsPanel:DisplayCategory(SP._category)
+tick()
+assert(title.text == withLogo, "back on our page: the logo did not come back")
+-- A search leaves our page as the current category but Blizzard's header says
+-- "Search Results": that text is not ours to replace.
+title:SetText("Search Results")
+tick(); tick()
+assert(title.text == "Search Results", "the search header was replaced by our title: " .. tostring(title.text))
+SettingsPanel:DisplayCategory(SP._category)
+tick()
+assert(title.text == withLogo, "after the search: the logo did not come back")
+openPanel(false)
+assert(SP._titleWatcher.shown == false, "the title watcher outlives the options window")
+title.SetText = setText
 
 -- 6. A click runs the setter (and its side effect) once: the setter's own
 --    Settings.SetValue notification must not call it back in a loop.

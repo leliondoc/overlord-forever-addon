@@ -394,6 +394,24 @@ local function CardIconTexture(card)
     return icon and icon.texture
 end
 
+-- Le gabarit pose l'icone (36 x 36) a 0, 3 et son cadre (46 x 46) a -1, 2 : une icone
+-- carree deborde expres du trou du cadre (25,6 px), qui la rogne. Un insigne detoure
+-- (row.iconShaped : les rangs Overlord) serait rogne et decale d'un pixel : il est
+-- montre entier, centre sur le trou.
+local function FitHonorCardIcon(card, texture, shaped)
+    shaped = shaped and true or false
+    if (card._hofIconShaped or false) == shaped then return end
+    card._hofIconShaped = shaped
+    texture:ClearAllPoints()
+    if shaped then
+        texture:SetSize(32, 32)
+        texture:SetPoint("CENTER", -1, 2)
+    else
+        texture:SetSize(36, 36)
+        texture:SetPoint("CENTER", 0, 3)
+    end
+end
+
 local function LifetimeRowNeedsProgressBar(row)
     if not row or row.kind ~= "lifetime" then return false end
     if row.earned then return false end
@@ -571,6 +589,7 @@ local function PopulateHonorCard(card, row, opts)
 
     local iconTexFrame = CardIconTexture(card)
     if iconTexFrame then
+        FitHonorCardIcon(card, iconTexFrame, row.iconShaped)
         local iconTex = row.icon
         if card._hofIcon ~= iconTex then
             card._hofIcon = iconTex
@@ -1255,6 +1274,13 @@ function Overlord.HallOfFameUI:RequestRefreshIfShown()
             Overlord.HallOfFameUI:Refresh()
         end
     end)
+end
+
+-- Les rangs Overlord ont bouge (une victoire, une semaine comptee) : seule la categorie
+-- Vos exploits en depend. Sur une autre, une victoire ne coute rien a la fenetre.
+function Overlord.HallOfFameUI:RequestFeatsRefresh()
+    if selectedCategory ~= "lifetime" then return end
+    self:RequestRefreshIfShown()
 end
 
 function Overlord.HallOfFameUI:Show()

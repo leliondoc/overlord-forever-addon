@@ -243,6 +243,9 @@ local function StartNetworkProbe()
             end
         end
         if sync.GetEnemyCaptureFinalDiagnostics then R.Detail(sync:GetEnemyCaptureFinalDiagnostics()) end
+        if sync.GetCrossFactionDiagnostics then
+            for _, line in ipairs(sync:GetCrossFactionDiagnostics()) do R.Detail(line) end
+        end
         if sync.GetSuspiciousSenderDiagnostics then R.Detail(sync:GetSuspiciousSenderDiagnostics()) end
         if sync.GetThirdPartyInflationDiagnostics then R.Detail(sync:GetThirdPartyInflationDiagnostics()) end
         if sync.GetHistoryCatchupDiagnostics then

@@ -4241,6 +4241,157 @@ local function EffectiveCapturerNameForAlert(zone, zsCapturerName)
     return ""
 end
 
+-- 2.0: an enemy capture learnt from a map page instead of its live final is counted
+-- (/ov network) and said in chat as what it is, a catch-up, with the time of the
+-- capture: one line per map, the newest four named. On a front we do not stand on,
+-- such a capture changed the map without a word; on our own front it printed the line
+-- of a live capture, late and several at once. At login only the captures of the last
+-- half hour are told. No message sent; work only when a map changes an owner.
+priv.mapCatchupNotice = {}
+priv.mapCatchupMaxAge = 6 * 3600
+priv.mapCatchupLoginMaxAge = 1800
+function Overlord.Sync:NoteMapCatchupCapture(zone, owner, capturedAt, capturerName, atLogin, alertAllowed)
+    if not zone or not zone.id or not owner or owner == Overlord.PlayerFaction then return end
+    capturedAt = math.floor(tonumber(capturedAt) or 0)
+    atLogin = atLogin == true
+        or (Overlord.IsCaptureSyncGateActive and Overlord:IsCaptureSyncGateActive()) or false
+    self:NoteEnemyCaptureByMap(capturedAt, atLogin)
+    if not alertAllowed then return end
+    -- The assault was followed here and the map ends it: the usual line, capturer named.
+    -- (pcall: a chat output that raises, another addon's chat frame for instance, must
+    -- not cut the map being applied; the grouped line below is flushed under pcall too.)
+    if capturerName and capturerName ~= "" then
+        pcall(PrintCaptureChatOnce, zone, owner, capturerName, capturedAt)
+        return
+    end
+    local now = Overlord.ServerNow and Overlord.ServerNow() or time()
+    if capturedAt <= 0
+        or now - capturedAt > (atLogin and priv.mapCatchupLoginMaxAge or priv.mapCatchupMaxAge) then return end
+    local queue = priv.mapCatchupNotice
+    if #queue < 64 then queue[#queue + 1] = { zone = zone, owner = owner, at = capturedAt } end
+end
+
+function Overlord.Sync:FlushMapCatchupNotice()
+    local queue = priv.mapCatchupNotice
+    if #queue == 0 then return end
+    priv.mapCatchupNotice = {}
+    table.sort(queue, function(a, b)
+        if a.at ~= b.at then return a.at > b.at end
+        return a.zone.id < b.zone.id
+    end)
+    local now, clock, shown, more = GetTime(), date or (os and os.date), {}, 0
+    for _, entry in ipairs(queue) do
+        local zone = entry.zone
+        if not Overlord.ShouldShowZoneAlert or Overlord:ShouldShowZoneAlert(zone) then
+            -- The marks of a live line: a late copy of the final then stays silent.
+            local key = zone.id .. ":" .. entry.owner
+            local last = priv.captureChatDedup[key]
+            local dedupSec = zone.isCapital and priv.captureChatDedupCapitalSec or priv.captureChatDedupSec
+            if RememberCaptureChatTimestamp(key .. ":" .. entry.at, now)
+                and not (last and now - last < dedupSec) then
+                priv.captureChatDedup[key] = now
+                if #shown < 4 then
+                    local label = zone.name or zone.id
+                    local front = Overlord.Fronts and Overlord.Fronts.GetZone
+                        and select(2, Overlord.Fronts:GetZone(zone.id))
+                    local mapName = front and front.mapName
+                    if type(mapName) == "string" and mapName ~= "" and mapName ~= label then
+                        label = label .. " (" .. mapName .. ")"
+                    end
+                    shown[#shown + 1] = label .. (clock and (" " .. clock("%H:%M", entry.at)) or "")
+                else
+                    more = more + 1
+                end
+            end
+        end
+    end
+    if #shown == 0 then return end
+    Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon()
+        .. (L.SYNC_CATCHUP_ENEMY or "Catch-up: taken by %s: %s."),
+        Overlord.Zones:GetEnemyFactionName(),
+        table.concat(shown, ", ") .. (more > 0 and (" +" .. more) or "")))
+end
+
+-- A dated capture of a map page on a front we are not standing on.
+function Overlord.Sync:ApplyInactiveMapCapture(zone, zoneId, owner, ts, ct, forceConvergence, quiet)
+    local oldStatus, oldOwner, oldPrevious, atLogin
+    if zone then
+        oldStatus, oldOwner, oldPrevious = zone.status, zone.owner, zone.previousOwner
+        atLogin = zone._loginSyncUnconfirmed == true
+    end
+    if not ApplyInactiveFrontZoneState(zoneId, "captured", 0, 0, owner, ts, nil, nil, ct,
+        nil, nil, nil, forceConvergence) then return false end
+    if zone and owner and zone.owner == owner and (oldOwner ~= owner or oldStatus == "in_progress") then
+        ct = tonumber(ct) or 0
+        self:NoteMapCatchupCapture(zone, owner, ct > 0 and ct or ts,
+            EffectiveCapturerNameForAlert(zone, nil), atLogin,
+            not quiet and not forceConvergence
+                and ShouldAlertEnemyZoneCapture(oldStatus, oldOwner, oldPrevious, owner, zone))
+    end
+    return true
+end
+
+-- /ov network: whole maps (page batches of a global map) by side of their sender, and
+-- the enemy captures a map taught us in place of their live final. Counters only.
+function Overlord.Sync:NoteMapBatch(sender, event, batch)
+    local theirs, mine = self:GetBetaPeerFaction(sender), Overlord.PlayerFaction
+    local side = (theirs and mine and theirs ~= mine) and "enemy" or "own"
+    local stats = self._mapBatchStats
+    if not stats then
+        stats = { enemy = {}, own = {} }
+        self._mapBatchStats = stats
+    end
+    stats[side][event] = (stats[side][event] or 0) + 1
+    if batch then batch.mapSide = side end
+end
+
+function Overlord.Sync:NoteEnemyCaptureByMap(capturedAt, atLogin)
+    local stats = self._enemyByMapStats
+    if not stats then
+        stats = { session = 0, login = 0, last = 0, worst = 0 }
+        self._enemyByMapStats = stats
+    end
+    -- Login apart: captures made while we were away are expected there.
+    if atLogin then
+        stats.login = stats.login + 1
+        return
+    end
+    local now = Overlord.ServerNow and Overlord.ServerNow() or time()
+    capturedAt = tonumber(capturedAt) or 0
+    local late = capturedAt > 0 and math.max(0, now - capturedAt) or 0
+    stats.session = stats.session + 1
+    stats.last = late
+    if late > stats.worst then stats.worst = late end
+end
+
+function Overlord.Sync:GetCrossFactionDiagnostics()
+    local now, waiting = GetTime(), { enemy = 0, own = 0 }
+    for _, batch in pairs(priv.pendingZaSnapshotPages or {}) do
+        if batch.mapSide and now - (batch.lastAt or batch.createdAt or 0) <= 45 then
+            waiting[batch.mapSide] = waiting[batch.mapSide] + 1
+        end
+    end
+    local stats = self._mapBatchStats or { enemy = {}, own = {} }
+    local function side(label, key)
+        local s = stats[key]
+        local started, complete = s.started or 0, s.complete or 0
+        -- A batch whose pages stopped coming is dropped after 45 s: never applied.
+        return ("Whole maps from %s: started %d, complete %d, expired %d, accepted %d, refused %d, identical %d.")
+            :format(label, started, complete, math.max(0, started - complete - waiting[key]),
+                s.accepted or 0, s.refused or 0, s.same or 0)
+    end
+    local lines = { side("the other faction", "enemy"), side("our faction", "own") }
+    local byMap = self._enemyByMapStats
+    if not byMap or byMap.session + byMap.login == 0 then
+        lines[3] = "Enemy captures learnt by map instead of live: none."
+    else
+        lines[3] = ("Enemy captures learnt by map instead of live: %d in session (last %d min late, worst %d min), %d at login.")
+            :format(byMap.session, math.floor(byMap.last / 60 + 0.5), math.floor(byMap.worst / 60 + 0.5),
+                byMap.login)
+    end
+    return lines
+end
+
 -- Interpolation observateur a 100% sans ZS captured/C : NE TRANCHE PAS la verite gameplay.
 -- Demande un SR poll agressif pour obtenir la confirmation reseau.
 -- L'UI continue d'afficher le timer cappe a holdTimeRequired (GetObserverHoldTimeElapsed).
@@ -7796,6 +7947,8 @@ function Overlord.Sync:OnReceiveZoneAll(
         NoteOutdated("outdatedMaps")
         return
     end
+    -- Entries left by a map whose handling was cut short are not told with the next one.
+    if #priv.mapCatchupNotice > 0 then priv.mapCatchupNotice = {} end
     local snapshotComplete = false
     local snapshotAtomic = false
     local snapshotGlobal = false
@@ -7877,6 +8030,9 @@ function Overlord.Sync:OnReceiveZoneAll(
                 pages = {},
             }
             priv.pendingZaSnapshotPages[batchKey] = pendingZaSnapshot
+            if zaSnapshotScope == "G" or zaSnapshotScope == "Q" then
+                self:NoteMapBatch(sender, "started", pendingZaSnapshot)
+            end
         elseif pendingZaSnapshot.pageCount ~= zaPageCount then
             -- Meme sender/id avec deux tailles = equivocation, jeter tout le lot.
             priv.pendingZaSnapshotPages[batchKey] = nil
@@ -7906,6 +8062,7 @@ function Overlord.Sync:OnReceiveZoneAll(
         end
         priv.pendingZaSnapshotPages[batchKey] = nil
         priv.completedZaSnapshots[batchKey] = now
+        if zaSnapshotScope == "G" or zaSnapshotScope == "Q" then self:NoteMapBatch(sender, "complete") end
         payload = table.concat(assembledZaSnapshot, ",")
         if payload == "" then return end
         -- Tous les lots v2 (G/F/P/Q) sont atomiques jusqu'a validation. Q est une
@@ -7927,7 +8084,10 @@ function Overlord.Sync:OnReceiveZoneAll(
     if payload == self._lastAcceptedZaPayload
         and GetTime() - (self._lastAcceptedZaAt or -math.huge) < 30
         and next(priv.zaFlipClaims) == nil then
-        if snapshotGlobal then self:NoteFullMapReceived(sender) end
+        if snapshotGlobal then
+            self:NoteFullMapReceived(sender)
+            self:NoteMapBatch(sender, "same")
+        end
         local betaNet = Overlord.Relay
         if betaNet and betaNet.stats then
             betaNet.stats.zaIdenticalSkipped = (betaNet.stats.zaIdenticalSkipped or 0) + 1
@@ -8069,7 +8229,10 @@ function Overlord.Sync:OnReceiveZoneAll(
     -- Les anciennes elections ZA dependaient des paquets vus par ce recepteur.
     -- Un lot atomique direct qui ne passe pas toutes les gardes echoue ferme ;
     -- une prochaine reponse SR complete retentera sans vote ni carte synthetique.
-    if snapshotAtomic and snapshotConsensusComplete == false then return end
+    if snapshotAtomic and snapshotConsensusComplete == false then
+        if snapshotGlobal then self:NoteMapBatch(sender, "refused") end
+        return
+    end
     -- Lot valide : les basculements tenus deviennent des demandes datees des
     -- maintenant, meme si le dry-run ci-dessous refuse le lot (sinon la limite de
     -- 5 min ne demarrerait jamais pour une zone en siege continu). A confirmation
@@ -8313,9 +8476,13 @@ function Overlord.Sync:OnReceiveZoneAll(
     end
     -- Un lot moderne ne touche rien tant que chacune de ses zones n'a pas passe
     -- la validation atomique.
-    if snapshotAtomic and not snapshotConsensusComplete then return end
+    if snapshotAtomic and not snapshotConsensusComplete then
+        if snapshotGlobal then self:NoteMapBatch(sender, "refused") end
+        return
+    end
     if next(confirmedFlips) ~= nil then self:CommitZaFlipClaims({}, confirmedFlips, sender) end
     self._lastAcceptedZaPayload, self._lastAcceptedZaAt = payload, GetTime()
+    if snapshotGlobal then self:NoteMapBatch(sender, "accepted") end
     -- Carte globale validee : le relais n'a pas besoin de redemander la carte a
     -- chaque nouveau pair entendu dans la foulee. Une carte rejetee, ou dont chaque
     -- zone etait plus ancienne que la notre, ne compte pas.
@@ -8512,11 +8679,11 @@ function Overlord.Sync:OnReceiveZoneAll(
                         zone.updatedAt = ts
                         zone._loginSyncUnconfirmed = nil
                         changed = true
-                        if not loginPairRepairMode and not runtimeGlobalRepairMode
-                            and ShouldAlertEnemyZoneCapture(
-                                oldStatus, oldOwner, previousBeforePromote, owner, zone) then
-                            PrintCaptureChatOnce(zone, owner, EffectiveCapturerNameForAlert(zone, nil), zaCaptureTs)
-                        end
+                        self:NoteMapCatchupCapture(zone, owner, zaCaptureTs,
+                            EffectiveCapturerNameForAlert(zone, nil), loginUnconfirmed,
+                            not loginPairRepairMode and not runtimeGlobalRepairMode
+                                and ShouldAlertEnemyZoneCapture(
+                                    oldStatus, oldOwner, previousBeforePromote, owner, zone))
                         priv.enemyAlertEmitted[zoneId] = nil
                         priv.enemyAlertSkipUntil[zoneId] = nil
                     end
@@ -8625,11 +8792,11 @@ function Overlord.Sync:OnReceiveZoneAll(
                         zone._loginSyncUnconfirmed = nil
                         CompleteAcceptedZsTerminal(zone, zone.status)
                         changed = true
-                        if not loginPairRepairMode and not runtimeGlobalRepairMode
-                            and ShouldAlertEnemyZoneCapture(
-                                oldStatus, oldOwner, oldPreviousOwner, owner, zone) then
-                            PrintCaptureChatOnce(zone, owner, EffectiveCapturerNameForAlert(zone, nil), zaCaptureTs)
-                        end
+                        self:NoteMapCatchupCapture(zone, owner, zaCaptureTs,
+                            EffectiveCapturerNameForAlert(zone, nil), loginUnconfirmed,
+                            not loginPairRepairMode and not runtimeGlobalRepairMode
+                                and ShouldAlertEnemyZoneCapture(
+                                    oldStatus, oldOwner, oldPreviousOwner, owner, zone))
                         if owner == Overlord.Zones:GetEnemyFaction() then
                             priv.enemyAlertEmitted[zoneId] = nil
                             priv.enemyAlertSkipUntil[zoneId] = nil
@@ -8676,9 +8843,9 @@ function Overlord.Sync:OnReceiveZoneAll(
                         end
                     end
                 end
-                local inactiveApplied = inactiveBaseAllowed and ApplyInactiveFrontZoneState(
-                    zoneId, "captured", 0, 0, owner, ts, nil, nil, ct,
-                    nil, nil, nil, runtimeGlobalRepairMode) or false
+                local inactiveApplied = inactiveBaseAllowed and self:ApplyInactiveMapCapture(
+                    inactiveZone, zoneId, owner, ts, ct, runtimeGlobalRepairMode,
+                    loginPairRepairMode) or false
                 if inactiveApplied then
                     changed = true
                 end
@@ -8744,6 +8911,9 @@ function Overlord.Sync:OnReceiveZoneAll(
             Overlord.Zones:RefreshInactiveFrontAvailability(frontId)
         end
     end
+    -- (pcall : une ligne de chat qui echoue ne doit pas couper la fin de l'application
+    -- de la carte, juste en dessous.)
+    pcall(self.FlushMapCatchupNotice, self)
     if changed then
         Overlord.Zones:UpdateAvailableZones(
             loginPairRepairMode or runtimeGlobalRepairMode)

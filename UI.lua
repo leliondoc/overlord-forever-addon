@@ -65,8 +65,6 @@ local C_HORDE = {
 local C = C_ALLIANCE
 
 local PANEL_LINK = "addon:Overlord:panel"
--- Hook unique sur SetItemRef pour le lien d'ouverture du panneau.
-local panelLinkHookRegistered = false
 
 local function IsShardHelperActive()
     if Overlord.IsShardHelperActive then
@@ -134,19 +132,11 @@ function Overlord.UI:IsPanelAddonLink(link)
     return linkType == "addon" and addonName == "Overlord" and linkData == "panel"
 end
 
-local function RegisterPanelLinkHandler()
-    if panelLinkHookRegistered then return end
-    panelLinkHookRegistered = true
-    hooksecurefunc("SetItemRef", function(link, _, button)
-        if button ~= "LeftButton" or type(link) ~= "string" then return end
-        if Overlord.UI and Overlord.UI.IsPanelAddonLink and Overlord.UI:IsPanelAddonLink(link) then
-            Overlord.UI:OpenPanelFromLink(button)
-        end
-    end)
-end
-
+-- Le lien « addon:Overlord:panel » n'existe que dans nos propres fenetres (annonce de
+-- bienvenue, tutoriel), qui traitent son clic par leur script OnHyperlinkClick
+-- (Popups.lua). 2.0 : plus de hooksecurefunc sur SetItemRef, qui s'executait a chaque
+-- clic de n'importe quel lien du chat pour ne jamais rien y trouver.
 function Overlord.UI:EnsureAddonLinkHandlers()
-    RegisterPanelLinkHandler()
 end
 
 -- Scroll molette + fleches haut/bas (meme principe que LeaderboardUI).
@@ -867,7 +857,6 @@ local function EnsureWorldMapPanelHooks()
 end
 
 function Overlord.UI:CreateMainFrame()
-    RegisterPanelLinkHandler()
     mainFrame = mainFrameShell
     userMovedPanel = mainFrame:IsUserPlaced()
     -- Largeur fixe. Hauteur initiale : recalculee par ApplyPanelLayout.
@@ -2859,6 +2848,8 @@ function Overlord.UI:GetNearbyEnemyCount(forceRefresh)
             if not forceRefresh and cached.zoneId == zone.id and now - cached.time < 2 then
                 cachedEnemyCount = cached.enemy
             else
+                -- (local : sans lui, cette ligne ecrivait la variable globale _.)
+                local _
                 _, cachedEnemyCount = Overlord.ZoneControl:ScanNearbyPlayers(zone)
             end
         else

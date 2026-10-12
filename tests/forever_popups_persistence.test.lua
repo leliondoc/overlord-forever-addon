@@ -13,9 +13,12 @@ assert(loadfile("Popups.lua"))()
 
 local popups = Overlord.Popups
 assert(popups:TryShowNextLoginAnnouncement() == false, "Welcome popup returned with an unloaded save")
-assert(popups:TryShowNextDailyAnnouncement() == false, "Daily popup returned with an unloaded save")
 assert(popups:TryShowFeaturedFrontOnLogin() == false, "Featured front returned with an unloaded save")
 assert(popups.TryShowGuildKeepSiegeReminder == nil, "Retired siege reminder is still installed")
+-- 2.0: the battle report (daily, then weekly) is retired with everything that showed it.
+assert(popups.TryShowNextDailyAnnouncement == nil and popups.PreviewBattleReport == nil
+    and popups.TryShowBattleReportOnFrontEnter == nil and popups.HasShownToday == nil,
+    "The retired battle report is still installed")
 
 -- A valid saved table still permits unseen announcements.
 Overlord.SavedVariablesLoadedAtLogin = true
@@ -33,9 +36,5 @@ assert(popups:TryShowNextLoginAnnouncement() == false, "A retired announcement i
 popups:RegisterLoginAnnouncement({ id = "fixture_once", title = "Once", body = "Body" })
 assert(popups:TryShowNextLoginAnnouncement() == true, "Saved one-shot announcement was suppressed")
 assert(shown[1].id == "fixture_once")
-
-popups:RegisterLoginAnnouncement({ id = "fixture_daily", daily = true, title = "Daily", body = "Body" })
-assert(popups:TryShowNextDailyAnnouncement() == true, "Saved daily announcement was suppressed")
-assert(shown[2].id == "fixture_daily")
 
 print("Forever popups: unloaded saves suppress automatic repeats; loaded saves still announce")

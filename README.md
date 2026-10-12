@@ -33,8 +33,8 @@ ne remplace pas une sauvegarde persistante : si tous les joueurs perdent leur
 La version CurseForge ne contient aucune sauvegarde personnelle.
 
 Quand aucune sauvegarde n'a été chargée au login, Overlord ne relance pas
-automatiquement les annonces de bienvenue, le rapport quotidien ni le rappel
-de siège : il ne peut pas savoir si elles ont déjà été vues. Le guide reste
+automatiquement les annonces de bienvenue : il ne peut pas savoir si elles
+ont déjà été vues. Le guide reste
 accessible par `/ov guide` ou le panneau. Ce comportement est inclus pour tous
 les joueurs et ne nécessite aucun pont local.
 
@@ -67,7 +67,7 @@ Overlord Forever gère sept fronts indépendants avec leurs zones de capture, pr
 - **Orneval / Ashenvale** (`ashenvale`)
 - **Forêt d'Elwynn** (`elwynn`), parcours rétabli du front Retail
 - **Carmines / Comté-du-Lac** (`redridge`), parcours autour du lac Placide
-- **Contreforts de Hautebrande** (`hillsbrad`), front spécial à deux grands cercles : Austrivage (51,2 / 58) et Moulin-de-Tarren (61,8 / 19)
+- **Contreforts de Hautebrande** (`hillsbrad`), front spécial à deux grands cercles, en rase campagne hors des deux villes : Austrivage (44,9 / 44,5) et Moulin-de-Tarren (54,8 / 26,6)
 
 Le panneau principal permet de basculer entre les fronts disponibles. Les pins et la logique de capture s'adaptent à la carte où vous vous trouvez.
 
