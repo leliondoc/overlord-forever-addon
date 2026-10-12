@@ -9,8 +9,9 @@
 ## Notes-ruRU: Захват зон на фронтах открытого мира (WoW Forever): синхронизация, карта, рейтинг.
 ## Notes-ptBR: Captura de zonas nas frentes do mundo aberto (WoW Forever): sincronização, mapa e classificação.
 ## Notes-zhCN: WoW Forever 开放世界战线的区域占领：同步、地图与排行榜。
-## Version: 1.9.1
+## Version: 2.0.0
 ## SavedVariables: OverlordDB
+## SavedVariablesPerCharacter: OverlordCharDB
 ## IconTexture: Interface\AddOns\Overlord\Textures\overlord_minimap
 ## X-Category: PvP
 ## X-License: All Rights Reserved
@@ -23,6 +24,7 @@ Locales_zhCN.lua
 ForeverLocaleFixes.lua
 FrontLocales.lua
 GroupFinderLocales.lua
+RankLocales.lua
 Core.lua
 RealmPools.lua
 UIShared.lua
@@ -63,6 +65,8 @@ NetworkHealth.lua
 MostWanted.lua
 GroupFinder.lua
 GroupFinderUI.lua
+Ranks.lua
+RanksUI.lua
 UI.lua
 ActionShortcut.lua
 Button.lua
