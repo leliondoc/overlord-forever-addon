@@ -18,21 +18,19 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
-    env:
-      CF_API_KEY: ${{ secrets.CF_API_KEY }}
-      GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: Clone project
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Valider CHANGELOG.md (une seule version)
         run: bash .github/scripts/validate-changelog.sh CHANGELOG.md "${GITHUB_REF_NAME}"
 
       - name: Installer Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
 
@@ -215,6 +213,7 @@ jobs:
 
       - name: Valider les secrets de publication
         env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           if [ -z "$CF_API_KEY" ]; then
@@ -249,7 +248,10 @@ jobs:
           EOF
 
       - name: Package and release
-        uses: BigWigsMods/packager@v2
+        uses: BigWigsMods/packager@e50a250f8705041e40f2fa1ddcb280a686d65aa0 # v2
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
         with:
           args: -m .pkgmeta.ci -n "Overlord-{project-version}:Overlord-{project-version}"
 
