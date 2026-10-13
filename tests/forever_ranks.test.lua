@@ -1036,6 +1036,141 @@ OverlordDB.ranksLadderSeenAt = { ["-"] = clock - 600 }
 check(closeWeek(after) and OverlordDB.ranksByCharacter[me].t[3] == 2, "and the following week counts")
 GetServerTime = nil
 
+-- ---------------------------------------------------------------- "Your rank" button
+-- The main panel's button leads to our tab. Sheet open: our tab, as by a click on it.
+-- Sheet closed: we show it ourselves and pick our tab, except in combat and when the
+-- Currency panel was the last one seen (shown from addon code, its list would be built
+-- tainted and the currency transfer refused): then a line on screen names the key, and
+-- for one minute the sheet the player opens himself shows our tab.
+Overlord.InstanceSuspended = false
+if CharacterFrame._shown then CharacterFrame:Hide() end
+runTimers(0)
+check(not UIR.selected and not CharacterFrame._shown, "the sheet is closed before the button cases")
+local hints, lit, opened = {}, 0, 0
+UIErrorsFrame = { AddMessage = function(_, text) hints[#hints + 1] = text end }
+GetBindingKey = function(action) return action == "TOGGLECHARACTER0" and "C" or nil end
+Overlord.UI = { ScheduleActionGridActiveRefresh = function() lit = lit + 1 end }
+ShowUIPanel = function(frame) opened = opened + 1; frame:Show() end
+local inCombat = false
+local realCombat = InCombatLockdown
+InCombatLockdown = function() return inCombat end
+-- (This fixture has no Currency panel of its own.)
+local currencyLast = false
+TokenFrame = { IsShown = function() return currencyLast end }
+-- As shipped the button never opens Blizzard's sheet itself (the in-game check of what
+-- that marks is owed): the cases below exercise the direct opening behind its switch.
+check(UIR.OPEN_SHEET_DIRECTLY == false, "the direct opening of the sheet is shipped switched on")
+UIR.OPEN_SHEET_DIRECTLY = true
+-- Out of combat, another panel than Currency last seen: the button opens the sheet.
+CharacterFrame.activeSubframe = CharacterFrame.activeSubframe or "PaperDollFrame"
+local panelBefore = CharacterFrame.activeSubframe
+check(UIR:OpenFromPanel() == true and opened == 1 and CharacterFrame._shown and UIR.selected
+    and UIR.left._shown and UIR.tab._checked == true and #hints == 0 and lit > 0,
+    "the button opens the sheet on the Overlord rank, and lights up")
+check(CharacterFrame.activeSubframe == panelBefore, "Blizzard's own panel choice is left as it was")
+runTimers(0)
+check(UIR.selected and UIR:OpenFromPanel() == true and opened == 1, "already on our tab: nothing more to do")
+CharacterFrame:Hide()
+runTimers(0)
+check(not UIR.selected, "closing the sheet closes our tab")
+-- Sheet opened by the player on Blizzard's panel: the button only picks our tab.
+CharacterFrame:Show()
+runTimers(0)
+check(not UIR.selected and UIR:OpenFromPanel() == true and UIR.selected and opened == 1,
+    "sheet already open: the button picks our tab without showing anything")
+CharacterFrame:Hide()
+runTimers(0)
+-- In combat: never shown by us; the line names the key, and the player's own opening
+-- lands on our tab (one frame after Blizzard has finished showing the sheet).
+inCombat = true
+check(UIR:OpenFromPanel() == false and opened == 1 and not CharacterFrame._shown and not UIR.selected,
+    "in combat the button does not show Blizzard's sheet")
+check(#hints == 1 and hints[1]:find("(C)", 1, true) and hints[1]:find("Overlord", 1, true),
+    "it says which key opens the sheet: " .. tostring(hints[1]))
+-- The key as the game writes it; without a key, the menu button's name.
+GetBindingText = function(key) return "Key " .. key end
+check(UIR:OpenFromPanel() == false and #hints == 2 and hints[2]:find("(Key C)", 1, true),
+    "the key is named as the game writes it: " .. tostring(hints[2]))
+GetBindingKey = function() return nil end
+CHARACTER_BUTTON = "Character Info"
+check(UIR:OpenFromPanel() == false and #hints == 3 and hints[3]:find("(Character Info)", 1, true),
+    "no key bound: the menu button is named instead: " .. tostring(hints[3]))
+GetBindingText, CHARACTER_BUTTON = nil, nil
+GetBindingKey = function(action) return action == "TOGGLECHARACTER0" and "C" or nil end
+inCombat = false
+-- Another key than the character one (reputation) within the minute keeps its panel.
+CharacterFrame.activeSubframe = "ReputationFrame"
+CharacterFrame:Show()
+runTimers(0)
+check(not UIR.selected, "the reputation key keeps its panel")
+CharacterFrame:Hide()
+runTimers(0)
+inCombat = true
+check(UIR:OpenFromPanel() == false and #hints == 4, "asked again in combat")
+inCombat = false
+CharacterFrame.activeSubframe = "PaperDollFrame"
+CharacterFrame:Show()
+check(not UIR.selected, "our tab waits for Blizzard to finish showing the sheet")
+runTimers(0)
+check(UIR.selected and UIR.left._shown, "the sheet opened by the player shows the Overlord rank")
+CharacterFrame:Hide()
+runTimers(0)
+CharacterFrame:Show()
+runTimers(0)
+check(not UIR.selected, "one opening only: the next one is Blizzard's panel")
+CharacterFrame:Hide()
+runTimers(0)
+-- The Currency panel was the last one seen: never shown by us either.
+currencyLast = true
+check(UIR:OpenFromPanel() == false and opened == 1 and not CharacterFrame._shown and #hints == 5,
+    "with the Currency panel last seen, the button does not show the sheet")
+runTimers(UIR.OPEN_ON_SHOW_SEC + 1)
+currencyLast = false
+PaperDollFrame._shown = true
+CharacterFrame:Show()
+runTimers(0)
+check(not UIR.selected, "a request older than a minute is forgotten")
+CharacterFrame:Hide()
+runTimers(0)
+-- A sheet the game refuses to show: the line, like in combat.
+ShowUIPanel = function() opened = opened + 1 end
+check(UIR:OpenFromPanel() == false and opened == 2 and #hints == 6 and UIR.openOnShow ~= nil,
+    "a sheet that did not open falls back on the line")
+UIR.openOnShow = nil
+-- The game has switched the character sheet off: nothing at all.
+C_GameRules = { IsGameRuleActive = function(rule) return rule == 7 end }
+Enum = Enum or {}
+local realGameRule = Enum.GameRule
+Enum.GameRule = { CharacterPanelDisabled = 7 }
+check(UIR:OpenFromPanel() == false and opened == 2 and #hints == 6 and UIR.openOnShow == nil,
+    "nothing when the game has disabled the character sheet")
+C_GameRules, Enum.GameRule = nil, realGameRule
+-- A game mode that replaces the character sheet by its own: nothing either.
+C_GameRules = { IsWoWHack = function() return true end }
+check(UIR:OpenFromPanel() == false and opened == 2 and #hints == 6 and UIR.openOnShow == nil,
+    "nothing when the game replaces the character sheet")
+C_GameRules = nil
+-- The first opening of a session (Blizzard has not chosen a panel yet) is the player's:
+-- shown by us, the sheet would keep an unset portrait and tabs once our tab closes.
+ShowUIPanel = function(frame) opened = opened + 1; frame:Show() end
+local chosenPanel = CharacterFrame.activeSubframe
+CharacterFrame.activeSubframe = nil
+check(UIR:OpenFromPanel() == false and opened == 2 and not CharacterFrame._shown and #hints == 7,
+    "the first opening of the session is left to the player's key")
+CharacterFrame.activeSubframe = chosenPanel
+-- The switch that turns the direct opening off: the line only.
+UIR.openOnShow = nil
+UIR.OPEN_SHEET_DIRECTLY = false
+check(UIR:OpenFromPanel() == false and opened == 2 and not CharacterFrame._shown and #hints == 8,
+    "direct opening switched off: the line only")
+UIR.openOnShow = nil
+-- Nothing in an instance.
+Overlord.InstanceSuspended = true
+check(UIR:OpenFromPanel() == false and opened == 2 and #hints == 8 and UIR.openOnShow == nil, "nothing in an instance")
+Overlord.InstanceSuspended = false
+UIErrorsFrame, GetBindingKey, Overlord.UI, ShowUIPanel, TokenFrame = nil, nil, nil, nil, nil
+InCombatLockdown = realCombat
+
 -- ---------------------------------------------------------------- one character, one record
 -- A renamed character finds its record again. A record under our own name is always
 -- ours, whatever identifier it carries: a transfer can change the identifier, and a

@@ -580,6 +580,10 @@ function UIR:Select()
     self:ApplyChrome()
     self.paintGlory = nil
     self:Refresh()
+    -- Le bouton « Votre rang » du panneau s'allume tant que notre onglet est ouvert.
+    if Overlord.UI and Overlord.UI.ScheduleActionGridActiveRefresh then
+        Overlord.UI:ScheduleActionGridActiveRefresh()
+    end
 end
 
 -- switching : Blizzard affiche lui-meme un autre panneau. Sinon (feuille fermee,
@@ -605,6 +609,9 @@ function UIR:Deselect(switching)
         hidden:Show()
     end
     RestoreChrome()
+    if Overlord.UI and Overlord.UI.ScheduleActionGridActiveRefresh then
+        Overlord.UI:ScheduleActionGridActiveRefresh()
+    end
 end
 
 -- Deuxieme securite : apres un clic sur un onglet de Blizzard, notre onglet ne reste
@@ -658,6 +665,79 @@ function UIR:OnInstanceResume()
     end
 end
 
+-- Bouton « Votre rang » du panneau principal : mene a notre onglet de la feuille de
+-- personnage.
+--  - Feuille ouverte : notre onglet est choisi, comme par un clic sur lui.
+--  - Feuille fermee : nous l'ouvrons (ShowUIPanel, sans changer le panneau que Blizzard
+--    avait laisse), puis notre onglet est choisi. Ouverte par un addon, ce que Blizzard
+--    ecrit en l'affichant est marque ; d'ou trois refus, ou le joueur l'ouvre lui-meme :
+--    en combat ; quand le panneau Monnaies etait le dernier vu (sa liste serait
+--    reconstruite marquee, et le transfert de monnaies entre personnages refuse, voir
+--    COVERED_PANELS) ; quand le jeu a desactive la feuille (regle de jeu). Dans les
+--    deux premiers cas, une ligne a l'ecran nomme la touche, et pendant une minute la
+--    feuille qu'il ouvre montre notre onglet.
+-- Reste, connu : l'affichage de la feuille ecrit aussi l'option « chiffres » des barres
+-- du joueur et du familier ; a verifier en jeu (feuille ouverte par le bouton, combat,
+-- changement d'equipement : aucun message « action bloquee »).
+UIR.OPEN_ON_SHOW_SEC = 60
+-- false : le bouton n'ouvre jamais la feuille lui-meme (la ligne a l'ecran seulement).
+-- Reste a false tant que la verification en jeu ci-dessus n'a pas ete faite.
+UIR.OPEN_SHEET_DIRECTLY = false
+
+-- Les cas ou Blizzard n'ouvre pas la feuille : regle de jeu qui la desactive, ou jeu
+-- qui la remplace par une autre (son bouton de menu teste les deux).
+local function SheetDisabledByGame()
+    local rules = C_GameRules
+    if not rules then return false end
+    local rule = Enum and Enum.GameRule and Enum.GameRule.CharacterPanelDisabled
+    if rule ~= nil and rules.IsGameRuleActive and rules.IsGameRuleActive(rule) == true then return true end
+    return rules.IsWoWHack ~= nil and rules.IsWoWHack() == true
+end
+
+-- Vrai si nous pouvons afficher la feuille nous-memes (voir plus haut). Pas a la toute
+-- premiere ouverture de la session : Blizzard n'a encore choisi aucun panneau
+-- (activeSubframe vide), et sans son choix la feuille garderait apres notre onglet un
+-- portrait, un bandeau et des onglets non poses. La touche du joueur le fait pour nous.
+function UIR:CanOpenSheet()
+    if not self.OPEN_SHEET_DIRECTLY or not ShowUIPanel or InCombatLockdown() then return false end
+    if CharacterFrame.activeSubframe == nil then return false end
+    return not (TokenFrame and TokenFrame:IsShown())
+end
+
+function UIR:OpenFromPanel()
+    if Overlord.InstanceSuspended or not self.attached or not CharacterFrame then return false end
+    -- Pas d'onglet a la manette (voir ShouldShowTab) : le bouton n'y mene nulle part.
+    if not ShouldShowTab() or SheetDisabledByGame() then return false end
+    if CharacterFrame:IsShown() then
+        if not (self.tab and self.tab:IsShown()) then return false end
+        if not self.selected then self:Select() end
+        return self.selected == true
+    end
+    if self:CanOpenSheet() then
+        -- (pcall : un affichage refuse ou en erreur retombe sur la ligne ci-dessous.)
+        pcall(ShowUIPanel, CharacterFrame)
+        if CharacterFrame:IsShown() and self.tab and self.tab:IsShown() then
+            if not self.selected then self:Select() end
+            if self.selected then return true end
+        end
+    end
+    if CharacterFrame:IsShown() then return false end
+    self.openOnShow = GetTime() + self.OPEN_ON_SHOW_SEC
+    -- La touche comme le jeu l'ecrit (« Maj-C ») ; sans touche, le nom du bouton du menu.
+    local key = GetBindingKey and GetBindingKey("TOGGLECHARACTER0")
+    if type(key) == "string" and key ~= "" then
+        key = GetBindingText and GetBindingText(key) or key
+    else
+        key = type(CHARACTER_BUTTON) == "string" and CHARACTER_BUTTON or "C"
+    end
+    if UIErrorsFrame and UIErrorsFrame.AddMessage then
+        UIErrorsFrame:AddMessage(string.format(
+            T("RANK_BUTTON_HINT", "Open your character sheet (%s): it will show your Overlord rank."), key),
+            1.0, 0.82, 0.0, 1.0)
+    end
+    return false
+end
+
 function UIR:Attach()
     if self.attached then return end
     local frame = CharacterFrame
@@ -670,6 +750,20 @@ function UIR:Attach()
         local tab = UIR:EnsureTab()
         tab:SetShown(ShouldShowTab())
         UIR:AnchorTab()
+        -- Bouton « Votre rang » du panneau : la feuille que le joueur vient d'ouvrir
+        -- montre notre onglet, une image plus tard (Blizzard finit d'abord de poser son
+        -- titre et ses onglets coches).
+        -- Seulement la feuille ouverte sur son premier panneau (la touche Personnage, celle
+        -- que la ligne a l'ecran nomme) : la touche de la reputation ou des competences,
+        -- pressee dans la minute, garde son panneau.
+        local wanted = UIR.openOnShow
+        UIR.openOnShow = nil
+        if wanted and GetTime() <= wanted and tab:IsShown() and C_Timer and C_Timer.After
+            and CharacterFrame.activeSubframe == "PaperDollFrame" then
+            C_Timer.After(0, function()
+                if CharacterFrame:IsShown() and not UIR.selected then UIR:Select() end
+            end)
+        end
     end)
     frame:HookScript("OnHide", function() UIR:Deselect(false) end)
     -- Fermeture de notre onglet : sur l'affichage d'un panneau de Blizzard et sur le

@@ -428,4 +428,26 @@ do
     assert(not held and confirmed, "a full claim table blocked a new flip's confirmation")
 end
 
+-- 2.0.1: not a surprise when the map gives the zone to the faction whose assault or
+-- capture we followed live (the capture whose end we lost: the hold kept exactly the
+-- zones being fought over on their old owner for five more minutes), nor when the map
+-- is the answer of a Battle.net friend of the other faction to a request of ours.
+do
+    local seen = { id = "zone_seen", owner = "Alliance", capturedTime = t0 - 300 }
+    s:NoteLiveZoneTraffic("zone_seen", "Horde")
+    held, confirmed = s:IsSuspiciousZaFlip("zone_seen", seen, "Horde", t0 - 100, "Peer One")
+    assert(not held and not confirmed, "the capture announced by the live traffic was held when a map confirmed it")
+    local other = { id = "zone_other", owner = "Horde", capturedTime = t0 - 300 }
+    s:NoteLiveZoneTraffic("zone_other", "Horde")
+    held = s:IsSuspiciousZaFlip("zone_other", other, "Alliance", t0 - 100, "Peer One")
+    assert(held, "a flip against the faction seen live was not held")
+    local priv = s:GetPriv()
+    priv.mapNewsSource = true
+    held, confirmed = s:IsSuspiciousZaFlip("zone_other", other, "Alliance", t0 - 100, "Peer One")
+    priv.mapNewsSource = nil
+    assert(not held and not confirmed, "the reply of a friend of the other faction was held")
+    held = s:IsSuspiciousZaFlip("zone_other", other, "Alliance", t0 - 100, "Peer One")
+    assert(held, "the friend's reply left the guard open for the next map")
+end
+
 print("1.4.2 trust and relay: LK bound, bridge hold, 3/N class answers, TV proof, final rate, ZA flips OK")

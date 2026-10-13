@@ -147,4 +147,85 @@ do
     net.stats.dropped, net.stats.localRejected, net.stats.relayRejected = 0, 0, 0
     net.stats.forwardNoTask, net.stats.forwardNoTaskMissing, net.stats.forwardNoTaskLoop = 0, 0, 0
 end
+-- 2.0.1: copies that expired in the relay queue are reported, and a capture's end among
+-- them is worth watching (2026-10-12: a bridge said "all good" with 233 expired copies,
+-- three capture finals included, while the other faction's map stayed behind).
+do
+    local NH = Overlord.NetworkHealth
+    NH:_ResetWindow()
+    sync._addonSendStats = { CHANNEL = { ok = 152, refused = 0 }, WHISPER = { ok = 622, refused = 0 } }
+    net.stats.sent, net.stats.received, net.stats.dropped = 1582, 2790, 8
+    net.stats.expired, net.stats.expiredFinals = 162, 0
+    local level, rows = NH:IndicatorLevel()
+    local relayRow
+    for _, row in ipairs(rows) do if row.id == "relay" then relayRow = row end end
+    assert(relayRow.text:find("8 lost of 1582 sent (0.5%), 2790 received, 162 expired in the queue", 1, true)
+        and not relayRow.text:find("capture ends", 1, true), "Expired copies must be reported: " .. relayRow.text)
+    assert(level == "ok" and relayRow.level == "ok", "Routine copies that expired colored the indicator")
+    net.stats.expired, net.stats.expiredFinals = 233, 3
+    level, rows = NH:IndicatorLevel()
+    for _, row in ipairs(rows) do if row.id == "relay" then relayRow = row end end
+    assert(relayRow.level == "warn" and level == "warn"
+        and relayRow.text:find("233 expired in the queue (3 capture ends)", 1, true),
+        "An expired capture end must be worth watching: " .. relayRow.text)
+    -- Ten minutes later, with nothing new, the window forgets them.
+    NH:NoteSend(9000)
+    NH:NoteSend(9000 + 900)
+    level, rows = NH:IndicatorLevel()
+    for _, row in ipairs(rows) do if row.id == "relay" then relayRow = row end end
+    assert(level == "ok" and not relayRow.text:find("expired", 1, true),
+        "Expired copies older than the window still showed: " .. relayRow.text)
+    -- The relay counts a capture's end apart when it expires, and only those.
+    net.stats.expiredFinals = 0
+    net.NoteExpiredFinal({ kind = "C", payload = "zone:Name:Horde:1" })
+    net.NoteExpiredFinal({ kind = "ZS", payload = "zone:captured:0:0:H:1" })
+    net.NoteExpiredFinal({ kind = "ZR", payload = "zone:wave:Name:x" })
+    net.NoteExpiredFinal({ kind = "ZS", payload = "zone:in_progress:0:5:H:1" })
+    net.NoteExpiredFinal({ kind = "FK", payload = "x" })
+    assert(net.stats.expiredFinals == 3, "Capture ends counted: " .. tostring(net.stats.expiredFinals))
+    -- A capture (not a release) that expired is handed to the map news of Sync.
+    local again, realNews = {}, sync.NoteMapNews
+    sync.NoteMapNews = function(_, zoneId) again[#again + 1] = zoneId end
+    net.NoteExpiredFinal({ kind = "C", payload = "zone_c:Name:Horde:1" })
+    net.NoteExpiredFinal({ kind = "ZS", payload = "zone_s:captured:0:0:H:1" })
+    net.NoteExpiredFinal({ kind = "ZS", payload = "zone_a:available:0:0::1" })
+    net.NoteExpiredFinal({ kind = "ZR", payload = "zone_r:wave:Name:x" })
+    sync.NoteMapNews = realNews
+    assert(#again == 2 and again[1] == "zone_c" and again[2] == "zone_s",
+        "Expired capture ends handed to the map news: " .. table.concat(again, ","))
+    -- Only when a channel copy is among the copies that did not leave (a Battle.net
+    -- copy lost alone leaves our channel informed), and counted once per packet (its
+    -- two channel fragments wait, and expire, apart).
+    do
+        local told, real = {}, sync.NoteMapNews
+        sync.NoteMapNews = function(_, zoneId) told[#told + 1] = zoneId end
+        local before = net.stats.expiredFinals
+        local packet = { kind = "C", payload = "zone_t:Name:Horde:1" }
+        net.NoteExpiredFinal(packet, { { transport = "BNET" }, { transport = "WHISPER" } }, 1)
+        assert(#told == 0, "A capture end whose channel copy had left was announced again")
+        net.NoteExpiredFinal(packet, { { transport = "CHANNEL" }, { transport = "BNET" } }, 2)
+        assert(#told == 0, "A channel copy already sent counted as lost")
+        net.NoteExpiredFinal(packet, { { transport = "BNET" }, { transport = "CHANNEL" } }, 1)
+        net.NoteExpiredFinal(packet, { { transport = "CHANNEL" } }, 1)
+        sync.NoteMapNews = real
+        assert(#told == 2 and told[1] == "zone_t", "A lost channel copy was not handed to the map news")
+        assert(net.stats.expiredFinals == before + 1,
+            "One packet's fragments counted as several capture ends: " .. (net.stats.expiredFinals - before))
+    end
+    -- A news page is live traffic for the relay, a whole-map page is not.
+    assert(net:IsUrgentPacket("ZA", "@P-1790017000-7:1:1|zone_c:H:5:5"), "A map news page is not served as live traffic")
+    assert(not net:IsUrgentPacket("ZA", "@G-1790017000-7:1:14|zone_c:H:5:5"), "A whole-map page is served as live traffic")
+    -- One shape for the news on both sides: what the relay serves as news is what Sync
+    -- lets on the channel (one to three pages), and nothing else.
+    for _, header in ipairs({ "@P-1790017000-7:1:1|", "@P-1790017000-7:3:3|", "@P-1790017000-7:2:4|",
+        "@P-1790017000-7:5:17|", "@G-1790017000-7:1:3|", "@P-x:1:1|" }) do
+        local page = header .. "zone_c:H:5:5"
+        assert(net.IsMapNews({ kind = "ZA", target = "*", payload = page }) == sync:ChannelCarries("ZA", page, true),
+            "The relay and the channel rule disagree on what a news page is: " .. header)
+    end
+    assert(not net.IsMapNews({ kind = "ZA", target = "Someone", payload = "@P-1790017000-7:1:1|zone_c:H:5:5" }),
+        "An addressed partial map counts as news")
+    NH:_ResetWindow()
+    net.stats.dropped, net.stats.expired, net.stats.expiredFinals = 0, 0, 0
+end
 print("Sync report: colored summary, worst-level header, red non-zero counters, stalled catch-up flagged OK")

@@ -792,6 +792,12 @@ ScheduleAttempt = function(pending, attempt)
                 -- nothing about the peer: no penalty, as for a local refusal below.
                 if not notAsked then
                     PenalizePeer(target, not supported and PEER_PENALTY_SEC or BUSY_PEER_SEC)
+                    -- A neighbour that answered nothing at all: the saved rotation moves on
+                    -- now, not only at the end of the round (about twenty minutes when
+                    -- nobody answers). The penalty above is forgotten by a /reload; without
+                    -- this the same first neighbours were asked again after every reload.
+                    -- No request added: only who is asked next.
+                    if not supported then RotatePeers() end
                 end
                 ScheduleAttempt(pending, attempt + 1)
             end)

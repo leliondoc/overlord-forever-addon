@@ -175,6 +175,8 @@ jobs:
           lua5.1 tests/forever_ranks_week_close.test.lua
           lua5.1 tests/forever_ranks_currency_panel.test.lua
           lua5.1 tests/forever_ranks_week_rule.test.lua
+          lua5.1 tests/forever_guild_rating.test.lua
+          lua5.1 tests/forever_map_news.test.lua
           lua5.1 tests/forever_join_chain.test.lua
           lua5.1 tests/forever_front_fight_size.test.lua
           lua5.1 tests/forever_front_fight_convergence.test.lua

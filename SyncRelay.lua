@@ -72,6 +72,12 @@ local URGENT = {}
 for kind in ("NH SH C ZS ZR CB OP OC TV FR FC GE GP GX GD GM HR HA"):gmatch("%S+") do
     URGENT[kind] = true
 end
+-- 2.0.1 map news: a broadcast partial map of one to three pages (the shape that
+-- Sync:ChannelCarries lets on the channel). Any other partial map stays background.
+function net.IsMapNews(p)
+    return p ~= nil and p.kind == "ZA" and (p.target == nil or p.target == "*")
+        and type(p.payload) == "string" and p.payload:match("^@P%-%d+%-%d+:%d+:[1-3]|") ~= nil
+end
 -- Fortresses and outposts share priorities: active captures and final OC events
 -- stay urgent; routine snapshots wait.
 local function isUrgent(p)
@@ -79,6 +85,9 @@ local function isUrgent(p)
     if kind == "OP" then
         return type(p.payload) == "string" and p.payload:match("^v%d+:[^:]*:([^:]*)") == "in_progress"
     end
+    -- 2.0.1: map news (a small partial map said once to the faction, see
+    -- Sync:QueueMapNews) is live news, not background: it must not wait behind it.
+    if kind == "ZA" then return net.IsMapNews(p) end
     return URGENT[kind] == true
 end
 local function isCatchup(p)
@@ -366,6 +375,32 @@ local function dropWaitingPresence()
     end
     return false
 end
+-- 2.0.1: a capture's end (C, final ZS, release) that outlived its TTL with a copy still
+-- unsent is counted apart: those recipients never get it, and the network status
+-- said "all good" while finals were expiring on a busy bridge (2026-10-12).
+function net.IsCaptureEnd(p)
+    return p ~= nil and (p.kind == "C" or p.kind == "ZR" or (p.kind == "ZS" and isTerminal(p)))
+end
+function net.NoteExpiredFinal(p, tasks, from)
+    if net.IsCaptureEnd(p) then
+        -- (Once per packet: its two channel fragments may wait, and expire, apart.)
+        if not p.expiredFinalCounted then
+            p.expiredFinalCounted = true
+            net.stats.expiredFinals = (net.stats.expiredFinals or 0) + 1
+        end
+        -- A capture (not a release) by the other faction: our channel, which only we
+        -- could tell, gets it as map news, a small partial map, if our own map holds it
+        -- (see Sync:NoteMapNews). Only when a channel copy is among those that did not
+        -- leave: a Battle.net copy lost alone leaves our channel informed.
+        local channelMissed = tasks == nil
+        for i = from or 1, tasks and #tasks or 0 do
+            if tasks[i].transport == "CHANNEL" then channelMissed = true break end
+        end
+        local zoneId = channelMissed and (p.kind == "C" or p.payload:match("^[^:]+:captured:"))
+            and p.payload:match("^([^:]+):") or nil
+        if zoneId and sync.NoteMapNews then pcall(sync.NoteMapNews, sync, zoneId, nil, true) end
+    end
+end
 -- A full queue first gives up an unsent item that has already outlived its TTL:
 -- pump only expires lane heads, so stale items behind them held slots for nothing.
 local function dropExpiredWaiting()
@@ -379,6 +414,7 @@ local function dropExpiredWaiting()
                 dedup.abandon(item.tasks)
                 countKind(item.p.kind, "dropped")
                 net.stats.expired = (net.stats.expired or 0) + 1
+                net.NoteExpiredFinal(item.p, item.tasks, 1)
                 return true
             end
         end
@@ -677,6 +713,10 @@ local function localMapStamp()
     mapStampCache.at, mapStampCache.value, mapStampCache.sum, mapStampCache.digest = now, best, sum, digest
     return best, sum, digest
 end
+-- 2.0.1: a map reply just changed our map. The stamp is read again for the next
+-- presence (it was kept for five seconds: a beat in that window said the old map, and
+-- the next one came two minutes later).
+function net:MapChanged() mapStampCache.at = -1000 end
 -- Keeps and outposts (1.8.2): the same map reply carries their captures, and a capture
 -- missed live is believed from nothing else than a reply we asked for (1.7.2). The
 -- zone stamp alone skipped the pulls that brought them: they have their own stamp,
@@ -1176,6 +1216,11 @@ function net:CarriesBroadcast(kind, payload)
     return at ~= nil and GetTime() - at < 2
 end
 -- Packet dispatched straight from its author over our channel or group.
+-- Heard first-hand on the faction channel (not in a group, not through a hop).
+function net:IsDirectChannelDispatch()
+    local c = self.context
+    return c ~= nil and (tonumber(c.hops) or 0) == 0 and c.transport == "CHANNEL"
+end
 function net:IsDirectLocalDispatch()
     local c = self.context
     return c ~= nil and (tonumber(c.hops) or 0) == 0
@@ -1542,7 +1587,9 @@ local function tasksFor(p, wire)
         local ownPresence = p.kind == "NH" and #p.path == 1
         -- A call to arms (FC) is only ever shown to its own faction: the other
         -- faction's bridges dropped it after spending budget and a channel slot.
-        local ownFactionOnly = p.kind == "FC"
+        -- 2.0.1: map news (a small partial map, see Sync:QueueMapNews) tells our faction
+        -- what the other one already knows: no copy goes back there.
+        local ownFactionOnly = p.kind == "FC" or net.IsMapNews(p)
         -- A capture (C, or ZS in progress / captured) is only ever accepted from its
         -- author: relayed for someone else, the side that made it already has it, and
         -- a copy sent back there over Battle.net only burnt the bridge's budget.
@@ -1945,18 +1992,34 @@ pump = function()
     -- every tick. The queue bounds this scan to at most 128 entries.
     local channelReady = not sync.ChannelTokenReady or sync:ChannelTokenReady()
     local now = serverNow()
+    -- 2.0.1: the priority token of relayed terminals (one per 1.25 s, see emit) also
+    -- makes a waiting fragment ready. It used to wait for the ordinary channel budget,
+    -- which the priority sends themselves keep empty on a busy bridge: the second
+    -- fragment of a relayed capture stayed behind until its packet was too old (seen in
+    -- game: 14 of 55 capture ends expired on the only bridge of a faction, whose channel
+    -- then never heard them).
+    local criticalReady = GetTime() - (net._lastRelayCriticalAt or -10) >= 1.25
     local function readyIndex(lane, predicate)
-        local firstReady
+        local firstReady, firstTerminal
         for i = lane.head, #lane.items do
             local it = lane.items[i]
             local task = it.tasks[it.index]
+            -- A fragment never tried is tried (refused, it takes its place among the
+            -- waiting ones, in arrival order, and the item's Battle.net copies leave in
+            -- the same tick); one that waited is ready with the priority token.
             if (not predicate or predicate(it.p)) and (channelReady or now - it.p.at > TTL or not task
-                or task.transport ~= "CHANNEL" or not task.defers) then
-                if lane ~= urgentLane or it.index > 1 or isTerminal(it.p) then return i end
+                or task.transport ~= "CHANNEL" or not task.defers
+                or (task.critical == true and criticalReady)) then
+                if lane ~= urgentLane then return i end
+                -- A capture's end first (C, final ZS, release), in their own order, then
+                -- the other terminals (front resets, victories, keeps: a truce end
+                -- queues dozens of them at once), then anything already started.
+                if net.IsCaptureEnd(it.p) then return i end
+                if it.index > 1 or isTerminal(it.p) then firstTerminal = firstTerminal or i end
                 firstReady = firstReady or i
             end
         end
-        return firstReady
+        return firstTerminal or firstReady
     end
     local urgentIndex = readyIndex(urgentLane)
     local bulkIndex = readyIndex(bulkLane)
@@ -2039,6 +2102,7 @@ pump = function()
                 dedup.abandon(item.tasks, item.index)
                 countKind(item.p.kind, "dropped")
                 net.stats.expired = (net.stats.expired or 0) + 1
+                net.NoteExpiredFinal(item.p, item.tasks, item.index)
             end
             item.index = #item.tasks + 1
             break
@@ -2052,6 +2116,26 @@ pump = function()
         if lane == stateLane and task.spent then stateCredit = math.max(0, stateCredit - task.spent) end
         if emitted then
             item.index = item.index + 1
+        elseif task.deferred and isTerminal(item.p) then
+            -- 2.0.1: a terminal's channel fragment that must wait for its token stays
+            -- at the front of the lane, behind the fragments already waiting there
+            -- (arrival order), while the item's other copies (Battle.net, whisper) go
+            -- on. Sent to the end of the lane, the second fragment of a capture waited
+            -- behind every terminal queued meanwhile and the first one was wasted
+            -- (nobody can assemble half a packet after 30 s).
+            task.deferred = nil
+            task.defers = (task.defers or 0) + 1
+            if item.waitingFragment then break end -- already in its place: just wait
+            item.index = item.index + 1
+            if hasLaneRoom(lane, item.p) then
+                local pos = lane.head + 1
+                while lane.items[pos] and lane.items[pos].waitingFragment do pos = pos + 1 end
+                table.insert(lane.items, pos, { p = item.p, tasks = { task }, index = 1,
+                    protected = item.protected, queuedAt = item.queuedAt, waitingFragment = true })
+            else
+                item.tasks[#item.tasks + 1] = task
+                break
+            end
         elseif task.deferred then
             -- Channel message budget empty: this copy waits at the end of its lane
             -- while the item's Battle.net/whisper copies keep going in this tick.
@@ -2333,16 +2417,28 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         -- A Battle.net friend is the only way to the other faction's map: its
         -- presence (one per friend every 120 s) has one pull a minute of its own,
         -- which a busy channel cannot use up.
-        local budget = self.pulls < 2
+        -- 2.0.1: the second pull of the minute is kept for a neighbour whose presence
+        -- says something about its map (a content stamp, a newest capture, a keep or
+        -- outpost capture). Neighbours that say nothing (clients before 1.8.1) took
+        -- both pulls on a busy channel, each for a whole map with nothing new most of
+        -- the time, while the neighbour that held news waited its turn.
+        local budget = self.pulls < ((diffRow or forSites or peerStamp) and 2 or 1)
         local friendPull = not budget and transport == "BNET" and (self.friendPulls or 0) < 1
         if noNews and #p.path == 1 and (budget or friendPull) and now - last >= 300 and not recentFullMap then
             self.stats.mapPullsNoNews = (self.stats.mapPullsNoNews or 0) + 1
         end
         -- Only a direct neighbour is asked: its map reply never needs a relay. A
         -- client from before 1.7.0 is never asked (see MAP_MIN_PROTOCOL).
+        -- 2.0.1: a Battle.net friend of the other faction whose map now differs in a new
+        -- way is asked again after one minute, not five. The five minutes were counted
+        -- from our last request to it, whatever it had answered: the routine request of
+        -- a few minutes earlier (answered with nothing new) then kept the door shut for
+        -- the captures its side had just made. Retries of one same difference keep their
+        -- own schedule (MapDiffDue), and the friend's budget stays one pull a minute.
+        local originGap = (enemyFriend and diffRow) and 60 or 300
         if #p.path == 1 and version < self.MAP_MIN_PROTOCOL then
             self.stats.outdatedPresences = (self.stats.outdatedPresences or 0) + 1
-        elseif #p.path == 1 and (budget or friendPull) and now - last >= 300 and not recentFullMap and not noNews then
+        elseif #p.path == 1 and (budget or friendPull) and now - last >= originGap and not recentFullMap and not noNews then
             if friendPull then self.friendPulls = (self.friendPulls or 0) + 1 else self.pulls = self.pulls + 1 end
             -- Bound this cache by the same live peer population.
             self.requested = self.requested or {}

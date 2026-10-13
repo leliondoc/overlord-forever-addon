@@ -188,15 +188,27 @@ later(5, heartbeat)
 advance(150)
 assert(view(ALLY, arathi) == "AHHHHHHH", "the hole was not repaired from the Battle.net friend within 2.5 min: "
     .. view(ALLY, arathi))
--- ... and its channel mate, who has no friend of the other faction, pulls it in turn.
-advance(300)
-assert(view(MATE, arathi) == "AHHHHHHH", "the hole did not spread to the channel mate within 7.5 min: "
+-- ... and its channel mate, who has no friend of the other faction, is told by the
+-- bridge within seconds (2.0.1, map news: the seven captures as a small partial map on
+-- the channel). It used to pull a whole map in turn, minutes later, like every other
+-- channel mate, from a bridge that serves one requester at a time.
+advance(20)
+assert(view(MATE, arathi) == "AHHHHHHH", "the bridge did not tell its channel mate within 20 s: "
     .. view(MATE, arathi))
 assert(world(ALLY) == world(HORDE) and world(MATE) == world(HORDE), "the three maps are not identical")
--- One map each was enough, and the Horde friend, who lacked nothing, pulled none.
+-- One whole map for the bridge, a few news pages for its mate, and the Horde friend,
+-- who lacked nothing, pulled nothing and got no copy of the news.
 local pages = ALLY.traffic.za
-assert(pages > 0 and MATE.traffic.za == pages and HORDE.traffic.za == 0,
+assert(pages > 3 and MATE.traffic.za > 0 and MATE.traffic.za <= 3 and HORDE.traffic.za == 0,
     ("map pages applied: %d / %d / %d"):format(ALLY.traffic.za, MATE.traffic.za, HORDE.traffic.za))
+-- (requests received: the bridge asked its Horde friend once; nobody asked the bridge)
+assert(ALLY.traffic.sr == 0 and MATE.traffic.sr == 0 and HORDE.traffic.sr == 1,
+    ("map requests received: %d / %d / %d (the channel mate must not ask the bridge for a whole map)"):format(
+        ALLY.traffic.sr, MATE.traffic.sr, HORDE.traffic.sr))
+local news = table.concat(ALLY.Overlord.Sync:GetCrossFactionDiagnostics(), " ")
+assert(news:find("Map news told to our faction: 1 announcements (7 captures)", 1, true),
+    "the bridge's announcement is not reported: " .. news)
+advance(280)
 -- Equal maps: half an hour of presence, not one more request.
 local requests = ALLY.traffic.sr + MATE.traffic.sr + HORDE.traffic.sr
 advance(1800)

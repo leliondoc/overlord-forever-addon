@@ -6,6 +6,12 @@ Overlord.Leaderboard = {
     -- The v4 catch-up protocol and older clients certify a top 500. Keep its
     -- wire budget independent from local display/storage capacity.
     NETWORK_KILL_RANK_LIMIT = 500,
+    -- Guild rating, in points: one per honorable kill, then per front point taken by a
+    -- member, per outpost and per keep taken by the guild (holds of 2, 5 and 10
+    -- minutes). Computed locally from the ranking rows and the signed site ledger.
+    GUILD_RATING_POINTS = { zone = 50, outpost = 75, keep = 100 },
+    -- Rows of the rating kept in the saved login preview.
+    GUILD_RATING_PREVIEW_ROWS = 100,
     kills = {},
     captures = {},
     captureCount = {},
@@ -1739,11 +1745,22 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         end
         state.metaIndex = self._dedupMetaIndex
 
+        -- Guild rating: each player's captures, counted once (the highest of his
+        -- spellings), noted while this pass walks the capture rows anyway.
+        local ratingCaptures = {}
+        local function noteRatingCapture(name, count)
+            local key = dedupKey(name)
+            key = key and tostring(key):lower()
+            count = tonumber(count) or 0
+            if key and count > (ratingCaptures[key] or 0) then ratingCaptures[key] = count end
+        end
+
         if not forEach(state.captureCountSource, function(name, count)
             local top = captureTopFor(name)
             if top then
                 offerDisplayTopK(self, top, dedupKey(name), canonicalName(name), count)
             end
+            noteRatingCapture(name, count)
         end) then return end
         if not forEach(state.capturesSource, function(name, zones)
             if not state.captureCountSource[name] and type(zones) == "table" and #zones > 0 then
@@ -1751,6 +1768,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                 if top then
                     offerDisplayTopK(self, top, dedupKey(name), canonicalName(name), #zones)
                 end
+                noteRatingCapture(name, #zones)
             end
         end) then return end
 
@@ -1870,6 +1888,92 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             yieldWork()
         end
 
+        -- Guild rating: the guild totals above, the front points taken by its members and
+        -- the outposts and keeps the guild took. A guild is the one its members' rows
+        -- name, as for the kill totals. Outposts and keeps are read in the signed ledger
+        -- (the "Captures" of the two site tables): a capturer's own total reaches a
+        -- client late, the ledger does not. His signed captures leave his total, the
+        -- rest are front points. No message, and no second walk of the ladder: only the
+        -- players who captured and the ledger rows are read.
+        local worth = self.GUILD_RATING_POINTS
+        local siteByGuild, siteByCapturer = self:CollectGuildSiteCaptures(yieldWork)
+        local guildZones = {}
+        forEach(ratingCaptures, function(key, count)
+            local info = state.metaIndex[key]
+            local guild = info and info.guild
+            count = count - (siteByCapturer[key] or 0)
+            if count > 0 and type(guild) == "string" and guild ~= "" then
+                local guildKey = guild:lower()
+                local row = guildZones[guildKey]
+                if not row then
+                    row = { guild = guild, zones = 0, _fac = 0 }
+                    guildZones[guildKey] = row
+                elseif guild < row.guild then
+                    row.guild = guild
+                end
+                row.zones = row.zones + count
+                if info.faction == "Horde" then row._fac = row._fac + count
+                elseif info.faction == "Alliance" then row._fac = row._fac - count end
+            end
+        end)
+        local sortedGuildRating = {}
+        -- A guild's rating row by its lowercase name, for the guild table sorted by kills.
+        local guildRatingByKey = {}
+        -- The ledger tables are shared between builds: read, never changed here.
+        local rated = {}
+        local function rate(guildKey, guild, kills, faction)
+            if rated[guildKey] then return end
+            rated[guildKey] = true
+            local zones = guildZones[guildKey]
+            local sites = siteByGuild[guildKey]
+            local zoneCount = zones and zones.zones or 0
+            local outposts, keeps = sites and sites.outposts or 0, sites and sites.keeps or 0
+            local points = kills + zoneCount * worth.zone + outposts * worth.outpost + keeps * worth.keep
+            if points <= 0 then return end
+            if not faction then
+                -- No ranked kill: the side its capturers play, else the ledger's.
+                local voted = ""
+                if zones and zones._fac > 0 then voted = "Horde"
+                elseif zones and zones._fac < 0 then voted = "Alliance"
+                elseif sites then voted = sites.faction end
+                faction = self:GetGuildDisplayFaction(guild, voted)
+            end
+            local rating = {
+                guild = guild, points = points, kills = kills, zones = zoneCount,
+                outposts = outposts, keeps = keeps, faction = faction,
+            }
+            sortedGuildRating[#sortedGuildRating + 1] = rating
+            guildRatingByKey[guildKey] = rating
+        end
+        for guildKey, bucket in pairs(guildBuckets) do
+            rate(guildKey, bucket.guild, bucket.kills, bucket.faction)
+            yieldWork()
+        end
+        -- Guilds that captured without a single ranked kill.
+        for guildKey, row in pairs(guildZones) do
+            rate(guildKey, row.guild, 0, nil)
+            yieldWork()
+        end
+        for guildKey, row in pairs(siteByGuild) do
+            rate(guildKey, row.guild, 0, nil)
+            yieldWork()
+        end
+        -- Eight comparisons to a step: this sort is the long part of the rating, and a
+        -- slice of them is still far under the time budget.
+        local sortSteps = 0
+        local function sortYield()
+            sortSteps = sortSteps + 1
+            if sortSteps % 8 == 0 then yieldWork() end
+        end
+        sortRowsWithYield(sortedGuildRating, function(a, b)
+            if a.points ~= b.points then return a.points > b.points end
+            return (a.guild or "") < (b.guild or "")
+        end, sortYield)
+        for i = #sortedGuildRating, DISPLAY_KILL_RANK_LIMIT + 1, -1 do
+            sortedGuildRating[i] = nil
+            yieldWork()
+        end
+
         if self._dedupMetaIndex ~= state.metaIndex then
             state.aborted = true
             return
@@ -1921,6 +2025,8 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             sortedKills = sortedKills,
             byFaction = byFaction,
             sortedGuilds = sortedGuilds,
+            sortedGuildRating = sortedGuildRating,
+            guildRatingByKey = guildRatingByKey,
             guildMembers = guildMembers,
             alliKills = alliKills,
             hordeKills = hordeKills,
@@ -2046,6 +2152,7 @@ function Overlord.Leaderboard:EnsureDisplayCache()
     if not displayCacheSourcesMatch(empty, self) then
         empty = {
             sortedKills = {}, byFaction = { Alliance = {}, Horde = {} }, sortedGuilds = {},
+            sortedGuildRating = {},
             alliKills = 0, hordeKills = 0, meta = {}, locale = {}, duplicateShortNames = {},
             ready = false,
             campaignStart = self:GetCurrentCampaignStart(),
@@ -2124,6 +2231,25 @@ function Overlord.Leaderboard:GetGuildMembersSummary(guild)
     return members[guild:lower()]
 end
 
+-- Rating row of a guild ({ points, kills, zones, outposts, keeps }) from the display
+-- cache, for the guild table when it is sorted by kills. A finished build carries the
+-- lookup; the login preview only has its rows, indexed here on first use (100 at most).
+function Overlord.Leaderboard:GetGuildRating(guild)
+    local cache = self._displayCache
+    if type(cache) ~= "table" or type(guild) ~= "string" or guild == "" then return nil end
+    local index = cache.guildRatingByKey
+    if type(index) ~= "table" then
+        index = {}
+        local rows = cache.sortedGuildRating
+        for i = 1, type(rows) == "table" and #rows or 0 do
+            local row = rows[i]
+            if type(row) == "table" and type(row.guild) == "string" then index[row.guild:lower()] = row end
+        end
+        cache.guildRatingByKey = index
+    end
+    return index[guild:lower()]
+end
+
 function Overlord.Leaderboard:SaveDisplayCache(cache)
     if self._storageBound ~= true or not cache.ready or cache.fromSavedCache
         or not self:IsDisplayCacheScopeCurrent(cache) then return false end
@@ -2156,6 +2282,7 @@ function Overlord.Leaderboard:SaveDisplayCache(cache)
         campaignStart = cache.campaignStart, scoreBucketEpoch = cache.scoreBucketEpoch,
         pool = cache.pool, at = (GetServerTime and GetServerTime()) or time(),
         sortedKills = sortedKills, sortedGuilds = head(cache.sortedGuilds, DISPLAY_PREVIEW_ROW_LIMIT),
+        sortedGuildRating = head(cache.sortedGuildRating or {}, self.GUILD_RATING_PREVIEW_ROWS),
         byFaction = byFaction, meta = meta, locale = locale,
         alliKills = cache.alliKills, hordeKills = cache.hordeKills,
     }
@@ -2182,6 +2309,7 @@ function Overlord.Leaderboard:RestoreDisplayCache()
         or not count(saved.alliKills) or not count(saved.hordeKills) then return nil end
     local cache = {
         sortedKills = {}, sortedGuilds = {}, byFaction = { Alliance = {}, Horde = {} },
+        sortedGuildRating = {},
         meta = {}, locale = {}, duplicateShortNames = {},
         alliKills = saved.alliKills, hordeKills = saved.hordeKills,
         campaignStart = saved.campaignStart, scoreBucketEpoch = saved.scoreBucketEpoch,
@@ -2229,6 +2357,16 @@ function Overlord.Leaderboard:RestoreDisplayCache()
         if type(row) ~= "table" or not text(row.guild, 128) or not count(row.kills)
             or not text(row.faction, 16) then return nil end
         cache.sortedGuilds[i] = { guild = row.guild, kills = row.kills, faction = row.faction }
+    end
+    -- A preview saved before the guild rating existed simply has none.
+    local rating = type(saved.sortedGuildRating) == "table" and saved.sortedGuildRating or {}
+    for i = 1, math.min(#rating, self.GUILD_RATING_PREVIEW_ROWS) do
+        local row = rating[i]
+        if type(row) ~= "table" or not text(row.guild, 128) or not count(row.points)
+            or not count(row.kills) or not count(row.zones) or not count(row.outposts)
+            or not count(row.keeps) or not text(row.faction, 16) then return nil end
+        cache.sortedGuildRating[i] = { guild = row.guild, points = row.points, kills = row.kills,
+            zones = row.zones, outposts = row.outposts, keeps = row.keeps, faction = row.faction }
     end
     return cache
 end
@@ -5323,6 +5461,90 @@ function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldW
         return (a.outpostSiteKey or "") < (b.outpostSiteKey or "")
     end, yieldWork)
     return sorted
+end
+
+-- Guild rating: what the signed ledger says of the week's keeps and outposts. First
+-- table, by guild (lowercase): { guild, faction, outposts, keeps }. Second: signed
+-- captures by capturer (identity key), which the rating takes out of his personal total
+-- so that only front points stay there. Both are kept until the ledger changes (same
+-- stamp as the weekly view) and never modified once returned. One capturer counts for
+-- at most a plausible week of site captures per guild, whatever the ledger holds; the
+-- cut is made on his totals, so every client makes the same one. Called from the sliced
+-- display pass: one ledger row per step, a capturer's name is resolved once.
+function Overlord.Leaderboard:CollectGuildSiteCaptures(yieldWork)
+    local counts = self:GetOutpostCaptureCountsTable()
+    local function ledgerStamp()
+        return tostring(counts) .. ":" .. (tonumber(self._outpostLedgerRevision) or 0)
+            .. ":" .. (tonumber(self._outpostLedgerEvents) or 0)
+            .. ":" .. tostring(OverlordDB and OverlordDB.lastResetTimestamp)
+    end
+    local stamp = ledgerStamp()
+    local cache = self._guildSiteCaptures
+    if cache and cache.stamp == stamp then return cache.byGuild, cache.byCapturer end
+    local keys = {}
+    for rowKey in pairs(counts) do keys[#keys + 1] = rowKey end
+    local byGuild, byCapturer, signed, capturerKeys = {}, {}, {}, {}
+    for _, rowKey in ipairs(keys) do
+        local row = counts[rowKey]
+        local site = type(row) == "table" and Overlord.OutpostSites and Overlord.OutpostSites[row.siteKey]
+        local guild = site and sanitizeGuildName(row.guild or "") or ""
+        if guild ~= "" and (row.faction == "Alliance" or row.faction == "Horde")
+            and type(row.events) == "table"
+            and outpostLbPoolMatchesCurrent(resolveOutpostLbPoolTag(row.pool)) then
+            local guildKey = guild:lower()
+            local entry = byGuild[guildKey]
+            if not entry then
+                entry = { guild = guild, faction = row.faction, outposts = 0, keeps = 0 }
+                byGuild[guildKey] = entry
+            else
+                -- Smallest spelling and side: the same on every client, whatever the
+                -- order of the rows.
+                if guild < entry.guild then entry.guild = guild end
+                if row.faction < entry.faction then entry.faction = row.faction end
+            end
+            local isKeep = site.isFortress == true
+            -- No yield in this loop: the row's events may grow between two slices.
+            -- Counted by capturer first: one key built per capturer of the row, not
+            -- per event (a row may hold thousands).
+            local rowSigned = {}
+            for _, capturer in pairs(row.events) do
+                local key = capturerKeys[capturer]
+                if key == nil then
+                    local name = normalizeOutpostCapturer(capturer)
+                    key = name and tostring(outpostCapturerKey(name)):lower() or false
+                    capturerKeys[capturer] = key
+                end
+                if key then rowSigned[key] = (rowSigned[key] or 0) + 1 end
+            end
+            for key, captures in pairs(rowSigned) do
+                byCapturer[key] = (byCapturer[key] or 0) + captures
+                local pairKey = key .. "\001" .. guildKey
+                local taken = signed[pairKey]
+                if not taken then
+                    taken = { guildKey = guildKey, outposts = 0, keeps = 0 }
+                    signed[pairKey] = taken
+                end
+                if isKeep then taken.keeps = taken.keeps + captures
+                else taken.outposts = taken.outposts + captures end
+            end
+        end
+        if yieldWork then yieldWork() end
+    end
+    local ceiling = math.max(1, (tonumber(Overlord.PLAUSIBLE_SYNC_CAPTURE_CEILING) or 500) - 1)
+    local steps = 0
+    for _, taken in pairs(signed) do
+        local entry = byGuild[taken.guildKey]
+        local outposts = math.min(taken.outposts, ceiling)
+        entry.outposts = entry.outposts + outposts
+        entry.keeps = entry.keeps + math.min(taken.keeps, ceiling - outposts)
+        steps = steps + 1
+        if yieldWork and steps % 64 == 0 then yieldWork() end
+    end
+    -- Kept only if the ledger did not move during the walk.
+    if stamp == ledgerStamp() then
+        self._guildSiteCaptures = { stamp = stamp, byGuild = byGuild, byCapturer = byCapturer }
+    end
+    return byGuild, byCapturer
 end
 
 -- Preneurs et rivalites de la semaine, lus dans le registre des prises signees (fiefs

@@ -961,10 +961,14 @@ do
     local hole = "~m1jk~o0" .. content({ "a1", "H", 2000 }, { "a0", "A", 1500 })
     assert(pulled("Hole Tester", hole), "A capture missed under a newer one was never pulled")
     assert(fresh.Relay.stats.mapPullsForDiff == 1, "Pull for a different map not counted")
-    assert(pulled("Older Tester", ""), "An older neighbour lost its presence-triggered pull")
+    -- 2.0.1: the minute's second pull is kept for a neighbour whose presence says its map
+    -- holds something ours lacks. One that says nothing is still pulled, once a minute.
+    assert(not pulled("Older Tester", ""), "A neighbour that says nothing took the pull kept for an informed one")
     -- Our map did not change (reply lost or refused): the same other map is asked
     -- again after 1 min, then 2, whoever advertises it.
     now = now + 61 -- (two pulls per minute at most)
+    assert(pulled("Older Tester", ""), "An older neighbour lost its presence-triggered pull")
+    assert(not pulled("Older Second", ""), "Two neighbours that say nothing took both pulls of the minute")
     assert(pulled("Hole Second", hole), "A lost reply was never asked again")
     assert(not pulled("Hole Third", hole), "The same other map was pulled on every presence")
     now = now + 61
@@ -1049,6 +1053,26 @@ do
         fresh.Sync._lastFullZaAt, fresh.Sync._lastEnemyFullZaAt = nil, nil
         fresh.Sync.GetBetaPeerFaction, fresh.PlayerFaction = nil, nil
     end
+    -- 2.0.1: a Battle.net friend of the other faction whose map differs in a new way is
+    -- asked again one minute after our last request to it (it was five, counted from a
+    -- request it had answered with nothing new); a channel neighbour still waits five.
+    do
+        now = now + 400
+        fresh.PlayerFaction = "Alliance"
+        function fresh.Sync:GetBetaPeerFaction(who) return who:find("^Enemy ") and "Horde" or nil end
+        local friend = { name = "Enemy Door", faction = "Horde" }
+        local first = "~m1jk~o0" .. content({ "a1", "H", 2000 }, { "h1", "H", 2100 })
+        assert(pulled("Enemy Door", first, "BNET", friend), "fixture: the friend's first difference was not pulled")
+        now = now + 61
+        local second = "~m1jk~o0" .. content({ "a1", "H", 2000 }, { "h1", "H", 2100 }, { "h2", "H", 2200 })
+        assert(pulled("Enemy Door", second, "BNET", friend),
+            "A new difference of a friend of the other faction waited five minutes after our last request")
+        assert(pulled("Chan Door", first), "fixture: the channel neighbour's first pull")
+        now = now + 61
+        assert(not pulled("Chan Door", second), "A channel neighbour was asked again within five minutes")
+        fresh.Sync.GetBetaPeerFaction, fresh.PlayerFaction = nil, nil
+        now = now + 400
+    end
     -- A 1.8.1 neighbour only says its newest capture. Newer than ours: pulled. Not
     -- newer: it cannot tell a hole, so it is pulled, but once per 150 s for its whole
     -- side, not on every presence (two full maps a minute during the whole rollout).
@@ -1104,15 +1128,17 @@ do
     -- A Battle.net friend is the way to the other faction's map: when the channel has
     -- used both pulls of the minute, its presence still has one of its own.
     local friendMap = "~m1jk~o0" .. content({ "a1", "H", 2000 }, { "h1", "H", 1800 })
-    assert(pulled("Chan First", "") and pulled("Chan Second", ""))
-    assert(not pulled("Chan Third", ""), "More than two channel pulls in a minute")
+    -- (2.0.1: one pull a minute for a neighbour that says nothing about its map, the
+    -- other for one that does: here a 1.8.1 neighbour that knows a newer capture)
+    assert(pulled("Chan First", "") and pulled("Chan Second", "~m2bi"))
+    assert(not pulled("Chan Third", "~m2bi"), "More than two channel pulls in a minute")
     local friend = { name = "Friend Tester", faction = "Horde" }
     assert(pulled("Friend Tester", friendMap, "BNET", friend), "A friend's different map was not pulled on a busy channel")
     -- (another map again: the pair just asked would wait a minute anyway)
     assert(not pulled("Friend Other", "~m1jk~o0" .. content({ "a1", "H", 2000 }, { "h2", "H", 1900 }), "BNET",
         { name = "Friend Other", faction = "Horde" }), "More than one extra pull a minute for Battle.net friends")
     now = now + 61
-    assert(pulled("Chan Fourth", "") and pulled("Chan Fifth", ""))
+    assert(pulled("Chan Fourth", "") and pulled("Chan Fifth", "~m2bi"))
     assert(pulled("Friend Third", "~m1jk~o0" .. content({ "a1", "H", 2000 }, { "h3", "H", 1950 }), "BNET",
         { name = "Friend Third", faction = "Horde" }), "The friends' own pull did not come back the next minute")
     now = now + 61

@@ -667,7 +667,7 @@ function GKA:Simulate()
             local simName = name:match("^(.-)%-Simulation$")
             if simName then
                 local shard = simName == SIM_NAMES[1] and SIM_STRAY_SHARD or SIM_GUILD_SHARD
-                return string.format((L and L.SHARD_ALERT_TAG) or " #%s", tostring(shard))
+                return string.format((L and (L.SHARD_ALERT_NAME_TAG or L.SHARD_ALERT_TAG)) or " #%s", tostring(shard))
             end
             return realTag and realTag(sync, name) or ""
         end

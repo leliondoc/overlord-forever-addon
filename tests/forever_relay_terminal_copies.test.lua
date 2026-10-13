@@ -147,3 +147,87 @@ advance(30)
 assert(refuse == nil, "the refusal was never exercised (vacuous case)")
 assert(channelHas("REFUSEMARK"), "a capture's refused channel copy was abandoned under a full lane")
 print("Relay terminals: a refused channel copy of a capture is retried under a full lane")
+
+-- (4) 2.0.1: a bridge under a flood of relayed front resets (a truce end: dozens of
+-- clients state it, and each copy is a terminal with the priority token) still passes a
+-- relayed capture at once, both fragments. Terminals were served in arrival order and a
+-- fragment that had to wait went to the end of the lane: seen in game, 14 of 55 capture
+-- ends expired on the only bridge of a faction, whose channel never heard them.
+do
+    advance(200)
+    channel, bnet = {}, {}
+    friends[1], friends.faction[777] = 777, "Alliance"
+    net:NoteBNetHeard(777)
+    local realOn, realInfo = s.OnAddonMessage, s.GetBetaBNetTargetInfo
+    s.OnAddonMessage = function() end -- only the relay's forwarding is under test
+    s.GetBetaBNetTargetInfo = function(_, id) return friends.faction[id], "Abri Bridger" end
+    local serial = 0
+    local function relayed(kind, text)
+        serial = serial + 1
+        return net:Receive("eu|q-" .. serial .. "|" .. time() .. "|*|Alda Capturer,Abri Bridger|" .. kind .. "|" .. text,
+            "Abri Bridger", "BNET", 777)
+    end
+    local flooding = true
+    local function flood()
+        if not flooding then return end
+        relayed("FR", "elwynn:" .. (1790000000 + serial))
+        C_Timer.After(0.25, flood)
+    end
+    flood()
+    advance(5)
+    local admittedAt = clock
+    assert(relayed("C", "FLOODMARK:" .. string.rep("y", 150) .. ":FLOODEND"), "the relayed capture was not admitted")
+    advance(6)
+    assert(channelHas("FLOODMARK"), "a relayed capture waited behind a flood of front resets (" .. #channel .. " channel messages)")
+    assert(channelHas("FLOODEND"), "the second fragment of a relayed capture waited behind the flood: nobody can assemble it")
+    local resets = 0
+    for _, msg in ipairs(channel) do if msg:find("|FR|", 1, true) then resets = resets + 1 end end
+    assert(resets >= 3, "fixture: the flood itself never reached the channel (" .. resets .. ")")
+    -- Two captures keep their order (the first one queued leaves first).
+    channel = {}
+    relayed("C", "FIRSTMARK:short")
+    relayed("C", "SECONDMARK:short")
+    advance(4)
+    local first, second
+    for i, msg in ipairs(channel) do
+        if msg:find("FIRSTMARK", 1, true) then first = first or i end
+        if msg:find("SECONDMARK", 1, true) then second = second or i end
+    end
+    assert(first and second and first < second, "two capture ends did not leave in their order")
+    flooding = false
+    advance(400)
+    -- (5) A busy channel: the client's other traffic (presences, timers, its own sends)
+    -- takes every ordinary token as soon as there is one, the usual state of the only
+    -- bridge of a faction. A fragment that waited needed that ordinary token: it never
+    -- got it, and every relayed capture end expired with its second fragment unsent
+    -- (probe on the released 2.0.0: 0 of 15 delivered whole). It leaves with the
+    -- priority token of relayed terminals, one per 1.25 s.
+    assert(s.TakeChannelToken and s.ChannelTokenReady, "fixture: the channel token functions are missing")
+    do
+        channel = {}
+        local realReady, realTake = s.ChannelTokenReady, s.TakeChannelToken
+        s.ChannelTokenReady = function() return false end
+        s.TakeChannelToken = function(self, critical)
+            if critical then return realTake(self, true) end
+            return false
+        end
+        advance(3)
+        local expiredBefore = net.stats.expired or 0
+        -- Six front resets at once (a truce end), then the capture.
+        for _ = 1, 6 do relayed("FR", "elwynn:" .. (1790000000 + serial)) end
+        assert(relayed("C", "BUSYMARK:" .. string.rep("z", 150) .. ":BUSYEND"), "the relayed capture was not admitted")
+        advance(6)
+        assert(channelHas("BUSYMARK") and channelHas("BUSYEND"),
+            "on a busy channel the second fragment of a relayed capture waited for an ordinary token")
+        advance(130)
+        assert((net.stats.expired or 0) == expiredBefore,
+            "relayed terminals expired on a busy channel, waiting for an ordinary token: "
+            .. ((net.stats.expired or 0) - expiredBefore))
+        s.ChannelTokenReady, s.TakeChannelToken = realReady, realTake
+        advance(10)
+    end
+    s.OnAddonMessage, s.GetBetaBNetTargetInfo = realOn, realInfo
+    friends[1], friends.faction[777] = nil, nil
+end
+print("Relay terminals: a capture's end passes a flood of other terminals, whole and in order, on a busy channel too")
+

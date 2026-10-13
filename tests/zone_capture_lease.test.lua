@@ -298,6 +298,16 @@ do
         "the followed wave's own name was accepted for another owner")
     expect(not Lease:FinalSatisfiesLocalRequirement(zone, "Alliance", "Mallory", "wforged", 120),
         "a final for the faction already holding the point ended the assault")
+    -- 2.0.1: not when the followed wave is that faction's own (a wave over a point our
+    -- map already gives to its faction: we missed the enemy's capture in between). Its
+    -- final is a real capture; refused, the point kept its old date here only.
+    lease.base.owner = "Horde"
+    expect(Lease:FinalSatisfiesLocalRequirement(zone, "Horde", lease.originKey, lease.waveId, 120)
+        and Lease:FinalSatisfiesLocalRequirement(zone, "Horde", "Eve", "wunknown", 120),
+        "the final of a wave followed over its own faction's point was refused")
+    expect(not Lease:FinalSatisfiesLocalRequirement(zone, "Alliance", lease.originKey, lease.waveId, 120),
+        "the followed wave's own name was accepted for another owner (own-faction base)")
+    lease.base.owner = "Alliance"
 end
 Lease:Complete(zone)
 expect(Lease:ShouldRejectFinal(zone, "Bob", "wreplaced"),

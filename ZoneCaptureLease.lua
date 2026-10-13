@@ -34,8 +34,8 @@ local tombstoneCount = 0
 -- reste acceptee (un capteur qui continue malgre une perte n'est jamais efface).
 local softTombstones = {}
 local softTombstoneCount = 0
--- Vagues fermees par une carte globale (prerequis absents de notre vue, ou zone deja
--- au capteur) : la marque dure bloque toujours leurs ticks, mais leur finale reste
+-- Vagues fermees par une carte (zone deja au capteur, capture datee ; avant 2.0.1
+-- aussi : prerequis absents de notre vue) : la marque dure bloque toujours leurs ticks, mais leur finale reste
 -- acceptee. Notre carte peut avoir rate la prise precedente ; une finale authentifiee
 -- corrige alors la zone au lieu d'etre refusee 10 min. Valeur = horodatage de la
 -- marque dure qu'elle accompagne ; toute nouvelle marque dure l'efface.
@@ -683,6 +683,33 @@ local function ApplyRebasedStableBase(zone, remote, base)
     zone._captureFinalConfirmedBase = nil
 end
 
+-- 2.0.1: a dated capture that a map gives for a followed point, compared with the wave.
+-- Without sinceWave: made after the capture under the wave. With it: also not before
+-- the wave was first seen here, so it can be that wave's own outcome (its final did not
+-- reach us; a capture needs its hold, so an earlier one is at least two minutes older).
+function Lease:MapEntryPostdates(zone, rawCt, sinceWave)
+    local remote = zone and zone._remoteCaptureLease
+    if type(remote) ~= "table" then return false end
+    local ct = math.floor(tonumber(rawCt) or 0)
+    if ct <= 0 or ct <= math.floor(tonumber(remote.base and remote.base.capturedTime) or 0) then
+        return false
+    end
+    if not sinceWave then return true end
+    local now = Overlord.ServerNow and Overlord.ServerNow() or time()
+    return ct >= now - (GetTime() - (tonumber(remote.openedAt) or GetTime())) - 30
+end
+
+-- 2.0.1: could the followed wave have reached its hold by now (the hold it had when
+-- first seen here, plus the time since, thirty seconds of margin)?
+function Lease:WaveCouldHaveFinished(zone)
+    local remote = zone and zone._remoteCaptureLease
+    if type(remote) ~= "table" then return false end
+    local required = tonumber(remote.effectiveRequired) or BASE_HOLD_REQUIRED
+    local progressed = (tonumber(remote.openedHold) or 0)
+        + (GetTime() - (tonumber(remote.openedAt) or GetTime()))
+    return progressed >= required - 30
+end
+
 -- Prepare une resolution ZA totalement detachee pendant le dry-run atomique.
 -- Aucun etat live n'est modifie ici. Le commit peut ainsi fermer une wave que
 -- la carte exacte invalide sans laisser cet overlay ephemere vetoer la carte.
@@ -1328,8 +1355,15 @@ function Lease:FinalSatisfiesLocalRequirement(zone, owner, originName, waveId, f
         if originKey == remote.originKey and validWave == remote.waveId and owner ~= remote.owner then
             return false
         end
+        -- 2.0.1: "under the assault" means an assault by the OTHER faction. A wave
+        -- followed over a point that its own faction already holds on our map (we
+        -- missed the enemy's capture in between; far fronts follow such a wave) ends
+        -- with a real capture: its final was refused here, the point kept its old
+        -- date on every far observer, and their maps then differed by one date from
+        -- everyone else's (a whole map pulled by each of them).
         local base = remote.base
-        if type(base) == "table" and base.owner ~= nil and owner == base.owner then return false end
+        if type(base) == "table" and base.owner ~= nil and owner == base.owner
+            and owner ~= remote.owner then return false end
         return true
     end
     if not sameWave then return false end

@@ -15,6 +15,9 @@ local lang = ({ frFR = "fr", esES = "es", esMX = "es", deDE = "de",
 local texts = {
 en = {
     RANK_TAB_TOOLTIP = "Overlord Rank",
+    RANK_BUTTON = "Your rank",
+    RANK_BUTTON_TOOLTIP = "Your Overlord rank",
+    RANK_BUTTON_HINT = "Open your character sheet (%s): it will show your Overlord rank.",
     RANK_NAME_0 = "Unranked",
     RANK_NAME_1 = "Recruit",
     RANK_NAME_2 = "Sworn Blade",
@@ -61,6 +64,9 @@ en = {
 },
 fr = {
     RANK_TAB_TOOLTIP = "Rang Overlord",
+    RANK_BUTTON = "Votre rang",
+    RANK_BUTTON_TOOLTIP = "Votre rang Overlord",
+    RANK_BUTTON_HINT = "Ouvrez votre feuille de personnage (%s) : elle s'ouvrira sur votre rang Overlord.",
     RANK_NAME_0 = "Sans rang",
     RANK_NAME_1 = "Recrue",
     RANK_NAME_2 = "Lame jurée",
@@ -107,6 +113,9 @@ fr = {
 },
 es = {
     RANK_TAB_TOOLTIP = "Rango Overlord",
+    RANK_BUTTON = "Tu rango",
+    RANK_BUTTON_TOOLTIP = "Tu rango Overlord",
+    RANK_BUTTON_HINT = "Abre tu hoja de personaje (%s): se abrirá en tu rango Overlord.",
     RANK_NAME_0 = "Sin rango",
     RANK_NAME_1 = "Recluta",
     RANK_NAME_2 = "Hoja jurada",
@@ -153,6 +162,9 @@ es = {
 },
 de = {
     RANK_TAB_TOOLTIP = "Overlord-Rang",
+    RANK_BUTTON = "Euer Rang",
+    RANK_BUTTON_TOOLTIP = "Euer Overlord-Rang",
+    RANK_BUTTON_HINT = "Öffnet Euren Charakterbogen (%s): Er zeigt dann Euren Overlord-Rang.",
     RANK_NAME_0 = "Ohne Rang",
     RANK_NAME_1 = "Rekrut",
     RANK_NAME_2 = "Eidklinge",
@@ -199,6 +211,9 @@ de = {
 },
 ru = {
     RANK_TAB_TOOLTIP = "Ранг Overlord",
+    RANK_BUTTON = "Ваш ранг",
+    RANK_BUTTON_TOOLTIP = "Ваш ранг Overlord",
+    RANK_BUTTON_HINT = "Откройте окно персонажа (%s): оно покажет ваш ранг Overlord.",
     RANK_NAME_0 = "Без ранга",
     RANK_NAME_1 = "Рекрут",
     RANK_NAME_2 = "Клинок присяги",
@@ -245,6 +260,9 @@ ru = {
 },
 pt = {
     RANK_TAB_TOOLTIP = "Patente Overlord",
+    RANK_BUTTON = "Sua patente",
+    RANK_BUTTON_TOOLTIP = "Sua patente Overlord",
+    RANK_BUTTON_HINT = "Abra sua ficha de personagem (%s): ela mostrará sua patente Overlord.",
     RANK_NAME_0 = "Sem patente",
     RANK_NAME_1 = "Recruta",
     RANK_NAME_2 = "Lâmina jurada",
@@ -291,6 +309,9 @@ pt = {
 },
 zhCN = {
     RANK_TAB_TOOLTIP = "Overlord 军衔",
+    RANK_BUTTON = "你的军衔",
+    RANK_BUTTON_TOOLTIP = "你的 Overlord 军衔",
+    RANK_BUTTON_HINT = "打开角色面板（%s）：将显示你的 Overlord 军衔。",
     RANK_NAME_0 = "无军衔",
     RANK_NAME_1 = "新兵",
     RANK_NAME_2 = "誓约之刃",

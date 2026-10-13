@@ -897,5 +897,47 @@ do
         "/ov network does not tell what this client answered: " .. line)
 end
 
+-- 15. The answer is built on its time budget: with the game's fine clock a client needs
+--     fewer frames before its first answer leaves than with the unit count alone (every
+--     zero-delay timer of the responder is one frame in the game). Same answer either way.
+do
+    local lb = ALLY.Overlord.Leaderboard
+    local function framesToFirstAnswer(clock)
+        advance(700)
+        lb.kills["Frame Probe"] = (lb.kills["Frame Probe"] or 0) + 1
+        lb.playerInfo["Frame Probe"] = lb.playerInfo["Frame Probe"] or { class = "WARRIOR", faction = "Alliance",
+            level = 60, locale = "enus", guild = "", guildAt = 0, guildAuth = true, race = "Human", raceSex = 2, raceAt = 1 }
+        lb:MarkMetaDirty()
+        lb._snapshotDirty = true
+        local ticks = 0
+        ALLY.debugprofilestop = clock and function() ticks = ticks + 1; return ticks * 0.01 end or nil
+        local frames, counting, first = 0, false, nil
+        local after = ALLY.C_Timer.After
+        ALLY.C_Timer.After = function(delay, fn)
+            if delay > 0.001 then return after(delay, fn) end
+            return after(delay, function()
+                if counting then frames = frames + 1 end
+                return fn()
+            end)
+        end
+        local hear, whisper = ALLY.Overlord.Sync.OnPagedLeaderboardMessage, ALLY.Overlord.Sync.SendWhisper
+        ALLY.Overlord.Sync.OnPagedLeaderboardMessage = function(self, kind, ...)
+            if kind == "HR" and not first then counting = true end
+            return hear(self, kind, ...)
+        end
+        ALLY.Overlord.Sync.SendWhisper = function(self, kind, ...)
+            if (kind == "HA" or kind == "HB") and counting and not first then first, counting = frames, false end
+            return whisper(self, kind, ...)
+        end
+        local ok = pull(ALLY)
+        ALLY.C_Timer.After, ALLY.debugprofilestop = after, nil
+        ALLY.Overlord.Sync.OnPagedLeaderboardMessage, ALLY.Overlord.Sync.SendWhisper = hear, whisper
+        assert(ok == true and first, "fixture: the pull did not get its answer")
+        return first
+    end
+    local counted, timed = framesToFirstAnswer(false), framesToFirstAnswer(true)
+    assert(timed < counted, "with a fine clock the answer must be built in fewer frames: " .. timed .. " against " .. counted)
+end
+
 SOURCE.Overlord.Sync.SendWhisper = sourceSend
 print("Paged v8 rows: a pull nobody answered restarts at the kills, cold cross-faction pull filtered by faction, equal ranking quiet, deltas row by row, v7 still answered OK")

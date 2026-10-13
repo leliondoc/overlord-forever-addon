@@ -932,7 +932,7 @@ local function IsPlayerOnActiveFront()
     return false
 end
 
--- Front du jour a la connexion : retente si hors front (TP en cours) ou sync pas encore prete.
+-- Volet annexe (prochain objectif, activite recente, pieces) a la connexion : retente si hors front (TP en cours) ou sync pas encore prete.
 function Overlord.Popups:TryShowDailyOnLogin(attempt)
     attempt = attempt or 0
     if Overlord.InstanceSuspended or not Overlord.IsInitialized then return end

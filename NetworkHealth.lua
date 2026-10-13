@@ -49,6 +49,8 @@ local function CurrentTotals()
     totals.dropped = relay and relay.dropped or 0
     totals.received = relay and relay.received or 0
     totals.notForwarded = NotForwarded(relay)
+    totals.expired = relay and relay.expired or 0
+    totals.expiredFinals = relay and relay.expiredFinals or 0
     return totals
 end
 
@@ -117,9 +119,18 @@ function NH:Compute()
         local pct = sent > 0 and dropped * 100 / sent or 0
         local others = notForwarded > 0
             and string.format(", %d copies for others not forwarded", notForwarded) or ""
-        add("relay", (dropped <= 1 or pct < 1) and "ok" or ((pct < 5 or sent < 500) and "warn" or "bad"),
-            "Relay losses", string.format("%d lost of %d sent (%.1f%%), %d received%s%s",
-                dropped, sent, pct, received, others, label))
+        -- 2.0.1: copies that waited in the queue until their packet was too old. They
+        -- were counted nowhere here: a bridge showed "all good" with 233 of them, three
+        -- capture ends included. A capture end that expires is worth watching.
+        local expired = math.max(0, (relayStats.expired or 0) - (base and base.expired or 0))
+        local expiredFinals = math.max(0, (relayStats.expiredFinals or 0) - (base and base.expiredFinals or 0))
+        local waited = expired > 0 and string.format(", %d expired in the queue%s", expired,
+            expiredFinals > 0 and string.format(" (%d capture ends)", expiredFinals) or "") or ""
+        local level = (dropped <= 1 or pct < 1) and "ok" or ((pct < 5 or sent < 500) and "warn" or "bad")
+        if expiredFinals > 0 then level = Worst(level, "warn") end
+        add("relay", level,
+            "Relay losses", string.format("%d lost of %d sent (%.1f%%), %d received%s%s%s",
+                dropped, sent, pct, received, others, waited, label))
     end
     if sync and sync.GetPagedLeaderboardSummary then
         local lb = sync:GetPagedLeaderboardSummary()

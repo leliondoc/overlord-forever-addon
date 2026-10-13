@@ -291,9 +291,15 @@ local function prepare(callback, own)
         end
         result.buckets = result.streams.LK.buckets
         local units, sliceAt = 0, 0
+        -- A slice ends on its time budget (1 ms). The count is only the fallback of a client
+        -- without a fine clock: at 32 units a slice did a few hundredths of a millisecond
+        -- of work, the answer to a ranking request took over a thousand frames to leave
+        -- (half a minute to several minutes by frame rate) and requesters gave up at
+        -- 270 s. Same total work, same pause in combat (step below), nothing on the wire.
+        local unitCap = debugprofilestop and 4096 or 32
         local function work()
             units = units + 1
-            if units >= 32 or (debugprofilestop and debugprofilestop() - sliceAt >= 1) then
+            if units >= unitCap or (debugprofilestop and debugprofilestop() - sliceAt >= 1) then
                 coroutine.yield()
             end
         end

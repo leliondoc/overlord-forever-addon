@@ -1749,7 +1749,7 @@ function Overlord.ZoneControl:CaptureZone(zone)
     zone.holdTimeRequired = 120
     -- Vu en direct ici (ligne "Capitale liberee", garde des cartes ZA surprenantes).
     if Overlord.Sync and Overlord.Sync.NoteLiveZoneTraffic then
-        Overlord.Sync:NoteLiveZoneTraffic(zone.id)
+        Overlord.Sync:NoteLiveZoneTraffic(zone.id, Overlord.PlayerFaction)
     end
 
     -- Meme logique que Sync:OnReceiveCapture : evite +2 quand un allie envoie aussi un "C"

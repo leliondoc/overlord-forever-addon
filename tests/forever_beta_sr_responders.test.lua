@@ -134,4 +134,70 @@ assert(responded(), "a group request lost its answer")
 release()
 
 math.random = realRandom
+-- 2.0.1: a targeted request that waits for the answer slot is served before any
+-- broadcast request (a broadcast heard at the moment the slot freed took it every
+-- time: the Battle.net friend of the other faction waited two minutes or was dropped
+-- after 90 s), an opposite-faction friend first, then the oldest; and the twelve
+-- waiting places never push that friend out.
+do
+    Overlord.Relay.GetDirectPeers = function() return peers end
+    math.random = function(...) if select("#", ...) == 0 then return roll end return realRandom(...) end
+    local served = {}
+    local real = sync.OnSyncRequest
+    sync.OnSyncRequest = function(self, sender, pl, channel, replyTo)
+        if channel == "WHISPER" then served[#served + 1] = sender end
+        return real(self, sender, pl, channel, replyTo)
+    end
+    local function freeSlot()
+        -- The safety callback frees the slot; the pending retry (1 s) is kept.
+        local kept = {}
+        for _, t in ipairs(timers) do
+            if t.delay == 120 then t.run() elseif t.delay == 1 then kept[#kept + 1] = t end
+        end
+        timers = kept
+        clock = clock + 20 -- past every answer cooldown (5 to 8 s), before a waiting request expires (90 s)
+    end
+    local function retry()
+        local due = {}
+        for _, t in ipairs(timers) do if t.delay == 1 then due[#due + 1] = t end end
+        local kept = {}
+        for _, t in ipairs(timers) do if t.delay ~= 1 then kept[#kept + 1] = t end end
+        timers = kept
+        for _, t in ipairs(due) do t.run() end
+    end
+    timers = {}
+    targeted, roll = true, 0.99
+    sync:OnSyncRequest("First Asker", payload, "BETA")
+    assert(responded(), "fixture: the first targeted request was not answered")
+    sync:OnSyncRequest("Second Asker", payload, "BETA")
+    freeSlot()
+    clock = clock + 40 -- past the longest answer cooldown (35 s in a large event)
+    targeted, roll = false, 0.0001
+    sync:OnSyncRequest("Loud Asker", payload, "BETA")
+    assert(not responded(), "A broadcast request took the answer slot of a waiting targeted request")
+    targeted = true
+    retry()
+    assert(responded() and served[#served] == "Second Asker", "The waiting targeted request was not served")
+    -- Thirteen requests wait while one answer is in flight: the friend of the other
+    -- faction (the first to arrive) keeps its place and is served first.
+    sync._enemyBNetRequesters = { ["enemy asker"] = clock }
+    sync:OnSyncRequest("Enemy Asker", payload, "BETA")
+    for i = 1, 13 do
+        clock = clock + 0.01
+        sync:OnSyncRequest("Herd " .. string.char(64 + i) .. "x", payload, "BETA")
+    end
+    freeSlot()
+    served = {}
+    retry()
+    assert(served[1] == "Enemy Asker", "The friend of the other faction was not served first: " .. tostring(served[1]))
+    freeSlot()
+    retry()
+    -- Fourteen requests for twelve places: the two oldest channel mates gave up theirs.
+    assert(served[2] == "Herd Cx", "The oldest waiting request was not served next: " .. tostring(served[2]))
+    sync.OnSyncRequest = real
+    sync._enemyBNetRequesters = nil
+    timers = {}
+    clock = clock + 400
+    math.random = realRandom
+end
 print("Forever beta SR responders: targeted requests answered, broadcast and raw channel requests bounded to ~2 of 30 direct peers, relayed requests ignored OK")

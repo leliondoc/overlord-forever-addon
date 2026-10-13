@@ -1611,10 +1611,13 @@ end
 -- Trafic en direct recu pour une zone (C, ZS, ticks) : sert a juger si un
 -- basculement propose par une carte ZA est surprenant.
 priv.liveZoneSeenAt = {}
-function Overlord.Sync:NoteLiveZoneTraffic(zoneId)
+priv.liveZoneOwner = {}
+function Overlord.Sync:NoteLiveZoneTraffic(zoneId, owner)
     if zoneId then
         priv.liveZoneSeenAt[zoneId] = GetTime()
         priv.liveZoneLastAt = priv.liveZoneSeenAt[zoneId]
+        -- The faction that live traffic showed taking the zone (assault or capture).
+        if owner == "Alliance" or owner == "Horde" then priv.liveZoneOwner[zoneId] = owner end
     end
 end
 function Overlord.Sync:HasRecentLiveZoneTraffic(zoneId, window)
@@ -1640,11 +1643,28 @@ priv.zaFlipClaims = {}
 function Overlord.Sync:IsSuspiciousZaFlip(zoneId, zone, owner, ct, sender)
     if not zone or not owner or zone.owner == owner then return false, false end
     if zone._loginSyncUnconfirmed or zone._captureFinalUnattested then return false, false end
+    -- 2.0.1: under a followed assault zone.owner is the attacker. An entry that gives
+    -- the point to the owner below the wave changes no owner (only the date of his
+    -- capture): it was held as a flip, every time, since the wave is live traffic.
+    -- Only a capture made before the wave was first seen here: the defender cannot
+    -- have taken the point since (a date inside the wave would outdate the wave's
+    -- own final and get it refused; see the plan loop of OnReceiveZoneAll).
+    if zone.status == "in_progress" and not zone.holdAuthorityLocal
+        and type(zone._remoteCaptureLease) == "table" and type(zone._remoteCaptureLease.base) == "table"
+        and zone._remoteCaptureLease.base.owner == owner
+        and not (Overlord.CaptureLease and Overlord.CaptureLease.MapEntryPostdates
+            and Overlord.CaptureLease:MapEntryPostdates(zone, ct, true)) then return false, false end
     local now = GetTime()
     local liveAt = priv.liveZoneSeenAt[zoneId]
     if not liveAt or now - liveAt > ZA_FLIP_LIVE_WINDOW then return false, false end
     ct = tonumber(ct) or 0
     if ct <= (tonumber(zone.capturedTime) or 0) then return false, false end
+    -- 2.0.1: not a surprise when the map gives the zone to the faction whose assault
+    -- or capture we followed live: that is the capture whose end we lost. Holding it
+    -- kept exactly the zones being fought over on the old owner for five more minutes.
+    -- Nor when the map is the answer of a Battle.net friend of the other faction to a
+    -- request of ours (Battle.net names the sender; it is the only door to that side).
+    if priv.liveZoneOwner[zoneId] == owner or priv.mapNewsSource then return false, false end
     local pending = priv.zaFlipClaims[zoneId]
     if pending then
         if now - pending.firstAt > ZA_FLIP_MAX_HOLD then return false, true end
@@ -2196,6 +2216,12 @@ end
 -- Ce que le canal transporte encore. Forteresses/avant-postes : seulement un siege
 -- en cours (alerte « attaque ») ; kills : seulement les notres, un total / 30 s.
 function Overlord.Sync:ChannelCarries(kind, payload, isOrigin)
+    -- 2.0.1: our own map news (see QueueMapNews), one to three small pages. Whole maps
+    -- (14 to 17 pages) stay off the channel.
+    if kind == "ZA" then
+        return isOrigin == true and type(payload) == "string"
+            and payload:match("^@P%-%d+%-%d+:%d+:[1-3]|") ~= nil
+    end
     if self.CHANNEL_OFF_KINDS[kind] then return false end
     if kind == "OP" then
         local status = type(payload) == "string" and payload:match("^v%d+:[^:]*:([^:]*)") or nil
@@ -3361,6 +3387,7 @@ local function ApplyInactiveFrontZoneState(zoneId, status, kills, holdTime, owne
                 zone, owner, capturerName, progressDecision, preparedBase) then
             return false
         end
+        Overlord.Sync:NoteLiveZoneTraffic(zoneId, owner)
     end
     zone.status = status
     zone.killsCurrent = kills
@@ -3689,7 +3716,9 @@ local function AppendShardTagToPlayerName(nameHint, shardHint)
         end
     end
     if not sid then return nameHint end
-    local tag = L and L.SHARD_ALERT_TAG
+    -- After a name the tag takes a comma ("Name, layer #1234"): the name and the
+    -- layer read as two things.
+    local tag = L and (L.SHARD_ALERT_NAME_TAG or L.SHARD_ALERT_TAG)
     if tag then
         return nameHint .. string.format(tag, tostring(sid))
     end
@@ -4364,6 +4393,262 @@ function Overlord.Sync:NoteEnemyCaptureByMap(capturedAt, atLogin)
     if late > stats.worst then stats.worst = late end
 end
 
+-- 2.0.1 map news. A capture learnt from the map of a Battle.net friend of the other
+-- faction (the answer to a request of ours: the only way that faction's captures come
+-- back when their final did not cross live) was told to nobody. Every channel mate then
+-- had to ask a whole map (14 to 17 pages) to the one client that held it, which serves
+-- one requester at a time: a faction lagged 10 to 30 minutes behind its own bridge, and
+-- its capturers took points on a map that lacked the enemy's captures (2026-10-12).
+-- The learner now says it once: the changed entries only, as a partial map of one to
+-- three small pages on the faction channel, through the relay. Receivers of any version
+-- merge it entry by entry by date, like any map. Nothing is said for what a broadcast or
+-- a channel mate's map taught us (they already have it), nor for an entry heard from
+-- someone else meanwhile; at most MAP_NEWS_ZONES captures, the newest first, no older
+-- than MAP_NEWS_AGE, one announcement per MAP_NEWS_GAP seconds. No reply is asked.
+Overlord.Sync.MAP_NEWS_ZONES, Overlord.Sync.MAP_NEWS_GAP, Overlord.Sync.MAP_NEWS_AGE = 12, 15, 7200
+function Overlord.Sync:MapNewsSource(sender)
+    local net = Overlord.Relay
+    if not net or not net.IsTargetedDispatch or not net:IsTargetedDispatch() then return nil end
+    -- First-hand only: the reply of a friend we asked comes straight over Battle.net.
+    -- The origin name of a relayed packet is written by the hop that passed it on.
+    if self.IsUnauthenticatedRelayOrigin and self:IsUnauthenticatedRelayOrigin(sender) then return nil end
+    local theirs, mine = self:GetBetaPeerFaction(sender), Overlord.PlayerFaction
+    if (theirs == "Alliance" or theirs == "Horde") and (mine == "Alliance" or mine == "Horde")
+        and theirs ~= mine then return true end
+    return nil
+end
+function Overlord.Sync:MapNewsZone(zoneId)
+    return zoneId and ((Overlord.Zones and Overlord.Zones.GetZone and Overlord.Zones:GetZone(zoneId))
+        or (Overlord.Fronts and Overlord.Fronts.GetZone and select(1, Overlord.Fronts:GetZone(zoneId)))) or nil
+end
+-- One map entry as the dry run reads it (same clock rules): zone, owner, capture date.
+function Overlord.Sync:MapNewsEntry(entry)
+    local zoneId, code, ts, ct = strsplit(":", tostring(entry))
+    ct = NormalizeRemoteTimestamp(ct) or 0
+    if ct <= 0 then ct = NormalizeRemoteTimestamp(ts) or 0 end
+    return zoneId, (code == "A" and "Alliance" or (code == "H" and "Horde" or nil)), ct
+end
+function Overlord.Sync:MapNewsMark(zone)
+    return (zone.status == "in_progress" and "*" or tostring(zone.owner or "N"))
+        .. "@" .. tostring(math.floor(tonumber(zone.capturedTime) or 0))
+end
+function Overlord.Sync:MapNewsView(entries)
+    local view = {}
+    for i = 1, #entries do
+        local zoneId = tostring(entries[i]):match("^([^:]+):")
+        local zone = self:MapNewsZone(zoneId)
+        if zone then view[zoneId] = self:MapNewsMark(zone) end
+    end
+    return view
+end
+-- (An error here must not cut a map that has passed its checks.)
+function Overlord.Sync:SafeMapNewsView(entries)
+    local ok, view = pcall(self.MapNewsView, self, entries)
+    return ok and view or nil
+end
+-- One capture to announce (also used for a capture end whose channel copy expired in
+-- our relay queue: enemyOnly, since our own faction heard its captures first-hand).
+function Overlord.Sync:NoteMapNews(zoneId, ct, enemyOnly)
+    local zone = self:MapNewsZone(zoneId)
+    ct = math.floor(tonumber(ct) or (zone and tonumber(zone.capturedTime)) or 0)
+    local now = Overlord.ServerNow and Overlord.ServerNow() or time()
+    if not zone or ct <= 0 or now - ct > self.MAP_NEWS_AGE then return false end
+    if enemyOnly and (zone.status == "in_progress" or zone.owner == nil
+        or zone.owner == Overlord.PlayerFaction) then return false end
+    -- Said once: not again for the same capture (a second copy of its final expiring in
+    -- our queue, the same map answered twice, someone else's announcement of it).
+    if priv.mapNewsTold and priv.mapNewsTold[zoneId] == ct then return false end
+    priv.mapNews = priv.mapNews or {}
+    priv.mapNews[zoneId] = ct
+    if priv.mapNewsTimer then return true end
+    priv.mapNewsTimer = true
+    -- Said almost at once (two bridges that learn the same thing in the same second
+    -- are spread over three seconds; the first to speak silences the other): it must
+    -- reach the channel before our next presence shows a map that differs, or every
+    -- channel mate asks us for a whole map in the same second. A final that expired in
+    -- a queue expires in every bridge's queue in the same second and is two minutes old
+    -- already: spread over twelve seconds.
+    local wait = enemyOnly and (3 + math.random() * 9) or (0.5 + math.random() * 2.5)
+    wait = math.max(wait, self.MAP_NEWS_GAP - (GetTime() - (priv.mapNewsSentAt or -1000)))
+    C_Timer.After(wait, function()
+        priv.mapNewsTimer = nil
+        if Overlord.Sync and Overlord.Sync.FlushMapNews then pcall(Overlord.Sync.FlushMapNews, Overlord.Sync) end
+    end)
+    return true
+end
+function Overlord.Sync:QueueMapNews(entries, before, sender)
+    -- One announcement per friend per two minutes: a friend whose maps keep changing
+    -- (or who sends maps nobody asked for) cannot make us speak every fifteen seconds.
+    -- What it teaches meanwhile is applied here and left to the usual pulls.
+    local key, now = tostring(sender or ""):lower(), GetTime()
+    priv.mapNewsFriendAt = priv.mapNewsFriendAt or {}
+    local limited = priv.mapNewsFriendAt[key] ~= nil and now - priv.mapNewsFriendAt[key] < 120
+    for i = 1, #entries do
+        local zoneId, owner, ct = self:MapNewsEntry(entries[i])
+        local zone = self:MapNewsZone(zoneId)
+        if zone and before[zoneId] and before[zoneId] ~= self:MapNewsMark(zone) then
+            -- A change of owner that our own live traffic contradicts (we followed the
+            -- other faction on that point in the last minutes) is applied here, since
+            -- the friend's reply is the only door to its side, but it is not ours to
+            -- spread: the channel learns it from a second source, as before.
+            local said = owner ~= nil and ct > 0 and zone.status ~= "in_progress" and zone.owner == owner
+                and math.floor(tonumber(zone.capturedTime) or 0) == ct
+                and not (before[zoneId]:match("^([^@]*)@") ~= owner
+                    and self:HasRecentLiveZoneTraffic(zoneId) and priv.liveZoneOwner[zoneId] ~= owner)
+                and not limited and self:NoteMapNews(zoneId, ct)
+            if said then priv.mapNewsFriendAt[key] = now end
+            -- Learnt but not announced (too old, contradicted, not a capture).
+            if not said then priv.mapNewsPartial = true end
+        end
+    end
+    -- (The mark only qualifies an announcement to come.)
+    if not priv.mapNews then priv.mapNewsPartial = nil end
+end
+-- Our presence after an announcement: the friend that gave us the map sees whether we
+-- hold captures it lacks. Only when everything learnt was said (otherwise the presence
+-- would only bring the channel's whole-map requests forward), once a minute at most.
+function Overlord.Sync:MapNewsPresence(partial)
+    local net = Overlord.Relay
+    if partial or not net or not net.ScheduleReturnPresence
+        or GetTime() - (priv.mapNewsPresenceAt or -1000) < 60 then return false end
+    priv.mapNewsPresenceAt = GetTime()
+    net:ScheduleReturnPresence()
+    return true
+end
+-- A page of someone else's announcement, heard first-hand on our channel, names a
+-- capture we are about to say: wait for its whole batch (a three-page announcement
+-- takes eight seconds and more to arrive) before saying it ourselves. Once per pending
+-- announcement, so a page whose batch never completes, or is refused, delays ours and
+-- cannot silence it.
+function Overlord.Sync:PostponeMapNews(pageBody)
+    local pending = priv.mapNews
+    if not pending or priv.mapNewsPostponed then return end
+    local net = Overlord.Relay
+    if not net or not net.IsDirectChannelDispatch or not net:IsDirectChannelDispatch()
+        or (net.IsTargetedDispatch and net:IsTargetedDispatch()) then return end
+    for entry in tostring(pageBody or ""):gmatch("[^,]+") do
+        local zoneId, owner, ct = self:MapNewsEntry(entry)
+        if owner and pending[zoneId] == ct then
+            priv.mapNewsPostponed, priv.mapNewsNotBefore = true, GetTime() + 12
+            return
+        end
+    end
+end
+-- What a partial map heard first-hand on our channel states, our channel has heard:
+-- nothing left to say for it, now or when its final expires in our queue later. Called
+-- once the batch has passed its checks, for the entries it really carried (skipped:
+-- refused by a guard or older than ours), same owner and same date as our own map.
+function Overlord.Sync:DropHeardMapNews(entries, skipped)
+    local pending = priv.mapNews
+    priv.mapNewsTold = priv.mapNewsTold or {}
+    for i = 1, #entries do
+        if not (skipped and skipped[i]) then
+            local zoneId, owner, ct = self:MapNewsEntry(entries[i])
+            local zone = owner and ct > 0 and self:MapNewsZone(zoneId) or nil
+            if zone and zone.status ~= "in_progress" and zone.owner == owner
+                and math.floor(tonumber(zone.capturedTime) or 0) == ct then
+                priv.mapNewsTold[zoneId] = ct
+                if pending and pending[zoneId] == ct then
+                    pending[zoneId] = nil
+                    priv.mapNewsHeard = (priv.mapNewsHeard or 0) + 1
+                end
+            end
+        end
+    end
+    if pending and next(pending) == nil then
+        priv.mapNews, priv.mapNewsRetries = nil, nil
+        priv.mapNewsPostponed, priv.mapNewsNotBefore = nil, nil
+        self:MapNewsPresence(priv.mapNewsPartial)
+        priv.mapNewsPartial = nil
+    end
+end
+function Overlord.Sync:FlushMapNews()
+    local pending = priv.mapNews
+    local net = Overlord.Relay
+    if not pending or not net or not net.Broadcast or Overlord.InstanceSuspended or IsInInstance() then
+        -- (Nothing leaves in an instance: an announcement still pending is given up.)
+        if pending then priv.mapNewsLost = (priv.mapNewsLost or 0) + 1 end
+        priv.mapNews, priv.mapNewsRetries, priv.mapNewsPartial = nil, nil, nil
+        priv.mapNewsPostponed, priv.mapNewsNotBefore = nil, nil
+        return 0
+    end
+    -- Back from an instance or just logged in: the reply that taught us is also the one
+    -- that ends the wait for a first map, a few seconds later. Say it then (one minute at
+    -- most). Someone else is saying it: after its batch (see PostponeMapNews).
+    local gated = Overlord.WaitingForSync or (Overlord.IsCaptureSyncPending and Overlord:IsCaptureSyncPending())
+    local wait = gated and 5 or ((priv.mapNewsNotBefore or 0) - GetTime())
+    if wait > 0 then
+        if gated then priv.mapNewsRetries = (priv.mapNewsRetries or 0) + 1 end
+        if (priv.mapNewsRetries or 0) > 12 then
+            priv.mapNewsLost = (priv.mapNewsLost or 0) + 1
+            priv.mapNews, priv.mapNewsRetries, priv.mapNewsPartial = nil, nil, nil
+            priv.mapNewsPostponed, priv.mapNewsNotBefore = nil, nil
+        elseif not priv.mapNewsTimer then
+            priv.mapNewsTimer = true
+            C_Timer.After(math.max(0.5, wait), function()
+                priv.mapNewsTimer = nil
+                if Overlord.Sync and Overlord.Sync.FlushMapNews then pcall(Overlord.Sync.FlushMapNews, Overlord.Sync) end
+            end)
+        end
+        return 0
+    end
+    local partial = priv.mapNewsPartial
+    priv.mapNews, priv.mapNewsRetries, priv.mapNewsPartial = nil, nil, nil
+    priv.mapNewsPostponed, priv.mapNewsNotBefore = nil, nil
+    local zones = {}
+    for zoneId, ct in pairs(pending) do
+        local zone = self:MapNewsZone(zoneId)
+        if zone and zone.status ~= "in_progress" and not zone._loginSyncUnconfirmed
+            and (zone.owner == "Alliance" or zone.owner == "Horde")
+            and math.floor(tonumber(zone.capturedTime) or 0) == ct then
+            zones[#zones + 1] = zone
+        end
+    end
+    table.sort(zones, function(a, b)
+        local x, y = tonumber(a.capturedTime) or 0, tonumber(b.capturedTime) or 0
+        if x ~= y then return x > y end
+        return tostring(a.id) < tostring(b.id)
+    end)
+    while #zones > self.MAP_NEWS_ZONES do zones[#zones], partial = nil, true end
+    local pages, count
+    while #zones > 0 do
+        pages, count = self:BuildZoneAllSnapshotPages(zones, "P")
+        if (count or 0) <= 3 then break end
+        zones[#zones], partial = nil, true
+    end
+    if #zones == 0 or not count or count == 0 then return 0 end
+    -- (Before the pages are queued: a final that expires in the relay queue while they
+    -- are admitted must find the capture already said and the spacing already running.)
+    priv.mapNewsTold = priv.mapNewsTold or {}
+    for i = 1, #zones do
+        priv.mapNewsTold[zones[i].id] = math.floor(tonumber(zones[i].capturedTime) or 0)
+    end
+    priv.mapNewsSentAt = GetTime()
+    local refused
+    for i = 1, count do
+        if net:Broadcast("ZA", pages[i]) ~= 1 then
+            refused = refused or {}
+            refused[#refused + 1] = pages[i]
+        end
+    end
+    if refused then
+        -- The relay queue refused a page (a full lane on a busy bridge): no early
+        -- presence, and the refused pages, same batch, go once more inside the 45 s
+        -- that receivers keep an incomplete batch. Nothing else is said again.
+        partial = true
+        priv.mapNewsRefused = (priv.mapNewsRefused or 0) + #refused
+        C_Timer.After(6 + math.random() * 4, function()
+            local relay = Overlord.Relay
+            if not relay or not relay.Broadcast or Overlord.InstanceSuspended or IsInInstance() then return end
+            for i = 1, #refused do relay:Broadcast("ZA", refused[i]) end
+        end)
+    end
+    priv.mapNewsSent = (priv.mapNewsSent or 0) + 1
+    priv.mapNewsZones = (priv.mapNewsZones or 0) + #zones
+    self:MapNewsPresence(partial)
+    return #zones
+end
+
 function Overlord.Sync:GetCrossFactionDiagnostics()
     local now, waiting = GetTime(), { enemy = 0, own = 0 }
     for _, batch in pairs(priv.pendingZaSnapshotPages or {}) do
@@ -4388,6 +4673,11 @@ function Overlord.Sync:GetCrossFactionDiagnostics()
         lines[3] = ("Enemy captures learnt by map instead of live: %d in session (last %d min late, worst %d min), %d at login.")
             :format(byMap.session, math.floor(byMap.last / 60 + 0.5), math.floor(byMap.worst / 60 + 0.5),
                 byMap.login)
+    end
+    if (priv.mapNewsSent or 0) + (priv.mapNewsHeard or 0) > 0 then
+        lines[4] = ("Map news told to our faction: %d announcements (%d captures); %d captures left to someone who said them first; %d announcements given up (instance or long wait), %d pages sent twice (queue full).")
+            :format(priv.mapNewsSent or 0, priv.mapNewsZones or 0, priv.mapNewsHeard or 0,
+                priv.mapNewsLost or 0, priv.mapNewsRefused or 0)
     end
     return lines
 end
@@ -4741,7 +5031,7 @@ function Overlord.Sync:OnReceiveCapture(payload, sender)
         return
     end
     self:NoteEnemyCaptureFinal(newOwner, "C", "passed")
-    self:NoteLiveZoneTraffic(zoneId)
+    self:NoteLiveZoneTraffic(zoneId, newOwner)
     -- Le sender WoW est une identite de transport non choisie par le payload.
     -- Une claim moderne complete (faction, wave, GUID, requis, timestamp),
     -- apres les gardes du bail local ci-dessus, redevient canonique
@@ -5270,10 +5560,16 @@ local function QueuePendingDirectSR(senderKey, sender, payload, channel, replyTo
     if not senderKey or senderKey == "" then return end
     if not priv.pendingDirectSR[senderKey] then
         if (priv.pendingDirectSRCount or 0) >= 12 then
+            -- 2.0.1: never the request of a Battle.net friend of the other faction (the
+            -- first to arrive after our map changed, hence the oldest: the twelve channel
+            -- mates that followed pushed it out, and that side kept waiting for our map).
             local oldestKey, oldestAt
+            local enemies = Overlord.Sync._enemyBNetRequesters
             for k, req in pairs(priv.pendingDirectSR) do
                 local queuedAt = tonumber(req and req.queuedAt) or 0
-                if not oldestAt or queuedAt < oldestAt then
+                local friend = enemies ~= nil and req ~= nil and req.replyToOverride ~= nil
+                    and enemies[tostring(req.replyToOverride):lower()] ~= nil
+                if not friend and (not oldestAt or queuedAt < oldestAt) then
                     oldestKey, oldestAt = k, queuedAt
                 end
             end
@@ -5315,7 +5611,26 @@ local function SchedulePendingDirectSRRetry()
         -- Une demande directe doit pouvoir recevoir la photo Q pendant notre
         -- propre gate login. OnSyncRequest garde alors toutes les reponses
         -- secondaires hors file ; bloquer ici creait un cycle A -> B -> C -> A.
-        local senderKey, req = next(priv.pendingDirectSR)
+        -- 2.0.1: an opposite-faction Battle.net friend first (nobody else can give it
+        -- our faction's map), then the oldest request (next() took any, so a request
+        -- could be passed over until it expired).
+        local senderKey, req
+        local enemies = Overlord.Sync._enemyBNetRequesters
+        for key, pending in pairs(priv.pendingDirectSR) do
+            local friend = enemies ~= nil and pending.replyToOverride ~= nil
+                and enemies[tostring(pending.replyToOverride):lower()] ~= nil
+            local better = req == nil
+            if req ~= nil then
+                local reqFriend = enemies ~= nil and req.replyToOverride ~= nil
+                    and enemies[tostring(req.replyToOverride):lower()] ~= nil
+                if friend ~= reqFriend then
+                    better = friend
+                else
+                    better = (tonumber(pending.queuedAt) or 0) < (tonumber(req.queuedAt) or 0)
+                end
+            end
+            if better then senderKey, req = key, pending end
+        end
         if not req then return end
         priv.pendingDirectSR[senderKey] = nil
         priv.pendingDirectSRCount = math.max((priv.pendingDirectSRCount or 1) - 1, 0)
@@ -5450,6 +5765,13 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
     if directSR then
         local lastSR = lastSRPerSender:Get(senderKey) or 0
         if now - lastSR < SR_PER_SENDER_COOLDOWN then return end
+    elseif (priv.pendingDirectSRCount or 0) > 0 then
+        -- 2.0.1: a targeted request (the only one with a guaranteed answer, and the
+        -- only way a Battle.net friend of the other faction gets our map) is waiting
+        -- for the answer slot. A broadcast request heard meanwhile took that slot
+        -- every time its period matched the cooldown: the friend waited two minutes
+        -- or was dropped after 90 s. Other neighbours answer the broadcast.
+        return
     end
 
     -- Whisper/BNet = reponse garantie ; canal/groupe = probabilite adaptee a la taille de l'event.
@@ -7010,7 +7332,12 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
         end
     end
 
-    if status == "in_progress" or status == "captured" then self:NoteLiveZoneTraffic(zoneId) end
+    -- 2.0.1: the owner live traffic showed is noted for a validated final here, and
+    -- for an assault only once it is really followed (AdoptRemote below): a tick that
+    -- is refused or older than our state says nothing about who is taking the point.
+    if status == "in_progress" or status == "captured" then
+        self:NoteLiveZoneTraffic(zoneId, status == "captured" and owner or nil)
+    end
     -- Dedoublonner seulement APRES la validation. Une copie BNet/Bridge refusee ne
     -- peut plus bloquer la copie WoW directe. Un terminal deja applique reste
     -- globalement idempotent.
@@ -7139,6 +7466,7 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
         local adopted, opened, effectEligible = Overlord.CaptureLease:AdoptRemote(
             zone, owner, zsCapturerName, progressDecision, progressPreparedBase)
         if not adopted then return false end
+        Overlord.Sync:NoteLiveZoneTraffic(zone.id, owner)
         progressAdopted = true
         progressLeaseOpened = opened == true
         progressEffectEligible = effectEligible == true
@@ -7911,32 +8239,6 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
     end
 end
 
--- Evalue une vague distante uniquement dans la vue stable d'un snapshot global
--- exact. Les overlays locaux ne doivent ni blanchir des prerequis, ni provoquer
--- un veto de convergence. Une liste vide est un prerequis valide ; nil ne l'est pas.
-local function RemoteCaptureMeetsStagedPrereqs(
-    zoneId, attackingFaction, stagedOwners, stagedOwnerPresent)
-    if not zoneId or (attackingFaction ~= "Alliance" and attackingFaction ~= "Horde")
-        or not Overlord.Fronts or not Overlord.Fronts.GetZone then return false end
-    local _, front = Overlord.Fronts:GetZone(zoneId)
-    local factionPrereqs = front and front.prereqs and front.prereqs[attackingFaction]
-    local prereqIds = factionPrereqs and factionPrereqs[zoneId]
-    if not front or prereqIds == nil then return false end
-    for _, prereqId in ipairs(prereqIds) do
-        if not stagedOwnerPresent[prereqId]
-            or stagedOwners[prereqId] ~= attackingFaction then return false end
-    end
-    local enemyCapitalId = Overlord.Fronts.GetEnemyCapitalId
-        and Overlord.Fronts:GetEnemyCapitalId(attackingFaction, front.id) or nil
-    if zoneId == enemyCapitalId then
-        for _, otherZone in ipairs(front.zones or {}) do
-            if otherZone.id ~= zoneId and (not stagedOwnerPresent[otherZone.id]
-                or stagedOwners[otherZone.id] ~= attackingFaction) then return false end
-        end
-    end
-    return true
-end
-
 -- Recoit une liste compacte de zones avec proprietaire et timestamp (peer-to-peer cross-faction)
 function Overlord.Sync:OnReceiveZoneAll(
     payload, sender, loginElectionClaimKey, runtimeElectionClaimKey)
@@ -8051,6 +8353,7 @@ function Overlord.Sync:OnReceiveZoneAll(
             pendingZaSnapshot.receivedCount = pendingZaSnapshot.receivedCount + 1
         end
         pendingZaSnapshot.lastAt = now
+        if priv.mapNews and zaSnapshotScope == "P" then self:PostponeMapNews(zaPageBody) end
         local receivedCount = pendingZaSnapshot.receivedCount
         if receivedCount < zaPageCount then return end
 
@@ -8077,6 +8380,8 @@ function Overlord.Sync:OnReceiveZoneAll(
     -- un merge zone par zone. Les replays d'election portent explicitement leur
     -- claim key et ont deja force snapshotAtomic ci-dessus.
     if not snapshotAtomic then return end
+    -- 2.0.1 map news: is this the reply of a Battle.net friend of the other faction?
+    priv.mapNewsSource = self:MapNewsSource(sender)
 
     -- The same validated snapshot again within 30 s (another elected sender, a
     -- relayed copy): nothing to apply, skip the whole parse (3-8 ms per map).
@@ -8247,15 +8552,11 @@ function Overlord.Sync:OnReceiveZoneAll(
     -- entree peut converger depuis l'etat local actuel et si une capitale prise
     -- est valide dans la vue finale du lot entier.
     if snapshotAtomic and snapshotConsensusComplete then
-        local stagedOwners = {}
-        local stagedOwnerPresent = {}
         local stagedEntries = {}
         for entryIndex, entry in ipairs(entries) do
             local zoneId, ownerCode, ts, ct, owner = ParseZoneAllEntry(entry)
             local stateZone = Overlord.Zones:GetZone(zoneId)
                 or (Overlord.Fronts and select(1, Overlord.Fronts:GetZone(zoneId)))
-            stagedOwnerPresent[zoneId] = true
-            stagedOwners[zoneId] = owner or false
             stagedEntries[#stagedEntries + 1] = {
                 zoneId = zoneId, ownerCode = ownerCode, owner = owner,
                 ts = ts, ct = ct, zone = stateZone, entryIndex = entryIndex,
@@ -8294,14 +8595,9 @@ function Overlord.Sync:OnReceiveZoneAll(
                 }, ":")
                 if not localPart or localPart ~= remotePart then
                     preserveRemoteLeaseMask[entryIndex] = "mismatch"
-                    -- A remote value no newer than the wave's base stays local in the
-                    -- staged view (like a stale entry): it closes no other wave.
                     do
                         local base = stateZone._remoteCaptureLease.base
                         local baseAt = tonumber(base and base.capturedTime) or 0
-                        if ct <= baseAt then
-                            stagedOwners[zoneId] = (base and base.owner) or false
-                        end
                         -- 1.8.2: an owner older than the capture under the wave is a
                         -- stale entry, refused like one below (the wave and its base
                         -- stay). When that older owner was the attacker's, the map
@@ -8325,15 +8621,16 @@ function Overlord.Sync:OnReceiveZoneAll(
 
             -- Une capture locale encore active est l'unique autorite physique :
             -- aucun snapshot ne peut terminer une partie du lot autour d'elle.
-            if not preserveRemoteLease then
-                if stateZone.status == "in_progress" and stateZone.isHolding
-                    and stateZone.owner == Overlord.PlayerFaction then
-                    snapshotConsensusComplete = false
-                    break
-                end
-            end
+            -- 2.0.1: only the point we are capturing keeps its local state (the commit
+            -- below never touches it). The whole map used to be refused here: a player
+            -- who chains captures refused every map for as long as he captured, and
+            -- finished points and sieges on a map that lacked the enemy's captures.
+            local heldLocally = not preserveRemoteLease
+                and stateZone.status == "in_progress" and stateZone.isHolding
+                and stateZone.owner == Overlord.PlayerFaction
+            if heldLocally then staleSkipMask[entryIndex] = true end
 
-            local skipPairMutation = preserveRemoteLease
+            local skipPairMutation = preserveRemoteLease or heldLocally
             if loginPairRepairMode then
                 if loginUnconfirmed then
                     loginPairApplyMask[entryIndex] = true
@@ -8391,10 +8688,11 @@ function Overlord.Sync:OnReceiveZoneAll(
                 staleSkipMask[entryIndex] = true
                 if refusedLease then
                     preserveRemoteLeaseMask[entryIndex] = nil
-                    stagedOwners[zoneId] = (refusedLease.base and refusedLease.base.owner) or false
                     stagedEntries[#stagedEntries].owner = refusedLease.base and refusedLease.base.owner
+                elseif heldLocally then
+                    -- Staged at the owner under our own assault, like a followed one.
+                    stagedEntries[#stagedEntries].owner = stateZone.previousOwner
                 else
-                    stagedOwners[zoneId] = stateZone.owner or false
                     stagedEntries[#stagedEntries].owner = stateZone.owner
                 end
             end
@@ -8406,15 +8704,27 @@ function Overlord.Sync:OnReceiveZoneAll(
                     and staged.zone._remoteCaptureLease
                     and not staged.zone.holdAuthorityLocal
                     and not staleSkipMask[staged.entryIndex] then
-                    -- Une carte globale exacte peut prouver que la wave est
-                    -- impossible : cible deja possedee par l'attaquant, chaine
-                    -- de prerequis absente, ou capitale ouverte trop tot. Fermer
-                    -- sur le socle ZA certifie ; l'overlay n'a aucun droit de veto.
-                    if snapshotComplete and ((staged.owner ~= nil
-                            and staged.owner == staged.zone._remoteCaptureLease.owner)
-                        or not RemoteCaptureMeetsStagedPrereqs(
-                            staged.zoneId, staged.zone._remoteCaptureLease.owner,
-                            stagedOwners, stagedOwnerPresent)) then
+                    -- Une carte peut prouver que la wave est terminee : elle donne la
+                    -- cible a l'attaquant, avec une capture datee. Fermer sur le socle
+                    -- ZA certifie ; l'overlay n'a aucun droit de veto.
+                    -- 2.0.1: it is the only proof (the map gives the target to the
+                    -- attacker with a dated capture). Another one closed the wave
+                    -- when the merged map lacked the attacker's chain: a receiver that
+                    -- had not learnt the attacker's captures (the usual case across
+                    -- factions) cut its own alert and timer, and ignored the wave's ticks
+                    -- for ten minutes. A capturer is never judged on the receiver's map.
+                    -- 2.0.1: a partial map closes it on the same proof when the capture
+                    -- is dated after the wave was first seen here (the wave's own
+                    -- outcome, whose final did not reach us). Our map news are partial
+                    -- maps: on a client that still followed the siege, the capture they
+                    -- announced was dropped and the point went back to the defender
+                    -- when the wave timed out.
+                    -- Not before the siege could have reached its hold: a partial map
+                    -- cannot show a capture earlier than the capturer can make it.
+                    if (snapshotComplete or (Overlord.CaptureLease:MapEntryPostdates(
+                            staged.zone, staged.ct, true)
+                            and Overlord.CaptureLease:WaveCouldHaveFinished(staged.zone))) and (staged.owner ~= nil
+                            and staged.owner == staged.zone._remoteCaptureLease.owner) then
                         if preserveRemoteLeaseMask[staged.entryIndex] == "mismatch"
                             or preserveRemoteLeaseMask[staged.entryIndex]
                                 == "base_cleanup" then
@@ -8425,6 +8735,18 @@ function Overlord.Sync:OnReceiveZoneAll(
                     elseif preserveRemoteLeaseMask[staged.entryIndex] == "mismatch" then
                         if staged.loginUnconfirmed and snapshotComplete then
                             preserveRemoteLeaseMask[staged.entryIndex] = "rebase"
+                        elseif staged.owner ~= nil
+                            and staged.owner ~= staged.zone._remoteCaptureLease.owner
+                            and Overlord.CaptureLease:MapEntryPostdates(staged.zone, staged.ct)
+                            and not Overlord.CaptureLease:MapEntryPostdates(staged.zone, staged.ct, true) then
+                            -- 2.0.1: the defender's capture is newer than the one under
+                            -- the wave and older than the wave: the wave stays, on that
+                            -- capture. It was dropped, and a wave that ended without a
+                            -- capture put the older one back until a later whole map.
+                            -- A date inside the wave is never his (he cannot have taken
+                            -- the point since): written under the wave, it outdated the
+                            -- wave's own final, which was then refused as stale.
+                            preserveRemoteLeaseMask[staged.entryIndex] = "cleanup"
                         else
                             -- The two maps disagree on this orange zone only (one side
                             -- missed a capture there): keep its wave, apply the rest.
@@ -8482,6 +8804,13 @@ function Overlord.Sync:OnReceiveZoneAll(
     end
     if next(confirmedFlips) ~= nil then self:CommitZaFlipClaims({}, confirmedFlips, sender) end
     self._lastAcceptedZaPayload, self._lastAcceptedZaAt = payload, GetTime()
+    -- 2.0.1 map news: what a partial map heard first-hand on our channel states, our
+    -- channel has heard.
+    if zaSnapshotScope == "P" and Overlord.Relay and Overlord.Relay.IsDirectChannelDispatch
+        and Overlord.Relay:IsDirectChannelDispatch()
+        and not (Overlord.Relay.IsTargetedDispatch and Overlord.Relay:IsTargetedDispatch()) then
+        pcall(self.DropHeardMapNews, self, entries, staleSkipMask)
+    end
     if snapshotGlobal then self:NoteMapBatch(sender, "accepted") end
     -- Carte globale validee : le relais n'a pas besoin de redemander la carte a
     -- chaque nouveau pair entendu dans la foulee. Une carte rejetee, ou dont chaque
@@ -8501,6 +8830,7 @@ function Overlord.Sync:OnReceiveZoneAll(
         if z.owner then hasAnyLocalData = true; break end
     end
 
+    priv.mapNewsBefore = priv.mapNewsSource and self:SafeMapNewsView(entries) or nil
     for entryIndex, entry in ipairs(entries) do
         -- 4e champ (capturedTime) optionnel pour retro-compat avec anciens clients
         local zoneId, ownerCode, ts, ct, owner = ParseZoneAllEntry(entry)
@@ -8733,8 +9063,8 @@ function Overlord.Sync:OnReceiveZoneAll(
                     -- alors que la Horde controle 9 zones).
                     if not dominated then
                         local fixedOwner = Overlord.Zones:GetBaseZoneFixedOwner(zoneId)
-                        -- Les lots atomiques ont deja valide la capitale contre
-                        -- stagedOwners (socles certifies, sans overlays orange).
+                        -- Les lots atomiques ne passent pas ce controle : une capitale
+                        -- prise est une entree comme une autre, classee par date (1.8.2).
                         -- Relire ici zone.owner recreerait un veto apres dry-run.
                         if not snapshotAtomic and fixedOwner and owner ~= fixedOwner then
                             local allControlled = true
@@ -8914,7 +9244,14 @@ function Overlord.Sync:OnReceiveZoneAll(
     -- (pcall : une ligne de chat qui echoue ne doit pas couper la fin de l'application
     -- de la carte, juste en dessous.)
     pcall(self.FlushMapCatchupNotice, self)
+    if priv.mapNewsBefore then
+        -- (Our presence follows the announcement: see FlushMapNews. A map that taught
+        -- us nothing we announce leaves the presence to its 120 s beat.)
+        pcall(self.QueueMapNews, self, entries, priv.mapNewsBefore, sender)
+        priv.mapNewsBefore = nil
+    end
     if changed then
+        if Overlord.Relay and Overlord.Relay.MapChanged then Overlord.Relay:MapChanged() end
         Overlord.Zones:UpdateAvailableZones(
             loginPairRepairMode or runtimeGlobalRepairMode)
         Overlord:MarkDirty()
@@ -11072,6 +11409,7 @@ function Overlord.Sync:ResetVictoryFlag()
     -- Nouvelle campagne : la memoire de la garde des bascules ZA (trafic vu, demandes
     -- en attente, dernier ZA accepte) date de la semaine passee.
     wipe(priv.liveZoneSeenAt)
+    wipe(priv.liveZoneOwner)
     priv.liveZoneLastAt = nil
     if priv.zaFlipClaims then wipe(priv.zaFlipClaims) end
     self._lastAcceptedZaPayload, self._lastAcceptedZaAt = nil, nil

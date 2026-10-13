@@ -210,8 +210,13 @@ do
         deliver(pages)
         assert(state(Y) == "Horde@" .. (EPOCH + 2600),
             "one disputed orange zone rejected the whole map (" .. (senderZ - EPOCH) .. "): " .. state(Y))
-        assert(z.status == "in_progress" and z._remoteCaptureLease == lease
-            and lease.base.capturedTime == EPOCH + 800, "the disputed orange zone lost its wave")
+        assert(z.status == "in_progress" and z._remoteCaptureLease == lease and z.owner == "Horde",
+            "the disputed orange zone lost its wave")
+        -- 2.0.1: the defender's newer capture goes under the wave (it was dropped, and a
+        -- wave that ended without a capture put the older one back); an older one never.
+        assert(lease.base.owner == "Alliance" and lease.base.capturedTime == math.max(senderZ, EPOCH + 800),
+            "the capture under the wave after a map dated " .. (senderZ - EPOCH) .. ": "
+            .. tostring((lease.base.capturedTime or 0) - EPOCH))
         assert(sync._lastFullZaAt, "an accepted map was not recorded")
         z._remoteCaptureLease = nil
         set(Z, "Alliance", EPOCH + 800)
@@ -293,11 +298,13 @@ print("Partial merge: a truce-refused entry on an orange zone keeps its wave")
 -- never learnt the capture, a flip held while the zone is followed live) keep the
 -- wave too, and no longer get the whole map rejected.
 do
-    local function orangeX()
+    local function orangeX(baseOwner)
         local zx = zoneOf(X)
         local lease = { owner = "Horde", originKey = "bob tester", waveId = "w3",
-            base = { owner = "Alliance", status = "captured", capturedTime = EPOCH + 2000, updatedAt = EPOCH + 2000 } }
-        zx._remoteCaptureLease, zx.status, zx.owner, zx.previousOwner = lease, "in_progress", "Horde", "Alliance"
+            base = { owner = baseOwner, status = baseOwner and "captured" or "available",
+                capturedTime = baseOwner and EPOCH + 2000 or nil, updatedAt = EPOCH + 2000 } }
+        zx._remoteCaptureLease, zx.status, zx.owner, zx.previousOwner = lease, "in_progress", "Horde", baseOwner
+        if not baseOwner then zx.capturedTime = nil end
         return zx, lease
     end
     local commitPlan = Overlord.CaptureLease.CommitRemoteStablePlan
@@ -306,24 +313,26 @@ do
         return commitPlan(lease_, plan)
     end
     local cases = {
-        { "unproven N", function() setN(X, EPOCH + 5000) end, function() end },
+        { "unproven N", function() setN(X, EPOCH + 5000) end, function() end, "Alliance" },
+        -- 2.0.1: a flip is a change of the owner UNDER the wave (here nobody held the
+        -- point); the defender's own newer capture is none (see 1k).
         { "held flip", function() set(X, "Alliance", EPOCH + 3000) end, function()
             sync:GetPriv().zaFlipClaims[X] = nil
             sync:NoteLiveZoneTraffic(X)
-        end },
+        end, nil },
     }
     for i, case in ipairs(cases) do
         case[2](); set(Y, "Horde", EPOCH + 2600 + i)
         local pages = snapshot()
         set(X, "Alliance", EPOCH + 2000); set(Y, "Alliance", EPOCH + 500)
-        local zx, lease = orangeX()
+        local zx, lease = orangeX(case[4])
         case[3]()
         sync._lastFullZaAt = nil
         deliver(pages)
         assert(state(Y) == "Horde@" .. (EPOCH + 2600 + i),
             "an orange zone's " .. case[1] .. " rejected the whole map: " .. state(Y))
         assert(zx._remoteCaptureLease == lease and zx.status == "in_progress"
-            and lease.base.owner == "Alliance" and lease.base.capturedTime == EPOCH + 2000,
+            and lease.base.owner == case[4] and (lease.base.capturedTime or 0) == (case[4] and EPOCH + 2000 or 0),
             "an orange zone's " .. case[1] .. " closed or rebased its wave")
         assert(sync._lastFullZaAt, "the map with an orange zone's " .. case[1] .. " was not recorded")
         assert(i ~= 2 or sync:GetPriv().zaFlipClaims[X], "the flip was not held (vacuous case)")
@@ -335,30 +344,154 @@ do
 end
 print("Partial merge: an unproven N or a held flip on an orange zone keeps its wave, the map merges")
 
--- (1i) A flip confirmed by the 5-minute cap arrives in a map the dry run refuses (we are
--- capturing another zone ourselves): the confirmation is kept, and the next accepted
--- map applies the flip at once instead of holding it for another 5 minutes.
+-- (1i) 2.0.1: a map that arrives while we capture a point ourselves is merged like any
+-- other. The whole map used to be refused: a player who chains captures learnt nothing
+-- by map for as long as he captured, and finished points and sieges on a map that
+-- lacked the enemy's captures (2026-10-12, Ashenvale: both capitals besieged at once).
+-- Only the point we hold keeps its local state; a flip confirmed by the 5-minute cap
+-- is applied at once.
 do
     set(X, "Horde", EPOCH + 3000); set(Y, "Horde", EPOCH + 2700)
     local pages = snapshot()
-    set(X, "Alliance", EPOCH + 2000); set(Y, "Alliance", EPOCH + 500)
+    set(X, "Alliance", EPOCH + 2000); set(Y, "Horde", EPOCH + 500)
     sync:NoteLiveZoneTraffic(X)
     local claims = sync:GetPriv().zaFlipClaims
     claims[X] = { owner = "Horde", ct = EPOCH + 3000, sender = "seed", firstAt = GetTime() - 301, at = GetTime() - 301 }
-    local firstAt = claims[X].firstAt
     local zy = zoneOf(Y)
-    zy.status, zy.isHolding, zy.holdAuthorityLocal, zy.owner = "in_progress", true, true, "Alliance"
+    zy.status, zy.isHolding, zy.holdAuthorityLocal = "in_progress", true, true
+    zy.owner, zy.previousOwner, zy.holdTimeElapsed = "Alliance", "Horde", 60
+    sync._lastFullZaAt = nil
     deliver(pages)
-    assert(state(X) == "Alliance@" .. (EPOCH + 2000), "a map refused by the dry run applied a flip: " .. state(X))
-    assert(claims[X] and claims[X].firstAt == firstAt, "a refused map consumed the flip's confirmation")
-    set(Y, "Alliance", EPOCH + 500)
-    zy.isHolding, zy.holdAuthorityLocal = false, nil
-    deliver(pages)
-    assert(state(X) == "Horde@" .. (EPOCH + 3000), "the confirmed flip was held again: " .. state(X))
+    assert(state(X) == "Horde@" .. (EPOCH + 3000),
+        "a map received while we capture another point was refused as a whole: " .. state(X))
     assert(claims[X] == nil, "an applied flip kept its claim")
+    assert(zy.status == "in_progress" and zy.isHolding and zy.holdAuthorityLocal and zy.owner == "Alliance"
+        and zy.previousOwner == "Horde" and zy.holdTimeElapsed == 60 and zy.capturedTime == EPOCH + 500,
+        "the point we are capturing was touched by the map: " .. tostring(zy.status) .. "/" .. tostring(zy.owner))
+    assert(sync._lastFullZaAt, "the map merged around our own capture was not recorded as received")
+    zy.status, zy.isHolding, zy.holdAuthorityLocal, zy.previousOwner, zy.holdTimeElapsed = "captured", false, nil, nil, 0
     set(X, "Alliance", EPOCH + 2000); set(Y, "Alliance", EPOCH + 500)
 end
-print("Partial merge: a flip confirmation survives a map refused while we capture elsewhere")
+print("Partial merge: a map received while we capture a point is merged around it")
+
+-- (1j) 2.0.1: a complete map no longer closes a followed siege because the merged map
+-- lacks the attacker's chain. A receiver that has not learnt the attacker's captures
+-- (the usual case across factions) cut its own alert and timer, and ignored the wave's
+-- ticks for ten minutes. A capturer is never judged on the receiver's map.
+do
+    local W, P, N = "ash_iris_lake", "ash_raynewood", "durotar_razor_hill"
+    set(P, "Alliance", EPOCH + 100); set(W, "Alliance", EPOCH + 900); set(N, "Horde", EPOCH + 3200)
+    local pages = snapshot()
+    set(N, "Alliance", EPOCH + 2000)
+    local zw = zoneOf(W)
+    local lease = { owner = "Horde", originKey = "bob tester", waveId = "w9",
+        base = { owner = "Alliance", status = "captured", capturedTime = EPOCH + 900, updatedAt = EPOCH + 900 } }
+    zw._remoteCaptureLease, zw.status, zw.owner, zw.previousOwner = lease, "in_progress", "Horde", "Alliance"
+    deliver(pages)
+    assert(state(N) == "Horde@" .. (EPOCH + 3200), "fixture: the map was not merged: " .. state(N))
+    assert(zw._remoteCaptureLease == lease and zw.status == "in_progress" and zw.owner == "Horde",
+        "a followed siege was closed because our map lacks the attacker's chain: " .. tostring(zw.status))
+    -- The proof that still closes it: the map gives the target to the attacker, dated.
+    set(W, "Horde", EPOCH + 3300)
+    zw._remoteCaptureLease = nil
+    pages = snapshot()
+    set(W, "Alliance", EPOCH + 900)
+    zw._remoteCaptureLease, zw.status, zw.owner, zw.previousOwner = lease, "in_progress", "Horde", "Alliance"
+    deliver(pages)
+    assert(state(W) == "Horde@" .. (EPOCH + 3300) and zw.status == "captured" and not zw._remoteCaptureLease,
+        "a map that gives the point to the attacker did not end the siege: " .. state(W) .. " " .. tostring(zw.status))
+    set(W, "Alliance", EPOCH + 900); set(N, "Alliance", EPOCH + 2000)
+end
+print("Partial merge: a followed siege is not closed for a chain our map lacks")
+
+-- (1k) 2.0.1: a partial map (our map news are partial maps) that gives a followed point
+-- to its attacker, dated after the siege was first seen here, ends the siege on that
+-- capture: it is the siege's own outcome, whose final did not reach us. The entry was
+-- dropped, and the point went back to the defender when the siege timed out. An older
+-- capture of the attacker (before the siege) still closes nothing. The point's ticks are
+-- live traffic: the defender's newer capture is no flip to hold (the owner under the
+-- wave does not change).
+do
+    local W, T = "ash_iris_lake", time()
+    local zw = zoneOf(W)
+    local function followed(wave)
+        set(W, "Alliance", T - 4000)
+        local lease = { owner = "Horde", originKey = "bob tester", waveId = wave, openedAt = GetTime() - 150,
+            base = { owner = "Alliance", status = "captured", capturedTime = T - 4000, updatedAt = T - 4000 } }
+        zw._remoteCaptureLease, zw.status, zw.owner, zw.previousOwner = lease, "in_progress", "Horde", "Alliance"
+        sync:NoteLiveZoneTraffic(W, "Horde")
+        return lease
+    end
+    local function news(owner, ct)
+        zw._remoteCaptureLease = nil
+        set(W, owner, ct)
+        local pages, count = sync:BuildZoneAllSnapshotPages({ zw }, "P")
+        assert(count == 1 and pages[1]:match("^@P%-"), "fixture: not a one-page partial map")
+        return pages
+    end
+    local pages = news("Horde", T - 900)
+    local lease = followed("k1")
+    deliver(pages)
+    assert(zw._remoteCaptureLease == lease and zw.status == "in_progress" and lease.base.capturedTime == T - 4000,
+        "a capture of the attacker older than the siege closed it: " .. state(W) .. " " .. tostring(zw.status))
+    pages = news("Alliance", T - 900)
+    lease = followed("k2")
+    deliver(pages)
+    assert(zw._remoteCaptureLease == lease and zw.status == "in_progress" and zw.owner == "Horde"
+        and lease.base.owner == "Alliance" and lease.base.capturedTime == T - 900,
+        "the defender's newer capture did not go under the followed siege: " .. tostring(lease.base.capturedTime - T))
+    assert(sync:GetPriv().zaFlipClaims[W] == nil, "the defender's own newer capture was held as a flip")
+    -- A date inside the siege is never the defender's (he cannot have taken the point
+    -- since): written under the wave it outdated the wave's own final, refused as stale.
+    -- It stays out, held like any surprising entry on a point with live traffic.
+    pages = news("Alliance", T - 20)
+    lease = followed("k2b")
+    deliver(pages)
+    assert(zw._remoteCaptureLease == lease and zw.status == "in_progress" and zw.owner == "Horde"
+        and lease.base.owner == "Alliance" and lease.base.capturedTime == T - 4000 and zw.capturedTime == T - 4000,
+        "a defender's capture dated inside the siege went under it: " .. tostring(lease.base.capturedTime - T))
+    assert(Overlord.CaptureLease:MapEntryPostdates(zw, T - 20, true)
+        and not Overlord.CaptureLease:MapEntryPostdates(zw, T - 181, true)
+        and Overlord.CaptureLease:MapEntryPostdates(zw, T - 179, true)
+        and not Overlord.CaptureLease:MapEntryPostdates(zw, T - 4000, false),
+        "the wave's own window (first seen 150 s ago, 30 s margin) is not the expected one")
+    lease.openedAt = nil
+    assert(not Overlord.CaptureLease:MapEntryPostdates(zw, T - 60, true)
+        and Overlord.CaptureLease:MapEntryPostdates(zw, T - 20, true),
+        "a wave without a first-seen time is not taken as first seen now")
+    sync:GetPriv().zaFlipClaims[W] = nil
+    -- The same once the hold no longer applies (here: no live traffic noted on the
+    -- point; in game: a second source, five minutes, or a friend's reply): the entry
+    -- reaches the plan of the wave and still stays out of it.
+    pages = news("Alliance", T - 21) -- (another date: an identical map is not parsed twice)
+    lease = followed("k2c")
+    sync:GetPriv().liveZoneSeenAt[W] = nil
+    deliver(pages)
+    assert(sync:GetPriv().zaFlipClaims[W] == nil, "fixture: the entry was held, the wave's plan was not reached")
+    assert(zw._remoteCaptureLease == lease and zw.status == "in_progress"
+        and lease.base.capturedTime == T - 4000 and zw.capturedTime == T - 4000,
+        "a defender's capture dated inside the siege went under it once the hold was over: "
+        .. tostring(lease.base.capturedTime - T))
+    -- Not before the siege could have reached its hold (first seen ten seconds ago,
+    -- two minutes to hold): a partial map cannot show the capture that early.
+    pages = news("Horde", T - 2)
+    lease = followed("k2d")
+    lease.openedAt = GetTime() - 10
+    deliver(pages)
+    assert(zw._remoteCaptureLease == lease and zw.status == "in_progress" and lease.base.capturedTime == T - 4000,
+        "a partial map ended a siege that had only just begun: " .. state(W) .. " " .. tostring(zw.status))
+    assert(not Overlord.CaptureLease:WaveCouldHaveFinished(zw), "fixture: ten seconds counted as a whole hold")
+    lease.openedHold = 100
+    assert(Overlord.CaptureLease:WaveCouldHaveFinished(zw), "the hold already made when first seen is not counted")
+    pages = news("Horde", T - 20)
+    lease = followed("k3")
+    deliver(pages)
+    assert(state(W) == "Horde@" .. (T - 20) and zw.status == "captured" and not zw._remoteCaptureLease,
+        "a partial map that announces the siege's capture did not end it: " .. state(W) .. " " .. tostring(zw.status))
+    zw._remoteCaptureLease = nil
+    set(W, "Alliance", EPOCH + 900)
+end
+print("Partial merge: a partial map that announces a followed siege's capture ends it")
 assert(loadfile("SyncRelay.lua"))()
 Overlord.RelayEnabled, Overlord.CommunityModeEnabled = true, false
 Overlord.InActiveFront, Overlord.InstanceSuspended = true, false

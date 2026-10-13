@@ -155,9 +155,14 @@ function methods:SetText(text)
     if self.scripts.OnTextChanged then self.scripts.OnTextChanged(self) end
 end
 function methods:GetText() return self.text or '' end
+function methods:SetTextColor(r, g, b) self.color = r .. ',' .. g .. ',' .. b end
 function methods:GetStringWidth() return #tostring(self.text or '') * 6 end
 function methods:GetStringHeight() return 12 end
-function methods:SetPoint(...) self.point = {...} end
+function methods:SetPoint(...)
+    self.point = {...}
+    self.points = self.points or {}
+    self.points[(...)] = self.point
+end
 setmetatable(methods, { __index = function(_, key)
     if key:match('^Set') or key:match('^Register') or key:match('^Enable') or key == 'ClearAllPoints'
         or key == 'ClearFocus' then return function() end end
@@ -306,6 +311,126 @@ assert(tip.lines[2]:find("12", 1, true), "Ranked member count missing: " .. tost
 assert(tip.lines[3] == "1. Ana Bel = 40" and tip.lines[4] == "2. Bo Rin = 30", "Top members wrong")
 assert(tip.lines[5] and tip.lines[5]:find("10", 1, true), "Remaining members not stated")
 assert(guildRow.scripts.OnMouseWheel, "Mouse wheel over a guild row no longer scrolls")
+-- One guild table: members, HK and rating side by side. It is sorted by rating, and a
+-- click on the HK or Rating header changes the order. The window keeps its width; the
+-- keep and outpost tables share the room a separate rating table would take.
+assert(frame.guildBlock.points.LEFT[2] == frame.leftStackAnchor
+    and frame.guildKeepBlock.points.LEFT[2] == frame.guildBlock
+    and frame.outpostBlock.points.LEFT[2] == frame.guildKeepBlock,
+    'Table order is not players, guilds, keeps, outposts')
+-- Every table is named above its column headers (the two capture lists already were).
+local titles = {}
+for _, key in ipairs({ 'killsTitle', 'guildTitle', 'guildKeepTitle', 'outpostTitle' }) do
+    local strip = assert(frame[key], 'No title above a table: ' .. key)
+    titles[#titles + 1] = strip.title.text
+end
+assert(table.concat(titles, ' | ') == 'Player kills | Guilds | Guild Keeps | Guild outposts',
+    'Table titles: ' .. table.concat(titles, ' | '))
+assert(frame.killsTitle.parent == frame.headerBand and frame.sitesWeek.title.title.text == 'Capturers and rivalries',
+    'A title does not follow its table, or the weekly view has none')
+assert(frame.width == 1550, "The ranking window changed width: " .. tostring(frame.width))
+assert(frame.guildRatingBlock == nil and frame.guildBlock.width == 372
+    and frame.guildKeepBlock.width == 336 and frame.outpostBlock.width == 336,
+    "Column widths: the four tables no longer add up to the window")
+local function guildRowsShown()
+    local count, byRank = 0, {}
+    for _, w in ipairs(frames) do
+        if w._olGuildEntry and w:IsShown() then count = count + 1; byRank[w.rank.text] = w end
+    end
+    return count, byRank
+end
+-- No rating yet (a preview saved before it existed): the guilds are listed by kills,
+-- the rating cell waits.
+frame.scrollGuild:SetVerticalScroll(0); drain()
+local guildCount, guildByRank = guildRowsShown()
+assert(guildByRank[1] and guildByRank[1].name.text == 'Guild 1' and guildByRank[1].kills.text == 6000
+    and guildByRank[1].points.text == '-', 'Guilds without a rating are not listed by kills')
+Overlord.Leaderboard.GUILD_RATING_POINTS = { zone = 50, outpost = 75, keep = 100 }
+Overlord.Leaderboard.GetGuildRating = function(_, guild)
+    return guild == 'Guild 1' and { points = 7777, kills = 6000, zones = 1, outposts = 0, keeps = 0 } or nil
+end
+source.sortedGuildRating = {}
+for i = 1, 300 do
+    source.sortedGuildRating[i] = { guild = 'Rated ' .. i, points = 90000 - i * 100, kills = 60000 - i * 100,
+        zones = 4, outposts = 2, keeps = 0, faction = i % 2 == 0 and 'Horde' or 'Alliance' }
+end
+-- The second guild by kills is fifth by rating: its HK keep their silver there.
+source.sortedGuildRating[5].guild = 'Guild 2'
+local framesWithGuilds = #frames
+ui:Refresh(); drain()
+-- By default the table stays sorted by kills (the HK column carries the arrow), with
+-- each guild's rating next to it. A click on Rating sorts by the rating.
+local sortHeaders = frame.guildSortHeaders
+guildCount, guildByRank = guildRowsShown()
+assert(guildByRank[1] and guildByRank[1].name.text == 'Guild 1' and guildByRank[1].points.text == 7777
+    and sortHeaders.kills.arrow:IsShown() and not sortHeaders.rating.arrow:IsShown(),
+    'The guild table is not sorted by kills by default: ' .. tostring(guildByRank[1] and guildByRank[1].name.text))
+OverlordDB = OverlordDB or {}
+OverlordDB.config = OverlordDB.config or {}
+sortHeaders.rating.scripts.OnClick(sortHeaders.rating); drain()
+guildCount, guildByRank = guildRowsShown()
+local ratingRow = guildByRank[1]
+assert(ratingRow and ratingRow.name.text == 'Rated 1' and ratingRow.kills.text == 59900
+    and ratingRow.points.text == 89900, 'The guild table is not sorted by rating: '
+    .. tostring(ratingRow and ratingRow.name.text))
+assert(guildCount > 1 and guildCount < 40 and #frames == framesWithGuilds,
+    'The rating made frames of its own: ' .. guildCount)
+local GOLD, SILVER, BRONZE = '1,0.84,0', '0.75,0.75,0.75', '0.8,0.5,0.2'
+assert(ratingRow.points.color == GOLD and guildByRank[2].points.color == SILVER
+    and guildByRank[3].points.color == BRONZE and guildByRank[4].points.color ~= GOLD
+    and guildByRank[4].points.color ~= BRONZE, 'Rating medals: gold, silver, bronze on the first three')
+assert(guildByRank[5].name.text == 'Guild 2' and guildByRank[5].kills.color == SILVER
+    and ratingRow.kills.color ~= GOLD, 'Sorted by rating, the HK medal does not follow the kill rank')
+assert(sortHeaders.rating.arrow:IsShown() and not sortHeaders.kills.arrow:IsShown()
+    and OverlordDB.config.leaderboardGuildSort == 'rating', 'The sort arrow or the saved choice is not on the Rating column')
+-- Hover: the members as before, then where the points come from, one line per kind
+-- of capture the guild made (none for the keeps it did not take).
+ratingRow.scripts.OnEnter(ratingRow)
+local at
+for i, line in ipairs(tip.lines) do if line == '89900 points' then at = i end end
+assert(tip.lines[1] == '<Rated 1>' and at and at > 2, 'Guild hover lost its members or its rating')
+assert(tip.lines[at + 1] == 'Honorable kills = 59900' and tip.lines[at + 2] == 'Front points (4 x 50) = 200'
+    and tip.lines[at + 3] == 'Outposts (2 x 75) = 150' and tip.lines[at + 4] == nil,
+    'Guild hover does not say where the points come from: ' .. tostring(tip.lines[at + 2]))
+frame.scrollGuild:SetVerticalScroll(frame.scrollGuild:GetVerticalScrollRange()); drain()
+guildCount, guildByRank = guildRowsShown()
+assert(guildByRank[300] and guildByRank[300].name.text == 'Rated 300', 'Scrolling cannot reach the last rated guild')
+assert(#frames == framesWithGuilds, 'Scrolling the guilds allocated frames')
+frame.searchBox:SetText('rated 250'); drain()
+guildCount, guildByRank = guildRowsShown()
+assert(#frame._lbView.sortedGuildRating == 1 and guildCount == 1 and guildByRank[250]
+    and guildByRank[250].name.text == 'Rated 250', 'Search renumbered or missed the rated guilds')
+frame.searchClear.scripts.OnClick(); drain()
+assert(#frame._lbView.sortedGuildRating == 300 and #frames == framesWithGuilds)
+-- A click on the HK header: the same table by kills, back at the top, each guild's
+-- rating read from the display cache; the choice is kept.
+OverlordDB = OverlordDB or {}
+OverlordDB.config = OverlordDB.config or {}
+frame.scrollGuild:SetVerticalScroll(240)
+sortHeaders.kills.scripts.OnClick(sortHeaders.kills); drain()
+guildCount, guildByRank = guildRowsShown()
+assert(frame.scrollGuild:GetVerticalScroll() == 0 and guildByRank[1].name.text == 'Guild 1'
+    and guildByRank[1].kills.text == 6000 and guildByRank[1].points.text == 7777
+    and guildByRank[2].name.text == 'Guild 2' and guildByRank[2].points.text == '-',
+    'A click on HK did not sort the guilds by kills')
+assert(guildByRank[1].kills.color == GOLD and guildByRank[2].kills.color == SILVER
+    and guildByRank[3].kills.color == BRONZE and guildByRank[4].kills.color ~= BRONZE,
+    'Sorted by kills, the HK lost their gold, silver and bronze')
+assert(sortHeaders.kills.arrow:IsShown() and not sortHeaders.rating.arrow:IsShown()
+    and OverlordDB.config.leaderboardGuildSort == 'kills', 'The sort arrow or the saved choice did not follow')
+guildByRank[1].scripts.OnEnter(guildByRank[1])
+at = nil
+for i, line in ipairs(tip.lines) do if line == '7777 points' then at = i end end
+assert(at and tip.lines[at + 2] == 'Front points (1 x 50) = 50', 'Sorted by kills, the hover lost the rating')
+sortHeaders.rating.scripts.OnEnter(sortHeaders.rating)
+assert(tip.lines[1] == 'Guild rating' and tip.lines[#tip.lines] == 'Click to sort by this column.',
+    'The Rating header does not explain itself')
+sortHeaders.rating.scripts.OnClick(sortHeaders.rating); drain()
+guildCount, guildByRank = guildRowsShown()
+assert(guildByRank[1].name.text == 'Rated 1' and OverlordDB.config.leaderboardGuildSort == 'rating',
+    'A click on Rating did not sort back by rating')
+ratingRow = guildByRank[1]
+ratingRow.scripts.OnMouseWheel(ratingRow, 1)
 -- Ranking sync badge (1.8.1): one frame next to the title, hidden without catch-up
 -- state, arrow animated while syncing, check when up to date (pulsing when live
 -- totals grow), hidden in an instance, animation stopped when the panel closes.

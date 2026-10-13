@@ -3,7 +3,7 @@ Overlord = Overlord or {}
 Overlord.LeaderboardSearch = {}
 local Search = Overlord.LeaderboardSearch
 local EMPTY = {}
-local FIELDS = { "sortedKills", "sortedGuilds", "sortedGuildKeeps", "sortedOutposts" }
+local FIELDS = { "sortedKills", "sortedGuilds", "sortedGuildRating", "sortedGuildKeeps", "sortedOutposts" }
 local MAX_ROWS_PER_SLICE, SLICE_MS = 256, 0.4
 
 -- Lua 5.1 lowercases ASCII only for UTF-8 strings. Fold the two-byte letters

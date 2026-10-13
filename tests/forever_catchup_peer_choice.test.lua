@@ -125,6 +125,31 @@ do
     check("silent neighbour skipped on the next attempt", order[2] == "Other Ally", order[2])
 end
 
+-- 2b. An unanswered pull moves the saved rotation on at once: after a /reload (the
+-- set-aside list is forgotten) another neighbour is asked first.
+do
+    local peers = {
+        { name = "Mute Ally", faction = "Alliance", hops = 1 },
+        { name = "Next Ally", faction = "Alliance", hops = 1 },
+    }
+    local w = world(peers, "Alliance")
+    assert(w.start(), "round not scheduled")
+    w.advance(24 + 60)
+    local first = w.hr()[1] and w.hr()[1].target
+    check("a neighbour is asked", first == "Mute Ally", first)
+    check("the rotation waits for the answer", w.e.OverlordDB.leaderboardHistoryCatchupTargetRotation == 0,
+        w.e.OverlordDB.leaderboardHistoryCatchupTargetRotation)
+    w.advance(270)
+    local saved = w.e.OverlordDB.leaderboardHistoryCatchupTargetRotation
+    check("an unanswered pull moves the rotation on before the round ends", saved == 1, saved)
+    local again = world(peers, "Alliance")
+    again.e.OverlordDB.leaderboardHistoryCatchupTargetRotation = saved
+    assert(again.start(), "round not scheduled after the reload")
+    again.advance(24 + 60)
+    local after = again.hr()[1] and again.hr()[1].target
+    check("after a reload another neighbour is asked first", after == "Next Ally", after)
+end
+
 -- 3. With only peers behind relays, nothing is requested at all.
 do
     local w = world({

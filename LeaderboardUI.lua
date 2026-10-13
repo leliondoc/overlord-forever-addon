@@ -20,14 +20,18 @@ local CAPTURE_ROW_HEIGHT = 30
 local GUILD_ROW_HEIGHT = 24
 local VIRTUAL_ROW_OVERSCAN = 2
 local GUILD_KEEP_ICON = 18
--- Colonne droite : tués guildes puis fortins (deux panneaux côte à côte)
+-- Colonne droite : guildes, puis fortins et avant-postes
 local LB_MAIN_W = 418
--- 1.7.1 : guildes plus larges (colonne Membres) ; fortins et avant-postes rendent
--- 44 px chacun en gardant leurs colonnes centrees : la fenetre garde sa largeur.
-local LB_GUILD_KILLS_W = 296
-local LB_GUILD_KEEP_W = 374
-local LB_OUTPOST_W = 374
+-- Guildes : un seul tableau, tues et cote cote a cote (372 px). Fortins et avant-postes
+-- se partagent le reste a egalite ; la fenetre garde sa largeur (1550).
+local LB_GUILD_KILLS_W = 372
+local LB_GUILD_KEEP_W = 336
+local LB_OUTPOST_W = 336
 local LB_COL_GAP = 12
+-- Cote des guildes (tues + captures) : derniere colonne du tableau des guildes, 296..354,
+-- le rail de defilement a sa droite. Le tri et l'infobulle vivent dans cette table (pas
+-- de local de plus au niveau du fichier).
+local GuildRating = { COL_POINTS = 139, POINTS_W = 58 }
 -- Marge interieure : le cadre en bois des panneaux Blizzard est epais.
 local LB_FRAME_PAD = 26
 -- Le classement s'affiche 20 % plus grand que l'echelle de l'interface Overlord
@@ -42,25 +46,26 @@ local LB_KEYART = {
 }
 local LB_FRAME_W = LB_FRAME_PAD + LB_MAIN_W + LB_COL_GAP + LB_GUILD_KILLS_W + LB_COL_GAP
     + LB_GUILD_KEEP_W + LB_COL_GAP + LB_OUTPOST_W + LB_FRAME_PAD
--- Colonnes guildes (tues) sur panneau 208. VH elargi a 58 px : les totaux de
--- guilde depassent 10 000 (5-6 chiffres) ; le rang reserve quatre chiffres.
--- Rang 8..40, nom 44..156, membres 160..220, VH 224..282 (centre du panneau a 148).
-local LB_GUILD_COL_RANK = -124
-local LB_GUILD_COL_NAME = -48
-local LB_GUILD_COL_MEMBERS = 42
-local LB_GUILD_COL_KILLS = 105
-local LB_GUILD_NAME_W = 112
+-- Colonnes guildes sur panneau 372 (centre a 186) : rang 8..40, nom 44..172,
+-- membres 174..234, VH 236..294, cote 296..354. VH sur 58 px : les totaux de guilde
+-- depassent 10 000 (5-6 chiffres) ; le rang reserve quatre chiffres.
+local LB_GUILD_COL_RANK = -162
+local LB_GUILD_COL_NAME = -78
+local LB_GUILD_COL_MEMBERS = 18
+local LB_GUILD_COL_KILLS = 79
+local LB_GUILD_NAME_W = 128
 local LB_GUILD_RANK_W = 32
 local LB_GUILD_MEMBERS_W = 60
 local LB_GUILD_KILLS_TEXT_W = 58
--- Fortins : 3 colonnes equidistantes (fort -100, guilde 0, captures +100). Panneau de
--- 374 (centre a 187) : icone + nom 8..122, guilde 125..249, captures 257..317.
+-- Fortins : 3 colonnes (fort, guilde, captures). Panneau de 336 (centre a 168) :
+-- icone + nom 8..130, guilde 134..244, captures 246..306 (60 px : « Eroberungen ») ; les
+-- 30 px de droite restent au bouton de l'en-tete des avant-postes et au rail.
 local LB_GK_KEEP_LEFT = 8
-local LB_GK_KEEP_NAME_W = 92
-local LB_GK_COL_KEEP = -100
-local LB_GK_COL_GUILD = 0
-local LB_GK_COL_WINS = 100
-local LB_GK_GUILD_NAME_W = 124
+local LB_GK_KEEP_NAME_W = 100
+local LB_GK_COL_KEEP = -99
+local LB_GK_COL_GUILD = 21
+local LB_GK_COL_WINS = 106
+local LB_GK_GUILD_NAME_W = 110
 local LB_GK_WINS_W = 60
 -- Avant-postes : 3 colonnes (site, guilde, captures)
 local LB_OP_OUTPOST_LEFT = LB_GK_KEEP_LEFT
@@ -805,6 +810,55 @@ local function CreateOfficialSubPanel(parent, w, h, P, opts)
     return f
 end
 
+-- Titre d'un tableau, au-dessus de son bandeau de colonnes : le nom du tableau dans la
+-- police du titre de la fenetre, entre deux filets dores qui s'effacent vers les bords.
+-- Enfant du bandeau : il suit son tableau quand un volet le remplace. Cree une fois,
+-- rien a l'affichage.
+Overlord.LeaderboardUI.TABLE_TITLE_H = 22
+function Overlord.LeaderboardUI.AddTableTitle(anchor, text, P)
+    local strip = CreateFrame("Frame", nil, anchor)
+    strip:SetHeight(Overlord.LeaderboardUI.TABLE_TITLE_H - 2)
+    strip:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", 0, 10)
+    strip:SetPoint("BOTTOMRIGHT", anchor, "TOPRIGHT", 0, 10)
+    local fs = strip:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    local ui = Overlord.UI
+    local path = ui and ui.ResolveLocalizedFontPath
+        and ui.ResolveLocalizedFontPath(Fancy24Font, "Fonts\\MORPHEUS.TTF")
+    if path then fs:SetFont(path, 16, "") end
+    fs:SetPoint("CENTER", strip, "CENTER", 0, 0)
+    fs:SetWordWrap(false)
+    fs:SetTextColor(P.accent[1], P.accent[2], P.accent[3])
+    fs:SetShadowOffset(1, -1)
+    fs:SetShadowColor(0, 0, 0, 0.7)
+    fs:SetText(text or "")
+    for _, side in ipairs({ "LEFT", "RIGHT" }) do
+        local line = strip:CreateTexture(nil, "ARTWORK")
+        line:SetHeight(1)
+        if side == "LEFT" then
+            line:SetPoint("LEFT", strip, "LEFT", LB_ROW_PAD, 0)
+            line:SetPoint("RIGHT", fs, "LEFT", -10, 0)
+        else
+            line:SetPoint("LEFT", fs, "RIGHT", 10, 0)
+            line:SetPoint("RIGHT", strip, "RIGHT", -LB_ROW_PAD, 0)
+        end
+        -- Fondu vers le bord du tableau : le degrade porte la couleur sur un filet blanc.
+        -- Filet dore plein si le client n'a pas ce degrade.
+        local faded = false
+        if CreateColor and line.SetGradient then
+            local clear = CreateColor(P.accent[1], P.accent[2], P.accent[3], 0)
+            local solid = CreateColor(P.accent[1], P.accent[2], P.accent[3], 0.6)
+            line:SetColorTexture(1, 1, 1, 1)
+            faded = pcall(line.SetGradient, line, "HORIZONTAL",
+                side == "LEFT" and clear or solid, side == "LEFT" and solid or clear)
+        end
+        if not faded then
+            line:SetColorTexture(P.accent[1], P.accent[2], P.accent[3], 0.35)
+        end
+    end
+    strip.title = fs
+    return strip
+end
+
 -- Colonne gauche (kills + captures) ; guildes a droite, alignees sur toute la hauteur.
 local function LayoutGuildScrollFill(panel, scroll)
     if not panel or not scroll then return end
@@ -834,12 +888,16 @@ local function LayoutLeaderboardSections()
     local capPanel = lbFrame.capturesPanel
     local footer = lbFrame.footerBand
     local leftStack = lbFrame.leftStackAnchor
-    if not (header and killsP and guildBlock and guildKeepBlock and outpostBlock and capPanel and footer and leftStack) then
+    if not (header and killsP and guildBlock and guildKeepBlock and outpostBlock
+        and capPanel and footer and leftStack) then
         return
     end
 
     header:ClearAllPoints()
-    header:SetPoint("TOP", lbFrame.totalText, "BOTTOM", 0, -10)
+    -- Les titres des tableaux tiennent entre les totaux et les bandeaux de colonnes, avec
+    -- 30 px d'air au-dessus d'eux (10 a l'origine : l'en-tete collait aux titres). La
+    -- fenetre grandit d'autant, sa hauteur suit son contenu.
+    header:SetPoint("TOP", lbFrame.totalText, "BOTTOM", 0, -30 - Overlord.LeaderboardUI.TABLE_TITLE_H)
     header:SetPoint("LEFT", lbFrame, "LEFT", LB_FRAME_PAD, 0)
 
     killsP:ClearAllPoints()
@@ -854,7 +912,8 @@ local function LayoutLeaderboardSections()
     leftStack:SetPoint("TOPLEFT", header, "TOPLEFT")
     leftStack:SetPoint("BOTTOMRIGHT", capPanel, "BOTTOMRIGHT")
 
-    -- Colonne tués guildes puis fortins (meme hauteur que la pile gauche)
+    -- Guildes (tues et cote) a leur place de toujours, puis fortins et avant-postes
+    -- (meme hauteur que la pile gauche)
     guildBlock:ClearAllPoints()
     guildBlock:SetPoint("LEFT", leftStack, "RIGHT", LB_COL_GAP, 0)
     guildBlock:SetPoint("TOP", header, "TOP", 0, 0)
@@ -878,8 +937,7 @@ local function LayoutLeaderboardSections()
     footer:ClearAllPoints()
     footer:SetPoint("TOP", capPanel, "BOTTOM", 0, -LB_GAP_SECTION)
     footer:SetPoint("LEFT", lbFrame, "LEFT", LB_FRAME_PAD, 0)
-    footer:SetWidth(LB_MAIN_W + LB_COL_GAP + LB_GUILD_KILLS_W + LB_COL_GAP + LB_GUILD_KEEP_W
-        + LB_COL_GAP + LB_OUTPOST_W)
+    footer:SetWidth(LB_FRAME_W - 2 * LB_FRAME_PAD)
 end
 
 -- Respecte l'echelle UI demandee sans jamais laisser le classement sortir de l'ecran.
@@ -1029,18 +1087,23 @@ function Overlord.LeaderboardUI:CreateSitesWeekView(P)
     view:SetPoint("BOTTOMRIGHT", lbFrame.outpostBlock, "BOTTOMRIGHT", 0, 0)
     view:Hide()
     lbFrame.sitesWeek = view
-    -- Gauche : preneurs (rang, joueur, fiefs, avant-postes).
+    -- Un seul titre pour le volet : ses deux moities se nomment deja dans leurs colonnes.
+    view.title = Overlord.LeaderboardUI.AddTableTitle(
+        view, L.SITES_WEEK_TIP_TITLE or "Capturers and rivalries", P)
+    -- Gauche : preneurs (rang, joueur, fiefs, avant-postes). Lignes de 328 px
+    -- (centre a 164) : rang 2..28, joueur 32..196, fort 198..256, avant-poste 258..326.
     view.capturers = SitesWeek.Half(view, P, "TOPLEFT", {
-        { x = -150, w = 32, text = "#" },
-        { x = -40, w = 180, text = L.SITES_WEEK_COL_CAPTURERS or "Capturers this week", justify = "LEFT" },
-        { x = 80, w = 60, text = L.LB_COL_KEEP or "Keep" },
-        { x = 145, w = 60, text = L.LB_COL_OUTPOST or "Outpost" },
+        { x = -149, w = 26, text = "#" },
+        { x = -50, w = 164, text = L.SITES_WEEK_COL_CAPTURERS or "Capturers this week", justify = "LEFT" },
+        { x = 63, w = 58, text = L.LB_COL_KEEP or "Keep" },
+        { x = 128, w = 68, text = L.LB_COL_OUTPOST or "Outpost" },
     }, L.SITES_WEEK_EMPTY_CAPTURERS)
-    -- Droite : rivalites (guilde qui prend, guilde qui perd, nombre de prises).
+    -- Droite : rivalites (guilde qui prend, guilde qui perd, nombre de prises) : rang
+    -- 2..28, rivalite 32..244, prises 244..302 (le bouton Retour reste a droite).
     view.rivalries = SitesWeek.Half(view, P, "TOPRIGHT", {
-        { x = -150, w = 32, text = "#" },
-        { x = -30, w = 200, text = L.SITES_WEEK_COL_RIVALRIES or "Rivalries this week", justify = "LEFT" },
-        { x = 110, w = 50, text = L.LB_COL_CAPTURES or "Captures" },
+        { x = -149, w = 26, text = "#" },
+        { x = -26, w = 212, text = L.SITES_WEEK_COL_RIVALRIES or "Rivalries this week", justify = "LEFT" },
+        { x = 109, w = 58, text = L.LB_COL_CAPTURES or "Captures" },
     }, L.SITES_WEEK_EMPTY_RIVALRIES)
     SitesWeek.ToggleButton(view.rivalries.header, L.SITES_WEEK_BACK or "Back")
     SitesWeek.ToggleButton(lbFrame.outpostHeaderBand, L.SITES_WEEK_TIP_TITLE, L.SITES_WEEK_TIP_BODY)
@@ -1076,7 +1139,7 @@ function Overlord.LeaderboardUI:RefreshSitesWeek()
     end
     view.capturers.list = stats.capturers or {}
     view.rivalries.list = stats.rivalries or {}
-    local nameW = 150
+    local nameW = 140
     SitesWeek.Paint(view.capturers, function(cells, c, index)
         cells[1]:SetText(index)
         local short = Ambiguate and Ambiguate(c.name, "short") or c.name
@@ -1087,7 +1150,7 @@ function Overlord.LeaderboardUI:RefreshSitesWeek()
     end)
     SitesWeek.Paint(view.rivalries, function(cells, r, index)
         cells[1]:SetText(index)
-        local half = 88
+        local half = 93
         cells[2]:SetText(SitesWeek.Colored(TruncateTextToWidth(r.taker, half, "GameFontNormal"), r.takerFaction)
             .. " |cFFB0A080>|r "
             .. SitesWeek.Colored(TruncateTextToWidth(r.victim, half, "GameFontNormal"), r.victimFaction))
@@ -1278,6 +1341,8 @@ function Overlord.LeaderboardUI:CreateFrame()
     local headerBand = CreateOfficialSubPanel(lbFrame, LB_MAIN_W, LB_HEADER_H, P, { header = true })
     headerBand:SetPoint("TOP", lbFrame.subtitle, "BOTTOM", 0, -6)
     lbFrame.headerBand = headerBand
+    lbFrame.killsTitle = Overlord.LeaderboardUI.AddTableTitle(
+        headerBand, L.LB_TABLE_PLAYER_KILLS or "Player kills", P)
     local killCols = GetKillLayoutSegments()
     local hRank = headerBand:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hRank:SetPoint("CENTER", headerBand, "LEFT", killCols.rank.center, 0)
@@ -1370,6 +1435,8 @@ function Overlord.LeaderboardUI:CreateFrame()
     local guildHeaderBand = CreateOfficialSubPanel(guildBlock, LB_GUILD_KILLS_W, LB_HEADER_H, P, { header = true })
     guildHeaderBand:SetPoint("TOP", guildBlock, "TOP", 0, 0)
     lbFrame.guildHeaderBand = guildHeaderBand
+    lbFrame.guildTitle = Overlord.LeaderboardUI.AddTableTitle(
+        guildHeaderBand, L.LB_TABLE_GUILDS or "Guilds", P)
     local ghRank = guildHeaderBand:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     ghRank:SetPoint("CENTER", guildHeaderBand, "CENTER", LB_GUILD_COL_RANK, 0)
     ghRank:SetWidth(LB_GUILD_RANK_W)
@@ -1389,12 +1456,14 @@ function Overlord.LeaderboardUI:CreateFrame()
     ghMembers:SetJustifyH("CENTER")
     ghMembers:SetText(L.LB_COL_MEMBERS or "Members")
     ApplyOfficialHeaderColor(ghMembers, P)
-    local ghKills = guildHeaderBand:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    ghKills:SetPoint("CENTER", guildHeaderBand, "CENTER", LB_GUILD_COL_KILLS, 0)
-    ghKills:SetWidth(LB_GUILD_KILLS_TEXT_W)
-    ghKills:SetJustifyH("CENTER")
-    ghKills:SetText(L.LB_COL_KILLS)
-    ApplyOfficialHeaderColor(ghKills, P)
+    -- VH et cote : un clic sur l'en-tete trie le tableau par cette colonne (les VH par
+    -- defaut) ; une fleche marque la colonne qui trie.
+    lbFrame.guildSortHeaders = {
+        kills = GuildRating.CreateSortHeader(guildHeaderBand, "kills",
+            LB_GUILD_COL_KILLS, LB_GUILD_KILLS_TEXT_W, L.LB_COL_KILLS, P),
+        rating = GuildRating.CreateSortHeader(guildHeaderBand, "rating",
+            GuildRating.COL_POINTS, GuildRating.POINTS_W, L.LB_COL_RATING or "Rating", P),
+    }
 
     local guildPanel = CreateOfficialSubPanel(guildBlock, LB_GUILD_KILLS_W, 400, P)
     guildPanel:SetPoint("TOP", guildHeaderBand, "BOTTOM", 0, -LB_GAP_HEADER)
@@ -1445,7 +1514,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.guildEmptyHint:SetText(L.LB_GUILD_EMPTY or "")
     lbFrame.guildEmptyHint:Hide()
 
-    -- Fortins guildes : 3e colonne a droite du tableau tués
+    -- Fortins guildes : a droite du tableau des guildes
     local guildKeepBlock = CreateFrame("Frame", nil, lbFrame)
     guildKeepBlock:SetSize(LB_GUILD_KEEP_W, 400)
     lbFrame.guildKeepBlock = guildKeepBlock
@@ -1453,6 +1522,8 @@ function Overlord.LeaderboardUI:CreateFrame()
     local guildKeepHeaderBand = CreateOfficialSubPanel(guildKeepBlock, LB_GUILD_KEEP_W, LB_HEADER_H, P, { header = true })
     guildKeepHeaderBand:SetPoint("TOP", guildKeepBlock, "TOP", 0, 0)
     lbFrame.guildKeepHeaderBand = guildKeepHeaderBand
+    lbFrame.guildKeepTitle = Overlord.LeaderboardUI.AddTableTitle(
+        guildKeepHeaderBand, L.GUIDE_SECTION_GUILD_KEEP or "Guild Keeps", P)
     local gkhKeep = guildKeepHeaderBand:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     gkhKeep:SetPoint("CENTER", guildKeepHeaderBand, "CENTER", LB_GK_COL_KEEP, 0)
     gkhKeep:SetWidth(GUILD_KEEP_ICON + 4 + LB_GK_KEEP_NAME_W)
@@ -1521,7 +1592,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.guildKeepEmptyHint:SetText(L.LB_GUILD_KEEP_EMPTY or "")
     lbFrame.guildKeepEmptyHint:Hide()
 
-    -- Avant-postes : 4e colonne a droite des fortins
+    -- Avant-postes : derniere colonne, a droite des fortins
     local outpostBlock = CreateFrame("Frame", nil, lbFrame)
     outpostBlock:SetSize(LB_OUTPOST_W, 400)
     lbFrame.outpostBlock = outpostBlock
@@ -1529,6 +1600,8 @@ function Overlord.LeaderboardUI:CreateFrame()
     local outpostHeaderBand = CreateOfficialSubPanel(outpostBlock, LB_OUTPOST_W, LB_HEADER_H, P, { header = true })
     outpostHeaderBand:SetPoint("TOP", outpostBlock, "TOP", 0, 0)
     lbFrame.outpostHeaderBand = outpostHeaderBand
+    lbFrame.outpostTitle = Overlord.LeaderboardUI.AddTableTitle(
+        outpostHeaderBand, L.GUIDE_SECTION_OUTPOST or "Guild outposts", P)
     local ophOutpost = outpostHeaderBand:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     ophOutpost:SetPoint("CENTER", outpostHeaderBand, "CENTER", LB_OP_COL_OUTPOST, 0)
     ophOutpost:SetWidth(GUILD_KEEP_ICON + 4 + LB_OP_OUTPOST_NAME_W)
@@ -1599,9 +1672,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     self:CreateSitesWeekView(P)
 
     -- Pied de page (positionne par LayoutLeaderboardSections)
-    local footerBand = CreateOfficialSubPanel(lbFrame,
-        LB_MAIN_W + LB_COL_GAP + LB_GUILD_KILLS_W + LB_COL_GAP + LB_GUILD_KEEP_W + LB_COL_GAP + LB_OUTPOST_W,
-        28, P)
+    local footerBand = CreateOfficialSubPanel(lbFrame, LB_FRAME_W - 2 * LB_FRAME_PAD, 28, P)
     lbFrame.footerBand = footerBand
 
     local capturesPanel = CreateOfficialSubPanel(lbFrame, LB_MAIN_W, capturesBlockH + 10, P)
@@ -1869,6 +1940,7 @@ function Overlord.LeaderboardUI.OnGuildRowEnter(row)
     else
         GameTooltip:AddLine(string.format(L.LB_GUILD_TIP_TOTAL or "%d HK", total), 0.8, 0.8, 0.8)
     end
+    GuildRating.AddBreakdown(row._olGuildRating)
     GameTooltip:Show()
 end
 
@@ -1977,7 +2049,7 @@ function Overlord.LeaderboardUI:CreateRow(parent, index, yOffset, P)
     return row
 end
 
--- Ligne du classement guildes (#, nom, tués).
+-- Ligne du tableau des guildes (#, nom, membres, tués, cote).
 function Overlord.LeaderboardUI:CreateGuildRow(parent, index, yOffset, P)
     local row = CreateFrame("Frame", nil, parent)
     row:SetSize(LB_GUILD_KILLS_W, GUILD_ROW_HEIGHT)
@@ -2017,6 +2089,11 @@ function Overlord.LeaderboardUI:CreateGuildRow(parent, index, yOffset, P)
     row.kills:SetPoint("CENTER", row, "CENTER", LB_GUILD_COL_KILLS, 0)
     row.kills:SetWidth(LB_GUILD_KILLS_TEXT_W)
     row.kills:SetJustifyH("CENTER")
+
+    row.points = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    row.points:SetPoint("CENTER", row, "CENTER", GuildRating.COL_POINTS, 0)
+    row.points:SetWidth(GuildRating.POINTS_W)
+    row.points:SetJustifyH("CENTER")
 
     row:EnableMouse(true)
     row:SetScript("OnEnter", Overlord.LeaderboardUI.OnGuildRowEnter)
@@ -2328,38 +2405,46 @@ end
 
 RenderGuildRows = function(force)
     if not lbFrame or not lbFrame._lbView then return end
-    local sortedGuilds = lbFrame._lbView.sortedGuilds or {}
+    local list, ranks, byRating = GuildRating.List(lbFrame._lbView)
     local first, poolSize, total = GetVirtualRowWindow(
-        lbFrame.scrollGuild, GUILD_ROW_HEIGHT, #sortedGuilds)
+        lbFrame.scrollGuild, GUILD_ROW_HEIGHT, #list)
     Overlord.LeaderboardUI:EnsureGuildRows(poolSize)
     SyncVirtualRenderWindow(lbFrame.scrollGuild, first, poolSize, total, force)
     local P = GetPalette()
     local myGuild = Overlord.Outpost and Overlord.Outpost.GetLocalPlayerGuild
         and Overlord.Outpost:GetLocalPlayerGuild() or ""
     local lbMembers = Overlord.Leaderboard
+    local killMedals, ratingMedals = GuildRating.Medals()
     local used = 0
     for slot = 1, poolSize do
         local dataIndex = first + slot - 1
         local row = guildRows[slot]
-        local entry = dataIndex <= total and sortedGuilds[dataIndex] or nil
+        local entry = dataIndex <= total and list[dataIndex] or nil
         if row and entry then
             used = slot
             PrepareVirtualRow(row, dataIndex, GUILD_ROW_HEIGHT, P)
+            -- Triee par cote, la ligne porte deja sa cote ; triee par VH, elle se lit
+            -- dans le cache d'affichage (rien tant qu'il n'est pas construit).
+            local rating = byRating and entry
+                or (lbMembers and lbMembers.GetGuildRating and lbMembers:GetGuildRating(entry.guild)) or nil
             -- Reused virtual rows: the tooltip follows the guild shown.
-            if row._olGuildEntry ~= entry then
-                row._olGuildEntry = entry
+            if row._olGuildEntry ~= entry or row._olGuildRating ~= rating then
+                row._olGuildEntry, row._olGuildRating = entry, rating
                 if GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(row) then
                     Overlord.LeaderboardUI.OnGuildRowEnter(row)
                 end
             end
-            local rank = lbFrame._lbView.ranks and lbFrame._lbView.ranks.sortedGuilds[dataIndex] or dataIndex
+            local rank = ranks and ranks[dataIndex] or dataIndex
             local isOwn = myGuild ~= "" and entry.guild == myGuild
             local membersSummary = lbMembers and lbMembers.GetGuildMembersSummary
                 and lbMembers:GetGuildMembersSummary(entry.guild)
             local memberCount = membersSummary and tonumber(membersSummary.count) or nil
+            local points = rating and math.floor(tonumber(rating.points) or 0) or nil
+            local killPlace, ratingPlace = killMedals[entry.guild], ratingMedals[entry.guild]
             local paintKey = rank .. "|" .. tostring(entry.guild or "") .. "|"
                 .. tostring(entry.kills or 0) .. "|" .. tostring(entry.faction or "")
-                .. "|" .. tostring(memberCount or "") .. (isOwn and "|me" or "")
+                .. "|" .. tostring(memberCount or "") .. "|" .. tostring(points or "")
+                .. "|" .. (killPlace or 0) .. (ratingPlace or 0) .. (isOwn and "|me" or "")
             if row._lbPaintKey ~= paintKey then
                 row._lbPaintKey = paintKey
                 local medalColor = MEDAL_COLORS[rank]
@@ -2375,10 +2460,17 @@ RenderGuildRows = function(force)
                 else
                     row.name:SetTextColor(P.white[1], P.white[2], P.white[3])
                 end
+                -- Or, argent, bronze : sur les VH des trois premieres guildes aux VH et
+                -- sur la cote des trois premieres a la cote, quel que soit le tri affiche.
                 local guildKills = tonumber(entry.kills) or 0
                 row.kills:SetText(guildKills >= 1000000
                     and string.format("%.1fM", guildKills / 1000000) or guildKills)
-                SetSecondaryTextColor(row.kills, P, medalColor)
+                SetSecondaryTextColor(row.kills, P, MEDAL_COLORS[killPlace or 0])
+                if row.points then
+                    row.points:SetText(not points and "-" or (points >= 1000000
+                        and string.format("%.1fM", points / 1000000) or points))
+                    SetSecondaryTextColor(row.points, P, MEDAL_COLORS[ratingPlace or 0])
+                end
                 if row.members then
                     row.members:SetText(memberCount and tostring(memberCount) or "-")
                     row.members:SetTextColor(0.8, 0.8, 0.8)
@@ -2523,6 +2615,134 @@ RenderOutpostRows = function(force)
     HideUnusedVirtualRows(outpostRows, used)
 end
 
+-- Cote des guildes : nombre avec separateurs, detail au survol, tri du tableau.
+function GuildRating.Number(value)
+    value = math.floor(tonumber(value) or 0)
+    if BreakUpLargeNumbers then
+        local ok, text = pcall(BreakUpLargeNumbers, value)
+        if ok and text then return text end
+    end
+    return tostring(value)
+end
+
+-- Survol d'une guilde : d'ou viennent ses points (lu sur la ligne, aucun calcul).
+function GuildRating.AddBreakdown(rating)
+    if type(rating) ~= "table" or not GameTooltip then return end
+    local worth = Overlord.Leaderboard.GUILD_RATING_POINTS or {}
+    GameTooltip:AddLine(string.format(L.LB_RATING_ROW_POINTS or "%s points",
+        GuildRating.Number(rating.points)), 1, 0.82, 0)
+    GameTooltip:AddDoubleLine(L.LB_RATING_ROW_KILLS or "Honorable kills",
+        GuildRating.Number(rating.kills), 0.8, 0.8, 0.8, 1, 1, 1)
+    -- One line per kind of capture the guild made this week.
+    for _, kind in ipairs({
+        { rating.zones, worth.zone, L.LB_RATING_ROW_ZONES or "Front points (%d x %d)" },
+        { rating.outposts, worth.outpost, L.LB_RATING_ROW_OUTPOSTS or "Outposts (%d x %d)" },
+        { rating.keeps, worth.keep, L.LB_RATING_ROW_KEEPS or "Keeps (%d x %d)" },
+    }) do
+        local count, per = math.floor(tonumber(kind[1]) or 0), tonumber(kind[2]) or 0
+        if count > 0 then
+            GameTooltip:AddDoubleLine(string.format(kind[3], count, per),
+                GuildRating.Number(count * per), 0.8, 0.8, 0.8, 1, 1, 1)
+        end
+    end
+end
+
+-- Places de medaille des guildes : les trois premieres aux VH et les trois premieres a
+-- la cote, lues sur les listes completes (pas sur le resultat d'une recherche). Refait
+-- seulement quand une des deux listes change.
+function GuildRating.Medals()
+    local source = lbFrame._lbSource or lbFrame._lbView or {}
+    local cache = GuildRating.medals
+    if not cache or cache.kills ~= source.sortedGuilds or cache.rating ~= source.sortedGuildRating then
+        cache = { kills = source.sortedGuilds, rating = source.sortedGuildRating, byKills = {}, byRating = {} }
+        for place = 1, 3 do
+            local byKills = cache.kills and cache.kills[place]
+            if byKills and byKills.guild then cache.byKills[byKills.guild] = place end
+            local byRating = cache.rating and cache.rating[place]
+            if byRating and byRating.guild then cache.byRating[byRating.guild] = place end
+        end
+        GuildRating.medals = cache
+    end
+    return cache.byKills, cache.byRating
+end
+
+-- Tri du tableau des guildes : "kills" (defaut) ou "rating", garde d'une session a
+-- l'autre dans la configuration.
+function GuildRating.Sort()
+    local mode = lbFrame and lbFrame.guildSort
+    if not mode then
+        mode = OverlordDB and type(OverlordDB.config) == "table" and OverlordDB.config.leaderboardGuildSort
+        if mode ~= "rating" then mode = "kills" end
+        if lbFrame then lbFrame.guildSort = mode end
+    end
+    return mode
+end
+
+-- Liste affichee, rangs d'origine sous une recherche, et vrai si les lignes sont celles
+-- de la cote. Sans cote encore (apercu enregistre par une version qui n'en avait pas),
+-- le tableau montre les guildes par VH plutot qu'une liste vide.
+function GuildRating.List(view)
+    local rating, guilds = view.sortedGuildRating or {}, view.sortedGuilds or {}
+    if GuildRating.Sort() == "kills" or (#rating == 0 and #guilds > 0) then
+        return guilds, view.ranks and view.ranks.sortedGuilds, false
+    end
+    return rating, view.ranks and view.ranks.sortedGuildRating, true
+end
+
+function GuildRating.SetSort(mode)
+    if not lbFrame or (mode ~= "kills" and mode ~= "rating") or GuildRating.Sort() == mode then return end
+    lbFrame.guildSort = mode
+    if OverlordDB and type(OverlordDB.config) == "table" then
+        OverlordDB.config.leaderboardGuildSort = mode
+    end
+    if lbFrame.scrollGuild then lbFrame.scrollGuild:SetVerticalScroll(0) end
+    Overlord.LeaderboardUI:PaintView()
+end
+
+-- La fleche suit la colonne qui trie (rien si elle y est deja).
+function GuildRating.RefreshSortHeaders()
+    local headers, mode = lbFrame and lbFrame.guildSortHeaders, GuildRating.Sort()
+    if not headers or lbFrame._guildSortShown == mode then return end
+    lbFrame._guildSortShown = mode
+    for key, header in pairs(headers) do header.arrow:SetShown(key == mode) end
+end
+
+-- En-tete cliquable d'une colonne qui trie (VH ou cote).
+function GuildRating.CreateSortHeader(band, mode, x, width, text, P)
+    local header = CreateFrame("Button", nil, band)
+    header:SetSize(width, LB_HEADER_H)
+    header:SetPoint("CENTER", band, "CENTER", x, 0)
+    header.label = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    header.label:SetPoint("CENTER", header, "CENTER", 0, 0)
+    header.label:SetText(text or "")
+    header.label:SetTextColor(P.accent[1], P.accent[2], P.accent[3])
+    -- Fleche de tri des listes Blizzard (liste /who, hotel des ventes).
+    header.arrow = header:CreateTexture(nil, "OVERLAY")
+    header.arrow:SetTexture("Interface\\Buttons\\UI-SortArrow")
+    header.arrow:SetTexCoord(0, 0.5625, 0, 1)
+    header.arrow:SetSize(9, 8)
+    header.arrow:SetPoint("LEFT", header.label, "RIGHT", 1, -1)
+    header.arrow:SetVertexColor(P.accent[1], P.accent[2], P.accent[3])
+    header.arrow:Hide()
+    header:SetScript("OnClick", function() GuildRating.SetSort(mode) end)
+    header:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        if mode == "rating" then
+            local worth = Overlord.Leaderboard.GUILD_RATING_POINTS or {}
+            GameTooltip:AddLine(L.LB_RATING_TIP_TITLE or "Guild rating", 1, 0.82, 0)
+            GameTooltip:AddLine(string.format(L.LB_RATING_TIP_BODY
+                or "1 point per honorable kill, %d per front point, %d per outpost, %d per keep.",
+                worth.zone or 0, worth.outpost or 0, worth.keep or 0), 1, 1, 1, true)
+        else
+            GameTooltip:AddLine(L.LB_RATING_ROW_KILLS or "Honorable kills", 1, 0.82, 0)
+        end
+        GameTooltip:AddLine(L.LB_SORT_HINT or "Click to sort by this column.", 0.6, 0.6, 0.6, true)
+        GameTooltip:Show()
+    end)
+    header:SetScript("OnLeave", GameTooltip_Hide)
+    return header
+end
+
 RenderCaptureRows = function(faction, force)
     if not lbFrame or not lbFrame._lbView then return end
     local isAlliance = faction == "Alliance"
@@ -2632,9 +2852,11 @@ function Overlord.LeaderboardUI:PaintView()
     local savedScroll = not lbFrame.searchResetScroll and CaptureLeaderboardScrollPositions()
     if lbFrame.searchResetScroll then ResetLeaderboardScrollPositions() end
     lbFrame.searchResetScroll = nil
+    local guildList = GuildRating.List(view)
     if lbFrame.guildEmptyHint then
-        lbFrame.guildEmptyHint:SetShown(not searching and #view.sortedGuilds == 0)
+        lbFrame.guildEmptyHint:SetShown(not searching and #guildList == 0)
     end
+    GuildRating.RefreshSortHeaders()
     if lbFrame.guildKeepEmptyHint then
         lbFrame.guildKeepEmptyHint:SetShown(not searching and #view.sortedGuildKeeps == 0)
     end
@@ -2651,7 +2873,7 @@ function Overlord.LeaderboardUI:PaintView()
     SetLeaderboardScrollExtent(
         lbFrame.scrollKills, lbFrame.scrollChildKills, killCount, KILL_ROW_HEIGHT)
     SetLeaderboardScrollExtent(
-        lbFrame.scrollGuild, lbFrame.scrollChildGuild, #view.sortedGuilds, GUILD_ROW_HEIGHT)
+        lbFrame.scrollGuild, lbFrame.scrollChildGuild, #guildList, GUILD_ROW_HEIGHT)
     SetLeaderboardScrollExtent(
         lbFrame.scrollGuildKeep, lbFrame.scrollChildGuildKeep,
         #view.sortedGuildKeeps, GUILD_ROW_HEIGHT)
@@ -2691,8 +2913,9 @@ end
 local function PublishSearchView(view)
     lbFrame._lbView = view
     if lbFrame.searchQuery and lbFrame.searchQuery ~= "" then
-        local count = #view.sortedKills + #view.sortedGuilds + #view.sortedGuildKeeps
-            + #view.sortedOutposts + #view.byFaction.Alliance + #view.byFaction.Horde
+        local count = #view.sortedKills + #view.sortedGuilds + #(view.sortedGuildRating or {})
+            + #view.sortedGuildKeeps + #view.sortedOutposts
+            + #view.byFaction.Alliance + #view.byFaction.Horde
         SetSearchStatus(count == 0 and (L.LB_SEARCH_EMPTY or "No matches") or "")
     else
         SetSearchStatus("")
@@ -3049,6 +3272,7 @@ function Overlord.LeaderboardUI:Refresh()
     view.sortedKills = dc.sortedKills or {}
     view.byFaction = dc.byFaction or { Alliance = {}, Horde = {} }
     view.sortedGuilds = dc.sortedGuilds or {}
+    view.sortedGuildRating = dc.sortedGuildRating or {}
     view.sortedGuildKeeps = sortedGuildKeeps or {}
     view.sortedOutposts = sortedOutposts or {}
     self:RefreshSitesWeek()

@@ -1437,16 +1437,17 @@ function Overlord.UI:CreateZoneListSection(parent)
     end)
     zoneListFrame.lbBtn = lbBtn
 
-    -- Emplacement reserve (grille equilibree) : Forever n'a pas de communaute,
-    -- le bouton reste grise avec son explication.
-    local communityBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
-        L.COMMUNITY_BTN_JOIN, "Interface\\Icons\\Achievement_GuildPerk_EverybodysFriend")
-    communityBtn:SetPoint("TOPRIGHT", actionsCard, "TOPRIGHT", -4, gridTop)
-    AttachGridButtonTooltip(communityBtn, L.COMMUNITY_BTN_TOOLTIP or L.COMMUNITY_BTN_JOIN)
-    zoneListFrame.communityBtn = communityBtn
-    if self.SetWC3ButtonUnavailable then
-        self.SetWC3ButtonUnavailable(communityBtn, L.COMMUNITY_BUTTON_UNAVAILABLE)
-    end
+    -- Rang Overlord du personnage : mene a l'onglet Overlord de la feuille de
+    -- personnage (RanksUI:OpenFromPanel). A la place de l'ancien bouton Communaute
+    -- (Forever n'a pas de communaute).
+    local rankBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
+        L.RANK_BUTTON or "Your rank", "Interface\\AddOns\\Overlord\\Textures\\overlord_minimap")
+    rankBtn:SetPoint("TOPRIGHT", actionsCard, "TOPRIGHT", -4, gridTop)
+    AttachGridButtonTooltip(rankBtn, L.RANK_BUTTON_TOOLTIP or L.RANK_BUTTON or "Your rank")
+    rankBtn:SetScript("OnClick", function()
+        if Overlord.RanksUI and Overlord.RanksUI.OpenFromPanel then Overlord.RanksUI:OpenFromPanel() end
+    end)
+    zoneListFrame.rankBtn = rankBtn
 
     local discordBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
         L.DISCORD_BUTTON, "Interface\\ChatFrame\\UIChatIcon")
@@ -2502,7 +2503,7 @@ function Overlord.UI:RefreshActionGridActiveState()
         hof = Overlord.HallOfFameUI and Overlord.HallOfFameUI.IsShown and Overlord.HallOfFameUI:IsShown() or false,
         groups = Overlord.GroupFinderUI and Overlord.GroupFinderUI.IsShown and Overlord.GroupFinderUI:IsShown() or false,
         tutorial = Overlord.Popups and Overlord.Popups.IsQuickGuideShown and Overlord.Popups:IsQuickGuideShown() or false,
-        community = false,
+        rank = Overlord.RanksUI and Overlord.RanksUI.selected == true or false,
         discord = discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "discord" or false,
         contact = discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "contact" or false,
         front = self._frontPickerPopup and self._frontPickerPopup:IsShown() or false,
@@ -2550,7 +2551,7 @@ function Overlord.UI:RefreshActionGridActiveState()
     panelOpen(zoneListFrame.hofBtn, nextState.hof)
     panelOpen(zoneListFrame.groupsBtn, nextState.groups)
     panelOpen(zoneListFrame.tutorialBtn, nextState.tutorial)
-    panelOpen(zoneListFrame.communityBtn, nextState.community)
+    panelOpen(zoneListFrame.rankBtn, nextState.rank)
     panelOpen(zoneListFrame.discordBtn, nextState.discord)
     panelOpen(zoneListFrame.contactBtn, nextState.contact)
     panelOpen(self.frontPickerBtn, nextState.front)
@@ -3150,7 +3151,8 @@ function Overlord.UI:RefreshActiveZone()
         activeZoneFrame.statusTag:SetTextColor(C.blueBright[1], C.blueBright[2], C.blueBright[3])
     elseif enemyCapturing then
         activeZoneFrame.holdBar:SetFillColor(C.orange[1], C.orange[2], C.orange[3], 0.8)
-        activeZoneFrame.statusTag:SetText(L.UI_ENEMY_CAPTURING)
+        -- The point's name is said again (the bar itself only shows "Hold").
+        activeZoneFrame.statusTag:SetText(string.format(L.UI_ENEMY_CAPTURING, tostring(az.name or "")))
         activeZoneFrame.statusTag:SetTextColor(C.orange[1], C.orange[2], C.orange[3])
     elseif hc >= hr and hr > 0 then
         -- Maintien plein : or du theme (pas le vert type quete WoW)
