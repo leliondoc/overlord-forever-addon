@@ -1,15 +1,14 @@
-2.0.0
+2.0.1
 
-**Overlord Forever 2.0.0**
+**Overlord Forever 2.0.1**
 
-- **Overlord Rank**: a new tab on your character sheet (Overlord logo). Fifteen ranks, and a rank earned never drops. The first ten are earned with Glory, from your open-world honorable kills and your captures. Ranks 11 to 14 also ask for weeks finished in the top 100, 25, 10 then 3 of your faction's weekly ranking; the last one, Overlord, asks for more Glory and five weeks finished first. Each rank is a feat in the Hall of Fame and is announced on screen. The tab's tooltip and the tutorial give the details.
-- **Your rank is saved only on your computer, for your character**: nobody else sees it and no copy exists anywhere else. If the game's addon data is deleted or lost, it starts again from zero and cannot be restored.
-- **World map**: the front's circles no longer stay drawn on the continent map after a right-click, and the map follows every change of zone reliably.
-- **Hillsbrad Foothills**: the Southshore and Tarren Mill capture points have moved out of the two towns, onto open ground.
-- **Battle report**: the pop-up is gone.
-- **Capture alerts**: enemy captures learnt late are told in a single "Catch-up" line with their time, instead of several lines at once.
-- **Ranking window**: the siege painting now sits on a solid background.
-- **Call to arms**: the tooltip and the tutorial say that the horn confirms the call.
-- **PvP Groups**: clearer connection messages.
-- **Reliability**: several fixes to the ranking catch-up, the options page and the character sheet.
-- **Update required**: the Hillsbrad capture points have changed place, so everyone needs 2.0.0 to fight over the same ground.
+- **Map between the two factions**: the two factions only talk through players who have a Battle.net friend on the other side. When such a player learns captures late (back from a battleground, a reload, a new friend), his whole faction now gets them within about a minute, instead of waiting 10 to 30 minutes each.
+- **Captures on a fresh map**: a player who is capturing a point keeps receiving the map, so he no longer finishes a capture or a siege that the enemy's moves had made impossible.
+- **Capture results first**: on a busy link between the factions, the result of a capture now passes before everything else and no longer gets lost in the queue.
+- **Enemy sieges**: the alert and the timer of a siege you follow are no longer cut by a late map, and a capture you missed live turns the point as soon as it is known.
+- **Guilds table** (ranking window): guild kills and a new **guild rating** in one table: 1 point per honorable kill, 50 per front point, 75 per outpost and 100 per keep taken. Click HK or Rating to sort the guilds. Every table now has its title.
+- **Your rank**: a new button on the main panel, in place of the greyed Community button, leads to the Overlord tab of your character sheet.
+- **Ranking**: answers to a ranking request leave much faster, and a neighbour that does not answer is no longer asked first again after each reload.
+- **Alerts**: the layer is written after the player's name, "(Name, layer #1234)", and the line under the capture bar names the point the enemy is capturing.
+- **Network status** (/ov network): capture results that expired in the relay queue are counted and shown.
+- **Reliability**: several fixes to the map exchange and the relay.
