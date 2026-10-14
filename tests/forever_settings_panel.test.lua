@@ -110,7 +110,7 @@ local expected = { "Overlord_UiScale", "Overlord_NotificationChat", "Overlord_Gu
     "Overlord_MapOverlayOpacity", "Overlord_MapIconOpacity", "Overlord_MapIconScale", "Overlord_MapPathOpacity",
     "Overlord_MinimapOverlayOpacity", "Overlord_ShowMinimapButton", "Overlord_ShowMinimapCaptureZones",
     "Overlord_AutoWaypointNextObjective",
-    "Overlord_ShowCoinsHud", "Overlord_ShowFloatingObjective",
+    "Overlord_ShowFloatingObjective",
     "Overlord_SoundEnabled", "Overlord_MostWantedAlerts", "Overlord_WorldMapMode" }
 for _, var in ipairs(expected) do
     assert(settings[var] and settings[var].control, "Missing native control: " .. var)

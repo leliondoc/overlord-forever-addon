@@ -676,9 +676,21 @@ end
 local function HasMatchingVictoryEvidence(ev)
     local victories = OverlordDB and OverlordDB.frontVictories
     local victory = victories and victories[ev.frontId]
-    if type(victory) ~= "table" or victory.faction ~= ev.faction then return false end
-    local localTs = NormalizeFiniteInteger(victory.timestamp)
-    return localTs and math.abs(localTs - ev.victoryTs) <= VB_MAX_FUTURE_SKEW
+    if type(victory) == "table" and victory.faction == ev.faction then
+        local localTs = NormalizeFiniteInteger(victory.timestamp)
+        if localTs and math.abs(localTs - ev.victoryTs) <= VB_MAX_FUTURE_SKEW then return true end
+    end
+    -- 2.0.2: a victory without truce (Zones.TRUCELESS_FROM) is filed at the next 30 s
+    -- tick; its record used to stay for the fifteen minutes of the truce. What is left is
+    -- as good a proof: the victory filed at that very moment and the fallen capital
+    -- kept by that faction on our own map.
+    local zones = Overlord.Zones
+    if not (zones and zones.IsTruceRetired and zones:IsTruceRetired(ev.victoryTs)
+        and zones.LocalStateShowsKeptConquest) then return false end
+    local filed = OverlordDB and OverlordDB.frontTruceResetEpoch
+        and NormalizeFiniteInteger(OverlordDB.frontTruceResetEpoch[ev.frontId])
+    return filed ~= nil and math.abs(filed - ev.victoryTs) <= 5
+        and zones:LocalStateShowsKeptConquest(ev.frontId, ev.faction, filed) == true
 end
 
 local function EvidenceKey(frontId, faction, victoryTs, sender, sourceChannel)

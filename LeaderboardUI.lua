@@ -2387,7 +2387,7 @@ RenderKillRows = function(force)
                 if row.classIconHolder then row.classIconHolder:Show() end
                 local cr, cg, cb = GetClassColor(class)
                 row.name:SetText(wanted
-                    and (Overlord.MostWanted.CrownMarkup(13) .. " " .. shortName)
+                    and (Overlord.MostWanted.SkullMarkup(12) .. " " .. shortName)
                     or shortName)
                 if cr and cg and cb then
                     row.name:SetTextColor(cr, cg, cb)

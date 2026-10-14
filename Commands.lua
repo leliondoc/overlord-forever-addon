@@ -176,7 +176,41 @@ do
     function SyncReport.Title(text) SyncReport.Print(GOLD .. text .. "|r") end
 end
 
--- Opt-in observation of actual incoming packets, independent of the relay's
+-- /ov network: the summary (shared with the main panel indicator, NetworkHealth.lua)
+-- and what concerns the map between the two factions. The relay's own counters, the
+-- ranking catch-up and the 30 s of incoming packets are in /ov relay (2.0.2: one
+-- report had grown past two screens).
+function SyncReport.Network()
+    local sync, net = Overlord.Sync, Overlord.Relay
+    local R = SyncReport
+    local overall, rows = "ok", {}
+    if Overlord.NetworkHealth and Overlord.NetworkHealth.Compute then
+        overall, rows = Overlord.NetworkHealth:Compute()
+    end
+    R.Header(overall)
+    for _, row in ipairs(rows) do R.Status(row.level, row.title, row.text) end
+    R.Title("Details:")
+    -- 1.4.0: each Forever ruleset runs its own campaign.
+    local pools = Overlord.RealmPools
+    if pools and pools.GetRuleset then
+        R.Detail("Campaign: " .. pools:GetRuleset() .. " ruleset (pool " .. pools:GetOverlordPoolTag()
+            .. ", channel OverlordF" .. pools:GetChannelSuffix() .. ")"
+            .. (pools._rulesetAssumed and " ASSUMED: game rules and realm name gave no answer" or ""))
+        if sync.IsChannelClosed and sync:IsChannelClosed() then
+            R.Detail("Channel: cannot be joined (tried again at login, /reload or on leaving an instance)")
+        end
+    end
+    if sync.GetEnemyCaptureFinalDiagnostics then R.Detail(sync:GetEnemyCaptureFinalDiagnostics()) end
+    if sync.GetCrossFactionDiagnostics then
+        for _, line in ipairs(sync:GetCrossFactionDiagnostics()) do R.Detail(line) end
+    end
+    if net and net.GetBridgeDiagnostics then
+        for _, line in ipairs(net:GetBridgeDiagnostics()) do R.Detail(line) end
+    end
+    R.Detail("More: /ov relay (relay queue, traffic by type, ranking catch-up, 30 s of incoming packets).")
+end
+
+-- /ov relay. Opt-in observation of actual incoming packets, independent of the relay's
 -- preferred-route cache. No payloads, BattleTags or account IDs are displayed.
 local networkProbeRunning = false
 local function StartNetworkProbe()
@@ -220,32 +254,9 @@ local function StartNetworkProbe()
     local reportOk, reportErr = pcall(function()
         local sync, net = Overlord.Sync, Overlord.Relay
         local R = SyncReport
-        -- 1. Summary: the five things that matter, worst first in the header
-        -- (shared with the main panel indicator, NetworkHealth.lua).
-        local overall, rows = "ok", {}
         local relayStats = net and net.stats
-        if Overlord.NetworkHealth and Overlord.NetworkHealth.Compute then
-            overall, rows = Overlord.NetworkHealth:Compute()
-        end
-        R.Header(overall)
-        for _, row in ipairs(rows) do R.Status(row.level, row.title, row.text) end
-
-        -- 2. Details, for debugging: grey, with any loss or refusal counter in red.
-        R.Title("Details:")
-        -- 1.4.0: each Forever ruleset runs its own campaign.
-        local pools = Overlord.RealmPools
-        if pools and pools.GetRuleset then
-            R.Detail("Campaign: " .. pools:GetRuleset() .. " ruleset (pool " .. pools:GetOverlordPoolTag()
-                .. ", channel OverlordF" .. pools:GetChannelSuffix() .. ")"
-                .. (pools._rulesetAssumed and " ASSUMED: game rules and realm name gave no answer" or ""))
-            if sync.IsChannelClosed and sync:IsChannelClosed() then
-                R.Detail("Channel: cannot be joined (tried again at login, /reload or on leaving an instance)")
-            end
-        end
-        if sync.GetEnemyCaptureFinalDiagnostics then R.Detail(sync:GetEnemyCaptureFinalDiagnostics()) end
-        if sync.GetCrossFactionDiagnostics then
-            for _, line in ipairs(sync:GetCrossFactionDiagnostics()) do R.Detail(line) end
-        end
+        -- For debugging: grey, with any loss or refusal counter in red.
+        R.Title("Relay and ranking catch-up (summary and map: /ov network):")
         if sync.GetSuspiciousSenderDiagnostics then R.Detail(sync:GetSuspiciousSenderDiagnostics()) end
         if sync.GetThirdPartyInflationDiagnostics then R.Detail(sync:GetThirdPartyInflationDiagnostics()) end
         if sync.GetHistoryCatchupDiagnostics then
@@ -273,7 +284,7 @@ local function StartNetworkProbe()
         R.Detail("Network observation: 30s. Use /ov sync now.")
     end)
     if not reportOk then
-        Overlord:PrintNotification("|cFFFF4040[Overlord]|r /ov network report error: " .. tostring(reportErr))
+        Overlord:PrintNotification("|cFFFF4040[Overlord]|r /ov relay report error: " .. tostring(reportErr))
     end
     C_Timer.After(30, function()
         frame:UnregisterAllEvents()
@@ -446,7 +457,6 @@ local function ShowHelp()
     Overlord:PrintNotification(L.HELP_SHOW)
     Overlord:PrintNotification(L.HELP_HIDE)
     Overlord:PrintNotification(L.HELP_TOGGLE)
-    Overlord:PrintNotification(L.HELP_HUD)
     Overlord:PrintNotification(L.HELP_STATUS)
     Overlord:PrintNotification(L.HELP_ZONES)
     Overlord:PrintNotification(L.HELP_WHERE)
@@ -650,27 +660,6 @@ local function CommandHandler(msg)
         return
     end
 
-    if cmd == "hud" then
-        local settings = Overlord.SettingsPanel
-        if not settings then return end
-        -- /ov hud : panneau des coins flottant (meme case que les options).
-        local action = args[2] and string.lower(args[2]) or "toggle"
-        local visible
-        if action == "toggle" then
-            visible = not settings.GetShowCoinsHud()
-        elseif action == "on" then
-            visible = true
-        elseif action == "off" then
-            visible = false
-        else
-            Overlord:PrintNotification(L.HELP_HUD)
-            return
-        end
-        settings.SetShowCoinsHud(visible)
-        Overlord:PrintNotification(visible and L.HUD_SHOWN or L.HUD_HIDDEN)
-        return
-    end
-
     -- Commandes lecture seule autorisees en instance (status, lb, hide)
     if Overlord.InstanceSuspended then
         if cmd == "status" then ShowStatus(); return
@@ -740,6 +729,12 @@ local function CommandHandler(msg)
         end
 
     elseif cmd == "network" or cmd == "reseau" then
+        local reportOk, reportErr = pcall(SyncReport.Network)
+        if not reportOk then
+            Overlord:PrintNotification("|cFFFF4040[Overlord]|r /ov network report error: " .. tostring(reportErr))
+        end
+
+    elseif cmd == "relay" or cmd == "relais" then
         StartNetworkProbe()
 
     elseif cmd == "perf" then

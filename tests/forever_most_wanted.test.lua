@@ -92,7 +92,7 @@ lastWeek.killSource = Overlord.Leaderboard.kills
 MW:Refresh(true)
 assert(#MW.list == 5, "a current view was not used")
 
--- Crown on the Blizzard nameplate, right of the health bar; gone when the plate is
+-- Skull on the Blizzard nameplate, right of the health bar; gone when the plate is
 -- recycled, in an instance and at the weekly reset.
 local function stubFrame()
     local f = { shown = false }
@@ -113,18 +113,18 @@ plates["Horde Four"] = { UnitFrame = { healthBar = {} } }
 units["Horde Four"] = "Horde"
 now = now + 1000
 MW:OnNameplateAdded("Horde Four")
-local crown = MW.crowns["Horde Four"]
-assert(crown and crown.shown and crown.anchor == plates["Horde Four"].UnitFrame.healthBar,
-    "no crown next to the health bar of a Most Wanted enemy")
-MW:HideCrown("Horde Four")
-assert(not crown.shown, "the crown stayed on a recycled nameplate")
+local skull = MW.skulls["Horde Four"]
+assert(skull and skull.shown and skull.anchor == plates["Horde Four"].UnitFrame.healthBar,
+    "no skull next to the health bar of a Most Wanted enemy")
+MW:HideSkull("Horde Four")
+assert(not skull.shown, "the skull stayed on a recycled nameplate")
 MW:OnNameplateAdded("Horde Four")
 MW:OnInstanceSuspend()
-assert(not crown.shown, "a crown stayed visible in an instance")
+assert(not skull.shown, "a skull stayed visible in an instance")
 MW:OnNameplateAdded("Horde Four")
 MW:ResetForCampaign()
-assert(not crown.shown, "last week's crown survived the weekly reset")
-assert(crown.anchor == plates["Horde Four"].UnitFrame.healthBar, "crown not anchored on the health bar")
+assert(not skull.shown, "last week's skull survived the weekly reset")
+assert(skull.anchor == plates["Horde Four"].UnitFrame.healthBar, "skull not anchored on the health bar")
 CreateFrame, C_NamePlate = nil, nil
 
 -- Network indicator: a stuck ladder round alone stays green; real losses turn it orange.

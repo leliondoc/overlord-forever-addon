@@ -109,11 +109,8 @@ local function EnableIndicatorDrag()
     indicatorFrame:RegisterForDrag("LeftButton", "RightButton")
 end
 
--- Convertit l'ancre actuelle (parfois relative a goldHudRoot en mode empile) en un point
--- absolu par rapport a UIParent, AVANT de commencer un drag. Sans ca, StopMovingOrSizing
--- renvoie des offsets relatifs a goldHudRoot ("BOTTOM") que ApplySavedIndicatorPosition
--- reappliquait ensuite par rapport a UIParent : la position sauvee ne correspondait plus
--- du tout a l'endroit lache par le joueur ("il se remet en haut tout seul").
+-- Convertit l'ancre actuelle en un point absolu par rapport a UIParent, AVANT de commencer
+-- un drag : la position sauvee au lacher est alors celle ou le joueur a pose le cadre.
 local function LockIndicatorToAbsoluteScreenPoint()
     if not indicatorFrame then return end
     local left, top = indicatorFrame:GetLeft(), indicatorFrame:GetTop()
@@ -159,34 +156,20 @@ local function ApplySavedIndicatorPosition()
     indicatorFrame:ClearAllPoints()
     indicatorFrame:SetWidth(w)
     EnableIndicatorDrag()
-    if pos then
-        -- Toujours ancre a UIParent (jamais a goldHudRoot) : coherent avec ce qui a ete
-        -- sauvegarde via LockIndicatorToAbsoluteScreenPoint.
-        indicatorFrame:SetPoint(point, UIParent, relPoint, x, y)
-    else
-        indicatorFrame:SetPoint(point, UIParent, relPoint, x, y)
-    end
+    -- Toujours ancre a UIParent : coherent avec ce qui a ete sauvegarde via
+    -- LockIndicatorToAbsoluteScreenPoint.
+    indicatorFrame:SetPoint(point, UIParent, relPoint, x, y)
 end
 
--- Empile sous le cluster or ; ignore si le joueur a deplace l'indicateur lui-meme.
+-- Place par defaut, en haut de l'ecran ; ignore si le joueur a deplace l'indicateur lui-meme.
 local function ApplyAutoStackIndicatorPosition()
     if not indicatorFrame then return end
-    local anchor = Overlord.Ressources and Overlord.Ressources.GetGoldHUDStackBottom
-        and Overlord.Ressources:GetGoldHUDStackBottom() or nil
-    if indicatorFrame._olLayoutMode == "stack" and indicatorFrame._olLayoutAnchor == anchor then
-        return
-    end
+    if indicatorFrame._olLayoutMode == "stack" then return end
     indicatorFrame._olLayoutMode = "stack"
-    indicatorFrame._olLayoutAnchor = anchor
     indicatorFrame._olLayoutKey = nil
     indicatorFrame:ClearAllPoints()
-    if anchor then
-        indicatorFrame:SetPoint("TOP", anchor, "BOTTOM", 0, -(IND_CHROME_TOP_OVERHANG + IND_BELOW_ANCHOR_GAP))
-        EnableIndicatorDrag()
-    else
-        indicatorFrame:SetPoint("TOP", UIParent, "TOP", 0, IND_DEFAULT_TOP_Y)
-        EnableIndicatorDrag()
-    end
+    indicatorFrame:SetPoint("TOP", UIParent, "TOP", 0, IND_DEFAULT_TOP_Y)
+    EnableIndicatorDrag()
 end
 
 function Overlord.ZoneIndicator:RepositionInStack()
@@ -248,9 +231,6 @@ do
             Overlord.HudInCombat = event == "PLAYER_REGEN_DISABLED"
         end
         Overlord.ZoneIndicator:ApplyCombatFade()
-        if Overlord.Ressources and Overlord.Ressources.ApplyCombatFade then
-            Overlord.Ressources:ApplyCombatFade()
-        end
     end)
 end
 

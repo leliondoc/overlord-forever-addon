@@ -466,12 +466,12 @@ local GUIDE_MINE_ATLAS = "Warfronts-FieldMapIcons-Empty-Mine"
 -- par "- " devient une puce doree, et les commandes /ov ... ressortent en bleu clair.
 local GUIDE_ICON_SIZE = 22
 local GUIDE_BULLET = "  |cFFFFD100\226\128\162|r "
-local GUIDE_COMMANDS = { show = true, hud = true, guide = true, network = true, lb = true,
+local GUIDE_COMMANDS = { show = true, guide = true, network = true, relay = true, lb = true,
     map = true, sync = true, wanted = true, guildkills = true, groups = true }
 
 local function GuideIconMarkup(icon)
     if type(icon) ~= "string" or icon == "" then return "" end
-    -- Deja une balise de texture (couronne Most Wanted, recadree par son module).
+    -- Deja une balise de texture (crane Most Wanted, construit par son module).
     if icon:sub(1, 2) == "|T" then return icon .. " " end
     if icon:find("\\Icons\\", 1, true) then
         -- Icones carrees : rogner le bord gris (5..59 sur 64) comme les boutons d'action.
@@ -571,7 +571,8 @@ local function BuildQuickGuidePageBody(page)
         return JoinGuideSections(
             FormatGuideSection(L.GUIDE_SECTION_TRAVEL, travel, "Interface\\Icons\\INV_Misc_Map_01"),
             FormatGuideSection(L.GUIDE_SECTION_RULES, L.GUIDE_RULES_BODY, "Bonus-Icon-PVP"),
-            FormatGuideSection(L.GUIDE_SECTION_PROGRESS, L.GUIDE_PROGRESS_BODY,
+            FormatGuideSection(L.GUIDE_SECTION_PROGRESS, (Overlord.Zones and Overlord.Zones.IsTruceRetired
+                and Overlord.Zones:IsTruceRetired() and L.GUIDE_PROGRESS_BODY_NOTRUCE) or L.GUIDE_PROGRESS_BODY,
                 (Overlord.Zones and Overlord.Zones.OBJECTIVE_NEUTRAL_ATLAS) or "Warfronts-FieldMapIcons-Empty-Banner"),
             FormatGuideSection(L.GUIDE_SECTION_SHARD, L.GUIDE_SHARD_BODY, "Interface\\Icons\\Spell_Arcane_PortalShattrath"),
             FormatGuideSection(L.GUIDE_SECTION_PANEL, L.GUIDE_PANEL_BODY, "Interface\\AddOns\\Overlord\\Textures\\overlord_minimap"),
@@ -585,7 +586,9 @@ local function BuildQuickGuidePageBody(page)
             -- etoile du front du jour.
             FormatGuideSection(L.GUIDE_SECTION_CONTEST, L.GUIDE_CONTEST_BODY,
                 "Interface\\Icons\\Ability_Warrior_OffensiveStance"),
-            FormatGuideSection(L.GUIDE_SECTION_SIEGE, L.GUIDE_SIEGE_BODY,
+            -- (2.0.2: without the truce once it is retired, see Zones.TRUCELESS_FROM.)
+            FormatGuideSection(L.GUIDE_SECTION_SIEGE, (Overlord.Zones and Overlord.Zones.IsTruceRetired
+                and Overlord.Zones:IsTruceRetired() and L.GUIDE_SIEGE_BODY_NOTRUCE) or L.GUIDE_SIEGE_BODY,
                 FactionGuideIcon("Warfronts-BaseMapIcons-Alliance-MainHall", "Warfronts-BaseMapIcons-Horde-MainHall")),
             FormatGuideSection(L.GUIDE_SECTION_GOLD, goldBody, "Interface\\Icons\\INV_Misc_Coin_01"),
             FormatGuideSection(L.GUIDE_SECTION_FEATURED, L.GUIDE_FEATURED_BODY, "QuestDailyIcon")
@@ -595,14 +598,14 @@ local function BuildQuickGuidePageBody(page)
         return JoinGuideSections(
             BuildGuildKeepGuideSection(),
             FormatGuideSection(L.GUIDE_SECTION_OUTPOST, L.GUIDE_OUTPOST_BODY, "Warfronts-BaseMapIcons-Empty-Tower"),
-            -- Banniere du bouton Appel aux armes, couronne Most Wanted, casque du bouton classement.
+            -- Banniere du bouton Appel aux armes, crane Most Wanted, casque du bouton classement.
             FormatGuideSection(L.GUIDE_SECTION_FACTION_CALL, L.GUIDE_FACTION_CALL_BODY,
                 FactionGuideIcon("Interface\\Icons\\INV_BannerPVP_02", "Interface\\Icons\\INV_BannerPVP_01")),
             -- Icon of the PvP Groups grid button.
             FormatGuideSection(L.GUIDE_SECTION_GROUPS, L.GUIDE_GROUPS_BODY,
                 "Interface\\Icons\\INV_Misc_GroupNeedMore"),
             FormatGuideSection(L.GUIDE_SECTION_ALERTS, L.GUIDE_ALERTS_BODY,
-                Overlord.MostWanted.CrownMarkup(GUIDE_ICON_SIZE)),
+                Overlord.MostWanted.SkullMarkup(GUIDE_ICON_SIZE)),
             FormatGuideSection(L.GUIDE_SECTION_TOOLS, L.GUIDE_TOOLS_BODY, "Interface\\Icons\\INV_Helmet_08"),
             -- Insigne du quatrieme rang (les epees croisees) : le logo Overlord sert deja au panneau.
             FormatGuideSection(L.GUIDE_SECTION_RANKS, L.GUIDE_RANKS_BODY,
@@ -618,7 +621,10 @@ local cachedGuideBodyLocale = nil
 local cachedGuideScrollHeights = {}
 
 local function GetQuickGuidePageBody(page)
-    local localeKey = GetLocale and GetLocale() or "enUS"
+    -- (2.0.2: the pages read whether the truce is retired; a session that crosses that
+    -- moment builds them again.)
+    local retired = Overlord.Zones and Overlord.Zones.IsTruceRetired and Overlord.Zones:IsTruceRetired() or false
+    local localeKey = (GetLocale and GetLocale() or "enUS") .. ":" .. tostring(retired)
     if cachedGuideBodyLocale ~= localeKey then
         cachedGuideBody = {}
         cachedGuideScrollHeights = {}

@@ -160,7 +160,15 @@ local function enqueue(job)
         if tokens >= cost and (not quietNeeded or not net or not net.CanSendLeaderboardPage
             or net:CanSendLeaderboardPage()) then
             tokens = tokens - cost
+            local relayStats = net and net.stats
+            local refusedBefore = relayStats and relayStats.localRowsRefused or 0
             if sync:SendWhisper(packet[1], packet[2], job.peer) ~= false then
+                -- 2.0.2: the page the relay queue had refused is accepted at last: those
+                -- refusals were flow control, not losses.
+                if (job.refusals or 0) > 0 and net and net.NoteOfferedAgain then
+                    net:NoteOfferedAgain(job.refusals)
+                    job.refusals = 0
+                end
                 job.index = job.index + 1
                 stats.bytes = stats.bytes + cost
                 if job.index > #job.packets then
@@ -171,6 +179,9 @@ local function enqueue(job)
                 end
             else
                 stats.replySendsRefused = (stats.replySendsRefused or 0) + 1
+                -- The page stays the next one: it is offered again in half a second.
+                job.refusals = (job.refusals or 0)
+                    + ((relayStats and relayStats.localRowsRefused or 0) - refusedBefore)
             end
         end
         wake = true

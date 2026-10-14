@@ -173,6 +173,26 @@ ticker.run()
 pump(1)
 assert(#joins == 2, "the ticker did not retry after the channel was lost again")
 
+-- (3b) The map requests that follow a join (at once, then 15 and 35 s): broadcast before
+-- the truce's retirement; from that day one neighbour heard as updated instead (2.0.2).
+for _, cut in ipairs({ false, true }) do
+    reset()
+    local broadcasts, targeted = 0, 0
+    sync.SendSyncRequest = function() broadcasts = broadcasts + 1 end
+    local realPeer = sync.SendLoginMapPeerRequest
+    sync.SendLoginMapPeerRequest = function() if cut then targeted = targeted + 1 end return cut end
+    onJoin = function() channelId = 5 end
+    sync:JoinChannel()
+    pump(40)
+    assert(sync:GetChannelId() == 5, "fixture: the join did not work")
+    if cut then
+        assert(broadcasts == 0 and targeted == 3, "after the cut a join still broadcast: " .. broadcasts .. " / " .. targeted)
+    else
+        assert(broadcasts == 3 and targeted == 0, "before the cut a join lost its requests: " .. broadcasts .. " / " .. targeted)
+    end
+    sync.SendSyncRequest, sync.SendLoginMapPeerRequest = function() end, realPeer
+end
+
 -- (4) Wiring, read in the source.
 local function read(path) return assert(io.open(path, "r")):read("*a") end
 local source = read("Sync.lua")

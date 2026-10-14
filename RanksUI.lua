@@ -653,9 +653,12 @@ end
 
 -- Pas d'onglet en instance, ni a la manette : Blizzard y pose son repere d'onglet
 -- suivant sous son dernier onglet, la ou est le notre, et navigue par sa propre liste.
+local function GamepadUI()
+    return (InputUtil and InputUtil.IsGamepadUIEnabled and InputUtil.IsGamepadUIEnabled()) and true or false
+end
+
 local function ShouldShowTab()
-    if Overlord.InstanceSuspended then return false end
-    return not (InputUtil and InputUtil.IsGamepadUIEnabled and InputUtil.IsGamepadUIEnabled())
+    return not Overlord.InstanceSuspended and not GamepadUI()
 end
 
 function UIR:OnInstanceResume()
@@ -747,6 +750,13 @@ function UIR:Attach()
     frame:HookScript("OnShow", function()
         -- (Filet : un panneau couvert ne reste jamais invisible, notre onglet ferme.)
         if not UIR.selected then UncoverPanel(UIR) end
+        -- A la manette, l'onglet n'est meme pas cree : un cadre cree sous la feuille
+        -- ouverte fait re-parcourir toute la feuille a Blizzard dans notre execution
+        -- (voir MapMarkers.NewFrame).
+        if not UIR.tab and GamepadUI() then
+            UIR.openOnShow = nil
+            return
+        end
         local tab = UIR:EnsureTab()
         tab:SetShown(ShouldShowTab())
         UIR:AnchorTab()

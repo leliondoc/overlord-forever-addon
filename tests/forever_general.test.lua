@@ -130,4 +130,39 @@ expect(general:ApplyRemoteClaim("Ally General", "Alliance", "eu", 1, 1, 1, serve
 expect(general:ApplyRemoteRelease("Ally General", "Alliance", "eu", serverNow), "fixture: the release was refused")
 drain()
 expect(not general:IsLocalHolder(), "a group leader became general when the general stepped down, without opting in")
+
+-- 2.0.2: an ally taking command is a chat line only; an enemy taking command is still
+-- announced in the middle of the screen, without the raid warning sound. A general's
+-- fall is announced there with its sound, as before.
+do
+    local said, warned = {}, {}
+    Overlord.L.GENERAL_RECEIVED = "%s commands in %s"
+    Overlord.L.GENERAL_ENEMY_ASSUMED = "%s is the enemy commander in %s"
+    Overlord.L.GENERAL_FALLEN = "%s fell to %s"
+    Overlord.PrintNotification = function(_, text) said[#said + 1] = text end
+    Overlord.PrintRaidWarning = function(_, text, silent)
+        warned[#warned + 1] = (silent and "silent " or "loud ") .. text
+    end
+    local function count(list, needle)
+        local n = 0
+        for _, text in ipairs(list) do if text:find(needle, 1, true) then n = n + 1 end end
+        return n
+    end
+    serverNow = serverNow + 10
+    expect(general:ApplyRemoteClaim("Other General", "Alliance", "eu", 1, 1, 1, serverNow, true),
+        "fixture: the allied claim was refused")
+    expect(count(said, "Other General commands in") == 1, "an ally taking command is not said in the chat")
+    expect(#warned == 0, "an ally taking command was announced as a raid warning: " .. tostring(warned[1]))
+    serverNow = serverNow + 10
+    expect(general:ApplyRemoteClaim("Horde General", "Horde", "eu", 1, 1, 1, serverNow, true),
+        "fixture: the enemy claim was refused")
+    expect(count(said, "Horde General is the enemy commander in") == 1, "an enemy taking command is not said in the chat")
+    expect(#warned == 1 and warned[1]:find("^silent ") and warned[1]:find("Horde General is the enemy commander", 1, true),
+        "an enemy taking command must be announced on screen once, without the sound: " .. tostring(warned[1]))
+    expect(general:ApplyRemoteDown("Other General", "Alliance", "eu", serverNow - 10, "Enemy Tester", "MAGE", "zone"),
+        "fixture: the general death was refused")
+    drain()
+    expect(count(warned, "fell to") == 1 and warned[#warned]:find("^loud "),
+        "a general's fall is no longer announced on screen with its sound: " .. tostring(warned[#warned]))
+end
 print("general_team_lifecycle_runtime: OK")

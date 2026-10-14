@@ -131,7 +131,7 @@ fronts, bonus, stocks) empruntent également ce réseau.
 - Les totaux reçus par synchronisation sont acceptés jusqu’à **5 000 VH par joueur et par campagne**, incluses. Au-delà, le total reçu est refusé. Les clients antérieurs à 1.0.13 refusent encore les totaux supérieurs à 1 000 ; tous les participants doivent mettre à jour pour partager ces scores. Le compteur local de VH continue de progresser indépendamment de ce seuil réseau.
 - Une fois affiché, le dernier tableau est conservé en mémoire et dans `OverlordDB`. À la prochaine connexion, ce cache borné apparaît immédiatement, avec la flèche verte de synchronisation dans l’en-tête, pendant la préparation des données locales. Il ne déclenche aucun transfert et ne remplace jamais les scores ; les mises à jour réseau continuent en arrière-plan. Une autre campagne, un autre pool ou un format incompatible invalide ce cache. Il ne peut pas survivre au défaut de chargement de toutes les SavedVariables décrit plus haut.
 - Au centre de l’en-tête du classement, une flèche verte glisse doucement tant que des données arrivent encore ; elle devient une coche verte quand une comparaison complète avec un voisin n’a presque rien trouvé de manquant (3 lignes ou 1 % du classement au plus). La coche pulse quand des victoires arrivent en direct. Ce badge lit seulement l’état local et n’envoie rien.
-- Le réseau de relais bêta partage un budget estimé de 1 000 octets/s et une file de 128 messages. Le rattrapage adressé dispose de 16 places protégées et d’une part de service de 300 octets/s, afin de progresser même avec du trafic courant. Les envois inutilisés laissent leur débit disponible aux autres messages. Les pages restent vérifiées et soumises aux filtres de scores existants ; `/ov network` affiche leur progression et les copies de présence évitées.
+- Le réseau de relais bêta partage un budget estimé de 1 000 octets/s et une file de 128 messages. Le rattrapage adressé dispose de 16 places protégées et d’une part de service de 300 octets/s, afin de progresser même avec du trafic courant. Les envois inutilisés laissent leur débit disponible aux autres messages. Les pages restent vérifiées et soumises aux filtres de scores existants ; `/ov relay` affiche leur progression et les copies de présence évitées ; `/ov network` en donne le résumé et les ponts.
 - Les totaux de guilde additionnent les VH de tous les membres connus, même hors du classement affiché, avec dédoublonnage des identités. Ce ne sont pas des victimes uniques. Une guilde temporairement indisponible au chargement ne supprime plus le rattachement connu.
 - Le volet latéral **Prochain objectif** remplace le bandeau flottant : vignette du front actuel et nom du prochain point à capturer. Le repère automatique sur la carte et les minuteurs de capture restent disponibles.
 - Pendant la bêta, tous les comptes utilisent la même semaine américaine (mardi 08:00 UTC, ancre commune de l’addon). Aucun reset EU le mercredi. Une sauvegarde absente au login ne déclenche plus de faux reset hebdomadaire.
@@ -159,7 +159,6 @@ Alias : `/ov` et `/overlord`. Tapez **`/ov help`** en jeu pour la liste complèt
 | `/ov` | Liste les commandes |
 | `/ov show` / `hide` / `toggle` | Affiche, cache ou bascule l'interface |
 | `/ov map` / `map full` / `map compact` / `map off` | Affichage de la carte du monde : compact (par défaut, nom écrit dans le cercle), complet ou masqué ; sans argument, passe au mode suivant (aussi le bouton Overlord dans le coin de la carte) |
-| `/ov hud on` / `off` / `toggle` | Panneau des coins flottant (même case que les options). Utilisable dans une macro. |
 | `/ov status` | État de toutes les zones du front |
 | `/ov zones` | Zones disponibles avec coordonnées |
 | `/ov where` | Bascule l'indicateur de zone |
@@ -175,8 +174,6 @@ Alias : `/ov` et `/overlord`. Tapez **`/ov help`** en jeu pour la liste complèt
 **Échap → Options → AddOns → Overlord** : échelle UI, opacité des overlays carte/minimap, notifications chat, waypoint automatique, affichage minimap, etc.
 
 Carte du monde : trois modes (compact par défaut, avec le nom écrit dans le cercle ; complet ; masqué), dans les options, le menu Filtres de la carte, le menu de suivi de la minicarte, le bouton Overlord dans le coin de la carte et `/ov map`.
-
-Le **panneau des coins flottant** est désactivé par défaut (tout son contenu est dans le panneau Overlord). Activé, il apparaît près d'une capture, d'une mine ou d'un fortin et reste visible 15 secondes après la sortie du lieu ; sa croix le désactive (options ou `/ov hud on` pour le rallumer). Le guide est accessible par le bouton Tutoriel du panneau et avec `/ov guide`.
 
 ## Releases
 

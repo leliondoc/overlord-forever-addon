@@ -696,6 +696,46 @@ local function CapturerLadderFaction(capturer)
     return nil
 end
 
+-- 2.0.2: capturers of claims from a reply we asked for, refused only because our ranking
+-- does not know them yet (or under that guild). Once it does, the map difference the claim
+-- left is asked again within 10 min instead of 30 (net:MapDiffDue reads the generation).
+-- 32 at most, each forgotten after 30 min (a name never learnt, or made up in an answer,
+-- must not hold a place for the session); checked at most every 20 s.
+local pendingCapturers, pendingCapturerState = {}, { count = 0, generation = 0, checkedAt = -100 }
+local PENDING_CAPTURER_MAX, PENDING_CAPTURER_TTL = 32, 1800
+local function NotePendingCapturer(capturer, guild)
+    if type(capturer) ~= "string" or capturer == "" or pendingCapturers[capturer] then return end
+    if pendingCapturerState.count >= PENDING_CAPTURER_MAX then
+        local now = GetTime()
+        for name, entry in pairs(pendingCapturers) do
+            if now - entry.at > PENDING_CAPTURER_TTL then
+                pendingCapturers[name] = nil
+                pendingCapturerState.count = pendingCapturerState.count - 1
+            end
+        end
+        if pendingCapturerState.count >= PENDING_CAPTURER_MAX then return end
+    end
+    pendingCapturers[capturer] = { guild = tostring(guild or ""):lower(), at = GetTime() }
+    pendingCapturerState.count = pendingCapturerState.count + 1
+end
+function Overlord.Sync:GetLearnedCapturerGeneration()
+    local st = pendingCapturerState
+    local now = GetTime()
+    if st.count > 0 and now - st.checkedAt >= 20 and self.IsKnownLeaderboardSubject then
+        st.checkedAt = now
+        for capturer, entry in pairs(pendingCapturers) do
+            local learnt = self:IsKnownLeaderboardSubject(capturer)
+                and CapturerLadderGuild(capturer):lower() == entry.guild
+            if learnt or now - entry.at > PENDING_CAPTURER_TTL then
+                pendingCapturers[capturer] = nil
+                st.count = st.count - 1
+                if learnt then st.generation = st.generation + 1 end
+            end
+        end
+    end
+    return st.generation
+end
+
 local function NoteOutpostClaimRefused(msgType, reason, routine)
     outpostClaimStats.refused = outpostClaimStats.refused + 1
     outpostClaimStats.lastRefused = tostring(msgType) .. " " .. tostring(reason)
@@ -879,10 +919,12 @@ function Overlord.Sync:AuthorizeOutpostClaim(siteKey, guild, faction, claimTs, c
     if ConsumeSolicitedOutpostClaim(sender, sourceChannel) then
         if not self.IsKnownLeaderboardSubject or not self:IsKnownLeaderboardSubject(capturer) then
             solicitedReason = "catch-up-unknown"
+            NotePendingCapturer(capturer, guild)
         else
             local ladderGuild = CapturerLadderGuild(capturer)
             if ladderGuild == "" or ladderGuild:lower() ~= guild:lower() then
                 solicitedReason = "catch-up-guild"
+                NotePendingCapturer(capturer, guild)
             else
                 outpostClaimStats.accepted = outpostClaimStats.accepted + 1
                 return true, "catch-up", capturer
@@ -1745,11 +1787,87 @@ local SR_MINIMAL_OP_SITE_MAX = 16
 -- the five fortresses start neutral, so every SR answer carried up to twelve such
 -- OP packets. A site that became neutral again (abandon) keeps its timestamp and
 -- is still sent, so peers clear their stale state.
+-- Held rows left out of answers because the requester holds them (2.0.2, /ov relay).
+local outpostKnownSkipped = 0
+function Overlord.Sync:GetOutpostKnownSkipped() return outpostKnownSkipped end
 local function IsNeverTouchedNeutral(st)
     return st and st.status == "neutral" and OutpostSyncTimestamp(st) <= 0
 end
 
-function Overlord.Sync:AppendOutpostToSrQueue(queue, minimalResponseOnly)
+-- 2.0.2: the keeps and outposts a requester already holds are not sent back to it. Its
+-- map request lists one short mark per held site it holds whole (tenant with its signed
+-- capturer, capture in its ledger, same sync date); an answer to that requester alone
+-- skips the held rows whose mark matches. A third of every answer's rows were keeps the
+-- requester had (2026-10-13: 14 sites, 11 held). A missed capture still comes in the same
+-- answer: its mark almost never matches (3 characters, about 1 in 3,000 with 14 marks), and
+-- a chance match is gone at the next request, whose nonce salts every mark anew. The hash
+-- ends with two squarings: a plain djb2 with the nonce in front would keep the same
+-- collisions under every nonce (the nonce's part cancels out between two rows).
+-- 12 marks at most: a targeted request then usually stays in one 170-byte relay fragment
+-- (two with two long names and a recorded victory: one more whisper, against the rows saved).
+local OUTPOST_MARK_CHARS, OUTPOST_MARK_MAX, OUTPOST_MARK_MOD = 3, 12, 67108859
+function Overlord.Sync:OutpostHeldMark(siteKey, st, nonce)
+    if not siteKey or not st or st.status ~= "held" or not Overlord.Outpost then return nil end
+    -- A state awaiting its snapshot is not sent (BuildOutpostPayload): never counted as skipped.
+    if Overlord.Outpost.IsOutpostStateAwaitingNetworkSnapshot
+        and Overlord.Outpost:IsOutpostStateAwaitingNetworkSnapshot(st) then return nil end
+    local guild = Overlord.Outpost:SanitizeGuildName(st.ownerGuild or "")
+    local facCode = FactionToCode(st.ownerFaction)
+    local claimedAt = math.floor(tonumber(st.claimedAt) or 0)
+    if guild == "" or facCode == "" or claimedAt <= 0 then return nil end
+    local text = table.concat({ tostring(math.floor(tonumber(nonce) or 0)), siteKey, guild:lower(), facCode,
+        tostring(claimedAt), tostring(math.floor(OutpostSyncTimestamp(st))) }, "|")
+    local hash = 5381
+    for i = 1, #text do hash = (hash * 33 + text:byte(i)) % 2147483647 end
+    -- Below 2^26, so each square stays exact in a double.
+    local salt = math.floor(tonumber(nonce) or 0) % OUTPOST_MARK_MOD
+    hash = hash % OUTPOST_MARK_MOD
+    for _ = 1, 2 do hash = (hash * hash + salt + 1) % OUTPOST_MARK_MOD end
+    local digits, out = "0123456789abcdefghijklmnopqrstuvwxyz", ""
+    hash = hash % (36 ^ OUTPOST_MARK_CHARS)
+    for _ = 1, OUTPOST_MARK_CHARS do
+        local d = hash % 36
+        out = digits:sub(d + 1, d + 1) .. out
+        hash = math.floor(hash / 36)
+    end
+    return out
+end
+-- The marks of the held sites we hold whole, for our own map request (nil: none).
+function Overlord.Sync:BuildOutpostKnownMarks(nonce)
+    local OP, lb = Overlord.Outpost, Overlord.Leaderboard
+    if not OP or not OP.GetState or not Overlord.OutpostSites then return nil end
+    local marks = {}
+    for siteKey in pairs(Overlord.OutpostSites) do
+        local st = OP:GetState(siteKey)
+        if st and st.status == "held" and #marks < OUTPOST_MARK_MAX then
+            local guild = OP:SanitizeGuildName(st.ownerGuild or "")
+            local capturer = OP.NormalizeHeldCapturerName and OP:NormalizeHeldCapturerName(st.heldCapturerName) or nil
+            local pool = NormalizePoolTag(st.pool)
+            if pool == "" then pool = CurrentOutpostPoolTag() end
+            if guild ~= "" and capturer and st.heldCapturerGuild == guild and lb and lb.HasOutpostEvent
+                and lb:HasOutpostEvent(siteKey, guild, st.ownerFaction, math.floor(tonumber(st.claimedAt) or 0), pool) then
+                local mark = self:OutpostHeldMark(siteKey, st, nonce)
+                if mark then marks[#marks + 1] = mark end
+            end
+        end
+    end
+    table.sort(marks)
+    return #marks > 0 and table.concat(marks) or nil
+end
+-- The marks of a request ("k" + 3 characters each), as a set; nil when absent or malformed.
+function Overlord.Sync:ParseOutpostKnownMarks(field)
+    if type(field) ~= "string" or field:sub(1, 1) ~= "k" then return nil end
+    local body = field:sub(2)
+    if #body == 0 or #body % OUTPOST_MARK_CHARS ~= 0 or #body > OUTPOST_MARK_CHARS * OUTPOST_MARK_MAX
+        or body:find("[^0-9a-z]") then return nil end
+    local set = {}
+    for i = 1, #body, OUTPOST_MARK_CHARS do set[body:sub(i, i + OUTPOST_MARK_CHARS - 1)] = true end
+    return set
+end
+
+-- known (2.0.2): the requester's marks with its nonce ({ set, nonce }), only for an answer
+-- to that requester alone; nil: every row as before.
+function Overlord.Sync:AppendOutpostToSrQueue(queue, minimalResponseOnly, known)
     if not queue or not Overlord.Outpost or not Overlord.OutpostSites then return end
     if minimalResponseOnly then
         local added = 0
@@ -1767,7 +1885,10 @@ function Overlord.Sync:AppendOutpostToSrQueue(queue, minimalResponseOnly)
         for siteKey in pairs(Overlord.OutpostSites) do
             if added >= SR_MINIMAL_OP_SITE_MAX * 2 then break end
             local st = Overlord.Outpost:GetState(siteKey)
-            if st and st.status == "held" and (st.ownerGuild or "") ~= "" then
+            local mark = known and st and st.status == "held" and self:OutpostHeldMark(siteKey, st, known.nonce) or nil
+            if mark and known.set[mark] then
+                outpostKnownSkipped = outpostKnownSkipped + 1
+            elseif st and st.status == "held" and (st.ownerGuild or "") ~= "" then
                 local opData = self.BuildOutpostPayload and self:BuildOutpostPayload(siteKey)
                 if opData then
                     table.insert(queue, { type = "OP", data = opData })

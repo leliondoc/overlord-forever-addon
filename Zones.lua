@@ -86,6 +86,35 @@ end
 -- Capitales ennemies : timer fixe (8 min) + treve post-victoire.
 local CAPITAL_HOLD_TIME = 480
 local CAPITAL_VICTORY_COOLDOWN = 900 -- 15 min (anti chain-cap ; etait 30 min)
+-- 2.0.2: the truce is retired. A victory dated from TRUCELESS_FROM on opens none: the
+-- front is the winner's at once, the fallen capital takes its kept stamp at once (one
+-- second after the victory) and the loser may take points back at once; the 6 hours
+-- between two victories of a front stay. The date is the weekly reset of Tuesday
+-- 2026-10-27, 08:00 UTC (chosen on 2026-10-14: a week for 2.0.2 to spread after its
+-- release), when every map and every truce is wiped anyway: all clients
+-- change rule on the same empty map. Before it nothing changes; nil = never.
+-- Why a date: a client without the truce next to clients that still have it gave two
+-- maps for 25 minutes after a victory, then a legitimate capture erased everywhere
+-- (bench of 86 clients, 2026-10-14). Clients that do not run this rule are therefore
+-- left out of the map exchange from the same moment (SyncRelay, "~t0"): update required.
+Overlord.Zones.TRUCELESS_FROM = 1793088000
+local function TruceSecondsFor(victoryTs)
+    local from = tonumber(Overlord.Zones.TRUCELESS_FROM)
+    victoryTs = tonumber(victoryTs)
+    if from and victoryTs and victoryTs >= from then return 0 end
+    return CAPITAL_VICTORY_COOLDOWN
+end
+-- The truce length behind a truce-end date: every truce-end record of an earlier week is
+-- wiped by the weekly reset, so a record dated from TRUCELESS_FROM on is a victory's own
+-- moment.
+local function TruceSecondsOfEpoch(epoch)
+    return TruceSecondsFor(epoch)
+end
+-- True once victories open no truce any more (by the server clock).
+function Overlord.Zones:IsTruceRetired(at)
+    at = tonumber(at) or (Overlord.ServerNow and Overlord.ServerNow()) or time()
+    return TruceSecondsFor(at) == 0
+end
 -- 1.7 : une nouvelle victoire sur un meme front ne compte que 6 h apres la precedente
 -- (la capitale peut etre reprise entre-temps : le combat continue, sans bonus ni treve).
 local VICTORY_SPACING = 6 * 3600
@@ -646,8 +675,10 @@ function Overlord.Zones:GetObserverHoldTimeElapsed(zone)
     return math.min(req, base + age)
 end
 
-function Overlord.Zones:GetVictoryCooldownSeconds()
-    return CAPITAL_VICTORY_COOLDOWN
+-- victoryTs: the victory whose truce is meant (2.0.2: none from TRUCELESS_FROM on).
+-- Without it, the rule in force now.
+function Overlord.Zones:GetVictoryCooldownSeconds(victoryTs)
+    return TruceSecondsFor(victoryTs or (Overlord.ServerNow and Overlord.ServerNow()) or time())
 end
 
 local function GetVictoryFrontId(frontId)
@@ -731,26 +762,56 @@ function Overlord.Zones:IsNetworkConfirmedCapture(zone)
 end
 
 -- Zones du front qui ne sont pas encore au gagnant (carte encore disputee).
-function Overlord.Zones:CountZonesNotOwnedByOnFront(frontId, faction)
+-- victoryTs (2.0.2, only where a victory announced for that moment is being proven): a
+-- point the other faction took strictly after it, within the truce that follows, is not
+-- counted. No capture is allowed then: it was made by a player who had not heard the
+-- victory, and it used to keep every client that had not accepted the victory yet out
+-- of the truce for good, on two maps (see tests/forever_victory_late_capture.test.lua).
+-- Only while the truce of that victory runs (an old announcement replayed later gets
+-- the plain count). Also returns how many points were set aside, and how many points
+-- other than the fallen capital the winner still holds from before the victory.
+-- 2.0.2, a victory without a truce: the loser may take points back at once, and those
+-- captures are legitimate; a client that learns the victory late (through a Battle.net
+-- bridge, after a battleground) must still believe it. They are set aside for as long as
+-- an announcement is believed at all (2 h, the age limit of a TV).
+local VICTORY_PROOF_LATE_SECONDS = 2 * 3600
+local function ProofSetAsideSeconds(victoryTs)
+    local truce = TruceSecondsFor(victoryTs)
+    return truce > 0 and truce or VICTORY_PROOF_LATE_SECONDS
+end
+function Overlord.Zones:CountZonesNotOwnedByOnFront(frontId, faction, victoryTs)
     if not frontId or not faction or not Overlord.Fronts then return 999 end
     local front = Overlord.Fronts:GetFront(frontId)
     if not front or not front.zones then return 999 end
-    local n = 0
+    victoryTs = tonumber(victoryTs)
+    if victoryTs and (victoryTs <= 0 or (Overlord.ServerNow and Overlord.ServerNow() or time())
+        > victoryTs + ProofSetAsideSeconds(victoryTs)) then victoryTs = nil end
+    local capitalId = victoryTs and Overlord.Fronts:GetEnemyCapitalId(faction, frontId) or nil
+    local n, setAside, heldBefore = 0, 0, 0
     for _, z in ipairs(front.zones) do
         local zd = select(1, Overlord.Fronts:GetZone(z.id, frontId))
         if zd and (zd.owner ~= faction or zd._loginSyncUnconfirmed) then
-            n = n + 1
+            local ct = tonumber(zd.capturedTime) or 0
+            local afterVictory = victoryTs and not zd._loginSyncUnconfirmed
+                and (zd.owner == "Alliance" or zd.owner == "Horde") and zd.status ~= "in_progress"
+                and ct > victoryTs and ct <= victoryTs + ProofSetAsideSeconds(victoryTs)
+            if afterVictory then setAside = setAside + 1 else n = n + 1 end
+        elseif zd and victoryTs and z.id ~= capitalId
+            and (tonumber(zd.capturedTime) or 0) <= victoryTs then
+            heldBefore = heldBefore + 1
         end
     end
-    return n
+    return n, setAside, heldBefore
 end
 
 -- Treve sync (SR/VT) valide seulement si l'etat local correspond a une vraie victoire totale.
-function Overlord.Zones:LocalStateSupportsVictoryTruce(frontId, winningFaction)
+function Overlord.Zones:LocalStateSupportsVictoryTruce(frontId, winningFaction, victoryTs)
     if not self:ConfirmsFrontCapitalCaptured(frontId, winningFaction) then
         return false
     end
-    return self:CountZonesNotOwnedByOnFront(frontId, winningFaction) == 0
+    local missing, setAside, heldBefore = self:CountZonesNotOwnedByOnFront(frontId, winningFaction, victoryTs)
+    -- Points set aside never make a front the loser retook entirely look like a victory.
+    return missing == 0 and (setAside == 0 or heldBefore > 0)
 end
 
 function Overlord.Zones:ClearFrontVictory(frontId)
@@ -796,35 +857,56 @@ function Overlord.Zones:ForceSyncFrontToWinner(frontId, winningFaction, timestam
     local front = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
     if not front or not front.zones or not winningFaction or not timestamp then return false end
     local ts = tonumber(timestamp) or time()
+    -- 2.0.2, no truce: a point taken after the victory (by the loser, or retaken later by
+    -- the winner) is legitimate and newer. A client that learns the victory late keeps it
+    -- (every client that heard the victory in time holds it too); only what is dated before
+    -- is repainted.
+    local truceless = TruceSecondsFor(ts) == 0
 
     for _, zone in ipairs(front.zones) do
-        if Overlord.CaptureLease and Overlord.CaptureLease.Complete then
-            Overlord.CaptureLease:Complete(zone)
+        if not (truceless and zone.owner and zone.status ~= "in_progress"
+                and not zone._loginSyncUnconfirmed and (tonumber(zone.capturedTime) or 0) > ts) then
+            if Overlord.CaptureLease and Overlord.CaptureLease.Complete then
+                Overlord.CaptureLease:Complete(zone)
+            end
+            self:ClearCaptureFinalUnattestedState(zone)
+            zone.owner = winningFaction
+            zone.status = "captured"
+            zone.capturedTime = ts
+            zone.updatedAt = ts
+            zone.isHolding = false
+            zone.holdAuthorityLocal = nil
+            zone.isContested = false
+            zone.isPaused = false
+            zone.holdTimeElapsed = 0
+            zone.holdStartTime = nil
+            zone.previousOwner = nil
+            zone.zsOfficialCapturerName = nil
+            zone._zsOfficialCapturerSeenAt = nil
+            zone.zsRelayCapturerName = nil
+            zone.zsRelayCapturerShard = nil
+            zone.lastZSSender = nil
+            zone._syncGateRemoteProgress = nil
+            zone._syncGateRemoteProgressUntil = nil
+            zone.holdTimeRequired = 120
+            if resetKills then
+                zone.killsCurrent = 0
+                zone.allyKillsCurrent = 0
+                zone.enemyKillsCurrent = 0
+            end
         end
-        self:ClearCaptureFinalUnattestedState(zone)
-        zone.owner = winningFaction
-        zone.status = "captured"
-        zone.capturedTime = ts
-        zone.updatedAt = ts
-        zone.isHolding = false
-        zone.holdAuthorityLocal = nil
-        zone.isContested = false
-        zone.isPaused = false
-        zone.holdTimeElapsed = 0
-        zone.holdStartTime = nil
-        zone.previousOwner = nil
-        zone.zsOfficialCapturerName = nil
-        zone._zsOfficialCapturerSeenAt = nil
-        zone.zsRelayCapturerName = nil
-        zone.zsRelayCapturerShard = nil
-        zone.lastZSSender = nil
-        zone._syncGateRemoteProgress = nil
-        zone._syncGateRemoteProgressUntil = nil
-        zone.holdTimeRequired = 120
-        if resetKills then
-            zone.killsCurrent = 0
-            zone.allyKillsCurrent = 0
-            zone.enemyKillsCurrent = 0
+    end
+
+    -- 2.0.2, no truce: the fallen capital is "kept" from the first second (the stamp a
+    -- truce end used to give it fifteen minutes later). Every client that repaints a
+    -- victory holds the same dates at once, whatever the order of its own bookkeeping,
+    -- and a kept capital is never read as a new victory.
+    if TruceSecondsFor(ts) == 0 and Overlord.Fronts.GetEnemyCapitalId then
+        local capitalId = Overlord.Fronts:GetEnemyCapitalId(winningFaction, frontId)
+        local capital = capitalId and select(1, Overlord.Fronts:GetZone(capitalId, frontId))
+        if capital and capital.owner == winningFaction then
+            capital.capturedTime = ts + CAPITAL_KEPT_STAMP_OFFSET
+            capital.updatedAt = capital.capturedTime
         end
     end
 
@@ -862,7 +944,7 @@ function Overlord.Zones:IsOnVictoryCooldown(frontId, forDisplay)
     end
     -- Horloge serveur : un PC en avance ne termine pas la treve trop tot.
     local elapsed = ((Overlord.ServerNow and Overlord.ServerNow()) or time()) - victoryTimestamp
-    local remaining = CAPITAL_VICTORY_COOLDOWN - elapsed
+    local remaining = TruceSecondsFor(victoryTimestamp) - elapsed
     if remaining > 0 and winningFaction then
         -- Treve orpheline (SR/VT sans TV) : carte mixte -> pas de blocage gameplay ni UI grisee.
         if self:LocalStateSupportsVictoryTruce(victoryFrontId, winningFaction) then
@@ -1000,7 +1082,7 @@ function Overlord.Zones:GetPreviousFrontVictoryTs(frontId)
     end
     local resetEpoch = OverlordDB and OverlordDB.frontTruceResetEpoch
         and math.floor(tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0) or 0
-    if resetEpoch > 0 then latest = math.max(latest, resetEpoch - CAPITAL_VICTORY_COOLDOWN) end
+    if resetEpoch > 0 then latest = math.max(latest, resetEpoch - TruceSecondsOfEpoch(resetEpoch)) end
     if Overlord.GetLatestDominationVictoryForFront then
         local journalTs = Overlord:GetLatestDominationVictoryForFront(frontId)
         latest = math.max(latest, math.floor(tonumber(journalTs) or 0))
@@ -1050,6 +1132,42 @@ function Overlord.Zones:IsKeptCapitalStamp(frontId, capital)
     return false
 end
 
+-- 2.0.2: the victory checks read this one. A kept stamp left by a truce end is never a
+-- new victory. A truce-less victory's own stamp (capital at victory + 1 with the points
+-- at the victory, see ForceSyncFrontToWinner) is one only for a client that has not filed
+-- that victory yet: a client that got the repainted front before the victory itself must
+-- still believe it (record, screen, 6 h spacing), and one that filed it is not told it
+-- again (after a /reload, by a replayed announcement). In the first 15 min after
+-- TRUCELESS_FROM a truce of the day before could end there: read as kept, as before.
+function Overlord.Zones:IsKeptCapitalAfterTruce(frontId, capital)
+    if not self:IsKeptCapitalStamp(frontId, capital) then return false end
+    local ct = math.floor(tonumber(capital.capturedTime) or 0)
+    if TruceSecondsFor(ct - CAPITAL_KEPT_STAMP_OFFSET - CAPITAL_VICTORY_COOLDOWN) > 0 then return true end
+    local filed = OverlordDB and type(OverlordDB.frontTruceResetEpoch) == "table"
+        and math.floor(tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0) or 0
+    return filed > 0 and math.abs(filed - (ct - CAPITAL_KEPT_STAMP_OFFSET)) <= CAPITAL_STAMP_SLACK
+end
+
+-- 2.0.2: the truce-less victory filed for this front (its moment and winner), read from
+-- the map itself: the fallen capital still held by the winner with the victory's kept
+-- stamp. nil when none, or when the capital was retaken since (nobody could prove it).
+function Overlord.Zones:GetFiledTrucelessVictory(frontId)
+    local vts = OverlordDB and type(OverlordDB.frontTruceResetEpoch) == "table"
+        and math.floor(tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0) or 0
+    if vts <= 0 or TruceSecondsFor(vts) > 0 or not Overlord.Fronts or not Overlord.Fronts.GetEnemyCapitalId then
+        return nil
+    end
+    for _, winner in ipairs({ "Alliance", "Horde" }) do
+        local capId = Overlord.Fronts:GetEnemyCapitalId(winner, frontId)
+        local cap = capId and select(1, Overlord.Fronts:GetZone(capId, frontId))
+        if cap and cap.owner == winner and cap.status ~= "in_progress"
+            and math.abs(math.floor(tonumber(cap.capturedTime) or 0) - (vts + CAPITAL_KEPT_STAMP_OFFSET)) <= CAPITAL_STAMP_SLACK then
+            return vts, winner
+        end
+    end
+    return nil
+end
+
 -- Fin de treve deja recue par ZA avant FR (ou vue au login) : la capitale du perdant est
 -- restee au vainqueur, re-horodatee une seconde apres l'epoch.
 function Overlord.Zones:LocalStateShowsKeptConquest(frontId, winningFaction, resetEpoch)
@@ -1079,13 +1197,21 @@ function Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, fromSync)
     if not frontId or not resetEpoch or resetEpoch <= 0 then return false end
     if not OverlordDB then return false end
     OverlordDB.frontTruceResetEpoch = OverlordDB.frontTruceResetEpoch or {}
+    local truceSeconds = TruceSecondsOfEpoch(resetEpoch)
     if (OverlordDB.frontTruceResetEpoch[frontId] or 0) >= resetEpoch then
+        -- 2.0.2, no truce: the record of this very victory has nothing left to wait for.
+        if truceSeconds == 0 then
+            local victory = OverlordDB.frontVictories and OverlordDB.frontVictories[frontId]
+            if victory and math.floor(tonumber(victory.timestamp) or 0) <= resetEpoch then
+                self:ClearFrontVictory(frontId)
+            end
+        end
         return false
     end
     -- Victoire de la campagne precedente (client pas encore passe au reset hebdo) :
     -- ne jamais re-horodater cette conquete dans la nouvelle semaine.
     local campaignStart = CurrentCampaignStartTs()
-    if campaignStart > 0 and resetEpoch - CAPITAL_VICTORY_COOLDOWN < campaignStart then
+    if campaignStart > 0 and resetEpoch - truceSeconds < campaignStart then
         return false
     end
     if not self:KeepFrontConquestAtTruceEnd(frontId, resetEpoch) then return false end
@@ -1107,16 +1233,14 @@ function Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, fromSync)
     if not fromSync then
         local mapLabel = self:GetFrontMapDisplayName(frontId) or frontId
         -- Connexion tardive : pas d'annonce perimee dans le chat.
-        if L.FRONT_TRUCE_ENDED_KEPT and resetEpoch + CAPITAL_VICTORY_COOLDOWN > NowServer() then
+        -- (2.0.2: no truce, nothing ended.)
+        if truceSeconds > 0 and L.FRONT_TRUCE_ENDED_KEPT
+            and resetEpoch + CAPITAL_VICTORY_COOLDOWN > NowServer() then
             Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.FRONT_TRUCE_ENDED_KEPT,
                 mapLabel))
         end
-        -- Fin de treve ancienne (connexion tardive, tick en retard) : le reseau l'a deja,
-        -- ne pas la rediffuser.
-        if Overlord.Sync and Overlord.Sync.BroadcastFrontTruceEndReset
-            and NowServer() - resetEpoch <= 120 then
-            Overlord.Sync:BroadcastFrontTruceEndReset(frontId, resetEpoch)
-        end
+        -- 2.0.2: nothing is announced. Every client that holds the victory ends its truce
+        -- by itself at this same second and gives the conquest these same dates.
     end
 
     return true
@@ -1242,7 +1366,7 @@ function Overlord.Zones:TryExpireFrontTruces()
             and (lastReset <= 0 or victoryTs >= lastReset)
             and victoryTs >= CurrentCampaignStartTs() then
             -- Horloge serveur : un PC en avance ne termine pas la treve trop tot.
-            if NowServer() - victoryTs >= CAPITAL_VICTORY_COOLDOWN then
+            if NowServer() - victoryTs >= TruceSecondsFor(victoryTs) then
                 toProcess[#toProcess + 1] = {
                     frontId = frontId,
                     victoryTs = victoryTs,
@@ -1253,7 +1377,7 @@ function Overlord.Zones:TryExpireFrontTruces()
     end
 
     for _, entry in ipairs(toProcess) do
-        local epoch = entry.victoryTs + CAPITAL_VICTORY_COOLDOWN
+        local epoch = entry.victoryTs + TruceSecondsFor(entry.victoryTs)
         -- Fin de treve + message seulement si la carte locale confirme une vraie victoire totale (pas SR/VT fantome).
         if self:LocalStateSupportsVictoryTruce(entry.frontId, entry.winningFaction) then
             self:ApplyFrontTruceEndReset(entry.frontId, epoch, false)

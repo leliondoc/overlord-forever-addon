@@ -1819,9 +1819,6 @@ function Overlord.Outpost:RefreshOutpostPresentation(siteKey, force)
             if Overlord.MapMarkers and Overlord.MapMarkers.CheckGuildKeepMinimap then
                 Overlord.MapMarkers:CheckGuildKeepMinimap()
             end
-            if Overlord.Ressources and Overlord.Ressources.RefreshGuildKeepHUD then
-                Overlord.Ressources:RefreshGuildKeepHUD()
-            end
         end
         if Overlord.MapMarkers and Overlord.MapMarkers.RefreshOutpostMapIfOpen then
             Overlord.MapMarkers:RefreshOutpostMapIfOpen()

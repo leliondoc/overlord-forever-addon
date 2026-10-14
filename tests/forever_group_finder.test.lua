@@ -1877,7 +1877,7 @@ do
 
     local core = read("Core.lua")
     local hook = core:find("pcall(self.GroupFinder.OnInstanceSuspend, self.GroupFinder)", 1, true)
-    local flag = core:find("\n    self.InstanceSuspended = true\n    -- HUD or", 1, true)
+    local flag = core:find("\n    self.InstanceSuspended = true\n    -- Remet le flag de zone", 1, true)
     assert(hook and flag and hook < flag, "the finder must be cut before the instance flag is set")
     assert(core:find("pcall(Overlord.GroupFinder.OnInstanceResume, Overlord.GroupFinder)", 1, true))
     assert(core:find("self.GroupFinderUI:IsShown() then self.GroupFinderUI:Hide() end", 1, true))

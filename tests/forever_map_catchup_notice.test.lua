@@ -112,6 +112,10 @@ assert(line:find(byId[there[1]].name or there[1], 1, true) < line:find(byId[ther
 assert(report():find("our faction: started 1, complete 1, expired 0, accepted 1, refused 0, identical 0.", 1, true)
     and report():find("by map instead of live: 3 in session (last ", 1, true)
     and report():find("worst 10 min), 0 at login.", 1, true), report())
+-- 2.0.2: why they came late. No relay here: nothing is known of who was heard.
+assert(report():find("was heard shortly before and after 0 of them", 1, true)
+    and report():find("none was for 0, 3 date from before this session. Last: ", 1, true)
+    and report():find(here[1] .. " 5 min (before this session)", 1, true), report())
 
 -- A late copy of the live final of one of them, and the same map again: silence.
 sync:OnReceiveCapture(table.concat({ here[1], "Horde Alpha|WARRIOR", "Horde", T - 300, "wA", "Player-1-0000AAAA", 120 }, ":"),
@@ -131,6 +135,39 @@ local burst = sync:BuildZoneAllSnapshotPages(zones, "G")
 for i = 1, 6 do set(there[i], "Alliance", T - 20000) end
 feed(burst, "Mate Tester")
 assert(#chat == 1 and chat[1]:find(" +2", 1, true), "six captures were not one line naming four: " .. table.concat(chat, " / "))
+
+-- 2.0.2: with a friend of the other faction heard around the capture, it is counted
+-- apart (its end should have come live) and named so; four are named at most.
+do
+    local realRelay = Overlord.Relay
+    local asked = {}
+    -- This session has been listening for half an hour: older captures are "before
+    -- this session", the others are sorted by a friend heard around them or not.
+    Overlord.Relay = setmetatable({ bnetWatchFrom = GetTime() - 1800, EnemyBridgeHeardAround = function(_, secondsAgo)
+        asked[#asked + 1] = secondsAgo
+        return secondsAgo < 200
+    end }, { __index = realRelay or {} })
+    local before = sync._enemyByMapStats.session
+    sync:NoteEnemyCaptureByMap(wall - 120, false, "zone_near")
+    sync:NoteEnemyCaptureByMap(wall - 900, false, "zone_far")
+    sync:NoteEnemyCaptureByMap(wall - 7200, false, "zone_old")
+    Overlord.Relay = realRelay
+    local why = sync._enemyByMapStats.why
+    assert(sync._enemyByMapStats.session == before + 3 and why["friend heard"] == 1 and why["no friend heard"] == 1
+        and #asked == 2 and math.abs(asked[1] - 120) <= 1 and math.abs(asked[2] - 900) <= 1,
+        "late captures are not sorted by a friend heard around them")
+    local text = report()
+    assert(text:find("heard shortly before and after 1 of them", 1, true) and text:find("none was for 1, ", 1, true)
+        and text:find("Last: zone_old 120 min (before this session), zone_far 15 min (no friend heard), "
+            .. "zone_near 2 min (friend heard), ", 1, true), text)
+    local _, names = text:match("Last: ([^|]+)"):gsub(" min %(", "")
+    assert(names == 4, "the report names " .. tostring(names) .. " late captures, four expected: " .. text)
+    -- At login nothing is asked: captures made while we were away are expected.
+    asked = {}
+    sync:NoteEnemyCaptureByMap(wall - 120, true, "zone_login")
+    assert(#asked == 0 and not report():find("zone_login", 1, true), "a login capture was sorted as a late one")
+    sync._enemyByMapStats.login = sync._enemyByMapStats.login - 1 -- the synthetic row
+end
 
 -- (3) A friendly capture learnt by map on another front: silent, not counted.
 chat = {}

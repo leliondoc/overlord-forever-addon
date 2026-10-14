@@ -18,7 +18,6 @@ Overlord.SettingsPanel.MapPathOpacityVariableName = "Overlord_MapPathOpacity"
 Overlord.SettingsPanel.AutoWaypointVariableName = "Overlord_AutoWaypointNextObjective"
 Overlord.SettingsPanel.ShowMinimapButtonVariableName = "Overlord_ShowMinimapButton"
 Overlord.SettingsPanel.ShowMinimapCaptureZonesVariableName = "Overlord_ShowMinimapCaptureZones"
-Overlord.SettingsPanel.ShowCoinsHudVariableName = "Overlord_ShowCoinsHud"
 Overlord.SettingsPanel.ShowFloatingObjectiveVariableName = "Overlord_ShowFloatingObjective"
 Overlord.SettingsPanel.SoundEnabledVariableName = "Overlord_SoundEnabled"
 Overlord.SettingsPanel.MapIconOpacityVariableName = "Overlord_MapIconOpacity"
@@ -40,7 +39,6 @@ local DEFAULT_MAP_PATH_OPACITY = 1.0
 local DEFAULT_AUTO_WAYPOINT = true
 local DEFAULT_SHOW_MINIMAP_BUTTON = true
 local DEFAULT_SHOW_MINIMAP_CAPTURE_ZONES = true
-local DEFAULT_SHOW_COINS_HUD = false
 local DEFAULT_SOUND_ENABLED = true
 -- Icones des points de capture sur la carte du monde : a 100 % elles masquaient
 -- les points d'exclamation de quete dans les villes.
@@ -331,23 +329,6 @@ function Overlord.SettingsPanel:SetShowMinimapCaptureZones(value)
     setShowMinimapCaptureZones(value)
 end
 
-local function getShowCoinsHud()
-    return OverlordDB and OverlordDB.config and OverlordDB.config.showCoinsHud == true or false
-end
-
-local function setShowCoinsHud(value)
-    if not OverlordDB then return end
-    OverlordDB.config = OverlordDB.config or {}
-    OverlordDB.config.showCoinsHud = value == true
-    if not settingsSuppressSideEffects and Overlord.Ressources and Overlord.Ressources.OnShowTopHudSettingChanged then
-        Overlord.Ressources:OnShowTopHudSettingChanged()
-    end
-    notifySettingsAPI(Overlord.SettingsPanel.ShowCoinsHudVariableName, OverlordDB.config.showCoinsHud)
-end
-
-Overlord.SettingsPanel.GetShowCoinsHud = getShowCoinsHud
-Overlord.SettingsPanel.SetShowCoinsHud = setShowCoinsHud
-
 -- Fenetre flottante « Prochain objectif » (desactivee par defaut). Accesseurs
 -- exposes par champs : les fonctions d'enregistrement sont a la limite d'upvalues.
 function Overlord.SettingsPanel.GetShowFloatingObjective()
@@ -626,9 +607,6 @@ local ROWS = {
         default = DEFAULT_SHOW_MINIMAP_BUTTON, get = getShowMinimapButton, set = setShowMinimapButton },
 
     { kind = "header", label = "SETTINGS_SECTION_HUD", fallback = "On-screen panels" },
-    { kind = "checkbox", var = SP.ShowCoinsHudVariableName, label = "COINS_HUD_LABEL",
-        fallback = "Coins panel", tooltip = "COINS_HUD_TOOLTIP",
-        default = DEFAULT_SHOW_COINS_HUD, get = getShowCoinsHud, set = setShowCoinsHud },
     { kind = "checkbox", var = SP.ShowFloatingObjectiveVariableName, label = "FLOATING_OBJECTIVE_LABEL",
         fallback = "Floating next objective", tooltip = "FLOATING_OBJECTIVE_TOOLTIP", default = false,
         get = SP.GetShowFloatingObjective, set = SP.SetShowFloatingObjective },

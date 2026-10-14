@@ -155,7 +155,7 @@ local function EnsureWorldPin(key, faction, parent)
         generalWorldRoot:SetFrameLevel((parent:GetFrameLevel() or 0) + 31)
     end
     if not generalWorldRoot then
-        generalWorldRoot = CreateFrame("Frame", nil, parent)
+        generalWorldRoot = Overlord.MapMarkers.NewFrame("Frame", parent)
         generalWorldRoot:SetAllPoints()
         generalWorldRoot:SetFrameStrata(parent:GetFrameStrata())
         generalWorldRoot:SetFrameLevel((parent:GetFrameLevel() or 0) + 31)
@@ -163,7 +163,7 @@ local function EnsureWorldPin(key, faction, parent)
 
     local pin = generalWorldPins[key]
     if not pin then
-        pin = CreateFrame("Frame", nil, generalWorldRoot)
+        pin = Overlord.MapMarkers.NewFrame("Frame", generalWorldRoot)
         pin:SetFrameLevel(generalWorldRoot:GetFrameLevel() + 1)
         local icon = pin:CreateTexture(nil, "OVERLAY", nil, 3)
         icon:SetAllPoints()
@@ -191,7 +191,7 @@ local function EnsureContinentPin(key, faction, parent)
         generalContinentRoot:SetFrameLevel((parent:GetFrameLevel() or 0) + 27)
     end
     if not generalContinentRoot then
-        generalContinentRoot = CreateFrame("Frame", nil, parent)
+        generalContinentRoot = Overlord.MapMarkers.NewFrame("Frame", parent)
         generalContinentRoot:SetAllPoints()
         generalContinentRoot:SetFrameStrata(parent:GetFrameStrata())
         generalContinentRoot:SetFrameLevel((parent:GetFrameLevel() or 0) + 27)
@@ -199,7 +199,7 @@ local function EnsureContinentPin(key, faction, parent)
 
     local pin = generalContinentPins[key]
     if not pin then
-        pin = CreateFrame("Frame", nil, generalContinentRoot)
+        pin = Overlord.MapMarkers.NewFrame("Frame", generalContinentRoot)
         pin:SetFrameLevel(generalContinentRoot:GetFrameLevel() + 1)
         local icon = pin:CreateTexture(nil, "OVERLAY", nil, 3)
         icon:SetAllPoints()
