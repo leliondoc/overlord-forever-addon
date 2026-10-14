@@ -7,6 +7,23 @@ Overlord = Overlord or {}
 Overlord.MapMarkers = {}
 Overlord.MapMarkers._mmKeepMapActive = false
 
+-- Cadre enfant de la carte du monde. A la manette, Blizzard accroche CreateFrame : un
+-- cadre cree avec un parent situe sous une de ses fenetres ouvertes lui fait re-parcourir
+-- toute la fenetre, dans l'execution de l'addon (carte figee a la premiere ouverture,
+-- navigation a la manette marquee). Cree sans parent puis rattache, le cadre est le meme
+-- (strate du parent, un niveau au-dessus) et ce crochet ne voit rien. Hors interface
+-- manette, rien ne change. (Un champ, pas une locale : limite de 200 locales du chunk.)
+function Overlord.MapMarkers.NewFrame(frameType, parent)
+    if not (InputUtil and InputUtil.IsGamepadUIEnabled and InputUtil.IsGamepadUIEnabled()) then
+        return CreateFrame(frameType, nil, parent)
+    end
+    local frame = CreateFrame(frameType)
+    frame:SetParent(parent)
+    frame:SetFrameStrata(parent:GetFrameStrata())
+    frame:SetFrameLevel(parent:GetFrameLevel() + 1)
+    return frame
+end
+
 local L = Overlord.L
 
 local overlays = {}
@@ -259,7 +276,7 @@ end
 function ZoneArc.Holder(overlay)
     local holder = overlay.arcFrame
     if not holder then
-        holder = CreateFrame("Frame", nil, overlay)
+        holder = Overlord.MapMarkers.NewFrame("Frame", overlay)
         holder:SetSize(1, 1)
         holder:SetPoint("CENTER", overlay, "CENTER", 0, 0)
         overlay.arcFrame = holder
@@ -883,7 +900,7 @@ local function CacheCanvas()
                 viewport:SetParent(WorldMapFrame.ScrollContainer)
             end
             if not viewport then
-                viewport = CreateFrame("Frame", nil, WorldMapFrame.ScrollContainer)
+                viewport = Overlord.MapMarkers.NewFrame("Frame", WorldMapFrame.ScrollContainer)
                 driverState.worldOverlayViewport = viewport
             end
             viewport:ClearAllPoints()
@@ -902,7 +919,7 @@ local function CacheCanvas()
                 driverState.worldTransformValid = false
             end
             if not worldOverlayParent then
-                local overlayParent = CreateFrame("Frame", nil, viewport)
+                local overlayParent = Overlord.MapMarkers.NewFrame("Frame", viewport)
                 overlayParent:SetFrameStrata(viewport:GetFrameStrata())
                 overlayParent:SetFrameLevel(viewport:GetFrameLevel() + 1)
                 -- Clip au viewport ScrollContainer (evite pins hors carte au zoom/pan)
@@ -1180,7 +1197,7 @@ end
 function Overlord.MapMarkers:CreateMapModeButton()
     local container = WorldMapFrame and WorldMapFrame.ScrollContainer
     if self._mapModeButton or not container then return self._mapModeButton end
-    local btn = CreateFrame("Button", nil, container)
+    local btn = Overlord.MapMarkers.NewFrame("Button", container)
     btn:SetSize(32, 32)
     -- 30 % plus grand que le bouton de la minicarte (meme dessin, plus lisible sur la carte).
     btn:SetScale(1.3)
@@ -1907,7 +1924,7 @@ function Overlord.MapMarkers:CreateZoneOverlay(zone)
         return pooled
     end
 
-    local frame = CreateFrame("Frame", nil, parent)
+    local frame = Overlord.MapMarkers.NewFrame("Frame", parent)
     frame:SetFrameStrata(parent:GetFrameStrata())
     frame:SetFrameLevel(parent:GetFrameLevel() + 1)
     frame.zone = zone
@@ -2398,7 +2415,7 @@ function Overlord.MapMarkers:ShowCatchUpBanner()
     local parent = GetOverlayParent()
     if not canvas or not parent then return end
     if not catchUpBanner then
-        catchUpBanner = CreateFrame("Frame", nil, parent)
+        catchUpBanner = Overlord.MapMarkers.NewFrame("Frame", parent)
         catchUpBanner:SetSize(340, 32)
         local bg = catchUpBanner:CreateTexture(nil, "BACKGROUND")
         bg:SetAllPoints()
@@ -3925,7 +3942,7 @@ function Overlord.MapMarkers:CreateEKDominanceOverlay(canvas)
         HideEKDominanceVisuals(root)
         root._ekDominanceFaction = nil
     else
-        root = CreateFrame("Frame", nil, parent)
+        root = Overlord.MapMarkers.NewFrame("Frame", parent)
         root._ekDominanceAnchorV2 = true
         root._ekDominanceScaleCompensated = true
         root._ekDominanceAssaultIcon = true
@@ -4128,7 +4145,7 @@ function Overlord.MapMarkers:EnsureEKGoldMinePins(canvas)
         ekGoldRoot:SetParent(parent)
     end
     if not ekGoldRoot then
-        ekGoldRoot = CreateFrame("Frame", nil, parent)
+        ekGoldRoot = Overlord.MapMarkers.NewFrame("Frame", parent)
         ekGoldRoot:SetAllPoints()
     end
     -- Meme strata que le calque carte (pas TOOLTIP + niveau 500 : ecrasait les logos faction)
@@ -4142,7 +4159,7 @@ function Overlord.MapMarkers:EnsureEKGoldMinePins(canvas)
             ekGoldPins[mine.id] = nil
         end
         if not ekGoldPins[mine.id] then
-            local pin = CreateFrame("Frame", nil, ekGoldRoot)
+            local pin = Overlord.MapMarkers.NewFrame("Frame", ekGoldRoot)
             pin:SetFrameStrata(ekGoldRoot:GetFrameStrata())
             pin:SetFrameLevel(ekGoldRoot:GetFrameLevel() + 1)
             pin.mine = mine
@@ -4254,7 +4271,7 @@ local function CreateResourceOverlay(resource, cfg)
     local parent = GetOverlayParent()
     if not canvas or not parent then return nil end
 
-    local frame = CreateFrame("Frame", nil, parent)
+    local frame = Overlord.MapMarkers.NewFrame("Frame", parent)
     frame:SetFrameStrata("HIGH")
     frame.resource = resource
     frame[cfg.field] = resource

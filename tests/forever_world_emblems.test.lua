@@ -70,6 +70,8 @@ function e.Overlord:GetMapContinent(mapID) return continentOf[mapID] end
 setfenv(assert(loadfile("MapWorldEmblems.lua")), e)()
 local mm = e.Overlord.MapMarkers
 function mm:GetWorldMapCanvas() return canvas, parent end
+-- The map's frame factory lives in MapMarkers.lua (see forever_gamepad_frames.test.lua).
+function mm.NewFrame(frameType, p) return e.CreateFrame(frameType, nil, p) end
 function mm:GetWorldMapOverlayPoint(_, _, x, yDown) return x, -yDown end
 function mm.GetMapIconScale() return 1 end
 function mm:GetDominantFaction(front) return front.owner end

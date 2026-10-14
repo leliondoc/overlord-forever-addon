@@ -31,7 +31,7 @@ assert(net:Send("C", "capital:Capper Tester:A:" .. time()),
 assert(net:Send("ZS", "capital:captured:0:0:A:" .. time()),
     "A full progress queue rejected the final zone state")
 assert(net:Send("ZR", "capital:release"), "A full progress queue rejected a release")
-for _, kind in ipairs({"OC", "TV", "FR"}) do
+for _, kind in ipairs({"OC", "TV"}) do
     assert(net:Send(kind, "terminal-" .. kind), "A full progress queue rejected " .. kind)
 end
 assert(net:Send("ZS", "capital:locked:0:0::" .. time()), "A full queue rejected a locked terminal")
@@ -55,7 +55,8 @@ end
 assert(capture and final and release, "A terminal event was lost")
 assert(capture <= final and final <= release, "Terminal event order changed")
 assert(release - start < 2, "Capture completion queued behind old progress updates")
-assert(otherTerminals == 4, "A structure/victory/reset terminal was lost")
+-- (2.0.2: a truce end, FR, is no longer a terminal; nobody sends one any more.)
+assert(otherTerminals == 3, "A structure/victory terminal was lost")
 assert(#sent == 84, "Ordinary queue bound/displacement changed")
 -- Never displace route/barrier handshakes as if they were periodic progress.
 assert(loadfile("SyncRelay.lua"))()

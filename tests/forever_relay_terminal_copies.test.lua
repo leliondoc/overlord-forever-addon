@@ -148,8 +148,8 @@ assert(refuse == nil, "the refusal was never exercised (vacuous case)")
 assert(channelHas("REFUSEMARK"), "a capture's refused channel copy was abandoned under a full lane")
 print("Relay terminals: a refused channel copy of a capture is retried under a full lane")
 
--- (4) 2.0.1: a bridge under a flood of relayed front resets (a truce end: dozens of
--- clients state it, and each copy is a terminal with the priority token) still passes a
+-- (4) 2.0.1: a bridge under a flood of other relayed terminals (victory announcements
+-- here; truce ends were terminals too until 2.0.2) still passes a
 -- relayed capture at once, both fragments. Terminals were served in arrival order and a
 -- fragment that had to wait went to the end of the lane: seen in game, 14 of 55 capture
 -- ends expired on the only bridge of a faction, whose channel never heard them.
@@ -170,7 +170,7 @@ do
     local flooding = true
     local function flood()
         if not flooding then return end
-        relayed("FR", "elwynn:" .. (1790000000 + serial))
+        relayed("TV", "Alliance:" .. (1790000000 + serial) .. ":1:2:elwynn")
         C_Timer.After(0.25, flood)
     end
     flood()
@@ -181,7 +181,7 @@ do
     assert(channelHas("FLOODMARK"), "a relayed capture waited behind a flood of front resets (" .. #channel .. " channel messages)")
     assert(channelHas("FLOODEND"), "the second fragment of a relayed capture waited behind the flood: nobody can assemble it")
     local resets = 0
-    for _, msg in ipairs(channel) do if msg:find("|FR|", 1, true) then resets = resets + 1 end end
+    for _, msg in ipairs(channel) do if msg:find("|TV|", 1, true) then resets = resets + 1 end end
     assert(resets >= 3, "fixture: the flood itself never reached the channel (" .. resets .. ")")
     -- Two captures keep their order (the first one queued leaves first).
     channel = {}
@@ -214,7 +214,7 @@ do
         advance(3)
         local expiredBefore = net.stats.expired or 0
         -- Six front resets at once (a truce end), then the capture.
-        for _ = 1, 6 do relayed("FR", "elwynn:" .. (1790000000 + serial)) end
+        for _ = 1, 6 do relayed("TV", "Alliance:" .. (1790000000 + serial) .. ":1:2:elwynn") end
         assert(relayed("C", "BUSYMARK:" .. string.rep("z", 150) .. ":BUSYEND"), "the relayed capture was not admitted")
         advance(6)
         assert(channelHas("BUSYMARK") and channelHas("BUSYEND"),

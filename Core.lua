@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.0.1"
+Overlord.Version = "2.0.2"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -317,10 +317,15 @@ function Overlord:IsCaptureSyncPending()
         if not self.InstanceSuspended and Overlord.Sync and Overlord.Sync.SendSyncRequest then
             C_Timer.After(0.5, function()
                 if Overlord.InstanceSuspended or not Overlord.Sync then return end
-                Overlord.Sync:SendSyncRequest({
-                    criticalChannel = wasLoginGate or wasInstanceGate,
-                    targetedOnly = wasInstanceGate,
-                })
+                -- 2.0.2: after the truce's retirement, a login's request goes to one
+                -- neighbour heard as updated (see Sync:SendLoginMapPeerRequest).
+                if not (wasLoginGate and Overlord.Sync.SendLoginMapPeerRequest
+                    and Overlord.Sync:SendLoginMapPeerRequest()) then
+                    Overlord.Sync:SendSyncRequest({
+                        criticalChannel = wasLoginGate or wasInstanceGate,
+                        targetedOnly = wasInstanceGate,
+                    })
+                end
                 if wasLoginGate
                     and Overlord.Sync.SendLoginCatchupSync then
                     Overlord.Sync:SendLoginCatchupSync()
@@ -422,7 +427,8 @@ function Overlord:EnemyFactionChatIcon()
 end
 
 -- Alerte rouge milieu d'ecran (RaidNotice), comme les avertissements de raid Blizzard.
-function Overlord:PrintRaidWarning(text)
+-- silent (2.0.2) : la ligne a l'ecran sans le son d'alerte de raid.
+function Overlord:PrintRaidWarning(text, silent)
     if not text or text == "" then return end
     -- Codes couleur WoW : |c + 8 hex (AARRGGBB). 7 hex laissait un « 0 » parasite (ex. |cFFFFD100).
     local plain = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
@@ -442,6 +448,7 @@ function Overlord:PrintRaidWarning(text)
     if not shown then
         self:PrintNotification("|cFFFF4444[Overlord]|r " .. plain)
     end
+    if silent then return end
     local cfg = OverlordDB and OverlordDB.config
     if cfg == nil or cfg.soundEnabled ~= false then
         pcall(PlaySound, SOUNDKIT and SOUNDKIT.RAID_WARNING or 8959)
@@ -1899,10 +1906,6 @@ function Overlord:SuspendForInstance()
         pcall(self.RanksUI.OnInstanceSuspend, self.RanksUI)
     end
     self.InstanceSuspended = true
-    -- HUD or : peut s'afficher sur PLAYER_ENTERING_WORLD avant que ce handler finisse - masquage immediat.
-    if self.Ressources and self.Ressources.HideGoldHUDForInstance then
-        self.Ressources:HideGoldHUDForInstance()
-    end
     -- Remet le flag de zone a zero : evite des etats stales si CheckActiveFrontZone n'est pas appele
     self.InActiveFront = false
     catchUpNotified = false
@@ -2756,16 +2759,6 @@ function Overlord:Initialize()
         end
     end
 
-    -- Le reglage « HUD du haut » et l'icone livre n'existent plus : seule la case
-    -- « Panneau des coins flottant » reste. Un panneau regle sur Jamais ou ferme par
-    -- sa croix reste ferme (case decochee) ; les anciennes cles sont effacees.
-    local hudCfg = OverlordDB.config
-    if hudCfg.topHudMode == "never" or hudCfg.showTopHud == false or OverlordDB.goldHUDHidden then
-        hudCfg.showCoinsHud = false
-    end
-    hudCfg.topHudMode, hudCfg.topHudModeUserSelected, hudCfg.showTopHud = nil, nil, nil
-    hudCfg.showTutorialBook, hudCfg.showTutorialBookUserSelected = nil, nil
-    OverlordDB.goldHUDHidden = nil
     local CONFIG_DEFAULTS = {
         uiVisible = true,
         soundEnabled = true,
@@ -4875,7 +4868,7 @@ function Overlord:ResetAll()
     if self.FrontActivity and self.FrontActivity.ResetForCampaign then
         pcall(self.FrontActivity.ResetForCampaign, self.FrontActivity)
     end
-    -- Most Wanted : plus aucune couronne ni alerte pour les joueurs de la semaine passee.
+    -- Most Wanted : plus aucun crane ni alerte pour les joueurs de la semaine passee.
     if self.MostWanted and self.MostWanted.ResetForCampaign then
         pcall(self.MostWanted.ResetForCampaign, self.MostWanted)
     end
@@ -4962,17 +4955,11 @@ function Overlord:ApplyGhostHudLayout()
     local deadOrGhost = self:IsPlayerDeadOrGhost()
     if deadOrGhost and not ghostHudSuppressed then
         ghostHudSuppressed = true
-        if Overlord.Ressources and Overlord.Ressources.SuppressForGhost then
-            Overlord.Ressources:SuppressForGhost()
-        end
         if Overlord.ZoneIndicator and Overlord.ZoneIndicator.SuppressForGhost then
             Overlord.ZoneIndicator:SuppressForGhost()
         end
     elseif not deadOrGhost and ghostHudSuppressed then
         ghostHudSuppressed = false
-        if Overlord.Ressources and Overlord.Ressources.RestoreAfterGhost then
-            Overlord.Ressources:RestoreAfterGhost()
-        end
         if Overlord.ZoneIndicator and Overlord.ZoneIndicator.RestoreAfterGhost then
             Overlord.ZoneIndicator:RestoreAfterGhost()
         end

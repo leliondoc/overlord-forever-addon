@@ -1122,8 +1122,6 @@ function Overlord.UI:CreateMainFrame()
     mainFrame:Hide()
 end
 
-local GK_HUD_REFRESH_INTERVAL = 15
-local lastGkHudRefreshAt = 0
 local lastMainFrameHeight = nil
 local lastForcesAnchorMode = nil
 local lastFrontEmblemKey = nil
@@ -1844,18 +1842,6 @@ function Overlord.UI:SyncMainFrameHeight()
     -- The PvP groups window docks beside the panel at the same height.
     if Overlord.GroupFinderUI and Overlord.GroupFinderUI.OnPanelLayoutChanged then
         Overlord.GroupFinderUI:OnPanelLayoutChanged()
-    end
-end
-
--- Guild Keep : affichage dans le cluster HUD haut (Ressources.lua)
-function Overlord.UI:RefreshGuildKeepRow(force)
-    if not force then
-        local now = GetTime()
-        if now - lastGkHudRefreshAt < GK_HUD_REFRESH_INTERVAL then return end
-        lastGkHudRefreshAt = now
-    end
-    if Overlord.Ressources and Overlord.Ressources.RefreshGuildKeepHUD then
-        Overlord.Ressources:RefreshGuildKeepHUD()
     end
 end
 
@@ -2617,7 +2603,6 @@ function Overlord.UI:Refresh()
     if not mainFrame:IsShown() then return end
     self:RefreshPanelState()
     self:RefreshZoneListIfNeeded()
-    self:RefreshGuildKeepRow()
     self:RefreshActiveZone()
     self:RefreshShardBadge()
     self:RefreshDomination()

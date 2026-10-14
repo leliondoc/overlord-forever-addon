@@ -227,9 +227,51 @@ assert(#channelRows == firstSent + 1 and channelRows[#channelRows]:match("^LK:Ho
 assert((net.stats.enemyTotalsFromFriends or 0) >= 1, "enemy totals from friends not counted")
 assert((net.stats.enemyTotalsFromChannel or 0) >= 1, "enemy totals from the channel not counted")
 local report = table.concat(net:GetKindDiagnostics(12), " ")
-assert(report:find("Enemy live totals received:", 1, true), "cross-faction line missing from /ov network")
+assert(report:find("Enemy live totals received:", 1, true), "cross-faction line missing from /ov relay")
 -- The bridges line names the enemy friends and what each can do.
-local bridges = report:match("Battle.net bridges:[^.]*%.")
+local bridges = table.concat(net:GetBridgeDiagnostics(), " "):match("Battle.net bridges:[^.]*%.")
 assert(bridges and bridges:find("Friend ", 1, true) and bridges:find("[", 1, true),
     "the bridges line does not name the opposite-faction friends: " .. tostring(bridges))
+-- 2.0.2: the release a friend's own presence states is shown next to what it can do.
+local other = Overlord.PlayerFaction == "Alliance" and "Horde" or "Alliance"
+local realInfo, realFriends = s.GetBetaBNetTargetInfo, friends
+friends = { 21, faction = { [21] = other } }
+s.GetBetaBNetTargetInfo = function(_, id) return friends.faction[id], id == 21 and "Release Tester" or ("Friend " .. id) end
+net:Receive("global|rel-1|" .. time() .. "|*|Release Tester|NH|2.0.1~b~m1~o1~z000000~l9~ld~lr~lp6", "Release Tester", "CHANNEL")
+assert(net:GetPeerRelease("Release Tester") == "2.0.1", "a neighbour's release was not read from its presence: "
+    .. tostring(net:GetPeerRelease("Release Tester")))
+assert(net:GetPeerRelease("Nobody Tester") == nil)
+-- A release is a short string: a run of digits a peer made up is not kept.
+net:Receive("global|rel-2|" .. time() .. "|*|Long Tester|NH|2.0.123456789~l9~ld~lr~lp6", "Long Tester", "CHANNEL")
+assert(net:GetPeerRelease("Long Tester") == nil, "an overlong release string was kept: " .. tostring(net:GetPeerRelease("Long Tester")))
+local byRelease = table.concat(net:GetKindDiagnostics(12), " "):match("Neighbours by stated release[^.]*:%s*(.-)%.%s")
+assert(byRelease and byRelease:find("2.0.1 x1", 1, true) and byRelease:find("not stated x", 1, true),
+    "/ov relay does not count the neighbours by stated release: " .. tostring(byRelease))
+-- "Was a friend of the other faction heard before and after that moment?" Never heard: no.
+assert(net:EnemyBridgeHeardAround(60) == false, "a friend never heard counted as a bridge")
+net:NoteBNetHeard(21)
+advance(100); net:NoteBNetHeard(21)
+advance(100); net:NoteBNetHeard(21)
+bridges = table.concat(net:GetBridgeDiagnostics(), " ")
+assert(bridges:find("Release Tester [live bridge", 1, true) and bridges:find("; states 2.0.1]", 1, true),
+    "the bridges line does not give the friend's release: " .. bridges)
+-- Heard at -200 s, -100 s and now: yes around 150 s ago, no before it was first heard, no
+-- for a friend of our own faction.
+assert(net:EnemyBridgeHeardAround(150) == true, "a friend heard all along is not seen around 150 s ago")
+assert(net:EnemyBridgeHeardAround(100000) == false, "a friend was seen around a moment before it was ever heard")
+friends.faction[21] = Overlord.PlayerFaction
+assert(net:EnemyBridgeHeardAround(150) == false, "a friend of our own faction counted as a bridge")
+friends.faction[21] = other
+-- A silence of more than three minutes (a presence comes every two) starts a new period:
+-- the friend does not count for a moment inside its silence, it does again once heard.
+advance(190)
+net:NoteBNetHeard(21)
+advance(10)
+assert(net:EnemyBridgeHeardAround(100) == false,
+    "a friend silent for more than three minutes counted as heard during its silence")
+assert(net:EnemyBridgeHeardAround(5) == true, "a friend heard again is not seen")
+-- Heard before the moment only, and not since for more than one presence period: no.
+advance(200)
+assert(net:EnemyBridgeHeardAround(100) == false, "a friend not heard after the moment counted as a bridge")
+s.GetBetaBNetTargetInfo, friends = realInfo, realFriends
 print("Forever cross-faction bridge: own-faction totals to enemy friends, enemy totals to the channel, bounds, no loop, no duplicate OK")

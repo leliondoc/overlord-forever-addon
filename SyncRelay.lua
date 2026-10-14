@@ -69,7 +69,11 @@ local URGENT = {}
 -- HR/HA are the tiny catch-up requests and acknowledgements (one every few
 -- minutes). Broadcast legacy controls remain urgent; addressed exchanges use
 -- the reserved lane below, including their requests and acknowledgements.
-for kind in ("NH SH C ZS ZR CB OP OC TV FR FC GE GP GX GD GM HR HA"):gmatch("%S+") do
+-- 2.0.2: a truce end (FR) is no longer urgent nor a terminal. No client sends one any
+-- more (each ends its truce by itself, see Zones:ApplyFrontTruceEndReset); those of
+-- clients before 2.0.2 (one per front in every map answer, the first traffic of a
+-- busy bridge on 2026-10-13) wait with the background.
+for kind in ("NH SH C ZS ZR CB OP OC TV FC GE GP GX GD GM HR HA"):gmatch("%S+") do
     URGENT[kind] = true
 end
 -- 2.0.1 map news: a broadcast partial map of one to three pages (the shape that
@@ -93,8 +97,8 @@ end
 local function isCatchup(p)
     if p.target == "*" then return false end
     if p.kind == "SR" or p.kind == "ZA" then
-        -- Reserve a map exchange only after discovery established an unexpired
-        -- route. Unknown targets keep the old ordinary lane/discovery behavior.
+        -- Reserve a map exchange only for a target with an unexpired route (without
+        -- one nothing leaves at all since 2.0.2, see tasksFor).
         local route = net.peers[p.target:lower()]
         if not route or GetTime() - route.at > 300 then return false end
         local via = type(route.via) == "string" and route.via:lower() or ""
@@ -131,7 +135,7 @@ end
 -- terminals: C is emitted before its final ZS, and neither invents a victory.
 local function isTerminal(p)
     if p.kind == "C" or p.kind == "ZR"
-        or p.kind == "OC" or p.kind == "TV" or p.kind == "FR" then return true end
+        or p.kind == "OC" or p.kind == "TV" then return true end
     if p.kind ~= "ZS" then return false end
     local status = p.payload:match("^[^:]+:([^:]+):")
     return status == "captured" or status == "available" or status == "locked"
@@ -301,6 +305,11 @@ local function rejectAdmission(p)
     net.stats.dropped = net.stats.dropped + 1
     local field = p.path and #p.path > 1 and "relayRejected" or "localRejected"
     net.stats[field] = (net.stats[field] or 0) + 1
+    -- 2.0.2: an own row addressed to one peer; its sender may offer it again (see
+    -- net:NoteOfferedAgain, whose callers read this count around their own send).
+    if field == "localRejected" and p.target ~= "*" then
+        net.stats.localRowsRefused = (net.stats.localRowsRefused or 0) + 1
+    end
     countKind(p.kind, "dropped")
     markZaBatchLost(p)
     return false
@@ -542,19 +551,18 @@ local function waitingMapControl(p)
             and item.p.path[1]:lower() == p.path[1]:lower() then return item end
     end
 end
-local function stateKey(p)
+-- The same state (kind, origin, target, payload) still waiting unsent.
+local function waitingStateItem(p)
     if not isReplicatedState(p) then return nil end
     local origin = p.path and p.path[1]
     if not origin then return nil end
-    return "VB|" .. origin:lower() .. "|" .. p.target .. "|" .. p.payload
-end
-local function waitingStateItem(p)
-    local key = stateKey(p)
-    if not key then return nil end
+    origin = origin:lower()
     for i = stateLane.head, #stateLane.items do
         local item = stateLane.items[i]
-        if item and item.index == 1 and not item.tasks[1].sending
-            and stateKey(item.p) == key then return item end
+        local q = item and item.p
+        if q and item.index == 1 and not item.tasks[1].sending and q.kind == p.kind
+            and q.payload == p.payload and q.target == p.target
+            and q.path[1]:lower() == origin then return item end
     end
 end
 -- Packets already handled (origin:id). A late copy (bridge hold, queue wait, other
@@ -737,8 +745,14 @@ local function active() return enabled() and not addon.InstanceSuspended and not
 -- live bridge is heard again well within this window.
 local BNET_ALIVE_SEC = 300
 local bnetHeard, bnetHeardCount = {}, 0
+-- 2.0.2: since when each friend has been heard without a silence of more than 180 s (a
+-- presence every 120 s and a margin), and since when this session listens at all (see
+-- EnemyBridgeHeardAround).
+net.bnetSince, net.bnetWatchFrom = {}, GetTime()
 local function noteBNetHeard(id)
     if id == nil then return end
+    local last = bnetHeard[id]
+    if not last or GetTime() - last > 180 then net.bnetSince[id] = GetTime() end
     if bnetHeard[id] == nil then
         -- Bounded at 64 game accounts: every Battle.net sender lands here, same-faction
         -- friends and friends beyond our 40 included. Full: forget the stale ones, else
@@ -748,12 +762,14 @@ local function noteBNetHeard(id)
             for key, at in pairs(bnetHeard) do
                 if now - at > BNET_ALIVE_SEC then
                     bnetHeard[key] = nil; bnetHeardCount = bnetHeardCount - 1
+                    net.bnetSince[key] = nil
                 elseif not oldestAt or at < oldestAt then
                     oldestKey, oldestAt = key, at
                 end
             end
             if bnetHeardCount >= 64 and oldestKey then
                 bnetHeard[oldestKey] = nil; bnetHeardCount = bnetHeardCount - 1
+                net.bnetSince[oldestKey] = nil
             end
         end
         bnetHeardCount = bnetHeardCount + 1
@@ -765,6 +781,25 @@ local function bnetAlive(id)
     return at ~= nil and GetTime() - at <= BNET_ALIVE_SEC
 end
 function net:NoteBNetHeard(id) noteBNetHeard(id) end
+-- /ov network (2.0.2): was a friend of the other faction heard both before and after the
+-- moment `secondsAgo` seconds back, without a gap? An enemy capture made at that moment
+-- should then have crossed live; otherwise no bridge existed and nothing could cross.
+-- "After" also means heard within the last 150 s (one presence period and a margin).
+function net:EnemyBridgeHeardAround(secondsAgo)
+    local mine = addon.PlayerFaction
+    local now = GetTime()
+    local moment = now - (tonumber(secondsAgo) or 0)
+    local targets = sync.GetBetaBNetTargets and sync:GetBetaBNetTargets() or {}
+    for _, id in ipairs(targets) do
+        local faction = sync.GetBetaBNetTargetInfo and sync:GetBetaBNetTargetInfo(id)
+        local since, last = net.bnetSince[id], bnetHeard[id]
+        if (faction == "Alliance" or faction == "Horde") and faction ~= mine
+            and since and last and since <= moment and (last >= moment or now - last <= 150) then
+            return true
+        end
+    end
+    return false
+end
 function net:IsBNetFriendAlive(id) return bnetAlive(id) end
 function net:HasLiveEnemyBridge()
     local mine = addon.PlayerFaction
@@ -887,14 +922,27 @@ function net:GetCrossElection() return sameFactionBridgeCount(), crossShare() en
 -- keeps its place in the retry schedule through every later capture, instead of
 -- being asked again at once each time the map moves.
 --  * The neighbour's sum is not lower: it holds a capture we lack. Pull now; if our
---    map did not change (reply lost or refused), again after 1, 2, 4... 10 min.
+--    map did not change (reply lost or refused), again after 1, 2, 4, 8, 16, then every
+--    30 min (2.0.2; a Battle.net friend: every 10 min).
 --  * Its sum is lower: it lacks one of ours and pulls on our own presence. It may
 --    still hold one we lack; that shows once it has caught up (its sum passes ours).
---    Should it never catch up, it is pulled anyway after 5 min, then every 10 min:
---    by about MAP_DIFF_ASKERS of the channel neighbours that hear it, drawn afresh
---    every 10 min, or by us when it is a Battle.net friend (only its friends hear it).
+--    Should it never catch up, it is pulled anyway after 5 min by about MAP_DIFF_ASKERS
+--    of the channel neighbours that hear it, drawn afresh every 10 min, or by us when it
+--    is a Battle.net friend (only its friends hear it). 2.0.2: past 20 min the draw
+--    thins out (half as many askers, then a quarter, then a sixth from the hour on), and
+--    each asker waits 10, 20, 40, then 60 min between its own pulls (a friend: 10 min).
 -- Returns the difference's row when a pull is due (the caller stamps it once sent).
-net.MAP_DIFF_ROWS, net.MAP_DIFF_ASKERS = 16, 4
+-- 2.0.2: 64 differences remembered (at 16, a seventeenth evicted the oldest, which was
+-- then asked again at once), and a difference that answers do not repair is asked on a
+-- doubling pace: 1, 2, 4, 8, 16, then every 30 min (was every 10 min for ever) on the
+-- upper branch. On the lower one the pace per client alone changed little on a busy
+-- channel (the askers are drawn afresh each 10 min: about 4 pulls every 10 min for ever),
+-- so the draw itself thins out with the difference's age. A keep claim part of the
+-- clients refuse (capturer's guild unknown to their ranking) is such a difference:
+-- bench of 86 clients, 4 of them = 117 KB of whispers a minute against 12-17 with none.
+-- A Battle.net friend keeps the 10 min: it is our only way to the other faction's map.
+net.MAP_DIFF_ROWS, net.MAP_DIFF_ASKERS = 64, 4
+net.MAP_DIFF_MAX_WAIT, net.MAP_DIFF_MAX_WAIT_LOW, net.MAP_DIFF_FRIEND_WAIT = 1800, 3600, 600
 -- A 1.8.1 neighbour only says its newest capture: when that is not newer than ours
 -- it cannot tell a hole, and it is pulled no more than once per this many seconds
 -- for its whole side (the pace of the periodic pull), not on every presence.
@@ -927,11 +975,25 @@ function net:MapDiffDue(digest, sum, peerDigest, peerSum, origin, now, friend)
     end
     row.seen = now
     if peerSum >= sum then
-        local wait = row.tries == 0 and 0 or math.min(600, 60 * 2 ^ (row.tries - 1))
-        return now - row.at >= wait and row or nil
+        local cap = friend and net.MAP_DIFF_FRIEND_WAIT or net.MAP_DIFF_MAX_WAIT
+        -- A keep claim refused because our ranking did not know its capturer (or under that
+        -- guild) becomes acceptable once the ranking learns him: then 10 min at most, as in
+        -- 2.0.1 (SyncOutpost GetLearnedCapturerGeneration).
+        local learned = sync.GetLearnedCapturerGeneration and sync:GetLearnedCapturerGeneration() or 0
+        if learned > (row.learned or 0) then cap = math.min(cap, 600) end
+        local wait = row.tries == 0 and 0 or math.min(cap, 60 * 2 ^ (row.tries - 1))
+        if now - row.at < wait then return nil end
+        -- Taken as the new baseline only once the pull is really sent (the caller): a
+        -- pull held back by the budget or the origin gap keeps the shorter wait.
+        row.learnedSeen = learned
+        return row
     end
-    if now - row.first < 300 or now - row.at < 600 then return nil end
-    local share = friend and 1 or self.MAP_DIFF_ASKERS / math.max(1, self:CountDirectPeers())
+    local lowCap = friend and net.MAP_DIFF_FRIEND_WAIT or net.MAP_DIFF_MAX_WAIT_LOW
+    if now - row.first < 300 or now - row.at < math.min(lowCap, 600 * 2 ^ math.max(0, row.tries - 1)) then
+        return nil
+    end
+    local spread = math.min(6, 2 ^ math.floor((now - row.first) / 1200))
+    local share = friend and 1 or self.MAP_DIFF_ASKERS / math.max(1, self:CountDirectPeers()) / spread
     if share < 1 then
         local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
         if hashFrac(tostring(me):lower() .. "|" .. tostring(origin):lower() .. "|"
@@ -1178,6 +1240,13 @@ function net:CountDirectPeers()
     directCountCache.at, directCountCache.value, directCountCache.peers = now, count, self.peers
     return count
 end
+-- The release a neighbour's own presence states ("2.0.1"), for the report only.
+function net:GetPeerRelease(name)
+    local key = canonical(name)
+    local row = key and pagedCapabilities[key:lower()]
+    if not row or GetTime() - row.at > 300 then return nil end
+    return row.release
+end
 function net:GetPeerPagedProtocol(name)
     local key = canonical(name)
     local row = key and pagedCapabilities[key:lower()]
@@ -1191,9 +1260,26 @@ end
 -- 1.7.5). What it sent to neighbours that are not updated yet still comes back in
 -- their maps, as any capture does.
 net.MAP_MIN_PROTOCOL = 7
+-- 2.0.2: from the day the truce is retired (Zones.TRUCELESS_FROM) a client whose own
+-- presence does not say "~t0" still runs the truce: after a victory it refuses the
+-- loser's captures for fifteen minutes, then serves the front with a newer date. Same
+-- treatment from that day on: its map is neither asked for nor taken, and it is not
+-- served ours. Update required, no fallback. Before that day the mark changes nothing.
+function net.MapCutActive()
+    local from = addon.Zones and tonumber(addon.Zones.TRUCELESS_FROM)
+    return from ~= nil and ((GetServerTime and GetServerTime()) or time()) >= from
+end
+-- From that day a neighbour whose presence was never heard is out as well: its map pages
+-- could be an older client's re-dated front, taken blind. A presence is heard within two
+-- minutes, and every pull is made on one. A presence heard once keeps saying what it said
+-- (a release does not change within a session): an instance or two lost presences no
+-- longer put an updated neighbour out for a while.
 function net:IsOutdatedMapPeer(name)
-    local capability = self:GetPeerPagedProtocol(name)
-    return capability ~= nil and capability < self.MAP_MIN_PROTOCOL
+    local key = canonical(name)
+    local row = key and pagedCapabilities[key:lower()]
+    if not row then return net.MapCutActive() end
+    if row.version < self.MAP_MIN_PROTOCOL then return true end
+    return row.truceless ~= true and net.MapCutActive()
 end
 function net:IsDispatching(sender)
     return self.context ~= nil and same(self.context.origin, sender)
@@ -1263,15 +1349,23 @@ function net:GetKindDiagnostics(maxRows)
         self.stats.channelSkipped or 0)
     -- "dropped" mixes intentional refusals with real losses: break it down.
     local noRoute = (self.stats.localNoTask or 0) + (self.stats.forwardNoTask or 0)
-    lines[#lines + 1] = string.format("Drops explained: %d copies relayed for others refused by the relay budget (incl. %d pages of already incomplete maps skipped on purpose); %d own messages refused (most are retried); %d evicted and %d expired in the queue; %d without a route.",
+    lines[#lines + 1] = string.format("Drops explained: %d copies relayed for others refused by the relay budget (incl. %d pages of already incomplete maps skipped on purpose); %d own messages refused (%d of them rows for one peer, offered again by their sender); %d evicted and %d expired in the queue; %d without a route.",
         self.stats.relayRejected or 0, self.stats.zaBatchSkipped or 0,
-        self.stats.localRejected or 0, self.stats.displaced or 0,
+        self.stats.localRejected or 0, self.stats.localRetried or 0, self.stats.displaced or 0,
         self.stats.expired or 0, noRoute)
     lines[#lines + 1] = string.format("No forwarding task: local %d (route missing/stale %d, loop %d), forward %d (route missing/stale %d, loop %d); path limit %d.",
         self.stats.localNoTask or 0, self.stats.localNoTaskMissing or 0,
         self.stats.localNoTaskLoop or 0, self.stats.forwardNoTask or 0,
         self.stats.forwardNoTaskMissing or 0, self.stats.forwardNoTaskLoop or 0,
         self.stats.forwardPathExhausted or 0)
+    -- 2.0.2: rows of somebody else's exchange that clients before 2.0.2 still fan out.
+    lines[#lines + 1] = string.format("Copies addressed to somebody else, not passed on: %d (%d had no route from here, the others were overheard on the channel or in a group). Broadcasts of others with nobody to pass them to here: %d.",
+        self.stats.addressedNotPassed or 0, self.stats.addressedNoRoute or 0, self.stats.broadcastNowhere or 0)
+    -- 2.0.2: keeps and outposts left out of our map answers because the requester holds them.
+    if sync.GetOutpostKnownSkipped then
+        lines[#lines + 1] = string.format("Keep and outpost rows left out of our map answers (the requester holds them): %d.",
+            sync:GetOutpostKnownSkipped())
+    end
     lines[#lines + 1] = string.format("VB relay: %d queued (max %d), %d B/s share, %d waiting updates coalesced.",
         laneSize(stateLane), STATE_QUEUE, STATE_RATE, self.stats.stateCoalesced or 0)
     lines[#lines + 1] = string.format("Waiting SR duplicates coalesced: %d (same origin/target only). Guild identities not relayed: %d. Outpost repeats not relayed: %d routine, %d progress. Waiting kill totals replaced by a newer one: %d.",
@@ -1287,6 +1381,48 @@ function net:GetKindDiagnostics(maxRows)
         self.stats.bridgeOut or 0, self.stats.bridgeLKCovered or 0,
         math.floor((net.GetBridgeShare and net:GetBridgeShare() or 1) * 100 + 0.5),
         self.stats.bridgeLKDeferred or 0)
+    lines[#lines + 1] = string.format("Bridge election: %d same-faction bridges heard, crossing share %d%%"
+        .. " (100%% up to %d), %d enemy copies of routine traffic and %d score rows left to the elected forwarders;"
+        .. " %d captures not sent back to the side that made them.",
+        sameFactionBridgeCount(), math.floor(crossShare() * 100 + 0.5), CROSS_FULL_BRIDGES,
+        self.stats.crossElectionSkipped or 0, self.stats.bridgeOutElectedAway or 0,
+        self.stats.captureBackSkipped or 0)
+    -- 2.0.2: what our direct neighbours say they run (their own presence, last 5 min).
+    do
+        local counts, order, now = {}, {}, GetTime()
+        for _, row in pairs(pagedCapabilities) do
+            if type(row) == "table" and now - (row.at or 0) <= 300 then
+                local release = row.release or "not stated"
+                if not counts[release] then
+                    counts[release] = 0
+                    order[#order + 1] = release
+                end
+                counts[release] = counts[release] + 1
+            end
+        end
+        table.sort(order, function(a, b)
+            if counts[a] ~= counts[b] then return counts[a] > counts[b] end
+            return a > b
+        end)
+        local parts = {}
+        for i = 1, math.min(#order, 8) do parts[#parts + 1] = order[i] .. " x" .. counts[order[i]] end
+        lines[#lines + 1] = "Neighbours by stated release (last 5 min): "
+            .. (#parts > 0 and table.concat(parts, ", ") or "none heard")
+            .. (#order > 8 and (", " .. (#order - 8) .. " other releases") or "") .. "."
+    end
+    local lb = addon.Leaderboard
+    if lb and lb.GetHotIndexStats then
+        local h = lb:GetHotIndexStats()
+        lines[#lines + 1] = string.format("Ranking index rebuilds: %d full + %d meta-only finished;"
+            .. " %d refreshed later (change not replayable); restarted %d.",
+            h.completed or 0, h.metaOnly or 0, h.metaDrift or 0, h.abortedOther or 0)
+    end
+    return lines
+end
+-- /ov network: the bridges to the other faction and what the map exchange skipped.
+-- The relay's own counters are in GetKindDiagnostics (/ov relay).
+function net:GetBridgeDiagnostics()
+    local lines = {}
     local enemies, live = 0, 0
     -- Named, with what each can do: "why no data from my friend of the other faction?"
     local named = {}
@@ -1300,15 +1436,18 @@ function net:GetKindDiagnostics(maxRows)
             if heard then live = live + 1 end
             if #named < 4 and type(character) == "string" and character ~= "" then
                 local capability = self:GetPeerPagedProtocol(character)
+                local release = heard and self:GetPeerRelease(character) or nil
                 named[#named + 1] = character .. " [" .. (not heard and "not heard under Overlord"
                     or capability and capability < self.MAP_MIN_PROTOCOL
                         and "before 1.7.0: no map, no ranking (update required)"
+                    or self:IsOutdatedMapPeer(character)
+                        and "before 2.0.2: still runs the truce, no map (update required)"
                     or capability and capability < (sync.PAGED_ASK_PROTOCOL or 8)
                         and "live bridge; before 1.8.0: no ranking catch-up"
                     or capability and capability < (sync.PAGED_PROTOCOL or 9)
                         and "live bridge; 1.8.0: kills and captures, no races"
                     or capability and "live bridge; ranking catch-up"
-                    or "live bridge; version not heard yet") .. "]"
+                    or "live bridge; version not heard yet") .. (release and ("; states " .. release) or "") .. "]"
             end
         end
     end
@@ -1322,19 +1461,6 @@ function net:GetKindDiagnostics(maxRows)
         lines[#lines + 1] = string.format("Clients before 1.7.0 (update required): %d presences not asked for a map,"
             .. " %d map pages not taken, %d requests not answered.", self.stats.outdatedPresences or 0,
             self.stats.outdatedMaps or 0, self.stats.outdatedRequests or 0)
-    end
-    lines[#lines + 1] = string.format("Bridge election: %d same-faction bridges heard, crossing share %d%%"
-        .. " (100%% up to %d), %d enemy copies of routine traffic and %d score rows left to the elected forwarders;"
-        .. " %d captures not sent back to the side that made them.",
-        sameFactionBridgeCount(), math.floor(crossShare() * 100 + 0.5), CROSS_FULL_BRIDGES,
-        self.stats.crossElectionSkipped or 0, self.stats.bridgeOutElectedAway or 0,
-        self.stats.captureBackSkipped or 0)
-    local lb = addon.Leaderboard
-    if lb and lb.GetHotIndexStats then
-        local h = lb:GetHotIndexStats()
-        lines[#lines + 1] = string.format("Ranking index rebuilds: %d full + %d meta-only finished;"
-            .. " %d refreshed later (change not replayable); restarted %d.",
-            h.completed or 0, h.metaOnly or 0, h.metaDrift or 0, h.abortedOther or 0)
     end
     return lines
 end
@@ -1383,7 +1509,8 @@ end
 --   * while the queue is busy, drops only repeats beyond COVER_COPIES per target,
 --     and the whole copy when nothing else is left. Local dispatch and the wire
 --     format are untouched.
--- FR : meme contenu "front:epoque" chez tous les clients qui terminent la treve.
+-- FR (clients d'avant la 2.0.2 seulement) : meme contenu "front:epoque" chez tous ceux
+-- qui terminent la treve.
 -- FK : meme palier dans la meme tranche de 30 s chez tous ceux qui l'annoncent.
 local DEDUP_KINDS = { OP = true, LO = true, LOC = true, VB = true, TV = true, FR = true, FK = true }
 -- COVER_TTL: how long a sent copy counts. COVER_PENDING: how long a copy still
@@ -1514,8 +1641,21 @@ local function tasksFor(p, wire)
     end
     if route and route.bnet then
         bnet(route.bnet)
-    elseif route and (paged or route.transport == "CHANNEL" or route.transport == "WHISPER") then
+    elseif route then
+        -- Any other route (channel, whisper, group) is a same-faction neighbour: one whisper.
         for _, fragment in ipairs(fragments) do add("WHISPER", fragment, "BF", route.via, route.via) end
+    elseif p.target ~= "*" then
+        -- 2.0.2: an addressed packet only ever follows a route. Without one (missing,
+        -- older than five minutes, or leading back to a client already on the path), or
+        -- with a group route, it used to take the broadcast fan-out below: group,
+        -- faction channel and every Battle.net bridge. Each row of a map answer to a
+        -- group mate (truce ends, victory journal, siege states) was then passed on by
+        -- every client that heard it, and put on the other faction's channel by its
+        -- bridges with the priority of a capture end (seen in game on 2026-10-13: half
+        -- of a lone bridge's channel messages were truce ends addressed to somebody
+        -- else). Every producer already asks for a known peer (Sync:SendWhisper,
+        -- map requests, named peers): nothing relied on that discovery.
+        return tasks, routeFailure or "missing"
     else
         -- The realm channel only carries what Blizzard's ~1 msg/s allows to be useful.
         local channelCopy = not p.skipChannel
@@ -1552,10 +1692,9 @@ local function tasksFor(p, wire)
             channelAgain = rec ~= nil and dedup.count(rec.carriers.channel, now) >= COVER_COPIES
         end
         -- Meme reserve Blizzard que le canal : pas de copie de fond au groupe pour une
-        -- diffusion. Un paquet adresse (reponse de rattrapage a un coequipier joint par
-        -- le groupe) garde sa copie : c'est parfois sa seule livraison.
+        -- diffusion. (Un paquet adresse ne passe plus ici : il suit sa route.)
         local groupCopy = not p.skipGroup
-            and (p.target ~= "*" or not sync.GroupCarries or sync:GroupCarries(p.kind, p.payload))
+            and (not sync.GroupCarries or sync:GroupCarries(p.kind, p.payload))
         groupSuppressed = not p.skipGroup and not groupCopy
         for _, fragment in ipairs(fragments) do
             if groupCopy then
@@ -1798,6 +1937,25 @@ local function noTask(p, tasks, reason)
         return true
     end
     if reason == "unheard" then return true end
+    -- 2.0.2: a copy of somebody else's broadcast that has nobody to go to here (heard on
+    -- the channel, no group, no live Battle.net friend: an ordinary morning) is not a drop.
+    -- It made /ov relay read hundreds "dropped" in red with nothing lost. Only the count
+    -- changes: it still returns false, so a later copy may be passed on once a group or a
+    -- friend is there (forward retry), and the rest of a ZA batch keeps its early refusal.
+    if p.target == "*" and p.path and #p.path > 1 and (reason == "missing" or reason == "no_transport") then
+        net.stats.broadcastNowhere = (net.stats.broadcastNowhere or 0) + 1
+        markZaBatchLost(p)
+        return false
+    end
+    -- 2.0.2: addressed to somebody else and no route to its target from here. Not ours
+    -- to deliver and not a loss: clients before 2.0.2 still fan such rows out to every
+    -- Battle.net friend (see tasksFor). Counted apart.
+    if p.target ~= "*" and p.path and #p.path > 1
+        and (reason == "missing" or reason == "stale" or reason == "loop") then
+        net.stats.addressedNotPassed = (net.stats.addressedNotPassed or 0) + 1
+        net.stats.addressedNoRoute = (net.stats.addressedNoRoute or 0) + 1
+        return false
+    end
     if reason ~= "redundant" then return rejectNoTask(p, reason) end
     dedup.commit(tasks)
     net.stats.contentDedupSkipped = (net.stats.contentDedupSkipped or 0) + 1
@@ -1973,6 +2131,18 @@ function net:Queue(p, immediate)
     else lane.items[#lane.items + 1] = item end
     schedule()
     return true
+end
+-- 2.0.2: a row the queue refused `count` times was offered again by its sender (the
+-- ticker of a map answer, the ranking pages) and is now ACCEPTED: those refusals were
+-- flow control, reported apart from losses. The sender counts them itself (the growth of
+-- stats.localRowsRefused around each of its sends) and only says so on acceptance: the
+-- refusals of a row that never leaves (an answer given up at its deadline), like those
+-- of a single-shot row, stay losses.
+function net:NoteOfferedAgain(count)
+    count = math.floor(tonumber(count) or 0)
+    if count <= 0 then return end
+    local room = (self.stats.localRowsRefused or 0) - (self.stats.localRetried or 0)
+    self.stats.localRetried = (self.stats.localRetried or 0) + math.max(0, math.min(count, room))
 end
 function net:CanSendLeaderboardPage()
     local ready = queuedPagedCount() < PAGED_QUEUE
@@ -2220,7 +2390,9 @@ function net:Send(kind, payload, target, immediate)
     if kind == "NH" and payload == tostring(addon.Version or "") then
         local stamp, sum, digest = localMapStamp()
         local sites = sync.GetOutpostMapStamps and sync:GetOutpostMapStamps() or 0
-        payload = payload .. (self:HasLiveEnemyBridge() and "~b" or "")
+        -- "~t0" (2.0.2): this client opens no truce from Zones.TRUCELESS_FROM on (see
+        -- IsOutdatedMapPeer). After "~b", whose readers look for "~b~".
+        payload = payload .. (self:HasLiveEnemyBridge() and "~b" or "") .. "~t0"
             .. "~m" .. base36(stamp) .. "~o" .. base36(sites)
             .. "~z" .. base36(digest, 6) .. base36(sum) .. "~l9~ld~lr~lp6"
     end
@@ -2351,7 +2523,9 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
             -- Sized like self.peers (CAPABILITY_RING): too small, most direct neighbours
             -- of a busy channel looked "unknown" and were asked the slower v7 sweep.
             remember(pagedCapabilities, pagedCapabilityOrder, originKey,
-                { version = version, at = GetTime(), originAt = p.at }, CAPABILITY_RING)
+                { version = version, at = GetTime(), originAt = p.at,
+                    truceless = p.payload:find("~t0~", 1, true) ~= nil,
+                    release = p.payload:match("^(%d%d?%d?%.%d%d?%d?%.%d%d?%d?)%f[%D]") }, CAPABILITY_RING)
         end
         -- Like Retail's community login, pull the territorial map first. Ranking
         -- already has its own paged catch-up; an SR:F on every new peer crowded
@@ -2436,7 +2610,8 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         -- the captures its side had just made. Retries of one same difference keep their
         -- own schedule (MapDiffDue), and the friend's budget stays one pull a minute.
         local originGap = (enemyFriend and diffRow) and 60 or 300
-        if #p.path == 1 and version < self.MAP_MIN_PROTOCOL then
+        if #p.path == 1 and (version < self.MAP_MIN_PROTOCOL
+            or (net.MapCutActive() and not p.payload:find("~t0~", 1, true))) then
             self.stats.outdatedPresences = (self.stats.outdatedPresences or 0) + 1
         elseif #p.path == 1 and (budget or friendPull) and now - last >= originGap and not recentFullMap and not noNews then
             if friendPull then self.friendPulls = (self.friendPulls or 0) + 1 else self.pulls = self.pulls + 1 end
@@ -2450,6 +2625,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
                 end
                 if diffRow and not forSites then
                     diffRow.at, diffRow.tries = now, diffRow.tries + 1
+                    diffRow.learned = diffRow.learnedSeen or diffRow.learned
                     self.stats.mapPullsForDiff = (self.stats.mapPullsForDiff or 0) + 1
                 end
                 if forSites then
@@ -2503,7 +2679,17 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
     if p.kind == "GI" then
         self.stats.giForwardSkipped = (self.stats.giForwardSkipped or 0) + 1
     end
-    if not relayable and not addressed then
+    -- 2.0.2: a packet addressed to somebody else is passed on by the next hop of its
+    -- route only, the client it was sent to point to point (whisper, Battle.net). A
+    -- copy overheard on the channel or in the group is the fan-out of a client before
+    -- 2.0.2 (see tasksFor): every hearer passed it on, one whisper each to the target
+    -- and one copy to each bridge of the other faction.
+    if relayable and not addressed and transport ~= "WHISPER" and transport ~= "BNET" then
+        -- (Not sealed: the same packet may still reach us point to point, as the next
+        -- hop of an older sender's Battle.net copy.)
+        relayable = false
+        self.stats.addressedNotPassed = (self.stats.addressedNotPassed or 0) + 1
+    elseif not relayable and not addressed then
         self.stats.catchupNotRelayed = (self.stats.catchupNotRelayed or 0) + 1
         -- Never relayed: seal it so duplicate copies are not decoded again.
         remember(seen, seenOrder, key, seal, SEEN_RING)

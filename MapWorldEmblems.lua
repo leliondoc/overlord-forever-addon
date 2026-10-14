@@ -111,7 +111,7 @@ end
 local function EmblemFrame(key, parent)
     local frame = state.frames[key]
     if not frame then
-        frame = CreateFrame("Frame", nil, parent)
+        frame = MM.NewFrame("Frame", parent)
         local logo = frame:CreateTexture(nil, "ARTWORK")
         logo:SetAllPoints(frame)
         logo:SetAlpha(EMBLEM_ALPHA)

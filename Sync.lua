@@ -29,11 +29,8 @@ local priv = {
     totalVictoryAnnounced = {},
     totalVictoryDeliveredAt = {},
     postVictorySyncGuardUntil = {},
-    -- FR recu avant sa preuve (SR envoie FR avant le journal VB) : un par front, rejoue.
+    -- FR (d'un client d'avant la 2.0.2) recu avant sa preuve : un par front, rejoue.
     pendingTruceRelease = {},
-    -- Derniere fin de treve entendue par front : un client qui l'a deja recue ne la
-    -- rediffuse pas (tous finissent la treve a la meme seconde, un seul annonceur suffit).
-    heardTruceRelease = {},
     captureDedup = {},
     captureDedupCount = 0,
     captureDedupMax = 128,
@@ -272,7 +269,7 @@ local function ShouldRejectFrontTruceZoneChange(zoneId, owner, status, ct)
     local victoryTs = victory and tonumber(victory.timestamp)
     if status == "captured" and owner == winner and ct and victoryTs then
         local cooldown = Overlord.Zones.GetVictoryCooldownSeconds
-            and tonumber(Overlord.Zones:GetVictoryCooldownSeconds()) or 900
+            and tonumber(Overlord.Zones:GetVictoryCooldownSeconds(victoryTs)) or 900
         -- La fenetre part du plus ancien de l'heure de victoire et du socle stable de la
         -- capitale tombee : un paquet distant ne peut pas les avancer tous les deux.
         local low = victoryTs
@@ -307,6 +304,10 @@ local function ShouldRejectPostVictoryZoneOwner(zoneId, owner, status, ts, sourc
         winner = OverlordDB.lastVictoryFaction
     end
     if not victoryTs or not winner or owner == winner then return false end
+    -- 2.0.2, no truce: the loser may take a point back at once; only a state dated at or
+    -- before the victory (in flight from before it) is still held back.
+    if ts > victoryTs and Overlord.Zones.GetVictoryCooldownSeconds
+        and Overlord.Zones:GetVictoryCooldownSeconds(victoryTs) == 0 then return false end
     local inLocalGuard = GetTime() <= (priv.postVictorySyncGuardUntil[frontId] or 0)
     if not inLocalGuard then return false end
 
@@ -339,6 +340,12 @@ local function SRPayload(requestMode)
     -- H (1.2.4) : historique avant-postes/forteresses seul (LO + LOC), sans carte.
     local mode = (requestMode == "F" and "F")
         or (requestMode == "S" and "S") or (requestMode == "H" and "H") or "T"
+    -- 2.0.2: before the mode of a territorial request, "k" + one mark per keep or outpost
+    -- we hold whole (SyncOutpost BuildOutpostKnownMarks): the answer leaves those out.
+    -- Older answerers read "k...:T" as their sixth field, a territorial request.
+    local marks = mode == "T" and Overlord.Sync.BuildOutpostKnownMarks
+        and Overlord.Sync:BuildOutpostKnownMarks(srEvidencePageNonce) or nil
+    if marks then mode = "k" .. marks .. ":" .. mode end
     return (Overlord.PlayerFaction or "") .. ":" .. versionField .. ":" .. vts
         .. ":" .. vfCode .. ":" .. vfront .. ":" .. mode
 end
@@ -346,6 +353,14 @@ end
 -- Accesseur public pour SRPayload (utilise par Commands.lua pour /ov sync <target>)
 function Overlord.Sync:GetSRPayload(requestMode)
     return SRPayload(requestMode)
+end
+
+-- 2.0.2: a request copy the whole group or channel hears is answered to all, so the keep
+-- marks are left out of it (the relay broadcast and whispers keep them: their answers go
+-- to the requester alone). Done after the relay dedup, which matches the marked payload.
+function Overlord.Sync:WithoutKeepMarks(data)
+    if type(data) ~= "string" then return data end
+    return (data:gsub(":k[0-9a-z]*:(%u)$", ":%1", 1))
 end
 
 -- Comparaison semver simple (retourne >0 si v1 > v2, 0 si egal, <0 si v1 < v2)
@@ -383,11 +398,19 @@ end
 -- Relay.MAP_MIN_PROTOCOL): known by its own presence, or by the version its
 -- request states.
 Overlord.Sync.MAP_MIN_VERSION = "1.7.0"
+-- 2.0.2: from the day the truce is retired (Zones.TRUCELESS_FROM), a client that still
+-- runs it is outside the map exchange too: it refuses the loser's captures for fifteen
+-- minutes after a victory, then serves the whole front with a newer date, which erased
+-- those captures everywhere (bench, 2026-10-14). Known by its presence ("~t0", see
+-- Relay:IsOutdatedMapPeer) or by a stated version that runs the rule for sure.
+Overlord.Sync.TRUCELESS_VERSION = "2.0.2"
 function Overlord.Sync:IsOutdatedMapPeer(name, version)
     -- The version a request states decides alone: a player who has just updated is
     -- still known by its previous presence until its next one is heard.
     if type(version) == "string" and version:match("^%d+%.%d+%.%d+$") then
-        return CompareVersions(version, self.MAP_MIN_VERSION) < 0
+        if CompareVersions(version, self.MAP_MIN_VERSION) < 0 then return true end
+        local retired = Overlord.Zones and Overlord.Zones.IsTruceRetired and Overlord.Zones:IsTruceRetired()
+        if not retired or CompareVersions(version, self.TRUCELESS_VERSION) >= 0 then return false end
     end
     local net = Overlord.Relay
     return net ~= nil and net.IsOutdatedMapPeer ~= nil and net:IsOutdatedMapPeer(name) == true
@@ -685,17 +708,23 @@ function Overlord.Sync:JoinChannel(attempt, generation)
         local id = GetChannelName(ChannelName())
         if id and id > 0 then
             FinishJoinAttempt()
-            Overlord.Sync:SendSyncRequest()
+            -- (2.0.2: after the truce's retirement, one neighbour heard as updated instead
+            -- of a broadcast, see SendLoginMapPeerRequest.)
+            if not Overlord.Sync:SendLoginMapPeerRequest() then Overlord.Sync:SendSyncRequest() end
             -- Relances SR a 15s et 35s pour les late-joiners (au cas ou personne ne repond au premier)
             C_Timer.After(15, function()
                 if Overlord.InstanceSuspended
                     or Overlord.Sync._joinChannelGeneration ~= generation then return end
-                if Overlord.Sync:GetChannelId() then Overlord.Sync:SendSyncRequest() end
+                if Overlord.Sync:GetChannelId() and not Overlord.Sync:SendLoginMapPeerRequest() then
+                    Overlord.Sync:SendSyncRequest()
+                end
             end)
             C_Timer.After(35, function()
                 if Overlord.InstanceSuspended
                     or Overlord.Sync._joinChannelGeneration ~= generation then return end
-                if Overlord.Sync:GetChannelId() then Overlord.Sync:SendSyncRequest() end
+                if Overlord.Sync:GetChannelId() and not Overlord.Sync:SendLoginMapPeerRequest() then
+                    Overlord.Sync:SendSyncRequest()
+                end
             end)
         else
             Overlord.Sync:JoinChannel(attempt + 1, generation)
@@ -810,6 +839,7 @@ function Overlord.Sync:StartLoginCaptureSyncBurst()
         (tonumber(self._loginCaptureSyncBurstGeneration) or 0) + 1
     local generation = self._loginCaptureSyncBurstGeneration
     local delays = { 0.25, 2.5, 6.5, 12.0 }
+    local askedAtLogin = {}
     for attempt, delay in ipairs(delays) do
         C_Timer.After(delay, function()
             if not Overlord.Sync
@@ -817,11 +847,18 @@ function Overlord.Sync:StartLoginCaptureSyncBurst()
                 or Overlord.InstanceSuspended or IsInInstance() then return end
             if Overlord.IsLoginCaptureSyncGateActive
                 and not Overlord:IsLoginCaptureSyncGateActive() then return end
-            Overlord.Sync:SendSyncRequest({
-                criticalChannel = true,
-                -- La gate login ne demande que la carte. Une reponse ladder complete
-                -- multiplie les copies/tri O(N) lors des reloads collectifs.
-            })
+            -- 2.0.2, from the day the truce is retired: the map answers of neighbours whose
+            -- presence was not heard yet are not taken (SyncRelay IsOutdatedMapPeer), and
+            -- right after a login none is. A broadcast here made about two of them build a
+            -- whole map for nothing; ask one neighbour heard as updated instead, if any
+            -- (presences come within two minutes, each one pulled when its map differs).
+            if not Overlord.Sync:SendLoginMapPeerRequest(askedAtLogin) then
+                Overlord.Sync:SendSyncRequest({
+                    criticalChannel = true,
+                    -- La gate login ne demande que la carte. Une reponse ladder complete
+                    -- multiplie les copies/tri O(N) lors des reloads collectifs.
+                })
+            end
             if attempt == #delays and Overlord.Sync.SendLoginCatchupSync
                 and Overlord:IsLoginCaptureSyncGateActive() then
                 -- Dernier filet petit-comite : au dernier essai, recontacter chaque membre
@@ -840,9 +877,11 @@ function Overlord.Sync:StartLoginCaptureSyncBurst()
             or Overlord.Sync._loginCaptureSyncBurstGeneration ~= generation
             or Overlord.InstanceSuspended or IsInInstance()
             or Overlord.InActiveFront then return end
-        Overlord.Sync:SendSyncRequest({
-            targetedOnly = true,
-        })
+        if not Overlord.Sync:SendLoginMapPeerRequest(askedAtLogin) then
+            Overlord.Sync:SendSyncRequest({
+                targetedOnly = true,
+            })
+        end
     end)
     -- Une campagne deja alimentee converge par K/LK/LC sans aucun travail global.
     -- Le seul cas dormant (client neuf, campagne vide) recoit plus tard UNE SR:F
@@ -1861,11 +1900,42 @@ end
 -- point vers quelques voisins directs (reponse garantie) et la carte periodique.
 function Overlord.Sync:SendLoginCatchupSync()
     if Overlord.InstanceSuspended or IsInInstance() then return 0 end
-    local betaSent = Overlord.Relay
+    -- (2.0.2: no broadcast once the truce is retired, see StartLoginCaptureSyncBurst.)
+    local cut = Overlord.Relay and Overlord.Relay.MapCutActive and Overlord.Relay.MapCutActive()
+    local betaSent = Overlord.Relay and not cut
         and Overlord.Relay:Broadcast("SR", SRPayload("T")) or 0
     self:ScheduleBetaPeerLoginCatchup()
     self:SchedulePeriodicMapCatchup()
     return betaSent
+end
+
+-- A direct neighbour whose presence says it runs our map rules, not asked yet at this
+-- login (nil when none is known yet), drawn at random: players logging in together hear
+-- the same presences, and the first names of a sorted list served them all.
+function Overlord.Sync:PickLoginMapPeer(asked)
+    local net = Overlord.Relay
+    if not net or not net.GetDirectPeers then return nil end
+    local myName = self:GetPlayerFullName()
+    local eligible = {}
+    for _, name in ipairs(net:GetDirectPeers()) do
+        if name ~= "" and not (asked and asked[name:lower()])
+            and not self:ForeverIdentitiesMatch(name, myName) and not self:IsOutdatedMapPeer(name) then
+            eligible[#eligible + 1] = name
+        end
+    end
+    return #eligible > 0 and eligible[math.random(#eligible)] or nil
+end
+-- From the day the truce is retired, a login map request goes to one neighbour heard as
+-- updated (a broadcast's answers would come from neighbours not heard yet, thrown away).
+-- True when this took the request over (sent, or nobody to ask yet); false before the day.
+function Overlord.Sync:SendLoginMapPeerRequest(asked)
+    local net = Overlord.Relay
+    if not (net and net.MapCutActive and net.MapCutActive()) then return false end
+    local target = self:PickLoginMapPeer(asked)
+    if target and self:SendSyncRequest({ betaTarget = target }) and asked then
+        asked[target:lower()] = true
+    end
+    return true
 end
 
 -- Equivalent sans Communaute du rattrapage login : au plus 2 SR territoriaux cibles
@@ -2050,6 +2120,7 @@ end
 function Overlord.Sync:Send(msgType, data, groupOnly)
     if Overlord.Relay and Overlord.Relay:IsEcho(msgType, data) then return false end
     if self:RelayAlreadyCarries(msgType, data) then return true end
+    if msgType == "SR" then data = self:WithoutKeepMarks(data) end
     if Overlord.InstanceSuspended then return end
     -- Filet de securite : IsInInstance/GetInstanceInfo peuvent confirmer une instance
     -- meme quand InstanceSuspended est brievement false (race condition en loading)
@@ -2289,6 +2360,7 @@ function Overlord.Sync:SendToChannel(msgType, data, critical)
     if Overlord.Relay and Overlord.Relay:IsEcho(msgType, data) then return false end
     if not (msgType == "K" and data == self._channelKillFlush)
         and self:RelayAlreadyCarries(msgType, data) then return true end
+    if msgType == "SR" then data = self:WithoutKeepMarks(data) end
     if Overlord.InstanceSuspended or IsInInstance() then return false end
     local channelId = self:GetChannelId()
     if not channelId then return false end
@@ -4284,7 +4356,7 @@ function Overlord.Sync:NoteMapCatchupCapture(zone, owner, capturedAt, capturerNa
     capturedAt = math.floor(tonumber(capturedAt) or 0)
     atLogin = atLogin == true
         or (Overlord.IsCaptureSyncGateActive and Overlord:IsCaptureSyncGateActive()) or false
-    self:NoteEnemyCaptureByMap(capturedAt, atLogin)
+    self:NoteEnemyCaptureByMap(capturedAt, atLogin, zone.id)
     if not alertAllowed then return end
     -- The assault was followed here and the map ends it: the usual line, capturer named.
     -- (pcall: a chat output that raises, another addon's chat frame for instance, must
@@ -4374,7 +4446,7 @@ function Overlord.Sync:NoteMapBatch(sender, event, batch)
     if batch then batch.mapSide = side end
 end
 
-function Overlord.Sync:NoteEnemyCaptureByMap(capturedAt, atLogin)
+function Overlord.Sync:NoteEnemyCaptureByMap(capturedAt, atLogin, zoneId)
     local stats = self._enemyByMapStats
     if not stats then
         stats = { session = 0, login = 0, last = 0, worst = 0 }
@@ -4391,6 +4463,21 @@ function Overlord.Sync:NoteEnemyCaptureByMap(capturedAt, atLogin)
     stats.session = stats.session + 1
     stats.last = late
     if late > stats.worst then stats.worst = late end
+    -- 2.0.2: why it came late. A friend of the other faction heard both before and after
+    -- the capture: its final should have crossed live. None: no bridge at that moment.
+    -- A capture older than what this session could hear: not known.
+    local net = Overlord.Relay
+    local why = "before this session"
+    if net and net.EnemyBridgeHeardAround and net.bnetWatchFrom
+        and late <= GetTime() - net.bnetWatchFrom then
+        why = net:EnemyBridgeHeardAround(late) == true and "friend heard" or "no friend heard"
+    end
+    stats.why = stats.why or {}
+    stats.why[why] = (stats.why[why] or 0) + 1
+    local recent = stats.recent or {}
+    stats.recent = recent
+    table.insert(recent, 1, { id = tostring(zoneId or "?"), late = late, why = why })
+    recent[5] = nil
 end
 
 -- 2.0.1 map news. A capture learnt from the map of a Battle.net friend of the other
@@ -4673,6 +4760,17 @@ function Overlord.Sync:GetCrossFactionDiagnostics()
         lines[3] = ("Enemy captures learnt by map instead of live: %d in session (last %d min late, worst %d min), %d at login.")
             :format(byMap.session, math.floor(byMap.last / 60 + 0.5), math.floor(byMap.worst / 60 + 0.5),
                 byMap.login)
+        if byMap.session > 0 then
+            local named, why = {}, byMap.why or {}
+            for _, row in ipairs(byMap.recent or {}) do
+                named[#named + 1] = ("%s %d min (%s)"):format(row.id, math.floor(row.late / 60 + 0.5), row.why)
+            end
+            lines[3] = lines[3] .. (" A friend of the other faction was heard shortly before and after %d of them"
+                .. " (their end should have come live), none was for %d, %d date from before this session."
+                .. " Last: %s.")
+                :format(why["friend heard"] or 0, why["no friend heard"] or 0, why["before this session"] or 0,
+                    table.concat(named, ", "))
+        end
     end
     if (priv.mapNewsSent or 0) + (priv.mapNewsHeard or 0) > 0 then
         lines[4] = ("Map news told to our faction: %d announcements (%d captures); %d captures left to someone who said them first; %d announcements given up (instance or long wait), %d pages sent twice (queue full).")
@@ -5693,8 +5791,15 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
     end
     -- Extraction de la version, victoryTs et victoryFaction du payload SR
     -- Format: "faction:version:victoryTs:victoryFaction"
-    local _, senderVersionField, senderVTs, senderVF, senderVFront, senderRequestMode =
-        strsplit(":", payload or "", 6)
+    local _, senderVersionField, senderVTs, senderVF, senderVFront, senderRequestMode, markedMode =
+        strsplit(":", payload or "", 7)
+    -- 2.0.2: "k<marks>:<mode>" (see SRPayload). The list is read only when an answer to
+    -- the requester alone is built (most requests heard are dropped before that).
+    local senderKeepMarks
+    if markedMode then
+        senderKeepMarks = senderRequestMode
+        senderRequestMode = markedMode
+    end
     local directSR = (channel == "WHISPER" or channel == "BNET")
     local fullResponseRequested = senderRequestMode == "F" and directSR
     local stateResponseRequested = senderRequestMode == "S" and directSR
@@ -5920,15 +6025,50 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         -- dans un de ces modules ne doit JAMAIS annuler la reponse territoriale
         -- communautaire ni laisser syncResponseInFlight verrouille 120 secondes.
         pcall(function()
-        -- Rejouer pendant deux heures la preuve terminale apres ZA. Le receveur
+        -- Rejouer la preuve terminale apres ZA tant que la treve court. Le receveur
         -- valide donc d'abord la carte complete, puis TV peut restaurer la capitale,
         -- la treve et l'annonce ratees pendant une instance. La dedup timestamp du
         -- handler empeche tout re-pop lors des SR suivantes ou apres /reload.
+        -- 2.0.2: only while its truce runs by the clock. The record stays until this
+        -- client's next 30 s tick ends the truce: an answer built in between replayed a
+        -- victory whose truce was over, and a late client showed it as a new one.
+        -- A victory without truce (Zones.TRUCELESS_FROM) is replayed for the 15 min a
+        -- truce used to last: a client that missed the live announcement (a faction whose
+        -- Battle.net bridge was away, a battleground) believes it on its own map proof.
+        -- Its record is filed at the first 30 s tick, so it then comes from the filed
+        -- moment and the fallen capital's kept stamp (Zones GetFiledTrucelessVictory).
+        local function truceSecondsOf(victoryTs)
+            return Overlord.Zones and Overlord.Zones.GetVictoryCooldownSeconds
+                and tonumber(Overlord.Zones:GetVictoryCooldownSeconds(victoryTs)) or 900
+        end
+        local TRUCELESS_REPLAY_SECONDS = 900
+        local function replaySecondsOf(victoryTs)
+            local truce = truceSecondsOf(victoryTs)
+            return truce > 0 and truce or TRUCELESS_REPLAY_SECONDS
+        end
+        local replayNow = (Overlord.ServerNow and Overlord.ServerNow()) or time()
+        local replayedFronts = {}
         if OverlordDB and OverlordDB.frontVictories then
             for frontId, victory in pairs(OverlordDB.frontVictories) do
-                local tvPayload = self:BuildTotalVictoryReplayPayload(frontId, victory)
+                local replayTs = tonumber(victory.timestamp) or 0
+                local tvPayload = replayNow - replayTs < replaySecondsOf(replayTs)
+                    and self:BuildTotalVictoryReplayPayload(frontId, victory) or nil
                 if tvPayload then
+                    replayedFronts[frontId] = true
                     table.insert(queue, { type = "TV", data = tvPayload })
+                end
+            end
+        end
+        if OverlordDB and type(OverlordDB.frontTruceResetEpoch) == "table"
+            and Overlord.Zones and Overlord.Zones.GetFiledTrucelessVictory then
+            for frontId in pairs(OverlordDB.frontTruceResetEpoch) do
+                local vts, winner = nil, nil
+                if not replayedFronts[frontId] then vts, winner = Overlord.Zones:GetFiledTrucelessVictory(frontId) end
+                if vts and replayNow >= vts and replayNow - vts < TRUCELESS_REPLAY_SECONDS then
+                    local tvPayload = self:BuildTotalVictoryReplayPayload(frontId, { faction = winner, timestamp = vts })
+                    if tvPayload then
+                        table.insert(queue, { type = "TV", data = tvPayload })
+                    end
                 end
             end
         end
@@ -5984,7 +6124,13 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         end
 
         if self.AppendOutpostToSrQueue then
-            pcall(self.AppendOutpostToSrQueue, self, queue, minimalResponseOnly)
+            -- 2.0.2: the keeps the requester holds are left out, in an answer to it alone
+            -- (never one the whole group or channel hears).
+            -- A malformed list is ignored (every row).
+            local markSet = senderKeepMarks and (whisperTarget or bnetTarget) and self.ParseOutpostKnownMarks
+                and self:ParseOutpostKnownMarks(senderKeepMarks) or nil
+            local known = markSet and { set = markSet, nonce = senderEvidencePage } or nil
+            pcall(self.AppendOutpostToSrQueue, self, queue, minimalResponseOnly, known)
         end
         if not minimalResponseOnly then
             if self.AppendLeaderboardOutpostToSrQueue then
@@ -6036,21 +6182,18 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
                 local vts = tonumber(victory.timestamp) or 0
                 local vf = victory.faction
                 local vfCode = (vf == "Alliance") and "A" or (vf == "Horde") and "H" or ""
-                if vts > 0 and vfCode ~= "" and not IsStaleCampaignTimestamp(vts) then
+                if vts > 0 and vfCode ~= "" and not IsStaleCampaignTimestamp(vts)
+                    and replayNow - vts < truceSecondsOf(vts) then
                     table.insert(queue, { type = "VT", data = tostring(vts) .. ":" .. frontId })
                     table.insert(queue, { type = "VF", data = vts .. ":" .. vfCode .. ":" .. frontId })
                 end
             end
         end
-        -- Tombstones de fin de treve : indispensables aux clients absents lors du FR initial.
-        if OverlordDB and OverlordDB.frontTruceResetEpoch then
-            for frontId, resetEpoch in pairs(OverlordDB.frontTruceResetEpoch) do
-                resetEpoch = math.floor(tonumber(resetEpoch) or 0)
-                if resetEpoch > 0 and not IsStaleCampaignTimestamp(resetEpoch) then
-                    table.insert(queue, { type = "FR", data = frontId .. ":" .. resetEpoch })
-                end
-            end
-        end
+        -- 2.0.2: no truce-end row (FR) any more. An answer carried one per front that had
+        -- a truce since the weekly reset (all seven on a reset evening), sent with the
+        -- priority of a capture end. The map above already carries the conquest as the
+        -- truce end left it (every point at the epoch, the fallen capital one second
+        -- later): a late client reads it there, with or without the row.
 
         -- Barre de domination v2 (plus de DX) : la barre = victoires de front.
         -- Le journal VB est rejoue ici pour que les late joiners / reloads convergent.
@@ -6176,11 +6319,22 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
             -- ce tick n'avance pas l'index et le suivant reprendra le meme slot.
             if not item then return end
             if whisperTarget then
+                local relayStats = Overlord.Relay and Overlord.Relay.stats
+                local refusedBefore = relayStats and relayStats.localRowsRefused or 0
                 if Overlord.Sync:SendWhisper(item.type, item.data, whisperTarget) ~= true then
                     -- A bounded beta relay can apply backpressure. Keep this row
                     -- until accepted (or the response watchdog expires).
                     responseState.queueIndex = math.max(
                         0, (tonumber(responseState.queueIndex) or 1) - 1)
+                    -- 2.0.2: refusals of this row by the relay queue. They only become
+                    -- "offered again" (not a loss) once the row is accepted.
+                    responseState.rowRefusals = (responseState.rowRefusals or 0)
+                        + ((relayStats and relayStats.localRowsRefused or 0) - refusedBefore)
+                elseif (responseState.rowRefusals or 0) > 0 then
+                    if Overlord.Relay and Overlord.Relay.NoteOfferedAgain then
+                        Overlord.Relay:NoteOfferedAgain(responseState.rowRefusals)
+                    end
+                    responseState.rowRefusals = 0
                 end
             elseif bnetTarget then
                 Overlord.Sync:SendToBNet(bnetTarget, item.type, item.data)
@@ -8866,7 +9020,16 @@ function Overlord.Sync:OnReceiveZoneAll(
                 local _, activityFront = Overlord.Fronts:GetZone(zoneId)
                 local releaseEpoch = activityFront and OverlordDB and OverlordDB.frontTruceResetEpoch
                     and tonumber(OverlordDB.frontTruceResetEpoch[activityFront.id]) or 0
-                if ct ~= releaseEpoch and ct ~= releaseEpoch + 1 then
+                -- 2.0.2: a client that was away for the truce holds no such record (truce
+                -- ends are no longer announced): the front's last victory dates the same
+                -- truce end, to the five seconds two clients may differ on a victory (and
+                -- one more for the kept capital).
+                local lastVictory = activityFront and Overlord.Zones.GetPreviousFrontVictoryTs
+                    and Overlord.Zones:GetPreviousFrontVictoryTs(activityFront.id) or 0
+                local derivedEpoch = lastVictory > 0 and lastVictory + (Overlord.Zones.GetVictoryCooldownSeconds
+                    and tonumber(Overlord.Zones:GetVictoryCooldownSeconds(lastVictory)) or 900) or 0
+                if ct ~= releaseEpoch and ct ~= releaseEpoch + 1
+                    and not (derivedEpoch > 0 and ct >= derivedEpoch - 5 and ct <= derivedEpoch + 6) then
                     Overlord.FrontActivity:RecordByZoneRef(zoneId, nil, ct)
                 end
             end
@@ -10159,7 +10322,7 @@ function Overlord.Sync:CheckTotalVictoryFromSync()
         return (ts > 0) and ts or time(), cap
     end
     local function VictoryCounts(victoryTs, capital, faction)
-        if Overlord.Zones.IsKeptCapitalStamp and Overlord.Zones:IsKeptCapitalStamp(frontId, capital) then
+        if Overlord.Zones.IsKeptCapitalAfterTruce and Overlord.Zones:IsKeptCapitalAfterTruce(frontId, capital) then
             return false
         end
         if Overlord.Zones.IsFrontVictoryAllowed
@@ -10179,17 +10342,53 @@ function Overlord.Sync:CheckTotalVictoryFromSync()
             and Overlord:GetDominationVictoryEventNear(frontId, faction, victoryTs) ~= nil or false
     end
 
+    -- 2.0.2: the moment of the victory its capturer announced for this faction, if that
+    -- announcement still waits for its proof here and names the moment the capital
+    -- fell on our map (see CountZonesNotOwnedByOnFront).
+    local function AnnouncedAt(faction)
+        local pending = priv.pendingTotalVictory and priv.pendingTotalVictory[frontId]
+        local at = pending and tostring(pending.payload or ""):match("^([^:]+)") == faction
+            and tonumber(pending.ts) or nil
+        if not at then return nil end
+        local capitalId = Overlord.Fronts:GetEnemyCapitalId(faction, frontId)
+        local capital = capitalId and select(1, Overlord.Fronts:GetZone(capitalId, frontId))
+        local stamp = math.floor(tonumber(capital and capital.capturedTime) or 0)
+        if stamp <= 0 or math.abs(at - stamp) > 5 then return nil end
+        return at
+    end
+
+    -- 2.0.2 victory news: the waiting announcement the map now proves came from a friend
+    -- of the other faction (see SayVictoryNews).
+    -- 2.0.2, no truce: the fallen capital carries the victory's kept stamp (V + 1, see
+    -- ForceSyncFrontToWinner); a waiting announcement gives the victory's own moment, the
+    -- one the TV path files. Otherwise each late learner would repaint one second later.
+    local function TrucelessMoment(faction, victoryTs)
+        local announced = AnnouncedAt(faction)
+        if announced and Overlord.Zones.GetVictoryCooldownSeconds
+            and Overlord.Zones:GetVictoryCooldownSeconds(announced) == 0 then return announced end
+        return victoryTs
+    end
+
+    local function SayWaitingNews(faction, victoryTs)
+        local waiting = priv.pendingTotalVictory and priv.pendingTotalVictory[frontId]
+        if not (waiting and waiting.news) or math.abs((tonumber(waiting.ts) or 0) - victoryTs) > 5 then return end
+        local who, _, allyK, enemyK = strsplit(":", tostring(waiting.payload or ""))
+        if who == faction then self:SayVictoryNews(frontId, faction, victoryTs, allyK, enemyK) end
+    end
+
     -- Victoire de notre faction : capitale ennemie capturee (owner + capturedTime via LocalStateSupportsVictoryTruce).
     if Overlord.Zones and Overlord.Zones.LocalStateSupportsVictoryTruce
-        and Overlord.Zones:LocalStateSupportsVictoryTruce(frontId, pf) then
+        and Overlord.Zones:LocalStateSupportsVictoryTruce(frontId, pf, AnnouncedAt(pf)) then
         -- Capitale seule en sync sans TV : ne pas figer le front si le reste de la carte est encore mixte.
         if Overlord.Zones and Overlord.Zones.CountZonesNotOwnedByOnFront
-            and Overlord.Zones:CountZonesNotOwnedByOnFront(frontId, pf) > 0 then
+            and Overlord.Zones:CountZonesNotOwnedByOnFront(frontId, pf, AnnouncedAt(pf)) > 0 then
             return
         end
         local victoryTs, capital = GetVictoryCaptureTimestamp(pf)
+        victoryTs = TrucelessMoment(pf, victoryTs)
         if releasedEpoch > 0 and victoryTs <= releasedEpoch + 5 then return end
         if not VictoryCounts(victoryTs, capital, pf) then return end
+        SayWaitingNews(pf, victoryTs)
         if OverlordDB and (not currentTruce or currentWinner == pf) then
             Overlord.Zones:SetVictoryCooldown(frontId, pf, victoryTs)
             if Overlord.TryGrantVictoryDominationBonus then
@@ -10216,14 +10415,16 @@ function Overlord.Sync:CheckTotalVictoryFromSync()
     -- Victoire ennemie : notre capitale est capturee par l'ennemi
     -- (cas ou le TV broadcast n'est pas arrive mais les ZS ont converge)
     if Overlord.Zones and Overlord.Zones.LocalStateSupportsVictoryTruce
-        and Overlord.Zones:LocalStateSupportsVictoryTruce(frontId, ef) then
+        and Overlord.Zones:LocalStateSupportsVictoryTruce(frontId, ef, AnnouncedAt(ef)) then
         if Overlord.Zones and Overlord.Zones.CountZonesNotOwnedByOnFront
-            and Overlord.Zones:CountZonesNotOwnedByOnFront(frontId, ef) > 0 then
+            and Overlord.Zones:CountZonesNotOwnedByOnFront(frontId, ef, AnnouncedAt(ef)) > 0 then
             return
         end
         local victoryTs, capital = GetVictoryCaptureTimestamp(ef)
+        victoryTs = TrucelessMoment(ef, victoryTs)
         if releasedEpoch > 0 and victoryTs <= releasedEpoch + 5 then return end
         if not VictoryCounts(victoryTs, capital, ef) then return end
+        SayWaitingNews(ef, victoryTs)
         if OverlordDB and (not currentTruce or currentWinner == ef) then
             Overlord.Zones:SetVictoryCooldown(frontId, ef, victoryTs)
             if Overlord.TryGrantVictoryDominationBonus then
@@ -10289,17 +10490,19 @@ function Overlord.Sync:RemoteVictoryProven(frontId, faction, ts)
     local endedEpoch = OverlordDB.frontTruceResetEpoch
         and math.floor(tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0) or 0
     local cooldownSec = zones.GetVictoryCooldownSeconds
-        and math.floor(tonumber(zones:GetVictoryCooldownSeconds()) or 0) or 900
+        and math.floor(tonumber(zones:GetVictoryCooldownSeconds(ts)) or 0) or 900
     if endedEpoch > 0 and ts + cooldownSec <= endedEpoch then return false end
     if zones.IsFrontVictoryAllowed and not select(1, zones:IsFrontVictoryAllowed(frontId, ts)) then
         return false
     end
+    -- Strict here (no point set aside, unlike the announcement's own proof): this path
+    -- records the victory without repainting the front.
     if not zones:LocalStateSupportsVictoryTruce(frontId, faction) then return false end
     local capitalId = Overlord.Fronts:GetEnemyCapitalId(faction, frontId)
     local capital = capitalId and select(1, Overlord.Fronts:GetZone(capitalId, frontId))
     local proofTs = math.floor(tonumber(capital and capital.capturedTime) or 0)
     if proofTs <= 0 or math.abs(ts - proofTs) > 5 then return false end
-    if zones.IsKeptCapitalStamp and zones:IsKeptCapitalStamp(frontId, capital) then return false end
+    if zones.IsKeptCapitalAfterTruce and zones:IsKeptCapitalAfterTruce(frontId, capital) then return false end
     return true
 end
 
@@ -10416,7 +10619,8 @@ function Overlord.Sync:DeferTotalVictoryUntilEvidence(frontKey, payload, sender,
     -- same moment (other totals in the payload) cannot replace it.
     if current and (current.payload == payload
         or math.abs((tonumber(current.ts) or 0) - (tonumber(ts) or 0)) <= 5) then return end
-    local entry = { payload = payload, sender = sender, sourceChannel = sourceChannel, step = 0, ts = ts }
+    local entry = { payload = payload, sender = sender, sourceChannel = sourceChannel, step = 0, ts = ts,
+        news = self.MapNewsSource and self:MapNewsSource(sender) or nil }
     priv.pendingTotalVictory[frontKey] = entry
     local function retry()
         if priv.pendingTotalVictory[frontKey] ~= entry then return end
@@ -10431,6 +10635,46 @@ function Overlord.Sync:DeferTotalVictoryUntilEvidence(frontKey, payload, sender,
         end
     end
     C_Timer.After(TV_RETRY_DELAYS[1], retry)
+end
+
+-- 2.0.2 victory news. The announcement of a victory (TV) crosses factions live through
+-- the relay. A client that only learns it afterwards, first-hand from a friend of the
+-- other faction (the TV row of the map answer it asked for: back from a battleground,
+-- a reload, a new friend), was the only one of its faction to enter the truce: every
+-- channel mate had to ask for a map in turn (thirteen minutes for 43 clients on the
+-- bench, during which they went on capturing). It now says the victory once on its
+-- channel, after its map news. Nobody is believed on his word: each hearer's own map
+-- must prove it, as for the capturer's announcement.
+-- Only when the same answer taught us captures we are telling (or just told) our
+-- faction: a bridge whose faction was up to date has nothing to add.
+function Overlord.Sync:MapNewsUnderWay()
+    return priv.mapNews ~= nil
+        or (priv.mapNewsSentAt ~= nil and GetTime() - priv.mapNewsSentAt <= 60)
+end
+function Overlord.Sync:SayVictoryNews(frontId, faction, ts, allyK, enemyK)
+    if not frontId or not faction or not ts then return end
+    if not self:MapNewsUnderWay() then return end
+    priv.victoryNewsSaid = priv.victoryNewsSaid or {}
+    if (priv.victoryNewsSaid[frontId] or 0) >= ts then return end
+    priv.victoryNewsSaid[frontId] = ts
+    local function total(value) return tostring(math.max(0, math.floor(tonumber(value) or 0))) end
+    local payload = table.concat({ faction, tostring(ts), total(allyK), total(enemyK), frontId }, ":")
+    local heardKey = frontId .. ":" .. faction
+    -- 15 to 35 s: after the map news, and never several bridges in the same second (the
+    -- first one heard on the channel keeps the others quiet).
+    C_Timer.After(15 + math.random() * 20, function()
+        if Overlord.InstanceSuspended or IsInInstance() then return end
+        -- Someone said it on our channel meanwhile, or its truce is over: nothing to say.
+        -- Only an announcement of this very moment counts (+-5 s, what hearers can prove):
+        -- one for another moment, forged, would otherwise keep every bridge quiet.
+        for _, heardTs in ipairs(priv.victoryHeardOnChannel and priv.victoryHeardOnChannel[heardKey] or {}) do
+            if math.abs(heardTs - ts) <= 5 then return end
+        end
+        -- (Fifteen minutes: how long the news is worth saying, truce or not.)
+        if (Overlord.ServerNow and Overlord.ServerNow() or time()) > ts + 900 then return end
+        priv.victoryNewsSent = (priv.victoryNewsSent or 0) + 1
+        Overlord.Sync:SendToChannel("TV", payload, true)
+    end)
 end
 
 -- Reception d'une victoire totale distante.
@@ -10467,6 +10711,18 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel, ret
     if frontId and (not Overlord.Fronts or not Overlord.Fronts:GetFront(frontId)) then return end
     local appliesToCurrentFront = (not frontId) or frontId == currentFrontId
     local proofFrontId = frontId or currentFrontId
+    -- Said on our channel (first-hand, or a copy the relay took from the channel): a
+    -- victory news of ours for the same front, winner and moment is then not needed.
+    local relayContext = Overlord.Relay and Overlord.Relay.context
+    if proofFrontId and (sourceChannel == "CHANNEL"
+        or (sourceChannel == "BETA" and relayContext and relayContext.transport == "CHANNEL")) then
+        priv.victoryHeardOnChannel = priv.victoryHeardOnChannel or {}
+        local heardKey = proofFrontId .. ":" .. faction
+        local heard = priv.victoryHeardOnChannel[heardKey] or {}
+        priv.victoryHeardOnChannel[heardKey] = heard
+        heard[#heard + 1] = ts
+        if #heard > 16 then table.remove(heard, 1) end
+    end
     local deliveredTs = proofFrontId
         and math.floor(tonumber(priv.totalVictoryDeliveredAt[proofFrontId]) or 0) or 0
     if deliveredTs > 0 and math.abs(ts - deliveredTs) <= 5 then return end
@@ -10478,7 +10734,7 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel, ret
     -- Deja livre (ou plus ancien) : ignore chat + rejoue d'etat (anti-spam timestamps).
     -- Une nouvelle victoire sur le meme front arrive au plus tot apres la treve.
     local truceSeconds = (Overlord.Zones and Overlord.Zones.GetVictoryCooldownSeconds
-        and Overlord.Zones:GetVictoryCooldownSeconds()) or 900
+        and Overlord.Zones:GetVictoryCooldownSeconds(deliveredTs)) or 900
     if deliveredTs > 0 and ts < deliveredTs + truceSeconds then
         return
     end
@@ -10500,16 +10756,17 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel, ret
 
     local localVictoryEvidence = proofFrontId and Overlord.Zones
         and Overlord.Zones.LocalStateSupportsVictoryTruce
-        and Overlord.Zones:LocalStateSupportsVictoryTruce(proofFrontId, faction)
+        and Overlord.Zones:LocalStateSupportsVictoryTruce(proofFrontId, faction, ts)
     if localVictoryEvidence and Overlord.Fronts and Overlord.Zones then
         local capitalId = Overlord.Fronts:GetEnemyCapitalId(faction, proofFrontId)
         local capital = capitalId and select(1, Overlord.Fronts:GetZone(capitalId, proofFrontId))
         local localProofTs = math.floor(tonumber(capital and capital.capturedTime) or 0)
         if localProofTs <= 0 or math.abs(ts - localProofTs) > 5 then
             localVictoryEvidence = false
-        elseif math.abs(ts - dbVts) > 5 and Overlord.Zones.IsKeptCapitalStamp
-            and Overlord.Zones:IsKeptCapitalStamp(proofFrontId, capital) then
+        elseif math.abs(ts - dbVts) > 5 and Overlord.Zones.IsKeptCapitalAfterTruce
+            and Overlord.Zones:IsKeptCapitalAfterTruce(proofFrontId, capital) then
             -- Capitale gardee apres une fin de treve (epoch + 1) : pas une nouvelle victoire.
+            -- (2.0.2 : celle d'une victoire sans treve, victoire + 1, est la victoire meme.)
             -- Une vraie victoire re-horodate tout le front a son heure (ZA du capteur) et
             -- la TV en attente est alors rejouee.
             localVictoryEvidence = false
@@ -10531,9 +10788,13 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel, ret
         end
         return
     end
+    local viaFriend = proofFrontId and ((self.MapNewsSource and self:MapNewsSource(sender))
+        or (retrying and priv.pendingTotalVictory and priv.pendingTotalVictory[proofFrontId]
+            and priv.pendingTotalVictory[proofFrontId].news))
     if proofFrontId and priv.pendingTotalVictory then
         priv.pendingTotalVictory[proofFrontId] = nil
     end
+    if viaFriend then self:SayVictoryNews(proofFrontId, faction, ts, allyKStr, enemyKStr) end
     if Overlord.WaitingForSync then Overlord.WaitingForSync = nil end
 
     -- NOTE : l'ancien check "toutes les zones doivent etre a faction" a ete retire.
@@ -11424,64 +11685,11 @@ end
 
 local function NewerPendingFirst(a, b) return a.epoch > b.epoch end
 
-local function NoteHeardTruceRelease(frontId, epoch)
-    if (priv.heardTruceRelease[frontId] or 0) < epoch then
-        priv.heardTruceRelease[frontId] = epoch
-    end
-end
-
--- FR : fin de treve. La conquete reste entiere, la capitale tombee comprise (epoch + 1).
-function Overlord.Sync:BroadcastFrontTruceEndReset(frontId, resetEpoch)
-    if not frontId or not resetEpoch or resetEpoch <= 0 then return end
-    if Overlord.InstanceSuspended or IsInInstance() then return end
-    local epoch = math.floor(resetEpoch)
-    local payload = frontId .. ":" .. epoch
-    -- Tous les clients qui ont vu la victoire finissent la treve a la meme seconde (horloge
-    -- serveur) : a 10 000 joueurs, chacun rediffusait FR + 3 pages ZA. Un annonceur
-    -- suffit : attente aleatoire de 3 a 25 s, annulee si ce FR a deja ete entendu.
-    -- La fin de treve locale, elle, a deja eu lieu.
-    local function announce()
-        if Overlord.InstanceSuspended or IsInInstance() then return end
-        if (priv.heardTruceRelease[frontId] or 0) >= epoch then return end
-        -- Reset hebdomadaire (ou autre fin de treve) entre-temps : plus rien a annoncer.
-        local applied = OverlordDB and OverlordDB.frontTruceResetEpoch
-            and tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0
-        if applied ~= epoch then return end
-        -- Les pairs se taisent des qu'ils entendent ce FR : il ne part qu'avec ses pages
-        -- ZA. Si elles ne peuvent pas partir (sync en attente), un autre client annonce.
-        if Overlord.WaitingForSync
-            or (Overlord.IsCaptureSyncPending and Overlord:IsCaptureSyncPending())
-            or (Overlord.LocalFrontAwaitingNetworkSnapshot
-                and Overlord:LocalFrontAwaitingNetworkSnapshot()) then
-            return
-        end
-        priv.heardTruceRelease[frontId] = epoch
-        self:SendToGroup("FR", payload)
-        self:SendToChannel("FR", payload, true)
-        self:BroadcastToRelay("FR", payload)
-        self:BroadcastFrontZoneSnapshot(frontId)
-    end
-    C_Timer.After(3 + math.random() * 22, announce)
-end
-
-function Overlord.Sync:BroadcastFrontZoneSnapshot(frontId)
-    if not frontId or Overlord.InstanceSuspended or IsInInstance() then return end
-    if Overlord.WaitingForSync then return end
-    if Overlord.IsCaptureSyncPending and Overlord:IsCaptureSyncPending() then return end
-    if Overlord.LocalFrontAwaitingNetworkSnapshot and Overlord:LocalFrontAwaitingNetworkSnapshot() then
-        return
-    end
-    local front = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
-    if not front or not front.zones then return end
-    local zaPages, zaPageCount = self:BuildZoneAllSnapshotPages(front.zones, "F")
-    for zaPageIndex = 1, zaPageCount do
-        local data = zaPages[zaPageIndex]
-        self:Send("ZA", data)
-    end
-    if zaPageCount > 0 and self.BroadcastZoneSnapshotPages then
-        self:BroadcastZoneSnapshotPages(zaPages)
-    end
-end
+-- 2.0.2: a truce end is no longer announced. Every client that holds the victory ends
+-- its truce by itself at the same second of the server clock (Zones:TryExpireFrontTruces)
+-- and gives the conquest the same dates; a client that missed the victory reads both in
+-- the next map it receives. The announcement (FR, with the front's map pages) and the
+-- copy of it in every map answer were the first traffic of a busy bridge.
 
 -- Rejoue les FR en attente de preuve (30 s ticker de treve, et apres un VB accepte).
 -- Local uniquement : aucune emission, aucune reponse.
@@ -11516,16 +11724,13 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
     if not frontId or not resetEpoch or resetEpoch <= 0 then return end
     if not Overlord.Fronts or not Overlord.Fronts:GetFront(frontId) then return end
     if IsStaleCampaignTimestamp(resetEpoch) then return end
+    -- 2.0.2: no truce from Zones.TRUCELESS_FROM on, hence no truce end to read (only a
+    -- client left out of the map exchange still sends one).
+    if Overlord.Zones and Overlord.Zones.IsTruceRetired and Overlord.Zones:IsTruceRetired(resetEpoch) then return end
     -- Deja applique (ou plus ancien) : rien a deriver, meme sous un flot de FR.
     local appliedEpoch = OverlordDB and OverlordDB.frontTruceResetEpoch
         and tonumber(OverlordDB.frontTruceResetEpoch[frontId]) or 0
-    if appliedEpoch >= resetEpoch then
-        -- Un pair a annonce la meme fin de treve : notre annonce differee devient inutile.
-        -- Seul un FR prouve (deja applique ici, ou derive plus bas) la fait taire : un FR
-        -- invente ne doit pas empecher la vraie annonce.
-        NoteHeardTruceRelease(frontId, resetEpoch)
-        return
-    end
+    if appliedEpoch >= resetEpoch then return end
     local frNow = (Overlord.ServerNow and Overlord.ServerNow()) or time()
     local locallyDerivedReset = false
     local victory = OverlordDB and OverlordDB.frontVictories
@@ -11644,7 +11849,6 @@ function Overlord.Sync:OnReceiveFrontTruceEndReset(payload, sender, sourceChanne
         return
     end
     priv.pendingTruceRelease[frontId] = nil
-    NoteHeardTruceRelease(frontId, resetEpoch)
     if Overlord.Zones and Overlord.Zones.ApplyFrontTruceEndReset then
         Overlord.Zones:ApplyFrontTruceEndReset(frontId, resetEpoch, true)
     end
@@ -11653,7 +11857,6 @@ end
 -- Reset hebdomadaire : les FR en attente et entendus appartiennent a l'ancienne semaine.
 function Overlord.Sync:ClearTruceReleaseState()
     priv.pendingTruceRelease = {}
-    priv.heardTruceRelease = {}
 end
 
 -- Snapshot ZA compact (owners, tous les fronts) : canal + groupe, comme DM en sync passive.

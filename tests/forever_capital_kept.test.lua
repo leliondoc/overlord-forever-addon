@@ -23,10 +23,13 @@ Overlord.SaveState = function() end
 Overlord.MarkDirty = function() end
 local printed = {}
 Overlord.PrintNotification = function(_, text) printed[#printed + 1] = text end
+-- 2.0.2: a truce end is no longer announced (no FR, no map pages): every client that
+-- holds the victory ends its truce by itself. Whatever a truce end sends lands here.
 local broadcasts = {}
-local realBroadcastFR = sync.BroadcastFrontTruceEndReset
-sync.BroadcastFrontTruceEndReset = function(_, frontId, epoch)
-    broadcasts[#broadcasts + 1] = { frontId = frontId, epoch = epoch }
+assert(sync.BroadcastFrontTruceEndReset == nil and sync.BroadcastFrontZoneSnapshot == nil,
+    "The truce-end announcement is still there")
+for _, name in ipairs({ "Send", "SendToGroup", "SendToChannel", "BroadcastToRelay", "SendWhisper" }) do
+    sync[name] = function(_, kind) broadcasts[#broadcasts + 1] = { via = name, kind = kind } end
 end
 -- Domination journal stub: a timestamp, or { timestamp, faction }.
 local journal = nil
@@ -72,7 +75,7 @@ for _, zone in ipairs(branches) do
     assert(zone.owner == "Alliance" and zone.capturedTime == E, zone.id .. " not kept at the epoch")
 end
 assert(allianceCap.owner == "Alliance" and allianceCap.capturedTime == E, "Winner's capital not at the epoch")
-assert(#broadcasts == 1 and broadcasts[1].epoch == E, "FR not announced once")
+assert(#broadcasts == 0, "A truce end still sent something: " .. tostring(broadcasts[1] and broadcasts[1].kind))
 assert(#printed == 1 and printed[1]:find("conquest kept", 1, true), "Truce-end line missing")
 assert(zones.IsCapitalImmune == nil and zones.GetCapitalProtectionLabel == nil, "Protection API still present")
 assert(zones:LocalStateShowsKeptConquest("elwynn", "Alliance", E), "Kept conquest not recognised")
@@ -80,7 +83,7 @@ assert(zones:KeptConquestWinnerFromMap("elwynn", E) == "Alliance")
 assert(zones:IsKeptCapitalStamp("elwynn", hordeCap), "Kept capital stamp not recognised")
 -- A second tick changes nothing.
 zones:TryExpireFrontTruces()
-assert(#broadcasts == 1 and hordeCap.capturedTime == E + 1)
+assert(#broadcasts == 0 and hordeCap.capturedTime == E + 1)
 
 -- 2. The kept map never yields a new victory, even on a client that knows nothing of it
 -- (no truce record, no journal): a kept capital is never a fresh capture.
@@ -220,7 +223,7 @@ assert(#broadcasts == 0 and #printed == 0 and OverlordDB.frontTruceResetEpoch.el
     "Truce end ran inside an instance")
 Overlord.InstanceSuspended = false
 zones:TryExpireFrontTruces()
-assert(#broadcasts == 1 and #printed == 1 and hordeCap.owner == "Alliance"
+assert(#broadcasts == 0 and #printed == 1 and hordeCap.owner == "Alliance"
     and hordeCap.capturedTime == V4 + 901, "Truce end did not run after leaving the instance")
 
 -- 10. Login long after the truce: applied silently, no stale chat line, no broadcast.
@@ -314,40 +317,27 @@ zones:ForceSyncFrontToWinner("hillsbrad", "Alliance", HBV, true)
 clock = HBV + 901
 zones:TryExpireFrontTruces()
 assert(tarren.owner == "Alliance" and tarren.capturedTime == HBV + 901, "Tarren Mill was given back after the truce")
-assert(#broadcasts == 1 and #printed == 1 and printed[1]:find("conquest kept", 1, true),
-    "Hillsbrad truce end not announced like the other fronts")
+assert(#broadcasts == 0 and #printed == 1 and printed[1]:find("conquest kept", 1, true),
+    "Hillsbrad truce end not printed like the other fronts")
 
--- 15. Truce-end herd: every client ends the truce at the same second, one announcer is
--- enough. The announce waits 3-25 s and is cancelled once the same FR was heard.
-local fired, timersFR = {}, {}
-local realAfter = C_Timer.After
-C_Timer.After = function(delay, fn) timersFR[#timersFR + 1] = { delay = delay, fn = fn } end
-local savedSend = { sync.SendToGroup, sync.SendToChannel, sync.BroadcastToRelay, sync.BroadcastFrontZoneSnapshot }
-sync.SendToGroup = function(_, kind) fired[#fired + 1] = "group:" .. kind end
-sync.SendToChannel = function(_, kind) fired[#fired + 1] = "channel:" .. kind end
-sync.BroadcastToRelay = function(_, kind) fired[#fired + 1] = "relay:" .. kind end
-sync.BroadcastFrontZoneSnapshot = function() fired[#fired + 1] = "za" end
-local realCaptureSyncPending = Overlord.IsCaptureSyncPending
-Overlord.IsCaptureSyncPending = function() return false end
-local herdEpoch = clock - 30
-OverlordDB.frontTruceResetEpoch.elwynn = herdEpoch
-realBroadcastFR(sync, "elwynn", herdEpoch)
-assert(#fired == 0 and #timersFR == 1, "Truce-end announce was not deferred")
-assert(timersFR[1].delay >= 3 and timersFR[1].delay <= 25, "Announce delay outside 3-25 s")
-sync:OnReceiveFrontTruceEndReset("elwynn:" .. herdEpoch, "Faster Peer", "CHANNEL")
-timersFR[1].fn()
-assert(#fired == 0, "Truce end re-announced although the network already carried it")
-OverlordDB.frontTruceResetEpoch.redridge = herdEpoch
-realBroadcastFR(sync, "redridge", herdEpoch)
-sync:OnReceiveFrontTruceEndReset("redridge:" .. (herdEpoch + 5), "Forger Peer", "CHANNEL")
-timersFR[2].fn()
-assert(#fired == 4, "Unheard truce end was not announced once (FR group/channel/relay + ZA)")
-timersFR[2].fn()
-assert(#fired == 4, "Truce end announced twice by the same client")
-sync.SendToGroup, sync.SendToChannel, sync.BroadcastToRelay, sync.BroadcastFrontZoneSnapshot =
-    savedSend[1], savedSend[2], savedSend[3], savedSend[4]
-Overlord.IsCaptureSyncPending = realCaptureSyncPending
-C_Timer.After = realAfter
+-- 15. No announcement (2.0.2): thousands of clients end the same truce at the same
+-- second and none of them says so. A truce end heard from a client before 2.0.2 is
+-- still read (same proof as ever), and answers nothing.
+broadcasts = {}
+local herdV = clock + 10
+clock = herdV
+winFront("Alliance", herdV)
+clock = herdV + 880
+sync:OnReceiveFrontTruceEndReset("elwynn:" .. (herdV + 900), "Early Peer", "CHANNEL")
+assert(OverlordDB.frontTruceResetEpoch.elwynn ~= herdV + 900, "A truce end dated in the future was applied")
+clock = herdV + 900
+sync:OnReceiveFrontTruceEndReset("elwynn:" .. (herdV + 900), "Older Client", "CHANNEL")
+assert(OverlordDB.frontTruceResetEpoch.elwynn == herdV + 900 and hordeCap.capturedTime == herdV + 901,
+    "A proven truce end heard from an older client was not applied")
+zones:TryExpireFrontTruces()
+sync:OnReceiveFrontTruceEndReset("elwynn:" .. (herdV + 900), "Other Client", "CHANNEL")
+assert(#broadcasts == 0, "A truce end, ended here or heard, sent something")
+clock = herdV + 1000
 
 -- 16. Pending slots (one per sender, four per front): newer unproven FRs from three
 -- senders, one of them sending several, cannot evict the genuine one.
@@ -550,4 +540,4 @@ zones:TryExpireFrontTruces()
 assert(hordeCap.capturedTime == FV2 + 901, "fixture: truce end not applied")
 zones:ClearFrontVictories()
 
-print("Capital kept: no release, own capital always attackable, liberation line, 6 h victory spacing, FR proofs, herd and forged packets OK")
+print("Capital kept: no release, own capital always attackable, liberation line, 6 h victory spacing, FR proofs, no announcement and forged packets OK")

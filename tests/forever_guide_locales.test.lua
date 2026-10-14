@@ -78,6 +78,17 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
     -- The 15-minute truce, on every front and on the Hillsbrad brawl.
     assert(L.GUIDE_SIEGE_BODY:find("%f[%d]15%f[%D]"), loc .. ": siege text lost the truce length")
     assert(L.GUIDE_PROGRESS_BODY:find("%f[%d]15%f[%D]"), loc .. ": guide lost the Hillsbrad note")
+    -- 2.0.2: the same two texts without the truce, shown once it is retired
+    -- (Zones.TRUCELESS_FROM). Same lines, the fifteen minutes gone, nothing else.
+    for _, key in ipairs({ "GUIDE_SIEGE_BODY", "GUIDE_PROGRESS_BODY" }) do
+        local with, without = L[key], L[key .. "_NOTRUCE"]
+        assert(type(without) == "string" and without ~= with, loc .. ": " .. key .. " has no text without the truce")
+        assert(not without:find("%f[%d]15%f[%D]"), loc .. ": " .. key .. "_NOTRUCE still gives the truce length")
+        local _, linesWith = with:gsub("\n", "")
+        local _, linesWithout = without:gsub("\n", "")
+        assert(linesWith == linesWithout, loc .. ": " .. key .. "_NOTRUCE lost or gained a line")
+        assert(#without < #with and #without > #with - 80, loc .. ": " .. key .. "_NOTRUCE changed more than the truce")
+    end
     -- Commands are quoted exactly as Commands.lua parses them, after every later locale
     -- fix (an old Shard -> Layer rewrite once turned /ov layer into /ov shard).
     for _, cmd in ipairs({ { "GUIDE_SHARD_BODY", "/ov network" },

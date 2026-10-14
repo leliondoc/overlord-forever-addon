@@ -24,14 +24,13 @@ local delegates = {
     GetMinimumHoldTimeRequired = "GetMinimumHoldTimeRequired",
     NormalizeHoldTimeRequired = "NormalizeHoldTimeRequired",
     IsPlayerInKeepGeometry = "IsPlayerInOutpostGeometry",
-    IsPlayerInKeepGeometryForHud = "IsPlayerInOutpostGeometry",
     IsKeepSiteDisplayMap = "IsOutpostSiteDisplayMap",
     ShouldProjectPinOnMap = "ShouldProjectOutpostPinOnMap",
     ShouldShowInProgressOnMap = "ShouldShowInProgressOnMap",
     GetKeepDisplayTenant = "GetOutpostDisplayTenant",
     GetKeepMapIconAtlas = "GetOutpostMapIconAtlas",
     GetKeepIconVertexColor = "GetOutpostIconVertexColor",
-    GetKeepMapSubtitle = "GetOutpostMapSubtitle", GetKeepHudLabel = "GetOutpostMapSubtitle",
+    GetKeepMapSubtitle = "GetOutpostMapSubtitle",
     GetObserverHoldTimeElapsed = "GetObserverHoldTimeElapsed",
     CanPlayerStartCapture = "CanPlayerStartCapture",
     MarkDirty = "MarkDirty",
@@ -73,69 +72,6 @@ function GK:GetKeepCaptureAvailableHint() return L.FORTRESS_CAPTURE_AVAILABLE or
 function GK:GetEffectiveHeldTenant(st, key)
     local guild, faction = self:GetKeepDisplayTenant(st, key)
     return guild, faction, st and (st.status == "in_progress" and st.previousClaimedAt or st.claimedAt)
-end
-function GK:GetGuildHeldSiteForPlayer()
-    local guild = self:GetLocalPlayerGuild()
-    if guild == "" then return end
-    local best, site, latest = nil, nil, -1
-    for key, candidate in pairs(siteByKey) do
-        local st = self:GetState(key)
-        local owner, _, at = self:GetEffectiveHeldTenant(st, key)
-        if owner == guild and (at or 0) > latest then best, site, latest = st, candidate, at or 0 end
-    end
-    return best, site
-end
-
-function Overlord.GuildKeep:GetHudSite()
-    local selKey = OverlordDB and OverlordDB.selectedKeepSiteKey
-    if selKey and siteByKey[selKey] then
-        return self:GetState(selKey), siteByKey[selKey]
-    end
-    local st, heldSite = self:GetGuildHeldSiteForPlayer()
-    if st and heldSite then
-        return st, heldSite
-    end
-    local onMap, site = self:IsPlayerOnKeepMap()
-    if onMap and site then
-        return self:GetState(site.siteKey), site
-    end
-    local defKey = GetDefaultSiteKey()
-    local fallbackSite = defKey and siteByKey[defKey]
-    if fallbackSite then
-        return self:GetState(fallbackSite.siteKey), fallbackSite
-    end
-    return nil, nil
-end
-
-function Overlord.GuildKeep:SetSelectedKeepSite(siteKey)
-    if not OverlordDB then return end
-    if siteKey and not siteByKey[siteKey] then return end
-    OverlordDB.selectedKeepSiteKey = siteKey
-    if Overlord.MarkDirty then Overlord:MarkDirty() end
-    if Overlord.Ressources then
-        if Overlord.Ressources.RefreshGuildKeepHUD then
-            Overlord.Ressources:RefreshGuildKeepHUD(true)
-        end
-    end
-end
-
-function Overlord.GuildKeep:GetSelectedKeepSiteKey()
-    local selKey = OverlordDB and OverlordDB.selectedKeepSiteKey
-    if selKey and siteByKey[selKey] then return selKey end
-    return nil
-end
-
-local cachedSortedSites
-
-function Overlord.GuildKeep:GetSortedSiteList()
-    if cachedSortedSites then return cachedSortedSites end
-    local list = {}
-    for key, site in pairs(Overlord.GuildKeepSites) do
-        table.insert(list, site)
-    end
-    table.sort(list, function(a, b) return (a.siteKey or "") < (b.siteKey or "") end)
-    cachedSortedSites = list
-    return list
 end
 
 function GK:ShouldProjectPinOnMap(site, mapID)

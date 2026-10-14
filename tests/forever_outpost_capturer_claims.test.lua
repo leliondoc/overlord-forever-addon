@@ -417,6 +417,40 @@ sync:OnReceiveLeaderboardOutpostCount(locWire("badlands", "Fortress Guild", "All
 assert(count("badlands", "Fortress Guild") == 481, "the budget was not refilled after a minute")
 print("Outpost claims: at most 480 events judged per reply window")
 
+-- ===== (14b) a claim refused because the ranking did not know its capturer: once it does,
+-- the generation read by the map difference pace moves (2.0.2)
+do
+    local stranger = "Stranger Tester"
+    local before = sync:GetLearnedCapturerGeneration()
+    tick(61)
+    assert(sync:NoteOutpostClaimPeer("Helper Tester", "A:1.7.2:0::T"))
+    local okU, whyU = sync:AuthorizeOutpostClaim("wetlands", "Marsh Guild", "Alliance", now - 4000, stranger, helper, "WHISPER", "global")
+    assert(okU == false and whyU == "catch-up-unknown", "not refused as unknown: " .. tostring(whyU))
+    tick(21)
+    assert(sync:GetLearnedCapturerGeneration() == before, "the generation moved before the ranking learnt him")
+    know(stranger, "Other Guild")
+    tick(21)
+    assert(sync:GetLearnedCapturerGeneration() == before, "learnt under another guild, the claim is still refused")
+    know(stranger, "Marsh Guild")
+    tick(21)
+    assert(sync:GetLearnedCapturerGeneration() == before + 1, "the ranking learnt him and nothing moved")
+    tick(21)
+    assert(sync:GetLearnedCapturerGeneration() == before + 1, "the same capturer counted twice")
+    lb.kills[stranger], lb.playerInfo[stranger] = nil, nil
+    -- A capturer never learnt is forgotten after 30 min: learnt later, nothing moves.
+    local ghost = "Ghost Tester"
+    tick(61)
+    assert(sync:NoteOutpostClaimPeer("Helper Tester", "A:1.7.2:0::T"))
+    sync:AuthorizeOutpostClaim("wetlands", "Marsh Guild", "Alliance", now - 3000, ghost, helper, "WHISPER", "global")
+    tick(1801)
+    assert(sync:GetLearnedCapturerGeneration() == before + 1, "the generation moved for a capturer never learnt")
+    know(ghost, "Marsh Guild")
+    tick(21)
+    assert(sync:GetLearnedCapturerGeneration() == before + 1, "a capturer forgotten after 30 min still counted")
+    lb.kills[ghost], lb.playerInfo[ghost] = nil, nil
+end
+print("Outpost claims: a capturer the ranking learns makes refused claims worth asking again")
+
 -- ===== (15) long histories are served in slices, whole rows never starve
 resetWorld()
 tick()

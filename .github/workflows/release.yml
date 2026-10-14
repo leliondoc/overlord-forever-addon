@@ -175,6 +175,7 @@ jobs:
           lua5.1 tests/forever_ranks_week_rule.test.lua
           lua5.1 tests/forever_guild_rating.test.lua
           lua5.1 tests/forever_map_news.test.lua
+          lua5.1 tests/forever_victory_late_capture.test.lua
           lua5.1 tests/forever_join_chain.test.lua
           lua5.1 tests/forever_front_fight_size.test.lua
           lua5.1 tests/forever_front_fight_convergence.test.lua
@@ -185,6 +186,7 @@ jobs:
           lua5.1 tests/forever_paged_v7_routing.test.lua
           lua5.1 tests/forever_continent_maps.test.lua
           lua5.1 tests/forever_world_emblems.test.lua
+          lua5.1 tests/forever_gamepad_frames.test.lua
           lua5.1 tests/forever_offline_promotion_stamp.test.lua
           lua5.1 tests/forever_paged_combat.test.lua
           lua5.1 tests/forever_capital_attack_coins.test.lua
@@ -195,6 +197,12 @@ jobs:
           lua5.1 tests/forever_snapshot_restore_lazy.test.lua
           lua5.1 tests/forever_snapshot_logout_slim.test.lua
           lua5.1 tests/forever_relay_terminal_copies.test.lua
+          lua5.1 tests/forever_relay_addressed_route.test.lua
+          lua5.1 tests/forever_relay_journal_lane.test.lua
+          lua5.1 tests/forever_truce_end_silent.test.lua
+          lua5.1 tests/forever_truce_retired.test.lua
+          lua5.1 tests/forever_map_diff_pace.test.lua
+          lua5.1 tests/forever_outpost_sr_known_skip.test.lua
           lua5.1 tests/forever_channel_kill_flush.test.lua
           lua5.1 tests/forever_relay_route_refresh.test.lua
           lua5.1 tests/forever_bnet_single_lookup.test.lua

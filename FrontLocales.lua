@@ -89,57 +89,42 @@ mapModeTexts.esMX = mapModeTexts.esES
 local mapMode = mapModeTexts[locale] or mapModeTexts.enUS
 L.MAP_FILTER_OVERLORD, L.MAP_MODE_FULL, L.MAP_MODE_COMPACT, L.MAP_MODE_HIDDEN = mapMode[1], mapMode[2], mapMode[3], mapMode[4]
 L.MAP_MODE_TOOLTIP, L.MAP_MODE_BUTTON_NEXT, L.MAP_MODE_STATUS = mapMode[5], mapMode[6], mapMode[7]
--- Settings texts that describe where things now live (coins and next objective
--- are always in the Overlord panel; floating versions are opt-in).
--- { coins label, coins tooltip, floating objective label, floating objective tooltip }
+-- Settings texts for the floating next objective (it is always in the Overlord
+-- panel; the floating window is opt-in).
+-- { floating objective label, floating objective tooltip }
 local settingsTexts = {
     enUS = {
-        "Floating coins panel",
-        "Your coins, Reinforce and Attack are always in the Overlord panel (Next Objective card). Turn on to also show them at the top of the screen near coin mines. Off by default.",
         "Floating next objective",
         "The next objective is always shown in the Overlord panel. Turn on to also show it in a small window in the middle of the screen when you are not capturing. Off by default.",
     },
     frFR = {
-        "Panneau des coins flottant",
-        "Vos coins, Renforcer et Attaquer sont toujours dans le panneau Overlord (carte Prochain objectif). Activez pour les afficher aussi en haut de l'écran près des mines de coins. Désactivé par défaut.",
         "Prochain objectif flottant",
         "Le prochain objectif est toujours affiché dans le panneau Overlord. Activez pour l'afficher aussi dans une petite fenêtre au milieu de l'écran quand vous ne capturez pas. Désactivé par défaut.",
     },
     esES = {
-        "Panel de monedas flotante",
-        "Tus monedas, Reforzar y Atacar están siempre en el panel de Overlord (tarjeta Próximo objetivo). Actívalo para mostrarlos también arriba de la pantalla cerca de las minas. Desactivado por defecto.",
         "Próximo objetivo flotante",
         "El próximo objetivo se muestra siempre en el panel de Overlord. Actívalo para mostrarlo también en una pequeña ventana en el centro de la pantalla cuando no estés capturando. Desactivado por defecto.",
     },
     deDE = {
-        "Schwebende Münzleiste",
-        "Deine Münzen, Verstärken und Angreifen sind immer im Overlord-Fenster (Karte Nächstes Ziel). Aktivieren, um sie zusätzlich oben am Bildschirm in der Nähe von Minen zu zeigen. Standardmäßig aus.",
         "Schwebendes nächstes Ziel",
         "Das nächste Ziel steht immer im Overlord-Fenster. Aktivieren, um es zusätzlich in einem kleinen Fenster in der Bildschirmmitte zu zeigen, wenn du nicht eroberst. Standardmäßig aus.",
     },
     ruRU = {
-        "Плавающая панель монет",
-        "Монеты, «Укрепить» и «Атаковать» всегда есть в окне Overlord (карточка «Следующая цель»). Включите, чтобы также показывать их вверху экрана рядом с шахтами. По умолчанию выключено.",
         "Плавающая следующая цель",
         "Следующая цель всегда показана в окне Overlord. Включите, чтобы также показывать её в маленьком окне в центре экрана, когда вы не захватываете. По умолчанию выключено.",
     },
     ptBR = {
-        "Painel de moedas flutuante",
-        "Suas moedas, Reforçar e Atacar estão sempre no painel do Overlord (cartão Próximo objetivo). Ative para mostrá-los também no topo da tela perto das minas. Desativado por padrão.",
         "Próximo objetivo flutuante",
         "O próximo objetivo é sempre mostrado no painel do Overlord. Ative para mostrá-lo também numa pequena janela no meio da tela quando você não estiver capturando. Desativado por padrão.",
     },
     zhCN = {
-        "浮动硬币面板",
-        "你的硬币、加固和进攻按钮始终在 Overlord 面板中（下一目标卡片）。开启后，在硬币矿区附近也会显示在屏幕顶部。默认关闭。",
         "浮动下一目标",
         "下一目标始终显示在 Overlord 面板中。开启后，在你未占领时也会在屏幕中央的小窗口中显示。默认关闭。",
     },
 }
 settingsTexts.esMX = settingsTexts.esES
 local st = settingsTexts[locale] or settingsTexts.enUS
-L.COINS_HUD_LABEL, L.COINS_HUD_TOOLTIP = st[1], st[2]
-L.FLOATING_OBJECTIVE_LABEL, L.FLOATING_OBJECTIVE_TOOLTIP = st[3], st[4]
+L.FLOATING_OBJECTIVE_LABEL, L.FLOATING_OBJECTIVE_TOOLTIP = st[1], st[2]
 local goldBonusReady = {
     enUS = "Ready", frFR = "Prêt", esES = "Listo", esMX = "Listo",
     deDE = "Bereit", ruRU = "Готово", ptBR = "Pronto", zhCN = "就绪",
@@ -218,65 +203,51 @@ elseif locale == "zhCN" then
         "elwynn_invasion_camp" }) do L.ZONE_NAMES[id] = elwynn[index] end
 end
 
--- Help lines, floating coins panel messages and the domination bar tooltip.
--- { /ov map, /ov network, /ov hud, coins panel on, coins panel off,
+-- Help lines and the domination bar tooltip.
+-- { /ov map, /ov network,
 --   domination rule, victories header, no victory, "%s ago", reset line }
 local uiTexts = {
     enUS = { "|cFFFFFF00/ov map [full|compact|off]|r: World map display (also the Overlord button in the map's corner)",
-        "|cFFFFFF00/ov network|r: Network report",
-        "|cFFFFFF00/ov hud [on|off|toggle]|r: Floating coins panel",
-        "|cFF00FF00[Overlord]|r Floating coins panel on.", "|cFF00FF00[Overlord]|r Floating coins panel off.",
+        "|cFFFFFF00/ov network|r: Network report (|cFFFFFF00/ov relay|r: relay details)",
         "Taking the enemy capital wins a front: +1% for the winning faction.",
         "Front victories this week", "No front victory yet this week.", "%s ago",
         "Resets in %s (every Tuesday, 08:00 UTC)." },
     frFR = { "|cFFFFFF00/ov map [full|compact|off]|r : affichage de la carte du monde (aussi le bouton Overlord dans le coin de la carte)",
-        "|cFFFFFF00/ov network|r : rapport réseau",
-        "|cFFFFFF00/ov hud [on|off|toggle]|r : panneau des coins flottant",
-        "|cFF00FF00[Overlord]|r Panneau des coins flottant activé.", "|cFF00FF00[Overlord]|r Panneau des coins flottant désactivé.",
+        "|cFFFFFF00/ov network|r : rapport réseau (|cFFFFFF00/ov relay|r : détail du relais)",
         "Prendre la capitale ennemie remporte un front : +1 % pour la faction gagnante.",
         "Victoires de front cette semaine", "Aucune victoire de front cette semaine pour l'instant.", "il y a %s",
         "Remise à zéro dans %s (chaque mardi, 08:00 UTC)." },
     esES = { "|cFFFFFF00/ov map [full|compact|off]|r: visualización del mapa del mundo (también el botón de Overlord en la esquina del mapa)",
-        "|cFFFFFF00/ov network|r: informe de red",
-        "|cFFFFFF00/ov hud [on|off|toggle]|r: panel de monedas flotante",
-        "|cFF00FF00[Overlord]|r Panel de monedas flotante activado.", "|cFF00FF00[Overlord]|r Panel de monedas flotante desactivado.",
+        "|cFFFFFF00/ov network|r: informe de red (|cFFFFFF00/ov relay|r: detalle del relé)",
         "Tomar la capital enemiga gana un frente: +1 % para la facción ganadora.",
         "Victorias de frente esta semana", "Aún no hay victorias de frente esta semana.", "hace %s",
         "Se reinicia en %s (cada martes, 08:00 UTC)." },
     deDE = { "|cFFFFFF00/ov map [full|compact|off]|r: Weltkartenanzeige (auch der Overlord-Knopf in der Kartenecke)",
-        "|cFFFFFF00/ov network|r: Netzwerkbericht",
-        "|cFFFFFF00/ov hud [on|off|toggle]|r: Schwebende Münzleiste",
-        "|cFF00FF00[Overlord]|r Schwebende Münzleiste an.", "|cFF00FF00[Overlord]|r Schwebende Münzleiste aus.",
+        "|cFFFFFF00/ov network|r: Netzwerkbericht (|cFFFFFF00/ov relay|r: Relay-Details)",
         "Die Einnahme der feindlichen Hauptstadt gewinnt eine Front: +1 % für die siegreiche Fraktion.",
         "Frontsiege diese Woche", "Diese Woche noch kein Frontsieg.", "vor %s",
         "Zurückgesetzt in %s (jeden Dienstag, 08:00 UTC)." },
     ruRU = { "|cFFFFFF00/ov map [full|compact|off]|r: отображение карты мира (также кнопка Overlord в углу карты)",
-        "|cFFFFFF00/ov network|r: отчёт о сети",
-        "|cFFFFFF00/ov hud [on|off|toggle]|r: плавающая панель монет",
-        "|cFF00FF00[Overlord]|r Плавающая панель монет включена.", "|cFF00FF00[Overlord]|r Плавающая панель монет выключена.",
+        "|cFFFFFF00/ov network|r: отчёт о сети (|cFFFFFF00/ov relay|r: подробности ретрансляции)",
         "Взятие вражеской столицы приносит победу на фронте: +1 % победившей фракции.",
         "Победы на фронтах на этой неделе", "На этой неделе побед на фронтах пока нет.", "%s назад",
         "Сброс через %s (каждый вторник, 08:00 UTC)." },
     ptBR = { "|cFFFFFF00/ov map [full|compact|off]|r: exibição do mapa-múndi (também o botão do Overlord no canto do mapa)",
-        "|cFFFFFF00/ov network|r: relatório de rede",
-        "|cFFFFFF00/ov hud [on|off|toggle]|r: painel de moedas flutuante",
-        "|cFF00FF00[Overlord]|r Painel de moedas flutuante ativado.", "|cFF00FF00[Overlord]|r Painel de moedas flutuante desativado.",
+        "|cFFFFFF00/ov network|r: relatório de rede (|cFFFFFF00/ov relay|r: detalhes do relé)",
         "Tomar a capital inimiga vence uma frente: +1 % para a facção vencedora.",
         "Vitórias de frente nesta semana", "Nenhuma vitória de frente nesta semana ainda.", "há %s",
         "Reinicia em %s (toda terça-feira, 08:00 UTC)." },
     zhCN = { "|cFFFFFF00/ov map [full|compact|off]|r：世界地图显示（也可用地图角落的 Overlord 按钮）",
-        "|cFFFFFF00/ov network|r：网络报告",
-        "|cFFFFFF00/ov hud [on|off|toggle]|r：浮动硬币面板",
-        "|cFF00FF00[Overlord]|r 浮动硬币面板已开启。", "|cFF00FF00[Overlord]|r 浮动硬币面板已关闭。",
+        "|cFFFFFF00/ov network|r：网络报告（|cFFFFFF00/ov relay|r：中继详情）",
         "攻下敌方主城即赢得该战线：获胜阵营 +1%。",
         "本周战线胜利", "本周尚无战线胜利。", "%s前",
         "%s后重置（每周二 08:00 UTC）。" },
 }
 uiTexts.esMX = uiTexts.esES
 local ut = uiTexts[locale] or uiTexts.enUS
-L.HELP_MAP, L.HELP_NETWORK, L.HELP_HUD, L.HUD_SHOWN, L.HUD_HIDDEN = ut[1], ut[2], ut[3], ut[4], ut[5]
+L.HELP_MAP, L.HELP_NETWORK = ut[1], ut[2]
 L.DOM_TIP_RULE, L.DOM_TIP_VICTORIES, L.DOM_TIP_NONE, L.DOM_TIP_AGO, L.DOM_TIP_RESET =
-    ut[6], ut[7], ut[8], ut[9], ut[10]
+    ut[3], ut[4], ut[5], ut[6], ut[7]
 
 -- Leaderboard: weekly capturers and rivalries view (keeps and outposts).
 -- { button title, button text, back, capturers column, rivalries column,

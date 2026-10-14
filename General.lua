@@ -564,11 +564,10 @@ local function NotifyGeneralReceived(senderName, frontName)
     if not L or not L.GENERAL_RECEIVED then return end
     local short = (senderName or "?"):match("^(.-)%-") or senderName
     local chatLine = "|cFFFFD100[Overlord]|r " .. string.format(L.GENERAL_RECEIVED, short, frontName or "")
+    -- 2.0.2: the chat line only. A general taking command is no longer announced in the
+    -- middle of the screen with the raid warning sound (his fall still is).
     if Overlord.PrintNotification then
         Overlord:PrintNotification(chatLine)
-    end
-    if ShouldShowGeneralBattleAlerts() and Overlord.PrintRaidWarning then
-        Overlord:PrintRaidWarning(chatLine)
     end
 end
 
@@ -580,8 +579,10 @@ local function NotifyEnemyGeneralClaimed(senderName, frontName, claimTs, faction
     if Overlord.PrintNotification then
         Overlord:PrintNotification(chatLine)
     end
+    -- 2.0.2: still announced in the middle of the screen on the front's map, without the
+    -- raid warning sound.
     if ShouldShowGeneralBattleAlerts() and Overlord.PrintRaidWarning then
-        Overlord:PrintRaidWarning(chatLine)
+        Overlord:PrintRaidWarning(chatLine, true)
     end
 end
 

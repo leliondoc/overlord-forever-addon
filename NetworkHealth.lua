@@ -30,7 +30,9 @@ local lastSampleAt
 -- Copies d'autres joueurs que le relais refuse de faire suivre, volontairement :
 -- destinataire sans route (parti, route de plus de 5 min ou boucle) ou budget du
 -- relais. Aucune donnee du joueur n'est perdue : l'expediteur repasse par un autre
--- voisin. Comptees dans "dropped", elles ne colorent pas le voyant.
+-- voisin. Comptees dans "dropped", elles ne colorent pas le voyant. (2.0.2 : une copie
+-- adressee a un autre joueur et sans route d'ici n'est plus dans "dropped" ; elle est
+-- dite a part, voir addressedNoRoute.)
 local function NotForwarded(stats)
     if not stats then return 0 end
     return (tonumber(stats.forwardNoTask) or 0) + (tonumber(stats.relayRejected) or 0)
@@ -49,6 +51,9 @@ local function CurrentTotals()
     totals.dropped = relay and relay.dropped or 0
     totals.received = relay and relay.received or 0
     totals.notForwarded = NotForwarded(relay)
+    totals.retried = relay and relay.localRetried or 0
+    totals.rowsRefused = relay and relay.localRowsRefused or 0
+    totals.noRoute = relay and relay.addressedNoRoute or 0
     totals.expired = relay and relay.expired or 0
     totals.expiredFinals = relay and relay.expiredFinals or 0
     return totals
@@ -113,12 +118,29 @@ function NH:Compute()
     if relayStats then
         local sent = math.max(0, (relayStats.sent or 0) - (base and base.sent or 0))
         local notForwarded = math.max(0, NotForwarded(relayStats) - (base and base.notForwarded or 0))
+        -- 2.0.2: own rows for one peer the queue refused (a map answer's row, a ranking
+        -- page): their sender offers them again, nothing is lost. They made a busy
+        -- answerer read "problem" for what is flow control.
+        local retried = math.max(0, (relayStats.localRetried or 0) - (base and base.retried or 0))
+        -- Never more than the rows refused in this window. A row refused before the window
+        -- and accepted inside it can still offset as many of the window's refusals (rows
+        -- retry within a second, so only around the window's start).
+        retried = math.min(retried, math.max(0, (relayStats.localRowsRefused or 0) - (base and base.rowsRefused or 0)))
         -- Pertes du joueur seulement : les copies d'autrui non relayees sont a part.
-        local dropped = math.max(0, (relayStats.dropped or 0) - (base and base.dropped or 0) - notForwarded)
+        local dropped = math.max(0, (relayStats.dropped or 0) - (base and base.dropped or 0) - notForwarded - retried)
         local received = math.max(0, (relayStats.received or 0) - (base and base.received or 0))
         local pct = sent > 0 and dropped * 100 / sent or 0
         local others = notForwarded > 0
             and string.format(", %d copies for others not forwarded", notForwarded) or ""
+        if retried > 0 then
+            others = others .. string.format(", %d own rows offered again", retried)
+        end
+        -- 2.0.2: rows addressed to somebody else that reached us point to point while we
+        -- hold no route to their target (never counted in "dropped").
+        local noRoute = math.max(0, (relayStats.addressedNoRoute or 0) - (base and base.noRoute or 0))
+        if noRoute > 0 then
+            others = others .. string.format(", %d copies for others without a route from here", noRoute)
+        end
         -- 2.0.1: copies that waited in the queue until their packet was too old. They
         -- were counted nowhere here: a bridge showed "all good" with 233 of them, three
         -- capture ends included. A capture end that expires is worth watching.

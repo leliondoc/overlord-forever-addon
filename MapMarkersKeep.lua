@@ -688,7 +688,7 @@ function Overlord.MapMarkers:EnsureProjectedKeepPins(canvas)
         projectedKeepRoot:SetParent(parent)
     end
     if not projectedKeepRoot then
-        projectedKeepRoot = CreateFrame("Frame", nil, parent)
+        projectedKeepRoot = MM.NewFrame("Frame", parent)
         projectedKeepRoot:SetAllPoints()
     end
     projectedKeepRoot:SetFrameStrata(parent:GetFrameStrata())
@@ -696,7 +696,7 @@ function Overlord.MapMarkers:EnsureProjectedKeepPins(canvas)
 
     for siteKey, site in pairs(Overlord.GuildKeepSites) do
         if not projectedKeepPins[siteKey] then
-            local pin = CreateFrame("Frame", nil, projectedKeepRoot)
+            local pin = MM.NewFrame("Frame", projectedKeepRoot)
             pin:SetFrameStrata(projectedKeepRoot:GetFrameStrata())
             pin:SetFrameLevel(projectedKeepRoot:GetFrameLevel() + 1)
             pin.siteKey = siteKey
@@ -859,7 +859,7 @@ function Overlord.MapMarkers:EnsureProjectedOutpostPins(canvas)
         projectedOutpostRoot:SetParent(parent)
     end
     if not projectedOutpostRoot then
-        projectedOutpostRoot = CreateFrame("Frame", nil, parent)
+        projectedOutpostRoot = MM.NewFrame("Frame", parent)
         projectedOutpostRoot:SetAllPoints()
     end
     projectedOutpostRoot:SetFrameStrata(parent:GetFrameStrata())
@@ -867,7 +867,7 @@ function Overlord.MapMarkers:EnsureProjectedOutpostPins(canvas)
 
     for siteKey, site in pairs(Overlord.OutpostSites) do
         if not projectedOutpostPins[siteKey] then
-            local pin = CreateFrame("Frame", nil, projectedOutpostRoot)
+            local pin = MM.NewFrame("Frame", projectedOutpostRoot)
             pin:SetFrameStrata(projectedOutpostRoot:GetFrameStrata())
             pin:SetFrameLevel(projectedOutpostRoot:GetFrameLevel() + 1)
             pin.siteKey = siteKey
@@ -1099,7 +1099,7 @@ function Overlord.MapMarkers:CreateGuildKeepOverlay(site)
     local parent = GetOverlayParent()
     if not canvas or not parent or not site then return nil end
 
-    local root = CreateFrame("Frame", nil, parent)
+    local root = MM.NewFrame("Frame", parent)
     root:SetFrameStrata(parent:GetFrameStrata())
     root:SetFrameLevel(parent:GetFrameLevel() + 2)
     root:SetSize(KEEP_MAP_ICON_MIN, KEEP_MAP_ICON_MIN)
@@ -1288,14 +1288,14 @@ function Overlord.MapMarkers:EnsureOutpostPins(canvas)
         outpostPinRoot:SetParent(parent)
     end
     if not outpostPinRoot then
-        outpostPinRoot = CreateFrame("Frame", nil, parent)
+        outpostPinRoot = MM.NewFrame("Frame", parent)
         outpostPinRoot:SetAllPoints()
     end
     outpostPinRoot:SetFrameStrata(parent:GetFrameStrata())
     outpostPinRoot:SetFrameLevel((parent:GetFrameLevel() or 0) + 27)
     for siteKey, site in pairs(Overlord.OutpostSites) do
         if not outpostPins[siteKey] then
-            local pin = CreateFrame("Frame", nil, outpostPinRoot)
+            local pin = MM.NewFrame("Frame", outpostPinRoot)
             pin:SetFrameStrata(outpostPinRoot:GetFrameStrata())
             pin:SetFrameLevel(outpostPinRoot:GetFrameLevel() + 1)
             local icon = pin:CreateTexture(nil, "OVERLAY")

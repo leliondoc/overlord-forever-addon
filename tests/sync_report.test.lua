@@ -18,10 +18,10 @@ assert(loadfile("NetworkHealth.lua"))() -- summary shared with the panel indicat
 assert(loadfile("Commands.lua"))()
 
 local GREEN, YELLOW, RED = "|cFF40FF40", "|cFFFFD100", "|cFFFF4040"
-local function run()
+local function run(command)
     lines = {}
     sync._historyCatchupStats, sync._historyCatchupPending = nil, nil
-    SlashCmdList.OVERLORD("network")
+    SlashCmdList.OVERLORD(command or "network")
     return lines
 end
 local function find(list, needle)
@@ -58,12 +58,30 @@ assert(find(out, "Blizzard throttle"):find("ReadyCheck-Waiting", 1, true), "3% B
 local lost = find(out, "Relay losses")
 assert(lost:find("ReadyCheck-NotReady", 1, true) and lost:find("60 lost of 1000 sent (6.0%)", 1, true),
     "6% relay losses must be red: " .. lost)
+-- 2.0.2: the relay's own counters and the ranking catch-up are in /ov relay; /ov network
+-- keeps the summary and the map, and says where the rest is.
+assert(not find(out, "Relay outcomes since login") and not find(out, "Relay by type since login")
+    and not find(out, "Ladder v8") and not find(out, "Incoming Overlord packets"),
+    "/ov network still prints the relay details")
+assert(find(out, "Battle.net bridges") and find(out, "Map pulls on a neighbour's presence")
+    and find(out, "Enemy capture finals"), "/ov network lost a map or bridge line")
+assert(out[#out]:find("More:", 1, true) and out[#out]:find("/ov relay", 1, true),
+    "/ov network does not end by naming /ov relay: " .. out[#out])
+assert(#out <= 22, "/ov network is long again: " .. #out .. " lines")
+out = run("relay")
+assert(not find(out, "Network status:") and not find(out, "Battle.net bridges"),
+    "/ov relay repeats the summary or the bridge lines")
+assert(find(out, "Relay by type since login") and find(out, "VB relay") and find(out, "Bridge election")
+    and find(out, "Incoming Overlord packets"), "/ov relay lost a relay line")
 local outcomes = assert(find(out, "Relay outcomes since login"), "Relay outcomes detail missing")
 assert(outcomes:find("local admission refused " .. RED .. "40|r", 1, true),
     "A non-zero refusal counter is not red: " .. outcomes)
 assert(not outcomes:find(RED .. "0|r", 1, true), "A zero counter was painted red")
 local dropped = assert(find(out, " 1000 sent, 1040 received"), "Relay detail missing")
 assert(dropped:find(RED .. "60|r", 1, true), "Dropped count not red: " .. dropped)
+-- The French aliases.
+assert(find(run("relais"), "Relay outcomes since login") and find(run("reseau"), "Network status:"),
+    "/ov relais or /ov reseau is not understood")
 
 -- A capture-history request left unanswered for more than 5 minutes is flagged.
 sync._addonSendStats = { CHANNEL = { ok = 10, refused = 0 } }
@@ -135,6 +153,28 @@ do
     for _, row in ipairs(rows) do if row.id == "relay" then relayRow = row end end
     assert(relayRow.level == "bad" and relayRow.text:find("70 lost of 1230 sent (5.7%)", 1, true),
         "Own losses must still turn the row red: " .. relayRow.text)
+    -- 2.0.2: own rows for one peer that the queue refused are offered again by their
+    -- sender (a map answer's row, a ranking page): reported apart, never a loss.
+    net.stats.dropped, net.stats.localRejected, net.stats.localRetried = 95 + 70 + 300, 70 + 300, 300
+    net.stats.localRowsRefused = 300
+    _, rows = NH:IndicatorLevel()
+    for _, row in ipairs(rows) do if row.id == "relay" then relayRow = row end end
+    assert(relayRow.text:find("70 lost of 1230 sent (5.7%)", 1, true)
+        and relayRow.text:find("300 own rows offered again", 1, true), "Rows offered again: " .. relayRow.text)
+    -- Never more credit than the rows refused in the window: rows refused before it and
+    -- offered again inside it do not hide the window's real losses.
+    net.stats.localRowsRefused = 100
+    _, rows = NH:IndicatorLevel()
+    for _, row in ipairs(rows) do if row.id == "relay" then relayRow = row end end
+    assert(relayRow.text:find("270 lost of 1230", 1, true), "Credit beyond the window's refusals: " .. relayRow.text)
+    net.stats.dropped, net.stats.localRejected, net.stats.localRetried, net.stats.localRowsRefused = 95 + 70, 70, 0, 0
+    -- Rows for others that reached us without a route from here: said, never a loss.
+    net.stats.addressedNoRoute = 12
+    _, rows = NH:IndicatorLevel()
+    for _, row in ipairs(rows) do if row.id == "relay" then relayRow = row end end
+    assert(relayRow.text:find("70 lost of 1230 sent", 1, true)
+        and relayRow.text:find("12 copies for others without a route from here", 1, true), "No route: " .. relayRow.text)
+    net.stats.addressedNoRoute = 0
     -- Inside the 10-minute window, earlier unforwarded copies are subtracted from the base.
     NH:NoteSend(5000)
     net.stats.dropped, net.stats.forwardNoTask = net.stats.dropped + 40, net.stats.forwardNoTask + 40
@@ -146,6 +186,7 @@ do
     NH:_ResetWindow()
     net.stats.dropped, net.stats.localRejected, net.stats.relayRejected = 0, 0, 0
     net.stats.forwardNoTask, net.stats.forwardNoTaskMissing, net.stats.forwardNoTaskLoop = 0, 0, 0
+    net.stats.localRetried = 0
 end
 -- 2.0.1: copies that expired in the relay queue are reported, and a capture's end among
 -- them is worth watching (2026-10-12: a bridge said "all good" with 233 expired copies,

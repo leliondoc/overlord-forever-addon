@@ -331,6 +331,11 @@ IsInGroup = function() return true end
 assert(a.Relay:Send("HB", string.rep("y", 3300))); drain()
 assert(d.received[#d.received].payload == string.rep("y", 3300), "Large history page lost fragments")
 -- Targeted request/reply traverses the reverse route without cross-faction whispers.
+-- 2.0.2: an addressed packet only follows a route. To a peer never heard, nothing leaves
+-- (it used to flood the channel and every bridge to find one).
+assert(not a.Relay:Send("MN", "request-unknown", d.name), "An addressed packet left without a route")
+assert(d.Relay:Send("C", "far-peer-speaks")); drain()
+assert(a.Relay:IsPeer(d.name), "Test setup: the far peer left no route")
 local before = #a.received
 assert(a.Relay:Send("MN", "request", d.name)); drain()
 assert(#a.received == before + 1 and a.received[#a.received].payload == "reply"
@@ -696,18 +701,26 @@ do
     assert(not sawZA, "A background map page was still copied to the group")
     -- Leaving out a background group copy is not a relay loss.
     assert(grouped.Relay.stats.dropped == 0, "A suppressed group copy was counted as lost")
-    -- An addressed reply to a mate known through the group keeps its group copy: it
-    -- may be the only way to reach a cross-realm or channel-less team mate.
+    -- 2.0.2: an addressed reply to a mate known through the group is whispered to him,
+    -- like any neighbour (Forever has no realms and a group is one faction). Its group
+    -- copy reached every member, with a channel copy and one per Battle.net bridge,
+    -- and each hearer passed it on (tests/forever_relay_addressed_route.test.lua).
     IsInGroup = function() return true end
     local hello = "global|mate-hello|" .. time() .. "|*|Mate Tester|NH|1.1.1"
     assert(grouped.Relay:Receive(hello, "Mate Tester", "PARTY"))
     groupKinds = {}
+    local whispered = {}
+    function grouped.Sync:SendWhisper(_, data, target)
+        whispered[#whispered + 1] = { data = data, target = target }
+        return true
+    end
     assert(grouped.Relay:Send("ZA", "map-page-for-mate", "Mate Tester"), "Addressed map page refused")
     drain()
     IsInGroup = wasInGroup
-    local delivered = false
-    for _, k in ipairs(groupKinds) do if k == "ZA" then delivered = true end end
-    assert(delivered, "An addressed map page to a group-only mate lost its only delivery path")
+    assert(#whispered == 1 and whispered[1].target == "Mate Tester"
+        and whispered[1].data:find("map-page-for-mate", 1, true),
+        "An addressed map page to a group mate was not whispered to him once")
+    assert(#groupKinds == 0, "An addressed map page to a group mate was still copied to the whole group")
 end
 -- Fight brackets (FK) travel on the relay like other broadcasts.
 do
@@ -985,7 +998,8 @@ do
     assert(not pulled("Behind Tester", behind), "A neighbour that lacks our capture was pulled at once")
     assert(fresh.Relay.stats.mapPullsNoNews == skipped + 1, "Skipped pull not counted")
     assert(not pulled("Empty Tester", "~m0~o0~z0000000"), "A neighbour with an empty map was pulled")
-    -- It never caught up: after 5 min a few neighbours pull it anyway, then every 10 min.
+    -- It never caught up: after 5 min a few neighbours pull it anyway, then after 10 min
+    -- (later 20, 40, 60, with fewer askers drawn past 20 min: forever_map_diff_pace).
     now = now + 301
     fresh.Relay.MAP_DIFF_ASKERS = 0
     assert(not pulled("Behind Unpicked", behind), "A neighbour outside the draw pulled a map that is behind")
@@ -1105,7 +1119,7 @@ do
         assert(fresh.Relay:IsOutdatedMapPeer("Old Six") and fresh.Relay:IsOutdatedMapPeer("Old Five"),
             "A client from before 1.7.0 is not known as such")
         assert(fresh.Relay.stats.outdatedPresences == 2, "Presences of clients before 1.7.0 not counted")
-        local report = fresh.Relay:GetKindDiagnostics()
+        local report = fresh.Relay:GetBridgeDiagnostics()
         if type(report) == "table" then report = table.concat(report, " ") end
         assert(tostring(report):find("Clients before 1.7.0 (update required): 2 presences", 1, true),
             "The network report does not say that clients before 1.7.0 were heard")
@@ -1118,7 +1132,7 @@ do
         assert(not fresh.Relay:IsOutdatedMapPeer("Far Old"), "A relayed presence decided a neighbour's version")
     end
     -- The table of pairs is bounded: the pair seen longest ago gives way.
-    for i = 1, 40 do
+    for i = 1, fresh.Relay.MAP_DIFF_ROWS + 24 do
         fresh.Relay:MapDiffDue(1, 10, 1000 + i, 5, "Row Tester", now + i)
     end
     local rows = 0
