@@ -1,14 +1,14 @@
-2.0.1
+2.0.2
 
-**Overlord Forever 2.0.1**
+**Overlord Forever 2.0.2**
 
-- **Map between the two factions**: the two factions only talk through players who have a Battle.net friend on the other side. When such a player learns captures late (back from a battleground, a reload, a new friend), his whole faction now gets them within about a minute, instead of waiting 10 to 30 minutes each.
-- **Captures on a fresh map**: a player who is capturing a point keeps receiving the map, so he no longer finishes a capture or a siege that the enemy's moves had made impossible.
-- **Capture results first**: on a busy link between the factions, the result of a capture now passes before everything else and no longer gets lost in the queue.
-- **Enemy sieges**: the alert and the timer of a siege you follow are no longer cut by a late map, and a capture you missed live turns the point as soon as it is known.
-- **Guilds table** (ranking window): guild kills and a new **guild rating** in one table: 1 point per honorable kill, 50 per front point, 75 per outpost and 100 per keep taken. Click HK or Rating to sort the guilds. Every table now has its title.
-- **Your rank**: a new button on the main panel, in place of the greyed Community button, leads to the Overlord tab of your character sheet.
-- **Ranking**: answers to a ranking request leave much faster, and a neighbour that does not answer is no longer asked first again after each reload.
-- **Alerts**: the layer is written after the player's name, "(Name, layer #1234)", and the line under the capture bar names the point the enemy is capturing.
-- **Network status** (/ov network): capture results that expired in the relay queue are counted and shown.
-- **Reliability**: several fixes to the map exchange and the relay.
+- **Update required before Tuesday 27 October, 08:00 UTC** (weekly reset): from that moment, players still on 2.0.1 or older no longer exchange the world map, nor keep and outpost history, with updated players. Until then both versions work side by side.
+- **Truce retired from the 27 October reset**: a front victory no longer opens a 15-minute truce. The fallen capital stays conquered until its faction retakes it, the losing side may take points back at once, and a new victory on the same front still only counts 6 hours after the previous one. The tutorial changes on that day.
+- **A much lighter network**: an answer meant for one player now goes to that player only, instead of being passed on by everyone who overheard it; truce-end announcements are gone; map requests list the keeps and outposts you already hold, so answers skip them; map differences that no answer can repair are asked less and less often. At peak hours the relay loses far fewer messages than before.
+- **Victories learnt late**: a player who learns a victory from a friend of the other faction (back from a battleground, after a reload) tells his faction once.
+- **Top HUD removed**: the floating coins panel, the keep block, the /ov hud command and its option are gone. Coins, Attack and Reinforce stay in the Next Objective card, and the floating Next Objective window stays.
+- **Most Wanted**: the skull is back instead of the crown, on nameplates, in the chat alert, in the ranking and in the tutorial.
+- **Generals**: an allied general taking command is now a chat line only, with no message in the middle of the screen. An enemy general is still shown there, without the sound.
+- **Network status**: /ov network is now a summary with the map between the two factions; the relay details, the ranking catch-up and the incoming packets moved to the new /ov relay. Rows a player offers again are no longer counted as lost, and messages with nobody to pass them to are counted apart.
+- **Controller**: the Overlord marks of the world map no longer get in the way of controller navigation, and the Overlord Rank tab is not created with the controller interface.
+- **Reliability**: network and sync hardening.
