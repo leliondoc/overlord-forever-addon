@@ -269,6 +269,15 @@ jobs:
         with:
           args: -m .pkgmeta.ci -n "Overlord-{project-version}:Overlord-{project-version}"
 
+      # Also support WowUp's filename fallback if release.json is unavailable.
+      - name: Publish Forever archive for WowUp fallback
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          cp ".release/Overlord-${VERSION}.zip" ".release/Overlord-${VERSION}-forever.zip"
+          gh release upload "$VERSION" ".release/Overlord-${VERSION}-forever.zip" --clobber
+
       - name: Annoncer sur Discord
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
