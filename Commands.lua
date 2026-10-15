@@ -80,9 +80,9 @@ local function ShowFrontDebug()
         Overlord.Fronts and Overlord.Fronts.activeFrontId or "?",
         Overlord.UI and Overlord.UI:GetPanelViewFrontId() or "?"))
     if reason then
-        Overlord:PrintNotification("  Blocage: |cFFFF6666" .. reason .. "|r")
+        Overlord:PrintNotification("  Blocage: |cFFFF4444" .. reason .. "|r")
     else
-        Overlord:PrintNotification("  Blocage: |cFF66FF66aucun|r (activation attendue)")
+        Overlord:PrintNotification("  Blocage: |cFF00FF00aucun|r (activation attendue)")
     end
     local okInst, _, instType, _, _, _, _, _, instID = pcall(GetInstanceInfo)
     if okInst then
@@ -122,7 +122,7 @@ end
 -- Une seule table locale : Commands.lua reste loin de la limite de 200 locals.
 local SyncReport = {}
 do
-    local GREEN, YELLOW, RED = "|cFF40FF40", "|cFFFFD100", "|cFFFF4040"
+    local GREEN, YELLOW, RED = "|cFF00FF00", "|cFFFFD100", "|cFFFF4444"
     local GREY, GOLD, WHITE = "|cFF9D9D9D", "|cFFFFD100", "|cFFFFFFFF"
     local ICON = {
         ok = "|TInterface\\RaidFrame\\ReadyCheck-Ready:14|t",
@@ -284,7 +284,7 @@ local function StartNetworkProbe()
         R.Detail("Network observation: 30s. Use /ov sync now.")
     end)
     if not reportOk then
-        Overlord:PrintNotification("|cFFFF4040[Overlord]|r /ov relay report error: " .. tostring(reportErr))
+        Overlord:PrintNotification("|cFFFF4444[Overlord]|r /ov relay report error: " .. tostring(reportErr))
     end
     C_Timer.After(30, function()
         frame:UnregisterAllEvents()
@@ -468,7 +468,6 @@ local function ShowHelp()
     Overlord:PrintNotification(L.HELP_SCALE)
     Overlord:PrintNotification(L.HELP_GUIDE)
     if L.HELP_GUILD_KILLS then Overlord:PrintNotification(L.HELP_GUILD_KILLS) end
-    if L.HELP_WANTED then Overlord:PrintNotification(L.HELP_WANTED) end
     if L.HELP_GROUPS then Overlord:PrintNotification(L.HELP_GROUPS) end
     Overlord:PrintNotification(L.HELP_FOOTER)
 end
@@ -506,7 +505,7 @@ local function ShowStatus()
         else
             statusIcon = "[X]"
             statusText = L.STATUS_LOCKED
-            color = "|cFF888888"
+            color = "|cFF9D9D9D"
         end
         
         Overlord:PrintNotification(string.format("%s %s%s|r : %s", statusIcon, color, zone.name, statusText))
@@ -708,9 +707,6 @@ local function CommandHandler(msg)
     elseif cmd == "shard" then
         ShowShardDebug()
 
-    elseif cmd == "wanted" then
-        if Overlord.MostWanted then Overlord.MostWanted:HandleCommand(args) end
-
     elseif cmd == "groups" or cmd == "group" then
         if Overlord.GroupFinder then Overlord.GroupFinder:HandleCommand(args) end
 
@@ -731,7 +727,7 @@ local function CommandHandler(msg)
     elseif cmd == "network" or cmd == "reseau" then
         local reportOk, reportErr = pcall(SyncReport.Network)
         if not reportOk then
-            Overlord:PrintNotification("|cFFFF4040[Overlord]|r /ov network report error: " .. tostring(reportErr))
+            Overlord:PrintNotification("|cFFFF4444[Overlord]|r /ov network report error: " .. tostring(reportErr))
         end
 
     elseif cmd == "relay" or cmd == "relais" then

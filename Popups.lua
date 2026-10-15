@@ -467,7 +467,7 @@ local GUIDE_MINE_ATLAS = "Warfronts-FieldMapIcons-Empty-Mine"
 local GUIDE_ICON_SIZE = 22
 local GUIDE_BULLET = "  |cFFFFD100\226\128\162|r "
 local GUIDE_COMMANDS = { show = true, guide = true, network = true, relay = true, lb = true,
-    map = true, sync = true, wanted = true, guildkills = true, groups = true }
+    map = true, sync = true, guildkills = true, groups = true }
 
 local function GuideIconMarkup(icon)
     if type(icon) ~= "string" or icon == "" then return "" end
@@ -492,12 +492,12 @@ local function FormatGuideBody(body)
         out[#out + 1] = line
     end
     local text = table.concat(out, "\n")
-    -- Commandes en bleu clair (/ov xxx et /pvp) ; les codes |c, |T et |A n'ont pas de "/".
+    -- Commandes en or (/ov xxx et /pvp) ; les codes |c, |T et |A n'ont pas de "/".
     -- Seules les vraies sous-commandes : "/ov seul", "/ov alone" restent en blanc.
     text = text:gsub("/ov (%a+)", function(word)
-        if GUIDE_COMMANDS[word] then return "|cFF7FD4FF/ov " .. word .. "|r" end
+        if GUIDE_COMMANDS[word] then return "|cFFFFD100/ov " .. word .. "|r" end
     end)
-    text = text:gsub("(/pvp)", "|cFF7FD4FF%1|r")
+    text = text:gsub("(/pvp)", "|cFFFFD100%1|r")
     return text
 end
 
@@ -589,7 +589,7 @@ local function BuildQuickGuidePageBody(page)
             FormatGuideSection(L.GUIDE_SECTION_SIEGE, (Overlord.Zones and Overlord.Zones.IsTruceRetired
                 and Overlord.Zones:IsTruceRetired() and L.GUIDE_SIEGE_BODY_NOTRUCE) or L.GUIDE_SIEGE_BODY,
                 FactionGuideIcon("Warfronts-BaseMapIcons-Alliance-MainHall", "Warfronts-BaseMapIcons-Horde-MainHall")),
-            FormatGuideSection(L.GUIDE_SECTION_GOLD, goldBody, "Interface\\Icons\\INV_Misc_Coin_01"),
+            FormatGuideSection(L.GUIDE_SECTION_GOLD, goldBody, "Interface\\Icons\\INV_Ingot_Platinum"),
             FormatGuideSection(L.GUIDE_SECTION_FEATURED, L.GUIDE_FEATURED_BODY, "QuestDailyIcon")
         )
     end
@@ -1182,7 +1182,8 @@ end
 
 -- Taille du combat par tranches : 5+, 10+, 20+, 30+... (sous 5, "1+ HK" : des victoires
 -- honorables, partagees par tout le groupe, pas des morts).
-local FRONT_FIGHT_BRACKETS = { 500, 300, 200, 150, 100, 75, 50, 40, 30, 20, 10, 5 }
+-- 2.0.4: 750+, 1000+, 1500+ and 2000+ above 500+ (very large fights told apart).
+local FRONT_FIGHT_BRACKETS = { 2000, 1500, 1000, 750, 500, 300, 200, 150, 100, 75, 50, 40, 30, 20, 10, 5 }
 local function GetFrontFightBracket(kills)
     kills = tonumber(kills) or 0
     for _, floor in ipairs(FRONT_FIGHT_BRACKETS) do
@@ -1526,8 +1527,9 @@ function Overlord.Popups:RefreshFeaturedFrontCoins(panel)
         and row._olAttack == attackActive and row._olReinforce == reinforceActive then return end
     row._olGold, row._olMax, row._olCost = g, maximum, cost
     row._olAttack, row._olReinforce = attackActive, reinforceActive
-    row.coinText:SetText("|TInterface\\MoneyFrame\\UI-GoldIcon:16:16:0:0|t  "
-        .. string.format(L.GOLD_COUNTER or "Coins: %d / %d", g, maximum))
+    -- 2.0.4: platinum (was "coins"), shown with the game's platinum bar icon.
+    row.coinText:SetText("|TInterface\\Icons\\INV_Ingot_Platinum:16:16:0:0:64:64:5:59:5:59|t  "
+        .. string.format(L.GOLD_COUNTER or "Platinum: %d / %d", g, maximum))
     for _, btn in ipairs(row.buttons) do
         local active = btn.isAttack and attackActive or (not btn.isAttack and reinforceActive)
         local available = not active and g >= cost
@@ -1538,7 +1540,7 @@ function Overlord.Popups:RefreshFeaturedFrontCoins(panel)
         btn:SetBackdropBorderColor(r, green, b, active and 0.85 or 0.6)
         btn.label:SetTextColor(r, green, b)
         local status = active and "|TInterface\\RaidFrame\\ReadyCheck-Ready:14:14|t"
-            or (cost .. " |TInterface\\MoneyFrame\\UI-GoldIcon:12:12|t")
+            or (cost .. " |TInterface\\Icons\\INV_Ingot_Platinum:12:12:0:0:64:64:5:59:5:59|t")
         btn.label:SetText(btn.actionLabel .. "  " .. status)
     end
 end
@@ -1590,7 +1592,7 @@ function Overlord.Popups:CreateFeaturedFrontCoinsPanel(parent)
                 local ready = self.isAttack and L.GOLD_REINFORCE_ACTIVE or L.GOLD_BARRICADE_ACTIVE
                 GameTooltip:AddLine(ready or L.GOLD_BONUS_READY or "Ready", 0.4, 0.9, 0.5, true)
             elseif not self._olCanSpend then
-                GameTooltip:AddLine(string.format(L.GOLD_NOT_ENOUGH or "Not enough coins (%d).",
+                GameTooltip:AddLine(string.format(L.GOLD_NOT_ENOUGH or "Not enough platinum (%d).",
                     self._olCost or 25), 1, 0.45, 0.35, true)
             end
             GameTooltip:Show()

@@ -38,7 +38,7 @@ Overlord.Leaderboard._displayCache = {
     killSource = Overlord.Leaderboard.kills,
 }
 
-assert(loadfile("MostWanted.lua"))()
+assert(loadfile("Nemesis.lua"))()
 local MW = Overlord.MostWanted
 MW:Refresh(true)
 assert(#MW.list == 5, "Most Wanted must hold five enemies")
@@ -68,11 +68,12 @@ Overlord.InstanceSuspended = true
 MW:OnNameplateAdded("Horde Two")
 assert(#printed == 2, "Most Wanted alerted inside an instance")
 Overlord.InstanceSuspended = false
-MW:HandleCommand({ "wanted", "off" })
-assert(OverlordDB.config.mostWantedAlerts == false, "/ov wanted off did not stick")
+-- 2.0.4: switched in the options only (no /ov wanted command any more).
+MW:SetAlertsEnabled(false)
+assert(OverlordDB.config.mostWantedAlerts == false, "switching the alerts off did not stick")
 MW:OnNameplateAdded("Horde Two")
-assert(#printed == 3, "/ov wanted must print its state")
-MW:HandleCommand({ "wanted", "on" })
+assert(#printed == 2, "a Nemesis alert showed while switched off")
+MW:SetAlertsEnabled(true)
 
 -- Weekly reset: a display cache of the previous campaign never names last week's players.
 local lastWeek = Overlord.Leaderboard._displayCache
@@ -126,6 +127,36 @@ MW:ResetForCampaign()
 assert(not skull.shown, "last week's skull survived the weekly reset")
 assert(skull.anchor == plates["Horde Four"].UnitFrame.healthBar, "skull not anchored on the health bar")
 CreateFrame, C_NamePlate = nil, nil
+
+-- 2.0.4: our killing blow on a Most Wanted pays 10 coins, once per wanted player per
+-- half hour, nothing for someone else, nothing in an instance.
+do
+    local sync = Overlord.Sync
+    local canon = sync and sync.CanonicalForeverName and sync:CanonicalForeverName("Horde One") or "Horde One"
+    MW.byKey = { [canon:lower()] = { name = "Horde One", key = canon:lower(), rank = 1 } }
+    local paid, shown = 0, 0
+    local savedRes = Overlord.Ressources
+    Overlord.Ressources = { AddGold = function(_, amount) paid = paid + amount; shown = shown + 1; return amount end }
+    assert(MW:PayBounty("Horde One") == 10 and paid == 10 and shown == 1, "no bounty on a Most Wanted")
+    assert(MW:PayBounty("Horde One") == 0 and paid == 10, "the same Most Wanted paid twice in half an hour")
+    assert(MW:PayBounty("Horde Nobody") == 0, "a bounty on a player without the skull")
+    now = now + MW.BOUNTY_PER_PLAYER_SEC
+    assert(MW:PayBounty("Horde One") == 10 and paid == 20, "the bounty did not come back after half an hour")
+    now = now + MW.BOUNTY_PER_PLAYER_SEC
+    IsInInstance = function() return true end
+    assert(MW:PayBounty("Horde One") == 0, "a bounty paid in an instance")
+    IsInInstance = function() return false end
+    -- At the 100 cap nothing is gained, and that player's half hour is not used up.
+    now = now + MW.BOUNTY_PER_PLAYER_SEC
+    local fullGold = Overlord.Ressources.AddGold
+    Overlord.Ressources.AddGold = function() return 0 end
+    assert(MW:PayBounty("Horde One") == 0, "a bounty was paid above the cap")
+    Overlord.Ressources.AddGold = fullGold
+    assert(MW:PayBounty("Horde One") == 10, "a kill at the cap used up the half hour")
+    MW:ResetForCampaign()
+    assert(next(MW.bountyAt) == nil, "bounty memory survived the weekly reset")
+    Overlord.Ressources = savedRes
+end
 
 -- Network indicator: a stuck ladder round alone stays green; real losses turn it orange.
 assert(loadfile("NetworkHealth.lua"))()

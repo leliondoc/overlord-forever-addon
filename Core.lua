@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.0.3"
+Overlord.Version = "2.0.4"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -1431,7 +1431,7 @@ local POST_INSTANCE_RECHECK_DELAYS = { 0.55, 1.35, 2.8, 4.5 }
 
 local function DebugOverlord(msg)
     if OverlordDB and OverlordDB.config and OverlordDB.config.debug then
-        print("|cFF8888FF[Overlord:dbg]|r " .. tostring(msg))
+        print("|cFF9D9D9D[Overlord:dbg]|r " .. tostring(msg))
     end
 end
 
@@ -1483,18 +1483,17 @@ local generalDuelMusicActive = false
 local generalDuelSoundHandle = nil
 local generalDuelFadeStopHandle = nil
 
-local function TryPlaySoundEntry(entry, channelOrder)
+-- 2.0.4: sound effects channel only. A retry on "Master" played our sounds even when
+-- the player had muted the game's sound effects.
+local function TryPlaySoundEntry(entry)
     if not entry then return false end
-    local channels = channelOrder or { "SFX", "Master" }
-    for _, channel in ipairs(channels) do
-        if PlaySound then
-            local ok, willPlay = pcall(PlaySound, entry, channel, false)
-            if ok and willPlay then return true end
-        end
-        if PlaySoundFile then
-            local ok, willPlay = pcall(PlaySoundFile, entry, channel)
-            if ok and willPlay then return true end
-        end
+    if PlaySound then
+        local ok, willPlay = pcall(PlaySound, entry, "SFX", false)
+        if ok and willPlay then return true end
+    end
+    if PlaySoundFile then
+        local ok, willPlay = pcall(PlaySoundFile, entry, "SFX")
+        if ok and willPlay then return true end
     end
     return false
 end
@@ -1509,6 +1508,8 @@ function Overlord:PlayPanelCloseSound()
 end
 
 function Overlord:PlayGeneralDuelMusic()
+    -- 2.0.4 : coupee pour l'instant (piste Retail, toute la faction l'entendait).
+    if true then return false end
     if not OverlordDB or not OverlordDB.config then return end
     if OverlordDB.config.soundEnabled == false then return end
     if not PlaySoundFile then return false end
@@ -1556,10 +1557,8 @@ function Overlord:PlayAddonSound(key)
         for i = 1, 3 do
             local kit = candidates[i]
             if kit and PlaySound then
-                for _, channel in ipairs({ "Master", "SFX" }) do
-                    local ok, willPlay = pcall(PlaySound, kit, channel, false)
-                    if ok and willPlay then return end
-                end
+                local ok, willPlay = pcall(PlaySound, kit, "SFX", false)
+                if ok and willPlay then return end
             end
         end
         return
@@ -1567,20 +1566,20 @@ function Overlord:PlayAddonSound(key)
     if key == "welcome_popup" then
         local soundId = WELCOME_POPUP_SOUND_KIT[Overlord.PlayerFaction]
             or WELCOME_POPUP_SOUND_KIT.Alliance
-        TryPlaySoundEntry(soundId, { "Master", "SFX" })
+        TryPlaySoundEntry(soundId)
         return
     end
     if key == "general_claim" then
-        TryPlaySoundEntry(GENERAL_CLAIM_SOUND, { "Master", "SFX" })
+        TryPlaySoundEntry(GENERAL_CLAIM_SOUND)
         PlayGeneralFactionEmote()
         return
     end
     if key == "general_release" then
-        TryPlaySoundEntry(GENERAL_RELEASE_SOUND, { "Master", "SFX" })
+        TryPlaySoundEntry(GENERAL_RELEASE_SOUND)
         return
     end
     if key == "general_assumed" then
-        TryPlaySoundEntry(GENERAL_CLAIM_SOUND, { "Master", "SFX" })
+        TryPlaySoundEntry(GENERAL_CLAIM_SOUND)
         return
     end
     local ids = ADDON_SOUNDS[key]

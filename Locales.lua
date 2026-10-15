@@ -199,9 +199,9 @@ L.UI_FRONT_PICKER_TOOLTIP = "Choose which zone list to show. Your capture timer 
 L.UI_FRONT_READONLY_TOOLTIP = "You are viewing another front or you are not on a war zone. Clicks do not start captures; waypoints use the selected front map."
 L.UI_CAPTURE_READONLY = "Read-only: go to this front in the open world to capture from this list."
 L.MAP_OVERLAY_OPACITY_LABEL   = "Map capture opacity"
-L.MAP_OVERLAY_OPACITY_TOOLTIP = "Transparency of capture zone circles on the |cffffffffworld map|r only. Lower values reveal more map detail underneath.\nDoes not affect the minimap (see Minimap capture opacity) or coin mine circles."
+L.MAP_OVERLAY_OPACITY_TOOLTIP = "Transparency of capture zone circles on the |cffffffffworld map|r only. Lower values reveal more map detail underneath.\nDoes not affect the minimap (see Minimap capture opacity) or platinum mine circles."
 L.MINIMAP_OVERLAY_OPACITY_LABEL   = "Minimap capture opacity"
-L.MINIMAP_OVERLAY_OPACITY_TOOLTIP = "Transparency of capture zone circles on the |cffffffffminimap|r. Lower values reveal more map detail underneath.\nDoes not affect the world map, guild keep icons, or coin mine circles."
+L.MINIMAP_OVERLAY_OPACITY_TOOLTIP = "Transparency of capture zone circles on the |cffffffffminimap|r. Lower values reveal more map detail underneath.\nDoes not affect the world map, guild keep icons, or platinum mine circles."
 L.MAP_ICON_OPACITY_LABEL = "Map icon opacity"
 L.MAP_ICON_OPACITY_TOOLTIP = "Transparency of capture point, fortress and outpost icons on the |cffffffffworld map|r. Lower values keep quest markers in towns readable. Set to 0 to hide them."
 L.MAP_ICON_SCALE_LABEL = "Map icon size"
@@ -217,25 +217,22 @@ L.SETTINGS_TOGGLE_OFF         = "Disabled"
 L.AUTO_WAYPOINT_LABEL         = "Automatic objective pin"
 L.AUTO_WAYPOINT_TOOLTIP       = "Places the Blizzard map pin on the next available objective. If you remove or replace that pin, Overlord waits for a new objective before placing it again. The pin is removed when the objective is no longer valid."
 L.SOUND_ENABLED_LABEL         = "Overlord sounds"
-L.SOUND_ENABLED_TOOLTIP       = "Mute all sounds from Overlord (alerts, war horn, captures, panels, coin buff, general duel music, etc.)."
+L.SOUND_ENABLED_TOOLTIP       = "Mute all sounds from Overlord (alerts, war horn, captures, panels, platinum buff, etc.)."
 L.SETTINGS_BUTTON             = "Settings"
 L.NET_HEALTH_TITLE = "Overlord network"
 L.NET_HEALTH_OK = "All good"
 L.NET_HEALTH_WARN = "Worth watching"
 L.NET_HEALTH_BAD = "Problem"
 L.NET_HEALTH_HINT = "Type /ov network for details."
-L.MW_ALERT = "Most Wanted nearby: %s (#%d %s, %d HK this week)!"
-L.HELP_WANTED = "|cFFFFFF00/ov wanted [on|off]|r: Most Wanted: alert when a top-5 enemy is nearby"
-L.MW_ALERTS_LABEL = "Most Wanted alerts"
-L.MW_ALERTS_TOOLTIP = "Skull on the nameplates of the week's five best enemy killers, and a chat warning when one is nearby (/ov wanted)."
+L.MW_ALERT = "Nemesis nearby: %s (#%d %s, %d HK this week)!"
+L.MW_ALERTS_LABEL = "Nemesis alerts"
+L.MW_ALERTS_TOOLTIP = "Skull on the nameplates of the week's five best enemy killers, and a chat warning when one is nearby."
 L.HONORABLE_KILLS_CONFIRM = "+%d honorable kills: Total: %d"
 L.KILL_CHAT_LABEL = "Chat line on each honorable kill"
 L.KILL_CHAT_TOOLTIP = "Prints \"+N honorable kills: Total\" in the chat each time you get an honorable kill. Off by default."
 L.WORLDWIDE_ALERTS_LABEL = "Capture alerts from the whole world"
 L.WORLDWIDE_ALERTS_TOOLTIP = "Off: captures and outpost assaults are announced only for the continent you are on (your guild's outposts, your capital, calls to arms and total victories are always announced). On: from both continents."
 L.MAP_WORLD_OVERLAYS_LABEL = "Overlord on the world map"
-L.MW_STATE_ON = "Most Wanted alerts: on"
-L.MW_STATE_OFF = "Most Wanted alerts: off"
 L.SETTINGS_BUTTON_TOOLTIP     = "Open Overlord settings."
 L.SETTINGS_OPEN_UNAVAILABLE   = "Settings are not available right now. Use Esc, then Options, then AddOns."
 L.SCALE_CURRENT     = "Panel scale: %.1f (range %.1f to %.1f)."
@@ -572,13 +569,13 @@ L.MINE_DARROW           = "Darrow Hill"
 L.MINE_ELEMGORGE        = "Elemgorge Mine"
 L.MINE_STONESSPLINTER   = "Stonesplinter Mine"
 L.MINE_JASPERLODE       = "Jasperlode Mine"
-L.GOLD_COUNTER          = "Coins: %d / %d"
-L.GOLD_HEADER_TIP       = "Earn coins inside the marked circles. Hillsbrad Foothills: Azurelode Mine and Darrow Hill. Silverpine Forest: Elemgorge Mine. Loch Modan: Stonesplinter Mine. Elwynn Forest: Jasperlode Mine."
+L.GOLD_COUNTER          = "Platinum: %d / %d"
+L.GOLD_HEADER_TIP       = "Earn platinum inside the marked circles. Hillsbrad Foothills: Azurelode Mine and Darrow Hill. Silverpine Forest: Elemgorge Mine. Loch Modan: Stonesplinter Mine. Elwynn Forest: Jasperlode Mine."
 -- GOLD_FULL, GOLD_REINFORCE_*, GOLD_BARRICADE_* : numeriques via ApplyGoldLocaleStrings() (Ressources init)
-L.GOLD_NODE_BONUS       = "+%d coins (mining node)"
+L.GOLD_NODE_BONUS       = "+%d platinum (mining node)"
 -- Texte flottant au-dessus du personnage (gain passif dans le cercle mine)
-L.GOLD_FCT_GAIN         = "+%d coins"
-L.GOLD_NOT_ENOUGH       = "Not enough coins (requires %d)."
+L.GOLD_FCT_GAIN         = "+%d platinum"
+L.GOLD_NOT_ENOUGH       = "Not enough platinum (requires %d)."
 L.GOLD_REINFORCE        = "Attack"
 
 -- Guild Keep
@@ -592,9 +589,9 @@ L.GUILD_KEEP_CAPTURING      = "Capturing…"
 L.GOLD_BARRICADE        = "Reinforce"
 L.ENEMY_MINING_HORDE     = "Alert! The Horde is mining: %s!"
 L.ENEMY_MINING_ALLIANCE  = "Alert! The Alliance is mining: %s!"
-L.MINE_TOOLTIP          = "Coin mine: stand inside the circle to earn coins."
-L.MINE_ENTERED          = "You entered %s. Coin generation started."
-L.MINE_LEFT             = "You left %s. Coin generation stopped."
+L.MINE_TOOLTIP          = "Platinum mine: stand inside the circle to earn platinum."
+L.MINE_ENTERED          = "You entered %s. Platinum mining started."
+L.MINE_LEFT             = "You left %s. Platinum mining stopped."
 L.MINE_STOCK            = "Mine reserves: %d / %d"
 L.MINE_DEPLETED         = "%s is depleted. Reserves will refill over time."
 L.CATCHUP_PHASE         = "Catch-up experience detected: Overlord is inactive in this phase."
@@ -758,9 +755,9 @@ L.UI_FRONT_PICKER_TOOLTIP = "Choisir quelles zones afficher. Le minuteur de capt
 L.UI_FRONT_READONLY_TOOLTIP = "Vous consultez un autre front ou vous n’êtes pas en zone de guerre. Les clics ne lancent pas de capture ; les repères utilisent la carte du front choisi."
 L.UI_CAPTURE_READONLY = "Lecture seule : rendez-vous sur ce front en monde ouvert pour capturer depuis cette liste."
 L.MAP_OVERLAY_OPACITY_LABEL   = "Opacité des captures (carte)"
-L.MAP_OVERLAY_OPACITY_TOOLTIP = "Transparence des cercles de capture sur la |cffffffffcarte du monde|r uniquement. Une valeur plus basse laisse mieux voir le détail de la carte en dessous.\nN’affecte pas la minimap (voir Opacité des captures (minimap)) ni les cercles des mines de coins."
+L.MAP_OVERLAY_OPACITY_TOOLTIP = "Transparence des cercles de capture sur la |cffffffffcarte du monde|r uniquement. Une valeur plus basse laisse mieux voir le détail de la carte en dessous.\nN’affecte pas la minimap (voir Opacité des captures (minimap)) ni les cercles des mines de platine."
 L.MINIMAP_OVERLAY_OPACITY_LABEL   = "Opacité des captures (minimap)"
-L.MINIMAP_OVERLAY_OPACITY_TOOLTIP = "Transparence des cercles de capture sur la |cffffffffminimap|r. Une valeur plus basse laisse mieux voir le détail de la carte en dessous.\nN’affecte pas la carte du monde, les icônes de fortin ni les cercles des mines de coins."
+L.MINIMAP_OVERLAY_OPACITY_TOOLTIP = "Transparence des cercles de capture sur la |cffffffffminimap|r. Une valeur plus basse laisse mieux voir le détail de la carte en dessous.\nN’affecte pas la carte du monde, les icônes de fortin ni les cercles des mines de platine."
 L.MAP_ICON_OPACITY_LABEL = "Opacité des icônes (carte)"
 L.MAP_ICON_OPACITY_TOOLTIP = "Transparence des icônes de points de capture, forteresses et avant-postes sur la |cffffffffcarte du monde|r. Une valeur basse laisse voir les marqueurs de quête dans les villes. À 0, elles sont masquées."
 L.MAP_ICON_SCALE_LABEL = "Taille des icônes (carte)"
@@ -776,25 +773,22 @@ L.SETTINGS_TOGGLE_OFF         = "Désactivé"
 L.AUTO_WAYPOINT_LABEL         = "Repère automatique d'objectif"
 L.AUTO_WAYPOINT_TOOLTIP       = "Place le repère Blizzard sur le prochain objectif disponible. Si vous retirez ou remplacez ce repère, Overlord attend le prochain objectif avant de le reposer. Le repère est retiré quand l'objectif n'est plus valide."
 L.SOUND_ENABLED_LABEL         = "Sons Overlord"
-L.SOUND_ENABLED_TOOLTIP       = "Coupe tous les sons d'Overlord (alertes, cor de guerre, captures, panneaux, buff coins, musique de duel du général, etc.)."
+L.SOUND_ENABLED_TOOLTIP       = "Coupe tous les sons d'Overlord (alertes, cor de guerre, captures, panneaux, buff platine, etc.)."
 L.SETTINGS_BUTTON             = "Options"
 L.NET_HEALTH_TITLE = "Réseau Overlord"
 L.NET_HEALTH_OK = "Tout va bien"
 L.NET_HEALTH_WARN = "À surveiller"
 L.NET_HEALTH_BAD = "Problème"
 L.NET_HEALTH_HINT = "Tapez /ov network pour le détail."
-L.MW_ALERT = "Most Wanted à proximité : %s (#%d %s, %d VH cette semaine) !"
-L.HELP_WANTED = "|cFFFFFF00/ov wanted [on|off]|r: Most Wanted : alerte quand un des 5 meilleurs ennemis est proche"
-L.MW_ALERTS_LABEL = "Alertes Most Wanted"
-L.MW_ALERTS_TOOLTIP = "Crâne sur la barre de nom des cinq meilleurs tueurs ennemis de la semaine, et alerte dans le chat quand l'un d'eux est proche (/ov wanted)."
+L.MW_ALERT = "Némésis à proximité : %s (#%d %s, %d VH cette semaine) !"
+L.MW_ALERTS_LABEL = "Alertes Némésis"
+L.MW_ALERTS_TOOLTIP = "Crâne sur la barre de nom des cinq meilleurs tueurs ennemis de la semaine, et alerte dans le chat quand l'un d'eux est proche."
 L.HONORABLE_KILLS_CONFIRM = "+%d victoires honorables : Total : %d"
 L.KILL_CHAT_LABEL = "Ligne de chat à chaque victoire honorable"
 L.KILL_CHAT_TOOLTIP = "Affiche « +N victoires honorables : Total » dans le chat à chaque victoire honorable. Désactivé par défaut."
 L.WORLDWIDE_ALERTS_LABEL = "Alertes de capture du monde entier"
 L.WORLDWIDE_ALERTS_TOOLTIP = "Désactivé : les captures et attaques d'avant-poste ne sont annoncées que pour le continent où vous êtes (les avant-postes de votre guilde, votre capitale, les appels aux armes et les victoires totales sont toujours annoncés). Activé : des deux continents."
 L.MAP_WORLD_OVERLAYS_LABEL = "Overlord sur la carte du monde"
-L.MW_STATE_ON = "Alertes Most Wanted : activées"
-L.MW_STATE_OFF = "Alertes Most Wanted : désactivées"
 L.SETTINGS_BUTTON_TOOLTIP     = "Ouvre les options Overlord."
 L.SETTINGS_OPEN_UNAVAILABLE   = "Les options ne sont pas disponibles pour le moment. Utilisez Échap, puis Options, puis AddOns."
 L.SCALE_CURRENT     = "Échelle du panneau : %.1f (plage de %.1f à %.1f)."
@@ -1129,11 +1123,11 @@ L.MINE_DARROW           = "Colline de Darrow"
 L.MINE_ELEMGORGE        = "Mine du Gouffre d'Elem"
 L.MINE_STONESSPLINTER   = "Mine de Brisetaille"
 L.MINE_JASPERLODE       = "Veine-de-Jaspe"
-L.GOLD_COUNTER          = "Coins : %d / %d"
-L.GOLD_HEADER_TIP       = "Gagnez des coins dans les cercles indiqués. Contreforts de Hautebrande : mine de Veine-d'Azur et colline de Darrow. Forêt des Pins-Argentés : mine du Gouffre d'Elem. Loch Modan : mine de Brisetaille. Forêt d'Elwynn : Veine-de-Jaspe."
-L.GOLD_NODE_BONUS       = "+%d coins (filon miné)"
-L.GOLD_FCT_GAIN         = "+%d coins"
-L.GOLD_NOT_ENOUGH       = "Pas assez de coins (%d requis)."
+L.GOLD_COUNTER          = "Platine : %d / %d"
+L.GOLD_HEADER_TIP       = "Gagnez du platine dans les cercles indiqués. Contreforts de Hautebrande : mine de Veine-d'Azur et colline de Darrow. Forêt des Pins-Argentés : mine du Gouffre d'Elem. Loch Modan : mine de Brisetaille. Forêt d'Elwynn : Veine-de-Jaspe."
+L.GOLD_NODE_BONUS       = "+%d platine (filon miné)"
+L.GOLD_FCT_GAIN         = "+%d platine"
+L.GOLD_NOT_ENOUGH       = "Pas assez de platine (%d requis)."
 L.GOLD_REINFORCE        = "Attaquer"
 
 -- Fortin de guilde
@@ -1147,9 +1141,9 @@ L.GUILD_KEEP_CAPTURING      = "Capture en cours…"
 L.GOLD_BARRICADE        = "Renforcer"
 L.ENEMY_MINING_HORDE     = "Alerte ! La Horde mine : %s !"
 L.ENEMY_MINING_ALLIANCE  = "Alerte ! L'Alliance mine : %s !"
-L.MINE_TOOLTIP          = "Mine de coins: restez dans le cercle pour gagner des coins."
-L.MINE_ENTERED          = "Vous entrez dans %s. Gain de coins activé."
-L.MINE_LEFT             = "Vous quittez %s. Gain de coins arrêté."
+L.MINE_TOOLTIP          = "Mine de platine : restez dans le cercle pour gagner du platine."
+L.MINE_ENTERED          = "Vous entrez dans %s. Gain de platine activé."
+L.MINE_LEFT             = "Vous quittez %s. Gain de platine arrêté."
 L.MINE_STOCK            = "Réserves de la mine : %d / %d"
 L.MINE_DEPLETED         = "%s est épuisée. Les réserves se reconstituent avec le temps."
 L.CATCHUP_PHASE         = "Expérience de rattrapage détectée: Overlord est inactif dans cette phase."
@@ -1312,9 +1306,9 @@ L.UI_FRONT_PICKER_TOOLTIP = "Elige qué lista de zonas mostrar. Tu temporizador 
 L.UI_FRONT_READONLY_TOOLTIP = "Estás viendo otro frente o no estás en una zona de guerra. Los clics no inician capturas; los waypoints usan el mapa del frente seleccionado."
 L.UI_CAPTURE_READONLY = "Solo lectura: ve a este frente en el mundo abierto para capturar desde esta lista."
 L.MAP_OVERLAY_OPACITY_LABEL   = "Opacidad de capturas (mapa)"
-L.MAP_OVERLAY_OPACITY_TOOLTIP = "Transparencia de los círculos de captura en el |cffffffffmapa del mundo|r solamente. Valores más bajos dejan ver más detalle del mapa debajo.\nNo afecta a la minimapa (ver Opacidad de capturas (minimapa)) ni a los círculos de minas de coins."
+L.MAP_OVERLAY_OPACITY_TOOLTIP = "Transparencia de los círculos de captura en el |cffffffffmapa del mundo|r solamente. Valores más bajos dejan ver más detalle del mapa debajo.\nNo afecta a la minimapa (ver Opacidad de capturas (minimapa)) ni a los círculos de minas de platino."
 L.MINIMAP_OVERLAY_OPACITY_LABEL   = "Opacidad de capturas (minimapa)"
-L.MINIMAP_OVERLAY_OPACITY_TOOLTIP = "Transparencia de los círculos de captura en la |cffffffffminimapa|r. Valores más bajos dejan ver más detalle del mapa debajo.\nNo afecta al mapa del mundo, a los iconos de fortín ni a los círculos de minas de coins."
+L.MINIMAP_OVERLAY_OPACITY_TOOLTIP = "Transparencia de los círculos de captura en la |cffffffffminimapa|r. Valores más bajos dejan ver más detalle del mapa debajo.\nNo afecta al mapa del mundo, a los iconos de fortín ni a los círculos de minas de platino."
 L.MAP_ICON_OPACITY_LABEL = "Opacidad de iconos (mapa)"
 L.MAP_ICON_OPACITY_TOOLTIP = "Transparencia de los iconos de puntos de captura, fortalezas y puestos avanzados en el |cffffffffmapa del mundo|r. Un valor bajo deja ver los marcadores de misión en las ciudades. En 0 se ocultan."
 L.MAP_ICON_SCALE_LABEL = "Tamaño de iconos (mapa)"
@@ -1330,25 +1324,22 @@ L.SETTINGS_TOGGLE_OFF         = "Desactivado"
 L.AUTO_WAYPOINT_LABEL         = "Pin automático de objetivo"
 L.AUTO_WAYPOINT_TOOLTIP       = "Coloca el pin de mapa de Blizzard en el próximo objetivo disponible. Si quitas o reemplazas ese pin, Overlord espera a un objetivo nuevo antes de colocarlo otra vez. El pin se retira cuando el objetivo deja de ser válido."
 L.SOUND_ENABLED_LABEL         = "Sonidos de Overlord"
-L.SOUND_ENABLED_TOOLTIP       = "Silencia todos los sonidos de Overlord (alertas, cuerno de guerra, capturas, paneles, buff de coins, música de duelo del general, etc.)."
+L.SOUND_ENABLED_TOOLTIP       = "Silencia todos los sonidos de Overlord (alertas, cuerno de guerra, capturas, paneles, buff de platino, etc.)."
 L.SETTINGS_BUTTON             = "Opciones"
 L.NET_HEALTH_TITLE = "Red de Overlord"
 L.NET_HEALTH_OK = "Todo bien"
 L.NET_HEALTH_WARN = "A vigilar"
 L.NET_HEALTH_BAD = "Problema"
 L.NET_HEALTH_HINT = "Escribe /ov network para ver el detalle."
-L.MW_ALERT = "¡Most Wanted cerca: %s (#%d %s, %d MH esta semana)!"
-L.HELP_WANTED = "|cFFFFFF00/ov wanted [on|off]|r: Most Wanted: aviso cuando uno de los 5 mejores enemigos está cerca"
-L.MW_ALERTS_LABEL = "Alertas Most Wanted"
-L.MW_ALERTS_TOOLTIP = "Calavera en la placa de nombre de los cinco mejores asesinos enemigos de la semana, y aviso en el chat cuando uno está cerca (/ov wanted)."
+L.MW_ALERT = "¡Némesis cerca: %s (#%d %s, %d MH esta semana)!"
+L.MW_ALERTS_LABEL = "Alertas de Némesis"
+L.MW_ALERTS_TOOLTIP = "Calavera en la placa de nombre de los cinco mejores asesinos enemigos de la semana, y aviso en el chat cuando uno está cerca."
 L.HONORABLE_KILLS_CONFIRM = "+%d muertes honorables: total: %d"
 L.KILL_CHAT_LABEL = "Línea de chat en cada muerte honorable"
 L.KILL_CHAT_TOOLTIP = "Muestra «+N muertes honorables: total» en el chat con cada muerte honorable. Desactivado por defecto."
 L.WORLDWIDE_ALERTS_LABEL = "Alertas de captura de todo el mundo"
 L.WORLDWIDE_ALERTS_TOOLTIP = "Desactivado: las capturas y los asaltos a avanzadas solo se anuncian para el continente en el que estás (las avanzadas de tu hermandad, tu capital, los avisos del Cuerno y las victorias totales se anuncian siempre). Activado: de ambos continentes."
 L.MAP_WORLD_OVERLAYS_LABEL = "Overlord en el mapa del mundo"
-L.MW_STATE_ON = "Avisos Most Wanted: activados"
-L.MW_STATE_OFF = "Avisos Most Wanted: desactivados"
 L.SETTINGS_BUTTON_TOOLTIP     = "Abre las opciones de Overlord."
 L.SETTINGS_OPEN_UNAVAILABLE   = "Las opciones no están disponibles ahora. Usa Esc, luego Opciones, luego AddOns."
 L.SCALE_CURRENT     = "Escala del panel: %.1f (rango de %.1f a %.1f)."
@@ -1681,11 +1672,11 @@ L.MINE_DARROW           = "Colinas de Darrow"
 L.MINE_ELEMGORGE        = "Mina de Elemgorge"
 L.MINE_STONESSPLINTER   = "Mina Partedura"
 L.MINE_JASPERLODE       = "Mina de Jaspe"
-L.GOLD_COUNTER          = "Coins: %d / %d"
-L.GOLD_HEADER_TIP       = "Gana coins dentro de los círculos marcados. Laderas de Trabalomas: mina Veta Azur y Colinas de Darrow. Bosque de Argénteos: mina Elemgorge. Loch Modan: mina Partedura. Bosque de Elwynn: mina de Jaspe."
-L.GOLD_NODE_BONUS       = "+%d coins (veta minada)"
-L.GOLD_FCT_GAIN         = "+%d coins"
-L.GOLD_NOT_ENOUGH       = "Coins insuficiente (se requieren %d)."
+L.GOLD_COUNTER          = "Platino: %d / %d"
+L.GOLD_HEADER_TIP       = "Gana platino dentro de los círculos marcados. Laderas de Trabalomas: mina Veta Azur y Colinas de Darrow. Bosque de Argénteos: mina Elemgorge. Loch Modan: mina Partedura. Bosque de Elwynn: mina de Jaspe."
+L.GOLD_NODE_BONUS       = "+%d de platino (veta minada)"
+L.GOLD_FCT_GAIN         = "+%d de platino"
+L.GOLD_NOT_ENOUGH       = "Platino insuficiente (se requieren %d)."
 L.GOLD_REINFORCE        = "Atacar"
 
 -- Guild Keep
@@ -1699,9 +1690,9 @@ L.GUILD_KEEP_CAPTURING      = "Capturando…"
 L.GOLD_BARRICADE        = "Reforzar"
 L.ENEMY_MINING_HORDE     = "¡Alerta! ¡La Horda está minando en %s!"
 L.ENEMY_MINING_ALLIANCE  = "¡Alerta! ¡La Alianza está minando en %s!"
-L.MINE_TOOLTIP          = "Mina de coins: permanece dentro del círculo para ganar coins."
-L.MINE_ENTERED          = "Has entrado en %s. Generación de coins iniciada."
-L.MINE_LEFT             = "Has abandonado %s. Generación de coins detenida."
+L.MINE_TOOLTIP          = "Mina de platino: permanece dentro del círculo para ganar platino."
+L.MINE_ENTERED          = "Has entrado en %s. Generación de platino iniciada."
+L.MINE_LEFT             = "Has abandonado %s. Generación de platino detenida."
 L.MINE_STOCK            = "Reservas de la mina: %d / %d"
 L.MINE_DEPLETED         = "%s está agotada. Las reservas se repondrán con el tiempo."
 L.CATCHUP_PHASE         = "Experiencia de recuperación detectada: Overlord está inactivo en esta fase."
@@ -1864,9 +1855,9 @@ L.UI_FRONT_PICKER_TOOLTIP = "Welche Zonenliste angezeigt wird. Eroberungstimer u
 L.UI_FRONT_READONLY_TOOLTIP = "Ihr seht eine andere Front oder seid nicht in einer Kriegszone. Klicks starten keine Eroberungen; Wegpunkte nutzen die gewählte Frontkarte."
 L.UI_CAPTURE_READONLY = "Nur Lesen: geht zu dieser Front in der offenen Welt, um von dieser Liste zu erobern."
 L.MAP_OVERLAY_OPACITY_LABEL   = "Deckkraft Eroberungen (Karte)"
-L.MAP_OVERLAY_OPACITY_TOOLTIP = "Transparenz der Eroberungskreise nur auf der |cffffffffWeltkarte|r. Niedrigere Werte zeigen mehr Kartendetail.\nBetrifft nicht die Minimap (siehe Deckkraft Eroberungen (Minimap)) oder Coin-Minen-Kreise."
+L.MAP_OVERLAY_OPACITY_TOOLTIP = "Transparenz der Eroberungskreise nur auf der |cffffffffWeltkarte|r. Niedrigere Werte zeigen mehr Kartendetail.\nBetrifft nicht die Minimap (siehe Deckkraft Eroberungen (Minimap)) oder Platinminen-Kreise."
 L.MINIMAP_OVERLAY_OPACITY_LABEL   = "Deckkraft Eroberungen (Minimap)"
-L.MINIMAP_OVERLAY_OPACITY_TOOLTIP = "Transparenz der Eroberungskreise auf der |cffffffffMinimap|r. Niedrigere Werte zeigen mehr Kartendetail.\nBetrifft nicht die Weltkarte, Gildenfestung-Symbole oder Coin-Minen-Kreise."
+L.MINIMAP_OVERLAY_OPACITY_TOOLTIP = "Transparenz der Eroberungskreise auf der |cffffffffMinimap|r. Niedrigere Werte zeigen mehr Kartendetail.\nBetrifft nicht die Weltkarte, Gildenfestung-Symbole oder Platinminen-Kreise."
 L.MAP_ICON_OPACITY_LABEL = "Deckkraft Symbole (Karte)"
 L.MAP_ICON_OPACITY_TOOLTIP = "Transparenz der Symbole von Eroberungspunkten, Festungen und Außenposten auf der |cffffffffWeltkarte|r. Niedrige Werte lassen Questmarkierungen in Städten sichtbar. Bei 0 werden sie ausgeblendet."
 L.MAP_ICON_SCALE_LABEL = "Symbolgröße (Karte)"
@@ -1882,25 +1873,22 @@ L.SETTINGS_TOGGLE_OFF         = "Deaktiviert"
 L.AUTO_WAYPOINT_LABEL         = "Automatische Zielmarkierung"
 L.AUTO_WAYPOINT_TOOLTIP       = "Setzt die Blizzard-Kartenmarkierung auf das nächste verfügbare Ziel. Wenn Ihr diese Markierung entfernt oder ersetzt, wartet Overlord bis zum nächsten Ziel, bevor sie erneut gesetzt wird. Die Markierung wird entfernt, wenn das Ziel nicht mehr gültig ist."
 L.SOUND_ENABLED_LABEL         = "Overlord-Töne"
-L.SOUND_ENABLED_TOOLTIP       = "Schaltet alle Overlord-Töne stumm (Alarme, Kriegshorn, Eroberungen, Panels, Coins-Buff, General-Duellmusik usw.)."
+L.SOUND_ENABLED_TOOLTIP       = "Schaltet alle Overlord-Töne stumm (Alarme, Kriegshorn, Eroberungen, Panels, Platin-Buff usw.)."
 L.SETTINGS_BUTTON             = "Einstellungen"
 L.NET_HEALTH_TITLE = "Overlord-Netzwerk"
 L.NET_HEALTH_OK = "Alles gut"
 L.NET_HEALTH_WARN = "Im Auge behalten"
 L.NET_HEALTH_BAD = "Problem"
 L.NET_HEALTH_HINT = "Gib /ov network für Details ein."
-L.MW_ALERT = "Most Wanted in der Nähe: %s (#%d %s, %d ES diese Woche)!"
-L.HELP_WANTED = "|cFFFFFF00/ov wanted [on|off]|r: Most Wanted: Warnung, wenn einer der 5 besten Gegner in der Nähe ist"
-L.MW_ALERTS_LABEL = "Most-Wanted-Warnungen"
-L.MW_ALERTS_TOOLTIP = "Totenkopf auf der Namensplakette der fünf besten feindlichen Kämpfer der Woche und Chatwarnung, wenn einer in der Nähe ist (/ov wanted)."
+L.MW_ALERT = "Nemesis in der Nähe: %s (#%d %s, %d ES diese Woche)!"
+L.MW_ALERTS_LABEL = "Nemesis-Warnungen"
+L.MW_ALERTS_TOOLTIP = "Totenkopf auf der Namensplakette der fünf besten feindlichen Kämpfer der Woche und Chatwarnung, wenn einer in der Nähe ist."
 L.HONORABLE_KILLS_CONFIRM = "+%d ehrenhafte Siege: Gesamt: %d"
 L.KILL_CHAT_LABEL = "Chatzeile bei jedem ehrenhaften Sieg"
 L.KILL_CHAT_TOOLTIP = "Zeigt „+N ehrenhafte Siege: Gesamt“ im Chat bei jedem ehrenhaften Sieg. Standardmäßig aus."
 L.WORLDWIDE_ALERTS_LABEL = "Eroberungswarnungen aus der ganzen Welt"
 L.WORLDWIDE_ALERTS_TOOLTIP = "Aus: Eroberungen und Angriffe auf Außenposten werden nur für den Kontinent gemeldet, auf dem ihr seid (die Außenposten eurer Gilde, eure Hauptstadt, das Kriegshorn und totale Siege werden immer gemeldet). An: von beiden Kontinenten."
 L.MAP_WORLD_OVERLAYS_LABEL = "Overlord auf der Weltkarte"
-L.MW_STATE_ON = "Most-Wanted-Warnungen: an"
-L.MW_STATE_OFF = "Most-Wanted-Warnungen: aus"
 L.SETTINGS_BUTTON_TOOLTIP     = "Öffnet die Overlord-Einstellungen."
 L.SETTINGS_OPEN_UNAVAILABLE   = "Einstellungen sind gerade nicht verfügbar. Esc, dann Optionen, dann AddOns."
 L.SCALE_CURRENT     = "Panel-Skalierung: %.1f (Bereich %.1f bis %.1f)."
@@ -2233,11 +2221,11 @@ L.MINE_DARROW           = "Darrohügel"
 L.MINE_ELEMGORGE        = "Elemgorge-Mine"
 L.MINE_STONESSPLINTER   = "Steinsplittermine"
 L.MINE_JASPERLODE       = "Jaspismine"
-L.GOLD_COUNTER          = "Coins: %d / %d"
-L.GOLD_HEADER_TIP       = "Verdient Coins in den markierten Kreisen. Vorgebirge des Hügellands: Azurmine und Darrohügel. Silberwald: Elemgorge. Loch Modan: Steinsplitter. Wald von Elwynn: Jaspismine."
-L.GOLD_NODE_BONUS       = "+%d Coins (Abbau)"
-L.GOLD_FCT_GAIN         = "+%d coins"
-L.GOLD_NOT_ENOUGH       = "Nicht genug Coins (%d nötig)."
+L.GOLD_COUNTER          = "Platin: %d / %d"
+L.GOLD_HEADER_TIP       = "Verdient Platin in den markierten Kreisen. Vorgebirge des Hügellands: Azurmine und Darrohügel. Silberwald: Elemgorge. Loch Modan: Steinsplitter. Wald von Elwynn: Jaspismine."
+L.GOLD_NODE_BONUS       = "+%d Platin (Abbau)"
+L.GOLD_FCT_GAIN         = "+%d Platin"
+L.GOLD_NOT_ENOUGH       = "Nicht genug Platin (%d nötig)."
 L.GOLD_REINFORCE        = "Angriff"
 
 -- Guild Keep
@@ -2251,9 +2239,9 @@ L.GUILD_KEEP_CAPTURING      = "Eroberung läuft…"
 L.GOLD_BARRICADE        = "Verstärken"
 L.ENEMY_MINING_HORDE     = "Alarm! Die Horde baut Erz ab: %s!"
 L.ENEMY_MINING_ALLIANCE  = "Alarm! Die Allianz baut Erz ab: %s!"
-L.MINE_TOOLTIP          = "Coin-Mine: im Kreis bleiben, um Coins zu verdienen."
-L.MINE_ENTERED          = "Ihr habt %s betreten. Coin-Erzeugung gestartet."
-L.MINE_LEFT             = "Ihr habt %s verlassen. Coin-Erzeugung gestoppt."
+L.MINE_TOOLTIP          = "Platinmine: im Kreis bleiben, um Platin zu verdienen."
+L.MINE_ENTERED          = "Ihr habt %s betreten. Platinabbau gestartet."
+L.MINE_LEFT             = "Ihr habt %s verlassen. Platinabbau gestoppt."
 L.MINE_STOCK            = "Minenreserven: %d / %d"
 L.MINE_DEPLETED         = "%s ist erschöpft. Reserven füllen sich mit der Zeit."
 L.CATCHUP_PHASE         = "Aufhol-Erfahrung erkannt: Overlord ist in dieser Phase inaktiv."
@@ -2422,9 +2410,9 @@ L.UI_FRONT_PICKER_TOOLTIP = "Выберите, какой список зон о
 L.UI_FRONT_READONLY_TOOLTIP = "Вы просматриваете другой фронт или находитесь вне зоны боевых действий. Клики не запускают захват; путевые точки используют карту выбранного фронта."
 L.UI_CAPTURE_READONLY = "Только чтение: чтобы начать захват из этого списка, перейдите на этот фронт в открытом мире."
 L.MAP_OVERLAY_OPACITY_LABEL   = "Прозрачность захвата на карте"
-L.MAP_OVERLAY_OPACITY_TOOLTIP = "Прозрачность кругов зон захвата только на |cffffffffкарте мира|r. Более низкие значения делают саму карту под ними более заметной.\nНе влияет на мини-карту (см. Прозрачность захвата на мини-карте) или круги золотых рудников."
+L.MAP_OVERLAY_OPACITY_TOOLTIP = "Прозрачность кругов зон захвата только на |cffffffffкарте мира|r. Более низкие значения делают саму карту под ними более заметной.\nНе влияет на мини-карту (см. Прозрачность захвата на мини-карте) или круги платиновых рудников."
 L.MINIMAP_OVERLAY_OPACITY_LABEL   = "Прозрачность захвата на мини-карте"
-L.MINIMAP_OVERLAY_OPACITY_TOOLTIP = "Прозрачность кругов зон захвата на |cffffffffмини-карте|r. Более низкие значения делают саму карту под ними более заметной.\nНе влияет на карту мира, иконки крепостей гильдий или круги золотых рудников."
+L.MINIMAP_OVERLAY_OPACITY_TOOLTIP = "Прозрачность кругов зон захвата на |cffffffffмини-карте|r. Более низкие значения делают саму карту под ними более заметной.\nНе влияет на карту мира, иконки крепостей гильдий или круги платиновых рудников."
 L.MAP_ICON_OPACITY_LABEL = "Прозрачность значков (карта)"
 L.MAP_ICON_OPACITY_TOOLTIP = "Прозрачность значков точек захвата, крепостей и аванпостов на |cffffffffкарте мира|r. Низкое значение оставляет видимыми метки заданий в городах. При 0 значки скрыты."
 L.MAP_ICON_SCALE_LABEL = "Размер значков (карта)"
@@ -2440,25 +2428,22 @@ L.SETTINGS_TOGGLE_OFF         = "Отключено"
 L.AUTO_WAYPOINT_LABEL         = "Автоматическая путевая точка"
 L.AUTO_WAYPOINT_TOOLTIP       = "Автоматически ставит стандартную булавку Blizzard на следующую доступную цель. Если вы удалите или замените эту булавку, Overlord дождется появления новой цели, прежде чем поставить её снова. Булавка удаляется, когда цель перестает быть актуальной."
 L.SOUND_ENABLED_LABEL         = "Звуки Overlord"
-L.SOUND_ENABLED_TOOLTIP       = "Отключить все звуки Overlord (оповещения, боевой горн, захваты, панели, эффект coins, фоновая музыка дуэлей и т.д.)."
+L.SOUND_ENABLED_TOOLTIP       = "Отключить все звуки Overlord (оповещения, боевой горн, захваты, панели, эффект платины и т.д.)."
 L.SETTINGS_BUTTON             = "Настройки"
 L.NET_HEALTH_TITLE = "Сеть Overlord"
 L.NET_HEALTH_OK = "Всё в порядке"
 L.NET_HEALTH_WARN = "Стоит присмотреться"
 L.NET_HEALTH_BAD = "Проблема"
 L.NET_HEALTH_HINT = "Введите /ov network для подробностей."
-L.MW_ALERT = "Most Wanted рядом: %s (#%d %s, %d ПП за неделю)!"
-L.HELP_WANTED = "|cFFFFFF00/ov wanted [on|off]|r: Most Wanted: оповещение, когда рядом один из 5 лучших врагов"
-L.MW_ALERTS_LABEL = "Оповещения Most Wanted"
-L.MW_ALERTS_TOOLTIP = "Череп над пятью лучшими вражескими бойцами недели и предупреждение в чате, когда один из них рядом (/ov wanted)."
+L.MW_ALERT = "Немезида рядом: %s (#%d %s, %d ПП за неделю)!"
+L.MW_ALERTS_LABEL = "Оповещения «Немезида»"
+L.MW_ALERTS_TOOLTIP = "Череп над пятью лучшими вражескими бойцами недели и предупреждение в чате, когда один из них рядом."
 L.HONORABLE_KILLS_CONFIRM = "+%d почётных побед: Всего: %d"
 L.KILL_CHAT_LABEL = "Строка в чате за каждую почётную победу"
 L.KILL_CHAT_TOOLTIP = "Показывает «+N почётных побед: Всего» в чате за каждую почётную победу. По умолчанию выключено."
 L.WORLDWIDE_ALERTS_LABEL = "Оповещения о захватах со всего мира"
 L.WORLDWIDE_ALERTS_TOOLTIP = "Выкл.: о захватах и атаках на аванпосты сообщается, только если они на вашем континенте (об аванпостах вашей гильдии, вашей столице, призывах «К оружию» и полных победах сообщается всегда). Вкл.: с обоих континентов."
 L.MAP_WORLD_OVERLAYS_LABEL = "Overlord на карте мира"
-L.MW_STATE_ON = "Оповещения Most Wanted: вкл."
-L.MW_STATE_OFF = "Оповещения Most Wanted: выкл."
 L.SETTINGS_BUTTON_TOOLTIP     = "Открыть настройки Overlord."
 L.SETTINGS_OPEN_UNAVAILABLE   = "Настройки сейчас недоступны. Используйте Esc > Параметры > Модификаторы."
 L.SCALE_CURRENT     = "Масштаб панели: %.1f (диапазон от %.1f до %.1f)."
@@ -2795,13 +2780,13 @@ L.MINE_DARROW           = "Холм Дарроу"
 L.MINE_ELEMGORGE        = "Серебряный рудник"
 L.MINE_STONESSPLINTER   = "Рудник Камнедробов"
 L.MINE_JASPERLODE       = "Яшмовая шахта"
-L.GOLD_COUNTER          = "Coins: %d / %d"
-L.GOLD_HEADER_TIP       = "Получайте coins в отмеченных кругах. Предгорья Хилсбрада: Лазуритовый рудник и холм Дарроу. Серебряный бор: рудник ущелья Элем. Лок Модан: рудник Камнедробов. Элвиннский лес: Яшмовая шахта."
+L.GOLD_COUNTER          = "Платина: %d / %d"
+L.GOLD_HEADER_TIP       = "Получайте платину в отмеченных кругах. Предгорья Хилсбрада: Лазуритовый рудник и холм Дарроу. Серебряный бор: рудник ущелья Элем. Лок Модан: рудник Камнедробов. Элвиннский лес: Яшмовая шахта."
 -- GOLD_FULL, GOLD_REINFORCE_*, GOLD_BARRICADE_* : numeriques via ApplyGoldLocaleStrings() (Ressources init)
-L.GOLD_NODE_BONUS       = "+%d coins (рудная жила)"
+L.GOLD_NODE_BONUS       = "+%d платины (рудная жила)"
 -- Texte flottant au-dessus du personnage (gain passif dans le cercle mine)
-L.GOLD_FCT_GAIN         = "+%d coins"
-L.GOLD_NOT_ENOUGH       = "Недостаточно coins (требуется %d)."
+L.GOLD_FCT_GAIN         = "+%d платины"
+L.GOLD_NOT_ENOUGH       = "Недостаточно платины (требуется %d)."
 L.GOLD_REINFORCE        = "Атака"
 
 -- Guild Keep
@@ -2813,11 +2798,11 @@ L.GUILD_KEEP_MULGORE        = "Луговой форт"
 L.GUILD_KEEP_NEUTRAL        = "Нейтрально"
 L.GUILD_KEEP_CAPTURING      = "Захват…"
 L.GOLD_BARRICADE        = "Укрепить"
-L.ENEMY_MINING_HORDE     = "Внимание! Орда добывает золото: %s!"
-L.ENEMY_MINING_ALLIANCE  = "Внимание! Альянс добывает золото: %s!"
-L.MINE_TOOLTIP          = "Рудник coins: стойте внутри круга, чтобы получать coins."
-L.MINE_ENTERED          = "Вы вошли в %s. Начат приток coins."
-L.MINE_LEFT             = "Вы покинули %s. Приток coins прекращен."
+L.ENEMY_MINING_HORDE     = "Внимание! Орда добывает платину: %s!"
+L.ENEMY_MINING_ALLIANCE  = "Внимание! Альянс добывает платину: %s!"
+L.MINE_TOOLTIP          = "Платиновый рудник: стойте внутри круга, чтобы получать платину."
+L.MINE_ENTERED          = "Вы вошли в %s. Начата добыча платины."
+L.MINE_LEFT             = "Вы покинули %s. Добыча платины прекращена."
 L.MINE_STOCK            = "Запасы рудника: %d / %d"
 L.MINE_DEPLETED         = "Запасы в %s исчерпаны. Они восстановятся со временем."
 L.CATCHUP_PHASE         = "Обнаружен догоняющий опыт: Overlord неактивен в этой фазе."
@@ -2833,114 +2818,114 @@ function Overlord.ApplyGoldLocaleStrings()
     local Loc = Overlord.L
     if not R or not Loc then return end
     if Overlord.IsFrenchLocale() then
-        Loc.GOLD_FULL = string.format("Coins au maximum (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
+        Loc.GOLD_FULL = string.format("Platine au maximum (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
         Loc.GOLD_REINFORCE_TIP = string.format(
-            "Coûte %d coins. Votre prochaine capture de zone, avant-poste ou fortin (hors capitales) se termine %d s plus tôt (temps minimum de maintien : %d s).",
+            "Coûte %d platine. Votre prochaine capture de zone, avant-poste ou fortin (hors capitales) se termine %d s plus tôt (temps minimum de maintien : %d s).",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
-        Loc.GOLD_REINFORCE_SPENT = string.format("%d coins dépensés. Votre prochaine capture sera %d s plus courte.",
+        Loc.GOLD_REINFORCE_SPENT = string.format("Platine dépensé : %d. Votre prochaine capture sera %d s plus courte.",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)
         Loc.GOLD_REINFORCE_ACTIVE = string.format("Attaque prête: votre prochaine capture sera %d s plus courte.", R.REINFORCE_REDUCTION)
         Loc.GOLD_REINFORCE_USED = string.format("Attaque utilisée: temps de capture réduit de %d s.", R.REINFORCE_REDUCTION)
         Loc.GOLD_BARRICADE_TIP = string.format(
-            "Coûte %d coins. La prochaine fois qu'un ennemi commence une capture sur l'une de vos zones de front, il devra tenir %d s de plus.",
+            "Coûte %d platine. La prochaine fois qu'un ennemi commence une capture sur l'une de vos zones de front, il devra tenir %d s de plus.",
             R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
-        Loc.GOLD_BARRICADE_SPENT = string.format("%d coins dépensés. La prochaine capture ennemie sur vos zones durera %d s de plus.",
+        Loc.GOLD_BARRICADE_SPENT = string.format("Platine dépensé : %d. La prochaine capture ennemie sur vos zones durera %d s de plus.",
             R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_ACTIVE = string.format("Renfort prêt: la prochaine capture ennemie sur vos zones durera %d s de plus.", R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_USED = string.format("Renfort déclenché: l'ennemi doit tenir %d s de plus.", R.BARRICADE_INCREASE)
     elseif Overlord.IsSpanishLocale() then
-        Loc.GOLD_FULL = string.format("Coins al máximo (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
+        Loc.GOLD_FULL = string.format("Platino al máximo (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
         Loc.GOLD_REINFORCE_TIP = string.format(
-            "Cuesta %d coins. Tu próxima captura de zona, avanzada o fortaleza (no capitales) termina %d s antes (tiempo mínimo de mantenimiento: %d s).",
+            "Cuesta %d de platino. Tu próxima captura de zona, avanzada o fortaleza (no capitales) termina %d s antes (tiempo mínimo de mantenimiento: %d s).",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
-        Loc.GOLD_REINFORCE_SPENT = string.format("%d coins gastados. Tu próxima captura será %d s más corta.",
+        Loc.GOLD_REINFORCE_SPENT = string.format("Platino gastado: %d. Tu próxima captura será %d s más corta.",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)
         Loc.GOLD_REINFORCE_ACTIVE = string.format("Ataque listo: tu próxima captura será %d s más corta.", R.REINFORCE_REDUCTION)
         Loc.GOLD_REINFORCE_USED = string.format("Ataque usado: tiempo de captura reducido %d s.", R.REINFORCE_REDUCTION)
         Loc.GOLD_BARRICADE_TIP = string.format(
-            "Cuesta %d coins. La próxima vez que un enemigo inicie una captura en una de tus zonas de frente, deberá mantener %d s más.",
+            "Cuesta %d de platino. La próxima vez que un enemigo inicie una captura en una de tus zonas de frente, deberá mantener %d s más.",
             R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
-        Loc.GOLD_BARRICADE_SPENT = string.format("%d coins gastados. La próxima captura enemiga en tus zonas durará %d s más.",
+        Loc.GOLD_BARRICADE_SPENT = string.format("Platino gastado: %d. La próxima captura enemiga en tus zonas durará %d s más.",
             R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_ACTIVE = string.format("Refuerzo listo: la próxima captura enemiga en tus zonas durará %d s más.", R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_USED = string.format("Refuerzo activado: el enemigo debe mantener %d s más.", R.BARRICADE_INCREASE)
     elseif Overlord.IsGermanLocale() then
-        Loc.GOLD_FULL = string.format("Coin-Maximum erreicht (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
+        Loc.GOLD_FULL = string.format("Platin-Maximum erreicht (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
         Loc.GOLD_REINFORCE_TIP = string.format(
-            "Kostet %d Coins. Eure nächste Zonen-, Außenposten- oder Gildenfestungs-Eroberung (keine Hauptstädte) endet %d s früher (Mindesthaltezeit: %d s).",
+            "Kostet %d Platin. Eure nächste Zonen-, Außenposten- oder Gildenfestungs-Eroberung (keine Hauptstädte) endet %d s früher (Mindesthaltezeit: %d s).",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
-        Loc.GOLD_REINFORCE_SPENT = string.format("%d Coins ausgegeben. Nächste Eroberung dauert %d s kürzer.",
+        Loc.GOLD_REINFORCE_SPENT = string.format("%d Platin ausgegeben. Nächste Eroberung dauert %d s kürzer.",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)
         Loc.GOLD_REINFORCE_ACTIVE = string.format("Angriff bereit: Eure nächste Eroberung dauert %d s kürzer.", R.REINFORCE_REDUCTION)
         Loc.GOLD_REINFORCE_USED = string.format("Angriff eingesetzt: Eroberungszeit um %d s verkürzt.", R.REINFORCE_REDUCTION)
         Loc.GOLD_BARRICADE_TIP = string.format(
-            "Kostet %d Coins. Beim nächsten feindlichen Eroberungsstart auf einer Eurer Frontzonen muss der Feind %d s länger halten.",
+            "Kostet %d Platin. Beim nächsten feindlichen Eroberungsstart auf einer Eurer Frontzonen muss der Feind %d s länger halten.",
             R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
-        Loc.GOLD_BARRICADE_SPENT = string.format("%d Coins ausgegeben. Nächste feindliche Eroberung auf Euren Zonen dauert %d s länger.",
+        Loc.GOLD_BARRICADE_SPENT = string.format("%d Platin ausgegeben. Nächste feindliche Eroberung auf Euren Zonen dauert %d s länger.",
             R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_ACTIVE = string.format("Verstärkung bereit: Nächste feindliche Eroberung auf Euren Zonen dauert %d s länger.", R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_USED = string.format("Verstärkung ausgelöst: Der Feind muss %d s länger halten.", R.BARRICADE_INCREASE)
     elseif Overlord.IsRussianLocale() then
-        Loc.GOLD_FULL = string.format("Достигнут максимум coins (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
+        Loc.GOLD_FULL = string.format("Достигнут максимум платины (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
         Loc.GOLD_REINFORCE_TIP = string.format(
-            "Стоимость: %d coins. Ваш следующий захват зоны, аванпоста или гильдейской крепости (кроме столиц) завершится на %d сек раньше (минимальное время удержания: %d сек).",
+            "Стоимость: %d платины. Ваш следующий захват зоны, аванпоста или гильдейской крепости (кроме столиц) завершится на %d сек раньше (минимальное время удержания: %d сек).",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
-        Loc.GOLD_REINFORCE_SPENT = string.format("Потрачено %d coins. Следующий захват займет на %d сек меньше времени.",
+        Loc.GOLD_REINFORCE_SPENT = string.format("Потрачено %d платины. Следующий захват займет на %d сек меньше времени.",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)
         Loc.GOLD_REINFORCE_ACTIVE = string.format("Атака готова: ваш следующий захват займет на %d сек меньше времени.", R.REINFORCE_REDUCTION)
         Loc.GOLD_REINFORCE_USED = string.format("Атака использована: время захвата сокращено на %d сек.", R.REINFORCE_REDUCTION)
         Loc.GOLD_BARRICADE_TIP = string.format(
-            "Стоимость: %d coins. При следующем начале вражеского захвата на одной из ваших фронтовых зон противнику придется удерживать её на %d сек дольше.",
+            "Стоимость: %d платины. При следующем начале вражеского захвата на одной из ваших фронтовых зон противнику придется удерживать её на %d сек дольше.",
             R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
-        Loc.GOLD_BARRICADE_SPENT = string.format("Потрачено %d coins. Следующий вражеский захват на ваших зонах займет на %d сек больше времени.",
+        Loc.GOLD_BARRICADE_SPENT = string.format("Потрачено %d платины. Следующий вражеский захват на ваших зонах займет на %d сек больше времени.",
             R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_ACTIVE = string.format("Усиление готово: следующий вражеский захват на ваших зонах займет на %d сек больше времени.", R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_USED = string.format("Усиление сработало: противник должен удерживать зону на %d сек дольше.", R.BARRICADE_INCREASE)
     elseif Overlord.IsPortugueseLocale() then
-        Loc.GOLD_FULL = string.format("Limite de coins atingido (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
+        Loc.GOLD_FULL = string.format("Limite de platina atingido (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
         Loc.GOLD_REINFORCE_TIP = string.format(
-            "Custa %d coins. Sua próxima captura de ponto, posto ou forte (exceto capitais) termina %d segundos antes (tempo mínimo: %d s).",
+            "Custa %d de platina. Sua próxima captura de ponto, posto ou forte (exceto capitais) termina %d segundos antes (tempo mínimo: %d s).",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
-        Loc.GOLD_REINFORCE_SPENT = string.format("%d coins gastos. Sua próxima captura será %d s mais curta.",
+        Loc.GOLD_REINFORCE_SPENT = string.format("Platina gasta: %d. Sua próxima captura será %d s mais curta.",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)
         Loc.GOLD_REINFORCE_ACTIVE = string.format("Ataque pronto: próxima captura %d s mais curta.", R.REINFORCE_REDUCTION)
         Loc.GOLD_REINFORCE_USED = string.format("Ataque usado: captura reduzida em %d s.", R.REINFORCE_REDUCTION)
         Loc.GOLD_BARRICADE_TIP = string.format(
-            "Custa %d coins. A próxima captura inimiga de um dos seus pontos exige mais %d segundos.",
+            "Custa %d de platina. A próxima captura inimiga de um dos seus pontos exige mais %d segundos.",
             R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
-        Loc.GOLD_BARRICADE_SPENT = string.format("%d coins gastos. Próxima captura inimiga demora mais %d s.",
+        Loc.GOLD_BARRICADE_SPENT = string.format("Platina gasta: %d. Próxima captura inimiga demora mais %d s.",
             R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_ACTIVE = string.format("Reforço pronto: próxima captura inimiga demora mais %d s.", R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_USED = string.format("Reforço ativado: o inimigo precisa segurar por mais %d s.", R.BARRICADE_INCREASE)
     elseif Overlord.IsChineseLocale() then
-        Loc.GOLD_FULL = string.format("Coin 已达上限（%d/%d）。", R.GOLD_MAX, R.GOLD_MAX)
+        Loc.GOLD_FULL = string.format("白金已达上限（%d/%d）。", R.GOLD_MAX, R.GOLD_MAX)
         Loc.GOLD_REINFORCE_TIP = string.format(
-            "花费 %d coin。下次占领据点、前哨或公会要塞（首都除外）时缩短 %d 秒（最短需 %d 秒）。",
+            "花费 %d 点白金。下次占领据点、前哨或公会要塞（首都除外）时缩短 %d 秒（最短需 %d 秒）。",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
-        Loc.GOLD_REINFORCE_SPENT = string.format("已花费 %d coin。下次占领缩短 %d 秒。",
+        Loc.GOLD_REINFORCE_SPENT = string.format("已花费 %d 点白金。下次占领缩短 %d 秒。",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)
         Loc.GOLD_REINFORCE_ACTIVE = string.format("进攻准备就绪：下次占领缩短 %d 秒。", R.REINFORCE_REDUCTION)
         Loc.GOLD_REINFORCE_USED = string.format("进攻已生效：占领时间缩短 %d 秒。", R.REINFORCE_REDUCTION)
         Loc.GOLD_BARRICADE_TIP = string.format(
-            "花费 %d coin。敌人下次占领你的一个战线据点时，需额外守住 %d 秒。",
+            "花费 %d 点白金。敌人下次占领你的一个战线据点时，需额外守住 %d 秒。",
             R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
-        Loc.GOLD_BARRICADE_SPENT = string.format("已花费 %d coin。敌人下次占领需额外 %d 秒。",
+        Loc.GOLD_BARRICADE_SPENT = string.format("已花费 %d 点白金。敌人下次占领需额外 %d 秒。",
             R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_ACTIVE = string.format("增援准备就绪：敌人下次占领需额外 %d 秒。", R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_USED = string.format("增援已生效：敌人需额外守住 %d 秒。", R.BARRICADE_INCREASE)
     else
-        Loc.GOLD_FULL = string.format("Coin cap reached (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
+        Loc.GOLD_FULL = string.format("Platinum cap reached (%d/%d).", R.GOLD_MAX, R.GOLD_MAX)
         Loc.GOLD_REINFORCE_TIP = string.format(
-            "Costs %d coins. Your next zone, outpost, or Guild Keep capture (not capitals) finishes %d seconds sooner (minimum hold time %d s).",
+            "Costs %d platinum. Your next zone, outpost, or Guild Keep capture (not capitals) finishes %d seconds sooner (minimum hold time %d s).",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION, R.REINFORCE_MIN_HOLD)
-        Loc.GOLD_REINFORCE_SPENT = string.format("%d coins spent. Next capture will be %d s shorter.",
+        Loc.GOLD_REINFORCE_SPENT = string.format("%d platinum spent. Next capture will be %d s shorter.",
             R.GOLD_SPEND_COST, R.REINFORCE_REDUCTION)
         Loc.GOLD_REINFORCE_ACTIVE = string.format("Attack ready: your next capture will be %d s shorter.", R.REINFORCE_REDUCTION)
         Loc.GOLD_REINFORCE_USED = string.format("Attack used: capture time reduced by %d s.", R.REINFORCE_REDUCTION)
         Loc.GOLD_BARRICADE_TIP = string.format(
-            "Costs %d coins. The next time an enemy starts capturing one of your front zones, they must hold %d seconds longer.",
+            "Costs %d platinum. The next time an enemy starts capturing one of your front zones, they must hold %d seconds longer.",
             R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
-        Loc.GOLD_BARRICADE_SPENT = string.format("%d coins spent. Next enemy capture on your zones will take %d s longer.",
+        Loc.GOLD_BARRICADE_SPENT = string.format("%d platinum spent. Next enemy capture on your zones will take %d s longer.",
             R.GOLD_SPEND_COST, R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_ACTIVE = string.format("Reinforce ready: the next enemy capture on your zones will take %d s longer.", R.BARRICADE_INCREASE)
         Loc.GOLD_BARRICADE_USED = string.format("Reinforce triggered: enemy must hold %d s longer.", R.BARRICADE_INCREASE)

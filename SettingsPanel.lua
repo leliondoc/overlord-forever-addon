@@ -536,7 +536,7 @@ local ROWS = {
         fallback = "Allied guild rampages", tooltip = "GUILD_KILL_ALLY_ENABLED_TOOLTIP",
         default = true, get = getGuildKillAllyAlert, set = setGuildKillAllyAlert },
     { kind = "checkbox", var = SP.MostWantedAlertsVariableName, label = "MW_ALERTS_LABEL",
-        fallback = "Most Wanted alerts", tooltip = "MW_ALERTS_TOOLTIP",
+        fallback = "Nemesis alerts", tooltip = "MW_ALERTS_TOOLTIP",
         default = true, get = getMostWantedAlerts, set = setMostWantedAlerts },
     { kind = "checkbox", var = "Overlord_KillChatLine", label = "KILL_CHAT_LABEL",
         fallback = "Chat line on each honorable kill", tooltip = "KILL_CHAT_TOOLTIP",

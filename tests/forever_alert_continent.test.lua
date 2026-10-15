@@ -93,6 +93,8 @@ L.OUTPOST_CAPTURE_ALERT_FRIENDLY = "CAPTURED %s %s"
 L.OUTPOST_CAPTURE_ALERT_ENEMY = "CAPTURED %s %s (%s)"
 local printed = {}
 Overlord.PrintNotification = function(_, text) printed[#printed + 1] = text end
+local raidWarnings = {}
+Overlord.PrintRaidWarning = function(_, text, silent) raidWarnings[#raidWarnings + 1] = { text = text, silent = silent } end
 local function take(word)
     local n = 0
     for _, text in ipairs(printed) do
@@ -207,8 +209,12 @@ assert(defenderLast.stonetalon == nil and defenderEmitted.stonetalon == nil
     and not hasKey(defenderWaves, "stonetalon:"), "A hidden defender alert left dedup state")
 defenderAlert("stonetalon", held(guild), assault("NoMercy"))
 assert(take("DEFEND") == 1, "Our own guild's outpost in Kalimdor stayed silent")
+-- 2.0.4: our guild's site also shows the red line mid-screen, without the raid sound.
+assert(#raidWarnings == 1 and raidWarnings[1].silent == true and raidWarnings[1].text:find("DEFEND", 1, true),
+    "Our own guild's outpost under attack showed no silent red line mid-screen")
 defenderAlert("silverpine", held("Ally Guild"), assault("NoMercy"))
 assert(take("ALLIED") == 1, "An allied outpost on the player's continent stayed silent")
+assert(#raidWarnings == 1, "An allied guild's outpost showed the red line meant for our own guild's sites")
 
 -- Assault alert: unrelated guilds hidden, our own guild assaulting always shown.
 assaultAlert("ashenvale", { status = "neutral" }, assault("NoMercy", "Horde", "Ally Guild"))
@@ -222,16 +228,17 @@ assaultAlert("ashenvale", { status = "neutral" }, assault("NoMercy", "Horde", "A
 assert(take("ASSAULT") == 1, "The assault stayed silent once the player reached Kalimdor")
 playerMap = EK
 
--- Capture alert: no line, no dedup and no sound from the other continent, unless our
--- guild takes or loses the site.
+-- Capture alert: no line and no dedup from the other continent, unless our guild takes
+-- or loses the site. Never a sound (2.0.4: every capture rang a raid warning).
 sounds, addonSounds = 0, 0
 sync:PrintOutpostCaptureAlert("durotar", "NoMercy", "Horde", now - 5)
 assert(take() == 0 and sounds == 0, "A capture in Kalimdor reached a player in the Eastern Kingdoms")
 assert(not hasKey(captureDedup, "durotar:"), "A hidden capture alert left dedup state")
 sync:PrintOutpostCaptureAlert("durotar", "NoMercy", "Horde", now - 5, "observer guild")
-assert(take("CAPTURED") == 1 and sounds == 1, "Losing our own guild's outpost in Kalimdor stayed silent")
+assert(take("CAPTURED") == 1, "Losing our own guild's outpost in Kalimdor stayed silent")
 sync:PrintOutpostCaptureAlert("mulgore", guild, "Alliance", now - 4)
-assert(take("CAPTURED") == 1 and addonSounds == 1, "Our own guild's capture in Kalimdor stayed silent")
+assert(take("CAPTURED") == 1, "Our own guild's capture in Kalimdor stayed silent")
+assert(sounds == 0 and addonSounds == 0, "A keep or outpost capture alert played a sound")
 sync:PrintOutpostCaptureAlert("silverpine", "NoMercy", "Horde", now - 3)
 assert(take("CAPTURED") == 1, "A capture on the player's continent stayed silent")
 

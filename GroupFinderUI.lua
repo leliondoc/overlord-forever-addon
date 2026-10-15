@@ -120,6 +120,8 @@ local function Color(fontString, name, alpha)
 end
 
 local function ClickSound()
+    local cfg = OverlordDB and OverlordDB.config
+    if cfg and cfg.soundEnabled == false then return end
     if PlaySound and SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON then
         PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
     end

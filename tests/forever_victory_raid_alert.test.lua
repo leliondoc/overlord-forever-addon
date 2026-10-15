@@ -1,6 +1,6 @@
 -- 1.3.1: a total victory shows a raid warning, not the old full-screen frame
--- (it got in the way of players still fighting on the front). The victory
--- music plays when the client has it, otherwise the raid warning sound.
+-- (it got in the way of players still fighting on the front). 2.0.4: no music
+-- and no sound any more (the losing faction heard it too).
 local now = 100
 local callbacks = {}
 function GetTime() return now end
@@ -50,20 +50,20 @@ assert(#notices == 1 and notices[1].frame == RaidWarningFrame, 'Total victory di
 assert(notices[1].text == 'TOTAL VICTORY FOR THE HORDE!', 'Unexpected raid warning text: ' .. tostring(notices[1].text))
 assert(notices[1].color.r > notices[1].color.b, 'Horde victory is not shown in Horde red')
 assert(framesCreated == before, 'A victory frame was still created')
-assert(sounds[1] == 175409 and sounds[2] == 8959, 'Missing victory music fell back to no sound')
+assert(#sounds == 0, 'A total victory played music or a sound')
 
 -- The same victory delivered again (TV, SR replay) does not repeat the alert.
 Overlord.UI:ShowVictoryScreen(L.VICTORY_FACTION_HORDE)
 assert(#notices == 1, 'The same victory raised a second alert')
 
--- Later, an Alliance victory: blue, and the victory music alone when available.
+-- Later, an Alliance victory: blue, still silent even when the client has the music.
 now = now + 60
 sounds = {}
 victoryMusicAvailable = true
 Overlord.UI:ShowVictoryScreen(L.VICTORY_FACTION_ALLIANCE)
 assert(#notices == 2 and notices[2].text == 'TOTAL VICTORY FOR THE ALLIANCE!')
 assert(notices[2].color.b > notices[2].color.r, 'Alliance victory is not shown in Alliance blue')
-assert(#sounds == 1 and sounds[1] == 175409, 'The raid warning sound played over the victory music')
+assert(#sounds == 0, 'A total victory played the victory music')
 
 -- Sound option off: the alert stays silent.
 now = now + 60
@@ -71,4 +71,4 @@ sounds = {}
 OverlordDB.config.soundEnabled = false
 Overlord.UI:ShowVictoryScreen(L.VICTORY_FACTION_HORDE)
 assert(#notices == 3 and #sounds == 0, 'Victory alert played a sound with sounds disabled')
-print('Victory raid alert: raid warning in faction color, no frame, one alert per victory, music or raid sound, silent when disabled OK')
+print('Victory raid alert: raid warning in faction color, no frame, one alert per victory, no music or sound OK')

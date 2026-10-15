@@ -607,7 +607,7 @@ function Overlord.Button:OnClick(confirmed)
             Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. string.format(
                 L.FACTION_CALL_COOLDOWN_SHARED, FormatCooldown(remAfter)))
         else
-            Overlord:PrintNotification("|cffff6600[Overlord]|r " .. L.FACTION_CALL_NO_ONLINE)
+            Overlord:PrintNotification("|cFFFF8C33[Overlord]|r " .. L.FACTION_CALL_NO_ONLINE)
         end
         return
     end

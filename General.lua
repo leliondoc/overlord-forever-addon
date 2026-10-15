@@ -136,7 +136,7 @@ end
 
 local function Dbg(msg)
     if OverlordDB and OverlordDB.config and OverlordDB.config.debug then
-        print("|cFFFF8800[Overlord:General]|r " .. tostring(msg))
+        print("|cFF9D9D9D[Overlord:General]|r " .. tostring(msg))
     end
 end
 

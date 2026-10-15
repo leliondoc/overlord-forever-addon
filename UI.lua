@@ -1910,7 +1910,7 @@ function Overlord.UI:CreateZoneLine(parent, zone)
             if z.owner and z.owner ~= pf then
                 Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.ENEMY_CONTROL_MSG, z.name))
             else
-                Overlord:PrintNotification(string.format("|cFF666666[Overlord]|r " .. L.ZONE_IS_LOCKED, z.name))
+                Overlord:PrintNotification(string.format("|cFF9D9D9D[Overlord]|r " .. L.ZONE_IS_LOCKED, z.name))
             end
         elseif z.status == "in_progress" then
             Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r " .. L.ALREADY_IN_PROGRESS, z.name))
@@ -3241,7 +3241,8 @@ end
 
 -- ============ Victoire totale ============
 -- Alerte raid au milieu de l'ecran (1.3.1) : l'ancien cadre plein ecran avec les
--- statistiques genait les joueurs encore en combat sur le front. La musique reste.
+-- statistiques genait les joueurs encore en combat sur le front. Sans musique ni son
+-- depuis la 2.0.4.
 local lastVictoryAlertFaction, lastVictoryAlertAt = nil, 0
 local VICTORY_ALERT_COLORS = {
     Horde = { r = 1.0, g = 0.35, b = 0.20 },
@@ -3265,18 +3266,11 @@ function Overlord.UI:ShowVictoryScreen(factionName)
         shown = pcall(RaidNotice_AddMessage, RaidWarningFrame, text, color)
     end
     if not shown then
-        -- Repli : meme alerte rouge que les autres avertissements Overlord (avec son).
-        if Overlord.PrintRaidWarning then Overlord:PrintRaidWarning(text) end
-        return
+        -- Repli : meme alerte rouge que les autres avertissements Overlord, sans son.
+        if Overlord.PrintRaidWarning then Overlord:PrintRaidWarning(text, true) end
     end
-    local cfg = OverlordDB and OverlordDB.config
-    if cfg == nil or cfg.soundEnabled ~= false then
-        -- Musique de fin de bataille (Retail) ; si le client ne l'a pas, son d'alerte raid.
-        local ok, willPlay = pcall(PlaySound, SOUNDKIT and SOUNDKIT.UI_WARFRONTS_BATTLE_COMPLETE or 175409)
-        if not (ok and willPlay) then
-            pcall(PlaySound, SOUNDKIT and SOUNDKIT.RAID_WARNING or 8959)
-        end
-    end
+    -- 2.0.4 : plus de musique de fin de bataille ni de son d'alerte (la faction perdante
+    -- l'entendait aussi). La ligne rouge suffit.
 end
 
 -- ============ Mode spectateur (panel visible hors front) ============

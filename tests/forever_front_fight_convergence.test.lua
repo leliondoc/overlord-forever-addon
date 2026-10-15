@@ -53,7 +53,7 @@ local function newClient(name)
 end
 
 -- Same brackets as the dock (Popups.lua).
-local BRACKETS = { 500, 300, 200, 150, 100, 75, 50, 40, 30, 20, 10, 5 }
+local BRACKETS = { 2000, 1500, 1000, 750, 500, 300, 200, 150, 100, 75, 50, 40, 30, 20, 10, 5 }
 local function shown(kills)
     for _, floor in ipairs(BRACKETS) do if kills >= floor then return floor .. "+" end end
     return kills > 0 and "1+" or "-"

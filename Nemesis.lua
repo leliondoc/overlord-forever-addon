@@ -1,4 +1,4 @@
--- MostWanted.lua : les cinq meilleurs ennemis de la semaine (Overlord Forever).
+-- Nemesis.lua : les cinq meilleurs ennemis de la semaine, les Némésis (ex Most Wanted) (Overlord Forever).
 -- Calcule localement depuis le cache deja trie du classement : aucun paquet, aucun
 -- tri en plus. Un crane sur leur barre de nom et une alerte dans le chat quand l'un
 -- d'eux apparait, avec des delais pour ne jamais inonder. Coupe en instance.
@@ -14,6 +14,12 @@ MW.ALERT_MEMORY_MAX = 64
 MW.list = MW.list or {}
 MW.byKey = MW.byKey or {}
 MW.alertedAt = MW.alertedAt or {}
+-- 2.0.4: our killing blow on one of the five Nemesis pays 10 platinum, shown like a mine's
+-- gain (Ressources:AddGold). Local only and capped, as all platinum. Once per player per
+-- half hour within a session (a /reload clears it; the 100 cap bounds any farming).
+MW.BOUNTY = 10
+MW.BOUNTY_PER_PLAYER_SEC = 1800
+MW.bountyAt = MW.bountyAt or {}
 
 local function T(key, fallback)
     local L = Overlord.L
@@ -112,7 +118,7 @@ end
 -- Reset hebdo (Overlord:ResetAll) : la liste de la semaine passee disparait tout de
 -- suite ; la prochaine lecture repart du cache de la nouvelle campagne.
 function MW:ResetForCampaign()
-    self.list, self.byKey, self.alertedAt = {}, {}, {}
+    self.list, self.byKey, self.alertedAt, self.bountyAt = {}, {}, {}, {}
     self._refreshedAt, self._ensureAt, self._lastAlertAt = nil, nil, nil
     if self.HideAllSkulls then self:HideAllSkulls() end
 end
@@ -122,6 +128,23 @@ function MW:IsWanted(name)
     if not next(self.byKey) then return nil end
     local key = KeyOf(name)
     return key and self.byKey[key] or nil
+end
+
+-- Our killing blow (Combat:ProcessKill): the bounty if the victim wears the skull.
+-- Returns the platinum really gained (0 at the 100 cap, which also shows nothing; a kill
+-- at the cap does not use up that player's half hour).
+function MW:PayBounty(victimName)
+    if not next(self.byKey) or InInstance() then return 0 end
+    local entry = self:IsWanted(victimName)
+    if not entry then return 0 end
+    local now = GetTime()
+    local last = self.bountyAt[entry.key]
+    if last and now - last < self.BOUNTY_PER_PLAYER_SEC then return 0 end
+    local res = Overlord.Ressources
+    if not res or not res.AddGold then return 0 end
+    local gained = tonumber(res:AddGold(self.BOUNTY)) or 0
+    if gained > 0 then self.bountyAt[entry.key] = now end
+    return gained
 end
 
 local function ShortName(name)
@@ -217,10 +240,10 @@ function MW:OnNameplateAdded(unit)
     self.alertedAt[key] = now
     local factionName = Overlord.Zones and Overlord.Zones.GetEnemyFactionName
         and Overlord.Zones:GetEnemyFactionName() or EnemyFaction() or "?"
-    local text = string.format(T("MW_ALERT", "Most Wanted nearby: %s (#%d %s, %d HK this week)!"),
+    local text = string.format(T("MW_ALERT", "Nemesis nearby: %s (#%d %s, %d HK this week)!"),
         ShortName(entry.name), entry.rank, factionName, entry.kills)
     if Overlord.PrintNotification then
-        Overlord:PrintNotification("|cFFFF4040[Overlord]|r " .. MW.SkullMarkup(14) .. " " .. text)
+        Overlord:PrintNotification("|cFFFF4444[Overlord]|r " .. MW.SkullMarkup(14) .. " " .. text)
     end
 end
 
@@ -246,20 +269,6 @@ function MW:OnInstanceResume()
     end
     EnsureTicker()
     self:Refresh(true)
-end
-
-function MW:HandleCommand(args)
-    local word = args and args[2] and args[2]:lower() or ""
-    if word == "on" then self:SetAlertsEnabled(true)
-    elseif word == "off" then self:SetAlertsEnabled(false) end
-    self:RefreshPlates()
-    if Overlord.SettingsPanel and Overlord.SettingsPanel.RefreshControls then
-        Overlord.SettingsPanel:RefreshControls()
-    end
-    if Overlord.PrintNotification then
-        Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. (self:AlertsEnabled()
-            and T("MW_STATE_ON", "Most Wanted alerts: on") or T("MW_STATE_OFF", "Most Wanted alerts: off")))
-    end
 end
 
 if CreateFrame then

@@ -170,9 +170,16 @@ local function BuildLeft(self)
     endRing:SetPoint("CENTER", endDisc, "CENTER")
     self.endIcon = endIcon
     bar:EnableMouse(true)
-    bar:SetScript("OnEnter", function(owner)
-        GameTooltip:SetOwner(owner, "ANCHOR_TOP")
+    -- The Glory bar's explanation; the "i" at the top right shows it too, first saying
+    -- that the rank is kept on this computer only (2.0.4).
+    local function GloryTooltip(owner, anchor, localNote)
+        GameTooltip:SetOwner(owner, anchor)
         GameTooltip:SetText(T("RANK_GLORY", "Glory"), 1, 0.82, 0)
+        if localNote then
+            GameTooltip:AddLine(T("RANK_TIP_LOCAL",
+                "Your Overlord rank is saved on this computer only: other players do not see it."), 1, 0.82, 0, true)
+            GameTooltip:AddLine(" ")
+        end
         local ranks = Overlord.Ranks
         GameTooltip:AddLine(string.format(T("RANK_TIP_GLORY", "%d per honorable kill, %d per capture."),
             ranks.GLORY_PER_KILL, ranks.GLORY_PER_CAPTURE), 1, 1, 1, true)
@@ -218,8 +225,26 @@ local function BuildLeft(self)
                 1, 0.6, 0.2, true)
         end
         GameTooltip:Show()
-    end)
+    end
+    bar:SetScript("OnEnter", function(owner) GloryTooltip(owner, "ANCHOR_TOP") end)
     bar:SetScript("OnLeave", GameTooltip_Hide)
+
+    -- "i" under Blizzard's pane toggle (28 px at TOPRIGHT -6,-6 of the left pane).
+    local info = CreateFrame("Button", nil, left)
+    info:SetSize(22, 22)
+    info:SetPoint("TOPRIGHT", left, "TOPRIGHT", -9, -38)
+    info:SetFrameLevel(left:GetFrameLevel() + 5)
+    local infoIcon = info:CreateTexture(nil, "ARTWORK")
+    infoIcon:SetAllPoints()
+    -- Blizzard's golden "i" (the addon's gold, never the blue glue icon).
+    infoIcon:SetTexture("Interface\\COMMON\\help-i")
+    local infoHighlight = info:CreateTexture(nil, "HIGHLIGHT")
+    infoHighlight:SetAllPoints()
+    infoHighlight:SetTexture("Interface\\Buttons\\UI-Common-MouseHilight")
+    infoHighlight:SetBlendMode("ADD")
+    info:SetScript("OnEnter", function(owner) GloryTooltip(owner, "ANCHOR_LEFT", true) end)
+    info:SetScript("OnLeave", GameTooltip_Hide)
+    self.info = info
 
     local nextText = Text(left, "OVERLAY", "GameFontHighlightSmall")
     nextText:SetPoint("CENTER", left, "TOP", 0, K.NEXT_Y)
@@ -928,7 +953,7 @@ function Toast:Pump()
     self.flash:Play()
     local config = OverlordDB and OverlordDB.config
     if PlaySoundFile and not (config and config.soundEnabled == false) then
-        PlaySoundFile(TOAST.SOUND, "Master")
+        PlaySoundFile(TOAST.SOUND, "SFX")
     end
 end
 

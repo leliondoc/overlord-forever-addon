@@ -361,7 +361,7 @@ assert(dispatched and dispatched[1] == channelPayload
 -- 1.7.1: allied guild rampages. The guild's own faction sees it too, in green, with
 -- its own option (on by default), once per guild per 30 min; nothing more is sent.
 do
-    local GREEN = "|cFF33FF66"
+    local GREEN = "|cFF00FF00"
     local function greens() local n = 0; for _, t in ipairs(printed) do if t:find(GREEN, 1, true) then n = n + 1 end end; return n end
     OverlordDB.config.guildKillAllyAlertEnabled = nil
     assert(GKA:IsAllyEnabled(), "allied rampages are not on by default")

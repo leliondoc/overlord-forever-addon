@@ -21,6 +21,10 @@ end
 local format = loadPopups({})
 assert(format(false, 30, 50, 3) == "...", "inactive row")
 assert(format(true, 30, 23, 4) == "20+ HK")
+-- 2.0.4: very large fights told apart above 500+.
+assert(format(true, 30, 600, 0) == "500+ HK" and format(true, 30, 750, 0) == "750+ HK")
+assert(format(true, 30, 1499, 0) == "1000+ HK" and format(true, 30, 1999, 0) == "1500+ HK")
+assert(format(true, 30, 5000, 0) == "2000+ HK", "the top bracket is not 2000+")
 assert(format(true, 200, 3, 12) == "1+ HK", "kills must come before captures")
 assert(format(true, 200, 1, 0) == "1+ HK", "a single kill is 1+ HK")
 assert(format(true, 200, 0, 1) == "1+ capture")
