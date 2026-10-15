@@ -1,14 +1,15 @@
-2.0.2
+2.0.3
 
-**Overlord Forever 2.0.2**
+**Overlord Forever 2.0.3**
 
-- **Update required before Tuesday 27 October, 08:00 UTC** (weekly reset): from that moment, players still on 2.0.1 or older no longer exchange the world map, nor keep and outpost history, with updated players. Until then both versions work side by side.
-- **Truce retired from the 27 October reset**: a front victory no longer opens a 15-minute truce. The fallen capital stays conquered until its faction retakes it, the losing side may take points back at once, and a new victory on the same front still only counts 6 hours after the previous one. The tutorial changes on that day.
-- **A much lighter network**: an answer meant for one player now goes to that player only, instead of being passed on by everyone who overheard it; truce-end announcements are gone; map requests list the keeps and outposts you already hold, so answers skip them; map differences that no answer can repair are asked less and less often. At peak hours the relay loses far fewer messages than before.
-- **Victories learnt late**: a player who learns a victory from a friend of the other faction (back from a battleground, after a reload) tells his faction once.
-- **Top HUD removed**: the floating coins panel, the keep block, the /ov hud command and its option are gone. Coins, Attack and Reinforce stay in the Next Objective card, and the floating Next Objective window stays.
-- **Most Wanted**: the skull is back instead of the crown, on nameplates, in the chat alert, in the ranking and in the tutorial.
-- **Generals**: an allied general taking command is now a chat line only, with no message in the middle of the screen. An enemy general is still shown there, without the sound.
-- **Network status**: /ov network is now a summary with the map between the two factions; the relay details, the ranking catch-up and the incoming packets moved to the new /ov relay. Rows a player offers again are no longer counted as lost, and messages with nobody to pass them to are counted apart.
-- **Controller**: the Overlord marks of the world map no longer get in the way of controller navigation, and the Overlord Rank tab is not created with the controller interface.
+- **Update required**: Hillsbrad Foothills now has ten points, so players on 2.0.2 or older no longer exchange the world map with updated players, nor receive keep and outpost history from them (captures made live on the other fronts still show on both sides).
+- **Hillsbrad Foothills becomes a full front**: two routes of four points between Southshore and Tarren Mill, around Darrow Hill. West: Western Strand, Hillsbrad Fields, Lordamere Camp and Hillsbrad Bridge. East: Nethander Stead, Dun Garok, Thoradin's Gate and Durnholde Keep. Southshore's capital now stands on the road north of the town; Tarren Mill's capital moved about 80 m south-east (57.0, 29.0), so its circle no longer reaches the Alterac slope; both capitals use the usual capital circle. Lordamere Camp sits on the Hillsbrad side of the internment camp's edge (the camp itself is in Alterac Mountains, where captures do not count). The tutorial is updated.
+- **The truce ends a week earlier**: from the weekly reset of Tuesday 20 October (08:00 UTC), a victory no longer opens a 15-minute truce, instead of 27 October.
+- **New outpost: Lordaeron Watch**, at Southpoint Tower in western Hillsbrad. Every front now has its outpost.
+- **New look for the circles**: capture points and gold mines on the world map and the minimap are now drawn like the game's quest objective areas, with a light rim fading inward instead of a solid ring.
+- **Points to attack in yellow**: every point your faction can take right now, on any front, is shown in yellow on the world map, the minimap and the Control Zones list, with crossed swords on the map and in the list (capitals keep their hall).
+- **Gold mines**: their circles turn to stone with a gold rim; on the compact map their reserve (for example 100 / 100) runs along the circle in dark brown and their icon sits in the middle.
+- **PvP Groups**: the wait between two groups is now 2 minutes instead of 5, and it only starts once you are actually in the group (a declined or lost invitation no longer makes you wait).
+- **Generals**: a general's fall no longer plays the raid warning sound; it is still shown in the middle of the screen on the front's map.
+- **A lighter network**: a map request answered by a neighbour who already holds your very map no longer sends the whole map back, and an end-of-capture request no longer goes out twice on your group or channel.
 - **Reliability**: network and sync hardening.

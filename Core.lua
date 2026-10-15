@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.0.2"
+Overlord.Version = "2.0.3"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -1450,10 +1450,6 @@ local ADDON_SOUNDS = {
     lb_close = {
         SOUNDKIT and SOUNDKIT.IG_MAINMENU_CLOSE,
         851,
-    },
-    general_fallen = {
-        SOUNDKIT and SOUNDKIT.RAID_WARNING,
-        8959,
     },
 }
 

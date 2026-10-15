@@ -774,7 +774,8 @@ local function CommandHandler(msg)
         end
 
         if not Overlord.Zones:IsZoneAvailable(zone.id) then
-            Overlord:PrintNotification(string.format("|cFFFF0000[Overlord]|r " .. L.CAPTURE_BLOCKED_RULES, zone.name))
+            local rules = Overlord.Zones:IsTruceRetired() and L.CAPTURE_BLOCKED_RULES_NOTRUCE or L.CAPTURE_BLOCKED_RULES
+            Overlord:PrintNotification(string.format("|cFFFF0000[Overlord]|r " .. rules, zone.name))
             return
         end
 

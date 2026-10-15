@@ -302,23 +302,27 @@ local ZONES_TRUCE_CONTENT_TOP = -38
 
 -- Icone principale de ligne (gauche) : banniere Warfronts ou MainHall (capitales).
 -- Taille fixe : celle de la ligne, pas celle de l'atlas.
-local function SetZoneLineWarfrontIcon(tex, zone)
+-- 2.0.3: a point the player's faction can attack now takes the yellow barracks (Zones
+-- OBJECTIVE_ATTACK_ATLAS, its second layer in glow).
+local function SetZoneLineWarfrontIcon(tex, zone, attackable, glow)
     if not tex then return end
     local Z = Overlord.Zones
-    local atlas = Z and Z.GetZoneMapIconAtlas and Z:GetZoneMapIconAtlas(zone, false)
+    local atlas = Z and Z.GetZoneMapIconAtlas and Z:GetZoneMapIconAtlas(zone, false, attackable)
         or (Z and Z.OBJECTIVE_NEUTRAL_ATLAS) or "Warfronts-FieldMapIcons-Empty-Banner"
     if tex._zoneLineAtlas == atlas then return end
     tex._zoneLineAtlas = atlas
-    tex:SetTexCoord(0, 1, 0, 1)
-    tex:SetVertexColor(1, 1, 1, 1)
-    if tex.SetAtlas then
+    if Z and Z.ApplyZoneMapIcon then
+        Z:ApplyZoneMapIcon(tex, atlas, glow)
+    elseif tex.SetAtlas then
+        tex:SetTexCoord(0, 1, 0, 1)
+        tex:SetVertexColor(1, 1, 1, 1)
         pcall(tex.SetAtlas, tex, atlas, false)
     end
     tex:SetSize(ZONE_LINE_ICON, ZONE_LINE_ICON)
 end
 
 -- Cle stable pour eviter un repaint complet de la ligne a chaque sync (timers via UpdateZoneListTimers).
-local function BuildZoneLinePaintKey(z, frontOnTruce, loginPending, pf, ef)
+local function BuildZoneLinePaintKey(z, frontOnTruce, loginPending, pf, ef, attackable)
     if loginPending then
         return "login|" .. z.id
     end
@@ -332,13 +336,13 @@ local function BuildZoneLinePaintKey(z, frontOnTruce, loginPending, pf, ef)
     if z.owner == pf then
         return z.id .. "|own|" .. pf
     end
-    if isEnemy and z.status == "available" then
+    if attackable and isEnemy then
         return z.id .. "|eatk"
     end
     if isEnemy then
         return z.id .. "|enemy|" .. ef
     end
-    if not z.owner and z.status == "available" then
+    if attackable and not z.owner then
         return z.id .. "|navail"
     end
     if not z.owner then
@@ -351,7 +355,7 @@ local function BuildZoneLinePaintKey(z, frontOnTruce, loginPending, pf, ef)
 end
 
 -- Peinture d'une ligne de zone (partagee RefreshZoneList / survol).
-local function PaintZoneLineVisual(line, z, frontOnTruce, loginPending, pf, ef, isEnemy)
+local function PaintZoneLineVisual(line, z, frontOnTruce, loginPending, pf, ef, isEnemy, attackable)
     if loginPending then
         line.icon:SetDesaturated(true)
         line.icon:SetAlpha(0.65)
@@ -386,12 +390,15 @@ local function PaintZoneLineVisual(line, z, frontOnTruce, loginPending, pf, ef, 
         line.name:SetTextColor(C.blueBright[1], C.blueBright[2], C.blueBright[3])
         line.progress:SetText(pf)
         line.progress:SetTextColor(C.blue[1], C.blue[2], C.blue[3], 0.7)
-    elseif isEnemy and z.status == "available" then
+    elseif attackable then
+        -- 2.0.3: attackable, enemy or neutral: yellow barracks (a capital keeps its hall).
+        local Z = Overlord.Zones
+        local tint = line.icon._zoneLineAtlas == Z.OBJECTIVE_ATTACK_ATLAS and Z.ATTACK_COLOR or nil
         line.icon:SetDesaturated(false)
         line.icon:SetAlpha(1.0)
-        line.icon:SetVertexColor(1, 0.5, 0.5)
+        line.icon:SetVertexColor(tint and tint[1] or 1, tint and tint[2] or 1, tint and tint[3] or 1)
         line.name:SetTextColor(C.gold[1], C.gold[2], C.gold[3])
-        line.progress:SetText(L.ATTACK)
+        line.progress:SetText(isEnemy and L.ATTACK or L.MAP_AVAILABLE)
         line.progress:SetTextColor(C.gold[1], C.gold[2], C.gold[3])
     elseif isEnemy then
         line.icon:SetDesaturated(false)
@@ -400,13 +407,6 @@ local function PaintZoneLineVisual(line, z, frontOnTruce, loginPending, pf, ef, 
         line.name:SetTextColor(C.enemy[1], C.enemy[2], C.enemy[3], 0.7)
         line.progress:SetText(ef)
         line.progress:SetTextColor(C.enemy[1], C.enemy[2], C.enemy[3], 0.5)
-    elseif not z.owner and z.status == "available" then
-        line.icon:SetDesaturated(false)
-        line.icon:SetAlpha(1.0)
-        line.icon:SetVertexColor(0.88, 0.90, 0.91)
-        line.name:SetTextColor(0.78, 0.80, 0.76)
-        line.progress:SetText(L.MAP_AVAILABLE)
-        line.progress:SetTextColor(0.62, 0.64, 0.60)
     elseif not z.owner then
         line.icon:SetDesaturated(false)
         line.icon:SetAlpha(0.88)
@@ -414,13 +414,6 @@ local function PaintZoneLineVisual(line, z, frontOnTruce, loginPending, pf, ef, 
         line.name:SetTextColor(0.65, 0.68, 0.70)
         line.progress:SetText(L.ZONE_NEUTRAL)
         line.progress:SetTextColor(0.55, 0.58, 0.62, 0.85)
-    elseif z.status == "available" then
-        line.icon:SetDesaturated(false)
-        line.icon:SetAlpha(1.0)
-        line.icon:SetVertexColor(1, 1, 1)
-        line.name:SetTextColor(C.gold[1], C.gold[2], C.gold[3])
-        line.progress:SetText(L.ATTACK)
-        line.progress:SetTextColor(C.gold[1], C.gold[2], C.gold[3])
     else
         line.icon:SetDesaturated(true)
         line.icon:SetAlpha(0.5)
@@ -432,8 +425,12 @@ local function PaintZoneLineVisual(line, z, frontOnTruce, loginPending, pf, ef, 
 end
 
 local function ApplyZoneLineUnderline(line, z, loginPending)
-    if line._zoneLineHover and z.status == "available" and not loginPending then
-        line.icon:SetVertexColor(1.0, 1.0, 0.85)
+    -- line._attackable: yellow points of another front keep a stale status (2.0.3).
+    if line._zoneLineHover and (z.status == "available" or line._attackable) and not loginPending then
+        -- The yellow barracks keeps its tint (Zones.OBJECTIVE_ATTACK_ATLAS).
+        if line.icon._zoneLineAtlas ~= Overlord.Zones.OBJECTIVE_ATTACK_ATLAS then
+            line.icon:SetVertexColor(1.0, 1.0, 0.85)
+        end
         line.name:SetTextColor(1.0, 0.94, 0.52)
         line.underline:SetColorTexture(C.gold[1], C.gold[2], C.gold[3], 0.35)
     else
@@ -1852,7 +1849,10 @@ function Overlord.UI:CreateZoneLine(parent, zone)
 
     line.icon = line:CreateTexture(nil, "ARTWORK")
     line.icon:SetSize(ZONE_LINE_ICON, ZONE_LINE_ICON)
-    SetZoneLineWarfrontIcon(line.icon, zone)
+    line.iconGlow = line:CreateTexture(nil, "ARTWORK", nil, 1)
+    line.iconGlow:SetAllPoints(line.icon)
+    line.iconGlow:Hide()
+    SetZoneLineWarfrontIcon(line.icon, zone, nil, line.iconGlow)
 
     line.progress = line:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 
@@ -1887,7 +1887,8 @@ function Overlord.UI:CreateZoneLine(parent, zone)
             local playerZone = Overlord.Zones:GetCurrentPlayerZone()
             if playerZone and playerZone.id == z.id then
                 if not Overlord.Zones:IsZoneAvailable(z.id) then
-                    Overlord:PrintNotification(string.format("|cFFFF0000[Overlord]|r " .. L.CAPTURE_BLOCKED_RULES, z.name))
+                    local rules = Overlord.Zones:IsTruceRetired() and L.CAPTURE_BLOCKED_RULES_NOTRUCE or L.CAPTURE_BLOCKED_RULES
+                    Overlord:PrintNotification(string.format("|cFFFF0000[Overlord]|r " .. rules, z.name))
                     return
                 end
                 -- Same start as the 1 s check, with all its guards, and one chat line
@@ -1932,7 +1933,7 @@ function Overlord.UI:CreateZoneLine(parent, zone)
             end
             GameTooltip:Show()
         end
-        if z and z.status == "available" and not self._zoneLineHover then
+        if z and (z.status == "available" or self._attackable) and not self._zoneLineHover then
             self._zoneLineHover = true
             Overlord.UI:RepaintZoneLine(self)
         end
@@ -1942,7 +1943,7 @@ function Overlord.UI:CreateZoneLine(parent, zone)
         GameTooltip:Hide()
         if self._zoneLineHover then
             self._zoneLineHover = false
-            if self.zone.status == "available" then
+            if self.zone.status == "available" or self._attackable then
                 Overlord.UI:RepaintZoneLine(self)
             end
         end
@@ -2939,11 +2940,13 @@ function Overlord.UI:RepaintZoneLine(line)
     local isEnemy = z.owner and z.owner == ef
     local loginPending = Overlord.IsLoginZoneDisplayPending
         and Overlord:IsLoginZoneDisplayPending(z)
-    local paintKey = BuildZoneLinePaintKey(z, frontOnTruce, loginPending, pf, ef)
+    local attackable = not loginPending and Overlord.Zones:IsZoneAttackable(z, frontOnTruce and true or false)
+    line._attackable = attackable
+    local paintKey = BuildZoneLinePaintKey(z, frontOnTruce, loginPending, pf, ef, attackable)
     line._paintKey = paintKey
     line.name:SetText(z.name)
-    SetZoneLineWarfrontIcon(line.icon, z)
-    PaintZoneLineVisual(line, z, frontOnTruce, loginPending, pf, ef, isEnemy)
+    SetZoneLineWarfrontIcon(line.icon, z, attackable, line.iconGlow)
+    PaintZoneLineVisual(line, z, frontOnTruce, loginPending, pf, ef, isEnemy, attackable)
     ApplyZoneLineUnderline(line, z, loginPending)
 end
 
@@ -3009,15 +3012,17 @@ function Overlord.UI:RefreshZoneList()
         local isEnemy = z.owner and z.owner == ef
         local loginPending = Overlord.IsLoginZoneDisplayPending
             and Overlord:IsLoginZoneDisplayPending(z)
-        local paintKey = BuildZoneLinePaintKey(z, frontOnTruce, loginPending, pf, ef)
+        local attackable = not loginPending and Overlord.Zones:IsZoneAttackable(z, frontOnTruce and true or false)
+        line._attackable = attackable
+        local paintKey = BuildZoneLinePaintKey(z, frontOnTruce, loginPending, pf, ef, attackable)
         if line._paintKey ~= paintKey then
             line._paintKey = paintKey
             line.name:SetText(z.name)
-            SetZoneLineWarfrontIcon(line.icon, z)
-            PaintZoneLineVisual(line, z, frontOnTruce, loginPending, pf, ef, isEnemy)
+            SetZoneLineWarfrontIcon(line.icon, z, attackable, line.iconGlow)
+            PaintZoneLineVisual(line, z, frontOnTruce, loginPending, pf, ef, isEnemy, attackable)
         end
         local underlineKey = (line._zoneLineHover and "h" or "")
-            .. tostring(z.status or "") .. (loginPending and "p" or "")
+            .. tostring(z.status or "") .. (loginPending and "p" or "") .. (attackable and "a" or "")
         if line._underlineKey ~= underlineKey then
             line._underlineKey = underlineKey
             ApplyZoneLineUnderline(line, z, loginPending)

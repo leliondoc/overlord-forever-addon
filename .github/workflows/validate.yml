@@ -133,6 +133,12 @@ jobs:
           lua5.1 tests/forever_channel_load.test.lua
           lua5.1 tests/forever_resource_maps.test.lua
           lua5.1 tests/forever_capture_locations.test.lua
+          lua5.1 tests/forever_front_registry.test.lua
+          lua5.1 tests/forever_prereq_mismatch_rounds.test.lua
+          lua5.1 tests/forever_za_page_headroom.test.lua
+          lua5.1 tests/forever_attackable_points.test.lua
+          lua5.1 tests/forever_sr_equal_map_skip.test.lua
+          lua5.1 tests/forever_map_layout_cut.test.lua
           lua5.1 tests/forever_silverpine_outpost.test.lua
           lua5.1 tests/forever_fortress_outpost.test.lua
           lua5.1 tests/forever_fortress_named_maps.test.lua

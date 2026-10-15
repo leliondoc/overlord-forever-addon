@@ -237,7 +237,7 @@ local other = Overlord.PlayerFaction == "Alliance" and "Horde" or "Alliance"
 local realInfo, realFriends = s.GetBetaBNetTargetInfo, friends
 friends = { 21, faction = { [21] = other } }
 s.GetBetaBNetTargetInfo = function(_, id) return friends.faction[id], id == 21 and "Release Tester" or ("Friend " .. id) end
-net:Receive("global|rel-1|" .. time() .. "|*|Release Tester|NH|2.0.1~b~m1~o1~z000000~l9~ld~lr~lp6", "Release Tester", "CHANNEL")
+net:Receive("global|rel-1|" .. time() .. "|*|Release Tester|NH|2.0.1~b~t0~y" .. net.LocalMapLayout() .. "~m1~o1~z000000~l9~ld~lr~lp6", "Release Tester", "CHANNEL")
 assert(net:GetPeerRelease("Release Tester") == "2.0.1", "a neighbour's release was not read from its presence: "
     .. tostring(net:GetPeerRelease("Release Tester")))
 assert(net:GetPeerRelease("Nobody Tester") == nil)

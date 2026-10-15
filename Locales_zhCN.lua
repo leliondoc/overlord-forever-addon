@@ -161,6 +161,8 @@ L.CAPTURE_LAUNCHED = "%s 的占领开始了！"
 L.GO_TO_ZONE = "前往 %s (%.1f, %.1f) 占领！"
 L.ENEMY_CONTROL_MSG = "%s处于敌人控制之下。首先占领先决条件。"
 L.CAPTURE_BLOCKED_RULES = "%s 尚无法被占领（前线休战或先决条件）。"
+-- 2.0.3: from the truce retirement (Zones.TRUCELESS_FROM) there is no truce to name.
+L.CAPTURE_BLOCKED_RULES_NOTRUCE = "%s 尚无法被占领（先决条件）。"
 L.ZONE_IS_LOCKED = "%s 已锁定。"
 L.ALREADY_IN_PROGRESS = "%s 已在进行中..."
 L.ZONE_UNDER_CONTROL = "%s 由 %s 控制。"

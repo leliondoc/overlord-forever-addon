@@ -62,7 +62,7 @@ Les identifiants, prérequis, rayons et scores ne changent pas. Les sauvegardes 
 | `ash_splintertree` | 73.50, 61.00 | Qeeju (15131), 73.38 / 61.02 |
 
 
-1.7.1 : Orneval est redessiné sur 10 objectifs (tracé ouest/sud-ouest ; Night Run, Bloodtooth, Silverwind, Mystral et le lac du Ciel-Déchu retirés) ; le test couvre toujours 59 objectifs.
+1.7.1 : Orneval est redessiné sur 10 objectifs (tracé ouest/sud-ouest ; Night Run, Bloodtooth, Silverwind, Mystral et le lac du Ciel-Déchu retirés) ; le test couvrait alors 59 objectifs, 67 depuis la 2.0.3 (Hautebrande passe de 2 à 10).
 
 ## Extension 1.0.14 : 57 objectifs
 
@@ -74,8 +74,23 @@ Le test couvre désormais les 57 objectifs et les cartes Classic 1429 (Elwynn) e
 
 La validation automatisée confirme que chaque référence sélectionne le bon objectif dans les deux familles d'identifiants. Elle ne certifie pas la navigation en jeu.
 
-## Extension locale : Austrivage / Moulin-de-Tarren
+## Contreforts de Hautebrande (2.0.3 : vrai front)
 
-Le front spécial des Contreforts de Hautebrande utilise la carte Classic 1424 (alias 25), avec seulement deux capitales : Austrivage à 44.9/44.5 et Moulin-de-Tarren à 54.8/26.6 (depuis la 2.0 : les deux points sont en rase campagne, hors des villes). Leur rayon effectif de capture est de 4.5 unités sur la carte (7.5 x 0.60), près du double du rayon habituel de 2.4. Les cercles restent séparés par la campagne centrale.
+Carte Classic 1424 (alias 25). Jusqu'à la 2.0.2, seulement deux capitales en mêlée permanente (rayon 7.5). Depuis la 2.0.3, un front de 10 points comme les autres, placé sur l'image de la carte Classic lue dans le client Forever (tuiles UiMapArtTile, calques de sous-zones WorldMapOverlay et leurs zones de survol). Chaque cercle entier est vérifié sur le terrain du client : toutes les parcelles de sol (ADT, MCNK) qu'il touche, jusqu'à leurs coins, appartiennent aux Contreforts de Hautebrande (un joueur sur le sol d'Alterac quitte le front et perd sa capture) :
 
-Les deux villes elles-mêmes ([aubergiste d'Austrivage à 51/58](https://wowwiki-archive.fandom.com/wiki/Innkeeper_Anderson), [Tarren Mill vers 60/19](https://classictinker.com/locations/tarren-mill/)) ne sont plus des points de capture : le test couvre les centres, les abords, la séparation des deux cercles et le fait que les deux centres-villes restent en dehors. La carte 623 du champ de bataille homonyme est exclue du front de monde ouvert.
+| Objectif | Centre (%) | Repère |
+| --- | --- | --- |
+| `hillsbrad_southshore` (capitale Alliance) | 50.9, 46.0 | sur la route au nord d'Austrivage, hors de la ville, rayon de capitale 5 |
+| `hillsbrad_western_strand` | 39.5, 60.5 | pente herbeuse au-dessus du rivage occidental |
+| `hillsbrad_fields` | 33.0, 40.5 | entre les fermes des Champs de Hautebrande |
+| `hillsbrad_internment_camp` | 29.5, 32.0 | bord du camp d'internement de Lordamere, côté Hautebrande (le camp lui-même est en Alterac, où aucune capture ne compte) |
+| `hillsbrad_bridge` | 60.5, 39.5 | grand-route, bout ouest du pont sous Moulin-de-Tarren |
+| `hillsbrad_nethander` | 65.0, 60.3 | champs de la ferme des Nethander, rive est |
+| `hillsbrad_dun_garok` | 69.5, 70.5 | bout du sentier de Dun Garok, avant sa porte |
+| `hillsbrad_thoradin_gate` | 79.3, 54.8 | route d'Arathi, côté Hautebrande de la porte du mur de Thoradin |
+| `hillsbrad_durnholde` | 75.8, 44.5 | chemin qui monte à la porte du donjon de Fort-de-Durn |
+| `hillsbrad_tarren_mill` (capitale Horde) | 57.0, 29.0 | rase campagne au sud-ouest de Moulin-de-Tarren, rayon de capitale 5 (2.0.3 : décalée vers le sud-est depuis 54.8, 26.6, dont le flanc ouest était en Alterac) |
+
+Deux routes contournent la colline de Darrow, dont la mine de coins reste neutre au milieu : ouest Austrivage -> Rivage occidental -> Champs -> Camp d'internement -> Pont -> Moulin-de-Tarren ; est Austrivage -> Nethander -> Dun Garok -> Porte de Thoradin -> Fort-de-Durn -> Moulin-de-Tarren. La Horde suit les mêmes routes en sens inverse. Austrivage, Fort-de-Durn et Nethander recalés par l'auteur sur la carte (Austrivage sur la route, idée de Lesi). Avant-poste : Vigie de Lordaeron, à la tour de la Pointe du Midi (20.8, 48.6), sur la route des Pins-Argentés, loin des deux routes. Positions non relevées en jeu : à confirmer sur place.
+
+Les deux villes elles-mêmes ([aubergiste d'Austrivage à 51/58](https://wowwiki-archive.fandom.com/wiki/Innkeeper_Anderson), [Tarren Mill vers 60/19](https://classictinker.com/locations/tarren-mill/)) ne sont plus des points de capture : le test couvre les centres, les abords, l'ancien cercle de 2.0 d'Austrivage devenu terrain libre, la mine de Darrow hors du front et le fait que les deux centres-villes restent en dehors. La carte 623 du champ de bataille homonyme est exclue du front de monde ouvert.

@@ -22,8 +22,15 @@ test("Forever fronts: seven Classic map campaigns", () => {
     assert.match(fronts, /Zone\("redridge_lakeshire", \{ center = \{25\.0, 43\.0\}/);
     assert.match(fronts, /Zone\("redridge_stonewatch_falls", \{ center = \{75\.0, 67\.0\}/);
     assert.match(fronts, /id = "hillsbrad"/);
-    assert.match(fronts, /Zone\("hillsbrad_southshore", \{ center = \{44\.9, 44\.5\}, radius = 7.5/);
-    assert.match(fronts, /Zone\("hillsbrad_tarren_mill", \{ center = \{54\.8, 26\.6\}, radius = 7.5/);
+    // 2.0.3: a full front (10 points), capitals at the usual capital radius.
+    assert.match(fronts, /Zone\("hillsbrad_southshore", \{ center = \{50\.9, 46\.0\}, radius = 5,/);
+    assert.match(fronts, /Zone\("hillsbrad_tarren_mill", \{ center = \{57\.0, 29\.0\}, radius = 5,/);
+    for (const id of ["hillsbrad_western_strand", "hillsbrad_fields", "hillsbrad_internment_camp", "hillsbrad_bridge",
+        "hillsbrad_nethander", "hillsbrad_dun_garok", "hillsbrad_thoradin_gate", "hillsbrad_durnholde"]) {
+        assert.ok(fronts.includes(`Zone("${id}"`), `${id} is missing`);
+    }
+    const hillsbradBlock = fronts.slice(fronts.indexOf('hillsbrad = {'), fronts.indexOf('Overlord.Fronts.Order'));
+    assert.doesNotMatch(hillsbradBlock, /radius = 7\.5/);
     assert.doesNotMatch(fronts, /id = "gilneas"/);
     assert.doesNotMatch(fronts, /id = "southern_barrens"/);
 });
@@ -67,7 +74,7 @@ test("TOC Forever 16001 and CurseForge 1701204", () => {
     assert.match(hofUi, /selectedCategory = Overlord\.HallOfFameData:GetDefaultCategory\(\)/);
 });
 
-test("Outposts cover six fronts and three open-world sites", () => {
+test("Outposts cover all seven fronts and three open-world sites", () => {
     assert.match(outpost, /frontId = "arathi"/);
     assert.match(outpost, /center = \{ 31[.]1, 60[.]2 \}/);
     assert.match(outpost, /loch_modan = \{[\s\S]*?center = \{ 40\.3, 39\.4 \}/);
@@ -76,7 +83,7 @@ test("Outposts cover six fronts and three open-world sites", () => {
     assert.match(outpost, /frontId = "ashenvale"/);
     assert.match(outpost, /frontId = "elwynn"/);
     assert.match(outpost, /frontId = "redridge"/);
-    assert.doesNotMatch(outpost, /frontId = "hillsbrad"/);
+    assert.match(outpost, /hillsbrad = \{[\s\S]*?frontId = "hillsbrad"[\s\S]*?center = \{ 20\.8, 48\.6 \}/);
     assert.match(outpost, /aeythyr_lodge = \{[\s\S]*?center = \{ 52\.1, 18\.4 \}/);
     assert.match(outpost, /lesi_bear_cave = \{[\s\S]*?mapIDs = \{ \[62\] = true, \[1439\] = true \}[\s\S]*?center = \{ 43\.4, 45\.8 \}/);
     assert.doesNotMatch(outpost, /coiled_isle/);

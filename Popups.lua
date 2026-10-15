@@ -571,8 +571,7 @@ local function BuildQuickGuidePageBody(page)
         return JoinGuideSections(
             FormatGuideSection(L.GUIDE_SECTION_TRAVEL, travel, "Interface\\Icons\\INV_Misc_Map_01"),
             FormatGuideSection(L.GUIDE_SECTION_RULES, L.GUIDE_RULES_BODY, "Bonus-Icon-PVP"),
-            FormatGuideSection(L.GUIDE_SECTION_PROGRESS, (Overlord.Zones and Overlord.Zones.IsTruceRetired
-                and Overlord.Zones:IsTruceRetired() and L.GUIDE_PROGRESS_BODY_NOTRUCE) or L.GUIDE_PROGRESS_BODY,
+            FormatGuideSection(L.GUIDE_SECTION_PROGRESS, L.GUIDE_PROGRESS_BODY,
                 (Overlord.Zones and Overlord.Zones.OBJECTIVE_NEUTRAL_ATLAS) or "Warfronts-FieldMapIcons-Empty-Banner"),
             FormatGuideSection(L.GUIDE_SECTION_SHARD, L.GUIDE_SHARD_BODY, "Interface\\Icons\\Spell_Arcane_PortalShattrath"),
             FormatGuideSection(L.GUIDE_SECTION_PANEL, L.GUIDE_PANEL_BODY, "Interface\\AddOns\\Overlord\\Textures\\overlord_minimap"),
@@ -1437,7 +1436,7 @@ local function LayoutFeaturedFrontActivityScroll(f, rowCount)
 end
 
 -- The objective dock keeps its normal picture and five-row activity viewport,
--- even on two-point fronts whose main panel is shorter. Grow the dock instead
+-- even when the front's main panel is shorter. Grow the dock instead
 -- of squeezing the title, scrollbar and coins into a single-row card.
 local function AnchorFeaturedFrontActivityBlock(f, contentH, footerVisible)
     local top = f:GetTop()
@@ -1789,7 +1788,7 @@ EnsureFeaturedFrontFrame = function()
     f.frontNameFs:SetMaxLines(1)
     f.frontNameFs:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
 
-    -- Vignette de hauteur constante, y compris sur les fronts a deux points.
+    -- Vignette de hauteur constante, quelle que soit la hauteur du panneau principal.
     f.artFrame = Overlord.UI.CreateWC3SubPanel(f, FEATURED_FRONT_PANEL_WIDTH - 48, FEATURED_FRONT_ART_HEIGHT)
     f.artFrame:SetPoint("TOP", f.frontNameFs, "BOTTOM", 0, -12)
 

@@ -132,8 +132,8 @@ drain()
 expect(not general:IsLocalHolder(), "a group leader became general when the general stepped down, without opting in")
 
 -- 2.0.2: an ally taking command is a chat line only; an enemy taking command is still
--- announced in the middle of the screen, without the raid warning sound. A general's
--- fall is announced there with its sound, as before.
+-- announced in the middle of the screen, without the raid warning sound. 2.0.3: a
+-- general's fall too (no general alert plays the raid warning sound any more).
 do
     local said, warned = {}, {}
     Overlord.L.GENERAL_RECEIVED = "%s commands in %s"
@@ -162,7 +162,7 @@ do
     expect(general:ApplyRemoteDown("Other General", "Alliance", "eu", serverNow - 10, "Enemy Tester", "MAGE", "zone"),
         "fixture: the general death was refused")
     drain()
-    expect(count(warned, "fell to") == 1 and warned[#warned]:find("^loud "),
-        "a general's fall is no longer announced on screen with its sound: " .. tostring(warned[#warned]))
+    expect(count(warned, "fell to") == 1 and warned[#warned]:find("^silent "),
+        "a general's fall must be announced on screen once, without the raid sound: " .. tostring(warned[#warned]))
 end
 print("general_team_lifecycle_runtime: OK")

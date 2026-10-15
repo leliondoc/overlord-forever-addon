@@ -678,6 +678,28 @@ local session = base36(time()) .. base36(math.random(0, 60466175), 5)
 -- that lacks one has the lower sum: it pulls, the other one waits. Both are taken
 -- from the entry our map would serve for the zone (the confirmed base under a siege
 -- or under a final not confirmed yet): a neighbour that holds our map says the same.
+-- Map layout (2.0.3): an order-free hash of every front's point ids. Two clients with
+-- different layouts refuse each other's whole maps (Sync:OnReceiveZoneAll wants the
+-- same zone set), so asking, answering or relaying a map between them only cost
+-- traffic (2.0.2 next to the 10-point Hillsbrad: refused pages both ways, pulls that
+-- could never repair). Own presence says "~y<layout>"; a neighbour whose presence
+-- says another layout, or none, is outside the map exchange (IsOutdatedMapPeer). Live
+-- captures (C, ZS) still cross. Update required, no fallback. (A field, not a local:
+-- this chunk is close to Lua 5.1's 200 locals.)
+function net.LocalMapLayout()
+    if net.mapLayout then return net.mapLayout end
+    local hash, count = 0, 0
+    for _, front in pairs(addon.Fronts and addon.Fronts.Registry or {}) do
+        for _, zone in ipairs(type(front) == "table" and front.zones or {}) do
+            local text, h = tostring(zone.id), 5381
+            for i = 1, #text do h = (h * 33 + text:byte(i)) % 2147483647 end
+            hash, count = (hash + h) % 2147483647, count + 1
+        end
+    end
+    if count == 0 then return "0000" end -- registry not loaded yet: not cached
+    net.mapLayout = base36(hash % 1679616, 4)
+    return net.mapLayout
+end
 local mapStampCache = { at = -1000, value = 0, sum = 0, digest = 0 }
 local function localMapStamp()
     local now = GetTime()
@@ -1240,6 +1262,28 @@ function net:CountDirectPeers()
     directCountCache.at, directCountCache.value, directCountCache.peers = now, count, self.peers
     return count
 end
+-- 2.0.3: does this neighbour's own last presence (150 s at most, by its own clock and by
+-- ours) say it holds the map we would serve? Same content digest and date sum ("~z", see
+-- localMapStamp): the map pages of an answer to it alone would carry nothing it lacks.
+-- Only for a request of the same session as that presence (a relay session is new at
+-- every load: after a /reload the old presence says nothing of the reloaded map).
+net.PEER_MAP_FRESH_SEC = 150
+function net:PeerHoldsOurMap(name, session)
+    if type(session) ~= "string" or session == "" then return false end
+    local key = canonical(name)
+    local row = key and pagedCapabilities[key:lower()]
+    local fresh = self.PEER_MAP_FRESH_SEC
+    -- (row.at: when that very presence was heard; the map fields are only written for it.)
+    if not row or not row.mapDigest or not row.mapSum or row.mapSession ~= session or GetTime() - (row.at or 0) > fresh
+        or serverNow() - (tonumber(row.originAt) or 0) > fresh then return false end
+    -- Our own map as it is now, not as cached up to 5 s ago (a live capture since).
+    mapStampCache.at = -1000
+    local _, sum, digest = localMapStamp()
+    -- An empty stamp of ours (every zone still waiting for a login map) proves nothing.
+    -- (A neighbour in that state shows an empty stamp, which never equals ours.)
+    if (tonumber(digest) or 0) == 0 or (tonumber(sum) or 0) == 0 then return false end
+    return row.mapDigest == digest and row.mapSum == sum
+end
 -- The release a neighbour's own presence states ("2.0.1"), for the report only.
 function net:GetPeerRelease(name)
     local key = canonical(name)
@@ -1279,7 +1323,21 @@ function net:IsOutdatedMapPeer(name)
     local row = key and pagedCapabilities[key:lower()]
     if not row then return net.MapCutActive() end
     if row.version < self.MAP_MIN_PROTOCOL then return true end
-    return row.truceless ~= true and net.MapCutActive()
+    -- "truceless" holds the map layout its presence says (2.0.3), true for a "~t0"
+    -- presence without one, nil for an older one (one field: the row keeps 8 keys).
+    local layout = type(row.truceless) == "string" and row.truceless or nil
+    if layout ~= net.LocalMapLayout() then return true end
+    -- "~y" comes with "~t0": a neighbour saying our layout runs no truce.
+    return false
+end
+-- A neighbour whose own presence says a map layout, and another one than ours. A
+-- presence without one (2.0.2) is not "another" here: the request's stated version
+-- decides for it (Sync:IsOutdatedMapPeer).
+function net:PeerLayoutDiffers(name)
+    local key = canonical(name)
+    local row = key and pagedCapabilities[key:lower()]
+    local layout = row and type(row.truceless) == "string" and row.truceless or nil
+    return layout ~= nil and layout ~= net.LocalMapLayout()
 end
 function net:IsDispatching(sender)
     return self.context ~= nil and same(self.context.origin, sender)
@@ -1441,7 +1499,7 @@ function net:GetBridgeDiagnostics()
                     or capability and capability < self.MAP_MIN_PROTOCOL
                         and "before 1.7.0: no map, no ranking (update required)"
                     or self:IsOutdatedMapPeer(character)
-                        and "before 2.0.2: still runs the truce, no map (update required)"
+                        and "outdated release or map layout: no map exchange (update required)"
                     or capability and capability < (sync.PAGED_ASK_PROTOCOL or 8)
                         and "live bridge; before 1.8.0: no ranking catch-up"
                     or capability and capability < (sync.PAGED_PROTOCOL or 9)
@@ -1457,8 +1515,12 @@ function net:GetBridgeDiagnostics()
     lines[#lines + 1] = string.format("Map pulls on a neighbour's presence skipped (same map, or its turn to pull): %d;"
         .. " sent for a different map: %d; for a keep or outpost capture: %d.",
         self.stats.mapPullsNoNews or 0, self.stats.mapPullsForDiff or 0, self.stats.mapPullsForSites or 0)
+    if (self.stats.mapPagesHeldSkipped or 0) > 0 then
+        lines[#lines + 1] = string.format("Map answers sent without their map pages (the requester's presence"
+            .. " showed this very map): %d.", self.stats.mapPagesHeldSkipped)
+    end
     if (self.stats.outdatedPresences or 0) + (self.stats.outdatedMaps or 0) + (self.stats.outdatedRequests or 0) > 0 then
-        lines[#lines + 1] = string.format("Clients before 1.7.0 (update required): %d presences not asked for a map,"
+        lines[#lines + 1] = string.format("Outdated clients (update required): %d presences not asked for a map,"
             .. " %d map pages not taken, %d requests not answered.", self.stats.outdatedPresences or 0,
             self.stats.outdatedMaps or 0, self.stats.outdatedRequests or 0)
     end
@@ -2388,11 +2450,20 @@ function net:Send(kind, payload, target, immediate)
     -- 1.8.2 a peer advertising 8 (1.8.0) is asked and served kills and captures,
     -- without the race stream; below 8, neither (SyncLeaderboardPages).
     if kind == "NH" and payload == tostring(addon.Version or "") then
+        -- 2.0.3: until our login (or instance-exit) map has come, our map is not ours to
+        -- vouch for: empty content and site stamps, so that no neighbour leaves the map
+        -- pages out of an answer to us (PeerHoldsOurMap; kept sites alone could match) nor
+        -- pulls us for news we do not serve yet. Asked first: it may lift the gate.
+        local pending = addon.IsCaptureSyncPending and addon:IsCaptureSyncPending()
+        -- Read fresh once the gate is lifted (the cache may still hold the quarantine view).
+        if not pending then mapStampCache.at = -1000 end
         local stamp, sum, digest = localMapStamp()
         local sites = sync.GetOutpostMapStamps and sync:GetOutpostMapStamps() or 0
+        if pending then sum, digest, sites = 0, 0, 0 end
         -- "~t0" (2.0.2): this client opens no truce from Zones.TRUCELESS_FROM on (see
         -- IsOutdatedMapPeer). After "~b", whose readers look for "~b~".
-        payload = payload .. (self:HasLiveEnemyBridge() and "~b" or "") .. "~t0"
+        -- "~y" (2.0.3): the map layout, right after "~t0" whose readers look for "~t0~".
+        payload = payload .. (self:HasLiveEnemyBridge() and "~b" or "") .. "~t0~y" .. net.LocalMapLayout()
             .. "~m" .. base36(stamp) .. "~o" .. base36(sites)
             .. "~z" .. base36(digest, 6) .. base36(sum) .. "~l9~ld~lr~lp6"
     end
@@ -2489,7 +2560,8 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
     elseif addressed and p.kind ~= "NH" then
         local previous = self.context
         self.context = { origin = origin, gateway = sender, hops = #p.path - 1,
-            kind = p.kind, payload = p.payload, targeted = p.target ~= "*", transport = transport }
+            kind = p.kind, payload = p.payload, targeted = p.target ~= "*", transport = transport,
+            session = tostring(p.id or ""):match("^(.-)%-") }
         -- BETA is explicit: do not masquerade the relay as a direct WoW whisper.
         local ok, err = pcall(sync.OnAddonMessage, sync, "OverlordF",
             p.kind .. ":" .. p.payload, "BETA", origin)
@@ -2524,7 +2596,9 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
             -- of a busy channel looked "unknown" and were asked the slower v7 sweep.
             remember(pagedCapabilities, pagedCapabilityOrder, originKey,
                 { version = version, at = GetTime(), originAt = p.at,
-                    truceless = p.payload:find("~t0~", 1, true) ~= nil,
+                    -- 2.0.3: the map layout it says ("~t0~y<layout>"), true for "~t0" alone.
+                    truceless = p.payload:match("~t0~y(%w+)~")
+                        or (p.payload:find("~t0~", 1, true) and true) or nil,
                     release = p.payload:match("^(%d%d?%d?%.%d%d?%d?%.%d%d?%d?)%f[%D]") }, CAPABILITY_RING)
         end
         -- Like Retail's community login, pull the territorial map first. Ranking
@@ -2563,10 +2637,18 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         local content = p.payload:match("~z(%w+)~")
         local peerDigest = content and #content > 6 and self.ParseBase36(content:sub(1, 6)) or nil
         local peerSum = peerDigest and self.ParseBase36(content:sub(7)) or nil
+        -- 2.0.3: what its map holds, kept with its capability (PeerHoldsOurMap).
+        local capabilityRow = #p.path == 1 and pagedCapabilities[originKey] or nil
+        if capabilityRow and capabilityRow.originAt == p.at then
+            capabilityRow.mapDigest, capabilityRow.mapSum = peerDigest, peerSum
+            capabilityRow.mapSession = tostring(p.id or ""):match("^(.-)%-")
+        end
         local noNews, diffRow, stampOnly = false, nil, false
         if peerDigest and peerSum and peerSites ~= nil then
             local _, sum, digest = localMapStamp()
-            if peerDigest ~= digest then
+            -- An empty stamp (a neighbour still waiting for its own login map) holds
+            -- nothing to pull and no difference to keep: no news.
+            if peerDigest ~= digest and peerSum > 0 then
                 diffRow = self:MapDiffDue(digest, sum, peerDigest, peerSum, origin, now, transport == "BNET")
             end
             noNews = diffRow == nil
@@ -2611,6 +2693,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         -- own schedule (MapDiffDue), and the friend's budget stays one pull a minute.
         local originGap = (enemyFriend and diffRow) and 60 or 300
         if #p.path == 1 and (version < self.MAP_MIN_PROTOCOL
+            or p.payload:match("~t0~y(%w+)~") ~= net.LocalMapLayout()
             or (net.MapCutActive() and not p.payload:find("~t0~", 1, true))) then
             self.stats.outdatedPresences = (self.stats.outdatedPresences or 0) + 1
         elseif #p.path == 1 and (budget or friendPull) and now - last >= originGap and not recentFullMap and not noNews then

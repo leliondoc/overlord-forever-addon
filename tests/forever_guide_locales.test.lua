@@ -75,12 +75,37 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
         assert(type(L[key]) == "string" and L[key]:find(unit, 1, true),
             loc .. ": " .. key .. " does not use " .. unit .. ": " .. tostring(L[key]))
     end
-    -- The 15-minute truce, on every front and on the Hillsbrad brawl.
+    -- 2.0.3: the locked-point message has a variant without the truce, shown once it is
+    -- retired; same slot for the point's name, no word of a truce.
+    local blocked = L.CAPTURE_BLOCKED_RULES_NOTRUCE
+    assert(type(blocked) == "string" and blocked ~= L.CAPTURE_BLOCKED_RULES and countSlots(blocked, "s") == 1,
+        loc .. ": no locked-point message without the truce")
+    for _, word in ipairs({ "truce", "trêve", "tregua", "Waffenstillstand", "перемир", "trégua", "休战" }) do
+        assert(not blocked:find(word, 1, true), loc .. ": CAPTURE_BLOCKED_RULES_NOTRUCE still names the truce")
+    end
+    -- The 15-minute truce, on every front.
     assert(L.GUIDE_SIEGE_BODY:find("%f[%d]15%f[%D]"), loc .. ": siege text lost the truce length")
-    assert(L.GUIDE_PROGRESS_BODY:find("%f[%d]15%f[%D]"), loc .. ": guide lost the Hillsbrad note")
-    -- 2.0.2: the same two texts without the truce, shown once it is retired
+    -- 2.0.3: Hillsbrad is a front like the others. The progress text names it with the
+    -- six other fronts and no longer has a brawl line (nor a truce of its own).
+    assert(L.GUIDE_PROGRESS_BODY_NOTRUCE == nil, loc .. ": the progress text still has a truce variant")
+    assert(not L.GUIDE_PROGRESS_BODY:find("%f[%d]15%f[%D]"), loc .. ": the progress text still gives a truce length")
+    local _, progressLines = L.GUIDE_PROGRESS_BODY:gsub("\n", "")
+    assert(progressLines == 2, loc .. ": the progress text should keep three lines, not " .. (progressLines + 1))
+    assert(not L.GUIDE_PROGRESS_BODY:find(L.ZONE_NAMES.hillsbrad_tarren_mill, 1, true),
+        loc .. ": the progress text still describes the Southshore / Tarren Mill brawl")
+    -- Named with the other fronts; its first letter may be lower case in the list
+    -- ("contreforts de Hautebrande"), so the first UTF-8 character is left out.
+    -- zhTW has no front names of its own (English) next to a Chinese tutorial.
+    if loc ~= "zhTW" then
+        local tail = L.FRONT_HILLSBRAD_NAME:gsub("^[%z\1-\127\194-\244][\128-\191]*", "")
+        assert(L.GUIDE_PROGRESS_BODY:find(tail, 1, true),
+            loc .. ": the progress text does not list " .. L.FRONT_HILLSBRAD_NAME .. " with the other fronts")
+    end
+    assert(not L.GUIDE_OUTPOST_BODY:find(L.ZONE_NAMES.hillsbrad_tarren_mill, 1, true),
+        loc .. ": the outpost text still says Hillsbrad has none")
+    -- 2.0.2: the siege text without the truce, shown once it is retired
     -- (Zones.TRUCELESS_FROM). Same lines, the fifteen minutes gone, nothing else.
-    for _, key in ipairs({ "GUIDE_SIEGE_BODY", "GUIDE_PROGRESS_BODY" }) do
+    for _, key in ipairs({ "GUIDE_SIEGE_BODY" }) do
         local with, without = L[key], L[key .. "_NOTRUCE"]
         assert(type(without) == "string" and without ~= with, loc .. ": " .. key .. " has no text without the truce")
         assert(not without:find("%f[%d]15%f[%D]"), loc .. ": " .. key .. "_NOTRUCE still gives the truce length")
@@ -107,9 +132,10 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
     assert(L.HELP_LAYER == nil, loc .. ": /ov help still advertises /ov layer")
     assert(L.LAYER_JUMPER_BUTTON == nil and L.LAYER_JUMPER_REMOVED == nil,
         loc .. ": a Layer Jumper text is still defined")
-    -- PvP group finder: its guide section quotes the command and the five-minute rule.
+    -- PvP group finder: its guide section quotes the command and the two-minute rule (2.0.3).
     assert(L.GUIDE_GROUPS_BODY:find("/ov groups", 1, true), loc .. ": groups section lost its command")
-    assert(L.GUIDE_GROUPS_BODY:find("%f[%d]5%f[%D]"), loc .. ": groups section lost the sign-up spacing")
+    assert(L.GUIDE_GROUPS_BODY:find("%f[%d]2%f[%D]") and not L.GUIDE_GROUPS_BODY:find("%f[%d]5%f[%D]"),
+        loc .. ": groups section does not give the two-minute wait")
     -- The guide names the buttons exactly as the panel shows them in that language
     -- (zhTW reads the zhCN guide over an English interface: skipped).
     if loc ~= "zhTW" then

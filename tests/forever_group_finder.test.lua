@@ -216,8 +216,10 @@ local function join(leader, member)
     if group.size == 0 then group.size = 1 end
     group.size = group.size + 1
     group.leader = true
+    local others = { [leader.name:lower()] = true }
+    for name in pairs(group.members) do others[name] = true end
     group.members[member.name:lower()] = true
-    member.group = { size = group.size, raid = group.raid, leader = false, members = {} }
+    member.group = { size = group.size, raid = group.raid, leader = false, members = others }
     fire(leader, "GROUP_ROSTER_UPDATE")
     fire(member, "GROUP_ROSTER_UPDATE")
 end
@@ -460,22 +462,67 @@ do
     assert(alice.invites[1] == "Bob Stone-Forever", "invite must use the sender as received")
     assert(#alice.GF.pending == 0)
     assert(bob.GF:GetApplyStatus(key(alice)) == "invited")
-    -- One accepted sign-up per five minutes, kept across a reload.
-    local left = bob.GF:SignupCooldownRemaining()
-    assert(left > 295 and left <= 300, "cooldown " .. left)
-    ok, reason = bob.GF:CanSignUp(bob.GF.board[key(carl)])
-    assert(not ok and reason == "GF_ERR_COOLDOWN")
-    assert(bob.db.groupFinder.signups["Bob Stone"], "the wait is not saved")
-    bob.GF._signupAt = nil
-    assert(bob.GF:SignupCooldownRemaining() > 295, "cooldown lost on reload")
+    -- The wait starts in the group, not at the invitation: another group can still be asked.
+    assert(bob.GF:SignupCooldownRemaining() == 0 and bob.db.groupFinder.signups == nil,
+        "the wait started at the invitation")
+    assert(bob.GF:CanSignUp(bob.GF.board[key(carl)]), "an invitation not taken yet blocks other groups")
     join(alice, bob)
     advance(1)
     assert(bob.GF.apply == nil, "request kept after joining")
+    -- One group joined per two minutes, kept across a reload.
+    local left = bob.GF:SignupCooldownRemaining()
+    assert(left > 115 and left <= 120, "cooldown " .. left)
+    assert(bob.db.groupFinder.signups["Bob Stone"], "the wait is not saved")
+    bob.GF._signupAt = nil
+    assert(bob.GF:SignupCooldownRemaining() > 115, "cooldown lost on reload")
     ok, reason = bob.GF:CanSignUp(bob.GF.board[key(carl)])
     assert(not ok and reason == "GF_ERR_GROUPED")
-    advance(301)
+    -- Out of the group again: the wait still holds, then ends.
     bob.group = { size = 0, raid = false, leader = false, members = {} }
+    ok, reason = bob.GF:CanSignUp(bob.GF.board[key(carl)])
+    assert(not ok and reason == "GF_ERR_COOLDOWN", "leaving the group ended the wait")
+    advance(121)
     assert(bob.GF:SignupCooldownRemaining() == 0)
+    -- More roster events in the group do not start the wait again.
+    join(alice, bob)
+    advance(1)
+    assert(bob.GF:SignupCooldownRemaining() == 0, "a roster event restarted the wait")
+end
+
+-- 5b. The wait follows the leader who invited us, not the request still open
+do
+    -- Invited by Alice, signs up with Carl (Alice is told to forget the request), then
+    -- takes Alice's invitation after all: the wait starts.
+    reset()
+    local alice = newClient("Alice Smith", "Alliance")
+    local bob = newClient("Bob Stone", "Alliance")
+    local carl = newClient("Carl Reed", "Alliance")
+    assert(alice.GF:Publish(spec({ cap = 10, auto = true })))
+    assert(carl.GF:Publish(spec({ intent = "h", kind = "f", target = "arathi", cap = 10 })))
+    advance(0.3)
+    assert(bob.GF:SignUp(key(alice)))
+    deliver()
+    assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and bob.GF:SignupCooldownRemaining() == 0)
+    assert(bob.GF:SignUp(key(carl)))
+    assert(#sentBy(bob, "WHISPER", "^C:1$") == 1, "the leader who invited was not told")
+    deliver()
+    join(alice, bob)
+    advance(1)
+    assert(bob.GF:SignupCooldownRemaining() > 115, "an invitation taken after a sign-up elsewhere escaped the wait")
+
+    -- A group joined some other way while a request is open: no wait.
+    reset()
+    alice = newClient("Alice Smith", "Alliance")
+    bob = newClient("Bob Stone", "Alliance")
+    local dora = newClient("Dora Friend", "Alliance")
+    assert(alice.GF:Publish(spec({ cap = 10 })))
+    advance(0.3)
+    assert(bob.GF:SignUp(key(alice)))
+    deliver()
+    assert(bob.GF:GetApplyStatus(key(alice)) == "pending")
+    join(dora, bob)
+    advance(1)
+    assert(bob.GF.apply == nil and bob.GF:SignupCooldownRemaining() == 0, "a friend's group started the wait")
 end
 
 -- ---------------------------------------------------------------------------
@@ -541,13 +588,13 @@ do
     assert(bob.GF:SignUp(key(alice)))
     deliver()
     advance(46)
-    assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and bob.GF:SignupCooldownRemaining() > 0)
+    assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and bob.GF:SignupCooldownRemaining() == 0)
     assert(#sentBy(bob, "WHISPER", "^N:") == 0)
     assert(#sentBy(alice, "WHISPER") + #sentBy(bob, "WHISPER") == 2, "a delivered invitation costs two whispers")
 
-    -- Dropped: one "not received" whisper, the request is back for a click, the five
-    -- minutes are given back. It concerns its author only: the next player is still
-    -- invited automatically.
+    -- Dropped: one "not received" whisper, the request is back for a click (no wait
+    -- either). It concerns its author only: the next player is still invited
+    -- automatically.
     reset()
     alice = newClient("Alice Smith", "Alliance")
     bob = newClient("Bob Stone", "Alliance")
@@ -564,7 +611,7 @@ do
         "the alarm was raised too early")
     advance(6)
     assert(bob.GF.apply and bob.GF.apply.status == "lost", "a lost invitation still reads 'invited'")
-    assert(bob.GF:SignupCooldownRemaining() == 0 and bob.db.groupFinder.signups["Bob Stone"] == nil)
+    assert(bob.GF:SignupCooldownRemaining() == 0 and (bob.db.groupFinder.signups or {})["Bob Stone"] == nil)
     assert(#sentBy(bob, "WHISPER", "^N:1$") == 1)
     assert(#alice.GF.pending == 1 and alice.GF.pending[1].manual and alice.GF.outstandingCount == 0)
     assert(alice.printed[1] and alice.printed[1]:find("Bob Stone", 1, true), "leader not told")
@@ -582,14 +629,14 @@ do
     fire(alice, "GROUP_ROSTER_UPDATE")
     advance(1)
     assert(#alice.invites == 2 and #alice.GF.pending == 1)
-    -- The click works: the player reads "invited" again and his five minutes start.
+    -- The click works: the player reads "invited" again.
     -- Here the leader's answer comes first and the game's invitation a little later.
     alice.invitesDropped = true
     assert(alice.GF:Accept(key(bob)))
     deliver()
     assert(#alice.invites == 3 and #alice.GF.pending == 0)
     assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and bob.GF.apply.retried, "the second 'invited' was not read")
-    assert(bob.GF:SignupCooldownRemaining() > 290)
+    assert(bob.GF:SignupCooldownRemaining() == 0)
     advance(10)
     fire(bob, "PARTY_INVITE_REQUEST", "Alice Smith")
     advance(40)
@@ -611,7 +658,7 @@ do
     assert(bob.GF.apply.status == "lost" and #alice.GF.pending == 1)
     alice.invitesDropped = false
     assert(alice.GF:Accept(key(bob)))
-    assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and bob.GF:SignupCooldownRemaining() > 290)
+    assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and bob.GF:SignupCooldownRemaining() == 0)
     deliver()
     assert(#sentBy(bob, "WHISPER", "^C:1$") == 1 and bob.GF:GetApplyStatus(key(alice)) == "invited")
     assert(alice.GF.outstanding[key(bob)] and alice.GF.outstandingCount == 1, "the cancel undid the invitation of the click")
@@ -662,7 +709,7 @@ do
     assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and #sentBy(bob, "WHISPER", "^N:") == 0)
 
     -- A slow server: the game's invitation comes half a minute after the leader's
-    -- answer. Nothing is said to anybody, the place stays held, the five minutes stand.
+    -- answer. Nothing is said to anybody, the place stays held.
     reset()
     alice = newClient("Alice Smith", "Alliance")
     bob = newClient("Bob Stone", "Alliance")
@@ -674,7 +721,7 @@ do
     advance(30)
     fire(bob, "PARTY_INVITE_REQUEST", "Alice Smith")
     advance(20)
-    assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and bob.GF:SignupCooldownRemaining() > 0)
+    assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and bob.GF:SignupCooldownRemaining() == 0)
     assert(#sentBy(bob, "WHISPER", "^N:") == 0 and #sentBy(bob, "WHISPER", "^C:") == 0 and #alice.printed == 0,
         "an invitation that was only slow raised the alarm")
     alice.GF:PruneOutstanding(now)
@@ -727,8 +774,8 @@ do
         "a protected name was read")
 
     -- Slower than our wait: the alarm went out, then the invitation comes. It is in
-    -- hand after all: the row says "invited" again, the five minutes start again and
-    -- the leader's list forgets the request it had taken back.
+    -- hand after all: the row says "invited" again and the leader's list forgets the
+    -- request it had taken back.
     reset()
     alice = newClient("Alice Smith", "Alliance")
     bob = newClient("Bob Stone", "Alliance")
@@ -745,7 +792,7 @@ do
     assert(bob.GF.apply.status == "lost" and #sentBy(bob, "WHISPER", "^C:") == 0)
     fire(bob, "PARTY_INVITE_REQUEST", "Alice Smith")
     deliver()
-    assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and bob.GF:SignupCooldownRemaining() > 290,
+    assert(bob.GF:GetApplyStatus(key(alice)) == "invited" and bob.GF._invitedBy["Alice Smith"],
         "a late invitation was not taken as received")
     assert(#sentBy(bob, "WHISPER", "^C:1$") == 1 and #alice.GF.pending == 0, "the leader still holds the request")
     -- Known limit: the leader gave the place up when the alarm came, it is not taken back.
@@ -772,7 +819,7 @@ do
 end
 
 -- ---------------------------------------------------------------------------
--- 6c. The leader's side keeps its own count: five minutes, arrival order, clicks
+-- 6c. The leader's side keeps its own count: two minutes, arrival order, clicks
 -- ---------------------------------------------------------------------------
 do
     -- A player invited minutes ago who left (or whose client lies about its wait) is
@@ -791,13 +838,13 @@ do
     assert(bob.GF:SignUp(key(alice)))
     deliver()
     assert(#alice.invites == 1 and #alice.GF.pending == 1 and alice.GF.pending[1].held,
-        "re-invited automatically within five minutes")
+        "re-invited automatically within two minutes")
     assert(bob.GF:GetApplyStatus(key(alice)) == "pending")
     fire(alice, "GROUP_ROSTER_UPDATE")
     advance(6)
     assert(#alice.invites == 1, "a held request was drained")
     assert(alice.GF:Accept(key(bob)) and #alice.invites == 2)
-    -- After five minutes the automatic path is open again.
+    -- After two minutes the automatic path is open again.
     advance(301)
     bob.GF.apply = nil
     bob.GF:ClearSignupCooldown()
@@ -851,7 +898,7 @@ do
     assert(#alice.invites == 2, "a clicked invitation was left to a timer")
 
     -- The leader's memory is bounded without forgetting whom it just invited: at its
-    -- cap the entries older than five minutes go first.
+    -- cap the entries older than two minutes go first.
     assert(alice.GF.invitedAt[key(bob2)] and alice.GF.invitedAt[key(carl2)])
     for i = 1, 300 do
         if not alice.GF.invitedAt["old " .. i] then alice.GF.invitedCount = alice.GF.invitedCount + 1 end
@@ -863,7 +910,7 @@ do
     assert(dan.GF:SignUp(key(alice)))
     deliver()
     assert(alice.GF:Accept(key(dan)))
-    assert(alice.GF.invitedAt[key(bob2)] and alice.GF.invitedAt[key(dan)], "the five-minute memory was wiped")
+    assert(alice.GF.invitedAt[key(bob2)] and alice.GF.invitedAt[key(dan)], "the two-minute memory was wiped")
     assert(alice.GF.invitedCount == 3 and not alice.GF.invitedAt["old 1"], "stale entries kept: " .. alice.GF.invitedCount)
 
     -- An empty token bucket: the listing looks again every 0.3 s for a few seconds and
@@ -1053,7 +1100,7 @@ do
     alt.GF:ClearSignupCooldown()
     clients = {}
     local back = newClient("Bob Stone", "Alliance", { db = db })
-    assert(back.GF:SignupCooldownRemaining() > 290, "another character erased the wait")
+    assert(back.GF:SignupCooldownRemaining() > 110, "another character erased the wait")
 
     -- The fullest groups come first, and a row moves up as its group fills.
     reset()
@@ -1088,7 +1135,7 @@ do
     fire(bob3, "CHAT_MSG_ADDON", "OverlordGF", "R:1:p", "WHISPER", top.name)
     assert(bob3.GF:GetApplyStatus(top.key) == "timeout")
     fire(bob3, "CHAT_MSG_ADDON", "OverlordGF", "R:1:i", "WHISPER", top.name)
-    assert(bob3.GF:GetApplyStatus(top.key) == "invited" and bob3.GF:SignupCooldownRemaining() > 0)
+    assert(bob3.GF:GetApplyStatus(top.key) == "invited" and bob3.GF._invitedBy[top.name])
     assert(not top.silent, "a leader who answered late stays ranked as silent")
     -- No invitation follows: "not received" goes out, to a name recorded for the
     -- offline filter (the leader may be gone).

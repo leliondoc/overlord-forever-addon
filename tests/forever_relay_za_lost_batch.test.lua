@@ -93,7 +93,7 @@ local function broadcastMap(who)
     drain()
     return channelCopies
 end
-hello("Updated Client", "1.7.2~lr~lp6")
+hello("Updated Client", "1.7.2~t0~y" .. net.LocalMapLayout() .. "~lr~lp6")
 hello("Old Client", "1.6.3~lp6")
 assert(net:IsOutdatedMapPeer("Old Client") and not net:IsOutdatedMapPeer("Updated Client"), "fixture: presences not read")
 assert(broadcastMap("Updated Client") > 0, "fixture: a broadcast map of an updated neighbour is no longer passed on")

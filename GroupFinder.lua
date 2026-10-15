@@ -86,9 +86,11 @@ GF.SIGNUP_RATE = 2
 -- early alarm sends the leader after a player who is fine. Not later: the alarm must
 -- reach the leader while he still holds the place (INVITE_OUTSTANDING_TTL).
 GF.INVITE_CHECK_SEC = 45
--- One accepted sign-up per 5 minutes: joining a group also moves you to its layer,
--- and this window is for playing together, not for hopping.
-GF.SIGNUP_COOLDOWN = 300
+-- One group joined per 2 minutes: joining a group also moves you to its layer, and
+-- this window is for playing together, not for hopping. The wait starts when the
+-- player really enters the leader's group, not at the invitation (a declined prompt
+-- or a lost invitation costs nothing).
+GF.SIGNUP_COOLDOWN = 120
 GF.RELOAD_RESTORE_SEC = 120
 
 GF.REPLY_STATUS = { i = "invited", p = "pending", d = "declined", f = "full", x = "gone", l = "level" }
@@ -108,7 +110,8 @@ GF.muted = GF.muted or {}             -- [key] = time until which a declined pla
 GF.declinedBy = GF.declinedBy or {}   -- [leader key] = time until which that leader's refusal stands (our side)
 GF.declinedCount = GF.declinedCount or 0
 GF.mutedCount = GF.mutedCount or 0
-GF.invitedAt = GF.invitedAt or {}     -- [key] = last invitation: no second automatic one for 5 min
+GF.invitedAt = GF.invitedAt or {}     -- [key] = last invitation: no second automatic one for 2 min
+GF._invitedBy = GF._invitedBy or {}   -- [leader name] = when that leader answered "invited" (our side)
 GF.invitedCount = GF.invitedCount or 0
 GF.requestSeen = GF.requestSeen or {}
 GF._invitesSeen = GF._invitesSeen or {} -- [key] = when the game's invitation of that player reached us
@@ -679,7 +682,7 @@ function GF:DoInvite(app, late)
 end
 
 -- An invitation given up before it left (refused at its turn, cancelled by the
--- player): its place is free again and the five-minute memory forgets it.
+-- player): its place is free again and the two-minute memory forgets it.
 function GF:DropQueuedInvite(key)
     self.outstanding[key] = nil
     self.outstandingCount = self.outstandingCount - 1
@@ -710,7 +713,7 @@ function GF:Invite(app, fromClick)
     self:RemovePending(app.key)
     if not self.outstanding[app.key] then self.outstandingCount = self.outstandingCount + 1 end
     self.outstanding[app.key] = { at = now, raw = app.raw, app = app }
-    -- Remembered for five minutes: no second automatic invitation to the same player
+    -- Remembered for two minutes: no second automatic invitation to the same player
     -- (see OnSignup), whatever his own client says about its wait.
     if not self.invitedAt[app.key] then
         self.invitedAt, self.invitedCount = MakeRoom(self.invitedAt, self.invitedCount, 256,
@@ -991,8 +994,8 @@ function GF:OnSignup(text, sender)
         return self:Reply(canon, "p")
     end
     app = { key = key, name = canon, raw = sender, class = class, level = level, at = now }
-    -- Invited less than five minutes ago (left again, or was removed): the leader
-    -- decides this time. The five-minute rule holds here, not only on the player's side.
+    -- Invited less than two minutes ago (left again, or was removed): the leader
+    -- decides this time. The two-minute rule holds here, not only on the player's side.
     local invitedAt = self.invitedAt[key]
     if invitedAt and now - invitedAt < self.SIGNUP_COOLDOWN then app.held = true end
     if own.auto and not app.held and not self:HasQueuedAuto() and self:CanInviteNow() then
@@ -1085,7 +1088,7 @@ function GF:OnReply(text, sender)
         self.declinedBy[apply.key] = apply.at + self.DECLINE_MUTE
     end
     if status == "invited" then
-        self:StartSignupCooldown()
+        self:NoteInvitedBy(apply.name)
         C_Timer.After(self.INVITE_CHECK_SEC, function() GF:CheckInviteArrived(apply) end)
     end
     self:Touch()
@@ -1095,8 +1098,7 @@ end
 -- (PARTY_INVITE_REQUEST from him since the click, or while he still counted it: a
 -- second click on a leader who already invited us gets "invited" with no new prompt),
 -- or we are already in the group. Somebody else's invitation does not count; one whose
--- sender the game does not name counts by its moment. If not, the leader is told and
--- the five-minute wait is given back.
+-- sender the game does not name counts by its moment. If not, the leader is told.
 function GF:CheckInviteArrived(apply)
     if self.apply ~= apply or apply.status ~= "invited" or InInstance() then return end
     -- After a first loss the same test only passes for an invitation seen since.
@@ -1107,7 +1109,6 @@ function GF:CheckInviteArrived(apply)
     end
     apply.status = "lost"
     apply.at = GetTime()
-    self:ClearSignupCooldown()
     self:Whisper(apply.name, "N:" .. self.VERSION)
     self:Touch()
 end
@@ -1116,8 +1117,8 @@ end
 -- its sender's name for CheckInviteArrived; a name the game hides or does not give in
 -- full only leaves its moment.
 -- If it is the leader's and we had already told him it was lost (a server slower than
--- our wait), it is in hand after all: our row says so, the five minutes start again
--- and the leader's client forgets the request it had taken back.
+-- our wait), it is in hand after all: our row says so and the leader's client forgets
+-- the request it had taken back.
 function GF:OnInviteSeen(inviter)
     local now = GetTime()
     local key
@@ -1143,7 +1144,7 @@ function GF:OnInviteSeen(inviter)
     if not apply or apply.status ~= "lost" or apply.key ~= key then return end
     apply.status = "invited"
     apply.at = now
-    self:StartSignupCooldown()
+    self:NoteInvitedBy(apply.name)
     self:Whisper(apply.name, "C:" .. self.VERSION)
     self:Touch()
 end
@@ -1252,8 +1253,10 @@ function GF:SignUp(key)
     if not faction then return false, "GF_ERR_NOT_READY" end
     -- One request at a time: the previous leader is told to forget ours.
     local previous = self.apply
+    -- An invitation not taken counts too (its queued turn is given up; the wait only
+    -- starts in a group, see StartCooldownIfJoined).
     if previous and previous.key ~= key and (previous.status == "pending" or previous.status == "sent"
-        or previous.status == "lost" or previous.status == "timeout") then
+        or previous.status == "lost" or previous.status == "timeout" or previous.status == "invited") then
         self:Whisper(previous.name, "C:" .. self.VERSION)
     end
     local msg = string.format("J:%s:%s:%s:%s:%s:%d:%d", self.VERSION, faction, entry.intent,
@@ -1393,6 +1396,7 @@ function GF:OnRosterSettled()
     if InInstance() then return end
     local now = GetTime()
     local grouped = self:IsGrouped()
+    if grouped then self:StartCooldownIfJoined(now) end
     if grouped and self.apply then self.apply = nil end
     local own = self.own
     if own then
@@ -1431,6 +1435,41 @@ function GF:OnRosterSettled()
         self:DrainPending()
     end
     self:Touch()
+end
+
+-- A leader answered "invited": remembered two minutes, so that entering his group
+-- starts the wait even after a sign-up elsewhere.
+function GF:NoteInvitedBy(name)
+    if type(name) ~= "string" or name == "" then return end
+    local now = GetTime()
+    for who, at in pairs(self._invitedBy) do
+        if now - at >= self.SIGNUP_COOLDOWN then self._invitedBy[who] = nil end
+    end
+    self._invitedBy[name] = now
+end
+
+-- In the group of a leader who invited us (the request still open, or one answered
+-- "invited" in the last two minutes): the two-minute wait starts now. Not for a group
+-- joined some other way.
+function GF:StartCooldownIfJoined(now)
+    local apply, sync = self.apply, Overlord.Sync
+    if not (sync and sync.SenderIsInOurGroup) then
+        if apply and apply.status == "invited" then self:StartSignupCooldown() end
+        return
+    end
+    local joined = apply and sync:SenderIsInOurGroup(apply.name)
+    if not joined then
+        for name, at in pairs(self._invitedBy) do
+            if now - at < self.SIGNUP_COOLDOWN and sync:SenderIsInOurGroup(name) then
+                joined = true
+                break
+            end
+        end
+    end
+    if joined then
+        self:StartSignupCooldown()
+        self._invitedBy = {}
+    end
 end
 
 -- A join fires a burst of roster events: one pass half a second after the first.
@@ -1503,6 +1542,7 @@ function GF:OnInstanceSuspend()
     self._listenUntil = nil
     self.declinedBy, self.declinedCount = {}, 0
     self._invitesSeen, self._inviteSeenAt = {}, nil
+    self._invitedBy = {}
     self:ClearPending()
     for key in pairs(self.board) do self.board[key] = nil end
     self.boardCount = 0

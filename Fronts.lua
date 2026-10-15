@@ -481,35 +481,84 @@ Overlord.Fronts.Registry = {
         mapIDs = { [25] = true, [1424] = true },
         excludedMapIDs = { [623] = true }, -- Southshore vs. Tarren Mill battleground
         mapNameNeedles = { "hillsbrad", "hautebrande", "laderas de trabalomas",
-            "hügelland", "предгорья хилсбрада", "contrafortes de eira dos montes", "希尔斯布莱德" },
+            "hügelland", "предгорья хилсбрада", "eira dos montes", "希尔斯布莱德" },
         allianceCapitalId = "hillsbrad_southshore",
         hordeCapitalId = "hillsbrad_tarren_mill",
         panelHeads = {
             Alliance = "HUMAN_MALE", Horde = "UNDEAD_MALE",
             faceInward = true, hordeMirror = false,
         },
-        -- Two circles (halved in 1.1.11). The registry's 0.60 capture scale makes radius 7.5 = 4.5 map units.
-        -- 2.0: both moved out of the towns, onto open ground (fights at the inn and the flight
-        -- master were in everybody's way). The zones keep their ids and their names.
+        -- 2.0: both capitals moved out of the towns, onto open ground (fights at the inn and
+        -- the flight master were in everybody's way). 2.0.3: a full front of 10 points instead
+        -- of the two-circle brawl, placed on the Classic map (1424). Two routes of four points
+        -- around Darrow Hill (its coin mine stays in the middle). West: Western Strand,
+        -- Hillsbrad Fields, the edge of Lordamere Internment Camp (Hillsbrad side: the camp
+        -- itself is Alterac Mountains, where no capture counts), then the main road to the
+        -- bridge below Tarren Mill. East, across the river: Nethander Stead, Dun Garok, the
+        -- gate of Thoradin's Wall on the Arathi road, then the road up to Durnholde Keep's
+        -- gate. Southshore's capital sits on the road north of the town (still out of it).
+        -- Capitals get the usual capital radius. Every circle lies wholly in Hillsbrad on
+        -- the client's terrain, up to the corners of its ground cells (a player on Alterac
+        -- ground leaves the front and loses his capture): Lordamere Camp at the camp's
+        -- Hillsbrad edge, Tarren Mill's capital moved south-east off the Alterac slope of
+        -- its 2.0 place (54.8, 26.6).
         zones = {
-            Zone("hillsbrad_southshore", { center = {44.9, 44.5}, radius = 7.5,
+            Zone("hillsbrad_southshore", { center = {50.9, 46.0}, radius = 5,
                 status = "captured", isCapital = true }),
-            Zone("hillsbrad_tarren_mill", { center = {54.8, 26.6}, radius = 7.5,
-                prereqZones = {"hillsbrad_southshore"}, isCapital = true }),
+            Zone("hillsbrad_western_strand", { center = {39.5, 60.5}, prereqZones = {"hillsbrad_southshore"} }),
+            Zone("hillsbrad_fields", { center = {33.0, 40.5}, prereqZones = {"hillsbrad_western_strand"} }),
+            Zone("hillsbrad_internment_camp", { center = {29.5, 32.0}, prereqZones = {"hillsbrad_fields"} }),
+            Zone("hillsbrad_bridge", { center = {60.5, 39.5}, prereqZones = {"hillsbrad_internment_camp"} }),
+            Zone("hillsbrad_nethander", { center = {65.0, 60.3}, prereqZones = {"hillsbrad_southshore"} }),
+            Zone("hillsbrad_dun_garok", { center = {69.5, 70.5}, prereqZones = {"hillsbrad_nethander"} }),
+            Zone("hillsbrad_thoradin_gate", { center = {79.3, 54.8}, prereqZones = {"hillsbrad_dun_garok"} }),
+            Zone("hillsbrad_durnholde", { center = {75.8, 44.5}, prereqZones = {"hillsbrad_thoradin_gate"} }),
+            Zone("hillsbrad_tarren_mill", { center = {57.0, 29.0}, radius = 5,
+                prereqZones = {"hillsbrad_bridge", "hillsbrad_durnholde"}, isCapital = true }),
         },
         prereqs = {
             Alliance = {
                 hillsbrad_southshore = {},
-                hillsbrad_tarren_mill = {"hillsbrad_southshore"},
+                hillsbrad_western_strand = {"hillsbrad_southshore"},
+                hillsbrad_fields = {"hillsbrad_western_strand"},
+                hillsbrad_internment_camp = {"hillsbrad_fields"},
+                hillsbrad_bridge = {"hillsbrad_internment_camp"},
+                hillsbrad_nethander = {"hillsbrad_southshore"},
+                hillsbrad_dun_garok = {"hillsbrad_nethander"},
+                hillsbrad_thoradin_gate = {"hillsbrad_dun_garok"},
+                hillsbrad_durnholde = {"hillsbrad_thoradin_gate"},
+                hillsbrad_tarren_mill = {"hillsbrad_bridge", "hillsbrad_durnholde"},
             },
             Horde = {
                 hillsbrad_tarren_mill = {},
-                hillsbrad_southshore = {"hillsbrad_tarren_mill"},
+                hillsbrad_bridge = {"hillsbrad_tarren_mill"},
+                hillsbrad_internment_camp = {"hillsbrad_bridge"},
+                hillsbrad_fields = {"hillsbrad_internment_camp"},
+                hillsbrad_western_strand = {"hillsbrad_fields"},
+                hillsbrad_durnholde = {"hillsbrad_tarren_mill"},
+                hillsbrad_thoradin_gate = {"hillsbrad_durnholde"},
+                hillsbrad_dun_garok = {"hillsbrad_thoradin_gate"},
+                hillsbrad_nethander = {"hillsbrad_dun_garok"},
+                hillsbrad_southshore = {"hillsbrad_western_strand", "hillsbrad_nethander"},
             },
         },
         displayOrder = {
-            Alliance = { "hillsbrad_southshore", "hillsbrad_tarren_mill" },
-            Horde = { "hillsbrad_tarren_mill", "hillsbrad_southshore" },
+            Alliance = {
+                "hillsbrad_southshore",
+                "hillsbrad_western_strand", "hillsbrad_nethander",
+                "hillsbrad_fields", "hillsbrad_dun_garok",
+                "hillsbrad_internment_camp", "hillsbrad_thoradin_gate",
+                "hillsbrad_bridge", "hillsbrad_durnholde",
+                "hillsbrad_tarren_mill",
+            },
+            Horde = {
+                "hillsbrad_tarren_mill",
+                "hillsbrad_bridge", "hillsbrad_durnholde",
+                "hillsbrad_internment_camp", "hillsbrad_thoradin_gate",
+                "hillsbrad_fields", "hillsbrad_dun_garok",
+                "hillsbrad_western_strand", "hillsbrad_nethander",
+                "hillsbrad_southshore",
+            },
         },
     },
 }
