@@ -6,7 +6,7 @@ Addon **World of Warcraft Forever** pour la capture de zones sur les fronts du m
 |---|---|
 | **Auteur** | Troma |
 | **Licence** | All Rights Reserved |
-| **Version** | 1.1.1 |
+| **Version** | [Dernière release](https://github.com/leliondoc/overlord-forever-addon/releases/latest) |
 | **Jeu** | WoW Forever (`## Interface: 16001`) |
 | **CurseForge** | https://www.curseforge.com/wow/addons/overlord-forever |
 | **Dépôt** | https://github.com/leliondoc/overlord-forever-addon |
@@ -14,7 +14,11 @@ Addon **World of Warcraft Forever** pour la capture de zones sur les fronts du m
 
 ## Installation
 
-**Recommandé :** installer via [CurseForge](https://www.curseforge.com/wow/addons/overlord-forever) (client CurseForge ou WoWUp).
+**WowUp (les deux éditions) :** sélectionner le client **Forever**, ouvrir **Get Addons → Install from URL**, puis coller **https://github.com/leliondoc/overlord-forever-addon**. WowUp pourra suivre les releases GitHub pour les mises à jour. Utiliser WowUp 2.24.0 ou plus récent et vérifier que le jeu est reconnu comme Forever.
+
+**CurseForge :** installer via [la page du projet](https://www.curseforge.com/wow/addons/overlord-forever) ou l'application CurseForge. La présence sur GitHub n'inscrit pas automatiquement le projet dans la recherche WowUp Hub.
+
+**Overlord Retail :** utiliser le dépôt public [overlord-releases](https://github.com/leliondoc/overlord-releases), avec le client Retail sélectionné dans WowUp.
 
 **Manuel :** cloner ou télécharger ce dépôt, placer le dossier `Overlord` dans `World of Warcraft\_classic_beta_\Interface\AddOns\`, puis redémarrer WoW.
 
