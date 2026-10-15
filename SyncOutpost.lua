@@ -1340,13 +1340,29 @@ local function TryPrintOutpostDefenderAlert(siteKey, stBefore, stAfter)
             Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.OUTPOST_ALLIED_UNDER_ATTACK,
                 whereLabel, heldGuild, facLabel))
         end
-    elseif rGuild ~= "" and L.OUTPOST_DEFENDER_UNDER_ATTACK_BY then
-        Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.OUTPOST_DEFENDER_UNDER_ATTACK_BY,
-            whereLabel, rGuild, facLabel))
     else
-        Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.OUTPOST_DEFENDER_UNDER_ATTACK,
-            whereLabel, facLabel))
+        local generic = string.format(L.OUTPOST_DEFENDER_UNDER_ATTACK, whereLabel, facLabel)
+        local text = (rGuild ~= "" and L.OUTPOST_DEFENDER_UNDER_ATTACK_BY)
+            and string.format(L.OUTPOST_DEFENDER_UNDER_ATTACK_BY, whereLabel, rGuild, facLabel)
+            or generic
+        Overlord:PrintNotification("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. text)
+        -- Mid-screen: only an assault our map adopted, and never the guild name the
+        -- network sent (site and faction only).
+        if not localOnlyAlert then Overlord.Sync:WarnOwnSiteAttacked(siteKey, generic) end
     end
+end
+
+-- 2.0.4: our guild's keep or outpost under attack also shows the red line mid-screen,
+-- without the raid warning sound. Once a minute per site: the local scan
+-- (OutpostControl) and the network alert can both see the same assault.
+local OWN_SITE_WARNING_SEC = 60
+local ownSiteWarnedAt = {}
+function Overlord.Sync:WarnOwnSiteAttacked(siteKey, text)
+    if not siteKey or not text or text == "" or not Overlord.PrintRaidWarning then return end
+    local now = GetTime()
+    if ownSiteWarnedAt[siteKey] and now - ownSiteWarnedAt[siteKey] < OWN_SITE_WARNING_SEC then return end
+    ownSiteWarnedAt[siteKey] = now
+    Overlord:PrintRaidWarning(text, true)
 end
 
 local function TryPrintOutpostAssaultAlert(siteKey, stBefore, stAfter)
@@ -1456,13 +1472,8 @@ function Overlord.Sync:PrintOutpostCaptureAlert(siteKey, guild, faction, capture
         Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.OUTPOST_CAPTURE_ALERT_ENEMY,
             whereLabel, guild, OutpostCapturingFactionLabel(faction)))
     end
-    local localGuild = OP.GetLocalPlayerGuild and OP:GetLocalPlayerGuild() or ""
-    if localGuild ~= "" and localGuild == guild and pf and faction == pf
-        and Overlord.PlayAddonSound then
-        Overlord:PlayAddonSound("welcome_popup")
-    elseif OverlordDB and OverlordDB.config and OverlordDB.config.soundEnabled then
-        pcall(PlaySound, SOUNDKIT and SOUNDKIT.RAID_WARNING or 8959)
-    end
+    -- 2.0.4: no sound any more. Every keep or outpost capture of both factions rang a
+    -- raid warning (since 1.0.0): with many sites held, players heard it all evening.
 end
 
 function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)

@@ -120,7 +120,7 @@ fronts, bonus, stocks) empruntent également ce réseau.
 
 ### Ressources et stratégie
 
-- **Mines de coins**, renforts et barricades selon le front.
+- **Mines de platine**, renforts et barricades selon le front.
 - Économie locale liée à la progression de capture.
 
 ### Guild Keep
@@ -130,7 +130,7 @@ fronts, bonus, stocks) empruntent également ce réseau.
 
 ### Autres systèmes
 
-- **Victoires honorables Blizzard (VH)** en monde ouvert, à tous les niveaux : une hausse du compteur officiel donne exactement autant de crédits. Les coups fatals et les cibles supposées à la mort ne donnent aucun crédit supplémentaire. Le front du jour ajoute seulement de l’or. Les instances (BG, arènes, donjons et raids) sont exclues.
+- **Victoires honorables Blizzard (VH)** en monde ouvert, à tous les niveaux : une hausse du compteur officiel donne exactement autant de crédits. Les coups fatals et les cibles supposées à la mort ne donnent aucun crédit supplémentaire. Le front du jour ajoute seulement du platine. Les instances (BG, arènes, donjons et raids) sont exclues.
 - Le classement affiche jusqu’à **5 000 joueurs connus**. Les clients à jour échangent jusqu’à 5 000 joueurs par pages reprenables, kills et captures à partir de la version 1.8.0, races à partir de la 1.8.1 (la 1.8.0 ne connaît pas la race Skyborne). Le tri, la préparation du transfert et les envois sont répartis dans le temps ; seules les lignes visibles sont dessinées.
 - Les totaux reçus par synchronisation sont acceptés jusqu’à **5 000 VH par joueur et par campagne**, incluses. Au-delà, le total reçu est refusé. Les clients antérieurs à 1.0.13 refusent encore les totaux supérieurs à 1 000 ; tous les participants doivent mettre à jour pour partager ces scores. Le compteur local de VH continue de progresser indépendamment de ce seuil réseau.
 - Une fois affiché, le dernier tableau est conservé en mémoire et dans `OverlordDB`. À la prochaine connexion, ce cache borné apparaît immédiatement, avec la flèche verte de synchronisation dans l’en-tête, pendant la préparation des données locales. Il ne déclenche aucun transfert et ne remplace jamais les scores ; les mises à jour réseau continuent en arrière-plan. Une autre campagne, un autre pool ou un format incompatible invalide ce cache. Il ne peut pas survivre au défaut de chargement de toutes les SavedVariables décrit plus haut.
@@ -197,4 +197,4 @@ La bêta peut toujours omettre de charger les SavedVariables. Le correctif empê
 
 Les guildes et factions déjà connues ne sont plus remplacées par les copies du classement envoyées par des tiers. Les changements de guilde et les départs doivent venir du personnage concerné ; ses déclarations corrigent les anciennes informations relayées, même si celles-ci portent une date plus récente. Un relais peut toujours renseigner une guilde inconnue. Une affiliation déjà erronée doit être corrigée par le personnage ou par une restauration locale vérifiée.
 
-La monnaie fictive des mines s’appelle **coin** dans l’interface (pluriel **coins**), y compris pour le bonus du front du jour. Les contrats et dons en véritable or du jeu conservent leur libellé.
+La monnaie fictive des mines s’appelle **platine** dans l’interface (avant la 2.0.4 : **coins**), y compris pour le bonus du front du jour. Les contrats et dons en véritable or du jeu conservent leur libellé.

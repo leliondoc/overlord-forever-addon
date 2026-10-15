@@ -118,11 +118,14 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
     -- fix (an old Shard -> Layer rewrite once turned /ov layer into /ov shard).
     for _, cmd in ipairs({ { "GUIDE_SHARD_BODY", "/ov network" },
         { "GUIDE_PANEL_BODY", "/ov show" }, { "GUIDE_PANEL_BODY", "/ov guide" },
-        { "GUIDE_OPTIONS_BODY", "/ov lb" }, { "GUIDE_ALERTS_BODY", "/ov wanted" },
+        { "GUIDE_OPTIONS_BODY", "/ov lb" },
         { "GUIDE_ALERTS_BODY", "/ov guildkills" } }) do
         assert(L[cmd[1]]:find(cmd[2], 1, true), loc .. ": " .. cmd[1] .. " lost the command " .. cmd[2])
     end
     assert(not L.GUIDE_SHARD_BODY:find("/ov shard", 1, true), loc .. ": guide points to /ov shard")
+    -- 2.0.4: the Nemesis alerts live in the options only (no command).
+    assert(not L.GUIDE_ALERTS_BODY:find("/ov wanted", 1, true) and not L.GUIDE_ALERTS_BODY:find("/ov nemesis", 1, true),
+        loc .. ": guide points to a removed Nemesis command")
     -- Layer Jumper removed in 1.6.1, its greyed button replaced by the PvP group finder:
     -- no text of it is left, and the guide never sends players to it.
     assert(not L.GUIDE_SHARD_BODY:find("/ov layer", 1, true)

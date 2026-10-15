@@ -837,7 +837,7 @@ function Overlord.ZoneIndicator:GetObjectiveDetails(zone)
             end
             location = "|cFFFF8C33" .. instruction .. "|r"
         else
-            location = "|cFF4DE64D" .. (L.IN_THE_ZONE or "You are in the zone!") .. "|r"
+            location = "|cFF00FF00" .. (L.IN_THE_ZONE or "You are in the zone!") .. "|r"
         end
     elseif dist ~= nil then
         location = string.format(L.DISTANCE_FORMAT or "Distance: ~%.0f yards", dist * 25)

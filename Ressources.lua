@@ -221,7 +221,7 @@ function Overlord.Ressources:SpendReinforce()
     gold = gold - GOLD_SPEND_COST
     reinforceActive = true
     self:SaveResources()
-    Overlord:PrintNotification("|cFFFFD700[Overlord]|r " .. L.GOLD_REINFORCE_SPENT)
+    Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.GOLD_REINFORCE_SPENT)
     self:RefreshHUD()
     if Overlord.PlayAddonSound then Overlord:PlayAddonSound("gold_buff") end
     return true
@@ -239,7 +239,7 @@ function Overlord.Ressources:SpendBarricade()
     gold = gold - GOLD_SPEND_COST
     barricadeActive = true
     self:SaveResources()
-    Overlord:PrintNotification("|cFFFFD700[Overlord]|r " .. L.GOLD_BARRICADE_SPENT)
+    Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.GOLD_BARRICADE_SPENT)
     self:RefreshHUD()
     if Overlord.PlayAddonSound then Overlord:PlayAddonSound("gold_buff") end
     return true
@@ -380,7 +380,7 @@ local function OnSpellcastSucceeded(_, _, unit, _, spellID)
     Overlord.Ressources:SaveResources()
     Overlord.Ressources:RefreshHUD()
     ShowFloatingGold(gained)
-    Overlord:PrintNotification("|cFFFFD700[Overlord]|r " .. string.format(L.GOLD_NODE_BONUS, gained))
+    Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. string.format(L.GOLD_NODE_BONUS, gained))
 end
 
 -- ==================== Ticker de minage passif ====================
@@ -549,7 +549,7 @@ local function MineTickerFunc(elapsed)
                         Overlord.Ressources:RefreshHUD()
                         ShowFloatingGold(gained)
                         if gold >= GOLD_MAX then
-                            Overlord:PrintNotification("|cFFFFD700[Overlord]|r " .. L.GOLD_FULL)
+                            Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.GOLD_FULL)
                         end
                     end
                 end

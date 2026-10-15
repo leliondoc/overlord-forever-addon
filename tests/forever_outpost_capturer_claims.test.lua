@@ -63,6 +63,8 @@ for _, method in ipairs({ "Send", "SendToChannel", "BroadcastToRelay" }) do
     sync[method] = function(_, kind, data) sent[#sent + 1] = { kind, data }; return true end
 end
 Overlord.PrintNotification = function() end
+-- The red line mid-screen (2.0.4, our guild's sites) is counted apart from chat lines.
+Overlord.PrintRaidWarning = function() end
 local EPOCH = OverlordDB.lastResetTimestamp
 
 local function code(fac) return fac == "Alliance" and "A" or "H" end
@@ -388,8 +390,13 @@ Overlord.L.OUTPOST_DEFENDER_UNDER_ATTACK_BY = "%s: UNDER ATTACK by %s (%s)"
 assert(op:CompleteCapture("silverpine", guild, "Alliance", now - 100, "global", true, capper), "fixture capture refused")
 local warned = 0
 Overlord.PrintNotification = function(_, text) if type(text) == "string" and text:find("UNDER ATTACK", 1, true) then warned = warned + 1 end end
+-- 2.0.4: the red line mid-screen for our guild's site (silent), counted apart from chat.
+local savedRaidWarning, onScreen = Overlord.PrintRaidWarning, 0
+Overlord.PrintRaidWarning = function(_, _, silent) if silent then onScreen = onScreen + 1 end end
 sync:OnReceiveOutpostState(string.format("v1:silverpine:in_progress:10:Horde Guild:H:0:0:%d:300:global:0:::0:0:Horde Attacker", now), "Horde Attacker-Forever", "CHANNEL")
 assert(warned == 1, "an assault naming no previous tenant did not warn the defenders: " .. warned)
+assert(onScreen == 1, "our guild's outpost under attack showed no silent red line mid-screen")
+Overlord.PrintRaidWarning = savedRaidWarning
 Overlord.PrintNotification = function() end
 print("Outpost claims: defender alert without the previous tenant in the assault")
 

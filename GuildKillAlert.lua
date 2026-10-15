@@ -416,7 +416,7 @@ local function RememberShownPersisted(key, serverNow)
 end
 
 local function Show(text, ally)
-    Overlord:PrintNotification((ally and "|cFF33FF66[Overlord]|r " or "|cFFFF4444[Overlord]|r ") .. text)
+    Overlord:PrintNotification((ally and "|cFF00FF00[Overlord]|r " or "|cFFFF4444[Overlord]|r ") .. text)
 end
 
 -- Appele apres toutes les validations d'un K recu (Sync:OnReceiveKill) et pour nos

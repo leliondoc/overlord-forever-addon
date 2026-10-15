@@ -52,7 +52,7 @@ local lastGmBroadcastAt = 0
 
 local function Dbg(msg)
     if OverlordDB and OverlordDB.config and OverlordDB.config.debug then
-        print("|cFFFF8800[Overlord:GeneralSync]|r " .. tostring(msg))
+        print("|cFF9D9D9D[Overlord:GeneralSync]|r " .. tostring(msg))
     end
 end
 

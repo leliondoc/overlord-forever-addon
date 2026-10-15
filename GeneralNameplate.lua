@@ -120,6 +120,9 @@ local function IsGeneralFrontContext()
 end
 
 local function CanMonitorGeneralDuel()
+    -- 2.0.4: the duel music is off (Core PlayGeneralDuelMusic), so nothing is armed and
+    -- no "GM" pulse goes out for a music nobody plays.
+    if not Overlord.GENERAL_DUEL_MUSIC then return false end
     if not IsGeneralFrontContext() or Overlord.InstanceSuspended then return false end
     local gen = Overlord.General
     return gen and gen.IsLocalHolder and gen:IsLocalHolder()

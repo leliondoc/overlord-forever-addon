@@ -4,7 +4,7 @@ local locale = GetLocale() or "enUS"
 
 if locale == "ptBR" then
     L.MINE_DARROW = "Monte das Flechas"
-    L.GOLD_HEADER_TIP = "Ganhe coins nos círculos marcados. Contraforte de Eira dos Montes: Mina Azurelode e Monte das Flechas. Floresta de Pinhaprata: Mina Elemgorge. Loch Modan: Mina Stonesplinter. Floresta de Elwynn: Mina Jasperlode."
+    L.GOLD_HEADER_TIP = "Ganhe platina nos círculos marcados. Contraforte de Eira dos Montes: Mina Azurelode e Monte das Flechas. Floresta de Pinhaprata: Mina Elemgorge. Loch Modan: Mina Stonesplinter. Floresta de Elwynn: Mina Jasperlode."
     L.HELP_ZONES = "|cFFFFFF00/ov zones|r: Mostrar pontos disponíveis com coordenadas"
     L.HELP_WHERE = "|cFFFFFF00/ov where|r: Alternar indicador de zona"
     L.HELP_SYNC = "|cFFFFFF00/ov sync [Jogador]|r: Pedir sincronização a um jogador ou grupo alcançável"
@@ -18,7 +18,7 @@ if locale == "ptBR" then
     L.SHARD_TOOLTIP_ALL_SAME = "Todos os jogadores sincronizados estão no mesmo layer."
 elseif locale == "zhCN" then
     L.MINE_DARROW = "达隆山"
-    L.GOLD_HEADER_TIP = "在标记的区域内获得硬币。希尔斯布莱德丘陵：碧玉矿洞与达隆山；银松森林：艾伦矿洞；洛克莫丹：碎石矿洞；艾尔文森林：玉石矿洞。"
+    L.GOLD_HEADER_TIP = "在标记的区域内获得白金。希尔斯布莱德丘陵：碧玉矿洞与达隆山；银松森林：艾伦矿洞；洛克莫丹：碎石矿洞；艾尔文森林：玉石矿洞。"
     L.HELP_HEADER = "|cFF00FF00========== Overlord：命令 ==========|r"
     L.HELP_SHOW = "|cFFFFFF00/ov show|r：显示界面"
     L.HELP_TOGGLE = "|cFFFFFF00/ov toggle|r：切换界面"

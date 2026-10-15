@@ -407,11 +407,12 @@ local function CheckLocalOutpostDefense(siteKey, st, site)
                 and Overlord.Zones:GetEnemyFactionName()
                 or ((Overlord.PlayerFaction == "Alliance") and "Horde" or "Alliance")
             if L.OUTPOST_UNDER_ATTACK then
-                Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.OUTPOST_UNDER_ATTACK,
-                    OP:GetDisplayName(site), facLabel))
-            end
-            if OverlordDB and OverlordDB.config and OverlordDB.config.soundEnabled then
-                pcall(PlaySound, SOUNDKIT and SOUNDKIT.RAID_WARNING or 8959)
+                local text = string.format(L.OUTPOST_UNDER_ATTACK, OP:GetDisplayName(site), facLabel)
+                Overlord:PrintNotification("|cFFFF4444[Overlord]|r " .. text)
+                -- 2.0.4: the red line mid-screen, never the raid warning sound.
+                if Overlord.Sync and Overlord.Sync.WarnOwnSiteAttacked then
+                    Overlord.Sync:WarnOwnSiteAttacked(siteKey, text)
+                end
             end
             RefreshOutpostHud()
         end

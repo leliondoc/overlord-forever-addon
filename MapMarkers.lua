@@ -1232,7 +1232,9 @@ function Overlord.MapMarkers:CreateMapModeButton()
     btn:SetScript("OnClick", function(b)
         local mm = Overlord.MapMarkers
         mm:SetWorldMapDisplayMode(mm:GetNextWorldMapDisplayMode())
-        if PlaySound and SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON then
+        local cfg = OverlordDB and OverlordDB.config
+        if not (cfg and cfg.soundEnabled == false)
+            and PlaySound and SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON then
             PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
         end
         if b:IsMouseOver() and b:GetScript("OnEnter") then b:GetScript("OnEnter")(b) end
@@ -2776,13 +2778,13 @@ function Overlord.MapMarkers:ShowAvailableZones()
             local tag = zone.status == "available" and "!" or "X"
             Overlord:PrintNotification(string.format("  |cFFFF4444[%s] %s|r - %s", tag, zone.name, ef))
         elseif not zone.owner and zone.status == "available" then
-            Overlord:PrintNotification(string.format("  |cFFB0B8B0[!] %s|r - %s", zone.name, c))
+            Overlord:PrintNotification(string.format("  |cFF9D9D9D[!] %s|r - %s", zone.name, c))
         elseif not zone.owner then
-            Overlord:PrintNotification(string.format("  |cFF8A9098[X] %s|r - %s", zone.name, L.MM_NEUTRAL))
+            Overlord:PrintNotification(string.format("  |cFF9D9D9D[X] %s|r - %s", zone.name, L.MM_NEUTRAL))
         elseif zone.status == "available" then
             Overlord:PrintNotification(string.format("  |cFFFFFF00[!] %s|r - %s", zone.name, c))
         else
-            Overlord:PrintNotification(string.format("  |cFF888888[X] %s|r", zone.name))
+            Overlord:PrintNotification(string.format("  |cFF9D9D9D[X] %s|r", zone.name))
         end
     end
 end

@@ -2359,7 +2359,7 @@ RenderKillRows = function(force)
             local rank = view.ranks and view.ranks.sortedKills[dataIndex] or dataIndex
             local isOwn = myName ~= nil and shortName:sub(1, #myName) == myName
                 and (#shortName == #myName or shortName:sub(#myName + 1, #myName + 2) == " (")
-            -- Most Wanted : tete de mort devant les cinq meilleurs ennemis (MostWanted.lua).
+            -- Némésis : tete de mort devant les cinq meilleurs ennemis (Nemesis.lua).
             local wanted = Overlord.MostWanted and Overlord.MostWanted.IsWanted
                 and Overlord.MostWanted:IsWanted(entry.name) ~= nil
             local paintKey = rank .. "|" .. tostring(entry.kills) .. "|" .. tostring(class) .. "|"
@@ -2963,7 +2963,7 @@ local function InfoNumber(value)
 end
 
 local function InfoText(label, value)
-    return "|cFFF8B700" .. label .. "|r " .. value
+    return "|cFFFFD100" .. label .. "|r " .. value
 end
 
 local function InfoSetLine(fs, text)

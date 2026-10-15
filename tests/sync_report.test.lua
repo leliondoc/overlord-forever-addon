@@ -17,7 +17,7 @@ CreateFrame = function() return frameStub end
 assert(loadfile("NetworkHealth.lua"))() -- summary shared with the panel indicator
 assert(loadfile("Commands.lua"))()
 
-local GREEN, YELLOW, RED = "|cFF40FF40", "|cFFFFD100", "|cFFFF4040"
+local GREEN, YELLOW, RED = "|cFF00FF00", "|cFFFFD100", "|cFFFF4444"
 local function run(command)
     lines = {}
     sync._historyCatchupStats, sync._historyCatchupPending = nil, nil

@@ -61,6 +61,7 @@ en = {
     RANK_WEEK_NOT_COMPARED = "A top 3 week needs your ranking to have been compared with other players during the week's last 24 hours.",
     RANK_TIP_COMPARED = "Ranking compared with other players %s ago.",
     RANK_TIP_NOT_COMPARED = "Ranking not compared with other players yet.",
+    RANK_TIP_LOCAL = "Your Overlord rank is saved on this computer only: other players do not see it.",
 },
 fr = {
     RANK_TAB_TOOLTIP = "Rang Overlord",
@@ -110,6 +111,7 @@ fr = {
     RANK_WEEK_NOT_COMPARED = "Une semaine dans le top 3 demande que votre classement ait été comparé à celui d'autres joueurs pendant les 24 dernières heures de la semaine.",
     RANK_TIP_COMPARED = "Classement comparé à celui d'autres joueurs il y a %s.",
     RANK_TIP_NOT_COMPARED = "Classement pas encore comparé à celui d'autres joueurs.",
+    RANK_TIP_LOCAL = "Votre rang Overlord est enregistré uniquement sur cet ordinateur : les autres joueurs ne le voient pas.",
 },
 es = {
     RANK_TAB_TOOLTIP = "Rango Overlord",
@@ -159,6 +161,7 @@ es = {
     RANK_WEEK_NOT_COMPARED = "Una semana en el top 3 pide que tu clasificación se haya comparado con la de otros jugadores durante las últimas 24 horas de la semana.",
     RANK_TIP_COMPARED = "Clasificación comparada con la de otros jugadores hace %s.",
     RANK_TIP_NOT_COMPARED = "Clasificación aún no comparada con la de otros jugadores.",
+    RANK_TIP_LOCAL = "Tu rango Overlord se guarda solo en este ordenador: los demás jugadores no lo ven.",
 },
 de = {
     RANK_TAB_TOOLTIP = "Overlord-Rang",
@@ -208,6 +211,7 @@ de = {
     RANK_WEEK_NOT_COMPARED = "Eine Woche in den Top 3 verlangt, dass Eure Rangliste in den letzten 24 Stunden der Woche mit der anderer Spieler verglichen wurde.",
     RANK_TIP_COMPARED = "Rangliste vor %s mit anderen Spielern abgeglichen.",
     RANK_TIP_NOT_COMPARED = "Rangliste noch nicht mit anderen Spielern abgeglichen.",
+    RANK_TIP_LOCAL = "Euer Overlord-Rang wird nur auf diesem Computer gespeichert: Andere Spieler sehen ihn nicht.",
 },
 ru = {
     RANK_TAB_TOOLTIP = "Ранг Overlord",
@@ -257,6 +261,7 @@ ru = {
     RANK_WEEK_NOT_COMPARED = "Неделя в топ-3 требует, чтобы ваш рейтинг был сверен с рейтингом других игроков в последние 24 часа недели.",
     RANK_TIP_COMPARED = "Рейтинг сверен с другими игроками %s назад.",
     RANK_TIP_NOT_COMPARED = "Рейтинг ещё не сверялся с другими игроками.",
+    RANK_TIP_LOCAL = "Ваш ранг Overlord хранится только на этом компьютере: другие игроки его не видят.",
 },
 pt = {
     RANK_TAB_TOOLTIP = "Patente Overlord",
@@ -306,6 +311,7 @@ pt = {
     RANK_WEEK_NOT_COMPARED = "Uma semana no top 3 exige que a sua classificação tenha sido comparada com a de outros jogadores nas últimas 24 horas da semana.",
     RANK_TIP_COMPARED = "Classificação comparada com a de outros jogadores há %s.",
     RANK_TIP_NOT_COMPARED = "Classificação ainda não comparada com a de outros jogadores.",
+    RANK_TIP_LOCAL = "Sua patente Overlord fica salva apenas neste computador: os outros jogadores não a veem.",
 },
 zhCN = {
     RANK_TAB_TOOLTIP = "Overlord 军衔",
@@ -355,6 +361,7 @@ zhCN = {
     RANK_WEEK_NOT_COMPARED = "进入前 3 名的一周，要求你的排行榜在该周最后 24 小时内与其他玩家比对过。",
     RANK_TIP_COMPARED = "排行榜已在 %s前与其他玩家比对。",
     RANK_TIP_NOT_COMPARED = "排行榜尚未与其他玩家比对。",
+    RANK_TIP_LOCAL = "你的 Overlord 军衔仅保存在这台电脑上：其他玩家看不到它。",
 },
 }
 

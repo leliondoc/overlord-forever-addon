@@ -666,7 +666,8 @@ end
 -- un client ne renvoie jamais son propre palier avant l'heure du rappel, et une
 -- annonce recue ne declenche jamais d'envoi.
 -- FK : 1:<front|#uiMapID>:<palier>:<tranche de 30 s du serveur>
-local FIGHT_BRACKETS = { 500, 300, 200, 150, 100, 75, 50, 40, 30, 20, 10, 5 }
+-- 2.0.4: 750+, 1000+, 1500+ and 2000+ above 500+ (very large fights told apart).
+local FIGHT_BRACKETS = { 2000, 1500, 1000, 750, 500, 300, 200, 150, 100, 75, 50, 40, 30, 20, 10, 5 }
 local REPORT_BRACKET_OK = { [1] = true }
 for _, floor in ipairs(FIGHT_BRACKETS) do REPORT_BRACKET_OK[floor] = true end
 local REPORT_SLOT_SEC = 30

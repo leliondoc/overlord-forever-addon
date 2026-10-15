@@ -190,7 +190,7 @@ local debugKillExpiry = 0
 
 local function dbg(...)
     if debugKillMode and GetTime() < debugKillExpiry then
-        print("|cFF00FFFF[Debug]|r", ...)
+        print("|cFF9D9D9D[Debug]|r", ...)
     end
 end
 
@@ -998,6 +998,10 @@ function Overlord.Combat:ProcessKill(killerGUID, killerName, victimGUID, victimN
         end
     end
     RecordProcessKillDedup(victimGUID, enrichedVictimName, victimName, now)
+    -- 2.0.4: our killing blow on a Most Wanted (the skull) pays its bounty in coins.
+    if playerFullName and not proofOnly and Overlord.MostWanted and Overlord.MostWanted.PayBounty then
+        Overlord.MostWanted:PayBounty(enrichedVictimName or victimName)
+    end
     if not proofOnly and Overlord.InActiveFront and victimName and victimName ~= "?" then
         local zone = Overlord.Zones:GetCurrentPlayerZone()
         if zone and zone.status ~= "locked" then
