@@ -10,6 +10,13 @@ local L = Overlord.L
 Overlord.Zones.OBJECTIVE_NEUTRAL_ATLAS = "Warfronts-FieldMapIcons-Empty-Banner"
 Overlord.Zones.OBJECTIVE_ALLIANCE_ATLAS = "Warfronts-FieldMapIcons-Alliance-Banner"
 Overlord.Zones.OBJECTIVE_HORDE_ATLAS = "Warfronts-FieldMapIcons-Horde-Banner"
+-- 2.0.3: a point the player's faction can take now is shown in yellow, and an ordinary one
+-- takes the Warfronts barracks (crossed swords). The client has the barracks in grey, blue
+-- and red only: the grey one is tinted, and a copy on top in ADD mode (the "glow" texture
+-- of ApplyZoneMapIcon) lifts it to the yellow of the Warfronts "Neutral" banner.
+Overlord.Zones.OBJECTIVE_ATTACK_ATLAS = "Warfronts-BaseMapIcons-Empty-Barracks"
+Overlord.Zones.ATTACK_COLOR = { 1, 0.82, 0 }
+Overlord.Zones.ATTACK_ICON_GLOW = { 0.55, 0.45, 0.05 }
 
 local function objectiveAtlasForOwner(owner)
     local Z = Overlord.Zones
@@ -18,13 +25,60 @@ local function objectiveAtlasForOwner(owner)
     return Z.OBJECTIVE_NEUTRAL_ATLAS
 end
 
+-- A point the player's faction can attack now, on any front: not its own, not in progress,
+-- every point before it (for that faction) held by it, every other point of the front for
+-- the enemy capital, and the front not on truce (onTruce is read here when the caller does
+-- not know it). Read from the owners, not from the "available" status, which is only kept
+-- up to date for the front the player stands on (other fronts' maps showed no yellow).
+function Overlord.Zones:IsZoneAttackable(zone, onTruce)
+    local pf = Overlord.PlayerFaction
+    if not zone or not pf or zone.owner == pf or zone.status == "in_progress" then return false end
+    local fronts, front = Overlord.Fronts, nil
+    if fronts and fronts.GetZone then front = select(2, fronts:GetZone(zone.id)) end
+    local ids = front and front.prereqs and front.prereqs[pf] and front.prereqs[pf][zone.id]
+    if not ids then return false end
+    for _, id in ipairs(ids) do
+        local held = fronts:GetZone(id)
+        if not held or held.owner ~= pf or held.status == "in_progress" or held._loginSyncUnconfirmed then
+            return false
+        end
+    end
+    if zone.id == fronts:GetEnemyCapitalId(pf, front.id) then
+        for _, other in ipairs(front.zones or {}) do
+            if other.id ~= zone.id and (other.owner ~= pf or other.status == "in_progress"
+                or other._loginSyncUnconfirmed) then
+                return false
+            end
+        end
+    end
+    if onTruce == nil then onTruce = self:IsFrontOnTruce(zone.id, front.id) end
+    return not onTruce
+end
+
 -- Applique une icone de zone sur une texture de la carte. La taille reste celle posee par
--- l'appelant (AnchorZoneIcon) : l'atlas ne l'impose pas.
-function Overlord.Zones:ApplyZoneMapIcon(tex, atlas)
+-- l'appelant (AnchorZoneIcon) : l'atlas ne l'impose pas. glow (optional): a second texture
+-- laid over tex, shown only for the attack icon (see OBJECTIVE_ATTACK_ATLAS).
+function Overlord.Zones:ApplyZoneMapIcon(tex, atlas, glow)
     if not tex or not atlas or atlas == "" or not tex.SetAtlas then return false end
     tex:SetTexCoord(0, 1, 0, 1)
     tex:SetVertexColor(1, 1, 1, 1)
     local ok, applied = pcall(tex.SetAtlas, tex, atlas, false)
+    local attack = ok and atlas == self.OBJECTIVE_ATTACK_ATLAS
+    if attack then
+        local c = self.ATTACK_COLOR
+        tex:SetVertexColor(c[1], c[2], c[3], 1)
+    end
+    if glow then
+        if attack and glow.SetAtlas and pcall(glow.SetAtlas, glow, atlas, false) then
+            local c = self.ATTACK_ICON_GLOW
+            glow:SetTexCoord(0, 1, 0, 1)
+            glow:SetBlendMode("ADD")
+            glow:SetVertexColor(c[1], c[2], c[3], 1)
+            glow:Show()
+        else
+            glow:Hide()
+        end
+    end
     return ok and applied
 end
 
@@ -51,8 +105,13 @@ local function heldCapitalMainHallAtlas(zone)
 end
 
 -- Atlas icône carte / panneau zone. hideWhenContestedWithOwner=true : pas d'icône en conteste (carte).
-function Overlord.Zones:GetZoneMapIconAtlas(zone, hideWhenContestedWithOwner)
+function Overlord.Zones:GetZoneMapIconAtlas(zone, hideWhenContestedWithOwner, attackable)
     if not zone then return self.OBJECTIVE_NEUTRAL_ATLAS end
+
+    -- attackable: the caller's IsZoneAttackable (capitals keep their main hall).
+    if attackable and not zone.isCapital and zone.status ~= "in_progress" then
+        return self.OBJECTIVE_ATTACK_ATLAS
+    end
 
     if zone.status == "in_progress" and zone.owner then
         if hideWhenContestedWithOwner then return nil end
@@ -90,14 +149,17 @@ local CAPITAL_VICTORY_COOLDOWN = 900 -- 15 min (anti chain-cap ; etait 30 min)
 -- front is the winner's at once, the fallen capital takes its kept stamp at once (one
 -- second after the victory) and the loser may take points back at once; the 6 hours
 -- between two victories of a front stay. The date is the weekly reset of Tuesday
--- 2026-10-27, 08:00 UTC (chosen on 2026-10-14: a week for 2.0.2 to spread after its
--- release), when every map and every truce is wiped anyway: all clients
--- change rule on the same empty map. Before it nothing changes; nil = never.
+-- 2026-10-20, 08:00 UTC (2.0.3: the map layout cut already leaves every older client
+-- out of the map exchange, so the week first left for 2.0.2 to spread is not needed;
+-- 2.0.2 itself keeps 2026-10-27), when every map and every truce is wiped anyway: all
+-- clients change rule on the same empty map, and no truce-end record of the old rule
+-- survives (see TruceSecondsOfEpoch). It must stay a weekly reset. Before it nothing
+-- changes; nil = never.
 -- Why a date: a client without the truce next to clients that still have it gave two
 -- maps for 25 minutes after a victory, then a legitimate capture erased everywhere
 -- (bench of 86 clients, 2026-10-14). Clients that do not run this rule are therefore
 -- left out of the map exchange from the same moment (SyncRelay, "~t0"): update required.
-Overlord.Zones.TRUCELESS_FROM = 1793088000
+Overlord.Zones.TRUCELESS_FROM = 1792483200
 local function TruceSecondsFor(victoryTs)
     local from = tonumber(Overlord.Zones.TRUCELESS_FROM)
     victoryTs = tonumber(victoryTs)
@@ -710,6 +772,10 @@ function Overlord.Zones:ClearCaptureFinalUnattestedState(zone)
     zone._observerFinalStatePollAt = nil
     zone._observerFinalStatePollCount = nil
     zone._observerCaptureConfirmPollAt = nil
+    -- A new state is a new siege wave for the prerequisite catch-up (SyncAux).
+    zone._prereqMismatchOwner = nil
+    zone._prereqMismatchRounds = nil
+    zone._prereqMismatchLastAt = nil
     zone._syncGateRemoteProgress = nil
     zone._syncGateRemoteProgressUntil = nil
     zone._restoredInProgress = nil

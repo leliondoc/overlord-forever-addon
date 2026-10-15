@@ -161,6 +161,8 @@ L.CAPTURE_LAUNCHED = "Captura de %s iniciada!"
 L.GO_TO_ZONE = "Vá para %s (%.1f, %.1f) para capturar!"
 L.ENEMY_CONTROL_MSG = "%s está sob controle inimigo. Capture os pré-requisitos primeiro."
 L.CAPTURE_BLOCKED_RULES = "%s ainda não pode ser capturado (trégua ou pré-requisitos)."
+-- 2.0.3: from the truce retirement (Zones.TRUCELESS_FROM) there is no truce to name.
+L.CAPTURE_BLOCKED_RULES_NOTRUCE = "%s ainda não pode ser capturado (pré-requisitos)."
 L.ZONE_IS_LOCKED = "%s está bloqueado."
 L.ALREADY_IN_PROGRESS = "%s já está em andamento..."
 L.ZONE_UNDER_CONTROL = "%s está sob controle da facção %s."

@@ -404,11 +404,23 @@ Overlord.Sync.MAP_MIN_VERSION = "1.7.0"
 -- those captures everywhere (bench, 2026-10-14). Known by its presence ("~t0", see
 -- Relay:IsOutdatedMapPeer) or by a stated version that runs the rule for sure.
 Overlord.Sync.TRUCELESS_VERSION = "2.0.2"
+-- 2.0.3: Hillsbrad has 10 points; an older client's maps hold another zone set and
+-- each side refuses the other's whole map (see Relay map layout, "~y"). A request
+-- that states an older version is not answered. Raise it with every layout change.
+Overlord.Sync.MAP_LAYOUT_VERSION = "2.0.3"
 function Overlord.Sync:IsOutdatedMapPeer(name, version)
-    -- The version a request states decides alone: a player who has just updated is
-    -- still known by its previous presence until its next one is heard.
+    -- The version a request states decides alone (2.0.3: unless the requester's own
+    -- presence says another map layout): a player who has just updated is still known
+    -- by its previous presence until its next one is heard.
     if type(version) == "string" and version:match("^%d+%.%d+%.%d+$") then
         if CompareVersions(version, self.MAP_MIN_VERSION) < 0 then return true end
+        if CompareVersions(version, self.MAP_LAYOUT_VERSION) < 0 then return true end
+        -- At or above the floor, a later layout change (its presence says another
+        -- layout) is still outside: its maps and ours would be refused both ways.
+        local relay = Overlord.Relay
+        if relay and relay.PeerLayoutDiffers and relay:PeerLayoutDiffers(name) then return true end
+        -- (With this floor at or above TRUCELESS_VERSION, the truce line below can only
+        -- return false; it stays so the truce rule still reads, and is tested, on its own.)
         local retired = Overlord.Zones and Overlord.Zones.IsTruceRetired and Overlord.Zones:IsTruceRetired()
         if not retired or CompareVersions(version, self.TRUCELESS_VERSION) >= 0 then return false end
     end
@@ -4067,14 +4079,10 @@ local function RequestObserverCaptureConfirmation(zone)
         Overlord.Sync:SendTargetedObserverMapRequest(
             zone, Overlord.Sync:GetSRPayload("T"))
     end
+    -- (2.0.3: SendSyncRequest already goes through the relay; the second relay request
+    -- sent here in large events carried a new nonce, escaped the relay dedup and made
+    -- every hearer answer twice.)
     Overlord.Sync:SendSyncRequest()
-    -- Gros event cross-faction : SendSyncRequest evite la communaute par defaut.
-    -- Ici le timer est deja au seuil, donc on fait un petit SR cible pour obtenir
-    -- un C / ZS captured reel au lieu de laisser l'observateur orange longtemps.
-    if Overlord.InActiveFront and Overlord.Sync.IsLargeEvent and Overlord.Sync:IsLargeEvent()
-        and Overlord.Sync.BroadcastToRelay then
-        Overlord.Sync:BroadcastToRelay("SR", SRPayload("T"))
-    end
 end
 
 -- Observateur distant seulement (pas isHolding) : ZS a 100 % sans message C recu.
@@ -5751,6 +5759,7 @@ end
 function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
     -- Routed request: delayed replies return through SendWhisper's beta route.
     local viaBetaBroadcast = false
+    local requestSession = nil
     local enemyFriendKey = nil
     if channel ~= "BETA" and replyToOverride and self._enemyBNetRequesters then
         local key = tostring(replyToOverride):lower()
@@ -5786,6 +5795,7 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         -- reply at once; the replies saturated the relay (24 % losses in 8 min).
         -- A lone requester is still covered by its targeted login/periodic pulls.
         viaBetaBroadcast = not Overlord.Relay:IsTargetedDispatch()
+        requestSession = context and context.session or nil
         channel = viaBetaBroadcast and "CHANNEL" or "WHISPER"
         replyToOverride = sender
     end
@@ -6011,7 +6021,20 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         -- Zones compactes (ZA) : snapshot atomique, toutes les pages portent le meme identifiant.
         -- Les zones neutres sont explicites (N) et les reparations locales non
         -- confirmees ne sont jamais relayees comme verite reseau.
-        local zaPages, zaPageCount = self:BuildZoneAllSnapshotPages(srZones, "G")
+        -- 2.0.3: an answer to the requester alone leaves the map pages out when its own
+        -- last presence says it holds this very map (Relay:PeerHoldsOurMap): the blind
+        -- periodic catch-up asked a whole map of a neighbour every 2.5-3 min, most of the
+        -- time an identical one. Everything else below (sieges, keeps and outposts, the
+        -- victory journal) still goes; those are not in the digest. Only for a targeted
+        -- request of the session that said that presence: a broadcast request is the
+        -- login, reload or instance-exit "anyone, a map" whose gate only a whole map
+        -- closes, and a request of another session comes after a /reload.
+        local mapAlreadyHeld = not quarantinedMapOnly and not viaBetaBroadcast and requestSession
+            and (whisperTarget or bnetTarget) and Overlord.Relay and Overlord.Relay.PeerHoldsOurMap
+            and Overlord.Relay:PeerHoldsOurMap(whisperTarget or bnetTarget, requestSession)
+        if mapAlreadyHeld then NoteOutdated("mapPagesHeldSkipped") end
+        local zaPages, zaPageCount = {}, 0
+        if not mapAlreadyHeld then zaPages, zaPageCount = self:BuildZoneAllSnapshotPages(srZones, "G") end
         for zaPageIndex = 1, zaPageCount do
             local zaPage = zaPages[zaPageIndex]
             if not quarantinedMapOnly or zaPage:match("^@Q%-") then

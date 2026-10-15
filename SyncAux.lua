@@ -150,13 +150,16 @@ function Overlord.Sync:RequestObserverCaptureConfirmationIfComplete(zone)
     -- At 100% (or a near-final stale heartbeat), ask the known origin first.
     -- The read-only request never grants capture authority.
     self:SendTargetedObserverMapRequest(zone, payload)
+    -- 2.0.3: the relay copy first, like SendSyncRequest. The raw group and channel
+    -- copies that follow are then recognised as carried (RelayAlreadyCarries) and not
+    -- sent again: one ask was two or three copies, and every group mate answered the
+    -- raw RAID/PARTY one with a whole map. Without the relay they still go out.
+    if Overlord.InActiveFront then
+        self:BroadcastToRelay("SR", payload)
+    end
     self:Send("SR", payload)
     if IsInRaid() or IsInGroup() then
         self:SendToChannel("SR", payload, true)
-    end
-
-    if Overlord.InActiveFront then
-        self:BroadcastToRelay("SR", payload)
     end
 end
 
@@ -167,10 +170,17 @@ end
 -- "captured" stale n'est jamais re-verifie par les polls (ils ne surveillent que in_progress).
 -- Observateur : on ne corrige RIEN localement (regle dure), on force un SR canal + communaute,
 -- seule passerelle cross-faction ; la verite revient via ZS/ZA avec un ts plus recent.
-local PREREQ_MISMATCH_CHECK_INTERVAL = 5
 local PREREQ_MISMATCH_SR_COOLDOWN = 20
 local PREREQ_MISMATCH_MAX_ZS_AGE = 120
-local lastPrereqMismatchCheck = 0
+-- 2.0.3: a few rounds per siege wave, not one every 20 s for the whole siege. A capturer
+-- whose chain can never match ours (a client with another layout of the front) kept
+-- every enemy observer asking, and himself answering, for 8 minutes (24 rounds). The
+-- rounds of a wave go out at these seconds after its first one: spread, so that a slow
+-- relay does not swallow them all. The wave is the remote capture lease (a new one per
+-- wave); without one, the capturing faction on the zone, forgotten after a quiet minute
+-- and a half or when the zone changes state (Zones:ClearCaptureFinalUnattestedState).
+local PREREQ_MISMATCH_ROUND_AT = { 0, 20, 60 }
+local PREREQ_MISMATCH_WAVE_FORGET = 90
 local lastPrereqMismatchSR = 0
 
 function Overlord.Sync:RequestPrereqMismatchCatchup(zone)
@@ -181,32 +191,55 @@ function Overlord.Sync:RequestPrereqMismatchCatchup(zone)
     -- same-faction (critical) garantit deja la coherence des prerequis.
     if not owner or not pf or owner == pf then return end
     if Overlord.InstanceSuspended then return end
+    -- Login or instance-exit quarantine: our own prerequisites are not confirmed yet, a
+    -- mismatch would be an artefact (and the login requests are asking already).
+    if Overlord.WaitingForSync or (Overlord.IsCaptureSyncPending and Overlord:IsCaptureSyncPending()) then return end
     local now = GetTime()
-    if now - lastPrereqMismatchCheck < PREREQ_MISMATCH_CHECK_INTERVAL then return end
-    lastPrereqMismatchCheck = now
     if now - lastPrereqMismatchSR < PREREQ_MISMATCH_SR_COOLDOWN then return end
+    local remoteLease = zone._remoteCaptureLease
+    local wave = remoteLease
+    if not wave then
+        if zone._prereqMismatchOwner ~= owner
+            or now - (zone._prereqMismatchLastAt or 0) > PREREQ_MISMATCH_WAVE_FORGET then
+            zone._prereqMismatchOwner, zone._prereqMismatchRounds = owner, 0
+            zone._prereqMismatchFirstAt, zone._prereqMismatchWhispered = nil, nil
+        end
+        zone._prereqMismatchLastAt = now
+        wave = zone
+    end
+    local rounds = wave._prereqMismatchRounds or 0
+    local due = PREREQ_MISMATCH_ROUND_AT[rounds + 1]
+    if not due or (rounds > 0 and now - (wave._prereqMismatchFirstAt or now) < due) then return end
     -- Capture activement entretenue par le reseau : un in_progress orphelin/stale est
     -- deja couvert par PollIfStaleObserverInProgress (pas de double source de SR).
     local age = (Overlord.ServerNow and Overlord.ServerNow() or time()) - (tonumber(zone.updatedAt) or 0)
     if age > PREREQ_MISMATCH_MAX_ZS_AGE then return end
     local Z = Overlord.Zones
     if not Z or not Z.FactionMeetsPrereqsForZoneCapture then return end
+    -- (No shared check slot before this test any more: a healthy siege polled first
+    -- kept a mismatched zone from ever reaching it. The 20 s cooldown bounds the asks.)
     if Z:FactionMeetsPrereqsForZoneCapture(zone.id, owner) then return end
+    if rounds == 0 then wave._prereqMismatchFirstAt = now end
+    wave._prereqMismatchRounds = rounds + 1
     lastPrereqMismatchSR = now
     -- La meilleure source est l'auteur direct du ZS de capitale : il vient de
     -- franchir la chaine et possede donc la photo qui contient le C manque.
     -- Un SR territorial whisper est garanti et conserve l'identite gameplay,
     -- contrairement a un nouvel echantillonnage aleatoire de la communaute.
-    local remoteLease = zone._remoteCaptureLease
-    local directOrigin = remoteLease and remoteLease.directValidated == true
-        and remoteLease.originName or nil
+    -- (Once per wave, on the first round where the capturer is known first hand; the
+    -- other rounds only ask the channel.)
+    local directOrigin = not wave._prereqMismatchWhispered and remoteLease
+        and remoteLease.directValidated == true and remoteLease.originName or nil
+    -- A capturer outside the map exchange (an older release) would answer a whole map
+    -- that is refused: only the channel is asked then.
+    if directOrigin and self.IsOutdatedMapPeer and self:IsOutdatedMapPeer(directOrigin) then directOrigin = nil end
     local srPayload = self.GetSRPayload and self:GetSRPayload("T") or nil
     if directOrigin and directOrigin ~= "" and srPayload and srPayload ~= ""
         and self.IsValidWhisperTarget and self:IsValidWhisperTarget(directOrigin)
         and self.SendWhisper then
-        self:SendWhisper("SR", srPayload, directOrigin)
+        -- Spent only once it really left (a refused relay route tries again next round).
+        if self:SendWhisper("SR", srPayload, directOrigin) then wave._prereqMismatchWhispered = true end
     end
-    local isLarge = self.IsLargeEvent and self:IsLargeEvent()
     self:SendSyncRequest({
         criticalChannel = true,
     })

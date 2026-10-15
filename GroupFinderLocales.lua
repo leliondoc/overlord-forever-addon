@@ -88,7 +88,7 @@ en = {
     GF_TIP_MEMBERS = "Members: %d / %d",
     GF_TIP_FRONT = "Front: %s",
     GF_TIP_MAP = "Click: waypoint on the map.",
-    GF_TIP_COOLDOWN = "One accepted sign-up every 5 minutes.",
+    GF_TIP_COOLDOWN = "You can join a group every 2 minutes.",
     HELP_GROUPS = "|cFFFFFF00/ov groups|r: PvP group finder",
 },
 fr = {
@@ -169,7 +169,7 @@ fr = {
     GF_TIP_MEMBERS = "Membres : %d / %d",
     GF_TIP_FRONT = "Front : %s",
     GF_TIP_MAP = "Clic : repère sur la carte.",
-    GF_TIP_COOLDOWN = "Une inscription acceptée toutes les 5 minutes.",
+    GF_TIP_COOLDOWN = "Vous pouvez rejoindre un groupe toutes les 2 minutes.",
     HELP_GROUPS = "|cFFFFFF00/ov groups|r : recherche de groupe JcJ",
 },
 es = {
@@ -250,7 +250,7 @@ es = {
     GF_TIP_MEMBERS = "Miembros: %d / %d",
     GF_TIP_FRONT = "Frente: %s",
     GF_TIP_MAP = "Clic: marca en el mapa.",
-    GF_TIP_COOLDOWN = "Una solicitud aceptada cada 5 minutos.",
+    GF_TIP_COOLDOWN = "Puedes unirte a un grupo cada 2 minutos.",
     HELP_GROUPS = "|cFFFFFF00/ov groups|r: buscador de grupos JcJ",
 },
 de = {
@@ -331,7 +331,7 @@ de = {
     GF_TIP_MEMBERS = "Mitglieder: %d / %d",
     GF_TIP_FRONT = "Front: %s",
     GF_TIP_MAP = "Klick: Wegpunkt auf der Karte.",
-    GF_TIP_COOLDOWN = "Eine angenommene Anmeldung alle 5 Minuten.",
+    GF_TIP_COOLDOWN = "Ihr könnt alle 2 Minuten einer Gruppe beitreten.",
     HELP_GROUPS = "|cFFFFFF00/ov groups|r: PvP-Gruppensuche",
 },
 ru = {
@@ -412,7 +412,7 @@ ru = {
     GF_TIP_MEMBERS = "Участники: %d / %d",
     GF_TIP_FRONT = "Фронт: %s",
     GF_TIP_MAP = "Щелчок: метка на карте.",
-    GF_TIP_COOLDOWN = "Одна принятая заявка раз в 5 минут.",
+    GF_TIP_COOLDOWN = "Вступать в группу можно раз в 2 минуты.",
     HELP_GROUPS = "|cFFFFFF00/ov groups|r: поиск PvP-групп",
 },
 pt = {
@@ -493,7 +493,7 @@ pt = {
     GF_TIP_MEMBERS = "Membros: %d / %d",
     GF_TIP_FRONT = "Frente: %s",
     GF_TIP_MAP = "Clique: marcador no mapa.",
-    GF_TIP_COOLDOWN = "Uma inscrição aceita a cada 5 minutos.",
+    GF_TIP_COOLDOWN = "Você pode entrar em um grupo a cada 2 minutos.",
     HELP_GROUPS = "|cFFFFFF00/ov groups|r: localizador de grupos JxJ",
 },
 zhCN = {
@@ -574,7 +574,7 @@ zhCN = {
     GF_TIP_MEMBERS = "成员：%d / %d",
     GF_TIP_FRONT = "战线：%s",
     GF_TIP_MAP = "点击：在地图上设置标记。",
-    GF_TIP_COOLDOWN = "每 5 分钟可有一次申请被接受。",
+    GF_TIP_COOLDOWN = "每 2 分钟可加入一个队伍。",
     HELP_GROUPS = "|cFFFFFF00/ov groups|r: PvP 队伍查找器",
 },
 }

@@ -290,12 +290,21 @@ function ZoneArc.FontSize(labelDiameter)
     return math.floor(math.max(7, math.min(18, labelDiameter * 0.10)) * 2 + 0.5) / 2
 end
 
-function ZoneArc.SetFont(glyph, font, size)
-    if glyph._olSize == size then return end
-    glyph:SetFont(font, size, "")
-    glyph:SetTextColor(ZONE_TEXT_GOLD_R, ZONE_TEXT_GOLD_G, ZONE_TEXT_GOLD_B)
+-- 2.0.3: on a light circle (a point to attack, a mine) the letters take the dark brown of
+-- the banner titles (ZONE_TITLE_PARCHMENT, declared further down): dark = overlay._olArcDark.
+ZoneArc.DARK = { 0.192, 0.051, 0.008 }
+
+function ZoneArc.SetFont(glyph, font, size, dark)
+    dark = dark and true or false
+    if glyph._olSize == size and glyph._olDark == dark then return end
+    if glyph._olSize ~= size then glyph:SetFont(font, size, "") end
+    if dark then
+        glyph:SetTextColor(ZoneArc.DARK[1], ZoneArc.DARK[2], ZoneArc.DARK[3])
+    else
+        glyph:SetTextColor(ZONE_TEXT_GOLD_R, ZONE_TEXT_GOLD_G, ZONE_TEXT_GOLD_B)
+    end
     glyph:SetShadowColor(0, 0, 0, 0)
-    glyph._olSize = size
+    glyph._olSize, glyph._olDark = size, dark
 end
 
 -- Lettres de text dans glyphs[first...] et leurs largeurs a la taille size ; rend le
@@ -315,7 +324,7 @@ function ZoneArc.Letters(overlay, text, first, font, size, widths, spaces)
         if not glyph then
             glyph = holder:CreateFontString(nil, "OVERLAY")
             glyph:SetShadowOffset(0, 0)
-            ZoneArc.SetFont(glyph, font, size)
+            ZoneArc.SetFont(glyph, font, size, overlay._olArcDark)
             glyphs[index] = glyph
         end
         if glyph._olChar ~= ch then
@@ -325,7 +334,7 @@ function ZoneArc.Letters(overlay, text, first, font, size, widths, spaces)
         local width = known[ch]
         if not width then
             -- Mesuree sur la lettre elle-meme, a cette taille ; put() lui rend la sienne.
-            ZoneArc.SetFont(glyph, font, size)
+            ZoneArc.SetFont(glyph, font, size, overlay._olArcDark)
             width = glyph:GetStringWidth() or 0
             if width > 0 then known[ch] = width end
         end
@@ -356,7 +365,7 @@ function ZoneArc.Place(overlay, holder, glyphs, snapD, name, status, base, pass)
         return total
     end
     local function put(glyph, x, y, rotation)
-        ZoneArc.SetFont(glyph, font, size)
+        ZoneArc.SetFont(glyph, font, size, overlay._olArcDark)
         if glyph._olAnchor ~= "CENTER" then
             glyph:ClearAllPoints()
             glyph._olAnchor = "CENTER"
@@ -392,7 +401,7 @@ function ZoneArc.Place(overlay, holder, glyphs, snapD, name, status, base, pass)
     if not glyphs[1].SetRotation then
         -- Client sans rotation de texte : le nom reste droit, en haut du cercle.
         local glyph = glyphs[1]
-        ZoneArc.SetFont(glyph, font, size)
+        ZoneArc.SetFont(glyph, font, size, overlay._olArcDark)
         glyph:SetText(name)
         glyph._olChar = nil
         glyph:ClearAllPoints()
@@ -470,7 +479,8 @@ function ZoneArc.Place(overlay, holder, glyphs, snapD, name, status, base, pass)
 end
 
 function ZoneArc.Layout(overlay, snapD, labelDiameter, shown)
-    local name = shown and overlay.zone and overlay.zone.name or nil
+    -- _olArcName: a text of its own instead of the point's name (a mine's reserve).
+    local name = shown and (overlay._olArcName or (overlay.zone and overlay.zone.name)) or nil
     if type(name) ~= "string" or name == "" or not snapD or not labelDiameter then
         ZoneArc.Hide(overlay)
         return
@@ -478,7 +488,7 @@ function ZoneArc.Layout(overlay, snapD, labelDiameter, shown)
     local status = overlay._olArcStatus
     if type(status) ~= "string" or status == "" then status = nil end
     local base = ZoneArc.FontSize(labelDiameter)
-    local key = name .. "|" .. snapD .. "|" .. base .. "|" .. (status or "")
+    local key = name .. "|" .. snapD .. "|" .. base .. "|" .. (status or "") .. (overlay._olArcDark and "|d" or "")
     local holder = ZoneArc.Holder(overlay)
     if overlay._olArcScaled then
         holder:SetScale(1)
@@ -1881,6 +1891,24 @@ end
 
 local CIRCLE_MASK = "Interface\\CHARACTERFRAME\\TempPortraitAlphaMaskSmall"
 
+-- Edge of the capture circles, drawn like Blizzard's quest objective areas: a light rim
+-- fading inward, plus a short halo outside (Textures/zone_rim, white, tinted here). The
+-- circle edge sits at 116 px of the 128 px half-texture, hence the size factor. With no
+-- solid ring under it, the fill is drawn a little stronger and the rim is lightened.
+local ZONE_RIM = {
+    texture = "Interface\\AddOns\\Overlord\\Textures\\zone_rim",
+    scale = 128 / 116,
+    fill = 1.5,
+    alpha = 1.45,
+    light = 0.45,
+}
+
+local function StyleZoneRim(tex, r, g, b, alpha)
+    local k = ZONE_RIM.light
+    tex:SetVertexColor(r + (1 - r) * k, g + (1 - g) * k, b + (1 - b) * k)
+    tex:SetAlpha(math.min(1, alpha * ZONE_RIM.alpha))
+end
+
 local function AddCircleMask(frame, tex)
     pcall(function()
         local mask = frame:CreateMaskTexture()
@@ -1936,13 +1964,11 @@ function Overlord.MapMarkers:CreateZoneOverlay(zone)
     frame.fill = fill
     AddCircleMask(frame, fill)
 
-    local border = frame:CreateTexture(nil, "BORDER")
+    local border = frame:CreateTexture(nil, "ARTWORK", nil, 2)
     border:SetPoint("CENTER")
-    border:SetColorTexture(1, 0, 0)
-    border:SetAlpha(0.5)
+    border:SetTexture(ZONE_RIM.texture)
+    StyleZoneRim(border, 1, 0, 0, 0.5)
     frame.border = border
-
-    AddCircleMask(frame, border)
 
     -- Ruban Warboard natif (UI-Frame-Neutral-Ribbon).
     local titleBg = frame:CreateTexture(nil, "ARTWORK", nil, 7)
@@ -1974,6 +2000,11 @@ function Overlord.MapMarkers:CreateZoneOverlay(zone)
     iconTex:SetPoint("CENTER", 0, 0)
     iconTex:Hide()
     frame.iconTex = iconTex
+    -- Second layer of the attack icon (Zones.ApplyZoneMapIcon), on the same spot.
+    local iconGlow = frame:CreateTexture(nil, "OVERLAY", nil, 1)
+    iconGlow:SetAllPoints(iconTex)
+    iconGlow:Hide()
+    frame.iconGlow = iconGlow
 
     frame:Hide()
     return frame
@@ -2017,13 +2048,17 @@ function Overlord.MapMarkers.GetMapIconScale()
     return v
 end
 
-local function GetFactionZoneColors(zone)
+local function GetFactionZoneColors(zone, attackable)
     if Overlord.IsLoginZoneDisplayPending and Overlord:IsLoginZoneDisplayPending(zone) then
         return 0.55, 0.55, 0.48, 0.12, 0.34
     end
     local pf = Overlord.PlayerFaction
     if zone.status == "in_progress" then
         return 1, 0.45, 0.05, 0.38, 0.72
+    elseif attackable then
+        -- 2.0.3: a point the player's faction can take now (Zones:IsZoneAttackable).
+        local c = Overlord.Zones.ATTACK_COLOR
+        return c[1], c[2], c[3], 0.25, 0.55
     elseif not zone.owner then
         if zone.status == "available" then
             return 0.62, 0.65, 0.60, 0.34, 0.58
@@ -2098,8 +2133,7 @@ function Overlord.MapMarkers:UpdateOverlayLayout(overlay)
     overlay._olLabelDiameter = labelDiameter
     overlay._olShowTitles = showTitles
 
-    local borderScale = 1.08
-    overlay.border:SetSize(snapD * borderScale, snapD * borderScale)
+    overlay.border:SetSize(snapD * ZONE_RIM.scale, snapD * ZONE_RIM.scale)
 
     local titleSz = math.max(9, math.min(24, labelDiameter * 0.14))
     local subSz = math.max(7, math.min(18, labelDiameter * 0.10))
@@ -2176,13 +2210,16 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
     local diameter = overlay:GetWidth()
     local labelDiameter = overlay._olLabelDiameter or diameter
     local pf = Overlord.PlayerFaction
-    local r, g, b, fa, ba = GetFactionZoneColors(zone)
     local st = ""
     local st2 = ""
     local renderFid = self._renderFront and self._renderFront.id
     local onTruce, truceRemaining = Overlord.Zones:IsFrontOnTruce(zone.id, renderFid, true)
     local loginPending = Overlord.IsLoginZoneDisplayPending
         and Overlord:IsLoginZoneDisplayPending(zone)
+    local attackable = not loginPending and Overlord.Zones:IsZoneAttackable(zone, onTruce and true or false)
+    local r, g, b, fa, ba = GetFactionZoneColors(zone, attackable)
+    -- On the yellow circle the curved name takes the banners' brown (ZoneArc.DARK).
+    overlay._olArcDark = attackable or nil
 
     if loginPending then
         st = L.MAP_SYNC_PENDING or L.MAP_NEUTRAL or "SYNC"
@@ -2224,7 +2261,7 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
         r, g, b, 0.32 * opacityScale)
     local borderAlpha = ba * opacityScale
     local fillAlpha = fa * opacityScale
-    local iconAtlas = Overlord.Zones:GetZoneMapIconAtlas(zone, true)
+    local iconAtlas = Overlord.Zones:GetZoneMapIconAtlas(zone, true, attackable)
     local iconAlpha = Overlord.MapMarkers.GetMapIconOpacity()
     if overlay._olPaintValid
         and overlay._olPaintIconAlpha == iconAlpha
@@ -2248,9 +2285,8 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
     overlay._olPaintIconAlpha = iconAlpha
     overlay.fill:Show()
     overlay.fill:SetColorTexture(r, g, b)
-    overlay.fill:SetAlpha(fillAlpha)
-    overlay.border:SetColorTexture(r, g, b)
-    overlay.border:SetAlpha(borderAlpha)
+    overlay.fill:SetAlpha(math.min(1, fillAlpha * ZONE_RIM.fill))
+    StyleZoneRim(overlay.border, r, g, b, borderAlpha)
     -- Titre sur ruban parchemin : brun fonce (style Warboard). Sous-titres restent dores.
     overlay.text:SetTextColor(ZONE_TITLE_PARCHMENT_R, ZONE_TITLE_PARCHMENT_G, ZONE_TITLE_PARCHMENT_B)
     overlay.text:SetShadowColor(0, 0, 0, 0)
@@ -2277,11 +2313,13 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
     if overlay.iconTex then
         if iconAtlas then
             AnchorZoneIcon(overlay, labelDiameter, overlay._olShowTitles, st2 ~= "")
-            Overlord.Zones:ApplyZoneMapIcon(overlay.iconTex, iconAtlas)
+            Overlord.Zones:ApplyZoneMapIcon(overlay.iconTex, iconAtlas, overlay.iconGlow)
             overlay.iconTex:SetAlpha(iconAlpha)
+            if overlay.iconGlow then overlay.iconGlow:SetAlpha(iconAlpha) end
             overlay.iconTex:Show()
         else
             overlay.iconTex:Hide()
+            if overlay.iconGlow then overlay.iconGlow:Hide() end
             overlay._olIconLayoutKey = nil
         end
     end
@@ -2842,11 +2880,11 @@ local function CreateMinimapCirclePin(fillColor, borderColor)
     pin.fill = fill
     AddCircleMask(pin, fill)
 
-    local border = pin:CreateTexture(nil, "BORDER")
+    local border = pin:CreateTexture(nil, "ARTWORK", nil, 2)
     border:SetPoint("CENTER")
-    border:SetColorTexture(borderColor[1], borderColor[2], borderColor[3], borderColor[4])
+    border:SetTexture(ZONE_RIM.texture)
+    StyleZoneRim(border, borderColor[1], borderColor[2], borderColor[3], borderColor[4])
     pin.border = border
-    AddCircleMask(pin, border)
 
     AddMinimapClipMask(pin, fill)
     AddMinimapClipMask(pin, border)
@@ -2856,15 +2894,15 @@ end
 local function StyleMinimapCirclePin(pin, diameter, r, g, b, fillAlpha, borderAlpha, borderR, borderG, borderB)
     if pin._olDiam ~= diameter then
         pin:SetSize(diameter, diameter)
-        if pin.border then pin.border:SetSize(diameter * 1.15, diameter * 1.15) end
+        if pin.border then pin.border:SetSize(diameter * ZONE_RIM.scale, diameter * ZONE_RIM.scale) end
         pin._olDiam = diameter
     end
     borderR, borderG, borderB = borderR or r, borderG or g, borderB or b
     if pin._olR ~= r or pin._olG ~= g or pin._olB ~= b
         or pin._olBR ~= borderR or pin._olBG ~= borderG or pin._olBB ~= borderB
         or pin._olFillAlpha ~= fillAlpha or pin._olBorderAlpha ~= borderAlpha then
-        pin.fill:SetColorTexture(r, g, b, fillAlpha)
-        if pin.border then pin.border:SetColorTexture(borderR, borderG, borderB, borderAlpha) end
+        pin.fill:SetColorTexture(r, g, b, math.min(1, fillAlpha * ZONE_RIM.fill))
+        if pin.border then StyleZoneRim(pin.border, borderR, borderG, borderB, borderAlpha) end
         pin._olR, pin._olG, pin._olB = r, g, b
         pin._olBR, pin._olBG, pin._olBB = borderR, borderG, borderB
         pin._olFillAlpha, pin._olBorderAlpha = fillAlpha, borderAlpha
@@ -3325,7 +3363,7 @@ function Overlord.MapMarkers:UpdateMinimapPins(fullRefresh)
         local pin = minimapPins[zone.id]
         if pin then
             if fullRefresh or pin._olZoneStyle == nil then
-                local r, g, b, fa, ba = GetFactionZoneColors(zone)
+                local r, g, b, fa, ba = GetFactionZoneColors(zone, Overlord.Zones:IsZoneAttackable(zone))
                 pin._olZoneStyle = true
                 pin._olZR, pin._olZG, pin._olZB = r, g, b
                 pin._olZFA, pin._olZBA = fa * opacityScale, ba * opacityScale
@@ -3393,7 +3431,8 @@ end
 local minimapMinePins = {}
 local mineYardsPerPct = {}
 
-local MINE_MINIMAP_FILL = { 1, 0.82, 0, 0.34 }
+-- 2.0.3: mines in warm stone with a gold rim (yellow now means a point to attack).
+local MINE_MINIMAP_FILL = { 0.52, 0.45, 0.36, 0.34 }
 local MINE_MINIMAP_BORDER = { 1, 0.82, 0, 0.58 }
 
 local function ResolveResourceMinimapMapID(mapID, isResourceMapID)
@@ -4261,7 +4300,8 @@ end
 
 local mineOverlays = {}
 
-local MINE_OVERLAY_FILL = { 1, 0.82, 0, 0.38 }
+-- 2.0.3: warm stone with a gold rim (MINE_WORLD_CONFIG.rimColor): yellow is for points to attack.
+local MINE_OVERLAY_FILL = { 0.52, 0.45, 0.36, 0.40 }
 local MINE_OVERLAY_TEXT = { 1, 0.82, 0 }
 
 local MINE_WORLD_CONFIG
@@ -4281,6 +4321,14 @@ local function CreateResourceOverlay(resource, cfg)
     fill:SetAllPoints()
     fill:SetVertexColor(cfg.fillColor[1], cfg.fillColor[2], cfg.fillColor[3], cfg.fillColor[4])
     frame.fill = fill
+
+    -- Same edge as the capture circles (quest objective area rim), sized with the circle.
+    local rim = frame:CreateTexture(nil, "ARTWORK", nil, 3)
+    rim:SetPoint("CENTER")
+    rim:SetTexture(ZONE_RIM.texture)
+    local rimColor = cfg.rimColor or cfg.fillColor
+    StyleZoneRim(rim, rimColor[1], rimColor[2], rimColor[3], 0.5)
+    frame.rim = rim
 
     -- Ruban Warboard (meme style que les zones de capture).
     local titleBg = frame:CreateTexture(nil, "ARTWORK", nil, 7)
@@ -4366,6 +4414,7 @@ local function UpdateResourceOverlayVisuals(ov, resource, diameter, cfg)
     end
     if layoutChanged then
         ov._olResourceLayoutDiameter = snappedDiameter
+        if ov.rim then ov.rim:SetSize(diameter * ZONE_RIM.scale, diameter * ZONE_RIM.scale) end
         -- Infobulle sur le centre seulement : le reste du cercle laisse le survol
         -- aux points de quete et PNJ de la carte en dessous.
         local inset = math.max(0, diameter * 0.5 - math.max(14, diameter * 0.25))
@@ -4387,6 +4436,7 @@ local function UpdateResourceOverlayVisuals(ov, resource, diameter, cfg)
             local iconSize = math.max(10, diameter * 0.30)
             ov.iconTex:ClearAllPoints()
             ov.iconTex:SetPoint("TOP", ov.subtext, "BOTTOM", 0, 1)
+            ov._olIconCentered = nil
             ov.iconTex:SetSize(iconSize, iconSize)
             local atlas = ResolveResourceIconAtlas(cfg, ov.iconTex)
             if atlas then
@@ -4408,7 +4458,26 @@ local function UpdateResourceOverlayVisuals(ov, resource, diameter, cfg)
     end
     if not ov.text:IsShown() then ov.text:Show() end
     cfg.updateText(ov, resource, diameter)
-    if not ov.subtext:IsShown() then ov.subtext:Show() end
+    local arcMode = ov._olArcName ~= nil and not titlesEnabled
+    if arcMode then
+        -- 2.0.3: without the names (compact map), the reserve runs along the top of the
+        -- circle like the points' names; with them, it stays under the ribbon.
+        if ov.subtext:IsShown() then ov.subtext:Hide() end
+        ZoneArc.Layout(ov, math.floor(diameter + 0.5), diameter, true)
+    else
+        ZoneArc.Hide(ov)
+        if not ov.subtext:IsShown() then ov.subtext:Show() end
+    end
+    -- The icon sits in the middle of the circle on the compact map, as the points' do.
+    if ov.iconTex and ov._olIconCentered ~= arcMode then
+        ov._olIconCentered = arcMode
+        ov.iconTex:ClearAllPoints()
+        if arcMode then
+            ov.iconTex:SetPoint("CENTER", ov, "CENTER", 0, 0)
+        else
+            ov.iconTex:SetPoint("TOP", ov.subtext, "BOTTOM", 0, 1)
+        end
+    end
     if layoutChanged or titleModeChanged or ov._olRibbonKey == nil then
         LayoutZoneTitleRibbon(ov)
     end
@@ -4470,13 +4539,19 @@ local function UpdateMineOverlayText(ov, mine, diameter, subSz)
     local key = tostring(stock) .. ":" .. tostring(stockMax)
     if ov._olResourceTextKey ~= key then
         ov._olResourceTextKey = key
+        -- 2.0.3: on the compact map, the bare reserve ("100 / 100") runs along the top of
+        -- the circle in the banners' brown (UpdateResourceOverlayVisuals); with the names
+        -- shown, the full line stays under the ribbon.
         ov.subtext:SetText(string.format(L.MINE_STOCK, stock, stockMax))
+        ov._olArcName = string.format("%d / %d", stock, stockMax)
+        ov._olArcDark = true
     end
 end
 
 MINE_WORLD_CONFIG = {
     field = "mine",
     fillColor = MINE_OVERLAY_FILL,
+    rimColor = MINE_OVERLAY_TEXT,
     textColor = MINE_OVERLAY_TEXT,
     iconAtlas = "Warfronts-FieldMapIcons-Empty-Mine",
     diameter = GetMineOverlayDiameter,

@@ -506,6 +506,13 @@ requests = {}
 tick(100)
 assert(sync:PollIfStaleObserverOutpost(999, true) == true and #requests == 1 and requests[1].betaTarget == "Ally Peer",
     "the stale probe pulled a client from before 1.7.0")
+-- 2.0.3: every direct neighbour outside the map exchange: no pull, and no channel
+-- request either (their maps would all be refused).
+Overlord.Relay.IsOutdatedMapPeer = function() return true end
+requests = {}
+tick(100)
+assert(sync:PollIfStaleObserverOutpost(999, true) == false and #requests == 0,
+    "the stale probe fell back to a channel request although every neighbour was outdated")
 Overlord.Relay.IsOutdatedMapPeer = nil
 -- Without any direct neighbour, the broadcast request is the fallback.
 Overlord.Relay.GetDirectPeers = function() return {} end

@@ -1,5 +1,5 @@
 -- The truce after a victory is retired from a date (2.0.2, Zones.TRUCELESS_FROM: the
--- weekly reset of Tuesday 2026-10-27, 08:00 UTC). A victory dated from then on opens no
+-- weekly reset of Tuesday 2026-10-20, 08:00 UTC, since 2.0.3). A victory dated from then on opens no
 -- truce: the front is the winner's at once, the fallen capital takes its kept stamp at
 -- once (victory + 1 s) and the loser may take points back at once; the 6 hours between two
 -- victories of a front stay. Before that date nothing changes (every other truce test runs
@@ -21,6 +21,7 @@ Overlord.PlayerFaction = "Alliance"
 assert(loadfile("Fronts.lua"))()
 assert(loadfile("Zones.lua"))()
 local sync, zones = Overlord.Sync, Overlord.Zones
+sync.MAP_LAYOUT_VERSION = "0.0.0" -- the stated versions below are about the truce; the 2.0.3 layout floor has its own test
 local campaign = Overlord:GetCurrentCampaignStartTs()
 local clock = campaign + 200000
 time = function() return clock end
@@ -61,10 +62,10 @@ local function before(ts)
     end
 end
 
--- 1. The date: a Tuesday, 08:00 UTC, two weeks after the reset of 2026-10-13. One second
--- before it the truce is whole; from it on there is none.
+-- 1. The date: a Tuesday, 08:00 UTC, one week after the reset of 2026-10-13 (2.0.3; 2.0.2
+-- had 2026-10-27). One second before it the truce is whole; from it on there is none.
 local FROM = zones.TRUCELESS_FROM
-assert(FROM == 1793088000 and FROM % 604800 == 460800, "The date is not the weekly reset of 2026-10-27: " .. tostring(FROM))
+assert(FROM == 1792483200 and FROM % 604800 == 460800, "The date is not the weekly reset of 2026-10-20: " .. tostring(FROM))
 assert(not zones:IsTruceRetired(FROM - 1) and zones:GetVictoryCooldownSeconds(FROM - 1) == 900,
     "The truce is gone before its date")
 assert(zones:IsTruceRetired(FROM) and zones:GetVictoryCooldownSeconds(FROM) == 0, "The truce is still there at its date")
@@ -312,23 +313,25 @@ local function presence(name, payload)
     return net:Receive("eu|r" .. serial .. "|" .. time() .. "|*|" .. name .. "|NH|" .. payload, name, "CHANNEL")
 end
 local OLD = "2.0.1~m1~o1~z0000zz1zzzzzzz~l9~ld~lr~lp6"
-local NEW = "2.0.2~t0~m1~o1~z0000zz2zzzzzzz~l9~ld~lr~lp6"
+-- (2.0.3, layout cut: the updated neighbour also says the map layout of this build; the
+-- older one, which says neither, is outside the map exchange from install.)
+local NEW = "2.0.2~t0~y" .. net.LocalMapLayout() .. "~m1~o1~z0000zz2zzzzzzz~l9~ld~lr~lp6"
 -- Our own presence says the mark, where older readers still find theirs.
 local queued
 local realQueue = net.Queue
 net.Queue = function(_, packet) queued = packet; return true end
 net:Send("NH", tostring(Overlord.Version or ""))
 net.Queue = realQueue
-assert(queued and queued.payload:find("~t0~m", 1, true) and queued.payload:match("~l9~ld~lr~lp6$"),
+assert(queued and queued.payload:find("~t0~y" .. net.LocalMapLayout() .. "~m", 1, true) and queued.payload:match("~l9~ld~lr~lp6$"),
     "Our presence does not say the mark: " .. tostring(queued and queued.payload))
 -- Before the day: both neighbours are in the exchange.
 zones.TRUCELESS_FROM = clock + 100000 -- the day is ahead
 asked = {}
 presence("Olda Client", OLD)
-assert(asked[1] == "Olda Client", "Test setup: a neighbour with another map is not asked before the day")
+assert(#asked == 0, "An older client (no map layout) was asked for its map before the day")
 presence("Newa Client", NEW)
-assert(not net:IsOutdatedMapPeer("Olda Client") and not net:IsOutdatedMapPeer("Newa Client"),
-    "A neighbour is left out of the map exchange before the day")
+assert(net:IsOutdatedMapPeer("Olda Client") and not net:IsOutdatedMapPeer("Newa Client"),
+    "Before the day: an older client (no map layout) is in the map exchange, or an updated one is out")
 assert(not sync:IsOutdatedMapPeer("Olda Client", "2.0.1"), "A 2.0.1 request is refused before the day")
 -- From the day on: the one without the mark is out, by its presence or by the version
 -- its request states; a stated 2.0.2 is in even before its new presence is heard.
@@ -400,6 +403,6 @@ assert(sync:IsOutdatedMapPeer("Olda Client", "1.6.3") and sync:IsOutdatedMapPeer
 zones.TRUCELESS_FROM = clock + 100000 -- the day is ahead again
 assert(not net:IsOutdatedMapPeer("Ever Unknown"), "A neighbour never heard is out of the map exchange before the day")
 zones.TRUCELESS_FROM = nil
-assert(not net:IsOutdatedMapPeer("Olda Client") and not net:IsOutdatedMapPeer("Ever Unknown") and not zones:IsTruceRetired(),
-    "nil does not mean never")
+assert(net:IsOutdatedMapPeer("Olda Client") and not net:IsOutdatedMapPeer("Ever Unknown") and not zones:IsTruceRetired(),
+    "nil does not mean never (an older client stays out by its map layout)")
 print("Truce retired: from the same day a client that still runs the truce is outside the map exchange")

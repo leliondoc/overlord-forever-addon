@@ -87,9 +87,18 @@ local anchors = {
     {"redridge_lakeridge_highway", 38.0, 73.0},
     {"redridge_stonewatch_falls", 75.0, 67.0},
     {"redridge_renders_valley", 73.0, 78.0},
-    -- Hillsbrad (2.0): the two points sit on open ground, away from the towns.
-    {"hillsbrad_southshore", 44.9, 45.4},
-    {"hillsbrad_tarren_mill", 54.0, 26.6},
+    -- Hillsbrad (2.0): both capitals sit on open ground, away from the towns. 2.0.3: a
+    -- real front, points placed on the Classic map 1424 (client art, subzone areas).
+    {"hillsbrad_southshore", 50.9, 46.8}, -- on the road north of Southshore
+    {"hillsbrad_tarren_mill", 57.0, 29.0},
+    {"hillsbrad_western_strand", 39.5, 60.5}, -- green slope above the Western Strand
+    {"hillsbrad_fields", 33.0, 40.5}, -- between the farms of Hillsbrad Fields
+    {"hillsbrad_internment_camp", 29.5, 32.0}, -- Hillsbrad ground at the edge of Lordamere Internment Camp
+    {"hillsbrad_bridge", 60.5, 39.5}, -- main road, west end of the bridge below Tarren Mill
+    {"hillsbrad_nethander", 65.0, 60.3}, -- Nethander Stead's fields, across the river
+    {"hillsbrad_dun_garok", 69.5, 70.5}, -- end of the path to Dun Garok, before its gate
+    {"hillsbrad_thoradin_gate", 79.3, 54.8}, -- Arathi road, inside the gate of Thoradin's Wall
+    {"hillsbrad_durnholde", 75.8, 44.5}, -- the road up to Durnholde Keep's gate
 }
 local seen = {}
 for _, a in ipairs(anchors) do
@@ -107,16 +116,24 @@ for _, a in ipairs(anchors) do
     end
     seen[a[1]] = true
 end
--- The special front's circles (halved in 1.1.11, moved out of the towns in 2.0): the
--- former outer ring, the open ground between them and both town cores stay outside.
+-- The capitals (moved out of the towns in 2.0, usual capital radius since 2.0.3): the
+-- former brawl ring, the open ground between them and both town cores stay outside.
 local hillsbrad = Overlord.Fronts:GetFront("hillsbrad")
 Overlord.Fronts.activeFrontId = hillsbrad.id
 Overlord.ZoneDatabase = hillsbrad.zones
 currentMap = hillsbrad.preferredMapID
 for _, sample in ipairs({
-    {48.2, 44.5, "hillsbrad_southshore"},
-    {57.5, 26.6, "hillsbrad_tarren_mill"},
-    {52.7, 44.5, nil},
+    {53.4, 46.0, "hillsbrad_southshore"},
+    {57.3, 26.6, "hillsbrad_tarren_mill"},
+    {44.9, 44.5, nil}, -- the 2.0 Southshore circle: open ground now
+    {46.0, 32.0, nil}, -- Darrow Hill's coin mine stays out of the front
+    -- Alterac Mountains ground next to Hillsbrad circles (client terrain cells): a player
+    -- there is off the front, so no circle may reach it.
+    {27.9, 27.9, nil}, {27.0, 29.6, nil}, -- Lordamere Internment Camp
+    {54.0, 26.4, nil}, -- the slope west of Tarren Mill's 2.0 capital place
+    -- Right at the edge (about 0.3 to 0.6 of a point outside): a circle drifting back
+    -- towards Alterac fails here first.
+    {54.1, 26.5, nil}, {27.05, 29.65, nil},
     {62.0, 26.6, nil},
     {50.0, 35.5, nil},
     {51.2, 58.0, nil}, -- Southshore's inn: no longer a capture point
@@ -135,10 +152,10 @@ for _, front in pairs(Overlord.Fronts.Registry) do
         count = count + 1
     end
 end
-assert(count == 59) -- 1.7.1: Ashenvale redrawn, still 10 points
+assert(count == 67) -- 2.0.3: Hillsbrad, 2 points -> 10
 classicAvailable = false
 for _, front in pairs(Overlord.Fronts.Registry) do
     front.resolvedMapID = nil
     assert(front.mapIDs[Overlord.Fronts:GetMapID(front.id)], "Alias-only client lost its map")
 end
-print("Forever capture locations: 59 references, capture detection and preferred Vanilla maps OK")
+print("Forever capture locations: 67 references, capture detection and preferred Vanilla maps OK")

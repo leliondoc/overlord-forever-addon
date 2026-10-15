@@ -189,6 +189,20 @@ Overlord.OutpostSites = {
         center = { 40.0, 17.0 },
         halfSize = 1.35,
     },
+    hillsbrad = {
+        id = "hillsbrad_outpost",
+        siteKey = "hillsbrad",
+        displayNameKey = "OUTPOST_HILLSBRAD_NAME",
+        frontId = "hillsbrad",
+        mapID = 1424,
+        mapIDs = { [25] = true, [1424] = true },
+        mapNameNeedles = { "hillsbrad", "hautebrande", "laderas de trabalomas",
+            "hügelland", "предгорья хилсбрада", "eira dos montes", "希尔斯布莱德" },
+        -- Vigie de Lordaeron (2.0.3), à la tour de la Pointe du Midi : à l'ouest, sur la route des Pins-Argentés,
+        -- loin des deux routes de capture autour de la colline de Darrow.
+        center = { 20.8, 48.6 },
+        halfSize = 1.35,
+    },
 }
 
 -- Fortresses use this engine, storage and wire protocol; only presentation and

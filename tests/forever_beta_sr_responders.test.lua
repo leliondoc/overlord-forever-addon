@@ -60,8 +60,13 @@ sync:OnSyncRequest("Horde Joiner", payload, "BETA")
 assert(responded(), "An updated neighbour was refused next to an outdated one")
 release()
 Overlord.Relay.IsOutdatedMapPeer = nil
-sync:OnSyncRequest("Seven Joiner", "H:1.7.0:0:::T", "BETA")
-assert(responded(), "A 1.7.0 client was refused")
+sync:OnSyncRequest("Seven Joiner", "H:2.0.3:0:::T", "BETA")
+assert(responded(), "A 2.0.3 client was refused")
+release()
+-- 2.0.3: a request that states an older release holds another map layout (2-point
+-- Hillsbrad): its whole map would be refused both ways, it is not answered.
+sync:OnSyncRequest("Older Layout", "H:2.0.2:0:::T", "BETA")
+assert(not responded(), "A 2.0.2 request (other map layout) was answered")
 release()
 
 targeted, roll = false, 0.5

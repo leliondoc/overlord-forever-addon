@@ -1,4 +1,4 @@
--- Names for the Forever Redridge and two-point Hillsbrad fronts.
+-- Names for the Forever Redridge and Hillsbrad fronts.
 local L = Overlord.L
 local locale = GetLocale() or "enUS"
 local names = {
@@ -26,21 +26,48 @@ local names = {
 }
 names.esMX = names.esES
 local n = names[locale] or names.enUS
+-- { zone, Southshore, Tarren Mill, Hillsbrad Fields, bridge, Nethander Stead,
+--   Durnholde Keep, outpost (Lordaeron Watch, at Southpoint Tower), Western Strand,
+--   Lordamere Camp (Hillsbrad edge of Lordamere Internment Camp), Dun Garok, gate of Thoradin's Wall }
+-- Place names as the game writes them (client AreaTable: enUS, frFR, ptBR, zhCN; deDE and
+-- esES from the Retail client where the area kept its name; ruRU not checked). The
+-- bridge, the gate, the camp's short name and the outpost are Overlord's own names.
 local hillsbradNames = {
-    enUS = { "Hillsbrad Foothills", "Southshore / Tarren Mill", "Southshore", "Tarren Mill" },
-    frFR = { "Contreforts de Hautebrande", "Austrivage / Moulin-de-Tarren", "Austrivage", "Moulin-de-Tarren" },
-    esES = { "Laderas de Trabalomas", "Costasur / Molino Tarren", "Costasur", "Molino Tarren" },
-    deDE = { "Vorgebirge des Hügellands", "Süderstade / Tarrens Mühle", "Süderstade", "Tarrens Mühle" },
-    ruRU = { "Предгорья Хилсбрада", "Южнобережье / Мельница Таррен", "Южнобережье", "Мельница Таррен" },
-    ptBR = { "Contrafortes de Eira dos Montes", "Costa Sul / Moinho Tarren", "Costa Sul", "Moinho Tarren" },
-    zhCN = { "希尔斯布莱德丘陵", "南海镇 / 塔伦米尔", "南海镇", "塔伦米尔" },
+    enUS = { "Hillsbrad Foothills", "Southshore", "Tarren Mill", "Hillsbrad Fields",
+        "Hillsbrad Bridge", "Nethander Stead", "Durnholde Keep", "Lordaeron Watch",
+        "Western Strand", "Lordamere Camp", "Dun Garok", "Thoradin's Gate" },
+    frFR = { "Contreforts de Hautebrande", "Austrivage", "Moulin-de-Tarren", "Champs de Hautebrande",
+        "Pont de Hautebrande", "Ferme des Nethander", "Donjon de Fort-de-Durn", "Vigie de Lordaeron",
+        "Rivage occidental", "Camp de Lordamere", "Dun Garok", "Porte de Thoradin" },
+    esES = { "Laderas de Trabalomas", "Costasur", "Molino Tarren", "Campos de Trabalomas",
+        "Puente de Trabalomas", "Granja Nethander", "Castillo de Durnholde", "Atalaya de Lordaeron",
+        "Playa del Oeste", "Campo de Lordamere", "Dun Garok", "Puerta de Thoradin" },
+    deDE = { "Vorgebirge des Hügellands", "Süderstade", "Tarrens Mühle", "Felder des Hügellands",
+        "Hügellandbrücke", "Nethandersiedlung", "Burg Durnholde", "Lordaeronwacht",
+        "Weststrand", "Lager von Lordamere", "Dun Garok", "Thoradins Tor" },
+    ruRU = { "Предгорья Хилсбрада", "Южнобережье", "Мельница Таррен", "Поля Хилсбрада",
+        "Мост Хилсбрада", "Усадьба Нетандера", "Крепость Дарнхольд", "Дозор Лордерона",
+        "Западный берег", "Лагерь Лордамера", "Дун Гарок", "Врата Торадина" },
+    ptBR = { "Contraforte de Eira dos Montes", "Costa Sul", "Serraria Tarren", "Campos de Eira dos Montes",
+        "Ponte de Eira dos Montes", "Sítio de Nethander", "Forte do Desterro", "Vigia de Lordaeron",
+        "Praia Ocidental", "Campo de Lordamere", "Dun Garok", "Portão de Thoradin" },
+    zhCN = { "希尔斯布莱德丘陵", "南海镇", "塔伦米尔", "希尔斯布莱德农场",
+        "希尔斯布莱德桥", "奈杉德哨岗", "敦霍尔德城堡", "洛丹伦哨塔",
+        "西部海岸", "洛丹米尔营地", "丹加洛克", "索拉丁之门" },
 }
 hillsbradNames.esMX = hillsbradNames.esES
 local h = hillsbradNames[locale] or hillsbradNames.enUS
 L.FRONT_HILLSBRAD_NAME = h[1]
 L.FRONT_HILLSBRAD_DROPDOWN = h[1]
-L.ZONE_NAMES.hillsbrad_southshore = h[3]
-L.ZONE_NAMES.hillsbrad_tarren_mill = h[4]
+for index, id in ipairs({ "hillsbrad_southshore", "hillsbrad_tarren_mill", "hillsbrad_fields",
+    "hillsbrad_bridge", "hillsbrad_nethander", "hillsbrad_durnholde" }) do
+    L.ZONE_NAMES[id] = h[index + 1]
+end
+for index, id in ipairs({ "hillsbrad_western_strand", "hillsbrad_internment_camp", "hillsbrad_dun_garok",
+    "hillsbrad_thoradin_gate" }) do
+    L.ZONE_NAMES[id] = h[index + 8]
+end
+L.OUTPOST_HILLSBRAD_NAME = h[8]
 L.FRONT_REDRIDGE_NAME = n[1]
 L.FRONT_REDRIDGE_DROPDOWN = n[1]
 L.OUTPOST_REDRIDGE_NAME = n[10]

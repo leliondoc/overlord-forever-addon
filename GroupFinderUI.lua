@@ -513,7 +513,7 @@ local function RowOnEnter(row)
     if not entry.isOwn then
         local ok, reason, arg = gf:CanSignUp(entry)
         if not ok then TipLine(Reason(reason, arg), "bad", true) end
-        TipLine(T("GF_TIP_COOLDOWN", "One accepted sign-up every 5 minutes."), "muted", true)
+        TipLine(T("GF_TIP_COOLDOWN", "You can join a group every 2 minutes."), "muted", true)
     end
     if info and (info.kind == "z" or info.kind == "o") then
         TipLine(T("GF_TIP_MAP", "Click: waypoint on the map."), "muted", true)
@@ -558,7 +558,7 @@ local function SignUpOnEnter(btn)
     local ok, reason, arg = gf:CanSignUp(entry)
     if ok then
         TipLine(T("GF_SIGNUP", "Sign up"), "gold")
-        TipLine(T("GF_TIP_COOLDOWN", "One accepted sign-up every 5 minutes."), "muted", true)
+        TipLine(T("GF_TIP_COOLDOWN", "You can join a group every 2 minutes."), "muted", true)
     else
         TipLine(Reason(reason, arg), "bad", true)
     end

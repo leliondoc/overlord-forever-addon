@@ -282,7 +282,8 @@ local function IsGeneralFrontContext()
 end
 
 -- Alertes Général : uniquement sur la carte physique du front.
--- Nouveau general (allie ou ennemi) : raid warning ; chute : popup WC3 conserve.
+-- Nouveau general ennemi et chute d'un general : alerte au centre de l'ecran, sans le son
+-- d'alerte de raid (2.0.3). Nouveau general allie : ligne de chat seulement.
 local function ShouldShowGeneralBattleAlerts()
     return IsOnOverlordFrontMap()
 end
@@ -552,11 +553,9 @@ local function NotifyGeneralFallen(victimName, killerName, victimFaction, claimT
     if Overlord.PrintNotification then
         Overlord:PrintNotification(chatLine)
     end
+    -- 2.0.3: on screen without the raid warning sound, like every general alert.
     if ShouldShowGeneralBattleAlerts() and Overlord.PrintRaidWarning then
-        Overlord:PrintRaidWarning(chatLine)
-    end
-    if Overlord.PlayAddonSound then
-        Overlord:PlayAddonSound("general_fallen")
+        Overlord:PrintRaidWarning(chatLine, true)
     end
 end
 
@@ -565,7 +564,7 @@ local function NotifyGeneralReceived(senderName, frontName)
     local short = (senderName or "?"):match("^(.-)%-") or senderName
     local chatLine = "|cFFFFD100[Overlord]|r " .. string.format(L.GENERAL_RECEIVED, short, frontName or "")
     -- 2.0.2: the chat line only. A general taking command is no longer announced in the
-    -- middle of the screen with the raid warning sound (his fall still is).
+    -- middle of the screen (his fall still is, without the raid warning sound since 2.0.3).
     if Overlord.PrintNotification then
         Overlord:PrintNotification(chatLine)
     end

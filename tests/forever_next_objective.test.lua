@@ -225,8 +225,8 @@ ui:Update()
 assert(scans == before and distanceReads == readsBefore, 'Hidden main panel polled objective details')
 print('Next objective: panel guidance/progress, no floating zone HUD, manual/automatic paths, structure HUD and hidden idle OK')
 
--- Exercise production layout with actual anchor arithmetic. Southshore/Tarren
--- Mill have short main panels; long localized instructions must still fit.
+-- Exercise production layout with actual anchor arithmetic. A short main panel
+-- (any front, a small window); long localized instructions must still fit.
 local function upvalue(fn, name)
     for i = 1, 60 do
         local key, value = debug.getupvalue(fn, i)

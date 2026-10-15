@@ -1104,10 +1104,12 @@ function Overlord.Sync:PollIfStaleObserverOutpost(secondsSinceOp, withPull)
     local net = Overlord.Relay
     if withPull and net and net.GetDirectPeers and self.GetBetaPeerFaction then
         local myName, myFaction = self:GetPlayerFullName(), Overlord.PlayerFaction
-        local enemies, allies = {}, {}
+        local enemies, allies, outdated = {}, {}, 0
         for _, name in ipairs(net:GetDirectPeers()) do
+            local left = name ~= "" and self.IsOutdatedMapPeer and self:IsOutdatedMapPeer(name)
+            if left then outdated = outdated + 1 end
             if name ~= "" and not (self.ForeverIdentitiesMatch and self:ForeverIdentitiesMatch(name, myName))
-                and not (self.IsOutdatedMapPeer and self:IsOutdatedMapPeer(name)) then
+                and not left then
                 local faction = self:GetBetaPeerFaction(name)
                 if faction and myFaction and faction ~= myFaction then
                     enemies[#enemies + 1] = name
@@ -1123,6 +1125,11 @@ function Overlord.Sync:PollIfStaleObserverOutpost(secondsSinceOp, withPull)
             -- try waits one interval; no broadcast in its place (the herd).
             return self:SendSyncRequest({ betaTarget = list[(staleOutpostPullRound % #list) + 1] }) and true or false
         end
+        -- 2.0.3: every direct neighbour is outside the map exchange or not heard yet (an
+        -- older release, or, once the truce is retired, before 2.0.2 or no presence yet):
+        -- a channel request would draw whole maps we refuse. Their live rows still come;
+        -- the next interval tries again. The broadcast stays when no neighbour is known.
+        if outdated > 0 then return false end
     end
     self:SendSyncRequest({
         criticalChannel = true,

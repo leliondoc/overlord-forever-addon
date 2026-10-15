@@ -85,4 +85,21 @@ calls = {}
 sync:PollIfStaleObserverInProgress(60, zone)
 assert(#calls == 2 and calls[1].target == "Capper Tester"
     and calls[2].kind == "fallback", "Stale observer poll missed the capper")
+-- 2.0.3: on the front, the relay copy goes before the raw ones (which the real Send /
+-- SendToChannel then drop as already carried): no second and third copy of one ask.
+now = now + 100
+calls = {}
+zone.status, zone.holdTimeElapsed, displayed = "in_progress", 480, 480
+zone._observerFinalStatePollAt, zone._observerFinalStatePollCount = nil, nil
+zone._remoteCaptureLease.lastSeen = now - 30
+Overlord.InActiveFront = true
+local realRelay = sync.BroadcastToRelay
+sync.BroadcastToRelay = function(_, kind, payload)
+    calls[#calls + 1] = { kind = "relay", messageKind = kind, payload = payload }
+    return true
+end
+sync:RequestObserverCaptureConfirmationIfComplete(zone)
+sync.BroadcastToRelay, Overlord.InActiveFront = realRelay, nil
+assert(#calls == 3 and calls[1].target == "Capper Tester" and calls[2].kind == "relay"
+    and calls[3].kind == "broadcast", "The relay copy did not go before the raw copy")
 print("Forever observer catch-up: direct capper first, fallback retained, no local finalization")
