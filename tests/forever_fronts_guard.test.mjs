@@ -74,7 +74,7 @@ test("TOC Forever 16001 and CurseForge 1701204", () => {
     assert.match(hofUi, /selectedCategory = Overlord\.HallOfFameData:GetDefaultCategory\(\)/);
 });
 
-test("Outposts cover all seven fronts and three open-world sites", () => {
+test("Outposts cover all seven fronts and four open-world sites", () => {
     assert.match(outpost, /frontId = "arathi"/);
     assert.match(outpost, /center = \{ 31[.]1, 60[.]2 \}/);
     assert.match(outpost, /loch_modan = \{[\s\S]*?center = \{ 40\.3, 39\.4 \}/);
@@ -86,6 +86,7 @@ test("Outposts cover all seven fronts and three open-world sites", () => {
     assert.match(outpost, /hillsbrad = \{[\s\S]*?frontId = "hillsbrad"[\s\S]*?center = \{ 20\.8, 48\.6 \}/);
     assert.match(outpost, /aeythyr_lodge = \{[\s\S]*?center = \{ 52\.1, 18\.4 \}/);
     assert.match(outpost, /lesi_bear_cave = \{[\s\S]*?mapIDs = \{ \[62\] = true, \[1439\] = true \}[\s\S]*?center = \{ 43\.4, 45\.8 \}/);
+    assert.match(outpost, /anadora = \{[\s\S]*?mapIDs = \{ \[69\] = true, \[1444\] = true \}[\s\S]*?center = \{ 58\.1, 44\.9 \}/);
     assert.doesNotMatch(outpost, /coiled_isle/);
     assert.doesNotMatch(outpost, /11\.2, 70\.5/);
 });

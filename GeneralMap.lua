@@ -40,10 +40,6 @@ local function ApplyPinFactionIcon(pin, entry)
     end
 end
 
-local function SnapPinCoord(v)
-    return math.floor((tonumber(v) or 0) * 2 + 0.5) / 2
-end
-
 local function GetOverlayPoint(canvas, parent, x, yDown)
     local mm = Overlord.MapMarkers
     if mm and mm.GetWorldMapOverlayPoint then
@@ -237,18 +233,9 @@ local function CreateMinimapGeneralIconPin()
     return pin
 end
 
+-- Meme placement que les autres icones de la minicarte (sous-pixel, MapMarkers.lua).
 local function PlaceMinimapGeneralPinCenter(pin, pinX, pinY)
-    if not pin then return false end
-    pinX = SnapPinCoord(pinX)
-    pinY = SnapPinCoord(pinY)
-    if pin._olMMX == pinX and pin._olMMY == pinY then
-        return true
-    end
-    pin._olMMX = pinX
-    pin._olMMY = pinY
-    pin:ClearAllPoints()
-    pin:SetPoint("CENTER", Minimap, "CENTER", pinX, pinY)
-    return true
+    return Overlord.MapMarkers:PlaceMinimapPinCenter(pin, pinX, pinY)
 end
 
 local function EnsureMinimapPin(key)

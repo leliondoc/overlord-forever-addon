@@ -152,6 +152,8 @@ jobs:
           lua5.1 tests/forever_beta_multihop_presence.test.lua
           lua5.1 tests/forever_beta_broadcast_retry.test.lua
           lua5.1 tests/forever_lesi_bear_cave_outpost.test.lua
+          lua5.1 tests/forever_anadora_outpost.test.lua
+          lua5.1 tests/forever_platinum_locales.test.lua
           lua5.1 tests/forever_beta_sr_responders.test.lua
           lua5.1 tests/forever_beta_login_catchup.test.lua
           lua5.1 tests/forever_beta_rank_bootstrap_cycle.test.lua
@@ -179,6 +181,12 @@ jobs:
           lua5.1 tests/forever_ranks_week_close.test.lua
           lua5.1 tests/forever_ranks_currency_panel.test.lua
           lua5.1 tests/forever_ranks_week_rule.test.lua
+          lua5.1 tests/forever_rank_proof.test.lua
+          lua5.1 tests/forever_rank_proof_close.test.lua
+          lua5.1 tests/forever_rank_proof_presence.test.lua
+          lua5.1 tests/forever_map_marker_zoom_cap.test.lua
+          lua5.1 tests/forever_minimap_driver.test.lua
+          lua5.1 tests/forever_world_map_zoom.test.lua
           lua5.1 tests/forever_guild_rating.test.lua
           lua5.1 tests/forever_map_news.test.lua
           lua5.1 tests/forever_victory_late_capture.test.lua

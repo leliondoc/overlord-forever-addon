@@ -111,4 +111,42 @@ assert(tracking.sub and tracking.sub.radios.compact and tracking.sub.checkbox, "
 tracking.sub.radios.compact.set()
 assert(filters.radios.compact.get(), "Minimap menu and map filters disagree")
 assert(tracking.sub.checkbox.get() == true, "Minimap icons should be on by default")
+-- Tooltip (2026-10-17): the front the player stands on, who holds its points (neutral
+-- counted, an attacked point stays its holder's), then the Overlord Rank and Glory.
+-- Off a front it says so, with no count. No click hints.
+do
+    local lines = {}
+    GameTooltip = setmetatable({}, { __index = function(_, k)
+        if k == "AddLine" then return function(_, text) lines[#lines + 1] = text end end
+        return function() end
+    end })
+    FACTION_ALLIANCE, FACTION_HORDE = "Alliance", "Horde"
+    BreakUpLargeNumbers = function(v) return v >= 1000 and string.format("%d,%03d", math.floor(v / 1000), v % 1000) or tostring(v) end
+    Overlord.L.ZONE_NEUTRAL, Overlord.L.TOOLTIP_NO_FRONT, Overlord.L.RANK_GLORY = "Neutral", "Not on a front", "Glory"
+    Overlord.Ranks = {
+        GetState = function() return { rank = 4, glory = 1240 } end,
+        GetRankName = function(_, rank) return "Rank" .. rank end,
+    }
+    Overlord.Fronts = { GetCurrentFront = function() return { id = "redridge", mapName = "Redridge Mountains" } end }
+    Overlord.ZoneDatabase = {
+        -- Under attack, owner is the attacker: the point still counts for its holder.
+        { owner = "Alliance", status = "captured" }, { owner = "Horde", previousOwner = "Alliance", status = "in_progress" },
+        { owner = "Horde", status = "captured" }, { status = "available" },
+        { owner = "Horde", status = "captured", _loginSyncUnconfirmed = true },
+    }
+    Overlord.Zones = Overlord.Zones or {}
+    Overlord.Zones.GetInterruptedCaptureRevertOwner = function(_, zone) return zone.previousOwner end
+    Overlord.InActiveFront = true
+    button.scripts.OnEnter(button)
+    assert(lines[1] == "Overlord" and lines[2] == "Redridge Mountains", "front not named: " .. tostring(lines[2]))
+    assert(lines[3]:find("Alliance 2", 1, true) and lines[3]:find("Horde 1", 1, true)
+        and lines[3]:find("Neutral 2", 1, true), "wrong point count: " .. lines[3])
+    assert(lines[5] == "Rank4  ·  1,240 Glory", "wrong rank line: " .. tostring(lines[5]))
+    assert(#lines == 5, "extra tooltip lines: " .. #lines)
+    lines = {}
+    Overlord.InActiveFront = false
+    button.scripts.OnEnter(button)
+    assert(lines[2] == "Not on a front" and lines[4]:find("Rank4", 1, true) and #lines == 4,
+        "off a front: " .. table.concat(lines, " | "))
+end
 print("Minimap button: login resize, border radius, rectangle, square, show and button collectors OK")

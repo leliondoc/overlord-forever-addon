@@ -64,6 +64,9 @@ local function widget(kind)
     function methods:CreateAnimationGroup()
         local group = widget("AnimationGroup")
         group.CreateAnimation = function() return widget("Animation") end
+        group.Play = function(self) self.playing = true end
+        group.Stop = function(self) self.playing = false end
+        group.IsPlaying = function(self) return self.playing == true end
         return group
     end
     return setmetatable(w, { __index = function(_, k)
@@ -443,6 +446,8 @@ do
     UI:Refresh()
     assert(list.emptyTitle:IsShown() and list.emptyTitle:GetText() == "Connecting…", tostring(list.emptyTitle:GetText()))
     assert(frame.subtitle:GetText() == "Connecting…" and not list.emptyBody:IsShown())
+    -- While it connects and listens, the crest breathes (the search is running).
+    assert(list.emptyPulse and list.emptyPulse:IsPlaying(), "the crest does not pulse while connecting")
     local armed = #timers
     UI:Refresh()
     UI:Refresh()
@@ -452,11 +457,13 @@ do
     runTimers(1)
     assert(list.emptyTitle:GetText() == "Listening for groups…", "the board did not look again once the channel was joined: " .. tostring(list.emptyTitle:GetText()))
     assert(not list.emptyBody:IsShown())
+    assert(list.emptyPulse:IsPlaying(), "the crest does not pulse while listening")
     runTimers(92)
     runTimers(1)
     assert(list.emptyTitle:GetText() == "No group is recruiting right now." and list.emptyBody:IsShown(),
         "the board did not repaint when the listening time ended")
     assert(frame.subtitle:GetText() == "No group is recruiting")
+    assert(not list.emptyPulse:IsPlaying(), "the crest still pulses once the search is over")
     -- Refused by the game: said on the board and on the leader's card, publishing refused.
     channelId, channelClosed = nil, true
     UI:Refresh()

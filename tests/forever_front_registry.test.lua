@@ -32,8 +32,8 @@ local siteKeys = {}
 for _, file in ipairs({ "Outpost.lua", "GuildKeepSites.lua" }) do
     for key in readAll(file):gmatch('displayNameKey%s*=%s*"([%w_]+)"') do siteKeys[#siteKeys + 1] = key end
 end
--- 2.0.3: 10 outposts (one per front, plus three open-world sites) and 5 keeps.
-assert(#siteKeys == 15, "expected 15 site name keys, found " .. #siteKeys)
+-- 2.0.5: 11 outposts (one per front, plus four open-world sites) and 5 keeps.
+assert(#siteKeys == 16, "expected 16 site name keys, found " .. #siteKeys)
 
 for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "zhCN", "zhTW" }) do
     Overlord = { L = {} }

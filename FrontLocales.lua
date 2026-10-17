@@ -73,19 +73,20 @@ L.FRONT_REDRIDGE_DROPDOWN = n[1]
 L.OUTPOST_REDRIDGE_NAME = n[10]
 -- Standalone outpost names, translated per locale.
 local standaloneOutpostNames = {
-    enUS = { "Savix Chapel", "Aeythyr Lodge", "Lesi's Bear Cave" },
-    frFR = { "Chapelle de Savix", "Pavillon d'Aeythyr", "Grotte de l'ours de Lesi" },
-    esES = { "Capilla de Savix", "Pabellón de Aeythyr", "Cueva del oso de Lesi" },
-    deDE = { "Kapelle von Savix", "Aeythyrs Jagdhütte", "Lesis Bärenhöhle" },
-    ruRU = { "Часовня Savix", "Охотничий домик Aeythyr", "Медвежья пещера Lesi" },
-    ptBR = { "Capela Savix", "Pavilhão de Aeythyr", "Caverna do Urso de Lesi" },
-    zhCN = { "Savix 教堂", "Aeythyr 小屋", "Lesi 的熊洞" },
+    enUS = { "Savix Chapel", "Aeythyr Lodge", "Lesi's Bear Cave", "Anad'Ora Moonwell" },
+    frFR = { "Chapelle de Savix", "Pavillon d'Aeythyr", "Grotte de l'ours de Lesi", "Anad'Ora Moonwell" },
+    esES = { "Capilla de Savix", "Pabellón de Aeythyr", "Cueva del oso de Lesi", "Anad'Ora Moonwell" },
+    deDE = { "Kapelle von Savix", "Aeythyrs Jagdhütte", "Lesis Bärenhöhle", "Anad'Ora Moonwell" },
+    ruRU = { "Часовня Savix", "Охотничий домик Aeythyr", "Медвежья пещера Lesi", "Anad'Ora Moonwell" },
+    ptBR = { "Capela Savix", "Pavilhão de Aeythyr", "Caverna do Urso de Lesi", "Anad'Ora Moonwell" },
+    zhCN = { "Savix 教堂", "Aeythyr 小屋", "Lesi 的熊洞", "Anad'Ora Moonwell" },
 }
 standaloneOutpostNames.esMX = standaloneOutpostNames.esES
 local outpostNames = standaloneOutpostNames[locale] or standaloneOutpostNames.enUS
 L.OUTPOST_SILVERPINE_NAME = outpostNames[1]
 L.OUTPOST_AEYTHYR_LODGE_NAME = outpostNames[2]
 L.OUTPOST_LESI_BEAR_CAVE_NAME = outpostNames[3]
+L.OUTPOST_ANADORA_NAME = outpostNames[4]
 -- World map display modes: map corner button, Blizzard "Map Filters" and minimap
 -- tracking menus, options dropdown and /ov map.
 -- { filters title, full, compact, hidden, options tooltip, button click hint, chat/status line }

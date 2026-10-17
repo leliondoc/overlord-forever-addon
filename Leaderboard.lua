@@ -6000,6 +6000,11 @@ function Overlord.Leaderboard:ResumePendingWeeklyArchive()
         local ok, probe = pcall(Overlord.Ranks.BeginWeekClose, Overlord.Ranks, marker)
         state.rankProbe = ok and probe or nil
     end
+    -- Top ranks seen by others (RankProof): each faction's top 100 of the finished week.
+    if Overlord.RankProof and Overlord.RankProof.BeginClose then
+        local ok, close = pcall(Overlord.RankProof.BeginClose, Overlord.RankProof, marker)
+        state.proofClose = ok and close or nil
+    end
 
     local function finishMarker()
         if self._weeklyArchiveBuildPending ~= state
@@ -6116,6 +6121,10 @@ function Overlord.Leaderboard:ResumePendingWeeklyArchive()
                         pcall(Overlord.Ranks.FinishWeekClose, Overlord.Ranks, state.rankProbe)
                         state.rankProbe = nil
                     end
+                    if state.phase == "kills" and state.proofClose then
+                        pcall(Overlord.RankProof.FinishClose, Overlord.RankProof, state.proofClose)
+                        state.proofClose = nil
+                    end
                     if state.phase == "kills" then state.phase = "captures"
                     elseif state.phase == "captures" then state.phase = "bountyTimes"
                     elseif state.phase == "bountyTimes" then state.phase = "bountyKills"
@@ -6129,6 +6138,11 @@ function Overlord.Leaderboard:ResumePendingWeeklyArchive()
                         local okRow = pcall(Overlord.Ranks.ProbeWeekRow, Overlord.Ranks,
                             state.rankProbe, key, value, bucket.playerInfo)
                         if not okRow then state.rankProbe = nil end
+                    end
+                    if state.proofClose and state.phase == "kills" then
+                        local okRow = pcall(Overlord.RankProof.OfferCloseRow, Overlord.RankProof,
+                            state.proofClose, key, value, bucket.playerInfo)
+                        if not okRow then state.proofClose = nil end
                     end
                     budget = budget - 1
                     processed = processed + 1

@@ -648,6 +648,19 @@ local function BuildList(f)
     list.emptyIcon:SetTexture(Overlord.PlayerFaction == "Horde" and "Interface\\Timer\\Horde-Logo"
         or "Interface\\Timer\\Alliance-Logo")
     list.emptyIcon:SetAlpha(0.55)
+    -- While the board is still connecting or listening, the crest breathes slowly
+    -- (0.55 -> 0.2 and back, 1.6 s a cycle): the search is running. Animations are
+    -- run by the game, and stop with the window.
+    if list.emptyIcon.CreateAnimationGroup then
+        local pulse = list.emptyIcon:CreateAnimationGroup()
+        pulse:SetLooping("BOUNCE")
+        local fade = pulse:CreateAnimation("Alpha")
+        fade:SetFromAlpha(0.55)
+        fade:SetToAlpha(0.2)
+        fade:SetDuration(0.8)
+        fade:SetSmoothing("IN_OUT")
+        list.emptyPulse = pulse
+    end
     list.emptyTitle = list:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     list.emptyTitle:SetPoint("TOP", list.emptyIcon, "BOTTOM", 0, -10)
     list.emptyTitle:SetWidth(K.LIST_W - 60)
@@ -766,6 +779,15 @@ local function PaintList(f, gf)
         list.emptyTitle:SetText(T(text[1], text[2]))
     end
     list.emptyIcon:SetShown(empty)
+    local pulse = list.emptyPulse
+    if pulse then
+        local searching = empty and (channelState == "listening" or channelState == "connecting")
+        if searching and not pulse:IsPlaying() then
+            pulse:Play()
+        elseif not searching and pulse:IsPlaying() then
+            pulse:Stop()
+        end
+    end
     list.emptyTitle:SetShown(empty)
     list.emptyBody:SetShown(empty and channelState == "open")
     if shown > visible then

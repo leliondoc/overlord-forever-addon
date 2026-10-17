@@ -177,7 +177,7 @@ local function BuildLeft(self)
         GameTooltip:SetText(T("RANK_GLORY", "Glory"), 1, 0.82, 0)
         if localNote then
             GameTooltip:AddLine(T("RANK_TIP_LOCAL",
-                "Your Overlord rank is saved on this computer only: other players do not see it."), 1, 0.82, 0, true)
+                "Your Overlord rank is saved on this computer only."), 1, 0.82, 0, true)
             GameTooltip:AddLine(" ")
         end
         local ranks = Overlord.Ranks
