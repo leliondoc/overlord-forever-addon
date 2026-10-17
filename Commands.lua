@@ -336,7 +336,7 @@ local PERF_MODULES = {
     "GuildKeep", "GuildKillAlert", "HallOfFameUI", "Leaderboard",
     "LeaderboardUI", "MapMarkers", "MostWanted", "NetworkHealth", "Outpost", "OutpostControl",
     "Popups", "Ressources", "SettingsPanel", "Shard", "Sync", "UI", "ZoneControl",
-    "ZoneIndicator", "Zones", "Relay",
+    "ZoneIndicator", "Zones", "Relay", "RankProof", "Ranks", "RanksUI",
 }
 local PERF_SPIKE_MS = 50
 local perfState = nil
@@ -709,6 +709,9 @@ local function CommandHandler(msg)
 
     elseif cmd == "groups" or cmd == "group" then
         if Overlord.GroupFinder then Overlord.GroupFinder:HandleCommand(args) end
+
+    elseif cmd == "proof" then
+        if Overlord.RankProof and Overlord.RankProof.HandleCommand then Overlord.RankProof:HandleCommand() end
 
     elseif cmd == "guildkills" then
         if Overlord.GuildKillAlert then Overlord.GuildKillAlert:HandleCommand(args) end

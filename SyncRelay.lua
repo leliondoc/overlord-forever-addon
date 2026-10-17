@@ -2463,7 +2463,15 @@ function net:Send(kind, payload, target, immediate)
         -- "~t0" (2.0.2): this client opens no truce from Zones.TRUCELESS_FROM on (see
         -- IsOutdatedMapPeer). After "~b", whose readers look for "~b~".
         -- "~y" (2.0.3): the map layout, right after "~t0" whose readers look for "~t0~".
+        -- "~q" (2.0.5): our Overlord rank from 11 on with one week of our own word
+        -- (".<week>-<kills>"), nothing below (RankProof). After the
+        -- layout, whose readers stop at the next "~".
+        local rankProof = addon.RankProof
+        local okToken, rankToken = false, ""
+        if rankProof and rankProof.PresenceToken then okToken, rankToken = pcall(rankProof.PresenceToken, rankProof) end
+        if not okToken or type(rankToken) ~= "string" or not rankToken:match("^~q[%w%.%-]*$") then rankToken = "" end
         payload = payload .. (self:HasLiveEnemyBridge() and "~b" or "") .. "~t0~y" .. net.LocalMapLayout()
+            .. rankToken
             .. "~m" .. base36(stamp) .. "~o" .. base36(sites)
             .. "~z" .. base36(digest, 6) .. base36(sum) .. "~l9~ld~lr~lp6"
     end
@@ -2579,6 +2587,26 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         local previous = pagedCapabilities[originKey]
         -- First-hand presence of a same-faction player (never one that came over
         -- Battle.net: that is the other faction): count its bridge flag.
+        -- 2.0.5: its Overlord rank claim, believed by nobody until proven (RankProof).
+        -- First-hand only; over Battle.net only from a friend the game itself shows in
+        -- our faction (its copy may be the first one heard, the channel's is then a
+        -- duplicate).
+        local rankProof = addon.RankProof
+        if #p.path == 1 and rankProof and rankProof.OnPresence then
+            local sameSide = transport ~= "BNET"
+            if sameSide and (transport == "PARTY" or transport == "RAID") and sync.GetGroupMemberFaction then
+                -- A group can hold the other faction: the group roster says which side he is on.
+                local okSide, side = pcall(sync.GetGroupMemberFaction, sync, origin)
+                if okSide and type(side) == "string" and side ~= addon.PlayerFaction then sameSide = false end
+            end
+            if not sameSide and transport == "BNET" and sync.GetResolvedBNetPlayerFaction then
+                local okFaction, faction = pcall(sync.GetResolvedBNetPlayerFaction, sync, origin)
+                sameSide = okFaction and faction ~= nil and faction == addon.PlayerFaction
+            end
+            if sameSide then
+                pcall(rankProof.OnPresence, rankProof, origin, p.payload:match("~q([%w%.%-]+)~"))
+            end
+        end
         if #p.path == 1 and transport ~= "BNET" then
             if p.payload:find("~b~", 1, true) then
                 remember(sameFactionBridges, sameFactionBridgesOrder, originKey, GetTime(), 500)

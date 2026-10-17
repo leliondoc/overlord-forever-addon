@@ -1085,6 +1085,31 @@ do
     tick(6)
     local sumBack, digestBack = sync:GetOutpostMapContent()
     assert(sumBack == sum0 and digestBack == digest0, "fixture: the site was not restored")
+    -- A site added after a release stays out of both stamps until its date (2.0.5,
+    -- Feralas): a client of the previous release holds the same map until then.
+    local site = assert(op:GetSite("anadora"), "fixture: no Feralas outpost")
+    assert(site.stampFrom and site.stampFrom > now, "fixture: the Feralas stamp date is already past")
+    local fresh = op:GetState("anadora")
+    local savedFresh = {}
+    for k, v in pairs(fresh) do savedFresh[k] = v end
+    local _, knownBefore = sync:GetOutpostMapStamps()
+    fresh.status, fresh.ownerGuild, fresh.ownerFaction = "held", "Moon Guild", "Alliance"
+    local moonAt = now - 60
+    fresh.claimedAt, fresh.updatedAt, fresh.heldCapturerGuild, fresh.heldCapturerName = moonAt, moonAt, "Moon Guild", "Moon Tester"
+    tick(6)
+    local sumGate, digestGate = sync:GetOutpostMapContent()
+    local _, knownGate = sync:GetOutpostMapStamps()
+    assert(sumGate == sum0 and digestGate == digest0 and knownGate == knownBefore,
+        "a site held before its stamp date changed our stamps")
+    local stampFrom = site.stampFrom
+    site.stampFrom = now - 1
+    tick(6)
+    local sumOpen, digestOpen = sync:GetOutpostMapContent()
+    assert(sumOpen == sum0 + moonAt and digestOpen ~= digest0, "a site past its stamp date is not in our stamps")
+    site.stampFrom = stampFrom
+    for k in pairs(fresh) do fresh[k] = nil end
+    for k, v in pairs(savedFresh) do fresh[k] = v end
+    tick(6)
 end
 print("Outpost claims: keep/outpost stamps (served with capturer, known with the besieged tenant)")
 -- ===== Ledger catch-up pages: every row past the first 16 sits in the block and

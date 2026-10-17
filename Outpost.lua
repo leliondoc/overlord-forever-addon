@@ -113,6 +113,23 @@ Overlord.OutpostSites = {
         center = { 43.4, 45.8 },
         halfSize = 1.35,
     },
+    anadora = {
+        id = "anadora_outpost",
+        siteKey = "anadora",
+        displayNameKey = "OUTPOST_ANADORA_NAME",
+        standaloneOpenWorld = true,
+        mapID = 1444,
+        mapIDs = { [69] = true, [1444] = true },
+        displayMapIDs = { [69] = true, [1444] = true },
+        regionalMapIDs = { [12] = true, [1414] = true },
+        includeChildMaps = false,
+        mapNameNeedles = { "feralas", "féralas", "фералас", "菲拉斯" },
+        -- 2.0.5, devant l'entree de Hache-Tripes, carte Classic de Feralas.
+        center = { 58.1, 44.9 },
+        halfSize = 1.35,
+        -- Hors des tampons de carte jusqu'au 18 novembre 2026 08:00 UTC (clients 2.0.4).
+        stampFrom = 1794988800,
+    },
     arathi = {
         id = "arathi_outpost",
         siteKey = "arathi",

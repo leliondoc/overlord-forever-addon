@@ -737,6 +737,39 @@ function R:BeginWeekClose(marker)
     end
     local all = OverlordDB.ranksByCharacter
     if type(all) ~= "table" then return nil end
+    local epoch, fresh = self:GetWeekCloseWindow(marker)
+    if not epoch then return nil end
+    -- Le personnage connecte d'abord : le plafond de sondes ne l'ecarte jamais.
+    local probes, localName = {}, LocalName()
+    if localName then
+        AddWeekProbe(self, probes, bucket, epoch, localName, Usable(self, all, localName), localName)
+    end
+    -- (Mettre une fiche de cote pendant ce parcours efface une cle existante, ce que
+    -- le parcours d'une table permet.) Le parcours s'arrete apres quelques fiches
+    -- refusees : une sauvegarde honnete n'en contient aucune, et une sauvegarde bourree
+    -- de fausses fiches ne doit pas en faire verifier des milliers.
+    local refused = 0
+    for name in pairs(all) do
+        if name ~= localName then
+            local rec, failed = Usable(self, all, name)
+            AddWeekProbe(self, probes, bucket, epoch, name, rec, localName)
+            if failed then
+                refused = refused + 1
+                if refused >= self.SET_ASIDE_MAX then break end
+            end
+        end
+    end
+    if #probes == 0 then return nil end
+    -- fresh : le classement avait ete compare a temps, les trois premieres places comptent.
+    return { epoch = epoch, limit = self.PLACE_TIERS[1], probes = probes, fresh = fresh }
+end
+
+-- Fenetre de la semaine finie : son debut (epoch) et si le classement avait ete compare
+-- a temps (fresh), ou nil si elle ne peut pas compter (pas une vraie semaine, ni
+-- classement compare ni presence en jeu sur sa derniere journee). Partagee avec les
+-- rangs du haut vus par les autres (RankProof), qui suivent la meme regle.
+function R:GetWeekCloseWindow(marker)
+    if type(marker) ~= "table" or type(OverlordDB) ~= "table" then return nil end
     local epoch = Count(marker.archiveEpoch)
     local resetEpoch = Count(marker.resetEpoch)
     if epoch == 0 or resetEpoch - epoch < self.WEEK_MIN_SEC then return nil end
@@ -776,29 +809,7 @@ function R:BeginWeekClose(marker)
     -- (Une semaine qui ne compte pas ne dit rien dans le chat : rien qui harcele les
     -- joueurs. L'infobulle de la jauge montre quand le classement a ete compare.)
     if not fresh and playedAt < weekEnd - self.WEEK_FRESH_SEC then return nil end
-    -- Le personnage connecte d'abord : le plafond de sondes ne l'ecarte jamais.
-    local probes, localName = {}, LocalName()
-    if localName then
-        AddWeekProbe(self, probes, bucket, epoch, localName, Usable(self, all, localName), localName)
-    end
-    -- (Mettre une fiche de cote pendant ce parcours efface une cle existante, ce que
-    -- le parcours d'une table permet.) Le parcours s'arrete apres quelques fiches
-    -- refusees : une sauvegarde honnete n'en contient aucune, et une sauvegarde bourree
-    -- de fausses fiches ne doit pas en faire verifier des milliers.
-    local refused = 0
-    for name in pairs(all) do
-        if name ~= localName then
-            local rec, failed = Usable(self, all, name)
-            AddWeekProbe(self, probes, bucket, epoch, name, rec, localName)
-            if failed then
-                refused = refused + 1
-                if refused >= self.SET_ASIDE_MAX then break end
-            end
-        end
-    end
-    if #probes == 0 then return nil end
-    -- fresh : le classement avait ete compare a temps, les trois premieres places comptent.
-    return { epoch = epoch, limit = self.PLACE_TIERS[1], probes = probes, fresh = fresh }
+    return epoch, fresh, weekEnd
 end
 
 -- Une ligne de la semaine finie. Pour chaque sonde, seules les lignes de sa faction

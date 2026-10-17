@@ -1903,6 +1903,15 @@ function Overlord.LeaderboardUI.OnKillRowEnter(row)
     else
         GameTooltip:AddLine(L.LB_ROW_NO_GUILD or "Guild unknown", 0.6, 0.6, 0.6)
     end
+    -- Its Overlord rank (11 to 15), shown once this client has proven it (RankProof).
+    local proof, ranks = Overlord.RankProof, Overlord.Ranks
+    local okBadge, badgeRank = false, 0
+    if proof and proof.GetBadgeRank then okBadge, badgeRank = pcall(proof.GetBadgeRank, proof, name) end
+    badgeRank = okBadge and tonumber(badgeRank) or 0
+    if badgeRank > 0 and ranks and ranks.GetRankName then
+        local icon = ranks.GetRankIcon and ranks:GetRankIcon(badgeRank)
+        GameTooltip:AddLine((icon and ("|T" .. icon .. ":16:16|t ") or "") .. ranks:GetRankName(badgeRank), 1, 0.82, 0)
+    end
     if L.LB_KILLS_SCROLL_TOOLTIP then
         GameTooltip:AddLine(L.LB_KILLS_SCROLL_TOOLTIP, 0.6, 0.6, 0.6, true)
     end
@@ -2362,9 +2371,14 @@ RenderKillRows = function(force)
             -- Némésis : tete de mort devant les cinq meilleurs ennemis (Nemesis.lua).
             local wanted = Overlord.MostWanted and Overlord.MostWanted.IsWanted
                 and Overlord.MostWanted:IsWanted(entry.name) ~= nil
+            -- Overlord rank badge (11 to 15) left of the name, once proven (RankProof).
+            local proof = Overlord.RankProof
+            local okBadge, badgeRank = false, 0
+            if proof and proof.GetBadgeRank then okBadge, badgeRank = pcall(proof.GetBadgeRank, proof, entry.name) end
+            badgeRank = okBadge and tonumber(badgeRank) or 0
             local paintKey = rank .. "|" .. tostring(entry.kills) .. "|" .. tostring(class) .. "|"
                 .. tostring(faction) .. "|" .. tostring(raceFile) .. "|" .. tostring(raceSex) .. "|"
-                .. shortName .. (isOwn and "|me" or "") .. (wanted and "|w" or "")
+                .. shortName .. (isOwn and "|me" or "") .. (wanted and "|w" or "") .. "|" .. badgeRank
             if row._lbPaintKey ~= paintKey then
                 row._lbPaintKey = paintKey
                 local medalColor = MEDAL_COLORS[rank]
@@ -2386,9 +2400,13 @@ RenderKillRows = function(force)
                 SetClassIcon(row.classIcon, class)
                 if row.classIconHolder then row.classIconHolder:Show() end
                 local cr, cg, cb = GetClassColor(class)
+                local shown = shortName
+                local badgeIcon = badgeRank > 0 and Overlord.Ranks and Overlord.Ranks.GetRankIcon
+                    and Overlord.Ranks:GetRankIcon(badgeRank)
+                if badgeIcon then shown = "|T" .. badgeIcon .. ":14:14|t " .. shown end
                 row.name:SetText(wanted
-                    and (Overlord.MostWanted.SkullMarkup(12) .. " " .. shortName)
-                    or shortName)
+                    and (Overlord.MostWanted.SkullMarkup(12) .. " " .. shown)
+                    or shown)
                 if cr and cg and cb then
                     row.name:SetTextColor(cr, cg, cb)
                 else

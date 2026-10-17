@@ -760,14 +760,24 @@ end
 -- besieged tenant of an observed assault included. Event times, identical on every
 -- client that holds the capture.
 local outpostMapStamps = { at = -1000, served = 0, known = 0 }
+-- A site added after a release (its stampFrom, server time) stays out of both stamps until
+-- that date: clients of the previous release do not know it, and its tenant would keep
+-- their stamps different from ours for good (map pulls, no map skip between the two).
+-- Its captures still travel live and in map replies.
+local UNSTAMPED_SITE = { status = "neutral" }
+local function StampedState(OP, siteKey, site, serverNow)
+    if type(site) == "table" and site.stampFrom and serverNow < site.stampFrom then return UNSTAMPED_SITE end
+    return OP:GetState(siteKey)
+end
 function Overlord.Sync:GetOutpostMapStamps()
     local now = GetTime()
     if now - outpostMapStamps.at < 5 then return outpostMapStamps.served, outpostMapStamps.known end
     local served, known = 0, 0
     local OP = Overlord.Outpost
     if OP and OP.GetState and Overlord.OutpostSites then
-        for siteKey in pairs(Overlord.OutpostSites) do
-            local st = OP:GetState(siteKey)
+        local serverNow = ClaimServerNow()
+        for siteKey, site in pairs(Overlord.OutpostSites) do
+            local st = StampedState(OP, siteKey, site, serverNow)
             if st.status == "held" then
                 local guild = OP:SanitizeGuildName(st.ownerGuild or "")
                 local claimedAt = math.floor(tonumber(st.claimedAt) or 0)
@@ -802,8 +812,9 @@ function Overlord.Sync:GetOutpostMapContent()
     local sum, digest = 0, 0
     local OP = Overlord.Outpost
     if OP and OP.GetState and Overlord.OutpostSites then
-        for siteKey in pairs(Overlord.OutpostSites) do
-            local st = OP:GetState(siteKey)
+        local serverNow = ClaimServerNow()
+        for siteKey, site in pairs(Overlord.OutpostSites) do
+            local st = StampedState(OP, siteKey, site, serverNow)
             local guild, claimedAt
             if st.status == "held" then
                 if not OP:IsOutpostStateAwaitingNetworkSnapshot(st) then

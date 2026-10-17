@@ -70,6 +70,8 @@ local driverState = {
     worldTransformX = 0,
     worldTransformY = 0,
     worldTransformScale = 1,
+    worldTransformZoom = 1,
+    worldLayoutScale = nil,
     worldTransformW = 0,
     worldTransformH = 0,
     worldOverlayViewport = nil,
@@ -784,7 +786,21 @@ function Overlord.MapMarkers:SyncWorldOverlayTransform(canvas)
     local offsetY = ((canvasTop * canvasScale) - (viewportTop * viewportScale)) / viewportScale
     local rootW, rootH = cw * scale, ch * scale
     local canvasChanged = driverState.worldTransformCanvas ~= canvas
-    local positionChanged = not driverState.worldTransformValid or canvasChanged
+    -- Zoom depuis le dernier layout. Les marqueurs sont places a l'echelle de ce layout et
+    -- replaces 20 fois par seconde ; Blizzard change l'echelle a chaque image d'un cran de
+    -- molette. Entre deux layouts, la racine prend le rapport des deux echelles : chaque
+    -- marqueur reste exactement sur son point (sinon il derivait en proportion de sa
+    -- distance au coin de la carte, puis sautait). Le layout suivant la remet a 1
+    -- (CommitWorldOverlayZoom) pour rendre aux icones leur taille fixe.
+    local layoutScale = driverState.worldLayoutScale
+    if canvasChanged or not driverState.worldTransformValid or not layoutScale then
+        layoutScale = scale
+        driverState.worldLayoutScale = scale
+    end
+    local zoom = scale / layoutScale
+    if math.abs(zoom - 1) < 0.00001 then zoom = 1 end
+    local zoomChanged = zoom ~= driverState.worldTransformZoom
+    local positionChanged = not driverState.worldTransformValid or canvasChanged or zoomChanged
         or math.abs(driverState.worldTransformX - offsetX) >= 0.015625
         or math.abs(driverState.worldTransformY - offsetY) >= 0.015625
     local scaleChanged = not driverState.worldTransformValid or canvasChanged
@@ -804,21 +820,32 @@ function Overlord.MapMarkers:SyncWorldOverlayTransform(canvas)
     driverState.worldTransformScale = scale
     driverState.worldTransformW = rootW
     driverState.worldTransformH = rootH
-    -- Ne jamais scaler la racine : plusieurs icones/plaque utilisent volontairement
-    -- une taille fixe en pixels UI. Seule son origine suit le pan ; le zoom est rebati
-    -- a cadence bornee pour conserver exactement leurs tailles historiques.
-    if sizeChanged then parent:SetSize(rootW, rootH) end
+    driverState.worldTransformZoom = zoom
+    -- Echelle de la racine : 1 apres chaque layout (icones a taille fixe exacte), le
+    -- rapport de zoom entre deux layouts seulement. Taille et ancre sont dans les unites
+    -- de la racine, donc divisees par ce rapport.
+    if zoomChanged then parent:SetScale(zoom) end
+    if sizeChanged or zoomChanged then parent:SetSize(rootW / zoom, rootH / zoom) end
     if positionChanged then
         parent:ClearAllPoints()
-        parent:SetPoint("TOPLEFT", viewport, "TOPLEFT", offsetX, offsetY)
+        parent:SetPoint("TOPLEFT", viewport, "TOPLEFT", offsetX / zoom, offsetY / zoom)
     end
-    if scaleChanged or sizeChanged then
+    if scaleChanged or sizeChanged or zoom ~= 1 then
         -- Zoom/maximisation : reveiller le layout borne. Le pan pur ne passe jamais
         -- ici et reste une unique translation de racine a chaque image.
         driverState.mapLayoutValid = false
         driverState.worldLayoutPending = true
     end
     return true
+end
+
+-- Juste avant un layout : la racine revient a l'echelle 1 et l'echelle du moment devient
+-- celle du layout. Les marqueurs sont alors replaces (MapLayoutChanged voit l'echelle
+-- changer), icones a leur taille fixe.
+function Overlord.MapMarkers:CommitWorldOverlayZoom(canvas)
+    if driverState.worldTransformZoom == 1 then return end
+    driverState.worldLayoutScale = nil
+    self:SyncWorldOverlayTransform(canvas)
 end
 
 local function GetCanvasToOverlayScaleRatio(canvas, parent)
@@ -1574,8 +1601,11 @@ function Overlord.MapMarkers:Initialize()
         end
         driverState.canvasInvalidHidden = false
         local parent = GetOverlayParent()
+        -- Zoom en cours : racine remise a l'echelle 1 avant de replacer les marqueurs.
+        Overlord.MapMarkers:CommitWorldOverlayZoom(canvas)
         local layoutChanged = MapLayoutChanged(canvas, parent)
-        driverState.worldLayoutPending = false
+        -- Racine encore a l'echelle d'un zoom (commit impossible a cette image) : rester en attente.
+        driverState.worldLayoutPending = driverState.worldTransformZoom ~= 1
         local contentRefresh = ShouldRefreshWorldMapOverlays(driverElapsed, mapID)
         local frontForMap = mapID and Overlord.Fronts and Overlord.Fronts:ResolveFrontByOverlayMapID(mapID)
         -- Une seule resolution GK : le elseif doit matcher UNIQUEMENT sur carte locale fortin,
@@ -2198,6 +2228,49 @@ local function SetOverlayPulse(overlay, active, r, g, b, alpha)
     if not overlay.pulseAnim:IsPlaying() then overlay.pulseAnim:Play() end
 end
 
+-- A zone being captured keeps its defender's colour, crossed by stripes in the
+-- attacker's (Textures/zone_stripes: white, tileable, tinted here). Two tiles across
+-- the circle whatever its size, so a zoom changes nothing; static, so a frame costs
+-- nothing. Created on first use. (One table for the helpers too: the main chunk is near
+-- Lua's 200 locals.)
+local ZONE_STRIPES = {
+    texture = "Interface\\AddOns\\Overlord\\Textures\\zone_stripes",
+    tiles = 2,
+    alpha = 0.6,
+    fill = 0.25,
+}
+
+-- The faction hues of GetFactionZoneColors, for the attacker and the defender of a capture.
+function ZONE_STRIPES.Hue(faction)
+    local pf = Overlord.PlayerFaction
+    if faction == "Alliance" then
+        if pf == "Alliance" then return 0.15, 0.45, 0.85 end
+        return 0.20, 0.50, 0.90
+    elseif faction == "Horde" then
+        if pf == "Horde" then return 0.72, 0.12, 0.10 end
+        return 0.85, 0.15, 0.15
+    end
+    return nil
+end
+
+function ZONE_STRIPES.Set(overlay, active, r, g, b, alpha)
+    if not active then
+        if overlay.stripes and overlay.stripes:IsShown() then overlay.stripes:Hide() end
+        return
+    end
+    if not overlay.stripes then
+        local stripes = overlay:CreateTexture(nil, "ARTWORK", nil, 1)
+        stripes:SetAllPoints()
+        stripes:SetTexture(ZONE_STRIPES.texture, "REPEAT", "REPEAT")
+        stripes:SetTexCoord(0, ZONE_STRIPES.tiles, 0, ZONE_STRIPES.tiles)
+        AddCircleMask(overlay, stripes)
+        overlay.stripes = stripes
+    end
+    overlay.stripes:SetVertexColor(r, g, b)
+    overlay.stripes:SetAlpha(alpha)
+    overlay.stripes:Show()
+end
+
 function Overlord.MapMarkers:UpdateOverlay(overlay)
     local zone = overlay.zone
     local canvas = GetCanvas()
@@ -2258,9 +2331,22 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
     -- Mode compact : « SYNCING » reste ecrit dans le cercle (arc du bas, voir ZoneArc).
     overlay._olArcStatus = loginPending and st or nil
     local opacityScale = GetMapOverlayOpacityScale()
-    -- Before the paint cache: the pulse follows the status even when nothing else changed.
-    SetOverlayPulse(overlay, zone.status == "in_progress" and not onTruce and not loginPending,
-        r, g, b, 0.32 * opacityScale)
+    -- A capture keeps its orange rim; the fill takes the defender's colour (grey for a
+    -- neutral point) under stripes in the attacker's.
+    local capturing = zone.status == "in_progress" and not onTruce and not loginPending
+    local fr, fg, fb = r, g, b
+    local sr, sg, sb
+    if capturing then
+        sr, sg, sb = ZONE_STRIPES.Hue(zone.owner)
+        if sr then
+            local dr, dg, db = ZONE_STRIPES.Hue(Overlord.Zones:GetInterruptedCaptureRevertOwner(zone))
+            fr, fg, fb = dr or 0.62, dg or 0.65, db or 0.60
+            fa = ZONE_STRIPES.fill
+        end
+    end
+    -- Before the paint cache: pulse and stripes follow the status even when nothing else changed.
+    SetOverlayPulse(overlay, capturing, sr or r, sg or g, sb or b, 0.32 * opacityScale)
+    ZONE_STRIPES.Set(overlay, sr ~= nil, sr, sg, sb, ZONE_STRIPES.alpha * opacityScale)
     local borderAlpha = ba * opacityScale
     local fillAlpha = fa * opacityScale
     local iconAtlas = Overlord.Zones:GetZoneMapIconAtlas(zone, true, attackable)
@@ -2271,6 +2357,7 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
         and overlay._olPaintSt == st
         and overlay._olPaintSt2 == st2
         and overlay._olPaintR == r and overlay._olPaintG == g and overlay._olPaintB == b
+        and overlay._olPaintFR == fr and overlay._olPaintFG == fg and overlay._olPaintFB == fb
         and overlay._olPaintFillAlpha == fillAlpha
         and overlay._olPaintBorderAlpha == borderAlpha
         and overlay._olPaintIconAtlas == iconAtlas then
@@ -2281,12 +2368,13 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
     overlay._olPaintSt = st
     overlay._olPaintSt2 = st2
     overlay._olPaintR, overlay._olPaintG, overlay._olPaintB = r, g, b
+    overlay._olPaintFR, overlay._olPaintFG, overlay._olPaintFB = fr, fg, fb
     overlay._olPaintFillAlpha = fillAlpha
     overlay._olPaintBorderAlpha = borderAlpha
     overlay._olPaintIconAtlas = iconAtlas
     overlay._olPaintIconAlpha = iconAlpha
     overlay.fill:Show()
-    overlay.fill:SetColorTexture(r, g, b)
+    overlay.fill:SetColorTexture(fr, fg, fb)
     overlay.fill:SetAlpha(math.min(1, fillAlpha * ZONE_RIM.fill))
     StyleZoneRim(overlay.border, r, g, b, borderAlpha)
     -- Titre sur ruban parchemin : brun fonce (style Warboard). Sous-titres restent dores.
@@ -2805,13 +2893,15 @@ local mmYardsPerPctX, mmYardsPerPctY = nil, nil
 local mmScaleCalculatedFor = nil
 local mmScaleCalculatedMapID = nil
 local mmFrame = nil  -- Garde une ref pour SetMinimapPinsVisible (appele depuis Core)
--- La position seule suit environ 60 Hz ; donnees, styles et reconciliations restent a 2 Hz.
--- Le pixel-cache de PlaceMinimapPinCenter evite tout SetPoint si un pin n'a pas bouge.
+-- En mouvement, la position suit a 60 Hz au plus (a chaque image, un ecran a 144 Hz faisait
+-- 2,4 fois plus de travail pour un gain a peine visible ; le placement au sous-pixel garde
+-- le glissement doux). Donnees, styles et reconciliations restent a 2 Hz. Le cache de
+-- PlaceMinimapPinCenter evite tout SetPoint si un pin n'a pas bouge.
 local MM_POS_INTERVAL = 1 / 60
 local MM_DATA_INTERVAL = 0.5
 local mmPosAcc = 0
 local mmDataAcc = MM_DATA_INTERVAL
--- Zones, mines et keep partagent le meme driver mmFrame (meme cache position, ~60 Hz en mouvement).
+-- Zones, mines et keep partagent le meme driver mmFrame (meme cache position, a chaque image en mouvement).
 -- mmMineMapActive : on est sur une carte a mines -> mmFrame doit tourner meme hors front actif.
 local mmMineMapActive = false
 -- Toutes les icones minimap deja masquees par l'option (evite de les recacher a chaque tick).
@@ -2835,6 +2925,25 @@ function driverState.WakeMinimapDriver()
     mmPosAcc = MM_POS_INTERVAL
 end
 
+-- Zoom ou taille de la minicarte changes : le rayon de vue et la taille des cercles ne se
+-- relisent qu'au rafraichissement complet (2 Hz). Le provoquer au tick suivant, au lieu de
+-- laisser les icones a l'ancienne echelle jusqu'a une demi-seconde puis sauter.
+-- Au plus un rafraichissement force par 0,1 s (redimensionnement continu en mode Edition) :
+-- les suivants arrivent au plus tard 0,1 s apres.
+function driverState.InvalidateMinimapScale()
+    if Overlord.InstanceSuspended then return end
+    local now = GetTime()
+    if now - (driverState.minimapScaleForcedAt or 0) >= 0.1 then
+        driverState.minimapScaleForcedAt = now
+        mmDataAcc = MM_DATA_INTERVAL
+    else
+        mmDataAcc = math.max(mmDataAcc, MM_DATA_INTERVAL - 0.1)
+        -- Le pilote tourne a chaque image jusqu'a ce rafraichissement, meme a l'arret.
+        driverState.minimapScalePending = true
+    end
+    driverState.WakeMinimapDriver()
+end
+
 local function GetPlayerPositionForResourceMap(mapID)
     if not mapID then return nil, nil end
     if mapID == mmCachedMapID then
@@ -2847,16 +2956,22 @@ local function GetPlayerPositionForResourceMap(mapID)
     return px * 100, py * 100
 end
 
+-- Position au demi-pixel, avec un cache : une icone n'est replacee que si sa position
+-- arrondie change (quelques fois par seconde en marchant, jamais a l'arret).
 local function PlaceMinimapPinCenter(pin, pinX, pinY)
     if not pin then return false end
+    -- Au demi-pixel : en marchant, une icone ne bouge que quelques fois par seconde (au
+    -- sous-pixel, chaque icone visible etait replacee a presque chaque tick : CPU).
     pinX = SnapMapPinCoord(pinX)
     pinY = SnapMapPinCoord(pinY)
-    if pin._olMMX == pinX and pin._olMMY == pinY then
+    local lastX = pin._olMMX
+    if lastX == pinX and pin._olMMY == pinY then
         return true
     end
+    -- Deja ancre en CENTER : SetPoint sur le meme point remplace l'ancre, sans ClearAllPoints.
+    if not lastX then pin:ClearAllPoints() end
     pin._olMMX = pinX
     pin._olMMY = pinY
-    pin:ClearAllPoints()
     pin:SetPoint("CENTER", Minimap, "CENTER", pinX, pinY)
     return true
 end
@@ -2987,15 +3102,15 @@ function Overlord.MapMarkers:InitializeMinimap()
         end
         mmPosAcc = mmPosAcc + elapsed
         mmDataAcc = mmDataAcc + elapsed
-        local tickInterval = driverState.minimapMovementActive
+        local tickInterval = (driverState.minimapMovementActive or driverState.minimapScalePending)
             and MM_POS_INTERVAL or driverState.minimapIdleInterval
         if mmPosAcc < tickInterval then return end
-        -- Conserver le reliquat : remettre a zero transformait 60 Hz en ~48 Hz sur
-        -- un ecran 144 Hz (3 frames par tick) et recreait un mouvement irregulier.
+        -- Conserver le reliquat (rythme 2 Hz a l'arret) ; en mouvement il reste a 0.
         mmPosAcc = math.min(math.max(0, mmPosAcc - tickInterval), tickInterval)
 
         local fullRefresh = mmDataAcc >= MM_DATA_INTERVAL
         if fullRefresh then
+            driverState.minimapScalePending = nil
             mmDataAcc = math.min(math.max(0, mmDataAcc - MM_DATA_INTERVAL), MM_DATA_INTERVAL)
         end
 
@@ -3079,9 +3194,16 @@ function Overlord.MapMarkers:InitializeMinimap()
     mmFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
     mmFrame:RegisterEvent("PLAYER_STARTED_MOVING")
     mmFrame:RegisterEvent("PLAYER_STOPPED_MOVING")
+    -- Zoom de la minicarte (molette, boutons, passage interieur / exterieur).
+    pcall(mmFrame.RegisterEvent, mmFrame, "MINIMAP_UPDATE_ZOOM")
+    pcall(Minimap.HookScript, Minimap, "OnSizeChanged", driverState.InvalidateMinimapScale)
     mmFrame:SetScript("OnEvent", function(_, event)
         if event == "PLAYER_STARTED_MOVING" or event == "PLAYER_STOPPED_MOVING" then
             driverState.WakeMinimapDriver()
+            return
+        end
+        if event == "MINIMAP_UPDATE_ZOOM" then
+            driverState.InvalidateMinimapScale()
             return
         end
         driverState.WakeMinimapDriver()
@@ -3213,15 +3335,42 @@ function Overlord.MapMarkers:CreateMinimapButton()
         if Overlord.InstanceSuspended then
             GameTooltip:AddLine(L.DISABLED_IN_INSTANCE, 0.6, 0.6, 0.6)
         else
-            local fri = Overlord.Zones:GetCapturedCount()
-            local ene = Overlord.Zones:GetEnemyCapturedCount()
-            local tot = Overlord.Zones:GetTotalCount()
-            GameTooltip:AddLine(string.format(L.TOOLTIP_FRIENDLY, fri, tot), 0.3, 0.6, 1)
-            GameTooltip:AddLine(string.format(L.TOOLTIP_ENEMY, ene, tot), 1, 0.3, 0.3)
-            GameTooltip:AddLine(" ")
-            GameTooltip:AddLine(L.TOOLTIP_LEFT_CLICK, 0.7, 0.7, 0.7)
-            GameTooltip:AddLine(L.TOOLTIP_SHIFT_GUIDE, 0.7, 0.7, 0.7)
-            GameTooltip:AddLine(L.TOOLTIP_RIGHT_DRAG, 0.7, 0.7, 0.7)
+            -- Le front ou se trouve le joueur, nomme, et qui tient ses points (un point
+            -- attaque reste a son detenteur). Hors d'un front : le dire, pas de compte.
+            local front = Overlord.InActiveFront and Overlord.Fronts and Overlord.Fronts:GetCurrentFront()
+            if front then
+                GameTooltip:AddLine(front.mapName or front.id, 1, 1, 1)
+                local alliance, horde, total = 0, 0, 0
+                for _, zone in ipairs(Overlord.ZoneDatabase or {}) do
+                    total = total + 1
+                    if not zone._loginSyncUnconfirmed then
+                        -- (Under attack, owner is the attacker: the holder is the defender.)
+                        local holder = zone.owner
+                        if zone.status == "in_progress" then
+                            holder = Overlord.Zones:GetInterruptedCaptureRevertOwner(zone)
+                        end
+                        if holder == "Alliance" then
+                            alliance = alliance + 1
+                        elseif holder == "Horde" then
+                            horde = horde + 1
+                        end
+                    end
+                end
+                GameTooltip:AddLine(string.format("|cff4d9eff%s %d|r  ·  |cffff4d4d%s %d|r  ·  |cff999999%s %d|r",
+                    FACTION_ALLIANCE or L.HOF_CAT_ALLIANCE, alliance, FACTION_HORDE or L.HOF_CAT_HORDE, horde,
+                    L.ZONE_NEUTRAL, total - alliance - horde))
+            else
+                GameTooltip:AddLine(L.TOOLTIP_NO_FRONT, 0.6, 0.6, 0.6)
+            end
+            -- Rang Overlord et Gloire, comme l'onglet de la fiche personnage.
+            local ranks = Overlord.Ranks
+            if ranks and ranks.GetState and ranks.GetRankName then
+                local rankState = ranks:GetState()
+                local glory = BreakUpLargeNumbers and BreakUpLargeNumbers(rankState.glory) or tostring(rankState.glory)
+                GameTooltip:AddLine(" ")
+                GameTooltip:AddLine(string.format("%s  ·  %s %s", ranks:GetRankName(rankState.rank), glory,
+                    L.RANK_GLORY or "Glory"), 0.95, 0.88, 0.70)
+            end
         end
         GameTooltip:Show()
     end)
@@ -3325,7 +3474,7 @@ function Overlord.MapMarkers:UpdateMinimapPins(fullRefresh)
         return
     end
 
-    -- Garantir un pin par zone sans scanner/recreer sur le chemin position ~60 Hz.
+    -- Garantir un pin par zone sans scanner/recreer sur le chemin position (chaque image en mouvement).
     if fullRefresh then self:CreateMinimapPins() end
 
     -- Echelle et position via la carte Zone du front, pas la sous-carte joueur (donjon / etage).
@@ -3707,6 +3856,27 @@ local function ApplyDominanceTimerLogo(tex, faction)
     tex:SetTexCoord(0, 1, 0, 1)
 end
 
+-- Zoom natif de la carte : toutes ses cartes (monde, continents, zones) partagent la meme
+-- couche d'art Blizzard, de 1 a 2,14 fois la carte ajustee a sa fenetre (donnees du client,
+-- lues le 17/10/2026). Un addon de carte peut zoomer un continent bien plus loin : les
+-- marqueurs proportionnels a la carte (logos de domination, fortins et avant-postes
+-- projetes, blasons du monde) cessent alors de grossir, a leur taille du zoom natif maximal.
+-- Positions inchangees ; calcule au layout seulement, jamais a chaque image.
+-- parent : le calque des marqueurs, enfant direct du cadre de la fenetre de carte.
+function Overlord.MapMarkers.CapMarkerScaleRatio(canvas, parent, scaleRatio)
+    local viewport = parent and parent.GetParent and parent:GetParent()
+    if not canvas or not viewport or not viewport.GetWidth or not scaleRatio then return scaleRatio end
+    local cw, ch = canvas:GetWidth(), canvas:GetHeight()
+    local vw, vh = viewport:GetWidth(), viewport:GetHeight()
+    if not cw or cw <= 0 or not ch or ch <= 0 or not vw or vw <= 0 or not vh or vh <= 0 then
+        return scaleRatio
+    end
+    -- 2.15 : le maximum natif (2,14) plus une marge d'arrondi.
+    local maxRatio = math.min(vw / cw, vh / ch) * 2.15
+    if scaleRatio > maxRatio then return maxRatio end
+    return scaleRatio
+end
+
 local function GetEKDominanceLogoSize(canvas, parent, capAssaultAtlas)
     if not canvas then return 50 end
     local cw = canvas:GetWidth()
@@ -3719,6 +3889,7 @@ local function GetEKDominanceLogoSize(canvas, parent, capAssaultAtlas)
             scaleRatio = canvasScale / parentScale
         end
     end
+    scaleRatio = Overlord.MapMarkers.CapMarkerScaleRatio(canvas, parent, scaleRatio)
     local computed = cw * EK_DOMINANCE_LOGO_BASE * scaleRatio * Overlord.MapMarkers.GetMapIconScale()
     if capAssaultAtlas then
         return math.min(computed, ResolveDominanceAtlasNativeSize())
@@ -3738,7 +3909,7 @@ local function GetEKDominanceGap(canvas, parent)
             scaleRatio = canvasScale / parentScale
         end
     end
-    return cw * EK_DOMINANCE_GAP_BASE * scaleRatio
+    return cw * EK_DOMINANCE_GAP_BASE * Overlord.MapMarkers.CapMarkerScaleRatio(canvas, parent, scaleRatio)
 end
 
 local function HideEKDominanceVisuals(overlay)
@@ -4403,9 +4574,15 @@ local function UpdateResourceOverlayVisuals(ov, resource, diameter, cfg)
         ov._olRibbonKey = nil
     end
     local snappedDiameter = math.floor(diameter * 10 + 0.5) / 10
-    local layoutChanged = ov._olResourceLayoutDiameter ~= snappedDiameter
+    -- Text and icon sized like a capture point's circle of the same size
+    -- (GetFrontOverlayLabelDiameter, AnchorZoneIcon).
+    local labelDiameter = diameter / ((Overlord.Fronts and Overlord.Fronts.CaptureRadiusScale) or 0.60)
+    local iconScale = Overlord.MapMarkers.GetMapIconScale()
     local titlesEnabled = ShouldShowMapZoneTitles()
     local titleModeChanged = ov._olResourceTitlesEnabled ~= titlesEnabled
+    -- (The icon's size depends on the mode: a mode change lays the circle out again.)
+    local layoutChanged = ov._olResourceLayoutDiameter ~= snappedDiameter or ov._olResourceIconScale ~= iconScale
+        or titleModeChanged
     if titleModeChanged then
         ov._olResourceTitlesEnabled = titlesEnabled
         ov._olRibbonKey = nil
@@ -4416,6 +4593,7 @@ local function UpdateResourceOverlayVisuals(ov, resource, diameter, cfg)
     end
     if layoutChanged then
         ov._olResourceLayoutDiameter = snappedDiameter
+        ov._olResourceIconScale = iconScale
         if ov.rim then ov.rim:SetSize(diameter * ZONE_RIM.scale, diameter * ZONE_RIM.scale) end
         -- Infobulle sur le centre seulement : le reste du cercle laisse le survol
         -- aux points de quete et PNJ de la carte en dessous.
@@ -4435,7 +4613,11 @@ local function UpdateResourceOverlayVisuals(ov, resource, diameter, cfg)
         ov.subtext:ClearAllPoints()
         ov.subtext:SetPoint("TOP", ov.text, "BOTTOM", 0, -math.max(1, subSz * 0.08))
         if ov.iconTex then
-            local iconSize = math.max(10, diameter * 0.30)
+            -- Compact map: alone in the middle, sized like a capture point's; with the
+            -- names, it hangs under the ribbon and its line, and keeps to the circle.
+            local iconSize = titlesEnabled and math.max(10, diameter * 0.30)
+                or math.min(48 * iconScale, math.max(6, labelDiameter * 0.28 * iconScale))
+            ov._olResourceIconSize = iconSize
             ov.iconTex:ClearAllPoints()
             ov.iconTex:SetPoint("TOP", ov.subtext, "BOTTOM", 0, 1)
             ov._olIconCentered = nil
@@ -4460,21 +4642,33 @@ local function UpdateResourceOverlayVisuals(ov, resource, diameter, cfg)
     end
     if not ov.text:IsShown() then ov.text:Show() end
     cfg.updateText(ov, resource, diameter)
-    local arcMode = ov._olArcName ~= nil and not titlesEnabled
-    if arcMode then
-        -- 2.0.3: without the names (compact map), the reserve runs along the top of the
-        -- circle like the points' names; with them, it stays under the ribbon.
+    local compact = ov._olArcName ~= nil and not titlesEnabled
+    if compact then
+        -- Without the names (compact map), the bare value curves just above the icon, at
+        -- a capture point's name size: laid out on a circle of the icon's size plus one
+        -- line of text; with the names, the full line stays under the ribbon.
         if ov.subtext:IsShown() then ov.subtext:Hide() end
-        ZoneArc.Layout(ov, math.floor(diameter + 0.5), diameter, true)
+        -- (At least the icon's size at 100 %: with smaller icons the arc would get too tight
+        -- for "100 / 100" and split it around the icon.)
+        local iconHalf = ov.iconTex and ov.iconTex:IsShown() and (ov._olResourceIconSize or 0) * 0.5 or 0
+        iconHalf = math.max(iconHalf, math.min(24, labelDiameter * 0.14))
+        local arcD = math.floor(2 * (iconHalf + ZoneArc.FontSize(labelDiameter) + 3) + 0.5)
+        -- During a zoom the letters follow by scale, like the points' names; the next
+        -- refresh after it settles (2 Hz on a mine map) lays them out exactly.
+        if ZoneArc.settleAt then
+            ZoneArc.Rescale(ov, arcD, labelDiameter, true)
+        else
+            ZoneArc.Layout(ov, arcD, labelDiameter, true)
+        end
     else
         ZoneArc.Hide(ov)
         if not ov.subtext:IsShown() then ov.subtext:Show() end
     end
     -- The icon sits in the middle of the circle on the compact map, as the points' do.
-    if ov.iconTex and ov._olIconCentered ~= arcMode then
-        ov._olIconCentered = arcMode
+    if ov.iconTex and ov._olIconCentered ~= compact then
+        ov._olIconCentered = compact
         ov.iconTex:ClearAllPoints()
-        if arcMode then
+        if compact then
             ov.iconTex:SetPoint("CENTER", ov, "CENTER", 0, 0)
         else
             ov.iconTex:SetPoint("TOP", ov.subtext, "BOTTOM", 0, 1)
@@ -4541,9 +4735,9 @@ local function UpdateMineOverlayText(ov, mine, diameter, subSz)
     local key = tostring(stock) .. ":" .. tostring(stockMax)
     if ov._olResourceTextKey ~= key then
         ov._olResourceTextKey = key
-        -- 2.0.3: on the compact map, the bare reserve ("100 / 100") runs along the top of
-        -- the circle in the banners' brown (UpdateResourceOverlayVisuals); with the names
-        -- shown, the full line stays under the ribbon.
+        -- On the compact map, the bare reserve ("100 / 100") curves above the icon in the
+        -- banners' brown (UpdateResourceOverlayVisuals); with the names shown, the full
+        -- line stays under the ribbon.
         ov.subtext:SetText(string.format(L.MINE_STOCK, stock, stockMax))
         ov._olArcName = string.format("%d / %d", stock, stockMax)
         ov._olArcDark = true
@@ -4818,7 +5012,7 @@ function Overlord.MapMarkers:GetEKDominanceLogoSizeFor(canvas, parent)
 end
 
 function Overlord.MapMarkers:PlaceMinimapPinCenter(pin, pinX, pinY)
-    PlaceMinimapPinCenter(pin, pinX, pinY)
+    return PlaceMinimapPinCenter(pin, pinX, pinY)
 end
 
 function Overlord.MapMarkers:GetMinimapCacheState()

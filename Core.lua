@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.0.4"
+Overlord.Version = "2.0.5"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -1749,6 +1749,9 @@ local function CompleteResumeFromInstance(reason)
     if Overlord.RanksUI and Overlord.RanksUI.OnInstanceResume then
         pcall(Overlord.RanksUI.OnInstanceResume, Overlord.RanksUI)
     end
+    if Overlord.RankProof and Overlord.RankProof.OnInstanceResume then
+        pcall(Overlord.RankProof.OnInstanceResume, Overlord.RankProof)
+    end
     -- Un loading survenu avant l'initialisation de Sync conserve le ZR au lieu de
     -- marquer la vague comme relachee sans transport. Le rejouer avant la rotation.
     if Overlord.FlushDeferredCaptureRelease then
@@ -1899,6 +1902,10 @@ function Overlord:SuspendForInstance()
     -- Overlord Rank: the character sheet tab goes away, nothing is credited.
     if self.RanksUI and self.RanksUI.OnInstanceSuspend then
         pcall(self.RanksUI.OnInstanceSuspend, self.RanksUI)
+    end
+    -- Top ranks seen by others: no inspect, whisper or badge in an instance.
+    if self.RankProof and self.RankProof.OnInstanceSuspend then
+        pcall(self.RankProof.OnInstanceSuspend, self.RankProof)
     end
     self.InstanceSuspended = true
     -- Remet le flag de zone a zero : evite des etats stales si CheckActiveFrontZone n'est pas appele

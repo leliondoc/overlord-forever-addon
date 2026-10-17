@@ -152,7 +152,9 @@ function MM:RefreshWorldEmblems(mapID, layoutChanged, contentRefresh)
     if canvasScale and canvasScale > 0 and parentScale and parentScale > 0 then
         scaleRatio = canvasScale / parentScale
     end
-    local size = math.floor(cw * EMBLEM_SIZE_FRAC * scaleRatio * MM.GetMapIconScale() + 0.5)
+    -- Taille plafonnee au zoom natif maximal (MapMarkers.lua) ; la position garde scaleRatio.
+    local sizeRatio = MM.CapMarkerScaleRatio and MM.CapMarkerScaleRatio(canvas, parent, scaleRatio) or scaleRatio
+    local size = math.floor(cw * EMBLEM_SIZE_FRAC * sizeRatio * MM.GetMapIconScale() + 0.5)
     local rowY, rows = 0, 0
     for _, continent in ipairs(CONTINENTS) do
         local _, y = ContinentPoint(continent, worldID)
