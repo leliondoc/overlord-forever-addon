@@ -3213,15 +3213,10 @@ function Overlord.MapMarkers:InitializeMinimap()
             Overlord.MapMarkers:HideMinimapOutpostPin()
             return
         end
-        -- (Read and scaled inside pcall: a position the game would hide hides the pins.)
+        -- (Read and scaled inside pcall. A position the game would hide leaves every pin
+        -- where it was, nothing disappears; the next tick reads it again.)
         local okXY, px, py = pcall(driverState.ReadMapXY, pos)
-        if not okXY or not px or not py then
-            Overlord.MapMarkers:HideMinimapPins()
-            Overlord.MapMarkers:HideMinimapMinePins()
-            Overlord.MapMarkers:HideMinimapKeepPin()
-            Overlord.MapMarkers:HideMinimapOutpostPin()
-            return
-        end
+        if not okXY or not px or not py then return end
         mmCachedMapID = mapID
         mmCachedPX, mmCachedPY = px, py
         -- Taille, rayon et mode de rotation changent rarement. Les relire avec les

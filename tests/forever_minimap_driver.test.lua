@@ -188,15 +188,17 @@ assert(facingTicks >= 25, "secret facing pace: " .. facingTicks .. " ticks in ha
 GetCVar = function() return "0" end
 GetPlayerFacing = function() return 0 end
 tick(0.6)
--- A hidden position: no error, the pins are hidden until it can be read again.
+-- A hidden position: no error, and nothing disappears: the pin stays where it was, then
+-- follows again once the position can be read.
+local shownBefore, xBefore = pin.shown, pin.x
 local mapPosition = C_Map.GetPlayerMapPosition
 C_Map.GetPlayerMapPosition = function() return { GetXY = function() return secret, secret end } end
-local okPos, errPos = pcall(tick, 0.6)
+local okPos, errPos = pcall(function() tick(0.6); px = px + 0.01; tick(0.6) end)
 assert(okPos, "secret position: " .. tostring(errPos))
-assert(not pin.shown, "a pin stayed where a hidden position put nothing")
+assert(pin.shown == shownBefore and pin.x == xBefore, "a hidden position moved or hid the pin")
 C_Map.GetPlayerMapPosition = mapPosition
 tick(0.6)
-assert(pin.shown, "the pin did not come back with the position")
+assert(pin.shown and pin.x ~= xBefore, "the pin did not follow the position again")
 C_Map.GetBestMapForUnit = bestMap
 -- Standing still with a forced refresh: no SetPoint for a pin that did not move.
 speed = 0
