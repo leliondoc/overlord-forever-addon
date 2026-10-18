@@ -179,6 +179,24 @@ assert(okSecret, "secret speed: " .. tostring(secretTicks))
 assert(secretTicks >= 50 and secretTicks <= 61, "secret speed pace: " .. secretTicks .. " ticks in a second")
 GetUnitSpeed = unitSpeed
 tick(0.6)
+-- A hidden facing (rotating minimap): no error, the last facing is kept, every frame.
+GetCVar = function() return "1" end
+GetPlayerFacing = function() return secret end
+local okFacing, facingTicks = pcall(function() tick(0.6); return ticksIn(0.5) end)
+assert(okFacing, "secret facing: " .. tostring(facingTicks))
+assert(facingTicks >= 25, "secret facing pace: " .. facingTicks .. " ticks in half a second")
+GetCVar = function() return "0" end
+GetPlayerFacing = function() return 0 end
+tick(0.6)
+-- A hidden position: no error, the pins are hidden until it can be read again.
+local mapPosition = C_Map.GetPlayerMapPosition
+C_Map.GetPlayerMapPosition = function() return { GetXY = function() return secret, secret end } end
+local okPos, errPos = pcall(tick, 0.6)
+assert(okPos, "secret position: " .. tostring(errPos))
+assert(not pin.shown, "a pin stayed where a hidden position put nothing")
+C_Map.GetPlayerMapPosition = mapPosition
+tick(0.6)
+assert(pin.shown, "the pin did not come back with the position")
 C_Map.GetBestMapForUnit = bestMap
 -- Standing still with a forced refresh: no SetPoint for a pin that did not move.
 speed = 0

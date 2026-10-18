@@ -2929,6 +2929,21 @@ local function GetPlayerSpeedForMinimap()
     return 0
 end
 
+-- Orientation pour une minicarte en rotation. Through pcall only, like the speed: a secret
+-- value would break the sin/cos of every pin; the arithmetic below raises inside the pcall
+-- instead, and the caller keeps the last facing it could read.
+function driverState.ReadMinimapFacing()
+    local facing = GetPlayerFacing and GetPlayerFacing() or 0
+    return (facing or 0) + 0
+end
+
+-- The player's map position in percent, through pcall only (same reason).
+function driverState.ReadMapXY(pos)
+    local x, y = pos:GetXY()
+    if not x or not y then return nil end
+    return x * 100, y * 100
+end
+
 -- Les icones sont placees au demi-pixel : en marchant (environ 2 px/s au zoom par
 -- defaut), leur position ne change que quelques fois par seconde. Un tick a chaque image
 -- recalculait 60 fois la meme position. Le tick suit maintenant le defilement : un par
@@ -2976,9 +2991,9 @@ local function GetPlayerPositionForResourceMap(mapID)
     end
     local ok, pos = pcall(C_Map.GetPlayerMapPosition, mapID, "player")
     if not ok or not pos then return nil, nil end
-    local ok2, px, py = pcall(pos.GetXY, pos)
-    if not ok2 or not px then return nil, nil end
-    return px * 100, py * 100
+    local ok2, px, py = pcall(driverState.ReadMapXY, pos)
+    if not ok2 or not px or not py then return nil, nil end
+    return px, py
 end
 
 -- Position au demi-pixel, avec un cache : une icone n'est replacee que si sa position
@@ -3153,8 +3168,16 @@ function Overlord.MapMarkers:InitializeMinimap()
         -- a 2 Hz ; une rotation detectee le reveille tant que l'orientation continue a changer.
         local speedOk, speed = pcall(GetPlayerSpeedForMinimap)
         if not speedOk or type(speed) ~= "number" then speed = nil end
-        local facing = mmCachedRotate and (GetPlayerFacing() or 0) or 0
-        local facingChanged = facing ~= mmCachedFacing
+        -- (Unreadable facing: the last one is kept and the driver ticks as if turning.)
+        local facing, facingChanged = 0, false
+        if mmCachedRotate then
+            local okFacing, readFacing = pcall(driverState.ReadMinimapFacing)
+            if okFacing then
+                facing, facingChanged = readFacing, readFacing ~= mmCachedFacing
+            else
+                facing, facingChanged = mmCachedFacing, true
+            end
+        end
         local moving = speed == nil or speed > 0
         driverState.minimapSpeed = speed
         driverState.minimapTurning = facingChanged
@@ -3190,15 +3213,26 @@ function Overlord.MapMarkers:InitializeMinimap()
             Overlord.MapMarkers:HideMinimapOutpostPin()
             return
         end
-        local px, py = pos:GetXY()
+        -- (Read and scaled inside pcall: a position the game would hide hides the pins.)
+        local okXY, px, py = pcall(driverState.ReadMapXY, pos)
+        if not okXY or not px or not py then
+            Overlord.MapMarkers:HideMinimapPins()
+            Overlord.MapMarkers:HideMinimapMinePins()
+            Overlord.MapMarkers:HideMinimapKeepPin()
+            Overlord.MapMarkers:HideMinimapOutpostPin()
+            return
+        end
         mmCachedMapID = mapID
-        mmCachedPX, mmCachedPY = px * 100, py * 100
+        mmCachedPX, mmCachedPY = px, py
         -- Taille, rayon et mode de rotation changent rarement. Les relire avec les
         -- donnees (2 Hz) plutot qu'a chaque mouvement evite trois appels API par tick.
         -- Le premier tick est toujours un fullRefresh (mmDataAcc initialise ci-dessus).
         if fullRefresh or mmCachedHalfMM <= 0 or mmCachedPxPerYard <= 0 then
             local nextRotate = GetCVar("rotateMinimap") == "1"
-            if nextRotate and not mmCachedRotate then facing = GetPlayerFacing() or 0 end
+            if nextRotate and not mmCachedRotate then
+                local okFacing, readFacing = pcall(driverState.ReadMinimapFacing)
+                facing = okFacing and readFacing or 0
+            end
             mmCachedRotate = nextRotate
             mmCachedHalfMM = Minimap:GetWidth() / 2
             local viewRadius = Overlord.MapMarkers:GetMinimapRadius()
