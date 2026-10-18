@@ -269,10 +269,22 @@ local function StopCooldownTicker()
     end
 end
 
+local function CooldownTickerWanted()
+    return not Overlord.InstanceSuspended and Overlord.UI and Overlord.UI.IsVisible
+        and Overlord.UI:IsVisible() and true or false
+end
+
+-- The countdown only ticks while the panel shows it: opening the panel runs
+-- Button:Show -> Refresh, which repaints the true remaining time and restarts it.
 local function StartCooldownTicker()
     StopCooldownTicker()
     if GetCooldownRemaining() <= 0 then return end
+    if not CooldownTickerWanted() then return end
     cdTicker = C_Timer.NewTicker(1, function()
+        if not CooldownTickerWanted() then
+            StopCooldownTicker()
+            return
+        end
         UpdateCooldownVisual()
         if GetCooldownRemaining() <= 0 then
             StopCooldownTicker()

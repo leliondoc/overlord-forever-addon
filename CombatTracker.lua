@@ -20,7 +20,12 @@ local guidFactionCache = {}
 local guidAllyClassCache = {}
 -- Cache GUID -> guilde (allies), meme refresh que la classe (evite scan raid par kill)
 local guidAllyGuildCache = {}
+-- "nameplate1".."nameplate40", built once for the plate scans.
+local NAMEPLATE_UNIT_TOKENS = {}
+for i = 1, 40 do NAMEPLATE_UNIT_TOKENS[i] = "nameplate" .. i end
 local rosterRefreshTimer = nil
+local rosterRefreshLastEventAt = 0
+local rosterRefreshArmedEventAt = 0
 
 -- Cache GUID -> infos visibles pour enrichir le leaderboard (joueurs ennemis).
 -- Permet de retrouver la classe et la race meme si la nameplate a disparu.
@@ -418,18 +423,32 @@ function Overlord.Combat:Initialize()
     self:RefreshGUIDCache()
 end
 
-function Overlord.Combat:RequestGUIDCacheRefresh()
-    if rosterRefreshTimer then
-        rosterRefreshTimer:Cancel()
-        rosterRefreshTimer = nil
+-- Une conversion/invitation de raid emet plusieurs GROUP_ROSTER_UPDATE dans la
+-- meme rafale. Ne reconstruire les trois index GUID qu'apres stabilisation.
+-- Trailing debounce, 0.2 s after the LAST event as before, but one pending timer per
+-- burst instead of a timer and a closure per event: a timer armed for an older event
+-- re-arms itself for the time left since the latest one.
+local ROSTER_REFRESH_DEBOUNCE = 0.2
+
+local function RunGUIDCacheRefresh()
+    rosterRefreshTimer = nil
+    if Overlord.InstanceSuspended or (IsInInstance and IsInInstance()) then return end
+    if rosterRefreshLastEventAt > rosterRefreshArmedEventAt then
+        rosterRefreshArmedEventAt = rosterRefreshLastEventAt
+        local remaining = rosterRefreshLastEventAt + ROSTER_REFRESH_DEBOUNCE - GetTime()
+        if remaining > 0.01 then
+            rosterRefreshTimer = C_Timer.NewTimer(remaining, RunGUIDCacheRefresh)
+            return
+        end
     end
-    -- Une conversion/invitation de raid emet plusieurs GROUP_ROSTER_UPDATE dans la
-    -- meme rafale. Ne reconstruire les trois index GUID qu'apres stabilisation.
-    rosterRefreshTimer = C_Timer.NewTimer(0.2, function()
-        rosterRefreshTimer = nil
-        if Overlord.InstanceSuspended or (IsInInstance and IsInInstance()) then return end
-        if Overlord.Combat then Overlord.Combat:RefreshGUIDCache() end
-    end)
+    if Overlord.Combat then Overlord.Combat:RefreshGUIDCache() end
+end
+
+function Overlord.Combat:RequestGUIDCacheRefresh()
+    rosterRefreshLastEventAt = GetTime()
+    if rosterRefreshTimer then return end
+    rosterRefreshArmedEventAt = rosterRefreshLastEventAt
+    rosterRefreshTimer = C_Timer.NewTimer(ROSTER_REFRESH_DEBOUNCE, RunGUIDCacheRefresh)
 end
 
 -- Reconstruit le cache GUID -> faction du raid/groupe
@@ -647,6 +666,8 @@ local function KillNameDedupKey(name)
     return "kill:" .. base:lower()
 end
 
+-- Also returns the name key it built, so ProcessKill records it without building the
+-- same key strings again.
 local function WasKillRecentlyProcessed(victimGUID, victimName, now)
     if victimGUID then
         local guidAt = recentlyProcessedKills[victimGUID]
@@ -654,16 +675,17 @@ local function WasKillRecentlyProcessed(victimGUID, victimName, now)
     end
     local nameKey = KillNameDedupKey(victimName)
     local nameAt = nameKey and recentlyProcessedKills[nameKey]
-    return nameAt ~= nil and now - nameAt <= KILL_DEDUP_WINDOW
+    return nameAt ~= nil and now - nameAt <= KILL_DEDUP_WINDOW, nameKey
 end
 
-local function RecordProcessKillDedup(victimGUID, enrichedVictimName, victimName, now)
+-- originalKey is KillNameDedupKey(victimName), already built by WasKillRecentlyProcessed.
+local function RecordProcessKillDedup(victimGUID, enrichedVictimName, originalKey, now)
     if victimGUID then
         recentlyProcessedKills[victimGUID] = now
     end
-    local enrichedKey = KillNameDedupKey(enrichedVictimName)
+    -- No enriched name (every kill but our own): its key would be nil anyway.
+    local enrichedKey = enrichedVictimName and KillNameDedupKey(enrichedVictimName)
     if enrichedKey then recentlyProcessedKills[enrichedKey] = now end
-    local originalKey = KillNameDedupKey(victimName)
     if originalKey then recentlyProcessedKills[originalKey] = now end
 end
 
@@ -944,7 +966,8 @@ end
 -- Elle ne cree aucun point de classement : seule la VH Blizzard le fait.
 function Overlord.Combat:ProcessKill(killerGUID, killerName, victimGUID, victimName, proofOnly)
     local now = GetTime()
-    if WasKillRecentlyProcessed(victimGUID, victimName, now) then return false end
+    local recentlyProcessed, originalKey = WasKillRecentlyProcessed(victimGUID, victimName, now)
+    if recentlyProcessed then return false end
     CleanupRecentlyProcessedKills(now)
     CleanupGuidPlayerInfoCache()
     -- Cache les metadonnees victime via nameplate/target (apres dedup pour ne scanner qu'une fois).
@@ -960,8 +983,9 @@ function Overlord.Combat:ProcessKill(killerGUID, killerName, victimGUID, victimN
             end
             if not victimClass then
                 for i = 1, 40 do
-                    local unit = "nameplate" .. i
-                    if UnitGUID(unit) == victimGUID then
+                    local unit = NAMEPLATE_UNIT_TOKENS[i]
+                    -- Boolean checks first: empty slots and NPC plates never build a GUID string.
+                    if UnitExists(unit) and UnitIsPlayer(unit) and UnitGUID(unit) == victimGUID then
                         _, victimClass = UnitClass(unit)
                         _, victimRace = UnitRace(unit)
                         victimSex = UnitSex(unit) or 0
@@ -997,7 +1021,7 @@ function Overlord.Combat:ProcessKill(killerGUID, killerName, victimGUID, victimN
             lastUnknownLocalBackupQueuedAt = 0
         end
     end
-    RecordProcessKillDedup(victimGUID, enrichedVictimName, victimName, now)
+    RecordProcessKillDedup(victimGUID, enrichedVictimName, originalKey, now)
     -- 2.0.4: our killing blow on a Most Wanted (the skull) pays its bounty in coins.
     if playerFullName and not proofOnly and Overlord.MostWanted and Overlord.MostWanted.PayBounty then
         Overlord.MostWanted:PayBounty(enrichedVictimName or victimName)
@@ -1028,7 +1052,8 @@ function Overlord.Combat:RegisterZoneKill(zone, killerGUID, killerName, victimNa
 
     Overlord:MarkDirty()
     if Overlord.UI then
-        Overlord.UI:RequestRefresh()
+        -- No map layer draws these counters: refresh the panel without a map pass.
+        Overlord.UI:RequestRefresh(true)
     end
 end
 
@@ -1206,7 +1231,7 @@ function Overlord.Combat:IdentifyKiller()
 
     -- 3) Nameplate ennemi la plus proche (premier joueur ennemi vivant)
     for i = 1, 40 do
-        local unit = "nameplate" .. i
+        local unit = NAMEPLATE_UNIT_TOKENS[i]
         if UnitExists(unit) and UnitIsPlayer(unit) and not UnitIsDead(unit) then
             local faction = UnitFactionGroup(unit)
             if faction == enemyFaction then
@@ -1229,7 +1254,7 @@ function Overlord.Combat:GetEnemyClassFromNameplate(name)
     local shortName = name:match("^(.-)%-") or name
     local requiresFullName = name:find("-", 1, true) ~= nil
     for i = 1, 40 do
-        local unit = "nameplate" .. i
+        local unit = NAMEPLATE_UNIT_TOKENS[i]
         if UnitExists(unit) and UnitIsPlayer(unit) then
             -- UnitFullName donne le royaume quand l'API le connait ; sinon meme royaume local.
             local npName = SafeFullUnitName(unit)

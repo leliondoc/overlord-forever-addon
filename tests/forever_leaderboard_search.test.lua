@@ -283,6 +283,9 @@ end
 otherRow.scripts.OnEnter(otherRow)
 assert(tip.lines[2] == 'Guild unknown', 'Unknown guild was not stated')
 -- Wheel on a row scrolls the ranking, and a reused row refreshes its open tooltip.
+-- The cursor stays put: after a three-row wheel step, Player 4 is the row under it
+-- (rows follow their data index, so the tooltip moves to the row now there).
+function methods:IsMouseOver() return self._olPlayerName == 'Player 4' end
 killRow.scripts.OnEnter(killRow)
 local lookupsBefore = guildLookups
 killRow.scripts.OnMouseWheel(killRow, -1); drain()
@@ -326,7 +329,10 @@ for _, key in ipairs({ 'killsTitle', 'guildTitle', 'guildKeepTitle', 'outpostTit
 end
 assert(table.concat(titles, ' | ') == 'Player kills | Guilds | Guild Keeps | Guild outposts',
     'Table titles: ' .. table.concat(titles, ' | '))
-assert(frame.killsTitle.parent == frame.headerBand and frame.sitesWeek.title.title.text == 'Capturers and rivalries',
+-- The weekly view is built on its first toggle (nothing built for a view never opened).
+assert(frame.sitesWeek == nil, 'The weekly view is built before its first toggle')
+local sitesWeekView = Overlord.LeaderboardUI:CreateSitesWeekView(frame._sitesPalette)
+assert(frame.killsTitle.parent == frame.headerBand and sitesWeekView.title.title.text == 'Capturers and rivalries',
     'A title does not follow its table, or the weekly view has none')
 assert(frame.width == 1550, "The ranking window changed width: " .. tostring(frame.width))
 assert(frame.guildRatingBlock == nil and frame.guildBlock.width == 372

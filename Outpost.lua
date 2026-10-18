@@ -1750,12 +1750,21 @@ function Overlord.Outpost:TickMaintenance()
             -- canal sondant en meme temps, ne pouvaient pas la porter). Les sondes
             -- ne sont rearmees que par un autre assaut (guilde ou faction) ou apres
             -- 15 min, jamais par un simple battement (un battement forge les rachetait).
-            local ident = sanitizeGuildName(st.ownerGuild or ""):lower() .. "|" .. tostring(st.ownerFaction or "")
+            -- The ident is a pure function of the raw owner guild and faction: reused
+            -- while both are the very same values, rebuilt (same rule) otherwise.
             local probes = observerStalePolls[key]
+            local rawGuild, rawFaction = st.ownerGuild, st.ownerFaction
+            local ident
+            if probes and rawequal(probes.rawGuild, rawGuild) and rawequal(probes.rawFaction, rawFaction) then
+                ident = probes.ident
+            else
+                ident = sanitizeGuildName(rawGuild or ""):lower() .. "|" .. tostring(rawFaction or "")
+            end
             if not probes or probes.ident ~= ident or now - probes.armedAt > OUTPOST_OBSERVER_PROBE_REARM_SEC then
                 probes = { ident = ident, armedAt = now, count = 0 }
                 observerStalePolls[key] = probes
             end
+            probes.rawGuild, probes.rawFaction = rawGuild, rawFaction
             if stale then
                 if probes.count < OUTPOST_OBSERVER_STALE_POLL_MAX
                     and Overlord.Sync and Overlord.Sync.PollIfStaleObserverOutpost

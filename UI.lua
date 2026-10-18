@@ -259,7 +259,10 @@ function Overlord.UI:CreateCleanScroll(parent, width, height, wheelStep, showFad
             if maximum <= 2 or travel <= 0 then return end
             local wantedTop = GetScaledCursorY() + (button.dragOffset or 0)
             local offset = math.max(0, math.min(travel, trackTop - wantedTop))
-            scroll:SetVerticalScroll(maximum * offset / travel)
+            local target = maximum * offset / travel
+            -- A held thumb fires every frame: skip when the list is already there.
+            if math.abs((scroll:GetVerticalScroll() or 0) - target) < 0.5 then return end
+            scroll:SetVerticalScroll(target)
             RefreshRail()
         end)
     end)
@@ -706,7 +709,10 @@ end
 function Overlord.UI:ApplyUiScale()
     if not mainFrame then return end
     local sc = self:GetEffectiveUiScale()
-    mainFrame:SetScale(sc)
+    -- Same tolerance as FitLeaderboardFrameScale: a needless SetScale re-lays out the panel.
+    if math.abs((mainFrame:GetScale() or 0) - sc) > 0.001 then
+        mainFrame:SetScale(sc)
+    end
     if Overlord.LeaderboardUI and Overlord.LeaderboardUI.ApplyFrameScale then
         Overlord.LeaderboardUI:ApplyFrameScale(sc)
     end
@@ -789,17 +795,23 @@ function Overlord.UI:UpdatePanelAnchor()
         return
     end
 
-    mainFrame:SetScale(1)
-    mainFrame:ClearAllPoints()
+    -- Offsets are in frame units, so no SetScale(1) is needed before SetPoint.
+    local point, relativeTo, relPoint, x = "RIGHT", UIParent, "RIGHT", -120
     if WorldMapFrame and WorldMapFrame:IsVisible() then
         local isMax = WorldMapFrame.IsMaximized and WorldMapFrame:IsMaximized()
         if isMax then
-            mainFrame:SetPoint("RIGHT", WorldMapFrame, "RIGHT", -20, 0)
+            point, relativeTo, relPoint, x = "RIGHT", WorldMapFrame, "RIGHT", -20
         else
-            mainFrame:SetPoint("LEFT", WorldMapFrame, "RIGHT", 4, 0)
+            point, relativeTo, relPoint, x = "LEFT", WorldMapFrame, "RIGHT", 4
         end
-    else
-        mainFrame:SetPoint("RIGHT", UIParent, "RIGHT", -120, 0)
+    end
+    -- Map show/hide/resize fire several times: skip the re-anchor when nothing moves.
+    local p, rel, rp, cx, cy = mainFrame:GetPoint(1)
+    if not (p == point and rel == relativeTo and rp == relPoint
+        and cx and cy and math.abs(cx - x) < 0.5 and math.abs(cy) < 0.5
+        and mainFrame:GetNumPoints() == 1) then
+        mainFrame:ClearAllPoints()
+        mainFrame:SetPoint(point, relativeTo, relPoint, x, 0)
     end
     self:ApplyUiScale()
 end
@@ -1111,9 +1123,9 @@ function Overlord.UI:CreateMainFrame()
     Overlord.UI.CreateWC3CloseButton(mainFrame, function() Overlord.UI:Hide() end, { gold = C.gold })
         :SetPoint("TOPRIGHT", 4, -4)
 
-    if Overlord.Popups and Overlord.Popups.SyncFeaturedFrontDock then
-        Overlord.Popups:SyncFeaturedFrontDock()
-    end
+    -- The Next Objective dock (about 120 widgets, a child of this panel) is built by the
+    -- first Show, just before the panel appears: not in the frame that already builds
+    -- the whole panel, and not at all while the panel stays closed.
 
     -- Panel persistent : Echap ne ferme pas le panel (carte de campagne, pas un popup)
     mainFrame:Hide()
@@ -2435,14 +2447,18 @@ local function ScheduleVisibleWorldMapRefresh()
     end)
 end
 
-function Overlord.UI:RequestRefresh()
+-- skipWorldMap: the caller changed nothing the world map draws (a kill counter), or
+-- already forced the map itself; the panel and HUD refresh as usual.
+function Overlord.UI:RequestRefresh(skipWorldMap)
     if Overlord.InstanceSuspended then return end
     local uiVisible = mainFrame and mainFrame:IsShown()
     local indVisible = Overlord.ZoneIndicator and Overlord.ZoneIndicator.IsHudVisible
         and Overlord.ZoneIndicator:IsHudVisible()
     -- La carte a son propre dirty flag. Coalescer les rafales UI/sync avant de le
     -- lever evite un repaint complet a chaque paquet quand la carte est ouverte.
-    ScheduleVisibleWorldMapRefresh()
+    if not skipWorldMap then
+        ScheduleVisibleWorldMapRefresh()
+    end
     if Overlord.ZoneIndicator and Overlord.ZoneIndicator.InvalidateActiveZoneCache then
         if uiVisible or indVisible then
             local nowInv = GetTime()
@@ -2485,17 +2501,18 @@ end
 
 function Overlord.UI:RefreshActionGridActiveState()
     if not zoneListFrame or not self.SetWC3ButtonActive then return end
-    local nextState = {
-        lb = Overlord.LeaderboardUI and Overlord.LeaderboardUI.IsShown and Overlord.LeaderboardUI:IsShown() or false,
-        hof = Overlord.HallOfFameUI and Overlord.HallOfFameUI.IsShown and Overlord.HallOfFameUI:IsShown() or false,
-        groups = Overlord.GroupFinderUI and Overlord.GroupFinderUI.IsShown and Overlord.GroupFinderUI:IsShown() or false,
-        tutorial = Overlord.Popups and Overlord.Popups.IsQuickGuideShown and Overlord.Popups:IsQuickGuideShown() or false,
-        rank = Overlord.RanksUI and Overlord.RanksUI.selected == true or false,
-        discord = discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "discord" or false,
-        contact = discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "contact" or false,
-        front = self._frontPickerPopup and self._frontPickerPopup:IsShown() or false,
-        settings = Overlord.SettingsPanel and Overlord.SettingsPanel.IsOpen and Overlord.SettingsPanel:IsOpen() or false,
-    }
+    -- Two tables swapped in turn (no new table per refresh); prev is never the one filled.
+    local nextState = self._actionGridSpareState or {}
+    self._actionGridSpareState = nil
+    nextState.lb = Overlord.LeaderboardUI and Overlord.LeaderboardUI.IsShown and Overlord.LeaderboardUI:IsShown() or false
+    nextState.hof = Overlord.HallOfFameUI and Overlord.HallOfFameUI.IsShown and Overlord.HallOfFameUI:IsShown() or false
+    nextState.groups = Overlord.GroupFinderUI and Overlord.GroupFinderUI.IsShown and Overlord.GroupFinderUI:IsShown() or false
+    nextState.tutorial = Overlord.Popups and Overlord.Popups.IsQuickGuideShown and Overlord.Popups:IsQuickGuideShown() or false
+    nextState.rank = Overlord.RanksUI and Overlord.RanksUI.selected == true or false
+    nextState.discord = discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "discord" or false
+    nextState.contact = discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "contact" or false
+    nextState.front = self._frontPickerPopup and self._frontPickerPopup:IsShown() or false
+    nextState.settings = Overlord.SettingsPanel and Overlord.SettingsPanel.IsOpen and Overlord.SettingsPanel:IsOpen() or false
     local prev = self._actionGridOpenState
     if prev then
         local same = true
@@ -2506,10 +2523,12 @@ function Overlord.UI:RefreshActionGridActiveState()
             end
         end
         if same then
+            self._actionGridSpareState = nextState
             return
         end
     end
     self._actionGridOpenState = nextState
+    self._actionGridSpareState = prev
 
     local opts = { gold = C.gold, white = C.white }
     local function panelOpen(btn, open)
@@ -2556,22 +2575,34 @@ function Overlord.UI:RefreshActionGridLabels()
     if hornBtn and hornBtn.label and Overlord.Button and Overlord.Button.RefreshFactionCallLabel then
         Overlord.Button:RefreshFactionCallLabel()
     elseif hornBtn and hornBtn.label and L.FACTION_CALL_BUTTON then
-        hornBtn.label:SetText(L.FACTION_CALL_BUTTON)
+        -- Constant labels below: written once (_olLabelText), not on every Refresh.
+        if hornBtn.label._olLabelText ~= L.FACTION_CALL_BUTTON then
+            hornBtn.label._olLabelText = L.FACTION_CALL_BUTTON
+            hornBtn.label:SetText(L.FACTION_CALL_BUTTON)
+        end
     end
     local generalBtn = zoneListFrame.generalBtn
-    if generalBtn and generalBtn.label and L.GENERAL_BUTTON then
+    if generalBtn and generalBtn.label and L.GENERAL_BUTTON
+        and generalBtn.label._olLabelText ~= L.GENERAL_BUTTON then
+        generalBtn.label._olLabelText = L.GENERAL_BUTTON
         generalBtn.label:SetText(L.GENERAL_BUTTON)
     end
     local settingsBtn = zoneListFrame.settingsBtn
-    if settingsBtn and settingsBtn.label and L.SETTINGS_BUTTON then
+    if settingsBtn and settingsBtn.label and L.SETTINGS_BUTTON
+        and settingsBtn.label._olLabelText ~= L.SETTINGS_BUTTON then
+        settingsBtn.label._olLabelText = L.SETTINGS_BUTTON
         settingsBtn.label:SetText(L.SETTINGS_BUTTON)
     end
     local discordBtn = zoneListFrame.discordBtn
-    if discordBtn and discordBtn.label and L.DISCORD_BUTTON then
+    if discordBtn and discordBtn.label and L.DISCORD_BUTTON
+        and discordBtn.label._olLabelText ~= L.DISCORD_BUTTON then
+        discordBtn.label._olLabelText = L.DISCORD_BUTTON
         discordBtn.label:SetText(L.DISCORD_BUTTON)
     end
     local contactBtn = zoneListFrame.contactBtn
-    if contactBtn and contactBtn.label and L.CONTACT_BUTTON then
+    if contactBtn and contactBtn.label and L.CONTACT_BUTTON
+        and contactBtn.label._olLabelText ~= L.CONTACT_BUTTON then
+        contactBtn.label._olLabelText = L.CONTACT_BUTTON
         contactBtn.label:SetText(L.CONTACT_BUTTON)
     end
 end
@@ -2744,12 +2775,18 @@ function Overlord.UI:RefreshDomination()
     -- Barre v2 : 50 % +/- victoires et depenses de bois. 50/50 est un etat normal
     -- (aucun evenement ou evenements qui s'annulent), peint comme n'importe quel autre.
     local allyPct, hordePct = Overlord:GetDominationDisplayFractions()
+    -- Label and widths are pure functions of these three numbers: same inputs as the last
+    -- call, nothing to format or compare.
+    if allyPct == bar._lastAllyPct and hordePct == bar._lastHordePct and innerWidth == bar._lastInnerWidth then
+        return
+    end
     local allyW = math.floor(innerWidth * allyPct + 0.5)
     if allyW < 0 then allyW = 0 end
     if allyW > innerWidth then allyW = innerWidth end
     local hordeW = innerWidth - allyW
     local label = FormatDominationPctLine(allyPct, hordePct)
     local paintKey = label .. "|" .. allyW .. "|" .. hordeW
+    bar._lastAllyPct, bar._lastHordePct, bar._lastInnerWidth = allyPct, hordePct, innerWidth
     if paintKey == lastDominationPaintKey then return end
     lastDominationPaintKey = paintKey
     bar.label:SetText(label)
@@ -2766,10 +2803,8 @@ function Overlord.UI:RefreshDomination()
     end
 end
 
--- Cache du scan ennemis pour eviter de rescanner 40 raids+40 nameplates chaque seconde
--- (UpdateHoldTimer scanne deja dans ZoneControl:Update au meme tick)
-local lastForcesScan = 0
-local cachedEnemyCount = 0
+-- Displayed enemy count: reuses ZoneControl's fresh scan, else counts visible nameplates,
+-- at most once per FORCES_SCAN_INTERVAL.
 local FORCES_SCAN_INTERVAL = 2
 local lastForcesDisplayScan = 0
 local cachedDisplayEnemyCount = 0
@@ -2801,56 +2836,16 @@ function Overlord.UI:GetDisplayedNearbyEnemyCount(forceRefresh)
     if forceRefresh or now - lastForcesDisplayScan >= FORCES_SCAN_INTERVAL then
         lastForcesDisplayScan = now
         local zone = Overlord.Zones and Overlord.Zones:GetCurrentPlayerZone()
-        if zone and Overlord.ZoneControl and Overlord.ZoneControl.GetCachedScan then
-            local cached = Overlord.ZoneControl:GetCachedScan()
-            if cached.zoneId == zone.id and now - cached.time < 2 and cached.visibleEnemy ~= nil then
-                cachedDisplayEnemyCount = cached.visibleEnemy
-            else
-                self:GetNearbyEnemyCount(true)
-                cached = Overlord.ZoneControl:GetCachedScan()
-                cachedDisplayEnemyCount = (cached.visibleEnemy ~= nil) and cached.visibleEnemy or cachedDisplayEnemyCount
-            end
+        local cached = zone and Overlord.ZoneControl and Overlord.ZoneControl.GetCachedScan
+            and Overlord.ZoneControl:GetCachedScan()
+        -- Reuse a fresh capture scan; never start one here (the full scan reads auras).
+        if cached and cached.zoneId == zone.id and now - cached.time < 2 and cached.visibleEnemy ~= nil then
+            cachedDisplayEnemyCount = cached.visibleEnemy
         else
             cachedDisplayEnemyCount = CountVisibleEnemyNameplates()
         end
     end
     return cachedDisplayEnemyCount
-end
-
--- Compte les ennemis pour l'appel de faction (regles contestation : pas monte / vol).
-function Overlord.UI:GetNearbyEnemyCount(forceRefresh)
-    if not Overlord.InActiveFront then
-        cachedEnemyCount = 0
-        return 0
-    end
-    local now = GetTime()
-    if forceRefresh or now - lastForcesScan >= FORCES_SCAN_INTERVAL then
-        lastForcesScan = now
-        cachedEnemyCount = 0
-        local ef = Overlord.Zones:GetEnemyFaction()
-        local zone = Overlord.Zones:GetCurrentPlayerZone()
-
-        if zone then
-            local cached = Overlord.ZoneControl:GetCachedScan()
-            if not forceRefresh and cached.zoneId == zone.id and now - cached.time < 2 then
-                cachedEnemyCount = cached.enemy
-            else
-                -- (local : sans lui, cette ligne ecrivait la variable globale _.)
-                local _
-                _, cachedEnemyCount = Overlord.ZoneControl:ScanNearbyPlayers(zone)
-            end
-        else
-            for i = 1, 40 do
-                local unit = "nameplate" .. i
-                if UnitExists(unit) and UnitIsPlayer(unit)
-                    and not UnitIsDead(unit) and not UnitIsGhost(unit)
-                    and UnitFactionGroup(unit) == ef then
-                    cachedEnemyCount = cachedEnemyCount + 1
-                end
-            end
-        end
-    end
-    return cachedEnemyCount
 end
 
 function Overlord.UI:RefreshForces()
@@ -2881,13 +2876,10 @@ function Overlord.UI:RefreshForces()
         lastForcesDisplayKey = displayKey
         self.forcesText:SetText(string.format(L.FORCES_PRESENT, nearby, ef or ""))
     end
-    -- Bouton appel de faction : scan contestation (ennemis au sol, pas montes)
-    self:GetNearbyEnemyCount(false)
-    if Overlord.Button and Overlord.Button.Refresh then
-        if lastForcesButtonRefreshCount ~= cachedEnemyCount then
-            lastForcesButtonRefreshCount = cachedEnemyCount
-            Overlord.Button:Refresh()
-        end
+    -- The button reads no enemy count: refresh it on front entry and when the shown count changes.
+    if Overlord.Button and Overlord.Button.Refresh and lastForcesButtonRefreshCount ~= nearby then
+        lastForcesButtonRefreshCount = nearby
+        Overlord.Button:Refresh()
     end
 end
 
@@ -3426,6 +3418,12 @@ function Overlord.UI:Show(opts)
     end
     local skipRefresh = type(opts) == "table" and opts.skipRefresh
     if mainFrame then
+        -- First Show: build the dock before the panel appears (CreateMainFrame used to,
+        -- then hid the panel), so its OnShow (activity rows, ticker) fires with it below.
+        if not self._featuredDockBuilt and Overlord.Popups and Overlord.Popups.SyncFeaturedFrontDock then
+            self._featuredDockBuilt = true
+            Overlord.Popups:SyncFeaturedFrontDock()
+        end
         self:UpdatePanelAnchor()
         mainFrame:Show()
         if Overlord.Popups and Overlord.Popups.SyncFeaturedFrontDock then

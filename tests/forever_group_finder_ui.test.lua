@@ -539,4 +539,85 @@ for _, faction in ipairs({ "Alliance", "Horde" }) do
     ui:Hide()
 end
 
+-- Hidden prebuild: 35 s after a loading screen the window is built hidden, one block
+-- per frame; a click during the build finishes it at once; combat and instances wait.
+local function loadWithDriver()
+    Overlord.GroupFinderUI = nil
+    framesByName.OverlordGroupFinderFrame = nil
+    local made, realCreate = {}, CreateFrame
+    CreateFrame = function(kind, name, ...)
+        local f = realCreate(kind, name, ...)
+        made[#made + 1] = f
+        return f
+    end
+    assert(loadfile("GroupFinderUI.lua"))()
+    CreateFrame = realCreate
+    local driver
+    for _, f in ipairs(made) do
+        if f._scripts.OnEvent then driver = f end
+    end
+    assert(driver, "no prebuild driver registered at load")
+    return Overlord.GroupFinderUI, driver
+end
+local function drainFrames(limit)
+    local steps = 0
+    while #timers > 0 and steps < limit do
+        runTimers(0)
+        steps = steps + 1
+    end
+    return steps
+end
+timers = {}
+local ui, driver = loadWithDriver()
+driver._scripts.OnEvent(driver, "PLAYER_ENTERING_WORLD")
+runTimers(34)
+assert(framesByName.OverlordGroupFinderFrame == nil, "prebuild started before its delay")
+runTimers(1)
+local hidden = framesByName.OverlordGroupFinderFrame
+assert(hidden and not hidden:IsShown() and not ui:IsShown(), "prebuild did not start hidden")
+local steps = drainFrames(20)
+assert(steps >= 3 and #timers == 0, "the build was not spread over frames: " .. steps)
+assert(hidden.list and hidden.card and not hidden:IsShown(), "prebuilt window incomplete or shown")
+local before = created
+ui:Show()
+assert(ui:IsShown() and framesByName.OverlordGroupFinderFrame == hidden and created == before,
+    "opening rebuilt a window that was already prebuilt")
+ui:Hide()
+
+-- A click in the middle of the build finishes it in the click, with one window only.
+timers = {}
+ui, driver = loadWithDriver()
+driver._scripts.OnEvent(driver, "PLAYER_ENTERING_WORLD")
+runTimers(35)
+local partial = framesByName.OverlordGroupFinderFrame
+assert(partial and not partial.card, "the first slice built more than one block")
+ui:Show()
+assert(ui:IsShown() and framesByName.OverlordGroupFinderFrame == partial and partial.card and partial.list.emptyTitle,
+    "a click during the prebuild did not finish the same window")
+drainFrames(20)
+assert(framesByName.OverlordGroupFinderFrame == partial, "the prebuild built a second window")
+ui:Hide()
+
+-- Combat holds the build until the fight ends; an instance holds it too.
+timers = {}
+ui, driver = loadWithDriver()
+InCombatLockdown = function() return true end
+driver._scripts.OnEvent(driver, "PLAYER_ENTERING_WORLD")
+runTimers(35)
+assert(framesByName.OverlordGroupFinderFrame == nil, "built in combat")
+InCombatLockdown = function() return false end
+driver._scripts.OnEvent(driver, "PLAYER_REGEN_ENABLED")
+runTimers(2)
+drainFrames(20)
+assert(framesByName.OverlordGroupFinderFrame and framesByName.OverlordGroupFinderFrame.card,
+    "the build did not resume after combat")
+timers = {}
+ui, driver = loadWithDriver()
+IsInInstance = function() return true end
+driver._scripts.OnEvent(driver, "PLAYER_ENTERING_WORLD")
+runTimers(35)
+drainFrames(20)
+assert(framesByName.OverlordGroupFinderFrame == nil, "built in an instance")
+IsInInstance = function() return false end
+
 print("forever_group_finder_ui: ok")

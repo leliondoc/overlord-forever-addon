@@ -1511,8 +1511,7 @@ function GF:RestoreAfterReload(attempt)
     self:Publish(saved, true)
 end
 
-GF.EVENTS = { "CHAT_MSG_ADDON", "GROUP_ROSTER_UPDATE", "PARTY_LEADER_CHANGED", "PLAYER_FLAGS_CHANGED",
-    "PARTY_INVITE_REQUEST" }
+GF.EVENTS = { "CHAT_MSG_ADDON", "GROUP_ROSTER_UPDATE", "PARTY_LEADER_CHANGED", "PARTY_INVITE_REQUEST" }
 
 function GF:RegisterLiveEvents(on)
     local frame = self.frame
@@ -1523,6 +1522,15 @@ function GF:RegisterLiveEvents(on)
         else
             pcall(frame.UnregisterEvent, frame, event)
         end
+    end
+    -- Only the player's own AFK flag is read: filtered on the client side so the flag
+    -- flips of every visible player stay out of Lua. Plain registration if refused.
+    if on then
+        local unitOk = frame.RegisterUnitEvent
+            and pcall(frame.RegisterUnitEvent, frame, "PLAYER_FLAGS_CHANGED", "player")
+        if not unitOk then pcall(frame.RegisterEvent, frame, "PLAYER_FLAGS_CHANGED") end
+    else
+        pcall(frame.UnregisterEvent, frame, "PLAYER_FLAGS_CHANGED")
     end
 end
 

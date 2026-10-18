@@ -80,6 +80,7 @@ function MW:Refresh(force)
         and (not lb.IsDisplayCacheScopeCurrent or lb:IsDisplayCacheScopeCurrent(cache))
     if not current then
         self.list, self.byKey = {}, {}
+        self._shortWalkList = nil
         self:HideAllSkulls()
         local stale = type(cache) == "table" and type(cache.sortedKills) == "table"
             and #cache.sortedKills > 0
@@ -90,6 +91,9 @@ function MW:Refresh(force)
         end
         return
     end
+    -- Fewer than five enemies in this very view last time: the walk went to the end
+    -- and would again (a ladder change builds a new view). Keep the list.
+    if cache.sortedKills == self._shortWalkList and enemy == self._shortWalkEnemy then return end
     local meta = type(cache.meta) == "table" and cache.meta or {}
     local list, byKey, rank = {}, {}, 0
     for i = 1, #cache.sortedKills do
@@ -106,6 +110,11 @@ function MW:Refresh(force)
             if #list >= self.SIZE then break end
         end
     end
+    if #list < self.SIZE then
+        self._shortWalkList, self._shortWalkEnemy = cache.sortedKills, enemy
+    else
+        self._shortWalkList = nil
+    end
     -- Barres de nom deja visibles repeintes seulement si les cinq noms ont change.
     local changed = #list ~= #self.list
     for i = 1, #list do
@@ -120,6 +129,7 @@ end
 function MW:ResetForCampaign()
     self.list, self.byKey, self.alertedAt, self.bountyAt = {}, {}, {}, {}
     self._refreshedAt, self._ensureAt, self._lastAlertAt = nil, nil, nil
+    self._shortWalkList = nil
     if self.HideAllSkulls then self:HideAllSkulls() end
 end
 
