@@ -299,10 +299,17 @@ local RenderGuildRows
 local RenderGuildKeepRows
 local RenderOutpostRows
 local RenderCaptureRows
+-- Paint bookkeeping (virtual ring rows, PaintView's per-list "nothing changed" test).
+-- paintGen moves on every Show/Hide: a reopened window always gets a full pass.
+local LbPerf = { paintGen = 0, metaMiss = false }
+-- Hidden prebuild of the window and its row pools (see LbBuild.Body, near Show).
+local LbBuild = {}
 
 local function CachedMeta(metaCache, name)
     local e = metaCache and metaCache[name]
     if e then return e[1], e[2], e[3], e[4] end
+    -- Live lookup: a list painted through it cannot be skipped by PaintView.
+    LbPerf.metaMiss = true
     if Overlord.Leaderboard then
         local c, f = Overlord.Leaderboard:GetExportPlayerMeta(name)
         local race, raceSex = "", 0
@@ -338,7 +345,9 @@ end
 local lbMeasureByFont = {}
 local lbTruncateCache = {}
 local lbTruncateCacheCount = 0
-local LB_TRUNCATE_CACHE_MAX = 512
+-- Large enough that scrolling a long outpost list does not flush the visible rows;
+-- still reset when full, so memory stays bounded (short strings).
+local LB_TRUNCATE_CACHE_MAX = 2048
 
 local function CacheTruncatedText(cacheKey, value)
     if lbTruncateCacheCount >= LB_TRUNCATE_CACHE_MAX then
@@ -369,6 +378,10 @@ local function MeasureTextWidth(measure, str, fontKey, pxPerChar)
     return len * pxPerChar
 end
 
+local function WithEllipsis(prefix, suffix)
+    return (prefix:gsub("%s+$", "") or prefix) .. suffix
+end
+
 -- Tronque un libelle pour tenir dans maxWidth px (suffixe "..." si trop long).
 local function TruncateTextToWidth(text, maxWidth, fontKey)
     if not text or text == "" then return text or "" end
@@ -390,9 +403,6 @@ local function TruncateTextToWidth(text, maxWidth, fontKey)
     if MeasureTextWidth(measure, suffix, fontKey, pxPerChar) >= maxWidth then
         return CacheTruncatedText(cacheKey, suffix)
     end
-    local function withSuffix(prefix)
-        return (prefix:gsub("%s+$", "") or prefix) .. suffix
-    end
     local result = suffix
     if utf8 and utf8.len and utf8.offset then
         local len = utf8.len(text)
@@ -401,7 +411,7 @@ local function TruncateTextToWidth(text, maxWidth, fontKey)
             local mid = math.floor((lo + hi) * 0.5)
             local cut = utf8.offset(text, mid + 1)
             if cut then
-                local part = withSuffix(text:sub(1, cut - 1))
+                local part = WithEllipsis(text:sub(1, cut - 1), suffix)
                 if MeasureTextWidth(measure, part, fontKey, pxPerChar) <= maxWidth then
                     result = part
                     lo = mid + 1
@@ -416,7 +426,7 @@ local function TruncateTextToWidth(text, maxWidth, fontKey)
         local lo, hi = 1, #text
         while lo <= hi do
             local mid = math.floor((lo + hi) * 0.5)
-            local part = withSuffix(text:sub(1, mid))
+            local part = WithEllipsis(text:sub(1, mid), suffix)
             if MeasureTextWidth(measure, part, fontKey, pxPerChar) <= maxWidth then
                 result = part
                 lo = mid + 1
@@ -607,7 +617,10 @@ local function AttachCleanScrollRail(scroll, parent, upT, downT, P)
         if travel <= 0 then return end
         local wantedTop = GetScaledCursorY() + (self.dragOffset or 0)
         local offset = math.max(0, math.min(travel, trackTop - wantedTop))
-        scroll:SetVerticalScroll(maximum * offset / travel)
+        local target = maximum * offset / travel
+        -- Cursor still (or moved under half a pixel of scroll): nothing to redraw this frame.
+        if math.abs(target - (scroll:GetVerticalScroll() or 0)) < 0.5 then return end
+        scroll:SetVerticalScroll(target)
         RefreshRail()
     end
 
@@ -1056,8 +1069,11 @@ function SitesWeek.Half(view, P, anchorPoint, columns, emptyText)
     half.empty:SetText(emptyText or "")
     panel:EnableMouseWheel(true)
     panel:SetScript("OnMouseWheel", function(_, delta)
+        local old = half.offset
         half.offset = math.max(0, math.min(half.offset - delta * 3, #half.list - 1))
-        Overlord.LeaderboardUI:RefreshSitesWeek()
+        if half.offset == old then return end
+        -- Paint only: the stats are read by Refresh, never on the input frame.
+        SitesWeek.Paint(half, half.fill)
     end)
     return half
 end
@@ -1066,6 +1082,9 @@ function SitesWeek.Paint(half, fill)
     local visible = math.max(1, math.floor(((half.panel:GetHeight() or 0) - 8) / GUILD_ROW_HEIGHT))
     visible = math.min(visible, SitesWeek.ROWS)
     half.offset = math.max(0, math.min(half.offset, #half.list - visible))
+    -- Same list, offset and height as the last paint: the rows already show it.
+    if half._paintedList == half.list and half._paintedOffset == half.offset
+        and half._paintedVisible == visible then return end
     for i = 1, SitesWeek.ROWS do
         local index = half.offset + i
         local entry = i <= visible and half.list[index] or nil
@@ -1078,10 +1097,41 @@ function SitesWeek.Paint(half, fill)
         end
     end
     half.empty:SetShown(#half.list == 0)
+    half._paintedList, half._paintedOffset, half._paintedVisible = half.list, half.offset, visible
+end
+
+function SitesWeek.FillCapturer(cells, c, index)
+    local nameW = 140
+    cells[1]:SetText(index)
+    local short = Ambiguate and Ambiguate(c.name, "short") or c.name
+    cells[2]:SetText(LbCrestMarkup(c.faction, 14) .. " "
+        .. SitesWeek.Colored(TruncateTextToWidth(short, nameW, "GameFontNormal"), c.faction))
+    cells[3]:SetText(c.keeps > 0 and c.keeps or "-")
+    cells[4]:SetText(c.outposts > 0 and c.outposts or "-")
+end
+
+function SitesWeek.FillRivalry(cells, r, index)
+    cells[1]:SetText(index)
+    local half = 93
+    cells[2]:SetText(SitesWeek.Colored(TruncateTextToWidth(r.taker, half, "GameFontNormal"), r.takerFaction)
+        .. " |cFFB0A080>|r "
+        .. SitesWeek.Colored(TruncateTextToWidth(r.victim, half, "GameFontNormal"), r.victimFaction))
+    cells[3]:SetText(r.count)
+end
+
+-- Built with the window: only the header button and the close hook. The view itself
+-- (32 rows) waits for the first press, most players never open it.
+function Overlord.LeaderboardUI:CreateSitesWeekToggle(P)
+    if not lbFrame then return end
+    lbFrame._sitesPalette = P
+    SitesWeek.ToggleButton(lbFrame.outpostHeaderBand, L.SITES_WEEK_TIP_TITLE, L.SITES_WEEK_TIP_BODY)
+    lbFrame:HookScript("OnHide", function()
+        if lbFrame.sitesWeek and lbFrame.sitesWeek:IsShown() then Overlord.LeaderboardUI:ToggleSitesWeek() end
+    end)
 end
 
 function Overlord.LeaderboardUI:CreateSitesWeekView(P)
-    if not lbFrame or lbFrame.sitesWeek then return end
+    if not lbFrame or lbFrame.sitesWeek then return lbFrame and lbFrame.sitesWeek end
     local view = CreateFrame("Frame", nil, lbFrame)
     view:SetPoint("TOPLEFT", lbFrame.guildKeepBlock, "TOPLEFT", 0, 0)
     view:SetPoint("BOTTOMRIGHT", lbFrame.outpostBlock, "BOTTOMRIGHT", 0, 0)
@@ -1105,15 +1155,15 @@ function Overlord.LeaderboardUI:CreateSitesWeekView(P)
         { x = -26, w = 212, text = L.SITES_WEEK_COL_RIVALRIES or "Rivalries this week", justify = "LEFT" },
         { x = 109, w = 58, text = L.LB_COL_CAPTURES or "Captures" },
     }, L.SITES_WEEK_EMPTY_RIVALRIES)
+    view.capturers.fill = SitesWeek.FillCapturer
+    view.rivalries.fill = SitesWeek.FillRivalry
     SitesWeek.ToggleButton(view.rivalries.header, L.SITES_WEEK_BACK or "Back")
-    SitesWeek.ToggleButton(lbFrame.outpostHeaderBand, L.SITES_WEEK_TIP_TITLE, L.SITES_WEEK_TIP_BODY)
-    lbFrame:HookScript("OnHide", function()
-        if lbFrame.sitesWeek and lbFrame.sitesWeek:IsShown() then Overlord.LeaderboardUI:ToggleSitesWeek() end
-    end)
+    return view
 end
 
 function Overlord.LeaderboardUI:ToggleSitesWeek()
     local view = lbFrame and lbFrame.sitesWeek
+    if not view and lbFrame then view = self:CreateSitesWeekView(lbFrame._sitesPalette) end
     if not view then return end
     local show = not view:IsShown()
     view:SetShown(show)
@@ -1139,29 +1189,21 @@ function Overlord.LeaderboardUI:RefreshSitesWeek()
     end
     view.capturers.list = stats.capturers or {}
     view.rivalries.list = stats.rivalries or {}
-    local nameW = 140
-    SitesWeek.Paint(view.capturers, function(cells, c, index)
-        cells[1]:SetText(index)
-        local short = Ambiguate and Ambiguate(c.name, "short") or c.name
-        cells[2]:SetText(LbCrestMarkup(c.faction, 14) .. " "
-            .. SitesWeek.Colored(TruncateTextToWidth(short, nameW, "GameFontNormal"), c.faction))
-        cells[3]:SetText(c.keeps > 0 and c.keeps or "-")
-        cells[4]:SetText(c.outposts > 0 and c.outposts or "-")
-    end)
-    SitesWeek.Paint(view.rivalries, function(cells, r, index)
-        cells[1]:SetText(index)
-        local half = 93
-        cells[2]:SetText(SitesWeek.Colored(TruncateTextToWidth(r.taker, half, "GameFontNormal"), r.takerFaction)
-            .. " |cFFB0A080>|r "
-            .. SitesWeek.Colored(TruncateTextToWidth(r.victim, half, "GameFontNormal"), r.victimFaction))
-        cells[3]:SetText(r.count)
-    end)
+    -- The stats getter keeps its tables while nothing changed, so Paint skips an unchanged Refresh.
+    SitesWeek.Paint(view.capturers, view.capturers.fill)
+    SitesWeek.Paint(view.rivalries, view.rivalries.fill)
 end
 
 function Overlord.LeaderboardUI:CreateFrame()
     local P = GetPalette()
 
     lbFrame = CreateFrame("Frame", "OverlordLeaderboardFrame", UIParent, "BackdropTemplate")
+    -- Built ahead in slices (LbBuild): hidden from its first line, so a half-built window
+    -- is never drawn; Show fits its height once it is really shown.
+    if LbBuild.co and coroutine.running() == LbBuild.co then
+        lbFrame:Hide()
+        lbFrame._lbBuiltHidden = true
+    end
     if Overlord.UI.AttachOpenFade then Overlord.UI.AttachOpenFade(lbFrame) end
     lbFrame:SetSize(LB_FRAME_W, 500)
     lbFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
@@ -1333,6 +1375,7 @@ function Overlord.LeaderboardUI:CreateFrame()
         end)
     end)
     self:CreateSyncBadge(title)
+    LbBuild.Step()
 
     -- En-tetes de colonnes (bandeau sombre, meme largeur que les lignes)
     lbFrame.leftStackAnchor = CreateFrame("Frame", nil, lbFrame)
@@ -1422,6 +1465,7 @@ function Overlord.LeaderboardUI:CreateFrame()
 
     lbFrame.scrollKills = scrollKills
     lbFrame.scrollChildKills = scrollChildKills
+    LbBuild.Step()
 
     -- Conteneur captures dans un sous-panneau WC3
     local capturesBlockH = 200
@@ -1489,7 +1533,7 @@ function Overlord.LeaderboardUI:CreateFrame()
         self:SetVerticalScroll(newVal)
     end)
     scrollGuild:HookScript("OnVerticalScroll", function()
-        if RenderGuildRows then RenderGuildRows(false) end
+        LbPerf.PaintList("guild")
         UpdateLeaderboardScrollIndicator(
             scrollGuild, lbFrame.guildScrollIndUp, lbFrame.guildScrollIndDown)
     end)
@@ -1513,6 +1557,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.guildEmptyHint:SetTextColor(P.gray[1], P.gray[2], P.gray[3], 0.85)
     lbFrame.guildEmptyHint:SetText(L.LB_GUILD_EMPTY or "")
     lbFrame.guildEmptyHint:Hide()
+    LbBuild.Step()
 
     -- Fortins guildes : a droite du tableau des guildes
     local guildKeepBlock = CreateFrame("Frame", nil, lbFrame)
@@ -1567,7 +1612,7 @@ function Overlord.LeaderboardUI:CreateFrame()
         self:SetVerticalScroll(newVal)
     end)
     scrollGuildKeep:HookScript("OnVerticalScroll", function()
-        if RenderGuildKeepRows then RenderGuildKeepRows(false) end
+        LbPerf.PaintList("keep")
         UpdateLeaderboardScrollIndicator(
             scrollGuildKeep, lbFrame.guildKeepScrollIndUp, lbFrame.guildKeepScrollIndDown)
     end)
@@ -1591,6 +1636,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.guildKeepEmptyHint:SetTextColor(P.gray[1], P.gray[2], P.gray[3], 0.85)
     lbFrame.guildKeepEmptyHint:SetText(L.LB_GUILD_KEEP_EMPTY or "")
     lbFrame.guildKeepEmptyHint:Hide()
+    LbBuild.Step()
 
     -- Avant-postes : derniere colonne, a droite des fortins
     local outpostBlock = CreateFrame("Frame", nil, lbFrame)
@@ -1645,7 +1691,7 @@ function Overlord.LeaderboardUI:CreateFrame()
         self:SetVerticalScroll(newVal)
     end)
     scrollOutpost:HookScript("OnVerticalScroll", function()
-        if RenderOutpostRows then RenderOutpostRows(false) end
+        LbPerf.PaintList("outpost")
         UpdateLeaderboardScrollIndicator(
             scrollOutpost, lbFrame.outpostScrollIndUp, lbFrame.outpostScrollIndDown)
     end)
@@ -1669,7 +1715,8 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.outpostEmptyHint:SetTextColor(P.gray[1], P.gray[2], P.gray[3], 0.85)
     lbFrame.outpostEmptyHint:SetText(L.LB_OUTPOST_EMPTY or "")
     lbFrame.outpostEmptyHint:Hide()
-    self:CreateSitesWeekView(P)
+    self:CreateSitesWeekToggle(P)
+    LbBuild.Step()
 
     -- Pied de page (positionne par LayoutLeaderboardSections)
     local footerBand = CreateOfficialSubPanel(lbFrame, LB_FRAME_W - 2 * LB_FRAME_PAD, 28, P)
@@ -1724,7 +1771,7 @@ function Overlord.LeaderboardUI:CreateFrame()
         self:SetVerticalScroll(newVal)
     end)
     scrollAlli:HookScript("OnVerticalScroll", function()
-        if RenderCaptureRows then RenderCaptureRows("Alliance", false) end
+        LbPerf.PaintList("Alliance")
         UpdateLeaderboardScrollIndicator(
             scrollAlli, lbFrame.alliScrollIndUp, lbFrame.alliScrollIndDown)
     end)
@@ -1770,7 +1817,7 @@ function Overlord.LeaderboardUI:CreateFrame()
         self:SetVerticalScroll(newVal)
     end)
     scrollHorde:HookScript("OnVerticalScroll", function()
-        if RenderCaptureRows then RenderCaptureRows("Horde", false) end
+        LbPerf.PaintList("Horde")
         UpdateLeaderboardScrollIndicator(
             scrollHorde, lbFrame.hordeScrollIndUp, lbFrame.hordeScrollIndDown)
     end)
@@ -1795,6 +1842,7 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.captureColWidth = colWidth
     lbFrame.captureScrollHeight = captureScrollViewportH
     lbFrame.capturesBlockH = capturesBlockH
+    LbBuild.Step()
 
     self:UpdateCaptureScrollIndicators() -- kills + captures
 
@@ -2007,11 +2055,6 @@ function Overlord.LeaderboardUI:CreateRow(parent, index, yOffset, P)
     row.bg:SetColorTexture(bgColor[1], bgColor[2], bgColor[3], bgColor[4])
     ApplyRowDivider(row, P)
 
-    -- Compat refresh : barre de faction desactivee (style roster officiel)
-    row.factionBar = row:CreateTexture(nil, "ARTWORK")
-    row.factionBar:SetSize(0, 0)
-    row.factionBar:Hide()
-
     local killCols = GetKillLayoutSegments()
 
     row.rank = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -2070,10 +2113,6 @@ function Overlord.LeaderboardUI:CreateGuildRow(parent, index, yOffset, P)
     row.bg:SetColorTexture(bgColor[1], bgColor[2], bgColor[3], bgColor[4])
     ApplyRowDivider(row, P)
 
-    row.factionBar = row:CreateTexture(nil, "ARTWORK")
-    row.factionBar:SetSize(0, 0)
-    row.factionBar:Hide()
-
     row.glow = row:CreateTexture(nil, "BACKGROUND", nil, 1)
     row.glow:SetAllPoints()
     row.glow:Hide()
@@ -2125,10 +2164,6 @@ function Overlord.LeaderboardUI:CreateGuildKeepRow(parent, index, yOffset, P)
     row.bg:SetColorTexture(bgColor[1], bgColor[2], bgColor[3], bgColor[4])
     ApplyRowDivider(row, P)
 
-    row.factionBar = row:CreateTexture(nil, "ARTWORK")
-    row.factionBar:SetSize(0, 0)
-    row.factionBar:Hide()
-
     row.keepIcon = row:CreateTexture(nil, "ARTWORK")
     row.keepIcon:SetSize(GUILD_KEEP_ICON, GUILD_KEEP_ICON)
     row.keepIcon:SetPoint("LEFT", row, "LEFT", LB_GK_KEEP_LEFT, 0)
@@ -2171,10 +2206,6 @@ function Overlord.LeaderboardUI:CreateOutpostRow(parent, index, yOffset, P)
     local bgColor = (index % 2 == 0) and P.rowEven or P.rowOdd
     row.bg:SetColorTexture(bgColor[1], bgColor[2], bgColor[3], bgColor[4])
     ApplyRowDivider(row, P)
-
-    row.factionBar = row:CreateTexture(nil, "ARTWORK")
-    row.factionBar:SetSize(0, 0)
-    row.factionBar:Hide()
 
     row.outpostIcon = row:CreateTexture(nil, "ARTWORK")
     row.outpostIcon:SetSize(GUILD_KEEP_ICON, GUILD_KEEP_ICON)
@@ -2235,10 +2266,6 @@ function Overlord.LeaderboardUI:CreateCaptureRow(parent, index, yOffset, P, widt
     local bgColor = (index % 2 == 0) and P.rowEven or P.rowOdd
     row.bg:SetColorTexture(bgColor[1], bgColor[2], bgColor[3], bgColor[4])
     ApplyRowDivider(row, P)
-
-    row.factionBar = row:CreateTexture(nil, "ARTWORK")
-    row.factionBar:SetSize(0, 0)
-    row.factionBar:Hide()
 
     local capCols = GetCaptureLayoutSegments(width)
     row.raceIconHolder = CreateOfficialIconHolder(row, LB_ICON_SIZE, P)
@@ -2302,10 +2329,14 @@ end
 -- gerent deja les Set* inchanges quand les donnees n'ont pas bouge).
 local function SyncVirtualRenderWindow(scroll, first, poolSize, total, force)
     BeginVirtualRender(scroll, first, poolSize, total, force)
+    -- Any pass voids this list's record of inputs: only LbPerf.PaintList, which records
+    -- them, marks it valid again after its own pass (any other pass forces the next one).
+    if scroll then scroll._lbInputsValid = nil end
 end
 
+-- Returns true when the row moved to another data index (re-anchored, paint key reset).
 local function PrepareVirtualRow(row, dataIndex, rowHeight, P)
-    if not row or row._lbDataIndex == dataIndex then return end
+    if not row or row._lbDataIndex == dataIndex then return false end
     row._lbDataIndex = dataIndex
     row._lbPaintKey = nil
     row:ClearAllPoints()
@@ -2314,6 +2345,59 @@ local function PrepareVirtualRow(row, dataIndex, rowHeight, P)
         local bgColor = (dataIndex % 2 == 0) and P.rowEven or P.rowOdd
         row.bg:SetColorTexture(bgColor[1], bgColor[2], bgColor[3], bgColor[4])
     end
+    return true
+end
+
+-- Ring mapping (panels-4): a data index always lands on the same pooled row while the
+-- pool size holds, so a scroll step re-anchors and repaints only the rows that entered
+-- the window; the others keep their place and their paint key. Positions, stripes and
+-- texts are those of the data index, whichever frame carries it.
+function LbPerf.RingRow(pool, dataIndex, poolSize)
+    return pool[(dataIndex - 1) % poolSize + 1]
+end
+
+function LbPerf.Owns(row)
+    return GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(row) or false
+end
+
+-- A row holding the tooltip was recycled to another place, so it left the cursor: the
+-- tooltip goes to the row now under the cursor (what a fixed slot showed after the same
+-- scroll), or closes if none is.
+function LbPerf.FollowTooltip(pool, poolSize, onEnter)
+    for i = 1, poolSize do
+        local row = pool[i]
+        if row and row:IsShown() and row.IsMouseOver and row:IsMouseOver() then
+            onEnter(row)
+            return
+        end
+    end
+    if GameTooltip and GameTooltip.Hide then GameTooltip:Hide() end
+end
+
+-- "Nothing changed" test for one list (panels-7, see LbPerf.PaintList): same window
+-- (scroll offset, viewport height, row count), same tables and values behind its paint
+-- keys and tooltips as its last recorded pass, and no other pass since. Values are
+-- compared one by one, no key string is built.
+function LbPerf.SameInputs(scroll, rowHeight, count, ...)
+    if not scroll then return false end
+    local first, poolSize, total = GetVirtualRowWindow(scroll, rowHeight, count)
+    local saved = scroll._lbInputs
+    if not saved then
+        saved = {}
+        scroll._lbInputs = saved
+    end
+    local n = select("#", ...)
+    local same = scroll._lbInputsValid == true and saved.n == n
+        and saved[1] == first and saved[2] == poolSize and saved[3] == total
+    saved[1], saved[2], saved[3], saved.n = first, poolSize, total, n
+    for i = 1, n do
+        local value = (select(i, ...))
+        if saved[i + 3] ~= value then
+            same = false
+            saved[i + 3] = value
+        end
+    end
+    return same
 end
 
 local function HideUnusedVirtualRows(pool, used)
@@ -2342,14 +2426,14 @@ RenderKillRows = function(force)
     local sync = Overlord.Sync
     local myName = sync and sync.GetPlayerFullName and sync:GetPlayerFullName()
     myName = myName and sync.CanonicalForeverName and sync:CanonicalForeverName(myName) or myName
-    local used = 0
+    local ownerMoved = false
     for slot = 1, poolSize do
         local dataIndex = first + slot - 1
-        local row = rows[slot]
+        local row = LbPerf.RingRow(rows, dataIndex, poolSize)
         local entry = dataIndex <= total and sortedKills[dataIndex] or nil
         if row and entry then
-            used = slot
-            PrepareVirtualRow(row, dataIndex, KILL_ROW_HEIGHT, P)
+            local moved = PrepareVirtualRow(row, dataIndex, KILL_ROW_HEIGHT, P)
+            if moved and LbPerf.Owns(row) then ownerMoved = true end
             local class, faction, raceFile, raceSex = CachedMeta(metaCache, entry.name)
             local nameStr = (type(entry.name) == "string") and entry.name or tostring(entry.name or "")
             local shortName = (Overlord.Sync and Overlord.Sync.CanonicalForeverName
@@ -2359,7 +2443,8 @@ RenderKillRows = function(force)
             -- Lignes virtuelles reutilisees au defilement : le survol suit le joueur affiche.
             if row._olPlayerName ~= entry.name then
                 row._olPlayerName, row._olDisplayName = entry.name, shortName
-                if GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(row) then
+                -- Same place, new player (a refresh): the open tooltip follows him.
+                if not moved and LbPerf.Owns(row) then
                     Overlord.LeaderboardUI.OnKillRowEnter(row)
                 end
             else
@@ -2416,9 +2501,13 @@ RenderKillRows = function(force)
                 SetSecondaryTextColor(row.kills, P, medalColor)
             end
             row:Show()
+        elseif row then
+            row._lbPaintKey = nil
+            row:Hide()
         end
     end
-    HideUnusedVirtualRows(rows, used)
+    HideUnusedVirtualRows(rows, poolSize)
+    if ownerMoved then LbPerf.FollowTooltip(rows, poolSize, Overlord.LeaderboardUI.OnKillRowEnter) end
 end
 
 RenderGuildRows = function(force)
@@ -2433,14 +2522,14 @@ RenderGuildRows = function(force)
         and Overlord.Outpost:GetLocalPlayerGuild() or ""
     local lbMembers = Overlord.Leaderboard
     local killMedals, ratingMedals = GuildRating.Medals()
-    local used = 0
+    local ownerMoved = false
     for slot = 1, poolSize do
         local dataIndex = first + slot - 1
-        local row = guildRows[slot]
+        local row = LbPerf.RingRow(guildRows, dataIndex, poolSize)
         local entry = dataIndex <= total and list[dataIndex] or nil
         if row and entry then
-            used = slot
-            PrepareVirtualRow(row, dataIndex, GUILD_ROW_HEIGHT, P)
+            local moved = PrepareVirtualRow(row, dataIndex, GUILD_ROW_HEIGHT, P)
+            if moved and LbPerf.Owns(row) then ownerMoved = true end
             -- Triee par cote, la ligne porte deja sa cote ; triee par VH, elle se lit
             -- dans le cache d'affichage (rien tant qu'il n'est pas construit).
             local rating = byRating and entry
@@ -2448,7 +2537,7 @@ RenderGuildRows = function(force)
             -- Reused virtual rows: the tooltip follows the guild shown.
             if row._olGuildEntry ~= entry or row._olGuildRating ~= rating then
                 row._olGuildEntry, row._olGuildRating = entry, rating
-                if GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(row) then
+                if not moved and LbPerf.Owns(row) then
                     Overlord.LeaderboardUI.OnGuildRowEnter(row)
                 end
             end
@@ -2469,7 +2558,6 @@ RenderGuildRows = function(force)
                 ApplyLbRowGlow(row, rank, isOwn)
                 row.rank:SetText(rank)
                 SetSecondaryTextColor(row.rank, P, medalColor)
-                row.factionBar:Hide()
                 row.name:SetText(entry.guild or "")
                 if entry.faction == "Horde" then
                     row.name:SetTextColor(1.0, 0.40, 0.27)
@@ -2495,9 +2583,13 @@ RenderGuildRows = function(force)
                 end
             end
             row:Show()
+        elseif row then
+            row._lbPaintKey = nil
+            row:Hide()
         end
     end
-    HideUnusedVirtualRows(guildRows, used)
+    HideUnusedVirtualRows(guildRows, poolSize)
+    if ownerMoved then LbPerf.FollowTooltip(guildRows, poolSize, Overlord.LeaderboardUI.OnGuildRowEnter) end
 end
 
 RenderGuildKeepRows = function(force)
@@ -2508,18 +2600,18 @@ RenderGuildKeepRows = function(force)
     Overlord.LeaderboardUI:EnsureGuildKeepRows(poolSize)
     SyncVirtualRenderWindow(lbFrame.scrollGuildKeep, first, poolSize, total, force)
     local P = GetPalette()
-    local used = 0
+    local ownerMoved = false
     for slot = 1, poolSize do
         local dataIndex = first + slot - 1
-        local row = guildKeepRows[slot]
+        local row = LbPerf.RingRow(guildKeepRows, dataIndex, poolSize)
         local entry = dataIndex <= total and list[dataIndex] or nil
         if row and entry then
-            used = slot
-            PrepareVirtualRow(row, dataIndex, GUILD_ROW_HEIGHT, P)
+            local moved = PrepareVirtualRow(row, dataIndex, GUILD_ROW_HEIGHT, P)
+            if moved and LbPerf.Owns(row) then ownerMoved = true end
             -- Reused virtual rows: the tooltip follows the site shown.
             if row._olSiteEntry ~= entry then
                 row._olSiteEntry = entry
-                if GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(row) then
+                if not moved and LbPerf.Owns(row) then
                     Overlord.LeaderboardUI.OnSiteRowEnter(row)
                 end
             end
@@ -2533,7 +2625,6 @@ RenderGuildKeepRows = function(force)
                 .. tostring(entry.keepAtlas or "") .. "|" .. keepName
             if row._lbPaintKey ~= paintKey then
                 row._lbPaintKey = paintKey
-                row.factionBar:Hide()
                 row.name:SetText(entry.guild or "")
                 if entry.faction == "Horde" then
                     row.name:SetTextColor(1.0, 0.40, 0.27)
@@ -2560,9 +2651,13 @@ RenderGuildKeepRows = function(force)
                 SetSecondaryTextColor(row.wins, P, (wins > 0 or entry.currentlyHeld) and medalColor or nil)
             end
             row:Show()
+        elseif row then
+            row._lbPaintKey = nil
+            row:Hide()
         end
     end
-    HideUnusedVirtualRows(guildKeepRows, used)
+    HideUnusedVirtualRows(guildKeepRows, poolSize)
+    if ownerMoved then LbPerf.FollowTooltip(guildKeepRows, poolSize, Overlord.LeaderboardUI.OnSiteRowEnter) end
 end
 
 RenderOutpostRows = function(force)
@@ -2573,18 +2668,18 @@ RenderOutpostRows = function(force)
     Overlord.LeaderboardUI:EnsureOutpostRows(poolSize)
     SyncVirtualRenderWindow(lbFrame.scrollOutpost, first, poolSize, total, force)
     local P = GetPalette()
-    local used = 0
+    local ownerMoved = false
     for slot = 1, poolSize do
         local dataIndex = first + slot - 1
-        local row = outpostRows[slot]
+        local row = LbPerf.RingRow(outpostRows, dataIndex, poolSize)
         local entry = dataIndex <= total and list[dataIndex] or nil
         if row and entry then
-            used = slot
-            PrepareVirtualRow(row, dataIndex, GUILD_ROW_HEIGHT, P)
+            local moved = PrepareVirtualRow(row, dataIndex, GUILD_ROW_HEIGHT, P)
+            if moved and LbPerf.Owns(row) then ownerMoved = true end
             -- Reused virtual rows: the tooltip follows the site shown.
             if row._olSiteEntry ~= entry then
                 row._olSiteEntry = entry
-                if GameTooltip and GameTooltip.IsOwned and GameTooltip:IsOwned(row) then
+                if not moved and LbPerf.Owns(row) then
                     Overlord.LeaderboardUI.OnSiteRowEnter(row)
                 end
             end
@@ -2598,7 +2693,6 @@ RenderOutpostRows = function(force)
                 .. tostring(entry.outpostAtlas or "") .. "|" .. outpostName
             if row._lbPaintKey ~= paintKey then
                 row._lbPaintKey = paintKey
-                row.factionBar:Hide()
                 row.name:SetText(TruncateTextToWidth(entry.guild or "", LB_OP_GUILD_NAME_W, "GameFontNormal"))
                 if entry.faction == "Horde" then
                     row.name:SetTextColor(1.0, 0.40, 0.27)
@@ -2628,9 +2722,13 @@ RenderOutpostRows = function(force)
                 SetSecondaryTextColor(row.captures, P, medalColor)
             end
             row:Show()
+        elseif row then
+            row._lbPaintKey = nil
+            row:Hide()
         end
     end
-    HideUnusedVirtualRows(outpostRows, used)
+    HideUnusedVirtualRows(outpostRows, poolSize)
+    if ownerMoved then LbPerf.FollowTooltip(outpostRows, poolSize, Overlord.LeaderboardUI.OnSiteRowEnter) end
 end
 
 -- Cote des guildes : nombre avec separateurs, detail au survol, tri du tableau.
@@ -2774,13 +2872,12 @@ RenderCaptureRows = function(faction, force)
     local P = GetPalette()
     local metaCache = lbFrame._lbView.meta or {}
     local localeCache = lbFrame._lbView.locale or {}
-    local used = 0
+    LbPerf.metaMiss = false
     for slot = 1, poolSize do
         local dataIndex = first + slot - 1
-        local row = pool[slot]
+        local row = LbPerf.RingRow(pool, dataIndex, poolSize)
         local entry = dataIndex <= total and list[dataIndex] or nil
         if row and entry then
-            used = slot
             PrepareVirtualRow(row, dataIndex, CAPTURE_ROW_HEIGHT, P)
             local nameStr = tostring(entry.name or "")
             local shortName = (Overlord.Sync and Overlord.Sync.CanonicalForeverName
@@ -2807,9 +2904,56 @@ RenderCaptureRows = function(faction, force)
                 if row.classIconHolder then row.classIconHolder:Show() end
             end
             row:Show()
+        elseif row then
+            row._lbPaintKey = nil
+            row:Hide()
         end
     end
-    HideUnusedVirtualRows(pool, used)
+    HideUnusedVirtualRows(pool, poolSize)
+    -- A row read its class or race live (not in the view's meta): PaintView repaints this
+    -- list every time until a pass reads everything from the view again.
+    if scroll then scroll._lbMetaMiss = LbPerf.metaMiss end
+end
+
+-- Paints one of the guild, keep, outpost or capture lists unless everything behind its
+-- paint keys and tooltips is what its last pass read (panels-7): the same window, the
+-- same list tables (rebuilt as new tables, never edited in place), ranks, sort, own
+-- guild, display cache and medal sources. Used by PaintView and by the scroll hooks: a
+-- scroll that keeps the same rows in the window paints nothing (rows sit in scroll-child
+-- coordinates). The kill list never comes here (see PaintView).
+function LbPerf.PaintList(key)
+    local view = lbFrame and lbFrame._lbView
+    if not view then return end
+    local gen, scroll, same = LbPerf.paintGen, nil, false
+    if key == "guild" then
+        scroll = lbFrame.scrollGuild
+        local lb, medalSource, outpost = Overlord.Leaderboard, lbFrame._lbSource or view, Overlord.Outpost
+        local myGuild = outpost and outpost.GetLocalPlayerGuild and outpost:GetLocalPlayerGuild() or ""
+        same = LbPerf.SameInputs(scroll, GUILD_ROW_HEIGHT, #GuildRating.List(view), gen, view,
+            view.sortedGuilds, view.sortedGuildRating, view.ranks, GuildRating.Sort(), myGuild,
+            lb and lb._displayCache, medalSource.sortedGuilds, medalSource.sortedGuildRating)
+        if not same then RenderGuildRows(false) end
+    elseif key == "keep" then
+        scroll = lbFrame.scrollGuildKeep
+        same = LbPerf.SameInputs(scroll, GUILD_ROW_HEIGHT, #(view.sortedGuildKeeps or {}), gen, view,
+            view.sortedGuildKeeps, view.ranks)
+        if not same then RenderGuildKeepRows(false) end
+    elseif key == "outpost" then
+        scroll = lbFrame.scrollOutpost
+        same = LbPerf.SameInputs(scroll, GUILD_ROW_HEIGHT, #(view.sortedOutposts or {}), gen, view,
+            view.sortedOutposts, view.ranks)
+        if not same then RenderOutpostRows(false) end
+    else
+        scroll = key == "Alliance" and lbFrame.scrollAlli or lbFrame.scrollHorde
+        local byFaction = view.byFaction
+        local list = byFaction and byFaction[key]
+        same = LbPerf.SameInputs(scroll, CAPTURE_ROW_HEIGHT, math.min(list and #list or 0, MAX_CAPTURE_LINES),
+            gen, view, byFaction, list, view.ranks, view.meta, view.locale)
+        -- Rows that read their meta live are never trusted to be unchanged.
+        if same and scroll and scroll._lbMetaMiss then same = false end
+        if not same then RenderCaptureRows(key, false) end
+    end
+    if scroll and not same then scroll._lbInputsValid = true end
 end
 
 local function GetLeaderboardScrollValue(scroll)
@@ -2832,14 +2976,17 @@ end
 
 local function RestoreLeaderboardScrollValue(scroll, value)
     if not scroll or not scroll.SetVerticalScroll then return end
-    if scroll._overlordHasOverflow == false then
-        scroll:SetVerticalScroll(0)
-        return
+    local target = 0
+    if scroll._overlordHasOverflow ~= false then
+        value = tonumber(value) or 0
+        local maxScroll = (scroll.GetVerticalScrollRange and scroll:GetVerticalScrollRange()) or 0
+        if maxScroll < 0 then maxScroll = 0 end
+        target = math.max(0, math.min(maxScroll, value))
     end
-    value = tonumber(value) or 0
-    local maxScroll = (scroll.GetVerticalScrollRange and scroll:GetVerticalScrollRange()) or 0
-    if maxScroll < 0 then maxScroll = 0 end
-    scroll:SetVerticalScroll(math.max(0, math.min(maxScroll, value)))
+    -- Already there: a same-value set could re-run the scroll hooks for nothing.
+    local current = scroll.GetVerticalScroll and scroll:GetVerticalScroll() or nil
+    if current and math.abs(current - target) < 0.01 then return end
+    scroll:SetVerticalScroll(target)
 end
 
 local function RestoreLeaderboardScrollPositions(saved)
@@ -2906,19 +3053,29 @@ function Overlord.LeaderboardUI:PaintView()
 
     -- Peinture virtuelle : paintKeys sautent les Set* inchanges.
     -- force=false : BeginVirtualRender ne coupe plus le paint (fenetre inchangee).
+    -- The kill list always repaints: its rank badges read RankProof state that no counter
+    -- fully covers (claims going quiet with time, pool switch, deny list, faction labels).
     RenderKillRows(false)
-    RenderGuildRows(false)
-    RenderGuildKeepRows(false)
-    RenderOutpostRows(false)
-    RenderCaptureRows("Alliance", false)
-    RenderCaptureRows("Horde", false)
+    -- The other lists are skipped when nothing behind their rows changed (LbPerf.PaintList).
+    LbPerf.PaintList("guild")
+    LbPerf.PaintList("keep")
+    LbPerf.PaintList("outpost")
+    LbPerf.PaintList("Alliance")
+    LbPerf.PaintList("Horde")
     self:UpdateCaptureScrollIndicators()
     -- Blizzard peut publier GetVerticalScrollRange un frame apres SetHeight. Une passe
     -- differee unique corrige rails/thumbs sans OnUpdate permanent.
-    C_Timer.After(0, function()
-        local ui = Overlord.LeaderboardUI
-        if ui and ui:IsShown() then ui:UpdateCaptureScrollIndicators() end
-    end)
+    if not lbFrame._scrollIndicatorsPending then
+        lbFrame._scrollIndicatorsPending = true
+        C_Timer.After(0, Overlord.LeaderboardUI.RunDeferredScrollIndicators)
+    end
+end
+
+-- One shared callback for the deferred pass above: no closure per paint.
+function Overlord.LeaderboardUI.RunDeferredScrollIndicators()
+    if lbFrame then lbFrame._scrollIndicatorsPending = nil end
+    local ui = Overlord.LeaderboardUI
+    if ui and ui:IsShown() then ui:UpdateCaptureScrollIndicators() end
 end
 
 local function SetSearchStatus(text)
@@ -3006,20 +3163,32 @@ local function ComputeLeaderboardInfo(dc)
     info.nameReady = myShort ~= nil
     local meta = dc.meta or {}
     local sorted = dc.sortedKills or {}
-    for i = 1, #sorted do
-        local row = sorted[i]
-        local m = row and meta[row.name]
-        local faction = m and m[2]
-        if faction == "Alliance" then info.allianceRanked = info.allianceRanked + 1
-        elseif faction == "Horde" then info.hordeRanked = info.hordeRanked + 1 end
-        if myShort and not info.myRank and type(row.name) == "string"
-            and row.name:find(myShort, 1, true) == 1 then
-            local name = canon and sync:CanonicalForeverName(row.name) or row.name
-            if name == myName then
-                info.myRank, info.myKills = i, tonumber(row.kills) or 0
-                local above = sorted[i - 1]
-                if above then info.aboveKills = tonumber(above.kills) or 0 end
+    -- The display build already counted the factions; older caches fall back to counting here.
+    local counted = type(dc.rankedAlliance) == "number" and type(dc.rankedHorde) == "number"
+    if counted then
+        info.allianceRanked, info.hordeRanked = dc.rankedAlliance, dc.rankedHorde
+    end
+    if not (counted and not myShort) then
+        -- First byte test before find: skips the method call on nearly every row.
+        local b1 = myShort and myShort:byte(1)
+        for i = 1, #sorted do
+            local row = sorted[i]
+            if not counted then
+                local m = row and meta[row.name]
+                local faction = m and m[2]
+                if faction == "Alliance" then info.allianceRanked = info.allianceRanked + 1
+                elseif faction == "Horde" then info.hordeRanked = info.hordeRanked + 1 end
             end
+            if myShort and not info.myRank and type(row.name) == "string"
+                and row.name:byte(1) == b1 and row.name:find(myShort, 1, true) == 1 then
+                local name = canon and sync:CanonicalForeverName(row.name) or row.name
+                if name == myName then
+                    info.myRank, info.myKills = i, tonumber(row.kills) or 0
+                    local above = sorted[i - 1]
+                    if above then info.aboveKills = tonumber(above.kills) or 0 end
+                end
+            end
+            if counted and info.myRank then break end
         end
     end
     local myGuild = Overlord.Outpost and Overlord.Outpost.GetLocalPlayerGuild
@@ -3324,16 +3493,177 @@ function Overlord.LeaderboardUI:ApplyFrameScale(scale)
     end
 end
 
+-- ---------- Hidden prebuild (open-ranking-1, open-ranking-5) ----------
+-- The window and its row pools were built inside the click that first opened the
+-- ranking (several ms in one frame), and the keep/outpost pools in a second heavy frame
+-- once their lists first filled. They are now built ahead, hidden, one block per frame,
+-- 30 s after a loading screen, never in combat or in an instance. Nothing is painted or
+-- measured while hidden (text widths are cached for the session). A click during the
+-- build finishes the window at once, as a first open always did, and leaves the pools
+-- still missing to the first paint. Same frames, same creation order, same hidden rows.
+LbBuild.DELAY = 30
+LbBuild.ROWS_PER_STEP = 4
+
+-- Yield point of the build. True once a click finishes it at once (no more pools then).
+function LbBuild.Step()
+    if LbBuild.sync then return true end
+    if not LbBuild.co or coroutine.running() ~= LbBuild.co then return false end
+    coroutine.yield()
+    return LbBuild.sync == true
+end
+
+-- Grows one pool to its first-paint size, a few hidden rows per frame. True = stop.
+function LbBuild.Grow(pool, target, ensure, faction)
+    local ui = Overlord.LeaderboardUI
+    while pool and #pool < target do
+        local before = #pool
+        local count = math.min(target, before + LbBuild.ROWS_PER_STEP)
+        if faction then ensure(ui, faction, count) else ensure(ui, count) end
+        if #pool == before or LbBuild.Step() then return true end
+    end
+    return false
+end
+
+function LbBuild.Body()
+    local ui = Overlord.LeaderboardUI
+    ui:CreateFrame()
+    LbBuild.frameDone = true
+    if LbBuild.Step() then return end
+    -- The sizes of the first paint: fixed viewports for kills and captures; the right-hand
+    -- columns span header + gap + kills panel + gap + captures panel, less their own header,
+    -- gap and the 4 px scroll insets (anchored scrolls read 0 while never shown).
+    local killCount = math.ceil(lbFrame.killsViewportH / KILL_ROW_HEIGHT) + VIRTUAL_ROW_OVERSCAN
+    local captureCount = math.ceil(lbFrame.captureScrollHeight / CAPTURE_ROW_HEIGHT) + VIRTUAL_ROW_OVERSCAN
+    local columnH = LB_HEADER_H + LB_GAP_HEADER + (lbFrame.killsViewportH + 8)
+        + LB_GAP_SECTION + (lbFrame.capturesBlockH + 10)
+    local listCount = math.ceil((columnH - LB_HEADER_H - LB_GAP_HEADER - 8) / GUILD_ROW_HEIGHT)
+        + VIRTUAL_ROW_OVERSCAN
+    -- PaintView's order (each pool has its own parent; they never overlap).
+    if LbBuild.Grow(rows, killCount, ui.EnsureKillRows) then return end
+    if LbBuild.Grow(guildRows, listCount, ui.EnsureGuildRows) then return end
+    if LbBuild.Grow(guildKeepRows, listCount, ui.EnsureGuildKeepRows) then return end
+    if LbBuild.Grow(outpostRows, listCount, ui.EnsureOutpostRows) then return end
+    if LbBuild.Grow(lbFrame.alliLines, captureCount, ui.EnsureCaptureRows, "Alliance") then return end
+    LbBuild.Grow(lbFrame.hordeLines, captureCount, ui.EnsureCaptureRows, "Horde")
+end
+
+function LbBuild.Stop()
+    LbBuild.done = true
+    local frame = LbBuild.frame
+    if frame and frame.UnregisterAllEvents then frame:UnregisterAllEvents() end
+end
+
+function LbBuild.Resume()
+    local co = LbBuild.co
+    if not co then return end
+    local ok, err = coroutine.resume(co)
+    if ok and coroutine.status(co) ~= "dead" then return end
+    LbBuild.co = nil
+    LbBuild.Stop()
+    if ok then return end
+    -- A window cut short is dropped: the next Show builds it the usual way.
+    if not LbBuild.frameDone and lbFrame then
+        if lbFrame.UnregisterAllEvents then lbFrame:UnregisterAllEvents() end
+        lbFrame:Hide()
+        lbFrame = nil
+        lbSectionsLayoutDone = false
+    end
+    local handler = geterrorhandler and geterrorhandler()
+    if handler then handler(err) end
+end
+
+-- Show: a build still running ends now, in the click, as before.
+function LbBuild.Finish()
+    if not LbBuild.co then return end
+    LbBuild.sync = true
+    while LbBuild.co do LbBuild.Resume() end
+    LbBuild.sync = nil
+end
+
+function LbBuild.InInstance()
+    if Overlord.InstanceSuspended then return true end
+    if IsInInstance then
+        local ok, inside = pcall(IsInInstance)
+        if ok and inside then return true end
+    end
+    return false
+end
+
+-- Paused in an instance (the loading screen out of it starts the delay again) or in
+-- combat (resumed when the fight ends).
+function LbBuild.Blocked()
+    if LbBuild.InInstance() then return true end
+    if InCombatLockdown and InCombatLockdown() then
+        local frame = LbBuild.frame
+        if frame and frame.RegisterEvent then frame:RegisterEvent("PLAYER_REGEN_ENABLED") end
+        return true
+    end
+    return false
+end
+
+function LbBuild.Slice()
+    LbBuild.sliceArmed = nil
+    if not LbBuild.co or LbBuild.done or LbBuild.Blocked() then return end
+    LbBuild.Resume()
+    if LbBuild.co then
+        LbBuild.sliceArmed = true
+        C_Timer.After(0, LbBuild.Slice)
+    end
+end
+
+function LbBuild.Start()
+    LbBuild.armed = nil
+    if LbBuild.done or LbBuild.sliceArmed then return end
+    -- Opened by a click first: nothing left to build.
+    if lbFrame and not LbBuild.co then
+        LbBuild.Stop()
+        return
+    end
+    if LbBuild.Blocked() then return end
+    if not LbBuild.co then LbBuild.co = coroutine.create(LbBuild.Body) end
+    LbBuild.Slice()
+end
+
+function LbBuild.Arm(delay)
+    if LbBuild.done or LbBuild.armed or LbBuild.sliceArmed or LbBuild.InInstance() then return end
+    if lbFrame and not LbBuild.co then
+        LbBuild.Stop()
+        return
+    end
+    LbBuild.armed = true
+    C_Timer.After(delay, LbBuild.Start)
+end
+
+if CreateFrame and C_Timer and C_Timer.After then
+    local frame = CreateFrame("Frame")
+    LbBuild.frame = frame
+    frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+    frame:SetScript("OnEvent", function(self, event)
+        if event == "PLAYER_REGEN_ENABLED" and self.UnregisterEvent then self:UnregisterEvent(event) end
+        LbBuild.Arm(event == "PLAYER_ENTERING_WORLD" and LbBuild.DELAY or 2)
+    end)
+end
+
 function Overlord.LeaderboardUI:Show()
+    LbBuild.Finish()
     if not lbFrame then
         self:CreateFrame()
     end
+    if not LbBuild.done then LbBuild.Stop() end
     if Overlord.UI and Overlord.UI.GetEffectiveUiScale then
         self:ApplyFrameScale(Overlord.UI:GetEffectiveUiScale())
     else
         self:ApplyFrameScale(1)
     end
     lbFrame:Show()
+    -- Built while hidden: its height is fitted now that it is shown, as a build in the
+    -- click did (same height, then the scale just applied refitted to it).
+    if lbFrame._lbBuiltHidden then
+        lbFrame._lbBuiltHidden = nil
+        FitLeaderboardFrameHeight()
+    end
+    -- A reopened window repaints every list in full (PaintView's skip starts afresh).
+    LbPerf.paintGen = LbPerf.paintGen + 1
     -- Ouverture manuelle : repartir du haut ; refresh sync visibles : conserver le scroll.
     ResetLeaderboardScrollPositions()
     lbRefreshPending = false
@@ -3351,6 +3681,7 @@ function Overlord.LeaderboardUI:Hide()
         Overlord:PlayPanelCloseSound()
     end
     if lbFrame then lbFrame:Hide() end
+    LbPerf.paintGen = LbPerf.paintGen + 1
     lbRefreshPending = false
     lbRefreshToken = lbRefreshToken + 1
     if Overlord.UI and Overlord.UI.ScheduleActionGridActiveRefresh then

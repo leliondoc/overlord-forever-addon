@@ -41,6 +41,22 @@ local function ReadPlayerMapDistance(mapID, zx, zy, aspect)
     return math.sqrt(dx * dx + dy * dy), dx, dy
 end
 
+-- ReadPlayerMapDistance split in two for several zones at once: one position read,
+-- then the same arithmetic per zone. Both run inside pcall (secret positions).
+local function ReadPlayerMapPoint(mapID)
+    local pos = C_Map.GetPlayerMapPosition(mapID, "player")
+    if not pos then return nil end
+    local px, py = pos:GetXY()
+    if px == nil or py == nil or (px == 0 and py == 0) then return nil end
+    return px * 100, py * 100
+end
+
+local function DistanceFromPlayerPoint(px, py, zx, zy, aspect)
+    local dx = zx - px
+    local dy = (zy - py) * aspect
+    return math.sqrt(dx * dx + dy * dy), dx, dy
+end
+
 local function GetPlayerMapCacheKey()
     local ok, mapID = pcall(C_Map.GetBestMapForUnit, "player")
     if not ok or not mapID then return nil, nil, nil end
@@ -383,22 +399,25 @@ local function IsLocallyHolding()
 end
 
 -- Verifie legerement si le HUD front pourrait s'afficher (evite FindActiveZone 1 Hz quand rien a montrer).
+-- Second result: the next objective it looked up (only when not holding), handed to
+-- RefreshHud so the same tick does not look it up again.
 local function FrontHasVisibleHudCandidate(frontId, holdingCached)
     if holdingCached == nil then holdingCached = IsLocallyHolding() end
-    if holdingCached then return true end
+    if holdingCached then return true, nil end
+    local nextZ
     if Overlord.Zones and Overlord.Zones.GetNextObjectiveZone then
-        local nextZ = Overlord.Zones:GetNextObjectiveZone(frontId)
-        if nextZ and nextZ.status == "available" then return true end
+        nextZ = Overlord.Zones:GetNextObjectiveZone(frontId)
+        if nextZ and nextZ.status == "available" then return true, nextZ end
     end
     if not frontId or not Overlord.Zones or not Overlord.Zones.GetDisplayOrderForFront then
-        return false
+        return false, nextZ
     end
     for _, zone in ipairs(Overlord.Zones:GetDisplayOrderForFront(frontId)) do
         if zone.status == "in_progress" then
-            return true
+            return true, nextZ
         end
     end
-    return false
+    return false, nextZ
 end
 
 -- Cible HUD midscreen pour avant-poste (front actif ou site open-world autonome, 24/7)
@@ -509,12 +528,15 @@ function Overlord.ZoneIndicator:FrontLateIndicatorNeedsRefresh()
     end
     local frontId = GetCurrentFrontId()
     local holding = IsLocallyHolding()
-    if not FrontHasVisibleHudCandidate(frontId, holding) then return false end
-    if not indicatorFrame or not indicatorFrame:IsShown() then return true end
+    local candidate, nextZ = FrontHasVisibleHudCandidate(frontId, holding)
+    if not candidate then return false end
+    -- True also hands RefreshHud what was just read (front, holding, next objective):
+    -- only valid for a RefreshHud called right away, in the same tick.
+    if not indicatorFrame or not indicatorFrame:IsShown() then return true, frontId, holding, nextZ end
     local target = indicatorFrame.hudTarget
-    if not target or target._outpost then return true end
+    if not target or target._outpost then return true, frontId, holding, nextZ end
     if target.status == "available" and not holding then return false end
-    return true
+    return true, frontId, holding, nextZ
 end
 
 function Overlord.ZoneIndicator:GetDistanceToOutpost(site)
@@ -722,6 +744,28 @@ function Overlord.ZoneIndicator:GetDistanceToZone(zone)
     return distance, dx, dy
 end
 
+-- Same reads as GetDistanceToZone, once for several zones: the player's point on the
+-- front's play map and the aspect ratio (nil when GetDistanceToZone would give nil).
+function Overlord.ZoneIndicator:ReadZoneDistanceOrigin()
+    local ok, mapID = pcall(C_Map.GetBestMapForUnit, "player")
+    if not ok or not mapID then return nil end
+    local front = Overlord.Fronts and Overlord.Fronts:ResolveFrontByMapID(mapID)
+    if not front then return nil end
+    local playMapID = front.resolvedMapID or (Overlord.Fronts.GetMapID and Overlord.Fronts:GetMapID(front.id)) or mapID
+    local ar = Overlord.Zones:GetMapAspectRatio()
+    local okPoint, px, py = pcall(ReadPlayerMapPoint, playMapID)
+    if not okPoint or not px then return nil end
+    return px, py, ar
+end
+
+-- GetDistanceToZone for one zone from an origin read by ReadZoneDistanceOrigin.
+function Overlord.ZoneIndicator:GetDistanceFromOrigin(zone, px, py, aspect)
+    if not zone or not zone.center then return nil end
+    local ok, distance, dx, dy = pcall(DistanceFromPlayerPoint, px, py, zone.center[1], zone.center[2], aspect)
+    if not ok then return nil end
+    return distance, dx, dy
+end
+
 -- Zone a afficher : position joueur > capture en cours > prochain objectif (chaine prereq)
 function Overlord.ZoneIndicator:FindActiveZone(forceRefresh)
     local now = GetTime()
@@ -817,6 +861,9 @@ local function FormatTime(seconds)
     return string.format("%d:%02d", math.floor(seconds / 60), seconds % 60)
 end
 
+-- Last text built by GetObjectiveDetails and every value it was built from.
+local objectiveDetailsMemo = {}
+
 -- Read-only details for the next-objective panel. Use the same geometry and
 -- observer timer as the capture HUD; never start a separate capture clock.
 function Overlord.ZoneIndicator:GetObjectiveDetails(zone)
@@ -824,36 +871,68 @@ function Overlord.ZoneIndicator:GetObjectiveDetails(zone)
     local dist = self:GetDistanceToZone(zone)
     local inZone = dist ~= nil and zone.radius and dist < zone.radius
     local alive = not (Overlord.IsPlayerDeadOrGhost and Overlord:IsPlayerDeadOrGhost())
-    local location = ""
+    -- Same branches as before, but only the choice is made here: the strings are built
+    -- below, and reused while every input of the text is unchanged (asked each second).
+    local mode, instruction, cx, cy = 0, nil, nil, nil
     if inZone and alive then
         local blocked = Overlord.ZoneControl and Overlord.ZoneControl.IsPlayerInNonCaptureStateForSync
             and Overlord.ZoneControl:IsPlayerInNonCaptureStateForSync()
         if blocked then
-            local instruction = L.INDICATOR_DISMOUNT_TO_CAPTURE or "Dismount."
+            mode = 1
+            instruction = L.INDICATOR_DISMOUNT_TO_CAPTURE or "Dismount."
             if Overlord.ZoneControl.PlayerLacksPvpFlag and Overlord.ZoneControl:PlayerLacksPvpFlag() then
                 instruction = L.INDICATOR_ENABLE_PVP or "Enable PvP (/pvp)."
             elseif IsStealthed and IsStealthed() then
                 instruction = L.INDICATOR_STEALTH_TO_CAPTURE or "Leave stealth to capture."
             end
-            location = "|cFFFF8C33" .. instruction .. "|r"
         else
-            location = "|cFF00FF00" .. (L.IN_THE_ZONE or "You are in the zone!") .. "|r"
+            mode = 2
         end
     elseif dist ~= nil then
-        location = string.format(L.DISTANCE_FORMAT or "Distance: ~%.0f yards", dist * 25)
+        mode = 3
     elseif zone.center then
-        location = string.format(L.COORDS_FORMAT or "Coords: %.1f, %.1f", zone.center[1], zone.center[2])
+        mode = 4
+        cx, cy = zone.center[1], zone.center[2]
+    end
+    local distKey = mode == 3 and dist or nil
+
+    local inProgress = zone.status == "in_progress"
+    local elapsed, required, contested, paused
+    if inProgress then
+        elapsed = (Overlord.Zones and Overlord.Zones.GetObserverHoldTimeElapsed)
+            and Overlord.Zones:GetObserverHoldTimeElapsed(zone) or (tonumber(zone.holdTimeElapsed) or 0)
+        required = tonumber(zone.holdTimeRequired) or 120
+        contested = zone.isContested and true or false
+        paused = zone.isPaused and true or false
+    end
+    -- Whole seconds: FormatTime floors, so this is exactly what the timer shows.
+    local elapsedKey = inProgress and math.floor(math.max(0, elapsed)) or nil
+
+    local memo = objectiveDetailsMemo
+    if memo.text and memo.zone == zone and memo.mode == mode and memo.instruction == instruction
+        and memo.dist == distKey and memo.cx == cx and memo.cy == cy
+        and memo.inProgress == inProgress and memo.elapsed == elapsedKey
+        and memo.required == required and memo.contested == contested and memo.paused == paused then
+        return memo.text
+    end
+
+    local location = ""
+    if mode == 1 then
+        location = "|cFFFF8C33" .. instruction .. "|r"
+    elseif mode == 2 then
+        location = "|cFF00FF00" .. (L.IN_THE_ZONE or "You are in the zone!") .. "|r"
+    elseif mode == 3 then
+        location = string.format(L.DISTANCE_FORMAT or "Distance: ~%.0f yards", dist * 25)
+    elseif mode == 4 then
+        location = string.format(L.COORDS_FORMAT or "Coords: %.1f, %.1f", cx, cy)
     end
 
     local detail = ""
-    if zone.status == "in_progress" then
-        local elapsed = (Overlord.Zones and Overlord.Zones.GetObserverHoldTimeElapsed)
-            and Overlord.Zones:GetObserverHoldTimeElapsed(zone) or (tonumber(zone.holdTimeElapsed) or 0)
-        local required = tonumber(zone.holdTimeRequired) or 120
+    if inProgress then
         local state, color = "", "|cFFFFD100"
-        if zone.isContested then
+        if contested then
             state, color = L.UI_CONTESTED or "CONTESTED", "|cFFFF4444"
-        elseif zone.isPaused then
+        elseif paused then
             state, color = L.UI_PAUSED or "PAUSED: outside zone, timer decaying", "|cFFFF8C33"
         end
         if required > 0 then
@@ -865,7 +944,12 @@ function Overlord.ZoneIndicator:GetObjectiveDetails(zone)
     end
     -- 1.7.1 : plus de consigne "Allez ici..." sous la distance (evidente une fois
     -- connue) : la place revient a la liste d'activite recente du dock.
-    return location .. (location ~= "" and detail ~= "" and "\n" or "") .. detail
+    local text = location .. (location ~= "" and detail ~= "" and "\n" or "") .. detail
+    memo.text, memo.zone, memo.mode, memo.instruction = text, zone, mode, instruction
+    memo.dist, memo.cx, memo.cy = distKey, cx, cy
+    memo.inProgress, memo.elapsed, memo.required = inProgress, elapsedKey, required
+    memo.contested, memo.paused = contested, paused
+    return text
 end
 
 local function EnsureIndicatorTextAnchors()
@@ -900,11 +984,12 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
         return
     end
 
-    -- Regular objectives and their capture progress now live in the side panel.
-    -- Only keeps/outposts still use this floating HUD, including manual calls,
-    -- plus the optional floating next-objective guide.
+    -- Regular objectives and their capture progress live in the side panel. Keeps and
+    -- outposts use this floating HUD; with the optional floating window, a regular zone
+    -- shows its guide while available and its capture timer and bar while in progress.
     if not IsSquareCaptureHud(activeZone) then
-        if self:IsFloatingObjectiveEnabled() and activeZone.status == "available"
+        local floatingWindow = self:IsFloatingObjectiveEnabled()
+        if floatingWindow and activeZone.status == "available"
             and not activeZone.isHolding then
             if not indicatorFrame._guidance then
                 indicatorFrame._guidance = true
@@ -926,8 +1011,10 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
             SetIndicatorHeight(IND_PAD_TOP + IND_PAD_BOTTOM + 16 + IND_LINE_GAP + 12)
             return
         end
-        self:Hide()
-        return
+        if not (floatingWindow and activeZone.status == "in_progress") then
+            self:Hide()
+            return
+        end
     end
     if indicatorFrame._guidance then
         indicatorFrame._guidance = false
@@ -1172,7 +1259,9 @@ function Overlord.ZoneIndicator:UpdateIndicator(activeZone)
 end
 
 -- Affiche / met a jour les captures ; le guidage est dans le panneau lateral.
-function Overlord.ZoneIndicator:RefreshHud()
+-- hintHolding ~= nil: called by the front tick right after FrontLateIndicatorNeedsRefresh
+-- returned true with these reads (front, holding, next objective), nothing changed since.
+function Overlord.ZoneIndicator:RefreshHud(hintFrontId, hintHolding, hintNextZ)
     if Overlord:IsPlayerDeadOrGhost() then
         if indicatorFrame and indicatorFrame:IsShown() then
             indicatorFrame:Hide()
@@ -1222,12 +1311,23 @@ function Overlord.ZoneIndicator:RefreshHud()
         return
     end
 
-    local frontId = GetCurrentFrontId()
-    local holding = IsLocallyHolding()
-    if indicatorFrame and not indicatorFrame:IsShown() and not holding
-        and not FrontHasVisibleHudCandidate(frontId, holding) then
-        self:SyncAutoObjectiveWaypoint(nil, frontId)
-        return
+    local frontId, holding, nextZ, nextZKnown
+    if hintHolding ~= nil then
+        -- The tick found a candidate, so the hidden-HUD early exit below cannot apply.
+        frontId, holding = hintFrontId, hintHolding
+        nextZ, nextZKnown = hintNextZ, true
+    else
+        frontId = GetCurrentFrontId()
+        holding = IsLocallyHolding()
+        if indicatorFrame and not indicatorFrame:IsShown() and not holding then
+            local candidate
+            candidate, nextZ = FrontHasVisibleHudCandidate(frontId, holding)
+            if not candidate then
+                self:SyncAutoObjectiveWaypoint(nil, frontId)
+                return
+            end
+            nextZKnown = true
+        end
     end
 
     local outVisible, _, outTarget = false, false, nil
@@ -1249,8 +1349,14 @@ function Overlord.ZoneIndicator:RefreshHud()
 
     local resolvedActiveZone = holding and self:FindActiveZone() or nil
     local activeZone = resolvedActiveZone
-    local nextZ = (not holding and Overlord.Zones and Overlord.Zones.GetNextObjectiveZone)
-        and Overlord.Zones:GetNextObjectiveZone(frontId) or nil
+    -- Next objective: the one just looked up for the candidate check when there was one
+    -- (same frame, nothing changed in between), else looked up here as before.
+    if holding then
+        nextZ = nil
+    elseif not nextZKnown then
+        nextZ = (Overlord.Zones and Overlord.Zones.GetNextObjectiveZone)
+            and Overlord.Zones:GetNextObjectiveZone(frontId) or nil
+    end
     if not holding and nextZ and nextZ.status == "available" then
         self:SyncAutoObjectiveWaypoint(nextZ, frontId)
     else
@@ -1269,13 +1375,25 @@ function Overlord.ZoneIndicator:RefreshHud()
         shouldShow = true
         activeZone = nextZ
     else
+        -- Not holding, floating window off: only a keep/outpost square HUD could show, and
+        -- FindActiveZone returns one only from its cache (no outpost HUD this frame, checked
+        -- above). Without such a cached target the scan would end in Hide: skip it.
+        if not self:IsFloatingObjectiveEnabled() and not IsSquareCaptureHud(cachedActiveZone) then
+            if indicatorFrame and indicatorFrame:IsShown() then
+                self:Hide()
+            end
+            return
+        end
         activeZone = resolvedActiveZone or self:FindActiveZone()
         shouldShow = activeZone and activeZone.status == "in_progress"
     end
 
+    local floatingWindow = self:IsFloatingObjectiveEnabled()
     local floatingGuide = shouldShow and activeZone and not holding
-        and activeZone.status == "available" and self:IsFloatingObjectiveEnabled()
-    if not shouldShow or (not IsSquareCaptureHud(activeZone) and not floatingGuide) then
+        and activeZone.status == "available" and floatingWindow
+    -- The floating window also carries a capture under way (timer and bar), not only the guide.
+    local floatingCapture = shouldShow and activeZone and activeZone.status == "in_progress" and floatingWindow
+    if not shouldShow or (not IsSquareCaptureHud(activeZone) and not floatingGuide and not floatingCapture) then
         if indicatorFrame and indicatorFrame:IsShown() then
             self:Hide()
         end

@@ -187,6 +187,41 @@ local function ClearPlayerBaseline(playerKey)
     end
 end
 
+-- Event tables are recycled: one per accepted K otherwise, each living up to the
+-- 5 min window (old GC generation). They are only ever held by guild.events, so a
+-- table goes back to the pool at the moment it leaves that list, never before.
+local eventPool, eventPoolCount = {}, 0
+local EVENT_POOL_MAX = 256
+
+local function NewEvent(at, key, name, kills, zref)
+    local e
+    if eventPoolCount > 0 then
+        e = eventPool[eventPoolCount]
+        eventPool[eventPoolCount] = nil
+        eventPoolCount = eventPoolCount - 1
+    else
+        e = {}
+    end
+    -- Every field set on reuse (zref may be nil).
+    e.at, e.key, e.name, e.kills, e.zref = at, key, name, kills, zref
+    return e
+end
+
+local function ReleaseEvent(e)
+    if not e or eventPoolCount >= EVENT_POOL_MAX then return end
+    e.key, e.name, e.zref = nil, nil, nil
+    eventPoolCount = eventPoolCount + 1
+    eventPool[eventPoolCount] = e
+end
+
+-- Empties the list in place (the table itself is kept by its guild).
+local function ReleaseAllEvents(events)
+    for i = #events, 1, -1 do
+        ReleaseEvent(events[i])
+        events[i] = nil
+    end
+end
+
 local function PruneEvents(guild, now)
     local events = guild.events
     local keep = 1
@@ -195,6 +230,8 @@ local function PruneEvents(guild, now)
         if now - e.at <= WINDOW then
             events[keep] = e
             keep = keep + 1
+        else
+            ReleaseEvent(e)
         end
     end
     for i = #events, keep, -1 do events[i] = nil end
@@ -240,6 +277,7 @@ local function GetGuild(guildName, faction, now)
             local lastAt = GuildActivityAt(other, now)
             if lastAt ~= math.huge and now - lastAt > WINDOW then lastAt = 0 end
             if lastAt == 0 then
+                ReleaseAllEvents(other.events)
                 guilds[otherKey] = nil
                 guildCount = guildCount - 1
             elseif not oldestAt or lastAt < oldestAt then
@@ -247,6 +285,7 @@ local function GetGuild(guildName, faction, now)
             end
         end
         if guildCount >= MAX_GUILDS and oldestKey then
+            ReleaseAllEvents(guilds[oldestKey].events)
             guilds[oldestKey] = nil
             guildCount = guildCount - 1
         end
@@ -286,6 +325,27 @@ local function Summarize(guild)
         row.kills = row.kills + e.kills
     end
     return kills, memberCount, bestLoc, byPlayer
+end
+
+-- True when the events hold at least `needed` distinct killers (e.key, as Summarize
+-- counts them). Seen keys go in a reused array, only slots 1..n are read.
+local memberScratch = {}
+local function HasDistinctMembers(events, needed)
+    if needed <= 0 then return true end
+    local n = 0
+    for i = 1, #events do
+        local key = events[i].key
+        local seen = false
+        for j = 1, n do
+            if memberScratch[j] == key then seen = true; break end
+        end
+        if not seen then
+            n = n + 1
+            if n >= needed then return true end
+            memberScratch[n] = key
+        end
+    end
+    return false
 end
 
 -- Layer de la guilde : shard connu le plus represente parmi ses tueurs, pondere
@@ -435,10 +495,12 @@ function GKA:OnLiveKill(playerName, faction, guildName, totalKills, zoneId, scor
     -- La base avance pour tout K authentifie, meme sans guilde, pour qu'un saut
     -- de total ne soit jamais credite plus tard a une autre guilde.
     local now = Now()
-    local delta = ConsumeKillDelta(playerName:lower(), math.floor(total), tonumber(scoreEpoch), guildKey, now)
+    local playerKey = playerName:lower()
+    local delta = ConsumeKillDelta(playerKey, math.floor(total), tonumber(scoreEpoch), guildKey, now)
     -- Taille des combats du dock : les memes kills, avec ou sans guilde (aucun paquet).
     local fa = Overlord.FrontActivity
-    if delta > 0 and not self._simulating and fa and fa.RecordKills and IsValidZoneRef(zoneId) then
+    local validZone = IsValidZoneRef(zoneId)
+    if delta > 0 and not self._simulating and fa and fa.RecordKills and validZone then
         pcall(fa.RecordKills, fa, zoneId, delta)
     end
     if delta <= 0 or not hasGuild then return end
@@ -446,9 +508,8 @@ function GKA:OnLiveKill(playerName, faction, guildName, totalKills, zoneId, scor
     local guild = GetGuild(guildName, faction, now)
     PruneEvents(guild, now)
     local events = guild.events
-    events[#events + 1] = { at = now, key = playerName:lower(), name = playerName, kills = delta,
-        zref = IsValidZoneRef(zoneId) and zoneId or nil }
-    if #events > MAX_EVENTS_PER_GUILD then table.remove(events, 1) end
+    events[#events + 1] = NewEvent(now, playerKey, playerName, delta, validZone and zoneId or nil)
+    if #events > MAX_EVENTS_PER_GUILD then ReleaseEvent(table.remove(events, 1)) end
 
     self:Evaluate(guild, now)
 end
@@ -465,12 +526,16 @@ function GKA:Evaluate(guild, now)
     local windowKills = 0
     for i = 1, #events do windowKills = windowKills + events[i].kills end
     if windowKills < self.KILL_THRESHOLD then return false end
+    -- Same member test as Summarize's below, without building its tables: a small
+    -- guild with many kills from 3-4 players otherwise rebuilt them on every K.
+    if not HasDistinctMembers(events, self.MEMBER_THRESHOLD) then return false end
     local kills, members, zoneRef, byPlayer = Summarize(guild)
     if kills < self.KILL_THRESHOLD or members < self.MEMBER_THRESHOLD then return false end
     local shard = GuildShard(byPlayer)
     guild.detectedAt = now
     -- Les kills suivants doivent reconstituer un nouveau seuil complet.
-    guild.events = {}
+    -- (Emptied in place, events recycled: Summarize's results hold no event table.)
+    ReleaseAllEvents(events)
     -- Detection locale corroboree : affichee meme si un GW (peut-etre forge) a deja
     -- ete montre pour cette guilde ; seul un affichage local recent la retient.
     local seenKey = FactionCode(guild.faction) .. ":" .. guild.name:lower()

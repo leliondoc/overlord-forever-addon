@@ -10,6 +10,9 @@ local generalContinentRoot = nil
 local generalContinentPins = {}
 local generalMinimapPins = {}
 local generalMinimapSeen = {}
+-- Reused by every pass (wiped first): no new table per zoom step.
+local generalWorldSeen = {}
+local generalContinentSeen = {}
 local generalMinimapCacheMapID = nil
 local generalMinimapCacheRevision = nil
 local generalMinimapCacheEntries = nil
@@ -30,9 +33,10 @@ local function ResolveGeneralFactionAtlas(faction)
     end
 end
 
-local function ApplyPinFactionIcon(pin, entry)
-    if not pin or not pin.icon or not entry or not entry.faction then return end
-    local atlas = ResolveGeneralFactionAtlas(entry.faction)
+-- Takes the faction itself: no { faction = ... } table per pin and pass.
+local function ApplyPinFactionIcon(pin, faction)
+    if not pin or not pin.icon or not faction then return end
+    local atlas = ResolveGeneralFactionAtlas(faction)
     if not atlas or not pin.icon.SetAtlas then return end
     if pin._olAtlas ~= atlas then
         pcall(pin.icon.SetAtlas, pin.icon, atlas)
@@ -174,7 +178,7 @@ local function EnsureWorldPin(key, faction, parent)
         pin:SetScript("OnLeave", function() GameTooltip:Hide() end)
         generalWorldPins[key] = pin
     end
-    ApplyPinFactionIcon(pin, { faction = faction })
+    ApplyPinFactionIcon(pin, faction)
     return pin
 end
 
@@ -210,7 +214,7 @@ local function EnsureContinentPin(key, faction, parent)
         pin:SetScript("OnLeave", function() GameTooltip:Hide() end)
         generalContinentPins[key] = pin
     end
-    ApplyPinFactionIcon(pin, { faction = faction })
+    ApplyPinFactionIcon(pin, faction)
     return pin
 end
 
@@ -293,7 +297,8 @@ function Overlord.GeneralMap:RefreshContinent()
             return
         end
         local iconSize = math.max(CONTINENT_PIN_MIN, math.min(CONTINENT_PIN_MAX, cw * CONTINENT_PIN_FRAC))
-        local seen = {}
+        local seen = generalContinentSeen
+        wipe(seen)
         local anyShown = false
 
         for i = 1, #entries do
@@ -350,7 +355,8 @@ function Overlord.GeneralMap:Refresh()
             return
         end
         local iconSize = math.max(WORLD_PIN_MIN, math.min(WORLD_PIN_MAX, cw * WORLD_PIN_FRAC))
-        local seen = {}
+        local seen = generalWorldSeen
+        wipe(seen)
         local anyShown = false
 
         for i = 1, #entries do
@@ -450,7 +456,7 @@ function Overlord.GeneralMap:UpdateMinimapPins(ctx, dataRefresh)
                             pin.icon:SetSize(iconSz, iconSz)
                             pin._olSz = iconSz
                         end
-                        ApplyPinFactionIcon(pin, entry)
+                        ApplyPinFactionIcon(pin, entry.faction)
                         PlaceMinimapGeneralPinCenter(pin, pinX, pinY)
                         pin.entry = entry
                         pin:Show()

@@ -840,6 +840,68 @@ local function RefreshPointsBannerFromStats(stats)
     end
 end
 
+-- Summary page (clone of AchievementFrameSummary), built on its first use: no category
+-- selects it today, so the window no longer pays its eight template bars at the first open.
+local function EnsureSummaryPanel()
+    if not hofFrame or hofFrame.summaryPanel then return end
+    local sidebar = hofFrame.sidebar
+    local summaryPanel = CreateFrame("Frame", nil, hofFrame)
+    summaryPanel:SetPoint("TOPLEFT", hofFrame, "TOPLEFT", 218, -19)
+    summaryPanel:SetPoint("BOTTOM", sidebar, "BOTTOM", 0, 0)
+    summaryPanel:SetPoint("RIGHT", hofFrame, "RIGHT", -44, 0)
+    hofFrame.summaryPanel = summaryPanel
+
+    local summaryBg = summaryPanel:CreateTexture(nil, "BACKGROUND")
+    summaryBg:SetTexture(ACH_PATH .. "UI-Achievement-AchievementBackground")
+    summaryBg:SetPoint("TOPLEFT", 3, -3)
+    summaryBg:SetPoint("BOTTOMRIGHT", -3, 3)
+    summaryBg:SetTexCoord(0, 1, 0, 0.5)
+
+    CreateFrame("Frame", nil, summaryPanel, "AchivementGoldBorderBackdrop"):SetAllPoints()
+
+    local achievementsArea = CreateFrame("Frame", nil, summaryPanel)
+    achievementsArea:SetPoint("TOPLEFT", 5, -10)
+    achievementsArea:SetPoint("TOPRIGHT", -5, -10)
+    achievementsArea:SetHeight(210)
+    summaryPanel.achievementsArea = achievementsArea
+
+    summaryPanel.recentHeader = CreateSectionHeader(achievementsArea, L.HOF_RECENT_TITLE)
+
+    summaryPanel.emptyText = achievementsArea:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    summaryPanel.emptyText:SetPoint("TOP", summaryPanel.recentHeader, "BOTTOM", 0, -30)
+    summaryPanel.emptyText:Hide()
+
+    local progressArea = CreateFrame("Frame", nil, summaryPanel)
+    progressArea:SetPoint("TOPLEFT", achievementsArea, "BOTTOMLEFT", 0, -6)
+    progressArea:SetPoint("TOPRIGHT", achievementsArea, "BOTTOMRIGHT", 0, -6)
+    progressArea:SetHeight(164)
+    summaryPanel.progressArea = progressArea
+
+    local progressHeader = CreateSectionHeader(progressArea, L.HOF_PROGRESS_TITLE)
+    progressBars[1] = CreateMainProgressBar(progressArea, progressHeader)
+
+    progressBars[2] = CreateCategoryProgressBar(progressArea, "OverlordHofProgBar2")
+    progressBars[2]:SetPoint("TOPLEFT", progressBars[1], "BOTTOMLEFT", 0, -13)
+
+    progressBars[3] = CreateCategoryProgressBar(progressArea, "OverlordHofProgBar3")
+    progressBars[3]:SetPoint("TOPLEFT", progressBars[2], "TOPRIGHT", 20, 0)
+
+    progressBars[4] = CreateCategoryProgressBar(progressArea, "OverlordHofProgBar4")
+    progressBars[4]:SetPoint("TOPLEFT", progressBars[2], "BOTTOMLEFT", 0, -10)
+
+    progressBars[5] = CreateCategoryProgressBar(progressArea, "OverlordHofProgBar5")
+    progressBars[5]:SetPoint("TOPLEFT", progressBars[4], "TOPRIGHT", 20, 0)
+
+    progressBars[6] = CreateCategoryProgressBar(progressArea, "OverlordHofProgBar6")
+    progressBars[6]:SetPoint("TOPLEFT", progressBars[4], "BOTTOMLEFT", 0, -10)
+
+    progressBars[7] = CreateCategoryProgressBar(progressArea, "OverlordHofProgBar7")
+    progressBars[7]:SetPoint("TOPLEFT", progressBars[6], "TOPRIGHT", 20, 0)
+
+    progressBars[8] = CreateCategoryProgressBar(progressArea, "OverlordHofProgBar8")
+    progressBars[8]:SetPoint("TOPLEFT", progressBars[7], "BOTTOMLEFT", 0, -10)
+end
+
 local function RefreshSummaryView(view)
     if not hofFrame or not hofFrame.summaryPanel or not view then return end
     local panel = hofFrame.summaryPanel
@@ -922,7 +984,8 @@ local function LayoutListHonorCards(content, rows)
             card = honorCards[i]
         end
         local row = rows[i]
-        card:SetParent(content)
+        -- Re-parenting relinks the frame and resets its level: only when it moved.
+        if card:GetParent() ~= content then card:SetParent(content) end
         if relayout then
             card:ClearAllPoints()
             local yOff = -4 - (i - 1) * cardStep
@@ -989,6 +1052,7 @@ function Overlord.HallOfFameUI:Refresh()
     UpdateCategoryButtons()
 
     local isSummary = (selectedCategory == "summary")
+    if isSummary then EnsureSummaryPanel() end
     if hofFrame.summaryPanel then hofFrame.summaryPanel:SetShown(isSummary) end
     if hofFrame.listPanel then hofFrame.listPanel:SetShown(not isSummary) end
 
@@ -1141,63 +1205,7 @@ function Overlord.HallOfFameUI:CreateFrame()
     hofFrame.sidebar = sidebar
 
     -- Boutons crees et places par UpdateCategoryButtons (categories visibles, semaines beta).
-
-    -- Panneau résumé (clone AchievementFrameSummary)
-    local summaryPanel = CreateFrame("Frame", nil, hofFrame)
-    summaryPanel:SetPoint("TOPLEFT", hofFrame, "TOPLEFT", 218, -19)
-    summaryPanel:SetPoint("BOTTOM", sidebar, "BOTTOM", 0, 0)
-    summaryPanel:SetPoint("RIGHT", hofFrame, "RIGHT", -44, 0)
-    hofFrame.summaryPanel = summaryPanel
-
-    local summaryBg = summaryPanel:CreateTexture(nil, "BACKGROUND")
-    summaryBg:SetTexture(ACH_PATH .. "UI-Achievement-AchievementBackground")
-    summaryBg:SetPoint("TOPLEFT", 3, -3)
-    summaryBg:SetPoint("BOTTOMRIGHT", -3, 3)
-    summaryBg:SetTexCoord(0, 1, 0, 0.5)
-
-    CreateFrame("Frame", nil, summaryPanel, "AchivementGoldBorderBackdrop"):SetAllPoints()
-
-    local achievementsArea = CreateFrame("Frame", nil, summaryPanel)
-    achievementsArea:SetPoint("TOPLEFT", 5, -10)
-    achievementsArea:SetPoint("TOPRIGHT", -5, -10)
-    achievementsArea:SetHeight(210)
-    summaryPanel.achievementsArea = achievementsArea
-
-    summaryPanel.recentHeader = CreateSectionHeader(achievementsArea, L.HOF_RECENT_TITLE)
-
-    summaryPanel.emptyText = achievementsArea:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    summaryPanel.emptyText:SetPoint("TOP", summaryPanel.recentHeader, "BOTTOM", 0, -30)
-    summaryPanel.emptyText:Hide()
-
-    local progressArea = CreateFrame("Frame", nil, summaryPanel)
-    progressArea:SetPoint("TOPLEFT", achievementsArea, "BOTTOMLEFT", 0, -6)
-    progressArea:SetPoint("TOPRIGHT", achievementsArea, "BOTTOMRIGHT", 0, -6)
-    progressArea:SetHeight(164)
-    summaryPanel.progressArea = progressArea
-
-    local progressHeader = CreateSectionHeader(progressArea, L.HOF_PROGRESS_TITLE)
-    progressBars[1] = CreateMainProgressBar(progressArea, progressHeader)
-
-    progressBars[2] = CreateCategoryProgressBar(progressArea, "OverlordHofProgBar2")
-    progressBars[2]:SetPoint("TOPLEFT", progressBars[1], "BOTTOMLEFT", 0, -13)
-
-    progressBars[3] = CreateCategoryProgressBar(progressArea, "OverlordHofProgBar3")
-    progressBars[3]:SetPoint("TOPLEFT", progressBars[2], "TOPRIGHT", 20, 0)
-
-    progressBars[4] = CreateCategoryProgressBar(progressArea, "OverlordHofProgBar4")
-    progressBars[4]:SetPoint("TOPLEFT", progressBars[2], "BOTTOMLEFT", 0, -10)
-
-    progressBars[5] = CreateCategoryProgressBar(progressArea, "OverlordHofProgBar5")
-    progressBars[5]:SetPoint("TOPLEFT", progressBars[4], "TOPRIGHT", 20, 0)
-
-    progressBars[6] = CreateCategoryProgressBar(progressArea, "OverlordHofProgBar6")
-    progressBars[6]:SetPoint("TOPLEFT", progressBars[4], "BOTTOMLEFT", 0, -10)
-
-    progressBars[7] = CreateCategoryProgressBar(progressArea, "OverlordHofProgBar7")
-    progressBars[7]:SetPoint("TOPLEFT", progressBars[6], "TOPRIGHT", 20, 0)
-
-    progressBars[8] = CreateCategoryProgressBar(progressArea, "OverlordHofProgBar8")
-    progressBars[8]:SetPoint("TOPLEFT", progressBars[7], "BOTTOMLEFT", 0, -10)
+    -- The summary page is built by EnsureSummaryPanel on its first use.
 
     -- Panneau liste (autres catégories)
     local listPanel = CreateFrame("Frame", nil, hofFrame)
@@ -1288,11 +1296,9 @@ function Overlord.HallOfFameUI:Show()
         self:CreateFrame()
     end
     if not hofFrame then return end
-    if Overlord.UI and Overlord.UI.GetEffectiveUiScale then
-        hofFrame:SetScale(Overlord.UI:GetEffectiveUiScale())
-    else
-        hofFrame:SetScale(1)
-    end
+    -- Re-scaling re-lays out the whole window: only when the scale really changed.
+    local scale = (Overlord.UI and Overlord.UI.GetEffectiveUiScale and Overlord.UI:GetEffectiveUiScale()) or 1
+    if math.abs((hofFrame:GetScale() or 1) - scale) > 0.001 then hofFrame:SetScale(scale) end
     if hofFrame.searchBox then
         hofFrame.searchBox:SetText("")
         SyncSearchBoxAppearance(hofFrame.searchBox)

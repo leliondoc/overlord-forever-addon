@@ -333,4 +333,28 @@ assert(hud:IsShown() and hud.zoneName.text == target.name, 'Opt-in floating guid
 OverlordDB.config.showFloatingObjective = false
 indicator:UpdateIndicator(target)
 assert(not hud:IsShown(), 'Floating guide stayed after the option was turned off')
+
+-- With the opt-in floating window, a regular capture under way keeps the window with
+-- its timer and bar (it used to vanish as soon as the capture started). Option off:
+-- nothing floats, the side panel alone carries the capture (checked above).
+local bar = widget()
+bar.shown, bar.value, bar.spark = false, 0, widget()
+function bar:SetValue(v) self.value = v end
+function bar:GetValue() return self.value end
+function bar:GetWidth() return 200 end
+hud.progressBar = bar
+OverlordDB.config.showFloatingObjective = true
+target.status, target.isHolding = 'in_progress', true
+target.holdTimeElapsed, target.holdTimeRequired = 30, 120
+distance, observedElapsed = 0, 30
+hud:Show()
+indicator:UpdateIndicator(target)
+assert(hud:IsShown() and hud.timer:IsShown() and hud.timer.text == '0:30 / 2:00',
+    'Floating window lost the capture timer: ' .. tostring(hud.timer.text))
+assert(bar:IsShown() and math.abs(bar.value - 0.25) < 0.001, 'Floating window lost the capture bar')
+indicator:RefreshHud()
+assert(hud:IsShown() and bar:IsShown(), 'The automatic refresh hid the floating capture window')
+OverlordDB.config.showFloatingObjective = false
+indicator:RefreshHud()
+assert(not hud:IsShown() and not bar:IsShown(), 'Capture window stayed after the option was turned off')
 print('Next objective layout: 45 short/tall/long-text/activity cases; normal image + five-row viewport, no overlap, cached idle OK')

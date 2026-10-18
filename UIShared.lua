@@ -850,9 +850,15 @@ local CLASSIC_RACE_ALIASES = {
     BLOOD_ELF = "BLOODELF",
 }
 
+-- Pure function of a few dozen race/gender strings, asked again on every row repaint:
+-- remembered (false = no Classic key), dropped wholesale past 256 entries.
+local classicRaceKeyMemo, classicRaceKeyMemoCount = {}, 0
+
 -- Normalise "raceicon-human-male", "human-male", "HUMAN_MALE" -> cle feuille Classic.
 local function NormalizeClassicRaceKey(head)
     if type(head) ~= "string" or head == "" then return nil end
+    local hit = classicRaceKeyMemo[head]
+    if hit ~= nil then return hit or nil end
     local s = head
     s = s:gsub("^raceicon%-", "")
     s = s:gsub("%-", "_")
@@ -864,8 +870,13 @@ local function NormalizeClassicRaceKey(head)
     if race and CLASSIC_RACE_ALIASES[race] then
         s = CLASSIC_RACE_ALIASES[race] .. "_" .. sex
     end
-    if CLASSIC_RACE_TCOORDS[s] then return s end
-    return nil
+    local result = CLASSIC_RACE_TCOORDS[s] and s or nil
+    if classicRaceKeyMemoCount >= 256 then
+        classicRaceKeyMemo, classicRaceKeyMemoCount = {}, 0
+    end
+    classicRaceKeyMemo[head] = result or false
+    classicRaceKeyMemoCount = classicRaceKeyMemoCount + 1
+    return result
 end
 
 -- Icone race style Classic (feuille CharacterCreate), avec miroir horizontal optionnel.

@@ -54,8 +54,8 @@ local function HideResourceMinimapPins(pins)
     MM:HideResourceMinimapPinsTable(pins)
 end
 
-local function GetMinePositionOnContinentMap(mine, continentMapID)
-    return MM:GetMinePositionOnContinentMap(mine, continentMapID)
+local function GetMinePositionOnContinentMap(mine, continentMapID, geomMapID)
+    return MM:GetMinePositionOnContinentMap(mine, continentMapID, geomMapID)
 end
 
 local function GetEKDominanceLogoSize(canvas, parent)
@@ -681,6 +681,39 @@ local function GetProjectedKeepPinSize(canvas, parent)
     return math.floor(GetEKDominanceLogoSize(canvas, parent) + 0.5) -- already scaled by the icon size option
 end
 
+-- Projected keep or outpost icon: each setter runs only when its value changes (as the
+-- minimap pins do), so a zoom step no longer repaints identical icons.
+local function PaintProjectedPinIcon(icon, iconSize, alpha, atlas, vr, vg, vb)
+    if icon._olSz ~= iconSize then
+        icon:SetSize(iconSize, iconSize)
+        icon._olSz = iconSize
+    end
+    if atlas == nil or icon._olLastAtlas ~= atlas then
+        icon:SetAtlas(atlas)
+        icon._olLastAtlas = atlas
+    end
+    if icon._olVR ~= vr or icon._olVG ~= vg or icon._olVB ~= vb then
+        icon:SetVertexColor(vr, vg, vb)
+        icon._olVR, icon._olVG, icon._olVB = vr, vg, vb
+    end
+    if icon._olAlpha ~= alpha then
+        icon:SetAlpha(alpha)
+        icon._olAlpha = alpha
+    end
+end
+
+-- File-level functions called through pcall: no closure per pin and pass (the outpost
+-- painter also serves the pins on the outpost's own map).
+local function PaintProjectedKeepPin(pin, st, site, projectionMapID, iconSize, alpha)
+    PaintProjectedPinIcon(pin.icon, iconSize, alpha, GetKeepIconAtlas(st, site, projectionMapID),
+        Overlord.GuildKeep:GetKeepIconVertexColor(st, site, projectionMapID))
+end
+
+local function PaintProjectedOutpostPin(pin, st, site, projectionMapID, iconSize, alpha)
+    PaintProjectedPinIcon(pin.icon, iconSize, alpha, GetOutpostIconAtlas(st, site, projectionMapID),
+        Overlord.Outpost:GetOutpostIconVertexColor(st, site, projectionMapID))
+end
+
 function Overlord.MapMarkers:EnsureProjectedKeepPins(canvas)
     local parent = GetOverlayParent()
     if not Overlord.GuildKeep or not Overlord.GuildKeepSites or not canvas or not parent then return end
@@ -764,6 +797,7 @@ function Overlord.MapMarkers:RefreshProjectedKeepPins()
     if not cw or cw == 0 or not ch or ch == 0 then return false end
 
     local iconSize = GetProjectedKeepPinSize(canvas, parent)
+    local alpha = Overlord.MapMarkers.GetMapIconOpacity()
     local shownPins = 0
     local expectedPins = 0
 
@@ -773,8 +807,7 @@ function Overlord.MapMarkers:RefreshProjectedKeepPins()
             and Overlord.GuildKeep:ShouldProjectPinOnMap(site, projectionMapID) then
             expectedPins = expectedPins + 1
             if pin and pin.icon then
-                local nx, ny = GetMinePositionOnContinentMap(
-                    { mapID = site.mapID, center = site.center }, projectionMapID)
+                local nx, ny = GetMinePositionOnContinentMap(site, projectionMapID)
                 if nx and ny then
                     local x = nx * cw
                     local yDown = ny * ch
@@ -782,19 +815,17 @@ function Overlord.MapMarkers:RefreshProjectedKeepPins()
                     if ox and oy then
                         local st = Overlord.GuildKeep:GetState(siteKey)
                         if PlaceMapPinCenter(pin, parent, ox, oy, iconSize) then
-                            local painted = pcall(function()
-                                pin.icon:SetSize(iconSize, iconSize)
-                                pin.icon:SetAtlas(GetKeepIconAtlas(st, site, projectionMapID))
-                                local vr, vg, vb = Overlord.GuildKeep:GetKeepIconVertexColor(st, site, projectionMapID)
-                                pin.icon:SetVertexColor(vr, vg, vb)
-                                pin.icon:SetAlpha(Overlord.MapMarkers.GetMapIconOpacity())
-                            end)
+                            local painted = pcall(PaintProjectedKeepPin, pin, st, site, projectionMapID, iconSize, alpha)
                             if painted then
                                 -- Continent / region : icone seule, sans creer de libelles vides.
                                 HideKeepMapLabels(pin)
                                 pin:Show()
                                 -- A 0 %, l'icone invisible ne doit plus capter le survol (pins de quete dessous).
-                                pin:EnableMouse(Overlord.MapMarkers.GetMapIconOpacity() > 0)
+                                local mouse = alpha > 0
+                                if pin._olMouse ~= mouse then
+                                    pin:EnableMouse(mouse)
+                                    pin._olMouse = mouse
+                                end
                                 shownPins = shownPins + 1
                             else
                                 pin:Hide()
@@ -916,6 +947,7 @@ function Overlord.MapMarkers:RefreshProjectedOutpostPins()
     if not cw or cw == 0 or not ch or ch == 0 then return false end
 
     local iconSize = GetProjectedKeepPinSize(canvas, parent)
+    local alpha = Overlord.MapMarkers.GetMapIconOpacity()
     local shownPins = 0
     local expectedPins = 0
 
@@ -925,8 +957,7 @@ function Overlord.MapMarkers:RefreshProjectedOutpostPins()
             and Overlord.Outpost:ShouldProjectOutpostPinOnMap(site, projectionMapID) then
             expectedPins = expectedPins + 1
             if pin and pin.icon then
-                local nx, ny = GetMinePositionOnContinentMap(
-                    { mapID = site.mapID, center = site.center }, projectionMapID)
+                local nx, ny = GetMinePositionOnContinentMap(site, projectionMapID)
                 if nx and ny then
                     local x = nx * cw
                     local yDown = ny * ch
@@ -934,19 +965,16 @@ function Overlord.MapMarkers:RefreshProjectedOutpostPins()
                     if ox and oy then
                         local st = Overlord.Outpost:GetState(siteKey)
                         if PlaceMapPinCenter(pin, parent, ox, oy, iconSize) then
-                            local painted = pcall(function()
-                                pin.icon:SetSize(iconSize, iconSize)
-                                pin.icon:SetAtlas(GetOutpostIconAtlas(st, site, projectionMapID))
-                                local vr, vg, vb = Overlord.Outpost:GetOutpostIconVertexColor(
-                                    st, site, projectionMapID)
-                                pin.icon:SetVertexColor(vr, vg, vb)
-                                pin.icon:SetAlpha(Overlord.MapMarkers.GetMapIconOpacity())
-                            end)
+                            local painted = pcall(PaintProjectedOutpostPin, pin, st, site, projectionMapID, iconSize, alpha)
                             if painted then
                                 HideKeepMapLabels(pin)
                                 pin:Show()
                                 -- A 0 %, l'icone invisible ne doit plus capter le survol (pins de quete dessous).
-                                pin:EnableMouse(Overlord.MapMarkers.GetMapIconOpacity() > 0)
+                                local mouse = alpha > 0
+                                if pin._olMouse ~= mouse then
+                                    pin:EnableMouse(mouse)
+                                    pin._olMouse = mouse
+                                end
                                 shownPins = shownPins + 1
                             else
                                 pin:Hide()
@@ -1087,8 +1115,7 @@ local function GetOutpostMapPinPosition(site, displayMapID, canvas, parent)
         nx = site.center[1] / 100
         ny = site.center[2] / 100
     else
-        nx, ny = GetMinePositionOnContinentMap(
-            { mapID = geomMapID, center = site.center }, displayMapID)
+        nx, ny = GetMinePositionOnContinentMap(site, displayMapID, geomMapID)
     end
     if not nx or not ny then return nil, nil end
     return GetOverlayPoint(canvas, parent, nx * cw, ny * ch)
@@ -1349,6 +1376,7 @@ function Overlord.MapMarkers:RefreshOutpostOverlays(mapID, frontId, layoutChange
 
         self:EnsureOutpostPins(canvas)
         local iconSize = GetKeepMapIconSize(canvas, parent)
+        local alpha = Overlord.MapMarkers.GetMapIconOpacity()
         local shownPins = 0
         local expectedPins = 0
         local displayMapID = mapID
@@ -1362,19 +1390,16 @@ function Overlord.MapMarkers:RefreshOutpostOverlays(mapID, frontId, layoutChange
                 if ox and oy then
                     local st = Overlord.Outpost:GetState(siteKey)
                     if PlaceMapPinCenter(pin, parent, ox, oy, iconSize) then
-                        local painted = pcall(function()
-                            pin.icon:SetSize(iconSize, iconSize)
-                            pin.icon:SetAtlas(GetOutpostIconAtlas(st, site, displayMapID))
-                            local vr, vg, vb = Overlord.Outpost:GetOutpostIconVertexColor(
-                                st, site, displayMapID)
-                            pin.icon:SetVertexColor(vr, vg, vb)
-                            pin.icon:SetAlpha(Overlord.MapMarkers.GetMapIconOpacity())
-                        end)
+                        local painted = pcall(PaintProjectedOutpostPin, pin, st, site, displayMapID, iconSize, alpha)
                         if painted then
                             HideKeepMapLabels(pin)
                             pin:Show()
                             -- A 0 %, l'icone invisible ne doit plus capter le survol (pins de quete dessous).
-                            pin:EnableMouse(Overlord.MapMarkers.GetMapIconOpacity() > 0)
+                            local mouse = alpha > 0
+                            if pin._olMouse ~= mouse then
+                                pin:EnableMouse(mouse)
+                                pin._olMouse = mouse
+                            end
                             shownPins = shownPins + 1
                         else
                             pin:Hide()

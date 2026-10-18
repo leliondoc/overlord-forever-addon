@@ -126,6 +126,27 @@ local function ResolveMacroIcon()
     return iconPath
 end
 
+-- Icon value the client reported right after our own EditMacro. If the client stores
+-- the icon in another form than the one we pass (fileID vs path), the plain compare
+-- would stay unequal and rewrite the macro at every combat end; a macro still holding
+-- this value is already repaired. A hand-set icon differs from both and is repaired once.
+-- Kept per desired icon: a faction read late at login still gets its own banner.
+local repairedMacroIcon, repairedForIcon
+
+local function MacroIconNeedsRepair(icon, desiredIcon)
+    if icon == desiredIcon then return false end
+    return repairedMacroIcon == nil or repairedForIcon ~= desiredIcon or icon ~= repairedMacroIcon
+end
+
+-- Rescans after our own edit (as before) and remembers the value the client now reports.
+local function RememberRepairedMacroIcon(desiredIcon)
+    InvalidateShortcutMacroCache()
+    RefreshShortcutMacroCache()
+    if firstShortcutMacroIcon ~= nil then
+        repairedMacroIcon, repairedForIcon = firstShortcutMacroIcon, desiredIcon
+    end
+end
+
 local function GetButtonIcon(button)
     if not button then return nil end
     if button.icon and button.icon.SetTexture then return button.icon end
@@ -176,17 +197,19 @@ local function ApplyShortcutIconToActionButton(button)
     SetOverlordTexture(icon)
 end
 
-local function SafeApplyShortcutIcon(button)
-    if not RefreshShortcutMacroCache() then return end
-    pcall(ApplyShortcutIconToActionButton, button)
+-- Button names built once; _G is still read per sweep so lazily created bars are found.
+local ACTION_BUTTON_NAMES = {}
+for _, prefix in ipairs(ACTION_BUTTON_PREFIXES) do
+    for index = 1, 12 do
+        ACTION_BUTTON_NAMES[#ACTION_BUTTON_NAMES + 1] = prefix .. index
+    end
 end
 
 local function RefreshActionButtonIcons()
     if not RefreshShortcutMacroCache() then return end
-    for _, prefix in ipairs(ACTION_BUTTON_PREFIXES) do
-        for index = 1, 12 do
-            SafeApplyShortcutIcon(_G[prefix .. index])
-        end
+    for i = 1, #ACTION_BUTTON_NAMES do
+        local button = _G[ACTION_BUTTON_NAMES[i]]
+        if button then pcall(ApplyShortcutIconToActionButton, button) end
     end
 end
 
@@ -202,8 +225,10 @@ function Overlord.ActionShortcut:EnsureMacro()
 
     local index, name, icon = FindExistingShortcut()
     if index then
-        if icon ~= ResolveMacroIcon() and type(EditMacro) == "function" then
-            pcall(EditMacro, index, name, ResolveMacroIcon(), MACRO_BODY)
+        local desiredIcon = ResolveMacroIcon()
+        if MacroIconNeedsRepair(icon, desiredIcon) and type(EditMacro) == "function" then
+            local ok, editedIndex = pcall(EditMacro, index, name, desiredIcon, MACRO_BODY)
+            if ok and editedIndex then RememberRepairedMacroIcon(desiredIcon) end
         end
         return index
     end
@@ -215,28 +240,28 @@ function Overlord.ActionShortcut:EnsureMacro()
     end
 
     -- Macro propre au personnage : elle n'encombre pas les macros generales du compte.
-    local ok, createdIndex = pcall(CreateMacro, name, ResolveMacroIcon(), MACRO_BODY, true)
+    local desiredIcon = ResolveMacroIcon()
+    local ok, createdIndex = pcall(CreateMacro, name, desiredIcon, MACRO_BODY, true)
     if not ok or not createdIndex then
         Notify((L and L.ACTION_SHORTCUT_FAILED) or "Unable to create the action bar shortcut.")
         return nil
     end
-    InvalidateShortcutMacroCache()
-    RefreshShortcutMacroCache()
+    -- No shortcut existed before: the first one found now is the macro just created.
+    RememberRepairedMacroIcon(desiredIcon)
     return createdIndex
 end
 
 local function RepairExistingShortcutMacroIcon()
-    if IsInCombat() or type(EditMacro) ~= "function" then return false end
+    if Overlord.InstanceSuspended or IsInCombat() or type(EditMacro) ~= "function" then return false end
     local index, name, icon = FindExistingShortcut()
     if not index then return false end
 
     local desiredIcon = ResolveMacroIcon()
-    if icon == desiredIcon then return true end
+    if not MacroIconNeedsRepair(icon, desiredIcon) then return true end
     local ok, editedIndex = pcall(EditMacro, index, name, desiredIcon, MACRO_BODY)
     if not ok or not editedIndex then return false end
 
-    InvalidateShortcutMacroCache()
-    RefreshShortcutMacroCache()
+    RememberRepairedMacroIcon(desiredIcon)
     return true
 end
 
@@ -278,13 +303,34 @@ for _, event in ipairs({ "UPDATE_SHAPESHIFT_FORM", "UPDATE_BONUS_ACTIONBAR", "UP
 end
 
 local actionIconRefreshPending = false
+local actionIconRepairPending = false
+
+-- Runs one frame after the event. Every feature stops in instances: no macro edit (it
+-- wakes every addon with UPDATE_MACROS) and no button sweep; the texture already on the
+-- buttons stays. OnInstanceResume (also after a delayed resume) asks for both on exit.
+local function RunActionButtonIconRefresh()
+    actionIconRefreshPending = false
+    if Overlord.InstanceSuspended or (IsInInstance and IsInInstance()) then
+        actionIconRepairPending = false
+        return
+    end
+    if actionIconRepairPending then
+        actionIconRepairPending = false
+        RepairExistingShortcutMacroIcon()
+    end
+    RefreshActionButtonIcons()
+end
+
 local function ScheduleActionButtonIconRefresh()
     if actionIconRefreshPending then return end
     actionIconRefreshPending = true
-    C_Timer.After(0, function()
-        actionIconRefreshPending = false
-        RefreshActionButtonIcons()
-    end)
+    C_Timer.After(0, RunActionButtonIconRefresh)
+end
+
+function Overlord.ActionShortcut:OnInstanceResume()
+    InvalidateShortcutMacroCache()
+    actionIconRepairPending = true
+    ScheduleActionButtonIconRefresh()
 end
 
 actionIconEventFrame:SetScript("OnEvent", function(_, event)
@@ -292,7 +338,7 @@ actionIconEventFrame:SetScript("OnEvent", function(_, event)
         InvalidateShortcutMacroCache()
     end
     if event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_REGEN_ENABLED" then
-        RepairExistingShortcutMacroIcon()
+        actionIconRepairPending = true
     end
     ScheduleActionButtonIconRefresh()
 end)

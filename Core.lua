@@ -110,7 +110,8 @@ function Overlord:RefreshCaptureSyncVisuals()
         Overlord.MapMarkers:RequestOverlayRefresh(true)
     end
     if Overlord.UI and Overlord.UI.RequestRefresh then
-        Overlord.UI:RequestRefresh()
+        -- The map was forced just above: no second coalesced map pass.
+        Overlord.UI:RequestRefresh(true)
     end
 end
 
@@ -600,8 +601,7 @@ local function CoerceShardId(value)
 end
 
 -- Parse le layer ID depuis un GUID unit/vignette (pcall : valeurs secret 12.0.5).
-local function ParseLayerIdFromGuidString(guid)
-    if type(guid) ~= "string" or guid == "" then return nil end
+local function ParseLayerIdFromGuidPieces(guid)
     local guidType, zero, _, instanceId, zoneUid = strsplit("-", guid)
     if guidType ~= "Creature" and guidType ~= "Vehicle" and guidType ~= "GameObject" and guidType ~= "Vignette" then
         return nil
@@ -624,6 +624,19 @@ local function ParseLayerIdFromGuidString(guid)
         return legacy
     end
     return nil
+end
+
+-- The layer is a pure function of the GUID string: the same creature seen again by
+-- target, mouseover and nameplate events reuses the last answer (nil included)
+-- instead of splitting the GUID into fresh pieces each time. Runs inside the pcall
+-- below, so a secret GUID still errors out at the "" test before the memo is read.
+local function ParseLayerIdFromGuidString(guid)
+    if type(guid) ~= "string" or guid == "" then return nil end
+    local shard = Overlord.Shard
+    if guid == shard._layerMemoGuid then return shard._layerMemoLayer end
+    local layer = ParseLayerIdFromGuidPieces(guid)
+    shard._layerMemoGuid, shard._layerMemoLayer = guid, layer
+    return layer
 end
 
 local function ExtractShardIDFromGUID(guid)
@@ -658,14 +671,17 @@ end
 -- ZoneUID exploitable. Leur objectGUID pointe en revanche vers la creature / l'objet
 -- effectivement present sur notre couche. L'acces reste protege car ces valeurs peuvent
 -- etre secretes dans certains contextes 12.x.
+-- (Named function: no closure per vignette on every scan.)
+local function ReadVignetteObjectGUID(vignetteGUID)
+    local info = C_VignetteInfo.GetVignetteInfo(vignetteGUID)
+    local guid = info and info.objectGUID
+    if type(guid) ~= "string" or guid == "" then return nil end
+    return guid
+end
+
 local function GetVignetteObjectGUID(vignetteGUID)
     if not C_VignetteInfo or not C_VignetteInfo.GetVignetteInfo then return nil end
-    local ok, objectGUID = pcall(function()
-        local info = C_VignetteInfo.GetVignetteInfo(vignetteGUID)
-        local guid = info and info.objectGUID
-        if type(guid) ~= "string" or guid == "" then return nil end
-        return guid
-    end)
+    local ok, objectGUID = pcall(ReadVignetteObjectGUID, vignetteGUID)
     if not ok then return nil end
     return objectGUID
 end
@@ -712,6 +728,11 @@ local SHARD_SCAN_UNITS = { "target", "mouseover", "focus", "softenemy", "softfri
 local SHARD_NAMEPLATE_UNITS = {}
 for i = 1, 40 do SHARD_NAMEPLATE_UNITS[i] = "nameplate" .. i end
 
+-- (Named function: no closure per plate on every scan.)
+local function ReadPlateToken(plate)
+    return plate.namePlateUnitToken
+end
+
 function Overlord.Shard:ScanForShardID()
     local strictZoneUid = type(self.localContextKey) == "string"
         and self.localContextKey:find("^keep:") ~= nil
@@ -721,22 +742,37 @@ function Overlord.Shard:ScanForShardID()
         if shardID ~= nil then return shardID end
     end
     -- Les tokens sont attribues par WoW et ne sont pas limites a nameplate1..40.
+    -- platesCovered: every listed plate was read without error, so the fixed tokens
+    -- below would only read the same units a second time. Any unreadable token or
+    -- failed unit read (secret values) keeps the fixed loop as the fallback.
+    local platesCovered = false
     if C_NamePlate and C_NamePlate.GetNamePlates then
         local ok, plates = pcall(C_NamePlate.GetNamePlates)
         if ok and type(plates) == "table" then
+            platesCovered = true
             for _, plate in ipairs(plates) do
-                local readable, unit = pcall(function() return plate.namePlateUnitToken end)
+                local readable, unit = pcall(ReadPlateToken, plate)
                 if readable and unit then
-                    shardID = ExtractShardIDFromUnit(unit)
-                    if shardID ~= nil then return shardID end
+                    local unitOk
+                    unitOk, shardID = pcall(ReadShardIDFromUnit, unit)
+                    if not unitOk then
+                        shardID = nil
+                        platesCovered = false
+                    elseif shardID ~= nil then
+                        return shardID
+                    end
+                else
+                    platesCovered = false
                 end
             end
         end
     end
     -- Secours pour les clients qui n'exposent pas la liste des frames.
-    for i = 1, #SHARD_NAMEPLATE_UNITS do
-        shardID = ExtractShardIDFromUnit(SHARD_NAMEPLATE_UNITS[i])
-        if shardID ~= nil then return shardID end
+    if not platesCovered then
+        for i = 1, #SHARD_NAMEPLATE_UNITS do
+            shardID = ExtractShardIDFromUnit(SHARD_NAMEPLATE_UNITS[i])
+            if shardID ~= nil then return shardID end
+        end
     end
     return ScanVignettesForShardID(strictZoneUid)
 end
@@ -1342,6 +1378,28 @@ local function ScheduleShardUpdateFromEvent(_, event, unit)
     end
     -- Coalescer la rafale sans annuler/recreer un timer a chaque evenement.
     if shardEventDebounceHandle then return end
+    -- Known layer measured under 8 s ago, same context, last scan far from the 30 s
+    -- freshness edge (1 s margin for a late timer): the debounced Update(true) would
+    -- return at once. Skip the timer and its closure but keep what its callback does
+    -- (context check now, badge at most once per debounce window); any other case,
+    -- including a context change found here, arms the timer as before.
+    if not needsRefresh and not shardEventNeedsUnthrottledScan then
+        local shard = Overlord.Shard
+        local now = GetTime()
+        -- A crowd sends tens of these events a second: one check per debounce window,
+        -- as the single pending timer gave before.
+        if now - (tonumber(shard._eventFastPathAt) or -10) < SHARD_EVENT_DEBOUNCE_SEC then return end
+        shard._eventFastPathAt = now
+        if shard:SyncLocalContext() and not LocalShardEvidenceNeedsRefresh(8)
+            and (tonumber(shard.lastScanAttemptAt) or 0) > 0
+            and now + SHARD_EVENT_DEBOUNCE_SEC + 1 < shard.lastScanAttemptAt + SHARD_FRESH_SECONDS then
+            if now - (tonumber(shard._eventBadgeRefreshAt) or -10) >= SHARD_EVENT_DEBOUNCE_SEC then
+                shard._eventBadgeRefreshAt = now
+                RefreshShardBadgeAfterScan()
+            end
+            return
+        end
+    end
     shardEventDebounceHandle = C_Timer.NewTimer(SHARD_EVENT_DEBOUNCE_SEC, function()
         shardEventDebounceHandle = nil
         if Overlord.InstanceSuspended then return end
@@ -1695,6 +1753,8 @@ end
 -- Annule toutes les relances differees liees a la sortie d'instance (ex. re-entree en arene).
 local function CancelAllDeferredInstanceTimers()
     CancelPostInstanceRecoveryTimers()
+    -- (Suspension only: the next exit starts with no front restore noted.)
+    if Overlord._postInstanceVisuals then Overlord._postInstanceVisuals.restored = false end
     CancelResumeFromInstanceRetryTimers()
 end
 
@@ -1710,6 +1770,41 @@ local function RestoreFrontVisualSystems(reason)
     end
 end
 
+-- What the world map looked like at the last front restore since the instance exit.
+-- Read only (no Blizzard method beyond GetMapID, inside pcall).
+local function ReadPostInstanceMapPicture()
+    if not (WorldMapFrame and WorldMapFrame.IsShown and WorldMapFrame:IsShown()) then
+        return false, nil, nil
+    end
+    local scroll = WorldMapFrame.ScrollContainer
+    local mapID
+    if WorldMapFrame.GetMapID then
+        local ok, id = pcall(WorldMapFrame.GetMapID, WorldMapFrame)
+        if ok then mapID = id end
+    end
+    return true, scroll and scroll.Child, mapID
+end
+
+local function NotePostInstanceVisualsRestored()
+    local note = Overlord._postInstanceVisuals or {}
+    Overlord._postInstanceVisuals = note
+    note.restored = true
+    note.mapShown, note.canvas, note.mapID = ReadPostInstanceMapPicture()
+end
+
+-- A retry repeats the restore only when it could change something: no restore yet
+-- since the exit, or a world map now open on another canvas or map than the last
+-- restore saw (the stale-canvas case the retries exist for). Otherwise the tickers
+-- already run, the minimap pins are shown and the overlays were kicked on this map;
+-- a map opened later goes through its own OnShow path.
+local function PostInstanceVisualsNeedRestore()
+    local note = Overlord._postInstanceVisuals
+    if not note or not note.restored then return true end
+    local shown, canvas, mapID = ReadPostInstanceMapPicture()
+    if not shown then return false end
+    return not (note.mapShown and canvas ~= nil and canvas == note.canvas and mapID == note.mapID)
+end
+
 local function SchedulePostInstanceWorldRecovery()
     CancelPostInstanceRecoveryTimers()
     for _, d in ipairs(POST_INSTANCE_RECHECK_DELAYS) do
@@ -1718,7 +1813,9 @@ local function SchedulePostInstanceWorldRecovery()
             if not Overlord.IsInitialized or Overlord.InstanceSuspended then return end
             Overlord:CheckActiveFrontZone()
             if not Overlord.InActiveFront then return end
+            if not PostInstanceVisualsNeedRestore() then return end
             RestoreFrontVisualSystems("postInstanceRecovery @" .. tostring(delay) .. "s")
+            NotePostInstanceVisualsRestored()
         end)
         postInstanceRecoveryTimers[#postInstanceRecoveryTimers + 1] = t
     end
@@ -1751,6 +1848,9 @@ local function CompleteResumeFromInstance(reason)
     end
     if Overlord.RankProof and Overlord.RankProof.OnInstanceResume then
         pcall(Overlord.RankProof.OnInstanceResume, Overlord.RankProof)
+    end
+    if Overlord.ActionShortcut and Overlord.ActionShortcut.OnInstanceResume then
+        pcall(Overlord.ActionShortcut.OnInstanceResume, Overlord.ActionShortcut)
     end
     -- Un loading survenu avant l'initialisation de Sync conserve le ZR au lieu de
     -- marquer la vague comme relachee sans transport. Le rejouer avant la rotation.
@@ -1787,13 +1887,28 @@ local function CompleteResumeFromInstance(reason)
     -- ne relance pas (wasIn=true, nowIn=true -> pas de transition detectee)
     if Overlord.InActiveFront then
         RestoreFrontVisualSystems(reason or "resumeFromInstance")
+        NotePostInstanceVisualsRestored()
         if Overlord.Sync then
             if Overlord.Sync.StartPeriodicChannelSync then Overlord.Sync:StartPeriodicChannelSync() end
             if Overlord.Sync.StartProximityRescan then Overlord.Sync:StartProximityRescan() end
         end
         if Overlord.UI and Overlord.UI.Show
             and OverlordDB and OverlordDB.config and OverlordDB.config.uiVisible then
-            Overlord.UI:Show()
+            -- Full repaint in its own frame, off the resume chain (as OnEnterFront).
+            Overlord.UI:Show({ skipRefresh = true })
+            if Overlord.MapMarkers and Overlord.MapMarkers.RequestOverlayRefresh then
+                Overlord.MapMarkers:RequestOverlayRefresh()
+            end
+            C_Timer.After(0, function()
+                if Overlord.InstanceSuspended or not Overlord.InActiveFront
+                    or not Overlord.UI or not Overlord.UI.Refresh then return end
+                Overlord.UI:Refresh()
+                C_Timer.After(0, function()
+                    if Overlord.UI and Overlord.UI.RefreshDomination then
+                        Overlord.UI:RefreshDomination()
+                    end
+                end)
+            end)
         end
     end
     -- Carte monde ouverte pendant suspend : reafficher le OnUpdate masque.
@@ -1875,6 +1990,11 @@ function Overlord:SuspendForInstance()
         self._postInstanceFlushGeneration =
             (tonumber(self._postInstanceFlushGeneration) or 0) + 1
         CancelAllDeferredInstanceTimers()
+        -- UI only: front circles kept under a closed world map must not show on the
+        -- instance map before the replayed suspension hides them.
+        if self.MapMarkers and self.MapMarkers.HideAllOverlays then
+            pcall(self.MapMarkers.HideAllOverlays, self.MapMarkers)
+        end
         return false
     end
     -- Invalide le callback Flush differe d'une sortie precedente avant toute
@@ -3057,9 +3177,15 @@ function Overlord:Initialize()
         -- UI apres ses dependances. Si une machine tres chargee atteint le timer
         -- d'auto-affichage de PLAYER_LOGIN avant cette etape, ce rattrapage evite
         -- que UI:Show() ait ete un no-op faute de mainFrame.
+        local loginUiBuilt = false
         AddLoginInitStage("UI", function()
             Overlord.UI:Initialize()
-            if not Overlord.InstanceSuspended and Overlord.InActiveFront
+            loginUiBuilt = true
+        end)
+        -- First Show (and the dock it builds) in the next frame, not stacked on the panel
+        -- build: the largest single login frame. Skipped if the build failed, as before.
+        AddLoginInitStage("UIShow", function()
+            if loginUiBuilt and not Overlord.InstanceSuspended and Overlord.InActiveFront
                 and OverlordDB and OverlordDB.config and OverlordDB.config.uiVisible
                 and Overlord.UI.Show then
                 Overlord.UI:Show({ skipRefresh = true })
@@ -4080,15 +4206,30 @@ Overlord.ARATHI_BASIN_MAP_IDS = Overlord.FRONT_EXCLUDED_BATTLEGROUND_MAP_IDS
 local EXCLUDED_BG_MAP_IDS = Overlord.FRONT_EXCLUDED_BATTLEGROUND_MAP_IDS
 
 -- Vrai si cette carte (ou un parent) est le BG exclu : ne pas activer le système front depuis le champ de bataille
+-- The parent chain is static for a session: a finished walk is kept per starting map
+-- (zone events and the 1 Hz spectator tick asked again with new tables each time).
+-- A walk cut by a failed GetMapInfo (map data not loaded yet) is never kept.
 local function IsExcludedWarfrontBattlegroundMap(mapID)
+    local walks = Overlord._excludedBgMapWalks
+    if not walks then
+        walks = {}
+        Overlord._excludedBgMapWalks = walks
+    end
+    local startID = mapID
+    local known = startID and walks[startID]
+    if known ~= nil then return known end
     local seen = {}
     while mapID and mapID > 0 and not seen[mapID] do
         seen[mapID] = true
-        if EXCLUDED_BG_MAP_IDS[mapID] then return true end
+        if EXCLUDED_BG_MAP_IDS[mapID] then
+            if startID then walks[startID] = true end
+            return true
+        end
         local ok, info = pcall(C_Map.GetMapInfo, mapID)
-        if not ok or not info then break end
+        if not ok or not info then return false end
         mapID = info.parentMapID or 0
     end
+    if startID then walks[startID] = false end
     return false
 end
 
@@ -4689,13 +4830,17 @@ end
 local function RunFrontLateIndicatorTick()
     if not Overlord.InActiveFront then return end
     if Overlord:IsPlayerDeadOrGhost() then return end
-    if Overlord.ZoneIndicator and Overlord.ZoneIndicator.FrontLateIndicatorNeedsRefresh
-        and not Overlord.ZoneIndicator:FrontLateIndicatorNeedsRefresh() then
-        return
+    -- The check hands over what it read (front, holding, next objective) so the HUD
+    -- refresh right after does not read it again in the same tick.
+    local hintFrontId, hintHolding, hintNextZ
+    if Overlord.ZoneIndicator and Overlord.ZoneIndicator.FrontLateIndicatorNeedsRefresh then
+        local needs
+        needs, hintFrontId, hintHolding, hintNextZ = Overlord.ZoneIndicator:FrontLateIndicatorNeedsRefresh()
+        if not needs then return end
     end
     if Overlord.ZoneIndicator then
         if Overlord.ZoneIndicator.RefreshHud then
-            Overlord.ZoneIndicator:RefreshHud()
+            Overlord.ZoneIndicator:RefreshHud(hintFrontId, hintHolding, hintNextZ)
         else
             Overlord.ZoneIndicator:UpdateIndicator()
         end

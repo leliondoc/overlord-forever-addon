@@ -366,11 +366,9 @@ local function EnsureDialogFrame()
             Overlord:PlayPanelOpenSound()
         end
         self._skipPanelOpenSound = nil
-        if Overlord.UI and Overlord.UI.GetEffectiveUiScale then
-            self:SetScale(Overlord.UI:GetEffectiveUiScale())
-        else
-            self:SetScale(1)
-        end
+        -- Re-scaling re-lays out the window: only when the scale really changed.
+        local scale = (Overlord.UI and Overlord.UI.GetEffectiveUiScale and Overlord.UI:GetEffectiveUiScale()) or 1
+        if math.abs((self:GetScale() or 1) - scale) > 0.001 then self:SetScale(scale) end
     end)
     f:SetScript("OnHide", function(self)
         if pendingSeenId then
@@ -732,11 +730,9 @@ local function EnsureQuickGuideFrame()
 
     f:SetScript("OnShow", function(self)
         if Overlord.PlayPanelOpenSound then Overlord:PlayPanelOpenSound() end
-        if Overlord.UI and Overlord.UI.GetEffectiveUiScale then
-            self:SetScale(Overlord.UI:GetEffectiveUiScale())
-        else
-            self:SetScale(1)
-        end
+        -- Re-scaling re-lays out the window: only when the scale really changed.
+        local scale = (Overlord.UI and Overlord.UI.GetEffectiveUiScale and Overlord.UI:GetEffectiveUiScale()) or 1
+        if math.abs((self:GetScale() or 1) - scale) > 0.001 then self:SetScale(scale) end
         if Overlord.UI and Overlord.UI.ScheduleActionGridActiveRefresh then
             Overlord.UI:ScheduleActionGridActiveRefresh()
         end
@@ -1609,7 +1605,8 @@ function Overlord.Popups:CreateFeaturedFrontCoinsPanel(parent)
 end
 
 function Overlord.Popups:RefreshFeaturedFrontActivity()
-    if featuredFrontFrame and ApplyFeaturedFrontActivity then
+    -- A collapsed dock skips the rows and layout: its OnShow repaints them on expand.
+    if featuredFrontFrame and featuredFrontFrame:IsShown() and ApplyFeaturedFrontActivity then
         ApplyFeaturedFrontActivity(featuredFrontFrame)
     end
     self:RefreshNextObjective()

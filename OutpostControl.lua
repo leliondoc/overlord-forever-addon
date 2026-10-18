@@ -172,6 +172,24 @@ local function BroadcastOP(siteKey, force, allowInstance)
     Overlord.Sync:BroadcastOutpostState(siteKey, force, allowInstance)
 end
 
+local presentedFlags = {}
+local presentUntil = {}
+-- Contest/decay ticks: the map, minimap, HUD and ranking only show the contested/paused
+-- flags, never the hold seconds (the HUD countdown runs through SyncOutpostCaptureHud).
+-- Refresh on a flag change only, and keep asking a little longer than Outpost's 2 s
+-- presentation throttle so that a throttled transition is never lost.
+local function RefreshPresentationOnFlagChange(siteKey, st)
+    local flags = (st.isContested and 2 or 0) + (st.isPaused and 1 or 0)
+    local now = GetTime()
+    if presentedFlags[siteKey] ~= flags then
+        presentedFlags[siteKey] = flags
+        presentUntil[siteKey] = now + 3
+    end
+    if (presentUntil[siteKey] or 0) >= now then
+        OP:RefreshOutpostPresentation(siteKey)
+    end
+end
+
 local function CanStartOutpostCapture(site, notify)
     if Overlord.InstanceSuspended or (IsInInstance and IsInInstance()) then
         return false
@@ -438,6 +456,9 @@ local function TryResumeLocalOutpostCapture(st, site)
     st.isContested = false
     st.holdAuthorityLocal = true
     st.holdStartTime = GetTime() - (tonumber(st.holdTimeElapsed) or 0)
+    if site.siteKey then
+        presentedFlags[site.siteKey], presentUntil[site.siteKey] = nil, nil
+    end
 end
 
 function Overlord.OutpostControl:StartHold(siteKey, st, site)
@@ -508,6 +529,7 @@ function Overlord.OutpostControl:StartHold(siteKey, st, site)
             OP:GetDisplayName(site), math.floor(OP:GetDefaultHoldTimeRequired(st, site) / 60)))
     end
     OP:RefreshOutpostPresentation(siteKey)
+    presentedFlags[siteKey], presentUntil[siteKey] = nil, nil
 end
 
 function Overlord.OutpostControl:OnInstanceSuspend()
@@ -554,6 +576,7 @@ function Overlord.OutpostControl:RevertCapture(siteKey, st, allowInstanceBroadca
     if Overlord.SaveState then Overlord:SaveState() end
     BroadcastOP(siteKey, true, allowInstanceBroadcast)
     OP:RefreshOutpostPresentation(siteKey)
+    presentedFlags[siteKey], presentUntil[siteKey] = nil, nil
     RefreshOutpostHud()
 end
 
@@ -647,11 +670,11 @@ function Overlord.OutpostControl:UpdateHoldTimer(siteKey, st, site, deltaTime, i
                     end
                 else
                     BroadcastOP(siteKey, false)
-                    OP:RefreshOutpostPresentation(siteKey)
+                    RefreshPresentationOnFlagChange(siteKey, st)
                 end
             else
                 BroadcastOP(siteKey, false)
-                OP:RefreshOutpostPresentation(siteKey)
+                RefreshPresentationOnFlagChange(siteKey, st)
             end
             return
         elseif st.isContested then
@@ -662,6 +685,8 @@ function Overlord.OutpostControl:UpdateHoldTimer(siteKey, st, site, deltaTime, i
             st.isPaused = false
             TryChatOutpostBackInZone(site, true)
         end
+        -- Back to plain progress: the next contest or decay is a new transition.
+        presentedFlags[siteKey] = nil
         if canProgress then
             st.holdTimeElapsed = (st.holdTimeElapsed or 0) + deltaTime
             st.updatedAt = ServerNow()
@@ -695,7 +720,7 @@ function Overlord.OutpostControl:UpdateHoldTimer(siteKey, st, site, deltaTime, i
             end
         else
             BroadcastOP(siteKey, false)
-            OP:RefreshOutpostPresentation(siteKey)
+            RefreshPresentationOnFlagChange(siteKey, st)
         end
     end
 end

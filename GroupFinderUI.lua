@@ -1101,6 +1101,18 @@ local function HideWindow()
     GFUI:Hide()
 end
 
+-- Hidden prebuild: the window was built inside the click that first opened it (about
+-- 7 ms in one frame). It is now built ahead, hidden, one block per frame, 35 s after a
+-- loading screen, never in combat or in an instance (the ranking does the same at 30 s).
+-- A click during the build finishes it at once, as a first open always did.
+local GfBuild = { DELAY = 35 }
+
+-- Yield point between the blocks of CreateFrame; a no-op outside the hidden build.
+function GfBuild.Step()
+    if GfBuild.sync or not GfBuild.co or coroutine.running() ~= GfBuild.co then return end
+    coroutine.yield()
+end
+
 function GFUI:CreateFrame()
     if frame or not CreateFrame or not Overlord.UI then return frame end
     local f = CreateFrame("Frame", "OverlordGroupFinderFrame", UIParent, "BackdropTemplate")
@@ -1125,9 +1137,13 @@ function GFUI:CreateFrame()
     f:Hide()
 
     BuildCrown(f)
+    GfBuild.Step()
     BuildBand(f)
+    GfBuild.Step()
     BuildList(f)
+    GfBuild.Step()
     BuildCard(f)
+    GfBuild.Step()
     local footer = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     footer:SetPoint("BOTTOM", f, "BOTTOM", 0, 17)
     footer:SetWidth(K.W - 2 * K.PAD)
@@ -1283,7 +1299,7 @@ end
 
 -- The panel's scale changed (UI.lua): same scale here, at once.
 function GFUI:ApplyFrameScale(scale)
-    if frame then frame:SetScale(scale) end
+    if frame and math.abs((frame:GetScale() or 0) - scale) > 0.001 then frame:SetScale(scale) end
 end
 
 function GFUI:IsShown()
@@ -1300,6 +1316,7 @@ function GFUI:Show()
         end
         return
     end
+    GfBuild.Finish()
     if not frame then self:CreateFrame() end
     if not frame then return end
     frame:SetScale(Overlord.UI.GetEffectiveUiScale and Overlord.UI:GetEffectiveUiScale() or 1)
@@ -1318,4 +1335,78 @@ function GFUI:Toggle()
     else
         self:Show()
     end
+end
+
+function GfBuild.Blocked()
+    local gf = Finder()
+    if not gf or Overlord.InstanceSuspended or (gf.InInstance and gf.InInstance()) then return true end
+    if InCombatLockdown and InCombatLockdown() then
+        local driver = GfBuild.driver
+        if driver and driver.RegisterEvent then driver:RegisterEvent("PLAYER_REGEN_ENABLED") end
+        return true
+    end
+    return false
+end
+
+function GfBuild.Resume()
+    local co = GfBuild.co
+    if not co then return end
+    local ok, err = coroutine.resume(co)
+    if ok and coroutine.status(co) ~= "dead" then return end
+    GfBuild.co = nil
+    GfBuild.done = true
+    local driver = GfBuild.driver
+    if driver and driver.UnregisterAllEvents then driver:UnregisterAllEvents() end
+    -- A build cut short leaves frame nil: the next Show builds the window the usual way.
+    if not ok then
+        local handler = geterrorhandler and geterrorhandler()
+        if handler then handler(err) end
+    end
+end
+
+-- One block per frame while nothing blocks; combat or the next loading screen resumes it.
+function GfBuild.Slice()
+    GfBuild.sliceArmed = nil
+    if not GfBuild.co or GfBuild.Blocked() then return end
+    GfBuild.Resume()
+    if GfBuild.co then
+        GfBuild.sliceArmed = true
+        C_Timer.After(0, GfBuild.Slice)
+    end
+end
+
+function GfBuild.Start()
+    GfBuild.armed = nil
+    if GfBuild.done or GfBuild.sliceArmed then return end
+    if frame and not GfBuild.co then
+        GfBuild.done = true
+        local driver = GfBuild.driver
+        if driver and driver.UnregisterAllEvents then driver:UnregisterAllEvents() end
+        return
+    end
+    if GfBuild.Blocked() then return end
+    if not GfBuild.co then
+        GfBuild.co = coroutine.create(function() GFUI:CreateFrame() end)
+    end
+    GfBuild.Slice()
+end
+
+-- Show: a build still running ends now, in the click.
+function GfBuild.Finish()
+    if not GfBuild.co then return end
+    GfBuild.sync = true
+    while GfBuild.co do GfBuild.Resume() end
+    GfBuild.sync = nil
+end
+
+if CreateFrame and C_Timer and C_Timer.After then
+    local driver = CreateFrame("Frame")
+    GfBuild.driver = driver
+    driver:RegisterEvent("PLAYER_ENTERING_WORLD")
+    driver:SetScript("OnEvent", function(self, event)
+        if event == "PLAYER_REGEN_ENABLED" and self.UnregisterEvent then self:UnregisterEvent(event) end
+        if GfBuild.done or GfBuild.armed or GfBuild.sliceArmed then return end
+        GfBuild.armed = true
+        C_Timer.After(event == "PLAYER_ENTERING_WORLD" and GfBuild.DELAY or 2, GfBuild.Start)
+    end)
 end

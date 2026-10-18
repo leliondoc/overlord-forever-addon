@@ -118,36 +118,36 @@ local mapMode = mapModeTexts[locale] or mapModeTexts.enUS
 L.MAP_FILTER_OVERLORD, L.MAP_MODE_FULL, L.MAP_MODE_COMPACT, L.MAP_MODE_HIDDEN = mapMode[1], mapMode[2], mapMode[3], mapMode[4]
 L.MAP_MODE_TOOLTIP, L.MAP_MODE_BUTTON_NEXT, L.MAP_MODE_STATUS = mapMode[5], mapMode[6], mapMode[7]
 -- Settings texts for the floating next objective (it is always in the Overlord
--- panel; the floating window is opt-in).
+-- panel; the floating window is opt-in and also carries a capture's timer and bar).
 -- { floating objective label, floating objective tooltip }
 local settingsTexts = {
     enUS = {
         "Floating next objective",
-        "The next objective is always shown in the Overlord panel. Turn on to also show it in a small window in the middle of the screen when you are not capturing. Off by default.",
+        "The next objective is always shown in the Overlord panel. Turn on to also show it in a small window in the middle of the screen, with the capture timer and bar while a capture is under way. Off by default.",
     },
     frFR = {
         "Prochain objectif flottant",
-        "Le prochain objectif est toujours affiché dans le panneau Overlord. Activez pour l'afficher aussi dans une petite fenêtre au milieu de l'écran quand vous ne capturez pas. Désactivé par défaut.",
+        "Le prochain objectif est toujours affiché dans le panneau Overlord. Activez pour l'afficher aussi dans une petite fenêtre au milieu de l'écran, avec le minuteur et la barre de capture pendant une capture. Désactivé par défaut.",
     },
     esES = {
         "Próximo objetivo flotante",
-        "El próximo objetivo se muestra siempre en el panel de Overlord. Actívalo para mostrarlo también en una pequeña ventana en el centro de la pantalla cuando no estés capturando. Desactivado por defecto.",
+        "El próximo objetivo se muestra siempre en el panel de Overlord. Actívalo para mostrarlo también en una pequeña ventana en el centro de la pantalla, con el temporizador y la barra de captura durante una captura. Desactivado por defecto.",
     },
     deDE = {
         "Schwebendes nächstes Ziel",
-        "Das nächste Ziel steht immer im Overlord-Fenster. Aktivieren, um es zusätzlich in einem kleinen Fenster in der Bildschirmmitte zu zeigen, wenn du nicht eroberst. Standardmäßig aus.",
+        "Das nächste Ziel steht immer im Overlord-Fenster. Aktivieren, um es zusätzlich in einem kleinen Fenster in der Bildschirmmitte zu zeigen, während einer Eroberung mit Timer und Fortschrittsbalken. Standardmäßig aus.",
     },
     ruRU = {
         "Плавающая следующая цель",
-        "Следующая цель всегда показана в окне Overlord. Включите, чтобы также показывать её в маленьком окне в центре экрана, когда вы не захватываете. По умолчанию выключено.",
+        "Следующая цель всегда показана в окне Overlord. Включите, чтобы также показывать её в маленьком окне в центре экрана, а во время захвата — с таймером и полосой захвата. По умолчанию выключено.",
     },
     ptBR = {
         "Próximo objetivo flutuante",
-        "O próximo objetivo é sempre mostrado no painel do Overlord. Ative para mostrá-lo também numa pequena janela no meio da tela quando você não estiver capturando. Desativado por padrão.",
+        "O próximo objetivo é sempre mostrado no painel do Overlord. Ative para mostrá-lo também numa pequena janela no meio da tela, com o cronômetro e a barra de captura durante uma captura. Desativado por padrão.",
     },
     zhCN = {
         "浮动下一目标",
-        "下一目标始终显示在 Overlord 面板中。开启后，在你未占领时也会在屏幕中央的小窗口中显示。默认关闭。",
+        "下一目标始终显示在 Overlord 面板中。开启后，也会在屏幕中央的小窗口中显示，占领进行中时附带占领计时和进度条。默认关闭。",
     },
 }
 settingsTexts.esMX = settingsTexts.esES

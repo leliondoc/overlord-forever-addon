@@ -70,6 +70,7 @@ local driverState = {
     mapLayoutCl = 0,
     mapLayoutCt = 0,
     mapLayoutRevision = 0,
+    overlaySetGen = 0,
     worldTransformValid = false,
     worldTransformCanvas = nil,
     worldTransformX = 0,
@@ -109,8 +110,25 @@ local function MapLayoutChanged(canvas, parent)
     if not canvas then return false end
     local cw, ch = canvas:GetWidth(), canvas:GetHeight()
     if not cw or cw == 0 then return false end
-    local cs = canvas:GetEffectiveScale() or 1
-    local ps = (parent and parent:GetEffectiveScale()) or 1
+    local rawCs = canvas:GetEffectiveScale()
+    local rawPs = parent and parent:GetEffectiveScale()
+    local cl, ct = canvas:GetLeft(), canvas:GetTop()
+    local pl, pt = parent and parent:GetLeft(), parent and parent:GetTop()
+    -- Exact readings, before any rounding: every input of a front circle's placement
+    -- (PlaceWorldMapCircleOverlay). A pass that sees the same ones in this frame (geomAt)
+    -- keeps each circle where it is (UpdateOverlayLayout).
+    local st = driverState
+    if st.geomCw ~= cw or st.geomCh ~= ch or st.geomCs ~= rawCs or st.geomPs ~= rawPs
+        or st.geomCl ~= cl or st.geomCt ~= ct or st.geomPl ~= pl or st.geomPt ~= pt
+        or st.geomCanvas ~= canvas or st.geomParent ~= parent then
+        st.geomCw, st.geomCh, st.geomCs, st.geomPs = cw, ch, rawCs, rawPs
+        st.geomCl, st.geomCt, st.geomPl, st.geomPt = cl, ct, pl, pt
+        st.geomCanvas, st.geomParent = canvas, parent
+        st.geomSerial = (st.geomSerial or 0) + 1
+    end
+    st.geomAt = GetTime()
+    local cs = rawCs or 1
+    local ps = rawPs or 1
     -- Ratio quantifie a 3 decimales (equivalent de l'ancien %.3f) : sinon le jitter float
     -- de cs/ps declencherait un layout change a chaque frame.
     local ratio = (ps > 0) and (cs / ps) or 1
@@ -120,8 +138,6 @@ local function MapLayoutChanged(canvas, parent)
     -- Comparer le decalage RELATIF, pas les positions absolues : le calque racine
     -- suit maintenant le canvas. Pendant un pan leurs deux GetLeft/GetTop bougent,
     -- mais leur geometrie interne reste identique et aucun enfant ne doit etre relaye.
-    local cl, ct = canvas:GetLeft(), canvas:GetTop()
-    local pl, pt = parent and parent:GetLeft(), parent and parent:GetTop()
     local offsetX, offsetY = 0, 0
     if cl and ct and pl and pt then
         offsetX = SnapMapPinCoord(((cl * cs) - (pl * ps)) / ps)
@@ -354,56 +370,85 @@ function ZoneArc.Letters(overlay, text, first, font, size, widths, spaces)
     return index
 end
 
+-- State of the trace in progress, read by the helpers below instead of closures: a zoom
+-- step that re-places a name allocates no function and no table. Place is never
+-- re-entered (Letters does not call it), so one scratch table is enough.
+ZoneArc.S = { widths = {}, spaces = {} }
+
+-- Letters of the name (and status) at base x scale, their widths in S.widths.
+function ZoneArc.Measure(scale)
+    local s = ZoneArc.S
+    local size = math.max(6, math.floor(s.base * scale * 2 + 0.5) / 2)
+    s.size = size
+    s.gap = size * 0.06
+    -- Plain arrays, emptied in place (fresh tables before).
+    local widths, spaces = s.widths, s.spaces
+    for i = #widths, 1, -1 do widths[i] = nil end
+    for i = #spaces, 1, -1 do spaces[i] = nil end
+    s.count = ZoneArc.Letters(s.overlay, s.name, 1, s.font, size, s.widths, s.spaces)
+    s.last = s.status and ZoneArc.Letters(s.overlay, s.status, s.count + 1, s.font, size, s.widths) or s.count
+end
+
+function ZoneArc.Span(first, to)
+    local s = ZoneArc.S
+    local widths = s.widths
+    local total = s.gap * (to - first)
+    for i = first, to do total = total + widths[i] end
+    return total
+end
+
+function ZoneArc.Put(glyph, x, y, rotation)
+    local s = ZoneArc.S
+    ZoneArc.SetFont(glyph, s.font, s.size, s.overlay._olArcDark)
+    if glyph._olAnchor ~= "CENTER" then
+        glyph:ClearAllPoints()
+        glyph._olAnchor = "CENTER"
+    end
+    glyph:SetPoint("CENTER", s.holder, "CENTER", x, y)
+    glyph:SetRotation(rotation)
+    if not glyph._olShown then
+        glyph:Show()
+        glyph._olShown = true
+    end
+    glyph._olPass = s.pass
+end
+
+-- Arc du haut : lu de gauche a droite, le haut des lettres vers le bord.
+function ZoneArc.Top(first, to, radius)
+    local s = ZoneArc.S
+    local widths, glyphs, gap = s.widths, s.glyphs, s.gap
+    local angle = -ZoneArc.Span(first, to) / (2 * radius)
+    for i = first, to do
+        local middle = angle + widths[i] / (2 * radius)
+        ZoneArc.Put(glyphs[i], radius * math.sin(middle), radius * math.cos(middle), -middle)
+        angle = angle + (widths[i] + gap) / radius
+    end
+end
+
+-- Arc du bas : lu de gauche a droite aussi, le haut des lettres vers le centre.
+function ZoneArc.Bottom(first, to, radius)
+    local s = ZoneArc.S
+    local widths, glyphs, gap = s.widths, s.glyphs, s.gap
+    local angle = -ZoneArc.Span(first, to) / (2 * radius)
+    for i = first, to do
+        local middle = angle + widths[i] / (2 * radius)
+        ZoneArc.Put(glyphs[i], radius * math.sin(middle), -radius * math.cos(middle), middle)
+        angle = angle + (widths[i] + gap) / radius
+    end
+end
+
 -- Pose les lettres du nom (et du statut). Rend true quand le nom tient dans le cercle
 -- a sa taille normale : un zoom peut alors le retracer sans toucher aux polices.
 function ZoneArc.Place(overlay, holder, glyphs, snapD, name, status, base, pass)
-    local font = Overlord.UI.ResolveLocalizedFontPath(GameFontNormalSmall, "Fonts\\FRIZQT__.TTF")
-    local widths, spaces, size, gap, count, last
-    local function measure(scale)
-        size = math.max(6, math.floor(base * scale * 2 + 0.5) / 2)
-        gap = size * 0.06
-        widths, spaces = {}, {}
-        count = ZoneArc.Letters(overlay, name, 1, font, size, widths, spaces)
-        last = status and ZoneArc.Letters(overlay, status, count + 1, font, size, widths) or count
-    end
-    local function span(first, to)
-        local total = gap * (to - first)
-        for i = first, to do total = total + widths[i] end
-        return total
-    end
-    local function put(glyph, x, y, rotation)
-        ZoneArc.SetFont(glyph, font, size, overlay._olArcDark)
-        if glyph._olAnchor ~= "CENTER" then
-            glyph:ClearAllPoints()
-            glyph._olAnchor = "CENTER"
-        end
-        glyph:SetPoint("CENTER", holder, "CENTER", x, y)
-        glyph:SetRotation(rotation)
-        if not glyph._olShown then
-            glyph:Show()
-            glyph._olShown = true
-        end
-        glyph._olPass = pass
-    end
-    -- Arc du haut : lu de gauche a droite, le haut des lettres vers le bord.
-    local function top(first, to, radius)
-        local angle = -span(first, to) / (2 * radius)
-        for i = first, to do
-            local middle = angle + widths[i] / (2 * radius)
-            put(glyphs[i], radius * math.sin(middle), radius * math.cos(middle), -middle)
-            angle = angle + (widths[i] + gap) / radius
-        end
-    end
-    -- Arc du bas : lu de gauche a droite aussi, le haut des lettres vers le centre.
-    local function bottom(first, to, radius)
-        local angle = -span(first, to) / (2 * radius)
-        for i = first, to do
-            local middle = angle + widths[i] / (2 * radius)
-            put(glyphs[i], radius * math.sin(middle), -radius * math.cos(middle), middle)
-            angle = angle + (widths[i] + gap) / radius
-        end
-    end
-    measure(1)
+    local s = ZoneArc.S
+    s.overlay, s.holder, s.glyphs, s.name, s.status, s.base, s.pass =
+        overlay, holder, glyphs, name, status, base, pass
+    s.font = Overlord.UI.ResolveLocalizedFontPath(GameFontNormalSmall, "Fonts\\FRIZQT__.TTF")
+    local font = s.font
+    local span, top, bottom = ZoneArc.Span, ZoneArc.Top, ZoneArc.Bottom
+    local spaces = s.spaces
+    ZoneArc.Measure(1)
+    local count, size, last = s.count, s.size, s.last
     if count == 0 then return false end
     if not glyphs[1].SetRotation then
         -- Client sans rotation de texte : le nom reste droit, en haut du cercle.
@@ -422,7 +467,10 @@ function ZoneArc.Place(overlay, holder, glyphs, snapD, name, status, base, pass)
         return false
     end
     for index, scale in ipairs(ZoneArc.SHRINK) do
-        if scale ~= 1 then measure(scale) end
+        if scale ~= 1 then
+            ZoneArc.Measure(scale)
+            count, size, last = s.count, s.size, s.last
+        end
         local inside = snapD * 0.5 - 1 - size * 0.5
         if inside > size then
             local whole = span(1, count) / inside
@@ -454,7 +502,8 @@ function ZoneArc.Place(overlay, holder, glyphs, snapD, name, status, base, pass)
     end
     -- Rien ne tient dans le cercle : contre le bord, a l'exterieur (trace a 1,08 fois
     -- le diametre), sur un arc ou deux arcs l'un au-dessus de l'autre.
-    measure(1)
+    ZoneArc.Measure(1)
+    count, size, last = s.count, s.size, s.last
     local inner = snapD * 0.54 + 1 + size * 0.5
     local outer = inner + size * 1.05
     local cut = nil
@@ -495,18 +544,25 @@ function ZoneArc.Layout(overlay, snapD, labelDiameter, shown)
     local status = overlay._olArcStatus
     if type(status) ~= "string" or status == "" then status = nil end
     local base = ZoneArc.FontSize(labelDiameter)
-    local key = name .. "|" .. snapD .. "|" .. base .. "|" .. (status or "") .. (overlay._olArcDark and "|d" or "")
+    local dark = overlay._olArcDark and true or false
     local holder = ZoneArc.Holder(overlay)
     if overlay._olArcScaled then
         holder:SetScale(1)
         overlay._olArcScaled = nil
     end
-    if overlay._olArcKey == key then return end
+    -- Same trace: compared field by field, so a zoom step builds no key string.
+    if overlay._olArcKey ~= nil and overlay._olArcKeyName == name and overlay._olArcD == snapD
+        and overlay._olArcBase == base and overlay._olArcKeyStatus == status
+        and overlay._olArcKeyDark == dark then
+        return
+    end
+    local key = true
     local glyphs = overlay.arcGlyphs
     if not glyphs then glyphs = {}; overlay.arcGlyphs = glyphs end
     local pass = (overlay._olArcPass or 0) + 1
     overlay._olArcPass = pass
     overlay._olArcKey, overlay._olArcD, overlay._olArcBase = key, snapD, base
+    overlay._olArcKeyName, overlay._olArcKeyStatus, overlay._olArcKeyDark = name, status, dark
     overlay._olArcPlain = ZoneArc.Place(overlay, holder, glyphs, snapD, name, status, base, pass) == true
     -- Les lettres d'un trace precedent qui n'ont pas ete reposees disparaissent.
     for i = 1, #glyphs do
@@ -587,6 +643,20 @@ end
 -- Coupe le nom en 1 ou 2 lignes equilibrees (jamais 3).
 local function FormatZoneTitleTwoLines(text, rawName)
     if not text or not rawName or rawName == "" then return rawName, 0, 0 end
+    local fontPath, titleSz, fontFlags = text:GetFont()
+    -- Glyphs are drawn at size x effective scale: a maximise or UI scale change can move
+    -- the measured width, so the scale is part of the key.
+    local fmtScale = math.floor((text:GetEffectiveScale() or 1) * 1000 + 0.5)
+    -- Same name in the same font: reuse the split already measured on this string
+    -- (otherwise every zoom step measured it all again).
+    if text._olFmtRaw == rawName and text._olFmtSz == titleSz and text._olFmtSz ~= nil
+        and text._olFmtFont == fontPath and text._olFmtFlags == fontFlags
+        and text._olFmtScale == fmtScale then
+        if text:GetText() ~= text._olFmtText then text:SetText(text._olFmtText) end
+        text:SetWidth(math.max(1, math.ceil(text._olFmtTw)))
+        return text._olFmtText, text._olFmtTw, text._olFmtTh
+    end
+    local fmtSz = titleSz
     local name = rawName:gsub("[\r\n]+", " "):gsub("%s+", " ")
     name = name:match("^%s*(.-)%s*$") or name
     text:SetJustifyH("CENTER")
@@ -597,7 +667,6 @@ local function FormatZoneTitleTwoLines(text, rawName)
     text:SetWidth(400)
     text:SetText(name)
     local fullW = text:GetStringWidth() or 0
-    local _, titleSz = text:GetFont()
     titleSz = titleSz or 12
     -- Au-dela de ca, on passe a 2 lignes.
     local oneLineMax = math.max(110, math.floor(titleSz * 12.5 + 0.5))
@@ -640,6 +709,12 @@ local function FormatZoneTitleTwoLines(text, rawName)
     text:SetWidth(math.max(1, math.ceil(tw)))
     text:SetText(formatted)
     local th = text:GetStringHeight() or 0
+    -- An empty measure (font not ready yet) is not kept: measured again next call.
+    if tw > 0 and th > 0 and fmtSz then
+        text._olFmtRaw, text._olFmtSz = rawName, fmtSz
+        text._olFmtFont, text._olFmtFlags, text._olFmtScale = fontPath, fontFlags, fmtScale
+        text._olFmtText, text._olFmtTw, text._olFmtTh = formatted, tw, th
+    end
     return formatted, tw, th
 end
 
@@ -882,7 +957,9 @@ local function GetOverlayPoint(canvas, parent, x, yDown)
 end
 
 -- Repositionne un pin carte seulement si les coords ont change (anti-sautillement au zoom)
-local function PlaceMapPinCenter(pin, parent, ox, oy, iconSize)
+-- singleAnchor: the pin never has another anchor than this CENTER (path dots), so
+-- SetPoint replaces the one already set without ClearAllPoints.
+local function PlaceMapPinCenter(pin, parent, ox, oy, iconSize, singleAnchor)
     if not pin or not parent or ox == nil or oy == nil then return false end
     ox = SnapMapPinCoord(ox)
     oy = SnapMapPinCoord(oy)
@@ -900,13 +977,14 @@ local function PlaceMapPinCenter(pin, parent, ox, oy, iconSize)
         if not pin:IsShown() then pin:Show() end
         return true
     end
+    local anchored = singleAnchor and pin._olLastOx ~= nil
     pin._olLastOx = ox
     pin._olLastOy = oy
     if iconSize then
         pin._olLastSz = iconSize
         pin:SetSize(iconSize, iconSize)
     end
-    pin:ClearAllPoints()
+    if not anchored then pin:ClearAllPoints() end
     pin:SetPoint("CENTER", parent, "TOPLEFT", ox, oy)
     pin:Show()
     return true
@@ -927,30 +1005,39 @@ end
 local function CacheCanvas()
     if cachedCanvas then
         local viewport = driverState.worldOverlayViewport
-        if viewport and viewport.SetClipsChildren then
-            pcall(viewport.SetClipsChildren, viewport, true)
+        -- Our own frame: once clipping is on, nothing turns it off.
+        if viewport and viewport.SetClipsChildren and not viewport._olClips then
+            viewport._olClips = pcall(viewport.SetClipsChildren, viewport, true) or nil
         end
         Overlord.MapMarkers:SyncWorldOverlayTransform(cachedCanvas)
         return
     end
     securecall(function()
         if WorldMapFrame and WorldMapFrame.ScrollContainer then
-            cachedCanvas = WorldMapFrame.ScrollContainer.Child
+            local container = WorldMapFrame.ScrollContainer
+            cachedCanvas = container.Child
             local viewport = driverState.worldOverlayViewport
-            if viewport and viewport:GetParent() ~= WorldMapFrame.ScrollContainer then
+            if viewport and viewport:GetParent() ~= container then
                 viewport:Hide()
-                viewport:SetParent(WorldMapFrame.ScrollContainer)
+                viewport:SetParent(container)
+                viewport._olAnchoredTo = nil
             end
             if not viewport then
-                viewport = Overlord.MapMarkers.NewFrame("Frame", WorldMapFrame.ScrollContainer)
+                viewport = Overlord.MapMarkers.NewFrame("Frame", container)
                 driverState.worldOverlayViewport = viewport
             end
-            viewport:ClearAllPoints()
-            viewport:SetAllPoints(WorldMapFrame.ScrollContainer)
-            viewport:SetFrameStrata(WorldMapFrame.ScrollContainer:GetFrameStrata())
-            viewport:SetFrameLevel(WorldMapFrame.ScrollContainer:GetFrameLevel() + 100)
-            if viewport.SetClipsChildren then
-                pcall(viewport.SetClipsChildren, viewport, true)
+            -- Same container as at the last open: the anchors already fill it. Strata and
+            -- level are still written at each open: the game hands them down to the whole
+            -- layer tree (pins that set their own strata included), as before.
+            if viewport._olAnchoredTo ~= container then
+                viewport:ClearAllPoints()
+                viewport:SetAllPoints(container)
+                viewport._olAnchoredTo = container
+            end
+            viewport:SetFrameStrata(container:GetFrameStrata())
+            viewport:SetFrameLevel(container:GetFrameLevel() + 100)
+            if viewport.SetClipsChildren and not viewport._olClips then
+                viewport._olClips = pcall(viewport.SetClipsChildren, viewport, true) or nil
             end
             -- Filtre joueur : le calque entier reste cache tant que l'affichage est coupe.
             viewport:SetShown(Overlord.MapMarkers:AreWorldMapOverlaysShown())
@@ -990,6 +1077,8 @@ local function PurgeStaleOverlays(oldCanvas, newCanvas, oldParent, newParent)
         end
     end
     wipe(overlays)
+    -- Every circle went back to the pool: the compact hover tests again.
+    driverState.overlaySetGen = driverState.overlaySetGen + 1
     for _, path in pairs(pathLines) do
         if path.dots then
             for _, dot in ipairs(path.dots) do
@@ -1186,20 +1275,45 @@ function Overlord.MapMarkers:UpdateCompactHover()
     if self._renderFront and not ShouldShowMapZoneTitles() and viewport
         and viewport:IsVisible() and viewport:IsMouseOver() then
         local cx, cy = GetCursorPosition()
-        local best = nil
-        for _, ov in pairs(overlays) do
-            if ov and ov.zone and ov:IsShown() then
-                local x, y = ov:GetCenter()
-                local s = ov:GetEffectiveScale()
-                if x and y and s and s > 0 then
-                    local dx, dy = cx / s - x, cy / s - y
-                    local r = math.max(14, (ov:GetWidth() or 0) * 0.5)
-                    local d = dx * dx + dy * dy
-                    if d <= r * r and (not best or d < best) then
-                        best, hovered = d, ov
+        -- The hit test only depends on these inputs (cursor, pan/zoom, layout, where the
+        -- map sits on screen, the shown circles: driverState.overlaySetGen). While none moves, the
+        -- last answer stands and the scan is skipped (20 Hz with the map open).
+        local st = driverState
+        local vl, vt = viewport:GetLeft(), viewport:GetTop()
+        local vs = viewport:GetEffectiveScale()
+        if cx == self._hvCx and cy == self._hvCy and st.mapLayoutRevision == self._hvRev
+            and st.worldTransformX == self._hvTx and st.worldTransformY == self._hvTy
+            and st.worldTransformScale == self._hvS and st.worldTransformZoom == self._hvZ
+            and self._renderFront == self._hvFront and driverState.overlaySetGen == self._hvGen
+            and vl == self._hvVl and vt == self._hvVt and vs == self._hvVs then
+            hovered = self._hvHit
+        else
+            self._hvCx, self._hvCy, self._hvRev = cx, cy, st.mapLayoutRevision
+            self._hvTx, self._hvTy = st.worldTransformX, st.worldTransformY
+            self._hvS, self._hvZ = st.worldTransformScale, st.worldTransformZoom
+            self._hvFront, self._hvGen = self._renderFront, driverState.overlaySetGen
+            self._hvVl, self._hvVt, self._hvVs = vl, vt, vs
+            -- Only the rendered front's circles can be shown: RefreshOverlays hides the rest.
+            local best = nil
+            local zones = self._renderFront.zones
+            if zones then
+                for _, zone in ipairs(zones) do
+                    local ov = overlays[zone.id]
+                    if ov and ov.zone and ov:IsShown() then
+                        local x, y = ov:GetCenter()
+                        local s = ov:GetEffectiveScale()
+                        if x and y and s and s > 0 then
+                            local dx, dy = cx / s - x, cy / s - y
+                            local r = math.max(14, (ov:GetWidth() or 0) * 0.5)
+                            local d = dx * dx + dy * dy
+                            if d <= r * r and (not best or d < best) then
+                                best, hovered = d, ov
+                            end
+                        end
                     end
                 end
             end
+            self._hvHit = hovered
         end
     end
     local previous = self._compactHover
@@ -1213,6 +1327,8 @@ function Overlord.MapMarkers:UpdateCompactHover()
         hovered._olHover = true
         self:UpdateOverlay(hovered)
     end
+    -- UpdateOverlay re-places both circles (it can even hide one): test again next tick.
+    driverState.overlaySetGen = driverState.overlaySetGen + 1
 end
 
 -- Fin d'un zoom : les noms courbes sont retraces une fois (voir ZoneArc.SETTLE).
@@ -1405,6 +1521,8 @@ function Overlord.MapMarkers:Initialize()
     end
 
     self:CreateMapModeButton()
+    -- Circles and path dots of the first front display, built ahead (PrewarmMapPools).
+    self:SchedulePrewarmMapPools(20)
 
     -- Capture le mapID en parametre du hook (jamais de lecture de .mapID)
     -- Le traitement d'un changement de carte, appele par le pilote (plus bas) et par le
@@ -1418,15 +1536,11 @@ function Overlord.MapMarkers:Initialize()
                 -- masquer sans latence visible (dezoom continent / Azeroth).
                 local oldFront = Overlord.Fronts and trackedMapID and Overlord.Fronts:ResolveFrontByOverlayMapID(trackedMapID)
                 local newFront = Overlord.Fronts and newMapID and Overlord.Fronts:ResolveFrontByOverlayMapID(newMapID)
-                if oldFront and (not newFront or oldFront.id ~= newFront.id) then
+                -- One teardown per change (HideAllOverlays already hides the paths): the two
+                -- former blocks both ran when leaving a front, sweeping every dot four times.
+                if not newFront or (oldFront and oldFront.id ~= newFront.id) then
                     Overlord.MapMarkers._renderFront = nil
                     Overlord.MapMarkers:HideAllOverlays()
-                    Overlord.MapMarkers:HideAllPaths()
-                end
-                if not newFront then
-                    Overlord.MapMarkers._renderFront = nil
-                    Overlord.MapMarkers:HideAllOverlays()
-                    Overlord.MapMarkers:HideAllPaths()
                 end
                 if not Overlord.MapMarkers:IsEKMap(newMapID) then
                     if Overlord.MapMarkers:IsKalimdorMap(newMapID) then
@@ -1609,6 +1723,9 @@ function Overlord.MapMarkers:Initialize()
         -- Zoom en cours : racine remise a l'echelle 1 avant de replacer les marqueurs.
         Overlord.MapMarkers:CommitWorldOverlayZoom(canvas)
         local layoutChanged = MapLayoutChanged(canvas, parent)
+        -- From here to the end of this pass, the layers read the canvas without syncing it
+        -- again (InDriverPass): it was synced and committed just above, in this frame.
+        driverState.inPass, driverState.passAt = true, GetTime()
         -- Racine encore a l'echelle d'un zoom (commit impossible a cette image) : rester en attente.
         driverState.worldLayoutPending = driverState.worldTransformZoom ~= 1
         local contentRefresh = ShouldRefreshWorldMapOverlays(driverElapsed, mapID)
@@ -1844,6 +1961,7 @@ function Overlord.MapMarkers:Initialize()
                 Overlord.MapMarkers:RefreshGuildHonorOverlays(mapID, layoutChanged, contentRefresh)
             end
         end
+        driverState.inPass = false
     end)
 
     WorldMapFrame:HookScript("OnShow", function()
@@ -1865,13 +1983,28 @@ function Overlord.MapMarkers:Initialize()
         cachedOverlayParent = nil
         CacheCanvas()
         PurgeStaleOverlays(oldCanvas, cachedCanvas, oldParent, cachedOverlayParent)
+        driverState.overlaySetGen = driverState.overlaySetGen + 1
         overlayRefreshForced = true
         overlayRefreshAccum = 0
         driverState.worldAccum = driverState.worldInterval
         driverState.worldGateSlow = false
         driverState.canvasInvalidHidden = false
         driverState.catchUpHidden = false
-        ResetMapLayoutKey()
+        -- The first tick measures the canvas anyway (MapLayoutChanged compares real sizes and
+        -- offsets): force a relayout only when the canvas itself was swapped.
+        if cachedCanvas ~= oldCanvas or cachedOverlayParent ~= oldParent
+            or not driverState.worldTransformValid or driverState.worldTransformCanvas ~= cachedCanvas then
+            ResetMapLayoutKey()
+        end
+        -- UI scale changed while closed: layout ratios do not move, but glyph widths do.
+        -- Same teardown as before the circles were kept, so every name is measured again.
+        local closedScale = driverState.closedParentScale
+        driverState.closedParentScale = nil
+        local openScale = cachedOverlayParent and cachedOverlayParent:GetEffectiveScale()
+        if closedScale and openScale and math.abs(openScale - closedScale) > 0.0005 then
+            Overlord.MapMarkers:HideWarfrontOverlays()
+            ResetMapLayoutKey()
+        end
         updateFrame:Show()
     end)
     WorldMapFrame:HookScript("OnHide", function()
@@ -1885,13 +2018,16 @@ function Overlord.MapMarkers:Initialize()
             hovered._olHover = nil
             Overlord.MapMarkers._compactHover = nil
         end
+        -- The kept circles are tested afresh at reopen, not answered from the hover memo.
+        driverState.overlaySetGen = driverState.overlaySetGen + 1
         driverState.worldAccum = driverState.worldInterval
         driverState.worldGateSlow = false
         driverState.canvasInvalidHidden = false
         driverState.catchUpHidden = false
         updateFrame:Hide()
-        ResetMapLayoutKey()
-        Overlord.MapMarkers:HideAllOverlays()
+        -- Remembered so a UI scale change made while closed re-measures the names at reopen.
+        driverState.closedParentScale = cachedOverlayParent and cachedOverlayParent:GetEffectiveScale() or nil
+        Overlord.MapMarkers:HideAllOverlays(true)
         Overlord.MapMarkers:HideEKDominance()
         Overlord.MapMarkers:HideMineOverlays()
         Overlord.MapMarkers:HideGuildKeepOverlays()
@@ -1969,6 +2105,7 @@ function Overlord.MapMarkers:CreateZoneOverlay(zone)
         pooled:SetFrameLevel(parent:GetFrameLevel() + 1)
         pooled.zone = zone
         pooled._olSnapD = nil
+        pooled._olGeomSerial = nil
         pooled._olRibbonKey = nil
         pooled._olRibbonInit = nil
         pooled._olRibbonOk = nil
@@ -1989,10 +2126,17 @@ function Overlord.MapMarkers:CreateZoneOverlay(zone)
         return pooled
     end
 
+    local frame = Overlord.MapMarkers.BuildZoneOverlay(parent)
+    frame.zone = zone
+    return frame
+end
+
+-- A circle's frame and regions, hidden, under parent (the map layer, or the hidden holder
+-- of PrewarmMapPools). Everything shown is set by CreateZoneOverlay and UpdateOverlay.
+function Overlord.MapMarkers.BuildZoneOverlay(parent)
     local frame = Overlord.MapMarkers.NewFrame("Frame", parent)
     frame:SetFrameStrata(parent:GetFrameStrata())
     frame:SetFrameLevel(parent:GetFrameLevel() + 1)
-    frame.zone = zone
 
     local fill = frame:CreateTexture(nil, "ARTWORK")
     fill:SetAllPoints()
@@ -2143,10 +2287,41 @@ function Overlord.MapMarkers:UpdateOverlayLayout(overlay)
     local parent = GetOverlayParent()
     if not canvas or not parent then return end
 
-    local diameter = PlaceWorldMapCircleOverlay(overlay, zone, canvas, parent, GetFrontOverlayDiameter)
-    if not diameter then return end
+    -- Placement inputs unchanged since this circle was placed (canvas and layer read this
+    -- frame by MapLayoutChanged, same zone data, pin cache untouched): the placement would
+    -- give the same point and size, so it is kept (2 Hz content passes, hover repaints).
+    local st = driverState
+    local center = zone and zone.center
+    local captureScale = Overlord.Fronts and Overlord.Fronts.CaptureRadiusScale
+    local diameter, labelDiameter
+    if overlay._olGeomSerial ~= nil and overlay._olGeomSerial == st.geomSerial
+        and st.geomAt == GetTime() and st.geomCanvas == canvas and st.geomParent == parent
+        and overlay._olGeomZone == zone and center
+        and overlay._olGeomCx == center[1] and overlay._olGeomCy == center[2]
+        and overlay._olGeomR == zone.radius and overlay._olGeomLR == zone.labelRadius
+        and overlay._olGeomCRS == captureScale and overlay._olPinParent == parent
+        and overlay._olLastOx == overlay._olGeomOx and overlay._olLastOy == overlay._olGeomOy
+        and overlay._olLastSz == overlay._olGeomSz then
+        diameter, labelDiameter = overlay._olGeomD, overlay._olGeomLabelD
+        if not overlay:IsShown() then overlay:Show() end
+    else
+        overlay._olGeomSerial = nil
+        diameter = PlaceWorldMapCircleOverlay(overlay, zone, canvas, parent, GetFrontOverlayDiameter)
+        if not diameter then return end
+        labelDiameter = GetFrontOverlayLabelDiameter(zone, canvas, parent) or diameter
+        -- Stamped only when the readings are this frame's (driver pass), never from an
+        -- older pass.
+        if st.geomAt == GetTime() and st.geomCanvas == canvas and st.geomParent == parent then
+            overlay._olGeomSerial = st.geomSerial
+            overlay._olGeomZone = zone
+            overlay._olGeomCx, overlay._olGeomCy = center[1], center[2]
+            overlay._olGeomR, overlay._olGeomLR, overlay._olGeomCRS = zone.radius, zone.labelRadius, captureScale
+            overlay._olGeomOx, overlay._olGeomOy, overlay._olGeomSz =
+                overlay._olLastOx, overlay._olLastOy, overlay._olLastSz
+            overlay._olGeomD, overlay._olGeomLabelD = diameter, labelDiameter
+        end
+    end
     local snapD = math.floor(diameter + 0.5)
-    local labelDiameter = GetFrontOverlayLabelDiameter(zone, canvas, parent) or diameter
     local showTitles = IsZoneLabelShown(overlay)
     if overlay._olSnapD and overlay._olSnapD ~= snapD then
         ZoneArc.settleAt = GetTime() + ZoneArc.SETTLE
@@ -2172,18 +2347,32 @@ function Overlord.MapMarkers:UpdateOverlayLayout(overlay)
 
     overlay.border:SetSize(snapD * ZONE_RIM.scale, snapD * ZONE_RIM.scale)
 
-    local titleSz = math.max(9, math.min(24, labelDiameter * 0.14))
-    local subSz = math.max(7, math.min(18, labelDiameter * 0.10))
-    local titleYOffset = math.max(12, labelDiameter * 0.16)
-    overlay.text:SetFont(ZONE_TITLE_FONT, titleSz)
-    overlay.text:ClearAllPoints()
-    overlay.text:SetPoint("CENTER", overlay, "CENTER", 0, titleYOffset)
-    overlay.subtext:SetFont(Overlord.UI.ResolveLocalizedFontPath(GameFontNormalSmall, "Fonts\\FRIZQT__.TTF"), subSz, "")
-    overlay.subtext:ClearAllPoints()
-    overlay.subtext:SetPoint("TOP", overlay.text, "BOTTOM", 0, -math.max(1, subSz * 0.08))
-    overlay.subtext2:SetFont(Overlord.UI.ResolveLocalizedFontPath(GameFontNormalSmall, "Fonts\\FRIZQT__.TTF"), subSz, "")
-    overlay.subtext2:ClearAllPoints()
-    overlay.subtext2:SetPoint("TOP", overlay.subtext, "BOTTOM", 0, -math.max(1, subSz * 0.06))
+    -- Half-point sizes (as ZoneArc.FontSize): a zoom step no longer asks for a new font
+    -- size every frame. Hidden texts (compact map) need nothing: showing them changes
+    -- showTitles, which skips the early return above and lays them out then.
+    if showTitles then
+        local titleSz = math.floor(math.max(9, math.min(24, labelDiameter * 0.14)) * 2 + 0.5) / 2
+        local subSz = math.floor(math.max(7, math.min(18, labelDiameter * 0.10)) * 2 + 0.5) / 2
+        local titleYOffset = math.max(12, labelDiameter * 0.16)
+        if overlay._olTitleSz ~= titleSz then
+            overlay.text:SetFont(ZONE_TITLE_FONT, titleSz)
+            overlay._olTitleSz = titleSz
+        end
+        overlay.text:ClearAllPoints()
+        overlay.text:SetPoint("CENTER", overlay, "CENTER", 0, titleYOffset)
+        local subFontChanged = overlay._olSubSz ~= subSz
+        local subFont = subFontChanged
+            and Overlord.UI.ResolveLocalizedFontPath(GameFontNormalSmall, "Fonts\\FRIZQT__.TTF")
+        if subFontChanged then overlay.subtext:SetFont(subFont, subSz, "") end
+        overlay.subtext:ClearAllPoints()
+        overlay.subtext:SetPoint("TOP", overlay.text, "BOTTOM", 0, -math.max(1, subSz * 0.08))
+        if subFontChanged then
+            overlay.subtext2:SetFont(subFont, subSz, "")
+            overlay._olSubSz = subSz
+        end
+        overlay.subtext2:ClearAllPoints()
+        overlay.subtext2:SetPoint("TOP", overlay.subtext, "BOTTOM", 0, -math.max(1, subSz * 0.06))
+    end
 
     overlay._olIconLayoutKey = nil
     if overlay.iconTex and overlay.iconTex:IsShown() then
@@ -2304,7 +2493,16 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
     if loginPending then
         st = L.MAP_SYNC_PENDING or L.MAP_NEUTRAL or "SYNC"
     elseif onTruce then
-        st = string.format(L.SIEGE_COOLDOWN_LABEL, Overlord.Zones:FormatDuration(truceRemaining))
+        -- The truce is the front's: every circle shows the same text, which only changes
+        -- with the whole second (FormatDuration floors). Built once per second, not per circle.
+        local truceSec = math.max(0, math.floor(truceRemaining))
+        local label = L.SIEGE_COOLDOWN_LABEL
+        if driverState.truceTextSec ~= truceSec or driverState.truceTextLabel ~= label
+            or driverState.truceText == nil then
+            driverState.truceText = string.format(label, Overlord.Zones:FormatDuration(truceRemaining))
+            driverState.truceTextSec, driverState.truceTextLabel = truceSec, label
+        end
+        st = driverState.truceText
     elseif zone.status == "in_progress" then
         local elapsed = (Overlord.Zones and Overlord.Zones.GetObserverHoldTimeElapsed)
             and Overlord.Zones:GetObserverHoldTimeElapsed(zone) or (zone.holdTimeElapsed or 0)
@@ -2356,8 +2554,10 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
     local fillAlpha = fa * opacityScale
     local iconAtlas = Overlord.Zones:GetZoneMapIconAtlas(zone, true, attackable)
     local iconAlpha = Overlord.MapMarkers.GetMapIconOpacity()
+    local iconScale = Overlord.MapMarkers.GetMapIconScale()
     if overlay._olPaintValid
         and overlay._olPaintIconAlpha == iconAlpha
+        and overlay._olPaintIconScale == iconScale
         and overlay._olPaintName == zone.name
         and overlay._olPaintSt == st
         and overlay._olPaintSt2 == st2
@@ -2378,6 +2578,7 @@ function Overlord.MapMarkers:UpdateOverlay(overlay)
     overlay._olPaintBorderAlpha = borderAlpha
     overlay._olPaintIconAtlas = iconAtlas
     overlay._olPaintIconAlpha = iconAlpha
+    overlay._olPaintIconScale = iconScale
     overlay.fill:Show()
     overlay.fill:SetColorTexture(fr, fg, fb)
     overlay.fill:SetAlpha(math.min(1, fillAlpha * ZONE_RIM.fill))
@@ -2427,6 +2628,8 @@ function Overlord.MapMarkers:RefreshOverlayLayouts()
             self:UpdateOverlayLayout(ov)
         end
     end
+    -- Circles moved or resized (or hidden when unplaceable): the compact hover tests again.
+    driverState.overlaySetGen = driverState.overlaySetGen + 1
 end
 
 function Overlord.MapMarkers:RefreshPathLayouts()
@@ -2486,8 +2689,23 @@ function Overlord.MapMarkers:RefreshOverlays()
     local expected, rendered = 0, 0
     wipe(overlayVisibleZoneIds)
     for _, zone in ipairs(zones) do
-        expected = expected + 1
         overlayVisibleZoneIds[zone.id] = true
+    end
+    -- Circles of another front (left behind on a front change) go back to the pool
+    -- before this front's are taken, so its first display reuses them instead of
+    -- creating new frames. CreateZoneOverlay resets a pooled circle, and UpdateOverlay
+    -- repaints it (pulse and stripes before its paint cache).
+    for zoneId, ov in pairs(overlays) do
+        if ov and not overlayVisibleZoneIds[zoneId] then
+            HideZoneOverlayText(ov)
+            ov:Hide()
+            ov._olGeomSerial = nil
+            overlayFramePool[#overlayFramePool + 1] = ov
+            overlays[zoneId] = nil
+        end
+    end
+    for _, zone in ipairs(zones) do
+        expected = expected + 1
         local ov = overlays[zone.id]
         -- Si le canvas a change (re-creation du ScrollContainer.Child entre deux
         -- ouvertures de carte), rendre l'overlay au pool : CreateZoneOverlay le
@@ -2508,12 +2726,9 @@ function Overlord.MapMarkers:RefreshOverlays()
             rendered = rendered + 1
         end
     end
-    for zoneId, ov in pairs(overlays) do
-        if ov and not overlayVisibleZoneIds[zoneId] then
-            HideZoneOverlayText(ov)
-            ov:Hide()
-        end
-    end
+    -- (Circles of other fronts were pooled above: no hidden leftover to sweep at each pass.)
+    -- Circles shown, hidden, moved or pooled: the compact hover tests again.
+    driverState.overlaySetGen = driverState.overlaySetGen + 1
     return expected > 0 and rendered == expected
 end
 
@@ -2525,12 +2740,20 @@ function Overlord.MapMarkers:HideWarfrontOverlays()
             if ov:IsShown() then ov:Hide() end
         end
     end
+    driverState.overlaySetGen = driverState.overlaySetGen + 1
     self:HideAllPaths()
     self:HideCatchUpBanner()
 end
 
-function Overlord.MapMarkers:HideAllOverlays()
-    self:HideWarfrontOverlays()
+-- keepFront: the map is only closing. The front's circles and path dots stay painted
+-- under the hidden map, so reopening the same front costs no full repaint and relayout;
+-- a map or front change at the next OnShow still tears them down (OnDisplayedMapChanged).
+function Overlord.MapMarkers:HideAllOverlays(keepFront)
+    if keepFront then
+        self:HideCatchUpBanner()
+    else
+        self:HideWarfrontOverlays()
+    end
     self:HideGuildKeepOverlays()
     if self.HideOutpostOverlays then self:HideOutpostOverlays() end
     self:HideProjectedKeepPins()
@@ -2576,6 +2799,8 @@ end
 function Overlord.MapMarkers:ResumeWorldMapOverlays()
     if not self._updateFrame then return end
     self:RefreshMapModeButton()
+    -- The build ahead stopped in the instance: it resumes outside.
+    self:SchedulePrewarmMapPools(20)
     local function kick()
         if Overlord.InstanceSuspended then return end
         if not WorldMapFrame then return end
@@ -2703,16 +2928,38 @@ function Overlord.MapMarkers:RefreshPaths()
     for _, zone in ipairs(zones) do
         pathZoneById[zone.id] = zone
     end
+    for _, zone in ipairs(zones) do
+        if zone.prereqZones then
+            for _, prereqId in ipairs(zone.prereqZones) do
+                if pathZoneById[prereqId] then
+                    pathVisibleConnIds[GetPathConnId(prereqId, zone.id)] = true
+                end
+            end
+        end
+    end
+    -- Paths of another front give their dots back to the pool before this front's are
+    -- drawn: its first display reuses them (UpdatePathLine reparents and repaints a
+    -- pooled dot) instead of creating hundreds of textures in one frame.
+    for connId, path in pairs(pathLines) do
+        if not pathVisibleConnIds[connId] then
+            if path.dots then
+                for _, dot in ipairs(path.dots) do
+                    if dot:IsShown() then dot:Hide() end
+                    pathDotPool[#pathDotPool + 1] = dot
+                end
+            end
+            pathLines[connId] = nil
+        end
+    end
 
+    local pathScale = GetMapPathOpacityScale()
     for _, zone in ipairs(zones) do
         if zone.prereqZones then
             for _, prereqId in ipairs(zone.prereqZones) do
                 local prereq = pathZoneById[prereqId]
                 if prereq then
                     local connId = GetPathConnId(prereqId, zone.id)
-                    pathVisibleConnIds[connId] = true
                     local path = pathLines[connId]
-                    local pathScale = GetMapPathOpacityScale()
                     if path and path.layoutCw == cw and path.layoutCh == ch
                         and path.layoutRevision == driverState.mapLayoutRevision
                         and path.pathScale == pathScale then
@@ -2724,15 +2971,7 @@ function Overlord.MapMarkers:RefreshPaths()
             end
         end
     end
-    for connId, path in pairs(pathLines) do
-        if not pathVisibleConnIds[connId] and path.dots then
-            for _, dot in ipairs(path.dots) do
-                dot:Hide()
-            end
-            path.visible = false
-            path.visualDots = nil
-        end
-    end
+    -- (Paths of other fronts were pooled above: nothing hidden is left to sweep.)
 end
 
 function Overlord.MapMarkers:UpdatePathLine(connId, fromZone, toZone, canvas, cw, ch)
@@ -2806,6 +3045,10 @@ function Overlord.MapMarkers:UpdatePathLine(connId, fromZone, toZone, canvas, cw
         table.insert(path.dots, dot)
     end
 
+    -- Layer origin read once per path: the mapping is affine (same formula and operation
+    -- order as GetOverlayPoint, so the positions are bit-identical).
+    local ox0, oy0 = GetOverlayPoint(canvas, parent, 0, 0)
+
     -- Positionne et colore chaque dot
     for i = 1, numDots do
         local t = (i - 0.5) / numDots
@@ -2816,12 +3059,16 @@ function Overlord.MapMarkers:UpdatePathLine(connId, fromZone, toZone, canvas, cw
         local dotAlpha = math.min(1, baseA * pathScale * (0.55 + 0.45 * t))
 
         local dot = path.dots[i]
-        local ox, oy = GetOverlayPoint(canvas, parent, px, py)
+        local ox, oy
+        if ox0 then
+            ox = ox0 + (px * scaleRatio)
+            oy = oy0 - (py * scaleRatio)
+        end
         if not ox or not oy then
             dot:Hide()
         else
             local dotSize = DOT_SIZE * sizeFactor
-            PlaceMapPinCenter(dot, parent, ox, oy, dotSize)
+            PlaceMapPinCenter(dot, parent, ox, oy, dotSize, true)
             -- Meme methode que les cercles de zone : RGB + SetAlpha (le 4e arg de SetColorTexture
             -- n'est pas fiable sur la carte monde en 12.0.5, le curseur semblait ne rien faire).
             if dot._olR ~= r or dot._olG ~= g or dot._olB ~= b then
@@ -2850,6 +3097,74 @@ function Overlord.MapMarkers:HideAllPaths()
         end
         path.visualDots = nil
     end
+end
+
+-- The first display of a front created its ~11 circles and ~300 path dots in the map's
+-- first frame. They are built ahead instead, one circle or 25 dots per frame, out of
+-- combat, out of instances and with the map closed, into the pools that first display
+-- takes from (fronts then recycle each other's: RefreshOverlays, RefreshPaths). Until
+-- then they wait under a hidden frame of our own, without parent: nothing is drawn.
+driverState.PREWARM_DOTS = 300
+driverState.PrewarmTick = function() Overlord.MapMarkers:PrewarmMapPools() end
+
+function Overlord.MapMarkers:PrewarmMapPools()
+    local st = driverState
+    st.prewarmTimerPending = nil
+    -- A front was displayed: from now on the pools are fed by recycling.
+    if st.prewarmDone or next(overlays) or next(pathLines) then
+        st.prewarmDone = true
+        return
+    end
+    -- Stopped in an instance; ResumeWorldMapOverlays starts it again on the way out.
+    if Overlord.InstanceSuspended then return end
+    if (InCombatLockdown and InCombatLockdown())
+        or (WorldMapFrame and WorldMapFrame.IsShown and WorldMapFrame:IsShown()) then
+        st.prewarmTimerPending = true
+        C_Timer.After(10, st.PrewarmTick)
+        return
+    end
+    if not st.prewarmCircles then
+        -- As many circles as the largest front shows.
+        local most = 0
+        local registry = Overlord.Fronts and Overlord.Fronts.Registry
+        for _, front in pairs(registry or {}) do
+            if type(front) == "table" and type(front.zones) == "table" and #front.zones > most then
+                most = #front.zones
+            end
+        end
+        st.prewarmCircles = math.min(most > 0 and most or 12, 24)
+    end
+    local holder = st.prewarmHolder
+    if not holder then
+        holder = CreateFrame("Frame")
+        holder:Hide()
+        st.prewarmHolder = holder
+    end
+    if #overlayFramePool < st.prewarmCircles then
+        overlayFramePool[#overlayFramePool + 1] = Overlord.MapMarkers.BuildZoneOverlay(holder)
+    elseif #pathDotPool < st.PREWARM_DOTS then
+        for _ = 1, 25 do
+            if #pathDotPool >= st.PREWARM_DOTS then break end
+            -- Same texture as a new dot (UpdatePathLine), hidden like a pooled one.
+            local dot = holder:CreateTexture(nil, "ARTWORK")
+            dot:SetColorTexture(1, 1, 1)
+            dot:Hide()
+            pathDotPool[#pathDotPool + 1] = dot
+        end
+    else
+        st.prewarmDone = true
+        return
+    end
+    st.prewarmTimerPending = true
+    C_Timer.After(0, st.PrewarmTick)
+end
+
+-- Starts the build ahead (PrewarmMapPools) a while after login, once per session.
+function Overlord.MapMarkers:SchedulePrewarmMapPools(delay)
+    local st = driverState
+    if st.prewarmDone or st.prewarmTimerPending or not (C_Timer and C_Timer.After) then return end
+    st.prewarmTimerPending = true
+    C_Timer.After(delay or 20, st.PrewarmTick)
 end
 
 function Overlord.MapMarkers:ShowAvailableZones()
@@ -2944,6 +3259,24 @@ function driverState.ReadMapXY(pos)
     return x * 100, y * 100
 end
 
+-- The player's world position (yards, no table made), through pcall only: the arithmetic
+-- raises on a value the game hides, so nothing hidden is ever kept.
+function driverState.ReadWorldPos()
+    local y, x, _, instance = UnitPosition("player")
+    if not y or not x then return nil end
+    return y + 0, x + 0, (instance or 0) + 0
+end
+
+-- True only when the world position is the one kept at the last map read
+-- (driverState.mmWorldY/X/Inst). Through pcall only (a hidden value raises).
+function driverState.SameWorldPos()
+    local st = driverState
+    if st.mmWorldY == nil then return false end
+    local y, x, _, instance = UnitPosition("player")
+    if not y or not x then return false end
+    return (y + 0) == st.mmWorldY and (x + 0) == st.mmWorldX and (instance or 0) + 0 == st.mmWorldInst
+end
+
 -- Les icones sont placees au demi-pixel : en marchant (environ 2 px/s au zoom par
 -- defaut), leur position ne change que quelques fois par seconde. Un tick a chaque image
 -- recalculait 60 fois la meme position. Le tick suit maintenant le defilement : un par
@@ -2989,10 +3322,21 @@ local function GetPlayerPositionForResourceMap(mapID)
     if mapID == mmCachedMapID then
         return mmCachedPX, mmCachedPY
     end
+    -- Another map than the player's own (a front's canonical map seen from a sub-map): up
+    -- to three layers ask for it in the same tick. The player cannot move within a frame,
+    -- so the answer is read once per frame and map (an unreadable one included).
+    local st = driverState
+    local now = GetTime()
+    if st.altPosMapID == mapID and st.altPosAt == now then
+        return st.altPosX, st.altPosY
+    end
+    local px, py
     local ok, pos = pcall(C_Map.GetPlayerMapPosition, mapID, "player")
-    if not ok or not pos then return nil, nil end
-    local ok2, px, py = pcall(driverState.ReadMapXY, pos)
-    if not ok2 or not px or not py then return nil, nil end
+    if ok and pos then
+        local ok2, x, y = pcall(driverState.ReadMapXY, pos)
+        if ok2 and x and y then px, py = x, y end
+    end
+    st.altPosMapID, st.altPosAt, st.altPosX, st.altPosY = mapID, now, px, py
     return px, py
 end
 
@@ -3110,6 +3454,7 @@ end
 function Overlord.MapMarkers:OnActiveFrontChanged()
     mmScaleCalculatedFor = nil
     mmScaleCalculatedMapID = nil
+    driverState.mmScaleRetryAt = nil
     mmDataAcc = MM_DATA_INTERVAL
     driverState.WakeMinimapDriver()
     self:CreateMinimapPins()
@@ -3120,17 +3465,14 @@ function Overlord.MapMarkers:OnActiveFrontChanged()
         self:HideAllPaths()
         self:RequestOverlayRefresh()
     end
-    if mmFrame and Overlord.InActiveFront and not Overlord.InstanceSuspended then
-        mmFrame:Show()
-    end
+    self:EnsureMinimapDriverVisible()
 end
 
 function Overlord.MapMarkers:InitializeMinimap()
     self:CreateMinimapButton()
     self:CreateMinimapPins()
-    self:CreateMinimapMinePins()
-    self:CreateMinimapKeepPin()
-    self:CreateMinimapOutpostPin()
+    -- Mine, keep and outpost pins are built on demand by the Check*Minimap calls at the
+    -- end of this function and on zone events, only when the player stands on such a map.
     self:CalcMinimapScale()
 
     mmFrame = CreateFrame("Frame")
@@ -3196,29 +3538,51 @@ function Overlord.MapMarkers:InitializeMinimap()
             end
             return
         end
-        -- Position joueur : une seule fois par tick, partagee entre tous les pins
-        local ok, mapID = pcall(C_Map.GetBestMapForUnit, "player")
-        if not ok or not mapID then
-            Overlord.MapMarkers:HideMinimapPins()
-            Overlord.MapMarkers:HideMinimapMinePins()
-            Overlord.MapMarkers:HideMinimapKeepPin()
-            Overlord.MapMarkers:HideMinimapOutpostPin()
-            return
+        -- Turning on the spot with a rotating minimap ticks at every frame: the map id and
+        -- map position are read again only if the world position moved since the last
+        -- read (a taxi, a boat or a knockback can report speed 0 while moving). Same map
+        -- read as before whenever the speed is unknown or not 0, on a forced or 2 Hz
+        -- tick, and whenever the world position cannot be read or compared.
+        local sameSpot = speed == 0 and facingChanged and not forcedRefresh and not fullRefresh
+            and mmCachedMapID ~= nil and driverState.mmWorldY ~= nil
+        if sameSpot then
+            local okSame, same = pcall(driverState.SameWorldPos)
+            sameSpot = okSame and same == true
         end
-        local ok2, pos = pcall(C_Map.GetPlayerMapPosition, mapID, "player")
-        if not ok2 or not pos then
-            Overlord.MapMarkers:HideMinimapPins()
-            Overlord.MapMarkers:HideMinimapMinePins()
-            Overlord.MapMarkers:HideMinimapKeepPin()
-            Overlord.MapMarkers:HideMinimapOutpostPin()
-            return
+        if not sameSpot then
+            -- Position joueur : une seule fois par tick, partagee entre tous les pins
+            local ok, mapID = pcall(C_Map.GetBestMapForUnit, "player")
+            if not ok or not mapID then
+                Overlord.MapMarkers:HideMinimapPins()
+                Overlord.MapMarkers:HideMinimapMinePins()
+                Overlord.MapMarkers:HideMinimapKeepPin()
+                Overlord.MapMarkers:HideMinimapOutpostPin()
+                return
+            end
+            local ok2, pos = pcall(C_Map.GetPlayerMapPosition, mapID, "player")
+            if not ok2 or not pos then
+                Overlord.MapMarkers:HideMinimapPins()
+                Overlord.MapMarkers:HideMinimapMinePins()
+                Overlord.MapMarkers:HideMinimapKeepPin()
+                Overlord.MapMarkers:HideMinimapOutpostPin()
+                return
+            end
+            -- (Read and scaled inside pcall. A position the game would hide leaves every pin
+            -- where it was, nothing disappears; the next tick reads it again.)
+            local okXY, px, py = pcall(driverState.ReadMapXY, pos)
+            if not okXY or not px or not py then return end
+            mmCachedMapID = mapID
+            mmCachedPX, mmCachedPY = px, py
+            -- The world position of this read, kept only where the skip above can use it
+            -- (standing still, rotating minimap): no extra call while moving.
+            driverState.mmWorldY = nil
+            if speed == 0 and mmCachedRotate then
+                local okW, wy, wx, winst = pcall(driverState.ReadWorldPos)
+                if okW and wy then
+                    driverState.mmWorldY, driverState.mmWorldX, driverState.mmWorldInst = wy, wx, winst
+                end
+            end
         end
-        -- (Read and scaled inside pcall. A position the game would hide leaves every pin
-        -- where it was, nothing disappears; the next tick reads it again.)
-        local okXY, px, py = pcall(driverState.ReadMapXY, pos)
-        if not okXY or not px or not py then return end
-        mmCachedMapID = mapID
-        mmCachedPX, mmCachedPY = px, py
         -- Taille, rayon et mode de rotation changent rarement. Les relire avec les
         -- donnees (2 Hz) plutot qu'a chaque mouvement evite trois appels API par tick.
         -- Le premier tick est toujours un fullRefresh (mmDataAcc initialise ci-dessus).
@@ -3284,7 +3648,7 @@ function Overlord.MapMarkers:InitializeMinimap()
     end)
 
     -- Activation initiale si deja dans un front actif
-    if Overlord.InActiveFront and not Overlord.InstanceSuspended then mmFrame:Show() end
+    self:EnsureMinimapDriverVisible()
 
     self:CheckMineMinimap()
     self:CheckGuildKeepMinimap()
@@ -3297,8 +3661,10 @@ function Overlord.MapMarkers:EnsureMinimapDriverVisible()
         mmFrame:Hide()
         return
     end
-    if Overlord.InActiveFront or mmMineMapActive
-        or Overlord.MapMarkers._mmKeepMapActive or Overlord.MapMarkers._mmOutpostMapActive then
+    -- With the "Minimap icons" option off the driver has nothing to draw: it sleeps
+    -- (events still reach the hidden frame) until RefreshMinimapCaptureZonesVisibility.
+    if Overlord.MapMarkers:MinimapIconsEnabled() and (Overlord.InActiveFront or mmMineMapActive
+        or Overlord.MapMarkers._mmKeepMapActive or Overlord.MapMarkers._mmOutpostMapActive) then
         if not mmFrame:IsShown() then driverState.WakeMinimapDriver() end
         mmFrame:Show()
     else
@@ -3314,6 +3680,14 @@ function Overlord.MapMarkers:CalcMinimapScale()
     local mapID = GetActiveFrontMapID()
     if not mapID then return end
     if mmScaleCalculatedFor == frontId and mmScaleCalculatedMapID == mapID then return end
+    -- The same front map failed a moment ago: asked again at the data pace, not at every
+    -- tick (twice per tick: zone pins and the generals' context). Nothing is hidden or
+    -- frozen by this: the callers do exactly what they did after a failed reading.
+    local st = driverState
+    if st.mmScaleRetryFor == frontId and st.mmScaleRetryMapID == mapID
+        and GetTime() < (st.mmScaleRetryAt or 0) then
+        return
+    end
     pcall(function()
         if not C_Map.GetWorldPosFromMapPos or not CreateVector2D then return end
         local _, w0 = C_Map.GetWorldPosFromMapPos(mapID, CreateVector2D(0, 0))
@@ -3328,6 +3702,10 @@ function Overlord.MapMarkers:CalcMinimapScale()
             mmScaleCalculatedMapID = mapID
         end
     end)
+    if mmScaleCalculatedFor ~= frontId or mmScaleCalculatedMapID ~= mapID then
+        st.mmScaleRetryFor, st.mmScaleRetryMapID = frontId, mapID
+        st.mmScaleRetryAt = GetTime() + MM_DATA_INTERVAL
+    end
 end
 
 -- ---- Bouton minimap (style LibDBIcon) ----
@@ -3631,6 +4009,7 @@ end
 function Overlord.MapMarkers:RefreshMinimapCaptureZonesVisibility()
     if not IsMinimapCaptureZonesEnabled() then
         self:HideAllMinimapIcons()
+        self:EnsureMinimapDriverVisible()
         return
     end
     -- Option rallumee : le prochain tick redessine toutes les icones.
@@ -3642,6 +4021,7 @@ function Overlord.MapMarkers:RefreshMinimapCaptureZonesVisibility()
             if pin:IsShown() then pin:Hide() end
         end
     end
+    self:EnsureMinimapDriverVisible()
 end
 
 -- ============ Pins ressources sur la minimap (mines) ============
@@ -3655,20 +4035,45 @@ local MINE_MINIMAP_BORDER = { 1, 0.82, 0, 0.58 }
 
 local function ResolveResourceMinimapMapID(mapID, isResourceMapID)
     if not mapID or not isResourceMapID then return nil end
+    -- The last answer per resolver is kept, a miss too, but only when every map read of
+    -- the walk succeeded (C_Map can be empty while loading). Keeps and outposts resolve
+    -- through the active front, so the front is part of the key.
+    local memos = driverState.resourceMapMemo
+    if not memos then
+        memos = {}
+        driverState.resourceMapMemo = memos
+    end
+    local memo = memos[isResourceMapID]
+    local frontId = Overlord.Fronts and Overlord.Fronts.activeFrontId or false
+    if memo and memo.source == mapID and memo.front == frontId then return memo.result end
     local resolvedMapID = mapID
     local depth = 0
+    local readFailed = false
     while resolvedMapID and not isResourceMapID(resolvedMapID) and depth < 3 do
         local ok, info = pcall(C_Map.GetMapInfo, resolvedMapID)
+        if not ok or not info then readFailed = true end
         if not ok or not info or not info.parentMapID or info.parentMapID == 0 then break end
         resolvedMapID = info.parentMapID
         depth = depth + 1
     end
-    if resolvedMapID and isResourceMapID(resolvedMapID) then return resolvedMapID end
-    return nil
+    local result = nil
+    if resolvedMapID and isResourceMapID(resolvedMapID) then result = resolvedMapID end
+    if result or not readFailed then
+        if not memo then
+            memo = {}
+            memos[isResourceMapID] = memo
+        end
+        memo.source, memo.front, memo.result = mapID, frontId, result
+    end
+    return result
 end
 
 local function CalcResourceYardsPerPct(cache, mapID)
-    if not cache or not mapID or cache[mapID] then return end
+    if not cache or not mapID then return end
+    local hit = cache[mapID]
+    -- A map without world positions is asked again at the data pace (MM_DATA_INTERVAL),
+    -- not at every tick: its pins keep the readers' 30 yards per percent meanwhile.
+    if hit and (not hit.retryAt or GetTime() < hit.retryAt) then return end
     pcall(function()
         if not C_Map.GetWorldPosFromMapPos or not CreateVector2D then return end
         local _, w0 = C_Map.GetWorldPosFromMapPos(mapID, CreateVector2D(0, 0))
@@ -3682,6 +4087,14 @@ local function CalcResourceYardsPerPct(cache, mapID)
             end
         end
     end)
+    if cache[mapID] == hit then
+        -- Not computed: the same value the readers use without one, asked again later.
+        if hit then
+            hit.retryAt = GetTime() + MM_DATA_INTERVAL
+        else
+            cache[mapID] = { x = 30, y = 30, retryAt = GetTime() + MM_DATA_INTERVAL }
+        end
+    end
 end
 
 local function ShowMineResourceTooltip(mine)
@@ -4164,7 +4577,7 @@ function Overlord.MapMarkers:IsKalimdorMap(mapID)
     return isKal
 end
 
--- Cache session (frontMapID|continentMapID -> nx, ny) : geometrie continentale statique.
+-- Cache session (frontMapID -> continentMapID -> nx, ny) : geometrie continentale statique.
 -- RefreshEKDominance n'est plus appele a 60 Hz (seulement layout/content), mais le cache
 -- evite quand meme C_Map.GetMapRectOnMap a chaque pan/zoom.
 local frontContinentPosCache = {}
@@ -4176,15 +4589,19 @@ local function GetFrontPositionOnContinentMap(front, continentMapID)
     if not frontMapID or not continentMapID or not C_Map.GetMapRectOnMap then
         return nil, nil
     end
-    local cacheKey = frontMapID .. "|" .. continentMapID
-    local cached = frontContinentPosCache[cacheKey]
+    local byContinent = frontContinentPosCache[frontMapID]
+    local cached = byContinent and byContinent[continentMapID]
     if cached then
         return cached[1], cached[2]
     end
     local ok, minX, maxX, minY, maxY = pcall(C_Map.GetMapRectOnMap, frontMapID, continentMapID)
     if ok and minX and maxX and minY and maxY and maxX > minX and maxY > minY then
         local nx, ny = (minX + maxX) / 2, (minY + maxY) / 2
-        frontContinentPosCache[cacheKey] = { nx, ny }
+        if not byContinent then
+            byContinent = {}
+            frontContinentPosCache[frontMapID] = byContinent
+        end
+        byContinent[continentMapID] = { nx, ny }
         return nx, ny
     end
     return nil, nil
@@ -4275,6 +4692,10 @@ function Overlord.MapMarkers:RefreshEKDominance(recomputeFaction)
         self:HideEKDominance()
         return
     end
+    -- Sizes shared by every front (canvas and layer only): computed once per pass.
+    local logoSize, contestedLogoSize, halfSize, gap
+    local strata = parent:GetFrameStrata()
+    local level = (parent:GetFrameLevel() or 0) + 40
     for _, frontId in ipairs(Overlord.Fronts.Order) do
         local front = Overlord.Fronts.Registry[frontId]
         if front then
@@ -4297,8 +4718,8 @@ function Overlord.MapMarkers:RefreshEKDominance(recomputeFaction)
                     ekOverlays[front.id] = overlay
                 end
                 if overlay then
-                    overlay:SetFrameStrata(parent:GetFrameStrata())
-                    overlay:SetFrameLevel((parent:GetFrameLevel() or 0) + 40)
+                    if overlay:GetFrameStrata() ~= strata then overlay:SetFrameStrata(strata) end
+                    if overlay:GetFrameLevel() ~= level then overlay:SetFrameLevel(level) end
                     local offset = EK_FRONT_LOGO_OFFSETS[front.id]
                     if offset then
                         nx = nx + offset.x
@@ -4313,10 +4734,12 @@ function Overlord.MapMarkers:RefreshEKDominance(recomputeFaction)
                         overlay:ClearAllPoints()
                         overlay:SetSize(2, 2)
                         overlay:SetPoint("CENTER", parent, "TOPLEFT", ox, oy)
-                        local logoSize = math.floor(GetEKDominanceLogoSize(canvas, parent, false) + 0.5)
-                        local contestedLogoSize = math.floor(GetEKDominanceLogoSize(canvas, parent, true) + 0.5)
-                        local halfSize = math.floor(contestedLogoSize * 0.84 + 0.5)
-                        local gap = math.floor(GetEKDominanceGap(canvas, parent) + 0.5)
+                        if not logoSize then
+                            logoSize = math.floor(GetEKDominanceLogoSize(canvas, parent, false) + 0.5)
+                            contestedLogoSize = math.floor(GetEKDominanceLogoSize(canvas, parent, true) + 0.5)
+                            halfSize = math.floor(contestedLogoSize * 0.84 + 0.5)
+                            gap = math.floor(GetEKDominanceGap(canvas, parent) + 0.5)
+                        end
                         local faction = overlay._ekDominanceFaction
                         if recomputeFaction or faction == nil then
                             faction = self:GetDominantFaction(front)
@@ -4397,21 +4820,36 @@ end
 
 local ekGoldRoot = nil
 local ekGoldPins = {}
-local mineContinentPosCache = {}
+-- Session cache by site table (weak key, nothing written on the site data), then
+-- geometry map, then projection map: no temp table or string key per pass.
+local mineContinentPosCache = setmetatable({}, { __mode = "k" })
 
-local function GetMinePositionOnContinentMap(mine, continentMapID)
+-- geomMapID: the site's geometry map when it differs from mine.mapID (outposts).
+local function GetMinePositionOnContinentMap(mine, continentMapID, geomMapID)
     if not mine or not continentMapID then return nil, nil end
-    local cacheKey = (mine.mapID or 0) .. "|" .. continentMapID .. "|"
-        .. (mine.center and mine.center[1] or 0) .. "|" .. (mine.center and mine.center[2] or 0)
-    local cached = mineContinentPosCache[cacheKey]
-    if cached then
+    geomMapID = geomMapID or mine.mapID
+    local cx = mine.center and mine.center[1] or 0
+    local cy = mine.center and mine.center[2] or 0
+    local byGeom = mineContinentPosCache[mine]
+    local byMap = byGeom and byGeom[geomMapID or 0]
+    local cached = byMap and byMap[continentMapID]
+    -- The centre is part of the key, as before: a moved site is projected again.
+    if cached and cached[3] == cx and cached[4] == cy then
         return cached[1], cached[2]
     end
-    local ok, minX, maxX, minY, maxY = pcall(C_Map.GetMapRectOnMap, mine.mapID, continentMapID)
+    local ok, minX, maxX, minY, maxY = pcall(C_Map.GetMapRectOnMap, geomMapID, continentMapID)
     if ok and minX and maxX and minY and maxY and maxX > minX and maxY > minY then
         local nx = minX + (maxX - minX) * (mine.center[1] / 100)
         local ny = minY + (maxY - minY) * (mine.center[2] / 100)
-        mineContinentPosCache[cacheKey] = { nx, ny }
+        if not byGeom then
+            byGeom = {}
+            mineContinentPosCache[mine] = byGeom
+        end
+        if not byMap then
+            byMap = {}
+            byGeom[geomMapID or 0] = byMap
+        end
+        byMap[continentMapID] = { nx, ny, cx, cy }
         return nx, ny
     end
     return nil, nil
@@ -5025,7 +5463,7 @@ end
 
 -- Pont vers GeneralMap.lua (évite de dépasser la limite 200 locals de ce chunk)
 function Overlord.MapMarkers:WithWorldMapPinLayer(fn)
-    CacheCanvas()
+    if not Overlord.MapMarkers.InDriverPass() then CacheCanvas() end
     local canvas = GetCanvas()
     local parent = GetOverlayParent()
     if not canvas or not parent or not fn then return end
@@ -5045,8 +5483,19 @@ function Overlord.MapMarkers:ClearWorldMapPinLayout(pin)
     ClearMapPinLayoutCache(pin)
 end
 
+-- Inside the world map driver's pass, after its zoom commit and layout check: the canvas
+-- is cached and the root was synced in this very frame, so a further sync is a no-op
+-- (same readings, nothing moves the canvas or the viewport within the pass). The keep,
+-- outpost, general and emblem layers then skip CacheCanvas; outside the pass (events,
+-- timers) they sync as before. passAt guards against a pass that ended in an error.
+function Overlord.MapMarkers.InDriverPass()
+    local st = driverState
+    return st.inPass == true and cachedCanvas ~= nil and cachedOverlayParent ~= nil
+        and st.passAt == GetTime()
+end
+
 function Overlord.MapMarkers:GetWorldMapCanvas()
-    CacheCanvas()
+    if not Overlord.MapMarkers.InDriverPass() then CacheCanvas() end
     return GetCanvas(), GetOverlayParent()
 end
 
@@ -5070,8 +5519,8 @@ function Overlord.MapMarkers:HideResourceMinimapPinsTable(pins)
     HideResourceMinimapPins(pins)
 end
 
-function Overlord.MapMarkers:GetMinePositionOnContinentMap(mine, continentMapID)
-    return GetMinePositionOnContinentMap(mine, continentMapID)
+function Overlord.MapMarkers:GetMinePositionOnContinentMap(mine, continentMapID, geomMapID)
+    return GetMinePositionOnContinentMap(mine, continentMapID, geomMapID)
 end
 
 function Overlord.MapMarkers:GetEKDominanceLogoSizeFor(canvas, parent)

@@ -457,11 +457,22 @@ local function refreshLocalGuildRosterCache(onBuildFinished)
                     and state.getDedupKey(sync, rosterName) or rosterName:lower()
                 if dk and dk ~= "" and not state.keys[dk] then
                     rosterLevel = math.floor(tonumber(rosterLevel) or 0)
-                    state.keys[dk] = {
-                        class = type(rosterClass) == "string" and rosterClass:match("^%u+$") or nil,
-                        level = rosterLevel > 0 and rosterLevel <= 90 and rosterLevel or nil,
-                        guid = type(rosterGuid) == "string" and rosterGuid:match("^Player%-") and rosterGuid or nil,
-                    }
+                    local level = rosterLevel > 0 and rosterLevel <= 90 and rosterLevel or nil
+                    -- Most roster events are status changes: a member whose raw class and
+                    -- GUID equal the previous snapshot's kept values (so they passed the
+                    -- same tests) and whose level is unchanged keeps that entry table.
+                    -- Published entries are only read, never written.
+                    local previous = state.previousKeys and state.previousKeys[dk]
+                    if previous and previous.level == level and previous.class == rosterClass
+                        and previous.guid == rosterGuid then
+                        state.keys[dk] = previous
+                    else
+                        state.keys[dk] = {
+                            class = type(rosterClass) == "string" and rosterClass:match("^%u+$") or nil,
+                            level = level,
+                            guid = type(rosterGuid) == "string" and rosterGuid:match("^Player%-") and rosterGuid or nil,
+                        }
+                    end
                     state.keyCount = state.keyCount + 1
                     if state.previousKeys and not state.previousKeys[dk] then
                         state.membershipChanged = true
@@ -1122,7 +1133,8 @@ function Overlord.Leaderboard:RebuildDedupMetaIndex(yieldWork, onName)
     local names
     if yieldWork then
         names = {}
-        for n in pairs(playerInfo) do names[#names + 1] = n end
+        local count = 0
+        for n in pairs(playerInfo) do count = count + 1; names[count] = n end
     end
     local cursor, n, inf = 0, nil, nil
     while true do
@@ -1327,8 +1339,8 @@ function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
     -- pairs() after an insertion is undefined in Lua (existing rows may be
     -- skipped). Keys added after a copy are covered by the journal.
     local function keysOf(source)
-        local list = {}
-        for name in pairs(source) do list[#list + 1] = name end
+        local list, count = {}, 0
+        for name in pairs(source) do count = count + 1; list[count] = name end
         return list
     end
     local killNames = keysOf(killsSource)
@@ -1571,10 +1583,12 @@ local function displayHeapSiftDown(top, index)
     end
 end
 
-local function offerDisplayTopK(lb, top, key, name, count)
+-- keyLowered: the caller passes a dedup key, already lowercase (the display build);
+-- the snapshot pass keeps the lowering it always had.
+local function offerDisplayTopK(lb, top, key, name, count, keyLowered)
     count = tonumber(count) or 0
     if not key or key == "" or not name or name == "" or count <= 0 then return end
-    key = tostring(key):lower()
+    if not keyLowered then key = tostring(key):lower() end
     local position = top.positions[key]
     if position then
         local row = top.rows[position]
@@ -1683,7 +1697,8 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         source = source or {}
         if not keys then
             keys = {}
-            for key in pairs(source) do keys[#keys + 1] = key end
+            local count = 0
+            for key in pairs(source) do count = count + 1; keys[count] = key end
         end
         for i = 1, #keys do
             local value = source[keys[i]]
@@ -1693,21 +1708,20 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         return keys
     end
 
+    -- The one normaliser of this build, lowercase like every index key: Sync's dedup
+    -- key already is (it lowers the canonical name), only the raw-name fallback is
+    -- lowered here, once, instead of at every lookup.
     local function dedupKey(name)
         local sync = Overlord.Sync
         local getDK = sync and sync.GetCaptureContributorDedupKey
-        return (getDK and getDK(sync, name)) or name
-    end
-
-    local function canonicalName(name)
-        local dk = dedupKey(name)
-        return (dk and state.canonicalIndex
-            and state.canonicalIndex[tostring(dk):lower()]) or name
+        local dk = getDK and getDK(sync, name)
+        if dk then return dk end
+        return name and tostring(name):lower() or nil
     end
 
     local function indexedMeta(name)
         local dk = dedupKey(name)
-        local bucket = dk and state.metaIndex and state.metaIndex[tostring(dk):lower()]
+        local bucket = dk and state.metaIndex and state.metaIndex[dk]
         if bucket then
             return bucket.class or "", bucket.faction or "", bucket.guild or "",
                 bucket.race or "", tonumber(bucket.raceSex) or 0,
@@ -1716,8 +1730,10 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         return "", "", "", "", 0, "", ""
     end
 
-    local function captureTopFor(name)
-        local _, faction = indexedMeta(name)
+    -- Capture heap of an identity, by its dedup key (computed once per row by the caller).
+    local function captureTopForKey(dk)
+        local bucket = dk and state.metaIndex and state.metaIndex[dk]
+        local faction = bucket and bucket.faction
         if faction == "Alliance" then return state.allianceTop end
         if faction == "Horde" then return state.hordeTop end
         return nil
@@ -1748,27 +1764,24 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         -- Guild rating: each player's captures, counted once (the highest of his
         -- spellings), noted while this pass walks the capture rows anyway.
         local ratingCaptures = {}
-        local function noteRatingCapture(name, count)
-            local key = dedupKey(name)
-            key = key and tostring(key):lower()
+        local function noteRatingCapture(key, count)
             count = tonumber(count) or 0
             if key and count > (ratingCaptures[key] or 0) then ratingCaptures[key] = count end
         end
-
-        if not forEach(state.captureCountSource, function(name, count)
-            local top = captureTopFor(name)
+        -- One dedup key per capture row, shared by the heap, the canonical name and the rating.
+        local function offerCaptureRow(name, count)
+            local dk = dedupKey(name)
+            local top = captureTopForKey(dk)
             if top then
-                offerDisplayTopK(self, top, dedupKey(name), canonicalName(name), count)
+                offerDisplayTopK(self, top, dk, (dk and state.canonicalIndex and state.canonicalIndex[dk]) or name, count, true)
             end
-            noteRatingCapture(name, count)
-        end) then return end
+            noteRatingCapture(dk, count)
+        end
+
+        if not forEach(state.captureCountSource, offerCaptureRow) then return end
         if not forEach(state.capturesSource, function(name, zones)
             if not state.captureCountSource[name] and type(zones) == "table" and #zones > 0 then
-                local top = captureTopFor(name)
-                if top then
-                    offerDisplayTopK(self, top, dedupKey(name), canonicalName(name), #zones)
-                end
-                noteRatingCapture(name, #zones)
+                offerCaptureRow(name, #zones)
             end
         end) then return end
 
@@ -1786,20 +1799,49 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         end
         local sortedKills = {}
         local killTop = newDisplayTopK(DISPLAY_KILL_RANK_LIMIT)
+        local killHeap = killTop.rows
         -- L'index contient deja un maximum par joueur, sans doublonner ses alias.
         -- One key list for both kill walks: the rows and the totals cover the same players.
         local killKeys = forEach(state.killIndex, function(key, count)
+            -- Each key comes once in this walk: with the heap full, fewer kills than its
+            -- worst row can never get in, so the name is not cleaned for nothing.
+            if #killHeap >= killTop.limit and (tonumber(count) or 0) < killHeap[1].count then return end
             offerDisplayTopK(self, killTop, key,
-                cleanName(state.canonicalIndex[key] or key), count)
+                cleanName(state.canonicalIndex[key] or key), count, true)
         end)
-        for _, row in ipairs(killTop.rows) do
-            sortedKills[#sortedKills + 1] = { name = row.name, kills = row.count }
-            yieldWork()
-        end
-        sortRowsWithYield(sortedKills, function(a, b)
-            if a.kills ~= b.kills then return a.kills > b.kills end
+        -- The heap rows are sorted in place (their order is the old row order, the sort is
+        -- stable), then turned into ranking rows in that order.
+        sortRowsWithYield(killHeap, function(a, b)
+            if a.count ~= b.count then return a.count > b.count end
             return (a.name or "") < (b.name or "")
         end, yieldWork)
+        -- A row with the same name and kills as in the previous view is that view's own
+        -- table: published rows are never written (UI, search, Nemesis and the saved
+        -- preview only read them), and both lists share this order, so one forward walk
+        -- finds them.
+        local previousView = self._displayCache
+        local previousRows = type(previousView) == "table" and type(previousView.sortedKills) == "table"
+            and previousView.sortedKills or {}
+        local previousAt, previousCount = 1, #previousRows
+        for i = 1, #killHeap do
+            local name, kills = killHeap[i].name, killHeap[i].count
+            local reused
+            while type(name) == "string" and previousAt <= previousCount do
+                local old = previousRows[previousAt]
+                if type(old) ~= "table" or type(old.kills) ~= "number" or type(old.name) ~= "string" then
+                    previousAt = previousCount + 1
+                elseif old.kills > kills or (old.kills == kills and old.name < name) then
+                    previousAt = previousAt + 1
+                else
+                    if old.kills == kills and old.name == name then
+                        reused, previousAt = old, previousAt + 1
+                    end
+                    break
+                end
+            end
+            sortedKills[i] = reused or { name = name, kills = kills }
+            yieldWork()
+        end
 
         local function captureRows(top, faction)
             local rows = {}
@@ -1832,8 +1874,19 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         local guildMembers = {}
         local alliKills, hordeKills = 0, 0
         forEach(state.killIndex, function(key, count)
-            local name = state.canonicalIndex[key] or key
-            local _, faction, guild = indexedMeta(name)
+            local name = state.canonicalIndex[key]
+            local faction, guild
+            if name then
+                -- A canonical name's dedup key is this key, so its meta is metaIndex[key]:
+                -- read it directly instead of deriving the key again from the name.
+                local bucket = state.metaIndex[key]
+                faction = bucket and bucket.faction or ""
+                guild = bucket and bucket.guild or ""
+            else
+                name = key
+                local _
+                _, faction, guild = indexedMeta(name)
+            end
             if faction == "Alliance" then alliKills = alliKills + count
             elseif faction == "Horde" then hordeKills = hordeKills + count end
             if guild and guild ~= "" then
@@ -1984,6 +2037,11 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         state.displayMetaGen = self._displayMetaGen or 0
         local displayMeta = { meta = {}, locale = {} }
         local meta, locale = displayMeta.meta, displayMeta.locale
+        -- The published view's meta, kept when a meta change dropped the reuse cache:
+        -- an entry whose four values are still the ones derived now is that same table
+        -- (entries are never written), most players' meta did not move.
+        local publishedMeta = type(previousView) == "table" and type(previousView.meta) == "table"
+            and previousView.meta or {}
         local function touch(name)
             if not name or name == "" or meta[name] then return end
             if previousDisplayMeta.meta and previousDisplayMeta.meta[name] then
@@ -1993,7 +2051,13 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                 return
             end
             local class, faction, _, race, raceSex, localeTag, pool = indexedMeta(name)
-            meta[name] = { class, faction, race, raceSex }
+            local old = publishedMeta[name]
+            if type(old) == "table" and old[1] == class and old[2] == faction
+                and old[3] == race and old[4] == raceSex then
+                meta[name] = old
+            else
+                meta[name] = { class, faction, race, raceSex }
+            end
             localeTag = sanitizeLocaleTag(localeTag)
             if localeTag ~= "" then
                 pool = normalizeSavedVarsPool(pool)
@@ -2006,12 +2070,18 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                 locale[name] = ""
             end
         end
-        for _, row in ipairs(sortedKills) do touch(row.name); yieldWork() end
-        for _, row in ipairs(byFaction.Alliance) do touch(row.name); yieldWork() end
-        for _, row in ipairs(byFaction.Horde) do touch(row.name); yieldWork() end
-
+        -- Ranked players per faction, counted here so the panel's info line does not
+        -- walk the whole ladder again in one frame. Local view only, never saved.
+        local rankedAlliance, rankedHorde = 0, 0
+        -- Short names counted in the same walk of the rows (one pass instead of two).
         local duplicateShortNames = {}
         for _, row in ipairs(sortedKills) do
+            touch(row.name)
+            local m = meta[row.name]
+            if m then
+                if m[2] == "Alliance" then rankedAlliance = rankedAlliance + 1
+                elseif m[2] == "Horde" then rankedHorde = rankedHorde + 1 end
+            end
             local name = type(row.name) == "string" and row.name or ""
             local short = name:match("^(.-)%-") or name
             if short ~= "" then
@@ -2020,6 +2090,8 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             end
             yieldWork()
         end
+        for _, row in ipairs(byFaction.Alliance) do touch(row.name); yieldWork() end
+        for _, row in ipairs(byFaction.Horde) do touch(row.name); yieldWork() end
 
         state.result = {
             sortedKills = sortedKills,
@@ -2030,6 +2102,8 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             guildMembers = guildMembers,
             alliKills = alliKills,
             hordeKills = hordeKills,
+            rankedAlliance = rankedAlliance,
+            rankedHorde = rankedHorde,
             meta = meta,
             locale = locale,
             duplicateShortNames = duplicateShortNames,
@@ -3169,11 +3243,35 @@ function Overlord.Leaderboard:IsLocalDisplayName(displayName)
     local sync = Overlord.Sync
     local me = sync and sync.GetPlayerFullName and sync:GetPlayerFullName() or Overlord:SafeUnitName("player")
     if not me or me == "" then return false end
-    if Overlord:SafeStringEquals(displayName, me) then return true end
-    if sync and sync.ForeverIdentitiesMatch then
-        return sync:ForeverIdentitiesMatch(displayName, me)
+    -- Asked once or twice per ingested row; the answer only depends on the two names.
+    -- Memo for plain strings out of instances (a secret value is never a table key,
+    -- SafeStringEquals answers differently in instances), bounded, and dropped when our
+    -- own name or the matcher changes.
+    local matcher = sync and sync.ForeverIdentitiesMatch
+    local canon = sync and sync.CanonicalForeverName
+    local memo
+    if not Overlord.InstanceSuspended and type(displayName) == "string" and type(me) == "string"
+        and (not canaccessvalue or (canaccessvalue(displayName) and canaccessvalue(me))) then
+        memo = self._localNameMemo
+        if not memo or memo.me ~= me or memo.matcher ~= matcher or memo.canon ~= canon
+            or memo.count >= 4096 then
+            memo = { me = me, matcher = matcher, canon = canon, count = 0, values = {} }
+            self._localNameMemo = memo
+        end
+        local known = memo.values[displayName]
+        if known ~= nil then return known end
     end
-    return false
+    local result = false
+    if Overlord:SafeStringEquals(displayName, me) then
+        result = true
+    elseif matcher then
+        result = sync:ForeverIdentitiesMatch(displayName, me)
+    end
+    if memo and result ~= nil then
+        memo.values[displayName] = result
+        memo.count = memo.count + 1
+    end
+    return result
 end
 
 -- Lifetime : credit uniquement sur la cle canonique Nom-Royaume (evite double Nom + Nom-Royaume).
@@ -5345,22 +5443,54 @@ end
 
 -- Separate presentation column; the storage, scoring and tie-breaks are shared.
 function Overlord.Leaderboard:GetSortedGuildKeeps(sortedGuildKillsForNames, yieldWork)
-    local rows = self:GetSortedOutposts(sortedGuildKillsForNames, yieldWork, true)
+    local rows
+    if yieldWork then
+        -- The ranking's sliced lists worker asks for the outposts right after the keeps,
+        -- with the same yieldWork and guild list: one scan of the sites and the ledger
+        -- fills both, and the outposts wait here for that very next call.
+        local outposts
+        rows, outposts = self:GetSortedOutposts(sortedGuildKillsForNames, yieldWork, "both")
+        self._sortedOutpostsHandoff = {
+            yieldWork = yieldWork, names = sortedGuildKillsForNames, rows = outposts,
+        }
+    else
+        rows = self:GetSortedOutposts(sortedGuildKillsForNames, yieldWork, true)
+    end
     for _, row in ipairs(rows) do
         row.keepSiteKey, row.keepAtlas, row.wins = row.outpostSiteKey, row.outpostAtlas, row.captures
     end
     return rows
 end
 
+-- fortressOnly "both": keeps and outposts from one scan, returned as two lists (keeps first).
 function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldWork, fortressOnly)
+    local handoff = self._sortedOutpostsHandoff
+    if handoff then
+        self._sortedOutpostsHandoff = nil
+        if not fortressOnly and yieldWork and handoff.yieldWork == yieldWork
+            and handoff.names == sortedGuildKillsForNames then
+            return handoff.rows
+        end
+    end
     local op = Overlord.Outpost
     local captureCounts = self:GetOutpostCaptureCountsTable()
     local tenants = self:GetOutpostTenantsTable()
+    local both = fortressOnly == "both"
     local sorted = {}
-    local rowKeys = {}
-    local function includeSite(key)
+    -- Second list of a "both" scan: the outposts.
+    local outpostRows = both and {} or nil
+    local rowKeys, outpostRowKeys = {}, both and {} or nil
+    -- The list a site's rows go to and its set of row keys, nil when this call does not
+    -- want them (each list keeps its own set, as two separate calls did).
+    local function listFor(key)
         local site = Overlord.OutpostSites and Overlord.OutpostSites[key]
-        return site and (site.isFortress == true) == (fortressOnly == true)
+        if not site then return nil end
+        if both then
+            if site.isFortress == true then return sorted, rowKeys end
+            return outpostRows, outpostRowKeys
+        end
+        if (site.isFortress == true) == (fortressOnly == true) then return sorted, rowKeys end
+        return nil
     end
 
     if Overlord.OutpostSites then
@@ -5386,12 +5516,13 @@ function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldW
                 rowPool = resolveOutpostLbPoolTag(t.pool)
             end
             local currentlyHeld = guild ~= ""
+            local list, keys = listFor(siteKey)
             -- 1.4.0: a tenant stamped by another ruleset's campaign is not ours.
-            if includeSite(siteKey) and guild ~= "" and (fac == "Alliance" or fac == "Horde")
+            if list and guild ~= "" and (fac == "Alliance" or fac == "Horde")
                 and outpostLbPoolMatchesCurrent(rowPool) then
                 local key = guild:lower()
                 local rowKey = outpostCaptureRowKey(siteKey, key, rowPool)
-                rowKeys[rowKey] = true
+                keys[rowKey] = true
                 local bucket = captureCounts[rowKey]
                 local captures = bucket and math.floor(tonumber(bucket.count) or 0) or 0
                 -- Who took it: the held state names its capturer; the tenant row or the
@@ -5407,7 +5538,7 @@ function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldW
                 if not capturer and bucket then
                     capturer = normalizeOutpostCapturer(bucket.lastCapturer)
                 end
-                sorted[#sorted + 1] = {
+                list[#list + 1] = {
                     guild = guild,
                     faction = fac,
                     outpostAtlas = op and op.GetMainHallAtlasForFaction
@@ -5429,12 +5560,14 @@ function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldW
     for rowKey in pairs(captureCounts) do captureKeys[#captureKeys + 1] = rowKey end
     for _, rowKey in ipairs(captureKeys) do
         local bucket = captureCounts[rowKey]
-        if type(bucket) == "table" and includeSite(bucket.siteKey) and not rowKeys[rowKey] then
+        local list, keys
+        if type(bucket) == "table" then list, keys = listFor(bucket.siteKey) end
+        if list and not keys[rowKey] then
             local captures = math.floor(tonumber(bucket.count) or 0)
             if captures > 0 and sanitizeGuildName(bucket.guild or "") ~= ""
                 and outpostLbPoolMatchesCurrent(resolveOutpostLbPoolTag(bucket.pool)) then
-                rowKeys[rowKey] = true
-                sorted[#sorted + 1] = {
+                keys[rowKey] = true
+                list[#list + 1] = {
                     guild = bucket.guild,
                     faction = bucket.faction or "",
                     outpostAtlas = nil,
@@ -5449,7 +5582,7 @@ function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldW
         if yieldWork then yieldWork() end
     end
 
-    sortRowsWithYield(sorted, function(a, b)
+    local function siteRowBefore(a, b)
         local ca, cb = a.captures or 0, b.captures or 0
         if ca ~= cb then return ca > cb end
         if (a.currentlyHeld and 1 or 0) ~= (b.currentlyHeld and 1 or 0) then
@@ -5459,7 +5592,12 @@ function Overlord.Leaderboard:GetSortedOutposts(sortedGuildKillsForNames, yieldW
             return (a.guild or "") < (b.guild or "")
         end
         return (a.outpostSiteKey or "") < (b.outpostSiteKey or "")
-    end, yieldWork)
+    end
+    sortRowsWithYield(sorted, siteRowBefore, yieldWork)
+    if both then
+        sortRowsWithYield(outpostRows, siteRowBefore, yieldWork)
+        return sorted, outpostRows
+    end
     return sorted
 end
 
@@ -5473,14 +5611,21 @@ end
 -- display pass: one ledger row per step, a capturer's name is resolved once.
 function Overlord.Leaderboard:CollectGuildSiteCaptures(yieldWork)
     local counts = self:GetOutpostCaptureCountsTable()
-    local function ledgerStamp()
-        return tostring(counts) .. ":" .. (tonumber(self._outpostLedgerRevision) or 0)
-            .. ":" .. (tonumber(self._outpostLedgerEvents) or 0)
-            .. ":" .. tostring(OverlordDB and OverlordDB.lastResetTimestamp)
+    -- The ledger's stamp, compared field by field (no string built per call). The
+    -- ledger table itself is held weakly: an old week's ledger is never kept alive.
+    local revision = tonumber(self._outpostLedgerRevision) or 0
+    local events = tonumber(self._outpostLedgerEvents) or 0
+    local reset = OverlordDB and OverlordDB.lastResetTimestamp
+    local function ledgerMoved()
+        return (tonumber(self._outpostLedgerRevision) or 0) ~= revision
+            or (tonumber(self._outpostLedgerEvents) or 0) ~= events
+            or (OverlordDB and OverlordDB.lastResetTimestamp) ~= reset
     end
-    local stamp = ledgerStamp()
     local cache = self._guildSiteCaptures
-    if cache and cache.stamp == stamp then return cache.byGuild, cache.byCapturer end
+    if cache and cache.ledger[1] == counts and cache.revision == revision
+        and cache.events == events and cache.reset == reset then
+        return cache.byGuild, cache.byCapturer
+    end
     local keys = {}
     for rowKey in pairs(counts) do keys[#keys + 1] = rowKey end
     local byGuild, byCapturer, signed, capturerKeys = {}, {}, {}, {}
@@ -5541,8 +5686,12 @@ function Overlord.Leaderboard:CollectGuildSiteCaptures(yieldWork)
         if yieldWork and steps % 64 == 0 then yieldWork() end
     end
     -- Kept only if the ledger did not move during the walk.
-    if stamp == ledgerStamp() then
-        self._guildSiteCaptures = { stamp = stamp, byGuild = byGuild, byCapturer = byCapturer }
+    if not ledgerMoved() then
+        self._guildSiteCaptures = {
+            ledger = setmetatable({ counts }, { __mode = "v" }),
+            revision = revision, events = events, reset = reset,
+            byGuild = byGuild, byCapturer = byCapturer,
+        }
     end
     return byGuild, byCapturer
 end
@@ -5559,10 +5708,15 @@ local OUTPOST_WEEKLY_STATS_MIN_INTERVAL = 3
 
 function Overlord.Leaderboard:GetOutpostWeeklyStats()
     local counts = self:GetOutpostCaptureCountsTable()
-    local stamp = tostring(counts) .. ":" .. (tonumber(self._outpostLedgerRevision) or 0)
-        .. ":" .. (tonumber(self._outpostLedgerEvents) or 0)
+    -- Ledger stamp compared field by field (asked on every refresh and wheel tick of the
+    -- view); the ledger table is held weakly, never kept alive past its week.
+    local revision = tonumber(self._outpostLedgerRevision) or 0
+    local events = tonumber(self._outpostLedgerEvents) or 0
     local cache = self._outpostWeeklyStats
-    if cache and cache.stamp == stamp then return cache end
+    if cache and cache.ledger[1] == counts and cache.revision == revision
+        and cache.events == events then
+        return cache
+    end
     local now = GetTime and GetTime() or 0
     -- Second retour vrai : resultat en retard, l'appelant relit apres l'intervalle.
     if cache and now - (cache.builtAt or 0) < OUTPOST_WEEKLY_STATS_MIN_INTERVAL then return cache, true end
@@ -5640,7 +5794,10 @@ function Overlord.Leaderboard:GetOutpostWeeklyStats()
         if a.taker ~= b.taker then return a.taker < b.taker end
         return a.victim < b.victim
     end)
-    cache = { stamp = stamp, builtAt = now, capturers = capturers, rivalries = rivalries }
+    cache = {
+        ledger = setmetatable({ counts }, { __mode = "v" }), revision = revision, events = events,
+        builtAt = now, capturers = capturers, rivalries = rivalries,
+    }
     self._outpostWeeklyStats = cache
     return cache
 end
@@ -6462,8 +6619,8 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
             -- are read live; a key added after the copy waits for the next pass (the
             -- snapshot stays dirty), a key removed since is skipped.
             if not state.keys then
-                local keys = {}
-                for key in pairs(source or {}) do keys[#keys + 1] = key end
+                local keys, count = {}, 0
+                for key in pairs(source or {}) do count = count + 1; keys[count] = key end
                 state.keys, state.position = keys, 0
             end
             state.position = state.position + 1
@@ -6607,10 +6764,14 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
         if raceSex ~= 2 and raceSex ~= 3 then raceSex = 0 end
         return raceSex
     end
+    -- Only the branches that write a level read it (most live rows already have one).
+    local function snapshotLevelOf(info)
+        local level = math.floor(tonumber(info.level) or 0)
+        if level < 0 or level > 90 then level = 0 end
+        return level
+    end
     for name, info in pairs(snapshotPlayerInfo) do
         if type(name) == "string" and name ~= "" and type(info) == "table" then
-            local snapshotLevel = math.floor(tonumber(info.level) or 0)
-            if snapshotLevel < 0 or snapshotLevel > 90 then snapshotLevel = 0 end
             local current = self.playerInfo[name]
             if not current then
                 self.playerInfo[name] = {
@@ -6627,7 +6788,7 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
                 race = snapshotRaceOf(info),
                 raceSex = snapshotRaceSexOf(info),
                 raceAt = math.max(0, math.floor(tonumber(info.raceAt) or 0)),
-                level = snapshotLevel,
+                level = snapshotLevelOf(info),
                 }
                 dirty = true
                 pcall(NoteDedupCanonicalName, self, name)
@@ -6676,10 +6837,12 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
                     local snapshotPool = normalizeSavedVarsPool(info.pool)
                     if snapshotPool ~= "" then current.pool, dirty = snapshotPool, true end
                 end
-                if (tonumber(current.level) or 0) <= 0
-                    and snapshotLevel > 0 then
-                    current.level = snapshotLevel
-                    dirty = true
+                if (tonumber(current.level) or 0) <= 0 then
+                    local snapshotLevel = snapshotLevelOf(info)
+                    if snapshotLevel > 0 then
+                        current.level = snapshotLevel
+                        dirty = true
+                    end
                 end
             end
         end

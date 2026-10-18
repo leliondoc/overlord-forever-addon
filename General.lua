@@ -40,6 +40,9 @@ local allyGeneralAlertKeys = {}
 local lastGroupResyncAt = 0
 local GROUP_RESYNC_COOLDOWN = 5
 local rosterDebounceTimer = nil
+local rosterLastEventAt = 0
+local rosterArmedEventAt = 0
+local ROSTER_DEBOUNCE = 0.5
 local pendingLeaderClaimTimer = nil
 local passivePruneTicker = nil
 local lastPersistAt = 0
@@ -1310,34 +1313,46 @@ function Overlord.General:OnCampaignReset()
     end
 end
 
+-- Trailing debounce: runs ROSTER_DEBOUNCE after the LAST roster event, as the old
+-- cancel-and-recreate did, but with one pending timer per burst instead of a timer and
+-- a closure per event (raid formation fires tens per second). The pending timer was
+-- armed for the event stamped rosterArmedEventAt; if a later event came in, it re-arms
+-- for the time left since that one.
+local function RunRosterDebounce()
+    rosterDebounceTimer = nil
+    if not Overlord.General or Overlord.InstanceSuspended or IsInInstance() then return end
+    if rosterLastEventAt > rosterArmedEventAt then
+        rosterArmedEventAt = rosterLastEventAt
+        local remaining = rosterLastEventAt + ROSTER_DEBOUNCE - GetTime()
+        if remaining > 0.01 then
+            rosterDebounceTimer = C_Timer.NewTimer(remaining, RunRosterDebounce)
+            return
+        end
+    end
+    if Overlord.General:IsLocalHolder() and not Overlord.General:IsRaidLeader() then
+        Overlord.General:TryRelease(true)
+    end
+    if pendingLeaderClaimTimer then
+        pendingLeaderClaimTimer:Cancel()
+        pendingLeaderClaimTimer = nil
+    end
+    if Overlord.General:IsRaidLeader() and not Overlord.General:IsLocalHolder() then
+        TryClearStaleLocalSlotForFormerLeader(Overlord.PlayerFaction)
+    end
+    if Overlord.General:IsLocalHolder() then
+        Overlord.General:ResyncToGroup(true)
+    end
+    if Overlord.Button and Overlord.Button.RefreshGeneralButton then
+        Overlord.Button:RefreshGeneralButton()
+    end
+end
+
 function Overlord.General:OnGroupRosterUpdate()
     if Overlord.InstanceSuspended or IsInInstance() then return end
-    if rosterDebounceTimer then
-        rosterDebounceTimer:Cancel()
-        rosterDebounceTimer = nil
-    end
-    -- After() ne renvoie pas de handle annulable : sous une rafale roster, chaque
-    -- event armait donc sa propre closure malgre le Cancel ci-dessus.
-    rosterDebounceTimer = C_Timer.NewTimer(0.5, function()
-        rosterDebounceTimer = nil
-        if not Overlord.General or Overlord.InstanceSuspended or IsInInstance() then return end
-        if Overlord.General:IsLocalHolder() and not Overlord.General:IsRaidLeader() then
-            Overlord.General:TryRelease(true)
-        end
-        if pendingLeaderClaimTimer then
-            pendingLeaderClaimTimer:Cancel()
-            pendingLeaderClaimTimer = nil
-        end
-        if Overlord.General:IsRaidLeader() and not Overlord.General:IsLocalHolder() then
-            TryClearStaleLocalSlotForFormerLeader(Overlord.PlayerFaction)
-        end
-        if Overlord.General:IsLocalHolder() then
-            Overlord.General:ResyncToGroup(true)
-        end
-        if Overlord.Button and Overlord.Button.RefreshGeneralButton then
-            Overlord.Button:RefreshGeneralButton()
-        end
-    end)
+    rosterLastEventAt = GetTime()
+    if rosterDebounceTimer then return end
+    rosterArmedEventAt = rosterLastEventAt
+    rosterDebounceTimer = C_Timer.NewTimer(ROSTER_DEBOUNCE, RunRosterDebounce)
 end
 
 function Overlord.General:AppendToSrQueue(queue, minimalResponseOnly)

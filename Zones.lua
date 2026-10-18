@@ -285,47 +285,80 @@ function Overlord.Zones:GetDisplayOrderForFront(frontId)
     return out
 end
 
--- Prochaines zones a viser (toutes les branches debloquees en parallele, ex. Faldir + Haut-Perchoir).
-function Overlord.Zones:GetNextObjectiveZoneIds(frontId)
+-- Fills ids (cleared first) with the next zones to aim at; returns their count.
+local function FillNextObjectiveZoneIds(self, frontId, ids)
+    for i = #ids, 1, -1 do ids[i] = nil end
     local pf = Overlord.PlayerFaction
-    if not pf then return {} end
+    if not pf then return 0 end
     -- Meme trêve que le gameplay : pas d'objectif HUD seulement si la carte confirme la victoire.
     if frontId and self.IsOnVictoryCooldown and select(1, self:IsOnVictoryCooldown(frontId, true)) then
-        return {}
+        return 0
     end
     local ordered = self:GetDisplayOrderForFront(frontId)
-    if not ordered or #ordered == 0 then return {} end
+    if not ordered or #ordered == 0 then return 0 end
     for _, zone in ipairs(ordered) do
         if zone.status == "in_progress" and zone.isHolding then
-            return { zone.id }
+            ids[1] = zone.id
+            return 1
         end
     end
-    local ids = {}
     for _, zone in ipairs(ordered) do
         if zone.status == "in_progress" and zone.owner == pf then
             ids[#ids + 1] = zone.id
         end
     end
-    if #ids > 0 then return ids end
+    if #ids > 0 then return #ids end
     for _, zone in ipairs(ordered) do
         if zone.status == "available" then
             ids[#ids + 1] = zone.id
         end
     end
+    return #ids
+end
+
+-- Prochaines zones a viser (toutes les branches debloquees en parallele, ex. Faldir + Haut-Perchoir).
+-- Public: a new table per call, the caller may keep it.
+function Overlord.Zones:GetNextObjectiveZoneIds(frontId)
+    local ids = {}
+    FillNextObjectiveZoneIds(self, frontId, ids)
     return ids
 end
 
 -- Une zone pour le HUD : capture en cours, sinon la plus proche parmi les objectifs paralleles.
+-- Asked several times a second (HUD tick, panel, dock): the ids go to a scratch list that
+-- never leaves this function, and parallel objectives share one read of the player's
+-- position instead of one per candidate (same arithmetic, same distances).
 function Overlord.Zones:GetNextObjectiveZone(frontId)
-    local ids = self:GetNextObjectiveZoneIds(frontId)
-    if #ids == 0 then return nil end
-    if #ids == 1 then return self:GetZone(ids[1]) end
-    if Overlord.ZoneIndicator and Overlord.ZoneIndicator.GetDistanceToZone then
+    local ids = self._nextObjectiveIdsScratch
+    if not ids then
+        ids = {}
+        self._nextObjectiveIdsScratch = ids
+    end
+    local count = FillNextObjectiveZoneIds(self, frontId, ids)
+    if count == 0 then return nil end
+    if count == 1 then return self:GetZone(ids[1]) end
+    local indicator = Overlord.ZoneIndicator
+    if indicator and indicator.ReadZoneDistanceOrigin and indicator.GetDistanceFromOrigin then
         local best, bestDist = nil, math.huge
-        for _, id in ipairs(ids) do
-            local z = self:GetZone(id)
+        local px, py, aspect = indicator:ReadZoneDistanceOrigin()
+        if px then
+            for i = 1, count do
+                local z = self:GetZone(ids[i])
+                if z then
+                    local d = indicator:GetDistanceFromOrigin(z, px, py, aspect)
+                    if d and d < bestDist then
+                        best, bestDist = z, d
+                    end
+                end
+            end
+        end
+        if best then return best end
+    elseif indicator and indicator.GetDistanceToZone then
+        local best, bestDist = nil, math.huge
+        for i = 1, count do
+            local z = self:GetZone(ids[i])
             if z then
-                local d = Overlord.ZoneIndicator:GetDistanceToZone(z)
+                local d = indicator:GetDistanceToZone(z)
                 if d and d < bestDist then
                     best, bestDist = z, d
                 end
@@ -1879,6 +1912,10 @@ end
 
 function Overlord.Zones:_DoUpdateAvailableZones(suppressNotifications)
     local pf = Overlord.PlayerFaction
+    -- A truce start or a broken chain can cancel several captures in this pass: one
+    -- local save after the loop instead of a full SaveState per cancelled zone
+    -- (SavedVariables are only written at logout or reload).
+    local invalidatedAny = false
 
     -- Annule un siege / une capture in_progress (prerequis, treve capitale, etc.)
     local function invalidateInProgressCapture(zone)
@@ -1939,9 +1976,7 @@ function Overlord.Zones:_DoUpdateAvailableZones(suppressNotifications)
         if Overlord.MarkDirty then
             Overlord:MarkDirty()
         end
-        if Overlord.SaveState then
-            pcall(Overlord.SaveState, Overlord)
-        end
+        invalidatedAny = true
         if Overlord.UI then Overlord.UI:RequestRefresh() end
     end
 
@@ -2043,5 +2078,8 @@ function Overlord.Zones:_DoUpdateAvailableZones(suppressNotifications)
             end
             end
         end
+    end
+    if invalidatedAny and Overlord.SaveState then
+        pcall(Overlord.SaveState, Overlord)
     end
 end
