@@ -1,6 +1,7 @@
 -- Minimap capture-zone pins (2026-10-17, players reported them jittering).
 -- While the player moves, the minimap background moves every rendered frame: the pins
--- follow at 60 Hz at most (every frame cost 2.4 times the work at 144 Hz). A zoom
+-- follow one tick per quarter pixel of scrolling, 60 Hz at most (2026-10-18: a tick at
+-- every frame recomputed the same half-pixel place about 60 times a second). A zoom
 -- of the minimap (event MINIMAP_UPDATE_ZOOM) or a resize takes effect at the next frame,
 -- position and circle size, instead of up to half a second later. Walking moves a pin by
 -- about 0.02 px a frame: pins are placed to the half pixel, so a walking pin is placed
@@ -116,7 +117,7 @@ assert(pin.points - before >= 1 and pin.points - before <= 13,
     ("pin moved %d times in 30 frames at 144 Hz"):format(pin.points - before))
 assert(pin.regions and #pin.regions > 0, "zone pin has no texture")
 -- Walking pace (7 yd/s at 144 Hz, about 0.02 px a frame): placed to the half pixel, the
--- pin stays within a quarter pixel of its place plus the frames between two 60 Hz ticks,
+-- pin stays within a quarter pixel of its place plus a quarter pixel of scrolling per tick,
 -- and is placed again only a few times a second (CPU), far fewer than the frames.
 local pxPerYard = 100 / 233
 local worst = 0
@@ -127,8 +128,78 @@ for i = 1, 60 do
     local exact = (50 - px * 100) * 10 * pxPerYard
     if i > 3 then worst = math.max(worst, math.abs(pin.x - exact)) end
 end
-assert(worst <= 0.25 + 3 * 0.021 + 1e-9, ("walking pace: pin %.3f px off its place"):format(worst))
+-- (Half-pixel placement, plus at most one tick of scrolling: a quarter pixel, plus the
+-- frames of a tick's reliquat.)
+assert(worst <= 0.25 + 0.25 + 3 * 0.021 + 1e-9, ("walking pace: pin %.3f px off its place"):format(worst))
 assert(pin.points - before >= 1 and pin.points - before <= 5, "walking pace: SetPoint count " .. (pin.points - before))
+
+-- Walking pace: the driver ticks with the scrolling (a quarter pixel a tick), not at
+-- every frame. 3 px/s here (7 yd/s, 100 px for 233 yd): about 12 ticks a second.
+local reads = 0
+local bestMap = C_Map.GetBestMapForUnit
+C_Map.GetBestMapForUnit = function(...) reads = reads + 1; return bestMap(...) end
+local function ticksIn(seconds)
+    reads = 0
+    for i = 1, math.floor(seconds * 144) do
+        px = px + speed / 144 / 1000
+        tick(1 / 144)
+    end
+    return reads
+end
+local walking = ticksIn(1)
+assert(walking >= 8 and walking <= 16, "walking pace: " .. walking .. " ticks in a second")
+-- Faster (a flying mount) or a closer zoom: the pace follows, still 60 Hz at most.
+speed = 30
+local flying = ticksIn(1)
+assert(flying > walking * 3 and flying <= 61, "flying pace: " .. flying .. " ticks in a second")
+speed = 7
+-- Turning with a rotating minimap: every frame, 60 Hz at most (pins sweep around it).
+local rotate, facingNow = "1", 0
+GetCVar = function() return rotate end
+GetPlayerFacing = function() facingNow = facingNow + 0.01; return facingNow end
+tick(0.6) -- full refresh: the rotation setting is read
+local turning = ticksIn(1)
+assert(turning >= 50 and turning <= 61, "turning pace: " .. turning .. " ticks in a second")
+-- Walking straight with a rotating minimap: every frame too (a turn would only be seen at
+-- the next tick, and the edge pins sweep far faster than the scrolling: 2.0.5's pace).
+GetPlayerFacing = function() return facingNow end
+local straight = ticksIn(1)
+assert(straight >= 50 and straight <= 61, "rotating minimap, walking: " .. straight .. " ticks in a second")
+GetCVar = function() return "0" end
+GetPlayerFacing = function() return 0 end
+tick(0.6)
+-- The game may hand the speed back as a secret value: it cannot be compared (an error
+-- at every tick stopped the pins, reported 2026-10-18). Read as unknown: ticks as if
+-- moving, 60 Hz, as 2.0.5 did. (A table stands for it: comparing one raises an error.)
+local secret = {}
+local unitSpeed = GetUnitSpeed
+GetUnitSpeed = function() return secret end
+local okSecret, secretTicks = pcall(ticksIn, 1)
+assert(okSecret, "secret speed: " .. tostring(secretTicks))
+assert(secretTicks >= 50 and secretTicks <= 61, "secret speed pace: " .. secretTicks .. " ticks in a second")
+GetUnitSpeed = unitSpeed
+tick(0.6)
+-- A hidden facing (rotating minimap): no error, the last facing is kept, every frame.
+GetCVar = function() return "1" end
+GetPlayerFacing = function() return secret end
+local okFacing, facingTicks = pcall(function() tick(0.6); return ticksIn(0.5) end)
+assert(okFacing, "secret facing: " .. tostring(facingTicks))
+assert(facingTicks >= 25, "secret facing pace: " .. facingTicks .. " ticks in half a second")
+GetCVar = function() return "0" end
+GetPlayerFacing = function() return 0 end
+tick(0.6)
+-- A hidden position: no error, and nothing disappears: the pin stays where it was, then
+-- follows again once the position can be read.
+local shownBefore, xBefore = pin.shown, pin.x
+local mapPosition = C_Map.GetPlayerMapPosition
+C_Map.GetPlayerMapPosition = function() return { GetXY = function() return secret, secret end } end
+local okPos, errPos = pcall(function() tick(0.6); px = px + 0.01; tick(0.6) end)
+assert(okPos, "secret position: " .. tostring(errPos))
+assert(pin.shown == shownBefore and pin.x == xBefore, "a hidden position moved or hid the pin")
+C_Map.GetPlayerMapPosition = mapPosition
+tick(0.6)
+assert(pin.shown and pin.x ~= xBefore, "the pin did not follow the position again")
+C_Map.GetBestMapForUnit = bestMap
 -- Standing still with a forced refresh: no SetPoint for a pin that did not move.
 speed = 0
 tick(0.6)
@@ -169,4 +240,4 @@ while math.abs(pin.x - x2 * 2) >= 1 and frames < 30 do
 end
 assert(frames <= 15, "resize burst: last size applied after " .. frames .. " frames")
 
-print("Minimap driver: 60 Hz while moving, zoom and resize at the next frame OK")
+print("Minimap driver: pace follows the scrolling, zoom and resize at the next frame OK")

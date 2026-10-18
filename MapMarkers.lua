@@ -58,6 +58,11 @@ local driverState = {
     minimapIdleInterval = 0.50,
     minimapMovementActive = true,
     minimapPositionRefreshForced = true,
+    -- En mouvement, un tick par quart de pixel de defilement de la minicarte (voir
+    -- driverState.MinimapMovingInterval) ; vitesse lue au tick precedent (yards/s).
+    minimapStepPx = 0.25,
+    minimapSpeed = nil,
+    minimapTurning = false,
     mapLayoutValid = false,
     mapLayoutCw = 0,
     mapLayoutCh = 0,
@@ -2893,15 +2898,14 @@ local mmYardsPerPctX, mmYardsPerPctY = nil, nil
 local mmScaleCalculatedFor = nil
 local mmScaleCalculatedMapID = nil
 local mmFrame = nil  -- Garde une ref pour SetMinimapPinsVisible (appele depuis Core)
--- En mouvement, la position suit a 60 Hz au plus (a chaque image, un ecran a 144 Hz faisait
--- 2,4 fois plus de travail pour un gain a peine visible ; le placement au sous-pixel garde
--- le glissement doux). Donnees, styles et reconciliations restent a 2 Hz. Le cache de
+-- En mouvement, la position suit le defilement de la minicarte, a 60 Hz au plus (voir
+-- driverState.MinimapMovingInterval). Donnees, styles et reconciliations restent a 2 Hz. Le cache de
 -- PlaceMinimapPinCenter evite tout SetPoint si un pin n'a pas bouge.
 local MM_POS_INTERVAL = 1 / 60
 local MM_DATA_INTERVAL = 0.5
 local mmPosAcc = 0
 local mmDataAcc = MM_DATA_INTERVAL
--- Zones, mines et keep partagent le meme driver mmFrame (meme cache position, a chaque image en mouvement).
+-- Zones, mines et keep partagent le meme driver mmFrame (meme cache position, au rythme du defilement en mouvement).
 -- mmMineMapActive : on est sur une carte a mines -> mmFrame doit tourner meme hors front actif.
 local mmMineMapActive = false
 -- Toutes les icones minimap deja masquees par l'option (evite de les recacher a chaque tick).
@@ -2915,8 +2919,44 @@ local mmCachedHalfMM = 0
 local mmCachedPxPerYard = 0
 local mmSharedDriverContext = {}
 
-local function IsPlayerStationaryForMinimap()
-    return GetUnitSpeed and (GetUnitSpeed("player") or 0) <= 0
+-- Called through pcall only. The comparison stays inside it, like Core.lua's wrappers
+-- (SafeUnitLevel): the game may hand the speed back as a secret value, which cannot be
+-- compared; the error is caught and the driver ticks as if moving (60 Hz), as in 2.0.5.
+local function GetPlayerSpeedForMinimap()
+    if not GetUnitSpeed then return nil end
+    local speed = GetUnitSpeed("player") or 0
+    if speed > 0 then return speed end
+    return 0
+end
+
+-- Orientation pour une minicarte en rotation. Through pcall only, like the speed: a secret
+-- value would break the sin/cos of every pin; the arithmetic below raises inside the pcall
+-- instead, and the caller keeps the last facing it could read.
+function driverState.ReadMinimapFacing()
+    local facing = GetPlayerFacing and GetPlayerFacing() or 0
+    return (facing or 0) + 0
+end
+
+-- The player's map position in percent, through pcall only (same reason).
+function driverState.ReadMapXY(pos)
+    local x, y = pos:GetXY()
+    if not x or not y then return nil end
+    return x * 100, y * 100
+end
+
+-- Les icones sont placees au demi-pixel : en marchant (environ 2 px/s au zoom par
+-- defaut), leur position ne change que quelques fois par seconde. Un tick a chaque image
+-- recalculait 60 fois la meme position. Le tick suit maintenant le defilement : un par
+-- quart de pixel, donc une icone bouge au plus un quart de pixel apres le terrain.
+-- Monte, en vol ou minicarte zoomee, la cadence monte d'elle-meme (60 Hz au plus).
+-- Vitesse inconnue (reveil, premier tick) : 60 Hz jusqu'au tick suivant.
+function driverState.MinimapMovingInterval()
+    local pxPerSec = (driverState.minimapSpeed or 0) * mmCachedPxPerYard
+    if pxPerSec <= 0 then return MM_POS_INTERVAL end
+    local interval = driverState.minimapStepPx / pxPerSec
+    if interval < MM_POS_INTERVAL then return MM_POS_INTERVAL end
+    if interval > driverState.minimapIdleInterval then return driverState.minimapIdleInterval end
+    return interval
 end
 
 function driverState.WakeMinimapDriver()
@@ -2951,9 +2991,9 @@ local function GetPlayerPositionForResourceMap(mapID)
     end
     local ok, pos = pcall(C_Map.GetPlayerMapPosition, mapID, "player")
     if not ok or not pos then return nil, nil end
-    local ok2, px, py = pcall(pos.GetXY, pos)
-    if not ok2 or not px then return nil, nil end
-    return px * 100, py * 100
+    local ok2, px, py = pcall(driverState.ReadMapXY, pos)
+    if not ok2 or not px or not py then return nil, nil end
+    return px, py
 end
 
 -- Position au demi-pixel, avec un cache : une icone n'est replacee que si sa position
@@ -3102,10 +3142,20 @@ function Overlord.MapMarkers:InitializeMinimap()
         end
         mmPosAcc = mmPosAcc + elapsed
         mmDataAcc = mmDataAcc + elapsed
-        local tickInterval = (driverState.minimapMovementActive or driverState.minimapScalePending)
-            and MM_POS_INTERVAL or driverState.minimapIdleInterval
-        if mmPosAcc < tickInterval then return end
-        -- Conserver le reliquat (rythme 2 Hz a l'arret) ; en mouvement il reste a 0.
+        -- Rotation de la minicarte en cours ou zoom a appliquer : a chaque image (60 Hz au
+        -- plus). En mouvement : au rythme du defilement. A l'arret : 2 Hz.
+        local tickInterval = driverState.minimapIdleInterval
+        if driverState.minimapScalePending or driverState.minimapTurning then
+            tickInterval = MM_POS_INTERVAL
+        elseif driverState.minimapMovementActive then
+            -- Minicarte en rotation : un virage en marchant n'est vu qu'au tick suivant, et
+            -- les icones du bord tournent bien plus vite que le defilement. A chaque image
+            -- alors, comme en 2.0.5.
+            tickInterval = mmCachedRotate and MM_POS_INTERVAL or driverState.MinimapMovingInterval()
+        end
+        -- (Un reveil -- depart, zoom, option -- est traite a l'image meme.)
+        if mmPosAcc < tickInterval and not driverState.minimapPositionRefreshForced then return end
+        -- Conserver le reliquat (rythme regulier) ; il reste borne a un intervalle.
         mmPosAcc = math.min(math.max(0, mmPosAcc - tickInterval), tickInterval)
 
         local fullRefresh = mmDataAcc >= MM_DATA_INTERVAL
@@ -3116,10 +3166,21 @@ function Overlord.MapMarkers:InitializeMinimap()
 
         -- Le mouvement reel garde le driver fluide. A l'arret, le prochain tick passe
         -- a 2 Hz ; une rotation detectee le reveille tant que l'orientation continue a changer.
-        local speedOk, stationary = pcall(IsPlayerStationaryForMinimap)
-        local facing = mmCachedRotate and (GetPlayerFacing() or 0) or 0
-        local facingChanged = facing ~= mmCachedFacing
-        local moving = not speedOk or not stationary
+        local speedOk, speed = pcall(GetPlayerSpeedForMinimap)
+        if not speedOk or type(speed) ~= "number" then speed = nil end
+        -- (Unreadable facing: the last one is kept and the driver ticks as if turning.)
+        local facing, facingChanged = 0, false
+        if mmCachedRotate then
+            local okFacing, readFacing = pcall(driverState.ReadMinimapFacing)
+            if okFacing then
+                facing, facingChanged = readFacing, readFacing ~= mmCachedFacing
+            else
+                facing, facingChanged = mmCachedFacing, true
+            end
+        end
+        local moving = speed == nil or speed > 0
+        driverState.minimapSpeed = speed
+        driverState.minimapTurning = facingChanged
         driverState.minimapMovementActive = moving or facingChanged
         local forcedRefresh = driverState.minimapPositionRefreshForced
         driverState.minimapPositionRefreshForced = false
@@ -3152,15 +3213,21 @@ function Overlord.MapMarkers:InitializeMinimap()
             Overlord.MapMarkers:HideMinimapOutpostPin()
             return
         end
-        local px, py = pos:GetXY()
+        -- (Read and scaled inside pcall. A position the game would hide leaves every pin
+        -- where it was, nothing disappears; the next tick reads it again.)
+        local okXY, px, py = pcall(driverState.ReadMapXY, pos)
+        if not okXY or not px or not py then return end
         mmCachedMapID = mapID
-        mmCachedPX, mmCachedPY = px * 100, py * 100
+        mmCachedPX, mmCachedPY = px, py
         -- Taille, rayon et mode de rotation changent rarement. Les relire avec les
         -- donnees (2 Hz) plutot qu'a chaque mouvement evite trois appels API par tick.
         -- Le premier tick est toujours un fullRefresh (mmDataAcc initialise ci-dessus).
         if fullRefresh or mmCachedHalfMM <= 0 or mmCachedPxPerYard <= 0 then
             local nextRotate = GetCVar("rotateMinimap") == "1"
-            if nextRotate and not mmCachedRotate then facing = GetPlayerFacing() or 0 end
+            if nextRotate and not mmCachedRotate then
+                local okFacing, readFacing = pcall(driverState.ReadMinimapFacing)
+                facing = okFacing and readFacing or 0
+            end
             mmCachedRotate = nextRotate
             mmCachedHalfMM = Minimap:GetWidth() / 2
             local viewRadius = Overlord.MapMarkers:GetMinimapRadius()
@@ -3474,7 +3541,7 @@ function Overlord.MapMarkers:UpdateMinimapPins(fullRefresh)
         return
     end
 
-    -- Garantir un pin par zone sans scanner/recreer sur le chemin position (chaque image en mouvement).
+    -- Garantir un pin par zone sans scanner/recreer sur le chemin position (chaque tick en mouvement).
     if fullRefresh then self:CreateMinimapPins() end
 
     -- Echelle et position via la carte Zone du front, pas la sous-carte joueur (donjon / etage).
@@ -5016,7 +5083,7 @@ function Overlord.MapMarkers:PlaceMinimapPinCenter(pin, pinX, pinY)
 end
 
 function Overlord.MapMarkers:GetMinimapCacheState()
-    -- Keep/Outpost consultent cet etat jusqu'a ~60 Hz. Reutiliser la meme table :
+    -- Keep/Outpost consultent cet etat a chaque tick (60 Hz au plus). Reutiliser la meme table :
     -- les consommateurs lisent les champs immediatement et ne la conservent pas.
     local state = self._minimapCacheState
     if not state then
