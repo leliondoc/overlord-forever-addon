@@ -1794,7 +1794,9 @@ function RP:RepaintPlates(dirty)
     if not pool then return end
     for _, plate in ipairs(C_NamePlate.GetNamePlates() or {}) do
         local unit = plate.namePlateUnitToken or (plate.UnitFrame and plate.UnitFrame.unit)
-        local name = unit and not every and UnitName(unit)
+        -- (Players only: creature plates are most of them, and only players carry a badge.)
+        local name = unit and not every and UnitIsPlayer(unit) and UnitName(unit)
+        if type(name) ~= "string" then name = nil end
         if unit and (every or (name and (dirty[name] or dirty[Canon(name) or ""]))) then
             local rank = self:UnitBadge(pool, unit)
             if rank >= self.MIN_RANK then self:ShowPlate(unit, rank) else self:HidePlate(unit) end

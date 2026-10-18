@@ -117,7 +117,7 @@ assert(pin.points - before >= 1 and pin.points - before <= 13,
     ("pin moved %d times in 30 frames at 144 Hz"):format(pin.points - before))
 assert(pin.regions and #pin.regions > 0, "zone pin has no texture")
 -- Walking pace (7 yd/s at 144 Hz, about 0.02 px a frame): placed to the half pixel, the
--- pin stays within a quarter pixel of its place plus the frames between two 60 Hz ticks,
+-- pin stays within a quarter pixel of its place plus a quarter pixel of scrolling per tick,
 -- and is placed again only a few times a second (CPU), far fewer than the frames.
 local pxPerYard = 100 / 233
 local worst = 0
@@ -160,6 +160,11 @@ GetPlayerFacing = function() facingNow = facingNow + 0.01; return facingNow end
 tick(0.6) -- full refresh: the rotation setting is read
 local turning = ticksIn(1)
 assert(turning >= 50 and turning <= 61, "turning pace: " .. turning .. " ticks in a second")
+-- Walking straight with a rotating minimap: every frame too (a turn would only be seen at
+-- the next tick, and the edge pins sweep far faster than the scrolling: 2.0.5's pace).
+GetPlayerFacing = function() return facingNow end
+local straight = ticksIn(1)
+assert(straight >= 50 and straight <= 61, "rotating minimap, walking: " .. straight .. " ticks in a second")
 GetCVar = function() return "0" end
 GetPlayerFacing = function() return 0 end
 tick(0.6)

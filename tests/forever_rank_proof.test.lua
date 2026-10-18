@@ -1059,6 +1059,22 @@ do
     checked = {}
     RP:RepaintPlates(true)
     assert(#checked == 2, "a full repaint checks every plate")
+    -- A badge whose rank fell is taken off that plate (no full hide any more).
+    local hidden = {}
+    local hidePlate = RP.HidePlate
+    RP.HidePlate = function(_, unit) hidden[#hidden + 1] = unit end
+    RP:RepaintPlates({ ["Real Ten"] = true })
+    assert(#hidden == 1 and hidden[1] == "nameplate2", "a badge that should go stays on its plate")
+    RP.HidePlate = hidePlate
+    -- Names gathered within the second are repainted together; a full repaint absorbs them.
+    RP._platesDirty, RP._platesQueued = nil, true
+    RP:RefreshPlates("Real Ten")
+    RP:RefreshPlates("Someone Else")
+    assert(RP._platesDirty["Real Ten"] and RP._platesDirty["Someone Else"], "names not gathered")
+    RP:RefreshPlates()
+    RP:RefreshPlates("Real Ten")
+    assert(RP._platesDirty == true, "a full repaint was narrowed to one name")
+    RP._platesDirty, RP._platesQueued = nil, nil
     RP.UnitBadge, C_NamePlate.GetNamePlates = unitBadge, getPlates
     units.nameplate1, units.nameplate2 = nil, nil
 end

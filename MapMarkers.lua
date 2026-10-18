@@ -2905,7 +2905,7 @@ local MM_POS_INTERVAL = 1 / 60
 local MM_DATA_INTERVAL = 0.5
 local mmPosAcc = 0
 local mmDataAcc = MM_DATA_INTERVAL
--- Zones, mines et keep partagent le meme driver mmFrame (meme cache position, a chaque image en mouvement).
+-- Zones, mines et keep partagent le meme driver mmFrame (meme cache position, au rythme du defilement en mouvement).
 -- mmMineMapActive : on est sur une carte a mines -> mmFrame doit tourner meme hors front actif.
 local mmMineMapActive = false
 -- Toutes les icones minimap deja masquees par l'option (evite de les recacher a chaque tick).
@@ -3133,7 +3133,10 @@ function Overlord.MapMarkers:InitializeMinimap()
         if driverState.minimapScalePending or driverState.minimapTurning then
             tickInterval = MM_POS_INTERVAL
         elseif driverState.minimapMovementActive then
-            tickInterval = driverState.MinimapMovingInterval()
+            -- Minicarte en rotation : un virage en marchant n'est vu qu'au tick suivant, et
+            -- les icones du bord tournent bien plus vite que le defilement. A chaque image
+            -- alors, comme en 2.0.5.
+            tickInterval = mmCachedRotate and MM_POS_INTERVAL or driverState.MinimapMovingInterval()
         end
         -- (Un reveil -- depart, zoom, option -- est traite a l'image meme.)
         if mmPosAcc < tickInterval and not driverState.minimapPositionRefreshForced then return end
@@ -3509,7 +3512,7 @@ function Overlord.MapMarkers:UpdateMinimapPins(fullRefresh)
         return
     end
 
-    -- Garantir un pin par zone sans scanner/recreer sur le chemin position (chaque image en mouvement).
+    -- Garantir un pin par zone sans scanner/recreer sur le chemin position (chaque tick en mouvement).
     if fullRefresh then self:CreateMinimapPins() end
 
     -- Echelle et position via la carte Zone du front, pas la sous-carte joueur (donjon / etage).
@@ -5051,7 +5054,7 @@ function Overlord.MapMarkers:PlaceMinimapPinCenter(pin, pinX, pinY)
 end
 
 function Overlord.MapMarkers:GetMinimapCacheState()
-    -- Keep/Outpost consultent cet etat jusqu'a ~60 Hz. Reutiliser la meme table :
+    -- Keep/Outpost consultent cet etat a chaque tick (60 Hz au plus). Reutiliser la meme table :
     -- les consommateurs lisent les champs immediatement et ne la conservent pas.
     local state = self._minimapCacheState
     if not state then
