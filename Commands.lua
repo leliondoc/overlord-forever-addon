@@ -364,6 +364,13 @@ local function PerfFinish(label, startedAt, startKb, sliced, ...)
             Overlord:PrintNotification(string.format("|cFFFF4444[Overlord perf]|r %d ms  %s",
                 math.floor(elapsed + 0.5), label))
         end
+        -- The frame's total: a peak can be many small calls in one frame (a burst of
+        -- messages), none slow on its own. Outermost calls only (nested ones are inside).
+        if not sliced and state.depth == 0 then
+            state.frameMs = state.frameMs + elapsed
+            state.frameTop[label] = (state.frameTop[label] or 0) + elapsed
+            state.frameCount[label] = (state.frameCount[label] or 0) + 1
+        end
     end
     return ...
 end
@@ -417,6 +424,38 @@ local function StopPerf()
         if r.kb < 1 then break end
         Overlord:PrintNotification(string.format("  %.0f KB / %d calls  %s", r.kb, r.calls, r.label))
     end
+    -- What the addon list's peaks are made of: the heaviest frames, with what ran in them.
+    if #state.heavy > 0 then
+        Overlord:PrintNotification("[Overlord perf] Heaviest frames (ms in Overlord: biggest calls ms x count):")
+        for _, frame in ipairs(state.heavy) do
+            Overlord:PrintNotification(string.format("  %.1f ms  %s", frame.ms, frame.parts))
+        end
+    end
+end
+
+-- At each frame's end: keep the three heaviest frames of the window (what ran in each,
+-- biggest first), then start the next frame's sums.
+local function PerfCloseFrame(state)
+    local ms = state.frameMs
+    local heavy = state.heavy
+    if ms > 0 and (#heavy < 3 or ms > heavy[#heavy].ms) then
+        local parts = {}
+        for label, spent in pairs(state.frameTop) do parts[#parts + 1] = { label = label, ms = spent } end
+        table.sort(parts, function(a, b) return a.ms > b.ms end)
+        local text = {}
+        for i = 1, math.min(4, #parts) do
+            text[i] = string.format("%s %.1f x%d", parts[i].label, parts[i].ms, state.frameCount[parts[i].label] or 1)
+        end
+        if #parts > 4 then text[#text + 1] = string.format("+%d more", #parts - 4) end
+        heavy[#heavy + 1] = { ms = ms, parts = table.concat(text, ", ") }
+        table.sort(heavy, function(a, b) return a.ms > b.ms end)
+        if #heavy > 3 then heavy[4] = nil end
+    end
+    if ms > 0 then
+        state.frameMs = 0
+        for label in pairs(state.frameTop) do state.frameTop[label] = nil end
+        for label in pairs(state.frameCount) do state.frameCount[label] = nil end
+    end
 end
 
 local function StartPerf(seconds)
@@ -424,7 +463,8 @@ local function StartPerf(seconds)
         Overlord:PrintNotification("[Overlord perf] Already running. /ov perf stop to end it now.")
         return
     end
-    local state = { stats = {}, wrapped = {}, depth = 0, frame = CreateFrame("Frame") }
+    local state = { stats = {}, wrapped = {}, depth = 0, frame = CreateFrame("Frame"),
+        frameMs = 0, frameTop = {}, frameCount = {}, heavy = {} }
     local function wrapTable(owner, prefix)
         if type(owner) ~= "table" then return end
         for key, value in pairs(owner) do
@@ -442,7 +482,13 @@ local function StartPerf(seconds)
     end
     for _, item in ipairs(state.wrapped) do item.owner[item.key] = item.wrapper end
     -- An error inside a timed call skips PerfFinish; never let depth drift across frames.
-    state.frame:SetScript("OnUpdate", function() if perfState then perfState.depth = 0 end end)
+    -- Once a frame: that frame's sums are closed too.
+    state.frame:SetScript("OnUpdate", function()
+        if perfState then
+            perfState.depth = 0
+            PerfCloseFrame(perfState)
+        end
+    end)
     perfState = state
     Overlord:PrintNotification(string.format(
         "[Overlord perf] Timing %d functions for %ds. Calls over %d ms print here.",

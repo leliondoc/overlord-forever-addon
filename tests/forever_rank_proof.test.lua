@@ -1043,6 +1043,25 @@ Overlord.MostWanted = { SKULL_SIZE = 16, skulls = { nameplate9 = { IsShown = fun
 RP:ShowPlate("nameplate9", 15)
 assert(points[#points][4] == -21, "with the Nemesis skull there: left of the skull")
 Overlord.MostWanted = nil
+-- A presence heard re-checks only its sender's plate, not every plate in sight (CPU: one
+-- badge check per player around, every second, on a busy channel).
+do
+    local checked = {}
+    local unitBadge, getPlates = RP.UnitBadge, C_NamePlate.GetNamePlates
+    RP.UnitBadge = function(_, _, unit) checked[#checked + 1] = unit; return 0 end
+    C_NamePlate.GetNamePlates = function()
+        return { { namePlateUnitToken = "nameplate1" }, { namePlateUnitToken = "nameplate2" } }
+    end
+    units.nameplate1 = { name = "Someone Else", faction = "Alliance", guid = "Player-1-SE" }
+    units.nameplate2 = { name = "Real Ten", faction = "Alliance", guid = "Player-1-RT" }
+    RP:RepaintPlates({ ["Real Ten"] = true })
+    assert(#checked == 1 and checked[1] == "nameplate2", "a named repaint checks that player's plate only")
+    checked = {}
+    RP:RepaintPlates(true)
+    assert(#checked == 2, "a full repaint checks every plate")
+    RP.UnitBadge, C_NamePlate.GetNamePlates = unitBadge, getPlates
+    units.nameplate1, units.nameplate2 = nil, nil
+end
 CreateFrame = nil
 print("Rank proof: nameplate badge placed at the start of the name OK")
 

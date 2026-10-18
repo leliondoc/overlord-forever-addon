@@ -255,11 +255,25 @@ local cachedPlayerZone = nil
 local cachedPlayerZoneTime = 0
 
 -- Ordre d'affichage pour un front donne (consultation UI sans activer ce front).
+-- The list is shared: callers read it, never change it. Fronts, their zones and their
+-- orders are fixed tables (Fronts.lua): the list is built once per front and faction.
+-- (The panel, the HUD and the observers asked for it several times a second, each time
+-- a new table and a search of the front's zones for every zone.)
 function Overlord.Zones:GetDisplayOrderForFront(frontId)
     local front = Overlord.Fronts and Overlord.Fronts:GetFront(frontId)
     if not front then return {} end
     local order = front.displayOrder and front.displayOrder[Overlord.PlayerFaction]
+    local cache = self._displayOrderCache
+    if not cache then
+        cache = {}
+        self._displayOrderCache = cache
+    end
+    local hit = cache[front]
+    if hit and hit.order == order and hit.zones == front.zones and hit.count == #(front.zones or {}) then
+        return hit.out
+    end
     local out = {}
+    cache[front] = { order = order, zones = front.zones, count = #(front.zones or {}), out = out }
     if order then
         for _, zid in ipairs(order) do
             local z = Overlord.Fronts:GetZone(zid, frontId)

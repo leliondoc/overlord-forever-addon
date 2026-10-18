@@ -186,6 +186,7 @@ jobs:
           lua5.1 tests/forever_rank_proof_presence.test.lua
           lua5.1 tests/forever_map_marker_zoom_cap.test.lua
           lua5.1 tests/forever_minimap_driver.test.lua
+          lua5.1 tests/forever_perf_frames.test.lua
           lua5.1 tests/forever_world_map_zoom.test.lua
           lua5.1 tests/forever_guild_rating.test.lua
           lua5.1 tests/forever_map_news.test.lua

@@ -79,4 +79,17 @@ assert(not glow.shown and icon.r == 1 and icon.g == 1 and icon.b == 1, "the yell
 Z:ApplyZoneMapIcon(icon, Z.OBJECTIVE_ATTACK_ATLAS)
 assert(icon.g == Z.ATTACK_COLOR[2], "the tint needs the second layer")
 
-print("Attackable points: read from owners on any front, capital last, truce, yellow barracks, second layer OK")
+-- The display order of a front is built once per faction (the panel and the HUD ask for it
+-- several times a second): the same list again, the same zones, the order of each side.
+local order1 = Z:GetDisplayOrderForFront("hillsbrad")
+assert(#order1 == 10 and order1[1] == F:GetZone(front.displayOrder.Alliance[1], "hillsbrad"),
+    "display order: not the front's Alliance order")
+assert(Z:GetDisplayOrderForFront("hillsbrad") == order1, "display order: rebuilt at every call")
+Overlord.PlayerFaction = "Horde"
+local hordeOrder = Z:GetDisplayOrderForFront("hillsbrad")
+assert(hordeOrder ~= order1 and hordeOrder[1] == F:GetZone(front.displayOrder.Horde[1], "hillsbrad"),
+    "display order: the other faction kept the first one's list")
+Overlord.PlayerFaction = "Alliance"
+assert(Z:GetDisplayOrderForFront("hillsbrad")[1] == order1[1], "display order: back to the Alliance order")
+
+print("Attackable points: read from owners on any front, capital last, truce, yellow barracks, second layer, display order once OK")

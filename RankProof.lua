@@ -239,7 +239,7 @@ local function Invalidate(key)
         for k in pairs(enemyBadge) do enemyBadge[k] = nil end
     end
     RP.generation = RP.generation + 1
-    if RP.RefreshPlates then RP:RefreshPlates() end
+    if RP.RefreshPlates then RP:RefreshPlates(key) end
 end
 RP.Invalidate = Invalidate
 
@@ -1764,26 +1764,40 @@ function RP:OnPlate(unit)
     self:TryInspect(unit, false, true)
 end
 
--- Something changed: badges already shown are repainted (at most once a second).
-function RP:RefreshPlates()
+-- Something changed: badges are repainted (at most once a second). With a name, only that
+-- player's plate: a presence heard re-checks its sender's badge, and on a busy channel
+-- (one every second or so) repainting every plate each time cost a badge check per
+-- player in sight every second. Without a name, every plate.
+function RP:RefreshPlates(name)
+    if name == nil then
+        self._platesDirty = true
+    elseif self._platesDirty ~= true then
+        self._platesDirty = self._platesDirty or {}
+        self._platesDirty[name] = true
+    end
     if self._platesQueued or not (C_Timer and C_Timer.After) then return end
     self._platesQueued = true
     C_Timer.After(1, function()
         RP._platesQueued = nil
-        pcall(RP.RepaintPlates, RP)
+        local dirty = RP._platesDirty
+        RP._platesDirty = nil
+        pcall(RP.RepaintPlates, RP, dirty)
     end)
 end
 
-function RP:RepaintPlates()
-    self:HideAllPlates()
+-- dirty: a set of names (only their plates), or nil / true for every plate.
+function RP:RepaintPlates(dirty)
+    local every = type(dirty) ~= "table"
+    if every or InInstance() then self:HideAllPlates() end
     if InInstance() or not (C_NamePlate and C_NamePlate.GetNamePlates) then return end
     local pool = self:Pool()
     if not pool then return end
     for _, plate in ipairs(C_NamePlate.GetNamePlates() or {}) do
         local unit = plate.namePlateUnitToken or (plate.UnitFrame and plate.UnitFrame.unit)
-        if unit then
+        local name = unit and not every and UnitName(unit)
+        if unit and (every or (name and (dirty[name] or dirty[Canon(name) or ""]))) then
             local rank = self:UnitBadge(pool, unit)
-            if rank >= self.MIN_RANK then self:ShowPlate(unit, rank) end
+            if rank >= self.MIN_RANK then self:ShowPlate(unit, rank) else self:HidePlate(unit) end
         end
     end
 end
