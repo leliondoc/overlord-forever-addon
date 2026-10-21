@@ -1,11 +1,9 @@
-2.0.7
+2.0.8
 
-**Overlord Forever 2.0.7**
+**Overlord Forever 2.0.8**
 
-- **Smoother play**: a full pass over the addon to reduce stutters and CPU spikes, mostly in the interface. Overlord also creates far less throwaway data, so it causes far fewer short pauses.
-- **World map**: closing and reopening the map on the same front no longer rebuilds every circle and path; zooming and maximising do much less work.
-- **Ranking and PvP Groups**: both windows are prepared quietly about half a minute after a loading screen, so the first click opens them faster. Scrolling the ranking only redraws the rows that change.
-- **Overlord panel**: the nearby-enemies counter and contested outposts no longer trigger heavy work every few seconds.
-- **Floating next objective** (option): the small window now also shows the capture timer and its bar while a point is being captured.
-- **Instances**: the action bar shortcut is no longer touched inside dungeons and battlegrounds, like the rest of Overlord.
-- Plays alongside 2.0.6: nothing changes in what players exchange.
+- **Ready for launch**: 2.0.8 is the minimum version from launch. Older versions no longer exchange maps or captures with it: **update required**.
+- **Fronts**: a capture made with another version of a front (other points) is no longer shown or applied: no more impossible siege timers coming from another version.
+- **Network**: relayed messages travel in larger pieces, so the relay sends fewer messages.
+- **Chat channels**: the Overlord channel waits for your own channels at login and normally takes the number right after them. It no longer takes General's or Trade's number, so your channel numbers and colours stay as you set them.
+- **Overlord panel**: once you close it, it stays closed at your next login, even on a new day.
