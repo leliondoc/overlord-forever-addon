@@ -182,6 +182,7 @@ jobs:
           lua5.1 tests/forever_group_finder_ui.test.lua
           lua5.1 tests/forever_ranks.test.lua
           lua5.1 tests/forever_ranks_seal.test.lua
+          lua5.1 tests/forever_ranks_launch_reset.test.lua
           lua5.1 tests/forever_ranks_week_close.test.lua
           lua5.1 tests/forever_ranks_currency_panel.test.lua
           lua5.1 tests/forever_ranks_week_rule.test.lua

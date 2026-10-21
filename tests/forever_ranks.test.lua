@@ -62,6 +62,9 @@ Overlord.PlayerFaction = "Alliance"
 OverlordDB = {}
 dofile("Ranks.lua")
 local R = Overlord.Ranks
+-- Its weeks run back and forth across the launch, a clock no server has: one seal era
+-- here (the launch seal has its own test, tests/forever_ranks_launch_reset).
+R.LAUNCH_RESET_AT = math.huge
 
 check(#R.TIERS == 15 and R.MAX_RANK == 15, "fifteen ranks")
 check(R.WEEK_MIN_KILLS == 100, "the kill floor printed in the seven languages is the one in the rules")

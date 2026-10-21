@@ -10,7 +10,8 @@
 -- Gloire, ni le score de la semaine, ni la faction.
 -- Chaque fiche porte un sceau, relu une fois par session : une fiche dont le sceau ne
 -- correspond plus a son contenu est mise de cote, jamais effacee, et le personnage
--- repart d'une fiche vide.
+-- repart d'une fiche vide. Au lancement du jeu (R.LAUNCH_RESET_AT), le sceau gagne un pas :
+-- les fiches de la beta ne se relisent plus, et chacun repart de zero (en silence).
 -- La fiche du personnage connecte est aussi gardee dans la sauvegarde du personnage
 -- (OverlordCharDB.rank) : si celle du compte manque ou a recule, elle est reprise de la.
 Overlord = Overlord or {}
@@ -55,6 +56,9 @@ R.WEEK_EPOCH_SLACK_SEC = 36 * 3600
 R.WEEK_MAX_PROBES = 16
 -- Fiches mises de cote gardees dans la sauvegarde (les plus recentes).
 R.SET_ASIDE_MAX = 8
+-- 2.1.0: the game's launch, the weekly reset of Tuesday 2026-11-03 08:00 UTC (the same
+-- moment as RankProof.ERA_LAUNCH). Ranks start again from zero there: see the seal.
+R.LAUNCH_RESET_AT = 1793692800
 -- Victoires comptees ici dans la semaine pour qu'elle puisse donner une place : sur une
 -- faction peu peuplee, une poignee de victoires vaudrait sinon un top 100.
 R.WEEK_MIN_KILLS = 100
@@ -224,8 +228,10 @@ end
 -- semaines, puis la semaine d'avant et son compte (pe, pk). Il est recalcule a chaque
 -- ecriture de la fiche et verifie a sa premiere lecture de la session.
 -- NE JAMAIS CHANGER ce calcul, ces constantes ni l'ordre des champs : toutes les fiches
--- existantes seraient refusees. Un nouveau format de fiche aurait un nouveau sceau, lu
--- a cote de celui-ci (tests/forever_ranks_seal.test.lua en fige des valeurs).
+-- existantes seraient refusees. Deux formules figees : celle de la beta, et celle du
+-- lancement (la meme plus un pas, Mix(h, 104729), a partir de R.LAUNCH_RESET_AT ; ni
+-- cette date ni ce nombre ne changent plus). Un nouveau format de fiche aurait un nouveau
+-- sceau, lu a cote de celui-ci (tests/forever_ranks_seal.test.lua en fige des valeurs).
 local SEAL_MOD = 2147483647
 local SEAL_CHUNK = 16777216                  -- 2^24
 local SEAL_LIMIT = SEAL_CHUNK * SEAL_CHUNK   -- 2^48
@@ -275,8 +281,35 @@ local function Seed(text)
     return h
 end
 
+-- 2.1.0: the seal of the game's launch. From R.LAUNCH_RESET_AT on, a record is sealed
+-- with one more step. A record sealed before (the beta) never reads back after, even put
+-- back by hand into a save: it is set aside without a word and the character starts
+-- again from zero. Before that moment the formula is the one above, unchanged.
+local function SealEra()
+    local now = Count(GetServerTime and GetServerTime() or (time and time()))
+    -- A time not read (0) keeps the era already seen this session: a launch record is
+    -- never resealed with the beta's formula by a clock read that failed.
+    if now <= 0 then return R._launchSeen and 2 or 1 end
+    if now >= (tonumber(R.LAUNCH_RESET_AT) or math.huge) then
+        R._launchSeen = true
+        return 2
+    end
+    return 1
+end
+
+-- Records verified under the other era are verified again (a session across the launch).
+local trustedEra
+local function EraCheck()
+    local era = SealEra()
+    if trustedEra ~= era then
+        for rec in pairs(trusted) do trusted[rec] = nil end
+        trustedEra = era
+    end
+    return era
+end
+
 -- Le sceau (un entier de 1 a 2^31 - 1), ou nil si la fiche ne peut pas en avoir.
-local function ComputeSeal(rec, name)
+local function ComputeSeal(rec, name, era)
     local weeks = type(rec.t) == "table" and rec.t or nil
     local h = MixNumber(Seed(name), Seed(rec.g))
     h = MixField(h, rec.k)
@@ -291,18 +324,24 @@ local function ComputeSeal(rec, name)
     h = MixField(h, rec.pe)
     h = MixField(h, rec.pk)
     if not h then return nil end
+    if (era or SealEra()) == 2 then h = Mix(h, 104729) end
     return Mix(h, 65521) % (SEAL_MOD - 1) + 1
 end
 
+-- A launch seal reads back whatever the clock says (no beta record carries one); a beta
+-- seal only before the launch.
 local function SealMatches(rec, name)
-    local seal = ComputeSeal(rec, name)
+    local seal = ComputeSeal(rec, name, 2)
+    if seal ~= nil and rec.s == seal then return true end
+    if SealEra() == 2 then return false end
+    seal = ComputeSeal(rec, name, 1)
     return seal ~= nil and rec.s == seal
 end
 
 -- A appeler apres TOUTE ecriture d'un champ scelle (k, c, f, g, we, wk, lw, t, pe, pk) et apres
 -- un changement du nom sous lequel la fiche est rangee.
 local function Reseal(rec, name)
-    rec.s = ComputeSeal(rec, name)
+    rec.s = ComputeSeal(rec, name, EraCheck())
     trusted[rec] = true
 end
 
@@ -339,10 +378,14 @@ end
 -- Vrai si cette table est une fiche au sceau juste pour ce nom. Un nom ou un identifiant
 -- demesure ne vient pas du jeu : il n'est meme pas lu (le sceau le parcourt octet par
 -- octet).
-local function SealOk(rec, key)
+local function SealOk(rec, key, era)
     if type(rec) ~= "table" or type(key) ~= "string" or #key > SEAL_TEXT_MAX then return false end
     local guid = rec.g
     if type(guid) == "string" and #guid > SEAL_TEXT_MAX then return false end
+    if era then
+        local seal = ComputeSeal(rec, key, era)
+        return seal ~= nil and rec.s == seal
+    end
     return SealMatches(rec, key)
 end
 
@@ -350,6 +393,7 @@ end
 -- cote (le second retour vaut alors true). Une fiche n'est verifiee qu'une fois par
 -- session.
 local function Usable(self, all, key)
+    EraCheck()
     local rec = all[key]
     if rec == nil then return nil, false end
     if type(rec) == "table" then
@@ -359,7 +403,9 @@ local function Usable(self, all, key)
             return rec
         end
     end
-    SetAside(self, all, key, rec)
+    -- A record of the beta (sealed before the launch) goes aside without a word.
+    local beta = SealEra() == 2 and SealOk(rec, key, 1)
+    SetAside(self, all, key, rec, beta)
     return nil, true
 end
 
@@ -456,6 +502,7 @@ function R:GetRecord(create)
     if type(OverlordDB) ~= "table" then return nil end
     local name = LocalName()
     if not name then return nil end
+    EraCheck()
     local all = OverlordDB.ranksByCharacter
     local copy = RestorableCopy(name)
     if type(all) ~= "table" then
@@ -655,6 +702,9 @@ function R:CreditLocal(field, amount)
         if now > 0 and (week > now + 2 * self.WEEK_EPOCH_SLACK_SEC or week < now - self.WEEK_SEC - 3 * 86400) then
             week = 0
         end
+        -- 2.1.0: a kill of the first seconds after the launch, before the ladder's own
+        -- reset, counts for Glory, never for the beta's last week.
+        if now >= self.LAUNCH_RESET_AT and week > 0 and week < self.LAUNCH_RESET_AT then week = 0 end
         if week > 0 then
             -- Le debut de semaine peut etre recale de quelques heures en cours de
             -- semaine (ancienne sauvegarde) : c'est la meme semaine, le compte reste.
@@ -895,9 +945,10 @@ end
 function R:SealForSave()
     local all = type(OverlordDB) == "table" and OverlordDB.ranksByCharacter
     if type(all) ~= "table" then return end
+    local era = EraCheck()
     for name, rec in pairs(all) do
         if type(name) == "string" and type(rec) == "table" and trusted[rec] then
-            rec.s = ComputeSeal(rec, name)
+            rec.s = ComputeSeal(rec, name, era)
         end
     end
 end
