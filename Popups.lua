@@ -2016,6 +2016,10 @@ function Overlord.Popups:TryShowFeaturedFrontOnLogin()
     if not CanAutoShowPersistentPopup() then return false end
     if Overlord.InstanceSuspended or not Overlord.IsInitialized then return false end
     if dialogFrame and dialogFrame:IsShown() then return false end
+    -- The player closed the panel: the daily front stays on its arrow and never reopens
+    -- the panel (Show used to flip the saved choice back to open every new day).
+    if OverlordDB and type(OverlordDB.config) == "table"
+        and OverlordDB.config.uiVisible == false then return false end
     MigrateLegacyPopupFlags()
     if self:HasShownFeaturedFrontToday() then return false end
     return self:ShowFeaturedFrontDialog(false)

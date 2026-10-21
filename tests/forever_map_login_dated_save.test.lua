@@ -129,13 +129,13 @@ set(other[5], "Alliance", T2)
 save()
 login()
 sync._enemyFinalStats = nil
-sync:OnReceiveCapture(other[5] .. ":Late Horde|WARRIOR:Horde:" .. T1 .. ":w1:Player-1-0000ABCD:120", "Late Horde")
+sync:OnReceiveCapture(sync:WithFrontMark(other[5], other[5] .. ":Late Horde|WARRIOR:Horde:" .. T1 .. ":w1:Player-1-0000ABCD:120"), "Late Horde")
 assert(sync:GetEnemyCaptureFinalDiagnostics():find("C passed 1", 1, true),
     "The older capture was not a well-formed final: " .. sync:GetEnemyCaptureFinalDiagnostics())
 assert(byId[other[5]].owner == "Alliance" and byId[other[5]].capturedTime == T2,
     "An older capture replaced a newer save during the login window")
 -- A newer one is taken at once, as always.
-sync:OnReceiveCapture(other[5] .. ":Late Horde|WARRIOR:Horde:" .. T3 .. ":w2:Player-1-0000ABCD:120", "Late Horde")
+sync:OnReceiveCapture(sync:WithFrontMark(other[5], other[5] .. ":Late Horde|WARRIOR:Horde:" .. T3 .. ":w2:Player-1-0000ABCD:120"), "Late Horde")
 assert(byId[other[5]].owner == "Horde" and byId[other[5]].capturedTime == T3,
     "A capture newer than the save was refused during the login window")
 -- A group mate's older map: its "ours since T1" does not take back a zone the save

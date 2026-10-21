@@ -11,6 +11,8 @@ Overlord.IsCaptureSyncPending = function() return false end
 Overlord.LocalFrontAwaitingNetworkSnapshot = function() return false end
 function s:IsLargeEvent() return large end
 function s:GetPlayerFullName() return "Capper Tester" end
+-- zone_a is on no front of the registry: give it a front mark (2.0.8, unmarked ZS is not sent).
+function s:GetFrontMark() return "test" end
 local wide = {}
 function s:SendToGroup() end
 function s:SendToChannel() end

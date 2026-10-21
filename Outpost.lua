@@ -127,8 +127,9 @@ Overlord.OutpostSites = {
         -- 2.0.5, devant l'entree de Hache-Tripes, carte Classic de Feralas.
         center = { 58.1, 44.9 },
         halfSize = 1.35,
-        -- Hors des tampons de carte jusqu'au 18 novembre 2026 08:00 UTC (clients 2.0.4).
-        stampFrom = 1794988800,
+        -- Hors des tampons de carte jusqu'au 22 octobre 2026 00:00 UTC, fin de beta prevue
+        -- alors (clients 2.0.4 ; avant, le 18 novembre). Meme date pour tous les clients.
+        stampFrom = 1792627200,
     },
     arathi = {
         id = "arathi_outpost",

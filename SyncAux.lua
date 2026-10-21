@@ -768,13 +768,271 @@ end
 
 function Overlord.Sync:GetEnemyCaptureFinalDiagnostics()
     local stats = self._enemyFinalStats
-    if not stats or next(stats) == nil then return "Enemy capture finals: none received yet." end
+    local refused = tonumber(self._frontMarkRefused) or 0
+    -- Copies, not captures: each transport's copy and each retry is counted, unmarked ones
+    -- (older versions) included.
+    local tail = refused > 0 and (" Copies from another version or front layout ignored: " .. refused .. ".") or ""
+    if not stats or next(stats) == nil then return "Enemy capture finals: none received yet." .. tail end
     local keys = {}
     for key in pairs(stats) do keys[#keys + 1] = key end
     table.sort(keys)
     local parts = {}
     for _, key in ipairs(keys) do parts[#parts + 1] = key .. " " .. stats[key] end
-    return "Enemy capture finals (C / ZS captured / lease end): " .. table.concat(parts, ", ") .. "."
+    return "Enemy capture finals (C / ZS captured / lease end): " .. table.concat(parts, ", ") .. "." .. tail
+end
+
+-- 2.0.8: front mark. A capture (C) and a zone state (ZS) end with ":~f<mark>", the mark
+-- of the sender's front: its point ids, order-free, the front id and FRONT_RULES. The
+-- SAME data as the map layout "~y" (Relay LocalMapLayout: every point id), front by
+-- front: when two versions refuse each other's maps (other point ids), they now also
+-- ignore each other's live captures on the front that differs, instead of seeing
+-- impossible sieges there (Hillsbrad 2 -> 10 points: a capital taken with half the front
+-- enemy, 2026-10). Routes are left out on purpose: a version that only changes routes
+-- keeps "~y", so its maps still cross; refusing its live captures would split live from
+-- maps. An unmarked message (2.0.7 and older) is ignored as well: 2.0.8 is the launch
+-- floor (FrontMarkRefuses). Every C and ZS we send must therefore carry the mark: a copy
+-- that would not fit is not sent at all (WithFrontMark returns nil). The mark goes
+-- last, after any optional field, so an older reader finds it in a slot it ignores
+-- (ZS 14-17: not a Q or W, not a number). FRONT_RULES cuts live captures between versions:
+-- raise it only together with a change of "~y" (Relay MAP_LAYOUT_SALT, or the zone ids),
+-- never alone.
+Overlord.Sync.FRONT_RULES = 1
+Overlord.Sync._frontMarks = {}
+
+function Overlord.Sync:GetFrontMark(zoneId)
+    local fronts = Overlord.Fronts
+    local front = zoneId and fronts and fronts.GetZone and select(2, fronts:GetZone(zoneId))
+    if type(front) ~= "table" or type(front.id) ~= "string" or type(front.zones) ~= "table" then return nil end
+    local cached = self._frontMarks[front.id]
+    if cached then return cached end
+    -- Order-free sum of one string per point, as "~y" (no routes: see above).
+    local hash, count = 0, 0
+    local function add(text)
+        local h = 5381
+        for i = 1, #text do h = (h * 33 + text:byte(i)) % 2147483647 end
+        hash = (hash + h) % 2147483647
+    end
+    for _, zone in ipairs(front.zones) do
+        add(tostring(type(zone) == "table" and zone.id or ""))
+        count = count + 1
+    end
+    if count == 0 then return nil end
+    add(front.id .. "#" .. tostring(self.FRONT_RULES))
+    local n, digits, out = hash % 1679616, "0123456789abcdefghijklmnopqrstuvwxyz", ""
+    for _ = 1, 4 do
+        local d = n % 36
+        out = digits:sub(d + 1, d + 1) .. out
+        n = math.floor(n / 36)
+    end
+    self._frontMarks[front.id] = out
+    return out
+end
+
+-- Our payload with our front's mark; nil when the zone is on no front or the mark would
+-- not fit: an unmarked copy is ignored everywhere, so it is not sent (sizes are pinned by
+-- tests/forever_front_mark.test.lua, the longest real payload keeps a wide margin).
+function Overlord.Sync:WithFrontMark(zoneId, payload, limit)
+    if type(payload) ~= "string" then return nil end
+    local mark = self:GetFrontMark(zoneId)
+    if not mark then return nil end
+    local marked = payload .. ":~f" .. mark
+    if #marked > (limit or 250) then return nil end
+    return marked
+end
+
+-- Splits a received payload: the payload as an unmarked sender would have sent it,
+-- and the mark (nil without one).
+function Overlord.Sync:TakeFrontMark(payload)
+    if type(payload) ~= "string" or #payload < 7 or payload:byte(-6) ~= 126 then return payload, nil end
+    local body, mark = payload:match("^(.*):~f(%w%w%w%w)$")
+    if not body then return payload, nil end
+    return body, mark
+end
+
+-- True when a marked message comes from another layout of this zone's front.
+-- 2.0.8 is the floor of the launch (the game opens on 2026-11-04, every client
+-- installed afresh in its own folder): an UNMARKED message (2.0.7 and older,
+-- the 2-point Hillsbrad of 2.0.2 included) is ignored too. Those versions are also out
+-- of the map exchange (Relay map layout salt), so live and maps cut together.
+function Overlord.Sync:FrontMarkRefuses(zoneId, mark)
+    local ours = self:GetFrontMark(zoneId)
+    if not ours or ours == mark then return false end
+    self._frontMarkRefused = (tonumber(self._frontMarkRefused) or 0) + 1
+    return true
+end
+
+-- 2.0.8: where our channel lands. The game never saves it (chat-cache.txt keeps server
+-- channels only): every login joins it again, and a join takes the lowest free number.
+-- Joined before the server channels, it took their numbers: they slid, the game saved the
+-- slide and the player's colours (one per number) moved (report 2026-10-18). Joined into
+-- a hole an earlier slide left, it sat above the player's own channels. Two steps before
+-- the join, from JoinChannel's first try:
+--  1. the player's channel list (GetChannelList) is read every second until it is the
+--     same three times in a row (2 s of calm), 30 s at most as before;
+--  2. every free number up to the player's last channel (5 at least: the server channels
+--     of a new character) gets a temporary, hidden channel for a few seconds, so ours
+--     lands right after the player's channels; they are left once ours is confirmed.
+-- Checked in game on 2026-10-21 (beta): a temporary channel takes a free number and skips
+-- the numbers the game keeps for Trade and Local Trade outside a city, says nothing in
+-- the chat, and its leaving keeps those numbers; ours then joined at /6 behind
+-- [1. LocalDefense] [2. General] (3 and 5 kept), and Trade was /3 again in the city.
+-- Nothing is swapped, no colour is touched, nothing is saved. A channel of ours already
+-- joined is never moved.
+Overlord.Sync.CHANNEL_SEAT_FLOOR = 5
+Overlord.Sync.CHANNEL_SEAT_MAX_PADS = 6
+
+-- Exactly the names JoinChannelPads gives ("OvPad" .. 6 hex .. a digit); a protected
+-- value is never read.
+function Overlord.Sync:IsChannelPad(name)
+    if type(name) ~= "string" or (canaccessvalue and not canaccessvalue(name)) then return false end
+    return name:upper():find("^OVPAD%x%x%x%x%x%x%d$") ~= nil
+end
+
+-- Ours or one of our pads (a method, not a local: this chunk is close to 200 locals).
+function Overlord.Sync:IsOwnSeatChannel(name)
+    if type(name) ~= "string" or (canaccessvalue and not canaccessvalue(name)) then return false end
+    local pools = Overlord.RealmPools
+    local ours = "OverlordF" .. (pools and pools.GetChannelSuffix and pools:GetChannelSuffix() or "")
+    return type(name) == "string" and (name:upper() == ours:upper() or self:IsChannelPad(name))
+end
+
+-- The player's channels as the game lists them (ours and our pads left out), and the
+-- highest number one of them holds, the ones the game keeps for later included.
+function Overlord.Sync:ReadPlayerChannels()
+    local used, parts, top = {}, {}, 0
+    if type(GetChannelList) == "function" then
+        local list = { GetChannelList() }
+        for i = 1, #list, 3 do
+            local id, name = tonumber(list[i]), list[i + 1]
+            if id and not self:IsOwnSeatChannel(name) then
+                used[id] = true
+                parts[#parts + 1] = id .. "=" .. tostring(name) .. (list[i + 2] and "*" or "")
+                if id > top then top = id end
+            end
+        end
+    end
+    if type(GetNumDisplayChannels) == "function" and type(GetChannelDisplayInfo) == "function" then
+        for i = 1, (tonumber(GetNumDisplayChannels()) or 0) do
+            local name, header, _, number = GetChannelDisplayInfo(i)
+            number = tonumber(number)
+            if number and not header and not self:IsOwnSeatChannel(name) then
+                used[number] = true
+                if number > top then top = number end
+            end
+        end
+    end
+    return table.concat(parts, ","), used, top
+end
+
+-- Free numbers below the player's last channel, or nil when nothing should be padded.
+function Overlord.Sync:ChannelSeatHoles()
+    if type(JoinTemporaryChannel) ~= "function" then return nil end
+    local _, used, top = self:ReadPlayerChannels()
+    top = math.max(top, self.CHANNEL_SEAT_FLOOR)
+    local max = Constants and Constants.ChatFrameConstants
+        and tonumber(Constants.ChatFrameConstants.MaxChatChannels) or 20
+    if top + 1 > max then return nil end
+    local holes = {}
+    for n = 1, top do
+        if not used[n] and (tonumber((GetChannelName(n))) or 0) == 0 then holes[#holes + 1] = n end
+    end
+    if #holes == 0 or #holes > self.CHANNEL_SEAT_MAX_PADS then return nil end
+    return holes
+end
+
+function Overlord.Sync:JoinChannelPads(count)
+    -- Unpredictable per session (the clock mixed in, whatever the RNG seed): a squatter
+    -- cannot guess a pad name to answer it with a password.
+    self._channelPadSalt = self._channelPadSalt or string.format("%06x", (math.random(0, 16777215)
+        + math.floor((GetTime and GetTime() or 0) * 1000) + (time and time() or 0)) % 16777216)
+    self._channelPads = self._channelPads or {}
+    for k = 1, count do
+        local name = "OvPad" .. self._channelPadSalt .. k
+        self._channelPads[#self._channelPads + 1] = name
+        securecall(JoinTemporaryChannel, name, nil, 0)
+    end
+    -- Safety: this seat's pads only (a later seat keeps its own).
+    local pads = self._channelPads
+    C_Timer.After(15, function()
+        local sync = Overlord.Sync
+        if sync and sync._channelPads == pads then sync:ReleaseChannelPads() end
+    end)
+end
+
+function Overlord.Sync:ChannelPadsSeated()
+    for _, name in ipairs(self._channelPads or {}) do
+        if (tonumber((GetChannelName(name))) or 0) <= 0 then return false end
+    end
+    return true
+end
+
+-- Leaves our pads; sweep = also any pad left by a /reload in the middle of a seat (a
+-- temporary channel outlives a /reload, not a logout). Idempotent.
+function Overlord.Sync:ReleaseChannelPads(sweep)
+    local leave = type(LeaveChannelByName) == "function" and LeaveChannelByName
+    if not leave then self._channelPads = nil return end
+    for _, name in ipairs(self._channelPads or {}) do
+        if (tonumber((GetChannelName(name))) or 0) > 0 then securecall(leave, name) end
+    end
+    self._channelPads = nil
+    if sweep and type(GetChannelList) == "function" then
+        local list = { GetChannelList() }
+        for i = 1, #list, 3 do
+            if self:IsChannelPad(list[i + 1]) then securecall(leave, list[i + 1]) end
+        end
+    end
+end
+
+-- One step of the seat for JoinChannel's first try: true when the join may go now;
+-- false when a later step was scheduled (it calls JoinChannel(1, generation) again).
+function Overlord.Sync:ChannelSeatStep(generation)
+    local seat = self._channelSeat
+    if not seat or seat.generation ~= generation then
+        seat = { generation = generation, samples = 0, stable = 0, phase = "calm" }
+        self._channelSeat = seat
+    end
+    if seat.phase == "go" then return true end
+    local delay
+    if seat.phase == "calm" then
+        local signature = self:ReadPlayerChannels()
+        seat.samples = seat.samples + 1
+        seat.stable = (signature ~= "" and signature == seat.last) and seat.stable + 1 or 0
+        seat.last = signature
+        if seat.stable < 2 and seat.samples < 30 then
+            delay = 1
+        else
+            local holes = self:ChannelSeatHoles()
+            if holes then
+                self:JoinChannelPads(#holes)
+                seat.phase, seat.polls, delay = "pads", 0, 0.5
+            else
+                seat.phase = "go"
+                return true
+            end
+        end
+    else
+        seat.polls = seat.polls + 1
+        if self:ChannelPadsSeated() or seat.polls >= 10 then
+            seat.phase = "go"
+            return true
+        end
+        delay = 0.5
+    end
+    C_Timer.After(delay, function()
+        local sync = Overlord.Sync
+        if not sync or sync._joinChannelAttemptPending ~= generation then
+            -- A newer seat may hold pads of its own: only an idle client drops them.
+            if sync and not sync._joinChannelAttemptPending then sync:ReleaseChannelPads() end
+            return
+        end
+        if Overlord.InstanceSuspended then
+            sync:ReleaseChannelPads()
+            sync._joinChannelAttemptPending = nil
+            return
+        end
+        sync:JoinChannel(1, generation)
+    end)
+    return false
 end
 
 -- Message chat de victoire totale, avec le front concerne quand il est connu.

@@ -58,14 +58,14 @@ local function set(id, owner, at)
     zone.owner, zone.status, zone.capturedTime, zone.updatedAt = owner, owner and "captured" or "locked", at, at
 end
 local function progress(id, code, who, wave, guid, hold)
-    sync:OnReceiveZoneState(table.concat({ id, "in_progress", 0, hold, code, wall, 0, 120, who, 1, wave, guid }, ":"),
+    sync:OnReceiveZoneState(sync:WithFrontMark(id, table.concat({ id, "in_progress", 0, hold, code, wall, 0, 120, who, 1, wave, guid }, ":")),
         who, "CHANNEL")
 end
 local function finalC(id, faction, who, wave, guid, at)
-    sync:OnReceiveCapture(table.concat({ id, who .. "|WARRIOR", faction, at or wall, wave, guid, 120 }, ":"), who)
+    sync:OnReceiveCapture(sync:WithFrontMark(id, table.concat({ id, who .. "|WARRIOR", faction, at or wall, wave, guid, 120 }, ":")), who)
 end
 local function finalZS(id, code, who, wave, guid, at)
-    sync:OnReceiveZoneState(table.concat({ id, "captured", 0, 0, code, at or wall, 0, 120, who, 1, wave, guid, 120 }, ":"),
+    sync:OnReceiveZoneState(sync:WithFrontMark(id, table.concat({ id, "captured", 0, 0, code, at or wall, 0, 120, who, 1, wave, guid, 120 }, ":")),
         who, "CHANNEL")
 end
 local function counted(what) return sync:GetEnemyCaptureFinalDiagnostics():find(what, 1, true) ~= nil end

@@ -118,10 +118,13 @@ assert(report():find("was heard shortly before and after 0 of them", 1, true)
     and report():find(here[1] .. " 5 min (before this session)", 1, true), report())
 
 -- A late copy of the live final of one of them, and the same map again: silence.
-sync:OnReceiveCapture(table.concat({ here[1], "Horde Alpha|WARRIOR", "Horde", T - 300, "wA", "Player-1-0000AAAA", 120 }, ":"),
-    "Horde Alpha")
-sync:OnReceiveZoneState(table.concat({ here[1], "captured", 0, 0, "H", T - 300, 0, 120, "Horde Alpha", 1, "wA",
-    "Player-1-0000AAAA", 120 }, ":"), "Horde Alpha", "CHANNEL")
+-- (2.0.8: marked, as every 2.0.8 copy; an unmarked one would be ignored before any of this.)
+local refusedBefore = tonumber(sync._frontMarkRefused) or 0
+sync:OnReceiveCapture(sync:WithFrontMark(here[1], table.concat({ here[1], "Horde Alpha|WARRIOR", "Horde", T - 300,
+    "wA", "Player-1-0000AAAA", 120 }, ":")), "Horde Alpha")
+sync:OnReceiveZoneState(sync:WithFrontMark(here[1], table.concat({ here[1], "captured", 0, 0, "H", T - 300, 0, 120,
+    "Horde Alpha", 1, "wA", "Player-1-0000AAAA", 120 }, ":")), "Horde Alpha", "CHANNEL")
+assert((tonumber(sync._frontMarkRefused) or 0) == refusedBefore, "fixture: the late copies were refused by their mark")
 advance(5)
 feed(neighbour, "Mate Tester")
 assert(#chat == 1, "a late final or a second copy of the map spoke again: " .. table.concat(chat, " / "))

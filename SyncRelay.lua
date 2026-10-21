@@ -15,11 +15,15 @@ local MAX_PACKET, MAX_PATH, TTL = 3600, 4, 120
 -- Channel/group fragment size. An addon message carries 255 bytes: "BF:" plus
 -- "<id>:<part>:<count>:" leave room for ~228 bytes of packet, but clients up to
 -- 1.8.0 refuse a piece longer than 170. Two steps so no version stops reading the
--- others: receivers accept up to FRAGMENT_RECEIVE_MAX now (1.8.1); the sending size
--- goes up in a later version once 1.8.0 is gone. A relayed capture (~185 bytes of
--- wire) then fits one channel message instead of two.
-local FRAGMENT_CHUNK, FRAGMENT_RECEIVE_MAX = 170, 230
--- A legal packet (<= MAX_PACKET bytes) needs at most 22 pieces of 170 bytes.
+-- others: receivers accept up to FRAGMENT_RECEIVE_MAX since 1.8.1; the sending size
+-- went up in 2.0.8 (below), once 1.8.0 was gone. A relayed capture (~185 bytes of
+-- wire) now fits one channel message instead of two.
+-- 2.0.8 (launch floor, every peer >= 2.0.8): 200. "BF:" + "<id>:<part>:<count>:" stays
+-- under 255 with it (tests/forever_front_mark.test.lua), and every relayed C/ZS carries
+-- the 7-byte front mark: measured over every point id, names of 8-24 characters and 1-3
+-- hops, 170 with the mark cost 6.4 % more fragments, 200 costs 23 % fewer than 2.0.7.
+local FRAGMENT_CHUNK, FRAGMENT_RECEIVE_MAX = 200, 230
+-- A legal packet (<= MAX_PACKET bytes) needs at most 18 pieces of 200 bytes.
 local MAX_FRAGMENTS = 24
 -- A legal multi-fragment relay packet can span more than 15 seconds at the
 -- reserved 300 B/s share while urgent traffic is continuous. Expire stalled
@@ -684,8 +688,12 @@ local session = base36(time()) .. base36(math.random(0, 60466175), 5)
 -- traffic (2.0.2 next to the 10-point Hillsbrad: refused pages both ways, pulls that
 -- could never repair). Own presence says "~y<layout>"; a neighbour whose presence
 -- says another layout, or none, is outside the map exchange (IsOutdatedMapPeer). Live
--- captures (C, ZS) still cross. Update required, no fallback. (A field, not a local:
--- this chunk is close to Lua 5.1's 200 locals.)
+-- captures (C, ZS) still crossed until 2.0.8. Update required, no fallback. (A field, not
+-- a local: this chunk is close to Lua 5.1's 200 locals.)
+-- 2.0.8, the launch floor: a salt moves the layout so that 2.0.7 and older (same point
+-- ids) leave the map exchange too, together with their unmarked live captures
+-- (Sync:FrontMarkRefuses). The front marks stay as they were (tests/forever_front_mark).
+net.MAP_LAYOUT_SALT = "2.0.8"
 function net.LocalMapLayout()
     if net.mapLayout then return net.mapLayout end
     local hash, count = 0, 0
@@ -697,6 +705,11 @@ function net.LocalMapLayout()
         end
     end
     if count == 0 then return "0000" end -- registry not loaded yet: not cached
+    if net.MAP_LAYOUT_SALT then
+        local text, h = "#" .. net.MAP_LAYOUT_SALT, 5381
+        for i = 1, #text do h = (h * 33 + text:byte(i)) % 2147483647 end
+        hash = (hash + h) % 2147483647
+    end
     net.mapLayout = base36(hash % 1679616, 4)
     return net.mapLayout
 end
@@ -1664,10 +1677,13 @@ local function tasksFor(p, wire)
     local ckey, pathFriends, trimmed, coverId, coverCarrier, groupSuppressed, unheard
     -- Same test as the lanes (v5, v6 and v7 pages): a page is never broadcast.
     local paged = isPagedCatchup(p)
-    local count = math.ceil(#wire / FRAGMENT_CHUNK)
+    -- A piece and its "BF:<id>:<part>:<count>:" header stay within an addon message even
+    -- for a relayed packet with a long id (up to 64 characters are accepted on receive).
+    local chunk = math.min(FRAGMENT_CHUNK, 252 - (#tostring(p.id) + 12))
+    local count = math.ceil(#wire / chunk)
     for i = 1, count do
         fragments[i] = p.id .. ":" .. i .. ":" .. count .. ":"
-            .. wire:sub((i - 1) * FRAGMENT_CHUNK + 1, i * FRAGMENT_CHUNK)
+            .. wire:sub((i - 1) * chunk + 1, i * chunk)
     end
     local route = p.target ~= "*" and net.peers[p.target:lower()] or nil
     local routeFailure = not route and "missing" or nil
@@ -3351,6 +3367,19 @@ function net:Start()
     local function hello()
         if active() then net:Broadcast("NH", addon.Version) end
     end
-    C_Timer.After(3, hello)
+    -- 2.0.8: the first hello waits for our channel while its join is still seating
+    -- (2-40 s at login, SyncAux ChannelSeatStep): sent at 3 s it reached group and
+    -- Battle.net only, and channel peers kept the newcomer out of their map exchange
+    -- until the next one, 120 s later. Still one hello, never more.
+    local tries = 0
+    local function firstHello()
+        tries = tries + 1
+        if active() and sync.GetChannelId and not sync:GetChannelId() and sync._joinChannelAttemptPending and tries < 14 then
+            C_Timer.After(3, firstHello)
+            return
+        end
+        hello()
+    end
+    C_Timer.After(3, firstHello)
     self.ticker = C_Timer.NewTicker(NH_INTERVAL, hello)
 end
