@@ -4,11 +4,11 @@ local locale = GetLocale() or "enUS"
 
 if locale == "ptBR" then
     L.MINE_DARROW = "Monte das Flechas"
-    L.GOLD_HEADER_TIP = "Ganhe platina nos círculos marcados. Contraforte de Eira dos Montes: Mina Azurelode e Monte das Flechas. Floresta de Pinhaprata: Mina Elemgorge. Loch Modan: Mina Stonesplinter. Floresta de Elwynn: Mina Jasperlode."
+    L.GOLD_HEADER_TIP = "Ganhe platina nos círculos marcados. Contraforte de Eira dos Montes: Mina Veioazul e Monte das Flechas. Floresta de Pinhaprata: Mina Elemgorge. Loch Modan: Mina de lascas de pedra. Floresta de Elwynn: Mina de Jaspe."
     L.HELP_ZONES = "|cFFFFFF00/ov zones|r: Mostrar pontos disponíveis com coordenadas"
     L.HELP_WHERE = "|cFFFFFF00/ov where|r: Alternar indicador de zona"
-    L.HELP_SYNC = "|cFFFFFF00/ov sync [Jogador]|r: Pedir sincronização a um jogador ou grupo alcançável"
-    L.HELP_SCALE = "|cFFFFFF00/ov scale [0.8-1.2]|r: Ajustar a escala do painel"
+    L.HELP_SYNC = "|cFFFFFF00/ov sync [Jogador-Reino]|r: Pedir sincronização (sussurro ao alvo ou grupo/raide/comunidade)"
+    L.HELP_SCALE = "|cFFFFFF00/ov scale [0.8-1.2]|r: Escala do painel (também: Esc > Opções > AddOns > Overlord)"
     L.HELP_GUIDE = "|cFFFFFF00/ov guide|r: Abrir o guia Forever"
     L.USAGE_START = "Uso: /ov start <ponto>"
     L.UI_SCALE_TOOLTIP = "Tamanho do painel e da classificação. Também é possível usar |cffffffff/ov scale|r."
@@ -42,7 +42,7 @@ if locale == "ptBR" or locale == "zhCN" then
         HELP_STATUS = "/ov status",
         HELP_ZONES = "/ov zones", HELP_WHERE = "/ov where",
         HELP_START = "/ov start <zone>", HELP_LB = "/ov lb",
-        HELP_SYNC = "/ov sync [PlayerName]",
+        HELP_SYNC = locale == "ptBR" and "/ov sync [Jogador-Reino]" or "/ov sync [玩家-服务器]",
         HELP_SCALE = "/ov scale [0.8-1.2]",
         HELP_GUIDE = "/ov guide",
     }
