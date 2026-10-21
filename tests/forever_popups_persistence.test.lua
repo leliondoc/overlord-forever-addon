@@ -37,4 +37,14 @@ popups:RegisterLoginAnnouncement({ id = "fixture_once", title = "Once", body = "
 assert(popups:TryShowNextLoginAnnouncement() == true, "Saved one-shot announcement was suppressed")
 assert(shown[1].id == "fixture_once")
 
+-- A panel the player closed stays closed: the daily front never reopens it at login.
+local featuredCalls = 0
+popups.ShowFeaturedFrontDialog = function() featuredCalls = featuredCalls + 1; return true end
+OverlordDB.config.uiVisible = false
+assert(popups:TryShowFeaturedFrontOnLogin() == false and featuredCalls == 0,
+    "The daily front reopened a panel the player closed")
+OverlordDB.config.uiVisible = true
+assert(popups:TryShowFeaturedFrontOnLogin() == true and featuredCalls == 1,
+    "The daily front no longer shows with the panel open")
+
 print("Forever popups: unloaded saves suppress automatic repeats; loaded saves still announce")

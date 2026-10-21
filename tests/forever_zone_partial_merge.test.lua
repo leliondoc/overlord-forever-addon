@@ -165,7 +165,7 @@ assert(loadfile("ZoneCaptureLease.lua"))()
 do
     local W = "ash_stardust"
     setN(W, EPOCH + 4000)
-    sync:OnReceiveCapture(W .. ":Late Capper|WARRIOR:Horde:" .. (EPOCH + 1600) .. ":wlate:Player-1-0000ABCD:120", "Late Capper")
+    sync:OnReceiveCapture(sync:WithFrontMark(W, W .. ":Late Capper|WARRIOR:Horde:" .. (EPOCH + 1600) .. ":wlate:Player-1-0000ABCD:120"), "Late Capper")
     assert(state(W) == "Horde@" .. (EPOCH + 1600),
         "a final older than the zone's last update was refused on a zone nobody holds: " .. state(W)
         .. " / " .. tostring(sync.GetEnemyCaptureFinalDiagnostics and sync:GetEnemyCaptureFinalDiagnostics()))

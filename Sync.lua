@@ -406,8 +406,10 @@ Overlord.Sync.MAP_MIN_VERSION = "1.7.0"
 Overlord.Sync.TRUCELESS_VERSION = "2.0.2"
 -- 2.0.3: Hillsbrad has 10 points; an older client's maps hold another zone set and
 -- each side refuses the other's whole map (see Relay map layout, "~y"). A request
--- that states an older version is not answered. Raise it with every layout change.
-Overlord.Sync.MAP_LAYOUT_VERSION = "2.0.3"
+-- that states an older version is not answered. Raise it with every layout change,
+-- together with what moves "~y" (the zone ids, or Relay MAP_LAYOUT_SALT).
+-- 2.0.8: the launch floor (Relay MAP_LAYOUT_SALT, front marks required on C and ZS).
+Overlord.Sync.MAP_LAYOUT_VERSION = "2.0.8"
 function Overlord.Sync:IsOutdatedMapPeer(name, version)
     -- The version a request states decides alone (2.0.3: unless the requester's own
     -- presence says another map layout): a player who has just updated is still known
@@ -647,6 +649,10 @@ function Overlord.Sync:Initialize()
         syncFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
         syncFrame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
         pcall(syncFrame.RegisterEvent, syncFrame, "CHANNEL_PASSWORD_REQUEST")
+        -- Seat pads left by a /reload in the middle of a join (a temporary channel
+        -- outlives a /reload): swept once the network is set up, outside instances only,
+        -- and never able to stop the rest of the start.
+        if self.ReleaseChannelPads then pcall(self.ReleaseChannelPads, self, true) end
     end
 end
 
@@ -683,30 +689,23 @@ function Overlord.Sync:JoinChannel(attempt, generation)
         end
     end
     if attempt > 4 then
+        self:ReleaseChannelPads()
         FinishJoinAttempt()
         return
     end
-    -- Anti vol du slot /1 : au login, les canaux serveur (Général...) arrivent quelques
-    -- secondes apres PLAYER_ENTERING_WORLD. Si on rejoint avant, le canal Overlord prend
-    -- le /1 et Général passe en /2 a chaque session (signalement joueur). On differe tant
-    -- que le slot 1 est vide, max ~30 s : un joueur qui a quitté tous les canaux serveur
-    -- garde un slot 1 vide en permanence et la sync ne doit jamais rester bloquee pour ça.
+    -- 2.0.8: where it lands (SyncAux ChannelSeatStep). The player's channels first (their
+    -- list calm for 2 s, 30 s at most), then their free numbers padded for a moment, so
+    -- ours never takes a number of theirs nor sits in a hole above them.
+    -- An unexpected error in the seat never holds the join: pads left, plain join.
     if attempt == 1 then
-        local deferCount = self._joinChannelDeferCount or 0
-        local slot1 = GetChannelName(1)
-        if (not slot1 or slot1 == 0) and deferCount < 15 then
-            self._joinChannelDeferCount = deferCount + 1
-            C_Timer.After(2, function()
-                if Overlord.Sync._joinChannelAttemptPending ~= generation then return end
-                if Overlord.InstanceSuspended then
-                    FinishJoinAttempt()
-                    return
-                end
-                Overlord.Sync:JoinChannel(1, generation)
-            end)
-            return
+        local seated, go = pcall(self.ChannelSeatStep, self, generation)
+        if seated and not go then return end
+        if not seated then
+            pcall(self.ReleaseChannelPads, self)
+            if self._channelSeat and self._channelSeat.generation == generation then
+                self._channelSeat.phase = "go"
+            end
         end
-        self._joinChannelDeferCount = 0
     end
     -- frameID 0 = canal invisible (les joueurs ne voient pas le canal dans leur chat)
     -- WoW 12.0.5 : securecall pour ne pas taint le systeme de chat
@@ -719,6 +718,9 @@ function Overlord.Sync:JoinChannel(attempt, generation)
         end
         local id = GetChannelName(ChannelName())
         if id and id > 0 then
+            -- Our number is taken: the pads go now (only now: a later try still lands
+            -- behind them; the 15 s safety timer, attempt > 4 and Suspend cover the rest).
+            Overlord.Sync:ReleaseChannelPads()
             FinishJoinAttempt()
             -- (2.0.2: after the truce's retirement, one neighbour heard as updated instead
             -- of a broadcast, see SendLoginMapPeerRequest.)
@@ -750,11 +752,17 @@ end
 -- never a timer. Any other channel's request is none of our business.
 function Overlord.Sync:OnChannelJoinRefused(name)
     if canaccessvalue and not canaccessvalue(name) then return end
+    -- One of our seat pads (a name somebody else holds): leave them all, join as is.
+    if self:IsChannelPad(name) then
+        self:ReleaseChannelPads()
+        return
+    end
     if type(name) ~= "string" or name:upper() ~= ChannelName():upper() then return end
     if (GetChannelName(ChannelName()) or 0) > 0 then return end
     if priv.channelClosed then return end
     priv.channelClosed = true
     self._joinChannelAttemptPending = nil
+    self:ReleaseChannelPads()
     if not priv.channelClosedTold then
         priv.channelClosedTold = true
         Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. ((L and L.CHANNEL_CLOSED_NOTICE)
@@ -4984,6 +4992,9 @@ end
 -- Une zone a ete capturee (cross-faction : tout le monde voit les captures)
 function Overlord.Sync:OnReceiveCapture(payload, sender)
     if not payload then return end
+    -- 2.0.8: the sender's front mark goes last (SyncAux FrontMarkRefuses).
+    local frontMark
+    payload, frontMark = self:TakeFrontMark(payload)
     local zoneId, participantsStr, faction, ts, captureWaveId, captureOriginGuid,
         captureFinalRequirement = strsplit(":", payload)
     local hadExplicitTs = ts and ts ~= ""
@@ -5056,6 +5067,10 @@ function Overlord.Sync:OnReceiveCapture(payload, sender)
     local zone = Overlord.Zones:GetZone(zoneId)
     local knownZone = zone or (Overlord.Fronts and Overlord.Fronts:IsKnownZoneId(zoneId))
     if not knownZone then return end
+    if self:FrontMarkRefuses(zoneId, frontMark) then
+        self:NoteEnemyCaptureFinal(faction, "C", frontMark and "otherFront" or "unmarked")
+        return
+    end
     local newOwner = faction
     if not newOwner or newOwner == "" then return end
     -- Validation stricte : seules Alliance et Horde sont acceptees (anti-exploit/corruption)
@@ -5592,10 +5607,11 @@ local function BuildSrZsPayload(zone)
             Overlord.Zones:GetObserverHoldTimeElapsed(zone)))
         relayedDisplayAt = tostring((Overlord.ServerNow and Overlord.ServerNow() or time()))
     end
-    return zone.id .. ":" .. status .. ":" .. kills .. ":" .. holdTime .. ":" .. ownerCode .. ":"
+    return Overlord.Sync:WithFrontMark(zone.id,
+        zone.id .. ":" .. status .. ":" .. kills .. ":" .. holdTime .. ":" .. ownerCode .. ":"
         .. zoneTs .. ":" .. siegePhase .. ":" .. holdReq .. ":" .. capturerName
         .. ":" .. capturerShard .. ":" .. (waveId or "")
-        .. ":::::" .. relayedDisplayHold .. ":" .. relayedDisplayAt
+        .. ":::::" .. relayedDisplayHold .. ":" .. relayedDisplayAt)
 end
 
 local function SrInProgressFrontPriority(zone, activeFrontId)
@@ -6792,7 +6808,8 @@ function Overlord.Sync:SendCaptureNetworkProbePackets(route, payload, openingCon
     route.openingContext = route.openingContext or openingContext
     local marked = route.openingPayload .. ":Q" .. route.probeId
         .. ":" .. tostring(route.baseline)
-    if #marked > 250 then return 0 end
+    marked = self:WithFrontMark(route.zoneId, marked)
+    if not marked then return 0 end
     local now = GetTime()
     route.probeRounds = (tonumber(route.probeRounds) or 0) + 1
     local probeRound = route.probeRounds
@@ -6911,7 +6928,9 @@ function Overlord.Sync:ActivateCaptureNetworkRouteCommit(row)
     if bufferedPayload and bufferedSender then
         local function replay()
             if Overlord.Sync and not Overlord.InstanceSuspended then
-                Overlord.Sync:OnReceiveZoneState(bufferedPayload, bufferedSender, "WHISPER")
+                -- Buffered after its front mark was checked and taken off: it gets ours back.
+                Overlord.Sync:OnReceiveZoneState(Overlord.Sync:WithFrontMark(
+                    bufferedPayload:match("^([^:]+)"), bufferedPayload), bufferedSender, "WHISPER")
             end
         end
         if C_Timer and C_Timer.After then C_Timer.After(0, replay) else replay() end
@@ -7213,18 +7232,19 @@ function Overlord.Sync:SendCaptureNetworkWitnessHeartbeat(
     for attempt = 1, attempts do
         for i = 1, #route.targets do
             local target = route.targets[i]
-            local markedPayload = payload .. ":W" .. tostring(i) .. ":" .. route.routeId
+            local markedPayload = self:WithFrontMark(zone.id,
+                payload .. ":W" .. tostring(i) .. ":" .. route.routeId)
             local finalLead = status == "captured" and 0.8
                 or ((openingCommitted or recentlyCommitted) and 1.4 or 0)
             local delay = finalLead + (attempt - 1) * retryDelay + (i - 1) * 0.12
-            if #markedPayload <= 250 and C_Timer and C_Timer.After then
+            if markedPayload and C_Timer and C_Timer.After then
                 C_Timer.After(delay, function()
                     if Overlord.Sync and not Overlord.InstanceSuspended and not IsInInstance() then
                         Overlord.Sync:SendWhisper("ZS", markedPayload, target)
                     end
                 end)
                 queued = queued + 1
-            elseif #markedPayload <= 250 then
+            elseif markedPayload then
                 self:SendWhisper("ZS", markedPayload, target)
                 queued = queued + 1
             end
@@ -7317,6 +7337,9 @@ end
 -- Recoit l'etat complet d'une zone avec proprietaire et timestamp (cross-faction)
 function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
     if not payload then return end
+    -- 2.0.8: the sender's front mark goes last, after any optional field below.
+    local frontMark
+    payload, frontMark = self:TakeFrontMark(payload)
     local syncGateWasPending = Overlord.IsCaptureSyncPending and Overlord:IsCaptureSyncPending()
 
     local VALID_ZS_STATUSES = { in_progress = true, captured = true, available = true, locked = true }
@@ -7352,6 +7375,13 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
         or (Overlord.Fronts and Overlord.Fronts.GetZone
             and select(1, Overlord.Fronts:GetZone(zoneId))))
     if not knownStateZone then return end
+    if self:FrontMarkRefuses(zoneId, frontMark) then
+        if status == "captured" then
+            self:NoteEnemyCaptureFinal(ownerCode == "A" and "Alliance" or ownerCode == "H" and "Horde" or nil,
+                "ZS", frontMark and "otherFront" or "unmarked")
+        end
+        return
+    end
     local remoteSiegePhase = tonumber(siegePhaseStr) or 0
     local remoteHoldParsed = tonumber(remoteHoldReqStr)
     if remoteHoldParsed then
@@ -10188,16 +10218,15 @@ function Overlord.Sync:BroadcastCapture(zoneId, completedRequirement)
         zone._lastCaptureFinalRequired = finalRequirement
         zone._lastCaptureFinalAt = GetTime()
     end
-    local payload = zoneId .. ":" .. triggerField .. ":" .. faction .. ":" .. ts
+    local tail = ":" .. faction .. ":" .. ts
         .. ":" .. tostring(waveId or "") .. ":" .. tostring(originGuid or "")
         .. ":" .. tostring(finalRequirement)
-    -- Secours ultra-rare : noms tres longs + royaume
-    if #payload > (self.MAX_CAPTURE_PAYLOAD_BYTES or 250) then
-        payload = zoneId .. ":" .. fullName .. ":" .. faction .. ":" .. ts
-            .. ":" .. tostring(waveId or "") .. ":" .. tostring(originGuid or "")
-            .. ":" .. tostring(finalRequirement)
-    end
-    if #payload > (self.MAX_CAPTURE_PAYLOAD_BYTES or 250) then return end
+    -- 2.0.8: always with our front mark (an unmarked C is ignored everywhere).
+    -- Secours ultra-rare : noms tres longs + royaume, sans la classe.
+    local payload = self:WithFrontMark(zoneId, zoneId .. ":" .. triggerField .. tail,
+        self.MAX_CAPTURE_PAYLOAD_BYTES or 250)
+        or self:WithFrontMark(zoneId, zoneId .. ":" .. fullName .. tail, self.MAX_CAPTURE_PAYLOAD_BYTES or 250)
+    if not payload then return end
     if self.MarkFreshCaptureLeaderboardRow then
         self:MarkFreshCaptureLeaderboardRow(fullName)
     end
@@ -11043,7 +11072,11 @@ function Overlord.Sync:BroadcastZoneState(zone, forceBNetZS, primaryOnly)
     local payload = zone.id .. ":" .. status .. ":" .. kills .. ":" .. holdTime .. ":" .. ownerCode .. ":" .. ts .. ":" .. siegePhase .. ":" .. holdReq .. ":" .. capturerName
         .. ":" .. capturerShard .. ":" .. (waveId or "") .. ":" .. tostring(originGuid or "")
         .. ":" .. tostring(finalRequirement or "")
-    self:SendToGroup("ZS", payload)
+    -- 2.0.8: copies carry our front mark; the witness whispers below add their Q/W
+    -- fields to the unmarked payload, and the mark after them.
+    local wire = self:WithFrontMark(zone.id, payload)
+    if not wire then return end
+    self:SendToGroup("ZS", wire)
     -- SendToChannel toujours (pas seulement si groupe) : aligne le comportement sur BroadcastCapture.
     -- Sans ca, un capteur solo n'envoie pas au canal -> les joueurs ennemis du meme canal ne voient rien.
     -- critical : captured (fin d'etat) et revert force vers available (fin d'echec de capture).
@@ -11058,7 +11091,7 @@ function Overlord.Sync:BroadcastZoneState(zone, forceBNetZS, primaryOnly)
             criticalTick = true
         end
     end
-    self:SendToChannel("ZS", payload, status == "captured" or isForcedFinalState or criticalTick)
+    self:SendToChannel("ZS", wire, status == "captured" or isForcedFinalState or criticalTick)
     if primaryOnly then return end
     -- BNet : throttle adaptatif par zone.
     -- En event normal : 15s entre chaque ZS BNet par zone (pas de saturation).
@@ -11078,9 +11111,9 @@ function Overlord.Sync:BroadcastZoneState(zone, forceBNetZS, primaryOnly)
             local allowWideRelay = (not largeEvent) or status ~= "captured" or terminalLocalWave
                 or (math.random() <= 0.20)
             if allowWideRelay then
-                self:BroadcastToRelay("ZS", payload)
+                self:BroadcastToRelay("ZS", wire)
                 lastBNetZSBroadcast[zone.id] = GetTime()
-                self:SendToBNetFriends("ZS", payload)
+                self:SendToBNetFriends("ZS", wire)
             end
         else
             local now = GetTime()
@@ -11095,8 +11128,8 @@ function Overlord.Sync:BroadcastZoneState(zone, forceBNetZS, primaryOnly)
             -- Hors gros event : ZS captured immediate (pas d'attente 15s) pour l'observateur cross-faction.
             if isCaptureStart or (isCaptureEnd and not largeEvent) or now - lastForZone >= wideInterval then
                 lastBNetZSBroadcast[zone.id] = now
-                self:BroadcastToRelay("ZS", payload)
-                self:SendToBNetFriends("ZS", payload)
+                self:BroadcastToRelay("ZS", wire)
+                self:SendToBNetFriends("ZS", wire)
             end
         end
     end
@@ -11680,6 +11713,7 @@ function Overlord.Sync:Suspend()
     syncResponseInFlight = false
     priv.syncResponseDeadline = 0
     self:StopChannelRetryLoop()
+    self:ReleaseChannelPads()
     self:StopPeriodicChannelSync()
     self:StopPassiveSync()
     self:StopProximityRescan()

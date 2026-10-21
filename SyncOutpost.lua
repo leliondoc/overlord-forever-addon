@@ -1832,7 +1832,7 @@ end
 -- a chance match is gone at the next request, whose nonce salts every mark anew. The hash
 -- ends with two squarings: a plain djb2 with the nonce in front would keep the same
 -- collisions under every nonce (the nonce's part cancels out between two rows).
--- 12 marks at most: a targeted request then usually stays in one 170-byte relay fragment
+-- 12 marks at most: a targeted request then usually stays in one relay fragment (170 bytes then, 200 since 2.0.8)
 -- (two with two long names and a recorded victory: one more whisper, against the rows saved).
 local OUTPOST_MARK_CHARS, OUTPOST_MARK_MAX, OUTPOST_MARK_MOD = 3, 12, 67108859
 function Overlord.Sync:OutpostHeldMark(siteKey, st, nonce)

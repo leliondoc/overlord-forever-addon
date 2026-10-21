@@ -1088,7 +1088,9 @@ do
     -- A site added after a release stays out of both stamps until its date (2.0.5,
     -- Feralas): a client of the previous release holds the same map until then.
     local site = assert(op:GetSite("anadora"), "fixture: no Feralas outpost")
-    assert(site.stampFrom and site.stampFrom > now, "fixture: the Feralas stamp date is already past")
+    -- (Its date is the end of the beta; the gate is checked with a date still to come.)
+    local stampFrom = assert(site.stampFrom, "fixture: the Feralas outpost has no stamp date")
+    site.stampFrom = now + 3600
     local fresh = op:GetState("anadora")
     local savedFresh = {}
     for k, v in pairs(fresh) do savedFresh[k] = v end
@@ -1101,7 +1103,6 @@ do
     local _, knownGate = sync:GetOutpostMapStamps()
     assert(sumGate == sum0 and digestGate == digest0 and knownGate == knownBefore,
         "a site held before its stamp date changed our stamps")
-    local stampFrom = site.stampFrom
     site.stampFrom = now - 1
     tick(6)
     local sumOpen, digestOpen = sync:GetOutpostMapContent()

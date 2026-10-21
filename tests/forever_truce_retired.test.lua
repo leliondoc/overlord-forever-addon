@@ -170,12 +170,12 @@ do
     local function final(key) return (sync._enemyFinalStats or {})[key] or 0 end
     local legacy0, stale0 = final("C legacy"), final("C stale")
     local q = branches[1]
-    sync:OnReceiveCapture(table.concat({ q.id, "Horde Alpha|WARRIOR", "Horde", V + 10, "wQ", "Player-1-0000AAAA", 120 }, ":"),
+    sync:OnReceiveCapture(sync:WithFrontMark(q.id, table.concat({ q.id, "Horde Alpha|WARRIOR", "Horde", V + 10, "wQ", "Player-1-0000AAAA", 120 }, ":")),
         "Horde Alpha")
     assert(final("C legacy") == legacy0 + 1, "A loser capture right after a truce-less victory was held back by the guard")
     -- A state from before the victory, in flight, is still held back by it.
     local r = branches[2]
-    sync:OnReceiveCapture(table.concat({ r.id, "Horde Beta|WARRIOR", "Horde", V - 30, "wR", "Player-1-0000BBBB", 120 }, ":"),
+    sync:OnReceiveCapture(sync:WithFrontMark(r.id, table.concat({ r.id, "Horde Beta|WARRIOR", "Horde", V - 30, "wR", "Player-1-0000BBBB", 120 }, ":")),
         "Horde Beta")
     assert(final("C legacy") == legacy0 + 1 and final("C stale") == stale0 and r.owner == "Alliance",
         "A capture from before the victory went past the guard")
