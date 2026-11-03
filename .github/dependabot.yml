@@ -1,7 +1,14 @@
+# Dépôt peu actif : mises à jour de version coupées (limite 0).
+# Les correctifs de sécurité restent proposés dès qu'une faille est publiée.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 0
+    groups:
+      securite:
+        applies-to: security-updates
+        patterns:
+          - "*"
