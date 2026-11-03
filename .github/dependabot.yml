@@ -1,7 +1,18 @@
+# Une seule PR groupée par mois et par écosystème pour les mises à jour de version.
+# Les correctifs de sécurité arrivent dès qu'ils sont publiés, dans leur propre PR.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 5
+    groups:
+      securite:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      mises-a-jour:
+        applies-to: version-updates
+        patterns:
+          - "*"
