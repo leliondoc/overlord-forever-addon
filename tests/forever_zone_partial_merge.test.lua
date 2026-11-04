@@ -695,3 +695,86 @@ do
     z.owner, z.status, z.capturedTime, z.updatedAt, z.previousOwner = "Alliance", "captured", EPOCH + 500, EPOCH + 500, nil
 end
 print("Map stamp: an orange zone counts by its stable base, never by its overlay")
+
+-- 2.1.0: a client left on 2.0.8 dates its neutral zones and its capitals at its own week
+-- start (Tuesday 08:00 UTC), up to 39 h before a region's week. Such an entry is refused,
+-- not the map: the captures of that map come in. Anything older still refuses the map.
+do
+    Overlord.L.ZONE_NOW_AVAILABLE = "%s"
+    local WEEK = 604800
+    local betaStart = EPOCH - (EPOCH - 1793692800) % WEEK - WEEK -- in this test's past, any day
+    local regionStart = betaStart + 20 * 3600 -- Europe, Wednesday 04:00 UTC
+    local realStart, realVictories = Overlord.GetCurrentCampaignStartTs, OverlordDB.frontVictories
+    Overlord.GetCurrentCampaignStartTs = function() return regionStart end
+    OverlordDB.frontVictories = {}
+    local kept = {}
+    for _, z in ipairs(zones) do
+        kept[z] = { z.owner, z.previousOwner, z.status, z.capturedTime, z.updatedAt }
+    end
+    local capital, fixedOwner
+    local function freshMap(stamp)
+        for _, z in ipairs(zones) do
+            local fixed = Overlord.Zones:GetBaseZoneFixedOwner(z.id)
+            if fixed and not capital then capital, fixedOwner = z.id, fixed end
+            z.owner, z.previousOwner, z.capturedTime = fixed, nil, fixed and stamp or nil
+            z.status, z.updatedAt = fixed and "captured" or "locked", stamp
+        end
+    end
+
+    -- Tonight: a fresh 2.0.8 client that holds one capture.
+    freshMap(betaStart)
+    set(Y, "Horde", regionStart + 600)
+    local map = snapshot()
+    freshMap(regionStart)
+    deliver(map)
+    assert(state(Y) == "Horde@" .. (regionStart + 600), "a 2.0.8 map was refused whole: " .. state(Y))
+    for _, z in ipairs(zones) do
+        if z.id ~= Y then
+            local fixed = Overlord.Zones:GetBaseZoneFixedOwner(z.id)
+            assert(z.owner == fixed and z.updatedAt == regionStart
+                and (z.capturedTime or 0) == (fixed and regionStart or 0),
+                "a 2.0.8 week start changed " .. z.id .. ": " .. state(z.id))
+        end
+    end
+
+    -- One second older than the gap: an old map, refused whole as before.
+    freshMap(betaStart - 1)
+    set(Y, "Horde", regionStart + 900)
+    map = snapshot()
+    freshMap(regionStart)
+    deliver(map)
+    assert(state(Y) == "N@0", "a map older than the gap was taken: " .. state(Y))
+
+    -- The next Tuesday, before the region's reset: 2.0.8 has reset, we have not. Its
+    -- certificate does not give a conquered capital back, and its map still comes in.
+    local conquered = regionStart + 3 * 86400
+    local conqueror = fixedOwner == "Horde" and "Alliance" or "Horde"
+    freshMap(betaStart + WEEK)
+    set(Y, "Horde", betaStart + WEEK + 600)
+    map = snapshot()
+    freshMap(regionStart)
+    set(capital, conqueror, conquered)
+    deliver(map)
+    assert(state(capital) == conqueror .. "@" .. conquered,
+        "a 2.0.8 certificate gave a capital back before the region's reset: " .. state(capital))
+    assert(state(Y) == "Horde@" .. (betaStart + WEEK + 600), "that map was not taken: " .. state(Y))
+
+    -- After the region's reset: what 2.0.8 captured in the gap stays out, the rest comes in.
+    local nextStart = regionStart + WEEK
+    Overlord.GetCurrentCampaignStartTs = function() return nextStart end
+    local early = "elwynn_goldshire"
+    freshMap(betaStart + WEEK)
+    set(early, "Horde", nextStart - 3600)
+    set(Y, "Horde", nextStart + 600)
+    map = snapshot()
+    freshMap(nextStart)
+    deliver(map)
+    assert(state(early) == "N@0", "a capture of the gap entered the new week: " .. state(early))
+    assert(state(Y) == "Horde@" .. (nextStart + 600), "the rest of that map was refused: " .. state(Y))
+
+    Overlord.GetCurrentCampaignStartTs, OverlordDB.frontVictories = realStart, realVictories
+    for z, v in pairs(kept) do
+        z.owner, z.previousOwner, z.status, z.capturedTime, z.updatedAt = v[1], v[2], v[3], v[4], v[5]
+    end
+end
+print("Beta week gap: a 2.0.8 map is taken entry by entry, an older map stays refused")
