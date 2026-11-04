@@ -12,11 +12,13 @@ Overlord.RealmPools = RealmPools
 -- 1.4.1: the non-PvP pools and channels were renamed. 1.4.0 Normal/RP clients
 -- could serve their old 1.3.x ("global") ladder snapshot to each other, so their
 -- ladders may hold PvP rows; the new tags make a clean break from them.
-local RULESET_POOL = { pvp = "global", normal = "pve", rp = "rpg", hardcore = "hc" }
-RealmPools.RULESET_POOLS = { pve = true, rpg = true, hc = true }
+-- 2.1.0: Roleplay PvP (Blizzard, 2026-10-22) is a campaign of its own, with both the
+-- RP and the PvP rule on. 2.0.8 counted it with RP, under the tag "rpg".
+local RULESET_POOL = { pvp = "global", normal = "pve", rp = "rpg", rppvp = "rpv", hardcore = "hc" }
+RealmPools.RULESET_POOLS = { pve = true, rpg = true, rpv = true, hc = true }
 -- Tags used by 1.4.0 only: their saved data is dropped once (Core.lua).
 RealmPools.RETIRED_POOLS = { "normal", "rp", "hardcore" }
-local CHANNEL_SUFFIX = { pvp = "", normal = "E", rp = "RP", hardcore = "HC" }
+local CHANNEL_SUFFIX = { pvp = "", normal = "E", rp = "RP", rppvp = "RPP", hardcore = "HC" }
 
 local function GameRuleActive(rule)
     if rule == nil or not C_GameRules or type(C_GameRules.IsGameRuleActive) ~= "function" then
@@ -34,8 +36,12 @@ local function RulesetFromRealmName(name)
     if type(name) ~= "string" or name == "" then return nil end
     local lower = " " .. name:lower() .. " "
     if lower:find("hardcore", 1, true) then return "hardcore" end
-    if lower:find("roleplay", 1, true) or lower:find("[%s%-]rp[%s%-%d]") then return "rp" end
-    if lower:find("pvp", 1, true) then return "pvp" end
+    local roleplay = lower:find("roleplay", 1, true) or lower:find("[%s%-]rp[%s%-%d]")
+        or lower:find("rppvp", 1, true)
+    local pvp = lower:find("pvp", 1, true)
+    if roleplay and pvp then return "rppvp" end
+    if roleplay then return "rp" end
+    if pvp then return "pvp" end
     if lower:find("pve", 1, true) or lower:find("normal", 1, true) then return "normal" end
     return nil
 end
@@ -52,6 +58,7 @@ function RealmPools:GetRuleset()
     local pvp = GameRuleActive(rules and rules.PvPRuleset)
     local ruleset
     if hc then ruleset = "hardcore"
+    elseif rp and pvp then ruleset = "rppvp"
     elseif rp then ruleset = "rp"
     elseif pvp then ruleset = "pvp"
     elseif hc == false and rp == false and pvp == false then ruleset = "normal"
@@ -64,11 +71,32 @@ function RealmPools:GetRuleset()
     if not ruleset or (ruleset == "normal" and fromName and fromName ~= "normal") then
         ruleset = fromName or ruleset
     end
+    -- A realm named Roleplay PvP completes a single rule read as on: both are meant.
+    if fromName == "rppvp" and (ruleset == "rp" or ruleset == "pvp") then ruleset = "rppvp" end
     -- Neither the game rules nor the realm name answered: PvP is assumed for the
     -- session. /ov network shows it so a wrong campaign is visible at launch.
     self._rulesetAssumed = ruleset == nil
     self._ruleset = ruleset or "pvp"
+    self._rulesetRead = { hc = hc, rp = rp, pvp = pvp, realm = okName and realm or nil }
     return self._ruleset
+end
+
+-- /ov network: what the campaign was detected from, and where this client plays.
+function RealmPools:DescribeDetection()
+    self:GetRuleset()
+    local read = self._rulesetRead or {}
+    local function word(value)
+        if value == nil then return "?" end
+        return value and "on" or "off"
+    end
+    local function ask(fn)
+        if type(fn) ~= "function" then return "?" end
+        local ok, value = pcall(fn)
+        return ok and value ~= nil and tostring(value) or "?"
+    end
+    return "hardcore " .. word(read.hc) .. ", RP " .. word(read.rp) .. ", PvP " .. word(read.pvp)
+        .. "; realm " .. tostring(read.realm or "?") .. " (id " .. ask(GetRealmID)
+        .. "), region " .. ask(GetCurrentRegionName) .. " (id " .. ask(GetCurrentRegion) .. ")"
 end
 
 function RealmPools:GetChannelSuffix()

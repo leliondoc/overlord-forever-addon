@@ -1325,7 +1325,8 @@ function Overlord.LeaderboardUI:CreateFrame()
     local ruleset = Overlord.RealmPools and Overlord.RealmPools.GetRuleset and Overlord.RealmPools:GetRuleset() or "pvp"
     local rulesetNames = {
         pvp = L.RULESET_NAME_PVP or "PvP", normal = L.RULESET_NAME_NORMAL or "Normal",
-        rp = L.RULESET_NAME_RP or "RP", hardcore = L.RULESET_NAME_HARDCORE or "Hardcore",
+        rp = L.RULESET_NAME_RP or "RP", rppvp = L.RULESET_NAME_RPPVP or "RP-PvP",
+        hardcore = L.RULESET_NAME_HARDCORE or "Hardcore",
     }
     rulesetLabel:SetText(string.format(L.LB_RULESET_LABEL or "%s ruleset", rulesetNames[ruleset] or tostring(ruleset)))
     lbFrame.rulesetLabel = rulesetLabel

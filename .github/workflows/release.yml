@@ -97,6 +97,8 @@ jobs:
           lua5.1 tests/forever_victory_bonus_before_tv.test.lua
           lua5.1 tests/forever_performance.test.lua
           lua5.1 tests/forever_us_reset.test.lua
+          lua5.1 tests/forever_regional_reset.test.lua
+          lua5.1 tests/forever_region_save.test.lua
           lua5.1 tests/forever_kill_row_removal.test.lua
           lua5.1 tests/forever_stale_week_relabel.test.lua
           lua5.1 tests/forever_catchup_peer_choice.test.lua

@@ -70,6 +70,8 @@ local function IsCurrentVictoryCampaignEpoch(epoch)
     epoch = NormalizeFiniteInteger(epoch)
     local windowStart = GetCurrentVictoryCampaignStart()
     if not epoch or epoch <= 0 or windowStart <= 0 then return false end
+    -- 2.1.0: the same week seen from the beta's Tuesday (a 2.0.8 sender) counts too.
+    if Overlord.CampaignEpochsMatch and Overlord:CampaignEpochsMatch(epoch, windowStart) then return true end
     return epoch >= windowStart and epoch < windowStart + VB_SECONDS_PER_WEEK
 end
 

@@ -9,8 +9,9 @@ function GetLocale() return "frFR" end
 function CreateFrame() return { RegisterEvent = function() end, SetScript = function() end } end
 local scheduled
 C_Timer = { After = function(delay) scheduled = delay end }
--- The regional API deliberately disagrees. It must never choose a beta reset.
-C_DateAndTime = { GetSecondsUntilWeeklyReset = function() return 3600 end }
+-- 2.1.0: a client that names no region and gives no weekly reset (test servers) keeps the
+-- beta's anchor, whatever its region id says. Regions: forever_regional_reset.test.lua.
+C_DateAndTime = nil
 Overlord = { L = { WEEKLY_RESET = "US weekly reset" } }
 assert(loadfile("Core.lua"))()
 Overlord.GetCurrentLeaderboardSavedVarsPool = function() return "global" end

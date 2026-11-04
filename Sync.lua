@@ -13,7 +13,8 @@ local L = Overlord.L
 
 local PREFIX = "OverlordF"
 -- 1.4.0: one channel per Forever ruleset. PvP keeps "OverlordF" (the current
--- population and 1.3.x clients); Normal/RP/Hardcore use OverlordFE/FRP/FHC (1.4.1).
+-- population and 1.3.x clients); Normal/RP/Hardcore use OverlordFE/FRP/FHC (1.4.1),
+-- Roleplay PvP OverlordFRPP (2.1.0).
 local function ChannelName()
     local rp = Overlord.RealmPools
     return "OverlordF" .. (rp and rp.GetChannelSuffix and rp:GetChannelSuffix() or "")
@@ -8705,7 +8706,8 @@ function Overlord.Sync:OnReceiveZoneAll(
             -- other fronts included. Winner stamp advanced during the truce: same.
             if validEntry and (ShouldRejectStaleTruceResetZone(zoneId, ts)
                 or ShouldRejectPostVictoryZoneOwner(zoneId, owner, "captured", ts, "ZA")
-                or (owner and ShouldRejectFrontTruceZoneChange(zoneId, owner, "captured", ct))) then
+                or (owner and ShouldRejectFrontTruceZoneChange(zoneId, owner, "captured", ct))
+                or Overlord:IsBetaWeekCapitalCertificate(zoneId, owner, ct)) then
                 staleSkipMask[entryIndex] = true
             end
         end
