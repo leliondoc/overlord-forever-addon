@@ -6,8 +6,9 @@
 -- (The record of the logged character is also kept in the character's own save,
 -- OverlordCharDB: a test that rewrites the account save by hand clears that copy, and
 -- the copy has its own section at the end.)
--- The seal's formula is frozen: this file recomputes it on its own and holds fixed
--- values, so that a change in Ranks.lua which would refuse every existing record
+-- The seal's formula is frozen (two of them: the beta's, and the launch's from
+-- 2026-11-03 08:00 UTC, which refuses the beta's records by design): this file
+-- recomputes both on its own and holds fixed values, so that a change in Ranks.lua which would refuse every existing record
 -- cannot pass unnoticed.
 
 local function check(cond, msg) if not cond then error(msg, 2) end end
@@ -31,9 +32,11 @@ OverlordCharDB = nil
 dofile("Ranks.lua")
 local R = Overlord.Ranks
 -- A new session: the file is loaded again, so nothing verified earlier is remembered.
+local oneEra = false
 local function relog()
     dofile("Ranks.lua")
     R = Overlord.Ranks
+    if oneEra then R.LAUNCH_RESET_AT = math.huge end
 end
 local function records() return OverlordDB.ranksByCharacter end
 local function asideCount()
@@ -65,7 +68,10 @@ local function seed(text)
     return h
 end
 local function n(v) v = math.floor(tonumber(v) or 0); return v > 0 and v or 0 end
-local function expected(rec, name)
+-- 2.1.0: from the game's launch (2026-11-03 08:00 UTC) one more step seals a record; the
+-- beta's records (sealed before) never read back after. Both formulas are frozen.
+local LAUNCH = 1793692800
+local function expected(rec, name, era)
     local w = type(rec.t) == "table" and rec.t or {}
     local h = mixNumber(seed(name), seed(rec.g))
     h = mixNumber(h, n(rec.k)); h = mixNumber(h, n(rec.c))
@@ -73,6 +79,7 @@ local function expected(rec, name)
     h = mixNumber(h, n(rec.we)); h = mixNumber(h, n(rec.wk)); h = mixNumber(h, n(rec.lw))
     for _, top in ipairs({ 100, 25, 10, 3, 1 }) do h = mixNumber(h, n(w[top])) end
     h = mixNumber(h, n(rec.pe)); h = mixNumber(h, n(rec.pk))
+    if (era or (clock >= R.LAUNCH_RESET_AT and 2 or 1)) == 2 then h = mix(h, 104729) end
     return mix(h, 65521) % (MOD - 1) + 1
 end
 local VECTORS = {
@@ -85,7 +92,10 @@ local VECTORS = {
     { name = "Aldric Vane", rec = { k = 250000, c = 1200, f = "Horde", g = "Player-1-0000AAAA", we = 1791878400,
         wk = 9000, lw = 1791273600, t = { [100] = 9, [25] = 8, [10] = 6, [3] = 4, [1] = 3 }, pe = 1790668800, pk = 7777 }, seal = 1711791722 },
 }
+local LAUNCH_SEALS = { 698649165, 654817259, 1872419967, 894444249, 324773063 }
+local now = clock
 for index, vector in ipairs(VECTORS) do
+    clock = LAUNCH - 1
     local value = expected(vector.rec, vector.name)
     check(value == vector.seal, "vector " .. index .. ": the frozen formula gives " .. value)
     check(value >= 1 and value <= MOD and value == math.floor(value), "a seal is a whole number that a save keeps exactly")
@@ -94,7 +104,21 @@ for index, vector in ipairs(VECTORS) do
     check(R:IsSealed(sealed, vector.name), "vector " .. index .. ": Ranks.lua computes another seal than the frozen one")
     sealed.s = value + 1
     check(not R:IsSealed(sealed, vector.name), "vector " .. index .. ": a wrong seal is refused")
+    -- From the launch on: the other frozen value; the beta seal no longer reads back.
+    clock = LAUNCH
+    local launchValue = expected(vector.rec, vector.name)
+    check(launchValue == LAUNCH_SEALS[index], "vector " .. index .. ": the launch formula gives " .. launchValue)
+    sealed.s = launchValue
+    check(R:IsSealed(sealed, vector.name), "vector " .. index .. ": Ranks.lua computes another launch seal")
+    sealed.s = value
+    check(not R:IsSealed(sealed, vector.name), "vector " .. index .. ": a beta seal reads back after the launch")
 end
+clock = now
+-- The rest of this file runs weeks back and forth across October and November 2026, a
+-- clock no server has: one era for it (the launch seal is checked above and in
+-- tests/forever_ranks_launch_reset.test.lua).
+oneEra = true
+R.LAUNCH_RESET_AT = math.huge
 -- Same content, other spellings of nothing: no weeks table, an empty one, zeros.
 local plain = { k = 5, c = 1, g = guid }
 plain.s = expected(plain, me)

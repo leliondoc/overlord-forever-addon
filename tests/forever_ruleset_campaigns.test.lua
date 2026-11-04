@@ -64,6 +64,35 @@ if s.GetAttestedLeaderboardSnapshot and Overlord.GetCurrentCampaignStartTs then
     legacy.pool = "pve"
     assert(s:GetAttestedLeaderboardSnapshot() == legacy, "A Normal client refused its own snapshot")
 end
+
+-- 2.1.0: Roleplay PvP never mixes with Roleplay nor with PvP, in either direction.
+ruleset("rppvp")
+assert(s:GetMyBand() == "Forever_rpv_A", "Roleplay PvP band: " .. s:GetMyBand())
+before = received()
+net:Receive(relayed("rpg"), "Bridge Tester", "BNET", 123)
+net:Receive(relayed("global"), "Bridge Tester", "BNET", 123)
+assert(received() == before, "A Roleplay PvP client accepted a Roleplay or PvP packet")
+net:Receive(relayed("rpv"), "Bridge Tester", "BNET", 123)
+assert(received() == before + 1, "A Roleplay PvP client refused its own ruleset")
+dispatched = 0
+s.DispatchBNetMessage = function(...) dispatched = dispatched + 1 end
+s:OnBNetMessage("EK:Forever_rpg_A:x", 123)
+s:OnBNetMessage("EK:Forever_global_A:x", 123)
+assert(dispatched == 0, "A Roleplay or PvP friend reached a Roleplay PvP client")
+s:OnBNetMessage("EK:Forever_rpv_A:x", 123)
+assert(dispatched == 1, "A Roleplay PvP friend was dropped")
+s.DispatchBNetMessage = realDispatch
+for _, other in ipairs({ "rp", "pvp" }) do
+    ruleset(other)
+    before = received()
+    net:Receive(relayed("rpv"), "Bridge Tester", "BNET", 123)
+    assert(received() == before, other .. " client accepted a Roleplay PvP packet")
+    dispatched = 0
+    s.DispatchBNetMessage = function(...) dispatched = dispatched + 1 end
+    s:OnBNetMessage("EK:Forever_rpv_A:x", 123)
+    assert(dispatched == 0, other .. " client took a Roleplay PvP friend's message")
+    s.DispatchBNetMessage = realDispatch
+end
 ruleset("pvp")
 
 
@@ -84,6 +113,25 @@ assert(pools:GetRuleset() == "normal" and pools:GetOverlordPoolTag() == "pve"
     and pools:GetChannelSuffix() == "E", "No rule on = Normal ruleset")
 assert(detect({ [2] = true }, "x"):GetRuleset() == "rp")
 assert(detect({ [1] = true, [3] = true }, "x"):GetRuleset() == "hardcore", "Hardcore wins over PvP")
+-- 2.1.0: Roleplay PvP = both rules on (no rule of its own in client 1.60.1.70755).
+pools = detect({ [2] = true, [3] = true }, "x")
+assert(pools:GetRuleset() == "rppvp" and pools:GetOverlordPoolTag() == "rpv"
+    and pools:GetChannelSuffix() == "RPP", "Roleplay PvP must be its own campaign")
+assert(pools:DescribeDetection():find("RP on, PvP on", 1, true), "Detection line: " .. pools:DescribeDetection())
+assert(pools:NormalizeRegionPool("rpv") == "rpv" and pools:AreOutpostCrossPoolsLinked("rpv", "rpv"))
+assert(not pools:AreOutpostCrossPoolsLinked("rpv", "rpg") and not pools:AreOutpostCrossPoolsLinked("rpv", "global"))
+assert(detect({ [1] = true, [2] = true, [3] = true }, "x"):GetRuleset() == "hardcore", "Hardcore wins over RP and PvP")
+assert(detect({ [2] = true }, "x"):GetOverlordPoolTag() == "rpg", "Roleplay keeps its tag")
+assert(detect({ [3] = true }, "x"):GetOverlordPoolTag() == "global", "PvP keeps its tag")
+-- Realm names: no rule API, one rule read, or rules not readable yet.
+for _, name in ipairs({ "Roleplay PvP", "Forever RP-PvP", "RP PvP", "RPPvP", "Forever RPPVP 2" }) do
+    assert(detect(nil, name):GetRuleset() == "rppvp", name)
+    assert(detect({}, name):GetRuleset() == "rppvp", name .. " (rules off)")
+    assert(detect({ [2] = true }, name):GetRuleset() == "rppvp", name .. " (RP rule only)")
+    assert(detect({ [3] = true }, name):GetRuleset() == "rppvp", name .. " (PvP rule only)")
+end
+assert(detect({ [1] = true }, "Roleplay PvP"):GetRuleset() == "hardcore")
+assert(detect(nil, "Roleplay"):GetRuleset() == "rp" and detect(nil, "Some PvP"):GetRuleset() == "pvp")
 -- No game-rule API: the realm name decides; never a guess beyond it.
 assert(detect(nil, "Classic Beta PvE 2"):GetRuleset() == "normal")
 assert(detect(nil, "Classic Beta PvP"):GetRuleset() == "pvp")
@@ -108,7 +156,7 @@ assert(pools:GetRuleset() == "normal", "Ruleset changed mid-session")
 for _, legacy in ipairs({ "global", "na", "us", "eu", "fr", "de", "EU" }) do
     assert(pools:NormalizeRegionPool(legacy) == "global", legacy)
 end
-for _, tag in ipairs({ "pve", "rpg", "hc" }) do
+for _, tag in ipairs({ "pve", "rpg", "rpv", "hc" }) do
     assert(pools:NormalizeRegionPool(tag) == tag, tag)
 end
 assert(pools:NormalizeRegionPool("pvp") == "" and pools:NormalizeRegionPool("x1") == "")

@@ -196,6 +196,8 @@ function SyncReport.Network()
         R.Detail("Campaign: " .. pools:GetRuleset() .. " ruleset (pool " .. pools:GetOverlordPoolTag()
             .. ", channel OverlordF" .. pools:GetChannelSuffix() .. ")"
             .. (pools._rulesetAssumed and " ASSUMED: game rules and realm name gave no answer" or ""))
+        R.Detail("Campaign detected from: " .. pools:DescribeDetection())
+        if Overlord.DescribeCampaignWeek then R.Detail("Campaign week: " .. Overlord:DescribeCampaignWeek()) end
         if sync.IsChannelClosed and sync:IsChannelClosed() then
             R.Detail("Channel: cannot be joined (tried again at login, /reload or on leaving an instance)")
         end

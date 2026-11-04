@@ -13,7 +13,8 @@ local L = Overlord.L
 
 local PREFIX = "OverlordF"
 -- 1.4.0: one channel per Forever ruleset. PvP keeps "OverlordF" (the current
--- population and 1.3.x clients); Normal/RP/Hardcore use OverlordFE/FRP/FHC (1.4.1).
+-- population and 1.3.x clients); Normal/RP/Hardcore use OverlordFE/FRP/FHC (1.4.1),
+-- Roleplay PvP OverlordFRPP (2.1.0).
 local function ChannelName()
     local rp = Overlord.RealmPools
     return "OverlordF" .. (rp and rp.GetChannelSuffix and rp:GetChannelSuffix() or "")
@@ -8699,13 +8700,19 @@ function Overlord.Sync:OnReceiveZoneAll(
         end
         if validEntry then
             validEntry = not IsStaleCampaignTimestamp(ts)
+            -- 2.1.0: dated between a 2.0.8 client's week start and ours: the entry is
+            -- refused, not the map (every neutral zone of its map is dated so).
+            if not validEntry and Overlord:IsStampInBetaWeekGap(ts) then
+                validEntry = true
+                staleSkipMask[entryIndex] = true
             -- Truce and post-victory guards refuse the entry, not the map (the refused
             -- value stays local): a peer that had not learnt a victory yet, or a
             -- phantom-victory epoch, got every map refused for the truce or the week,
             -- other fronts included. Winner stamp advanced during the truce: same.
-            if validEntry and (ShouldRejectStaleTruceResetZone(zoneId, ts)
+            elseif validEntry and (ShouldRejectStaleTruceResetZone(zoneId, ts)
                 or ShouldRejectPostVictoryZoneOwner(zoneId, owner, "captured", ts, "ZA")
-                or (owner and ShouldRejectFrontTruceZoneChange(zoneId, owner, "captured", ct))) then
+                or (owner and ShouldRejectFrontTruceZoneChange(zoneId, owner, "captured", ct))
+                or Overlord:IsBetaWeekCapitalCertificate(zoneId, owner, ct)) then
                 staleSkipMask[entryIndex] = true
             end
         end

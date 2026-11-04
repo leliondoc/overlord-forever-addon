@@ -1,9 +1,9 @@
-2.0.8
+2.1.0
 
-**Overlord Forever 2.0.8**
+**Overlord Forever 2.1.0**
 
-- **Ready for launch**: 2.0.8 is the minimum version from launch. Older versions no longer exchange maps or captures with it: **update required**.
-- **Fronts**: a capture made with another version of a front (other points) is no longer shown or applied: no more impossible siege timers coming from another version.
-- **Network**: relayed messages travel in larger pieces, so the relay sends fewer messages.
-- **Chat channels**: the Overlord channel waits for your own channels at login and normally takes the number right after them. It no longer takes General's or Trade's number, so your channel numbers and colours stay as you set them.
-- **Overlord panel**: once you close it, it stays closed at your next login, even on a new day.
+- **Weekly reset**: each region now runs its own week. The campaign starts and resets at your region's weekly reset (Americas on Tuesday, Europe on Wednesday, Korea and Taiwan on Thursday morning). 2.0.8 keeps the beta's Tuesday schedule: update before the first reset.
+- **Roleplay PvP**: this new ruleset now runs its own campaign (map, ranking, channel), apart from Roleplay and PvP. On that ruleset, update required: 2.0.8 still counts it with Roleplay.
+- **Launch**: Overlord Rank starts again from zero for the game's launch (from the weekly reset of Tuesday 3 November). Ranks earned on the beta do not carry over.
+- **Translations**: place names now match the game's own names in French, Spanish, Portuguese and Chinese; Anad'Ora Moonwell is translated in every language; capture messages, tooltips and the tutorial reworded in all languages.
+- Plays alongside 2.0.8: maps and captures cross, but the ranking only catches up between clients on 2.1.0. In Korea and Taiwan, update before you play: updating after the launch starts your week again.

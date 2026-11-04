@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.0.8"
+Overlord.Version = "2.1.0"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -2350,11 +2350,22 @@ end
 -- Frame principal pour gérer les events
 local eventFrame = CreateFrame("Frame")
 
--- BETA Forever : une seule campagne americaine pour tous les comptes/langues.
--- Ne pas utiliser le reset regional du client pendant cette beta.
+-- 2.1.0 : le jeu est sorti, chaque region joue sa campagne et repart a son reset
+-- hebdomadaire, en UTC (les horaires du Retail, fixes toute l'annee). Le meme calcul de
+-- calendrier que sur la beta : tous les clients d'une region tiennent le meme instant a la
+-- seconde pres (le certificat initial des capitales et les tampons de carte en dependent).
 -- wday: 1=Dimanche, 2=Lundi, 3=Mardi, 4=Mercredi, ..., 7=Samedi
-local RESET_HOUR_US = 8
-local RESET_WDAY_US = 3  -- Mardi
+local RESET_RULE_BY_REGION = {
+    US = { wday = 3, hour = 15 }, -- Ameriques et Oceanie : mardi 15:00 UTC
+    EU = { wday = 4, hour = 4 },  -- Europe : mercredi 04:00 UTC
+    KR = { wday = 4, hour = 23 }, -- Coree et Taiwan : mercredi 23:00 UTC, jeudi matin chez eux
+    TW = { wday = 4, hour = 23 },
+}
+-- Client qui ne nomme pas sa region et ne donne pas son reset : l'ancre de la beta.
+local RESET_HOUR_UNNAMED = 8
+local RESET_WDAY_UNNAMED = 3
+-- L'API et GetServerTime ne tickent pas a la meme seconde (8.0.6) : au quart d'heure pres.
+local WEEKLY_RESET_SNAP_SEC = 900
 local SECONDS_PER_DAY = 86400
 local SECONDS_PER_WEEK = SECONDS_PER_DAY * 7
 -- Regression 8.0.6 : jitter ±1 s sur GetLastResetTimestamp (NA) ne doit jamais
@@ -2430,10 +2441,22 @@ local function GetWeeklyResetTimestampForRule(resetWday, resetHour, now)
     return resetToday - (daysSinceReset * SECONDS_PER_DAY)
 end
 
-local function GetFallbackWeeklyResetRule()
-    -- Forever beta is a global population. Use one deterministic US campaign
-    -- boundary even when a client is logged in through an EU account endpoint.
-    return RESET_WDAY_US, RESET_HOUR_US
+local function GetRegionWeeklyResetRule()
+    local regionName = type(GetCurrentRegionName) == "function" and GetCurrentRegionName() or nil
+    local rule = regionName and RESET_RULE_BY_REGION[regionName]
+    if rule then return rule.wday, rule.hour end
+    return nil
+end
+
+-- Le debut de la semaine selon le client (nil s'il ne repond pas, ou hors d'une semaine).
+-- Sert si la region n'a pas de nom ; sinon /ov network le compare seulement au calendrier.
+local function ReadWeeklyResetFromClient(now)
+    if not (C_DateAndTime and C_DateAndTime.GetSecondsUntilWeeklyReset) then return nil end
+    local ok, untilReset = pcall(C_DateAndTime.GetSecondsUntilWeeklyReset)
+    untilReset = ok and tonumber(untilReset) or nil
+    if not untilReset or untilReset <= 0 or untilReset > SECONDS_PER_WEEK then return nil end
+    local start = now + untilReset - SECONDS_PER_WEEK
+    return math.floor((start + WEEKLY_RESET_SNAP_SEC / 2) / WEEKLY_RESET_SNAP_SEC) * WEEKLY_RESET_SNAP_SEC
 end
 
 local function IsLegacyUSResetAhead(dbReset, regionalReset)
@@ -2473,8 +2496,10 @@ function Overlord:GetLastResetTimestamp()
         and now >= cachedRegionalResetTs and now < cachedRegionalResetTs + SECONDS_PER_WEEK then
         return cachedRegionalResetTs
     end
-    local resetWday, resetHour = GetFallbackWeeklyResetRule()
-    local computed = GetWeeklyResetTimestampForRule(resetWday, resetHour, now)
+    local resetWday, resetHour = GetRegionWeeklyResetRule()
+    local computed = resetWday and GetWeeklyResetTimestampForRule(resetWday, resetHour, now)
+        or ReadWeeklyResetFromClient(now)
+        or GetWeeklyResetTimestampForRule(RESET_WDAY_UNNAMED, RESET_HOUR_UNNAMED, now)
     -- Stabilise la session : GetServerTime et untilReset ne tickent pas a la meme seconde (NA).
     if cachedRegionalResetTs and (now - cachedRegionalResetWallAt) < REGIONAL_RESET_CACHE_SEC then
         if math.abs(computed - cachedRegionalResetTs) < REGIONAL_RESET_CACHE_SEC then
@@ -2484,6 +2509,42 @@ function Overlord:GetLastResetTimestamp()
     cachedRegionalResetTs = computed
     cachedRegionalResetWallAt = now
     return computed
+end
+
+-- 2.1.0 : 2.0.8 reste sur la semaine de la beta. A son reset, il estampille chaque capitale
+-- a cette seconde precise (mardi 08:00:00 UTC). Dans une region dont la semaine tourne a un
+-- autre moment, ce certificat rendrait les capitales conquises des heures avant le reset de
+-- la region : l'entree est refusee, pas la carte. Une prise en direct n'est pas concernee.
+local BETA_WEEK_PHASE = 1793692800 % SECONDS_PER_WEEK
+function Overlord:IsBetaWeekCapitalCertificate(zoneId, owner, stamp)
+    stamp = tonumber(stamp) or 0
+    if stamp <= 0 or stamp % SECONDS_PER_WEEK ~= BETA_WEEK_PHASE then return false end
+    if (self:GetCurrentCampaignStartTs() or 0) % SECONDS_PER_WEEK == BETA_WEEK_PHASE then return false end
+    local fixedOwner = self.Zones and self.Zones:GetBaseZoneFixedOwner(zoneId)
+    return fixedOwner ~= nil and fixedOwner == owner
+end
+
+-- 2.1.0 : le debut de semaine d'un 2.0.8 precede le notre d'au plus 39 h. Ce qu'il date dans
+-- cet ecart (ses zones neutres, datees de son debut de semaine, ses certificats, ses captures
+-- d'avant le reset de la region) date d'avant notre semaine, sans etre une vieille carte :
+-- l'entree est ecartee, le reste de la carte est pris. Plus ancien : carte refusee, comme avant.
+function Overlord:IsStampInBetaWeekGap(stamp)
+    stamp = tonumber(stamp) or 0
+    local start = self:GetCurrentCampaignStartTs() or 0
+    local gap = (start - BETA_WEEK_PHASE) % SECONDS_PER_WEEK
+    return gap > 0 and stamp >= start - gap and stamp < start
+end
+
+-- /ov network : la semaine de campagne de cette region, et ce qu'en dit le jeu.
+function Overlord:DescribeCampaignWeek()
+    local now = (GetServerTime and GetServerTime()) or time()
+    local start = self:GetLastResetTimestamp() or 0
+    local fromClient = ReadWeeklyResetFromClient(now)
+    local game = fromClient == start and "the game agrees"
+        or fromClient and ("the game says " .. date("!%a %H:%M UTC", fromClient))
+        or "the game gave no answer"
+    return date("!%a %Y-%m-%d %H:%M UTC", start) .. ", next reset "
+        .. date("!%a %Y-%m-%d %H:%M UTC", start + SECONDS_PER_WEEK) .. " (" .. game .. ")"
 end
 
 -- Retourne les dates de debut et fin de la campagne en cours formatees.
@@ -2539,7 +2600,7 @@ function Overlord:CheckWeeklyReset()
     -- l'archive compacte ou les side-effects fixes n'etaient pas termines.
     local pending = tonumber(OverlordDB and OverlordDB.pendingWeeklyResetAt) or 0
     if pending > 0 and pending ~= lastReset then
-        -- Ancien reset regional interrompu : ne jamais le rejouer en beta US.
+        -- Ancien reset interrompu sur une autre frontiere : ne jamais le rejouer.
         -- Si son bucket a deja ete detache, finir uniquement l'archive sauvegardee.
         OverlordDB.pendingWeeklyResetAt = nil
         local marker = OverlordDB.pendingWeeklyArchive
@@ -2781,8 +2842,30 @@ function Overlord:PrintLoginInitStatus()
 end
 
 -- Initialisation de l'addon
+-- 2.1.0 : la sauvegarde du compte sert a toutes les regions ou il joue (WTF/Account/x/<region>/)
+-- et chaque region est sa propre campagne : y emporter cette carte et ce classement les
+-- verserait dans sa campagne. Chaque region garde donc sa sauvegarde entiere, a part ; une
+-- region vue pour la premiere fois demarre comme une nouvelle installation. Un client qui ne
+-- nomme pas sa region garde sa sauvegarde telle quelle. Rend les sauvegardes mises de cote.
+function Overlord:SwapRegionSave()
+    local name = type(GetCurrentRegionName) == "function" and GetCurrentRegionName() or nil
+    if type(name) ~= "string" or name == "" then return nil end
+    self._saveRegionName = name
+    if type(OverlordDB) ~= "table" then return nil end
+    local saved = OverlordDB.saveRegion
+    if saved == nil or saved == name then return nil end
+    local parked = type(OverlordDB.otherRegionSaves) == "table" and OverlordDB.otherRegionSaves or {}
+    OverlordDB.otherRegionSaves = nil
+    parked[saved] = OverlordDB
+    local mine = parked[name]
+    parked[name] = nil
+    OverlordDB = type(mine) == "table" and mine or nil
+    return parked
+end
+
 function Overlord:Initialize()
     if self.IsInitialized then return end
+    local otherRegionSaves = self:SwapRegionSave()
     -- Session-only evidence captured before defaults/migrations/reset stages, once:
     -- a retry of Initialize (faction not ready yet) runs after the first call created
     -- OverlordDB and would otherwise report a lost save as loaded.
@@ -2807,6 +2890,8 @@ function Overlord:Initialize()
             campaignId = self:TimestampToCampaignId(campaignStart),
         }
     end
+    if otherRegionSaves then OverlordDB.otherRegionSaves = otherRegionSaves end
+    if self._saveRegionName then OverlordDB.saveRegion = self._saveRegionName end
 
     -- Migration : assure que chaque sous-table et champ existe
     OverlordDB.config = OverlordDB.config or {}
@@ -4996,7 +5081,7 @@ function Overlord:ResetAll()
     OverlordDB.dominationVictoryEvents = OverlordDB.dominationVictoryEvents or { byPool = {} }
     OverlordDB.dominationVictoryEvents.byPool =
         OverlordDB.dominationVictoryEvents.byPool or {}
-    for _, oldPool in ipairs({ "fr", "eu", "de", "us", "na", "normal", "rp", "hardcore", "pve", "rpg", "hc" }) do
+    for _, oldPool in ipairs({ "fr", "eu", "de", "us", "na", "normal", "rp", "hardcore", "pve", "rpg", "rpv", "hc" }) do
         OverlordDB.dominationVictoryEvents.byPool[oldPool] = nil
     end
     OverlordDB.dominationVictoryEvents.byPool.global = nil
