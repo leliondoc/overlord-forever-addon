@@ -123,8 +123,9 @@ assert(resets == 1 and mapResets == 1 and OverlordDB.lastResetTimestamp == START
 assert(OverlordDB.leaderboard.kills.Old == nil, "the beta's kills survived the launch")
 
 -- 8. A save of 2.0.8 played this week (the beta's Tuesday): updating never wipes the week,
--- and the next true reset still runs, once. Asia is further than the tolerance: its
--- week starts with the launch itself, so nothing can have been played before it.
+-- and the next true reset still runs, once. Asia is further than the tolerance: its week
+-- starts with the launch itself, so a save from before the launch holds nothing to keep.
+-- Updating there after the launch starts the week again: the release notes say so.
 for _, region in ipairs({ "US", "EU" }) do
     local score = { ["Guild Member"] = 12 }
     o = boot(region, LAUNCH + 86400, { lastResetTimestamp = TUE_08, leaderboardResetEpoch = TUE_08,
