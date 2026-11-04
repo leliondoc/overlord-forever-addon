@@ -8700,11 +8700,16 @@ function Overlord.Sync:OnReceiveZoneAll(
         end
         if validEntry then
             validEntry = not IsStaleCampaignTimestamp(ts)
+            -- 2.1.0: dated between a 2.0.8 client's week start and ours: the entry is
+            -- refused, not the map (every neutral zone of its map is dated so).
+            if not validEntry and Overlord:IsStampInBetaWeekGap(ts) then
+                validEntry = true
+                staleSkipMask[entryIndex] = true
             -- Truce and post-victory guards refuse the entry, not the map (the refused
             -- value stays local): a peer that had not learnt a victory yet, or a
             -- phantom-victory epoch, got every map refused for the truce or the week,
             -- other fronts included. Winner stamp advanced during the truce: same.
-            if validEntry and (ShouldRejectStaleTruceResetZone(zoneId, ts)
+            elseif validEntry and (ShouldRejectStaleTruceResetZone(zoneId, ts)
                 or ShouldRejectPostVictoryZoneOwner(zoneId, owner, "captured", ts, "ZA")
                 or (owner and ShouldRejectFrontTruceZoneChange(zoneId, owner, "captured", ct))
                 or Overlord:IsBetaWeekCapitalCertificate(zoneId, owner, ct)) then

@@ -2524,6 +2524,17 @@ function Overlord:IsBetaWeekCapitalCertificate(zoneId, owner, stamp)
     return fixedOwner ~= nil and fixedOwner == owner
 end
 
+-- 2.1.0 : le debut de semaine d'un 2.0.8 precede le notre d'au plus 39 h. Ce qu'il date dans
+-- cet ecart (ses zones neutres, datees de son debut de semaine, ses certificats, ses captures
+-- d'avant le reset de la region) date d'avant notre semaine, sans etre une vieille carte :
+-- l'entree est ecartee, le reste de la carte est pris. Plus ancien : carte refusee, comme avant.
+function Overlord:IsStampInBetaWeekGap(stamp)
+    stamp = tonumber(stamp) or 0
+    local start = self:GetCurrentCampaignStartTs() or 0
+    local gap = (start - BETA_WEEK_PHASE) % SECONDS_PER_WEEK
+    return gap > 0 and stamp >= start - gap and stamp < start
+end
+
 -- /ov network : la semaine de campagne de cette region, et ce qu'en dit le jeu.
 function Overlord:DescribeCampaignWeek()
     local now = (GetServerTime and GetServerTime()) or time()

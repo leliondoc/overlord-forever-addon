@@ -65,6 +65,37 @@ regionName = "KR"
 parked = Overlord:SwapRegionSave()
 assert(OverlordDB == nil and parked.EU == eu and parked.US == us, "a third region lost a save")
 
+-- Through the real login: Initialize runs up to the modules this test does not load.
+local function login(name)
+    regionName = name
+    Overlord.IsInitialized, Overlord.SavedVariablesLoadedAtLogin = false, nil
+    Overlord._saveRegionName = nil
+    pcall(Overlord.Initialize, Overlord)
+end
+eu = { saveRegion = "EU", lastResetTimestamp = 1793764800, zones = { z = { owner = "Horde" } },
+    leaderboard = { kills = { Eu = 5 } }, config = {} }
+OverlordDB = eu
+login("EU")
+assert(OverlordDB == eu and eu.zones.z.owner == "Horde" and eu.otherRegionSaves == nil, "one region: the save changed")
+assert(Overlord.SavedVariablesLoadedAtLogin == true, "one region: the save was reported lost")
+login("US")
+us = OverlordDB
+assert(us ~= eu and us.saveRegion == "US" and us.otherRegionSaves.EU == eu, "first login in a second region")
+assert(us.zones.z == nil and us.leaderboard.kills.Eu == nil, "the European campaign came along")
+assert(us.lastResetTimestamp == 1793718000, "a new region's save is anchored on its own week: " .. tostring(us.lastResetTimestamp))
+assert(Overlord.SavedVariablesLoadedAtLogin == false, "a new region must behave like a new install")
+pcall(Overlord.Initialize, Overlord)
+assert(OverlordDB == us and us.otherRegionSaves.EU == eu, "a retry of Initialize moved the save")
+us.leaderboard.kills.Us = 7
+login("EU")
+assert(OverlordDB == eu and eu.saveRegion == "EU" and eu.otherRegionSaves.US == us and us.otherRegionSaves == nil,
+    "back in Europe: its own save, the other kept")
+assert(eu.zones.z.owner == "Horde" and eu.leaderboard.kills.Eu == 5 and eu.leaderboard.kills.Us == nil,
+    "back in Europe: the two campaigns mixed")
+assert(Overlord.SavedVariablesLoadedAtLogin == true, "back in Europe: the save was reported lost")
+login("")
+assert(OverlordDB == eu and eu.saveRegion == "EU", "no region name: the save and its region stay")
+
 -- The wiring: before the save is read, and before the new-install block.
 local source = assert(io.open("Core.lua", "rb")):read("*a")
 local init = source:find("function Overlord:Initialize()", 1, true)

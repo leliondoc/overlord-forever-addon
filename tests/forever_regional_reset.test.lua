@@ -189,6 +189,32 @@ local sync = assert(io.open("Sync.lua", "rb")):read("*a")
 assert(sync:find("or Overlord:IsBetaWeekCapitalCertificate(zoneId, owner, ct)) then", 1, true),
     "the map receiver no longer refuses a 2.0.8 Tuesday certificate")
 
+-- What a 2.0.8 client dates between its week start and ours (its neutral zones are dated at
+-- its week start) refuses that entry, not its whole map. Anything older is an old map.
+for region, start in pairs(START) do
+    o = boot(region, LAUNCH + HOUR)
+    assert(o:IsStampInBetaWeekGap(TUE_08), region .. ": a 2.0.8 week start")
+    assert(o:IsStampInBetaWeekGap(tostring(TUE_08)), region .. ": stamp as a string")
+    assert(o:IsStampInBetaWeekGap(start - 1), region .. ": the last second before our week")
+    assert(not o:IsStampInBetaWeekGap(start), region .. ": our own week start")
+    assert(not o:IsStampInBetaWeekGap(start + 60), region .. ": a capture of our week")
+    assert(not o:IsStampInBetaWeekGap(TUE_08 - 1), region .. ": older than the gap")
+    assert(not o:IsStampInBetaWeekGap(0) and not o:IsStampInBetaWeekGap(nil), region .. ": no date")
+end
+-- A week later, after each region's reset: the same gap, a week on.
+for region, start in pairs(START) do
+    o = boot(region, start + WEEK + HOUR)
+    assert(o:IsStampInBetaWeekGap(TUE_08 + WEEK), region .. ": next 2.0.8 week start")
+    assert(o:IsStampInBetaWeekGap(start + WEEK - 1), region .. ": a capture just before the reset")
+    assert(not o:IsStampInBetaWeekGap(TUE_08 + WEEK - 1), region .. ": last week's map stays an old map")
+end
+-- The beta's calendar (no region name): no gap.
+o = boot(nil, LAUNCH + HOUR)
+assert(not o:IsStampInBetaWeekGap(TUE_08 - 1), "the beta's calendar has no gap")
+assert(not o:IsStampInBetaWeekGap(TUE_08), "the beta's calendar has no gap")
+assert(sync:find("if not validEntry and Overlord:IsStampInBetaWeekGap(ts) then", 1, true),
+    "the map receiver refuses a 2.0.8 map whole again")
+
 -- 12. The other weekly clocks of the addon see one week per region.
 local WEEK_REF = 1578384000 -- RankProof.WEEK_REF
 local function weekIndex(start) return math.floor((start - WEEK_REF) / WEEK + 0.5) end
