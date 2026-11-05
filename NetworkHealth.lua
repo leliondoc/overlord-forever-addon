@@ -23,7 +23,7 @@ NH.Worst = Worst
 -- jaune toute la session. Un relevé des compteurs au plus par minute, pris quand un
 -- message part (Sync:SendAddonChecked) : aucun minuteur, rien en instance.
 local SAMPLE_SEC, WINDOW_SEC, WINDOW_LABEL = 60, 600, " · last 10 min"
-local SEND_TYPES = { "CHANNEL", "RAID", "PARTY", "WHISPER" }
+local SEND_TYPES = { "CHANNEL", "GUILD", "RAID", "PARTY", "WHISPER" }
 local samples = {}
 local lastSampleAt
 
@@ -191,13 +191,20 @@ function NH:Compute()
             string.format("%d waiting (catch-up %d/%d, domination %d/%d)", q.total, q.catchup, q.catchupMax,
                 q.state, q.stateMax))
     end
+    -- 2.1.1: the channel can be refused without any send failing: the dot stayed green with
+    -- nothing received. Says what carries our data (SyncGuild.lua).
+    local guildLane = Overlord.GuildLane
+    if guildLane and guildLane.Describe then
+        local level, text = guildLane:Describe()
+        add("transport", level, "Channel and guild", text)
+    end
     return overall, rows
 end
 
 -- Niveau du voyant : seulement ce qui touche le joueur (refus Blizzard, pertes du
 -- relais, file saturee). Un tour de rattrapage interrompu est normal (un voisin
 -- part en instance) et ne doit pas inquieter : il reste visible dans l'infobulle.
-local INDICATOR_IDS = { throttle = true, relay = true, queue = true }
+local INDICATOR_IDS = { throttle = true, relay = true, queue = true, transport = true }
 function NH:IndicatorLevel()
     local ok, overall, rows = pcall(self.Compute, self)
     if not ok then return "ok", {} end

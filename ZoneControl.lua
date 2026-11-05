@@ -591,6 +591,8 @@ end
 local function MaybeTakeOverStaleAllyCaptureAuthority(zone)
     if not zone or zone.holdAuthorityLocal then return false end
     if zone.status ~= "in_progress" or zone.owner ~= Overlord.PlayerFaction then return false end
+    -- 2.1.1: no ticks in the guild, so no verdict on silence (see KeepFollowing).
+    if Overlord.GuildLane and Overlord.GuildLane:KeepFollowing(zone) then return false end
     local official = zone.zsOfficialCapturerName
     if not official or official == "" then return false end
     if not Overlord.Sync or not Overlord.Sync.GetPlayerFullName then return false end
@@ -1212,6 +1214,8 @@ local CONTEST_RESET_GRACE_SECONDS = 8
 local contestedStartedAt = {} -- zone.id -> GetTime() de debut de contestation continue
 function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
     if not zone.isHolding then return end
+    -- 2.1.1 : pas de ticks dans la guilde : le suivi ne depend pas de la suite (monture, contestation).
+    local waveClock = not zone.holdAuthorityLocal and Overlord.GuildLane and Overlord.GuildLane:KeepFollowing(zone)
 
     local playerZone = Overlord.Zones:GetCurrentPlayerZone()
     local inZone = playerZone and playerZone.id == zone.id
@@ -1453,8 +1457,14 @@ function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
                 if (zone.holdTimeElapsed or 0) >= (zone.holdTimeRequired or 120) then
                     self:CaptureZone(zone)
                 end
+            else
+                -- Co-captureur sans autorite : timer pousse par le ZS du capteur officiel
+                -- uniquement. 2.1.1 : pas de ZS dans la guilde, l'horloge de la vague le pousse.
+                if waveClock then
+                    zone.holdTimeElapsed = math.max(zone.holdTimeElapsed or 0,
+                        math.min(waveClock, zone.holdTimeRequired or 120))
+                end
             end
-            -- Co-captureur sans autorite : timer pousse par le ZS du capteur officiel uniquement.
         end
     else
         -- LOSING : hors de la zone, le timer decroit

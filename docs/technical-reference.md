@@ -86,10 +86,11 @@ Le panneau principal permet de basculer entre les fronts disponibles. Les pins e
 
 ### Synchronisation multi-joueurs
 
-- État partagé entre joueurs de la même région NA/EU (canal addon, groupe/raid et relais Battle.net).
+- État partagé entre joueurs de la même région NA/EU (canal addon, groupe/raid et relais Battle.net ; la guilde, à très bas débit, quand le canal ne marche pas : `SyncGuild.lua`).
 - Les communautés ne sont pas utilisées. Les captures, fortins, avant-postes, classements et historiques passent par ces passerelles, y compris entre factions via Battle.net.
 - Le relais conserve l'auteur initial, élimine les doublons et limite les trajets à trois relais. Son budget partagé est de 1 Ko/s, réserve de 500 octets comprise, avec 128 messages en attente au maximum. Les grosses données sont fragmentées.
 - Ponts Battle.net : jusqu'à 40 amis sont pris en compte. Les amis de l'autre faction entendus récemment sous Overlord servent de ponts (cinq au plus par message), les autres reçoivent des copies à tour de rôle, et la présence de chacun (huit amis sondés toutes les deux minutes, à tour de rôle) permet de se retrouver en quelques minutes (une dizaine au plus avec 40 amis silencieux). Quand une faction compte de nombreux ponts, seule une petite partie d'entre eux fait traverser le trafic de routine ; l'auteur d'un message et les événements terminaux (captures, victoires) traversent toujours.
+- Voie de guilde (seulement quand le canal ne marche pas : refusé par le serveur, pas rejoint depuis une minute, ou personne d'entendu depuis 5 min malgré nos envois) : un fait n'y est dit qu'une fois, après une courte attente qui suit l'écho mesuré, et rien n'y répond. Un siège y est annoncé au début et à la fin, sans ses ticks (abandonné avant que son début parte, il n'y est pas dit du tout) : son minuteur suit l'horloge de la vague, sur le front ou ailleurs, un joueur de notre camp qui le suit le garde jusqu'à sa fin prévue + 15 s, et une capture alliée dite là par son auteur clôt une vague locale. Elle lui compte aussitôt quand son début et sa fin ont été dits là par lui, à 45 s d'écart au moins ; sinon elle lui compte par les pages de classement. La date la plus tardive d'une capture est toujours dite, pour que toutes les cartes convergent. Une diffusion ne voyage jamais en chuchotement : reçue ainsi, elle n'est jamais répétée dans la guilde.
 - Tous les participants doivent avoir cette version et un chemin de communication entre eux. La découverte périodique permet le rattrapage ; une file saturée ou un paquet expiré peut retarder la synchronisation. Les auteurs antérieurs sont attestés par le relais, pas authentifiés directement par Blizzard. Les contrôles de campagne et de validité des données restent actifs.
 - Noms Forever en deux parties acceptés dans la sync et les whispers.
 - Commande `/ov sync` pour demander un rattrapage manuel.
@@ -172,6 +173,7 @@ Alias : `/ov` et `/overlord`. Tapez **`/ov help`** en jeu pour la liste complèt
 | `/ov scale [0.8–1.2]` | Échelle du panneau |
 | `/ov guide` | Guide visuel rapide |
 | `/ov groups` | Recherche de groupe JcJ |
+| `/ov guild` / `guild on` / `guild off` | Messages envoyés en guilde quand le canal ne marche pas : affiche leur état, les coupe ou les rétablit (ce que disent les autres reste lu) |
 
 ## Options
 

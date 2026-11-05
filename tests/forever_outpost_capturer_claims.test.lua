@@ -1155,4 +1155,52 @@ do
     assert(slices < keyBytes / 32, "the ledger build still yields inside key hashing: " .. slices .. " slices for "
         .. keyBytes .. " key bytes")
 end
+print("Outpost claims: a guild mate on the game's roster needs no ladder row, nothing else changes")
+do
+    resetWorld()
+    local realRoster = lb.IsLocalGuildRosterMember
+    lb.IsLocalGuildRosterMember = function(_, name) return name == "Mate Player" end
+    tick(7200)
+    local at = now - 60
+    sync:OnReceiveOutpostCapture(ocWire("silverpine", guild, "Alliance", at, "Other Player"), "Other Player-Forever", "WHISPER")
+    assert(count("silverpine", guild) == 0, "a stranger to the ladder and to the roster was believed")
+    sync:OnReceiveOutpostCapture(ocWire("silverpine", "Other Guild", "Alliance", at, "Mate Player"), "Mate Player-Forever", "WHISPER")
+    assert(count("silverpine", "Other Guild") == 0, "a guild mate named another guild")
+    sync:OnReceiveOutpostCapture(ocWire("silverpine", guild, "Alliance", at, "Mate Player"), "Other Player-Forever", "WHISPER")
+    assert(count("silverpine", guild) == 0, "someone else spoke for a guild mate")
+    sync:OnReceiveOutpostCapture(ocWire("silverpine", guild, "Alliance", at, "Mate Player"), "Mate Player-Forever", "WHISPER")
+    assert(count("silverpine", guild) == 1, "a guild mate's own capture was refused for want of a ladder row")
+    assert(op:GetState("silverpine").status == "held" and op:GetState("silverpine").ownerGuild == guild,
+        "a guild mate's own capture did not reach the map")
+    -- The same in a catch-up reply, for whoever missed the capture; our own guild only.
+    tick(61)
+    assert(sync:NoteOutpostClaimPeer("Helper Tester", "A:1.7.2:0::T"))
+    sync:OnReceiveLeaderboardOutpostTenant(loWire("badlands", "Other Guild", "Alliance", at - 3000, "Mate Player"), "Helper Tester-Forever", "WHISPER")
+    assert(count("badlands", "Other Guild") == 0, "a catch-up reply credited a guild mate to another guild")
+    sync:OnReceiveLeaderboardOutpostTenant(loWire("badlands", guild, "Alliance", at - 3000, "Other Player"), "Helper Tester-Forever", "WHISPER")
+    assert(count("badlands", guild) == 0, "a catch-up reply believed a stranger to the ladder and to the roster")
+    sync:OnReceiveLeaderboardOutpostTenant(loWire("badlands", guild, "Horde", at - 3000, "Mate Player"), "Helper Tester-Forever", "WHISPER")
+    assert(count("badlands", guild) == 0, "a catch-up reply gave a capture of the other faction to our guild, in a guild mate's name")
+    sync:OnReceiveLeaderboardOutpostTenant(loWire("badlands", guild, "Alliance", at - 3000, "Mate Player"), "Helper Tester-Forever", "WHISPER")
+    assert(count("badlands", guild) == 1, "a guild mate's capture was refused in a catch-up reply")
+    -- Heard in the guild: the relay hands it over as "BETA", and the guild proves the faction.
+    -- (A mate with no capture yet: a character captures at most once per contract.)
+    lb.IsLocalGuildRosterMember = function(_, name) return name == "Second Mate" end
+    local realRelay = Overlord.Relay
+    Overlord.Relay = { IsRelayedOrigin = function() return false end, IsTargetedDispatch = function() return false end,
+        IsPeer = function() return true end, IsDispatching = function() return true end,
+        IsEcho = function() return false end, context = { hops = 1, transport = "BNET" } }
+    local okGuild, whyGuild = sync:AuthorizeOutpostClaim("wetlands", guild, "Alliance", now - 30, "Second Mate",
+        "Second Mate-Forever", "BETA", "global")
+    assert(okGuild == false and whyGuild == "owner-faction", "only the guild proves the faction here: " .. tostring(whyGuild))
+    Overlord.Relay.context.transport = "GUILD"
+    okGuild, whyGuild = sync:AuthorizeOutpostClaim("wetlands", "Red Guild", "Horde", now - 30, "Second Mate",
+        "Second Mate-Forever", "BETA", "global")
+    assert(okGuild == false and whyGuild == "owner-faction", "a guild mate claimed for the other faction: " .. tostring(whyGuild))
+    okGuild, whyGuild = sync:AuthorizeOutpostClaim("wetlands", guild, "Alliance", now - 30, "Second Mate",
+        "Second Mate-Forever", "BETA", "global")
+    assert(okGuild == true, "a capture told in the guild by its capturer was refused: " .. tostring(whyGuild))
+    Overlord.Relay = realRelay
+    lb.IsLocalGuildRosterMember = realRoster
+end
 print("Forever outpost capturer claims: forged rows refused, capturer believed live, catch-up by content, convergent ledger, purge, bounded probes, ledger buckets")

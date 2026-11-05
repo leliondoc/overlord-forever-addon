@@ -84,7 +84,9 @@ Settings = {
     end,
 }
 function CreateSettingsListSectionHeaderInitializer(name) return { header = name } end
-function CreateSettingsButtonInitializer(name, button, click) return { button = button, name = name, click = click } end
+function CreateSettingsButtonInitializer(name, button, click, tooltip, addSearchTags)
+    return { button = button, name = name, click = click, addSearchTags = addSearchTags }
+end
 
 local scaleApplied = 0
 Overlord = { UI = { ApplyUiScale = function() scaleApplied = scaleApplied + 1 end },
@@ -121,6 +123,11 @@ for _, init in ipairs(inits) do
     if init.button then buttons[#buttons + 1] = init end
 end
 assert(headers == 4 and #buttons == 2, "Sections or buttons missing")
+-- Blizzard adds a button's search tags from our call: the Options search would read them, then
+-- refuse the Discord button's protected call in our name.
+for _, b in ipairs(buttons) do
+    assert(b.addSearchTags == false, "a button with search tags written by us: " .. b.name)
+end
 
 -- 2. The chat destination lists tabs by name, never a closed window.
 local options = dropdowns["Overlord_NotificationChat"]()

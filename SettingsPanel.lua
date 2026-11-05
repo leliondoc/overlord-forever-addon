@@ -631,8 +631,12 @@ local function addRow(category, layout, row)
     end
     if row.kind == "button" then
         if layout and layout.AddInitializer and CreateSettingsButtonInitializer then
+            -- No search tags: Blizzard writes a button's tags from our call, the Options search
+            -- reads every tag, and the rest of that search then runs in our name, up to the
+            -- Discord button's protected IsUserOAuthed (ADDON_ACTION_FORBIDDEN on 1.60.1).
+            -- Setting rows get theirs from Blizzard's secure path.
             layout:AddInitializer(CreateSettingsButtonInitializer(
-                label, Lx(row.button, row.buttonFallback), row.click, tooltip, true))
+                label, Lx(row.button, row.buttonFallback), row.click, tooltip, false))
         end
         return
     end

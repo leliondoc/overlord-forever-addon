@@ -529,7 +529,7 @@ function GF:CheckPublish()
 end
 
 -- What the window says about the channel the listings travel on: "closed" (the game
--- refuses our join), "connecting" (not inside yet), "listening" (inside for less than
+-- refuses our join or our messages), "connecting" (not inside yet), "listening" (inside for less than
 -- a minute and a half: the listings already published have not all been heard yet,
 -- nobody is asked for them) or "open". Second value: seconds of listening left.
 function GF:ChannelState()

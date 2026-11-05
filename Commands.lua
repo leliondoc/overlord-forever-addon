@@ -198,10 +198,12 @@ function SyncReport.Network()
             .. (pools._rulesetAssumed and " ASSUMED: game rules and realm name gave no answer" or ""))
         R.Detail("Campaign detected from: " .. pools:DescribeDetection())
         if Overlord.DescribeCampaignWeek then R.Detail("Campaign week: " .. Overlord:DescribeCampaignWeek()) end
-        if sync.IsChannelClosed and sync:IsChannelClosed() then
+        if sync.IsChannelClosed and sync:IsChannelClosed() and not sync._channelRefusedAt then
             R.Detail("Channel: cannot be joined (tried again at login, /reload or on leaving an instance)")
         end
     end
+    local guildLane = Overlord.GuildLane
+    if guildLane and guildLane.GetDiagnostics then R.Detail(guildLane:GetDiagnostics()) end
     if sync.GetEnemyCaptureFinalDiagnostics then R.Detail(sync:GetEnemyCaptureFinalDiagnostics()) end
     if sync.GetCrossFactionDiagnostics then
         for _, line in ipairs(sync:GetCrossFactionDiagnostics()) do R.Detail(line) end
@@ -513,6 +515,7 @@ local function ShowHelp()
     Overlord:PrintNotification(L.HELP_SYNC)
     Overlord:PrintNotification(L.HELP_MAP)
     Overlord:PrintNotification(L.HELP_NETWORK)
+    if L.HELP_GUILD_LANE then Overlord:PrintNotification(L.HELP_GUILD_LANE) end
     Overlord:PrintNotification(L.HELP_SCALE)
     Overlord:PrintNotification(L.HELP_GUIDE)
     if L.HELP_GUILD_KILLS then Overlord:PrintNotification(L.HELP_GUILD_KILLS) end
@@ -783,6 +786,15 @@ local function CommandHandler(msg)
 
     elseif cmd == "relay" or cmd == "relais" then
         StartNetworkProbe()
+
+    elseif cmd == "guild" or cmd == "guilde" then
+        -- 2.1.1: the player's own guild messages (what is heard from others stays read).
+        local guildLane = Overlord.GuildLane
+        local choice = string.lower(args[2] or "")
+        if guildLane and (choice == "on" or choice == "off") then guildLane:SetSwitchedOff(choice == "off") end
+        if guildLane then
+            Overlord:PrintNotification("[Overlord] " .. (guildLane:IsSwitchedOff() and L.GUILD_LANE_OFF or L.GUILD_LANE_ON))
+        end
 
     elseif cmd == "perf" then
         if args[2] == "stop" then
