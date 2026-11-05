@@ -100,6 +100,7 @@ function Overlord.Sync:PollIfStaleObserverInProgress(secondsSinceZs, zone)
     if Overlord.InstanceSuspended or not secondsSinceZs or secondsSinceZs < pollInterval then return end
     local now = GetTime()
     if now - lastStaleObserverPoll < pollInterval then return end
+    if Overlord.GuildLane and not Overlord.GuildLane:AsksAboutWave(zone) then return end
     lastStaleObserverPoll = now
     local payload = self.GetSRPayload and self:GetSRPayload("T")
     if payload then self:SendTargetedObserverMapRequest(zone, payload) end
@@ -118,6 +119,9 @@ function Overlord.Sync:RequestObserverCaptureConfirmationIfComplete(zone)
     end
     if zone.isHolding then return end
     if not Overlord.Zones or not Overlord.Zones.GetObserverHoldTimeElapsed then return end
+    -- 2.1.1: a clock at 100 % proves nothing, and those of a whole guild get there together, a
+    -- second before the final. A wave that outlives it is asked about by the stale poll.
+    if Overlord.GuildLane and Overlord.GuildLane:WaveClock(zone) then return end
 
     local req = tonumber(zone.holdTimeRequired) or 120
     local stored = tonumber(zone.holdTimeElapsed) or 0
@@ -2213,10 +2217,12 @@ function Overlord.Sync:CanCreditDirectCapture(sender, contributor, zoneId, facti
     end
     local key = senderKey .. ":" .. tostring(zoneId or "") .. ":" .. tostring(faction or "")
     local row = captureCreditProgressEvidence[key]
-    if not row or now - (row.firstSeen or now) < CAPTURE_CREDIT_MIN_OBSERVED_SEC
+    if (not row or now - (row.firstSeen or now) < CAPTURE_CREDIT_MIN_OBSERVED_SEC
         or (row.maxHold or 0) < CAPTURE_CREDIT_MIN_HOLD_SEC
         or (row.maxHold or 0) - (row.firstHold or 0) < CAPTURE_CREDIT_MIN_HOLD_SEC
-        or now - (row.lastSeen or 0) > 30 then
+        or now - (row.lastSeen or 0) > 30)
+        and not (Overlord.GuildLane and Overlord.GuildLane:ProvesWave(sender, zoneId, faction,
+            CAPTURE_CREDIT_MIN_OBSERVED_SEC, CAPTURE_CREDIT_MIN_HOLD_SEC)) then
         return false
     end
     ReleaseSecurityEvidenceKey(captureCreditProgressEvidence, key)

@@ -269,4 +269,55 @@ do
     NH:_ResetWindow()
     net.stats.dropped, net.stats.expired, net.stats.expiredFinals = 0, 0, 0
 end
+-- 2.1.1: a refused channel reaches the report and the dot, which stayed green with nothing
+-- received; /ov guild is the player's own switch.
+do
+    assert(loadfile("SyncGuild.lua"))()
+    assert(loadfile("GuideLocales.lua"))()
+    local NH, lane, L = Overlord.NetworkHealth, Overlord.GuildLane, Overlord.L
+    local realAfter, realInGuild, realChannelName = C_Timer.After, IsInGuild, GetChannelName
+    C_Timer.After = function() end -- the probe is the guild lane test's subject
+    IsInGuild, GetChannelName = function() return true end, function() return 5 end
+    NH:_ResetWindow()
+    sync._addonSendStats = { CHANNEL = { ok = 46, refused = 0 } }
+    net.stats.sent, net.stats.received, net.stats.dropped = 934, 1040, 0
+    local function transport()
+        local level, rows = NH:IndicatorLevel()
+        for _, row in ipairs(rows) do
+            if row.id == "transport" then return row, level end
+        end
+    end
+    local row, dot = transport()
+    assert(row and row.level == "ok" and row.text == "channel open" and dot == "ok", "An open channel must stay green")
+    sync:NoteChannelRefused("NOT_ALLOWED_IN_CHANNEL")
+    row, dot = transport()
+    assert(row.level == "warn" and dot == "warn", "The dot stayed green on a refused channel")
+    assert(row.text:find("refused by the server", 1, true) and row.text:find("guild fallback on", 1, true), row.text)
+    local report = run()
+    assert(find(report, "Channel and guild"), "No channel row in /ov network")
+    assert(find(report, "Guild fallback:"), "No guild counters in the details of /ov network")
+    assert(not find(report, "cannot be joined"), "A refused channel is not one that cannot be joined")
+    -- /ov guild: off, on, the French alias, the state alone, anything else changes nothing.
+    report = run("guild off")
+    assert(lane:IsSwitchedOff() and #report == 1 and report[1]:find(L.GUILD_LANE_OFF, 1, true), "/ov guild off")
+    row, dot = transport()
+    assert(dot == "warn" and row.text:find("/ov guild on", 1, true), "The panel must say the fallback is off: " .. row.text)
+    report = run("guild")
+    assert(lane:IsSwitchedOff() and report[1]:find(L.GUILD_LANE_OFF, 1, true), "/ov guild must give the state and change nothing")
+    report = run("guilde ON")
+    assert(not lane:IsSwitchedOff() and report[1]:find(L.GUILD_LANE_ON, 1, true), "/ov guilde on")
+    report = run("guild maybe")
+    assert(not lane:IsSwitchedOff() and report[1]:find(L.GUILD_LANE_ON, 1, true), "An unknown argument must change nothing")
+    -- No guild: the panel says who still carries data.
+    IsInGuild = function() return false end
+    row = transport()
+    assert(row.level == "warn" and row.text:find("no guild", 1, true), row.text)
+    IsInGuild = function() return true end
+    sync:NoteChannelReopened()
+    row, dot = transport()
+    assert(row.level == "ok" and dot == "ok", "The dot must clear when the channel comes back")
+    C_Timer.After, IsInGuild, GetChannelName = realAfter, realInGuild, realChannelName
+    lane.probeGeneration = (lane.probeGeneration or 0) + 1
+    NH:_ResetWindow()
+end
 print("Sync report: colored summary, worst-level header, red non-zero counters, stalled catch-up flagged OK")

@@ -180,6 +180,13 @@ do
         said[#said + 1] = kind .. ":" .. payload .. (critical and ":critical" or "")
         return true
     end
+    -- 2.1.1: a refused channel (GetChannelId answers nil): the relay says it.
+    local realChannelId, realBroadcast, channelUp, relayedNews = sync.GetChannelId, sync.BroadcastToRelay, true, {}
+    sync.GetChannelId = function() return channelUp and 5 or nil end
+    sync.BroadcastToRelay = function(_, kind, payload)
+        relayedNews[#relayedNews + 1] = kind .. ":" .. payload
+        return 1
+    end
     local targeted = true
     Overlord.Relay = setmetatable({ IsTargetedDispatch = function() return targeted end }, { __index = realRelay or {} })
     sync.GetBetaPeerFaction = function(_, name) return name == "Alliance Friend" and "Alliance" or "Horde" end
@@ -257,6 +264,20 @@ do
     sync:OnReceiveTotalVictory("Alliance:" .. (V + 4) .. ":0:0:elwynn", "Horde Mate", "CHANNEL")
     fire()
     assert(#said == 0, "an announcement of the same moment (4 s apart) did not keep us quiet")
+    -- 2.1.1: heard in the guild keeps us quiet too; without a channel, the relay says it.
+    relayedNews = {}
+    V = won("Alliance Friend", "BNET")
+    Overlord.Relay.context = { transport = "GUILD", hops = 1 }
+    sync:OnReceiveTotalVictory(TV, "Horde Mate", "BETA")
+    Overlord.Relay.context = nil
+    fire()
+    assert(#said == 0 and #relayedNews == 0, "a victory heard in the guild was said again")
+    V = won("Alliance Friend", "BNET")
+    channelUp = false
+    fire()
+    channelUp = true
+    assert(#said == 0 and #relayedNews == 1 and relayedNews[1] == "TV:Alliance:" .. V .. ":3:4:elwynn",
+        "without a channel a victory news must go by the relay: " .. table.concat(relayedNews, " | "))
     -- Its truce is over when our turn comes: nothing to say.
     V = won("Alliance Friend", "BNET")
     clock = V + 901
@@ -312,6 +333,7 @@ do
     fire()
     assert(#said == 1, "a friend's victory accepted by the map check was not said: " .. #said)
     sync.SendToChannel, Overlord.Relay, sync.GetBetaPeerFaction = realChannel, realRelay, realFaction
+    sync.GetChannelId, sync.BroadcastToRelay = realChannelId, realBroadcast
     sync.IsUnauthenticatedRelayOrigin = realUnauth
     sync.MapNewsUnderWay = realUnderWay
     C_Timer.After = function() end

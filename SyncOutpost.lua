@@ -659,7 +659,7 @@ local function SenderIsOutpostCapturer(sender, capturer)
     return sync.KillSyncSenderOwnsPlayer and sync:KillSyncSenderOwnsPlayer(sender, capturer) or false
 end
 
--- Faction the transport proves for a live sender: the channel and whispers are
+-- Faction the transport proves for a live sender: the channel, the guild and whispers are
 -- faction-bound, a group mate's unit tells it, a Battle.net friend is resolved.
 -- nil when nothing proves it (the claim is then refused).
 local function LiveSenderFaction(sender, sourceChannel)
@@ -675,7 +675,7 @@ local function LiveSenderFaction(sender, sourceChannel)
         if faction == "Alliance" or faction == "Horde" then return faction end
         return nil
     end
-    if transport == "CHANNEL" or transport == "WHISPER" then return Overlord.PlayerFaction end
+    if transport == "CHANNEL" or transport == "WHISPER" or transport == "GUILD" then return Overlord.PlayerFaction end
     local resolved = sync.GetResolvedBNetPlayerFaction and sync:GetResolvedBNetPlayerFaction(sender)
     if resolved == "Alliance" or resolved == "Horde" then return resolved end
     return nil
@@ -686,6 +686,13 @@ local function CapturerLadderGuild(capturer)
     if not lb or not lb.GetHotPlayerGuildState then return "" end
     local guild = lb:GetHotPlayerGuildState(capturer)
     return Overlord.Outpost:SanitizeGuildName(guild or "")
+end
+
+local function CapturerOnOurRoster(capturer, guild, faction)
+    local lb = Overlord.Leaderboard
+    return faction == Overlord.PlayerFaction and lb and lb.IsLocalGuildRosterMember
+        and lb:IsLocalGuildRosterMember(capturer)
+        and Overlord.Outpost:GetLocalPlayerGuild():lower() == guild:lower() or false
 end
 
 local function CapturerLadderFaction(capturer)
@@ -928,7 +935,10 @@ function Overlord.Sync:AuthorizeOutpostClaim(siteKey, guild, faction, claimTs, c
     -- own history is not held to the live pace.
     local solicitedReason = nil
     if ConsumeSolicitedOutpostClaim(sender, sourceChannel) then
-        if not self.IsKnownLeaderboardSubject or not self:IsKnownLeaderboardSubject(capturer) then
+        if CapturerOnOurRoster(capturer, guild, faction) then
+            outpostClaimStats.accepted = outpostClaimStats.accepted + 1
+            return true, "catch-up", capturer
+        elseif not self.IsKnownLeaderboardSubject or not self:IsKnownLeaderboardSubject(capturer) then
             solicitedReason = "catch-up-unknown"
             NotePendingCapturer(capturer, guild)
         else
@@ -945,11 +955,13 @@ function Overlord.Sync:AuthorizeOutpostClaim(siteKey, guild, faction, claimTs, c
     if SenderIsOutpostCapturer(sender, capturer) then
         local senderFaction = LiveSenderFaction(sender, sourceChannel)
         if senderFaction ~= faction then return false, "owner-faction" end
-        -- Credited to the guild the ladder knows for him (his own K / GI, our roster
-        -- or group, a page): an unknown guild is not his to name live.
-        local ladderGuild = CapturerLadderGuild(capturer)
-        if ladderGuild == "" then return false, "owner-guild-unknown" end
-        if ladderGuild:lower() ~= guild:lower() then return false, "owner-guild" end
+        -- Credited to the guild the ladder knows for the capturer (their own K / GI, group, a
+        -- page), or to ours when the game's roster lists them: without the channel nobody hears a GI.
+        if not CapturerOnOurRoster(capturer, guild, faction) then
+            local ladderGuild = CapturerLadderGuild(capturer)
+            if ladderGuild == "" then return false, "owner-guild-unknown" end
+            if ladderGuild:lower() ~= guild:lower() then return false, "owner-guild" end
+        end
         -- The live sender also carries a pace and an hourly budget of his own: a
         -- repeat of the very same claim (OC, then LO, then OP) costs nothing.
         local identity = siteKey .. "|" .. guild:lower() .. "|" .. faction .. "|" .. claimTs

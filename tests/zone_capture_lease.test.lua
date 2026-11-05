@@ -312,8 +312,8 @@ end
 Lease:Complete(zone)
 expect(Lease:ShouldRejectFinal(zone, "Bob", "wreplaced"),
     "a replaced wave could still be finalized after the capture completed")
--- 1.8.2: unless that final takes the zone from another owner at a later date: it is
--- then another capture, not a repeat of the one completed.
+-- 1.8.2: unless that final comes at a later date: it is then another capture, not a
+-- repeat of the one completed (2.1.1: by the same side too, every client keeps the latest date).
 do
     local owner, status, at = zone.owner, zone.status, zone.capturedTime
     zone.owner, zone.status, zone.capturedTime = "Alliance", "captured", wallBase + 300
@@ -321,8 +321,10 @@ do
         "a closed wave's later capture from another owner was refused")
     expect(Lease:ShouldRejectFinal(zone, "Bob", "wreplaced", "Horde", wallBase + 300),
         "a closed wave's final not later than the capture it follows was accepted")
-    expect(Lease:ShouldRejectFinal(zone, "Bob", "wreplaced", "Alliance", wallBase + 420),
-        "a closed wave's final for the faction already holding the zone was accepted (a repeat)")
+    expect(not Lease:ShouldRejectFinal(zone, "Bob", "wreplaced", "Alliance", wallBase + 420),
+        "a closed wave's later date for the side holding the zone was refused")
+    expect(Lease:ShouldRejectFinal(zone, "Bob", "wreplaced", "Alliance", wallBase + 300),
+        "a closed wave's final for the side holding the zone was accepted at the same date (a repeat)")
     zone.status = "in_progress"
     expect(Lease:ShouldRejectFinal(zone, "Bob", "wreplaced", "Horde", wallBase + 420),
         "a closed wave's final was accepted over another assault in progress")
@@ -1259,5 +1261,93 @@ expect(Lease:ValidateProgress(
     zone.id, "Alliance", "LocalHero", releasedWave, wallBase + 1100,
     10, 0, 120, nil, "LocalHero") == nil,
     "rotated local wave was not tombstoned")
+
+-- 2.1.1: the guild hears one copy of a capture. For our own side, dated after our wave opened,
+-- it ends our wave too; anywhere else our wave goes on, as it always did.
+resetZone()
+mono = 2000
+Lease:BeginLocal(zone)
+zone.holdAuthorityLocal, zone.owner = true, "Alliance"
+local heardThere, fromAuthor = false, false
+Overlord.GuildLane = { IsActive = function() return true end, HeardHere = function() return heardThere end,
+    HeardFromAuthor = function() return fromAuthor end, KeepFollowing = function() return nil end,
+    NoteWaveClosed = function() end }
+local dated = wallBase + 2030
+mono = 2035
+expect(Lease:ShouldRejectFinal(zone, "Bob", "wother", "Alliance", dated),
+    "told anywhere else (anybody can whisper), another wave's final must leave ours alone")
+heardThere = true
+expect(Lease:ShouldRejectFinal(zone, "Bob", "wother", "Alliance", dated),
+    "a copy relayed in the guild is a name anybody wrote: ours goes on")
+fromAuthor = true
+expect(not Lease:ShouldRejectFinal(zone, "Bob", "wother", "Alliance", dated),
+    "a final said in the guild by its author ends our wave")
+expect(Lease:ShouldRejectFinal(zone, "Bob", "wother", "Horde", dated),
+    "the enemy's final must never end our wave")
+expect(Lease:ShouldRejectFinal(zone, "Bob", "wother", "Alliance", wallBase + 1900),
+    "an older final of our side must not end a wave opened since")
+expect(not Lease:ShouldRejectFinal(zone, "Bob", "wother", "Alliance", wallBase + 1995),
+    "a final made just before our wave opened is the same capture")
+expect(Lease:ShouldRejectFinal(zone, "Bob", "wother", "Alliance", nil), "a final without a date proves nothing")
+Overlord.GuildLane = nil
+expect(Lease:ShouldRejectFinal(zone, "Bob", "wother", "Alliance", dated), "without the lane, as before")
+
+-- 2.1.1: told in the guild by its author, a wave has no ticks to refute a forged release, and its
+-- end comes the same way. Told there by somebody else, a relayed release ends it as before.
+do
+    local author = true
+    Overlord.GuildLane = { HeardHere = function() return true end, HeardFromAuthor = function() return author end,
+        KeepFollowing = function() return nil end, NoteWaveClosed = function() end }
+    local realRelayed = Overlord.Sync.IsUnauthenticatedRelayOrigin
+    local relayedNow = true
+    Overlord.Sync.IsUnauthenticatedRelayOrigin = function() return relayedNow end
+    local function told(wave, byAuthor)
+        resetZone()
+        mono = mono + 1000
+        author = byAuthor
+        expect(Lease:AdoptRemote(zone, "Alliance", "Bob",
+            { originKey = "bob", waveId = wave, ts = wallBase + mono, hold = 5, direct = true }), "adoption failed")
+        zone.status = "in_progress"
+        expect(zone._remoteCaptureLease.viaGuild == true and zone._remoteCaptureLease.guildAuthor == (byAuthor or nil),
+            "where the wave was told was not kept")
+    end
+    told("wtold1", true)
+    expect(not Lease:ReceiveRelease(zone.id .. ":wtold1:Bob", "Bob"), "a relayed release was taken for its author's")
+    expect(zone._remoteCaptureLease and zone._remoteCaptureLease.waveId == "wtold1", "a relayed release ended a wave told by its author")
+    expect(not Lease._IsTombstoned(zone.id, "bob", "wtold1"), "a relayed release left a mark on that wave")
+    relayedNow = false
+    expect(Lease:ReceiveRelease(zone.id .. ":wtold1:Bob", "Bob"), "its author's release was refused")
+    expect(not zone._remoteCaptureLease, "its author's release must end the wave")
+    relayedNow = true
+    told("wtold2", false)
+    expect(Lease:ReceiveRelease(zone.id .. ":wtold2:Bob", "Bob"), "a relayed release of a relayed wave was refused")
+    expect(not zone._remoteCaptureLease, "a relayed release must end a wave told by somebody else")
+    Overlord.Sync.IsUnauthenticatedRelayOrigin = realRelayed
+    Overlord.GuildLane = nil
+end
+
+-- 2.1.1: a sweep asks the lane too, for whoever is off the fronts: a wave told in the guild has no
+-- ticks, and would die at 150 s however long it still has to run.
+resetZone()
+mono = 3000
+expect(Lease:AdoptRemote(zone, "Alliance", "Bob",
+    { originKey = "bob", waveId = "wsilent", ts = wallBase + 3000, hold = 10 }), "adoption failed")
+zone.status = "in_progress"
+local stillFollowed = 160
+Overlord.GuildLane = { KeepFollowing = function() return stillFollowed end, NoteWaveClosed = function() end }
+mono = 3000 + 151
+expect(not Lease:MaybeExpire(zone), "a wave the lane still follows must not expire")
+-- Any later tick of the wave, a carrier's answer to a poll, corrects its clock.
+expect(zone._remoteCaptureLease.tickAt == 3000 and zone._remoteCaptureLease.tickHold == 10, "the clock starts with the wave")
+expect(Lease:AdoptRemote(zone, "Alliance", "Bob",
+    { originKey = "bob", waveId = "wsilent", ts = wallBase + 3100, hold = 5 }), "same wave refused")
+expect(zone._remoteCaptureLease.tickAt == 3151 and zone._remoteCaptureLease.tickHold == 5, "a later tick must correct the clock")
+expect(zone._remoteCaptureLease.openedAt == 3000, "the wave still opened when it opened")
+Lease:AdoptRemote(zone, "Alliance", "Bob", { originKey = "bob", waveId = "wsilent", ts = wallBase + 3050, hold = 70 })
+expect(zone._remoteCaptureLease.tickHold == 5, "an older copy must not move the clock")
+stillFollowed = nil
+mono = 3151 + 151
+expect(Lease:MaybeExpire(zone), "past its end, silence counts again")
+Overlord.GuildLane = nil
 
 print("zone_capture_lease: ok")

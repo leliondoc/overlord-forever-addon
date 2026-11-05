@@ -18,6 +18,7 @@ local guideKeys = {
     "GUIDE_BAR_LABEL", "GUIDE_TITLE", "GUIDE_CLOSE", "GUIDE_NEXT", "GUIDE_PREV",
     "GUIDE_PAGE_INDICATOR", "FRONT_TRUCE_ENDED_KEPT", "FRONT_CAPITAL_LIBERATED",
     "FRONT_VICTORY_TOO_SOON", "FORTRESS_CAPTURE_AVAILABLE",
+    "HELP_GUILD_LANE", "GUILD_LANE_ON", "GUILD_LANE_OFF",
 }
 
 local function countSlots(text, slot)
@@ -116,7 +117,8 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
     end
     -- Commands are quoted exactly as Commands.lua parses them, after every later locale
     -- fix (an old Shard -> Layer rewrite once turned /ov layer into /ov shard).
-    for _, cmd in ipairs({ { "GUIDE_SHARD_BODY", "/ov network" },
+    for _, cmd in ipairs({ { "GUIDE_SHARD_BODY", "/ov network" }, { "GUIDE_SHARD_BODY", "/ov guild off" },
+        { "HELP_GUILD_LANE", "/ov guild" }, { "GUILD_LANE_ON", "/ov guild off" }, { "GUILD_LANE_OFF", "/ov guild on" },
         { "GUIDE_PANEL_BODY", "/ov show" }, { "GUIDE_PANEL_BODY", "/ov guide" },
         { "GUIDE_OPTIONS_BODY", "/ov lb" },
         { "GUIDE_ALERTS_BODY", "/ov guildkills" } }) do

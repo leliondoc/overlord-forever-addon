@@ -269,5 +269,207 @@ end
 -- (5) Still refused: a final older than what the map holds.
 finalC("faldir", "Horde", "Horde Bravo", "wB5", "Player-1-0000BBBB", takenAt - 50)
 assert(neutral.owner == "Alliance" and neutral.capturedTime == takenAt, "an older final replaced a newer capture")
+
+-- 2.1.1: nobody on a point hears the others when only the guild carries the news, so a capture of
+-- our side, said there by its author, ends a wave of our own there, even dated before our last
+-- tick. Real receive paths and lease rule; the lane is only asked where this copy was heard.
+do
+    local fromAuthor = true
+    Overlord.GuildLane = { IsActive = function() return true end, HeardHere = function() return fromAuthor end,
+        HeardFromAuthor = function() return fromAuthor end,
+        KeepFollowing = function() return nil end, WaveClock = function() return nil end,
+        ProvesWave = function() return false end, NoteWaveClosed = function() end }
+    -- On the front we stand on: nobody captures anywhere else.
+    local onFront
+    for _, zone in ipairs(Overlord.Fronts:GetFront("elwynn").zones) do
+        if zone.id ~= own.id and not zone.isCapital then onFront = zone.id; break end
+    end
+    local function localWave(id)
+        local point = Overlord.Zones:GetZone(id)
+        point.owner, point.status, point.capturedTime, point.holdTimeElapsed = "Alliance", "in_progress", nil, 30
+        point.isHolding, point.holdAuthorityLocal, point.holdStartTime = true, true, clock - 30
+        point._remoteCaptureLease = nil
+        Overlord.CaptureLease:BeginLocal(point)
+        advance(20)
+        point.updatedAt = wall -- our own tick of this very second
+        return point
+    end
+    advance(600)
+    local point = localWave(onFront)
+    local dated = wall - 3
+    finalZS(onFront, "A", "Ally Mate", "wM1", "Player-1-0000F001", dated)
+    assert(point.status == "captured" and point.owner == "Alliance" and point.capturedTime == dated,
+        "a final ZS dated before our last tick did not end our wave: " .. tostring(point.status))
+    assert(point.holdAuthorityLocal == nil and not point.isHolding, "our wave survived the final ZS: " .. tostring(point.holdAuthorityLocal) .. "/" .. tostring(point.isHolding))
+    -- Told any other way, other waves' finals leave ours alone, as they always did: anybody can
+    -- whisper one, with any name.
+    fromAuthor = false
+    advance(600)
+    point = localWave(onFront)
+    finalZS(onFront, "A", "Ally Mate", "wM2", "Player-1-0000F001", wall - 3)
+    assert(point.status == "in_progress" and point.holdAuthorityLocal == true,
+        "a final of another wave, told outside the guild, ended ours")
+    -- Said in the guild by its author, it ends ours: that wave has no ticks for us.
+    fromAuthor = true
+    dated = wall - 2
+    finalZS(onFront, "A", "Ally Mate", "wM3", "Player-1-0000F001", dated)
+    assert(point.status == "captured" and point.capturedTime == dated and point.holdAuthorityLocal == nil,
+        "a final heard in the guild did not end our wave")
+    -- As a C too.
+    advance(600)
+    point = localWave(onFront)
+    dated = wall - 3
+    finalC(onFront, "Alliance", "Ally Mate", "wM4", "Player-1-0000F001", dated)
+    assert(point.status == "captured" and point.capturedTime == dated and point.holdAuthorityLocal == nil,
+        "a C dated before our last tick did not end our wave: " .. tostring(point.status))
+    Overlord.GuildLane = nil
+end
+
+-- 2.1.1: every client keeps the latest date. The followed player finishing seconds after another
+-- player of the same side has a later date to tell, although that other final closed the timer
+-- followed here; a repeat or an earlier copy still moves nothing.
+do
+    local point = zoneOf("highperch")
+    point.owner, point.status, point.capturedTime, point.updatedAt = nil, "locked", nil, 0
+    point._remoteCaptureLease = nil
+    advance(600)
+    progress("highperch", "A", "Ally Foxtrot", "wF1", "Player-1-0000F00A", 5)
+    assert(point.status == "in_progress" and point._remoteCaptureLease, "fixture: the allied wave is not followed")
+    advance(100)
+    local firstAt = wall
+    finalC("highperch", "Alliance", "Ally Golf", "wF2", "Player-1-0000F00B")
+    assert(point.owner == "Alliance" and point.capturedTime == firstAt and not point._remoteCaptureLease,
+        "fixture: the other final was not taken")
+    advance(2)
+    local laterAt = wall
+    finalC("highperch", "Alliance", "Ally Foxtrot", "wF1", "Player-1-0000F00A", laterAt)
+    assert(point.capturedTime == laterAt, "the later date of the followed player was refused: " .. tostring(point.capturedTime - firstAt))
+    advance(1)
+    finalC("highperch", "Alliance", "Ally Foxtrot", "wF1", "Player-1-0000F00A", firstAt - 5)
+    assert(point.capturedTime == laterAt, "an earlier copy moved the date")
+    -- As a state final too.
+    local other = zoneOf("newstead")
+    other.owner, other.status, other.capturedTime, other.updatedAt = nil, "locked", nil, 0
+    other._remoteCaptureLease = nil
+    advance(60)
+    progress("newstead", "A", "Ally Hotel", "wF3", "Player-1-0000F00C", 5)
+    assert(other.status == "in_progress" and other._remoteCaptureLease, "fixture: the second allied wave is not followed")
+    advance(100)
+    firstAt = wall
+    finalZS("newstead", "A", "Ally India", "wF4", "Player-1-0000F00D", firstAt)
+    assert(other.capturedTime == firstAt and not other._remoteCaptureLease, "fixture: the other state final was not taken")
+    advance(2)
+    laterAt = wall
+    finalZS("newstead", "A", "Ally Hotel", "wF3", "Player-1-0000F00C", laterAt)
+    assert(other.capturedTime == laterAt, "the later state final of the followed player was refused")
+end
+-- 2.1.1: told in the guild, a capture has no ticks. What they would have proved before it counts
+-- for its author is then the time between its start and its final, both said by that author.
+do
+    function GetChannelName() return 5 end
+    function securecall(fn, ...) return fn(...) end
+    C_Club = C_Club or { GetSubscribedClubs = function() return {} end }
+    Enum = Enum or {}; Enum.ClubType = Enum.ClubType or { Character = 1 }
+    C_Timer.NewTicker = C_Timer.NewTicker or function() return {} end
+    assert(loadfile("SyncRelay.lua"))()
+    assert(loadfile("SyncGuild.lua"))()
+    local lane = Overlord.GuildLane
+    local fromAuthor = true
+    lane.HeardHere = function() return true end
+    lane.HeardFromAuthor = function() return fromAuthor end
+    local credits = {}
+    local realAdd = Overlord.Leaderboard.AddPlayerCapture
+    Overlord.Leaderboard.AddPlayerCapture = function(self, name, ...)
+        credits[name] = (credits[name] or 0) + 1
+        return realAdd(self, name, ...)
+    end
+    local function start(id, who, wave, guid)
+        local point = zoneOf(id)
+        point.owner, point.status, point.capturedTime, point.updatedAt = nil, "locked", nil, 0
+        point._remoteCaptureLease = nil
+        advance(600)
+        progress(id, "A", who, wave, guid, 2)
+        assert(point.status == "in_progress" and point._remoteCaptureLease, "fixture: the wave is not followed")
+        return point
+    end
+    -- Start and final from their author, long enough apart: it counts at once, once.
+    local point = start("highperch", "Ally Kilo", "wK1", "Player-1-0000F00E")
+    advance(100)
+    finalC("highperch", "Alliance", "Ally Kilo", "wK1", "Player-1-0000F00E")
+    assert(point.owner == "Alliance" and credits["Ally Kilo"] == 1, "the capture did not count: " .. tostring(credits["Ally Kilo"]))
+    finalZS("highperch", "A", "Ally Kilo", "wK1", "Player-1-0000F00E", point.capturedTime)
+    assert(credits["Ally Kilo"] == 1, "its state final counted it again")
+    -- The state final alone says as much.
+    point = start("newstead", "Ally Lima", "wL1", "Player-1-0000F00F")
+    advance(100)
+    finalZS("newstead", "A", "Ally Lima", "wL1", "Player-1-0000F00F")
+    assert(point.owner == "Alliance" and credits["Ally Lima"] == 1, "the state final did not count")
+    -- Too soon after its start: taken, not counted.
+    point = start("highperch", "Ally Mike", "wM7", "Player-1-0000F010")
+    advance(20)
+    finalC("highperch", "Alliance", "Ally Mike", "wM7", "Player-1-0000F010")
+    assert(point.owner == "Alliance" and not credits["Ally Mike"], "a capture 20 s after its start counted")
+    -- A start somebody else repeated proves nothing.
+    fromAuthor = false
+    point = start("newstead", "Ally November", "wN1", "Player-1-0000F011")
+    fromAuthor = true
+    advance(100)
+    finalC("newstead", "Alliance", "Ally November", "wN1", "Player-1-0000F011")
+    assert(point.owner == "Alliance" and not credits["Ally November"], "a capture counted on a repeated start")
+    -- Neither does a final somebody else repeats.
+    point = start("highperch", "Ally Oscar", "wO1", "Player-1-0000F012")
+    advance(60)
+    Overlord.Relay.context = { hops = 1, origin = "Ally Oscar" }
+    assert(not sync:CanCreditDirectCapture("Ally Oscar", "Ally Oscar", "highperch", "Alliance"),
+        "a repeated final counted")
+    Overlord.Relay.context = nil
+    -- Nor the wave of somebody else, nor the other side.
+    assert(not sync:CanCreditDirectCapture("Ally Papa", "Ally Papa", "highperch", "Alliance"), "another player's wave counted")
+    assert(not lane:ProvesWave("Ally Oscar", "highperch", "Horde", 45, 30), "the wave counted for the other side")
+    assert(not lane:ProvesWave("Ally Oscar", "not-a-zone", "Alliance", 45, 30), "a site that is no zone")
+    assert(sync:CanCreditDirectCapture("Ally Oscar", "Ally Oscar", "highperch", "Alliance"), "the wave itself did not count")
+    -- One wave, one capture: not again once the time between two credits has passed, closed or not.
+    advance(61)
+    assert(point._remoteCaptureLease, "fixture: the wave should still be followed")
+    assert(not sync:CanCreditDirectCapture("Ally Oscar", "Ally Oscar", "highperch", "Alliance"), "a wave counted twice")
+    Overlord.CaptureLease:Complete(point)
+    assert(not sync:CanCreditDirectCapture("Ally Oscar", "Ally Oscar", "highperch", "Alliance"), "a closed wave counted twice")
+    assert(lane.closedWaves["highperch"].base == nil, "a closed wave keeps what it proves, not the zone's snapshot")
+    -- Somebody else's final closes the wave seconds before its author's own: it still counts for
+    -- that author, once, and for nobody else.
+    point = start("newstead", "Ally Quebec", "wQ1", "Player-1-0000F013")
+    advance(100)
+    finalC("newstead", "Alliance", "Ally Romeo", "wR1", "Player-1-0000F014")
+    assert(point.owner == "Alliance" and not point._remoteCaptureLease and not credits["Ally Romeo"],
+        "fixture: the other final did not close the wave")
+    advance(4)
+    finalC("newstead", "Alliance", "Ally Quebec", "wQ1", "Player-1-0000F013")
+    assert(credits["Ally Quebec"] == 1, "the wave's author lost the capture to the order of the finals")
+    assert(not credits["Ally Romeo"], "the other player was credited")
+    advance(2)
+    finalC("newstead", "Alliance", "Ally Quebec", "wQ1", "Player-1-0000F013")
+    assert(credits["Ally Quebec"] == 1, "a later final of the same wave counted again")
+    -- As a state final too, and only that long.
+    point = start("highperch", "Ally Sierra", "wS1", "Player-1-0000F015")
+    advance(100)
+    finalC("highperch", "Alliance", "Ally Tango", "wT1", "Player-1-0000F016")
+    advance(4)
+    finalZS("highperch", "A", "Ally Sierra", "wS1", "Player-1-0000F015")
+    assert(credits["Ally Sierra"] == 1, "the state final of the wave's author did not count")
+    point = start("newstead", "Ally Uniform", "wU1", "Player-1-0000F017")
+    advance(100)
+    finalC("newstead", "Alliance", "Ally Victor", "wV1", "Player-1-0000F018")
+    advance(lane.CLOSED_WAVE_SEC + 1)
+    finalC("newstead", "Alliance", "Ally Uniform", "wU1", "Player-1-0000F017")
+    assert(point.owner == "Alliance" and not credits["Ally Uniform"], "a wave closed long ago still proved something")
+    -- A wave given up proves nothing: only a completed one is kept.
+    point = start("highperch", "Ally Whiskey", "wW1", "Player-1-0000F019")
+    advance(100)
+    Overlord.CaptureLease:ExpireRemote(point, "timeout")
+    assert(not sync:CanCreditDirectCapture("Ally Whiskey", "Ally Whiskey", "highperch", "Alliance"),
+        "a wave given up proved a capture")
+    Overlord.Leaderboard.AddPlayerCapture = realAdd
+    Overlord.GuildLane = nil
+end
 print("Forever group capture: a point finished by another player than the one followed is taken (C and ZS, "
     .. "own front and others, either faction); retries and older finals change nothing")

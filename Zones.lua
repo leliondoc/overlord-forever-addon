@@ -763,6 +763,11 @@ function Overlord.Zones:GetObserverHoldTimeElapsed(zone)
     end
     local base = math.max(tonumber(zone.holdTimeElapsed) or 0,
         tonumber(zone._observerDisplayNetworkFloor) or 0)
+    -- 2.1.1 : pas de ticks dans la guilde : l'horloge de la vague est tout ce qu'il y a a montrer.
+    local waveClock = Overlord.GuildLane and Overlord.GuildLane:WaveClock(zone)
+    if waveClock then
+        return math.min(tonumber(zone.holdTimeRequired) or 120, math.max(base, waveClock))
+    end
     if zone._restoredInProgress then
         local display = zone._observerDisplayHold
         if display and display >= base then

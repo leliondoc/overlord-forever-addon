@@ -612,9 +612,10 @@ function Overlord.Sync:Initialize()
 
     priv.groupSyncStatePrimed = true
     priv.wasGroupedForSync = IsInGroup and IsInGroup() or false
-    -- Ne pas ecouter CHAT_MSG_CHANNEL_NOTICE : en arene/BG, ses arguments peuvent
-    -- etre proteges/tainted et une simple comparaison Lua peut ouvrir une erreur.
-    -- La boucle StartChannelRetryLoop() suffit a rejoindre le canal si necessaire.
+    -- CHAT_MSG_CHANNEL_NOTICE (2.1.1, seul moyen de voir un refus du serveur) : en arene/BG,
+    -- ses arguments peuvent etre proteges et une simple comparaison Lua peut ouvrir une
+    -- erreur. Jamais lu en instance (voir plus bas), et jamais compare avant canaccessvalue
+    -- (Sync:OnChannelNotice). La boucle StartChannelRetryLoop() rejoint le canal si necessaire.
     syncFrame:SetScript("OnEvent", function(_, event, ...)
         -- Every addon's messages arrive here: drop the other prefixes before any
         -- other work (IsInInstance included).
@@ -640,6 +641,8 @@ function Overlord.Sync:Initialize()
             Overlord.Sync:OnNameplateAdded(...)
         elseif event == "CHANNEL_PASSWORD_REQUEST" then
             Overlord.Sync:OnChannelJoinRefused(...)
+        elseif event == "CHAT_MSG_CHANNEL_NOTICE" or event == "CHAT_MSG_CHANNEL_NOTICE_USER" then
+            if Overlord.Sync.OnChannelNotice then Overlord.Sync:OnChannelNotice(...) end
         end
     end)
     -- Cold /reload en arene : preparer le protocole mais ne jamais ouvrir ses
@@ -650,6 +653,8 @@ function Overlord.Sync:Initialize()
         syncFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
         syncFrame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
         pcall(syncFrame.RegisterEvent, syncFrame, "CHANNEL_PASSWORD_REQUEST")
+        pcall(syncFrame.RegisterEvent, syncFrame, "CHAT_MSG_CHANNEL_NOTICE")
+        pcall(syncFrame.RegisterEvent, syncFrame, "CHAT_MSG_CHANNEL_NOTICE_USER")
         -- Seat pads left by a /reload in the middle of a join (a temporary channel
         -- outlives a /reload): swept once the network is set up, outside instances only,
         -- and never able to stop the rest of the start.
@@ -730,14 +735,16 @@ function Overlord.Sync:JoinChannel(attempt, generation)
             C_Timer.After(15, function()
                 if Overlord.InstanceSuspended
                     or Overlord.Sync._joinChannelGeneration ~= generation then return end
-                if Overlord.Sync:GetChannelId() and not Overlord.Sync:SendLoginMapPeerRequest() then
+                if (Overlord.Sync:GetChannelId() or Overlord.Sync._channelRefusedAt)
+                    and not Overlord.Sync:SendLoginMapPeerRequest() then
                     Overlord.Sync:SendSyncRequest()
                 end
             end)
             C_Timer.After(35, function()
                 if Overlord.InstanceSuspended
                     or Overlord.Sync._joinChannelGeneration ~= generation then return end
-                if Overlord.Sync:GetChannelId() and not Overlord.Sync:SendLoginMapPeerRequest() then
+                if (Overlord.Sync:GetChannelId() or Overlord.Sync._channelRefusedAt)
+                    and not Overlord.Sync:SendLoginMapPeerRequest() then
                     Overlord.Sync:SendSyncRequest()
                 end
             end)
@@ -773,9 +780,9 @@ function Overlord.Sync:OnChannelJoinRefused(name)
     if finder and finder.Touch then finder:Touch() end
 end
 
--- Refused that way, and still outside.
+-- Refused that way and still outside, or (2.1.1) inside and refused by the server.
 function Overlord.Sync:IsChannelClosed()
-    return priv.channelClosed == true and not self:GetChannelId()
+    return self._channelRefusedAt ~= nil or (priv.channelClosed == true and not self:GetChannelId())
 end
 
 -- Relance periodique du join canal (toutes les 60s) si on n'est pas dedans (evite de rester desync si le join a rate au chargement)
@@ -963,10 +970,22 @@ end
 
 -- Retourne le canal prioritaire : groupe (cross-realm) > channel (realm uniquement)
 function Overlord.Sync:GetChannelId()
+    -- 2.1.1: the server refuses what we send there (SyncGuild.lua): for every sender, there
+    -- is no channel. A probe takes it back when the server does.
+    if self._channelRefusedAt then return nil end
     local id = GetChannelName(ChannelName())
     if id and id > 0 then return id end
     return nil
 end
+
+-- We are in the channel, whether or not it carries anything.
+function Overlord.Sync:GetJoinedChannelId()
+    local id = GetChannelName(ChannelName())
+    if id and id > 0 then return id end
+    return nil
+end
+
+function Overlord.Sync:GetChannelBaseName() return ChannelName() end
 
 -- Forever : base Prenom Nom. Un suffixe -Royaume d'API est ignore, jamais recolle.
 function Overlord.Sync:ForeverCharacterBase(name)
@@ -2212,6 +2231,7 @@ function Overlord.Sync:SendAddonChecked(msg, chatType, target)
     end
     if chatType == "CHANNEL" then
         self:NoteChannelSendKind(self._channelSendKind or msg:match("^([^:]+)") or "?", ok, #msg)
+        if self.NoteChannelSendResult then self:NoteChannelSendResult(result, ok) end
     end
     local health = Overlord.NetworkHealth
     if health and health.NoteSend then health:NoteSend(GetTime()) end
@@ -2975,10 +2995,23 @@ end
 function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
     if prefix ~= PREFIX then return end
     -- 1.7.5 : seuls les transports que l'addon emploie. Un fragment relais recu en
-    -- GUILD/SAY/YELL etait reexpedie par chaque auditeur sur le canal et le groupe.
+    -- SAY/YELL etait reexpedie par chaque auditeur sur le canal et le groupe.
+    -- 2.1.1 : GUILD en est, a ses propres conditions (SyncGuild.lua).
     if channel ~= "CHANNEL" and channel ~= "WHISPER" and channel ~= "PARTY"
-        and channel ~= "RAID" and channel ~= "BETA" then return end
+        and channel ~= "RAID" and channel ~= "BETA" and channel ~= "GUILD" then return end
     if channel == "BETA" and (not Overlord.Relay or not Overlord.Relay:IsDispatching(sender)) then return end
+    -- 2.1.1: the guild only carries relay fragments, and our own copy stops there (SyncGuild.lua).
+    if channel == "GUILD" then
+        local guildLane = Overlord.GuildLane
+        if not guildLane or not guildLane:OnHeard(message, sender) then return end
+    elseif channel == "CHANNEL" then
+        -- Our own copy back: the channel carries again. Anyone else: it is not silent.
+        if self:IsSenderLocalPlayer(sender) then
+            if self._channelRefusedAt and self.NoteChannelReopened then self:NoteChannelReopened() end
+        else
+            self._channelHeardAt = GetTime()
+        end
+    end
     if message and message:sub(1, 3) == "BF:" and Overlord.Relay then
         return Overlord.Relay:ReceiveFragment(message:sub(4), sender, channel)
     end
@@ -5316,6 +5349,8 @@ function Overlord.Sync:OnReceiveCapture(payload, sender)
         -- FinalizeAcceptedCaptureFinal pose ensuite le TombstoneFinalWave : jamais
         -- avant que owner/status/capturedTime soient devenus canoniques.
         zone.isHolding = false
+        -- 2.1.1 : la finale d'un allie peut clore notre vague (GuildFinalEndsLocalWave).
+        zone.holdAuthorityLocal = nil
         zone.isContested = false
         zone.isPaused = false
         zone.holdTimeElapsed = 0
@@ -7839,7 +7874,11 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
 
     -- Donnee distante plus recente : on prend tout (owner deja defini plus haut).
     -- La fin directe d'un bail peut partager la seconde de son dernier heartbeat.
-    if ts > localTs or (directRevertVerified and ts == localTs) then
+    -- 2.1.1 : nos propres ticks datent notre vague : une finale alliee qui la clot peut etre
+    -- plus ancienne d'une seconde ou deux, comme un C (GuildFinalEndsLocalWave).
+    if ts > localTs or (directRevertVerified and ts == localTs)
+        or (status == "captured" and IsLocalAuthoritativeCapture(zone) and Overlord.CaptureLease
+            and Overlord.CaptureLease:GuildFinalEndsLocalWave(zone, owner, ts)) then
         -- Protection : allie encore sur le disque - ignorer abandon/revert d'un partant.
         if AllyStillCapturingOnDisk(zone) then
             if status == "available" or status == "locked" then
@@ -8050,6 +8089,8 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
         end
         if status == "captured" then
             zone.isHolding = false
+            -- 2.1.1 : la finale d'un allie peut clore notre vague (GuildFinalEndsLocalWave).
+            zone.holdAuthorityLocal = nil
             zone.isContested = false
             zone.isPaused = false
             zone.holdTimeElapsed = 0
@@ -9886,7 +9927,7 @@ function Overlord.Sync:OnGroupChanged()
     -- Une mutation du roster est observee par les 40 clients. Toutes les demandes
     -- automatiques restent territoriales ; en raid massif, les membres deja presents
     -- passent par l'election partagee et seul le nouveau membre fait une relance directe.
-    local canSend = self:GetChannelId() or IsInRaid() or IsInGroup()
+    local canSend = self:GetChannelId() or self._channelRefusedAt or IsInRaid() or IsInGroup()
     if canSend and not pendingSync then
         pendingSync = true
         C_Timer.After(3, function()
@@ -10732,7 +10773,12 @@ function Overlord.Sync:SayVictoryNews(frontId, faction, ts, allyK, enemyK)
         -- (Fifteen minutes: how long the news is worth saying, truce or not.)
         if (Overlord.ServerNow and Overlord.ServerNow() or time()) > ts + 900 then return end
         priv.victoryNewsSent = (priv.victoryNewsSent or 0) + 1
-        Overlord.Sync:SendToChannel("TV", payload, true)
+        -- 2.1.1: no channel: the relay says it, in the guild too.
+        if Overlord.Sync:GetChannelId() then
+            Overlord.Sync:SendToChannel("TV", payload, true)
+        else
+            Overlord.Sync:BroadcastToRelay("TV", payload)
+        end
     end)
 end
 
@@ -10774,7 +10820,8 @@ function Overlord.Sync:OnReceiveTotalVictory(payload, sender, sourceChannel, ret
     -- victory news of ours for the same front, winner and moment is then not needed.
     local relayContext = Overlord.Relay and Overlord.Relay.context
     if proofFrontId and (sourceChannel == "CHANNEL"
-        or (sourceChannel == "BETA" and relayContext and relayContext.transport == "CHANNEL")) then
+        or (sourceChannel == "BETA" and relayContext
+            and (relayContext.transport == "CHANNEL" or relayContext.transport == "GUILD"))) then
         priv.victoryHeardOnChannel = priv.victoryHeardOnChannel or {}
         local heardKey = proofFrontId .. ":" .. faction
         local heard = priv.victoryHeardOnChannel[heardKey] or {}
@@ -11716,6 +11763,7 @@ function Overlord.Sync:Suspend()
     self._instanceSuspendAt = GetTime()
     if self.DropPagedServing then self:DropPagedServing() end
     syncFrame:UnregisterAllEvents()
+    if self.OnNetworkSuspend then self:OnNetworkSuspend() end
     syncResponseGeneration = syncResponseGeneration + 1
     syncResponseInFlight = false
     priv.syncResponseDeadline = 0
@@ -12007,11 +12055,13 @@ function Overlord.Sync:Resume()
     syncFrame:RegisterEvent("CHAT_MSG_ADDON")
     syncFrame:RegisterEvent("BN_CHAT_MSG_ADDON")
     syncFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
-    -- Voir Initialize() : on evite CHAT_MSG_CHANNEL_NOTICE pour ne pas toucher
-    -- a ses arguments proteges pendant les transitions d'instance.
     syncFrame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
     pcall(syncFrame.RegisterEvent, syncFrame, "CHANNEL_PASSWORD_REQUEST")
+    -- Voir Initialize() : jamais lus en instance, ni compares avant canaccessvalue.
+    pcall(syncFrame.RegisterEvent, syncFrame, "CHAT_MSG_CHANNEL_NOTICE")
+    pcall(syncFrame.RegisterEvent, syncFrame, "CHAT_MSG_CHANNEL_NOTICE_USER")
     -- Leaving an instance is one of the three moments the channel is tried again.
+    if self.OnNetworkResume then self:OnNetworkResume() end
     priv.channelClosed = nil
     self:JoinChannel()
     self:StartChannelRetryLoop()

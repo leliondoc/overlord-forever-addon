@@ -130,6 +130,8 @@ end
 local function resolutionCanBroadcast()
     if Overlord.InstanceSuspended or IsInInstance() then return false end
     if Overlord.Sync and Overlord.Sync.GetChannelId and Overlord.Sync:GetChannelId() then return true end
+    -- 2.1.1: refused by the server: Battle.net and whispers still carry these.
+    if Overlord.Sync and Overlord.Sync._channelRefusedAt then return true end
     if IsInRaid() or IsInGroup() then return true end
     return false
 end

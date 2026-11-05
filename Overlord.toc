@@ -51,6 +51,7 @@ SyncOutpost.lua
 SyncHistoryCatchup.lua
 SyncLeaderboardPages.lua
 SyncRelay.lua
+SyncGuild.lua
 MapMarkers.lua
 MapMarkersKeep.lua
 MapWorldEmblems.lua

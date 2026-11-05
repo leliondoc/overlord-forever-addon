@@ -1,5 +1,5 @@
 -- Overlord relay (was "BetaNetwork" until 1.8.0; wire kinds BR/BF unchanged):
--- bounded store-and-forward over group/channel and Battle.net.
+-- bounded store-and-forward over group/channel, the guild (SyncGuild.lua) and Battle.net.
 -- The last hop is authenticated by WoW/BNet. Earlier authors are vouched for by
 -- that peer, not cryptographically authenticated by Blizzard. Keep the original
 -- author when dispatching so relays never manufacture additional witnesses.
@@ -901,6 +901,7 @@ local function hashFrac(text)
     for i = 1, #text do h = (h * 33 + text:byte(i)) % 2147483647 end
     return (h * 0.6180339887498949) % 1
 end
+net.HashFrac = hashFrac
 -- Bridge election (launch scale). Every same-faction client that hears a broadcast
 -- forwards it once, Battle.net legs included: with hundreds of players holding a
 -- live opposite-faction friend, each routine packet crossed hundreds of times and
@@ -992,6 +993,22 @@ function net.ParseBase36(text)
         value = value * 36 + digit
     end
     return #text > 0 and value or nil
+end
+-- 2.1.1: a presence said in the guild is heard by all of it in the same second, and few
+-- presences are said there: routes stay a small part of the guild, so CountDirectPeers says
+-- little about how many hear this one. Without this, each guild mate lacking a capture would
+-- pull the same player at once (the channel avoids it with map news, which a guild may not
+-- carry). About MAP_DIFF_ASKERS of them ask, others per 10 min; a client still waiting for
+-- its login map always asks.
+function net:GuildPresenceLeavesUsQuiet(origin, now)
+    local guildLane = addon.GuildLane
+    if not guildLane then return false end
+    if addon.IsCaptureSyncPending and addon:IsCaptureSyncPending() then return false end
+    local share = self.MAP_DIFF_ASKERS / math.max(1, guildLane:PeerCount())
+    if share >= 1 then return false end
+    local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
+    return hashFrac(tostring(me):lower() .. "|" .. tostring(origin):lower() .. "|"
+        .. math.floor(now / 600)) >= share
 end
 function net:MapDiffDue(digest, sum, peerDigest, peerSum, origin, now, friend)
     local rows = self.mapDiffs
@@ -1376,7 +1393,9 @@ end
 -- Heard first-hand on the faction channel (not in a group, not through a hop).
 function net:IsDirectChannelDispatch()
     local c = self.context
-    return c ~= nil and (tonumber(c.hops) or 0) == 0 and c.transport == "CHANNEL"
+    if c == nil or (tonumber(c.hops) or 0) ~= 0 then return false end
+    -- 2.1.1: with no channel of our own, the guild stands in for it (map news: said, heard).
+    return c.transport == "CHANNEL" or (c.transport == "GUILD" and not sync:GetChannelId())
 end
 function net:IsDirectLocalDispatch()
     local c = self.context
@@ -1855,6 +1874,8 @@ local function tasksFor(p, wire)
                     -- still need the Battle.net copy.
                     local heardAt = p.heardOn == "CHANNEL" and type(character) == "string"
                         and channelHeard[character:lower()] or nil
+                    -- 2.1.1: likewise a friend we hear in the guild this copy came from.
+                    if p.heardOn == "GUILD" and addon.GuildLane then heardAt = addon.GuildLane:HeardAt(character) end
                     if heardAt ~= nil and GetTime() - heardAt <= 300 then
                         net.stats.friendCopiesOnChannelSkipped = (net.stats.friendCopiesOnChannelSkipped or 0) + 1
                     elseif #p.path > 1 and not bnetAlive(id) then
@@ -1926,6 +1947,16 @@ local function tasksFor(p, wire)
             else coverId = entry.id; bnet(entry.id) end
         end
         coverId = nil
+        -- 2.1.1: the channel does not work here: the guild, rarely (SyncGuild.lua). Last, so
+        -- that nothing else of this packet waits for it.
+        local guildLane = addon.GuildLane
+        if guildLane and guildLane:Carries(p, count) then
+            local task = add("GUILD", "", "BF")
+            task.guildPacket, task.guildFragments = p, fragments
+            -- A release may be the last thing out before a loading screen, and the other copies
+            -- can spend the byte budget this one does not use (Queue stops there, for the pump).
+            if p.kind == "ZR" then table.insert(tasks, 1, table.remove(tasks)) end
+        end
     end
     if ckey then tasks.cover = { key = ckey, path = pathFriends } end
     if trimmed and trimmed > 0 then
@@ -1942,6 +1973,13 @@ end
 local function emit(task)
     task.spent = nil
     if task.skip then return true end
+    -- 2.1.1: the guild lane decides when and whether, on its own budget: nothing waits here.
+    if task.transport == "GUILD" then
+        local guildLane = addon.GuildLane
+        if guildLane then guildLane:Offer(task.guildPacket, task.guildFragments) end
+        task.guildPacket, task.guildFragments = nil, nil
+        return true
+    end
     -- Missing optional local paths are not send failures; a throttled channel
     -- that is present must, however, retry the same fragment.
     if task.transport == "GROUP" and not IsInGroup() then
@@ -2688,11 +2726,12 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
             capabilityRow.mapSession = tostring(p.id or ""):match("^(.-)%-")
         end
         local noNews, diffRow, stampOnly = false, nil, false
+        local guildQuiet = transport == "GUILD" and self:GuildPresenceLeavesUsQuiet(origin, now)
         if peerDigest and peerSum and peerSites ~= nil then
             local _, sum, digest = localMapStamp()
             -- An empty stamp (a neighbour still waiting for its own login map) holds
             -- nothing to pull and no difference to keep: no news.
-            if peerDigest ~= digest and peerSum > 0 then
+            if peerDigest ~= digest and peerSum > 0 and not guildQuiet then
                 diffRow = self:MapDiffDue(digest, sum, peerDigest, peerSum, origin, now, transport == "BNET")
             end
             noNews = diffRow == nil
@@ -2706,7 +2745,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         end
         -- A keep or outpost capture we do not hold (see the "~o" stamp above).
         local forSites = false
-        if noNews and peerSites and sync.GetOutpostMapStamps then
+        if noNews and peerSites and sync.GetOutpostMapStamps and not guildQuiet then
             local _, known = sync:GetOutpostMapStamps()
             local asked = self.sitesPull
             if peerSites > known and (not asked or peerSites > asked.stamp or now - asked.at >= 1800
@@ -2830,6 +2869,9 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         -- A copy heard on the channel was heard by our group mates too (same realm,
         -- same faction): in a 40-man raid every hearer re-sent it to the raid.
         p.skipGroup = transport == "RAID" or transport == "PARTY" or transport == "CHANNEL"
+            or transport == "GUILD"
+        -- 2.1.1: what the guild has heard is never said there again.
+        p.skipGuild = transport == "GUILD"
         -- Whoever gave us a group copy either put it on the channel or got it from
         -- there. Only a gateway we never hear on our channel (another realm) needs it.
         local heardAt = (transport == "RAID" or transport == "PARTY") and channelHeard[sender:lower()] or nil
@@ -2869,8 +2911,9 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
             else
                 self.stats.routineForwardSkipped = (self.stats.routineForwardSkipped or 0) + 1
             end
-        elseif transport == "BNET" and p.target == "*" and p.kind ~= "NH" and p.kind ~= "SH"
-            and not p.skipChannel and holdForward(key, p, "bridge") then
+        -- (2.1.1: a guild mate's copy too, for a client whose channel does work: it bridges.)
+        elseif (transport == "BNET" or transport == "GUILD") and p.target == "*" and p.kind ~= "NH"
+            and p.kind ~= "SH" and not p.skipChannel and holdForward(key, p, "bridge") then
             forwarded = true
             self.stats.bridgeForwardsHeld = (self.stats.bridgeForwardsHeld or 0) + 1
             if routineKey then
@@ -2891,7 +2934,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         end
         -- Group mates without the channel still need a copy: one held group-only
         -- copy per hearer, dropped as soon as a mate's copy is heard in the group.
-        if transport == "CHANNEL" and p.target == "*" and p.kind ~= "NH"
+        if (transport == "CHANNEL" or transport == "GUILD") and p.target == "*" and p.kind ~= "NH"
             and p.kind ~= "SH" and IsInGroup() and not retryForward
             and (not sync.GroupCarries or sync:GroupCarries(p.kind, p.payload)) then
             local pg = { region = p.region, id = p.id, at = p.at, target = p.target, path = p.path,
@@ -2924,6 +2967,13 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         return false
     end
     return true
+end
+-- (taken: Receive has checked the last hop, and may have added us to the path.)
+function net:NoteGuildCopy(p, sender, taken)
+    local guildLane = addon.GuildLane
+    if p and guildLane and p.target == "*" and (taken or same(p.path[#p.path], sender)) then
+        guildLane:NoteHeardPacket(p, not same(p.path[1], sender))
+    end
 end
 function net:ReceiveFragment(payload, sender, transport, bnetID)
     if not active() or type(payload) ~= "string" or #payload > 252 then return false end
@@ -2972,10 +3022,17 @@ function net:ReceiveFragment(payload, sender, transport, bnetID)
     -- Every later duplicate fragment of a completed packet lands here again.
     -- Let refused broadcast forwards reach Receive's retry-only path as well.
     local wasSeen = alreadySeen(wire, name)
-    if wasSeen and not forwardRetryKey(wire) then return false end
+    if wasSeen and not forwardRetryKey(wire) then
+        -- 2.1.1: said in the guild, even if we already had it: nothing left to say there.
+        if transport == "GUILD" then self:NoteGuildCopy(decode(wire), name) end
+        return false
+    end
     local p = decode(wire)
     if not p or p.id ~= id then return false end
-    return self:Receive(wire, name, transport, bnetID, p, wasSeen)
+    local taken = self:Receive(wire, name, transport, bnetID, p, wasSeen)
+    -- 2.1.1: only a copy the relay took counts as said.
+    if taken and transport == "GUILD" then self:NoteGuildCopy(p, name, true) end
+    return taken
 end
 -- Same-faction peers reachable by a plain whisper: heard directly (hops == 1) and
 -- recently, on a transport that is same-faction by construction (channel, group,
@@ -2988,7 +3045,7 @@ function net:GetLocalPeers(exclude)
         if now - row.at <= LOCAL_PEER_FRESH and tonumber(row.hops) == 1
             and not (exclude and exclude[key]) then
             local t = row.transport
-            local direct = t == "CHANNEL" or t == "WHISPER" or t == "RAID" or t == "PARTY"
+            local direct = t == "CHANNEL" or t == "WHISPER" or t == "RAID" or t == "PARTY" or t == "GUILD"
             local faction = sync.GetBetaPeerFaction and sync:GetBetaPeerFaction(row.name)
             if ((faction ~= nil and faction == mine) or (faction == nil and direct))
                 and not (sync.SenderIsInOurGroup and sync:SenderIsInOurGroup(row.name)) then

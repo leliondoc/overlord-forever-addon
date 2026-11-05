@@ -26,6 +26,9 @@ local NETWORK_PROOF_HOLD_SLACK = 8
 -- consecutives sans assouplir la fraicheur du terminal, bornee separement.
 local NETWORK_PROOF_MAX_GAP = 50
 local BASE_HOLD_REQUIRED = 120
+-- 2.1.1: how long before our wave opened a capture of the point can still be that same capture
+-- (not heard yet when we stepped on it).
+local GUILD_FINAL_SLACK = 10
 
 local tombstones = {}
 local tombstoneCount = 0
@@ -1258,6 +1261,7 @@ function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
         current.lastSeen = now
         current.lastRemoteTs = remoteTs
         current.lastHold = decision.hold or 0
+        current.tickAt, current.tickHold = now, decision.hold or 0
         zone.holdTimeRequired = tonumber(current.effectiveRequired)
             or self:GetDefaultCaptureRequirement(zone, owner)
         TrackLeaseZone(zone)
@@ -1311,6 +1315,13 @@ function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
         effectiveRequired = decision.proofRequired
             or self:GetDefaultCaptureRequirement(zone, owner),
         base = base,
+        -- 2.1.1: told in the guild, its ticks will not come (GuildLane:KeepFollowing), and
+        -- its clock runs from the last one heard. Told there by its author, its end comes the
+        -- same way, and no tick would refute a forged release (ReceiveRelease).
+        viaGuild = Overlord.GuildLane ~= nil and Overlord.GuildLane:HeardHere() or nil,
+        guildAuthor = Overlord.GuildLane ~= nil and Overlord.GuildLane:HeardFromAuthor() or nil,
+        tickAt = now,
+        tickHold = decision.hold or 0,
     }
     StartNetworkProof(remote, decision, now)
     zone._remoteCaptureLease = remote
@@ -1385,6 +1396,20 @@ function Lease:FinalSatisfiesLocalRequirement(zone, owner, originName, waveId, f
         and observedDuration >= required - 15
 end
 
+-- 2.1.1: on a refused channel the guild hears one copy of a capture and those holding others keep
+-- quiet, so a co-capturer holding a separate wave (anyone who stepped on the point before the
+-- start could be heard) would refuse it, and lose the point on leaving before that wave's timer
+-- ended. A capture of the point by our own side, said there by its author and dated since our
+-- wave opened, ends our wave too. No other copy of it: anybody can write one, with any name.
+function Lease:GuildFinalEndsLocalWave(zone, owner, ts)
+    local guild = Overlord.GuildLane
+    if owner ~= zone.owner or not guild or not guild:HeardFromAuthor() then return false end
+    local openedAt, dated = tonumber(zone._localCaptureOpenedAt), tonumber(ts)
+    if not openedAt or not dated then return false end
+    local nowWall = Overlord.ServerNow and Overlord.ServerNow() or time()
+    return dated >= nowWall - (GetTime() - openedAt) - GUILD_FINAL_SLACK
+end
+
 function Lease:ShouldRejectFinal(zone, originName, waveId, owner, ts)
     if not zone then return true end
     local originKey = CanonicalPlayer(originName)
@@ -1395,19 +1420,21 @@ function Lease:ShouldRejectFinal(zone, originName, waveId, owner, ts)
         and zone._captureFinalUnattestedWaveId == validWave then
         return false
     end
-    if zone.holdAuthorityLocal and zone._localCaptureWaveId ~= validWave then return true end
+    if zone.holdAuthorityLocal and zone._localCaptureWaveId ~= validWave
+        and not self:GuildFinalEndsLocalWave(zone, owner, ts) then return true end
     -- Une marque douce (arret faute de nouvelles, releve) ne bloque jamais une finale.
     if not IsHardTombstoned(zone.id, originKey, validWave) then return false end
     -- 1.8.2: the final of a closed wave repeats a capture already taken into account,
-    -- unless it takes the zone from another owner at a later date: then it is
-    -- another capture. A final accepted while another timer is followed closes that
-    -- timer: when the other faction completed first and the followed player
-    -- completes afterwards, his own capture must still count. Only for a wave closed
-    -- that way (see MarkSuperseded): never for one closed by anti-spoof or released.
+    -- unless it comes at a later date: then it is another capture, by the other faction or
+    -- by a player of the same side finishing seconds after (every client keeps the latest
+    -- date). A final accepted while another timer is followed closes that timer: when
+    -- somebody else completed first and the followed player completes afterwards, that
+    -- capture must still count. Only for a wave closed that way (see MarkSuperseded):
+    -- never for one closed by anti-spoof or released.
     local key = LeaseKey(zone.id, originKey, validWave)
     if superseded.rows[key] == nil or superseded.rows[key] ~= tombstones[key] then return true end
     local at = tonumber(ts)
-    if owner and at and zone.owner and zone.owner ~= owner and zone.status ~= "in_progress"
+    if owner and at and zone.owner and zone.status ~= "in_progress"
         and at > (tonumber(zone.capturedTime) or 0) then return false end
     return true
 end
@@ -1467,6 +1494,9 @@ function Lease:MaybeExpire(zone)
         zone.holdTimeRequired = remote.effectiveRequired
         RefreshVisuals()
     end
+    -- 2.1.1: told in the guild, a wave has no ticks: its silence proves nothing until its end.
+    -- (Off the fronts this sweep is all there is: no observer tick runs there.)
+    if Overlord.GuildLane and Overlord.GuildLane:KeepFollowing(zone) then return false end
     if GetTime() - (remote.lastSeen or 0) < HARD_TTL then return false end
     return self:ExpireRemote(zone, "timeout")
 end
@@ -1481,6 +1511,7 @@ function Lease:Complete(zone)
             MarkSuperseded(LeaseKey(zone.id, remote.originKey, remote.waveId))
         end
         ClearTransient(zone)
+        if Overlord.GuildLane then Overlord.GuildLane:NoteWaveClosed(zone.id, remote) end
     end
     TombstoneLocalWave(zone)
     zone._remoteCaptureLease = nil
@@ -1604,6 +1635,7 @@ function Lease:ReceiveRelease(payload, sender)
         and sync:IsUnauthenticatedRelayOrigin(sender) == true
     local remote = zone._remoteCaptureLease
     local following = remote ~= nil and remote.originKey == originKey and remote.waveId == waveId
+    if relayed and following and remote.guildAuthor then return false end
     if relayed then
         -- Dated from its arrival, not from the last tick seen: a release jumps the
         -- queues (terminal first, priority token), so a tick it overtook is older than
