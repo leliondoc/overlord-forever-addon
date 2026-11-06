@@ -1,10 +1,14 @@
-2.1.1
+2.2.0
 
-**Overlord Forever 2.1.1**
+**Overlord Forever 2.2.0**
 
-- **Addon channel**: since the launch the game refuses addon messages on custom channels, and Overlord went on talking to nobody behind a green dot. It now notices, says so in the network panel (/ov network), and tries the channel again every 5 minutes: as soon as the game reopens it, everything goes back by itself.
-- **Guild**: while the channel is refused or nobody answers on it, your presence and captures go through your guild, a few messages at most; maps and rankings then travel by whisper between guild mates. Nothing goes there while the channel works and others are heard on it. /ov guild off stops your own guild messages.
-- Without a guild, data only reaches you through your group and your Battle.net friends until the channel reopens. Group search stays unavailable while the channel is refused.
-- **Options search**: typing in the search box of the game's Options no longer raises an error saying that Overlord tried to call a protected function. Overlord's two buttons on its options page (action bar shortcut, chat tab) are no longer listed by that search.
-- Plays alongside 2.1.0: nothing changes for it, but a 2.1.0 client does not read the guild.
+- **Between guilds**: while the game refuses the addon channel, Overlord now reads the channel's member list and exchanges data, by invisible whispers, with a few players listed there, whatever their guild or realm. Maps, captures and rankings cross from one guild to another again and reach players without a guild: captures and sieges usually within seconds, passed from hand to hand, the ranking a few minutes later.
+- While those players answer, ranking catch-ups come more often. Everything stops in instances, and nothing of this runs while the channel works.
+- The panel dot stays green when the channel is refused but your data still goes through its member list or your guild, and says which. Its tooltip is narrower: one line per item, the figures only when something is worth watching (all of them in /ov network).
+- When the game puts the Overlord channel aside for a session (it then disappears from your channel list), the panel says so; data keeps going through your guild, group and Battle.net friends, and the member list is used again as soon as the channel comes back.
+- A hidden temporary channel ("OvPad...") could stay in your channel list after logging in: it is now removed within a minute.
+- Better protection against forged messages on the member-list lane.
+- The layer tooltip lists the players you exchange with again, not only your Battle.net friends.
+- /ov network shows how many players of the member list exchange with you.
+- Plays alongside 2.1.1: a 2.1.1 client does not answer those whispers, but still gets the data from the 2.2.0 players who reach it.
 - **Restart the game after updating** (a new file: a /reload is not enough).

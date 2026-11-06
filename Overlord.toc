@@ -9,7 +9,7 @@
 ## Notes-ruRU: Захват зон на фронтах открытого мира (WoW Forever): синхронизация, карта, рейтинг.
 ## Notes-ptBR: Captura de zonas nas frentes do mundo aberto (WoW Forever): sincronização, mapa e classificação.
 ## Notes-zhCN: WoW Forever 开放世界战线的区域占领：同步、地图与排行榜。
-## Version: 2.1.1
+## Version: 2.2.0
 ## SavedVariables: OverlordDB
 ## SavedVariablesPerCharacter: OverlordCharDB
 ## IconTexture: Interface\AddOns\Overlord\Textures\overlord_minimap
@@ -52,6 +52,7 @@ SyncHistoryCatchup.lua
 SyncLeaderboardPages.lua
 SyncRelay.lua
 SyncGuild.lua
+SyncDirectory.lua
 MapMarkers.lua
 MapMarkersKeep.lua
 MapWorldEmblems.lua
