@@ -82,8 +82,8 @@ end
 function NH:Compute()
     local sync, net = Overlord.Sync, Overlord.Relay
     local rows, overall = {}, "ok"
-    local function add(id, level, title, text)
-        rows[#rows + 1] = { id = id, level = level, title = title, text = text }
+    local function add(id, level, title, text, short)
+        rows[#rows + 1] = { id = id, level = level, title = title, text = text, short = short }
         overall = Worst(overall, level)
     end
     local base, baseAt = WindowBase()
@@ -195,8 +195,8 @@ function NH:Compute()
     -- nothing received. Says what carries our data (SyncGuild.lua).
     local guildLane = Overlord.GuildLane
     if guildLane and guildLane.Describe then
-        local level, text = guildLane:Describe()
-        add("transport", level, "Channel and guild", text)
+        local level, text, short = guildLane:Describe()
+        add("transport", level, "Channel and guild", text, short)
     end
     return overall, rows
 end
@@ -248,6 +248,7 @@ local function Paint(button)
     Tint(button.icon, level)
 end
 
+local CHECK = "|TInterface\\RaidFrame\\ReadyCheck-Ready:12:12|t"
 local function ShowTooltip(button)
     if InInstance() or not GameTooltip then return end
     local level, rows = NH:IndicatorLevel()
@@ -255,9 +256,18 @@ local function ShowTooltip(button)
     GameTooltip:AddLine(T("NET_HEALTH_TITLE", "Overlord network"), 1, 0.82, 0)
     local c = COLOR[level] or COLOR.ok
     GameTooltip:AddLine(T(WORD_KEY[level], WORD_FALLBACK[level]), c[1], c[2], c[3])
+    -- 2.2.0: one line per row, a check while it is fine; the figures only for a row worth
+    -- watching, and what carries our data, wrapped under their title (/ov network has them all).
     for _, row in ipairs(rows) do
         local rc = COLOR[row.level] or COLOR.ok
-        GameTooltip:AddDoubleLine(row.title, row.text, rc[1], rc[2], rc[3], 0.8, 0.8, 0.8)
+        if row.level == "ok" then
+            GameTooltip:AddDoubleLine(row.title, CHECK, rc[1], rc[2], rc[3], 1, 1, 1)
+        else
+            GameTooltip:AddLine(row.title, rc[1], rc[2], rc[3])
+        end
+        if row.level ~= "ok" or (row.id == "transport" and row.short ~= "channel open") then
+            GameTooltip:AddLine(row.short or row.text, 0.8, 0.8, 0.8, true)
+        end
     end
     GameTooltip:AddLine(" ")
     GameTooltip:AddLine(T("NET_HEALTH_HINT", "Type /ov network for details."), 0.6, 0.6, 0.6)

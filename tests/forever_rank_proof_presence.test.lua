@@ -123,3 +123,32 @@ local wire = table.concat({ longQueued.region, longQueued.id, tostring(longQueue
 assert(longQueued.payload:find("~q15.zz-zzzz~m", 1, true) and #wire <= 170,
     "one fragment: " .. #wire .. " bytes: " .. wire)
 print("Rank claim in the presence: after the layout, first-hand only, older parsers unaffected, " .. #wire .. "/170 bytes OK")
+
+-- 2.2.0: our layer ("~s"), after the rank claim, read like an SH from a first-hand presence
+-- only. The longest one (a layer id of 8 digits, the long name, his word) still fits.
+long.Shard = { GetCurrentShardID = function() return 99999999 end }
+long.IsShardHelperActive = function() return true end
+longNet.Queue = function(_, p) longQueued = p return true end
+longNet:Send("NH", "2.0.4")
+longNet.Queue = longQueue
+wire = table.concat({ longQueued.region, longQueued.id, tostring(longQueued.at), longQueued.target,
+    table.concat(longQueued.path, ","), longQueued.kind, longQueued.payload }, "|")
+assert(longQueued.payload:find("~q15.zz-zzzz~s99999999~m", 1, true) and #wire <= 170,
+    "one fragment with the layer: " .. #wire .. " bytes: " .. wire)
+assert(longQueued.payload:match("~q([%w%.%-]+)~") == "15.zz-zzzz", "the rank claim is read the same way")
+long.IsShardHelperActive = function() return false end
+now, longQueued = now + 10, nil
+longNet.Queue = function(_, p) longQueued = p return true end
+longNet:Send("NH", "2.0.4")
+longNet.Queue = longQueue
+assert(longQueued and not longQueued.payload:find("~s", 1, true), "a layer said while the layer helper is off")
+local layers = {}
+me.Shard = { SetPlayerShard = function(_, who, sid) layers[#layers + 1] = { who = who, sid = sid } end }
+presence("Layer Player", "2.2.0~t0~y" .. layout .. "~q0~s17" .. tail)
+assert(#layers == 1 and layers[1].who == "Layer Player" and layers[1].sid == 17, "a first-hand layer is recorded")
+presence("Layer Far", "2.2.0~t0~y" .. layout .. "~s4" .. tail, "CHANNEL", "Layer Far,Relay Hop")
+assert(#layers == 1, "a relayed presence gave a layer")
+presence("Layer Old", "2.1.1~t0~y" .. layout .. tail)
+assert(#layers == 1, "a presence without a layer gave one")
+assert(not net:IsOutdatedMapPeer("Layer Player"), "a presence with a layer left the map exchange")
+print("Layer in the presence: first-hand only, rank claim and layout read the same, " .. #wire .. "/170 bytes OK")

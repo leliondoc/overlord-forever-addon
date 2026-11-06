@@ -204,6 +204,8 @@ function SyncReport.Network()
     end
     local guildLane = Overlord.GuildLane
     if guildLane and guildLane.GetDiagnostics then R.Detail(guildLane:GetDiagnostics()) end
+    local directory = Overlord.ChannelDirectory
+    if directory and directory.GetDiagnostics then R.Detail(directory:GetDiagnostics()) end
     if sync.GetEnemyCaptureFinalDiagnostics then R.Detail(sync:GetEnemyCaptureFinalDiagnostics()) end
     if sync.GetCrossFactionDiagnostics then
         for _, line in ipairs(sync:GetCrossFactionDiagnostics()) do R.Detail(line) end

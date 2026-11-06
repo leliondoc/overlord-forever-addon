@@ -75,7 +75,7 @@ local lane = {
     NO_GUILD_BACKOFF = 300,
     -- The channel: how long a join may run before it counts as down, how much talking to
     -- nobody makes it "silent", how often and how patiently a refused one is tried again.
-    JOIN_GRACE = 60,
+    JOIN_GRACE = 60, SETTLE_SEC = 180,
     SILENT_SEC = 300, SILENT_SENDS = 3,
     PROBE_SEC = 300, PROBE_WAIT = 20, PROBE_AFTER_INSTANCE = 20,
     PROBE_MESSAGE = "PB",
@@ -230,12 +230,15 @@ function sync:OnNetworkSuspend()
     lane.armedAt, lane.notJoinedSince = nil, nil
     lane.outbox, lane.awaiting = {}, {}
     self._channelSilence, self._channelHeardAt = nil, nil
+    -- 2.2.0: the channel's member list stops too (SyncDirectory.lua).
+    if addon.ChannelDirectory then addon.ChannelDirectory:Suspend() end
 end
 
 function sync:OnNetworkResume()
     if self._channelRefusedAt then
         self:ScheduleChannelProbe(lane.PROBE_AFTER_INSTANCE * (1 + math.random()))
     end
+    if addon.ChannelDirectory then addon.ChannelDirectory:Resume() end
 end
 
 -- ---------------------------------------------------------------------------
@@ -255,15 +258,21 @@ end
 
 function lane:ChannelDown()
     -- Refused by the server, or a join the game answered with a request of its own.
-    if sync:IsChannelClosed() then return true end
-    if not sync:GetJoinedChannelId() then
+    local down
+    if sync:IsChannelClosed() then
+        down = true
+    elseif not sync:GetJoinedChannelId() then
         -- Not joined for a while: a join still running (40 s at most at login) is no verdict.
         local at = now()
         self.notJoinedSince = self.notJoinedSince or at
-        return at - self.notJoinedSince >= self.JOIN_GRACE
+        down = at - self.notJoinedSince >= self.JOIN_GRACE
+    else
+        self.notJoinedSince = nil
+        down = sync:IsChannelSilent()
     end
-    self.notJoinedSince = nil
-    return sync:IsChannelSilent()
+    -- (Since when, for Describe: the member list needs a minute or two to answer.)
+    if down then self.downSince = self.downSince or now() else self.downSince = nil end
+    return down
 end
 
 -- Free to speak in the guild, whatever the channel does?
@@ -505,15 +514,25 @@ function lane:AsksAboutWave(zone)
     local remote = zone and zone._remoteCaptureLease
     if not remote or not remote.viaGuild then return true end
     local peers = self:PeerCount()
+    -- 2.2.0: told along the channel's member list, the whole list may follow it.
+    local directory = addon.ChannelDirectory
+    if directory and directory.ChainFollowers then peers = math.max(peers, directory:ChainFollowers()) end
     if peers <= self.RELAY_SPEAKERS then return true end
     local me = sync.GetPlayerFullName and sync:GetPlayerFullName() or ""
     return addon.Relay.HashFrac(tostring(me):lower() .. "|" .. tostring(remote.waveId)) < self.RELAY_SPEAKERS / peers
 end
 
--- Is what is being delivered right now a copy heard in the guild?
+-- Is what is being delivered right now a copy heard in the guild? 2.2.0: or a broadcast whispered
+-- along the channel's member list (SyncDirectory.lua, the only sender of one): no ticks follow it
+-- either. (Not its author's word for HeardFromAuthor: that stays the guild's.)
 function lane:HeardHere()
     local context = addon.Relay and addon.Relay.context
-    return context ~= nil and context.transport == "GUILD"
+    if context == nil then return false end
+    if context.transport == "GUILD" then return true end
+    -- Whispered: from a contact of the chain only (a stranger's word keeps its ticks).
+    local directory = addon.ChannelDirectory
+    return context.transport == "WHISPER" and context.targeted == false and directory ~= nil
+        and directory.IsContact ~= nil and directory:IsContact(context.gateway) == true
 end
 
 -- The same, from its author: the game gives that name, and it is one of ours. (A relayed copy
@@ -983,31 +1002,58 @@ end
 -- Reports (/ov network, panel)
 -- ---------------------------------------------------------------------------
 
+-- Level, the full text (/ov network) and a short one (the panel dot's tooltip).
 function lane:Describe()
     local at, stats = now(), self.stats
-    local channel
+    local channel, short
     if sync._channelRefusedAt then
-        channel = string.format("channel refused by the server for %d min (%s), tried again every 5 min",
-            math.floor((at - sync._channelRefusedAt) / 60), tostring(sync._channelRefusedWhy))
+        channel, short = "channel refused by the server (tried again every 5 min)", "channel refused"
     elseif not sync:GetJoinedChannelId() then
         channel = sync._joinChannelAttemptPending and "joining the channel" or "channel not joined"
     elseif sync:IsChannelSilent() then
         channel = "nobody heard on the channel for 5 min"
     else
-        return "ok", "channel open"
+        return "ok", "channel open", "channel open"
     end
-    if not self:ChannelDown() then return "ok", channel end
-    if self:IsSwitchedOff() then return "warn", channel .. "; guild fallback off (/ov guild on)" end
-    if not (IsInGuild and IsInGuild()) or (self.noGuildUntil and at < self.noGuildUntil) then
-        return "warn", channel .. "; no guild: only your group and Battle.net friends carry data"
+    short = short or channel
+    if not self:ChannelDown() then return "ok", channel, short end
+    -- 2.2.0: a refused channel is the server's choice, not a fault: the dot stays green while
+    -- something carries our data instead (players of the channel's member list exchanging with us,
+    -- SyncDirectory.lua; guild mates heard under Overlord), and says what.
+    local listed, exchanging = nil, 0
+    if addon.ChannelDirectory then listed, exchanging = addon.ChannelDirectory:Describe() end
+    exchanging = tonumber(exchanging) or 0
+    if listed then channel = channel .. "; " .. listed end
+    if addon.ChannelDirectory and addon.ChannelDirectory.suspended then short = "channel suspended by the game" end
+    local carriers = {}
+    if exchanging > 0 then carriers[#carriers + 1] = "the channel member list" end
+    local guildText, unheard
+    if self:IsSwitchedOff() then
+        guildText = "guild fallback off (/ov guild on)"
+    elseif not (IsInGuild and IsInGuild()) or (self.noGuildUntil and at < self.noGuildUntil) then
+        guildText = "no guild"
+    else
+        local echo = self.lastEchoDelay and string.format(", last in %.1f s", self.lastEchoDelay) or ""
+        guildText = string.format("guild fallback on: %d sent, %d back%s, %d heard from %d players",
+            stats.sent, stats.echoes, echo, stats.heard, self:PeerCount())
+        unheard = self:IsUnheard()
+        if self:PeerCount() > 0 and not unheard then carriers[#carriers + 1] = "the guild" end
     end
-    local echo = self.lastEchoDelay and string.format(", last in %.1f s", self.lastEchoDelay) or ""
-    local text = string.format("%s; guild fallback on: %d sent, %d back%s, %d heard from %d players",
-        channel, stats.sent, stats.echoes, echo, stats.heard, self:PeerCount())
-    if self:IsUnheard() then
-        text = text .. "; nothing came back for 5 min: the server may be dropping this account's addon messages"
+    -- (The guild is a carrier only while heard: a silent guild does not turn a working list yellow.)
+    -- Nor while the member list is still being read and greeted (the first SETTLE_SEC).
+    local settling = at - (self.downSince or at) < self.SETTLE_SEC
+    local level = (#carriers > 0 or settling) and "ok" or "warn"
+    if #carriers == 0 and settling then carriers[#carriers + 1] = "the channel member list (looking for players)" end
+    carriers[#carriers + 1] = "your group and Battle.net friends"
+    local text = string.format("%s; %s; data goes through %s", channel, guildText, table.concat(carriers, ", "))
+    short = string.format("%s; data goes through %s", short, table.concat(carriers, ", "))
+    -- (Yellow: why, in the tooltip too.)
+    if level == "warn" and listed then short = short .. "; " .. listed end
+    if unheard and exchanging == 0 then
+        local warning = "; nothing came back for 5 min: the server may be dropping this account's addon messages"
+        text, short = text .. warning, short .. warning
     end
-    return "warn", text
+    return level, text, short
 end
 
 function lane:GetDiagnostics()

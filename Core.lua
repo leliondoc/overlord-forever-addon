@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.1.1"
+Overlord.Version = "2.2.0"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
