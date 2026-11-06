@@ -1325,6 +1325,9 @@ function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
     }
     StartNetworkProof(remote, decision, now)
     zone._remoteCaptureLease = remote
+    -- 2.2.0: without ticks, its outcome is all we will hear of it (SyncDirectory WatchWave).
+    local directory = remote.viaGuild and Overlord.ChannelDirectory
+    if directory and directory.WatchWave then pcall(directory.WatchWave, directory, zone, remote) end
     -- Vague (re)ouverte : plus de marque douce (sinon ses Barricade P/A/C restaient refusees).
     local reopenedKey = LeaseKey(zone.id, decision.originKey, decision.waveId)
     if softTombstones[reopenedKey] then
@@ -1475,6 +1478,8 @@ function Lease:ExpireRemote(zone, reason)
         PutTombstone(zone.id, remote.originKey, remote.waveId)
     end
     RestoreSnapshot(zone, remote.base)
+    -- 2.2.0: how it ended, for SyncDirectory:PullAfterWave.
+    remote.endedBy = reason
     zone._remoteCaptureLease = nil
     ClearTransient(zone)
     zone._remoteLeaseExpiredReason = reason

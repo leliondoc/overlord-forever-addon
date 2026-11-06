@@ -365,4 +365,17 @@ held[2] = "OvPadabc1231"
 sync:OnChannelJoinRefused("OvPadabc1231")
 assert(not held[2] and not sync:IsChannelClosed(), "a refused pad closed our channel or stayed")
 
+-- 2.2.0: a pad whose leave the server refused ("you are going too fast", seen in game
+-- 2026-11-06) is swept by the 60 s ticker, once no join is under way; never during a seat.
+model({ [1] = "LocalDefense", [5] = "OvPad296c3f1" })
+held[6] = channel
+sync._joinChannelAttemptPending, sync._channelPads = nil, nil
+-- (The ticker of part 1: StartChannelRetryLoop is a stub since part 3.)
+sync._joinChannelAttemptPending = 99
+ticker.run()
+assert(held[5] == "OvPad296c3f1", "a pad was swept during a join")
+sync._joinChannelAttemptPending = nil
+ticker.run()
+assert(not held[5] and held[6] == channel and held[1] == "LocalDefense", "the stray pad stayed, or more was left")
+
 print("forever_join_chain: ok")

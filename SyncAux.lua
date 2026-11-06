@@ -980,9 +980,18 @@ function Overlord.Sync:ReleaseChannelPads(sweep)
     end
     self._channelPads = nil
     if sweep and type(GetChannelList) == "function" then
+        -- 2.2.0: swept every minute too (the retry ticker); a pad the server put aside cannot
+        -- be left ("wrong channel name"), and each name is tried twice per session at most,
+        -- so a refused leave never turns into a notice a minute.
+        self._padSweepTries = self._padSweepTries or {}
         local list = { GetChannelList() }
         for i = 1, #list, 3 do
-            if self:IsChannelPad(list[i + 1]) then securecall(leave, list[i + 1]) end
+            local name, disabled = list[i + 1], list[i + 2]
+            if self:IsChannelPad(name) and not (canaccessvalue and not canaccessvalue(disabled))
+                and disabled ~= true and (self._padSweepTries[name] or 0) < 2 then
+                self._padSweepTries[name] = (self._padSweepTries[name] or 0) + 1
+                securecall(leave, name)
+            end
         end
     end
 end
@@ -1192,6 +1201,8 @@ local function SuppressAddonWhisperOfflineSystem(_, _, msg)
     if not hit then return false end
     local quoted = firstQuotedToken(msg)
     if quoted and recentWhisperLooksLikeFailedTarget(quoted) then
+        local directory = Overlord.ChannelDirectory
+        if directory and directory.NoteUnreachable then pcall(directory.NoteUnreachable, directory, quoted) end
         return true
     end
     -- Rafale /ov sync : masque aussi les cibles corrompues (ex. bruit API Club ')g]').

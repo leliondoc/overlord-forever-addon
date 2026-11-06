@@ -791,7 +791,15 @@ function Overlord.Sync:StartChannelRetryLoop()
     if channelRetryTicker then channelRetryTicker:Cancel() end
     channelRetryTicker = C_Timer.NewTicker(60, function()
         if not Overlord.IsInitialized then return end
+        -- 2.2.0: a seat pad whose leave the server refused ("you are going too fast") stayed in
+        -- the player's channel list for the session (seen in game 2026-11-06): swept again here
+        -- while no join is under way.
         if Overlord.Sync:GetChannelId() then
+            -- (Only while seated: a sweep never meets a join started in the same tick.)
+            if not Overlord.InstanceSuspended and not Overlord.Sync._joinChannelAttemptPending
+                and not Overlord.Sync._channelPads then
+                pcall(Overlord.Sync.ReleaseChannelPads, Overlord.Sync, true)
+            end
             priv.channelClosed = nil    -- inside: a refusal met earlier no longer stands
             return
         end
@@ -1749,8 +1757,14 @@ function Overlord.Sync:IsSuspiciousZaFlip(zoneId, zone, owner, ct, sender)
         if now - pending.firstAt > ZA_FLIP_MAX_HOLD then return false, true end
         -- La seconde source est le dernier saut authentifie (passerelle pour une
         -- origine relayee) : deux origines forgees par le meme relais n'en font qu'une.
+        -- 2.2.0: a map news vouched along the chain (SyncDirectory VouchesMapNews) names an author
+        -- nobody here heard: its copies, one per hand, are never a second source.
+        local context = Overlord.Relay and Overlord.Relay.context
         if pending.owner == owner and math.abs(pending.ct - ct) <= 5
-            and pending.sender ~= tostring(self:BurstLimiterKey(sender) or ""):lower() then return false, true end
+            and not (context and context.vouched and pending.vouched)
+            -- (One client is one source, whether it speaks for itself or relays: "via:" set aside.)
+            and pending.sender:gsub("^via:", "") ~= tostring(self:BurstLimiterKey(sender) or ""):lower():gsub("^via:", "")
+            then return false, true end
     end
     return true, false
 end
@@ -1777,6 +1791,7 @@ function Overlord.Sync:CommitZaFlipClaims(held, confirmed, sender)
         if now - pending.firstAt > ZA_FLIP_CLAIM_TTL or confirmed[zoneId] then claims[zoneId] = nil end
     end
     local senderKey = tostring(self:BurstLimiterKey(sender) or ""):lower()
+    local vouchedClaim = Overlord.Relay and Overlord.Relay.context and Overlord.Relay.context.vouched == true or nil
     for _, flip in ipairs(held) do
         local pending = claims[flip.zoneId]
         if pending and pending.owner == flip.owner and math.abs(pending.ct - flip.ct) <= 5 then
@@ -1790,7 +1805,8 @@ function Overlord.Sync:CommitZaFlipClaims(held, confirmed, sender)
                 if not oldestAt or other.firstAt < oldestAt then oldestId, oldestAt = id, other.firstAt end
             end
             if count >= ZA_FLIP_MAX and oldestId and not claims[flip.zoneId] then claims[oldestId] = nil end
-            claims[flip.zoneId] = { owner = flip.owner, ct = flip.ct, sender = senderKey, firstAt = now, at = now }
+            claims[flip.zoneId] = { owner = flip.owner, ct = flip.ct, sender = senderKey, firstAt = now, at = now,
+                vouched = vouchedClaim }
         end
         local betaNet = Overlord.Relay
         if betaNet and betaNet.stats then
@@ -2150,9 +2166,32 @@ function Overlord.Sync:RunPeriodicMapCatchup()
     if self._mapCatchupRound % 2 == 1 then first, second = enemies, allies end
     local list = #first > 0 and first or second
     if #list == 0 then return false end
-    local target = list[math.random(1, #list)]
+    -- 2.2.0: one turn of our own side in two goes to a partner of the channel's member list,
+    -- from another guild most of the time (SyncDirectory.lua).
+    local directory, target = Overlord.ChannelDirectory, nil
+    if list == allies and directory and directory.HasPartner then
+        local listed = {}
+        for _, name in ipairs(allies) do listed[name:lower()] = true end
+        local function accept(name) return listed[name:lower()] == true end
+        self._mapAllyTurns = (tonumber(self._mapAllyTurns) or 0) + 1
+        if self._mapAllyTurns % 2 == 1 and directory:HasPartner(accept) then
+            target = directory:PickPartner(accept, "map")
+        end
+    end
+    target = target or list[math.random(1, #list)]
     self._mapCatchupLastTarget = target
-    return self:SendWhisper("SR", SRPayload("T"), target) == true
+    local payload = SRPayload("T")
+    if directory and directory.BeforeMapPull and directory:BeforeMapPull(target) then
+        -- Our presence first, so that an identical map comes back without its pages.
+        C_Timer.After(directory.MAP_PULL_DELAY, function()
+            local sync = Overlord.Sync
+            if sync and not Overlord.InstanceSuspended and not IsInInstance() then
+                pcall(sync.SendWhisper, sync, "SR", payload, target)
+            end
+        end)
+        return true
+    end
+    return self:SendWhisper("SR", payload, target) == true
 end
 
 
@@ -2228,6 +2267,9 @@ function Overlord.Sync:SendAddonChecked(msg, chatType, target)
     else
         row.refused = row.refused + 1
         row.lastCode, row.lastCodeAt = result, GetTime()
+        -- 2.2.0: a whisper refused (the server's throttle): the chain waits for its tokens to refill.
+        local directory = chatType == "WHISPER" and Overlord.ChannelDirectory
+        if directory and directory.chain then directory.chain.tokens, directory.chain.at = 0, GetTime() end
     end
     if chatType == "CHANNEL" then
         self:NoteChannelSendKind(self._channelSendKind or msg:match("^([^:]+)") or "?", ok, #msg)
@@ -4748,10 +4790,22 @@ function Overlord.Sync:FlushMapNews()
     end)
     while #zones > self.MAP_NEWS_ZONES do zones[#zones], partial = nil, true end
     local pages, count
-    while #zones > 0 do
-        pages, count = self:BuildZoneAllSnapshotPages(zones, "P")
-        if (count or 0) <= 3 then break end
-        zones[#zones], partial = nil, true
+    local directory = Overlord.ChannelDirectory
+    if directory and directory.IsActive and directory:IsActive() then
+        -- 2.2.0: along the channel's member list a news is taken as one capture (SyncDirectory
+        -- VouchesMapNews): one page of one entry per capture, the newest few.
+        while #zones > 4 do zones[#zones], partial = nil, true end
+        pages, count = {}, 0
+        for i = 1, #zones do
+            local one, n = self:BuildZoneAllSnapshotPages({ zones[i] }, "P")
+            if one and n == 1 then count = count + 1; pages[count] = one[1] end
+        end
+    else
+        while #zones > 0 do
+            pages, count = self:BuildZoneAllSnapshotPages(zones, "P")
+            if (count or 0) <= 3 then break end
+            zones[#zones], partial = nil, true
+        end
     end
     if #zones == 0 or not count or count == 0 then return 0 end
     -- (Before the pages are queued: a final that expires in the relay queue while they
@@ -8494,7 +8548,12 @@ function Overlord.Sync:OnReceiveZoneAll(
     if not payload or payload == "" then return end
     if loginElectionClaimKey or runtimeElectionClaimKey then return end
     -- 1.8.2: the map of a client from before 1.7.0 is not taken.
-    if self:IsOutdatedMapPeer(sender) then
+    -- 2.2.0: a map news passed along the channel's member list by a contact speaks for an
+    -- author we may never have heard (SyncDirectory VouchesMapNews).
+    if self:IsOutdatedMapPeer(sender) and not (Overlord.ChannelDirectory
+        and Overlord.ChannelDirectory.VouchesMapNews
+        and select(2, pcall(Overlord.ChannelDirectory.VouchesMapNews, Overlord.ChannelDirectory,
+            sender, payload)) == true) then
         NoteOutdated("outdatedMaps")
         return
     end

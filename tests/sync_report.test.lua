@@ -290,6 +290,8 @@ do
     local row, dot = transport()
     assert(row and row.level == "ok" and row.text == "channel open" and dot == "ok", "An open channel must stay green")
     sync:NoteChannelRefused("NOT_ALLOWED_IN_CHANNEL")
+    -- (Past the first minutes, while the member list is read and greeted.)
+    lane.downSince = GetTime() - 1000
     row, dot = transport()
     assert(row.level == "warn" and dot == "warn", "The dot stayed green on a refused channel")
     assert(row.text:find("refused by the server", 1, true) and row.text:find("guild fallback on", 1, true), row.text)

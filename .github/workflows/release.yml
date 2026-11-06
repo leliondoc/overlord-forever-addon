@@ -200,6 +200,8 @@ jobs:
           lua5.1 tests/forever_victory_late_capture.test.lua
           lua5.1 tests/forever_join_chain.test.lua
           lua5.1 tests/forever_guild_lane.test.lua
+          lua5.1 tests/forever_channel_directory.test.lua
+          lua5.1 tests/forever_directory_chain.test.lua
           lua5.1 tests/forever_front_fight_size.test.lua
           lua5.1 tests/forever_front_fight_convergence.test.lua
           lua5.1 tests/forever_front_fight_herd.test.lua

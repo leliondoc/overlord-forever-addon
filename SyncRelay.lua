@@ -1205,18 +1205,40 @@ local function decode(wire)
     end
     return { region = normalizedPool, id = id, at = at, target = target, path = nodes, kind = kind, payload = payload }
 end
+-- (A route written for a greeting, row.directory, only carries that whisper: nobody is a
+-- peer before something of theirs came back. See NoteDirectoryRoute.)
 function net:IsPeer(name)
     local key = canonical(name)
     local row = key and self.peers[key:lower()]
-    return row ~= nil and GetTime() - row.at <= 300
+    return row ~= nil and GetTime() - row.at <= 300 and not row.directory
 end
 -- Path length of the freshest known route to a peer (1 = heard directly from it,
 -- e.g. our own Battle.net friend). nil when unknown or stale.
 function net:GetPeerHops(name)
     local key = canonical(name)
     local row = key and self.peers[key:lower()]
-    if not row or GetTime() - row.at > 300 then return nil end
+    if not row or GetTime() - row.at > 300 or row.directory then return nil end
     return tonumber(row.hops)
+end
+-- 2.2.0: a player found in the channel's member list (SyncDirectory.lua) is greeted by
+-- whisper, and an addressed packet needs a route: this one goes straight to that player. It
+-- makes no neighbour (IsPeer, GetDirectPeers and the counts leave it out) until a packet of
+-- theirs comes back: Receive then writes the route that packet came by and drops the mark (a
+-- neighbour when it came first-hand, a relayed route otherwise). A live route is never replaced.
+function net:NoteDirectoryRoute(name)
+    local key = canonical(name)
+    if not key or same(key, sync:GetPlayerFullName()) then return false end
+    local lower = key:lower()
+    local row = self.peers[lower]
+    if row and GetTime() - row.at <= 300 then return false end
+    if row then
+        row.name, row.at, row.via, row.transport, row.bnet, row.hops, row.directory =
+            key, GetTime(), key, "WHISPER", nil, 1, true
+    else
+        remember(self.peers, peerOrder, lower, { name = key, at = GetTime(), via = key,
+            transport = "WHISPER", hops = 1, directory = true }, self.PEER_RING_LIMIT or PEER_RING, IsPagedSessionPeer)
+    end
+    return true
 end
 -- Secondes depuis le dernier paquet de ce pair (nil si inconnu ou perime).
 -- Catch-up is point-to-point since 1.2.4: a map, ranking or history exchange only
@@ -1247,7 +1269,7 @@ local DIRECT_PEER_SAMPLE = 250
 function net:GetDirectPeers()
     local now, names, taken = GetTime(), {}, {}
     local function take(row)
-        if row and not taken[row] and now - row.at <= 300 and tonumber(row.hops) == 1 then
+        if row and not taken[row] and now - row.at <= 300 and tonumber(row.hops) == 1 and not row.directory then
             taken[row] = true
             names[#names + 1] = row.name
         end
@@ -1287,7 +1309,7 @@ function net:CountDirectPeers()
     end
     local count = 0
     for _, row in pairs(self.peers) do
-        if now - row.at <= 300 and tonumber(row.hops) == 1 then count = count + 1 end
+        if now - row.at <= 300 and tonumber(row.hops) == 1 and not row.directory then count = count + 1 end
     end
     directCountCache.at, directCountCache.value, directCountCache.peers = now, count, self.peers
     return count
@@ -1359,6 +1381,11 @@ function net:IsOutdatedMapPeer(name)
     if layout ~= net.LocalMapLayout() then return true end
     -- "~y" comes with "~t0": a neighbour saying our layout runs no truce.
     return false
+end
+-- 2.2.0: has a presence of this player been heard first-hand this session (whatever it said)?
+function net:HeardPresenceOf(name)
+    local key = canonical(name)
+    return key ~= nil and pagedCapabilities[key:lower()] ~= nil
 end
 -- A neighbour whose own presence says a map layout, and another one than ours. A
 -- presence without one (2.0.2) is not "another" here: the request's stated version
@@ -1947,6 +1974,19 @@ local function tasksFor(p, wire)
             else coverId = entry.id; bnet(entry.id) end
         end
         coverId = nil
+        -- 2.2.0: the channel does not work here: a live fact goes from hand to hand along its
+        -- member list, by whisper (SyncDirectory.lua, ChainTargets).
+        local directory = addon.ChannelDirectory
+        if directory and directory.ChainTargets then
+            local okChain, chainTargets = pcall(directory.ChainTargets, directory, p, count)
+            if not okChain then
+                directory.lastError = tostring(chainTargets)
+            elseif chainTargets then
+                for _, name in ipairs(chainTargets) do
+                    for _, fragment in ipairs(fragments) do add("WHISPER", fragment, "BF", name, name).chain = true end
+                end
+            end
+        end
         -- 2.1.1: the channel does not work here: the guild, rarely (SyncGuild.lua). Last, so
         -- that nothing else of this packet waits for it.
         local guildLane = addon.GuildLane
@@ -2100,7 +2140,10 @@ function net:Queue(p, immediate)
             or MAP_RELAY_BATCH) then return rejectAdmission(p) end
     -- Keep the freshest unsent presence in its original place in the queue.
     -- Once any copy has started, finish it instead of disrupting its fragments.
-    local presenceKey = p.kind == "NH" and p.path[1]:lower()
+    -- (A presence addressed to one player, a greeting of SyncDirectory.lua, neither replaces our
+    -- broadcast one nor is replaced by it. Only our own presences come here: another player's is
+    -- never forwarded, see forwardPresence in Receive.)
+    local presenceKey = p.kind == "NH" and p.target == "*" and p.path[1]:lower()
     local previous = presenceKey and pendingPresence[presenceKey]
     -- A held group-only copy must never replace the full forward of the same packet.
     local statePrevious = not p.groupOnly and waitingStateItem(p) or nil
@@ -2121,6 +2164,10 @@ function net:Queue(p, immediate)
     if killPrevious then
         previous, replace = killPrevious, p.at >= killPrevious.p.at
         if not replace then return true end
+        -- 2.2.0: its whispers along the chain had not left: the newer total takes them over.
+        for _, task in ipairs(killPrevious.tasks or {}) do
+            if task.chain then p.chainRetake = true; break end
+        end
     end
     local lane = laneFor(p)
     local wire, item
@@ -2524,8 +2571,20 @@ function net:Send(kind, payload, target, immediate)
         local okToken, rankToken = false, ""
         if rankProof and rankProof.PresenceToken then okToken, rankToken = pcall(rankProof.PresenceToken, rankProof) end
         if not okToken or type(rankToken) ~= "string" or not rankToken:match("^~q[%w%.%-]*$") then rankToken = "" end
+        -- "~s" (2.2.0): our layer, read like an SH by those who hear this presence first-hand.
+        -- Without the channel (refused) the SH of other players no longer reaches us; this
+        -- presence still does (the channel's member list, the guild), at no extra message.
+        local layerToken, shard = "", addon.Shard
+        if shard and shard.GetCurrentShardID and addon.IsShardHelperActive then
+            local okLayer, layer = pcall(function()
+                return addon:IsShardHelperActive() and tonumber(shard:GetCurrentShardID()) or nil
+            end)
+            if okLayer and layer and layer >= 0 and layer < 1e8 and layer == math.floor(layer) then
+                layerToken = "~s" .. string.format("%d", layer)
+            end
+        end
         payload = payload .. (self:HasLiveEnemyBridge() and "~b" or "") .. "~t0~y" .. net.LocalMapLayout()
-            .. rankToken
+            .. rankToken .. layerToken
             .. "~m" .. base36(stamp) .. "~o" .. base36(sites)
             .. "~z" .. base36(digest, 6) .. base36(sum) .. "~l9~ld~lr~lp6"
     end
@@ -2609,12 +2668,15 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         remember(self.peers, peerOrder, origin:lower(), {
             name = origin, at = GetTime(), via = sender, transport = transport, bnet = bnetID, hops = #p.path,
         }, self.PEER_RING_LIMIT or PEER_RING, IsPagedSessionPeer)
-    elseif GetTime() - previousRoute.at > keepRoute or #p.path <= previousRoute.hops then
+    elseif previousRoute.directory or GetTime() - previousRoute.at > keepRoute or #p.path <= previousRoute.hops then
         -- Refreshed in place (same values, same ring order): a new table per received
         -- packet was tens of KB/s of garbage on a launch channel. No caller keeps a
         -- route row from one call to the next.
         previousRoute.name, previousRoute.at, previousRoute.via = origin, GetTime(), sender
         previousRoute.transport, previousRoute.bnet, previousRoute.hops = transport, bnetID, #p.path
+        -- 2.2.0: the provisional route of a greeting (NoteDirectoryRoute) gives way to the one
+        -- this packet came by: a neighbour when it came first-hand.
+        previousRoute.directory = nil
     end
     self.stats.received = self.stats.received + 1
     if retryForward then
@@ -2627,6 +2689,8 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         -- BETA is explicit: do not masquerade the relay as a direct WoW whisper.
         local ok, err = pcall(sync.OnAddonMessage, sync, "OverlordF",
             p.kind .. ":" .. p.payload, "BETA", origin)
+        -- 2.2.0: a map news taken on a contact's word (SyncDirectory VouchesMapNews) is passed on.
+        p.vouched = self.context and self.context.vouched == true or nil
         self.context = previous
         if not ok then self.stats.lastError = tostring(err) end
     elseif p.kind == "NH" then
@@ -2661,6 +2725,15 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
                 pcall(rankProof.OnPresence, rankProof, origin, p.payload:match("~q([%w%.%-]+)~"))
             end
         end
+        -- 2.2.0: its layer ("~s", see Send), first-hand only, as an SH from it would be. By whisper
+        -- only from a player of the channel's member list (anybody can whisper).
+        local directory = addon.ChannelDirectory
+        local layer = #p.path == 1 and (transport ~= "WHISPER" or (directory and directory.Lists
+            and directory:Lists(origin))) and tonumber(p.payload:match("~s(%d+)~")) or nil
+        if layer and addon.Shard and addon.Shard.SetPlayerShard then
+            local okLayer, layerError = pcall(addon.Shard.SetPlayerShard, addon.Shard, origin, layer)
+            if not okLayer then self.stats.lastError = tostring(layerError) end
+        end
         if #p.path == 1 and transport ~= "BNET" then
             if p.payload:find("~b~", 1, true) then
                 remember(sameFactionBridges, sameFactionBridgesOrder, originKey, GetTime(), 500)
@@ -2682,6 +2755,14 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
                     truceless = p.payload:match("~t0~y(%w+)~")
                         or (p.payload:find("~t0~", 1, true) and true) or nil,
                     release = p.payload:match("^(%d%d?%d?%.%d%d?%d?%.%d%d?%d?)%f[%D]") }, CAPABILITY_RING)
+        end
+        -- 2.2.0: a presence addressed to us alone, whispered by its own author: a player who
+        -- found us in the channel's member list, or the answer to our greeting (SyncDirectory.lua),
+        -- with its relay session (a new one after a /reload or a relog).
+        if #p.path == 1 and transport == "WHISPER" and p.target ~= "*" and addressed and addon.ChannelDirectory then
+            local okGreeting, greetingError = pcall(addon.ChannelDirectory.OnGreeting, addon.ChannelDirectory, origin,
+                tostring(p.id or ""):match("^(.-)%-"))
+            if not okGreeting then self.stats.lastError = tostring(greetingError) end
         end
         -- Like Retail's community login, pull the territorial map first. Ranking
         -- already has its own paged catch-up; an SR:F on every new peer crowded
@@ -2841,7 +2922,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
     -- client's presence and would take it.
     local relayable = not captureClaim and not isPointToPointCatchup(p.kind, p.target)
         and not ((p.kind == "SR" or p.kind == "GR" or p.kind == "CR") and p.target == "*")
-        and p.kind ~= "GI" and not (p.kind == "ZA" and self:IsOutdatedMapPeer(origin))
+        and p.kind ~= "GI" and not (p.kind == "ZA" and self:IsOutdatedMapPeer(origin) and not p.vouched)
     if p.kind == "GI" then
         self.stats.giForwardSkipped = (self.stats.giForwardSkipped or 0) + 1
     end
@@ -3042,7 +3123,7 @@ local LOCAL_PEER_FRESH = 200
 function net:GetLocalPeers(exclude)
     local now, mine, out = GetTime(), addon.PlayerFaction, {}
     for key, row in pairs(self.peers) do
-        if now - row.at <= LOCAL_PEER_FRESH and tonumber(row.hops) == 1
+        if now - row.at <= LOCAL_PEER_FRESH and tonumber(row.hops) == 1 and not row.directory
             and not (exclude and exclude[key]) then
             local t = row.transport
             local direct = t == "CHANNEL" or t == "WHISPER" or t == "RAID" or t == "PARTY" or t == "GUILD"
@@ -3439,4 +3520,6 @@ function net:Start()
     end
     C_Timer.After(3, firstHello)
     self.ticker = C_Timer.NewTicker(NH_INTERVAL, hello)
+    -- 2.2.0: the channel's member list, used while the channel does not carry.
+    if addon.ChannelDirectory then addon.ChannelDirectory:Start() end
 end

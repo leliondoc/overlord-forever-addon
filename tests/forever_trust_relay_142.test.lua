@@ -381,6 +381,21 @@ do
     net.context = { origin = "Forged Three", gateway = "Other Gateway", hops = 1 }
     held, confirmed = s:IsSuspiciousZaFlip("zone_gw", zoneGw, "Horde", t0 - 100, "Forged Three")
     assert(not held and confirmed, "a different gateway did not count as a second source")
+    -- 2.2.0: map news vouched along the channel's member list (an author nobody heard) never
+    -- confirms a claim made by another vouched copy: one sender whispering it to two hands.
+    local zoneV = { id = "zone_vouched", owner = "Alliance", capturedTime = t0 - 300 }
+    s:NoteLiveZoneTraffic("zone_vouched")
+    net.context = { origin = "Made Up", gateway = "Hand One", hops = 1, vouched = true }
+    held = s:IsSuspiciousZaFlip("zone_vouched", zoneV, "Horde", t0 - 100, "Made Up")
+    assert(held, "a vouched news applied a surprising flip")
+    s:CommitZaFlipClaims({ { zoneId = "zone_vouched", owner = "Horde", ct = t0 - 100 } }, {}, "Made Up")
+    net.context = { origin = "Made Up", gateway = "Hand Two", hops = 1, vouched = true }
+    held, confirmed = s:IsSuspiciousZaFlip("zone_vouched", zoneV, "Horde", t0 - 100, "Made Up")
+    assert(held and not confirmed, "two vouched copies confirmed each other")
+    -- A source heard first-hand still confirms it.
+    net.context = nil
+    held, confirmed = s:IsSuspiciousZaFlip("zone_vouched", zoneV, "Horde", t0 - 100, "Peer Five")
+    assert(not held and confirmed, "a first-hand source did not confirm a vouched claim")
     net.context = nil
     -- Once the zone really flipped (C/ZS applied it) the claim is purged: a new
     -- source is a first source again.

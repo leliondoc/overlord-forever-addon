@@ -593,7 +593,36 @@ local function PickDirectPeer(minProtocol)
     else
         pool, index = enemies, rotation - sameRounds
     end
+    -- 2.2.0: while the channel does not carry, one turn of our own side in two goes to a
+    -- player found in the channel's member list (SyncDirectory.lua), from another guild most
+    -- of the time; the other turns walk the usual neighbours, each in turn.
+    local directory = Overlord.ChannelDirectory
+    if pool == allies and directory and directory.HasPartner then
+        local listed = {}
+        for _, name in ipairs(allies) do listed[name:lower()] = true end
+        local function accept(name) return listed[name:lower()] == true end
+        if directory:HasPartner(accept) then
+            if index % 2 == 1 then
+                local partner = directory:PickPartner(accept, "ranking")
+                if partner then return partner end
+            end
+            index = math.floor(index / 2)
+        end
+    end
     return pool[(index % #pool) + 1]
+end
+
+-- 2.2.0: can a partner of the channel's member list take one of our own side's next turns?
+-- PickDirectPeer's rule: a direct candidate (not set aside after a silent or busy round,
+-- recent enough) of our own side. Without one, closer rounds would only ask the usual
+-- neighbours more often.
+local function PartnerTurnAhead(directory)
+    local enemyFaction = ENEMY_FACTION[Overlord.PlayerFaction]
+    local listed = {}
+    for _, name in ipairs(DirectCandidates()) do
+        if not (enemyFaction and PeerFaction(name) == enemyFaction) then listed[name:lower()] = true end
+    end
+    return directory:FastRounds(function(name) return listed[name:lower()] == true end)
 end
 
 local function RotatePeers()
@@ -649,12 +678,16 @@ end
 local ScheduleAttempt
 
 -- Un C_Timer.After possede par generation : jamais plus d'un reveil arme.
-local function ArmNextHistoryCatchup(delay)
+-- fast (2.2.0): partners of the channel's member list answer, rounds come closer
+-- (SyncDirectory.lua, LADDER_*).
+local function ArmNextHistoryCatchup(delay, fast)
     sync._historyCatchupWakeGeneration =
         math.floor(tonumber(sync._historyCatchupWakeGeneration) or 0) + 1
     local generation = sync._historyCatchupWakeGeneration
-    local jitter = math.random and math.random(0, PERIODIC_JITTER_SEC) or 0
-    C_Timer.After(math.max(30, math.floor(tonumber(delay) or RECENT_ACK_SEC) + jitter), function()
+    local directory = fast and Overlord.ChannelDirectory or nil
+    local jitter = math.random and math.random(0, directory and directory.LADDER_JITTER_SEC or PERIODIC_JITTER_SEC) or 0
+    local shortest = directory and directory.LADDER_FLOOR_SEC or 30
+    C_Timer.After(math.max(shortest, math.floor(tonumber(delay) or RECENT_ACK_SEC) + jitter), function()
         if not Overlord.Sync
             or Overlord.Sync._historyCatchupWakeGeneration ~= generation then return end
         if Overlord.InstanceSuspended or IsInInstance()
@@ -722,7 +755,14 @@ local function FinishRound(pending, success, target)
         or ("paged sweep interrupted" .. (why ~= "" and (" " .. why) or "")))
     -- Re-arm first: a failure in the history request must never stop the rounds.
     local v8Round = success and type(pageStats) == "table" and pageStats.protocol == 8
-    ArmNextHistoryCatchup(v8Round and V8_RECENT_ACK_SEC or success and RECENT_ACK_SEC or EXHAUSTED_RETRY_SEC)
+    -- 2.2.0: while a partner of the channel's member list can take one of the next turns, the
+    -- next v8 round comes in 20-40 s (pcall: a fault there must not stop the rounds either).
+    local directory = Overlord.ChannelDirectory
+    local okFast, fast = false, false
+    if v8Round and directory and directory.FastRounds then okFast, fast = pcall(PartnerTurnAhead, directory) end
+    fast = okFast and fast == true
+    ArmNextHistoryCatchup(fast and directory.LADDER_ACK_SEC or v8Round and V8_RECENT_ACK_SEC
+        or success and RECENT_ACK_SEC or EXHAUSTED_RETRY_SEC, fast)
     pcall(MaybeRequestOutpostHistory, success and target or nil, pending.forceHistory)
     NotifyLadderBadge()
 end
