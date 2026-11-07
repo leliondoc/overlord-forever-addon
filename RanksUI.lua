@@ -605,7 +605,8 @@ function UIR:Select()
     self:ApplyChrome()
     self.paintGlory = nil
     self:Refresh()
-    -- Le bouton « Votre rang » du panneau s'allume tant que notre onglet est ouvert.
+    -- (2.2.1 : le panneau n'a plus de bouton « Votre rang » ; OpenFromPanel reste pour un
+    -- retour du bouton, la mise a jour de la grille est sans effet.)
     if Overlord.UI and Overlord.UI.ScheduleActionGridActiveRefresh then
         Overlord.UI:ScheduleActionGridActiveRefresh()
     end

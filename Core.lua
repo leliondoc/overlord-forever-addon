@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.2.0"
+Overlord.Version = "2.2.1"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -32,6 +32,8 @@ Overlord.DISCORD_INVITE_URL = "https://discord.com/invite/53VrYYtPz5"
 Overlord.DISCORD_BUTTON_ATLAS = "UI-ChatIcon-Discord"
 -- Contact de l'auteur (bouton Contact, ancien emplacement Export) : compte X personnel.
 Overlord.CONTACT_URL = "https://x.com/TromaFR"
+-- Site d'Overlord (bouton Site internet, ancien emplacement Votre rang).
+Overlord.WEBSITE_URL = "https://overlord-forever.com/"
 
 local L = Overlord.L
 

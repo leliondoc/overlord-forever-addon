@@ -133,7 +133,75 @@ do
     local LEVEL_RANK = { ok = 1, warn = 2, bad = 3 }
     local LEVEL_WORD = { ok = "all good", warn = "worth watching", bad = "problem" }
     local PREFIX = GOLD .. "[Overlord]|r "
-    function SyncReport.Print(text) Overlord:PrintNotification(PREFIX .. text) end
+    -- 2.2.1: /ov network and /ov relay also land in a window (his request: a small chat window
+    -- made screenshots and copies of the reports a chore). Plain text there, the check icons as
+    -- words, so that "Select all" then Ctrl+C copies something readable.
+    function SyncReport.Plain(text)
+        local s = tostring(text or "")
+        s = s:gsub("|T[^|]*ReadyCheck%-Ready[^|]*|t", "[OK]"):gsub("|T[^|]*ReadyCheck%-Waiting[^|]*|t", "[!]")
+        s = s:gsub("|T[^|]*ReadyCheck%-NotReady[^|]*|t", "[X]"):gsub("|T[^|]*|t", "")
+        s = s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("^%[Overlord%] ", "")
+        return s
+    end
+    -- Lines of the report being printed go to this sheet too (Begin, then sheet = nil).
+    function SyncReport.Begin()
+        SyncReport.sheet = { lines = {} }
+        return SyncReport.sheet
+    end
+    function SyncReport.Add(sheet, text)
+        if sheet and #sheet.lines < 400 then sheet.lines[#sheet.lines + 1] = SyncReport.Plain(text) end
+    end
+    function SyncReport.Print(text)
+        Overlord:PrintNotification(PREFIX .. text)
+        if SyncReport.sheet then SyncReport.Add(SyncReport.sheet, text) end
+    end
+    -- refresh: only while this sheet is the one on screen (the 30 s of /ov relay).
+    function SyncReport.ShowSheet(sheet, refresh)
+        local f = SyncReport.frame
+        if refresh and not (f and f:IsShown() and f.sheet == sheet) then return end
+        if not f then
+            f = CreateFrame("Frame", "OverlordReportFrame", UIParent, "BasicFrameTemplateWithInset")
+            f:SetSize(760, 480)
+            f:SetPoint("CENTER")
+            f:SetFrameStrata("DIALOG")
+            f:SetClampedToScreen(true)
+            f:SetMovable(true)
+            f:EnableMouse(true)
+            f:RegisterForDrag("LeftButton")
+            f:SetScript("OnDragStart", f.StartMoving)
+            f:SetScript("OnDragStop", f.StopMovingOrSizing)
+            local title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            title:SetPoint("TOP", 0, -5)
+            title:SetText(L.REPORT_WINDOW_TITLE or "Overlord network report")
+            local scroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
+            scroll:SetPoint("TOPLEFT", 12, -32)
+            scroll:SetPoint("BOTTOMRIGHT", -32, 42)
+            local edit = CreateFrame("EditBox", nil, scroll)
+            edit:SetMultiLine(true)
+            edit:SetAutoFocus(false)
+            edit:SetFontObject(ChatFontNormal)
+            edit:SetWidth(700)
+            edit:SetScript("OnEscapePressed", function(self) self:ClearFocus() f:Hide() end)
+            -- Read only: whatever is typed gives the report back.
+            edit:SetScript("OnTextChanged", function(self, typed) if typed then self:SetText(f.text or "") end end)
+            scroll:SetScrollChild(edit)
+            f.edit = edit
+            local selectAll = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+            selectAll:SetSize(240, 22)
+            selectAll:SetPoint("BOTTOMLEFT", 12, 12)
+            selectAll:SetText(L.REPORT_SELECT_ALL or "Select all (then Ctrl+C)")
+            selectAll:SetScript("OnClick", function() edit:SetFocus() edit:HighlightText() end)
+            f:SetScript("OnHide", function() edit:ClearFocus() end)
+            if Overlord.UI and Overlord.UI.BindEscapeClose then
+                Overlord.UI.BindEscapeClose(f, function(self) self:Hide() end)
+            end
+            SyncReport.frame = f
+        end
+        f.sheet, f.text = sheet, table.concat(sheet.lines, "\n")
+        f.edit:SetText(f.text)
+        if not refresh then f.edit:SetCursorPosition(0) end
+        f:Show()
+    end
     function SyncReport.Worst(a, b) return LEVEL_RANK[b] > LEVEL_RANK[a] and b or a end
     function SyncReport.Header(level)
         SyncReport.Print(GOLD .. "===== Network status: |r" .. LEVEL_COLOR[level] .. LEVEL_WORD[level]
@@ -225,6 +293,7 @@ local function StartNetworkProbe()
         return
     end
     networkProbeRunning = true
+    local sheet = SyncReport.Begin()
     local counts, rows, order = {}, {}, {}
     local frame = CreateFrame("Frame")
     frame:RegisterEvent("CHAT_MSG_ADDON")
@@ -289,14 +358,20 @@ local function StartNetworkProbe()
         end
         R.Detail("Network observation: 30s. Use /ov sync now.")
     end)
+    SyncReport.sheet = nil
     if not reportOk then
         Overlord:PrintNotification("|cFFFF4444[Overlord]|r /ov relay report error: " .. tostring(reportErr))
+        SyncReport.Add(sheet, "/ov relay report error: " .. tostring(reportErr))
     end
+    pcall(SyncReport.ShowSheet, sheet)
     C_Timer.After(30, function()
         frame:UnregisterAllEvents()
         frame:SetScript("OnEvent", nil)
         networkProbeRunning = false
-        local function emit(text) Overlord:PrintNotification(text) end
+        local function emit(text)
+            Overlord:PrintNotification(text)
+            SyncReport.Add(sheet, text)
+        end
         emit("|cFFFFD100[Overlord] Incoming Overlord packets (30s; includes fragments, not score changes):|r")
         local transports = {}
         for transport in pairs(counts) do transports[#transports + 1] = transport end
@@ -327,6 +402,7 @@ local function StartNetworkProbe()
             emit(string.format("%s [%s] %s x%d", row.name, row.faction, row.transport, row.count))
         end
         emit("Up to 15 senders shown; this does not identify earlier hops or validate payloads.")
+        pcall(SyncReport.ShowSheet, sheet, true)
     end)
 end
 
@@ -781,10 +857,14 @@ local function CommandHandler(msg)
         end
 
     elseif cmd == "network" or cmd == "reseau" then
+        local sheet = SyncReport.Begin()
         local reportOk, reportErr = pcall(SyncReport.Network)
+        SyncReport.sheet = nil
         if not reportOk then
             Overlord:PrintNotification("|cFFFF4444[Overlord]|r /ov network report error: " .. tostring(reportErr))
+            SyncReport.Add(sheet, "/ov network report error: " .. tostring(reportErr))
         end
+        pcall(SyncReport.ShowSheet, sheet)
 
     elseif cmd == "relay" or cmd == "relais" then
         StartNetworkProbe()

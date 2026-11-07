@@ -272,6 +272,13 @@ advance(dir.TICK_SEC + 1)
 assert(dir.suspended and dir.state == "channel suspended by the game for this session", tostring(dir.state))
 assert(#selections == 0, "nothing selected while our channel is suspended")
 assert(select(3, lane:Describe()):find("^channel suspended by the game; data goes through"), select(3, lane:Describe()))
+-- 2.2.1: said once, even when yellow (the list's own state said it a second time).
+lane.downSince = clock - 1000
+do
+    local level, _, said = lane:Describe()
+    local _, times = said:gsub("suspended", "")
+    assert(level == "warn" and times == 1, said)
+end
 display = keptDisplay
 function GetChannelList() return 1, "General", false, 5, CHANNEL, false end
 advance(dir.RETRY_SEC + dir.TICK_SEC + dir.READ_POLLS[1] + 1)
@@ -616,6 +623,16 @@ dir.stats.full, dir.lastError = 2, "boom"
 local report = dir:GetDiagnostics()
 assert(report:find("2 refused (table full)", 1, true) and report:find("last error: boom", 1, true), report)
 dir.stats.full, dir.lastError = 0, nil
+-- 2.2.1: a greeted player the relay reaches without its answer to our greeting (a guild mate
+-- under 2.1.1) is not "exchanging with you" through the list.
+do
+    local row = dir.partners[partner:lower()]
+    local heard = row.heardAt
+    row.heardAt = nil
+    assert(dir:AnsweringCount() == 0 and select(2, dir:Describe()) == 0, "counted without an answer")
+    row.heardAt = heard
+    assert(dir:AnsweringCount() == 1, "an answering partner not counted")
+end
 local toc = io.open("Overlord.toc", "rb"):read("*a"):gsub("\r\n", "\n")
 assert(toc:find("SyncGuild.lua\nSyncDirectory.lua\n", 1, true), "SyncDirectory.lua must load right after SyncGuild.lua")
 

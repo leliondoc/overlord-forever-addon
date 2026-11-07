@@ -1444,17 +1444,16 @@ function Overlord.UI:CreateZoneListSection(parent)
     end)
     zoneListFrame.lbBtn = lbBtn
 
-    -- Rang Overlord du personnage : mene a l'onglet Overlord de la feuille de
-    -- personnage (RanksUI:OpenFromPanel). A la place de l'ancien bouton Communaute
-    -- (Forever n'a pas de communaute).
-    local rankBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
-        L.RANK_BUTTON or "Your rank", "Interface\\AddOns\\Overlord\\Textures\\overlord_minimap")
-    rankBtn:SetPoint("TOPRIGHT", actionsCard, "TOPRIGHT", -4, gridTop)
-    AttachGridButtonTooltip(rankBtn, L.RANK_BUTTON_TOOLTIP or L.RANK_BUTTON or "Your rank")
-    rankBtn:SetScript("OnClick", function()
-        if Overlord.RanksUI and Overlord.RanksUI.OpenFromPanel then Overlord.RanksUI:OpenFromPanel() end
+    -- 2.2.1: the Overlord website, a link to copy (same window as Discord and Contact), in
+    -- place of the "Your rank" button (the rank stays on its character sheet tab).
+    local websiteBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
+        L.WEBSITE_BUTTON or "Website", "Interface\\AddOns\\Overlord\\Textures\\overlord_minimap")
+    websiteBtn:SetPoint("TOPRIGHT", actionsCard, "TOPRIGHT", -4, gridTop)
+    AttachGridButtonTooltip(websiteBtn, L.WEBSITE_BUTTON_TOOLTIP or L.WEBSITE_BUTTON or "Website")
+    websiteBtn:SetScript("OnClick", function()
+        Overlord.UI:ShowWebsitePopup()
     end)
-    zoneListFrame.rankBtn = rankBtn
+    zoneListFrame.websiteBtn = websiteBtn
 
     local discordBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
         L.DISCORD_BUTTON, "Interface\\ChatFrame\\UIChatIcon")
@@ -2142,11 +2141,17 @@ local function LinkPopupTexts()
             L.CONTACT_POPUP_HINT or "Open X in your browser and paste the link below.",
             L.CONTACT_URL_LABEL or "Author's X profile"
     end
+    if linkPopupKind == "website" then
+        return L.WEBSITE_POPUP_TITLE or "Overlord website",
+            L.WEBSITE_POPUP_HINT or "Open your browser and paste the link below.",
+            L.WEBSITE_URL_LABEL or "Website address"
+    end
     return L.DISCORD_POPUP_TITLE, L.DISCORD_POPUP_HINT, L.DISCORD_URL_LABEL
 end
 
 local function GetDiscordInviteUrl()
     if linkPopupKind == "contact" then return Overlord.CONTACT_URL or "" end
+    if linkPopupKind == "website" then return Overlord.WEBSITE_URL or "" end
     return Overlord.DISCORD_INVITE_URL or ""
 end
 
@@ -2297,6 +2302,16 @@ function Overlord.UI:OnDiscordButtonClick()
         return
     end
     linkPopupKind = "discord"
+    self:ShowDiscordPopup()
+    self:ScheduleActionGridActiveRefresh()
+end
+
+function Overlord.UI:ShowWebsitePopup()
+    if discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "website" then
+        discordPopupFrame:Hide()
+        return
+    end
+    linkPopupKind = "website"
     self:ShowDiscordPopup()
     self:ScheduleActionGridActiveRefresh()
 end
@@ -2508,7 +2523,7 @@ function Overlord.UI:RefreshActionGridActiveState()
     nextState.hof = Overlord.HallOfFameUI and Overlord.HallOfFameUI.IsShown and Overlord.HallOfFameUI:IsShown() or false
     nextState.groups = Overlord.GroupFinderUI and Overlord.GroupFinderUI.IsShown and Overlord.GroupFinderUI:IsShown() or false
     nextState.tutorial = Overlord.Popups and Overlord.Popups.IsQuickGuideShown and Overlord.Popups:IsQuickGuideShown() or false
-    nextState.rank = Overlord.RanksUI and Overlord.RanksUI.selected == true or false
+    nextState.website = discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "website" or false
     nextState.discord = discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "discord" or false
     nextState.contact = discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "contact" or false
     nextState.front = self._frontPickerPopup and self._frontPickerPopup:IsShown() or false
@@ -2557,7 +2572,7 @@ function Overlord.UI:RefreshActionGridActiveState()
     panelOpen(zoneListFrame.hofBtn, nextState.hof)
     panelOpen(zoneListFrame.groupsBtn, nextState.groups)
     panelOpen(zoneListFrame.tutorialBtn, nextState.tutorial)
-    panelOpen(zoneListFrame.rankBtn, nextState.rank)
+    panelOpen(zoneListFrame.websiteBtn, nextState.website)
     panelOpen(zoneListFrame.discordBtn, nextState.discord)
     panelOpen(zoneListFrame.contactBtn, nextState.contact)
     panelOpen(self.frontPickerBtn, nextState.front)

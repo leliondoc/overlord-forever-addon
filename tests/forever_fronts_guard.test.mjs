@@ -165,6 +165,13 @@ test("Forever panel greys disabled modules", () => {
     assert.match(ui, /Overlord\.UI:ShowContactPopup\(\)/);
     assert.match(readFileSync(new URL("../Core.lua", import.meta.url), "utf8"), /Overlord\.CONTACT_URL = "https:\/\/x\.com\/TromaFR"/);
     assert.match(locales, /L\.CONTACT_BUTTON = "Contact"/);
+    // 2.2.1: the website link in place of "Your rank", same link window.
+    assert.match(ui, /websiteBtn:SetPoint\("TOPRIGHT", actionsCard, "TOPRIGHT", -4, gridTop\)/);
+    assert.match(ui, /Overlord\.UI:ShowWebsitePopup\(\)/);
+    assert.match(ui, /linkPopupKind == "website" then return Overlord\.WEBSITE_URL/);
+    assert.doesNotMatch(ui, /rankBtn/);
+    assert.match(readFileSync(new URL("../Core.lua", import.meta.url), "utf8"), /Overlord\.WEBSITE_URL = "https:\/\/overlord-forever\.com\/"/);
+    assert.match(locales, /L\.WEBSITE_BUTTON = "Site internet"/);
     assert.match(locales, /L\.FOREVER_FEATURE_UNAVAILABLE = "Unavailable on Overlord Forever\."/);
     assert.match(locales, /L\.FOREVER_FEATURE_UNAVAILABLE = "Indisponible sur Overlord Forever\."/);
 });

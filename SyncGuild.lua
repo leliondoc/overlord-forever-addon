@@ -1024,7 +1024,8 @@ function lane:Describe()
     if addon.ChannelDirectory then listed, exchanging = addon.ChannelDirectory:Describe() end
     exchanging = tonumber(exchanging) or 0
     if listed then channel = channel .. "; " .. listed end
-    if addon.ChannelDirectory and addon.ChannelDirectory.suspended then short = "channel suspended by the game" end
+    local suspended = addon.ChannelDirectory and addon.ChannelDirectory.suspended
+    if suspended then short = "channel suspended by the game" end
     local carriers = {}
     if exchanging > 0 then carriers[#carriers + 1] = "the channel member list" end
     local guildText, unheard
@@ -1048,7 +1049,8 @@ function lane:Describe()
     local text = string.format("%s; %s; data goes through %s", channel, guildText, table.concat(carriers, ", "))
     short = string.format("%s; data goes through %s", short, table.concat(carriers, ", "))
     -- (Yellow: why, in the tooltip too.)
-    if level == "warn" and listed then short = short .. "; " .. listed end
+    -- (Not the list's state when the game suspended the channel: the short text says it already.)
+    if level == "warn" and listed and not suspended then short = short .. "; " .. listed end
     if unheard and exchanging == 0 then
         local warning = "; nothing came back for 5 min: the server may be dropping this account's addon messages"
         text, short = text .. warning, short .. warning

@@ -122,6 +122,33 @@ do
     assert(NH:IndicatorLevel() ~= "ok", "Refusals inside the window were forgotten too early")
     NH:NoteSend(1000 + 900)
     assert(NH:IndicatorLevel() == "ok", "A burst older than ten minutes kept the indicator yellow")
+    -- 2.2.1: a /reload in a group, a burst of group refusals the relay sends again: yellow at
+    -- worst, never red. The same burst on the channel stays red.
+    NH:_ResetWindow()
+    net.stats.sent, net.stats.dropped = 0, 0
+    sync._addonSendStats = { PARTY = { ok = 30, refused = 30 } }
+    local burst = select(2, NH:IndicatorLevel())
+    for _, row in ipairs(burst) do
+        if row.id == "throttle" then assert(row.level == "warn", "group burst: " .. row.level) end
+    end
+    sync._addonSendStats = { CHANNEL = { ok = 30, refused = 30 } }
+    burst = select(2, NH:IndicatorLevel())
+    for _, row in ipairs(burst) do
+        if row.id == "throttle" then assert(row.level == "bad", "channel burst: " .. row.level) end
+    end
+    -- A channel the server refuses (its probes, code 7 on a suspended channel): not a throttle,
+    -- still listed in the text.
+    local wasRefused = sync._channelRefusedAt
+    sync._channelRefusedAt = 1
+    sync._addonSendStats = { CHANNEL = { ok = 0, refused = 3, lastCode = 7, lastCodeAt = 0 } }
+    burst = select(2, NH:IndicatorLevel())
+    for _, row in ipairs(burst) do
+        if row.id == "throttle" then
+            assert(row.level == "ok" and row.text:find("channel 3/3", 1, true), "refused channel probes: "
+                .. row.level .. " " .. row.text)
+        end
+    end
+    sync._channelRefusedAt = wasRefused
     NH:_ResetWindow()
 end
 -- Copies of other players' packets the relay refuses to forward (no route to the
@@ -321,5 +348,34 @@ do
     C_Timer.After, IsInGuild, GetChannelName = realAfter, realInGuild, realChannelName
     lane.probeGeneration = (lane.probeGeneration or 0) + 1
     NH:_ResetWindow()
+end
+-- 2.2.1: /ov network and /ov relay land in a window too, as plain text (icons as words, no
+-- colour codes), the /ov relay one completed by its 30 s of packets.
+do
+    local made, shown = {}, nil
+    local function widget(kind)
+        local w = { kind = kind, shown = false }
+        setmetatable(w, { __index = function(_, key)
+            if key == "SetText" then return function(self, t) self.text = t end end
+            if key == "Show" then return function(self) self.shown = true shown = self end end
+            if key == "IsShown" then return function(self) return self.shown end end
+            if key == "CreateFontString" then return function() return widget("FontString") end end
+            return function() end
+        end })
+        made[#made + 1] = w
+        return w
+    end
+    local stub = CreateFrame
+    CreateFrame = function(kind) return widget(kind) end
+    run("network")
+    assert(shown and shown.edit and shown.edit.text, "/ov network opened no window")
+    local text = shown.edit.text
+    assert(text:find("Network status:", 1, true) and text:find("[OK] Blizzard throttle", 1, true)
+        and not text:find("|c", 1, true) and not text:find("|T", 1, true) and not text:find("[Overlord]", 1, true),
+        "window text not plain: " .. text:sub(1, 200))
+    run("relay")
+    assert(shown.edit.text:find("Relay and ranking catch-up", 1, true)
+        and shown.edit.text:find("Incoming Overlord packets", 1, true), "/ov relay window lacks its 30 s part")
+    CreateFrame = stub
 end
 print("Sync report: colored summary, worst-level header, red non-zero counters, stalled catch-up flagged OK")
