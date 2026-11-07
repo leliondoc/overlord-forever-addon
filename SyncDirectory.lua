@@ -293,6 +293,17 @@ function dir:IsUsable(row)
     return net ~= nil and row.greetedAt ~= nil and net:IsDirectPeer(row.name)
 end
 
+-- 2.2.1: players of the list that answered our greeting by whisper (2.2.0 or later) and that
+-- the relay reaches. A guild mate we greeted is a direct peer through the guild without ever
+-- answering: it showed as "exchanging with you" while nothing went through the list.
+function dir:AnsweringCount()
+    local live = 0
+    for _, row in pairs(self.partners) do
+        if row.heardAt and self:IsUsable(row) then live = live + 1 end
+    end
+    return live
+end
+
 -- Partners answering us now, and greetings still waiting for their answer.
 function dir:LiveCount()
     local count, at = 0, now()
@@ -1044,10 +1055,7 @@ end
 function dir:Describe()
     if not self:IsActive() then return nil, 0 end
     if #self.names == 0 then return "channel member list: " .. (self.state or "not read yet"), 0 end
-    local live = 0
-    for _, row in pairs(self.partners) do
-        if self:IsUsable(row) then live = live + 1 end
-    end
+    local live = self:AnsweringCount()
     return string.format("%d players in the channel member list, %d of them exchanging with you", #self.names, live),
         live
 end
@@ -1058,10 +1066,7 @@ function dir:GetDiagnostics()
     for _, method in ipairs(self.FETCH_METHODS) do
         if self.provenMethods[method] then proven[#proven + 1] = method end
     end
-    local live = 0
-    for _, row in pairs(self.partners) do
-        if self:IsUsable(row) then live = live + 1 end
-    end
+    local live = self:AnsweringCount()
     return string.format("Channel member list: %d names%s, %d reads, %d fetches (%s), %d failed%s; "
         .. "partners: %d greeted, %d answered, %d silent, %d greeted us, %d answers, %d capped, "
         .. "%d refused (table full), %d live, %d ranking rounds, %d map rounds%s",

@@ -91,6 +91,12 @@ function NH:Compute()
     local sendStats = sync and sync._addonSendStats
     if sendStats then
         local refused, attempts, parts = 0, 0, {}
+        local groupRefused, groupAttempts = 0, 0
+        local asideRefused, asideAttempts = 0, 0
+        -- 2.2.1: a channel the server refuses (its probe every 5 min, code 7 on a channel the
+        -- game suspended) is no throttle: "Channel and guild" says it. Seen 2026-11-06: red for
+        -- 3 probes in 10 min while everything else was green.
+        local channelRefused = sync._channelRefusedAt ~= nil
         for _, chatType in ipairs(SEND_TYPES) do
             local row = sendStats[chatType]
             if row then
@@ -98,6 +104,11 @@ function NH:Compute()
                 local rowRefused = math.max(0, row.refused - (b and b.refused or 0))
                 local rowAttempts = math.max(rowRefused, row.ok + row.refused - (b and (b.ok + b.refused) or 0))
                 refused, attempts = refused + rowRefused, attempts + rowAttempts
+                if chatType == "PARTY" or chatType == "RAID" then
+                    groupRefused, groupAttempts = groupRefused + rowRefused, groupAttempts + rowAttempts
+                elseif chatType == "CHANNEL" and channelRefused then
+                    asideRefused, asideAttempts = rowRefused, rowAttempts
+                end
                 -- Blizzard's last refusal code, to tell a throttle from a channel not joined yet.
                 local code = rowRefused > 0 and row.lastCode ~= nil
                     and (not baseAt or (tonumber(row.lastCodeAt) or 0) >= baseAt)
@@ -108,9 +119,16 @@ function NH:Compute()
         end
         -- Un refus isolé ou 1 % au plus : normal (Blizzard ne laisse qu'environ un
         -- message par seconde au groupe, au raid et au canal réunis).
-        local ratio = attempts > 0 and refused / attempts or 0
-        local level = (refused <= 1 or ratio <= 0.01) and "ok"
-            or ((ratio < 0.05 or refused < 3) and "warn" or "bad")
+        local function judge(no, of)
+            local ratio = of > 0 and no / of or 0
+            return (no <= 1 or ratio <= 0.01) and "ok" or ((ratio < 0.05 or no < 3) and "warn" or "bad")
+        end
+        -- 2.2.1: the group's refusals never turn it red. The relay sends a refused group copy
+        -- again (a /reload in a group: a burst of them, then nothing); what never leaves shows
+        -- under "Relay losses".
+        local level = judge(refused - groupRefused - asideRefused, attempts - groupAttempts - asideAttempts)
+        local groupLevel = judge(groupRefused, groupAttempts)
+        level = Worst(level, groupLevel == "bad" and "warn" or groupLevel)
         add("throttle", level, "Blizzard throttle",
             string.format("%d refused (%s)%s", refused, table.concat(parts, ", "), label))
     end

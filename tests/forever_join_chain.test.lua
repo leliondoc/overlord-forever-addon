@@ -294,6 +294,20 @@ for n, nm in pairs(held) do assert(not sync:IsChannelPad(nm), "a pad is still he
 -- A new character: General, Trade kept, LocalDefense; ours after the five first numbers.
 at = seat({ [1] = "General", [3] = "LocalDefense" }, { [2] = "Trade" })
 assert(at == 6 and held[1] == "General" and held[3] == "LocalDefense", "a new character's channels moved: /" .. at)
+-- 2.2.1: never a burst. Pads, our join and the leaves one CHANNEL_OP_GAP apart at least.
+do
+    local ops, quickTemp, quickJoin, quickLeave = {}, JoinTemporaryChannel, JoinChannelByName, LeaveChannelByName
+    JoinTemporaryChannel = function(nm) ops[#ops + 1] = now; return quickTemp(nm) end
+    JoinChannelByName = function(nm) ops[#ops + 1] = now; return quickJoin(nm) end
+    LeaveChannelByName = function(nm) ops[#ops + 1] = now; return quickLeave(nm) end
+    at = seat({ [1] = "General", [3] = "LocalDefense" }, { [2] = "Trade" })
+    JoinTemporaryChannel, JoinChannelByName, LeaveChannelByName = quickTemp, quickJoin, quickLeave
+    assert(at == 6 and #tempJoins == 2 and #left == 2 and #ops == 5, "spaced seat: /" .. at .. ", " .. #ops .. " ops")
+    for k = 2, #ops do
+        assert(ops[k] - ops[k - 1] >= sync.CHANNEL_OP_GAP - 0.01, "two channel operations " .. (ops[k] - ops[k - 1]) .. " s apart")
+    end
+    for n, nm in pairs(held) do assert(not sync:IsChannelPad(nm), "a spaced pad is still held at /" .. n) end
+end
 -- Every number up to the player's last one taken: no pad at all.
 at = seat({ [1] = "General", [2] = "LocalDefense", [3] = "A", [4] = "B", [5] = "C", [6] = "Mine" })
 assert(at == 7 and #tempJoins == 0, "pads joined with no hole to fill")

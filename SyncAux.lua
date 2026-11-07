@@ -884,6 +884,11 @@ end
 -- joined is never moved.
 Overlord.Sync.CHANNEL_SEAT_FLOOR = 5
 Overlord.Sync.CHANNEL_SEAT_MAX_PADS = 6
+-- 2.2.1: seconds between two channel joins or leaves of ours. Joined or left in one go, the
+-- pads met the server's "you are going too fast" at login (seen 2026-11-06, the game's own
+-- channels joining at the same moment), and a pad stayed; a channel whose join is cut that way
+-- is a suspect for the one the game then keeps suspended for days.
+Overlord.Sync.CHANNEL_OP_GAP = 1.5
 
 -- Exactly the names JoinChannelPads gives ("OvPad" .. 6 hex .. a digit); a protected
 -- value is never read.
@@ -950,14 +955,24 @@ function Overlord.Sync:JoinChannelPads(count)
     self._channelPadSalt = self._channelPadSalt or string.format("%06x", (math.random(0, 16777215)
         + math.floor((GetTime and GetTime() or 0) * 1000) + (time and time() or 0)) % 16777216)
     self._channelPads = self._channelPads or {}
+    local pads, gap = self._channelPads, self.CHANNEL_OP_GAP
     for k = 1, count do
         local name = "OvPad" .. self._channelPadSalt .. k
-        self._channelPads[#self._channelPads + 1] = name
-        securecall(JoinTemporaryChannel, name, nil, 0)
+        pads[#pads + 1] = name
+        -- 2.2.1: one join every CHANNEL_OP_GAP, never a burst (see there).
+        if k == 1 then
+            securecall(JoinTemporaryChannel, name, nil, 0)
+        else
+            C_Timer.After((k - 1) * gap, function()
+                local sync = Overlord.Sync
+                if sync and sync._channelPads == pads and not Overlord.InstanceSuspended then
+                    securecall(JoinTemporaryChannel, name, nil, 0)
+                end
+            end)
+        end
     end
     -- Safety: this seat's pads only (a later seat keeps its own).
-    local pads = self._channelPads
-    C_Timer.After(15, function()
+    C_Timer.After(15 + (count - 1) * gap, function()
         local sync = Overlord.Sync
         if sync and sync._channelPads == pads then sync:ReleaseChannelPads() end
     end)
@@ -975,8 +990,9 @@ end
 function Overlord.Sync:ReleaseChannelPads(sweep)
     local leave = type(LeaveChannelByName) == "function" and LeaveChannelByName
     if not leave then self._channelPads = nil return end
+    local going, seen = {}, {}
     for _, name in ipairs(self._channelPads or {}) do
-        if (tonumber((GetChannelName(name))) or 0) > 0 then securecall(leave, name) end
+        if (tonumber((GetChannelName(name))) or 0) > 0 then going[#going + 1], seen[name] = name, true end
     end
     self._channelPads = nil
     if sweep and type(GetChannelList) == "function" then
@@ -987,11 +1003,25 @@ function Overlord.Sync:ReleaseChannelPads(sweep)
         local list = { GetChannelList() }
         for i = 1, #list, 3 do
             local name, disabled = list[i + 1], list[i + 2]
-            if self:IsChannelPad(name) and not (canaccessvalue and not canaccessvalue(disabled))
+            if self:IsChannelPad(name) and not seen[name] and not (canaccessvalue and not canaccessvalue(disabled))
                 and disabled ~= true and (self._padSweepTries[name] or 0) < 2 then
                 self._padSweepTries[name] = (self._padSweepTries[name] or 0) + 1
-                securecall(leave, name)
+                going[#going + 1], seen[name] = name, true
             end
+        end
+    end
+    -- 2.2.1: one leave every CHANNEL_OP_GAP. A later one waits for no seat to hold pads (pad
+    -- names are kept for the session: a newer seat's own are its to leave).
+    for k, name in ipairs(going) do
+        if k == 1 then
+            securecall(leave, name)
+        else
+            C_Timer.After((k - 1) * self.CHANNEL_OP_GAP, function()
+                local sync = Overlord.Sync
+                if sync and not sync._channelPads and (tonumber((GetChannelName(name))) or 0) > 0 then
+                    securecall(leave, name)
+                end
+            end)
         end
     end
 end
@@ -1017,7 +1047,9 @@ function Overlord.Sync:ChannelSeatStep(generation)
             local holes = self:ChannelSeatHoles()
             if holes then
                 self:JoinChannelPads(#holes)
+                -- (Polls cover the pads joined one CHANNEL_OP_GAP apart.)
                 seat.phase, seat.polls, delay = "pads", 0, 0.5
+                seat.maxPolls = 10 + math.ceil((#holes - 1) * self.CHANNEL_OP_GAP / 0.5)
             else
                 seat.phase = "go"
                 return true
@@ -1025,11 +1057,12 @@ function Overlord.Sync:ChannelSeatStep(generation)
         end
     else
         seat.polls = seat.polls + 1
-        if self:ChannelPadsSeated() or seat.polls >= 10 then
-            seat.phase = "go"
-            return true
+        if self:ChannelPadsSeated() or seat.polls >= (seat.maxPolls or 10) then
+            -- 2.2.1: our join one CHANNEL_OP_GAP after the last pad, not in its wake.
+            seat.phase, delay = "go", self.CHANNEL_OP_GAP
+        else
+            delay = 0.5
         end
-        delay = 0.5
     end
     C_Timer.After(delay, function()
         local sync = Overlord.Sync
