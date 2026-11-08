@@ -401,7 +401,10 @@ assert(row.silentUntil and row.silentUntil > clock, "a silent player is left alo
 -- (Greetings are jittered: a third player may have been greeted, and left silent, meanwhile.)
 assert(dir.stats.silent >= 1, "counted silent")
 -- (2.2.2: a first silence lasts FIRST_SILENT_SEC; the long one comes with the second.)
-advance(dir.FIRST_SILENT_SEC - dir.ANSWER_WAIT - 10)
+-- (Counted from that player's own greeting: jittered, it may come early in the window above.)
+assert(row.greetedAt and row.silentUntil == row.greetedAt + dir.ANSWER_WAIT + dir.FIRST_SILENT_SEC,
+    "a first silence does not last FIRST_SILENT_SEC")
+advance(row.silentUntil - clock - 10)
 local again = 0
 for _, g in ipairs(whispers("NH")) do if g.row.target == second then again = again + 1 end end
 assert(again == 1, "not greeted again within FIRST_SILENT_SEC")
