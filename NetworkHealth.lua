@@ -61,6 +61,11 @@ end
 
 function NH:NoteSend(now)
     if lastSampleAt and now - lastSampleAt < SAMPLE_SEC then return end
+    -- (2.2.2: after a silence longer than the window, an instance say, the base before it no
+    -- longer counted the hours before as "last 10 min": the window starts again here.)
+    if lastSampleAt and now - lastSampleAt > WINDOW_SEC then
+        for i = #samples, 1, -1 do samples[i] = nil end
+    end
     lastSampleAt = now
     samples[#samples + 1] = { at = now, totals = CurrentTotals() }
     -- Garder un seul relevé antérieur au début de la fenêtre : c'est la base.
@@ -69,6 +74,9 @@ end
 
 -- Base de la fenêtre : le relevé le plus ancien encore utile (nil = tout depuis le login).
 local function WindowBase()
+    -- (2.2.2: a silence longer than the window, an instance say, leaves no valid base:
+    -- counted since login, unlabelled, until the next send starts the window again.)
+    if lastSampleAt and GetTime() - lastSampleAt > WINDOW_SEC then return nil, nil end
     return samples[1] and samples[1].totals or nil, samples[1] and samples[1].at or nil
 end
 
@@ -172,16 +180,23 @@ function NH:Compute()
             "Relay losses", string.format("%d lost of %d sent (%.1f%%), %d received%s%s%s",
                 dropped, sent, pct, received, others, waited, label))
     end
+    local ladderAlive = false
     if sync and sync.GetPagedLeaderboardSummary then
         local lb = sync:GetPagedLeaderboardSummary()
+        ladderAlive = type(lb.lastPartAge) == "number" and lb.lastPartAge < 120
         local stuck = lb.status:find("interrupted", 1, true) ~= nil
         add("ladder", stuck and "warn" or "ok", "Leaderboard catch-up",
             string.format("%s, %d pages / %d rows (v%d)", lb.status, lb.pages, lb.rows, lb.protocol))
     end
     if sync and sync.GetHistoryCatchupSummary then
         local hr = sync:GetHistoryCatchupSummary()
-        local waiting = hr.running and hr.step == "paged ladder catch-up" and hr.stepAge > 600
+        local long = hr.running and hr.step == "paged ladder catch-up" and hr.stepAge > 600
+        -- (2.3.0: a big ladder over whispers takes more than 10 min: pages still coming is no wait.)
+        local waiting = long and not ladderAlive
         local text = hr.running and string.format("%s, %ds ago", tostring(hr.step or "?"), hr.stepAge) or "idle"
+        if long and ladderAlive then
+            text = string.format("paged ladder catch-up, pages still coming for %ds", hr.stepAge)
+        end
         add("history", waiting and "warn" or "ok", "Capture history catch-up",
             waiting and string.format("waiting on one peer for %ds", hr.stepAge) or text)
     end

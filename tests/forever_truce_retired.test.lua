@@ -265,6 +265,41 @@ do
 end
 print("Truce retired: a waiting announcement proven by the map is filed at the victory's own moment")
 
+-- 3e. No announcement waits (a login, a return from a battleground after the replays):
+-- the journal proves the victory. The map check files it at the journal's moment, not at
+-- the capital's kept stamp, and moves no date (2.3.0).
+do
+    zones:ClearFrontVictories()
+    OverlordDB.frontTruceResetEpoch = {}
+    OverlordDB.lastVictoryTimestamp, OverlordDB.lastVictoryFaction, OverlordDB.lastVictoryFrontId = nil, nil, nil
+    local p = sync:GetPriv()
+    p.totalVictoryDeliveredAt, p.totalVictoryAnnounced, p.pendingTotalVictory = {}, {}, {}
+    clock = clock + 30000
+    local V = clock
+    for _, zone in ipairs(elwynn.zones) do
+        zone.owner, zone.status, zone.capturedTime, zone.updatedAt = "Alliance", "captured", V, V
+        zone._loginSyncUnconfirmed = nil
+    end
+    hordeCap.capturedTime, hordeCap.updatedAt = V + 1, V + 1
+    clock = V + 1800
+    local realNear, realGrant = Overlord.GetDominationVictoryEventNear, Overlord.TryGrantVictoryDominationBonus
+    Overlord.GetDominationVictoryEventNear = function(_, frontId, faction, ts)
+        if frontId == "elwynn" and faction == "Alliance" and math.abs(ts - V) <= 60 then
+            return { frontId = "elwynn", faction = "Alliance", victoryTs = V }
+        end
+    end
+    Overlord.TryGrantVictoryDominationBonus = function() end
+    Overlord.InActiveFront = true
+    sync:CheckTotalVictoryFromSync()
+    Overlord.InActiveFront = false
+    Overlord.GetDominationVictoryEventNear, Overlord.TryGrantVictoryDominationBonus = realNear, realGrant
+    assert(tonumber(OverlordDB.lastVictoryTimestamp) == V,
+        "The journal-backed map check filed the victory at the kept stamp: " .. tostring((tonumber(OverlordDB.lastVictoryTimestamp) or 0) - V))
+    assert(hordeCap.capturedTime == V + 1 and branches[1].capturedTime == V,
+        "The journal-backed map check moved the dates on: " .. tostring(hordeCap.capturedTime - V) .. ", " .. tostring(branches[1].capturedTime - V))
+end
+print("Truce retired: a journal-proven victory read from the map is filed at the journal's moment")
+
 -- 4. A record left behind by another order of events is filed too (never a truce).
 zones:ClearFrontVictories()
 clock = clock + 30000

@@ -92,6 +92,11 @@ RP.WORD_FROM = 1793692800
 local session = math.floor((GetTime and GetTime() or 0) * 1000) % 2147483647
 local badge = {}
 local enemyBadge = {}
+-- Pure caches of the names painted (ranking rows, plates): a long session paints
+-- thousands. Past this many names a cache starts again empty (refilled at the
+-- next paint, same values).
+local BADGE_CACHE_MAX = 4096
+local badgeSize, enemyBadgeSize = 0, 0
 local pending -- the inspect in flight
 local lastInspectAt, lastMouseoverAt = -1e9, -1e9
 local lastForeignReadyAt = -1e9
@@ -228,15 +233,18 @@ function RP:Pool()
     candidates = nil
     for name in pairs(badge) do badge[name] = nil end
     for name in pairs(enemyBadge) do enemyBadge[name] = nil end
+    badgeSize, enemyBadgeSize = 0, 0
     return pool
 end
 
 local function Invalidate(key)
     if key then
+        if badge[key] ~= nil then badgeSize = badgeSize - 1 end
         badge[key] = nil
     else
         for k in pairs(badge) do badge[k] = nil end
         for k in pairs(enemyBadge) do enemyBadge[k] = nil end
+        badgeSize, enemyBadgeSize = 0, 0
     end
     RP.generation = RP.generation + 1
     if RP.RefreshPlates then RP:RefreshPlates(key) end
@@ -689,6 +697,10 @@ function RP:EnemyRank(pool, name, faction)
             end
         end
     end
+    if enemyBadge[name] == nil then
+        if enemyBadgeSize >= BADGE_CACHE_MAX then enemyBadge, enemyBadgeSize = {}, 0 end
+        enemyBadgeSize = enemyBadgeSize + 1
+    end
     enemyBadge[name] = rank
     return rank
 end
@@ -740,6 +752,11 @@ end
 -- oldest entries of any table over its cap.
 function RP:Prune(pool)
     local yearAgo = ServerNow() - 52 * self.WEEK_SEC
+    -- Inspect retry times already passed say nothing more than a missing one.
+    local clock = GetTime and GetTime() or 0
+    for name, at in pairs(readAt) do
+        if not (clock < at) then readAt[name] = nil end
+    end
     local function newest(readings)
         local at = 0
         for _, reading in pairs(readings) do
@@ -1189,7 +1206,13 @@ function RP:ProvenRank(name)
         local floor = (type(shownRec) == "table" and not shownRec.wait) and Count(shownRec.r) or 0
         rank = math.min(rank, math.max(Count(claim.r), floor))
     end
-    if pool and faction then badge[name] = rank end
+    if pool and faction then
+        if badge[name] == nil then
+            if badgeSize >= BADGE_CACHE_MAX then badge, badgeSize = {}, 0 end
+            badgeSize = badgeSize + 1
+        end
+        badge[name] = rank
+    end
     return rank
 end
 
@@ -1241,9 +1264,27 @@ end
 -- of our faction (0 = no badge). Our own rank is in the character sheet, not here: a badge
 -- on our own name would suggest the others see it too.
 -- side: the faction the game shows him in (a unit), when known.
+-- 2.3.0: the addon's author wears the Overlord logo on both factions, in the ranking, its
+-- tooltips and on nameplates: a fixed name of one region known to every client (nothing heard
+-- from the network, nothing to prove). Character names are unique within a region.
+RP.AUTHORS = { ["troma orcbane"] = "EU" }
+
+function RP:IsAuthor(name)
+    local region = type(name) == "string" and self.AUTHORS[name:lower()]
+    if not region or type(GetCurrentRegionName) ~= "function" then return false end
+    local ok, current = pcall(GetCurrentRegionName)
+    return ok and Accessible(current) and current == region
+end
+
+local function AuthorRank()
+    local ranks = Overlord.Ranks
+    return ranks and ranks.AUTHOR_RANK or 0
+end
+
 function RP:GetBadgeRank(rawName, side)
     if InInstance() then return 0 end
     local name = Canon(rawName)
+    if name and self:IsAuthor(name) then return AuthorRank() end
     if not name or name == MyName() or IsDenied(name) then return 0 end
     local pool = self:Pool()
     if not pool then return 0 end
@@ -1275,6 +1316,10 @@ function RP:GetBadgeRank(rawName, side)
     -- Never an error into the ranking's painting: a damaged entry shows no badge.
     local ok, rank = pcall(self.ProvenRank, self, name)
     if not ok then
+        if badge[name] == nil then
+            if badgeSize >= BADGE_CACHE_MAX then badge, badgeSize = {}, 0 end
+            badgeSize = badgeSize + 1
+        end
         badge[name] = 0
         return 0
     end
@@ -1747,6 +1792,7 @@ function RP:UnitBadge(pool, unit)
         return 0, nil
     end
     local name = UnitName(unit)
+    if name and self:IsAuthor(name) then return AuthorRank(), name end
     if not name or not pool.claims[name] then return 0, name end
     if not self:SameCharacter(pool, name, unit) then return 0, name end
     return self:GetBadgeRank(name, mine), name

@@ -42,7 +42,6 @@ local function sameSource(a, b)
         if a[field] ~= b[field] then return false end
     end
     return a.byFaction == b.byFaction and a.meta == b.meta and a.locale == b.locale
-        and a.duplicateShortNames == b.duplicateShortNames
 end
 
 function Search:New(isVisible, publish)
@@ -73,8 +72,7 @@ function Search:Request(source, text, delay)
     -- Snapshot references: Refresh reuses its source-view table, but lists are immutable.
     local snapshot = {}
     for key, value in pairs(source) do snapshot[key] = value end
-    local result = { byFaction = {}, ranks = {}, meta = source.meta,
-        locale = source.locale, duplicateShortNames = source.duplicateShortNames }
+    local result = { byFaction = {}, ranks = {}, meta = source.meta, locale = source.locale }
     local lists = {}
     for _, field in ipairs(FIELDS) do
         result[field], result.ranks[field] = {}, {}

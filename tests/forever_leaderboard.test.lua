@@ -21,10 +21,17 @@ function CreateFrame()
     return { RegisterEvent = function() end, SetScript = function() end }
 end
 C_Timer = { After = function() end, NewTicker = function() return {} end }
-local function copy(value)
+local function deepCopy(value)
     if type(value) ~= "table" then return value end
-    local result = {}; for key, item in pairs(value) do result[key] = copy(item) end
+    local result = {}; for key, item in pairs(value) do result[key] = deepCopy(item) end
     return result
+end
+-- A copy of the save is what the SavedVariables writer sees: compact playerInfo
+-- rows are written back named first, as PLAYER_LOGOUT does (2.2.2).
+local function copy(value)
+    local lb = Overlord and Overlord.Leaderboard
+    if lb and lb.MaterializePlayerInfoRows then lb:MaterializePlayerInfoRows() end
+    return deepCopy(value)
 end
 Overlord = { L = { ZONE_CAPTURED_BY = "%s captured by %s" } }
 assert(loadfile("Core.lua"))()

@@ -57,6 +57,16 @@ assert(Z:GetZoneMapIconAtlas(enemy, true, false) == Z.OBJECTIVE_HORDE_ATLAS, "th
 assert(Z:GetZoneMapIconAtlas(byId.hillsbrad_tarren_mill, true, true) ~= Z.OBJECTIVE_ATTACK_ATLAS, "a capital lost its hall")
 assert(Z:GetZoneMapIconAtlas({ id = "x", status = "in_progress" }, false, true) ~= Z.OBJECTIVE_ATTACK_ATLAS,
     "a point in progress shows the barracks")
+-- 2.2.2: a capital taken shows the hall of the faction holding it (it stays conquered), in the
+-- zone list and on the map; held by its own faction, its own hall.
+local mill = byId.hillsbrad_tarren_mill
+assert(Z:GetZoneMapIconAtlas(mill, false, false) == "Warfronts-BaseMapIcons-Horde-MainHall", "a Horde capital lost its hall")
+mill.owner, mill.status = "Alliance", "captured"
+assert(Z:GetZoneMapIconAtlas(mill, false, false) == "Warfronts-BaseMapIcons-Alliance-MainHall",
+    "a Horde capital taken by the Alliance kept the Horde hall")
+assert(Z:GetZoneMapIconAtlas(mill, true, false) == "Warfronts-BaseMapIcons-Alliance-MainHall",
+    "the map kept the Horde hall on a capital taken by the Alliance")
+mill.owner, mill.status = "Horde", "locked"
 
 -- 3. The texture: yellow tint, and the ADD layer shown with it and hidden after it.
 local function texture()

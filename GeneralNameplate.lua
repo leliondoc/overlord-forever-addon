@@ -95,9 +95,25 @@ local function HolderMatchesUnit(holderName, unitName)
     return hk ~= nil and uk ~= nil and hk == uk
 end
 
+-- Nameplate tokens built once (no concatenation at each pass).
+local NAMEPLATE_TOKENS = {}
+for i = 1, 40 do NAMEPLATE_TOKENS[i] = "nameplate" .. i end
+
 function Overlord.GeneralNameplate:RefreshAllOverlays()
     for unit in pairs(overlays) do
         self:RefreshUnit(unit)
+    end
+    -- 2.3.0: a player already in sight who takes command keeps his plate (no
+    -- NAME_PLATE_UNIT_ADDED follows): the plates that never carried a badge are read
+    -- too, only while a holder exists and never in an instance.
+    if Overlord.InstanceSuspended then return end
+    RefreshHolderCache()
+    if not allyHolderKey and not enemyHolderKey then return end
+    for i = 1, #NAMEPLATE_TOKENS do
+        local unit = NAMEPLATE_TOKENS[i]
+        if not overlays[unit] and UnitExists(unit) then
+            self:RefreshUnit(unit)
+        end
     end
 end
 

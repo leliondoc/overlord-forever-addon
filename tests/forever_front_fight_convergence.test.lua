@@ -235,6 +235,103 @@ do
         "the refused bracket was never sent again: " .. panel(peer) .. " / " .. panel(busy))
 end
 
+-- 2.2.2: without the channel the relay queues our bracket and the whisper chain may take nothing
+-- (no spare token, no contact): that is checked later and handled as a refusal, not covered.
+do
+    for _, client in ipairs(clients) do client.FA:ResetForCampaign() end
+    local quiet, peer = newClient("Chainless Sender"), newClient("Chainless Peer")
+    local dir = { IsActive = function() return true end }
+    quiet.env.Overlord.ChannelDirectory = dir
+    local realBroadcast = quiet.env.Overlord.Relay.Broadcast
+    quiet.env.Overlord.Relay.Broadcast = function() return 1 end
+    kills(quiet, "@redridge", 12)
+    runTimers()
+    assert(panel(peer) == "", "fixture: the chain took nothing")
+    quiet.env.Overlord.Relay.Broadcast = function(self, kind, payload)
+        dir.ownFKTaken = { n = 1, [payload] = 0 }
+        return realBroadcast(self, kind, payload)
+    end
+    serverNow = serverNow + 25
+    kills(quiet, "@redridge", 1)
+    runTimers()
+    assert(panel(peer) == "redridge=10+",
+        "an own bracket the chain never took was not sent again: " .. panel(peer))
+    -- A chain that never takes it (no contact, covered): tried again twice, then left.
+    local never, other = newClient("Never Taken"), newClient("Never Peer")
+    never.env.Overlord.ChannelDirectory = { IsActive = function() return true end }
+    local sends = 0
+    never.env.Overlord.Relay.Broadcast = function(_, kind)
+        if kind == "FK" then sends = sends + 1 end
+        return 1
+    end
+    kills(never, "@redridge", 10)
+    runTimers()
+    for _ = 1, 7 do
+        serverNow = serverNow + 30
+        kills(never, "@redridge", 1)
+        runTimers()
+    end
+    assert(sends >= 2 and sends <= 4, "a bracket the chain never takes was sent " .. sends .. " times")
+    -- Our very bracket heard back from a peer before the check: covered, never sent again.
+    local echo = newClient("Echo Sender")
+    echo.env.Overlord.ChannelDirectory = { IsActive = function() return true end }
+    local echoed, last = 0, nil
+    echo.env.Overlord.Relay.Broadcast = function(_, kind, payload)
+        if kind == "FK" then echoed, last = echoed + 1, payload end
+        return 1
+    end
+    local after = echo.env.C_Timer.After
+    echo.env.C_Timer.After = function(delay, fn)
+        if delay == 8 and last then echo.FA:OnReceiveKillBracket(last, "Echo Peer", "BETA") end
+        return after(delay, fn)
+    end
+    kills(echo, "@redridge", 12)
+    runTimers()
+    serverNow = serverNow + 30
+    kills(echo, "@redridge", 1)
+    runTimers()
+    assert(echoed == 1, "an own bracket heard back was sent " .. echoed .. " times")
+end
+
+-- A newer bracket of the same fight sent within 8 s of the previous one gets its own delivery
+-- check: the chain took the first, not the second, so the second is tried again.
+do
+    for _, client in ipairs(clients) do client.FA:ResetForCampaign() end
+    local fresh = newClient("Newer Bracket")
+    local dir = { IsActive = function() return true end }
+    fresh.env.Overlord.ChannelDirectory = dir
+    local sends, last = 0, nil
+    fresh.env.Overlord.Relay.Broadcast = function(_, kind, payload)
+        if kind == "FK" then
+            sends, last = sends + 1, payload
+            if sends == 1 then dir.ownFKTaken = { n = 1, [payload] = 0 } end
+        end
+        return 1
+    end
+    local queue = {}
+    fresh.env.C_Timer.After = function(delay, fn) queue[#queue + 1] = { delay = delay, fn = fn } end
+    local function fire(match)
+        local due = {}
+        for i = #queue, 1, -1 do
+            if match(queue[i].delay) then due[#due + 1] = table.remove(queue, i) end
+        end
+        for i = #due, 1, -1 do due[i].fn() end
+        return #due
+    end
+    local function isReport(delay) return delay ~= 8 and delay ~= 21 end
+    kills(fresh, "@redridge", 12)
+    assert(fire(isReport) == 1 and sends == 1 and last:find(":redridge:10:", 1, true), "fixture: 10+ not sent")
+    -- 20+ crossed before the 8 s check of 10+ fires.
+    kills(fresh, "@redridge", 10)
+    assert(fire(isReport) == 1 and sends == 2 and last:find(":redridge:20:", 1, true), "fixture: 20+ not sent")
+    fire(function(delay) return delay == 8 end)
+    serverNow = serverNow + 21
+    fire(function(delay) return delay == 21 end)
+    fire(isReport)
+    assert(sends == 3 and last:find(":redridge:20:", 1, true),
+        "the newer bracket's delivery was never checked: " .. sends .. " sends")
+end
+
 -- A raw FK posted on the channel or in a group by a stranger is ignored.
 do
     local fa = d.FA
@@ -331,6 +428,12 @@ assert(fa:OnReceiveKillBracket("1:redridge:20:" .. slot, "Late Honest Sender", "
     "a new honest sender was refused after 300 others")
 assert(fa:GetDisplayKillCount("redridge") == 20, "the crowd's bracket was lost")
 fa:ResetForCampaign()
+-- 2.2.2: copies of a bracket already known (relay, chain, Battle.net) leave before the
+-- budgets: they no longer spend the room of a real new bracket from the same sender.
+for _ = 1, 30 do fa:OnReceiveKillBracket("1:hillsbrad:10:" .. slot, "Copy Tester", "BETA") end
+assert(fa:OnReceiveKillBracket("1:arathi:10:" .. slot, "Copy Tester", "BETA"),
+    "copies of one bracket spent the sender's budget")
+fa:ResetForCampaign()
 
 -- Inside an instance nothing is announced or received; the weekly reset forgets it all.
 d.env.Overlord.InstanceSuspended = true
@@ -339,4 +442,26 @@ assert(not fa:RecordKills("@hillsbrad", 9) and #d.timers == 0, "announced from i
 d.env.Overlord.InstanceSuspended = false
 fa:ResetForCampaign()
 assert(panel(d) == "", "the weekly reset kept an announced bracket: " .. panel(d))
+
+-- 2.3.0: the whisper chain does not pass on a bracket a fresher one known here covers (at least as
+-- high, valid more than 90 s): the copy itself, a higher bracket or another front still go.
+do
+    local s30 = math.floor(serverNow / 30)
+    assert(fa:OnReceiveKillBracket("1:hillsbrad:20:" .. s30, "Chain Tester", "BETA"), "fixture: 20+ stored")
+    -- (2.3.0) Stored but not passed on by us: it covers nothing (a stranger's would stop the real ones).
+    assert(not fa:CoversRelayedBracket("1:hillsbrad:10:" .. s30), "a bracket never passed on covered another")
+    fa:NoteRelayedBracketPassed("1:hillsbrad:20:" .. s30)
+    assert(not fa:CoversRelayedBracket("1:hillsbrad:20:" .. s30), "the copy just stored covers itself")
+    assert(fa:CoversRelayedBracket("1:hillsbrad:10:" .. s30), "a lower bracket was not covered")
+    assert(fa:CoversRelayedBracket("1:hillsbrad:20:" .. (s30 - 2)), "an older copy of the same bracket was not covered")
+    assert(not fa:CoversRelayedBracket("1:hillsbrad:30:" .. (s30 - 2)), "a higher bracket was covered")
+    assert(not fa:CoversRelayedBracket("1:arathi:5:" .. s30), "another front was covered")
+    assert(not fa:CoversRelayedBracket("bracket1:hillsbrad:3:2"), "a malformed payload was covered")
+    -- A newer lower bracket outliving the known one (a fading fight) still goes.
+    assert(not fa:CoversRelayedBracket("1:hillsbrad:10:" .. (s30 + 2)), "a newer lower bracket living longer was covered")
+    -- 90 s or less left: the known bracket covers nothing any more (a newer one keeps the row alive).
+    serverNow = serverNow + 215
+    assert(not fa:CoversRelayedBracket("1:hillsbrad:10:" .. (s30 + 7)), "a bracket about to expire covered a newer one")
+    fa:ResetForCampaign()
+end
 print("Front fight convergence: same panel everywhere, few announcements, herd, refresh, expiry, validation OK; " .. tostring(__fkScale))

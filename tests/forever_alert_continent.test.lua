@@ -115,8 +115,10 @@ end
 local enemyAttack = upvalue(sync.OnReceiveZoneState, "TryPrintEnemyCapturingAlert")
 local captureChat = upvalue(sync.OnReceiveZoneState, "PrintCaptureChatOnce")
 local priv = upvalue(enemyAttack, "priv")
-local defenderAlert = upvalue(sync.OnReceiveOutpostState, "TryPrintOutpostDefenderAlert")
-local assaultAlert = upvalue(sync.OnReceiveOutpostState, "TryPrintOutpostAssaultAlert")
+-- (2.3.0: both alerts wait for half the capture, AlertAtHalfCapture; their rules are tested here.)
+local halfAlert = upvalue(sync.OnReceiveOutpostState, "AlertAtHalfCapture")
+local defenderAlert = upvalue(halfAlert, "TryPrintOutpostDefenderAlert")
+local assaultAlert = upvalue(halfAlert, "TryPrintOutpostAssaultAlert")
 local defenderLast = upvalue(defenderAlert, "opDefenderAlertLast")
 local defenderEmitted = upvalue(defenderAlert, "opDefenderAlertEmitted")
 local defenderWaves = upvalue(defenderAlert, "opDefenderAlertWaveKey")
@@ -212,6 +214,16 @@ assert(take("DEFEND") == 1, "Our own guild's outpost in Kalimdor stayed silent")
 -- 2.0.4: our guild's site also shows the red line mid-screen, without the raid sound.
 assert(#raidWarnings == 1 and raidWarnings[1].silent == true and raidWarnings[1].text:find("DEFEND", 1, true),
     "Our own guild's outpost under attack showed no silent red line mid-screen")
+-- 2.3.0: keeps and outposts of other guilds stay silent unless the "other guilds" option is
+-- on (defence, assault and capture alike); a hidden alert leaves no dedup state.
+defenderAlert("silverpine", held("Ally Guild"), assault("NoMercy"))
+assert(take() == 0, "An allied guild's outpost alerted with the other-guilds option off")
+assert(defenderLast.silverpine == nil and defenderEmitted.silverpine == nil, "A hidden defence left dedup state")
+assaultAlert("silverpine", { status = "neutral" }, assault("NoMercy", "Horde", "Ally Guild"))
+assert(take() == 0, "Two other guilds' assault alerted with the other-guilds option off")
+Overlord.Sync:PrintOutpostCaptureAlert("silverpine", "NoMercy", "Horde", now - 5, "Ally Guild")
+assert(take() == 0, "Two other guilds' capture alerted with the other-guilds option off")
+OverlordDB.config.otherGuildSiteAlerts = true
 defenderAlert("silverpine", held("Ally Guild"), assault("NoMercy"))
 assert(take("ALLIED") == 1, "An allied outpost on the player's continent stayed silent")
 assert(#raidWarnings == 1, "An allied guild's outpost showed the red line meant for our own guild's sites")
@@ -227,6 +239,16 @@ playerMap = 1439
 assaultAlert("ashenvale", { status = "neutral" }, assault("NoMercy", "Horde", "Ally Guild"))
 assert(take("ASSAULT") == 1, "The assault stayed silent once the player reached Kalimdor")
 playerMap = EK
+-- 2.2.2: an abandoned assault a relay still serves (Savix Chapel, every login) is silent
+-- and leaves no dedup state; a live one on the same site still alerts.
+local abandoned = assault("Loves You", "Alliance", "Les cames")
+abandoned.updatedAt = now - 3600
+assaultAlert("silverpine", held("Les cames"), abandoned)
+assert(take() == 0, "An abandoned assault served by a relay printed an alert")
+assert(assaultLast.silverpine == nil and assaultEmitted.silverpine == nil
+    and not hasKey(assaultWaves, "silverpine:"), "A stale assault left dedup state")
+assaultAlert("silverpine", held("Les cames"), assault("Loves You", "Alliance", "Les cames"))
+assert(take("ASSAULT") == 1, "A live assault stayed silent")
 
 -- Capture alert: no line and no dedup from the other continent, unless our guild takes
 -- or loses the site. Never a sound (2.0.4: every capture rang a raid warning).
@@ -248,7 +270,8 @@ local function wireAt(siteKey, attacker)
     local saved = {}
     for k, v in pairs(st) do saved[k] = v end
     st.status, st.ownerGuild, st.ownerFaction = "in_progress", attacker, "Horde"
-    st.holdTimeElapsed, st.claimedAt, st.updatedAt, st.pool = 10, now, now, "global"
+    -- (2.3.0: past half the capture, so the alert is due at once.)
+    st.holdTimeElapsed, st.claimedAt, st.updatedAt, st.pool = 160, now, now, "global"
     local payload = assert(sync:BuildOutpostPayload(siteKey))
     for k in pairs(st) do st[k] = nil end
     for k, v in pairs(saved) do st[k] = v end
@@ -263,6 +286,19 @@ now = now + 20
 sync:OnReceiveOutpostState(wireAt("lesi_bear_cave", "No Flying"), "Channel Mate", "CHANNEL")
 assert(take("ASSAULT") == 1, "The next assault stayed silent once the player reached Kalimdor")
 playerMap = EK
+
+-- 2.3.0: our guild losing its keep or outpost to a capture final (OC, or any path through
+-- Outpost:CompleteCapture) is our guild's matter: told with the other-guilds option off.
+OverlordDB.config.otherGuildSiteAlerts = false
+do
+    local lost = op:GetState("silverpine")
+    lost.status, lost.ownerGuild, lost.ownerFaction = "held", guild, "Alliance"
+    lost.claimedAt, lost.updatedAt, lost.pool, lost.holdTimeElapsed = now - 900, now - 900, "global", 0
+    assert(op:CompleteCapture("silverpine", "NoMercy", "Horde", now, "global", true, "Enemy Tester"),
+        "Fixture: the enemy capture final was refused")
+    assert(take("CAPTURED") == 1, "Our own guild's outpost lost to a capture final stayed silent")
+end
+OverlordDB.config.otherGuildSiteAlerts = true
 
 -- 4. The option brings back the whole world.
 OverlordDB.config.worldwideAlerts = true
@@ -339,10 +375,16 @@ do
     assert(env.OverlordDB.config.worldwideAlerts == true and row.get() == true, "The option was not saved")
     row.set(false)
     assert(env.OverlordDB.config.worldwideAlerts == false and row.get() == false, "The option did not turn off")
+    -- 2.3.0: other guilds' keeps and outposts, off by default.
+    local other = registered.Overlord_OtherGuildSiteAlerts
+    assert(other and other.control == "checkbox" and other.default == false and other.get() == false,
+        "The other-guilds site alerts checkbox is missing or not off by default")
+    other.set(true)
+    assert(env.OverlordDB.config.otherGuildSiteAlerts == true and other.get() == true, "Other-guilds option not saved")
 end
 
 -- 8. Every language names the option, and the tutorial names it the same way.
-local english
+local english, otherEnglish
 for _, loc in ipairs({ "enUS", "frFR", "esES", "deDE", "ruRU", "ptBR", "zhCN" }) do
     local env = setmetatable({ GetLocale = function() return loc end }, { __index = _G })
     env.Overlord = { L = {} }
@@ -358,6 +400,15 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "deDE", "ruRU", "ptBR", "zhCN" })
         loc .. " misses the worldwide alerts option texts")
     assert(LL.GUIDE_ALERTS_BODY:find(LL.WORLDWIDE_ALERTS_LABEL, 1, true),
         loc .. ": the tutorial does not name the worldwide alerts option")
+    assert(type(LL.OTHER_GUILD_SITE_ALERTS_LABEL) == "string" and LL.OTHER_GUILD_SITE_ALERTS_LABEL ~= ""
+        and type(LL.OTHER_GUILD_SITE_ALERTS_TOOLTIP) == "string"
+        and LL.GUIDE_ALERTS_BODY:find(LL.OTHER_GUILD_SITE_ALERTS_LABEL, 1, true),
+        loc .. ": the other-guilds site alerts option is missing or not named by the tutorial")
+    if loc ~= "enUS" then
+        assert(LL.OTHER_GUILD_SITE_ALERTS_TOOLTIP ~= otherEnglish, loc .. " shows the English other-guilds tooltip")
+    else
+        otherEnglish = LL.OTHER_GUILD_SITE_ALERTS_TOOLTIP
+    end
     if loc == "enUS" then
         english = LL.WORLDWIDE_ALERTS_TOOLTIP
     else

@@ -306,8 +306,11 @@ local perturbed, touched = {}, 0
 for k, v in pairs(served) do perturbed[k] = v end
 perturbed.playerInfo = {}
 for name, info in pairs(served.playerInfo) do
+    -- Named copy: a snapshot row shared with the meta index is an array read by
+    -- name (2.2.2), pairs() would copy its slots.
     local copy = {}
-    for k, v in pairs(info) do copy[k] = v end
+    for _, k in ipairs({ "class", "level", "faction", "locale", "guild", "guildAt", "guildAuth",
+        "guildReplica", "race", "raceSex", "raceAt", "pool", "factionAt" }) do copy[k] = info[k] end
     if (tonumber(copy.guildAt) or 0) > 0 or copy.race then
         copy.guildAt = (tonumber(copy.guildAt) or 0) + 37
         copy.raceAt = (tonumber(copy.raceAt) or 0) + 11

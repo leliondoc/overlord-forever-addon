@@ -290,5 +290,17 @@ assert(loadfile("SyncRelay.lua"))()
 assert(Overlord.Relay and Overlord.Relay.LocalMapLayout and Overlord.Relay.LocalMapLayout() == "9rpf",
     "the map layout \"~y\" moved: update the golden front marks in the same change")
 
+-- 2.3.0: no table built for every ZS received (each copy, refused ones included, reached the
+-- status test through a fresh set of the four statuses).
+do
+    local f = assert(io.open("Sync.lua", "rb"))
+    local src = f:read("*a")
+    f:close()
+    local from = src:find("function Overlord.Sync:OnReceiveZoneState(", 1, true)
+    local to = from and src:find("local zone = Overlord.Zones:GetZone(zoneId)", from, true)
+    assert(from and to, "OnReceiveZoneState not found")
+    assert(not src:sub(from, to):find("{%s*in_progress%s*=%s*true"),
+        "a set of the ZS statuses is built on every ZS received")
+end
 print("Forever front mark: one mark per front, last on the wire; another layout's sieges and captures "
     .. "ignored on that front only, unmarked ones too (2.0.8 floor); our layout taken; sizes and golden values pinned")

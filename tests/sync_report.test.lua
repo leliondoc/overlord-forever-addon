@@ -95,6 +95,28 @@ local hr = assert(find(lines, "Capture history catch-up"), "History row missing"
 assert(hr:find("ReadyCheck-Waiting", 1, true) and hr:find("waiting on one peer for 655s", 1, true),
     "Stalled history catch-up not flagged: " .. hr)
 assert(lines[1]:find(YELLOW .. "worth watching", 1, true), "Header must be yellow: " .. lines[1])
+-- 2.3.0: a long ladder catch-up that still receives pages is no wait on a silent peer.
+do
+    local ladderSummary = sync.GetPagedLeaderboardSummary
+    sync.GetPagedLeaderboardSummary = function()
+        return { status = "receiving page", running = true, lastPartAge = 3, pages = 140, rows = 261, protocol = 8 }
+    end
+    lines = {}
+    SlashCmdList.OVERLORD("network")
+    local busy = assert(find(lines, "Capture history catch-up"), "History row missing")
+    assert(not busy:find("waiting on one peer", 1, true) and busy:find("pages still coming for 655s", 1, true),
+        "A catch-up still receiving pages was flagged as waiting: " .. busy)
+    sync.GetPagedLeaderboardSummary = function()
+        return { status = "awaiting reply", running = true, lastPartAge = 300, pages = 140, rows = 261, protocol = 8 }
+    end
+    lines = {}
+    SlashCmdList.OVERLORD("network")
+    busy = assert(find(lines, "Capture history catch-up"), "History row missing")
+    assert(busy:find("waiting on one peer for 655s", 1, true), "A silent catch-up lost its flag: " .. busy)
+    sync.GetPagedLeaderboardSummary = ladderSummary
+    lines = {}
+    SlashCmdList.OVERLORD("network")
+end
 -- The indicator judges the last 10 minutes, not the session: a burst of refusals
 -- (joining a group) turns green again once it leaves the window, and a lone refusal
 -- or 1 % at most is normal.

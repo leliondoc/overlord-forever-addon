@@ -563,6 +563,19 @@ local ROWS = {
             OverlordDB.config = OverlordDB.config or {}
             OverlordDB.config.worldwideAlerts = value == true
         end },
+    -- 2.3.0: off = keep and outpost alerts only when the player's guild is involved.
+    { kind = "checkbox", var = "Overlord_OtherGuildSiteAlerts", label = "OTHER_GUILD_SITE_ALERTS_LABEL",
+        fallback = "Keep and outpost alerts of other guilds", tooltip = "OTHER_GUILD_SITE_ALERTS_TOOLTIP",
+        default = false,
+        get = function()
+            local cfg = OverlordDB and OverlordDB.config
+            return cfg ~= nil and cfg.otherGuildSiteAlerts == true
+        end,
+        set = function(value)
+            if not OverlordDB then return end
+            OverlordDB.config = OverlordDB.config or {}
+            OverlordDB.config.otherGuildSiteAlerts = value == true
+        end },
 
     { kind = "header", label = "SETTINGS_SECTION_MAP", fallback = "Map and minimap" },
     { kind = "dropdown", var = SP.WorldMapModeVariableName, label = "MAP_WORLD_OVERLAYS_LABEL",

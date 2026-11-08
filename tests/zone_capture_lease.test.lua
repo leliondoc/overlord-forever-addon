@@ -1350,4 +1350,67 @@ mono = 3151 + 151
 expect(Lease:MaybeExpire(zone), "past its end, silence counts again")
 Overlord.GuildLane = nil
 
+-- 2.2.2: a copy told late (hands of the member list, an answer to a pull) starts the clock from its
+-- projected hold, and a wave past its clock that nobody renews ends after SOFT_TTL of silence, not
+-- HARD_TTL: a finished siege told late stayed orange for minutes.
+resetZone()
+mono = 4000
+expect(Lease:AdoptRemote(zone, "Alliance", "Bob",
+    { originKey = "bob", waveId = "wlate", ts = wallBase + 3940, hold = 10, observerDisplayHold = 70 }), "late adoption failed")
+zone.status = "in_progress"
+expect(zone._remoteCaptureLease.tickHold == 70 and zone._remoteCaptureLease.openedHold == 70,
+    "the clock must start from the projected hold")
+-- (the clock reaches 120 + 15 at 4000 + 65: before that, silence is not an end)
+mono = 4000 + 60
+expect(not Lease:MaybeExpire(zone), "a wave still inside its clock expired")
+mono = 4000 + 66
+expect(Lease:MaybeExpire(zone), "a wave past its clock and silent must end before HARD_TTL")
+-- A wave that keeps ticking keeps its clock young.
+resetZone()
+mono = 5000
+expect(Lease:AdoptRemote(zone, "Alliance", "Bob",
+    { originKey = "bob", waveId = "wtick", ts = wallBase + 5000, hold = 10, observerDisplayHold = 10 }), "adoption failed")
+zone.status = "in_progress"
+mono = 5130
+expect(Lease:AdoptRemote(zone, "Alliance", "Bob",
+    { originKey = "bob", waveId = "wtick", ts = wallBase + 5130, hold = 140, observerDisplayHold = 140 }), "tick refused")
+mono = 5140
+expect(not Lease:MaybeExpire(zone), "a ticking wave expired")
+-- A projection that is not a number changes nothing.
+resetZone()
+mono = 6000
+expect(Lease:AdoptRemote(zone, "Alliance", "Bob",
+    { originKey = "bob", waveId = "wnan", ts = wallBase + 6000, hold = 10, observerDisplayHold = 0 / 0 }), "adoption failed")
+expect(zone._remoteCaptureLease.tickHold == 10, "a NaN projection moved the clock")
+
+-- A sender's date and display hold buy no more than the time the state really spent on the way:
+-- the lag is bounded by the age of the stamp and by what is left of the required hold.
+resetZone()
+mono = 7000
+expect(Lease:AdoptRemote(zone, "Alliance", "Bob",
+    { originKey = "bob", waveId = "wforge1", ts = wallBase + 6995, hold = 10, observerDisplayHold = 110,
+      observerDisplayAt = wallBase + 7000 }), "adoption failed")
+expect(zone._remoteCaptureLease.tickHold == 15 and zone._remoteCaptureLease.openedHold == 15,
+    "an inflated display hold moved the clock past the age of the stamp: " .. tostring(zone._remoteCaptureLease.tickHold))
+-- Late by 90 s with 100 s of hold: the lag stops at the required hold, never past it.
+resetZone()
+mono = 7100
+expect(Lease:AdoptRemote(zone, "Alliance", "Bob",
+    { originKey = "bob", waveId = "wforge2", ts = wallBase + 7010, hold = 100, observerDisplayHold = 190,
+      observerDisplayAt = wallBase + 7100 }), "adoption failed")
+local forged = zone._remoteCaptureLease
+expect(forged.tickHold <= forged.effectiveRequired,
+    "a late copy completed the wave on its own: " .. tostring(forged.tickHold) .. "/" .. tostring(forged.effectiveRequired))
+-- No stamp: no age, no lag. The same wave ticking again keeps the same bound.
+resetZone()
+mono = 7200
+expect(Lease:AdoptRemote(zone, "Alliance", "Bob",
+    { originKey = "bob", waveId = "wforge3", ts = 0, hold = 10, observerDisplayHold = 90 }), "adoption failed")
+expect(zone._remoteCaptureLease.tickHold == 10, "a copy without a date got a lag")
+expect(Lease:AdoptRemote(zone, "Alliance", "Bob",
+    { originKey = "bob", waveId = "wforge3", ts = wallBase + 7195, hold = 20, observerDisplayHold = 120,
+      observerDisplayAt = wallBase + 7200 }), "tick refused")
+expect(zone._remoteCaptureLease.tickHold == 25, "a tick's inflated display hold moved the clock: "
+    .. tostring(zone._remoteCaptureLease.tickHold))
+
 print("zone_capture_lease: ok")

@@ -259,4 +259,27 @@ drain()
 assert(mergeTarget.playerInfo[subject].guild == ""
     and mergeTarget.playerInfo[subject].guildAuth == true,
     "Global-pool migration resurrected a confirmed departure")
+-- 2.2.2: equal totals in a guild's top ten are ordered by name, whatever order the rows come
+-- in (two clients with the same ranking show the same ten names).
+local function tieSummary(order)
+    lb.kills, lb.playerInfo = {}, {}
+    for _, name in ipairs(order) do
+        lb.kills[name] = (name:sub(1, 3) == "Top") and 90 or 40
+        lb.playerInfo[name] = { guild = "Tie Guild", faction = "Horde" }
+    end
+    assert(lb:RebuildNetworkHotIndexes())
+    lb:MarkDirty()
+    assert(lb:StartDisplayCacheBuild())
+    drain()
+    local summary = assert(lb:GetGuildMembersSummary("Tie Guild"))
+    return table.concat(summary.names, ",")
+end
+local tied = {}
+for i = 1, 8 do tied[#tied + 1] = "Top" .. string.char(96 + i) end
+for _, name in ipairs({ "Tie Zed", "Tie Bob", "Tie Max", "Tie Amy" }) do tied[#tied + 1] = name end
+local forward = tieSummary(tied)
+local reversed = {}
+for i = #tied, 1, -1 do reversed[#reversed + 1] = tied[i] end
+assert(forward == tieSummary(reversed), "a guild's top ten depends on row order: " .. forward)
+assert(forward:find("Tie Amy,Tie Bob$"), "equal totals not ordered by name: " .. forward)
 print("Forever guild totals: all members, dedup, unavailable API and genuine departures OK")

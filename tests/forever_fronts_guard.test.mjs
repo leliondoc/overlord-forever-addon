@@ -187,8 +187,8 @@ test("One-shot popups are marked seen when shown", () => {
     assert.match(popups, /seen\[id\]\) then return true/);
     assert.match(popups, /v == true or v == 1/);
     assert.doesNotMatch(popups, /if not ACTIVE_ONE_SHOT_POPUP_IDS\[id\] then/);
-    assert.match(core, /Overlord\.Popups:CommitPendingPopupMark\(\)/);
-    assert.match(core, /Overlord\.Popups:PersistSeenFlags\(\)/);
+    assert.match(core, /persist\(Overlord\.Popups, "CommitPendingPopupMark"\)/);
+    assert.match(core, /persist\(Overlord\.Popups, "PersistSeenFlags"\)/);
 });
 
 test("Domination bar v2 counts events: no zone-time ticker, no DX producer", () => {

@@ -393,7 +393,8 @@ Overlord.PrintNotification = function(_, text) if type(text) == "string" and tex
 -- 2.0.4: the red line mid-screen for our guild's site (silent), counted apart from chat.
 local savedRaidWarning, onScreen = Overlord.PrintRaidWarning, 0
 Overlord.PrintRaidWarning = function(_, _, silent) if silent then onScreen = onScreen + 1 end end
-sync:OnReceiveOutpostState(string.format("v1:silverpine:in_progress:10:Horde Guild:H:0:0:%d:300:global:0:::0:0:Horde Attacker", now), "Horde Attacker-Forever", "CHANNEL")
+-- (2.3.0: past half the capture, 160 of 300 s, so the warning is due at once.)
+sync:OnReceiveOutpostState(string.format("v1:silverpine:in_progress:160:Horde Guild:H:0:0:%d:300:global:0:::0:0:Horde Attacker", now), "Horde Attacker-Forever", "CHANNEL")
 assert(warned == 1, "an assault naming no previous tenant did not warn the defenders: " .. warned)
 assert(onScreen == 1, "our guild's outpost under attack showed no silent red line mid-screen")
 Overlord.PrintRaidWarning = savedRaidWarning
@@ -838,6 +839,10 @@ lb.playerInfo["Horde Capper"].faction = "Horde"
 assert(sync:NoteOutpostClaimPeer("Helper Tester", "A:1.7.2:0::H"))
 sync:OnReceiveLeaderboardOutpostCount(locWire("silverpine", "Horde Guild", "Horde", { { now - 400, "Horde Capper" } }), helper, "WHISPER")
 assert(count("silverpine", "Horde Guild") == 1, "the missed enemy capture was not learned from the reply")
+-- 2.3.0: the assault went quiet long ago (only its besieged tenant shows): the map follows the
+-- missed capture the reply brought, as for a held site, instead of keeping the old tenant.
+assert(retaken.status == "held" and retaken.ownerGuild == "Horde Guild" and retaken.ownerFaction == "Horde",
+    "a stale assault kept the map off the ledger's tenant: " .. tostring(retaken.status) .. " " .. tostring(retaken.ownerGuild))
 local retaker = "Retake Tester"
 know(retaker, "Night Guild")
 sync:OnReceiveOutpostCapture(ocWire("silverpine", "Night Guild", "Alliance", now - 10, retaker), retaker .. "-Forever", "CHANNEL")
@@ -897,20 +902,20 @@ sync:OnReceiveOutpostCapture(ocWire("silverpine", "Fortress Guild", "Alliance", 
 local warnedAgain = 0
 Overlord.PrintNotification = function(_, text) if type(text) == "string" and text:find("UNDER ATTACK", 1, true) then warnedAgain = warnedAgain + 1 end end
 tick(5)
-sync:OnReceiveOutpostState(string.format("v1:silverpine:in_progress:10:Horde Guild:H:0:0:%d:300:global:0:::0:0:Horde Attacker", now), "Horde Attacker-Forever", "CHANNEL")
+sync:OnReceiveOutpostState(string.format("v1:silverpine:in_progress:160:Horde Guild:H:0:0:%d:300:global:0:::0:0:Horde Attacker", now), "Horde Attacker-Forever", "CHANNEL")
 assert(warnedAgain == 1, "fixture assault did not warn: " .. warnedAgain)
 tick(5)
 sync:OnReceiveOutpostState(string.format("v1:silverpine:neutral:0:::0:0:%d:300:global:0", now), "Horde Attacker-Forever", "CHANNEL")
 assert(op:GetState("silverpine").status == "held", "fixture abandon did not restore the tenant")
 tick(400)
-sync:OnReceiveOutpostState(string.format("v1:silverpine:in_progress:10:Horde Guild:H:0:0:%d:300:global:0:::0:0:Horde Attacker", now), "Horde Attacker-Forever", "CHANNEL")
+sync:OnReceiveOutpostState(string.format("v1:silverpine:in_progress:160:Horde Guild:H:0:0:%d:300:global:0:::0:0:Horde Attacker", now), "Horde Attacker-Forever", "CHANNEL")
 assert(warnedAgain == 2, "the defenders were not warned of the next assault: " .. warnedAgain)
 -- Same when the assailant ends it by putting the tenant back himself.
 tick(5)
 sync:OnReceiveOutpostState(heldWire("silverpine", "Fortress Guild", "Alliance", ts, capper, nil, now), "Horde Attacker-Forever", "CHANNEL")
 assert(op:GetState("silverpine").status == "held", "the assailant's own tenant copy did not end his assault")
 tick(400)
-sync:OnReceiveOutpostState(string.format("v1:silverpine:in_progress:10:Horde Guild:H:0:0:%d:300:global:0:::0:0:Horde Attacker", now), "Horde Attacker-Forever", "CHANNEL")
+sync:OnReceiveOutpostState(string.format("v1:silverpine:in_progress:160:Horde Guild:H:0:0:%d:300:global:0:::0:0:Horde Attacker", now), "Horde Attacker-Forever", "CHANNEL")
 assert(warnedAgain == 3, "the defenders were not warned after a tenant copy: " .. warnedAgain)
 Overlord.PrintNotification = function() end
 print("Outpost claims: alerts re-armed after a restored tenant")
@@ -921,7 +926,7 @@ tick(300)
 ts = now - 1500
 sync:OnReceiveOutpostCapture(ocWire("silverpine", "Fortress Guild", "Alliance", ts, capper), capper .. "-Forever", "CHANNEL")
 tick(5)
-sync:OnReceiveOutpostState(string.format("v1:silverpine:in_progress:10:Horde Guild:H:0:0:%d:300:global:0:::0:0:Horde Attacker", now), "Horde Attacker-Forever", "CHANNEL")
+sync:OnReceiveOutpostState(string.format("v1:silverpine:in_progress:160:Horde Guild:H:0:0:%d:300:global:0:::0:0:Horde Attacker", now), "Horde Attacker-Forever", "CHANNEL")
 tick(1)
 sync:OnReceiveOutpostState(string.format("v1:silverpine:in_progress:12:Horde Guild:H:0:0:%d:300:global:0:::0:0:", now), "Observer Tester-Forever", "CHANNEL")
 assert(op:GetState("silverpine").opRelayCapturerName == "Horde Attacker", "an observer copy erased the assailant")
@@ -930,7 +935,7 @@ sync:OnReceiveOutpostState(string.format("v1:silverpine:neutral:0:::0:0:%d:300:g
 assert(op:GetState("silverpine").status == "held", "the assailant could not end his assault after an observer copy")
 -- A stranger naming himself assailant of another guild ends nothing.
 tick(5)
-sync:OnReceiveOutpostState(string.format("v1:silverpine:in_progress:10:Other Horde:H:0:0:%d:300:global:0:::0:0:Troll Player", now), "Troll Player-Forever", "CHANNEL")
+sync:OnReceiveOutpostState(string.format("v1:silverpine:in_progress:160:Other Horde:H:0:0:%d:300:global:0:::0:0:Troll Player", now), "Troll Player-Forever", "CHANNEL")
 tick(5)
 sync:OnReceiveOutpostState(string.format("v1:silverpine:neutral:0:::0:0:%d:300:global:0", now), "Troll Player-Forever", "CHANNEL")
 assert(op:GetState("silverpine").status == "in_progress", "a stranger naming himself assailant hid an assault")
@@ -989,6 +994,8 @@ do
         else
             st.status, st.previousOwnerGuild, st.previousOwnerFaction, st.previousClaimedAt = "in_progress", "Horde Guild", "Horde", now - 3000
             st.ownerGuild, st.ownerFaction, st.claimedAt = "Assault Guild", "Alliance", 0
+            -- (live: heard just now, its clock still running)
+            st.updatedAt, st.holdTimeElapsed = now, 10
         end
         assert(sync:NoteOutpostClaimPeer("Helper Tester", "A:1.7.2:0::H"))
         sync:OnReceiveLeaderboardOutpostTenant(loWire("badlands", "Fortress Guild", "Alliance", now - 100, follower), helper, "WHISPER")

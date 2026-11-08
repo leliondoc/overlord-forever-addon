@@ -343,5 +343,213 @@ net.context = { transport = "WHISPER", targeted = true }
 assert(not lane:HeardHere(), "an addressed whisper is heard here")
 net.context = nil
 
+-- 9. 2.2.2: players that greeted us outside our list get a few copies (leaves), never our total;
+-- fights (FK) ride the chain within their own cap and keep the tokens of captures; a fact capped
+-- by the tokens costs nothing of the minute's intake.
+advance(120)
+dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+local leafNames = { "Leaf Una", "Leaf Duo", "Leaf Tria" }
+for _, name in ipairs(leafNames) do dir.partners[name:lower()] = { name = name, heardAt = clock, chainAt = clock } end
+local function isLeaf(name)
+    for _, leaf in ipairs(leafNames) do if leaf == name then return true end end
+    return false
+end
+targets = dir:ChainTargets(packet("C", capture("leaf_point", "Alliance", now)), 1)
+local leafCount = 0
+for _, name in ipairs(targets or {}) do if isLeaf(name) then leafCount = leafCount + 1 end end
+assert(targets and #targets == 10 + dir.LEAF_FANS and leafCount == dir.LEAF_FANS,
+    "contacts then leaves: " .. #(targets or {}) .. ", leaves " .. leafCount)
+-- 2.3.0: a leaf's own fact is passed on (a player out of the lists starts a siege alone); what a
+-- leaf passes on for somebody else is a stranger's copy.
+local fromLeaf = packet("C", capture("elwynn_mirror_lake", "Alliance", GetServerTime()), { "Leaf Una", me }, "WHISPER")
+local strangers = stats.chainStranger
+dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+assert(dir:ChainTargets(fromLeaf, 1) and stats.chainStranger == strangers, "a leaf's own fact was not passed on")
+local leafRelay = packet("C", capture("elwynn_fargodeep", "Alliance", GetServerTime() + 1), { "Some Author", "Leaf Una", me }, "WHISPER")
+assert(dir:ChainTargets(leafRelay, 1) == nil and stats.chainStranger == strangers + 1,
+    "a leaf's copy of somebody else's fact passed on")
+local unknown = packet("C", capture("elwynn_fargodeep", "Alliance", GetServerTime() + 2), { "Never Greeted", me }, "WHISPER")
+assert(dir:ChainTargets(unknown, 1) == nil and stats.chainStranger == strangers + 2,
+    "a whisper of somebody who never greeted us passed on")
+-- Fights: FK_PER_MIN brackets a minute, and never below FK_RESERVE tokens.
+advance(61)
+dir.CHAIN_BURST, dir.chain.tokens, dir.chain.at = 1000, 1000, clock
+local fights = 0
+for i = 1, dir.FK_PER_MIN + 4 do
+    if dir:ChainTargets(packet("FK", "bracket" .. i .. ":elwynn:3:2", { "Guild Mate", me }, "GUILD"), 1) then
+        fights = fights + 1
+    end
+end
+assert(fights == dir.FK_PER_MIN, "fights passed on per minute: " .. fights)
+-- Our own front's fight still leaves once the minute is full of others'.
+assert(dir:ChainTargets(packet("FK", "bracket_own:elwynn:3:2"), 1), "our own fight capped by the forwards")
+-- Guild rampages (GW): only one GuildKillAlert would show, once per guild every GW_COVER_SEC, and
+-- GW_PER_MIN passed on a minute on their own count.
+if not Overlord.GuildKillAlert then assert(loadfile("GuildKillAlert.lua"))() end
+local gwAt = GetServerTime()
+assert(dir:ChainTargets(packet("GW", "1:Some Guild:H:12:5:::" .. gwAt), 1) == nil, "a rampage below the threshold rides the chain")
+assert(dir:ChainTargets(packet("GW", "1:Some Guild:H:40:8:::" .. (gwAt - 900)), 1) == nil, "an old rampage rides the chain")
+local rampage = dir:ChainTargets(packet("GW", "1:Some Guild:H:40:8:::" .. gwAt), 1)
+assert(rampage and #rampage <= dir.FK_FAN + dir.LEAF_FANS, "a rampage does not ride the chain within the fights' fan")
+assert(dir:ChainTargets(packet("GW", "1:some guild:H:60:9:::" .. gwAt), 1) == nil, "the same guild's rampage told twice")
+local rampages = 0
+for i = 1, dir.GW_PER_MIN + 3 do
+    if dir:ChainTargets(packet("GW", "1:Guild " .. string.char(64 + i) .. ":H:40:8:::" .. gwAt, { "Guild Mate", me }, "GUILD"), 1) then
+        rampages = rampages + 1
+    end
+end
+assert(rampages == dir.GW_PER_MIN, "rampages passed on per minute: " .. rampages)
+assert(dir:ChainTargets(packet("FK", "bracket_after_gw:elwynn:3:2", { "Guild Mate", me }, "GUILD"), 1) == nil,
+    "the fights' minute is not full any more")
+dir.CHAIN_BURST = 30
+advance(61)
+dir.chain.tokens, dir.chain.at = dir.FK_RESERVE, clock
+assert(dir:ChainTargets(packet("FK", "bracket_reserve:elwynn:3:2"), 1) == nil, "a fight spent the reserve")
+assert(dir:ChainTargets(packet("C", capture("reserve_point", "Alliance", now)), 1), "a capture still goes")
+-- Capped by the tokens: the gateway's intake is not spent.
+advance(61)
+dir.chain.tokens, dir.chain.at = 0, clock
+local starved = packet("C", capture("starved_point", "Alliance", GetServerTime()), { contacts[5], me }, "WHISPER")
+local unvouched = stats.chainUnvouched
+assert(dir:ChainTargets(starved, 1) == nil and stats.chainUnvouched == unvouched, "no tokens, no chain")
+local intake = dir.chain.intake[contacts[5]:lower()]
+assert(not intake or intake.count == 0, "a capped fact spent the intake: " .. tostring(intake and intake.count))
+assert(dir.chain.minute.count == 0, "a capped fact spent the minute: " .. dir.chain.minute.count)
+-- Said offline: no copies until it greets again.
+dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+for _, name in ipairs(leafNames) do dir.partners[name:lower()] = nil end
+for i = 1, 25 do dir.partners[contacts[i]:lower()].unreachableUntil = clock + 100 end
+targets = dir:ChainTargets(packet("C", capture("offline_point", "Alliance", now)), 1)
+for _, name in ipairs(targets or {}) do
+    assert((dir.partners[name:lower()].unreachableUntil or 0) <= clock, "an offline contact got a copy: " .. name)
+end
+for i = 1, 25 do dir.partners[contacts[i]:lower()].unreachableUntil = nil end
+
+-- 2.2.2: a release goes to the hands its start went to; our own total also goes to the rampage
+-- collectors of the guild (the same two mates for every member), inside the same fan.
+do
+    dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+    dir.chain.cover, dir.chain.starts, dir.chain.rankAt, dir.chain.minute = {}, {}, nil, { at = -1000, count = 0 }
+    dir.chain.intake = {}
+    local started = GetServerTime()
+    local first = dir:ChainTargets(packet("ZS", siege("pin_point", "A", started, "wpin")), 1)
+    assert(first and #first == 10, "the start of the pinned release")
+    advance(30)
+    dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+    local second = dir:ChainTargets(packet("ZR", release("pin_point", "wpin")), 1)
+    assert(second and #second >= #first, "the release of the pinned start")
+    local told = {}
+    for _, name in ipairs(second) do told[name] = true end
+    for _, name in ipairs(first) do assert(told[name], name .. " heard the start and not its release") end
+    -- A forwarder passes the release to the contacts it passed the start to.
+    local viaHand = packet("ZS", siege("pin_other", "A", GetServerTime(), "wpin2"), { contacts[1], me }, "WHISPER")
+    local passed = dir:ChainTargets(viaHand, 1)
+    assert(passed and #passed > 0, "a start passed on")
+    advance(30)
+    dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+    local back = dir:ChainTargets(packet("ZR", release("pin_other", "wpin2"), { contacts[1], me }, "WHISPER"), 1)
+    local backTold = {}
+    for _, name in ipairs(back or {}) do backTold[name] = true end
+    for _, name in ipairs(passed) do assert(backTold[name], name .. " got the start from us and not the release") end
+
+    -- Rampage collectors.
+    function GetGuildInfo() return "Test Guild" end
+    local mates, collectors = {}, {}
+    lane.peers = {}
+    for i = 1, 8 do
+        local name = "Mate " .. string.char(64 + i) .. "x"
+        mates[i] = name
+        lane.peers[name:lower()] = clock
+        net.peers[name:lower()] = { name = name, at = clock, hops = 1 }
+        dir.partners[name:lower()] = { name = name, heardAt = clock }
+    end
+    lane.PeerCount = function() return 8 end
+    local ranked = { { me:lower(), net.HashFrac("test guild|" .. me:lower()) } }
+    for _, name in ipairs(mates) do ranked[#ranked + 1] = { name:lower(), net.HashFrac("test guild|" .. name:lower()) } end
+    table.sort(ranked, function(a, b) return a[2] < b[2] end)
+    for i = 1, dir.RAMPAGE_COLLECTORS do
+        if ranked[i][1] ~= me:lower() then collectors[ranked[i][1]] = true end
+    end
+    dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+    local own = dir:ChainTargets(packet("K", "total"), 1)
+    assert(own and #own == dir.RANK_FAN and distinct(own), "a total goes to the usual fan: " .. tostring(own and #own))
+    local got = {}
+    for _, name in ipairs(own) do got[name:lower()] = true end
+    local expected = 0
+    for key in pairs(collectors) do
+        expected = expected + 1
+        assert(got[key], key .. " is a collector and heard no total")
+    end
+    assert(expected >= 1, "no collector was drawn")
+    assert(stats.chainRampage >= expected, "the collectors are not counted")
+    -- The same two for the next total (a guild mate draws the same).
+    advance(31)
+    dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+    local again = dir:ChainTargets(packet("K", "total 2"), 1)
+    local gotAgain = {}
+    for _, name in ipairs(again or {}) do gotAgain[name:lower()] = true end
+    for key in pairs(collectors) do assert(gotAgain[key], key .. " is not a collector any more") end
+    -- Too few mates for a rampage: the fan is the contacts' alone.
+    lane.PeerCount = function() return 2 end
+    advance(31)
+    dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+    local small = dir:ChainTargets(packet("K", "total 3"), 1)
+    for _, name in ipairs(small or {}) do assert(not name:find("^Mate "), "a mate heard a total of a guild too small for a rampage") end
+    lane.PeerCount = function() return 40 end
+end
+
+-- 10. Our own fight bracket already told (covered): the chain takes it, so FrontActivity does not
+-- send its report again.
+do
+    advance(61)
+    dir.CHAIN_BURST, dir.chain.tokens, dir.chain.at = 1000, 1000, clock
+    assert(dir:ChainTargets(packet("FK", "bracket_cover:elwynn:3:2"), 1), "our own fight did not go the first time")
+    dir.ownFKTaken = nil
+    assert(dir:ChainTargets(packet("FK", "bracket_cover:elwynn:3:2"), 1) == nil, "a fight told twice went along twice")
+    assert(dir.ownFKTaken and dir.ownFKTaken["bracket_cover:elwynn:3:2"],
+        "a covered fight of ours was not marked as taken")
+    -- Somebody else's covered copy is not ours to mark.
+    dir.ownFKTaken = nil
+    assert(dir:ChainTargets(packet("FK", "bracket_cover:elwynn:3:2", { "Guild Mate", me }, "GUILD"), 1) == nil)
+    assert(not (dir.ownFKTaken and dir.ownFKTaken["bracket_cover:elwynn:3:2"]), "a forwarded fight was marked as ours")
+end
+
+-- 11. 2.3.0: a fight bracket passed on for others that a fresher one known here covers
+-- (FrontActivity:CoversRelayedBracket) is not passed on and spends nothing of the fights' minute;
+-- our own bracket is never checked against the brackets heard.
+do
+    advance(61)
+    dir.CHAIN_BURST, dir.chain.tokens, dir.chain.at = 1000, 1000, clock
+    local covered, asked = { ["1:elwynn:10:5"] = true, ["1:elwynn:5:9"] = true }, {}
+    local savedFA = Overlord.FrontActivity
+    Overlord.FrontActivity = { CoversRelayedBracket = function(_, payload)
+        asked[payload] = true
+        return covered[payload] == true
+    end }
+    local coveredBefore = stats.chainCovered
+    assert(dir:ChainTargets(packet("FK", "1:elwynn:10:5", { contacts[21], me }, "WHISPER"), 1) == nil,
+        "a covered fight bracket was passed on")
+    assert(stats.chainCovered == coveredBefore + 1, "a covered fight bracket was not counted as covered")
+    local passed = 0
+    for i = 1, dir.FK_PER_MIN do
+        if dir:ChainTargets(packet("FK", "1:elwynn:20:" .. (5 + i), { contacts[21 + i], me }, "WHISPER"), 1) then
+            passed = passed + 1
+        end
+    end
+    assert(passed == dir.FK_PER_MIN, "a covered bracket spent the fights' minute: " .. passed)
+    assert(dir:ChainTargets(packet("FK", "1:elwynn:5:9"), 1), "our own fight bracket was held back")
+    assert(not asked["1:elwynn:5:9"], "our own fight bracket was checked against the brackets heard")
+    Overlord.FrontActivity = savedFA
+end
+
+-- 12. 2.3.0: a fight bracket passed on reaches five contacts: the relay's four names allow three hands
+-- after the author, and hands of four (1 + 4 + 16 + 64 = 85) could never cover a 93-player list.
+do
+    advance(61)
+    dir.CHAIN_BURST, dir.chain.tokens, dir.chain.at = 1000, 1000, clock
+    local fan = dir:ChainTargets(packet("FK", "1:elwynn:30:12", { contacts[21], me }, "WHISPER"), 1)
+    assert(fan and #fan == 5, "a passed-on fight bracket reached " .. tostring(fan and #fan) .. " contacts, not 5")
+end
+
 print("Directory chain: fans, cover, start and release, guild speakers, caps, tokens, vouched map news, "
-    .. "silent sieges OK")
+    .. "silent sieges, leaves, fights, intake, offline contacts OK")

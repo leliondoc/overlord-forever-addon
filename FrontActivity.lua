@@ -123,6 +123,7 @@ function FA:ResetForCampaign()
     end
     wipe(killSlotsByFront)
     wipe(killLastAtByKey)
+    self._relayPassed = nil
     worldKeyCount = 0
     wipe(reportedByKey)
     reportedCount = 0
@@ -675,6 +676,12 @@ local REPORT_REFRESH_MARGIN = 90
 local REPORT_MAX_KEYS = 32
 local REPORT_MAX_PAYLOAD = 48
 local pendingReport = {}
+local retryByKey = {}
+-- 2.2.2: every accepted send has its own 8 s check, apart from the 21 s retries (a shared flag
+-- skipped the check of a newer bracket of the same fight, or the retry of a refused one); a
+-- check whose send was replaced by a newer one does nothing.
+-- 2.2.2: late refusals tried again twice at most per fight and bracket (the payload changes each slot).
+local lateRetries = { n = 0 }
 
 local function IsWorldKey(key)
     return type(key) == "string" and key:sub(1, 1) == "#"
@@ -797,10 +804,45 @@ local function SendReport(key, bracket, now)
         -- Refuse (relais sature ou absent) : rien n'est couvert ni affiche, nouvel essai
         -- dans 20 s au plus tot (pas a chaque kill).
         ownSentByKey[key] = { bracket = bracket, expiresAt = now + REPORT_REFRESH_MARGIN + 20 }
+        -- 2.2.2: tried again once that wait is over, even if no other kill comes (a fight that
+        -- stops on its last kill stayed off every panel).
+        if C_Timer and C_Timer.After and not retryByKey[key] then
+            retryByKey[key] = true
+            C_Timer.After(21, function()
+                retryByKey[key] = nil
+                if not Overlord.InstanceSuspended then MaybeScheduleReport(key, ActivityNow()) end
+            end)
+        end
         return false
     end
     -- Notre envoi couvre ce palier meme si la table des paliers recus est pleine.
-    ownSentByKey[key] = { bracket = bracket, expiresAt = expiresAt }
+    local mine = { bracket = bracket, expiresAt = expiresAt }
+    ownSentByKey[key] = mine
+    -- 2.2.2: without the channel the relay queue hands it to the whisper chain later, which may
+    -- take nothing (no spare token, no contact): checked once a little later, and if so told as
+    -- refused (tried again in 20 s), not covered for minutes.
+    local dir = Overlord.ChannelDirectory
+    if dir and dir.IsActive and dir:IsActive() and C_Timer and C_Timer.After then
+        C_Timer.After(8, function()
+            local took = dir.ownFKTaken
+            if Overlord.InstanceSuspended or ownSentByKey[key] ~= mine or mine.heard
+                or (took and took[payload]) or not (dir.IsActive and dir:IsActive()) then return end
+            local tries = key .. ":" .. bracket
+            if (lateRetries[tries] or 0) >= 2 then return end
+            if lateRetries.n >= 32 then lateRetries = { n = 0 } end
+            if not lateRetries[tries] then lateRetries.n = lateRetries.n + 1 end
+            lateRetries[tries] = (lateRetries[tries] or 0) + 1
+            mine.expiresAt = ActivityNow() + REPORT_REFRESH_MARGIN + 20
+            -- (Our own copy of it goes too: kept, it would cover the bracket for minutes.)
+            local entries = reportedByKey[key]
+            if entries and entries[bracket] == expiresAt then entries[bracket] = nil end
+            retryByKey[key] = true
+            C_Timer.After(21, function()
+                retryByKey[key] = nil
+                if not Overlord.InstanceSuspended then MaybeScheduleReport(key, ActivityNow()) end
+            end)
+        end)
+    end
     StoreReport(key, bracket, expiresAt, now)
     if IsWorldKey(key) then
         TrackWorldKey(key, slot * REPORT_SLOT_SEC, now)
@@ -905,6 +947,15 @@ function FA:OnReceiveKillBracket(payload, sender, sourceChannel)
     local at = slot * REPORT_SLOT_SEC
     if at > now + 60 or now - at > ACTIVITY_WINDOW then return false end
     at = math.min(at, now)
+    -- (2.2.2) Our very bracket told back by a trusted sender: covered, no late retry for it.
+    local own = ownSentByKey[key]
+    if own and own.bracket == bracket and own.expiresAt == at + ACTIVITY_WINDOW then own.heard = true end
+    -- (2.2.2) Une copie deja connue d'un palier de front (relais, chaine, Battle.net) sort
+    -- avant les budgets : elle ne consomme plus la place d'un vrai palier distinct.
+    if not IsWorldKey(key) then
+        local known = reportedByKey[key]
+        if known and (known[bracket] or 0) >= at + ACTIVITY_WINDOW then return false end
+    end
     -- Budgets avant toute recherche de carte : la passerelle d'abord (un faussaire qui
     -- change de nom passe par la meme), puis l'expediteur.
     local sync = Overlord.Sync
@@ -929,6 +980,63 @@ function FA:OnReceiveKillBracket(payload, sender, sourceChannel)
     if not StoreReport(resolved, bracket, at + ACTIVITY_WINDOW, now) then return false end
     PublishActivityChange(resolved)
     return true
+end
+
+-- 2.3.0: a bracket the whisper chain may pass on for somebody else: a known front or a world key, a
+-- listed bracket, a slot within the activity window (what OnReceiveKillBracket takes). A forged one
+-- dated far ahead went from hand to hand and covered the real brackets of its front for the whole
+-- session. Returns key, bracket, slot, or nil.
+function FA:IsLiveBracket(payload)
+    if type(payload) ~= "string" or #payload > REPORT_MAX_PAYLOAD then return nil end
+    local key, bracketStr, slotStr = payload:match("^1:([^:]+):(%d+):(%d+)$")
+    local bracket, slot = tonumber(bracketStr), tonumber(slotStr)
+    if not key or not REPORT_BRACKET_OK[bracket] or not slot then return nil end
+    if bracket < 5 and IsWorldKey(key) then return nil end
+    if not (key:match("^#%d+$") or IsKnownFrontId(key)) then return nil end
+    local at, now = slot * REPORT_SLOT_SEC, ActivityNow()
+    if at > now + 60 or now - at > ACTIVITY_WINDOW then return nil end
+    return key, bracket, slot
+end
+
+-- 2.3.0: a bracket the whisper chain would pass on for somebody else (SyncDirectory ChainTargets)
+-- that a fresher one known here covers: at least as high and valid more than REPORT_REFRESH_MARGIN
+-- (what keeps an author's own report quiet, ReportCovers), and not that very copy (a higher
+-- bracket, or the same one of a later slot). Read only: nothing stored, nothing sent.
+-- (Only brackets this client passed on itself cover: one stored but never passed on, a stranger's
+-- for instance, would stop the real ones. And only one living at least as long as the copy: a newer
+-- lower bracket of a fading fight still goes, or the panels behind us drop the fight sooner.)
+function FA:CoversRelayedBracket(payload)
+    if type(payload) ~= "string" or #payload > REPORT_MAX_PAYLOAD then return false end
+    local key, bracket, slot = self:IsLiveBracket(payload)
+    if not key then return false end
+    local now = ActivityNow()
+    local entries = self._relayPassed and self._relayPassed[key]
+    if not entries then return false end
+    local copyExpiresAt = slot * REPORT_SLOT_SEC + ACTIVITY_WINDOW
+    for passed, expiresAt in pairs(entries) do
+        if expiresAt - now > REPORT_REFRESH_MARGIN and expiresAt >= copyExpiresAt
+            and (passed > bracket or (passed == bracket and expiresAt > copyExpiresAt)) then
+            return true
+        end
+    end
+    return false
+end
+
+-- 2.3.0: a bracket the whisper chain passed on for somebody else (SyncDirectory ChainTargets).
+-- Bounded: expired rows go, and past 64 fights the table starts again.
+function FA:NoteRelayedBracketPassed(payload)
+    if type(payload) ~= "string" or #payload > REPORT_MAX_PAYLOAD then return end
+    local key, bracket, slot = self:IsLiveBracket(payload)
+    if not key then return end
+    local now, store = ActivityNow(), self._relayPassed
+    if not store or (store.n or 0) >= 64 then store = { n = 0 }; self._relayPassed = store end
+    local entries = store[key]
+    if not entries then entries = {}; store[key] = entries; store.n = store.n + 1 end
+    for passed, expiresAt in pairs(entries) do
+        if expiresAt <= now then entries[passed] = nil end
+    end
+    local expiresAt = slot * REPORT_SLOT_SEC + ACTIVITY_WINDOW
+    if (entries[bracket] or 0) < expiresAt then entries[bracket] = expiresAt end
 end
 
 local function WorldRowBefore(a, b)
@@ -1158,9 +1266,10 @@ if Sync then
     end
 
     local origSendWhisper = Sync.SendWhisper
-    function Sync:SendWhisper(msgType, data, target)
+    -- (direct, the 4th argument: one raw whisper even to a relay peer, the relay's bridge LK rows.)
+    function Sync:SendWhisper(msgType, data, target, direct)
         if msgType == "SR" then ExpectSyncResponse(target, false) end
-        return origSendWhisper(self, msgType, data, target)
+        return origSendWhisper(self, msgType, data, target, direct)
     end
 
     local origSendToBNet = Sync.SendToBNet
@@ -1203,9 +1312,10 @@ if Sync then
         return origBroadcastZoneState(self, zone, forceBNetZS, primaryOnly)
     end
 
-    function Sync:AppendFrontActivityToSrQueue(queue, directReply)
+    -- bracketsOnly (2.3.0): a map answer to a territorial request carries the brackets, not FA.
+    function Sync:AppendFrontActivityToSrQueue(queue, directReply, bracketsOnly)
         if type(queue) ~= "table" then return end
-        local payload = FA:BuildSyncPayload()
+        local payload = not bracketsOnly and FA:BuildSyncPayload() or nil
         if payload then
             queue[#queue + 1] = { type = "FA", data = payload }
         end

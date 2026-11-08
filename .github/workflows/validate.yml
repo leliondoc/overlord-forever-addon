@@ -68,9 +68,19 @@ jobs:
           lua5.1 tests/forever_next_objective.test.lua
           lua5.1 tests/forever_shard_factions.test.lua
           lua5.1 tests/forever_whisper_offline_filter.test.lua
+          lua5.1 tests/forever_group_pace.test.lua
           lua5.1 tests/forever_leaderboard_pages.test.lua
           lua5.1 tests/forever_paged_v8_rows.test.lua
           lua5.1 tests/forever_meta_index_compact.test.lua
+          lua5.1 tests/forever_meta_memory_reuse.test.lua
+          lua5.1 tests/forever_meta_index_memory.test.lua
+          lua5.1 tests/forever_cocapture_enemy_guard.test.lua
+          lua5.1 tests/forever_map_batch_retry.test.lua
+          lua5.1 tests/forever_ladder_wide_rounds.test.lua
+          lua5.1 tests/forever_ladder_settle.test.lua
+          lua5.1 tests/forever_outpost_hunt_fixes.test.lua
+          lua5.1 tests/forever_zone_heal_order.test.lua
+          lua5.1 tests/forever_ladder_settle_guild.test.lua
           lua5.1 tests/forever_name_memo.test.lua
           lua5.1 tests/audit_ranking_v6.test.lua
           lua5.1 tests/audit_v6_silent_first_request.test.lua
@@ -178,6 +188,7 @@ jobs:
           lua5.1 tests/forever_most_wanted.test.lua
           lua5.1 tests/forever_group_finder.test.lua
           lua5.1 tests/forever_group_finder_ui.test.lua
+          lua5.1 tests/forever_group_finder_relay.test.lua
           lua5.1 tests/forever_ranks.test.lua
           lua5.1 tests/forever_ranks_seal.test.lua
           lua5.1 tests/forever_ranks_launch_reset.test.lua

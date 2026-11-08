@@ -63,6 +63,13 @@ if s.GetAttestedLeaderboardSnapshot and Overlord.GetCurrentCampaignStartTs then
     assert(s:GetAttestedLeaderboardSnapshot() == nil, "A Normal client served a PvP snapshot")
     legacy.pool = "pve"
     assert(s:GetAttestedLeaderboardSnapshot() == legacy, "A Normal client refused its own snapshot")
+    -- 2.2.2: a bucket kept on an equivalent anchor (CheckWeeklyReset's 36 h tolerance) still
+    -- serves its week; last week's never does.
+    legacy.campaignStart = start - 13 * 3600
+    assert(s:GetAttestedLeaderboardSnapshot() == legacy, "an equivalent week anchor refused its own snapshot")
+    legacy.campaignStart = start - 7 * 86400
+    assert(s:GetAttestedLeaderboardSnapshot() == nil, "last week's snapshot served as this week's")
+    legacy.campaignStart = start
 end
 
 -- 2.1.0: Roleplay PvP never mixes with Roleplay nor with PvP, in either direction.

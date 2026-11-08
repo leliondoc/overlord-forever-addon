@@ -39,6 +39,8 @@ local HISTORY_LEASE_SEC = 15 * 60
 local HISTORY_FRESH_RETRY_SEC = 30 * 60
 -- Un voisin occupe ou interrompu cede sa place quelques instants aux autres.
 local BUSY_PEER_SEC = 45
+local BUSY_RETRIES, BUSY_RETRY_SEC = 6, 4
+local HOT_IDLE_ROUNDS = 2
 local CAMPAIGN_MIN_AGE_SEC = 30 * 60
 local INITIAL_DELAY_SEC = 24
 -- On the affected Forever beta, the client can omit every account SavedVariable
@@ -166,8 +168,9 @@ end
 
 local function SnapshotForCampaign(campaignStart)
     local snapshot = OverlordDB and OverlordDB.leaderboardSnapshot
-    if type(snapshot) ~= "table"
-        or math.floor(tonumber(snapshot.campaignStart) or 0) ~= campaignStart then
+    -- (Same week as everywhere else: a bucket kept on an equivalent anchor, CheckWeeklyReset's
+    -- tolerance, could neither serve nor take a page for the whole week.)
+    if type(snapshot) ~= "table" or not CampaignEpochsMatch(snapshot.campaignStart, campaignStart) then
         return nil
     end
     local snapshotBucket = math.floor(tonumber(snapshot.scoreBucketEpoch) or 0)
@@ -602,11 +605,13 @@ local function PickDirectPeer(minProtocol)
         for _, name in ipairs(allies) do listed[name:lower()] = true end
         local function accept(name) return listed[name:lower()] == true end
         if directory:HasPartner(accept) then
-            if index % 2 == 1 then
+            -- 2.2.2: two turns in three (one in two before): the same rounds, more of them to a
+            -- player of another guild.
+            if index % 3 ~= 0 then
                 local partner = directory:PickPartner(accept, "ranking")
                 if partner then return partner end
             end
-            index = math.floor(index / 2)
+            index = math.floor(index / 3)
         end
     end
     return pool[(index % #pool) + 1]
@@ -680,13 +685,20 @@ local ScheduleAttempt
 -- Un C_Timer.After possede par generation : jamais plus d'un reveil arme.
 -- fast (2.2.0): partners of the channel's member list answer, rounds come closer
 -- (SyncDirectory.lua, LADDER_*).
-local function ArmNextHistoryCatchup(delay, fast)
+local function ArmNextHistoryCatchup(delay, fast, productive)
     sync._historyCatchupWakeGeneration =
         math.floor(tonumber(sync._historyCatchupWakeGeneration) or 0) + 1
     local generation = sync._historyCatchupWakeGeneration
     local directory = fast and Overlord.ChannelDirectory or nil
     local jitter = math.random and math.random(0, directory and directory.LADDER_JITTER_SEC or PERIODIC_JITTER_SEC) or 0
     local shortest = directory and directory.LADDER_FLOOR_SEC or 30
+    -- 2.2.2: a round that changed our ranking says the neighbours hold more (what it brought
+    -- is news to them too): the next one follows soon instead of after the usual rest. An
+    -- idle round rests as before, so a quiet ranking costs no more than it did.
+    if productive and directory then
+        delay, jitter, shortest = directory.LADDER_HOT_SEC, math.random and math.random(0, directory.LADDER_HOT_JITTER) or 0,
+            directory.LADDER_HOT_SEC
+    end
     C_Timer.After(math.max(shortest, math.floor(tonumber(delay) or RECENT_ACK_SEC) + jitter), function()
         if not Overlord.Sync
             or Overlord.Sync._historyCatchupWakeGeneration ~= generation then return end
@@ -761,13 +773,36 @@ local function FinishRound(pending, success, target)
     local okFast, fast = false, false
     if v8Round and directory and directory.FastRounds then okFast, fast = pcall(PartnerTurnAhead, directory) end
     fast = okFast and fast == true
+    local changedNow = type(pageStats) == "table" and tonumber(pageStats.changedRows) or 0
+    -- (Productive = at least 4 rows changed: on a busy ladder the live kills alone made nearly
+    -- every round "productive" and the fast pace permanent, each round rebuilding our profile.)
+    local productive = success and fast and changedNow - (tonumber(pending.changedBase) or changedNow) >= 4
+    -- After a productive round, the next idle ones (a neighbour that holds nothing more) are
+    -- followed quickly too, HOT_IDLE_ROUNDS of them at most: the next neighbour may hold more.
+    if productive then
+        sync._hotIdleLeft = HOT_IDLE_ROUNDS
+    elseif success and fast and (sync._hotIdleLeft or 0) > 0 then
+        sync._hotIdleLeft = sync._hotIdleLeft - 1
+        productive = true
+    end
+    -- At most 10 fast rounds in a row, then the next 5 productive ones at the normal pace: on a
+    -- ladder that keeps moving (a busy evening) the fast pace must not become the usual one.
+    -- The rest counts productive rounds only, so a failed or partnerless round cannot end it.
+    if productive and (sync._hotRest or 0) > 0 then
+        sync._hotRest, sync._hotIdleLeft, productive = sync._hotRest - 1, 0, false
+    elseif productive then
+        sync._hotStreak = (sync._hotStreak or 0) + 1
+        if sync._hotStreak > 10 then sync._hotStreak, sync._hotIdleLeft, sync._hotRest, productive = 0, 0, 5, false end
+    else
+        sync._hotStreak = 0
+    end
     ArmNextHistoryCatchup(fast and directory.LADDER_ACK_SEC or v8Round and V8_RECENT_ACK_SEC
-        or success and RECENT_ACK_SEC or EXHAUSTED_RETRY_SEC, fast)
+        or success and RECENT_ACK_SEC or EXHAUSTED_RETRY_SEC, fast, productive == true)
     pcall(MaybeRequestOutpostHistory, success and target or nil, pending.forceHistory)
     NotifyLadderBadge()
 end
 
-ScheduleAttempt = function(pending, attempt)
+ScheduleAttempt = function(pending, attempt, quickDelay)
     if sync._historyCatchupPending ~= pending or pending.terminal then return false end
     if attempt > MAX_ATTEMPTS then
         NoteHr("step", "all attempts used, next round in 2 min")
@@ -839,6 +874,18 @@ ScheduleAttempt = function(pending, attempt)
                     -- No request added: only who is asked next.
                     if not supported then RotatePeers() end
                 end
+                -- 2.2.2: "busy" is a clean answer (the neighbour serves somebody else, which is
+                -- why it was set aside above): another neighbour is asked in a few seconds, and
+                -- the attempt is not spent (at most BUSY_RETRIES of them in a round). One
+                -- small request and one small reply each.
+                local lastResult = type(sync._leaderboardPageStats) == "table"
+                    and sync._leaderboardPageStats.result
+                if supported and not notAsked and type(lastResult) == "string"
+                    and lastResult:find("peer busy", 1, true) and (pending.busyRetries or 0) < BUSY_RETRIES then
+                    pending.busyRetries = (pending.busyRetries or 0) + 1
+                    ScheduleAttempt(pending, attempt, BUSY_RETRY_SEC + (math.random and math.random(0, BUSY_RETRY_SEC) or 0))
+                    return
+                end
                 ScheduleAttempt(pending, attempt + 1)
             end)
         end
@@ -864,7 +911,7 @@ ScheduleAttempt = function(pending, attempt)
             end
         end)
     end
-    C_Timer.After(AttemptDelay(attempt), function()
+    C_Timer.After(quickDelay or AttemptDelay(attempt), function()
         -- An unexpected error must end the round, never leave it pending forever.
         local ok, err = pcall(attemptBody)
         if not ok and sync._historyCatchupPending == pending and not pending.terminal then
@@ -916,7 +963,8 @@ function sync:ScheduleLoginLeaderboardHistoryCatchUp(force, forceHistory)
     -- Invalide le reveil periodique eventuel : un seul tour actif a la fois.
     self._historyCatchupWakeGeneration =
         math.floor(tonumber(self._historyCatchupWakeGeneration) or 0) + 1
-    local pending = { campaignId = campaignId, terminal = false, forceHistory = forceHistory == true }
+    local pending = { campaignId = campaignId, terminal = false, forceHistory = forceHistory == true,
+        changedBase = sync._leaderboardPageStats and tonumber(sync._leaderboardPageStats.changedRows) or 0 }
     self._historyCatchupPending = pending
     local initialDelay = Overlord.SavedVariablesLoadedAtLogin == false
         and EMPTY_SAVE_INITIAL_DELAY_SEC or INITIAL_DELAY_SEC

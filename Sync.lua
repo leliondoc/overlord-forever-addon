@@ -40,7 +40,6 @@ local priv = {
     captureChatDedupTs = {},
     captureChatDedupTsCount = 0,
     captureChatDedupTsMax = 256,
-    captureChatDedupTsBlockedUntil = 0,
     captureDedupSec = 10,
     captureChatDedupSec = 30,
     captureChatDedupCapitalSec = 45,
@@ -682,9 +681,17 @@ function Overlord.Sync:JoinChannel(attempt, generation)
         -- Core, Resume et le ticker peuvent tous demander un join au meme moment.
         -- Une seule chaine possede les retries et les SR +15/+35.
         if self._joinChannelAttemptPending then return end
+        -- 2.2.2: a chain refused lately waits its turn (NoteJoinChainEnd), whoever asks.
+        if self.JoinRetryHeld and self:JoinRetryHeld() then return end
         self._joinChannelGeneration = (tonumber(self._joinChannelGeneration) or 0) + 1
         generation = self._joinChannelGeneration
         self._joinChannelAttemptPending = generation
+        -- 2.3.0: once the channel was refused (this session, or saved within CHANNEL_REFUSED_MEMORY:
+        -- a login, a /reload, an instance left), a chain is a single plain join: no pads, no leaves,
+        -- no second try. A refused chain is up to 16 joins and leaves, and the game answers them
+        -- with a red "You're doing that too fast" (players' reports, 2026-11-08). The calm wait for
+        -- the game's own channels stays: it reads the list and joins nothing.
+        self._joinChainLight = self.ChannelRefusedLately and self:ChannelRefusedLately() or false
     elseif self._joinChannelAttemptPending ~= generation then
         return
     end
@@ -694,9 +701,10 @@ function Overlord.Sync:JoinChannel(attempt, generation)
             self._joinChannelAttemptPending = nil
         end
     end
-    if attempt > 4 then
+    if attempt > (self._joinChainLight and 1 or 4) then
         self:ReleaseChannelPads()
         FinishJoinAttempt()
+        if self.NoteJoinChainEnd then self:NoteJoinChainEnd(false) end
         return
     end
     -- 2.0.8: where it lands (SyncAux ChannelSeatStep). The player's channels first (their
@@ -713,9 +721,23 @@ function Overlord.Sync:JoinChannel(attempt, generation)
             end
         end
     end
+    -- 2.2.2: spaced from our other channel operations and kept off a zone change.
+    if self.TakeChannelOp and not self:TakeChannelOp() then
+        C_Timer.After(math.max(0.1, self:ChannelOpWait()), function()
+            local sync = Overlord.Sync
+            if sync._joinChannelAttemptPending ~= generation then return end
+            if Overlord.InstanceSuspended then
+                FinishJoinAttempt()
+                return
+            end
+            sync:JoinChannel(attempt, generation)
+        end)
+        return
+    end
     -- frameID 0 = canal invisible (les joueurs ne voient pas le canal dans leur chat)
     -- WoW 12.0.5 : securecall pour ne pas taint le systeme de chat
     securecall(JoinChannelByName, ChannelName(), nil, 0, 0)
+    if self.NoteChannelOp then self:NoteChannelOp("join channel") end
     C_Timer.After(3 * attempt, function()
         if Overlord.Sync._joinChannelAttemptPending ~= generation then return end
         if Overlord.InstanceSuspended then
@@ -728,6 +750,7 @@ function Overlord.Sync:JoinChannel(attempt, generation)
             -- behind them; the 15 s safety timer, attempt > 4 and Suspend cover the rest).
             Overlord.Sync:ReleaseChannelPads()
             FinishJoinAttempt()
+            if Overlord.Sync.NoteJoinChainEnd then Overlord.Sync:NoteJoinChainEnd(true) end
             -- (2.0.2: after the truce's retirement, one neighbour heard as updated instead
             -- of a broadcast, see SendLoginMapPeerRequest.)
             if not Overlord.Sync:SendLoginMapPeerRequest() then Overlord.Sync:SendSyncRequest() end
@@ -794,7 +817,9 @@ function Overlord.Sync:StartChannelRetryLoop()
         -- 2.2.0: a seat pad whose leave the server refused ("you are going too fast") stayed in
         -- the player's channel list for the session (seen in game 2026-11-06): swept again here
         -- while no join is under way.
-        if Overlord.Sync:GetChannelId() then
+        -- (2.2.2: seated, even while the server refuses what we send there: GetChannelId is nil
+        -- then, and the sweep never ran for the very players whose pad leaves were refused.)
+        if Overlord.Sync:GetJoinedChannelId() then
             -- (Only while seated: a sweep never meets a join started in the same tick.)
             if not Overlord.InstanceSuspended and not Overlord.Sync._joinChannelAttemptPending
                 and not Overlord.Sync._channelPads then
@@ -833,6 +858,7 @@ function Overlord.Sync:SendSyncRequest(opts)
     if Overlord.Relay then
         if opts.betaTarget then
             local sent = Overlord.Relay:Send("SR", payload, opts.betaTarget)
+            if sent then self:NoteMapAsked(opts.betaTarget) end
             if sent and self.NoteOutpostClaimPeer then self:NoteOutpostClaimPeer(opts.betaTarget, payload) end
             if sent and requestMode == "F" then
                 self:ExpectDirectFullLeaderboardResponse(opts.betaTarget)
@@ -1686,11 +1712,25 @@ function Overlord.Sync:AdmitCaptureFinalRate(originName, zoneId, ts, sender)
         return false
     end
     if not last then
-        if lastFinalByOriginCount >= 512 then lastFinalByOrigin, lastFinalByOriginCount = {}, 0 end
+        if lastFinalByOriginCount >= 512 then
+            -- 2.2.2: only the entries past the gap go (a whole wipe let every capturer repaint
+            -- a second zone at once); wiped whole only when none is old enough.
+            local clock, kept = GetTime(), 0
+            for k, row in pairs(lastFinalByOrigin) do
+                if clock - (row.seen or 0) > CAPTURE_FINAL_MIN_GAP * 2 then
+                    lastFinalByOrigin[k] = nil
+                else
+                    kept = kept + 1
+                end
+            end
+            if kept >= 512 then lastFinalByOrigin, kept = {}, 0 end
+            lastFinalByOriginCount = kept
+        end
         lastFinalByOriginCount = lastFinalByOriginCount + 1
         last = {}
         lastFinalByOrigin[key] = last
     end
+    last.seen = GetTime()
     if ts >= (last.ts or 0) then last.ts, last.zoneId = ts, zoneId end
     return true
 end
@@ -2086,11 +2126,15 @@ end
 function Overlord.Sync:NoteFullMapReceived(sender)
     local now = GetTime()
     self._lastFullZaAt = now
+    self._mapRetryChain = 0
     local theirs, mine = self:GetBetaPeerFaction(sender), Overlord.PlayerFaction
     if theirs and mine and theirs ~= mine then
         self._lastEnemyFullZaAt = now
     else
         self._lastOwnFullZaAt = now
+        -- 2.2.2: and whether it came from outside our guild (RunPeriodicMapCatchup).
+        local lane = Overlord.GuildLane
+        if not (lane and lane.IsGuildMate and lane:IsGuildMate(sender)) then self._lastOwnFarZaAt = now end
     end
 end
 
@@ -2144,12 +2188,20 @@ function Overlord.Sync:RunPeriodicMapCatchup()
     -- faction's reply to the previous turn used to hold it back every time.
     local round = (tonumber(self._mapCatchupRound) or 0) + 1
     local lastMapAt = self._lastFullZaAt
+    local ownTurn = #enemies == 0
     if #enemies > 0 then
         if (round % 2 == 1) or #allies == 0 then
             lastMapAt = self._lastEnemyFullZaAt
         else
-            lastMapAt = self._lastOwnFullZaAt
+            lastMapAt, ownTurn = self._lastOwnFullZaAt, true
         end
+    end
+    -- 2.2.2: while the channel's member list stands in for the channel, our own side's turn
+    -- waits only for a map from outside our guild: guild mates whose maps kept differing kept
+    -- the partner (another guild) from ever being asked, and the guild stayed an island.
+    local directory0 = Overlord.ChannelDirectory
+    if ownTurn and directory0 and directory0.IsActive and directory0:IsActive() then
+        lastMapAt = self._lastOwnFarZaAt
     end
     local outpostWaiting = Overlord.Outpost and Overlord.Outpost.HasStateAwaitingNetwork
         and Overlord.Outpost:HasStateAwaitingNetwork()
@@ -2179,6 +2231,15 @@ function Overlord.Sync:RunPeriodicMapCatchup()
         end
     end
     target = target or list[math.random(1, #list)]
+    -- 2.3.0: a guild mate drawn for our own side's turn while a map of our side came within the
+    -- interval (the far-map wait above lets this turn through for a partner): the mate would only
+    -- send the guild's map again. A held site waiting for its snapshot still pulls.
+    local lane = Overlord.GuildLane
+    if list == allies and not outpostWaiting and self._lastOwnFullZaAt
+        and GetTime() - self._lastOwnFullZaAt < self.BETA_MAP_CATCHUP_INTERVAL
+        and lane and lane.IsGuildMate and lane:IsGuildMate(target) then
+        return false
+    end
     self._mapCatchupLastTarget = target
     local payload = SRPayload("T")
     if directory and directory.BeforeMapPull and directory:BeforeMapPull(target) then
@@ -2218,6 +2279,12 @@ function Overlord.Sync:Send(msgType, data, groupOnly)
     -- WoW 12.0.5 : securecall (evite taint ChatFrame_MessageEventFilters)
     local raidOk = IsInRaid() and UnitInRaid("player")
         and (not self._instanceResumeTime or GetTime() - self._instanceResumeTime > 5)
+    -- 2.3.0: the group shares the channel's message token (Blizzard counts group, raid and channel
+    -- together, about one a second; seen live: 9 of 22 group messages refused, code 3, in bursts).
+    -- Held here, a relayed copy waits in the relay queue instead of being refused by the server.
+    if (raidOk or IsInGroup()) and not self:TakeChannelToken(msgType == "K") then
+        return false, "budget"
+    end
     if raidOk then
         return self:SendAddonChecked(msg, "RAID")
     end
@@ -2232,7 +2299,8 @@ function Overlord.Sync:Send(msgType, data, groupOnly)
             -- Meme filtre et meme budget que SendToChannel : sinon un solo envoyait
             -- ZA/DX/ZS en rafale et les refus Blizzard tombaient sur les alertes.
             if msgType ~= "BF" and not self:ChannelCarries(msgType, data, true) then return true end
-            if not self:TakeChannelToken() then return false end
+            -- (K as in SendToChannel: ChannelCarries has already spent its 30 s window.)
+            if not self:TakeChannelToken(msgType == "K") then return false end
             return self:SendAddonChecked(msg, "CHANNEL", channelId)
         end
     end
@@ -2255,8 +2323,9 @@ end
 -- les anciens clients renvoyaient un booleen. Un envoi refuse par le throttle
 -- Blizzard (canal ou prefixe) n'est PAS parti : l'appelant doit le savoir pour
 -- reessayer au lieu de perdre le paquet en silence.
-function Overlord.Sync:SendAddonChecked(msg, chatType, target)
-    local result = securecall(C_ChatInfo.SendAddonMessage, PREFIX, msg, chatType, target)
+-- prefix : celui d'un module a part (OverlordGF des groupes JcJ), OverlordF par defaut.
+function Overlord.Sync:SendAddonChecked(msg, chatType, target, prefix)
+    local result = securecall(C_ChatInfo.SendAddonMessage, prefix or PREFIX, msg, chatType, target)
     local ok = result == nil or result == true or result == 0
     local stats = self._addonSendStats or {}
     self._addonSendStats = stats
@@ -2651,7 +2720,10 @@ function Overlord.Sync:SendWhisper(msgType, data, target, direct)
     if Overlord.Relay and not direct
         and msgType ~= "R1" and msgType ~= "BF" and Overlord.Relay:IsPeer(target) then
         local queued = Overlord.Relay:Send(msgType, data or "", target)
-        if queued and msgType == "SR" and self.NoteOutpostClaimPeer then self:NoteOutpostClaimPeer(target, data) end
+        if queued and msgType == "SR" then
+            self:NoteMapAsked(target)
+            if self.NoteOutpostClaimPeer then self:NoteOutpostClaimPeer(target, data) end
+        end
         return queued
     end
     if Overlord.InstanceSuspended or IsInInstance() then return end
@@ -2673,7 +2745,10 @@ function Overlord.Sync:SendWhisper(msgType, data, target, direct)
     -- securecall : empeche le taint addon de contaminer SetLastTellTarget
     -- (meme fix que SendToBNet, sinon "secret string value" sur les whispers entrants)
     local sentOk = self:SendAddonChecked(msg, "WHISPER", target)
-    if sentOk and msgType == "SR" and self.NoteOutpostClaimPeer then self:NoteOutpostClaimPeer(target, data) end
+    if sentOk and msgType == "SR" then
+        self:NoteMapAsked(target)
+        if self.NoteOutpostClaimPeer then self:NoteOutpostClaimPeer(target, data) end
+    end
     return sentOk
 end
 
@@ -3005,7 +3080,8 @@ function Overlord.Sync:DispatchBNetMessage(msgType, payload, sender, senderID, b
     elseif msgType == "VB" then
         self:OnReceiveVictoryBonus(payload or "", sender, "BNET")
     elseif msgType == "MN" then
-        self:OnReceiveMining(payload or "", sender)
+        -- (2.2.2: the alert names the miner: the character, not the Battle.net leg.)
+        self:OnReceiveMining(payload or "", ResolveBNetGameplaySender(self, senderID, bnetInfo) or sender)
     elseif msgType == "MS" then
         self:OnReceiveMineStock(payload or "", sender)
     elseif msgType == "OP" then
@@ -3433,8 +3509,14 @@ local function ApplyInactiveFrontCapture(zoneId, newOwner, ts)
         and Overlord:IsLoginZoneStateUnconfirmed(zone)
         and not Overlord.Sync:LoginSaveKeepsItsDate(zone)
     local stateUnconfirmed = loginUnconfirmed or zone._captureFinalUnattested
+    -- 2.3.0: compared with the capture it would replace, as the ZS final of the same
+    -- capture is (ApplyInactiveFrontZoneState) and as C is on our own front. updatedAt
+    -- is the last tick of a followed assault: a final by another player of the group,
+    -- dated a second before that tick, was refused when the tick came first and taken
+    -- when it came second. A point with no capture date keeps its last update.
     local localFreshness = stateUnconfirmed and 0
-        or math.max(zone.updatedAt or 0, zone.capturedTime or 0)
+        or ((tonumber(zone.capturedTime) or 0) > 0 and tonumber(zone.capturedTime))
+        or (zone.updatedAt or 0)
     -- A zone nobody holds here takes any dated capture (see ApplyInactiveFrontZoneState).
     if not zone.owner and zone.status ~= "in_progress" then localFreshness = 0 end
     if localFreshness > ts then return false end
@@ -3744,15 +3826,20 @@ function Overlord.Sync:OnReceiveKill(payload, sender)
             totalKills, totalBefore, classVerified and class or "", localeVerified and locTag or "",
             remoteEpoch, bucketEpochToken, levelToken)
     end
+    -- 2.2.2: a total addressed to us is one its owner told again once it stopped moving
+    -- (SyncDirectory SettleStep, 30 s to 10 min after the kill): the ranking takes it, the fights
+    -- and rampages do not count it as a kill made now (their base still moves).
+    local settled = Overlord.Relay and Overlord.Relay.IsTargetedDispatch
+        and Overlord.Relay:IsTargetedDispatch() or nil
     -- Activite uniquement apres toutes les validations K (epoch, identite, anti-spoof, total).
-    if Overlord.FrontActivity and Overlord.FrontActivity.RecordKillActivity then
+    if not settled and Overlord.FrontActivity and Overlord.FrontActivity.RecordKillActivity then
         Overlord.FrontActivity:RecordKillActivity(zoneId, playerName)
     end
     -- Alerte de raid de guilde : K deja valide, guilde et semaine de score du K.
     if Overlord.GuildKillAlert and Overlord.GuildKillAlert.OnLiveKill then
         Overlord.GuildKillAlert:OnLiveKill(playerName, faction,
             validGuild and guildTag or nil, totalKills, zoneId,
-            ParseLeaderboardBucketEpochToken(bucketEpochToken))
+            ParseLeaderboardBucketEpochToken(bucketEpochToken), settled)
     end
     -- Le cache du ladder est deja invalide par les setters, mais un panneau ouvert
     -- n'a pas de ticker : demander explicitement le rendu de l'etat accepte.
@@ -3927,23 +4014,25 @@ end
 local function RememberCaptureChatTimestamp(tsKey, now)
     if priv.captureChatDedupTs[tsKey] ~= nil then return false end
     if priv.captureChatDedupTsCount >= priv.captureChatDedupTsMax then
-        if now < (tonumber(priv.captureChatDedupTsBlockedUntil) or 0) then return false end
-        local count, earliestExpiry = 0, math.huge
+        local count, oldestKey, oldestAt = 0, nil, math.huge
         for key, seenAt in pairs(priv.captureChatDedupTs) do
             seenAt = tonumber(seenAt) or 0
             if now - seenAt > 600 then
                 priv.captureChatDedupTs[key] = nil
             else
                 count = count + 1
-                earliestExpiry = math.min(earliestExpiry, seenAt + 600)
+                if seenAt < oldestAt then oldestKey, oldestAt = key, seenAt end
             end
         end
         priv.captureChatDedupTsCount = count
         if count >= priv.captureChatDedupTsMax then
-            priv.captureChatDedupTsBlockedUntil = earliestExpiry + 0.01
-            return false
+            -- (Full of live keys: the oldest gives way. Refusing muted every capture alert
+            -- until it expired, up to ten minutes on a busy evening.)
+            if oldestKey then
+                priv.captureChatDedupTs[oldestKey] = nil
+                priv.captureChatDedupTsCount = priv.captureChatDedupTsCount - 1
+            end
         end
-        priv.captureChatDedupTsBlockedUntil = 0
     end
     priv.captureChatDedupTs[tsKey] = now
     priv.captureChatDedupTsCount = priv.captureChatDedupTsCount + 1
@@ -4351,6 +4440,16 @@ local function TryAlignAllyCoCaptureTimer(zone, status, owner, holdTime, ts,
             return false
         end
     end
+    -- (2.2.2) Ni une capture ennemie plus recente : un ZS allie retarde (ts <= capture ennemie)
+    -- la renversait ici alors que les autres clients, par ts > localTs, la gardaient.
+    -- (2.3.0) Une zone ennemie n'est jamais "captured" chez nous (Zones la remet en available ou
+    -- locked) : la garde regarde tout statut hors siege, comme la regle des C/ZA.
+    local capturedAt = tonumber(zone.capturedTime) or 0
+    if zone.status ~= "in_progress" and zone.owner and zone.owner ~= owner
+        and capturedAt > 0 and not zone._captureFinalUnattested then
+        local enemyTs = math.max(capturedAt, zone.updatedAt or 0)
+        if ts and ts <= enemyTs then return false end
+    end
     -- Toutes les gardes sont passees ; materialiser le bail juste avant la
     -- premiere mutation. Un paquet rejete ne doit jamais toucher le snapshot.
     if adoptRemote and not adoptRemote() then return false end
@@ -4364,7 +4463,7 @@ local function TryAlignAllyCoCaptureTimer(zone, status, owner, holdTime, ts,
     zone.holdAuthorityLocal = nil
     zone.holdTimeElapsed = remoteHold
     if ts and ts > 0 then
-        zone.updatedAt = ts
+        zone.updatedAt = math.max(zone.updatedAt or 0, ts)
     end
     if zone.isHolding then
         zone.holdStartTime = GetTime() - remoteHold
@@ -4536,6 +4635,204 @@ function Overlord.Sync:NoteMapBatch(sender, event, batch)
     end
     stats[side][event] = (stats[side][event] or 0) + 1
     if batch then batch.mapSide = side end
+end
+
+-- 2.2.2: a whole map is 14 to 17 pages (two whispers each) taken atomically: one lost whisper
+-- voids the answer (bench, 4 % loss: a client kept an old map for 5 to 20 minutes, asking whole
+-- maps again and again). An answer still incomplete MAP_BATCH_CHECK_SEC after its first page
+-- is repaired: the sender is asked for the missing pages alone ("R<id>.<list>" in the mode field
+-- of a request; a client that does not know it answers a whole map, as before), and it sends
+-- them again from the pages it kept for MAP_SERVED_SEC (the same snapshot: same id, same
+-- bodies). At most MAP_REPAIRS rounds per snapshot, MAP_RETRY_CHAIN in a row (a complete map
+-- resets it) and MAP_RETRY_BUDGET per MAP_RETRY_WINDOW. Nothing without a loss.
+Overlord.Sync.MAP_BATCH_CHECK_SEC, Overlord.Sync.MAP_RETRY_CHAIN = 30, 2
+Overlord.Sync.MAP_RETRY_WINDOW, Overlord.Sync.MAP_RETRY_BUDGET = 600, 4
+Overlord.Sync.MAP_SERVED_SEC, Overlord.Sync.MAP_REPAIRS, Overlord.Sync.MAP_REPAIR_PAGES = 120, 2, 16
+-- (A new whole-map request starts the per-snapshot count over: one requester gets MAP_REPAIR_BUDGET
+-- repair rounds per MAP_REPAIR_WINDOW seconds in all, MAP_REPAIR_BUDGET_ROWS requesters kept.)
+Overlord.Sync.MAP_REPAIR_BUDGET, Overlord.Sync.MAP_REPAIR_WINDOW, Overlord.Sync.MAP_REPAIR_BUDGET_ROWS = 4, 600, 32
+-- (2.3.0: offers of one repair page our own relay queue refuses: nothing left the client.)
+Overlord.Sync.MAP_REPAIR_OFFERS = 4
+function Overlord.Sync:ServedKey(name)
+    local canon = type(name) == "string" and self.CanonicalForeverName and self:CanonicalForeverName(name) or nil
+    return canon and canon:lower() or tostring(name or ""):lower()
+end
+
+-- Requester: the peers we asked a map ourselves (a targeted request). Only their answers are
+-- repaired: a group, relay broadcast or Battle.net answer is kept by nobody, and a 2.2.1 sender
+-- would answer each repair with a whole map.
+function Overlord.Sync:NoteMapAsked(target)
+    if type(target) ~= "string" or target == "" then return end
+    local asked, now = priv.mapAskedAt, GetTime()
+    if not asked then asked = {}; priv.mapAskedAt = asked end
+    local count, oldestKey, oldestAt = 0, nil, nil
+    for key, at in pairs(asked) do
+        if now - at > 90 then asked[key] = nil
+        else
+            count = count + 1
+            if not oldestAt or at < oldestAt then oldestKey, oldestAt = key, at end
+        end
+    end
+    local key = self:ServedKey(target)
+    if count >= 16 and oldestKey and not asked[key] then asked[oldestKey] = nil end
+    asked[key] = now
+end
+
+function Overlord.Sync:WasMapAsked(sender)
+    local at = priv.mapAskedAt and priv.mapAskedAt[self:ServedKey(sender)]
+    return at ~= nil and GetTime() - at <= 90
+end
+
+-- Responder: the pages of the map just built for a requester, kept for its repairs.
+function Overlord.Sync:NoteServedMap(target, pages)
+    if type(target) ~= "string" or type(pages) ~= "table" or #pages < 2 then return end
+    local id = tostring(pages[1]):match("^@([%w_-]+):")
+    if not id then return end
+    local served, now, count, oldestKey, oldestAt = priv.zaServed, GetTime(), 0, nil, nil
+    if not served then served = {}; priv.zaServed = served end
+    for key, row in pairs(served) do
+        if now - row.at > self.MAP_SERVED_SEC then
+            served[key] = nil
+        else
+            count = count + 1
+            if not oldestAt or row.at < oldestAt then oldestKey, oldestAt = key, row.at end
+        end
+    end
+    local key = self:ServedKey(target)
+    if count >= 8 and oldestKey and not served[key] then served[oldestKey] = nil end
+    served[key] = { id = id, pages = pages, at = now, repairs = 0 }
+end
+
+-- Responder: "R<id>.<i,j,k>" from a requester we served that very snapshot: those pages again,
+-- paced, nothing else.
+function Overlord.Sync:RespondMapRepair(target, mode)
+    if Overlord.InstanceSuspended or IsInInstance() or Overlord.WaitingForSync or type(target) ~= "string" then
+        return false
+    end
+    local id, list = tostring(mode):match("^R([%w_-]+)%.([%d,]+)$")
+    if not id or #id > 40 or #list > 80 then return false end
+    local row = priv.zaServed and priv.zaServed[self:ServedKey(target)]
+    local now = GetTime()
+    if not row or row.id ~= id or now - row.at > self.MAP_SERVED_SEC or row.repairs >= self.MAP_REPAIRS then
+        return false
+    end
+    local rows, seen = {}, {}
+    for number in list:gmatch("%d+") do
+        local index = tonumber(number)
+        if row.pages[index] and not seen[index] and #rows < self.MAP_REPAIR_PAGES then
+            seen[index] = true
+            rows[#rows + 1] = index
+        end
+    end
+    if #rows == 0 then return false end
+    -- (Our answer queue still busy: no repair beside it; the requester asks again later.)
+    if (tonumber(priv.syncResponseDeadline) or 0) > 0 then return false end
+    -- The requester's budget over the window (a fresh map request resets row.repairs, not this).
+    local budgets = priv.zaRepairBudget
+    if not budgets then budgets = {}; priv.zaRepairBudget = budgets end
+    local who, count, oldestKey, oldestAt = self:ServedKey(target), 0, nil, nil
+    for key, b in pairs(budgets) do
+        if now - b.at >= self.MAP_REPAIR_WINDOW then
+            budgets[key] = nil
+        else
+            count = count + 1
+            if not oldestAt or b.at < oldestAt then oldestKey, oldestAt = key, b.at end
+        end
+    end
+    local budget = budgets[who]
+    if budget and budget.count >= self.MAP_REPAIR_BUDGET then return false end
+    if not budget then
+        if count >= self.MAP_REPAIR_BUDGET_ROWS and oldestKey then budgets[oldestKey] = nil end
+        budget = { at = now, count = 0 }
+        budgets[who] = budget
+    end
+    budget.count = budget.count + 1
+    row.repairs = row.repairs + 1
+    self._mapRepaired = (self._mapRepaired or 0) + 1
+    for k, index in ipairs(rows) do
+        local offers = 0
+        local function offer()
+            local sync = Overlord.Sync
+            if not sync or Overlord.InstanceSuspended or IsInInstance() then return end
+            offers = offers + 1
+            local ok, sent = pcall(sync.SendWhisper, sync, "ZA", row.pages[index], target)
+            -- 2.3.0: refused by our own relay queue (two own map pages at most beside a full
+            -- catch-up lane): nothing left; offered again like the answer ticker's rows.
+            if ok and sent == false and offers < (tonumber(sync.MAP_REPAIR_OFFERS) or 1) then
+                C_Timer.After(1, offer)
+            end
+        end
+        C_Timer.After(0.3 + (k - 1) * 0.4, offer)
+    end
+    return true
+end
+
+-- Requester: the first page of a whole map arrived (batchKey, id: the snapshot).
+function Overlord.Sync:WatchMapBatch(sender, batchKey, batch, id, rearmed)
+    C_Timer.After(rearmed and 12 or self.MAP_BATCH_CHECK_SEC, function()
+        local sync = Overlord.Sync
+        if not sync or priv.pendingZaSnapshotPages[batchKey] ~= batch
+            or batch.receivedCount >= batch.pageCount then return end
+        local now = GetTime()
+        -- A batch gone quiet past the 45 s drop: dropped now, never repaired into a new batch.
+        if now - (batch.lastAt or 0) > 35 then
+            priv.pendingZaSnapshotPages[batchKey] = nil
+            return
+        end
+        -- Pages still arriving (a slow lane, the answer still in the sender's queue): wait.
+        if now - (batch.lastAt or 0) < 8 then
+            return sync:WatchMapBatch(sender, batchKey, batch, id, true)
+        end
+        -- A complete map of that side came meanwhile (another answer): nothing to repair.
+        local fullAt = batch.mapSide == "enemy" and sync._lastEnemyFullZaAt or sync._lastOwnFullZaAt
+        if fullAt and fullAt > (batch.createdAt or 0) then return end
+        if sync:RepairLostMapBatch(sender, batch, id) then
+            -- 2.3.0: kept from the repair on. Its pages come 30 to 45 s after the last original
+            -- one: dropped at 45 s, they started a batch that never completes. A repair that
+            -- brought nothing back (the sender's answer queue busy, its pages lost) is asked once
+            -- more at the next look, within MAP_RETRY_CHAIN and both sides' budgets.
+            batch.lastAt = now
+            sync:WatchMapBatch(sender, batchKey, batch, id)
+        end
+    end)
+end
+
+function Overlord.Sync:RepairLostMapBatch(sender, batch, id)
+    if Overlord.InstanceSuspended or IsInInstance() or type(sender) ~= "string" or type(id) ~= "string" then
+        return false
+    end
+    local missing = {}
+    for index = 1, batch.pageCount do
+        if batch.pages[index] == nil then missing[#missing + 1] = index end
+    end
+    -- (More than a third missing: a congested lane, not a random loss; left to the next round.)
+    if #missing == 0 or #missing > math.min(self.MAP_REPAIR_PAGES, math.max(1, math.ceil(batch.pageCount / 3))) then
+        return false
+    end
+    -- (Only a sender on 2.2.2 or later knows the repair mode: an earlier one would answer a whole map.)
+    local dir = Overlord.ChannelDirectory
+    if not (dir and dir.PeerSettles and dir:PeerSettles(sender)) then return false end
+    local now = GetTime()
+    if (self._mapRetryChain or 0) >= self.MAP_RETRY_CHAIN then return false end
+    local window = self._mapRetryWindow
+    if not window or now - window.at >= self.MAP_RETRY_WINDOW then
+        window = { at = now, count = 0 }
+        self._mapRetryWindow = window
+    end
+    if window.count >= self.MAP_RETRY_BUDGET then return false end
+    window.count = window.count + 1
+    self._mapRetryChain = (self._mapRetryChain or 0) + 1
+    self._mapRetried = (self._mapRetried or 0) + 1
+    -- (A territorial request, keep marks included, whose mode is the repair: a client that does
+    -- not know it answers it as one periodic round.)
+    local payload = SRPayload("T"):gsub(":T$", ":R" .. id .. "." .. table.concat(missing, ","))
+    C_Timer.After(1 + math.random() * 3, function()
+        local sync = Overlord.Sync
+        if sync and not Overlord.InstanceSuspended and not IsInInstance() then
+            pcall(sync.SendWhisper, sync, "SR", payload, sender)
+        end
+    end)
+    return true
 end
 
 function Overlord.Sync:NoteEnemyCaptureByMap(capturedAt, atLogin, zoneId)
@@ -5092,7 +5389,7 @@ function Overlord.Sync:OnReceiveCapture(payload, sender)
     ts = NormalizeRemoteTimestamp(ts)
     if hadExplicitTs and not ts then return end
     if not ts or ts <= 0 then
-        ts = time()
+        ts = (Overlord.ServerNow and Overlord.ServerNow() or time())
     end
     if hadExplicitTs then
         local lastReset = OverlordDB and OverlordDB.lastResetTimestamp or 0
@@ -5936,6 +6233,12 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         NoteOutdated("outdatedRequests")
         return
     end
+    -- 2.2.2: "R<id>.<pages>": the missing pages of a map we served (RespondMapRepair), by
+    -- whisper or Battle.net only; never a map, whatever comes of it.
+    if type(senderRequestMode) == "string" and senderRequestMode:sub(1, 1) == "R" then
+        if directSR then self:RespondMapRepair(replyToOverride or sender, senderRequestMode) end
+        return
+    end
     if senderRequestMode == "H" then
         if directSR and self.RespondOutpostHistory then
             self:RespondOutpostHistory(replyToOverride or sender, senderEvidencePage, hasEvidencePage)
@@ -6141,6 +6444,7 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
         if mapAlreadyHeld then NoteOutdated("mapPagesHeldSkipped") end
         local zaPages, zaPageCount = {}, 0
         if not mapAlreadyHeld then zaPages, zaPageCount = self:BuildZoneAllSnapshotPages(srZones, "G") end
+        if zaPageCount > 1 and whisperTarget and not quarantinedMapOnly then self:NoteServedMap(whisperTarget, zaPages) end
         for zaPageIndex = 1, zaPageCount do
             local zaPage = zaPages[zaPageIndex]
             if not quarantinedMapOnly or zaPage:match("^@Q%-") then
@@ -6201,8 +6505,13 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
                 end
             end
         end
-        if not territorialResponseOnly and self.AppendFrontActivityToSrQueue then
-            pcall(self.AppendFrontActivityToSrQueue, self, queue, directSR)
+        -- 2.3.0: a map answer to the requester alone (login, /reload, instance exit, a neighbour
+        -- with another map; not one that holds ours) carries the fresh fight brackets too, never FA.
+        -- They went only in full answers, which no automatic request asks: a reloaded client saw an
+        -- empty Recent activity for minutes and announced again the fights it was in.
+        if self.AppendFrontActivityToSrQueue
+            and (not territorialResponseOnly or (directSR and not mapAlreadyHeld)) then
+            pcall(self.AppendFrontActivityToSrQueue, self, queue, directSR, territorialResponseOnly)
         end
         -- Etat live immediat : les timers/tenants ne doivent pas attendre les historiques.
         -- Une reponse territoriale reprend toutes les captures du front actif.
@@ -6452,23 +6761,42 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
                 local refusedBefore = relayStats and relayStats.localRowsRefused or 0
                 if Overlord.Sync:SendWhisper(item.type, item.data, whisperTarget) ~= true then
                     -- A bounded beta relay can apply backpressure. Keep this row
-                    -- until accepted (or the response watchdog expires).
-                    responseState.queueIndex = math.max(
-                        0, (tonumber(responseState.queueIndex) or 1) - 1)
+                    -- until accepted (or the response watchdog expires). 2.2.2: a plain
+                    -- whisper the game refuses (not a relay peer) is offered 10 times at most,
+                    -- like the group and channel rows (each refusal stops our whisper chain).
+                    local peer = Overlord.Relay and Overlord.Relay.IsPeer and Overlord.Relay:IsPeer(whisperTarget)
+                    if not peer then consecutiveSendFailures = consecutiveSendFailures + 1 end
+                    if peer or consecutiveSendFailures < 10 then
+                        responseState.queueIndex = math.max(
+                            0, (tonumber(responseState.queueIndex) or 1) - 1)
+                    end
                     -- 2.0.2: refusals of this row by the relay queue. They only become
                     -- "offered again" (not a loss) once the row is accepted.
                     responseState.rowRefusals = (responseState.rowRefusals or 0)
                         + ((relayStats and relayStats.localRowsRefused or 0) - refusedBefore)
-                elseif (responseState.rowRefusals or 0) > 0 then
-                    if Overlord.Relay and Overlord.Relay.NoteOfferedAgain then
-                        Overlord.Relay:NoteOfferedAgain(responseState.rowRefusals)
+                else
+                    consecutiveSendFailures = 0
+                    if (responseState.rowRefusals or 0) > 0 then
+                        if Overlord.Relay and Overlord.Relay.NoteOfferedAgain then
+                            Overlord.Relay:NoteOfferedAgain(responseState.rowRefusals)
+                        end
+                        responseState.rowRefusals = 0
                     end
-                    responseState.rowRefusals = 0
                 end
             elseif bnetTarget then
                 Overlord.Sync:SendToBNet(bnetTarget, item.type, item.data)
             elseif channel == "RAID" or channel == "PARTY" then
-                Overlord.Sync:Send(item.type, item.data)
+                -- (A row the game refuses is offered again, as on the channel: a map answer
+                -- with a hole in it is thrown away whole.)
+                if Overlord.Sync:Send(item.type, item.data) == false then
+                    consecutiveSendFailures = consecutiveSendFailures + 1
+                    if consecutiveSendFailures < 10 then
+                        responseState.queueIndex = math.max(
+                            0, (tonumber(responseState.queueIndex) or 1) - 1)
+                    end
+                else
+                    consecutiveSendFailures = 0
+                end
             else
                 local cid = Overlord.Sync:GetChannelId()
                 if cid and not Overlord.Sync:SendToChannel(
@@ -7382,8 +7710,21 @@ local function TryHealStaleEnemyOwnerFromFriendlyCapture(zone, status, owner, ts
     local ef = Overlord.Zones:GetEnemyFaction()
     if zone.owner ~= ef then return false end
     if zone.isHolding and zone.holdAuthorityLocal then return false end
+    -- 2.2.2: only an enemy owner OLDER than this ally capture is stale. A late relayed
+    -- copy of an older ally capture overwrote a newer enemy capture on the clients
+    -- where the trust test below held, while every other client kept the enemy
+    -- capture. Same date: the same tie-break as every other capture merge. A login
+    -- save without a usable date, or an unattested final, has no date to defend.
+    local enemyUndated = zone._captureFinalUnattested
+        or (zone._loginSyncUnconfirmed and not Overlord.Sync:LoginSaveKeepsItsDate(zone))
+    local enemyAt = enemyUndated and 0 or (tonumber(zone.capturedTime) or 0)
+    if ts < enemyAt or (ts == enemyAt and ts > 0
+        and Overlord.Sync:DeterministicCaptureTieOwner(zone.id, ts) ~= owner) then
+        return false
+    end
     opts = opts or {}
-    local now = time()
+    -- (ts is a server stamp: compared with the server clock, never the PC's.)
+    local now = (Overlord.ServerNow and Overlord.ServerNow() or time())
     local age = now - ts
     local maxAge = opts.loginUnconfirmed and TUNING.LOGIN_FRIENDLY_CAPTURE_HEAL_MAX_AGE
         or TUNING.STALE_FRIENDLY_CAPTURE_HEAL_MAX_AGE
@@ -7432,7 +7773,7 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
     payload, frontMark = self:TakeFrontMark(payload)
     local syncGateWasPending = Overlord.IsCaptureSyncPending and Overlord:IsCaptureSyncPending()
 
-    local VALID_ZS_STATUSES = { in_progress = true, captured = true, available = true, locked = true }
+    -- (The four statuses are tested below without a table: none is built for every ZS received.)
     -- 8e champ optionnel : holdTimeRequired emetteur (retro-compat : absents des vieux clients)
     -- 9e champ optionnel : nom du capteur (avec royaume) pour affichage dans les alertes
     -- 10e champ optionnel : shard du capteur (couche WoW)
@@ -7454,7 +7795,7 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
         zsNetworkWitness, zsNetworkRouteId = nil, nil
     end
     local zsCapturerShard = tonumber(zsCapturerShardStr)
-    if not VALID_ZS_STATUSES[status] then return end
+    if status ~= "in_progress" and status ~= "captured" and status ~= "available" and status ~= "locked" then return end
     local wireStatus = status
     kills = math.max(0, math.min(tonumber(kills) or 0, TUNING.MAX_SYNC_KILLS))
     holdTime = math.max(0, math.min(tonumber(holdTime) or 0, TUNING.MAX_SYNC_HOLD_TIME))
@@ -7749,6 +8090,32 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
     end
 
     local localTs = zone.updatedAt or 0
+    -- 2.2.2: a capture is compared with the capture it would replace, as on an
+    -- inactive front (ApplyInactiveFrontZoneState), in C and in ZA. updatedAt also
+    -- rises without the capture changing (same-owner ZA merge, a direct revert) and is
+    -- 0 after a login, so two clients receiving the same two messages in different
+    -- orders kept different owners. A zone nobody holds takes any dated capture; the
+    -- same second goes to the deterministic tie-break of the ts == localTs branch.
+    if status == "captured" and owner and zone.status ~= "in_progress" then
+        local capturedAt = tonumber(zone.capturedTime) or 0
+        if not zone.owner then
+            localTs = 0
+        elseif zone.owner ~= owner and capturedAt > 0 and not zone._captureFinalUnattested
+            and (not (Overlord.IsLoginZoneStateUnconfirmed and Overlord:IsLoginZoneStateUnconfirmed(zone))
+                or self:LoginSaveKeepsItsDate(zone)) then
+            localTs = capturedAt
+        end
+    elseif status == "captured" and owner and zone.owner == owner
+        and zone._remoteCaptureLease and not zone.holdAuthorityLocal
+        and not zone._captureFinalUnattested
+        and (tonumber(zone.capturedTime) or 0) > 0 then
+        -- 2.3.0: a final over an assault we only follow is compared with the capture under
+        -- it, as C is here and as both are on other fronts. updatedAt is the followed
+        -- player's last tick: another player of his group completing a second before it
+        -- was refused unless our view of the timer had ended, and a client told by ZS only
+        -- gave the point back to its defender when the followed timer ran out.
+        localTs = math.min(localTs, tonumber(zone.capturedTime))
+    end
     local oldStatus, oldOwner = zone.status, zone.owner
     local oldPreviousOwner = zone.previousOwner
     local progressAdopted = false
@@ -8389,7 +8756,8 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
                 -- La capture elle-meme reste l'horloge canonique : utiliser time()
                 -- ici rendrait le resultat dependant du moment ou chaque pair repare le tie.
                 zone.updatedAt = remoteCapturedTime
-                self:BroadcastZoneState(zone, true)
+                -- 2.3.0: no copy of the result. Every client settles the tie alone from
+                -- the same final, and our copy (no wave of ours) was refused as legacy.
             end
             -- Si localCapturedTime > remoteCapturedTime, on garde notre version (deja plus recente)
             return
@@ -8642,6 +9010,9 @@ function Overlord.Sync:OnReceiveZoneAll(
             priv.pendingZaSnapshotPages[batchKey] = pendingZaSnapshot
             if zaSnapshotScope == "G" or zaSnapshotScope == "Q" then
                 self:NoteMapBatch(sender, "started", pendingZaSnapshot)
+            end
+            if zaSnapshotScope == "G" and self:WasMapAsked(sender) then
+                self:WatchMapBatch(sender, batchKey, pendingZaSnapshot, zaSnapshotId)
             end
         elseif pendingZaSnapshot.pageCount ~= zaPageCount then
             -- Meme sender/id avec deux tailles = equivocation, jeter tout le lot.
@@ -9345,7 +9716,8 @@ function Overlord.Sync:OnReceiveZoneAll(
                     -- capturedTime protege les captures stales au sync ZA.
                     -- Force status = "captured" : corrige les zones bloquees en "locked" par
                     -- UpdateAvailableZones quand les prereqs ne sont pas encore synches.
-                    zone.updatedAt = ts
+                    -- (2.2.2 : jamais en arriere : un tick plus recent garde sa date.)
+                    zone.updatedAt = math.max(zone.updatedAt or 0, ts)
                     if zone.status ~= "captured" and zone.status ~= "in_progress" then
                         zone.status = "captured"
                     end
@@ -10040,6 +10412,9 @@ function Overlord.Sync:SendKillBroadcast(payload)
             and (not self._instanceResumeTime or GetTime() - self._instanceResumeTime > 5)
         if self:RelayAlreadyCarries("K", payload) then
             -- Le relais a deja mis ce K sur le groupe et le canal.
+        elseif (raidOk or IsInGroup()) and not self:TakeChannelToken(false) then
+            -- 2.3.0: the group shares the channel's token (see Send): no token, no group copy; the
+            -- next kill carries the newer total (seen live: group copies refused in pairs, code 3).
         elseif raidOk then
             self:SendAddonChecked(msg, "RAID")
         elseif IsInGroup() then
@@ -10259,7 +10634,7 @@ function Overlord.Sync:BroadcastCaptureBarrier(
     if not defenderGuid or defenderGuid == "" then return false end
     local payload = table.concat({
         zone.id, mode, originName, waveId, originGuid, defenderGuid,
-        tostring(math.floor(tonumber(requirement) or 0)), tostring(time()),
+        tostring(math.floor(tonumber(requirement) or 0)), tostring((Overlord.ServerNow and Overlord.ServerNow() or time())),
     }, ":")
     self:SendToGroup("CB", payload)
     self:SendToChannel("CB", payload, true)
@@ -10478,7 +10853,7 @@ function Overlord.Sync:CheckTotalVictoryFromSync()
         local capId = Overlord.Fronts and Overlord.Fronts:GetEnemyCapitalId(winningFaction, frontId)
         local cap = capId and Overlord.Zones:GetZone(capId)
         local ts = tonumber(cap and cap.capturedTime) or 0
-        return (ts > 0) and ts or time(), cap
+        return (ts > 0) and ts or (Overlord.ServerNow and Overlord.ServerNow() or time()), cap
     end
     local function VictoryCounts(victoryTs, capital, faction)
         if Overlord.Zones.IsKeptCapitalAfterTruce and Overlord.Zones:IsKeptCapitalAfterTruce(frontId, capital) then
@@ -10525,6 +10900,15 @@ function Overlord.Sync:CheckTotalVictoryFromSync()
         local announced = AnnouncedAt(faction)
         if announced and Overlord.Zones.GetVictoryCooldownSeconds
             and Overlord.Zones:GetVictoryCooldownSeconds(announced) == 0 then return announced end
+        -- 2.3.0: no announcement waits and the journal proves the victory (VictoryCounts):
+        -- its moment, when the capital carries the kept stamp (at most 5 s later). The stamp
+        -- itself made each such late learner repaint the front one second later, and every
+        -- map answer then carried those dates on (a full map pull for each neighbour).
+        local ev = Overlord.GetDominationVictoryEventNear
+            and Overlord:GetDominationVictoryEventNear(frontId, faction, victoryTs)
+        local at = type(ev) == "table" and ev.faction == faction and math.floor(tonumber(ev.victoryTs) or 0) or 0
+        if at > 0 and at <= victoryTs and victoryTs - at <= 5 and Overlord.Zones.GetVictoryCooldownSeconds
+            and Overlord.Zones:GetVictoryCooldownSeconds(at) == 0 then return at end
         return victoryTs
     end
 
@@ -10711,7 +11095,7 @@ function Overlord.Sync:BroadcastTotalVictory(victoryTs, victoryBonusPayload)
     local snap = OverlordDB and OverlordDB.lastCampaignStats
     local allyK  = (snap and snap.allyKills)  or 0
     local enemyK = (snap and snap.enemyKills) or 0
-    victoryTs = math.floor(tonumber(victoryTs) or time())
+    victoryTs = math.floor(tonumber(victoryTs) or (Overlord.ServerNow and Overlord.ServerNow() or time()))
     if frontId then
         -- WoW ne reboucle pas notre propre TV. Marquer aussi la livraison locale
         -- empeche qu'un replay SR du meme timestamp recree popup + annonce.
@@ -10753,7 +11137,7 @@ function Overlord.Sync:BuildTotalVictoryReplayPayload(frontId, victory)
     local faction = victory.faction
     local victoryTs = math.floor(tonumber(victory.timestamp) or 0)
     if (faction ~= "Alliance" and faction ~= "Horde") or victoryTs <= 0 then return nil end
-    local now = time()
+    local now = (Overlord.ServerNow and Overlord.ServerNow() or time())
     if now - victoryTs > 7200 or victoryTs > now + MAX_CLOCK_SKEW
         or IsStaleCampaignTimestamp(victoryTs) then return nil end
     local allyK, enemyK = 0, 0
@@ -10783,6 +11167,11 @@ function Overlord.Sync:DeferTotalVictoryUntilEvidence(frontKey, payload, sender,
     priv.pendingTotalVictory[frontKey] = entry
     local function retry()
         if priv.pendingTotalVictory[frontKey] ~= entry then return end
+        -- (Nothing is applied in an instance: the victory waits for the way out.)
+        if Overlord.InstanceSuspended or (IsInInstance and IsInInstance()) then
+            C_Timer.After(30, retry)
+            return
+        end
         entry.step = entry.step + 1
         Overlord.Sync:OnReceiveTotalVictory(entry.payload, entry.sender, entry.sourceChannel, true)
         if priv.pendingTotalVictory[frontKey] ~= entry then return end
@@ -12121,6 +12510,9 @@ function Overlord.Sync:Resume()
     pcall(syncFrame.RegisterEvent, syncFrame, "CHAT_MSG_CHANNEL_NOTICE_USER")
     -- Leaving an instance is one of the three moments the channel is tried again.
     if self.OnNetworkResume then self:OnNetworkResume() end
+    -- 2.2.2: the join backoff starts again (failures during loading screens are not the
+    -- server's refusal, and leaving an instance always tried at once).
+    self._joinChainFailures, self._joinRetryAt = nil, nil
     priv.channelClosed = nil
     self:JoinChannel()
     self:StartChannelRetryLoop()

@@ -11,6 +11,10 @@ function CreateFrame()
 end
 local clock = 0
 function debugprofilestop() return clock end
+local now = 100
+function GetTime() return now end
+function GetAddOnMemoryUsage(name) return name == "Overlord" and 20480 or 0 end
+function UpdateAddOnMemoryUsage() end
 local timers = {}
 C_Timer = { After = function(_, fn) timers[#timers + 1] = fn end }
 SlashCmdList = {}
@@ -40,7 +44,18 @@ Overlord.UI:Update(); for _ = 1, 4 do Overlord.Sync:OnAddonMessage() end; frameE
 -- (A fifth, light frame never pushes out a heavier one.)
 Overlord.Sync:OnAddonMessage(); frameEnd()
 
+now = 110
 SlashCmdList.OVERLORD("perf stop")
+-- 2.3.0: a report like /ov network: header, one verdict per line, then the details.
+local function line(text)
+    for _, l in ipairs(printed) do if l:find(text, 1, true) then return l end end
+end
+assert(line("===== Performance:") and line("all good"), "no performance header:\n" .. table.concat(printed, "\n"))
+assert(line("ReadyCheck-Ready") and line("Freezes") and line("0 calls over 50 ms in 10s; slowest 3.0 ms (UI:Update)"),
+    "freezes line: " .. tostring(line("Freezes")))
+assert(line("10.0 ms of Overlord in one frame"), "heaviest frame line missing")
+assert(line("1.9 ms per second"), "average load: " .. tostring(line("Average load")))
+assert(line("20.0 MB right now"), "addon memory line missing")
 local header
 for i, line in ipairs(printed) do
     if line:find("Heaviest frames", 1, true) then header = i end
@@ -57,5 +72,31 @@ assert(not printed[header + 4] or not printed[header + 4]:find("0.5 ms", 1, true
 clock = 0
 Overlord.UI:Update()
 assert(clock == 3, "profiler not removed")
+
+-- A profiler started outside an instance can be stopped inside one: it times every call.
+printed = {}
+SlashCmdList.OVERLORD("perf 10")
+Overlord.InstanceSuspended = true
+SlashCmdList.OVERLORD("perf stop")
+Overlord.InstanceSuspended = nil
+assert(line("===== Performance:") and not line("DISABLED_IN_INSTANCE"),
+    "/ov perf stop refused inside an instance:\n" .. table.concat(printed, "\n"))
+clock = 0
+Overlord.UI:Update()
+assert(clock == 3, "profiler left running inside an instance")
+
+-- 2.3.0: the whisper mesh and the guild lane carry the traffic while the channel is refused:
+-- /ov perf must time them too.
+Overlord.ChannelDirectory, Overlord.GuildLane = {}, {}
+function Overlord.ChannelDirectory:Tick() clock = clock + 2 end
+function Overlord.GuildLane:Pump() clock = clock + 1 end
+printed = {}
+SlashCmdList.OVERLORD("perf 10")
+Overlord.ChannelDirectory:Tick()
+Overlord.GuildLane:Pump()
+now = 120
+SlashCmdList.OVERLORD("perf stop")
+assert(line("ChannelDirectory:Tick") and line("GuildLane:Pump"),
+    "the whisper mesh and the guild lane are not timed:\n" .. table.concat(printed, "\n"))
 
 print("Perf: heaviest frames with the calls inside them OK")

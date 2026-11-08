@@ -61,6 +61,8 @@ local function reset()
     pending, joins, printed, touched, onJoin = {}, {}, {}, 0, nil
     channelId = 0
     sync._joinChannelAttemptPending = nil
+    sync._joinChainFailures, sync._joinRetryAt, sync._channelOpAt, sync._zoneSwapAt = nil, nil, nil, nil
+    if OverlordDB then OverlordDB.channelRefusedAt = nil end
     -- A login: the latch only lives in memory, cleared here the way Resume does it.
     channelId = 1
     sync:JoinChannel()
@@ -83,9 +85,36 @@ assert(not sync:IsChannelClosed() and #printed == 0)
 sync:StartChannelRetryLoop()
 local ticker = tickers[#tickers]
 assert(ticker and ticker.period == 60)
+-- 2.2.2: a refused chain is tried again after 60 s, then 120, 240... (up to 15 min), whoever asks.
+ticker.run()
+sync:JoinChannel(1)
+pump(5)
+assert(#joins == 4, "a chain restarted right after a refused one")
+pump(60)
 ticker.run()
 pump(40)
-assert(#joins == 8, "the ticker no longer restarts a chain while outside")
+-- 2.3.0: after a refused chain, a single plain join (no burst of joins and leaves).
+assert(#joins == 5, "a retry after a refused chain made " .. (#joins - 4) .. " joins, expected 1")
+local heldUntil = sync._joinRetryAt
+assert(heldUntil and heldUntil - now > 60 and heldUntil - now <= 120, "the second wait is not doubled")
+pump(heldUntil - now - 1)
+ticker.run()
+pump(1)
+assert(#joins == 5, "the doubled wait was not kept")
+pump(2)
+ticker.run()
+pump(40)
+assert(#joins == 6, "the ticker never came back after the doubled wait")
+-- 2.2.2: off a zone change: a join asked within 6 s of one waits for the game's own channels.
+reset()
+sync:NoteZoneSwap()
+sync:JoinChannel()
+pump(5)
+assert(#joins == 0, "our join met the game's own channel swap")
+pump(10)
+assert(#joins >= 1 and sync._zoneSwapAt + 6 <= joins[1].at,
+    "the join never came after the zone change")
+pump(40)
 -- A join that works: one call, and the chain ends.
 reset()
 onJoin = function() channelId = 5 end
@@ -276,6 +305,8 @@ end
 local function seat(channels, reserved, seconds)
     pending, joins, printed = {}, {}, {}
     sync._joinChannelAttemptPending, sync._channelSeat, sync._channelPads = nil, nil, nil
+    sync._joinChainFailures, sync._joinRetryAt = nil, nil
+    if OverlordDB then OverlordDB.channelRefusedAt = nil end
     model(channels, reserved)
     local startedAt = now
     sync:JoinChannel()
@@ -307,6 +338,46 @@ do
         assert(ops[k] - ops[k - 1] >= sync.CHANNEL_OP_GAP - 0.01, "two channel operations " .. (ops[k] - ops[k - 1]) .. " s apart")
     end
     for n, nm in pairs(held) do assert(not sync:IsChannelPad(nm), "a spaced pad is still held at /" .. n) end
+end
+-- 2.3.0: a chain refused earlier this session: the next one is one plain join, no pad, no leave.
+do
+    local quickJoin = JoinChannelByName
+    JoinChannelByName = function(nm) joins[#joins + 1] = { name = nm, at = now } end   -- refused
+    pending, joins, printed = {}, {}, {}
+    sync._joinChannelAttemptPending, sync._channelSeat, sync._channelPads = nil, nil, nil
+    sync._joinChainFailures, sync._joinRetryAt = 1, nil
+    model({ [1] = "General", [3] = "LocalDefense" }, { [2] = "Trade" })
+    sync:JoinChannel()
+    pump(40)
+    JoinChannelByName = quickJoin
+    assert(#joins == 1 and #tempJoins == 0 and #left == 0,
+        "a retry made " .. #joins .. " joins, " .. #tempJoins .. " pads, " .. #left .. " leaves")
+    assert(sync._joinChainFailures == 2 and sync._joinRetryAt and not sync._joinChannelAttemptPending,
+        "the single join did not end its chain as refused")
+    -- A login or /reload within 6 h of a refusal (only the saved date is left): one plain join too,
+    -- still after the calm wait; once it works, the refusal is forgotten and pads come back.
+    assert(OverlordDB and OverlordDB.channelRefusedAt, "the refusal was not saved")
+    JoinChannelByName = function(nm) joins[#joins + 1] = { name = nm, at = now } end
+    pending, joins = {}, {}
+    sync._joinChannelAttemptPending, sync._channelSeat, sync._channelPads = nil, nil, nil
+    sync._joinChainFailures, sync._joinRetryAt = nil, nil
+    model({ [1] = "General", [3] = "LocalDefense" }, { [2] = "Trade" })
+    local startedAt = now
+    sync:JoinChannel()
+    pump(40)
+    assert(#joins == 1 and #tempJoins == 0 and joins[1].at >= startedAt + 2,
+        "a login after a saved refusal made " .. #joins .. " joins, " .. #tempJoins .. " pads")
+    JoinChannelByName = quickJoin
+    pending, joins = {}, {}
+    sync._joinChannelAttemptPending, sync._channelSeat, sync._channelPads = nil, nil, nil
+    sync._joinChainFailures, sync._joinRetryAt = nil, nil
+    model({ [1] = "General", [3] = "LocalDefense" }, { [2] = "Trade" })
+    sync:JoinChannel()
+    pump(20)
+    assert(#joins == 1 and OverlordDB.channelRefusedAt == nil, "a join that worked kept the refusal")
+    OverlordDB.channelRefusedAt = time() - 7 * 3600
+    assert(not sync:ChannelRefusedLately(), "a refusal older than 6 h still counts")
+    OverlordDB.channelRefusedAt = nil
 end
 -- Every number up to the player's last one taken: no pad at all.
 at = seat({ [1] = "General", [2] = "LocalDefense", [3] = "A", [4] = "B", [5] = "C", [6] = "Mine" })
@@ -390,6 +461,7 @@ ticker.run()
 assert(held[5] == "OvPad296c3f1", "a pad was swept during a join")
 sync._joinChannelAttemptPending = nil
 ticker.run()
+pump(3)   -- (2.2.2: one channel operation per CHANNEL_OP_GAP, whatever sequence it belongs to)
 assert(not held[5] and held[6] == channel and held[1] == "LocalDefense", "the stray pad stayed, or more was left")
 
 print("forever_join_chain: ok")

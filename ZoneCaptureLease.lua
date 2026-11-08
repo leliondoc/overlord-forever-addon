@@ -1225,6 +1225,32 @@ function Lease:ObserveNetworkProgress(zone, owner, decision)
     return after ~= nil and (after ~= before or after.lastRemoteTs ~= beforeTs)
 end
 
+-- 2.2.2: a wave told without ticks (guild, hands of the member list, answers to a map pull) runs
+-- on the clock of its last state heard. A copy that went through hands and queues is late, and
+-- the raw hold it carries says nothing of that: the clock starts from the hold projected to
+-- now (the decision's observerDisplayHold: the sender's display, or the raw hold aged by the
+-- state's date), or a late copy keeps a finished wave on the map for minutes after the others
+-- dropped it, and tells it again with a fresh date. (Added to the opening hold as well: the
+-- proofs count the progress made since, so they do not change.)
+local TRANSIT_LAG_MAX = 100
+-- The sender writes the state's date and may write its display hold: neither buys more than
+-- the time the state really spent on the way. The lag is bounded by the age of the stamp
+-- (a display hold ahead of it is the sender's word only), by TRANSIT_LAG_MAX, and by what is
+-- left of the required hold (a late copy never completes a wave on its own); a state without
+-- a stamp, or stamped in the future (clamped by NormalizeRemoteTimestamp), has no age.
+local function TransitLag(decision, required)
+    local raw = tonumber(decision and decision.hold) or 0
+    local projected = tonumber(decision and decision.observerDisplayHold)
+    if not projected or projected ~= projected then return 0 end
+    local stamp = tonumber(decision.ts) or 0
+    local at = tonumber(decision.observerDisplayAt) or (Overlord.ServerNow and Overlord.ServerNow() or time())
+    if stamp <= 0 then return 0 end
+    local lag = math.min(TRANSIT_LAG_MAX, math.floor(projected - raw), math.floor(at - stamp))
+    local req = tonumber(required)
+    if req then lag = math.min(lag, math.floor(req - raw)) end
+    return math.max(0, lag)
+end
+
 function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
     if not zone or not decision or zone.holdAuthorityLocal then return false end
     if IsTombstoned(zone.id, decision.originKey, decision.waveId, decision.ts) then return false end
@@ -1261,7 +1287,7 @@ function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
         current.lastSeen = now
         current.lastRemoteTs = remoteTs
         current.lastHold = decision.hold or 0
-        current.tickAt, current.tickHold = now, decision.hold or 0
+        current.tickAt, current.tickHold = now, (decision.hold or 0) + TransitLag(decision, current.effectiveRequired)
         zone.holdTimeRequired = tonumber(current.effectiveRequired)
             or self:GetDefaultCaptureRequirement(zone, owner)
         TrackLeaseZone(zone)
@@ -1323,6 +1349,8 @@ function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
         tickAt = now,
         tickHold = decision.hold or 0,
     }
+    local lag = TransitLag(decision, remote.effectiveRequired)
+    remote.tickHold, remote.openedHold = remote.tickHold + lag, remote.openedHold + lag
     StartNetworkProof(remote, decision, now)
     zone._remoteCaptureLease = remote
     -- 2.2.0: without ticks, its outcome is all we will hear of it (SyncDirectory WatchWave).
@@ -1492,6 +1520,22 @@ function Lease:ExpireRemote(zone, reason)
     return true
 end
 
+-- 2.2.2: when the clock of a followed wave (the hold of its last state heard, run on) is past its
+-- requirement and a grace, in GetTime() seconds; nil without a clock.
+local CLOCK_GRACE = 15
+local function ClockOverAt(remote, zone)
+    if not remote or not remote.tickAt then return nil end
+    -- Only a lease never renewed (the late copy that opened it): a wave still ticking may be
+    -- contested or paused (its hold does not run 1 s per second; a Battle.net tick comes every
+    -- 15-60 s), and a capturer seen on our own disk is followed there.
+    if remote.tickAt ~= remote.openedAt then return nil end
+    if zone and CapturerVisibleOnLocalDisk and CapturerVisibleOnLocalDisk(zone, remote.originName, remote.owner) then
+        return nil
+    end
+    local required = tonumber(remote.effectiveRequired) or BASE_HOLD_REQUIRED
+    return remote.tickAt + required + CLOCK_GRACE - (tonumber(remote.tickHold) or 0)
+end
+
 function Lease:MaybeExpire(zone)
     local remote = zone and zone._remoteCaptureLease
     if not remote or zone.holdAuthorityLocal then return false end
@@ -1502,7 +1546,13 @@ function Lease:MaybeExpire(zone)
     -- 2.1.1: told in the guild, a wave has no ticks: its silence proves nothing until its end.
     -- (Off the fronts this sweep is all there is: no observer tick runs there.)
     if Overlord.GuildLane and Overlord.GuildLane:KeepFollowing(zone) then return false end
-    if GetTime() - (remote.lastSeen or 0) < HARD_TTL then return false end
+    local silence = GetTime() - (remote.lastSeen or 0)
+    if silence < HARD_TTL then
+        -- 2.2.2: past its clock a wave nobody renews is over; waiting HARD_TTL more left finished
+        -- sieges on the map for minutes (a copy told late opens a lease that nothing ends).
+        local over = ClockOverAt(remote, zone)
+        if not (over and silence >= SOFT_TTL and GetTime() >= over) then return false end
+    end
     return self:ExpireRemote(zone, "timeout")
 end
 
@@ -1742,7 +1792,7 @@ function Lease:ApplyDefensiveRequirement(zoneId, mode, originName, waveId, origi
     if not validWave or not originKey or not senderKey
         or type(originGuid) ~= "string" or originGuid == ""
         or type(defenderGuid) ~= "string" or defenderGuid == ""
-        or math.abs(time() - (tonumber(issuedAt) or 0)) > 120 then return false end
+        or math.abs((Overlord.ServerNow and Overlord.ServerNow() or time()) - (tonumber(issuedAt) or 0)) > 120 then return false end
     local required = self:NormalizeCaptureRequirement(
         zone, zone.owner, rawRequirement)
     if not IsExtendedCaptureRequirement(required) then return false end
@@ -2029,6 +2079,8 @@ GetZoneMaintenanceDeadline = function(zone, now)
             return now
         end
         deadline = (tonumber(remote.lastSeen) or 0) + HARD_TTL
+        local over = ClockOverAt(remote, zone)
+        if over then deadline = math.min(deadline, math.max(over, (tonumber(remote.lastSeen) or 0) + SOFT_TTL)) end
         if not remote.barrierCommitted and remote.barrierProposalUntil then
             deadline = math.min(deadline, tonumber(remote.barrierProposalUntil) or deadline)
         end
@@ -2038,6 +2090,21 @@ GetZoneMaintenanceDeadline = function(zone, now)
         deadline = deadline and math.min(deadline, localDeadline) or localDeadline
     end
     return deadline or now
+end
+
+local function SweepOneLease(zoneId, zone)
+    ExpireLocalBarrierProposal(zone)
+    if zone._remoteCaptureLease and zone.status ~= "in_progress" then
+        Lease:Complete(zone)
+    else
+        Lease:MaybeExpire(zone)
+    end
+    if not ZoneNeedsLeaseMaintenance(zone) then
+        if activeLeaseZones[zoneId] then
+            activeLeaseZoneCount = math.max(0, activeLeaseZoneCount - 1)
+        end
+        activeLeaseZones[zoneId] = nil
+    end
 end
 
 local function SweepActiveLeases()
@@ -2051,22 +2118,15 @@ local function SweepActiveLeases()
     end
 
     leaseMaintenanceRunning = true
+    -- (2.2.2: one zone's error no longer leaves the sweep marked running for the session,
+    -- every remote lease then waiting for a /reload to expire; a zone that keeps failing is
+    -- looked at again in 5 s, not at once.)
+    local failed = false
     for zoneId, zone in pairs(activeLeaseZones) do
-        ExpireLocalBarrierProposal(zone)
-        if zone._remoteCaptureLease and zone.status ~= "in_progress" then
-            Lease:Complete(zone)
-        else
-            Lease:MaybeExpire(zone)
-        end
-        if not ZoneNeedsLeaseMaintenance(zone) then
-            if activeLeaseZones[zoneId] then
-                activeLeaseZoneCount = math.max(0, activeLeaseZoneCount - 1)
-            end
-            activeLeaseZones[zoneId] = nil
-        end
+        if not pcall(SweepOneLease, zoneId, zone) then failed = true end
     end
     leaseMaintenanceRunning = false
-    ScheduleLeaseMaintenance()
+    ScheduleLeaseMaintenance(failed and 5 or nil)
 end
 
 ScheduleLeaseMaintenance = function(forcedDelay, zoneHint)

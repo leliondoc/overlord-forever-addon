@@ -1158,6 +1158,7 @@ function GFUI:CreateFrame()
     f:SetScript("OnHide", function()
         GFUI._refreshPending = false
         GFUI._refreshToken = (GFUI._refreshToken or 0) + 1
+        GFUI._channelTimer = nil
         if GameTooltip then GameTooltip:Hide() end
         if Overlord.PlayPanelCloseSound then Overlord:PlayPanelCloseSound() end
         if Overlord.UI.ScheduleActionGridActiveRefresh then Overlord.UI:ScheduleActionGridActiveRefresh() end
@@ -1192,6 +1193,8 @@ function GFUI:Refresh()
     if not frame or not frame:IsShown() or not gf then return end
     self._refreshedAt = GetTime()
     self:EnsureForm(gf)
+    -- Listings by hand: an open window asks a contact for the best ones (paced inside).
+    if gf.MaybePull then gf:MaybePull() end
     PaintList(frame, gf)
     local own = gf.own
     local card = frame.card
@@ -1212,7 +1215,8 @@ function GFUI:Refresh()
         end)
     end
     -- An empty board waiting on the channel looks again by itself: every 5 s until the
-    -- channel answers, then once when the listening time is over.
+    -- channel answers, then once when the listening time is over. One timer at a time,
+    -- forgotten when the window hides (OnHide).
     local waiting = frame.list.channelState
     if waiting and waiting ~= "open" and not self._channelTimer then
         local delay = 5
@@ -1220,8 +1224,10 @@ function GFUI:Refresh()
             local _, remaining = gf:ChannelState()
             delay = (remaining or 0) + 0.5
         end
-        self._channelTimer = true
+        local token = {}
+        self._channelTimer = token
         C_Timer.After(delay, function()
+            if GFUI._channelTimer ~= token then return end
             GFUI._channelTimer = nil
             GFUI:RequestRefresh()
         end)

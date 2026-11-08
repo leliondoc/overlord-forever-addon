@@ -189,6 +189,13 @@ local function newClient(name, faction, opts)
                 return true
             end,
             NoteChannelSendKind = function(_, kind) client.kinds[kind] = (client.kinds[kind] or 0) + 1 end,
+            -- As Sync.lua: the module's prefix, the channel's kind counter.
+            SendAddonChecked = function(self, msg, chatType, target, prefix)
+                local result = env.C_ChatInfo.SendAddonMessage(prefix, msg, chatType, target)
+                local ok = result == nil or result == true or result == 0
+                if chatType == "CHANNEL" then self:NoteChannelSendKind(self._channelSendKind or "?", ok, #msg) end
+                return ok
+            end,
             IsDeniedKillContributor = function(_, n) return client.banned[n] == true end,
             SenderIsInOurGroup = function(_, sender)
                 local key = canonical(sender)
@@ -573,6 +580,28 @@ do
     assert(not ok and reason == "GF_ERR_FULL")
     fire(alice, "CHAT_MSG_ADDON", "OverlordGF", "J:1:A:a:z:stromgarde:1:60", "WHISPER", "Bob Stone")
     assert(sentBy(alice, "WHISPER", "^R:1:f$")[1] and #alice.invites == 0)
+end
+
+-- ---------------------------------------------------------------------------
+-- 6a. 2.3.0: the leader raises the minimum level: who waited below it is not invited
+-- automatically (still there for a click)
+-- ---------------------------------------------------------------------------
+do
+    reset()
+    local alice = newClient("Alice Smith", "Alliance")
+    assert(alice.GF:Publish(spec({ cap = 10, auto = false })))
+    advance(0.3)
+    for _, row in ipairs({ { "Low Player", 30 }, { "High Player", 60 } }) do
+        local app = { key = row[1]:lower(), name = row[1], raw = row[1], class = 1, level = row[2], at = 0 }
+        alice.GF.pending[#alice.GF.pending + 1] = app
+        alice.GF.pendingByKey[app.key] = app
+    end
+    assert(alice.GF:Publish(spec({ cap = 10, auto = true, minLevel = 50 })))
+    alice.GF:DrainPending()
+    assert(#alice.invites == 1, "invited " .. #alice.invites .. " with the minimum level raised")
+    assert(#alice.GF.pending == 1 and alice.GF.pending[1].name == "Low Player",
+        "the player below the new minimum level was dropped or invited")
+    assert(not alice.GF:HasQueuedAuto(), "a player below the minimum level holds the automatic invitation back")
 end
 
 -- ---------------------------------------------------------------------------
@@ -1461,10 +1490,14 @@ do
     assert(#sentBy(alice, "WHISPER", "^R:1:f$") == 7, "a full waiting list must still say so")
     assert(alice.GF:Unpublish("user"))
     advance(60)
+    -- 2.2.2: the twenty waiting were told "gone" once each, spaced (not in one frame).
+    local farewells = sentBy(alice, "WHISPER", "^R:1:x$")
+    assert(#farewells == 20, "waiting sign-ups told at the withdrawal: " .. #farewells)
+    assert(farewells[20].at - farewells[1].at >= 19 * alice.GF.FAREWELL_GAP - 0.01, "the farewells left in a burst")
     local answered = #sentBy(alice, "WHISPER")
     for i = 1, 50 do ask("J:1:A:a:z:stromgarde:1:60", crowd(i)) end
     assert(#sentBy(alice, "WHISPER") - answered == 20, "no listing: the answers must be bounded too")
-    assert(#sentBy(alice, "WHISPER", "^R:1:x$") == 20)
+    assert(#sentBy(alice, "WHISPER", "^R:1:x$") == 40)
     -- An answer from someone else than the leader we asked is ignored.
     reset()
     alice = newClient("Alice Smith", "Alliance")
@@ -1856,12 +1889,17 @@ end
 do
     local source = assert(io.open("GroupFinder.lua", "r")):read("*a")
     for _, word in ipairs({ "Relay", "BroadcastToRelay", "SendToBNet", "BNSend", "SendToGroup",
-        "SendSyncRequest", "SendToNamedPeers", '"RAID"', '"PARTY"', '"GUILD"', '"SAY"', '"YELL"',
+        "SendSyncRequest", "SendToNamedPeers", '"RAID"', '"PARTY"', '"SAY"', '"YELL"',
         "TakeChannelToken%(true%)", "AcceptGroup", "LeaveParty", "UninviteUnit" }) do
         assert(not source:find(word), "GroupFinder.lua must not use " .. word)
     end
+    -- 2.2.2: the guild carries only the leader's own copy and its withdrawal (one send, one read).
+    local _, guildUses = source:gsub('"GUILD"', "")
+    assert(guildUses == 2 and source:find('return self:Send(msg, "GUILD")', 1, true)
+        and source:find('elseif channel == "GUILD" then', 1, true), "the guild path grew: " .. guildUses)
     assert(source:find('GF.PREFIX = "OverlordGF"', 1, true))
-    assert(source:find("securecall(C_ChatInfo.SendAddonMessage, self.PREFIX", 1, true))
+    assert(source:find("pcall(sync.SendAddonChecked, sync, msg, chatType, target, self.PREFIX)", 1, true))
+    assert(not source:find("C_ChatInfo.SendAddonMessage", 1, true), "a send around Sync's checked send")
 end
 
 -- ---------------------------------------------------------------------------
@@ -1942,8 +1980,20 @@ do
         local text = read(workflow)
         assert(text:find("lua5.1 tests/forever_group_finder.test.lua", 1, true), workflow .. " misses the finder test")
         assert(text:find("lua5.1 tests/forever_group_finder_ui.test.lua", 1, true), workflow .. " misses the window test")
+        assert(text:find("lua5.1 tests/forever_group_finder_relay.test.lua", 1, true), workflow .. " misses the relay test")
         assert(text:find("lua5.1 tests/forever_join_chain.test.lua", 1, true), workflow .. " misses the join test")
     end
+end
+
+-- 2.3.0: a packet that raises inside the handler is counted and kept, never silent.
+do
+    local eve = newClient("Eve Error", "Alliance")
+    local saved = eve.GF.OnAddonMessage
+    eve.GF.OnAddonMessage = function() error("boom") end
+    eve.GF:OnEvent("CHAT_MSG_ADDON", eve.GF.PREFIX, "X:1", "WHISPER", "Some One")
+    eve.GF.OnAddonMessage = saved
+    assert(eve.GF.messageErrors == 1 and tostring(eve.GF.lastMessageError):find("boom"),
+        "a PvP Groups message error was swallowed")
 end
 
 print("forever_group_finder: ok")

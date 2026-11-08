@@ -85,6 +85,13 @@ local previousSessionHonorableKills = nil
 local honorableKillCounterSource = nil
 -- Reference relue (login, sortie d'instance) pas encore confirmee par un VH credite.
 local honorableKillBaselineUnconfirmed = false
+-- 2.2.2: reference relue a la sortie d'une instance. Le compteur peut encore y valoir sa
+-- valeur d'avant le BG (donnees PvP en retard) : le premier saut ne depasse pas
+-- RESUME_FIRST_DELTA, et la reference est relue apres RESUME_REREAD tant qu'aucun evenement ne
+-- l'a recalee (meme hors front, sans credit).
+local honorableKillResumePending = false
+local RESUME_FIRST_DELTA = 3
+local RESUME_REREAD = { 3, 10 }
 
 -- Tracking du dernier ennemi vu (nameplate) pour attribuer les morts
 local lastEnemyTarget = { name = nil, guid = nil, time = 0 }
@@ -206,22 +213,29 @@ local GUID_CACHE_CLEANUP_INT = 300  -- 5 minutes
 local GUID_CACHE_CLEANUP_QUOTA = 16
 local guidCacheCleanupActive = false
 local guidCacheCleanupNextKey = nil
+-- Bounds: past GUID_CACHE_SOFT_MAX players (a crowded hour) the sweep runs without
+-- waiting and keeps 15 minutes only; past GUID_CACHE_HARD_MAX the cache starts again.
+local GUID_CACHE_SOFT_MAX, GUID_CACHE_HARD_MAX, GUID_CACHE_PRESSURE_EXPIRY = 1024, 4096, 900
+local guidCacheSize = 0
 
 local function CleanupGuidPlayerInfoCache()
     local now = GetTime()
+    local pressed = guidCacheSize > GUID_CACHE_SOFT_MAX
     if not guidCacheCleanupActive then
-        if now - lastGuidCacheCleanup < GUID_CACHE_CLEANUP_INT then return end
+        if not pressed and now - lastGuidCacheCleanup < GUID_CACHE_CLEANUP_INT then return end
         guidCacheCleanupActive = true
         guidCacheCleanupNextKey = next(guidPlayerInfoCache)
     end
 
+    local expiry = pressed and GUID_CACHE_PRESSURE_EXPIRY or GUID_CACHE_EXPIRY
     local processed = 0
     while guidCacheCleanupNextKey ~= nil and processed < GUID_CACHE_CLEANUP_QUOTA do
         local guid = guidCacheCleanupNextKey
         guidCacheCleanupNextKey = next(guidPlayerInfoCache, guid)
         local info = guidPlayerInfoCache[guid]
-        if now - (info.time or 0) > GUID_CACHE_EXPIRY then
+        if now - (info.time or 0) > expiry then
             guidPlayerInfoCache[guid] = nil
+            guidCacheSize = guidCacheSize - 1
         end
         processed = processed + 1
     end
@@ -239,8 +253,13 @@ local function CacheEnemyPlayerInfo(guid, name, class, race, raceSex)
     CleanupGuidPlayerInfoCache()
     local info = guidPlayerInfoCache[guid]
     if not info then
+        if guidCacheSize >= GUID_CACHE_HARD_MAX then
+            guidPlayerInfoCache, guidCacheSize = {}, 0
+            guidCacheCleanupActive, guidCacheCleanupNextKey = false, nil
+        end
         info = {}
         guidPlayerInfoCache[guid] = info
+        guidCacheSize = guidCacheSize + 1
     end
     info.name = name
     if class and class ~= "" then info.class = class end
@@ -883,11 +902,23 @@ function Overlord.Combat:OnPVPKillsChanged(unitTarget)
     previousSessionHonorableKills = current
     local previousSource = honorableKillCounterSource
     honorableKillCounterSource = source
+    -- (Tout evenement recale la reference : la garde de reprise est consommee ici, meme hors
+    -- front, sinon un premier groupe de VH plus tard dans un front etait jete sans credit.)
+    -- (2.2.2: the guard covers the stale minutes after an instance only, 120 s at most.)
+    local resumePending = honorableKillResumePending
+        and GetTime() - (tonumber(Overlord.Combat._resumeAt) or 0) < 120
+    honorableKillResumePending = false
     if not IsKillScoringActive() or previous == nil or previousSource ~= source then return end
     local delta = current - previous
     -- Le compteur "session" est journalier : un reset/recul rebase sans retirer
     -- les VH hebdomadaires ni importer des kills d'une ancienne session.
     if delta <= 0 then return end
+    if resumePending then
+        if delta > RESUME_FIRST_DELTA then
+            dbg("PLAYER_PVP_KILLS_CHANGED: reference perimee apres l'instance, recalage sans credit", delta)
+            return
+        end
+    end
     -- Au login, le compteur a vie peut valoir 0 (ou une valeur perimee) avant l'arrivee des
     -- donnees PvP : cette reference ferait crediter tout l'historique d'un coup (2026-09-29 :
     -- 3434 VH de la semaine passee + 50 du jour). Le premier saut apres une relecture ne peut
@@ -1166,7 +1197,7 @@ function Overlord.Combat:OnPlayerDead()
                 -- Broadcast EK (Enemy Kill event) au lieu de K (total).
                 if Overlord.Sync then
                     local classStr = killerClass or ""
-                    local ts = time()
+                    local ts = Overlord.ServerNow and Overlord.ServerNow() or time()
                     local zoneIdForEK = zoneIdOnDeath
                     if zoneIdForEK == "" and Overlord.InActiveFront
                         and Overlord.Fronts and Overlord.Fronts.activeFrontId then
@@ -1297,6 +1328,18 @@ function Overlord.Combat:Resume()
     -- Les HK/KB gagnees en instance pendant la suspension ne doivent pas etre
     -- rejouees comme des kills open-world au prochain event apres la sortie.
     RefreshPvpKillBaselines()
+    honorableKillResumePending = true
+    self._resumeAt = GetTime()
+    for _, delay in ipairs(RESUME_REREAD) do
+        C_Timer.After(delay, function()
+            if not honorableKillResumePending or Overlord.InstanceSuspended then return end
+            local current, source = GetSessionHonorableKills()
+            -- (A la sortie, le compteur pouvait encore etre illisible : la relecture le prend alors.)
+            if current ~= nil and (honorableKillCounterSource == nil or source == honorableKillCounterSource) then
+                previousSessionHonorableKills, honorableKillCounterSource = current, source
+            end
+        end)
+    end
     combatFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
     combatFrame:RegisterEvent("CHAT_MSG_COMBAT_HONOR_GAIN")
     combatFrame:RegisterEvent("PARTY_KILL")

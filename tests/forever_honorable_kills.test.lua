@@ -110,6 +110,43 @@ Overlord.Combat:Resume()
 honorableKills = 41
 Overlord.Combat:OnPVPKillsChanged("player")
 assert(score() == 89, "Instance points leaked into the outdoor leaderboard")
+-- 2.2.2: the counter still read its value from before the battleground at the exit (PvP data
+-- late): the battleground's kills come with the first outdoor event, never credited.
+Overlord.InstanceSuspended = true
+Overlord.InstanceSuspended = false
+Overlord.Combat:Resume() -- reads 41, the battleground made it 47
+honorableKills = 48
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 89, "Battleground kills credited after a late counter")
+honorableKills = 49
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 90, "The next outdoor kill was lost")
+-- The late counter read again a few seconds after the exit: the first kill then counts.
+Overlord.Combat:Resume() -- reads 49, the battleground made it 55
+honorableKills = 55
+advance(4)
+honorableKills = 56
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 91, "The re-read after the exit lost the first outdoor kill")
+-- Nothing changes for later events.
+honorableKills = 40
+Overlord.Combat:OnPVPKillsChanged("player")
+honorableKills = 41
+Overlord.Combat:OnPVPKillsChanged("player")
+Overlord.Leaderboard.kills[playerName] = 89
+-- 2.2.2: the guard covers the first minutes after the exit only: kills long after it count.
+Overlord.Combat:Resume() -- reads 41
+advance(130)
+honorableKills = 46
+Overlord.Combat:OnPVPKillsChanged("player")
+assert(score() == 94, "Kills two minutes after an instance exit were dropped")
+honorableKills = 41
+Overlord.Combat:OnPVPKillsChanged("player")
+honorableKills = 40
+Overlord.Combat:OnPVPKillsChanged("player")
+honorableKills = 41
+Overlord.Combat:OnPVPKillsChanged("player")
+Overlord.Leaderboard.kills[playerName] = 89
 
 -- Prefer the lifetime counter: no daily rollover, no false zero replay.
 local lifetime = 2000
