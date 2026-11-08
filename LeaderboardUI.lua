@@ -447,6 +447,10 @@ local lbVolatileLists = {
     dirty = true,
     token = 0,
     revision = 0,
+    -- (2.2.2) One shared empty list while the first build runs: a fresh {} per refresh
+    -- made an active search see a new source each time and start over.
+    none = {},
+    retryAt = 0,
 }
 local LB_VOLATILE_LISTS_TTL = 30
 local LB_VOLATILE_WORK_PER_SLICE = 64
@@ -460,7 +464,7 @@ local function GetVolatileLeaderboardLists(lb, sortedGuilds)
         and (now - lbVolatileLists.at) < LB_VOLATILE_LISTS_TTL then
         return lbVolatileLists.keeps, lbVolatileLists.outposts
     end
-    if not lbVolatileLists.pending and C_Timer and C_Timer.After then
+    if not lbVolatileLists.pending and now >= lbVolatileLists.retryAt and C_Timer and C_Timer.After then
         lbVolatileLists.pending = true
         lbVolatileLists.token = lbVolatileLists.token + 1
         local token = lbVolatileLists.token
@@ -489,7 +493,14 @@ local function GetVolatileLeaderboardLists(lb, sortedGuilds)
             local ok, keepsOrErr, outposts = coroutine.resume(worker)
             if not ok then
                 lbVolatileLists.pending = false
-                C_Timer.After(1, function()
+                -- (2.2.2) A failing build used to retry every second with a full rebuild,
+                -- silently: it is reported once and retried after 30 s.
+                lbVolatileLists.retryAt = GetTime() + 30
+                if not lbVolatileLists.reported and geterrorhandler then
+                    lbVolatileLists.reported = true
+                    pcall(geterrorhandler(), keepsOrErr)
+                end
+                C_Timer.After(31, function()
                     if token ~= lbVolatileLists.token then return end
                     if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RequestRefresh then
                         Overlord.LeaderboardUI:RequestRefresh()
@@ -525,7 +536,7 @@ local function GetVolatileLeaderboardLists(lb, sortedGuilds)
     end
     -- L'ancienne vue reste visible jusqu'au commit complet; le premier affichage
     -- utilise simplement deux listes vides pendant quelques tranches.
-    return lbVolatileLists.keeps or {}, lbVolatileLists.outposts or {}
+    return lbVolatileLists.keeps or lbVolatileLists.none, lbVolatileLists.outposts or lbVolatileLists.none
 end
 
 -- Textures Blizzard (barres de defilement) pour indiquer qu'on peut scroller
@@ -2423,7 +2434,6 @@ RenderKillRows = function(force)
     local P = GetPalette()
     local metaCache = view.meta or {}
     local localeCache = view.locale or {}
-    local duplicateShortNames = view.duplicateShortNames or {}
     local sync = Overlord.Sync
     local myName = sync and sync.GetPlayerFullName and sync:GetPlayerFullName()
     myName = myName and sync.CanonicalForeverName and sync:CanonicalForeverName(myName) or myName
@@ -3192,6 +3202,14 @@ local function ComputeLeaderboardInfo(dc)
             if counted and info.myRank then break end
         end
     end
+    -- (2.2.2) Beyond the displayed top (5 000 rows): "#5000+" with our kills, never
+    -- "not ranked yet" for a player who has kills this week.
+    local lbData = Overlord.Leaderboard
+    if not info.myRank and myName and lbData and lbData.GetMaxKillsForDedupName
+        and #sorted > 0 and #sorted >= (lbData.KILL_RANK_LIMIT or 5000) then
+        local kills = tonumber(lbData:GetMaxKillsForDedupName(myName)) or 0
+        if kills > 0 then info.beyondTop, info.myKills = #sorted, kills end
+    end
     local myGuild = Overlord.Outpost and Overlord.Outpost.GetLocalPlayerGuild
         and Overlord.Outpost:GetLocalPlayerGuild() or ""
     if myGuild ~= "" then
@@ -3251,6 +3269,9 @@ function Overlord.LeaderboardUI:RefreshInfoLines(dc)
             or (L.LB_INFO_FIRST or "You lead the ladder!")
         InfoSetLine(right[1], InfoText(L.LB_INFO_YOU or "You:", string.format("#%d · %s %s",
             info.myRank, InfoNumber(info.myKills), unit)) .. "  |cFFB8B8B8(" .. nextText .. ")|r")
+    elseif info.beyondTop then
+        InfoSetLine(right[1], InfoText(L.LB_INFO_YOU or "You:", string.format("#%d+ · %s %s",
+            info.beyondTop, InfoNumber(info.myKills), unit)))
     else
         InfoSetLine(right[1], InfoText(L.LB_INFO_YOU or "You:", L.LB_INFO_UNRANKED or "not ranked yet"))
     end
@@ -3461,12 +3482,11 @@ function Overlord.LeaderboardUI:Refresh()
     view.byFaction = dc.byFaction or { Alliance = {}, Horde = {} }
     view.sortedGuilds = dc.sortedGuilds or {}
     view.sortedGuildRating = dc.sortedGuildRating or {}
-    view.sortedGuildKeeps = sortedGuildKeeps or {}
-    view.sortedOutposts = sortedOutposts or {}
+    view.sortedGuildKeeps = sortedGuildKeeps or lbVolatileLists.none
+    view.sortedOutposts = sortedOutposts or lbVolatileLists.none
     self:RefreshSitesWeek()
     view.meta = dc.meta or {}
     view.locale = dc.locale or {}
-    view.duplicateShortNames = dc.duplicateShortNames or {}
     -- Totaux avant le dessin : la hauteur du cadre est calculee avec leur ligne.
     local totalFmt = string.format(L.LB_TOTAL_FORMAT, dc.alliKills or 0, dc.hordeKills or 0)
     if lbFrame._lbTotalFmt ~= totalFmt then

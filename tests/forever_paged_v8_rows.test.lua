@@ -117,6 +117,9 @@ local PULLER = client("Bridge Tester", "alliance", "Alliance")
 local ALLY = client("Analyst Tester", "alliance", "Alliance")
 local SOURCE = client("Gateway Tester", "horde", "Horde")
 PULLER.friends, SOURCE.friends = { SOURCE }, { PULLER }
+-- This file covers the one-bucket pages ("G"): 2.3.0 peers ask several buckets at once ("M",
+-- tests/forever_ladder_wide_rounds.test.lua), so the release of every peer reads as unknown here.
+PULLER.Overlord.Relay.GetPeerReleaseWithin = function() return nil end
 -- Only Battle.net proves the other faction (game account of the friend).
 PULLER.Overlord.Sync.GetResolvedBNetPlayerFaction = function(_, n) return n == SOURCE.name and "Horde" or nil end
 SOURCE.Overlord.Sync.GetResolvedBNetPlayerFaction = function(_, n) return n == PULLER.name and "Alliance" or nil end

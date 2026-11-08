@@ -203,4 +203,32 @@ end
 -- Relay off: a capture still lights the row (local view, as before 1.7.0).
 Overlord.Relay.IsEnabled = function() return false end
 assert(row("durotar").active and row("durotar").captures == 6, "relay off: capture row missing")
+-- The send wrappers hand every argument on: the relay's bridge rows ask Sync:SendWhisper for a
+-- raw whisper (4th argument, direct); dropped, they went through the relay's catch-up lane.
+do
+    local got
+    Overlord.Sync = {
+        SendWhisper = function(_, kind, data, target, direct) got = { kind, data, target, direct } return true end,
+        Send = function() return true end, SendToChannel = function() return true end,
+        SendToBNet = function() return true end,
+    }
+    assert(loadfile("FrontActivity.lua"))()
+    assert(Overlord.Sync:SendWhisper("LK", "row", "Some Body", true) == true, "wrapped whisper not sent")
+    assert(got and got[1] == "LK" and got[3] == "Some Body" and got[4] == true,
+        "the FrontActivity wrapper dropped the direct flag of Sync:SendWhisper")
+    Overlord.Sync = nil
+end
+-- 2.3.0: a bracket whispered along the chain with a slot far ahead (a forged one) is no live
+-- bracket, is not kept as passed on, and covers none of the front's real brackets.
+do
+    local fa = Overlord.FrontActivity
+    local slot = math.floor(serverNow / 30)
+    assert(fa.IsLiveBracket and fa:IsLiveBracket("1:ashenvale:10:" .. slot), "a live bracket was refused")
+    assert(not fa:IsLiveBracket("1:ashenvale:10:" .. (slot + 100000)), "a bracket dated far ahead was taken as live")
+    assert(not fa:IsLiveBracket("1:nowhere:10:" .. slot), "a bracket of an unknown front was taken as live")
+    assert(not fa:IsLiveBracket("1:ashenvale:7:" .. slot), "a bracket that is not listed was taken as live")
+    fa:NoteRelayedBracketPassed("1:ashenvale:50:" .. (slot + 100000))
+    assert(not fa:CoversRelayedBracket("1:ashenvale:10:" .. slot),
+        "a forged bracket dated far ahead covered the front's real brackets")
+end
 print("Front activity captures: shared map count, release/campaign stamps ignored, kills first, expiry OK")

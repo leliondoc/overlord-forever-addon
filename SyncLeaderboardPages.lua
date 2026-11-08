@@ -263,7 +263,7 @@ end
 -- and its profile for every requester (~220 ms of work and ~29 MB of garbage for
 -- 5,000 players, CPU spikes). Pages are then at most 2 minutes old; the next round
 -- brings the rest.
-local PROFILE_REUSE_SEC = 120
+local PROFILE_REUSE_SEC, PROFILE_DIRTY_REUSE_SEC, PROFILE_DIRTY_ROW_SEC = 120, 30, 0.03
 -- own: the profile is for our own pull. It is not reused once rows were applied
 -- since it was built (1.8.0: rounds every 45-105 s after a v8 round would otherwise
 -- list and fetch again the rows the previous round just brought).
@@ -274,7 +274,23 @@ local function prepare(callback, own)
     local recent = sync.GetAttestedLeaderboardSnapshot and sync:GetAttestedLeaderboardSnapshot()
     local cached = type(recent) == "table" and profiles[recent] or nil
     local age = cached and (((GetServerTime and GetServerTime()) or time()) - (tonumber(recent.at) or 0)) or nil
-    if cached and cached.epoch == wanted and age and age >= 0 and age < PROFILE_REUSE_SEC
+    -- 2.2.2: without the channel, ranking rows travel from hand to hand by these pages: a copy
+    -- two minutes old at every hand made each hop up to two minutes late (the whole ranking
+    -- settled 6-7 minutes after the last kill). A copy our ranking moved past is served again
+    -- only while younger than PROFILE_DIRTY_REUSE_SEC; an unchanged one as before (and always
+    -- while the channel carries: there the totals come live). (Measured: about a quarter more
+    -- rebuilds than at 120 s, the rows a fifth sooner; 60 s brought nothing over 120 s.)
+    -- A rebuild costs garbage in proportion to the rows: the wait grows with the copy (30 s up
+    -- to 1,000 rows, 120 s from 4,000), so at most ~33 rebuilt rows a second (2.2.1's rate for a
+    -- 4,000-row copy at 120 s); a smaller copy rebuilds up to 4x more often than in 2.2.1, accepted.
+    local reuse = PROFILE_REUSE_SEC
+    local directory = Overlord.ChannelDirectory
+    if lb._snapshotDirty and directory and directory.IsActive and directory:IsActive() then
+        local perRow = tonumber(sync._profileDirtyRowSec) or PROFILE_DIRTY_ROW_SEC
+        reuse = math.min(PROFILE_REUSE_SEC,
+            math.max(PROFILE_DIRTY_REUSE_SEC, (cached and tonumber(cached.count) or 0) * perRow))
+    end
+    if cached and cached.epoch == wanted and age and age >= 0 and age < reuse
         and not (own and cached.builtRows ~= (stats.changedRows or 0)) then
         stats.profileReused = (stats.profileReused or 0) + 1
         C_Timer.After(0.001, function()
@@ -551,7 +567,7 @@ local function checkpoint(state)
     if state.wire == "8" then
         -- A v8 stream restarts with its bucket fingerprints (3 packets): only the
         -- stream is kept, and a v7 pull with another peer resumes at its start.
-        saved.shared = { stream = state.stream or "LK", bucket = 1, done = 0, at = GetServerTime() }
+        saved.shared = { stream = state.stream or "LK", bucket = 1, done = 0, at = GetServerTime(), wire8 = true }
         return
     end
     local previous = saved.shared
@@ -652,6 +668,11 @@ request = function(state, retry)
         elseif state.phase == "T" then
             fields = { "8", "T", state.epoch, state.nonce, state.seq, "LK", state.from,
                 state.factionFilter or "-" }
+        elseif state.phase == "M" then
+            fields = { "8", "M", state.epoch, state.nonce, state.seq, state.stream, state.wideBitmap }
+        elseif state.phase == "N" then
+            fields = { "8", "N", state.epoch, state.nonce, state.seq, state.stream, state.coveredBitmap,
+                state.from, state.bitmap }
         elseif state.phase == "L" then
             fields = { "8", "L", state.epoch, state.nonce, state.seq, state.stream, state.bucket }
         else
@@ -694,7 +715,9 @@ request = function(state, retry)
     -- Two relay TTLs plus margin also cover a congested first request/reply.
     -- A peer that already answered pages in this pull and then goes silent has
     -- most likely left or zoned in: give up sooner (rows already merged stay).
-    local answered = state.completed > 0 or state.replySeen
+    -- (2.3.0: a wide round counts no bucket in completed; it only runs after the peer answered
+    -- its V, so it is as answered as a pull past its first bucket.)
+    local answered = state.completed > 0 or state.replySeen or state.wideTodo ~= nil
     local remaining = state.supported and (answered and 90 or 180) or 270
     state.timeoutRemaining = remaining
     -- The first request can be admitted locally yet disappear in a relay, or
@@ -796,6 +819,7 @@ local function nextStream8(state)
     sendControl("HR", table.concat({ "8", "F", state.epoch, state.nonce, state.seq }, ":"), state.peer)
     finish(state, true)
 end
+local SMALL_BUCKET_ROWS, SMALL_STREAM_ROWS = 4, 640
 local function nextBucket8(state)
     state.combatWaits = 0
     state.qi = state.qi + 1
@@ -805,7 +829,11 @@ local function nextBucket8(state)
     local own = state.profile.streams[state.stream].buckets[bucketIndex]
     -- Nothing of ours in this bucket: every row is wanted (of the friend's faction
     -- when it is of the other faction), no list needed.
-    if own.n == 0 then
+    -- 2.2.2: a small bucket of a small ranking is asked whole too (the list step is one more
+    -- round trip, 3-4 s, for a handful of rows): fewer exchanges, a page of rows we mostly hold.
+    local ownStream = state.profile.streams[state.stream]
+    local small = own.n <= SMALL_BUCKET_ROWS and (subset(ownStream, state.factionFilter) or 0) <= SMALL_STREAM_ROWS
+    if own.n == 0 or small then
         state.phase, state.from = "G", 1
         state.bitmap = state.factionFilter and ("*" .. state.factionFilter) or "*"
     else
@@ -838,8 +866,236 @@ local function nextTop8(state, cursor)
     request(state)
 end
 
+-- 2.2.2: wide rounds. Between two 2.2.2 clients the differing buckets of a stream are not
+-- walked one at a time (a list and a page of rows each: two round trips of 3-4 s per bucket,
+-- and the responder busy for the whole minute): "M" asks the row lists of all the buckets
+-- still to do at once (as many as one answer holds, a header and the 5-byte entries of each
+-- bucket, in index order), "N" then asks the wanted rows of the listed buckets, numbered along
+-- the lists, a page at a time. The same fingerprints, the same rows and the same acceptance
+-- as L and G; only the number of exchanges changes. A bucket too big for a list (WIDE_BIG) is
+-- left to L and G. Older clients are never asked: their release (their own presence) decides.
+local WIDE_MIN_RELEASE, WIDE_BLOB_MAX, WIDE_BIG, WIDE_RELEASE_AGE = { 2, 2, 2 }, 4000, 790, 3 * 3600
+-- Hint (kill rows only): next to its fingerprint and faction, every entry of an LK list carries
+-- 5 more characters, the player's key tag (14 bits of a key hash whose base and seed come from the
+-- pull's nonce, so two keys sharing a tag in one pull almost never do in the next) and the
+-- kill total (16 bits, 65535 = "more or unknown"). The requester does not ask the rows it can
+-- tell it is AHEAD on (the same tag in the bucket, every row holding it more kills than the
+-- list says). A wrong or lying hint can only make us skip rows (the list's sender is asked
+-- nothing it could not already refuse us): the rows that are asked and delivered go through the
+-- same acceptance as ever, a score is never taken from a list.
+-- A list carries hints for the buckets of at most hintMax rows (the entries of a big bucket would
+-- cost more than the rows they spare); the count of such a bucket is sent 500 higher.
+-- (LK lists, hinted, are cut at blobLK: the requester works a list out in one frame.)
+-- hintBudget: own rows a requester turns into hints in one frame (beyond it, rows are asked).
+-- fpBudget (2.3.0): own rows a requester fingerprints in one frame (wideAsk: buckets asked per M).
+local wide = { bigLK = 400, ordMax = 4000, killsMax = 65535, hintMax = 32, blobLK = 2000, hintBudget = 600,
+    fpBudget = 1000 }
+sync._leaderboardWide = wide
+function wide.big(stream) return stream == "LK" and wide.bigLK or WIDE_BIG end
+function wide.blob(stream) return stream == "LK" and wide.blobLK or WIDE_BLOB_MAX end
+-- (h < 2^31 and base < 1028: every step stays an exact double. The top 14 bits of a salted
+-- product: the low bits of a polynomial hash follow the last characters too closely.)
+function wide.tag(key, a, b)
+    local base, h = 31 + a % 997, b
+    for i = 1, #key do h = (h * base + key:byte(i)) % MOD end
+    return math.floor(((mulmod(h, a) + b) % MOD) / 131072)
+end
+function wide.encode(key, payload, a, b)
+    local kills = tonumber(payload:match("^[^:]*:(%d+):"))
+    if not kills or kills >= wide.killsMax then kills = wide.killsMax end
+    local value = wide.tag(key, a, b) * 65536 + kills
+    local d5 = value % 64; value = (value - d5) / 64
+    local d4 = value % 64; value = (value - d4) / 64
+    local d3 = value % 64; value = (value - d3) / 64
+    local d2 = value % 64
+    return string.char(B64BYTES[(value - d2) / 64 + 1], B64BYTES[d2 + 1], B64BYTES[d3 + 1], B64BYTES[d4 + 1], B64BYTES[d5 + 1])
+end
+-- tag, kills (nil when the five characters are not a hint)
+function wide.decode(text)
+    local value = 0
+    for i = 1, 5 do
+        local digit = B64INDEX[text:byte(i) or 0]
+        if not digit then return nil end
+        value = value * 64 + digit
+    end
+    return math.floor(value / 65536), value % 65536
+end
+-- Our rows of a bucket by tag: the lowest kill total of each (cached for the pull).
+function wide.own(state, bucketIndex, bucket, a, b)
+    local cache = state.ownHint
+    if not cache then cache = {}; state.ownHint = cache end
+    local found = cache[bucketIndex]
+    if found then return found end
+    found = {}
+    for j = 1, bucket.n do
+        local tag = wide.tag(bucket.keys[j], a, b)
+        local kills = tonumber(bucket.payloads[j]:match("^[^:]*:(%d+):")) or 0
+        if not found[tag] or kills < found[tag] then found[tag] = kills end
+    end
+    cache[bucketIndex] = found
+    return found
+end
+local function wideAllowed(peer)
+    local net = Overlord.Relay
+    local release = net and net.GetPeerReleaseWithin and net:GetPeerReleaseWithin(peer, WIDE_RELEASE_AGE)
+    local x, y, z = tostring(release or ""):match("^(%d+)%.(%d+)%.(%d+)$")
+    if not x then return false end
+    x, y, z = tonumber(x), tonumber(y), tonumber(z)
+    if x ~= WIDE_MIN_RELEASE[1] then return x > WIDE_MIN_RELEASE[1] end
+    if y ~= WIDE_MIN_RELEASE[2] then return y > WIDE_MIN_RELEASE[2] end
+    return z >= WIDE_MIN_RELEASE[3]
+end
+local function wideAsk(state)
+    local todo = {}
+    for i in pairs(state.wideTodo) do todo[#todo + 1] = i end
+    table.sort(todo)
+    -- 2.3.0: our own fingerprints of the listed buckets are worked out in the frame their list
+    -- arrives (applyWideList): one M asks the buckets holding at most fpBudget rows of ours (one
+    -- bucket always), the others wait for the next M. A big ranking pulling from a small one had
+    -- all 64 buckets in one answer: its whole stream (6,500 race rows) fingerprinted in one frame.
+    local own, picked, asked, rows = state.profile.streams[state.stream].buckets, {}, {}, 0
+    for _, i in ipairs(todo) do
+        local n = own[i].n
+        if #picked > 0 and rows + n > wide.fpBudget then break end
+        picked[#picked + 1], asked[i], rows = i, true, rows + n
+    end
+    state.phase, state.wideBitmap, state.wideAsked = "M", encodeBitmap(picked), asked
+    state.nLastBucket, state.nLastKey, state.wideCovered = nil, nil, nil
+    request(state)
+end
+local function wideNext(state)
+    state.combatWaits = 0
+    if next(state.wideTodo) then wideAsk(state); return end
+    local left = state.wideLeft
+    state.wideTodo, state.wideAsked, state.wideLeft = nil, nil, nil
+    state.ownFp, state.ownHint = nil, nil
+    if left and #left > 0 then
+        -- (Buckets too big for a list: the usual way.)
+        state.queue, state.qi = left, 0
+        nextBucket8(state)
+        return
+    end
+    nextStream8(state)
+end
+local function nextWideRows(state, cursor)
+    stats.pages = stats.pages + 1
+    if cursor == "-" then wideNext(state); return end
+    state.combatWaits = 0
+    state.from = tonumber(cursor)
+    request(state)
+end
+local function wideStart(state, queue)
+    state.wideTodo, state.wideLeft, state.ownFp, state.ownHint = {}, {}, nil, nil
+    -- 2.3.0: a bucket we hold nothing of is not listed: every row of it is wanted, its list would
+    -- only add 5-10 bytes a row on the wire. G asks it whole after the wide round, as in 2.2.1.
+    local buckets, listed = state.profile.streams[state.stream].buckets, false
+    for _, i in ipairs(queue) do
+        if buckets[i].n == 0 then state.wideLeft[#state.wideLeft + 1] = i
+        else state.wideTodo[i], listed = true, true end
+    end
+    if not listed then wideNext(state); return end
+    stats.wideRounds = (stats.wideRounds or 0) + 1
+    wideAsk(state)
+end
+-- The answer to an M: headers (bucket, then its entry count, 999 for a bucket too big) and
+-- entries, every unit 5 bytes. Returns false for anything that does not add up.
+local function applyWideList(state, meta, blob)
+    local own = state.profile.streams[state.stream]
+    local a, b = saltOf(state.nonce)
+    stats.pages = stats.pages + 1
+    if #blob ~= meta.rows * 5 then return false end
+    local pos, covered, coveredList, left, want, ordinal, previous = 1, {}, {}, {}, {}, 0, 0
+    local filter, listed, headers = state.factionFilter, 0, 0
+    local skipped, hintBudget = 0, wide.hintBudget
+    while pos <= #blob do
+        local bucket, count = tonumber(blob:sub(pos, pos + 1)), tonumber(blob:sub(pos + 2, pos + 4))
+        if not bucket or not count or bucket <= previous or bucket > BUCKETS
+            or not state.wideAsked[bucket] or not blob:sub(pos, pos + 4):match("^%d%d%d%d%d$") then return false end
+        previous, pos, headers = bucket, pos + 5, headers + 1
+        if count == 999 then
+            left[#left + 1] = bucket
+        else
+            local hinted = state.stream == "LK" and count >= 500
+            if hinted then count = count - 500 end
+            local unit = hinted and 10 or 5
+            if count > wide.big(state.stream) or pos + unit * count - 1 > #blob then return false end
+            local ownBucket = own.buckets[bucket]
+            -- (Our fingerprints of a bucket are worked out once per pull: a bucket asked again
+            -- in a later list, or a long list, costs the frame nothing more.)
+            local cache = state.ownFp
+            if not cache then cache = {}; state.ownFp = cache end
+            local mine = cache[bucket]
+            if not mine then
+                mine = {}
+                for j = 1, ownBucket.n do mine[rowFp(ownBucket.digests[j], a, b)] = true end
+                cache[bucket] = mine
+            end
+            local ownHints
+            for _ = 1, count do
+                ordinal = ordinal + 1
+                local faction = blob:sub(pos + 4, pos + 4)
+                local tag, theirs
+                if hinted then
+                    tag, theirs = wide.decode(blob:sub(pos + 5, pos + 9))
+                    if not tag then return false end
+                end
+                if not mine[blob:sub(pos, pos + 3)] and (not filter or faction == filter or faction == "?") then
+                    local ahead = false
+                    if hinted and theirs < wide.killsMax then
+                        if ownHints == nil then
+                            -- (Past the frame's budget, the rest of the bucket is asked as before.)
+                            local cached = state.ownHint and state.ownHint[bucket]
+                            if cached then
+                                ownHints = cached
+                            elseif hintBudget >= ownBucket.n then
+                                hintBudget = hintBudget - ownBucket.n
+                                ownHints = wide.own(state, bucket, ownBucket, a, b)
+                            else
+                                ownHints = false
+                            end
+                        end
+                        ahead = ownHints and ownHints[tag] ~= nil and ownHints[tag] > theirs or false
+                    end
+                    if ahead then
+                        skipped = skipped + 1
+                    else
+                        want[#want + 1] = ordinal
+                    end
+                end
+                pos = pos + unit
+            end
+            covered[bucket], coveredList[#coveredList + 1] = true, bucket
+            listed = listed + count
+        end
+    end
+    -- The answer holds, in order, exactly the asked buckets up to the last one it names; a cut
+    -- (cursor) names the next asked bucket, no cut means every asked bucket was answered.
+    local askedCount, askedUpTo, nextAsked = 0, 0, nil
+    for i in pairs(state.wideAsked) do
+        askedCount = askedCount + 1
+        if i <= previous then askedUpTo = askedUpTo + 1
+        elseif not nextAsked or i < nextAsked then nextAsked = i end
+    end
+    if previous == 0 or headers ~= askedUpTo
+        or (meta.cursor == "-" and askedUpTo ~= askedCount)
+        or (meta.cursor ~= "-" and tonumber(meta.cursor) ~= nextAsked) then return false end
+    for i in pairs(state.wideAsked) do
+        if i <= previous then state.wideTodo[i] = nil end
+    end
+    for _, i in ipairs(left) do state.wideLeft[#state.wideLeft + 1] = i end
+    stats.listed = (stats.listed or 0) + listed
+    stats.wanted = (stats.wanted or 0) + #want
+    stats.hintSkipped = (stats.hintSkipped or 0) + skipped
+    if #want == 0 then wideNext(state); return true end
+    state.wideCovered, state.coveredBitmap = covered, encodeBitmap(coveredList)
+    state.phase, state.from, state.bitmap = "N", want[1], encodeBitmap(want)
+    request(state)
+    return true
+end
+
 -- V and L answers: fixed-width blobs, compared with our own profile (same salt).
 local function applyList8(state, meta, blob)
+    if meta.op == "M" then return applyWideList(state, meta, blob) end
     local own = state.profile.streams[state.stream]
     local a, b = saltOf(state.nonce)
     stats.pages = stats.pages + 1
@@ -859,6 +1115,11 @@ local function applyList8(state, meta, blob)
         end
         state.queue, state.qi = queue, 0
         stats.bucketsDiffering = (stats.bucketsDiffering or 0) + #queue
+        -- 2.2.2: two buckets or more, from a 2.2.2 neighbour: all at once (see wideStart).
+        if #queue >= 2 and wideAllowed(state.peer) then
+            wideStart(state, queue)
+            return true
+        end
         nextBucket8(state)
         return true
     end
@@ -917,7 +1178,7 @@ tryApply = function(state)
         -- request waits (combat) must not apply it again and skip a step.
         state.parts, state.bytes, state.partCount, state.meta = {}, 0, nil, nil
     end
-    if v8 and meta.op ~= "G" and meta.op ~= "T" then
+    if v8 and meta.op ~= "G" and meta.op ~= "T" and meta.op ~= "N" then
         applyList8(state, meta, blob)
         return
     end
@@ -928,6 +1189,8 @@ tryApply = function(state)
     if not v8 and state.cursor ~= "-" then first = state.cursor
     elseif v8 and meta.op == "G" then first = state.gLast or "" end
     local rows, pos, last = {}, 1, first
+    -- (A wide page walks its buckets in index order, the keys of each in order.)
+    local lastBucket, lastKey = state.nLastBucket or 0, state.nLastKey or ""
     for i = 1, meta.rows do
         local prefix, stop = blob:match("^(%d+)():", pos)
         -- Lua's ^ anchor is relative to init for string.find/match in 5.1.
@@ -946,6 +1209,12 @@ tryApply = function(state)
             -- twice in the whole top (a looping responder gets nothing applied).
             if not identity or state.topSeen[identity] then return end
             for j = 1, #rows do if rows[j].key == identity then return end end
+        elseif meta.op == "N" then
+            -- Only the buckets listed in the answer to our M, ascending, no key twice.
+            local at = identity and (hash(identity) % BUCKETS + 1)
+            if not at or not state.wideCovered or not state.wideCovered[at]
+                or at < lastBucket or (at == lastBucket and identity <= lastKey) then return end
+            lastBucket, lastKey = at, identity
         elseif not identity or identity <= last or hash(identity) % BUCKETS + 1 ~= state.bucket then
             return
         end
@@ -957,6 +1226,8 @@ tryApply = function(state)
     if meta.op == "T" then
         for j = 1, #rows do state.topSeen[rows[j].key] = true end
         state.topApplied = state.topApplied + #rows
+    elseif v8 and meta.op == "N" then
+        state.nLastBucket, state.nLastKey = lastBucket, lastKey
     elseif v8 and #rows > 0 then
         state.gLast = rows[#rows].key
     end
@@ -972,6 +1243,7 @@ tryApply = function(state)
             if not row then
                 state.applying = nil
                 if meta.op == "T" then nextTop8(state, meta.cursor)
+                elseif meta.op == "N" then nextWideRows(state, meta.cursor)
                 elseif v8 then nextRows8(state, meta.cursor)
                 else nextPage(state, meta.cursor) end
                 return
@@ -1092,6 +1364,64 @@ local function respond8(session, q)
         if r <= last then cursor = tostring(r) end
     elseif q.op == "V" then
         for i = 1, BUCKETS do parts[i] = bucketFp(profile.buckets[i], a, b, q.filter) end
+    elseif q.op == "M" then
+        -- The lists of the asked buckets, in index order, as far as one answer holds: a header
+        -- (bucket, entry count) and the entries, 5 bytes each (a bucket too big for a list
+        -- is only named, count 999). A bucket that does not fit starts the next answer.
+        local bytes = 0
+        for i = 1, BUCKETS do
+            if wantedAt(q.buckets, i) then
+                local bucket = profile.buckets[i]
+                local n = bucket.n
+                local hinted = q.stream == "LK" and n <= wide.hintMax
+                local unit = hinted and 10 or 5
+                if bytes + (n > wide.big(q.stream) and 5 or 5 + unit * n) > wide.blob(q.stream) and #parts > 0 then
+                    cursor = tostring(i)
+                    break
+                end
+                if n > wide.big(q.stream) then
+                    parts[#parts + 1], bytes = string.format("%02d999", i), bytes + 5
+                else
+                    parts[#parts + 1], bytes = string.format("%02d%03d", i, hinted and n + 500 or n), bytes + 5
+                    for j = 1, n do
+                        parts[#parts + 1] = rowFp(bucket.digests[j], a, b) .. bucket.factions[j]
+                        if hinted then parts[#parts + 1] = wide.encode(bucket.keys[j], bucket.payloads[j], a, b) end
+                    end
+                    bytes = bytes + unit * n
+                end
+            end
+        end
+        if #parts == 0 then return end
+    elseif q.op == "N" then
+        -- The wanted rows (bits of the numbering along the lists M gave: the covered buckets in
+        -- index order, the rows of each in key order), a page at a time like G.
+        local withRace, bytes, ordinal = raced("8", q.stream), 0, 0
+        local full = false
+        for i = 1, BUCKETS do
+            if wantedAt(q.covered, i) then
+                local bucket = profile.buckets[i]
+                local factions = bucket.factions
+                local races = withRace and bucket.races
+                for j = 1, math.min(bucket.n, wide.big(q.stream)) do
+                    ordinal = ordinal + 1
+                    if ordinal >= q.from and wantedAt(q.bitmap, ordinal) then
+                        local payload = compactRow8(q.stream, bucket.payloads[j], session.epoch)
+                        if payload then
+                            if races and races[j] then payload = payload .. ":" .. races[j] end
+                            local encoded = tostring(#payload) .. ":" .. payload
+                            if #parts >= PAGE_ROWS8 or bytes + #encoded > 4064 then
+                                cursor, full = tostring(ordinal), true
+                                break
+                            end
+                            parts[#parts + 1] = encoded
+                            bytes = bytes + #encoded
+                        end
+                    end
+                end
+                if full then break end
+            end
+        end
+        if #parts == 0 and cursor ~= "-" then return end
     elseif q.op == "L" then
         local bucket = profile.buckets[q.bucket]
         bucketIndex = q.bucket
@@ -1229,6 +1559,12 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
     serial = serial + 1
     local saved = progress().shared
     local savedStream = type(saved) == "table" and saved.stream or nil
+    -- 2.2.2: a v8 round cut at the captures or races resumes there only soon after; later the
+    -- kills are compared first again (they changed meanwhile, and were left uncompared for hours).
+    if type(saved) == "table" and saved.wire8 and (savedStream == "LC" or savedStream == "LR")
+        and GetServerTime() - (tonumber(saved.at) or 0) > 600 then
+        savedStream = "LK"
+    end
     local stream = extended and (savedStream == "LC" or savedStream == "LR")
         and savedStream or "LK"
     -- A sweep left at the races resumes there with a current peer only.
@@ -1349,7 +1685,8 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         end
         raceless = theirs ~= nil and theirs < PAGED_PROTOCOL
     end
-    local v8Request = version == "8" and (op == "V" or op == "L" or op == "G" or op == "T")
+    local v8Request = version == "8" and (op == "V" or op == "L" or op == "G" or op == "T"
+        or op == "M" or op == "N")
     if kind == "HR" and ((op == "Q" and version ~= "8") or v8Request) then
         local q, fresh
         if v8Request then
@@ -1367,6 +1704,14 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
                 local from = integer(b, 1, STREAM_LIMITS.LK)
                 if stream ~= "LK" or not from or (c ~= "-" and c ~= "A" and c ~= "H") or d then return end
                 q = { op = "T", stream = "LK", seq = seq, from = from, filter = c ~= "-" and c or nil }
+            elseif op == "M" then
+                if not validBitmap(b) or b:sub(1, 1) == "*" or #b > 11 or c then return end
+                q = { op = "M", stream = stream, seq = seq, buckets = b }
+            elseif op == "N" then
+                local from = integer(c, 1, wide.ordMax)
+                if not validBitmap(b) or b:sub(1, 1) == "*" or #b > 11 or not from
+                    or not validBitmap(d) or d:sub(1, 1) == "*" or e then return end
+                q = { op = "N", stream = stream, seq = seq, covered = b, from = from, bitmap = d }
             elseif op == "L" then
                 local bucket = integer(b, 1, BUCKETS)
                 if not bucket or c then return end
@@ -1540,16 +1885,17 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         local bucket, rows, digest = integer(b, 0, BUCKETS), integer(c, 0, LIST_MAX_ROWS), integer(d, 0, MOD - 1)
         local parts, cursor, stream = integer(f, 1, MAX_PARTS), e, g
         if a ~= state.phase or stream ~= state.stream or not bucket or not rows or not digest
-            or not parts or ((a == "V" or a == "T") and bucket ~= 0)
-            or (a ~= "V" and a ~= "T" and bucket ~= state.bucket)
-            or ((a == "G" or a == "T") and rows > PAGE_ROWS8_MAX)
+            or not parts or ((a == "V" or a == "T" or a == "M" or a == "N") and bucket ~= 0)
+            or (a ~= "V" and a ~= "T" and a ~= "M" and a ~= "N" and bucket ~= state.bucket)
+            or ((a == "G" or a == "T" or a == "N") and rows > PAGE_ROWS8_MAX)
             -- A T cursor is the next rank to look at: always past this page.
             or (a == "T" and not (cursor == "-"
                 or integer(cursor, state.from + math.max(rows, 1), STREAM_LIMITS.LK)))
             -- A G cursor is the next wanted index after the rows of this page: it
             -- must move past them (a page that never advances is refused).
             or not (cursor == "-" or a == "T"
-                or (a == "G" and integer(cursor, state.from + rows, STREAM_LIMITS[state.stream] or 0)))
+                or (a == "M" and integer(cursor, 1, BUCKETS))
+                or ((a == "G" or a == "N") and integer(cursor, state.from + rows, STREAM_LIMITS[state.stream] or 0)))
             or (state.partCount and state.partCount ~= parts) then return end
         state.meta = { op = a, rows = rows, hash = digest, cursor = cursor, parts = parts }
         state.partCount = parts
@@ -1613,6 +1959,9 @@ end
 function sync:GetPagedLeaderboardSummary()
     return {
         status = currentPullStatus(), running = pull ~= nil,
+        -- (2.3.0: seconds since the running pull last heard a page part: /ov network tells a long
+        -- catch-up that still receives from one that waits on nobody.)
+        lastPartAge = pull and pull.fragmentAt and math.floor(GetTime() - pull.fragmentAt) or nil,
         pages = stats.pages or 0, rows = stats.rows or 0,
         protocol = stats.protocol or 5, peer = stats.peerProtocol or "",
     }

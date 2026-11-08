@@ -359,6 +359,24 @@ local MINING_SPELL_IDS = {
     [423393] = true,  -- Mining (TWW)
 }
 
+-- 2.2.2 (player feedback): mining needs the PvP flag, as captures do (1.4.1 had left mining
+-- open). An unflagged player cannot be attacked there and must not earn nor be announced.
+-- The hint is told once a minute per mine, like the capture one.
+local minePvpHintAt = {}
+local function MiningNeedsPvp(mine)
+    local zc = Overlord.ZoneControl
+    if not (zc and zc.PlayerLacksPvpFlag and zc:PlayerLacksPvpFlag()) then return false end
+    if mine and not UnitIsDead("player") and not UnitIsGhost("player") then
+        local now = GetTime()
+        if now - (minePvpHintAt[mine.id] or -60) >= 60 then
+            minePvpHintAt[mine.id] = now
+            Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r "
+                .. (L.MINE_NEEDS_PVP or "%s: enable PvP (/pvp) to mine here."), mine.name or ""))
+        end
+    end
+    return true
+end
+
 local function OnSpellcastSucceeded(_, _, unit, _, spellID)
     -- No mine in an instance; never index a table with a 12.x secret spell ID.
     if Overlord.InstanceSuspended then return end
@@ -370,6 +388,7 @@ local function OnSpellcastSucceeded(_, _, unit, _, spellID)
 
     local mine = Overlord.Zones:GetCurrentPlayerMine()
     if not mine then return end
+    if MiningNeedsPvp(nil) then return end
 
     -- Verifie le stock de la mine
     local available = DrainMineStock(mine.id, GOLD_NODE_BONUS)
@@ -494,6 +513,7 @@ local function MineTickerFunc(elapsed)
     if IsPlayerInNonMiningState() then return end
 
     local mine = mineNow
+    if mine and MiningNeedsPvp(mine) then return end
 
     if mine then
         -- Entree dans la mine

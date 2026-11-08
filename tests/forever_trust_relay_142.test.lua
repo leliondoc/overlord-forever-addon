@@ -275,8 +275,33 @@ local wire4 = "global|c-4|" .. time() .. "|*|Horde Origin,Mate One|FR|f1:Horde:"
 net:Receive(wire4, "Mate One", "CHANNEL")
 advance(16)
 assert(groupSends >= 1, "group copy never sent when no mate carried it")
+-- 2.2.2: a broadcast whispered to us (the chain) is held the same way: every raid member it
+-- was whispered to re-sent it to the raid at once before.
+local heldBefore, cancelledBefore, sendsBefore = net.stats.groupCopiesHeld or 0, net.stats.groupCopiesCancelled or 0, groupSends
+net:Receive("global|c-5|" .. time() .. "|*|Horde Origin,Mate One|FR|f1:Horde:" .. (time() + 4), "Mate One", "WHISPER")
+assert((net.stats.groupCopiesHeld or 0) == heldBefore + 1, "group copy of a whispered packet was not held")
+assert(groupSends == sendsBefore, "a whispered packet went to the group at once")
+net:Receive("global|c-5|" .. time() .. "|*|Horde Origin,Mate Two|FR|f1:Horde:" .. (time() + 4), "Mate Two", "RAID")
+assert((net.stats.groupCopiesCancelled or 0) == cancelledBefore + 1, "a mate's raid copy did not cancel the whispered hold")
+advance(16)
+assert(groupSends == sendsBefore, "cancelled whispered group copy was still sent")
 s.SendToGroup = realSendToGroup
 IsInGroup = function() return false end
+-- 2.3.0: a broadcast whispered to us (a contact's chain) while our channel works waits like a
+-- Battle.net one: every contact it was whispered to put it on the channel at once before.
+do
+    local at6 = time()
+    local heldBefore, cancelledBefore = net.stats.bridgeForwardsHeld or 0, net.stats.bridgeForwardsCancelled or 0
+    net:Receive("global|c-6|" .. at6 .. "|*|Horde Origin,Chain Hand|FR|f1:Horde:" .. (at6 + 5), "Chain Hand", "WHISPER")
+    assert((net.stats.bridgeForwardsHeld or 0) == heldBefore + 1, "whispered broadcast was not held before the channel")
+    advance(1)
+    assert(channelSendsOf("c-6") == 0, "whispered broadcast went on the channel at once")
+    local heard = "global|c-6|" .. at6 .. "|*|Horde Origin,Other Hand|FR|f1:Horde:" .. (at6 + 5)
+    net:ReceiveFragment("c-6:1:1:" .. heard, "Other Hand", "CHANNEL")
+    assert((net.stats.bridgeForwardsCancelled or 0) == cancelledBefore + 1, "a channel copy did not cancel the whispered hold")
+    advance(16)
+    assert(channelSendsOf("c-6") == 0, "cancelled whispered forward still went on the channel")
+end
 net.BridgeChannelHold = { 0, 0 }
 
 -- ===== (3) class answers scale with the population

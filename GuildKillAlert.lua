@@ -482,7 +482,8 @@ end
 -- Appele apres toutes les validations d'un K recu (Sync:OnReceiveKill) et pour nos
 -- propres kills (Sync:BroadcastKill). guildName vide = guilde inconnue ou aucune :
 -- jamais de reprise d'une guilde en cache, qui pourrait etre ancienne.
-function GKA:OnLiveKill(playerName, faction, guildName, totalKills, zoneId, scoreEpoch)
+-- settled: a total told again late (Sync:OnReceiveKill): the base moves, nothing is counted.
+function GKA:OnLiveKill(playerName, faction, guildName, totalKills, zoneId, scoreEpoch, settled)
     if type(playerName) ~= "string" or playerName == "" then return end
     if not FactionCode(faction) then return end
     local total = tonumber(totalKills)
@@ -497,6 +498,7 @@ function GKA:OnLiveKill(playerName, faction, guildName, totalKills, zoneId, scor
     local now = Now()
     local playerKey = playerName:lower()
     local delta = ConsumeKillDelta(playerKey, math.floor(total), tonumber(scoreEpoch), guildKey, now)
+    if settled then return end
     -- Taille des combats du dock : les memes kills, avec ou sans guilde (aucun paquet).
     local fa = Overlord.FrontActivity
     local validZone = IsValidZoneRef(zoneId)
@@ -624,6 +626,31 @@ end
 -- Reception d'un GW : afficher tel quel chez la faction ennemie de la guilde, une
 -- fois par guilde et par 10 min. Chez la faction de la guilde, il annule nos propres
 -- envois en attente et, depuis 1.7.1, s'affiche en vert si les carnages allies sont actifs.
+-- 2.2.2: the whisper chain (SyncDirectory) passes a rampage on only when its content is one
+-- this file would show (same checks as below, options aside). Returns the chain's cover key:
+-- one rampage per guild and side, whatever its numbers or its author.
+function GKA:ChainCoverKey(payload)
+    if type(payload) ~= "string" or payload == "" or #payload > 200 then return nil end
+    local version, guildName, facCode, killsStr, membersStr, zoneRef, shardStr, tsStr =
+        strsplit(":", payload, 8)
+    if version ~= "1" or (facCode ~= "H" and facCode ~= "A") then return nil end
+    local sync = Overlord.Sync
+    if not (sync and sync.IsValidGuildSyncToken and sync:IsValidGuildSyncToken(guildName))
+        or not IsCleanGuildName(guildName) then return nil end
+    local kills, members = tonumber(killsStr), tonumber(membersStr)
+    if not kills or not members or kills ~= math.floor(kills) or members ~= math.floor(members)
+        or kills < self.KILL_THRESHOLD or kills > 9999
+        or members < self.MEMBER_THRESHOLD or members > 999 then return nil end
+    if zoneRef and zoneRef ~= "" and not IsValidZoneRef(zoneRef) then return nil end
+    if shardStr and shardStr ~= "" then
+        local shard = tonumber(shardStr)
+        if not shard or shard ~= math.floor(shard) or shard < 0 or shard > 99999999 then return nil end
+    end
+    local ts, serverNow = tonumber(tsStr), ServerNow()
+    if not ts or ts ~= ts or ts > serverNow + NETWORK_MAX_SKEW or serverNow - ts > NETWORK_MAX_AGE then return nil end
+    return "GW|" .. facCode .. "|" .. guildName:lower()
+end
+
 function GKA:OnReceiveNetworkAlert(payload, sender, channel)
     if type(payload) ~= "string" or payload == "" or #payload > 200 then return false end
     if not GW_TRANSPORTS[channel or ""] then return false end

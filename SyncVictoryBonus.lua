@@ -5,6 +5,9 @@ Overlord.Sync = Overlord.Sync or {}
 
 local VB_SECONDS_PER_WEEK = 7 * 24 * 60 * 60
 local VB_TRUCE_SECONDS = 15 * 60
+-- 2.2.2: the server clock (Core ServerNow), as every victory date carried: a PC clock minutes
+-- ahead or behind judged the truce and the future skew of other players' dates wrongly.
+local function VBNow() return Overlord.ServerNow and Overlord.ServerNow() or time() end
 -- 1.7 (regle b) : une autre victoire sur un front ne compte que 6 h apres la precedente.
 -- La projection triee l'applique de facon deterministe : tous les clients qui ont les
 -- memes evenements retiennent les memes victoires, dans n'importe quel ordre d'arrivee.
@@ -147,7 +150,7 @@ local function NormalizeVictoryEvent(ev)
     if not campaignEpoch or not IsCurrentVictoryCampaignEpoch(campaignEpoch) then return nil end
     local campaignStart = GetCurrentVictoryCampaignStart()
     if victoryTs < campaignStart or rangeMaxTs >= campaignStart + VB_SECONDS_PER_WEEK then return nil end
-    if rangeMaxTs > time() + VB_MAX_FUTURE_SKEW then return nil end
+    if rangeMaxTs > VBNow() + VB_MAX_FUTURE_SKEW then return nil end
     return {
         eventId = BuildVictoryEventId(frontId, victoryTs),
         frontId = frontId,
@@ -158,7 +161,7 @@ local function NormalizeVictoryEvent(ev)
         totalAtApply = totalAtApply,
         campaignEpoch = campaignEpoch,
         source = tostring(ev.source or ""),
-        appliedAt = NormalizeFiniteInteger(ev.appliedAt) or time(),
+        appliedAt = NormalizeFiniteInteger(ev.appliedAt) or VBNow(),
     }
 end
 
@@ -977,7 +980,7 @@ function Overlord:ApplyDominationVictoryBonusEvent(rawEv, opts)
     if not ev then return false, "invalid" end
     local evidence = HasMatchingVictoryEvidence(ev) or opts.transportEvidence == true
     local historicalReplay = opts.allowHistorical == true
-        and time() - ev.victoryTs >= VB_TRUCE_SECONDS
+        and VBNow() - ev.victoryTs >= VB_TRUCE_SECONDS
     if not evidence and not historicalReplay then return false, "no_victory_evidence" end
 
     local store = EnsureVictoryEventsDB()
@@ -1119,10 +1122,10 @@ function Overlord.Sync:OnReceiveVictoryBonus(payload, sender, sourceChannel)
     for _, ev in ipairs(events) do
         local transportEvidence = HasVictoryTransportEvidence(ev, sender, sourceChannel)
         local localEvidence = HasMatchingVictoryEvidence(ev)
-        local historicalTrusted = time() - ev.victoryTs >= VB_TRUCE_SECONDS
+        local historicalTrusted = VBNow() - ev.victoryTs >= VB_TRUCE_SECONDS
             and IsHistoricalReplaySenderTrusted(self, sender, sourceChannel)
         if not historicalTrusted and sourceChannel == "CHANNEL"
-            and time() - ev.victoryTs >= VB_TRUCE_SECONDS
+            and VBNow() - ev.victoryTs >= VB_TRUCE_SECONDS
             and self.IsDominationChannelSenderVerified
             and self:IsDominationChannelSenderVerified(sender or "") then
             -- Une source de groupe/communaute deja verifiee suffit. Un second

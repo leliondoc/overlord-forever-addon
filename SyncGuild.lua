@@ -24,7 +24,7 @@
 --   * one message per TOKEN_SEC per client, and a ceiling for the whole guild, counted on
 --     what is heard there (SOFT_PER_MIN, HARD_PER_MIN);
 --   * a message waits a moment and is given up if someone else has said the same thing;
---   * a packet relayed to us (a friend's, a group mate's: a whisper never carries a broadcast) is
+--   * a packet relayed to us (a friend's, a group mate's, a chain contact's whisper: see Level) is
 --     said by a few of its holders, from a share of about two a minute for the whole guild
 --     (RELAYED_SEC), unless it is a capture our own map has just taken;
 --   * nothing ever answers a guild message in the guild: no request goes there, and what is
@@ -313,9 +313,19 @@ end
 function lane:Level(p)
     local kind, payload = p.kind, p.payload
     if type(payload) ~= "string" then return nil end
-    -- A broadcast never travels by whisper: only a modified client sends one that way, and it
-    -- would have whoever it reaches say it to the whole guild.
-    if p.heardOn == "WHISPER" then return nil end
+    -- A broadcast whispered to us travels the chain (SyncDirectory, 2.2.0) and comes from one of
+    -- our contacts: those are said here like any relayed packet (same share, same few speakers),
+    -- or a siege a lone player starts never reaches the guilds the chain touches. A leaf's own
+    -- fact too (a player out of the member lists: SyncDirectory IsLeafOrigin). Any other
+    -- broadcast whispered to us is a modified client's: never said to the whole guild.
+    if p.heardOn == "WHISPER" then
+        local directory, from = addon.ChannelDirectory, p.path and p.path[#p.path - 1]
+        if not (directory and directory.IsContact and type(from) == "string"
+            and (directory:IsContact(from) == true
+                or (directory.IsLeafOrigin and directory:IsLeafOrigin(p) == true))) then
+            return nil
+        end
+    end
     local level = FIXED_LEVEL[kind]
     if level then return level end
     local own = #p.path == 1
@@ -531,8 +541,11 @@ function lane:HeardHere()
     if context.transport == "GUILD" then return true end
     -- Whispered: from a contact of the chain only (a stranger's word keeps its ticks).
     local directory = addon.ChannelDirectory
+    -- (2.3.0: or a leaf's own fact, hops 0: SyncDirectory IsLeafOrigin.)
     return context.transport == "WHISPER" and context.targeted == false and directory ~= nil
-        and directory.IsContact ~= nil and directory:IsContact(context.gateway) == true
+        and ((directory.IsContact ~= nil and directory:IsContact(context.gateway) == true)
+            or (directory.IsLeaf ~= nil and (tonumber(context.hops) or 1) == 0
+                and directory:IsLeaf(context.gateway) == true))
 end
 
 -- The same, from its author: the game gives that name, and it is one of ours. (A relayed copy
@@ -589,6 +602,15 @@ function lane:PeerCount()
     end
     self.peerCountAt, self.peerCountValue = at, count
     return count
+end
+
+-- 2.2.2: a guild mate heard here within PEER_MEMORY (Sync:NoteFullMapReceived).
+function lane:IsGuildMate(name)
+    -- (Peers are kept by canonical name: a sender may come with its realm suffix.)
+    local canon = type(name) == "string" and sync.CanonicalForeverName and sync:CanonicalForeverName(name) or name
+    local key = type(canon) == "string" and canon:lower() or nil
+    local heardAt = key and self.peers[key]
+    return heardAt ~= nil and now() - heardAt < self.PEER_MEMORY
 end
 
 -- When this guild mate was last heard here, nil beyond HEARD_FRESH (see tasksFor).
@@ -668,7 +690,9 @@ local function mayPost(self, entry, at)
         self.stats.capped = self.stats.capped + 1
         return false
     end
-    local shared = entry.relayed and not mapShowsCapture(entry.cover)
+    -- (2.3.0: a copy of the whisper chain pays the share even for a capture our map shows: many
+    -- holders get chain copies, and they would fill the guild's minute for its routine words.)
+    local shared = entry.relayed and (entry.chained or not mapShowsCapture(entry.cover))
     if shared and relayedShare(self, at) < (entry.level == TERMINAL and 1 or 2) + (self.relayedJitter or 0) then
         self.stats.capped = self.stats.capped + 1
         return false, true
@@ -914,6 +938,7 @@ function lane:Offer(p, fragments)
     end
     local started = own and p.kind == "ZS" and level == ALERT
     outbox[#outbox + 1] = { kind = p.kind, level = level, rank = rank, relayed = not own, cover = key,
+        chained = p.heardOn == "WHISPER" or nil,
         coverSec = seconds, firm = firm, date = date,
         startedZone = started and p.payload:match("^[^:]*") or nil,
         startedWave = started and stateWave(p.payload) or nil,
@@ -972,7 +997,7 @@ function lane:NoteHeardPacket(p, relayed)
     local heard = key and self.cover[key]
     local news = not heard or at - heard >= (seconds or self.COVER_SEC)
     if key then self:RememberCover(key, at) end
-    if relayed and news and self:Level(p) and not mapShowsCapture(key) then spendRelayedShare(self, at) end
+    if relayed and news and self:Level(p) then spendRelayedShare(self, at) end
     local date = captureDate(p)
     if key and date then
         -- (A date to come stays here for good otherwise; receivers take it for the present.)
@@ -1020,14 +1045,17 @@ function lane:Describe()
     -- 2.2.0: a refused channel is the server's choice, not a fault: the dot stays green while
     -- something carries our data instead (players of the channel's member list exchanging with us,
     -- SyncDirectory.lua; guild mates heard under Overlord), and says what.
-    local listed, exchanging = nil, 0
-    if addon.ChannelDirectory then listed, exchanging = addon.ChannelDirectory:Describe() end
+    local listed, exchanging, listLess = nil, 0, false
+    if addon.ChannelDirectory then listed, exchanging, listLess = addon.ChannelDirectory:Describe() end
     exchanging = tonumber(exchanging) or 0
     if listed then channel = channel .. "; " .. listed end
     local suspended = addon.ChannelDirectory and addon.ChannelDirectory.suspended
     if suspended then short = "channel suspended by the game" end
     local carriers = {}
-    if exchanging > 0 then carriers[#carriers + 1] = "the channel member list" end
+    -- (2.2.2: without the list, players found otherwise: address book, ranking, met in the world.)
+    if exchanging > 0 then
+        carriers[#carriers + 1] = listLess and "players found without the list" or "the channel member list"
+    end
     local guildText, unheard
     if self:IsSwitchedOff() then
         guildText = "guild fallback off (/ov guild on)"
@@ -1044,7 +1072,10 @@ function lane:Describe()
     -- Nor while the member list is still being read and greeted (the first SETTLE_SEC).
     local settling = at - (self.downSince or at) < self.SETTLE_SEC
     local level = (#carriers > 0 or settling) and "ok" or "warn"
-    if #carriers == 0 and settling then carriers[#carriers + 1] = "the channel member list (looking for players)" end
+    if #carriers == 0 and settling then
+        carriers[#carriers + 1] = listLess and "players found without the list (looking for some)"
+            or "the channel member list (looking for players)"
+    end
     carriers[#carriers + 1] = "your group and Battle.net friends"
     local text = string.format("%s; %s; data goes through %s", channel, guildText, table.concat(carriers, ", "))
     short = string.format("%s; data goes through %s", short, table.concat(carriers, ", "))

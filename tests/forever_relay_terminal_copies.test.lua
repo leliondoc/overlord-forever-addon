@@ -105,7 +105,10 @@ refuseGroup = "GROUPMARK"
 s._channelTokens, s._channelTokensAt = nil, nil
 assert(s:TakeChannelToken(true))
 assert(net:Send("ZR", "elwynn_goldshire:wave2:Origin Tester:GROUPMARK", nil, true), "the grouped release was not queued")
-assert(refuseGroup == nil, "the group copy was never tried (vacuous case)")
+-- (2.3.0: the group shares the token the direct ZR just used: the copy now waits on the client
+-- instead of being refused by Blizzard; either way it must not hold Battle.net back.)
+local heldOrRefused = refuseGroup == nil or #group == 0
+assert(heldOrRefused, "the group copy left without the token")
 assert(#bnet >= 1 and bnet[1].id == 777, "a refused group copy held the release's Battle.net copy")
 advance(5)
 local groupCopies = 0

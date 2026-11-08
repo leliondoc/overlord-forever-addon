@@ -316,7 +316,8 @@ local function BuildOutpostPayload(siteKey, st)
     local claimedAt = math.floor(st.claimedAt or 0)
     local expiresAt = math.floor(st.expiresAt or 0)
     local ts = OutpostSyncTimestamp(st)
-    local holdReq = math.floor(OP:GetDefaultHoldTimeRequired(st))
+    -- (The site's own hold time: a fortress's 600 s, or 540 s on a gold attack, not an outpost's 300.)
+    local holdReq = math.floor(OP:GetDefaultHoldTimeRequired(st, OP.GetSite and OP:GetSite(siteKey) or nil))
     local pool = NormalizePoolTag(st.pool)
     if pool == "" then pool = CurrentOutpostPoolTag() end
     if pool == "" then return nil end
@@ -957,10 +958,21 @@ function Overlord.Sync:AuthorizeOutpostClaim(siteKey, guild, faction, claimTs, c
         if senderFaction ~= faction then return false, "owner-faction" end
         -- Credited to the guild the ladder knows for the capturer (their own K / GI, group, a
         -- page), or to ours when the game's roster lists them: without the channel nobody hears a GI.
+        -- 2.2.2: or to the guild the game shows for them in our group (read from the unit, not
+        -- the packet). Refused, the capturer is watched (NotePendingCapturer): their map is
+        -- pulled sooner once the ladder knows them, as for a refused catch-up claim. Before, a
+        -- capturer without a ladder row here kept their keep or outpost off our map until the
+        -- slow map round, or for good once they logged off.
         if not CapturerOnOurRoster(capturer, guild, faction) then
             local ladderGuild = CapturerLadderGuild(capturer)
-            if ladderGuild == "" then return false, "owner-guild-unknown" end
-            if ladderGuild:lower() ~= guild:lower() then return false, "owner-guild" end
+            if ladderGuild == "" or ladderGuild:lower() ~= guild:lower() then
+                local unitGuild, unitFaction = GetOpAddonSenderGuild(sender)
+                if not (type(unitGuild) == "string" and unitGuild ~= "" and unitFaction == faction
+                    and unitGuild:lower() == guild:lower()) then
+                    NotePendingCapturer(capturer, guild)
+                    return false, ladderGuild == "" and "owner-guild-unknown" or "owner-guild"
+                end
+            end
         end
         -- The live sender also carries a pace and an hourly budget of his own: a
         -- repeat of the very same claim (OC, then LO, then OP) costs nothing.
@@ -1176,6 +1188,8 @@ end
 
 -- 1.8.0: outpost alerts follow the player's continent, unless one of the guilds
 -- named is the player's own (case-insensitive) or the worldwide option is on.
+-- 2.3.0: keeps and outposts of other guilds (assault, defence, capture) only with the
+-- "other guilds" option on (player feedback: a busy evening filled the chat).
 local function OutpostAlertVisible(siteKey, ...)
     if not Overlord.ShouldShowPlaceAlert then return true end
     local OP = Overlord.Outpost
@@ -1193,6 +1207,10 @@ local function OutpostAlertVisible(siteKey, ...)
                 break
             end
         end
+    end
+    if not always then
+        local cfg = OverlordDB and OverlordDB.config
+        if not (cfg and cfg.otherGuildSiteAlerts == true) then return false end
     end
     local site = OP and OP.GetSite and OP:GetSite(siteKey)
     return Overlord:ShouldShowPlaceAlert(site and site.mapID, always)
@@ -1249,7 +1267,12 @@ local function FollowLedgerTenant(siteKey)
     if not (lb and OP and OP.AdoptLedgerTenant and lb.OutpostLedgerAheadOfMap
         and lb.IsOutpostLedgerTenant and lb.GetOutpostTenantsTable) then return false end
     local st = OP:GetState(siteKey)
-    if not st or st.status == "in_progress" or not lb:OutpostLedgerAheadOfMap(siteKey, st) then return false end
+    -- (2.3.0) An assault over long ago (its clock ran out: every map shows only its besieged
+    -- tenant, and none is served any more) follows the ledger like a held site; a live one or
+    -- our own hold is left alone. Before, the map kept the besieged tenant and pulled for it.
+    if not st or (st.status == "in_progress" and (st.holdAuthorityLocal
+        or not OP:IsObserverOutpostCaptureStale(st, OP:GetSite(siteKey), ClaimServerNow())))
+        or not lb:OutpostLedgerAheadOfMap(siteKey, st) then return false end
     local t = lb:GetOutpostTenantsTable()[siteKey]
     if type(t) ~= "table" or not lb:IsOutpostLedgerTenant(siteKey, t.guild, t.faction, t.claimedAt) then
         return false
@@ -1394,7 +1417,13 @@ local function TryPrintOutpostAssaultAlert(siteKey, stBefore, stAfter)
     if not L then return end
     if stAfter.status ~= "in_progress" then return end
     local OP = Overlord.Outpost
-    if stBefore and stBefore.status == "in_progress" then
+    -- (2.2.2: an assault we kept long after its clock ran out is over: the same guild attacking
+    -- again is a new assault, told as such.)
+    local beforeOver = stBefore and stBefore.status == "in_progress" and OP.IsObserverOutpostCaptureStale
+        and OP:IsObserverOutpostCaptureStale(stBefore, OP:GetSite(siteKey), ClaimServerNow())
+    if beforeOver then
+        ResetOutpostAssaultAlert(siteKey)
+    elseif stBefore and stBefore.status == "in_progress" then
         local beforeGuild = OP.SanitizeGuildName and OP:SanitizeGuildName(stBefore.ownerGuild or "")
             or (stBefore.ownerGuild or "")
         local afterGuild = OP.SanitizeGuildName and OP:SanitizeGuildName(stAfter.ownerGuild or "")
@@ -1420,6 +1449,12 @@ local function TryPrintOutpostAssaultAlert(siteKey, stBefore, stAfter)
         return
     end
     if not OutpostAlertVisible(siteKey, assaultGuild, defendedGuild) then return end
+    -- An abandoned assault kept by relays came back at every login (the dedup
+    -- lives in memory): same rule as the defender alert and the map.
+    if OP.IsObserverOutpostCaptureStale
+        and OP:IsObserverOutpostCaptureStale(stAfter, OP:GetSite(siteKey), ClaimServerNow()) then
+        return
+    end
 
     local remoteTs = tonumber(stAfter.updatedAt) or 0
     local waveKey = siteKey .. ":" .. tostring(remoteTs)
@@ -1459,6 +1494,64 @@ local function TryPrintOutpostAssaultAlert(siteKey, stBefore, stAfter)
                 whereLabel, attacker))
         end
     end
+end
+
+-- 2.3.0: the assault lines in chat (ours attacked, an assault of another guild) wait for half
+-- the capture. Players feedback: keeps and outposts on quest paths alerted for every enemy just
+-- passing through, and defenders arriving found nobody. Each client reckons the half from the
+-- assault it already holds (start date, time held, time required): no message more on the network.
+-- At the half, only an assault still under way on our map, by the same faction and guild, is told.
+-- (The defender standing on its own site still sees enemies at once: OutpostControl.)
+local halfAlertPending = {}
+Overlord.Sync._halfAlertPending = halfAlertPending
+local function SameAssault(a, b)
+    if not a or not b or a.status ~= "in_progress" or b.status ~= "in_progress" then return false end
+    if a.ownerFaction ~= b.ownerFaction then return false end
+    local OP = Overlord.Outpost
+    local ga = OP.SanitizeGuildName and OP:SanitizeGuildName(a.ownerGuild or "") or (a.ownerGuild or "")
+    local gb = OP.SanitizeGuildName and OP:SanitizeGuildName(b.ownerGuild or "") or (b.ownerGuild or "")
+    return ga == "" or gb == "" or ga == gb
+end
+local function AlertAtHalfCapture(siteKey, stBefore, defenderState, stAfter)
+    local assault = (defenderState and defenderState.status == "in_progress" and defenderState)
+        or (stAfter and stAfter.status == "in_progress" and stAfter) or nil
+    if not siteKey or not assault or not Overlord.Outpost then
+        TryPrintOutpostDefenderAlert(siteKey, stBefore, defenderState)
+        TryPrintOutpostAssaultAlert(siteKey, stBefore, stAfter)
+        return
+    end
+    -- A later update of an assault already waiting: the wait stands.
+    if halfAlertPending[siteKey] and SameAssault(halfAlertPending[siteKey].assault, assault) then return end
+    local OP = Overlord.Outpost
+    local req = OP:GetDefaultHoldTimeRequired(assault, OP.GetSite and OP:GetSite(siteKey))
+    local held = math.max(0, math.min(tonumber(assault.holdTimeElapsed) or 0, req))
+    local at = tonumber(assault.updatedAt) or 0
+    local wait = at > 0 and (at + (req / 2 - held) - ClaimServerNow()) or 0
+    if wait <= 0 then
+        halfAlertPending[siteKey] = nil
+        TryPrintOutpostDefenderAlert(siteKey, stBefore, defenderState)
+        TryPrintOutpostAssaultAlert(siteKey, stBefore, stAfter)
+        return
+    end
+    local token = { assault = assault }
+    halfAlertPending[siteKey] = token
+    C_Timer.After(math.min(wait, req), function()
+        if halfAlertPending[siteKey] ~= token then return end
+        halfAlertPending[siteKey] = nil
+        if Overlord.InstanceSuspended or IsInInstance() then return end
+        local cur = OP.GetState and OP:GetState(siteKey)
+        if defenderState and defenderState._localOnlyAlert then
+            -- (Our map kept the site held: told only while nothing newer says otherwise.)
+            if cur and cur.status == "held" then TryPrintOutpostDefenderAlert(siteKey, stBefore, defenderState) end
+            return
+        end
+        if not SameAssault(cur, assault) then return end
+        if OP.IsObserverOutpostCaptureStale and OP:IsObserverOutpostCaptureStale(cur, OP:GetSite(siteKey), ClaimServerNow()) then
+            return
+        end
+        TryPrintOutpostDefenderAlert(siteKey, stBefore, cur)
+        TryPrintOutpostAssaultAlert(siteKey, stBefore, cur)
+    end)
 end
 
 -- previousGuild (optional): the tenant the capture took the site from.
@@ -1511,7 +1604,8 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
         = strsplit(":", parsePayload, 16)
     local remoteFac = FactionCodeToFaction(facCode)
     if not siteKey or not Overlord.OutpostSites[siteKey] then return end
-    if status and not VALID_OP_STATUS[status] then return end
+    -- (2.2.2: a state without a status is none: it blanked a tenant's guild.)
+    if not status or not VALID_OP_STATUS[status] then return end
     if facCode and facCode ~= "" and not remoteFac then return end
     -- Guild names reach chat alerts and tooltips: a name no guild can have is a forgery.
     guild = Overlord.Outpost:SanitizeGuildName(guild or "")
@@ -1566,6 +1660,17 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
         local relayPeerSource = self.IsKnownRelayPeer
             and self:IsKnownRelayPeer(sender or "") or false
         if relayPeerSource and not ownerSourceVerified and remoteTs <= 0 then
+            return
+        end
+        -- 2.2.2: an assault already over when it arrives (its clock ran out long ago: an
+        -- abandoned one whose release reached nobody) changes nothing here. Every map already
+        -- shows such an assault as its previous tenant; taken, it replaced our tenant with it and
+        -- we served it on to every requester, so it came back at every login (Savix Chapel).
+        if status == "in_progress" and not (stLocal and stLocal.status == "in_progress"
+            and stLocal.holdAuthorityLocal)
+            and Overlord.Outpost:IsObserverOutpostCaptureStale({ status = "in_progress", updatedAt = remoteTs,
+                holdTimeElapsed = tonumber(holdStr) or 0, holdTimeRequired = tonumber(holdReqStr) },
+                Overlord.Outpost:GetSite(siteKey), ClaimServerNow()) then
             return
         end
         -- A release of an assault we observe gives the site back to the tenant we
@@ -1713,8 +1818,7 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
             _localOnlyAlert = true,
         }
     end
-    TryPrintOutpostDefenderAlert(siteKey, stBefore, defenderAlertState)
-    TryPrintOutpostAssaultAlert(siteKey, stBefore, stAfter)
+    AlertAtHalfCapture(siteKey, stBefore, defenderAlertState, stAfter)
     if not (defenderAlertState and defenderAlertState._localOnlyAlert) then
         MaybeResetOutpostDefenderAlert(siteKey, stAfter)
     end
@@ -1906,6 +2010,14 @@ function Overlord.Sync:ParseOutpostKnownMarks(field)
     return set
 end
 
+-- 2.2.2: an assault observed here whose clock ran out long ago (not ours).
+local function OutpostAssaultOver(siteKey, st)
+    local OP = Overlord.Outpost
+    return st ~= nil and st.status == "in_progress" and not st.holdAuthorityLocal
+        and OP.IsObserverOutpostCaptureStale ~= nil
+        and OP:IsObserverOutpostCaptureStale(st, OP:GetSite(siteKey), ClaimServerNow()) == true
+end
+
 -- known (2.0.2): the requester's marks with its nonce ({ set, nonce }), only for an answer
 -- to that requester alone; nil: every row as before.
 function Overlord.Sync:AppendOutpostToSrQueue(queue, minimalResponseOnly, known)
@@ -1915,7 +2027,8 @@ function Overlord.Sync:AppendOutpostToSrQueue(queue, minimalResponseOnly, known)
         for siteKey in pairs(Overlord.OutpostSites) do
             if added >= SR_MINIMAL_OP_SITE_MAX then break end
             local st = Overlord.Outpost:GetState(siteKey)
-            if st and st.status == "in_progress" then
+            -- (2.2.2: an assault over long ago is not served: OnReceiveOutpostState drops it.)
+            if st and st.status == "in_progress" and not OutpostAssaultOver(siteKey, st) then
                 local opData = self.BuildOutpostPayload and self:BuildOutpostPayload(siteKey)
                 if opData then
                     table.insert(queue, { type = "OP", data = opData })
@@ -1952,7 +2065,7 @@ function Overlord.Sync:AppendOutpostToSrQueue(queue, minimalResponseOnly, known)
     end
     for siteKey in pairs(Overlord.OutpostSites) do
         local st = Overlord.Outpost:GetState(siteKey)
-        local opData = not IsNeverTouchedNeutral(st)
+        local opData = not IsNeverTouchedNeutral(st) and not OutpostAssaultOver(siteKey, st)
             and self.BuildOutpostPayload and self:BuildOutpostPayload(siteKey)
         if opData then
             table.insert(queue, { type = "OP", data = opData })
@@ -2201,7 +2314,7 @@ end
 -- same rows behind up to 615 ranking rows.
 local OUTPOST_HISTORY_REPLY_COOLDOWN = 600
 local OUTPOST_HISTORY_SEND_INTERVAL = 0.5
-local outpostHistoryRepliedAt = {}
+local outpostHistoryRepliedAt, outpostHistoryRepliedCount = {}, 0
 local outpostHistoryReply = nil
 
 function Overlord.Sync:RespondOutpostHistory(target, evidencePage, hasEvidencePage)
@@ -2215,6 +2328,20 @@ function Overlord.Sync:RespondOutpostHistory(target, evidencePage, hasEvidencePa
     pcall(self.AppendLeaderboardOutpostToSrQueue, self, queue)
     pcall(self.AppendLeaderboardOutpostCountToSrQueue, self, queue, evidencePage, hasEvidencePage)
     if #queue == 0 then return false end
+    if outpostHistoryRepliedAt[key] == nil then
+        -- 2.2.2: past cooldowns say nothing; dropped once the table holds 64 names.
+        if outpostHistoryRepliedCount >= 64 then
+            outpostHistoryRepliedCount = 0
+            for name, at in pairs(outpostHistoryRepliedAt) do
+                if now - at >= OUTPOST_HISTORY_REPLY_COOLDOWN then
+                    outpostHistoryRepliedAt[name] = nil
+                else
+                    outpostHistoryRepliedCount = outpostHistoryRepliedCount + 1
+                end
+            end
+        end
+        outpostHistoryRepliedCount = outpostHistoryRepliedCount + 1
+    end
     outpostHistoryRepliedAt[key] = now
     local reply = { target = target, queue = queue, index = 1, startedAt = now }
     outpostHistoryReply = reply

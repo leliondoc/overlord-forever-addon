@@ -162,6 +162,10 @@ relay.IsDispatching = function(_, who) return relay.context ~= nil and relay.con
 relay.IsTargetedDispatch = function() return relay.context ~= nil and relay.context.targeted == true end
 local built, appended, journal = 0, 0, 0
 local realBuild, realAppend, realJournal = sync.BuildZoneAllSnapshotPages, sync.AppendOutpostToSrQueue, sync.AppendVictoryBonusToSrQueue
+-- 2.3.0: the fight brackets (Recent activity) ride every map answer to the requester alone.
+local fights, fightsOnly = 0, nil
+local realFights = sync.AppendFrontActivityToSrQueue
+sync.AppendFrontActivityToSrQueue = function(_, _, _, bracketsOnly) fights, fightsOnly = fights + 1, bracketsOnly end
 sync.BuildZoneAllSnapshotPages = function(self, ...) built = built + 1; return realBuild(self, ...) end
 sync.AppendOutpostToSrQueue = function(self, ...) appended = appended + 1; return realAppend(self, ...) end
 if realJournal then
@@ -175,7 +179,7 @@ GetTime = function() return clock end
 math.random = function() return 0 end
 Overlord.InActiveFront = true
 local function ask(sender, channel, replyTo)
-    built, appended, journal = 0, 0, 0
+    built, appended, journal, fights, fightsOnly = 0, 0, 0, 0, nil
     clock = clock + 600
     sync:OnSyncRequest(sender, sync:GetSRPayload("T"), channel, replyTo)
     return built, appended
@@ -192,12 +196,16 @@ end
 local b, a = askRelayed("Same Tester", true, "sessA")
 assert(b == 0 and a == 1, "a targeted request from a holder of our map got map pages, or lost its keep rows: " .. b .. "/" .. a)
 assert(journal == 1, "the victory journal rows were left out with the map pages")
+assert(fights == 0, "fight brackets went to a neighbour that holds our map")
 b = askRelayed("Same Tester", true, "sessB")
 assert(b == 1, "a request of another session (after a /reload) got no map pages")
+assert(fights == 1 and fightsOnly == true, "a map answer after a /reload carried no fight brackets, or carried FA")
 b = askRelayed("Same Tester", false, "sessA")
 assert(b == 1, "a broadcast request (login, instance exit) answered to the holder got no map pages")
+assert(fights == 0, "fight brackets went into an answer to a relay broadcast")
 b, a = ask("Same Tester", "WHISPER")
 assert(b == 1 and a == 1, "a raw whisper (no session) got no map pages: " .. b .. "/" .. a)
+assert(fights == 1, "a map answer to a raw whisper carried no fight brackets")
 b = ask("Same Tester", "BNET")
 assert(b == 1, "a raw Battle.net request (no session) got no map pages")
 b, a = askRelayed("Other Tester", true, "sessA")
@@ -205,8 +213,10 @@ assert(b == 1 and a == 1, "a requester with another map got no map pages: " .. b
 for _, heard in ipairs({ "CHANNEL", "RAID", "PARTY" }) do
     b = ask("Same Tester", heard)
     assert(b == 1, "map pages left out of an answer heard by others (" .. heard .. ")")
+    assert(fights == 0, "fight brackets went into an answer heard by others (" .. heard .. ")")
 end
 sync.BuildZoneAllSnapshotPages, sync.AppendOutpostToSrQueue, sync.AppendVictoryBonusToSrQueue = realBuild, realAppend, realJournal
+sync.AppendFrontActivityToSrQueue = realFights
 relay.PeerHoldsOurMap, relay.IsDispatching, relay.IsTargetedDispatch = realHolds, realDispatching, realTargeted
 C_Timer.After, C_Timer.NewTicker, GetTime, math.random = realAfter, realTicker, realTime, realRandom
 print("Equal map skip: pages left out only for a targeted request of the same session, keep and journal rows kept")

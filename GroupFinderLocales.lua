@@ -3,7 +3,8 @@
 -- Same format slots in every language, in the same order:
 --   GF_SUBTITLE %d %d, GF_ROW_LEVEL %d, GF_ROW_MIN_LEVEL %d, GF_REQUESTS_MORE %d,
 --   GF_ERR_LEVEL %d, GF_ERR_COOLDOWN %s, GF_CHAT_APPLICANT %s %d, GF_TIP_LEADER %s,
---   GF_TIP_MEMBERS %d %d, GF_TIP_FRONT %s, GF_CHAT_INVITE_LOST %s, GF_CHAT_INVITE_TYPE %s.
+--   GF_TIP_MEMBERS %d %d, GF_TIP_FRONT %s, GF_CHAT_INVITE_LOST %s, GF_CHAT_INVITE_TYPE %s,
+--   GF_CHAT_INVITE_FAILED %s.
 local L = Overlord.L
 local locale = GetLocale() or "enUS"
 local lang = ({ frFR = "fr", esES = "es", esMX = "es", deDE = "de",
@@ -84,6 +85,7 @@ en = {
     GF_CHAT_AFK = "Your listing was withdrawn: you are away.",
     GF_CHAT_INVITE_LOST = "%s did not receive the invitation. Invite from the window (/ov groups).",
     GF_CHAT_INVITE_TYPE = "The game refused the invitation again. Type: /invite %s",
+    GF_CHAT_INVITE_FAILED = "The game refused the invitation. Type: /invite %s",
     GF_TIP_LEADER = "Leader: %s",
     GF_TIP_MEMBERS = "Members: %d / %d",
     GF_TIP_FRONT = "Front: %s",
@@ -165,6 +167,7 @@ fr = {
     GF_CHAT_AFK = "Votre annonce a été retirée : vous êtes absent.",
     GF_CHAT_INVITE_LOST = "%s n'a pas reçu l'invitation. Invitez depuis la fenêtre (/ov groups).",
     GF_CHAT_INVITE_TYPE = "Le jeu a encore refusé l'invitation. Tapez : /invite %s",
+    GF_CHAT_INVITE_FAILED = "Le jeu a refusé l'invitation. Tapez : /invite %s",
     GF_TIP_LEADER = "Chef : %s",
     GF_TIP_MEMBERS = "Membres : %d / %d",
     GF_TIP_FRONT = "Front : %s",
@@ -246,6 +249,7 @@ es = {
     GF_CHAT_AFK = "Tu anuncio se ha retirado: estás ausente.",
     GF_CHAT_INVITE_LOST = "%s no ha recibido la invitación. Invita desde la ventana (/ov groups).",
     GF_CHAT_INVITE_TYPE = "El juego ha vuelto a rechazar la invitación. Escribe: /invite %s",
+    GF_CHAT_INVITE_FAILED = "El juego ha rechazado la invitación. Escribe: /invite %s",
     GF_TIP_LEADER = "Líder: %s",
     GF_TIP_MEMBERS = "Miembros: %d / %d",
     GF_TIP_FRONT = "Frente: %s",
@@ -327,6 +331,7 @@ de = {
     GF_CHAT_AFK = "Euer Eintrag wurde zurückgezogen: Ihr seid abwesend.",
     GF_CHAT_INVITE_LOST = "%s hat die Einladung nicht erhalten. Ladet über das Fenster ein (/ov groups).",
     GF_CHAT_INVITE_TYPE = "Das Spiel hat die Einladung erneut abgelehnt. Tippt: /invite %s",
+    GF_CHAT_INVITE_FAILED = "Das Spiel hat die Einladung abgelehnt. Tippt: /invite %s",
     GF_TIP_LEADER = "Anführer: %s",
     GF_TIP_MEMBERS = "Mitglieder: %d / %d",
     GF_TIP_FRONT = "Front: %s",
@@ -408,6 +413,7 @@ ru = {
     GF_CHAT_AFK = "Ваше объявление снято: вы отошли.",
     GF_CHAT_INVITE_LOST = "%s не получил приглашение. Пригласите из окна (/ov groups).",
     GF_CHAT_INVITE_TYPE = "Игра снова отклонила приглашение. Введите: /invite %s",
+    GF_CHAT_INVITE_FAILED = "Игра отклонила приглашение. Введите: /invite %s",
     GF_TIP_LEADER = "Лидер: %s",
     GF_TIP_MEMBERS = "Участники: %d / %d",
     GF_TIP_FRONT = "Фронт: %s",
@@ -489,6 +495,7 @@ pt = {
     GF_CHAT_AFK = "Seu anúncio foi retirado: você está ausente.",
     GF_CHAT_INVITE_LOST = "%s não recebeu o convite. Convide pela janela (/ov groups).",
     GF_CHAT_INVITE_TYPE = "O jogo recusou o convite de novo. Digite: /invite %s",
+    GF_CHAT_INVITE_FAILED = "O jogo recusou o convite. Digite: /invite %s",
     GF_TIP_LEADER = "Líder: %s",
     GF_TIP_MEMBERS = "Membros: %d / %d",
     GF_TIP_FRONT = "Frente: %s",
@@ -570,6 +577,7 @@ zhCN = {
     GF_CHAT_AFK = "你的招募已撤回：你处于暂离状态。",
     GF_CHAT_INVITE_LOST = "%s 没有收到邀请。请在窗口中邀请（/ov groups）。",
     GF_CHAT_INVITE_TYPE = "游戏再次拒绝了邀请。请输入：/invite %s",
+    GF_CHAT_INVITE_FAILED = "游戏拒绝了邀请。请输入：/invite %s",
     GF_TIP_LEADER = "队长：%s",
     GF_TIP_MEMBERS = "成员：%d / %d",
     GF_TIP_FRONT = "战线：%s",

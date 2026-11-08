@@ -203,8 +203,8 @@ do
         f:Show()
     end
     function SyncReport.Worst(a, b) return LEVEL_RANK[b] > LEVEL_RANK[a] and b or a end
-    function SyncReport.Header(level)
-        SyncReport.Print(GOLD .. "===== Network status: |r" .. LEVEL_COLOR[level] .. LEVEL_WORD[level]
+    function SyncReport.Header(level, label)
+        SyncReport.Print(GOLD .. "===== " .. (label or "Network status") .. ": |r" .. LEVEL_COLOR[level] .. LEVEL_WORD[level]
             .. "|r" .. GOLD .. " =====|r")
     end
     function SyncReport.Status(level, title, text)
@@ -280,6 +280,12 @@ function SyncReport.Network()
     end
     if net and net.GetBridgeDiagnostics then
         for _, line in ipairs(net:GetBridgeDiagnostics()) do R.Detail(line) end
+    end
+    if sync.GetChannelOpDiagnostics then R.Detail(sync:GetChannelOpDiagnostics()) end
+    local groupFinder = Overlord.GroupFinder
+    if groupFinder and (groupFinder.messageErrors or 0) > 0 then
+        R.Detail(string.format("PvP Groups: %d message errors (last: %s)", groupFinder.messageErrors,
+            tostring(groupFinder.lastMessageError):sub(1, 160)))
     end
     R.Detail("More: /ov relay (relay queue, traffic by type, ranking catch-up, 30 s of incoming packets).")
 end
@@ -419,6 +425,8 @@ local PERF_MODULES = {
     "LeaderboardUI", "MapMarkers", "MostWanted", "NetworkHealth", "Outpost", "OutpostControl",
     "Popups", "Ressources", "SettingsPanel", "Shard", "Sync", "UI", "ZoneControl",
     "ZoneIndicator", "Zones", "Relay", "RankProof", "Ranks", "RanksUI",
+    -- 2.3.0: the whisper mesh and the guild lane carry the data while the channel is refused.
+    "ChannelDirectory", "GuildLane",
 }
 local PERF_SPIKE_MS = 50
 local perfState = nil
@@ -443,12 +451,14 @@ local function PerfFinish(label, startedAt, startKb, sliced, ...)
         if elapsed > row.max then row.max = elapsed end
         -- Only the outermost call is reported live, so one freeze prints one line.
         if not sliced and elapsed >= PERF_SPIKE_MS and state.depth == 0 then
+            state.spikes = state.spikes + 1
             Overlord:PrintNotification(string.format("|cFFFF4444[Overlord perf]|r %d ms  %s",
                 math.floor(elapsed + 0.5), label))
         end
         -- The frame's total: a peak can be many small calls in one frame (a burst of
         -- messages), none slow on its own. Outermost calls only (nested ones are inside).
         if not sliced and state.depth == 0 then
+            state.outerMs, state.outerKb = state.outerMs + elapsed, state.outerKb + allocated
             state.frameMs = state.frameMs + elapsed
             state.frameTop[label] = (state.frameTop[label] or 0) + elapsed
             state.frameCount[label] = (state.frameCount[label] or 0) + 1
@@ -487,32 +497,81 @@ local function StopPerf()
         if not r.label:find("(sliced", 1, true) then frameRows[#frameRows + 1] = r end
     end
     rows = frameRows
-    table.sort(rows, function(a, b) return a.max > b.max end)
-    Overlord:PrintNotification("[Overlord perf] Slowest single calls in one frame (max ms / total ms / calls):")
-    for i = 1, math.min(12, #rows) do
-        local r = rows[i]
-        Overlord:PrintNotification(string.format("  %.1f / %.0f / %d  %s", r.max, r.total, r.calls, r.label))
-    end
-    table.sort(rows, function(a, b) return a.total > b.total end)
-    Overlord:PrintNotification("[Overlord perf] Most total time:")
-    for i = 1, math.min(8, #rows) do
-        local r = rows[i]
-        Overlord:PrintNotification(string.format("  %.0f ms / %d calls  %s", r.total, r.calls, r.label))
-    end
-    table.sort(rows, function(a, b) return a.kb > b.kb end)
-    Overlord:PrintNotification("[Overlord perf] Most memory allocated (KB, includes nested calls):")
-    for i = 1, math.min(10, #rows) do
-        local r = rows[i]
-        if r.kb < 1 then break end
-        Overlord:PrintNotification(string.format("  %.0f KB / %d calls  %s", r.kb, r.calls, r.label))
-    end
-    -- What the addon list's peaks are made of: the heaviest frames, with what ran in them.
-    if #state.heavy > 0 then
-        Overlord:PrintNotification("[Overlord perf] Heaviest frames (ms in Overlord: biggest calls ms x count):")
-        for _, frame in ipairs(state.heavy) do
-            Overlord:PrintNotification(string.format("  %.1f ms  %s", frame.ms, frame.parts))
+    -- 2.3.0: a report like /ov network (his request): a verdict per line, the detail below, and
+    -- the copyable window. Thresholds: a frame lasts 16.7 ms at 60 fps; a call or a frame of
+    -- ours over 50 ms is a freeze the player sees, over 16 ms a stutter.
+    local R = SyncReport
+    local seconds = math.max(1, (GetTime and GetTime() or state.startedAt) - state.startedAt)
+    local sheet = R.Begin()
+    local reportOk, reportErr = pcall(function()
+        table.sort(rows, function(a, b) return a.max > b.max end)
+        local slowest, heaviest = rows[1], state.heavy[1]
+        local lines, overall = {}, "ok"
+        local function verdict(level, title, text)
+            lines[#lines + 1] = { level, title, text }
+            overall = R.Worst(overall, level)
         end
+        local worst = slowest and slowest.max or 0
+        verdict(state.spikes > 0 and "bad" or (worst >= 16 and "warn" or "ok"), "Freezes",
+            string.format("%d calls over %d ms in %ds; slowest %.1f ms%s", state.spikes, PERF_SPIKE_MS,
+                math.floor(seconds + 0.5), worst, slowest and (" (" .. slowest.label .. ")") or ""))
+        local frameMs = heaviest and heaviest.ms or 0
+        verdict(frameMs >= PERF_SPIKE_MS and "bad" or (frameMs >= 16 and "warn" or "ok"), "Heaviest frame",
+            string.format("%.1f ms of Overlord in one frame%s", frameMs,
+                heaviest and (" (" .. heaviest.parts .. ")") or ""))
+        local perSec = state.outerMs / seconds
+        verdict(perSec >= 30 and "bad" or (perSec >= 10 and "warn" or "ok"), "Average load",
+            string.format("%.1f ms per second (%.1f%% of one core)", perSec, perSec / 10))
+        local kbSec = state.outerKb / seconds
+        verdict(kbSec >= 500 and "bad" or (kbSec >= 100 and "warn" or "ok"), "Garbage",
+            string.format("%.0f KB allocated per second (the game collects it later)", kbSec))
+        -- The addon's memory, read once now (never in combat: it walks every addon).
+        local update = UpdateAddOnMemoryUsage or (C_AddOns and C_AddOns.UpdateAddOnMemoryUsage)
+        local usage = GetAddOnMemoryUsage or (C_AddOns and C_AddOns.GetAddOnMemoryUsage)
+        if update and usage and not (InCombatLockdown and InCombatLockdown()) then
+            local okUpdate = pcall(update)
+            local okUsage, kb = pcall(usage, "Overlord")
+            if okUpdate and okUsage and type(kb) == "number" then
+                verdict("ok", "Overlord memory", string.format("%.1f MB right now", kb / 1024))
+            end
+        end
+        R.Header(overall, "Performance")
+        for _, line in ipairs(lines) do R.Status(line[1], line[2], line[3]) end
+        R.Title("Details:")
+        R.Detail("Slowest single calls in one frame (max ms / total ms / calls):")
+        for i = 1, math.min(12, #rows) do
+            local r = rows[i]
+            R.Detail(string.format("  %.1f / %.0f / %d  %s", r.max, r.total, r.calls, r.label))
+        end
+        table.sort(rows, function(a, b) return a.total > b.total end)
+        R.Detail("Most total time:")
+        for i = 1, math.min(8, #rows) do
+            local r = rows[i]
+            R.Detail(string.format("  %.0f ms / %d calls  %s", r.total, r.calls, r.label))
+        end
+        table.sort(rows, function(a, b) return a.kb > b.kb end)
+        R.Detail("Most memory allocated (KB, includes nested calls):")
+        for i = 1, math.min(10, #rows) do
+            local r = rows[i]
+            if r.kb < 1 then break end
+            R.Detail(string.format("  %.0f KB / %d calls  %s", r.kb, r.calls, r.label))
+        end
+        -- What the addon list's peaks are made of: the heaviest frames, with what ran in them.
+        if #state.heavy > 0 then
+            R.Detail("Heaviest frames (ms in Overlord: biggest calls ms x count):")
+            for _, frame in ipairs(state.heavy) do
+                R.Detail(string.format("  %.1f ms  %s", frame.ms, frame.parts))
+            end
+        end
+        R.Detail(string.format("Timed %d functions for %ds; timing adds a little to every call it measures.",
+            #state.wrapped, math.floor(seconds + 0.5)))
+    end)
+    SyncReport.sheet = nil
+    if not reportOk then
+        Overlord:PrintNotification("|cFFFF4444[Overlord]|r /ov perf report error: " .. tostring(reportErr))
+        SyncReport.Add(sheet, "/ov perf report error: " .. tostring(reportErr))
     end
+    pcall(SyncReport.ShowSheet, sheet)
 end
 
 -- At each frame's end: keep the three heaviest frames of the window (what ran in each,
@@ -546,7 +605,8 @@ local function StartPerf(seconds)
         return
     end
     local state = { stats = {}, wrapped = {}, depth = 0, frame = CreateFrame("Frame"),
-        frameMs = 0, frameTop = {}, frameCount = {}, heavy = {} }
+        frameMs = 0, frameTop = {}, frameCount = {}, heavy = {},
+        spikes = 0, outerMs = 0, outerKb = 0, startedAt = GetTime and GetTime() or 0 }
     local function wrapTable(owner, prefix)
         if type(owner) ~= "table" then return end
         for key, value in pairs(owner) do
@@ -797,6 +857,10 @@ local function CommandHandler(msg)
             if Overlord.LeaderboardUI then Overlord.LeaderboardUI:Toggle() end; return
         elseif cmd == "scale" then
             RunScaleCommand(args)
+            return
+        elseif cmd == "perf" and args[2] == "stop" then
+            -- (A profiler started outside must be stoppable in here: it times every call.)
+            StopPerf()
             return
         end
         Overlord:PrintNotification("|cFF00FF00[Overlord]|r " .. L.DISABLED_IN_INSTANCE)

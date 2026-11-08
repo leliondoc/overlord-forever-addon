@@ -1438,3 +1438,28 @@ reading("Plain Nobody", cur - 2, 500)
 RP:ForgetCharacter(pool, "Plain Nobody")
 assert(next(pool.park) == nil and pool.rd["Plain Nobody"] == nil, "nothing shown: forgotten, not parked")
 print("Rank proof: park holders only OK")
+
+-- 23. 2.3.0: the addon's author wears the Overlord logo on both factions, with no claim nor
+-- reading, in his region only, never in an instance; nobody else's name does.
+do
+    local savedRegion = GetCurrentRegionName
+    GetCurrentRegionName = function() return "EU" end
+    local authorRank = R.AUTHOR_RANK
+    assert(authorRank == 16 and R:GetRankIcon(authorRank) == "Interface\\AddOns\\Overlord\\Textures\\overlord",
+        "the author's badge is the Overlord logo")
+    assert(RP:GetBadgeRank("Troma Orcbane") == authorRank, "the author shows his badge on our side")
+    assert(RP:GetBadgeRank("Troma Orcbane", "Horde") == authorRank, "the author shows his badge to the other faction")
+    units.authorplate = { name = "Troma Orcbane", faction = "Alliance", guid = "Player-1-TROMA" }
+    assert(RP:UnitBadge(pool, "authorplate") == authorRank, "the author's nameplate without any claim")
+    units.authorplate = nil
+    assert(RP:GetBadgeRank("Troma Orcbanes") == 0 and RP:GetBadgeRank("Hush King") ~= authorRank,
+        "only the author's exact name")
+    GetCurrentRegionName = function() return "US" end
+    assert(RP:GetBadgeRank("Troma Orcbane") == 0, "another region's Troma Orcbane is somebody else")
+    GetCurrentRegionName = function() return "EU" end
+    IsInInstance = function() return true end
+    assert(RP:GetBadgeRank("Troma Orcbane") == 0, "nothing in an instance")
+    IsInInstance = function() return false end
+    GetCurrentRegionName = savedRegion
+end
+print("Rank proof: author badge OK")

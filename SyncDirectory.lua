@@ -54,14 +54,56 @@ local dir = {
     -- before the request, so that an identical map is answered without its pages
     -- (Relay:PeerHoldsOurMap, BeforeMapPull).
     LADDER_ACK_SEC = 20, LADDER_JITTER_SEC = 20, LADDER_FLOOR_SEC = 20,
+    -- 2.2.2: after a round that changed our ranking, the next one comes in LADDER_HOT_SEC +
+    -- 0..LADDER_HOT_JITTER s (what we just took is news to our other partners); an idle one
+    -- rests as above.
+    LADDER_HOT_SEC = 6, LADDER_HOT_JITTER = 6,
     MAP_PRESENCE_SEC = 100, MAP_PULL_DELAY = 2,
+    -- 2.2.2: a first silence keeps a player alone FIRST_SILENT_SEC (SILENT_SEC from the second):
+    -- the first players back after a restart were greeted by many at once, their answers
+    -- capped, and the whole faction left them alone for half an hour. Answers past the cap
+    -- wait for the next minute (REPLY_QUEUE at most) instead of being dropped.
+    FIRST_SILENT_SEC = 300, REPLY_QUEUE = 6,
+    -- 2.2.2: a quicker start: BOOT_GREETS greetings BOOT_GAP apart after the first list read,
+    -- and greetings go on while fewer than MIN_CONTACTS contacts are in the chain's view.
+    BOOT_GREETS = 3, BOOT_GAP = 4, MIN_CONTACTS = 8,
+    -- 2.2.2: the address book. Some clients never get the member list (the game keeps our
+    -- channel suspended for them, or never loads its list): they had no contact at all, and
+    -- the chain never reached them. Players of the list that answered our greeting are kept
+    -- (BOOK_MAX names, BOOK_DAYS) in the saved variables, per region, channel and faction; a
+    -- client without a list greets them (one every BOOK_GREET_SEC) and takes them as contacts.
+    -- An offline name costs one whisper, its "no player named" line hidden (SyncAux).
+    BOOK_MAX = 60, BOOK_DAYS = 3, BOOK_GREET_SEC = 20,
+    -- 2.2.2: a player that greeted us and is not in our list (a client the game keeps out of
+    -- the list) gets live news too, at most LEAF_FANS of them per fact; what it passes on is
+    -- not taken further (its word is a stranger's).
+    LEAF_FANS = 2,
+    -- 2.2.2: the list read again (fetched anew) for a newcomer at most every REFETCH_SEC.
+    REFETCH_SEC = 300,
+    -- 2.2.2: a client without a list and without a book yet (a first session the game keeps out
+    -- of the list) had nobody: it greets players of its own faction from this week's ranking
+    -- instead, the LADDER_SEEDS with most kills (Overlord players, most of them often online),
+    -- looked up again every LADDER_SEED_SEC. An offline one costs one whisper, hidden.
+    -- One look reads LADDER_SEED_SCAN rows of the ranking from a random place (another one on
+    -- every client: not all greeting the same players), never the whole ranking, never in combat.
+    -- 2.3.0: the place is a cursor moved on by 0..LADDER_SEED_SKIP rows at every look (bounded:
+    -- the ranking is no longer counted nor walked whole in one frame).
+    LADDER_SEEDS = 40, LADDER_SEED_SEC = 300, LADDER_SEED_SCAN = 2000, LADDER_SEED_SKIP = 8000,
+    -- 2.2.2: a client with nobody at all (no list, no book, no ranking yet, no guild mate or
+    -- Battle.net friend heard: a first install the game keeps out of the list) greets players
+    -- of its faction it meets, PvP on (target, mouseover, nameplates): the last WORLD_SEEN, met
+    -- under WORLD_FRESH s ago, WORLD_MAX greetings a session at most. Only while no peer is
+    -- heard directly: the unit events are registered then only (Tick), never otherwise.
+    WORLD_SEEN = 12, WORLD_FRESH = 600, WORLD_MAX = 20,
 }
 addon.ChannelDirectory = dir
 dir.names, dir.partners, dir.partnerCount, dir.failedMethods, dir.provenMethods = {}, {}, 0, {}, {}
 dir.replies = { at = -1000, count = 0 }
 dir.generation = 0
 dir.stats = { reads = 0, fetches = 0, fetchFailed = 0, greeted = 0, answered = 0, silent = 0,
-    greetedUs = 0, replies = 0, repliesCapped = 0, ladderTurns = 0, mapTurns = 0, full = 0, gapPulls = 0 }
+    greetedUs = 0, replies = 0, repliesCapped = 0, ladderTurns = 0, mapTurns = 0, full = 0, gapPulls = 0,
+    worldGreeted = 0 }
+dir.world = {}
 
 local function now() return GetTime() end
 local function outside() return not addon.InstanceSuspended and not IsInInstance() end
@@ -159,8 +201,10 @@ local function selectEntry(index)
     return (pcall(SetSelectedDisplayChannel, index))
 end
 
+-- (2.2.2: never right after a zone change, while the game swaps its own channels.)
 function dir:CanFetch()
     return outside() and not inCombat() and not windowOpen()
+        and (sync.ChannelZoneQuiet == nil or sync:ChannelZoneQuiet())
 end
 
 function dir:Take(index, members)
@@ -174,6 +218,7 @@ function dir:Take(index, members)
     self.listed, self.listedFor, self.listedCount = listed, names, #names
     self.nextReadAt = now() + self.REFRESH_SEC
     self.stats.reads = self.stats.reads + 1
+    if #names > 0 then self:Boot() end
     return true
 end
 
@@ -182,6 +227,7 @@ function dir:Refresh()
     local at = now()
     self.nextReadAt = at + self.RETRY_SEC
     if not self:CanFetch() then return false end
+    self.refreshTried = true
     local index, members, group, custom, world = scanDisplay()
     self.suspended = nil
     if not index then
@@ -203,6 +249,12 @@ function dir:Refresh()
     end
     if not method then
         if members and members > 0 then return self:Take(index, members) end
+        self.state = "member list not loaded"
+        return false
+    end
+    -- 2.2.2: the two channel selections are spaced from our joins and leaves like any channel
+    -- operation (the next look comes NEXT_READ later).
+    if sync.TakeChannelOp and not sync:TakeChannelOp() then
         self.state = "member list not loaded"
         return false
     end
@@ -254,15 +306,226 @@ function dir:Poll(fetch, last)
 end
 
 -- ---------------------------------------------------------------------------
+-- The address book (2.2.2)
+-- ---------------------------------------------------------------------------
+
+local function serverNow() return addon.ServerNow and addon.ServerNow() or time() end
+
+-- This region's, this channel's and this faction's page of the book (nil before the saved
+-- variables or without a faction).
+function dir:Book(create)
+    local db = _G.OverlordDB
+    local faction = addon.PlayerFaction
+    if type(db) ~= "table" or (faction ~= "Alliance" and faction ~= "Horde") then return nil end
+    -- (The page's key, made once per faction: Known asks for it on every whisper.)
+    local key = self.bookKeyFaction == faction and self.bookKey or nil
+    if not key then
+        local region = type(GetCurrentRegionName) == "function" and GetCurrentRegionName() or nil
+        key = tostring(readable(region) and region or "?") .. "|" .. sync:GetChannelBaseName():lower() .. "|" .. faction
+        self.bookKey, self.bookKeyFaction = key, faction
+    end
+    local books = db.directoryBook
+    if type(books) ~= "table" then
+        if not create then return nil end
+        books = {}
+        db.directoryBook = books
+    end
+    local page = books[key]
+    if type(page) ~= "table" then
+        if not create then return nil end
+        page = {}
+        books[key] = page
+    end
+    return page
+end
+
+-- A listed player that answered our greeting, or greeted us, first-hand by whisper.
+-- 2.2.2: without a list, a player we greeted ourselves (book or ranking) that answered
+-- (ours: our own pick, never somebody that whispered first).
+function dir:Remember(name, ours)
+    if type(name) ~= "string" or not (self:Lists(name) or (ours and self:ListLess())) then return false end
+    local page = self:Book(true)
+    if not page then return false end
+    local lower, at = name:lower(), serverNow()
+    local entry = page[lower]
+    if type(entry) == "table" then
+        entry.n, entry.t = name, at
+        return true
+    end
+    local count, oldest, oldestKey = 0, math.huge, nil
+    for key, row in pairs(page) do
+        count = count + 1
+        local t = type(row) == "table" and tonumber(row.t) or 0
+        if t < oldest then oldest, oldestKey = t, key end
+    end
+    if count >= self.BOOK_MAX and oldestKey then page[oldestKey] = nil end
+    page[lower] = { n = name, t = at }
+    return true
+end
+
+-- The book's live names, newest first (old and malformed ones dropped).
+function dir:BookNames()
+    local page = self:Book(false)
+    if not page then return {} end
+    local at, limit, rows = serverNow(), self.BOOK_DAYS * 86400, {}
+    for key, row in pairs(page) do
+        local name = type(row) == "table" and row.n
+        local t = type(row) == "table" and tonumber(row.t) or nil
+        if type(name) ~= "string" or name:lower() ~= key or not t or at - t > limit or t > at + 3600 then
+            page[key] = nil
+        else
+            rows[#rows + 1] = { name = name, t = t }
+        end
+    end
+    table.sort(rows, function(a, b) if a.t ~= b.t then return a.t > b.t end return a.name < b.name end)
+    local names = {}
+    for i, row in ipairs(rows) do names[i] = row.name end
+    return names
+end
+
+function dir:InBook(name)
+    local page = type(name) == "string" and self:Book(false) or nil
+    local row = page and page[name:lower()]
+    return type(row) == "table" and tonumber(row.t) ~= nil and serverNow() - row.t <= self.BOOK_DAYS * 86400
+end
+
+-- 2.2.2: players of our faction in this week's ranking, most kills first (LADDER_SEEDS),
+-- not us; looked up again every LADDER_SEED_SEC.
+function dir:LadderSeeds()
+    local at = now()
+    if inCombat() then return self.seeds or {} end
+    if self.seeds and at - (self.seedsAt or -1e9) < self.LADDER_SEED_SEC then return self.seeds end
+    self.seedsAt = at
+    local lb, faction = addon.Leaderboard, addon.PlayerFaction
+    local kills = lb and lb.kills
+    local info = lb and lb.playerInfo
+    local seeds = {}
+    self.seeds = seeds
+    if type(kills) ~= "table" or type(info) ~= "table" or (faction ~= "Alliance" and faction ~= "Horde") then
+        return seeds
+    end
+    -- The window: LADDER_SEED_SCAN rows from a random place (wrapping round), the LADDER_SEEDS
+    -- with most kills kept in two small arrays (no table per row, no sort of the ranking).
+    -- 2.3.0: the place is a cursor kept from one look to the next, moved on by a random
+    -- 0..LADDER_SEED_SKIP rows first: a look walks LADDER_SEED_SKIP + LADDER_SEED_SCAN rows at
+    -- most, the ranking is never counted nor walked whole (a frame spike on big rankings).
+    if next(kills) == nil then return seeds end
+    local key = self.seedCursor
+    -- (A key gone from the ranking cannot be followed by next: start again from its top.)
+    if key ~= nil and kills[key] == nil then key = nil end
+    for _ = 1, math.random(0, self.LADDER_SEED_SKIP - 1) do key = next(kills, key) end
+    local names, counts, size, minAt = {}, {}, 0, 1
+    local limit, first = self.LADDER_SEEDS, nil
+    for _ = 1, self.LADDER_SEED_SCAN do
+        local name, count = next(kills, key)
+        if name == nil then name, count = next(kills) end
+        -- (Round the whole ranking already: a small one, each row once.)
+        if name == first then break end
+        first, key = first or name, name
+        count = tonumber(count)
+        if count and count > 0 and type(name) == "string" and (size < limit or count > counts[minAt]) then
+            local row = info[name]
+            if type(row) == "table" and row.faction == faction and name:find(" ", 1, true) then
+                if size < limit then
+                    size = size + 1
+                    names[size], counts[size] = name, count
+                else
+                    names[minAt], counts[minAt] = name, count
+                end
+                if size == limit then
+                    minAt = 1
+                    for k = 2, size do if counts[k] < counts[minAt] then minAt = k end end
+                end
+            end
+        end
+    end
+    self.seedCursor = key
+    local me = tostring(sync:GetPlayerFullName() or ""):lower()
+    for k = 1, size do
+        local canon = names[k]:lower() ~= me and sync:CanonicalForeverName(names[k]) or nil
+        if canon then seeds[#seeds + 1] = canon end
+    end
+    return seeds
+end
+
+-- 2.2.2: a player of our faction met in the world, PvP on (a unit event, only while isolated).
+function dir:NoteSeen(unit)
+    if not unit or type(UnitIsPlayer) ~= "function" or not UnitIsPlayer(unit) then return false end
+    if UnitIsUnit and UnitIsUnit(unit, "player") then return false end
+    local faction = UnitFactionGroup and UnitFactionGroup(unit)
+    if not readable(faction) or faction ~= addon.PlayerFaction then return false end
+    if UnitIsPVP and not UnitIsPVP(unit) then return false end
+    local raw = addon.SafeGetUnitName and addon:SafeGetUnitName(unit, true)
+    local name = readable(raw) and type(raw) == "string" and sync:CanonicalForeverName(raw) or nil
+    if not name then return false end
+    local world, at, lower = self.world, now(), name:lower()
+    for i = #world, 1, -1 do
+        if world[i].key == lower then table.remove(world, i) end
+    end
+    table.insert(world, 1, { name = name, key = lower, at = at })
+    while #world > self.WORLD_SEEN do world[#world] = nil end
+    return true
+end
+
+-- Nobody heard directly (guild, Battle.net, whisper) and no list: a player met may be greeted.
+function dir:Isolated()
+    local net = addon.Relay
+    return net ~= nil and net.CountDirectPeers ~= nil and self:ListLess() and net:CountDirectPeers() == 0
+        and self.stats.worldGreeted < self.WORLD_MAX
+end
+
+-- The unit events, registered only while isolated (no cost for everyone else).
+function dir:WatchWorld(on)
+    on = on == true
+    if on == (self.worldWatched == true) then return end
+    self.worldWatched = on
+    local frame = self.worldFrame
+    if not frame then
+        if not on or type(CreateFrame) ~= "function" then return end
+        frame = CreateFrame("Frame")
+        frame:SetScript("OnEvent", function(_, event, unit)
+            if event == "PLAYER_TARGET_CHANGED" then unit = "target"
+            elseif event == "UPDATE_MOUSEOVER_UNIT" then unit = "mouseover" end
+            pcall(dir.NoteSeen, dir, unit)
+        end)
+        self.worldFrame = frame
+    end
+    local method = on and frame.RegisterEvent or frame.UnregisterEvent
+    if type(method) == "function" then
+        for _, event in ipairs({ "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT", "NAME_PLATE_UNIT_ADDED" }) do
+            pcall(method, frame, event)
+        end
+    end
+    if not on then self.world = {} end
+end
+
+-- No member list to go by: never read, the channel suspended for us, or its list not loaded.
+function dir:ListLess()
+    -- (Not while a fetch is on its way: its list may come within seconds.)
+    return #self.names == 0 and self.refreshTried == true and not self.fetching
+end
+
+-- Known to us as a player of the list: read in it now or, without a list, kept in the book.
+function dir:Known(name)
+    if self:Lists(name) then return true end
+    return self:ListLess() and self:InBook(name)
+end
+
+-- ---------------------------------------------------------------------------
 -- Partners
 -- ---------------------------------------------------------------------------
 
 function dir:Forget(force)
-    local at = now()
+    local at, net = now(), addon.Relay
     for key, row in pairs(self.partners) do
         local last = math.max(row.greetedAt or -1e9, row.heardAt or -1e9, row.presenceAt or -1e9,
             row.askedAt or -1e9, row.silentUntil or -1e9)
-        if at - last > self.SILENT_SEC or (force and at - last > self.PRESENCE_SEC) then
+        -- 2.3.0: a contact the relay still reaches directly is live: its ranking rounds and the chain
+        -- keep its route, only its presence is old (a player that greeted us first sends none again
+        -- while it hears us). Forgotten, its whispered news was a stranger's and another player was
+        -- greeted in its place. A full table still makes room (force).
+        if (at - last > self.SILENT_SEC and not (row.chainAt and net and net:IsDirectPeer(row.name)))
+            or (force and at - last > self.PRESENCE_SEC) then
             self.partners[key] = nil
             self.partnerCount = self.partnerCount - 1
         end
@@ -290,7 +553,9 @@ end
 -- neighbour: nobody earns a share of our rounds by whispering to us.
 function dir:IsUsable(row)
     local net = addon.Relay
-    return net ~= nil and row.greetedAt ~= nil and net:IsDirectPeer(row.name)
+    -- (2.2.2: nor one the game said is offline, NoteUnreachable: it kept its turns.)
+    return net ~= nil and row.greetedAt ~= nil and not (row.unreachableUntil and row.unreachableUntil > now())
+        and net:IsDirectPeer(row.name)
 end
 
 -- 2.2.1: players of the list that answered our greeting by whisper (2.2.0 or later) and that
@@ -316,19 +581,67 @@ function dir:LiveCount()
     return count
 end
 
+-- 2.3.0: our route to this player came from our channel (heard there, not by whisper since).
+function dir:HeardOnChannelOnly(name)
+    local net = addon.Relay
+    local route = net and type(net.peers) == "table" and type(name) == "string" and net.peers[name:lower()] or nil
+    return route ~= nil and route.transport == "CHANNEL"
+end
+
 -- A listed player we do not hear yet, not greeted lately, not left alone.
+-- 2.2.2: a player that answered us before comes first (a known 2.2 client: no greeting lost on
+-- a silent one); a guild mate never (the guild carries to it already); without a list, the
+-- book's names, newest first.
 function dir:PickNew()
-    local names, net = self.names, addon.Relay
+    local net = addon.Relay
+    if not net then return nil end
+    local lane = addon.GuildLane
+    local guildOn = lane ~= nil and lane.IsGuildMate ~= nil and lane.IsActive ~= nil and lane:IsActive()
+    local at = now()
+    local function free(name)
+        local row = self.partners[name:lower()]
+        -- (2.3.0: heard on our channel only, a player does not hear us: the directory runs while the
+        -- channel does not carry what we send. Refused alone, or just after a refusal, the whole list
+        -- was such a neighbour and nobody was greeted.)
+        return not (net:IsPeer(name) and not self:HeardOnChannelOnly(name)) and not (guildOn and lane:IsGuildMate(name))
+            and not (row and ((row.silentUntil or 0) > at or at - (row.presenceAt or -1e9) < self.PRESENCE_SEC))
+    end
+    if self:ListLess() then
+        for _, name in ipairs(self:BookNames()) do
+            if free(name) then return name end
+        end
+        -- 2.2.2: isolated, a player met lately (online a moment ago) before the ranking's.
+        if self:Isolated() then
+            for _, seen in ipairs(self.world) do
+                if at - seen.at <= self.WORLD_FRESH and free(seen.name) then
+                    seen.at = -1e9
+                    self.stats.worldGreeted = self.stats.worldGreeted + 1
+                    return seen.name
+                end
+            end
+        end
+        local seeds = self:LadderSeeds()
+        local size = #seeds
+        if size == 0 then return nil end
+        local start = math.random(1, size)
+        for step = 0, size - 1 do
+            local name = seeds[(start + step - 1) % size + 1]
+            if free(name) then return name end
+        end
+        return nil
+    end
+    local names = self.names
     local size = #names
-    if size == 0 or not net then return nil end
-    local at, start = now(), math.random(1, size)
+    if size == 0 then return nil end
+    for _, row in pairs(self.partners) do
+        if row.heardAt and at - row.heardAt < self.SILENT_SEC and self:Lists(row.name) and free(row.name) then
+            return row.name
+        end
+    end
+    local start = math.random(1, size)
     for step = 0, math.min(size, 40) - 1 do
         local name = names[(start + step - 1) % size + 1]
-        local row = self.partners[name:lower()]
-        if not net:IsPeer(name) and not (row and ((row.silentUntil or 0) > at
-            or at - (row.presenceAt or -1e9) < self.PRESENCE_SEC)) then
-            return name
-        end
+        if free(name) then return name end
     end
     return nil
 end
@@ -359,12 +672,14 @@ end
 
 function dir:CheckAnswer(row)
     if self.partners[row.name:lower()] ~= row or not row.greetedAt or row.heardAt then return end
-    if self:IsUsable(row) then
+    -- (2.3.0: a route from our channel alone is no answer: a 2.2.1 client whose channel carries never answers.)
+    if self:IsUsable(row) and not self:HeardOnChannelOnly(row.name) then
         -- It spoke (a client before 2.2.0 that pulled our map, for instance).
         row.heardAt = now()
         return
     end
-    row.silentUntil = now() + self.SILENT_SEC
+    row.silences = (row.silences or 0) + 1
+    row.silentUntil = now() + (row.silences > 1 and self.SILENT_SEC or self.FIRST_SILENT_SEC)
     self.stats.silent = self.stats.silent + 1
 end
 
@@ -373,8 +688,9 @@ end
 -- session: its relay session. A new one (a /reload, a relog) knows nothing of the presence we
 -- gave the old one: answered then even within PRESENCE_SEC, once per PRESENCE_SEC.
 function dir:OnGreeting(origin, session)
-    -- Nothing of this runs while the channel works.
-    if not self:IsActive() then return false end
+    -- 2.2.2: answered even while our own channel carries: the greeter's may be refused (a
+    -- channel that works for some players only made them islands). The rest stays as it was.
+    if not self.started or not outside() or addon.RelayEnabled == false then return false end
     local row = partnerRow(origin, true)
     if not row then return false end
     local at = now()
@@ -384,31 +700,81 @@ function dir:OnGreeting(origin, session)
         end
         row.session = session
     end
-    if row.greetedAt and not row.heardAt and at - row.greetedAt <= self.ANSWER_WAIT then
+    local hadAnswer = row.heardAt ~= nil
+    local answersOurs = row.greetedAt ~= nil and not row.heardAt and at - row.greetedAt <= self.ANSWER_WAIT
+    if answersOurs then
         self.stats.answered = self.stats.answered + 1
     elseif not row.heardAt or at - row.heardAt > self.PRESENCE_SEC then
         self.stats.greetedUs = self.stats.greetedUs + 1
     end
-    row.heardAt, row.silentUntil = at, nil
+    row.heardAt, row.silentUntil, row.silences, row.unreachableUntil = at, nil, nil, nil
     -- 2.2.0 or later (only the list greets this way): a contact of the chain (ChainTargets), once
     -- the list we read names it. A newcomer to the list: read it again soon.
     row.chainAt = at
+    -- 2.2.2: kept in the book for a session without the list. (A busy player's answer may wait
+    -- for its next minute, REPLY_QUEUE: still the answer to our own greeting.)
+    self:Remember(row.name, answersOurs or (row.greetedAt ~= nil and not hadAnswer
+        and at - row.greetedAt <= self.ANSWER_WAIT + 62))
     -- (Never later than planned: no planned read yet is a read at once.)
-    if not self:Lists(origin) and at - (self.readAt or -1e9) >= self.REREAD_SEC
+    -- 2.3.0: once per greeter. A player the game keeps out of every list (a leaf) never shows in
+    -- ours: its greetings and map-round presences had every listed client read its whole list
+    -- every REREAD_SEC and fetch it every REFETCH_SEC, for nothing.
+    if not self:Lists(origin) and not row.rereadAsked and at - (self.readAt or -1e9) >= self.REREAD_SEC
         and self.nextReadAt and self.nextReadAt > at + self.RETRY_SEC then
+        row.rereadAsked = true
         self.nextReadAt = at + self.RETRY_SEC
+        -- 2.2.2: fetched anew (the game may hold an old list), at most every REFETCH_SEC.
+        if at - (self.refetchAt or -1e9) >= self.REFETCH_SEC then
+            self.refetchAt, self.fetchAt = at, nil
+        end
     end
     if at - (row.presenceAt or -1e9) < self.PRESENCE_SEC then return false end
-    local replies = self.replies
+    return self:Answer(row)
+end
+
+-- One answer to a greeting, within REPLIES_PER_MIN; past it, the answer waits for the next minute
+-- (REPLY_QUEUE at most): dropped, the greeter took us for silent.
+function dir:Answer(row)
+    local at, replies = now(), self.replies
     if at - replies.at >= 60 then replies.at, replies.count = at, 0 end
     if replies.count >= self.REPLIES_PER_MIN then
         self.stats.repliesCapped = self.stats.repliesCapped + 1
+        local queue = self.replyQueue or {}
+        self.replyQueue = queue
+        if #queue < self.REPLY_QUEUE and not row.queued then
+            row.queued = true
+            queue[#queue + 1] = row
+            if not self.replyTimer then
+                -- (Its own token: a timer from before a suspension (Suspend drops the queue)
+                -- touches nothing of a later queue.)
+                local token = {}
+                self.replyTimer = token
+                C_Timer.After(math.max(1, 60 - (at - replies.at) + 0.5), function()
+                    if dir.replyTimer ~= token then return end
+                    dir.replyTimer = nil
+                    return dir:DrainReplies()
+                end)
+            end
+        end
         return false
     end
     if not sendPresence(row) then return false end
     replies.count = replies.count + 1
     self.stats.replies = self.stats.replies + 1
     return true
+end
+
+function dir:DrainReplies()
+    local queue = self.replyQueue
+    self.replyQueue = nil
+    if not queue then return end
+    local at = now()
+    for _, row in ipairs(queue) do
+        row.queued = nil
+        if outside() and self.partners[row.name:lower()] == row and at - (row.presenceAt or -1e9) >= self.PRESENCE_SEC then
+            self:Answer(row)
+        end
+    end
 end
 
 -- Is there a partner to ask (accept: the caller's own rules), and which one, the one asked
@@ -492,6 +858,23 @@ dir.RANK_GAP, dir.RANK_FAN, dir.RANK_RESERVE = 30, 6, 20
 -- Copies we pass on never spend the last FORWARD_RESERVE tokens: those are our own captures'.
 dir.FORWARD_RESERVE = 10
 dir.PER_GATEWAY, dir.PER_MIN = 8, 30
+-- Fight brackets (FK) leave or pass on only above FK_RESERVE tokens; those we pass on, FK_PER_MIN a
+-- minute at most (our own front's are paced by Recent activity itself).
+-- (Four a minute to five contacts at most: a busy evening tells many brackets. Five, not four: the
+-- relay's four names allow three hands after the author, and 1 + 4 + 16 + 64 = 85 could never reach
+-- a 93-player list without the channel; 1 + 5 + 25 + 125 does, with room for the random overlap.)
+dir.FK_RESERVE, dir.FK_PER_MIN, dir.FK_FAN = 20, 4, 5
+-- Guild rampages (GuildKillAlert GW): checked as GuildKillAlert shows them, one per guild and side
+-- every GW_COVER_SEC, those we pass on GW_PER_MIN a minute (their own count, not the fights'),
+-- the fights' fan and reserve.
+dir.GW_PER_MIN, dir.GW_COVER_SEC = 2, 600
+-- Our own kill total (K) also goes to RAMPAGE_COLLECTORS guild mates (the same ones for the whole
+-- guild: the lowest hash of guild and name among the mates reached directly), inside the K fan.
+-- A rampage (GuildKillAlert) needs one client to hear five members of a guild; with the totals
+-- thrown at random contacts none ever did. A guild of fewer than RAMPAGE_MIN_MATES other mates
+-- online cannot make one; past RAMPAGE_LOAD mates only that many senders in all take part (a
+-- collector hears RAMPAGE_LOAD totals per RANK_GAP at most).
+dir.RAMPAGE_COLLECTORS, dir.RAMPAGE_MIN_MATES, dir.RAMPAGE_LOAD = 2, 4, 60
 dir.MULTICAST_SPEAKERS, dir.CHAIN_FRAGMENTS = 2, 2
 -- How long a passed start is remembered for its release (the relay's TTL and a margin), and how
 -- long a heard copy of a capture keeps our own report of it quiet (GuildLane: HEARD_COVER_SEC).
@@ -500,7 +883,7 @@ dir.CHAIN_ROWS = 256
 dir.chain = { tokens = dir.CHAIN_BURST, cover = {}, starts = {}, intake = {}, rows = 0,
     minute = { at = -1000, count = 0 } }
 for _, key in ipairs({ "chainOwn", "chainForwarded", "chainWhispers", "chainCovered", "chainCapped",
-    "chainNoContact", "chainLeft", "chainStranger", "chainRetold", "chainUnvouched" }) do dir.stats[key] = 0 end
+    "chainNoContact", "chainLeft", "chainStranger", "chainRetold", "chainUnvouched", "chainRampage" }) do dir.stats[key] = 0 end
 
 local FIXED_FACTS = { C = true, TV = true, GE = true, GX = true, GD = true, FC = true }
 
@@ -545,6 +928,15 @@ local function chainShape(p)
     local kind, payload = p.kind, p.payload
     if type(payload) ~= "string" then return nil end
     if FIXED_FACTS[kind] then return "fact" end
+    -- 2.2.2: a fight's bracket (FrontActivity FK) is the dock's "Recent activity": without the
+    -- channel it only went to Battle.net friends, so every panel showed its own fights. A bracket
+    -- has no author in it, so the same one told by several fighters is one fact (cover), and it
+    -- never spends the tokens kept for captures and sieges (FK_RESERVE, FK_PER_MIN).
+    if kind == "FK" then return "fact" end
+    if kind == "GW" then
+        local gka = addon.GuildKillAlert
+        return gka and gka.ChainCoverKey and gka:ChainCoverKey(payload) and "fact" or nil
+    end
     if kind == "K" then return #p.path == 1 and "rank" or nil end
     -- Believed first-hand only (Relay:Receive does not pass one on): our own, to our contacts.
     if kind == "OC" then return #p.path == 1 and "fact" or nil end
@@ -600,6 +992,10 @@ function dir:NoteUnreachable(name)
     local row = canon and self.partners[canon:lower()] or nil
     if not row then return false end
     row.chainAt, row.silentUntil = nil, now() + self.PRESENCE_SEC
+    -- 2.2.2: no partner turns either, and the route forgotten (another one is greeted).
+    row.unreachableUntil = now() + self.PRESENCE_SEC
+    local net = addon.Relay
+    if net and net.ForgetDirectRoute then net:ForgetDirectRoute(row.name) end
     return true
 end
 
@@ -619,8 +1015,49 @@ end
 function dir:IsContact(name)
     local net = addon.Relay
     local row = type(name) == "string" and self.partners[name:lower()] or nil
-    return row ~= nil and row.chainAt ~= nil and net ~= nil and self:Lists(row.name)
+    return row ~= nil and row.chainAt ~= nil and net ~= nil and self:Known(row.name)
         and net:IsDirectPeer(row.name)
+end
+
+-- 2.2.2: players that greeted us and are not in our list (the game keeps them out of it: about a
+-- third of the clients on the beta), reached directly now. The chain tells them live news as
+-- leaves (LEAF_FANS); the PvP Groups' hands and pulls serve them the same way (GroupFinder).
+function dir:LeafNames()
+    local net, out, at = addon.Relay, {}, now()
+    if not net or not net.IsDirectPeer then return out end
+    for _, row in pairs(self.partners) do
+        -- (2.3.0: however old its greeting: a leaf sends no presence again while it hears us; the
+        -- direct route says it is there.)
+        if row.chainAt and not (row.unreachableUntil and row.unreachableUntil > at)
+            and not self:Known(row.name) and net:IsDirectPeer(row.name) then
+            out[#out + 1] = row.name
+        end
+    end
+    return out
+end
+
+function dir:IsLeaf(name)
+    local net = addon.Relay
+    local row = type(name) == "string" and self.partners[name:lower()] or nil
+    return row ~= nil and row.chainAt ~= nil and net ~= nil
+        and not (row.unreachableUntil and row.unreachableUntil > now())
+        and not self:Known(row.name) and net:IsDirectPeer(row.name)
+end
+
+-- 2.3.0: a whispered copy that is a leaf's own fact (it made it and whispered it to us: the path is
+-- that leaf, then us). A player out of every member list (about a third on the beta) starts a
+-- siege alone: its contacts take it on as if from a contact, else it never goes further than
+-- them. What a leaf passes on for somebody else stays a stranger's copy.
+function dir:IsLeafOrigin(p)
+    local path = type(p) == "table" and p.path
+    return type(path) == "table" and #path == 2 and type(path[1]) == "string" and self:IsLeaf(path[1])
+end
+
+-- 2.2.2: a contact that passes a broadcast on is online and reached directly (SyncRelay Receive):
+-- its own route is refreshed, so a quiet contact is no stranger to the next hand.
+function dir:KeepsContactAlive(name)
+    local row = type(name) == "string" and self.partners[name:lower()] or nil
+    return row ~= nil and row.chainAt ~= nil and self:IsActive() and self:Known(row.name)
 end
 
 -- Sync:OnReceiveZoneAll, for a map whose author's presence was never heard here (without the
@@ -744,7 +1181,9 @@ local function keep(book, key, value)
         if chain.rows > dir.CHAIN_ROWS then
             local at, rows = now(), 0
             for k, row in pairs(chain.cover) do
-                if at - row.at > 300 then chain.cover[k] = nil else rows = rows + 1 end
+                -- (Rampages are covered GW_COVER_SEC; everything else 300 s, or the book overflows.)
+                local limit = k:sub(1, 3) == "GW|" and math.max(300, dir.GW_COVER_SEC) or 300
+                if at - row.at > limit then chain.cover[k] = nil else rows = rows + 1 end
             end
             for k, row in pairs(chain.starts) do
                 if at - row.at > dir.START_MEMORY then chain.starts[k] = nil else rows = rows + 1 end
@@ -776,6 +1215,36 @@ local function takeTokens(wanted, fragments)
     return granted
 end
 
+-- The guild mates that hear our kill total for a rampage, or nil: the RAMPAGE_COLLECTORS lowest of
+-- (hash of guild and name) among us and the mates reached directly (we drop ourselves).
+function dir:RampageCollectors()
+    local lane, net = addon.GuildLane, addon.Relay
+    if not (lane and lane.peers and lane.PeerCount and net and net.IsDirectPeer and net.peers and net.HashFrac) then
+        return nil
+    end
+    local mates = lane:PeerCount()
+    if mates < self.RAMPAGE_MIN_MATES then return nil end
+    if mates > self.RAMPAGE_LOAD and math.random() * mates >= self.RAMPAGE_LOAD then return nil end
+    local guild = GetGuildInfo and GetGuildInfo("player")
+    if not readable(guild) or type(guild) ~= "string" or guild == "" then return nil end
+    local salt, at = guild:lower() .. "|", now()
+    local me = tostring(sync:GetPlayerFullName() or ""):lower()
+    local ranked = { { key = me, score = net.HashFrac(salt .. me), me = true } }
+    for key in pairs(lane.peers) do
+        local route, partner = net.peers[key], self.partners[key]
+        if route and route.name and key ~= me and net:IsDirectPeer(route.name)
+            and not (partner and partner.unreachableUntil and partner.unreachableUntil > at) then
+            ranked[#ranked + 1] = { key = key, name = route.name, score = net.HashFrac(salt .. key) }
+        end
+    end
+    table.sort(ranked, function(a, b) return a.score < b.score end)
+    local out = {}
+    for i = 1, math.min(self.RAMPAGE_COLLECTORS, #ranked) do
+        if not ranked[i].me then out[#out + 1] = ranked[i].name end
+    end
+    return out[1] and out or nil
+end
+
 -- Relay tasksFor, for a broadcast about to leave (ours, or one we pass on: we are then the last
 -- name of its path): the contacts to whisper it to, or nil.
 function dir:ChainTargets(p, fragmentCount)
@@ -791,6 +1260,11 @@ function dir:ChainTargets(p, fragmentCount)
     local key, window
     if lane and lane.CoverKey then key, window = lane:CoverKey(p) end
     key, window = key or (p.kind .. "|" .. p.payload), window or 30
+    if p.kind == "GW" then
+        -- (Read once more here: its date may have just aged past the limit since chainShape.)
+        key, window = addon.GuildKillAlert:ChainCoverKey(p.payload), self.GW_COVER_SEC
+        if not key then return nil end
+    end
     local date = captureDate(p)
     if shape == "news" then
         -- One capture told as map news is the same fact as its C (a client that passed the C
@@ -823,6 +1297,8 @@ function dir:ChainTargets(p, fragmentCount)
     end
     local start = startKey and chain.starts[startKey] or nil
     if shape == "rank" then
+        -- 2.2.2: told to the rest of our contacts once it stops moving (SettleStep).
+        self:NoteOwnTotal(p.payload)
         -- A newer total taking the place of one still waiting in the relay queue (SyncRelay Send):
         -- the same whispers, nothing spent again.
         if p.chainRetake and chain.rankTargets and at - (chain.rankAt or -1e9) < self.RANK_GAP then
@@ -831,6 +1307,7 @@ function dir:ChainTargets(p, fragmentCount)
                 if net:IsDirectPeer(name) then again[#again + 1] = name end
             end
             chain.rankTargets = again
+            self:SettleTold(again)
             return #again > 0 and again or nil
         end
         if at - (chain.rankAt or -1e9) < self.RANK_GAP then
@@ -866,13 +1343,36 @@ function dir:ChainTargets(p, fragmentCount)
         local limit = (own and date) and math.min(window, self.OWN_COVER_SEC) or window
         if cover and at - cover.at < limit and not (date and date > (cover.date or 0)) then
             stats.chainCovered = stats.chainCovered + 1
+            -- Our own fight bracket told already: taken (FrontActivity must not send it again).
+            if own and p.kind == "FK" then
+                local took = self.ownFKTaken
+                if not took or took.n >= 16 then took = { n = 0 }; self.ownFKTaken = took end
+                if not took[p.payload] then took[p.payload], took.n = at, took.n + 1 end
+            end
             return nil
         end
+    end
+    -- 2.3.0: a fight bracket passed on for others is one FrontActivity would take (a known front, a
+    -- listed bracket, a slot of the activity window: IsLiveBracket); anything else is a modified
+    -- client's and stops here (a bracket dated far ahead covered a front's real ones for the session).
+    if not own and p.kind == "FK" and addon.FrontActivity and addon.FrontActivity.IsLiveBracket
+        and not addon.FrontActivity:IsLiveBracket(p.payload) then
+        stats.chainStranger = stats.chainStranger + 1
+        return nil
+    end
+    -- 2.3.0: a fight bracket passed on for others that a fresher one known here covers (higher, or
+    -- the same of a later slot, valid 90 s more: FrontActivity CoversRelayedBracket) is not passed
+    -- on: a busy fight's lower and older brackets spent FK_PER_MIN, and the bracket that counts,
+    -- coming last, was capped by them. Our own brackets are FrontActivity's (ReportCovers).
+    if not own and p.kind == "FK" and addon.FrontActivity and addon.FrontActivity.CoversRelayedBracket
+        and addon.FrontActivity:CoversRelayedBracket(p.payload) then
+        stats.chainCovered = stats.chainCovered + 1
+        return nil
     end
     local me = tostring(sync:GetPlayerFullName() or ""):lower()
     if not own then
         local heardOn, gateway = p.heardOn, p.path[#p.path - 1]
-        if heardOn == "WHISPER" and not self:IsContact(gateway) then
+        if heardOn == "WHISPER" and not self:IsContact(gateway) and not self:IsLeafOrigin(p) then
             stats.chainStranger = stats.chainStranger + 1
             return nil
         end
@@ -925,55 +1425,298 @@ function dir:ChainTargets(p, fragmentCount)
             stats.chainCapped = stats.chainCapped + 1
             return nil
         end
-        minute.count, intake.count = minute.count + 1, intake.count + 1
+        -- (2.2.2: counted once a whisper leaves, below: a fact capped by the tokens or without a
+        -- contact spent the minute's intake for nothing.)
+        chain.pendingIntake = intake
+    else
+        chain.pendingIntake = nil
     end
-    -- Our contacts, those already on the path left out.
+    -- Our contacts, those already on the path left out. 2.2.2: guild mates are left out for what
+    -- the guild lane carries (it reached them already); players that greeted us but are not in
+    -- our list (kept out of it by the game) get the fact too, LEAF_FANS of them at most, as leaves.
     local onPath = {}
     for _, node in ipairs(p.path) do onPath[node:lower()] = true end
-    local view = {}
+    local lane0 = addon.GuildLane
+    -- (2.3.0: not for a whispered copy: the guild lane says it only within its small share, and
+    -- may give it up; its guild mates stay in our fan.)
+    local skipGuild = lane0 ~= nil and lane0.IsGuildMate ~= nil and lane0.IsActive ~= nil and lane0:IsActive()
+        and p.heardOn ~= "WHISPER" and lane0.Level ~= nil and lane0:Level(p) ~= nil
+    local view, leaves = {}, {}
+    local at0 = now()
     for lower, row in pairs(self.partners) do
-        if row.chainAt and not onPath[lower] and self:Lists(row.name) and net:IsDirectPeer(row.name) then
-            view[#view + 1] = row.name
+        if row.chainAt and not onPath[lower] and net:IsDirectPeer(row.name)
+            and not (row.unreachableUntil and row.unreachableUntil > at0)
+            and not (skipGuild and lane0:IsGuildMate(row.name)) then
+            if self:Known(row.name) then
+                view[#view + 1] = row.name
+            else
+                leaves[#leaves + 1] = row.name
+            end
+        end
+    end
+    -- Names that must be among the targets, taken out of the random draw and counted in the fan:
+    -- a release goes to the hands its start went to; our own total also to the rampage collectors.
+    local forced = {}
+    local function pinned(names)
+        local want = {}
+        for _, name in ipairs(names) do want[name:lower()] = true end
+        local function split(list)
+            local kept = {}
+            for _, name in ipairs(list) do
+                if want[name:lower()] then forced[#forced + 1] = name else kept[#kept + 1] = name end
+            end
+            return kept
+        end
+        view, leaves = split(view), split(leaves)
+    end
+    if shape == "release" and start and start.targets then
+        pinned(start.targets)
+    elseif shape == "rank" and own then
+        local collectors = self:RampageCollectors()
+        if collectors then
+            for _, name in ipairs(collectors) do forced[#forced + 1] = name end
+            local want = {}
+            for _, name in ipairs(collectors) do want[name:lower()] = true end
+            local function without(list)
+                local kept = {}
+                for _, name in ipairs(list) do if not want[name:lower()] then kept[#kept + 1] = name end end
+                return kept
+            end
+            view, leaves = without(view), without(leaves)
         end
     end
     local level = #p.path
     if level > 1 and enemyCapture(p) then level = math.max(1, level - 2) end
-    local wanted = math.min(shape == "rank" and self.RANK_FAN or self:FanFor(level), #view)
-    if wanted == 0 then
+    local wanted = math.min(shape == "rank" and self.RANK_FAN or self:FanFor(level), #view + #forced)
+    wanted = math.max(0, math.min(wanted - #forced, #view))
+    local rampage = p.kind == "GW"
+    local fight = p.kind == "FK" or rampage
+    if fight then wanted = math.min(wanted, self.FK_FAN) end
+    -- Leaves after the contacts, never for our own first-hand total (its settle rotation, SettleNext,
+    -- reaches leaves too: a K is credited from its owner only, whoever receives it).
+    local leafCount = shape ~= "rank" and math.min(self.LEAF_FANS, #leaves) or 0
+    for i = 1, leafCount do
+        local j = math.random(i, #leaves)
+        leaves[i], leaves[j] = leaves[j], leaves[i]
+    end
+    if #forced + wanted + leafCount == 0 then
         stats.chainNoContact = stats.chainNoContact + 1
         return nil
     end
     local granted
-    if own then
-        granted = takeTokens(wanted, fragmentCount)
+    local minuteKey = rampage and "gwMinute" or "fkMinute"
+    if fight then
+        local fk = chain[minuteKey]
+        if not fk or at - fk.at >= 60 then
+            fk = { at = at, count = 0 }
+            chain[minuteKey] = fk
+        end
+        -- (The minute cap is for the fights we pass on: our own front's fight always leaves,
+        -- paced by Recent activity itself; before, a busy evening's forwards silenced it.)
+        if not own and fk.count >= (rampage and self.GW_PER_MIN or self.FK_PER_MIN) then
+            stats.chainCapped = stats.chainCapped + 1
+            return nil
+        end
+    end
+    local reserve = fight and self.FK_RESERVE or (not own and self.FORWARD_RESERVE) or nil
+    local total = #forced + wanted + leafCount
+    if not reserve then
+        granted = takeTokens(total, fragmentCount)
     else
         takeTokens(0, 1)
-        local spare = math.floor((chain.tokens - self.FORWARD_RESERVE) / math.max(1, tonumber(fragmentCount) or 1))
-        granted = spare > 0 and takeTokens(math.min(wanted, spare), fragmentCount) or 0
+        local spare = math.floor((chain.tokens - reserve) / math.max(1, tonumber(fragmentCount) or 1))
+        granted = spare > 0 and takeTokens(math.min(total, spare), fragmentCount) or 0
     end
+    if fight and not own and granted > 0 then chain[minuteKey].count = chain[minuteKey].count + 1 end
     if granted == 0 then
+        chain.pendingIntake = nil
         stats.chainCapped = stats.chainCapped + 1
         return nil
     end
-    for i = 1, granted do
+    if chain.pendingIntake then
+        chain.minute.count, chain.pendingIntake.count = chain.minute.count + 1, chain.pendingIntake.count + 1
+        chain.pendingIntake = nil
+    end
+    -- Contacts first, then the leaves with what is left.
+    local fromForced = math.min(granted, #forced)
+    local fromView = math.min(granted - fromForced, wanted)
+    for i = 1, fromView do
         local j = math.random(i, #view)
         view[i], view[j] = view[j], view[i]
     end
     local targets = {}
-    for i = 1, granted do targets[i] = view[i] end
+    for i = 1, fromForced do targets[i] = forced[i] end
+    for i = 1, fromView do targets[#targets + 1] = view[i] end
+    for i = 1, math.min(granted - fromForced - fromView, leafCount) do targets[#targets + 1] = leaves[i] end
+    if fromForced > 0 and shape == "rank" then stats.chainRampage = stats.chainRampage + fromForced end
+    granted = #targets
     if shape == "rank" then
         chain.rankAt, chain.rankTargets = at, targets
+        self:SettleTold(targets)
     elseif shape == "release" then
         chain.starts[startKey] = nil
         -- The point may be told again at once: a new wave is a new start.
         if start.cover then chain.cover[start.cover] = nil end
     else
         keep("cover", key, { at = at, date = date })
+        -- Our own fight brackets the chain took (FrontActivity checks its report left).
+        if own and p.kind == "FK" then
+            local took = self.ownFKTaken
+            if not took or took.n >= 16 then took = { n = 0 }; self.ownFKTaken = took end
+            if not took[p.payload] then took[p.payload], took.n = at, took.n + 1 end
+        end
     end
-    if shape == "start" then keep("starts", startKey, { at = at, cover = key }) end
+    if shape == "start" then keep("starts", startKey, { at = at, cover = key, targets = targets }) end
+    if not own and p.kind == "FK" and addon.FrontActivity and addon.FrontActivity.NoteRelayedBracketPassed then
+        addon.FrontActivity:NoteRelayedBracketPassed(p.payload)
+    end
     if own then stats.chainOwn = stats.chainOwn + 1 else stats.chainForwarded = stats.chainForwarded + 1 end
     stats.chainWhispers = stats.chainWhispers + granted * math.max(1, tonumber(fragmentCount) or 1)
     return targets
+end
+
+-- ---------------------------------------------------------------------------
+-- 2.2.2: our settled total, told to the rest of our contacts
+-- ---------------------------------------------------------------------------
+--
+-- Our own total (K) leaves first-hand to RANK_FAN contacts; every other client of the list
+-- waited for ranking rounds to bring it (minutes without the channel). Once our total stops
+-- moving (SETTLE_QUIET), it goes, one whisper every SETTLE_GAP, to the next of our contacts and
+-- leaves in a fixed order (a hash of our name and theirs: not the same few every time), each of
+-- them once for that total, SETTLE_MAX at most, then nothing more until it moves again. Only
+-- from spare tokens (above SETTLE_RESERVE, what captures and sieges keep). First-hand from its
+-- owner, like any K (Sync:OnReceiveKill: the whisper names its author); nobody passes it on.
+dir.SETTLE_QUIET, dir.SETTLE_JITTER, dir.SETTLE_GAP, dir.SETTLE_MAX, dir.SETTLE_RESERVE = 30, 10, 3, 24, 24
+-- (Given up SETTLE_LIFE after the total last moved: a whole evening without spare tokens.)
+dir.SETTLE_LIFE = 600
+-- (A contact the relay refused our whisper to: tried again SETTLE_RETRY later, the others meanwhile.)
+dir.SETTLE_RETRY = 60
+
+-- Every own total ChainTargets sees (sent, held for the gap or capped).
+function dir:NoteOwnTotal(payload)
+    if type(payload) ~= "string" then return nil end
+    local total = tonumber(payload:match("^[^:]*:[^:]*:(%d+)"))
+    if not total then return nil end
+    local chain, at = self.chain, now()
+    local settle = chain.settle
+    if settle and settle.total == total then
+        settle.payload = payload
+        return settle
+    end
+    settle = { total = total, payload = payload, changedAt = at, told = {}, sent = 0 }
+    chain.settle = settle
+    local generation = self.generation
+    C_Timer.After(self.SETTLE_QUIET + math.random() * self.SETTLE_JITTER, function()
+        if dir.generation == generation then dir:SettleStep(settle) end
+    end)
+    return settle
+end
+
+-- The contacts (or leaves) a total of ours already went to.
+function dir:SettleTold(targets)
+    local settle = self.chain.settle
+    if not settle or type(targets) ~= "table" then return end
+    for _, name in ipairs(targets) do settle.told[name:lower()] = true end
+end
+
+-- Not told this total yet, nor refused by the relay in the last SETTLE_RETRY.
+function dir:SettleOpen(settle, lower, at)
+    local retry = settle.refused and settle.refused[lower]
+    return not settle.told[lower] and not (retry and retry > at)
+end
+
+-- The next one of the rotation not told this total yet, or nil.
+function dir:SettleNext(settle)
+    local net = addon.Relay
+    if not net or not net.HashFrac then return nil end
+    local me = tostring(sync:GetPlayerFullName() or ""):lower()
+    -- (Guild mates included: the guild lane never carries a K.)
+    local at, best, bestScore = now(), nil, nil
+    for lower, row in pairs(self.partners) do
+        if row.chainAt and self:SettleOpen(settle, lower, at) and self:PeerSettles(row.name) and net:IsDirectPeer(row.name)
+            and not (row.unreachableUntil and row.unreachableUntil > at) then
+            local score = net.HashFrac(me .. "|" .. lower)
+            if not bestScore or score < bestScore then best, bestScore = row, score end
+        end
+    end
+    -- 2.2.2: and the guild mates the relay reaches directly. Nobody greets a guild mate, so
+    -- they were hardly ever contacts: past the two rampage collectors of the first fan, our
+    -- guild only had our total from the ranking rounds, minutes later. Same rotation, same
+    -- once-per-total, same SETTLE_MAX; a guild mate heard in the last hour only.
+    -- (The guild lane keeps its mates by lower-case canonical name, as the relay its routes.)
+    local lane = addon.GuildLane
+    local memory = lane and tonumber(lane.PEER_MEMORY)
+    if memory and type(lane.peers) == "table" and type(net.peers) == "table" then
+        for lower, heardAt in pairs(lane.peers) do
+            local route, row = net.peers[lower], self.partners[lower]
+            local name = route and route.name
+            if name and lower ~= me and self:SettleOpen(settle, lower, at) and at - (tonumber(heardAt) or -1e9) < memory
+                and not (row and (row.chainAt or (row.unreachableUntil and row.unreachableUntil > at)))
+                and net:IsDirectPeer(name) and self:PeerSettles(name) then
+                local score = net.HashFrac(me .. "|" .. lower)
+                if not bestScore or score < bestScore then best, bestScore = { name = name }, score end
+            end
+        end
+    end
+    return best
+end
+
+-- Only peers announcing 2.2.2 or later get a settled total: they know it is no kill made now
+-- (an earlier release counted it in its fights and rampages).
+function dir:PeerSettles(name)
+    local net = addon.Relay
+    local release = net and net.GetPeerReleaseWithin and net:GetPeerReleaseWithin(name, 3 * 3600)
+    local x, y, z = tostring(release or ""):match("^(%d+)%.(%d+)%.(%d+)$")
+    if not x then return false end
+    x, y, z = tonumber(x), tonumber(y), tonumber(z)
+    if x ~= 2 then return x > 2 end
+    if y ~= 2 then return y > 2 end
+    return z >= 2
+end
+
+function dir:SettleStep(settle)
+    local chain = self.chain
+    if chain.settle ~= settle or settle.sent >= self.SETTLE_MAX
+        or now() - settle.changedAt > self.SETTLE_LIFE then return false end
+    local at = now()
+    local generation = self.generation
+    local function again(delay)
+        C_Timer.After(delay, function()
+            if dir.generation == generation then dir:SettleStep(settle) end
+        end)
+    end
+    -- (Directory idle for now, channel seated again or relay off: nothing sent, still ours to
+    -- tell if it comes back before SETTLE_LIFE. An instance ends this timer: Suspend, Resume.)
+    if not self:IsActive() then again(30); return false end
+    -- (Moved meanwhile with the same total: wait for the quiet again.)
+    if at - settle.changedAt < self.SETTLE_QUIET then
+        again(self.SETTLE_QUIET - (at - settle.changedAt) + 1)
+        return false
+    end
+    -- In a fight: later (the whispers are the fight's).
+    if inCombat() then again(10); return false end
+    local row = self:SettleNext(settle)
+    -- (Nobody left for now: a contact met later may still want it, until SETTLE_LIFE.)
+    if not row then again(30); return false end
+    takeTokens(0, 1)
+    if chain.tokens - 1 < self.SETTLE_RESERVE then
+        again(self.SETTLE_GAP * 3)
+        return false
+    end
+    local net, lower = addon.Relay, row.name:lower()
+    if net:Send("K", settle.payload, row.name) then
+        settle.told[lower] = true
+        takeTokens(1, 1)
+        settle.sent = settle.sent + 1
+        self.stats.chainSettled = (self.stats.chainSettled or 0) + 1
+        self.stats.chainWhispers = self.stats.chainWhispers + 1
+    else
+        -- (Refused here, nothing left: not lost for this total, tried again SETTLE_RETRY later.)
+        settle.refused = settle.refused or {}
+        settle.refused[lower] = at + self.SETTLE_RETRY
+    end
+    again(self.SETTLE_GAP + math.random() * self.SETTLE_GAP)
+    return true
 end
 
 -- ---------------------------------------------------------------------------
@@ -997,22 +1740,69 @@ end
 function dir:Tick()
     if not self:IsActive() then
         self.suspended = nil
+        self:WatchWorld(false)
+        -- 2.3.0: idle (the channel carries) after a refused spell. Should it be refused again, see
+        -- below. (Not before the first refusal: the login's own list boots as before.)
+        -- Only when the channel itself carries: an instance or a pause keeps the partners.
+        local lane = addon.GuildLane
+        if self.activeSeen and outside() and lane ~= nil and not lane:ChannelDown() then
+            self.wasIdle = true
+        end
         return
     end
+    self.activeSeen = true
+    -- 2.3.0: refused again after carrying: the first greetings come together as after a login
+    -- (Boot), not one a minute from nothing (the partners of before went silent or were forgotten).
+    if self.wasIdle then
+        self.wasIdle, self.booted = nil, nil
+        if #self.names > 0 then self:Boot() end
+    end
+    self:WatchWorld(self:Isolated())
     local at = now()
     if not self.fetching and at >= (self.nextReadAt or 0) then self:Refresh() end
-    if #self.names > 0 and at >= (self.nextGreetAt or 0) then
-        local greeted = false
-        if self:LiveCount() < self.MAX_PARTNERS then
-            local name = self:PickNew()
-            greeted = name ~= nil and self:Greet(name)
-        end
-        self.nextGreetAt = greeted and at + self.GREET_SEC + math.random(0, self.GREET_JITTER)
-            or at + self.TICK_SEC
+    -- 2.2.2: without a list, the book's players are greeted, one every BOOK_GREET_SEC.
+    local listLess = self:ListLess()
+    if (#self.names > 0 or listLess) and at >= (self.nextGreetAt or 0) then
+        local greeted = self:GreetOne()
+        self.nextGreetAt = not greeted and at + self.TICK_SEC
+            or listLess and at + self.BOOK_GREET_SEC
+            or at + self.GREET_SEC + math.random(0, self.GREET_JITTER)
     end
     if at - (self.forgottenAt or 0) >= 300 then
         self.forgottenAt = at
         self:Forget()
+    end
+end
+
+-- Contacts in the chain's view now (ChainTargets' rule, leaves left out).
+function dir:ContactCount()
+    local count = 0
+    for _, row in pairs(self.partners) do
+        if row.chainAt and self:IsContact(row.name) then count = count + 1 end
+    end
+    return count
+end
+
+-- One greeting while fewer than MAX_PARTNERS answer us, or (2.2.2) fewer than MIN_CONTACTS are
+-- contacts of the chain.
+function dir:GreetOne()
+    if self:LiveCount() >= self.MAX_PARTNERS and (self:ListLess() or self:ContactCount() >= self.MIN_CONTACTS) then
+        return false
+    end
+    local name = self:PickNew()
+    return name ~= nil and self:Greet(name)
+end
+
+-- 2.2.2: the first list of the session: BOOT_GREETS greetings BOOT_GAP apart, not one a minute
+-- (a fresh login waited ten minutes for its partners and was out of the chain meanwhile).
+function dir:Boot()
+    if self.booted then return end
+    self.booted = true
+    local generation = self.generation
+    for i = 1, self.BOOT_GREETS do
+        C_Timer.After(i * self.BOOT_GAP + math.random() * 2, function()
+            if dir.generation == generation and dir:IsActive() and not inCombat() then dir:GreetOne() end
+        end)
     end
 end
 
@@ -1037,13 +1827,38 @@ end
 -- An instance: everything stops (the list, greetings waiting for an answer, the ticker).
 function dir:Suspend()
     self.generation = self.generation + 1
+    self.suspendedAt = now()
+    self:WatchWorld(false)
     self.fetching = nil
+    -- (2.2.2: answers waiting dropped, and their timer with them: a later queue arms its own.)
+    for _, row in ipairs(self.replyQueue or {}) do row.queued = nil end
+    self.replyQueue, self.replyTimer = nil, nil
+    -- (2.3.0: a total still settling is told after the instance, see Resume; one already given
+    -- up, SETTLE_LIFE past or SETTLE_MAX told, stays given up.)
+    local settle = self.chain and self.chain.settle
+    self.settlePaused = settle and settle.sent < self.SETTLE_MAX
+        and now() - settle.changedAt <= self.SETTLE_LIFE and settle or nil
 end
 
 function dir:Resume()
-    if not self.started then return end
     self.generation = self.generation + 1
-    self:Arm(self.TICK_SEC * (1 + math.random()))
+    -- 2.3.0: an instance longer than the relay keeps a route (300 s, Relay:GetPeerHops): nothing
+    -- refreshed them inside, every partner and contact is a stranger again and the chain's view is
+    -- empty, as after a login. The next Tick boots (BOOT_GREETS greetings together) instead of one
+    -- greeting a minute; a short instance keeps its partners and boots nothing.
+    if self.suspendedAt and now() - self.suspendedAt > 300 then self.wasIdle = true end
+    self.suspendedAt = nil
+    if self.started then self:Arm(self.TICK_SEC * (1 + math.random())) end
+    -- (A total settling when the instance began: its timer died with the generation.)
+    local settle, paused = self.chain and self.chain.settle, self.settlePaused
+    self.settlePaused = nil
+    if settle and settle == paused and settle.sent < self.SETTLE_MAX then
+        settle.changedAt = now()
+        local generation = self.generation
+        C_Timer.After(self.SETTLE_QUIET + math.random() * self.SETTLE_JITTER, function()
+            if dir.generation == generation then dir:SettleStep(settle) end
+        end)
+    end
 end
 
 -- ---------------------------------------------------------------------------
@@ -1054,7 +1869,16 @@ end
 -- and how many players of the list exchange with us.
 function dir:Describe()
     if not self:IsActive() then return nil, 0 end
-    if #self.names == 0 then return "channel member list: " .. (self.state or "not read yet"), 0 end
+    if #self.names == 0 then
+        -- 2.2.2: without the list, players of the address book may still exchange with us.
+        local listLess = self:ListLess()
+        local live = listLess and self:AnsweringCount() or 0
+        local state = "channel member list: " .. (self.state or "not read yet")
+        if live > 0 then
+            state = string.format("%s, %d players found without it exchanging with you", state, live)
+        end
+        return state, live, listLess
+    end
     local live = self:AnsweringCount()
     return string.format("%d players in the channel member list, %d of them exchanging with you", #self.names, live),
         live
@@ -1080,4 +1904,20 @@ function dir:GetDiagnostics()
             .. "%d map news of an unknown author kept; %d maps asked after a silent siege",
             s.chainOwn, s.chainForwarded, s.chainWhispers, s.chainCovered, s.chainCapped, s.chainNoContact,
             s.chainLeft, s.chainStranger, s.chainRetold, s.chainUnvouched, s.gapPulls)
+        .. self:BookDiagnostics()
+end
+
+-- 2.2.2: the address book, the contacts and leaves of the chain, the answers waiting.
+function dir:BookDiagnostics()
+    local book, at = 0, now()
+    for _ in pairs(self:Book(false) or {}) do book = book + 1 end
+    local leaves = 0
+    for _, row in pairs(self.partners) do
+        if row.chainAt and self:IsLeaf(row.name) then leaves = leaves + 1 end
+    end
+    return string.format("; address book: %d players%s; %d players met in the world greeted%s; "
+        .. "%d contacts, %d leaves; %d answers waiting",
+        book, self:ListLess() and " (greeted without the list)" or "", self.stats.worldGreeted,
+        self.worldWatched and " (looking: nobody heard)" or "", self:ContactCount(), leaves,
+        #(self.replyQueue or {}))
 end

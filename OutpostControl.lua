@@ -433,9 +433,11 @@ local function CheckLocalOutpostDefense(siteKey, st, site)
                 end
             end
             RefreshOutpostHud()
-        end
-        if Overlord.Sync and Overlord.Sync.PollIfStaleObserverOutpost then
-            Overlord.Sync:PollIfStaleObserverOutpost(ServerNow() - (tonumber(st.updatedAt) or 0))
+            -- 2.2.2: one targeted pull when the enemy shows up (a held site's date is its capture,
+            -- always old: every defender standing there asked the whole relay every 22 s).
+            if Overlord.Sync and Overlord.Sync.PollIfStaleObserverOutpost then
+                Overlord.Sync:PollIfStaleObserverOutpost(ServerNow() - (tonumber(st.updatedAt) or 0), true)
+            end
         end
     elseif outpostDefenseAlerted[siteKey]
         and now - (lastOutpostDefenseEnemyAt[siteKey] or 0) > OUTPOST_DEFENSE_REARM_SECONDS then
@@ -451,6 +453,9 @@ local function TryResumeLocalOutpostCapture(st, site)
     local guild = OP:GetLocalPlayerGuild()
     if guild == "" or not Overlord.PlayerFaction then return end
     if st.ownerGuild ~= guild or st.ownerFaction ~= Overlord.PlayerFaction then return end
+    -- 2.2.2: a mate's hold nobody heard of for longer than it had left is over (the network shows
+    -- it so): never resumed at its old count.
+    if OP:IsObserverOutpostCaptureStale(st, site) then return end
     st.isHolding = true
     st.isPaused = false
     st.isContested = false
@@ -471,6 +476,27 @@ function Overlord.OutpostControl:StartHold(siteKey, st, site)
         end
         return
     end
+    -- 2.2.2: checked before anything changes. Without a pool the hold was reverted at once and
+    -- started again every second; a guild name the network refuses made a capture only this
+    -- client showed; a character whose capture would be refused when the hold ends (judged at
+    -- the earliest end, as the network judges it) held, was reverted and started again for good
+    -- (it may still take over a mate's hold).
+    local sync = Overlord.Sync
+    if ((Overlord.GetCurrentSavedVarsPool and Overlord:GetCurrentSavedVarsPool()) or "") == "" then return end
+    if sync and sync.IsValidGuildSyncToken and not sync:IsValidGuildSyncToken(guild) then return end
+    -- (A stale hold, over for the network, is neither a mate's hold to take over nor resumed.)
+    local stale = st.status == "in_progress" and OP:IsObserverOutpostCaptureStale(st, site)
+    local mateHold = st.status == "in_progress" and not stale
+        and OP:SanitizeGuildName(st.ownerGuild or "") == guild
+        and st.ownerFaction == Overlord.PlayerFaction
+        and (st.holdTimeElapsed or 0) > 0
+    local lb = Overlord.Leaderboard
+    local me = sync and sync.GetPlayerFullName and sync:GetPlayerFullName()
+    if not mateHold and me and lb and lb.IsOutpostCapturerPaced and lb.GetOutpostSiteGap
+        and not lb:IsOutpostCapturerPaced(me, ServerNow() + (tonumber(OP:GetMinimumHoldTimeRequired(site)) or 0),
+            lb:GetOutpostSiteGap(siteKey)) then
+        return
+    end
     if st.status == "held" then
         st.previousOwnerGuild = OP:SanitizeGuildName(st.ownerGuild or "")
         st.previousOwnerFaction = st.ownerFaction
@@ -480,7 +506,7 @@ function Overlord.OutpostControl:StartHold(siteKey, st, site)
         st.claimedAt = 0
         st.expiresAt = 0
     end
-    local resumeCapture = st.status == "in_progress"
+    local resumeCapture = st.status == "in_progress" and not stale
         and OP:SanitizeGuildName(st.ownerGuild or "") == guild
         and st.ownerFaction == Overlord.PlayerFaction
         and (st.holdTimeElapsed or 0) > 0
@@ -590,11 +616,27 @@ function Overlord.OutpostControl:CompleteCapture(siteKey, st, site)
         guild = OP:GetLocalPlayerGuild()
     end
     local fac = st.ownerFaction or Overlord.PlayerFaction
+    local lb = Overlord.Leaderboard
+    -- (2.2.2) A guild mate holding the square with us already signed this wave: the ledger
+    -- holds our guild's capture, newer than the map's last tenant. A second signature made
+    -- two events for one take (guild credit twice) or, in the same second, a capturer that
+    -- depended on arrival order; we take the mate's capture instead, with no packet.
+    local mate = lb and lb.GetOutpostLedgerTenant and lb:GetOutpostLedgerTenant(siteKey)
+    if mate and mate.faction == fac and mate.guildKey == guild:lower()
+        and mate.claimedAt > math.max(tonumber(st.claimedAt) or 0, tonumber(st.previousClaimedAt) or 0) then
+        st.holdAuthorityLocal, st.isHolding, st.isPaused, st.holdStartTime = false, false, false, nil
+        if OP:AdoptLedgerTenant(siteKey, st, { status = "held", ownerGuild = mate.guild,
+            ownerFaction = mate.faction, claimedAt = mate.claimedAt, updatedAt = mate.claimedAt,
+            pool = mate.pool }) then
+            st.heldCapturerName, st.heldCapturerGuild = mate.capturer, mate.guild
+            OP:RefreshOutpostPresentation(siteKey)
+        end
+        return
+    end
     if not OP:IsCaptureTakeoverAllowed(st, guild, fac, ServerNow(), site) then return end
     -- A character signs at most one capture per contract (a hold resumed from a
     -- guild mate may complete sooner): this character does not conclude; another
     -- holder signs it, otherwise the hold is reverted like any unfinished capture.
-    local lb = Overlord.Leaderboard
     if lb and lb.IsOutpostCapturerPaced and lb.GetOutpostSiteGap
         and not lb:IsOutpostCapturerPaced(capturer, ServerNow(), lb:GetOutpostSiteGap(siteKey)) then
         return
@@ -621,6 +663,10 @@ local function ShouldTickOutpostHoldTimer(st)
     return st.isHolding or st.isPaused
 end
 
+-- Sites whose hold paused while the player stayed on the square (mounted, flying, dead): the
+-- "left" line waits for the player to really leave it.
+local pausedOnSquare = {}
+
 function Overlord.OutpostControl:UpdateHoldTimer(siteKey, st, site, deltaTime, inGeomOverride)
     if not ShouldTickOutpostHoldTimer(st) then return end
     local inGeom = inGeomOverride
@@ -629,6 +675,8 @@ function Overlord.OutpostControl:UpdateHoldTimer(siteKey, st, site, deltaTime, i
     end
     local canProgress = st.holdAuthorityLocal and st.isHolding and not st.isPaused
     local canDecay = st.holdAuthorityLocal
+    -- (Mounted, flying or dead on the square: no progress, but the player did not leave it.)
+    local onSquare = inGeom
     if inGeom and IsPlayerInNonCaptureState() then
         inGeom = false
     end
@@ -703,7 +751,7 @@ function Overlord.OutpostControl:UpdateHoldTimer(siteKey, st, site, deltaTime, i
     elseif canDecay then
         if st.holdAuthorityLocal and not st.isPaused then
             st.isPaused = true
-            TryChatOutpostLeftZone(site)
+            if onSquare then pausedOnSquare[siteKey] = true else TryChatOutpostLeftZone(site) end
         end
         st.isContested = false
         st.holdTimeElapsed = (st.holdTimeElapsed or 0) - deltaTime
@@ -740,7 +788,10 @@ function Overlord.OutpostControl:CheckPosition(deltaTime)
             st.isPaused = true
             st.isContested = false
             TryChatOutpostLeftZone(site)
+        elseif pausedOnSquare[siteKey] and st.holdAuthorityLocal and st.isPaused then
+            TryChatOutpostLeftZone(site)
         end
+        pausedOnSquare[siteKey] = nil
         if ShouldTickOutpostHoldTimer(st) then
             self:UpdateHoldTimer(siteKey, st, site, deltaTime, false)
         end
@@ -768,7 +819,11 @@ function Overlord.OutpostControl:CheckPosition(deltaTime)
 
     CheckLocalOutpostDefense(siteKey, st, site)
 
-    if OP:CanPlayerStartCapture(st) and not st.isHolding then
+    if OP:CanPlayerStartCapture(st, site) and not st.isHolding then
+        -- 2.2.2: outnumbered, a hold would be lost in the same second (and told, and started
+        -- again every second): it starts once the enemy no longer outnumbers us.
+        local friendly, enemy = ScanNearbyOutpostPlayers(site)
+        if enemy > friendly then return end
         self:StartHold(siteKey, st, site)
     end
 end

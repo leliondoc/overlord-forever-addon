@@ -228,3 +228,33 @@ do
     assert(op:GetState("silverpine").heldCapturerName == nil, "the capturer survived the campaign reset")
 end
 print("Outpost held capturer: kept on capture, sanitized, cleared at reset")
+
+-- 2.2.2: two guild mates hold the square together; the mate's signed capture reached our
+-- ledger first: finishing our own hold takes the mate's capture, never a second signature
+-- (two events for one take, or a capturer that depended on arrival order).
+do
+    op:ResetOutpostsForCampaign()
+    guild, faction, Overlord.PlayerFaction = "Mate Guild", "Alliance", "Alliance"
+    local st, site = op:GetState("silverpine"), op:GetSite("silverpine")
+    -- Our hold, as StartHold leaves it (its own gates are tested elsewhere).
+    st.status, st.ownerGuild, st.ownerFaction, st.pool = "in_progress", "Mate Guild", "Alliance", "global"
+    st.holdAuthorityLocal, st.isHolding, st.isPaused, st.holdTimeElapsed = true, true, false, 0
+    st.holdTimeRequired = op:GetDefaultHoldTimeRequired(st, site)
+    st.updatedAt = now
+    local mateAt = now + 1
+    assert(lb:RecordOutpostCapture("silverpine", "Mate Guild", "Alliance", mateAt, "global", "Mate Tester"),
+        "fixture mate capture refused by the ledger")
+    local before = assert(lb:GetOutpostCaptureCountRow("silverpine", "Mate Guild", "global")).count
+    sent = {}
+    local required = st.holdTimeRequired or 300
+    now = now + required
+    control:UpdateHoldTimer("silverpine", st, site, required, true)
+    assert(st.status == "held" and st.ownerGuild == "Mate Guild" and st.claimedAt == mateAt
+        and not st.holdAuthorityLocal, "the second mate did not take the first one's capture")
+    assert(st.heldCapturerName == "Mate Tester", "capturer: " .. tostring(st.heldCapturerName))
+    assert(lb:GetOutpostCaptureCountRow("silverpine", "Mate Guild", "global").count == before,
+        "the second mate signed a second capture")
+    for _, message in ipairs(sent) do assert(message[1] ~= "OC", "a second capture was announced") end
+    op:ResetOutpostsForCampaign()
+end
+print("Outpost guild mates: the second to finish takes the first one's signed capture")

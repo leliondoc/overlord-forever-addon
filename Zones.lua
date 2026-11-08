@@ -130,7 +130,8 @@ function Overlord.Zones:GetZoneMapIconAtlas(zone, hideWhenContestedWithOwner, at
 
     if zone.owner and zone.status ~= "in_progress" then
         if zone.isCapital then
-            return heldCapitalMainHallAtlas(zone) or "Warfronts-BaseMapIcons-Empty-Tower"
+            -- 2.2.2: a capital taken stays its taker's (1.7.0): the hall of the faction holding it.
+            return capitalMainHallAtlas(zone, zone.owner) or "Warfronts-BaseMapIcons-Empty-Tower"
         end
         return objectiveAtlasForOwner(zone.owner)
     end

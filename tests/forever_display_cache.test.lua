@@ -27,11 +27,19 @@ local function drain()
     end
     timers, head = {}, 1
 end
-local function copy(value)
+local function deepCopy(value)
     if type(value) ~= "table" then return value end
     local result = {}
-    for key, item in pairs(value) do result[key] = copy(item) end
+    for key, item in pairs(value) do result[key] = deepCopy(item) end
     return result
+end
+-- What the SavedVariables writer sees: compact playerInfo rows written back named
+-- first, as PLAYER_LOGOUT does (2.2.2).
+local function copy(value)
+    if Overlord.Leaderboard.MaterializePlayerInfoRows then
+        Overlord.Leaderboard:MaterializePlayerInfoRows()
+    end
+    return deepCopy(value)
 end
 local names = {}
 for i = 1, 6000 do
@@ -149,6 +157,31 @@ assert(updated.sortedKills[1].name == names[101] and updated.sortedKills[1].kill
 assert(OverlordDB.leaderboardDisplayCache.sortedKills[1].kills == 4999,
     "Updated view was not saved for the next login")
 assert(saved.sortedKills[1].kills == 3000, "Publishing a view mutated the previous saved view")
+
+-- 2.3.0: the ranking closed for an instance, its view build stops at the door: the
+-- deferred build does not start there and a running one is dropped (no ladder scan or
+-- sort in a battleground); the next build outside publishes the update.
+lb:SetPlayerKills(names[102], 4998, true)
+lb:EnsureDisplayCache()
+Overlord.InstanceSuspended = true
+drain()
+assert(lb._displayCache == updated and lb._displayCacheBuildPending == nil,
+    "A deferred view build ran inside an instance")
+Overlord.InstanceSuspended = false
+timerNow = timerNow + 11
+lb:EnsureDisplayCache()
+assert(lb._displayCacheBuildPending, "No view build started after the instance")
+Overlord.InstanceSuspended = true
+drain()
+assert(lb._displayCache == updated and lb._displayCacheBuildPending == nil,
+    "A running view build kept scanning the ladder inside an instance")
+Overlord.InstanceSuspended = false
+timerNow = timerNow + 11
+lb:EnsureDisplayCache()
+drain()
+local outside = lb:EnsureDisplayCache()
+assert(outside ~= updated and outside.sortedKills[2].name == names[102]
+    and outside.sortedKills[2].kills == 4998, "The view did not catch up after the instance")
 
 -- Reject a wrong region, incompatible layout, stale week, invalid attestation,
 -- or malformed cache. Reading a cache must never repair/attest score data.

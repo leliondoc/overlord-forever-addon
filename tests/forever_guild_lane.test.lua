@@ -763,13 +763,14 @@ assert(not saidWith({ owner = "Alliance", status = "in_progress", capturedTime =
 assert(not saidWith({ owner = "Alliance", status = "captured", capturedTime = serverClock() - lane.PROVEN_SEC - 30 }),
     "an old capture proves nothing: anybody can quote it")
 assert(not saidWith(nil), "a zone we do not know proves nothing")
--- Heard from a guild mate, such a capture does not take from the share either.
+-- 2.3.0: heard from a guild mate, a relayed capture takes one from the share (whisper-chain copies
+-- reach many holders; uncounted, they filled the guild's minute and its routine words were lost).
 resetLane()
 refused()
 hearPresence("Bob Tester")
 mapZone = { owner = "Alliance", status = "captured", capturedTime = serverClock() - 10 }
 hear("C", capture("elwynn_s"), "Origin Tester", "Origin Tester,Bob Tester")
-assert((lane.relayedTokens or lane.RELAYED_BURST) == lane.RELAYED_BURST, "a capture on our map took from the share when heard")
+assert((lane.relayedTokens or lane.RELAYED_BURST) == lane.RELAYED_BURST - 1, "a relayed capture heard took nothing from the share")
 -- In the box: it stays through a flood, and goes first.
 drained()
 mapZone = { owner = "Alliance", status = "captured", capturedTime = serverClock() - 10 }
@@ -1640,6 +1641,36 @@ assert(lane:Level(packet("ZS", zoneState("in_progress", "elwynn_e", "A", 2))) ==
 assert(lane:Level(packet("ZS", zoneState("captured", "elwynn_e", "A", 0))), "a capture is always worth saying")
 lane.lastEchoDelay = lane.SLOW_ECHO - 1
 assert(lane:Level(packet("ZS", zoneState("in_progress", "elwynn_e", "A", 2))), "a siege is said in time")
+-- 2.3.0: a siege the chain whispers to us is said in the guild when a contact gave it to us;
+-- a stranger's whisper never is.
+do
+    local savedDirectory = Overlord.ChannelDirectory
+    Overlord.ChannelDirectory = { IsContact = function(_, name) return name == "Chain Contact" end,
+        IsLeafOrigin = function(_, p) return #p.path == 2 and p.path[1] == "Lone Leaf" end }
+    local function whispered(by)
+        local p = packet("ZS", zoneState("in_progress", "elwynn_e", "A", 2))
+        p.path, p.heardOn = { "Siege Author", by, me }, "WHISPER"
+        return p
+    end
+    assert(lane:Level(whispered("Chain Contact")), "a siege a chain contact whispered is said in the guild")
+    assert(lane:Level(whispered("Some Stranger")) == nil, "a stranger's whispered broadcast is never said")
+    -- (2.3.0) A leaf's own siege (out of every list) is said; its copy of another's is not.
+    local own = packet("ZS", zoneState("in_progress", "elwynn_e", "A", 2))
+    own.path, own.heardOn = { "Lone Leaf", me }, "WHISPER"
+    assert(lane:Level(own), "a leaf's own whispered siege is not said in the guild")
+    assert(lane:Level(whispered("Lone Leaf")) == nil, "a leaf's copy of another's siege is said in the guild")
+    -- (2.3.0) A leaf's own siege is heard here like a contact's: no ticks follow it either.
+    Overlord.ChannelDirectory.IsLeaf = function(_, name) return name == "Lone Leaf" end
+    local savedContext = Overlord.Relay.context
+    Overlord.Relay.context = { transport = "WHISPER", targeted = false, gateway = "Lone Leaf", hops = 0 }
+    assert(lane:HeardHere(), "a leaf's own whispered siege is not followed as heard here")
+    Overlord.Relay.context = { transport = "WHISPER", targeted = false, gateway = "Lone Leaf", hops = 1 }
+    assert(not lane:HeardHere(), "a leaf's copy of another's siege is followed as heard here")
+    Overlord.Relay.context = savedContext
+    Overlord.ChannelDirectory = nil
+    assert(lane:Level(whispered("Chain Contact")) == nil, "no directory: no whispered broadcast is said")
+    Overlord.ChannelDirectory = savedDirectory
+end
 
 -- ---------------------------------------------------------------------------
 -- (10) Wiring, read in the source

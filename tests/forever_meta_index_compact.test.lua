@@ -258,4 +258,40 @@ do
     assert(lb._dedupMetaIndex[dk("Tombstone Only")] == before, "an unchanged locale re-derived the entry")
 end
 
+-- Login repairs write rows between yields (2.2.2 compact rows): a meta index
+-- rebuild run in a yield replaces a named row (a save just loaded) by its compact
+-- copy. The repair must write the row in place, never the table read before the yield.
+do
+    -- Runs repair(yieldWork) and rebuilds the index at the yield that follows the
+    -- read of target in the pass after skipPasses full passes (one yield per row).
+    local function rebuildAfterRead(target, skipPasses, repair)
+        local order = {}
+        for n in pairs(lb.playerInfo) do order[#order + 1] = n end
+        local offset, named, calls, replaced = skipPasses * #order, lb.playerInfo[target], 0, false
+        repair(function()
+            calls = calls + 1
+            if not replaced and order[calls - offset] == target then
+                lb:RebuildDedupMetaIndex()
+                replaced = lb.playerInfo[target] ~= named
+                assert(replaced, "fixture: the rebuild kept the named row of " .. target)
+            end
+        end)
+        assert(replaced, "fixture: the repair never yielded after reading " .. target)
+    end
+    local short, full = "Heal Yielder", "Heal Yielder-Realm"
+    lb.playerInfo[full] = { class = "WARLOCK", faction = "Horde", factionAt = now, locale = "",
+        guild = "", pool = "", race = "", raceSex = 0, raceAt = 0, level = 30 }
+    lb.playerInfo[short] = { class = "", faction = "Horde", factionAt = now, locale = "",
+        guild = "", pool = "", race = "", raceSex = 0, raceAt = 0, level = 30 }
+    rebuildAfterRead(short, 1, function(yieldWork) lb:HealPropagateClassAcrossDedupAliases(yieldWork) end)
+    assert(lb.playerInfo[short].class == "WARLOCK",
+        "a class healed across a yield went into a replaced row: " .. tostring(lb.playerInfo[short].class))
+    lb.playerInfo["Token Yielder"] = { class = " mage ", faction = "Alliance", factionAt = now, locale = "",
+        guild = "", pool = "", race = "", raceSex = 0, raceAt = 0, level = 12 }
+    rebuildAfterRead("Token Yielder", 0, function(yieldWork) lb:NormalizePlayerInfoClassTokens(yieldWork) end)
+    assert(lb.playerInfo["Token Yielder"].class == "MAGE",
+        "a class token normalized across a yield went into a replaced row: "
+        .. tostring(lb.playerInfo["Token Yielder"].class))
+end
+
 print("Forever meta index: compact entries, in-place single-row updates equal a rebuild, two-row identities rebuilt, mid-pass updates replayed OK")

@@ -519,6 +519,9 @@ function Overlord.Sync:BroadcastMining(mineId)
     end
     local factionCode = (Overlord.PlayerFaction == "Alliance") and "A" or "H"
     local payload = mineId .. ":" .. factionCode
+    -- 2.2.2: our layer too, for the alert ("..., layer #12"); 2.2.1 reads the first two fields.
+    local shard = Overlord.Shard and Overlord.Shard.GetCurrentShardID and tonumber(Overlord.Shard:GetCurrentShardID())
+    if shard and shard >= 0 and shard < 1e9 then payload = payload .. ":" .. math.floor(shard) end
     local extraWhispers = nil
     local res = Overlord.Ressources
     if res and res.GetMineStock then
@@ -889,6 +892,85 @@ Overlord.Sync.CHANNEL_SEAT_MAX_PADS = 6
 -- channels joining at the same moment), and a pad stayed; a channel whose join is cut that way
 -- is a suspect for the one the game then keeps suspended for days.
 Overlord.Sync.CHANNEL_OP_GAP = 1.5
+-- 2.2.2: the game joins and leaves its own zone channels (General, LocalDefense) as the player
+-- changes zone, and its own "you are going too fast" comes in pairs right then (measured
+-- 2026-11-07, Overlord disabled too). Ours never meets that moment: no join, leave or member-list
+-- fetch of ours within CHANNEL_ZONE_QUIET of a zone change or a loading screen, and every join or
+-- leave of ours one CHANNEL_OP_GAP after the previous one, whatever sequence it belongs to (pads,
+-- our join, sweeps and releases each spaced only themselves).
+Overlord.Sync.CHANNEL_ZONE_QUIET = 6
+-- A join chain that ends refused (four tries) is tried again after CHANNEL_RETRY_BASE, doubled at
+-- each refusal up to CHANNEL_RETRY_MAX: a refused client ran the whole chain (pads, joins, leaves:
+-- up to 16 channel operations) every minute for the session.
+Overlord.Sync.CHANNEL_RETRY_BASE, Overlord.Sync.CHANNEL_RETRY_MAX = 60, 900
+
+function Overlord.Sync:NoteZoneSwap()
+    self._zoneSwapAt = GetTime()
+end
+
+function Overlord.Sync:ChannelZoneQuiet()
+    return GetTime() - (self._zoneSwapAt or -1e9) >= self.CHANNEL_ZONE_QUIET
+end
+
+-- Seconds before a channel operation of ours may go.
+function Overlord.Sync:ChannelOpWait()
+    local at = GetTime()
+    return math.max(0, (self._channelOpAt or -1e9) + self.CHANNEL_OP_GAP - at,
+        (self._zoneSwapAt or -1e9) + self.CHANNEL_ZONE_QUIET - at)
+end
+
+-- True (and the operation counted) when one may go now; the caller tries again later otherwise.
+function Overlord.Sync:TakeChannelOp()
+    if self:ChannelOpWait() > 0 then return false end
+    self._channelOpAt = GetTime()
+    return true
+end
+
+-- 2.3.0: our channel joins and leaves, for /ov network: the game answers too many of them with a
+-- red "You're doing that too fast", and players asked whether it came from Overlord. The last 32.
+function Overlord.Sync:NoteChannelOp(kind)
+    local ops = self._channelOps or {}
+    self._channelOps = ops
+    ops[#ops + 1] = { at = GetTime(), kind = kind }
+    if #ops > 32 then table.remove(ops, 1) end
+end
+
+function Overlord.Sync:GetChannelOpDiagnostics()
+    local ops, now = self._channelOps, GetTime()
+    if not ops or #ops == 0 then return "Channel joins/leaves by Overlord: none this session." end
+    local recent = 0
+    for _, op in ipairs(ops) do if now - op.at <= 600 then recent = recent + 1 end end
+    local last = ops[#ops]
+    return string.format("Channel joins/leaves by Overlord: %d in the last 10 min; last: %s %d s ago",
+        recent, last.kind, math.floor(now - last.at))
+end
+
+-- 2.3.0: a refusal is remembered this long across logins and /reloads (OverlordDB), so their
+-- chain is a single plain join too (Sync:JoinChannel); a join that works forgets it.
+Overlord.Sync.CHANNEL_REFUSED_MEMORY = 6 * 3600
+
+function Overlord.Sync:ChannelRefusedLately()
+    if (tonumber(self._joinChainFailures) or 0) > 0 then return true end
+    local at = OverlordDB and tonumber(OverlordDB.channelRefusedAt)
+    local clock = type(time) == "function" and time() or nil
+    return at ~= nil and clock ~= nil and clock >= at and clock - at < self.CHANNEL_REFUSED_MEMORY
+end
+
+function Overlord.Sync:NoteJoinChainEnd(seated)
+    if seated then
+        self._joinChainFailures, self._joinRetryAt = 0, nil
+        if OverlordDB then OverlordDB.channelRefusedAt = nil end
+        return
+    end
+    if OverlordDB and type(time) == "function" then OverlordDB.channelRefusedAt = time() end
+    self._joinChainFailures = (self._joinChainFailures or 0) + 1
+    self._joinRetryAt = GetTime() + math.min(self.CHANNEL_RETRY_MAX,
+        self.CHANNEL_RETRY_BASE * 2 ^ (self._joinChainFailures - 1))
+end
+
+function Overlord.Sync:JoinRetryHeld()
+    return (self._joinRetryAt or 0) > GetTime()
+end
 
 -- Exactly the names JoinChannelPads gives ("OvPad" .. 6 hex .. a digit); a protected
 -- value is never read.
@@ -956,23 +1038,24 @@ function Overlord.Sync:JoinChannelPads(count)
         + math.floor((GetTime and GetTime() or 0) * 1000) + (time and time() or 0)) % 16777216)
     self._channelPads = self._channelPads or {}
     local pads, gap = self._channelPads, self.CHANNEL_OP_GAP
-    for k = 1, count do
-        local name = "OvPad" .. self._channelPadSalt .. k
-        pads[#pads + 1] = name
-        -- 2.2.1: one join every CHANNEL_OP_GAP, never a burst (see there).
-        if k == 1 then
-            securecall(JoinTemporaryChannel, name, nil, 0)
-        else
-            C_Timer.After((k - 1) * gap, function()
-                local sync = Overlord.Sync
-                if sync and sync._channelPads == pads and not Overlord.InstanceSuspended then
-                    securecall(JoinTemporaryChannel, name, nil, 0)
-                end
-            end)
+    local first = #pads + 1
+    for k = 1, count do pads[#pads + 1] = "OvPad" .. self._channelPadSalt .. k end
+    -- 2.2.1: one join every CHANNEL_OP_GAP, never a burst; 2.2.2: spaced from every other
+    -- channel operation of ours and kept off a zone change (TakeChannelOp).
+    local function step(k)
+        local sync = Overlord.Sync
+        if not sync or sync._channelPads ~= pads or Overlord.InstanceSuspended or not pads[k] then return end
+        if not sync:TakeChannelOp() then
+            C_Timer.After(math.max(0.1, sync:ChannelOpWait()), function() step(k) end)
+            return
         end
+        securecall(JoinTemporaryChannel, pads[k], nil, 0)
+        sync:NoteChannelOp("join pad")
+        if pads[k + 1] then C_Timer.After(gap, function() step(k + 1) end) end
     end
+    step(first)
     -- Safety: this seat's pads only (a later seat keeps its own).
-    C_Timer.After(15 + (count - 1) * gap, function()
+    C_Timer.After(15 + self.CHANNEL_ZONE_QUIET + (count - 1) * gap, function()
         local sync = Overlord.Sync
         if sync and sync._channelPads == pads then sync:ReleaseChannelPads() end
     end)
@@ -1012,18 +1095,23 @@ function Overlord.Sync:ReleaseChannelPads(sweep)
     end
     -- 2.2.1: one leave every CHANNEL_OP_GAP. A later one waits for no seat to hold pads (pad
     -- names are kept for the session: a newer seat's own are its to leave).
-    for k, name in ipairs(going) do
-        if k == 1 then
-            securecall(leave, name)
-        else
-            C_Timer.After((k - 1) * self.CHANNEL_OP_GAP, function()
-                local sync = Overlord.Sync
-                if sync and not sync._channelPads and (tonumber((GetChannelName(name))) or 0) > 0 then
-                    securecall(leave, name)
-                end
-            end)
+    -- 2.2.2: spaced from every other channel operation of ours, off a zone change (TakeChannelOp).
+    local function step(k, later)
+        local sync, name = Overlord.Sync, going[k]
+        if not sync or not name then return end
+        if later and (sync._channelPads or (tonumber((GetChannelName(name))) or 0) <= 0) then
+            if sync._channelPads then return end
+            return step(k + 1, true)
         end
+        if not sync:TakeChannelOp() then
+            C_Timer.After(math.max(0.1, sync:ChannelOpWait()), function() step(k, true) end)
+            return
+        end
+        securecall(leave, name)
+        sync:NoteChannelOp("leave pad")
+        if going[k + 1] then C_Timer.After(sync.CHANNEL_OP_GAP, function() step(k + 1, true) end) end
     end
+    step(1, false)
 end
 
 -- One step of the seat for JoinChannel's first try: true when the join may go now;
@@ -1044,7 +1132,8 @@ function Overlord.Sync:ChannelSeatStep(generation)
         if seat.stable < 2 and seat.samples < 30 then
             delay = 1
         else
-            local holes = self:ChannelSeatHoles()
+            -- 2.3.0: no pads once the channel was refused lately (Sync:JoinChannel).
+            local holes = not self._joinChainLight and self:ChannelSeatHoles()
             if holes then
                 self:JoinChannelPads(#holes)
                 -- (Polls cover the pads joined one CHANNEL_OP_GAP apart.)
@@ -1056,7 +1145,8 @@ function Overlord.Sync:ChannelSeatStep(generation)
             end
         end
     else
-        seat.polls = seat.polls + 1
+        -- 2.2.2: the pads wait out a zone change (TakeChannelOp); so does their budget.
+        if self:ChannelZoneQuiet() then seat.polls = seat.polls + 1 end
         if self:ChannelPadsSeated() or seat.polls >= (seat.maxPolls or 10) then
             -- 2.2.1: our join one CHANNEL_OP_GAP after the last pad, not in its wake.
             seat.phase, delay = "go", self.CHANNEL_OP_GAP
@@ -1135,7 +1225,7 @@ function Overlord.Sync:OnReceiveMining(payload, sender)
     if not payload or payload == "" then return end
     if not Overlord.Zones then return end
 
-    local mineId, factionCode = strsplit(":", payload, 3)
+    local mineId, factionCode, shardField = strsplit(":", payload, 4)
     mineId = mineId and mineId:match("^%s*(.-)%s*$") or mineId
     if not mineId or mineId == "" then return end
     -- Only mines this addon knows: an invented id went straight into the chat line
@@ -1155,6 +1245,24 @@ function Overlord.Sync:OnReceiveMining(payload, sender)
     if (p.mineAlertLast[mineId] or 0) + p.mineAlertCooldown > now then return end
     p.mineAlertLast[mineId] = now
     local mineName = mine.name or mineId
+    -- 2.2.2: who mines and on which layer ("Darrow Hill (Name, layer #12)"). The name is the
+    -- message's author (the relay's origin), shown short and without escape codes.
+    local who = type(sender) == "string" and sender:sub(1, 5) ~= "BNet-" and sender:sub(1, 7) ~= "Bridge-"
+        and sender:match("^([^%-]+)") or nil
+    who = who and who:gsub("[|%c]", ""):sub(1, 24) or nil
+    if who == "" or (who and who:find("#", 1, true)) then who = nil end
+    local sid = type(shardField) == "string" and #shardField <= 9 and shardField:match("^%d+$") or nil
+    local tag = ""
+    if sid then
+        tag = string.format((L and (L.SHARD_ALERT_NAME_TAG or L.SHARD_ALERT_TAG)) or ", layer #%s", sid)
+    elseif who and self.GetShardAlertTagForPlayer then
+        tag = self:GetShardAlertTagForPlayer(sender) or ""
+    end
+    if who then
+        mineName = mineName .. " (" .. who .. tag .. ")"
+    elseif tag ~= "" then
+        mineName = mineName .. " (" .. (tag:gsub("^[%s,，]+", "")) .. ")"
+    end
     local line = (senderFaction == "Horde" and L and L.ENEMY_MINING_HORDE)
         or (senderFaction == "Alliance" and L and L.ENEMY_MINING_ALLIANCE)
     if line then
@@ -1238,11 +1346,46 @@ local function SuppressAddonWhisperOfflineSystem(_, _, msg)
         if directory and directory.NoteUnreachable then pcall(directory.NoteUnreachable, directory, quoted) end
         return true
     end
+    -- (2.3.0: a real name we did not whisper is the player's own /w: always shown. The mesh
+    -- whispers every few seconds, so the window below hid every offline error of the session.)
+    if quoted then
+        -- (Forever names hold a space, "First Last": letters and spaces, a realm after "-".)
+        local bare = quoted:gsub("%-", ""):gsub(" ", "")
+        if bare ~= "" and not bare:find("[%p%d%c]") then return false end
+    end
     -- Rafale /ov sync : masque aussi les cibles corrompues (ex. bruit API Club ')g]').
     return hasAnyRecentAddonWhisper(8)
 end
 
+-- 2.2.2: the game's notices about our channel and our pads ("left channel", "not allowed"
+-- while the server refuses it). The default chat never shows them (the channel sits in no
+-- chat window); chat addons that show every channel notice (reported with Chattynator) printed
+-- a pair every minute. Hidden for any chat that goes through the game's message filters.
+-- (Methods, not locals: this chunk is close to 200 locals. A protected value is never read.)
+function Overlord.Sync.SuppressSeatChannelNotice(_, _, text, _, _, channelName, _, _, _, _, baseName)
+    local sync = Overlord.Sync
+    if not (issecretvalue and issecretvalue(baseName)) and baseName ~= nil and sync:IsOwnSeatChannel(baseName) then
+        return true
+    end
+    if type(channelName) ~= "string" or (issecretvalue and issecretvalue(channelName))
+        or (canaccessvalue and not canaccessvalue(channelName)) then return false end
+    local bare = channelName:match("^%d+%.%s*(.+)$") or channelName
+    return sync:IsOwnSeatChannel(bare)
+end
+
+function Overlord.Sync:InstallSeatNoticeFilter()
+    if self._seatNoticeFilter then return true end
+    local add = ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter
+    if type(add) ~= "function" then add = ChatFrame_AddMessageEventFilter end
+    if type(add) ~= "function" then return false end
+    local ok = pcall(add, "CHAT_MSG_CHANNEL_NOTICE", self.SuppressSeatChannelNotice)
+    ok = pcall(add, "CHAT_MSG_CHANNEL_NOTICE_USER", self.SuppressSeatChannelNotice) and ok
+    self._seatNoticeFilter = ok or nil
+    return ok
+end
+
 function Overlord.Sync:InstallWhisperOfflineChatFilter()
+    self:InstallSeatNoticeFilter()
     if whisperOfflineFilterInstalled then return end
     local ok = false
     -- Current clients expose the filter on ChatFrameUtil; the old global is

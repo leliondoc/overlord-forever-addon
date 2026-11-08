@@ -170,6 +170,9 @@ Overlord = {
         IsChannelClosed = function() return channelClosed and not channelId end,
         TakeChannelToken = function() return true end,
         NoteChannelSendKind = function() end,
+        SendAddonChecked = function(_, msg, chatType, target, prefix)
+            return C_ChatInfo.SendAddonMessage(prefix, msg, chatType, target) == 0
+        end,
         SenderIsInOurGroup = function() return false end,
     },
 }

@@ -270,6 +270,59 @@ end
 finalC("faldir", "Horde", "Horde Bravo", "wB5", "Player-1-0000BBBB", takenAt - 50)
 assert(neutral.owner == "Alliance" and neutral.capturedTime == takenAt, "an older final replaced a newer capture")
 
+-- 2.3.0: on another front a final is compared with the capture under the assault, as its
+-- state final is and as C is on our own front. A point taken by a group: the player we
+-- follow ticks once more after another one completed. The C was compared with that tick:
+-- taken when it came first, refused when the tick came first (the point then went back to
+-- its defender when the followed timer ran out).
+do
+    local function assault(id, who, wave, guid)
+        set(id, "Alliance", wall - 5000)
+        local point = zoneOf(id)
+        point._remoteCaptureLease = nil
+        advance(60)
+        progress(id, "H", who, wave, guid, 5)
+        assert(point.status == "in_progress" and point._remoteCaptureLease, "fixture: the assault on " .. id .. " is not followed")
+        for i = 1, 9 do advance(10); progress(id, "H", who, wave, guid, 5 + 10 * i) end
+        advance(10)
+        return point
+    end
+    -- The final first, then the followed player's last tick.
+    local point = assault("goshek", "Horde Xray", "wX1", "Player-1-0000F0A1")
+    local takenAt = wall - 1
+    finalC("goshek", "Horde", "Horde Yankee", "wY1", "Player-1-0000F0A2", takenAt)
+    progress("goshek", "H", "Horde Xray", "wX1", "Player-1-0000F0A1", 105)
+    assert(point.owner == "Horde" and point.status == "captured" and point.capturedTime == takenAt,
+        "fixture: the final heard before the last tick was not taken: " .. tostring(point.status))
+    -- The tick first, then the final: the same capture.
+    point = assault("refuge", "Horde Victor", "wV1", "Player-1-0000F0A3")
+    takenAt = wall - 1
+    progress("refuge", "H", "Horde Victor", "wV1", "Player-1-0000F0A3", 105)
+    finalC("refuge", "Horde", "Horde Zulu", "wZ1", "Player-1-0000F0A4", takenAt)
+    assert(point.owner == "Horde" and point.status == "captured" and point.capturedTime == takenAt
+        and not point._remoteCaptureLease,
+        "on another front, a final dated before the followed player's last tick was refused: "
+        .. tostring(point.owner) .. "/" .. tostring(point.status))
+end
+
+-- 2.3.0: on the front we stand on, the state final of such a capture is compared with the
+-- capture under the assault too, as C is there. Compared with the followed player's last
+-- tick, it was refused unless our view of his timer had already reached its end.
+do
+    own.owner, own.status, own.capturedTime, own.updatedAt = "Alliance", "captured", wall - 5000, wall - 5000
+    own._remoteCaptureLease = nil
+    advance(60)
+    progress(own.id, "H", "Horde Tango", "wT9", "Player-1-0000F0A5", 5)
+    assert(own.status == "in_progress" and own._remoteCaptureLease, "fixture: the point of our front is not under assault")
+    for i = 1, 10 do advance(10); progress(own.id, "H", "Horde Tango", "wT9", "Player-1-0000F0A5", 5 + 10 * i) end
+    local takenAt = wall - 1
+    finalZS(own.id, "H", "Horde Sierra", "wS9", "Player-1-0000F0A6", takenAt)
+    assert(own.owner == "Horde" and own.status ~= "in_progress" and own.capturedTime == takenAt
+        and not own._remoteCaptureLease,
+        "on our own front, a state final dated before the followed player's last tick was refused: "
+        .. tostring(own.owner) .. "/" .. tostring(own.status))
+end
+
 -- 2.1.1: nobody on a point hears the others when only the guild carries the news, so a capture of
 -- our side, said there by its author, ends a wave of our own there, even dated before our last
 -- tick. Real receive paths and lease rule; the lane is only asked where this copy was heard.

@@ -144,3 +144,22 @@ OP:ApplyRemoteState(siteKey, restored, true)
 assert(OP:GetState(siteKey).status == "held" and OP:GetState(siteKey).ownerGuild == guild,
     "Returning observer erased a capture completed while offline")
 print("Outpost offline restore: stale neutral preserves the real completed capture")
+
+-- 2.2.2: an observed enemy assault saved at its required hold (the last tick seen said
+-- 300/300, the signed capture never reached us) is never turned into a tenant by a
+-- /reload: the ledger and the map tell who really holds it. Before, the observer showed
+-- an unsigned holder nobody else saw and asked the network about it every 22 s all week.
+OverlordDB.outposts[siteKey] = nil
+local observedFull = snapshotRemote(OP:GetState(siteKey))
+local required = OP:GetDefaultHoldTimeRequired(OP:GetState(siteKey), site)
+observedFull.status, observedFull.ownerGuild, observedFull.ownerFaction = "in_progress", "Enemy Guild", "Horde"
+observedFull.holdTimeElapsed, observedFull.updatedAt = required, now - 5
+observedFull.previousOwnerGuild, observedFull.previousOwnerFaction = "", nil
+OverlordDB.outposts[siteKey] = observedFull
+OverlordDB.lastSessionTimestamp = now - 3
+OP:RestoreOutposts()
+local afterReload = OP:GetState(siteKey)
+assert(afterReload.status == "neutral" and (afterReload.ownerGuild or "") == "",
+    "a /reload made an observed assault a tenant: " .. tostring(afterReload.status) .. " " .. tostring(afterReload.ownerGuild))
+assert(not OP:HasStateAwaitingNetwork(), "the restored site keeps asking the network")
+print("Outpost restore: an observed full assault never becomes an unsigned tenant")

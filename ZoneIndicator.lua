@@ -468,8 +468,8 @@ local function EvaluateOutpostHud()
     if not Overlord.Outpost:IsPlayerInOutpostGeometry(site) then
         return false, false, nil
     end
-    local canParticipate = st.isHolding or Overlord.Outpost:CanPlayerStartCapture(st)
-        or Overlord.Outpost:CanPlayerAssaultOutpostState(st)
+    local canParticipate = st.isHolding or Overlord.Outpost:CanPlayerStartCapture(st, site)
+        or Overlord.Outpost:CanPlayerAssaultOutpostState(st, site)
         or Overlord.Outpost:IsPlayerDefendingHeldOutpost(st)
     if not canParticipate then
         return false, false, nil

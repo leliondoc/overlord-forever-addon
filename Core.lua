@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.2.1"
+Overlord.Version = "2.3.0"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -2744,19 +2744,30 @@ function Overlord:ScheduleNextReset()
 
     if delay <= 0 then delay = 1 end
 
-    C_Timer.After(delay, function()
-        if Overlord.IsInitialized then
-            local ok, err = pcall(Overlord.CheckWeeklyReset, Overlord)
-            if not ok and OverlordDB and OverlordDB.config and OverlordDB.config.debug then
-                print("|cFFFF4444[Overlord:dbg]|r CheckWeeklyReset: " .. tostring(err))
-            end
-            if not Overlord._loginWeeklyResetDeferred then
-                Overlord:ScheduleNextReset()
-            else
-                Overlord._loginWeeklyResetTimerStopped = true
-            end
+    -- 2.2.2 : une seule chaine vivante (un rearmement de fin de login en ajoutait une seconde,
+    -- chacune se rearmant pour toujours). Avant l'initialisation, ou pendant l'union EU du
+    -- classement, la frontiere est retentee 5 s plus tard au lieu d'attendre une semaine.
+    local token = {}
+    self._resetTimerToken = token
+    local function fire()
+        if Overlord._resetTimerToken ~= token then return end
+        if not Overlord.IsInitialized or Overlord._europeanLeaderboardUnionPending then
+            C_Timer.After(5, fire)
+            return
         end
-    end)
+        local ok, err = pcall(Overlord.CheckWeeklyReset, Overlord)
+        if not ok and OverlordDB and OverlordDB.config and OverlordDB.config.debug then
+            print("|cFFFF4444[Overlord:dbg]|r CheckWeeklyReset: " .. tostring(err))
+        end
+        if Overlord._europeanLeaderboardUnionPending then
+            C_Timer.After(5, fire)
+        elseif not Overlord._loginWeeklyResetDeferred then
+            Overlord:ScheduleNextReset()
+        else
+            Overlord._loginWeeklyResetTimerStopped = true
+        end
+    end
+    C_Timer.After(delay, fire)
 end
 
 
@@ -3823,7 +3834,8 @@ local function ReconcileBaseOwnershipSanity()
     if not Overlord.ZoneDatabase or not Overlord.Zones then return false end
 
     local changed = false
-    local now = time()
+    -- (updatedAt is a server stamp: the server clock, never the PC's.)
+    local now = Overlord.ServerNow()
     local baseIds = {
         Overlord.Fronts and Overlord.Fronts:GetCapitalId("Alliance"),
         Overlord.Fronts and Overlord.Fronts:GetCapitalId("Horde"),
@@ -5290,13 +5302,25 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         Overlord:RequestFactionChangeReconcile()
 
     elseif event == "PLAYER_LOGOUT" then
-        if Overlord.General and Overlord.General.PersistSession then
-            Overlord.General:PersistSession()
+        -- 2.2.2 : chaque ecriture est isolee (pcall). Une erreur d'un module annexe (session,
+        -- position du panneau, popups) sautait SaveState et Leaderboard:Save : cartes et
+        -- classement de la session perdus.
+        -- (Une erreur reste lisible dans les SavedVariables : OverlordDB.lastLogoutError.)
+        if OverlordDB then OverlordDB.lastLogoutError = nil end
+        local function persist(owner, method)
+            if not (owner and owner[method]) then return end
+            local ok, err = pcall(owner[method], owner)
+            if not ok and OverlordDB and not OverlordDB.lastLogoutError then
+                OverlordDB.lastLogoutError = tostring(method) .. ": " .. tostring(err)
+            end
         end
+        -- 2.2.2 : lignes playerInfo compactes (metatable) reecrites en lignes nommees,
+        -- seule forme que l'ecriture des SavedVariables voit en entier. En premier : rien
+        -- de ce qui suit ne peut l'empecher, et toute ligne ecrite ensuite reste nommee.
+        persist(Overlord.Leaderboard, "MaterializePlayerInfoForLogout")
+        persist(Overlord.General, "PersistSession")
         -- Position du panel : derniere ecriture avant fermeture des SavedVariables
-        if Overlord.UI and Overlord.UI.PersistPanelPosition then
-            Overlord.UI:PersistPanelPosition()
-        end
+        persist(Overlord.UI, "PersistPanelPosition")
         -- Sauvegarde faction + timestamp pour detecter changement Horde<->Alliance et donnees obsoletes
         if OverlordDB then
             if Overlord.PlayerFaction then
@@ -5304,33 +5328,25 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
             end
             OverlordDB.lastSessionTimestamp = time()
         end
-        if Overlord.Popups and Overlord.Popups.CommitPendingPopupMark then
-            Overlord.Popups:CommitPendingPopupMark()
-        end
-        if Overlord.Popups and Overlord.Popups.PersistSeenFlags then
-            Overlord.Popups:PersistSeenFlags()
-        end
-        Overlord:SaveState()
-        if Overlord.Leaderboard then
-            -- Un snapshot tranche ne peut pas terminer apres PLAYER_LOGOUT. Le dernier
-            -- snapshot autosave complet reste intact ; Save() persiste les buckets courants.
-            Overlord.Leaderboard:Save()
-        end
+        persist(Overlord.Popups, "CommitPendingPopupMark")
+        persist(Overlord.Popups, "PersistSeenFlags")
+        persist(Overlord, "SaveState")
+        -- Un snapshot tranche ne peut pas terminer apres PLAYER_LOGOUT. Le dernier
+        -- snapshot autosave complet reste intact ; Save() persiste les buckets courants.
+        persist(Overlord.Leaderboard, "Save")
         -- Derniere ecriture : l'alias OverlordDB.leaderboard pointe sur le bucket de
         -- pool deja persiste. Le retirer evite une seconde copie complete du ladder
         -- dans le fichier ; Initialize() le retablit depuis leaderboardAliasPool.
         if OverlordDB and OverlordDB.leaderboard and OverlordDB.leaderboardsByPool
             and Overlord.GetCurrentLeaderboardSavedVarsPool then
-            local pool = Overlord:GetCurrentLeaderboardSavedVarsPool()
-            if type(pool) == "string" and pool ~= ""
+            local ok, pool = pcall(Overlord.GetCurrentLeaderboardSavedVarsPool, Overlord)
+            if ok and type(pool) == "string" and pool ~= ""
                 and OverlordDB.leaderboardsByPool[pool] == OverlordDB.leaderboard then
                 OverlordDB.leaderboardAliasPool = pool
                 OverlordDB.leaderboard = nil
             end
         end
-        if Overlord.Leaderboard and Overlord.Leaderboard.SlimSavedSnapshotForLogout then
-            Overlord.Leaderboard:SlimSavedSnapshotForLogout()
-        end
+        persist(Overlord.Leaderboard, "SlimSavedSnapshotForLogout")
     elseif event == "PLAYER_DEAD" or event == "PLAYER_ALIVE" or event == "PLAYER_UNGHOST" then
         if event == "PLAYER_DEAD" and Overlord.ZoneControl
             and Overlord.ZoneControl.ReleaseLocalCaptureState then
@@ -5346,6 +5362,8 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
             Overlord.Shard:InvalidateLocalContext()
         end
     elseif event == "ZONE_CHANGED_NEW_AREA" or event == "PLAYER_ENTERING_WORLD" then
+        -- 2.2.2: the game swaps its zone channels now; ours keep away a moment (SyncAux).
+        if Overlord.Sync and Overlord.Sync.NoteZoneSwap then Overlord.Sync:NoteZoneSwap() end
         if Overlord.Shard and Overlord.Shard.InvalidateLocalContext then
             Overlord.Shard:InvalidateLocalContext()
         end

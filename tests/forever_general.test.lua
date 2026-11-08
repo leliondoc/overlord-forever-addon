@@ -165,4 +165,57 @@ do
     expect(count(warned, "fell to") == 1 and warned[#warned]:find("^silent "),
         "a general's fall must be announced on screen once, without the raid sound: " .. tostring(warned[#warned]))
 end
+
+-- 2.3.0: a player already in sight who takes command gets his nameplate badge at once.
+-- His plate came before his claim (no NAME_PLATE_UNIT_ADDED follows); the refresh used
+-- to repaint only the plates that had carried a badge before.
+do
+    local plateNames = { nameplate3 = "Plate General", nameplate4 = "Plate Bystander" }
+    local plates, created = {}, {}
+    local function texture()
+        local t = {}
+        function t:SetAllPoints() end
+        function t:SetTexture() end
+        function t:SetTexCoord() end
+        function t:SetAtlas(atlas) self.atlas = atlas end
+        return t
+    end
+    function CreateFrame(_, _, parent)
+        local f = { parent = parent, shown = true }
+        function f:SetSize() end
+        function f:SetPoint() end
+        function f:ClearAllPoints() end
+        function f:SetParent(p) self.parent = p end
+        function f:GetParent() return self.parent end
+        function f:CreateTexture() return texture() end
+        function f:Show() self.shown = true end
+        function f:Hide() self.shown = false end
+        created[#created + 1] = f
+        return f
+    end
+    for unit in pairs(plateNames) do plates[unit] = { UnitFrame = { unit = unit } } end
+    C_NamePlate = { GetNamePlateForUnit = function(unit) return plates[unit] end }
+    local oldUnitExists = UnitExists
+    function UnitExists(unit) return plateNames[unit] ~= nil end
+    function UnitIsPlayer(unit) return plateNames[unit] ~= nil end
+    Overlord.SafeUnitName = function(_, unit) return plateNames[unit] end
+    dofile("GeneralNameplate.lua")
+    local nameplates = Overlord.GeneralNameplate
+    nameplates:OnNamePlateAdded("nameplate3")
+    nameplates:OnNamePlateAdded("nameplate4")
+    expect(#created == 0, "fixture: a plate got a badge before anyone took command")
+    serverNow = serverNow + 10
+    expect(general:ApplyRemoteClaim("Plate General", "Alliance", "eu", 1, 1, 1, serverNow, false),
+        "fixture: the allied claim was refused")
+    drain()
+    local badge
+    for _, f in ipairs(created) do
+        if f.parent == plates.nameplate3.UnitFrame then badge = f end
+        expect(f.parent ~= plates.nameplate4.UnitFrame, "a bystander's plate got a badge frame")
+    end
+    expect(badge and badge.shown and badge.icon
+        and badge.icon.atlas == general:GetFactionBadgeAtlas("Alliance"),
+        "a general already in sight got no badge on his nameplate when he took command")
+    UnitExists = oldUnitExists
+end
 print("general_team_lifecycle_runtime: OK")

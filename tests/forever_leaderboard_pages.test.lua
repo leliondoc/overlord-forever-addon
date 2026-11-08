@@ -427,6 +427,8 @@ PULLER.OverlordDB.leaderboardPageProgress = nil
 PULLER.Overlord.Sync._leaderboardPageStats.sweepBase = nil
 PULLER.Overlord.Sync.SendWhisper = sendRequest
 local SECOND = a -- same channel as the puller: a second direct neighbour
+-- A copy by pairs() sees compact playerInfo rows whole only once written back named.
+SOURCE.Overlord.Leaderboard:MaterializePlayerInfoRows()
 for _, field in ipairs({ "kills", "playerInfo", "captureCount" }) do
     SECOND.Overlord.Leaderboard[field] = copy(SOURCE.Overlord.Leaderboard[field])
 end
@@ -517,5 +519,47 @@ do
     for _ = 1, 40 do advance(100); if done ~= nil then break end end
     assert(done == true and PULLER.Overlord.Leaderboard.kills[names[6]] == 4991,
         "an old profile was served again: " .. tostring(PULLER.Overlord.Leaderboard.kills[names[6]]))
+    -- 2.2.2: without the channel (the member list's chain active), a copy our ranking moved past
+    -- is served again only while younger than 30 s on a small ladder (the wait grows with the
+    -- rows: 30 s per 1,000 rows here): rows go from hand to hand by these pages. While the
+    -- channel carries, the same copy is served again for its two minutes.
+    SOURCE.Overlord.Sync._profileDirtyRowSec = 0.006
+    local active = true
+    SOURCE.Overlord.ChannelDirectory = { IsActive = function() return active end }
+    local function pull()
+        PULLER.OverlordDB.leaderboardPageProgress = nil
+        done = nil
+        assert(PULLER.Overlord.Sync:StartCompletePagedLeaderboardCatchup(SOURCE.name, function(ok) done = ok end))
+        for _ = 1, 400 do advance(5); if done ~= nil then break end end
+        assert(done == true, "pull failed: " .. PULLER.Overlord.Sync:GetPagedLeaderboardDiagnostics())
+    end
+    -- A copy `wait` s old (built for a pull), then our ranking moves.
+    local function movedCopy(name, kills, wait)
+        wait = wait or 40
+        advance(200)
+        SOURCE.Overlord.Leaderboard:SetPlayerKills(name, kills - 1, true)
+        pull()
+        local snap = SOURCE.Overlord.Sync:GetAttestedLeaderboardSnapshot()
+        local age = SOURCE.GetServerTime() - (snap.at or 0)
+        assert(age < wait, "the copy took too long to build for this test: " .. age)
+        advance(wait - age)
+        SOURCE.Overlord.Leaderboard:SetPlayerKills(name, kills, true)
+        local reused = responderStats.profileReused or 0
+        pull()
+        return (responderStats.profileReused or 0) > reused, PULLER.Overlord.Leaderboard.kills[name]
+    end
+    local wasReused, got = movedCopy(names[7], 4992, 40)
+    assert(not wasReused and got == 4992, "a moved copy 40 s old was served again without the channel: " .. tostring(got))
+    wasReused, got = movedCopy(names[9], 4994, 20)
+    assert(wasReused and got == 4993, "a moved copy 20 s old was rebuilt: " .. tostring(got))
+    -- At its real pace this 5,000-row ladder waits two minutes: a rebuild every 30 s would be four
+    -- times 2.2.1's garbage.
+    SOURCE.Overlord.Sync._profileDirtyRowSec = nil
+    wasReused, got = movedCopy(names[20], 4995, 40)
+    assert(wasReused and got == 4994, "a big moved copy 40 s old was rebuilt: " .. tostring(got))
+    active = false
+    wasReused, got = movedCopy(names[8], 4993)
+    assert(wasReused and got == 4992, "a recent copy was rebuilt while the channel carries: " .. tostring(got))
+    SOURCE.Overlord.ChannelDirectory = nil
 end
-print("PASS: recent page profile reused, older copy rebuilt")
+print("PASS: recent page profile reused, older copy rebuilt, moved copy fresher without the channel")

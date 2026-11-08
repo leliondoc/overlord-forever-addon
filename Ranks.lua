@@ -459,7 +459,11 @@ local function Mirror(rec)
     return rec
 end
 
+-- 2.3.0: the addon author's badge (RankProof.AUTHORS): the Overlord logo, above every rank.
+R.AUTHOR_RANK, R.AUTHOR_ICON = 16, "Interface\\AddOns\\Overlord\\Textures\\overlord"
+
 function R:GetRankIcon(rank)
+    if rank == self.AUTHOR_RANK then return self.AUTHOR_ICON end
     local tier = self.TIERS[rank]
     return tier and (self.ICON_DIR .. tier.icon) or nil
 end

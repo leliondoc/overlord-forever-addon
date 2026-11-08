@@ -674,7 +674,7 @@ function Overlord.Leaderboard:PatchDedupMetaClassForPlayer(playerName, normClass
     if not b then
         return false
     end
-    if lbClassRank(normClass) <= lbClassRank(b.class) then
+    if lbClassRank(normClass) <= lbClassRank(b[2][1]) then
         return false
     end
     b = copyPublishedMeta(index, dk:lower(), b)
@@ -690,6 +690,15 @@ end
 -- chaud (demande de guilde/classe opportuniste) est sans impact sur l'etat reseau.
 function Overlord.Leaderboard:MarkMetaDirty()
     markIndexedMetaMutation(self)
+    self:_DropDedupMetaIndex()
+end
+
+-- A dropped index stays the reuse source of the next rebuild (see publishMeta):
+-- its unchanged entries are kept instead of allocated again. Held until that
+-- rebuild publishes (one index at most, usually still shared by the snapshot).
+function Overlord.Leaderboard:_DropDedupMetaIndex()
+    local index = self._dedupMetaIndex
+    if index then self._dedupMetaReuse = index end
     self._dedupMetaIndex = nil
 end
 
@@ -794,8 +803,8 @@ end
 
 -- Meta index entries. A rebuild merges every row of an identity into a work entry
 -- (values plus tie-break scratch: factionAt/Key, localeAt/Key, poolAt/Key,
--- guildRank, _guildSeen), then publishes only the values, 14 fields at most
--- (16 hash slots instead of 32: about half the memory of the old entries). src is
+-- guildRank, _guildSeen), then publishes only the values (an array since 2.2.2, see
+-- below; 1.8.0 already halved them by leaving the scratch out). src is
 -- the identity's only row name, or false when several rows were merged; a single
 -- row's entry can then be re-derived from that row alone (RefreshIndexedMetaForName).
 local function resetMetaWork(b)
@@ -809,12 +818,88 @@ local function resetMetaWork(b)
     return b
 end
 
+-- 2.2.2 memory: a published entry is an array, not 14 named fields (one 16-slot
+-- hash, ~700 B): [1] src, [2] profile, [3] level, [4] guild, [5] guildAt,
+-- [6] raceAt, [7] raceKey only when it is not the derived one (metaRaceKey). The
+-- profile is an array shared by every entry holding the same values, never written:
+-- [1] class, [2] faction, [3] locale, [4] race, [5] raceSex, [6] pool, [7] guildAuth,
+-- [8] guildReplica (true or nil). A guild register only (GI heartbeat of a player
+-- never ranked) leaves profile [1]-[6] and entry [3] and [6] nil, the fields the
+-- named register did not have. About 150 B per player instead of ~700 B. Hot
+-- readers here read the slots; a metatable gives every other reader (Sync, the
+-- ladder snapshot served after it is built, tests) the same named fields as before,
+-- writes included. The saved snapshot gets named copies (SlimSavedSnapshotForLogout).
+local META_ENTRY_SLOT = { src = 1, level = 3, guild = 4, guildAt = 5, raceAt = 6 }
+local META_PROFILE_SLOT = { class = 1, faction = 2, locale = 3, race = 4, raceSex = 5, pool = 6,
+    guildAuth = 7, guildReplica = 8 }
+-- Weak values: a profile no entry holds any more is collected.
+local metaProfiles = setmetatable({}, { __mode = "v" })
+
+local function metaProfileKey(class, faction, locale, race, raceSex, pool, auth, replica)
+    return (class or "\2") .. "\1" .. (faction or "\2") .. "\1" .. (locale or "\2") .. "\1"
+        .. (race or "\2") .. "\1" .. (raceSex or "\2") .. "\1" .. (pool or "\2") .. "\1"
+        .. (auth and "1" or "0") .. (replica and "1" or "0")
+end
+
+-- The shared profile holding these values. The lookup is verified field by field:
+-- a key collision (a value holding the separator) only costs an unshared profile,
+-- and so does a value that is no string or number (an odd save: no key at all).
+local function internMetaProfile(class, faction, locale, race, raceSex, pool, auth, replica)
+    auth = auth and true or nil
+    replica = replica and true or nil
+    local built, key = pcall(metaProfileKey, class, faction, locale, race, raceSex, pool, auth, replica)
+    if not built then key = nil end
+    local p = key and metaProfiles[key]
+    if p and p[1] == class and p[2] == faction and p[3] == locale and p[4] == race
+        and p[5] == raceSex and p[6] == pool and p[7] == auth and p[8] == replica then
+        return p
+    end
+    p = { class, faction, locale, race, raceSex, pool, auth, replica }
+    if key and not metaProfiles[key] then metaProfiles[key] = p end
+    return p
+end
+
+-- raceKey is the row that gave the race: for a single-row entry, src itself when a
+-- race is known, else "" (mergeMetaRow), so it is stored only when it differs.
+local function metaRaceKey(t)
+    local explicit = rawget(t, 7)
+    if explicit ~= nil then return explicit end
+    local race = rawget(t, 2)[4]
+    if race == nil then return nil end
+    local src = rawget(t, 1)
+    if src and race ~= "" then return src end
+    return ""
+end
+
+local META_MT = {}
+META_MT.__index = function(t, k)
+    local slot = META_ENTRY_SLOT[k]
+    if slot then return rawget(t, slot) end
+    slot = META_PROFILE_SLOT[k]
+    if slot then return rawget(t, 2)[slot] end
+    if k == "raceKey" then return metaRaceKey(t) end
+    return nil
+end
+-- Named writes (patch paths on a copy) land in the slots; a profile value gives the
+-- entry another shared profile, the old one is never written.
+META_MT.__newindex = function(t, k, v)
+    local slot = META_ENTRY_SLOT[k]
+    if slot then rawset(t, slot, v); return end
+    slot = META_PROFILE_SLOT[k]
+    if slot then
+        local p = rawget(t, 2)
+        local f = { p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8] }
+        f[slot] = v
+        rawset(t, 2, internMetaProfile(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8]))
+        return
+    end
+    if k == "raceKey" then rawset(t, 7, v); return end
+    rawset(t, k, v)
+end
+
 local function newPublishedMeta()
-    return {
-        class = "", level = 0, faction = "", locale = "",
-        guild = "", guildAt = 0, guildAuth = nil, guildReplica = nil,
-        race = "", raceSex = 0, raceAt = -1, raceKey = "", pool = "", src = false,
-    }
+    return setmetatable({ false, internMetaProfile("", "", "", "", 0, "", nil, nil), 0, "", 0, -1 },
+        META_MT)
 end
 
 -- Published entries are never written in place (the ladder snapshot shares them):
@@ -822,37 +907,208 @@ end
 -- reached only when the entry cannot be re-derived from one row, so the copy no
 -- longer names a single source row (a later update rebuilds the whole identity).
 copyPublishedMeta = function(index, key, b)
-    local c = {
-        class = b.class, level = b.level, faction = b.faction, locale = b.locale,
-        guild = b.guild, guildAt = b.guildAt, guildAuth = b.guildAuth,
-        guildReplica = b.guildReplica, race = b.race, raceSex = b.raceSex,
-        raceAt = b.raceAt, raceKey = b.raceKey, pool = b.pool, src = false,
-    }
+    local raceKey = metaRaceKey(b)
+    -- Without a source row the derived key is "" (nil for a register): keep any other.
+    if raceKey == "" then raceKey = nil end
+    local c
+    if raceKey == nil then
+        c = { false, rawget(b, 2), rawget(b, 3), rawget(b, 4), rawget(b, 5), rawget(b, 6) }
+    else
+        c = { false, rawget(b, 2), rawget(b, 3), rawget(b, 4), rawget(b, 5), rawget(b, 6), raceKey }
+    end
+    setmetatable(c, META_MT)
     index[key] = c
     return c
 end
 
-local function publishMeta(self, w, src)
+-- An entry array, live or as a save read it back (no metatable, profile copied).
+local function isMetaEntryArray(e)
+    return getmetatable(e) == META_MT or (rawget(e, "class") == nil and rawget(e, "guild") == nil
+        and type(rawget(e, 2)) == "table")
+end
+
+-- Named copy of an entry for the saved snapshot: the fields its readers use, without
+-- src, raceKey and an empty pool (as the 1.8.0 logout slimming wrote them).
+local function savedMetaCopy(e)
+    local p = rawget(e, 2)
+    local pool = p[6]
+    if pool == "" then pool = nil end
+    return {
+        class = p[1], level = rawget(e, 3), faction = p[2], locale = p[3],
+        guild = rawget(e, 4), guildAt = rawget(e, 5), guildAuth = p[7], guildReplica = p[8],
+        race = p[4], raceSex = p[5], raceAt = rawget(e, 6), pool = pool,
+    }
+end
+
+-- 2.2.2 memory: playerInfo rows. A named row holds up to 13 fields, one 16-slot
+-- hash (~700 B per player). Six of them take few values over the whole ladder
+-- (class, faction, locale, race, raceSex, pool): a compact row keeps the others
+-- (level, factionAt, guild, guildAt, guildAuth, guildReplica, raceAt, any odd key)
+-- in its own table, 8 slots (~380 B), and reads the six through its metatable, a
+-- profile shared by every row holding the same six values and never written. Every
+-- reader gets the same named fields; writing one of the six gives the row the
+-- profile holding the new value. Only pairs/next/rawget do not see the six: no
+-- reader of a row uses them (an emptiness test asks infoRowIsEmpty), and neither
+-- does the SavedVariables writer, so every compact row is turned back into the
+-- named row at PLAYER_LOGOUT (MaterializePlayerInfoForLogout): the saved text is
+-- the one 2.2.1 wrote. A row whose six values are not all strings or numbers (an
+-- edited save) stays named. Rows become compact when a meta index rebuild walks
+-- them (login, structural changes) and when the main setters write them.
+local INFO_PROFILE_FIELD = { class = true, faction = true, locale = true, race = true,
+    raceSex = true, pool = true }
+local newInfoRow, compactInfoRow, materializeInfoRow, infoRowIsEmpty
+-- Set once the logout wrote every row back named: no row becomes compact again.
+local infoRowsNamedForSave = false
+-- Weak keys: the playerInfo tables that may hold compact rows (the live one, and
+-- one a weekly archive or a pool switch took away), materialized at logout.
+local compactInfoContainers = setmetatable({}, { __mode = "k" })
+do
+    local INFO_ROW_FIELD = { level = true, factionAt = true, guild = true, guildAt = true,
+        guildAuth = true, guildReplica = true, raceAt = true }
+    -- Weak values: a profile no row holds any more is collected.
+    local profiles = setmetatable({}, { __mode = "v" })
+    local profileWrite
+    local function plainValue(v)
+        local t = type(v)
+        return v == nil or t == "string" or (t == "number" and v == v)
+    end
+    local function holds(mt, c, f, l, r, s, p)
+        return mt.class == c and mt.faction == f and mt.locale == l and mt.race == r
+            and mt.raceSex == s and mt.pool == p
+    end
+    -- The shared profile of these values (hint: the row's previous one, compared
+    -- before any key string is built), or nil when one value cannot be shared.
+    local function intern(c, f, l, r, s, p, hint)
+        if infoRowsNamedForSave then return nil end
+        if hint and hint.__newindex == profileWrite and holds(hint, c, f, l, r, s, p) then
+            return hint
+        end
+        if not (plainValue(c) and plainValue(f) and plainValue(l) and plainValue(r)
+            and plainValue(s) and plainValue(p)) then return nil end
+        local key = (c or "\2") .. "\1" .. (f or "\2") .. "\1" .. (l or "\2") .. "\1"
+            .. (r or "\2") .. "\1" .. (s or "\2") .. "\1" .. (p or "\2")
+        local mt = profiles[key]
+        -- Verified field by field: a key collision (a value holding the separator,
+        -- 2 and "2") only costs an unshared profile.
+        if mt and holds(mt, c, f, l, r, s, p) then return mt end
+        -- One table is both the metatable and the values it serves (8 slots).
+        mt = { class = c, faction = f, locale = l, race = r, raceSex = s, pool = p,
+            __newindex = profileWrite }
+        mt.__index = mt
+        if not profiles[key] then profiles[key] = mt end
+        return mt
+    end
+    -- Fires for every field the row does not hold itself: the six (another
+    -- profile) and a new row field (stored in the row, as before).
+    profileWrite = function(t, k, v)
+        if not INFO_PROFILE_FIELD[k] then rawset(t, k, v); return end
+        local cur = getmetatable(t)
+        if cur[k] == v then return end
+        local c, f, l, r, s, p = cur.class, cur.faction, cur.locale, cur.race, cur.raceSex, cur.pool
+        if k == "class" then c = v elseif k == "faction" then f = v elseif k == "locale" then l = v
+        elseif k == "race" then r = v elseif k == "raceSex" then s = v else p = v end
+        local mt = intern(c, f, l, r, s, p)
+        if mt then setmetatable(t, mt); return end
+        materializeInfoRow(t)
+        rawset(t, k, v)
+    end
+    materializeInfoRow = function(t)
+        local mt = getmetatable(t)
+        if not (mt and mt.__newindex == profileWrite) then return t end
+        setmetatable(t, nil)
+        for k in pairs(INFO_PROFILE_FIELD) do
+            local x = mt[k]
+            if x ~= nil and rawget(t, k) == nil then rawset(t, k, x) end
+        end
+        return t
+    end
+    -- The compact copy of a named row, or the row itself (already compact, a guild
+    -- register holding none of the six, or a value that cannot be shared).
+    compactInfoRow = function(t)
+        if getmetatable(t) ~= nil then return t end
+        local c, f, l, r = rawget(t, "class"), rawget(t, "faction"), rawget(t, "locale"), rawget(t, "race")
+        local s, p = rawget(t, "raceSex"), rawget(t, "pool")
+        if c == nil and f == nil and l == nil and r == nil and s == nil and p == nil then return t end
+        local mt = intern(c, f, l, r, s, p)
+        if not mt then return t end
+        local row = { level = rawget(t, "level"), factionAt = rawget(t, "factionAt"),
+            guild = rawget(t, "guild"), guildAt = rawget(t, "guildAt"), guildAuth = rawget(t, "guildAuth"),
+            guildReplica = rawget(t, "guildReplica"), raceAt = rawget(t, "raceAt") }
+        for k, x in pairs(t) do
+            if not INFO_PROFILE_FIELD[k] and not INFO_ROW_FIELD[k] then row[k] = x end
+        end
+        -- A row holding none of its own fields stays named: next() keeps meaning empty.
+        if next(row) == nil then return t end
+        return setmetatable(row, mt)
+    end
+    -- A new row (the main setters): the same fields as the named constructor they
+    -- replace; prev is the row it replaces (its profile is reused when unchanged).
+    newInfoRow = function(container, prev, class, level, faction, factionAt, locale, guild,
+        guildAuth, guildReplica, guildAt, pool, race, raceSex, raceAt)
+        local mt = intern(class, faction, locale, race, raceSex, pool, prev and getmetatable(prev))
+        local row = { level = level, factionAt = factionAt, guild = guild, guildAt = guildAt,
+            guildAuth = guildAuth, guildReplica = guildReplica, raceAt = raceAt }
+        if mt and next(row) ~= nil then
+            compactInfoContainers[container] = true
+            return setmetatable(row, mt)
+        end
+        row.class, row.faction, row.locale, row.race, row.raceSex, row.pool =
+            class, faction, locale, race, raceSex, pool
+        return row
+    end
+    infoRowIsEmpty = function(t)
+        if next(t) ~= nil then return false end
+        local mt = getmetatable(t)
+        if not (mt and mt.__newindex == profileWrite) then return true end
+        for k in pairs(INFO_PROFILE_FIELD) do
+            if mt[k] ~= nil then return false end
+        end
+        return true
+    end
+end
+
+-- prev: the entry published before for this identity (or nil). When every value
+-- it would publish is the one prev holds, prev itself is returned: entries are
+-- never written in place, so the same table is the same entry for every reader
+-- (and the ladder snapshot keeps sharing it). A rebuild over an unchanged ladder
+-- then allocates no entry at all. An unchanged profile is compared before any
+-- lookup (no key string is built for it).
+local function publishMeta(self, w, src, prev)
     local class = w.class
     if class ~= "" and class ~= "UNKNOWN" then
         class = self:NormalizeClassTokenForDisplay(class) or ""
     end
-    -- Guild register only (a GI heartbeat of an Overlord user never ranked): 3 to 5
-    -- fields instead of 14 (4-8 hash slots, about 500 B less per such player). Every
-    -- reader takes a missing field as its empty value; guild stays even when "".
+    local auth, replica = w.guildAuth and true or nil, w.guildReplica and true or nil
+    local p = prev and rawget(prev, 2)
+    -- Guild register only (a GI heartbeat of an Overlord user never ranked): src,
+    -- guild and guildAt; every reader takes a missing field as its empty value.
     if class == "" and w.level == 0 and w.faction == "" and w.locale == ""
         and w.race == "" and w.pool == "" then
-        local entry = { guild = w.guild, guildAt = w.guildAt, src = src }
-        if w.guildAuth then entry.guildAuth = true end
-        if w.guildReplica then entry.guildReplica = true end
-        return entry
+        if not (p and p[1] == nil and p[2] == nil and p[3] == nil and p[4] == nil
+            and p[5] == nil and p[6] == nil and p[7] == auth and p[8] == replica) then
+            p = internMetaProfile(nil, nil, nil, nil, nil, nil, auth, replica)
+        elseif rawget(prev, 1) == src and rawget(prev, 3) == nil and rawget(prev, 4) == w.guild
+            and rawget(prev, 5) == w.guildAt and rawget(prev, 6) == nil and rawget(prev, 7) == nil then
+            return prev
+        end
+        return setmetatable({ src, p, nil, w.guild, w.guildAt }, META_MT)
     end
-    return {
-        class = class, level = w.level, faction = w.faction, locale = w.locale,
-        guild = w.guild, guildAt = w.guildAt, guildAuth = w.guildAuth,
-        guildReplica = w.guildReplica, race = w.race, raceSex = w.raceSex,
-        raceAt = w.raceAt, raceKey = w.raceKey, pool = w.pool, src = src,
-    }
+    local faction, locale, race, raceSex, pool = w.faction, w.locale, w.race, w.raceSex, w.pool
+    if not (p and p[1] == class and p[2] == faction and p[3] == locale and p[4] == race
+        and p[5] == raceSex and p[6] == pool and p[7] == auth and p[8] == replica) then
+        p = internMetaProfile(class, faction, locale, race, raceSex, pool, auth, replica)
+    end
+    local raceKey = w.raceKey
+    if raceKey == ((src and race ~= "") and src or "") then raceKey = nil end
+    if prev and rawget(prev, 2) == p and rawget(prev, 1) == src and rawget(prev, 3) == w.level
+        and rawget(prev, 4) == w.guild and rawget(prev, 5) == w.guildAt
+        and rawget(prev, 6) == w.raceAt and rawget(prev, 7) == raceKey then
+        return prev
+    end
+    if raceKey == nil then
+        return setmetatable({ src, p, w.level, w.guild, w.guildAt, w.raceAt }, META_MT)
+    end
+    return setmetatable({ src, p, w.level, w.guild, w.guildAt, w.raceAt, raceKey }, META_MT)
 end
 
 -- One row into a work entry: the deterministic joins of every identity field
@@ -984,9 +1240,9 @@ function Overlord.Leaderboard:RefreshIndexedMetaForName(playerName)
     if not dk or dk == "" then return false end
     local key = dk:lower()
     local current = index[key]
-    if current and current.src ~= playerName then return false end
+    if current and current[1] ~= playerName then return false end
     mergeMetaRow(self, resetMetaWork(metaRefreshWork), playerName, inf)
-    index[key] = publishMeta(self, metaRefreshWork, playerName)
+    index[key] = publishMeta(self, metaRefreshWork, playerName, current)
     if not current then NoteDedupCanonicalName(self, playerName) end
     markIndexedMetaMutation(self, playerName)
     return true
@@ -1048,7 +1304,7 @@ function Overlord.Leaderboard:GetHotPlayerClass(playerName)
     local dk = getDK and getDK(sync, playerName)
     local index = self._dedupMetaIndex
     local bucket = type(index) == "table" and dk and index[dk:lower()] or nil
-    local cls = bucket and bucket.class or ""
+    local cls = bucket and bucket[2][1] or ""
     if cls ~= "" and cls ~= "UNKNOWN" then return cls end
     local direct = self.playerInfo and self.playerInfo[playerName]
     cls = direct and direct.class or ""
@@ -1069,10 +1325,10 @@ function Overlord.Leaderboard:GetHotPlayerGuildState(playerName)
     local index = self._dedupMetaIndex
     local bucket = type(index) == "table" and dk and index[dk:lower()] or nil
     if bucket then
-        local guild = sanitizeGuildName(bucket.guild or "")
-        local guildAt = normalizeGuildAt(bucket.guildAt)
+        local guild = sanitizeGuildName(bucket[4] or "")
+        local guildAt = normalizeGuildAt(bucket[5])
         if guild ~= "" or guildAt > 0 then
-            return guild, guildAt, bucket.guildAuth == true
+            return guild, guildAt, bucket[2][7] == true
         end
     end
     local direct = self.playerInfo and self.playerInfo[playerName]
@@ -1121,6 +1377,9 @@ function Overlord.Leaderboard:RebuildDedupMetaIndex(yieldWork, onName)
     local getDK = sync and sync.GetCaptureContributorDedupKey
     local playerInfo = self.playerInfo or {}
     local index = {}
+    -- Entries published before (the live index, else the last dropped one): an
+    -- unchanged identity keeps its entry table (publishMeta).
+    local prev = self._dedupMetaIndex or self._dedupMetaReuse or {}
     -- Work entries only for identities with several rows (rare on Forever).
     local work = {}
     local scratch = resetMetaWork({})
@@ -1148,6 +1407,18 @@ function Overlord.Leaderboard:RebuildDedupMetaIndex(yieldWork, onName)
         if n == nil then break end
         if yieldWork then yieldWork() end
         if onName and inf then onName(n) end
+        -- A named row (a save just loaded, a row written in place) becomes compact
+        -- here: same values, the table of this name only is replaced. Only the row
+        -- still in place: one a setter replaced while this pass yielded is newer
+        -- (the journal replays it), its stale copy must never be written back.
+        if type(inf) == "table" and getmetatable(inf) == nil and playerInfo[n] == inf then
+            local compact = compactInfoRow(inf)
+            if compact ~= inf then
+                playerInfo[n] = compact
+                inf = compact
+                compactInfoContainers[playerInfo] = true
+            end
+        end
         if inf then
             local dk = (getDK and getDK(sync, n)) or n
             if dk and dk ~= "" then
@@ -1159,13 +1430,14 @@ function Overlord.Leaderboard:RebuildDedupMetaIndex(yieldWork, onName)
                     local published = index[k]
                     if not published then
                         mergeMetaRow(self, resetMetaWork(scratch), n, inf)
-                        index[k] = publishMeta(self, scratch, n)
+                        index[k] = publishMeta(self, scratch, n, prev[k])
                     else
                         -- Second row of this identity: replay the first one into a
                         -- full work entry, its tie-break scratch is needed from now on.
                         w = resetMetaWork({})
-                        local first = published.src and playerInfo[published.src]
-                        if type(first) == "table" then mergeMetaRow(self, w, published.src, first) end
+                        local src = published[1]
+                        local first = src and playerInfo[src]
+                        if type(first) == "table" then mergeMetaRow(self, w, src, first) end
                         mergeMetaRow(self, w, n, inf)
                         work[k] = w
                     end
@@ -1177,7 +1449,7 @@ function Overlord.Leaderboard:RebuildDedupMetaIndex(yieldWork, onName)
 
     for k, w in pairs(work) do
         if yieldWork then yieldWork() end
-        index[k] = publishMeta(self, w, false)
+        index[k] = publishMeta(self, w, false, prev[k])
     end
 
     -- Rows re-derived while this pass yielded: the pass may already have read
@@ -1196,9 +1468,9 @@ function Overlord.Leaderboard:RebuildDedupMetaIndex(yieldWork, onName)
             local dk = (getDK and getDK(sync, name)) or name
             local k = dk and dk ~= "" and dk:lower()
             local current = k and index[k]
-            if type(row) == "table" and k and (not current or current.src == name) then
+            if type(row) == "table" and k and (not current or current[1] == name) then
                 mergeMetaRow(self, resetMetaWork(scratch), name, row)
-                index[k] = publishMeta(self, scratch, name)
+                index[k] = publishMeta(self, scratch, name, current or prev[k])
             elseif k then
                 self._dedupMetaEpoch = (self._dedupMetaEpoch or 0) + 1
             end
@@ -1207,6 +1479,7 @@ function Overlord.Leaderboard:RebuildDedupMetaIndex(yieldWork, onName)
     metaRebuildJournals[journal] = nil
 
     self._dedupMetaIndex = index
+    self._dedupMetaReuse = nil
     -- A freshly built index may differ from the meta the display copied: drop the copy.
     self._displayMetaCache = nil
     self._displayMetaGen = (self._displayMetaGen or 0) + 1
@@ -1297,7 +1570,7 @@ function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
             and self.captureCount == captureSource and self.captures == capturesSource
             and self.playerInfo == playerInfoSource and dedupHardEpoch == hardEpoch) then
             noteHotIndexOutcome(self, "abortedOther")
-            self._dedupMetaIndex = nil
+            self:_DropDedupMetaIndex()
             return false
         end
         self._networkHotPlayerInfoSource = playerInfoSource
@@ -1382,7 +1655,7 @@ function Overlord.Leaderboard:RebuildNetworkHotIndexes(yieldWork, owner)
         and self.playerInfo == playerInfoSource and dedupHardEpoch == hardEpoch
     if not journalKept or (sourcesChanged() and not onlyMetaDrift) then
         noteHotIndexOutcome(self, "abortedOther")
-        self._dedupMetaIndex = nil
+        self:_DropDedupMetaIndex()
         return false
     end
     if onlyMetaDrift then
@@ -1547,6 +1820,27 @@ end
 
 -- Tas borne dont la racine est la pire ligne retenue. positions ne contient au
 -- maximum que K cles : aucune map temporaire proportionnelle au ladder.
+-- 2.2.2 memory: the display meta of a name is { class, faction, race, raceSex },
+-- never written (a change publishes another array). Equal arrays are one shared
+-- table: a few hundred instead of one per ranked name (~120 B each, 5,000 names).
+-- Weak values: an array no view holds any more is collected.
+local displayMetaArrays = setmetatable({}, { __mode = "v" })
+local function internDisplayMeta(class, faction, race, raceSex)
+    local key
+    if type(class) == "string" and type(faction) == "string" and type(race) == "string"
+        and type(raceSex) == "number" and raceSex == raceSex then
+        key = class .. "\1" .. faction .. "\1" .. race .. "\1" .. raceSex
+        local shared = displayMetaArrays[key]
+        if shared and shared[1] == class and shared[2] == faction and shared[3] == race
+            and shared[4] == raceSex then
+            return shared
+        end
+    end
+    local array = { class, faction, race, raceSex }
+    if key and not displayMetaArrays[key] then displayMetaArrays[key] = array end
+    return array
+end
+
 local function newDisplayTopK(limit)
     return { limit = limit, rows = {}, positions = {} }
 end
@@ -1630,9 +1924,19 @@ local function displayCacheSourcesMatch(cache, lb)
         and cache.playerInfoSource == lb.playerInfo
 end
 
+-- 2.3.0: in an instance the view is built only for an open ranking window (/ov lb stays
+-- allowed there). A build left running when the window closed for a battleground, or the
+-- deferred one behind it, stops at the door; the next refresh outside starts again.
+function Overlord.Leaderboard:IsDisplayBuildHeldByInstance()
+    if not Overlord.InstanceSuspended then return false end
+    local ui = Overlord.LeaderboardUI
+    return not (ui and ui.IsShown and ui:IsShown())
+end
+
 function Overlord.Leaderboard:StartDisplayCacheBuild()
     if self._storageBound ~= true then return false end
     if self._displayCacheBuildPending then return false end
+    if self:IsDisplayBuildHeldByInstance() then return false end
     if not C_Timer or not C_Timer.After then return false end
     -- An incoming LK can invalidate metadata before a sliced build finishes.
     -- Pace attempts as well as completed builds while an older view is usable;
@@ -1723,9 +2027,10 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         local dk = dedupKey(name)
         local bucket = dk and state.metaIndex and state.metaIndex[dk]
         if bucket then
-            return bucket.class or "", bucket.faction or "", bucket.guild or "",
-                bucket.race or "", tonumber(bucket.raceSex) or 0,
-                bucket.locale or "", bucket.pool or ""
+            local p = bucket[2]
+            return p[1] or "", p[2] or "", bucket[4] or "",
+                p[4] or "", tonumber(p[5]) or 0,
+                p[3] or "", p[6] or ""
         end
         return "", "", "", "", 0, "", ""
     end
@@ -1733,7 +2038,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
     -- Capture heap of an identity, by its dedup key (computed once per row by the caller).
     local function captureTopForKey(dk)
         local bucket = dk and state.metaIndex and state.metaIndex[dk]
-        local faction = bucket and bucket.faction
+        local faction = bucket and bucket[2][2]
         if faction == "Alliance" then return state.allianceTop end
         if faction == "Horde" then return state.hordeTop end
         return nil
@@ -1754,7 +2059,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             self:RebuildDedupMetaIndex(yieldWork)
             if state.metaEpoch ~= (self._dedupMetaEpoch or 0) then
                 -- Une mutation pendant le scan invalide la publication partielle de l'index.
-                self._dedupMetaIndex = nil
+                self:_DropDedupMetaIndex()
                 state.aborted = true
                 return
             end
@@ -1880,8 +2185,8 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                 -- A canonical name's dedup key is this key, so its meta is metaIndex[key]:
                 -- read it directly instead of deriving the key again from the name.
                 local bucket = state.metaIndex[key]
-                faction = bucket and bucket.faction or ""
-                guild = bucket and bucket.guild or ""
+                faction = bucket and bucket[2][2] or ""
+                guild = bucket and bucket[4] or ""
             else
                 name = key
                 local _
@@ -1911,9 +2216,11 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                     m.count = m.count + 1
                     local names, kills = m.names, m.kills
                     local n = #kills
-                    if n < 10 or count > kills[n] then
+                    -- (Equal totals by name: every client shows the same ten, in the same order.)
+                    if n < 10 or count > kills[n] or (count == kills[n] and name < names[n]) then
                         local pos = (n < 10) and (n + 1) or n
-                        while pos > 1 and kills[pos - 1] < count do
+                        while pos > 1 and (kills[pos - 1] < count
+                            or (kills[pos - 1] == count and names[pos - 1] > name)) do
                             kills[pos], names[pos] = kills[pos - 1], names[pos - 1]
                             pos = pos - 1
                         end
@@ -1953,7 +2260,8 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         local guildZones = {}
         forEach(ratingCaptures, function(key, count)
             local info = state.metaIndex[key]
-            local guild = info and info.guild
+            local guild = info and info[4]
+            local faction = info and info[2][2]
             count = count - (siteByCapturer[key] or 0)
             if count > 0 and type(guild) == "string" and guild ~= "" then
                 local guildKey = guild:lower()
@@ -1965,8 +2273,8 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                     row.guild = guild
                 end
                 row.zones = row.zones + count
-                if info.faction == "Horde" then row._fac = row._fac + count
-                elseif info.faction == "Alliance" then row._fac = row._fac - count end
+                if faction == "Horde" then row._fac = row._fac + count
+                elseif faction == "Alliance" then row._fac = row._fac - count end
             end
         end)
         local sortedGuildRating = {}
@@ -2056,7 +2364,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
                 and old[3] == race and old[4] == raceSex then
                 meta[name] = old
             else
-                meta[name] = { class, faction, race, raceSex }
+                meta[name] = internDisplayMeta(class, faction, race, raceSex)
             end
             localeTag = sanitizeLocaleTag(localeTag)
             if localeTag ~= "" then
@@ -2073,20 +2381,14 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         -- Ranked players per faction, counted here so the panel's info line does not
         -- walk the whole ladder again in one frame. Local view only, never saved.
         local rankedAlliance, rankedHorde = 0, 0
-        -- Short names counted in the same walk of the rows (one pass instead of two).
-        local duplicateShortNames = {}
+        -- (2.3.0: no more count of players per short name: nothing read it since 1.0, and it
+        -- held a key per ranked player, about 0.25 MB at 3,000 players.)
         for _, row in ipairs(sortedKills) do
             touch(row.name)
             local m = meta[row.name]
             if m then
                 if m[2] == "Alliance" then rankedAlliance = rankedAlliance + 1
                 elseif m[2] == "Horde" then rankedHorde = rankedHorde + 1 end
-            end
-            local name = type(row.name) == "string" and row.name or ""
-            local short = name:match("^(.-)%-") or name
-            if short ~= "" then
-                local key = short:lower()
-                duplicateShortNames[key] = (duplicateShortNames[key] or 0) + 1
             end
             yieldWork()
         end
@@ -2106,7 +2408,6 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             rankedHorde = rankedHorde,
             meta = meta,
             locale = locale,
-            duplicateShortNames = duplicateShortNames,
             epoch = state.epoch,
             campaignStart = state.campaignStart,
             pool = state.pool,
@@ -2151,6 +2452,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         if self.kills ~= state.killSource or self.captureCount ~= state.captureCountSource
             or self.captures ~= state.capturesSource or self.playerInfo ~= state.playerInfoSource
             or (self._dedupMetaEpoch or 0) ~= state.metaEpoch
+            or self:IsDisplayBuildHeldByInstance()
             -- The name index invalidated or republished; a new name alone is not one.
             or (state.canonicalIndex and (not dedupCanonicalValid
                 or dedupCanonicalIndex ~= state.canonicalIndex
@@ -2227,7 +2529,7 @@ function Overlord.Leaderboard:EnsureDisplayCache()
         empty = {
             sortedKills = {}, byFaction = { Alliance = {}, Horde = {} }, sortedGuilds = {},
             sortedGuildRating = {},
-            alliKills = 0, hordeKills = 0, meta = {}, locale = {}, duplicateShortNames = {},
+            alliKills = 0, hordeKills = 0, meta = {}, locale = {},
             ready = false,
             campaignStart = self:GetCurrentCampaignStart(),
             pool = Overlord.GetCurrentLeaderboardSavedVarsPool
@@ -2384,7 +2686,7 @@ function Overlord.Leaderboard:RestoreDisplayCache()
     local cache = {
         sortedKills = {}, sortedGuilds = {}, byFaction = { Alliance = {}, Horde = {} },
         sortedGuildRating = {},
-        meta = {}, locale = {}, duplicateShortNames = {},
+        meta = {}, locale = {},
         alliKills = saved.alliKills, hordeKills = saved.hordeKills,
         campaignStart = saved.campaignStart, scoreBucketEpoch = saved.scoreBucketEpoch,
         pool = saved.pool, savedAt = saved.at,
@@ -2398,7 +2700,7 @@ function Overlord.Leaderboard:RestoreDisplayCache()
         if type(meta) ~= "table" or not text(meta[1], 32) or not text(meta[2], 16)
             or not text(meta[3], 64) or not count(meta[4]) or meta[4] > 3
             or not text(locale, 32) then return false end
-        cache.meta[name] = { meta[1], meta[2], meta[3], meta[4] }
+        cache.meta[name] = internDisplayMeta(meta[1], meta[2], meta[3], meta[4])
         cache.locale[name] = locale
         return true
     end
@@ -2410,8 +2712,6 @@ function Overlord.Leaderboard:RestoreDisplayCache()
             or (Overlord.Sync and Overlord.Sync.IsDeniedKillContributor
                 and Overlord.Sync:IsDeniedKillContributor(row.name)) then return nil end
         cache.sortedKills[i] = { name = row.name, kills = row.kills }
-        local short = (row.name:match("^(.-)%-") or row.name):lower()
-        cache.duplicateShortNames[short] = (cache.duplicateShortNames[short] or 0) + 1
     end
     for _, faction in ipairs({"Alliance", "Horde"}) do
         local rows = saved.byFaction[faction]
@@ -2868,6 +3168,7 @@ function Overlord.Leaderboard:Initialize(loadFromDB)
     local loadedBucket = loadFromDB ~= false and OverlordDB and OverlordDB.leaderboard
     -- 1.8.0: the copy of the previous week (no reader) leaves old saves.
     if OverlordDB then OverlordDB.leaderboardPreviousCampaigns = nil end
+    self:NormalizeLoadedSnapshotMeta()
     if loadedBucket then
         self.kills = loadedBucket.kills or {}
         self.captures = loadedBucket.captures or {}
@@ -3333,23 +3634,20 @@ function Overlord.Leaderboard:ForceUpdateLocalPlayer(playerName, class, faction)
             raceAt = leaderboardServerNow()
         end
     end
-    self.playerInfo[playerName] = {
-        class = class or "",
-        level = Overlord.SafeUnitLevel and (Overlord:SafeUnitLevel("player") or 0) or 0,
-        faction = faction or "",
-        factionAt = leaderboardServerNow(),
-        locale = locTag,
-        guild = guildTag,
-        guildAuth = not keepReplica
-            and (identity ~= nil or (prev and prev.guildAuth == true)) or nil,
-        guildReplica = keepReplica or (identity == nil and prev
-            and prev.guildReplica == true) or nil,
-        guildAt = guildAt,
-        pool = poolTag,
-        race = raceFile,
-        raceSex = raceSex,
-        raceAt = raceAt,
-    }
+    self.playerInfo[playerName] = newInfoRow(self.playerInfo, prev,
+        class or "",
+        Overlord.SafeUnitLevel and (Overlord:SafeUnitLevel("player") or 0) or 0,
+        faction or "",
+        leaderboardServerNow(),
+        locTag,
+        guildTag,
+        not keepReplica and (identity ~= nil or (prev and prev.guildAuth == true)) or nil,
+        keepReplica or (identity == nil and prev and prev.guildReplica == true) or nil,
+        guildAt,
+        poolTag,
+        raceFile,
+        raceSex,
+        raceAt)
     if not prev then NoteDedupCanonicalName(self, playerName) end
     if previousFaction ~= (faction or "") and self:IsLocalFactionAlias(playerName) then
         self._localFactionAliasRevision =
@@ -3400,7 +3698,7 @@ end
 local function lbMergeTwoPlayerInfoRows(self, bestKey, otherKey)
     local iT = self.playerInfo[bestKey] or {}
     local iO = self.playerInfo[otherKey] or {}
-    if not next(iO) and not next(iT) then return end
+    if infoRowIsEmpty(iO) and infoRowIsEmpty(iT) then return end
     local fT = normalizeMetadataEpoch(iT.factionAt)
     local fO = normalizeMetadataEpoch(iO.factionAt)
     local factionT = (iT.faction == "Alliance" or iT.faction == "Horde") and iT.faction or ""
@@ -3459,21 +3757,10 @@ local function lbMergeTwoPlayerInfoRows(self, bestKey, otherKey)
     else
         mergedPool = pT
     end
-    self.playerInfo[bestKey] = {
-        class = mergedClass,
-        level = mergedLevel,
-        faction = mergedFaction,
-        factionAt = mergedFactionAt,
-        locale = mergedLocale or "",
-        guild = mergedGuild,
-        guildAuth = mergedGuildAuth or nil,
-        guildReplica = mergedGuildReplica or nil,
-        guildAt = mergedGuildAt,
-        pool = mergedPool,
-        race = mergedRace or "",
-        raceSex = mergedRaceSex,
-        raceAt = mergedRaceAt,
-    }
+    self.playerInfo[bestKey] = newInfoRow(self.playerInfo, self.playerInfo[bestKey],
+        mergedClass, mergedLevel, mergedFaction, mergedFactionAt, mergedLocale or "",
+        mergedGuild, mergedGuildAuth or nil, mergedGuildReplica or nil, mergedGuildAt,
+        mergedPool, mergedRace or "", mergedRaceSex, mergedRaceAt)
     self.playerInfo[otherKey] = nil
 end
 
@@ -3530,9 +3817,8 @@ function Overlord.Leaderboard:SetPlayerLocale(playerName, localeTag)
     if tag == "" then return end
     local prev = self.playerInfo[playerName]
     if not prev then
-        self.playerInfo[playerName] = {
-            class = "", faction = "", factionAt = 0, locale = tag, guild = "", pool = "",
-        }
+        self.playerInfo[playerName] = newInfoRow(self.playerInfo, nil,
+            "", nil, "", 0, tag, "", nil, nil, nil, "", nil, nil, nil)
         NoteDedupCanonicalName(self, playerName)
     else
         -- Locale inchangee : ne pas invalider l'index meta (appele sur quasi chaque K/LK/LC,
@@ -3776,21 +4062,11 @@ function Overlord.Leaderboard:SetPlayerInfo(playerName, class, faction, localeOp
     local prevAuth = prev and prev.guildAuth == true
     local prevReplica = prev and prev.guildReplica == true
     local poolKeep = normalizeSavedVarsPool((prev and prev.pool) or "")
-    self.playerInfo[playerName] = {
-        class = class,
-        level = (prev and math.floor(tonumber(prev.level) or 0)) or 0,
-        faction = newFaction,
-        factionAt = factionAt,
-        locale = locKeep,
-        guild = guildKeep,
-        guildAuth = prevAuth or nil,
-        guildReplica = prevReplica or nil,
-        guildAt = guildAtKeep,
-        pool = poolKeep,
-        race = (prev and prev.race) or "",
-        raceSex = (prev and tonumber(prev.raceSex)) or 0,
-        raceAt = (prev and tonumber(prev.raceAt)) or 0,
-    }
+    self.playerInfo[playerName] = newInfoRow(self.playerInfo, prev,
+        class, (prev and math.floor(tonumber(prev.level) or 0)) or 0, newFaction, factionAt,
+        locKeep, guildKeep, prevAuth or nil, prevReplica or nil, guildAtKeep, poolKeep,
+        (prev and prev.race) or "", (prev and tonumber(prev.raceSex)) or 0,
+        (prev and tonumber(prev.raceAt)) or 0)
     if not prev then NoteDedupCanonicalName(self, playerName) end
     if ((not prev and newFaction ~= "")
         or (prev and prev.faction ~= newFaction))
@@ -3825,8 +4101,12 @@ end
 
 -- Migration : tokens de classe mal formates en SavedVariables (casse, espaces, import).
 function Overlord.Leaderboard:NormalizePlayerInfoClassTokens(yieldWork)
-    for _, info in pairs(self.playerInfo or {}) do
+    local rows = self.playerInfo or {}
+    for name in pairs(rows) do
         if yieldWork then yieldWork() end
+        -- Re-read after the yield: a meta index rebuild may have replaced a named
+        -- row by its compact copy meanwhile, a write into the old table is lost.
+        local info = rows[name]
         if info and info.class and info.class ~= "" then
             local c = self:NormalizeClassTokenForDisplay(info.class)
             if c and c ~= "UNKNOWN" then
@@ -3870,9 +4150,8 @@ function Overlord.Leaderboard:SetPlayerFaction(playerName, faction, forceLocal)
         if faction >= prev.faction then return end
     end
     if not prev then
-        self.playerInfo[playerName] = {
-            class = "", faction = faction, factionAt = leaderboardServerNow(), locale = "", guild = "", pool = "",
-        }
+        self.playerInfo[playerName] = newInfoRow(self.playerInfo, nil,
+            "", nil, faction, leaderboardServerNow(), "", "", nil, nil, nil, "", nil, nil, nil)
         NoteDedupCanonicalName(self, playerName)
         -- Nouvelle entree meta : invalider l'index.
         self:MarkPlayerMetaDirty(playerName)
@@ -3914,9 +4193,8 @@ function Overlord.Leaderboard:SetPlayerClassFromSync(playerName, classToken)
         if norm >= prev.class then return end
     end
     if not prev then
-        self.playerInfo[playerName] = {
-            class = norm, faction = "", factionAt = 0, locale = "", guild = "", pool = "",
-        }
+        self.playerInfo[playerName] = newInfoRow(self.playerInfo, nil,
+            norm, nil, "", 0, "", "", nil, nil, nil, "", nil, nil, nil)
         NoteDedupCanonicalName(self, playerName)
         self:MarkPlayerMetaDirty(playerName)
     else
@@ -3952,10 +4230,8 @@ function Overlord.Leaderboard:SetPlayerLevel(playerName, level)
     if level < 1 or level > 90 then return false end
     local prev = self.playerInfo[playerName]
     if not prev then
-        self.playerInfo[playerName] = {
-            class = "", level = level, faction = "", factionAt = 0,
-            locale = "", guild = "", pool = "",
-        }
+        self.playerInfo[playerName] = newInfoRow(self.playerInfo, nil,
+            "", level, "", 0, "", "", nil, nil, nil, "", nil, nil, nil)
         NoteDedupCanonicalName(self, playerName)
     else
         -- Monotone dans une campagne : un niveau ne baisse pas en une semaine, et
@@ -3982,10 +4258,7 @@ function Overlord.Leaderboard:MergeLeaderboardKillMetadata(
     local changed = false
     local factionChanged = false
     if type(row) ~= "table" then
-        row = {
-            class = "", level = 0, faction = "", factionAt = 0,
-            locale = "", guild = "", guildAt = 0, pool = "",
-        }
+        row = newInfoRow(self.playerInfo, nil, "", 0, "", 0, "", "", nil, nil, 0, "", nil, nil, nil)
         self.playerInfo[playerName] = row
         NoteDedupCanonicalName(self, playerName)
         changed = true
@@ -4203,9 +4476,10 @@ function Overlord.Leaderboard:GetExportPlayerRace(playerName)
     local dk = getDK and sync:GetCaptureContributorDedupKey(playerName) or playerName
     if dk and self:EnsureDedupMetaIndex() then
         local b = self._dedupMetaIndex[dk:lower()]
-        if b and b.race and b.race ~= "" then
-            fallbackRace = b.race
-            fallbackSex = tonumber(b.raceSex) or 0
+        local p = b and b[2]
+        if p and p[4] and p[4] ~= "" then
+            fallbackRace = p[4]
+            fallbackSex = tonumber(p[5]) or 0
         end
     end
     local pi = self:GetPlayerInfo(playerName)
@@ -4228,9 +4502,9 @@ local function PatchIndexedRaceDate(self, playerName, race, observedAt)
     local getDK = sync and sync.GetCaptureContributorDedupKey
     local dk = (getDK and getDK(sync, playerName)) or playerName
     local b = dk and dk ~= "" and index[dk:lower()]
-    if not b or b.race ~= race or b.raceKey ~= tostring(playerName) then return false end
+    if not b or b[2][4] ~= race or metaRaceKey(b) ~= tostring(playerName) then return false end
     local ts = normalizeMetadataEpoch(observedAt)
-    if ts > (b.raceAt or -1) then
+    if ts > (rawget(b, 6) or -1) then
         b = copyPublishedMeta(index, dk:lower(), b)
         b.raceAt = ts
     end
@@ -4282,11 +4556,8 @@ function Overlord.Leaderboard:SetPlayerRace(
         if fromSync and observedAt == previousAt and normRace >= prev.race then return end
     end
     if not prev then
-        self.playerInfo[playerName] = {
-            class = "", faction = "", factionAt = 0, locale = "", guild = "", pool = "",
-            race = normRace, raceSex = sex,
-            raceAt = observedAt,
-        }
+        self.playerInfo[playerName] = newInfoRow(self.playerInfo, nil,
+            "", nil, "", 0, "", "", nil, nil, nil, "", normRace, sex, observedAt)
         NoteDedupCanonicalName(self, playerName)
     else
         prev.race = normRace
@@ -4328,8 +4599,11 @@ function Overlord.Leaderboard:HealPropagateClassAcrossDedupAliases(yieldWork)
     local updated = false
     -- Une seconde passe indexee suffit. L'ancien parcours faisait une passe
     -- playerInfo complete pour chaque cle dedup (O(N^2) au login).
-    for k, inf in pairs(self.playerInfo) do
+    for k in pairs(self.playerInfo) do
         if yieldWork then yieldWork() end
+        -- Re-read after the yield: a meta index rebuild may have replaced a named
+        -- row by its compact copy meanwhile, a write into the old table is lost.
+        local inf = self.playerInfo[k]
         if k and inf then
             local dkk = sync:GetCaptureContributorDedupKey(k)
             local rawBest = dkk and bestByDk[dkk:lower()]
@@ -4408,8 +4682,11 @@ function Overlord.Leaderboard:HealPropagateGuildAcrossDedupAliases(yieldWork)
         end
     end
     local updated = false
-    for k, inf in pairs(self.playerInfo) do
+    for k in pairs(self.playerInfo) do
         if yieldWork then yieldWork() end
+        -- Re-read after the yield: a meta index rebuild may have replaced a named
+        -- row by its compact copy meanwhile, a write into the old table is lost.
+        local inf = self.playerInfo[k]
         if k and inf then
             local dkk = sync:GetCaptureContributorDedupKey(k)
             if dkk then
@@ -4479,8 +4756,9 @@ function Overlord.Leaderboard:GetExportPlayerMeta(playerName)
 
     if dk and self:EnsureDedupMetaIndex() then
         local b = self._dedupMetaIndex[dk:lower()]
-        if b and (b.faction == "Alliance" or b.faction == "Horde") then
-            local bestClass, bestFaction = b.class or "", b.faction or ""
+        local p = b and b[2]
+        if p and (p[2] == "Alliance" or p[2] == "Horde") then
+            local bestClass, bestFaction = p[1] or "", p[2]
             if bestClass == "" then
                 return "", bestFaction
             elseif bestClass ~= "UNKNOWN" then
@@ -4521,11 +4799,7 @@ function Overlord.Leaderboard:MaybeEnrichGuildForKillRow(playerName, deferDirty)
     local row = self.playerInfo[playerName]
     local changed = false
     if type(row) ~= "table" then
-        row = {
-            class = "", level = 0, faction = "", factionAt = 0,
-            locale = "", guild = "", guildAt = 0, pool = "",
-            race = "", raceSex = 0, raceAt = 0,
-        }
+        row = newInfoRow(self.playerInfo, nil, "", 0, "", 0, "", "", nil, nil, 0, "", "", 0, 0)
         self.playerInfo[playerName] = row
         NoteDedupCanonicalName(self, playerName)
         changed = true
@@ -5056,6 +5330,12 @@ function Overlord.Leaderboard:HasOutpostEventOfFactionSince(siteKey, faction, af
 end
 
 -- This capture is the newest tenant the ledger holds for the site.
+-- (2.2.2) The ledger's newest tenant of the site, checked (nil when none).
+function Overlord.Leaderboard:GetOutpostLedgerTenant(siteKey)
+    local tenants = self:GetOutpostTenantsTable()
+    return getValidOutpostTenantRow(self, siteKey, tenants and tenants[siteKey])
+end
+
 function Overlord.Leaderboard:IsOutpostLedgerTenant(siteKey, guild, faction, claimedAt)
     local tenants = self:GetOutpostTenantsTable()
     local t = getValidOutpostTenantRow(self, siteKey, tenants and tenants[siteKey])
@@ -5783,6 +6063,9 @@ function Overlord.Leaderboard:GetOutpostWeeklyStats()
                     r = { taker = cur.guild, takerFaction = cf, victim = prev.guild, victimFaction = pf, count = 0 }
                     byPair[pairKey] = r
                 end
+                -- (One spelling whatever the order the sites come in.)
+                if cur.guild < r.taker then r.taker = cur.guild end
+                if prev.guild < r.victim then r.victim = prev.guild end
                 r.count = r.count + 1
             end
         end
@@ -6107,6 +6390,10 @@ function Overlord.Leaderboard:OpenAtomicWeeklyBucket(archiveEpoch, resetEpoch, c
     self._snapshotBuildPending = nil
     self:ResolveSnapshotCompletion(false, "weekly reset")
     self:MarkMetaDirty()
+    -- The new week starts empty: nothing of the old index can be reused, and the
+    -- name memo (pure, up to 32768 names) mostly holds last week's players.
+    self._dedupMetaReuse = nil
+    if Overlord.Sync then Overlord.Sync._nameMemo = nil end
     if Overlord.LifetimeStats and Overlord.LifetimeStats.OnAtomicWeeklyBucketOpened then
         Overlord.LifetimeStats:OnAtomicWeeklyBucketOpened()
     end
@@ -6483,7 +6770,8 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
         -- the entry holds them already normalized. Entries carry no factionAt: a row
         -- restored from the snapshot gets 0 there (an older date, the safe side of the
         -- pool tie-break); src and raceKey, unused by every reader of the saved copy,
-        -- are stripped at logout (SlimSavedSnapshotForLogout).
+        -- are stripped at logout (SlimSavedSnapshotForLogout). The shared entries are
+        -- arrays read by name through their metatable (publishMeta).
         for name in pairs(kept) do
             local entry = state.metaIndex[GetKillDedupKey(name)]
             local info = entry or (state.playerInfoSource and state.playerInfoSource[name])
@@ -6649,7 +6937,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
                 elseif state.phase == "captures" then
                     local name = state.canonicalIndex[key] or key
                     local info = state.metaIndex[key]
-                    local faction = type(info) == "table" and info.faction or ""
+                    local faction = type(info) == "table" and info[2][2] or ""
                     local heap = faction == "Alliance" and state.capHeapAlliance
                         or faction == "Horde" and state.capHeapHorde
                         or state.capHeapUnknown
@@ -6685,14 +6973,69 @@ end
 -- PLAYER_LOGOUT only, as its last write: the saved snapshot shares the live meta index
 -- entries, whose src and raceKey (and an empty pool, read as "" anyway) no reader of
 -- the saved copy uses. About a quarter of the snapshot text, parsed at every login.
--- In place: the Lua state ends with this event.
+-- 2.2.2: a shared entry is an array (see publishMeta) and is saved as the same named
+-- table as before; other entries are slimmed in place (the Lua state ends here).
 function Overlord.Leaderboard:SlimSavedSnapshotForLogout()
     local snapshot = OverlordDB and OverlordDB.leaderboardSnapshot
     if type(snapshot) ~= "table" or type(snapshot.playerInfo) ~= "table" then return end
-    for _, entry in pairs(snapshot.playerInfo) do
+    local info = snapshot.playerInfo
+    for name, entry in pairs(info) do
         if type(entry) == "table" then
-            entry.src, entry.raceKey = nil, nil
-            if entry.pool == "" then entry.pool = nil end
+            if isMetaEntryArray(entry) then
+                info[name] = savedMetaCopy(entry)
+            else
+                entry.src, entry.raceKey = nil, nil
+                if entry.pool == "" then entry.pool = nil end
+            end
+        end
+    end
+end
+
+-- PLAYER_LOGOUT: compact playerInfo rows (see newInfoRow) back to named rows, the
+-- only form the SavedVariables writer can see whole (it ignores metatables). Every
+-- table that may hold one: the registered ones, the live ladder, every pool bucket
+-- and a weekly archive still pending. The Lua state ends here.
+function Overlord.Leaderboard:MaterializePlayerInfoForLogout()
+    infoRowsNamedForSave = true
+    self:MaterializePlayerInfoRows()
+end
+
+-- The same write-back without the logout freeze (tests writing a save mid-session).
+function Overlord.Leaderboard:MaterializePlayerInfoRows()
+    local done = {}
+    local function materialize(rows)
+        if type(rows) ~= "table" or done[rows] then return end
+        done[rows] = true
+        for _, row in pairs(rows) do
+            if type(row) == "table" then materializeInfoRow(row) end
+        end
+    end
+    for rows in pairs(compactInfoContainers) do materialize(rows) end
+    materialize(self.playerInfo)
+    local db = OverlordDB
+    if type(db) ~= "table" then return end
+    if type(db.leaderboard) == "table" then materialize(db.leaderboard.playerInfo) end
+    if type(db.leaderboardsByPool) == "table" then
+        for _, bucket in pairs(db.leaderboardsByPool) do
+            if type(bucket) == "table" then materialize(bucket.playerInfo) end
+        end
+    end
+    local pending = db.pendingWeeklyArchive
+    if type(pending) == "table" and type(pending.bucket) == "table" then
+        materialize(pending.bucket.playerInfo)
+    end
+end
+
+-- A saved snapshot written without the logout slimming (an error earlier in the
+-- PLAYER_LOGOUT handler) holds raw entry arrays: give their readers the named
+-- tables back once, at load.
+function Overlord.Leaderboard:NormalizeLoadedSnapshotMeta()
+    local snapshot = OverlordDB and OverlordDB.leaderboardSnapshot
+    if type(snapshot) ~= "table" or type(snapshot.playerInfo) ~= "table" then return end
+    local info = snapshot.playerInfo
+    for name, entry in pairs(info) do
+        if type(entry) == "table" and getmetatable(entry) ~= META_MT and isMetaEntryArray(entry) then
+            info[name] = savedMetaCopy(entry)
         end
     end
 end
@@ -6774,22 +7117,20 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
         if type(name) == "string" and name ~= "" and type(info) == "table" then
             local current = self.playerInfo[name]
             if not current then
-                self.playerInfo[name] = {
-                class = snapshotClassOf(info),
-                faction = (info.faction == "Alliance" or info.faction == "Horde")
-                    and info.faction or "",
-                factionAt = math.max(0, math.floor(tonumber(info.factionAt) or 0)),
-                locale = sanitizeLocaleTag(info.locale),
-                guild = sanitizeGuildName(info.guild),
-                guildAuth = info.guildAuth == true or nil,
-                guildReplica = info.guildReplica == true or nil,
-                guildAt = type(info.guild) == "string" and normalizeGuildAt(info.guildAt) or 0,
-                pool = normalizeSavedVarsPool(info.pool),
-                race = snapshotRaceOf(info),
-                raceSex = snapshotRaceSexOf(info),
-                raceAt = math.max(0, math.floor(tonumber(info.raceAt) or 0)),
-                level = snapshotLevelOf(info),
-                }
+                self.playerInfo[name] = newInfoRow(self.playerInfo, nil,
+                    snapshotClassOf(info),
+                    snapshotLevelOf(info),
+                    (info.faction == "Alliance" or info.faction == "Horde") and info.faction or "",
+                    math.max(0, math.floor(tonumber(info.factionAt) or 0)),
+                    sanitizeLocaleTag(info.locale),
+                    sanitizeGuildName(info.guild),
+                    info.guildAuth == true or nil,
+                    info.guildReplica == true or nil,
+                    type(info.guild) == "string" and normalizeGuildAt(info.guildAt) or 0,
+                    normalizeSavedVarsPool(info.pool),
+                    snapshotRaceOf(info),
+                    snapshotRaceSexOf(info),
+                    math.max(0, math.floor(tonumber(info.raceAt) or 0)))
                 dirty = true
                 pcall(NoteDedupCanonicalName, self, name)
             else
@@ -6899,9 +7240,8 @@ function Overlord.Leaderboard:RegisterKill(playerName, fromSync)
         if poolTag ~= "" then
             local prev = self.playerInfo[playerName]
             if not prev then
-                self.playerInfo[playerName] = {
-                    class = "", faction = "", factionAt = 0, locale = "", guild = "", pool = poolTag,
-                }
+                self.playerInfo[playerName] = newInfoRow(self.playerInfo, nil,
+                    "", nil, "", 0, "", "", nil, nil, nil, poolTag, nil, nil, nil)
                 localPoolChanged = true
             else
                 if normalizeSavedVarsPool(prev.pool) ~= poolTag then
@@ -7140,6 +7480,9 @@ function Overlord.Leaderboard:MergeDuplicateLeaderboardKeysByDedup(yieldWork)
     -- Regroupe toutes les variantes en une seule passe. L'ancien code appelait
     -- MergeLeaderboardGroupForName (fallback O(N)) pour chaque groupe dont la
     -- premiere cle rencontree n'etait pas canonique : O(N^2) au pire au login.
+    -- A group is its only name (a string) until a second name arrives: two tables
+    -- per player were allocated for groups that are almost all single names. The
+    -- names of nameSet are distinct, so a second name is always a new alias.
     local groupsByDedup = {}
     for n in pairs(nameSet) do
         if yieldWork then yieldWork() end
@@ -7148,14 +7491,18 @@ function Overlord.Leaderboard:MergeDuplicateLeaderboardKeysByDedup(yieldWork)
             local dkKey = dk:lower()
             local group = groupsByDedup[dkKey]
             if not group then
-                group = { canonical = n, aliases = {}, count = 0 }
-                groupsByDedup[dkKey] = group
+                groupsByDedup[dkKey] = n
+            elseif type(group) == "string" then
+                groupsByDedup[dkKey] = {
+                    canonical = self:ChooseRicherPlayerName(group, n),
+                    aliases = { [group] = true, [n] = true }, count = 2,
+                }
             else
                 group.canonical = self:ChooseRicherPlayerName(group.canonical, n)
-            end
-            if not group.aliases[n] then
-                group.aliases[n] = true
-                group.count = group.count + 1
+                if not group.aliases[n] then
+                    group.aliases[n] = true
+                    group.count = group.count + 1
+                end
             end
         end
     end
@@ -7163,7 +7510,7 @@ function Overlord.Leaderboard:MergeDuplicateLeaderboardKeysByDedup(yieldWork)
     local merged = false
     for _, group in pairs(groupsByDedup) do
         if yieldWork then yieldWork() end
-        if group.count > 1 then
+        if type(group) == "table" and group.count > 1 then
             lbCollapseKeysIntoCanonical(self, group.canonical, group.aliases, yieldWork)
             merged = true
         end
@@ -7173,7 +7520,7 @@ function Overlord.Leaderboard:MergeDuplicateLeaderboardKeysByDedup(yieldWork)
         merged = true
     end
     if merged then
-        self._dedupMetaIndex = nil
+        self:_DropDedupMetaIndex()
     end
 end
 

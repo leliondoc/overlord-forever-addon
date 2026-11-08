@@ -1054,7 +1054,8 @@ function net:MapDiffDue(digest, sum, peerDigest, peerSum, origin, now, friend)
     return row
 end
 local heldForwards, heldCount = {}, { bridge = 0, group = 0 }
-local HELD_FORWARD_MAX = { bridge = 256, group = 128 }
+-- (2.2.2: group 256: whispered chain facts are held too, a busy raid filled 128.)
+local HELD_FORWARD_MAX = { bridge = 256, group = 256 }
 local function holdForward(key, p, mode)
     local hold = net.BridgeChannelHold or {}
     local lo, hi = tonumber(hold[1]) or 0, tonumber(hold[2]) or 0
@@ -1062,6 +1063,9 @@ local function holdForward(key, p, mode)
     if hi <= 0 or heldCount[mode] >= HELD_FORWARD_MAX[mode] then return false end
     -- Only a client with a channel is a bridge to it; elsewhere forward at once.
     if mode == "bridge" and not (sync.GetChannelId and sync:GetChannelId()) then return false end
+    -- 2.2.2: nor while the channel does not carry (the hold spaces bridges on a live channel).
+    local lane = addon.GuildLane
+    if mode == "bridge" and lane and lane.ChannelDown and lane:ChannelDown() then return false end
     -- Terminal events and urgent ones (siege start, active capture, call to arms)
     -- wait 1-4 s only: a Battle.net alert reached remote defenders ~8 s late.
     if isTerminal(p) or isUrgent(p) then lo, hi = math.min(lo, 1), math.min(hi, 4) end
@@ -1240,6 +1244,15 @@ function net:NoteDirectoryRoute(name)
     end
     return true
 end
+-- 2.2.2: the game said this player is offline ("no player named", SyncDirectory NoteUnreachable):
+-- a direct whisper route to it is no neighbour any more. Battle.net routes are left alone.
+function net:ForgetDirectRoute(name)
+    local key = canonical(name)
+    local row = key and self.peers[key:lower()]
+    if not row or row.bnet or row.transport ~= "WHISPER" then return false end
+    row.at = GetTime() - 301
+    return true
+end
 -- Secondes depuis le dernier paquet de ce pair (nil si inconnu ou perime).
 -- Catch-up is point-to-point since 1.2.4: a map, ranking or history exchange only
 -- runs between direct neighbours (same channel/group/whisper, or a Battle.net
@@ -1341,6 +1354,14 @@ function net:GetPeerRelease(name)
     local key = canonical(name)
     local row = key and pagedCapabilities[key:lower()]
     if not row or GetTime() - row.at > 300 then return nil end
+    return row.release
+end
+-- 2.2.2: the same, from a presence heard up to `maxAge` seconds ago (a release does not change
+-- under a running client; the ranking's wide rounds only need to know it is not older).
+function net:GetPeerReleaseWithin(name, maxAge)
+    local key = canonical(name)
+    local row = key and pagedCapabilities[key:lower()]
+    if not row or GetTime() - row.at > (tonumber(maxAge) or 300) then return nil end
     return row.release
 end
 function net:GetPeerPagedProtocol(name)
@@ -2043,7 +2064,7 @@ local function emit(task)
     local sent, reason
     if task.transport == "BNET" then sent = sync:SendToBNet(task.target, task.kind, task.data)
     elseif task.transport == "WHISPER" then sent = sync:SendWhisper(task.kind, task.data, task.target)
-    elseif task.transport == "GROUP" then sent = sync:SendToGroup(task.kind, task.data)
+    elseif task.transport == "GROUP" then sent, reason = sync:SendToGroup(task.kind, task.data)
     else
         -- /ov network: a relay copy is a BF fragment; count it under its real kind.
         sync._channelSendKind = tostring(task.packetKind or "?") .. "*"
@@ -2678,6 +2699,23 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         -- this packet came by: a neighbour when it came first-hand.
         previousRoute.directory = nil
     end
+    -- 2.2.2: a contact of the member list passing a broadcast on by whisper is online and reached
+    -- directly: its own route is refreshed (the game names it, the packet proves nothing else).
+    -- A quiet contact used to count as a stranger at the next hand, and the chain stopped there.
+    if transport == "WHISPER" and #p.path >= 2 then
+        local directory = addon.ChannelDirectory
+        local hop = canonical(sender)
+        if hop and directory and directory.KeepsContactAlive and directory:KeepsContactAlive(hop) then
+            local hopRow = self.peers[hop:lower()]
+            if not hopRow then
+                remember(self.peers, peerOrder, hop:lower(), { name = hop, at = GetTime(), via = hop,
+                    transport = "WHISPER", hops = 1 }, self.PEER_RING_LIMIT or PEER_RING, IsPagedSessionPeer)
+            elseif not hopRow.bnet and (hopRow.transport == "WHISPER" or GetTime() - hopRow.at > 300) then
+                hopRow.name, hopRow.at, hopRow.via, hopRow.transport, hopRow.bnet, hopRow.hops, hopRow.directory =
+                    hop, GetTime(), hop, "WHISPER", nil, 1, nil
+            end
+        end
+    end
     self.stats.received = self.stats.received + 1
     if retryForward then
         -- Already handled locally: skip delivery, capability and pulls.
@@ -2949,8 +2987,10 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         p.heardOn = transport
         -- A copy heard on the channel was heard by our group mates too (same realm,
         -- same faction): in a 40-man raid every hearer re-sent it to the raid.
+        -- 2.2.2: and a whispered copy (the chain whispers most of the list, a raid with it):
+        -- every holder re-sent it to the raid. Its group copy is held below, as the channel's.
         p.skipGroup = transport == "RAID" or transport == "PARTY" or transport == "CHANNEL"
-            or transport == "GUILD"
+            or transport == "GUILD" or transport == "WHISPER"
         -- 2.1.1: what the guild has heard is never said there again.
         p.skipGuild = transport == "GUILD"
         -- Whoever gave us a group copy either put it on the channel or got it from
@@ -2993,8 +3033,10 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
                 self.stats.routineForwardSkipped = (self.stats.routineForwardSkipped or 0) + 1
             end
         -- (2.1.1: a guild mate's copy too, for a client whose channel does work: it bridges.)
-        elseif (transport == "BNET" or transport == "GUILD") and p.target == "*" and p.kind ~= "NH"
-            and p.kind ~= "SH" and not p.skipChannel and holdForward(key, p, "bridge") then
+        -- (2.3.0: and a whispered one, the chain of a player whose channel is refused: every contact
+        -- it was whispered to put it on its working channel at once, a capture with the priority token.)
+        elseif (transport == "BNET" or transport == "GUILD" or transport == "WHISPER") and p.target == "*"
+            and p.kind ~= "NH" and p.kind ~= "SH" and not p.skipChannel and holdForward(key, p, "bridge") then
             forwarded = true
             self.stats.bridgeForwardsHeld = (self.stats.bridgeForwardsHeld or 0) + 1
             if routineKey then
@@ -3015,7 +3057,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         end
         -- Group mates without the channel still need a copy: one held group-only
         -- copy per hearer, dropped as soon as a mate's copy is heard in the group.
-        if (transport == "CHANNEL" or transport == "GUILD") and p.target == "*" and p.kind ~= "NH"
+        if (transport == "CHANNEL" or transport == "GUILD" or transport == "WHISPER") and p.target == "*" and p.kind ~= "NH"
             and p.kind ~= "SH" and IsInGroup() and not retryForward
             and (not sync.GroupCarries or sync:GroupCarries(p.kind, p.payload)) then
             local pg = { region = p.region, id = p.id, at = p.at, target = p.target, path = p.path,

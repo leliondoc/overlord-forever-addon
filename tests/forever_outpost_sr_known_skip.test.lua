@@ -8,6 +8,7 @@
 assert(loadfile("tests/forever_fortress_outpost.test.lua"))()
 local op, sync, lb = Overlord.Outpost, Overlord.Sync, Overlord.Leaderboard
 local NOW = 1790017000
+Overlord.ServerNow = function() return NOW end
 for key in pairs(Overlord.OutpostSites) do
     local st = op:GetState(key)
     st.status, st.ownerGuild, st.ownerFaction, st.heldCapturerName, st.heldCapturerGuild = "neutral", "", nil, nil, nil
@@ -90,6 +91,16 @@ if siege then
     local seen = false
     for _, item in ipairs(queue) do if item.data:find("^v%d+:crossroads:in_progress:") then seen = true end end
     assert(seen, "A site in progress was left out")
+    -- 2.2.2: an assault whose clock ran out long ago (abandoned, its release lost) is not served
+    -- any more, by either answer: every map shows it as its previous tenant anyway.
+    siege.updatedAt, siege.holdTimeElapsed = NOW - 3600, 0
+    for _, minimal in ipairs({ true, false }) do
+        queue = {}
+        sync:AppendOutpostToSrQueue(queue, minimal, minimal and { set = set, nonce = NONCE } or nil)
+        for _, item in ipairs(queue) do
+            assert(not item.data:find("^v%d+:crossroads:"), "An abandoned assault was served again")
+        end
+    end
     siege.status, siege.ownerGuild, siege.ownerFaction, siege.updatedAt = "neutral", "", nil, 0
 end
 print("Keep marks: the answer leaves out exactly the keeps held whole, never a missed capture or a siege")

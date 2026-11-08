@@ -802,7 +802,7 @@ function Overlord.Outpost:IsRecaptureTerminalAllowed(st, captureTs, site)
         baseClaimedAt = math.floor(tonumber(st.previousClaimedAt) or 0)
     end
     if baseClaimedAt <= 0 then return true end
-    captureTs = math.floor(tonumber(captureTs) or time())
+    captureTs = math.floor(tonumber(captureTs) or (Overlord.ServerNow and Overlord.ServerNow() or time()))
     return captureTs >= baseClaimedAt + self:GetMinimumHoldTimeRequired(site)
 end
 
@@ -914,7 +914,8 @@ function Overlord.Outpost:IsPlayerDefendingHeldOutpost(st)
     return true
 end
 
-function Overlord.Outpost:CanPlayerAssaultOutpostState(st)
+-- site: a fortress's assault is judged stale on its own hold time (600 s), not an outpost's.
+function Overlord.Outpost:CanPlayerAssaultOutpostState(st, site)
     if not st then return false end
     local guild = self:GetLocalPlayerGuild()
     if guild == "" or not Overlord.PlayerFaction then return false end
@@ -922,7 +923,7 @@ function Overlord.Outpost:CanPlayerAssaultOutpostState(st)
     if st.status == "held" then
         return self:CanPlayerContestOutpost(st)
     end
-    if st.status == "in_progress" and self:IsObserverOutpostCaptureStale(st) then
+    if st.status == "in_progress" and self:IsObserverOutpostCaptureStale(st, site) then
         -- Le bail d'affichage distant a expire. Gameplay local : raisonner sur
         -- son socle stable sans diffuser de faux revert observateur.
         local previousFaction = st.previousOwnerFaction
@@ -932,8 +933,8 @@ function Overlord.Outpost:CanPlayerAssaultOutpostState(st)
     return false
 end
 
-function Overlord.Outpost:CanPlayerStartCapture(st)
-    return self:CanPlayerAssaultOutpostState(st)
+function Overlord.Outpost:CanPlayerStartCapture(st, site)
+    return self:CanPlayerAssaultOutpostState(st, site)
 end
 
 function Overlord.Outpost:GetOutpostDisplayTenant(st, siteKey)
@@ -1161,7 +1162,12 @@ function Overlord.Outpost:ApplyOutpostRestoreZoneView(st, view, site)
     st.holdStartTime = nil
     local req = self:GetDefaultHoldTimeRequired(st, site)
     st.holdTimeElapsed = math.min(tonumber(view.holdTimeElapsed) or 0, req)
-    if view.status == "captured" then
+    -- (2.2.2) "captured" here only ever means "back to the previous tenant": an assault seen
+    -- at its required hold (or our own hold cut at 300/300) is no signed capture, so with no
+    -- previous tenant the site goes neutral; the ledger and the map tell who holds it.
+    -- Before, a /reload showed an unsigned holder nobody else saw, polled all week.
+    local previousTenant = sanitizeGuildName(st.previousOwnerGuild or "") ~= "" and st.previousOwnerFaction
+    if view.status == "captured" and previousTenant then
         st.status = "held"
         local pg = sanitizeGuildName(st.previousOwnerGuild or "")
         if pg ~= "" and st.previousOwnerFaction then
@@ -1310,6 +1316,10 @@ function Overlord.Outpost:CompleteCapture(siteKey, guild, faction, captureTs, ca
     -- network only accepts a claim its capturer made himself, see SyncOutpost).
     local heldCapturer = self:NormalizeHeldCapturerName(capturerName)
     if not heldCapturer then return false end
+    -- The tenant this capture takes the site from: its guild hears of the loss whatever the
+    -- other-guilds option (a final heard by OC named only the new tenant, hidden since 2.3.0).
+    local lostTenant = sanitizeGuildName((st.status == "held" and st.ownerGuild)
+        or (st.status == "in_progress" and st.previousOwnerGuild) or "")
     st.status = "held"
     st.ownerGuild = newGuild
     st.ownerFaction = faction
@@ -1340,7 +1350,7 @@ function Overlord.Outpost:CompleteCapture(siteKey, guild, faction, captureTs, ca
     if Overlord.SaveState then Overlord:SaveState() end
     self:RefreshOutpostPresentation(siteKey)
     if Overlord.Sync and Overlord.Sync.PrintOutpostCaptureAlert then
-        Overlord.Sync:PrintOutpostCaptureAlert(siteKey, st.ownerGuild, faction, now)
+        Overlord.Sync:PrintOutpostCaptureAlert(siteKey, st.ownerGuild, faction, now, lostTenant)
     end
     if not suppressLeaderboard and Overlord.Leaderboard and Overlord.Leaderboard.RecordOutpostCapture then
         Overlord.Leaderboard:RecordOutpostCapture(siteKey, st.ownerGuild, faction, now, capturePool, heldCapturer)
