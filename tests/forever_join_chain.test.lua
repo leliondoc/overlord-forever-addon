@@ -7,9 +7,8 @@
 --  (3) The next tries are the way out of an instance and a login, never a timer.
 --  (4) Wiring read in the source: one join call site, the event in both register lists,
 --      its branch behind the instance barrier.
---  (5) 2.0.8, where it lands: after 2 s of calm in the player's channel list, the free
---      numbers below their last channel are padded with hidden temporary channels for a
---      moment, so ours lands right after theirs; nothing of theirs moves.
+--  (5) 2.0.8, where it lands: after 2 s of calm in the player's channel list, so ours never
+--      takes a number of theirs (2.3.1: no temporary pad channels any more).
 assert(loadfile("tests/forever_beta_integration.test.lua"))()
 
 local sync = Overlord.Sync
@@ -313,31 +312,33 @@ local function seat(channels, reserved, seconds)
     pump(seconds or 20)
     return GetChannelName(channel), startedAt
 end
--- His character on the beta: a hole at /4 (and /3, /5 kept for Trade and Local Trade).
--- (9 s: joined and confirmed, the 15 s safety release not reached: the confirmation leaves them.)
+-- 2.3.1: no temporary pad channels any more. Ours waits for the player's list to be calm, then
+-- takes the lowest free number; nothing of the player's moves. (His character on the beta: a
+-- hole at /4, /3 and /5 kept for Trade and Local Trade.)
 local at, startedAt = seat({ [1] = "LocalDefense", [2] = "General" }, { [3] = "Trade", [5] = "TradeLocal" }, 9)
-assert(at == 6, "ours did not land after the player's channels: /" .. at)
+assert(at == 4, "ours did not take the lowest free number: /" .. at)
 assert(held[1] == "LocalDefense" and held[2] == "General" and kept[3] and kept[5], "a channel of the player moved")
-assert(#tempJoins == 1 and #left == 1 and left[1] == tempJoins[1],
-    "the pads were not all left: " .. #tempJoins .. "/" .. #left)
+assert(#tempJoins == 0 and #left == 0, "a pad was joined or a channel left: " .. #tempJoins .. "/" .. #left)
 assert(#joins == 1 and joins[1].at >= startedAt + 2, "our join did not wait for the calm list")
-for n, nm in pairs(held) do assert(not sync:IsChannelPad(nm), "a pad is still held at /" .. n) end
--- A new character: General, Trade kept, LocalDefense; ours after the five first numbers.
+-- A new character: General, Trade kept, LocalDefense.
 at = seat({ [1] = "General", [3] = "LocalDefense" }, { [2] = "Trade" })
-assert(at == 6 and held[1] == "General" and held[3] == "LocalDefense", "a new character's channels moved: /" .. at)
--- 2.2.1: never a burst. Pads, our join and the leaves one CHANNEL_OP_GAP apart at least.
+assert(at == 4 and held[1] == "General" and held[3] == "LocalDefense" and #tempJoins == 0,
+    "a new character's channels moved or a pad was joined: /" .. at)
+-- One channel operation for the whole chain that works: our join.
 do
-    local ops, quickTemp, quickJoin, quickLeave = {}, JoinTemporaryChannel, JoinChannelByName, LeaveChannelByName
-    JoinTemporaryChannel = function(nm) ops[#ops + 1] = now; return quickTemp(nm) end
+    local ops, quickJoin, quickLeave = {}, JoinChannelByName, LeaveChannelByName
     JoinChannelByName = function(nm) ops[#ops + 1] = now; return quickJoin(nm) end
     LeaveChannelByName = function(nm) ops[#ops + 1] = now; return quickLeave(nm) end
     at = seat({ [1] = "General", [3] = "LocalDefense" }, { [2] = "Trade" })
-    JoinTemporaryChannel, JoinChannelByName, LeaveChannelByName = quickTemp, quickJoin, quickLeave
-    assert(at == 6 and #tempJoins == 2 and #left == 2 and #ops == 5, "spaced seat: /" .. at .. ", " .. #ops .. " ops")
-    for k = 2, #ops do
-        assert(ops[k] - ops[k - 1] >= sync.CHANNEL_OP_GAP - 0.01, "two channel operations " .. (ops[k] - ops[k - 1]) .. " s apart")
-    end
-    for n, nm in pairs(held) do assert(not sync:IsChannelPad(nm), "a spaced pad is still held at /" .. n) end
+    JoinChannelByName, LeaveChannelByName = quickJoin, quickLeave
+    assert(at == 4 and #ops == 1, "a join that works made " .. #ops .. " channel operations")
+end
+-- The addon never joins a temporary channel again.
+for _, file in ipairs({ "Sync.lua", "SyncAux.lua", "SyncGuild.lua", "SyncDirectory.lua" }) do
+    local f = assert(io.open(file, "r"))
+    local text = f:read("*a")
+    f:close()
+    assert(not text:find("JoinTemporaryChannel", 1, true), file .. " joins a temporary channel")
 end
 -- 2.3.0: a chain refused earlier this session: the next one is one plain join, no pad, no leave.
 do
@@ -355,7 +356,7 @@ do
     assert(sync._joinChainFailures == 2 and sync._joinRetryAt and not sync._joinChannelAttemptPending,
         "the single join did not end its chain as refused")
     -- A login or /reload within 6 h of a refusal (only the saved date is left): one plain join too,
-    -- still after the calm wait; once it works, the refusal is forgotten and pads come back.
+    -- still after the calm wait; once it works, the refusal is forgotten (four tries again).
     assert(OverlordDB and OverlordDB.channelRefusedAt, "the refusal was not saved")
     JoinChannelByName = function(nm) joins[#joins + 1] = { name = nm, at = now } end
     pending, joins = {}, {}
@@ -379,6 +380,26 @@ do
     assert(not sync:ChannelRefusedLately(), "a refusal older than 6 h still counts")
     OverlordDB.channelRefusedAt = nil
 end
+-- 2.3.1: the join takes a number but the server refuses what we send there (live since
+-- 2026-11-05). That seat is no success: the next chain stays a single plain join, the wait grows,
+-- and the refusal is saved; a channel that carries again forgets it.
+do
+    pending, joins = {}, {}
+    sync._joinChannelAttemptPending, sync._channelSeat, sync._channelPads = nil, nil, nil
+    sync._joinChainFailures, sync._joinRetryAt, sync._channelRefusedAt = nil, nil, nil
+    OverlordDB.channelRefusedAt = nil
+    sync._channelRefusedAt = now    -- (SyncGuild NoteChannelRefused, tested in forever_guild_lane)
+    model({ [1] = "General", [3] = "LocalDefense" }, { [2] = "Trade" })
+    sync:JoinChannel()
+    pump(20)
+    assert(#joins == 1 and #tempJoins == 0 and #left == 0,
+        "a channel refusing our messages was joined with " .. #tempJoins .. " pads and " .. #left .. " leaves")
+    assert(numberOf(channel) > 0, "fixture: the join took a number")
+    assert(sync._joinChainFailures == 1 and sync._joinRetryAt and OverlordDB.channelRefusedAt,
+        "a seat in a channel refusing our messages counted as a success")
+    sync._channelRefusedAt, OverlordDB.channelRefusedAt = nil, nil
+    sync._joinChainFailures, sync._joinRetryAt = nil, nil
+end
 -- Every number up to the player's last one taken: no pad at all.
 at = seat({ [1] = "General", [2] = "LocalDefense", [3] = "A", [4] = "B", [5] = "C", [6] = "Mine" })
 assert(at == 7 and #tempJoins == 0, "pads joined with no hole to fill")
@@ -392,38 +413,17 @@ sync._joinChannelAttemptPending = nil
 sync:JoinChannel()
 pump(20)
 assert(#joins == 0 and #tempJoins == 0 and GetChannelName(channel) == 4, "a joined channel was moved")
--- An instance in the middle of the seat: pads left, no join.
+-- An instance in the middle of the calm wait: no join.
 model({ [1] = "LocalDefense", [2] = "General" }, { [3] = "Trade", [5] = "TradeLocal" })
 pending, joins = {}, {}
 sync._joinChannelAttemptPending, sync._channelSeat, sync._channelPads = nil, nil, nil
 sync:JoinChannel()
-pump(2.2)
-assert(#tempJoins == 1, "fixture: the pads were not joined before the instance")
+pump(1)
 Overlord.InstanceSuspended = true
 pump(20)
 Overlord.InstanceSuspended = false
-assert(#joins == 0 and #left == 1 and GetChannelName(channel) == 0, "an instance let the seat join or keep its pads")
--- A slow server: our join is only numbered 4 s later. The pads stay until it is confirmed,
--- so ours still lands behind the player's channels, and they go at the confirmation.
-model({ [1] = "LocalDefense", [2] = "General" }, { [3] = "Trade", [5] = "TradeLocal" })
-pending, joins = {}, {}
-sync._joinChannelAttemptPending, sync._channelSeat, sync._channelPads = nil, nil, nil
-local quickJoin = JoinChannelByName
-JoinChannelByName = function(nm)
-    joins[#joins + 1] = { name = nm, at = now }
-    if numberOf(nm) > 0 then return end
-    C_Timer.After(4, function() if numberOf(nm) == 0 then held[lowestFree()] = nm end end)
-end
-local joinStart = now
-sync:JoinChannel()
-pump(5.6)   -- calm 2 s, pads 0.5 s, our join, its first check at +3 s: not numbered yet
-assert(#left == 0 and #tempJoins == 1, "the pads were left before our join was confirmed")
-pump(20)
-JoinChannelByName = quickJoin
-assert(GetChannelName(channel) == 6 and #left == 1, "a slow join landed in the hole or kept its pads: /"
-    .. GetChannelName(channel) .. ", left " .. #left)
-assert(now > joinStart, "fixture: time did not move")
--- Pads left behind by a /reload are swept at start.
+assert(#joins == 0 and GetChannelName(channel) == 0, "an instance let the seat join")
+-- Pads of 2.0.8-2.3.0 left by a /reload after the update are still swept at start.
 model({ [1] = "LocalDefense", [2] = "General", [4] = "OvPadabc1231" })
 sync:ReleaseChannelPads(true)
 assert(not held[4] and left[1] == "OvPadabc1231", "a pad left by a /reload was not swept")
@@ -443,15 +443,9 @@ assert(not sync:IsChannelPad("OvPadabc") and not sync:IsChannelPad("OvPadzzzzzz1
 canaccessvalue = function(v) return v ~= "OvPad0a1b2c3" end
 assert(not sync:IsChannelPad("OvPad0a1b2c3"), "a protected name was read")
 canaccessvalue = nil
--- A pad name somebody else holds with a password: pads left, our channel is not closed.
-model({ [1] = "LocalDefense" })
-sync._channelPads = { "OvPadabc1231" }
-held[2] = "OvPadabc1231"
-sync:OnChannelJoinRefused("OvPadabc1231")
-assert(not held[2] and not sync:IsChannelClosed(), "a refused pad closed our channel or stayed")
-
 -- 2.2.0: a pad whose leave the server refused ("you are going too fast", seen in game
 -- 2026-11-06) is swept by the 60 s ticker, once no join is under way; never during a seat.
+-- (2.3.1: only a pad left by 2.3.0 or older can still be there.)
 model({ [1] = "LocalDefense", [5] = "OvPad296c3f1" })
 held[6] = channel
 sync._joinChannelAttemptPending, sync._channelPads = nil, nil

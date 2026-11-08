@@ -871,22 +871,12 @@ end
 -- 2.0.8: where our channel lands. The game never saves it (chat-cache.txt keeps server
 -- channels only): every login joins it again, and a join takes the lowest free number.
 -- Joined before the server channels, it took their numbers: they slid, the game saved the
--- slide and the player's colours (one per number) moved (report 2026-10-18). Joined into
--- a hole an earlier slide left, it sat above the player's own channels. Two steps before
--- the join, from JoinChannel's first try:
---  1. the player's channel list (GetChannelList) is read every second until it is the
---     same three times in a row (2 s of calm), 30 s at most as before;
---  2. every free number up to the player's last channel (5 at least: the server channels
---     of a new character) gets a temporary, hidden channel for a few seconds, so ours
---     lands right after the player's channels; they are left once ours is confirmed.
--- Checked in game on 2026-10-21 (beta): a temporary channel takes a free number and skips
--- the numbers the game keeps for Trade and Local Trade outside a city, says nothing in
--- the chat, and its leaving keeps those numbers; ours then joined at /6 behind
--- [1. LocalDefense] [2. General] (3 and 5 kept), and Trade was /3 again in the city.
--- Nothing is swapped, no colour is touched, nothing is saved. A channel of ours already
--- joined is never moved.
-Overlord.Sync.CHANNEL_SEAT_FLOOR = 5
-Overlord.Sync.CHANNEL_SEAT_MAX_PADS = 6
+-- slide and the player's colours (one per number) moved (report 2026-10-18). So the join waits
+-- for the player's channel list (GetChannelList) to be the same three times in a row, read every
+-- second (2 s of calm), 30 s at most. A channel of ours already joined is never moved.
+-- 2.3.1: the temporary "pad" channels (2.0.8-2.3.0) that filled the free numbers below the
+-- player's last channel are gone: only a matter of number, they cost up to a dozen channel joins
+-- and leaves per try, and the game answers those with a red "You're doing that too fast".
 -- 2.2.1: seconds between two channel joins or leaves of ours. Joined or left in one go, the
 -- pads met the server's "you are going too fast" at login (seen 2026-11-06, the game's own
 -- channels joining at the same moment), and a pad stayed; a channel whose join is cut that way
@@ -950,13 +940,20 @@ end
 Overlord.Sync.CHANNEL_REFUSED_MEMORY = 6 * 3600
 
 function Overlord.Sync:ChannelRefusedLately()
-    if (tonumber(self._joinChainFailures) or 0) > 0 then return true end
+    -- (2.3.1: the server refusing what we send there counts too, SyncGuild NoteChannelRefused.)
+    if (tonumber(self._joinChainFailures) or 0) > 0 or self._channelRefusedAt then return true end
     local at = OverlordDB and tonumber(OverlordDB.channelRefusedAt)
     local clock = type(time) == "function" and time() or nil
     return at ~= nil and clock ~= nil and clock >= at and clock - at < self.CHANNEL_REFUSED_MEMORY
 end
 
 function Overlord.Sync:NoteJoinChainEnd(seated)
+    -- 2.3.1: a seat in a channel whose server refuses what we send is no success. Live since
+    -- 2026-11-05: the join takes a number, our messages are refused (code 7, NOT_MEMBER) and the
+    -- channel goes; counted a success, it cleared the backoff and the saved refusal, and the
+    -- 60 s ticker ran the whole chain (pads, join, leaves) every minute: 21 channel operations in
+    -- 10 min on his client the day 2.3.0 came out.
+    if seated and self._channelRefusedAt then seated = false end
     if seated then
         self._joinChainFailures, self._joinRetryAt = 0, nil
         if OverlordDB then OverlordDB.channelRefusedAt = nil end
@@ -972,8 +969,8 @@ function Overlord.Sync:JoinRetryHeld()
     return (self._joinRetryAt or 0) > GetTime()
 end
 
--- Exactly the names JoinChannelPads gives ("OvPad" .. 6 hex .. a digit); a protected
--- value is never read.
+-- Exactly the names the pads of 2.0.8-2.3.0 had ("OvPad" .. 6 hex .. a digit; one may outlive a
+-- /reload after the update); a protected value is never read.
 function Overlord.Sync:IsChannelPad(name)
     if type(name) ~= "string" or (canaccessvalue and not canaccessvalue(name)) then return false end
     return name:upper():find("^OVPAD%x%x%x%x%x%x%d$") ~= nil
@@ -1013,59 +1010,6 @@ function Overlord.Sync:ReadPlayerChannels()
         end
     end
     return table.concat(parts, ","), used, top
-end
-
--- Free numbers below the player's last channel, or nil when nothing should be padded.
-function Overlord.Sync:ChannelSeatHoles()
-    if type(JoinTemporaryChannel) ~= "function" then return nil end
-    local _, used, top = self:ReadPlayerChannels()
-    top = math.max(top, self.CHANNEL_SEAT_FLOOR)
-    local max = Constants and Constants.ChatFrameConstants
-        and tonumber(Constants.ChatFrameConstants.MaxChatChannels) or 20
-    if top + 1 > max then return nil end
-    local holes = {}
-    for n = 1, top do
-        if not used[n] and (tonumber((GetChannelName(n))) or 0) == 0 then holes[#holes + 1] = n end
-    end
-    if #holes == 0 or #holes > self.CHANNEL_SEAT_MAX_PADS then return nil end
-    return holes
-end
-
-function Overlord.Sync:JoinChannelPads(count)
-    -- Unpredictable per session (the clock mixed in, whatever the RNG seed): a squatter
-    -- cannot guess a pad name to answer it with a password.
-    self._channelPadSalt = self._channelPadSalt or string.format("%06x", (math.random(0, 16777215)
-        + math.floor((GetTime and GetTime() or 0) * 1000) + (time and time() or 0)) % 16777216)
-    self._channelPads = self._channelPads or {}
-    local pads, gap = self._channelPads, self.CHANNEL_OP_GAP
-    local first = #pads + 1
-    for k = 1, count do pads[#pads + 1] = "OvPad" .. self._channelPadSalt .. k end
-    -- 2.2.1: one join every CHANNEL_OP_GAP, never a burst; 2.2.2: spaced from every other
-    -- channel operation of ours and kept off a zone change (TakeChannelOp).
-    local function step(k)
-        local sync = Overlord.Sync
-        if not sync or sync._channelPads ~= pads or Overlord.InstanceSuspended or not pads[k] then return end
-        if not sync:TakeChannelOp() then
-            C_Timer.After(math.max(0.1, sync:ChannelOpWait()), function() step(k) end)
-            return
-        end
-        securecall(JoinTemporaryChannel, pads[k], nil, 0)
-        sync:NoteChannelOp("join pad")
-        if pads[k + 1] then C_Timer.After(gap, function() step(k + 1) end) end
-    end
-    step(first)
-    -- Safety: this seat's pads only (a later seat keeps its own).
-    C_Timer.After(15 + self.CHANNEL_ZONE_QUIET + (count - 1) * gap, function()
-        local sync = Overlord.Sync
-        if sync and sync._channelPads == pads then sync:ReleaseChannelPads() end
-    end)
-end
-
-function Overlord.Sync:ChannelPadsSeated()
-    for _, name in ipairs(self._channelPads or {}) do
-        if (tonumber((GetChannelName(name))) or 0) <= 0 then return false end
-    end
-    return true
 end
 
 -- Leaves our pads; sweep = also any pad left by a /reload in the middle of a seat (a
@@ -1132,37 +1076,16 @@ function Overlord.Sync:ChannelSeatStep(generation)
         if seat.stable < 2 and seat.samples < 30 then
             delay = 1
         else
-            -- 2.3.0: no pads once the channel was refused lately (Sync:JoinChannel).
-            local holes = not self._joinChainLight and self:ChannelSeatHoles()
-            if holes then
-                self:JoinChannelPads(#holes)
-                -- (Polls cover the pads joined one CHANNEL_OP_GAP apart.)
-                seat.phase, seat.polls, delay = "pads", 0, 0.5
-                seat.maxPolls = 10 + math.ceil((#holes - 1) * self.CHANNEL_OP_GAP / 0.5)
-            else
-                seat.phase = "go"
-                return true
-            end
-        end
-    else
-        -- 2.2.2: the pads wait out a zone change (TakeChannelOp); so does their budget.
-        if self:ChannelZoneQuiet() then seat.polls = seat.polls + 1 end
-        if self:ChannelPadsSeated() or seat.polls >= (seat.maxPolls or 10) then
-            -- 2.2.1: our join one CHANNEL_OP_GAP after the last pad, not in its wake.
-            seat.phase, delay = "go", self.CHANNEL_OP_GAP
-        else
-            delay = 0.5
+            seat.phase = "go"
+            return true
         end
     end
     C_Timer.After(delay, function()
         local sync = Overlord.Sync
         if not sync or sync._joinChannelAttemptPending ~= generation then
-            -- A newer seat may hold pads of its own: only an idle client drops them.
-            if sync and not sync._joinChannelAttemptPending then sync:ReleaseChannelPads() end
             return
         end
         if Overlord.InstanceSuspended then
-            sync:ReleaseChannelPads()
             sync._joinChannelAttemptPending = nil
             return
         end
