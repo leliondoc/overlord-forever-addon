@@ -157,6 +157,8 @@ function sync:NoteChannelRefused(why)
     self._channelLastRefusalAt = at
     self._channelRefusedWhy = why
     lane.stats.refusals = lane.stats.refusals + 1
+    -- 2.3.1: remembered across a /reload or a login too (Sync:ChannelRefusedLately).
+    if OverlordDB and type(time) == "function" then OverlordDB.channelRefusedAt = time() end
     if self._channelRefusedAt then return end
     self._channelRefusedAt = at
     self._channelSilence = nil
@@ -170,6 +172,7 @@ end
 function sync:NoteChannelReopened()
     if not self._channelRefusedAt then return end
     self._channelRefusedAt, self._channelRefusedWhy = nil, nil
+    if OverlordDB then OverlordDB.channelRefusedAt = nil end
     self._channelSilence, self._channelHeardAt = nil, nil
     lane.probeGeneration = (lane.probeGeneration or 0) + 1
     lane.stats.reopened = lane.stats.reopened + 1
@@ -1032,7 +1035,7 @@ function lane:Describe()
     local at, stats = now(), self.stats
     local channel, short
     if sync._channelRefusedAt then
-        channel, short = "channel refused by the server (tried again every 5 min)", "channel refused"
+        channel, short = "channel refused by the server", "channel refused"
     elseif not sync:GetJoinedChannelId() then
         channel = sync._joinChannelAttemptPending and "joining the channel" or "channel not joined"
     elseif sync:IsChannelSilent() then

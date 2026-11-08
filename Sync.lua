@@ -654,8 +654,8 @@ function Overlord.Sync:Initialize()
         pcall(syncFrame.RegisterEvent, syncFrame, "CHANNEL_PASSWORD_REQUEST")
         pcall(syncFrame.RegisterEvent, syncFrame, "CHAT_MSG_CHANNEL_NOTICE")
         pcall(syncFrame.RegisterEvent, syncFrame, "CHAT_MSG_CHANNEL_NOTICE_USER")
-        -- Seat pads left by a /reload in the middle of a join (a temporary channel
-        -- outlives a /reload): swept once the network is set up, outside instances only,
+        -- Seat pads of 2.0.8-2.3.0 left by a /reload (a temporary channel outlives a
+        -- /reload, not a logout): swept once the network is set up, outside instances only,
         -- and never able to stop the rest of the start.
         if self.ReleaseChannelPads then pcall(self.ReleaseChannelPads, self, true) end
     end
@@ -702,20 +702,17 @@ function Overlord.Sync:JoinChannel(attempt, generation)
         end
     end
     if attempt > (self._joinChainLight and 1 or 4) then
-        self:ReleaseChannelPads()
         FinishJoinAttempt()
         if self.NoteJoinChainEnd then self:NoteJoinChainEnd(false) end
         return
     end
-    -- 2.0.8: where it lands (SyncAux ChannelSeatStep). The player's channels first (their
-    -- list calm for 2 s, 30 s at most), then their free numbers padded for a moment, so
-    -- ours never takes a number of theirs nor sits in a hole above them.
-    -- An unexpected error in the seat never holds the join: pads left, plain join.
+    -- 2.0.8: where it lands (SyncAux ChannelSeatStep): after the player's channels (their
+    -- list calm for 2 s, 30 s at most), so ours never takes a number of theirs.
+    -- An unexpected error in the seat never holds the join: plain join.
     if attempt == 1 then
         local seated, go = pcall(self.ChannelSeatStep, self, generation)
         if seated and not go then return end
         if not seated then
-            pcall(self.ReleaseChannelPads, self)
             if self._channelSeat and self._channelSeat.generation == generation then
                 self._channelSeat.phase = "go"
             end
@@ -746,9 +743,6 @@ function Overlord.Sync:JoinChannel(attempt, generation)
         end
         local id = GetChannelName(ChannelName())
         if id and id > 0 then
-            -- Our number is taken: the pads go now (only now: a later try still lands
-            -- behind them; the 15 s safety timer, attempt > 4 and Suspend cover the rest).
-            Overlord.Sync:ReleaseChannelPads()
             FinishJoinAttempt()
             if Overlord.Sync.NoteJoinChainEnd then Overlord.Sync:NoteJoinChainEnd(true) end
             -- (2.0.2: after the truce's retirement, one neighbour heard as updated instead
@@ -783,17 +777,11 @@ end
 -- never a timer. Any other channel's request is none of our business.
 function Overlord.Sync:OnChannelJoinRefused(name)
     if canaccessvalue and not canaccessvalue(name) then return end
-    -- One of our seat pads (a name somebody else holds): leave them all, join as is.
-    if self:IsChannelPad(name) then
-        self:ReleaseChannelPads()
-        return
-    end
     if type(name) ~= "string" or name:upper() ~= ChannelName():upper() then return end
     if (GetChannelName(ChannelName()) or 0) > 0 then return end
     if priv.channelClosed then return end
     priv.channelClosed = true
     self._joinChannelAttemptPending = nil
-    self:ReleaseChannelPads()
     if not priv.channelClosedTold then
         priv.channelClosedTold = true
         Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. ((L and L.CHANNEL_CLOSED_NOTICE)
@@ -12216,7 +12204,6 @@ function Overlord.Sync:Suspend()
     syncResponseInFlight = false
     priv.syncResponseDeadline = 0
     self:StopChannelRetryLoop()
-    self:ReleaseChannelPads()
     self:StopPeriodicChannelSync()
     self:StopPassiveSync()
     self:StopProximityRescan()
