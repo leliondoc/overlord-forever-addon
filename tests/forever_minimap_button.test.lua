@@ -90,6 +90,12 @@ local filters = menu()
 builders.MENU_WORLD_MAP_TRACKING(nil, filters)
 local radios = filters.radios
 assert(radios.full and radios.compact and radios.hidden, "Map filter modes missing")
+-- 2.3.2: the map corner button can be hidden from the same menu.
+assert(filters.checkbox and filters.checkbox.get() == true, "Map button checkbox missing from the Filters menu")
+filters.checkbox.set()
+assert(OverlordDB.config.mapModeButtonHidden == true and filters.checkbox.get() == false, "Filters menu did not hide the map button")
+filters.checkbox.set()
+assert(OverlordDB.config.mapModeButtonHidden == nil and filters.checkbox.get() == true, "Filters menu did not bring the map button back")
 assert(radios.compact.get() and not radios.full.get(), "Compact display should be the default (1.8.2)")
 radios.compact.set()
 assert(OverlordDB.config.showMapZoneTitles == false and OverlordDB.config.showWorldMapOverlays ~= false
@@ -100,8 +106,16 @@ assert(markers:GetNextWorldMapDisplayMode() == "compact")
 radios.full.set()
 assert(OverlordDB.config.showWorldMapOverlays == true and OverlordDB.config.showMapZoneTitles == true
     and radios.full.get(), "Filter did not restore the full display")
+assert(markers:GetNextWorldMapDisplayMode() == "circles")
+-- 2.3.2: circles only (compact without the names in the circles), between full and hidden.
+assert(radios.circles, "Circles only missing from the map filters")
+radios.circles.set()
+assert(OverlordDB.config.showMapZoneTitles == false and OverlordDB.config.mapCircleNamesHidden == true
+    and OverlordDB.config.showWorldMapOverlays ~= false and radios.circles.get() and not radios.compact.get(),
+    "Circles only did not keep the map on with the names off")
 assert(markers:GetNextWorldMapDisplayMode() == "hidden")
 radios.compact.set()
+assert(OverlordDB.config.mapCircleNamesHidden == nil and radios.compact.get(), "Compact kept circles only")
 assert(markers:GetNextWorldMapDisplayMode() == "full", "From the default display one click must give the banners")
 radios.full.set()
 assert(markers:SetWorldMapDisplayMode("bogus") == false and radios.full.get())

@@ -1161,6 +1161,10 @@ function Overlord.Sync:OnReceiveMining(payload, sender)
     elseif factionCode == "H" then senderFaction = "Horde" end
 
     if not senderFaction or senderFaction == Overlord.PlayerFaction then return end
+    -- 2.3.2: the player's zone by default, like capture alerts (hidden: no cooldown taken).
+    if Overlord.ShouldShowPlaceAlert and not Overlord:ShouldShowPlaceAlert(mine.mapID, false, mine.mapIDs) then
+        return
+    end
 
     local p = self:GetPriv()
     if not p then return end

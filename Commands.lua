@@ -910,11 +910,20 @@ local function CommandHandler(msg)
         if Overlord.GuildKillAlert then Overlord.GuildKillAlert:HandleCommand(args) end
 
     elseif cmd == "map" or cmd == "carte" then
-        -- /ov map : mode suivant (complet, compact, masque) ; /ov map compact|full|off : ce mode.
+        -- /ov map : mode suivant (complet, compact, cercles seuls, masque) ;
+        -- /ov map compact|full|circles|off : ce mode.
+        -- /ov map button : affiche ou masque le bouton du coin de la carte (2.3.2).
         local mm = Overlord.MapMarkers
-        if mm and mm.SetWorldMapDisplayMode then
+        local sub = string.lower(args[2] or "")
+        if (sub == "button" or sub == "bouton") and mm and mm.SetMapModeButtonShown then
+            local shown = not mm:IsMapModeButtonShown()
+            mm:SetMapModeButtonShown(shown)
+            Overlord:PrintNotification("[Overlord] " .. (shown and (L.MAP_BUTTON_SHOWN or "Map button shown.")
+                or (L.MAP_BUTTON_HIDDEN or "Map button hidden. To bring it back: the map's Filters menu, the options or /ov map button.")))
+        elseif mm and mm.SetWorldMapDisplayMode then
             local named = ({ full = "full", on = "full", complet = "full", compact = "compact",
-                hidden = "hidden", off = "hidden", masque = "hidden" })[string.lower(args[2] or "")]
+                circles = "circles", cercles = "circles",
+                hidden = "hidden", off = "hidden", masque = "hidden" })[sub]
             mm:SetWorldMapDisplayMode(named or mm:GetNextWorldMapDisplayMode())
             Overlord:PrintNotification("[Overlord] " .. string.format(L.MAP_MODE_STATUS or "World map display: %s",
                 mm.GetWorldMapModeText(mm:GetWorldMapDisplayMode())))

@@ -1186,8 +1186,9 @@ local function OutpostCapturingFactionLabel(fac)
     return fac or ""
 end
 
--- 1.8.0: outpost alerts follow the player's continent, unless one of the guilds
--- named is the player's own (case-insensitive) or the worldwide option is on.
+-- 1.8.0: outpost alerts follow the player's continent (2.3.2: zone by default, see
+-- Overlord:GetAlertScope), unless one of the guilds named is the player's own
+-- (case-insensitive) or the option widens them.
 -- 2.3.0: keeps and outposts of other guilds (assault, defence, capture) only with the
 -- "other guilds" option on (player feedback: a busy evening filled the chat).
 local function OutpostAlertVisible(siteKey, ...)
@@ -1213,7 +1214,7 @@ local function OutpostAlertVisible(siteKey, ...)
         if not (cfg and cfg.otherGuildSiteAlerts == true) then return false end
     end
     local site = OP and OP.GetSite and OP:GetSite(siteKey)
-    return Overlord:ShouldShowPlaceAlert(site and site.mapID, always)
+    return Overlord:ShouldShowPlaceAlert(site and site.mapID, always, site and site.mapIDs)
 end
 
 local function ResetOutpostAssaultAlert(siteKey)

@@ -125,6 +125,19 @@ markers.LayoutZoneArcName(point, 90, 150, false)
 assert(#shown(point) == 0, "the curved name stayed under the banner")
 markers.LayoutZoneArcName(point, 90, 150, true)
 assert(#shown(point) == 6, "the curved name did not come back after the banner")
+-- 2.3.2, circles only: no name in the circle (its banner stays under the mouse); a mine's
+-- reserve (a text of its own) stays written; back to compact, the name comes back.
+OverlordDB.config.mapCircleNamesHidden = true
+assert(markers:GetWorldMapDisplayMode() == "circles", "circles only not reported as such")
+markers.LayoutZoneArcName(point, 90, 150, true)
+assert(#shown(point) == 0, "the curved name stayed on the circles-only map")
+local reserve = overlay("Mine")
+reserve._olArcName = "80 / 100"
+markers.LayoutZoneArcName(reserve, 90, 150, true)
+assert(#shown(reserve) == 8, "a mine's reserve left the circles-only map")
+OverlordDB.config.mapCircleNamesHidden = nil
+markers.LayoutZoneArcName(point, 90, 150, true)
+assert(#shown(point) == 6, "the curved name did not come back in compact")
 markers.HideZoneArcName(point)
 assert(#shown(point) == 0)
 

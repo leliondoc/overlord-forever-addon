@@ -17,6 +17,7 @@ Overlord.SettingsPanel.MinimapOverlayOpacityVariableName = "Overlord_MinimapOver
 Overlord.SettingsPanel.MapPathOpacityVariableName = "Overlord_MapPathOpacity"
 Overlord.SettingsPanel.AutoWaypointVariableName = "Overlord_AutoWaypointNextObjective"
 Overlord.SettingsPanel.ShowMinimapButtonVariableName = "Overlord_ShowMinimapButton"
+Overlord.SettingsPanel.ShowMapModeButtonVariableName = "Overlord_ShowMapModeButton"
 Overlord.SettingsPanel.ShowMinimapCaptureZonesVariableName = "Overlord_ShowMinimapCaptureZones"
 Overlord.SettingsPanel.ShowFloatingObjectiveVariableName = "Overlord_ShowFloatingObjective"
 Overlord.SettingsPanel.SoundEnabledVariableName = "Overlord_SoundEnabled"
@@ -314,6 +315,28 @@ local function setShowMinimapButton(value)
         OverlordDB.config.showMinimapButton)
 end
 
+-- 2.3.2: the Overlord button in the world map's corner (MapMarkers SetMapModeButtonShown).
+local function getShowMapModeButton()
+    local cfg = OverlordDB and OverlordDB.config
+    return not (cfg and cfg.mapModeButtonHidden == true)
+end
+
+local function setShowMapModeButton(value)
+    if not OverlordDB then return end
+    OverlordDB.config = OverlordDB.config or {}
+    local mm = Overlord.MapMarkers
+    if not settingsSuppressSideEffects and mm and mm.SetMapModeButtonShown then
+        mm:SetMapModeButtonShown(value == true)
+    else
+        OverlordDB.config.mapModeButtonHidden = value ~= true or nil
+    end
+end
+
+-- Changed from the map (right-click, Filters menu, /ov map button): the options follow.
+function Overlord.SettingsPanel:NotifyMapModeButtonShown(shown)
+    notifySettingsAPI(Overlord.SettingsPanel.ShowMapModeButtonVariableName, shown == true)
+end
+
 local function setShowMinimapCaptureZones(value)
     if not OverlordDB then return end
     OverlordDB.config = OverlordDB.config or {}
@@ -550,19 +573,22 @@ local ROWS = {
             OverlordDB.config = OverlordDB.config or {}
             OverlordDB.config.killChatLine = value == true
         end },
-    -- 1.8.0: off = capture and outpost alerts from the player's continent only.
-    { kind = "checkbox", var = "Overlord_WorldwideAlerts", label = "WORLDWIDE_ALERTS_LABEL",
-        fallback = "Capture alerts from the whole world", tooltip = "WORLDWIDE_ALERTS_TOOLTIP",
-        default = false,
+    -- 2.3.2: capture, outpost and mine alerts from the player's zone (default), continent or the
+    -- whole world (Overlord:GetAlertScope; the 1.8.0 "whole world" box ticked reads as world).
+    { kind = "dropdown", var = "Overlord_AlertScope", label = "ALERT_SCOPE_LABEL",
+        fallback = "Capture alerts", tooltip = "ALERT_SCOPE_TOOLTIP",
+        default = "zone",
         get = function()
-            local cfg = OverlordDB and OverlordDB.config
-            return cfg ~= nil and cfg.worldwideAlerts == true
+            return Overlord.GetAlertScope and Overlord:GetAlertScope() or "zone"
         end,
         set = function(value)
-            if not OverlordDB then return end
+            if not OverlordDB or not (Overlord.ALERT_SCOPES and Overlord.ALERT_SCOPES[value]) then return end
             OverlordDB.config = OverlordDB.config or {}
-            OverlordDB.config.worldwideAlerts = value == true
-        end },
+            OverlordDB.config.alertScope = value
+            OverlordDB.config.worldwideAlerts = nil
+        end,
+        choices = { { "zone", "ALERT_SCOPE_ZONE", "My zone" }, { "continent", "ALERT_SCOPE_CONTINENT", "My continent" },
+            { "world", "ALERT_SCOPE_WORLD", "Whole world" } } },
     -- 2.3.0: off = keep and outpost alerts only when the player's guild is involved.
     { kind = "checkbox", var = "Overlord_OtherGuildSiteAlerts", label = "OTHER_GUILD_SITE_ALERTS_LABEL",
         fallback = "Keep and outpost alerts of other guilds", tooltip = "OTHER_GUILD_SITE_ALERTS_TOOLTIP",
@@ -582,7 +608,10 @@ local ROWS = {
         fallback = "Overlord on the world map", tooltip = "MAP_MODE_TOOLTIP",
         default = "compact", get = getWorldMapMode, set = setWorldMapMode,
         choices = { { "full", "MAP_MODE_FULL", "Full" }, { "compact", "MAP_MODE_COMPACT", "Compact" },
-            { "hidden", "MAP_MODE_HIDDEN", "Hidden" } } },
+            { "circles", "MAP_MODE_CIRCLES", "Circles only" }, { "hidden", "MAP_MODE_HIDDEN", "Hidden" } } },
+    { kind = "checkbox", var = SP.ShowMapModeButtonVariableName, label = "MAP_BUTTON_LABEL",
+        fallback = "Overlord button on the world map", tooltip = "MAP_BUTTON_TOOLTIP",
+        default = true, get = getShowMapModeButton, set = setShowMapModeButton },
     { kind = "slider", var = SP.MapOverlayOpacityVariableName, label = "MAP_OVERLAY_OPACITY_LABEL",
         fallback = "Map capture opacity", tooltip = "MAP_OVERLAY_OPACITY_TOOLTIP",
         default = DEFAULT_MAP_OVERLAY_OPACITY, get = getMapOverlayOpacity, set = setMapOverlayOpacity,

@@ -280,6 +280,13 @@ local ZoneArc = { TOP_SWEEP = math.rad(200), HALF_SWEEP = math.rad(165), WIDE_SW
     -- retracer apres un zoom, ne refait ni texte ni mesure.
     widths = {} }
 
+-- 2.3.2 : mode « cercles seuls » : le nom d'un point n'est plus ecrit dans son cercle (son
+-- bandeau reste au survol et pendant une prise) ; la reserve d'une mine reste ecrite.
+local function ZoneArcNamesHidden()
+    local config = OverlordDB and OverlordDB.config
+    return config ~= nil and config.mapCircleNamesHidden == true
+end
+
 function ZoneArc.Hide(overlay)
     if not overlay or overlay._olArcKey == nil then return end
     local glyphs = overlay.arcGlyphs
@@ -536,7 +543,8 @@ end
 
 function ZoneArc.Layout(overlay, snapD, labelDiameter, shown)
     -- _olArcName: a text of its own instead of the point's name (a mine's reserve).
-    local name = shown and (overlay._olArcName or (overlay.zone and overlay.zone.name)) or nil
+    local name = shown and (overlay._olArcName
+        or (overlay.zone and not ZoneArcNamesHidden() and overlay.zone.name)) or nil
     if type(name) ~= "string" or name == "" or not snapD or not labelDiameter then
         ZoneArc.Hide(overlay)
         return
@@ -727,7 +735,8 @@ end
 
 -- Mode compact (noms decoches) : un point de front garde son cercle, son icone et
 -- son nom ecrit dans le cercle ; ruban et statut reviennent au survol et pendant une
--- prise (« SYNCING » reste ecrit dans le cercle pendant la synchronisation).
+-- prise (« SYNCING » reste ecrit dans le cercle pendant la synchronisation, sauf en mode
+-- « cercles seuls » : rien d'ecrit dans le cercle, le bandeau au survol le dit).
 local function IsZoneLabelShown(overlay)
     if ShouldShowMapZoneTitles() or overlay._olHover then return true end
     local zone = overlay.zone
@@ -1226,16 +1235,29 @@ function Overlord.MapMarkers:SetWorldMapOverlaysShown(shown)
     return true
 end
 
--- Trois modes joueur : complet (bandeau sur chaque point), compact (cercles, icones
--- et nom le long du cercle ; bandeau au survol ou pendant une prise), masque.
+-- Quatre modes joueur : complet (bandeau sur chaque point), compact (cercles, icones
+-- et nom le long du cercle ; bandeau au survol ou pendant une prise), cercles seuls
+-- (2.3.2 : compact sans le nom dans le cercle), masque.
 -- Compact = « noms de zones » decoches ; c'est le mode par defaut depuis la 1.8.2.
 -- Ordre du bouton : depuis le mode de depart (compact), un clic donne les bandeaux.
-local WORLD_MAP_MODES = { "compact", "full", "hidden" }
-local WORLD_MAP_MODE_TEXT = { full = "MAP_MODE_FULL", compact = "MAP_MODE_COMPACT", hidden = "MAP_MODE_HIDDEN" }
+local WORLD_MAP_MODES = { "compact", "full", "circles", "hidden" }
+local WORLD_MAP_MODE_TEXT = { full = "MAP_MODE_FULL", compact = "MAP_MODE_COMPACT",
+    circles = "MAP_MODE_CIRCLES", hidden = "MAP_MODE_HIDDEN" }
 
 function Overlord.MapMarkers:GetWorldMapDisplayMode()
     if not self:AreWorldMapOverlaysShown() then return "hidden" end
-    return ShouldShowMapZoneTitles() and "full" or "compact"
+    if ShouldShowMapZoneTitles() then return "full" end
+    return ZoneArcNamesHidden() and "circles" or "compact"
+end
+
+-- Les noms courbes des points affiches suivent le mode tout de suite (sans zoom ni
+-- deplacement, UpdateOverlay ne les retrace pas).
+local function RelayoutZoneArcNames()
+    for _, ov in pairs(overlays) do
+        if ov and ov.zone and ov:IsShown() and ov._olSnapD then
+            ZoneArc.Layout(ov, ov._olSnapD, ov._olLabelDiameter, not ov._olShowTitles)
+        end
+    end
 end
 
 function Overlord.MapMarkers.GetWorldMapModeText(mode)
@@ -1255,10 +1277,12 @@ function Overlord.MapMarkers:SetWorldMapDisplayMode(mode)
     if mode == "hidden" then return self:SetWorldMapOverlaysShown(false) end
     OverlordDB.config = OverlordDB.config or {}
     OverlordDB.config.showMapZoneTitles = mode == "full"
+    OverlordDB.config.mapCircleNamesHidden = mode == "circles" or nil
     if self:AreWorldMapOverlaysShown() then
         if Overlord.SettingsPanel and Overlord.SettingsPanel.RefreshControls then
             pcall(Overlord.SettingsPanel.RefreshControls, Overlord.SettingsPanel)
         end
+        RelayoutZoneArcNames()
         self:RequestOverlayRefresh()
         self:RefreshMapModeButton()
         return true
@@ -1350,6 +1374,89 @@ function Overlord.MapMarkers:SettleZoneArcs()
     return true
 end
 
+-- 2.3.2: the corner button can be hidden (options, the map's Filters menu, /ov map button,
+-- a right-click on it) and moved with Shift + drag. The modes stay in the Filters menu.
+local function MapModeButtonWanted()
+    local cfg = OverlordDB and OverlordDB.config
+    return not (cfg and cfg.mapModeButtonHidden == true)
+end
+
+function Overlord.MapMarkers:IsMapModeButtonShown()
+    return MapModeButtonWanted()
+end
+
+function Overlord.MapMarkers:SetMapModeButtonShown(shown)
+    if not OverlordDB then return false end
+    OverlordDB.config = OverlordDB.config or {}
+    shown = shown and true or false
+    if MapModeButtonWanted() == shown then return false end
+    OverlordDB.config.mapModeButtonHidden = (not shown) or nil
+    self:RefreshMapModeButton()
+    local sp = Overlord.SettingsPanel
+    if sp and sp.NotifyMapModeButtonShown then sp:NotifyMapModeButtonShown(shown) end
+    return true
+end
+
+-- Where the button sits: its centre, as shares of the map's width and height counted from
+-- the top right corner; none = the corner, as before.
+local function SavedMapModeButtonShares()
+    local cfg = OverlordDB and OverlordDB.config
+    local pos = cfg and cfg.mapModeButtonPos
+    if type(pos) ~= "table" then return nil end
+    local fx, fy = tonumber(pos.x), tonumber(pos.y)
+    if not fx or not fy or fx ~= fx or fy ~= fy then return nil end
+    return math.max(0, math.min(1, fx)), math.max(0, math.min(1, fy))
+end
+
+-- Keeps the whole button inside the map.
+local function ClampMapModeButtonShares(btn, container, fx, fy)
+    local w, h = container:GetWidth() or 0, container:GetHeight() or 0
+    if w <= 0 or h <= 0 then return fx, fy end
+    local s = btn:GetScale() or 1
+    local hx = math.min(0.5, (btn:GetWidth() or 32) * s * 0.5 / w)
+    local hy = math.min(0.5, (btn:GetHeight() or 32) * s * 0.5 / h)
+    return math.max(hx, math.min(1 - hx, fx)), math.max(hy, math.min(1 - hy, fy))
+end
+
+local function PlaceMapModeButton(btn, container)
+    btn:ClearAllPoints()
+    local fx, fy = SavedMapModeButtonShares()
+    local w, h = container:GetWidth() or 0, container:GetHeight() or 0
+    if not fx or w <= 0 or h <= 0 then
+        btn._olMoved = fx ~= nil
+        btn:SetPoint("TOPRIGHT", container, "TOPRIGHT", -5, -5)
+        return
+    end
+    btn._olMoved = true
+    fx, fy = ClampMapModeButtonShares(btn, container, fx, fy)
+    -- Offsets are in the button's own scale (1.3 times the map's).
+    local s = btn:GetScale() or 1
+    btn:SetPoint("CENTER", container, "TOPRIGHT", -fx * w / s, -fy * h / s)
+end
+
+local function DragMapModeButton(btn)
+    local container = btn:GetParent()
+    if not container or not (IsMouseButtonDown and IsMouseButtonDown("RightButton")) then
+        btn._olDragging = nil
+        btn:SetScript("OnUpdate", nil)
+        return
+    end
+    local cx, cy = GetCursorPosition()
+    local scale = container:GetEffectiveScale() or 1
+    local right, top = container:GetRight(), container:GetTop()
+    local w, h = container:GetWidth() or 0, container:GetHeight() or 0
+    if not right or not top or w <= 0 or h <= 0 or scale <= 0 then return end
+    local fx, fy = ClampMapModeButtonShares(btn, container,
+        (right - cx / scale) / w, (top - cy / scale) / h)
+    OverlordDB.config = OverlordDB.config or {}
+    local pos = OverlordDB.config.mapModeButtonPos
+    if type(pos) ~= "table" then pos = {}; OverlordDB.config.mapModeButtonPos = pos end
+    if pos.x == fx and pos.y == fy then return end
+    pos.x, pos.y = fx, fy
+    btn._olDragged = true
+    PlaceMapModeButton(btn, container)
+end
+
 -- Bouton rond dans le coin de la carte du monde : un clic passe au mode suivant.
 -- Cree hors combat a l'init ; masque en instance comme tout Overlord.
 function Overlord.MapMarkers:CreateMapModeButton()
@@ -1361,7 +1468,7 @@ function Overlord.MapMarkers:CreateMapModeButton()
     btn:SetScale(1.3)
     btn:SetFrameStrata(container:GetFrameStrata())
     btn:SetFrameLevel(container:GetFrameLevel() + 200)
-    btn:SetPoint("TOPRIGHT", container, "TOPRIGHT", -5, -5)
+    PlaceMapModeButton(btn, container)
     btn:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
     local bg = btn:CreateTexture(nil, "BACKGROUND")
     bg:SetSize(20, 20)
@@ -1377,8 +1484,28 @@ function Overlord.MapMarkers:CreateMapModeButton()
     border:SetPoint("TOPLEFT")
     border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
     btn:RegisterForClicks("LeftButtonUp")
-    btn:SetScript("OnClick", function(b)
+    -- 2.3.2: right button + drag moves it anywhere on the map (its place is kept as a share of
+    -- the map's size, so the windowed and the full map put it at the same spot). A right click
+    -- alone does nothing; hiding it stays in the map's Filters menu, the options and /ov map.
+    btn:SetScript("OnMouseDown", function(b, mouseButton)
+        b._olDragged = nil
+        if mouseButton == "RightButton" then
+            b._olDragging = true
+            b:SetScript("OnUpdate", DragMapModeButton)
+        end
+    end)
+    btn:SetScript("OnMouseUp", function(b)
+        if b._olDragging then
+            b._olDragging = nil
+            b:SetScript("OnUpdate", nil)
+        end
+    end)
+    btn:SetScript("OnClick", function(b, mouseButton)
         local mm = Overlord.MapMarkers
+        if b._olDragged or mouseButton ~= "LeftButton" then
+            b._olDragged = nil
+            return
+        end
         mm:SetWorldMapDisplayMode(mm:GetNextWorldMapDisplayMode())
         local cfg = OverlordDB and OverlordDB.config
         if not (cfg and cfg.soundEnabled == false)
@@ -1395,11 +1522,18 @@ function Overlord.MapMarkers:CreateMapModeButton()
             mm.GetWorldMapModeText(mm:GetWorldMapDisplayMode())), 1, 1, 1)
         GameTooltip:AddLine(string.format(L.MAP_MODE_BUTTON_NEXT or "Click: %s",
             mm.GetWorldMapModeText(mm:GetNextWorldMapDisplayMode())), 0.82, 0.82, 0.82, true)
+        GameTooltip:AddLine(L.MAP_BUTTON_HINT or "Right-click + drag: move.",
+            0.82, 0.82, 0.82, true)
         GameTooltip:Show()
     end)
     btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
     btn:SetScript("OnShow", function(b)
-        if Overlord.InstanceSuspended then b:Hide() end
+        if Overlord.InstanceSuspended or not MapModeButtonWanted() then b:Hide() end
+    end)
+    -- The windowed and the full map differ in size: a moved button follows its share.
+    container:HookScript("OnSizeChanged", function()
+        local b = Overlord.MapMarkers and Overlord.MapMarkers._mapModeButton
+        if b and b._olMoved and not Overlord.InstanceSuspended then PlaceMapModeButton(b, container) end
     end)
     self._mapModeButton = btn
     self:RefreshMapModeButton()
@@ -1409,7 +1543,7 @@ end
 function Overlord.MapMarkers:RefreshMapModeButton()
     local btn = self._mapModeButton
     if not btn then return end
-    btn:SetShown(not Overlord.InstanceSuspended)
+    btn:SetShown(not Overlord.InstanceSuspended and MapModeButtonWanted())
     local mode = self:GetWorldMapDisplayMode()
     btn.icon:SetDesaturated(mode == "hidden")
     btn.icon:SetAlpha(mode == "hidden" and 0.6 or 1)
@@ -1436,6 +1570,15 @@ function Overlord.MapMarkers:RegisterWorldMapFilterToggle()
             rootDescription:CreateTitle(L.MAP_FILTER_OVERLORD or "Overlord")
         end
         AddWorldMapModeRadios(rootDescription)
+        -- 2.3.2: the button in the map's corner, here where its modes also are.
+        if rootDescription.CreateCheckbox then
+            rootDescription:CreateCheckbox(L.MAP_BUTTON_LABEL or "Overlord button on the world map",
+                function() return Overlord.MapMarkers:IsMapModeButtonShown() end,
+                function()
+                    local mm = Overlord.MapMarkers
+                    mm:SetMapModeButtonShown(not mm:IsMapModeButtonShown())
+                end)
+        end
     end)
     Menu.ModifyMenu("MENU_MINIMAP_TRACKING", function(_, rootDescription)
         if not rootDescription or not rootDescription.CreateButton then return end

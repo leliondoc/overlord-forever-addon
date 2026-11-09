@@ -1,7 +1,9 @@
 -- 1.8.0: capture and outpost alerts come only from the continent the player is on.
--- Always shown: our own capital, our own guild's outposts (defended, assaulted, taken
--- or lost), and everything with the "whole world" option. An unknown continent (of
--- the place or of the player) shows the alert. A hidden alert marks no dedup state.
+-- 2.3.2: by default only from the zone the player is in (mines too); the option widens them to the
+-- continent or the whole world, and our own capital follows the same rule. Always shown: our own
+-- guild's outposts (defended, assaulted, taken or lost). An unknown continent or zone (of the place
+-- or of the player) shows the alert. A hidden alert marks no dedup state.
+-- Sections 1 to 6 run with the continent setting; 6b tests the zone default.
 assert(loadfile("tests/forever_leaderboard.test.lua"))()
 local now = 1790018000
 local guild, faction = "Observer Guild", "Alliance"
@@ -33,19 +35,24 @@ function PlaySound() sounds = sounds + 1 end
 GetInstanceInfo = nil
 
 -- Classic map tree: zones under Kalimdor (1414) or the Eastern Kingdoms (1415).
+-- (mapType: 0 cosmic, 1 world, 2 continent, 3 zone, 5 micro.)
 local maps = {
-    [946] = { parentMapID = 0 },
-    [947] = { parentMapID = 946 },
-    [1414] = { parentMapID = 947 }, -- Kalimdor
-    [1415] = { parentMapID = 947 }, -- Eastern Kingdoms
-    [1439] = { parentMapID = 1414 }, -- Darkshore
-    [1440] = { parentMapID = 1414 }, -- Ashenvale
-    [1442] = { parentMapID = 1414 }, -- Stonetalon Mountains
-    [1411] = { parentMapID = 1414 }, -- Durotar
-    [1412] = { parentMapID = 1414 }, -- Mulgore
-    [1413] = { parentMapID = 1414 }, -- The Barrens
-    [1429] = { parentMapID = 1415 }, -- Elwynn Forest
-    [1421] = { parentMapID = 1415 }, -- Silverpine Forest
+    [946] = { parentMapID = 0, mapType = 0 },
+    [947] = { parentMapID = 946, mapType = 1 },
+    [1414] = { parentMapID = 947, mapType = 2 }, -- Kalimdor
+    [1415] = { parentMapID = 947, mapType = 2 }, -- Eastern Kingdoms
+    [13] = { parentMapID = 947, mapType = 2 }, -- Eastern Kingdoms (Retail id)
+    [1439] = { parentMapID = 1414, mapType = 3 }, -- Darkshore
+    [1440] = { parentMapID = 1414, mapType = 3 }, -- Ashenvale
+    [1442] = { parentMapID = 1414, mapType = 3 }, -- Stonetalon Mountains
+    [1411] = { parentMapID = 1414, mapType = 3 }, -- Durotar
+    [1412] = { parentMapID = 1414, mapType = 3 }, -- Mulgore
+    [1413] = { parentMapID = 1414, mapType = 3 }, -- The Barrens
+    [1429] = { parentMapID = 1415, mapType = 3 }, -- Elwynn Forest
+    [37] = { parentMapID = 13, mapType = 3 }, -- Elwynn Forest (Retail id)
+    [9001] = { parentMapID = 1429, mapType = 5 }, -- a cave in Elwynn
+    [1453] = { parentMapID = 1415, mapType = 3 }, -- Stormwind City (its own zone map)
+    [1421] = { parentMapID = 1415, mapType = 3 }, -- Silverpine Forest
 }
 local EK, KALIMDOR = 1429, 1440
 local playerMap = EK
@@ -67,7 +74,7 @@ Overlord.IsCaptureSyncGateActive = function() return false end
 Overlord.IsCaptureSyncPending = function() return false end
 Overlord.SaveState = function() end
 Overlord.PlayerFaction = faction
-OverlordDB = { lastResetTimestamp = 1789527600, config = { soundEnabled = true }, outposts = {} }
+OverlordDB = { lastResetTimestamp = 1789527600, config = { soundEnabled = true, alertScope = "continent" }, outposts = {} }
 assert(loadfile("GuildKeepSites.lua"))()
 assert(loadfile("Zones.lua"))()
 assert(loadfile("Outpost.lua"))()
@@ -172,9 +179,9 @@ assert(priv.enemyAlertEmitted[raynewood.id] == true, "A shown attack alert was n
 playerMap = EK
 enemyAttack(zone("elwynn_goldshire", "elwynn"), "Enemy Tester", now)
 assert(take("ATTACK") == 1, "An attack on the player's continent stayed silent")
--- Our own capital is always announced; a front without a map is unknown: shown.
+-- 2.3.2: our own capital follows the same rule; a front without a map is unknown: shown.
 enemyAttack(zone("ash_astranaar", "ashenvale", true), "Enemy Tester", now)
-assert(take("ATTACK") == 1, "An attack on our own capital in Kalimdor stayed silent")
+assert(take() == 0, "An attack on our own capital in Kalimdor reached a player in the Eastern Kingdoms")
 enemyAttack(zone("ash_splintertree", "ashenvale", true), "Enemy Tester", now)
 assert(take() == 0, "The enemy capital counted as our own capital")
 enemyAttack(zone("nowhere_camp", "nowhere"), "Enemy Tester", now)
@@ -193,7 +200,7 @@ playerMap = EK
 captureChat(zone("elwynn_eastvale", "elwynn"), "Horde", "Enemy Tester", now - 20)
 assert(take("TAKEN") == 1, "A capture on the player's continent stayed silent")
 captureChat(zone("ash_astranaar", "ashenvale", true), "Horde", "Enemy Tester", now - 10)
-assert(take("TAKEN") == 1, "The loss of our own capital in Kalimdor stayed silent")
+assert(take() == 0, "The loss of our own capital in Kalimdor reached a player in the Eastern Kingdoms")
 
 -- 3. Outposts. The defender alert: an allied guild's site on the other continent is
 -- hidden (nothing remembered), our own guild's always alerts.
@@ -301,14 +308,14 @@ end
 OverlordDB.config.otherGuildSiteAlerts = true
 
 -- 4. The option brings back the whole world.
-OverlordDB.config.worldwideAlerts = true
+OverlordDB.config.alertScope = "world"
 enemyAttack(zone("ash_bough_shadow", "ashenvale"), "Enemy Tester", now)
 captureChat(zone("ash_maestra", "ashenvale"), "Horde", "Enemy Tester", now - 2)
 defenderAlert("mulgore", held("Ally Guild"), assault("NoMercy"))
 assaultAlert("durotar", { status = "neutral" }, assault("Ruthless", "Horde", "Ally Guild"))
 sync:PrintOutpostCaptureAlert("crossroads", "NoMercy", "Horde", now - 1)
 assert(take() == 5, "The worldwide option did not bring back the other continent")
-OverlordDB.config.worldwideAlerts = false
+OverlordDB.config.alertScope = "continent"
 
 -- 5. Unknown continent of the player: everything shows. Without a map, the open-world
 -- instance id still tells the continent (0 = Eastern Kingdoms, 1 = Kalimdor).
@@ -344,7 +351,54 @@ Overlord.alertContinentCache = {}
 assert(Overlord:ShouldShowPlaceAlert(1440), "No map API hid an alert")
 C_Map = savedMap
 
--- 7. The option: a Chat checkbox, off by default, stored as config.worldwideAlerts.
+-- 6b. 2.3.2: the default is the player's zone. A cave climbs to its zone; a front, an outpost or a
+-- mine with two map ids (Classic and Retail) is one zone; our own capital and the mines follow the
+-- same rule. Another zone of the same continent is hidden, with nothing remembered.
+OverlordDB.config.alertScope = nil
+assert(Overlord:GetAlertScope() == "zone", "The default is not the player's zone")
+fronts.elwynn.mapIDs = { [37] = true, [1429] = true }
+playerMap = EK
+enemyAttack(zone("elwynn_fargodeep", "elwynn"), "Enemy Tester", now)
+assert(take("ATTACK") == 1, "An attack in the player's zone stayed silent")
+playerMap = 1421
+local jerod = zone("elwynn_jerod", "elwynn")
+enemyAttack(jerod, "Enemy Tester", now)
+assert(take() == 0, "An attack in another zone of the continent reached the player")
+assert(priv.enemyAlertEmitted[jerod.id] == nil, "A hidden zone alert left dedup state")
+enemyAttack(zone("elwynn_westbrook", "elwynn", true), "Enemy Tester", now)
+assert(take() == 0, "Our own capital in another zone reached the player")
+playerMap = 9001
+enemyAttack(jerod, "Enemy Tester", now)
+assert(take("ATTACK") == 1, "An attack in the zone around the player's cave stayed silent")
+playerMap = 37
+enemyAttack(zone("elwynn_stonecairn", "elwynn"), "Enemy Tester", now)
+assert(take("ATTACK") == 1, "The Retail id of the same zone counted as another zone")
+playerMap = 1453
+enemyAttack(zone("elwynn_brackwell", "elwynn"), "Enemy Tester", now)
+assert(take("ATTACK") == 1, "A player in Stormwind did not hear Elwynn")
+playerMap = 1421
+assaultAlert("elwynn", { status = "neutral" }, assault("NoMercy", "Horde", "Ally Guild"))
+assert(take() == 0 and assaultLast.elwynn == nil, "An outpost assault in another zone reached the player")
+playerMap = EK
+assaultAlert("elwynn", { status = "neutral" }, assault("NoMercy", "Horde", "Ally Guild"))
+assert(take("ASSAULT") == 1, "An outpost assault in the player's zone stayed silent")
+-- Mines (2.3.2: they were announced from the whole world).
+L.ENEMY_MINING_HORDE = "MINING %s"
+local minePriv = sync:GetPriv()
+playerMap = 1421
+sync:OnReceiveMining("jasperlode:H", "Enemy Miner")
+assert(take() == 0 and minePriv.mineAlertLast.jasperlode == nil, "A mine in another zone reached the player")
+playerMap = 37
+sync:OnReceiveMining("jasperlode:H", "Enemy Miner")
+assert(take("MINING") == 1, "A mine in the player's zone stayed silent")
+OverlordDB.config.alertScope = "continent"
+playerMap = 1421
+sync:OnReceiveMining("elemgorge:H", "Enemy Miner")
+assert(take("MINING") == 1, "The continent setting hid a mine of the continent")
+playerMap = EK
+
+-- 7. The option: a menu of three (zone, continent, world), the zone by default, stored as
+-- config.alertScope. The 1.8.0 "whole world" box ticked reads as the whole world.
 do
     local registered = {}
     local env = setmetatable({}, { __index = _G })
@@ -358,24 +412,40 @@ do
             return s
         end,
         CreateCheckbox = function(_, s, tooltip) s.control, s.tooltip = "checkbox", tooltip end,
+        CreateDropdown = function(_, s, options, tooltip) s.control, s.options, s.tooltip = "dropdown", options, tooltip end,
+        CreateControlTextContainer = function()
+            local data = {}
+            return { Add = function(_, value, text) data[#data + 1] = { value = value, text = text } end,
+                GetData = function() return data end }
+        end,
         RegisterAddOnCategory = function() end,
     }
-    env.Overlord = { L = { WORLDWIDE_ALERTS_TOOLTIP = "TIP" } }
-    env.OverlordDB = { config = {} }
+    env.Overlord = { L = { ALERT_SCOPE_TOOLTIP = "TIP" }, GetAlertScope = Overlord.GetAlertScope,
+        ALERT_SCOPES = Overlord.ALERT_SCOPES }
+    env.OverlordDB = OverlordDB
     local chunk = assert(loadfile("SettingsPanel.lua"))
     setfenv(chunk, env)
     chunk()
     env.Overlord.SettingsPanel:Register()
-    local row = registered.Overlord_WorldwideAlerts
-    assert(row and row.control == "checkbox" and row.kind == "boolean" and row.default == false,
-        "The worldwide alerts checkbox is missing or not off by default")
-    assert(row.label == "Capture alerts from the whole world" and row.tooltip == "TIP", "Checkbox texts")
-    assert(row.get() == false, "The option reads on without a saved value")
-    row.set(true)
-    assert(env.OverlordDB.config.worldwideAlerts == true and row.get() == true, "The option was not saved")
-    row.set(false)
-    assert(env.OverlordDB.config.worldwideAlerts == false and row.get() == false, "The option did not turn off")
+    local row = registered.Overlord_AlertScope
+    assert(row and row.control == "dropdown" and row.kind == "string" and row.default == "zone",
+        "The alert scope menu is missing or not on the zone by default")
+    assert(row.label == "Capture alerts" and row.tooltip == "TIP", "Menu texts")
+    local values = {}
+    for _, option in ipairs(row.options()) do values[#values + 1] = option.value end
+    assert(table.concat(values, ",") == "zone,continent,world", "Menu choices")
+    local cfg = OverlordDB.config
+    cfg.alertScope, cfg.worldwideAlerts = nil, nil
+    assert(row.get() == "zone", "The option reads another scope without a saved value")
+    cfg.worldwideAlerts = true
+    assert(row.get() == "world", "The 1.8.0 whole-world box was not kept")
+    row.set("continent")
+    assert(cfg.alertScope == "continent" and cfg.worldwideAlerts == nil and row.get() == "continent",
+        "The option was not saved")
+    row.set("nowhere")
+    assert(cfg.alertScope == "continent", "An unknown scope was saved")
     -- 2.3.0: other guilds' keeps and outposts, off by default.
+    cfg.otherGuildSiteAlerts = nil
     local other = registered.Overlord_OtherGuildSiteAlerts
     assert(other and other.control == "checkbox" and other.default == false and other.get() == false,
         "The other-guilds site alerts checkbox is missing or not off by default")
@@ -395,11 +465,12 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "deDE", "ruRU", "ptBR", "zhCN" })
         chunk()
     end
     local LL = env.Overlord.L
-    assert(type(LL.WORLDWIDE_ALERTS_LABEL) == "string" and LL.WORLDWIDE_ALERTS_LABEL ~= ""
-        and type(LL.WORLDWIDE_ALERTS_TOOLTIP) == "string" and LL.WORLDWIDE_ALERTS_TOOLTIP ~= "",
-        loc .. " misses the worldwide alerts option texts")
-    assert(LL.GUIDE_ALERTS_BODY:find(LL.WORLDWIDE_ALERTS_LABEL, 1, true),
-        loc .. ": the tutorial does not name the worldwide alerts option")
+    for _, key in ipairs({ "ALERT_SCOPE_LABEL", "ALERT_SCOPE_TOOLTIP", "ALERT_SCOPE_ZONE",
+        "ALERT_SCOPE_CONTINENT", "ALERT_SCOPE_WORLD" }) do
+        assert(type(LL[key]) == "string" and LL[key] ~= "", loc .. " misses " .. key)
+    end
+    assert(LL.GUIDE_ALERTS_BODY:find(LL.ALERT_SCOPE_LABEL, 1, true),
+        loc .. ": the tutorial does not name the alert scope option")
     assert(type(LL.OTHER_GUILD_SITE_ALERTS_LABEL) == "string" and LL.OTHER_GUILD_SITE_ALERTS_LABEL ~= ""
         and type(LL.OTHER_GUILD_SITE_ALERTS_TOOLTIP) == "string"
         and LL.GUIDE_ALERTS_BODY:find(LL.OTHER_GUILD_SITE_ALERTS_LABEL, 1, true),
@@ -410,9 +481,9 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "deDE", "ruRU", "ptBR", "zhCN" })
         otherEnglish = LL.OTHER_GUILD_SITE_ALERTS_TOOLTIP
     end
     if loc == "enUS" then
-        english = LL.WORLDWIDE_ALERTS_TOOLTIP
+        english = LL.ALERT_SCOPE_TOOLTIP
     else
-        assert(LL.WORLDWIDE_ALERTS_TOOLTIP ~= english, loc .. " shows the English tooltip")
+        assert(LL.ALERT_SCOPE_TOOLTIP ~= english, loc .. " shows the English tooltip")
     end
 end
-print("Alert continent: other-continent capture and outpost alerts hidden without dedup state; own capital, own guild, worldwide option and unknown continents shown")
+print("Alert scope: zone by default (caves, Retail ids, outposts, mines), continent and world settings; own guild and unknown places shown; hidden alerts leave no dedup state")

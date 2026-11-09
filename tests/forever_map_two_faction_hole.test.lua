@@ -120,7 +120,12 @@ local function client(name, channel, faction)
     local onSr = s.OnSyncRequest
     s.OnSyncRequest = function(self, ...) e.traffic.sr = e.traffic.sr + 1; return onSr(self, ...) end
     local onZa = s.OnReceiveZoneAll
-    s.OnReceiveZoneAll = function(self, ...) e.traffic.za = e.traffic.za + 1; return onZa(self, ...) end
+    e.zaPages = {}
+    s.OnReceiveZoneAll = function(self, payload, ...)
+        e.traffic.za = e.traffic.za + 1
+        e.zaPages[#e.zaPages + 1] = payload
+        return onZa(self, payload, ...)
+    end
     clients[#clients + 1] = e
     return e
 end
@@ -199,7 +204,8 @@ assert(world(ALLY) == world(HORDE) and world(MATE) == world(HORDE), "the three m
 -- One whole map for the bridge, a few news pages for its mate, and the Horde friend,
 -- who lacked nothing, pulled nothing and got no copy of the news.
 local pages = ALLY.traffic.za
-assert(pages > 3 and MATE.traffic.za > 0 and MATE.traffic.za <= 3 and HORDE.traffic.za == 0,
+-- (2.3.2: the bridge's request carries its front marks: only Arathi comes, not the whole map.)
+assert(pages > 0 and pages <= 3 and MATE.traffic.za > 0 and MATE.traffic.za <= 3 and HORDE.traffic.za == 0,
     ("map pages applied: %d / %d / %d"):format(ALLY.traffic.za, MATE.traffic.za, HORDE.traffic.za))
 -- (requests received: the bridge asked its Horde friend once; nobody asked the bridge)
 assert(ALLY.traffic.sr == 0 and MATE.traffic.sr == 0 and HORDE.traffic.sr == 1,
@@ -208,6 +214,23 @@ assert(ALLY.traffic.sr == 0 and MATE.traffic.sr == 0 and HORDE.traffic.sr == 1,
 local news = table.concat(ALLY.Overlord.Sync:GetCrossFactionDiagnostics(), " ")
 assert(news:find("Map news told to our faction: 1 announcements (7 captures)", 1, true),
     "the bridge's announcement is not reported: " .. news)
+-- (2.3.2: that "D" map was asked: it counts as the other faction's map received.)
+assert(ALLY.Overlord.Sync._lastEnemyFullZaAt ~= nil, "the asked fronts-only map did not count as a map received")
+-- The same "D" pages, unasked, on a client still waiting for its map: taken for their
+-- fronts, never as a whole map (no end of the wait, no map received).
+local dPages = {}
+for _, page in ipairs(ALLY.zaPages) do
+    if page:match("^@D%-") then dPages[#dPages + 1] = page end
+end
+assert(#dPages > 0, "the bridge received no fronts-only map")
+for i, id in ipairs(arathi) do set(MATE, id, "Alliance", T - 40000 + i) end
+MATE.Overlord.WaitingForSync = true
+MATE.Overlord.Sync._lastEnemyFullZaAt = nil
+for _, page in ipairs(dPages) do MATE.Overlord.Sync:OnReceiveZoneAll(page, "Horde Tester") end
+assert(view(MATE, arathi) == "AHHHHHHH", "the fronts-only map was not taken for its front: " .. view(MATE, arathi))
+assert(MATE.Overlord.WaitingForSync == true and MATE.Overlord.Sync._lastEnemyFullZaAt == nil,
+    "an unasked fronts-only map ended the wait for a whole map")
+MATE.Overlord.WaitingForSync = nil
 advance(280)
 -- Equal maps: half an hour of presence, not one more request.
 local requests = ALLY.traffic.sr + MATE.traffic.sr + HORDE.traffic.sr

@@ -323,7 +323,7 @@ local srEvidencePageNonce = 0
 --   F = historique complet, uniquement honore en transport direct
 -- Le nonce final est ignore par les anciennes versions, mais force tous les repondeurs
 -- d'une meme requete a choisir le meme bloc de lignes LOC au lieu de curseurs divergents.
-local function SRPayload(requestMode)
+local function SRPayload(requestMode, noFrontMarks)
     local vts = (OverlordDB and OverlordDB.lastVictoryTimestamp) or 0
     local vf = OverlordDB and OverlordDB.lastVictoryFaction
     local vfront = (OverlordDB and OverlordDB.lastVictoryFrontId) or ""
@@ -345,14 +345,20 @@ local function SRPayload(requestMode)
     -- Older answerers read "k...:T" as their sixth field, a territorial request.
     local marks = mode == "T" and Overlord.Sync.BuildOutpostKnownMarks
         and Overlord.Sync:BuildOutpostKnownMarks(srEvidencePageNonce) or nil
+    -- 2.3.2: then "f~" + one mark per front of our map (Sync BuildFrontMarks): the answer
+    -- carries only the fronts whose mark differs. Older answerers read it as their keep-marks
+    -- field and the mode stays "T": a whole map, as before.
+    local fronts = mode == "T" and not noFrontMarks and Overlord.Sync.BuildFrontMarks
+        and Overlord.Sync:BuildFrontMarks(srEvidencePageNonce) or nil
+    if fronts then mode = "f~" .. fronts .. ":" .. mode end
     if marks then mode = "k" .. marks .. ":" .. mode end
     return (Overlord.PlayerFaction or "") .. ":" .. versionField .. ":" .. vts
         .. ":" .. vfCode .. ":" .. vfront .. ":" .. mode
 end
 
 -- Accesseur public pour SRPayload (utilise par Commands.lua pour /ov sync <target>)
-function Overlord.Sync:GetSRPayload(requestMode)
-    return SRPayload(requestMode)
+function Overlord.Sync:GetSRPayload(requestMode, noFrontMarks)
+    return SRPayload(requestMode, noFrontMarks)
 end
 
 -- 2.0.2: a request copy the whole group or channel hears is answered to all, so the keep
@@ -360,7 +366,99 @@ end
 -- to the requester alone). Done after the relay dedup, which matches the marked payload.
 function Overlord.Sync:WithoutKeepMarks(data)
     if type(data) ~= "string" then return data end
+    -- (2.3.2: the front marks too, "f~...", right before the mode.)
+    data = data:gsub(":f~[0-9a-z]*:(%u)$", ":%1", 1)
     return (data:gsub(":k[0-9a-z]*:(%u)$", ":%1", 1))
+end
+
+-- 2.3.2: one mark per front of the map we would serve, three base-36 characters salted with the
+-- request's nonce (a mark that collides once does not collide at the next request): a hash of
+-- every point's served entry (BuildZoneAllSnapshotPart, the entry the map stamp reads). Fronts
+-- in id order. Only outside the login and instance-exit gates: a map still waiting for its
+-- first answer asks the whole map. A point with no served entry (in progress, unconfirmed)
+-- hashes as "-" on both sides: its wave travels by ZS, not in the map.
+Overlord.Sync.FRONT_MARK_CHARS = 3
+function Overlord.Sync:FrontMarkIds()
+    local ids = {}
+    for id, front in pairs(Overlord.Fronts and Overlord.Fronts.Registry or {}) do
+        if type(front) == "table" and type(front.zones) == "table" then ids[#ids + 1] = tostring(id) end
+    end
+    table.sort(ids)
+    return ids
+end
+function Overlord.Sync:FrontMark(front, nonce)
+    local parts = {}
+    for _, zone in ipairs(front.zones or {}) do
+        if zone and zone.id then
+            parts[#parts + 1] = tostring(zone.id) .. "=" .. (self:BuildZoneAllSnapshotPart(zone) or "-")
+        end
+    end
+    table.sort(parts)
+    local text = tostring(math.floor(tonumber(nonce) or 0)) .. "|" .. table.concat(parts, ",")
+    local hash = 5381
+    for i = 1, #text do hash = (hash * 33 + text:byte(i)) % 2147483647 end
+    local size = 36 ^ self.FRONT_MARK_CHARS
+    hash = hash % size
+    local digits, out = "0123456789abcdefghijklmnopqrstuvwxyz", ""
+    for _ = 1, self.FRONT_MARK_CHARS do
+        local d = hash % 36
+        out = digits:sub(d + 1, d + 1) .. out
+        hash = math.floor(hash / 36)
+    end
+    return out
+end
+function Overlord.Sync:BuildFrontMarks(nonce)
+    if Overlord.WaitingForSync or (Overlord.IsCaptureSyncPending and Overlord:IsCaptureSyncPending()) then
+        return nil
+    end
+    -- Still waiting for a map of the network (the login gate gave up): marks equal to a
+    -- neighbour's would leave it without the whole map it needs.
+    if Overlord.LocalFrontAwaitingNetworkSnapshot and Overlord:LocalFrontAwaitingNetworkSnapshot() then
+        return nil
+    end
+    local registry = Overlord.Fronts and Overlord.Fronts.Registry
+    local ids = self:FrontMarkIds()
+    if #ids == 0 then return nil end
+    local marks = {}
+    for i, id in ipairs(ids) do marks[i] = self:FrontMark(registry[id], nonce) end
+    return table.concat(marks)
+end
+-- Answerer: the points of the fronts whose mark differs from ours, in the answer's usual order
+-- (CollectSrResponseZones), or nil when the field is absent or malformed (a whole map).
+function Overlord.Sync:ZonesOfDifferingFronts(field, nonce, zones)
+    if type(field) ~= "string" or field:sub(1, 2) ~= "f~" then return nil end
+    local body, size = field:sub(3), self.FRONT_MARK_CHARS
+    local ids = self:FrontMarkIds()
+    if #ids == 0 or #body ~= #ids * size or body:find("[^0-9a-z]") then return nil end
+    local registry, differing = Overlord.Fronts.Registry, {}
+    for i, id in ipairs(ids) do
+        local front = registry[id]
+        if body:sub((i - 1) * size + 1, i * size) ~= self:FrontMark(front, nonce) then
+            for _, zone in ipairs(front.zones or {}) do
+                if zone and zone.id then differing[zone.id] = true end
+            end
+        end
+    end
+    local subset = {}
+    for _, zone in ipairs(zones or {}) do
+        if zone and differing[zone.id] then subset[#subset + 1] = zone end
+    end
+    return subset
+end
+-- Receiver of a "D" map: every point of the fronts its entries name (a set of zone ids), or nil
+-- when an entry names no known front (the map is refused, as a whole map with a stranger point).
+function Overlord.Sync:FrontsOfZaEntries(entries)
+    local fronts, points = Overlord.Fronts, {}
+    if not fronts or not fronts.GetZone then return nil end
+    for _, entry in ipairs(entries or {}) do
+        local zoneId = tostring(entry):match("^([^:]+)")
+        local _, front = fronts:GetZone(zoneId)
+        if type(front) ~= "table" or type(front.zones) ~= "table" then return nil end
+        for _, zone in ipairs(front.zones) do
+            if zone and zone.id then points[zone.id] = true end
+        end
+    end
+    return next(points) and points or nil
 end
 
 -- Comparaison semver simple (retourne >0 si v1 > v2, 0 si egal, <0 si v1 < v2)
@@ -4043,8 +4141,8 @@ local function PrintCaptureChatOnce(zone, newOwner, capturerName, captureTs)
             return
         end
     end
-    -- 1.8.0: only the player's continent (own capital excepted, or the worldwide
-    -- option). Before the dedup: a hidden alert marks nothing.
+    -- 2.3.2: only within the chosen alert scope (zone by default, continent or
+    -- world). Before the dedup: a hidden alert marks nothing.
     if Overlord.ShouldShowZoneAlert and not Overlord:ShouldShowZoneAlert(zone) then return end
     local now = GetTime()
     local key = zone.id .. ":" .. newOwner
@@ -4813,7 +4911,7 @@ function Overlord.Sync:RepairLostMapBatch(sender, batch, id)
     self._mapRetried = (self._mapRetried or 0) + 1
     -- (A territorial request, keep marks included, whose mode is the repair: a client that does
     -- not know it answers it as one periodic round.)
-    local payload = SRPayload("T"):gsub(":T$", ":R" .. id .. "." .. table.concat(missing, ","))
+    local payload = SRPayload("T", true):gsub(":T$", ":R" .. id .. "." .. table.concat(missing, ","))
     C_Timer.After(1 + math.random() * 3, function()
         local sync = Overlord.Sync
         if sync and not Overlord.InstanceSuspended and not IsInInstance() then
@@ -5195,8 +5293,8 @@ local function TryPrintEnemyCapturingAlert(zone, capturerName, waveTs)
         priv.enemyAlertEmitted[zone.id] = nil
         priv.enemyAlertSkipUntil[zone.id] = nil
     end
-    -- 1.8.0: another continent stays silent (own capital excepted) and marks
-    -- nothing: the attack still alerts once the player reaches that continent.
+    -- 2.3.2: a place outside the alert scope stays silent and marks nothing:
+    -- the attack still alerts once the player reaches it.
     if Overlord.ShouldShowZoneAlert and not Overlord:ShouldShowZoneAlert(zone) then return end
     waveTs = tonumber(waveTs) or zone.updatedAt or 0
     local waveKey = zone.id .. ":" .. tostring(waveTs)
@@ -5880,6 +5978,9 @@ function Overlord.Sync:BuildZoneAllSnapshotPages(zones, requestedScope)
             -- quarantaine, mais le receveur valide et applique son lot atomiquement.
             scope = "Q"
         end
+    elseif scope == "D" and #parts ~= expectedCount then
+        -- 2.3.2: whole fronts or nothing more than a partial map (never with login rows).
+        scope = "P"
     end
     if #parts == 0 then return {}, 0 end
     local zaSnapshotId = self:NextZaSnapshotId(scope)
@@ -6192,14 +6293,21 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
     end
     -- Extraction de la version, victoryTs et victoryFaction du payload SR
     -- Format: "faction:version:victoryTs:victoryFaction"
-    local _, senderVersionField, senderVTs, senderVF, senderVFront, senderRequestMode, markedMode =
-        strsplit(":", payload or "", 7)
+    local _, senderVersionField, senderVTs, senderVF, senderVFront, senderRequestMode, modeField7, modeField8 =
+        strsplit(":", payload or "", 8)
     -- 2.0.2: "k<marks>:<mode>" (see SRPayload). The list is read only when an answer to
     -- the requester alone is built (most requests heard are dropped before that).
-    local senderKeepMarks
-    if markedMode then
-        senderKeepMarks = senderRequestMode
-        senderRequestMode = markedMode
+    -- 2.3.2: "[k<marks>:]f~<front marks>:<mode>" (SRPayload, BuildFrontMarks).
+    local senderKeepMarks, senderFrontMarks
+    if modeField8 then
+        senderKeepMarks, senderFrontMarks, senderRequestMode = senderRequestMode, modeField7, modeField8
+    elseif modeField7 then
+        if tostring(senderRequestMode):sub(1, 2) == "f~" then
+            senderFrontMarks = senderRequestMode
+        else
+            senderKeepMarks = senderRequestMode
+        end
+        senderRequestMode = modeField7
     end
     local directSR = (channel == "WHISPER" or channel == "BNET")
     local fullResponseRequested = senderRequestMode == "F" and directSR
@@ -6430,8 +6538,25 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
             and (whisperTarget or bnetTarget) and Overlord.Relay and Overlord.Relay.PeerHoldsOurMap
             and Overlord.Relay:PeerHoldsOurMap(whisperTarget or bnetTarget, requestSession)
         if mapAlreadyHeld then NoteOutdated("mapPagesHeldSkipped") end
+        -- 2.3.2: the requester's front marks (BuildFrontMarks), in an answer to it alone: only
+        -- the fronts whose mark differs go, as one "D" map (whole fronts, taken like a whole
+        -- map for them). No front differs: no map pages (the keeps, the fight brackets and the
+        -- rest still go: the other faction sees our fights only through these answers).
+        local zaZones, zaScope = srZones, "G"
+        local frontsAllHeld = false
+        if not mapAlreadyHeld and senderFrontMarks and not quarantinedMapOnly and not viaBetaBroadcast
+            and (whisperTarget or bnetTarget) then
+            local subset = self:ZonesOfDifferingFronts(senderFrontMarks, senderEvidencePage, srZones)
+            if subset and #subset == 0 then
+                frontsAllHeld = true
+                NoteOutdated("mapFrontsHeldSkipped")
+            elseif subset and #subset < #srZones then
+                zaZones, zaScope = subset, "D"
+                NoteOutdated("mapFrontsOnly")
+            end
+        end
         local zaPages, zaPageCount = {}, 0
-        if not mapAlreadyHeld then zaPages, zaPageCount = self:BuildZoneAllSnapshotPages(srZones, "G") end
+        if not mapAlreadyHeld and not frontsAllHeld then zaPages, zaPageCount = self:BuildZoneAllSnapshotPages(zaZones, zaScope) end
         if zaPageCount > 1 and whisperTarget and not quarantinedMapOnly then self:NoteServedMap(whisperTarget, zaPages) end
         for zaPageIndex = 1, zaPageCount do
             local zaPage = zaPages[zaPageIndex]
@@ -8918,12 +9043,15 @@ function Overlord.Sync:OnReceiveZoneAll(
     local snapshotComplete = false
     local snapshotAtomic = false
     local snapshotGlobal = false
+    -- 2.3.2: a "D" map is exact for the fronts it names only: it never ends the login
+    -- quarantine or the capture gate, and counts as a map received only when we asked it.
+    local snapshotWholeMap = true
     local zaSnapshotScope
     local zaSnapshotId, zaPageIndexRaw, zaPageCountRaw, zaPageBody =
         payload:match("^@([%w_-]+):(%d+):(%d+)|(.*)$")
     if payload:sub(1, 1) == "@" then
         if not zaSnapshotId or #zaSnapshotId > 40 then return end
-        zaSnapshotScope = zaSnapshotId:match("^([GFPQ])%-%d+%-%d+$")
+        zaSnapshotScope = zaSnapshotId:match("^([GFPQD])%-%d+%-%d+$")
         if not zaSnapshotScope then return end
         local zaPageIndex = tonumber(zaPageIndexRaw)
         local zaPageCount = tonumber(zaPageCountRaw)
@@ -8996,10 +9124,11 @@ function Overlord.Sync:OnReceiveZoneAll(
                 pages = {},
             }
             priv.pendingZaSnapshotPages[batchKey] = pendingZaSnapshot
-            if zaSnapshotScope == "G" or zaSnapshotScope == "Q" then
+            -- (2.3.2: "D", the differing fronts of our map only, is taken like a whole map.)
+            if zaSnapshotScope == "G" or zaSnapshotScope == "Q" or zaSnapshotScope == "D" then
                 self:NoteMapBatch(sender, "started", pendingZaSnapshot)
             end
-            if zaSnapshotScope == "G" and self:WasMapAsked(sender) then
+            if (zaSnapshotScope == "G" or zaSnapshotScope == "D") and self:WasMapAsked(sender) then
                 self:WatchMapBatch(sender, batchKey, pendingZaSnapshot, zaSnapshotId)
             end
         elseif pendingZaSnapshot.pageCount ~= zaPageCount then
@@ -9032,14 +9161,17 @@ function Overlord.Sync:OnReceiveZoneAll(
         end
         priv.pendingZaSnapshotPages[batchKey] = nil
         priv.completedZaSnapshots[batchKey] = now
-        if zaSnapshotScope == "G" or zaSnapshotScope == "Q" then self:NoteMapBatch(sender, "complete") end
+        if zaSnapshotScope == "G" or zaSnapshotScope == "Q" or zaSnapshotScope == "D" then
+            self:NoteMapBatch(sender, "complete")
+        end
         payload = table.concat(assembledZaSnapshot, ",")
         if payload == "" then return end
         -- Tous les lots v2 (G/F/P/Q) sont atomiques jusqu'a validation. Q est une
         -- vue globale exacte emise par un client encore en quarantaine login.
         snapshotAtomic = true
-        snapshotGlobal = zaSnapshotScope == "G" or zaSnapshotScope == "Q"
+        snapshotGlobal = zaSnapshotScope == "G" or zaSnapshotScope == "Q" or zaSnapshotScope == "D"
         snapshotComplete = snapshotGlobal
+        snapshotWholeMap = zaSnapshotScope ~= "D"
     end
 
     -- Protocole territorial 9.6 uniquement : un ZA non page n'a ni identite de
@@ -9057,7 +9189,7 @@ function Overlord.Sync:OnReceiveZoneAll(
         and GetTime() - (self._lastAcceptedZaAt or -math.huge) < 30
         and next(priv.zaFlipClaims) == nil then
         if snapshotGlobal then
-            self:NoteFullMapReceived(sender)
+            if snapshotWholeMap or self:WasMapAsked(sender) then self:NoteFullMapReceived(sender) end
             self:NoteMapBatch(sender, "same")
         end
         local betaNet = Overlord.Relay
@@ -9120,8 +9252,11 @@ function Overlord.Sync:OnReceiveZoneAll(
     local expectedGlobalZoneIds = {}
     local expectedGlobalZoneCount = 0
     if snapshotGlobal then
+        -- 2.3.2: a "D" map holds whole fronts: every point of each front it names, nothing else.
+        local frontsOnly = zaSnapshotScope == "D" and self:FrontsOfZaEntries(entries) or nil
         for _, knownZone in ipairs(CollectSrResponseZones()) do
-            if knownZone and knownZone.id and not expectedGlobalZoneIds[knownZone.id] then
+            if knownZone and knownZone.id and not expectedGlobalZoneIds[knownZone.id]
+                and (zaSnapshotScope ~= "D" or (frontsOnly and frontsOnly[knownZone.id])) then
                 expectedGlobalZoneIds[knownZone.id] = true
                 expectedGlobalZoneCount = expectedGlobalZoneCount + 1
             end
@@ -9488,7 +9623,7 @@ function Overlord.Sync:OnReceiveZoneAll(
     -- Carte globale validee : le relais n'a pas besoin de redemander la carte a
     -- chaque nouveau pair entendu dans la foulee. Une carte rejetee, ou dont chaque
     -- zone etait plus ancienne que la notre, ne compte pas.
-    if snapshotGlobal then
+    if snapshotGlobal and (snapshotWholeMap or self:WasMapAsked(sender)) then
         for entryIndex = 1, #entries do
             if not staleSkipMask[entryIndex] then
                 self:NoteFullMapReceived(sender)
@@ -9901,7 +10036,7 @@ function Overlord.Sync:OnReceiveZoneAll(
             end
         end
     end
-    if snapshotComplete and snapshotConsensusComplete
+    if snapshotComplete and snapshotWholeMap and snapshotConsensusComplete
         and Overlord.ClearLoginUnconfirmedZoneState then
         -- Visuellement atomique : aucun marqueur ne sort de SYNC avant que le
         -- snapshot global ait fini de remplacer/rebaser toutes les zones.
@@ -9917,7 +10052,7 @@ function Overlord.Sync:OnReceiveZoneAll(
             end
         end
     end
-    snapshotComplete = snapshotComplete and snapshotConsensusComplete
+    snapshotComplete = snapshotComplete and snapshotWholeMap and snapshotConsensusComplete
         and allLoginZonesConfirmed
     for frontId in pairs(touchedInactiveFronts) do
         if Overlord.Zones.RefreshInactiveFrontAvailability then

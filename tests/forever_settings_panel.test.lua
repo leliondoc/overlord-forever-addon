@@ -111,6 +111,7 @@ assert(SP._registered, "Native options page was not registered")
 local expected = { "Overlord_UiScale", "Overlord_NotificationChat", "Overlord_GuildKillAlert",
     "Overlord_MapOverlayOpacity", "Overlord_MapIconOpacity", "Overlord_MapIconScale", "Overlord_MapPathOpacity",
     "Overlord_MinimapOverlayOpacity", "Overlord_ShowMinimapButton", "Overlord_ShowMinimapCaptureZones",
+    "Overlord_ShowMapModeButton",
     "Overlord_AutoWaypointNextObjective",
     "Overlord_ShowFloatingObjective",
     "Overlord_SoundEnabled", "Overlord_MostWantedAlerts", "Overlord_WorldMapMode" }
@@ -202,7 +203,7 @@ settings["Overlord_MapIconScale"].set(3)
 assert(OverlordDB.config.mapIconScale == 1.5, "Icon size not clamped to 150 %")
 assert(settings["Overlord_MapIconScale"].get() == 1.5)
 -- 1.7.1: Most Wanted alerts get a native checkbox wired to its module (default on).
--- The world map display is one dropdown (full, compact, hidden), compact by default (1.8.2).
+-- The world map display is one dropdown (full, compact, circles only since 2.3.2, hidden), compact by default (1.8.2).
 assert(settings["Overlord_MostWantedAlerts"].default == true and settings["Overlord_WorldMapMode"].default == "compact")
 settings["Overlord_MostWantedAlerts"].set(false)
 assert(Overlord.MostWanted.on == false and Overlord.MostWanted.plates == 1, "Most Wanted box not wired")
@@ -211,5 +212,25 @@ settings["Overlord_WorldMapMode"].set("compact")
 assert(Overlord.MapMarkers.mode == "compact" and settings["Overlord_WorldMapMode"].get() == "compact", "World map mode not wired")
 local mapModes = {}
 for _, o in ipairs(dropdowns["Overlord_WorldMapMode"]()) do mapModes[#mapModes + 1] = o.value end
-assert(table.concat(mapModes, ",") == "full,compact,hidden", "World map modes: " .. table.concat(mapModes, ","))
+assert(table.concat(mapModes, ",") == "full,compact,circles,hidden", "World map modes: " .. table.concat(mapModes, ","))
+-- 2.3.2: the world map corner button, both ways (box -> map, map -> box), never in a loop.
+do
+    local calls = 0
+    Overlord.MapMarkers.SetMapModeButtonShown = function(_, shown)
+        calls = calls + 1
+        if (OverlordDB.config.mapModeButtonHidden ~= true) == shown then return false end
+        OverlordDB.config.mapModeButtonHidden = (not shown) or nil
+        SP:NotifyMapModeButtonShown(shown)
+        return true
+    end
+    local box = settings["Overlord_ShowMapModeButton"]
+    assert(box.default == true and box.get() == true, "map button box: shown by default")
+    box.set(false)
+    assert(OverlordDB.config.mapModeButtonHidden == true and box.get() == false and calls == 1,
+        "the box did not hide the map button once: " .. calls)
+    -- Hidden from the map (right-click, Filters menu, /ov map button): the box follows.
+    Overlord.MapMarkers:SetMapModeButtonShown(true)
+    assert(values["Overlord_ShowMapModeButton"] == true and box.get() == true and calls == 2,
+        "the box did not follow the map: " .. calls)
+end
 print("Settings panel: native controls, chat tab, guild alerts, Most Wanted, world map, scale OK")
