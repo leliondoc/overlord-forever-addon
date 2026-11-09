@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.3.2"
+Overlord.Version = "2.3.3"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -564,9 +564,14 @@ function Overlord:IsKillScoringActive()
 end
 
 -- ============================================================
--- Module Shard : detection du shardID via parsing GUID (ZoneUID)
--- Format retail : Type-0-ServerID-InstanceID-ZoneUID-NpcID-SpawnUID
--- Le ZoneUID (5e segment apres le 0) identifie la couche / le shard client.
+-- Module Shard : detection du shardID via parsing GUID (ServerID)
+-- Format : Type-0-ServerID-InstanceID-ZoneUID-NpcID-SpawnUID
+-- 2.3.3: on Forever the layer is the ServerID (3rd field). The ZoneUID differs between
+-- players standing together on one layer and changes from day to day; the ServerID is
+-- shared by players who see each other and differs across layers (field readings
+-- 2026-11: UnitPhaseReason sharding, group hops). Creatures of players (pets, totems)
+-- carry other server numbers: player-controlled units are skipped, and a layer is
+-- believed only once two different NPCs agree.
 -- Sources : vignettes monde, cible, souris, nameplates.
 -- ============================================================
 Overlord.Shard = {
@@ -602,29 +607,15 @@ local function CoerceShardId(value)
     return tonumber(value)
 end
 
--- Parse le layer ID depuis un GUID unit/vignette (pcall : valeurs secret 12.0.5).
+-- Parse le layer ID (ServerID) depuis un GUID unit/vignette (pcall : valeurs secret 12.0.5).
 local function ParseLayerIdFromGuidPieces(guid)
-    local guidType, zero, _, instanceId, zoneUid = strsplit("-", guid)
+    local guidType, zero, serverId = strsplit("-", guid)
     if guidType ~= "Creature" and guidType ~= "Vehicle" and guidType ~= "GameObject" and guidType ~= "Vignette" then
         return nil
     end
-    -- Format moderne : Type-0-server-instance-zoneUID-npc-spawn
-    if zero == "0" and zoneUid and zoneUid ~= "" then
-        local zoneLayer = tonumber(zoneUid)
-        if zoneLayer and zoneLayer >= 0 and zoneLayer < SHARD_LAYER_ID_MAX then
-            if zoneLayer > 0 then return zoneLayer end
-            local instLayer = tonumber(instanceId)
-            if instLayer and instLayer > 0 and instLayer < SHARD_LAYER_ID_MAX then
-                return instLayer
-            end
-            return 0
-        end
-    end
-    -- Ancien format sans le 0 central (legacy).
-    local legacy = tonumber(zoneUid)
-    if legacy and legacy >= 0 and legacy < SHARD_LAYER_ID_MAX then
-        return legacy
-    end
+    if zero ~= "0" or not serverId or not serverId:find("^%d+$") then return nil end
+    local layer = tonumber(serverId)
+    if layer and layer > 0 and layer < SHARD_LAYER_ID_MAX then return layer end
     return nil
 end
 
@@ -658,6 +649,8 @@ end
 
 local function ReadShardIDFromUnit(unit)
     if not UnitExists(unit) or UnitIsPlayer(unit) then return nil end
+    -- 2.3.3: a pet, totem or summon carries its owner's server number, not the layer's.
+    if UnitPlayerControlled and UnitPlayerControlled(unit) then return nil end
     if UnitIsVisible and not UnitIsVisible(unit) then return nil end
     local guid = SafeUnitGUID(unit)
     return ExtractShardIDFromGUID(guid), guid
@@ -670,7 +663,7 @@ local function ExtractShardIDFromUnit(unit)
 end
 
 -- Certaines vignettes retail utilisent un GUID d'enveloppe qui ne transporte pas un
--- ZoneUID exploitable. Leur objectGUID pointe en revanche vers la creature / l'objet
+-- numero de couche exploitable. Leur objectGUID pointe en revanche vers la creature / l'objet
 -- effectivement present sur notre couche. L'acces reste protege car ces valeurs peuvent
 -- etre secretes dans certains contextes 12.x.
 -- (Named function: no closure per vignette on every scan.)
@@ -688,39 +681,48 @@ local function GetVignetteObjectGUID(vignetteGUID)
     return objectGUID
 end
 
--- GUID de vignette : meme parseur ; repli sur le dernier entier si structure atypique.
-local function ExtractShardIDFromVignetteGUID(guid)
-    local id = ExtractShardIDFromGUID(guid)
-    if id ~= nil then return id end
-    if type(guid) ~= "string" or guid == "" then return nil end
-    local lastNum
-    for n in guid:gmatch("(%d+)") do
-        lastNum = n
-    end
-    if lastNum then
-        local v = tonumber(lastNum)
-        if v and v >= 0 and v < SHARD_LAYER_ID_MAX then return v end
-    end
+-- 2.3.3: a layer is believed once two different NPCs (GUIDs) give it. Reused tables,
+-- emptied at the start of each scan.
+local layerVoteSeen, layerVoteCount = {}, {}
+-- Events: a new layer seen on one GUID waits here for a second NPC (ObserveShardFromGUID).
+local pendingEventLayer, pendingEventGuid, pendingEventAt
+local function ClearPendingEventLayer()
+    pendingEventLayer, pendingEventGuid, pendingEventAt = nil, nil, nil
+end
+local function ClearLayerVotes()
+    for k in pairs(layerVoteSeen) do layerVoteSeen[k] = nil end
+    for k in pairs(layerVoteCount) do layerVoteCount[k] = nil end
+end
+-- The layer once a second NPC agrees with it, else nil.
+local function VoteLayer(layer, guid)
+    if layer == nil or type(guid) ~= "string" or layerVoteSeen[guid] then return nil end
+    layerVoteSeen[guid] = true
+    local n = (layerVoteCount[layer] or 0) + 1
+    layerVoteCount[layer] = n
+    if n >= 2 then return layer end
     return nil
 end
 
 -- Parcourt les vignettes actives (objectifs, caisses, elites, etc.) - se met a jour souvent sans PNJ a portee
-local function ScanVignettesForShardID(strictZoneUid)
+local function ScanVignettesForShardID()
     if not C_VignetteInfo or not C_VignetteInfo.GetVignettes then return nil end
     local ok, vignettes = pcall(C_VignetteInfo.GetVignettes)
     if not ok or type(vignettes) ~= "table" then return nil end
     for _, vignetteGUID in ipairs(vignettes) do
-        -- Une Anchor GK immuable ne doit jamais utiliser le dernier nombre arbitraire
-        -- d'un GUID atypique (souvent NPC/spawn ID). Le GUID objet est une preuve stricte
-        -- equivalente a une cible/nameplate ; seul le vieux repli numerique reste interdit.
-        local sid = ExtractShardIDFromGUID(vignetteGUID)
+        -- The vignette's own GUID, else its object's (the creature or object on our layer).
+        -- One vote per vignette: both GUIDs name the same thing.
+        local sid, voter = ExtractShardIDFromGUID(vignetteGUID), vignetteGUID
+        local objectGUID = GetVignetteObjectGUID(vignetteGUID)
         if sid == nil then
-            sid = ExtractShardIDFromGUID(GetVignetteObjectGUID(vignetteGUID))
+            sid, voter = ExtractShardIDFromGUID(objectGUID), objectGUID
+        elseif type(objectGUID) == "string" then
+            -- One NPC, one vote: its object already voted as a nameplate or target, or
+            -- it will not vote again under its own GUID.
+            if layerVoteSeen[objectGUID] then sid = nil end
+            layerVoteSeen[objectGUID] = true
         end
-        if sid == nil and not strictZoneUid then
-            sid = ExtractShardIDFromVignetteGUID(vignetteGUID)
-        end
-        if sid ~= nil then return sid end
+        local agreed = VoteLayer(sid, voter)
+        if agreed ~= nil then return agreed end
     end
     return nil
 end
@@ -736,12 +738,12 @@ local function ReadPlateToken(plate)
 end
 
 function Overlord.Shard:ScanForShardID()
-    local strictZoneUid = type(self.localContextKey) == "string"
-        and self.localContextKey:find("^keep:") ~= nil
-    local shardID
+    ClearLayerVotes()
+    local shardID, guid, agreed
     for i = 1, #SHARD_SCAN_UNITS do
-        shardID = ExtractShardIDFromUnit(SHARD_SCAN_UNITS[i])
-        if shardID ~= nil then return shardID end
+        shardID, guid = ExtractShardIDFromUnit(SHARD_SCAN_UNITS[i])
+        agreed = VoteLayer(shardID, guid)
+        if agreed ~= nil then return agreed end
     end
     -- Les tokens sont attribues par WoW et ne sont pas limites a nameplate1..40.
     -- platesCovered: every listed plate was read without error, so the fixed tokens
@@ -756,12 +758,12 @@ function Overlord.Shard:ScanForShardID()
                 local readable, unit = pcall(ReadPlateToken, plate)
                 if readable and unit then
                     local unitOk
-                    unitOk, shardID = pcall(ReadShardIDFromUnit, unit)
+                    unitOk, shardID, guid = pcall(ReadShardIDFromUnit, unit)
                     if not unitOk then
-                        shardID = nil
                         platesCovered = false
-                    elseif shardID ~= nil then
-                        return shardID
+                    else
+                        agreed = VoteLayer(shardID, guid)
+                        if agreed ~= nil then return agreed end
                     end
                 else
                     platesCovered = false
@@ -772,11 +774,12 @@ function Overlord.Shard:ScanForShardID()
     -- Secours pour les clients qui n'exposent pas la liste des frames.
     if not platesCovered then
         for i = 1, #SHARD_NAMEPLATE_UNITS do
-            shardID = ExtractShardIDFromUnit(SHARD_NAMEPLATE_UNITS[i])
-            if shardID ~= nil then return shardID end
+            shardID, guid = ExtractShardIDFromUnit(SHARD_NAMEPLATE_UNITS[i])
+            agreed = VoteLayer(shardID, guid)
+            if agreed ~= nil then return agreed end
         end
     end
-    return ScanVignettesForShardID(strictZoneUid)
+    return ScanVignettesForShardID()
 end
 
 -- Duree pendant laquelle les events bruyants reutilisent une mesure confirmee.
@@ -1027,7 +1030,7 @@ function Overlord.Shard:SetPlayerShard(playerName, shardID)
     return true
 end
 
--- Un ZoneUID n'est valable que dans le contexte (front ou fortin) ou il a ete lu.
+-- Un numero de couche n'est valable que dans le contexte (front ou fortin) ou il a ete lu.
 -- Le ticker gameplay appelle ceci avant toute tentative de tag : un passage Redridge ->
 -- Wetlands ne peut donc jamais reutiliser l'identifiant de la carte precedente.
 function Overlord.Shard:RefreshLocalContext(contextKey, skipScan)
@@ -1040,6 +1043,7 @@ function Overlord.Shard:RefreshLocalContext(contextKey, skipScan)
     self.lastScanAttemptAt = 0
     self.localShardSource = nil
     self.keepShardRequest = nil
+    ClearPendingEventLayer()
     if StopShardScanMaintenance then StopShardScanMaintenance() end
     if not skipScan and contextKey ~= "" and Overlord.IsShardHelperActive
         and Overlord:IsShardHelperActive() then
@@ -1077,6 +1081,7 @@ function Overlord.Shard:InvalidateLocalContext()
     self.lastScanAttemptAt = 0
     self.localShardSource = nil
     self.keepShardRequest = nil
+    ClearPendingEventLayer()
     if StopShardScanMaintenance then StopShardScanMaintenance() end
 end
 
@@ -1234,13 +1239,31 @@ end
 -- Les preuves unitaires sont lues au moment exact ou WoW expose le token. Attendre le
 -- debounce perdait parfois la cible / le cadavre avant le scan, notamment dans un fortin
 -- sans vignette exploitable. Ce chemin ne parcourt ni les vignettes ni les 40 nameplates.
-local function ObserveShardFromGUID(guid)
+-- 2.3.3: one GUID confirms the known layer, but a new layer needs a second, different NPC
+-- giving it within SHARD_EVENT_AGREE_SECONDS (a killed totem carries its owner's server).
+local SHARD_EVENT_AGREE_SECONDS = 30
+-- confirmOnly (a killed creature's raw GUID, never checked for a player owner): it may
+-- confirm the known layer but never move it.
+local function ObserveShardFromGUID(guid, confirmOnly)
     if not Overlord.Shard:SyncLocalContext() then return false end
     if not (Overlord.IsShardHelperActive and Overlord:IsShardHelperActive()) then return false end
     local shardID = ExtractShardIDFromGUID(guid)
     if shardID == nil then return false end
     local now = GetTime()
     local changed = shardID ~= CoerceShardId(Overlord.Shard.currentShardID)
+    if changed and confirmOnly and Overlord.Shard.currentShardID ~= nil then return false end
+    if changed then
+        if pendingEventLayer == shardID and pendingEventGuid ~= guid
+            and now - (pendingEventAt or 0) <= SHARD_EVENT_AGREE_SECONDS then
+            ClearPendingEventLayer()
+        else
+            pendingEventLayer, pendingEventGuid, pendingEventAt = shardID, guid, now
+            return false
+        end
+    else
+        -- An NPC of the known layer contradicts the waiting one.
+        ClearPendingEventLayer()
+    end
     -- Same layer measured under 2 s ago (every NPC mouseover, nameplate and soft
     -- target in a crowd): nothing to update, broadcast or repaint.
     if not changed and Overlord.Shard.localShardSource == "guid"
@@ -1313,9 +1336,12 @@ ScheduleNextShardScan = function(hasKnownShard)
         shardUnknownScanDelay = SHARD_UNKNOWN_SCAN_MIN
         delay = SHARD_KNOWN_SCAN_INTERVAL
         local lastBroadcast = tonumber(Overlord.Shard.lastBroadcastAt) or 0
-        if lastBroadcast > 0 then
-            delay = math.min(delay,
-                math.max(1, SHARD_BROADCAST_INTERVAL - (GetTime() - lastBroadcast)))
+        -- Rescan when the heartbeat falls due; once overdue (a scan found no two NPCs that
+        -- agree), the usual interval: no rescan every second.
+        local untilBroadcast = lastBroadcast > 0
+            and SHARD_BROADCAST_INTERVAL - (GetTime() - lastBroadcast) or 0
+        if untilBroadcast > 0 then
+            delay = math.min(delay, math.max(1, untilBroadcast))
         end
     else
         delay = shardUnknownScanDelay
@@ -1429,7 +1455,7 @@ local function HandleShardPulseEvent(frame, event, ...)
         -- En 12.0 PARTY_KILL peut fournir (attackerGUID, targetGUID). Consommer d'abord
         -- targetGUID : contrairement au token "target", il survit a la disparition du cadavre.
         -- Le format legacy fournit parfois arg1 comme unit token ; les deux replis le couvrent.
-        if not (PartyKillAttackerIsLocal(arg1) and ObserveShardFromGUID(arg2))
+        if not (PartyKillAttackerIsLocal(arg1) and ObserveShardFromGUID(arg2, true))
             and not ObserveShardFromUnit(arg1)
             and not ObserveShardFromUnit("target") then
             if LocalShardEvidenceNeedsRefresh(8) then
