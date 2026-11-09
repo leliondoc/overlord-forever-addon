@@ -178,10 +178,12 @@ local clock = realTime()
 GetTime = function() return clock end
 math.random = function() return 0 end
 Overlord.InActiveFront = true
+-- (2.3.2: the requests below carry no front marks, as at a login; see the end for marks.)
+local markedRequests = false
 local function ask(sender, channel, replyTo)
     built, appended, journal, fights, fightsOnly = 0, 0, 0, 0, nil
     clock = clock + 600
-    sync:OnSyncRequest(sender, sync:GetSRPayload("T"), channel, replyTo)
+    sync:OnSyncRequest(sender, sync:GetSRPayload("T", not markedRequests), channel, replyTo)
     return built, appended
 end
 -- A request that came through the relay, first hand: targeted or broadcast, with its session.
@@ -215,6 +217,52 @@ for _, heard in ipairs({ "CHANNEL", "RAID", "PARTY" }) do
     assert(b == 1, "map pages left out of an answer heard by others (" .. heard .. ")")
     assert(fights == 0, "fight brackets went into an answer heard by others (" .. heard .. ")")
 end
+-- 2.3.2, front marks: the requester's marks say our very map: no map pages, whatever its
+-- session or transport; one front of its map differs: that front alone, as a "D" map.
+local lastScope, lastZones
+sync.BuildZoneAllSnapshotPages = function(self, zones, scope)
+    built, lastScope, lastZones = built + 1, scope, #zones
+    return realBuild(self, zones, scope)
+end
+markedRequests = true
+assert(sync:GetSRPayload("T"):find(":f~", 1, true), "fixture: a territorial request carries no front marks")
+-- Still waiting for a map of the network (login gate gave up): no marks, a whole map comes.
+do
+    local awaiting = Overlord.LocalFrontAwaitingNetworkSnapshot
+    Overlord.LocalFrontAwaitingNetworkSnapshot = function() return true end
+    assert(not sync:GetSRPayload("T"):find(":f~", 1, true), "front marks sent while waiting for the network's map")
+    Overlord.LocalFrontAwaitingNetworkSnapshot = awaiting
+end
+b, a = ask("Same Tester", "WHISPER")
+assert(b == 0 and a == 1, "marks of our very map still got map pages, or lost the keep rows: " .. b .. "/" .. a)
+b = askRelayed("Other Tester", true, "sessZ")
+assert(b == 0, "marks of our very map, another session, still got map pages")
+b = askRelayed("Other Tester", false, "sessZ")
+assert(b == 1 and lastScope == "G", "a relay broadcast (login, instance exit) did not get the whole map")
+local ids = sync:FrontMarkIds()
+local front = Overlord.Fronts.Registry[ids[1]]
+-- (The fixture has one front: a second one, one neutral point, that both sides hold alike.)
+local extra = { id = "zz_extra", zones = { { id = "zz_extra_point", status = "available", updatedAt = 1790000000 } } }
+Overlord.Fronts.Registry.zz_extra = extra
+assert(#sync:FrontMarkIds() == #ids + 1, "fixture: the second front is not marked")
+local payload = sync:GetSRPayload("T")
+local z = front.zones[1]
+local kept = { z.owner, z.capturedTime, z.status, z.updatedAt }
+z.owner = z.owner == "Horde" and "Alliance" or "Horde"
+z.capturedTime, z.status, z.updatedAt = 1790000500, "captured", 1790000500
+built, lastScope, lastZones = 0, nil, nil
+clock = clock + 600
+sync:OnSyncRequest("Same Tester", payload, "WHISPER")
+assert(built == 1 and lastScope == "D" and lastZones == #front.zones,
+    "one differing front did not go alone: " .. tostring(lastScope) .. " " .. tostring(lastZones))
+z.owner, z.capturedTime, z.status, z.updatedAt = kept[1], kept[2], kept[3], kept[4]
+-- A malformed or older list: the whole map.
+built, lastScope = 0, nil
+clock = clock + 600
+sync:OnSyncRequest("Same Tester", payload:gsub(":f~(%w+):", ":f~%1z:"), "WHISPER")
+assert(built == 1 and lastScope == "G", "a malformed front list did not get the whole map")
+Overlord.Fronts.Registry.zz_extra = nil
+markedRequests = false
 sync.BuildZoneAllSnapshotPages, sync.AppendOutpostToSrQueue, sync.AppendVictoryBonusToSrQueue = realBuild, realAppend, realJournal
 sync.AppendFrontActivityToSrQueue = realFights
 relay.PeerHoldsOurMap, relay.IsDispatching, relay.IsTargetedDispatch = realHolds, realDispatching, realTargeted

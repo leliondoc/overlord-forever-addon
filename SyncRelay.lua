@@ -1599,6 +1599,12 @@ function net:GetBridgeDiagnostics()
         lines[#lines + 1] = string.format("Map answers sent without their map pages (the requester's presence"
             .. " showed this very map): %d.", self.stats.mapPagesHeldSkipped)
     end
+    -- 2.3.2: answers that carried only the fronts the requester's marks showed different.
+    if (self.stats.mapFrontsOnly or 0) + (self.stats.mapFrontsHeldSkipped or 0) > 0 then
+        lines[#lines + 1] = string.format("Map answers with only the differing fronts: %d; with no front"
+            .. " (the requester's marks showed this very map): %d.", self.stats.mapFrontsOnly or 0,
+            self.stats.mapFrontsHeldSkipped or 0)
+    end
     if (self.stats.outdatedPresences or 0) + (self.stats.outdatedMaps or 0) + (self.stats.outdatedRequests or 0) > 0 then
         lines[#lines + 1] = string.format("Outdated clients (update required): %d presences not asked for a map,"
             .. " %d map pages not taken, %d requests not answered.", self.stats.outdatedPresences or 0,

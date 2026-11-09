@@ -1,7 +1,9 @@
-2.3.1
+2.3.2
 
-**Overlord Forever 2.3.1**
+**Overlord Forever 2.3.2**
 
-- No more "You're doing that too fast" caused by the addon: while the game refuses the Overlord channel, the server still let the addon in for a moment before refusing its messages, and 2.3.0 took that for a success and tried the channel again every minute with several channel joins and leaves. A channel that refuses the addon's messages now counts as refused, is tried again with a single join, less and less often (up to every 15 minutes), and this is remembered after a /reload or a login.
-- The addon no longer joins temporary channels at all (they only placed the Overlord channel's number in your list). It still waits for the game's own channels before joining, so their numbers and colours do not move.
-- /ov network: the channel line no longer says it is tried again every 5 minutes.
+- Capture alerts now follow the zone you are in by default: an attack, an outpost assault or a mine far away no longer fills your chat when you cannot get there in time. A capital city counts as the zone around it (Stormwind hears Elwynn). The new "Capture alerts" option in the settings chooses My zone, My continent or Whole world; if you had ticked the old "whole world" box, you keep the whole world.
+- Your own capital follows the same rule. Your guild's keeps and outposts, rampages, calls to arms and total victories still reach you everywhere.
+- Mines follow the same option (they were announced from the whole world).
+- World map: a new "Circles only" display (circles and icons without names; a point's name shows under the mouse). An Overlord button in the corner of the world map changes the display with one click; right-click + drag moves it; it can be hidden from the map's Filters menu, the options or /ov map button.
+- Lighter map exchange between players: only the fronts that differ are sent, and nothing is sent when both sides already agree. Fights show on the map sooner.

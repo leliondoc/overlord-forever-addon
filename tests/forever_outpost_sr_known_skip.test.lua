@@ -115,7 +115,12 @@ end
 local payload = sync:GetSRPayload("T")
 local f = {}
 for part in (payload .. ":"):gmatch("([^:]*):") do f[#f + 1] = part end
-assert(#f == 7 and f[6]:sub(1, 1) == "k" and f[7] == "T", "Not a territorial request with marks: " .. payload)
+-- (2.3.2: then "f~" + the front marks, right before the mode.)
+assert(#f == 8 and f[6]:sub(1, 1) == "k" and f[7]:sub(1, 2) == "f~" and f[8] == "T",
+    "Not a territorial request with marks: " .. payload)
+assert(sync:WithoutKeepMarks(payload) == table.concat({ f[1], f[2], f[3], f[4], f[5], "T" }, ":"),
+    "a copy the whole group hears kept its marks: " .. sync:WithoutKeepMarks(payload))
+assert(not sync:GetSRPayload("T", true):find("f~", 1, true), "a request asked without front marks carries them")
 for _, mode in ipairs({ "F", "S", "H" }) do
     assert(sync:GetSRPayload(mode):match(":" .. mode .. "$") and not sync:GetSRPayload(mode):find(":k", 1, true),
         "A " .. mode .. " request carries marks")

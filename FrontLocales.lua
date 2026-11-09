@@ -89,34 +89,66 @@ L.OUTPOST_LESI_BEAR_CAVE_NAME = outpostNames[3]
 L.OUTPOST_ANADORA_NAME = outpostNames[4]
 -- World map display modes: map corner button, Blizzard "Map Filters" and minimap
 -- tracking menus, options dropdown and /ov map.
--- { filters title, full, compact, hidden, options tooltip, button click hint, chat/status line }
+-- { filters title, full, compact, hidden, options tooltip, button click hint, chat/status line,
+--   circles only (2.3.2), map button: label, options tooltip, move/hide hint, hidden, shown (2.3.2) }
 local mapModeTexts = {
     enUS = { "Overlord zones", "Full", "Compact (name in the circle)", "Hidden",
-        "Full: a name banner on every point. Compact: circles and icons, with each point's name written inside its circle; its banner and status show under the mouse and while it is being taken. Hidden: nothing from Overlord on the world map.\nAlso from the Overlord button in the corner of the world map, the map's Filters menu, the minimap tracking menu and /ov map.",
-        "Click: %s", "World map display: %s" },
+        "Full: a name banner on every point. Compact: circles and icons, with each point's name written inside its circle; its banner and status show under the mouse and while it is being taken. Circles only: the same without the names in the circles; a point's name shows under the mouse. Hidden: nothing from Overlord on the world map.\nAlso from the Overlord button in the corner of the world map, the map's Filters menu, the minimap tracking menu and /ov map.",
+        "Click: %s", "World map display: %s", "Circles only",
+        "Overlord button on the world map",
+        "The Overlord button in the corner of the world map: a click changes the display. Right-click + drag moves it. The displays stay in the map's Filters menu and /ov map.",
+        "Right-click + drag: move.",
+        "Map button hidden. To bring it back: the map's Filters menu, the options or /ov map button.", "Map button shown." },
     frFR = { "Zones Overlord", "Complet", "Compact (nom dans le cercle)", "Masqué",
-        "Complet : un bandeau avec le nom sur chaque point. Compact : cercles et icônes, avec le nom de chaque point écrit dans son cercle ; son bandeau et son statut apparaissent sous la souris et pendant sa prise. Masqué : rien d'Overlord sur la carte du monde.\nAussi avec le bouton Overlord dans le coin de la carte du monde, le menu Filtres de la carte, le menu de suivi de la minicarte et /ov map.",
-        "Clic : %s", "Carte du monde : %s" },
+        "Complet : un bandeau avec le nom sur chaque point. Compact : cercles et icônes, avec le nom de chaque point écrit dans son cercle ; son bandeau et son statut apparaissent sous la souris et pendant sa prise. Cercles seuls : pareil, sans les noms dans les cercles ; le nom d'un point apparaît sous la souris. Masqué : rien d'Overlord sur la carte du monde.\nAussi avec le bouton Overlord dans le coin de la carte du monde, le menu Filtres de la carte, le menu de suivi de la minicarte et /ov map.",
+        "Clic : %s", "Carte du monde : %s", "Cercles seuls",
+        "Bouton Overlord sur la carte du monde",
+        "Le bouton Overlord dans le coin de la carte du monde : un clic change l'affichage. Clic droit + glisser le déplace. Les affichages restent dans le menu Filtres de la carte et /ov map.",
+        "Clic droit + glisser : déplacer.",
+        "Bouton de la carte masqué. Pour le remettre : menu Filtres de la carte, options ou /ov map button.", "Bouton de la carte affiché." },
     esES = { "Zonas de Overlord", "Completo", "Compacto (nombre en el círculo)", "Oculto",
-        "Completo: un cartel con el nombre en cada punto. Compacto: círculos e iconos, con el nombre de cada punto escrito dentro de su círculo; su cartel y su estado aparecen bajo el ratón y mientras se está tomando. Oculto: nada de Overlord en el mapa del mundo.\nTambién con el botón de Overlord en la esquina del mapa del mundo, el menú Filtros del mapa, el menú de seguimiento del minimapa y /ov map.",
-        "Clic: %s", "Mapa del mundo: %s" },
+        "Completo: un cartel con el nombre en cada punto. Compacto: círculos e iconos, con el nombre de cada punto escrito dentro de su círculo; su cartel y su estado aparecen bajo el ratón y mientras se está tomando. Solo círculos: lo mismo sin los nombres en los círculos; el nombre de un punto aparece bajo el ratón. Oculto: nada de Overlord en el mapa del mundo.\nTambién con el botón de Overlord en la esquina del mapa del mundo, el menú Filtros del mapa, el menú de seguimiento del minimapa y /ov map.",
+        "Clic: %s", "Mapa del mundo: %s", "Solo círculos",
+        "Botón de Overlord en el mapa del mundo",
+        "El botón de Overlord en la esquina del mapa del mundo: un clic cambia la vista. Clic derecho + arrastrar lo mueve. Las vistas siguen en el menú Filtros del mapa y en /ov map.",
+        "Clic derecho + arrastrar: mover.",
+        "Botón del mapa oculto. Para recuperarlo: menú Filtros del mapa, opciones o /ov map button.", "Botón del mapa visible." },
     deDE = { "Overlord-Zonen", "Vollständig", "Kompakt (Name im Kreis)", "Ausgeblendet",
-        "Vollständig: ein Namensbanner auf jedem Punkt. Kompakt: Kreise und Symbole, der Name jedes Punktes steht in seinem Kreis; Banner und Status erscheinen unter der Maus und während er erobert wird. Ausgeblendet: nichts von Overlord auf der Weltkarte.\nAuch über den Overlord-Knopf in der Ecke der Weltkarte, das Filtermenü der Karte, das Verfolgungsmenü der Minimap und /ov map.",
-        "Klick: %s", "Weltkarte: %s" },
+        "Vollständig: ein Namensbanner auf jedem Punkt. Kompakt: Kreise und Symbole, der Name jedes Punktes steht in seinem Kreis; Banner und Status erscheinen unter der Maus und während er erobert wird. Nur Kreise: dasselbe ohne die Namen in den Kreisen; der Name eines Punktes erscheint unter der Maus. Ausgeblendet: nichts von Overlord auf der Weltkarte.\nAuch über den Overlord-Knopf in der Ecke der Weltkarte, das Filtermenü der Karte, das Verfolgungsmenü der Minimap und /ov map.",
+        "Klick: %s", "Weltkarte: %s", "Nur Kreise",
+        "Overlord-Knopf auf der Weltkarte",
+        "Der Overlord-Knopf in der Ecke der Weltkarte: ein Klick wechselt die Anzeige. Rechtsklick + Ziehen verschiebt ihn. Die Anzeigen bleiben im Filtermenü der Karte und unter /ov map.",
+        "Rechtsklick + Ziehen: verschieben.",
+        "Kartenknopf ausgeblendet. Zurückholen: Filtermenü der Karte, Optionen oder /ov map button.", "Kartenknopf eingeblendet." },
     ruRU = { "Зоны Overlord", "Полный", "Компактный (название в круге)", "Скрыт",
-        "Полный: лента с названием на каждой точке. Компактный: круги и значки, название каждой точки написано внутри её круга; лента и статус видны под курсором и во время захвата. Скрыт: ничего от Overlord на карте мира.\nТакже кнопкой Overlord в углу карты мира, в меню фильтров карты, в меню отслеживания мини-карты и командой /ov map.",
-        "Щелчок: %s", "Карта мира: %s" },
+        "Полный: лента с названием на каждой точке. Компактный: круги и значки, название каждой точки написано внутри её круга; лента и статус видны под курсором и во время захвата. Только круги: то же самое без названий в кругах; название точки видно под курсором. Скрыт: ничего от Overlord на карте мира.\nТакже кнопкой Overlord в углу карты мира, в меню фильтров карты, в меню отслеживания мини-карты и командой /ov map.",
+        "Щелчок: %s", "Карта мира: %s", "Только круги",
+        "Кнопка Overlord на карте мира",
+        "Кнопка Overlord в углу карты мира: щелчок меняет режим. Перетаскивание правой кнопкой перемещает её. Режимы остаются в меню фильтров карты и в /ov map.",
+        "Перетаскивание правой кнопкой: переместить.",
+        "Кнопка карты скрыта. Вернуть: меню фильтров карты, настройки или /ov map button.", "Кнопка карты показана." },
     ptBR = { "Zonas do Overlord", "Completo", "Compacto (nome no círculo)", "Oculto",
-        "Completo: um banner com o nome em cada ponto. Compacto: círculos e ícones, com o nome de cada ponto escrito dentro do seu círculo; o banner e o estado aparecem sob o mouse e enquanto ele é tomado. Oculto: nada do Overlord no mapa-múndi.\nTambém pelo botão do Overlord no canto do mapa-múndi, no menu Filtros do mapa, no menu de rastreamento do minimapa e com /ov map.",
-        "Clique: %s", "Mapa-múndi: %s" },
+        "Completo: um banner com o nome em cada ponto. Compacto: círculos e ícones, com o nome de cada ponto escrito dentro do seu círculo; o banner e o estado aparecem sob o mouse e enquanto ele é tomado. Só círculos: o mesmo, sem os nomes nos círculos; o nome de um ponto aparece sob o mouse. Oculto: nada do Overlord no mapa-múndi.\nTambém pelo botão do Overlord no canto do mapa-múndi, no menu Filtros do mapa, no menu de rastreamento do minimapa e com /ov map.",
+        "Clique: %s", "Mapa-múndi: %s", "Só círculos",
+        "Botão do Overlord no mapa-múndi",
+        "O botão do Overlord no canto do mapa-múndi: um clique muda a exibição. Clique direito + arrastar o move. As exibições continuam no menu Filtros do mapa e em /ov map.",
+        "Clique direito + arrastar: mover.",
+        "Botão do mapa oculto. Para trazê-lo de volta: menu Filtros do mapa, opções ou /ov map button.", "Botão do mapa visível." },
     zhCN = { "Overlord 区域", "完整", "紧凑（名称写在圆圈内）", "隐藏",
-        "完整：每个据点都显示名称横幅。紧凑：显示圆圈和图标，据点名称写在圆圈内；鼠标悬停或据点正在被占领时显示横幅和状态。隐藏：世界地图上不显示任何 Overlord 内容。\n也可通过世界地图角落的 Overlord 按钮、地图的过滤菜单、小地图追踪菜单和 /ov map 切换。",
-        "点击：%s", "世界地图：%s" },
+        "完整：每个据点都显示名称横幅。紧凑：显示圆圈和图标，据点名称写在圆圈内；鼠标悬停或据点正在被占领时显示横幅和状态。仅圆圈：同上，但圆圈内不写名称；鼠标悬停时显示据点名称。隐藏：世界地图上不显示任何 Overlord 内容。\n也可通过世界地图角落的 Overlord 按钮、地图的过滤菜单、小地图追踪菜单和 /ov map 切换。",
+        "点击：%s", "世界地图：%s", "仅圆圈",
+        "世界地图上的 Overlord 按钮",
+        "世界地图角落的 Overlord 按钮：点击切换显示方式。按住右键拖动可移动它。显示方式仍可在地图的过滤菜单和 /ov map 中切换。",
+        "右键拖动：移动。",
+        "地图按钮已隐藏。恢复方法：地图的过滤菜单、选项或 /ov map button。", "地图按钮已显示。" },
 }
 mapModeTexts.esMX = mapModeTexts.esES
 local mapMode = mapModeTexts[locale] or mapModeTexts.enUS
 L.MAP_FILTER_OVERLORD, L.MAP_MODE_FULL, L.MAP_MODE_COMPACT, L.MAP_MODE_HIDDEN = mapMode[1], mapMode[2], mapMode[3], mapMode[4]
 L.MAP_MODE_TOOLTIP, L.MAP_MODE_BUTTON_NEXT, L.MAP_MODE_STATUS = mapMode[5], mapMode[6], mapMode[7]
+L.MAP_MODE_CIRCLES = mapMode[8]
+L.MAP_BUTTON_LABEL, L.MAP_BUTTON_TOOLTIP, L.MAP_BUTTON_HINT = mapMode[9], mapMode[10], mapMode[11]
+L.MAP_BUTTON_HIDDEN, L.MAP_BUTTON_SHOWN = mapMode[12], mapMode[13]
 -- Settings texts for the floating next objective (it is always in the Overlord
 -- panel; the floating window is opt-in and also carries a capture's timer and bar).
 -- { floating objective label, floating objective tooltip }

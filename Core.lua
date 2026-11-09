@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.3.1"
+Overlord.Version = "2.3.2"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -4476,34 +4476,84 @@ function Overlord:GetPlayerContinent()
     return nil
 end
 
--- always: alert shown everywhere (own guild, own capital). The option shows the
--- whole world; an unknown continent (place or player) shows the alert.
-function Overlord:ShouldShowPlaceAlert(mapID, always)
-    if always then return true end
+-- 2.3.2: capture, outpost and mine alerts follow the zone the player is in by default (on
+-- Forever another zone is too far to defend in time); the option widens them to the
+-- continent or the whole world. A "whole world" box ticked before 2.3.2 keeps the world.
+Overlord.ALERT_SCOPES = { zone = true, continent = true, world = true }
+function Overlord:GetAlertScope()
     local config = OverlordDB and OverlordDB.config
-    if config and config.worldwideAlerts == true then return true end
+    local scope = config and config.alertScope
+    if scope and Overlord.ALERT_SCOPES[scope] then return scope end
+    if config and config.worldwideAlerts == true then return "world" end
+    return "zone"
+end
+
+-- A capital city is its own zone map: it counts as the zone around it, so a player in Stormwind
+-- hears Elwynn. Classic and Retail ids.
+Overlord.CITY_ZONE = {
+    [1453] = 1429, [84] = 37,   -- Stormwind -> Elwynn Forest
+    [1455] = 1426, [87] = 27,   -- Ironforge -> Dun Morogh
+    [1457] = 1438, [89] = 57,   -- Darnassus -> Teldrassil
+    [1454] = 1411, [85] = 1,    -- Orgrimmar -> Durotar
+    [1456] = 1412, [88] = 7,    -- Thunder Bluff -> Mulgore
+    [1458] = 1420, [90] = 18,   -- Undercity -> Tirisfal Glades
+}
+
+-- The zone map holding mapID (a sub-zone or a cave climbs to its zone), or nil (unknown, unloaded,
+-- or a continent or world map). Enum.UIMapType: 2 continent, 3 zone, 4 dungeon, 5 micro, 6 orphan.
+function Overlord:GetMapZone(mapID)
+    local current = tonumber(mapID)
+    if not current or current <= 0 or not C_Map or not C_Map.GetMapInfo then return nil end
+    for _ = 1, 8 do
+        if Overlord.CITY_ZONE[current] then return Overlord.CITY_ZONE[current] end
+        local ok, info = pcall(C_Map.GetMapInfo, current)
+        if not ok or type(info) ~= "table" then return nil end
+        local mapType = tonumber(info.mapType)
+        if mapType == 3 then return current end
+        if not mapType or mapType < 3 then return nil end
+        current = tonumber(info.parentMapID) or 0
+        if current <= 0 then return nil end
+    end
+    return nil
+end
+
+-- always: alert shown everywhere (own guild). aliases: the place's map ids (a front or a mine has
+-- the Classic and the Retail id of one zone). An unknown continent or zone (of the place or of the
+-- player) shows the alert.
+function Overlord:ShouldShowPlaceAlert(mapID, always, aliases)
+    if always then return true end
+    local scope = self:GetAlertScope()
+    if scope == "world" then return true end
     local place = self:GetMapContinent(mapID)
     if not place then return true end
     local here = self:GetPlayerContinent()
-    return here == nil or here == place
+    if here == nil then return true end
+    if here ~= place then return false end
+    if scope ~= "zone" then return true end
+    local playerMap
+    if C_Map and C_Map.GetBestMapForUnit then
+        local ok, best = pcall(C_Map.GetBestMapForUnit, "player")
+        if ok then playerMap = best end
+    end
+    local hereZone, placeZone = self:GetMapZone(playerMap), self:GetMapZone(mapID)
+    if not hereZone or not placeZone then return true end
+    if hereZone == placeZone then return true end
+    return type(aliases) == "table" and aliases[hereZone] == true and aliases[placeZone] == true
 end
 
--- Zone alerts: the zone's front gives the place; our own capital is always shown.
+-- Zone alerts: the zone's front gives the place. (2.3.2: our own capital follows the same rule.)
 function Overlord:ShouldShowZoneAlert(zone)
     local fronts = self.Fronts
     if not zone or not zone.id or not fronts or not fronts.GetZone then return true end
     local _, front = fronts:GetZone(zone.id)
     if not front then return true end
-    local always = zone.isCapital and fronts.GetCapitalId
-        and fronts:GetCapitalId(self.PlayerFaction, front.id) == zone.id or false
-    if always then return true end
     -- The registry map first; another client's alias when that one is unknown.
     local mapID = front.preferredMapID
     if not self:GetMapContinent(mapID) and C_Map and C_Map.GetMapInfo
         and fronts.GetMapID and front.id then
         mapID = fronts:GetMapID(front.id)
     end
-    return self:ShouldShowPlaceAlert(mapID, false)
+    return self:ShouldShowPlaceAlert(mapID, false, front.mapIDs)
 end
 
 -- Delai de verification avant activation (secondes)
