@@ -2022,7 +2022,21 @@ function Overlord.Zones:_DoUpdateAvailableZones(suppressNotifications)
                     -- Observateur / co-captureur : ne pas publier un revert base sur nos prereqs locaux.
                     -- Le capteur officiel ou un C / ZS captured tranchera l'etat partage.
                 else
-                    invalidateInProgressCapture(zone)
+                    -- 2.4.0: broken only by captures of the other faction that began after ours
+                    -- (ZoneDefense): ours waits on hold instead of being cancelled. Each side
+                    -- hears the other seconds late; before, both started and cancelled each other,
+                    -- and one enemy stepping on a back point cancelled a siege of eight minutes.
+                    local defense = Overlord.ZoneDefense
+                    local held, blocker
+                    if defense and defense.ChainHeldByYoungerWaves then
+                        held, blocker = defense:ChainHeldByYoungerWaves(zone)
+                    end
+                    if held then
+                        defense:SetFrozen(zone, true, blocker)
+                    else
+                        if defense and defense.SetFrozen then defense:SetFrozen(zone, false) end
+                        invalidateInProgressCapture(zone)
+                    end
                 end
             end
         else

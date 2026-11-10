@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.3.3"
+Overlord.Version = "2.4.0"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -4284,6 +4284,15 @@ function Overlord:SaveState()
     ForEachKnownZone(function(zone)
         local persisted = self.CaptureLease and self.CaptureLease.GetPersistableView
             and self.CaptureLease:GetPersistableView(zone) or zone
+        -- 2.4.0: a capture of ours on hold (ZoneDefense: a point of its chain is under a capture
+        -- of the other faction that began after it) is saved as the point was before it. What it
+        -- waits for is not saved (a followed wave never is) and is not told again: restored
+        -- after a /reload it would run on, and could complete over a chain being broken.
+        if persisted == zone and zone.holdAuthorityLocal == true and zone._chainFrozen ~= nil
+            and zone._chainFrozen == (zone._localCaptureWaveId or true)
+            and type(zone._localCaptureBase) == "table" and zone._localCaptureBase.status ~= "in_progress" then
+            persisted = zone._localCaptureBase
+        end
         local localCapture = persisted == zone and zone.holdAuthorityLocal == true
         local localWaveId = localCapture and self.CaptureLease
             and self.CaptureLease.GetWaveId and self.CaptureLease:GetWaveId(zone) or nil

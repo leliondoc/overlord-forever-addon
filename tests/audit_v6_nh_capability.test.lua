@@ -81,12 +81,12 @@ local queued, normalQueue = nil, net.Queue
 net.Queue = function(_, packet) queued = packet; return true end
 net:Start()
 advance(3.1)
-assert(queued and queued.kind == "NH" and queued.payload == "1.1.3~t0~y" .. net.LocalMapLayout() .. "~m0~o0~z0000000~l9~ld~lr~lp6",
+assert(queued and queued.kind == "NH" and queued.payload == "1.1.3~t0~y" .. net.LocalMapLayout() .. "~m0~o0~z0000000~la~l9~ld~lr~lp6",
     "Startup hello did not advertise lp6")
 advance(2.1) -- distinct community scan, outside NH duplicate suppression
 queued = nil
 assert(net:Broadcast("NH", e.Overlord.Version) == 1)
-assert(queued and queued.payload == "1.1.3~t0~y" .. net.LocalMapLayout() .. "~m0~o0~z0000000~l9~ld~lr~lp6",
+assert(queued and queued.payload == "1.1.3~t0~y" .. net.LocalMapLayout() .. "~m0~o0~z0000000~la~l9~ld~lr~lp6",
     "Plain-version NH from the community scan lacked lp6")
 net.Queue = normalQueue
 
@@ -115,6 +115,11 @@ receive("Diff Tester", "NH", "1.1.3~m0~ld~lr~lp6")
 assert(net:GetPeerPagedProtocol("Diff Tester") == 8, "~ld~lr~lp6 was not read as v8")
 receive("Current Tester", "NH", "1.1.3~m0~l9~ld~lr~lp6")
 assert(net:GetPeerPagedProtocol("Current Tester") == 9, "~l9~ld~lr~lp6 was not read as capability 9")
+-- 2.4.0: "~la" before it says the ranking of 10,000 rows; anywhere else it says nothing.
+receive("Wide Tester", "NH", "2.4.0~m0~la~l9~ld~lr~lp6")
+assert(net:GetPeerPagedProtocol("Wide Tester") == 10, "~la~l9~ld~lr~lp6 was not read as capability 10")
+receive("Stray Tester", "NH", "2.4.0~la~m0~l9~ld~lr~lp6")
+assert(net:GetPeerPagedProtocol("Stray Tester") == 9, "a stray ~la was read as capability 10")
 
 -- 512 first-hand capabilities are kept (1.7.5): with 128, most direct neighbours of a
 -- busy channel looked "unknown" and an old client cost a silent probe.
@@ -185,7 +190,7 @@ assert(s:StartCompletePagedLeaderboardCatchup("Current Tester", function() end))
 advance(5)
 assert(#sent == 1 and sent[1].version == "8" and sent[1].stream == "LK" and sent[1].target == "Current Tester",
     "A peer advertising capability 9 was not asked in v8")
-assert(s:GetPagedLeaderboardDiagnostics():find("beta v9; l9+ld+lr+lp6 NH", 1, true),
+assert(s:GetPagedLeaderboardDiagnostics():find("beta v9; best 5,000 rows", 1, true),
     "Diagnostics omit the current peer's capability")
 assert(s:CancelPagedLeaderboardCatchup())
 advance(5)

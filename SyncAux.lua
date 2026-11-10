@@ -98,6 +98,13 @@ function Overlord.Sync:PollIfStaleObserverInProgress(secondsSinceZs, zone)
         pollInterval = math.max(pollInterval, 75)
     end
     if Overlord.InstanceSuspended or not secondsSinceZs or secondsSinceZs < pollInterval then return end
+    -- 2.4.0: a wave of the other faction now stays until its clock ends (CaptureLease
+    -- FollowedByClock) instead of 150 s of silence: nothing more is asked about it than before.
+    -- (Counted from its start: a siege told again is renewed each time, and would be asked about
+    -- for its whole length.)
+    local followed = zone and zone._remoteCaptureLease
+    if followed and GetTime() - (tonumber(followed.openedAt) or GetTime()) >= 150 and Overlord.CaptureLease
+        and Overlord.CaptureLease.FollowedByClock and Overlord.CaptureLease:FollowedByClock(zone) then return end
     local now = GetTime()
     if now - lastStaleObserverPoll < pollInterval then return end
     if Overlord.GuildLane and not Overlord.GuildLane:AsksAboutWave(zone) then return end
@@ -223,6 +230,10 @@ function Overlord.Sync:RequestPrereqMismatchCatchup(zone)
     -- (No shared check slot before this test any more: a healthy siege polled first
     -- kept a mismatched zone from ever reaching it. The 20 s cooldown bounds the asks.)
     if Z:FactionMeetsPrereqsForZoneCapture(zone.id, owner) then return end
+    -- 2.4.0: a chain broken only by captures of our own faction in progress is a capture that
+    -- waits for them on its client (ZoneDefense): our map misses nothing.
+    if Overlord.ZoneDefense and Overlord.ZoneDefense.ChainBrokenOnlyByOurWaves
+        and Overlord.ZoneDefense:ChainBrokenOnlyByOurWaves(zone, owner) then return end
     if rounds == 0 then wave._prereqMismatchFirstAt = now end
     wave._prereqMismatchRounds = rounds + 1
     lastPrereqMismatchSR = now

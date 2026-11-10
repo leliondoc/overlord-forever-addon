@@ -3270,6 +3270,11 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
             ok, err = pcall(Overlord.CaptureLease.ReceiveRelease,
                 Overlord.CaptureLease, payload or "", sender)
         end
+    elseif msgType == "ZD" then
+        -- 2.4.0: defenders the capturer cannot see (ZoneDefense.lua).
+        if Overlord.ZoneDefense and Overlord.ZoneDefense.OnReport then
+            ok, err = pcall(Overlord.ZoneDefense.OnReport, Overlord.ZoneDefense, payload or "", sender)
+        end
     elseif msgType == "NR" then
         ok, err = pcall(self.OnReceiveCaptureNetworkProbeReply,
             self, payload or "", sender, channel)
@@ -5296,6 +5301,8 @@ local function TryPrintEnemyCapturingAlert(zone, capturerName, waveTs)
     -- 2.3.2: a place outside the alert scope stays silent and marks nothing:
     -- the attack still alerts once the player reaches it.
     if Overlord.ShouldShowZoneAlert and not Overlord:ShouldShowZoneAlert(zone) then return end
+    -- 2.4.0: an attacker held back by defenders he cannot see tries again every two minutes.
+    if Overlord.ZoneDefense and Overlord.ZoneDefense:AlertMuted(zone, capturerName) then return end
     waveTs = tonumber(waveTs) or zone.updatedAt or 0
     local waveKey = zone.id .. ":" .. tostring(waveTs)
     if waveTs > 0 and priv.enemyAlertWaveKey[waveKey] then
@@ -7976,6 +7983,9 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
                 zsNetworkWitness, zsNetworkRouteId,
                 zsRelayedDisplayHold, zsRelayedDisplayAt)
         if not progressDecision then return end
+        -- Said by the capturer himself (the game names the sender), not through a relay, whose
+        -- origin is written by whoever passed it on (CaptureLease AdoptRemote).
+        progressDecision.firstHand = not self:IsUnauthenticatedRelayOrigin(sender)
         if type(zsNetworkWitness) == "string" and zsNetworkWitness:match("^W[1-5]$")
             and not progressDecision.networkDesignated
             and self.BufferCaptureNetworkWitnessProgress then
@@ -8243,6 +8253,10 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
         local adopted, opened, effectEligible = Overlord.CaptureLease:AdoptRemote(
             zone, owner, zsCapturerName, progressDecision, progressPreparedBase)
         if not adopted then return false end
+        -- 2.4.0: said by the capturer himself, not through a relay (CaptureLease ShouldRelieve).
+        if Overlord.CaptureLease.NoteFirstHand and not Overlord.Sync:IsUnauthenticatedRelayOrigin(sender) then
+            Overlord.CaptureLease:NoteFirstHand(zone, remoteSiegePhase == 1)
+        end
         Overlord.Sync:NoteLiveZoneTraffic(zone.id, owner)
         progressAdopted = true
         progressLeaseOpened = opened == true
@@ -8273,6 +8287,40 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
         and status == "in_progress" then
         zone.zsRelayCapturerName = nil
         zone.zsRelayCapturerShard = nil
+        return
+    end
+
+    -- 2.4.0: one timer per point. We hold a capture of this point and another player of our
+    -- faction, heard first-hand, holds one that began before ours: his is the capture and we
+    -- follow it (CaptureLease YieldToElderWave). Members of one raid standing on a point each
+    -- began their own in the same second and showed as many timers.
+    if progressDecision and status == "in_progress" and owner == Overlord.PlayerFaction
+        and IsLocalAuthoritativeCapture(zone) and Overlord.CaptureLease
+        and Overlord.CaptureLease.YieldToElderWave
+        and Overlord.CaptureLease:YieldToElderWave(zone, owner, zsCapturerName, progressDecision,
+            not self:IsUnauthenticatedRelayOrigin(sender)) then
+        zone.lastZSSender = sender
+        if Overlord.MarkCaptureSyncReceived then Overlord:MarkCaptureSyncReceived() end
+        Overlord:MarkDirty()
+        if Overlord.UI then Overlord.UI:RequestRefresh() end
+        return
+    end
+    -- 2.4.0: relief. We left the point of our capture (or died there) and a player of our
+    -- faction standing on it carries the capture on: ours is given up, his is followed
+    -- (CaptureLease YieldAwayWave).
+    if progressDecision and status == "in_progress" and owner == Overlord.PlayerFaction
+        and IsLocalAuthoritativeCapture(zone) and Overlord.CaptureLease
+        and Overlord.CaptureLease.YieldAwayWave
+        and Overlord.CaptureLease:YieldAwayWave(zone, owner, zsCapturerName, progressDecision,
+            not self:IsUnauthenticatedRelayOrigin(sender)) then
+        zone.lastZSSender = sender
+        if Overlord.MarkCaptureSyncReceived then Overlord:MarkCaptureSyncReceived() end
+        local L = Overlord.L or {}
+        Overlord:PrintNotification(string.format("|cFFFFFF00[Overlord]|r "
+            .. (L.CAPTURE_HANDED_ON or "%s: %s carries your capture on."),
+            zone.name or zone.id, Overlord.CaptureLease:DisplayName(zsCapturerName)))
+        Overlord:MarkDirty()
+        if Overlord.UI then Overlord.UI:RequestRefresh() end
         return
     end
 
@@ -8908,7 +8956,14 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
         if progressWillApply then
             if not AdoptAcceptedProgress() then return end
             StoreZsRelayCapturerFromZs(zone, status, owner, zsCapturerName, zsCapturerShard)
-            if progressLeaseOpened then factionSwitched = true end
+            if progressLeaseOpened then
+                factionSwitched = true
+                -- 2.4.0: the wave followed was replaced by this one, told in the same second
+                -- (two players taking a capture over at once): AdoptRemote put the point back
+                -- as it stood before the capture, date included, and a timer shown from that
+                -- old date read full until the next tick.
+                zone.updatedAt = math.max(tonumber(zone.updatedAt) or 0, ts)
+            end
         end
         if factionSwitched then
             -- Sauvegarde previousOwner avant ecrasement (pour revert si abandon)
@@ -11646,7 +11701,15 @@ function Overlord.Sync:BroadcastZoneState(zone, forceBNetZS, primaryOnly)
     -- holdTimeRequired (8e champ) : timer de siege capitale (480 s fixe, sync cross-client).
     -- 9e champ : notre capture (nom local) ou relais du nom ennemi (zsRelayCapturerName).
     -- 10e champ optionnel : shard du capteur (si 9e champ present).
+    -- (Seventh field: once the siege phase, 0 since. 2.4.0: 1 while our own capture's timer
+    -- goes down because we are off the point; a member of our group standing on it then
+    -- carries the capture on, CaptureLease ShouldRelieve. Older clients read a number there
+    -- and do nothing with it.)
     local siegePhase = 0
+    if status == "in_progress" and zone.isHolding and zone.holdAuthorityLocal and zone.isPaused == true
+        and zone.owner == Overlord.PlayerFaction then
+        siegePhase = 1
+    end
     local holdReq = math.floor(zone.holdTimeRequired or 120)
     if status == "in_progress" and zone.isCapital and zone.owner
         and Overlord.Zones and Overlord.Zones.GetCapitalSiegeHoldRequired then
@@ -11702,6 +11765,9 @@ function Overlord.Sync:BroadcastZoneState(zone, forceBNetZS, primaryOnly)
     local wire = self:WithFrontMark(zone.id, payload)
     if not wire then return end
     self:SendToGroup("ZS", wire)
+    -- (2.4.0, primaryOnly "group": the timer of our capture going down, ZoneControl. Our group
+    -- and nobody else: before, nothing at all was said of it.)
+    if primaryOnly == "group" then return end
     -- SendToChannel toujours (pas seulement si groupe) : aligne le comportement sur BroadcastCapture.
     -- Sans ca, un capteur solo n'envoie pas au canal -> les joueurs ennemis du meme canal ne voient rien.
     -- critical : captured (fin d'etat) et revert force vers available (fin d'echec de capture).

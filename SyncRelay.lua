@@ -11,6 +11,11 @@ local allowed = {}
 for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA FK LK LR LC LO LOC TV VT VF FR VB MN MS OP OC SH HR HB HA CR CA GR GY GI FC GW GE GP GX GD GM"):gmatch("%S+") do
     allowed[kind] = true
 end
+-- ZD (2.4.0: defenders a capturer cannot see, ZoneDefense.lua) is read and passed on only while
+-- ZoneDefense.HOLDS_CAPTURES is on: off, it means nothing, and nobody's relay pays for it. A relay
+-- before 2.4.0 neither reads nor passes it on.
+allowed.ZD = (addon.ZoneDefense ~= nil and addon.ZoneDefense.HOLDS_CAPTURES == true) or nil
+function net:CarryZoneDefense(on) allowed.ZD = on == true or nil end
 local MAX_PACKET, MAX_PATH, TTL = 3600, 4, 120
 -- Channel/group fragment size. An addon message carries 255 bytes: "BF:" plus
 -- "<id>:<part>:<count>:" leave room for ~228 bytes of packet, but clients up to
@@ -77,7 +82,7 @@ local URGENT = {}
 -- more (each ends its truce by itself, see Zones:ApplyFrontTruceEndReset); those of
 -- clients before 2.0.2 (one per front in every map answer, the first traffic of a
 -- busy bridge on 2026-10-13) wait with the background.
-for kind in ("NH SH C ZS ZR CB OP OC TV FC GE GP GX GD GM HR HA"):gmatch("%S+") do
+for kind in ("NH SH C ZS ZR ZD CB OP OC TV FC GE GP GX GD GM HR HA"):gmatch("%S+") do
     URGENT[kind] = true
 end
 -- 2.0.1 map news: a broadcast partial map of one to three pages (the shape that
@@ -915,7 +920,7 @@ net.HashFrac = hashFrac
 -- channel/group/same-faction copies. Transport only, never acceptance.
 local CROSS_FULL_BRIDGES, CROSS_TARGET, CROSS_MIN_SHARE = 8, 4, 0.02
 local CROSS_ELECTED_KINDS = { NH = true, SH = true, ZS = true, OP = true, GW = true,
-    FK = true, MN = true, MS = true, GP = true }
+    FK = true, MN = true, MS = true, GP = true, ZD = true }
 local sameFactionBridges, sameFactionBridgesOrder = {}, {}
 local bridgeCountCache = { at = -1000, value = 0 }
 local function sameFactionBridgeCount()
@@ -2613,7 +2618,7 @@ function net:Send(kind, payload, target, immediate)
         payload = payload .. (self:HasLiveEnemyBridge() and "~b" or "") .. "~t0~y" .. net.LocalMapLayout()
             .. rankToken .. layerToken
             .. "~m" .. base36(stamp) .. "~o" .. base36(sites)
-            .. "~z" .. base36(digest, 6) .. base36(sum) .. "~l9~ld~lr~lp6"
+            .. "~z" .. base36(digest, 6) .. base36(sum) .. "~la~l9~ld~lr~lp6"
     end
     -- Handlers may rebroadcast received snapshots. The existing packet is already
     -- forwarded below; do not give that replay a fresh author or hop budget.
@@ -2746,6 +2751,9 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         if version == 6 and p.payload:find("~lr~lp6", 1, true) then version = 7 end
         if version == 7 and p.payload:find("~ld~lr~lp6", 1, true) then version = 8 end
         if version == 8 and p.payload:find("~l9~ld~lr~lp6", 1, true) then version = 9 end
+        -- "~la" (2.4.0): ranking of 10,000 rows (SyncLeaderboardPages FULL_PROTOCOL). Before
+        -- "~l9~ld~lr~lp6", which older clients still find.
+        if version == 9 and p.payload:find("~la~l9~ld~lr~lp6", 1, true) then version = 10 end
         local previous = pagedCapabilities[originKey]
         -- First-hand presence of a same-faction player (never one that came over
         -- Battle.net: that is the other faction): count its bridge flag.

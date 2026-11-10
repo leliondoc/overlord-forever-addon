@@ -224,13 +224,19 @@ local ENEMY_REVERSED_CHAT_GAP = 45   -- secondes entre deux messages identiques 
 
 -- Chat « capture ennemie annulee » : uniquement depuis les reverts autoritaires sur le disque
 -- (contestation / timer ennemi a 0). Les autres chemins restent silencieux volontairement.
-function Overlord.ZoneControl:TryChatEnemyCaptureReversed(zone)
+-- ownLost (2.4.0): it was our own capture that was pushed back to nothing: "capture lost", under
+-- the same gate (an attacker standing outnumbered loses one every few seconds).
+function Overlord.ZoneControl:TryChatEnemyCaptureReversed(zone, ownLost)
     if not zone or not zone.id then return end
     local now = GetTime()
     local last = lastEnemyReversedChatAt[zone.id] or 0
     if now - last < ENEMY_REVERSED_CHAT_GAP then return end
     lastEnemyReversedChatAt[zone.id] = now
-    Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.ENEMY_CAPTURE_REVERSED, zone.name))
+    if ownLost then
+        Overlord:PrintNotification(string.format("|cFFFF0000[Overlord]|r " .. L.CAPTURE_LOST, zone.name))
+    else
+        Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.ENEMY_CAPTURE_REVERSED, zone.name))
+    end
 end
 
 local function ResolveLocalFailedCaptureOwner(zone)
@@ -933,6 +939,12 @@ function Overlord.ZoneControl:Update(deltaTime)
             end
         end
     end
+    -- 2.4.0: standing on a point of ours that the other faction is capturing, we say so, seen
+    -- or not by its capturer (ZoneDefense.lua).
+    local defense = Overlord.ZoneDefense
+    if playerZone and defense and defense.TickDefender then
+        pcall(defense.TickDefender, defense, playerZone)
+    end
 end
 
 -- /ov start and a click on the zone row: the same start as the 1 s check (all its
@@ -972,6 +984,9 @@ function Overlord.ZoneControl:StartManually(zone)
     elseif pendingEntrySyncZoneId == zone.id and GetTime() < pendingEntrySyncUntil then
         -- The few seconds' grace on entering the point (not the login sync): the
         -- capture starts by itself right after; nothing misleading to say.
+        msg = nil
+    elseif Overlord.ZoneDefense and Overlord.ZoneDefense.IsLocked and Overlord.ZoneDefense:IsLocked(zone) then
+        -- 2.4.0: waiting after a capture held back or handed over (said when it happened).
         msg = nil
     elseif (Overlord._captureSyncNotices or 0) == syncNoticesBefore then
         -- Not twice in a row when the sync gate just said it itself.
@@ -1050,6 +1065,13 @@ function Overlord.ZoneControl:CheckPlayerPosition()
     -- Treve post-victoire (front entier) + prerequis : si le statut local est "available"
     -- en retard sur UpdateAvailableZones ou la sync, on ne demarre pas le timer (exploit Sage).
     if Overlord.Zones and not Overlord.Zones:IsZoneAvailable(currentZone.id) then
+        previousCaptureCheckZoneId = currentId
+        return
+    end
+
+    -- 2.4.0: our last capture here was held back by defenders we could not see, or handed over
+    -- to an ally on the point (ZoneDefense): not started again for a while, unless we changed layer.
+    if Overlord.ZoneDefense and Overlord.ZoneDefense.IsLocked and Overlord.ZoneDefense:IsLocked(currentZone) then
         previousCaptureCheckZoneId = currentId
         return
     end
@@ -1260,6 +1282,13 @@ function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
         local enemyFaction = Overlord.Zones:GetEnemyFaction()
         local enemyIsCapturing = (zone.owner == enemyFaction)
         local friendlyCount, enemyCount = self:ScanNearbyPlayers(zone)
+        -- 2.4.0: defenders standing on the point where we cannot see them (another layer, enemy
+        -- nameplates off or out of range) count like those we see (ZoneDefense.lua).
+        local defense = Overlord.ZoneDefense
+        if defense and defense.UnseenDefenders and not enemyIsCapturing then
+            local unseen = defense:UnseenDefenders(zone, enemyCount, friendlyCount)
+            if unseen > enemyCount then enemyCount = unseen end
+        end
         -- Conteste si : des ennemis sont visibles ET en surnombre (>= allies), OU l'ennemi capture
         -- et est physiquement present (au moins 1 nameplate). Si 0 ennemis, l'ennemi a quitte :
         -- on reprend la zone normalement (le timer va decroitre puis repartir pour notre faction).
@@ -1312,6 +1341,20 @@ function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
                     end
                 end
                 local wasLocalAuthority = zone.holdAuthorityLocal == true
+                -- 2.4.0: held back by defenders we cannot see: not started again at once.
+                if wasLocalAuthority and defense and defense.NoteWaveFailed then
+                    defense:NoteWaveFailed(zone)
+                end
+                -- 2.4.0: our own capture pushed back to nothing is a capture lost, not "enemy
+                -- capture reversed, zone secured" (said to the attacker each time he was repelled).
+                local ownWaveFailed = zone.owner == Overlord.PlayerFaction
+                -- 2.4.0: allies stand on the point with us and may not see the enemies we see: one
+                -- of them takes the capture over on our release (CaptureLease ReceiveRelease).
+                -- We leave it to him for a moment instead of starting again in the same second,
+                -- which made the two of us take the capture from each other every few seconds.
+                if wasLocalAuthority and ownWaveFailed and friendlyCount > 1 and defense and defense.NoteHandOver then
+                    defense:NoteHandOver(zone)
+                end
                 if wasLocalAuthority and Overlord.CaptureLease
                     and Overlord.CaptureLease.BroadcastLocalRelease then
                     Overlord.CaptureLease:BroadcastLocalRelease(zone)
@@ -1349,7 +1392,7 @@ function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
                     Overlord.CaptureLease:Complete(zone)
                 end
                 Overlord.Zones:UpdateAvailableZones()
-                self:TryChatEnemyCaptureReversed(zone)
+                self:TryChatEnemyCaptureReversed(zone, ownWaveFailed)
 
                 Overlord:SaveState()
                 if Overlord.UI then
@@ -1444,7 +1487,15 @@ function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
             end
 
             if zone.holdAuthorityLocal or MaybeTakeOverStaleAllyCaptureAuthority(zone) then
-                zone.holdTimeElapsed = (zone.holdTimeElapsed or 0) + deltaTime
+                -- 2.4.0: on hold while a point of its chain is under a capture of the other
+                -- faction that began after ours (ZoneDefense): the timer stands still, its
+                -- ticks still go out, and it cannot complete.
+                local onHold = defense ~= nil and defense.IsFrozen ~= nil and defense:IsFrozen(zone)
+                -- (IsFrozen may have cancelled it: a chain really lost.)
+                if not zone.isHolding then return end
+                if not onHold then
+                    zone.holdTimeElapsed = (zone.holdTimeElapsed or 0) + deltaTime
+                end
 
                 -- Sync du timer aux autres joueurs
                 local now = GetTime()
@@ -1454,15 +1505,55 @@ function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
                     lastZSBroadcast[zone.id] = now
                 end
 
-                if (zone.holdTimeElapsed or 0) >= (zone.holdTimeRequired or 120) then
-                    self:CaptureZone(zone)
+                if not onHold and (zone.holdTimeElapsed or 0) >= (zone.holdTimeRequired or 120) then
+                    -- 2.4.0: never completed over a chain our own map shows broken this very second
+                    -- (the availability pass is spaced 0.15 s and may be a moment late): the map is
+                    -- looked at first, and the capture completes at the next second if it stands.
+                    if zone.holdAuthorityLocal and Overlord.Zones.FactionMeetsPrereqsForZoneCapture
+                        and not Overlord.Zones:FactionMeetsPrereqsForZoneCapture(zone.id, Overlord.PlayerFaction, true) then
+                        zone.holdTimeElapsed = (zone.holdTimeRequired or 120) - 1
+                        Overlord.Zones:UpdateAvailableZones()
+                    else
+                        self:CaptureZone(zone)
+                    end
                 end
             else
+                -- 2.4.0: relief (CaptureLease TakeOverStanding). We stand on the point while a
+                -- member of our group captures it: the time we stand is counted, and when he
+                -- gives way (gone, dead, silent) we carry the capture on from there.
+                local lease = Overlord.CaptureLease
+                if lease and lease.NoteStanding then
+                    lease:NoteStanding(zone)
+                    if not waveClock and lease:ReliefDue(zone) then
+                        local took, _, previous = lease:TakeOverStanding(zone)
+                        if took then
+                            lastZSBroadcast[zone.id] = GetTime()
+                            if Overlord.Sync then Overlord.Sync:BroadcastZoneState(zone, true) end
+                            Overlord:PrintNotification(string.format("|cFFFFFF00[Overlord]|r "
+                                .. (L.CAPTURE_RELIEVED or "%s: %s left the point, you carry the capture on."),
+                                zone.name or zone.id, lease:DisplayName(previous)))
+                            Overlord:MarkDirty()
+                            if Overlord.UI then Overlord.UI:RequestRefresh() end
+                            return
+                        end
+                    end
+                end
                 -- Co-captureur sans autorite : timer pousse par le ZS du capteur officiel
                 -- uniquement. 2.1.1 : pas de ZS dans la guilde, l'horloge de la vague le pousse.
                 if waveClock then
                     zone.holdTimeElapsed = math.max(zone.holdTimeElapsed or 0,
                         math.min(waveClock, zone.holdTimeRequired or 120))
+                else
+                    -- 2.4.0: between two ticks of the capturer (5 s apart) our timer runs with his
+                    -- while his goes up, instead of standing still then jumping: the members of a
+                    -- raid on one point showed timers up to 5 s apart. Never past his next tick's
+                    -- time, never to the end (only his client completes the capture).
+                    local remote = zone._remoteCaptureLease
+                    if remote and remote.rising and remote.tickAt then
+                        local lead = math.min(GetTime() - remote.tickAt, ZS_BROADCAST_INTERVAL + 1)
+                        local shown = math.min((tonumber(remote.tickHold) or 0) + lead, (zone.holdTimeRequired or 120) - 1)
+                        if shown > (zone.holdTimeElapsed or 0) then zone.holdTimeElapsed = shown end
+                    end
                 end
             end
         end
@@ -1495,6 +1586,15 @@ function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
         if not zone.isPaused then
             zone.isPaused = true
             TryChatLeftZone(zone)
+            -- 2.4.0: our group hears at the next second that the timer goes down (not up to five
+            -- seconds later): a member standing on the point carries the capture on from there
+            -- (CaptureLease TakeOverStanding). Never less than two seconds after the last tick,
+            -- and once in ten seconds (a player stepping in and out of the disc's edge).
+            if zone.holdAuthorityLocal and zone.owner == Overlord.PlayerFaction and lastZSBroadcast[zone.id]
+                and GetTime() - (zone._awayToldAt or -10) >= 10 then
+                zone._awayToldAt = GetTime()
+                lastZSBroadcast[zone.id] = lastZSBroadcast[zone.id] - (ZS_BROADCAST_INTERVAL - 2)
+            end
         end
 
         zone.holdTimeElapsed = (zone.holdTimeElapsed or 0) - deltaTime
@@ -1544,6 +1644,19 @@ function Overlord.ZoneControl:UpdateHoldTimer(zone, deltaTime)
             Overlord:SaveState()
             if Overlord.UI then
                 Overlord.UI:RequestRefresh()
+            end
+        elseif zone.holdAuthorityLocal and zone.owner == Overlord.PlayerFaction then
+            -- 2.4.0: the timer going down is told to our group at the pace it is told going up.
+            -- Nothing was said while the capturer was off the point: the rest of his raid,
+            -- standing on it, saw the timer stand still, then jump back when he returned
+            -- ("timers jump and show different things for everyone in the raid"). To the group
+            -- only (primaryOnly "group"): further away a falling timer read as a start, and kept a
+            -- capture that is running out on the other faction's map.
+            local now = GetTime()
+            if Overlord.Sync and (not lastZSBroadcast[zone.id] or now - lastZSBroadcast[zone.id] >= ZS_BROADCAST_INTERVAL) then
+                zone.updatedAt = (Overlord.ServerNow and Overlord.ServerNow() or time())
+                Overlord.Sync:BroadcastZoneState(zone, nil, "group")
+                lastZSBroadcast[zone.id] = now
             end
         end
     end

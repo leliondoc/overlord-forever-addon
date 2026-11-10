@@ -308,6 +308,13 @@ local LEVELS = {
     { "ZS", zoneState("available"), other, nil },
     { "ZS", zoneState("in_progress", nil, nil, 30), own, 2 }, { "ZS", zoneState("in_progress", nil, nil, 45), own, 2 },
     { "ZS", zoneState("in_progress", nil, nil, 46), own, nil }, { "ZS", zoneState("other"), own, nil },
+    -- 2.4.0: the siege of a capital (480 s) is told again while it runs, ours or relayed; the ticks
+    -- of an ordinary capture never. Defenders a capturer cannot see (ZD): for those who carry it.
+    { "ZS", (zoneState("in_progress", nil, nil, 200):gsub(":0:120:", ":0:480:", 1)), own, 1 },
+    { "ZS", (zoneState("in_progress", nil, nil, 200):gsub(":0:120:", ":0:480:", 1)), other, 1 },
+    { "ZS", (zoneState("in_progress", nil, nil, 200, ""):gsub(":0:120:", ":0:480:", 1)), own, nil },
+    { "ZS", (zoneState("in_progress", nil, nil, 200):gsub(":0:120:", ":0:240:", 1)), own, nil },
+    { "ZD", "elwynn_goldshire:w1:Dwarf Tester:3:7", own, 2 }, { "ZD", "elwynn_goldshire:w1:Dwarf Tester:3:7", other, 2 },
     { "NH", "2.1.1", own, 1 }, { "NH", "2.1.1", other, nil },
     { "OC", "x", own, 3 }, { "OC", "x", other, nil }, { "GW", "x", own, 1 }, { "GW", "x", other, nil },
     { "OP", "v1:site:in_progress:x", own, 1 }, { "OP", "v1:site:captured:x", own, nil },
@@ -323,6 +330,56 @@ local LEVELS = {
 for _, row in ipairs(LEVELS) do
     local got = lane:Level({ kind = row[1], payload = row[2], path = row[3] })
     assert(got == row[4], string.format("level of %s %s (%d hops): %s", row[1], row[2], #row[3], tostring(got)))
+end
+-- 2.4.0: a wave released, lost or over is forgotten: the next wave of the point is a new start,
+-- said at once (its cover of a minute kept a capture begun again out of the guild and of the other
+-- faction).
+do
+    local key = lane:CoverKey({ kind = "ZS", payload = zoneState("in_progress", "elwynn_goldshire", "A", 5), path = own })
+    lane:RememberCover(key, GetTime(), true)
+    lane:RememberCover(key, GetTime(), false)
+    lane:RememberCover("SIEGE|elwynn_eastvale|A", GetTime(), true)
+    lane:ForgetSiege("elwynn_goldshire")
+    -- RESTART_GAP seconds of cover are left, not the minute, and not none (a fight makes many waves).
+    local left = lane.SIEGE_COVER_SEC - (GetTime() - lane.ownCover[key])
+    assert(left == lane.RESTART_GAP and lane.cover[key] == lane.ownCover[key], "cover left after a release: " .. tostring(left))
+    assert(GetTime() - lane.ownCover["SIEGE|elwynn_eastvale|A"] == 0, "the cover of another point was touched")
+    lane:ForgetSiege("elwynn_goldshire")
+    assert(lane.SIEGE_COVER_SEC - (GetTime() - lane.ownCover[key]) == lane.RESTART_GAP, "forgetting twice took more")
+    lane:ForgetSiege(nil); lane:ForgetSiege("")
+    lane:RememberCover(key, GetTime(), true)
+    lane:NoteHeardPacket({ kind = "ZR", payload = "elwynn_goldshire:w1:Bob Tester", path = { "Bob Tester" }, id = "x-1" }, false)
+    assert(lane.SIEGE_COVER_SEC - (GetTime() - lane.ownCover[key]) == lane.RESTART_GAP, "a release heard in the guild left the whole minute of cover")
+    lane.ownCover["SIEGE|elwynn_eastvale|A"], lane.ownCover[key], lane.cover[key] = nil, nil, nil
+    -- A start of that point relayed to us and still waiting (for its share) is not said after
+    -- the end; ours is none of its business.
+    lane.outbox = { { kind = "ZS", relayed = true, cover = key, due = GetTime() + 5, fragments = {} },
+        { kind = "ZS", cover = key, due = GetTime() + 5, fragments = {} },
+        { kind = "ZS", relayed = true, cover = "SIEGE|elwynn_eastvale|A", due = GetTime() + 5, fragments = {} } }
+    lane:ForgetSiege("elwynn_goldshire")
+    assert(#lane.outbox == 2 and not lane.outbox[1].relayed and lane.outbox[2].cover == "SIEGE|elwynn_eastvale|A",
+        "a relayed start waiting in the box outlived the end of its point's wave")
+    -- Only the start of the wave that ended: a release that comes after the start of the next
+    -- wave (the relay does not keep their order) leaves that one in the box.
+    local kept = lane.outbox
+    lane.outbox = { { kind = "ZS", relayed = true, cover = key, wave = "w2", due = GetTime() + 5, fragments = {} } }
+    lane:ForgetSiege("elwynn_goldshire", "w1")
+    assert(#lane.outbox == 1, "the release of an earlier wave took the start of the next one out of the box")
+    lane:NoteHeardPacket({ kind = "ZR", payload = "elwynn_goldshire:w2:Bob Tester", path = { "Bob Tester" }, id = "x-2" }, false)
+    assert(#lane.outbox == 0, "the start of the released wave stayed in the box")
+    lane.outbox = kept
+    lane.ownCover[key], lane.cover[key] = nil, nil
+    -- One timer per point: our capture gave way to an elder one. Its start leaves the box and a
+    -- copy still on its way is refused; already said, the guild follows it (false: say its release).
+    lane.outbox = { { kind = "ZS", startedZone = "elwynn_goldshire", startedWave = "wyield", due = GetTime() + 5, fragments = {} },
+        { kind = "ZS", startedZone = "elwynn_goldshire", startedWave = "wother", due = GetTime() + 5, fragments = {} } }
+    assert(lane:NoteYielded("elwynn_goldshire", "wyield") == true and #lane.outbox == 1 and lane.outbox[1].startedWave == "wother",
+        "the start of a capture that gave way stayed in the box")
+    assert(lane.released["elwynn_goldshire"] and lane.released["elwynn_goldshire"].wyield, "a late copy of that start would still be said")
+    lane.spoken["elwynn_goldshire"] = "wsaid"
+    assert(lane:NoteYielded("elwynn_goldshire", "wsaid") == false, "a start the guild heard: its release must be said")
+    assert(lane:NoteYielded(nil, "w") == true and lane:NoteYielded("elwynn_goldshire", "") == true, "nothing to do without a wave")
+    lane.outbox, lane.spoken["elwynn_goldshire"], lane.released["elwynn_goldshire"] = {}, nil, nil
 end
 local broadcast = { kind = "C", payload = capture(), path = own, target = "*" }
 assert(lane:Carries(broadcast, 2), "a capture must be carried")

@@ -2,7 +2,7 @@
 assert(loadfile("tests/forever_world_kills.test.lua"))()
 local sync, lb = Overlord.Sync, Overlord.Leaderboard
 assert(Overlord.PLAUSIBLE_SYNC_KILL_CEILING == 15000)
-assert(lb.KILL_RANK_LIMIT == 5000, "Score ceiling changed the ranking population")
+assert(lb.KILL_RANK_LIMIT == 10000, "Score ceiling changed the ranking population")
 -- A six-day-old campaign: the first-contact cap (300 + 0.03/s since the reset) is
 -- above 15000, so only the global and per-level ceilings act here.
 OverlordDB.lastResetTimestamp = time() - 6 * 86400

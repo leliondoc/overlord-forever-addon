@@ -879,6 +879,9 @@ dir.MULTICAST_SPEAKERS, dir.CHAIN_FRAGMENTS = 2, 2
 -- How long a passed start is remembered for its release (the relay's TTL and a margin), and how
 -- long a heard copy of a capture keeps our own report of it quiet (GuildLane: HEARD_COVER_SEC).
 dir.START_MEMORY, dir.OWN_COVER_SEC = 300, 10
+-- 2.4.0: from this hold time on (a capital's siege) a capture is told again while it runs
+-- (chainShape); how many hands a start remembers for its release, over those tellings.
+dir.BEAT_MIN_HOLD, dir.START_HANDS = 300, 16
 dir.CHAIN_ROWS = 256
 dir.chain = { tokens = dir.CHAIN_BURST, cover = {}, starts = {}, intake = {}, rows = 0,
     minute = { at = -1000, count = 0 } }
@@ -948,6 +951,12 @@ local function chainShape(p)
         if zone and zone ~= "" and wave and wave ~= "" then return "release", zone, wave end
         return nil
     end
+    -- 2.4.0: defenders a capturer cannot see (ZoneDefense): one fact per wave and half a minute,
+    -- whoever says it (GuildLane CoverKey), on its way back to the capturer's side.
+    if kind == "ZD" then
+        local wave, count = payload:match("^[^:]+:([%w_]+):[^:]+:(%d+)")
+        return wave and #wave <= 48 and #count <= 2 and "fact" or nil
+    end
     -- Map news (Sync:QueueMapNews, NoteMapNews): what a client of ours learnt from the other side.
     if kind == "ZA" then
         local net = addon.Relay
@@ -970,6 +979,14 @@ local function chainShape(p)
         return "fact"
     end
     if status == "in_progress" and (tonumber(hold) or 999) <= 45 then
+        local wave = stateWave(payload)
+        if wave and wave ~= "" then return "start", zone, wave end
+    end
+    -- 2.4.0: the siege of a capital (eight minutes) is told again along the way, once per
+    -- SIEGE_COVER_SEC at most (the cover of its start): whoever logs in or reaches the front
+    -- after its start saw nothing of it, and its release only follows a start told in the last
+    -- START_MEMORY seconds. Any other capture is over before a second word would help.
+    if status == "in_progress" and (tonumber(payload:match("^[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:(%d+)")) or 0) >= dir.BEAT_MIN_HOLD then
         local wave = stateWave(payload)
         if wave and wave ~= "" then return "start", zone, wave end
     end
@@ -1135,6 +1152,9 @@ function dir:PullAfterWave(zone, remote, opened, retried)
     -- map taught them (below).
     local net, size = addon.Relay, #self.names
     local askers = current == remote and self.GAP_ASKERS_FOLLOWED or self.GAP_ASKERS
+    -- (2.4.0: a wave of the other faction now stays past its clock: the few askers of before.)
+    if current == remote and addon.CaptureLease and addon.CaptureLease.FollowedByClock
+        and addon.CaptureLease:FollowedByClock(zone) then askers = self.GAP_ASKERS end
     if size > askers and net and net.HashFrac then
         local me = tostring(sync:GetPlayerFullName() or ""):lower()
         if net.HashFrac(me .. "|" .. tostring(zone.id) .. "|" .. math.floor(opened)) >= askers / size then
@@ -1296,6 +1316,20 @@ function dir:ChainTargets(p, fragmentCount)
         shape = "retelling"
     end
     local start = startKey and chain.starts[startKey] or nil
+    -- 2.4.0: one timer per point. A group stepping on a point begins several waves in one
+    -- second, one start is passed on and the others are covered by it, then all but the first
+    -- give way in silence (CaptureLease YieldToElderWave). The release of the one that goes on
+    -- follows the hands of the start we passed, whichever of them it was.
+    if shape == "release" and not start and zone and addon.CaptureLease and addon.CaptureLease.SameStart then
+        local prefix = zone .. "|"
+        for other, row in pairs(chain.starts) do
+            if other:sub(1, #prefix) == prefix and at - row.at <= self.START_MEMORY
+                and addon.CaptureLease:SameStart(wave, other:sub(#prefix + 1)) then
+                start, startKey = row, other
+                break
+            end
+        end
+    end
     if shape == "rank" then
         -- 2.2.2: told to the rest of our contacts once it stops moving (SettleStep).
         self:NoteOwnTotal(p.payload)
@@ -1405,7 +1439,7 @@ function dir:ChainTargets(p, fragmentCount)
         end
         -- Someone else's capture or siege is passed on only for a point of ours, dated about now:
         -- made-up points or dates would each be a new fact for the cover, and fill the chain.
-        if p.kind == "C" or p.kind == "ZS" or p.kind == "ZR" then
+        if p.kind == "C" or p.kind == "ZS" or p.kind == "ZR" or p.kind == "ZD" then
             local serverAt = addon.ServerNow and addon.ServerNow() or time()
             if not self:KnowsZone(p.payload:match("^([^:]+)"))
                 or (date and math.abs(date - serverAt) > self.FACT_SKEW) then
@@ -1566,7 +1600,20 @@ function dir:ChainTargets(p, fragmentCount)
             if not took[p.payload] then took[p.payload], took.n = at, took.n + 1 end
         end
     end
-    if shape == "start" then keep("starts", startKey, { at = at, cover = key, targets = targets }) end
+    if shape == "start" then
+        -- 2.4.0: a siege told again keeps the hands of its earlier tellings for its release.
+        local hands = targets
+        if start and start.targets and at - start.at <= self.START_MEMORY then
+            local known = {}
+            hands = {}
+            for _, name in ipairs(targets) do hands[#hands + 1] = name; known[name:lower()] = true end
+            for _, name in ipairs(start.targets) do
+                if #hands >= self.START_HANDS then break end
+                if not known[name:lower()] then hands[#hands + 1] = name; known[name:lower()] = true end
+            end
+        end
+        keep("starts", startKey, { at = at, cover = key, targets = hands })
+    end
     if not own and p.kind == "FK" and addon.FrontActivity and addon.FrontActivity.NoteRelayedBracketPassed then
         addon.FrontActivity:NoteRelayedBracketPassed(p.payload)
     end

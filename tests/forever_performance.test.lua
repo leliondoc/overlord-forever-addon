@@ -61,9 +61,9 @@ local beforeDisplay = slices
 drain()
 assert(slices - beforeDisplay > 200, "Large ranking preparation did not yield")
 local cache = assert(lb._displayCache, "Large display cache was not published")
-assert(#cache.sortedKills == 5000 and cache.sortedKills[1].kills == 10000)
+assert(#cache.sortedKills == 10000 and cache.sortedKills[1].kills == 10000)
 for i, row in ipairs(cache.sortedKills) do
-    assert(row.kills == 10001 - i, "Top 5000 lost, duplicated or misordered a player")
+    assert(row.kills == 10001 - i, "Top 10000 lost, duplicated or misordered a player")
 end
 assert(#cache.sortedGuilds == 5000 and cache.sortedGuilds[1].kills == 10000)
 assert(cache.alliKills + cache.hordeKills == total, "Aliases inflated faction totals")
@@ -99,7 +99,7 @@ lb:SnapshotCurrentCampaignBeforeReset(function(ok) snapshotDone = ok end)
 drain()
 assert(snapshotDone and slices - beforeSnapshot > 100, "Snapshot work was not sliced")
 local snapshot = assert(OverlordDB.leaderboardSnapshot)
-assert(#snapshot.killOrder == 5000)
+assert(#snapshot.killOrder == 10000)
 assert(#snapshot.captureOrder == 1000, "Snapshot omitted part of the displayed capture top")
 for _, faction in ipairs({ "Alliance", "Horde" }) do
     for _, row in ipairs(cache.byFaction[faction]) do
@@ -109,7 +109,7 @@ for _, faction in ipairs({ "Alliance", "Horde" }) do
 end
 for i, row in ipairs(cache.sortedKills) do
     assert(snapshot.killOrder[i] == row.name and snapshot.kills[row.name] == row.kills,
-        "Snapshot and display disagree on the top 5000")
+        "Snapshot and display disagree on the top 10000")
     assert(snapshot.playerInfo[row.name].guild ~= "", "Alias lost its guild metadata")
 end
 assert(loadfile("SyncHistoryCatchup.lua"))()

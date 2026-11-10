@@ -1,7 +1,10 @@
 -- Leaderboard.lua - Classement des kills et captures par joueur
 Overlord = Overlord or {}
 Overlord.Leaderboard = {
-    KILL_RANK_LIMIT = 5000,
+    -- 2.4.0: 10,000 (was 5,000): shown, kept in the safety copy and exchanged between clients
+    -- that both hold as many (SyncLeaderboardPages; a client before that still gets and gives
+    -- its best 5,000).
+    KILL_RANK_LIMIT = 10000,
     CAPTURE_RANK_LIMIT = 500,
     -- The v4 catch-up protocol and older clients certify a top 500. Keep its
     -- wire budget independent from local display/storage capacity.
@@ -1789,6 +1792,8 @@ end
 -- Merge dedup throttle (sync SR) : force=true pour export / login / prep lourde.
 
 local DISPLAY_KILL_RANK_LIMIT = Overlord.Leaderboard.KILL_RANK_LIMIT
+-- (2.4.0: the guild tables keep the bound they had when the player ranking held 5,000.)
+local DISPLAY_GUILD_RANK_LIMIT = 5000
 local DISPLAY_PREVIEW_ROW_LIMIT = 500
 function Overlord.Leaderboard:SortNetworkRows(rows, less, yieldWork)
     return sortRowsWithYield(rows, less, yieldWork)
@@ -2243,7 +2248,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             if a.kills ~= b.kills then return a.kills > b.kills end
             return (a.guild or "") < (b.guild or "")
         end, yieldWork)
-        for i = #sortedGuilds, DISPLAY_KILL_RANK_LIMIT + 1, -1 do
+        for i = #sortedGuilds, DISPLAY_GUILD_RANK_LIMIT + 1, -1 do
             sortedGuilds[i] = nil
             yieldWork()
         end
@@ -2330,7 +2335,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             if a.points ~= b.points then return a.points > b.points end
             return (a.guild or "") < (b.guild or "")
         end, sortYield)
-        for i = #sortedGuildRating, DISPLAY_KILL_RANK_LIMIT + 1, -1 do
+        for i = #sortedGuildRating, DISPLAY_GUILD_RANK_LIMIT + 1, -1 do
             sortedGuildRating[i] = nil
             yieldWork()
         end
