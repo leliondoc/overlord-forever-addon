@@ -55,6 +55,10 @@ jobs:
           mapfile -t LUA_FILES < <(find . -maxdepth 1 -type f -name '*.lua' -print | sort)
           lua5.1 tests/lua_syntax_check.lua "${LUA_FILES[@]}"
           lua5.1 tests/zone_capture_lease.test.lua
+          lua5.1 tests/forever_zone_defense.test.lua
+          lua5.1 tests/forever_ladder_10k.test.lua
+          lua5.1 tests/forever_layer_server_field.test.lua
+          lua5.1 tests/forever_map_mode_button.test.lua
           lua5.1 tests/forever_trust_relay_142.test.lua
           lua5.1 tests/forever_ladder_injection.test.lua
           lua5.1 tests/forever_ladder_signatures.test.lua

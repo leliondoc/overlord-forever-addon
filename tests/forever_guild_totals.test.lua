@@ -121,7 +121,7 @@ lb.playerInfo[me].guild, lb.playerInfo[me].guildAt = "French Guild", stamp
 lb:ForceUpdateLocalPlayer(me, "PRIEST", "Horde")
 assert(lb.playerInfo[me].guild == "French Guild", "Login erased unavailable guild metadata")
 
--- Prepare an actual sliced display cache at the 5000-player boundary.
+-- Prepare an actual sliced display cache at the 10,000-player boundary.
 local timers = {}
 local timerNow = GetTime()
 function GetTime() return timerNow end
@@ -155,7 +155,7 @@ assert(killPayload and killPayload:find(":French Guild:", 1, true),
 
 lb.kills = { ["Guild Member"] = 620, ["Guild Member-Realm"] = 620 }
 lb.playerInfo = { ["Guild Member"] = { guild = "French Guild", faction = "Horde" } }
-for i = 1, 4999 do
+for i = 1, 9999 do
     local name = "Rival Player" .. string.char(97 + math.floor(i / 676),
         97 + math.floor(i / 26) % 26, 97 + i % 26)
     lb.kills[name] = 1000 + i
@@ -167,7 +167,7 @@ lb:MarkDirty()
 assert(lb:StartDisplayCacheBuild())
 drain()
 local cache = lb._displayCache
-assert(cache and #cache.sortedKills == 5000, "Full player display lost members or duplicated aliases")
+assert(cache and #cache.sortedKills == 10000, "Full player display lost members or duplicated aliases")
 local found
 for _, row in ipairs(cache.sortedGuilds) do
     if row.guild == "French Guild" then found = row.kills end
@@ -179,8 +179,8 @@ local french = assert(lb:GetGuildMembersSummary("French Guild"), "No member summ
 assert(french.count == 1 and #french.names == 1 and french.kills[1] == 620,
     "Guild member summary double counted an alias: " .. french.count)
 local other = assert(lb:GetGuildMembersSummary("other guild"), "Summary lookup is case-sensitive")
-assert(other.count == 4999 and #other.names == 10, "Top 10 / member count wrong: " .. other.count)
-assert(other.kills[1] == 5999 and other.kills[10] == 5990, "Top 10 not highest first")
+assert(other.count == 9999 and #other.names == 10, "Top 10 / member count wrong: " .. other.count)
+assert(other.kills[1] == 10999 and other.kills[10] == 10990, "Top 10 not highest first")
 for i = 2, 10 do assert(other.kills[i] < other.kills[i - 1], "Top 10 out of order at " .. i) end
 assert(lb:GetGuildMembersSummary("No Such Guild") == nil)
 local saved = OverlordDB.leaderboardDisplayCache
@@ -193,12 +193,12 @@ assert(lb:EnsureDisplayCache() == cache,
     "Deferred guild ranking refresh blanked the previous view")
 drain()
 cache = lb._displayCache
-assert(#cache.sortedKills == 5000 and cache.sortedKills[5000].name == "New Rival")
+assert(#cache.sortedKills == 10000 and cache.sortedKills[10000].name == "New Rival")
 found = nil
 for _, row in ipairs(cache.sortedGuilds) do
     if row.guild == "French Guild" then found = row.kills end
 end
-assert(found == 620, "Rank 5001 subtracted an existing member's HKs from the guild")
+assert(found == 620, "Rank 10001 subtracted an existing member's HKs from the guild")
 -- Revalidate already populated legacy records with the character itself; a GR
 -- response from that character uses fresh Blizzard metadata in an owned GI.
 local whispers = {}

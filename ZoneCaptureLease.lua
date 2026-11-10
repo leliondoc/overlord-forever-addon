@@ -26,6 +26,12 @@ local NETWORK_PROOF_HOLD_SLACK = 8
 -- consecutives sans assouplir la fraicheur du terminal, bornee separement.
 local NETWORK_PROOF_MAX_GAP = 50
 local BASE_HOLD_REQUIRED = 120
+-- 2.4.0: a wave of the other faction heard within this many seconds of its start is "told live".
+local LIVE_START_LAG = 30
+-- 2.4.0 (relief, see TakeOverStanding): how far past the relieved timer a relief may be told.
+local RELIEF_SLACK = 10
+-- A word of the capturer is fresh for this long; a lease silent that long may be relieved.
+local RELIEF_FRESH = 8
 -- 2.1.1: how long before our wave opened a capture of the point can still be that same capture
 -- (not heard yet when we stepped on it).
 local GUILD_FINAL_SLACK = 10
@@ -478,11 +484,77 @@ function Lease:NormalizeWaveId(raw, zoneId, originName, owner, remoteTs, holdTim
     return LegacyWave(zoneId, originKey, owner, remoteTs, holdTime)
 end
 
-function Lease:NewWaveId()
+-- beganAt (2.4.0, TakeOverStanding): a relief wave began when its capturer began standing on
+-- the point, within the hour; the id says that second, as any wave's says its own, and ends
+-- with "r": it carries on a capture that was running (IsReliefWave). Older clients read any id.
+function Lease:NewWaveId(beganAt)
     waveSequence = (waveSequence + 1) % 1000000
     local wall = math.max(0, math.floor((Overlord.ServerNow and Overlord.ServerNow() or time())))
+    local began = tonumber(beganAt)
+    if began and began < wall and began > wall - 3600 then wall = math.floor(began) end
     local mono = math.max(0, math.floor(GetTime() * 1000)) % 1000000000
-    return string.format("w%x_%x_%x", wall, mono, waveSequence)
+    return string.format("w%x_%x_%x%s", wall, mono, waveSequence, began and "r" or "")
+end
+
+-- 2.4.0: one timer per point. Several players of a group standing on a point when it becomes
+-- theirs to take each began a capture of their own in the same second, each with its own timer,
+-- its own view of the enemies and its own capture at the end: six raid members showed six timers
+-- (Ashenvale, 2026-11-10), and a point was "captured" twice. A wave says when it began in its id
+-- (NewWaveId: the server's second), the same for everybody: of two waves of one faction on one
+-- point the first one is the capture, by that second, then by the capturer's name.
+local function WaveBeganAt(waveId)
+    local began = type(waveId) == "string" and waveId:match("^w(%x+)_%x+_%x+r?$") or nil
+    return began and tonumber(began, 16) or nil
+end
+-- A relief (TakeOverStanding): the capture of a player who stood on the point, carried on from
+-- the one whose capturer gave way.
+local function IsReliefWave(waveId)
+    return type(waveId) == "string" and waveId:match("^w%x+_%x+_%x+r$") ~= nil
+end
+function Lease:IsReliefWave(waveId) return IsReliefWave(waveId) end
+-- Is the capture we follow under a Barricade? Known by our own handshake (barrierCommitted), or
+-- told by its capturer's ticks (toldRequired, AdoptRemote): a follower who did not see the
+-- defender raise it only knows it that way. No relief over one: its longer hold belongs to the
+-- wave it was raised against, and a relief would shed it.
+local function LeaseUnderBarrier(zone, remote)
+    if not remote then return false end
+    if remote.barrierCommitted or remote.barrierProposalUntil then return true end
+    return not (zone and zone.isCapital) and IsExtendedCaptureRequirement(remote.toldRequired)
+end
+
+local function IsElderWave(waveId, originKey, otherWaveId, otherKey)
+    local began, otherBegan = WaveBeganAt(waveId), WaveBeganAt(otherWaveId)
+    if not began or not otherBegan or type(originKey) ~= "string" or type(otherKey) ~= "string"
+        or originKey == otherKey then return false end
+    if began ~= otherBegan then return began < otherBegan end
+    return originKey < otherKey
+end
+-- An id is written by its sender. A wave cannot be older than the hour, nor further on than its
+-- age allows: without that, any id saying an early second took the place of the capture followed.
+-- A name as it came in a packet, for a chat line: nothing from a "|" or a control character on
+-- (colour, link and texture codes, line breaks), 48 bytes at most.
+function Lease:DisplayName(name)
+    local text = tostring(name or ""):match("^[^|%c]*") or ""
+    if #text > 48 then text = text:sub(1, 48):gsub("[\192-\247][\128-\191]*$", "") end
+    return text ~= "" and text or "?"
+end
+local function WaveAgeFits(waveId, hold)
+    local began = WaveBeganAt(waveId)
+    if not began then return false end
+    local nowWall = Overlord.ServerNow and Overlord.ServerNow() or time()
+    return began <= nowWall + 5 and began >= nowWall - 3600
+        and (tonumber(hold) or 0) <= nowWall - began + 15
+end
+
+-- Waves begun within this many seconds of each other are one group stepping on one point.
+local SAME_START = 2
+function Lease:WaveBeganAt(waveId) return WaveBeganAt(waveId) end
+function Lease:SameStart(waveId, otherWaveId)
+    local began, otherBegan = WaveBeganAt(waveId), WaveBeganAt(otherWaveId)
+    return began ~= nil and otherBegan ~= nil and math.abs(began - otherBegan) <= SAME_START
+end
+function Lease:IsElderWave(waveId, originKey, otherWaveId, otherKey)
+    return IsElderWave(waveId, originKey, otherWaveId, otherKey)
 end
 
 -- Les champs d'affichage SR sont ephemeres et projetes une seule fois a la
@@ -528,14 +600,16 @@ function Lease:BeginLocal(zone)
     return zone._localCaptureWaveId
 end
 
-function Lease:PromoteRemoteToLocal(zone, releasedByOrigin)
+-- relief, beganAt (2.4.0): TakeOverStanding only. The capturer told us himself that his timer
+-- goes down, or went silent, and does not stand on the point: the wave is his to lose, not live.
+function Lease:PromoteRemoteToLocal(zone, releasedByOrigin, relief, beganAt)
     if not zone then return nil end
     local remote = zone._remoteCaptureLease
     if remote then
         -- Defense en profondeur : une entree tardive sur le disque ne peut pas
         -- tombstoner la vague authentifiee encore vivante puis repartir a zero.
         -- Seul le ZR direct de cette origine autorise une releve immediate.
-        if not releasedByOrigin and remote.directValidated == true
+        if not releasedByOrigin and relief ~= true and remote.directValidated == true
             and GetTime() - (remote.lastDirectSeen or 0) < LIVE_SILENCE then
             return nil
         end
@@ -579,7 +653,7 @@ function Lease:PromoteRemoteToLocal(zone, releasedByOrigin)
     elseif not zone._localCaptureBase then
         zone._localCaptureBase = StableSnapshot(zone)
     end
-    zone._localCaptureWaveId = self:NewWaveId()
+    zone._localCaptureWaveId = self:NewWaveId(beganAt)
     zone._localCaptureOpenedAt = GetTime()
     zone._captureReleaseSentWave = nil
     TrackLeaseZone(zone)
@@ -1271,6 +1345,7 @@ function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
                     current.lastDirectSeen = now
                 end
                 current.lastHold = decision.hold or 0
+                current.toldRequired = decision.networkRequired or current.toldRequired
                 ApplyRemoteRequirement(current, decision)
                 UpdateNetworkProof(current, decision, now)
                 zone.holdTimeRequired = tonumber(current.effectiveRequired)
@@ -1278,6 +1353,7 @@ function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
             end
             return true, false, stillFresh
         end
+        current.toldRequired = decision.networkRequired or current.toldRequired
         ApplyRemoteRequirement(current, decision)
         UpdateNetworkProof(current, decision, now)
         if decision.direct == true then
@@ -1286,6 +1362,13 @@ function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
         end
         current.lastSeen = now
         current.lastRemoteTs = remoteTs
+        -- 2.4.0: is its timer going up? (ZoneControl: a co-capturer's timer runs between two ticks.)
+        current.rising = (decision.hold or 0) > (current.lastHold or 0)
+        if (decision.hold or 0) >= (current.peakHold or 0) then
+            current.peakHold, current.peakAt = decision.hold or 0, now
+        end
+        -- A word of its later time: a siege told again while it runs (EnemyClockOverAt).
+        if (decision.hold or 0) > 45 then current.retold = true end
         current.lastHold = decision.hold or 0
         current.tickAt, current.tickHold = now, (decision.hold or 0) + TransitLag(decision, current.effectiveRequired)
         zone.holdTimeRequired = tonumber(current.effectiveRequired)
@@ -1294,7 +1377,7 @@ function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
         return true, false, true
     end
 
-    local base
+    local base, relievedKey
     if current then
         local age = now - (current.lastSeen or 0)
         local expired = age >= HARD_TTL
@@ -1313,10 +1396,47 @@ function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
         local cleanRestart = (decision.hold or 0) <= 15
             and (decision.ts or 0) >= (current.lastRemoteTs or 0)
             and (softExpired or locallyObserved)
+            and not IsElderWave(current.waveId, current.originKey, decision.waveId, decision.originKey)
+        -- 2.4.0: of two waves of one faction on this point, the one that began first is followed
+        -- (IsElderWave), whichever was heard first: every client ends on the same timer.
+        -- On the capturer's own word only (firstHand, set by Sync): the origin of a relayed word
+        -- is written by whoever passed it on, and those who hear a capture through relays (the
+        -- other faction, far hands) get its start and its end, the same for either wave.
+        local elderWave = decision.firstHand == true and current.owner == owner and not current.barrierCommitted
+            and (decision.ts or 0) >= (current.lastRemoteTs or 0)
+            and IsElderWave(decision.waveId, decision.originKey, current.waveId, current.originKey)
+            and WaveAgeFits(decision.waveId, decision.hold)
+            -- (Not back to the wave this one relieved, its capturer gave it up; unless he is
+            -- back: we see him on the point, or the relief itself went silent. Without this a
+            -- capturer who returned before hearing his relief left us on a timer nobody held.)
+            and (current.relievedKey ~= LeaseKey(zone.id, decision.originKey, decision.waveId)
+                or locallyObserved or now - (current.lastSeen or 0) >= RELIEF_FRESH)
+        -- 2.4.0: relief (TakeOverStanding). The capturer we follow told us he is off the point
+        -- (away), or released his capture, and another player of his faction carries it on, from
+        -- no further than it stood (its highest hold told, plus the time gone since): his is
+        -- the timer now. A timer going down alone is a contest, not a reason.
+        -- Those who follow the relieved capture by its clock alone (no ticks: the other
+        -- faction, the guild, far hands) know a relief by its id, with the same bound: only over
+        -- a capture never heard again since its start, or silent, never over one that ticks
+        -- (any id would take a running capture's place), nor over another relief (of two, the
+        -- elder is followed, as of any two captures).
+        -- (A relief is dated from when its capturer began standing behind the capture he
+        -- relieves: never before that one began.)
+        local reliefById = IsReliefWave(decision.waveId) and not IsReliefWave(current.waveId)
+            and WaveAgeFits(decision.waveId, decision.hold)
+            and (WaveBeganAt(decision.waveId) or 0) >= (WaveBeganAt(current.waveId) or 0) - RELIEF_SLACK
+            and (current.tickAt == current.openedAt or now - (current.lastSeen or 0) >= RELIEF_FRESH)
+        local relief = self.RELIEF_ON and current.owner == owner
+            and (current.away == true or current.releasedAt ~= nil or reliefById)
+            and not LeaseUnderBarrier(zone, current)
+            and (decision.ts or 0) >= (current.lastRemoteTs or 0)
+            and (decision.hold or 0) <= (tonumber(current.peakHold) or tonumber(current.lastHold) or 0)
+                + (now - (current.peakAt or now)) + RELIEF_SLACK
         -- Une rotation directe du meme capteur couvre un loading. Un autre
         -- capteur du meme camp attend au moins le soft-TTL si son ZR a ete rate.
         if not expired and not cleanRestart and not sameOriginDirectContinuation
-            and not softExpiredDirectHandoff then return false end
+            and not softExpiredDirectHandoff and not elderWave and not relief then return false end
+        if relief then relievedKey = LeaseKey(zone.id, current.originKey, current.waveId) end
         base = CopySnapshot(current.base)
         -- Releve par un autre capteur : marque douce (sa finale reste valable).
         PutSoftTombstone(zone.id, current.originKey, current.waveId, current.lastRemoteTs)
@@ -1348,9 +1468,17 @@ function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
         guildAuthor = Overlord.GuildLane ~= nil and Overlord.GuildLane:HeardFromAuthor() or nil,
         tickAt = now,
         tickHold = decision.hold or 0,
+        peakHold = decision.hold or 0,
+        peakAt = now,
+        relievedKey = relievedKey,
+        toldRequired = decision.networkRequired,
+        -- 2.4.0: when it began, on the server's clock (ZoneDefense: which of two captures was first).
+        startedTs = (tonumber(decision.ts) or 0) - (tonumber(decision.hold) or 0),
     }
     local lag = TransitLag(decision, remote.effectiveRequired)
     remote.tickHold, remote.openedHold = remote.tickHold + lag, remote.openedHold + lag
+    -- 2.4.0: heard as it began (not a copy told late): see ClockOverAt.
+    remote.toldLive = lag <= LIVE_START_LAG or nil
     StartNetworkProof(remote, decision, now)
     zone._remoteCaptureLease = remote
     -- 2.2.0: without ticks, its outcome is all we will hear of it (SyncDirectory WatchWave).
@@ -1364,6 +1492,339 @@ function Lease:AdoptRemote(zone, owner, capturerName, decision, preparedBase)
     end
     TrackLeaseZone(zone)
     return true, true, true
+end
+
+-- 2.4.0: we hold a capture of this point and hear, first-hand, another player of our faction
+-- holding one that began before ours (IsElderWave): his is the capture, ours ends without a word
+-- and we follow his timer, as a player who steps on the point later does. Those who followed ours
+-- by its ticks switch the same way (AdoptRemote, elderWave); those who only heard its start keep
+-- its clock, and any capture of the point ends it (FinalSatisfiesLocalRequirement).
+-- firstHand: the game named the sender (group, guild, whisper), not a relay. And the capturer
+-- stands on the point with us (decision.physicalPresenceGuid: a group member alive, in sight,
+-- inside the disc): a guild mate's word from another layer, or a late copy, is no reason to give
+-- up a capture that runs. Not when ours is the shorter one (a gold attack spent on it), nor over
+-- a Barricade already raised against it.
+function Lease:YieldToElderWave(zone, owner, capturerName, decision, firstHand)
+    if not zone or not decision or firstHand ~= true or not decision.physicalPresenceGuid
+        or not zone.holdAuthorityLocal or not zone.isHolding or zone.status ~= "in_progress"
+        or zone.owner ~= owner or owner ~= Overlord.PlayerFaction then return false end
+    if zone._captureBarrierCommitted or zone._captureBarrierProposalUntil then return false end
+    local theirRequired = tonumber(decision.proofRequired) or tonumber(decision.networkRequired) or BASE_HOLD_REQUIRED
+    if (tonumber(zone.holdTimeRequired) or BASE_HOLD_REQUIRED) < theirRequired then return false end
+    local sync = Overlord.Sync
+    local selfKey = CanonicalPlayer(sync and sync.GetPlayerFullName and sync:GetPlayerFullName() or nil)
+    local own = zone._localCaptureWaveId
+    if not selfKey or not own or not IsElderWave(decision.waveId, decision.originKey, own, selfKey) then
+        return false
+    end
+    -- A wave cannot be older than the hour, nor further on than its age allows.
+    local nowWall = Overlord.ServerNow and Overlord.ServerNow() or time()
+    local began = WaveBeganAt(decision.waveId)
+    if began > nowWall + 5 or began < nowWall - 3600
+        or (tonumber(decision.hold) or 0) > nowWall - began + 15 then return false end
+    if IsTombstoned(zone.id, decision.originKey, decision.waveId, decision.ts) then return false end
+    local base = zone._localCaptureBase and CopySnapshot(zone._localCaptureBase) or nil
+    local openedAt = zone._localCaptureOpenedAt
+    local ownHold = math.max(0, tonumber(zone.holdTimeElapsed) or 0)
+    zone.holdAuthorityLocal = nil
+    zone._localCaptureWaveId = nil
+    if not self:AdoptRemote(zone, owner, capturerName, decision, base) then
+        zone.holdAuthorityLocal, zone._localCaptureWaveId, zone._localCaptureOpenedAt = true, own, openedAt
+        return false
+    end
+    -- Ours is over, here only: nobody is asked. Its start leaves the guild's box if it still
+    -- waited there, so that the elder's own is the one the guild hears; already said, the guild
+    -- follows our wave: its release is said like any other (the elder's start follows).
+    local lane = Overlord.GuildLane
+    if lane and lane.NoteYielded and not lane:NoteYielded(zone.id, own) then
+        local origin = sync.GetPlayerFullName and sync:GetPlayerFullName() or nil
+        if origin and origin ~= "" and sync.BroadcastToRelay then
+            pcall(sync.BroadcastToRelay, sync, "ZR", table.concat({ zone.id, own, origin }, ":"))
+        end
+    end
+    PutTombstone(zone.id, selfKey, own)
+    zone._localCaptureOpenedAt, zone._localCaptureBase, zone._captureReleaseSentWave = nil, nil, nil
+    ClearLocalWaveEphemera(zone)
+    local remote = zone._remoteCaptureLease
+    local hold = tonumber(remote and remote.tickHold) or tonumber(decision.hold) or 0
+    zone.holdTimeElapsed = hold
+    zone.holdTimeRequired = tonumber(remote and remote.effectiveRequired) or zone.holdTimeRequired
+    zone.holdStartTime = GetTime() - hold
+    zone.isContested, zone.isPaused = false, false
+    zone.zsOfficialCapturerName = capturerName
+    zone._zsOfficialCapturerSeenAt = GetTime()
+    zone.updatedAt = math.max(tonumber(zone.updatedAt) or 0, tonumber(decision.ts) or 0)
+    -- We have stood here since our own capture began (StandingSeconds), for no longer than it
+    -- earned (pushed back or off the point for a while, its timer says less than its age).
+    zone._standSince = GetTime() - math.min(math.max(0, GetTime() - (openedAt or GetTime())), ownHold)
+    zone._standSeenAt = GetTime()
+    if self.stats then self.stats.yielded = self.stats.yielded + 1 end
+    TrackLeaseZone(zone)
+    RefreshVisuals()
+    return true
+end
+
+-- 2.4.0: relief. One timer per point made the whole group's capture depend on one player:
+-- when he died or stepped off the point his timer went down for everybody and the capture was
+-- lost with four others standing on it (2.3.3: those who had begun their own in the same second
+-- still held theirs, and one of them completed). A player who stands on the point while a
+-- member of his group captures it carries the capture on when that capturer gives way:
+-- - the capturer is a member of his group and tells him first-hand that he is off the point
+--   (NoteFirstHand, away), or went silent for RELIEF_SILENCE seconds after his ticks came
+--   while the game itself shows him dead, disconnected or standing outside the disc
+--   (ShouldRelieve). Not seeing him proves nothing (another layer, out of sight): a capturer
+--   pushed back by enemies where he stands keeps his capture, that is a contest, not an
+--   absence, and a timer going down alone is no reason;
+-- - the relief starts from what the timer showed, and never from more than the time he
+--   himself has stood on the point without a break (NoteStanding, each second of ZoneControl's
+--   follower path: on the disc, alive, on foot, not contested on his own screen). Nothing is
+--   inherited: the wave is his own, dated from when he began to stand (NewWaveId beganAt), as
+--   the capture he would have run alone;
+-- - of several players standing there the first by name goes first (StandingRank, RELIEF_STEP
+--   apart); the others hear him and follow (AdoptRemote, relief), or yield to him as the elder;
+-- - never over a Barricade (its longer hold belongs to the wave it was raised against).
+-- Only between members of a group: nobody else hears the ticks that say a timer goes down.
+local STAND_GAP = 2.5
+local RELIEF_SILENCE, RELIEF_STEP, RELIEF_MAX_RANK = 16, 1.5, 4
+-- A capture released by its capturer is kept that long for the turn of the last in line
+-- (rank and late-comer waits, ReliefDue), then dropped.
+local RELEASE_KEEP = (2 * RELIEF_MAX_RANK + 1) * RELIEF_STEP + 4
+Lease.RELIEF_SILENCE, Lease.RELIEF_STEP = RELIEF_SILENCE, RELIEF_STEP
+-- The rule in one switch: false, nobody's time on the point is counted, so no capture is
+-- carried on (a hand-over starts from nothing, as before) and none of ours is given up to one.
+Lease.RELIEF_ON = true
+-- Counted since login, for the network report (ZoneDefense:GetDiagnostics): captures of ours
+-- given to an elder one of the point, captures carried on by us, captures of ours carried on.
+Lease.stats = Lease.stats or { yielded = 0, relieved = 0, handedOn = 0 }
+
+function Lease:NoteStanding(zone)
+    if not zone or not self.RELIEF_ON then return end
+    local now = GetTime()
+    if not zone._standSince or now - (zone._standSeenAt or 0) > STAND_GAP then zone._standSince = now end
+    zone._standSeenAt = now
+end
+
+function Lease:StandingSeconds(zone)
+    local now = GetTime()
+    if not self.RELIEF_ON or not zone or not zone._standSince or now - (zone._standSeenAt or 0) > STAND_GAP then return nil end
+    return math.max(0, now - zone._standSince)
+end
+
+-- A word of the wave we follow came from its capturer himself (Sync, after AdoptRemote).
+-- away: he says he is off the point (the state's seventh field, Sync BroadcastZoneState).
+-- Only a word newer than the last one counts: a copy of the same state (a witness whisper, his
+-- answer to a map request, which says nothing of "away") is neither a tick nor news.
+function Lease:NoteFirstHand(zone, away)
+    local remote = zone and zone._remoteCaptureLease
+    if not remote then return end
+    local ts = tonumber(remote.lastRemoteTs) or 0
+    if remote.firstHandTs and ts <= remote.firstHandTs then return end
+    remote.firstHandTs = ts
+    remote.firstHandAt = GetTime()
+    remote.firstHandTicks = (remote.firstHandTicks or 0) + 1
+    remote.away = away == true or nil
+end
+
+local function GroupUnitName(unit)
+    if not UnitExists(unit) or not UnitIsPlayer(unit) then return nil end
+    if Overlord.SafeGetUnitName then return Overlord:SafeGetUnitName(unit, true) end
+    if type(GetUnitName) == "function" then return GetUnitName(unit, true) end
+    return type(UnitName) == "function" and UnitName(unit) or nil
+end
+
+-- The unit of our party or raid that bears this name, if any.
+local function CapturerGroupUnit(name)
+    local wanted = CanonicalPlayer(name)
+    if not wanted or type(UnitExists) ~= "function" or type(UnitIsPlayer) ~= "function" then return nil end
+    local units = (type(IsInRaid) == "function" and IsInRaid()) and findCapturerRaidUnits or findCapturerPartyUnits
+    for i = 1, #units do
+        local ok, unitName = pcall(GroupUnitName, units[i])
+        if ok and unitName and CanonicalPlayer(unitName) == wanted then return units[i] end
+    end
+    return nil
+end
+function Lease:IsGroupMember(name) return CapturerGroupUnit(name) ~= nil end
+
+-- Does the game itself show this member of our group off the point? true: dead, a ghost,
+-- disconnected, or standing outside the disc; false: his position is inside it (he stands
+-- there, seen or not: another layer keeps the coordinates); nil: no position to judge by.
+local function GroupUnitOffDisk(unit, zone)
+    if type(UnitIsConnected) == "function" and UnitIsConnected(unit) == false then return true end
+    if type(UnitIsDead) == "function" and UnitIsDead(unit) then return true end
+    if type(UnitIsGhost) == "function" and UnitIsGhost(unit) then return true end
+    local mapID = zone and zone.center and zone.radius and ResolveZoneMapID(zone) or nil
+    if not mapID or not C_Map or type(C_Map.GetPlayerMapPosition) ~= "function" then return nil end
+    local okPos, pos = pcall(C_Map.GetPlayerMapPosition, mapID, unit)
+    if not okPos or not pos then return nil end
+    findCapturerZone = zone
+    local okInside, inside = pcall(FindCapturerUnitInsideDisk, pos)
+    if not okInside then return nil end
+    return not inside
+end
+
+function Lease:ShouldRelieve(zone)
+    local remote = zone and zone._remoteCaptureLease
+    if not remote or zone.holdAuthorityLocal or remote.owner ~= Overlord.PlayerFaction then return false end
+    if LeaseUnderBarrier(zone, remote) then return false end
+    -- Its capturer released it himself and we were not the first in line (ReceiveRelease).
+    if remote.releasedAt then return true end
+    local heard = tonumber(remote.firstHandAt)
+    -- (His last word must be his own, and not the first: a start alone says nothing of ticks.)
+    if not heard or (remote.firstHandTicks or 0) < 2 or heard < (remote.lastSeen or 0) - 0.5 then return false end
+    local silent = GetTime() - heard
+    local saysAway = remote.away == true and silent < RELIEF_FRESH
+    if not saysAway and silent < RELIEF_SILENCE then return false end
+    local unit = CapturerGroupUnit(remote.originName)
+    if not unit then return false end
+    local off = GroupUnitOffDisk(unit, zone)
+    -- He says he is away: unless the game shows him standing on the disc. Silent: only when
+    -- the game shows him off it.
+    if saysAway then return off ~= false end
+    return off == true
+end
+
+-- Members of our group standing on the point, fit to capture, whose name comes before ours.
+function Lease:StandingRank(zone)
+    local sync = Overlord.Sync
+    local me = CanonicalPlayer(sync and sync.GetPlayerFullName and sync:GetPlayerFullName() or nil)
+    local mapID = zone and zone.center and zone.radius and ResolveZoneMapID(zone) or nil
+    if not me or not mapID or not C_Map or type(C_Map.GetPlayerMapPosition) ~= "function"
+        or type(UnitExists) ~= "function" then return 0 end
+    local units = (type(IsInRaid) == "function" and IsInRaid()) and findCapturerRaidUnits or findCapturerPartyUnits
+    findCapturerMapID, findCapturerOwner, findCapturerZone = mapID, Overlord.PlayerFaction, zone
+    local rank = 0
+    for i = 1, #units do
+        local unit = units[i]
+        local okName, name = pcall(GroupUnitName, unit)
+        local key = okName and CanonicalPlayer(name) or nil
+        if key and key < me then
+            local okEligible, eligible = pcall(FindCapturerUnitEligible, unit)
+            local okPos, pos = pcall(C_Map.GetPlayerMapPosition, mapID, unit)
+            if okEligible and eligible and okPos and pos then
+                local okInside, inside = pcall(FindCapturerUnitInsideDisk, pos)
+                if okInside and inside then
+                    rank = rank + 1
+                    if rank >= RELIEF_MAX_RANK then break end
+                end
+            end
+        end
+    end
+    return rank
+end
+
+-- Once a second from ZoneControl while we stand on a point whose capture we follow. True when
+-- its capturer gave way and our turn has come: the caller then takes it over.
+function Lease:ReliefDue(zone)
+    local stand = self:ShouldRelieve(zone) and self:StandingSeconds(zone) or nil
+    if not stand then
+        if zone then zone._reliefSince = nil end
+        return false
+    end
+    local now = GetTime()
+    zone._reliefSince = zone._reliefSince or now
+    local wait = self:StandingRank(zone) * RELIEF_STEP
+    -- We stood there for less time than the timer shows (we came late, or came back): taking
+    -- it over would set the capture back to our own time. Whoever stood through it goes first,
+    -- whatever his name; we go after the whole line if nobody did.
+    local remote = zone._remoteCaptureLease
+    local shown = math.min(tonumber(zone.holdTimeElapsed) or 0, (tonumber(remote and remote.tickHold) or 0) + 6)
+    if stand + 3 < shown then wait = wait + (RELIEF_MAX_RANK + 1) * RELIEF_STEP end
+    return now - zone._reliefSince >= wait
+end
+
+-- released: the capturer's own release handed the wave over (ReceiveRelease), else relief.
+-- Returns true and the hold the capture goes on from.
+function Lease:TakeOverStanding(zone, released)
+    local remote = zone and zone._remoteCaptureLease
+    local stand = self:StandingSeconds(zone)
+    if not remote or not stand or zone.holdAuthorityLocal or remote.owner ~= Overlord.PlayerFaction
+        or zone.owner ~= Overlord.PlayerFaction or zone.status ~= "in_progress"
+        or LeaseUnderBarrier(zone, remote) then return false end
+    released = released == true or remote.releasedAt ~= nil
+    local previous = remote.originName
+    -- What our screen shows of his timer, never past his last word by more than a tick.
+    local shown = math.max(0, math.min(tonumber(zone.holdTimeElapsed) or 0,
+        (tonumber(remote.tickHold) or 0) + 6))
+    local nowWall = Overlord.ServerNow and Overlord.ServerNow() or time()
+    if not self:PromoteRemoteToLocal(zone, released == true, released ~= true, nowWall - stand) then return false end
+    local hold = math.floor(math.max(0, math.min(shown, stand,
+        (tonumber(zone.holdTimeRequired) or BASE_HOLD_REQUIRED) - 1)))
+    zone.holdTimeElapsed = hold
+    zone.holdStartTime = GetTime() - hold
+    zone._localCaptureOpenedAt = GetTime() - stand
+    zone._reliefSince = nil
+    zone.holdAuthorityLocal = true
+    local sync = Overlord.Sync
+    local selfName = sync and sync.GetPlayerFullName and sync:GetPlayerFullName() or nil
+    if selfName and selfName ~= "" then
+        zone.zsOfficialCapturerName = selfName
+        zone._zsOfficialCapturerSeenAt = GetTime()
+    end
+    zone.updatedAt = nowWall
+    if self.stats then self.stats.relieved = self.stats.relieved + 1 end
+    return true, hold, previous
+end
+
+-- The other side of a relief: we hold a capture of this point, we are not on it (gone, dead:
+-- our timer goes down) and a player of our faction, heard first-hand, carries one on there.
+-- Ours is over and we follow his. Its release is said to our group only (members on an older
+-- version follow ours until then): further away the capture goes on, and those who follow it
+-- by the clock of our start keep that clock until the relief's own word or its capture (a
+-- release there would show the point free for the rest of a capture that is running).
+function Lease:YieldAwayWave(zone, owner, capturerName, decision, firstHand)
+    if not self.RELIEF_ON or not zone or not decision or firstHand ~= true
+        or not zone.holdAuthorityLocal or not zone.isHolding or zone.status ~= "in_progress"
+        or zone.owner ~= owner or owner ~= Overlord.PlayerFaction then return false end
+    if zone._captureBarrierCommitted or zone._captureBarrierProposalUntil then return false end
+    local sync = Overlord.Sync
+    local selfKey = CanonicalPlayer(sync and sync.GetPlayerFullName and sync:GetPlayerFullName() or nil)
+    local own = zone._localCaptureWaveId
+    if not selfKey or not own or decision.originKey == selfKey then return false end
+    -- Away: not on this point, or on it without counting (dead, ghost, mounted).
+    local current = Overlord.Zones and Overlord.Zones.GetCurrentPlayerZone and Overlord.Zones:GetCurrentPlayerZone() or nil
+    local here = current ~= nil and current.id == zone.id
+        and not (type(UnitIsDead) == "function" and UnitIsDead("player"))
+        and not (type(UnitIsGhost) == "function" and UnitIsGhost("player"))
+        and not (Overlord.ZoneControl and Overlord.ZoneControl.IsPlayerInNonCaptureStateForSync
+            and Overlord.ZoneControl:IsPlayerInNonCaptureStateForSync())
+    if here then return false end
+    -- A relief only (it says so in its id), by a member of our group. Any other capture of the
+    -- point (a guild mate's on another layer, begun while we were off ours for a moment) is
+    -- not carrying ours on: ours stays ours to come back to, as it always did.
+    if not IsReliefWave(decision.waveId) or not CapturerGroupUnit(capturerName) then return false end
+    local nowWall = Overlord.ServerNow and Overlord.ServerNow() or time()
+    local began = WaveBeganAt(decision.waveId)
+    if began > nowWall + 5 or began < nowWall - 3600
+        or (tonumber(decision.hold) or 0) > nowWall - began + 15 then return false end
+    if IsTombstoned(zone.id, decision.originKey, decision.waveId, decision.ts) then return false end
+    local base = zone._localCaptureBase and CopySnapshot(zone._localCaptureBase) or nil
+    local openedAt = zone._localCaptureOpenedAt
+    local release = self:SnapshotLocalRelease(zone)
+    zone.holdAuthorityLocal = nil
+    zone._localCaptureWaveId = nil
+    if not self:AdoptRemote(zone, owner, capturerName, decision, base) then
+        zone.holdAuthorityLocal, zone._localCaptureWaveId, zone._localCaptureOpenedAt = true, own, openedAt
+        return false
+    end
+    if release and release.payload and sync.SendToGroup then
+        pcall(sync.SendToGroup, sync, "ZR", release.payload)
+    end
+    PutTombstone(zone.id, selfKey, own)
+    zone._localCaptureOpenedAt, zone._localCaptureBase, zone._captureReleaseSentWave = nil, nil, nil
+    ClearLocalWaveEphemera(zone)
+    local remote = zone._remoteCaptureLease
+    local hold = tonumber(remote and remote.tickHold) or tonumber(decision.hold) or 0
+    zone.holdTimeElapsed = hold
+    zone.holdTimeRequired = tonumber(remote and remote.effectiveRequired) or zone.holdTimeRequired
+    zone.holdStartTime = nil
+    zone.isHolding, zone.isContested, zone.isPaused = false, false, false
+    zone.zsOfficialCapturerName = capturerName
+    zone._zsOfficialCapturerSeenAt = GetTime()
+    zone.updatedAt = math.max(tonumber(zone.updatedAt) or 0, tonumber(decision.ts) or 0)
+    if self.stats then self.stats.handedOn = self.stats.handedOn + 1 end
+    TrackLeaseZone(zone)
+    RefreshVisuals()
+    return true
 end
 
 -- Une finale directe ne doit pas annuler une Barricade que ce client a lui-meme
@@ -1506,11 +1967,17 @@ function Lease:ExpireRemote(zone, reason)
         PutTombstone(zone.id, remote.originKey, remote.waveId)
     end
     RestoreSnapshot(zone, remote.base)
+    -- 2.4.0: the next wave of this point is a new start for the guild (GuildLane ForgetSiege).
+    if Overlord.GuildLane and Overlord.GuildLane.ForgetSiege then
+        Overlord.GuildLane:ForgetSiege(zone.id, remote.waveId)
+    end
     -- 2.2.0: how it ended, for SyncDirectory:PullAfterWave.
     remote.endedBy = reason
     zone._remoteCaptureLease = nil
     ClearTransient(zone)
     zone._remoteLeaseExpiredReason = reason
+    -- 2.4.0: and when (ZoneDefense: a capture on hold waits a moment after a silent end).
+    zone._remoteLeaseExpiredAt, zone._remoteLeaseExpiredOwner = GetTime(), remote.owner
     if Overlord.Sync and Overlord.Sync.OnRemoteCaptureLeaseEnded then
         Overlord.Sync:OnRemoteCaptureLeaseEnded(zone.id)
     end
@@ -1523,6 +1990,16 @@ end
 -- 2.2.2: when the clock of a followed wave (the hold of its last state heard, run on) is past its
 -- requirement and a grace, in GetTime() seconds; nil without a clock.
 local CLOCK_GRACE = 15
+-- 2.4.0: how long past its clock a wave of the other faction, told live and never renewed, stays on
+-- the map. Without the channel only the start and the end of a wave cross to the other faction, so
+-- its clock is all we have: a capturer who steps off the point or is contested for a while finishes
+-- later than that clock says. Ending the wave 15 s past it showed the point safe again, then lost
+-- without a word (seen in Ashenvale, 2026-11-10). Its release or its capture still ends it at once.
+local CLOCK_OVERTIME = 120
+-- A capital's siege (hold of SIEGE_RETOLD_MIN or more) is told again about once a minute while it
+-- runs (SyncDirectory chainShape, GuildLane Level): this long without a word after one of them
+-- ends it on our map (several of them lost in a row).
+local SIEGE_RETOLD_MIN, SIEGE_RETOLD_SILENCE = 300, 240
 local function ClockOverAt(remote, zone)
     if not remote or not remote.tickAt then return nil end
     -- Only a lease never renewed (the late copy that opened it): a wave still ticking may be
@@ -1536,9 +2013,39 @@ local function ClockOverAt(remote, zone)
     return remote.tickAt + required + CLOCK_GRACE - (tonumber(remote.tickHold) or 0)
 end
 
+-- 2.4.0: a wave of the other faction is ended by its clock, never by silence alone: a siege of
+-- eight minutes was gone from the besieged faction's map after 150 s, and its back points looked
+-- free to take again. The clock runs from the last word heard of it (its start, or a later one: a
+-- siege is told again along the way, SyncDirectory chainShape), with CLOCK_OVERTIME when that word
+-- was live. A capturer seen on our own disk is followed there, as before.
+local function EnemyClockOverAt(remote, zone)
+    if not remote or not remote.tickAt or remote.owner == Overlord.PlayerFaction then return nil end
+    if zone and CapturerVisibleOnLocalDisk and CapturerVisibleOnLocalDisk(zone, remote.originName, remote.owner) then
+        return nil
+    end
+    local required = tonumber(remote.effectiveRequired) or BASE_HOLD_REQUIRED
+    local renewed = remote.tickAt ~= remote.openedAt
+    local over = remote.tickAt + required + ((remote.toldLive or renewed) and CLOCK_OVERTIME or CLOCK_GRACE)
+        - (tonumber(remote.tickHold) or 0)
+    -- A siege that was told again and then is not: given up in silence (its capturer gone
+    -- without a release). Not kept to the end of its eight minutes.
+    if remote.retold and required >= SIEGE_RETOLD_MIN then over = math.min(over, remote.tickAt + SIEGE_RETOLD_SILENCE) end
+    return over
+end
+
+function Lease:FollowedByClock(zone)
+    local remote = zone and zone._remoteCaptureLease
+    return remote ~= nil and not zone.holdAuthorityLocal and EnemyClockOverAt(remote, zone) ~= nil
+end
+
 function Lease:MaybeExpire(zone)
     local remote = zone and zone._remoteCaptureLease
     if not remote or zone.holdAuthorityLocal then return false end
+    -- 2.4.0: released by its capturer and kept for our turn to take it over (ReceiveRelease):
+    -- nobody did, we left the point.
+    if remote.releasedAt and GetTime() - remote.releasedAt > RELEASE_KEEP then
+        return self:ExpireRemote(zone, "release")
+    end
     if ExpireUnacknowledgedBarrier(remote, GetTime()) then
         zone.holdTimeRequired = remote.effectiveRequired
         RefreshVisuals()
@@ -1547,7 +2054,10 @@ function Lease:MaybeExpire(zone)
     -- (Off the fronts this sweep is all there is: no observer tick runs there.)
     if Overlord.GuildLane and Overlord.GuildLane:KeepFollowing(zone) then return false end
     local silence = GetTime() - (remote.lastSeen or 0)
-    if silence < HARD_TTL then
+    local enemyOver = EnemyClockOverAt(remote, zone)
+    if enemyOver then
+        if GetTime() < enemyOver or silence < SOFT_TTL then return false end
+    elseif silence < HARD_TTL then
         -- 2.2.2: past its clock a wave nobody renews is over; waiting HARD_TTL more left finished
         -- sieges on the map for minutes (a copy told late opens a lease that nothing ends).
         local over = ClockOverAt(remote, zone)
@@ -1691,6 +2201,11 @@ function Lease:ReceiveRelease(payload, sender)
     local remote = zone._remoteCaptureLease
     local following = remote ~= nil and remote.originKey == originKey and remote.waveId == waveId
     if relayed and following and remote.guildAuthor then return false end
+    -- 2.4.0: a wave of this point is over (its state may have ended our view of it before this
+    -- release came): the next one is told as a new start (GuildLane ForgetSiege).
+    if Overlord.GuildLane and Overlord.GuildLane.ForgetSiege then
+        Overlord.GuildLane:ForgetSiege(zoneId, waveId)
+    end
     if relayed then
         -- Dated from its arrival, not from the last tick seen: a release jumps the
         -- queues (terminal first, priority token), so a tick it overtook is older than
@@ -1708,11 +2223,42 @@ function Lease:ReceiveRelease(payload, sender)
     else
         PutTombstone(zoneId, originKey, waveId)
     end
+    -- 2.4.0: one timer per point (YieldToElderWave). The wave we follow may be one that gave way
+    -- in silence to this elder one of its faction: the elder's release ends ours too, or a wave
+    -- nobody holds stayed on the map to the end of its clock.
+    -- Only that case: began within SAME_START seconds of it, and never heard again since its
+    -- start (a wave that ticks, a takeover, a capture of the other faction begun later are alive).
+    -- (Nor a relief: the wave it relieved is released as it gives way, YieldAwayWave.)
+    if not following and remote and not zone.holdAuthorityLocal and remote.tickAt == remote.openedAt
+        and not remote.relievedKey and not IsReliefWave(remote.waveId)
+        and IsElderWave(waveId, originKey, remote.waveId, remote.originKey)
+        and WaveBeganAt(remote.waveId) - WaveBeganAt(waveId) <= SAME_START then
+        return self:ExpireRemote(zone, "relayedRelease")
+    end
     if following then
         -- Un co-capteur allie deja physiquement sur le disque reprend la vague
         -- avec un nouvel id local au lieu de perdre tout le progres.
         if zone.isHolding and zone.owner == Overlord.PlayerFaction then
             -- Only the origin's own release hands a fresh first-hand wave over at once.
+            -- 2.4.0: from the time we stood there ourselves, when we did (TakeOverStanding), and
+            -- one player at a time: everybody standing on the point took the capture over in
+            -- the same second, each with a timer of his own. The first in line takes it now;
+            -- the others keep the released capture on screen for their turn (ReliefDue), follow
+            -- him as soon as they hear him (AdoptRemote, relief), and let it go after that.
+            local stood = not relayed and self:StandingSeconds(zone) or nil
+            if stood then
+                -- (Or we stood there for less time than the timer shows: see ReliefDue.)
+                local shown = math.min(tonumber(zone.holdTimeElapsed) or 0, (tonumber(remote.tickHold) or 0) + 6)
+                if not LeaseUnderBarrier(zone, remote) and (self:StandingRank(zone) > 0 or stood + 3 < shown) then
+                    remote.releasedAt = GetTime()
+                    TrackLeaseZone(zone)
+                    return true
+                end
+                if self:TakeOverStanding(zone, true) then
+                    if sync.BroadcastZoneState then sync:BroadcastZoneState(zone, true) end
+                    return true
+                end
+            end
             local takeoverWave = self:PromoteRemoteToLocal(zone, not relayed)
             if not takeoverWave then return false end
             zone.holdAuthorityLocal = true
@@ -2079,10 +2625,20 @@ GetZoneMaintenanceDeadline = function(zone, now)
             return now
         end
         deadline = (tonumber(remote.lastSeen) or 0) + HARD_TTL
-        local over = ClockOverAt(remote, zone)
-        if over then deadline = math.min(deadline, math.max(over, (tonumber(remote.lastSeen) or 0) + SOFT_TTL)) end
+        local enemyOver = EnemyClockOverAt(remote, zone)
+        local over = not enemyOver and ClockOverAt(remote, zone) or nil
+        if enemyOver then
+            -- 2.4.0: the clock alone ends it (MaybeExpire), however long the silence.
+            deadline = math.max(enemyOver, (tonumber(remote.lastSeen) or 0) + SOFT_TTL)
+        elseif over then
+            deadline = math.min(deadline, math.max(over, (tonumber(remote.lastSeen) or 0) + SOFT_TTL))
+        end
         if not remote.barrierCommitted and remote.barrierProposalUntil then
             deadline = math.min(deadline, tonumber(remote.barrierProposalUntil) or deadline)
+        end
+        -- 2.4.0: released and kept for our turn (ReceiveRelease): dropped when that time is up.
+        if remote.releasedAt then
+            deadline = math.min(deadline, remote.releasedAt + RELEASE_KEEP + 0.5)
         end
     end
     if not zone._captureBarrierCommitted and zone._captureBarrierProposalUntil then

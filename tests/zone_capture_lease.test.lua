@@ -235,6 +235,16 @@ expect(zone._remoteCaptureLease.lastSeen == 0,
     "identical replay renewed lease liveness")
 mono = 151
 local sentBeforeExpire = #sent
+-- 2.4.0: told as it began, a wave of the other faction is followed by its clock (120 s here, from a
+-- hold of 10) and two more minutes, whatever the silence: only its start and its end cross.
+expect(zone._remoteCaptureLease.toldLive == true and Lease:FollowedByClock(zone),
+    "a wave of the other faction heard as it began is not followed by its clock")
+expect(not Lease:MaybeExpire(zone), "150 s of silence ended a wave of the other faction still inside its clock")
+mono = 229
+expect(not Lease:MaybeExpire(zone), "a wave of the other faction ended before its clock and two minutes")
+mono = 151
+-- A copy told late keeps the short grace of 2.2.2 (its clock ended at 110 + 15).
+zone._remoteCaptureLease.toldLive = nil
 expect(Lease:MaybeExpire(zone), "hard expiry missing")
 expect(zone.status == "captured" and zone.owner == "Alliance" and zone.killsCurrent == 4,
     "hard expiry did not restore the confirmed snapshot")

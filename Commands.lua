@@ -274,6 +274,9 @@ function SyncReport.Network()
     if guildLane and guildLane.GetDiagnostics then R.Detail(guildLane:GetDiagnostics()) end
     local directory = Overlord.ChannelDirectory
     if directory and directory.GetDiagnostics then R.Detail(directory:GetDiagnostics()) end
+    -- 2.4.0: what the capture rules did since login (on hold, one timer, carried on, unseen attacker).
+    local defense = Overlord.ZoneDefense
+    if defense and defense.GetDiagnostics then R.Detail(defense:GetDiagnostics()) end
     if sync.GetEnemyCaptureFinalDiagnostics then R.Detail(sync:GetEnemyCaptureFinalDiagnostics()) end
     if sync.GetCrossFactionDiagnostics then
         for _, line in ipairs(sync:GetCrossFactionDiagnostics()) do R.Detail(line) end

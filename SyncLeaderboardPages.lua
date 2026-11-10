@@ -20,7 +20,18 @@ local PAGED_PROTOCOL, ASK_PROTOCOL = 9, 8
 sync.PAGED_PROTOCOL, sync.PAGED_ASK_PROTOCOL = PAGED_PROTOCOL, ASK_PROTOCOL
 local BUCKETS, PAGE_ROWS, CHUNK, MAX_PARTS = 64, 16, 170, 24
 local STREAMS = { "LK", "LC", "LR" }
-local STREAM_LIMITS = { LK = 5000, LC = 1500, LR = 6500 }
+-- 2.4.0: the ranking holds 10,000 kill rows (it held 5,000). Two clients that both say so in
+-- their presence ("~la", capability FULL_PROTOCOL) compare and exchange all of them. A client
+-- before that holds, compares and serves its best 5,000: with it, in both directions, we use
+-- the same view of ours (LegacyView: our best 5,000 kill rows, every capture row, the race rows
+-- of those players, what its own copy would hold of our data), so the fingerprints of two equal
+-- rankings still match and nothing is pulled again round after round. Which view a pull is
+-- about is said by the requester in its nonce ("w" for the whole ranking, "n" as before) and
+-- never guessed by the responder. The numbers a peer sends are bounded by the larger limits.
+local STREAM_LIMITS = { LK = 10000, LC = 1500, LR = 11500 }
+local LEGACY_LIMITS = { LK = 5000, LC = 1500, LR = 6500 }
+local FULL_PROTOCOL = 10
+sync.PAGED_FULL_PROTOCOL = FULL_PROTOCOL
 local MOD, RATE, BURST = 2147483647, 300, 500
 local pull, serving, outbound, wake, building
 -- Fair share (1.4.2): a Battle.net friend of the other faction is the only source
@@ -51,6 +62,42 @@ local function HasDirectAlly(except)
     return false
 end
 local profiles = setmetatable({}, { __mode = "k" })
+-- (2.4.0: the view of 5,000 of an attested copy, and its profile; both only exist for a copy
+-- holding more kill rows than that.)
+local legacyViews = setmetatable({}, { __mode = "k" })
+local legacyProfiles = setmetatable({}, { __mode = "k" })
+local function LegacyView(snapshot)
+    local order = type(snapshot) == "table" and snapshot.killOrder or nil
+    if type(order) ~= "table" or #order <= LEGACY_LIMITS.LK then return snapshot end
+    local view = legacyViews[snapshot]
+    if view then return view end
+    local kills, info, top = {}, {}, {}
+    local allKills, allInfo = snapshot.kills or {}, snapshot.playerInfo or {}
+    for i = 1, LEGACY_LIMITS.LK do
+        local name = order[i]
+        top[i], kills[name], info[name] = name, allKills[name], allInfo[name]
+    end
+    for name in pairs(snapshot.captureCount or {}) do
+        if info[name] == nil then info[name] = allInfo[name] end
+    end
+    -- Every other field (captures, dates) is the copy's own, read through a weak link: Lua 5.1
+    -- never frees a weak key that its own value holds, and a view holding its copy kept every
+    -- copy ever attested (and the profiles and wire rows cached under it) for the session.
+    local back = setmetatable({ snapshot }, { __mode = "v" })
+    view = setmetatable({ kills = kills, playerInfo = info, killOrder = top }, { __index = function(_, field)
+        local copy = back[1]
+        return copy and copy[field]
+    end })
+    legacyViews[snapshot] = view
+    return view
+end
+sync._LegacyLadderView = LegacyView
+-- Does this peer hold the whole ranking (its own presence said so in the last five minutes)?
+local function HoldsFullLadder(peer)
+    local net = Overlord.Relay
+    local capability = net and net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(peer)
+    return capability ~= nil and capability >= FULL_PROTOCOL
+end
 local unsupported, unsupportedOrder = {}, {}
 local serial, tokens, refillAt = 0, BURST, 0
 local stats = { pages = 0, rows = 0, rejected = 0, deferred = 0, retries = 0, bytes = 0 }
@@ -267,12 +314,14 @@ local PROFILE_REUSE_SEC, PROFILE_DIRTY_REUSE_SEC, PROFILE_DIRTY_ROW_SEC = 120, 3
 -- own: the profile is for our own pull. It is not reused once rows were applied
 -- since it was built (1.8.0: rounds every 45-105 s after a v8 round would otherwise
 -- list and fetch again the rows the previous round just brought).
-local function prepare(callback, own)
+-- legacy (2.4.0): the profile of our view of 5,000 (LegacyView), for a peer that holds no more.
+local function prepare(callback, own, legacy)
     if building then return false end
     stats.profileWhy = nil
     local wanted = epoch()
     local recent = sync.GetAttestedLeaderboardSnapshot and sync:GetAttestedLeaderboardSnapshot()
-    local cached = type(recent) == "table" and profiles[recent] or nil
+    local recentCache = (legacy and type(recent) == "table" and LegacyView(recent) ~= recent) and legacyProfiles or profiles
+    local cached = type(recent) == "table" and recentCache[recent] or nil
     local age = cached and (((GetServerTime and GetServerTime()) or time()) - (tonumber(recent.at) or 0)) or nil
     -- 2.2.2: without the channel, ranking rows travel from hand to hand by these pages: a copy
     -- two minutes old at every hand made each hop up to two minutes late (the whole ranking
@@ -310,8 +359,13 @@ local function prepare(callback, own)
                 or not snapshot and "built copy not attested" or "campaign changed"
             building = nil; callback(nil); return
         end
-        if profiles[snapshot] then building = nil; callback(profiles[snapshot]); return end
-        local result = { epoch = wanted, streams = {}, builtRows = builtRows }
+        -- (From here on `snapshot` is what the profile is made of: the copy, or its view of 5,000.)
+        local attested = snapshot
+        if legacy then snapshot = LegacyView(attested) end
+        local cache = snapshot ~= attested and legacyProfiles or profiles
+        local limits = snapshot ~= attested and LEGACY_LIMITS or STREAM_LIMITS
+        if cache[attested] then building = nil; callback(cache[attested]); return end
+        local result = { epoch = wanted, streams = {}, builtRows = builtRows, legacy = snapshot ~= attested or nil }
         for _, kind in ipairs(STREAMS) do
             result.streams[kind] = { buckets = {}, count = 0, hash = 0, hash7 = 0,
                 countA = 0, hashA = 0, countH = 0, hashH = 0 }
@@ -346,7 +400,7 @@ local function prepare(callback, own)
                 for i = 1, BUCKETS do pending[i] = {}; work() end
                 for name in pairs(source) do
                     count = count + 1
-                    if count > STREAM_LIMITS[kind] then error("oversized attested snapshot") end
+                    if count > limits[kind] then error("oversized attested snapshot") end
                     local serialize = serializers[kind]
                     local payload = serialize and serialize(sync, snapshot, name, wanted)
                     local identity = payload and key(name)
@@ -399,7 +453,7 @@ local function prepare(callback, own)
                 building = nil; callback(nil); return
             end
             if coroutine.status(co) ~= "dead" then C_Timer.After(0.001, step); return end
-            profiles[snapshot] = result
+            cache[attested] = result
             building = nil
             callback(result)
         end
@@ -1579,8 +1633,12 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
         raceless = raceless == true and diff == true or nil,
         changedAtStart = stats.changedRows or 0,
         wire = extended and (diff and "8" or withRace and "7" or "6") or "5",
-        cursor = "-", nonce = tostring(GetServerTime()) .. "n"
-            .. tostring(math.floor(GetTime() * 1000)) .. "n" .. tostring(serial) }
+        cursor = "-" }
+    -- 2.4.0: the whole ranking with a peer that holds it too, our view of 5,000 with any other
+    -- (and with one whose presence we have not heard: the safe side, one round).
+    state.full = diff == true and HoldsFullLadder(peer) or nil
+    state.nonce = tostring(GetServerTime()) .. (state.full and "w" or "n")
+        .. tostring(math.floor(GetTime() * 1000)) .. "n" .. tostring(serial)
     if state.wire == "8" then
         -- v8 starts each stream with its bucket fingerprints, whatever the saved bucket.
         state.phase, state.bucket, state.completed, state.qi = "V", 0, 0, 0
@@ -1625,7 +1683,7 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
             state.phase, state.from, state.topSeen, state.topApplied = "T", 1, {}, 0
         end
         request(state)
-    end, true) then pull = nil; return false, "local" end
+    end, true, not state.full) then pull = nil; return false, "local" end
     return true
 end
 
@@ -1645,8 +1703,8 @@ function sync:StartCompletePagedLeaderboardCatchup(peer, callback)
     end
     local raceless = capability ~= nil and capability < PAGED_PROTOCOL
     stats.peerProtocol = raceless and ("beta v" .. capability .. "; kills and captures only (1.8.0)")
-        or capability and ("beta v" .. capability .. "; l9+ld+lr+lp6 NH")
-        or "capability unknown, v8 probe"
+        or capability and ("beta v" .. capability .. (capability >= FULL_PROTOCOL and "; whole ranking" or "; best 5,000 rows"))
+        or "capability unknown, v8 probe (best 5,000 rows)"
     return self:StartPagedLeaderboardCatchup(peer, function(ok, supported, notAsked)
         callback(ok == true, supported == true, notAsked == true)
     end, true, true, true, raceless)
@@ -1795,7 +1853,9 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
             if building or outbound then sendControl("HA", busyReply, sender); return end
             session = { peer = sender, nonce = nonce, epoch = wireEpoch,
                 at = GetTime(), startedAt = GetTime(), seq = seq, extended = extended,
-                wire = version }
+                wire = version,
+                -- 2.4.0: the requester's nonce says which view it compares ("w": all of it).
+                legacy = not (version == "8" and nonce:match("^%d+w%d") ~= nil) }
             serving = session
             stats.pullsTaken = (stats.pullsTaken or 0) + 1
         -- The previous page of this same session is still leaving: its requester
@@ -1814,7 +1874,7 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
                     serving = nil
                     sendControl("HA", busyReply, sender)
                 end
-            end)
+            end, nil, session.legacy)
         end
         return
     end

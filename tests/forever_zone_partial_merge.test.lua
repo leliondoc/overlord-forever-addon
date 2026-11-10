@@ -658,7 +658,7 @@ do
     Overlord.Relay.Queue = function(_, packet) if packet.kind == "NH" then queued = packet end; return true end
     Overlord.Relay:Send("NH", tostring(Overlord.Version or ""))
     Overlord.Relay.Queue = realQueue
-    assert(queued and queued.payload:find(calm .. "~l9~ld~lr~lp6", 1, true),
+    assert(queued and queued.payload:find(calm .. "~la~l9~ld~lr~lp6", 1, true),
         "own presence does not say what the served map holds: " .. tostring(queued and queued.payload))
     -- A neighbour that also holds a capture we lack is pulled.
     set("elwynn_goldshire", "Horde", newest + 1)

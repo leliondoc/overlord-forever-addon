@@ -189,6 +189,20 @@ zone.status, zone.owner, zone.previousOwner = "in_progress", "Horde", "Alliance"
 zone.updatedAt, zone.holdTimeElapsed = now, 20
 Overlord:SaveState()
 assert(OverlordDB.zones.point.status == "in_progress" and OverlordDB.zones.point.owner == "Horde")
+-- 2.4.0: a capture of ours on hold (ZoneDefense) is saved as the point was before it: what it
+-- waits for is not saved, and restored after a /reload it would run on over a chain being broken.
+zone.holdAuthorityLocal, zone._localCaptureWaveId, zone._chainFrozen = true, "whold", "whold"
+zone._localCaptureBase = { status = "captured", owner = "Alliance", capturedTime = now - 30, updatedAt = now - 30,
+    holdTimeElapsed = 0, holdTimeRequired = 120 }
+Overlord:SaveState()
+assert(OverlordDB.zones.point.status == "captured" and OverlordDB.zones.point.owner == "Alliance"
+    and OverlordDB.zones.point.localCapture == nil and OverlordDB.zones.point.holdTimeElapsed == 0,
+    "a capture on hold was saved as running")
+zone._chainFrozen = "wearlier"
+Overlord:SaveState()
+assert(OverlordDB.zones.point.status == "in_progress" and OverlordDB.zones.point.owner == "Horde",
+    "the mark of an earlier capture hid a running one from the save")
+zone.holdAuthorityLocal, zone._localCaptureWaveId, zone._chainFrozen, zone._localCaptureBase = nil, nil, nil, nil
 zone.status, zone.owner, zone.capturedTime, zone.updatedAt = "available", nil, nil, now + 1
 Overlord:SaveState()
 assert(OverlordDB.zones.point.owner == nil and OverlordDB.zones.point.capturedTime == nil,

@@ -57,6 +57,8 @@ local lane = {
     -- How long past its end a silent wave is still followed (its capture may be on its way), and
     -- how long without a tick makes a wave told in the guild silent (ticks come every 5 s).
     SIEGE_GRACE = 15, TICK_SEC = 8,
+    -- 2.4.0: from this hold time on (a capital's siege) a capture is told again while it runs (Level).
+    BEAT_MIN_HOLD = 300,
     -- (Less than Sync:CanCreditDirectCapture leaves between two credits of a sender on a zone.)
     CLOSED_WAVE_SEC = 30,
     -- Our own releases are remembered as long as the relay may still hand over a start of theirs
@@ -88,8 +90,10 @@ addon.GuildLane = lane
 
 local TERMINAL, ALERT, ROUTINE = 3, 2, 1
 -- Any path: a capture told by a friend of ours is what the guild would otherwise never hear.
+-- (2.4.0: ZD, defenders a capturer cannot see: said for the guild mates that carry it to the
+-- other faction, and on that side for the capturer.)
 local FIXED_LEVEL = { C = TERMINAL, TV = TERMINAL, GE = TERMINAL, GX = TERMINAL,
-    GD = TERMINAL, FC = ALERT }
+    GD = TERMINAL, FC = ALERT, ZD = ALERT }
 -- Our own only: nobody relays a presence or a keep claim, and a relayed guild kill alert has
 -- somebody else to say it.
 local OWN_LEVEL = { NH = ROUTINE, OC = TERMINAL, GW = ROUTINE }
@@ -345,6 +349,15 @@ function lane:Level(p)
         -- The defenders' early warning, not the ticks of the siege (see KeepFollowing).
         if status == "in_progress" and (tonumber(hold) or 999) <= 45
             and (self.lastEchoDelay or 0) < self.SLOW_ECHO then return ALERT end
+        -- 2.4.0: the siege of a capital (eight minutes) is told again while it runs, once per
+        -- SIEGE_COVER_SEC for the whole guild (CoverKey), as along the member list (SyncDirectory
+        -- chainShape): whoever logs in or reaches the front after its start saw nothing of it,
+        -- and its clock drifts when it is put on hold. Never the ticks of an ordinary capture.
+        if status == "in_progress" and (self.lastEchoDelay or 0) < self.SLOW_ECHO
+            and (tonumber(payload:match("^[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:(%d+)")) or 0) >= self.BEAT_MIN_HOLD then
+            local wave = stateWave(payload)
+            if wave and wave ~= "" then return ROUTINE end
+        end
         return nil
     end
     -- The end of a wave is news to those who follow it: the guild has it from us only if it
@@ -368,6 +381,57 @@ function lane:Level(p)
     return nil
 end
 
+-- 2.4.0: a wave of this point ended without a capture (released, lost): the next one is a new
+-- start, said within RESTART_GAP seconds. Its cover (one siege start per point and
+-- SIEGE_COVER_SEC) kept a capture begun again within the minute out of the guild, hence from the
+-- other faction, for good when its timer had passed 45 s by the time the cover ended: their map
+-- showed the point safe while it was being taken. Not at once: a fight on the edge of a point makes
+-- a wave every few seconds, and the guild pays for every message. (The chain forgets it at once.)
+lane.RESTART_GAP = 30
+-- wave: the one that ended, when known. Only its own start leaves the box: a release that comes
+-- after the start of the next wave (the relay does not keep their order) must not take that one.
+function lane:ForgetSiege(zone, wave)
+    if type(zone) ~= "string" or zone == "" then return end
+    if type(wave) ~= "string" or wave == "" then wave = nil end
+    local limit = now() - self.SIEGE_COVER_SEC + self.RESTART_GAP
+    for _, code in ipairs({ "A", "H" }) do
+        local key = "SIEGE|" .. zone .. "|" .. code
+        if self.cover[key] and self.cover[key] > limit then self.cover[key] = limit end
+        if self.ownCover[key] and self.ownCover[key] > limit then self.ownCover[key] = limit end
+        -- Somebody else's start of that point still waiting here (for its share): its wave may
+        -- be the one that just ended. Not said after the end.
+        for i = #self.outbox, 1, -1 do
+            local entry = self.outbox[i]
+            if entry.relayed and entry.cover == key and (not wave or not entry.wave or entry.wave == wave) then
+                table.remove(self.outbox, i)
+            end
+        end
+    end
+end
+
+-- 2.4.0: one timer per point (CaptureLease YieldToElderWave): our capture gave way to an elder
+-- one. True when the guild never heard of ours: its start leaves the box if it waited there, and
+-- one still on its way through the relay is refused like the start of a released wave (Offer).
+-- False when ours was said: the guild follows it, its release is to be said.
+function lane:NoteYielded(zone, wave)
+    if type(zone) ~= "string" or type(wave) ~= "string" or wave == "" then return true end
+    if self.spoken[zone] == wave then return false end
+    for i = #self.outbox, 1, -1 do
+        local entry = self.outbox[i]
+        if entry.startedZone == zone and entry.startedWave == wave then
+            table.remove(self.outbox, i)
+            self.stats.cancelled = self.stats.cancelled + 1
+        end
+    end
+    local at, waves = now(), self.released[zone] or {}
+    for given, releasedAt in pairs(waves) do
+        if at - releasedAt > self.RELEASED_SEC then waves[given] = nil end
+    end
+    waves[wave] = at
+    self.released[zone] = waves
+    return true
+end
+
 -- What tasksFor asks: does this broadcast take a guild copy?
 function lane:Carries(p, fragmentCount)
     -- Our own release, whatever the guild does with it: the start of that wave may still wait in
@@ -381,6 +445,7 @@ function lane:Carries(p, fragmentCount)
             end
             waves[wave] = at
             self.released[zone] = waves
+            self:ForgetSiege(zone, wave)
         end
     end
     if p.skipGuild or p.groupOnly or p.target ~= "*" or fragmentCount > self.MAX_FRAGMENTS then return false end
@@ -402,6 +467,11 @@ function lane:CoverKey(p)
     elseif kind == "OP" then
         local site = payload:match("^v%d+:([^:]*):")
         if site then return "OP|" .. site, self.SITE_COVER_SEC end
+    elseif kind == "ZD" then
+        -- 2.4.0: one report per point, whoever counted the defenders, however many, whatever
+        -- wave they name (a field anybody writes must not make as many facts as it has values).
+        local zone = payload:match("^([^:]*):")
+        if zone then return "ZD|" .. zone, 25 end
     end
     return kind .. "|" .. payload, self.COVER_SEC
 end
@@ -697,8 +767,15 @@ local function mayPost(self, entry, at)
     -- holders get chain copies, and they would fill the guild's minute for its routine words.)
     local shared = entry.relayed and (entry.chained or not mapShowsCapture(entry.cover))
     if shared and relayedShare(self, at) < (entry.level == TERMINAL and 1 or 2) + (self.relayedJitter or 0) then
-        self.stats.capped = self.stats.capped + 1
-        return false, true
+        -- 2.4.0: the start of a capture waits for the share instead of being given up (its
+        -- time in the box bounds the wait): it is the defenders' warning, and a capture begun
+        -- again right after its release was the third relayed word of the minute; given up
+        -- here, the point fell without a sign for the whole guild. The last of the share is
+        -- still left to a capture.
+        local waits = entry.kind == "ZS" and entry.level == ALERT
+        if not (waits and entry.capped) then self.stats.capped = self.stats.capped + 1 end
+        entry.capped = true
+        return false, not waits
     end
     if not takeTokens(self, #entry.fragments, at) then return false end
     if shared then spendRelayedShare(self, at) end
@@ -873,9 +950,16 @@ function lane:Offer(p, fragments)
             self.stats.cancelled = self.stats.cancelled + 1
             return false
         end
+        -- (2.4.0: a word of that wave still waiting, a siege told again: not said after its end.)
+        local late = waitingStart(self, zone, wave)
+        while late do
+            table.remove(self.outbox, late)
+            late = waitingStart(self, zone, wave)
+        end
     end
     -- Or given up while its start still waited in the relay's queue: the release went first.
-    if own and p.kind == "ZS" and level == ALERT then
+    -- (2.4.0: likewise a siege told again, ROUTINE.)
+    if own and p.kind == "ZS" and (level == ALERT or level == ROUTINE) then
         local wave, waves = stateWave(p.payload), self.released[p.payload:match("^[^:]*")]
         if wave and waves and waves[wave] then
             self.stats.cancelled = self.stats.cancelled + 1
@@ -939,12 +1023,15 @@ function lane:Offer(p, fragments)
         -- (A friend or a group mate can put one packet in the hands of many: relayed ones draw too.)
         delay = self:DrawWait(own and WAIT[level] or RELAYED_WAIT, key ~= nil)
     end
-    local started = own and p.kind == "ZS" and level == ALERT
+    -- (2.4.0: or a siege told again, ROUTINE: when its start gave way to a raid mate's, this is
+    -- what the guild has from us, and its release must follow.)
+    local started = own and p.kind == "ZS" and (level == ALERT or level == ROUTINE)
     outbox[#outbox + 1] = { kind = p.kind, level = level, rank = rank, relayed = not own, cover = key,
         chained = p.heardOn == "WHISPER" or nil,
         coverSec = seconds, firm = firm, date = date,
         startedZone = started and p.payload:match("^[^:]*") or nil,
         startedWave = started and stateWave(p.payload) or nil,
+        wave = p.kind == "ZS" and stateWave(p.payload) or nil,
         id = p.id, origin = p.path[1]:lower(), fragments = fragments, due = at + delay }
     if release then self:Flush() else self:Arm(delay) end
     return true
@@ -1000,6 +1087,8 @@ function lane:NoteHeardPacket(p, relayed)
     local heard = key and self.cover[key]
     local news = not heard or at - heard >= (seconds or self.COVER_SEC)
     if key then self:RememberCover(key, at) end
+    -- 2.4.0: a release heard here: that point's next wave is a new start (ForgetSiege).
+    if p.kind == "ZR" and type(p.payload) == "string" then self:ForgetSiege(p.payload:match("^([^:]*):([^:]*)")) end
     if relayed and news and self:Level(p) then spendRelayedShare(self, at) end
     local date = captureDate(p)
     if key and date then

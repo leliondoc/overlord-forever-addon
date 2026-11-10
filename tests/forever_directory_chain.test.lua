@@ -551,5 +551,57 @@ do
     assert(fan and #fan == 5, "a passed-on fight bracket reached " .. tostring(fan and #fan) .. " contacts, not 5")
 end
 
+-- 13. 2.4.0: the siege of a capital is told again while it runs, once per cover window, and keeps the
+-- hands of its earlier tellings for its release; an ordinary capture's ticks stay off the chain.
+-- Defenders a capturer cannot see (ZD) are one fact per wave, whoever counted them.
+do
+    advance(400)
+    dir.CHAIN_BURST, dir.chain.tokens, dir.chain.at = 1000, 1000, clock
+    local function running(zone, hold, required, wave)
+        return ("%s:in_progress:0:%d:A:%d:0:%d:Somebody::%s"):format(zone, hold, GetServerTime(), required, wave)
+    end
+    assert(dir:ChainTargets(packet("ZS", running("elwynn_stormwind", 100, 120, "w20")), 1) == nil, "an ordinary capture's tick went along the chain")
+    assert(dir:ChainTargets(packet("ZS", running("elwynn_stormwind", 100, 480, "")), 1) == nil, "a siege without its wave")
+    local first = dir:ChainTargets(packet("ZS", running("elwynn_stormwind", 0, 480, "w21")), 1)
+    assert(first and #first > 0, "the start of a siege")
+    assert(dir:ChainTargets(packet("ZS", running("elwynn_stormwind", 50, 480, "w21")), 1) == nil, "a siege told twice within its cover")
+    advance(61)
+    local again = dir:ChainTargets(packet("ZS", running("elwynn_stormwind", 111, 480, "w21")), 1)
+    assert(again and #again > 0, "a siege was not told again after a minute")
+    local hands, kept = dir.chain.starts["elwynn_stormwind|w21"].targets, {}
+    for _, name in ipairs(hands) do kept[name] = true end
+    -- The latest hands first, then the earlier ones, START_HANDS at most.
+    local both, earlier = {}, 0
+    for _, name in ipairs(again) do both[name] = true; assert(kept[name], "the later hands are not kept for the release") end
+    for _, name in ipairs(first) do
+        if not both[name] then both[name] = true; if kept[name] then earlier = earlier + 1 end end
+    end
+    local union = 0
+    for _ in pairs(both) do union = union + 1 end
+    assert(#hands == math.min(union, dir.START_HANDS), "hands kept for the release: " .. #hands .. " of " .. union)
+    assert(earlier == #hands - #again, "the earlier hands were forgotten for the release")
+    for _, name in ipairs(hands) do assert(both[name], "a hand out of nowhere: " .. name) end
+    -- Past START_MEMORY since its start, told again in between: its release still follows.
+    advance(200)
+    assert(dir:ChainTargets(packet("ZS", running("elwynn_stormwind", 311, 480, "w21")), 1), "a siege told again later")
+    advance(200)
+    assert(dir:ChainTargets(packet("ZR", release("elwynn_stormwind", "w21")), 1), "the release of a long siege was not passed on")
+    -- ZD: a fact, one per point and 25 s whatever count and wave it names (fields anybody writes
+    -- must not make as many facts as they have values), passed on only for a point of ours.
+    advance(61)
+    local report = dir:ChainTargets(packet("ZD", "elwynn_goldshire:w30:Somebody:3:7"), 1)
+    assert(report and #report > 0, "the report of the defenders did not go along the chain")
+    assert(dir:ChainTargets(packet("ZD", "elwynn_goldshire:w30:Somebody:5:7"), 1) == nil, "the same point reported twice in the window")
+    assert(dir:ChainTargets(packet("ZD", "elwynn_goldshire:w31:Somebody:5:7"), 1) == nil, "another wave name made another fact")
+    assert(dir:ChainTargets(packet("ZD", "elwynn_eastvale:w31:Somebody:5:7"), 1), "another point is another fact")
+    advance(26)
+    assert(dir:ChainTargets(packet("ZD", "elwynn_goldshire:w31:Somebody:5:7"), 1), "the next round of the same point")
+    assert(dir:ChainTargets(packet("ZD", "nowhere:w32:Somebody:5:7", { contacts[1], me }, "WHISPER"), 1) == nil, "a report about no point of ours was passed on")
+    for _, bad in ipairs({ "garbage", "elwynn_ridgepoint:w 1:Somebody:5:7", "elwynn_ridgepoint:" .. string.rep("w", 60) .. ":Somebody:5:7",
+        "elwynn_ridgepoint:w1:Somebody:500:7", "elwynn_ridgepoint::Somebody:5:7" }) do
+        assert(dir:ChainTargets(packet("ZD", bad), 1) == nil, "a malformed report went along the chain: " .. bad)
+    end
+end
+
 print("Directory chain: fans, cover, start and release, guild speakers, caps, tokens, vouched map news, "
     .. "silent sieges, leaves, fights, intake, offline contacts OK")

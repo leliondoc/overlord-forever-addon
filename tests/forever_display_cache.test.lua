@@ -42,10 +42,10 @@ local function copy(value)
     return deepCopy(value)
 end
 local names = {}
-for i = 1, 6000 do
+for i = 1, 11000 do
     local name = "Cached Player" .. string.char(97 + math.floor(i / 676), 97 + math.floor(i / 26) % 26, 97 + i % 26)
     names[i] = name
-    lb.kills[name] = math.ceil(i / 2)
+    lb.kills[name] = math.ceil(i / 4)
     lb.captureCount[name] = math.ceil(i / 20)
     lb.playerInfo[name] = { class = "WARRIOR", faction = "Horde", guild = "Cache Guild",
         guildAuth = true, guildAt = time(), locale = "engb", race = "Orc", raceSex = 2, level = 2 }
@@ -57,10 +57,10 @@ drain()
 assert(not lb:EnsureDisplayCache().ready)
 drain()
 local first = lb:EnsureDisplayCache()
-assert(first.ready and #first.sortedKills == 5000)
+assert(first.ready and #first.sortedKills == 10000)
 assert(#first.byFaction.Horde == 500)
 local saved = assert(OverlordDB.leaderboardDisplayCache)
--- 1.4.2: only the login preview is persisted (500 rows), the full 5000 live in memory.
+-- 1.4.2: only the login preview is persisted (500 rows), the full 10,000 live in memory.
 assert(#saved.sortedKills == 500 and #saved.sortedGuilds == 1,
     "persisted cache rows: " .. #saved.sortedKills .. "/" .. #saved.sortedGuilds)
 local savedMetaRows = 0
@@ -79,7 +79,7 @@ Overlord.Sync.SendWhisper = function() networkCalls = networkCalls + 1; return t
 local preview = lb:EnsureDisplayCache()
 assert(preview.ready and preview.fromSavedCache and #preview.sortedKills == 500,
     "Reload did not immediately return the saved ranking")
-assert(preview.sortedKills[1].name == names[5999] and preview.sortedKills[1].kills == 3000)
+assert(preview.sortedKills[1].name == names[10997] and preview.sortedKills[1].kills == 2750)
 assert(#preview.byFaction.Horde == 25, "Reload synchronously copied the expanded capture list")
 assert(next(lb.kills) == nil and next(lb.playerInfo) == nil,
     "Presentation cache was merged into authoritative scores")
@@ -101,7 +101,7 @@ assert(loading.ready and loading.fromSavedCache, "Login binding blanked the cach
 for _ = 1, 50 do assert(lb:EnsureDisplayCache() == loading) end
 drain()
 local live = lb:EnsureDisplayCache()
-assert(live.ready and not live.fromSavedCache and #live.sortedKills == 5000)
+assert(live.ready and not live.fromSavedCache and #live.sortedKills == 10000)
 assert(#live.byFaction.Horde == 500 and live.byFaction.Horde[500].name == first.byFaction.Horde[500].name,
     "Sliced initialization did not restore the full capture ranking")
 assert(live.sortedGuilds[1].kills == first.sortedGuilds[1].kills)
@@ -156,7 +156,7 @@ assert(updated.sortedKills[1].name == names[101] and updated.sortedKills[1].kill
     "Cached display stayed frozen after a real score update")
 assert(OverlordDB.leaderboardDisplayCache.sortedKills[1].kills == 4999,
     "Updated view was not saved for the next login")
-assert(saved.sortedKills[1].kills == 3000, "Publishing a view mutated the previous saved view")
+assert(saved.sortedKills[1].kills == 2750, "Publishing a view mutated the previous saved view")
 
 -- 2.3.0: the ranking closed for an instance, its view build stops at the door: the
 -- deferred build does not start there and a running one is dropped (no ladder scan or

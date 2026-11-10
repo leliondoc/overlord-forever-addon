@@ -1170,7 +1170,7 @@ do
         return freshChannel(self, kind, fragment)
     end
     assert(fresh.Relay:Send("NH", "1.0.0")); drain()
-    assert(advertised and advertised:find("~m1jk~o0" .. ours .. "~l9~ld~lr~lp6", 1, true), "Own presence lacks the map stamp")
+    assert(advertised and advertised:find("~m1jk~o0" .. ours .. "~la~l9~ld~lr~lp6", 1, true), "Own presence lacks the map stamp")
     -- Clients of 1.8.1 read "~m...~" and nothing else of this.
     assert(("1.8.2~b~m1jk~o0" .. ours .. "~l9~ld~lr~lp6"):match("~m(%w+)~") == "1jk")
     -- The sum of sixty-four capture dates is beyond 32 bits, where tonumber(text, 36)
@@ -1200,7 +1200,7 @@ do
         assert(not pulled("Sites Held", "~m1jk~o0" .. theirs), "Our own tenants are not part of our content")
         advertised = nil
         assert(fresh.Relay:Send("NH", "1.0.0")); drain()
-        assert(advertised and advertised:find("~m1jk~o0" .. theirs .. "~l9~ld~lr~lp6", 1, true),
+        assert(advertised and advertised:find("~m1jk~o0" .. theirs .. "~la~l9~ld~lr~lp6", 1, true),
             "Own presence does not advertise our keeps and outposts in the content")
         fresh.Sync.GetOutpostMapContent = nil
         now = now + 6
@@ -1245,7 +1245,7 @@ do
     assert(not pulled("Sites Known", "~m1jk~o5eg"), "A capture our map holds was pulled")
     advertised = nil
     assert(fresh.Relay:Send("NH", "1.0.0")); drain()
-    assert(advertised and advertised:find("~m1jk~o4mo" .. ours .. "~l9~ld~lr~lp6", 1, true),
+    assert(advertised and advertised:find("~m1jk~o4mo" .. ours .. "~la~l9~ld~lr~lp6", 1, true),
         "Own presence lacks the keep/outpost stamp")
 end
 -- A forged relayed copy carrying a victim's next packet id (ids are predictable)
