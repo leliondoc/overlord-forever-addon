@@ -36,8 +36,20 @@ jobs:
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
             /etc/apt/sources.list.d/azure-cli.list 2>/dev/null || true
-          sudo apt-get update -qq
-          sudo apt-get install -y lua5.1
+          # The runner's resolver can fail on the Ubuntu mirrors for a long while (2026-11-11:
+          # three runs in a row, about four minutes each): after a failed try, public resolvers
+          # for this job. The packages are still verified by apt.
+          for attempt in 1 2 3; do
+            if getent hosts archive.ubuntu.com >/dev/null 2>&1 \
+              && sudo apt-get update -qq && sudo apt-get install -y lua5.1; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then echo "Lua 5.1 could not be installed" >&2; exit 1; fi
+            sudo rm -f /etc/resolv.conf
+            printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee /etc/resolv.conf >/dev/null
+            sleep 10
+          done
+          lua5.1 -v
 
       - name: Valider versions, syntaxe Lua et fronts Forever
         run: |
