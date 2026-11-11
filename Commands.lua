@@ -903,6 +903,10 @@ local function CommandHandler(msg)
     elseif cmd == "shard" then
         ShowShardDebug()
 
+    elseif cmd == "layer" or cmd == "layers" then
+        -- 2.5.0: the layers of the players heard, and joining one (/ov layer help on|off).
+        if Overlord.LayerJumper then Overlord.LayerJumper:HandleCommand(args) end
+
     elseif cmd == "groups" or cmd == "group" then
         if Overlord.GroupFinder then Overlord.GroupFinder:HandleCommand(args) end
 

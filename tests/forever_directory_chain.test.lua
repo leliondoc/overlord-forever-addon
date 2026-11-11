@@ -387,14 +387,14 @@ assert(dir:ChainTargets(packet("FK", "bracket_own:elwynn:3:2"), 1), "our own fig
 -- GW_PER_MIN passed on a minute on their own count.
 if not Overlord.GuildKillAlert then assert(loadfile("GuildKillAlert.lua"))() end
 local gwAt = GetServerTime()
-assert(dir:ChainTargets(packet("GW", "1:Some Guild:H:12:5:::" .. gwAt), 1) == nil, "a rampage below the threshold rides the chain")
-assert(dir:ChainTargets(packet("GW", "1:Some Guild:H:40:8:::" .. (gwAt - 900)), 1) == nil, "an old rampage rides the chain")
-local rampage = dir:ChainTargets(packet("GW", "1:Some Guild:H:40:8:::" .. gwAt), 1)
+assert(dir:ChainTargets(packet("GW", "1:Some Guild:H:40:5:::" .. gwAt), 1) == nil, "a rampage below the threshold rides the chain")
+assert(dir:ChainTargets(packet("GW", "1:Some Guild:H:60:8:::" .. (gwAt - 900)), 1) == nil, "an old rampage rides the chain")
+local rampage = dir:ChainTargets(packet("GW", "1:Some Guild:H:60:8:::" .. gwAt), 1)
 assert(rampage and #rampage <= dir.FK_FAN + dir.LEAF_FANS, "a rampage does not ride the chain within the fights' fan")
-assert(dir:ChainTargets(packet("GW", "1:some guild:H:60:9:::" .. gwAt), 1) == nil, "the same guild's rampage told twice")
+assert(dir:ChainTargets(packet("GW", "1:some guild:H:80:9:::" .. gwAt), 1) == nil, "the same guild's rampage told twice")
 local rampages = 0
 for i = 1, dir.GW_PER_MIN + 3 do
-    if dir:ChainTargets(packet("GW", "1:Guild " .. string.char(64 + i) .. ":H:40:8:::" .. gwAt, { "Guild Mate", me }, "GUILD"), 1) then
+    if dir:ChainTargets(packet("GW", "1:Guild " .. string.char(64 + i) .. ":H:60:8:::" .. gwAt, { "Guild Mate", me }, "GUILD"), 1) then
         rampages = rampages + 1
     end
 end
@@ -603,5 +603,108 @@ do
     end
 end
 
+-- 2.5.0: bridges first. The contacts whose own presence said they hold a Battle.net friend of the
+-- other faction are whispered first by the author and by the hand after it, inside the same fan.
+do
+    advance(400)
+    dir.chain.cover, dir.chain.starts, dir.chain.rows = {}, {}, 0
+    dir.PER_MIN, dir.PER_GATEWAY = 1000, 1000
+    assert(type(net.IsKnownBridge) == "function", "the relay does not say who is a bridge")
+    local live, bridges = {}, {}
+    for _, row in pairs(dir.partners) do
+        if row.chainAt and dir:IsContact(row.name) then live[#live + 1] = row.name end
+    end
+    table.sort(live)
+    assert(#live >= 12, "fixture: contacts left: " .. #live)
+    bridges[live[3]:lower()], bridges[live[7]:lower()], bridges[live[11]:lower()] = true, true, true
+    local realBridge = net.IsKnownBridge
+    net.IsKnownBridge = function(_, name) return bridges[tostring(name):lower()] == true end
+    local function bridgesIn(list)
+        local count = 0
+        for _, name in ipairs(list or {}) do if bridges[name:lower()] then count = count + 1 end end
+        return count
+    end
+    local at = GetServerTime()
+    local function refill() dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock end
+    -- Our own siege: BRIDGE_FANS bridges among the targets, every time, and no whisper more.
+    for round = 1, 12 do
+        refill()
+        local own = dir:ChainTargets(packet("ZS", siege("elwynn_goldshire", "A", at, "wb" .. round)), 1)
+        -- (The draw of the rest of the fan may add the third one.)
+        assert(own and bridgesIn(own) >= dir.BRIDGE_FANS, "own siege: bridges served " .. bridgesIn(own or {}))
+        assert(#own <= dir:FanFor(1) + dir.LEAF_FANS and distinct(own), "bridges cost whispers: " .. #own)
+        dir.chain.starts, dir.chain.cover, dir.chain.rows = {}, {}, 0
+    end
+    -- The hand after the author too; a bridge already on the path is not whispered again.
+    refill()
+    local second = dir:ChainTargets(packet("C", capture("elwynn_eastvale", "Alliance", at, "wb20"), { live[7], me }, "WHISPER"), 1)
+    assert(second and bridgesIn(second) == 2, "second hand: bridges served " .. bridgesIn(second or {}))
+    for _, name in ipairs(second) do assert(name ~= live[7], "whispered back to the path") end
+    -- Further hands (the fact could not cross any more), what came over Battle.net (it has crossed)
+    -- and a kill total (it never crosses): the plain draw.
+    local late, crossed, totals = 0, 0, 0
+    for round = 1, 40 do
+        refill()
+        dir.chain.cover, dir.chain.rows = {}, 0
+        late = late + bridgesIn(dir:ChainTargets(packet("C", capture("zone_l" .. round, "Alliance", at, "wl" .. round),
+            { live[1], live[2], me }, "WHISPER"), 1))
+        refill()
+        crossed = crossed + bridgesIn(dir:ChainTargets(packet("C", capture("zone_x" .. round, "Horde", at, "wx" .. round),
+            { "Horde Friend", me }, "BNET"), 1))
+        refill()
+        dir.chain.rankAt = nil
+        totals = totals + bridgesIn(dir:ChainTargets(packet("K", me .. ":WARRIOR:" .. (100 + round) .. ":Alliance:1"), 1))
+    end
+    assert(late < 40 * dir.BRIDGE_FANS and crossed < 40 * dir.BRIDGE_FANS and totals < 40 * dir.BRIDGE_FANS,
+        "bridges pinned where nothing can cross: " .. late .. " " .. crossed .. " " .. totals)
+    net.IsKnownBridge = realBridge
+    -- The relay's own book: a first-hand presence saying "~b", not one heard over Battle.net.
+    assert(not net:IsKnownBridge("Nobody Heard"), "an unknown player counted as a bridge")
+end
+
+-- 2.5.0: the Commander's position (GP) goes along the chain once per GP_COVER_SEC and Commander.
+do
+    advance(400)
+    dir.chain.cover, dir.chain.starts, dir.chain.rows, dir.chain.gpMinute = {}, {}, 0, nil
+    dir.PER_MIN, dir.PER_GATEWAY = 30, 8
+    local claim, epochValue = GetServerTime() - 50, 1790000000
+    local function position(x, claimAt, faction)
+        return ("%s:global:%d:4000:1429:%d:%d:%d"):format(faction or "A", x, claimAt or claim, GetServerTime(), epochValue)
+    end
+    dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+    local spare = dir.chain.tokens - dir.FK_RESERVE
+    local first = dir:ChainTargets(packet("GP", position(4000)), 1)
+    assert(first and #first > 0, "our own position did not go along the chain")
+    assert(#first <= spare, "a position spent the tokens kept for captures: " .. #first)
+    -- The next positions of the same Commander wait for the cover, wherever it stands.
+    advance(20)
+    assert(dir:ChainTargets(packet("GP", position(4100)), 1) == nil, "a position every 20 s went along the chain")
+    advance(20)
+    assert(dir:ChainTargets(packet("GP", position(4200)), 1) == nil, "a position at 40 s went along the chain")
+    advance(20)
+    dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+    assert(dir:ChainTargets(packet("GP", position(4300)), 1), "the position a minute later was not passed on")
+    -- Another Commander (the other faction's, or a later claim) is another fact.
+    dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+    assert(dir:ChainTargets(packet("GP", position(1000, claim, "H"), { contacts[1], me }, "WHISPER"), 1),
+        "the other Commander's position was covered by ours")
+    -- Passed on for others GP_PER_MIN a minute at most, never from a stranger, never malformed.
+    local passed = 0
+    for i = 1, 12 do
+        dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+        if dir:ChainTargets(packet("GP", position(1000, claim + 100 + i, "H"), { contacts[2], me }, "WHISPER"), 1) then
+            passed = passed + 1
+        end
+    end
+    assert(passed <= dir.GP_PER_MIN - 1 and passed >= 1, "positions passed on in a minute: " .. passed)
+    assert(dir:ChainTargets(packet("GP", position(1000, claim + 500, "H"), { "Some Body", me }, "WHISPER"), 1) == nil,
+        "a stranger's position was passed on")
+    for _, bad in ipairs({ "garbage", "X:global:1:2:3:4:5:6", "A:global:1:2:3:4:5", "A:global:x:2:3:4:5:6" }) do
+        assert(dir:ChainTargets(packet("GP", bad), 1) == nil, "a malformed position went along the chain: " .. bad)
+    end
+    -- Without news the Commander is kept long enough for a beat to be missed (General.lua).
+    assert(dir.GP_COVER_SEC * 2 + 40 <= 200, "fixture: two beats must fit the Commander's life without news")
+end
+
 print("Directory chain: fans, cover, start and release, guild speakers, caps, tokens, vouched map news, "
-    .. "silent sieges, leaves, fights, intake, offline contacts OK")
+    .. "silent sieges, leaves, fights, intake, offline contacts, bridges first, Commander position OK")

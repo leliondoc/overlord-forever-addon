@@ -102,6 +102,96 @@ local unsupported, unsupportedOrder = {}, {}
 local serial, tokens, refillAt = 0, BURST, 0
 local stats = { pages = 0, rows = 0, rejected = 0, deferred = 0, retries = 0, bytes = 0 }
 sync._leaderboardPageStats = stats
+-- 2.5.0: the feed (its block is further down, "The feed"). Declared here: the profile reuse and
+-- the pull's own steps read it.
+local feed = {
+    -- Asked for and served only between clients from MIN_RELEASE on (their own presence says so).
+    MIN_RELEASE = { 2, 5, 0 }, RELEASE_AGE = 3 * 3600,
+    -- A responder keeps SUBS_MAX subscribers, each SUB_TTL after its last pull or keep-alive. A
+    -- requester takes the feed of a peer it asked in the last SOURCE_TTL (the peer has that long to
+    -- say its first word) or that feeds it now, and counts a peer as feeding it for LIVE_SEC after
+    -- its last word. Every KEEP_SEC it tells each of them it is still there ("HR 8:K"), and the
+    -- source answers with a feed message, rows or none: a source only reaches a subscriber the
+    -- relay heard in the last five minutes, and the feed alone goes one way. Without that word a
+    -- subscription died five minutes after its pull while the subscriber went on counting on it
+    -- and resting its rounds. A source silent for LIVE_SEC counts no more, and the rounds take
+    -- their usual pace back.
+    SUBS_MAX = 8, SUB_TTL = 900, SOURCE_TTL = 600, LIVE_SEC = 420, KEEP_SEC = 200,
+    -- Rows read from one source in a minute (a source sends PER_MIN messages at most).
+    ROWS_PER_MIN = 240,
+    -- Players new to our ranking taken from the feed in an hour: NEW_PER_SOURCE from one source,
+    -- NEW_PER_HOUR in all. Past it such a row is left to the pulls, whose acceptance is unchanged
+    -- (the same ranking in the end, by the slower way): a source stays one for as long as it
+    -- speaks, and what it brings is passed on within seconds.
+    NEW_PER_SOURCE = 200, NEW_PER_HOUR = 600,
+    -- The feed's own byte bucket (the pages keep theirs: a busy feed must not slow the answers
+    -- served to the pulls, those of older clients first).
+    RATE = 150, BURST = 450,
+    -- A requester asks for the feed of SOURCES_MAX peers at most (those feeding it stay asked):
+    -- every further source brings the same rows once more.
+    SOURCES_MAX = 4,
+    -- One message per subscriber every GAP at most, LINGER after the first row waiting (a few
+    -- rows travel together), PER_MIN for the whole client; BLOB bytes and ROWS_MAX rows per
+    -- message, PENDING_MAX rows waiting per subscriber.
+    -- (PER_MIN 24 and RATE 150 are measured: on 310 whole clients with 119 of them killing, 18 and
+    -- 110 gave the same busiest tenth, 59 whispers a minute, a higher median, 42 against 38, the
+    -- pulls making up for the feed, and the same ranking 90 s later.)
+    -- BLOB: the rows of a message that does not go through the relay (one whisper). Through it a
+    -- message fills up to PIECES whispers, the last one FILL full at least (feedSend), and is read
+    -- up to MESSAGE_MAX bytes.
+    GAP = 8, LINGER = 2, PER_MIN = 24, BLOB = 228, ROWS_MAX = 24, PENDING_MAX = 96,
+    PIECES = 3, FILL = 0.5, MESSAGE_MAX = 600,
+    -- The fresh fight brackets of "Recent activity" (FrontActivity FK) travel in the feed's
+    -- messages too, FIGHT_ROWS a message at most, FIGHT_ROOM bytes kept for them while one waits.
+    -- On the whisper chain alone a bracket missed one or two clients in most fights (36 whole
+    -- clients, three worlds: a panel one bracket behind for 6 to 9 minutes, another chat line).
+    FIGHT_ROWS = 4, FIGHT_ROOM = 60,
+    -- They also go up: a client tells the peers that feed it the brackets they have not told it
+    -- ("HR 8:W:<epoch>:<bracket>,<bracket>...": W, a letter no step of a pull bears), FIGHT_UP_LINGER after it learnt one, a message
+    -- per source every GAP at most. Down alone, a bracket entering by a client few others ask
+    -- (a Battle.net friend of the other side, a player out of the member list) stopped at its
+    -- one or two subscribers: 19 to 22 of 24 players of a faction a bracket behind for minutes
+    -- (304 whole clients, two bridges).
+    FIGHT_UP_LINGER = 3,
+    -- The zone of a fight. When the channel carried, every client heard every kill total with
+    -- its zone and counted the size of a fight by itself ("Recent activity"); without it a total
+    -- only reaches its author's guild, group and a few contacts, and the best-informed client
+    -- counted about half the kills (36 whole clients, a battle of several guilds). The feed
+    -- carries every total to everybody: a kill row now says where its last kills were made, as
+    -- a marker row "z<@front|#uiMapID>" in front of the rows of that zone (one marker per zone
+    -- and message, about ten bytes), for ZONE_SEC after the kills. PARSE_MAX: rows read in one
+    -- message (ROWS_MAX rows, their markers, FIGHT_ROWS brackets).
+    -- (ZONE_SEC 180: in the biggest fights a row waits its turn; at 90 the last row of a player
+    -- who had stopped left without its zone, and those kills were counted nowhere.)
+    ZONE_SEC = 180, ZONE_REF_MAX = 24, PARSE_MAX = 48,
+    -- The last RING rows that moved, kept RING_SEC (a profile served to a new subscriber may be
+    -- that old); identities born lately (FRESH_MAX of them) travel as whole rows.
+    RING = 256, RING_SEC = 130, FRESH_MAX = 1024,
+    STOP_GAP = 300, INBOX_MAX = 256, WAIT_MAX = 20,
+    -- A capture count leaves CAPTURE_LINGER after it moved, never sooner. A capture is counted by
+    -- its event (C) on the clients that witness it and by a row everywhere else: a witness that
+    -- took our row (the count with that capture in it) before the event would count it twice,
+    -- for good (totals only go up). The event is whispered within a second and lives two minutes
+    -- at most in a relay; the row waits most of that.
+    -- (125 s: past the two minutes an event lives in a relay, so that no witness can take the row
+    -- and then the event.)
+    CAPTURE_LINGER = 125, CAPTURE_PENDING = 64,
+    -- The rows a pull of ours brings are passed on to our subscribers while that pull has changed
+    -- at most PULL_PASS rows of our ranking (a few rows the feed missed). Past it the pull is a
+    -- catch-up (a login, an evening away: thousands of rows everybody else holds): passed on, they
+    -- filled every subscriber's queue with old rows and the fresh ones were dropped behind them
+    -- (bench, 5,000-row rankings: two rows in three sent were already held).
+    PULL_PASS = 24, BULK_PER_FRAME = 48,
+    subs = {}, subCount = 0, sources = {}, enemy = {}, asked = {}, askedCount = 0, stops = {}, stopCount = 0,
+    sourceFights = {}, sourceFightAt = {}, zones = {}, zoneAt = {}, zoneCount = 0,
+    pinged = {}, intake = {}, tokens = 450, refillAt = 0, newcomers = { at = -1e9, total = 0, by = {} },
+    ring = {}, ringAt = 0, fresh = {}, freshCount = 0, inbox = {}, inboxHead = 1, inboxTail = 0,
+    minute = { at = -1000, count = 0 },
+    scratch = { kills = {}, captureCount = {}, captures = {}, playerInfo = {} },
+}
+sync._leaderboardFeed = feed
+-- Rows that changed our ranking since login, by pages and by the feed.
+local function movedRows() return (stats.changedRows or 0) + (stats.feedChanged or 0) end
 
 local function epoch()
     return math.floor(tonumber(Overlord.GetCurrentCampaignStartTs
@@ -340,7 +430,7 @@ local function prepare(callback, own, legacy)
             math.max(PROFILE_DIRTY_REUSE_SEC, (cached and tonumber(cached.count) or 0) * perRow))
     end
     if cached and cached.epoch == wanted and age and age >= 0 and age < reuse
-        and not (own and cached.builtRows ~= (stats.changedRows or 0)) then
+        and not (own and cached.builtRows ~= movedRows()) then
         stats.profileReused = (stats.profileReused or 0) + 1
         C_Timer.After(0.001, function()
             if wanted ~= epoch() then callback(nil); return end
@@ -350,7 +440,7 @@ local function prepare(callback, own, legacy)
     end
     building = true
     -- Rows that really changed our ranking so far (taken before the copy is made).
-    local builtRows = stats.changedRows or 0
+    local builtRows = movedRows()
     local accepted = lb:SnapshotCurrentCampaignBeforeReset(function(ok)
         local snapshot = ok and sync:GetAttestedLeaderboardSnapshot()
         if not snapshot or wanted ~= epoch() then
@@ -764,6 +854,10 @@ request = function(state, retry)
         end
         state.waitingForSend = nil
         state.sentAny = true
+        -- (The feed of a peer is taken once we asked it ourselves.)
+        if state.feed then
+            feed.keep(feed.asked, "askedCount", state.peer:lower(), GetTime(), 64, feed.SOURCE_TTL)
+        end
     end
     sendRequest()
     -- Two relay TTLs plus margin also cover a congested first request/reply.
@@ -1201,6 +1295,926 @@ local function applyList8(state, meta, blob)
     return true
 end
 
+-- ---------------------------------------------------------------------------
+-- 2.5.0: the feed
+-- ---------------------------------------------------------------------------
+--
+-- Without the channel a kill total leaves first-hand for a few contacts, and every other client
+-- waits for a pull to bring it: one neighbour at a time, each side building its whole profile
+-- first, a hop every 20 s to 2 min. Measured on 36 whole clients (mc_ladder_eq): everybody equal
+-- 190 s (median) to 460 s after the last kill, 10 s when the channel carried; during a fight
+-- hardly anyone held the true totals.
+--
+-- A pull now leaves a subscription behind. The requester says so in its nonce (a trailing "f",
+-- only toward a peer whose own presence states MIN_RELEASE or later); the responder that takes
+-- the pull keeps the requester as a subscriber and, from then on, whispers it the rows of its
+-- own ranking that move: a few rows per message ("HB 8:U:<epoch>:<rows>", the pages' kind, lane
+-- and byte budget), a message per subscriber every GAP at most. Whoever takes a row that way
+-- passes it on to its own subscribers, so a total crosses the faction in a few hands of a few
+-- seconds each; a subscriber of the other faction (a Battle.net friend) gets the rows it
+-- compares with us, its own filter.
+--  * Nothing new is believed. A row of the feed is taken only from a peer we asked ourselves in
+--    the last SOURCE_TTL (the peers our pulls go to), through the same code as a row of a page we
+--    asked for (OnReceiveLeaderboardKills / Captures under _pagedDelivery): content only, the
+--    same result by any route. From anybody else it is dropped, and that sender is told once to
+--    stop ("HR 8:X").
+--  * A row is the one an attested copy made now would hold (Leaderboard:GetLiveNetworkRow, the
+--    pages' own serializers). A player the subscriber already compared with us travels as its
+--    name and total ("s"), which the subscriber completes with what it holds; an identity born
+--    since travels whole ("k", a v8 kill row with its race; "c", a capture row).
+--  * What does not fit (a subscriber's PENDING_MAX, the client's PER_MIN and byte budget, a lost
+--    whisper, a row the subscriber cannot complete) is left to the pulls, which go on: closer
+--    after a pull that brought rows, further apart once LADDER_FED_SOURCES peers feed us
+--    (SyncHistoryCatchup FinishRound, sync:LadderFeedSources).
+--  * Only while our channel does not carry (the directory's own rule), never in an instance.
+-- A client before MIN_RELEASE never sees any of it: it is not flagged, and reads "HB 8:U" as a
+-- page of no pull of its own.
+local function feedActive()
+    local directory = Overlord.ChannelDirectory
+    return directory ~= nil and directory.IsActive ~= nil and directory:IsActive() == true
+end
+function feed.peerOk(peer)
+    local net = Overlord.Relay
+    local release = net and net.GetPeerReleaseWithin and net:GetPeerReleaseWithin(peer, feed.RELEASE_AGE)
+    local x, y, z = tostring(release or ""):match("^(%d+)%.(%d+)%.(%d+)$")
+    if not x then return false end
+    x, y, z = tonumber(x), tonumber(y), tonumber(z)
+    local min = feed.MIN_RELEASE
+    if x ~= min[1] then return x > min[1] end
+    if y ~= min[2] then return y > min[2] end
+    return z >= min[3]
+end
+-- Do we ask this peer for its feed: it feeds us already, or fewer than SOURCES_MAX peers of our
+-- own faction do. A Battle.net friend of the other faction always: it is our only source of
+-- that faction's rows, whatever our own side already brings (and it is not counted among them).
+function feed.wants(peer)
+    if IsOtherFaction(peer) then return true end
+    local at, lower, live = GetTime(), peer:lower(), 0
+    for name, heardAt in pairs(feed.sources) do
+        if at - heardAt <= feed.LIVE_SEC then
+            if name == lower then return true end
+            if not feed.enemy[name] then live = live + 1 end
+        end
+    end
+    return live < feed.SOURCES_MAX
+end
+-- A small bounded book (asked, stops): the oldest rows go once it holds `limit`.
+function feed.keep(book, counter, lower, at, limit, life)
+    if book[lower] == nil then
+        if feed[counter] >= limit then
+            local count = 0
+            for k, t in pairs(book) do
+                if at - t > life then book[k] = nil else count = count + 1 end
+            end
+            if count >= limit then
+                -- (The oldest gives way: wiped whole, the book forgot the peers feeding us now.)
+                local oldest, oldestAt
+                for k, t in pairs(book) do
+                    if not oldestAt or t < oldestAt then oldest, oldestAt = k, t end
+                end
+                if oldest then
+                    book[oldest] = nil
+                    count = count - 1
+                end
+            end
+            feed[counter] = count
+        end
+        feed[counter] = feed[counter] + 1
+    end
+    book[lower] = at
+end
+local function feedDrop(lower)
+    if feed.subs[lower] then
+        feed.subs[lower] = nil
+        feed.subCount = feed.subCount - 1
+    end
+end
+-- Everything forgotten: an instance, another campaign, the channel carrying again.
+function feed.reset()
+    feed.subs, feed.subCount, feed.sources, feed.enemy, feed.asked, feed.askedCount = {}, 0, {}, {}, {}, 0
+    feed.sourceFights, feed.sourceFightAt = {}, {}
+    feed.pinged, feed.intake = {}, {}
+    -- (The hour's count of newcomers is kept: leaving an instance must not open it again.)
+    feed.inbox, feed.inboxHead, feed.inboxTail, feed.from, feed.captureWaiting = {}, 1, 0, nil, nil
+end
+local function feedPush(sub, id, at)
+    if sub.has[id] then return end
+    if sub.count >= feed.PENDING_MAX then
+        stats.feedOverflow = (stats.feedOverflow or 0) + 1
+        return
+    end
+    sub.tail = sub.tail + 1
+    sub.queue[sub.tail], sub.has[id], sub.count = id, true, sub.count + 1
+    sub.firstAt = sub.firstAt or at
+end
+local feedArm
+-- Leaderboard.OnNetworkRowMoved: the best total of an identity rose (a kill of ours, a K, a
+-- page, a row of the feed). O(1) without a subscriber.
+function feed.note(stream, dedupKey, born)
+    -- (A catch-up pull: nothing of it is news to anybody, see PULL_PASS.)
+    if feed.from == "*" then return end
+    local at = GetTime()
+    -- A ranking put back in one go (a login restoring its save, aliases merged): hundreds of
+    -- totals "rise" in one frame and none of them is news. Past BULK_PER_FRAME in one frame the
+    -- rest of that frame is not noted (live totals come a few per frame at the very most).
+    if feed.bulkAt == at then
+        feed.bulkCount = feed.bulkCount + 1
+        if feed.bulkCount > feed.BULK_PER_FRAME then return end
+    else
+        feed.bulkAt, feed.bulkCount = at, 1
+    end
+    local id = (stream == "LC" and "c" or "k") .. dedupKey
+    -- (Only while somebody is fed: a login puts thousands of identities back in one go.)
+    if born and stream == "LK" and feed.subCount > 0 then
+        if feed.fresh[dedupKey] == nil then
+            if feed.freshCount >= feed.FRESH_MAX then feed.fresh, feed.freshCount = {}, 0 end
+            feed.freshCount = feed.freshCount + 1
+        end
+        feed.fresh[dedupKey] = at
+    end
+    local slot = feed.ringAt % feed.RING + 1
+    feed.ringAt = slot
+    feed.ring[2 * slot - 1], feed.ring[2 * slot] = id, at
+    if feed.subCount == 0 then return end
+    -- (Not back to the peer it just came from.)
+    local from = feed.from
+    if stream == "LC" then
+        -- (One timer per identity; a count that moves again meanwhile is read when it leaves.)
+        local waiting = feed.captureWaiting
+        if not waiting then waiting = { n = 0 }; feed.captureWaiting = waiting end
+        if waiting[id] or waiting.n >= feed.CAPTURE_PENDING or not C_Timer or not C_Timer.After then return end
+        waiting[id], waiting.n = true, waiting.n + 1
+        C_Timer.After(feed.CAPTURE_LINGER, function()
+            waiting[id], waiting.n = nil, waiting.n - 1
+            if feed.captureWaiting ~= waiting or feed.subCount == 0 then return end
+            local later = GetTime()
+            for lower, sub in pairs(feed.subs) do
+                if lower ~= from then feedPush(sub, id, later) end
+            end
+            feedArm()
+        end)
+        return
+    end
+    for lower, sub in pairs(feed.subs) do
+        if lower ~= from then feedPush(sub, id, at) end
+    end
+    feedArm()
+end
+lb.OnNetworkRowMoved = feed.note
+
+-- The responder's side of a pull flagged "f": its requester becomes (or stays) a subscriber.
+-- create: a pull we take (a busy answer only renews).
+function feed.subscribe(sender, filter, create)
+    if not feedActive() then return false end
+    local lower, at = sender:lower(), GetTime()
+    local sub = feed.subs[lower]
+    if not sub then
+        if not create then return false end
+        if feed.subCount >= feed.SUBS_MAX then
+            -- Room is made of the subscriber renewed longest ago, once it is 5 min old; at once
+            -- for a friend of the other faction (we may be its only source of our faction's rows;
+            -- a subscriber of our own side has other sources), never of another such friend.
+            local crossing = IsOtherFaction(sender)
+            local oldest, oldestAt
+            for k, row in pairs(feed.subs) do
+                if (not oldestAt or row.at < oldestAt) and not (crossing and row.crossing) then oldest, oldestAt = k, row.at end
+            end
+            if oldest and (crossing or at - oldestAt >= 300) then feedDrop(oldest) end
+        end
+        if feed.subCount >= feed.SUBS_MAX then
+            stats.feedFull = (stats.feedFull or 0) + 1
+            return false
+        end
+        sub = { name = sender, has = {}, whole = {}, queue = {}, head = 1, tail = 0, count = 0, lastAt = -1000,
+            crossing = IsOtherFaction(sender) or nil }
+        feed.subs[lower] = sub
+        feed.subCount = feed.subCount + 1
+        stats.feedSubscribed = (stats.feedSubscribed or 0) + 1
+        -- What moved since the copy this pull may be served from was made.
+        local ring = feed.ring
+        for slot = 1, feed.RING do
+            local id, movedAt = ring[2 * slot - 1], ring[2 * slot]
+            if id and at - movedAt <= feed.RING_SEC then feedPush(sub, id, movedAt) end
+        end
+    end
+    sub.at, sub.epoch = at, epoch()
+    if create then
+        -- (The requester has just compared with a copy at most RING_SEC old; a word at once
+        -- tells it we feed it, rows or not.)
+        sub.filter, sub.since, sub.hello, sub.whole = filter, at - feed.RING_SEC, true, {}
+        sub.firstAt = sub.firstAt or at
+        -- (And the fights going on, if it has not had them from us: a login, a reload.)
+        sub.fights = true
+    end
+    feedArm()
+    return true
+end
+
+-- Where a player's last kills were made (GuildKillAlert, for a kill total heard or our own; the
+-- feed itself, for a row taken with its zone): kept ZONE_SEC, FRESH_MAX players at most. Only
+-- a front or a world zone map; nothing while nobody is fed.
+function feed.noteZone(name, zoneRef)
+    if feed.subCount == 0 or type(zoneRef) ~= "string" or type(name) ~= "string" then return end
+    local ref
+    if zoneRef:match("^#%d+$") then
+        ref = zoneRef
+    else
+        local fa = Overlord.FrontActivity
+        local front = fa and fa.GetFrontIdFromZoneRef and fa:GetFrontIdFromZoneRef(zoneRef)
+        ref = front and ("@" .. front) or nil
+    end
+    if not ref or #ref > feed.ZONE_REF_MAX then return end
+    local dedupKey = lb.GetNetworkRowKey and lb:GetNetworkRowKey(name)
+    if not dedupKey then return end
+    local at = GetTime()
+    if feed.zones[dedupKey] == nil then
+        if feed.zoneCount >= feed.FRESH_MAX then
+            -- (The zones past their life first; emptied whole only if that frees nothing.)
+            local kept = 0
+            for known, seenAt in pairs(feed.zoneAt) do
+                if at - seenAt > feed.ZONE_SEC then
+                    feed.zones[known], feed.zoneAt[known] = nil, nil
+                else
+                    kept = kept + 1
+                end
+            end
+            feed.zoneCount = kept
+            if kept >= feed.FRESH_MAX then feed.zones, feed.zoneAt, feed.zoneCount = {}, {}, 0 end
+        end
+        feed.zoneCount = feed.zoneCount + 1
+    end
+    feed.zones[dedupKey], feed.zoneAt[dedupKey] = ref, at
+end
+
+-- A fight bracket this subscriber holds: we told it, or it told us (64 at most, then afresh).
+local function feedFightTold(sub, bracket)
+    local told = sub.fightsTold
+    if not told or (sub.fightsToldCount or 0) >= 64 then
+        told, sub.fightsToldCount = {}, 0
+        sub.fightsTold = told
+    end
+    if not told[bracket] then
+        told[bracket] = true
+        sub.fightsToldCount = sub.fightsToldCount + 1
+    end
+end
+-- A fight bracket a peer that feeds us holds: it told us, or we told it (64 at most per source).
+local function feedSourceHolds(lower, bracket)
+    local held = feed.sourceFights[lower]
+    if not held or held.n >= 64 then
+        held = { n = 0 }
+        feed.sourceFights[lower] = held
+    end
+    if not held[bracket] then held[bracket], held.n = true, held.n + 1 end
+end
+-- Up the feed: the fresh brackets a source has not told us, to that source. One timer.
+local function feedFightsUp()
+    feed.upTimer = nil
+    if blocked() or not feedActive() then return end
+    local fa = Overlord.FrontActivity
+    local ok, entries = pcall(function()
+        return fa and fa.BuildKillBracketSyncEntries and fa:BuildKillBracketSyncEntries() or nil
+    end)
+    if not ok or type(entries) ~= "table" or not entries[1] then return end
+    local at, net, wireEpoch, again = GetTime(), Overlord.Relay, epoch(), false
+    for lower, heardAt in pairs(feed.sources) do
+        local route = net and net.peers and net.peers[lower]
+        -- (Not a source we feed too: it has them with our own messages to it, feedSend.)
+        if at - heardAt <= feed.LIVE_SEC and not feed.subs[lower] and route and net:IsDirectPeer(route.name) then
+            local held, untold = feed.sourceFights[lower], nil
+            for _, bracket in ipairs(entries) do
+                if type(bracket) == "string" and not (held and held[bracket]) and not bracket:find(",", 1, true) then
+                    untold = untold or {}
+                    if #untold < feed.FIGHT_ROWS then untold[#untold + 1] = bracket else again = true end
+                end
+            end
+            if untold then
+                -- (Within the feed's own count of messages a minute.)
+                local minute = feed.minute
+                if at - minute.at >= 60 then minute.at, minute.count = at, 0 end
+                if at - (feed.sourceFightAt[lower] or -1e9) < feed.GAP or minute.count >= feed.PER_MIN then
+                    again = true
+                elseif sendControl("HR", "8:W:" .. tostring(wireEpoch) .. ":" .. table.concat(untold, ","), route.name) then
+                    minute.count = minute.count + 1
+                    feed.sourceFightAt[lower] = at
+                    for _, bracket in ipairs(untold) do feedSourceHolds(lower, bracket) end
+                    stats.feedFightsUp = (stats.feedFightsUp or 0) + #untold
+                end
+            end
+        end
+    end
+    if again and C_Timer and C_Timer.After then
+        feed.upTimer = true
+        C_Timer.After(feed.GAP, function() pcall(feedFightsUp) end)
+    end
+end
+-- FrontActivity: a bracket new to us was stored (our own, or one we took). Every subscriber gets
+-- it with its next message, at the feed's own pace (GAP per subscriber); the peers that feed us
+-- and did not tell it to us get it too (feedFightsUp).
+function feed.noteBracket()
+    if blocked() or not feedActive() then return end
+    if next(feed.sources) ~= nil and not feed.upTimer and C_Timer and C_Timer.After then
+        feed.upTimer = true
+        C_Timer.After(feed.FIGHT_UP_LINGER, function() pcall(feedFightsUp) end)
+    end
+    if feed.subCount == 0 then return end
+    local at = GetTime()
+    for _, sub in pairs(feed.subs) do
+        sub.fights = true
+        sub.firstAt = sub.firstAt or at
+    end
+    feedArm()
+end
+-- "HR 8:W:<epoch>:<brackets>": a subscriber of ours tells us fight brackets. From anybody else
+-- nothing is read. Taken through FrontActivity's own acceptance, like a row "f" of the feed.
+function feed.fightsUp(payload, sender)
+    local wireEpoch, list = payload:match("^8:W:(%d+):(.+)$")
+    if not wireEpoch or tonumber(wireEpoch) ~= epoch() or blocked() or not feedActive() then return end
+    local sub = feed.subs[sender:lower()]
+    if not sub then return end
+    -- Anybody may ask us for our ranking and so become a subscriber: a bracket coming up is read
+    -- only from one the whisper chain would take a fact from (a contact), a guild mate, or a
+    -- Battle.net friend of the other side (the game says who that is).
+    local trusted = IsOtherFaction(sender)
+    if not trusted then
+        local directory, lane = Overlord.ChannelDirectory, Overlord.GuildLane
+        local ok, known = pcall(function()
+            return (directory and directory.IsContact and directory:IsContact(sender))
+                or (lane and lane.IsGuildMate and lane:IsGuildMate(sender)) or false
+        end)
+        trusted = ok and known == true
+    end
+    if not trusted then
+        stats.feedFightsRefused = (stats.feedFightsRefused or 0) + 1
+        return
+    end
+    local fa, count = Overlord.FrontActivity, 0
+    for bracket in (list .. ","):gmatch("([^,]*),") do
+        count = count + 1
+        if count > feed.FIGHT_ROWS then break end
+        if bracket ~= "" then
+            feedFightTold(sub, bracket)
+            if fa and fa.OnReceiveKillBracket then
+                local ok, taken = pcall(fa.OnReceiveKillBracket, fa, bracket, sender, "BETA", true)
+                if ok and taken then stats.feedFights = (stats.feedFights or 0) + 1 end
+            end
+        end
+    end
+end
+
+-- One row for one subscriber: its text, or nil (nothing to send for it), or nil, true (the
+-- indexes are being rebuilt: asked again later).
+local function feedRow(sub, id, wireEpoch)
+    local stream, dedupKey = id:sub(1, 1) == "c" and "LC" or "LK", id:sub(2)
+    local name, count, info = lb:GetLiveNetworkRow(stream, dedupKey)
+    if not name then
+        -- (In a fight the indexes are not rebuilt for this: asked again once it is over.)
+        if inCombat() then return nil, true end
+        return nil, lb.EnsureNetworkHotIndexesPrepared ~= nil and lb:EnsureNetworkHotIndexesPrepared() ~= true
+    end
+    if not info then return nil end
+    -- (The subscriber told us this total itself while the row waited: feedApply. Its mark goes
+    -- when the row leaves the queue, consume in feedSend: a row walked and kept is walked again.)
+    local told = sub.told and sub.told[id]
+    if told and stream == "LK" and (tonumber(count) or math.huge) <= told then return nil end
+    local faction = info.faction == "Alliance" and "A" or info.faction == "Horde" and "H" or "?"
+    if sub.filter and faction ~= sub.filter and faction ~= "?" then return nil end
+    local snap = feed.scratch
+    snap.playerInfo[name] = info
+    local payload, row
+    if stream == "LK" then
+        snap.kills[name] = count
+        payload = sync:BuildPagedLeaderboardKillPayload(snap, name, wireEpoch)
+        snap.kills[name] = nil
+        local compact = payload and compactRow8("LK", payload, wireEpoch)
+        if compact then
+            local born = feed.fresh[dedupKey]
+            if born and born >= sub.since and not sub.whole[dedupKey] then
+                local race = raceField(snap, name, payload)
+                row = "k" .. (race and (compact .. ":" .. race) or compact)
+            else
+                local short, kills = compact:match("^([^:]+):(%d+):")
+                row = short and ("s" .. short .. ":" .. kills) or nil
+            end
+        end
+    else
+        snap.captureCount[name], snap.captures[name] = count, lb.captures and lb.captures[name] or nil
+        payload = sync:BuildPagedLeaderboardCapturePayload(snap, name, wireEpoch)
+        snap.captureCount[name], snap.captures[name] = nil, nil
+        local compact = payload and compactRow8("LC", payload, wireEpoch)
+        row = compact and ("c" .. compact) or nil
+    end
+    snap.playerInfo[name] = nil
+    return row
+end
+
+-- One message to one subscriber. Rows leave the queue only once the relay took the message.
+local function feedSend(sub, at)
+    local minute = feed.minute
+    if at - minute.at >= 60 then minute.at, minute.count = at, 0 end
+    if minute.count >= feed.PER_MIN then
+        stats.feedCapped = (stats.feedCapped or 0) + 1
+        return false
+    end
+    local net = Overlord.Relay
+    if net and net.CanSendLeaderboardPage and not net:CanSendLeaderboardPage() then return false end
+    -- (The bytes first: a message built and then held back for want of them was built again
+    -- every second under load.)
+    feed.tokens = math.min(feed.BURST, feed.tokens + math.max(0, at - feed.refillAt) * feed.RATE)
+    feed.refillAt = at
+    if feed.tokens < 212 + feed.BLOB then return false end
+    local wireEpoch = epoch()
+    -- The rows fill whole whispers. Through the relay a message leaves in pieces of 200 bytes, its
+    -- header in the first one: 228 bytes of rows made two whispers, the second half empty as often
+    -- as not (bench, 310 whole clients: 20 second pieces for 25 messages a minute on the clients
+    -- feeding 8 subscribers, two thirds of all they sent). `first` bytes of rows fit the first
+    -- whisper and `piece` each further one, PIECES whispers at most; a last whisper that would
+    -- leave less than FILL full is not sent, its rows wait for this subscriber's next message.
+    local first, piece, limit = feed.BLOB, 0, feed.BLOB
+    -- (Only what the relay takes: SendWhisper hands it the message for a peer of its own.)
+    if net and net.PayloadRoom and net.IsPeer and net:IsPeer(sub.name) then
+        local room, chunk = net:PayloadRoom("HB", sub.name, 1)
+        room = room - (5 + #tostring(wireEpoch))
+        if room >= 60 then
+            first, piece = room, chunk
+            limit = first + (feed.PIECES - 1) * piece
+        end
+    end
+    local function whispers(size)
+        if piece <= 0 or size <= first then return 1 end
+        return 1 + math.ceil((size - first) / piece)
+    end
+    -- (Room kept for the fight brackets waiting for this subscriber.)
+    if sub.fights and limit > 2 * feed.FIGHT_ROOM then limit = limit - feed.FIGHT_ROOM end
+    local parts, bytes, index = {}, 0, sub.head
+    -- (The newcomers whose whole row is in this message: their next totals travel short, once
+    -- the message has left. A whole row that could not be built yet is no such thing.)
+    local wholes = {}
+    -- (Where the message stood before the row that opened its last whisper.)
+    local cutIndex, cutParts, cutWholes, cutBytes = index, 0, 0, 0
+    local rowsMax = feed.ROWS_MAX - (sub.fights and feed.FIGHT_ROWS or 0)
+    -- (zoneOf: the zone of each row kept; zoneSeen: the zones whose marker is counted.)
+    local zoneOf, zoneSeen, zoned = {}, {}, false
+    while index <= sub.tail and #parts < rowsMax do
+        local id = sub.queue[index]
+        local row, wait = feedRow(sub, id, wireEpoch)
+        if wait then
+            sub.waits = (sub.waits or 0) + 1
+            if sub.waits <= feed.WAIT_MAX then break end
+            row = nil
+        end
+        if row then
+            local encoded = tostring(#row) .. ":" .. row
+            local kind, zone, marker = row:sub(1, 1), nil, 0
+            if kind == "s" or kind == "k" then
+                local dedupKey = id:sub(2)
+                zone = feed.zones[dedupKey]
+                if zone and at - (feed.zoneAt[dedupKey] or -1e9) > feed.ZONE_SEC then zone = nil end
+                -- (Its marker: length prefix, "z" and the zone, once per zone in a message.)
+                if zone and not zoneSeen[zone] then marker = #tostring(#zone + 1) + 2 + #zone end
+            end
+            -- (A row too long for any message is left to the pulls.)
+            if bytes + #encoded + marker > limit then
+                if #encoded + marker <= limit then break end
+            else
+                if bytes > 0 and whispers(bytes + #encoded + marker) > whispers(bytes) then
+                    cutIndex, cutParts, cutWholes, cutBytes = index, #parts, #wholes, bytes
+                end
+                parts[#parts + 1], bytes = encoded, bytes + #encoded + marker
+                if zone then zoneOf[#parts], zoneSeen[zone], zoned = zone, true, true end
+                if kind == "k" then wholes[#wholes + 1] = id:sub(2) end
+            end
+        end
+        index = index + 1
+    end
+    local pieces = whispers(bytes)
+    if pieces > 1 and cutParts > 0 and bytes - first - (pieces - 2) * piece < feed.FILL * piece then
+        for i = #parts, cutParts + 1, -1 do parts[i] = nil end
+        for i = #wholes, cutWholes + 1, -1 do wholes[i] = nil end
+        index, bytes, pieces = cutIndex, cutBytes, pieces - 1
+        stats.feedHeldBack = (stats.feedHeldBack or 0) + 1
+    end
+    local function consume()
+        for i = sub.head, index - 1 do
+            local id = sub.queue[i]
+            sub.queue[i], sub.has[id], sub.count = nil, nil, sub.count - 1
+            if sub.told and sub.told[id] then
+                sub.told[id], sub.toldCount = nil, math.max(0, (sub.toldCount or 1) - 1)
+                stats.feedEchoSkipped = (stats.feedEchoSkipped or 0) + 1
+            end
+        end
+        if index > sub.head then sub.waits = nil end
+        sub.head = index
+        if sub.head > sub.tail then sub.queue, sub.head, sub.tail = {}, 1, 0 end
+        sub.firstAt = sub.count > 0 and at or nil
+    end
+    local rowCount = #parts
+    -- The rows of one zone together behind its marker (those without a zone first: a marker
+    -- holds for every kill row after it in the message).
+    if zoned then
+        local ordered, groups, order = {}, {}, {}
+        for i = 1, rowCount do
+            local zone = zoneOf[i]
+            if not zone then
+                ordered[#ordered + 1] = parts[i]
+            else
+                local group = groups[zone]
+                if not group then
+                    group = {}
+                    groups[zone] = group
+                    order[#order + 1] = zone
+                end
+                group[#group + 1] = parts[i]
+            end
+        end
+        for _, zone in ipairs(order) do
+            ordered[#ordered + 1] = tostring(#zone + 1) .. ":z" .. zone
+            for _, part in ipairs(groups[zone]) do ordered[#ordered + 1] = part end
+        end
+        parts = ordered
+    end
+    -- The fights: the fresh brackets this subscriber has neither had from us nor told us.
+    local fights, fightsLeft = nil, false
+    if sub.fights then
+        local fa = Overlord.FrontActivity
+        local ok, entries = pcall(function()
+            return fa and fa.BuildKillBracketSyncEntries and fa:BuildKillBracketSyncEntries() or nil
+        end)
+        if ok and type(entries) == "table" then
+            for _, bracket in ipairs(entries) do
+                if type(bracket) == "string" and not (sub.fightsTold and sub.fightsTold[bracket]) then
+                    local encoded = tostring(#bracket + 1) .. ":f" .. bracket
+                    local size = bytes + #encoded
+                    if (fights and #fights or 0) < feed.FIGHT_ROWS and rowCount + (fights and #fights or 0) < feed.ROWS_MAX
+                        and ((piece > 0 and whispers(size) <= feed.PIECES) or (piece <= 0 and size <= first)) then
+                        fights = fights or {}
+                        fights[#fights + 1] = bracket
+                        parts[#parts + 1], bytes = encoded, size
+                    else
+                        fightsLeft = true
+                    end
+                end
+            end
+        end
+        if not fights and not fightsLeft then sub.fights = nil end
+        pieces = whispers(bytes)
+    end
+    if #parts == 0 and not sub.hello then
+        -- Nothing of the walked rows is for this subscriber (its filter, rows gone meanwhile).
+        consume()
+        if sub.fights then sub.firstAt = sub.firstAt or at end
+        return false
+    end
+    local payload = "8:U:" .. tostring(wireEpoch) .. ":" .. table.concat(parts)
+    -- (Every whisper of the message is paid for: its bytes and what carries them.)
+    local cost = #payload + 200 + 110 * (pieces - 1)
+    if sync:SendWhisper("HB", payload, sub.name) == false then
+        stats.feedSendsRefused = (stats.feedSendsRefused or 0) + 1
+        -- (Offered again in a few seconds; nothing left the queue.)
+        sub.lastAt = at - feed.GAP + 3
+        return false
+    end
+    feed.tokens = feed.tokens - cost
+    stats.bytes = stats.bytes + cost
+    stats.feedSent = (stats.feedSent or 0) + 1
+    stats.feedRowsSent = (stats.feedRowsSent or 0) + rowCount
+    stats.feedWhispers = (stats.feedWhispers or 0) + pieces
+    minute.count = minute.count + 1
+    sub.lastAt, sub.hello = at, nil
+    for _, dedupKey in ipairs(wholes) do sub.whole[dedupKey] = true end
+    consume()
+    if fights then
+        for _, bracket in ipairs(fights) do feedFightTold(sub, bracket) end
+        stats.feedFightsSent = (stats.feedFightsSent or 0) + #fights
+        if not fightsLeft then sub.fights = nil end
+    end
+    if sub.fights then sub.firstAt = sub.firstAt or at end
+    return true
+end
+
+local function feedTick()
+    feed.timer = nil
+    if feed.subCount == 0 then return end
+    if blocked() or not feedActive() then feed.reset() return end
+    local at, net, wireEpoch = GetTime(), Overlord.Relay, epoch()
+    local due, waiting, unreached = nil, false, false
+    for lower, sub in pairs(feed.subs) do
+        if at - sub.at > feed.SUB_TTL or sub.epoch ~= wireEpoch then
+            feedDrop(lower)
+        elseif sub.count > 0 or sub.hello or sub.fights then
+            -- A subscriber not heard for five minutes has no direct route (the relay would refuse
+            -- the message): its rows wait, PENDING_MAX at most, until it speaks again or its
+            -- subscription ends. (Dropped at once, it stayed unfed until its next pull came round.)
+            if not (net and net.IsDirectPeer and net:IsDirectPeer(sub.name)) then
+                unreached = true
+            else
+                waiting = true
+                if at >= math.max(sub.lastAt + feed.GAP, (sub.firstAt or at) + feed.LINGER)
+                    and (not due or sub.lastAt < due.lastAt) then
+                    due = sub
+                end
+            end
+        end
+    end
+    if due then feedSend(due, at) end
+    if waiting then
+        feedArm()
+    elseif unreached and not feed.timer and C_Timer and C_Timer.After then
+        -- (Looked at again every 15 s, not every second, while only unreached subscribers wait.)
+        feed.timer = true
+        C_Timer.After(15, function()
+            local ok, err = pcall(feedTick)
+            if not ok then
+                feed.timer = nil
+                stats.feedError = tostring(err)
+            end
+        end)
+    end
+end
+feedArm = function()
+    if feed.timer or not C_Timer or not C_Timer.After then return end
+    feed.timer = true
+    C_Timer.After(1, function()
+        local ok, err = pcall(feedTick)
+        if not ok then
+            feed.timer = nil
+            stats.feedError = tostring(err)
+        end
+    end)
+end
+
+-- "HR 8:K:<epoch>": a subscriber of ours is still there (and the relay has just heard it): its
+-- subscription goes on, and a word of ours tells it so, with the rows waiting if any. From
+-- anybody else nothing happens: it finds out by our silence and asks again by a pull.
+function feed.kept(payload, sender)
+    if tonumber(payload:match("^8:K:(%d+)$")) ~= epoch() or blocked() or not feedActive() then return end
+    local sub = feed.subs[sender:lower()]
+    if not sub then return end
+    sub.at, sub.hello = GetTime(), true
+    sub.firstAt = sub.firstAt or sub.at
+    feedArm()
+end
+-- The subscriber's side: one word per source every KEEP_SEC, while it feeds us.
+local function feedKeepTick()
+    feed.keepTimer = nil
+    if blocked() or not feedActive() then return end
+    local at, net, wireEpoch, any = GetTime(), Overlord.Relay, epoch(), false
+    for lower, heardAt in pairs(feed.sources) do
+        if at - heardAt <= feed.LIVE_SEC then
+            any = true
+            local route = net and net.peers and net.peers[lower]
+            if at - (feed.pinged[lower] or heardAt) >= feed.KEEP_SEC and route and net:IsDirectPeer(route.name) then
+                feed.pinged[lower] = at
+                if sendControl("HR", "8:K:" .. tostring(wireEpoch), route.name) then
+                    stats.feedKeeps = (stats.feedKeeps or 0) + 1
+                end
+            end
+        else
+            feed.sources[lower], feed.enemy[lower], feed.pinged[lower], feed.intake[lower] = nil, nil, nil, nil
+            feed.sourceFights[lower], feed.sourceFightAt[lower] = nil, nil
+        end
+    end
+    if any and C_Timer and C_Timer.After then
+        feed.keepTimer = true
+        C_Timer.After(20, function() pcall(feedKeepTick) end)
+    end
+end
+
+-- "HR 8:X:<epoch>": this peer does not take our feed (it asked nothing lately, a /reload).
+function feed.stop(payload, sender)
+    if tonumber(payload:match("^8:X:(%d+)$")) ~= epoch() then return end
+    local lower = sender:lower()
+    if feed.subs[lower] then
+        feedDrop(lower)
+        stats.feedStopped = (stats.feedStopped or 0) + 1
+    end
+end
+
+-- One received row, through the acceptance of a page row we asked this peer for.
+local function feedApply(item)
+    local wireEpoch = epoch()
+    local kind, body = item.row:sub(1, 1), item.row:sub(2)
+    local stream, payload
+    if kind == "f" then
+        -- A fight bracket: FrontActivity's own acceptance (a known front or zone, a listed
+        -- bracket, a slot of the last five minutes, its budgets per sender), as from the relay.
+        -- A peer that feeds us and that we feed holds it: not told back.
+        local sub = feed.subs[item.sender:lower()]
+        if sub then feedFightTold(sub, body) end
+        feedSourceHolds(item.sender:lower(), body)
+        local fa = Overlord.FrontActivity
+        if fa and fa.OnReceiveKillBracket then
+            local ok, taken = pcall(fa.OnReceiveKillBracket, fa, body, item.sender, "BETA", true)
+            if ok and taken then stats.feedFights = (stats.feedFights or 0) + 1 end
+        end
+        return
+    end
+    if kind == "s" then
+        local name, kills = body:match("^([^:]+):(%d+)$")
+        -- (A total above the global ceiling is refused, as a page row holding it is: completing
+        -- the row here would otherwise clamp it to the ceiling and take it.)
+        kills = integer(kills, 1, tonumber(Overlord.PLAUSIBLE_SYNC_KILL_CEILING) or 15000)
+        local dedupKey = kills and lb.GetNetworkRowKey and lb:GetNetworkRowKey(name)
+        if not dedupKey then stats.feedBad = (stats.feedBad or 0) + 1 return end
+        local canonical, count, info = lb:GetLiveNetworkRow("LK", dedupKey)
+        if not canonical then
+            -- (Indexes being rebuilt: the row as it is stored.)
+            count, info = tonumber(lb.kills and lb.kills[name]), lb.playerInfo and lb.playerInfo[name]
+            canonical = count and type(info) == "table" and name or nil
+        end
+        -- Unknown here: not ours to complete. The next pull brings it whole.
+        if not canonical or not info then stats.feedUnknown = (stats.feedUnknown or 0) + 1 return end
+        if kills <= count then
+            stats.feedKnown = (stats.feedKnown or 0) + 1
+            -- This source holds the very total we hold: when it is our subscriber too (two peers
+            -- that asked each other), the row waiting for it would tell it nothing (feedRow).
+            local sub = kills == count and feed.subs[item.sender:lower()] or nil
+            local id = sub and ("k" .. dedupKey)
+            if sub and sub.has[id] then
+                -- (Bounded: a row that left its queue without being read here keeps its entry.)
+                if (sub.toldCount or 0) >= 2 * feed.PENDING_MAX then sub.told, sub.toldCount = nil, 0 end
+                sub.told = sub.told or {}
+                if sub.told[id] == nil then sub.toldCount = (sub.toldCount or 0) + 1 end
+                sub.told[id] = kills
+            end
+            return
+        end
+        -- (Above what the level we hold allows: the level moved at the sender. Completed here the
+        -- total would be clamped and differ from the sender's: the next pull brings the whole row.)
+        if sync.MaxPlausibleKillsForLevel and kills > sync:MaxPlausibleKillsForLevel(info.level) then
+            stats.feedUnknown = (stats.feedUnknown or 0) + 1
+            return
+        end
+        local snap = feed.scratch
+        snap.playerInfo[canonical], snap.kills[canonical] = info, kills
+        stream, payload = "LK", sync:BuildPagedLeaderboardKillPayload(snap, canonical, wireEpoch)
+        snap.playerInfo[canonical], snap.kills[canonical] = nil, nil
+        if not payload then stats.feedUnknown = (stats.feedUnknown or 0) + 1 return end
+    elseif kind == "k" then
+        stream, payload = "LK", expandRow8("LK", body, wireEpoch)
+    elseif kind == "c" then
+        stream, payload = "LC", expandRow8("LC", body, wireEpoch)
+    end
+    local name = payload and payload:match("^([^:]+):")
+    local identity = name and key(name)
+    if not identity then stats.feedBad = (stats.feedBad or 0) + 1 return end
+    -- A player our ranking does not hold yet: within the hour's budget (NEW_PER_SOURCE, NEW_PER_HOUR).
+    if kind ~= "s" and sync.IsKnownLeaderboardSubject and not sync:IsKnownLeaderboardSubject(name) then
+        local book, at, source = feed.newcomers, GetTime(), item.sender:lower()
+        if at - book.at >= 3600 then book.at, book.total, book.by = at, 0, {} end
+        if book.total >= feed.NEW_PER_HOUR or (book.by[source] or 0) >= feed.NEW_PER_SOURCE then
+            stats.feedOverBudget = (stats.feedOverBudget or 0) + 1
+            return
+        end
+        book.total, book.by[source] = book.total + 1, (book.by[source] or 0) + 1
+    end
+    if sync.SenderBurstShouldDrop and sync:SenderBurstShouldDrop(item.sender, stream) then
+        stats.deferred = stats.deferred + 1
+        return
+    end
+    local net, previous = Overlord.Relay, nil
+    if net then previous = net.context; net.context = item.context end
+    sync._pagedDelivery = { kind = stream, sender = item.sender, channel = item.channel, key = identity }
+    local receive = stream == "LK" and sync.OnReceiveLeaderboardKills or sync.OnReceiveLeaderboardCaptures
+    local revision = lb._snapshotRevision
+    feed.from = item.sender:lower()
+    local ok, accepted = pcall(receive, sync, payload, item.sender, item.channel)
+    feed.from = nil
+    sync._pagedDelivery = nil
+    if net then net.context = previous end
+    if not ok then stats.feedError = tostring(accepted) return end
+    local changed = lb._snapshotRevision ~= revision
+    if changed then stats.feedChanged = (stats.feedChanged or 0) + 1 end
+    if accepted then stats.feedRows = (stats.feedRows or 0) + 1
+    else stats.feedRejected = (stats.feedRejected or 0) + 1 end
+    -- A kill total we took, with the zone of its kills: the size of that fight counts them (the
+    -- base of a live total heard from the same player is the same one: nothing twice), and the
+    -- zone goes on with the row to our own subscribers.
+    if accepted and changed and stream == "LK" and item.zone then
+        local total = tonumber(payload:match("^[^:]+:(%d+):"))
+        -- (What our ranking took, when it took less than the row said: Sync bounds a total.)
+        local ok, _, held = pcall(lb.GetLiveNetworkRow, lb, "LK", lb.GetNetworkRowKey and lb:GetNetworkRowKey(name) or identity)
+        held = ok and tonumber(held) or tonumber(lb.kills and lb.kills[name])
+        if total and held and held < total then total = held end
+        local alerts = Overlord.GuildKillAlert
+        if total and alerts and alerts.OnFedKill then
+            pcall(alerts.OnFedKill, alerts, name, total, item.zone, wireEpoch)
+            stats.feedZoned = (stats.feedZoned or 0) + 1
+        end
+        feed.noteZone(name, item.zone)
+    end
+end
+local function feedDrain()
+    feed.draining = nil
+    if blocked() then feed.inbox, feed.inboxHead, feed.inboxTail = {}, 1, 0 return end
+    local inbox, wireEpoch = feed.inbox, epoch()
+    local sliceAt = debugprofilestop and debugprofilestop() or 0
+    -- (In a fight too, like a live total: two rows a frame.)
+    for _ = 1, inCombat() and 2 or 4 do
+        local item = inbox[feed.inboxHead]
+        if not item then feed.inbox, feed.inboxHead, feed.inboxTail = {}, 1, 0 return end
+        inbox[feed.inboxHead] = nil
+        feed.inboxHead = feed.inboxHead + 1
+        if item.epoch == wireEpoch then feedApply(item) end
+        if debugprofilestop and debugprofilestop() - sliceAt >= 1 then break end
+    end
+    if feed.inbox[feed.inboxHead] then
+        feed.draining = true
+        C_Timer.After(0.001, feed.drainSafely)
+    else
+        feed.inbox, feed.inboxHead, feed.inboxTail = {}, 1, 0
+    end
+end
+-- (One function for every frame of a drain: an error ends that drain, not the feed.)
+function feed.drainSafely()
+    local ok, err = pcall(feedDrain)
+    if not ok then
+        feed.draining = nil
+        stats.feedError = tostring(err)
+    end
+end
+-- "HB 8:U:<epoch>:<rows>" from a direct neighbour (allowed() passed).
+function feed.receive(payload, sender, channel)
+    local wireEpoch, blob = payload:match("^8:U:(%d+):(.*)$")
+    if not wireEpoch or tonumber(wireEpoch) ~= epoch() or blocked() then return end
+    local lower, at = sender:lower(), GetTime()
+    local asked, feeding = feed.asked[lower], feed.sources[lower]
+    -- Asked lately (its first word), or feeding us now (kept alive by our own word, feedKeepTick).
+    if not ((asked and at - asked <= feed.SOURCE_TTL) or (feeding and at - feeding <= feed.LIVE_SEC)) then
+        stats.feedRefused = (stats.feedRefused or 0) + 1
+        if at - (feed.stops[lower] or -1e9) >= feed.STOP_GAP then
+            feed.keep(feed.stops, "stopCount", lower, at, 64, feed.STOP_GAP)
+            sendControl("HR", "8:X:" .. tostring(epoch()), sender)
+        end
+        return
+    end
+    feed.sources[lower] = at
+    feed.enemy[lower] = IsOtherFaction(sender) or nil
+    feed.pinged[lower] = feed.pinged[lower] or at
+    stats.feedReceived = (stats.feedReceived or 0) + 1
+    if not feed.keepTimer and C_Timer and C_Timer.After then
+        feed.keepTimer = true
+        C_Timer.After(20, function() pcall(feedKeepTick) end)
+    end
+    local intake = feed.intake[lower]
+    if not intake or at - intake.at >= 60 then
+        intake = { at = at, rows = 0 }
+        feed.intake[lower] = intake
+    end
+    local inbox, context = feed.inbox, Overlord.Relay and Overlord.Relay.context or nil
+    local pos, rows, numericEpoch, zone = 1, 0, epoch(), nil
+    while pos <= #blob and rows < feed.PARSE_MAX do
+        local prefix, stop = blob:match("^(%d+)():", pos)
+        local length = prefix and #prefix <= 3 and integer(prefix, 2, 250)
+        if not length then break end
+        local row = blob:sub(stop + 1, stop + length)
+        if #row ~= length then break end
+        pos, rows = stop + 1 + length, rows + 1
+        local kind = row:sub(1, 1)
+        if kind == "z" then
+            -- The zone of the kill rows that follow in this message (anything else: none).
+            local ref = row:sub(2)
+            zone = #ref <= feed.ZONE_REF_MAX and (ref:match("^@[%w_%-]+$") or ref:match("^#%d+$")) or nil
+        elseif length < 3 then
+            break
+        elseif intake.rows >= feed.ROWS_PER_MIN then
+            intake.rows = intake.rows + 1
+            stats.feedOverflow = (stats.feedOverflow or 0) + 1
+        elseif feed.inboxTail - feed.inboxHead + 1 < feed.INBOX_MAX then
+            intake.rows = intake.rows + 1
+            -- (Its own tail: the rows already read are emptied from the front, and # of such a
+            -- table is anybody's guess. A second message arriving while the first was being read
+            -- wrote its rows under the head, never read.)
+            feed.inboxTail = feed.inboxTail + 1
+            inbox[feed.inboxTail] = { row = row, sender = sender, channel = channel, context = context, epoch = numericEpoch,
+                zone = (kind == "s" or kind == "k") and zone or nil }
+        else
+            intake.rows = intake.rows + 1
+            stats.feedOverflow = (stats.feedOverflow or 0) + 1
+        end
+    end
+    if inbox[feed.inboxHead] and not feed.draining then
+        feed.draining = true
+        C_Timer.After(0.001, feed.drainSafely)
+    end
+end
+
+-- How many peers feed us now: asked lately, heard on the feed in the last LIVE_SEC, still direct
+-- neighbours (SyncHistoryCatchup: the rounds rest longer with enough of them).
+function sync:LadderFeedSources()
+    if not feedActive() then return 0 end
+    local at, net, count = GetTime(), Overlord.Relay, 0
+    for lower, heardAt in pairs(feed.sources) do
+        if at - heardAt > feed.LIVE_SEC then
+            feed.sources[lower], feed.enemy[lower], feed.pinged[lower] = nil, nil, nil
+            feed.sourceFights[lower], feed.sourceFightAt[lower] = nil, nil
+        elseif net and net.peers and net.peers[lower] and net:IsDirectPeer(net.peers[lower].name) then
+            count = count + 1
+        end
+    end
+    return count
+end
+
 -- The neighbour table keeps the peer of our running pull and of the session we
 -- serve (SyncRelay remember): their replies stay routed however busy the
 -- channel is. lowerName is the table key (lower-case full name).
@@ -1332,8 +2346,15 @@ tryApply = function(state)
                     or kind == "LC" and sync.OnReceiveLeaderboardCaptures
                     or sync.OnReceiveLeaderboardRace
                 local revision = lb._snapshotRevision
+                -- (The feed does not send a row back to the peer it came from, nor the rows of a
+                -- catch-up to anybody: PULL_PASS.)
+                feed.from = (state.pullChanged or 0) >= feed.PULL_PASS and "*" or state.peer:lower()
                 ok, accepted = pcall(receive, sync, payload, state.peer, state.channel)
-                if lb._snapshotRevision ~= revision then stats.changedRows = (stats.changedRows or 0) + 1 end
+                feed.from = nil
+                if lb._snapshotRevision ~= revision then
+                    stats.changedRows = (stats.changedRows or 0) + 1
+                    state.pullChanged = (state.pullChanged or 0) + 1
+                end
                 sync._pagedDelivery = nil
                 if net then net.context = previous end
             end
@@ -1590,6 +2611,7 @@ end
 -- instance to a requester that had stopped waiting. A new request opens a new one.
 function sync:DropPagedServing()
     serving, outbound = nil, nil
+    feed.reset()
 end
 
 -- Abandon the running pull (scheduler watchdog). Rows already merged stay and
@@ -1637,8 +2659,10 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
     -- 2.4.0: the whole ranking with a peer that holds it too, our view of 5,000 with any other
     -- (and with one whose presence we have not heard: the safe side, one round).
     state.full = diff == true and HoldsFullLadder(peer) or nil
+    -- 2.5.0: a trailing "f" asks the responder for its feed afterwards (see "The feed").
+    state.feed = state.wire == "8" and feed.peerOk(peer) and feed.wants(peer) or nil
     state.nonce = tostring(GetServerTime()) .. (state.full and "w" or "n")
-        .. tostring(math.floor(GetTime() * 1000)) .. "n" .. tostring(serial)
+        .. tostring(math.floor(GetTime() * 1000)) .. "n" .. tostring(serial) .. (state.feed and "f" or "")
     if state.wire == "8" then
         -- v8 starts each stream with its bucket fingerprints, whatever the saved bucket.
         state.phase, state.bucket, state.completed, state.qi = "V", 0, 0, 0
@@ -1712,7 +2736,27 @@ end
 
 function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
     sender = self:NormalizeContributorFullName(sender)
-    if #payload > 250 or not allowed(sender, channel) then return end
+    -- 2.5.0: the feed's own two messages (no pull, no step number): rows from a peer we asked,
+    -- and "stop" from a peer that does not take ours.
+    local head = payload:sub(1, 4)
+    -- (A page is 250 bytes at most; a message of the feed fills up to three whispers.)
+    if #payload > (kind == "HB" and head == "8:U:" and feed.MESSAGE_MAX or 250) or not allowed(sender, channel) then return end
+    if head == "8:U:" then
+        if kind == "HB" then feed.receive(payload, sender, channel) end
+        return
+    end
+    if head == "8:X:" then
+        if kind == "HR" then feed.stop(payload, sender) end
+        return
+    end
+    if head == "8:K:" then
+        if kind == "HR" then feed.kept(payload, sender) end
+        return
+    end
+    if head == "8:W:" then
+        if kind == "HR" then feed.fightsUp(payload, sender) end
+        return
+    end
     local version, op, epochStr, nonce, seqStr, a, b, c, d, e, f, g = strsplit(":", payload, 12)
     local wireEpoch, seq = integer(epochStr, 1, 9999999999), integer(seqStr, 1, 10000)
     -- "7" is "6" with the race at the end of each LK row; "8" sends only differing rows.
@@ -1803,6 +2847,10 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         end
         -- (/ov network: the pulls other players opened with us, and those we took.)
         if fresh then stats.pullsAsked = (stats.pullsAsked or 0) + 1 end
+        -- 2.5.0: the requester takes our feed (its nonce says so). A subscriber already ours is
+        -- renewed whatever we answer; a new one is kept when its pull is taken (below).
+        local flagged = fresh and version == "8" and nonce:match("^%d+[wn]%d+n%d+f$") ~= nil
+        if flagged then feed.subscribe(sender, q.filter, false) end
         local session = serving
         if session and (session.epoch ~= wireEpoch or GetTime() - session.at > 300) then serving = nil; session = nil end
         -- A fresh start from the same requester supersedes its own stale session
@@ -1858,6 +2906,7 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
                 legacy = not (version == "8" and nonce:match("^%d+w%d") ~= nil) }
             serving = session
             stats.pullsTaken = (stats.pullsTaken or 0) + 1
+            if flagged then feed.subscribe(sender, q.filter, true) end
         -- The previous page of this same session is still leaving: its requester
         -- asks again after its own timeout.
         elseif outbound or seq < session.seq or seq > session.seq + 1 then return end
@@ -1905,6 +2954,8 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
             return
         end
         state.why = a == "C" and "peer in combat" or "peer busy"
+        -- (It did not take our pull: its feed is not asked for, unless it feeds us already.)
+        if state.feed and not feed.sources[state.peer:lower()] then feed.asked[state.peer:lower()] = nil end
         finish(state, false)
         return
     end
@@ -2059,6 +3110,17 @@ function sync:GetPagedLeaderboardDiagnostics()
         "; asked by others=%d taken=%d; answers queued=%d sent=%d expired=%d cancelled=%d send refusals=%d",
         stats.pullsAsked or 0, stats.pullsTaken or 0, stats.repliesQueued or 0, stats.repliesSent or 0,
         stats.repliesExpired or 0, stats.repliesCancelled or 0, stats.replySendsRefused or 0)
+    -- 2.5.0, the feed: who we feed and who feeds us now; messages and rows sent; messages
+    -- received, rows taken, rows that changed our ranking, rows of players unknown here (left to
+    -- the pulls), messages from a peer we had not asked.
+    local feeding = 0
+    for _, heardAt in pairs(feed.sources) do
+        if GetTime() - heardAt <= feed.LIVE_SEC then feeding = feeding + 1 end
+    end
+    details = details .. string.format(
+        "; feed: subscribers=%d feeding us=%d; sent=%d rows=%d; received=%d rows=%d changed=%d unknown=%d refused=%d",
+        feed.subCount, feeding, stats.feedSent or 0, stats.feedRowsSent or 0, stats.feedReceived or 0,
+        stats.feedRows or 0, stats.feedChanged or 0, stats.feedUnknown or 0, stats.feedRefused or 0)
     return string.format("Ladder v%d: %s; pages=%d rows=%d filtered=%d retries=%d; %s bucket=%s/64%s; peer=%s; 300 B/s budget",
         stats.protocol or 5, status, stats.pages, stats.rows, stats.rejected,
         stats.retries, pull and pull.stream or "LK",

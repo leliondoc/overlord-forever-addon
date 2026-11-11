@@ -124,6 +124,7 @@ function FA:ResetForCampaign()
     wipe(killSlotsByFront)
     wipe(killLastAtByKey)
     self._relayPassed = nil
+    if self.ResetFightAlerts then self:ResetFightAlerts() end
     worldKeyCount = 0
     wipe(reportedByKey)
     reportedCount = 0
@@ -672,6 +673,7 @@ local FIGHT_BRACKETS = { 2000, 1500, 1000, 750, 500, 300, 200, 150, 100, 75, 50,
 local REPORT_BRACKET_OK = { [1] = true }
 for _, floor in ipairs(FIGHT_BRACKETS) do REPORT_BRACKET_OK[floor] = true end
 local REPORT_SLOT_SEC = 30
+local REPORT_CROWD_FLOOR = 12
 local REPORT_REFRESH_MARGIN = 90
 local REPORT_MAX_KEYS = 32
 local REPORT_MAX_PAYLOAD = 48
@@ -725,7 +727,8 @@ local function TopBracket(key, now)
     return top
 end
 
-local function StoreReport(key, bracket, expiresAt, now)
+-- tell (2.5.0): this bracket may be told to the players we feed our ranking to (FeedMayTell).
+local function StoreReport(key, bracket, expiresAt, now, tell)
     local entries = FreshBrackets(key, now)
     if not entries then
         if reportedCount >= REPORT_MAX_KEYS then
@@ -753,6 +756,16 @@ local function StoreReport(key, bracket, expiresAt, now)
     if (entries[bracket] or 0) >= expiresAt then return false end
     entries[bracket] = expiresAt
     reportRevision = reportRevision + 1
+    -- 2.5.0: a new bracket is also told to the players we feed our ranking to, in the feed's own
+    -- messages (SyncLeaderboardPages, feed.noteBracket): whoever missed it on the whisper chain
+    -- has it from each of the peers that feed it.
+    local sync = Overlord.Sync
+    local feed = sync and sync._leaderboardFeed
+    if tell and feed and feed.noteBracket then pcall(feed.noteBracket) end
+    -- 2.5.0: a big battle is also said in the chat (MaybeAnnounceFight, further down).
+    if bracket >= (FA.FIGHT_ALERT_MIN or 50) and FA.MaybeAnnounceFight then
+        pcall(FA.MaybeAnnounceFight, FA, key, bracket, now)
+    end
     return true
 end
 
@@ -788,7 +801,35 @@ local function ReportDelay()
     end
     -- Plancher : sans maillage dense (peu de voisins directs), beaucoup de clients
     -- franchissent quand meme le palier ensemble ; mieux vaut converger un peu plus tard.
-    local early = math.min(1, 4 / math.max(crowd, 100))
+    local floor = 100
+    -- 2.5.0: without the channel a kill is only heard by its author's guild (the guild lane), its
+    -- group and a few contacts, so a bracket is crossed by them alone: with the channel's floor
+    -- nearly every bracket waited for the last wave (measured on 36 whole clients: a fight first
+    -- shown 30 s after its first kills, 16 s when the channel carried). The crowd is then those
+    -- who hear the kills we hear.
+    local dir = Overlord.ChannelDirectory
+    if dir and dir.IsActive and dir:IsActive() then
+        local lane, mates = Overlord.GuildLane, 0
+        if lane and lane.IsActive and lane.PeerCount then
+            local ok, count = pcall(function() return lane:IsActive() and lane:PeerCount() or 0 end)
+            if ok and tonumber(count) then mates = tonumber(count) end
+        end
+        local group = GetNumGroupMembers and tonumber(GetNumGroupMembers()) or 0
+        -- (A floor of REPORT_CROWD_FLOOR: players that are neither guild mates nor grouped still
+        -- hear some of the same kills, a kill total goes to a few contacts of its author; a brawl
+        -- of forty strangers must not announce all at once. Alone, one time in three within
+        -- 6 s, else within 18 s.)
+        crowd, floor = 1 + mates + group, REPORT_CROWD_FLOOR
+        -- 2.5.0: fed by the ranking feed, a client counts the kills of everybody (their zone
+        -- travels with the rows): all the fed clients cross a bracket together, as when the
+        -- channel carried every total. The channel's floor again.
+        local sync = Overlord.Sync
+        if sync and sync.LadderFeedSources then
+            local ok, sources = pcall(sync.LadderFeedSources, sync)
+            if ok and (tonumber(sources) or 0) > 0 then floor = 100 end
+        end
+    end
+    local early = math.min(1, 4 / math.max(crowd, floor))
     local roll = math.random()
     if roll < early then return 1 + math.random() * 5 end
     if roll < math.min(1, early * 8) then return 10 + math.random() * 8 end
@@ -843,7 +884,7 @@ local function SendReport(key, bracket, now)
             end)
         end)
     end
-    StoreReport(key, bracket, expiresAt, now)
+    StoreReport(key, bracket, expiresAt, now, true)
     if IsWorldKey(key) then
         TrackWorldKey(key, slot * REPORT_SLOT_SEC, now)
         PublishActivityChange(key)
@@ -930,7 +971,29 @@ function FA:BuildKillBracketSyncEntries()
     return payloads
 end
 
-function FA:OnReceiveKillBracket(payload, sender, sourceChannel)
+-- 2.5.0: may a bracket we take be told on by the ranking feed? The whisper chain passes on
+-- nothing a stranger whispers (SyncDirectory ChainTargets); the feed has no such hand to check,
+-- so it only tells what somebody vouches for: a bracket of the feed itself (vouched: a peer we
+-- asked or feed), one heard in our guild, our group or from a Battle.net friend, one whispered
+-- by a contact, or by a player out of the list telling its own fight. A bracket whispered by
+-- anybody else is shown here as before and goes no further.
+local function FeedMayTell(vouched)
+    if vouched then return true end
+    local net = Overlord.Relay
+    local context = net and net.context
+    if type(context) ~= "table" or context.kind ~= "FK" then return true end
+    if context.transport ~= "WHISPER" then return true end
+    local dir = Overlord.ChannelDirectory
+    if not dir or type(context.gateway) ~= "string" then return false end
+    local ok, known = pcall(function()
+        return (dir.IsContact and dir:IsContact(context.gateway))
+            or (context.hops == 1 and dir.IsLeaf and dir:IsLeaf(context.gateway)) or false
+    end)
+    return ok and known == true
+end
+
+-- vouched (2.5.0): a row of the ranking feed (a peer we asked, or one we feed).
+function FA:OnReceiveKillBracket(payload, sender, sourceChannel, vouched)
     if Overlord.InstanceSuspended then return false end
     if type(payload) ~= "string" or #payload > REPORT_MAX_PAYLOAD then return false end
     local key, bracketStr, slotStr = payload:match("^1:([^:]+):(%d+):(%d+)$")
@@ -977,7 +1040,7 @@ function FA:OnReceiveKillBracket(payload, sender, sourceChannel)
     else
         self:Record(resolved, nil, at)
     end
-    if not StoreReport(resolved, bracket, at + ACTIVITY_WINDOW, now) then return false end
+    if not StoreReport(resolved, bracket, at + ACTIVITY_WINDOW, now, FeedMayTell(vouched == true)) then return false end
     PublishActivityChange(resolved)
     return true
 end
@@ -1081,6 +1144,106 @@ end
 local function GetFrontActivityDisplayName(front)
     if not front then return "?" end
     return front.dropdownLabel or front.mapName or front.id or "?"
+end
+
+-- 2.5.0: big battles in the chat. The shared bracket of a fight (the one the "Recent activity"
+-- panel shows, the same for everyone) reaching FIGHT_ALERT_MIN kills in five minutes is said
+-- once, wherever it is in the world (not bound to the reach of the capture alerts: it is no
+-- capture); the same fight is said again only at the next step (100, 200, 500...). A
+-- fight is the same one while a bracket of FIGHT_ALERT_MIN or more keeps coming within
+-- FIGHT_ALERT_QUIET. On by default (config.fightAlerts ~= false); nothing in an instance nor
+-- while the login map is still awaited. Nothing is sent: the bracket travels anyway.
+FA.FIGHT_ALERT_MIN, FA.FIGHT_ALERT_QUIET, FA.FIGHT_ALERT_ROWS = 50, 600, 48
+-- The sizes said: a line names the highest of these steps the bracket has reached, and a fight is
+-- said again when it reaches the next one. Brackets do not reach everyone in the same order (75
+-- before 50 for half the clients of a 304-client bench): said as they came, with "again when it
+-- doubles", half the players read 50+, 100+, 200+ and the other half 75+, 150+, 300+ for the same
+-- battle. With fixed steps everybody reads the same lines.
+FA.FIGHT_ALERT_STEPS = { 50, 100, 200, 500, 1000, 2000 }
+-- Whatever the brackets say, FIGHT_ALERT_PER_WINDOW new battles per FIGHT_ALERT_WINDOW at most,
+-- and FIGHT_ALERT_PER_HOUR lines an hour: a chat is not a ticker. The next step of a battle
+-- already said has room of its own (FIGHT_ALERT_PER_WINDOW_ALL lines in all per window): a battle
+-- going from 50 to 500 in five minutes had its "500+" line said by 3 clients of 304, those whose
+-- first line was a few seconds older (and it is the line that matters most). Six in all: every
+-- step of one battle fits, and made-up brackets cannot print the hour's twelve lines at once.
+FA.FIGHT_ALERT_WINDOW, FA.FIGHT_ALERT_PER_WINDOW, FA.FIGHT_ALERT_PER_HOUR = 300, 3, 12
+FA.FIGHT_ALERT_PER_WINDOW_ALL = 6
+local fightAnnounced, fightAnnouncedCount = {}, 0
+local fightLines = {}
+function FA:ResetFightAlerts()
+    fightAnnounced, fightAnnouncedCount = {}, 0
+    fightLines = {}
+end
+function FA:MaybeAnnounceFight(key, bracket, now)
+    bracket = tonumber(bracket) or 0
+    if type(key) ~= "string" or bracket < self.FIGHT_ALERT_MIN then return false end
+    local step = 0
+    for _, size in ipairs(self.FIGHT_ALERT_STEPS) do
+        if bracket >= size and size > step then step = size end
+    end
+    if step <= 0 then return false end
+    now = tonumber(now) or ActivityNow()
+    local last = fightAnnounced[key]
+    local sameFight = last ~= nil and now - last.seen <= self.FIGHT_ALERT_QUIET
+    if last then last.seen = now end
+    if sameFight and step <= last.bracket then return false end
+    local cfg = OverlordDB and OverlordDB.config
+    if cfg and cfg.fightAlerts == false then return false end
+    if Overlord.InstanceSuspended or Overlord.WaitingForSync or (IsInInstance and IsInInstance()) then return false end
+    local label
+    if IsWorldKey(key) then
+        label = worldNameByKey[key]
+        if type(label) ~= "string" and C_Map and C_Map.GetMapInfo then
+            local ok, info = pcall(C_Map.GetMapInfo, tonumber(key:sub(2)))
+            label = ok and type(info) == "table" and info.name or nil
+        end
+    else
+        local fronts = Overlord.Fronts
+        local front = fronts and fronts.GetFront and fronts:GetFront(key)
+        label = front and GetFrontActivityDisplayName(front) or nil
+    end
+    if type(label) ~= "string" or label == "" or label == "?" or not Overlord.PrintNotification then return false end
+    -- The lines of the last hour, oldest first: over either limit, nothing is said (and nothing
+    -- is remembered of this bracket: the fight is said once there is room, if it still runs).
+    local recent, inWindow = {}, 0
+    for _, at in ipairs(fightLines) do
+        if now - at < 3600 then
+            recent[#recent + 1] = at
+            if now - at < self.FIGHT_ALERT_WINDOW then inWindow = inWindow + 1 end
+        end
+    end
+    fightLines = recent
+    if #recent >= self.FIGHT_ALERT_PER_HOUR then return false end
+    if inWindow >= (sameFight and self.FIGHT_ALERT_PER_WINDOW_ALL or self.FIGHT_ALERT_PER_WINDOW) then return false end
+    if not last then
+        if fightAnnouncedCount >= self.FIGHT_ALERT_ROWS then
+            for tracked, row in pairs(fightAnnounced) do
+                if now - row.seen > self.FIGHT_ALERT_QUIET then
+                    fightAnnounced[tracked] = nil
+                    fightAnnouncedCount = fightAnnouncedCount - 1
+                end
+            end
+            -- (Still full: the fight seen longest ago gives way. Wiped whole, every fight in
+            -- progress was "new" again.)
+            if fightAnnouncedCount >= self.FIGHT_ALERT_ROWS then
+                local oldest, oldestSeen
+                for tracked, row in pairs(fightAnnounced) do
+                    if not oldestSeen or row.seen < oldestSeen then oldest, oldestSeen = tracked, row.seen end
+                end
+                if oldest then
+                    fightAnnounced[oldest] = nil
+                    fightAnnouncedCount = fightAnnouncedCount - 1
+                end
+            end
+        end
+        fightAnnouncedCount = fightAnnouncedCount + 1
+    end
+    fightAnnounced[key] = { bracket = step, seen = now }
+    fightLines[#fightLines + 1] = now
+    local L = Overlord.L
+    local text = (L and L.FIGHT_ALERT) or "Battle at %s: %d+ kills in 5 min"
+    Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. string.format(text, label, step))
+    return true
 end
 
 -- Zones of a front taken in the last 5 minutes, read from the shared map: the

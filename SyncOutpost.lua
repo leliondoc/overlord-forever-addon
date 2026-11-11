@@ -401,7 +401,9 @@ local function OpSenderIsInOurGroup(sender)
         if UnitExists(unit) then
             local full = Overlord:SafeGetUnitName(unit, true)
             if OpRosterMatchKey(full) == want then
-                return true
+                -- 2.5.0: the partner of a layer change earns no group trust.
+                local jumper = Overlord.LayerJumper
+                return not (jumper and jumper.IsHopPartner and jumper:IsHopPartner(sender))
             end
         end
     end
@@ -1330,6 +1332,21 @@ local function OutpostAssaultTargetsHeldState(siteKey, stBefore, stAfter)
     return true
 end
 
+-- 2.5.0: who is capturing a keep or an outpost and on which layer, when both are known (the
+-- capturer the assault names, its layer as Overlord.Shard holds it): " (Name, layer #1234)",
+-- the layer clickable like a zone point's (LayerJumper). Nothing new travels for it.
+local function OutpostCapturerTail(st)
+    local who = st and NormalizeOpCapturerName(st.opRelayCapturerName or st.opOfficialCapturerName)
+    if type(who) ~= "string" or who == "" then return "" end
+    -- (A name is letters, spaces, apostrophes and hyphens: one carrying an escape code, a link
+    -- or a control character is somebody's doing, and is not printed.)
+    if who:find("[|%c%[%]:]") then return "" end
+    local sync = Overlord.Sync
+    local ok, tag = pcall(function() return sync.GetShardAlertTagForPlayer and sync:GetShardAlertTagForPlayer(who) or "" end)
+    if not ok or type(tag) ~= "string" or tag == "" then return "" end
+    return " (" .. who .. tag .. ")"
+end
+
 local function TryPrintOutpostDefenderAlert(siteKey, stBefore, stAfter)
     if not siteKey or not stBefore or not stAfter or not Overlord.Outpost then return end
     local OP = Overlord.Outpost
@@ -1385,14 +1402,14 @@ local function TryPrintOutpostDefenderAlert(siteKey, stBefore, stAfter)
     if not isOwnGuild then
         if L.OUTPOST_ALLIED_UNDER_ATTACK then
             Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.OUTPOST_ALLIED_UNDER_ATTACK,
-                whereLabel, heldGuild, facLabel))
+                whereLabel, heldGuild, facLabel) .. OutpostCapturerTail(stAfter))
         end
     else
         local generic = string.format(L.OUTPOST_DEFENDER_UNDER_ATTACK, whereLabel, facLabel)
         local text = (rGuild ~= "" and L.OUTPOST_DEFENDER_UNDER_ATTACK_BY)
             and string.format(L.OUTPOST_DEFENDER_UNDER_ATTACK_BY, whereLabel, rGuild, facLabel)
             or generic
-        Overlord:PrintNotification("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. text)
+        Overlord:PrintNotification("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. text .. OutpostCapturerTail(stAfter))
         -- Mid-screen: only an assault our map adopted, and never the guild name the
         -- network sent (site and faction only).
         if not localOnlyAlert then Overlord.Sync:WarnOwnSiteAttacked(siteKey, generic) end
@@ -1481,18 +1498,18 @@ local function TryPrintOutpostAssaultAlert(siteKey, stBefore, stAfter)
     if pf and assaultFac == pf then
         if holder and L.OUTPOST_ALLY_ASSAULT_VS then
             Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r " .. L.OUTPOST_ALLY_ASSAULT_VS,
-                whereLabel, attacker, holder))
+                whereLabel, attacker, holder) .. OutpostCapturerTail(stAfter))
         elseif L.OUTPOST_ALLY_ASSAULT then
             Overlord:PrintNotification(string.format("|cFFFFD100[Overlord]|r " .. L.OUTPOST_ALLY_ASSAULT,
-                whereLabel, attacker))
+                whereLabel, attacker) .. OutpostCapturerTail(stAfter))
         end
     else
         if holder and L.OUTPOST_ENEMY_ASSAULT_VS then
             Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.OUTPOST_ENEMY_ASSAULT_VS,
-                whereLabel, attacker, holder))
+                whereLabel, attacker, holder) .. OutpostCapturerTail(stAfter))
         elseif L.OUTPOST_ENEMY_ASSAULT then
             Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. L.OUTPOST_ENEMY_ASSAULT,
-                whereLabel, attacker))
+                whereLabel, attacker) .. OutpostCapturerTail(stAfter))
         end
     end
 end

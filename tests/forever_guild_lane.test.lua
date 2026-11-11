@@ -1441,7 +1441,26 @@ shownWave._remoteCaptureLease.lastRemoteTs = wall - 2
 assert(lane:WaveClock(shownWave) == nil, "ticks coming some other way say more than a clock")
 shownWave._remoteCaptureLease.lastRemoteTs = wall - 30
 shownWave._remoteCaptureLease.viaGuild = nil
-assert(lane:WaveClock(shownWave) == nil, "a wave heard elsewhere has its ticks")
+-- 2.5.0: heard elsewhere (a friend, a player out of the list): its ticks come while the channel
+-- carries; while it does not, none will, and its timer runs like any other. Never for a wave on
+-- hold or released.
+do
+    local realDown = lane.ChannelDown
+    lane.ChannelDown = function() return false end
+    assert(lane:WaveClock(shownWave) == nil, "a wave heard elsewhere has its ticks while the channel carries")
+    lane.ChannelDown = function() return true end
+    local elsewhere = lane:WaveClock(shownWave)
+    assert(elsewhere and math.abs(elsewhere - 70) < 1, "without the channel a wave heard elsewhere stood still")
+    shownWave._remoteCaptureLease.lastRemoteTs = wall - 2
+    assert(lane:WaveClock(shownWave) == nil, "ticks that do come say more than a clock")
+    shownWave._remoteCaptureLease.lastRemoteTs = wall - 30
+    shownWave._remoteCaptureLease.away = true
+    assert(lane:WaveClock(shownWave) == nil, "a wave on hold went on counting")
+    shownWave._remoteCaptureLease.away, shownWave._remoteCaptureLease.releasedAt = nil, clock - 5
+    assert(lane:WaveClock(shownWave) == nil, "a released wave went on counting")
+    shownWave._remoteCaptureLease.releasedAt = nil
+    lane.ChannelDown = realDown
+end
 assert(lane:WaveClock({}) == nil and lane:WaveClock(nil) == nil)
 
 -- Our own siege start said for us by whoever holds it counts as said by us: our release and our

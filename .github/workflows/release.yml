@@ -42,8 +42,20 @@ jobs:
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
             /etc/apt/sources.list.d/azure-cli.list 2>/dev/null || true
-          sudo apt-get update -qq
-          sudo apt-get install -y lua5.1 pandoc
+          # The runner's resolver can fail on the Ubuntu mirrors for a long while (2026-11-11:
+          # three runs in a row, about four minutes each): after a failed try, public resolvers
+          # for this job. The packages are still verified by apt.
+          for attempt in 1 2 3; do
+            if getent hosts archive.ubuntu.com >/dev/null 2>&1 \
+              && sudo apt-get update -qq && sudo apt-get install -y lua5.1 pandoc; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then echo "The validators could not be installed" >&2; exit 1; fi
+            sudo rm -f /etc/resolv.conf
+            printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee /etc/resolv.conf >/dev/null
+            sleep 10
+          done
+          lua5.1 -v
 
       - name: Valider versions, syntaxe Lua et fronts Forever
         run: |
@@ -57,6 +69,10 @@ jobs:
           lua5.1 tests/zone_capture_lease.test.lua
           lua5.1 tests/forever_zone_defense.test.lua
           lua5.1 tests/forever_ladder_10k.test.lua
+          lua5.1 tests/forever_ladder_feed.test.lua
+          lua5.1 tests/forever_fight_alert.test.lua
+          lua5.1 tests/forever_cross_hands.test.lua
+          lua5.1 tests/forever_layer_jumper.test.lua
           lua5.1 tests/forever_layer_server_field.test.lua
           lua5.1 tests/forever_map_mode_button.test.lua
           lua5.1 tests/forever_trust_relay_142.test.lua

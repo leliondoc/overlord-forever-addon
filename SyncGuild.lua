@@ -582,11 +582,19 @@ end
 
 -- What the timer of a wave told in the guild shows: how far it should be by now. Nil while ticks
 -- come some other way (a group, a friend), which say more. Asking changes nothing.
+-- 2.5.0: while the channel does not carry, any wave we follow, however its start reached us (a
+-- Battle.net friend, a player out of the member list, a contact gone quiet for five minutes): no
+-- tick of it will come either, and its timer stood still at the hold its start told (measured on
+-- 36 whole clients: 9 showed about 8 s at the 53rd second of a siege). The timer only: how long
+-- such a wave is believed is decided as before (KeepFollowing, CaptureLease:MaybeExpire). Not a
+-- wave on hold or released, whose capturer has left the point.
 function lane:WaveClock(zone)
     local remote = zone and zone._remoteCaptureLease
-    if not remote or not remote.viaGuild or not remote.tickAt then return nil end
+    if not remote or not remote.tickAt then return nil end
+    -- (Ticks that do come first: asked by every timer on screen, it costs nothing then.)
     local serverNow = addon.ServerNow and addon.ServerNow() or time()
     if serverNow - (tonumber(remote.lastRemoteTs) or 0) < self.TICK_SEC then return nil end
+    if not remote.viaGuild and (remote.away or remote.releasedAt or not self:ChannelDown()) then return nil end
     return (tonumber(remote.tickHold) or 0) + now() - remote.tickAt
 end
 

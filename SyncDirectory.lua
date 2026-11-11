@@ -58,6 +58,9 @@ local dir = {
     -- 0..LADDER_HOT_JITTER s (what we just took is news to our other partners); an idle one
     -- rests as above.
     LADDER_HOT_SEC = 6, LADDER_HOT_JITTER = 6,
+    -- 2.5.0: once LADDER_FED_SOURCES peers feed us the rows that move (SyncLeaderboardPages, "The
+    -- feed"), an idle round is followed LADDER_FED_SEC + 0..LADDER_FED_JITTER s later.
+    LADDER_FED_SEC = 100, LADDER_FED_JITTER = 60, LADDER_FED_SOURCES = 3,
     MAP_PRESENCE_SEC = 100, MAP_PULL_DELAY = 2,
     -- 2.2.2: a first silence keeps a player alone FIRST_SILENT_SEC (SILENT_SEC from the second):
     -- the first players back after a restart were greeted by many at once, their answers
@@ -868,6 +871,12 @@ dir.FK_RESERVE, dir.FK_PER_MIN, dir.FK_FAN = 20, 4, 5
 -- every GW_COVER_SEC, those we pass on GW_PER_MIN a minute (their own count, not the fights'),
 -- the fights' fan and reserve.
 dir.GW_PER_MIN, dir.GW_COVER_SEC = 2, 600
+-- 2.5.0: the Commander's position (General GP, sent every 20 s while it moves, 40 s otherwise) is
+-- passed along once per GP_COVER_SEC and Commander, whichever of its positions comes first after
+-- that: about one a minute, enough to keep its icon on every map (General.ENTRY_STALE_CHAIN_SEC).
+-- Never from the tokens kept for captures and sieges (the fights' reserve); those we pass on,
+-- GP_PER_MIN a minute (two Commanders, one per faction, make two).
+dir.GP_COVER_SEC, dir.GP_PER_MIN = 55, 4
 -- Our own kill total (K) also goes to RAMPAGE_COLLECTORS guild mates (the same ones for the whole
 -- guild: the lowest hash of guild and name among the mates reached directly), inside the K fan.
 -- A rampage (GuildKillAlert) needs one client to hear five members of a guild; with the totals
@@ -876,6 +885,15 @@ dir.GW_PER_MIN, dir.GW_COVER_SEC = 2, 600
 -- collector hears RAMPAGE_LOAD totals per RANK_GAP at most).
 dir.RAMPAGE_COLLECTORS, dir.RAMPAGE_MIN_MATES, dir.RAMPAGE_LOAD = 2, 4, 60
 dir.MULTICAST_SPEAKERS, dir.CHAIN_FRAGMENTS = 2, 2
+-- 2.5.0: bridges first. The other faction only has a fact from a player holding a Battle.net friend
+-- of that faction (a bridge), and the relay stops at four names: a siege that reached a bridge
+-- as the fourth name never crossed, and one that crossed as the third could go no further than
+-- the friend (measured on 36 whole clients: one siege in two unseen by most of the other faction,
+-- by the draw of the contacts alone). The author of a fact and the hand after it now whisper it
+-- first to the contacts whose own presence says they are bridges, BRIDGE_FANS of them at most,
+-- inside the same fan (no whisper more). Never for a kill total (it does not cross), nor for what
+-- came over Battle.net (it has crossed already).
+dir.BRIDGE_FANS, dir.BRIDGE_HANDS = 2, 2
 -- How long a passed start is remembered for its release (the relay's TTL and a margin), and how
 -- long a heard copy of a capture keeps our own report of it quiet (GuildLane: HEARD_COVER_SEC).
 dir.START_MEMORY, dir.OWN_COVER_SEC = 300, 10
@@ -941,6 +959,10 @@ local function chainShape(p)
         return gka and gka.ChainCoverKey and gka:ChainCoverKey(payload) and "fact" or nil
     end
     if kind == "K" then return #p.path == 1 and "rank" or nil end
+    -- 2.5.0: a Commander's position (its cover and pace: ChainTargets).
+    if kind == "GP" then
+        return payload:match("^[AH]:[^:]*:%-?%d+:%-?%d+:%d+:%d+:%d+:%d+$") and "fact" or nil
+    end
     -- Believed first-hand only (Relay:Receive does not pass one on): our own, to our contacts.
     if kind == "OC" then return #p.path == 1 and "fact" or nil end
     if kind == "OP" then
@@ -1285,6 +1307,22 @@ function dir:ChainTargets(p, fragmentCount)
         key, window = addon.GuildKillAlert:ChainCoverKey(p.payload), self.GW_COVER_SEC
         if not key then return nil end
     end
+    local beat = p.kind == "GP"
+    if beat then
+        local faction, claim = p.payload:match("^([AH]):[^:]*:%-?%d+:%-?%d+:%d+:(%d+):")
+        key, window = "GP|" .. tostring(faction) .. "|" .. tostring(claim), self.GP_COVER_SEC
+        -- Somebody else's Commander: passed on only for a claim dated about now or in the week
+        -- (its date is the claimant's own clock: a claim dated far ahead would outrank every real
+        -- one for good, and the chain would keep it on every map).
+        if not own then
+            local serverAt = addon.ServerNow and addon.ServerNow() or time()
+            local claimed = tonumber(claim) or 0
+            if claimed > serverAt + self.FACT_SKEW or claimed < serverAt - 8 * 86400 then
+                stats.chainUnvouched = stats.chainUnvouched + 1
+                return nil
+            end
+        end
+    end
     local date = captureDate(p)
     if shape == "news" then
         -- One capture told as map news is the same fact as its C (a client that passed the C
@@ -1519,13 +1557,37 @@ function dir:ChainTargets(p, fragmentCount)
             view, leaves = without(view), without(leaves)
         end
     end
+    if shape ~= "rank" and shape ~= "release" and #p.path <= self.BRIDGE_HANDS and p.heardOn ~= "BNET"
+        and net.IsKnownBridge then
+        -- (Which of the bridges: drawn per fact, a hash of us, the fact and their name. Taken in
+        -- the table's own order, every client pinned the same two for every fact.)
+        -- (One pass keeping the lowest scores: no table per bridge, no sort.)
+        local bridges, scores, salt = {}, {}, me .. "|" .. tostring(key) .. "|"
+        local wantCount = self.BRIDGE_FANS
+        for _, name in ipairs(view) do
+            if net:IsKnownBridge(name) then
+                local score = net.HashFrac and net.HashFrac(salt .. name:lower()) or math.random()
+                local at = #bridges + 1
+                while at > 1 and scores[at - 1] > score do at = at - 1 end
+                if at <= wantCount then
+                    table.insert(bridges, at, name)
+                    table.insert(scores, at, score)
+                    bridges[wantCount + 1], scores[wantCount + 1] = nil, nil
+                end
+            end
+        end
+        if bridges[1] then
+            pinned(bridges)
+            stats.chainBridged = (stats.chainBridged or 0) + #bridges
+        end
+    end
     local level = #p.path
     if level > 1 and enemyCapture(p) then level = math.max(1, level - 2) end
     local wanted = math.min(shape == "rank" and self.RANK_FAN or self:FanFor(level), #view + #forced)
     wanted = math.max(0, math.min(wanted - #forced, #view))
     local rampage = p.kind == "GW"
     local fight = p.kind == "FK" or rampage
-    if fight then wanted = math.min(wanted, self.FK_FAN) end
+    if fight then wanted = math.max(0, math.min(wanted, self.FK_FAN - #forced)) end
     -- Leaves after the contacts, never for our own first-hand total (its settle rotation, SettleNext,
     -- reaches leaves too: a K is credited from its owner only, whoever receives it).
     local leafCount = shape ~= "rank" and math.min(self.LEAF_FANS, #leaves) or 0
@@ -1536,6 +1598,17 @@ function dir:ChainTargets(p, fragmentCount)
     if #forced + wanted + leafCount == 0 then
         stats.chainNoContact = stats.chainNoContact + 1
         return nil
+    end
+    if beat and not own then
+        local gp = chain.gpMinute
+        if not gp or at - gp.at >= 60 then
+            gp = { at = at, count = 0 }
+            chain.gpMinute = gp
+        end
+        if gp.count >= self.GP_PER_MIN then
+            stats.chainCapped = stats.chainCapped + 1
+            return nil
+        end
     end
     local granted
     local minuteKey = rampage and "gwMinute" or "fkMinute"
@@ -1552,7 +1625,7 @@ function dir:ChainTargets(p, fragmentCount)
             return nil
         end
     end
-    local reserve = fight and self.FK_RESERVE or (not own and self.FORWARD_RESERVE) or nil
+    local reserve = (fight or beat) and self.FK_RESERVE or (not own and self.FORWARD_RESERVE) or nil
     local total = #forced + wanted + leafCount
     if not reserve then
         granted = takeTokens(total, fragmentCount)
@@ -1562,6 +1635,7 @@ function dir:ChainTargets(p, fragmentCount)
         granted = spare > 0 and takeTokens(math.min(total, spare), fragmentCount) or 0
     end
     if fight and not own and granted > 0 then chain[minuteKey].count = chain[minuteKey].count + 1 end
+    if beat and not own and granted > 0 then chain.gpMinute.count = chain.gpMinute.count + 1 end
     if granted == 0 then
         chain.pendingIntake = nil
         stats.chainCapped = stats.chainCapped + 1

@@ -395,6 +395,26 @@ OverlordDB.config.alertScope = "continent"
 playerMap = 1421
 sync:OnReceiveMining("elemgorge:H", "Enemy Miner")
 assert(take("MINING") == 1, "The continent setting hid a mine of the continent")
+-- 2.5.0: the layer written by the miner's client can be clicked (the link names nobody: the
+-- miner is of the other faction), and stays plain text without the layer window's module.
+do
+    minePriv.mineAlertLast = {}
+    sync:OnReceiveMining("elemgorge:H:6846", "Enemy Miner")
+    assert(#printed == 1 and printed[1]:find("(Enemy Miner, layer #6846)", 1, true), "the mine's plain layer: " .. tostring(printed[1]))
+    printed = {}
+    local asked
+    Overlord.LayerJumper = { ChatLink = function(_, name, layer, text)
+        asked = { name = name, layer = layer, text = text }
+        return ", <" .. tostring(layer) .. ">"
+    end }
+    minePriv.mineAlertLast = {}
+    sync:OnReceiveMining("elemgorge:H:6846", "Enemy Miner")
+    assert(asked and asked.name == nil and tostring(asked.layer) == "6846" and asked.text == ", layer #6846",
+        "the mine alert did not ask for its layer link")
+    assert(#printed == 1 and printed[1]:find("(Enemy Miner, <6846>)", 1, true), "the mine's layer link: " .. tostring(printed[1]))
+    printed = {}
+    Overlord.LayerJumper = nil
+end
 playerMap = EK
 
 -- 7. The option: a menu of three (zone, continent, world), the zone by default, stored as

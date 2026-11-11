@@ -1101,11 +1101,20 @@ function Overlord.UI:CreateMainFrame()
         else
             GameTooltip:AddLine(L.SHARD_TOOLTIP_UNDETECTED, tp.MUTED[1], tp.MUTED[2], tp.MUTED[3], true)
         end
+        if Overlord.LayerJumper and L.LJ_CLICK_HINT then
+            GameTooltip:AddLine(" ", tp.BODY[1], tp.BODY[2], tp.BODY[3])
+            GameTooltip:AddLine(L.LJ_CLICK_HINT, tp.MUTED[1], tp.MUTED[2], tp.MUTED[3], true)
+        end
         GameTooltip:Show()
     end)
     shardFrame:SetScript("OnLeave", GameTooltip_Hide)
-    -- Indicateur seulement (infobulle) : plus d'invitation de groupe depuis la couche.
+    -- 2.5.0: a click opens the whole list (every known player and layer), where a layer can
+    -- be joined (LayerJumper.lua).
     shardFrame:EnableMouse(true)
+    shardFrame:SetScript("OnClick", function()
+        local jumper = Overlord.LayerJumper
+        if jumper and jumper.Toggle then jumper:Toggle() end
+    end)
     self.shardFrame = shardFrame
     self.shardText = shardText
     self.shardRealmText = shardRealmText
@@ -1536,15 +1545,23 @@ function Overlord.UI:CreateZoneListSection(parent)
     zoneListFrame.groupsBtn = groupsBtn
     Overlord.UI.groupFinderBtn = groupsBtn
 
-    -- Contact (1.7.1, ancien emplacement Export grise) : lien X de l'auteur a copier.
-    local contactBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
-        L.CONTACT_BUTTON or "Contact", "Interface\\Icons\\INV_Letter_15")
-    contactBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(4))
-    AttachGridButtonTooltip(contactBtn, L.CONTACT_BUTTON_TOOLTIP or L.CONTACT_BUTTON or "Contact")
-    contactBtn:SetScript("OnClick", function()
-        Overlord.UI:ShowContactPopup()
+    -- 2.5.0: Layers (row 4, left, where Contact was since 1.7.1): the window of the players we
+    -- hear and their layer, the same one as a click on the layer number at the top left of the
+    -- panel. The author's contact link moved to the options (SettingsPanel, General).
+    local layersBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
+        L.LJ_TITLE or "Layers",
+        Overlord.PlayerFaction == "Horde" and "Interface\\Icons\\Spell_Arcane_PortalOrgrimmar"
+            or "Interface\\Icons\\Spell_Arcane_PortalStormwind")
+    layersBtn:SetPoint("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY(4))
+    AttachGridButtonTooltip(layersBtn, L.LJ_CLICK_HINT or L.LJ_TITLE or "Layers")
+    layersBtn:SetScript("OnClick", function()
+        local jumper = Overlord.LayerJumper
+        if jumper and jumper.Toggle then jumper:Toggle() end
     end)
-    zoneListFrame.contactBtn = contactBtn
+    zoneListFrame.layersBtn = layersBtn
+    if self.SetWC3ButtonUnavailable and not Overlord.LayerJumper then
+        self.SetWC3ButtonUnavailable(layersBtn, foreverUnavailable)
+    end
     if self.SetWC3ButtonUnavailable then
         if not Overlord.HallOfFameUI then
             self.SetWC3ButtonUnavailable(hofBtn, foreverUnavailable)
@@ -2525,7 +2542,7 @@ function Overlord.UI:RefreshActionGridActiveState()
     nextState.tutorial = Overlord.Popups and Overlord.Popups.IsQuickGuideShown and Overlord.Popups:IsQuickGuideShown() or false
     nextState.website = discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "website" or false
     nextState.discord = discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "discord" or false
-    nextState.contact = discordPopupFrame and discordPopupFrame:IsShown() and linkPopupKind == "contact" or false
+    nextState.layers = Overlord.LayerJumper and Overlord.LayerJumper.IsShown and Overlord.LayerJumper:IsShown() or false
     nextState.front = self._frontPickerPopup and self._frontPickerPopup:IsShown() or false
     nextState.settings = Overlord.SettingsPanel and Overlord.SettingsPanel.IsOpen and Overlord.SettingsPanel:IsOpen() or false
     local prev = self._actionGridOpenState
@@ -2574,7 +2591,7 @@ function Overlord.UI:RefreshActionGridActiveState()
     panelOpen(zoneListFrame.tutorialBtn, nextState.tutorial)
     panelOpen(zoneListFrame.websiteBtn, nextState.website)
     panelOpen(zoneListFrame.discordBtn, nextState.discord)
-    panelOpen(zoneListFrame.contactBtn, nextState.contact)
+    panelOpen(zoneListFrame.layersBtn, nextState.layers)
     panelOpen(self.frontPickerBtn, nextState.front)
     panelOpen(zoneListFrame.settingsBtn, nextState.settings)
     if Overlord.Button and Overlord.Button.RefreshGeneralButton then
@@ -2614,11 +2631,11 @@ function Overlord.UI:RefreshActionGridLabels()
         discordBtn.label._olLabelText = L.DISCORD_BUTTON
         discordBtn.label:SetText(L.DISCORD_BUTTON)
     end
-    local contactBtn = zoneListFrame.contactBtn
-    if contactBtn and contactBtn.label and L.CONTACT_BUTTON
-        and contactBtn.label._olLabelText ~= L.CONTACT_BUTTON then
-        contactBtn.label._olLabelText = L.CONTACT_BUTTON
-        contactBtn.label:SetText(L.CONTACT_BUTTON)
+    local layersBtn = zoneListFrame.layersBtn
+    if layersBtn and layersBtn.label and L.LJ_TITLE
+        and layersBtn.label._olLabelText ~= L.LJ_TITLE then
+        layersBtn.label._olLabelText = L.LJ_TITLE
+        layersBtn.label:SetText(L.LJ_TITLE)
     end
 end
 

@@ -535,6 +535,16 @@ local ROWS = {
     { kind = "checkbox", var = SP.SoundEnabledVariableName, label = "SOUND_ENABLED_LABEL",
         fallback = "Overlord sounds", tooltip = "SOUND_ENABLED_TOOLTIP",
         default = DEFAULT_SOUND_ENABLED, get = getSoundEnabled, set = setSoundEnabled },
+    -- 2.5.0: the author's contact link (it was a button of the panel's grid, now Layers). On the
+    -- next frame, outside Blizzard's Settings click path, like the chat tab below.
+    { kind = "button", label = "CONTACT_POPUP_TITLE", fallback = "Contact the author",
+        button = "CONTACT_BUTTON", buttonFallback = "Contact", tooltip = "CONTACT_BUTTON_TOOLTIP",
+        click = function()
+            local function open()
+                if Overlord.UI and Overlord.UI.ShowContactPopup then Overlord.UI:ShowContactPopup() end
+            end
+            if C_Timer and C_Timer.After then C_Timer.After(0, open) else open() end
+        end },
 
     { kind = "header", label = "SETTINGS_SECTION_CHAT", fallback = "Chat" },
     { kind = "dropdown", var = SP.NotificationChatVariableName, label = "NOTIFICATION_CHAT_LABEL",
@@ -602,6 +612,50 @@ local ROWS = {
             OverlordDB.config = OverlordDB.config or {}
             OverlordDB.config.otherGuildSiteAlerts = value == true
         end },
+    -- 2.5.0: a chat line for a fight of 50 kills or more in five minutes, anywhere (FrontActivity).
+    { kind = "checkbox", var = "Overlord_FightAlerts", label = "FIGHT_ALERTS_LABEL",
+        fallback = "Big battle alerts", tooltip = "FIGHT_ALERTS_TOOLTIP",
+        default = true,
+        get = function()
+            local cfg = OverlordDB and OverlordDB.config
+            return not (cfg ~= nil and cfg.fightAlerts == false)
+        end,
+        set = function(value)
+            if not OverlordDB then return end
+            OverlordDB.config = OverlordDB.config or {}
+            OverlordDB.config.fightAlerts = value == true
+        end },
+
+    -- 2.5.0: the author's logo and the top ranks in front of what such a player says (RankProof).
+    { kind = "checkbox", var = "Overlord_ChatBadges", label = "CHAT_BADGES_LABEL",
+        fallback = "Rank badges in chat", tooltip = "CHAT_BADGES_TOOLTIP",
+        default = true,
+        get = function()
+            local cfg = OverlordDB and OverlordDB.config
+            return not (cfg ~= nil and cfg.chatBadges == false)
+        end,
+        set = function(value)
+            if not OverlordDB then return end
+            OverlordDB.config = OverlordDB.config or {}
+            OverlordDB.config.chatBadges = value == true
+        end },
+
+    -- 2.5.0: volunteer to invite the players that ask to join our layer (LayerJumper), off by
+    -- default; the same choice as the button of the layers window and /ov layer help on|off.
+    { kind = "checkbox", var = "Overlord_LayerHelp", label = "LJ_HELP_OPTION_LABEL",
+        fallback = "Help others change layer", tooltip = "LJ_HELP_MODE_TOOLTIP",
+        default = false,
+        get = function()
+            local cfg = OverlordDB and OverlordDB.config
+            return cfg ~= nil and cfg.layerHelpMode == "auto"
+        end,
+        set = function(value)
+            if not OverlordDB then return end
+            OverlordDB.config = OverlordDB.config or {}
+            OverlordDB.config.layerHelpMode = value == true and "auto" or "off"
+            local jumper = Overlord.LayerJumper
+            if jumper and jumper.RefreshUI then jumper:RefreshUI() end
+        end },
 
     { kind = "header", label = "SETTINGS_SECTION_MAP", fallback = "Map and minimap" },
     { kind = "dropdown", var = SP.WorldMapModeVariableName, label = "MAP_WORLD_OVERLAYS_LABEL",
@@ -652,6 +706,19 @@ local ROWS = {
     { kind = "checkbox", var = SP.ShowFloatingObjectiveVariableName, label = "FLOATING_OBJECTIVE_LABEL",
         fallback = "Floating next objective", tooltip = "FLOATING_OBJECTIVE_TOOLTIP", default = false,
         get = SP.GetShowFloatingObjective, set = SP.SetShowFloatingObjective },
+    -- 2.5.0: the "+N platinum" text rising over the character (Ressources ShowFloatingGold), off by default.
+    { kind = "checkbox", var = "Overlord_PlatinumText", label = "PLATINUM_TEXT_LABEL",
+        fallback = "Floating platinum gains", tooltip = "PLATINUM_TEXT_TOOLTIP",
+        default = false,
+        get = function()
+            local cfg = OverlordDB and OverlordDB.config
+            return cfg ~= nil and cfg.platinumText == true
+        end,
+        set = function(value)
+            if not OverlordDB then return end
+            OverlordDB.config = OverlordDB.config or {}
+            OverlordDB.config.platinumText = value == true
+        end },
 }
 
 local function choiceOptions(choices)

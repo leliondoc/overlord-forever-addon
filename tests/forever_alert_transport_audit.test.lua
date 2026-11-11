@@ -41,10 +41,10 @@ for index, name in ipairs(directAuthors) do
     if index == 1 then
         -- The integration fixture already accepted this author's total of 4.
         sync:DispatchBNetMessage("K", payload(name, 8), "BNet-" .. id, id)
-        sync:DispatchBNetMessage("K", payload(name, 11), "BNet-" .. id, id)
+        sync:DispatchBNetMessage("K", payload(name, 20), "BNet-" .. id, id)
     else
         sync:DispatchBNetMessage("K", payload(name, 1), "BNet-" .. id, id)
-        sync:DispatchBNetMessage("K", payload(name, 4), "BNet-" .. id, id)
+        sync:DispatchBNetMessage("K", payload(name, 12), "BNet-" .. id, id)
     end
 end
 alert.OnLiveKill = originalOnLiveKill

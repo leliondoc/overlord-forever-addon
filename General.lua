@@ -8,6 +8,21 @@ local L = Overlord.L
 Overlord.General.GP_INTERVAL = 20
 Overlord.General.GP_STALE_SEC = 60
 Overlord.General.ENTRY_STALE_SEC = 90
+-- 2.5.0: while the channel does not carry, a Commander's position only reached its group and its
+-- Battle.net friends: everybody else saw the icon appear with the claim and vanish ENTRY_STALE_SEC
+-- later (measured on 36 whole clients: 30 of 35 showed it, none after 120 s; all 35 with the
+-- channel). The position now travels from hand to hand about once a minute (SyncDirectory, GP on
+-- the chain, GP_COVER_SEC), so a remote Commander is kept this long without news then. A release
+-- or a fall still removes it at once, as before.
+Overlord.General.GP_STALE_CHAIN_SEC = 150
+Overlord.General.ENTRY_STALE_CHAIN_SEC = 200
+local function ChainCarriesPositions()
+    local directory = Overlord.ChannelDirectory
+    return directory ~= nil and directory.IsActive ~= nil and directory:IsActive() == true
+end
+function Overlord.General:EntryStaleSec()
+    return ChainCarriesPositions() and self.ENTRY_STALE_CHAIN_SEC or self.ENTRY_STALE_SEC
+end
 Overlord.General.COLLISION_WINDOW_SEC = 3
 Overlord.General.TOMBSTONE_SEC = 90
 
@@ -211,6 +226,10 @@ end
 
 function Overlord.General:IsRaidLeader()
     if not IsInGroup() then return false end
+    -- 2.5.0: the helper of a layer change leads a group of a few seconds with a stranger:
+    -- no command group, no role taken.
+    local jumper = Overlord.LayerJumper
+    if jumper and jumper.IsHopGroup and jumper:IsHopGroup() then return false end
     return UnitIsGroupLeader("player") == true
 end
 
@@ -330,7 +349,7 @@ end
 function Overlord.General:IsSlotFresh(slot)
     if not slot or not slot.lastMoveTs then return false end
     if IsLocalGeneralSlot(slot) then return true end
-    return (GetTime() - slot.lastMoveTs) <= self.GP_STALE_SEC
+    return (GetTime() - slot.lastMoveTs) <= (ChainCarriesPositions() and self.GP_STALE_CHAIN_SEC or self.GP_STALE_SEC)
 end
 
 function Overlord.General:GetSlot(faction)
@@ -340,7 +359,7 @@ function Overlord.General:GetSlot(faction)
     local slot = GetSlotTable(pool, faction)
     if not slot then return nil end
     if IsLocalGeneralSlot(slot) then return slot end
-    if (GetTime() - (slot.lastMoveTs or 0)) <= self.ENTRY_STALE_SEC then
+    if (GetTime() - (slot.lastMoveTs or 0)) <= self:EntryStaleSec() then
         return slot
     end
     return nil
@@ -399,7 +418,7 @@ function Overlord.General:BuildDisplayEntryFromSlot(slot)
     if not slot or not slot.holder then return nil end
     local now = GetTime()
     if not IsLocalGeneralSlot(slot)
-        and (now - (slot.lastMoveTs or 0)) > self.ENTRY_STALE_SEC then
+        and (now - (slot.lastMoveTs or 0)) > self:EntryStaleSec() then
         return nil
     end
     if not slot.mapX or not slot.mapY or not slot.mapID then return nil end
@@ -481,7 +500,7 @@ function Overlord.General:PruneStale()
                 if age > self.GP_STALE_SEC then
                     slot.lastMoveTs = now
                 end
-            elseif age > self.ENTRY_STALE_SEC then
+            elseif age > self:EntryStaleSec() then
                 ClearSlot(pool, faction)
                 changed = true
             end

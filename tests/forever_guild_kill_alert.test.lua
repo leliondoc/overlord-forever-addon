@@ -5,6 +5,12 @@ assert(loadfile("tests/forever_world_kills.test.lua"))()
 assert(loadfile("GuildKillAlert.lua"))()
 local NAMES = { "Alpha Tester", "Bravo Tester", "Charlie Tester", "Delta Tester", "Echo Tester", "Foxtrot Tester" }
 local GKA = Overlord.GuildKillAlert
+-- 2.5.0: the threshold is 50 HK (it was 20: one group of five killing four players). The cases
+-- below were written at 20 and check the mechanism at that figure; the shipped one is checked
+-- in the last section.
+assert(GKA.KILL_THRESHOLD == 50, "the rampage threshold he chose is 50: " .. tostring(GKA.KILL_THRESHOLD))
+local SHIPPED_THRESHOLD = GKA.KILL_THRESHOLD
+GKA.KILL_THRESHOLD = 20
 -- The cases below predate the allied rampage line (1.7.1): checked with it off, then
 -- the allied section at the end turns it on.
 GKA:SetAllyEnabled(false)
@@ -19,6 +25,12 @@ Overlord.PrintNotification = function(_, text) printed[#printed + 1] = text end
 local shards = { [NAMES[1]] = 143 }
 Overlord.Sync.GetShardAlertTagForPlayer = function(_, name)
     return shards[name] and (" #" .. shards[name]) or ""
+end
+-- (2.5.0: the rampage reads the layers themselves, not the tag's text.)
+Overlord.Shard = Overlord.Shard or {}
+Overlord.Shard.ResolveKnownShardPlayer = function(_, name)
+    if shards[name] then return name, shards[name] end
+    return nil, nil
 end
 local sent = {}
 local function record(kind)
@@ -60,6 +72,44 @@ local function raid(zone, base, guild, faction)
 end
 local function gw(guild, faction, kills, members, zone, shard, ts)
     return GKA:BuildNetworkPayload(guild, faction, kills, members, zone, shard, ts)
+end
+
+-- 2.5.0: a kill total taken from the ranking feed with its zone counts for the size of the fight
+-- on the same base as a live total: once, whichever comes first, and never for a rampage.
+do
+    local recorded = {}
+    local savedFA = Overlord.FrontActivity
+    Overlord.FrontActivity = { RecordKills = function(_, zone, kills) recorded[#recorded + 1] = { zone, kills } end }
+    local gka = Overlord.GuildKillAlert
+    gka:OnFedKill("Fed Fighter", 10, "@elwynn", nil)
+    assert(#recorded == 1 and recorded[1][2] == 1, "the first total of a player only sets its base (one kill)")
+    gka:OnFedKill("Fed Fighter", 14, "@elwynn", nil)
+    assert(#recorded == 2 and recorded[2][1] == "@elwynn" and recorded[2][2] == 4, "the kills since the last total")
+    gka:OnFedKill("Fed Fighter", 14, "@elwynn", nil)
+    gka:OnFedKill("Fed Fighter", 12, "@elwynn", nil)
+    assert(#recorded == 2, "a total already counted, or an older one, was counted again")
+    gka:OnFedKill("Fed Fighter", 20, "not a zone!", nil)
+    gka:OnFedKill("", 30, "@elwynn", nil)
+    assert(#recorded == 2, "a total without a valid zone or name was counted")
+    assert(alerts() == 0, "a fed total started a rampage alert")
+    -- A live total after fed ones: the fight counts only what is new to it, and the rampage
+    -- base credits the whole jump since the last LIVE total, as before 2.5.0 (a fed total in
+    -- between took nothing from it).
+    reset()
+    recorded = {}
+    kill(NAMES[1], 10, "#9001")
+    assert(#recorded == 1 and recorded[1][2] == 1, "fixture: a first live total is one kill")
+    gka:OnFedKill(NAMES[1], 14, "#9001", EPOCH)
+    assert(#recorded == 2 and recorded[2][2] == 4, "the fed total after a live one counts its four kills")
+    kill(NAMES[1], 15, "#9001")
+    assert(#recorded == 3 and recorded[3][2] == 1, "the live total after a fed one counts one kill for the fight: " .. tostring(recorded[3] and recorded[3][2]))
+    for m = 2, 5 do kill(NAMES[m], 1, "#9001") end
+    assert(alerts() == 0, "fixture: ten kills by five members is under the threshold")
+    for m = 2, 5 do kill(NAMES[m], 4, "#9001") end
+    -- (1 + 5 for the first member, whose fed total took nothing from the rampage base; 4 x 4.)
+    assert(alerts() == 1, "the rampage lost the kills a fed total had shown first")
+    reset()
+    Overlord.FrontActivity = savedFA
 end
 
 -- Two members alone never trigger, whatever their score.
@@ -448,6 +498,37 @@ do
     assert(counted >= 4000, "Fixture kills were not tracked: " .. counted)
     assert(counted == live and live <= 4000 and ordered <= 2 * 4000 + 1,
         "Player tracking unbounded or miscounted: " .. counted .. "/" .. live .. "/" .. ordered)
+end
+
+-- 2.5.0: the shipped threshold. 49 HK by five members say nothing, the 50th does; an announcement
+-- below it (a client before 2.5.0) is neither shown nor passed along the chain.
+do
+    reset()
+    GKA.KILL_THRESHOLD = SHIPPED_THRESHOLD
+    GKA:SetAllyEnabled(false)
+    for m = 1, 5 do kill(NAMES[m], 1, nil, "Fifty Guild") end
+    for m = 1, 5 do kill(NAMES[m], 9, nil, "Fifty Guild") end
+    kill(NAMES[1], 13, nil, "Fifty Guild")
+    assert(alerts("Fifty Guild") == 0, "49 HK made a rampage")
+    kill(NAMES[2], 10, nil, "Fifty Guild")
+    assert(alerts("Fifty Guild") == 1, "50 HK by 5 members did not alert")
+    assert(printed[#printed]:find("50+ HK by 5+ members", 1, true), printed[#printed])
+    local before = #printed
+    assert(not GKA:OnReceiveNetworkAlert(gw("Small Band", "Alliance", 30, 5, "", nil), "Relay Tester", "BETA"),
+        "a rampage of 30 HK announced by an older client was shown")
+    assert(#printed == before)
+    assert(GKA:ChainCoverKey(gw("Small Band", "Alliance", 30, 5, "", nil)) == nil, "a rampage under the threshold goes along the chain")
+    assert(GKA:OnReceiveNetworkAlert(gw("Big Band", "Alliance", 50, 5, "", nil), "Relay Tester", "BETA"),
+        "a rampage of 50 HK announced on the network was refused")
+    assert(GKA:ChainCoverKey(gw("Other Band", "Alliance", 64, 6, "", nil)) ~= nil)
+    -- Every language says the new figure in both tooltips.
+    for _, file in ipairs({ "Locales.lua", "Locales_ptBR.lua", "Locales_zhCN.lua" }) do
+        local text = assert(io.open(file, "rb")):read("*a")
+        for line in text:gmatch("L%.GUILD_KILL_AL[A-Z]+_ENABLED_TOOLTIP = [^\n]+") do
+            assert(line:find("50", 1, true) and not line:find("20+", 1, true) and not line:find("20 ", 1, true),
+                file .. " still says 20: " .. line:sub(1, 90))
+        end
+    end
 end
 
 Overlord.Sync.SendToChannel, Overlord.Sync.SendToGroup, Overlord.Sync.BroadcastToRelay =

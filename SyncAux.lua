@@ -1193,6 +1193,13 @@ function Overlord.Sync:OnReceiveMining(payload, sender)
     local tag = ""
     if sid then
         tag = string.format((L and (L.SHARD_ALERT_NAME_TAG or L.SHARD_ALERT_TAG)) or ", layer #%s", sid)
+        -- 2.5.0: the layer can be clicked, as in a capture alert. The miner is of the other
+        -- faction: the link names nobody, and asks the players of ours known on that layer.
+        local jumper = Overlord.LayerJumper
+        if jumper and jumper.ChatLink then
+            local ok, linked = pcall(jumper.ChatLink, jumper, nil, sid, tag)
+            if ok and type(linked) == "string" then tag = linked end
+        end
     elseif who and self.GetShardAlertTagForPlayer then
         tag = self:GetShardAlertTagForPlayer(sender) or ""
     end

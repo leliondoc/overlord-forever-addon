@@ -121,6 +121,10 @@ local function UpdateDedupKillMaxIndex(name, count)
     end
     if not dedupKillMaxIndex then return end
     if dk and count > (dedupKillMaxIndex[dk] or 0) then
+        -- 2.5.0: the ranking feed (SyncLeaderboardPages) hears every identity whose best total
+        -- moves; the third value says the identity had no total before.
+        local moved = Overlord.Leaderboard.OnNetworkRowMoved
+        if moved then moved("LK", dk, dedupKillMaxIndex[dk] == nil) end
         dedupKillMaxIndex[dk] = count
     end
 end
@@ -154,6 +158,8 @@ local function UpdateDedupCaptureMaxIndex(name, count)
     end
     if not dedupCaptureMaxIndex then return end
     if dk and count > (dedupCaptureMaxIndex[dk] or 0) then
+        local moved = Overlord.Leaderboard.OnNetworkRowMoved
+        if moved then moved("LC", dk, dedupCaptureMaxIndex[dk] == nil) end
         dedupCaptureMaxIndex[dk] = count
     end
 end
@@ -175,6 +181,35 @@ function Overlord.Leaderboard:GetMaxCapturesForDedupName(playerName)
     if not dk then return tonumber(self.captureCount and self.captureCount[playerName]) or 0 end
     local index = EnsureDedupCaptureMaxIndex(self)
     return tonumber(index[dk]) or 0
+end
+
+-- 2.5.0 (the ranking feed, SyncLeaderboardPages): one identity's row as an attested copy made
+-- right now would hold it (SnapshotCurrentCampaignFull): its canonical name, its best total over
+-- every spelling, the index entry its metadata is served from. nil while the hot indexes are
+-- not all ready (nothing is built for it: the feed asks again later) or without such a row.
+-- (While the metadata index is being rebuilt the one in place stays readable, as for every
+-- other reader: on a big ranking a rebuild takes seconds, and the totals are not its business.)
+-- stream: "LK" (kills) or "LC" (captures); dedupKey: as OnNetworkRowMoved gives it.
+function Overlord.Leaderboard:GetLiveNetworkRow(stream, dedupKey)
+    if type(dedupKey) ~= "string" or not (dedupKillMaxIndex and dedupCaptureMaxIndex and dedupCanonicalValid
+        and self._dedupMetaIndex) then return nil end
+    local count
+    if stream == "LK" then count = dedupKillMaxIndex[dedupKey]
+    elseif stream == "LC" then count = dedupCaptureMaxIndex[dedupKey] end
+    count = tonumber(count)
+    if not count or count <= 0 then return nil end
+    local name = dedupCanonicalIndex[dedupKey]
+    if type(name) ~= "string" or name == "" then return nil end
+    local sync = Overlord.Sync
+    if sync and sync.StripPipeLeakFromContributorName then name = sync:StripPipeLeakFromContributorName(name) end
+    local info = self._dedupMetaIndex[dedupKey]
+    if type(info) ~= "table" then info = self.playerInfo and self.playerInfo[name] end
+    return name, count, type(info) == "table" and info or nil
+end
+-- The key the feed names an identity by (the one of the hot indexes).
+function Overlord.Leaderboard:GetNetworkRowKey(playerName)
+    if type(playerName) ~= "string" or playerName == "" then return nil end
+    return GetKillDedupKey(playerName)
 end
 
 -- Table de lookup des zoneIds valides.

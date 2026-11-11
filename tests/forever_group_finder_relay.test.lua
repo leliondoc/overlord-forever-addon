@@ -482,6 +482,92 @@ do
     advance(121)
     for k in pairs(alice.GF.board) do alice.GF:RemoveEntry(k) end
     assert(alice.GF:MaybePull())
+    -- 2.5.0: a board still empty, the contact asked silent: another contact is asked when the
+    -- listening time is over, three in all, then nothing before two minutes after the first.
+    reset()
+    do
+        local asker, mute, quiet, holder, spare = newClient("Asker Aa"), newClient("Mute Bb"), newClient("Quiet Cc"),
+            newClient("Holder Dd"), newClient("Spare Ee")
+        -- (Heard before it had a contact: passed on to nobody.)
+        hear(holder, G(1, "Lead Qq", rev()), "Lead Qq")
+        assert(holder.GF.board["lead qq"] and #log == 0, "fixture: the holder holds a listing")
+        link(asker, mute); link(asker, quiet); link(asker, holder); link(asker, spare)
+        asker.dir.ContactView = function() return { "Mute Bb", "Quiet Cc", "Holder Dd", "Spare Ee" } end
+        asker.GF._contacts = nil
+        asker.GF.Random = function() return 0 end
+        advance(100)
+        assert(asker.GF:MaybePull() and #sent(asker, "^Q:1$", mute) == 1, "the first contact was not asked")
+        advance(5)
+        assert(not asker.GF:MaybePull(), "asked again while still listening")
+        advance(11)
+        assert(asker.GF:MaybePull() and #sent(asker, "^Q:1$", quiet) == 1, "a silent contact: the next one was not asked")
+        assert(#sent(asker, "^Q:1$", mute) == 1, "the silent contact was asked twice")
+        assert(asker.GF:ChannelState() == "listening")
+        advance(16)
+        assert(asker.GF:MaybePull() and #sent(asker, "^Q:1$", holder) == 1, "the third contact was not asked")
+        advance(0.5)
+        assert(asker.GF.board["lead qq"] and asker.GF.board["lead qq"].hearsay, "the third contact's answer was not read")
+        assert(#sent(asker, "^Q:1$") == 3 and #sent(asker, "^Q:1$", spare) == 0)
+        -- With a row on the board nothing more is asked; nor, empty again, a fourth contact.
+        advance(16)
+        assert(not asker.GF:MaybePull())
+        for k in pairs(asker.GF.board) do asker.GF:RemoveEntry(k) end
+        assert(not asker.GF:MaybePull(), "a fourth contact was asked")
+        assert(#sent(asker, "^Q:1$") == 3)
+        -- Two minutes after the last question the board asks afresh (three contacts at most again).
+        advance(75)
+        assert(not asker.GF:MaybePull(), "a new round before two minutes after the last question")
+        advance(30)
+        assert(asker.GF:MaybePull() and #sent(asker, "^Q:1$") == 4)
+        -- A window closed and opened again later goes on with the same round: never more than
+        -- three questions in two minutes.
+        reset()
+        local back, c1, c2, c3 = newClient("Back Hh"), newClient("Con Ha"), newClient("Con Hb"), newClient("Con Hc")
+        link(back, c1); link(back, c2); link(back, c3)
+        advance(100)
+        local times = {}
+        for step = 1, 80 do
+            -- (Closed between 5 s and 104 s after the first question.)
+            if step == 1 or step >= 27 then
+                if back.GF:MaybePull() then times[#times + 1] = now end
+            end
+            advance(4)
+        end
+        assert(#times >= 5, "fixture: the window asked " .. #times .. " times")
+        for i = 4, #times do
+            assert(times[i] - times[i - 3] >= back.GF.PULL_GAP, "four questions within two minutes")
+        end
+        -- The first contact's answer is still read once the second one has been asked (PULL_WAIT
+        -- runs from its own question), and no longer after that.
+        reset()
+        local late, slow, other = newClient("Late Ii"), newClient("Slow Ia"), newClient("Other Ib")
+        link(late, slow); link(late, other)
+        late.dir.ContactView = function() return { "Slow Ia", "Other Ib" } end
+        late.GF._contacts = nil
+        late.GF.Random = function() return 0 end
+        advance(100)
+        assert(late.GF:MaybePull() and #sent(late, "^Q:1$", slow) == 1)
+        advance(16)
+        assert(late.GF:MaybePull() and #sent(late, "^Q:1$", other) == 1)
+        hear(late, "B:1:Lead Ww:" .. rev() .. ":5:A:a:z:stromgarde:40:3:0:0:1:60:1140", "Slow Ia")
+        assert(late.GF.board["lead ww"], "the first contact's answer was dropped once the second was asked")
+        advance(6)
+        hear(late, "B:1:Lead Vv:" .. rev() .. ":5:A:a:z:stromgarde:40:3:0:0:1:60:1140", "Slow Ia")
+        assert(not late.GF.board["lead vv"], "an answer was read long after its question")
+        -- Nobody answers at all: three questions, no more.
+        reset()
+        local lone, a, b, c, d = newClient("Lone Ff"), newClient("Con Ga"), newClient("Con Gb"), newClient("Con Gc"), newClient("Con Gd")
+        link(lone, a); link(lone, b); link(lone, c); link(lone, d)
+        advance(100)
+        for _ = 1, 8 do
+            lone.GF:MaybePull()
+            advance(16)
+        end
+        local asked = sent(lone, "^Q:1$")
+        assert(#asked == 3, "questions of an empty board nobody answers, in two minutes: " .. #asked)
+        assert(asked[1].target ~= asked[2].target and asked[2].target ~= asked[3].target and asked[1].target ~= asked[3].target,
+            "the same contact was asked twice")
+    end
     -- A copy by hand of a pulled row makes it heard (and passed on).
     reset()
     alice, bob, carl = newClient("Alice Smith"), newClient("Bob Stone"), newClient("Carl Reed")
@@ -1221,4 +1307,80 @@ do
     assert(not g2.GF.board[key(lead)], "the second hand's leaf kept the withdrawn listing")
 end
 
+-- ---------------------------------------------------------------------------
+-- 2.5.0: a player whose window got a listing from a pull answer is told when it is withdrawn
+-- (by the contact that answered, whatever its hand; by the leader for its own listing)
+-- ---------------------------------------------------------------------------
+do
+    reset()
+    local lead, hand, last = newClient("Lena Lead"), newClient("Hope Hand"), newClient("Lars Last")
+    local late, later, direct = newClient("Olga Opens"), newClient("Otto Opens"), newClient("Dora Direct")
+    link(lead, hand); link(hand, last)
+    assert(lead.GF:Publish(spec()))
+    advance(0.3)
+    assert(hand.GF.board[key(lead)] and last.GF.board[key(lead)], "fixture: the hands hold the listing")
+    -- Three windows open later: one asks a middle hand, one a last hand, one the leader itself.
+    link(late, hand); link(later, last); link(direct, lead)
+    advance(30)
+    for _, pair in ipairs({ { late, hand }, { later, last }, { direct, lead } }) do
+        local asker, source = pair[1], pair[2]
+        asker.GF.Random = function() return 0 end
+        assert(asker.GF:MaybePull(), "the window did not ask")
+        advance(0.5)
+        assert(asker.GF.board[key(lead)], asker.name .. " got nothing from " .. source.name)
+    end
+    assert(late.GF.board[key(lead)].hearsay and later.GF.board[key(lead)].hearsay)
+    advance(100)
+    assert(lead.GF:Unpublish())
+    advance(30)
+    assert(not hand.GF.board[key(lead)] and not last.GF.board[key(lead)], "fixture: the hands were told")
+    assert(not late.GF.board[key(lead)], "a window filled by a middle hand kept the withdrawn listing")
+    assert(not later.GF.board[key(lead)], "a window filled by a last hand kept the withdrawn listing")
+    assert(not direct.GF.board[key(lead)], "a window filled by the leader kept the withdrawn listing")
+    -- Told once each, and only them: nobody that never asked.
+    assert(#sent(hand, "^X:", late) == 1 and #sent(last, "^X:", later) == 1 and #sent(lead, "^X:", direct) == 1,
+        "askers told " .. #sent(hand, "^X:", late) .. "/" .. #sent(last, "^X:", later) .. "/" .. #sent(lead, "^X:", direct))
+    assert(#sent(last, "^X:") == 1, "a last hand told somebody that never asked")
+    -- The holders of a row are bounded.
+    assert(lead.GF.PULL_HOLDERS >= 4 and lead.GF.PULL_HOLDERS <= 16)
+end
+
 print("forever_group_finder_relay: ok")
+
+-- ---------------------------------------------------------------------------
+-- 2.5.0: a contact the relay has not heard for five minutes is no stranger for what it whispers
+-- to us: the withdrawal of the listing it brought, a newer copy, a window's question
+-- ---------------------------------------------------------------------------
+do
+    reset()
+    local bob, carl = newClient("Bob Stone"), newClient("Carl Reed")
+    link(bob, carl)
+    -- The directory's own rule for a quiet contact: greeted us, named by the list, no live route.
+    local quiet = {}
+    local isContact = bob.dir.IsContact
+    bob.dir.IsContact = function(self, n) return not quiet[tostring(n):lower()] and isContact(self, n) end
+    bob.dir.KeepsContactAlive = function(self, n)
+        local row = self.partners[tostring(n):lower()]
+        return row ~= nil and row.chainAt ~= nil and self:IsActive()
+    end
+    local r = rev()
+    hear(bob, G(2, "Lena Lead", r), "Carl Reed")
+    assert(bob.GF.board["lena lead"], "fixture: the listing came by Carl's hand")
+    advance(400)
+    quiet["carl reed"] = true
+    bob.GF._contacts = nil
+    assert(not bob.GF:IsContactName("Carl Reed") and bob.GF:IsContactSender("Carl Reed"), "fixture: a quiet contact")
+    local strangers = bob.GF.handStats.stranger
+    hear(bob, "X:1:2:Lena Lead:" .. r, "Carl Reed")
+    assert(not bob.GF.board["lena lead"], "the withdrawal of a contact gone quiet was dropped: the board keeps a dead group")
+    assert(bob.GF.handStats.stranger == strangers, "a quiet contact was counted as a stranger")
+    -- Its newer copies are read too; somebody that never greeted us stays a stranger, whatever it says.
+    hear(bob, G(2, "Lena Lead", rev()), "Carl Reed")
+    assert(bob.GF.board["lena lead"], "a newer copy from a quiet contact was dropped")
+    hear(bob, G(2, "Mona Lead", rev()), "Zed Unknown")
+    assert(not bob.GF.board["mona lead"] and bob.GF.handStats.stranger == strangers + 1, "a stranger's copy was read")
+    hear(bob, "X:1:2:Lena Lead:" .. rev(), "Zed Unknown")
+    assert(bob.GF.board["lena lead"], "a stranger withdrew a listing")
+end
+
+print("forever_group_finder_relay: quiet contacts ok")

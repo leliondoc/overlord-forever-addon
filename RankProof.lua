@@ -1779,6 +1779,195 @@ function RP:ShowPlate(unit, rank)
     end
 end
 
+-- 2.5.0: the same badge at the top right of the target's portrait (the author's logo, the top
+-- ranks 11 to 15), whichever side the target is on: the rank UnitBadge gives a nameplate, shown
+-- where a player looks when he clicks somebody. One frame of ours, child of the game's target
+-- frame (shown and hidden with it), created at the first badge; nothing of the game is touched.
+RP.TARGET_BADGE_SIZE = 26
+
+local function TargetPortrait()
+    local frame = _G.TargetFrame
+    if type(frame) ~= "table" or type(frame.GetObjectType) ~= "function" then return nil, nil end
+    local container = frame.TargetFrameContainer
+    local portrait = frame.portrait or (type(container) == "table" and container.Portrait) or _G.TargetFramePortrait
+    if type(portrait) ~= "table" then portrait = nil end
+    return frame, portrait
+end
+
+function RP:HideTargetBadge()
+    if self.targetBadge then self.targetBadge:Hide() end
+end
+
+function RP:PaintTargetBadge()
+    local rank = 0
+    if not InInstance() and UnitExists and UnitExists("target") and UnitIsPlayer("target") then
+        local pool = self:Pool()
+        if pool then
+            local ok, found = pcall(self.UnitBadge, self, pool, "target")
+            rank = ok and tonumber(found) or 0
+        end
+    end
+    local ranks = Overlord.Ranks
+    local icon = rank >= self.MIN_RANK and ranks and ranks.GetRankIcon and ranks:GetRankIcon(rank) or nil
+    local badge = self.targetBadge
+    if not icon then
+        if badge then badge:Hide() end
+        return false
+    end
+    if not badge then
+        local frame, portrait = TargetPortrait()
+        if not frame or not CreateFrame then return false end
+        badge = CreateFrame("Frame", nil, frame)
+        badge:SetSize(self.TARGET_BADGE_SIZE, self.TARGET_BADGE_SIZE)
+        badge:SetFrameLevel((frame:GetFrameLevel() or 1) + 6)
+        badge.icon = badge:CreateTexture(nil, "OVERLAY")
+        badge.icon:SetAllPoints()
+        -- (The portrait is a disc: its top right is a little inside the square's corner.)
+        local inset = math.floor(self.TARGET_BADGE_SIZE / 4)
+        badge:SetPoint("CENTER", portrait or frame, "TOPRIGHT", -inset, -inset)
+        self.targetBadge = badge
+    end
+    badge.icon:SetTexture(icon)
+    badge:Show()
+    return true
+end
+
+-- 2.5.0: the same badge in the chat, left of the name of such a player (the author's logo, the
+-- top ranks 11 to 15). Through the game's own message filters (the way SyncAux hides its
+-- notices) and the chat window's own rewrite of a line: no chat frame is hooked (see
+-- RP.ChatBadgeFilter below). Never on a whisper (the game keeps who whispered last from
+-- those arguments), never in an instance, never on a value the game protects. Off with
+-- "Rank badges in chat" in the options.
+RP.CHAT_EVENTS = { "CHAT_MSG_SAY", "CHAT_MSG_YELL", "CHAT_MSG_CHANNEL", "CHAT_MSG_GUILD", "CHAT_MSG_OFFICER",
+    "CHAT_MSG_PARTY", "CHAT_MSG_PARTY_LEADER", "CHAT_MSG_RAID", "CHAT_MSG_RAID_LEADER", "CHAT_MSG_RAID_WARNING" }
+RP.CHAT_BADGE_SIZE, RP.CHAT_RANK_SEC, RP.CHAT_RANK_ROWS = 14, 20, 256
+
+-- The badge's markup for a chat author, or nil. Its rank is looked up once per CHAT_RANK_SEC
+-- and author (a busy channel prints several lines a second).
+function RP:ChatBadge(author)
+    local cfg = OverlordDB and OverlordDB.config
+    if cfg and cfg.chatBadges == false then return nil end
+    if InInstance() or not Accessible(author) or type(author) ~= "string" or author == "" then return nil end
+    local now = GetTime()
+    local cache = self.chatRanks
+    if not cache or cache.n >= self.CHAT_RANK_ROWS then
+        cache = { n = 0 }
+        self.chatRanks = cache
+    end
+    local row = cache[author]
+    if not row or now - row.at > self.CHAT_RANK_SEC then
+        if not row then cache.n = cache.n + 1 end
+        row = { at = now, rank = tonumber(self:GetBadgeRank(author)) or 0 }
+        cache[author] = row
+    end
+    if row.rank < self.MIN_RANK then return nil end
+    -- (The markup is built once per row, not per line.)
+    if row.mark == nil then
+        local ranks = Overlord.Ranks
+        local icon = ranks and ranks.GetRankIcon and ranks:GetRankIcon(row.rank)
+        row.mark = type(icon) == "string"
+            and ("|T" .. icon .. ":" .. self.CHAT_BADGE_SIZE .. ":" .. self.CHAT_BADGE_SIZE .. ":0:0|t ") or false
+    end
+    return row.mark or nil
+end
+
+-- Where the badge goes. The game builds "[Name]" itself from the author's name, which is also
+-- what a click on it whispers to: nothing a filter returns can put a badge inside the bracket.
+-- But a chat window lets an addon rewrite a line it already holds (TransformMessages, one of the
+-- window's functions the game opens to addons: its own way to rewrite a censored line). So the
+-- filter changes nothing, notes the line's id, and on the next frame the badge is written inside
+-- the bracket, left of the name: "[<badge>Name]". No function of the game is hooked or replaced.
+-- Where a window has no such function, the badge stays in front of the text.
+function RP:ChatLinesCanBeMarked()
+    if type(CHAT_FRAMES) ~= "table" or not (C_Timer and C_Timer.After) then return false end
+    for _, frameName in pairs(CHAT_FRAMES) do
+        local frame = type(frameName) == "string" and _G[frameName]
+        return type(frame) == "table" and type(frame.TransformMessages) == "function"
+    end
+    return false
+end
+
+-- (The arguments of a line: its text, colours, then what the chat window kept with it; the ninth
+-- is the event's own arguments, whose eleventh is the line's id.)
+local function ChatLineIsPending(message, _, _, _, _, _, _, _, eventArgs)
+    local pending = RP.chatPending
+    if not pending or type(eventArgs) ~= "table" then return false end
+    local line = eventArgs[11]
+    -- (Nearly every line stops here: one lookup, before anything is asked of the game.)
+    if not Accessible(line) then return false end
+    local mark = pending[line]
+    if mark == nil or not Accessible(message) or type(message) ~= "string" then return false end
+    return message:find("|Hplayer:", 1, true) ~= nil and message:find(mark, 1, true) == nil
+end
+local function MarkChatLine(message, r, g, b, infoID, accessID, typeID, event, eventArgs, ...)
+    local mark = RP.chatPending and type(eventArgs) == "table" and RP.chatPending[eventArgs[11]]
+    if mark then
+        -- (After the opening bracket of the name's link, once.)
+        local marked = message:gsub("(|Hplayer:[^|]*|h%[)", function(head) return head .. mark end, 1)
+        message = marked
+    end
+    return message, r, g, b, infoID, accessID, typeID, event, eventArgs, ...
+end
+
+-- A pass reads every line each chat window holds (128 by default, thousands with some addons):
+-- CHAT_MARK_GAP between two passes, whatever the number of badge holders talking, and never the
+-- combat log's window (its lines are no chat lines, and it is the busiest in a fight).
+function RP:MarkChatLines()
+    self.chatMarkArmed = nil
+    self.chatMarkAt = GetTime()
+    if self.chatPending and type(CHAT_FRAMES) == "table" then
+        for _, frameName in pairs(CHAT_FRAMES) do
+            local frame = type(frameName) == "string" and _G[frameName]
+            if type(frame) == "table" and type(frame.TransformMessages) == "function"
+                and frame ~= COMBATLOG and frameName ~= "ChatFrame2" then
+                pcall(frame.TransformMessages, frame, ChatLineIsPending, MarkChatLine)
+            end
+        end
+    end
+    self.chatPending, self.chatPendingCount = nil, nil
+end
+
+RP.CHAT_PENDING_MAX, RP.CHAT_MARK_GAP = 32, 0.25
+function RP.ChatBadgeFilter(_, _, msg, author, ...)
+    local ok, mark = pcall(RP.ChatBadge, RP, author)
+    if not ok or not mark or not Accessible(msg) or type(msg) ~= "string" then return false end
+    -- (The line's id: the event's eleventh argument, the ninth after the text and the author.)
+    local line = select(9, ...)
+    if Accessible(line) and type(line) == "number" and line > 0 and RP:ChatLinesCanBeMarked() then
+        local pending = RP.chatPending
+        if not pending then
+            pending = {}
+            RP.chatPending, RP.chatPendingCount = pending, 0
+        end
+        -- (One note per line: the filter runs once per chat window showing it.)
+        if pending[line] == nil and RP.chatPendingCount < RP.CHAT_PENDING_MAX then
+            pending[line] = (mark:gsub("%s+$", ""))
+            RP.chatPendingCount = RP.chatPendingCount + 1
+        end
+        if not RP.chatMarkArmed then
+            RP.chatMarkArmed = true
+            -- (The next frame, or CHAT_MARK_GAP after the last pass.)
+            local wait = (RP.chatMarkAt or -1e9) + RP.CHAT_MARK_GAP - GetTime()
+            C_Timer.After(wait > 0 and wait or 0, function() pcall(RP.MarkChatLines, RP) end)
+        end
+        return false
+    end
+    return false, mark .. msg, author, ...
+end
+
+function RP:InstallChatBadges()
+    if self.chatFilter then return true end
+    local add = ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter
+    if type(add) ~= "function" then add = ChatFrame_AddMessageEventFilter end
+    if type(add) ~= "function" then return false end
+    local all = true
+    for _, event in ipairs(self.CHAT_EVENTS) do
+        all = pcall(add, event, self.ChatBadgeFilter) and all
+    end
+    self.chatFilter = true
+    return all
+end
+
 -- The badge for a friendly player's unit (0 = none): never for another character than the
 -- one we read under that name.
 function RP:UnitBadge(pool, unit)
@@ -1828,6 +2017,8 @@ function RP:RefreshPlates(name)
         local dirty = RP._platesDirty
         RP._platesDirty = nil
         pcall(RP.RepaintPlates, RP, dirty)
+        -- (A rank proven or a claim heard meanwhile: the target's badge follows.)
+        pcall(RP.PaintTargetBadge, RP)
     end)
 end
 
@@ -1868,6 +2059,7 @@ function RP:OnInstanceSuspend()
     self:RegisterLiveEvents(false)
     self:EndInspect()
     self:HideAllPlates()
+    self:HideTargetBadge()
 end
 
 function RP:OnInstanceResume()
@@ -1890,6 +2082,7 @@ function RP:OnEvent(event, ...)
         pcall(self.TryInspect, self, "mouseover", false, true)
         return
     end
+    if event == "PLAYER_TARGET_CHANGED" then pcall(self.PaintTargetBadge, self) end
     if InInstance() then return end
     if event == "NAME_PLATE_UNIT_ADDED" then
         pcall(self.OnPlate, self, (...))
@@ -1911,6 +2104,7 @@ function RP:Initialize()
     frame:SetScript("OnEvent", function(_, event, ...) RP:OnEvent(event, ...) end)
     pcall(self.CheckEra, self, self:Pool())
     pcall(self.NoteOnline, self)
+    pcall(self.InstallChatBadges, self)
     if C_Timer and C_Timer.NewTicker then
         self.ticker = C_Timer.NewTicker(30, function()
             pcall(RP.NoteOnline, RP)
