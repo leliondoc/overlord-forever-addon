@@ -939,6 +939,8 @@ local function crossShare()
     return math.max(CROSS_TARGET / bridges, CROSS_MIN_SHARE)
 end
 local function crossElected(p)
+    -- (A copy made to cross only was elected when it was made, CrossHands: not drawn twice.)
+    if p.crossOnly then return true end
     if #p.path < 2 or not CROSS_ELECTED_KINDS[p.kind] or isTerminal(p) then return true end
     -- A siege start (defenders' early warning) and an assault given up (neutral
     -- outpost) are rare and matter: never elected away either.
@@ -955,6 +957,70 @@ local function crossElected(p)
         .. "|" .. tostring(p.id)) < share
 end
 function net:GetCrossElection() return sameFactionBridgeCount(), crossShare() end
+-- 2.5.0: a capture in progress (its start "ZS in_progress", its release "ZR") between the factions.
+-- A packet carries four names at most, and a Battle.net friend's copy came with three or four of
+-- them most of the time: the friend saw the capture begin and could tell nobody, or was not told
+-- at all because its own friend stood fifth in line. Measured on 304 whole clients with two
+-- bridges, 2.4.0 and 2.5.0 alike: 0 to 12 of 24 players of the other side saw a capture begin
+-- (its end always arrived: it is told again as map news, Sync:NoteMapNews).
+--  * Heard from a Battle.net friend of the other side: the hands it took over there are not
+--    counted over here. Its author stays, then us (Receive adds our name): two more hands
+--    after us on our side, three rows of whispers with the fans the chain gives a capture of
+--    the other side (SyncDirectory ChainTargets, two levels up: 10, 10, 6 for a small list),
+--    about what the four rows of a capture of ours cost (10, 6, 3, 2). Keeping the friend's
+--    name, one hand less, left 12 of 24 players of the other side without it in one world out
+--    of three. Nothing of it goes back to the friend it came from (crossFrom, tasksFor). Same
+--    packet id: a client that has had it drops it, and the chain tells one fact once.
+--  * Heard on our side with its four names (nothing more is passed on here): the start of a
+--    capture of ours still goes to our live friends of the other side, and to nobody else
+--    (crossOnly, tasksFor), under the author's name and ours. Once per packet (not for a copy
+--    that only retries a forward), and with many bridges about (crossShare) only by the share
+--    of them an ordinary packet crosses by: this fifth row is the widest.
+-- Transport only: what a client takes of a ZS or a ZR is unchanged.
+-- A fight bracket (FK, the "Recent activity" panel) takes the first of the two ways, like a
+-- release: it names no side. Measured on the same world: each bracket reached the two friends of
+-- the other side at once and then took 60 to 75 s to go round the 24 players behind them.
+function net:CrossHands(p, transport, bnetID, me, retry)
+    local mine = addon.PlayerFaction
+    if (mine ~= "Alliance" and mine ~= "Horde") or type(p.payload) ~= "string" or type(me) ~= "string" then return end
+    local side
+    if p.kind == "ZS" then
+        local status, code = p.payload:match("^[^:]*:([^:]*):[^:]*:[^:]*:([AH]):")
+        if status ~= "in_progress" then return end
+        side = code == "A" and "Alliance" or "Horde"
+    elseif p.kind ~= "ZR" and p.kind ~= "FK" then
+        return
+    end
+    if transport == "BNET" then
+        local faction = sync.GetBetaBNetTargetInfo and sync:GetBetaBNetTargetInfo(bnetID) or nil
+        if (faction ~= "Alliance" and faction ~= "Horde") or faction == mine or side == mine then return end
+        -- (A release says no side: not one whose author we know as a player of ours.)
+        if not side and sync.GetBetaPeerFaction and sync:GetBetaPeerFaction(p.path[1]) == mine then return end
+        p.path, p.crossFrom = { p.path[1] }, bnetID
+        self.stats.crossHandsReset = (self.stats.crossHandsReset or 0) + 1
+    elseif side == mine and not retry and #p.path >= MAX_PATH and self:HasLiveEnemyBridge() then
+        local share = crossShare()
+        if share < 1 and hashFrac(me:lower() .. "|" .. tostring(p.path[1]):lower() .. "|" .. tostring(p.id)) >= share then
+            self.stats.crossElectionSkipped = (self.stats.crossElectionSkipped or 0) + 1
+            return
+        end
+        local copy = { region = p.region, id = p.id, at = p.at, target = "*", path = { p.path[1], me },
+            kind = p.kind, payload = p.payload, crossOnly = true, skipChannel = true, skipGroup = true,
+            skipGuild = true, heardOn = transport }
+        if self:Queue(copy) == true then
+            self.stats.crossHandsSent = (self.stats.crossHandsSent or 0) + 1
+        end
+    end
+end
+-- 2.5.0: did this player's own presence, heard first-hand in the last `maxAge` seconds (half an
+-- hour by default: a contact that hears us sends none again), say it holds a live Battle.net
+-- friend of the other faction? (SyncDirectory: such contacts are served first.)
+function net:IsKnownBridge(name, maxAge)
+    local at = type(name) == "string" and sameFactionBridges[name:lower()] or nil
+    -- (at > 0: a bridge that stopped saying so is written -1000, which is "lately" on a machine
+    -- started a few minutes ago.)
+    return at ~= nil and at > 0 and GetTime() - at <= (tonumber(maxAge) or 1800)
+end
 -- Two maps that differ (1.8.2, see localMapStamp). Decided per difference, not per
 -- neighbour: a hundred neighbours holding the same other map are one question. The
 -- difference is known by the gap between the two digests: the digest is a sum of
@@ -1849,7 +1915,9 @@ local function tasksFor(p, wire)
         end
         -- Meme reserve Blizzard que le canal : pas de copie de fond au groupe pour une
         -- diffusion. (Un paquet adresse ne passe plus ici : il suit sa route.)
+        -- (2.5.0: never to the partner of a layer change, a two-player group of a few seconds.)
         local groupCopy = not p.skipGroup
+            and not (Overlord.LayerJumper and Overlord.LayerJumper.IsHopGroup and Overlord.LayerJumper:IsHopGroup())
             and (not sync.GroupCarries or sync:GroupCarries(p.kind, p.payload))
         groupSuppressed = not p.skipGroup and not groupCopy
         for _, fragment in ipairs(fragments) do
@@ -1910,7 +1978,8 @@ local function tasksFor(p, wire)
             local faction, character
             if sync.GetBetaBNetTargetInfo then faction, character = sync:GetBetaBNetTargetInfo(id) end
             -- Friend names and path nodes are canonical Forever names.
-            local onPath = type(character) == "string" and pathKeys[character:lower()] == true
+            local onPath = (type(character) == "string" and pathKeys[character:lower()] == true)
+                or (p.crossFrom ~= nil and id == p.crossFrom)
             if onPath then
                 if pathFriends then pathFriends[#pathFriends + 1] = id end
             else
@@ -1935,7 +2004,9 @@ local function tasksFor(p, wire)
                         and channelHeard[character:lower()] or nil
                     -- 2.1.1: likewise a friend we hear in the guild this copy came from.
                     if p.heardOn == "GUILD" and addon.GuildLane then heardAt = addon.GuildLane:HeardAt(character) end
-                    if heardAt ~= nil and GetTime() - heardAt <= 300 then
+                    if p.crossOnly then
+                        -- (2.5.0, CrossHands: our side has it already.)
+                    elseif heardAt ~= nil and GetTime() - heardAt <= 300 then
                         net.stats.friendCopiesOnChannelSkipped = (net.stats.friendCopiesOnChannelSkipped or 0) + 1
                     elseif #p.path > 1 and not bnetAlive(id) then
                         -- A copy relayed for someone else rotates among friends heard
@@ -2009,7 +2080,7 @@ local function tasksFor(p, wire)
         -- 2.2.0: the channel does not work here: a live fact goes from hand to hand along its
         -- member list, by whisper (SyncDirectory.lua, ChainTargets).
         local directory = addon.ChannelDirectory
-        if directory and directory.ChainTargets then
+        if directory and directory.ChainTargets and not p.crossOnly then
             local okChain, chainTargets = pcall(directory.ChainTargets, directory, p, count)
             if not okChain then
                 directory.lastError = tostring(chainTargets)
@@ -2022,7 +2093,7 @@ local function tasksFor(p, wire)
         -- 2.1.1: the channel does not work here: the guild, rarely (SyncGuild.lua). Last, so
         -- that nothing else of this packet waits for it.
         local guildLane = addon.GuildLane
-        if guildLane and guildLane:Carries(p, count) then
+        if guildLane and not p.crossOnly and guildLane:Carries(p, count) then
             local task = add("GUILD", "", "BF")
             task.guildPacket, task.guildFragments = p, fragments
             -- A release may be the last thing out before a loading screen, and the other copies
@@ -2054,7 +2125,8 @@ local function emit(task)
     end
     -- Missing optional local paths are not send failures; a throttled channel
     -- that is present must, however, retry the same fragment.
-    if task.transport == "GROUP" and not IsInGroup() then
+    if task.transport == "GROUP" and (not IsInGroup()
+        or (Overlord.LayerJumper and Overlord.LayerJumper.IsHopGroup and Overlord.LayerJumper:IsHopGroup())) then
         return true
     end
     if task.transport == "CHANNEL" and not sync:GetChannelId() then return true end
@@ -2178,7 +2250,7 @@ function net:Queue(p, immediate)
     local presenceKey = p.kind == "NH" and p.target == "*" and p.path[1]:lower()
     local previous = presenceKey and pendingPresence[presenceKey]
     -- A held group-only copy must never replace the full forward of the same packet.
-    local statePrevious = not p.groupOnly and waitingStateItem(p) or nil
+    local statePrevious = not p.groupOnly and not p.crossOnly and waitingStateItem(p) or nil
     if statePrevious and p.at < statePrevious.p.at then return true end
     local replace = previous and previous.index == 1
         and not previous.tasks[1].sending and p.at >= previous.p.at
@@ -2345,6 +2417,19 @@ function net:CanSendLeaderboardPage()
         self.stats.pagedBackpressureChecks = (self.stats.pagedBackpressureChecks or 0) + 1
     end
     return ready
+end
+-- 2.5.0: the bytes of payload our next packet to `target` holds in `pieces` whispers (its own
+-- header counted: region|id|at|target|path|kind|, see encode and tasksFor), and the size of a
+-- piece. The ranking feed fills its whispers with it (SyncLeaderboardPages feedSend). To a
+-- Battle.net friend a packet leaves whole up to 430 bytes (tasksFor): that much, and no piece.
+function net:PayloadRoom(kind, target, pieces)
+    local id = #tostring(session) + 1 + #tostring(serial + 1)
+    local chunk = math.min(FRAGMENT_CHUNK, 252 - (id + 12))
+    local head = #tostring(region()) + id + #tostring(serverNow()) + #tostring(target)
+        + #tostring(sync:GetPlayerFullName() or "") + #tostring(kind) + 6
+    local route = type(target) == "string" and self.peers[target:lower()] or nil
+    if route and route.bnet then return 430 - head, 0 end
+    return pieces * chunk - head, chunk
 end
 pump = function()
     pumping = false
@@ -2995,6 +3080,10 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
     end
     -- K et EK ne sont jamais retransmis : un avis de mort d'un ancien client ne doit
     -- plus inonder le relais a travers nous (il reste livre localement).
+    -- 2.5.0: a capture in progress between the factions (CrossHands).
+    if relayable and p.target == "*" and (p.kind == "ZS" or p.kind == "ZR" or p.kind == "FK") and #p.path > 1 then
+        self:CrossHands(p, transport, bnetID, me, retryForward)
+    end
     if relayable and p.kind ~= "K" and p.kind ~= "EK" and forwardPresence and #p.path < MAX_PATH
         and (p.target == "*" or not addressed) then
         p.path[#p.path + 1] = me
@@ -3073,6 +3162,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         -- copy per hearer, dropped as soon as a mate's copy is heard in the group.
         if (transport == "CHANNEL" or transport == "GUILD" or transport == "WHISPER") and p.target == "*" and p.kind ~= "NH"
             and p.kind ~= "SH" and IsInGroup() and not retryForward
+            and not (Overlord.LayerJumper and Overlord.LayerJumper.IsHopGroup and Overlord.LayerJumper:IsHopGroup())
             and (not sync.GroupCarries or sync:GroupCarries(p.kind, p.payload)) then
             local pg = { region = p.region, id = p.id, at = p.at, target = p.target, path = p.path,
                 kind = p.kind, payload = p.payload, groupOnly = true, skipChannel = true, heardOn = transport }

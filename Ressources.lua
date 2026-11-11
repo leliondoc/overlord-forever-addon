@@ -103,7 +103,12 @@ for i = 1, FCT_POOL_SIZE do
     fctPool[i] = { fs = fs, ag = ag }
 end
 
+-- 2.5.0: off by default (players in a mine had "+1 platinum" rising over their character every
+-- few seconds, with no way to stop it); "Floating platinum gains" in the options turns it on.
+-- The platinum itself, its counter and its chat lines are unchanged.
 local function ShowFloatingGold(amount)
+    local cfg = OverlordDB and OverlordDB.config
+    if not (cfg and cfg.platinumText == true) then return end
     local entry = fctPool[fctIndex]
     fctIndex = (fctIndex % FCT_POOL_SIZE) + 1
     entry.ag:Stop()

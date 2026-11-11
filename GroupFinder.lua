@@ -146,6 +146,7 @@ GF.PULL_GAP = 120             -- an empty board asks again after 2 min, a full o
 GF.PULL_FRESH = 600
 GF.PULL_WAIT = 20             -- answers read that long after the question
 GF.PULL_LISTEN = 15           -- the empty board says "listening" that long after it
+GF.PULL_ASKS = 3              -- contacts an empty board asks in turn, PULL_LISTEN apart, while nobody answers
 GF.PULL_ROWS = 8
 GF.PULL_PER_MSG = 2
 GF.PULL_ROWS_PER_GATEWAY = 24 -- new rows one contact's pull answers bring onto the board at most (three full answers)
@@ -156,6 +157,11 @@ GF.PULL_BYTES = 160
 -- above 125 listed, the second hand above 330).
 GF.LEAF_COPIES = 1
 GF.PULL_ANSWER_GAP = 60       -- one answer per asker a minute, PULL_ANSWERS_PER_MIN in all
+-- 2.5.0: the players a pull answer of ours gave a listing to are remembered with it (the last
+-- PULL_HOLDERS of them), and told when it is withdrawn. Nobody told them: a hand only tells the
+-- players it passed the copy to, so a board filled by opening the window (about one in ten on
+-- the bench) showed a withdrawn group until its lifetime ran out, nine minutes later on average.
+GF.PULL_HOLDERS = 8
 GF.PULL_ANSWERS_PER_MIN = 6
 
 GF.REPLY_STATUS = { i = "invited", p = "pending", d = "declined", f = "full", x = "gone", l = "level" }
@@ -771,6 +777,8 @@ function GF:Publish(spec, restored)
     if old and old.spreadLive and old.rev then
         self.own.rev, self.own.spreadLive, self.own.heldLast, self.own.heldPrev =
             old.rev, true, old.heldLast, old.heldPrev
+        -- (2.5.0: and the windows that had it from our pull answers.)
+        self.own.pulledBy = old.pulledBy
     elseif restored then
         self:RestoreSpread(self.own, spec)
     end
@@ -787,6 +795,18 @@ local function Whispered(picked, leaves, toPicked, toLeaves)
     for i = 1, toPicked do a[i] = picked[i] end
     for i = 1, toLeaves do b[i] = leaves[i] end
     return a, b
+end
+
+-- A name added to a short list of holders (the newest last, `cap` names at most).
+local function AddHolder(list, name, cap)
+    list = list or {}
+    local lower = name:lower()
+    for i = #list, 1, -1 do
+        if list[i]:lower() == lower then table.remove(list, i) end
+    end
+    list[#list + 1] = name
+    while #list > cap do table.remove(list, 1) end
+    return list
 end
 
 -- The names of two lists, once each, the names given left out (lowercase); at most cap names.
@@ -857,7 +877,8 @@ function GF:Unpublish(reason)
     if own.spreadLive and own.rev and not InInstance() then
         -- Every holder of the last two copies (up to 20: two first hands of HAND_BURST; the bucket
         -- spreads them, see SpreadWithdraw).
-        self:SpreadWithdraw(own.rev, 1, MergeNames(own.heldLast, own.heldPrev))
+        -- (2.5.0: and the players that had it from our pull answers.)
+        self:SpreadWithdraw(own.rev, 1, MergeNames(MergeNames(own.heldLast, own.heldPrev), own.pulledBy))
         local me = self:PlayerName()
         if me then self:SendGuild("X:" .. self.VERSION .. ":" .. self.HANDS .. ":" .. me .. ":" .. own.rev) end
     end
@@ -1526,6 +1547,21 @@ function GF:IsContactName(name)
     return ok and yes == true
 end
 
+-- 2.5.0: a contact for what it whispers to US. The directory counts a player as a contact only
+-- while the relay heard it in the last five minutes (a route to whisper it by); the hands do not
+-- go through the relay, so a contact that had been quiet that long was a stranger here, and its
+-- word was dropped: the withdrawal of a listing it had brought us itself (the board then showed
+-- a group that no longer existed until its lifetime ran out: one board in six on the bench), a
+-- newer copy, a window's question. The whisper that has just arrived says it is there: a player
+-- that greeted us and that the member list (or our book) names is enough.
+function GF:IsContactSender(name)
+    if self:IsContactName(name) then return true end
+    local dir = Overlord.ChannelDirectory
+    if not dir or not dir.KeepsContactAlive or type(name) ~= "string" then return false end
+    local ok, yes = pcall(dir.KeepsContactAlive, dir, name)
+    return ok and yes == true
+end
+
 -- The directory's contacts (players that greeted us, listed, reached directly), names
 -- as the directory writes them; looked up again after CONTACTS_CACHE_SEC.
 function GF:Contacts()
@@ -1837,7 +1873,7 @@ function GF:HandSources(sender, leader, now)
         self:Strike(key, now)
         return nil
     end
-    if leaderKey ~= key and not self:IsContactName(canon) then
+    if leaderKey ~= key and not self:IsContactSender(canon) then
         self.handStats.stranger = self.handStats.stranger + 1
         return nil
     end
@@ -1975,15 +2011,31 @@ function GF:OnSpreadWithdraw(text, sender, viaGuild)
     -- WITHDRAW_FANS cut the leaf, last in passedTo, which kept a withdrawn listing for its lifetime.)
     local passed = MergeNames(entry.passedTo, entry.passedPrev, key, leaderKey,
         2 * (self:FanFor(handN + 1) + self.LEAF_COPIES))
+    local pulled = entry.pulledBy
     self:RemoveEntry(leaderKey)
     self.handStats.withdrawn = self.handStats.withdrawn + 1
     self:Touch()
+    local head = "X:" .. self.VERSION .. ":"
+    local told = {}
     if handN < self.HANDS and self:Mode() == "relay" then
         -- The players we passed it to (they hold it). Nobody: nothing to pass on (a contact drawn
         -- at random would refuse it: we did not bring it the listing).
         local granted = #passed > 0 and self:TakeHandTokens(#passed, now) or 0
-        local head = "X:" .. self.VERSION .. ":"
-        if granted > 0 then self:WhisperList(passed, granted, head .. (handN + 1) .. text:sub(#head + 2)) end
+        if granted > 0 then
+            local sent = self:WhisperList(passed, granted, head .. (handN + 1) .. text:sub(#head + 2))
+            for i = 1, sent do told[passed[i]:lower()] = true end
+        end
+    end
+    -- 2.5.0: the players that had it from our pull answers (whatever our own hand: they hold it
+    -- on our word alone, and pass it on to nobody: the last hand).
+    if pulled and self:Mode() == "relay" then
+        local askers = {}
+        for _, name in ipairs(pulled) do
+            local lower = name:lower()
+            if not told[lower] and lower ~= key and lower ~= leaderKey then askers[#askers + 1] = name end
+        end
+        local granted = #askers > 0 and self:TakeHandTokens(#askers, now) or 0
+        if granted > 0 then self:WhisperList(askers, granted, head .. self.HANDS .. text:sub(#head + 2)) end
     end
 end
 
@@ -1993,14 +2045,28 @@ function GF:MaybePull()
     if InInstance() or self:Mode() ~= "relay" then return false end
     local now = GetTime()
     local last = self._pullAt
-    if last and (now - last < self.PULL_GAP or (self.boardCount > 0 and now - last < self.PULL_FRESH)) then
+    -- 2.5.0: a contact that holds no listing says nothing, and the hands leave about one board in
+    -- five without a copy: one window in three that opened empty stayed empty for PULL_GAP while
+    -- a group was listed (bench, 36 clients). A board still empty PULL_LISTEN after its question,
+    -- without a word from the contact asked, asks another one: PULL_ASKS contacts in all, then
+    -- PULL_GAP as before, counted from the last question (three in any two minutes at most).
+    local pull = self._pull
+    local again = last ~= nil and pull ~= nil and self.boardCount == 0 and pull.msgs == 0
+        and (pull.asks or 1) < self.PULL_ASKS and now - pull.at >= self.PULL_LISTEN
+    if last and not again and (now - last < self.PULL_GAP or (self.boardCount > 0 and now - last < self.PULL_FRESH)) then
         return false
     end
-    local picked = self:PickContacts(1)
+    local picked = self:PickContacts(1, again and pull.key or nil, again and pull.first or nil)
     if not picked[1] or self:TakeHandTokens(1, now) == 0 then return false end
     self._pullAt = now
     if not self:Whisper(picked[1], "Q:" .. self.VERSION) then return false end
-    self._pull = { key = picked[1]:lower(), at = now, msgs = 0 }
+    -- (asked: when each contact of this round was asked; its answer is read PULL_WAIT from then,
+    -- the next contact asked meanwhile or not.)
+    local asked = again and pull.asked or {}
+    if again and not pull.asked then asked[pull.key] = pull.at end
+    asked[picked[1]:lower()] = now
+    self._pull = { key = picked[1]:lower(), at = now, msgs = 0, asked = asked,
+        asks = again and (pull.asks or 1) + 1 or 1, first = again and (pull.first or pull.key) or nil }
     self._pullListenUntil = now + self.PULL_LISTEN
     self.handStats.pulls = self.handStats.pulls + 1
     return true
@@ -2025,7 +2091,7 @@ function GF:OnPull(text, sender)
     local now = GetTime()
     if not key or self:IsStruck(key, now) then return end
     -- (A player the member list does not show asks too: its window is as good as any.)
-    if not self:IsContactName(canon) then
+    if not self:IsContactSender(canon) then
         local dir = Overlord.ChannelDirectory
         local okLeaf, leaf = pcall(function() return dir and dir.IsLeaf and dir:IsLeaf(canon) end)
         if not (okLeaf and leaf) then return end
@@ -2046,7 +2112,7 @@ function GF:OnPull(text, sender)
         -- (Rows heard in a pull answer are never served again: their withdrawal may have missed us.)
         if entry.rev and not entry.hearsay and leaderKey ~= key and entry.expires > now
             and age < (entry.ttl or 0) - 30 then
-            rows[#rows + 1] = { open = entry.count < entry.cap, sentAt = entry.sentAt,
+            rows[#rows + 1] = { open = entry.count < entry.cap, sentAt = entry.sentAt, entry = entry,
                 text = self:BundleItem(entry.name, entry.rev, age, string.format("%s:%s:%s:%s:%d:%d:%d:%d:%d:%d:%d",
                     faction, entry.intent, entry.kind, entry.target, entry.cap, entry.count, entry.minLevel,
                     (entry.auto and 1 or 0) + (entry.raid and 2 or 0), entry.class, entry.level, entry.ttl)) }
@@ -2055,7 +2121,7 @@ function GF:OnPull(text, sender)
     table.sort(rows, GF.CompareForPull)
     local own, me = self.own, self:PlayerName()
     if own and own.spreadLive and own.rev and me and now - (own.spreadAt or -1e9) < self.HAND_TTL - 30 then
-        table.insert(rows, 1, { text = self:BundleItem(me, own.rev, now - own.spreadAt,
+        table.insert(rows, 1, { own = own, text = self:BundleItem(me, own.rev, now - own.spreadAt,
             self:OwnBody(faction, own.sentCount, own.sentRaid, self.HAND_TTL)) })
     end
     if not rows[1] then return end
@@ -2063,24 +2129,38 @@ function GF:OnPull(text, sender)
     minute.count = minute.count + 1
     local head = "B:" .. self.VERSION .. ":"
     local messages, current, inCurrent = {}, nil, 0
+    -- (rowsOf: the rows each message carries, for their holders below.)
+    local rowsOf, carried = {}, {}
     for i = 1, math.min(#rows, self.PULL_ROWS) do
         local item = rows[i].text
         if current and inCurrent < self.PULL_PER_MSG and #current + 1 + #item <= self.PULL_BYTES then
             current, inCurrent = current .. "|" .. item, inCurrent + 1
+            carried[#carried + 1] = rows[i]
         else
-            if current then messages[#messages + 1] = current end
+            if current then
+                local at = #messages + 1
+                messages[at], rowsOf[at] = current, carried
+            end
             if #messages >= self.PULL_MSGS then
                 current = nil
                 break
             end
-            current, inCurrent = head .. item, 1
+            current, inCurrent, carried = head .. item, 1, { rows[i] }
         end
     end
-    if current and #messages < self.PULL_MSGS then messages[#messages + 1] = current end
+    if current and #messages < self.PULL_MSGS then
+        local at = #messages + 1
+        messages[at], rowsOf[at] = current, carried
+    end
     local granted = self:TakeHandTokens(#messages, now)
     for i = 1, granted do
         if not self:Whisper(canon, messages[i], true) then break end
         self.handStats.whispers = self.handStats.whispers + 1
+        -- 2.5.0: this asker now holds these rows on our word: told when they are withdrawn.
+        for _, row in ipairs(rowsOf[i] or {}) do
+            local holder = row.own or row.entry
+            if holder then holder.pulledBy = AddHolder(holder.pulledBy, canon, self.PULL_HOLDERS) end
+        end
     end
     self.handStats.answers = self.handStats.answers + 1
 end
@@ -2092,10 +2172,9 @@ function GF:OnBundle(text, sender)
     local pull = self._pull
     local now = GetTime()
     local key, canon = self:SenderKey(sender)
-    if not pull or not key or pull.key ~= key or now - pull.at > self.PULL_WAIT or pull.msgs >= self.PULL_MSGS then
-        return
-    end
-    if not self:IsContactName(canon) then return end
+    local askedAt = pull and key and ((pull.asked and pull.asked[key]) or (pull.key == key and pull.at)) or nil
+    if not askedAt or now - askedAt > self.PULL_WAIT or pull.msgs >= self.PULL_MSGS then return end
+    if not self:IsContactSender(canon) then return end
     pull.msgs = pull.msgs + 1
     local head = "B:" .. self.VERSION .. ":"
     if text:sub(1, #head) ~= head then return end

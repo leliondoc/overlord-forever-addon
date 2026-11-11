@@ -1463,3 +1463,163 @@ do
     GetCurrentRegionName = savedRegion
 end
 print("Rank proof: author badge OK")
+
+-- 24. 2.5.0: the same badge at the top right of the target's portrait and in the chat, in front
+-- of what such a player says. Both sides, the author as the top ranks; never a whisper, never in
+-- an instance, never a protected value; off with the option.
+do
+    local savedRegion, savedCreate, savedTarget = GetCurrentRegionName, CreateFrame, _G.TargetFrame
+    GetCurrentRegionName = function() return "EU" end
+    local made, anchors = {}, {}
+    CreateFrame = function(_, _, parent)
+        local f = { parent = parent, shown = false }
+        function f:SetSize(w, h) self.w, self.h = w, h end
+        function f:SetFrameLevel(level) self.level = level end
+        function f:CreateTexture() return { SetAllPoints = function() end, SetTexture = function(t, path) f.texture = path end } end
+        function f:SetPoint(...) anchors[#anchors + 1] = { ... } end
+        function f:Show() self.shown = true end
+        function f:Hide() self.shown = false end
+        function f:IsShown() return self.shown end
+        made[#made + 1] = f
+        return f
+    end
+    local portrait = {}
+    _G.TargetFrame = { portrait = portrait, GetObjectType = function() return "Button" end, GetFrameLevel = function() return 3 end }
+    local savedExists = UnitExists
+    UnitExists = function(unit) return units[unit] ~= nil end
+    -- Nobody targeted, a creature, a player without a rank: nothing, and no frame made.
+    units.target = nil
+    assert(RP:PaintTargetBadge() == false and #made == 0, "a badge without a target")
+    units.target = { name = "Plain Nobody", faction = "Alliance", guid = "Player-1-PN2" }
+    assert(RP:PaintTargetBadge() == false and #made == 0, "a badge for a player without a rank")
+    -- The author, on our side and on the other one.
+    units.target = { name = "Troma Orcbane", faction = "Alliance", guid = "Player-1-TROMA" }
+    assert(RP:PaintTargetBadge() == true and #made == 1 and made[1].shown, "the author targeted shows no badge")
+    assert(made[1].parent == _G.TargetFrame and made[1].texture == R:GetRankIcon(R.AUTHOR_RANK)
+        and made[1].w == RP.TARGET_BADGE_SIZE and made[1].level == 9, "the badge of the author on the target frame")
+    assert(anchors[1][1] == "CENTER" and anchors[1][2] == portrait and anchors[1][3] == "TOPRIGHT"
+        and anchors[1][4] < 0 and anchors[1][5] < 0, "the badge is not at the top right of the portrait")
+    units.target = { name = "Troma Orcbane", faction = "Horde", guid = "Player-1-TROMA" }
+    assert(RP:PaintTargetBadge() == true and #made == 1, "the author seen from the other side (one frame, reused)")
+    -- Another target: hidden again. An instance: hidden.
+    units.target = { name = "Plain Nobody", faction = "Alliance", guid = "Player-1-PN2" }
+    assert(RP:PaintTargetBadge() == false and not made[1].shown, "the badge stayed on another target")
+    units.target = { name = "Troma Orcbane", faction = "Alliance", guid = "Player-1-TROMA" }
+    RP:PaintTargetBadge()
+    IsInInstance = function() return true end
+    assert(RP:PaintTargetBadge() == false and not made[1].shown, "a badge in an instance")
+    IsInInstance = function() return false end
+    units.target = nil
+
+    -- The chat, where a chat window cannot rewrite a line (no such window in this fixture yet):
+    -- the badge in front of the text, the author's name and everything else untouched.
+    OverlordDB.config = OverlordDB.config or {}
+    RP.chatRanks = nil
+    local kept, text, author, extra = RP.ChatBadgeFilter(nil, "CHAT_MSG_SAY", "hello there", "Troma Orcbane", "third")
+    assert(kept == false and author == "Troma Orcbane" and extra == "third", "the filter changed more than the text")
+    assert(text == "|T" .. R:GetRankIcon(R.AUTHOR_RANK) .. ":14:14:0:0|t hello there", "the author's line in chat: " .. tostring(text))
+    assert(select("#", RP.ChatBadgeFilter(nil, "CHAT_MSG_SAY", "hi", "Plain Nobody")) == 1,
+        "a player without a rank got a badge in chat")
+    -- Looked up once per author for a while, whatever he says.
+    local looked, getRank = 0, RP.GetBadgeRank
+    RP.GetBadgeRank = function(...) looked = looked + 1 return getRank(...) end
+    RP.chatRanks = nil
+    for _ = 1, 20 do RP.ChatBadgeFilter(nil, "CHAT_MSG_CHANNEL", "spam", "Troma Orcbane") end
+    assert(looked == 1, "the rank of a chat author was looked up " .. looked .. " times for 20 lines")
+    RP.GetBadgeRank = getRank
+    -- Off, in an instance, or a value the game protects: untouched.
+    OverlordDB.config.chatBadges = false
+    assert(select("#", RP.ChatBadgeFilter(nil, "CHAT_MSG_SAY", "hi", "Troma Orcbane")) == 1, "a badge with the option off")
+    OverlordDB.config.chatBadges = nil
+    IsInInstance = function() return true end
+    assert(select("#", RP.ChatBadgeFilter(nil, "CHAT_MSG_SAY", "hi", "Troma Orcbane")) == 1, "a chat badge in an instance")
+    IsInInstance = function() return false end
+    local savedAccess = canaccessvalue
+    canaccessvalue = function(value) return value ~= "secret" end
+    assert(select("#", RP.ChatBadgeFilter(nil, "CHAT_MSG_SAY", "secret", "Troma Orcbane")) == 1
+        and select("#", RP.ChatBadgeFilter(nil, "CHAT_MSG_SAY", "hi", "secret")) == 1, "a protected value was read or rewritten")
+    canaccessvalue = savedAccess
+    -- Where a chat window can rewrite a line it holds (the game's client): the filter changes
+    -- nothing, and on the next frame the badge is inside the bracket, left of the name.
+    do
+        local savedFrames, savedTimer = CHAT_FRAMES, C_Timer
+        local later, waits = {}, {}
+        C_Timer = { After = function(wait, fn) later[#later + 1] = fn; waits[#waits + 1] = wait end }
+        RP.chatMarkAt = nil
+        local function window()
+            local frame = { lines = {} }
+            -- (As the client does: predicate and rewrite get the line's text, colours and extras.)
+            function frame:TransformMessages(predicate, rewrite)
+                for i, line in ipairs(self.lines) do
+                    if predicate(unpack(line, 1, 10)) then self.lines[i] = { rewrite(unpack(line, 1, 10)) } end
+                end
+            end
+            return frame
+        end
+        ChatFrameOne, ChatFrameTwo = window(), window()
+        CHAT_FRAMES = { "ChatFrameOne", "ChatFrameTwo" }
+        local function show(frame, lineID, name, said)
+            local args = { said, name, "", "1. General", "", "", 1, 1, "General", 0, lineID }
+            local text = "|Hchannel:channel:1|h[1. General]|h |Hplayer:" .. name .. ":" .. lineID .. ":CHANNEL:1|h[|cffc79c6e"
+                .. name .. "|r]|h: " .. said
+            frame.lines[#frame.lines + 1] = { text, 1, 1, 1, 7, "a", "t", "CHAT_MSG_CHANNEL", args, function() end }
+            return RP.ChatBadgeFilter(frame, "CHAT_MSG_CHANNEL", unpack(args, 1, 11))
+        end
+        RP.chatRanks = nil
+        local mark = "|T" .. R:GetRankIcon(R.AUTHOR_RANK) .. ":14:14:0:0|t"
+        assert(select("#", show(ChatFrameOne, 41, "Troma Orcbane", "is wetlands ?")) == 1, "the filter rewrote a line the window can mark")
+        show(ChatFrameTwo, 41, "Troma Orcbane", "is wetlands ?")
+        show(ChatFrameOne, 42, "Plain Nobody", "hello |Hplayer:x|h[x]|h")
+        show(ChatFrameOne, 43, "Troma Orcbane", "again")
+        assert(#later == 1, "one pass for the lines of a frame, armed " .. #later .. " times")
+        assert(not ChatFrameOne.lines[1][1]:find(mark, 1, true), "fixture: marked before the next frame")
+        later[1]()
+        local want = "|Hchannel:channel:1|h[1. General]|h |Hplayer:Troma Orcbane:41:CHANNEL:1|h[" .. mark
+            .. "|cffc79c6eTroma Orcbane|r]|h: is wetlands ?"
+        assert(ChatFrameOne.lines[1][1] == want, "the author's line: " .. ChatFrameOne.lines[1][1])
+        assert(ChatFrameTwo.lines[1][1] == want, "the same line in a second window was not marked")
+        assert(ChatFrameOne.lines[3][1]:find("|h[" .. mark .. "|cffc79c6eTroma Orcbane", 1, true), "his second line was not marked")
+        assert(not ChatFrameOne.lines[2][1]:find("|T", 1, true), "a player without a rank was marked")
+        -- (Everything the window kept with the line is still there.)
+        assert(ChatFrameOne.lines[1][8] == "CHAT_MSG_CHANNEL" and ChatFrameOne.lines[1][9][11] == 41
+            and type(ChatFrameOne.lines[1][10]) == "function" and ChatFrameOne.lines[1][5] == 7, "the line lost what the window kept with it")
+        -- A second pass marks nothing twice; a line without an id keeps the badge before its text.
+        RP.chatPending, RP.chatPendingCount = { [41] = mark }, 1
+        RP:MarkChatLines()
+        assert(ChatFrameOne.lines[1][1] == want, "a line was marked twice")
+        local _, text = RP.ChatBadgeFilter(ChatFrameOne, "CHAT_MSG_SAY", "hi", "Troma Orcbane", "", "", "", "", 0, 0, "", 0, 0)
+        assert(text == mark .. " hi", "a line without an id: " .. tostring(text))
+        -- The first pass on the next frame; another one right after it waits (passes are spaced),
+        -- and the combat log's window is never read.
+        assert(waits[1] == 0, "the first pass was not for the next frame: " .. tostring(waits[1]))
+        local combat = window()
+        local read = 0
+        function combat:TransformMessages() read = read + 1 end
+        ChatFrame2 = combat
+        CHAT_FRAMES = { "ChatFrameOne", "ChatFrame2", "ChatFrameTwo" }
+        show(ChatFrameOne, 44, "Troma Orcbane", "soon after")
+        assert(#later == 2 and waits[2] > 0 and waits[2] <= RP.CHAT_MARK_GAP, "a second pass right after the first: " .. tostring(waits[2]))
+        later[2]()
+        assert(read == 0, "the combat log's window was read")
+        assert(ChatFrameOne.lines[#ChatFrameOne.lines][1]:find("|h[" .. mark, 1, true), "the line of the spaced pass was not marked")
+        ChatFrame2 = nil
+        CHAT_FRAMES, C_Timer, ChatFrameOne, ChatFrameTwo = savedFrames, savedTimer, nil, nil
+        RP.chatPending, RP.chatPendingCount, RP.chatMarkArmed = nil, nil, nil
+    end
+    -- Whispers are never filtered, and the filters go through the game's own registry.
+    for _, event in ipairs(RP.CHAT_EVENTS) do
+        assert(not event:find("WHISPER", 1, true) and not event:find("BN_", 1, true), "a whisper event is filtered: " .. event)
+    end
+    local added = {}
+    local savedUtil, savedAdd = ChatFrameUtil, ChatFrame_AddMessageEventFilter
+    ChatFrameUtil = nil
+    ChatFrame_AddMessageEventFilter = function(event, fn) added[#added + 1] = { event, fn } end
+    RP.chatFilter = nil
+    assert(RP:InstallChatBadges() == true and #added == #RP.CHAT_EVENTS and added[1][2] == RP.ChatBadgeFilter,
+        "the chat filters were not installed")
+    RP:InstallChatBadges()
+    assert(#added == #RP.CHAT_EVENTS, "the chat filters were installed twice")
+    ChatFrameUtil, ChatFrame_AddMessageEventFilter = savedUtil, savedAdd
+    GetCurrentRegionName, CreateFrame, _G.TargetFrame, UnitExists = savedRegion, savedCreate, savedTarget, savedExists
+end
+print("Rank proof: target portrait and chat badges OK")

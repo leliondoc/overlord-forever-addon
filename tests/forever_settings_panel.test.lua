@@ -123,7 +123,22 @@ for _, init in ipairs(inits) do
     if init.header then headers = headers + 1 end
     if init.button then buttons[#buttons + 1] = init end
 end
-assert(headers == 4 and #buttons == 2, "Sections or buttons missing")
+-- (2.5.0: a third button, the author's contact link, moved here from the panel's grid.)
+assert(headers == 4 and #buttons == 3, "Sections or buttons missing")
+do
+    local contact
+    for _, b in ipairs(buttons) do if b.name == "Contact the author" then contact = b end end
+    assert(contact and contact.button == "Contact", "the contact button of the options is missing")
+    local opened, savedUI, savedTimer = 0, Overlord.UI, C_Timer
+    local later = {}
+    C_Timer = { After = function(_, fn) later[#later + 1] = fn end }
+    Overlord.UI = { ShowContactPopup = function() opened = opened + 1 end }
+    contact.click()
+    assert(opened == 0 and #later == 1, "the contact link opened inside the options' own click")
+    later[1]()
+    assert(opened == 1, "the contact button of the options opens nothing")
+    Overlord.UI, C_Timer = savedUI, savedTimer
+end
 -- Blizzard adds a button's search tags from our call: the Options search would read them, then
 -- refuse the Discord button's protected call in our name.
 for _, b in ipairs(buttons) do

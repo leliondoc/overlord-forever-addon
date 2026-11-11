@@ -685,7 +685,9 @@ local ScheduleAttempt
 -- Un C_Timer.After possede par generation : jamais plus d'un reveil arme.
 -- fast (2.2.0): partners of the channel's member list answer, rounds come closer
 -- (SyncDirectory.lua, LADDER_*).
-local function ArmNextHistoryCatchup(delay, fast, productive)
+-- fed (2.5.0): enough peers feed us the rows that move (sync:LadderFeedSources): the next round
+-- only has to renew a subscription and catch what the feed could not carry, LADDER_FED_SEC away.
+local function ArmNextHistoryCatchup(delay, fast, productive, fed)
     sync._historyCatchupWakeGeneration =
         math.floor(tonumber(sync._historyCatchupWakeGeneration) or 0) + 1
     local generation = sync._historyCatchupWakeGeneration
@@ -698,6 +700,9 @@ local function ArmNextHistoryCatchup(delay, fast, productive)
     if productive and directory then
         delay, jitter, shortest = directory.LADDER_HOT_SEC, math.random and math.random(0, directory.LADDER_HOT_JITTER) or 0,
             directory.LADDER_HOT_SEC
+    elseif fed and directory then
+        delay, jitter, shortest = directory.LADDER_FED_SEC, math.random and math.random(0, directory.LADDER_FED_JITTER) or 0,
+            directory.LADDER_FED_SEC
     end
     C_Timer.After(math.max(shortest, math.floor(tonumber(delay) or RECENT_ACK_SEC) + jitter), function()
         if not Overlord.Sync
@@ -796,8 +801,15 @@ local function FinishRound(pending, success, target)
     else
         sync._hotStreak = 0
     end
+    -- 2.5.0: an idle round while enough peers feed us: the rows that move come by the feed, the
+    -- next round rests longer (a round that brought rows keeps the pace above: the feed missed them).
+    local fed = false
+    if fast and success and productive ~= true and sync.LadderFeedSources and directory.LADDER_FED_SOURCES then
+        local okFed, sources = pcall(sync.LadderFeedSources, sync)
+        fed = okFed and (tonumber(sources) or 0) >= directory.LADDER_FED_SOURCES
+    end
     ArmNextHistoryCatchup(fast and directory.LADDER_ACK_SEC or v8Round and V8_RECENT_ACK_SEC
-        or success and RECENT_ACK_SEC or EXHAUSTED_RETRY_SEC, fast, productive == true)
+        or success and RECENT_ACK_SEC or EXHAUSTED_RETRY_SEC, fast, productive == true, fed)
     pcall(MaybeRequestOutpostHistory, success and target or nil, pending.forceHistory)
     NotifyLadderBadge()
 end

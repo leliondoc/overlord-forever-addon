@@ -6,7 +6,10 @@
 -- surtout les joueurs de la meme faction que la guilde qui voient ses kills. Chaque K
 -- porte le total absolu du tueur, sa guilde, le lieu et l'epoch de score ; la
 -- difference entre deux K successifs donne le nombre de kills reels.
--- Seuil fixe pour tous : 20 kills par 5 membres distincts sur 5 min glissantes.
+-- Seuil fixe pour tous : 50 kills par 5 membres distincts sur 5 min glissantes.
+-- (2.5.0 : 50, c'etait 20. Un kill honorable est compte a chaque membre du groupe present : un
+-- groupe de cinq qui tuait quatre joueurs faisait deja un "carnage". Une annonce recue sous le
+-- seuil, celle d'un client plus ancien, n'est ni affichee ni passee plus loin : memes controles.)
 --
 -- Diffusion : le client qui detecte le raid attend 0,5 a 6 s puis emet UN message
 -- GW par le relais (groupe, canal, amis Battle.net qui font le pont vers l'autre
@@ -42,7 +45,7 @@ local EPOCH_TOLERANCE = 3 * 86400
 -- evict-and-insert.)
 local MAX_PLAYERS = 4000
 local MAX_GUILDS = 500
--- A threshold (20 kills, 5 members) is reached long before; bounds memory
+-- A threshold (50 kills, 5 members) is reached long before; bounds memory
 -- (500 guilds x 64 events of ~360 B at worst).
 local MAX_EVENTS_PER_GUILD = 64
 local NETWORK_MAX_AGE = 300   -- un GW relaye plus vieux que 5 min n'est plus d'actualite
@@ -57,7 +60,7 @@ local GW_TRANSPORTS = { BETA = true, CHANNEL = true, PARTY = true, RAID = true, 
 
 -- Seuil commun a tous les clients : c'est lui qui declenche l'envoi reseau, donc
 -- il ne doit pas etre personnalisable (sinon un seuil bas alerterait tout le monde).
-GKA.KILL_THRESHOLD = 20
+GKA.KILL_THRESHOLD = 50
 GKA.MEMBER_THRESHOLD = 5
 
 local players, playerCount = {}, 0   -- [nom minuscule] = { total, at, epoch, guild, slot }
@@ -180,6 +183,54 @@ local function ConsumeKillDelta(playerKey, total, epoch, guildKey, now)
     return 1
 end
 
+-- 2.5.0: the size of the fights ("Recent activity") counts on a base of its own: the highest
+-- total counted per player, whether it was heard live (a K) or taken from the ranking feed with
+-- its zone. The rampage base above stays what it was (live totals only): a fed total in between
+-- two live ones must not shrink what the second one credits to a guild. Two flat tables, emptied
+-- whole at FIGHT_BASE_MAX players or on another week.
+local FIGHT_BASE_MAX = 4000
+local fightTotal, fightAt, fightCount, fightEpoch = {}, {}, 0, nil
+local function ResetFightBase()
+    fightTotal, fightAt, fightCount = {}, {}, 0
+end
+-- liveDelta: what the rampage base made of a live total (nil for a fed one). Without a base of
+-- ours, a live total counts what it counted before 2.5.0, a fed one a single kill.
+local function FightDelta(playerKey, total, epoch, now, liveDelta)
+    epoch = tonumber(epoch)
+    if epoch and epoch > 0 then
+        if fightEpoch and not EpochsMatch(epoch, fightEpoch) then ResetFightBase() end
+        fightEpoch = epoch
+    end
+    local base = fightTotal[playerKey]
+    if base and now - (fightAt[playerKey] or -1e9) <= BASELINE_TTL then
+        local delta = total - base
+        if delta <= 0 then return 0 end
+        fightTotal[playerKey], fightAt[playerKey] = total, now
+        return delta > MAX_DELTA and 1 or delta
+    end
+    -- (A late copy of an older total says nothing, and replaces no higher base.)
+    if liveDelta == 0 or (base and total < base) then return 0 end
+    if not base then
+        if fightCount >= FIGHT_BASE_MAX then
+            -- (The bases past their life first; emptied whole only if that frees nothing: a
+            -- whole wipe made every fighter in progress count one kill for his next total.)
+            local kept = 0
+            for known, seenAt in pairs(fightAt) do
+                if now - seenAt > BASELINE_TTL then
+                    fightTotal[known], fightAt[known] = nil, nil
+                else
+                    kept = kept + 1
+                end
+            end
+            fightCount = kept
+            if kept >= FIGHT_BASE_MAX then ResetFightBase() end
+        end
+        fightCount = fightCount + 1
+    end
+    fightTotal[playerKey], fightAt[playerKey] = total, now
+    return liveDelta or 1
+end
+
 local function ClearPlayerBaseline(playerKey)
     if players[playerKey] ~= nil then
         players[playerKey] = nil
@@ -299,10 +350,25 @@ local function GetGuild(guildName, faction, now)
 end
 
 -- Shard connu d'un joueur (meme source que les alertes de capture), en nombre.
+-- (2.5.0: the number itself, from the layers we hold. The alert's tag may now be a link whose
+-- colour code holds digits of its own: read from it, every rampage was on "layer 71".)
 local function KnownShardOf(playerName)
+    if type(playerName) ~= "string" or playerName == "" then return nil end
+    local shard = Overlord.Shard
+    -- (The simulation of "/ov guildkills test" writes its layers in the tag only.)
+    local alerts = Overlord.GuildKillAlert
+    if shard and shard.ResolveKnownShardPlayer and not (alerts and alerts._simulating) then
+        local ok, _, layer = pcall(shard.ResolveKnownShardPlayer, shard, playerName, true)
+        if ok and not layer then ok, _, layer = pcall(shard.ResolveKnownShardPlayer, shard, playerName, false) end
+        -- (Nothing more to find in the tag: it reads the same layers, by the same two passes.)
+        return ok and tonumber(layer) or nil
+    end
+    -- (Without it, the tag's text, its link and colour codes taken out first.)
     local sync = Overlord.Sync
     local tag = sync and sync.GetShardAlertTagForPlayer and sync:GetShardAlertTagForPlayer(playerName)
-    return tonumber(type(tag) == "string" and tag:match("(%d+)") or nil)
+    if type(tag) ~= "string" then return nil end
+    tag = tag:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|H.-|h", ""):gsub("|h", ""):gsub("|r", "")
+    return tonumber(tag:match("(%d+)"))
 end
 
 -- Totaux de la fenetre : kills, membres distincts, lieu le plus frequent (pondere
@@ -432,7 +498,14 @@ function GKA:BuildAlertText(guildName, faction, kills, members, zoneRef, shard, 
     local shardSuffix = ""
     if shard then
         local tag = string.format((L and L.SHARD_ALERT_TAG) or " #%s", tostring(shard))
-        shardSuffix = " (" .. (tag:match("^%s*(.-)%s*$") or tag) .. ")"
+        tag = tag:match("^%s*(.-)%s*$") or tag
+        -- 2.5.0: the layer can be clicked (no player named: those of ours known on that layer).
+        local jumper = Overlord.LayerJumper
+        if jumper and jumper.ChatLink and not self._simulating then
+            local ok, linked = pcall(jumper.ChatLink, jumper, nil, shard, tag)
+            if ok and type(linked) == "string" then tag = linked end
+        end
+        shardSuffix = " (" .. tag .. ")"
     end
     local location = ResolveLocationLabel(zoneRef)
     if ally then
@@ -498,12 +571,21 @@ function GKA:OnLiveKill(playerName, faction, guildName, totalKills, zoneId, scor
     local now = Now()
     local playerKey = playerName:lower()
     local delta = ConsumeKillDelta(playerKey, math.floor(total), tonumber(scoreEpoch), guildKey, now)
+    -- (The fights' own base moves with every total, a settled one too; see FightDelta.)
+    local fightDelta = 0
+    if not self._simulating then
+        fightDelta = FightDelta(playerKey, math.floor(total), scoreEpoch, now, delta)
+    end
     if settled then return end
     -- Taille des combats du dock : les memes kills, avec ou sans guilde (aucun paquet).
     local fa = Overlord.FrontActivity
     local validZone = IsValidZoneRef(zoneId)
-    if delta > 0 and not self._simulating and fa and fa.RecordKills and validZone then
-        pcall(fa.RecordKills, fa, zoneId, delta)
+    if fightDelta > 0 and fa and fa.RecordKills and validZone then
+        pcall(fa.RecordKills, fa, zoneId, fightDelta)
+        -- 2.5.0: where these kills were made goes with the player's row of the ranking feed.
+        local sync = Overlord.Sync
+        local feed = sync and sync._leaderboardFeed
+        if feed and feed.noteZone then pcall(feed.noteZone, playerName, zoneId) end
     end
     if delta <= 0 or not hasGuild then return end
 
@@ -514,6 +596,21 @@ function GKA:OnLiveKill(playerName, faction, guildName, totalKills, zoneId, scor
     if #events > MAX_EVENTS_PER_GUILD then ReleaseEvent(table.remove(events, 1)) end
 
     self:Evaluate(guild, now)
+end
+
+-- 2.5.0: a kill total taken from the ranking feed with the zone of its kills
+-- (SyncLeaderboardPages). The same base as a live total of that player for the size of the
+-- fights (FightDelta): the kills are counted once, whichever comes first. Only the size of the
+-- fight ("Recent activity"): a rampage is still told by those who heard the kills themselves,
+-- and its own base is not touched.
+function GKA:OnFedKill(playerName, totalKills, zoneRef, scoreEpoch)
+    if Overlord.InstanceSuspended or self._simulating then return end
+    if type(playerName) ~= "string" or playerName == "" or not IsValidZoneRef(zoneRef) then return end
+    local total = tonumber(totalKills)
+    if not total or total <= 0 then return end
+    local delta = FightDelta(playerName:lower(), math.floor(total), scoreEpoch, Now(), nil)
+    local fa = Overlord.FrontActivity
+    if delta > 0 and fa and fa.RecordKills then pcall(fa.RecordKills, fa, zoneRef, delta) end
 end
 
 function GKA:Evaluate(guild, now)
@@ -824,6 +921,8 @@ end
 function GKA:_ResetState(keepPersisted)
     players, playerCount = {}, 0
     playerOrder, playerHead, playerTail = {}, 1, 0
+    ResetFightBase()
+    fightEpoch = nil
     guilds, guildCount = {}, 0
     networkShownAt = {}
     if OverlordDB and not keepPersisted then OverlordDB.guildKillAlertSeen = nil end

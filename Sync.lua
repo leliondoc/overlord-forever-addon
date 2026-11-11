@@ -2375,6 +2375,9 @@ function Overlord.Sync:Send(msgType, data, groupOnly)
         return self:SendAddonChecked(msg, "RAID")
     end
     if IsInGroup() then
+        -- 2.5.0: the two-player group of a layer change (LayerJumper): the partner is a stranger
+        -- for a few seconds, nothing is sent to it.
+        if Overlord.LayerJumper and Overlord.LayerJumper.IsHopGroup and Overlord.LayerJumper:IsHopGroup() then return true end
         return self:SendAddonChecked(msg, "PARTY")
     end
 
@@ -4052,6 +4055,9 @@ end
 -- Chat capture : dedup par (zone, faction, capturedTime) + fenetre courte (C + ZS captured).
 local function AppendShardTagToPlayerName(nameHint, shardHint)
     if not nameHint or nameHint == "" then return nameHint end
+    -- (2.5.0: a name from the network goes into a chat line: its escape character is doubled,
+    -- so that it can open no colour, texture nor link of its own.)
+    if type(nameHint) == "string" and nameHint:find("|", 1, true) then nameHint = nameHint:gsub("|", "||") end
     local sid = tonumber(shardHint)
     local shardMod = Overlord.Shard
     if not sid and shardMod and shardMod.ResolveKnownShardPlayer then
@@ -4065,15 +4071,22 @@ local function AppendShardTagToPlayerName(nameHint, shardHint)
     -- After a name the tag takes a comma ("Name, layer #1234"): the name and the
     -- layer read as two things.
     local tag = L and (L.SHARD_ALERT_NAME_TAG or L.SHARD_ALERT_TAG)
-    if tag then
-        return nameHint .. string.format(tag, tostring(sid))
+    local text = tag and string.format(tag, tostring(sid)) or (" #" .. tostring(sid))
+    -- 2.5.0: the layer can be clicked (LayerJumper asks that player for an invitation). Only
+    -- where the game hands the click of an "addon" link to its addon (EventRegistry).
+    local jumper = Overlord.LayerJumper
+    if jumper and jumper.ChatLink then
+        local ok, linked = pcall(jumper.ChatLink, jumper, nameHint, sid, text)
+        if ok and type(linked) == "string" then text = linked end
     end
-    return nameHint .. " #" .. tostring(sid)
+    return nameHint .. text
 end
 
 -- Meme etiquette " #shard" que les alertes de capture, pour les autres modules.
 function Overlord.Sync:GetShardAlertTagForPlayer(nameHint)
     if type(nameHint) ~= "string" or nameHint == "" then return "" end
+    -- (A name with an escape character is nobody's: its doubled copy has another length.)
+    if nameHint:find("|", 1, true) then return "" end
     local tagged = AppendShardTagToPlayerName(nameHint)
     if not tagged or tagged == nameHint then return "" end
     return tagged:sub(#nameHint + 1)
@@ -7001,6 +7014,10 @@ local function SyncSenderIsInOurGroup(sender)
         and Overlord.Sync:GetCaptureContributorDedupKey(sender)) or sender:lower()
     if not want or want == "" then return false end
     if GetGroupMemberNames()[want:lower()] == nil then return false end
+    -- 2.5.0: the partner of a layer change (LayerJumper) is grouped with us for a few seconds
+    -- and earns no group trust.
+    local jumper = Overlord.LayerJumper
+    if jumper and jumper.IsHopPartner and jumper:IsHopPartner(sender) then return false end
     return true
 end
 
@@ -10546,6 +10563,8 @@ function Overlord.Sync:OnGroupChanged()
             if not sync then return end
             local joinCatchUp = priv.groupJoinCatchUpPending
             priv.groupJoinCatchUpPending = false
+            -- 2.5.0: the two-player group of a layer change: same realm, same map, no catch-up.
+            if Overlord.LayerJumper and Overlord.LayerJumper.IsHopGroup and Overlord.LayerJumper:IsHopGroup() then return end
             if sync.IsLargeEvent and sync:IsLargeEvent() and not joinCatchUp then
                 if sync.ScheduleActivePeriodicCatchUp then
                     sync:ScheduleActivePeriodicCatchUp()
@@ -10562,6 +10581,7 @@ function Overlord.Sync:OnGroupChanged()
         and self.IsLargeEvent and self:IsLargeEvent() and IsInGroup() then
         C_Timer.After(5, function()
             if Overlord.InstanceSuspended or not Overlord.InActiveFront then return end
+            if Overlord.LayerJumper and Overlord.LayerJumper.IsHopGroup and Overlord.LayerJumper:IsHopGroup() then return end
             if Overlord.Sync and Overlord.Sync.RequestRaidLeaderboardCatchUp then
                 Overlord.Sync:RequestRaidLeaderboardCatchUp()
             end
@@ -10595,7 +10615,7 @@ function Overlord.Sync:SendKillBroadcast(payload)
             -- next kill carries the newer total (seen live: group copies refused in pairs, code 3).
         elseif raidOk then
             self:SendAddonChecked(msg, "RAID")
-        elseif IsInGroup() then
+        elseif IsInGroup() and not (Overlord.LayerJumper and Overlord.LayerJumper.IsHopGroup and Overlord.LayerJumper:IsHopGroup()) then
             self:SendAddonChecked(msg, "PARTY")
         end
         self:SendToChannel("K", payload)

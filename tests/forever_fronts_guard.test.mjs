@@ -159,10 +159,20 @@ test("Forever panel greys disabled modules", () => {
     assert.match(ui, /if Overlord\.GroupFinderUI then Overlord\.GroupFinderUI:Toggle\(\) end/);
     assert.match(ui, /if not Overlord\.GroupFinderUI then\s+self\.SetWC3ButtonUnavailable\(groupsBtn, foreverUnavailable\)/);
     assert.match(ui, /panelOpen\(zoneListFrame\.groupsBtn, nextState\.groups\)/);
-    assert.doesNotMatch(ui, /Overlord\.LayerJumper|layerBtn|LAYER_JUMPER/);
+    // 2.5.0: the layers are back as a list (LayerJumper.lua) opened from the layer number at
+    // the top left of the panel and from a Layers button of the grid (row 4, left, where
+    // Contact was); no LAYER_JUMPER text.
+    assert.doesNotMatch(ui, /layerBtn|LAYER_JUMPER/);
+    assert.match(ui, /layersBtn:SetPoint\("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY\(4\)\)/);
+    assert.match(ui, /layersBtn:SetScript\("OnClick", function\(\)\s+local jumper = Overlord\.LayerJumper\s+if jumper and jumper\.Toggle then jumper:Toggle\(\) end/);
+    assert.match(ui, /panelOpen\(zoneListFrame\.layersBtn, nextState\.layers\)/);
+    assert.match(ui, /shardFrame:SetScript\("OnClick", function\(\)\s+local jumper = Overlord\.LayerJumper\s+if jumper and jumper\.Toggle then jumper:Toggle\(\) end/);
     assert.doesNotMatch(locales, /LAYER_JUMPER/);
-    assert.match(ui, /contactBtn:SetPoint\("TOPLEFT", actionsCard, "TOPLEFT", 4, ActionGridRowY\(4\)\)/);
-    assert.match(ui, /Overlord\.UI:ShowContactPopup\(\)/);
+    // The author's contact link: no longer a grid button, a button row of the options.
+    assert.doesNotMatch(ui, /contactBtn/);
+    assert.match(ui, /function Overlord\.UI:ShowContactPopup\(\)/);
+    const settings = readFileSync(new URL("../SettingsPanel.lua", import.meta.url), "utf8");
+    assert.match(settings, /kind = "button", label = "CONTACT_POPUP_TITLE"[\s\S]{0,400}Overlord\.UI:ShowContactPopup\(\)/);
     assert.match(readFileSync(new URL("../Core.lua", import.meta.url), "utf8"), /Overlord\.CONTACT_URL = "https:\/\/x\.com\/TromaFR"/);
     assert.match(locales, /L\.CONTACT_BUTTON = "Contact"/);
     // 2.2.1: the website link in place of "Your rank", same link window.

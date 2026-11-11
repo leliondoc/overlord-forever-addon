@@ -1643,7 +1643,12 @@ local function CapturerGroupUnit(name)
     end
     return nil
 end
-function Lease:IsGroupMember(name) return CapturerGroupUnit(name) ~= nil end
+-- (2.5.0: never the partner of a layer change, grouped with us for a few seconds: LayerJumper.)
+function Lease:IsGroupMember(name)
+    if CapturerGroupUnit(name) == nil then return false end
+    local jumper = Overlord.LayerJumper
+    return not (jumper and jumper.IsHopPartner and jumper:IsHopPartner(name))
+end
 
 -- Does the game itself show this member of our group off the point? true: dead, a ghost,
 -- disconnected, or standing outside the disc; false: his position is inside it (he stands
@@ -1791,7 +1796,7 @@ function Lease:YieldAwayWave(zone, owner, capturerName, decision, firstHand)
     -- A relief only (it says so in its id), by a member of our group. Any other capture of the
     -- point (a guild mate's on another layer, begun while we were off ours for a moment) is
     -- not carrying ours on: ours stays ours to come back to, as it always did.
-    if not IsReliefWave(decision.waveId) or not CapturerGroupUnit(capturerName) then return false end
+    if not IsReliefWave(decision.waveId) or not Lease:IsGroupMember(capturerName) then return false end
     local nowWall = Overlord.ServerNow and Overlord.ServerNow() or time()
     local began = WaveBeganAt(decision.waveId)
     if began > nowWall + 5 or began < nowWall - 3600

@@ -218,4 +218,33 @@ do
         "a general already in sight got no badge on his nameplate when he took command")
     UnitExists = oldUnitExists
 end
+
+-- 2.5.0: while the channel does not carry, a remote Commander's position comes along the chain
+-- about once a minute: its icon outlives a missed beat. With the channel, as before.
+do
+    local savedDirectory = Overlord.ChannelDirectory
+    Overlord.ChannelDirectory = nil
+    expect(general:EntryStaleSec() == general.ENTRY_STALE_SEC, "the Commander's life changed while the channel carries")
+    serverNow = serverNow + 10
+    expect(general:ApplyRemoteClaim("Plate General", "Alliance", "eu", 1, 1, 1, serverNow, false), "fixture: claim")
+    now = now + general.ENTRY_STALE_SEC + 5
+    expect(general:GetSlot("Alliance") == nil, "a silent Commander kept past ENTRY_STALE_SEC while the channel carries")
+    Overlord.ChannelDirectory = { IsActive = function() return true end }
+    expect(general:EntryStaleSec() == general.ENTRY_STALE_CHAIN_SEC and general.ENTRY_STALE_CHAIN_SEC >= 180,
+        "the Commander's life without the channel")
+    serverNow = serverNow + 10
+    expect(general:ApplyRemoteClaim("Plate General", "Alliance", "eu", 1, 1, 1, serverNow, false), "fixture: second claim")
+    now = now + 150
+    general:PruneStale()
+    expect(general:GetSlot("Alliance") ~= nil and #general:GetActiveList() >= 1,
+        "the Commander's icon was lost between two positions of the chain")
+    expect(general:ApplyRemotePosition("Plate General", "Alliance", "eu", 30, 40, 1, serverNow, serverNow + 150),
+        "a position of the chain was refused")
+    now = now + 150
+    expect(general:GetSlot("Alliance") ~= nil and general:GetSlot("Alliance").mapX == 30, "a position did not renew the icon")
+    now = now + general.ENTRY_STALE_CHAIN_SEC
+    general:PruneStale()
+    expect(general:GetSlot("Alliance") == nil, "a Commander without news was kept for ever")
+    Overlord.ChannelDirectory = savedDirectory
+end
 print("general_team_lifecycle_runtime: OK")

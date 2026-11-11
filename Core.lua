@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.4.0"
+Overlord.Version = "2.5.0"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -2040,6 +2040,9 @@ function Overlord:SuspendForInstance()
     if self.General and self.General.OnInstanceSuspend then
         self.General:OnInstanceSuspend()
     end
+    if self.LayerJumper and self.LayerJumper.OnInstanceSuspend then
+        pcall(self.LayerJumper.OnInstanceSuspend, self.LayerJumper)
+    end
     if self.MostWanted and self.MostWanted.OnInstanceSuspend then
         pcall(self.MostWanted.OnInstanceSuspend, self.MostWanted)
     end
@@ -2951,14 +2954,20 @@ function Overlord:Initialize()
     OverlordDB.frontDominationTimeByPool, OverlordDB.dominationBoostPct = nil, nil
     OverlordDB.frontDominationPoolVersion, OverlordDB.globalDominationUnifiedVersion = nil, nil
     OverlordDB.frontDominationMigrated = nil
-    -- 1.6.1 : Layer Jumper retire. Saut en cours et choix « Aider les autres » oublies.
-    OverlordDB.layerJumperHop = nil
+    -- 1.6.1 cleared the Layer Jumper's saved jump and helper choice at every login; 2.5.0 brings
+    -- the module back (LayerJumper.lua) and keeps them. Once only: a choice made before 1.6.1 by
+    -- a player who skipped every version since is forgotten, so that nobody helps (invites by
+    -- itself) without having chosen it in this version.
+    if OverlordDB.layerHelpEra ~= 250 then
+        OverlordDB.layerHelpEra = 250
+        OverlordDB.layerJumperHop = nil
+        if type(OverlordDB.config) == "table" then OverlordDB.config.layerHelpMode = nil end
+    end
     -- 1.8.1: outposts parked by an unreleased 1.4.0 build (2026-10-03, minutes); the
     -- one-week recovery of that week can no longer match.
     OverlordDB.outpostsByPool = nil
     -- 1.8.1: write-only since 2026-09-30 (the catch-up ack carries the campaign).
     OverlordDB.leaderboardRankFirstCompletedCampaignId = nil
-    if type(OverlordDB.config) == "table" then OverlordDB.config.layerHelpMode = nil end
     -- 1.7.0 : plus de protection de capitale (la conquete reste jusqu a la reprise).
     OverlordDB.frontCapitalImmuneFrom = nil
     -- 1.2.4 : contrats en or et War Mode n'existent pas sur Forever (code retire).
