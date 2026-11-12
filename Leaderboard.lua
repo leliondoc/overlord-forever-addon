@@ -2213,7 +2213,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             killHeap[i] = nil
             row.key, row.name = nil, nil
             displayKillRowPool[#displayKillRowPool + 1] = row
-            yieldWork()
+            if i % 64 == 0 then yieldWork() end
         end
 
         local function captureRows(top, faction)
@@ -6892,6 +6892,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
             killRows[i] = nil
             r.key, r.name = nil, nil
             snapshotKillRowPool[#snapshotKillRowPool + 1] = r
+            if i % 64 == 0 then yieldFinalWork() end
         end
         for i = 1, #capRows do
             local r = capRows[i]
