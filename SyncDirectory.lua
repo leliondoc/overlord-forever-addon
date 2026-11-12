@@ -1513,6 +1513,9 @@ function dir:ChainTargets(p, fragmentCount)
     -- may give it up; its guild mates stay in our fan.)
     local skipGuild = lane0 ~= nil and lane0.IsGuildMate ~= nil and lane0.IsActive ~= nil and lane0:IsActive()
         and p.heardOn ~= "WHISPER" and lane0.Level ~= nil and lane0:Level(p) ~= nil
+        -- (2.5.1: nor for a rampage relayed to us: the lane may give it up too, and its guild mates
+        -- had it from our fan in 2.5.0.)
+        and not (p.kind == "GW" and #p.path > 1)
     local view, leaves = {}, {}
     local at0 = now()
     for lower, row in pairs(self.partners) do

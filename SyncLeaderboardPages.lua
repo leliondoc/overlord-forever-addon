@@ -214,8 +214,8 @@ end
 local COMBAT_WAIT_SEC, COMBAT_WAIT_JITTER, COMBAT_WAIT_MAX = 30, 15, 5
 -- Same fold as byte by byte (wire-compatible), read 8 bytes per call: a 4 KB
 -- page hashed in one frame on both sides cost ~1 ms with one call per byte.
-local function hash(value)
-    local h, n, i = 0, #value, 1
+-- (foldRange: the same fold over bytes i..n of value, from h.)
+local function foldRange(value, h, i, n)
     while i + 7 <= n do
         local b1, b2, b3, b4, b5, b6, b7, b8 = value:byte(i, i + 7)
         h = (h * 31 + b1) % MOD; h = (h * 31 + b2) % MOD
@@ -227,6 +227,7 @@ local function hash(value)
     for j = i, n do h = (h * 31 + value:byte(j)) % MOD end
     return h
 end
+local function hash(value) return foldRange(value, 0, 1, #value) end
 local function key(name)
     local result = sync:GetCaptureContributorDedupKey(name)
     return result and result:lower()
@@ -349,6 +350,29 @@ local function rowDigest(kind, payload)
     return payload
 end
 sync._PagedRowDigest = rowDigest
+-- 2.5.1: hash(rowDigest(kind, payload)) without building the digest text: the same bytes
+-- folded in place (the two cut strings and their join were ~300 B of garbage per row, ~3 MB
+-- per profile at 10,000 players). rowDigest stays the definition (tests compare both).
+local function colonAfter(payload, at) return payload:find(":", at + 1, true) end
+local function digestHash(kind, payload)
+    if kind == "LK" then
+        -- Ten fields exactly: fields 1-7, ":", field 9.
+        local c7 = colonAfter(payload, 0)
+        for _ = 2, 7 do c7 = c7 and colonAfter(payload, c7) end
+        local c8 = c7 and colonAfter(payload, c7)
+        local c9 = c8 and colonAfter(payload, c8)
+        if c9 and not colonAfter(payload, c9) then
+            return foldRange(payload, (foldRange(payload, 0, 1, c7 - 1) * 31 + 58) % MOD, c8 + 1, c9 - 1)
+        end
+    elseif kind == "LR" then
+        -- Five fields exactly: fields 1-4.
+        local c4 = colonAfter(payload, 0)
+        for _ = 2, 4 do c4 = c4 and colonAfter(payload, c4) end
+        if c4 and not colonAfter(payload, c4) then return foldRange(payload, 0, 1, c4 - 1) end
+    end
+    return hash(payload)
+end
+sync._PagedDigestHash = digestHash
 
 -- v7 digests (1.7): each row hash goes through a non-linear mix before the sum. With a
 -- plain sum, two clients that each lead on a different row (A: X=102, Y=161; B: X=101,
@@ -405,6 +429,7 @@ local PROFILE_REUSE_SEC, PROFILE_DIRTY_REUSE_SEC, PROFILE_DIRTY_ROW_SEC = 120, 3
 -- since it was built (1.8.0: rounds every 45-105 s after a v8 round would otherwise
 -- list and fetch again the rows the previous round just brought).
 -- legacy (2.4.0): the profile of our view of 5,000 (LegacyView), for a peer that holds no more.
+local function pendingRowBefore(a, b) return a[1] < b[1] end
 local function prepare(callback, own, legacy)
     if building then return false end
     stats.profileWhy = nil
@@ -485,7 +510,8 @@ local function prepare(callback, own, legacy)
             for _, kind in ipairs(STREAMS) do
                 local profile, source, count = result.streams[kind], sources[kind] or {}, 0
                 local isKills = kind == "LK"
-                -- Rows are gathered and sorted as small tables, then kept as arrays.
+                -- Rows are gathered and sorted as small arrays { identity, payload, name }
+                -- (2.5.1: half the size of a keyed table), then kept as parallel arrays.
                 local pending = {}
                 for i = 1, BUCKETS do pending[i] = {}; work() end
                 for name in pairs(source) do
@@ -496,23 +522,24 @@ local function prepare(callback, own, legacy)
                     local identity = payload and key(name)
                     if identity and validCursor(identity) then
                         local rows = pending[hash(identity) % BUCKETS + 1]
-                        rows[#rows + 1] = { key = identity, payload = payload, name = name }
+                        rows[#rows + 1] = { identity, payload, name }
                     end
                     work()
                 end
                 for i = 1, BUCKETS do
                     local rows = pending[i]
-                    lb:SortNetworkRows(rows, function(a, b) return a.key < b.key end, work)
+                    lb:SortNetworkRows(rows, pendingRowBefore, work)
                     local bucket = { hash = 0, hash7 = 0, n = #rows, keys = {}, payloads = {},
                         digests = {}, factions = {}, races = isKills and {} or nil,
                         nA = 0, hashA = 0, nH = 0, hashH = 0 }
                     for j = 1, #rows do
                         local row = rows[j]
-                        local h = hash(rowDigest(kind, row.payload))
-                        local faction, mixed = factionChar(snapshot, row.name), mixRow(h)
-                        bucket.keys[j], bucket.payloads[j], bucket.digests[j] = row.key, row.payload, h
+                        local rowKey, rowText, rowName = row[1], row[2], row[3]
+                        local h = digestHash(kind, rowText)
+                        local faction, mixed = factionChar(snapshot, rowName), mixRow(h)
+                        bucket.keys[j], bucket.payloads[j], bucket.digests[j] = rowKey, rowText, h
                         bucket.factions[j] = faction
-                        if isKills then bucket.races[j] = raceField(snapshot, row.name, row.payload) or false end
+                        if isKills then bucket.races[j] = raceField(snapshot, rowName, rowText) or false end
                         bucket.hash = (bucket.hash + h) % MOD
                         bucket.hash7 = (bucket.hash7 + mixed) % MOD
                         if faction ~= "H" then bucket.nA, bucket.hashA = bucket.nA + 1, (bucket.hashA + mixed) % MOD end

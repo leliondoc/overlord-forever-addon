@@ -350,6 +350,30 @@ assert(digest("LR", "Ana:Orc:2:1790000000:100") == digest("LR", "Ana:Orc:2:17900
 assert(digest("LR", "Ana:Orc:2:1790000000:100") ~= digest("LR", "Ana:Troll:2:1790000000:100"))
 assert(digest("LC", "Ana:A:MAGE:3:1790000000:z1,z2:frFR:B1790000000")
     == "Ana:A:MAGE:3:1790000000:z1,z2:frFR:B1790000000")
+-- 2.5.1: the profile folds the digest in place; same value as hashing the digest text,
+-- for well-formed rows, rows of another shape (fallback: the whole payload) and empty fields.
+do
+    local fold = PULLER.Overlord.Sync._PagedDigestHash
+    local function text(value)
+        local h = 0
+        for i = 1, #value do h = (h * 31 + value:byte(i)) % 2147483647 end
+        return h
+    end
+    local cases = {
+        { "LK", base },
+        { "LK", "Ana:12:MAGE:Alliance:1790000000:::0:B1790000000:42" },
+        { "LK", "Ana:12:MAGE:Alliance:1790000000:frFR:Veteran Guild:1790016000:B1790000000:42:o2" },
+        { "LK", "Ana:12:MAGE:Alliance:1790000000:frFR:Veteran Guild:1790016000:B1790000000" },
+        { "LK", ":::::::::" }, { "LK", "" }, { "LK", "Zzzzzzzzzzzzzzzzzzzzzzzzzzzz Long:1:2:3:4:5:6:7:8:9" },
+        { "LR", "Ana:Orc:2:1790000000:100" }, { "LR", "Ana:Orc:2:1790000000" },
+        { "LR", "Ana:Orc:2:1790000000:100:x" }, { "LR", "::::" },
+        { "LC", "Ana:A:MAGE:3:1790000000:z1,z2:frFR:B1790000000" },
+    }
+    for _, case in ipairs(cases) do
+        assert(fold(case[1], case[2]) == text(digest(case[1], case[2])),
+            "folded digest differs for " .. case[1] .. " " .. case[2])
+    end
+end
 
 SOURCE.Overlord.Leaderboard:SetPlayerCaptureCount(names[500], 2, true)
 local normalSend = PULLER.Overlord.Sync.SendWhisper

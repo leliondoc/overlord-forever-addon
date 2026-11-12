@@ -69,6 +69,7 @@ jobs:
           lua5.1 tests/forever_fight_alert.test.lua
           lua5.1 tests/forever_cross_hands.test.lua
           lua5.1 tests/forever_layer_jumper.test.lua
+          lua5.1 tests/forever_action_shortcut.test.lua
           lua5.1 tests/forever_layer_server_field.test.lua
           lua5.1 tests/forever_map_mode_button.test.lua
           lua5.1 tests/forever_trust_relay_142.test.lua
@@ -247,6 +248,7 @@ jobs:
           lua5.1 tests/forever_race_icon_recycle.test.lua
           lua5.1 tests/forever_mine_ids.test.lua
           lua5.1 tests/forever_snapshot_restore_lazy.test.lua
+          lua5.1 tests/forever_snapshot_restore_sliced.test.lua
           lua5.1 tests/forever_snapshot_logout_slim.test.lua
           lua5.1 tests/forever_relay_terminal_copies.test.lua
           lua5.1 tests/forever_relay_addressed_route.test.lua

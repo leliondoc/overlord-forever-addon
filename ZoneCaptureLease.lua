@@ -1703,11 +1703,14 @@ function Lease:StandingRank(zone)
         local okName, name = pcall(GroupUnitName, unit)
         local key = okName and CanonicalPlayer(name) or nil
         if key and key < me then
-            local okEligible, eligible = pcall(FindCapturerUnitEligible, unit)
+            -- (2.5.1: the position first, a few map reads; the fitness check reads the unit's
+            -- state and auras, and most of a raid stands elsewhere.)
             local okPos, pos = pcall(C_Map.GetPlayerMapPosition, mapID, unit)
-            if okEligible and eligible and okPos and pos then
-                local okInside, inside = pcall(FindCapturerUnitInsideDisk, pos)
-                if okInside and inside then
+            local okInside, inside = false, false
+            if okPos and pos then okInside, inside = pcall(FindCapturerUnitInsideDisk, pos) end
+            if okInside and inside then
+                local okEligible, eligible = pcall(FindCapturerUnitEligible, unit)
+                if okEligible and eligible then
                     rank = rank + 1
                     if rank >= RELIEF_MAX_RANK then break end
                 end

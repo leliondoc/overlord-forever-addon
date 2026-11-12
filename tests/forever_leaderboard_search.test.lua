@@ -396,8 +396,55 @@ local at
 for i, line in ipairs(tip.lines) do if line == '89900 points' then at = i end end
 assert(tip.lines[1] == '<Rated 1>' and at and at > 2, 'Guild hover lost its members or its rating')
 assert(tip.lines[at + 1] == 'Honorable kills = 59900' and tip.lines[at + 2] == 'Front points (4 x 50) = 200'
-    and tip.lines[at + 3] == 'Outposts (2 x 75) = 150' and tip.lines[at + 4] == nil,
+    and tip.lines[at + 3] == 'Outposts (2 x 75) = 150' and tip.lines[at + 4] == 'Click: all its members'
+    and tip.lines[at + 5] == nil,
     'Guild hover does not say where the points come from: ' .. tostring(tip.lines[at + 2]))
+-- Click: the guild window opens beside the table with its title; a second click on the
+-- same guild closes it, Escape closes it before the leaderboard.
+assert(not frame.guildMembersFrame or not frame.guildMembersFrame:IsShown(), 'Guild window open before any click')
+ratingRow.IsMouseOver = function() return false end
+ratingRow.scripts.OnMouseUp(ratingRow, 'LeftButton')
+assert(not frame.guildMembersFrame, 'A button released off the guild row opened its window')
+ratingRow.IsMouseOver = function() return true end
+ratingRow.scripts.OnMouseUp(ratingRow, 'LeftButton')
+local membersFrame = frame.guildMembersFrame
+assert(membersFrame and membersFrame:IsShown() and membersFrame.title.text == '<Rated 1>',
+    'A click on a guild did not open its window')
+ratingRow.scripts.OnMouseUp(ratingRow, 'LeftButton')
+assert(not membersFrame:IsShown(), 'A second click on the same guild did not close its window')
+ratingRow.scripts.OnMouseUp(ratingRow, 'LeftButton')
+frame.scripts.OnKeyDown(frame, 'ESCAPE')
+assert(not membersFrame:IsShown() and frame:IsShown(), 'Escape did not close the guild window first')
+-- (The guild window's frames are made once, on its first opening: the table's count moves on.)
+local framesWithWindow = #frames
+ratingRow.scripts.OnMouseUp(ratingRow, 'LeftButton')
+ratingRow.scripts.OnMouseUp(ratingRow, 'LeftButton')
+assert(#frames == framesWithWindow, 'Opening the guild window again made new frames')
+-- Guild window: hovering lights the row (it can be clicked), the open guild stays marked,
+-- the members carry captures and HK, and the Captures header sorts them.
+ratingRow.scripts.OnEnter(ratingRow)
+assert(ratingRow.hover.shown, 'Hovering a guild does not light its row')
+ratingRow.scripts.OnLeave(ratingRow)
+assert(not ratingRow.hover.shown, 'Leaving a guild row keeps it lit')
+Overlord.Leaderboard.GetGuildMembers = function(_, guild)
+    assert(guild == 'Rated 1')
+    return { { name = 'Ana Bel', kills = 40, captures = 0 }, { name = 'Bo Rin', kills = 30, captures = 3 } }
+end
+ratingRow.scripts.OnMouseUp(ratingRow, 'LeftButton')
+assert(membersFrame:IsShown() and ratingRow.selected.shown, 'The open guild is not marked in the table')
+assert(membersFrame.summary.text == '2 ranked members, 70 HK', 'Window summary: ' .. tostring(membersFrame.summary.text))
+local firstMember = membersFrame.rows[1]
+assert(firstMember and firstMember.name.text == 'Ana Bel' and firstMember.kills.text == '40'
+    and firstMember.captures.text == '-' and membersFrame.rows[2].captures.text == '3',
+    'The member rows lost their columns')
+membersFrame.sortHeaders.captures.scripts.OnClick(membersFrame.sortHeaders.captures)
+assert(membersFrame.sort == 'captures' and membersFrame.sortHeaders.captures.arrow.shown
+    and not membersFrame.sortHeaders.kills.arrow.shown and membersFrame.rows[1].name.text == 'Bo Rin',
+    'The captures header does not sort the members')
+ratingRow.scripts.OnMouseUp(ratingRow, 'LeftButton')
+assert(not membersFrame:IsShown() and not ratingRow.selected.shown, 'Closing the window left its guild marked')
+Overlord.Leaderboard.GetGuildMembers = nil
+framesWithGuilds = #frames
 frame.scrollGuild:SetVerticalScroll(frame.scrollGuild:GetVerticalScrollRange()); drain()
 guildCount, guildByRank = guildRowsShown()
 assert(guildByRank[300] and guildByRank[300].name.text == 'Rated 300', 'Scrolling cannot reach the last rated guild')

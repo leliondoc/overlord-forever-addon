@@ -1881,15 +1881,23 @@ local function internDisplayMeta(class, faction, race, raceSex)
     return array
 end
 
-local function newDisplayTopK(limit)
-    return { limit = limit, rows = {}, positions = {} }
+-- uniqueKeys (2.5.1): the caller offers each key once (a walk of the kill index), so no
+-- row is ever found again by its key and the heap keeps no positions: a 10,000-key map
+-- built and thrown away at every ranking view and every snapshot (~2 MB of garbage each).
+-- rowPool (2.5.1, the snapshot pass): row tables kept from the previous pass and handed
+-- back by it once copied (one pass at a time; an abandoned pass simply keeps its rows).
+local function newDisplayTopK(limit, uniqueKeys, rowPool)
+    return { limit = limit, rows = {}, positions = not uniqueKeys and {} or nil, pool = rowPool }
 end
 
 local function displayHeapSwap(top, a, b)
     local rows = top.rows
     rows[a], rows[b] = rows[b], rows[a]
-    top.positions[rows[a].key] = a
-    top.positions[rows[b].key] = b
+    local positions = top.positions
+    if positions then
+        positions[rows[a].key] = a
+        positions[rows[b].key] = b
+    end
 end
 
 local function displayHeapSiftUp(top, index)
@@ -1923,7 +1931,8 @@ local function offerDisplayTopK(lb, top, key, name, count, keyLowered)
     count = tonumber(count) or 0
     if not key or key == "" or not name or name == "" or count <= 0 then return end
     if not keyLowered then key = tostring(key):lower() end
-    local position = top.positions[key]
+    local positions = top.positions
+    local position = positions and positions[key]
     if position then
         local row = top.rows[position]
         local previousCount, previousName = row.count, row.name
@@ -1937,9 +1946,16 @@ local function offerDisplayTopK(lb, top, key, name, count, keyLowered)
     end
 
     if #top.rows < top.limit then
-        local candidate = { key = key, name = name, count = count }
+        local pool = top.pool
+        local candidate = pool and pool[#pool]
+        if candidate then
+            pool[#pool] = nil
+            candidate.key, candidate.name, candidate.count = key, name, count
+        else
+            candidate = { key = key, name = name, count = count }
+        end
         top.rows[#top.rows + 1] = candidate
-        top.positions[key] = #top.rows
+        if positions then positions[key] = #top.rows end
         displayHeapSiftUp(top, #top.rows)
     else
         local worst = top.rows[1]
@@ -1948,9 +1964,9 @@ local function offerDisplayTopK(lb, top, key, name, count, keyLowered)
         if not better then return end
         -- Recycler la ligne evincee : meme sur 10k scores croissants, le build
         -- n'alloue que K lignes de tas au total.
-        top.positions[worst.key] = nil
+        if positions then positions[worst.key] = nil end
         worst.key, worst.name, worst.count = key, name, count
-        top.positions[key] = 1
+        if positions then positions[key] = 1 end
         displayHeapSiftDown(top, 1)
     end
 end
@@ -1973,6 +1989,8 @@ function Overlord.Leaderboard:IsDisplayBuildHeldByInstance()
     return not (ui and ui.IsShown and ui:IsShown())
 end
 
+local displayKillRowPool, displayKillRowPoolTimer, displayKillRowPoolBuilds = {}, nil, 0
+local DISPLAY_KILL_ROW_POOL_SEC = 60
 function Overlord.Leaderboard:StartDisplayCacheBuild()
     if self._storageBound ~= true then return false end
     if self._displayCacheBuildPending then return false end
@@ -2143,7 +2161,7 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             return name
         end
         local sortedKills = {}
-        local killTop = newDisplayTopK(DISPLAY_KILL_RANK_LIMIT)
+        local killTop = newDisplayTopK(DISPLAY_KILL_RANK_LIMIT, true, displayKillRowPool)
         local killHeap = killTop.rows
         -- L'index contient deja un maximum par joueur, sans doublonner ses alias.
         -- One key list for both kill walks: the rows and the totals cover the same players.
@@ -2186,6 +2204,16 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             end
             sortedKills[i] = reused or { name = name, kills = kills }
             yieldWork()
+        end
+        -- (The heap rows go back to the next build while the window stays open: one build
+        -- every 10-15 s, up to 10,000 rows each, otherwise garbage. Let go a minute after
+        -- the last build.)
+        for i = #killHeap, 1, -1 do
+            local row = killHeap[i]
+            killHeap[i] = nil
+            row.key, row.name = nil, nil
+            displayKillRowPool[#displayKillRowPool + 1] = row
+            if i % 64 == 0 then yieldWork() end
         end
 
         local function captureRows(top, faction)
@@ -2539,6 +2567,23 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             end
             state.scoreEpochChanged = scoreEpochChanged
             self._displayCacheLastBuildAt = GetTime()
+            -- (The pool is let go once a whole minute passed without a build: counted in
+            -- builds, not in time, so a timer never chases a clock that does not move.)
+            displayKillRowPoolBuilds = displayKillRowPoolBuilds + 1
+            if not displayKillRowPoolTimer and #displayKillRowPool > 0 then
+                displayKillRowPoolTimer = true
+                local armedAt = displayKillRowPoolBuilds
+                local function dropPool()
+                    if displayKillRowPoolBuilds ~= armedAt then
+                        armedAt = displayKillRowPoolBuilds
+                        C_Timer.After(DISPLAY_KILL_ROW_POOL_SEC, dropPool)
+                        return
+                    end
+                    displayKillRowPoolTimer = nil
+                    displayKillRowPool = {}
+                end
+                C_Timer.After(DISPLAY_KILL_ROW_POOL_SEC, dropPool)
+            end
             requestConsumerRefresh()
             return
         end
@@ -2645,6 +2690,50 @@ function Overlord.Leaderboard:GetGuildMembersSummary(guild)
     local members = cache and cache.guildMembers
     if type(members) ~= "table" or type(guild) ~= "string" or guild == "" then return nil end
     return members[guild:lower()]
+end
+
+-- Every ranked member of a guild, for the guild window: { { name, kills }, ... }, highest
+-- first, equal totals by name. Counted as the guild totals are (one row per player, his
+-- highest spelling, kills above 0). One walk of the kill index when the window opens,
+-- plain lookups and no string built for the common case; nothing kept afterwards.
+-- Nil while the indexes are being rebuilt (the caller then shows the tooltip's top 10).
+function Overlord.Leaderboard:GetGuildMembers(guild)
+    if type(guild) ~= "string" or guild == "" then return nil end
+    local metaIndex = self._dedupMetaIndex
+    if not dedupCanonicalValid or type(dedupKillMaxIndex) ~= "table" or type(metaIndex) ~= "table" then
+        return nil
+    end
+    local guildKey, guildLen = guild:lower(), #guild
+    local sync = Overlord.Sync
+    local getDK = sync and sync.GetCaptureContributorDedupKey
+    -- Captures from the dedup index when it exists (it is never built here: a click must
+    -- not pay a walk of every capture row), else the row of the name itself.
+    local captureIndex, captureCount = dedupCaptureMaxIndex, self.captureCount or {}
+    local out = {}
+    for key, count in pairs(dedupKillMaxIndex) do
+        count = tonumber(count) or 0
+        if count > 0 and type(key) == "string" then
+            local name = dedupCanonicalIndex[key]
+            local bucket, dk = nil, key
+            if name then
+                bucket = metaIndex[key]
+            else
+                name = key
+                dk = getDK and getDK(sync, key) or key:lower()
+                bucket = dk and metaIndex[dk]
+            end
+            local g = bucket and bucket[4]
+            if type(g) == "string" and #g == guildLen and (g == guild or g:lower() == guildKey) then
+                local captures = captureIndex and dk and captureIndex[dk] or captureCount[name]
+                out[#out + 1] = { name = name, kills = count, captures = tonumber(captures) or 0 }
+            end
+        end
+    end
+    table.sort(out, function(a, b)
+        if a.kills ~= b.kills then return a.kills > b.kills end
+        return a.name < b.name
+    end)
+    return out
 end
 
 -- Rating row of a guild ({ points, kills, zones, outposts, keeps }) from the display
@@ -6668,6 +6757,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignBeforeReset(callback)
     return true
 end
 
+local snapshotKillRowPool = {}
 function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
     if not OverlordDB or self._storageBound ~= true then
         self:ResolveSnapshotCompletion(false, "storage not bound")
@@ -6715,7 +6805,7 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
         phase = "kills",
         campaignStart = campaignStart,
         scoreBucketEpoch = scoreBucketEpoch,
-        killHeap = newDisplayTopK(LADDER_SNAPSHOT_MAX_KILL_PLAYERS),
+        killHeap = newDisplayTopK(LADDER_SNAPSHOT_MAX_KILL_PLAYERS, true, snapshotKillRowPool),
         killIndex = dedupKillMaxIndex,
         captureIndex = dedupCaptureMaxIndex,
         canonicalIndex = dedupCanonicalIndex,
@@ -6787,20 +6877,27 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
             return
         end
 
-        local snapKills, snapCaps, snapInfo, snapCaptures, kept = {}, {}, {}, {}, {}
+        local snapKills, snapCaps, snapInfo, snapCaptures = {}, {}, {}, {}
         local killOrder, captureOrder = {}, {}
         for i = 1, #killRows do
             local r = killRows[i]
             snapKills[r.name] = r.count
             killOrder[#killOrder + 1] = r.name
-            kept[r.name] = true
             yieldFinalWork()
+        end
+        -- (The heap rows go back to the next pass: up to 5,000 tables a pass, every ranking
+        -- round, otherwise garbage.)
+        for i = #killRows, 1, -1 do
+            local r = killRows[i]
+            killRows[i] = nil
+            r.key, r.name = nil, nil
+            snapshotKillRowPool[#snapshotKillRowPool + 1] = r
+            if i % 64 == 0 then yieldFinalWork() end
         end
         for i = 1, #capRows do
             local r = capRows[i]
             snapCaps[r.name] = r.count
             captureOrder[#captureOrder + 1] = r.name
-            kept[r.name] = true
             yieldFinalWork()
         end
         -- Copy metadata in slices as well as sorting at the 5000-player cap.
@@ -6812,9 +6909,13 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
         -- pool tie-break); src and raceKey, unused by every reader of the saved copy,
         -- are stripped at logout (SlimSavedSnapshotForLogout). The shared entries are
         -- arrays read by name through their metatable (publishMeta).
-        for name in pairs(kept) do
-            local entry = state.metaIndex[GetKillDedupKey(name)]
-            local info = entry or (state.playerInfoSource and state.playerInfoSource[name])
+        -- (2.5.1: the kept names are the two orders, a ranked capturer once; no set of them.)
+        local keptCount = #killOrder + #captureOrder
+        for keptAt = 1, keptCount do
+            local name = keptAt <= #killOrder and killOrder[keptAt] or captureOrder[keptAt - #killOrder]
+            if keptAt > #killOrder and snapKills[name] ~= nil then name = nil end
+            local entry = name and state.metaIndex[GetKillDedupKey(name)]
+            local info = entry or (name and state.playerInfoSource and state.playerInfoSource[name])
             if entry then
                 snapInfo[name] = entry
             elseif type(info) == "table" then
@@ -7084,7 +7185,11 @@ end
 -- campagne en cours. Fusion max() uniquement (jamais de retour en arriere) et meta seulement pour
 -- les noms absents (ne pas ecraser une meta plus fraiche). Aucun rebroadcast autoritaire ici : la
 -- donnee re-circulera, si besoin, par les chemins SR/LK existants (deja plafonnes / anti-spoof).
-function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
+-- 2.5.1: `pause` (optional) is called once per saved row; it yields the login
+-- stage's coroutine when the slice is spent and returns true when the bucket
+-- changed meanwhile (the snapshot then no longer applies). Without it (tests,
+-- direct calls) the restore stays one synchronous pass, as before.
+function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded(pause)
     if not OverlordDB then return false end
     local snap = OverlordDB.leaderboardSnapshot
     if type(snap) ~= "table" then return false end
@@ -7108,7 +7213,15 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
     local snapshotCaptureCount = type(snap.captureCount) == "table" and snap.captureCount or {}
     local snapshotPlayerInfo = type(snap.playerInfo) == "table" and snap.playerInfo or {}
     local dirty = false
+    local function finish()
+        if dirty then
+            self:MarkMetaDirty()
+            self:Save()
+        end
+        return dirty
+    end
     for name, count in pairs(snapshotKills) do
+        if pause and pause() then return finish() end
         local n = tonumber(count) or 0
         -- Cheap comparison first: almost no saved row is above the live one, and the
         -- denylist (name-case walk) is then evaluated only for rows really written.
@@ -7124,6 +7237,7 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
         end
     end
     for name, count in pairs(snapshotCaptureCount) do
+        if pause and pause() then return finish() end
         local n = tonumber(count) or 0
         if type(name) == "string" and name ~= "" and n > 0
             and n > (tonumber(self.captureCount[name]) or 0) then
@@ -7154,6 +7268,7 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
         return level
     end
     for name, info in pairs(snapshotPlayerInfo) do
+        if pause and pause() then return finish() end
         if type(name) == "string" and name ~= "" and type(info) == "table" then
             local current = self.playerInfo[name]
             if not current then
@@ -7229,11 +7344,47 @@ function Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
         end
     end
 
-    if dirty then
-        self:MarkMetaDirty()
-        self:Save()
+    return finish()
+end
+
+-- 2.5.1: the login restore walked up to three 10,000-row tables in one frame
+-- (7 ms on a 4,200-player save, 17 ms at 10,000), at every login and /reload.
+-- The SnapshotRestore login stage now calls this once per frame: one slice of
+-- RESTORE_SLICE_MS, true once the walk is over. A bucket swapped between two
+-- slices (weekly reset, other campaign) ends the walk where it stands.
+local RESTORE_SLICE_MS, RESTORE_CHECK_EVERY = 1, 64
+function Overlord.Leaderboard:StepFullLadderSnapshotRestore()
+    local job = self._snapshotRestoreJob
+    if not job then
+        job = { kills = self.kills, playerInfo = self.playerInfo, rows = 0, started = 0 }
+        job.campaign = self:GetCurrentCampaignStart()
+        local board = self
+        local function pause()
+            job.rows = job.rows + 1
+            if job.rows % RESTORE_CHECK_EVERY ~= 0 or not debugprofilestop
+                or debugprofilestop() - job.started < RESTORE_SLICE_MS then
+                return false
+            end
+            coroutine.yield()
+            return board.kills ~= job.kills or board.playerInfo ~= job.playerInfo
+                or board:GetCurrentCampaignStart() ~= job.campaign
+        end
+        job.thread = coroutine.create(function()
+            board:RestoreFullLadderFromSnapshotIfNeeded(pause)
+        end)
+        self._snapshotRestoreJob = job
     end
-    return dirty
+    job.started = debugprofilestop and debugprofilestop() or 0
+    local ok, err = coroutine.resume(job.thread)
+    if not ok then
+        self._snapshotRestoreJob = nil
+        error(err, 0)
+    end
+    if coroutine.status(job.thread) == "dead" then
+        self._snapshotRestoreJob = nil
+        return true
+    end
+    return false
 end
 
 -- Marque qu'un kill a ete credite en local (combat), pas seulement via sync reseau.

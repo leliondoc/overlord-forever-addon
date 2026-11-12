@@ -1859,4 +1859,55 @@ do
         "old releases are kept")
 end
 print("Guild lane: reports and wiring OK")
+
+-- 2.5.1: a guild rampage relayed to us is said in our guild too, once per guild and side, by a few
+-- of its holders: before, only its author's guild heard it, and the others had it from the
+-- chain's random draws alone (2 to 3 % of the clients drew none on the bench).
+if not Overlord.GuildKillAlert then assert(loadfile("GuildKillAlert.lua"))() end
+do
+    local GKA = Overlord.GuildKillAlert
+    local function gw(guild, kills, members, ts)
+        return assert(GKA:BuildNetworkPayload(guild, "Horde", kills, members, "", nil, ts or GetServerTime()))
+    end
+    local first, second, otherGuild = gw("Iron Band", 64, 6), gw("Iron Band", 71, 7, GetServerTime() - 20), gw("Red Band", 64, 6)
+    local function relayedGW(payload, from)
+        local r = packet("GW", payload)
+        r.path, r.heardOn = { "Far Tester", from or "Bob Tester", me }, "BNET"
+        return r
+    end
+    assert(lane:Level(packet("GW", first)) == 1, "our own rampage stays routine")
+    assert(lane:Level(relayedGW(first)) == 2, "a relayed rampage is said in the guild")
+    assert(lane:Level(relayedGW("x")) == nil, "a malformed rampage is nobody's to say")
+    assert(lane:Level(relayedGW(gw("Iron Band", 64, 6, GetServerTime() - 3600))) == nil, "a stale rampage is not said")
+    assert(lane:Level(relayedGW(gw("Iron Band", 12, 6))) == nil, "a rampage under the threshold is not said")
+    local key = lane:CoverKey(relayedGW(first))
+    assert(key and key == lane:CoverKey(packet("GW", second)), "one rampage per guild and side, whatever its numbers or author")
+    assert(lane:CoverKey(relayedGW(otherGuild)) ~= key, "two guilds are two rampages")
+
+    -- Two holders' copies of one rampage: said once.
+    resetLane()
+    refused()
+    hearPresence("Bob Tester")
+    sent = {}
+    local r1 = relayedGW(first)
+    assert(lane:Carries(r1, 1) and lane:Offer(r1, { r1.id .. ":1:1:GW" }), "a relayed rampage must be offered")
+    local r2 = relayedGW(second, "Carl Tester")
+    assert(lane:Offer(r2, { r2.id .. ":1:1:GW" }) and #lane.outbox == 1, "the same rampage waits once")
+    advance(120)
+    assert(count("GUILD", ":GW") == 1, "a relayed rampage must be said once: " .. count("GUILD", ":GW"))
+    local r3 = relayedGW(second, "Dan Tester")
+    assert(lane:Offer(r3, { r3.id .. ":1:1:GW" }) == false, "said already")
+
+    -- Heard in the guild first: our copy is not said again.
+    resetLane()
+    refused()
+    hearPresence("Bob Tester")
+    sent = {}
+    hear("GW", first, "Far Tester", "Far Tester,Bob Tester")
+    local r4 = relayedGW(second, "Carl Tester")
+    assert(lane:Offer(r4, { r4.id .. ":1:1:GW" }) == false, "a rampage the guild heard is not said again")
+    advance(120)
+    assert(count("GUILD", ":GW") == 0, "nothing of it said again")
+end
+print("Guild lane: relayed rampages said once per guild")
 print("Forever guild lane: refused channel, probe, guild fallback, rates, echo, reception and instances OK")

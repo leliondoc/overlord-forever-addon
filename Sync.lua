@@ -4053,7 +4053,8 @@ end
 -- le recepteur peut donc recevoir 2-3 copies du meme evenement. Sans dedup, chaque
 -- copie incremente captureCount et gonfle le classement.
 -- Chat capture : dedup par (zone, faction, capturedTime) + fenetre courte (C + ZS captured).
-local function AppendShardTagToPlayerName(nameHint, shardHint)
+-- enemy (2.5.1): the caller knows this player is of the other faction (an enemy capture).
+local function AppendShardTagToPlayerName(nameHint, shardHint, enemy)
     if not nameHint or nameHint == "" then return nameHint end
     -- (2.5.0: a name from the network goes into a chat line: its escape character is doubled,
     -- so that it can open no colour, texture nor link of its own.)
@@ -4076,6 +4077,9 @@ local function AppendShardTagToPlayerName(nameHint, shardHint)
     -- where the game hands the click of an "addon" link to its addon (EventRegistry).
     local jumper = Overlord.LayerJumper
     if jumper and jumper.ChatLink then
+        if enemy and jumper.NoteEnemy then pcall(jumper.NoteEnemy, jumper, nameHint) end
+        -- (An enemy is never asked: ChatLink then names nobody, and the click asks the players
+        -- of ours known on that layer.)
         local ok, linked = pcall(jumper.ChatLink, jumper, nameHint, sid, text)
         if ok and type(linked) == "string" then text = linked end
     end
@@ -4192,7 +4196,7 @@ local function PrintCaptureChatOnce(zone, newOwner, capturerName, captureTs)
         if capturerName and capturerName ~= "" then
             Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.SYNC_CAPTURED_ENEMY_BY,
                 zoneLabel, Overlord.Zones:GetEnemyFactionName(),
-                AppendShardTagToPlayerName(capturerName, zone and zone.zsRelayCapturerShard)))
+                AppendShardTagToPlayerName(capturerName, zone and zone.zsRelayCapturerShard, true)))
         else
             Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.SYNC_CAPTURED_ENEMY,
                 zoneLabel, Overlord.Zones:GetEnemyFactionName()))
@@ -4609,6 +4613,10 @@ local function StoreZsRelayCapturerFromZs(zone, status, owner, zsCapturerName, z
         local tn = zsCapturerName:match("^%s*(.-)%s*$") or ""
         if #tn >= 2 and #tn <= 50 then
             zone.zsRelayCapturerName = tn
+            -- 2.5.1: the capturer of an enemy capture is no helper for a layer change, even
+            -- before any alert names him (LayerJumper lists the players whose layer we hold).
+            local jumper = Overlord.LayerJumper
+            if jumper and jumper.NoteEnemy then pcall(jumper.NoteEnemy, jumper, tn) end
             local sid = tonumber(zsCapturerShard)
             if sid then
                 zone.zsRelayCapturerShard = sid
@@ -5344,7 +5352,7 @@ local function TryPrintEnemyCapturingAlert(zone, capturerName, waveTs)
     if capturerName and capturerName ~= "" then
         Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.ENEMY_CAPTURING_BY,
             whereLabel, Overlord.Zones:GetEnemyFactionName(),
-            AppendShardTagToPlayerName(capturerName, zone and zone.zsRelayCapturerShard)))
+            AppendShardTagToPlayerName(capturerName, zone and zone.zsRelayCapturerShard, true)))
     else
         Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.ENEMY_CAPTURING,
             whereLabel, Overlord.Zones:GetEnemyFactionName()))

@@ -54,6 +54,10 @@ local lane = {
     -- share of the guild's messages relayed packets may take, said or heard; how long a
     -- capture on our own map counts as proof that a relayed copy of it was not made up.
     RELAY_SPEAKERS = 3, RELAYED_SEC = 30, RELAYED_BURST = 3, PROVEN_SEC = 120,
+    -- 2.5.1: a relayed rampage has its own pace, one per RELAYED_GW_GAP said or heard, outside
+    -- the share (a flood of them must not keep a siege out), and is remembered as long as a
+    -- rampage is shown (GuildKillAlert NETWORK_MAX_AGE).
+    RELAYED_GW_GAP = 45, GW_COVER_SEC = 300,
     -- How long past its end a silent wave is still followed (its capture may be on its way), and
     -- how long without a tick makes a wave told in the guild silent (ticks come every 5 s).
     SIEGE_GRACE = 15, TICK_SEC = 8,
@@ -94,9 +98,13 @@ local TERMINAL, ALERT, ROUTINE = 3, 2, 1
 -- other faction, and on that side for the capturer.)
 local FIXED_LEVEL = { C = TERMINAL, TV = TERMINAL, GE = TERMINAL, GX = TERMINAL,
     GD = TERMINAL, FC = ALERT, ZD = ALERT }
--- Our own only: nobody relays a presence or a keep claim, and a relayed guild kill alert has
--- somebody else to say it.
+-- Our own only: nobody relays a presence or a keep claim.
 local OWN_LEVEL = { NH = ROUTINE, OC = TERMINAL, GW = ROUTINE }
+-- 2.5.1: a guild rampage relayed to us (a chain contact's whisper, a Battle.net friend's) is said
+-- too, by a few of its holders (isSpeaker), once per guild (CoverKey: one rampage per guild and
+-- side). Only its author's guild heard it so far: everybody else had it from the chain's random
+-- draws alone, and 2 to 3 % of the clients drew none (bench, 36 whole clients, channel refused).
+local RELAYED_LEVEL = { GW = ALERT }
 -- How long a message waits for someone else to say it: { first, last } in seconds. Long
 -- enough for the first copy to come back (about a second) in a raid of one guild.
 local WAIT = { [TERMINAL] = { 1, 6 }, [ALERT] = { 0.5, 5.5 }, [ROUTINE] = { 0, 5 } }
@@ -337,7 +345,11 @@ function lane:Level(p)
     if level then return level end
     local own = #p.path == 1
     level = OWN_LEVEL[kind]
-    if level then return own and level or nil end
+    if level then
+        if own then return level end
+        -- (Only a rampage this client would show: CoverKey reads it, a bad one has no key.)
+        return RELAYED_LEVEL[kind] and self:CoverKey(p) ~= nil and RELAYED_LEVEL[kind] or nil
+    end
     if kind == "ZS" then
         local status, hold = payload:match("^[^:]+:([^:]+):[^:]*:(%d*)")
         -- A final names its wave. Without one it is a point handed back, and an "available" says
@@ -472,6 +484,13 @@ function lane:CoverKey(p)
         -- wave they name (a field anybody writes must not make as many facts as it has values).
         local zone = payload:match("^([^:]*):")
         if zone then return "ZD|" .. zone, 25 end
+    elseif kind == "GW" then
+        -- 2.5.1: one rampage per guild and side, whatever its numbers or its author (the chain's
+        -- key: GuildKillAlert ChainCoverKey), for as long as a rampage is shown.
+        -- Nil: a rampage nobody would show (stale, malformed).
+        local gka = addon.GuildKillAlert
+        local key = gka and gka.ChainCoverKey and gka:ChainCoverKey(payload)
+        return key, key and self.GW_COVER_SEC or nil
     end
     return kind .. "|" .. payload, self.COVER_SEC
 end
@@ -518,8 +537,9 @@ function lane:RememberCover(key, at, mine)
     self.coverCount = (self.coverCount or 0) + 1
     if self.coverCount <= 128 then return end
     self.coverCount = 0
-    pruneCover(self.ownCover, at, self.SITE_COVER_SEC)
-    if pruneCover(self.cover, at, self.SITE_COVER_SEC) > self.COVER_ROWS then self.cover = {} end
+    local oldest = math.max(self.SITE_COVER_SEC, self.GW_COVER_SEC)
+    pruneCover(self.ownCover, at, oldest)
+    if pruneCover(self.cover, at, oldest) > self.COVER_ROWS then self.cover = {} end
     self.coverDate = {}
 end
 
@@ -771,6 +791,13 @@ local function mayPost(self, entry, at)
         self.stats.capped = self.stats.capped + 1
         return false
     end
+    -- 2.5.1: a relayed rampage waits for its own gap (TTL bounds the wait), never the share.
+    if entry.relayed and entry.kind == "GW" then
+        if self.relayedGWAt and at - self.relayedGWAt < self.RELAYED_GW_GAP then return false end
+        if not takeTokens(self, #entry.fragments, at) then return false end
+        self.relayedGWAt = at
+        return true
+    end
     -- (2.3.0: a copy of the whisper chain pays the share even for a capture our map shows: many
     -- holders get chain copies, and they would fill the guild's minute for its routine words.)
     local shared = entry.relayed and (entry.chained or not mapShowsCapture(entry.cover))
@@ -1008,7 +1035,7 @@ function lane:Offer(p, fragments)
     -- Ours first, then a capture our map shows, then anything else relayed to us: a flood of
     -- whispers takes the place of none of them.
     local rank = release and TERMINAL + TERMINAL + 1 or own and level + TERMINAL
-        or (mapShowsCapture(key) and TERMINAL + 0.5) or level
+        or (mapShowsCapture(key) and TERMINAL + 0.5) or (p.kind == "GW" and level - 0.5) or level
     if #outbox >= self.OUTBOX_MAX then
         -- A full box gives up what matters least, the oldest first.
         local worst
@@ -1097,7 +1124,9 @@ function lane:NoteHeardPacket(p, relayed)
     if key then self:RememberCover(key, at) end
     -- 2.4.0: a release heard here: that point's next wave is a new start (ForgetSiege).
     if p.kind == "ZR" and type(p.payload) == "string" then self:ForgetSiege(p.payload:match("^([^:]*):([^:]*)")) end
-    if relayed and news and self:Level(p) then spendRelayedShare(self, at) end
+    if relayed and news and self:Level(p) then
+        if p.kind == "GW" then self.relayedGWAt = at else spendRelayedShare(self, at) end
+    end
     local date = captureDate(p)
     if key and date then
         -- (A date to come stays here for good otherwise; receivers take it for the present.)

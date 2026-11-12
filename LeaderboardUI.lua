@@ -1874,7 +1874,8 @@ function Overlord.LeaderboardUI:CreateFrame()
             if not InCombatLockdown() then
                 self:SetPropagateKeyboardInput(false)
             end
-            Overlord.LeaderboardUI:Hide()
+            -- Echap ferme d'abord la fenetre de guilde ouverte, puis le classement.
+            if not GuildRating.HideMembers() then Overlord.LeaderboardUI:Hide() end
         elseif not InCombatLockdown() then
             self:SetPropagateKeyboardInput(true)
         end
@@ -2010,6 +2011,7 @@ function Overlord.LeaderboardUI.OnGuildRowEnter(row)
         GameTooltip:AddLine(string.format(L.LB_GUILD_TIP_TOTAL or "%d HK", total), 0.8, 0.8, 0.8)
     end
     GuildRating.AddBreakdown(row._olGuildRating)
+    GameTooltip:AddLine(L.LB_GUILD_TIP_CLICK or "Click: all its members", 0.6, 0.6, 0.6)
     GameTooltip:Show()
 end
 
@@ -2155,9 +2157,25 @@ function Overlord.LeaderboardUI:CreateGuildRow(parent, index, yOffset, P)
     row.points:SetWidth(GuildRating.POINTS_W)
     row.points:SetJustifyH("CENTER")
 
+    -- Surbrillance des listes Blizzard : au survol (la ligne se clique) et, plus douce,
+    -- sur la guilde dont la fiche est ouverte.
+    row.selected = row:CreateTexture(nil, "BACKGROUND", nil, 2)
+    row.selected:SetAllPoints()
+    row.selected:SetTexture(GuildRating.Sheet.HIGHLIGHT)
+    row.selected:SetBlendMode("ADD")
+    row.selected:SetAlpha(0.35)
+    row.selected:Hide()
+    row.hover = row:CreateTexture(nil, "BACKGROUND", nil, 3)
+    row.hover:SetAllPoints()
+    row.hover:SetTexture(GuildRating.Sheet.HIGHLIGHT)
+    row.hover:SetBlendMode("ADD")
+    row.hover:SetAlpha(0.6)
+    row.hover:Hide()
+
     row:EnableMouse(true)
-    row:SetScript("OnEnter", Overlord.LeaderboardUI.OnGuildRowEnter)
-    row:SetScript("OnLeave", GameTooltip_Hide)
+    row:SetScript("OnEnter", GuildRating.OnRowEnter)
+    row:SetScript("OnLeave", GuildRating.OnRowLeave)
+    row:SetScript("OnMouseUp", GuildRating.OnRowClick)
     row:EnableMouseWheel(true)
     row:SetScript("OnMouseWheel", Overlord.LeaderboardUI.OnGuildRowWheel)
 
@@ -2533,6 +2551,7 @@ RenderGuildRows = function(force)
         and Overlord.Outpost:GetLocalPlayerGuild() or ""
     local lbMembers = Overlord.Leaderboard
     local killMedals, ratingMedals = GuildRating.Medals()
+    local openGuild = GuildRating.OpenGuild()
     local ownerMoved = false
     for slot = 1, poolSize do
         local dataIndex = first + slot - 1
@@ -2552,6 +2571,7 @@ RenderGuildRows = function(force)
                     Overlord.LeaderboardUI.OnGuildRowEnter(row)
                 end
             end
+            GuildRating.MarkRow(row, openGuild)
             local rank = ranks and ranks[dataIndex] or dataIndex
             local isOwn = myGuild ~= "" and entry.guild == myGuild
             local membersSummary = lbMembers and lbMembers.GetGuildMembersSummary
@@ -2868,6 +2888,325 @@ function GuildRating.CreateSortHeader(band, mode, x, width, text, P)
     end)
     header:SetScript("OnLeave", GameTooltip_Hide)
     return header
+end
+
+-- Fenetre d'une guilde : un clic sur une ligne du tableau des guildes liste tous ses
+-- membres classes (le classement n'en montre aucun ensemble, l'infobulle s'arrete a dix),
+-- dans un panneau pose a cote du tableau, sur la colonne des fortins, memes haut et bas.
+-- Rien n'est demande au reseau : la liste est lue une fois a l'ouverture
+-- (Leaderboard:GetGuildMembers, un parcours de l'index des VH) ; un dessin ne touche que
+-- les lignes visibles (une vingtaine de cadres crees une fois), la molette deplace un indice.
+GuildRating.Sheet = {
+    ROW_H = 20,
+    HIGHLIGHT = "Interface\\QuestFrame\\UI-QuestTitleHighlight",
+}
+
+-- Colonnes des membres, depuis la droite de la ligne : VH puis captures.
+function GuildRating.SheetColumn(parent, rightOffset, width)
+    local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    fs:SetPoint("RIGHT", parent, "RIGHT", rightOffset, 0)
+    fs:SetWidth(width)
+    fs:SetJustifyH("RIGHT")
+    return fs
+end
+
+function GuildRating.SheetSortHeader(f, head, key, rightOffset, text, P)
+    local header = CreateFrame("Button", nil, head)
+    header:SetSize(56, GuildRating.Sheet.ROW_H)
+    header:SetPoint("RIGHT", head, "RIGHT", rightOffset, 0)
+    header.label = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    header.label:SetPoint("RIGHT", header, "RIGHT", 0, 0)
+    header.label:SetText(text or "")
+    header.label:SetTextColor(P.accent[1], P.accent[2], P.accent[3])
+    header.arrow = header:CreateTexture(nil, "OVERLAY")
+    header.arrow:SetTexture("Interface\\Buttons\\UI-SortArrow")
+    header.arrow:SetTexCoord(0, 0.5625, 0, 1)
+    header.arrow:SetSize(9, 8)
+    header.arrow:SetPoint("RIGHT", header.label, "LEFT", -1, -1)
+    header.arrow:SetVertexColor(P.accent[1], P.accent[2], P.accent[3])
+    header.arrow:Hide()
+    header:SetScript("OnClick", function()
+        if f.sort == key then return end
+        f.sort = key
+        GuildRating.SortMembers(f)
+        f.scroll = 0
+        GuildRating.PaintMembers()
+    end)
+    header:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine(L.LB_SORT_HINT or "Click to sort by this column.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    header:SetScript("OnLeave", GameTooltip_Hide)
+    f.sortHeaders[key] = header
+    return header
+end
+
+function GuildRating.MembersFrame()
+    if not lbFrame or not lbFrame.guildBlock then return nil end
+    local f = lbFrame.guildMembersFrame
+    if f then return f end
+    local K, UI, P = GuildRating.Sheet, Overlord.UI or {}, GetPalette()
+    f = CreateFrame("Frame", nil, lbFrame, "BackdropTemplate")
+    f:SetPoint("TOPLEFT", lbFrame.guildBlock, "TOPRIGHT", LB_COL_GAP, 0)
+    f:SetPoint("BOTTOMLEFT", lbFrame.guildBlock, "BOTTOMRIGHT", LB_COL_GAP, 0)
+    f:SetWidth(LB_GUILD_KEEP_W)
+    -- Au-dessus du voile d'illustration (+15) et du cadre en bois (+20) du classement.
+    f:SetFrameLevel(lbFrame:GetFrameLevel() + 30)
+    if UI.ApplyWoodDialogBackdrop then UI.ApplyWoodDialogBackdrop(f) end
+    if UI.AttachOpenFade then UI.AttachOpenFade(f) end
+    f:EnableMouse(true)
+    f:Hide()
+    f.sort, f.sortHeaders, f.rows = "kills", {}, {}
+    lbFrame.guildMembersFrame = f
+    -- Fermer le classement ferme la fenetre : rouvert, il ne la remontre pas, perimee.
+    lbFrame:HookScript("OnHide", function() f:Hide() end)
+    f:SetScript("OnHide", function() GuildRating.MarkOpenGuild() end)
+
+    local close = UI.CreateWC3CloseButton and UI.CreateWC3CloseButton(f, function() GuildRating.HideMembers() end)
+        or CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -6)
+
+    f.icon = f:CreateTexture(nil, "ARTWORK")
+    f.icon:SetSize(24, 24)
+    f.icon:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -16)
+    f.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    f.title:SetPoint("LEFT", f.icon, "RIGHT", 8, 0)
+    f.title:SetPoint("RIGHT", f, "RIGHT", -36, 0)
+    f.title:SetJustifyH("LEFT")
+    f.title:SetWordWrap(false)
+
+    f.summary = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    f.summary:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -50)
+    f.summary:SetPoint("TOPRIGHT", f, "TOPRIGHT", -80, -50)
+    f.summary:SetJustifyH("LEFT")
+    f.summary:SetWordWrap(false)
+
+    -- Les membres, avec leur en-tete (#, joueur, captures, VH ; les deux derniers trient).
+    local list = UI.CreateWC3SubPanel and UI.CreateWC3SubPanel(f, LB_GUILD_KEEP_W - 36, 100)
+        or CreateFrame("Frame", nil, f)
+    list:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -66)
+    list:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -18, 18)
+    list:EnableMouseWheel(true)
+    list:SetScript("OnMouseWheel", function(_, delta)
+        f.scroll = (f.scroll or 0) - delta * 3
+        GuildRating.PaintMembers()
+    end)
+    f.list = list
+    local head = CreateFrame("Frame", nil, list)
+    head:SetHeight(K.ROW_H)
+    head:SetPoint("TOPLEFT", list, "TOPLEFT", 6, -5)
+    head:SetPoint("TOPRIGHT", list, "TOPRIGHT", -6, -5)
+    local hRank = head:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hRank:SetPoint("LEFT", head, "LEFT", 0, 0)
+    hRank:SetWidth(30)
+    hRank:SetJustifyH("CENTER")
+    hRank:SetText("#")
+    ApplyOfficialHeaderColor(hRank, P)
+    local hName = head:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hName:SetPoint("LEFT", head, "LEFT", 48, 0)
+    hName:SetText(L.LB_COL_PLAYER or "Player")
+    ApplyOfficialHeaderColor(hName, P)
+    GuildRating.SheetSortHeader(f, head, "captures", -56, L.LB_COL_CAPTURES or "Captures", P)
+    GuildRating.SheetSortHeader(f, head, "kills", -4, L.LB_COL_KILLS or "HK", P)
+
+    f.countText = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    f.countText:SetPoint("BOTTOMRIGHT", list, "TOPRIGHT", -4, 3)
+    return f
+end
+
+function GuildRating.MemberRow(f, i)
+    local row = f.rows[i]
+    if row then return row end
+    local P, h = GetPalette(), GuildRating.Sheet.ROW_H
+    row = CreateFrame("Frame", nil, f.list)
+    row:SetHeight(h)
+    row:SetPoint("TOPLEFT", f.list, "TOPLEFT", 6, -5 - i * h)
+    row:SetPoint("TOPRIGHT", f.list, "TOPRIGHT", -6, -5 - i * h)
+    row.bg = row:CreateTexture(nil, "BACKGROUND")
+    row.bg:SetAllPoints()
+    local bgColor = (i % 2 == 0) and P.rowEven or P.rowOdd
+    row.bg:SetColorTexture(bgColor[1], bgColor[2], bgColor[3], bgColor[4])
+    row.glow = row:CreateTexture(nil, "BACKGROUND", nil, 1)
+    row.glow:SetAllPoints()
+    row.glow:Hide()
+    row.rank = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.rank:SetPoint("LEFT", row, "LEFT", 0, 0)
+    row.rank:SetWidth(30)
+    row.rank:SetJustifyH("CENTER")
+    row.badge = row:CreateTexture(nil, "ARTWORK")
+    row.badge:SetSize(14, 14)
+    row.badge:SetPoint("LEFT", row, "LEFT", 31, 0)
+    row.badge:Hide()
+    row.kills = GuildRating.SheetColumn(row, -4, 48)
+    row.captures = GuildRating.SheetColumn(row, -56, 48)
+    row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.name:SetPoint("LEFT", row, "LEFT", 48, 0)
+    row.name:SetPoint("RIGHT", row.captures, "LEFT", -4, 0)
+    row.name:SetJustifyH("LEFT")
+    row.name:SetWordWrap(false)
+    row:Hide()
+    f.rows[i] = row
+    return row
+end
+
+function GuildRating.SortMembers(f)
+    local byCaptures = f.sort == "captures"
+    table.sort(f.members, function(a, b)
+        if byCaptures and a.captures ~= b.captures then return a.captures > b.captures end
+        if a.kills ~= b.kills then return a.kills > b.kills end
+        return a.name < b.name
+    end)
+end
+
+-- Dessin des lignes visibles. Nom, couleur de classe, badge et « c'est moi » sont
+-- resolus une fois par membre (a son premier passage a l'ecran), pas a chaque cran.
+function GuildRating.PaintMembers()
+    local f = lbFrame and lbFrame.guildMembersFrame
+    if not f or not f:IsShown() then return end
+    local K, P = GuildRating.Sheet, GetPalette()
+    local members = f.members or {}
+    for key, header in pairs(f.sortHeaders) do header.arrow:SetShown(key == f.sort) end
+    local visible = math.floor(((f.list:GetHeight() or 0) - 10 - K.ROW_H) / K.ROW_H)
+    if visible < 1 then visible = 15 end
+    local maxScroll = math.max(0, #members - visible)
+    f.scroll = math.min(math.max(0, f.scroll or 0), maxScroll)
+    local lb, sync = Overlord.Leaderboard, Overlord.Sync
+    local proof, ranks = Overlord.RankProof, Overlord.Ranks
+    for i = 1, math.max(visible, #f.rows) do
+        local index = i + f.scroll
+        local data = i <= visible and members[index] or nil
+        if data then
+            local row = GuildRating.MemberRow(f, i)
+            if not data.shown then
+                data.shown = (sync and sync.CanonicalForeverName and sync:CanonicalForeverName(data.name)) or data.name
+                local class = lb and lb.GetExportPlayerMeta and select(1, lb:GetExportPlayerMeta(data.name)) or nil
+                data.r, data.g, data.b = GetClassColor(class)
+                data.own = lb and lb.IsLocalDisplayName and lb:IsLocalDisplayName(data.name) or false
+                local okBadge, badgeRank = false, 0
+                if proof and proof.GetBadgeRank then okBadge, badgeRank = pcall(proof.GetBadgeRank, proof, data.name) end
+                badgeRank = okBadge and tonumber(badgeRank) or 0
+                data.badge = badgeRank > 0 and ranks and ranks.GetRankIcon and ranks:GetRankIcon(badgeRank) or false
+            end
+            ApplyLbRowGlow(row, index, data.own)
+            row.rank:SetText(index)
+            SetSecondaryTextColor(row.rank, P, MEDAL_COLORS[index])
+            if data.badge then row.badge:SetTexture(data.badge) end
+            row.badge:SetShown(data.badge and true or false)
+            row.name:SetText(tostring(data.shown))
+            row.name:SetTextColor(data.r or 0.85, data.g or 0.85, data.b or 0.85)
+            row.captures:SetText(data.captures > 0 and GuildRating.Number(data.captures) or "-")
+            row.captures:SetTextColor(P.white[1], P.white[2], P.white[3])
+            row.kills:SetText(GuildRating.Number(data.kills))
+            row.kills:SetTextColor(1, 0.82, 0)
+            row:Show()
+        elseif f.rows[i] then
+            f.rows[i]:Hide()
+        end
+    end
+    if #members > visible then
+        f.countText:SetText(string.format("%d-%d / %d", f.scroll + 1, math.min(#members, f.scroll + visible), #members))
+    else
+        f.countText:SetText("")
+    end
+end
+
+-- Guilde dont la fenetre est ouverte (nil sinon), et sa ligne marquee dans le tableau.
+function GuildRating.OpenGuild()
+    local f = lbFrame and lbFrame.guildMembersFrame
+    return f and f:IsShown() and f.guild or nil
+end
+
+function GuildRating.MarkRow(row, openGuild)
+    local entry = row and row._olGuildEntry
+    local selected = openGuild ~= nil and entry ~= nil and entry.guild == openGuild
+    if row and row.selected and row._olSelected ~= selected then
+        row._olSelected = selected
+        row.selected:SetShown(selected)
+    end
+end
+
+function GuildRating.MarkOpenGuild()
+    local openGuild = GuildRating.OpenGuild()
+    for i = 1, #guildRows do GuildRating.MarkRow(guildRows[i], openGuild) end
+end
+
+function GuildRating.ShowMembers(row)
+    local entry = row and row._olGuildEntry
+    local f = entry and type(entry.guild) == "string" and entry.guild ~= "" and GuildRating.MembersFrame()
+    if not f then return end
+    local lb = Overlord.Leaderboard
+    local members = lb and lb.GetGuildMembers and lb:GetGuildMembers(entry.guild)
+    local count, total
+    -- (GetGuildMembers hands its list already sorted by kills then name: sorted again only for
+    -- another order. Two sorts of a guild of a thousand members were a long click.)
+    local sorted = members ~= nil
+    if members then
+        total = 0
+        for i = 1, #members do total = total + members[i].kills end
+        count = #members
+    else
+        -- Index en reconstruction : les dix premiers du survol, et le compte du tableau.
+        members = {}
+        local summary = lb and lb.GetGuildMembersSummary and lb:GetGuildMembersSummary(entry.guild)
+        for i = 1, summary and #summary.names or 0 do
+            members[i] = { name = summary.names[i], kills = summary.kills[i], captures = 0 }
+        end
+        count, total = summary and summary.count or #members, tonumber(entry.kills) or 0
+    end
+    f.guild, f.members, f.scroll = entry.guild, members, 0
+    if not sorted or f.sort == "captures" then GuildRating.SortMembers(f) end
+    f.title:SetText("<" .. entry.guild .. ">")
+    local r, g, b = 1, 1, 1
+    if row.name and row.name.GetTextColor then r, g, b = row.name:GetTextColor() end
+    f.title:SetTextColor(r or 1, g or 1, b or 1)
+    local icon = (entry.faction == "Horde" and "Interface\\Icons\\INV_BannerPVP_01")
+        or (entry.faction == "Alliance" and "Interface\\Icons\\INV_BannerPVP_02") or nil
+    f.icon:SetTexture(icon)
+    f.icon:SetShown(icon ~= nil)
+    f.title:SetPoint("LEFT", f.icon, icon and "RIGHT" or "LEFT", icon and 8 or 0, 0)
+    f.summary:SetText(string.format(L.LB_GUILD_TIP_SUMMARY or "%d ranked members, %d HK", count, total))
+    if not f:IsShown() then
+        f:Show()
+        if Overlord.PlayPanelOpenSound then Overlord:PlayPanelOpenSound() end
+        -- (The list's height is only known once the game has laid the window out: painted again
+        -- on the next frame, or a first opening could show three rows.)
+        if C_Timer and C_Timer.After then C_Timer.After(0, GuildRating.PaintMembers) end
+    end
+    GuildRating.MarkOpenGuild()
+    GuildRating.PaintMembers()
+end
+
+function GuildRating.HideMembers()
+    local f = lbFrame and lbFrame.guildMembersFrame
+    if not f or not f:IsShown() then return false end
+    if Overlord.PlayPanelCloseSound then Overlord:PlayPanelCloseSound() end
+    f:Hide()
+    return true
+end
+
+-- Clic sur une guilde : sa fenetre ; un second clic sur la meme la referme.
+function GuildRating.OnRowClick(row, button)
+    if button ~= "LeftButton" or not row or not row._olGuildEntry then return end
+    if row.IsMouseOver and not row:IsMouseOver() then return end
+    if GuildRating.OpenGuild() == row._olGuildEntry.guild then
+        GuildRating.HideMembers()
+    else
+        GuildRating.ShowMembers(row)
+    end
+end
+
+-- Survol d'une guilde : la surbrillance des listes Blizzard dit qu'on peut cliquer.
+function GuildRating.OnRowEnter(row)
+    if row and row.hover then row.hover:Show() end
+    Overlord.LeaderboardUI.OnGuildRowEnter(row)
+end
+
+function GuildRating.OnRowLeave(row)
+    if row and row.hover then row.hover:Hide() end
+    if GameTooltip_Hide then GameTooltip_Hide() elseif GameTooltip then GameTooltip:Hide() end
 end
 
 RenderCaptureRows = function(faction, force)

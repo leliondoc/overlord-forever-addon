@@ -1878,13 +1878,32 @@ end
 -- filter changes nothing, notes the line's id, and on the next frame the badge is written inside
 -- the bracket, left of the name: "[<badge>Name]". No function of the game is hooked or replaced.
 -- Where a window has no such function, the badge stays in front of the text.
-function RP:ChatLinesCanBeMarked()
-    if type(CHAT_FRAMES) ~= "table" or not (C_Timer and C_Timer.After) then return false end
-    for _, frameName in pairs(CHAT_FRAMES) do
-        local frame = type(frameName) == "string" and _G[frameName]
-        return type(frame) == "table" and type(frame.TransformMessages) == "function"
+-- (2.5.1: only the windows that showed such a line, and only where that window holds few enough
+-- lines. A pass reads every line of a window: about 1 ms for the game's own 128 lines, 20 ms and
+-- more where another addon keeps thousands, and it read every window, whichever showed the line.
+-- Above CHAT_MARK_LINES lines in that window, the badge stays in front of the text there. Asked
+-- once per CHAT_MARK_CHECK seconds and window.)
+RP.CHAT_MARK_LINES, RP.CHAT_MARK_CHECK = 400, 5
+function RP:ChatLinesCanBeMarked(frame)
+    if type(frame) ~= "table" or type(frame.TransformMessages) ~= "function" or frame == COMBATLOG
+        or frame == _G.ChatFrame2 or not (C_Timer and C_Timer.After) then return false end
+    local now = GetTime()
+    local book = self.chatMarkOk
+    if not book then
+        book = setmetatable({}, { __mode = "k" })
+        self.chatMarkOk = book
     end
-    return false
+    local row = book[frame]
+    if row and now - row.at < self.CHAT_MARK_CHECK then return row.ok end
+    local lines = 0
+    if type(frame.GetNumMessages) == "function" then
+        local read, count = pcall(frame.GetNumMessages, frame)
+        lines = read and tonumber(count) or 0
+    end
+    row = row or {}
+    row.at, row.ok = now, lines <= self.CHAT_MARK_LINES
+    book[frame] = row
+    return row.ok
 end
 
 -- (The arguments of a line: its text, colours, then what the chat window kept with it; the ninth
@@ -1909,36 +1928,34 @@ local function MarkChatLine(message, r, g, b, infoID, accessID, typeID, event, e
     return message, r, g, b, infoID, accessID, typeID, event, eventArgs, ...
 end
 
--- A pass reads every line each chat window holds (128 by default, thousands with some addons):
--- CHAT_MARK_GAP between two passes, whatever the number of badge holders talking, and never the
--- combat log's window (its lines are no chat lines, and it is the busiest in a fight).
+-- A pass reads every line a chat window holds (128 by default): CHAT_MARK_GAP between two
+-- passes, whatever the number of badge holders talking, only the windows that showed one of
+-- their lines (ChatBadgeFilter), never the combat log's window.
 function RP:MarkChatLines()
     self.chatMarkArmed = nil
     self.chatMarkAt = GetTime()
-    if self.chatPending and type(CHAT_FRAMES) == "table" then
-        for _, frameName in pairs(CHAT_FRAMES) do
-            local frame = type(frameName) == "string" and _G[frameName]
-            if type(frame) == "table" and type(frame.TransformMessages) == "function"
-                and frame ~= COMBATLOG and frameName ~= "ChatFrame2" then
-                pcall(frame.TransformMessages, frame, ChatLineIsPending, MarkChatLine)
-            end
+    local frames = self.chatPendingFrames
+    if self.chatPending and frames then
+        for frame in pairs(frames) do
+            pcall(frame.TransformMessages, frame, ChatLineIsPending, MarkChatLine)
         end
     end
-    self.chatPending, self.chatPendingCount = nil, nil
+    self.chatPending, self.chatPendingCount, self.chatPendingFrames = nil, nil, nil
 end
 
 RP.CHAT_PENDING_MAX, RP.CHAT_MARK_GAP = 32, 0.25
-function RP.ChatBadgeFilter(_, _, msg, author, ...)
+function RP.ChatBadgeFilter(chatFrame, _, msg, author, ...)
     local ok, mark = pcall(RP.ChatBadge, RP, author)
     if not ok or not mark or not Accessible(msg) or type(msg) ~= "string" then return false end
     -- (The line's id: the event's eleventh argument, the ninth after the text and the author.)
     local line = select(9, ...)
-    if Accessible(line) and type(line) == "number" and line > 0 and RP:ChatLinesCanBeMarked() then
+    if Accessible(line) and type(line) == "number" and line > 0 and RP:ChatLinesCanBeMarked(chatFrame) then
         local pending = RP.chatPending
         if not pending then
             pending = {}
-            RP.chatPending, RP.chatPendingCount = pending, 0
+            RP.chatPending, RP.chatPendingCount, RP.chatPendingFrames = pending, 0, {}
         end
+        RP.chatPendingFrames[chatFrame] = true
         -- (One note per line: the filter runs once per chat window showing it.)
         if pending[line] == nil and RP.chatPendingCount < RP.CHAT_PENDING_MAX then
             pending[line] = (mark:gsub("%s+$", ""))

@@ -1545,7 +1545,7 @@ do
         local savedFrames, savedTimer = CHAT_FRAMES, C_Timer
         local later, waits = {}, {}
         C_Timer = { After = function(wait, fn) later[#later + 1] = fn; waits[#waits + 1] = wait end }
-        RP.chatMarkAt = nil
+        RP.chatMarkAt, RP.chatMarkOk = nil, nil
         local function window()
             local frame = { lines = {} }
             -- (As the client does: predicate and rewrite get the line's text, colours and extras.)
@@ -1585,6 +1585,7 @@ do
             and type(ChatFrameOne.lines[1][10]) == "function" and ChatFrameOne.lines[1][5] == 7, "the line lost what the window kept with it")
         -- A second pass marks nothing twice; a line without an id keeps the badge before its text.
         RP.chatPending, RP.chatPendingCount = { [41] = mark }, 1
+        RP.chatPendingFrames = { [ChatFrameOne] = true, [ChatFrameTwo] = true }
         RP:MarkChatLines()
         assert(ChatFrameOne.lines[1][1] == want, "a line was marked twice")
         local _, text = RP.ChatBadgeFilter(ChatFrameOne, "CHAT_MSG_SAY", "hi", "Troma Orcbane", "", "", "", "", 0, 0, "", 0, 0)
@@ -1597,14 +1598,31 @@ do
         function combat:TransformMessages() read = read + 1 end
         ChatFrame2 = combat
         CHAT_FRAMES = { "ChatFrameOne", "ChatFrame2", "ChatFrameTwo" }
+        -- (2.5.1: only the windows that showed such a line are read.)
+        local twoRead, twoTransform = 0, ChatFrameTwo.TransformMessages
+        ChatFrameTwo.TransformMessages = function(...) twoRead = twoRead + 1 return twoTransform(...) end
         show(ChatFrameOne, 44, "Troma Orcbane", "soon after")
+        assert(select(2, RP.ChatBadgeFilter(combat, "CHAT_MSG_SAY", "hi", "Troma Orcbane", "", "", "", "", 0, 0, "", 0, 47)) == mark .. " hi",
+            "a line of the combat log's window was to be marked in place")
         assert(#later == 2 and waits[2] > 0 and waits[2] <= RP.CHAT_MARK_GAP, "a second pass right after the first: " .. tostring(waits[2]))
         later[2]()
         assert(read == 0, "the combat log's window was read")
+        assert(twoRead == 0, "a window that showed no such line was read")
+        ChatFrameTwo.TransformMessages = twoTransform
         assert(ChatFrameOne.lines[#ChatFrameOne.lines][1]:find("|h[" .. mark, 1, true), "the line of the spaced pass was not marked")
         ChatFrame2 = nil
+        -- 2.5.1: chat windows holding thousands of lines (another addon's history): a pass would
+        -- read them all, so the badge stays in front of the text and no pass is armed.
+        ChatFrameOne.GetNumMessages = function() return RP.CHAT_MARK_LINES + 1 end
+        RP.chatMarkOk = nil
+        local armed = #later
+        local _, heavy = show(ChatFrameOne, 45, "Troma Orcbane", "long history")
+        assert(heavy == mark .. " long history" and #later == armed, "a long chat history was to be read: " .. tostring(heavy))
+        ChatFrameOne.GetNumMessages = function() return 128 end
+        RP.chatMarkOk = nil
+        assert(select("#", show(ChatFrameOne, 46, "Troma Orcbane", "short history")) == 1, "the game's own history is not marked in place")
         CHAT_FRAMES, C_Timer, ChatFrameOne, ChatFrameTwo = savedFrames, savedTimer, nil, nil
-        RP.chatPending, RP.chatPendingCount, RP.chatMarkArmed = nil, nil, nil
+        RP.chatPending, RP.chatPendingCount, RP.chatMarkArmed, RP.chatMarkOk, RP.chatPendingFrames = nil, nil, nil, nil, nil
     end
     -- Whispers are never filtered, and the filters go through the game's own registry.
     for _, event in ipairs(RP.CHAT_EVENTS) do

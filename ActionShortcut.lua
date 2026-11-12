@@ -5,8 +5,12 @@ Overlord.ActionShortcut = {}
 local L = Overlord.L
 
 local ICON_TEXTURE = "Interface\\AddOns\\Overlord\\Textures\\overlord_minimap"
-local ALLIANCE_MACRO_ICON = "Interface\\Icons\\INV_BannerPVP_02"
-local HORDE_MACRO_ICON = "Interface\\Icons\\INV_BannerPVP_01"
+-- 2.5.1: the macro's own icon, the one the game draws on the cursor while the shortcut is
+-- dragged and in its macro window: crossed swords, the same for both factions. It was the
+-- player's faction banner, which read as a bug during the drag. The game refuses an addon's
+-- texture here: EditMacro with our logo leaves the macro without icon (checked in game on
+-- 2026-11-11: GetMacroInfo returned nil for it).
+local MACRO_ICON = "Interface\\Icons\\Ability_DualWield"
 local MACRO_BODY = "/overlord toggle"
 local MACRO_NAME = "Overlord"
 local MACRO_NAME_FALLBACK = "Overlord Panel"
@@ -114,11 +118,10 @@ local function CanUseMacroAPI()
 end
 
 local function ResolveMacroIcon()
-    -- Les macros n'acceptent pas de facon fiable une texture situee dans le
-    -- dossier d'un addon. Un etendard Blizzard evite donc le point d'interrogation
-    -- sur les barres tierces; les boutons Blizzard recoivent le logo exact plus bas.
-    local faction = type(UnitFactionGroup) == "function" and UnitFactionGroup("player")
-    local iconPath = faction == "Horde" and HORDE_MACRO_ICON or ALLIANCE_MACRO_ICON
+    -- Les macros n'acceptent pas une texture situee dans le dossier d'un addon. Une icone
+    -- de Blizzard evite donc le point d'interrogation sur les barres tierces et pendant le
+    -- glisser; les boutons Blizzard recoivent le logo exact plus bas.
+    local iconPath = MACRO_ICON
     if type(GetFileIDFromPath) == "function" then
         local ok, fileID = pcall(GetFileIDFromPath, iconPath)
         if ok and type(fileID) == "number" and fileID > 0 then return fileID end
@@ -130,7 +133,7 @@ end
 -- the icon in another form than the one we pass (fileID vs path), the plain compare
 -- would stay unequal and rewrite the macro at every combat end; a macro still holding
 -- this value is already repaired. A hand-set icon differs from both and is repaired once.
--- Kept per desired icon: a faction read late at login still gets its own banner.
+-- Kept per desired icon: a macro made by an earlier version (a faction banner) is repaired once.
 local repairedMacroIcon, repairedForIcon
 
 local function MacroIconNeedsRepair(icon, desiredIcon)
@@ -181,20 +184,49 @@ local function IsShortcutActionButton(button)
     return shortcutMacroIndices[macroIndex] == true
 end
 
-local function SetOverlordTexture(icon)
-    if not icon or icon._overlordSettingTexture then return end
-    icon._overlordSettingTexture = true
-    icon:SetTexture(ICON_TEXTURE)
-    icon:SetTexCoord(0, 1, 0, 1)
-    icon._overlordSettingTexture = nil
+-- 2.5.1: the logo is a texture of our own laid over the button's icon, shown while the button
+-- holds the shortcut. Before, the logo was written into the game's own icon: the game repaints
+-- that icon whenever the mouse passes over the button (and when its bar is shown), without any
+-- event, so the macro's own icon (one of the game's: a macro cannot hold an addon's texture)
+-- came back until the next event. Our layer is not the game's to repaint. Kept in a table of
+-- ours (weak keys), nothing is written on the game's buttons.
+local shortcutLayers = setmetatable({}, { __mode = "k" })
+
+local function ShortcutLayer(button, create)
+    local layer = shortcutLayers[button]
+    if layer or not create then return layer end
+    local icon = GetButtonIcon(button)
+    if not icon or type(button.CreateTexture) ~= "function" then return nil end
+    -- (Just above the icon, in its own draw layer: the cooldown, the border, the key text and
+    -- the glow of the button stay above, as they are above the icon.)
+    local drawLayer, sub = "BACKGROUND", 0
+    if icon.GetDrawLayer then
+        local ok, name, level = pcall(icon.GetDrawLayer, icon)
+        if ok and type(name) == "string" then drawLayer, sub = name, tonumber(level) or 0 end
+    end
+    local ok, made = pcall(button.CreateTexture, button, nil, drawLayer, nil, math.min(7, sub + 1))
+    if not ok or not made then return nil end
+    layer = made
+    layer:SetTexture(ICON_TEXTURE)
+    layer:SetTexCoord(0, 1, 0, 1)
+    layer:SetAllPoints(icon)
+    -- (Where the game rounds the icon with a mask, ours is rounded by the same one.)
+    local mask = button.IconMask
+    if mask and layer.AddMaskTexture then pcall(layer.AddMaskTexture, layer, mask) end
+    layer:Hide()
+    shortcutLayers[button] = layer
+    return layer
 end
 
 local function ApplyShortcutIconToActionButton(button)
-    if not IsShortcutActionButton(button) then return end
-
-    local icon = GetButtonIcon(button)
-    if not icon then return end
-    SetOverlordTexture(icon)
+    if IsShortcutActionButton(button) then
+        local layer = ShortcutLayer(button, true)
+        if layer then layer:Show() end
+    else
+        -- (The slot now holds something else, or nothing: its own icon shows again.)
+        local layer = ShortcutLayer(button, false)
+        if layer then layer:Hide() end
+    end
 end
 
 -- Button names built once; _G is still read per sweep so lazily created bars are found.
@@ -206,7 +238,11 @@ for _, prefix in ipairs(ACTION_BUTTON_PREFIXES) do
 end
 
 local function RefreshActionButtonIcons()
-    if not RefreshShortcutMacroCache() then return end
+    if not RefreshShortcutMacroCache() then
+        -- (No shortcut macro any more: no button shows our layer.)
+        for _, layer in pairs(shortcutLayers) do layer:Hide() end
+        return
+    end
     for i = 1, #ACTION_BUTTON_NAMES do
         local button = _G[ACTION_BUTTON_NAMES[i]]
         if button then pcall(ApplyShortcutIconToActionButton, button) end
@@ -285,7 +321,7 @@ end
 -- d'ailleurs a rien : les boutons de Blizzard recoivent leur propre copie de Update au
 -- chargement, avant nous.) Le logo est repose sur les evenements ci-dessous. Blizzard
 -- repeint aussi un bouton au survol et quand sa barre s'affiche, sans evenement : la
--- macro montre alors son icone d'etendard, jamais un point d'interrogation, jusqu'a
+-- macro montrait alors sa propre icone, jamais un point d'interrogation, jusqu'a
 -- l'evenement suivant. Comme en 1.9.1.
 
 local actionIconEventFrame = CreateFrame("Frame")
@@ -294,11 +330,13 @@ actionIconEventFrame:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
 actionIconEventFrame:RegisterEvent("ACTIONBAR_PAGE_CHANGED")
 actionIconEventFrame:RegisterEvent("UPDATE_MACROS")
 actionIconEventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
--- Les autres repeints d'un bouton par Blizzard : changement de forme ou de barre,
--- grille montree pendant un glisser, icone d'un sort ou d'une macro qui change.
+-- Les autres changements de ce qu'un bouton tient : changement de forme ou de barre,
+-- grille montree pendant un glisser. (2.5.1 : plus SPELL_UPDATE_ICON. Le logo est une
+-- texture a nous, qu'une icone de sort repeinte ne touche pas, et cet evenement tombe
+-- sans cesse en combat : un balayage de 96 boutons a presque chaque image.)
 -- (pcall : un evenement absent de ce client ne doit pas empecher les autres.)
 for _, event in ipairs({ "UPDATE_SHAPESHIFT_FORM", "UPDATE_BONUS_ACTIONBAR", "UPDATE_VEHICLE_ACTIONBAR",
-    "UPDATE_OVERRIDE_ACTIONBAR", "ACTIONBAR_SHOWGRID", "ACTIONBAR_HIDEGRID", "SPELL_UPDATE_ICON" }) do
+    "UPDATE_OVERRIDE_ACTIONBAR", "ACTIONBAR_SHOWGRID", "ACTIONBAR_HIDEGRID" }) do
     pcall(actionIconEventFrame.RegisterEvent, actionIconEventFrame, event)
 end
 
@@ -306,12 +344,17 @@ local actionIconRefreshPending = false
 local actionIconRepairPending = false
 
 -- Runs one frame after the event. Every feature stops in instances: no macro edit (it
--- wakes every addon with UPDATE_MACROS) and no button sweep; the texture already on the
--- buttons stays. OnInstanceResume (also after a delayed resume) asks for both on exit.
+-- wakes every addon with UPDATE_MACROS) and no sweep of the bars. Only the buttons that
+-- already carry our layer are looked at, to hide it where the slot now holds something
+-- else (the layer is ours: the game's repaint no longer covers it, as it did before
+-- 2.5.1). OnInstanceResume (also after a delayed resume) asks for the rest on exit.
 local function RunActionButtonIconRefresh()
     actionIconRefreshPending = false
     if Overlord.InstanceSuspended or (IsInInstance and IsInInstance()) then
         actionIconRepairPending = false
+        for button, layer in pairs(shortcutLayers) do
+            if layer:IsShown() and not IsShortcutActionButton(button) then layer:Hide() end
+        end
         return
     end
     if actionIconRepairPending then
