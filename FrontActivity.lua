@@ -1241,7 +1241,7 @@ function FA:MaybeAnnounceFight(key, bracket, now)
     fightAnnounced[key] = { bracket = step, seen = now }
     fightLines[#fightLines + 1] = now
     local L = Overlord.L
-    local text = (L and L.FIGHT_ALERT) or "Battle at %s: %d+ kills in 5 min"
+    local text = (L and L.FIGHT_ALERT) or "Battle at %s: %d+ honorable kills in 5 min"
     Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. string.format(text, label, step))
     return true
 end
