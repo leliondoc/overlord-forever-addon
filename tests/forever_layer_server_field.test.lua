@@ -162,4 +162,106 @@ assert(scan({ nameplate1 = { guid = "Creature-0-7054-1-26-3100-0000EEEE09" } },
     { ["Vignette-0-7054-1-26-0-0000EEEE01"] = "Creature-0-7054-1-26-3100-0000EEEE09" }) == nil,
     "one NPC voted as a nameplate and again as a vignette")
 
-print("Layer: server field, two agreeing NPCs, player creatures skipped OK")
+-- 2.5.1: the layer of a player asked by name is three lookups in an index of the known layers
+-- (lowered name, dedup key, base name), not a pass over all of them: a name that was not there
+-- cost 1 ms with 512 known layers, and a guild rampage asked for every killer in one frame.
+do
+    local savedSync = Overlord.Sync
+    Overlord.Sync = { GetCaptureContributorDedupKey = function(_, name) return ((name:match("^([^%-]+)") or name):lower()) end }
+    shard:SetPlayerShard("Ann Lee-Realm", 7)
+    shard:SetPlayerShard("Bob Stone", 8)
+    local who, layer = shard:ResolveKnownShardPlayer("Bob Stone", true)
+    assert(who == "Bob Stone" and layer == 8, "a player asked by its exact name")
+    who, layer = shard:ResolveKnownShardPlayer("bob stone", true)
+    assert(who == "Bob Stone" and layer == 8, "a player asked in another case")
+    -- The key holds the realm, the question does not: found by the dedup key, strict or not.
+    who, layer = shard:ResolveKnownShardPlayer("Ann Lee", true)
+    assert(who == "Ann Lee-Realm" and layer == 7, "a player known with its realm, asked without: " .. tostring(who))
+    -- Without a dedup key (a short capturer name): only the loose question finds the base name.
+    Overlord.Sync = nil
+    shard._resolveIndex = nil
+    assert(shard:ResolveKnownShardPlayer("Ann Lee", true) == nil, "the strict question matched a base name")
+    who, layer = shard:ResolveKnownShardPlayer("Ann Lee", false)
+    assert(who == "Ann Lee-Realm" and layer == 7, "the loose question did not find the base name")
+    -- A name nobody holds: nothing, and the index is not built again for it.
+    local index = shard._resolveIndex
+    assert(index and shard:ResolveKnownShardPlayer("No Body", false) == nil and shard._resolveIndex == index,
+        "a name that is not there built the index again")
+    -- A player added or removed: the next question sees it, and the index is not built again
+    -- (a newcomer joins it in place, a departure is dropped where it is met).
+    shard:SetPlayerShard("Cid Vale", 9)
+    who, layer = shard:ResolveKnownShardPlayer("cid vale", true)
+    assert(who == "Cid Vale" and layer == 9 and shard._resolveIndex == index, "a player added after the index was built")
+    shard:RemoveKnownShardPeer("Ann Lee-Realm")
+    assert(shard:ResolveKnownShardPlayer("Ann Lee", false) == nil, "a removed player is still found")
+    -- Past its life: not found (and dropped).
+    shard:ResolveKnownShardPlayer("cid vale", true)
+    local built = shard._resolveIndex
+    now = now + 100000
+    assert(shard:ResolveKnownShardPlayer("Bob Stone", true) == nil and shard.knownShards["Bob Stone"] == nil,
+        "a layer past its life was returned")
+    -- (Dropped from the index in place: a rampage asking for many stale killers in one frame built
+    -- it again for each of them.)
+    assert(shard._resolveIndex == built and built.byLower["bob stone"] == nil
+        and built.byBase["bob stone"] == nil,
+        "a layer past its life built the index again, or stayed in it")
+    assert(shard:ResolveKnownShardPlayer("Cid Vale", true) == nil and shard._resolveIndex == built,
+        "a second stale player built the index again")
+    shard:SetPlayerShard("Dee Moor", 4)
+    who, layer = shard:ResolveKnownShardPlayer("Dee Moor", true)
+    assert(who == "Dee Moor" and layer == 4 and shard._resolveIndex == built, "a player added after a drop")
+    who, layer = shard:ResolveKnownShardPlayer("Dee Moor-Elsewhere", false)
+    assert(who == "Dee Moor" and layer == 4 and shard._resolveIndex == built, "a newcomer's base name is not in the index")
+    -- Two players of the same base: the one who leaves does not hide the other, and the index
+    -- loses nothing at a departure.
+    shard:SetPlayerShard("Dee Moor-Faraway", 6)
+    shard:RemoveKnownShardPeer("Dee Moor")
+    assert(built.byLower["dee moor"] == nil, "a departure stayed in the index")
+    who, layer = shard:ResolveKnownShardPlayer("Dee Moor-Elsewhere", false)
+    assert(who == "Dee Moor-Faraway" and layer == 6 and shard._resolveIndex == built,
+        "a known player of the same base was hidden by one who left: " .. tostring(who))
+    shard:SetPlayerShard("Dee Moor", 4)
+    now = now + 100000
+    shard:SetPlayerShard("Dee Moor-Faraway", 6)
+    who, layer = shard:ResolveKnownShardPlayer("Dee Moor-Elsewhere", false)
+    assert(who == "Dee Moor-Faraway" and layer == 6 and shard.knownShards["Dee Moor"] == nil,
+        "a stale player of the same base hid a live one: " .. tostring(who))
+    -- Another table of players (a reset): built again.
+    local savedKnown = shard.knownShards
+    shard.knownShards = { ["Eve Hart"] = 5 }
+    shard:ResolveIndex()
+    assert(shard._resolveIndex ~= built and shard._resolveIndex.byLower["eve hart"]
+        and shard._resolveIndex.byLower["eve hart"]["Eve Hart"], "a new table of players was not read")
+    shard.knownShards = savedKnown
+    shard._resolveIndex = nil
+    Overlord.Sync = savedSync
+end
+
+-- 2.5.1: the players whose presence says they help ("Help others" on). Kept 15 min, taken back
+-- by a presence without the mark, bounded.
+do
+    assert(not shard:IsPlayerHelper("Hal Helper"), "a helper nobody told us of")
+    shard:SetPlayerHelper("Hal Helper", true)
+    assert(shard:IsPlayerHelper("Hal Helper") and shard.knownHelperCount == 1, "a helper told by its presence")
+    shard:SetPlayerHelper("Hal Helper", true)
+    assert(shard.knownHelperCount == 1, "the same helper counted twice")
+    shard:SetPlayerHelper("Hal Helper", false)
+    assert(not shard:IsPlayerHelper("Hal Helper") and shard.knownHelperCount == 0, "the mark was not taken back")
+    shard:SetPlayerHelper("", true); shard:SetPlayerHelper(nil, true); shard:SetPlayerHelper("Not There", false)
+    assert(shard.knownHelperCount == 0, "an empty name was kept")
+    shard:SetPlayerHelper("Hal Helper", true)
+    now = now + 901
+    assert(not shard:IsPlayerHelper("Hal Helper"), "a helper mark outlived its 15 minutes")
+    -- Full: the lapsed ones leave first (Hal), the table never passes its bound.
+    for i = 1, 599 do shard:SetPlayerHelper("Helper " .. i, true) end
+    assert(shard.knownHelperCount == 600, "600 names: " .. tostring(shard.knownHelperCount))
+    shard:SetPlayerHelper("Helper 600", true)
+    assert(shard.knownHelperCount == 600 and shard.knownHelpers["Hal Helper"] == nil and shard:IsPlayerHelper("Helper 600")
+        and shard:IsPlayerHelper("Helper 1"), "the lapsed helper did not leave first: " .. tostring(shard.knownHelperCount))
+    shard:SetPlayerHelper("Helper 601", true)
+    local held = 0
+    for _ in pairs(shard.knownHelpers) do held = held + 1 end
+    assert(held == 1 and shard.knownHelperCount == 1 and shard:IsPlayerHelper("Helper 601"), "the table passed its bound: " .. held)
+end
+
+print("Layer: server field, two agreeing NPCs, player creatures skipped, helper marks OK")

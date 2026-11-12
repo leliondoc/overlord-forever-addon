@@ -1341,6 +1341,12 @@ local function OutpostCapturerTail(st)
     -- (A name is letters, spaces, apostrophes and hyphens: one carrying an escape code, a link
     -- or a control character is somebody's doing, and is not printed.)
     if who:find("[|%c%[%]:]") then return "" end
+    -- 2.5.1: the capturer is of the faction the site goes to: of the other one, he is never
+    -- asked for a layer change (the link of the tag then names nobody).
+    local side, jumper = st.ownerFaction, Overlord.LayerJumper
+    if (side == "Alliance" or side == "Horde") and side ~= Overlord.PlayerFaction and jumper and jumper.NoteEnemy then
+        pcall(jumper.NoteEnemy, jumper, who)
+    end
     local sync = Overlord.Sync
     local ok, tag = pcall(function() return sync.GetShardAlertTagForPlayer and sync:GetShardAlertTagForPlayer(who) or "" end)
     if not ok or type(tag) ~= "string" or tag == "" then return "" end

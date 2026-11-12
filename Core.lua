@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.5.0"
+Overlord.Version = "2.5.1"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -951,6 +951,14 @@ function Overlord.Shard:TouchPeerNode(playerName, now)
         node = { key = playerName }
         self.peerNodes[playerName] = node
         self.peerCount = (tonumber(self.peerCount) or 0) + 1
+        -- (2.5.1: a newcomer joins ResolveIndex in place; without a current index, the next
+        -- question builds one. A rebuild per newcomer was a whole pass per alert in a front.)
+        local index = self._resolveIndex
+        if index and index.rev == (tonumber(self._peerSetRev) or 0) and index.source == self.knownShards then
+            self:AddToIndex(index, playerName)
+        else
+            self._peerSetRev = (tonumber(self._peerSetRev) or 0) + 1
+        end
     end
     node.expiresAt = now + SHARD_PEER_TTL
     node.prev = self.peerTail
@@ -962,6 +970,13 @@ function Overlord.Shard:RemoveKnownShardPeer(playerName)
     local shard = self.knownShards[playerName]
     self.knownShards[playerName] = nil
     self.knownShardUpdatedAt[playerName] = nil
+    -- (2.5.1: a departure leaves ResolveIndex in place, under its three keys, without
+    -- building it again. A rebuild per departure was a whole pass per stale killer of a
+    -- guild rampage, the exact name included, in one frame.)
+    local index = self._resolveIndex
+    if index and index.rev == (tonumber(self._peerSetRev) or 0) and index.source == self.knownShards then
+        self:DropFromIndex(index, playerName)
+    end
     local node = self.peerNodes[playerName]
     if node then
         self:UnlinkPeerNode(node)
@@ -989,6 +1004,49 @@ function Overlord.Shard:EnsurePeerCapacity(playerName, now)
         return true
     end
     return false
+end
+
+-- 2.5.1: "Help others" as that player's own presence says it (SyncRelay "~h"). Kept apart from
+-- its layer and longer (SHARD_HELPER_MEMORY): a layer lives 3 min and comes back by a relayed SH,
+-- which says nothing of the option; its presence comes at the directory's own pace. A presence
+-- without the mark takes it back at once. Bounded: SHARD_HELPER_MAX names, the lapsed ones
+-- dropped first, then all (they come back with the presences).
+local SHARD_HELPER_MEMORY, SHARD_HELPER_MAX = 900, 600
+function Overlord.Shard:SetPlayerHelper(playerName, helps)
+    if type(playerName) ~= "string" or playerName == "" then return end
+    local known = self.knownHelpers
+    if not known then
+        known = {}
+        self.knownHelpers, self.knownHelperCount = known, 0
+    end
+    local now = GetTime()
+    if not helps then
+        if known[playerName] then
+            known[playerName] = nil
+            self.knownHelperCount = math.max(0, (self.knownHelperCount or 1) - 1)
+        end
+        return
+    end
+    if not known[playerName] then
+        if (self.knownHelperCount or 0) >= SHARD_HELPER_MAX then
+            local kept = 0
+            for name, untilAt in pairs(known) do
+                if untilAt <= now then known[name] = nil else kept = kept + 1 end
+            end
+            if kept >= SHARD_HELPER_MAX then
+                known, kept = {}, 0
+                self.knownHelpers = known
+            end
+            self.knownHelperCount = kept
+        end
+        self.knownHelperCount = (self.knownHelperCount or 0) + 1
+    end
+    known[playerName] = now + SHARD_HELPER_MEMORY
+end
+
+function Overlord.Shard:IsPlayerHelper(playerName)
+    local untilAt = playerName and self.knownHelpers and self.knownHelpers[playerName]
+    return untilAt ~= nil and untilAt > GetTime()
 end
 
 -- Enregistre le shardID d'un autre joueur (recu via sync)
@@ -1174,25 +1232,83 @@ function Overlord.Shard:ResolveKnownShardPlayer(nameHint, strict)
     local sync = Overlord.Sync
     local hintDK = sync and sync.GetCaptureContributorDedupKey and sync:GetCaptureContributorDedupKey(hint)
     local hintLower = hint:lower()
+    local hintKey = hintDK and hintDK:lower() or nil
+    local hintBase = not strict and (hint:match("^([^%-]+)") or hint):lower() or nil
 
-    for player, _ in pairs(self.knownShards) do
-        if self:PartyInviteTargetIsUsable(player) then
-            local shard = self:GetKnownPlayerShard(player)
-            if shard then
-                if player:lower() == hintLower then return player, shard end
-                if hintDK and sync then
-                    local pdk = sync:GetCaptureContributorDedupKey(player)
-                    if pdk and pdk:lower() == hintDK:lower() then return player, shard end
-                end
-                if not strict then
-                    local hintBase = hint:match("^([^%-]+)") or hint
-                    local base = player:match("^([^%-]+)") or player
-                    if base:lower() == hintBase:lower() then return player, shard end
-                end
-            end
-        end
+    -- 2.5.1: three lookups in an index of the known layers, instead of reading them all. A name
+    -- that was not there cost a whole pass (1 ms for 512 known layers, twice with the loose
+    -- pass), and a guild rampage asked for every one of its killers in the same frame: 20 ms
+    -- for twenty unknown killers. Each key holds the set of known players under it (names of
+    -- the same base are rare: a set of one); an entry found past its life is dropped by
+    -- GetKnownPlayerShard and leaves the set there, and the next one under the key is asked.
+    local index = self:ResolveIndex()
+    local player, shard = self:FirstLiveInIndex(index, index.byLower[hintLower])
+    if player then return player, shard end
+    player, shard = self:FirstLiveInIndex(index, hintKey and index.byKey[hintKey] or nil)
+    if player then return player, shard end
+    return self:FirstLiveInIndex(index, hintBase and index.byBase[hintBase] or nil)
+end
+
+-- (Removing the player being read from its set during the walk is allowed in Lua.)
+function Overlord.Shard:FirstLiveInIndex(index, set)
+    if not set then return nil, nil end
+    for player in pairs(set) do
+        local shard = self:GetKnownPlayerShard(player)
+        if shard then return player, shard end
+        self:DropFromIndex(index, player)
     end
     return nil, nil
+end
+
+local function IndexSetAdd(map, key, player)
+    local set = map[key]
+    if not set then
+        set = {}
+        map[key] = set
+    end
+    set[player] = true
+end
+
+local function IndexSetDrop(map, key, player)
+    local set = map[key]
+    if not set or not set[player] then return end
+    set[player] = nil
+    if next(set) == nil then map[key] = nil end
+end
+
+-- A player no longer known (departure, layer past its life) leaves the index under its three
+-- keys, in place.
+function Overlord.Shard:DropFromIndex(index, player)
+    if type(player) ~= "string" or self.knownShards[player] ~= nil then return end
+    IndexSetDrop(index.byLower, player:lower(), player)
+    local sync = Overlord.Sync
+    local key = sync and sync.GetCaptureContributorDedupKey and sync:GetCaptureContributorDedupKey(player)
+    if key then IndexSetDrop(index.byKey, key:lower(), player) end
+    IndexSetDrop(index.byBase, (player:match("^([^%-]+)") or player):lower(), player)
+end
+
+-- The known layers by lowered name, by dedup key and by base name (before the realm), each key
+-- to the set of players under it. Built in one pass when there is none or the players' table
+-- was replaced; then kept in place: a newcomer added (TouchPeerNode), a departure dropped
+-- (RemoveKnownShardPeer).
+function Overlord.Shard:ResolveIndex()
+    local rev = tonumber(self._peerSetRev) or 0
+    local index = self._resolveIndex
+    if index and index.rev == rev and index.source == self.knownShards then return index end
+    index = { rev = rev, source = self.knownShards, byLower = {}, byKey = {}, byBase = {} }
+    for player in pairs(self.knownShards) do self:AddToIndex(index, player) end
+    self._resolveIndex = index
+    return index
+end
+
+-- One player into the index under its three keys.
+function Overlord.Shard:AddToIndex(index, player)
+    if type(player) ~= "string" or not self:PartyInviteTargetIsUsable(player) then return end
+    IndexSetAdd(index.byLower, player:lower(), player)
+    local sync = Overlord.Sync
+    local key = sync and sync.GetCaptureContributorDedupKey and sync:GetCaptureContributorDedupKey(player)
+    if key then IndexSetAdd(index.byKey, key:lower(), player) end
+    IndexSetAdd(index.byBase, (player:match("^([^%-]+)") or player):lower(), player)
 end
 
 function Overlord.Shard:IsPlayerOnDifferentShard(playerName)
@@ -3217,12 +3333,18 @@ function Overlord:Initialize()
             if Overlord.Leaderboard and Overlord.Leaderboard.RestoreLocalKillsFromLatestHistoryIfNeeded then
                 Overlord.Leaderboard:RestoreLocalKillsFromLatestHistoryIfNeeded()
             end
-            -- Filet anti-perte : restaure le classement complet recu si le snapshot appartient a la
-            -- campagne courante (recuperation apres faux reset / crash). Fusion max(), pas de rebroadcast.
-            if Overlord.Leaderboard and Overlord.Leaderboard.RestoreFullLadderFromSnapshotIfNeeded then
-                Overlord.Leaderboard:RestoreFullLadderFromSnapshotIfNeeded()
-            end
             return true
+        end, true)
+
+        -- Filet anti-perte : restaure le classement complet recu si le snapshot appartient a la
+        -- campagne courante (recuperation apres faux reset / crash). Fusion max(), pas de rebroadcast.
+        -- 2.5.1 : par tranches d'1 ms (jusqu'a 17 ms d'un bloc a 10 000 joueurs), stage a part
+        -- pour que le reset hebdomadaire ci-dessus ne soit pas rejoue a chaque tranche.
+        AddLoginInitStage("SnapshotRestore", function()
+            if Overlord._europeanLeaderboardUnionPending then return false end
+            if not Overlord.Leaderboard
+                or not Overlord.Leaderboard.StepFullLadderSnapshotRestore then return true end
+            return Overlord.Leaderboard:StepFullLadderSnapshotRestore()
         end, true)
 
         -- History 8.0.7, alias de personnages et index account-wide peuvent contenir

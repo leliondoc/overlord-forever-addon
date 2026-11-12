@@ -430,6 +430,8 @@ local PERF_MODULES = {
     "ZoneIndicator", "Zones", "Relay", "RankProof", "Ranks", "RanksUI",
     -- 2.3.0: the whisper mesh and the guild lane carry the data while the channel is refused.
     "ChannelDirectory", "GuildLane",
+    -- 2.5.1: the Layers window and the action bar shortcut.
+    "LayerJumper",
 }
 local PERF_SPIKE_MS = 50
 local perfState = nil

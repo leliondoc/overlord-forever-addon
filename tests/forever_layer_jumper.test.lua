@@ -310,6 +310,68 @@ local link = dana.LJ:ChatLink("Bob Helper", 1305, ", layer #1305")
 assert(link == ", |cff71d5ff|Haddon:Overlord:layer:Bob Helper:1305|h[layer #1305]|h|r", "the link: " .. tostring(link))
 assert(dana.LJ:ChatLink("Bad|Name", 1305, " layer #1") == nil and dana.LJ:ChatLink("Bob Helper", nil, " layer") == nil,
     "a link for a name or a layer that cannot be one")
+-- 2.5.1: a player an alert told us is of the other faction is never asked, even when nothing
+-- else knows his faction (never met, in no ranking): his link names nobody, he is no candidate,
+-- and the window does not offer him.
+do
+    assert(not dana.LJ:IsEnemy("Tom Raider"), "fixture: an unknown player is nobody's enemy yet")
+    dana.LJ:NoteEnemy("Tom Raider")
+    assert(dana.LJ:IsEnemy("Tom Raider") and dana.LJ:IsEnemy("tom raider-SomeRealm"), "a noted enemy is not known as one")
+    assert(dana.LJ:ChatLink("Tom Raider", 1305, ", layer #1305") == ", |cff71d5ff|Haddon:Overlord:layer::1305|h[layer #1305]|h|r",
+        "the link of an enemy's layer names him: " .. tostring(dana.LJ:ChatLink("Tom Raider", 1305, ", layer #1305")))
+    know(dana, { { "Tom Raider", 1305 }, { "Bob Helper", 1305 } })
+    local asked = {}
+    for _, cand in ipairs(dana.LJ:CandidatesFor(1305, "Tom Raider")) do asked[#asked + 1] = cand.name end
+    assert(table.concat(asked, ",") == "Bob Helper", "an enemy is among the players asked: " .. table.concat(asked, ","))
+    for _, row in ipairs(dana.LJ:KnownPlayers()) do
+        if row.name == "Tom Raider" then assert(row.enemy, "the window offers an enemy as a helper") end
+    end
+    -- What the game shows of a player comes first: an ally seen as such stays one.
+    dana.LJ:NoteEnemy("Bob Helper")
+    local savedLive = dana.env.Overlord.Sync.GetLivePlayerFaction
+    dana.env.Overlord.Sync.GetLivePlayerFaction = function(_, name)
+        if name == "Bob Helper" then return dana.env.Overlord.PlayerFaction end
+        return savedLive and savedLive(dana.env.Overlord.Sync, name) or nil
+    end
+    assert(not dana.LJ:IsEnemy("Bob Helper"), "a player seen of our faction was kept as an enemy")
+    dana.env.Overlord.Sync.GetLivePlayerFaction = savedLive
+    dana.LJ.enemies, dana.LJ.enemyCount = {}, 0
+    -- A name that cannot be one, or one our own ranking holds on our side, is never noted.
+    dana.LJ:NoteEnemy("Bad|Name")
+    dana.LJ:NoteEnemy("Bad:Name")
+    assert(dana.LJ.enemyCount == 0, "a name with link or field characters was noted as an enemy")
+    local savedLb = dana.env.Overlord.Leaderboard
+    dana.env.Overlord.Leaderboard = { GetPlayerInfo = function(_, name)
+        if name == "Our Mate" then return { faction = dana.env.Overlord.PlayerFaction } end
+    end }
+    dana.LJ:NoteEnemy("Our Mate")
+    assert(not dana.LJ.enemies[next(dana.LJ.enemies) or ""] and dana.LJ.enemyCount == 0,
+        "a player of our side in our own ranking was noted as an enemy")
+    dana.env.Overlord.Leaderboard = savedLb
+    -- Bounded.
+    for i = 1, dana.LJ.ENEMY_MAX + 5 do dana.LJ:NoteEnemy("Foe " .. string.char(97 + i % 26) .. string.char(97 + math.floor(i / 26) % 26) .. "x") end
+    assert(dana.LJ.enemyCount <= dana.LJ.ENEMY_MAX, "the enemies noted are not bounded")
+    dana.LJ.enemies, dana.LJ.enemyCount = {}, 0
+end
+-- 2.5.1: a click that asks nobody says why (it read as a hidden cooldown): nobody of ours known
+-- on that layer, the few seconds between two requests, a change already under way.
+do
+    local function last() return tostring(dana.notes[#dana.notes]) end
+    local before = #sent
+    assert(not dana.LJ:Join(nil, 4242, true) and #sent == before, "fixture: nobody is known on layer 4242")
+    assert(last():find("#4242", 1, true) and last():find("nobody to ask", 1, true), "nobody known on the layer: " .. last())
+    assert(dana.LJ.lastJoinAt == nil or now - dana.LJ.lastJoinAt >= dana.LJ.REQUEST_GAP, "a request that asked nobody started the wait")
+    know(dana, { { "Bob Helper", 1305 } })
+    dana.LJ.lastJoinAt = now - 2
+    assert(not dana.LJ:Join("Bob Helper", 1305, true) and #sent == before, "asked inside the wait between two requests")
+    assert(last():find("Wait 3 s", 1, true), "the wait between two requests is not said: " .. last())
+    dana.LJ.lastJoinAt = nil
+    local state = dana.LJ.state
+    dana.LJ.state = "requesting"
+    assert(not dana.LJ:Join("Bob Helper", 1305, true) and #sent == before, "asked while a change is under way")
+    assert(last():find("already under way", 1, true), "a change under way is not said: " .. last())
+    dana.LJ.state = state
+end
 -- An alert without a player of ours (a mine, a rampage): the link names nobody.
 assert(dana.LJ:ChatLink(nil, 1305, ", layer #1305") == ", |cff71d5ff|Haddon:Overlord:layer::1305|h[layer #1305]|h|r",
     "the link of a layer without a player: " .. tostring(dana.LJ:ChatLink(nil, 1305, ", layer #1305")))
@@ -404,5 +466,88 @@ assert(panel and panel:find("default = false", 1, true) and panel:find('cfg.laye
 -- The alerts of keeps and outposts name the capturer and its layer when both are known.
 local _, tails = outpostLua:gsub("%.%. OutpostCapturerTail%(stAfter%)", "")
 assert(tails >= 6, "outpost alerts carrying the capturer's layer: " .. tails)
+-- 2.5.1: the players whose presence says they help are listed first with their mark and asked
+-- first; a jump that finds nobody says why, player by player.
+do
+    local eve = newClient("Eve Asker", 2001)
+    local cat, dan, fay = newClient("Cat Grouped", 2002), newClient("Dan Off", 2002), newClient("Fay Fighter", 2002)
+    eve.shard.helpers = {}
+    function eve.shard:IsPlayerHelper(who) return self.helpers[who] == true end
+    function eve.shard:SetPlayerHelper(who, helps) self.helpers[who] = helps and true or nil end
+    know(eve, { { "Dan Off", 2002 }, { "Cat Grouped", 2002 }, { "Fay Fighter", 2002 }, { "Gus Ghost", 2002 },
+        { "Ivy Elsewhere", 2003 } })
+    local function names(list)
+        local out = {}
+        for i, row in ipairs(list) do out[i] = row.name end
+        return table.concat(out, ", ")
+    end
+    -- Nobody says he helps: the named player first, then the newest heard, as before.
+    assert(names(eve.LJ:CandidatesFor(2002, "Dan Off")) == "Dan Off, Gus Ghost, Fay Fighter, Cat Grouped",
+        "no helper known: " .. names(eve.LJ:CandidatesFor(2002, "Dan Off")))
+    eve.shard.helpers["Fay Fighter"], eve.shard.helpers["Cat Grouped"], eve.shard.helpers["Ivy Elsewhere"] = true, true, true
+    -- Helpers of that layer first, then the player named, then the others; never another layer's.
+    assert(names(eve.LJ:CandidatesFor(2002, "Dan Off")) == "Fay Fighter, Cat Grouped, Dan Off, Gus Ghost",
+        "helpers are not asked first: " .. names(eve.LJ:CandidatesFor(2002, "Dan Off")))
+    assert(names(eve.LJ:CandidatesFor(2002, "Cat Grouped")) == "Cat Grouped, Fay Fighter, Gus Ghost, Dan Off",
+        "a named helper is not asked first: " .. names(eve.LJ:CandidatesFor(2002, "Cat Grouped")))
+    assert(names(eve.LJ:CandidatesFor(2002, nil)) == "Fay Fighter, Cat Grouped, Gus Ghost, Dan Off",
+        "a layer asked without a name: " .. names(eve.LJ:CandidatesFor(2002, nil)))
+    -- The list: on each layer the helpers first, counted (those of another layer than ours).
+    local rows = eve.LJ:BuildRowsNow(2001)
+    assert(rows.helpers == 3 and names(rows) == "Cat Grouped, Fay Fighter, Dan Off, Gus Ghost, Ivy Elsewhere"
+        and rows[1].helper and rows[2].helper and not rows[3].helper and rows[5].helper,
+        "the list does not show the helpers first: " .. tostring(rows.helpers) .. " " .. names(rows))
+    -- Each one refuses for a reason of its own, and the last one is no client at all.
+    cat.LJ:SetHelpMode("auto"); fay.LJ:SetHelpMode("auto")
+    cat.grouped, cat.groupSize, fay.combat = true, 5, true
+    assert(eve.LJ:Join("Dan Off", 2002), "the jump did not start")
+    advance(20)
+    local said, why = eve.notes[#eve.notes], "No invitation: Fay Fighter is in combat; Cat Grouped is in a group "
+        .. "(a helper invites only while alone); Dan Off has \"Help others\" off; Gus Ghost did not answer."
+    assert(eve.LJ.state == "idle" and eve.LJ.statusText == why, "the reasons of the refusals: " .. tostring(eve.LJ.statusText))
+    assert(said:sub(-#why) == why, "the reasons were not said in the chat: " .. tostring(said))
+    assert(#cat.invites == 0 and #fay.invites == 0 and #dan.invites == 0, "somebody invited")
+    -- The helper in a group is no helper for now (until his next presence): not asked first
+    -- again. The one in combat keeps the mark: his combat ends.
+    assert(eve.shard.helpers["Cat Grouped"] == nil and eve.shard.helpers["Fay Fighter"] == true,
+        "the mark of a helper who cannot invite was kept, or the mark of one in combat was taken")
+    assert(names(eve.LJ:CandidatesFor(2002, "Dan Off")) == "Fay Fighter, Dan Off, Gus Ghost, Cat Grouped",
+        "the next click still asks the grouped helper first: " .. names(eve.LJ:CandidatesFor(2002, "Dan Off")))
+    -- More helpers than players asked: four of them, the named one who says nothing is not asked.
+    -- A marked player the game shows on the other side is never asked.
+    know(eve, { { "Dan Off", 2002 }, { "H One", 2002 }, { "H Two", 2002 }, { "H Three", 2002 }, { "H Four", 2002 },
+        { "H Five", 2002 }, { "Red Helper", 2002 } })
+    for _, who in ipairs({ "H One", "H Two", "H Three", "H Four", "H Five", "Red Helper" }) do eve.shard.helpers[who] = true end
+    eve.factions["Red Helper"] = "Horde"
+    assert(names(eve.LJ:CandidatesFor(2002, "Dan Off")) == "H Five, H Four, H Three, H Two",
+        "more helpers than attempts: " .. names(eve.LJ:CandidatesFor(2002, "Dan Off")))
+    -- An answer of a later version: no more is said than "cannot help".
+    local hop = { candidates = { { name = "Zed Later-Realm", why = "later-word" }, { name = "Not Asked" } } }
+    assert(eve.LJ:FailureText(hop) == "No invitation: Zed Later cannot help right now.", eve.LJ:FailureText(hop))
+    assert(eve.LJ:FailureText({ candidates = {} }) == "No helper invited you. Try again in a moment.", "nobody asked")
+end
+local lj = read("LayerJumper.lua")
+assert(lj:find("row.mark:SetShown(row._helper)", 1, true) and lj:find('T("LJ_HELPERS_KNOWN", "Helpers: %d")', 1, true)
+    and lj:find('T("LJ_HELPER_TIP"', 1, true), "the window does not show the helpers")
+do
+    local newKeys = { "LJ_STATUS_FAILED_WHY", "LJ_WHY_SEP", "LJ_WHY_OFF", "LJ_WHY_GROUPED", "LJ_WHY_COMBAT", "LJ_WHY_AWAY",
+        "LJ_WHY_BUSY", "LJ_WHY_SAME", "LJ_WHY_SILENT", "LJ_WHY_LOST", "LJ_HELPERS_KNOWN", "LJ_HELPER_TIP" }
+    local seen = {}
+    for _, path in ipairs({ "Locales.lua", "Locales_ptBR.lua", "Locales_zhCN.lua" }) do
+        local text = read(path)
+        for _, key in ipairs(newKeys) do
+            for line in text:gmatch("\nL%." .. key .. " = (\"[^\n]+\")") do
+                seen[key] = (seen[key] or 0) + 1
+                -- One %s (or %d) and nothing else to format: a broken string would break the alert.
+                local value = assert(loadstring("return " .. line))()
+                local _, marks = value:gsub("%%", "")
+                local wanted = (key == "LJ_WHY_SEP" or key == "LJ_HELPER_TIP") and 0 or 1
+                assert(marks == wanted and (wanted == 0 or value:find(key == "LJ_HELPERS_KNOWN" and "%%d" or "%%s")),
+                    key .. " in " .. path .. ": " .. value)
+            end
+        end
+    end
+    for _, key in ipairs(newKeys) do assert(seen[key] == 7, key .. " in seven languages: " .. tostring(seen[key])) end
+end
 print("Layer jumper: request to one player, volunteers only, invitation of the player asked, proof, group left, "
     .. "other side never asked, list, chat link, instance, wiring OK")

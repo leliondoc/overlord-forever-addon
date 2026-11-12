@@ -152,3 +152,37 @@ presence("Layer Old", "2.1.1~t0~y" .. layout .. tail)
 assert(#layers == 1, "a presence without a layer gave one")
 assert(not net:IsOutdatedMapPeer("Layer Player"), "a presence with a layer left the map exchange")
 print("Layer in the presence: first-hand only, rank claim and layout read the same, " .. #wire .. "/170 bytes OK")
+
+-- 2.5.1: "~h" right after the layer while "Help others" is on here, never without the option;
+-- a reader of before 2.5.1 still reads the layer and the rank claim, and the longest presence
+-- still fits one fragment. Read first-hand only; a presence without it takes the mark back.
+long.IsShardHelperActive = function() return true end
+long.LayerJumper = { GetHelpMode = function() return "auto" end }
+now, longQueued = now + 10, nil
+longNet.Queue = function(_, p) longQueued = p return true end
+longNet:Send("NH", "2.0.4")
+longNet.Queue = longQueue
+wire = table.concat({ longQueued.region, longQueued.id, tostring(longQueued.at), longQueued.target,
+    table.concat(longQueued.path, ","), longQueued.kind, longQueued.payload }, "|")
+assert(longQueued.payload:find("~q15.zz-zzzz~s99999999~h~m", 1, true) and #wire <= 170,
+    "one fragment with the layer and the helper mark: " .. #wire .. " bytes: " .. wire)
+assert(tonumber(longQueued.payload:match("~s(%d+)~")) == 99999999 and longQueued.payload:match("~q([%w%.%-]+)~") == "15.zz-zzzz"
+    and longQueued.payload:match("~m(%w+)~"), "the layer, the rank claim or the map stamp is no longer read the same way")
+long.LayerJumper = { GetHelpMode = function() return "off" end }
+now, longQueued = now + 10, nil
+longNet.Queue = function(_, p) longQueued = p return true end
+longNet:Send("NH", "2.0.4")
+longNet.Queue = longQueue
+assert(longQueued and longQueued.payload:find("~s99999999~m", 1, true) and not longQueued.payload:find("~h", 1, true),
+    "a helper mark said with the option off")
+local helpers = {}
+me.Shard = { SetPlayerShard = function() end,
+    SetPlayerHelper = function(_, who, helps) helpers[#helpers + 1] = { who = who, helps = helps } end }
+presence("Helper One", "2.5.1~t0~y" .. layout .. "~q0~s17~h" .. tail)
+assert(#helpers == 1 and helpers[1].who == "Helper One" and helpers[1].helps == true, "a first-hand helper mark is recorded")
+presence("Helper One", "2.5.1~t0~y" .. layout .. "~q0~s17" .. tail)
+assert(#helpers == 2 and helpers[2].helps == false, "a presence without the mark did not take it back")
+presence("Helper Far", "2.5.1~t0~y" .. layout .. "~s4~h" .. tail, "CHANNEL", "Helper Far,Relay Hop")
+assert(#helpers == 2, "a relayed presence gave a helper mark")
+assert(not net:IsOutdatedMapPeer("Helper One"), "a presence with a helper mark left the map exchange")
+print("Helper mark in the presence: only with the option, first-hand only, older readers unaffected, " .. #wire .. "/170 bytes OK")

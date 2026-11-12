@@ -179,6 +179,31 @@ function LJ:MyLayer()
     return id, tonumber(shard.lastUpdateAt) or 0
 end
 
+-- 2.5.1: the players an alert told us are of the other faction (the capturer of an enemy
+-- capture, of an enemy assault): a capturer we never met and who is in no ranking yet was not
+-- known as an enemy, was listed in the window, and a click on his layer asked HIM for an
+-- invitation (twelve seconds lost on a whisper that cannot cross). Kept for the session,
+-- ENEMY_MAX names, then afresh. What the game itself shows of a player still comes first.
+LJ.ENEMY_MAX = 512
+LJ.enemies, LJ.enemyCount = LJ.enemies or {}, LJ.enemyCount or 0
+function LJ:NoteEnemy(name)
+    -- (Only a plain name, and never one our own ranking holds on our side: an alert names its
+    -- capturer, and a made-up one must not keep us from asking an ally.)
+    if type(name) ~= "string" or name:find("[|%c%[%]:]") then return end
+    local key = NameKey(name)
+    if not key or key == self:MyKey() then return end
+    local lb, mine = Overlord.Leaderboard, Overlord.PlayerFaction
+    if lb and lb.GetPlayerInfo and mine then
+        local ok, info = pcall(lb.GetPlayerInfo, lb, name)
+        if ok and type(info) == "table" and info.faction == mine then return end
+    end
+    if not self.enemies[key] then
+        if self.enemyCount >= self.ENEMY_MAX then self.enemies, self.enemyCount = {}, 0 end
+        self.enemyCount = self.enemyCount + 1
+        self.enemies[key] = true
+    end
+end
+
 -- A player of the other side, as far as we know: the game or Battle.net shows it there, or the
 -- ranking holds it there (an enemy miner or capturer named in an alert is in neither's sight).
 -- A wrong label only keeps us from asking that player; nothing is trusted from it.
@@ -192,6 +217,8 @@ function LJ:IsEnemy(name)
         local ok, faction = pcall(sync.GetLivePlayerFaction, sync, name)
         if ok and (faction == "Alliance" or faction == "Horde") then return other(faction) end
     end
+    local key = NameKey(name)
+    if key and self.enemies[key] then return true end
     local lb = Overlord.Leaderboard
     if lb and lb.GetPlayerInfo then
         local ok, info = pcall(lb.GetPlayerInfo, lb, name)
@@ -221,7 +248,14 @@ function LJ:KnownPlayers()
             and (not shard.PartyInviteTargetIsUsable or shard:PartyInviteTargetIsUsable(name)) then
             local key = NameKey(name)
             if key and key ~= me then
-                out[#out + 1] = { name = name, key = key, layer = layer, enemy = self:IsEnemy(name) or nil }
+                -- (2.5.1: only what an alert told us, one lookup. The full question (units in
+                -- sight, Battle.net friends, ranking) cost 0.03 ms a player: 15 ms for a list of
+                -- 400, at every repaint of the window. It is asked for the few players a jump
+                -- would really ask, CandidatesFor.)
+                -- helper (2.5.1): its own presence says "Help others" is on there (Shard:IsPlayerHelper).
+                local row = { name = name, key = key, layer = layer, enemy = self.enemies[key] or nil }
+                if shard.IsPlayerHelper and shard:IsPlayerHelper(name) then row.helper = true end
+                out[#out + 1] = row
             end
         end
         node = node.prev
@@ -414,22 +448,88 @@ end
 -- The players to ask for a layer: the one named first, then the others known on that layer.
 -- Never a player of the other side (an addon whisper does not cross): the layer of an enemy
 -- capturer is joined through a player of ours standing on it.
+-- 2.5.1: the players whose presence says they help come first, before a named player who does
+-- not say so (the click asks for a layer; most players have the option off and four are asked
+-- at most). The named one is still asked after them while fewer than four say so: a client of
+-- before 2.5.1 helps without saying it.
 function LJ:CandidatesFor(layer, first)
     local list, seen = {}, {}
     local firstKey = NameKey(first)
-    if firstKey and firstKey ~= self:MyKey() and not self:IsEnemy(first) then
-        list[1] = { name = first, key = firstKey, layer = layer }
-        seen[firstKey] = true
+    local named = firstKey and firstKey ~= self:MyKey() and not self:IsEnemy(first)
+        and { name = first, key = firstKey, layer = layer } or nil
+    local known = layer ~= nil and self:KnownPlayers() or {}
+    local function take(row)
+        if #list >= self.MAX_ATTEMPTS or seen[row.key] then return end
+        seen[row.key] = true
+        list[#list + 1] = row
     end
-    if layer ~= nil then
-        for _, row in ipairs(self:KnownPlayers()) do
-            if row.layer == layer and not row.enemy and not seen[row.key] and #list < self.MAX_ATTEMPTS then
-                seen[row.key] = true
-                list[#list + 1] = row
-            end
+    local helpers = false
+    for _, row in ipairs(known) do
+        -- (A mark said by a player of the other side counts for nothing.)
+        if row.layer == layer and row.helper and not self:IsEnemy(row.name) then
+            helpers = true
+            if named and row.key == named.key then named.helper = true end
         end
     end
+    if named and (named.helper or not helpers) then take(named) end
+    for pass = 1, 2 do
+        for _, row in ipairs(known) do
+            if #list >= self.MAX_ATTEMPTS then break end
+            -- (IsEnemy alone: what the game shows of a player comes before what an alert said.
+            -- The row's own mark reads the alerts only: it would bar an ally named by mistake.)
+            if row.layer == layer and (row.helper ~= nil) == (pass == 1) and not seen[row.key]
+                and not self:IsEnemy(row.name) then
+                take(row)
+            end
+        end
+        if pass == 1 and named then take(named) end
+    end
     return list
+end
+
+-- Why a player asked did not invite us, as its own answer said ("N:<reason>", OnRequest) or as
+-- we saw it (no answer, an invitation that led to no group). 2.5.1: said to the player; before,
+-- every failure read "try again in a moment", as if waiting would change a helper who is in a
+-- raid or has the option off.
+local WHY_KEYS = { off = "LJ_WHY_OFF", full = "LJ_WHY_GROUPED", combat = "LJ_WHY_COMBAT",
+    instance = "LJ_WHY_AWAY", queue = "LJ_WHY_AWAY", same = "LJ_WHY_SAME", silent = "LJ_WHY_SILENT",
+    lost = "LJ_WHY_LOST" }
+local WHY_ENGLISH = {
+    LJ_WHY_OFF = "%s has \"Help others\" off",
+    LJ_WHY_GROUPED = "%s is in a group (a helper invites only while alone)",
+    LJ_WHY_COMBAT = "%s is in combat",
+    LJ_WHY_AWAY = "%s is in an instance or a battleground queue",
+    LJ_WHY_BUSY = "%s cannot help right now",
+    LJ_WHY_SAME = "%s is on your own layer",
+    LJ_WHY_SILENT = "%s did not answer",
+    LJ_WHY_LOST = "the invitation of %s did not go through",
+}
+
+-- A player marked as a helper who has the option off, is in a group, does not answer or whose
+-- invitation led nowhere is no helper for now: the mark is taken back here until his next
+-- presence says it again, so that the next click does not ask him first (nor four such players
+-- ahead of those who would invite). Local only: nothing is sent.
+local UNMARKS = { off = true, full = true, silent = true, lost = true }
+
+function LJ:UnmarkRefuser(cand)
+    local shard = Overlord.Shard
+    if not cand or not cand.why or not UNMARKS[cand.why] or not shard or not shard.SetPlayerHelper then return end
+    pcall(shard.SetPlayerHelper, shard, cand.name, false)
+    self.rowsKept = nil
+end
+
+function LJ:FailureText(hop)
+    local parts = {}
+    for i = 1, math.min(#hop.candidates, self.MAX_ATTEMPTS) do
+        local cand = hop.candidates[i]
+        if cand.why then
+            -- (An answer we do not know, from a later version: it cannot help, no more is said.)
+            local key = WHY_KEYS[cand.why] or "LJ_WHY_BUSY"
+            parts[#parts + 1] = string.format(T(key, WHY_ENGLISH[key]), (cand.name:match("^([^%-]+)") or cand.name))
+        end
+    end
+    if #parts == 0 then return T("LJ_STATUS_FAILED", "No helper invited you. Try again in a moment.") end
+    return string.format(T("LJ_STATUS_FAILED_WHY", "No invitation: %s."), table.concat(parts, T("LJ_WHY_SEP", "; ")))
 end
 
 -- Asks to join the layer of `name` (and, failing that player, of the others known on `layer`).
@@ -438,13 +538,22 @@ end
 function LJ:Join(name, layer, say)
     self:Initialize()
     layer = tonumber(layer)
-    if self:IsActive() then return false end
+    -- (2.5.1: every refusal is said. A click that did nothing read as a hidden cooldown.)
+    if self:IsActive() then
+        if say then Print(T("LJ_ERR_BUSY", "A layer change is already under way.")) end
+        return false
+    end
     local blocked = self:CheckRequesterBlocked()
     local myLayer = self:MyLayer()
     if not blocked and layer ~= nil and myLayer ~= nil and layer == myLayer then
         blocked = T("LJ_ERR_SAME_LAYER", "You are already on this layer.")
     end
-    if not blocked and Now() - (self.lastJoinAt or -100) < self.REQUEST_GAP then return false end
+    if not blocked then
+        local wait = self.REQUEST_GAP - (Now() - (self.lastJoinAt or -100))
+        if wait > 0 then
+            blocked = string.format(T("LJ_ERR_WAIT", "Wait %d s before asking again."), math.ceil(wait))
+        end
+    end
     if blocked then
         self.statusText = blocked
         self:RefreshUI()
@@ -462,7 +571,13 @@ function LJ:Join(name, layer, say)
     end
     local candidates = self:CandidatesFor(layer, name)
     if #candidates == 0 then
-        self.statusText = T("LJ_STATUS_FAILED", "No helper invited you. Try again in a moment.")
+        -- (Nobody was asked: said as it is, not as a helper who did not answer.)
+        if layer ~= nil then
+            self.statusText = string.format(
+                T("LJ_ERR_NOBODY", "No player of your faction is known on layer %s: nobody to ask."), self:FormatLayer(layer))
+        else
+            self.statusText = T("LJ_STATUS_FAILED", "No helper invited you. Try again in a moment.")
+        end
         self:RefreshUI()
         Print(self.statusText)
         return false
@@ -487,6 +602,8 @@ function LJ:NextCandidate(reason)
     local hop = self.hop
     if not hop then return false end
     if OverlordDB then OverlordDB.layerJumperHop = nil end
+    -- (The player just asked, when he gave no invitation: see UNMARKS.)
+    self:UnmarkRefuser(hop.current)
     hop.index = hop.index + 1
     local cand = hop.candidates[hop.index]
     if not cand or hop.index > self.MAX_ATTEMPTS then
@@ -496,7 +613,10 @@ function LJ:NextCandidate(reason)
         if reason == "off" and hop.index == 2 and hop.current then
             self:SetState("idle", "LJ_DECLINED_OFF", hop.current.name)
         else
-            self:SetState("idle", "LJ_STATUS_FAILED")
+            -- (2.5.1: why, player by player.)
+            self:SetState("idle")
+            self.statusText = self:FailureText(hop)
+            self:RefreshUI()
         end
         Print(self.statusText)
         return false
@@ -506,7 +626,7 @@ function LJ:NextCandidate(reason)
     local index = hop.index
     C_Timer.After(self.INVITE_WAIT, function()
         if LJ.hop == hop and hop.index == index and LJ.state == "requesting" then
-            cand.failed = true
+            cand.failed, cand.why = true, "silent"
             LJ:ArmLateJoinLeave(cand)
             LJ:NextCandidate()
         end
@@ -520,7 +640,8 @@ function LJ:OnDecline(sender, reqId, reason)
     local hop = self.hop
     if not hop or hop.reqId ~= reqId or self.state ~= "requesting" then return end
     if not hop.current or NameKey(sender) ~= hop.current.key then return end
-    hop.current.failed = true
+    -- (The reason is a word of the wire: only looked up in a table of ours, never printed.)
+    hop.current.failed, hop.current.why = true, type(reason) == "string" and reason or "busy"
     self:NextCandidate(reason)
 end
 
@@ -547,7 +668,7 @@ function LJ:OnPartyInvite(inviter)
     C_Timer.After(self.JOIN_WAIT, function()
         if LJ.hop == hop and hop.current == cand and LJ.state == "joining" then
             if LJ:IsGrouped() then return LJ:OnGroupJoined() end
-            cand.failed = true
+            cand.failed, cand.why = true, "lost"
             LJ:ArmLateJoinLeave(cand)
             LJ:NextCandidate()
         end
@@ -938,7 +1059,7 @@ function LJ:OnEvent(event, ...)
             end
         end
         if self.state == "joining" and self.hop and self.hop.current then
-            self.hop.current.failed = true
+            self.hop.current.failed, self.hop.current.why = true, "lost"
             self:ArmLateJoinLeave(self.hop.current)
             self:NextCandidate()
         elseif self.state == "verifying" then
@@ -968,6 +1089,8 @@ function LJ:ChatLink(name, layer, text)
     if not self:CanLink() then return nil end
     layer = tonumber(layer)
     if not layer or type(text) ~= "string" then return nil end
+    -- (A player of the other faction is never asked: the link then names nobody.)
+    if name ~= nil and self:IsEnemy(name) then name = nil end
     if name == nil then
         name = ""
     elseif not NameKey(name) or name:find("[|:%[%]]") then
@@ -1025,6 +1148,8 @@ end
 -- ============================================================
 
 local GOLD = { 1, 0.82, 0 }
+local HELPER_ICON = "Interface\\Icons\\Spell_Arcane_PortalShattrath"
+local STATUS_H = 50
 local FRAME_W = 380
 local ROW_H = 20
 
@@ -1052,13 +1177,31 @@ end
 
 -- The rows: our layer's players last, the others by layer then by name (the same order at
 -- every repaint: a list that reshuffles under the pointer cannot be clicked).
+-- (2.5.1: the sorted list is kept ROWS_KEEP seconds: the window repaints on every wheel notch,
+-- every second during a jump and every 5 s, and a list of 400 was read and sorted each time.)
+LJ.ROWS_KEEP = 2
 function LJ:BuildRows()
     local myLayer = self:MyLayer()
+    local kept, at = self.rowsKept, Now()
+    if kept and kept.layer == myLayer and at - kept.at < self.ROWS_KEEP then return kept.rows, myLayer end
+    local rows = self:BuildRowsNow(myLayer)
+    self.rowsKept = { rows = rows, layer = myLayer, at = at }
+    return rows, myLayer
+end
+
+function LJ:BuildRowsNow(myLayer)
     local rows = self:KnownPlayers()
     for _, row in ipairs(rows) do row.here = myLayer ~= nil and row.layer == myLayer end
+    -- (2.5.1: on each layer, the players who say they help come first.)
+    local helpers = 0
+    for _, row in ipairs(rows) do
+        if row.helper and not row.here and not row.enemy then helpers = helpers + 1 end
+    end
+    rows.helpers = helpers
     table.sort(rows, function(a, b)
         if a.here ~= b.here then return b.here end
         if a.layer ~= b.layer then return a.layer < b.layer end
+        if (a.helper ~= nil) ~= (b.helper ~= nil) then return a.helper ~= nil end
         return a.key < b.key
     end)
     return rows, myLayer
@@ -1067,7 +1210,7 @@ end
 function LJ:CreateWindow()
     if self.frame then return self.frame end
     local UI = Overlord.UI or {}
-    local frameH = 150 + self.ROWS * ROW_H
+    local frameH = 124 + STATUS_H + self.ROWS * ROW_H
     local f = CreateFrame("Frame", "OverlordLayerJumperFrame", UIParent, "BackdropTemplate")
     f:SetSize(FRAME_W, frameH)
     f:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
@@ -1097,7 +1240,7 @@ function LJ:CreateWindow()
     local icon = f:CreateTexture(nil, "ARTWORK")
     icon:SetSize(24, 24)
     icon:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -16)
-    icon:SetTexture("Interface\\Icons\\Spell_Arcane_PortalShattrath")
+    icon:SetTexture(HELPER_ICON)
     icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -1111,6 +1254,7 @@ function LJ:CreateWindow()
     mine:SetJustifyH("LEFT")
     mine:SetWordWrap(false)
     f.mineText = mine
+
 
     local listH = self.ROWS * ROW_H + 10
     local list = UI.CreateWC3SubPanel and UI.CreateWC3SubPanel(f, FRAME_W - 36, listH) or CreateFrame("Frame", nil, f)
@@ -1127,9 +1271,27 @@ function LJ:CreateWindow()
         local row = CreateFrame("Frame", nil, list)
         row:SetSize(FRAME_W - 52, ROW_H - 2)
         row:SetPoint("TOPLEFT", list, "TOPLEFT", 8, -5 - (i - 1) * ROW_H)
+        -- 2.5.1: the window's own icon in front of a player who says he helps (his presence);
+        -- the row then explains it under the mouse. Every name starts after the icon's place.
+        local mark = row:CreateTexture(nil, "ARTWORK")
+        mark:SetSize(14, 14)
+        mark:SetPoint("LEFT", row, "LEFT", 1, 0)
+        mark:SetTexture(HELPER_ICON)
+        mark:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        mark:Hide()
+        -- (Under the mouse only while it is a helper's row, PaintWindow: the other rows still
+        -- let the window be dragged through them.)
+        row:SetScript("OnEnter", function(frame)
+            if not frame._helper or not GameTooltip then return end
+            GameTooltip:SetOwner(frame, "ANCHOR_RIGHT")
+            GameTooltip:SetText(T("LJ_HELPER_TIP", "Volunteer helper: invites you automatically when you ask."), 1, 1, 1, 1, true)
+            GameTooltip:Show()
+        end)
+        row:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+        row.mark = mark
         local label = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        label:SetPoint("LEFT", row, "LEFT", 2, 0)
-        label:SetWidth(170)
+        label:SetPoint("LEFT", row, "LEFT", 19, 0)
+        label:SetWidth(155)
         label:SetJustifyH("LEFT")
         label:SetWordWrap(false)
         local info = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
@@ -1159,14 +1321,15 @@ function LJ:CreateWindow()
     status:SetPoint("TOPRIGHT", list, "BOTTOMRIGHT", -2, -6)
     status:SetJustifyH("LEFT")
     status:SetJustifyV("TOP")
-    status:SetHeight(26)
+    -- (2.5.1: four lines. The reasons of a refusal, one per player asked, did not fit in two.)
+    status:SetHeight(STATUS_H)
     f.statusLine = status
 
     local btnW = math.floor((FRAME_W - 36 - 6) / 2)
     local help = MakeButton(f, btnW, 22, "", function()
         LJ:SetHelpMode(LJ:GetHelpMode() == "auto" and "off" or "auto")
     end)
-    help:SetPoint("TOPLEFT", list, "BOTTOMLEFT", 0, -36)
+    help:SetPoint("TOPLEFT", list, "BOTTOMLEFT", 0, -10 - STATUS_H)
     help:HookScript("OnEnter", function(btn)
         GameTooltip:SetOwner(btn, "ANCHOR_TOP")
         GameTooltip:SetText(T("LJ_HELP_MODE_TOOLTIP", ""), 1, 1, 1, 1, true)
@@ -1203,7 +1366,11 @@ end
 
 function LJ:PaintWindow(f)
     local rows, myLayer = self:BuildRows()
-    f.mineText:SetText(string.format(T("LJ_YOUR_LAYER", "Your layer: %s"), self:FormatLayer(myLayer)))
+    -- (2.5.1: how many of the players listed on another layer say they help; none explains a
+    -- jump that finds nobody before it is tried.)
+    f.mineText:SetText(string.format(T("LJ_YOUR_LAYER", "Your layer: %s"), self:FormatLayer(myLayer))
+        .. "     |T" .. HELPER_ICON .. ":14:14:0:0:64:64:5:59:5:59|t "
+        .. string.format(T("LJ_HELPERS_KNOWN", "Helpers: %d"), tonumber(rows.helpers) or 0))
     local maxScroll = math.max(0, #rows - self.ROWS)
     self.scroll = math.min(math.max(0, self.scroll or 0), maxScroll)
     local active = self:IsActive()
@@ -1211,6 +1378,9 @@ function LJ:PaintWindow(f)
         local row, data = f.rows[i], rows[i + self.scroll]
         if data then
             row.label:SetText(FactionColor(data.name) .. data.name .. "|r")
+            row._helper = data.helper and true or false
+            row.mark:SetShown(row._helper)
+            row:EnableMouse(row._helper)
             row.info:SetText(data.here and T("LJ_HERE", "you are here") or self:FormatLayer(data.layer))
             row.join._name, row.join._layer = data.name, data.layer
             row.join:SetShown(not data.here)
@@ -1239,6 +1409,7 @@ function LJ:Show()
         f:SetScale(Overlord.UI:GetEffectiveUiScale())
     end
     if not self:IsActive() then self.statusText = nil end
+    self.rowsKept = nil
     f:Show()
     if Overlord.PlayPanelOpenSound then Overlord:PlayPanelOpenSound() end
     self:RefreshUI()

@@ -1,20 +1,15 @@
-2.5.0
+2.5.1
 
-**Overlord Forever 2.5.0**
+**Overlord Forever 2.5.1**
 
-- The weekly ranking now catches up much faster between players on 2.5.0: when a total moves, the players who compared rankings with you receive that line directly, and pass it on. In our tests everyone held the same ranking within one to three minutes, both factions included, where it took six to eleven. With 310 players and a ranking that never stops moving, 2.4.0 did not catch up at all; 2.5.0 does in under ten minutes. The addon sends fewer messages while doing so: about a third fewer at rest, about a tenth fewer in the middle of a big fight.
-- The start of a capture now reaches the whole other faction. Players holding a Battle.net friend of the other faction are told first, and that friend now passes it on to its own side whatever the way it came. In our tests with 300 players and only two such friendships, everyone on the other side saw the capture begin; before, most of them did not.
-- The timer of a capture in progress now runs on every map. It could stay frozen at a few seconds for players who learnt of the capture through a Battle.net friend or a distant player.
-- The Commander's icon now stays on everyone's map for as long as he holds the role, and follows him about once a minute. Without the channel it vanished after a minute and a half for everyone outside his group.
-- PvP Groups: a group that is withdrawn now leaves every window within seconds. Some windows kept showing it for several minutes.
-- PvP Groups: a window that opens empty now asks up to three players for the listed groups, one after the other, instead of one. It stayed empty about one time in five while a group was listed.
-- Recent activity: everyone now sees the same fights with the same numbers, and every kill is counted again. Without the channel, a player only counted the kills made near them or by their guild. The place of a kill now travels with the ranking updates, and so does a fight's size: in our tests with 300 players, a battle of 800 kills in 5 minutes showed 750+ on every screen, where 2.4.0 showed 200 to 300 on most screens and 50 on others. A fight shows up within seconds of its first kills.
-- Layers: click the new Layers button of the panel, or the layer number at its top left (or type `/ov layer`), to see every player Overlord hears and the layer they are on. Join asks a volunteer on that layer for an invite: you change layer within seconds and leave the group by yourself. Volunteers only: "Help others" is off by default, and nothing happens until you click. In a capture, mine or rampage alert, the layer can be clicked the same way.
-- Keep and outpost alerts now name the player capturing and their layer, when it is known.
-- The Overlord logo and the five highest Overlord ranks now show at the top right of a targeted player's portrait, on both factions, and left of such a player's name in chat, inside the brackets (never on whispers). "Rank badges in chat" in the options.
-- New alert, on by default: a chat line when a battle reaches 50 kills or more in 5 minutes, on a front or in a zone, anywhere in the world. The same battle is announced again only when it reaches 100, 200, 500, 1,000 and 2,000, and everyone reads the same lines. Three new battles at most are announced in 5 minutes, six lines in all, twelve an hour. "Big battle alerts" in the options.
-- Guild rampage alerts now need 50 honorable kills by 5 members in 5 minutes. It was 20, which a single group of five reached after four kills. A rampage under 50 announced by a player still on 2.4.0 is no longer shown.
-- The "+1 platinum" text rising over your character is now off by default. "Floating platinum gains" in the options turns it back on. Your platinum is counted either way.
-- The Contact button of the panel made room for Layers: the author's contact link is now in the options ("Contact the author").
-- `/ov network`: the ranking line now says how many players send you ranking lines and how many you send them to.
-- Update required: the faster ranking, the Commander's position and layer changes only work between players on 2.5.0. With a player on 2.4.0 everything still converges, at the previous pace.
+- Guilds table: click a guild to open the list of all its ranked members, with their rank badge, captures and honorable kills. Click a column to sort; a second click on the guild closes the list. Guild rows now light up under the mouse.
+- Layers: a click on a layer never asks a player of the other faction any more. In an alert about an enemy capture, the click asks the players of your faction known on that layer.
+- Layers window: the players who turned "Help others" on now carry a portal icon, come first on each layer, and are counted at the top. They are also the first ones asked when you join a layer. Helpers on 2.5.0 or older are not marked yet; helping stays off by default.
+- Layers: when nobody invites you, the message now says why for each player asked: "Help others" off, in a group (a helper invites only while alone), in combat, no answer. It no longer says "try again in a moment".
+- Layers: a click that cannot start now says why: nobody of your faction is known on that layer, the 5 seconds between two requests, or a change already under way.
+- Smoother Layers window: with hundreds of players known it took a whole frame at every refresh; it is now about forty times lighter.
+- Guild rampage alerts no longer cost a long frame when they fire in a crowded zone.
+- Guild rampage alerts reach everybody: a player who receives one also tells their own guild, once per guild. Before, a few players in each big fight never saw the alert.
+- Rank badges in chat: placing a badge inside the name's brackets now rereads only the chat window that showed the line, not every window; it caused short freezes in busy chat. In a window that keeps more than 400 lines (some chat addons), the badge stays in front of the message.
+- Fewer short freezes: the action bar shortcut no longer checks every button many times a second in combat, the layers of players known around you are no longer rebuilt at every arrival or departure, and the saved ranking is restored over several frames at login and after /reload instead of in one block. The ranking builds (the window, the safety copy and the pages shared with other players) also leave much less memory to clean up, which the game does in short pauses.
+- Action bar shortcut: the Overlord logo now stays on the button. It turned into a faction banner whenever the mouse passed over it. While you drag it, the game shows crossed swords instead of a faction banner (a macro cannot carry an addon's own image).

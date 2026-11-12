@@ -230,9 +230,14 @@ local function AppendPacket(queue, msgType, data)
     return true
 end
 
+-- 2.5.1: one fields table for every row (the function never yields and is never re-entered)
+-- and no empty table for a name without info: a profile serializes every ranked name, and
+-- both were new tables per row (~2 MB of garbage per profile at 10,000 players).
+local NO_INFO = {}
+local killFields = {}
 local function BuildSnapshotKillPayload(snapshot, name, wireEpoch)
     local info = type(snapshot.playerInfo) == "table" and snapshot.playerInfo[name] or nil
-    info = type(info) == "table" and info or {}
+    info = type(info) == "table" and info or NO_INFO
     local level = math.floor(tonumber(info.level) or 0)
     if not sync.IsEligibleKillContributorLevel
         or not sync:IsEligibleKillContributorLevel(level)
@@ -257,18 +262,17 @@ local function BuildSnapshotKillPayload(snapshot, name, wireEpoch)
     -- page register and spread a fake guild (2026-10-06).
     local strongGuild = info.guildAuth == true or info.guildReplica == true
     if not strongGuild then guild = "" end
-    local fields = {
-        SafeWireField(name, 80),
-        tostring(kills),
-        SafeWireField(info.class == "UNKNOWN" and "" or info.class, 24),
-        SafeWireField(info.faction, 12),
-        tostring(wireEpoch),
-        SafeWireField(info.locale, 8),
-        guild,
-        tostring(strongGuild and math.floor(tonumber(info.guildAt) or 0) or 0),
-        "B" .. tostring(wireEpoch),
-        tostring(level),
-    }
+    local fields = killFields
+    fields[1] = SafeWireField(name, 80)
+    fields[2] = tostring(kills)
+    fields[3] = SafeWireField(info.class == "UNKNOWN" and "" or info.class, 24)
+    fields[4] = SafeWireField(info.faction, 12)
+    fields[5] = tostring(wireEpoch)
+    fields[6] = SafeWireField(info.locale, 8)
+    fields[7] = guild
+    fields[8] = tostring(strongGuild and math.floor(tonumber(info.guildAt) or 0) or 0)
+    fields[9] = "B" .. tostring(wireEpoch)
+    fields[10] = tostring(level)
     local payload = table.concat(fields, ":")
     if #payload <= 250 then return payload end
     fields[7], fields[8] = "", "0"
@@ -283,7 +287,7 @@ local function BuildSnapshotCapturePayload(snapshot, name, wireEpoch, full)
     if not ContributorCanRelay(name)
         or (sync.IsDeniedKillContributor and sync:IsDeniedKillContributor(name)) then return nil end
     local info = type(snapshot.playerInfo) == "table" and snapshot.playerInfo[name] or nil
-    info = type(info) == "table" and info or {}
+    info = type(info) == "table" and info or NO_INFO
     local zones, safeZones = snapshot.captures and snapshot.captures[name], {}
     if type(zones) == "table" then
         for i = 1, math.min(#zones, full and 128 or 32) do

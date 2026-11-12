@@ -183,6 +183,16 @@ assert(other.count == 9999 and #other.names == 10, "Top 10 / member count wrong:
 assert(other.kills[1] == 10999 and other.kills[10] == 10990, "Top 10 not highest first")
 for i = 2, 10 do assert(other.kills[i] < other.kills[i - 1], "Top 10 out of order at " .. i) end
 assert(lb:GetGuildMembersSummary("No Such Guild") == nil)
+-- Guild window: every member, counted as the summary (aliases once), highest first,
+-- whatever the case of the name asked; nobody from another guild.
+local frenchAll = assert(lb:GetGuildMembers("French Guild"), "No member list for a ranked guild")
+assert(#frenchAll == 1 and frenchAll[1].kills == 620 and type(frenchAll[1].captures) == "number", "Guild window double counted an alias: " .. #frenchAll)
+local otherAll = assert(lb:GetGuildMembers("OTHER GUILD"), "Member list lookup is case-sensitive")
+assert(#otherAll == other.count, "Guild window and summary disagree: " .. #otherAll .. " / " .. other.count)
+assert(otherAll[1].kills == 10999 and otherAll[#otherAll].kills == 1001, "Member list not highest first")
+for i = 1, 10 do assert(otherAll[i].name == other.names[i], "Member list and top 10 disagree at " .. i) end
+for i = 2, #otherAll do assert(otherAll[i].kills <= otherAll[i - 1].kills, "Member list out of order at " .. i) end
+assert(#lb:GetGuildMembers("No Such Guild") == 0 and lb:GetGuildMembers("") == nil)
 local saved = OverlordDB.leaderboardDisplayCache
 assert(not saved or saved.guildMembers == nil, "Member lists leaked into SavedVariables")
 lb:SetPlayerKills("New Rival", 621, true)

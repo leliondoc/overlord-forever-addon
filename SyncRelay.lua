@@ -2698,6 +2698,12 @@ function net:Send(kind, payload, target, immediate)
             end)
             if okLayer and layer and layer >= 0 and layer < 1e8 and layer == math.floor(layer) then
                 layerToken = "~s" .. string.format("%d", layer)
+                -- "~h" (2.5.1): "Help others change layer" is on here. Right after the layer,
+                -- whose readers look for "~s<digits>~"; the Layers window of those who hear
+                -- this presence first-hand marks us as a helper. Never without the option.
+                local jumper = addon.LayerJumper
+                local okHelp, mode = pcall(function() return jumper and jumper.GetHelpMode and jumper:GetHelpMode() end)
+                if okHelp and mode == "auto" then layerToken = layerToken .. "~h" end
             end
         end
         payload = payload .. (self:HasLiveEnemyBridge() and "~b" or "") .. "~t0~y" .. net.LocalMapLayout()
@@ -2865,11 +2871,17 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         -- 2.2.0: its layer ("~s", see Send), first-hand only, as an SH from it would be. By whisper
         -- only from a player of the channel's member list (anybody can whisper).
         local directory = addon.ChannelDirectory
-        local layer = #p.path == 1 and (transport ~= "WHISPER" or (directory and directory.Lists
-            and directory:Lists(origin))) and tonumber(p.payload:match("~s(%d+)~")) or nil
+        local ownWord = #p.path == 1 and (transport ~= "WHISPER" or (directory and directory.Lists
+            and directory:Lists(origin)))
+        local layer = ownWord and tonumber(p.payload:match("~s(%d+)~")) or nil
         if layer and addon.Shard and addon.Shard.SetPlayerShard then
             local okLayer, layerError = pcall(addon.Shard.SetPlayerShard, addon.Shard, origin, layer)
             if not okLayer then self.stats.lastError = tostring(layerError) end
+        end
+        -- 2.5.1: "~h", its "Help others" option, by the same word and under the same rule. A
+        -- presence without it takes the mark back (the option was turned off).
+        if ownWord and addon.Shard and addon.Shard.SetPlayerHelper then
+            pcall(addon.Shard.SetPlayerHelper, addon.Shard, origin, p.payload:find("~h~", 1, true) ~= nil)
         end
         if #p.path == 1 and transport ~= "BNET" then
             if p.payload:find("~b~", 1, true) then
