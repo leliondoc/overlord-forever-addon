@@ -4,6 +4,7 @@
 
 - Killing blows: the players table has a new KB column, right of the honorable kills. It counts this week's killing blows on enemy players that earned an honorable kill, outside instances. Click HK or KB at the top of the table to sort the players. Honorable kills stay the ranking: the default sort, the guilds table and the guild rating do not change.
 - Killing blows are shared between players on 2.5.2. A player still on an older version shows 0 until they update.
+- Big battle alerts in chat now start at 100 honorable kills in 5 minutes instead of 50, which had become too common on full servers; said again at 200, 500, 1000 and 2000. The Recent activity panel still lists the smaller fights.
 - The ranking window now lets go of its copy of the ranking when you close it: about 3 MB less memory while it is closed. It is built again when you open it.
 - Lighter ranking builds: the language shown for each player is no longer worked out again at every build, which left a lot of memory to clean up.
 - Rank badges in chat: with several chat windows open, each window is now reread on its own frame instead of all of them at once.

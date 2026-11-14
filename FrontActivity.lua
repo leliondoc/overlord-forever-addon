@@ -763,7 +763,7 @@ local function StoreReport(key, bracket, expiresAt, now, tell)
     local feed = sync and sync._leaderboardFeed
     if tell and feed and feed.noteBracket then pcall(feed.noteBracket) end
     -- 2.5.0: a big battle is also said in the chat (MaybeAnnounceFight, further down).
-    if bracket >= (FA.FIGHT_ALERT_MIN or 50) and FA.MaybeAnnounceFight then
+    if bracket >= (FA.FIGHT_ALERT_MIN or 100) and FA.MaybeAnnounceFight then
         pcall(FA.MaybeAnnounceFight, FA, key, bracket, now)
     end
     return true
@@ -1149,17 +1149,18 @@ end
 -- 2.5.0: big battles in the chat. The shared bracket of a fight (the one the "Recent activity"
 -- panel shows, the same for everyone) reaching FIGHT_ALERT_MIN kills in five minutes is said
 -- once, wherever it is in the world (not bound to the reach of the capture alerts: it is no
--- capture); the same fight is said again only at the next step (100, 200, 500...). A
+-- capture); the same fight is said again only at the next step (200, 500, 1000...). A
 -- fight is the same one while a bracket of FIGHT_ALERT_MIN or more keeps coming within
 -- FIGHT_ALERT_QUIET. On by default (config.fightAlerts ~= false); nothing in an instance nor
 -- while the login map is still awaited. Nothing is sent: the bracket travels anyway.
-FA.FIGHT_ALERT_MIN, FA.FIGHT_ALERT_QUIET, FA.FIGHT_ALERT_ROWS = 50, 600, 48
+-- 2.5.2: 100 (50 in 2.5.0 and 2.5.1: a battle of 50+ became too common on a full server).
+FA.FIGHT_ALERT_MIN, FA.FIGHT_ALERT_QUIET, FA.FIGHT_ALERT_ROWS = 100, 600, 48
 -- The sizes said: a line names the highest of these steps the bracket has reached, and a fight is
 -- said again when it reaches the next one. Brackets do not reach everyone in the same order (75
 -- before 50 for half the clients of a 304-client bench): said as they came, with "again when it
 -- doubles", half the players read 50+, 100+, 200+ and the other half 75+, 150+, 300+ for the same
 -- battle. With fixed steps everybody reads the same lines.
-FA.FIGHT_ALERT_STEPS = { 50, 100, 200, 500, 1000, 2000 }
+FA.FIGHT_ALERT_STEPS = { 100, 200, 500, 1000, 2000 }
 -- Whatever the brackets say, FIGHT_ALERT_PER_WINDOW new battles per FIGHT_ALERT_WINDOW at most,
 -- and FIGHT_ALERT_PER_HOUR lines an hour: a chat is not a ticker. The next step of a battle
 -- already said has room of its own (FIGHT_ALERT_PER_WINDOW_ALL lines in all per window): a battle
