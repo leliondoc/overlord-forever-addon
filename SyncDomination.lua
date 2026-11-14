@@ -29,3 +29,7 @@ function Overlord:GetDominationBarScore()
     if alliancePct < 0 then alliancePct = 0 elseif alliancePct > 100 then alliancePct = 100 end
     return alliancePct, 100 - alliancePct, victoriesA, victoriesH
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["SyncDomination.lua"] = function() return { DM_BAR_BASE = DM_BAR_BASE } end

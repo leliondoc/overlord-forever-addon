@@ -125,3 +125,7 @@ function RealmPools:AreOutpostCrossPoolsLinked(poolA, poolB)
     if poolA == "" or poolB == "" then return false end
     return poolA == poolB
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["RealmPools.lua"] = function() return { RealmPools = RealmPools, RULESET_POOL = RULESET_POOL, CHANNEL_SUFFIX = CHANNEL_SUFFIX } end

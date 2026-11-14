@@ -304,3 +304,7 @@ if CreateFrame then
         end
     end)
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["Nemesis.lua"] = function() return { MW = MW, SKULL_TEXTURE = SKULL_TEXTURE, skullMarkup = skullMarkup } end

@@ -1930,16 +1930,24 @@ end
 
 -- A pass reads every line a chat window holds (128 by default): CHAT_MARK_GAP between two
 -- passes, whatever the number of badge holders talking, only the windows that showed one of
--- their lines (ChatBadgeFilter), never the combat log's window.
+-- their lines (ChatBadgeFilter), never the combat log's window. 2.5.2: one window per frame
+-- (a window is about 1 ms at 128 lines, 3 ms at CHAT_MARK_LINES: two or three windows in the
+-- same frame made a frame of several milliseconds in a busy chat).
+local function MarkChatLinesLater() pcall(RP.MarkChatLines, RP) end
 function RP:MarkChatLines()
-    self.chatMarkArmed = nil
     self.chatMarkAt = GetTime()
     local frames = self.chatPendingFrames
-    if self.chatPending and frames then
-        for frame in pairs(frames) do
-            pcall(frame.TransformMessages, frame, ChatLineIsPending, MarkChatLine)
+    local frame = self.chatPending and frames and next(frames)
+    if frame then
+        frames[frame] = nil
+        pcall(frame.TransformMessages, frame, ChatLineIsPending, MarkChatLine)
+        if next(frames) then
+            self.chatMarkArmed = true
+            C_Timer.After(0, MarkChatLinesLater)
+            return
         end
     end
+    self.chatMarkArmed = nil
     self.chatPending, self.chatPendingCount, self.chatPendingFrames = nil, nil, nil
 end
 
@@ -1965,7 +1973,7 @@ function RP.ChatBadgeFilter(chatFrame, _, msg, author, ...)
             RP.chatMarkArmed = true
             -- (The next frame, or CHAT_MARK_GAP after the last pass.)
             local wait = (RP.chatMarkAt or -1e9) + RP.CHAT_MARK_GAP - GetTime()
-            C_Timer.After(wait > 0 and wait or 0, function() pcall(RP.MarkChatLines, RP) end)
+            C_Timer.After(wait > 0 and wait or 0, MarkChatLinesLater)
         end
         return false
     end
@@ -2138,3 +2146,7 @@ if CreateFrame then
         RP:Initialize()
     end)
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["RankProof.lua"] = function() return { RP = RP, session = session, badge = badge, enemyBadge = enemyBadge, BADGE_CACHE_MAX = BADGE_CACHE_MAX, badgeSize = badgeSize, enemyBadgeSize = enemyBadgeSize, pending = pending, lastInspectAt = lastInspectAt, lastMouseoverAt = lastMouseoverAt, lastForeignReadyAt = lastForeignReadyAt, readAt = readAt, candidates = candidates, candidatesFor = candidatesFor, poolCache = poolCache, POOL_TABLES = POOL_TABLES, PARK_KEYS = PARK_KEYS, staleInspectSince = staleInspectSince, staleInspectKey = staleInspectKey } end

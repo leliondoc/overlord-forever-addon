@@ -1226,3 +1226,7 @@ function lane:GetDiagnostics()
         s.covered, s.cancelled, s.notSpeaker, s.capped, s.expired, s.noListener, s.failed, s.tooFast,
         s.refusals, s.probes, s.reopened)
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["SyncGuild.lua"] = function() return { addon = addon, sync = sync, lane = lane, TERMINAL = TERMINAL, ALERT = ALERT, ROUTINE = ROUTINE, FIXED_LEVEL = FIXED_LEVEL, OWN_LEVEL = OWN_LEVEL, RELAYED_LEVEL = RELAYED_LEVEL, WAIT = WAIT, RELAYED_WAIT = RELAYED_WAIT, ANNOUNCED_WAIT = ANNOUNCED_WAIT, CODE_INVALID_CHANNEL = CODE_INVALID_CHANNEL, CODE_NOT_IN_GUILD = CODE_NOT_IN_GUILD } end

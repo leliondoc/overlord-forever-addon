@@ -1574,6 +1574,10 @@ do
         assert(#later == 1, "one pass for the lines of a frame, armed " .. #later .. " times")
         assert(not ChatFrameOne.lines[1][1]:find(mark, 1, true), "fixture: marked before the next frame")
         later[1]()
+        -- 2.5.2: one window per frame; the other one on the next frame.
+        assert(#later == 2 and waits[2] == 0, "the second window was not left to the next frame")
+        later[2]()
+        assert(#later == 2 and not RP.chatMarkArmed and RP.chatPending == nil, "a pass went on after the last window")
         local want = "|Hchannel:channel:1|h[1. General]|h |Hplayer:Troma Orcbane:41:CHANNEL:1|h[" .. mark
             .. "|cffc79c6eTroma Orcbane|r]|h: is wetlands ?"
         assert(ChatFrameOne.lines[1][1] == want, "the author's line: " .. ChatFrameOne.lines[1][1])
@@ -1587,6 +1591,8 @@ do
         RP.chatPending, RP.chatPendingCount = { [41] = mark }, 1
         RP.chatPendingFrames = { [ChatFrameOne] = true, [ChatFrameTwo] = true }
         RP:MarkChatLines()
+        assert(#later == 3 and waits[3] == 0, "the second window of a direct pass was not left to the next frame")
+        later[3]()
         assert(ChatFrameOne.lines[1][1] == want, "a line was marked twice")
         local _, text = RP.ChatBadgeFilter(ChatFrameOne, "CHAT_MSG_SAY", "hi", "Troma Orcbane", "", "", "", "", 0, 0, "", 0, 0)
         assert(text == mark .. " hi", "a line without an id: " .. tostring(text))
@@ -1604,8 +1610,8 @@ do
         show(ChatFrameOne, 44, "Troma Orcbane", "soon after")
         assert(select(2, RP.ChatBadgeFilter(combat, "CHAT_MSG_SAY", "hi", "Troma Orcbane", "", "", "", "", 0, 0, "", 0, 47)) == mark .. " hi",
             "a line of the combat log's window was to be marked in place")
-        assert(#later == 2 and waits[2] > 0 and waits[2] <= RP.CHAT_MARK_GAP, "a second pass right after the first: " .. tostring(waits[2]))
-        later[2]()
+        assert(#later == 4 and waits[4] > 0 and waits[4] <= RP.CHAT_MARK_GAP, "a second pass right after the first: " .. tostring(waits[4]))
+        later[4]()
         assert(read == 0, "the combat log's window was read")
         assert(twoRead == 0, "a window that showed no such line was read")
         ChatFrameTwo.TransformMessages = twoTransform

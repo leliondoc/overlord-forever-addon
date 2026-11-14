@@ -993,3 +993,7 @@ boot:SetScript("OnEvent", function(self)
         C_Timer.After(5, function() UIR:Attach() end)
     end
 end)
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["RanksUI.lua"] = function() return { UIR = UIR, LOGO = LOGO, LOGO_COORDS = LOGO_COORDS, K = K, COVERED_PANELS = COVERED_PANELS, Toast = Toast, TOAST = TOAST, boot = boot } end

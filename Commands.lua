@@ -645,6 +645,217 @@ local function StartPerf(seconds)
     end)
 end
 
+-- /ov perf mem (2.5.2): what holds Overlord's memory, measured once in the real game. One walk
+-- of every table reachable from Overlord and its saves, spread over frames (never inside a
+-- pairs loop, so a table changed meanwhile cannot break it); each object charged to the first
+-- part reaching it (the saves first, then each module's fields), sizes estimated as Lua 5.1
+-- lays them out. Then the frames met on the way, walked last as one part: Overlord's own, with
+-- their fields, children and regions. Ours = not forbidden, and up its parents an Overlord name
+-- comes before any other name (UIParent ends the climb; another named parent, a Blizzard
+-- window, map canvas or nameplate, means Blizzard's: never entered, so our unnamed frames
+-- under Blizzard windows are not counted; a frame without parent is taken as ours, as our
+-- event frames are). Functions and the code are not measured: the
+-- gap to the addon's total is theirs, the module locals' without a probe and the frames' never
+-- reached.
+local memWalk = nil
+-- (The files' probes, taken once here: no other addon can read them afterwards.)
+local memoryParts = type(Overlord._TakeMemoryParts) == "function" and Overlord._TakeMemoryParts() or nil
+Overlord._TakeMemoryParts = nil
+local function StartMemoryWalk()
+    if memWalk then
+        Overlord:PrintNotification("[Overlord perf] Memory walk already running.")
+        return
+    end
+    if (InCombatLockdown and InCombatLockdown()) or Overlord.InstanceSuspended or (IsInInstance and IsInInstance()) then
+        Overlord:PrintNotification("[Overlord perf] Memory walk: out of combat and out of instances only.")
+        return
+    end
+    local parts, seen = {}, {}
+    local frames, frameMet = {}, {}
+    local function widget(t) return type(rawget(t, 0)) == "userdata" end
+    local function meet(w)
+        if not frameMet[w] then frameMet[w] = true; frames[#frames + 1] = w end
+    end
+    local function add(label, value)
+        if type(value) == "table" then
+            if widget(value) then meet(value)
+            else parts[#parts + 1] = { label = label, value = value, bytes = 0 } end
+        end
+    end
+    if type(OverlordDB) == "table" then
+        for key, value in pairs(OverlordDB) do add("DB." .. tostring(key), value) end
+    end
+    for key, module in pairs(Overlord) do
+        if type(module) == "table" and not widget(module) then
+            for field, value in pairs(module) do add(tostring(key) .. "." .. tostring(field), value) end
+        elseif type(module) == "table" then
+            meet(module)
+        end
+    end
+    -- Each file's own tables (MemoryParts, at the end of each file), after the modules' fields.
+    local fileParts = {}
+    for label, probe in pairs(memoryParts or (type(Overlord.MemoryParts) == "table" and Overlord.MemoryParts) or {}) do
+        local ok, found = pcall(probe)
+        if ok and type(found) == "table" then
+            for name, value in pairs(found) do fileParts[#fileParts + 1] = { tostring(label):gsub("#%d+$", "") .. ":" .. tostring(name), value } end
+        end
+    end
+    table.sort(fileParts, function(a, b) return a[1] < b[1] end)
+    for _, item in ipairs(fileParts) do add(item[1], item[2]) end
+    add("Overlord (rest)", Overlord)
+    add("OverlordDB (rest)", OverlordDB)
+    -- (The addon's total is read before the walk: its own bookkeeping would count in it after.
+    -- A full collect first, so it is what the addon really holds: a short freeze, only here.)
+    collectgarbage("collect")
+    local total
+    local update = UpdateAddOnMemoryUsage or (C_AddOns and C_AddOns.UpdateAddOnMemoryUsage)
+    local usage = GetAddOnMemoryUsage or (C_AddOns and C_AddOns.GetAddOnMemoryUsage)
+    if update and usage and pcall(update) then
+        local ok, kb = pcall(usage, "Overlord")
+        if ok and type(kb) == "number" then total = kb * 1024 end
+    end
+    -- (A slice ends on 4 ms of work, or every 4,000 tables without a fine clock.)
+    local clock = debugprofilestop
+    local state = { objects = 0, sliceAt = 0 }
+    local function due(n, every)
+        if clock then return n % 32 == 0 and clock() - state.sliceAt >= 4 end
+        return n % every == 0
+    end
+    memWalk = state
+    local function size(part)
+        local stack, n, bytes = { part.value }, 1, 0
+        local function visit(x)
+            local kind = type(x)
+            if kind == "string" then
+                if not seen[x] then seen[x] = true; bytes = bytes + 24 + #x end
+            elseif kind == "table" and not seen[x] then
+                if widget(x) then
+                    meet(x)
+                else
+                    n = n + 1
+                    stack[n] = x
+                end
+            end
+        end
+        while n > 0 do
+            local t = stack[n]
+            stack[n], n = nil, n - 1
+            if not seen[t] then
+                seen[t] = true
+                local arr, hash = #t, 0
+                for k, v in pairs(t) do
+                    if not (type(k) == "number" and k >= 1 and k <= arr and k % 1 == 0) then hash = hash + 1 end
+                    visit(k)
+                    visit(v)
+                end
+                local slots = 1
+                while slots < hash do slots = slots * 2 end
+                bytes = bytes + 40 + arr * 16 + (hash > 0 and slots * 40 or 0)
+                state.objects = state.objects + 1
+                if due(state.objects, 4000) then coroutine.yield() end
+            end
+        end
+        part.bytes = part.bytes + bytes
+    end
+    -- (Any error, or a missing method, reads as "not ours".)
+    local function call(w, method)
+        local fn = rawget(w, method) or w[method]
+        if type(fn) ~= "function" then return false end
+        return pcall(fn, w)
+    end
+    local function pack(fn, w) return { fn(w) } end
+    local function mine(w)
+        local ok, forbidden = call(w, "IsForbidden")
+        if not ok or forbidden then return false end
+        local node = w
+        for _ = 1, 30 do
+            local okName, name = call(node, "GetName")
+            if not okName then return false end
+            if type(name) == "string" then return name:find("^Overlord") ~= nil end
+            local okParent, parent = call(node, "GetParent")
+            if not okParent then return false end
+            if parent == nil or parent == UIParent then return true end
+            if type(parent) ~= "table" then return false end
+            node = parent
+        end
+        return false
+    end
+    local framePart = { label = "Frames (Overlord's, fields included)", bytes = 0, count = 0 }
+    local FRAME_MAX = 50000
+    local co = coroutine.create(function()
+        for _, part in ipairs(parts) do size(part) end
+        -- (Frames last: whatever a part already reached stays that part's.)
+        local i = 1
+        while i <= #frames and framePart.count < FRAME_MAX do
+            local w = frames[i]
+            i = i + 1
+            if mine(w) then
+                framePart.count = framePart.count + 1
+                framePart.value = w
+                size(framePart)
+                for _, getter in ipairs({ "GetChildren", "GetRegions" }) do
+                    local fn = w[getter]
+                    local ok, list = false, nil
+                    if type(fn) == "function" then ok, list = pcall(pack, fn, w) end
+                    if ok and list then for _, child in ipairs(list) do if type(child) == "table" then meet(child) end end end
+                end
+            end
+            -- (Every frame looked at counts, ours or not.)
+            if due(i, 500) then coroutine.yield() end
+        end
+        framePart.value = nil
+        if framePart.count > 0 then parts[#parts + 1] = framePart end
+    end)
+    local function report()
+        memWalk = nil
+        table.sort(parts, function(a, b) return a.bytes > b.bytes end)
+        local reached = 0
+        for _, part in ipairs(parts) do reached = reached + part.bytes end
+        local R = SyncReport
+        local sheet = R.Begin()
+        pcall(function()
+            R.Header("ok", "Memory")
+            R.Status("ok", "Overlord memory", total and string.format("%.1f MB held (after a full collect)", total / 1048576) or "unknown")
+            R.Status("ok", "Reached tables", string.format("%.1f MB in %d tables", reached / 1048576, state.objects))
+            R.Status("ok", "Frames", string.format("%d of Overlord's: %.1f MB with their fields (in the total above)%s",
+                framePart.count, framePart.bytes / 1048576, framePart.count >= FRAME_MAX and ", more not walked" or ""))
+            if total then
+                R.Status("ok", "Not reached", string.format("%.1f MB (code, functions, module locals, frames never reached)",
+                    math.max(0, total - reached) / 1048576))
+            end
+            R.Title("Details:")
+            R.Detail("Biggest parts (MB, each object counted once, for the first part reaching it):")
+            for i = 1, math.min(25, #parts) do
+                local part = parts[i]
+                if part.bytes < 51200 then break end
+                R.Detail(string.format("  %.2f  %s", part.bytes / 1048576, part.label))
+            end
+        end)
+        SyncReport.sheet = nil
+        pcall(SyncReport.ShowSheet, sheet)
+    end
+    local function step()
+        if memWalk ~= state then return end
+        if (InCombatLockdown and InCombatLockdown()) or Overlord.InstanceSuspended then
+            memWalk = nil
+            Overlord:PrintNotification("[Overlord perf] Memory walk stopped (combat or instance).")
+            return
+        end
+        if clock then state.sliceAt = clock() end
+        local ok, err = coroutine.resume(co)
+        if not ok then
+            memWalk = nil
+            Overlord:PrintNotification("[Overlord perf] Memory walk error: " .. tostring(err))
+        elseif coroutine.status(co) == "dead" then
+            report()
+        else
+            C_Timer.After(0, step)
+        end
+    end
+    Overlord:PrintNotification("[Overlord perf] Measuring memory over a few seconds...")
+    C_Timer.After(0, step)
+end
+
 local function ShowHelp()
     Overlord:PrintNotification(L.HELP_HEADER)
     Overlord:PrintNotification(L.HELP_SHOW)
@@ -963,6 +1174,8 @@ local function CommandHandler(msg)
     elseif cmd == "perf" then
         if args[2] == "stop" then
             StopPerf()
+        elseif args[2] == "mem" then
+            StartMemoryWalk()
         else
             local seconds = math.floor(tonumber(args[2]) or 60)
             StartPerf(math.max(10, math.min(600, seconds)))
@@ -1082,3 +1295,7 @@ end
 SLASH_OVERLORD1 = "/ov"
 SLASH_OVERLORD2 = "/overlord"
 SlashCmdList["OVERLORD"] = CommandHandler
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["Commands.lua"] = function() return { zoneAliases = zoneAliases, SyncReport = SyncReport, networkProbeRunning = networkProbeRunning, PERF_MODULES = PERF_MODULES, PERF_SPIKE_MS = PERF_SPIKE_MS, perfState = perfState, memWalk = memWalk } end

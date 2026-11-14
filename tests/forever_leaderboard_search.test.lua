@@ -52,6 +52,9 @@ source.sortedGuilds[3998].guild = 'ЖУК'
 source.byFaction.Alliance[1] = source.sortedKills[4321]
 source.sortedGuildKeeps[1] = { guild = 'Test[100%]' }
 source.sortedOutposts[1] = { guild = 'Test[100%]' }
+-- 2.5.2: the killing blows order (rows of sortedKills) and whether it was built.
+source.sortedKB = { source.sortedKills[10], source.sortedKills[4321] }
+source.kbByName, source.kbBuilt = { [source.sortedKills[10].name] = 5, [source.sortedKills[4321].name] = 2 }, true
 local shown, published, commits = true, nil, 0
 local search = Overlord.LeaderboardSearch:New(function() return shown end, function(view)
     published, commits = view, commits + 1
@@ -69,6 +72,9 @@ assert(published.sortedKills[1] == source.sortedKills[4321] and published.ranks.
 assert(published.ranks.sortedGuilds[1] == 4000 and #published.sortedGuildKeeps == 1
     and #published.sortedOutposts == 1 and #published.byFaction.Alliance == 1)
 assert(source.sortedKills[4321].rank == nil and #source.sortedKills == 5000, 'Search mutated scores/ranks')
+assert(published.kbBuilt == true and published.kbByName == source.kbByName and #published.sortedKB == 1
+    and published.sortedKB[1] == source.sortedKills[4321] and published.ranks.sortedKB[1] == 2,
+    'Search lost the killing blows order')
 for _ = 1, 100 do assert(search:Request(source, 'test[100%]') == published) end
 assert(pending() == 0, 'Repeated refresh rebuilt an unchanged search')
 search:Request(source, 'éléa'); drain()
@@ -209,12 +215,51 @@ assert(not frame.guildEmptyHint:IsShown(), 'An empty search was presented as a g
 frame.searchClear.scripts.OnClick(); drain()
 assert(#frame._lbView.sortedKills == 5000 and not frame.searchClear:IsShown())
 assert(#frames == frameCount, 'Search created frames per matching row')
+assert(frame.scrollGuild._lbInputs ~= nil and frame.scrollHorde._lbInputs ~= nil,
+    'fixture: the open window recorded no paint inputs')
+frame._infoDc = source -- (as the info lines keep the view they were read from)
 frame.searchBox:SetText('player'); ui:Hide(); drain()
 assert(not frame.search.job, 'Hidden leaderboard continued filtering')
+-- 2.5.2: closed, the window holds no copy of a ranking view nor a search result.
+assert(frame._lbView == nil and frame._lbSource == nil and frame.search.result == nil and frame.search.source == nil,
+    'the closed window kept a ranking view')
+assert(frame._infoDc == nil, 'the closed window kept the view of its info lines')
+for _, key in ipairs({ 'scrollKills', 'scrollGuild', 'scrollGuildKeep', 'scrollOutpost', 'scrollAlli', 'scrollHorde' }) do
+    assert(frame[key]._lbInputs == nil, 'the closed window kept the lists of its last paint: ' .. key)
+end
 ui:Show(); drain()
 assert(#frame._lbView.sortedKills == 4999, 'Reopening lost pending query')
 frame.searchBox.scripts.OnEscapePressed(frame.searchBox); drain()
 assert(frame._lbView == frame._lbSource and pending() == 0)
+-- (Shown again by its parent, not by Show(): the window rebuilds its view by itself.)
+frame:Hide(); drain()
+assert(frame._lbView == nil, 'the closed window kept a ranking view')
+frame:Show(); frame.scripts.OnShow(frame); drain()
+assert(frame._lbView and #frame._lbView.sortedKills == 5000, 'the window shown by its parent stayed empty')
+-- 2.5.2: the KB header sorts by killing blows; until this session has built that order (the
+-- saved login preview holds none), the honorable kills order stays, arrow included.
+do
+    local headers = frame.playerSortHeaders
+    local function first()
+        for _, w in ipairs(frames) do
+            if w.rank and w.kills and w:IsShown() and w.rank.text == 1 then return w end
+        end
+    end
+    local built = source.sortedKB
+    source.sortedKB = nil
+    headers.kb.scripts.OnClick(); ui:Refresh(); drain()
+    assert(frame.playerSort == 'kb' and headers.kills.arrow:IsShown() and not headers.kb.arrow:IsShown(),
+        'the arrow is on killing blows before their order exists')
+    assert(first() and first()._olPlayerName == 'Player 1' and not frame.kbEmptyHint:IsShown(),
+        'no list (or an empty hint) while the killing blows order is not built')
+    source.sortedKB = built
+    ui:Refresh(); drain()
+    assert(headers.kb.arrow:IsShown() and not headers.kills.arrow:IsShown(), 'the arrow did not follow the built order')
+    assert(first() and first()._olPlayerName == 'Player 10' and first().kb.text == 5,
+        'the killing blows order is not shown: ' .. tostring(first() and first()._olPlayerName))
+    headers.kills.scripts.OnClick(); drain()
+    assert(frame.playerSort == 'kills' and headers.kills.arrow:IsShown())
+end
 -- Expanding from 25 to 500 captures must reuse the same visible row pool.
 for _, faction in ipairs({ 'Alliance', 'Horde' }) do
     source.byFaction[faction] = {}

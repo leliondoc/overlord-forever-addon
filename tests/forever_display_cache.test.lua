@@ -59,6 +59,33 @@ drain()
 local first = lb:EnsureDisplayCache()
 assert(first.ready and #first.sortedKills == 10000)
 assert(#first.byFaction.Horde == 500)
+-- 2.5.2: the "KB" order holds the rows of sortedKills themselves (no table per player),
+-- most killing blows first, then most honorable kills; counts read from kbByName.
+do
+    local function key(i) return lb:GetNetworkRowKey(names[i]) end
+    local counts = { [key(2000)] = 3, [key(10997)] = 1, [key(2040)] = 3, [key(5000)] = 7 }
+    Overlord.KillingBlows = { Counts = function() return counts end }
+    lb:InvalidateDisplayCache()
+    lb:EnsureDisplayCache()
+    drain()
+    local view = lb:EnsureDisplayCache()
+    assert(view.ready and view.sortedKB and #view.sortedKB == 4, "killing blows view not built")
+    local want = { 5000, 2040, 2000, 10997 }
+    local shared = {}
+    for _, row in ipairs(view.sortedKills) do shared[row] = true end
+    for i, n in ipairs(want) do
+        local row = view.sortedKB[i]
+        assert(row.name == names[n], "killing blows order: " .. i .. " " .. tostring(row.name))
+        assert(shared[row], "killing blows row is not the ranking's own row")
+    end
+    assert(view.kbByName[names[5000]] == 7 and view.kbByName[names[2000]] == 3 and view.kbByName[names[1]] == nil)
+    Overlord.KillingBlows = nil
+    lb:InvalidateDisplayCache()
+    lb:EnsureDisplayCache()
+    drain()
+    first = lb:EnsureDisplayCache()
+    assert(first.ready and #first.sortedKB == 0 and #first.sortedKills == 10000)
+end
 local saved = assert(OverlordDB.leaderboardDisplayCache)
 -- 1.4.2: only the login preview is persisted (500 rows), the full 10,000 live in memory.
 assert(#saved.sortedKills == 500 and #saved.sortedGuilds == 1,

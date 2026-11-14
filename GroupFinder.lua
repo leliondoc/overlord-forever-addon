@@ -2718,3 +2718,7 @@ if CreateFrame then
         GF:Initialize()
     end)
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["GroupFinder.lua"] = function() return { GF = GF, securecall = securecall, strsplit = strsplit } end

@@ -464,3 +464,7 @@ end
 function Defense._Peek()
     return held, locks, said, muted
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["ZoneDefense.lua"] = function() return { Defense = Defense, held = held, locks = locks, said = said, muted = muted, noticeAt = noticeAt } end

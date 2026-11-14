@@ -526,3 +526,7 @@ function Overlord.GeneralSync:OnReceiveGM(payload, sender, sourceChannel)
     end
     RememberDedup(recentGM, dedupKey, now)
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["GeneralSync.lua"] = function() return { GE_DEDUP_SEC = GE_DEDUP_SEC, GP_DEDUP_SEC = GP_DEDUP_SEC, GX_DEDUP_SEC = GX_DEDUP_SEC, GD_DEDUP_SEC = GD_DEDUP_SEC, GM_DEDUP_SEC = GM_DEDUP_SEC, DEDUP_PURGE_INTERVAL = DEDUP_PURGE_INTERVAL, lastDedupPurgeAt = lastDedupPurgeAt, recentGE = recentGE, recentGP = recentGP, recentGX = recentGX, recentGD = recentGD, recentGM = recentGM, DEDUP_MAX_ENTRIES = DEDUP_MAX_ENTRIES, dedupStates = dedupStates, GD_REPLAY_DELAY_1 = GD_REPLAY_DELAY_1, GD_REPLAY_DELAY_2 = GD_REPLAY_DELAY_2, GM_BROADCAST_COOLDOWN = GM_BROADCAST_COOLDOWN, lastGmBroadcastAt = lastGmBroadcastAt } end

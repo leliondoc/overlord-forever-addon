@@ -1,6 +1,19 @@
 -- Locales.lua: Localisation automatique (EN/FR/ES/DE/RU selon le client)
 -- Détection via GetLocale() au chargement de l'addon.
 Overlord = Overlord or {}
+-- (/ov perf mem, 2.5.2: each file hands its tables to the memory walk through this table, which
+-- takes them and gives nothing back; Commands.lua takes the list once while the addon loads.)
+do
+    local parts = {}
+    Overlord.MemoryParts = setmetatable({}, {
+        __newindex = function(_, key, value) if type(value) == "function" then parts[key] = value end end,
+        __metatable = false,
+    })
+    function Overlord._TakeMemoryParts()
+        Overlord._TakeMemoryParts = nil
+        return parts
+    end
+end
 local L = {}
 Overlord.L = L
 L.OUTPOST_SILVERPINE_NAME = "Savix Chapel"
@@ -453,6 +466,10 @@ L.LB_COL_RATING = "Rating"
 L.LB_TABLE_PLAYER_KILLS = "Player kills"
 L.LB_TABLE_GUILDS = "Guilds"
 L.LB_SORT_HINT = "Click to sort by this column."
+L.LB_COL_KB = "KB"
+L.LB_KB_TIP_TITLE = "Killing blows"
+L.LB_KB_TIP_BODY = "The last hit on an enemy player that earned an honorable kill, this week."
+L.LB_KB_EMPTY = "No killing blows counted yet this week."
 L.LB_RATING_TIP_TITLE = "Guild rating"
 L.LB_RATING_TIP_BODY = "This week: 1 point per honorable kill, %d per front point taken by a member, %d per outpost and %d per keep taken by the guild."
 L.LB_RATING_ROW_POINTS = "%s points"
@@ -1079,6 +1096,10 @@ L.LB_COL_RATING = "Cote"
 L.LB_TABLE_PLAYER_KILLS = "Victoires des joueurs"
 L.LB_TABLE_GUILDS = "Guildes"
 L.LB_SORT_HINT = "Cliquer pour trier sur cette colonne."
+L.LB_COL_KB = "CF"
+L.LB_KB_TIP_TITLE = "Coups fatals"
+L.LB_KB_TIP_BODY = "Le dernier coup porté à un joueur ennemi qui a rapporté une victoire honorable, cette semaine."
+L.LB_KB_EMPTY = "Aucun coup fatal compté cette semaine pour l'instant."
 L.LB_RATING_TIP_TITLE = "Cote des guildes"
 L.LB_RATING_TIP_BODY = "Cette semaine : 1 point par victoire honorable, %d par point du front pris par un membre, %d par avant-poste et %d par fort pris par la guilde."
 L.LB_RATING_ROW_POINTS = "%s points"
@@ -1700,6 +1721,10 @@ L.LB_COL_RATING = "Puntos"
 L.LB_TABLE_PLAYER_KILLS = "Muertes de jugadores"
 L.LB_TABLE_GUILDS = "Hermandades"
 L.LB_SORT_HINT = "Haz clic para ordenar por esta columna."
+L.LB_COL_KB = "GdG"
+L.LB_KB_TIP_TITLE = "Golpes de gracia"
+L.LB_KB_TIP_BODY = "El último golpe a un jugador enemigo que dio una muerte honorable, esta semana."
+L.LB_KB_EMPTY = "Aún no hay golpes de gracia contados esta semana."
 L.LB_RATING_TIP_TITLE = "Puntos de hermandad"
 L.LB_RATING_TIP_BODY = "Esta semana: 1 punto por muerte honorable, %d por punto del frente tomado por un miembro, %d por avanzada y %d por fortaleza tomadas por la hermandad."
 L.LB_RATING_ROW_POINTS = "%s puntos"
@@ -2320,6 +2345,10 @@ L.LB_COL_RATING = "Wertung"
 L.LB_TABLE_PLAYER_KILLS = "Siege der Spieler"
 L.LB_TABLE_GUILDS = "Gilden"
 L.LB_SORT_HINT = "Klicken, um nach dieser Spalte zu sortieren."
+L.LB_COL_KB = "TS"
+L.LB_KB_TIP_TITLE = "Todesstöße"
+L.LB_KB_TIP_BODY = "Der letzte Treffer gegen einen feindlichen Spieler, der diese Woche einen ehrenhaften Sieg einbrachte."
+L.LB_KB_EMPTY = "Diese Woche wurden noch keine Todesstöße gezählt."
 L.LB_RATING_TIP_TITLE = "Gildenwertung"
 L.LB_RATING_TIP_BODY = "Diese Woche: 1 Punkt pro ehrenhaftem Sieg, %d pro Frontpunkt, den ein Mitglied erobert, %d pro Außenposten und %d pro Festung, die die Gilde erobert."
 L.LB_RATING_ROW_POINTS = "%s Punkte"
@@ -2947,6 +2976,10 @@ L.LB_COL_RATING = "Очки"
 L.LB_TABLE_PLAYER_KILLS = "Победы игроков"
 L.LB_TABLE_GUILDS = "Гильдии"
 L.LB_SORT_HINT = "Нажмите, чтобы сортировать по этому столбцу."
+L.LB_COL_KB = "СУ"
+L.LB_KB_TIP_TITLE = "Смертельные удары"
+L.LB_KB_TIP_BODY = "Последний удар по вражескому игроку, принёсший почётную победу, на этой неделе."
+L.LB_KB_EMPTY = "На этой неделе смертельные удары ещё не засчитаны."
 L.LB_RATING_TIP_TITLE = "Очки гильдий"
 L.LB_RATING_TIP_BODY = "На этой неделе: 1 очко за почётную победу, %d за точку фронта, захваченную участником, %d за аванпост и %d за крепость, захваченные гильдией."
 L.LB_RATING_ROW_POINTS = "Очки: %s"

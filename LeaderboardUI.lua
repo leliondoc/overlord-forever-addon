@@ -93,6 +93,9 @@ local LB_HEADER_H = 24
 local LB_KILL_COL_RANK_W = 34
 local LB_KILL_COL_ICON_W = 34
 local LB_KILL_COL_KILLS_W = 50
+-- 2.5.2: the killing blow column right of the honorable kills, and the table's sort (functions
+-- next to GuildRating's). Its width comes out of the player name.
+local PlayerSort = { KB_W = 42 }
 -- Captures : deux icones compactes, nom lisible et compteur fixe.
 local LB_CAPTURE_ROW_PAD = 4
 local LB_CAPTURE_SCROLL_GUTTER = 18
@@ -114,7 +117,8 @@ local function GetKillLayoutSegments(panelW)
     local raceLeft = rankLeft + LB_KILL_COL_RANK_W
     local classLeft = raceLeft + LB_KILL_COL_ICON_W
     local playerLeft = classLeft + LB_KILL_COL_ICON_W
-    local killsLeft = right - LB_KILL_COL_KILLS_W
+    local kbLeft = right - PlayerSort.KB_W
+    local killsLeft = kbLeft - LB_KILL_COL_KILLS_W
     return {
         rank = {
             left = rankLeft,
@@ -142,9 +146,15 @@ local function GetKillLayoutSegments(panelW)
         },
         kills = {
             left = killsLeft,
-            right = right,
+            right = kbLeft,
             center = killsLeft + LB_KILL_COL_KILLS_W * 0.5,
             width = LB_KILL_COL_KILLS_W,
+        },
+        kb = {
+            left = kbLeft,
+            right = right,
+            center = kbLeft + PlayerSort.KB_W * 0.5,
+            width = PlayerSort.KB_W,
         },
     }
 end
@@ -1348,6 +1358,19 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame:SetScript("OnHide", function()
         if lbFrame.search then lbFrame.search:Cancel() end
         if lbFrame.infoTicker then lbFrame.infoTicker:Cancel(); lbFrame.infoTicker = nil end
+        -- 2.5.2: closed, the window lets go of its copy of the ranking view, of the medals read
+        -- from it and of a search result (the query typed stays). Each opening builds them again
+        -- from the display cache (Refresh); kept, they held a whole older view next to the one
+        -- built since (by Nemesis, by sync), several MB for the rest of the session.
+        lbFrame._lbView, lbFrame._lbSource, lbFrame._infoDc = nil, nil, nil
+        GuildRating.medals = nil
+        -- (Each list's record of its last inputs holds those lists too; a reopened window
+        -- repaints every list in full anyway, LbPerf.paintGen.)
+        for _, key in ipairs({ "scrollKills", "scrollGuild", "scrollGuildKeep", "scrollOutpost", "scrollAlli", "scrollHorde" }) do
+            local scroll = lbFrame[key]
+            if scroll then scroll._lbInputs, scroll._lbInputsValid = nil, nil end
+        end
+        if lbFrame.search then lbFrame.search.result, lbFrame.search.source = nil, nil end
     end)
 
     -- Infos de part et d'autre du titre (donnees deja locales, aucun paquet), sur les
@@ -1374,6 +1397,9 @@ function Overlord.LeaderboardUI:CreateFrame()
     lbFrame.infoRight = { InfoLine(lbFrame.subtitle, "RIGHT"), InfoLine(lbFrame.totalText, "RIGHT") }
     lbFrame:HookScript("OnShow", function()
         if lbFrame.Raise then lbFrame:Raise() end
+        -- (Shown again by its parent: the view let go at OnHide is built again here; an opening
+        -- by Show refreshes right after.)
+        if not lbFrame._lbView and not lbFrame._lbOpening then Overlord.LeaderboardUI:Refresh() end
         -- Shown again by its parent (Alt+Z, cinematic): OnHide stopped the badge, and a
         -- repaint while the parent was hidden must not hide that from this one.
         if lbFrame.syncBadge then lbFrame.syncBadge._paint = nil end
@@ -1427,12 +1453,14 @@ function Overlord.LeaderboardUI:CreateFrame()
     hName:SetText(L.LB_COL_PLAYER)
     ApplyOfficialHeaderColor(hName, P)
 
-    local hKills = headerBand:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hKills:SetPoint("CENTER", headerBand, "LEFT", killCols.kills.center, 0)
-    hKills:SetWidth(killCols.kills.width)
-    hKills:SetJustifyH("CENTER")
-    hKills:SetText(L.LB_COL_KILLS)
-    ApplyOfficialHeaderColor(hKills, P)
+    -- HK and KB: a click on the header sorts the table by that column (HK by default), an
+    -- arrow marks the one that sorts, as in the guild table.
+    lbFrame.playerSortHeaders = {
+        kills = PlayerSort.CreateHeader(headerBand, "kills", killCols.kills.center,
+            killCols.kills.width, L.LB_COL_KILLS, P),
+        kb = PlayerSort.CreateHeader(headerBand, "kb", killCols.kb.center,
+            killCols.kb.width, L.LB_COL_KB or "KB", P),
+    }
 
     -- Classement kills : 10 lignes visibles, defilement molette comme les captures
     local killsViewportH = MAX_VISIBLE_KILL_ROWS * KILL_ROW_HEIGHT
@@ -1477,6 +1505,14 @@ function Overlord.LeaderboardUI:CreateFrame()
 
     lbFrame.scrollKills = scrollKills
     lbFrame.scrollChildKills = scrollChildKills
+    -- (Sorted by killing blows before anybody has one: said, as the guild table does.)
+    lbFrame.kbEmptyHint = killsPanel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    lbFrame.kbEmptyHint:SetPoint("CENTER", scrollKills, "CENTER", 0, 0)
+    lbFrame.kbEmptyHint:SetWidth(260)
+    lbFrame.kbEmptyHint:SetJustifyH("CENTER")
+    lbFrame.kbEmptyHint:SetTextColor(P.gray[1], P.gray[2], P.gray[3], 0.85)
+    lbFrame.kbEmptyHint:SetText(L.LB_KB_EMPTY or "")
+    lbFrame.kbEmptyHint:Hide()
     LbBuild.Step()
 
     -- Conteneur captures dans un sous-panneau WC3
@@ -2105,6 +2141,11 @@ function Overlord.LeaderboardUI:CreateRow(parent, index, yOffset, P)
     row.kills:SetWidth(killCols.kills.width)
     row.kills:SetJustifyH("CENTER")
 
+    row.kb = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    row.kb:SetPoint("CENTER", row, "LEFT", killCols.kb.center, 0)
+    row.kb:SetWidth(killCols.kb.width)
+    row.kb:SetJustifyH("CENTER")
+
     row:EnableMouse(true)
     row:SetScript("OnEnter", Overlord.LeaderboardUI.OnKillRowEnter)
     row:SetScript("OnLeave", GameTooltip_Hide)
@@ -2443,7 +2484,9 @@ end
 RenderKillRows = function(force)
     if not lbFrame or not lbFrame._lbView then return end
     local view = lbFrame._lbView
-    local sortedKills = view.sortedKills or {}
+    -- (Sorted by honorable kills, or by killing blows: PlayerSort.)
+    local sortedKills, sortedRanks = PlayerSort.List(view)
+    local kbByName = view.kbByName or {}
     local first, poolSize, total = GetVirtualRowWindow(
         lbFrame.scrollKills, KILL_ROW_HEIGHT, #sortedKills)
     Overlord.LeaderboardUI:EnsureKillRows(poolSize)
@@ -2479,7 +2522,8 @@ RenderKillRows = function(force)
             else
                 row._olDisplayName = shortName
             end
-            local rank = view.ranks and view.ranks.sortedKills[dataIndex] or dataIndex
+            local rank = sortedRanks and sortedRanks[dataIndex] or dataIndex
+            local kb = kbByName[entry.name] or 0
             local isOwn = myName ~= nil and shortName:sub(1, #myName) == myName
                 and (#shortName == #myName or shortName:sub(#myName + 1, #myName + 2) == " (")
             -- Némésis : tete de mort devant les cinq meilleurs ennemis (Nemesis.lua).
@@ -2493,6 +2537,7 @@ RenderKillRows = function(force)
             local paintKey = rank .. "|" .. tostring(entry.kills) .. "|" .. tostring(class) .. "|"
                 .. tostring(faction) .. "|" .. tostring(raceFile) .. "|" .. tostring(raceSex) .. "|"
                 .. shortName .. (isOwn and "|me" or "") .. (wanted and "|w" or "") .. "|" .. badgeRank
+                .. "|" .. kb
             if row._lbPaintKey ~= paintKey then
                 row._lbPaintKey = paintKey
                 local medalColor = MEDAL_COLORS[rank]
@@ -2528,6 +2573,8 @@ RenderKillRows = function(force)
                 end
                 row.kills:SetText(entry.kills)
                 SetSecondaryTextColor(row.kills, P, medalColor)
+                row.kb:SetText(kb)
+                SetSecondaryTextColor(row.kb, P, medalColor)
             end
             row:Show()
         elseif row then
@@ -2880,6 +2927,85 @@ function GuildRating.CreateSortHeader(band, mode, x, width, text, P)
             GameTooltip:AddLine(string.format(L.LB_RATING_TIP_BODY
                 or "1 point per honorable kill, %d per front point, %d per outpost, %d per keep.",
                 worth.zone or 0, worth.outpost or 0, worth.keep or 0), 1, 1, 1, true)
+        else
+            GameTooltip:AddLine(L.LB_RATING_ROW_KILLS or "Honorable kills", 1, 0.82, 0)
+        end
+        GameTooltip:AddLine(L.LB_SORT_HINT or "Click to sort by this column.", 0.6, 0.6, 0.6, true)
+        GameTooltip:Show()
+    end)
+    header:SetScript("OnLeave", GameTooltip_Hide)
+    return header
+end
+
+-- 2.5.2: the player table sorts by honorable kills ("kills", the default) or by killing blows
+-- ("kb", KillingBlows: those with at least one), kept from one session to the next like the
+-- guild table's sort. The guild table and the guild rating never read killing blows.
+function PlayerSort.Mode()
+    local mode = lbFrame and lbFrame.playerSort
+    if not mode then
+        mode = OverlordDB and type(OverlordDB.config) == "table" and OverlordDB.config.leaderboardPlayerSort
+        if mode ~= "kb" then mode = "kills" end
+        if lbFrame then lbFrame.playerSort = mode end
+    end
+    return mode
+end
+
+-- Rows shown, their own ranks under a search, and true when they are sorted by killing blows.
+-- (Until the first build of this session has made the killing blows order, the saved login
+-- preview holding none, the honorable kills order is shown rather than an empty list.)
+function PlayerSort.List(view)
+    if PlayerSort.Mode() == "kb" and view.kbBuilt == true then
+        return view.sortedKB or {}, view.ranks and view.ranks.sortedKB, true
+    end
+    return view.sortedKills or {}, view.ranks and view.ranks.sortedKills, false
+end
+
+function PlayerSort.SetMode(mode)
+    if not lbFrame or (mode ~= "kills" and mode ~= "kb") or PlayerSort.Mode() == mode then return end
+    lbFrame.playerSort = mode
+    if OverlordDB and type(OverlordDB.config) == "table" then
+        OverlordDB.config.leaderboardPlayerSort = mode
+    end
+    if lbFrame.scrollKills then lbFrame.scrollKills:SetVerticalScroll(0) end
+    Overlord.LeaderboardUI:PaintView()
+end
+
+-- (The arrow follows the order shown: on honorable kills while the killing blows order of
+-- this session is not built yet, PlayerSort.List.)
+function PlayerSort.RefreshHeaders(view)
+    local headers = lbFrame and lbFrame.playerSortHeaders
+    if not headers then return end
+    local mode = PlayerSort.Mode()
+    if mode == "kb" and not (view and view.kbBuilt == true) then mode = "kills" end
+    if lbFrame._playerSortShown == mode then return end
+    lbFrame._playerSortShown = mode
+    for key, header in pairs(headers) do header.arrow:SetShown(key == mode) end
+end
+
+-- Clickable header of the player table (HK or KB), drawn like the guild table's.
+function PlayerSort.CreateHeader(band, mode, center, width, text, P)
+    local header = CreateFrame("Button", nil, band)
+    header:SetSize(width, LB_HEADER_H)
+    header:SetPoint("CENTER", band, "LEFT", center, 0)
+    header.label = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    header.label:SetPoint("CENTER", header, "CENTER", 0, 0)
+    header.label:SetText(text or "")
+    header.label:SetTextColor(P.accent[1], P.accent[2], P.accent[3])
+    header.arrow = header:CreateTexture(nil, "OVERLAY")
+    header.arrow:SetTexture("Interface\\Buttons\\UI-SortArrow")
+    header.arrow:SetTexCoord(0, 0.5625, 0, 1)
+    header.arrow:SetSize(9, 8)
+    header.arrow:SetPoint("LEFT", header.label, "RIGHT", 1, -1)
+    header.arrow:SetVertexColor(P.accent[1], P.accent[2], P.accent[3])
+    header.arrow:Hide()
+    header:SetScript("OnClick", function() PlayerSort.SetMode(mode) end)
+    header:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        if mode == "kb" then
+            GameTooltip:AddLine(L.LB_KB_TIP_TITLE or "Killing blows", 1, 0.82, 0)
+            GameTooltip:AddLine(L.LB_KB_TIP_BODY
+                or "The last hit on an enemy player that earned an honorable kill, this week.",
+                1, 1, 1, true)
         else
             GameTooltip:AddLine(L.LB_RATING_ROW_KILLS or "Honorable kills", 1, 0.82, 0)
         end
@@ -3372,6 +3498,11 @@ function Overlord.LeaderboardUI:PaintView()
         lbFrame.guildEmptyHint:SetShown(not searching and #guildList == 0)
     end
     GuildRating.RefreshSortHeaders()
+    PlayerSort.RefreshHeaders(view)
+    if lbFrame.kbEmptyHint then
+        lbFrame.kbEmptyHint:SetShown(not searching and PlayerSort.Mode() == "kb" and view.kbBuilt == true
+            and #(view.sortedKB or {}) == 0)
+    end
     if lbFrame.guildKeepEmptyHint then
         lbFrame.guildKeepEmptyHint:SetShown(not searching and #view.sortedGuildKeeps == 0)
     end
@@ -3382,7 +3513,7 @@ function Overlord.LeaderboardUI:PaintView()
     LayoutLeaderboardSections()
     FitLeaderboardFrameHeight()
 
-    local killCount = #view.sortedKills
+    local killCount = #(PlayerSort.List(view))
     local alliCount = math.min(#(view.byFaction.Alliance or {}), MAX_CAPTURE_LINES)
     local hordeCount = math.min(#(view.byFaction.Horde or {}), MAX_CAPTURE_LINES)
     SetLeaderboardScrollExtent(
@@ -3438,7 +3569,7 @@ end
 local function PublishSearchView(view)
     lbFrame._lbView = view
     if lbFrame.searchQuery and lbFrame.searchQuery ~= "" then
-        local count = #view.sortedKills + #view.sortedGuilds + #(view.sortedGuildRating or {})
+        local count = #(PlayerSort.List(view)) + #view.sortedGuilds + #(view.sortedGuildRating or {})
             + #view.sortedGuildKeeps + #view.sortedOutposts
             + #view.byFaction.Alliance + #view.byFaction.Horde
         SetSearchStatus(count == 0 and (L.LB_SEARCH_EMPTY or "No matches") or "")
@@ -3818,6 +3949,12 @@ function Overlord.LeaderboardUI:Refresh()
     local view = lbFrame._lbSource or {}
     lbFrame._lbSource = view
     view.sortedKills = dc.sortedKills or {}
+    -- (One shared empty list until it is built: a new table at each refresh would make a
+    -- search in progress start again every time, its sources never the same.)
+    view.sortedKB = dc.sortedKB or lbVolatileLists.none
+    -- (A view restored from the save has no killing blows yet: not "none", just not built.)
+    view.kbBuilt = dc.sortedKB ~= nil
+    view.kbByName = dc.kbByName or lbVolatileLists.none
     view.byFaction = dc.byFaction or { Alliance = {}, Horde = {} }
     view.sortedGuilds = dc.sortedGuilds or {}
     view.sortedGuildRating = dc.sortedGuildRating or {}
@@ -4015,7 +4152,9 @@ function Overlord.LeaderboardUI:Show()
     else
         self:ApplyFrameScale(1)
     end
+    lbFrame._lbOpening = true
     lbFrame:Show()
+    lbFrame._lbOpening = nil
     -- Built while hidden: its height is fitted now that it is shown, as a build in the
     -- click did (same height, then the scale just applied refitted to it).
     if lbFrame._lbBuiltHidden then
@@ -4117,3 +4256,8 @@ function Overlord.LeaderboardUI:RefreshIfVisible()
         ui:RequestRefresh()
     end)
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["LeaderboardUI.lua"] = function() return { lbFrame = lbFrame, rows = rows, guildRows = guildRows, guildKeepRows = guildKeepRows, outpostRows = outpostRows, MAX_VISIBLE_KILL_ROWS = MAX_VISIBLE_KILL_ROWS, KILL_ROW_HEIGHT = KILL_ROW_HEIGHT, MAX_CAPTURE_LINES = MAX_CAPTURE_LINES, CAPTURE_ROW_HEIGHT = CAPTURE_ROW_HEIGHT, GUILD_ROW_HEIGHT = GUILD_ROW_HEIGHT, VIRTUAL_ROW_OVERSCAN = VIRTUAL_ROW_OVERSCAN, GUILD_KEEP_ICON = GUILD_KEEP_ICON, LB_MAIN_W = LB_MAIN_W, LB_GUILD_KILLS_W = LB_GUILD_KILLS_W, LB_GUILD_KEEP_W = LB_GUILD_KEEP_W, LB_OUTPOST_W = LB_OUTPOST_W, LB_COL_GAP = LB_COL_GAP, GuildRating = GuildRating, LB_FRAME_PAD = LB_FRAME_PAD, LB_SIZE_BOOST = LB_SIZE_BOOST, LB_KEYART = LB_KEYART, LB_FRAME_W = LB_FRAME_W, LB_GUILD_COL_RANK = LB_GUILD_COL_RANK, LB_GUILD_COL_NAME = LB_GUILD_COL_NAME, LB_GUILD_COL_MEMBERS = LB_GUILD_COL_MEMBERS, LB_GUILD_COL_KILLS = LB_GUILD_COL_KILLS, LB_GUILD_NAME_W = LB_GUILD_NAME_W, LB_GUILD_RANK_W = LB_GUILD_RANK_W, LB_GUILD_MEMBERS_W = LB_GUILD_MEMBERS_W, LB_GUILD_KILLS_TEXT_W = LB_GUILD_KILLS_TEXT_W, LB_GK_KEEP_LEFT = LB_GK_KEEP_LEFT, LB_GK_KEEP_NAME_W = LB_GK_KEEP_NAME_W, LB_GK_COL_KEEP = LB_GK_COL_KEEP, LB_GK_COL_GUILD = LB_GK_COL_GUILD, LB_GK_COL_WINS = LB_GK_COL_WINS, LB_GK_GUILD_NAME_W = LB_GK_GUILD_NAME_W, LB_GK_WINS_W = LB_GK_WINS_W, LB_OP_OUTPOST_LEFT = LB_OP_OUTPOST_LEFT, LB_OP_OUTPOST_NAME_W = LB_OP_OUTPOST_NAME_W, LB_OP_COL_OUTPOST = LB_OP_COL_OUTPOST, LB_OP_COL_GUILD = LB_OP_COL_GUILD, LB_OP_COL_CAPTURES = LB_OP_COL_CAPTURES, LB_OP_GUILD_NAME_W = LB_OP_GUILD_NAME_W, LB_OP_CAPTURES_W = LB_OP_CAPTURES_W, LB_OP_GUILD_COL_LEFT = LB_OP_GUILD_COL_LEFT, LB_OP_GUILD_COL_RIGHT = LB_OP_GUILD_COL_RIGHT, LB_OP_OUTPOST_NAME_MAX_W = LB_OP_OUTPOST_NAME_MAX_W, LB_GAP_SECTION = LB_GAP_SECTION, LB_GAP_HEADER = LB_GAP_HEADER, LB_ROW_PAD = LB_ROW_PAD } end
+Overlord.MemoryParts["LeaderboardUI.lua#2"] = function() return { LB_KILLS_SCROLL_GUTTER = LB_KILLS_SCROLL_GUTTER, LB_KILLS_RIGHT = LB_KILLS_RIGHT, LB_CAPTURE_PANEL_W = LB_CAPTURE_PANEL_W, LB_ICON_SIZE = LB_ICON_SIZE, LB_HEADER_H = LB_HEADER_H, LB_KILL_COL_RANK_W = LB_KILL_COL_RANK_W, LB_KILL_COL_ICON_W = LB_KILL_COL_ICON_W, LB_KILL_COL_KILLS_W = LB_KILL_COL_KILLS_W, PlayerSort = PlayerSort, LB_CAPTURE_ROW_PAD = LB_CAPTURE_ROW_PAD, LB_CAPTURE_SCROLL_GUTTER = LB_CAPTURE_SCROLL_GUTTER, LB_CAPTURE_COL_ICON_W = LB_CAPTURE_COL_ICON_W, LB_CAPTURE_COL_COUNT_W = LB_CAPTURE_COL_COUNT_W, MEDAL_COLORS = MEDAL_COLORS, LB_CREST = LB_CREST, lbRefreshPending = lbRefreshPending, lbRefreshLastAt = lbRefreshLastAt, lbRefreshToken = lbRefreshToken, LB_REFRESH_MIN_INTERVAL = LB_REFRESH_MIN_INTERVAL, LB_REFRESH_DEBOUNCE = LB_REFRESH_DEBOUNCE, lbSectionsLayoutDone = lbSectionsLayoutDone, RenderKillRows = RenderKillRows, RenderGuildRows = RenderGuildRows, RenderGuildKeepRows = RenderGuildKeepRows, RenderOutpostRows = RenderOutpostRows, RenderCaptureRows = RenderCaptureRows, LbPerf = LbPerf, LbBuild = LbBuild, lbMeasureByFont = lbMeasureByFont, lbTruncateCache = lbTruncateCache, lbTruncateCacheCount = lbTruncateCacheCount, LB_TRUNCATE_CACHE_MAX = LB_TRUNCATE_CACHE_MAX, lbVolatileLists = lbVolatileLists, LB_VOLATILE_LISTS_TTL = LB_VOLATILE_LISTS_TTL, LB_VOLATILE_WORK_PER_SLICE = LB_VOLATILE_WORK_PER_SLICE, LB_VOLATILE_MS_PER_SLICE = LB_VOLATILE_MS_PER_SLICE, SCROLL_IND_UP = SCROLL_IND_UP, SCROLL_IND_DOWN = SCROLL_IND_DOWN, cachedPalette = cachedPalette, SitesWeek = SitesWeek, lastRefreshIfVisibleAt = lastRefreshIfVisibleAt, REFRESH_IF_VISIBLE_INTERVAL = REFRESH_IF_VISIBLE_INTERVAL, refreshIfVisiblePending = refreshIfVisiblePending } end

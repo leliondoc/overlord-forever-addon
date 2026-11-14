@@ -2709,7 +2709,10 @@ function net:Send(kind, payload, target, immediate)
         payload = payload .. (self:HasLiveEnemyBridge() and "~b" or "") .. "~t0~y" .. net.LocalMapLayout()
             .. rankToken .. layerToken
             .. "~m" .. base36(stamp) .. "~o" .. base36(sites)
-            .. "~z" .. base36(digest, 6) .. base36(sum) .. "~la~l9~ld~lr~lp6"
+            .. "~z" .. base36(digest, 6) .. base36(sum)
+            -- "~lb" (2.5.2): killing blows ride the ranking pages and the feed (capability 11,
+            -- KillingBlows). Before "~la~l9~ld~lr~lp6", which older clients still find.
+            .. (addon.KillingBlows and "~lb" or "") .. "~la~l9~ld~lr~lp6"
     end
     -- Handlers may rebroadcast received snapshots. The existing packet is already
     -- forwarded below; do not give that replay a fresh author or hop budget.
@@ -2845,6 +2848,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         -- "~la" (2.4.0): ranking of 10,000 rows (SyncLeaderboardPages FULL_PROTOCOL). Before
         -- "~l9~ld~lr~lp6", which older clients still find.
         if version == 9 and p.payload:find("~la~l9~ld~lr~lp6", 1, true) then version = 10 end
+        if version == 10 and p.payload:find("~lb~la~l9~ld~lr~lp6", 1, true) then version = 11 end
         local previous = pagedCapabilities[originKey]
         -- First-hand presence of a same-faction player (never one that came over
         -- Battle.net: that is the other faction): count its bridge flag.
@@ -3681,3 +3685,9 @@ function net:Start()
     -- 2.2.0: the channel's member list, used while the channel does not carry.
     if addon.ChannelDirectory then addon.ChannelDirectory:Start() end
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["SyncRelay.lua"] = function() return { addon = addon, sync = sync, net = net, allowed = allowed, MAX_PACKET = MAX_PACKET, MAX_PATH = MAX_PATH, TTL = TTL, FRAGMENT_CHUNK = FRAGMENT_CHUNK, FRAGMENT_RECEIVE_MAX = FRAGMENT_RECEIVE_MAX, MAX_FRAGMENTS = MAX_FRAGMENTS, ASSEMBLY_IDLE_TIMEOUT = ASSEMBLY_IDLE_TIMEOUT, MAX_BRIDGE_FRIENDS = MAX_BRIDGE_FRIENDS, MAX_QUEUE = MAX_QUEUE, ROUTINE_FORWARD_SEC = ROUTINE_FORWARD_SEC, ROUTINE_FRESH_FORWARD_SEC = ROUTINE_FRESH_FORWARD_SEC, ROUTINE_FRESH_AGE = ROUTINE_FRESH_AGE, OP_PROGRESS_FORWARD_SEC = OP_PROGRESS_FORWARD_SEC, routineForwarded = routineForwarded, routineForwardedOrder = routineForwardedOrder, CATCHUP_QUEUE = CATCHUP_QUEUE, PAGED_QUEUE = PAGED_QUEUE, MAP_CATCHUP_EXTRA = MAP_CATCHUP_EXTRA, MAP_RELAY_BATCH = MAP_RELAY_BATCH, CATCHUP_RATE = CATCHUP_RATE, STATE_QUEUE = STATE_QUEUE, STATE_RATE = STATE_RATE, BULK_MAX_WAIT = BULK_MAX_WAIT, BULK_AGED_SERVE_INTERVAL = BULK_AGED_SERVE_INTERVAL, lastBulkAgedServeAt = lastBulkAgedServeAt, PRESENCE_RECLAIM_FLOOR = PRESENCE_RECLAIM_FLOOR, URGENT = URGENT, urgentLane = urgentLane, bulkLane = bulkLane, catchupLane = catchupLane, stateLane = stateLane, pendingPresence = pendingPresence, pumping = pumping, dedup = dedup, kindStatsCount = kindStatsCount, lostZaBatches = lostZaBatches, lostZaBatchCount = lostZaBatchCount, LOST_ZA_BATCH_SEC = LOST_ZA_BATCH_SEC, SEEN_RING = SEEN_RING, PLAYER_RING = PLAYER_RING, PEER_RING = PEER_RING, CAPABILITY_RING = CAPABILITY_RING, seen = seen, recent = recent, assemblies = assemblies, channelHeard = channelHeard } end
+Overlord.MemoryParts["SyncRelay.lua#2"] = function() return { channelHeardOrder = channelHeardOrder, NH_FORWARD_SEC = NH_FORWARD_SEC, NH_INTERVAL = NH_INTERVAL, nhForwarded = nhForwarded, nhForwardedOrder = nhForwardedOrder, SH_FORWARD_SEC = SH_FORWARD_SEC, shForwarded = shForwarded, shForwardedOrder = shForwardedOrder, NH_RELAY_SLOTS = NH_RELAY_SLOTS, PRESENCE_PROBES = PRESENCE_PROBES, pagedCapabilities = pagedCapabilities, pagedCapabilityOrder = pagedCapabilityOrder, seenOrder = seenOrder, recentOrder = recentOrder, assemblyOrder = assemblyOrder, peerOrder = peerOrder, forwardRetry = forwardRetry, forwardRetryOrder = forwardRetryOrder, serial = serial, session = session, mapStampCache = mapStampCache, BNET_ALIVE_SEC = BNET_ALIVE_SEC, bnetHeard = bnetHeard, bnetHeardCount = bnetHeardCount, CROSS_FULL_BRIDGES = CROSS_FULL_BRIDGES, CROSS_TARGET = CROSS_TARGET, CROSS_MIN_SHARE = CROSS_MIN_SHARE, CROSS_ELECTED_KINDS = CROSS_ELECTED_KINDS, sameFactionBridges = sameFactionBridges, sameFactionBridgesOrder = sameFactionBridgesOrder, bridgeCountCache = bridgeCountCache, heldForwards = heldForwards, heldCount = heldCount, HELD_FORWARD_MAX = HELD_FORWARD_MAX, sealer = sealer, CATCHUP_KINDS = CATCHUP_KINDS, DIRECT_PEER_SAMPLE = DIRECT_PEER_SAMPLE, directCountCache = directCountCache, pump = pump, tokens = tokens, budgetAt = budgetAt, catchupCredit = catchupCredit, catchupAt = catchupAt, stateCredit = stateCredit, stateAt = stateAt, mapServiceRun = mapServiceRun, mapControlCooldown = mapControlCooldown, pagedServiceRun = pagedServiceRun, DEDUP_KINDS = DEDUP_KINDS, COVER_TTL = COVER_TTL } end
+Overlord.MemoryParts["SyncRelay.lua#3"] = function() return { COVER_PENDING = COVER_PENDING, COVER_RECORDS = COVER_RECORDS, COVER_COPIES = COVER_COPIES, LOCAL_PEER_FRESH = LOCAL_PEER_FRESH, BRIDGE_LK_SUBJECT_GAP = BRIDGE_LK_SUBJECT_GAP, BRIDGE_LK_PER_MIN = BRIDGE_LK_PER_MIN, BRIDGE_LK_FANOUT = BRIDGE_LK_FANOUT, BRIDGE_LK_ALLOWANCE = BRIDGE_LK_ALLOWANCE, BRIDGE_LK_MAX_ROWS = BRIDGE_LK_MAX_ROWS, bridgeLK = bridgeLK, bridgeOut = bridgeOut, ELECTION_TARGET = ELECTION_TARGET, ELECTION_MIN_SHARE = ELECTION_MIN_SHARE, ELECTION_FALLBACK_MIN = ELECTION_FALLBACK_MIN, ELECTION_FALLBACK_SPAN = ELECTION_FALLBACK_SPAN, bridgeCopies = bridgeCopies, bridgeCopiesOrder = bridgeCopiesOrder, bridgeFlush = bridgeFlush } end
