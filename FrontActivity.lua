@@ -763,7 +763,7 @@ local function StoreReport(key, bracket, expiresAt, now, tell)
     local feed = sync and sync._leaderboardFeed
     if tell and feed and feed.noteBracket then pcall(feed.noteBracket) end
     -- 2.5.0: a big battle is also said in the chat (MaybeAnnounceFight, further down).
-    if bracket >= (FA.FIGHT_ALERT_MIN or 50) and FA.MaybeAnnounceFight then
+    if bracket >= (FA.FIGHT_ALERT_MIN or 100) and FA.MaybeAnnounceFight then
         pcall(FA.MaybeAnnounceFight, FA, key, bracket, now)
     end
     return true
@@ -787,9 +787,47 @@ local function ReportCovers(key, bracket, now)
     return false
 end
 
+-- 2.5.2: how late the brackets of others reach us. A bracket says its 30 s slot: its age on
+-- arrival is the wait before it was sent (15 s on average within the slot) plus the relay's
+-- delay. The median of the last REPORT_LAG_SAMPLES arrivals of the last ACTIVITY_WINDOW, at most
+-- REPORT_LAG_MAX. On a full server with several big battles the relay took 30 s and more: the
+-- later waves no longer heard the first ones in time and nearly every client announced, which
+-- slowed the relay further (bench: 60 fed clients, six battles, 164 announcements in 10 min
+-- with 3 s of delay, 1094 with 30 s). The waves now wait that much more.
+-- Only a bracket taken here as news and come live counts: stored (not a copy already known, not
+-- one refused by the budgets, not one of an unknown front or map), not handed on by the ranking
+-- feed or a catch-up (old by design), and not older than REPORT_LAG_FRESH (old samples, a
+-- catch-up's or a forger's, would stretch our waves for as long as they stay in the window).
+local REPORT_LAG_SAMPLES, REPORT_LAG_MAX, REPORT_LAG_FRESH = 16, 45, 90
+local lagValue, lagAt, lagNext = {}, {}, 1
+local function NoteBracketLag(at, now)
+    local age = now - at
+    if age > REPORT_LAG_FRESH then return end
+    lagValue[lagNext] = math.max(0, age - REPORT_SLOT_SEC / 2)
+    lagAt[lagNext] = now
+    lagNext = lagNext % REPORT_LAG_SAMPLES + 1
+end
+-- (The median, not the mean: a few odd samples, a forger's for instance, move it nowhere; it takes
+-- half of them. Sorted in a table kept for it, a report at most.)
+local lagSorted = {}
+local function BracketLag(now)
+    local count = 0
+    for i = 1, REPORT_LAG_SAMPLES do
+        local at = lagAt[i]
+        if at and now - at <= ACTIVITY_WINDOW then
+            count = count + 1
+            lagSorted[count] = lagValue[i]
+        end
+    end
+    for i = count + 1, REPORT_LAG_SAMPLES do lagSorted[i] = nil end
+    if count == 0 then return 0 end
+    table.sort(lagSorted)
+    return math.min(REPORT_LAG_MAX, lagSorted[math.floor((count + 1) / 2)])
+end
+
 -- Vague d'annonce : environ 4 clients sur l'ensemble des voisins directs annoncent
 -- tout de suite, une part 8 fois plus grande ensuite, les autres en dernier.
-local function ReportDelay()
+local function ReportDelay(retry)
     local crowd = 1
     local net = Overlord.Relay
     if net and net.CountDirectPeers then
@@ -831,9 +869,14 @@ local function ReportDelay()
     end
     local early = math.min(1, 4 / math.max(crowd, floor))
     local roll = math.random()
-    if roll < early then return 1 + math.random() * 5 end
-    if roll < math.min(1, early * 8) then return 10 + math.random() * 8 end
-    return 25 + math.random() * 15
+    if roll < early then return 1 + math.random() * 5, 0, 0 end
+    -- (2.5.2: the later waves wait lag * 1.5 and lag * 3 on top, so that the brackets of the
+    -- earlier waves reach them first, see BracketLag. Results 2 and 3: that factor and the lag
+    -- used. Not for a report of ours tried again after a refused send: it waits as before.)
+    local lag = retry and 0 or BracketLag(ActivityNow())
+    local stretch = retry and 0 or 1
+    if roll < math.min(1, early * 8) then return 10 + math.random() * 8 + lag * 1.5, 1.5 * stretch, lag end
+    return 25 + math.random() * 15 + lag * 3, 3 * stretch, lag
 end
 
 local function SendReport(key, bracket, now)
@@ -851,7 +894,7 @@ local function SendReport(key, bracket, now)
             retryByKey[key] = true
             C_Timer.After(21, function()
                 retryByKey[key] = nil
-                if not Overlord.InstanceSuspended then MaybeScheduleReport(key, ActivityNow()) end
+                if not Overlord.InstanceSuspended then MaybeScheduleReport(key, ActivityNow(), true) end
             end)
         end
         return false
@@ -880,7 +923,7 @@ local function SendReport(key, bracket, now)
             retryByKey[key] = true
             C_Timer.After(21, function()
                 retryByKey[key] = nil
-                if not Overlord.InstanceSuspended then MaybeScheduleReport(key, ActivityNow()) end
+                if not Overlord.InstanceSuspended then MaybeScheduleReport(key, ActivityNow(), true) end
             end)
         end)
     end
@@ -894,20 +937,29 @@ local function SendReport(key, bracket, now)
     return true
 end
 
-MaybeScheduleReport = function(key, now)
+MaybeScheduleReport = function(key, now, retry)
     if pendingReport[key] or Overlord.InstanceSuspended or not SharingActive() then return end
     local bracket = ReportBracket(key, FA:GetKillCount(key, now))
     if bracket <= 0 or ReportCovers(key, bracket, now) then return end
     if not (C_Timer and C_Timer.After) then return end
     pendingReport[key] = true
-    C_Timer.After(ReportDelay(), function()
-        pendingReport[key] = nil
-        if Overlord.InstanceSuspended then return end
+    local delay, factor, lag = ReportDelay(retry)
+    local function fire()
+        if Overlord.InstanceSuspended then pendingReport[key] = nil return end
         local t = ActivityNow()
+        -- 2.5.2: the delay grew while we waited (the first brackets of a busy evening arrive
+        -- meanwhile): a later wave waits the difference once, so that it hears the earlier ones.
+        if factor > 0 then
+            local extra = (BracketLag(t) - lag) * factor
+            factor = 0
+            if extra >= 1 then C_Timer.After(extra, fire) return end
+        end
+        pendingReport[key] = nil
         local current = ReportBracket(key, FA:GetKillCount(key, t))
         if current <= 0 or ReportCovers(key, current, t) then return end
         SendReport(key, current, t)
-    end)
+    end
+    C_Timer.After(delay, fire)
 end
 
 -- Kills affiches. Relais actif : seulement les paliers partages (les memes chez tous ;
@@ -1009,6 +1061,7 @@ function FA:OnReceiveKillBracket(payload, sender, sourceChannel, vouched)
     local now = ActivityNow()
     local at = slot * REPORT_SLOT_SEC
     if at > now + 60 or now - at > ACTIVITY_WINDOW then return false end
+    local sentAt = at
     at = math.min(at, now)
     -- (2.2.2) Our very bracket told back by a trusted sender: covered, no late retry for it.
     local own = ownSentByKey[key]
@@ -1041,6 +1094,7 @@ function FA:OnReceiveKillBracket(payload, sender, sourceChannel, vouched)
         self:Record(resolved, nil, at)
     end
     if not StoreReport(resolved, bracket, at + ACTIVITY_WINDOW, now, FeedMayTell(vouched == true)) then return false end
+    if vouched ~= true then NoteBracketLag(sentAt, now) end
     PublishActivityChange(resolved)
     return true
 end
@@ -1149,17 +1203,18 @@ end
 -- 2.5.0: big battles in the chat. The shared bracket of a fight (the one the "Recent activity"
 -- panel shows, the same for everyone) reaching FIGHT_ALERT_MIN kills in five minutes is said
 -- once, wherever it is in the world (not bound to the reach of the capture alerts: it is no
--- capture); the same fight is said again only at the next step (100, 200, 500...). A
+-- capture); the same fight is said again only at the next step (200, 500, 1000...). A
 -- fight is the same one while a bracket of FIGHT_ALERT_MIN or more keeps coming within
 -- FIGHT_ALERT_QUIET. On by default (config.fightAlerts ~= false); nothing in an instance nor
 -- while the login map is still awaited. Nothing is sent: the bracket travels anyway.
-FA.FIGHT_ALERT_MIN, FA.FIGHT_ALERT_QUIET, FA.FIGHT_ALERT_ROWS = 50, 600, 48
+-- 2.5.2: 100 (50 in 2.5.0 and 2.5.1: a battle of 50+ became too common on a full server).
+FA.FIGHT_ALERT_MIN, FA.FIGHT_ALERT_QUIET, FA.FIGHT_ALERT_ROWS = 100, 600, 48
 -- The sizes said: a line names the highest of these steps the bracket has reached, and a fight is
 -- said again when it reaches the next one. Brackets do not reach everyone in the same order (75
 -- before 50 for half the clients of a 304-client bench): said as they came, with "again when it
 -- doubles", half the players read 50+, 100+, 200+ and the other half 75+, 150+, 300+ for the same
 -- battle. With fixed steps everybody reads the same lines.
-FA.FIGHT_ALERT_STEPS = { 50, 100, 200, 500, 1000, 2000 }
+FA.FIGHT_ALERT_STEPS = { 100, 200, 500, 1000, 2000 }
 -- Whatever the brackets say, FIGHT_ALERT_PER_WINDOW new battles per FIGHT_ALERT_WINDOW at most,
 -- and FIGHT_ALERT_PER_HOUR lines an hour: a chat is not a ticker. The next step of a battle
 -- already said has room of its own (FIGHT_ALERT_PER_WINDOW_ALL lines in all per window): a battle
@@ -1492,3 +1547,8 @@ if Sync then
         end
     end
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["FrontActivity.lua"] = function() return { FA = FA, ACTIVITY_WINDOW = ACTIVITY_WINDOW, ACTIVITY_SCHEMA = ACTIVITY_SCHEMA, ACTIVITY_ACTOR_MAX = ACTIVITY_ACTOR_MAX, MAX_FUTURE_SKEW = MAX_FUTURE_SKEW, MAX_SYNC_PAYLOAD_BYTES = MAX_SYNC_PAYLOAD_BYTES, MAX_SYNC_ENTRIES = MAX_SYNC_ENTRIES, SYNC_BROADCAST_RESPONSE_TTL = SYNC_BROADCAST_RESPONSE_TTL, SYNC_TARGET_RESPONSE_TTL = SYNC_TARGET_RESPONSE_TTL, ACTIVITY_WRITE_PURGE_INTERVAL = ACTIVITY_WRITE_PURGE_INTERVAL, activityRevision = activityRevision, activityChangeListeners = activityChangeListeners, zoneToFront = zoneToFront, expectedAnySyncResponseUntil = expectedAnySyncResponseUntil, expectedSyncSenders = expectedSyncSenders, expectedSenderNodes = expectedSenderNodes, expectedSenderHead = expectedSenderHead, expectedSenderTail = expectedSenderTail, expectedSenderCount = expectedSenderCount, EXPECTED_SENDER_MAX = EXPECTED_SENDER_MAX, lastWritePurgeAtByFront = lastWritePurgeAtByFront, KILL_SLOT_SEC = KILL_SLOT_SEC, KILL_DELTA_MAX = KILL_DELTA_MAX, killSlotsByFront = killSlotsByFront, WORLD_KEY_MAX = WORLD_KEY_MAX, WORLD_MIN_KILLS = WORLD_MIN_KILLS, WORLD_ROWS_MAX = WORLD_ROWS_MAX, killLastAtByKey = killLastAtByKey, worldNameByKey = worldNameByKey, worldNameCount = worldNameCount, worldKeyCount = worldKeyCount, preparedActivityRoot = preparedActivityRoot, preparedActorRoot = preparedActorRoot, reportedByKey = reportedByKey, reportedCount = reportedCount, reportRevision = reportRevision, ownSentByKey = ownSentByKey, originLimiter = originLimiter, gatewayLimiter = gatewayLimiter, MaybeScheduleReport = MaybeScheduleReport, FIGHT_BRACKETS = FIGHT_BRACKETS, REPORT_BRACKET_OK = REPORT_BRACKET_OK, REPORT_SLOT_SEC = REPORT_SLOT_SEC, REPORT_CROWD_FLOOR = REPORT_CROWD_FLOOR, REPORT_REFRESH_MARGIN = REPORT_REFRESH_MARGIN, REPORT_MAX_KEYS = REPORT_MAX_KEYS, REPORT_MAX_PAYLOAD = REPORT_MAX_PAYLOAD, pendingReport = pendingReport, retryByKey = retryByKey, lateRetries = lateRetries } end
+Overlord.MemoryParts["FrontActivity.lua#2"] = function() return { syncEntriesCache = syncEntriesCache, syncEntriesAt = syncEntriesAt, syncEntriesRevision = syncEntriesRevision, fightAnnounced = fightAnnounced, fightAnnouncedCount = fightAnnouncedCount, fightLines = fightLines, seenCaptureTimes = seenCaptureTimes, Sync = Sync } end

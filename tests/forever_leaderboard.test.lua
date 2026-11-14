@@ -104,4 +104,22 @@ OverlordDB = { config = {}, lastResetTimestamp = campaign, leaderboardScoreSanit
 lb = loadLeaderboard()
 assert(OverlordDB.leaderboard.campaignStart == campaign
     and OverlordDB.leaderboardScoreBucketEpoch == campaign, "Missing score table was not initialized")
+-- 2.5.2: the locale shown for a ranked player, answers kept per tag (same as before them).
+do
+    local F = function(tag, pool) return Overlord:FormatLocaleTagForDisplay(tag, pool) end
+    for _ = 1, 2 do
+        assert(F("frfr") == "frFR" and F("FRFR") == "frFR" and F("ptbr") == "ptBR" and F("esmx") == "esMX")
+        -- (English without its region follows the client's region, never a kept answer.)
+        local region = GetCurrentRegion
+        assert(F("en") == "enGB" and F("enus") == "enGB", "English on an EU client")
+        GetCurrentRegion = function() return 1 end
+        assert(F("en") == "enUS" and F("enus") == "enUS", "English without a region kept the other region's answer")
+        GetCurrentRegion = region
+        assert(F("fr") == "frFR" and F("abcd") == "abCD" and F("xyz") == "XYZ")
+        assert(F("") == "" and F(nil) == "" and F("12") == "" and F("fr fr") == "")
+    end
+    -- Made-up tags from the network: answered all the same, never kept beyond the cap.
+    for i = 1, 200 do assert(F("q" .. string.char(97 + i % 26) .. string.char(97 + math.floor(i / 26) % 26)) ~= nil) end
+    assert(F("dede") == "deDE" and F("en") == "enGB")
+end
 print("Forever leaderboard: physical capture, first save, reload, alt faction, display and campaign guard OK")

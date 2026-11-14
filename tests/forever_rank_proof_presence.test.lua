@@ -158,13 +158,16 @@ print("Layer in the presence: first-hand only, rank claim and layout read the sa
 -- still fits one fragment. Read first-hand only; a presence without it takes the mark back.
 long.IsShardHelperActive = function() return true end
 long.LayerJumper = { GetHelpMode = function() return "auto" end }
+-- (2.5.2: and "~lb", the killing blows, in the longest presence too.)
+long.KillingBlows = {}
 now, longQueued = now + 10, nil
 longNet.Queue = function(_, p) longQueued = p return true end
 longNet:Send("NH", "2.0.4")
 longNet.Queue = longQueue
 wire = table.concat({ longQueued.region, longQueued.id, tostring(longQueued.at), longQueued.target,
     table.concat(longQueued.path, ","), longQueued.kind, longQueued.payload }, "|")
-assert(longQueued.payload:find("~q15.zz-zzzz~s99999999~h~m", 1, true) and #wire <= 170,
+assert(longQueued.payload:find("~q15.zz-zzzz~s99999999~h~m", 1, true) and #wire <= 170
+    and longQueued.payload:find("~lb~la~l9~ld~lr~lp6", 1, true),
     "one fragment with the layer and the helper mark: " .. #wire .. " bytes: " .. wire)
 assert(tonumber(longQueued.payload:match("~s(%d+)~")) == 99999999 and longQueued.payload:match("~q([%w%.%-]+)~") == "15.zz-zzzz"
     and longQueued.payload:match("~m(%w+)~"), "the layer, the rank claim or the map stamp is no longer read the same way")

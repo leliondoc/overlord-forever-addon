@@ -853,7 +853,7 @@ end
 
 -- Une augmentation du compteur VH officiel vaut exactement autant de credits.
 -- Aucun bonus x2 ni credit de coup fatal ne modifie ce total.
-function Overlord.Combat:CreditHonorableKills(count)
+function Overlord.Combat:CreditHonorableKills(count, catchUp)
     count = math.floor(tonumber(count) or 0)
     if count <= 0
         or not IsKillScoringActive() or not Overlord.Leaderboard then return 0 end
@@ -880,6 +880,10 @@ function Overlord.Combat:CreditHonorableKills(count)
     if Overlord.Sync and Overlord.Sync.BroadcastKill then
         Overlord.Sync:BroadcastKill(currentZone and currentZone.id or "", totalKills, true)
     end
+    -- 2.5.2: a killing blow of ours waiting for its honorable kill (KillingBlows). Never with
+    -- a counter catching up (the first jump after login, after an instance): those honorable
+    -- kills are minutes old, any blow of ours now has nothing to do with them.
+    if Overlord.KillingBlows and not catchUp then Overlord.KillingBlows:NoteOwnHonorable(count) end
     -- Ligne de chat par VH : desactivee par defaut depuis 1.7.3 (Blizzard l'annonce
     -- deja, le total est dans le classement) ; option "Ligne de chat a chaque VH".
     local cfg = OverlordDB and OverlordDB.config
@@ -910,6 +914,9 @@ function Overlord.Combat:OnPVPKillsChanged(unitTarget)
     honorableKillResumePending = false
     if not IsKillScoringActive() or previous == nil or previousSource ~= source then return end
     local delta = current - previous
+    -- (A first jump after a reload of the baseline: honorable kills older than this event.)
+    local catchUp = resumePending
+        or (source == "lifetime" and (honorableKillBaselineUnconfirmed or previous == 0)) or nil
     -- Le compteur "session" est journalier : un reset/recul rebase sans retirer
     -- les VH hebdomadaires ni importer des kills d'une ancienne session.
     if delta <= 0 then return end
@@ -936,7 +943,7 @@ function Overlord.Combat:OnPVPKillsChanged(unitTarget)
         end
     end
     dbg("PLAYER_PVP_KILLS_CHANGED: VH Blizzard +", delta)
-    self:CreditHonorableKills(delta)
+    self:CreditHonorableKills(delta, catchUp)
 end
 
 -- Cherche le nom d'un membre du groupe par son GUID
@@ -1056,6 +1063,10 @@ function Overlord.Combat:ProcessKill(killerGUID, killerName, victimGUID, victimN
     -- 2.0.4: our killing blow on a Most Wanted (the skull) pays its bounty in coins.
     if playerFullName and not proofOnly and Overlord.MostWanted and Overlord.MostWanted.PayBounty then
         Overlord.MostWanted:PayBounty(enrichedVictimName or victimName)
+    end
+    -- 2.5.2: the same killing blow, for the KB column (counted with its honorable kill only).
+    if playerFullName and not proofOnly and Overlord.KillingBlows then
+        Overlord.KillingBlows:NoteOwnBlow()
     end
     if not proofOnly and Overlord.InActiveFront and victimName and victimName ~= "?" then
         local zone = Overlord.Zones:GetCurrentPlayerZone()
@@ -1312,6 +1323,7 @@ end
 
 function Overlord.Combat:Suspend()
     ResetPvpKillReconciliation()
+    if Overlord.KillingBlows then Overlord.KillingBlows:ResetPairing() end
     if rosterRefreshTimer then
         rosterRefreshTimer:Cancel()
         rosterRefreshTimer = nil
@@ -1348,3 +1360,8 @@ function Overlord.Combat:Resume()
     combatFrame:RegisterUnitEvent("UNIT_TARGET", "player")
     self:RefreshGUIDCache()
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["CombatTracker.lua"] = function() return { combatFrame = combatFrame, guidFactionCache = guidFactionCache, guidAllyClassCache = guidAllyClassCache, guidAllyGuildCache = guidAllyGuildCache, NAMEPLATE_UNIT_TOKENS = NAMEPLATE_UNIT_TOKENS, rosterRefreshTimer = rosterRefreshTimer, rosterRefreshLastEventAt = rosterRefreshLastEventAt, rosterRefreshArmedEventAt = rosterRefreshArmedEventAt, guidPlayerInfoCache = guidPlayerInfoCache, recentlyProcessedKills = recentlyProcessedKills, KILL_DEDUP_WINDOW = KILL_DEDUP_WINDOW, UNKNOWN_LOCAL_BACKUP_DELAY = UNKNOWN_LOCAL_BACKUP_DELAY, UNKNOWN_LOCAL_BACKUP_DEDUP_WINDOW = UNKNOWN_LOCAL_BACKUP_DEDUP_WINDOW, UNKNOWN_NAME_RETRY_DELAY = UNKNOWN_NAME_RETRY_DELAY, UNKNOWN_NAME_RETRY_COUNT = UNKNOWN_NAME_RETRY_COUNT, lastDedupCleanup = lastDedupCleanup, DEDUP_CLEANUP_INTERVAL = DEDUP_CLEANUP_INTERVAL, DEDUP_CLEANUP_QUOTA = DEDUP_CLEANUP_QUOTA, dedupCleanupActive = dedupCleanupActive, dedupCleanupNextKey = dedupCleanupNextKey, lastUnknownLocalBackupQueuedAt = lastUnknownLocalBackupQueuedAt, pendingUnknownLocalKill = pendingUnknownLocalKill, IsValidPlayerName = IsValidPlayerName, lastDeathTime = lastDeathTime, DEATH_DEDUP_WINDOW = DEATH_DEDUP_WINDOW, TOTAL_KB_ACHIEVEMENT_ID = TOTAL_KB_ACHIEVEMENT_ID, previousKillingBlows = previousKillingBlows, previousSessionHonorableKills = previousSessionHonorableKills, honorableKillCounterSource = honorableKillCounterSource, honorableKillBaselineUnconfirmed = honorableKillBaselineUnconfirmed, honorableKillResumePending = honorableKillResumePending, RESUME_FIRST_DELTA = RESUME_FIRST_DELTA, RESUME_REREAD = RESUME_REREAD, lastEnemyTarget = lastEnemyTarget, farmKillPairs = farmKillPairs, farmKillWarned = farmKillWarned, FARM_KILL_WINDOW = FARM_KILL_WINDOW, FARM_KILL_THRESHOLD = FARM_KILL_THRESHOLD, farmKillLastClean = farmKillLastClean, FARM_KILL_CLEAN_INT = FARM_KILL_CLEAN_INT, FARM_KILL_CLEAN_QUOTA = FARM_KILL_CLEAN_QUOTA, farmKillCleanupActive = farmKillCleanupActive, farmKillCleanupNextKey = farmKillCleanupNextKey, debugKillMode = debugKillMode, debugKillExpiry = debugKillExpiry, GUID_CACHE_EXPIRY = GUID_CACHE_EXPIRY, lastGuidCacheCleanup = lastGuidCacheCleanup, GUID_CACHE_CLEANUP_INT = GUID_CACHE_CLEANUP_INT, GUID_CACHE_CLEANUP_QUOTA = GUID_CACHE_CLEANUP_QUOTA, guidCacheCleanupActive = guidCacheCleanupActive } end
+Overlord.MemoryParts["CombatTracker.lua#2"] = function() return { guidCacheCleanupNextKey = guidCacheCleanupNextKey, GUID_CACHE_SOFT_MAX = GUID_CACHE_SOFT_MAX, GUID_CACHE_HARD_MAX = GUID_CACHE_HARD_MAX, GUID_CACHE_PRESSURE_EXPIRY = GUID_CACHE_PRESSURE_EXPIRY, guidCacheSize = guidCacheSize, ROSTER_REFRESH_DEBOUNCE = ROSTER_REFRESH_DEBOUNCE, honorGainPatterns = honorGainPatterns } end

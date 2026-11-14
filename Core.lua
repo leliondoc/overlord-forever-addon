@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.5.1"
+Overlord.Version = "2.5.2"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -1818,21 +1818,43 @@ end
 
 -- Affichage classement : frfr -> frFR, ptbr -> ptBR, esmx -> esMX.
 -- poolHint optionnel (us/fr/de/eu) pour trancher en vs enUS sur EU.
-function Overlord:FormatLocaleTagForDisplay(localeTag, poolHint)
-    if type(localeTag) ~= "string" or localeTag == "" then return "" end
-    localeTag = localeTag:lower():match("^([a-z][a-z][a-z]?[a-z]?[a-z]?)$")
-    if not localeTag or localeTag == "" then return "" end
-
-    if localeTag == "en" or localeTag == "enus" then
-        if LocaleDisplayIsEuContext(poolHint) then return "enGB" end
-        return "enUS"
-    end
-
-    local KNOWN = {
+-- 2.5.2: the display build calls this once per ranked player; it made a new table of the
+-- thirteen known tags at every call (about 4 MB of garbage per build at 6,000 players). The
+-- table is built once, and each tag's answer is kept (LOCALE_DISPLAY.MAX tags at most: a
+-- made-up tag from the network never grows it without end). "en"/"enus" depend on the pool.
+local LOCALE_DISPLAY = {
+    MAX = 64, count = 0, done = {},
+    KNOWN = {
         enus = "enUS", engb = "enGB", dede = "deDE", eses = "esES", esmx = "esMX",
         frfr = "frFR", itit = "itIT", ptbr = "ptBR", ptpt = "ptPT", ruru = "ruRU",
         kokr = "koKR", zhcn = "zhCN", zhtw = "zhTW",
-    }
+    },
+}
+local FormatLocaleTagUncached
+function Overlord:FormatLocaleTagForDisplay(localeTag, poolHint)
+    if type(localeTag) ~= "string" or localeTag == "" then return "" end
+    local done = LOCALE_DISPLAY.done[localeTag]
+    if done == nil then
+        done = FormatLocaleTagUncached(localeTag)
+        if LOCALE_DISPLAY.count < LOCALE_DISPLAY.MAX then
+            LOCALE_DISPLAY.count = LOCALE_DISPLAY.count + 1
+            LOCALE_DISPLAY.done[localeTag] = done
+        end
+    end
+    if done == true then
+        if LocaleDisplayIsEuContext(poolHint) then return "enGB" end
+        return "enUS"
+    end
+    return done
+end
+-- The answer for a tag, or true for English without its region (decided by the pool).
+FormatLocaleTagUncached = function(localeTag)
+    localeTag = localeTag:lower():match("^([a-z][a-z][a-z]?[a-z]?[a-z]?)$")
+    if not localeTag or localeTag == "" then return "" end
+
+    if localeTag == "en" or localeTag == "enus" then return true end
+
+    local KNOWN = LOCALE_DISPLAY.KNOWN
     if KNOWN[localeTag] then return KNOWN[localeTag] end
     if #localeTag == 4 then
         return localeTag:sub(1, 2):lower() .. localeTag:sub(3, 4):upper()
@@ -5623,3 +5645,8 @@ end)
 -- WoW 12.0 (Midnight) : COMBAT_LOG_EVENT_UNFILTERED supprime pour les addons.
 -- La detection des kills est geree par CombatTracker.lua via PARTY_KILL
 -- et PLAYER_PVP_KILLS_CHANGED (events standards qui fonctionnent en 12.0).
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["Core.lua"] = function() return { CAPTURE_SYNC_GATE_TIMEOUT = CAPTURE_SYNC_GATE_TIMEOUT, CAPTURE_SYNC_SETTLE_SECONDS = CAPTURE_SYNC_SETTLE_SECONDS, CAPTURE_SYNC_REMOTE_ADOPT_RESET_SECONDS = CAPTURE_SYNC_REMOTE_ADOPT_RESET_SECONDS, staleSessionUpdatedAtZeroed = staleSessionUpdatedAtZeroed, captureSyncGate = captureSyncGate, SHARD_BROADCAST_INTERVAL = SHARD_BROADCAST_INTERVAL, SHARD_PEER_TTL = SHARD_PEER_TTL, SHARD_LAYER_ID_MAX = SHARD_LAYER_ID_MAX, ScheduleNextShardScan = ScheduleNextShardScan, StopShardScanMaintenance = StopShardScanMaintenance, layerVoteSeen = layerVoteSeen, layerVoteCount = layerVoteCount, pendingEventLayer = pendingEventLayer, pendingEventGuid = pendingEventGuid, pendingEventAt = pendingEventAt, SHARD_SCAN_UNITS = SHARD_SCAN_UNITS, SHARD_NAMEPLATE_UNITS = SHARD_NAMEPLATE_UNITS, SHARD_FRESH_SECONDS = SHARD_FRESH_SECONDS, SHARD_NEGATIVE_FRESH_SECONDS = SHARD_NEGATIVE_FRESH_SECONDS, SHARD_KNOWN_SCAN_INTERVAL = SHARD_KNOWN_SCAN_INTERVAL, SHARD_UNKNOWN_SCAN_MIN = SHARD_UNKNOWN_SCAN_MIN, SHARD_UNKNOWN_SCAN_MAX = SHARD_UNKNOWN_SCAN_MAX, localShardReferenceFullName = localShardReferenceFullName, localShardReferenceRealm = localShardReferenceRealm, SHARD_HELPER_MEMORY = SHARD_HELPER_MEMORY, SHARD_HELPER_MAX = SHARD_HELPER_MAX, shardPulseFrame = shardPulseFrame, shardEventDebounceHandle = shardEventDebounceHandle, shardEventNeedsUnthrottledScan = shardEventNeedsUnthrottledScan, SHARD_EVENT_DEBOUNCE_SEC = SHARD_EVENT_DEBOUNCE_SEC, lastShardPeerPurgeAt = lastShardPeerPurgeAt, shardScanTimer = shardScanTimer, shardPeerMaintenanceTimer = shardPeerMaintenanceTimer, shardUnknownScanDelay = shardUnknownScanDelay, SHARD_EVENT_AGREE_SECONDS = SHARD_EVENT_AGREE_SECONDS, SHARD_LOCAL_KILL_UNITS = SHARD_LOCAL_KILL_UNITS, pendingFrontEnter = pendingFrontEnter, catchUpNotified = catchUpNotified, postInstanceRecoveryTimers = postInstanceRecoveryTimers, resumeInstanceRetryTimers = resumeInstanceRetryTimers, RESUME_INSTANCE_RETRY_DELAYS = RESUME_INSTANCE_RETRY_DELAYS, POST_INSTANCE_RECHECK_DELAYS = POST_INSTANCE_RECHECK_DELAYS, ADDON_SOUNDS = ADDON_SOUNDS, FACTION_CALL_SOUND_KIT = FACTION_CALL_SOUND_KIT, WELCOME_POPUP_SOUND_KIT = WELCOME_POPUP_SOUND_KIT, GENERAL_CLAIM_SOUND = GENERAL_CLAIM_SOUND, GENERAL_RELEASE_SOUND = GENERAL_RELEASE_SOUND, GENERAL_DUEL_MUSIC_FILE = GENERAL_DUEL_MUSIC_FILE, GENERAL_DUEL_FADE_MS = GENERAL_DUEL_FADE_MS, generalDuelMusicActive = generalDuelMusicActive } end
+Overlord.MemoryParts["Core.lua#2"] = function() return { generalDuelSoundHandle = generalDuelSoundHandle, generalDuelFadeStopHandle = generalDuelFadeStopHandle, LOCALE_DISPLAY = LOCALE_DISPLAY, FormatLocaleTagUncached = FormatLocaleTagUncached, eventFrame = eventFrame, RESET_RULE_BY_REGION = RESET_RULE_BY_REGION, RESET_HOUR_UNNAMED = RESET_HOUR_UNNAMED, RESET_WDAY_UNNAMED = RESET_WDAY_UNNAMED, WEEKLY_RESET_SNAP_SEC = WEEKLY_RESET_SNAP_SEC, SECONDS_PER_DAY = SECONDS_PER_DAY, SECONDS_PER_WEEK = SECONDS_PER_WEEK, CAMPAIGN_EPOCH_TOLERANCE_SEC = CAMPAIGN_EPOCH_TOLERANCE_SEC, REGIONAL_RESET_CACHE_SEC = REGIONAL_RESET_CACHE_SEC, LEGACY_US_MIN_GAP_SEC = LEGACY_US_MIN_GAP_SEC, WEEKLY_RESET_REENTRY_GUARD_SEC = WEEKLY_RESET_REENTRY_GUARD_SEC, cachedRegionalResetTs = cachedRegionalResetTs, cachedRegionalResetWallAt = cachedRegionalResetWallAt, lastEnsureCampaignFreshAt = lastEnsureCampaignFreshAt, ENSURE_CAMPAIGN_FRESH_INTERVAL = ENSURE_CAMPAIGN_FRESH_INTERVAL, BETA_WEEK_PHASE = BETA_WEEK_PHASE, RULESET_WORLD_KEYS = RULESET_WORLD_KEYS, RULESET_WORLD_SCALARS = RULESET_WORLD_SCALARS, saveDirty = saveDirty, EXCLUDED_BG_MAP_IDS = EXCLUDED_BG_MAP_IDS, OPEN_WORLD_CONTINENT_INSTANCE_IDS = OPEN_WORLD_CONTINENT_INSTANCE_IDS, FRONT_ENTER_DELAY = FRONT_ENTER_DELAY, REMOTE_OBSERVER_INTERVAL = REMOTE_OBSERVER_INTERVAL, updateTicker = updateTicker, frontTickPhase = frontTickPhase, truceExpireTicker = truceExpireTicker, strategicSiteTicker = strategicSiteTicker, remoteObserverTicker = remoteObserverTicker, remoteObserverState = remoteObserverState, REMOTE_OBSERVER_LIST_REBUILD_SEC = REMOTE_OBSERVER_LIST_REBUILD_SEC, ticksSinceLadderSnapshot = ticksSinceLadderSnapshot, ladderSnapshotThisSession = ladderSnapshotThisSession, ghostHudSuppressed = ghostHudSuppressed } end

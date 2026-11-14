@@ -187,3 +187,7 @@ function MM:RefreshWorldEmblems(mapID, layoutChanged, contentRefresh)
     end
     state.painted = placed
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["MapWorldEmblems.lua"] = function() return { MM = MM, EMBLEM_TEXTURE = EMBLEM_TEXTURE, EMBLEM_SIZE_FRAC = EMBLEM_SIZE_FRAC, EMBLEM_ALPHA = EMBLEM_ALPHA, CONTINENTS = CONTINENTS, RETRY_SEC = RETRY_SEC, state = state } end

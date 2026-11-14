@@ -1416,3 +1416,7 @@ if CreateFrame and C_Timer and C_Timer.After then
         C_Timer.After(event == "PLAYER_ENTERING_WORLD" and GfBuild.DELAY or 2, GfBuild.Start)
     end)
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["GroupFinderUI.lua"] = function() return { GFUI = GFUI, K = K, P = P, INTENT_ICON = INTENT_ICON, INTENT_KEY = INTENT_KEY, STATE_KEY = STATE_KEY, LIVE_KEY = LIVE_KEY, EMPTY_KEY = EMPTY_KEY, frame = frame, boardBuf = boardBuf, GfBuild = GfBuild } end

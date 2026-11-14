@@ -666,3 +666,7 @@ function Overlord.Button:Initialize()
         Overlord.Button:EnsureCreated()
     end)
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["Button.lua"] = function() return { BTN_SIZE = BTN_SIZE, btnFrame = btnFrame, generalBtnFrame = generalBtnFrame, cdFrame = cdFrame, cdTicker = cdTicker, cdSwipeExpireAt = cdSwipeExpireAt, FACTION_ICON = FACTION_ICON, GENERAL_GRID_ICON = GENERAL_GRID_ICON, PANEL_BADGE_SCALE = PANEL_BADGE_SCALE, C_ALLIANCE = C_ALLIANCE, C_HORDE = C_HORDE, C = C, CALL_PROMPT_ICON = CALL_PROMPT_ICON, CALL_PROMPT_DECO = CALL_PROMPT_DECO, CALL_PROMPT_ARM_DELAY = CALL_PROMPT_ARM_DELAY, CALL_PROMPT_TIMEOUT = CALL_PROMPT_TIMEOUT, callPrompt = callPrompt, parentShowHooked = parentShowHooked } end

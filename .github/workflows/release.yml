@@ -69,6 +69,7 @@ jobs:
           lua5.1 tests/zone_capture_lease.test.lua
           lua5.1 tests/forever_zone_defense.test.lua
           lua5.1 tests/forever_ladder_10k.test.lua
+          lua5.1 tests/forever_killing_blows.test.lua
           lua5.1 tests/forever_ladder_feed.test.lua
           lua5.1 tests/forever_fight_alert.test.lua
           lua5.1 tests/forever_cross_hands.test.lua

@@ -568,3 +568,7 @@ function Overlord.GeneralNameplate:Initialize()
     duelMonitorArmed = false
     Overlord.GeneralNameplate:UpdateCombatLogSubscription()
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["GeneralNameplate.lua"] = function() return { frame = frame, overlays = overlays, holderCacheRevision = holderCacheRevision, allyHolderKey = allyHolderKey, enemyHolderKey = enemyHolderKey, allyHolderName = allyHolderName, enemyHolderName = enemyHolderName, allyHolderFaction = allyHolderFaction, enemyHolderFaction = enemyHolderFaction, duelMusicActive = duelMusicActive, duelStopTimer = duelStopTimer, duelMaxTimer = duelMaxTimer, duelStartedAt = duelStartedAt, duelMusicCapped = duelMusicCapped, duelStopAt = duelStopAt, enemyHolderNameplateUnit = enemyHolderNameplateUnit, DUEL_STOP_DELAY = DUEL_STOP_DELAY, DUEL_MAX_DURATION = DUEL_MAX_DURATION, initialized = initialized, duelMonitorArmed = duelMonitorArmed, gmKeepaliveTicker = gmKeepaliveTicker, overlayRefreshPending = overlayRefreshPending, lastDuelTriggerAt = lastDuelTriggerAt, DUEL_TRIGGER_DEBOUNCE = DUEL_TRIGGER_DEBOUNCE, GM_KEEPALIVE_INTERVAL = GM_KEEPALIVE_INTERVAL, DUEL_MONITOR_EVENTS = DUEL_MONITOR_EVENTS, PANEL_BTN_SIZE = PANEL_BTN_SIZE, PANEL_BADGE_SCALE = PANEL_BADGE_SCALE, NAMEPLATE_BADGE_SIZE = NAMEPLATE_BADGE_SIZE, NAMEPLATE_BADGE_OFFSET = NAMEPLATE_BADGE_OFFSET, NAMEPLATE_TOKENS = NAMEPLATE_TOKENS } end

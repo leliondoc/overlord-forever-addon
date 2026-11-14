@@ -385,3 +385,7 @@ actionIconEventFrame:SetScript("OnEvent", function(_, event)
     end
     ScheduleActionButtonIconRefresh()
 end)
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["ActionShortcut.lua"] = function() return { ICON_TEXTURE = ICON_TEXTURE, MACRO_ICON = MACRO_ICON, MACRO_BODY = MACRO_BODY, MACRO_NAME = MACRO_NAME, MACRO_NAME_FALLBACK = MACRO_NAME_FALLBACK, ACTION_BUTTON_PREFIXES = ACTION_BUTTON_PREFIXES, shortcutMacroCacheValid = shortcutMacroCacheValid, shortcutMacroIndices = shortcutMacroIndices, firstShortcutMacroIndex = firstShortcutMacroIndex, firstShortcutMacroName = firstShortcutMacroName, firstShortcutMacroIcon = firstShortcutMacroIcon, repairedMacroIcon = repairedMacroIcon, repairedForIcon = repairedForIcon, shortcutLayers = shortcutLayers, ACTION_BUTTON_NAMES = ACTION_BUTTON_NAMES, actionIconEventFrame = actionIconEventFrame, actionIconRefreshPending = actionIconRefreshPending, actionIconRepairPending = actionIconRepairPending } end

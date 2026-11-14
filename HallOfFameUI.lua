@@ -1345,3 +1345,7 @@ end
 function Overlord.HallOfFameUI:IsShown()
     return hofFrame and hofFrame:IsShown()
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["HallOfFameUI.lua"] = function() return { hofFrame = hofFrame, honorCards = honorCards, recentCards = recentCards, progressBars = progressBars, categoryFrames = categoryFrames, selectedCategory = selectedCategory, betaExpanded = betaExpanded, searchText = searchText, achUILoaded = achUILoaded, HOF_FRAME_W = HOF_FRAME_W, HOF_FRAME_H = HOF_FRAME_H, HOF_RECENT_MAX = HOF_RECENT_MAX, HOF_LIST_CARD_PAD_X = HOF_LIST_CARD_PAD_X, HOF_LIST_CARD_H = HOF_LIST_CARD_H, HOF_LIST_CARD_H_LIFETIME = HOF_LIST_CARD_H_LIFETIME, SEARCH_DEBOUNCE_SEC = SEARCH_DEBOUNCE_SEC, ACH_PATH = ACH_PATH, CARD_OPTS_RECENT = CARD_OPTS_RECENT, CARD_OPTS_NORMAL = CARD_OPTS_NORMAL, SUB_BAR_DEFS = SUB_BAR_DEFS, searchDebounceTimer = searchDebounceTimer, hofRefreshPending = hofRefreshPending, hofRefreshLastAt = hofRefreshLastAt, HOF_REFRESH_MIN_INTERVAL = HOF_REFRESH_MIN_INTERVAL, lastListCategory = lastListCategory, lastListSearchText = lastListSearchText, lastListLayoutCount = lastListLayoutCount, lastListLayoutCategory = lastListLayoutCategory, pointsBannerText = pointsBannerText, blizzardSummaryIsolationInstalled = blizzardSummaryIsolationInstalled, CATEGORY_ROW_STEP = CATEGORY_ROW_STEP, CATEGORY_CHILD_INDENT = CATEGORY_CHILD_INDENT, OnCategoryButtonClick = OnCategoryButtonClick } end

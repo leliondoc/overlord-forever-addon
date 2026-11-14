@@ -47,6 +47,20 @@ local function IsPlayerInNonCaptureState()
     return false
 end
 
+-- (Named, not a closure per unit scanned: each comparison stays under pcall, as a secret
+-- value cannot be compared.)
+local function IsTrueValue(value) return value == true end
+local function RaidIndexOf(unit)
+    local value = UnitInRaid(unit)
+    if canaccessvalue and not canaccessvalue(value) then return nil end
+    return tonumber(value)
+end
+local function IsSameUnit(unit, token)
+    local value = UnitIsUnit(unit, token)
+    if canaccessvalue and not canaccessvalue(value) then return false end
+    return value == true
+end
+
 local function IsUnitInNonCaptureState(unit, auraResultByGUID, unitGUID)
     if Overlord.ZoneControl and Overlord.ZoneControl.IsPlayerInNonCaptureStateForSync then
         return Overlord.ZoneControl:IsPlayerInNonCaptureStateForSync(unit, auraResultByGUID, unitGUID)
@@ -60,7 +74,7 @@ local function IsUnitInNonCaptureState(unit, auraResultByGUID, unitGUID)
                 local okAcc, accessible = pcall(canaccessvalue, mounted)
                 if okAcc and not accessible then return true end
             end
-            local okBool, isTrue = pcall(function() return mounted == true end)
+            local okBool, isTrue = pcall(IsTrueValue, mounted)
             if okBool and isTrue then return true end
         end
     end
@@ -71,7 +85,7 @@ local function IsUnitInNonCaptureState(unit, auraResultByGUID, unitGUID)
                 local okAcc, accessible = pcall(canaccessvalue, flying)
                 if okAcc and not accessible then return true end
             end
-            local okBool, isTrue = pcall(function() return flying == true end)
+            local okBool, isTrue = pcall(IsTrueValue, flying)
             if okBool and isTrue then return true end
         end
     end
@@ -129,11 +143,7 @@ end
 -- le groupe. Le raid reste O(1), le groupe de cinq demande au plus quatre tests.
 local function NameplateWasCountedFromGroup(unit)
     if IsInRaid() and UnitInRaid then
-        local ok, index = pcall(function()
-            local value = UnitInRaid(unit)
-            if canaccessvalue and not canaccessvalue(value) then return nil end
-            return tonumber(value)
-        end)
+        local ok, index = pcall(RaidIndexOf, unit)
         local token = ok and index and outpostUnitTokens.raid[math.floor(index)]
         return token and outpostScanCountedGroupUnit[token] == true or false
     end
@@ -141,11 +151,7 @@ local function NameplateWasCountedFromGroup(unit)
         for i = 1, 4 do
             local token = outpostUnitTokens.party[i]
             if outpostScanCountedGroupUnit[token] then
-                local ok, same = pcall(function()
-                    local value = UnitIsUnit(unit, token)
-                    if canaccessvalue and not canaccessvalue(value) then return false end
-                    return value == true
-                end)
+                local ok, same = pcall(IsSameUnit, unit, token)
                 if ok and same then return true end
             end
         end
@@ -882,3 +888,7 @@ function Overlord.OutpostControl:Update(deltaTime)
         Overlord.ZoneIndicator:SyncOutpostCaptureHud()
     end
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["OutpostControl.lua"] = function() return { OP = OP, ZS_BROADCAST_INTERVAL = ZS_BROADCAST_INTERVAL, lastOPBroadcast = lastOPBroadcast, lastNoGuildWarnAt = lastNoGuildWarnAt, lastHoldStartedNotifyAt = lastHoldStartedNotifyAt, NO_GUILD_WARN_GAP = NO_GUILD_WARN_GAP, HOLD_STARTED_NOTIFY_GAP = HOLD_STARTED_NOTIFY_GAP, OUTPOST_CHAT_GAP = OUTPOST_CHAT_GAP, lastOutpostLeftChatAt = lastOutpostLeftChatAt, lastOutpostBackChatAt = lastOutpostBackChatAt, lastOutpostContestedChatAt = lastOutpostContestedChatAt, outpostDefenseAlerted = outpostDefenseAlerted, lastOutpostDefenseEnemyAt = lastOutpostDefenseEnemyAt, OUTPOST_DEFENSE_REARM_SECONDS = OUTPOST_DEFENSE_REARM_SECONDS, OUTPOST_CONTESTED_CHAT_GAP = OUTPOST_CONTESTED_CHAT_GAP, OUTPOST_SCAN_CACHE_SECONDS = OUTPOST_SCAN_CACHE_SECONDS, lastMarkDirtyHoldSec = lastMarkDirtyHoldSec, outpostScanCache = outpostScanCache, outpostScanCountedFriendly = outpostScanCountedFriendly, outpostScanCountedEnemy = outpostScanCountedEnemy, outpostScanCountedGroupUnit = outpostScanCountedGroupUnit, outpostScanAuraResultByGUID = outpostScanAuraResultByGUID, outpostUnitTokens = outpostUnitTokens, presentedFlags = presentedFlags, presentUntil = presentUntil, pendingOutpostLeftChat = pendingOutpostLeftChat, announcedOutpostLeft = announcedOutpostLeft, pausedOnSquare = pausedOnSquare } end

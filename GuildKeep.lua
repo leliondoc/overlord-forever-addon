@@ -79,3 +79,7 @@ function GK:ShouldProjectPinOnMap(site, mapID)
     if site.regionalMapIDs then return site.regionalMapIDs[mapID] == true end
     return mapID == 13 or mapID == 1415
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["GuildKeep.lua"] = function() return { GK = GK, OP = OP, siteByKey = siteByKey, delegates = delegates } end

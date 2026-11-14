@@ -1473,3 +1473,7 @@ function Overlord.ZoneIndicator:Toggle()
         self:Show()
     end
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["ZoneIndicator.lua"] = function() return { indicatorFrame = indicatorFrame, hudUserDismissed = hudUserDismissed, indicatorDragActive = indicatorDragActive, cachedActiveZone = cachedActiveZone, cachedActiveZoneAt = cachedActiveZoneAt, cachedActiveZoneMapID = cachedActiveZoneMapID, cachedActiveZoneQx = cachedActiveZoneQx, cachedActiveZoneQy = cachedActiveZoneQy, FIND_ACTIVE_ZONE_CACHE_SEC = FIND_ACTIVE_ZONE_CACHE_SEC, lastOpIndicatorKey = lastOpIndicatorKey, lastZoneIndicatorKey = lastZoneIndicatorKey, lastOutpostCaptureHudSyncAt = lastOutpostCaptureHudSyncAt, autoWaypointZone = autoWaypointZone, autoWaypointFrontId = autoWaypointFrontId, autoWaypointSuppressedKey = autoWaypointSuppressedKey, autoWaypointLastDesiredKey = autoWaypointLastDesiredKey, IND_CHROME_TOP_OVERHANG = IND_CHROME_TOP_OVERHANG, IND_BELOW_ANCHOR_GAP = IND_BELOW_ANCHOR_GAP, IND_PAD_TOP = IND_PAD_TOP, IND_PAD_BOTTOM = IND_PAD_BOTTOM, IND_LINE_GAP = IND_LINE_GAP, IND_DISTANCE_DROP = IND_DISTANCE_DROP, IND_TIMER_DROP = IND_TIMER_DROP, HUD_ENABLED_ALPHA = HUD_ENABLED_ALPHA, HUD_DISABLED_ALPHA = HUD_DISABLED_ALPHA, IND_DEFAULT_TOP_Y = IND_DEFAULT_TOP_Y, outpostHudEvalCache = outpostHudEvalCache, OUTPOST_HUD_EVAL_CACHE_SEC = OUTPOST_HUD_EVAL_CACHE_SEC, objectiveDetailsMemo = objectiveDetailsMemo, ghostIndicatorWasShown = ghostIndicatorWasShown } end

@@ -1466,3 +1466,7 @@ if CreateFrame then
         LJ:Initialize()
     end)
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["LayerJumper.lua"] = function() return { LJ = LJ, securecall = securecall, GroupHasMember = GroupHasMember, HELP_MODES = HELP_MODES, PHASE_LIMIT = PHASE_LIMIT, WHY_KEYS = WHY_KEYS, WHY_ENGLISH = WHY_ENGLISH, UNMARKS = UNMARKS, GOLD = GOLD, HELPER_ICON = HELPER_ICON, STATUS_H = STATUS_H, FRAME_W = FRAME_W, ROW_H = ROW_H } end

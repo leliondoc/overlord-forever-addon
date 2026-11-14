@@ -479,3 +479,7 @@ function Overlord.GeneralMap:Hide()
     self:HideContinent()
     self:HideMinimapPins()
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["GeneralMap.lua"] = function() return { generalWorldRoot = generalWorldRoot, generalWorldPins = generalWorldPins, generalContinentRoot = generalContinentRoot, generalContinentPins = generalContinentPins, generalMinimapPins = generalMinimapPins, generalMinimapSeen = generalMinimapSeen, generalWorldSeen = generalWorldSeen, generalContinentSeen = generalContinentSeen, generalMinimapCacheMapID = generalMinimapCacheMapID, generalMinimapCacheRevision = generalMinimapCacheRevision, generalMinimapCacheEntries = generalMinimapCacheEntries, MM_ICON_MIN = MM_ICON_MIN, MM_ICON_MAX = MM_ICON_MAX, MM_ICON_SCALE = MM_ICON_SCALE, WORLD_PIN_MIN = WORLD_PIN_MIN, WORLD_PIN_MAX = WORLD_PIN_MAX, WORLD_PIN_FRAC = WORLD_PIN_FRAC, CONTINENT_PIN_MIN = CONTINENT_PIN_MIN, CONTINENT_PIN_MAX = CONTINENT_PIN_MAX, CONTINENT_PIN_FRAC = CONTINENT_PIN_FRAC } end

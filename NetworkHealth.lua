@@ -346,3 +346,7 @@ function NH:AttachIndicator(parent, anchor)
     self.indicator = button
     return button
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["NetworkHealth.lua"] = function() return { NH = NH, LEVEL_RANK = LEVEL_RANK, SAMPLE_SEC = SAMPLE_SEC, WINDOW_SEC = WINDOW_SEC, WINDOW_LABEL = WINDOW_LABEL, SEND_TYPES = SEND_TYPES, samples = samples, lastSampleAt = lastSampleAt, INDICATOR_IDS = INDICATOR_IDS, TEXTURE = TEXTURE, WORD_KEY = WORD_KEY, WORD_FALLBACK = WORD_FALLBACK, COLOR = COLOR, CHECK = CHECK } end

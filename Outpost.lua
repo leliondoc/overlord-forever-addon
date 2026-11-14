@@ -1900,3 +1900,7 @@ end
 function Overlord.Outpost:SanitizeGuildName(name)
     return sanitizeGuildName(name)
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["Outpost.lua"] = function() return { OUTPOST_CAPTURE_SECONDS = OUTPOST_CAPTURE_SECONDS, OUTPOST_ZONE_CAPTURE_PENALTY_SECONDS = OUTPOST_ZONE_CAPTURE_PENALTY_SECONDS, OUTPOST_NEUTRAL_ATLAS = OUTPOST_NEUTRAL_ATLAS, OUTPOST_OBSERVER_STALE_BUFFER = OUTPOST_OBSERVER_STALE_BUFFER, OUTPOST_OBSERVER_STALE_POLL_MAX = OUTPOST_OBSERVER_STALE_POLL_MAX, OUTPOST_OBSERVER_PROBE_REARM_SEC = OUTPOST_OBSERVER_PROBE_REARM_SEC, OUTPOST_LEDGER_AHEAD_PULLS_MAX = OUTPOST_LEDGER_AHEAD_PULLS_MAX, ledgerAheadPulls = ledgerAheadPulls, observerStalePresentation = observerStalePresentation, observerStalePolls = observerStalePolls, strategicSiteKeyByZoneId = strategicSiteKeyByZoneId, siteByKey = siteByKey, sitesByFront = sitesByFront, standaloneSites = standaloneSites, standaloneSiteByDisplayMapID = standaloneSiteByDisplayMapID, initializedOutpostDb = initializedOutpostDb, initializedOutpostRows = initializedOutpostRows, mapNameLowerCache = mapNameLowerCache, mapExistsCache = mapExistsCache, fortressNameMatchMemo = fortressNameMatchMemo, OUTPOST_SPATIAL_SAMPLE_CACHE_SEC = OUTPOST_SPATIAL_SAMPLE_CACHE_SEC, onOutpostMapCache = onOutpostMapCache, keepMapAspectRatio = keepMapAspectRatio, outpostGeomCache = outpostGeomCache, lastPresentationRefresh = lastPresentationRefresh, PRESENTATION_THROTTLE = PRESENTATION_THROTTLE } end

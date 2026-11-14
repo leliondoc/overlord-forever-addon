@@ -1257,3 +1257,7 @@ function Overlord.Sync:AppendVictoryBonusToSrQueue(queue, minimalResponseOnly, d
     end
     self._vbSrCursor = ((start - 1 + sent) % totalBatches)
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["SyncVictoryBonus.lua"] = function() return { VB_SECONDS_PER_WEEK = VB_SECONDS_PER_WEEK, VB_TRUCE_SECONDS = VB_TRUCE_SECONDS, VB_VICTORY_SPACING = VB_VICTORY_SPACING, VB_VICTORY_SPACING_SINCE = VB_VICTORY_SPACING_SINCE, VB_MAX_PAYLOAD = VB_MAX_PAYLOAD, VB_CHANNEL_REPLAY_BATCHES = VB_CHANNEL_REPLAY_BATCHES, VB_DEDUP_WINDOW = VB_DEDUP_WINDOW, VB_MAX_FUTURE_SKEW = VB_MAX_FUTURE_SKEW, VB_VICTORY_BONUS = VB_VICTORY_BONUS, VB_PENDING_SECONDS = VB_PENDING_SECONDS, VB_PENDING_LIMIT = VB_PENDING_LIMIT, VB_MIN_TOTAL_AT_APPLY = VB_MIN_TOTAL_AT_APPLY, VALID_VB_POOL = VALID_VB_POOL, victoryTransportEvidence = victoryTransportEvidence, pendingVictoryBonuses = pendingVictoryBonuses, vbSrPayloadCache = vbSrPayloadCache, validatedVictoryStores = validatedVictoryStores, victoryProjectionStates = victoryProjectionStates, BeginVictoryProjection = BeginVictoryProjection, HasVictoryTransportEvidence = HasVictoryTransportEvidence, pendingRetryWorker = pendingRetryWorker, VB_HISTORICAL_PER_SENDER = VB_HISTORICAL_PER_SENDER, VB_HISTORICAL_WINDOW = VB_HISTORICAL_WINDOW, historicalBudget = historicalBudget, historicalBudgetCount = historicalBudgetCount, victoryCountCache = victoryCountCache } end
