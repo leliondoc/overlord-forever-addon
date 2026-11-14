@@ -206,15 +206,16 @@ do
         runUntil(simTime + 60)
     end
     assert(quick >= 25 and quick <= 80 and slow == 0, "a player alone: " .. quick .. " of 150 within 6 s, " .. slow .. " after 18 s")
-    -- 2.5.2: old brackets (a catch-up, a forger) and those handed on by the ranking feed say
+    -- 2.5.2: old brackets (a catch-up, a forger), those of a map nobody knows and those handed on by the ranking feed say
     -- nothing of the relay's delay: a player alone still announces within 18 s.
     slow = 0
     for i = 1, 40 do
         delays = {}
         simTime = simTime + 1000
         for j = 1, 16 do
-            lone.FA:OnReceiveKillBracket("1:#" .. (2100 + j) .. ":5:" .. math.floor((simTime - 250) / 30), "Old Teller" .. j, "BETA")
-            lone.FA:OnReceiveKillBracket("1:#" .. (2200 + j) .. ":5:" .. math.floor((simTime - 60) / 30), "Feed Teller" .. j, "BETA", true)
+            lone.FA:OnReceiveKillBracket("1:#" .. (2040 + j) .. ":5:" .. math.floor((simTime - 250) / 30), "Old Teller" .. j, "BETA")
+            lone.FA:OnReceiveKillBracket("1:#" .. (2040 + j) .. ":5:" .. math.floor((simTime - 60) / 30), "Feed Teller" .. j, "BETA", true)
+            lone.FA:OnReceiveKillBracket("1:#" .. (3000 + j) .. ":5:" .. math.floor((simTime - 80) / 30), "Odd Teller" .. j, "BETA")
         end
         for _ = 1, 6 do kill(lone, "#" .. (2000 + i % 60)) end
         if delays[1] and delays[1] > 18 then slow = slow + 1 end

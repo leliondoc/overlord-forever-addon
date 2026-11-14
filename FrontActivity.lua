@@ -789,15 +789,15 @@ end
 
 -- 2.5.2: how late the brackets of others reach us. A bracket says its 30 s slot: its age on
 -- arrival is the wait before it was sent (15 s on average within the slot) plus the relay's
--- delay. The mean of the last REPORT_LAG_SAMPLES arrivals of the last ACTIVITY_WINDOW, at most
+-- delay. The median of the last REPORT_LAG_SAMPLES arrivals of the last ACTIVITY_WINDOW, at most
 -- REPORT_LAG_MAX. On a full server with several big battles the relay took 30 s and more: the
 -- later waves no longer heard the first ones in time and nearly every client announced, which
 -- slowed the relay further (bench: 60 fed clients, six battles, 164 announcements in 10 min
 -- with 3 s of delay, 1094 with 30 s). The waves now wait that much more.
--- Only a bracket that is news here and comes live counts: not a copy already known, not one
--- refused by the budgets, not one handed on by the ranking feed or a catch-up (old by design),
--- and not one older than REPORT_LAG_FRESH (a catch-up, or a forger, would hold every wave of
--- ours at the most for five minutes).
+-- Only a bracket taken here as news and come live counts: stored (not a copy already known, not
+-- one refused by the budgets, not one of an unknown front or map), not handed on by the ranking
+-- feed or a catch-up (old by design), and not older than REPORT_LAG_FRESH (old samples, a
+-- catch-up's or a forger's, would stretch our waves for as long as they stay in the window).
 local REPORT_LAG_SAMPLES, REPORT_LAG_MAX, REPORT_LAG_FRESH = 16, 45, 90
 local lagValue, lagAt, lagNext = {}, {}, 1
 local function NoteBracketLag(at, now)
@@ -807,14 +807,22 @@ local function NoteBracketLag(at, now)
     lagAt[lagNext] = now
     lagNext = lagNext % REPORT_LAG_SAMPLES + 1
 end
+-- (The median, not the mean: a few odd samples, a forger's for instance, move it nowhere; it takes
+-- half of them. Sorted in a table kept for it, a report at most.)
+local lagSorted = {}
 local function BracketLag(now)
-    local sum, count = 0, 0
+    local count = 0
     for i = 1, REPORT_LAG_SAMPLES do
         local at = lagAt[i]
-        if at and now - at <= ACTIVITY_WINDOW then sum, count = sum + lagValue[i], count + 1 end
+        if at and now - at <= ACTIVITY_WINDOW then
+            count = count + 1
+            lagSorted[count] = lagValue[i]
+        end
     end
+    for i = count + 1, REPORT_LAG_SAMPLES do lagSorted[i] = nil end
     if count == 0 then return 0 end
-    return math.min(REPORT_LAG_MAX, sum / count)
+    table.sort(lagSorted)
+    return math.min(REPORT_LAG_MAX, lagSorted[math.floor((count + 1) / 2)])
 end
 
 -- Vague d'annonce : environ 4 clients sur l'ensemble des voisins directs annoncent
@@ -1073,7 +1081,6 @@ function FA:OnReceiveKillBracket(payload, sender, sourceChannel, vouched)
     if not originLimiter.take(type(sender) == "string" and sender:lower() or "?", now) then
         return false
     end
-    if vouched ~= true then NoteBracketLag(sentAt, now) end
     local resolved
     if key:match("^#%d+$") then
         resolved = ResolveWorldKillKey(key)
@@ -1087,6 +1094,7 @@ function FA:OnReceiveKillBracket(payload, sender, sourceChannel, vouched)
         self:Record(resolved, nil, at)
     end
     if not StoreReport(resolved, bracket, at + ACTIVITY_WINDOW, now, FeedMayTell(vouched == true)) then return false end
+    if vouched ~= true then NoteBracketLag(sentAt, now) end
     PublishActivityChange(resolved)
     return true
 end
