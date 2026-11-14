@@ -2045,3 +2045,7 @@ function dir:BookDiagnostics()
         self.worldWatched and " (looking: nobody heard)" or "", self:ContactCount(), leaves,
         #(self.replyQueue or {}))
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["SyncDirectory.lua"] = function() return { addon = addon, sync = sync, dir = dir, FIXED_FACTS = FIXED_FACTS } end

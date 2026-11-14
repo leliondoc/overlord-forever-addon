@@ -20,6 +20,28 @@ local PAGED_PROTOCOL, ASK_PROTOCOL = 9, 8
 sync.PAGED_PROTOCOL, sync.PAGED_ASK_PROTOCOL = PAGED_PROTOCOL, ASK_PROTOCOL
 local BUCKETS, PAGE_ROWS, CHUNK, MAX_PARTS = 64, 16, 170, 24
 local STREAMS = { "LK", "LC", "LR" }
+-- 2.5.2: killing blows ("LB", rows "Name:count", KillingBlows) come after the races in a sweep,
+-- only between two clients whose presence says capability 11 ("~lb"); the requester says so in
+-- its nonce ("b" before its serial), and only then does the fingerprint of the whole ranking
+-- (profileFp) count them. Every profile holds the stream (empty in a view of 5,000).
+local PROFILE_STREAMS = { "LK", "LC", "LR", "LB" }
+-- A sweep carries them once every KB_SWEEP_SEC at most, whoever the peer (the feed carries the
+-- moves meanwhile): a sweep without them is a 2.5.1 sweep, its fingerprint and its length too.
+-- The column settles later than the kills (the feed first, a sweep within half an hour for what
+-- it missed), the rounds keep their pace: a sweep lists every bucket of LB that differs, and a
+-- row a peer refuses (above its honorable kills, a banned name) is listed again at each one.
+local KB_SWEEP_SEC = 1800
+local kbSweepAt
+local function carriesKB(peer)
+    local blows = Overlord.KillingBlows
+    return blows ~= nil and blows.PeerCarries ~= nil and blows:PeerCarries(peer) == true
+end
+-- A row of the stream, taken by KillingBlows' own acceptance (a page row and a feed row alike).
+function sync._ReceiveKillingBlowRow(_, payload, sender)
+    local blows = Overlord.KillingBlows
+    if not blows or not blows.MergeRow then return false end
+    return blows:MergeRow(payload, sender)
+end
 -- 2.4.0: the ranking holds 10,000 kill rows (it held 5,000). Two clients that both say so in
 -- their presence ("~la", capability FULL_PROTOCOL) compare and exchange all of them. A client
 -- before that holds, compares and serves its best 5,000: with it, in both directions, we use
@@ -28,8 +50,8 @@ local STREAMS = { "LK", "LC", "LR" }
 -- rankings still match and nothing is pulled again round after round. Which view a pull is
 -- about is said by the requester in its nonce ("w" for the whole ranking, "n" as before) and
 -- never guessed by the responder. The numbers a peer sends are bounded by the larger limits.
-local STREAM_LIMITS = { LK = 10000, LC = 1500, LR = 11500 }
-local LEGACY_LIMITS = { LK = 5000, LC = 1500, LR = 6500 }
+local STREAM_LIMITS = { LK = 10000, LC = 1500, LR = 11500, LB = 10000 }
+local LEGACY_LIMITS = { LK = 5000, LC = 1500, LR = 6500, LB = 10000 }
 local FULL_PROTOCOL = 10
 sync.PAGED_FULL_PROTOCOL = FULL_PROTOCOL
 local MOD, RATE, BURST = 2147483647, 300, 500
@@ -190,7 +212,9 @@ local feed = {
     scratch = { kills = {}, captureCount = {}, captures = {}, playerInfo = {} },
 }
 sync._leaderboardFeed = feed
--- Rows that changed our ranking since login, by pages and by the feed.
+-- Rows that changed our ranking since login, by pages and by the feed. (Killing blows apart: a
+-- profile of ours with their stream up to PROFILE_REUSE_SEC old is fine, they are swept every
+-- KB_SWEEP_SEC; counting them rebuilt it after every row "b" of the feed.)
 local function movedRows() return (stats.changedRows or 0) + (stats.feedChanged or 0) end
 
 local function epoch()
@@ -479,12 +503,24 @@ local function prepare(callback, own, legacy)
         if legacy then snapshot = LegacyView(attested) end
         local cache = snapshot ~= attested and legacyProfiles or profiles
         local limits = snapshot ~= attested and LEGACY_LIMITS or STREAM_LIMITS
-        if cache[attested] then building = nil; callback(cache[attested]); return end
-        local result = { epoch = wanted, streams = {}, builtRows = builtRows, legacy = snapshot ~= attested or nil }
-        for _, kind in ipairs(STREAMS) do
-            result.streams[kind] = { buckets = {}, count = 0, hash = 0, hash7 = 0,
-                countA = 0, hashA = 0, countH = 0, hashH = 0 }
+        -- Killing blows: the live counts, read by key while the profile is built (none in a view
+        -- of 5,000: nobody asks it), labelled with KB:ProfileRevision.
+        local blows = Overlord.KillingBlows
+        local kbCounts = snapshot == attested and blows and blows.Counts and blows:Counts() or nil
+        local kbRevision = kbCounts and blows.ProfileRevision and blows:ProfileRevision() or false
+        local known = cache[attested]
+        if known and known.kbRevision == kbRevision then building = nil; callback(known); return end
+        -- Only the killing blows moved since this copy's profile: its other streams are kept as
+        -- they are (never written after their build), the stream LB alone is built again.
+        local base = known and known.epoch == wanted and type(known.streams) == "table" and known or nil
+        local result = { epoch = wanted, streams = {}, builtRows = builtRows, legacy = snapshot ~= attested or nil,
+            kbRevision = kbRevision }
+        for _, kind in ipairs(PROFILE_STREAMS) do
+            result.streams[kind] = base and kind ~= "LB" and base.streams[kind] or { buckets = {}, count = 0,
+                hash = 0, hash7 = 0, countA = 0, hashA = 0, countH = 0, hashH = 0 }
         end
+        local building8 = base and { "LB" } or PROFILE_STREAMS
+        if base then stats.profileKBOnly = (stats.profileKBOnly or 0) + 1 end
         result.buckets = result.streams.LK.buckets
         local units, sliceAt = 0, 0
         -- A slice ends on its time budget (1 ms). The count is only the fallback of a client
@@ -500,14 +536,24 @@ local function prepare(callback, own, legacy)
             end
         end
         local co = coroutine.create(function()
+            -- Killing blows of the players of this very copy, by identity, under the copy's own
+            -- spelling and within its honorable kills: two clients whose kill rows agree list
+            -- the same rows (a row never refused at the other side, never a different spelling,
+            -- never more rows than the kill stream holds).
+            local kbByKey = kbCounts or {}
             local sources = { LK = snapshot.kills, LC = snapshot.captureCount,
-                LR = snapshot.playerInfo }
+                LR = snapshot.playerInfo, LB = next(kbByKey) ~= nil and snapshot.kills or {} }
             local serializers = {
                 LK = sync.BuildPagedLeaderboardKillPayload,
                 LC = sync.BuildPagedLeaderboardCapturePayload,
                 LR = sync.BuildPagedLeaderboardRacePayload,
+                LB = function(_, copy, name)
+                    local count, kills = tonumber(kbByKey[key(name)]), tonumber(copy.kills[name])
+                    if not count or count <= 0 or not kills or kills <= 0 then return nil end
+                    return name .. ":" .. string.format("%d", math.min(count, math.floor(kills)))
+                end,
             }
-            for _, kind in ipairs(STREAMS) do
+            for _, kind in ipairs(building8) do
                 local profile, source, count = result.streams[kind], sources[kind] or {}, 0
                 local isKills = kind == "LK"
                 -- Rows are gathered and sorted as small arrays { identity, payload, name }
@@ -642,9 +688,10 @@ end
 -- One fingerprint of the three streams (same filter, same salt): sent with the
 -- first request of a pull, it lets a pair that already agrees end in a single
 -- exchange (1 request, 1 reply) instead of one per stream.
-local function profileFp(profile, a, b, filter)
+-- (withKB: a pull between two clients of capability 11 compares the killing blows too.)
+local function profileFp(profile, a, b, filter, withKB)
     local acc = 0
-    for _, kind in ipairs(STREAMS) do
+    for _, kind in ipairs(withKB and PROFILE_STREAMS or STREAMS) do
         local n, h = subset(profile.streams[kind], filter)
         acc = (acc * 31 + (h + n * 65599) % MOD) % MOD
     end
@@ -695,6 +742,9 @@ local function compactRow8(stream, payload, wireEpoch)
     elseif stream == "LC" then
         local head, e1, mid, e2 = payload:match("^([^:]*:[^:]*:[^:]*:[^:]*):([^:]*):([^:]*:[^:]*):([^:]*)$")
         if head and e1 == e and e2 == "B" .. e then return head .. ":" .. mid end
+    elseif stream == "LB" then
+        -- (No epoch in a killing blow row: it travels as it is.)
+        if payload:match("^[^:]+:%d+$") then return payload end
     else
         local head, e1, at = payload:match("^([^:]*:[^:]*:[^:]*):([^:]*):([^:]*)$")
         if head and e1 == e then return head .. ":" .. at end
@@ -718,6 +768,8 @@ local function expandRow8(stream, row, wireEpoch)
         local head, mid = row:match("^([^:]*:[^:]*:[^:]*:[^:]*):([^:]*:[^:]*)$")
         if head then full = head .. ":" .. e .. ":" .. mid .. ":B" .. e end
         return full and #full <= 3500 and full or nil
+    elseif stream == "LB" then
+        return #row <= 250 and row:match("^[^:]+:%d+$") and row or nil
     end
     local head, at = row:match("^([^:]*:[^:]*:[^:]*):([^:]*)$")
     if head then full = head .. ":" .. e .. ":" .. at end
@@ -832,7 +884,7 @@ request = function(state, retry)
             if state.seq == 1 then
                 local a, b = saltOf(state.nonce)
                 fields[#fields + 1] = state.factionFilter or "-"
-                fields[#fields + 1] = profileFp(state.profile, a, b, state.factionFilter)
+                fields[#fields + 1] = profileFp(state.profile, a, b, state.factionFilter, state.kb)
             elseif state.factionFilter then
                 fields[#fields + 1] = state.factionFilter
             end
@@ -978,12 +1030,21 @@ local function nextPage(state, cursor)
 end
 
 -- v8 transitions: next stream, next differing bucket, next page of wanted rows.
+-- The stream after this one in a sweep, nil at its end. raceless: a 1.8.0 peer, kills and
+-- captures only (see the header); kb: a peer of capability 11, the killing blows last.
+local function followingStream8(state)
+    if state.stream == "LK" then return "LC" end
+    if state.stream == "LC" then return not state.raceless and "LR" or nil end
+    if state.stream == "LR" then return state.kb and "LB" or nil end
+    return nil
+end
 local function nextStream8(state)
     state.combatWaits = 0
-    -- raceless: a 1.8.0 peer, kills and captures only (see the header).
-    if state.stream ~= "LR" and not (state.raceless and state.stream == "LC") then
+    local following = followingStream8(state)
+    if following then
         noteKillsCompared(state)
-        state.stream = state.stream == "LK" and "LC" or "LR"
+        state.stream = following
+        if following == "LB" then kbSweepAt = GetTime() end
         state.phase, state.queue, state.qi, state.bucket, state.completed = "V", nil, 0, 0, 0
         checkpoint(state)
         request(state)
@@ -1426,6 +1487,15 @@ function feed.reset()
 end
 local function feedPush(sub, id, at)
     if sub.has[id] then return end
+    -- 2.5.2: a killing blow row only for a subscriber that reads them, and only while its queue
+    -- is three quarters empty and the feed has used less than 70 % of its messages this minute:
+    -- kill rows go first (the stream LB brings the rest in its next sweep).
+    local minute = feed.minute
+    if id:byte(1) == 98 and (sub.count * 4 >= feed.PENDING_MAX or not carriesKB(sub.name)
+        or (GetTime() - minute.at < 60 and minute.count * 10 >= feed.PER_MIN * 7)) then
+        stats.feedKBSkipped = (stats.feedKBSkipped or 0) + 1
+        return
+    end
     if sub.count >= feed.PENDING_MAX then
         stats.feedOverflow = (stats.feedOverflow or 0) + 1
         return
@@ -1488,6 +1558,22 @@ function feed.note(stream, dedupKey, born)
     feedArm()
 end
 lb.OnNetworkRowMoved = feed.note
+
+-- 2.5.2: a killing blow total that rose (KillingBlows: ours, a page row, a feed row). It goes as
+-- a row "b" to the subscribers whose presence says capability 11 only (feedRow), never back to
+-- the peer it came from, nothing of a catch-up. O(1) without a subscriber. Never in the ring:
+-- its slots are the kill rows a new subscriber is handed (the stream LB covers the rest).
+function feed.noteKB(dedupKey)
+    if feed.from == "*" or type(dedupKey) ~= "string" then return end
+    if feed.subCount == 0 then return end
+    local at, id = GetTime(), "b" .. dedupKey
+    local from = feed.from
+    for lower, sub in pairs(feed.subs) do
+        if lower ~= from then feedPush(sub, id, at) end
+    end
+    feedArm()
+end
+sync._NoteKillingBlowMoved = feed.noteKB
 
 -- The responder's side of a pull flagged "f": its requester becomes (or stays) a subscriber.
 -- create: a pull we take (a busy answer only renews).
@@ -1692,6 +1778,27 @@ end
 -- One row for one subscriber: its text, or nil (nothing to send for it), or nil, true (the
 -- indexes are being rebuilt: asked again later).
 local function feedRow(sub, id, wireEpoch)
+    if id:sub(1, 1) == "b" then
+        -- A killing blow total: only to a subscriber that reads it, of its faction when it filters.
+        local blows, dedupKey = Overlord.KillingBlows, id:sub(2)
+        if not blows or not carriesKB(sub.name) then return nil end
+        local data = blows:Data()
+        local count = data and tonumber(data.counts[dedupKey])
+        if not count or count <= 0 then return nil end
+        -- (Named as the ranking names it, with its metadata and within its honorable kills: the
+        -- spelling a peer first sent may hold no profile, so no faction to filter on.)
+        local name, hk, info = lb:GetLiveNetworkRow("LK", dedupKey)
+        if not name then
+            if inCombat() then return nil, true end
+            return nil, lb.EnsureNetworkHotIndexesPrepared ~= nil and lb:EnsureNetworkHotIndexesPrepared() ~= true
+        end
+        if sub.filter then
+            local faction = type(info) == "table" and info.faction
+            faction = faction == "Alliance" and "A" or faction == "Horde" and "H" or "?"
+            if faction ~= sub.filter and faction ~= "?" then return nil end
+        end
+        return "b" .. name .. ":" .. string.format("%d", math.min(count, hk))
+    end
     local stream, dedupKey = id:sub(1, 1) == "c" and "LC" or "LK", id:sub(2)
     local name, count, info = lb:GetLiveNetworkRow(stream, dedupKey)
     if not name then
@@ -2022,6 +2129,20 @@ local function feedApply(item)
     local wireEpoch = epoch()
     local kind, body = item.row:sub(1, 1), item.row:sub(2)
     local stream, payload
+    if kind == "b" then
+        -- A killing blow total (2.5.2): KillingBlows' own acceptance, as a page row of the stream.
+        local blows = Overlord.KillingBlows
+        if not blows then return end
+        local revision = blows.revision
+        feed.from = item.sender:lower()
+        local ok, accepted = pcall(blows.MergeRow, blows, body, item.sender)
+        feed.from = nil
+        if not ok then stats.feedError = tostring(accepted) return end
+        if blows.revision ~= revision then stats.kbChanged = (stats.kbChanged or 0) + 1 end
+        if accepted then stats.feedKB = (stats.feedKB or 0) + 1
+        else stats.feedRejected = (stats.feedRejected or 0) + 1 end
+        return
+    end
     if kind == "f" then
         -- A fight bracket: FrontActivity's own acceptance (a known front or zone, a listed
         -- bracket, a slot of the last five minutes, its budgets per sender), as from the relay.
@@ -2207,6 +2328,10 @@ function feed.receive(payload, sender, channel)
         elseif intake.rows >= feed.ROWS_PER_MIN then
             intake.rows = intake.rows + 1
             stats.feedOverflow = (stats.feedOverflow or 0) + 1
+        elseif kind == "b" and (feed.inboxTail - feed.inboxHead + 1) * 2 >= feed.INBOX_MAX then
+            -- (2.5.2: a killing blow row never takes the second half of the inbox from kill rows;
+            -- the stream LB brings it in its next sweep.)
+            stats.feedKBSkipped = (stats.feedKBSkipped or 0) + 1
         elseif feed.inboxTail - feed.inboxHead + 1 < feed.INBOX_MAX then
             intake.rows = intake.rows + 1
             -- (Its own tail: the rows already read are emptied from the front, and # of such a
@@ -2371,8 +2496,11 @@ tryApply = function(state)
                     channel = state.channel, key = row.key }
                 local receive = kind == "LK" and sync.OnReceiveLeaderboardKills
                     or kind == "LC" and sync.OnReceiveLeaderboardCaptures
+                    or kind == "LB" and sync._ReceiveKillingBlowRow
                     or sync.OnReceiveLeaderboardRace
                 local revision = lb._snapshotRevision
+                local blows = Overlord.KillingBlows
+                local kbRevision = blows and blows.revision
                 -- (The feed does not send a row back to the peer it came from, nor the rows of a
                 -- catch-up to anybody: PULL_PASS.)
                 feed.from = (state.pullChanged or 0) >= feed.PULL_PASS and "*" or state.peer:lower()
@@ -2380,6 +2508,10 @@ tryApply = function(state)
                 feed.from = nil
                 if lb._snapshotRevision ~= revision then
                     stats.changedRows = (stats.changedRows or 0) + 1
+                    state.pullChanged = (state.pullChanged or 0) + 1
+                elseif kind == "LB" and blows and blows.revision ~= kbRevision then
+                    -- (Counted apart: the sync badge's "rows changed" are the ranking's own.)
+                    stats.kbChanged = (stats.kbChanged or 0) + 1
                     state.pullChanged = (state.pullChanged or 0) + 1
                 end
                 sync._pagedDelivery = nil
@@ -2415,7 +2547,7 @@ local function respond8(session, q)
     end
     if q.op == "V" and q.whole then
         local a, b = saltOf(session.nonce)
-        if profileFp(session.profile, a, b, q.filter) == q.whole then
+        if profileFp(session.profile, a, b, q.filter, session.kb) == q.whole then
             enqueue({ epoch = session.epoch, peer = session.peer, packets = { { "HA",
                 table.concat({ "8", "S", session.epoch, session.nonce, q.seq, "*" }, ":") } },
                 done = function() if serving == session then serving = nil end end })
@@ -2430,7 +2562,8 @@ local function respond8(session, q)
                 streamCount, streamHash7 }, ":") } },
             done = function()
                 if serving == session then
-                    if q.stream ~= "LR" then session.at = GetTime() else serving = nil end
+                    -- (The last stream of the sweep: the races, the killing blows with capability 11.)
+                    if q.stream ~= (session.kb and "LB" or "LR") then session.at = GetTime() else serving = nil end
                 end
             end })
         return
@@ -2664,11 +2797,15 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
     local savedStream = type(saved) == "table" and saved.stream or nil
     -- 2.2.2: a v8 round cut at the captures or races resumes there only soon after; later the
     -- kills are compared first again (they changed meanwhile, and were left uncompared for hours).
-    if type(saved) == "table" and saved.wire8 and (savedStream == "LC" or savedStream == "LR")
+    if type(saved) == "table" and saved.wire8 and (savedStream == "LC" or savedStream == "LR" or savedStream == "LB")
         and GetServerTime() - (tonumber(saved.at) or 0) > 600 then
         savedStream = "LK"
     end
-    local stream = extended and (savedStream == "LC" or savedStream == "LR")
+    -- 2.5.2: the killing blows with a peer of capability 11 (and the whole ranking), once every
+    -- KB_SWEEP_SEC (a sweep cut in them resumes there, as the other streams).
+    local kb = diff == true and HoldsFullLadder(peer) and carriesKB(peer)
+        and (savedStream == "LB" or not kbSweepAt or GetTime() - kbSweepAt >= KB_SWEEP_SEC) or nil
+    local stream = extended and (savedStream == "LC" or savedStream == "LR" or (kb and savedStream == "LB"))
         and savedStream or "LK"
     -- A sweep left at the races resumes there with a current peer only.
     if raceless and stream == "LR" then stream = "LK" end
@@ -2686,10 +2823,15 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
     -- 2.4.0: the whole ranking with a peer that holds it too, our view of 5,000 with any other
     -- (and with one whose presence we have not heard: the safe side, one round).
     state.full = diff == true and HoldsFullLadder(peer) or nil
+    state.kb = state.full and kb or nil
+    -- (The window counts from the stream LB itself: a pull cut in the kills, captures or races
+    -- leaves the next one free to reach it.)
+    if state.kb and stream == "LB" then kbSweepAt = GetTime() end
     -- 2.5.0: a trailing "f" asks the responder for its feed afterwards (see "The feed").
     state.feed = state.wire == "8" and feed.peerOk(peer) and feed.wants(peer) or nil
     state.nonce = tostring(GetServerTime()) .. (state.full and "w" or "n")
-        .. tostring(math.floor(GetTime() * 1000)) .. "n" .. tostring(serial) .. (state.feed and "f" or "")
+        .. tostring(math.floor(GetTime() * 1000)) .. (state.kb and "b" or "n") .. tostring(serial)
+        .. (state.feed and "f" or "")
     if state.wire == "8" then
         -- v8 starts each stream with its bucket fingerprints, whatever the saved bucket.
         state.phase, state.bucket, state.completed, state.qi = "V", 0, 0, 0
@@ -2876,7 +3018,7 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         if fresh then stats.pullsAsked = (stats.pullsAsked or 0) + 1 end
         -- 2.5.0: the requester takes our feed (its nonce says so). A subscriber already ours is
         -- renewed whatever we answer; a new one is kept when its pull is taken (below).
-        local flagged = fresh and version == "8" and nonce:match("^%d+[wn]%d+n%d+f$") ~= nil
+        local flagged = fresh and version == "8" and nonce:match("^%d+[wn]%d+[nb]%d+f$") ~= nil
         if flagged then feed.subscribe(sender, q.filter, false) end
         local session = serving
         if session and (session.epoch ~= wireEpoch or GetTime() - session.at > 300) then serving = nil; session = nil end
@@ -2930,7 +3072,9 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
                 at = GetTime(), startedAt = GetTime(), seq = seq, extended = extended,
                 wire = version,
                 -- 2.4.0: the requester's nonce says which view it compares ("w": all of it).
-                legacy = not (version == "8" and nonce:match("^%d+w%d") ~= nil) }
+                legacy = not (version == "8" and nonce:match("^%d+w%d") ~= nil),
+                -- 2.5.2: "b" before the serial: the killing blows end the sweep (capability 11).
+                kb = version == "8" and nonce:match("^%d+w%d+b%d+f?$") ~= nil or nil }
             serving = session
             stats.pullsTaken = (stats.pullsTaken or 0) + 1
             if flagged then feed.subscribe(sender, q.filter, true) end
@@ -3091,7 +3235,7 @@ end
 function sync:GetPagedPullProgress()
     local s = pull
     if not s then return false end
-    return true, s.stream == "LR" and 3 or s.stream == "LC" and 2 or 1, paused()
+    return true, (s.stream == "LR" or s.stream == "LB") and 3 or s.stream == "LC" and 2 or 1, paused()
 end
 
 function sync:GetPagedLeaderboardSummary()
@@ -3154,3 +3298,8 @@ function sync:GetPagedLeaderboardDiagnostics()
         pull and tostring(pull.bucket) or "-", details,
         stats.peerProtocol or "unspecified")
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["SyncLeaderboardPages.lua"] = function() return { sync = sync, lb = lb, PAGED_PROTOCOL = PAGED_PROTOCOL, ASK_PROTOCOL = ASK_PROTOCOL, BUCKETS = BUCKETS, PAGE_ROWS = PAGE_ROWS, CHUNK = CHUNK, MAX_PARTS = MAX_PARTS, STREAMS = STREAMS, PROFILE_STREAMS = PROFILE_STREAMS, KB_SWEEP_SEC = KB_SWEEP_SEC, kbSweepAt = kbSweepAt, STREAM_LIMITS = STREAM_LIMITS, LEGACY_LIMITS = LEGACY_LIMITS, FULL_PROTOCOL = FULL_PROTOCOL, MOD = MOD, RATE = RATE, BURST = BURST, pull = pull, serving = serving, outbound = outbound, wake = wake, building = building, SESSION_SHARE_SEC = SESSION_SHARE_SEC, profiles = profiles, legacyViews = legacyViews, legacyProfiles = legacyProfiles, unsupported = unsupported, unsupportedOrder = unsupportedOrder, serial = serial, tokens = tokens, refillAt = refillAt, stats = stats, feed = feed, COMBAT_WAIT_SEC = COMBAT_WAIT_SEC, COMBAT_WAIT_JITTER = COMBAT_WAIT_JITTER, COMBAT_WAIT_MAX = COMBAT_WAIT_MAX, PROFILE_REUSE_SEC = PROFILE_REUSE_SEC, PROFILE_DIRTY_REUSE_SEC = PROFILE_DIRTY_REUSE_SEC, PROFILE_DIRTY_ROW_SEC = PROFILE_DIRTY_ROW_SEC, FP_SPACE = FP_SPACE, LIST_MAX_ROWS = LIST_MAX_ROWS, BITMAP_MAX = BITMAP_MAX, B64 = B64, B64BYTES = B64BYTES, B64INDEX = B64INDEX, PAGE_ROWS8 = PAGE_ROWS8, PAGE_ROWS8_MAX = PAGE_ROWS8_MAX, TOP_ROWS = TOP_ROWS, COLD_PULL_ROWS = COLD_PULL_ROWS } end
+Overlord.MemoryParts["SyncLeaderboardPages.lua#2"] = function() return { TOP_SCAN = TOP_SCAN, sendControl = sendControl, request = request, tryApply = tryApply, SMALL_BUCKET_ROWS = SMALL_BUCKET_ROWS, SMALL_STREAM_ROWS = SMALL_STREAM_ROWS, WIDE_MIN_RELEASE = WIDE_MIN_RELEASE, WIDE_BLOB_MAX = WIDE_BLOB_MAX, WIDE_BIG = WIDE_BIG, WIDE_RELEASE_AGE = WIDE_RELEASE_AGE, wide = wide, feedArm = feedArm } end

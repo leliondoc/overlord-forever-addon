@@ -2205,6 +2205,30 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             sortedKills[i] = reused or { name = name, kills = kills }
             yieldWork()
         end
+        -- 2.5.2: killing blows of the ranked players (KillingBlows, by the same dedup key), and
+        -- the player table sorted by them (its "KB" header): those with at least one, most
+        -- first, then most honorable kills. The rows are those of sortedKills (never written),
+        -- their count read from kbByName: no table per player at each build.
+        local sortedKB, kbByName = {}, {}
+        local blows = Overlord.KillingBlows
+        local kbCounts = blows and blows.Counts and blows:Counts()
+        if kbCounts and next(kbCounts) then
+            for i = 1, #killHeap do
+                local count = tonumber(kbCounts[killHeap[i].key])
+                local row = sortedKills[i]
+                if count and count > 0 and row then
+                    kbByName[row.name] = count
+                    sortedKB[#sortedKB + 1] = row
+                end
+                yieldWork()
+            end
+            sortRowsWithYield(sortedKB, function(a, b)
+                local ka, kb = kbByName[a.name], kbByName[b.name]
+                if ka ~= kb then return ka > kb end
+                if a.kills ~= b.kills then return a.kills > b.kills end
+                return (a.name or "") < (b.name or "")
+            end, yieldWork)
+        end
         -- (The heap rows go back to the next build while the window stays open: one build
         -- every 10-15 s, up to 10,000 rows each, otherwise garbage. Let go a minute after
         -- the last build.)
@@ -2465,6 +2489,8 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
 
         state.result = {
             sortedKills = sortedKills,
+            sortedKB = sortedKB,
+            kbByName = kbByName,
             byFaction = byFaction,
             sortedGuilds = sortedGuilds,
             sortedGuildRating = sortedGuildRating,
@@ -7792,3 +7818,8 @@ function Overlord.Leaderboard:GetGuildDisplayFaction(guild, votedFaction)
     end
     return ""
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["Leaderboard.lua"] = function() return { PLAUSIBLE_OUTPOST_CAPTURE_COUNT = PLAUSIBLE_OUTPOST_CAPTURE_COUNT, dedupCanonicalIndex = dedupCanonicalIndex, dedupCanonicalValid = dedupCanonicalValid, dedupCanonicalGeneration = dedupCanonicalGeneration, dedupKillMaxIndex = dedupKillMaxIndex, dedupCaptureMaxIndex = dedupCaptureMaxIndex, NoteDedupCanonicalName = NoteDedupCanonicalName, hotRebuildJournals = hotRebuildJournals, dedupHardEpoch = dedupHardEpoch, VALID_ZONE_IDS = VALID_ZONE_IDS, VALID_SPECIAL_OBJECTIVE_IDS = VALID_SPECIAL_OBJECTIVE_IDS, validGuildKeepRegistrySource = validGuildKeepRegistrySource, validOutpostRegistrySource = validOutpostRegistrySource, MAX_GUILD_NAME_LEN = MAX_GUILD_NAME_LEN, VALID_SAVED_VARS_POOLS = VALID_SAVED_VARS_POOLS, LOCAL_GUILD_ROSTER_TTL = LOCAL_GUILD_ROSTER_TTL, localGuildRosterKeys = localGuildRosterKeys, localGuildRosterKeyCount = localGuildRosterKeyCount, localGuildRosterCacheAt = localGuildRosterCacheAt, localGuildRosterCacheFresh = localGuildRosterCacheFresh, localGuildRosterGuild = localGuildRosterGuild, localGuildRosterEventAt = localGuildRosterEventAt, localGuildRosterRetryBudget = localGuildRosterRetryBudget, localGuildRosterGeneration = localGuildRosterGeneration, localGuildRosterBuild = localGuildRosterBuild, localGuildRosterMembershipChangePending = localGuildRosterMembershipChangePending, LOCAL_GUILD_ROSTER_ROWS_PER_SLICE = LOCAL_GUILD_ROSTER_ROWS_PER_SLICE, LOCAL_GUILD_ROSTER_MS_PER_SLICE = LOCAL_GUILD_ROSTER_MS_PER_SLICE, LOCAL_GUILD_ROSTER_SELF_ECHO_WINDOW = LOCAL_GUILD_ROSTER_SELF_ECHO_WINDOW, localGuildRosterSelfRequestAt = localGuildRosterSelfRequestAt, metaRebuildJournals = metaRebuildJournals, copyPublishedMeta = copyPublishedMeta, META_ENTRY_SLOT = META_ENTRY_SLOT, META_PROFILE_SLOT = META_PROFILE_SLOT, metaProfiles = metaProfiles, META_MT = META_MT, INFO_PROFILE_FIELD = INFO_PROFILE_FIELD, newInfoRow = newInfoRow, compactInfoRow = compactInfoRow, materializeInfoRow = materializeInfoRow, infoRowIsEmpty = infoRowIsEmpty, infoRowsNamedForSave = infoRowsNamedForSave, compactInfoContainers = compactInfoContainers, metaRefreshWork = metaRefreshWork, META_REFRESH_DELAY = META_REFRESH_DELAY, DISPLAY_KILL_RANK_LIMIT = DISPLAY_KILL_RANK_LIMIT, DISPLAY_GUILD_RANK_LIMIT = DISPLAY_GUILD_RANK_LIMIT, DISPLAY_PREVIEW_ROW_LIMIT = DISPLAY_PREVIEW_ROW_LIMIT, DISPLAY_CAPTURE_RANK_LIMIT = DISPLAY_CAPTURE_RANK_LIMIT, DISPLAY_CAPTURE_PREVIEW_LIMIT = DISPLAY_CAPTURE_PREVIEW_LIMIT } end
+Overlord.MemoryParts["Leaderboard.lua#2"] = function() return { DISPLAY_CACHE_WORK_PER_SLICE = DISPLAY_CACHE_WORK_PER_SLICE, DISPLAY_CACHE_SLICE_BUDGET_MS = DISPLAY_CACHE_SLICE_BUDGET_MS, displayMetaArrays = displayMetaArrays, displayKillRowPool = displayKillRowPool, displayKillRowPoolTimer = displayKillRowPoolTimer, displayKillRowPoolBuilds = displayKillRowPoolBuilds, DISPLAY_KILL_ROW_POOL_SEC = DISPLAY_KILL_ROW_POOL_SEC, LEGACY_SCORE_SANITIZE_VERSION = LEGACY_SCORE_SANITIZE_VERSION, OUTPOST_CAPTURER_LEDGER_VERSION = OUTPOST_CAPTURER_LEDGER_VERSION, OUTPOST_LEDGER_ROWS_MAX = OUTPOST_LEDGER_ROWS_MAX, OUTPOST_LEDGER_EVENTS_MAX = OUTPOST_LEDGER_EVENTS_MAX, OUTPOST_LEDGER_REBUILD_DEBOUNCE = OUTPOST_LEDGER_REBUILD_DEBOUNCE, OUTPOST_LEDGER_PURGE_TS = OUTPOST_LEDGER_PURGE_TS, OUTPOST_EVENTS_PER_PACKET = OUTPOST_EVENTS_PER_PACKET, OUTPOST_WEEKLY_STATS_MIN_INTERVAL = OUTPOST_WEEKLY_STATS_MIN_INTERVAL, MAX_HISTORY_ENTRIES = MAX_HISTORY_ENTRIES, MAX_HISTORY_PLAYERS = MAX_HISTORY_PLAYERS, LADDER_SNAPSHOT_MAX_KILL_PLAYERS = LADDER_SNAPSHOT_MAX_KILL_PLAYERS, LADDER_SNAPSHOT_MAX_CAPTURE_PLAYERS_PER_FACTION = LADDER_SNAPSHOT_MAX_CAPTURE_PLAYERS_PER_FACTION, LADDER_SNAPSHOT_WORK_PER_SLICE = LADDER_SNAPSHOT_WORK_PER_SLICE, LADDER_SNAPSHOT_SLICE_BUDGET_MS = LADDER_SNAPSHOT_SLICE_BUDGET_MS, LADDER_SNAPSHOT_MAX_ZONES_PER_PLAYER = LADDER_SNAPSHOT_MAX_ZONES_PER_PLAYER, LADDER_SNAPSHOT_MAX_ZONE_BYTES_PER_PLAYER = LADDER_SNAPSHOT_MAX_ZONE_BYTES_PER_PLAYER, WEEKLY_ARCHIVE_WORK_PER_SLICE = WEEKLY_ARCHIVE_WORK_PER_SLICE, WEEKLY_ARCHIVE_SLICE_BUDGET_MS = WEEKLY_ARCHIVE_SLICE_BUDGET_MS, snapshotKillRowPool = snapshotKillRowPool, RESTORE_SLICE_MS = RESTORE_SLICE_MS, RESTORE_CHECK_EVERY = RESTORE_CHECK_EVERY } end

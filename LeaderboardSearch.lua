@@ -3,7 +3,7 @@ Overlord = Overlord or {}
 Overlord.LeaderboardSearch = {}
 local Search = Overlord.LeaderboardSearch
 local EMPTY = {}
-local FIELDS = { "sortedKills", "sortedGuilds", "sortedGuildRating", "sortedGuildKeeps", "sortedOutposts" }
+local FIELDS = { "sortedKills", "sortedKB", "sortedGuilds", "sortedGuildRating", "sortedGuildKeeps", "sortedOutposts" }
 local MAX_ROWS_PER_SLICE, SLICE_MS = 256, 0.4
 
 -- Lua 5.1 lowercases ASCII only for UTF-8 strings. Fold the two-byte letters
@@ -72,12 +72,13 @@ function Search:Request(source, text, delay)
     -- Snapshot references: Refresh reuses its source-view table, but lists are immutable.
     local snapshot = {}
     for key, value in pairs(source) do snapshot[key] = value end
-    local result = { byFaction = {}, ranks = {}, meta = source.meta, locale = source.locale }
+    local result = { byFaction = {}, ranks = {}, meta = source.meta, locale = source.locale,
+        kbByName = source.kbByName, kbBuilt = source.kbBuilt }
     local lists = {}
     for _, field in ipairs(FIELDS) do
         result[field], result.ranks[field] = {}, {}
         lists[#lists + 1] = { source[field] or EMPTY, result[field], result.ranks[field],
-            field == "sortedKills" and "name" or "guild" }
+            (field == "sortedKills" or field == "sortedKB") and "name" or "guild" }
     end
     for _, faction in ipairs({ "Alliance", "Horde" }) do
         result.byFaction[faction], result.ranks[faction] = {}, {}
@@ -119,3 +120,7 @@ function Search:Request(source, text, delay)
     end
     self.timer = C_Timer.NewTimer(delay or 0.18, step)
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["LeaderboardSearch.lua"] = function() return { Search = Search, EMPTY = EMPTY, FIELDS = FIELDS, MAX_ROWS_PER_SLICE = MAX_ROWS_PER_SLICE, SLICE_MS = SLICE_MS } end

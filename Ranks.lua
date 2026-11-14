@@ -976,3 +976,7 @@ if CreateFrame then
         end
     end)
 end
+
+-- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
+Overlord.MemoryParts = Overlord.MemoryParts or {}
+Overlord.MemoryParts["Ranks.lua"] = function() return { R = R, state = state, SEAL_MOD = SEAL_MOD, SEAL_CHUNK = SEAL_CHUNK, SEAL_LIMIT = SEAL_LIMIT, SEAL_TIERS = SEAL_TIERS, SEAL_TEXT_MAX = SEAL_TEXT_MAX, seeds = seeds, trusted = trusted, trustedEra = trustedEra, copyTried = copyTried, featRows = featRows, featView = featView } end
