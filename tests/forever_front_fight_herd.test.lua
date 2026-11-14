@@ -206,6 +206,21 @@ do
         runUntil(simTime + 60)
     end
     assert(quick >= 25 and quick <= 80 and slow == 0, "a player alone: " .. quick .. " of 150 within 6 s, " .. slow .. " after 18 s")
+    -- 2.5.2: old brackets (a catch-up, a forger) and those handed on by the ranking feed say
+    -- nothing of the relay's delay: a player alone still announces within 18 s.
+    slow = 0
+    for i = 1, 40 do
+        delays = {}
+        simTime = simTime + 1000
+        for j = 1, 16 do
+            lone.FA:OnReceiveKillBracket("1:#" .. (2100 + j) .. ":5:" .. math.floor((simTime - 250) / 30), "Old Teller" .. j, "BETA")
+            lone.FA:OnReceiveKillBracket("1:#" .. (2200 + j) .. ":5:" .. math.floor((simTime - 60) / 30), "Feed Teller" .. j, "BETA", true)
+        end
+        for _ = 1, 6 do kill(lone, "#" .. (2000 + i % 60)) end
+        if delays[1] and delays[1] > 18 then slow = slow + 1 end
+        runUntil(simTime + 60)
+    end
+    assert(slow == 0, "old or fed brackets made a player alone wait: " .. slow .. " of 40 after 18 s")
     -- Forty guild mates hear the same kills: about one in ten announces in the first seconds.
     mates = 39
     local early, tries = 0, 160
@@ -228,6 +243,55 @@ do
     end
     assert(early >= tries * 0.04 and early <= tries * 0.2, "early announcers in a raid of 40: " .. early .. " of " .. tries)
 end
+-- 2.5.2: a busy evening, the relay 30 s late. The later waves wait for the earlier ones to reach
+-- them (their delay is read on the brackets that arrive): a new battle is still announced by a
+-- handful. Waves of fixed length were all over before the first announcement arrived, and
+-- nearly every client announced, which slowed the relay further.
+local busyFirst
+do
+    LATENCY = 30
+    simTime = simTime + 2000
+    -- A battle goes on: its brackets reach everybody 30 s late (about 45 s after their slot began).
+    for i = 1, 16 do
+        simTime = simTime + 3
+        for _, client in ipairs(clients) do
+            client.FA:OnReceiveKillBracket("1:#" .. (2000 + i) .. ":5:" .. (math.floor((simTime - 45) / 30)), "Far Fighter" .. i, "BETA")
+        end
+    end
+    runUntil(simTime + 1)
+    sent = {}
+    for _ = 1, 12 do for _, client in ipairs(clients) do kill(client, "@ashenvale") end end
+    runUntil(simTime + 240)
+    busyFirst = 0
+    for _, msg in ipairs(sent) do if msg.payload:find(":ashenvale:10:", 1, true) then busyFirst = busyFirst + 1 end end
+    assert(busyFirst >= 1 and busyFirst <= 12,
+        string.format("%d of %d clients announced a new battle with the relay 30 s late", busyFirst, #clients))
+    for _, client in ipairs(clients) do
+        assert(client.FA:GetDisplayKillCount("ashenvale") >= 10, client.name .. " missed the battle on a busy evening")
+    end
+    -- The first battle of the evening: nobody knows yet how late brackets come when it begins;
+    -- they learn it while their wave waits (other battles' brackets arrive late meanwhile), and
+    -- a later wave then waits the difference.
+    simTime = simTime + 1000
+    sent = {}
+    for _ = 1, 12 do for _, client in ipairs(clients) do kill(client, "@redridge") end end
+    for i = 1, 16 do
+        simTime = simTime + 0.5
+        for _, client in ipairs(clients) do
+            client.FA:OnReceiveKillBracket("1:#" .. (2020 + i) .. ":5:" .. (math.floor((simTime - 45) / 30)), "Far Fighter" .. i, "BETA")
+        end
+    end
+    -- (Four minutes: the kills leave the five-minute window at five, the battle with them.)
+    runUntil(simTime + 240)
+    local coldFirst = 0
+    for _, msg in ipairs(sent) do if msg.payload:find(":redridge:10:", 1, true) then coldFirst = coldFirst + 1 end end
+    assert(coldFirst >= 1 and coldFirst <= 15,
+        string.format("%d of %d clients announced the evening's first battle as they learnt the relay's delay", coldFirst, #clients))
+    for _, client in ipairs(clients) do
+        assert(client.FA:GetDisplayKillCount("redridge") >= 10, client.name .. " missed the evening's first battle")
+    end
+    LATENCY = 3
+end
 print(string.format("Front fight herd: %d/%d first announcers at %d s latency, %d in a 5-min steady fight, full table safe; "
-    .. "without the channel a player alone announces within 18 s, a guild of 40 by a few",
-    firstWave, N, LATENCY, refresh))
+    .. "without the channel a player alone announces within 18 s, a guild of 40 by a few; %d announcers with the relay 30 s late",
+    firstWave, N, LATENCY, refresh, busyFirst))

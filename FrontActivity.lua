@@ -787,9 +787,39 @@ local function ReportCovers(key, bracket, now)
     return false
 end
 
+-- 2.5.2: how late the brackets of others reach us. A bracket says its 30 s slot: its age on
+-- arrival is the wait before it was sent (15 s on average within the slot) plus the relay's
+-- delay. The mean of the last REPORT_LAG_SAMPLES arrivals of the last ACTIVITY_WINDOW, at most
+-- REPORT_LAG_MAX. On a full server with several big battles the relay took 30 s and more: the
+-- later waves no longer heard the first ones in time and nearly every client announced, which
+-- slowed the relay further (bench: 60 fed clients, six battles, 164 announcements in 10 min
+-- with 3 s of delay, 1094 with 30 s). The waves now wait that much more.
+-- Only a bracket that is news here and comes live counts: not a copy already known, not one
+-- refused by the budgets, not one handed on by the ranking feed or a catch-up (old by design),
+-- and not one older than REPORT_LAG_FRESH (a catch-up, or a forger, would hold every wave of
+-- ours at the most for five minutes).
+local REPORT_LAG_SAMPLES, REPORT_LAG_MAX, REPORT_LAG_FRESH = 16, 45, 90
+local lagValue, lagAt, lagNext = {}, {}, 1
+local function NoteBracketLag(at, now)
+    local age = now - at
+    if age > REPORT_LAG_FRESH then return end
+    lagValue[lagNext] = math.max(0, age - REPORT_SLOT_SEC / 2)
+    lagAt[lagNext] = now
+    lagNext = lagNext % REPORT_LAG_SAMPLES + 1
+end
+local function BracketLag(now)
+    local sum, count = 0, 0
+    for i = 1, REPORT_LAG_SAMPLES do
+        local at = lagAt[i]
+        if at and now - at <= ACTIVITY_WINDOW then sum, count = sum + lagValue[i], count + 1 end
+    end
+    if count == 0 then return 0 end
+    return math.min(REPORT_LAG_MAX, sum / count)
+end
+
 -- Vague d'annonce : environ 4 clients sur l'ensemble des voisins directs annoncent
 -- tout de suite, une part 8 fois plus grande ensuite, les autres en dernier.
-local function ReportDelay()
+local function ReportDelay(retry)
     local crowd = 1
     local net = Overlord.Relay
     if net and net.CountDirectPeers then
@@ -831,9 +861,14 @@ local function ReportDelay()
     end
     local early = math.min(1, 4 / math.max(crowd, floor))
     local roll = math.random()
-    if roll < early then return 1 + math.random() * 5 end
-    if roll < math.min(1, early * 8) then return 10 + math.random() * 8 end
-    return 25 + math.random() * 15
+    if roll < early then return 1 + math.random() * 5, 0, 0 end
+    -- (2.5.2: the later waves wait lag * 1.5 and lag * 3 on top, so that the brackets of the
+    -- earlier waves reach them first, see BracketLag. Results 2 and 3: that factor and the lag
+    -- used. Not for a report of ours tried again after a refused send: it waits as before.)
+    local lag = retry and 0 or BracketLag(ActivityNow())
+    local stretch = retry and 0 or 1
+    if roll < math.min(1, early * 8) then return 10 + math.random() * 8 + lag * 1.5, 1.5 * stretch, lag end
+    return 25 + math.random() * 15 + lag * 3, 3 * stretch, lag
 end
 
 local function SendReport(key, bracket, now)
@@ -851,7 +886,7 @@ local function SendReport(key, bracket, now)
             retryByKey[key] = true
             C_Timer.After(21, function()
                 retryByKey[key] = nil
-                if not Overlord.InstanceSuspended then MaybeScheduleReport(key, ActivityNow()) end
+                if not Overlord.InstanceSuspended then MaybeScheduleReport(key, ActivityNow(), true) end
             end)
         end
         return false
@@ -880,7 +915,7 @@ local function SendReport(key, bracket, now)
             retryByKey[key] = true
             C_Timer.After(21, function()
                 retryByKey[key] = nil
-                if not Overlord.InstanceSuspended then MaybeScheduleReport(key, ActivityNow()) end
+                if not Overlord.InstanceSuspended then MaybeScheduleReport(key, ActivityNow(), true) end
             end)
         end)
     end
@@ -894,20 +929,29 @@ local function SendReport(key, bracket, now)
     return true
 end
 
-MaybeScheduleReport = function(key, now)
+MaybeScheduleReport = function(key, now, retry)
     if pendingReport[key] or Overlord.InstanceSuspended or not SharingActive() then return end
     local bracket = ReportBracket(key, FA:GetKillCount(key, now))
     if bracket <= 0 or ReportCovers(key, bracket, now) then return end
     if not (C_Timer and C_Timer.After) then return end
     pendingReport[key] = true
-    C_Timer.After(ReportDelay(), function()
-        pendingReport[key] = nil
-        if Overlord.InstanceSuspended then return end
+    local delay, factor, lag = ReportDelay(retry)
+    local function fire()
+        if Overlord.InstanceSuspended then pendingReport[key] = nil return end
         local t = ActivityNow()
+        -- 2.5.2: the delay grew while we waited (the first brackets of a busy evening arrive
+        -- meanwhile): a later wave waits the difference once, so that it hears the earlier ones.
+        if factor > 0 then
+            local extra = (BracketLag(t) - lag) * factor
+            factor = 0
+            if extra >= 1 then C_Timer.After(extra, fire) return end
+        end
+        pendingReport[key] = nil
         local current = ReportBracket(key, FA:GetKillCount(key, t))
         if current <= 0 or ReportCovers(key, current, t) then return end
         SendReport(key, current, t)
-    end)
+    end
+    C_Timer.After(delay, fire)
 end
 
 -- Kills affiches. Relais actif : seulement les paliers partages (les memes chez tous ;
@@ -1009,6 +1053,7 @@ function FA:OnReceiveKillBracket(payload, sender, sourceChannel, vouched)
     local now = ActivityNow()
     local at = slot * REPORT_SLOT_SEC
     if at > now + 60 or now - at > ACTIVITY_WINDOW then return false end
+    local sentAt = at
     at = math.min(at, now)
     -- (2.2.2) Our very bracket told back by a trusted sender: covered, no late retry for it.
     local own = ownSentByKey[key]
@@ -1028,6 +1073,7 @@ function FA:OnReceiveKillBracket(payload, sender, sourceChannel, vouched)
     if not originLimiter.take(type(sender) == "string" and sender:lower() or "?", now) then
         return false
     end
+    if vouched ~= true then NoteBracketLag(sentAt, now) end
     local resolved
     if key:match("^#%d+$") then
         resolved = ResolveWorldKillKey(key)
