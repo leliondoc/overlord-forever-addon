@@ -15,7 +15,7 @@ function UnitNameFromGUID(guid)
     return ({ ["Player-2-VICTIM_A"] = "Victim A",
         ["Player-2-VICTIM_B"] = "Victim B" })[guid]
 end
-C_AchievementInfo = { GetCriteriaInfo = function() return { quantity = killingBlows } end }
+function GetAchievementCriteriaInfo(id, index) if id == 1487 and index == 1 then return "Killing blows", 0, false, killingBlows, 0 end end
 C_Timer.After = function(delay, callback)
     scheduled[#scheduled + 1] = { due = clock + delay, callback = callback }
 end
@@ -245,4 +245,84 @@ do
     OverlordDB.config.killChatLine = nil
     Overlord.PrintNotification = realPrint
 end
-print("Forever HK: exact Blizzard deltas, all roles, no KB/death/x2 additions, batching, counters, instances and optional chat line OK")
+-- 2.5.3: on the lifetime counter, the first +1 after a login or /reload is the kill just made
+-- (it pairs with our killing blow); a bigger first jump stays a catch-up, never paired.
+do
+    local lifetime = 500
+    GetPVPLifetimeStats = function() return lifetime end
+    local notes, realKB = {}, Overlord.KillingBlows
+    Overlord.KillingBlows = { NoteOwnHonorable = function(_, n) notes[#notes + 1] = n end,
+        NoteOwnBlow = function() end, ResetPairing = function() end }
+    Overlord.InstanceSuspended = false
+    Overlord.Combat:Initialize()
+    lifetime = 501
+    Overlord.Combat:OnPVPKillsChanged("player")
+    assert(#notes == 1 and notes[1] == 1, "the first +1 after a reload was taken as a catch-up")
+    Overlord.Combat:Initialize()
+    lifetime = 504
+    Overlord.Combat:OnPVPKillsChanged("player")
+    assert(#notes == 1, "a first jump of 3 after a reload paired with a blow")
+    lifetime = 505
+    Overlord.Combat:OnPVPKillsChanged("player")
+    assert(#notes == 2 and notes[2] == 1, "a +1 on a confirmed baseline did not pair")
+    -- A baseline of 0 (PvP data not loaded yet): its first step is never paired.
+    lifetime = 0
+    Overlord.Combat:Initialize()
+    lifetime = 1
+    Overlord.Combat:OnPVPKillsChanged("player")
+    assert(#notes == 2, "a first step from a 0 baseline paired with a blow")
+    GetPVPLifetimeStats = nil
+    Overlord.KillingBlows = realKB
+    Overlord.Combat:Initialize()
+end
+-- 2.5.3: a hidden attacker is ours when the total killing blows (achievement 1487, read with
+-- GetAchievementCriteriaInfo) moved: the kill reaches the killing blow pairing.
+do
+    local blows, realKB = 0, Overlord.KillingBlows
+    Overlord.KillingBlows = { NoteOwnHonorable = function() end, ResetPairing = function() end,
+        NoteOwnBlow = function() blows = blows + 1 end }
+    local realAccess = canaccessvalue
+    canaccessvalue = function(v) return v ~= "SECRET" end
+    killingBlows = killingBlows + 1
+    clock = clock + 30
+    Overlord.Combat:OnPartyKillEvent("SECRET", "Player-2-VICTIM_C")
+    advance(10)
+    assert(blows == 1, "a kill with a hidden attacker and a moved killing blow total was not ours")
+    clock = clock + 30
+    Overlord.Combat:OnPartyKillEvent("SECRET", "Player-2-VICTIM_D")
+    advance(10)
+    assert(blows == 1, "a kill with a hidden attacker was ours without a new killing blow")
+    -- (Usual audit) Our own blows seen with our GUID move the reference: a mate's hidden blow
+    -- right after is not read as ours, even when the counter trailed our blow.
+    clock = clock + 30
+    killingBlows = killingBlows + 1
+    Overlord.Combat:OnPartyKillEvent("Player-1-LOCAL", "Player-2-VICTIM_A")
+    advance(10)
+    local afterVisible = blows
+    clock = clock + 30
+    Overlord.Combat:OnPartyKillEvent("Player-1-LOCAL", "Player-2-VICTIM_B")
+    killingBlows = killingBlows + 1
+    clock = clock + 30
+    Overlord.Combat:OnPartyKillEvent("SECRET", "Player-2-VICTIM_E")
+    advance(10)
+    assert(blows == afterVisible + 1, "a mate's hidden blow was read as ours after our own visible blows")
+    -- A reference read as 0 (achievement data not loaded yet) is no baseline: the first hidden
+    -- blow only sets it, the next real rise is ours.
+    local saved = killingBlows
+    killingBlows = 0
+    Overlord.Combat:Initialize()
+    killingBlows = saved
+    local before = blows
+    clock = clock + 30
+    Overlord.Combat:OnPartyKillEvent("SECRET", "Player-2-VICTIM_F")
+    advance(10)
+    assert(blows == before, "a hidden blow was ours against a reference read as 0")
+    killingBlows = killingBlows + 1
+    clock = clock + 30
+    Overlord.Combat:OnPartyKillEvent("SECRET", "Player-2-VICTIM_G")
+    advance(10)
+    assert(blows == before + 1, "a hidden blow after the reference was set was not ours")
+    canaccessvalue = realAccess
+    Overlord.KillingBlows = realKB
+end
+print("Forever HK: exact Blizzard deltas, all roles, no KB/death/x2 additions, batching, counters, instances, optional chat line and killing blow inputs OK")

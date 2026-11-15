@@ -1186,6 +1186,7 @@ function LJ:BuildRows()
     if kept and kept.layer == myLayer and at - kept.at < self.ROWS_KEEP then return kept.rows, myLayer end
     local rows = self:BuildRowsNow(myLayer)
     self.rowsKept = { rows = rows, layer = myLayer, at = at }
+    self.factionColors = nil
     return rows, myLayer
 end
 
@@ -1353,15 +1354,20 @@ function LJ:RefreshUI()
     if not ok and geterrorhandler then geterrorhandler()(err) end
 end
 
+-- 2.5.3: a name's colour is kept while the sorted list is (BuildRows empties it): the faction
+-- lookup walks the Battle.net friends, for each row painted, every 5 s and every wheel notch.
 local function FactionColor(name)
+    local colors = LJ.factionColors
+    if not colors then colors = {}; LJ.factionColors = colors end
+    local known = colors[name]
+    if known then return known end
     local sync = Overlord.Sync
-    local ok, faction = pcall(function()
-        return sync and sync.GetLivePlayerFaction and sync:GetLivePlayerFaction(name) or nil
-    end)
+    local ok, faction = false, nil
+    if sync and sync.GetLivePlayerFaction then ok, faction = pcall(sync.GetLivePlayerFaction, sync, name) end
     faction = ok and faction or nil
-    if faction == "Horde" then return "|cffff6644" end
-    if faction == "Alliance" then return "|cff6db3f2" end
-    return "|cffb8b8b8"
+    local color = faction == "Horde" and "|cffff6644" or faction == "Alliance" and "|cff6db3f2" or "|cffb8b8b8"
+    colors[name] = color
+    return color
 end
 
 function LJ:PaintWindow(f)

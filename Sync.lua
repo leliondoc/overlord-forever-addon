@@ -3076,25 +3076,29 @@ end
 function Overlord.Sync:OnBNetMessage(message, senderID)
     local inRegion, bnetInfo = IsBNetGameAccountInCurrentRegion(senderID)
     if not inRegion then return end
-    local msgType, rest = strsplit(":", message, 2)
-    if not rest then return end
+    -- 2.5.3: cut by position, one copy per field (two strsplit copied the rest of every
+    -- message twice); same fields as strsplit(":", s, 2) at each step.
+    local c1 = type(message) == "string" and message:find(":", 1, true)
+    if not c1 then return end
+    local msgType = message:sub(1, c1 - 1)
+    local c2 = message:find(":", c1 + 1, true)
 
     -- R2 = enveloppe du relais : R2:<band>:BR|BF:<paquet>
     if msgType == "R2" then
-        local band, innerMsg = strsplit(":", rest, 2)
-        if band and innerMsg then
-            self:OnReceiveR2Relay(senderID, band, innerMsg, bnetInfo)
+        if c2 then
+            self:OnReceiveR2Relay(senderID, message:sub(c1 + 1, c2 - 1), message:sub(c2 + 1), bnetInfo)
         end
         return
     end
 
     -- Format normal: msgType:band:payload (band = realm_A ou realm_H)
-    local band, payload = strsplit(":", rest, 2)
-    if band and band:match("_[AH]$") then
+    local band = c2 and message:sub(c1 + 1, c2 - 1) or message:sub(c1 + 1)
+    local payload = c2 and message:sub(c2 + 1) or nil
+    if band:match("_[AH]$") then
         -- 1.4.0: a Battle.net friend on another ruleset plays another campaign.
         if band:match("^Forever_") and not IsCompatibleForeverBand(band) then return end
     else
-        payload = rest
+        payload = c2 and message:sub(c1 + 1) or band
         band = nil
     end
     -- A direct message from a compatible friend proves a live bridge (relay
@@ -3675,7 +3679,7 @@ end
 local function ApplyInactiveFrontZoneState(zoneId, status, kills, holdTime, owner, ts,
     _siegePhaseLegacy, holdReq, capturedTimeOverride, capturerName, progressDecision,
     preparedBase, forceConvergence, directTerminalRevert,
-    relayedDisplayHold, relayedDisplayAt)
+    relayedDisplayHold, relayedDisplayAt, deferRefresh)
     local zone, zoneFront
     if Overlord.Fronts then zone, zoneFront = Overlord.Fronts:GetZone(zoneId) end
     if not zone or Overlord.Zones:GetZone(zoneId) then return false end
@@ -3789,7 +3793,8 @@ local function ApplyInactiveFrontZoneState(zoneId, status, kills, holdTime, owne
     end
     PersistSyncedZoneState(zone)
     -- Le changement d'etat peut (de)bloquer des prerequis : rafraichir les statuts local-only du front.
-    if zoneFront and Overlord.Zones.RefreshInactiveFrontAvailability then
+    -- (2.5.3 : deferRefresh, une carte entiere ZA le fait une fois par front a la fin du lot.)
+    if zoneFront and not deferRefresh and Overlord.Zones.RefreshInactiveFrontAvailability then
         Overlord.Zones:RefreshInactiveFrontAvailability(zoneFront.id)
     end
     return true
@@ -4717,14 +4722,17 @@ function Overlord.Sync:FlushMapCatchupNotice()
 end
 
 -- A dated capture of a map page on a front we are not standing on.
-function Overlord.Sync:ApplyInactiveMapCapture(zone, zoneId, owner, ts, ct, forceConvergence, quiet)
+-- deferRefresh (2.5.3): the whole-map batch refreshes each touched inactive front once at its end
+-- (a refresh per zone was 1-3 ms in one frame on a catch-up map); entries of the batch are
+-- captures, never read the available/locked status that refresh sets.
+function Overlord.Sync:ApplyInactiveMapCapture(zone, zoneId, owner, ts, ct, forceConvergence, quiet, deferRefresh)
     local oldStatus, oldOwner, oldPrevious, atLogin
     if zone then
         oldStatus, oldOwner, oldPrevious = zone.status, zone.owner, zone.previousOwner
         atLogin = zone._loginSyncUnconfirmed == true
     end
     if not ApplyInactiveFrontZoneState(zoneId, "captured", 0, 0, owner, ts, nil, nil, ct,
-        nil, nil, nil, forceConvergence) then return false end
+        nil, nil, nil, forceConvergence, nil, nil, nil, deferRefresh) then return false end
     if zone and owner and zone.owner == owner and (oldOwner ~= owner or oldStatus == "in_progress") then
         ct = tonumber(ct) or 0
         self:NoteMapCatchupCapture(zone, owner, ct > 0 and ct or ts,
@@ -10073,9 +10081,10 @@ function Overlord.Sync:OnReceiveZoneAll(
                 end
                 local inactiveApplied = inactiveBaseAllowed and self:ApplyInactiveMapCapture(
                     inactiveZone, zoneId, owner, ts, ct, runtimeGlobalRepairMode,
-                    loginPairRepairMode) or false
+                    loginPairRepairMode, true) or false
                 if inactiveApplied then
                     changed = true
+                    if inactiveFront then touchedInactiveFronts[inactiveFront.id] = true end
                 end
                 if inactiveZone and inactiveZone.status == "captured"
                     and inactiveZone.owner == owner then

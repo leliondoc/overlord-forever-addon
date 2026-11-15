@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.5.2"
+Overlord.Version = "2.5.3"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -506,9 +506,8 @@ end
 function Overlord:SafeGetGuildInfo(unit)
     if Overlord.InstanceSuspended then return nil end
     if not unit or not GetGuildInfo then return nil end
-    local ok, guild = pcall(function()
-        return select(1, GetGuildInfo(unit))
-    end)
+    -- (2.5.3: no closure per call; the first value is the guild name, as before.)
+    local ok, guild = pcall(GetGuildInfo, unit)
     if not ok or not guild or guild == "" then return nil end
     return guild
 end
@@ -737,11 +736,25 @@ local function ReadPlateToken(plate)
     return plate.namePlateUnitToken
 end
 
+-- 2.5.3: the layers the NPCs of this scan gave (vignettes aside: some carry a wrapper GUID),
+-- for ResolveContradictedLayer. One layer only, else "mixed".
+function Overlord.Shard:NoteScanUnitLayer(layer)
+    if layer == nil then return end
+    if self._scanUnitLayer == nil then
+        self._scanUnitLayer = layer
+    elseif self._scanUnitLayer ~= layer then
+        self._scanUnitMixed = true
+    end
+end
+
 function Overlord.Shard:ScanForShardID()
     ClearLayerVotes()
+    self._scanUnitLayer, self._scanUnitMixed, self._scanTargetLayer = nil, nil, nil
     local shardID, guid, agreed
     for i = 1, #SHARD_SCAN_UNITS do
         shardID, guid = ExtractShardIDFromUnit(SHARD_SCAN_UNITS[i])
+        if i == 1 then self._scanTargetLayer = shardID end
+        self:NoteScanUnitLayer(shardID)
         agreed = VoteLayer(shardID, guid)
         if agreed ~= nil then return agreed end
     end
@@ -762,6 +775,7 @@ function Overlord.Shard:ScanForShardID()
                     if not unitOk then
                         platesCovered = false
                     else
+                        self:NoteScanUnitLayer(shardID)
                         agreed = VoteLayer(shardID, guid)
                         if agreed ~= nil then return agreed end
                     end
@@ -775,6 +789,7 @@ function Overlord.Shard:ScanForShardID()
     if not platesCovered then
         for i = 1, #SHARD_NAMEPLATE_UNITS do
             shardID, guid = ExtractShardIDFromUnit(SHARD_NAMEPLATE_UNITS[i])
+            self:NoteScanUnitLayer(shardID)
             agreed = VoteLayer(shardID, guid)
             if agreed ~= nil then return agreed end
         end
@@ -790,6 +805,30 @@ local SHARD_KNOWN_SCAN_INTERVAL = 30
 local SHARD_UNKNOWN_SCAN_MIN = 2
 local SHARD_UNKNOWN_SCAN_MAX = 30
 
+-- 2.5.3: after a layer hop, the old layer stayed shown for good (seen in game: 4 min on
+-- 6868 while every NPC in sight gave 7090). Two NPCs of the new layer had to come in one
+-- scan, or 30 s apart at most; with friendly plates off, a scan only sees the target.
+-- A scan where NPCs give one other layer and nothing gives the shown one, more than
+-- SHARD_FRESH_SECONDS after its last proof, forgets it (badge hidden rather than wrong).
+-- Then the layer of the NPC the player targets is taken (player creatures are skipped
+-- before this). Called when the scan found no two NPCs that agree; the new layer or nil.
+function Overlord.Shard:ResolveContradictedLayer(now)
+    local unitLayer = self._scanUnitLayer
+    if unitLayer == nil or self._scanUnitMixed then return nil end
+    local current = CoerceShardId(self.currentShardID)
+    if current ~= nil then
+        if unitLayer == current or layerVoteCount[current] then return nil end
+        if now - (tonumber(self.lastUpdateAt) or 0) < SHARD_FRESH_SECONDS then return nil end
+        self.currentShardID = nil
+        self.lastUpdateAt = 0
+        self.localShardSource = nil
+        self.contradictedBy = unitLayer
+        ClearPendingEventLayer()
+    end
+    if self.contradictedBy == unitLayer and self._scanTargetLayer == unitLayer then return unitLayer end
+    return nil
+end
+
 -- Met a jour le shardID courant. skipIfFresh=true (evenements haute frequence) : ne rescanne pas
 -- (GetVignettes + jusqu'a 40 nameplates) si un shardID a deja ete confirme il y a moins de
 -- SHARD_FRESH_SECONDS -- les changements monde/phase invalident le contexte immediatement.
@@ -798,6 +837,7 @@ function Overlord.Shard:Update(skipIfFresh)
     if not (Overlord.IsShardHelperActive and Overlord:IsShardHelperActive()) then
         self.currentShardID = nil
         self.lastUpdateAt = 0
+        self.contradictedBy = nil
         if StopShardScanMaintenance then StopShardScanMaintenance() end
         return false
     end
@@ -814,11 +854,13 @@ function Overlord.Shard:Update(skipIfFresh)
     end
     self.lastScanAttemptAt = now
     local newShard = self:ScanForShardID()
+    if newShard == nil then newShard = self:ResolveContradictedLayer(now) end
     if newShard ~= nil then
         local changed = (newShard ~= self.currentShardID)
         self.currentShardID = newShard
         self.lastUpdateAt = now
         self.localShardSource = "guid"
+        self.contradictedBy = nil
         -- Heartbeat leger : garde les infos de shard vivantes entre raids / communaute.
         if Overlord.Sync and Overlord.Sync.BroadcastShard
             and (changed or (self.lastBroadcastAt + SHARD_BROADCAST_INTERVAL <= self.lastUpdateAt)) then
@@ -1101,6 +1143,7 @@ function Overlord.Shard:RefreshLocalContext(contextKey, skipScan)
     self.lastScanAttemptAt = 0
     self.localShardSource = nil
     self.keepShardRequest = nil
+    self.contradictedBy = nil
     ClearPendingEventLayer()
     if StopShardScanMaintenance then StopShardScanMaintenance() end
     if not skipScan and contextKey ~= "" and Overlord.IsShardHelperActive
@@ -1139,6 +1182,7 @@ function Overlord.Shard:InvalidateLocalContext()
     self.lastScanAttemptAt = 0
     self.localShardSource = nil
     self.keepShardRequest = nil
+    self.contradictedBy = nil
     ClearPendingEventLayer()
     if StopShardScanMaintenance then StopShardScanMaintenance() end
 end
@@ -1360,7 +1404,9 @@ end
 local SHARD_EVENT_AGREE_SECONDS = 30
 -- confirmOnly (a killed creature's raw GUID, never checked for a player owner): it may
 -- confirm the known layer but never move it.
-local function ObserveShardFromGUID(guid, confirmOnly)
+-- targeted (2.5.3): the GUID of the NPC the player targets. Once a scan dropped the shown
+-- layer for this one (ResolveContradictedLayer), it is taken without a second NPC.
+local function ObserveShardFromGUID(guid, confirmOnly, targeted)
     if not Overlord.Shard:SyncLocalContext() then return false end
     if not (Overlord.IsShardHelperActive and Overlord:IsShardHelperActive()) then return false end
     local shardID = ExtractShardIDFromGUID(guid)
@@ -1369,7 +1415,10 @@ local function ObserveShardFromGUID(guid, confirmOnly)
     local changed = shardID ~= CoerceShardId(Overlord.Shard.currentShardID)
     if changed and confirmOnly and Overlord.Shard.currentShardID ~= nil then return false end
     if changed then
-        if pendingEventLayer == shardID and pendingEventGuid ~= guid
+        if targeted and not confirmOnly and Overlord.Shard.currentShardID == nil
+            and Overlord.Shard.contradictedBy == shardID then
+            ClearPendingEventLayer()
+        elseif pendingEventLayer == shardID and pendingEventGuid ~= guid
             and now - (pendingEventAt or 0) <= SHARD_EVENT_AGREE_SECONDS then
             ClearPendingEventLayer()
         else
@@ -1388,6 +1437,7 @@ local function ObserveShardFromGUID(guid, confirmOnly)
     Overlord.Shard.lastUpdateAt = now
     Overlord.Shard.lastScanAttemptAt = now
     Overlord.Shard.localShardSource = "guid"
+    Overlord.Shard.contradictedBy = nil
     if Overlord.Sync and Overlord.Sync.BroadcastShard
         and (changed or (tonumber(Overlord.Shard.lastBroadcastAt) or 0)
             + SHARD_BROADCAST_INTERVAL <= now) then
@@ -1404,7 +1454,7 @@ end
 
 local function ObserveShardFromUnit(unit)
     local shardID, guid = ExtractShardIDFromUnit(unit)
-    return shardID ~= nil and ObserveShardFromGUID(guid)
+    return shardID ~= nil and ObserveShardFromGUID(guid, nil, unit == "target")
 end
 
 local function LocalShardEvidenceNeedsRefresh(maxAge)

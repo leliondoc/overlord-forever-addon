@@ -875,21 +875,6 @@ local function MayRestoreObservedAssault(siteKey, st, sender)
         and OP:IsObserverOutpostCaptureStale(st, OP:GetSite(siteKey), ClaimServerNow()) or false
 end
 
--- A direct adoption is for a capture the map missed in between: a takeover by the
--- faction the map already shows as tenant is only adopted when the ledger holds a
--- capture of the other faction on this site newer than that tenant (the missed one).
-local function OutpostAdoptionJustified(siteKey, st, faction, lb)
-    local mapFaction = (st.status == "held" and st.ownerFaction)
-        or (st.status == "in_progress" and st.previousOwnerFaction) or nil
-    if mapFaction ~= "Alliance" and mapFaction ~= "Horde" then return true end
-    if mapFaction ~= faction then return true end
-    local mapTs = math.max(math.floor(tonumber(st.claimedAt) or 0),
-        math.floor(tonumber(st.previousClaimedAt) or 0))
-    local other = faction == "Alliance" and "Horde" or "Alliance"
-    return lb.HasOutpostEventOfFactionSince
-        and lb:HasOutpostEventOfFactionSince(siteKey, other, mapTs) or false
-end
-
 -- Decides whether one capture claim may enter the ledger and the map.
 -- Returns true, "known" | "catch-up" | "owner", canonical capturer; or false, reason.
 function Overlord.Sync:AuthorizeOutpostClaim(siteKey, guild, faction, claimTs, capturer, sender, sourceChannel, pool)
@@ -1265,6 +1250,10 @@ end
 -- Without it the map, minimap and keep lists kept the old tenant until a map pull
 -- happened to reach a peer whose map had the capture. A site never expires once held,
 -- so the newest capture is the tenant; a live assault on the map is left alone.
+-- (2.5.3) Whatever the faction of the two tenants: a map that refused a takeover by
+-- the faction it already showed (no enemy capture in its ledger between the two) kept
+-- its old tenant for good while the other maps showed the new one (Menethil keep:
+-- The Helping Hand here, Sap It Consensually elsewhere, for days).
 local function FollowLedgerTenant(siteKey)
     local lb, OP = Overlord.Leaderboard, Overlord.Outpost
     if not (lb and OP and OP.AdoptLedgerTenant and lb.OutpostLedgerAheadOfMap
@@ -1280,7 +1269,6 @@ local function FollowLedgerTenant(siteKey)
     if type(t) ~= "table" or not lb:IsOutpostLedgerTenant(siteKey, t.guild, t.faction, t.claimedAt) then
         return false
     end
-    if not OutpostAdoptionJustified(siteKey, st, t.faction, lb) then return false end
     local claimedAt = math.floor(tonumber(t.claimedAt) or 0)
     local mapTs = math.min(claimedAt, ClaimServerNow() + 5)
     if not OP:AdoptLedgerTenant(siteKey, st, { status = "held", ownerGuild = t.guild,
@@ -1292,6 +1280,12 @@ local function FollowLedgerTenant(siteKey)
     MaybeResetOutpostDefenderAlert(siteKey, st)
     MaybeResetOutpostAssaultAlert(siteKey, st)
     return true
+end
+
+-- (2.5.3) The map catches up with its own ledger without the network (a tenant the
+-- ledger already held at login, or one a map earlier refused).
+function Overlord.Sync:FollowOutpostLedgerTenant(siteKey)
+    return FollowLedgerTenant(siteKey)
 end
 
 local function OutpostDefendedGuildFromState(stAfter)
@@ -1768,18 +1762,25 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
             sender, relayCapturer, objective.id, remoteFac, remote.holdTimeElapsed)
     end
     -- A capture the ledger holds as the newest tenant of the site is the truth the
-    -- map must follow, even when the map, which may have missed a capture in
-    -- between, would refuse the takeover on its own (same-faction rule).
+    -- map must follow, even when the map would refuse the takeover on its own
+    -- (same-faction rule): every map then shows the same tenant (2.5.3).
     local lb = Overlord.Leaderboard
     local heldNewEvent, heldTenantChanged = false, false
     if status == "held" and guild ~= "" and lb and lb.RecordOutpostCapture then
         heldNewEvent, heldTenantChanged = lb:RecordOutpostCapture(
             siteKey, guild, remoteFac, heldCaptureTs, remotePool, relayCapturer)
     end
-    if status == "held" and lb and lb.IsOutpostLedgerTenant
+    -- (2.5.3, usual audit) Never over our own hold, nor over a live assault by the other
+    -- faction: a "held" of the besieged side, freshly dated, would end that assault on every
+    -- map (2.5.2 refused it with the same-faction rule). The assailant's own capture ends it
+    -- as before; the LWW merge below decides the rest, the periodic catch-up follows later.
+    local liveForeignAssault = stLocal and (stLocal.holdAuthorityLocal or (stLocal.status == "in_progress"
+        and stLocal.ownerFaction ~= remoteFac
+        and not Overlord.Outpost:IsObserverOutpostCaptureStale(stLocal,
+            Overlord.Outpost:GetSite(siteKey), ClaimServerNow())))
+    if status == "held" and not liveForeignAssault and lb and lb.IsOutpostLedgerTenant
         and lb:IsOutpostLedgerTenant(siteKey, guild, remoteFac, heldCaptureTs)
         and lb.OutpostLedgerAheadOfMap and lb:OutpostLedgerAheadOfMap(siteKey, stLocal)
-        and OutpostAdoptionJustified(siteKey, stLocal, remoteFac, lb)
         and Overlord.Outpost.AdoptLedgerTenant then
         Overlord.Outpost:AdoptLedgerTenant(siteKey, stLocal, remote)
     else

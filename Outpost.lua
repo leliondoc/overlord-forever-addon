@@ -1361,6 +1361,8 @@ end
 -- A held site still waiting for its network snapshot (login): the periodic
 -- targeted pull is then never skipped. An assault only observed is not listed:
 -- its quiet end is covered by the bounded probes of TickMaintenance.
+-- (2.5.3) Not a pure question any more: the map takes its own ledger's tenant here
+-- (local, no packet; its only caller, the periodic map catch-up, is cut in instances).
 function Overlord.Outpost:HasStateAwaitingNetwork()
     local lb = Overlord.Leaderboard
     local waiting = false
@@ -1369,8 +1371,15 @@ function Overlord.Outpost:HasStateAwaitingNetwork()
         if st.status == "held" and self:IsOutpostStateAwaitingNetworkSnapshot(st) then waiting = true end
         -- The ledger learned a capture (history round) whose held state the map
         -- still lacks (a capturer gone offline never re-announces it): a few pulls
-        -- per such tenant, never an endless one (the map may refuse it for good).
+        -- per such tenant, never an endless one (a live assault may outlast them).
         local aheadTs = lb and lb.OutpostLedgerAheadOfMap and lb:OutpostLedgerAheadOfMap(key, st) or nil
+        -- (2.5.3) The ledger itself is the tenant the map takes first, locally; a pull
+        -- is left only for a tenant the map cannot take yet (a live assault on it).
+        if aheadTs and Overlord.Sync and Overlord.Sync.FollowOutpostLedgerTenant
+            and Overlord.Sync:FollowOutpostLedgerTenant(key) then
+            st = self:GetState(key)
+            aheadTs = lb:OutpostLedgerAheadOfMap(key, st)
+        end
         if aheadTs then
             local pulls = ledgerAheadPulls[key]
             if not pulls or pulls.claimedAt ~= aheadTs then
