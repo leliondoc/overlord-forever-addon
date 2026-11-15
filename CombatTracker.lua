@@ -271,13 +271,16 @@ local function CacheEnemyPlayerInfo(guid, name, class, race, raceSex)
     info.time = GetTime()
 end
 
+-- Total killing blows (achievement 1487, its criterion's quantity). 2.5.3: read with
+-- GetAchievementCriteriaInfo; C_AchievementInfo.GetCriteriaInfo does not exist on Forever (checked
+-- in game 2026-11-15: it answered "non", the global gave 2133), so this read always gave 0 and a
+-- PARTY_KILL with a hidden attacker was never ours.
 local function GetKillingBlows()
-    if not C_AchievementInfo or not C_AchievementInfo.GetCriteriaInfo then return 0 end
-    local ok, info = pcall(C_AchievementInfo.GetCriteriaInfo, TOTAL_KB_ACHIEVEMENT_ID, 1)
-    if ok and info then
-        return info.quantity or info.quantityNumber or 0
-    end
-    return 0
+    if type(GetAchievementCriteriaInfo) ~= "function" then return 0 end
+    local ok, _, _, _, quantity = pcall(GetAchievementCriteriaInfo, TOTAL_KB_ACHIEVEMENT_ID, 1)
+    if not ok or type(quantity) ~= "number" then return 0 end
+    if canaccessvalue and not canaccessvalue(quantity) then return 0 end
+    return quantity
 end
 
 local function GetSessionHonorableKills()
@@ -470,6 +473,12 @@ function Overlord.Combat:RequestGUIDCacheRefresh()
     rosterRefreshTimer = C_Timer.NewTimer(ROSTER_REFRESH_DEBOUNCE, RunGUIDCacheRefresh)
 end
 
+-- 2.5.3: the group's unit tokens, made once ("raid" .. i built up to 40 strings per roster
+-- refresh and per lookup).
+Overlord.Combat.GROUP_UNITS = { raid = {}, party = {} }
+for i = 1, 40 do Overlord.Combat.GROUP_UNITS.raid[i] = "raid" .. i end
+for i = 1, 4 do Overlord.Combat.GROUP_UNITS.party[i] = "party" .. i end
+
 -- Reconstruit le cache GUID -> faction du raid/groupe
 function Overlord.Combat:RefreshGUIDCache()
     wipe(guidFactionCache)
@@ -491,8 +500,9 @@ function Overlord.Combat:RefreshGUIDCache()
     elseif IsInGroup() then prefix, count = "party", 4
     else return end
 
+    local units = self.GROUP_UNITS[prefix]
     for i = 1, count do
-        local unit = prefix .. i
+        local unit = units[i]
         if UnitExists(unit) then
             local g = UnitGUID(unit)
             if g then
@@ -734,6 +744,9 @@ end
 -- On gere les deux cas pour robustesse.
 function Overlord.Combat:OnPartyKillEvent(arg1, arg2)
     local killScoring = IsKillScoringActive()
+    -- 2.5.3: the moment of the blow, for its pairing with the honorable kill (KillingBlows),
+    -- even when the kill is processed up to 2.75 s later (victim name still unknown).
+    local eventAt = GetTime()
 
     dbg("PARTY_KILL event fired")
 
@@ -766,10 +779,12 @@ function Overlord.Combat:OnPartyKillEvent(arg1, arg2)
     local killerName = nil
     local victimName = "?"
 
+    local visibleOwnBlow = false
     if isGUIDFormat then
         if safeAttacker then
             if safeAttacker == playerGUID then
                 isOurKill = true
+                visibleOwnBlow = true
                 killerName = Overlord:SafeUnitName("player") or "?"
             elseif guidFactionCache[safeAttacker] then
                 isOurKill = true
@@ -777,8 +792,11 @@ function Overlord.Combat:OnPartyKillEvent(arg1, arg2)
             end
         else
             -- Pas de GUID attaquant : verifier via KB (API achievement)
+            -- (2.5.3, usual audit: a counter read 0 before, now and then, is no baseline yet:
+            -- taken as one, never as a kill of ours.)
             local killingBlows = GetKillingBlows()
-            local kbIncreased = (killingBlows > previousKillingBlows)
+            local kbIncreased = previousKillingBlows > 0 and killingBlows > previousKillingBlows
+            if previousKillingBlows <= 0 then previousKillingBlows = killingBlows end
             if kbIncreased then
                 previousKillingBlows = killingBlows
                 isOurKill = true
@@ -790,6 +808,12 @@ function Overlord.Combat:OnPartyKillEvent(arg1, arg2)
             if not safeTarget:match("^Player%-") then
                 dbg("  target pas Player-*, ignore")
                 return
+            end
+            -- 2.5.3 (usual audit): our own blow seen with our GUID moves the counter's
+            -- reference too, by at least this blow (the counter may trail the event). Left
+            -- behind, a later blow of a mate with a hidden attacker read our rise as his.
+            if visibleOwnBlow and previousKillingBlows > 0 then
+                previousKillingBlows = math.max(previousKillingBlows + 1, GetKillingBlows())
             end
             if UnitNameFromGUID then
                 local n = UnitNameFromGUID(safeTarget)
@@ -805,8 +829,8 @@ function Overlord.Combat:OnPartyKillEvent(arg1, arg2)
     else
         -- Format legacy : PARTY_KILL sans GUID explicite.
         local killingBlows = GetKillingBlows()
-        local kbIncreased = (killingBlows > previousKillingBlows)
-        if kbIncreased then previousKillingBlows = killingBlows end
+        local kbIncreased = previousKillingBlows > 0 and killingBlows > previousKillingBlows
+        if previousKillingBlows <= 0 or kbIncreased then previousKillingBlows = killingBlows end
         if kbIncreased then
             isOurKill = true
             killerName = Overlord:SafeUnitName("player") or "?"
@@ -842,13 +866,13 @@ function Overlord.Combat:OnPartyKillEvent(arg1, arg2)
     local finalKillerName = killerName or localName
     if victimName == "?" and finalKillerGUID and playerGUID and finalKillerGUID == playerGUID then
         if DeferUnknownLocalBackupKill("PARTY_KILL", safeTarget, function(resolvedVictimName)
-            self:ProcessKill(finalKillerGUID, finalKillerName, safeTarget, resolvedVictimName, not killScoring)
+            self:ProcessKill(finalKillerGUID, finalKillerName, safeTarget, resolvedVictimName, not killScoring, eventAt)
         end) then
             return
         end
     end
     self:ProcessKill(safeAttacker or playerGUID, killerName or localName,
-                     safeTarget, victimName, not killScoring)
+                     safeTarget, victimName, not killScoring, eventAt)
 end
 
 -- Une augmentation du compteur VH officiel vaut exactement autant de credits.
@@ -915,8 +939,11 @@ function Overlord.Combat:OnPVPKillsChanged(unitTarget)
     if not IsKillScoringActive() or previous == nil or previousSource ~= source then return end
     local delta = current - previous
     -- (A first jump after a reload of the baseline: honorable kills older than this event.)
+    -- 2.5.3: a +1 on a read baseline is the kill just made (the first one after every login or
+    -- /reload never paired with its killing blow); a larger first jump stays a catch-up.
     local catchUp = resumePending
-        or (source == "lifetime" and (honorableKillBaselineUnconfirmed or previous == 0)) or nil
+        or (source == "lifetime" and (previous == 0
+            or (honorableKillBaselineUnconfirmed and delta > 1))) or nil
     -- Le compteur "session" est journalier : un reset/recul rebase sans retirer
     -- les VH hebdomadaires ni importer des kills d'une ancienne session.
     if delta <= 0 then return end
@@ -953,8 +980,9 @@ function Overlord.Combat:FindGroupMemberName(guid)
     if IsInRaid() then prefix, count = "raid", 40
     elseif IsInGroup() then prefix, count = "party", 4
     else return nil end
+    local units = self.GROUP_UNITS[prefix]
     for i = 1, count do
-        local unit = prefix .. i
+        local unit = units[i]
         if UnitExists(unit) and UnitGUID(unit) == guid then
             return Overlord:SafeGetUnitName(unit, true)
         end
@@ -1002,7 +1030,8 @@ end
 
 -- Une preuve de coup fatal sert a l'activite locale.
 -- Elle ne cree aucun point de classement : seule la VH Blizzard le fait.
-function Overlord.Combat:ProcessKill(killerGUID, killerName, victimGUID, victimName, proofOnly)
+-- eventAt (2.5.3): GetTime() of the PARTY_KILL behind this call (the blow's own moment).
+function Overlord.Combat:ProcessKill(killerGUID, killerName, victimGUID, victimName, proofOnly, eventAt)
     local now = GetTime()
     local recentlyProcessed, originalKey = WasKillRecentlyProcessed(victimGUID, victimName, now)
     if recentlyProcessed then return false end
@@ -1066,7 +1095,7 @@ function Overlord.Combat:ProcessKill(killerGUID, killerName, victimGUID, victimN
     end
     -- 2.5.2: the same killing blow, for the KB column (counted with its honorable kill only).
     if playerFullName and not proofOnly and Overlord.KillingBlows then
-        Overlord.KillingBlows:NoteOwnBlow()
+        Overlord.KillingBlows:NoteOwnBlow(eventAt)
     end
     if not proofOnly and Overlord.InActiveFront and victimName and victimName ~= "?" then
         local zone = Overlord.Zones:GetCurrentPlayerZone()

@@ -203,6 +203,27 @@ alb.kills[A.name] = 40
 -- Leaving for an instance: nothing waits for a partner.
 KB:NoteOwnBlow(); KB:ResetPairing(); KB:NoteOwnHonorable(1)
 assert(KB:Get(A.name) == 3, "a blow from before an instance paired after it")
+-- 2.5.3: a kill processed late (victim name resolved up to 2.75 s after PARTY_KILL) is dated
+-- at its event: the honorable kill that came in between still pairs.
+now = now + KB.PAIR_SEC + 1
+local blowAt = now
+now = now + 0.3; KB:NoteOwnHonorable(1)
+now = now + 2.45; KB:NoteOwnBlow(blowAt)
+assert(KB:Get(A.name) == 4, "a late-processed blow lost the honorable kill that came after it")
+-- Dated at the event, the HONOR_FIRST_SEC rule is unchanged: an honorable kill 3 s before it
+-- stays someone else's.
+now = now + KB.PAIR_SEC + 1
+KB:NoteOwnHonorable(1); now = now + 3
+local lateAt = now
+now = now + 0.5; KB:NoteOwnBlow(lateAt)
+assert(KB:Get(A.name) == 4, "an honorable kill 3 s before a late-processed blow paired with it")
+-- And PAIR_SEC runs from the blow itself, not from its processing.
+now = now + KB.PAIR_SEC + 1
+local oldAt = now
+now = now + 2; KB:NoteOwnBlow(oldAt)
+now = now + KB.PAIR_SEC - 1; KB:NoteOwnHonorable(1)
+assert(KB:Get(A.name) == 4, "PAIR_SEC counted from the processing, not from the blow")
+now = now + KB.PAIR_SEC + 1
 
 -- 2) Rows of the network: kept at the highest, within the player's honorable kills.
 do

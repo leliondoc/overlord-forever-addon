@@ -193,15 +193,37 @@ end
 
 -- A keyed table over its cap loses its oldest entries (age read by at(value)); keys that
 -- keep(key) protects are never dropped.
+-- 2.5.3: the cut age is found on a plain array of numbers (a table per entry and a sort with
+-- a closure were 6-12 ms in one frame at a weekly close); entries older than it go, then
+-- entries of that very age until the count is reached (ties went in no set order before either).
 local function TrimOldest(t, cap, at, keep)
     local size = Size(t)
     if size <= cap then return end
-    local list = {}
+    local keys, ages, n = {}, {}, 0
     for key, value in pairs(t) do
-        if not (keep and keep(key)) then list[#list + 1] = { k = key, a = at(value) } end
+        if not (keep and keep(key)) then
+            n = n + 1
+            keys[n], ages[n] = key, at(value)
+        end
     end
-    table.sort(list, function(a, b) return a.a < b.a end)
-    for index = 1, math.min(size - cap, #list) do t[list[index].k] = nil end
+    local drop = math.min(size - cap, n)
+    if drop <= 0 then return end
+    local sorted = {}
+    for index = 1, n do sorted[index] = ages[index] end
+    table.sort(sorted)
+    local cut = sorted[drop]
+    local older = 0
+    for index = 1, drop do if sorted[index] < cut then older = older + 1 end end
+    local ties = drop - older
+    for index = 1, n do
+        local age = ages[index]
+        if age < cut then
+            t[keys[index]] = nil
+        elseif age == cut and ties > 0 then
+            t[keys[index]] = nil
+            ties = ties - 1
+        end
+    end
 end
 
 -- Account store of this ranking. claims: rank claims heard; rd: our inspect readings (one
@@ -631,7 +653,7 @@ function RP:FinishClose(close)
     candidates = nil
     -- (Pruning waits for the next frame: the weekly close stays light.)
     if C_Timer and C_Timer.After then
-        C_Timer.After(0, function() pcall(RP.Prune, RP, pool) end)
+        C_Timer.After(0, function() RP:PruneInSteps(pool) end)
     else
         self:Prune(pool)
     end
@@ -750,42 +772,72 @@ end
 
 -- Old data goes at each weekly close: readings of players not read for a year, then the
 -- oldest entries of any table over its cap.
-function RP:Prune(pool)
-    local yearAgo = ServerNow() - 52 * self.WEEK_SEC
-    -- Inspect retry times already passed say nothing more than a missing one.
-    local clock = GetTime and GetTime() or 0
-    for name, at in pairs(readAt) do
-        if not (clock < at) then readAt[name] = nil end
-    end
-    local function newest(readings)
-        local at = 0
-        for _, reading in pairs(readings) do
-            if type(reading) == "table" then at = math.max(at, Count(reading.a)) end
+-- 2.5.3: in steps, each its own frame at a weekly close (PruneInSteps; the whole was 5-30 ms in
+-- one callback); RP:Prune runs them all at once. The order is kept: each step reads only what
+-- the steps before it left.
+RP.PRUNE_STEPS = {
+    function(self, pool)
+        local yearAgo = ServerNow() - 52 * self.WEEK_SEC
+        -- Inspect retry times already passed say nothing more than a missing one.
+        local clock = GetTime and GetTime() or 0
+        for name, at in pairs(readAt) do
+            if not (clock < at) then readAt[name] = nil end
         end
-        return at
+        for name, readings in pairs(pool.rd) do
+            if self:NewestReading(readings) < yearAgo and not pool.shown[name] then pool.rd[name] = nil end
+        end
+    end,
+    function(self, pool)
+        TrimOldest(pool.rd, self.READ_KEYS, function(readings) return RP:NewestReading(readings) end,
+            function(name) return pool.claims[name] ~= nil or pool.shown[name] ~= nil end)
+        for name in pairs(pool.gd) do
+            if not pool.rd[name] and not pool.shown[name] then pool.gd[name] = nil end
+        end
+    end,
+    function(self, pool)
+        local yearAgo = ServerNow() - 52 * self.WEEK_SEC
+        local function stamp(value) return type(value) == "table" and Count(value.at) or 0 end
+        for name, value in pairs(pool.low) do
+            if stamp(value) < yearAgo then pool.low[name] = nil end
+        end
+        TrimOldest(pool.low, self.LIST_MAX, stamp)
+        -- A rank shown is for life: never aged out; only a very large table loses its oldest.
+        TrimOldest(pool.shown, self.SHOWN_MAX, stamp)
+        for name in pairs(pool.vw) do
+            if not pool.rd[name] and not pool.shown[name] then pool.vw[name] = nil end
+        end
+        for name in pairs(pool.gf) do
+            if not pool.gd[name] then pool.gf[name] = nil end
+        end
+    end,
+    function(self, pool) self:PruneWeeks(pool) end,
+}
+
+function RP:NewestReading(readings)
+    local at = 0
+    for _, reading in pairs(readings) do
+        if type(reading) == "table" then at = math.max(at, Count(reading.a)) end
     end
-    for name, readings in pairs(pool.rd) do
-        if newest(readings) < yearAgo and not pool.shown[name] then pool.rd[name] = nil end
+    return at
+end
+
+function RP:Prune(pool)
+    for _, step in ipairs(self.PRUNE_STEPS) do step(self, pool) end
+end
+
+-- One step a frame (a step that fails stops the rest until the next close, as a failed
+-- Prune did).
+function RP:PruneInSteps(pool, index)
+    index = index or 1
+    local step = self.PRUNE_STEPS[index]
+    if not step or not pcall(step, self, pool) then return end
+    if self.PRUNE_STEPS[index + 1] then
+        C_Timer.After(0, function() RP:PruneInSteps(pool, index + 1) end)
     end
-    TrimOldest(pool.rd, self.READ_KEYS, function(readings)
-        return newest(readings)
-    end, function(name) return pool.claims[name] ~= nil or pool.shown[name] ~= nil end)
-    for name in pairs(pool.gd) do
-        if not pool.rd[name] and not pool.shown[name] then pool.gd[name] = nil end
-    end
-    local function stamp(value) return type(value) == "table" and Count(value.at) or 0 end
-    for name, value in pairs(pool.low) do
-        if stamp(value) < yearAgo then pool.low[name] = nil end
-    end
-    TrimOldest(pool.low, self.LIST_MAX, stamp)
-    -- A rank shown is for life: never aged out; only a very large table loses its oldest.
-    TrimOldest(pool.shown, self.SHOWN_MAX, stamp)
-    for name in pairs(pool.vw) do
-        if not pool.rd[name] and not pool.shown[name] then pool.vw[name] = nil end
-    end
-    for name in pairs(pool.gf) do
-        if not pool.gd[name] then pool.gf[name] = nil end
-    end
+end
+
+-- The weeks kept for each name: own words and lies, doubtful weeks.
+function RP:PruneWeeks(pool)
     local oldest = (self:CurrentWeek() or 0) - 60
     for _, key in ipairs({ "ow", "lw" }) do
         for name, weeks in pairs(pool[key]) do
@@ -1268,9 +1320,13 @@ end
 -- tooltips and on nameplates: a fixed name of one region known to every client (nothing heard
 -- from the network, nothing to prove). Character names are unique within a region.
 RP.AUTHORS = { ["troma orcbane"] = "EU" }
+-- 2.5.3: the lengths of those names, so a name of another length is answered without a lower()
+-- (read for every ranking row, tooltip and plate).
+RP.AUTHOR_LENGTHS = {}
+for author in pairs(RP.AUTHORS) do RP.AUTHOR_LENGTHS[#author] = true end
 
 function RP:IsAuthor(name)
-    local region = type(name) == "string" and self.AUTHORS[name:lower()]
+    local region = type(name) == "string" and self.AUTHOR_LENGTHS[#name] and self.AUTHORS[name:lower()]
     if not region or type(GetCurrentRegionName) ~= "function" then return false end
     local ok, current = pcall(GetCurrentRegionName)
     return ok and Accessible(current) and current == region

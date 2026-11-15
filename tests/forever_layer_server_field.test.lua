@@ -264,4 +264,81 @@ do
     assert(held == 1 and shard.knownHelperCount == 1 and shard:IsPlayerHelper("Helper 601"), "the table passed its bound: " .. held)
 end
 
-print("Layer: server field, two agreeing NPCs, player creatures skipped, helper marks OK")
+-- 2.5.3: after a layer hop the old layer stayed shown for good (in game: 6868 for 4 min while
+-- every guard in sight gave 7090; a scan only sees the target with friendly plates off).
+do
+    local function setUnits(set)
+        for k in pairs(units) do units[k] = nil end
+        for k, v in pairs(set or {}) do units[k] = v end
+        vignettes, vignetteObjects = {}, {}
+    end
+    local function shown(layer, age)
+        shard:InvalidateLocalContext()
+        shard.currentShardID = layer
+        shard.lastUpdateAt = now - (age or 0)
+        shard.localShardSource = "guid"
+    end
+    local function update(set)
+        setUnits(set)
+        shard:Update()
+        return shard.currentShardID
+    end
+    local guard1 = { guid = "Creature-0-7090-0-15-1423-8396499D0B" }
+    local guard2 = { guid = "Creature-0-7090-0-15-1423-F1A61230BC" }
+
+    -- 1. The case seen in game: 6868 proven 45 s ago, the targeted guard gives 7090.
+    shown(6868, 45)
+    assert(update({ target = guard1 }) == 7090, "the targeted guard of the new layer was not taken")
+    assert(shard.contradictedBy == nil and shard.lastUpdateAt == now, "the taken layer was not proven now")
+
+    -- 2. A layer proven under 30 s ago is kept: one NPC does not overturn it.
+    shown(6868, 10)
+    assert(update({ target = guard1 }) == 6868, "a fresh layer was overturned by one NPC")
+
+    -- 3. Not targeted (mouseover): the old layer is forgotten, nothing is taken; the next
+    -- targeted NPC of that layer is taken alone (event), another layer is not.
+    shown(6868, 45)
+    assert(update({ mouseover = guard1 }) == nil and shard.contradictedBy == 7090,
+        "an NPC of another layer did not forget the old one")
+    setUnits({ nameplate1 = { guid = "Creature-0-7090-0-15-1423-0000AAAA21" } })
+    onEvent(nil, "NAME_PLATE_UNIT_ADDED", "nameplate1")
+    assert(shard.currentShardID == nil, "a nameplate alone was taken after the drop")
+    setUnits({ target = { guid = "Creature-0-7111-0-15-1423-0000AAAA22" } })
+    onEvent(nil, "PLAYER_TARGET_CHANGED")
+    assert(shard.currentShardID == nil, "a targeted NPC of a third layer was taken alone")
+    setUnits({ target = guard2 })
+    onEvent(nil, "PLAYER_TARGET_CHANGED")
+    assert(shard.currentShardID == 7090 and shard.contradictedBy == nil,
+        "the targeted NPC of the layer that dropped the old one was not taken")
+
+    -- 4. The shown layer still in sight: kept.
+    shown(6868, 45)
+    assert(update({ target = guard1, nameplate1 = { guid = "Creature-0-6868-0-14-1423-1E1E0D95B0" } }) == 6868,
+        "the shown layer was dropped while one of its NPCs was in sight")
+
+    -- 5. NPCs of two other layers: nothing decided, the old layer stays.
+    shown(6868, 45)
+    assert(update({ mouseover = guard1, nameplate1 = { guid = "Creature-0-7111-0-15-1423-0000AAAA23" } }) == 6868,
+        "two disagreeing NPCs dropped the shown layer")
+
+    -- 6. A pet or totem of another server, and a vignette alone, overturn nothing.
+    shown(6868, 45)
+    assert(update({ target = { guid = "Creature-0-7090-0-15-416-0000BBBB21", controlled = true } }) == 6868,
+        "a player creature dropped the shown layer")
+    setUnits()
+    vignettes = { "Vignette-0-7090-0-15-0-0000EEEE21" }
+    shard:Update()
+    assert(shard.currentShardID == 6868, "a vignette alone dropped the shown layer")
+
+    -- 7. A context change forgets the layer that dropped the old one.
+    shown(6868, 45)
+    update({ mouseover = guard1 })
+    assert(shard.contradictedBy == 7090, "drop not noted")
+    shard:InvalidateLocalContext()
+    assert(shard.contradictedBy == nil, "the drop outlived a context change")
+    setUnits({ target = guard2 })
+    onEvent(nil, "PLAYER_TARGET_CHANGED")
+    assert(shard.currentShardID == nil, "a targeted NPC was taken alone in a new context")
+end
+
+print("Layer: server field, two agreeing NPCs, player creatures skipped, helper marks, stale layer after a hop OK")

@@ -5471,19 +5471,6 @@ function Overlord.Leaderboard:OutpostLedgerAheadOfMap(siteKey, st)
     return nil
 end
 
--- The ledger holds a capture of this faction on the site newer than afterTs
--- (the capture the map missed between two tenants of the other faction).
-function Overlord.Leaderboard:HasOutpostEventOfFactionSince(siteKey, faction, afterTs)
-    afterTs = math.floor(tonumber(afterTs) or 0)
-    for _, row in pairs(self:GetOutpostCaptureCountsTable()) do
-        if type(row) == "table" and row.siteKey == siteKey and row.faction == faction
-            and math.floor(tonumber(row.lastTs) or 0) > afterTs then
-            return true
-        end
-    end
-    return false
-end
-
 -- This capture is the newest tenant the ledger holds for the site.
 -- (2.2.2) The ledger's newest tenant of the site, checked (nil when none).
 function Overlord.Leaderboard:GetOutpostLedgerTenant(siteKey)
@@ -7073,9 +7060,16 @@ function Overlord.Leaderboard:SnapshotCurrentCampaignFull()
             -- an insertion is undefined in Lua (rows skipped or seen twice). Values
             -- are read live; a key added after the copy waits for the next pass (the
             -- snapshot stays dirty), a key removed since is skipped.
+            -- 2.5.3: one buffer reused by every pass (a single build runs at a time): a new
+            -- array of up to 10,000 keys each phase was about 0.5 MB in one frame per build.
+            -- Slots past this phase's count, left by a longer list, are cleared (the nil there
+            -- ends the phase).
             if not state.keys then
-                local keys, count = {}, 0
+                local keys, count = self._snapshotKeyBuffer or {}, 0
+                self._snapshotKeyBuffer = keys
                 for key in pairs(source or {}) do count = count + 1; keys[count] = key end
+                for i = count + 1, tonumber(self._snapshotKeyBufferCount) or 0 do keys[i] = nil end
+                self._snapshotKeyBufferCount = count
                 state.keys, state.position = keys, 0
             end
             state.position = state.position + 1

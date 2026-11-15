@@ -821,13 +821,22 @@ function Overlord.ZoneIndicator:FindActiveZone(forceRefresh)
         end
     end
 
+    -- 2.5.3: the player's point read once for the whole scan (the map and position were read
+    -- again for every zone); GetDistanceToZone when it cannot be read, as before.
+    local originRead, px, py, aspect = false, nil, nil, nil
     for _, zone in ipairs(scanZones) do
         local prio = 0
         if zone.status == "in_progress" then prio = 2
         elseif zone.status == "available" then prio = 1 end
 
         if prio > 0 then
-            local dist = self:GetDistanceToZone(zone)
+            if not originRead then
+                originRead = true
+                px, py, aspect = self:ReadZoneDistanceOrigin()
+            end
+            local dist
+            if px then dist = self:GetDistanceFromOrigin(zone, px, py, aspect)
+            else dist = self:GetDistanceToZone(zone) end
             if dist ~= nil then
                 if prio > bestPrio or (prio == bestPrio and dist < bestDist) then
                     bestZone = zone

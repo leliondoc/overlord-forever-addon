@@ -712,15 +712,19 @@ sync:OnReceiveOutpostCapture(ocWire("badlands", "Fortress Guild", "Alliance", no
 assert(count("badlands", "Fortress Guild") == 0, "a claim further ahead than the shared clock allows was believed")
 print("Outpost claims: map time bounded by the clock")
 
--- ===== (27) a capture the ledger knows but the map lacks keeps the periodic pull
+-- ===== (27) a capture the ledger knows but the map lacks is taken on the periodic round
+-- (2.5.3: from the ledger itself, without a pull)
 resetWorld()
 tick()
 lb:RecordOutpostCapture("badlands", "Fortress Guild", "Alliance", now - 100, "global", third)
-assert(op:HasStateAwaitingNetwork(), "a held state missing from the map did not keep the periodic pull")
+assert(not op:HasStateAwaitingNetwork(), "a tenant the ledger holds still asked for the map")
+local fromLedger = op:GetState("badlands")
+assert(fromLedger.status == "held" and fromLedger.ownerGuild == "Fortress Guild" and fromLedger.heldCapturerName == third,
+    "the map did not take its own ledger's tenant: " .. tostring(fromLedger.status))
 sync:OnReceiveOutpostState(heldWire("badlands", "Fortress Guild", "Alliance", now - 100, third, 600), "Any Peer-Forever", "CHANNEL")
-assert(op:GetState("badlands").status == "held", "the known held state was not taken from any peer")
+assert(op:GetState("badlands").status == "held", "the known held state was lost to its own heartbeat")
 assert(not op:HasStateAwaitingNetwork(), "the map caught up but the pull goes on")
-print("Outpost claims: the map follows the ledger through the periodic pull")
+print("Outpost claims: the map follows the ledger on the periodic round")
 
 -- ===== (28) probes are re-armed by another assault, not by a heartbeat
 resetWorld()
@@ -816,6 +820,10 @@ print("Outpost claims: the pace of a pair follows its later capture, whatever th
 -- ===== (32) a tenant the map refuses for good stops the periodic pull after a few tries
 resetWorld()
 tick()
+-- 2.5.3: the map takes the ledger's tenant locally; only our own live hold keeps it off.
+local holdingSite = op:GetState("badlands")
+holdingSite.status, holdingSite.ownerGuild, holdingSite.ownerFaction, holdingSite.pool = "in_progress", guild, "Alliance", "global"
+holdingSite.holdAuthorityLocal, holdingSite.isHolding, holdingSite.holdTimeElapsed = true, true, 30
 lb:RecordOutpostCapture("badlands", "Fortress Guild", "Alliance", now - 100, "global", third)
 local kept = 0
 for _ = 1, 6 do if op:HasStateAwaitingNetwork() then kept = kept + 1 end end
@@ -851,7 +859,8 @@ sync:OnReceiveOutpostState(heldWire("silverpine", "Night Guild", "Alliance", now
 assert(retaken.status == "held" and retaken.ownerGuild == "Night Guild",
     "the map stayed on a missed enemy capture: " .. tostring(retaken.status) .. " " .. tostring(retaken.ownerGuild))
 print("Outpost claims: the map follows the ledger after a missed capture")
--- ===== (34) a same-faction swap of a held site is not adopted without a missed enemy capture
+-- ===== (34) 2.5.3: a same-faction swap the ledger holds as newest tenant is on every map
+-- (before, a map that already showed an allied tenant kept it for good, the others moved).
 resetWorld()
 tick(300)
 ts = now - 1500
@@ -862,20 +871,54 @@ local rival = "Rival One"
 know(rival, "Rival Guild")
 tick(5)
 sync:OnReceiveOutpostState(heldWire("silverpine", "Rival Guild", "Alliance", ts + 600, rival, nil, now), rival .. "-Forever", "CHANNEL")
-assert(swapSite.ownerGuild == "Fortress Guild", "an allied guild swapped a held site by a signed claim")
 assert(count("silverpine", "Rival Guild") == 1, "the signed claim left the ledger")
--- With the enemy capture the map missed (known from a reply), the retake is adopted.
-local hordeCapper = "Horde Capper"
-know(hordeCapper, "Horde Guild")
-lb.playerInfo[hordeCapper].faction = "Horde"
+assert(swapSite.status == "held" and swapSite.ownerGuild == "Rival Guild" and swapSite.heldCapturerName == rival,
+    "the map kept an allied tenant the ledger replaced: " .. tostring(swapSite.ownerGuild))
+-- An older allied capture arriving late never moves the map back.
 tick(5)
-assert(sync:NoteOutpostClaimPeer("Helper Tester", "A:1.7.2:0::H"))
-sync:OnReceiveLeaderboardOutpostCount(locWire("silverpine", "Horde Guild", "Horde", { { ts + 300, hordeCapper } }), helper, "WHISPER")
-assert(count("silverpine", "Horde Guild") == 1, "the missed enemy capture was not taken from the reply")
+sync:OnReceiveOutpostState(heldWire("silverpine", "Fortress Guild", "Alliance", ts, capper, nil, now), capper .. "-Forever", "CHANNEL")
+assert(swapSite.ownerGuild == "Rival Guild", "an older allied capture took the map back")
+print("Outpost claims: a swap between allied guilds the ledger holds is on the map")
+
+-- ===== (34b) 2.5.3: a map stuck on an allied tenant (Menethil keep) catches up with its own
+-- ledger without the network, on the periodic round.
+resetWorld()
+tick(300)
+ts = now - 1500
+sync:OnReceiveOutpostCapture(ocWire("silverpine", "Fortress Guild", "Alliance", ts, capper), capper .. "-Forever", "CHANNEL")
+local stuck = op:GetState("silverpine")
+assert(stuck.status == "held" and stuck.ownerGuild == "Fortress Guild", "fixture capture refused")
+lb:RecordOutpostCapture("silverpine", "Rival Guild", "Alliance", ts + 600, "global", rival)
+assert(stuck.ownerGuild == "Fortress Guild", "fixture: the ledger write moved the map by itself")
+op:HasStateAwaitingNetwork()
+assert(stuck.status == "held" and stuck.ownerGuild == "Rival Guild" and stuck.ownerFaction == "Alliance"
+    and stuck.claimedAt == ts + 600 and stuck.heldCapturerName == rival,
+    "the map stayed off its own ledger's tenant: " .. tostring(stuck.ownerGuild))
+assert(not op:HasStateAwaitingNetwork(), "a tenant taken locally still asks for the map")
+print("Outpost claims: a map stuck on an allied tenant follows its own ledger")
+
+-- ===== (34c) 2.5.3 usual audit: a fresh "held" of the besieged side never ends a live assault
+-- of the other faction through the ledger (2.5.2 refused it by the same-faction rule).
+resetWorld()
+tick(300)
+ts = now - 1500
+sync:OnReceiveOutpostCapture(ocWire("badlands", "Fortress Guild", "Alliance", ts, capper), capper .. "-Forever", "CHANNEL")
+local besieged = op:GetState("badlands")
 tick(5)
-sync:OnReceiveOutpostState(heldWire("silverpine", "Rival Guild", "Alliance", ts + 600, rival, nil, now), "Any Peer-Forever", "CHANNEL")
-assert(swapSite.status == "held" and swapSite.ownerGuild == "Rival Guild", "the retake after a missed enemy capture was not adopted")
-print("Outpost claims: a swap between allied guilds needs the missed enemy capture")
+sync:OnReceiveOutpostState(string.format("v1:badlands:in_progress:160:Horde Guild:H:0:0:%d:600:global:0:::0:0:Horde Attacker", now), "Horde Attacker-Forever", "CHANNEL")
+assert(besieged.status == "in_progress" and besieged.ownerFaction == "Horde", "fixture assault not observed")
+local defender = "Defender Two"
+know(defender, "Rival Guild")
+tick(5)
+-- (The ledger takes the signed claim; the map is left to its own merge, as in 2.5.2: never
+-- adopted from the ledger over the live assault.)
+local realAdopt, adopted = op.AdoptLedgerTenant, 0
+op.AdoptLedgerTenant = function(...) adopted = adopted + 1; return realAdopt(...) end
+sync:OnReceiveOutpostState(heldWire("badlands", "Rival Guild", "Alliance", now, defender, 600, now), defender .. "-Forever", "CHANNEL")
+op.AdoptLedgerTenant = realAdopt
+assert(count("badlands", "Rival Guild") == 1, "the signed claim left the ledger")
+assert(adopted == 0, "a fresh held of the besieged side was adopted from the ledger over a live assault")
+print("Outpost claims: a live assault is never overwritten from the ledger by the besieged side")
 
 -- ===== (35) the local final waits for the pace of its own signature
 resetWorld()
@@ -976,14 +1019,15 @@ do
     assert(sync:NoteOutpostClaimPeer("Helper Tester", "A:1.7.2:0::H"))
     sync:OnReceiveLeaderboardOutpostCount(locWire("silverpine", "Fortress Guild", "Alliance", { { now - 100, follower } }), helper, "WHISPER")
     assert(st.ownerGuild == "Fortress Guild" and st.claimedAt == now - 100, "a caught-up LOC did not move the map")
-    -- (c) An allied swap without a missed enemy capture is not adopted.
+    -- (c) 2.5.3: an allied swap the ledger holds is adopted too (every map shows one tenant).
     resetWorld()
     tick(4000)
     st = hordeHeld("badlands", now - 3000)
     st.ownerGuild, st.ownerFaction = "Old Guild", "Alliance"
     assert(sync:NoteOutpostClaimPeer("Helper Tester", "A:1.7.2:0::H"))
     sync:OnReceiveLeaderboardOutpostTenant(loWire("badlands", "Fortress Guild", "Alliance", now - 100, follower), helper, "WHISPER")
-    assert(st.ownerGuild == "Old Guild", "an allied swap was adopted without a missed enemy capture")
+    assert(st.ownerGuild == "Fortress Guild" and st.claimedAt == now - 100,
+        "an allied swap the ledger holds was not adopted: " .. tostring(st.ownerGuild))
     -- (d) A local capture and (e) a live assault on the map are left alone.
     for _, case in ipairs({ "local", "assault" }) do
         resetWorld()

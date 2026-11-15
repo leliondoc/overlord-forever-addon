@@ -88,19 +88,29 @@ local profiles = setmetatable({}, { __mode = "k" })
 -- holding more kill rows than that.)
 local legacyViews = setmetatable({}, { __mode = "k" })
 local legacyProfiles = setmetatable({}, { __mode = "k" })
-local function LegacyView(snapshot)
+-- 2.5.3: does this copy need a view of 5,000 at all (more kill rows than that)? The cheap test,
+-- without building it: prepare() built the whole view in one frame just to pick its cache
+-- (about 1.1 MB and 2 ms, the "StartPagedLeaderboardCatchup 1.1 MB in one call" of /ov perf).
+local function NeedsLegacyView(snapshot)
     local order = type(snapshot) == "table" and snapshot.killOrder or nil
-    if type(order) ~= "table" or #order <= LEGACY_LIMITS.LK then return snapshot end
+    return type(order) == "table" and #order > LEGACY_LIMITS.LK
+end
+-- yieldFn (2.5.3): called once per name, so the view is built inside the sliced profile.
+local function LegacyView(snapshot, yieldFn)
+    if not NeedsLegacyView(snapshot) then return snapshot end
     local view = legacyViews[snapshot]
     if view then return view end
+    local order = snapshot.killOrder
     local kills, info, top = {}, {}, {}
     local allKills, allInfo = snapshot.kills or {}, snapshot.playerInfo or {}
     for i = 1, LEGACY_LIMITS.LK do
         local name = order[i]
         top[i], kills[name], info[name] = name, allKills[name], allInfo[name]
+        if yieldFn then yieldFn() end
     end
     for name in pairs(snapshot.captureCount or {}) do
         if info[name] == nil then info[name] = allInfo[name] end
+        if yieldFn then yieldFn() end
     end
     -- Every other field (captures, dates) is the copy's own, read through a weak link: Lua 5.1
     -- never frees a weak key that its own value holds, and a view holding its copy kept every
@@ -459,7 +469,7 @@ local function prepare(callback, own, legacy)
     stats.profileWhy = nil
     local wanted = epoch()
     local recent = sync.GetAttestedLeaderboardSnapshot and sync:GetAttestedLeaderboardSnapshot()
-    local recentCache = (legacy and type(recent) == "table" and LegacyView(recent) ~= recent) and legacyProfiles or profiles
+    local recentCache = (legacy and NeedsLegacyView(recent)) and legacyProfiles or profiles
     local cached = type(recent) == "table" and recentCache[recent] or nil
     local age = cached and (((GetServerTime and GetServerTime()) or time()) - (tonumber(recent.at) or 0)) or nil
     -- 2.2.2: without the channel, ranking rows travel from hand to hand by these pages: a copy
@@ -498,22 +508,23 @@ local function prepare(callback, own, legacy)
                 or not snapshot and "built copy not attested" or "campaign changed"
             building = nil; callback(nil); return
         end
-        -- (From here on `snapshot` is what the profile is made of: the copy, or its view of 5,000.)
+        -- (From the coroutine on, `snapshot` is what the profile is made of: the copy, or its view
+        -- of 5,000, built there in slices.)
         local attested = snapshot
-        if legacy then snapshot = LegacyView(attested) end
-        local cache = snapshot ~= attested and legacyProfiles or profiles
-        local limits = snapshot ~= attested and LEGACY_LIMITS or STREAM_LIMITS
+        local useLegacy = legacy and NeedsLegacyView(attested) or false
+        local cache = useLegacy and legacyProfiles or profiles
+        local limits = useLegacy and LEGACY_LIMITS or STREAM_LIMITS
         -- Killing blows: the live counts, read by key while the profile is built (none in a view
         -- of 5,000: nobody asks it), labelled with KB:ProfileRevision.
         local blows = Overlord.KillingBlows
-        local kbCounts = snapshot == attested and blows and blows.Counts and blows:Counts() or nil
+        local kbCounts = not useLegacy and blows and blows.Counts and blows:Counts() or nil
         local kbRevision = kbCounts and blows.ProfileRevision and blows:ProfileRevision() or false
         local known = cache[attested]
         if known and known.kbRevision == kbRevision then building = nil; callback(known); return end
         -- Only the killing blows moved since this copy's profile: its other streams are kept as
         -- they are (never written after their build), the stream LB alone is built again.
         local base = known and known.epoch == wanted and type(known.streams) == "table" and known or nil
-        local result = { epoch = wanted, streams = {}, builtRows = builtRows, legacy = snapshot ~= attested or nil,
+        local result = { epoch = wanted, streams = {}, builtRows = builtRows, legacy = useLegacy or nil,
             kbRevision = kbRevision }
         for _, kind in ipairs(PROFILE_STREAMS) do
             result.streams[kind] = base and kind ~= "LB" and base.streams[kind] or { buckets = {}, count = 0,
@@ -536,6 +547,7 @@ local function prepare(callback, own, legacy)
             end
         end
         local co = coroutine.create(function()
+            if useLegacy then snapshot = LegacyView(attested, work) end
             -- Killing blows of the players of this very copy, by identity, under the copy's own
             -- spelling and within its honorable kills: two clients whose kill rows agree list
             -- the same rows (a row never refused at the other side, never a different spelling,

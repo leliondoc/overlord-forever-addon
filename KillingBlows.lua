@@ -144,14 +144,18 @@ function KB:CreditOwn(count)
 end
 
 -- A killing blow of ours on a player, outside instances (CombatTracker ProcessKill).
-function KB:NoteOwnBlow()
-    local at = now()
+-- blowAt (2.5.3): the PARTY_KILL's own time. A kill whose victim name came late is processed
+-- up to 2.75 s after it; dated then, its honorable kill (arrived meanwhile) was already older
+-- than HONOR_FIRST_SEC and a solo blow never paired.
+function KB:NoteOwnBlow(blowAt)
+    local t = now()
+    local at = math.min(tonumber(blowAt) or t, t)
     prune(honors, at, self.HONOR_FIRST_SEC)
     if honors[1] then
         table.remove(honors, 1)
         self:CreditOwn(1)
     else
-        prune(blows, at, self.PAIR_SEC)
+        prune(blows, t, self.PAIR_SEC)
         push(blows, at, self.QUEUE_MAX)
     end
 end
