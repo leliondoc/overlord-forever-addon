@@ -65,7 +65,8 @@ assert(installed(nil, "CHAT_MSG_SYSTEM", message), "A late error (90 s) for an a
 now = now + 31
 assert(not installed(nil, "CHAT_MSG_SYSTEM", message), "Expired addon target still hid errors")
 -- In an instance (and on 12.x secret chat text) the filter never reads the line.
-assert(Overlord.Sync:SendWhisper("BF", "test-fragment", "Massa Zug") ~= nil or true)
+-- (The whisper only records its target for the filter: its result is not what is tested here.)
+Overlord.Sync:SendWhisper("BF", "test-fragment", "Massa Zug")
 Overlord.InstanceSuspended = true
 assert(not installed(nil, "CHAT_MSG_SYSTEM", message), "Filter acted inside an instance")
 Overlord.InstanceSuspended = false
@@ -115,3 +116,73 @@ do
     assert(secretAt and compareAt and secretAt < compareAt, "the base name is compared before its secret test")
 end
 print("Offline addon whisper filter: current, legacy and late chat APIs OK")
+
+-- 2.5.4: in an instance no chat filter of ours stays installed. A filter that reads nothing is
+-- still called by the game while it handles a chat line, which taints its own handling of that
+-- line (battleground report of 2026-11-16: "attempted to iterate a table that cannot be
+-- accessed while tainted (execution tainted by 'Overlord')", thousands of times). Taken out on
+-- the way in, back on the way out; nothing installs inside.
+do
+    assert(loadfile("SyncAux.lua"))()
+    local sync = Overlord.Sync
+    local filters, timers = {}, 0
+    local function count() local n = 0 for _ in pairs(filters) do n = n + 1 end return n end
+    ChatFrame_AddMessageEventFilter, Chat_AddMessageEventFilter, ChatFrame_RemoveMessageEventFilter = nil, nil, nil
+    ChatFrameUtil = {
+        AddMessageEventFilter = function(event, fn) filters[event] = fn end,
+        RemoveMessageEventFilter = function(event, fn)
+            assert(filters[event] == fn, "removed a filter that was not ours: " .. tostring(event))
+            filters[event] = nil
+        end,
+    }
+    C_Timer.After = function(delay) assert(delay == 5); timers = timers + 1 end
+    function IsInInstance() return false end
+    sync._seatNoticeFilter = nil
+    Overlord.InstanceSuspended = false
+    sync:InstallWhisperOfflineChatFilter()
+    assert(filters.CHAT_MSG_SYSTEM and filters.CHAT_MSG_CHANNEL_NOTICE and filters.CHAT_MSG_CHANNEL_NOTICE_USER
+        and count() == 3, "fixture: the three filters are not installed")
+    -- The way in.
+    Overlord.InstanceSuspended = true
+    assert(sync:RemoveChatFilters() == true and count() == 0, "a chat filter of ours stayed installed in an instance")
+    assert(sync:RemoveChatFilters() == true and count() == 0, "a second removal did something")
+    -- (Both channel-notice filters go whatever our flag says: one installed alone would stay.)
+    Overlord.InstanceSuspended = false
+    sync:InstallWhisperOfflineChatFilter()
+    sync._seatNoticeFilter = nil
+    Overlord.InstanceSuspended = true
+    assert(sync:RemoveChatFilters() == true and count() == 0, "a channel-notice filter stayed because our flag was not set")
+    assert(sync:InsideInstance() == true, "suspended is not inside an instance")
+    -- Inside: nothing installs, nothing is asked again (the way out does it).
+    sync:InstallWhisperOfflineChatFilter()
+    assert(sync:InstallSeatNoticeFilter() == false and count() == 0 and timers == 0, "a chat filter was installed inside an instance")
+    -- The way out.
+    Overlord.InstanceSuspended = false
+    sync:InstallWhisperOfflineChatFilter()
+    assert(count() == 3 and timers == 0, "the chat filters did not come back on the way out")
+    -- A login or a /reload inside an instance, before our own suspension: nothing installed, asked
+    -- again a few times only.
+    sync:RemoveChatFilters()
+    function IsInInstance() return true, "pvp" end
+    for _ = 1, 10 do sync:InstallWhisperOfflineChatFilter() end
+    assert(count() == 0 and timers == 6, "a login inside an instance: installed " .. count() .. ", asked again " .. timers)
+    function IsInInstance() return false end
+    -- A client whose chat cannot remove a filter: said, and the filter still reads nothing inside.
+    sync:InstallWhisperOfflineChatFilter()
+    local system = filters.CHAT_MSG_SYSTEM
+    ChatFrameUtil.RemoveMessageEventFilter = nil
+    assert(sync:RemoveChatFilters() == false and count() == 3, "fixture: removal without the game's function")
+    Overlord.InstanceSuspended = true
+    assert(system(nil, "CHAT_MSG_SYSTEM", "No player named 'Massa Zug' is currently playing.") == false,
+        "the filter acted inside an instance")
+    Overlord.InstanceSuspended = false
+    -- The wiring: the way in removes them, the way out installs them again.
+    local f = assert(io.open("Sync.lua", "rb"))
+    local source = f:read("*a")
+    f:close()
+    local suspend = source:match("function Overlord%.Sync:Suspend%(%)(.-)\nend")
+    local resume = source:match("function Overlord%.Sync:Resume%(%)(.-)\nend")
+    assert(suspend and suspend:find("if self.RemoveChatFilters then pcall(self.RemoveChatFilters, self) end", 1, true), "Sync:Suspend leaves the chat filters installed")
+    assert(resume and resume:find("if self.InstallWhisperOfflineChatFilter then pcall(self.InstallWhisperOfflineChatFilter, self) end", 1, true), "Sync:Resume does not install the chat filters again")
+end
+print("Chat filters: none of ours installed inside an instance, back on the way out OK")

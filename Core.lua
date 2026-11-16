@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.5.3"
+Overlord.Version = "2.5.4"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -1092,7 +1092,11 @@ function Overlord.Shard:IsPlayerHelper(playerName)
 end
 
 -- Enregistre le shardID d'un autre joueur (recu via sync)
-function Overlord.Shard:SetPlayerShard(playerName, shardID)
+-- firstHand (2.5.4): said by that player itself on our side, the game naming it as the sender
+-- (its presence, its own SH; never over Battle.net from a friend the game does not show in our
+-- faction). A relayed copy or a name read in a payload is not: only the Layers window reads the
+-- difference (LayerJumper NoteLayer).
+function Overlord.Shard:SetPlayerShard(playerName, shardID, firstHand)
     if not playerName or shardID == nil then return end
     local sid = CoerceShardId(shardID)
     if sid == nil or sid ~= sid or sid < 0 or sid >= SHARD_LAYER_ID_MAX then return false end
@@ -1127,6 +1131,9 @@ function Overlord.Shard:SetPlayerShard(playerName, shardID)
             self.shardReferenceCheckedAt[sid] = now
         end
     end
+    -- 2.5.4: the Layers window keeps it longer than we do, for its list only (LayerJumper NoteLayer).
+    local jumper = Overlord.LayerJumper
+    if jumper and jumper.NoteLayer then jumper:NoteLayer(playerName, sid, firstHand == true) end
     return true
 end
 
@@ -2210,6 +2217,13 @@ function Overlord:SuspendForInstance()
         -- instance map before the replayed suspension hides them.
         if self.MapMarkers and self.MapMarkers.HideAllOverlays then
             pcall(self.MapMarkers.HideAllOverlays, self.MapMarkers)
+        end
+        -- 2.5.4: the chat filters leave at once (they send nothing and release nothing): the
+        -- replayed suspension comes seconds later, and a filter still installed is called by the
+        -- game for every chat line meanwhile.
+        if self.Sync and self.Sync.RemoveChatFilters then pcall(self.Sync.RemoveChatFilters, self.Sync) end
+        if self.RankProof and self.RankProof.RemoveChatBadges then
+            pcall(self.RankProof.RemoveChatBadges, self.RankProof)
         end
         return false
     end

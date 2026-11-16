@@ -1643,6 +1643,53 @@ do
         "the chat filters were not installed")
     RP:InstallChatBadges()
     assert(#added == #RP.CHAT_EVENTS, "the chat filters were installed twice")
+    -- 2.5.4: none of them stays installed in an instance (a filter the game calls taints its
+    -- handling of the line: the battleground errors of 2026-11-16), no line is rewritten there,
+    -- and they come back on the way out.
+    do
+        local removed = {}
+        local savedRemove, savedSuspended, savedTimer = ChatFrame_RemoveMessageEventFilter, Overlord.InstanceSuspended, C_Timer
+        ChatFrame_RemoveMessageEventFilter = function(event, fn) removed[#removed + 1] = { event, fn } end
+        local later = 0
+        C_Timer = { After = function() later = later + 1 end }
+        Overlord.InstanceSuspended = true
+        local transformed = 0
+        local window = { TransformMessages = function() transformed = transformed + 1 end }
+        RP.chatPending, RP.chatPendingCount, RP.chatPendingFrames, RP.chatMarkArmed = { [7] = "x" }, 1, { [window] = true }, true
+        RP:MarkChatLines()
+        assert(transformed == 0 and RP.chatPending == nil and RP.chatMarkArmed == nil, "a chat line was rewritten inside an instance")
+        RP.chatPending, RP.chatPendingCount, RP.chatPendingFrames = { [7] = "x" }, 1, { [window] = true }
+        -- (Removed first: an error further down the suspension must not keep them installed.)
+        local savedEnd = RP.EndInspect
+        RP.EndInspect = function() error("inspect broken") end
+        assert(not pcall(RP.OnInstanceSuspend, RP) and #removed == #RP.CHAT_EVENTS and RP.chatFilter == nil,
+            "an error in the suspension kept the chat filters installed")
+        RP.EndInspect = savedEnd
+        removed = {}
+        RP.chatFilter = true
+        RP:OnInstanceSuspend()
+        assert(#removed == #RP.CHAT_EVENTS and removed[1][2] == RP.ChatBadgeFilter and RP.chatFilter == nil
+            and RP.chatPending == nil, "the chat filters stayed installed in an instance: " .. #removed)
+        assert(RP:InstallChatBadges() == false and #added == #RP.CHAT_EVENTS and later == 0,
+            "the chat filters were installed inside an instance")
+        local read = 0
+        local savedBadge = RP.ChatBadge
+        RP.ChatBadge = function() read = read + 1 end
+        assert(RP.ChatBadgeFilter(window, "CHAT_MSG_SAY", "hello", "Some Author") == false and read == 0,
+            "the badge filter read a line inside an instance")
+        RP.ChatBadge = savedBadge
+        Overlord.InstanceSuspended = false
+        -- (Installed first: an error further down the way out must not leave them out.)
+        local savedPlates = RP.RefreshPlates
+        RP.RefreshPlates = function() error("plates broken") end
+        assert(not pcall(RP.OnInstanceResume, RP) and #added == 2 * #RP.CHAT_EVENTS and RP.chatFilter == true,
+            "an error on the way out kept the chat filters from coming back")
+        RP.RefreshPlates = savedPlates
+        RP:OnInstanceResume()
+        assert(#added == 2 * #RP.CHAT_EVENTS and RP.chatFilter == true, "the chat filters did not come back on the way out")
+        -- (Restored as the test above left them: installed once.)
+        ChatFrame_RemoveMessageEventFilter, Overlord.InstanceSuspended, C_Timer = savedRemove, savedSuspended, savedTimer
+    end
     ChatFrameUtil, ChatFrame_AddMessageEventFilter = savedUtil, savedAdd
     GetCurrentRegionName, CreateFrame, _G.TargetFrame, UnitExists = savedRegion, savedCreate, savedTarget, savedExists
 end

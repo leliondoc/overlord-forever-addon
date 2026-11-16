@@ -341,4 +341,25 @@ do
     assert(shard.currentShardID == nil, "a targeted NPC was taken alone in a new context")
 end
 
-print("Layer: server field, two agreeing NPCs, player creatures skipped, helper marks, stale layer after a hop OK")
+-- 2.5.4: every layer a player says is passed on to the Layers window, which keeps it ten
+-- minutes for its list (LayerJumper NoteLayer); what the game logic reads here still forgets it
+-- after three.
+do
+    local told = {}
+    Overlord.LayerJumper = { NoteLayer = function(_, who, sid, first) told[#told + 1] = { who = who, sid = sid, first = first } end }
+    assert(shard:SetPlayerShard("Window Guest", 6868) == true, "fixture: layer refused")
+    assert(#told == 1 and told[1].who == "Window Guest" and told[1].sid == 6868, "the Layers window was not told a layer")
+    -- (Its own word only when the caller says so: a relayed copy or a name read in a payload is not.)
+    assert(told[1].first == false, "a layer said by somebody else was passed on as the player's own word")
+    shard:SetPlayerShard("Window Guest", 6868, true)
+    assert(#told == 2 and told[2].first == true, "the player's own word was not passed on as such")
+    told = { told[1] }
+    shard:SetPlayerShard("Window Guest", "not a layer")
+    assert(#told == 1, "the Layers window was told a refused layer")
+    assert(shard:GetKnownPlayerShard("Window Guest") == 6868, "fixture: layer not known")
+    now = now + 181
+    assert(shard:GetKnownPlayerShard("Window Guest") == nil, "the game logic keeps a layer past three minutes")
+    Overlord.LayerJumper = nil
+end
+
+print("Layer: server field, two agreeing NPCs, player creatures skipped, helper marks, stale layer after a hop, window told OK")

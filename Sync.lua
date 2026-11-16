@@ -821,7 +821,8 @@ function Overlord.Sync:JoinChannel(attempt, generation)
         C_Timer.After(math.max(0.1, self:ChannelOpWait()), function()
             local sync = Overlord.Sync
             if sync._joinChannelAttemptPending ~= generation then return end
-            if Overlord.InstanceSuspended then
+            -- (2.5.4: or the game already says "instance", before our own suspension.)
+            if Overlord.InstanceSuspended or (sync.InsideInstance and sync:InsideInstance()) then
                 FinishJoinAttempt()
                 return
             end
@@ -835,7 +836,7 @@ function Overlord.Sync:JoinChannel(attempt, generation)
     if self.NoteChannelOp then self:NoteChannelOp("join channel") end
     C_Timer.After(3 * attempt, function()
         if Overlord.Sync._joinChannelAttemptPending ~= generation then return end
-        if Overlord.InstanceSuspended then
+        if Overlord.InstanceSuspended or (Overlord.Sync.InsideInstance and Overlord.Sync:InsideInstance()) then
             FinishJoinAttempt()
             return
         end
@@ -3398,7 +3399,43 @@ function Overlord.Sync:OnReceiveShard(payload, sender, channel)
     local shardID = tonumber(payload)
     if shardID == nil then return end
     if Overlord.Shard and Overlord.Shard.SetPlayerShard then
-        Overlord.Shard:SetPlayerShard(sender, shardID)
+        -- 2.5.4: its own word only when the game names it as the sender. The origin of a relayed
+        -- copy is whatever its relay wrote (as for K, LR and ZS): the Layers window keeps such a
+        -- layer three minutes, not ten, and never over the player's own word (LayerJumper).
+        local own = type(sender) == "string" and sender:sub(1, 5) ~= "BNet-" and sender:sub(1, 7) ~= "Bridge-"
+            and not (self.IsUnauthenticatedRelayOrigin and self:IsUnauthenticatedRelayOrigin(sender))
+        -- (How it came: an SH of the relay is handed here as "BETA", its real transport is the
+        -- relay's own.)
+        local transport = channel
+        local net = Overlord.Relay
+        if channel == "BETA" and net and type(net.context) == "table" then transport = net.context.transport end
+        -- (By whisper, only from a player the directory knows, in the member list or, without a
+        -- list, in our book, as the layer of a presence is read: anybody can whisper.)
+        if own and transport == "WHISPER" then
+            local directory = Overlord.ChannelDirectory
+            own = directory ~= nil and directory.Known ~= nil and directory:Known(sender) and true or false
+        end
+        -- (Over Battle.net: a friend of the other faction unless the game shows that character in
+        -- ours. The Layers window lists our side only; Overlord.Shard still takes the layer.)
+        -- (In a group: the roster says which side a group mate is on.)
+        if own and (transport == "PARTY" or transport == "RAID") and self.GetGroupMemberFaction then
+            local okSide, side = pcall(self.GetGroupMemberFaction, self, sender)
+            if okSide and type(side) == "string" and side ~= Overlord.PlayerFaction then
+                own = false
+                local jumper = Overlord.LayerJumper
+                if jumper and jumper.NoteEnemy then pcall(jumper.NoteEnemy, jumper, sender) end
+            end
+        end
+        if own and transport == "BNET" then
+            local okFaction, faction = false, nil
+            if self.GetResolvedBNetPlayerFaction then okFaction, faction = pcall(self.GetResolvedBNetPlayerFaction, self, sender) end
+            if not (okFaction and faction ~= nil and faction == Overlord.PlayerFaction) then
+                own = false
+                local jumper = Overlord.LayerJumper
+                if jumper and jumper.NoteEnemy then pcall(jumper.NoteEnemy, jumper, sender) end
+            end
+        end
+        Overlord.Shard:SetPlayerShard(sender, shardID, own)
     end
 end
 
@@ -10792,7 +10829,19 @@ function Overlord.Sync:BroadcastKill(zoneId, totalKills, killScoringAtEvent,
             -- near the 200-locals limit). Communities used to supply everyone's race;
             -- on Forever only the weekly beacon and the slow LR catch-up remained.
             local syncObj = Overlord.Sync
-            local withRace = GetTime() - (syncObj._lastRaceInKillAt or -1000) >= 600
+            -- 2.5.4: without the channel our total goes to a few contacts by whisper, one per
+            -- half minute, the latest one only (SyncDirectory ChainTargets), and the race
+            -- beacon does not travel at all. The total that carried the race every 10 min
+            -- was then often never told (no contact yet right after a login, or held for
+            -- that gap and replaced by the next one): ranked everywhere, race unknown. So
+            -- every total carries it while the member-list directory carries our totals
+            -- (about 10 bytes; a known race costs its receiver nothing).
+            -- (Asked under pcall: nothing of the directory may cost us this total.)
+            local book = Overlord.ChannelDirectory
+            local asked, active = false, false
+            if book ~= nil and book.IsActive ~= nil then asked, active = pcall(book.IsActive, book) end
+            local withRace = (asked and active == true)
+                or GetTime() - (syncObj._lastRaceInKillAt or -1000) >= 600
             local payload = syncObj.BuildKillBroadcastPayload
                 and syncObj:BuildKillBroadcastPayload(
                     playerName, d.zoneId, totalKills, class or "", faction, d.campaignEpoch,
@@ -12435,6 +12484,9 @@ end
 -- Coupe toute l'activite sync (events + tickers) pour les instances
 function Overlord.Sync:Suspend()
     self._instanceSuspendAt = GetTime()
+    -- 2.5.4: our chat filters leave the game's chat handling for the whole instance (SyncAux
+    -- RemoveChatFilters: a filter that reads nothing still taints the line being handled).
+    if self.RemoveChatFilters then pcall(self.RemoveChatFilters, self) end
     if self.DropPagedServing then self:DropPagedServing() end
     syncFrame:UnregisterAllEvents()
     if self.OnNetworkSuspend then self:OnNetworkSuspend() end
@@ -12733,6 +12785,8 @@ function Overlord.Sync:Resume()
     -- Voir Initialize() : jamais lus en instance, ni compares avant canaccessvalue.
     pcall(syncFrame.RegisterEvent, syncFrame, "CHAT_MSG_CHANNEL_NOTICE")
     pcall(syncFrame.RegisterEvent, syncFrame, "CHAT_MSG_CHANNEL_NOTICE_USER")
+    -- 2.5.4: the chat filters taken out on the way in (Suspend) come back.
+    if self.InstallWhisperOfflineChatFilter then pcall(self.InstallWhisperOfflineChatFilter, self) end
     -- Leaving an instance is one of the three moments the channel is tried again.
     if self.OnNetworkResume then self:OnNetworkResume() end
     -- 2.2.2: the join backoff starts again (failures during loading screens are not the

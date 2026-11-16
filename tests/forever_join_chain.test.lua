@@ -315,11 +315,119 @@ end
 -- 2.3.1: no temporary pad channels any more. Ours waits for the player's list to be calm, then
 -- takes the lowest free number; nothing of the player's moves. (His character on the beta: a
 -- hole at /4, /3 and /5 kept for Trade and Local Trade.)
+-- 2.5.4: that free number below his channels makes the calm last 10 s the first time (it could
+-- be a channel of the game still to come); it outlasted the wait, so it is his own: remembered
+-- for this character, and the next login waits the usual 2 s.
+if OverlordDB then OverlordDB.channelHoles = nil end
 local at, startedAt = seat({ [1] = "LocalDefense", [2] = "General" }, { [3] = "Trade", [5] = "TradeLocal" }, 9)
+assert(at == 0 and #joins == 0, "ours joined within 9 s with a number free below the player's channels")
+at, startedAt = seat({ [1] = "LocalDefense", [2] = "General" }, { [3] = "Trade", [5] = "TradeLocal" }, 20)
 assert(at == 4, "ours did not take the lowest free number: /" .. at)
 assert(held[1] == "LocalDefense" and held[2] == "General" and kept[3] and kept[5], "a channel of the player moved")
 assert(#tempJoins == 0 and #left == 0, "a pad was joined or a channel left: " .. #tempJoins .. "/" .. #left)
-assert(#joins == 1 and joins[1].at >= startedAt + 2, "our join did not wait for the calm list")
+assert(#joins == 1 and joins[1].at >= startedAt + 10, "our join did not wait 10 s for a list with a free number")
+local myName = sync:GetPlayerFullName()
+-- (Remembered only once the same numbers are still held a minute after our join.)
+assert(sync.CHANNEL_HOLE_CONFIRM_SEC == 60 and not (OverlordDB.channelHoles and OverlordDB.channelHoles[myName]),
+    "a free number was remembered before it was seen again after the join")
+pump(60)
+assert(OverlordDB.channelHoles and OverlordDB.channelHoles[myName] == "1,2,3,5",
+    "a free number that outlasted the wait was not remembered: " .. tostring(OverlordDB.channelHoles and OverlordDB.channelHoles[myName]))
+at, startedAt = seat({ [1] = "LocalDefense", [2] = "General" }, { [3] = "Trade", [5] = "TradeLocal" }, 9)
+assert(at == 4 and #joins == 1 and joins[1].at >= startedAt + 2 and joins[1].at < startedAt + 9,
+    "a free number already waited for was waited for again")
+-- Another list (he left a channel since): waited for in full again, and remembered in its turn.
+at, startedAt = seat({ [2] = "General" }, { [3] = "Trade", [5] = "TradeLocal" }, 9)
+assert(at == 0, "a new free number was not waited for")
+at = seat({ [2] = "General" }, { [3] = "Trade", [5] = "TradeLocal" }, 20)
+assert(at == 1 and OverlordDB.channelHoles[myName] == "1,2,3,5", "the new list was remembered before its minute")
+pump(60)
+assert(OverlordDB.channelHoles[myName] == "2,3,5", "the new list was not remembered")
+-- A very slow login: the game's first channels stay alone for the whole wait, ours joins at /1,
+-- and General only comes afterwards (pushed to /2). The list changed after our join: it is NOT
+-- remembered, or every later login would wait 2 s only and repeat the fault for good.
+do
+    pending, joins, printed = {}, {}, {}
+    sync._joinChannelAttemptPending, sync._channelSeat, sync._channelPads = nil, nil, nil
+    sync._joinChainFailures, sync._joinRetryAt = nil, nil
+    OverlordDB.channelRefusedAt, OverlordDB.channelHoles = nil, nil
+    model({ [6] = "LookingForGroup", [7] = "Trade" })
+    sync:JoinChannel()
+    pump(20)
+    assert(#joins == 1 and GetChannelName(channel) == 1, "fixture: ours did not join after the whole wait")
+    held[lowestFree()] = "General"
+    pump(60)
+    assert(OverlordDB.channelHoles == nil, "a list that changed after our join was remembered: "
+        .. tostring(OverlordDB.channelHoles and OverlordDB.channelHoles[myName]))
+    -- The same wait, and an instance entered before the minute: nothing is remembered there.
+    pending, joins = {}, {}
+    sync._joinChannelAttemptPending, sync._channelSeat = nil, nil
+    sync._joinChainFailures, sync._joinRetryAt = nil, nil
+    model({ [6] = "LookingForGroup", [7] = "Trade" })
+    sync:JoinChannel()
+    pump(20)
+    Overlord.InstanceSuspended = true
+    pump(60)
+    Overlord.InstanceSuspended = false
+    assert(OverlordDB.channelHoles == nil, "a list was remembered from inside an instance")
+    -- A remembered list is looked at again a minute after each join: still the same, it stays;
+    -- contradicted (the channel that was missing came back after our join), it is forgotten and
+    -- the next login waits in full again. Kept, it cut the wait to 2 s for good.
+    OverlordDB.channelHoles = { [myName] = "6,7" }
+    pending, joins = {}, {}
+    sync._joinChannelAttemptPending, sync._channelSeat = nil, nil
+    model({ [6] = "LookingForGroup", [7] = "Trade" })
+    local began = now
+    sync:JoinChannel()
+    pump(8)
+    assert(#joins == 1 and joins[1].at < began + 8, "a remembered list was waited for in full")
+    pump(60)
+    assert(OverlordDB.channelHoles and OverlordDB.channelHoles[myName] == "6,7", "a remembered list still true was forgotten")
+    pending, joins = {}, {}
+    sync._joinChannelAttemptPending, sync._channelSeat = nil, nil
+    model({ [6] = "LookingForGroup", [7] = "Trade" })
+    sync:JoinChannel()
+    pump(8)
+    held[lowestFree()] = "General"
+    pump(60)
+    assert(OverlordDB.channelHoles == nil, "a remembered list contradicted after the join was kept")
+    -- The game already says "instance" before our own suspension: the wait stops, nothing joins.
+    pending, joins = {}, {}
+    sync._joinChannelAttemptPending, sync._channelSeat = nil, nil
+    model({ [1] = "General" })
+    sync:JoinChannel()
+    local savedInside = IsInInstance
+    IsInInstance = function() return true, "pvp" end
+    pump(20)
+    IsInInstance = savedInside
+    assert(#joins == 0 and sync._joinChannelAttemptPending == nil, "our channel was joined while the game said instance")
+    OverlordDB.channelHoles = { [myName] = "2,3,5" }
+end
+-- The report of 2026-11-16: every number held once the game is done (General /1 ... Trade /7),
+-- but Trade and LookingForGroup come first and General a few seconds later. Ours waits for the
+-- free numbers below them, lands after the last one, nothing of the player's moves, and nothing
+-- is remembered (no number stayed free).
+do
+    pending, joins, printed = {}, {}, {}
+    sync._joinChannelAttemptPending, sync._channelSeat, sync._channelPads = nil, nil, nil
+    sync._joinChainFailures, sync._joinRetryAt = nil, nil
+    OverlordDB.channelRefusedAt = nil
+    assert(OverlordDB.channelHoles[myName] == "2,3,5", "fixture: the list remembered above is gone")
+    model({ [6] = "LookingForGroup", [7] = "Trade" })
+    local began = now
+    sync:JoinChannel()
+    pump(4)
+    assert(#joins == 0, "ours joined at /1 while the game's first channels were still to come")
+    held[1], held[2] = "General", "LocalDefense"
+    pump(3)
+    held[3], held[4], held[5] = "Services", "TradeLocal", "OOC"
+    pump(20)
+    assert(#joins == 1 and GetChannelName(channel) == 8, "ours did not land after the player's last channel: /"
+        .. GetChannelName(channel))
+    assert(held[1] == "General" and held[7] == "Trade", "a channel of the player moved")
+    assert(joins[1].at >= began + 9 and joins[1].at < began + 9 + 5, "a full list waited more than its usual 2 s")
+    assert(OverlordDB.channelHoles == nil, "a list without a free number kept what an older list had left")
+end
 -- A new character: General, Trade kept, LocalDefense.
 at = seat({ [1] = "General", [3] = "LocalDefense" }, { [2] = "Trade" })
 assert(at == 4 and held[1] == "General" and held[3] == "LocalDefense" and #tempJoins == 0,

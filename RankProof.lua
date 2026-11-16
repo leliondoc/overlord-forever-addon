@@ -1992,6 +1992,12 @@ end
 local function MarkChatLinesLater() pcall(RP.MarkChatLines, RP) end
 function RP:MarkChatLines()
     self.chatMarkAt = GetTime()
+    -- (2.5.4: never in an instance: what was pending is dropped.)
+    if InInstance() then
+        self.chatMarkArmed = nil
+        self.chatPending, self.chatPendingCount, self.chatPendingFrames = nil, nil, nil
+        return
+    end
     local frames = self.chatPendingFrames
     local frame = self.chatPending and frames and next(frames)
     if frame then
@@ -2009,6 +2015,9 @@ end
 
 RP.CHAT_PENDING_MAX, RP.CHAT_MARK_GAP = 32, 0.25
 function RP.ChatBadgeFilter(chatFrame, _, msg, author, ...)
+    -- (2.5.4: removed in an instance, RemoveChatBadges; on a client whose chat cannot remove a
+    -- filter, nothing is read nor written there.)
+    if Overlord.InstanceSuspended then return false end
     local ok, mark = pcall(RP.ChatBadge, RP, author)
     if not ok or not mark or not Accessible(msg) or type(msg) ~= "string" then return false end
     -- (The line's id: the event's eleventh argument, the ninth after the text and the author.)
@@ -2036,8 +2045,22 @@ function RP.ChatBadgeFilter(chatFrame, _, msg, author, ...)
     return false, mark .. msg, author, ...
 end
 
+-- 2.5.4: never in an instance. A filter is a function of ours the game calls while it handles a
+-- chat line, which taints its own handling of that line (the battleground errors of 2026-11-16,
+-- see SyncAux RemoveChatFilters): the filters leave on the way in and come back on the way out
+-- (OnInstanceSuspend, OnInstanceResume), and no line of a chat window is rewritten there.
 function RP:InstallChatBadges()
     if self.chatFilter then return true end
+    if InInstance() then
+        -- (Only the game says "instance", our own suspension over or not begun: a login inside
+        -- one, a way out the game has not finished. Asked again a few times; the way out asks too.)
+        if not Overlord.InstanceSuspended and C_Timer and C_Timer.After and (self.chatFilterTries or 0) < 6 then
+            self.chatFilterTries = (self.chatFilterTries or 0) + 1
+            C_Timer.After(5, function() pcall(RP.InstallChatBadges, RP) end)
+        end
+        return false
+    end
+    self.chatFilterTries = nil
     local add = ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter
     if type(add) ~= "function" then add = ChatFrame_AddMessageEventFilter end
     if type(add) ~= "function" then return false end
@@ -2047,6 +2070,19 @@ function RP:InstallChatBadges()
     end
     self.chatFilter = true
     return all
+end
+
+function RP:RemoveChatBadges()
+    -- (A pass armed before the way in rewrites nothing: MarkChatLines.)
+    self.chatPending, self.chatPendingCount, self.chatPendingFrames = nil, nil, nil
+    self.chatFilterTries = nil
+    if not self.chatFilter then return true end
+    local remove = ChatFrameUtil and ChatFrameUtil.RemoveMessageEventFilter
+    if type(remove) ~= "function" then remove = ChatFrame_RemoveMessageEventFilter end
+    if type(remove) ~= "function" then return false end
+    for _, event in ipairs(self.CHAT_EVENTS) do pcall(remove, event, self.ChatBadgeFilter) end
+    self.chatFilter = nil
+    return true
 end
 
 -- The badge for a friendly player's unit (0 = none): never for another character than the
@@ -2137,6 +2173,8 @@ function RP:RegisterLiveEvents(on)
 end
 
 function RP:OnInstanceSuspend()
+    -- (First: nothing below may keep the chat filters installed in an instance.)
+    pcall(self.RemoveChatBadges, self)
     self:RegisterLiveEvents(false)
     self:EndInspect()
     self:HideAllPlates()
@@ -2144,6 +2182,8 @@ function RP:OnInstanceSuspend()
 end
 
 function RP:OnInstanceResume()
+    -- (First: nothing below may keep the chat filters from coming back.)
+    pcall(self.InstallChatBadges, self)
     self:RegisterLiveEvents(true)
     self:RefreshPlates()
 end
