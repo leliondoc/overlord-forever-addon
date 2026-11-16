@@ -202,8 +202,11 @@ function LJ:NoteEnemy(name)
         self.enemyCount = self.enemyCount + 1
         self.enemies[key] = true
     end
-    -- (2.5.4: and off the Layers window, which lists our side only.)
-    if self.ForgetLayer then self:ForgetLayer(name) end
+    -- (2.5.4: and off the Layers window, which lists our side only. Never a row that is the
+    -- player's own word on our side: a mark comes from an alert, whose capturer name is whatever
+    -- a relay wrote, and must not hide an ally. Its own word wins: NoteLayer.)
+    local row = self.seen and self.seen[key]
+    if row and not row.first and self.ForgetLayer then self:ForgetLayer(name) end
 end
 
 -- 2.5.4: the Layers window lists our own faction only: nobody of the other side can invite us,
@@ -318,10 +321,18 @@ function LJ:NoteLayer(name, layer, firstHand)
     local key = NameKey(name)
     -- (The name is shown as it came: nothing the game would read as a colour, a texture or a link.)
     if not key or not layer or name:find("[%c|]") then return end
-    -- (Our side only: a name an alert marked as the other side is not kept, nor one already listed.)
+    -- Our side only. firstHand is a word the player said itself on our side (the channel, a
+    -- whisper, the guild, a group mate of our faction): the strongest thing we hold, so it lists
+    -- the player whatever a mark says and takes the mark back (an alert named it by mistake, or
+    -- a forged one did). A word that is not its own is not kept for a marked name.
     if self.enemies[key] then
-        if self.seen[key] then self:ForgetLayer(name) end
-        return
+        if not firstHand then
+            local listed = self.seen[key]
+            if listed and not listed.first then self:ForgetLayer(name) end
+            return
+        end
+        self.enemies[key] = nil
+        self.enemyCount = math.max(0, (self.enemyCount or 1) - 1)
     end
     local at, row = Now(), self.seen[key]
     -- Not the player's own word, over its own word still listed: nothing while that word is fresh
@@ -331,7 +342,7 @@ function LJ:NoteLayer(name, layer, firstHand)
     if row and row.first and not firstHand and at - row.at < self.SEEN_SEC
         and (layer == row.layer or at - row.at < self.SEEN_SECOND_SEC) then return end
     if not row then
-        if self:KnownOtherSide(name) then return end
+        if not firstHand and self:KnownOtherSide(name) then return end
         if self.seenCount >= self.LIST_MAX then
             -- (A word that is not its player's own never pushes an own word out: only the lapsed
             -- names make room for it, and without room it is not kept.)
@@ -365,7 +376,7 @@ function LJ:KnownPlayers(unsorted)
     if not shard then return out end
     local now, me = Now(), self:MyKey()
     for key, known in pairs(self.seen) do
-        if now - known.at >= self.SeenLife(known) or self.enemies[key] then
+        if now - known.at >= self.SeenLife(known) or (self.enemies[key] and not known.first) then
             self.seen[key] = nil
             self.seenCount = math.max(0, self.seenCount - 1)
         elseif key ~= me and (not shard.PartyInviteTargetIsUsable or shard:PartyInviteTargetIsUsable(known.name)) then
@@ -1512,6 +1523,19 @@ local function FactionColor(name)
     return color
 end
 
+-- Found on the other side while painting (FactionColor): the game itself shows that player there,
+-- which no word outweighs. Marked and off the memory, own word or not; the next repaint lists
+-- without them. Their Join button is already hidden on this one.
+function LJ:DropPaintedOther()
+    local found = self.paintedOther
+    if not found then return end
+    self.paintedOther = nil
+    for name in pairs(found) do
+        self:NoteEnemy(name)
+        self:ForgetLayer(name)
+    end
+end
+
 -- A row's second column: the layer (or "you are here"), and from a minute on how long ago that
 -- player said it (2.5.4: a layer is listed ten minutes; its player may have moved since).
 function LJ:RowInfo(data)
@@ -1549,12 +1573,7 @@ function LJ:PaintWindow(f)
             row:Hide()
         end
     end
-    -- (Found on the other side while painting: off the memory; the next repaint lists without them.)
-    if self.paintedOther then
-        local found = self.paintedOther
-        self.paintedOther = nil
-        for name in pairs(found) do self:NoteEnemy(name) end
-    end
+    self:DropPaintedOther()
     f.emptyText:SetShown(#rows == 0)
     if #rows > self.ROWS then
         f.countText:SetText(string.format("%d-%d / %d", self.scroll + 1, math.min(#rows, self.scroll + self.ROWS), #rows))

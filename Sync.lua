@@ -3417,6 +3417,15 @@ function Overlord.Sync:OnReceiveShard(payload, sender, channel)
         end
         -- (Over Battle.net: a friend of the other faction unless the game shows that character in
         -- ours. The Layers window lists our side only; Overlord.Shard still takes the layer.)
+        -- (In a group: the roster says which side a group mate is on.)
+        if own and (transport == "PARTY" or transport == "RAID") and self.GetGroupMemberFaction then
+            local okSide, side = pcall(self.GetGroupMemberFaction, self, sender)
+            if okSide and type(side) == "string" and side ~= Overlord.PlayerFaction then
+                own = false
+                local jumper = Overlord.LayerJumper
+                if jumper and jumper.NoteEnemy then pcall(jumper.NoteEnemy, jumper, sender) end
+            end
+        end
         if own and transport == "BNET" then
             local okFaction, faction = false, nil
             if self.GetResolvedBNetPlayerFaction then okFaction, faction = pcall(self.GetResolvedBNetPlayerFaction, self, sender) end

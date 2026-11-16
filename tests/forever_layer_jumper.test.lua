@@ -169,7 +169,7 @@ local function know(c, rows)
         c.shard.knownShards[row[1]] = row[2]
         local node = { key = row[1], expiresAt = now + 180, prev = prev }
         prev = node
-        c.LJ:NoteLayer(row[1], row[2], true)
+        c.LJ:NoteLayer(row[1], row[2], row[3] ~= false)
         local seen = c.LJ.seen[row[1]:lower()]
         if seen then seen.at = now - (#rows - i) * 0.001 end
     end
@@ -441,29 +441,60 @@ end
 -- 6c. 2.5.4: the window lists our own faction only (nobody of the other side can invite us; a
 -- Battle.net friend of the other faction was listed with a Join button). A name an alert marked,
 -- a Battle.net friend the game shows on the other side, a player our ranking holds there: never
--- kept; marked while listed: dropped at once.
+-- kept on a word that is not its own; marked while listed that way: dropped at once.
 do
     local LJ, O = ann.LJ, ann.env.Overlord
     local savedSync, savedLb = O.Sync, O.Leaderboard
     know(ann, {})
     LJ.enemies, LJ.enemyCount = {}, 0
     LJ:NoteLayer("Ally One", 1305, true)
-    LJ:NoteLayer("Red Capturer", 1305, true)
+    LJ:NoteLayer("Red Capturer", 1305)
     assert(#LJ:KnownPlayers() == 2, "fixture: two players listed")
     LJ:NoteEnemy("Red Capturer")
     assert(LJ.seen["red capturer"] == nil and LJ.seenCount == 1 and #LJ:KnownPlayers() == 1,
         "a player marked as the other side stayed in the Layers window")
-    LJ:NoteLayer("Red Capturer", 1306, true)
-    assert(LJ.seen["red capturer"] == nil, "a player of the other side was listed again by its next word")
+    LJ:NoteLayer("Red Capturer", 1306)
+    assert(LJ.seen["red capturer"] == nil, "a player of the other side was listed again by the next word about it")
     -- (A mark set without NoteEnemy, a row older than it: the list drops it when it is read.)
-    LJ:NoteLayer("Late Mark", 1305, true)
+    LJ:NoteLayer("Late Mark", 1305)
     LJ.enemies["late mark"] = true
     assert(#LJ:KnownPlayers() == 1 and LJ.seen["late mark"] == nil and LJ.seenCount == 1, "a row marked since was still listed")
-    -- (The same, met by its player's next word before the list is read.)
-    LJ:NoteLayer("Late Two", 1305, true)
+    -- (The same, met by the next word about that player before the list is read.)
+    LJ:NoteLayer("Late Two", 1305)
     LJ.enemies["late two"] = true
-    LJ:NoteLayer("Late Two", 1307, true)
-    assert(LJ.seen["late two"] == nil and LJ.seenCount == 1, "a row marked since was renewed by its player's next word")
+    LJ:NoteLayer("Late Two", 1307)
+    assert(LJ.seen["late two"] == nil and LJ.seenCount == 1, "a row marked since was renewed by the next word about it")
+    -- A mark comes from an alert, whose capturer name is whatever a relay wrote: it never hides a
+    -- player listed by its own word on our side (one modified client could take any ally off
+    -- everybody's window), and that player's next own word takes the mark back.
+    LJ.enemies, LJ.enemyCount = {}, 0
+    LJ:NoteEnemy("Ally One")
+    assert(LJ.enemies["ally one"] and LJ.enemyCount == 1, "fixture: the ally is marked")
+    assert(LJ.seen["ally one"] and #LJ:KnownPlayers() == 1 and LJ.seen["ally one"] and LJ.seenCount == 1,
+        "a mark hid a player listed by its own word")
+    LJ:NoteLayer("Ally One", 1399)
+    assert(LJ.seen["ally one"] and LJ.seen["ally one"].layer == 1305 and LJ.seen["ally one"].first == true and LJ.enemies["ally one"],
+        "a word that is not its own changed a marked player's own row, or took the mark back")
+    LJ:NoteLayer("Ally One", 1310, true)
+    assert(LJ.enemies["ally one"] == nil and LJ.enemyCount == 0 and LJ.seen["ally one"].layer == 1310,
+        "a player's own word did not take a mark back")
+    -- (Marked before it was ever listed: a word about it is refused, its own word lists it.)
+    LJ:NoteEnemy("Named Ally")
+    LJ:NoteLayer("Named Ally", 1305)
+    assert(LJ.seen["named ally"] == nil and LJ.enemies["named ally"], "a word about a marked player listed it")
+    LJ:NoteLayer("Named Ally", 1305, true)
+    assert(LJ.seen["named ally"] and LJ.seen["named ally"].first == true and LJ.enemies["named ally"] == nil
+        and LJ.enemyCount == 0 and LJ.seenCount == 2, "a marked player's own word did not list it")
+    LJ:ForgetLayer("Named Ally")
+    -- What the game itself shows outweighs any word: a listed player it shows on the other side
+    -- while the window is painted leaves the list, own word or not, and is marked.
+    LJ:NoteLayer("Seen Red", 1305, true)
+    LJ.paintedOther = { ["Seen Red"] = true }
+    LJ:DropPaintedOther()
+    assert(LJ.seen["seen red"] == nil and LJ.enemies["seen red"] and LJ.paintedOther == nil and LJ.seenCount == 1
+        and LJ.seen["ally one"], "a player the game shows on the other side stayed listed")
+    LJ:DropPaintedOther()
+    LJ.enemies, LJ.enemyCount = {}, 0
     -- A Battle.net friend the game shows in the other faction, a player the ranking holds there.
     O.Sync = setmetatable({ GetResolvedBNetPlayerFaction = function(_, who)
         return who == "Bnet Horde" and "Horde" or who == "Bnet Ally" and "Alliance" or nil
@@ -474,10 +505,14 @@ do
         return nil
     end }
     for _, who in ipairs({ "Bnet Horde", "Bnet Ally", "Ranked Horde", "Ranked Ally", "Nobody Knows" }) do
-        LJ:NoteLayer(who, 1305, true)
+        LJ:NoteLayer(who, 1305)
     end
     assert(LJ.seen["bnet horde"] == nil and LJ.seen["ranked horde"] == nil, "a player known on the other side was listed")
     assert(LJ.seen["bnet ally"] and LJ.seen["ranked ally"] and LJ.seen["nobody knows"], "a player of ours, or of no known side, was left out")
+    -- (Its own word on our side, the channel or a whisper of our faction: listed whatever a
+    -- ranking row says of that name; a row is network data, the way the word came is not.)
+    LJ:NoteLayer("Ranked Horde", 1305, true)
+    assert(LJ.seen["ranked horde"] and LJ.seen["ranked horde"].first == true, "a player's own word on our side was refused on a ranking row")
     assert(LJ:KnownOtherSide("Bnet Horde") == true and LJ:KnownOtherSide("Ranked Ally") == false
         and LJ:KnownOtherSide("Nobody Knows") == false, "the side of a player from what we hold")
     O.Sync, O.Leaderboard = savedSync, savedLb
@@ -520,13 +555,28 @@ do
     assert(dana.LJ:IsEnemy("Tom Raider") and dana.LJ:IsEnemy("tom raider-SomeRealm"), "a noted enemy is not known as one")
     assert(dana.LJ:ChatLink("Tom Raider", 1305, ", layer #1305") == ", |cff71d5ff|Haddon:Overlord:layer::1305|h[layer #1305]|h|r",
         "the link of an enemy's layer names him: " .. tostring(dana.LJ:ChatLink("Tom Raider", 1305, ", layer #1305")))
-    know(dana, { { "Tom Raider", 1305 }, { "Bob Helper", 1305 } })
+    -- (His layer as an alert gave it, not his own word: he is not even listed.)
+    know(dana, { { "Tom Raider", 1305, false }, { "Bob Helper", 1305 } })
     local asked = {}
     for _, cand in ipairs(dana.LJ:CandidatesFor(1305, "Tom Raider")) do asked[#asked + 1] = cand.name end
     assert(table.concat(asked, ",") == "Bob Helper", "an enemy is among the players asked: " .. table.concat(asked, ","))
+    assert(dana.LJ.seen["tom raider"] == nil, "a marked player was listed on a word that is not its own")
+    -- (2.5.4: marked while listed by his own word on our side: he stays in the window, an alert
+    -- cannot hide him, and is not asked until his own word takes the mark back.)
+    dana.LJ.enemies, dana.LJ.enemyCount = {}, 0
+    know(dana, { { "Tom Raider", 1305 }, { "Bob Helper", 1305 } })
+    dana.LJ:NoteEnemy("Tom Raider")
+    asked = {}
+    for _, cand in ipairs(dana.LJ:CandidatesFor(1305, "Tom Raider")) do asked[#asked + 1] = cand.name end
+    assert(table.concat(asked, ",") == "Bob Helper", "a marked player is among the players asked: " .. table.concat(asked, ","))
+    local shown = 0
     for _, row in ipairs(dana.LJ:KnownPlayers()) do
-        if row.name == "Tom Raider" then assert(row.enemy, "the window offers an enemy as a helper") end
+        if row.name == "Tom Raider" then
+            shown = shown + 1
+            assert(row.enemy, "the window offers a marked player as a helper")
+        end
     end
+    assert(shown == 1, "a mark hid a player listed by his own word: " .. shown)
     -- What the game shows of a player comes first: an ally seen as such stays one.
     dana.LJ:NoteEnemy("Bob Helper")
     local savedLive = dana.env.Overlord.Sync.GetLivePlayerFaction

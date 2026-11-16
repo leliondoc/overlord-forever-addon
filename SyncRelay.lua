@@ -2887,18 +2887,25 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         -- 2.5.4: over Battle.net it is a friend of the other faction unless the game itself shows
         -- that character in ours (the rule of the rank claim above): its layer still serves the
         -- captures (Overlord.Shard), the Layers window lists our side only.
-        if layer and transport == "BNET" and addon.LayerJumper and addon.LayerJumper.NoteEnemy then
+        -- (In a group: the roster says which side a group mate is on, as for the rank claim.)
+        local ourSide = true
+        if layer and transport == "BNET" then
             local okFaction, faction = false, nil
             if sync.GetResolvedBNetPlayerFaction then
                 okFaction, faction = pcall(sync.GetResolvedBNetPlayerFaction, sync, origin)
             end
-            if not (okFaction and faction ~= nil and faction == addon.PlayerFaction) then
-                pcall(addon.LayerJumper.NoteEnemy, addon.LayerJumper, origin)
-            end
+            ourSide = okFaction and faction ~= nil and faction == addon.PlayerFaction or false
+        elseif layer and (transport == "PARTY" or transport == "RAID") and sync.GetGroupMemberFaction then
+            local okSide, side = pcall(sync.GetGroupMemberFaction, sync, origin)
+            if okSide and type(side) == "string" and side ~= addon.PlayerFaction then ourSide = false end
+        end
+        if layer and not ourSide and addon.LayerJumper and addon.LayerJumper.NoteEnemy then
+            pcall(addon.LayerJumper.NoteEnemy, addon.LayerJumper, origin)
         end
         if layer and addon.Shard and addon.Shard.SetPlayerShard then
-            -- (2.5.4: true = its own word, see Shard:SetPlayerShard.)
-            local okLayer, taken = pcall(addon.Shard.SetPlayerShard, addon.Shard, origin, layer, true)
+            -- (2.5.4: the last argument, its own word ON OUR SIDE, see Shard:SetPlayerShard: only
+            -- such a word lists a player in the Layers window whatever a mark says.)
+            local okLayer, taken = pcall(addon.Shard.SetPlayerShard, addon.Shard, origin, layer, ourSide)
             if not okLayer then self.stats.lastError = tostring(taken) end
             -- (A layer said and refused, out of range or no room for one more player: the layer
             -- the window listed for that player is no longer its own word either.)

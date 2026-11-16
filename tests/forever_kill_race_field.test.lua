@@ -144,10 +144,27 @@ do
     Overlord.Relay.context = { transport = "BNET", hops = 0 }
     s:OnReceiveShard("6883", "Friend Theirs", "BETA")
     s:OnReceiveShard("6884", "Friend Ours", "BETA")
+    -- In a group the roster says which side a group mate is on: the other faction's SH is never
+    -- an own word of our side, heard directly or handed over by the relay.
+    local theirs = Overlord.PlayerFaction == "Horde" and "Alliance" or "Horde"
+    local savedGroup = s.GetGroupMemberFaction
+    s.GetGroupMemberFaction = function(_, who)
+        return who == "Group Foe" and theirs or who == "Group Mate" and Overlord.PlayerFaction or nil
+    end
+    Overlord.Relay.context = nil
+    s:OnReceiveShard("6885", "Group Foe", "PARTY")
+    s:OnReceiveShard("6886", "Group Mate", "RAID")
+    s:OnReceiveShard("6887", "Group Unknown", "PARTY")
+    Overlord.Relay.context = { transport = "RAID", hops = 0 }
+    s:OnReceiveShard("6888", "Group Foe", "BETA")
+    s.GetGroupMemberFaction = savedGroup
+    assert(said[6][3] == false and said[7][3] == true and said[8][3] == true and said[9][3] == false,
+        "an SH in a group: the other faction's is an own word of our side, or a mate's is not")
+    assert(#marked == 3 and marked[2] == "Group Foe" and marked[3] == "Group Foe", "a group mate of the other faction was not marked: " .. #marked)
     Overlord.Relay.context = nil
     assert(said[1][3] == false and said[2][3] == true, "a relayed-as-BETA whisper: only a player the directory knows is an own word")
     assert(said[3][3] == true, "an SH heard on the channel is no longer its sender's own word")
-    assert(said[4][3] == false and said[5][3] == true and #marked == 1 and marked[1] == "Friend Theirs",
+    assert(said[4][3] == false and said[5][3] == true and marked[1] == "Friend Theirs",
         "an SH over Battle.net: the other faction is not an own word and is marked, a friend of ours is")
     Overlord.LayerJumper, s.GetResolvedBNetPlayerFaction = savedJumper, savedResolved
     said = { {}, {}, {}, {} }

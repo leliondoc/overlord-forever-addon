@@ -253,6 +253,15 @@ do
     presence("Channel Player", "2.5.4~t0~y" .. layout .. "~q0~s33" .. tail)
     assert(#others == 1 and others[1] == "Friend Theirs", "the other side over Battle.net: marked " .. #others)
     assert(#taken == takenBefore + 3, "a layer heard over Battle.net no longer reaches Overlord.Shard")
+    -- (Its own word ON OUR SIDE, the third argument: only that lists a player whatever a mark says.)
+    assert(taken[takenBefore + 1][3] == false and taken[takenBefore + 2][3] == true and taken[takenBefore + 3][3] == true,
+        "the layer of a Battle.net friend of the other side was handed over as an own word of our side, or ours was not")
+    -- In a group the roster says which side a group mate is on (GetGroupMemberFaction above).
+    presence("Group Foe", "2.5.4~t0~y" .. layout .. "~q0~s34" .. tail, "PARTY")
+    presence("Group Mate", "2.5.4~t0~y" .. layout .. "~q0~s35" .. tail, "RAID")
+    assert(#taken == takenBefore + 5 and taken[takenBefore + 4][3] == false and taken[takenBefore + 5][3] == true,
+        "a group mate of the other faction: its layer as an own word of our side, or a mate of ours not")
+    assert(#others == 2 and others[2] == "Group Foe", "a group mate of the other faction was not marked: " .. #others)
     me.Sync.GetResolvedBNetPlayerFaction = savedResolved
     me.LayerJumper = { ForgetLayer = function(_, who) dropped[#dropped + 1] = who end }
     -- (No directory at all: nothing by whisper, as before.)

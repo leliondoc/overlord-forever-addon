@@ -1092,9 +1092,10 @@ function Overlord.Shard:IsPlayerHelper(playerName)
 end
 
 -- Enregistre le shardID d'un autre joueur (recu via sync)
--- firstHand (2.5.4): said by that player itself, the game naming it as the sender (its presence,
--- its own SH). A relayed copy or a name read in a payload is not: only the Layers window reads
--- the difference (LayerJumper NoteLayer).
+-- firstHand (2.5.4): said by that player itself on our side, the game naming it as the sender
+-- (its presence, its own SH; never over Battle.net from a friend the game does not show in our
+-- faction). A relayed copy or a name read in a payload is not: only the Layers window reads the
+-- difference (LayerJumper NoteLayer).
 function Overlord.Shard:SetPlayerShard(playerName, shardID, firstHand)
     if not playerName or shardID == nil then return end
     local sid = CoerceShardId(shardID)
