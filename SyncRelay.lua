@@ -2875,12 +2875,41 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         -- 2.2.0: its layer ("~s", see Send), first-hand only, as an SH from it would be. By whisper
         -- only from a player of the channel's member list (anybody can whisper).
         local directory = addon.ChannelDirectory
-        local ownWord = #p.path == 1 and (transport ~= "WHISPER" or (directory and directory.Lists
-            and directory:Lists(origin)))
+        -- 2.5.4: "of the member list" as the directory itself means it (Known): read in the list
+        -- now or, while the game gives us no list at all, a player of our book (greeted from a
+        -- list of the last days, and who answered). Asked of the list alone, a client without a
+        -- list dropped every whispered layer and helper mark: its Layers window stayed empty
+        -- (0 players of 39 on a bench front, with 21 contacts), and the game keeps most clients
+        -- out of the list while it refuses the channel.
+        local ownWord = #p.path == 1 and (transport ~= "WHISPER" or (directory and directory.Known
+            and directory:Known(origin))) and true or false
         local layer = ownWord and tonumber(p.payload:match("~s(%d+)~")) or nil
+        -- 2.5.4: over Battle.net it is a friend of the other faction unless the game itself shows
+        -- that character in ours (the rule of the rank claim above): its layer still serves the
+        -- captures (Overlord.Shard), the Layers window lists our side only.
+        if layer and transport == "BNET" and addon.LayerJumper and addon.LayerJumper.NoteEnemy then
+            local okFaction, faction = false, nil
+            if sync.GetResolvedBNetPlayerFaction then
+                okFaction, faction = pcall(sync.GetResolvedBNetPlayerFaction, sync, origin)
+            end
+            if not (okFaction and faction ~= nil and faction == addon.PlayerFaction) then
+                pcall(addon.LayerJumper.NoteEnemy, addon.LayerJumper, origin)
+            end
+        end
         if layer and addon.Shard and addon.Shard.SetPlayerShard then
-            local okLayer, layerError = pcall(addon.Shard.SetPlayerShard, addon.Shard, origin, layer)
-            if not okLayer then self.stats.lastError = tostring(layerError) end
+            -- (2.5.4: true = its own word, see Shard:SetPlayerShard.)
+            local okLayer, taken = pcall(addon.Shard.SetPlayerShard, addon.Shard, origin, layer, true)
+            if not okLayer then self.stats.lastError = tostring(taken) end
+            -- (A layer said and refused, out of range or no room for one more player: the layer
+            -- the window listed for that player is no longer its own word either.)
+            if okLayer and taken == false and addon.LayerJumper and addon.LayerJumper.ForgetLayer then
+                pcall(addon.LayerJumper.ForgetLayer, addon.LayerJumper, origin)
+            end
+        elseif ownWord and not layer and addon.LayerJumper and addon.LayerJumper.ForgetLayer then
+            -- 2.5.4: its own presence names no layer: the Layers window, which keeps a layer
+            -- ten minutes, lets go of that player at once.
+            local okForget, forgetError = pcall(addon.LayerJumper.ForgetLayer, addon.LayerJumper, origin)
+            if not okForget then self.stats.lastError = tostring(forgetError) end
         end
         -- 2.5.1: "~h", its "Help others" option, by the same word and under the same rule. A
         -- presence without it takes the mark back (the option was turned off).

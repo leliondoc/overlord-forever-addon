@@ -202,6 +202,33 @@ function LJ:NoteEnemy(name)
         self.enemyCount = self.enemyCount + 1
         self.enemies[key] = true
     end
+    -- (2.5.4: and off the Layers window, which lists our side only.)
+    if self.ForgetLayer then self:ForgetLayer(name) end
+end
+
+-- 2.5.4: the Layers window lists our own faction only: nobody of the other side can invite us,
+-- and a Join button in front of an enemy made no sense (his words, 2026-11-16: a Battle.net
+-- friend of the other faction was listed with its layer). Asked once per new name, from what we
+-- already hold and one lookup each: an alert said so (enemies), the game showed that Battle.net
+-- friend's character on the other side, or our ranking holds it there. (The full question,
+-- LJ:IsEnemy, walks the Battle.net friends: kept for the few players a jump asks.)
+function LJ:KnownOtherSide(name)
+    local mine = Overlord.PlayerFaction
+    if mine ~= "Alliance" and mine ~= "Horde" then return false end
+    local key = NameKey(name)
+    if key and self.enemies[key] then return true end
+    local sync, lb = Overlord.Sync, Overlord.Leaderboard
+    if sync and sync.GetResolvedBNetPlayerFaction then
+        local ok, faction = pcall(sync.GetResolvedBNetPlayerFaction, sync, name)
+        if ok and (faction == "Alliance" or faction == "Horde") then return faction ~= mine end
+    end
+    if lb and lb.GetPlayerInfo then
+        local ok, info = pcall(lb.GetPlayerInfo, lb, name)
+        if ok and type(info) == "table" and (info.faction == "Alliance" or info.faction == "Horde") then
+            return info.faction ~= mine
+        end
+    end
+    return false
 end
 
 -- A player of the other side, as far as we know: the game or Battle.net shows it there, or the
@@ -232,34 +259,134 @@ function LJ:FormatLayer(layer)
     return "#" .. tostring(layer)
 end
 
--- The players whose layer we know now (Overlord.Shard's own table, newest first), ours left
--- out: { name, key, layer }. Read only, bounded.
-function LJ:KnownPlayers()
+-- 2.5.4: the window's own memory of the layer each player last said. Overlord.Shard forgets a
+-- layer after three minutes (its rule for what the game logic reads: who stands on which layer
+-- now), and without the channel a player's presence reaches us by whisper about every ten
+-- minutes: the window listed the few contacts heard in the last three (5 players of 39 on a
+-- bench front, 39 with the channel). It keeps what a player said ITSELF for SEEN_SEC and shows
+-- its age (PaintWindow). Nothing else reads this memory, nothing is sent for it; LIST_MAX names
+-- at most.
+-- A layer we did not hear from its player (a relayed SH, the capturer named in an alert) is
+-- whatever a relay or a payload wrote: listed SEEN_SECOND_SEC only, as long as 2.5.3 listed any
+-- layer, never over a word of the player's own that is still listed, and the first to go when
+-- the memory is full.
+LJ.SEEN_SEC, LJ.SEEN_SECOND_SEC, LJ.LAPSE_SCAN_SEC = 600, 180, 2
+LJ.seen, LJ.seenCount, LJ.seenSeq = LJ.seen or {}, LJ.seenCount or 0, LJ.seenSeq or 0
+
+function LJ.SeenLife(known)
+    return known.first and LJ.SEEN_SEC or LJ.SEEN_SECOND_SEC
+end
+
+-- Room for a newcomer in a full memory: the lapsed names go; then the list is brought down to
+-- nine tenths in one pass (a scan per newcomer was a whole pass of the list for each new name of
+-- a busy evening), those we did not hear first-hand first, then the oldest words.
+-- lapsedOnly: nothing but the lapsed names goes (the newcomer is not its player's own word).
+function LJ:TrimSeen(at, lapsedOnly)
+    -- (A memory full of own words lets nothing lapse for minutes: a pass per relayed newcomer
+    -- found nothing each time. One lapsed-only pass every LAPSE_SCAN_SEC, and no array for it.)
+    if lapsedOnly then
+        if at - (self.lapseScanAt or -1e9) < self.LAPSE_SCAN_SEC then return end
+        self.lapseScanAt = at
+    end
+    local rows, kept = not lapsedOnly and {} or nil, 0
+    for key, known in pairs(self.seen) do
+        if at - known.at >= self.SeenLife(known) then
+            self.seen[key] = nil
+        else
+            kept = kept + 1
+            if rows then rows[kept] = known end
+        end
+    end
+    local room = self.LIST_MAX - math.max(1, math.floor(self.LIST_MAX / 10))
+    if not lapsedOnly and kept > room then
+        table.sort(rows, function(a, b)
+            if (a.first == true) ~= (b.first == true) then return b.first == true end
+            return a.seq < b.seq
+        end)
+        for i = 1, kept - room do
+            self.seen[rows[i].key] = nil
+        end
+        kept = room
+    end
+    self.seenCount = kept
+end
+
+-- A layer said of a player (Overlord.Shard:SetPlayerShard). firstHand: by that player itself (its
+-- presence, its own SH), the game naming it as the sender.
+function LJ:NoteLayer(name, layer, firstHand)
+    layer = tonumber(layer)
+    local key = NameKey(name)
+    -- (The name is shown as it came: nothing the game would read as a colour, a texture or a link.)
+    if not key or not layer or name:find("[%c|]") then return end
+    -- (Our side only: a name an alert marked as the other side is not kept, nor one already listed.)
+    if self.enemies[key] then
+        if self.seen[key] then self:ForgetLayer(name) end
+        return
+    end
+    local at, row = Now(), self.seen[key]
+    -- Not the player's own word, over its own word still listed: nothing while that word is fresh
+    -- (SEEN_SECOND_SEC) or says the same layer. Later a different layer is taken, as somebody
+    -- else's word: the capturer an alert names on a new layer has moved, and the window must not
+    -- show the old layer for ten minutes while the chat says the new one.
+    if row and row.first and not firstHand and at - row.at < self.SEEN_SEC
+        and (layer == row.layer or at - row.at < self.SEEN_SECOND_SEC) then return end
+    if not row then
+        if self:KnownOtherSide(name) then return end
+        if self.seenCount >= self.LIST_MAX then
+            -- (A word that is not its player's own never pushes an own word out: only the lapsed
+            -- names make room for it, and without room it is not kept.)
+            self:TrimSeen(at, not firstHand)
+            if self.seenCount >= self.LIST_MAX then return end
+        end
+        row = { key = key }
+        self.seen[key] = row
+        self.seenCount = self.seenCount + 1
+    end
+    -- (seq: the order the words came in; several of one frame share its time.)
+    self.seenSeq = self.seenSeq + 1
+    row.name, row.layer, row.at, row.seq, row.first = name, layer, at, self.seenSeq, firstHand == true or nil
+end
+
+-- That player's own presence names no layer any more (it left the fronts, or cannot read its
+-- layer where it stands): off the list at once.
+function LJ:ForgetLayer(name)
+    local key = NameKey(name)
+    if not key or not self.seen[key] then return end
+    self.seen[key] = nil
+    self.seenCount = math.max(0, self.seenCount - 1)
+    self.rowsKept = nil
+end
+
+-- The players whose layer we know (the memory above, newest first), ours left out:
+-- { name, key, layer, at }. Bounded. unsorted: the caller sorts them its own way (the window).
+function LJ:KnownPlayers(unsorted)
     local shard = Overlord.Shard
     local out = {}
-    if not shard or type(shard.knownShards) ~= "table" then return out end
+    if not shard then return out end
     local now, me = Now(), self:MyKey()
-    local node, walked = shard.peerTail, 0
-    while node and walked < 600 and #out < self.LIST_MAX do
-        walked = walked + 1
-        local name = node.key
-        local layer = name and tonumber(shard.knownShards[name])
-        if layer and (tonumber(node.expiresAt) or 0) > now
-            and (not shard.PartyInviteTargetIsUsable or shard:PartyInviteTargetIsUsable(name)) then
-            local key = NameKey(name)
-            if key and key ~= me then
-                -- (2.5.1: only what an alert told us, one lookup. The full question (units in
-                -- sight, Battle.net friends, ranking) cost 0.03 ms a player: 15 ms for a list of
-                -- 400, at every repaint of the window. It is asked for the few players a jump
-                -- would really ask, CandidatesFor.)
-                -- helper (2.5.1): its own presence says "Help others" is on there (Shard:IsPlayerHelper).
-                local row = { name = name, key = key, layer = layer, enemy = self.enemies[key] or nil }
-                if shard.IsPlayerHelper and shard:IsPlayerHelper(name) then row.helper = true end
-                out[#out + 1] = row
-            end
+    for key, known in pairs(self.seen) do
+        if now - known.at >= self.SeenLife(known) or self.enemies[key] then
+            self.seen[key] = nil
+            self.seenCount = math.max(0, self.seenCount - 1)
+        elseif key ~= me and (not shard.PartyInviteTargetIsUsable or shard:PartyInviteTargetIsUsable(known.name)) then
+            -- (2.5.1, the 'enemy' mark: only what an alert told us, one lookup. The full question
+            -- (units in sight, Battle.net friends, ranking) cost 0.03 ms a player: 15 ms for a
+            -- list of 400, at every repaint of the window. It is asked for the few players a
+            -- jump would really ask, CandidatesFor.)
+            -- helper (2.5.1): its own presence says "Help others" is on there (Shard:IsPlayerHelper).
+            local row = { name = known.name, key = key, layer = known.layer, at = known.at, seq = known.seq,
+                enemy = self.enemies[key] or nil }
+            if shard.IsPlayerHelper and shard:IsPlayerHelper(known.name) then row.helper = true end
+            out[#out + 1] = row
         end
-        node = node.prev
     end
+    if unsorted then return out end
+    -- (Newest first: a jump asks the players heard last before those heard minutes ago.)
+    table.sort(out, function(a, b)
+        if a.at ~= b.at then return a.at > b.at end
+        if a.seq ~= b.seq then return a.seq > b.seq end
+        return a.key < b.key
+    end)
     return out
 end
 
@@ -627,6 +754,9 @@ function LJ:NextCandidate(reason)
     C_Timer.After(self.INVITE_WAIT, function()
         if LJ.hop == hop and hop.index == index and LJ.state == "requesting" then
             cand.failed, cand.why = true, "silent"
+            -- (2.5.4: a layer is listed ten minutes: a player who does not answer has logged off,
+            -- entered an instance or left; off the list until its next word, nothing is sent.)
+            LJ:ForgetLayer(cand.name)
             LJ:ArmLateJoinLeave(cand)
             LJ:NextCandidate()
         end
@@ -1003,6 +1133,8 @@ function LJ:OnInstanceSuspend()
 end
 
 function LJ:OnEvent(event, ...)
+    -- (2.5.4: nothing of an event is read in an instance, its prefix included.)
+    if Overlord.InstanceSuspended then return end
     -- (Every addon's messages come by here: the prefix first.)
     if event == "CHAT_MSG_ADDON" and (...) ~= self.PREFIX then return end
     if self:InInstance() then return end
@@ -1150,7 +1282,7 @@ end
 local GOLD = { 1, 0.82, 0 }
 local HELPER_ICON = "Interface\\Icons\\Spell_Arcane_PortalShattrath"
 local STATUS_H = 50
-local FRAME_W = 380
+local FRAME_W = 400     -- (2.5.4: 20 wider, for the age after a layer)
 local ROW_H = 20
 
 local function SetButtonEnabled(btn, enabled)
@@ -1191,7 +1323,7 @@ function LJ:BuildRows()
 end
 
 function LJ:BuildRowsNow(myLayer)
-    local rows = self:KnownPlayers()
+    local rows = self:KnownPlayers(true)
     for _, row in ipairs(rows) do row.here = myLayer ~= nil and row.layer == myLayer end
     -- (2.5.1: on each layer, the players who say they help come first.)
     local helpers = 0
@@ -1298,6 +1430,9 @@ function LJ:CreateWindow()
         local info = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
         info:SetPoint("LEFT", row, "LEFT", 178, 0)
         info:SetJustifyH("LEFT")
+        -- (2.5.4: up to the Join button, never under it: "#12345 (9 min)" fills it.)
+        info:SetWidth(FRAME_W - 52 - 84 - 178 - 2)
+        info:SetWordWrap(false)
         local join = MakeButton(row, 84, ROW_H - 2, T("LJ_JOIN", "Join"), function(btn)
             if btn._name then LJ:Join(btn._name, btn._layer) end
         end)
@@ -1367,7 +1502,23 @@ local function FactionColor(name)
     faction = ok and faction or nil
     local color = faction == "Horde" and "|cffff6644" or faction == "Alliance" and "|cff6db3f2" or "|cffb8b8b8"
     colors[name] = color
+    -- (2.5.4: a listed player the game shows on the other side, seen only now that its row is
+    -- painted: marked, so that the next build of the list leaves it out.)
+    local mine = Overlord.PlayerFaction
+    if (faction == "Alliance" or faction == "Horde") and (mine == "Alliance" or mine == "Horde") and faction ~= mine then
+        LJ.paintedOther = LJ.paintedOther or {}
+        LJ.paintedOther[name] = true
+    end
     return color
+end
+
+-- A row's second column: the layer (or "you are here"), and from a minute on how long ago that
+-- player said it (2.5.4: a layer is listed ten minutes; its player may have moved since).
+function LJ:RowInfo(data)
+    local info = data.here and T("LJ_HERE", "you are here") or self:FormatLayer(data.layer)
+    local minutes = math.floor((Now() - (tonumber(data.at) or Now())) / 60)
+    if minutes >= 1 then info = info .. " (" .. string.format(T("LJ_AGE", "%d min"), minutes) .. ")" end
+    return info
 end
 
 function LJ:PaintWindow(f)
@@ -1387,14 +1538,22 @@ function LJ:PaintWindow(f)
             row._helper = data.helper and true or false
             row.mark:SetShown(row._helper)
             row:EnableMouse(row._helper)
-            row.info:SetText(data.here and T("LJ_HERE", "you are here") or self:FormatLayer(data.layer))
+            -- (A row of our own layer has no Join button: its text may run to the end of the row.)
+            row.info:SetWidth(data.here and (FRAME_W - 52 - 178 - 2) or (FRAME_W - 52 - 84 - 178 - 2))
+            row.info:SetText(self:RowInfo(data))
             row.join._name, row.join._layer = data.name, data.layer
-            row.join:SetShown(not data.here)
+            row.join:SetShown(not data.here and not (self.paintedOther and self.paintedOther[data.name]))
             SetButtonEnabled(row.join, not active)
             row:Show()
         else
             row:Hide()
         end
+    end
+    -- (Found on the other side while painting: off the memory; the next repaint lists without them.)
+    if self.paintedOther then
+        local found = self.paintedOther
+        self.paintedOther = nil
+        for name in pairs(found) do self:NoteEnemy(name) end
     end
     f.emptyText:SetShown(#rows == 0)
     if #rows > self.ROWS then
@@ -1408,6 +1567,11 @@ function LJ:PaintWindow(f)
 end
 
 function LJ:Show()
+    -- (2.5.4: not in an instance, like the rest of the addon: said, nothing opened.)
+    if self:InInstance() then
+        Print(T("LJ_ERR_INSTANCE", "Not available in instances and battlegrounds."))
+        return
+    end
     self:Initialize()
     if not CreateFrame then return end
     local f = self:CreateWindow()

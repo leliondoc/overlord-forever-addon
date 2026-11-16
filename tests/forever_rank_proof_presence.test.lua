@@ -188,4 +188,80 @@ assert(#helpers == 2 and helpers[2].helps == false, "a presence without the mark
 presence("Helper Far", "2.5.1~t0~y" .. layout .. "~s4~h" .. tail, "CHANNEL", "Helper Far,Relay Hop")
 assert(#helpers == 2, "a relayed presence gave a helper mark")
 assert(not net:IsOutdatedMapPeer("Helper One"), "a presence with a helper mark left the map exchange")
+-- 2.5.4: the Layers window keeps a layer ten minutes (LayerJumper). A first-hand presence that
+-- names no layer takes its player off that list at once; one that names a layer, or a relayed
+-- one, does not.
+do
+    local forgot, said = {}, {}
+    me.LayerJumper = { ForgetLayer = function(_, who) forgot[#forgot + 1] = who end }
+    local savedShard = me.Shard
+    me.Shard = { SetPlayerShard = function(_, who, sid, first) said[#said + 1] = { who, sid, first } end,
+        SetPlayerHelper = function() end }
+    presence("Helper One", "2.5.4~t0~y" .. layout .. "~q0~s17" .. tail)
+    assert(#forgot == 0, "a presence naming a layer took its player off the Layers window")
+    assert(#said == 1 and said[1][1] == "Helper One" and said[1][2] == 17 and said[1][3] == true,
+        "the layer of a first-hand presence is not passed on as the player's own word")
+    me.Shard = savedShard
+    presence("Helper One", "2.5.4~t0~y" .. layout .. "~q0" .. tail)
+    assert(#forgot == 1 and forgot[1] == "Helper One", "a presence without a layer left its player in the Layers window")
+    presence("Helper Far", "2.5.4~t0~y" .. layout .. tail, "CHANNEL", "Helper Far,Relay Hop")
+    assert(#forgot == 1, "a relayed presence took a player off the Layers window")
+    -- A layer said and refused (out of range, no room): the row listed for that player goes too.
+    me.Shard = { SetPlayerShard = function() return false end, SetPlayerHelper = function() end }
+    presence("Helper One", "2.5.4~t0~y" .. layout .. "~q0~s18" .. tail)
+    assert(#forgot == 2 and forgot[2] == "Helper One", "a refused layer left the older row in the Layers window")
+    me.Shard = { SetPlayerShard = function() return true end, SetPlayerHelper = function() end }
+    presence("Helper One", "2.5.4~t0~y" .. layout .. "~q0~s19" .. tail)
+    assert(#forgot == 2, "a layer that was taken removed its player from the Layers window")
+    -- An error of the window is said, as an error of the layer is.
+    me.LayerJumper = { ForgetLayer = function() error("window broken") end }
+    net.stats.lastError = nil
+    presence("Helper One", "2.5.4~t0~y" .. layout .. "~q0" .. tail)
+    assert(tostring(net.stats.lastError):find("window broken", 1, true), "an error of ForgetLayer was swallowed")
+    net.stats.lastError = nil
+    -- By whisper: the layer and the helper mark of a player the directory knows (in the member
+    -- list or, for a client the game gives no list, in our book), never of a stranger: anybody
+    -- can whisper. Asked of the list alone, a client without a list read no whispered layer at
+    -- all and its Layers window stayed empty.
+    local taken, marks, dropped = {}, {}, {}
+    me.Shard = { SetPlayerShard = function(_, who, sid, first) taken[#taken + 1] = { who, sid, first }; return true end,
+        SetPlayerHelper = function(_, who, helps) marks[#marks + 1] = { who, helps } end }
+    me.LayerJumper = { ForgetLayer = function(_, who) dropped[#dropped + 1] = who end }
+    local savedDirectory = me.ChannelDirectory
+    me.ChannelDirectory = { Known = function(_, who) return who == "Book Friend" end,
+        Lists = function() return false end }
+    presence("Book Friend", "2.5.4~t0~y" .. layout .. "~q0~s21~h" .. tail, "WHISPER")
+    assert(#taken == 1 and taken[1][1] == "Book Friend" and taken[1][2] == 21 and taken[1][3] == true,
+        "the whispered layer of a player of our book was not read")
+    assert(#marks == 1 and marks[1][2] == true, "the whispered helper mark of a player of our book was not read")
+    presence("Stranger One", "2.5.4~t0~y" .. layout .. "~q0~s22~h" .. tail, "WHISPER")
+    presence("Stranger One", "2.5.4~t0~y" .. layout .. "~q0" .. tail, "WHISPER")
+    assert(#taken == 1 and #marks == 1 and #dropped == 0, "a stranger's whisper gave or took a layer or a helper mark")
+    presence("Book Friend", "2.5.4~t0~y" .. layout .. "~q0" .. tail, "WHISPER")
+    assert(#dropped == 1 and dropped[1] == "Book Friend", "a known player's whisper without a layer did not take it off the window")
+    -- Over Battle.net: a friend of the other faction unless the game shows that character in ours.
+    -- Its layer still goes to Overlord.Shard (the captures read it); the window is told it is
+    -- the other side, and lists our faction only.
+    local others = {}
+    me.LayerJumper = { ForgetLayer = function(_, who) dropped[#dropped + 1] = who end,
+        NoteEnemy = function(_, who) others[#others + 1] = who end }
+    local savedResolved = me.Sync.GetResolvedBNetPlayerFaction
+    me.Sync.GetResolvedBNetPlayerFaction = function(_, who) return who == "Friend Ours" and me.PlayerFaction or nil end
+    local takenBefore = #taken
+    presence("Friend Theirs", "2.5.4~t0~y" .. layout .. "~q0~s31" .. tail, "BNET")
+    presence("Friend Ours", "2.5.4~t0~y" .. layout .. "~q0~s32" .. tail, "BNET")
+    presence("Channel Player", "2.5.4~t0~y" .. layout .. "~q0~s33" .. tail)
+    assert(#others == 1 and others[1] == "Friend Theirs", "the other side over Battle.net: marked " .. #others)
+    assert(#taken == takenBefore + 3, "a layer heard over Battle.net no longer reaches Overlord.Shard")
+    me.Sync.GetResolvedBNetPlayerFaction = savedResolved
+    me.LayerJumper = { ForgetLayer = function(_, who) dropped[#dropped + 1] = who end }
+    -- (No directory at all: nothing by whisper, as before.)
+    me.ChannelDirectory = nil
+    local takenSoFar = #taken
+    presence("Book Friend", "2.5.4~t0~y" .. layout .. "~q0~s23" .. tail, "WHISPER")
+    assert(#taken == takenSoFar, "a whispered layer was read without any directory")
+    me.ChannelDirectory = savedDirectory
+    me.Shard = savedShard
+    me.LayerJumper = nil
+end
 print("Helper mark in the presence: only with the option, first-hand only, older readers unaffected, " .. #wire .. "/170 bytes OK")

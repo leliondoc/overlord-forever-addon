@@ -159,14 +159,19 @@ local function newClient(name, layer)
     return c
 end
 
--- Players a client knows the layer of (newest last, as Overlord.Shard links them).
+-- Players a client knows the layer of (newest last, as Overlord.Shard links them and tells the
+-- window: 2.5.4, LJ:NoteLayer).
 local function know(c, rows)
     c.shard.knownShards, c.shard.peerTail = {}, nil
+    c.LJ.seen, c.LJ.seenCount, c.LJ.rowsKept = {}, 0, nil
     local prev
-    for _, row in ipairs(rows) do
+    for i, row in ipairs(rows) do
         c.shard.knownShards[row[1]] = row[2]
         local node = { key = row[1], expiresAt = now + 180, prev = prev }
         prev = node
+        c.LJ:NoteLayer(row[1], row[2], true)
+        local seen = c.LJ.seen[row[1]:lower()]
+        if seen then seen.at = now - (#rows - i) * 0.001 end
     end
     c.shard.peerTail = prev
 end
@@ -294,8 +299,204 @@ know(ann, many)
 assert(#ann.LJ:KnownPlayers() <= ann.LJ.LIST_MAX, "the list is not bounded")
 -- An entry past its life is not listed.
 know(ann, { { "Old One", 1305 } })
-ann.shard.peerTail.expiresAt = now - 1
+ann.LJ.seen["old one"].at = now - ann.LJ.SEEN_SEC
 assert(#ann.LJ:KnownPlayers() == 0, "an expired layer was listed")
+
+-- 6b. 2.5.4: the window's own memory. A layer stays listed ten minutes after its player said it
+-- (Overlord.Shard's own three minutes are for the game logic, and without the channel a
+-- presence comes about every ten minutes), with its age from a minute on; a newer word
+-- replaces it, and a presence that names no layer takes the player off at once.
+do
+    local LJ = ann.LJ
+    assert(LJ.SEEN_SEC == 600, "a layer is no longer listed for ten minutes")
+    know(ann, {})
+    ann.shard.currentShardID = 1201
+    LJ:NoteLayer("Ivy Contact", 1305, true)
+    LJ:NoteLayer("Jon Contact", 1305, true)
+    LJ:NoteLayer("Mia Same", 1201, true)
+    assert(LJ:RowInfo({ layer = 1305, at = now }) == "#1305", "a layer just said shows an age")
+    advance(250)        -- past Overlord.Shard's own 180 s
+    LJ:NoteLayer("Jon Contact", 1444, true)       -- heard again, on another layer
+    local list = LJ:KnownPlayers()
+    assert(#list == 3 and list[1].name == "Jon Contact" and list[1].layer == 1444,
+        "the players heard minutes ago left the list, or the newest is not first: " .. #list)
+    local ivy
+    for _, row in ipairs(list) do if row.name == "Ivy Contact" then ivy = row end end
+    assert(ivy and ivy.layer == 1305 and LJ:RowInfo(ivy) == "#1305 (4 min)",
+        "a layer said 4 min ago: " .. tostring(ivy and LJ:RowInfo(ivy)))
+    assert(LJ:RowInfo({ layer = 1201, here = true, at = now - 130 }):find("%(2 min%)$"), "a row of our own layer does not show its age")
+    assert(LJ:RowInfo({ layer = 1305, at = now - 59 }) == "#1305" and LJ:RowInfo({ layer = 1305, at = now - 60 }) == "#1305 (1 min)"
+        and LJ:RowInfo({ layer = 1305 }) == "#1305", "the age of a row: under a minute, at a minute, without a date")
+    -- A jump asks the player heard last first.
+    LJ:NoteLayer("Kai Contact", 1305, true)
+    local asked = LJ:CandidatesFor(1305)
+    assert(#asked == 2 and asked[1].name == "Kai Contact" and asked[2].name == "Ivy Contact",
+        "candidates: the newest word does not come first")
+    -- Its presence names no layer any more.
+    LJ:ForgetLayer("Ivy Contact")
+    LJ:ForgetLayer("Nobody Known")
+    list = LJ:KnownPlayers()
+    assert(#list == 3 and LJ.seenCount == 3, "a player whose presence names no layer stayed listed: " .. #list)
+    advance(345)        -- Mia was heard 595 s ago, Jon and Kai later
+    assert(#LJ:KnownPlayers() == 3, "a layer left the list before its ten minutes")
+    advance(10)
+    list = LJ:KnownPlayers()
+    assert(#list == 2 and LJ.seenCount == 2, "a layer stayed listed past ten minutes: " .. #list)
+    -- Words of one frame (the game's clock moves once per frame): the last one said comes first.
+    know(ann, {})
+    LJ:NoteLayer("Ann First", 1305, true)
+    LJ:NoteLayer("Zed Second", 1305, true)
+    asked = LJ:CandidatesFor(1305)
+    assert(asked[1].name == "Zed Second" and asked[2].name == "Ann First", "two words of one frame: not the last one first")
+    -- A layer we did not hear from its player (a relayed SH, the capturer named in an alert): the
+    -- three minutes of 2.5.3, never over that player's own word while it is listed, and replaced
+    -- by its own word at once.
+    assert(LJ.SEEN_SECOND_SEC == 180, "a layer said by somebody else is no longer listed three minutes")
+    know(ann, {})
+    LJ:NoteLayer("Own Word", 1305, true)
+    LJ:NoteLayer("Told Word", 1305)
+    advance(100)
+    LJ:NoteLayer("Own Word", 4444)              -- a relayed copy names another layer for that player
+    LJ:NoteLayer("Told Word", 1306, true)       -- the player itself says its layer
+    local byName = {}
+    for _, row in ipairs(LJ:KnownPlayers()) do byName[row.name] = row.layer end
+    assert(byName["Own Word"] == 1305, "a relayed word replaced the player's own: " .. tostring(byName["Own Word"]))
+    assert(byName["Told Word"] == 1306, "the player's own word did not replace a relayed one")
+    -- Past three minutes a DIFFERENT layer said by somebody else is taken (the capturer an alert
+    -- names has moved: the window must not keep the old layer while the chat says the new one),
+    -- as somebody else's word; the SAME layer changes nothing, the own word keeps its age.
+    know(ann, {})
+    LJ:NoteLayer("Moved Since", 1305, true)
+    LJ:NoteLayer("Still There", 1305, true)
+    advance(200)
+    LJ:NoteLayer("Moved Since", 9999)
+    LJ:NoteLayer("Still There", 1305)
+    byName = {}
+    for _, row in ipairs(LJ:KnownPlayers()) do byName[row.name] = row end
+    assert(byName["Moved Since"].layer == 9999 and LJ:RowInfo(byName["Moved Since"]) == "#9999",
+        "a newer layer said by somebody else was ignored for ten minutes: " .. LJ:RowInfo(byName["Moved Since"]))
+    assert(LJ.seen["moved since"].first == nil, "a layer said by somebody else became the player's own word")
+    assert(byName["Still There"].layer == 1305 and LJ:RowInfo(byName["Still There"]) == "#1305 (3 min)"
+        and LJ.seen["still there"].first == true, "the same layer said by somebody else replaced the own word")
+    advance(181)
+    assert(LJ.seen["moved since"] == nil or #LJ:KnownPlayers() == 1, "the newer word of somebody else outlived its three minutes")
+    know(ann, {})
+    LJ:NoteLayer("Own Word", 1305, true)
+    LJ:NoteLayer("Told Word", 1306, true)
+    LJ:NoteLayer("Passing By", 1307)
+    advance(179)
+    assert(#LJ:KnownPlayers() == 3, "a layer said by somebody else left before its three minutes")
+    advance(2)
+    list = LJ:KnownPlayers()
+    assert(#list == 2 and LJ.seenCount == 2, "a layer said by somebody else stayed past three minutes: " .. #list)
+    -- Its own word past its ten minutes: somebody else's word is taken again.
+    advance(600)
+    LJ:NoteLayer("Own Word", 4444)
+    list = LJ:KnownPlayers()
+    assert(#list == 1 and list[1].layer == 4444, "an old own word still barred a newer word")
+    -- A name the chat would read as a colour, a texture, a link or a new line is never kept.
+    know(ann, {})
+    for _, bad in ipairs({ "Bad Name-|cffff0000Red|r", "Bad Name-|TInterface\\Icons\\x:64|t", "Bad|Hplayer:x|h Name", "Bad Name-x\ny" }) do
+        LJ:NoteLayer(bad, 1305, true)
+    end
+    assert(LJ.seenCount == 0 and #LJ:KnownPlayers() == 0, "a name with chat codes was listed")
+    -- Full: room is made for a tenth of the list in one pass, the words we did not hear first-hand
+    -- first, then the oldest; the count stays right and the next newcomers scan nothing.
+    know(ann, {})
+    local last = LJ.LIST_MAX
+    for i = 1, last do
+        -- (The five NEWEST words are somebody else's: the oldest words alone would spare them.)
+        LJ:NoteLayer(string.format("Full %03d", i), 5000, i <= last - 5)
+        LJ.seen[string.format("full %03d", i)].at = now - 100 + i * 0.1
+    end
+    local trims, realTrim = 0, LJ.TrimSeen
+    LJ.TrimSeen = function(...) trims = trims + 1; return realTrim(...) end
+    LJ:NoteLayer("One More", 5001, true)
+    local tenth = math.floor(LJ.LIST_MAX / 10)
+    assert(trims == 1 and LJ.seenCount == LJ.LIST_MAX - tenth + 1 and LJ.seen["one more"], "a full memory: count " .. LJ.seenCount)
+    assert(not LJ.seen[string.format("full %03d", last)] and not LJ.seen[string.format("full %03d", last - 4)]
+        and LJ.seen[string.format("full %03d", last - 5)], "the words of somebody else were not the first to go")
+    assert(not LJ.seen["full 001"] and not LJ.seen[string.format("full %03d", tenth - 5)]
+        and LJ.seen[string.format("full %03d", tenth - 4)], "the oldest own words were not the next to go")
+    for i = 1, tenth - 1 do LJ:NoteLayer("Later " .. i, 5002, true) end
+    assert(trims == 1 and LJ.seenCount == LJ.LIST_MAX, "room made for a tenth was scanned again before it was used")
+    -- Full of own words: a word that is not its player's own is not kept and pushes nobody out.
+    local before = LJ.seenCount
+    LJ:NoteLayer("Relayed Stranger", 5003)
+    assert(LJ.seen["relayed stranger"] == nil and LJ.seenCount == before and trims == 2,
+        "a word of somebody else pushed an own word out of a full memory")
+    -- A pass that found a lapsed name still brings the list down to nine tenths (it stopped just
+    -- under the cap and ran again at the very next newcomer).
+    LJ.seen["later 1"].at = now - LJ.SEEN_SEC - 1
+    LJ:NoteLayer("After A Lapse", 5004, true)
+    assert(trims == 3 and LJ.seenCount == LJ.LIST_MAX - tenth + 1 and LJ.seen["after a lapse"] and not LJ.seen["later 1"],
+        "a lapsed name kept the list just under its cap: " .. LJ.seenCount)
+    local real = 0
+    for _ in pairs(LJ.seen) do real = real + 1 end
+    assert(real == LJ.seenCount, "the count of the memory drifted: " .. real .. " / " .. LJ.seenCount)
+    LJ.TrimSeen = realTrim
+    know(ann, {})
+end
+
+-- 6c. 2.5.4: the window lists our own faction only (nobody of the other side can invite us; a
+-- Battle.net friend of the other faction was listed with a Join button). A name an alert marked,
+-- a Battle.net friend the game shows on the other side, a player our ranking holds there: never
+-- kept; marked while listed: dropped at once.
+do
+    local LJ, O = ann.LJ, ann.env.Overlord
+    local savedSync, savedLb = O.Sync, O.Leaderboard
+    know(ann, {})
+    LJ.enemies, LJ.enemyCount = {}, 0
+    LJ:NoteLayer("Ally One", 1305, true)
+    LJ:NoteLayer("Red Capturer", 1305, true)
+    assert(#LJ:KnownPlayers() == 2, "fixture: two players listed")
+    LJ:NoteEnemy("Red Capturer")
+    assert(LJ.seen["red capturer"] == nil and LJ.seenCount == 1 and #LJ:KnownPlayers() == 1,
+        "a player marked as the other side stayed in the Layers window")
+    LJ:NoteLayer("Red Capturer", 1306, true)
+    assert(LJ.seen["red capturer"] == nil, "a player of the other side was listed again by its next word")
+    -- (A mark set without NoteEnemy, a row older than it: the list drops it when it is read.)
+    LJ:NoteLayer("Late Mark", 1305, true)
+    LJ.enemies["late mark"] = true
+    assert(#LJ:KnownPlayers() == 1 and LJ.seen["late mark"] == nil and LJ.seenCount == 1, "a row marked since was still listed")
+    -- (The same, met by its player's next word before the list is read.)
+    LJ:NoteLayer("Late Two", 1305, true)
+    LJ.enemies["late two"] = true
+    LJ:NoteLayer("Late Two", 1307, true)
+    assert(LJ.seen["late two"] == nil and LJ.seenCount == 1, "a row marked since was renewed by its player's next word")
+    -- A Battle.net friend the game shows in the other faction, a player the ranking holds there.
+    O.Sync = setmetatable({ GetResolvedBNetPlayerFaction = function(_, who)
+        return who == "Bnet Horde" and "Horde" or who == "Bnet Ally" and "Alliance" or nil
+    end }, { __index = savedSync })
+    O.Leaderboard = { GetPlayerInfo = function(_, who)
+        if who == "Ranked Horde" then return { faction = "Horde" } end
+        if who == "Ranked Ally" then return { faction = "Alliance" } end
+        return nil
+    end }
+    for _, who in ipairs({ "Bnet Horde", "Bnet Ally", "Ranked Horde", "Ranked Ally", "Nobody Knows" }) do
+        LJ:NoteLayer(who, 1305, true)
+    end
+    assert(LJ.seen["bnet horde"] == nil and LJ.seen["ranked horde"] == nil, "a player known on the other side was listed")
+    assert(LJ.seen["bnet ally"] and LJ.seen["ranked ally"] and LJ.seen["nobody knows"], "a player of ours, or of no known side, was left out")
+    assert(LJ:KnownOtherSide("Bnet Horde") == true and LJ:KnownOtherSide("Ranked Ally") == false
+        and LJ:KnownOtherSide("Nobody Knows") == false, "the side of a player from what we hold")
+    O.Sync, O.Leaderboard = savedSync, savedLb
+    -- A lapsed-only pass (a word of somebody else in a full memory) runs once per LAPSE_SCAN_SEC:
+    -- a full memory of own words lets nothing lapse, and a pass per newcomer found nothing.
+    know(ann, {})
+    for i = 1, LJ.LIST_MAX do LJ:NoteLayer(string.format("Own %03d", i), 5000, true) end
+    LJ.lapseScanAt = nil
+    LJ:NoteLayer("Stranger A", 5001)                      -- the pass runs, nothing lapsed
+    LJ.seen["own 001"].at = now - LJ.SEEN_SEC - 1         -- one name lapses right after it
+    LJ:NoteLayer("Stranger B", 5001)
+    assert(LJ.seen["own 001"] ~= nil and LJ.seen["stranger b"] == nil, "a second lapsed-only pass ran at once")
+    advance(LJ.LAPSE_SCAN_SEC + 1)
+    LJ:NoteLayer("Stranger C", 5001)
+    assert(LJ.seen["own 001"] == nil and LJ.seen["stranger c"] ~= nil and LJ.seenCount == LJ.LIST_MAX,
+        "the lapsed name did not make room once the pass could run again")
+    know(ann, {})
+    LJ.enemies, LJ.enemyCount = {}, 0
+end
 
 -- 7. The layer named in a chat alert: a link only where the game hands addon links to addons,
 --    a left click asks that player, anything else does nothing.
@@ -417,6 +618,21 @@ bob.env.Overlord.InstanceSuspended = true
 bob.LJ:OnAddonMessage("OverlordLJ", "R:2:abc200:1201", "WHISPER", "Eve Asker")
 assert(#sent == quiet, "answered from an instance")
 bob.instance, bob.env.Overlord.InstanceSuspended = false, nil
+-- (2.5.4: the window does not open there either, and an event is not read at all once suspended.)
+do
+    local madeFrames, notesBefore = 0, #bob.notes
+    local savedCreate = bob.env.CreateFrame
+    bob.env.CreateFrame = function(...) madeFrames = madeFrames + 1; return savedCreate and savedCreate(...) end
+    bob.instance = true
+    bob.LJ:Show()
+    assert(madeFrames == 0 and #bob.notes == notesBefore + 1, "the Layers window opened in an instance, or said nothing")
+    bob.env.Overlord.InstanceSuspended = true
+    -- (Whether the prefix itself is read cannot be seen from Lua: only that nothing is answered.)
+    bob.LJ:OnEvent("CHAT_MSG_ADDON", "OverlordLJ", "R:2:abc201:1201", "WHISPER", "Eve Asker")
+    assert(#sent == quiet, "an addon message was answered while suspended")
+    bob.instance, bob.env.Overlord.InstanceSuspended = false, nil
+    bob.env.CreateFrame = savedCreate
+end
 
 -- 9. The wiring: the sync never trusts nor feeds the partner of a jump, the saved choice is no
 --    longer wiped at login, the file is loaded, and every text exists in seven languages.
@@ -511,8 +727,12 @@ do
     -- again. The one in combat keeps the mark: his combat ends.
     assert(eve.shard.helpers["Cat Grouped"] == nil and eve.shard.helpers["Fay Fighter"] == true,
         "the mark of a helper who cannot invite was kept, or the mark of one in combat was taken")
-    assert(names(eve.LJ:CandidatesFor(2002, "Dan Off")) == "Fay Fighter, Dan Off, Gus Ghost, Cat Grouped",
-        "the next click still asks the grouped helper first: " .. names(eve.LJ:CandidatesFor(2002, "Dan Off")))
+    -- (2.5.4: Gus Ghost, who did not answer at all, left the list until its next word: a layer is
+    -- listed ten minutes now, and a player gone since would be asked again at every click.)
+    assert(names(eve.LJ:CandidatesFor(2002, "Dan Off")) == "Fay Fighter, Dan Off, Cat Grouped",
+        "the next click still asks the grouped helper first, or the silent player: " .. names(eve.LJ:CandidatesFor(2002, "Dan Off")))
+    assert(eve.LJ.seen["gus ghost"] == nil and eve.LJ.seen["dan off"] ~= nil and eve.LJ.seen["fay fighter"] ~= nil,
+        "a player who did not answer stayed listed, or one who answered left")
     -- More helpers than players asked: four of them, the named one who says nothing is not asked.
     -- A marked player the game shows on the other side is never asked.
     know(eve, { { "Dan Off", 2002 }, { "H One", 2002 }, { "H Two", 2002 }, { "H Three", 2002 }, { "H Four", 2002 },

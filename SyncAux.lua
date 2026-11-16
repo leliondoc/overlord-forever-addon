@@ -884,7 +884,8 @@ end
 -- Joined before the server channels, it took their numbers: they slid, the game saved the
 -- slide and the player's colours (one per number) moved (report 2026-10-18). So the join waits
 -- for the player's channel list (GetChannelList) to be the same three times in a row, read every
--- second (2 s of calm), 30 s at most. A channel of ours already joined is never moved.
+-- second (2 s of calm), 30 s at most (2.5.4: longer while a number below the player's channels
+-- is free, see CHANNEL_CALM_HOLE_SEC). A channel of ours already joined is never moved.
 -- 2.3.1: the temporary "pad" channels (2.0.8-2.3.0) that filled the free numbers below the
 -- player's last channel are gone: only a matter of number, they cost up to a dozen channel joins
 -- and leaves per try, and the game answers those with a red "You're doing that too fast".
@@ -1069,6 +1070,83 @@ function Overlord.Sync:ReleaseChannelPads(sweep)
     step(1, false)
 end
 
+-- 2.5.4: the calm the join waits for. CHANNEL_CALM_SEC (2 s, as since 2.0.8) when the player's
+-- channels hold every number up to their last one; CHANNEL_CALM_HOLE_SEC while a number below
+-- it is free; CHANNEL_CALM_MAX seconds in all at most. Report of 2026-11-16: a full list (General
+-- /1 to Trade /7) and ours still at /1 at every login, General pushed to /2: the game joins some
+-- of its channels (Trade, LookingForGroup) before others (General), the list was calm for 2 s in
+-- between, and ours took the number of a channel on its way. The wait is not free (the
+-- member-list directory reads OUR channel's members: everything a login starts leaves that
+-- much later, measured on whole clients), so only a list with a free number pays it, and only
+-- once: a free number that outlasted the whole wait AND is still free CHANNEL_HOLE_CONFIRM_SEC
+-- after our join is the player's own choice (a channel left), remembered per character with the
+-- numbers held (OverlordDB.channelHoles) until that list changes. (Still free a minute later:
+-- a channel of the game that came after our join, a very slow login, changes the list, and a
+-- list remembered too early would cut the wait to 2 s at every later login, the fault itself.)
+Overlord.Sync.CHANNEL_CALM_SEC, Overlord.Sync.CHANNEL_CALM_HOLE_SEC, Overlord.Sync.CHANNEL_CALM_MAX = 2, 10, 30
+Overlord.Sync.CHANNEL_HOLE_CONFIRM_SEC = 60
+
+-- The numbers the player's channels hold ("2,3,5") when one below the highest is free, nil
+-- when they hold them all (or when there is no channel at all).
+function Overlord.Sync:ChannelHoleNumbers(used, top)
+    top = tonumber(top) or 0
+    if type(used) ~= "table" or top < 2 then return nil end
+    local held, hole = {}, false
+    for n = 1, top do
+        if used[n] then held[#held + 1] = n else hole = true end
+    end
+    return hole and table.concat(held, ",") or nil
+end
+
+function Overlord.Sync:IsKnownChannelHole(numbers)
+    local saved = OverlordDB and OverlordDB.channelHoles
+    local me = self.GetPlayerFullName and self:GetPlayerFullName()
+    return numbers ~= nil and me ~= nil and type(saved) == "table" and saved[me] == numbers
+end
+
+-- numbers: the list our join goes with (nil: every number held, nothing to remember).
+function Overlord.Sync:RememberChannelHole(numbers)
+    local me = self.GetPlayerFullName and self:GetPlayerFullName()
+    if type(OverlordDB) ~= "table" or type(me) ~= "string" or me == "" then return end
+    local saved = OverlordDB.channelHoles
+    if numbers == nil then
+        if type(saved) == "table" then
+            saved[me] = nil
+            if next(saved) == nil then OverlordDB.channelHoles = nil end
+        end
+        return
+    end
+    if type(saved) ~= "table" then saved = {}; OverlordDB.channelHoles = saved end
+    if saved[me] == nil then
+        -- (One line per character; a save with many of them starts again.)
+        local count = 0
+        for _ in pairs(saved) do count = count + 1 end
+        if count >= 40 then saved = {}; OverlordDB.channelHoles = saved end
+    end
+    saved[me] = numbers
+end
+
+-- The list our join went with, read again CHANNEL_HOLE_CONFIRM_SEC later: remembered only if the
+-- player's channels still hold the same numbers (ours is never counted). One check at a time:
+-- a newer join's check replaces it. Never in an instance.
+function Overlord.Sync:ConfirmChannelHoleLater(numbers)
+    local check = (tonumber(self._channelHoleCheck) or 0) + 1
+    self._channelHoleCheck = check
+    C_Timer.After(self.CHANNEL_HOLE_CONFIRM_SEC, function()
+        local sync = Overlord.Sync
+        if not sync or sync._channelHoleCheck ~= check or sync:InsideInstance() then return end
+        local ok, _, used, top = pcall(sync.ReadPlayerChannels, sync)
+        if not ok then return end
+        if sync:ChannelHoleNumbers(used, top) == numbers then
+            sync:RememberChannelHole(numbers)
+        elseif sync:IsKnownChannelHole(numbers) then
+            -- (A remembered list that no longer holds, a channel taken back since: forgotten, and
+            -- the next login waits in full again. Kept, it cut the wait to 2 s for good.)
+            sync:RememberChannelHole(nil)
+        end
+    end)
+end
+
 -- One step of the seat for JoinChannel's first try: true when the join may go now;
 -- false when a later step was scheduled (it calls JoinChannel(1, generation) again).
 function Overlord.Sync:ChannelSeatStep(generation)
@@ -1080,13 +1158,28 @@ function Overlord.Sync:ChannelSeatStep(generation)
     if seat.phase == "go" then return true end
     local delay
     if seat.phase == "calm" then
-        local signature = self:ReadPlayerChannels()
+        local signature, used, top = self:ReadPlayerChannels()
         seat.samples = seat.samples + 1
         seat.stable = (signature ~= "" and signature == seat.last) and seat.stable + 1 or 0
         seat.last = signature
-        if seat.stable < 2 and seat.samples < 30 then
+        -- 2.5.4: a free number below the player's channels is most often a channel of the game
+        -- still to come (see CHANNEL_CALM_HOLE_SEC): the calm must last longer, unless this very
+        -- list was already waited for in full at an earlier login.
+        local numbers = self:ChannelHoleNumbers(used, top)
+        local need = (numbers and not self:IsKnownChannelHole(numbers)) and self.CHANNEL_CALM_HOLE_SEC
+            or self.CHANNEL_CALM_SEC
+        if seat.stable < need and seat.samples < self.CHANNEL_CALM_MAX then
             delay = 1
         else
+            -- (Ended by its longest wait, the list never calm: nothing is learnt from it.)
+            if seat.stable >= need then
+                if numbers == nil then
+                    self:RememberChannelHole(nil)
+                else
+                    -- (Waited for in full, or known from an earlier login: looked at again later.)
+                    self:ConfirmChannelHoleLater(numbers)
+                end
+            end
             seat.phase = "go"
             return true
         end
@@ -1096,7 +1189,7 @@ function Overlord.Sync:ChannelSeatStep(generation)
         if not sync or sync._joinChannelAttemptPending ~= generation then
             return
         end
-        if Overlord.InstanceSuspended then
+        if sync:InsideInstance() then
             sync._joinChannelAttemptPending = nil
             return
         end
@@ -1308,6 +1401,9 @@ end
 -- a pair every minute. Hidden for any chat that goes through the game's message filters.
 -- (Methods, not locals: this chunk is close to 200 locals. A protected value is never read.)
 function Overlord.Sync.SuppressSeatChannelNotice(_, _, text, _, _, channelName, _, _, _, _, baseName)
+    -- (2.5.4: removed in an instance, RemoveChatFilters; where the game cannot remove a filter,
+    -- nothing is read there.)
+    if Overlord.InstanceSuspended then return false end
     local sync = Overlord.Sync
     if not (issecretvalue and issecretvalue(baseName)) and baseName ~= nil and sync:IsOwnSeatChannel(baseName) then
         return true
@@ -1318,8 +1414,50 @@ function Overlord.Sync.SuppressSeatChannelNotice(_, _, text, _, _, channelName, 
     return sync:IsOwnSeatChannel(bare)
 end
 
+-- 2.5.4: in an instance none of our chat filters stays installed. A filter that reads nothing
+-- is still a function of ours the game calls while it handles a chat line: from there on its
+-- own handling of that line runs "tainted by Overlord", and in a battleground its grouping of
+-- the "... joined the battle" lines then fails on every line of the window ("attempted to
+-- iterate a table that cannot be accessed while tainted", thousands of times; report
+-- 2026-11-16). Taken out on the way in (Sync:Suspend), put back on the way out (Sync:Resume);
+-- a login or a /reload inside an instance installs nothing until the way out.
+-- Second result: true when only the game says "instance" (a login inside one before our own
+-- suspension, or a way out the game has not finished): worth asking again in a moment.
+function Overlord.Sync:ChatFiltersAllowed()
+    if Overlord.InstanceSuspended then return false, false end
+    if type(IsInInstance) == "function" then
+        local ok, inside = pcall(IsInInstance)
+        if ok and inside then return false, true end
+    end
+    return true
+end
+
+function Overlord.Sync:RemoveChatFilters()
+    whisperOfflineFilterAttempts = 0
+    local remove = ChatFrameUtil and ChatFrameUtil.RemoveMessageEventFilter
+    if type(remove) ~= "function" then remove = ChatFrame_RemoveMessageEventFilter end
+    if type(remove) ~= "function" then return false end
+    if whisperOfflineFilterInstalled then
+        pcall(remove, "CHAT_MSG_SYSTEM", SuppressAddonWhisperOfflineSystem)
+        whisperOfflineFilterInstalled = false
+    end
+    -- (Both, whatever our flag says: it is set only when both were installed, and one of the
+    -- two installed alone would stay.)
+    pcall(remove, "CHAT_MSG_CHANNEL_NOTICE", self.SuppressSeatChannelNotice)
+    pcall(remove, "CHAT_MSG_CHANNEL_NOTICE_USER", self.SuppressSeatChannelNotice)
+    self._seatNoticeFilter = nil
+    return true
+end
+
+-- Our own suspension, or the game already saying "instance" before it (the moments between the
+-- two): the timers of the channel join stop on either.
+function Overlord.Sync:InsideInstance()
+    return not self:ChatFiltersAllowed()
+end
+
 function Overlord.Sync:InstallSeatNoticeFilter()
     if self._seatNoticeFilter then return true end
+    if not self:ChatFiltersAllowed() then return false end
     local add = ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter
     if type(add) ~= "function" then add = ChatFrame_AddMessageEventFilter end
     if type(add) ~= "function" then return false end
@@ -1330,20 +1468,24 @@ function Overlord.Sync:InstallSeatNoticeFilter()
 end
 
 function Overlord.Sync:InstallWhisperOfflineChatFilter()
-    self:InstallSeatNoticeFilter()
+    -- (2.5.4: never inside an instance; Sync:Resume calls this again on the way out.)
+    local allowed, askAgain = self:ChatFiltersAllowed()
+    if not allowed and not askAgain then return end
+    if allowed then self:InstallSeatNoticeFilter() end
     if whisperOfflineFilterInstalled then return end
     local ok = false
+    -- (Not allowed yet: nothing is installed, the bounded retry below asks again.)
     -- Current clients expose the filter on ChatFrameUtil; the old global is
     -- optional. Keep the legacy path for clients with the earlier chat API.
-    local add = ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter
+    local add = allowed and ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter
     if type(add) == "function" then
         ok = select(1, pcall(add, "CHAT_MSG_SYSTEM", SuppressAddonWhisperOfflineSystem))
     end
-    if not ok and type(ChatFrame_AddMessageEventFilter) == "function" then
+    if allowed and not ok and type(ChatFrame_AddMessageEventFilter) == "function" then
         ok = select(1, pcall(ChatFrame_AddMessageEventFilter,
             "CHAT_MSG_SYSTEM", SuppressAddonWhisperOfflineSystem))
     end
-    if not ok and type(Chat_AddMessageEventFilter) == "function" then
+    if allowed and not ok and type(Chat_AddMessageEventFilter) == "function" then
         ok = select(1, pcall(Chat_AddMessageEventFilter, SuppressAddonWhisperOfflineSystem))
     end
     if ok then
