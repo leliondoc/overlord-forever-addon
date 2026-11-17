@@ -101,6 +101,9 @@ local function client(name, version)
     lb._storageBound = true
     e.loadfile("SyncHistoryCatchup.lua")()
     e.loadfile("SyncLeaderboardPages.lua")()
+    -- (2.5.5: the captures compared first have their own test, forever_capture_totals: here every pull
+    -- that starts at the kills is a plain sweep.)
+    e.Overlord.Sync._captureTurns.FIRST_SEC = math.huge
     e.loadfile("SyncRelay.lua")()
     s.SendSyncRequest = function() return true end
     -- The feed runs while the channel does not carry (the directory's own rule).

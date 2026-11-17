@@ -50,6 +50,57 @@ local ROUTINE_FRESH_FORWARD_SEC, ROUTINE_FRESH_AGE = 60, 600
 -- whichever origin. A new attacker has another key and passes at once.
 local OP_PROGRESS_FORWARD_SEC = 15
 local routineForwarded, routineForwardedOrder = {}, {}
+-- 2.5.5: the fight brackets (FK, the "Recent activity" panel) have a share of the relay's
+-- bytes: FK_SHARE_RATE a second, counted over windows of FK_SHARE_WINDOW. Past it, a bracket
+-- relayed for somebody else is not passed on (our own panel still takes it, and our own
+-- announcements always leave: they are counted in the share, never held back by it).
+-- They had none: on a busy evening, on a client that is the only bridge between the factions
+-- (25 neighbours), FK was 45 % of the bytes the relay sent and 3,360 of the 3,610 packets it
+-- refused or lost, 169 packets were displaced and 265 expired in the queue. The storm feeds
+-- itself (a late bracket makes more players announce: 260 announcements for six battles with
+-- no delay, 912 with every whisper 30 s late, 150 whole clients), so the bytes it may take
+-- are bounded here, whatever its cause. An ordinary client stays far under the share (about
+-- 20 B/s of FK in that bench): only a hub is held to it. The panel of the players behind a
+-- hub is then later on such an evening; captures, outposts and the ranking keep their room.
+-- A bracket left out here is not queued; another copy of the same packet reaching us later
+-- (another neighbour's, or the one a friend of the other faction hands us) is weighed again,
+-- and passes if the share has room by then. Else its zone is told again by the next size or
+-- the next refresh, minutes later at most, or by another way round the hub.
+-- A bracket that has just come from the other faction over Battle.net (crossFrom) has room of
+-- its own, up to twice the share in all: we may be its only way in, and our own side's
+-- chatter must not close that door. (Still bounded: 300 B/s of the 1,000 at the very most.)
+-- The bytes are counted when they leave, not when they are queued: what waits when the share
+-- is reached still leaves, so a window may run over, and the next one starts from there.
+-- (Fields: this file's main chunk is kept away from the limit of locals.)
+-- (Windows of 30 s: six battles crossing a size together make a burst, which a window of
+-- 10 s cut on ordinary clients, 1,071 forwards in that bench; the average is what is bounded.)
+-- One neighbour may hand us FK_GATEWAY_MAX brackets to pass on per window, whoever it says
+-- their authors are (the game names who whispered a packet to us; an author's name is only
+-- written in it): a single client cannot use up the share of everybody else.
+net.FK_SHARE_RATE, net.FK_SHARE_WINDOW, net.FK_GATEWAY_MAX = 150, 30, 8
+-- True once the bytes of FK sent in the running window have used the share (`times` the share
+-- for a bracket that has just crossed the factions), or once `gateway`, the neighbour that
+-- handed us this bracket, has had its count of the window.
+function net:FightShareSpent(times, gateway)
+    local row = self.kindStats and self.kindStats.FK
+    local sent = row and tonumber(row.bytes) or 0
+    local now, share = GetTime(), self.fightShare
+    if not share or now - share.at >= self.FK_SHARE_WINDOW or sent < share.base then
+        share = { at = now, base = sent }
+        self.fightShare = share
+    end
+    if type(gateway) == "string" then
+        local by = share.by
+        if not by then
+            by = {}
+            share.by = by
+        end
+        local key = gateway:lower()
+        by[key] = (by[key] or 0) + 1
+        if by[key] > self.FK_GATEWAY_MAX then return true end
+    end
+    return sent - share.base >= self.FK_SHARE_RATE * self.FK_SHARE_WINDOW * (tonumber(times) or 1)
+end
 local CATCHUP_QUEUE = 16
 local PAGED_QUEUE = 4
 local MAP_CATCHUP_EXTRA = 2
@@ -1581,6 +1632,9 @@ function net:GetKindDiagnostics(maxRows)
         self.stats.mapRequestsCoalesced or 0, self.stats.giForwardSkipped or 0,
         self.stats.routineForwardSkipped or 0, self.stats.progressForwardSkipped or 0,
         self.stats.killCoalesced or 0)
+    -- 2.5.5: the fight brackets' share of the relay.
+    lines[#lines + 1] = string.format("Fight brackets (FK): %d B/s share; relayed for others and not passed on past it: %d.",
+        self.FK_SHARE_RATE, self.stats.fightShareSkipped or 0)
     -- 1.3.2 cross-faction live totals: what reached us, and what our own bridge did.
     lines[#lines + 1] = string.format("Enemy live totals received: %d from the channel, %d from Battle.net friends"
         .. " (their own kills: %d). Your bridge: %d posted on the channel, %d sent to enemy friends,"
@@ -3187,6 +3241,12 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
             else
                 self.stats.routineForwardSkipped = (self.stats.routineForwardSkipped or 0) + 1
             end
+        -- 2.5.5: a fight bracket relayed for somebody else, past the share of the brackets
+        -- (FK_SHARE_RATE) or past its neighbour's count (FK_GATEWAY_MAX): handled, not passed on.
+        -- (Left as "not forwarded": a later copy of this packet is weighed again, below.)
+        elseif p.kind == "FK" and p.target == "*"
+            and self:FightShareSpent(p.crossFrom ~= nil and 2 or 1, sender) then
+            self.stats.fightShareSkipped = (self.stats.fightShareSkipped or 0) + 1
         -- (2.1.1: a guild mate's copy too, for a client whose channel does work: it bridges.)
         -- (2.3.0: and a whispered one, the chain of a player whose channel is refused: every contact
         -- it was whispered to put it on its working channel at once, a capture with the priority token.)
