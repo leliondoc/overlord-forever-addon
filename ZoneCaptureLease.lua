@@ -2648,6 +2648,10 @@ GetZoneMaintenanceDeadline = function(zone, now)
         if remote.releasedAt then
             deadline = math.min(deadline, remote.releasedAt + RELEASE_KEEP + 0.5)
         end
+        -- MaybeExpire leaves a remote lease alone while our own hold has the authority: a
+        -- deadline already past re-armed the sweep every 50 ms for the rest of the hold
+        -- (4 Hz now: once the hold ends, a stale lease still expires within 0.25 s).
+        if zone.holdAuthorityLocal and deadline < now + 0.25 then deadline = now + 0.25 end
     end
     if not zone._captureBarrierCommitted and zone._captureBarrierProposalUntil then
         local localDeadline = tonumber(zone._captureBarrierProposalUntil) or now

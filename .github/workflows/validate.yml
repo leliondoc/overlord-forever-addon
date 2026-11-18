@@ -114,6 +114,10 @@ jobs:
           lua5.1 tests/forever_leaderboard_search.test.lua
           lua5.1 tests/forever_world_kills.test.lua
           lua5.1 tests/forever_honorable_kills.test.lua
+          lua5.1 tests/forever_capture_totals.test.lua
+          lua5.1 tests/forever_fight_bracket_share.test.lua
+          lua5.1 tests/forever_group_roster_cache.test.lua
+          lua5.1 tests/forever_whisper_offline_language.test.lua
           lua5.1 tests/forever_kill_ceiling.test.lua
           lua5.1 tests/forever_guild_totals.test.lua
           lua5.1 tests/audit_guild_lww_convergence.test.lua
@@ -172,6 +176,7 @@ jobs:
           lua5.1 tests/forever_resource_maps.test.lua
           lua5.1 tests/forever_capture_locations.test.lua
           lua5.1 tests/forever_front_registry.test.lua
+          lua5.1 tests/forever_tanaris_front.test.lua
           lua5.1 tests/forever_prereq_mismatch_rounds.test.lua
           lua5.1 tests/forever_za_page_headroom.test.lua
           lua5.1 tests/forever_attackable_points.test.lua

@@ -1331,14 +1331,21 @@ local function matchesLocalizedPlayerNotFound(msg)
         and (suffix == "" or lowered:find(suffix, 1, true) ~= nil)
 end
 
+-- (2.6.0: also the quotes of other languages, « » and " " and „ ": a Ukrainian line,
+-- «Name», was not read, so the offline partner was never noted and was whispered for
+-- minutes, one line every few seconds; report 2026-11-18. Paired quotes first: "ім'я"
+-- holds a lone apostrophe. A field, not a local: this chunk is close to 200 locals.)
+Overlord.Sync.QUOTE_PATTERNS = {
+    "\194\171([^\194]+)\194\187",
+    "\226\128\152([^\226\128\153]+)\226\128\153",
+    "\226\128\156([^\226\128\157]+)\226\128\157",
+    "\226\128\158([^\226]+)\226\128[\156\157]",
+    "'([^']+)'",
+    "\"([^\"]+)\"",
+}
 local function firstQuotedToken(msg)
     if not msg then return nil end
-    local patts = {
-        "'([^']+)'",
-        "\226\128\152([^\226\128\153]+)\226\128\153",
-        "\226\128\156([^\226\128\157]+)\226\128\157",
-    }
-    for _, pat in ipairs(patts) do
+    for _, pat in ipairs(Overlord.Sync.QUOTE_PATTERNS) do
         local q = msg:match(pat)
         if q then return q:match("^%s*(.-)%s*$") or q end
     end
@@ -1377,8 +1384,14 @@ local function SuppressAddonWhisperOfflineSystem(_, _, msg)
             break
         end
     end
-    if not hit then return false end
     local quoted = firstQuotedToken(msg)
+    -- 2.6.0: a line in a language the game's string does not give (a translation addon
+    -- rewrites it before us): a system line naming, between quotes and with no link, a
+    -- player we whispered in the last two minutes is that whisper's failure.
+    if not hit and not (quoted and not msg:find("|H", 1, true)
+        and recentWhisperLooksLikeFailedTarget(quoted)) then
+        return false
+    end
     if quoted and recentWhisperLooksLikeFailedTarget(quoted) then
         local directory = Overlord.ChannelDirectory
         if directory and directory.NoteUnreachable then pcall(directory.NoteUnreachable, directory, quoted) end

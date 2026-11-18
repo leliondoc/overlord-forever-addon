@@ -3248,6 +3248,8 @@ end
 -- takes from (fronts then recycle each other's: RefreshOverlays, RefreshPaths). Until
 -- then they wait under a hidden frame of our own, without parent: nothing is drawn.
 driverState.PREWARM_DOTS = 300
+-- Letters of a circle's name (ZoneArc.Letters) made ahead per pooled circle.
+driverState.PREWARM_GLYPHS = 20
 driverState.PrewarmTick = function() Overlord.MapMarkers:PrewarmMapPools() end
 
 function Overlord.MapMarkers:PrewarmMapPools()
@@ -3285,6 +3287,25 @@ function Overlord.MapMarkers:PrewarmMapPools()
     end
     if #overlayFramePool < st.prewarmCircles then
         overlayFramePool[#overlayFramePool + 1] = Overlord.MapMarkers.BuildZoneOverlay(holder)
+    elseif not ZoneArcNamesHidden() and (st.prewarmGlyphCircle or 1) <= #overlayFramePool then
+        -- The letters of each circle's name: ZoneArc.Letters made them all in the map's first
+        -- frame (hundreds of font strings). One circle per frame, hidden (Put shows a letter
+        -- it places). The font is set without ZoneArc.SetFont's memo, so the first SetFont
+        -- of a real trace always applies its own font and size.
+        local index = st.prewarmGlyphCircle or 1
+        st.prewarmGlyphCircle = index + 1
+        local ov = overlayFramePool[index]
+        local glyphs = ov.arcGlyphs
+        if not glyphs then glyphs = {}; ov.arcGlyphs = glyphs end
+        local arcHolder = ZoneArc.Holder(ov)
+        local font = Overlord.UI.ResolveLocalizedFontPath(GameFontNormalSmall, "Fonts\\FRIZQT__.TTF")
+        for i = #glyphs + 1, st.PREWARM_GLYPHS do
+            local glyph = arcHolder:CreateFontString(nil, "OVERLAY")
+            glyph:SetShadowOffset(0, 0)
+            glyph:SetFont(font, ZoneArc.FontSize(0), "")
+            glyph:Hide()
+            glyphs[i] = glyph
+        end
     elseif #pathDotPool < st.PREWARM_DOTS then
         for _ = 1, 25 do
             if #pathDotPool >= st.PREWARM_DOTS then break end
@@ -5247,8 +5268,10 @@ local function UpdateResourceOverlayVisuals(ov, resource, diameter, cfg)
         -- aux points de quete et PNJ de la carte en dessous.
         local inset = math.max(0, diameter * 0.5 - math.max(14, diameter * 0.25))
         ov:SetHitRectInsets(inset, inset, inset, inset)
-        local titleSz = math.max(7, math.min(22, diameter * 0.22))
-        local subSz = math.max(6, math.min(16, diameter * 0.16))
+        -- Half-point sizes, as the circle names (ZoneArc.FontSize): a zoom gesture rendered the
+        -- mine's two texts at a new fractional size on every step (glyphs rasterised again).
+        local titleSz = math.floor(math.max(7, math.min(22, diameter * 0.22)) * 2 + 0.5) / 2
+        local subSz = math.floor(math.max(6, math.min(16, diameter * 0.16)) * 2 + 0.5) / 2
         local titleYOffset = math.max(10, diameter * 0.16)
         ov.text:SetFont(ZONE_TITLE_FONT, titleSz)
         ov.text:SetShadowOffset(0, 0)

@@ -837,6 +837,14 @@ now = now + RP.INSPECT_AGAIN + 100
 units.target = nil
 units.raid1 = { name = "Read Me", faction = "Alliance", guid = "Player-1-RM" }
 local before = #notified
+-- 2.6.0: in combat every unit answers "combat": the tick walks no unit at all.
+local realExists, existsCalls = UnitExists, 0
+UnitExists = function(...) existsCalls = existsCalls + 1 return realExists(...) end
+InCombatLockdown = function() return true end
+RP:SampleUnits()
+assert(#notified == before and existsCalls == 0, "the tick walked the units in combat: " .. existsCalls)
+InCombatLockdown = function() return false end
+UnitExists = realExists
 RP:SampleUnits()
 assert(#notified == before + 1 and notified[#notified] == "raid1", "a group mate due for a reading is inspected")
 RP:EndInspect()

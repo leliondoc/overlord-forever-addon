@@ -6,8 +6,18 @@ const fronts = readFileSync(new URL("../Fronts.lua", import.meta.url), "utf8");
 const toc = readFileSync(new URL("../Overlord.toc", import.meta.url), "utf8");
 const outpost = readFileSync(new URL("../Outpost.lua", import.meta.url), "utf8");
 
-test("Forever fronts: seven Classic map campaigns", () => {
-    assert.match(fronts, /Overlord\.Fronts\.Order = \{"arathi", "loch_modan", "durotar", "ashenvale", "elwynn", "redridge", "hillsbrad"\}/);
+test("Forever fronts: eight Classic map campaigns", () => {
+    assert.match(fronts, /Overlord\.Fronts\.Order = \{"arathi", "loch_modan", "durotar", "ashenvale", "elwynn", "redridge", "hillsbrad", "tanaris"\}/);
+    // Tanaris: 10 points on the Classic map 1446, Gnome against Goblin, both capitals on
+    // the reachable desert floor (nothing on the southern mountains or Land's End Beach).
+    assert.match(fronts, /id = "tanaris",\s+preferredMapID = 1446,/);
+    assert.match(fronts, /Zone\("tanaris_thistleshrub", \{ center = \{29\.5, 66\.0\}, radius = 4\.5,/);
+    assert.match(fronts, /Zone\("tanaris_lost_rigger", \{ center = \{72\.7, 44\.9\}, radius = 4\.5,/);
+    assert.match(fronts, /Alliance = "GNOME_MALE", Horde = "GOBLIN_MALE"/);
+    assert.match(fronts, /tanaris = "Interface\\\\QuestionFrame\\\\Answer-WarBoard-Classic-Tanaris\.blp"/);
+    const tanarisBlock = fronts.slice(fronts.indexOf('    tanaris = {'), fronts.indexOf('Overlord.Fronts.Order'));
+    assert.equal((tanarisBlock.match(/Zone\("tanaris_/g) || []).length, 10);
+    assert.doesNotMatch(tanarisBlock, /center = \{5[0-9]\.[0-9], (8[5-9]|9[0-9])\./, "a point sits on the unreachable south");
     assert.match(fronts, /activeFrontId = "arathi"/);
     assert.match(fronts, /Zone\("stromgarde"/);
     assert.match(fronts, /center = \{25\.38, 58\.36\}/);
@@ -74,7 +84,8 @@ test("TOC Forever 16001 and CurseForge 1701204", () => {
     assert.match(hofUi, /selectedCategory = Overlord\.HallOfFameData:GetDefaultCategory\(\)/);
 });
 
-test("Outposts cover all seven fronts and four open-world sites", () => {
+test("Outposts cover all eight fronts and four open-world sites", () => {
+    assert.match(outpost, /tanaris = \{[\s\S]*?frontId = "tanaris"[\s\S]*?center = \{ 54\.5, 45\.5 \}/);
     assert.match(outpost, /frontId = "arathi"/);
     assert.match(outpost, /center = \{ 31[.]1, 60[.]2 \}/);
     assert.match(outpost, /loch_modan = \{[\s\S]*?center = \{ 40\.3, 39\.4 \}/);

@@ -386,6 +386,16 @@ function Overlord.Combat:SetDebugKill(enabled)
     debugKillMode = enabled
     if enabled then
         debugKillExpiry = GetTime() + 60
+        -- 2.6.0: the honor gain line is heard only during this window (it only feeds the trace).
+        if not Overlord.InstanceSuspended and not (IsInInstance and IsInInstance()) then
+            combatFrame:RegisterEvent("CHAT_MSG_COMBAT_HONOR_GAIN")
+        end
+        local expiry = debugKillExpiry
+        if C_Timer and C_Timer.After then
+            C_Timer.After(60.5, function()
+                if debugKillExpiry == expiry then combatFrame:UnregisterEvent("CHAT_MSG_COMBAT_HONOR_GAIN") end
+            end)
+        end
         print("|cFFFFD100[Overlord Debug]|r Kill debug ON (60s).")
         print("|cFFFFD100  InActiveFront:|r " .. tostring(Overlord.InActiveFront))
         print("|cFFFFD100  PlayerFaction:|r " .. tostring(Overlord.PlayerFaction))
@@ -396,6 +406,7 @@ function Overlord.Combat:SetDebugKill(enabled)
         print("|cFFFFD100  LastEnemy:|r " .. tostring(lastEnemyTarget.name))
         print("|cFFFFD100  Events:|r HONOR_GAIN + PARTY_KILL + PVP_KILLS + PLAYER_DEAD")
     else
+        combatFrame:UnregisterEvent("CHAT_MSG_COMBAT_HONOR_GAIN")
         print("|cFFFFD100[Overlord Debug]|r Kill debug OFF.")
     end
 end
@@ -424,7 +435,7 @@ function Overlord.Combat:Initialize()
     if not Overlord.InstanceSuspended and not (IsInInstance and IsInInstance()) then
         combatFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
         -- Le chat reste diagnostique : en raid son nom de victime n'identifie pas le tueur.
-        combatFrame:RegisterEvent("CHAT_MSG_COMBAT_HONOR_GAIN")
+        -- (2.6.0: CHAT_MSG_COMBAT_HONOR_GAIN is registered only during /debugkill: SetDebugKill.)
         -- Les VH sont comptees uniquement par PVP_KILLS_CHANGED, tous roles compris.
         combatFrame:RegisterEvent("PARTY_KILL")
         combatFrame:RegisterEvent("PLAYER_PVP_KILLS_CHANGED")
@@ -1382,7 +1393,7 @@ function Overlord.Combat:Resume()
         end)
     end
     combatFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
-    combatFrame:RegisterEvent("CHAT_MSG_COMBAT_HONOR_GAIN")
+    if debugKillMode and GetTime() < debugKillExpiry then combatFrame:RegisterEvent("CHAT_MSG_COMBAT_HONOR_GAIN") end
     combatFrame:RegisterEvent("PARTY_KILL")
     combatFrame:RegisterEvent("PLAYER_PVP_KILLS_CHANGED")
     combatFrame:RegisterEvent("PLAYER_DEAD")

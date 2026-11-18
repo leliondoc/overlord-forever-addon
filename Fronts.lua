@@ -561,9 +561,92 @@ Overlord.Fronts.Registry = {
             },
         },
     },
+    tanaris = {
+        id = "tanaris",
+        preferredMapID = 1446,
+        mapName = L.FRONT_TANARIS_NAME or "Tanaris",
+        dropdownLabel = L.FRONT_TANARIS_DROPDOWN or "Tanaris",
+        mapIDs = { [71] = true, [1446] = true },
+        mapNameNeedles = { "tanaris", "Танарис", "塔纳利斯" },
+        allianceCapitalId = "tanaris_lost_rigger",
+        hordeCapitalId = "tanaris_thistleshrub",
+        panelHeads = {
+            Alliance = "GNOME_MALE", Horde = "GOBLIN_MALE",
+            faceInward = true, hordeMirror = false,
+        },
+        -- Placed on the Classic map (1446) from the client's terrain: every circle lies
+        -- wholly in Tanaris; the mountains and the southern beach (Land's End) are out of
+        -- reach and hold nothing. Capitals chosen by the author: the Alliance holds Lost
+        -- Rigger Cove on the east coast (the circle takes in the cove's water), the Horde
+        -- the stone circle of Thistleshrub Valley in the west. Two routes of four points
+        -- around the Abyssal Sands (Broken Pillar, in the middle, holds the outpost). North:
+        -- Waterspring Field, Sandsorrow Watch, the Noxious Lair, Dunemaul Compound. South:
+        -- Southbreak Shore, the Gaping Chasm (rim), Eastmoon Ruins, Valley of the Watchers
+        -- (before the gate of Uldum). The points between the capitals stand on dry desert
+        -- floor reached on foot from Gadgetzan. Tanaris is the widest front map (6,900 yards
+        -- across): radii 3.5 and 4.5 keep the circles at Ashenvale's size on the ground.
+        zones = {
+            Zone("tanaris_lost_rigger", { center = {72.7, 44.9}, radius = 4.5,
+                status = "captured", isCapital = true }),
+            Zone("tanaris_waterspring", { center = {59.0, 41.0}, radius = 3.5, prereqZones = {"tanaris_lost_rigger"} }),
+            Zone("tanaris_sandsorrow", { center = {42.0, 29.5}, radius = 3.5, prereqZones = {"tanaris_waterspring"} }),
+            Zone("tanaris_noxious_lair", { center = {36.5, 45.5}, radius = 3.5, prereqZones = {"tanaris_sandsorrow"} }),
+            Zone("tanaris_dunemaul", { center = {38.5, 57.0}, radius = 3.5, prereqZones = {"tanaris_noxious_lair"} }),
+            Zone("tanaris_southbreak", { center = {62.0, 58.0}, radius = 3.5, prereqZones = {"tanaris_lost_rigger"} }),
+            Zone("tanaris_gaping_chasm", { center = {55.5, 65.5}, radius = 3.5, prereqZones = {"tanaris_southbreak"} }),
+            Zone("tanaris_eastmoon", { center = {46.5, 63.0}, radius = 3.5, prereqZones = {"tanaris_gaping_chasm"} }),
+            Zone("tanaris_watchers", { center = {36.0, 74.0}, radius = 3.5, prereqZones = {"tanaris_eastmoon"} }),
+            Zone("tanaris_thistleshrub", { center = {29.5, 66.0}, radius = 4.5,
+                prereqZones = {"tanaris_dunemaul", "tanaris_watchers"}, isCapital = true }),
+        },
+        prereqs = {
+            Alliance = {
+                tanaris_lost_rigger = {},
+                tanaris_waterspring = {"tanaris_lost_rigger"},
+                tanaris_sandsorrow = {"tanaris_waterspring"},
+                tanaris_noxious_lair = {"tanaris_sandsorrow"},
+                tanaris_dunemaul = {"tanaris_noxious_lair"},
+                tanaris_southbreak = {"tanaris_lost_rigger"},
+                tanaris_gaping_chasm = {"tanaris_southbreak"},
+                tanaris_eastmoon = {"tanaris_gaping_chasm"},
+                tanaris_watchers = {"tanaris_eastmoon"},
+                tanaris_thistleshrub = {"tanaris_dunemaul", "tanaris_watchers"},
+            },
+            Horde = {
+                tanaris_thistleshrub = {},
+                tanaris_dunemaul = {"tanaris_thistleshrub"},
+                tanaris_noxious_lair = {"tanaris_dunemaul"},
+                tanaris_sandsorrow = {"tanaris_noxious_lair"},
+                tanaris_waterspring = {"tanaris_sandsorrow"},
+                tanaris_watchers = {"tanaris_thistleshrub"},
+                tanaris_eastmoon = {"tanaris_watchers"},
+                tanaris_gaping_chasm = {"tanaris_eastmoon"},
+                tanaris_southbreak = {"tanaris_gaping_chasm"},
+                tanaris_lost_rigger = {"tanaris_waterspring", "tanaris_southbreak"},
+            },
+        },
+        displayOrder = {
+            Alliance = {
+                "tanaris_lost_rigger",
+                "tanaris_waterspring", "tanaris_southbreak",
+                "tanaris_sandsorrow", "tanaris_gaping_chasm",
+                "tanaris_noxious_lair", "tanaris_eastmoon",
+                "tanaris_dunemaul", "tanaris_watchers",
+                "tanaris_thistleshrub",
+            },
+            Horde = {
+                "tanaris_thistleshrub",
+                "tanaris_dunemaul", "tanaris_watchers",
+                "tanaris_noxious_lair", "tanaris_eastmoon",
+                "tanaris_sandsorrow", "tanaris_gaping_chasm",
+                "tanaris_waterspring", "tanaris_southbreak",
+                "tanaris_lost_rigger",
+            },
+        },
+    },
 }
 
-Overlord.Fronts.Order = {"arathi", "loch_modan", "durotar", "ashenvale", "elwynn", "redridge", "hillsbrad"}
+Overlord.Fronts.Order = {"arathi", "loch_modan", "durotar", "ashenvale", "elwynn", "redridge", "hillsbrad", "tanaris"}
 if not Overlord.Fronts.activeFrontId then
     Overlord.Fronts.activeFrontId = "arathi"
 end
@@ -866,6 +949,7 @@ local FEATURED_FRONT_ART = {
     elwynn = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-ElwynnForest.blp",
     redridge = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-RedridgeMountains.blp",
     hillsbrad = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-HillsbradFoothills.blp",
+    tanaris = "Interface\\QuestionFrame\\Answer-WarBoard-Classic-Tanaris.blp",
 }
 
 -- Outside a war front: the player's homeland, same WarBoard art as the fronts.
@@ -913,6 +997,7 @@ local FEATURED_FRONT_NAME_KEYS = {
     elwynn = "FRONT_ELWYNN_NAME",
     redridge = "FRONT_REDRIDGE_NAME",
     hillsbrad = "FRONT_HILLSBRAD_NAME",
+    tanaris = "FRONT_TANARIS_NAME",
 }
 
 local featuredFrontCacheDayKey = nil

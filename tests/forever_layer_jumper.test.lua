@@ -711,6 +711,36 @@ assert(gka:find("local ok, _, layer = pcall%(shard%.ResolveKnownShardPlayer, sha
     and gka:find('tag = tag:gsub%("|c%%x%%x%%x%%x%%x%%x%%x%%x", ""%):gsub%("|H%.%-|h", ""%)'),
     "a rampage reads its layer from the alert's text, link and colour codes included")
 assert(core:find("self%.LayerJumper%.OnInstanceSuspend"), "an instance does not stop the module")
+-- 2.6.0: in an instance the module's frame leaves the event stream (every addon's message came
+-- by it), and comes back on resume; so do the shard pulse and the General's nameplate badges.
+do
+    local registered = {}
+    local frame = {
+        RegisterEvent = function(_, event) registered[event] = true end,
+        UnregisterEvent = function(_, event) registered[event] = nil end,
+    }
+    local savedFrame = bob.LJ.eventFrame
+    bob.LJ.eventFrame = frame
+    bob.LJ:SetEvents(true)
+    for _, event in ipairs(bob.LJ.EVENTS) do assert(registered[event], "not registered: " .. event) end
+    bob.LJ:OnInstanceSuspend()
+    assert(next(registered) == nil, "an event of the module stayed registered in an instance")
+    bob.LJ:OnInstanceResume()
+    local count = 0
+    for _ in pairs(registered) do count = count + 1 end
+    assert(count == 5 and registered.CHAT_MSG_ADDON, "the module's events did not come back: " .. count)
+    bob.LJ.eventFrame = savedFrame
+end
+assert(core:find("pcall%(self%.Shard%.SetPulseEvents, self%.Shard, false%)")
+    and core:find("pcall%(self%.GeneralNameplate%.SetNameplateEvents, self%.GeneralNameplate, false%)"),
+    "the shard pulse or the nameplate badges stay in the event stream in an instance")
+assert(core:find("pcall%(Overlord%.Shard%.SetPulseEvents, Overlord%.Shard, true%)")
+    and core:find("pcall%(Overlord%.GeneralNameplate%.SetNameplateEvents, Overlord%.GeneralNameplate, true%)")
+    and core:find("pcall%(Overlord%.LayerJumper%.OnInstanceResume, Overlord%.LayerJumper%)"),
+    "an event frame left in an instance is not registered again on resume")
+assert(read("GeneralNameplate.lua"):find('frame:UnregisterEvent%("NAME_PLATE_UNIT_ADDED"%)')
+    and read("GeneralNameplate.lua"):find('frame:RegisterEvent%("NAME_PLATE_UNIT_ADDED"%)'),
+    "the nameplate badges have no event switch")
 assert(read("Overlord.toc"):find("\nLayerJumper%.lua\r?\n"), "the module is not loaded")
 assert(read("Commands.lua"):find('cmd == "layer" or cmd == "layers"', 1, true), "/ov layer is missing")
 local keys = { "LJ_HELP_OPTION_LABEL", "LJ_TITLE", "LJ_YOUR_LAYER", "LJ_LIST_EMPTY", "LJ_DECLINED_OFF", "LJ_CLICK_HINT", "LJ_HELP_MODE_TOOLTIP",

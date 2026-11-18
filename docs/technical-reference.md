@@ -63,7 +63,7 @@ pendant sept jours), l’historique complet étant archivé hors du jeu.
 
 ## Fronts de guerre
 
-Overlord Forever gère sept fronts indépendants avec leurs zones de capture, prérequis et capitales de faction :
+Overlord Forever gère huit fronts indépendants avec leurs zones de capture, prérequis et capitales de faction :
 
 - **Hautes-terres d'Arathi** (`arathi`) : points de capture recalés sur la carte Classic / Forever
 - **Loch Modan** (`loch_modan`)
@@ -72,6 +72,7 @@ Overlord Forever gère sept fronts indépendants avec leurs zones de capture, pr
 - **Forêt d'Elwynn** (`elwynn`), parcours rétabli du front Retail
 - **Carmines / Comté-du-Lac** (`redridge`), parcours autour du lac Placide
 - **Contreforts de Hautebrande** (`hillsbrad`), deux routes autour de la colline de Darrow entre Austrivage et Moulin-de-Tarren
+- **Tanaris** (`tanaris`), deux routes autour du désert Abysséen entre la crique des Gréements (Alliance, côte est) et la vallée des Chardonniers (Horde, ouest)
 
 Le panneau principal permet de basculer entre les fronts disponibles. Les pins et la logique de capture s'adaptent à la carte où vous vous trouvez.
 
@@ -144,7 +145,7 @@ fronts, bonus, stocks) empruntent également ce réseau.
 - Les totaux de guilde additionnent les VH de tous les membres connus, même hors du classement affiché, avec dédoublonnage des identités. Ce ne sont pas des victimes uniques. Une guilde temporairement indisponible au chargement ne supprime plus le rattachement connu.
 - Le volet latéral **Prochain objectif** remplace le bandeau flottant : vignette du front actuel et nom du prochain point à capturer. Le repère automatique sur la carte et les minuteurs de capture restent disponibles. Avec l'option « Prochain objectif flottant », la petite fenêtre au milieu de l'écran montre aussi le minuteur et la barre pendant la capture d'une zone.
 - Depuis la 2.1.0, chaque région suit son reset hebdomadaire : Amériques mardi 15:00 UTC, Europe mercredi 04:00 UTC, Corée et Taïwan mercredi 23:00 UTC (une autre région : le reset lu dans le client). Pendant la bêta, tous les comptes utilisaient la même semaine américaine (mardi 08:00 UTC, ancre commune de l’addon). Aucun reset EU le mercredi. Une sauvegarde absente au login ne déclenche plus de faux reset hebdomadaire.
-- **Avant-postes** sur les sept fronts (Hautebrande : Vigie de Lordaeron, à la tour de la Pointe du Midi), plus **Savix Chapel** dans la forêt des Pins-Argentés (61,8 / 64,4), **Aeythyr Lodge** aux Maleterres de l'Est (52,1 / 18,4), **Lesi's Bear Cave** à Sombrivage (43,4 / 45,8) et **Anad'Ora Moonwell** à Féralas (58,1 / 44,9), près de l'entrée de Hache-Tripes, capturables en permanence.
+- **Avant-postes** sur les huit fronts (Hautebrande : Vigie de Lordaeron, à la tour de la Pointe du Midi), plus **Savix Chapel** dans la forêt des Pins-Argentés (61,8 / 64,4), **Aeythyr Lodge** aux Maleterres de l'Est (52,1 / 18,4), **Lesi's Bear Cave** à Sombrivage (43,4 / 45,8) et **Anad'Ora Moonwell** à Féralas (58,1 / 44,9), près de l'entrée de Hache-Tripes, capturables en permanence.
 - **Forêts de bois** dans les Paluns (53,8 / 43,7) et en Orneval (33,6 / 63,6).
 - Appel de faction pour alerter les alliés accessibles par les passerelles de synchronisation.
 - **Commandant** : rôle du chef de groupe sur un front, position sur la carte/minimap,
@@ -157,7 +158,7 @@ fronts, bonus, stocks) empruntent également ce réseau.
 
 ### Langues
 
-Interface traduite en **anglais**, **français**, **espagnol**, **allemand**, **russe**, **portugais brésilien** et **chinois simplifié**. Le guide Forever dans `GuideLocales.lua` décrit les sept fronts, les layers et la synchronisation ; les chaînes ptBR et zhCN se trouvent dans leurs fichiers `Locales_*.lua`.
+Interface traduite en **anglais**, **français**, **espagnol**, **allemand**, **russe**, **portugais brésilien** et **chinois simplifié**. Le guide Forever dans `GuideLocales.lua` décrit les huit fronts, les layers et la synchronisation ; les chaînes ptBR et zhCN se trouvent dans leurs fichiers `Locales_*.lua`.
 
 ## Commandes
 

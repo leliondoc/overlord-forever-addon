@@ -419,11 +419,15 @@ assert(dir.chain.minute.count == 0, "a capped fact spent the minute: " .. dir.ch
 dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
 for _, name in ipairs(leafNames) do dir.partners[name:lower()] = nil end
 for i = 1, 25 do dir.partners[contacts[i]:lower()].unreachableUntil = clock + 100 end
+-- (Written by hand in this frame: the game sets it through NoteUnreachable, which drops the
+-- frame's contact memo, as Forget does for a row taken out.)
+dir._chainMemo = nil
 targets = dir:ChainTargets(packet("C", capture("offline_point", "Alliance", now)), 1)
 for _, name in ipairs(targets or {}) do
     assert((dir.partners[name:lower()].unreachableUntil or 0) <= clock, "an offline contact got a copy: " .. name)
 end
 for i = 1, 25 do dir.partners[contacts[i]:lower()].unreachableUntil = nil end
+dir._chainMemo = nil
 
 -- 2.2.2: a release goes to the hands its start went to; our own total also goes to the rampage
 -- collectors of the guild (the same two mates for every member), inside the same fan.
@@ -704,6 +708,37 @@ do
     end
     -- Without news the Commander is kept long enough for a beat to be missed (General.lua).
     assert(dir.GP_COVER_SEC * 2 + 40 <= 200, "fixture: two beats must fit the Commander's life without news")
+end
+
+-- 2.6.0: the chain's contacts are walked once per frame (a truce end or a siege start queues
+-- several packets in one frame: each walked every partner before); a contact said unreachable in
+-- that frame is left out at once, and the next frame walks again.
+do
+    advance(61)
+    local walks, realDirect = 0, net.IsDirectPeer
+    net.IsDirectPeer = function(...) walks = walks + 1 return realDirect(...) end
+    local live = 0
+    for _, row in pairs(dir.partners) do if row.chainAt then live = live + 1 end end
+    dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+    local firstFan = dir:ChainTargets(packet("C", capture("memo_point_one", "Alliance", GetServerTime())), 1)
+    dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+    local secondFan = dir:ChainTargets(packet("C", capture("memo_point_two", "Alliance", GetServerTime())), 1)
+    assert(firstFan and secondFan and #firstFan > 0 and #secondFan > 0, "fixture: two fans in one frame")
+    assert(walks <= live, "the partners were walked for each packet of the frame: " .. walks .. " for " .. live)
+    local gone = secondFan[1]
+    dir:NoteUnreachable(gone)
+    for i = 1, 6 do
+        dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+        for _, name in ipairs(dir:ChainTargets(packet("C", capture("memo_point_x" .. i, "Alliance", GetServerTime())), 1) or {}) do
+            assert(name ~= gone, "a contact said unreachable in this frame still got a copy")
+        end
+    end
+    walks = 0
+    clock = clock + 0.01
+    dir.chain.tokens, dir.chain.at = dir.CHAIN_BURST, clock
+    dir:ChainTargets(packet("C", capture("memo_point_three", "Alliance", GetServerTime())), 1)
+    assert(walks > 0, "the next frame did not walk the partners again")
+    net.IsDirectPeer = realDirect
 end
 
 print("Directory chain: fans, cover, start and release, guild speakers, caps, tokens, vouched map news, "

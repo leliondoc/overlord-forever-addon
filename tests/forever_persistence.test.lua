@@ -207,6 +207,14 @@ zone.status, zone.owner, zone.capturedTime, zone.updatedAt = "available", nil, n
 Overlord:SaveState()
 assert(OverlordDB.zones.point.owner == nil and OverlordDB.zones.point.capturedTime == nil,
     "Old saved capture overrode a legitimate neutral state")
+-- 2.6.0: a save refills the zone's own row (about 70 new tables every 30 s before), holding
+-- exactly the saved keys.
+local savedRow = OverlordDB.zones.point
+savedRow.legacyField = 1
+Overlord:SaveState()
+assert(OverlordDB.zones.point == savedRow and savedRow.legacyField == nil
+    and savedRow.status == "available" and savedRow.owner == nil,
+    "a save did not refill the zone's own row")
 
 -- A capture from before the current campaign must expire.
 OverlordDB = copy(disk)
@@ -271,3 +279,28 @@ assert(sync:GetMyBand() == "Forever_global_H")
 region = 1
 assert(sync:GetMyBand() == "Forever_global_H")
 print("Forever identity: full names, API suffix, compact sender, accents, Cyrillic and global routing OK")
+
+-- 2.6.0: the shard helper reads the keep from the Outpost sample it already took (the keep's own
+-- read added an uncached C_Map call on every shard event, thrown away).
+do
+    local savedOutpost, savedKeep, savedFront, savedSuspended =
+        Overlord.Outpost, Overlord.GuildKeep, Overlord.InActiveFront, Overlord.InstanceSuspended
+    local sample = { false, nil }
+    Overlord.Outpost = { IsPlayerOnOutpostMap = function() return sample[1], sample[2] end }
+    Overlord.GuildKeep = { IsPlayerOnKeepMap = function() error("the keep's own map read was called") end }
+    Overlord.InActiveFront, Overlord.InstanceSuspended = false, false
+    sample[1], sample[2] = true, { isFortress = true }
+    assert(Overlord:IsShardHelperActive() == true, "on a keep's map the shard helper was off")
+    sample[1], sample[2] = true, { isFortress = false }
+    assert(Overlord:IsShardHelperActive() == false, "on a plain outpost's map the shard helper was on")
+    sample[1], sample[2] = true, { standaloneOpenWorld = true }
+    assert(Overlord:IsShardHelperActive() == true, "on a standalone site the shard helper was off")
+    sample[1], sample[2] = false, nil
+    assert(Overlord:IsShardHelperActive() == false, "off every map the shard helper was on")
+    Overlord.GuildKeep = nil
+    sample[1], sample[2] = true, { isFortress = true }
+    assert(Overlord:IsShardHelperActive() == false, "without the keep module a keep turned the helper on")
+    Overlord.Outpost, Overlord.GuildKeep, Overlord.InActiveFront, Overlord.InstanceSuspended =
+        savedOutpost, savedKeep, savedFront, savedSuspended
+end
+print("Shard helper: keep read from the Outpost sample, no map read of its own")

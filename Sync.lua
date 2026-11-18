@@ -386,6 +386,8 @@ function Overlord.Sync:FrontMarkIds()
     table.sort(ids)
     return ids
 end
+-- Per front: the last body hashed (see FrontMark). Weak keys: a front table dropped goes with it.
+Overlord.Sync._frontMarkMemo = setmetatable({}, { __mode = "k" })
 function Overlord.Sync:FrontMark(front, nonce)
     local parts = {}
     for _, zone in ipairs(front.zones or {}) do
@@ -394,9 +396,27 @@ function Overlord.Sync:FrontMark(front, nonce)
         end
     end
     table.sort(parts)
-    local text = tostring(math.floor(tonumber(nonce) or 0)) .. "|" .. table.concat(parts, ",")
+    local body = table.concat(parts, ",")
+    -- The hash of nonce .. "|" .. body (h = h * 33 + byte, mod M, from 5381), by parts: only the
+    -- nonce changes from one call to the next, so the body's own hash (from 0) and 33^#body are
+    -- kept per front until the body changes, and the prefix is folded in by one modular product
+    -- (16-bit split: every step stays under 2^53). Same mark as the byte loop over the whole text.
+    local M = 2147483647
+    local memo = self._frontMarkMemo[front]
+    if not memo or memo.body ~= body then
+        local h, p = 0, 1
+        for i = 1, #body do
+            h = (h * 33 + body:byte(i)) % M
+            p = (p * 33) % M
+        end
+        memo = { body = body, h = h, p = p }
+        self._frontMarkMemo[front] = memo
+    end
+    local prefix = tostring(math.floor(tonumber(nonce) or 0)) .. "|"
     local hash = 5381
-    for i = 1, #text do hash = (hash * 33 + text:byte(i)) % 2147483647 end
+    for i = 1, #prefix do hash = (hash * 33 + prefix:byte(i)) % M end
+    local high, low = math.floor(memo.p / 65536), memo.p % 65536
+    hash = (((hash * high) % M * 65536 + hash * low) % M + memo.h) % M
     local size = 36 ^ self.FRONT_MARK_CHARS
     hash = hash % size
     local digits, out = "0123456789abcdefghijklmnopqrstuvwxyz", ""
@@ -507,7 +527,8 @@ Overlord.Sync.TRUCELESS_VERSION = "2.0.2"
 -- that states an older version is not answered. Raise it with every layout change,
 -- together with what moves "~y" (the zone ids, or Relay MAP_LAYOUT_SALT).
 -- 2.0.8: the launch floor (Relay MAP_LAYOUT_SALT, front marks required on C and ZS).
-Overlord.Sync.MAP_LAYOUT_VERSION = "2.0.8"
+-- 2.6.0: Tanaris, the eighth front (10 more zone ids in "~y").
+Overlord.Sync.MAP_LAYOUT_VERSION = "2.6.0"
 function Overlord.Sync:IsOutdatedMapPeer(name, version)
     -- The version a request states decides alone (2.0.3: unless the requester's own
     -- presence says another map layout): a player who has just updated is still known
@@ -6905,6 +6926,7 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
             responseState.responseDeadline - GetTime() + 30), function()
             if syncResponseInFlight and syncResponseGeneration == responseGeneration then
                 responseState.finished = true
+                responseState.queue = nil -- nothing reads it once finished: freed now, not after 180 s
                 syncResponseInFlight = false
                 priv.syncResponseDeadline = 0
             end
@@ -6913,6 +6935,7 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
             if syncResponseGeneration ~= responseGeneration then
                 ticker:Cancel()
                 responseState.finished = true
+                responseState.queue = nil -- nothing reads it once finished: freed now, not after 180 s
                 return
             end
             local tickNow = GetTime()
@@ -6920,6 +6943,7 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
                 or tickNow > (tonumber(responseState.responseDeadline) or 0) then
                 ticker:Cancel()
                 responseState.finished = true
+                responseState.queue = nil -- nothing reads it once finished: freed now, not after 180 s
                 if syncResponseGeneration == responseGeneration then
                     syncResponseInFlight = false
                     priv.syncResponseDeadline = 0
@@ -6932,6 +6956,7 @@ function Overlord.Sync:OnSyncRequest(sender, payload, channel, replyToOverride)
             if finished then
                 ticker:Cancel()
                 responseState.finished = true
+                responseState.queue = nil -- nothing reads it once finished: freed now, not after 180 s
                 if syncResponseGeneration == responseGeneration then
                     syncResponseInFlight = false
                     priv.syncResponseDeadline = 0
@@ -7011,8 +7036,14 @@ local cachedGroupStamp = -10
 
 local function GetGroupMemberNames()
     local now = GetTime()
-    if now - cachedGroupStamp < 2 then return cachedGroupNames end
-    cachedGroupStamp = now
+    -- 2.6.0: 10 s (was 2). The roster changes on GROUP_ROSTER_UPDATE, which resets the stamp
+    -- (OnGroupChanged); another group size rebuilds too (events missed in an instance), and a
+    -- member whose name or faction is not readable yet (after a loading screen) keeps 2 s.
+    local size = GetNumGroupMembers and GetNumGroupMembers() or 0
+    if now - cachedGroupStamp < (priv.groupNamesTtl or 2) and size == priv.groupNamesSize then
+        return cachedGroupNames
+    end
+    cachedGroupStamp, priv.groupNamesSize, priv.groupNamesTtl = now, size, 10
     wipe(cachedGroupNames)
     wipe(cachedGroupGuilds)
     wipe(cachedGroupUnits)
@@ -7022,10 +7053,12 @@ local function GetGroupMemberNames()
         local unit = prefix .. i
         if UnitExists(unit) then
             local raw = Overlord:SafeGetUnitName(unit, true)
+            if not raw or raw == "" or raw == UNKNOWNOBJECT then priv.groupNamesTtl = 2 end
             local full = Overlord.Sync.CanonicalForeverName
                 and Overlord.Sync:CanonicalForeverName(raw) or nil
             if full and full ~= "" then
                 local faction = UnitFactionGroup(unit)
+                if not faction then priv.groupNamesTtl = 2 end
                 cachedGroupNames[full] = faction or true
                 cachedGroupUnits[full:lower()] = unit
                 local key = Overlord.Sync.GetCaptureContributorDedupKey
@@ -12175,10 +12208,18 @@ local lastLbClassRefreshFromNp = 0
 
 function Overlord.Sync:MaybeLeaderboardClassRefreshFromNameplate()
     local lbUI = Overlord.LeaderboardUI
-    if not lbUI or not lbUI.IsShown or not lbUI:IsShown() then return end
+    if not lbUI or not lbUI.IsShown or not lbUI:IsShown() then
+        self._lbNpRefreshPending = nil -- the window repaints in full when it opens
+        return
+    end
     local now = GetTime()
-    if now - lastLbClassRefreshFromNp < TUNING.LB_CLASS_REFRESH_FROM_NP_INTERVAL then return end
+    if now - lastLbClassRefreshFromNp < TUNING.LB_CLASS_REFRESH_FROM_NP_INTERVAL then
+        -- A change held back by the throttle is painted by the next nameplate.
+        self._lbNpRefreshPending = true
+        return
+    end
     lastLbClassRefreshFromNp = now
+    self._lbNpRefreshPending = nil
     -- OnNameplateAdded appelle deja SetPlayerClassFromSync pour l'unite concernee :
     -- un simple rafraichissement suffit, aucun scan des unites visibles.
     if lbUI.RequestRefresh then
@@ -12211,15 +12252,20 @@ function Overlord.Sync:OnNameplateAdded(unit)
     if not fullName or fullName == "" then return end
     -- Classe : tout joueur en nameplate est une unite valide - imperative pour le classement.
     local _, plateClass = UnitClass(unit)
+    local metaChanged = false
     if plateClass and plateClass ~= "" and self:IsValidCaptureClassToken(plateClass)
         and Overlord.Leaderboard and Overlord.Leaderboard.SetPlayerClassFromSync then
-        Overlord.Leaderboard:SetPlayerClassFromSync(fullName, plateClass)
+        if Overlord.Leaderboard:SetPlayerClassFromSync(fullName, plateClass) then metaChanged = true end
     end
     local faction = UnitFactionGroup(unit)
     if faction and faction ~= "" then
-        Overlord.Leaderboard:SetPlayerFaction(fullName, faction)
+        if Overlord.Leaderboard:SetPlayerFaction(fullName, faction) then metaChanged = true end
     end
-    self:MaybeLeaderboardClassRefreshFromNameplate()
+    -- Nothing new on this unit: the open ranking has nothing to repaint (it used to
+    -- rebuild every 2 s near other players for a class and faction already known).
+    if metaChanged or self._lbNpRefreshPending then
+        self:MaybeLeaderboardClassRefreshFromNameplate()
+    end
     -- Faction inconnue (unite pas encore chargee) : ne pas whisper, risque d'erreur visible
     if not faction or faction == "" then return end
     local myFaction = UnitFactionGroup("player")
@@ -12777,6 +12823,9 @@ function Overlord.Sync:Resume()
     -- Grace RAID : si IsInRaid() reste vrai alors que la couche RAID n'est pas prête (instance -> monde),
     -- on utilise PARTY quelques secondes dans Send().
     self._instanceResumeTime = GetTime()
+    -- 2.6.0: roster events were not heard in the instance; a group of the same size
+    -- may hold other members now, so the 10 s roster cache is read again.
+    cachedGroupStamp = -10
     syncFrame:RegisterEvent("CHAT_MSG_ADDON")
     syncFrame:RegisterEvent("BN_CHAT_MSG_ADDON")
     syncFrame:RegisterEvent("GROUP_ROSTER_UPDATE")

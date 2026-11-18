@@ -1691,12 +1691,20 @@ end
 function RP:SampleUnits()
     if pending or InInstance() then return end
     if GetTime() - lastInspectAt < self.INSPECT_GAP then return end
-    local units = { "target" }
+    -- 2.6.0: in combat every unit answers "combat" (TryInspect): nothing to walk, in the fights
+    -- where a frame counts. The unit list is reused, with the group's prebuilt tokens.
+    if InCombat() then return end
+    local units = self._sampleUnits
+    if not units then units = {}; self._sampleUnits = units end
+    for i = #units, 1, -1 do units[i] = nil end
+    units[1] = "target"
     if IsInGroup and IsInGroup() then
         local prefix, size = "party", 4
         if IsInRaid and IsInRaid() then prefix, size = "raid", 40 end
+        local groupUnits = Overlord.Combat and Overlord.Combat.GROUP_UNITS
+        local tokens = groupUnits and groupUnits[prefix]
         for index = 1, size do
-            local unit = prefix .. index
+            local unit = tokens and tokens[index] or (prefix .. index)
             if UnitExists(unit) then units[#units + 1] = unit end
         end
     end

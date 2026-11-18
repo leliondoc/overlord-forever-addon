@@ -101,4 +101,23 @@ for name, entry in pairs(snapshot.playerInfo) do
 end
 assert(payloads() == beforePayloads, "a page or catch-up row changed after the logout strip")
 assert(restored() == beforeRestore, "the login restore changed after the logout strip")
+-- 2.6.0: a finished slimming marks the save; the next load skips the normalising walk once.
+assert(OverlordDB.leaderboardSnapshotSlimmed == true, "a finished slimming left no mark")
+local planted = { 1, { "WARRIOR", "Alliance", "frFR", nil, nil, "" }, 60 }
+snapshot.playerInfo["Planted Array"] = planted
+lb:NormalizeLoadedSnapshotMeta()
+assert(snapshot.playerInfo["Planted Array"] == planted and OverlordDB.leaderboardSnapshotSlimmed == nil,
+    "a marked save was walked at load, or the mark outlived the load")
+-- Without the mark (an older save, a second load) the walk runs as before.
+lb:NormalizeLoadedSnapshotMeta()
+local walked = snapshot.playerInfo["Planted Array"]
+assert(walked ~= planted and walked.class == "WARRIOR" and walked.level == 60,
+    "an unmarked save was not normalised at load")
+snapshot.playerInfo["Planted Array"] = nil
+-- A slimming that fails half-way leaves no mark from an earlier one.
+OverlordDB.leaderboardSnapshotSlimmed = true
+snapshot.playerInfo["Trap Row"] = setmetatable({}, { __index = function() error("trap") end })
+assert(not pcall(lb.SlimSavedSnapshotForLogout, lb), "fixture: the trapped row did not stop the slimming")
+assert(OverlordDB.leaderboardSnapshotSlimmed == nil, "a failed slimming kept an earlier mark")
+snapshot.playerInfo["Trap Row"] = nil
 print("Snapshot logout slim: index-only fields dropped, pages and login restore unchanged")

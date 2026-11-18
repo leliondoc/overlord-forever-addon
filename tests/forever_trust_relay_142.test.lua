@@ -272,9 +272,21 @@ assert((net.stats.groupCopiesCancelled or 0) == 1, "a mate's raid copy did not c
 advance(16)
 assert(groupSends == 0, "cancelled group copy was still sent")
 local wire4 = "global|c-4|" .. time() .. "|*|Horde Origin,Mate One|FR|f1:Horde:" .. (time() + 3)
+-- 2.6.0: the group-only copy is made when the hold fires (most holds are cancelled): one copy,
+-- marked as before, with the transport it was heard on.
+local groupCopies, realQueue = {}, net.Queue
+net.Queue = function(self, p, ...)
+    if p.groupOnly and p.id == "c-4" then groupCopies[#groupCopies + 1] = p end
+    return realQueue(self, p, ...)
+end
 net:Receive(wire4, "Mate One", "CHANNEL")
+assert(#groupCopies == 0, "the group copy was queued before its hold")
 advance(16)
 assert(groupSends >= 1, "group copy never sent when no mate carried it")
+assert(#groupCopies == 1 and groupCopies[1].skipChannel == true and groupCopies[1].heardOn == "CHANNEL"
+    and groupCopies[1].kind == "FR" and groupCopies[1].path[1] == "Horde Origin",
+    "the held group copy was not the one made on arrival: " .. #groupCopies)
+net.Queue = realQueue
 -- 2.2.2: a broadcast whispered to us (the chain) is held the same way: every raid member it
 -- was whispered to re-sent it to the raid at once before.
 local heldBefore, cancelledBefore, sendsBefore = net.stats.groupCopiesHeld or 0, net.stats.groupCopiesCancelled or 0, groupSends

@@ -59,6 +59,31 @@ drain()
 local first = lb:EnsureDisplayCache()
 assert(first.ready and #first.sortedKills == 10000)
 assert(#first.byFaction.Horde == 500)
+-- 2.6.0: the sliced build finds the player's own row (the panel's info line walked the whole
+-- ladder in one frame for it); a player out of the ladder is said so, with no index.
+do
+    local s = Overlord.Sync
+    local realName = s.GetPlayerFullName
+    local function rebuild(me)
+        s.GetPlayerFullName = function() return me end
+        lb:InvalidateDisplayCache()
+        lb:EnsureDisplayCache()
+        drain()
+        return lb:EnsureDisplayCache()
+    end
+    local view = rebuild(names[7000])
+    local want
+    for i, row in ipairs(view.sortedKills) do if row.name == names[7000] then want = i; break end end
+    assert(want and view.selfIndex == want and view.selfName ~= nil,
+        "the build did not find the player's own row: " .. tostring(view.selfIndex) .. " for " .. tostring(want))
+    view = rebuild("Nobody Ranked")
+    assert(view.selfName ~= nil and view.selfIndex == nil, "a player out of the ladder got an index")
+    s.GetPlayerFullName = realName
+    lb:InvalidateDisplayCache()
+    lb:EnsureDisplayCache()
+    drain()
+    first = lb:EnsureDisplayCache()
+end
 -- 2.5.2: the "KB" order holds the rows of sortedKills themselves (no table per player),
 -- most killing blows first, then most honorable kills; counts read from kbByName.
 do

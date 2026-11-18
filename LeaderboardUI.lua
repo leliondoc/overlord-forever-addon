@@ -1489,7 +1489,7 @@ function Overlord.LeaderboardUI:CreateFrame()
         self:SetVerticalScroll(newVal)
     end)
     scrollKills:HookScript("OnVerticalScroll", function()
-        if RenderKillRows then RenderKillRows(false) end
+        if RenderKillRows then RenderKillRows(false, true) end
         UpdateLeaderboardScrollIndicator(
             scrollKills, lbFrame.killsScrollIndUp, lbFrame.killsScrollIndDown)
     end)
@@ -2481,7 +2481,7 @@ local function HideUnusedVirtualRows(pool, used)
     end
 end
 
-RenderKillRows = function(force)
+RenderKillRows = function(force, scrollOnly)
     if not lbFrame or not lbFrame._lbView then return end
     local view = lbFrame._lbView
     -- (Sorted by honorable kills, or by killing blows: PlayerSort.)
@@ -2506,75 +2506,85 @@ RenderKillRows = function(force)
         if row and entry then
             local moved = PrepareVirtualRow(row, dataIndex, KILL_ROW_HEIGHT, P)
             if moved and LbPerf.Owns(row) then ownerMoved = true end
-            local class, faction, raceFile, raceSex = CachedMeta(metaCache, entry.name)
-            local nameStr = (type(entry.name) == "string") and entry.name or tostring(entry.name or "")
-            local shortName = (Overlord.Sync and Overlord.Sync.CanonicalForeverName
-                and Overlord.Sync:CanonicalForeverName(nameStr)) or nameStr
-            local locTag = localeCache[entry.name]
-            if locTag and locTag ~= "" then shortName = shortName .. " (" .. locTag .. ")" end
-            -- Lignes virtuelles reutilisees au defilement : le survol suit le joueur affiche.
-            if row._olPlayerName ~= entry.name then
-                row._olPlayerName, row._olDisplayName = entry.name, shortName
-                -- Same place, new player (a refresh): the open tooltip follows him.
-                if not moved and LbPerf.Owns(row) then
-                    Overlord.LeaderboardUI.OnKillRowEnter(row)
-                end
-            else
-                row._olDisplayName = shortName
-            end
             local rank = sortedRanks and sortedRanks[dataIndex] or dataIndex
             local kb = kbByName[entry.name] or 0
-            local isOwn = myName ~= nil and shortName:sub(1, #myName) == myName
-                and (#shortName == #myName or shortName:sub(#myName + 1, #myName + 2) == " (")
-            -- Némésis : tete de mort devant les cinq meilleurs ennemis (Nemesis.lua).
-            local wanted = Overlord.MostWanted and Overlord.MostWanted.IsWanted
-                and Overlord.MostWanted:IsWanted(entry.name) ~= nil
-            -- Overlord rank badge (11 to 15) left of the name, once proven (RankProof).
-            local proof = Overlord.RankProof
-            local okBadge, badgeRank = false, 0
-            if proof and proof.GetBadgeRank then okBadge, badgeRank = pcall(proof.GetBadgeRank, proof, entry.name) end
-            badgeRank = okBadge and tonumber(badgeRank) or 0
-            local paintKey = rank .. "|" .. tostring(entry.kills) .. "|" .. tostring(class) .. "|"
-                .. tostring(faction) .. "|" .. tostring(raceFile) .. "|" .. tostring(raceSex) .. "|"
-                .. shortName .. (isOwn and "|me" or "") .. (wanted and "|w" or "") .. "|" .. badgeRank
-                .. "|" .. kb
-            if row._lbPaintKey ~= paintKey then
-                row._lbPaintKey = paintKey
-                local medalColor = MEDAL_COLORS[rank]
-                if row.crest then
-                    local crest = LB_CREST[faction]
-                    if crest then row.crest:SetTexture(crest) end
-                    row.crest:SetShown(crest ~= nil)
-                end
-                ApplyLbRowGlow(row, rank, isOwn)
-                row.rank:SetText(rank)
-                SetSecondaryTextColor(row.rank, P, medalColor)
-                if raceFile and raceFile ~= "" then
-                    local raceIconShown = SetRaceIcon(row.raceIcon, raceFile, raceSex)
-                    if row.raceIconHolder then row.raceIconHolder:SetShown(raceIconShown) end
-                elseif row.raceIconHolder then
-                    row.raceIcon:Hide()
-                    row.raceIconHolder:Hide()
-                end
-                SetClassIcon(row.classIcon, class)
-                if row.classIconHolder then row.classIconHolder:Show() end
-                local cr, cg, cb = GetClassColor(class)
-                local shown = shortName
-                local badgeIcon = badgeRank > 0 and Overlord.Ranks and Overlord.Ranks.GetRankIcon
-                    and Overlord.Ranks:GetRankIcon(badgeRank)
-                if badgeIcon then shown = "|T" .. badgeIcon .. ":14:14|t " .. shown end
-                row.name:SetText(wanted
-                    and (Overlord.MostWanted.SkullMarkup(12) .. " " .. shown)
-                    or shown)
-                if cr and cg and cb then
-                    row.name:SetTextColor(cr, cg, cb)
+            -- 2.6.0: a scroll step changes no data: a row that kept its data index (ring mapping)
+            -- and shows the same entry keeps what the last pass painted. Data passes (PaintView)
+            -- still paint every row (rank badges, skulls).
+            local kept = scrollOnly == true and not moved and row._lbPaintKey ~= nil
+                and row._lbShownEntry == entry and row._lbShownKills == entry.kills
+                and row._lbShownRank == rank and row._lbShownKb == kb
+            if not kept then
+                local class, faction, raceFile, raceSex = CachedMeta(metaCache, entry.name)
+                local nameStr = (type(entry.name) == "string") and entry.name or tostring(entry.name or "")
+                local shortName = (Overlord.Sync and Overlord.Sync.CanonicalForeverName
+                    and Overlord.Sync:CanonicalForeverName(nameStr)) or nameStr
+                local locTag = localeCache[entry.name]
+                if locTag and locTag ~= "" then shortName = shortName .. " (" .. locTag .. ")" end
+                -- Lignes virtuelles reutilisees au defilement : le survol suit le joueur affiche.
+                if row._olPlayerName ~= entry.name then
+                    row._olPlayerName, row._olDisplayName = entry.name, shortName
+                    -- Same place, new player (a refresh): the open tooltip follows him.
+                    if not moved and LbPerf.Owns(row) then
+                        Overlord.LeaderboardUI.OnKillRowEnter(row)
+                    end
                 else
-                    row.name:SetTextColor(P.gray[1], P.gray[2], P.gray[3])
+                    row._olDisplayName = shortName
                 end
-                row.kills:SetText(entry.kills)
-                SetSecondaryTextColor(row.kills, P, medalColor)
-                row.kb:SetText(kb)
-                SetSecondaryTextColor(row.kb, P, medalColor)
+                local isOwn = myName ~= nil and shortName:sub(1, #myName) == myName
+                    and (#shortName == #myName or shortName:sub(#myName + 1, #myName + 2) == " (")
+                -- Némésis : tete de mort devant les cinq meilleurs ennemis (Nemesis.lua).
+                local wanted = Overlord.MostWanted and Overlord.MostWanted.IsWanted
+                    and Overlord.MostWanted:IsWanted(entry.name) ~= nil
+                -- Overlord rank badge (11 to 15) left of the name, once proven (RankProof).
+                local proof = Overlord.RankProof
+                local okBadge, badgeRank = false, 0
+                if proof and proof.GetBadgeRank then okBadge, badgeRank = pcall(proof.GetBadgeRank, proof, entry.name) end
+                badgeRank = okBadge and tonumber(badgeRank) or 0
+                local paintKey = rank .. "|" .. tostring(entry.kills) .. "|" .. tostring(class) .. "|"
+                    .. tostring(faction) .. "|" .. tostring(raceFile) .. "|" .. tostring(raceSex) .. "|"
+                    .. shortName .. (isOwn and "|me" or "") .. (wanted and "|w" or "") .. "|" .. badgeRank
+                    .. "|" .. kb
+                if row._lbPaintKey ~= paintKey then
+                    row._lbPaintKey = paintKey
+                    local medalColor = MEDAL_COLORS[rank]
+                    if row.crest then
+                        local crest = LB_CREST[faction]
+                        if crest then row.crest:SetTexture(crest) end
+                        row.crest:SetShown(crest ~= nil)
+                    end
+                    ApplyLbRowGlow(row, rank, isOwn)
+                    row.rank:SetText(rank)
+                    SetSecondaryTextColor(row.rank, P, medalColor)
+                    if raceFile and raceFile ~= "" then
+                        local raceIconShown = SetRaceIcon(row.raceIcon, raceFile, raceSex)
+                        if row.raceIconHolder then row.raceIconHolder:SetShown(raceIconShown) end
+                    elseif row.raceIconHolder then
+                        row.raceIcon:Hide()
+                        row.raceIconHolder:Hide()
+                    end
+                    SetClassIcon(row.classIcon, class)
+                    if row.classIconHolder then row.classIconHolder:Show() end
+                    local cr, cg, cb = GetClassColor(class)
+                    local shown = shortName
+                    local badgeIcon = badgeRank > 0 and Overlord.Ranks and Overlord.Ranks.GetRankIcon
+                        and Overlord.Ranks:GetRankIcon(badgeRank)
+                    if badgeIcon then shown = "|T" .. badgeIcon .. ":14:14|t " .. shown end
+                    row.name:SetText(wanted
+                        and (Overlord.MostWanted.SkullMarkup(12) .. " " .. shown)
+                        or shown)
+                    if cr and cg and cb then
+                        row.name:SetTextColor(cr, cg, cb)
+                    else
+                        row.name:SetTextColor(P.gray[1], P.gray[2], P.gray[3])
+                    end
+                    row.kills:SetText(entry.kills)
+                    SetSecondaryTextColor(row.kills, P, medalColor)
+                    row.kb:SetText(kb)
+                    SetSecondaryTextColor(row.kb, P, medalColor)
+                end
+                row._lbShownEntry, row._lbShownKills, row._lbShownRank, row._lbShownKb =
+                    entry, entry.kills, rank, kb
             end
             row:Show()
         elseif row then
@@ -3649,7 +3659,22 @@ local function ComputeLeaderboardInfo(dc)
     if counted then
         info.allianceRanked, info.hordeRanked = dc.rankedAlliance, dc.rankedHorde
     end
-    if not (counted and not myShort) then
+    -- 2.6.0: the display build found our row in its sliced walk (same test as below): no walk of
+    -- the whole ladder in this frame. Its row is checked again here (one name).
+    local selfRow = counted and myShort and dc.selfName ~= nil and dc.selfName == myName
+        and dc.selfIndex and sorted[dc.selfIndex] or nil
+    if selfRow and type(selfRow.name) == "string"
+        and (canon and sync:CanonicalForeverName(selfRow.name) or selfRow.name) ~= myName then
+        selfRow = nil
+    end
+    if selfRow then
+        local i = dc.selfIndex
+        info.myRank, info.myKills = i, tonumber(selfRow.kills) or 0
+        local above = sorted[i - 1]
+        if above then info.aboveKills = tonumber(above.kills) or 0 end
+    elseif counted and myShort and dc.selfName ~= nil and dc.selfName == myName and dc.selfIndex == nil then
+        -- (Not in the ladder: nothing to walk.)
+    elseif not (counted and not myShort) then
         -- First byte test before find: skips the method call on nearly every row.
         local b1 = myShort and myShort:byte(1)
         for i = 1, #sorted do

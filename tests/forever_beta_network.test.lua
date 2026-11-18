@@ -907,6 +907,34 @@ do
         "A neighbour's v8 capability was forgotten on a busy channel")
     now = now + 6 -- the count is cached 5 s (read for every broadcast request)
     assert(busy.Relay:CountDirectPeers() >= 1000, "Direct neighbours undercounted")
+    -- 2.6.0: past 200 neighbours a steady count is kept 30 s (the walk took 1-2.5 ms at 8,000
+    -- routes); a fifth more routes recounts at the 5 s step.
+    local counted = busy.Relay:CountDirectPeers()
+    busy.Relay.peers["first tester"].hops = 2
+    now = now + 6
+    assert(busy.Relay:CountDirectPeers() == counted, "a launch-sized count was walked again within 30 s")
+    now = now + 25
+    assert(busy.Relay:CountDirectPeers() == counted - 1, "the kept count outlived 30 s")
+    busy.Relay.peers["first tester"].hops = 1
+    now = now + 31
+    counted = busy.Relay:CountDirectPeers()
+    for i = 1, 300 do
+        local who = "Qeer" .. letters:sub(i % 26 + 1, i % 26 + 1)
+            .. letters:sub(math.floor(i / 26) % 26 + 1, math.floor(i / 26) % 26 + 1) .. " Tester"
+        busy.Relay:Receive("global|qeer-nh-" .. i .. "|" .. time() .. "|*|" .. who .. "|NH|1.0.0~ld~lr~lp6",
+            who, "CHANNEL")
+    end
+    drain()
+    now = now + 6
+    assert(busy.Relay:CountDirectPeers() >= counted + 300,
+        "a fifth more routes was not recounted: " .. busy.Relay:CountDirectPeers() .. " after " .. counted)
+    -- 2.6.0: a final ZS is read once per packet (the pump asks for every queued one, twice a tick).
+    local zs = { kind = "ZS", payload = "z1:captured:Alliance:1:" }
+    assert(busy.Relay.IsCaptureEnd(zs) and zs._terminal == true, "a final ZS was not read as a capture end")
+    zs.payload = "z1:in_progress:Alliance:1:"
+    assert(busy.Relay.IsCaptureEnd(zs), "a queued packet's verdict was read again")
+    assert(not busy.Relay.IsCaptureEnd({ kind = "ZS", payload = "z1:in_progress:Alliance:1:" }),
+        "a running ZS read as a capture end")
     -- Catch-up partners come from a bounded sample read from a random place, so
     -- clients do not all ask the same neighbours.
     local first = busy.Relay:GetDirectPeers()

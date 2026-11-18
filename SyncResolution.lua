@@ -144,7 +144,19 @@ end
 
 local function MaybeLeaderboardGuildRefreshFromSync()
     local now = GetTime()
-    if now - lastLbGuildRefreshFromGY < LB_GUILD_REFRESH_FROM_GY_INTERVAL then return end
+    if now - lastLbGuildRefreshFromGY < LB_GUILD_REFRESH_FROM_GY_INTERVAL then
+        -- 2.6.0: a change held back by the throttle gets one trailing repaint (an unchanged
+        -- GI heartbeat no longer comes along to carry it).
+        local sync = Overlord.Sync
+        if sync and not sync._lbGuildRefreshTrailing and C_Timer and C_Timer.After then
+            sync._lbGuildRefreshTrailing = true
+            C_Timer.After(LB_GUILD_REFRESH_FROM_GY_INTERVAL - (now - lastLbGuildRefreshFromGY) + 0.05, function()
+                sync._lbGuildRefreshTrailing = nil
+                MaybeLeaderboardGuildRefreshFromSync()
+            end)
+        end
+        return
+    end
     lastLbGuildRefreshFromGY = now
     if Overlord.LeaderboardUI and Overlord.LeaderboardUI.RefreshIfVisible then
         Overlord.LeaderboardUI:RefreshIfVisible()
@@ -843,8 +855,11 @@ function Overlord.Sync:OnReceiveGuildIdentity(payload, sender, channel)
     if lb and lb.MergeOwnedGuildMetadata then
         -- sender==playerName est deja prouve ci-dessus : merge direct, autoritaire
         -- et borne, sans reconstruction de l'index dedup du classement.
-        lb:MergeOwnedGuildMetadata(playerName, guildTag, guildAtStr)
-        MaybeLeaderboardGuildRefreshFromSync()
+        -- Repaint only when the register moved (same guard as GY): an unchanged GI
+        -- heartbeat no longer reruns the open ranking every 4 s.
+        if lb:MergeOwnedGuildMetadata(playerName, guildTag, guildAtStr) then
+            MaybeLeaderboardGuildRefreshFromSync()
+        end
     end
 end
 

@@ -32,8 +32,9 @@ local siteKeys = {}
 for _, file in ipairs({ "Outpost.lua", "GuildKeepSites.lua" }) do
     for key in readAll(file):gmatch('displayNameKey%s*=%s*"([%w_]+)"') do siteKeys[#siteKeys + 1] = key end
 end
--- 2.0.5: 11 outposts (one per front, plus four open-world sites) and 5 keeps.
-assert(#siteKeys == 16, "expected 16 site name keys, found " .. #siteKeys)
+-- 2.0.5: 11 outposts (one per front, plus four open-world sites) and 5 keeps; Tanaris's
+-- outpost makes 12.
+assert(#siteKeys == 17, "expected 17 site name keys, found " .. #siteKeys)
 
 for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "zhCN", "zhTW" }) do
     Overlord = { L = {} }
@@ -115,7 +116,7 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
             for i = 1, #a do assert(zone.prereqZones[i] == a[i], frontId .. ": " .. zone.id .. " map prereqs differ") end
         end
     end
-    assert(fronts == 7, "seven fronts expected, got " .. fronts)
+    assert(fronts == 8, "eight fronts expected, got " .. fronts)
     local hillsbrad = Overlord.Fronts.Registry.hillsbrad
     assert(#hillsbrad.zones == 10, "Hillsbrad is a 10-point front")
     -- Each name on its own point (a shifted index in FrontLocales would still give
@@ -129,10 +130,24 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
             assert(L.ZONE_NAMES[id] == name, id .. " is named " .. tostring(L.ZONE_NAMES[id]))
         end
         assert(L.OUTPOST_HILLSBRAD_NAME == "Lordaeron Watch", "outpost named " .. tostring(L.OUTPOST_HILLSBRAD_NAME))
+        for id, name in pairs({ tanaris_watchers = "Valley of the Watchers", tanaris_lost_rigger = "Lost Rigger Cove",
+            tanaris_thistleshrub = "Thistleshrub Valley", tanaris_dunemaul = "Dunemaul Compound",
+            tanaris_noxious_lair = "The Noxious Lair", tanaris_sandsorrow = "Sandsorrow Watch",
+            tanaris_eastmoon = "Eastmoon Ruins", tanaris_gaping_chasm = "The Gaping Chasm",
+            tanaris_southbreak = "Southbreak Shore", tanaris_waterspring = "Waterspring Field" }) do
+            assert(L.ZONE_NAMES[id] == name, id .. " is named " .. tostring(L.ZONE_NAMES[id]))
+        end
+        assert(L.OUTPOST_TANARIS_NAME == "Broken Pillar", "outpost named " .. tostring(L.OUTPOST_TANARIS_NAME))
+    elseif loc == "frFR" then
+        assert(L.ZONE_NAMES.tanaris_lost_rigger == "Crique des Gréements" and L.ZONE_NAMES.tanaris_thistleshrub
+            == "Vallée des Chardonniers", "Tanaris capitals misnamed in French")
+        assert(L.FRONT_TANARIS_NAME == "Tanaris" and L.OUTPOST_TANARIS_NAME == "Pilier brisé", "Tanaris misnamed in French")
     end
+    assert(#Overlord.Fronts.Registry.tanaris.zones == 10, "Tanaris is a 10-point front")
+    assert(L.FRONT_TANARIS_NAME and L.FRONT_TANARIS_NAME ~= "", loc .. ": no Tanaris front name")
     for _, key in ipairs(siteKeys) do
         assert(type(L[key]) == "string" and L[key] ~= "", loc .. ": site name " .. key .. " missing")
     end
     assert(L.OUTPOST_HILLSBRAD_NAME and L.OUTPOST_HILLSBRAD_NAME ~= "", loc .. ": no Hillsbrad outpost name")
 end
-print("Forever front registry: structure, panel order and names of 7 fronts and every site in 9 languages OK")
+print("Forever front registry: structure, panel order and names of 8 fronts and every site in 9 languages OK")

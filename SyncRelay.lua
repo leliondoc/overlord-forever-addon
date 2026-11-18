@@ -194,11 +194,18 @@ end
 -- A completion/release must overtake routine timer updates. Preserve FIFO among
 -- terminals: C is emitted before its final ZS, and neither invents a victory.
 local function isTerminal(p)
-    if p.kind == "C" or p.kind == "ZR"
-        or p.kind == "OC" or p.kind == "TV" then return true end
-    if p.kind ~= "ZS" then return false end
-    local status = p.payload:match("^[^:]+:([^:]+):")
-    return status == "captured" or status == "available" or status == "locked"
+    local kind = p.kind
+    if kind == "C" or kind == "ZR" or kind == "OC" or kind == "TV" then return true end
+    if kind ~= "ZS" then return false end
+    -- 2.6.0: read once per packet (its payload never changes): the pump asks it for every queued
+    -- packet of the urgent lane, twice, ten times a second while anything waits.
+    local terminal = p._terminal
+    if terminal == nil then
+        local status = p.payload:match("^[^:]+:([^:]+):")
+        terminal = status == "captured" or status == "available" or status == "locked"
+        p._terminal = terminal
+    end
+    return terminal
 end
 -- The first in_progress ZS of our own capture is the defenders' early warning. When the urgent lane
 -- is full of forwarded traffic it may take the slot of an unsent presence/progress copy, like a
@@ -1178,7 +1185,7 @@ end
 local heldForwards, heldCount = {}, { bridge = 0, group = 0 }
 -- (2.2.2: group 256: whispered chain facts are held too, a busy raid filled 128.)
 local HELD_FORWARD_MAX = { bridge = 256, group = 256 }
-local function holdForward(key, p, mode)
+local function holdForward(key, p, mode, groupHeardOn)
     local hold = net.BridgeChannelHold or {}
     local lo, hi = tonumber(hold[1]) or 0, tonumber(hold[2]) or 0
     if heldForwards[key] then return true end
@@ -1209,7 +1216,15 @@ local function holdForward(key, p, mode)
             -- never heard on our channel.
             p.skipChannel, p.skipGroup, p.heardOn = true, true, "CHANNEL"
         end
-        if net:Queue(p) == true then
+        -- 2.6.0: a group hold makes its group-only copy now: most holds are cancelled by a mate's
+        -- copy (entry.heard above), and the copy made on arrival was garbage.
+        local out = p
+        if mode == "group" then
+            out = { region = p.region, id = p.id, at = p.at, target = p.target, path = p.path,
+                kind = p.kind, payload = p.payload, groupOnly = true, skipChannel = true,
+                heardOn = groupHeardOn }
+        end
+        if net:Queue(out) == true then
             local stat = mode == "group" and "groupCopiesSent" or "bridgeForwardsSent"
             net.stats[stat] = (net.stats[stat] or 0) + 1
         elseif mode == "bridge" then
@@ -1436,17 +1451,29 @@ function net:IsEnabled() return enabled() end
 -- Every live direct route (GetDirectPeers only returns a sample). Read for
 -- every broadcast request received (answer chance): kept 5 s, the table holds
 -- thousands of neighbours at launch.
-local directCountCache = { at = -1000, value = 0, peers = nil }
+local directCountCache = { at = -1000, value = 0, peers = nil, routes = 0 }
 function net:CountDirectPeers()
     local now = GetTime()
-    if directCountCache.peers == self.peers and now - directCountCache.at < 5 then
+    -- 2.6.0: routes held, O(1) (peerOrder spans the keys remember() put in self.peers).
+    local routes = (peerOrder.last or 0) - (peerOrder.first or 1) + 1
+    -- The walk costs ~1-2.5 ms in one frame at 8,000 routes. Past 200 neighbours the count is
+    -- kept 30 s while the route table grew or shrank by less than a fifth: readers only scale
+    -- answer chances with it (a count kept high only lowers them); a login wave still
+    -- recounts every 5 s.
+    local ttl = 5
+    if directCountCache.value >= 200
+        and math.abs(routes - directCountCache.routes) * 5 <= directCountCache.routes then
+        ttl = 30
+    end
+    if directCountCache.peers == self.peers and now - directCountCache.at < ttl then
         return directCountCache.value
     end
     local count = 0
     for _, row in pairs(self.peers) do
         if now - row.at <= 300 and tonumber(row.hops) == 1 and not row.directory then count = count + 1 end
     end
-    directCountCache.at, directCountCache.value, directCountCache.peers = now, count, self.peers
+    directCountCache.at, directCountCache.value, directCountCache.peers, directCountCache.routes =
+        now, count, self.peers, routes
     return count
 end
 -- 2.0.3: does this neighbour's own last presence (150 s at most, by its own clock and by
@@ -2485,6 +2512,11 @@ function net:PayloadRoom(kind, target, pieces)
     if route and route.bnet then return 430 - head, 0 end
     return pieces * chunk - head, chunk
 end
+-- The pump's lane filters, made once (they were three new closures per tick, 10 Hz while
+-- anything waits). Fields of net: the chunk keeps its local count.
+function net._pumpIsMapPage(p) return isMapCatchup(p) and not isTargetedMapControl(p) end
+function net._pumpIsPagedPage(p) return isPagedCatchup(p) and not isPagedControl(p) end
+function net._pumpIsLegacy(p) return not isMapCatchup(p) and not isPagedCatchup(p) end
 pump = function()
     pumping = false
     if not active() then
@@ -2529,18 +2561,12 @@ pump = function()
     local bulkIndex = readyIndex(bulkLane)
     local stateIndex = readyIndex(stateLane)
     local mapControlIndex = readyIndex(catchupLane, isTargetedMapControl)
-    local mapPageIndex = readyIndex(catchupLane, function(p)
-        return isMapCatchup(p) and not isTargetedMapControl(p)
-    end)
+    local mapPageIndex = readyIndex(catchupLane, net._pumpIsMapPage)
     local mapIndex = mapControlIndex and (not mapPageIndex or mapControlCooldown == 0)
         and mapControlIndex or mapPageIndex or mapControlIndex
     local pagedControlIndex = readyIndex(catchupLane, isPagedControl)
-    local pagedPageIndex = readyIndex(catchupLane, function(p)
-        return isPagedCatchup(p) and not isPagedControl(p)
-    end)
-    local legacyIndex = readyIndex(catchupLane, function(p)
-        return not isMapCatchup(p) and not isPagedCatchup(p)
-    end)
+    local pagedPageIndex = readyIndex(catchupLane, net._pumpIsPagedPage)
+    local legacyIndex = readyIndex(catchupLane, net._pumpIsLegacy)
     local rankingIndex = pagedControlIndex
         or (pagedPageIndex and (not legacyIndex or pagedServiceRun < 3)
             and pagedPageIndex or legacyIndex or pagedPageIndex)
@@ -3276,9 +3302,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
             and p.kind ~= "SH" and IsInGroup() and not retryForward
             and not (Overlord.LayerJumper and Overlord.LayerJumper.IsHopGroup and Overlord.LayerJumper:IsHopGroup())
             and (not sync.GroupCarries or sync:GroupCarries(p.kind, p.payload)) then
-            local pg = { region = p.region, id = p.id, at = p.at, target = p.target, path = p.path,
-                kind = p.kind, payload = p.payload, groupOnly = true, skipChannel = true, heardOn = transport }
-            if holdForward("G:" .. key, pg, "group") then
+            if holdForward("G:" .. key, p, "group", transport) then
                 self.stats.groupCopiesHeld = (self.stats.groupCopiesHeld or 0) + 1
             -- Hold table full (a crowd): only terminal events and siege starts still
             -- get an immediate group copy. Re-sending every routine packet from all 40 raid members
@@ -3286,7 +3310,9 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
             -- routine state up through the periodic map request.
             elseif (not ((tonumber((net.BridgeChannelHold or {})[2]) or 0) > 0)
                     or isTerminal(p) or isOwnSiegeStart(p))
-                and self:Queue(pg) == true then
+                and self:Queue({ region = p.region, id = p.id, at = p.at, target = p.target, path = p.path,
+                    kind = p.kind, payload = p.payload, groupOnly = true, skipChannel = true,
+                    heardOn = transport }) == true then
                 self.stats.groupCopiesSent = (self.stats.groupCopiesSent or 0) + 1
             end
         end
@@ -3505,16 +3531,42 @@ function net:EmitBridgeLK(row, payload)
     -- Channel only busy: retry shortly (the flush waits 5 s); whisper only when the
     -- channel is unavailable (not joined, instance).
     if why == "wait" then return false end
-    local candidates = self:GetLocalPeers({ [row.key] = true })
-    -- Spread the load: the peers that got a row from this client longest ago first.
-    for i = #candidates, 2, -1 do
-        local j = math.random(1, i)
-        candidates[i], candidates[j] = candidates[j], candidates[i]
+    -- One neighbour list per flush (bridgeFlush sets flushPeers to false, then clears it):
+    -- every queued row walked the whole peer table and sorted it, tens of rows in one frame
+    -- when nobody could be reached. Same peers, the subject itself left out as before.
+    local memo = bridgeLK.flushPeers
+    if not memo then
+        local names = self:GetLocalPeers()
+        local keys = {}
+        for i = 1, #names do keys[i] = names[i]:lower() end
+        memo = { names = names, keys = keys }
+        if bridgeLK.flushPeers == false then bridgeLK.flushPeers = memo end
     end
-    table.sort(candidates, function(a, b)
-        return (bridgeLK.peerAt[a:lower()] or -1) < (bridgeLK.peerAt[b:lower()] or -1)
-    end)
-    for i = 1, math.min(BRIDGE_LK_FANOUT, #candidates) do
+    -- Spread the load: the BRIDGE_LK_FANOUT peers served longest ago, at random among equals
+    -- (what the shuffle before the sort gave), without sorting the whole list.
+    local candidates, pickAt, pickRoll, peerAt = {}, {}, {}, bridgeLK.peerAt
+    for i = 1, #memo.names do
+        local key = memo.keys[i]
+        if key ~= row.key then
+            local at, roll = peerAt[key] or -1, math.random()
+            local slot = #candidates + 1
+            while slot > 1 and (at < pickAt[slot - 1]
+                or (at == pickAt[slot - 1] and roll < pickRoll[slot - 1])) do
+                slot = slot - 1
+            end
+            if slot <= BRIDGE_LK_FANOUT then
+                table.insert(candidates, slot, memo.names[i])
+                table.insert(pickAt, slot, at)
+                table.insert(pickRoll, slot, roll)
+                if #candidates > BRIDGE_LK_FANOUT then
+                    candidates[#candidates] = nil
+                    pickAt[#pickAt] = nil
+                    pickRoll[#pickRoll] = nil
+                end
+            end
+        end
+    end
+    for i = 1, #candidates do
         local name = candidates[i]
         if sync:SendWhisper("LK", payload, name, true) then
             remember(bridgeLK.peerAt, bridgeLK.peerOrder, name:lower(), now, 250)
@@ -3557,6 +3609,7 @@ end
 bridgeFlush = function(state)
     local now, sent, wait, keep = GetTime(), state.sent, math.huge, {}
     while sent[1] and now - sent[1] >= 60 do table.remove(sent, 1) end
+    bridgeLK.flushPeers = false -- one neighbour list per flush (EmitBridgeLK)
     for _, key in ipairs(state.queue) do
         local row = state.rows[key]
         if row and row.pending and now - row.pendingAt <= 300 then
@@ -3599,6 +3652,7 @@ bridgeFlush = function(state)
             row.pending = nil
         end
     end
+    bridgeLK.flushPeers = nil
     state.queue = keep
     -- One live timer per bridge, moved earlier when a nearer row arrives: a stale
     -- 30 s timer let rows wait for the next kill, heard in the same second by

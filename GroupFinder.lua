@@ -1684,10 +1684,10 @@ function GF:PickLeaves(n, skipA, skipB, prefer)
     if n <= 0 or not dir or not dir.LeafNames then return {} end
     local ok, names = pcall(dir.LeafNames, dir)
     if not ok or type(names) ~= "table" then return {} end
-    local view = {}
+    local view, me = {}, (self:PlayerName() or ""):lower()
     for _, name in ipairs(names) do
         local lower = name:lower()
-        if lower ~= skipA and lower ~= skipB and lower ~= (self:PlayerName() or ""):lower() then view[#view + 1] = name end
+        if lower ~= skipA and lower ~= skipB and lower ~= me then view[#view + 1] = name end
     end
     return Draw(view, n, prefer, self.Random)
 end

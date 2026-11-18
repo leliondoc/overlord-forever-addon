@@ -148,4 +148,63 @@ assert(not two.made[1].shown, "the logo stayed over another action in an instanc
 assert(#one.made == 1 and not one.made[1].shown, "an instance event showed a layer")
 IsInInstance = function() return false end
 
+-- 8. 2.6.0: the end of a fight runs the macro repair alone (EditMacro waited for it), with no
+-- sweep of the bars: the fight's bar events swept them already.
+slots[2] = { "macro", 5 }
+onEvent(nil, "ACTIONBAR_SLOT_CHANGED")
+runTimers()
+local reads, realInfo = 0, GetActionInfo
+GetActionInfo = function(...) reads = reads + 1 return realInfo(...) end
+onEvent(nil, "ACTIONBAR_SLOT_CHANGED")
+runTimers()
+assert(reads > 0, "a bar event no longer swept the buttons")
+reads = 0
+local edits2, realEdit2 = 0, EditMacro
+EditMacro = function(...) edits2 = edits2 + 1 return realEdit2(...) end
+-- The macro gets a banner during a fight: its UPDATE_MACROS sweeps, the edit must wait.
+InCombatLockdown = function() return true end
+macros[5].icon = "Interface\\Icons\\INV_BannerPVP_02"
+onEvent(nil, "UPDATE_MACROS")
+runTimers()
+assert(edits2 == 0, "the macro was edited during a fight")
+InCombatLockdown = function() return false end
+reads = 0
+onEvent(nil, "PLAYER_REGEN_ENABLED")
+onEvent(nil, "PLAYER_REGEN_ENABLED")
+runTimers()
+assert(reads == 0, "the end of a fight swept the bars: " .. reads)
+assert(edits2 == 1 and macros[5].icon == "Interface\\Icons\\Ability_DualWield",
+    "the end of a fight did not repair the macro's banner once")
+EditMacro, GetActionInfo = realEdit2, realInfo
+
+-- 9. 2.6.0: a slot event sweeps only for a slot that holds the shortcut or is shown by a button
+-- carrying our layer; a form event only for a new form.
+GetActionInfo = function(...) reads = reads + 1 return realInfo(...) end
+reads = 0
+onEvent(nil, "ACTIONBAR_SLOT_CHANGED", 30)
+runTimers()
+assert(reads <= 1, "a foreign slot swept the bars: " .. reads)
+slots[1] = { "macro", 5 }
+onEvent(nil, "ACTIONBAR_SLOT_CHANGED", 1)
+runTimers()
+assert(one.made[1].shown, "the slot that got the shortcut was not swept")
+slots[1] = { "spell", 133 }
+onEvent(nil, "ACTIONBAR_SLOT_CHANGED", 1)
+runTimers()
+assert(not one.made[1].shown, "the slot that lost the shortcut kept our layer")
+GetShapeshiftForm = function() return 1 end
+reads = 0
+onEvent(nil, "UPDATE_SHAPESHIFT_FORM")
+runTimers()
+assert(reads > 1, "a new form did not sweep the bars")
+reads = 0
+onEvent(nil, "UPDATE_SHAPESHIFT_FORM")
+runTimers()
+assert(reads == 0, "the same form swept the bars again: " .. reads)
+GetShapeshiftForm = function() return 2 end
+onEvent(nil, "UPDATE_SHAPESHIFT_FORM")
+runTimers()
+assert(reads > 1, "another form did not sweep the bars")
+GetActionInfo, GetShapeshiftForm = realInfo, nil
+
 print("Action shortcut: the logo is our own layer over the button, kept through the game's repaints")

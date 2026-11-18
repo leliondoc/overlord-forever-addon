@@ -163,13 +163,14 @@ local function scanDisplay()
 end
 
 -- The names of the list, canonical, without ours.
-local function readList(index, members)
+-- (from, names, seen: one slice of a long list, dir:TakeSliced; names go on in the same tables.)
+local function readList(index, members, from, names, seen)
     if type(C_ChatInfo) ~= "table" or type(C_ChatInfo.GetChannelRosterInfo) ~= "function" then return nil end
     local me = sync:GetPlayerFullName()
     -- (Our own name, by its first part: the full identity test only for the names that share it.)
     local mine = tostring(me or ""):match("^[^%-]*"):lower()
-    local names, seen = {}, {}
-    for k = 1, math.min(members, dir.MAX_NAMES) do
+    names, seen = names or {}, seen or {}
+    for k = from or 1, math.min(members, dir.MAX_NAMES) do
         local ok, name = pcall(C_ChatInfo.GetChannelRosterInfo, index, k)
         local canon = ok and readable(name) and type(name) == "string" and sync:CanonicalForeverName(name) or nil
         local lower = canon and canon:lower()
@@ -210,12 +211,52 @@ function dir:CanFetch()
         and (sync.ChannelZoneQuiet == nil or sync:ChannelZoneQuiet())
 end
 
+-- 2.6.0: a list longer than READ_SLICE names is read over several frames (the session's first
+-- read canonicalises every name: 15-30 ms in one frame at 1,500). Committed whole at the end.
+dir.READ_SLICE = 200
 function dir:Take(index, members)
+    local count = math.min(tonumber(members) or 0, self.MAX_NAMES)
+    if count > self.READ_SLICE and C_Timer and C_Timer.After then return self:TakeSliced(index, count) end
     local names, listed = readList(index, members)
     if not names then
         self.state = "member list unreadable"
         return false
     end
+    return self:Commit(names, listed)
+end
+
+-- One slice per frame while dir.fetching holds this read (Tick and ListLess wait as for a fetch;
+-- Suspend drops it). Our channel's place is checked again at each slice: the game may reorder its
+-- channels, and another channel's members must never be read as ours. A fight or the channel
+-- window meanwhile: the list is read again later, the one we had is kept.
+function dir:TakeSliced(index, count)
+    local read = { index = index, count = count, k = 1, names = {}, seen = {}, generation = self.generation }
+    self.fetching = read
+    local function step()
+        if dir.fetching ~= read then return end
+        if dir.generation ~= read.generation or not outside() or inCombat() or windowOpen()
+            or scanDisplay() ~= read.index then
+            dir.fetching, dir.nextReadAt = nil, now() + dir.RETRY_SEC
+            return
+        end
+        local last = math.min(read.k + dir.READ_SLICE - 1, read.count)
+        if not readList(read.index, last, read.k, read.names, read.seen) then
+            dir.fetching, dir.nextReadAt, dir.state = nil, now() + dir.RETRY_SEC, "member list unreadable"
+            return
+        end
+        read.k = last + 1
+        if read.k <= read.count then
+            C_Timer.After(0, step)
+            return
+        end
+        dir.fetching = nil
+        dir:Commit(read.names, read.seen)
+    end
+    step()
+    return true
+end
+
+function dir:Commit(names, listed)
     self.names, self.readAt, self.state = names, now(), nil
     -- (The lookup of dir:Lists, built here out of combat rather than at its first use.)
     self.listed, self.listedFor, self.listedCount = listed, names, #names
@@ -520,6 +561,8 @@ end
 
 function dir:Forget(force)
     local at, net = now(), addon.Relay
+    self._leafMemo = nil
+    self._chainMemo = nil
     for key, row in pairs(self.partners) do
         local last = math.max(row.greetedAt or -1e9, row.heardAt or -1e9, row.presenceAt or -1e9,
             row.askedAt or -1e9, row.silentUntil or -1e9)
@@ -547,6 +590,8 @@ local function partnerRow(name, create)
     row = { name = name }
     dir.partners[key] = row
     dir.partnerCount = dir.partnerCount + 1
+    dir._leafMemo = nil
+    dir._chainMemo = nil
     return row
 end
 
@@ -714,6 +759,8 @@ function dir:OnGreeting(origin, session)
     -- 2.2.0 or later (only the list greets this way): a contact of the chain (ChainTargets), once
     -- the list we read names it. A newcomer to the list: read it again soon.
     row.chainAt = at
+    self._leafMemo = nil -- (LeafNames: a new leaf from this frame on)
+    self._chainMemo = nil
     -- 2.2.2: kept in the book for a session without the list. (A busy player's answer may wait
     -- for its next minute, REPLY_QUEUE: still the answer to our own greeting.)
     self:Remember(row.name, answersOurs or (row.greetedAt ~= nil and not hadAnswer
@@ -1031,6 +1078,8 @@ function dir:NoteUnreachable(name)
     local row = canon and self.partners[canon:lower()] or nil
     if not row then return false end
     row.chainAt, row.silentUntil = nil, now() + self.PRESENCE_SEC
+    self._leafMemo = nil -- (LeafNames: no copy to it from this frame on)
+    self._chainMemo = nil
     -- 2.2.2: no partner turns either, and the route forgotten (another one is greeted).
     row.unreachableUntil = now() + self.PRESENCE_SEC
     local net = addon.Relay
@@ -1062,8 +1111,16 @@ end
 -- third of the clients on the beta), reached directly now. The chain tells them live news as
 -- leaves (LEAF_FANS); the PvP Groups' hands and pulls serve them the same way (GroupFinder).
 function dir:LeafNames()
-    local net, out, at = addon.Relay, {}, now()
-    if not net or not net.IsDirectPeer then return out end
+    local net, at = addon.Relay, now()
+    if not net or not net.IsDirectPeer then return {} end
+    -- One walk per frame: the G copies forwarded in the same frame (PvP Groups) read the same
+    -- list, read only (PickLeaves copies it). Up to PARTNER_ROWS rows each time otherwise.
+    local memo = self._leafMemo
+    if memo and memo.at == at and memo.partners == self.partners and memo.count == self.partnerCount
+        and memo.names == self.names and memo.listed == #self.names then
+        return memo.out
+    end
+    local out = {}
     for _, row in pairs(self.partners) do
         -- (2.3.0: however old its greeting: a leaf sends no presence again while it hears us; the
         -- direct route says it is there.)
@@ -1072,7 +1129,38 @@ function dir:LeafNames()
             out[#out + 1] = row.name
         end
     end
+    if memo then
+        memo.at, memo.partners, memo.count, memo.names, memo.listed, memo.out =
+            at, self.partners, self.partnerCount, self.names, #self.names, out
+    else
+        self._leafMemo = { at = at, partners = self.partners, count = self.partnerCount,
+            names = self.names, listed = #self.names, out = out }
+    end
     return out
+end
+
+-- 2.6.0: the chain's live contacts (a direct route, not said unreachable), split by the list, walked
+-- once per frame: a truce end or a siege start queues several packets in one frame and each one
+-- walked every partner (IsDirectPeer per row) for the same answer. Read only by ChainTargets.
+function dir:ChainContacts(net)
+    local at = now()
+    local memo = self._chainMemo
+    if memo and memo.at == at and memo.partners == self.partners and memo.count == self.partnerCount
+        and memo.list == self.names and memo.listed == #self.names then
+        return memo
+    end
+    local lowers, names, known = {}, {}, {}
+    for lower, row in pairs(self.partners) do
+        if row.chainAt and net:IsDirectPeer(row.name)
+            and not (row.unreachableUntil and row.unreachableUntil > at) then
+            local n = #names + 1
+            lowers[n], names[n], known[n] = lower, row.name, self:Known(row.name) and true or false
+        end
+    end
+    memo = { at = at, partners = self.partners, count = self.partnerCount, list = self.names,
+        listed = #self.names, lowers = lowers, names = names, known = known }
+    self._chainMemo = memo
+    return memo
 end
 
 function dir:IsLeaf(name)
@@ -1517,16 +1605,12 @@ function dir:ChainTargets(p, fragmentCount)
         -- had it from our fan in 2.5.0.)
         and not (p.kind == "GW" and #p.path > 1)
     local view, leaves = {}, {}
-    local at0 = now()
-    for lower, row in pairs(self.partners) do
-        if row.chainAt and not onPath[lower] and net:IsDirectPeer(row.name)
-            and not (row.unreachableUntil and row.unreachableUntil > at0)
-            and not (skipGuild and lane0:IsGuildMate(row.name)) then
-            if self:Known(row.name) then
-                view[#view + 1] = row.name
-            else
-                leaves[#leaves + 1] = row.name
-            end
+    local contacts = self:ChainContacts(net)
+    local lowers, names, known = contacts.lowers, contacts.names, contacts.known
+    for i = 1, #names do
+        local name = names[i]
+        if not onPath[lowers[i]] and not (skipGuild and lane0:IsGuildMate(name)) then
+            if known[i] then view[#view + 1] = name else leaves[#leaves + 1] = name end
         end
     end
     -- Names that must be among the targets, taken out of the random draw and counted in the fan:
@@ -1754,12 +1838,20 @@ function dir:SettleNext(settle)
     local net = addon.Relay
     if not net or not net.HashFrac then return nil end
     local me = tostring(sync:GetPlayerFullName() or ""):lower()
+    -- A name's place in the rotation depends on (me, name) only: hashed once per total, not
+    -- once per step (up to SETTLE_MAX steps, every partner and guild mate each time).
+    local scores = settle.scores
+    if not scores or settle.scoresFor ~= me then
+        scores = {}
+        settle.scores, settle.scoresFor = scores, me
+    end
     -- (Guild mates included: the guild lane never carries a K.)
     local at, best, bestScore = now(), nil, nil
     for lower, row in pairs(self.partners) do
         if row.chainAt and self:SettleOpen(settle, lower, at) and self:PeerSettles(row.name) and net:IsDirectPeer(row.name)
             and not (row.unreachableUntil and row.unreachableUntil > at) then
-            local score = net.HashFrac(me .. "|" .. lower)
+            local score = scores[lower]
+            if not score then score = net.HashFrac(me .. "|" .. lower); scores[lower] = score end
             if not bestScore or score < bestScore then best, bestScore = row, score end
         end
     end
@@ -1777,7 +1869,8 @@ function dir:SettleNext(settle)
             if name and lower ~= me and self:SettleOpen(settle, lower, at) and at - (tonumber(heardAt) or -1e9) < memory
                 and not (row and (row.chainAt or (row.unreachableUntil and row.unreachableUntil > at)))
                 and net:IsDirectPeer(name) and self:PeerSettles(name) then
-                local score = net.HashFrac(me .. "|" .. lower)
+                local score = scores[lower]
+                if not score then score = net.HashFrac(me .. "|" .. lower); scores[lower] = score end
                 if not bestScore or score < bestScore then best, bestScore = { name = name }, score end
             end
         end

@@ -275,7 +275,10 @@ assert(#("BF:" .. string.rep("z", 11) .. "-9999999" .. ":18:18:" .. string.rep("
 -- or the zone ids), in the same change, never alone (FRONT_RULES included).
 sync._frontMarks = {}
 local GOLDEN = { arathi = "jdmc", ashenvale = "xi4b", durotar = "u15r", elwynn = "w9up",
-    hillsbrad = "6kdm", loch_modan = "ro3u", redridge = "zorv" }
+    hillsbrad = "6kdm", loch_modan = "ro3u", redridge = "zorv",
+    -- Tanaris (eighth front): its own mark; the seven others are unchanged, so their live
+    -- captures still cross between versions. Its point ids move "~y" (9rpf -> tkwc).
+    tanaris = "dzk4" }
 assert(sync.FRONT_RULES == 1, "FRONT_RULES moved: every front mark moves, and \"~y\" must move with it")
 local frontCount = 0
 for id, front in pairs(Overlord.Fronts.Registry) do
@@ -285,9 +288,9 @@ for id, front in pairs(Overlord.Fronts.Registry) do
     assert(m == GOLDEN[id], "the mark of " .. id .. " moved (" .. tostring(m) .. "): live captures would be cut "
         .. "between versions; move \"~y\" in the same change and update both golden values")
 end
-assert(frontCount == 7, "a front left the registry: update the golden marks with \"~y\"")
+assert(frontCount == 8, "a front left the registry: update the golden marks with \"~y\"")
 assert(loadfile("SyncRelay.lua"))()
-assert(Overlord.Relay and Overlord.Relay.LocalMapLayout and Overlord.Relay.LocalMapLayout() == "9rpf",
+assert(Overlord.Relay and Overlord.Relay.LocalMapLayout and Overlord.Relay.LocalMapLayout() == "tkwc",
     "the map layout \"~y\" moved: update the golden front marks in the same change")
 
 -- 2.3.0: no table built for every ZS received (each copy, refused ones included, reached the
@@ -302,5 +305,52 @@ do
     assert(not src:sub(from, to):find("{%s*in_progress%s*=%s*true"),
         "a set of the ZS statuses is built on every ZS received")
 end
+-- 2.6.0 (smoothness audit): FrontMark hashes the body once per change of the front (the nonce is
+-- folded in by a modular product). Same mark as the byte loop over the whole text, any nonce,
+-- before and after a change of the front.
+do
+    local function reference(front, nonce)
+        local parts = {}
+        for _, zone in ipairs(front.zones or {}) do
+            if zone and zone.id then
+                parts[#parts + 1] = tostring(zone.id) .. "=" .. (sync:BuildZoneAllSnapshotPart(zone) or "-")
+            end
+        end
+        table.sort(parts)
+        local text = tostring(math.floor(tonumber(nonce) or 0)) .. "|" .. table.concat(parts, ",")
+        local hash = 5381
+        for i = 1, #text do hash = (hash * 33 + text:byte(i)) % 2147483647 end
+        hash = hash % (36 ^ sync.FRONT_MARK_CHARS)
+        local digits, out = "0123456789abcdefghijklmnopqrstuvwxyz", ""
+        for _ = 1, sync.FRONT_MARK_CHARS do
+            local d = hash % 36
+            out = digits:sub(d + 1, d + 1) .. out
+            hash = math.floor(hash / 36)
+        end
+        return out
+    end
+    local nonces = { 0, 1, 7, 99, 12345, 2147483646, 987654321012, -5, 3.7 }
+    local checked = 0
+    for _, front in pairs(Overlord.Fronts.Registry) do
+        for _, nonce in ipairs(nonces) do
+            assert(sync:FrontMark(front, nonce) == reference(front, nonce), "FrontMark differs from the byte loop")
+            checked = checked + 1
+        end
+        local zone = front.zones[1]
+        local before = sync:FrontMark(front, 1)
+        local saved = zone.owner
+        zone.owner = saved == "Horde" and "Alliance" or "Horde"
+        assert(sync:FrontMark(front, 1) ~= before or reference(front, 1) == before,
+            "fixture: the owner change does not move the mark")
+        for _, nonce in ipairs(nonces) do
+            assert(sync:FrontMark(front, nonce) == reference(front, nonce),
+                "FrontMark kept an old body after the front changed")
+        end
+        zone.owner = saved
+        assert(sync:FrontMark(front, 42) == reference(front, 42), "FrontMark kept the changed body")
+    end
+    assert(checked >= 7 * #nonces, "not every front checked")
+end
+
 print("Forever front mark: one mark per front, last on the wire; another layout's sieges and captures "
     .. "ignored on that front only, unmarked ones too (2.0.8 floor); our layout taken; sizes and golden values pinned")

@@ -2475,8 +2475,24 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
         local rankedAlliance, rankedHorde = 0, 0
         -- (2.3.0: no more count of players per short name: nothing read it since 1.0, and it
         -- held a key per ranked player, about 0.25 MB at 3,000 players.)
-        for _, row in ipairs(sortedKills) do
+        -- 2.6.0: the player's own row, found in this sliced walk (same test as the panel's info
+        -- line, ComputeLeaderboardInfo, which walked the whole ladder in one frame for a player
+        -- out of it: 1.5-3 ms at 10,000 rows).
+        local selfSync = Overlord.Sync
+        local selfName = selfSync and selfSync.GetPlayerFullName and selfSync:GetPlayerFullName()
+        selfName = selfName and selfSync.CanonicalForeverName and selfSync:CanonicalForeverName(selfName) or selfName
+        local selfShort = type(selfName) == "string" and (selfName:match("^(.-)%-") or selfName) or nil
+        if selfShort == "" then selfShort = nil end
+        if not selfShort then selfName = nil end
+        local selfB1, selfIndex = selfShort and selfShort:byte(1), nil
+        for i, row in ipairs(sortedKills) do
             touch(row.name)
+            if selfShort and not selfIndex and type(row.name) == "string"
+                and row.name:byte(1) == selfB1 and row.name:find(selfShort, 1, true) == 1
+                and (selfSync.CanonicalForeverName and selfSync:CanonicalForeverName(row.name)
+                    or row.name) == selfName then
+                selfIndex = i
+            end
             local m = meta[row.name]
             if m then
                 if m[2] == "Alliance" then rankedAlliance = rankedAlliance + 1
@@ -2500,6 +2516,9 @@ function Overlord.Leaderboard:StartDisplayCacheBuild()
             hordeKills = hordeKills,
             rankedAlliance = rankedAlliance,
             rankedHorde = rankedHorde,
+            -- (The info line's own rank: selfIndex nil with selfName set = not in sortedKills.)
+            selfName = selfName,
+            selfIndex = selfIndex,
             meta = meta,
             locale = locale,
             epoch = state.epoch,
@@ -4314,6 +4333,7 @@ function Overlord.Leaderboard:SetPlayerFaction(playerName, faction, forceLocal)
             self._localFactionAliasRevision =
                 (tonumber(self._localFactionAliasRevision) or 0) + 1
         end
+        return true
     else
         local changed = (prev.faction ~= faction)
         -- Une repetition de la meme valeur n'apporte aucune information au join lexical.
@@ -4330,6 +4350,7 @@ function Overlord.Leaderboard:SetPlayerFaction(playerName, faction, forceLocal)
             self._localFactionAliasRevision =
                 (tonumber(self._localFactionAliasRevision) or 0) + 1
         end
+        return true
     end
 end
 
@@ -4352,6 +4373,7 @@ function Overlord.Leaderboard:SetPlayerClassFromSync(playerName, classToken)
             norm, nil, "", 0, "", "", nil, nil, nil, "", nil, nil, nil)
         NoteDedupCanonicalName(self, playerName)
         self:MarkPlayerMetaDirty(playerName)
+        return true
     else
         local changed = (prev.class ~= norm)
         prev.class = norm
@@ -4363,6 +4385,7 @@ function Overlord.Leaderboard:SetPlayerClassFromSync(playerName, classToken)
                 self:MarkPlayerMetaDirty(playerName)
             end
         end
+        return changed
     end
 end
 
@@ -5412,6 +5435,8 @@ function Overlord.Leaderboard:ResetOutpostLedgerCounters()
     self._outpostLedgerCountersSource = nil
     self._outpostLedgerRows, self._outpostLedgerEvents = nil, nil
     self._outpostCapturerIndex = nil
+    -- Any counters a sliced pass (EnsureOutpostLedgerPrepared) built before this are stale.
+    self._outpostLedgerCountersEpoch = (tonumber(self._outpostLedgerCountersEpoch) or 0) + 1
 end
 
 -- True when this character could have made a capture at claimTs on a site whose
@@ -5680,6 +5705,13 @@ function Overlord.Leaderboard:EnsureOutpostLedgerPrepared(requireCurrent)
         coroutine.yield()
         budgetOps, budgetStarted = 0, clockMs()
     end
+    -- The pace counters (ensureOutpostLedgerCounters), built by this sliced pass when they are
+    -- not held for this table (login, /reload, weekly reset): the first capture heard after
+    -- login built them in one block (30-60 ms near OUTPOST_LEDGER_EVENTS_MAX). Same content:
+    -- the raw events left after this pass, keyed by the raw capturer as the lazy build does.
+    local primeIndex = not (self._outpostLedgerCountersSource == source and self._outpostLedgerRows) and {} or nil
+    local primeRows, primeEvents = 0, 0
+    local countersEpoch = tonumber(self._outpostLedgerCountersEpoch) or 0
     local worker = coroutine.create(function()
         budgetStarted = clockMs()
         local changed = false
@@ -5697,16 +5729,29 @@ function Overlord.Leaderboard:EnsureOutpostLedgerPrepared(requireCurrent)
             if type(row) == "table" then
                 local events = {}
                 local lastTs, lastCapturer = 0, nil
+                local primeGap
+                if primeIndex then
+                    primeRows = primeRows + 1
+                    primeEvents = primeEvents + math.max(0, math.floor(tonumber(row.count) or 0))
+                end
                 if type(row.events) == "table" then
                     local eventKey, capturer = next(row.events)
                     while eventKey ~= nil do
                         local okEvent, nextKey, nextValue = pcall(next, row.events, eventKey)
                         if not okEvent then error(nextKey) end
                         local eventTs = math.floor(tonumber(eventKey) or 0)
+                        local rawCapturer = capturer
                         capturer = normalizeOutpostCapturer(capturer)
                         if eventTs > 0 and capturer then
                             events[#events + 1] = { ts = eventTs, capturer = capturer }
                             if eventTs > lastTs then lastTs, lastCapturer = eventTs, capturer end
+                            if primeIndex then
+                                primeGap = primeGap or outpostSiteGap(row.siteKey)
+                                local key = outpostCapturerKey(rawCapturer)
+                                local list = primeIndex[key]
+                                if not list then list = {}; primeIndex[key] = list end
+                                list[#list + 1] = { ts = eventTs, gap = primeGap }
+                            end
                         else
                             row.events[eventKey], changed = nil, true
                         end
@@ -5787,7 +5832,12 @@ function Overlord.Leaderboard:EnsureOutpostLedgerPrepared(requireCurrent)
                 sortRowsWithYield(subPages[i][j], lexical, yieldWork)
             end
         end
-        return { rows = rows, blocks = blocks, subPages = subPages }, buildSource, changed, repairs
+        if primeIndex then
+            local function byTs(a, b) return a.ts < b.ts end
+            for _, list in pairs(primeIndex) do sortRowsWithYield(list, byTs, yieldWork) end
+        end
+        return { rows = rows, blocks = blocks, subPages = subPages }, buildSource, changed, repairs,
+            primeIndex and { rows = primeRows, events = primeEvents, index = primeIndex } or nil
     end)
 
     local function finishFailure(err)
@@ -5821,6 +5871,7 @@ function Overlord.Leaderboard:EnsureOutpostLedgerPrepared(requireCurrent)
             return
         end
         local snapshot, committedSource, changed, repairs = result[2], result[3], result[4], result[5]
+        local primed = result[6]
         if type(snapshot) ~= "table" or type(committedSource) ~= "table" then
             finishFailure("OUTPOST_LEDGER_EMPTY_COMMIT")
             return
@@ -5833,6 +5884,17 @@ function Overlord.Leaderboard:EnsureOutpostLedgerPrepared(requireCurrent)
             end
             self:ResetOutpostLedgerCounters()
             changed = true
+        end
+        -- Published only when nothing touched the ledger during the pass (a capture heard
+        -- meanwhile built the counters itself, a repair or a reset dropped them: kept as is).
+        if type(primed) == "table" and not (type(repairs) == "table" and #repairs > 0)
+            and (tonumber(self._outpostLedgerRevision) or 0) == buildRevision
+            and (tonumber(self._outpostLedgerCountersEpoch) or 0) == countersEpoch
+            and self._outpostLedgerCountersSource ~= committedSource
+            and OverlordDB and OverlordDB.outpostCaptureCounts == committedSource then
+            self._outpostLedgerCountersSource = committedSource
+            self._outpostLedgerRows, self._outpostLedgerEvents = primed.rows, primed.events
+            self._outpostCapturerIndex = primed.index
         end
         self._outpostSyncSnapshot = snapshot
         self._outpostLedgerSource = committedSource
@@ -6142,7 +6204,74 @@ function Overlord.Leaderboard:GetOutpostWeeklyStats()
     local now = GetTime and GetTime() or 0
     -- Second retour vrai : resultat en retard, l'appelant relit apres l'intervalle.
     if cache and now - (cache.builtAt or 0) < OUTPOST_WEEKLY_STATS_MIN_INTERVAL then return cache, true end
+    -- 2.6.0: a rebuild runs in slices (up to 10-25 ms in one frame every 3 s near the ledger
+    -- caps while the view was open); the view keeps the previous stats meanwhile and is
+    -- repainted when the new ones are ready. Only the first view (nothing to show) is built here.
+    if cache and cache.ledger[1] == counts and C_Timer and C_Timer.After
+        and coroutine and coroutine.create then
+        if not self._outpostWeeklyStatsBuild then self:StartOutpostWeeklyStatsBuild(counts) end
+        return cache, true
+    end
+    local built = self:BuildOutpostWeeklyStats(counts)
+    cache = {
+        ledger = setmetatable({ counts }, { __mode = "v" }), revision = revision, events = events,
+        builtAt = now, capturers = built.capturers, rivalries = built.rivalries,
+    }
+    self._outpostWeeklyStats = cache
+    return cache
+end
+
+-- The sliced rebuild of GetOutpostWeeklyStats (about 1.25 ms per frame). The ledger stamp is
+-- read when it starts: a capture recorded meanwhile leaves the result stale, so the next read
+-- (3 s later at the earliest) builds again and the view converges once the captures stop.
+function Overlord.Leaderboard:StartOutpostWeeklyStatsBuild(counts)
+    local token = {}
+    self._outpostWeeklyStatsBuild = token
+    local revision = tonumber(self._outpostLedgerRevision) or 0
+    local events = tonumber(self._outpostLedgerEvents) or 0
+    local budgetOps, budgetStarted = 0, 0
+    local function clockMs()
+        if debugprofilestop then return debugprofilestop() end
+        return ((GetTime and GetTime()) or 0) * 1000
+    end
+    local function yieldWork()
+        budgetOps = budgetOps + 1
+        if budgetOps < 64 and (clockMs() - budgetStarted) < 1.25 then return end
+        coroutine.yield()
+        budgetOps, budgetStarted = 0, clockMs()
+    end
+    local lb = self
+    local worker = coroutine.create(function() return lb:BuildOutpostWeeklyStats(counts, yieldWork) end)
+    local function step()
+        if lb._outpostWeeklyStatsBuild ~= token then return end
+        budgetStarted = clockMs()
+        local ok, built = coroutine.resume(worker)
+        if not ok then
+            lb._outpostWeeklyStatsBuild = nil
+            -- Reported once per failed build (it surfaced in RefreshSitesWeek before).
+            local handler = geterrorhandler and geterrorhandler()
+            if handler then pcall(handler, built) end
+            return
+        end
+        if coroutine.status(worker) ~= "dead" then C_Timer.After(0, step); return end
+        lb._outpostWeeklyStatsBuild = nil
+        -- A new week (another ledger table) meanwhile: this result is for the old one.
+        if lb:GetOutpostCaptureCountsTable() ~= counts or type(built) ~= "table" then return end
+        lb._outpostWeeklyStats = {
+            ledger = setmetatable({ counts }, { __mode = "v" }), revision = revision, events = events,
+            builtAt = GetTime and GetTime() or 0, capturers = built.capturers, rivalries = built.rivalries,
+        }
+        local ui = Overlord.LeaderboardUI
+        if ui and ui.RefreshSitesWeek then pcall(ui.RefreshSitesWeek, ui) end
+    end
+    C_Timer.After(0, step)
+end
+
+-- Capturers and rivalries of the ledger. yieldWork given: sliced, never inside one row's
+-- events (they may grow between two slices: each row is read whole, in one slice).
+function Overlord.Leaderboard:BuildOutpostWeeklyStats(counts, yieldWork)
     -- Lignes retenues, numerotees dans l'ordre (site, guilde) : meme ordre sur tous les clients.
+    -- (Collected in one go: a table may not get new keys while next() walks it.)
     local rows = {}
     for _, row in pairs(counts) do
         local site = type(row) == "table" and Overlord.OutpostSites and Overlord.OutpostSites[row.siteKey]
@@ -6153,10 +6282,11 @@ function Overlord.Leaderboard:GetOutpostWeeklyStats()
                 isKeep = site.isFortress == true }
         end
     end
-    table.sort(rows, function(a, b)
+    -- (Keys (site, guild) are unique among the rows kept: the merge sort's order is the same.)
+    sortRowsWithYield(rows, function(a, b)
         if a.siteKey ~= b.siteKey then return a.siteKey < b.siteKey end
         return a.key < b.key
-    end)
+    end, yieldWork)
     local byCapturer, bySite, capturerKeys = {}, {}, {}
     for index = 1, math.min(#rows, 8191) do
         local info = rows[index]
@@ -6184,6 +6314,8 @@ function Overlord.Leaderboard:GetOutpostWeeklyStats()
                 list[#list + 1] = math.floor(ts) * 8192 + index
             end
         end
+        -- Between two rows only (see above).
+        if yieldWork then yieldWork() end
     end
     local capturers = {}
     for _, c in pairs(byCapturer) do capturers[#capturers + 1] = c end
@@ -6192,8 +6324,10 @@ function Overlord.Leaderboard:GetOutpostWeeklyStats()
         if a.keeps ~= b.keeps then return a.keeps > b.keeps end
         return a.name < b.name
     end)
+    if yieldWork then yieldWork() end
     local byPair = {}
     for _, list in pairs(bySite) do
+        if yieldWork then yieldWork() end
         table.sort(list)
         for i = 2, #list do
             local prev, cur = rows[list[i - 1] % 8192], rows[list[i] % 8192]
@@ -6219,12 +6353,7 @@ function Overlord.Leaderboard:GetOutpostWeeklyStats()
         if a.taker ~= b.taker then return a.taker < b.taker end
         return a.victim < b.victim
     end)
-    cache = {
-        ledger = setmetatable({ counts }, { __mode = "v" }), revision = revision, events = events,
-        builtAt = now, capturers = capturers, rivalries = rivalries,
-    }
-    self._outpostWeeklyStats = cache
-    return cache
+    return { capturers = capturers, rivalries = rivalries }
 end
 
 -- Nombre max de campagnes archivees (au-dela, les plus anciennes sont supprimees)
@@ -7137,6 +7266,8 @@ end
 -- 2.2.2: a shared entry is an array (see publishMeta) and is saved as the same named
 -- table as before; other entries are slimmed in place (the Lua state ends here).
 function Overlord.Leaderboard:SlimSavedSnapshotForLogout()
+    -- (2.6.0: set again below only once this walk is done: an error here leaves no mark.)
+    if OverlordDB then OverlordDB.leaderboardSnapshotSlimmed = nil end
     local snapshot = OverlordDB and OverlordDB.leaderboardSnapshot
     if type(snapshot) ~= "table" or type(snapshot.playerInfo) ~= "table" then return end
     local info = snapshot.playerInfo
@@ -7150,6 +7281,8 @@ function Overlord.Leaderboard:SlimSavedSnapshotForLogout()
             end
         end
     end
+    -- 2.6.0: no entry array left: the next load skips NormalizeLoadedSnapshotMeta's walk.
+    OverlordDB.leaderboardSnapshotSlimmed = true
 end
 
 -- PLAYER_LOGOUT: compact playerInfo rows (see newInfoRow) back to named rows, the
@@ -7191,6 +7324,11 @@ end
 -- PLAYER_LOGOUT handler) holds raw entry arrays: give their readers the named
 -- tables back once, at load.
 function Overlord.Leaderboard:NormalizeLoadedSnapshotMeta()
+    -- 2.6.0: a save whose logout slimming finished holds no entry array (SlimSavedSnapshotForLogout):
+    -- no walk of up to ~11,500 rows in the login stage's frame. The mark is read once per load.
+    local slimmed = OverlordDB and OverlordDB.leaderboardSnapshotSlimmed == true
+    if OverlordDB then OverlordDB.leaderboardSnapshotSlimmed = nil end
+    if slimmed then return end
     local snapshot = OverlordDB and OverlordDB.leaderboardSnapshot
     if type(snapshot) ~= "table" or type(snapshot.playerInfo) ~= "table" then return end
     local info = snapshot.playerInfo

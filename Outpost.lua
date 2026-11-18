@@ -221,6 +221,20 @@ Overlord.OutpostSites = {
         center = { 20.8, 48.6 },
         halfSize = 1.35,
     },
+    tanaris = {
+        id = "tanaris_outpost",
+        siteKey = "tanaris",
+        displayNameKey = "OUTPOST_TANARIS_NAME",
+        frontId = "tanaris",
+        mapID = 1446,
+        mapIDs = { [71] = true, [1446] = true },
+        regionalMapIDs = { [12] = true, [1414] = true },
+        mapNameNeedles = { "tanaris", "Танарис", "塔纳利斯" },
+        -- Pilier brisé, au milieu du désert Abysséen : entre les deux routes de capture,
+        -- sol plat et sec (terrain du client), à pied depuis Gadgetzan.
+        center = { 54.5, 45.5 },
+        halfSize = 1.35,
+    },
 }
 
 -- Fortresses use this engine, storage and wire protocol; only presentation and
