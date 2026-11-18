@@ -6,7 +6,7 @@ Enum = { UIMapType = { Zone = 3, Continent = 2 } }
 local now, currentMap, x, y = 10, 1417, 0, 0
 local classicAvailable = true
 local classic = { [1417]=true, [1432]=true, [1411]=true, [1440]=true,
-    [1429]=true, [1433]=true, [1424]=true }
+    [1429]=true, [1433]=true, [1424]=true, [1446]=true }
 function GetTime() return now end
 function wipe(t) for k in pairs(t) do t[k] = nil end end
 function CreateVector2D(x, y) return {x=x, y=y} end
@@ -99,6 +99,18 @@ local anchors = {
     {"hillsbrad_dun_garok", 69.5, 70.5}, -- end of the path to Dun Garok, before its gate
     {"hillsbrad_thoradin_gate", 79.3, 54.8}, -- Arathi road, inside the gate of Thoradin's Wall
     {"hillsbrad_durnholde", 75.8, 44.5}, -- the road up to Durnholde Keep's gate
+    -- Tanaris: placed on the Classic map 1446 from the client's terrain (subzone areas,
+    -- dry desert floor reached on foot from Gadgetzan); see docs/forever-capture-locations.md.
+    {"tanaris_watchers", 36.0, 74.0}, -- Valley of the Watchers, before the gate of Uldum
+    {"tanaris_thistleshrub", 29.5, 66.0}, -- Thistleshrub Valley
+    {"tanaris_dunemaul", 38.5, 57.0}, -- west edge of Dunemaul Compound
+    {"tanaris_noxious_lair", 36.5, 45.5}, -- flat sand below the Noxious Lair
+    {"tanaris_sandsorrow", 42.0, 29.5}, -- Sandsorrow Watch
+    {"tanaris_eastmoon", 46.5, 63.0}, -- Eastmoon Ruins
+    {"tanaris_gaping_chasm", 55.5, 65.5}, -- north rim of the Gaping Chasm
+    {"tanaris_southbreak", 62.0, 58.0}, -- sand above Southbreak Shore
+    {"tanaris_waterspring", 59.0, 41.0}, -- Waterspring Field
+    {"tanaris_lost_rigger", 72.7, 44.9}, -- Lost Rigger Cove, east coast
 }
 local seen = {}
 for _, a in ipairs(anchors) do
@@ -145,6 +157,26 @@ for _, sample in ipairs({
 end
 assert(Overlord.Fronts:ResolveFrontByMapID(623) == nil,
     "The Southshore / Tarren Mill battleground is not the open-world front")
+-- Tanaris: the goblin towns, the unreachable south (mountains and Land's End Beach) and the
+-- outpost's spot in the middle of the Abyssal Sands hold no capture point.
+local tanaris = Overlord.Fronts:GetFront("tanaris")
+Overlord.Fronts.activeFrontId = tanaris.id
+Overlord.ZoneDatabase = tanaris.zones
+currentMap = tanaris.preferredMapID
+for _, sample in ipairs({
+    {52.4, 27.5, nil}, -- Gadgetzan
+    {66.8, 21.3, nil}, -- Steamwheedle Port
+    {53.5, 86.0, nil}, {55.0, 91.0, nil}, -- mountains and Land's End Beach (no way in)
+    {54.5, 45.5, nil}, -- Broken Pillar: the outpost, not a point
+    {38.1, 19.2, nil}, -- Zul'Farrak's entrance
+    {74.5, 46.0, "tanaris_lost_rigger"}, -- inside the capital's wider circle
+    {36.0, 76.5, "tanaris_watchers"},
+}) do
+    now, x, y = now + 1, sample[1], sample[2]
+    local found = Overlord.Zones:GetCurrentPlayerZone()
+    assert((found and found.id) == sample[3], "Unexpected Tanaris capture at " .. x .. ", " .. y
+        .. ": " .. tostring(found and found.id))
+end
 local count = 0
 for _, front in pairs(Overlord.Fronts.Registry) do
     for _, zone in ipairs(front.zones) do
@@ -152,10 +184,10 @@ for _, front in pairs(Overlord.Fronts.Registry) do
         count = count + 1
     end
 end
-assert(count == 67) -- 2.0.3: Hillsbrad, 2 points -> 10
+assert(count == 77) -- 2.0.3: Hillsbrad, 2 points -> 10; Tanaris: +10
 classicAvailable = false
 for _, front in pairs(Overlord.Fronts.Registry) do
     front.resolvedMapID = nil
     assert(front.mapIDs[Overlord.Fronts:GetMapID(front.id)], "Alias-only client lost its map")
 end
-print("Forever capture locations: 67 references, capture detection and preferred Vanilla maps OK")
+print("Forever capture locations: 77 references, capture detection and preferred Vanilla maps OK")

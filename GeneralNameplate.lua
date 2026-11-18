@@ -450,6 +450,21 @@ function Overlord.GeneralNameplate:OnNamePlateRemoved(unit)
     end
 end
 
+-- 2.6.0: in an instance the nameplate events leave the stream (OnNamePlateAdded returned at once
+-- there, after the game had called it for every plate of a battleground); the badges are hidden.
+function Overlord.GeneralNameplate:SetNameplateEvents(on)
+    if not frame then return end
+    if on then
+        frame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
+        frame:RegisterEvent("NAME_PLATE_UNIT_REMOVED")
+    else
+        frame:UnregisterEvent("NAME_PLATE_UNIT_ADDED")
+        frame:UnregisterEvent("NAME_PLATE_UNIT_REMOVED")
+        for unit in pairs(overlays) do HideOverlay(unit) end
+        enemyHolderNameplateUnit = nil
+    end
+end
+
 local function CancelDuelMaxTimer()
     if duelMaxTimer then
         duelMaxTimer:Cancel()
@@ -550,8 +565,11 @@ function Overlord.GeneralNameplate:Initialize()
     initialized = true
 
     frame = CreateFrame("Frame")
-    frame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
-    frame:RegisterEvent("NAME_PLATE_UNIT_REMOVED")
+    -- (Started inside an instance: the events come with CompleteResumeFromInstance.)
+    if not Overlord.InstanceSuspended then
+        frame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
+        frame:RegisterEvent("NAME_PLATE_UNIT_REMOVED")
+    end
     frame:SetScript("OnEvent", function(_, event, unit)
         if event == "NAME_PLATE_UNIT_ADDED" then
             Overlord.GeneralNameplate:OnNamePlateAdded(unit)

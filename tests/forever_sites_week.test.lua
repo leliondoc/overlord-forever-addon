@@ -58,9 +58,69 @@ assert(lb:GetOutpostWeeklyStats() == stats, "Stats should be cached")
 take(keep, "Orcs", "Horde", 500, "Thrall-Realm")
 local held, late = lb:GetOutpostWeeklyStats()
 assert(held == stats and late == true, "A rebuild within 3 s keeps the previous stats and says so")
+-- 2.6.0: past the interval the rebuild runs in slices (C_Timer.After(0) steps); the view
+-- keeps the previous stats until it is done, then reads the new ones.
+local pending = {}
+C_Timer.After = function(_, fn) pending[#pending + 1] = fn end
+local function runTimers()
+    for _ = 1, 1000 do
+        local fns = pending
+        pending = {}
+        if #fns == 0 then return end
+        for _, fn in ipairs(fns) do fn() end
+    end
+    error("the sliced rebuild never ended")
+end
 now = now + 5
+local waiting, isLate = lb:GetOutpostWeeklyStats()
+assert(waiting == stats and isLate == true, "A rebuild past the interval runs in slices, previous stats meanwhile")
+assert(lb:GetOutpostWeeklyStats() == stats, "A second read while the rebuild runs starts no other one")
+runTimers()
 local after = lb:GetOutpostWeeklyStats()
 assert(after ~= stats and after.rivalries[1].taker == "Orcs" and after.rivalries[1].count == 2,
     "A new capture must update the rivalries")
 assert(after.capturers[1].name == "Thrall-Realm" and after.capturers[1].total == 3)
+
+-- Same content as a build in one block, sliced to one operation per slice.
+do
+    local whole = lb:BuildOutpostWeeklyStats(lb:GetOutpostCaptureCountsTable())
+    local slices = 0
+    local co = coroutine.create(function()
+        return lb:BuildOutpostWeeklyStats(lb:GetOutpostCaptureCountsTable(), function()
+            slices = slices + 1
+            coroutine.yield()
+        end)
+    end)
+    local ok, sliced
+    repeat ok, sliced = coroutine.resume(co); assert(ok, sliced) until coroutine.status(co) == "dead"
+    assert(slices > 3, "the build did not yield")
+    assert(#sliced.capturers == #whole.capturers and #sliced.rivalries == #whole.rivalries, "sliced build differs")
+    for i, cap in ipairs(whole.capturers) do
+        local s = sliced.capturers[i]
+        assert(s.name == cap.name and s.total == cap.total and s.keeps == cap.keeps, "sliced capturers differ")
+    end
+    for i, riv in ipairs(whole.rivalries) do
+        local s = sliced.rivalries[i]
+        assert(s.taker == riv.taker and s.victim == riv.victim and s.count == riv.count, "sliced rivalries differ")
+    end
+end
+
+-- A capture recorded while a rebuild runs: published with the stamp of its start, so the
+-- next read past the interval builds again and shows it.
+do
+    take(outpost, "Lions", "Alliance", 300, "Arthas-Realm")
+    now = now + 5
+    local _, lateAgain = lb:GetOutpostWeeklyStats()
+    assert(lateAgain == true, "a stale cache was not rebuilt")
+    take(keep, "Wolves", "Horde", 200, "Rexxar-Realm")
+    runTimers()
+    now = now + 5
+    local _, still = lb:GetOutpostWeeklyStats()
+    assert(still == true, "a capture heard during the rebuild was taken as already counted")
+    runTimers()
+    local final = lb:GetOutpostWeeklyStats()
+    local rexxar
+    for _, cap in ipairs(final.capturers) do if cap.name == "Rexxar-Realm" then rexxar = cap end end
+    assert(rexxar and rexxar.total == 2 and rexxar.keeps == 1, "the capture heard during the rebuild is missing")
+end
 print("Sites week: capturers per character, cross-faction rivalries, cache by ledger OK")

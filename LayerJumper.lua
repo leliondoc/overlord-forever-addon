@@ -1131,7 +1131,16 @@ end
 
 -- An instance: like the rest of Overlord, this module stops. The jump under way is given up
 -- WITHOUT touching the group (a dungeon's or a battleground's group is never left nor read).
+LJ.EVENTS = { "CHAT_MSG_ADDON", "PARTY_INVITE_REQUEST", "GROUP_JOINED", "GROUP_ROSTER_UPDATE", "GROUP_LEFT" }
+function LJ:SetEvents(on)
+    local f = self.eventFrame
+    if not f then return end
+    for _, event in ipairs(self.EVENTS) do pcall(on and f.RegisterEvent or f.UnregisterEvent, f, event) end
+end
+function LJ:OnInstanceResume() self:SetEvents(true) end
+
 function LJ:OnInstanceSuspend()
+    self:SetEvents(false) -- 2.6.0: out of the event stream (every addon's message came by here)
     if self.frame and self.frame:IsShown() then self.frame:Hide() end
     self.hop, self.lateLeave = nil, nil
     for key in pairs(self.guests) do self.guests[key] = nil end
@@ -1279,10 +1288,8 @@ function LJ:Initialize()
     if not CreateFrame then return end
     local f = CreateFrame("Frame")
     self.eventFrame = f
-    for _, event in ipairs({ "CHAT_MSG_ADDON", "PARTY_INVITE_REQUEST", "GROUP_JOINED",
-        "GROUP_ROSTER_UPDATE", "GROUP_LEFT" }) do
-        pcall(f.RegisterEvent, f, event)
-    end
+    -- (Started inside an instance: the events come with CompleteResumeFromInstance.)
+    self:SetEvents(not Overlord.InstanceSuspended)
     f:SetScript("OnEvent", function(_, event, ...) LJ:OnEvent(event, ...) end)
 end
 

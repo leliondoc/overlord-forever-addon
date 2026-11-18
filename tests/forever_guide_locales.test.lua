@@ -98,9 +98,12 @@ for _, loc in ipairs({ "enUS", "frFR", "esES", "esMX", "deDE", "ruRU", "ptBR", "
     -- ("contreforts de Hautebrande"), so the first UTF-8 character is left out.
     -- zhTW has no front names of its own (English) next to a Chinese tutorial.
     if loc ~= "zhTW" then
-        local tail = L.FRONT_HILLSBRAD_NAME:gsub("^[%z\1-\127\194-\244][\128-\191]*", "")
-        assert(L.GUIDE_PROGRESS_BODY:find(tail, 1, true),
-            loc .. ": the progress text does not list " .. L.FRONT_HILLSBRAD_NAME .. " with the other fronts")
+        -- Tanaris (eighth front) is listed the same way.
+        for _, name in ipairs({ L.FRONT_HILLSBRAD_NAME, L.FRONT_TANARIS_NAME }) do
+            local tail = name:gsub("^[%z\1-\127\194-\244][\128-\191]*", "")
+            assert(L.GUIDE_PROGRESS_BODY:find(tail, 1, true),
+                loc .. ": the progress text does not list " .. name .. " with the other fronts")
+        end
     end
     assert(not L.GUIDE_OUTPOST_BODY:find(L.ZONE_NAMES.hillsbrad_tarren_mill, 1, true),
         loc .. ": the outpost text still says Hillsbrad has none")

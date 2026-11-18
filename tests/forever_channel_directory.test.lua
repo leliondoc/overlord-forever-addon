@@ -1138,5 +1138,51 @@ sent = {}
 advance(dir.TICK_SEC * 2 + dir.BOOT_GREETS * dir.BOOT_GAP + 10)
 assert(#whispers("NH") <= 1, "back from a short instance: " .. #whispers("NH") .. " greetings, no boot")
 
+-- 2.6.0: a long member list is read 200 names a frame and committed whole at the end; a fight,
+-- our channel moved in the list or an instance meanwhile drop the read and keep the old list.
+do
+    local savedMembers, savedLoaded = members, loaded
+    members = {}
+    for i = 1, 450 do
+        members[i] = "Slice " .. string.char(65 + math.floor((i - 1) / 26)) .. string.char(97 + (i - 1) % 26) .. "tro"
+    end
+    loaded = true
+    local function slices() advance(0.001) end
+    local before, reads = dir.names, dir.stats.reads
+    assert(dir:Take(ourIndex(), #members) == true, "a long list was not taken")
+    assert(dir.names == before and dir.fetching ~= nil, "a long list was committed before its last slice")
+    slices()
+    assert(#dir.names == 450 and dir.listedCount == 450 and dir.stats.reads == reads + 1 and dir.fetching == nil,
+        "the sliced read did not commit the whole list: " .. #dir.names)
+    assert(dir.nextReadAt == clock + dir.REFRESH_SEC or dir.nextReadAt > clock + dir.RETRY_SEC,
+        "the next read was not set by the commit")
+    local committed = dir.names
+    -- A fight between two slices.
+    dir:Take(ourIndex(), #members)
+    combat = true
+    slices()
+    combat = false
+    assert(dir.names == committed and dir.fetching == nil and math.abs(dir.nextReadAt - (clock + dir.RETRY_SEC)) < 0.01,
+        "a fight did not drop the sliced read")
+    -- Our channel moved in the game's list between two slices: another channel is never read as ours.
+    dir:Take(ourIndex(), #members)
+    table.insert(display, 1, { name = "Nouveau", category = "CHANNEL_CATEGORY_CUSTOM" })
+    slices()
+    table.remove(display, 1)
+    assert(dir.names == committed and dir.fetching == nil, "a moved channel's slices were committed")
+    -- An instance between two slices.
+    dir:Take(ourIndex(), #members)
+    dir:Suspend()
+    slices()
+    assert(dir.names == committed, "a read cut by an instance was committed")
+    dir:Resume()
+    -- A short list stays one read.
+    members = { "Short Lista", "Short Listb" }
+    reads = dir.stats.reads
+    assert(dir:Take(ourIndex(), #members) == true and #dir.names == 2 and dir.stats.reads == reads + 1,
+        "a short list was not read at once")
+    members, loaded = savedMembers, savedLoaded
+end
+
 print("Channel directory: list fetched without a world channel, greeting and answer, a reload answered, silence, "
     .. "answers capped, presence kept, ranking and map turns, closer ranking rounds, map pace kept, reports OK")

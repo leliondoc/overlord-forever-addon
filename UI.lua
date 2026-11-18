@@ -3418,7 +3418,14 @@ combatFrame:SetScript("OnEvent", function(_, event)
             -- restores the panel from the saved setting.
             if Overlord.InstanceSuspended then return end
             mainFrame:Show()
-            if Overlord.UI then Overlord.UI:Refresh() end
+            -- Full repaint in its own frame, as OnEnterFront and the instance exit do
+            -- (Show fires the dock's OnShow: both in one frame at every combat end).
+            C_Timer.After(0, function()
+                if Overlord.InstanceSuspended or not Overlord.UI then return end
+                -- Back in combat meanwhile: the next combat end repaints.
+                if not mainFrame:IsShown() then return end
+                Overlord.UI:Refresh()
+            end)
         end
     end
 end)

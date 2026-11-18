@@ -27,7 +27,7 @@ for _, frontId in ipairs(Overlord.Fronts.Order) do
         zone._loginSyncUnconfirmed = nil
     end
 end
-assert(count == 67, "67 points on the 7 fronts (2.0.3), found " .. count)
+assert(count == 77, "77 points on the 8 fronts (Tanaris), found " .. count)
 local pages, built = sync:BuildZoneAllSnapshotPages(zones, "G")
 assert(type(pages) == "table" and #pages > 0, "no map built for the worst case")
 local cap = sync.ZA_SNAPSHOT_MAX_PAGES

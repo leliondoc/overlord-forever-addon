@@ -342,6 +342,7 @@ end
 
 local actionIconRefreshPending = false
 local actionIconRepairPending = false
+local actionIconRepairScheduled = false
 
 -- Runs one frame after the event. Every feature stops in instances: no macro edit (it
 -- wakes every addon with UPDATE_MACROS) and no sweep of the bars. Only the buttons that
@@ -370,18 +371,56 @@ local function ScheduleActionButtonIconRefresh()
     C_Timer.After(0, RunActionButtonIconRefresh)
 end
 
+-- 2.6.0: combat end runs the macro icon repair alone (EditMacro waited for it). The bar events
+-- of the fight already swept the buttons, and an edit wakes UPDATE_MACROS, which sweeps.
+local function RunShortcutRepair()
+    actionIconRepairScheduled = false
+    if actionIconRefreshPending or not actionIconRepairPending then return end
+    actionIconRepairPending = false
+    if Overlord.InstanceSuspended or (IsInInstance and IsInInstance()) then return end
+    RepairExistingShortcutMacroIcon()
+end
+
 function Overlord.ActionShortcut:OnInstanceResume()
     InvalidateShortcutMacroCache()
     actionIconRepairPending = true
     ScheduleActionButtonIconRefresh()
 end
 
-actionIconEventFrame:SetScript("OnEvent", function(_, event)
+-- 2.6.0: a bar slot that neither holds the shortcut nor is shown by a button carrying our
+-- layer changes nothing: no sweep of the 96 buttons for it. A form event without a new form
+-- neither (the client sends it on aura changes in combat).
+local lastShapeshiftForm
+local function SlotMayTouchShortcut(slot)
+    if not RefreshShortcutMacroCache() then return next(shortcutLayers) ~= nil end
+    local ok, actionType, macroIndex = pcall(GetActionInfo, slot)
+    if ok and actionType == "macro" and shortcutMacroIndices[macroIndex] then return true end
+    for button, layer in pairs(shortcutLayers) do
+        if layer:IsShown() and GetButtonAction(button) == slot then return true end
+    end
+    return false
+end
+
+actionIconEventFrame:SetScript("OnEvent", function(_, event, slot)
     if event == "UPDATE_MACROS" or event == "PLAYER_ENTERING_WORLD" then
         InvalidateShortcutMacroCache()
     end
     if event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_REGEN_ENABLED" then
         actionIconRepairPending = true
+    end
+    if event == "PLAYER_REGEN_ENABLED" then
+        if not actionIconRepairScheduled then
+            actionIconRepairScheduled = true
+            C_Timer.After(0, RunShortcutRepair)
+        end
+        return
+    end
+    if event == "ACTIONBAR_SLOT_CHANGED" and type(slot) == "number" and slot > 0
+        and not actionIconRefreshPending and not SlotMayTouchShortcut(slot) then return end
+    if event == "UPDATE_SHAPESHIFT_FORM" then
+        local form = GetShapeshiftForm and GetShapeshiftForm() or 0
+        if form == lastShapeshiftForm then return end
+        lastShapeshiftForm = form
     end
     ScheduleActionButtonIconRefresh()
 end)

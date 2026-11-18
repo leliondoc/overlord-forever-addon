@@ -1,4 +1,4 @@
--- Names for the Forever Redridge and Hillsbrad fronts.
+-- Names for the Forever Redridge, Hillsbrad and Tanaris fronts.
 local L = Overlord.L
 local locale = GetLocale() or "enUS"
 local names = {
@@ -68,6 +68,44 @@ for index, id in ipairs({ "hillsbrad_western_strand", "hillsbrad_internment_camp
     L.ZONE_NAMES[id] = h[index + 8]
 end
 L.OUTPOST_HILLSBRAD_NAME = h[8]
+-- { zone, Valley of the Watchers, Lost Rigger Cove, Thistleshrub Valley, Dunemaul Compound,
+--   The Noxious Lair, Sandsorrow Watch, Eastmoon Ruins, The Gaping Chasm, Southbreak Shore,
+--   Waterspring Field, outpost (Broken Pillar) }
+-- Place names as the game writes them: frFR from the Forever client's AreaTable, enUS, deDE
+-- and esES from the Retail client (same area ids); ruRU, ptBR and zhCN not read from a client.
+local tanarisNames = {
+    enUS = { "Tanaris", "Valley of the Watchers", "Lost Rigger Cove", "Thistleshrub Valley",
+        "Dunemaul Compound", "The Noxious Lair", "Sandsorrow Watch", "Eastmoon Ruins",
+        "The Gaping Chasm", "Southbreak Shore", "Waterspring Field", "Broken Pillar" },
+    frFR = { "Tanaris", "Vallée des guetteurs", "Crique des Gréements", "Vallée des Chardonniers",
+        "Base des Cognedunes", "Le Repaire nuisible", "Guet de Tristesable", "Ruines d'Estelune",
+        "Le Gouffre béant", "Rivage de Brisesud", "Champ des puisatiers", "Pilier brisé" },
+    esES = { "Tanaris", "Valle de los Vigías", "Cala del Aparejo Perdido", "Valle Cardizal",
+        "Base Machacaduna", "La Guarida Ponzoñosa", "Vigía Penas de Arena", "Ruinas de Lunaeste",
+        "Sima Abierta", "Tierras del Sur", "Campo del Manantial", "Pilar Partido" },
+    deDE = { "Tanaris", "Tal der Behüter", "Mast- und Schotbucht", "Disteltal",
+        "Truppenlager der Dünenbrecher", "Der Giftige Unterschlupf", "Sandmarterwache", "Ostmondruinen",
+        "Die Klaffende Schlucht", "Südbrandung", "Wasserfeld", "Zerbrochene Säule" },
+    ruRU = { "Танарис", "Долина Стражей", "Бухта Потерянной Оснастки", "Долина Чертополоха",
+        "Лагерь Дюнных Громил", "Ядовитое логово", "Застава Скорбных Песков", "Руины Восточной Луны",
+        "Зияющая расселина", "Южный берег", "Поле Родников", "Сломанная колонна" },
+    ptBR = { "Tanaris", "Vale dos Vigias", "Enseada do Cordame Perdido", "Vale do Cardo",
+        "Complexo Malhaduna", "Covil Nocivo", "Vigia Mágoa de Areia", "Ruínas da Lua Leste",
+        "Abismo Escancarado", "Costa Quebra-sul", "Campo da Nascente", "Pilar Quebrado" },
+    zhCN = { "塔纳利斯", "守望者山谷", "落帆海湾", "蓟草谷",
+        "沙槌营地", "毒性巢穴", "沙痛哨岗", "东月废墟",
+        "大裂口", "南浪海岸", "泉水平原", "断柱" },
+}
+tanarisNames.esMX = tanarisNames.esES
+local tn = tanarisNames[locale] or tanarisNames.enUS
+L.FRONT_TANARIS_NAME = tn[1]
+L.FRONT_TANARIS_DROPDOWN = tn[1]
+for index, id in ipairs({ "tanaris_watchers", "tanaris_lost_rigger", "tanaris_thistleshrub",
+    "tanaris_dunemaul", "tanaris_noxious_lair", "tanaris_sandsorrow", "tanaris_eastmoon",
+    "tanaris_gaping_chasm", "tanaris_southbreak", "tanaris_waterspring" }) do
+    L.ZONE_NAMES[id] = tn[index + 1]
+end
+L.OUTPOST_TANARIS_NAME = tn[12]
 L.FRONT_REDRIDGE_NAME = n[1]
 L.FRONT_REDRIDGE_DROPDOWN = n[1]
 L.OUTPOST_REDRIDGE_NAME = n[10]

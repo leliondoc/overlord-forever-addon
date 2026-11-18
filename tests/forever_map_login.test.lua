@@ -1,4 +1,4 @@
--- Real seven-front login with empty SavedVariables, as on Forever beta.
+-- Real login on every front (eight since Tanaris) with empty SavedVariables, as on Forever beta.
 assert(loadfile("tests/forever_world_kills.test.lua"))()
 Overlord.L.ZONE_NAMES = {}
 Overlord.L.SYNC_CAPTURED_FRIENDLY = "Captured"
@@ -35,7 +35,7 @@ local function assertGlobalMap()
             end
         end
     end
-    assert(capitals == 14, "Global snapshot omitted a front's capitals")
+    assert(capitals == 16, "Global snapshot omitted a front's capitals")
     return pages
 end
 assertGlobalMap()
@@ -95,4 +95,4 @@ capital.owner, capital.status, capital.capturedTime = nil, "in_progress", nil
 Overlord.Zones:InitializeMissingCapitalDefaults()
 assert(capital.status == "in_progress" and capital.owner == nil,
     "Default initialization ended a capture in progress")
-print("Forever map login: seven-front defaults and full Elwynn catch-up during capital assault OK")
+print("Forever map login: eight-front defaults and full Elwynn catch-up during capital assault OK")

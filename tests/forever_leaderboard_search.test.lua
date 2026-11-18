@@ -339,6 +339,35 @@ if killRow._olPlayerName ~= 'Player 1' then
     assert(guildLookups > lookupsBefore and tip.lines[1] ~= 'Player 1',
         'Tooltip kept the previous player after the row was reused')
 end
+-- 2.6.0: a scroll step changes no data: the rows that kept their place are not painted again
+-- (a drag of the bar painted every row up to 60 times a second); a data pass paints them all.
+do
+    function methods:IsMouseOver() return false end
+    local savedProof, badgeReads = Overlord.RankProof, 0
+    Overlord.RankProof = { GetBadgeRank = function() badgeReads = badgeReads + 1 return 0 end }
+    frame.scrollKills:SetVerticalScroll(0); drain()
+    ui:Refresh(); drain()
+    local pooled = badgeReads
+    assert(pooled > 0, 'fixture: the data pass read no badge')
+    badgeReads = 0
+    frame.scrollKills:SetVerticalScroll(10); drain()
+    assert(badgeReads == 0, 'a scroll of less than a row painted rows again: ' .. badgeReads)
+    frame.scrollKills:SetVerticalScroll(10 + 26); drain()
+    assert(badgeReads >= 1 and badgeReads <= 2, 'a one-row step painted more than the rows coming in: ' .. badgeReads)
+    -- An entry whose total changed in place is painted on the next step.
+    local shown
+    for _, w in ipairs(frames) do
+        if w.rank and w.kills and w:IsShown() and w._lbShownEntry then shown = w; break end
+    end
+    shown._lbShownEntry.kills = shown._lbShownEntry.kills + 1
+    badgeReads = 0
+    frame.scrollKills:SetVerticalScroll(12 + 26); drain()
+    assert(badgeReads >= 1 and shown.kills.text == shown._lbShownEntry.kills,
+        'a row whose total changed kept its old total on a scroll step')
+    shown._lbShownEntry.kills = shown._lbShownEntry.kills - 1
+    Overlord.RankProof = savedProof
+    frame.scrollKills:SetVerticalScroll(0); drain()
+end
 -- 1.4.0: hovering a guild row lists its ranked members (top 10 + how many more)
 -- from the display cache; nothing is computed or sent on hover.
 function tip:AddDoubleLine(left, right) self.lines[#self.lines + 1] = left .. " = " .. right end
@@ -585,6 +614,37 @@ assert(badge:IsShown() and badge.arrow:IsShown() and badge.anim.playing,
     "The badge stayed frozen when the panel came back")
 ui:Hide(); drain()
 Overlord.Sync = nil
+
+-- 2.6.0: the info line reads the player's own row from the display build (found in its sliced
+-- walk); a row that no longer matches falls back to the walk; out of the ladder: no walk.
+do
+    ui:Show(); drain()
+    local canonCalls = 0
+    Overlord.Sync = { GetLadderCatchupState = function() return badgeState end,
+        GetPlayerFullName = function() return 'Info Me-Realm' end,
+        CanonicalForeverName = function(_, n) canonCalls = canonCalls + 1 return n end }
+    local rows = {}
+    for i = 1, 3000 do rows[i] = { name = 'Info Row' .. i, kills = 4000 - i } end
+    rows[1200] = { name = 'Info Me-Realm', kills = 2800 }
+    local function dcWith(index)
+        return { ready = true, sortedKills = rows, rankedAlliance = 10, rankedHorde = 20, meta = {},
+            sortedGuilds = {}, selfName = 'Info Me-Realm', selfIndex = index }
+    end
+    canonCalls = 0
+    ui:RefreshInfoLines(dcWith(1200))
+    assert(canonCalls <= 2 and frame.infoRight[1]._infoText:find('#1200', 1, true),
+        'the build\'s own row was not used: ' .. tostring(frame.infoRight[1]._infoText) .. ' / ' .. canonCalls)
+    ui:RefreshInfoLines(dcWith(5))
+    assert(frame.infoRight[1]._infoText:find('#1200', 1, true), 'a stale own row was trusted')
+    local unranked = dcWith(nil)
+    rows[1200] = { name = 'Info Row1200', kills = 2800 }
+    canonCalls = 0
+    ui:RefreshInfoLines(unranked)
+    assert(canonCalls <= 1 and frame.infoRight[1]._infoText:find('not ranked yet', 1, true),
+        'a player out of the ladder was looked for again: ' .. canonCalls)
+    Overlord.Sync = nil
+    ui:Hide(); drain()
+end
 
 -- Keep/outpost lists: a mutation every few frames (an assault, a catch-up burst) no
 -- longer throws the running build away; the lists are published, then rebuilt.

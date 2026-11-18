@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.5.5"
+Overlord.Version = "2.6.0"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -535,12 +535,15 @@ end
 function Overlord:IsShardHelperActive()
     if self.InstanceSuspended then return false end
     if self.InActiveFront then return true end
+    local onOutpost, site
     if self.Outpost and self.Outpost.IsPlayerOnOutpostMap then
-        local onOutpost, site = self.Outpost:IsPlayerOnOutpostMap()
+        onOutpost, site = self.Outpost:IsPlayerOnOutpostMap()
         if onOutpost and site and site.standaloneOpenWorld then return true end
     end
     if self.GuildKeep and self.GuildKeep.IsPlayerOnKeepMap then
-        return (select(1, self.GuildKeep:IsPlayerOnKeepMap())) == true
+        -- 2.6.0: GuildKeep:IsPlayerOnKeepMap's first value, from the Outpost sample read above: its
+        -- third value was an uncached C_Map read on every shard event, thrown away here.
+        return (onOutpost and site and site.isFortress == true) == true
     end
     return false
 end
@@ -1647,20 +1650,25 @@ end
 -- Initialise le ticker de mise a jour du shard (marqueur legacy des tests).
 -- Maintenance one-shot adaptative : rapide tant que la shard est inconnue, lente
 -- une fois stable. Les transitions et preuves ephemeres restent event-driven.
+Overlord.Shard.PULSE_EVENTS = { "VIGNETTES_UPDATED", "UPDATE_MOUSEOVER_UNIT", "PLAYER_TARGET_CHANGED",
+    "PLAYER_FOCUS_CHANGED", "PLAYER_SOFT_ENEMY_CHANGED", "PLAYER_SOFT_FRIEND_CHANGED",
+    "PLAYER_SOFT_INTERACT_CHANGED", "NAME_PLATE_UNIT_ADDED", "PARTY_KILL" }
+-- 2.6.0: in an instance the pulse leaves the event stream (its handler returned at once there,
+-- after the game had called it for every nameplate, mouseover and kill of a battleground).
+function Overlord.Shard:SetPulseEvents(on)
+    if not shardPulseFrame then return end
+    for _, event in ipairs(self.PULSE_EVENTS) do
+        if on then shardPulseFrame:RegisterEvent(event) else shardPulseFrame:UnregisterEvent(event) end
+    end
+end
+
 function Overlord.Shard:Initialize()
     ScheduleShardPeerMaintenance()
     if not shardPulseFrame then
         shardPulseFrame = CreateFrame("Frame")
-        shardPulseFrame:RegisterEvent("VIGNETTES_UPDATED")
-        shardPulseFrame:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
-        shardPulseFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
-        shardPulseFrame:RegisterEvent("PLAYER_FOCUS_CHANGED")
-        shardPulseFrame:RegisterEvent("PLAYER_SOFT_ENEMY_CHANGED")
-        shardPulseFrame:RegisterEvent("PLAYER_SOFT_FRIEND_CHANGED")
-        shardPulseFrame:RegisterEvent("PLAYER_SOFT_INTERACT_CHANGED")
-        shardPulseFrame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
-        shardPulseFrame:RegisterEvent("PARTY_KILL")
         shardPulseFrame:SetScript("OnEvent", HandleShardPulseEvent)
+        -- (Started inside an instance: the events come with CompleteResumeFromInstance.)
+        self:SetPulseEvents(not Overlord.InstanceSuspended)
     end
     if Overlord.IsShardHelperActive and Overlord:IsShardHelperActive() then
         self:Update()
@@ -2075,6 +2083,13 @@ local function CompleteResumeFromInstance(reason)
     if Overlord.ActionShortcut and Overlord.ActionShortcut.OnInstanceResume then
         pcall(Overlord.ActionShortcut.OnInstanceResume, Overlord.ActionShortcut)
     end
+    if Overlord.Shard and Overlord.Shard.SetPulseEvents then pcall(Overlord.Shard.SetPulseEvents, Overlord.Shard, true) end
+    if Overlord.GeneralNameplate and Overlord.GeneralNameplate.SetNameplateEvents then
+        pcall(Overlord.GeneralNameplate.SetNameplateEvents, Overlord.GeneralNameplate, true)
+    end
+    if Overlord.LayerJumper and Overlord.LayerJumper.OnInstanceResume then
+        pcall(Overlord.LayerJumper.OnInstanceResume, Overlord.LayerJumper)
+    end
     -- Un loading survenu avant l'initialisation de Sync conserve le ZR au lieu de
     -- marquer la vague comme relachee sans transport. Le rejouer avant la rotation.
     if Overlord.FlushDeferredCaptureRelease then
@@ -2259,6 +2274,11 @@ function Overlord:SuspendForInstance()
     -- Top ranks seen by others: no inspect, whisper or badge in an instance.
     if self.RankProof and self.RankProof.OnInstanceSuspend then
         pcall(self.RankProof.OnInstanceSuspend, self.RankProof)
+    end
+    -- 2.6.0: the shard pulse and the General's nameplate badges leave the event stream.
+    if self.Shard and self.Shard.SetPulseEvents then pcall(self.Shard.SetPulseEvents, self.Shard, false) end
+    if self.GeneralNameplate and self.GeneralNameplate.SetNameplateEvents then
+        pcall(self.GeneralNameplate.SetNameplateEvents, self.GeneralNameplate, false)
     end
     self.InstanceSuspended = true
     -- Remet le flag de zone a zero : evite des etats stales si CheckActiveFrontZone n'est pas appele
@@ -4522,25 +4542,32 @@ function Overlord:SaveState()
             and savedUpdatedAt < savedCapturedTime then
             savedUpdatedAt = savedCapturedTime
         end
-        OverlordDB.zones[zone.id] = {
-            status = persisted.status,
-            killsCurrent = persisted.killsCurrent,
-            allyKillsCurrent  = persisted.allyKillsCurrent,
-            enemyKillsCurrent = persisted.enemyKillsCurrent,
-            holdTimeElapsed = persisted.holdTimeElapsed,
-            holdTimeRequired = persisted.holdTimeRequired,
-            capturedTime = savedCapturedTime,
-            updatedAt = savedUpdatedAt,
-            owner = persisted.owner,
-            previousOwner = persisted.previousOwner,
-            assaultFromAvailable = persisted._assaultFromAvailable and true or nil,
-            localCapture = localCapture and true or nil,
-            localCaptureWaveId = localWaveId,
-            captureNetworkWitnessRouteId = witnessRoute and witnessRoute.routeId or nil,
-            captureNetworkWitnessOriginGuid = witnessRoute and witnessRoute.originGuid or nil,
-            captureNetworkWitnessBaseline = witnessRoute and witnessRoute.baseline or nil,
-            captureNetworkWitnessTargets = witnessRoute and witnessRoute.targets or nil,
-        }
+        -- 2.6.0: the zone's row is refilled in place (about 70 new tables every 30 s before),
+        -- emptied first so it holds exactly these keys, as a new table did.
+        local row = OverlordDB.zones[zone.id]
+        if type(row) ~= "table" or row == persisted then
+            row = {}
+            OverlordDB.zones[zone.id] = row
+        else
+            for key in pairs(row) do row[key] = nil end
+        end
+        row.status = persisted.status
+        row.killsCurrent = persisted.killsCurrent
+        row.allyKillsCurrent = persisted.allyKillsCurrent
+        row.enemyKillsCurrent = persisted.enemyKillsCurrent
+        row.holdTimeElapsed = persisted.holdTimeElapsed
+        row.holdTimeRequired = persisted.holdTimeRequired
+        row.capturedTime = savedCapturedTime
+        row.updatedAt = savedUpdatedAt
+        row.owner = persisted.owner
+        row.previousOwner = persisted.previousOwner
+        row.assaultFromAvailable = persisted._assaultFromAvailable and true or nil
+        row.localCapture = localCapture and true or nil
+        row.localCaptureWaveId = localWaveId
+        row.captureNetworkWitnessRouteId = witnessRoute and witnessRoute.routeId or nil
+        row.captureNetworkWitnessOriginGuid = witnessRoute and witnessRoute.originGuid or nil
+        row.captureNetworkWitnessBaseline = witnessRoute and witnessRoute.baseline or nil
+        row.captureNetworkWitnessTargets = witnessRoute and witnessRoute.targets or nil
     end)
     saveDirty = false
 end

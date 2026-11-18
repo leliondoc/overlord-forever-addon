@@ -19,9 +19,11 @@ function GetAchievementCriteriaInfo(id, index) if id == 1487 and index == 1 then
 C_Timer.After = function(delay, callback)
     scheduled[#scheduled + 1] = { due = clock + delay, callback = callback }
 end
+local registeredEvents = {}
 CreateFrame = function()
-    return { RegisterEvent = function() end, RegisterUnitEvent = function() end,
-        SetScript = function() end }
+    return { RegisterEvent = function(_, event) registeredEvents[event] = true end,
+        UnregisterEvent = function(_, event) registeredEvents[event] = nil end,
+        RegisterUnitEvent = function() end, SetScript = function() end }
 end
 
 local function advance(seconds)
@@ -325,4 +327,20 @@ do
     canaccessvalue = realAccess
     Overlord.KillingBlows = realKB
 end
+-- 2.6.0: the honor gain line only feeds /debugkill's trace: heard during its 60 s window only.
+assert(not registeredEvents.CHAT_MSG_COMBAT_HONOR_GAIN, "the honor gain line is heard outside /debugkill")
+local realPrint = print
+print = function() end
+Overlord.Combat:SetDebugKill(true)
+assert(registeredEvents.CHAT_MSG_COMBAT_HONOR_GAIN, "/debugkill does not hear the honor gain line")
+Overlord.Combat:Resume()
+assert(registeredEvents.CHAT_MSG_COMBAT_HONOR_GAIN, "a resume during /debugkill dropped the honor gain line")
+advance(61)
+assert(not registeredEvents.CHAT_MSG_COMBAT_HONOR_GAIN, "the honor gain line outlived /debugkill's window")
+Overlord.Combat:Resume()
+assert(not registeredEvents.CHAT_MSG_COMBAT_HONOR_GAIN, "a resume after /debugkill heard the honor gain line")
+Overlord.Combat:SetDebugKill(true)
+Overlord.Combat:SetDebugKill(false)
+assert(not registeredEvents.CHAT_MSG_COMBAT_HONOR_GAIN, "/debugkill off kept the honor gain line")
+print = realPrint
 print("Forever HK: exact Blizzard deltas, all roles, no KB/death/x2 additions, batching, counters, instances, optional chat line and killing blow inputs OK")

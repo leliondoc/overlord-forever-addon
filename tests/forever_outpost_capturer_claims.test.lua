@@ -1205,6 +1205,50 @@ do
     -- Hashing alone used to cost 2 yields per key byte (64 per slice).
     assert(slices < keyBytes / 32, "the ledger build still yields inside key hashing: " .. slices .. " slices for "
         .. keyBytes .. " key bytes")
+    -- 2.6.0: the sliced pass also builds the pace counters when none are held (login): the first
+    -- capture heard after login built them in one block. Same counters as that lazy build.
+    local function snapshotCounters()
+        local copy = {}
+        for key, list in pairs(lb._outpostCapturerIndex or {}) do
+            local items = {}
+            for i, e in ipairs(list) do items[i] = e.ts .. "/" .. e.gap end
+            copy[key] = table.concat(items, ",")
+        end
+        return lb._outpostLedgerRows, lb._outpostLedgerEvents, copy
+    end
+    lb:ResetOutpostLedgerCounters()
+    lb:IsOutpostCapturerPaced(third, stamp + 9999, 60) -- the lazy build
+    local lazyRows, lazyEvents, lazyIndex = snapshotCounters()
+    assert(lazyRows and lazyRows > 0 and next(lazyIndex), "fixture: no lazy counters")
+    lb:ResetOutpostLedgerCounters()
+    C_Timer.After = function(_, fn) fn() end
+    lb._outpostLedgerPrepared = false
+    lb:EnsureOutpostLedgerPrepared(true)
+    C_Timer.After = realAfterTimer
+    assert(lb._outpostLedgerCountersSource == lb:GetOutpostCaptureCountsTable() and lb._outpostLedgerRows,
+        "the sliced pass did not publish the pace counters")
+    local primedRows, primedEvents, primedIndex = snapshotCounters()
+    assert(primedRows == lazyRows and primedEvents == lazyEvents, "primed row/event counts differ from the lazy build")
+    for key, items in pairs(lazyIndex) do
+        assert(primedIndex[key] == items, "primed pace list differs for " .. tostring(key))
+    end
+    for key in pairs(primedIndex) do assert(lazyIndex[key], "primed pace list has an extra capturer " .. tostring(key)) end
+    -- A capture recorded while the pass runs: the pass publishes nothing (the capture built them).
+    lb:ResetOutpostLedgerCounters()
+    local queued = {}
+    C_Timer.After = function(_, fn) queued[#queued + 1] = fn end
+    lb._outpostLedgerPrepared = false
+    lb:EnsureOutpostLedgerPrepared(true)
+    lb:RecordOutpostCapture("badlands", "Late Guild", "Alliance", stamp + 5000, "global", third)
+    local held = lb._outpostCapturerIndex
+    assert(held, "the capture did not build the counters")
+    for _ = 1, 10000 do
+        local fn = table.remove(queued, 1)
+        if not fn then break end
+        fn()
+    end
+    C_Timer.After = realAfterTimer
+    assert(lb._outpostCapturerIndex == held, "the pass replaced the counters a capture had built meanwhile")
 end
 print("Outpost claims: a guild mate on the game's roster needs no ladder row, nothing else changes")
 do

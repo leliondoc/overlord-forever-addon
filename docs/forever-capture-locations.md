@@ -94,3 +94,22 @@ Carte Classic 1424 (alias 25). Jusqu'à la 2.0.2, seulement deux capitales en m�
 Deux routes contournent la colline de Darrow, dont la mine de coins reste neutre au milieu : ouest Austrivage -> Rivage occidental -> Champs -> Camp d'internement -> Pont -> Moulin-de-Tarren ; est Austrivage -> Nethander -> Dun Garok -> Porte de Thoradin -> Fort-de-Durn -> Moulin-de-Tarren. La Horde suit les mêmes routes en sens inverse. Austrivage, Fort-de-Durn et Nethander recalés par l'auteur sur la carte (Austrivage sur la route, idée de Lesi). Avant-poste : Vigie de Lordaeron, à la tour de la Pointe du Midi (20.8, 48.6), sur la route des Pins-Argentés, loin des deux routes. Positions non relevées en jeu : à confirmer sur place.
 
 Les deux villes elles-mêmes ([aubergiste d'Austrivage à 51/58](https://wowwiki-archive.fandom.com/wiki/Innkeeper_Anderson), [Tarren Mill vers 60/19](https://classictinker.com/locations/tarren-mill/)) ne sont plus des points de capture : le test couvre les centres, les abords, l'ancien cercle de 2.0 d'Austrivage devenu terrain libre, la mine de Darrow hors du front et le fait que les deux centres-villes restent en dehors. La carte 623 du champ de bataille homonyme est exclue du front de monde ouvert.
+
+## Tanaris (nouveau front)
+
+Carte Classic 1446 (alias 71), 6 900 m de large : la plus grande carte de front, d'où des rayons de 3.5 (points) et 4.5 (capitales), qui donnent sur le terrain la taille des cercles d'Orneval. Points placés sur le terrain du client Forever (parcelles ADT/MCNK de Kalimdor) : chaque cercle entier est en Tanaris. Les huit points de route sont sans eau (MH2O), sur le fond du désert qu'on atteint à pied depuis Gadgetzan. Les deux capitales sont choisies par l'auteur : la crique des Gréements, sur la côte est (environ la moitié du cercle couvre l'eau de la crique), et la vallée des Chardonniers, à l'ouest. Les montagnes et la plage du Bout-du-Monde, au sud, sont hors d'atteinte : rien n'y est posé.
+
+| Objectif | Centre (%) | Repère |
+| --- | --- | --- |
+| `tanaris_lost_rigger` (capitale Alliance) | 72.7, 44.9 | crique des Gréements, côte est, rayon 4.5 |
+| `tanaris_waterspring` | 59.0, 41.0 | champ des Puisatiers |
+| `tanaris_sandsorrow` | 42.0, 29.5 | guet de Tristesable |
+| `tanaris_noxious_lair` | 36.5, 45.5 | sable plat au pied du Repaire nuisible |
+| `tanaris_dunemaul` | 38.5, 57.0 | bord ouest de la base des Cognedunes |
+| `tanaris_southbreak` | 62.0, 58.0 | sable au-dessus du rivage de Brisesud |
+| `tanaris_gaping_chasm` | 55.5, 65.5 | bord nord du Gouffre béant, hors du trou |
+| `tanaris_eastmoon` | 46.5, 63.0 | ruines d'Estelune |
+| `tanaris_watchers` | 36.0, 74.0 | vallée des Guetteurs, devant la porte d'Uldum |
+| `tanaris_thistleshrub` (capitale Horde) | 29.5, 66.0 | cercle de pierres de la vallée des Chardonniers, rayon 4.5 |
+
+Deux routes de quatre points contournent le désert Abysséen : nord Gréements -> Puisatiers -> Tristesable -> Repaire nuisible -> Cognedunes -> Chardonniers ; sud Gréements -> Brisesud -> Gouffre béant -> Estelune -> Guetteurs -> Chardonniers. La Horde suit les mêmes routes en sens inverse ; chaque capitale demande le bout des deux routes. Avant-poste : Pilier brisé (54.5, 45.5), au milieu du désert, entre les deux routes. Portraits : Gnome (Alliance) contre Gobelin (Horde). Positions non relevées en jeu : à confirmer sur place.

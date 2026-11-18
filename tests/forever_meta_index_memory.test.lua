@@ -361,6 +361,7 @@ assert(digest == GOLDEN, "readers differ from 2.2.1: digest " .. digest .. " ins
 -- 2. A save written without the logout slimming (raw entry arrays) loads as the
 -- same named rows.
 OverlordDB.leaderboardSnapshot = { playerInfo = liveRaw }
+OverlordDB.leaderboardSnapshotSlimmed = nil -- (2.6.0: such a save has no slimming mark)
 lb:NormalizeLoadedSnapshotMeta()
 assert(savedText(liveRaw) == slimText, "an unslimmed save did not load as the slimmed one")
 
