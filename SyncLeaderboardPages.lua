@@ -26,12 +26,43 @@ local STREAMS = { "LK", "LC", "LR" }
 -- (profileFp) count them. Every profile holds the stream (empty in a view of 5,000).
 local PROFILE_STREAMS = { "LK", "LC", "LR", "LB" }
 -- A sweep carries them once every KB_SWEEP_SEC at most, whoever the peer (the feed carries the
--- moves meanwhile): a sweep without them is a 2.5.1 sweep, its fingerprint and its length too.
+-- moves meanwhile; since 2.5.5 they also have a turn of their own, kbTurn below): a sweep
+-- without them is a 2.5.1 sweep, its fingerprint and its length too.
 -- The column settles later than the kills (the feed first, a sweep within half an hour for what
 -- it missed), the rounds keep their pace: a sweep lists every bucket of LB that differs, and a
 -- row a peer refuses (above its honorable kills, a banned name) is listed again at each one.
 local KB_SWEEP_SEC = 1800
 local kbSweepAt
+-- 2.5.5: a turn of their own. At the end of a sweep only, the stream LB was hardly ever asked:
+-- while two rankings differ (any busy evening) a pull is cut or ends in the kills, and the next
+-- one starts at the kills again (8 whole clients, rankings 15 % apart, everybody killing: 77
+-- pulls in 30 min, none past the kills). So a pull that would start at the kills, with a peer
+-- that reads killing blows and once they are due (never compared this session, or KB_SWEEP_SEC
+-- ago), compares them alone instead: kbTurn.SEC at most, then the kills' pull follows at once
+-- with the same neighbour (finish).
+-- Not before the session's first pull is FIRST_SEC old (a login fills its ranking first), and
+-- GAP after the last such turn (one cut by its time, or not answered, comes again then).
+-- A 2.5.2 responder answers it as it answers a sweep resumed at LB: nothing new on the wire.
+local kbTurn = { FIRST_SEC = 300, GAP = 900, SEC = 60 }
+sync._killingBlowTurns = kbTurn
+-- 2.5.5: the captures first. They come second in a sweep and were not compared either on a busy
+-- ranking (8 whole clients on a real save, rankings 15 % apart, everybody killing: 64 pulls in
+-- 40 min, none asked the captures). The feed only carries a count that moves while somebody is
+-- fed by its holder: the captures a player made while its neighbours were away, or with no
+-- subscriber, stayed in its own client (same bench: a client logging in with 11 captures of its
+-- own, 0 of the 7 others held them after 40 min; live, two guild mates 11 captures apart for two
+-- days, and a player's own count 15 short on his second computer). So once the captures have
+-- not been compared to their end for GAP, a pull that would start at the kills compares them
+-- FIRST (a small stream: one request and one reply when they are equal), then goes on with the
+-- kills in the same exchange, and that sweep does not ask them a second time. Not before the
+-- session's first pull is FIRST_SEC old, nor on a ranking still nearly empty.
+-- (A pull of their own was measured and dropped: a neighbour free to answer is rare on a busy
+-- evening, and a turn spent it without comparing a kill row: 48 % of the kill rows right after
+-- 40 min against 50 to 52 % without it, same bench.)
+-- A responder answers each request for the stream it names, in any order: nothing new on the wire.
+-- (Kept in kbTurn: this file's main chunk is near its limit of locals.)
+kbTurn.captures = { FIRST_SEC = 120, GAP = 600 }
+sync._captureTurns = kbTurn.captures
 local function carriesKB(peer)
     local blows = Overlord.KillingBlows
     return blows ~= nil and blows.PeerCarries ~= nil and blows:PeerCarries(peer) == true
@@ -171,8 +202,23 @@ local feed = {
     -- BLOB: the rows of a message that does not go through the relay (one whisper). Through it a
     -- message fills up to PIECES whispers, the last one FILL full at least (feedSend), and is read
     -- up to MESSAGE_MAX bytes.
-    GAP = 8, LINGER = 2, PER_MIN = 24, BLOB = 228, ROWS_MAX = 24, PENDING_MAX = 96,
+    -- 2.5.5: PENDING_MAX 2048 (was 96). A list holds one entry per player, its total read when
+    -- it leaves: what waits is never stale, only late. At 96, a fight of more than a hundred
+    -- players filled it for good and every further player was dropped, the last total of one
+    -- who had just stopped killing included; nothing sent it again, and the pulls were left to
+    -- find it (8 whole clients on a busy ranking: 160 to 200 rows dropped per client in 25 min).
+    -- A list now only fills when over two thousand players move faster than a subscriber is fed:
+    -- rows wait their turn, in the order they first moved, and all of them leave once it calms
+    -- down. (About 100 bytes per waiting player, only while it waits.)
+    GAP = 8, LINGER = 2, PER_MIN = 24, BLOB = 228, ROWS_MAX = 24, PENDING_MAX = 2048,
     PIECES = 3, FILL = 0.5, MESSAGE_MAX = 600,
+    -- 2.5.5: killing blow rows (feedPushKB): KB_PENDING_MAX players waiting per subscriber. Kill
+    -- rows stay first: a killing blow row only takes what they leave of their whispers, and
+    -- nothing is ever kept for it (feedSend): in a fight the rows wait, and leave when it calms
+    -- down. A message for them alone only leaves with KB_ALONE_ROWS waiting or the oldest
+    -- waiting KB_ALONE_SEC, under half the minute's messages (feedKBAlone).
+    -- (KB_PENDING_MAX 2048, was 192, for the same reason as PENDING_MAX.)
+    KB_PENDING_MAX = 2048, KB_ALONE_ROWS = 6, KB_ALONE_SEC = 30,
     -- The fresh fight brackets of "Recent activity" (FrontActivity FK) travel in the feed's
     -- messages too, FIGHT_ROWS a message at most, FIGHT_ROOM bytes kept for them while one waits.
     -- On the whisper chain alone a bracket missed one or two clients in most fights (36 whole
@@ -199,7 +245,7 @@ local feed = {
     -- The last RING rows that moved, kept RING_SEC (a profile served to a new subscriber may be
     -- that old); identities born lately (FRESH_MAX of them) travel as whole rows.
     RING = 256, RING_SEC = 130, FRESH_MAX = 1024,
-    STOP_GAP = 300, INBOX_MAX = 256, WAIT_MAX = 20,
+    STOP_GAP = 300, INBOX_MAX = 256, WAIT_MAX = 20, WALK_MAX = 96,
     -- A capture count leaves CAPTURE_LINGER after it moved, never sooner. A capture is counted by
     -- its event (C) on the clients that witness it and by a row everywhere else: a witness that
     -- took our row (the count with that capture in it) before the event would count it twice,
@@ -208,6 +254,31 @@ local feed = {
     -- (125 s: past the two minutes an event lives in a relay, so that no witness can take the row
     -- and then the event.)
     CAPTURE_LINGER = 125, CAPTURE_PENDING = 64,
+    -- 2.5.5: a capture row of the feed is CAPTURE_ROW_MAX bytes at most. A page row holds every
+    -- zone its player captured (up to 3,500 bytes); the feed sent that same row, a message holds
+    -- 228 bytes of rows (168 while fight brackets wait) and a reader stops at a row over 250: past
+    -- a dozen different zones a player's count was dropped at every hand ("left to the pulls",
+    -- which did not reach the captures either, see kbTurn.captures), and through a relay it cut
+    -- the reading of the rows behind it. The best capturers were the ones nobody held right.
+    -- The count is what a ranking shows: the row now carries it with the zones that fit, another
+    -- part of the list at each count (a reader keeps the union), the whole list staying the
+    -- pages' business.
+    CAPTURE_ROW_MAX = 160, CAPTURE_EXTRA = 16,
+    -- A player's own count also goes UP, to the peers that feed it ("HR 8:C:<epoch>:<row>", its
+    -- own row only, read from a subscriber of ours whose name it bears, one per CAPTURE_UP_GAP):
+    -- at the first word of a new source, and CAPTURE_LINGER after a capture. Down alone, the
+    -- count of a player nobody had asked lately stayed in its client. A new subscriber is handed
+    -- our own count too (it may have been made while nobody listened).
+    CAPTURE_UP_GAP = 60,
+    -- Our own killing blows travel the same way (the same message, a row "b" beside the row
+    -- "c"): to a new subscriber, at the first word of a new source, and every KB_UP_SEC at most
+    -- while they move (they move at every kill of ours: never a whisper per kill).
+    KB_UP_SEC = 300, KB_LATER_MAX = 1024,
+    -- The capture counts that moved here in the last CAPTURE_RECENT_SEC (CAPTURE_RECENT_MAX of
+    -- them) are handed to a new subscriber: a count is told once, to the subscribers of that
+    -- minute, and a peer that asks us later had no way to hear it (bench, 8 whole clients: one
+    -- run in five left a client or two without a count every peer feeding them held).
+    CAPTURE_RECENT_SEC = 1800, CAPTURE_RECENT_MAX = 48,
     -- The rows a pull of ours brings are passed on to our subscribers while that pull has changed
     -- at most PULL_PASS rows of our ranking (a few rows the feed missed). Past it the pull is a
     -- catch-up (a login, an evening away: thousands of rows everybody else holds): passed on, they
@@ -220,6 +291,7 @@ local feed = {
     ring = {}, ringAt = 0, fresh = {}, freshCount = 0, inbox = {}, inboxHead = 1, inboxTail = 0,
     minute = { at = -1000, count = 0 },
     scratch = { kills = {}, captureCount = {}, captures = {}, playerInfo = {} },
+    upward = { kbOk = true }, upAt = {}, upAtCount = 0,
 }
 sync._leaderboardFeed = feed
 -- Rows that changed our ranking since login, by pages and by the feed. (Killing blows apart: a
@@ -833,6 +905,36 @@ local function finish(state, success, unsupportedPeer)
         stats.silentPulls = (stats.silentPulls or 0) + 1
         state.stream = "LK"
     end
+    -- 2.5.5: a turn of the killing blows alone leaves the sweep where it was, at the kills (a
+    -- checkpoint at LB would bring the next pull back to them), and one that did not see the
+    -- end of the stream (cut by its time, a busy or silent peer) is due again kbTurn.GAP later.
+    if state.kbOnly then
+        state.stream = "LK"
+        if not state.kbDone then
+            kbSweepAt = nil
+            stats.kbTurnsCut = (stats.kbTurnsCut or 0) + 1
+        end
+        -- (A peer that answered "busy" compared nothing: the turn is still due with the next
+        -- neighbour the round asks. No request more: that attempt was this round's anyway.)
+        if not success and (state.why == "peer busy" or state.why == "peer in combat") then
+            kbTurn.at = state.kbPrev or nil
+        end
+        -- It compared no kill row: the scheduler's end of round (FinishRound, which reads the
+        -- last sweep's figures after every successful pull) must not date the previous sweep
+        -- of now, for the badge or for the Overlord Rank.
+        if success and not state.wholeMatch then stats.lastSweepFull, stats.lastSweepChanged = false, 0 end
+    end
+    -- A pull cut while it compared the captures first: the sweep stays at the kills (a
+    -- checkpoint at the captures would send the next pull on to the races without a kill row),
+    -- and the captures are asked first again GAP after this pull started; at the very next pull
+    -- when the peer answered "busy" (it compared nothing, and that pull is asked anyway).
+    if state.capFirst and not state.capFirstDone and not state.wholeMatch then
+        state.stream = "LK"
+        stats.capTurnsCut = (stats.capTurnsCut or 0) + 1
+        if not success and (state.why == "peer busy" or state.why == "peer in combat") then
+            kbTurn.captures.at = state.capPrev or nil
+        end
+    end
     checkpoint(state)
     pull = nil
     -- A failed pull tells its responder to drop the session at once; otherwise the
@@ -842,7 +944,8 @@ local function finish(state, success, unsupportedPeer)
             state.epoch, state.nonce, state.seq }, ":"), state.peer)
     end
     -- /ov network: why the last pull stopped (busy responder, silence, ...).
-    stats.result = success and "sweep received"
+    stats.result = success and (state.kbOnly and (state.kbDone and "killing blows compared" or "killing blows: turn cut")
+            or "sweep received")
         or ("interrupted (" .. tostring(state.why or "?") .. "); bucket retained")
     if unsupportedPeer and not state.extended then
         if not unsupported[state.peer] then
@@ -851,7 +954,9 @@ local function finish(state, success, unsupportedPeer)
         end
         unsupported[state.peer] = GetTime() + 600
     end
-    if success then
+    -- (Not the end of a killing blows' turn: it compared no kill row, unless its first
+    -- fingerprint matched the whole ranking.)
+    if success and (not state.kbOnly or state.wholeMatch) then
         -- Leaderboard badge: the sweep ends here (LR done, or the whole ranking
         -- matched). Rows it changed in our ranking, counted from the pull that
         -- started it at LK (0 = nothing was missing); "full" only when that start
@@ -861,6 +966,18 @@ local function finish(state, success, unsupportedPeer)
         stats.lastSweepFiltered = stats.sweepFiltered == true or state.factionFilter ~= nil
         stats.lastSweepAt = stats.sweepAt or state.startedAt
         stats.sweepBase, stats.sweepAt, stats.sweepFiltered, stats.sweepEpoch = nil, nil, nil, nil
+    end
+    -- 2.5.5: the killing blows' turn found a neighbour free to answer, which is rare on a busy
+    -- evening (four requests in five are answered "busy"): the kills' pull follows at once with
+    -- that same neighbour, in place of ending the round there. The turn then costs the kills the
+    -- seconds it lasted, not a neighbour. (Not after a whole ranking that matched: nothing to
+    -- pull. When that pull cannot start, the round ends on the turn as before.)
+    if state.kbOnly and success and not state.wholeMatch and state.again and state.epoch == epoch() then
+        local a = state.again
+        if sync:StartPagedLeaderboardCatchup(state.peer, state.callback, a[1], a[2], a[3], a[4]) then
+            stats.kbTurnsFollowed = (stats.kbTurnsFollowed or 0) + 1
+            return
+        end
     end
     -- Third value: nothing ever left for this peer (our own copy could not be built,
     -- the round was cut before its first request): the failure is ours, not its.
@@ -879,6 +996,14 @@ local request, tryApply
 request = function(state, retry)
     if pull ~= state then return end
     if state.epoch ~= epoch() then state.why = "campaign changed"; finish(state, false); return end
+    -- 2.5.5: the killing blows' own turn ends on its time (the rows taken stay; the buckets
+    -- left come with the next turn), told to the responder like the end of any pull.
+    if state.kbOnly and not retry and state.seq > 0
+        and GetTime() - (state.kbStartedAt or 0) >= (tonumber(kbTurn.SEC) or 60) then
+        sendControl("HR", table.concat({ "8", "F", state.epoch, state.nonce, state.seq }, ":"), state.peer)
+        finish(state, true)
+        return
+    end
     state.waitingForSend = true
     if paused() then C_Timer.After(2, function() request(state, retry) end); return end
     if not retry then
@@ -1045,6 +1170,8 @@ end
 -- The stream after this one in a sweep, nil at its end. raceless: a 1.8.0 peer, kills and
 -- captures only (see the header); kb: a peer of capability 11, the killing blows last.
 local function followingStream8(state)
+    -- (2.5.5: a pull that compared the captures first does not ask them again after the kills.)
+    if state.stream == "LK" and state.capFirstDone then return not state.raceless and "LR" or nil end
     if state.stream == "LK" then return "LC" end
     if state.stream == "LC" then return not state.raceless and "LR" or nil end
     if state.stream == "LR" then return state.kb and "LB" or nil end
@@ -1052,7 +1179,23 @@ local function followingStream8(state)
 end
 local function nextStream8(state)
     state.combatWaits = 0
+    if state.stream == "LC" then
+        -- The captures were compared to their end (every row of them: not with an enemy friend
+        -- whose pull compares its own faction's rows only).
+        if not state.factionFilter then kbTurn.captures.comparedAt = GetTime() end
+        -- Compared first: the sweep proper starts now, at the kills.
+        if state.capFirst and not state.capFirstDone then
+            state.capFirstDone = true
+            state.stream = "LK"
+            state.phase, state.queue, state.qi, state.bucket, state.completed = "V", nil, 0, 0, 0
+            checkpoint(state)
+            request(state)
+            return
+        end
+    end
     local following = followingStream8(state)
+    -- (A sweep that ends at the kills: captures first with a 1.8.0 peer, no races.)
+    if not following then noteKillsCompared(state) end
     if following then
         noteKillsCompared(state)
         state.stream = following
@@ -1062,6 +1205,8 @@ local function nextStream8(state)
         request(state)
         return
     end
+    -- (The killing blows were compared to their end: their next turn is KB_SWEEP_SEC away.)
+    if state.stream == "LB" then state.kbDone = true end
     state.stream, state.completed = "LK", 0
     checkpoint(state)
     sendControl("HR", table.concat({ "8", "F", state.epoch, state.nonce, state.seq }, ":"), state.peer)
@@ -1496,19 +1641,149 @@ function feed.reset()
     feed.pinged, feed.intake = {}, {}
     -- (The hour's count of newcomers is kept: leaving an instance must not open it again.)
     feed.inbox, feed.inboxHead, feed.inboxTail, feed.from, feed.captureWaiting = {}, 1, 0, nil, nil
+    feed.captureTold, feed.captureToldAt = nil, nil
+    feed.captureRecent, feed.captureRecentCount = nil, 0
+    feed.kbLater, feed.kbTold, feed.kbReads = nil, nil, nil
+    feed.upAt, feed.upAtCount = {}, 0
 end
-local function feedPush(sub, id, at)
-    if sub.has[id] then return end
-    -- 2.5.2: a killing blow row only for a subscriber that reads them, and only while its queue
-    -- is three quarters empty and the feed has used less than 70 % of its messages this minute:
-    -- kill rows go first (the stream LB brings the rest in its next sweep).
-    local minute = feed.minute
-    if id:byte(1) == 98 and (sub.count * 4 >= feed.PENDING_MAX or not carriesKB(sub.name)
-        or (GetTime() - minute.at < 60 and minute.count * 10 >= feed.PER_MIN * 7)) then
+-- Our own killing blows as the feed names them (our identity), nil without one.
+function feed.ownKB()
+    local blows = Overlord.KillingBlows
+    local me = sync.GetPlayerFullName and sync:GetPlayerFullName()
+    if not blows or type(me) ~= "string" or me == "" then return nil end
+    local count = tonumber(blows:Get(me)) or 0
+    if count <= 0 then return nil end
+    return feed.ownIdentity(), count
+end
+-- Our identity as the feed keys it (kept: a character does not change in a session).
+function feed.ownIdentity()
+    if not feed.ownKey then
+        local me = sync.GetPlayerFullName and sync:GetPlayerFullName()
+        feed.ownKey = type(me) == "string" and me ~= "" and lb.GetNetworkRowKey and lb:GetNetworkRowKey(me) or nil
+    end
+    return feed.ownKey
+end
+-- A capture count moved here (feed.note): kept CAPTURE_RECENT_SEC for the subscribers to come.
+-- Full: the entries past their life go, else the oldest one.
+function feed.captureMoved(id, at)
+    local recent = feed.captureRecent
+    if not recent then
+        recent = {}
+        feed.captureRecent, feed.captureRecentCount = recent, 0
+    end
+    if recent[id] == nil then
+        if feed.captureRecentCount >= feed.CAPTURE_RECENT_MAX then
+            local kept, oldest, oldestAt = 0, nil, nil
+            for known, movedAt in pairs(recent) do
+                if at - movedAt > feed.CAPTURE_RECENT_SEC then
+                    recent[known] = nil
+                else
+                    kept = kept + 1
+                    if not oldestAt or movedAt < oldestAt then oldest, oldestAt = known, movedAt end
+                end
+            end
+            if kept >= feed.CAPTURE_RECENT_MAX and oldest then
+                recent[oldest] = nil
+                kept = kept - 1
+            end
+            feed.captureRecentCount = kept
+        end
+        feed.captureRecentCount = feed.captureRecentCount + 1
+    end
+    recent[id] = at
+end
+-- Our own capture count as the feed names it ("c" and our identity), nil without a capture.
+function feed.ownCapture()
+    local me = sync.GetPlayerFullName and sync:GetPlayerFullName()
+    local dedupKey = type(me) == "string" and me ~= "" and lb.GetNetworkRowKey and lb:GetNetworkRowKey(me) or nil
+    if not dedupKey or not lb.GetMaxCapturesForDedupName then return nil end
+    local count = tonumber(lb:GetMaxCapturesForDedupName(me)) or 0
+    if count <= 0 then return nil end
+    return "c" .. dedupKey, count
+end
+-- The zones a capture row of the feed carries: all of them when they fit `room` bytes, else a
+-- part of the list that starts further at each count, by as many zones as a row holds on
+-- average (the list is walked round, so a few counts tell all of it, whatever the room: a
+-- long name leaves two zones a row, a short one seven).
+function feed.captureZones(zones, count, room)
+    if type(zones) ~= "table" then return nil end
+    local total, n = 0, #zones
+    for i = 1, n do total = total + #tostring(zones[i]) + 1 end
+    if total <= room + 1 then return zones end
+    local step = math.max(1, math.floor((room + 1) * n / total))
+    -- (A step with no common divisor with the list's length: every zone opens a row in its
+    -- turn, whatever the lengths of the zones. A step of 5 in a list of 20 came back to the
+    -- same four places, and a long zone there hid the ones behind it for good.)
+    while step > 1 do
+        local a, b = step, n
+        while b ~= 0 do a, b = b, a % b end
+        if a == 1 then break end
+        step = step - 1
+    end
+    local part, used, start = {}, 0, (math.floor(tonumber(count) or 0) * step % n)
+    for step = 0, n - 1 do
+        local zone = tostring(zones[(start + step) % n + 1])
+        if used + #zone + 1 > room + 1 then break end
+        part[#part + 1], used = zone, used + #zone + 1
+    end
+    return part
+end
+-- 2.5.5: a killing blow row waits in a list of its own, per subscriber that reads them (its
+-- presence said capability 11 once: a client does not go back a version under a subscription).
+-- 2.5.2 dropped the row whenever the subscriber's queue was a quarter full or the feed had used
+-- 70 % of its messages this minute, and nothing sent it again: in a fight, the very moment
+-- killing blows are made, two rows in three were dropped at every hand (8 whole clients killing
+-- every 6 s: 3,877 dropped, 1,945 taken; after 30 min some clients knew 3 holders of 8), and
+-- live nearly none passed two hands. Now a row waits (one entry per player, its count read when
+-- it leaves) and rides the messages the kill rows make, in the room they leave (feedSend). No
+-- message more at a busy hour, no whisper more per message.
+local function feedPushKB(sub, dedupKey, at)
+    if not sub.kbOk then
+        -- (2.5.5: a subscriber whose presence was not heard in the last five minutes is not one
+        -- that cannot read them: its rows wait, and leave with its next message (a kill row, a
+        -- word of the feed) once its presence says so, feedSend.
+        -- They were dropped, and a subscriber that had gone quiet got none of a whole fight.
+        -- Only a presence that says an older client leaves a row out.)
+        local net = Overlord.Relay
+        local capability = net and net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(sub.name)
+        local blows = Overlord.KillingBlows
+        if capability ~= nil and not (blows and capability >= (tonumber(blows.PROTOCOL) or math.huge)) then
+            stats.feedKBSkipped = (stats.feedKBSkipped or 0) + 1
+            return
+        end
+        sub.kbOk = capability ~= nil or nil
+    end
+    local kb = sub.kb
+    if not kb then
+        kb = { has = {}, queue = {}, head = 1, tail = 0, count = 0 }
+        sub.kb = kb
+    end
+    if kb.has[dedupKey] then return end
+    if kb.count >= feed.KB_PENDING_MAX then
+        -- (The stream LB brings it: its own turn, kbTurn.)
         stats.feedKBSkipped = (stats.feedKBSkipped or 0) + 1
         return
     end
-    if sub.count >= feed.PENDING_MAX then
+    kb.tail = kb.tail + 1
+    kb.queue[kb.tail], kb.has[dedupKey], kb.count = dedupKey, true, kb.count + 1
+    -- (Its own date: the kill rows' LINGER is theirs, a waiting killing blow row does not spend it.)
+    kb.firstAt = kb.firstAt or at
+end
+-- May a message leave for the killing blow rows of this list alone? Only a few together (or
+-- one that waited long), and only while the feed has used less than half of its messages this
+-- minute: past it they wait for a message a kill row makes. (Each such message is paid from
+-- the feed's bytes like any other: one per row would have spent the kill rows' share.)
+local function feedKBAlone(kb, at)
+    local minute = feed.minute
+    if at - minute.at < 60 and minute.count * 2 >= feed.PER_MIN then return false end
+    return kb.count >= feed.KB_ALONE_ROWS or at - (kb.firstAt or at) >= feed.KB_ALONE_SEC
+end
+local function feedPush(sub, id, at)
+    if sub.has[id] then return end
+    -- (2.5.5: a capture count, rare and told once, still enters a full list, CAPTURE_EXTRA of
+    -- them at most: dropped behind the kill rows of a busy evening it was not offered again.)
+    if sub.count >= feed.PENDING_MAX
+        and not (id:byte(1) == 99 and sub.count < feed.PENDING_MAX + feed.CAPTURE_EXTRA) then
         stats.feedOverflow = (stats.feedOverflow or 0) + 1
         return
     end
@@ -1544,7 +1819,12 @@ function feed.note(stream, dedupKey, born)
     local slot = feed.ringAt % feed.RING + 1
     feed.ringAt = slot
     feed.ring[2 * slot - 1], feed.ring[2 * slot] = id, at
-    if feed.subCount == 0 then return end
+    -- (Kept for the subscribers to come, fed or not right now: feed.captureMoved.)
+    if stream == "LC" then feed.captureMoved(id, at) end
+    -- (A capture count takes its wait even with nobody fed: a subscriber may come within the
+    -- CAPTURE_LINGER, and must not be handed a count before the capture's own event; and ours
+    -- still goes up to the peers that feed us.)
+    if feed.subCount == 0 and stream ~= "LC" then return end
     -- (Not back to the peer it just came from.)
     local from = feed.from
     if stream == "LC" then
@@ -1555,15 +1835,21 @@ function feed.note(stream, dedupKey, born)
         waiting[id], waiting.n = true, waiting.n + 1
         C_Timer.After(feed.CAPTURE_LINGER, function()
             waiting[id], waiting.n = nil, waiting.n - 1
-            if feed.captureWaiting ~= waiting or feed.subCount == 0 then return end
-            local later = GetTime()
-            for lower, sub in pairs(feed.subs) do
-                if lower ~= from then feedPush(sub, id, later) end
+            if feed.captureWaiting ~= waiting then return end
+            if feed.subCount > 0 then
+                local later = GetTime()
+                for lower, sub in pairs(feed.subs) do
+                    if lower ~= from then feedPush(sub, id, later) end
+                end
+                feedArm()
             end
-            feedArm()
+            -- 2.5.5: our own count also goes up (feed.ownCaptureUp).
+            local own = feed.ownIdentity()
+            if own and id == "c" .. own and next(feed.sources) ~= nil then pcall(feed.ownCaptureUp) end
         end)
         return
     end
+    if feed.subCount == 0 then return end
     for lower, sub in pairs(feed.subs) do
         if lower ~= from then feedPush(sub, id, at) end
     end
@@ -1577,11 +1863,19 @@ lb.OnNetworkRowMoved = feed.note
 -- its slots are the kill rows a new subscriber is handed (the stream LB covers the rest).
 function feed.noteKB(dedupKey)
     if feed.from == "*" or type(dedupKey) ~= "string" then return end
+    -- 2.5.5: our own count also goes up to the peers that feed us, one timer at a time.
+    if dedupKey == feed.ownIdentity() and not feed.kbUpTimer and next(feed.sources) ~= nil and C_Timer and C_Timer.After then
+        feed.kbUpTimer = true
+        C_Timer.After(feed.KB_UP_SEC, function()
+            feed.kbUpTimer = nil
+            pcall(feed.ownCaptureUp)
+        end)
+    end
     if feed.subCount == 0 then return end
-    local at, id = GetTime(), "b" .. dedupKey
+    local at = GetTime()
     local from = feed.from
     for lower, sub in pairs(feed.subs) do
-        if lower ~= from then feedPush(sub, id, at) end
+        if lower ~= from then feedPushKB(sub, dedupKey, at) end
     end
     feedArm()
 end
@@ -1615,12 +1909,29 @@ function feed.subscribe(sender, filter, create)
         feed.subs[lower] = sub
         feed.subCount = feed.subCount + 1
         stats.feedSubscribed = (stats.feedSubscribed or 0) + 1
+        -- 2.5.5: the capture counts that moved here lately, before the kill rows (they are few,
+        -- and each was told once). One still in its CAPTURE_LINGER leaves with its timer.
+        local waiting = feed.captureWaiting
+        for id, movedAt in pairs(feed.captureRecent or {}) do
+            if at - movedAt <= feed.CAPTURE_RECENT_SEC and not (waiting and waiting[id]) then feedPush(sub, id, at) end
+        end
         -- What moved since the copy this pull may be served from was made.
         local ring = feed.ring
         for slot = 1, feed.RING do
             local id, movedAt = ring[2 * slot - 1], ring[2 * slot]
-            if id and at - movedAt <= feed.RING_SEC then feedPush(sub, id, movedAt) end
+            -- (A capture count still in its CAPTURE_LINGER leaves with its timer, this
+            -- subscriber included: handed over here it left within seconds of the capture.)
+            if id and at - movedAt <= feed.RING_SEC and not (feed.captureWaiting and feed.captureWaiting[id]) then
+                feedPush(sub, id, movedAt)
+            end
         end
+        -- 2.5.5: and our own capture count, whenever it was made (the feed only carried a count
+        -- that moved while somebody was fed: captures made with nobody listening never left).
+        local own = feed.ownCapture()
+        if own and not (feed.captureWaiting and feed.captureWaiting[own]) then feedPush(sub, own, at) end
+        -- (And our own killing blows: made while nobody listened, they never moved again.)
+        local ownKB = feed.ownKB()
+        if ownKB then feedPushKB(sub, ownKB, at) end
     end
     sub.at, sub.epoch = at, epoch()
     if create then
@@ -1787,30 +2098,31 @@ function feed.fightsUp(payload, sender)
     end
 end
 
+-- A killing blow total (a row "b") for one subscriber that reads them, of its faction when it
+-- filters: its text, or nil (nothing to send), or nil, true (asked again later), as feedRow.
+local function feedRowKB(sub, dedupKey)
+    local blows = Overlord.KillingBlows
+    if not blows or not sub.kbOk then return nil end
+    local data = blows:Data()
+    local count = data and tonumber(data.counts[dedupKey])
+    if not count or count <= 0 then return nil end
+    -- (Named as the ranking names it, with its metadata and within its honorable kills: the
+    -- spelling a peer first sent may hold no profile, so no faction to filter on.)
+    local name, hk, info = lb:GetLiveNetworkRow("LK", dedupKey)
+    if not name then
+        if inCombat() then return nil, true end
+        return nil, lb.EnsureNetworkHotIndexesPrepared ~= nil and lb:EnsureNetworkHotIndexesPrepared() ~= true
+    end
+    if sub.filter then
+        local faction = type(info) == "table" and info.faction
+        faction = faction == "Alliance" and "A" or faction == "Horde" and "H" or "?"
+        if faction ~= sub.filter and faction ~= "?" then return nil end
+    end
+    return "b" .. name .. ":" .. string.format("%d", math.min(count, hk))
+end
 -- One row for one subscriber: its text, or nil (nothing to send for it), or nil, true (the
 -- indexes are being rebuilt: asked again later).
 local function feedRow(sub, id, wireEpoch)
-    if id:sub(1, 1) == "b" then
-        -- A killing blow total: only to a subscriber that reads it, of its faction when it filters.
-        local blows, dedupKey = Overlord.KillingBlows, id:sub(2)
-        if not blows or not carriesKB(sub.name) then return nil end
-        local data = blows:Data()
-        local count = data and tonumber(data.counts[dedupKey])
-        if not count or count <= 0 then return nil end
-        -- (Named as the ranking names it, with its metadata and within its honorable kills: the
-        -- spelling a peer first sent may hold no profile, so no faction to filter on.)
-        local name, hk, info = lb:GetLiveNetworkRow("LK", dedupKey)
-        if not name then
-            if inCombat() then return nil, true end
-            return nil, lb.EnsureNetworkHotIndexesPrepared ~= nil and lb:EnsureNetworkHotIndexesPrepared() ~= true
-        end
-        if sub.filter then
-            local faction = type(info) == "table" and info.faction
-            faction = faction == "Alliance" and "A" or faction == "Horde" and "H" or "?"
-            if faction ~= sub.filter and faction ~= "?" then return nil end
-        end
-        return "b" .. name .. ":" .. string.format("%d", math.min(count, hk))
-    end
     local stream, dedupKey = id:sub(1, 1) == "c" and "LC" or "LK", id:sub(2)
     local name, count, info = lb:GetLiveNetworkRow(stream, dedupKey)
     if not name then
@@ -1844,7 +2156,9 @@ local function feedRow(sub, id, wireEpoch)
             end
         end
     else
-        snap.captureCount[name], snap.captures[name] = count, lb.captures and lb.captures[name] or nil
+        -- (30: the fields around the name and the zones, at their longest.)
+        snap.captureCount[name], snap.captures[name] = count, feed.captureZones(lb.captures and lb.captures[name], count,
+            math.max(0, feed.CAPTURE_ROW_MAX - #name - 30))
         payload = sync:BuildPagedLeaderboardCapturePayload(snap, name, wireEpoch)
         snap.captureCount[name], snap.captures[name] = nil, nil
         local compact = payload and compactRow8("LC", payload, wireEpoch)
@@ -1892,6 +2206,19 @@ local function feedSend(sub, at)
     end
     -- (Room kept for the fight brackets waiting for this subscriber.)
     if sub.fights and limit > 2 * feed.FIGHT_ROOM then limit = limit - feed.FIGHT_ROOM end
+    -- 2.5.5: the killing blow rows waiting for this subscriber (feedPushKB) are added after the
+    -- kill rows, in what those left of the whispers they use: never a whisper more, and nothing
+    -- taken from the kill rows. Messages full of kill rows leave them no room at all: they wait
+    -- (KB_PENDING_MAX players), and leave once the kill rows thin out. (A room kept for them
+    -- after a few such messages was measured, then removed: the killing blows never come
+    -- before the kills.)
+    local kb = sub.kb
+    local kbWaiting = kb ~= nil and kb.count > 0
+    -- (Rows waiting for a subscriber whose presence was not fresh: asked again here.)
+    if kbWaiting and not sub.kbOk then
+        sub.kbOk = carriesKB(sub.name) or nil
+        kbWaiting = sub.kbOk == true
+    end
     local parts, bytes, index = {}, 0, sub.head
     -- (The newcomers whose whole row is in this message: their next totals travel short, once
     -- the message has left. A whole row that could not be built yet is no such thing.)
@@ -1901,13 +2228,24 @@ local function feedSend(sub, at)
     local rowsMax = feed.ROWS_MAX - (sub.fights and feed.FIGHT_ROWS or 0)
     -- (zoneOf: the zone of each row kept; zoneSeen: the zones whose marker is counted.)
     local zoneOf, zoneSeen, zoned = {}, {}, false
-    while index <= sub.tail and #parts < rowsMax do
+    -- 2.5.5 (audit): WALK_MAX rows looked at per message. A list of two thousand rows that
+    -- are mostly not for this subscriber (its faction filter) was walked whole in one frame.
+    local walked = 0
+    while index <= sub.tail and #parts < rowsMax and walked < feed.WALK_MAX do
+        walked = walked + 1
         local id = sub.queue[index]
         local row, wait = feedRow(sub, id, wireEpoch)
         if wait then
-            sub.waits = (sub.waits or 0) + 1
-            if sub.waits <= feed.WAIT_MAX then break end
-            row = nil
+            -- 2.5.5 (audit): a row that cannot be built yet waits, and the rows behind it with
+            -- it. In a fight the indexes are not rebuilt (feedRow): that wait is not counted.
+            -- Out of a fight, after WAIT_MAX tries, ONE row is given up and counted. It used to
+            -- be that row and then every row behind it, the whole list in one message.
+            if not inCombat() then sub.waits = (sub.waits or 0) + 1 end
+            if (sub.waits or 0) > feed.WAIT_MAX then
+                stats.feedGone = (stats.feedGone or 0) + 1
+                index = index + 1
+            end
+            break
         end
         if row then
             local encoded = tostring(#row) .. ":" .. row
@@ -1935,11 +2273,42 @@ local function feedSend(sub, at)
     end
     local pieces = whispers(bytes)
     if pieces > 1 and cutParts > 0 and bytes - first - (pieces - 2) * piece < feed.FILL * piece then
-        for i = #parts, cutParts + 1, -1 do parts[i] = nil end
+        -- (Their zones too: a killing blow row added below at one of these places has none.)
+        for i = #parts, cutParts + 1, -1 do parts[i], zoneOf[i] = nil, nil end
         for i = #wholes, cutWholes + 1, -1 do wholes[i] = nil end
         index, bytes, pieces = cutIndex, cutBytes, pieces - 1
         stats.feedHeldBack = (stats.feedHeldBack or 0) + 1
     end
+    -- 2.5.5: the killing blow rows, in what the kill rows left of the whispers they use (one
+    -- whisper when there is no kill row).
+    local kbIndex, kbRows = kb and kb.head or 1, 0
+    if kbWaiting then
+        local capacity = first + (pieces - 1) * piece
+        -- (The room of the fight brackets stays theirs where they could not open a whisper.)
+        if sub.fights and (piece <= 0 or pieces >= feed.PIECES) then capacity = capacity - feed.FIGHT_ROOM end
+        local kbMax = feed.ROWS_MAX - (sub.fights and feed.FIGHT_ROWS or 0)
+        local kbWalked = 0
+        while kbIndex <= kb.tail and #parts < kbMax and kbWalked < feed.WALK_MAX do
+            kbWalked = kbWalked + 1
+            local row, wait = feedRowKB(sub, kb.queue[kbIndex])
+            if wait then
+                -- (As for the kill rows: one row given up at most, and none in a fight.)
+                if not inCombat() then kb.waits = (kb.waits or 0) + 1 end
+                if (kb.waits or 0) > feed.WAIT_MAX then
+                    stats.feedGone = (stats.feedGone or 0) + 1
+                    kbIndex = kbIndex + 1
+                end
+                break
+            end
+            if row then
+                local encoded = tostring(#row) .. ":" .. row
+                if bytes + #encoded > capacity then break end
+                parts[#parts + 1], bytes, kbRows = encoded, bytes + #encoded, kbRows + 1
+            end
+            kbIndex = kbIndex + 1
+        end
+    end
+    pieces = whispers(bytes)
     local function consume()
         for i = sub.head, index - 1 do
             local id = sub.queue[i]
@@ -1952,6 +2321,15 @@ local function feedSend(sub, at)
         if index > sub.head then sub.waits = nil end
         sub.head = index
         if sub.head > sub.tail then sub.queue, sub.head, sub.tail = {}, 1, 0 end
+        if kb and kbIndex > kb.head then
+            for i = kb.head, kbIndex - 1 do
+                local dedupKey = kb.queue[i]
+                kb.queue[i], kb.has[dedupKey], kb.count = nil, nil, kb.count - 1
+            end
+            kb.head, kb.waits = kbIndex, nil
+            if kb.head > kb.tail then kb.queue, kb.head, kb.tail = {}, 1, 0 end
+            kb.firstAt = kb.count > 0 and at or nil
+        end
         sub.firstAt = sub.count > 0 and at or nil
     end
     local rowCount = #parts
@@ -2024,6 +2402,7 @@ local function feedSend(sub, at)
     stats.bytes = stats.bytes + cost
     stats.feedSent = (stats.feedSent or 0) + 1
     stats.feedRowsSent = (stats.feedRowsSent or 0) + rowCount
+    if kbRows > 0 then stats.feedKBSent = (stats.feedKBSent or 0) + kbRows end
     stats.feedWhispers = (stats.feedWhispers or 0) + pieces
     minute.count = minute.count + 1
     sub.lastAt, sub.hello = at, nil
@@ -2043,11 +2422,11 @@ local function feedTick()
     if feed.subCount == 0 then return end
     if blocked() or not feedActive() then feed.reset() return end
     local at, net, wireEpoch = GetTime(), Overlord.Relay, epoch()
-    local due, waiting, unreached = nil, false, false
+    local due, dueKB, waiting, unreached = nil, nil, false, false
     for lower, sub in pairs(feed.subs) do
         if at - sub.at > feed.SUB_TTL or sub.epoch ~= wireEpoch then
             feedDrop(lower)
-        elseif sub.count > 0 or sub.hello or sub.fights then
+        elseif sub.count > 0 or sub.hello or sub.fights or (sub.kbOk and sub.kb and sub.kb.count > 0) then
             -- A subscriber not heard for five minutes has no direct route (the relay would refuse
             -- the message): its rows wait, PENDING_MAX at most, until it speaks again or its
             -- subscription ends. (Dropped at once, it stayed unfed until its next pull came round.)
@@ -2055,13 +2434,21 @@ local function feedTick()
                 unreached = true
             else
                 waiting = true
-                if at >= math.max(sub.lastAt + feed.GAP, (sub.firstAt or at) + feed.LINGER)
+                -- (2.5.5: killing blow rows alone make a message by feedKBAlone's rule only.)
+                -- (Such a subscriber has the tick's one message only when no kill row is due.)
+                if not (sub.count > 0 or sub.hello or sub.fights) then
+                    if at >= sub.lastAt + feed.GAP and feedKBAlone(sub.kb, at)
+                        and (not dueKB or sub.lastAt < dueKB.lastAt) then
+                        dueKB = sub
+                    end
+                elseif at >= math.max(sub.lastAt + feed.GAP, (sub.firstAt or at) + feed.LINGER)
                     and (not due or sub.lastAt < due.lastAt) then
                     due = sub
                 end
             end
         end
     end
+    due = due or dueKB
     if due then feedSend(due, at) end
     if waiting then
         feedArm()
@@ -2118,6 +2505,10 @@ local function feedKeepTick()
         else
             feed.sources[lower], feed.enemy[lower], feed.pinged[lower], feed.intake[lower] = nil, nil, nil, nil
             feed.sourceFights[lower], feed.sourceFightAt[lower] = nil, nil
+            -- (And what we told it of our own counts: told again if it feeds us again.)
+            if feed.captureTold then feed.captureTold[lower], feed.captureToldAt[lower] = nil, nil end
+            if feed.kbTold then feed.kbTold[lower] = nil end
+            if feed.kbReads then feed.kbReads[lower] = nil end
         end
     end
     if any and C_Timer and C_Timer.After then
@@ -2264,25 +2655,164 @@ local function feedApply(item)
         feed.noteZone(name, item.zone)
     end
 end
+-- 2.5.5: our own capture count, up to the peers that feed us (all of them, or `only`). Each is
+-- told a count once, CAPTURE_UP_GAP apart at least (what its reader allows), within the feed's
+-- own messages a minute; one left out (no route, the minute's messages used, the indexes being
+-- rebuilt) is tried again 30 s later while it still feeds us. One whisper per source and count.
+function feed.ownCaptureUp(only)
+    if blocked() or not feedActive() or next(feed.sources) == nil then return end
+    local wireEpoch = epoch()
+    local id, count = feed.ownCapture()
+    -- (Still in its CAPTURE_LINGER after a capture: it leaves with its timer, feed.note.)
+    if id and feed.captureWaiting and feed.captureWaiting[id] then id = nil end
+    local row, wait
+    if id then row, wait = feedRow(feed.scratch, id, wireEpoch) end
+    -- (Our killing blows, for the sources whose presence says they read them.)
+    local kbKey, kbCount = feed.ownKB()
+    local kbRow, kbWait
+    if kbKey then kbRow, kbWait = feedRowKB(feed.upward, kbKey) end
+    if not row and not kbRow and not wait and not kbWait then return end
+    local told, toldAt, toldKB = feed.captureTold, feed.captureToldAt, feed.kbTold
+    if not told then
+        told, toldAt = {}, {}
+        feed.captureTold, feed.captureToldAt = told, toldAt
+    end
+    if not toldKB then
+        toldKB = {}
+        feed.kbTold = toldKB
+    end
+    local at, net, minute, left = GetTime(), Overlord.Relay, feed.minute, wait == true or kbWait == true
+    if at - minute.at >= 60 then minute.at, minute.count = at, 0 end
+    -- (Paid like any message of the feed: its bytes, the relay's say, the minute's count; two
+    -- sources a call, the others 30 s later. A message for killing blows alone only while the
+    -- feed has used less than half of its minute, as feedKBAlone: never before the kill rows.)
+    feed.tokens = math.min(feed.BURST, feed.tokens + math.max(0, at - feed.refillAt) * feed.RATE)
+    feed.refillAt = at
+    local open = not (net and net.CanSendLeaderboardPage and not net:CanSendLeaderboardPage())
+    local sentNow = 0
+    for lower, heardAt in pairs(feed.sources) do
+        if (not only or only == lower) and at - heardAt <= feed.LIVE_SEC then
+            local route = net and net.peers and net.peers[lower]
+            local c = row and (told[lower] or 0) < count and row or nil
+            -- (A source that read killing blows once reads them for the session; one whose
+            -- presence was not heard in the last five minutes is asked again, not skipped.)
+            local reads = feed.kbReads and feed.kbReads[lower] or false
+            if kbRow and route and not reads and (toldKB[lower] or 0) < kbCount then
+                local capability = net.GetPeerPagedProtocol and net:GetPeerPagedProtocol(route.name)
+                local blows = Overlord.KillingBlows
+                if capability == nil then
+                    left = true
+                elseif blows and capability >= (tonumber(blows.PROTOCOL) or math.huge) then
+                    feed.kbReads = feed.kbReads or {}
+                    feed.kbReads[lower], reads = true, true
+                end
+            end
+            local b = kbRow and reads and (toldKB[lower] or 0) < kbCount and kbRow or nil
+            if c or b then
+                local message = "8:C:" .. tostring(wireEpoch) .. ":" .. (c and (tostring(#c) .. ":" .. c) or "")
+                    .. (b and (tostring(#b) .. ":" .. b) or "")
+                -- (A reader takes 250 bytes: over it, the capture count alone, the other later.)
+                if #message > 250 and c and b then
+                    b, left = nil, true
+                    message = "8:C:" .. tostring(wireEpoch) .. ":" .. tostring(#c) .. ":" .. c
+                end
+                -- (Never more than the bucket holds: counted dearer, the message of a player
+                -- with many zones waited for bytes that never come.)
+                local cost = math.min(feed.BURST, #message + 200)
+                if at - (toldAt[lower] or -1e9) < feed.CAPTURE_UP_GAP + 5 or minute.count >= feed.PER_MIN
+                    or (not c and minute.count * 2 >= feed.PER_MIN)
+                    or not open or sentNow >= 2 or feed.tokens < cost
+                    or not (route and net:IsDirectPeer(route.name)) then
+                    left = true
+                elseif sendControl("HR", message, route.name) then
+                    minute.count, sentNow = minute.count + 1, sentNow + 1
+                    feed.tokens = feed.tokens - cost
+                    stats.bytes = stats.bytes + cost
+                    toldAt[lower] = at
+                    if c then told[lower] = count end
+                    if b then toldKB[lower] = kbCount end
+                    stats.feedCapturesUp = (stats.feedCapturesUp or 0) + 1
+                else
+                    left = true
+                end
+            end
+        end
+    end
+    if left and not feed.captureUpTimer and C_Timer and C_Timer.After then
+        feed.captureUpTimer = true
+        C_Timer.After(30, function()
+            feed.captureUpTimer = nil
+            pcall(feed.ownCaptureUp)
+        end)
+    end
+end
+-- "HR 8:C:<epoch>:<rows>": a subscriber of ours tells us its own counts, as rows of the feed
+-- ("<length>:c<capture row>", "<length>:b<killing blow row>", one of each at most). Read from a
+-- subscriber only, its own rows only (the game names the sender of a whisper: the same proof a
+-- live kill total has), one message per CAPTURE_UP_GAP; each row taken through the acceptance
+-- of a feed row, and passed on to our other subscribers like any count that moves.
+function feed.captureFromBelow(payload, sender, channel)
+    local wireEpoch, blob = payload:match("^8:C:(%d+):(.+)$")
+    if not wireEpoch or tonumber(wireEpoch) ~= epoch() or blocked() or not feedActive() then return end
+    local sub = feed.subs[sender:lower()]
+    if not sub then return end
+    -- (The gap is kept by name, not on the subscription: asking us again made a new one.)
+    local at, lower = GetTime(), sender:lower()
+    if at - (feed.upAt[lower] or -1e9) < feed.CAPTURE_UP_GAP then
+        stats.feedCapturesUpRefused = (stats.feedCapturesUpRefused or 0) + 1
+        return
+    end
+    feed.keep(feed.upAt, "upAtCount", lower, at, 64, feed.CAPTURE_UP_GAP)
+    local pos, seen, context = 1, {}, Overlord.Relay and Overlord.Relay.context or nil
+    for _ = 1, 2 do
+        local prefix, stop = blob:match("^(%d+)():", pos)
+        local length = prefix and #prefix <= 3 and integer(prefix, 3, 250)
+        local row = length and blob:sub(stop + 1, stop + length)
+        if not row or #row ~= length then break end
+        pos = stop + 1 + length
+        local kind, name = row:sub(1, 1), row:match("^.([^:]+):")
+        -- (A player our ranking holds already: anybody may ask us and so become a subscriber,
+        -- and what comes up is passed on at once. A player new to us comes by the pages and by
+        -- the peers we chose to ask, as before.)
+        if (kind ~= "c" and kind ~= "b") or seen[kind] or not name or not sync.CaptureContributorMatchesSender
+            or not sync:CaptureContributorMatchesSender(name, sender)
+            or not (sync.IsKnownLeaderboardSubject and sync:IsKnownLeaderboardSubject(name)) then
+            stats.feedCapturesUpRefused = (stats.feedCapturesUpRefused or 0) + 1
+            break
+        end
+        seen[kind] = true
+        stats.feedCapturesUpTaken = (stats.feedCapturesUpTaken or 0) + 1
+        feedApply({ row = row, sender = sender, channel = channel, context = context, epoch = epoch() })
+    end
+end
 local function feedDrain()
     feed.draining = nil
-    if blocked() then feed.inbox, feed.inboxHead, feed.inboxTail = {}, 1, 0 return end
+    if blocked() then feed.inbox, feed.inboxHead, feed.inboxTail, feed.kbLater = {}, 1, 0, nil return end
     local inbox, wireEpoch = feed.inbox, epoch()
     local sliceAt = debugprofilestop and debugprofilestop() or 0
     -- (In a fight too, like a live total: two rows a frame.)
     for _ = 1, inCombat() and 2 or 4 do
         local item = inbox[feed.inboxHead]
-        if not item then feed.inbox, feed.inboxHead, feed.inboxTail = {}, 1, 0 return end
-        inbox[feed.inboxHead] = nil
-        feed.inboxHead = feed.inboxHead + 1
+        if item then
+            inbox[feed.inboxHead] = nil
+            feed.inboxHead = feed.inboxHead + 1
+        else
+            -- (No kill row waits: the killing blow rows a busy inbox put aside.)
+            local later = feed.kbLater
+            item = later and later[later.head]
+            if not item then break end
+            later[later.head] = nil
+            later.head = later.head + 1
+        end
         if item.epoch == wireEpoch then feedApply(item) end
         if debugprofilestop and debugprofilestop() - sliceAt >= 1 then break end
     end
-    if feed.inbox[feed.inboxHead] then
+    local later = feed.kbLater
+    if feed.inbox[feed.inboxHead] or (later and later[later.head]) then
         feed.draining = true
         C_Timer.After(0.001, feed.drainSafely)
     else
-        feed.inbox, feed.inboxHead, feed.inboxTail = {}, 1, 0
+        feed.inbox, feed.inboxHead, feed.inboxTail, feed.kbLater = {}, 1, 0, nil
     end
 end
 -- (One function for every frame of a drain: an error ends that drain, not the feed.)
@@ -2312,6 +2842,12 @@ function feed.receive(payload, sender, channel)
     feed.enemy[lower] = IsOtherFaction(sender) or nil
     feed.pinged[lower] = feed.pinged[lower] or at
     stats.feedReceived = (stats.feedReceived or 0) + 1
+    -- 2.5.5: the first word of a peer that was not feeding us: it is told our own capture count.
+    if not (feeding and at - feeding <= feed.LIVE_SEC) then
+        if feed.captureTold then feed.captureTold[lower] = nil end
+        if feed.kbTold then feed.kbTold[lower] = nil end
+        pcall(feed.ownCaptureUp, lower)
+    end
     if not feed.keepTimer and C_Timer and C_Timer.After then
         feed.keepTimer = true
         C_Timer.After(20, function() pcall(feedKeepTick) end)
@@ -2325,13 +2861,19 @@ function feed.receive(payload, sender, channel)
     local pos, rows, numericEpoch, zone = 1, 0, epoch(), nil
     while pos <= #blob and rows < feed.PARSE_MAX do
         local prefix, stop = blob:match("^(%d+)():", pos)
-        local length = prefix and #prefix <= 3 and integer(prefix, 2, 250)
+        -- 2.5.5: a row over 250 bytes no longer ends the reading (a 2.5.4 client sends the whole
+        -- capture row of a player with many zones through a relay: the kill rows behind it in
+        -- the message were lost, and counted as sent). A capture row is read up to the size of
+        -- a message (its zones are a page row's, bounded there); any other long row is skipped.
+        local length = prefix and #prefix <= 3 and integer(prefix, 2, feed.MESSAGE_MAX)
         if not length then break end
         local row = blob:sub(stop + 1, stop + length)
         if #row ~= length then break end
         pos, rows = stop + 1 + length, rows + 1
         local kind = row:sub(1, 1)
-        if kind == "z" then
+        if length > 250 and kind ~= "c" then
+            stats.feedBad = (stats.feedBad or 0) + 1
+        elseif kind == "z" then
             -- The zone of the kill rows that follow in this message (anything else: none).
             local ref = row:sub(2)
             zone = #ref <= feed.ZONE_REF_MAX and (ref:match("^@[%w_%-]+$") or ref:match("^#%d+$")) or nil
@@ -2341,9 +2883,22 @@ function feed.receive(payload, sender, channel)
             intake.rows = intake.rows + 1
             stats.feedOverflow = (stats.feedOverflow or 0) + 1
         elseif kind == "b" and (feed.inboxTail - feed.inboxHead + 1) * 2 >= feed.INBOX_MAX then
-            -- (2.5.2: a killing blow row never takes the second half of the inbox from kill rows;
-            -- the stream LB brings it in its next sweep.)
-            stats.feedKBSkipped = (stats.feedKBSkipped or 0) + 1
+            -- (2.5.2: a killing blow row never takes the second half of the inbox from kill rows.
+            -- 2.5.5: it is put aside and read once no kill row waits (feedDrain), KB_LATER_MAX of
+            -- them; it was dropped, and its sender had counted it as told.)
+            local later = feed.kbLater
+            if not later then
+                later = { head = 1, tail = 0 }
+                feed.kbLater = later
+            end
+            if later.tail - later.head + 1 < feed.KB_LATER_MAX then
+                intake.rows = intake.rows + 1
+                later.tail = later.tail + 1
+                later[later.tail] = { row = row, sender = sender, channel = channel, context = context, epoch = numericEpoch }
+                stats.feedKBLater = (stats.feedKBLater or 0) + 1
+            else
+                stats.feedKBSkipped = (stats.feedKBSkipped or 0) + 1
+            end
         elseif feed.inboxTail - feed.inboxHead + 1 < feed.INBOX_MAX then
             intake.rows = intake.rows + 1
             -- (Its own tail: the rows already read are emptied from the front, and # of such a
@@ -2821,6 +3376,37 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
         and savedStream or "LK"
     -- A sweep left at the races resumes there with a current peer only.
     if raceless and stream == "LR" then stream = "LK" end
+    -- 2.5.5: the killing blows' own turn (see kbTurn), in place of a pull starting at the kills.
+    local at = GetTime()
+    kbTurn.firstPullAt = kbTurn.firstPullAt or at
+    -- (Not for a ranking still nearly empty: its cold pull comes first. The values are read as
+    -- numbers: the table is reachable from outside this file.)
+    local turnAtBefore, sweepAtBefore = kbTurn.at, kbSweepAt
+    -- (Decided before the captures first: those take the start of a pull once every GAP, and on
+    -- a busy evening a pull lasts that long, so every pull started at the captures and the
+    -- killing blows' turn never came: 0 turn in 50 min, 8 whole clients.)
+    local kbOnly = kb == true and extended == true and stream == "LK"
+        and stats.ladderRowsEpoch == epoch() and (tonumber(stats.ladderRows) or 0) >= COLD_PULL_ROWS
+        and at - kbTurn.firstPullAt >= (tonumber(kbTurn.FIRST_SEC) or 300)
+        and (not kbTurn.at or at - kbTurn.at >= (tonumber(kbTurn.GAP) or 900)) or nil
+    if kbOnly then
+        stream, kbTurn.at = "LB", at
+        stats.kbTurns = (stats.kbTurns or 0) + 1
+    end
+    -- The captures first (see kbTurn.captures), with any peer asked in v8. (Not in the killing
+    -- blows' turn: the pull that follows it compares them first.)
+    local capTurn = kbTurn.captures
+    local capAtBefore = capTurn.at
+    local capGap = tonumber(capTurn.GAP) or 600
+    local capFirst = diff == true and extended == true and stream == "LK"
+        and stats.ladderRowsEpoch == epoch() and (tonumber(stats.ladderRows) or 0) >= COLD_PULL_ROWS
+        and at - kbTurn.firstPullAt >= (tonumber(capTurn.FIRST_SEC) or 120)
+        and (not capTurn.comparedAt or at - capTurn.comparedAt >= capGap)
+        and (not capTurn.at or at - capTurn.at >= capGap) or nil
+    if capFirst then
+        stream, capTurn.at = "LC", at
+        stats.capTurns = (stats.capTurns or 0) + 1
+    end
     local resume = type(saved) == "table" and (extended or savedStream == "LK")
         and integer(saved.bucket, 1, BUCKETS) or nil
     local state = { peer = peer, callback = callback, epoch = epoch(), seq = 0,
@@ -2836,6 +3422,10 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
     -- (and with one whose presence we have not heard: the safe side, one round).
     state.full = diff == true and HoldsFullLadder(peer) or nil
     state.kb = state.full and kb or nil
+    state.kbOnly, state.kbStartedAt = kbOnly, kbOnly and at or nil
+    -- (What the turn was started with: the kills' pull that follows it, see finish.)
+    state.kbPrev, state.again = kbOnly and turnAtBefore or nil, kbOnly and { extended, withRace, diff, raceless } or nil
+    state.capFirst, state.capPrev = capFirst, capFirst and capAtBefore or nil
     -- (The window counts from the stream LB itself: a pull cut in the kills, captures or races
     -- leaves the next one free to reach it.)
     if state.kb and stream == "LB" then kbSweepAt = GetTime() end
@@ -2861,11 +3451,12 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
     -- A sweep stays open until a pull ends it (v8 restarts LK from its fingerprints
     -- after a cut: the rows of the cut pass still count).
     state.startedAt = GetServerTime()
-    if (stats.sweepBase == nil or stats.sweepEpoch ~= state.epoch) and state.stream == "LK"
+    -- (2.5.5: a pull that compares the captures first is the start of a sweep all the same.)
+    if (stats.sweepBase == nil or stats.sweepEpoch ~= state.epoch) and (state.stream == "LK" or state.capFirst)
         and (state.wire == "8" or (state.bucket == 1 and state.completed == 0)) then
         stats.sweepBase, stats.sweepAt, stats.sweepEpoch = stats.changedRows or 0, state.startedAt, state.epoch
         stats.sweepFiltered = state.factionFilter ~= nil
-    elseif state.factionFilter then
+    elseif state.factionFilter and not state.kbOnly then
         stats.sweepFiltered = true
     end
     stats.protocol = extended and (diff and 8 or withRace and 7 or 6) or 5
@@ -2879,6 +3470,7 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
         stats.profileWhy = nil
         state.profile = profile
         -- Ranking size, for the badge's "quiet sweep" limit.
+        stats.ladderRowsEpoch = state.epoch
         stats.ladderRows = profile.streams and profile.streams.LK and profile.streams.LK.count
             or profile.count or 0
         stats.result = "awaiting reply"
@@ -2888,7 +3480,14 @@ function sync:StartPagedLeaderboardCatchup(peer, callback, extended, withRace, d
             state.phase, state.from, state.topSeen, state.topApplied = "T", 1, {}, 0
         end
         request(state)
-    end, true, not state.full) then pull = nil; return false, "local" end
+    end, true, not state.full) then
+        -- (Nothing was asked: the killing blows' turn and window are as they were.)
+        kbSweepAt = sweepAtBefore
+        if kbOnly then kbTurn.at, stats.kbTurns = turnAtBefore, stats.kbTurns - 1 end
+        if capFirst then capTurn.at, stats.capTurns = capAtBefore, stats.capTurns - 1 end
+        pull = nil
+        return false, "local"
+    end
     return true
 end
 
@@ -2936,6 +3535,10 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
     end
     if head == "8:W:" then
         if kind == "HR" then feed.fightsUp(payload, sender) end
+        return
+    end
+    if head == "8:C:" then
+        if kind == "HR" then feed.captureFromBelow(payload, sender, channel) end
         return
     end
     local version, op, epochStr, nonce, seqStr, a, b, c, d, e, f, g = strsplit(":", payload, 12)
@@ -3149,6 +3752,8 @@ function sync:OnPagedLeaderboardMessage(kind, payload, sender, channel)
         state.supported = true
         stats.pages = stats.pages + 1
         state.stream, state.wholeMatch = "LK", true
+        -- (A pull flagged for killing blows compared them in that one fingerprint.)
+        state.kbDone = state.kb and true or nil
         finish(state, true)
         return
     end
@@ -3304,6 +3909,24 @@ function sync:GetPagedLeaderboardDiagnostics()
         "; feed: subscribers=%d feeding us=%d; sent=%d rows=%d; received=%d rows=%d changed=%d unknown=%d refused=%d",
         feed.subCount, feeding, stats.feedSent or 0, stats.feedRowsSent or 0, stats.feedReceived or 0,
         stats.feedRows or 0, stats.feedChanged or 0, stats.feedUnknown or 0, stats.feedRefused or 0)
+    -- 2.5.5, the killing blows: feed rows sent, taken and left out (a subscriber that does not
+    -- read them, a waiting list full); turns of their own, and those not seen to their end.
+    details = details .. string.format("; killing blows: sent=%d taken=%d left out=%d; turns=%d cut=%d",
+        stats.feedKBSent or 0, stats.feedKB or 0, stats.feedKBSkipped or 0, stats.kbTurns or 0, stats.kbTurnsCut or 0)
+    -- 2.5.5: nothing is put aside without a number. Rows a full waiting list or a full inbox
+    -- left out (they wait for a pull), rows too long or unreadable, rows of players new to us
+    -- past the hour's budget, messages the relay refused (offered again), messages held back by
+    -- the minute's count.
+    details = details .. string.format(
+        "; left out: list, inbox or a source's minute full=%d, unreadable=%d, never buildable=%d, over the newcomers' budget=%d; "
+            .. "relay refused (sent again)=%d, sends held by our minute=%d; killing blow rows read later=%d, turns followed by the kills=%d",
+        stats.feedOverflow or 0, stats.feedBad or 0, stats.feedGone or 0, stats.feedOverBudget or 0,
+        stats.feedSendsRefused or 0, stats.feedCapped or 0, stats.feedKBLater or 0, stats.kbTurnsFollowed or 0)
+    -- 2.5.5, the captures: pulls that compared them first, and those cut before their end; our
+    -- own count told to the peers that feed us, theirs taken from our subscribers.
+    details = details .. string.format("; captures: pulls that began with them=%d cut=%d; upward messages sent=%d, rows taken from below=%d refused=%d",
+        stats.capTurns or 0, stats.capTurnsCut or 0, stats.feedCapturesUp or 0, stats.feedCapturesUpTaken or 0,
+        stats.feedCapturesUpRefused or 0)
     return string.format("Ladder v%d: %s; pages=%d rows=%d filtered=%d retries=%d; %s bucket=%s/64%s; peer=%s; 300 B/s budget",
         stats.protocol or 5, status, stats.pages, stats.rows, stats.rejected,
         stats.retries, pull and pull.stream or "LK",
@@ -3313,5 +3936,5 @@ end
 
 -- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
 Overlord.MemoryParts = Overlord.MemoryParts or {}
-Overlord.MemoryParts["SyncLeaderboardPages.lua"] = function() return { sync = sync, lb = lb, PAGED_PROTOCOL = PAGED_PROTOCOL, ASK_PROTOCOL = ASK_PROTOCOL, BUCKETS = BUCKETS, PAGE_ROWS = PAGE_ROWS, CHUNK = CHUNK, MAX_PARTS = MAX_PARTS, STREAMS = STREAMS, PROFILE_STREAMS = PROFILE_STREAMS, KB_SWEEP_SEC = KB_SWEEP_SEC, kbSweepAt = kbSweepAt, STREAM_LIMITS = STREAM_LIMITS, LEGACY_LIMITS = LEGACY_LIMITS, FULL_PROTOCOL = FULL_PROTOCOL, MOD = MOD, RATE = RATE, BURST = BURST, pull = pull, serving = serving, outbound = outbound, wake = wake, building = building, SESSION_SHARE_SEC = SESSION_SHARE_SEC, profiles = profiles, legacyViews = legacyViews, legacyProfiles = legacyProfiles, unsupported = unsupported, unsupportedOrder = unsupportedOrder, serial = serial, tokens = tokens, refillAt = refillAt, stats = stats, feed = feed, COMBAT_WAIT_SEC = COMBAT_WAIT_SEC, COMBAT_WAIT_JITTER = COMBAT_WAIT_JITTER, COMBAT_WAIT_MAX = COMBAT_WAIT_MAX, PROFILE_REUSE_SEC = PROFILE_REUSE_SEC, PROFILE_DIRTY_REUSE_SEC = PROFILE_DIRTY_REUSE_SEC, PROFILE_DIRTY_ROW_SEC = PROFILE_DIRTY_ROW_SEC, FP_SPACE = FP_SPACE, LIST_MAX_ROWS = LIST_MAX_ROWS, BITMAP_MAX = BITMAP_MAX, B64 = B64, B64BYTES = B64BYTES, B64INDEX = B64INDEX, PAGE_ROWS8 = PAGE_ROWS8, PAGE_ROWS8_MAX = PAGE_ROWS8_MAX, TOP_ROWS = TOP_ROWS, COLD_PULL_ROWS = COLD_PULL_ROWS } end
+Overlord.MemoryParts["SyncLeaderboardPages.lua"] = function() return { sync = sync, lb = lb, PAGED_PROTOCOL = PAGED_PROTOCOL, ASK_PROTOCOL = ASK_PROTOCOL, BUCKETS = BUCKETS, PAGE_ROWS = PAGE_ROWS, CHUNK = CHUNK, MAX_PARTS = MAX_PARTS, STREAMS = STREAMS, PROFILE_STREAMS = PROFILE_STREAMS, KB_SWEEP_SEC = KB_SWEEP_SEC, kbSweepAt = kbSweepAt, kbTurn = kbTurn, STREAM_LIMITS = STREAM_LIMITS, LEGACY_LIMITS = LEGACY_LIMITS, FULL_PROTOCOL = FULL_PROTOCOL, MOD = MOD, RATE = RATE, BURST = BURST, pull = pull, serving = serving, outbound = outbound, wake = wake, building = building, SESSION_SHARE_SEC = SESSION_SHARE_SEC, profiles = profiles, legacyViews = legacyViews, legacyProfiles = legacyProfiles, unsupported = unsupported, unsupportedOrder = unsupportedOrder, serial = serial, tokens = tokens, refillAt = refillAt, stats = stats, feed = feed, COMBAT_WAIT_SEC = COMBAT_WAIT_SEC, COMBAT_WAIT_JITTER = COMBAT_WAIT_JITTER, COMBAT_WAIT_MAX = COMBAT_WAIT_MAX, PROFILE_REUSE_SEC = PROFILE_REUSE_SEC, PROFILE_DIRTY_REUSE_SEC = PROFILE_DIRTY_REUSE_SEC, PROFILE_DIRTY_ROW_SEC = PROFILE_DIRTY_ROW_SEC, FP_SPACE = FP_SPACE, LIST_MAX_ROWS = LIST_MAX_ROWS, BITMAP_MAX = BITMAP_MAX, B64 = B64, B64BYTES = B64BYTES, B64INDEX = B64INDEX, PAGE_ROWS8 = PAGE_ROWS8, PAGE_ROWS8_MAX = PAGE_ROWS8_MAX, TOP_ROWS = TOP_ROWS, COLD_PULL_ROWS = COLD_PULL_ROWS } end
 Overlord.MemoryParts["SyncLeaderboardPages.lua#2"] = function() return { TOP_SCAN = TOP_SCAN, sendControl = sendControl, request = request, tryApply = tryApply, SMALL_BUCKET_ROWS = SMALL_BUCKET_ROWS, SMALL_STREAM_ROWS = SMALL_STREAM_ROWS, WIDE_MIN_RELEASE = WIDE_MIN_RELEASE, WIDE_BLOB_MAX = WIDE_BLOB_MAX, WIDE_BIG = WIDE_BIG, WIDE_RELEASE_AGE = WIDE_RELEASE_AGE, wide = wide, feedArm = feedArm } end
