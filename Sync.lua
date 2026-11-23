@@ -3456,7 +3456,7 @@ function Overlord.Sync:OnReceiveShard(payload, sender, channel)
                 if jumper and jumper.NoteEnemy then pcall(jumper.NoteEnemy, jumper, sender) end
             end
         end
-        Overlord.Shard:SetPlayerShard(sender, shardID, own)
+        Overlord.Shard:SetPlayerShard(sender, shardID, own, self:WordSaidAt(channel))
     end
 end
 
@@ -4122,31 +4122,21 @@ local function AppendShardTagToPlayerName(nameHint, shardHint, enemy)
     -- (2.5.0: a name from the network goes into a chat line: its escape character is doubled,
     -- so that it can open no colour, texture nor link of its own.)
     if type(nameHint) == "string" and nameHint:find("|", 1, true) then nameHint = nameHint:gsub("|", "||") end
+    -- 2.7.0 (Layers OL): only the mark the caller hands over, the one the line of this capture
+    -- carried. No lookup by name: the last word heard about a player may be minutes old, differs
+    -- from client to client, and would print a code its own panel no longer shows.
     local sid = tonumber(shardHint)
     local shardMod = Overlord.Shard
-    if not sid and shardMod and shardMod.ResolveKnownShardPlayer then
-        local _, resolvedSid = shardMod:ResolveKnownShardPlayer(nameHint, true)
-        sid = resolvedSid
-        if not sid then
-            _, sid = shardMod:ResolveKnownShardPlayer(nameHint, false)
-        end
-    end
     if not sid then return nameHint end
-    -- After a name the tag takes a comma ("Name, layer #1234"): the name and the
-    -- layer read as two things.
-    local tag = L and (L.SHARD_ALERT_NAME_TAG or L.SHARD_ALERT_TAG)
-    local text = tag and string.format(tag, tostring(sid)) or (" #" .. tostring(sid))
-    -- 2.5.0: the layer can be clicked (LayerJumper asks that player for an invitation). Only
-    -- where the game hands the click of an "addon" link to its addon (EventRegistry).
-    local jumper = Overlord.LayerJumper
-    if jumper and jumper.ChatLink then
-        if enemy and jumper.NoteEnemy then pcall(jumper.NoteEnemy, jumper, nameHint) end
-        -- (An enemy is never asked: ChatLink then names nobody, and the click asks the players
-        -- of ours known on that layer.)
-        local ok, linked = pcall(jumper.ChatLink, jumper, nameHint, sid, text)
-        if ok and type(linked) == "string" then text = linked end
-    end
-    return nameHint .. text
+    -- 2.7.0 (Layers OL): the mark is shown by its code ("Name, layer #OL37"); a mark without a
+    -- number shows nothing. One proven on our layer says so. Plain text: nothing to click, no
+    -- way to another layer is offered.
+    local code = shardMod and shardMod.DisplayCode and shardMod:DisplayCode(sid) or nil
+    if not code then return nameHint end
+    local ours = shardMod.IsOurLayer and shardMod:IsOurLayer(sid)
+    -- After a name the tag takes a comma: the name and the layer read as two things.
+    local tag = L and ((ours and L.SHARD_ALERT_NAME_TAG_OURS) or L.SHARD_ALERT_NAME_TAG or L.SHARD_ALERT_TAG)
+    return nameHint .. (tag and string.format(tag, code) or (" #" .. code))
 end
 
 -- Meme etiquette " #shard" que les alertes de capture, pour les autres modules.
@@ -4159,27 +4149,113 @@ function Overlord.Sync:GetShardAlertTagForPlayer(nameHint)
     return tagged:sub(#nameHint + 1)
 end
 
+-- Somebody else's word about a capturer's mark (a line relayed by a third player): kept for
+-- the tooltip, never merged with (Shard:SetPlayerShard, saidAt = false).
 local function RememberCapturerShard(capturerName, shardId)
     shardId = tonumber(shardId)
     if not capturerName or capturerName == "" or not shardId then return end
     if Overlord.Shard and Overlord.Shard.SetPlayerShard then
-        Overlord.Shard:SetPlayerShard(capturerName, shardId)
+        Overlord.Shard:SetPlayerShard(capturerName, shardId, false, false)
     end
 end
 
-local function LearnCapturerShardFromZsSender(sender, capturerName)
-    if not sender or not capturerName or capturerName == "" then return end
-    local sync = Overlord.Sync
-    if not sync or not sync.GetCaptureContributorDedupKey then return end
-    local sdk = sync:GetCaptureContributorDedupKey(sender)
-    local cdk = sync:GetCaptureContributorDedupKey(capturerName)
-    if not sdk or not cdk or sdk:lower() ~= cdk:lower() then return end
-    local shardMod = Overlord.Shard
-    if not shardMod or not shardMod.GetKnownPlayerShard then return end
-    local sid = shardMod:GetKnownPlayerShard(sender)
-    if sid then
-        RememberCapturerShard(capturerName, sid)
+-- When the message being handled was said, as a GetTime(): now for a direct one, now minus its
+-- age for one the relay delivers (a copy may be two minutes old).
+function Overlord.Sync:WordSaidAt(channel)
+    local now = GetTime()
+    local net = Overlord.Relay
+    local context = channel == "BETA" and net and net.context or nil
+    local at = type(context) == "table" and tonumber(context.at) or nil
+    if at and Overlord.ServerNow then
+        return now - math.max(0, Overlord.ServerNow() - at)
     end
+    return now
+end
+
+-- 2.7.0: only the name itself goes into a capture alert, "First Last". Whatever a sender wrote
+-- after it (a hyphen and any text, up to the 50 characters a name may take) is never shown.
+function priv.NameForChat(name)
+    if type(name) ~= "string" or name == "" then return name end
+    local canon = Overlord.Sync:CanonicalForeverName(name)
+    if canon then return canon end
+    -- (Not a complete name: what stands before any hyphen, nothing when nothing does; never a
+    -- control character or an escape bar.)
+    local head = (name:match("^([^%-]*)") or ""):gsub("[%c|]", "")
+    return (head:match("^%s*(.-)%s*$")) or ""
+end
+
+-- 2.7.0 (Layers OL): the mark of a capture's alert is the one its own line carries, kept per
+-- point, so that every client prints the same code and it is the capturer's own. (In priv:
+-- the main chunk is close to Lua's 200 locals.)
+function priv.SameContributor(a, b)
+    if type(a) ~= "string" or type(b) ~= "string" or a == "" or b == "" then return false end
+    local sync = Overlord.Sync
+    local ka = sync.GetCaptureContributorDedupKey and sync:GetCaptureContributorDedupKey(a) or a
+    local kb = sync.GetCaptureContributorDedupKey and sync:GetCaptureContributorDedupKey(b) or b
+    return type(ka) == "string" and type(kb) == "string" and ka:lower() == kb:lower()
+end
+
+-- A capture line passed the gates: what it says of its capturer's mark. The capturer's own
+-- line always counts, an empty field included (it holds no mark now); a line relayed by a
+-- third player counts when it carries a mark, or names another capturer than the one held.
+-- lineTs: the line's own timestamp: an older line of the same capturer, delivered late by a
+-- relay, never replaces what a newer one said.
+-- final: the line that ends the capture. The code "is capturing" printed stays the code of
+-- "has been taken" on every client: a final that names another mark (a sign of a layer change
+-- in the capture's last seconds) does not replace the one the capture's lines carried.
+function priv.NoteLineMark(zoneId, capturerName, mark, sender, channel, lineTs, final)
+    if type(zoneId) ~= "string" or type(capturerName) ~= "string" then return end
+    local name = capturerName:match("^%s*(.-)%s*$") or ""
+    if #name < 2 or #name > 50 then return end
+    local shardMod = Overlord.Shard
+    local raw = tonumber(mark)
+    mark = shardMod and shardMod.ValidMark and shardMod:ValidMark(mark) or nil
+    local own = priv.SameContributor(sender, name)
+    -- (Said by the capturer himself as the game names him: never a name a relay wrote in.)
+    local sync = Overlord.Sync
+    local authenticated = own and not (sync.IsUnauthenticatedRelayOrigin and sync:IsUnauthenticatedRelayOrigin(sender))
+    priv.alertMarks = priv.alertMarks or {}
+    local held = priv.alertMarks[zoneId]
+    lineTs = tonumber(lineTs) or 0
+    -- (A line dated ahead of the clock would hold the slot against every later line.)
+    local serverNow = Overlord.ServerNow and Overlord.ServerNow() or time()
+    -- (Every line is dated by the server clock its sender keeps: a few seconds of drift at most.)
+    if lineTs > serverNow + 5 then lineTs = serverNow + 5 end
+    local now = GetTime()
+    local sameCapturer = held ~= nil and priv.SameContributor(held.name, name)
+    if sameCapturer and lineTs > 0 and lineTs < (held.ts or 0) and not (authenticated and not held.authenticated) then return end
+    local keepForFinal = final and sameCapturer and held.mark ~= nil and now - held.at <= 180
+    local replace = not keepForFinal and (own or mark or not sameCapturer)
+    -- What the capturer said himself is never overwritten by somebody else's word about it: not
+    -- for that capture, nor by another capturer's name in the half minute after his last line.
+    if replace and held and held.authenticated and not authenticated
+        and now - held.at <= (sameCapturer and 180 or 30) then
+        replace = false
+    end
+    if replace then
+        if not held then
+            held = {}
+            priv.alertMarks[zoneId] = held
+        end
+        held.name, held.mark, held.at, held.ts, held.authenticated = name, mark, now, lineTs, authenticated
+    end
+    -- (A mark, an empty field or 0: his own word. Any other number is the chance value of a
+    -- 2.6.0 client: nothing is written for it, a row of 0 would only make us say our mark to a
+    -- client that cannot read it.)
+    if own and shardMod and shardMod.SetPlayerShard and (mark or not raw or raw == 0) then
+        shardMod:SetPlayerShard(name, mark or 0, false, Overlord.Sync:WordSaidAt(channel))
+    end
+end
+
+-- The mark to print next to that capturer for that point: the one a line of this capture
+-- carried, nil when none did (the alert then names no layer).
+function priv.AlertMarkFor(zone, capturerName)
+    local held = zone and priv.alertMarks and priv.alertMarks[zone.id]
+    -- (Three minutes: every line of a capture renews it, about every five seconds; only the
+    -- wait between its last line and the alert has to be covered, never a later capture.)
+    if not held or not held.mark or GetTime() - held.at > 180 then return nil end
+    if not priv.SameContributor(held.name, capturerName) then return nil end
+    return held.mark
 end
 
 local function RememberCaptureChatTimestamp(tsKey, now)
@@ -4255,11 +4331,12 @@ local function PrintCaptureChatOnce(zone, newOwner, capturerName, captureTs)
         Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. Overlord:FactionChatIcon(Overlord.PlayerFaction) .. L.SYNC_CAPTURED_FRIENDLY,
             zoneLabel, Overlord.Zones:GetFactionName()))
     else
-        -- Affiche le nom du capteur (avec royaume) si disponible
+        -- The capturer's name when there is one (2.7.0: the name itself, priv.NameForChat).
+        capturerName = priv.NameForChat(capturerName)
         if capturerName and capturerName ~= "" then
             Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.SYNC_CAPTURED_ENEMY_BY,
                 zoneLabel, Overlord.Zones:GetEnemyFactionName(),
-                AppendShardTagToPlayerName(capturerName, zone and zone.zsRelayCapturerShard, true)))
+                AppendShardTagToPlayerName(capturerName, priv.AlertMarkFor(zone, capturerName), true)))
         else
             Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.SYNC_CAPTURED_ENEMY,
                 zoneLabel, Overlord.Zones:GetEnemyFactionName()))
@@ -4680,11 +4757,12 @@ local function StoreZsRelayCapturerFromZs(zone, status, owner, zsCapturerName, z
             -- before any alert names him (LayerJumper lists the players whose layer we hold).
             local jumper = Overlord.LayerJumper
             if jumper and jumper.NoteEnemy then pcall(jumper.NoteEnemy, jumper, tn) end
-            local sid = tonumber(zsCapturerShard)
-            if sid then
-                zone.zsRelayCapturerShard = sid
-                RememberCapturerShard(tn, sid)
-            end
+            -- (The mark of THIS line or none: a capturer who takes the wave over, or whose
+            -- line carries no mark, never inherits the code of the one before.)
+            local shardMod = Overlord.Shard
+            local sid = shardMod and shardMod.ValidMark and shardMod:ValidMark(zsCapturerShard) or nil
+            zone.zsRelayCapturerShard = sid
+            if sid then RememberCapturerShard(tn, sid) end
         end
     end
 end
@@ -4698,12 +4776,13 @@ end
 
 -- Nom affiche alertes : paquet courant, sinon dernier nom ennemi relais valide.
 local function EffectiveCapturerNameForAlert(zone, zsCapturerName)
+    -- (2.7.0: the name itself, priv.NameForChat: the catch-up lines print it too.)
     local z = zsCapturerName and zsCapturerName:match("^%s*(.-)%s*$") or ""
-    if z ~= "" and #z >= 2 and #z <= 50 then return z end
+    if z ~= "" and #z >= 2 and #z <= 50 then return priv.NameForChat(z) end
     local r = zone and zone.zsRelayCapturerName
     if r and type(r) == "string" then
         local t = r:match("^%s*(.-)%s*$") or ""
-        if t ~= "" and #t >= 2 and #t <= 50 then return t end
+        if t ~= "" and #t >= 2 and #t <= 50 then return priv.NameForChat(t) end
     end
     return ""
 end
@@ -5413,12 +5492,13 @@ local function TryPrintEnemyCapturingAlert(zone, capturerName, waveTs)
     if waveTs > 0 then
         priv.enemyAlertWaveKey[waveKey] = nowAlert
     end
-    -- Affiche le nom du capteur (avec royaume) si disponible
+    -- The capturer's name when there is one (2.7.0: the name itself, priv.NameForChat).
     local whereLabel = Overlord.Zones:GetZoneCaptureAlertLocationLabel(zone)
+    capturerName = priv.NameForChat(capturerName)
     if capturerName and capturerName ~= "" then
         Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.ENEMY_CAPTURING_BY,
             whereLabel, Overlord.Zones:GetEnemyFactionName(),
-            AppendShardTagToPlayerName(capturerName, zone and zone.zsRelayCapturerShard, true)))
+            AppendShardTagToPlayerName(capturerName, priv.AlertMarkFor(zone, capturerName), true)))
     else
         Overlord:PrintNotification(string.format("|cFFFF4444[Overlord]|r " .. Overlord:EnemyFactionChatIcon() .. L.ENEMY_CAPTURING,
             whereLabel, Overlord.Zones:GetEnemyFactionName()))
@@ -6150,6 +6230,14 @@ local function BuildSrZsPayload(zone)
     if status == "in_progress" and Overlord.PlayerFaction then
         if zone.isHolding and zone.holdAuthorityLocal and zone.owner == Overlord.PlayerFaction then
             capturerName = Overlord.Sync:GetPlayerFullName() or ""
+            -- 2.7.0: this answer to a catch-up names the code our capture already carries (a
+            -- client that learns the capture here prints it like the others). It never makes,
+            -- numbers or pins a mark: only the capture's own lines do.
+            local shardMod = Overlord.Shard
+            if capturerName ~= "" and shardMod and shardMod.IsMarkPinned and shardMod:IsMarkPinned()
+                and shardMod.currentShardID ~= nil then
+                capturerShard = tostring(shardMod.currentShardID)
+            end
         elseif zone.owner == Overlord.PlayerFaction then
             local official = zone.zsOfficialCapturerName
             if official and type(official) == "string" then
@@ -8192,7 +8280,10 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
         if captureFinalClaimKey then
             -- Le final authentifie autorise owner/status/ts uniquement. Les
             -- valeurs de gameplay du dernier paquet restent non autoritaires.
-            kills, holdTime, remoteSiegePhase, remoteHoldParsed, zsCapturerShard = 0, 0, 0, nil, nil
+            -- (2.7.0: the capturer's mark is no gameplay value: it stays, for the "has been
+            -- taken" alert, which must print the code the "is capturing" alert printed. Wiped
+            -- here, a client that handled this final before the C printed no code at all.)
+            kills, holdTime, remoteSiegePhase, remoteHoldParsed = 0, 0, 0, nil
         end
     end
 
@@ -8252,8 +8343,16 @@ function Overlord.Sync:OnReceiveZoneState(payload, sender, sourceChannel)
     end
     if Overlord.MarkCaptureSyncReceived then Overlord:MarkCaptureSyncReceived() end
     if Overlord.WaitingForSync then Overlord.WaitingForSync = nil end
-    if not progressDecision or progressDecision.direct then
-        LearnCapturerShardFromZsSender(sender, zsCapturerName)
+    if wireStatus == "in_progress" or wireStatus == "captured" then
+        priv.NoteLineMark(zoneId, zsCapturerName, zsCapturerShard, sender, sourceChannel, ts,
+            wireStatus == "captured")
+        -- 2.7.0 ("Capturer spotted", CaptorSpot.lua): an enemy capturing here is followed by
+        -- name, to mark his nameplate once the game shows him. Nothing is sent; a fault of that
+        -- display never reaches the capture.
+        if Overlord.CaptorSpot and owner and owner == Overlord.Zones:GetEnemyFaction() then
+            pcall(Overlord.CaptorSpot.Note, Overlord.CaptorSpot, zoneId, zsCapturerName,
+                wireStatus == "captured")
+        end
     end
 
     local zone = Overlord.Zones:GetZone(zoneId)
@@ -11847,9 +11946,12 @@ function Overlord.Sync:BroadcastZoneState(zone, forceBNetZS, primaryOnly)
             and zone.owner == Overlord.PlayerFaction) then
             capturerName = (recentFinalProof and zone._lastCaptureFinalOrigin)
                 or self:GetPlayerFullName() or ""
-            if capturerName ~= "" and Overlord.Shard and Overlord.Shard.currentShardID ~= nil then
-                capturerShard = tostring(Overlord.Shard.currentShardID)
-            end
+            -- 2.7.0: our capture names our mark (Layers OL), numbered now if it had no number:
+            -- its alert reads "layer #OL37" for everybody.
+            local shardMod = Overlord.Shard
+            local mark = capturerName ~= "" and shardMod and ((shardMod.MarkForCapture
+                and shardMod:MarkForCapture()) or shardMod.currentShardID) or nil
+            if mark ~= nil then capturerShard = tostring(mark) end
         elseif zone.owner and zone.owner ~= Overlord.PlayerFaction then
             local r = zone.zsRelayCapturerName
             if r and type(r) == "string" then

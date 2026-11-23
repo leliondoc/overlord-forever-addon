@@ -2776,7 +2776,7 @@ function net:Send(kind, payload, target, immediate)
             local okLayer, layer = pcall(function()
                 return addon:IsShardHelperActive() and tonumber(shard:GetCurrentShardID()) or nil
             end)
-            if okLayer and layer and layer >= 0 and layer < 1e8 and layer == math.floor(layer) then
+            if okLayer and layer and layer >= 0 and layer < 1e9 and layer == math.floor(layer) then
                 layerToken = "~s" .. string.format("%d", layer)
                 -- "~h" (2.5.1): "Help others change layer" is on here. Right after the layer,
                 -- whose readers look for "~s<digits>~"; the Layers window of those who hear
@@ -2908,7 +2908,7 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         local previous = self.context
         self.context = { origin = origin, gateway = sender, hops = #p.path - 1,
             kind = p.kind, payload = p.payload, targeted = p.target ~= "*", transport = transport,
-            session = tostring(p.id or ""):match("^(.-)%-") }
+            session = tostring(p.id or ""):match("^(.-)%-"), at = p.at }
         -- BETA is explicit: do not masquerade the relay as a direct WoW whisper.
         local ok, err = pcall(sync.OnAddonMessage, sync, "OverlordF",
             p.kind .. ":" .. p.payload, "BETA", origin)
@@ -2982,20 +2982,28 @@ function net:Receive(wire, sender, transport, bnetID, decoded, seenChecked)
         if layer and not ourSide and addon.LayerJumper and addon.LayerJumper.NoteEnemy then
             pcall(addon.LayerJumper.NoteEnemy, addon.LayerJumper, origin)
         end
+        -- 2.7.0: when this presence was said, as a GetTime(): its packet may have waited two
+        -- minutes in its sender's queue (a busy or refused channel). Dated "now", the mark of
+        -- the layer its player just left came after its SH 0 and was merged with.
+        local presenceSaidAt = GetTime() - math.max(0, serverNow() - (tonumber(p.at) or serverNow()))
         if layer and addon.Shard and addon.Shard.SetPlayerShard then
-            -- (2.5.4: the last argument, its own word ON OUR SIDE, see Shard:SetPlayerShard: only
-            -- such a word lists a player in the Layers window whatever a mark says.)
-            local okLayer, taken = pcall(addon.Shard.SetPlayerShard, addon.Shard, origin, layer, ourSide)
+            -- (Third argument: its own word ON OUR SIDE, see Shard:SetPlayerShard.)
+            local okLayer, taken = pcall(addon.Shard.SetPlayerShard, addon.Shard, origin, layer, ourSide, presenceSaidAt)
             if not okLayer then self.stats.lastError = tostring(taken) end
             -- (A layer said and refused, out of range or no room for one more player: the layer
             -- the window listed for that player is no longer its own word either.)
             if okLayer and taken == false and addon.LayerJumper and addon.LayerJumper.ForgetLayer then
                 pcall(addon.LayerJumper.ForgetLayer, addon.LayerJumper, origin)
             end
-        elseif ownWord and not layer and addon.LayerJumper and addon.LayerJumper.ForgetLayer then
-            -- 2.5.4: its own presence names no layer: the Layers window, which keeps a layer
-            -- ten minutes, lets go of that player at once.
-            local okForget, forgetError = pcall(addon.LayerJumper.ForgetLayer, addon.LayerJumper, origin)
+        elseif ownWord and not layer and addon.Shard and addon.Shard.SetPlayerShard
+            and type(addon.Shard.knownShards) == "table" and addon.Shard.knownShards[origin] ~= nil
+            and (not addon.Shard.ValidMark or addon.Shard:ValidMark(addon.Shard.knownShards[origin]) ~= nil) then
+            -- 2.7.0: its own presence names no mark: it holds none now (it changed layer, or
+            -- left the fronts), and the one we held for it is let go at once. Only over a MARK
+            -- we hold: a row of 0 for every contact off the fronts would fill the table of known
+            -- players, and a 0 over the chance number of a 2.6.0 client would make us say our
+            -- mark to a client that cannot read it.
+            local okForget, forgetError = pcall(addon.Shard.SetPlayerShard, addon.Shard, origin, 0, false, presenceSaidAt)
             if not okForget then self.stats.lastError = tostring(forgetError) end
         end
         -- 2.5.1: "~h", its "Help others" option, by the same word and under the same rule. A

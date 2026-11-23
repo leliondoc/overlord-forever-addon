@@ -61,8 +61,8 @@ Overlord.L.SHARD_ALERT_NAME_TAG = ", layer #%s"
 local mineAlerts = sync:GetPriv().mineAlertLast
 prints = {}
 mineAlerts.realmine = nil
-sync:OnReceiveMining("realmine:H:4321", "Horde Miner-Realm")
-assert(prints[1] and prints[1]:find("Real Mine (Horde Miner, layer #4321)", 1, true),
+sync:OnReceiveMining("realmine:H:604321", "Horde Miner-Realm")
+assert(prints[1] and prints[1]:find("Real Mine (Horde Miner, layer #OL321)", 1, true),
     "the alert lacks the miner or its layer: " .. tostring(prints[1]))
 mineAlerts.realmine = nil
 sync:OnReceiveMining("realmine:H:12|cffff0000", "Bad|cffName")

@@ -12,10 +12,6 @@ if locale == "ptBR" then
     L.HELP_GUIDE = "|cFFFFFF00/ov guide|r: Abrir o guia Forever"
     L.USAGE_START = "Uso: /ov start <ponto>"
     L.UI_SCALE_TOOLTIP = "Tamanho do painel e da classificação. Também é possível usar |cffffffff/ov scale|r."
-    L.SHARD_TOOLTIP_TITLE = "ID do layer"
-    L.SHARD_TOOLTIP_CURRENT = "Layer atual: %s"
-    L.SHARD_TOOLTIP_PLAYERS_HEADER = "Jogadores em outro layer:"
-    L.SHARD_TOOLTIP_ALL_SAME = "Todos os jogadores sincronizados estão no mesmo layer."
 elseif locale == "zhCN" then
     L.MINE_DARROW = "达隆山"
     L.GOLD_HEADER_TIP = "在标记的区域内获得白金。希尔斯布莱德丘陵：碧玉矿洞与达隆山；银松森林：艾伦矿洞；洛克莫丹：碎石矿洞；艾尔文森林：玉石矿洞。"
@@ -29,10 +25,6 @@ elseif locale == "zhCN" then
     L.HELP_GUIDE = "|cFFFFFF00/ov guide|r：打开 Forever 指南"
     L.USAGE_START = "用法：/ov start <据点>"
     L.UI_SCALE_TOOLTIP = "调整主面板和排行榜的大小，也可以使用 |cffffffff/ov scale|r。"
-    L.SHARD_TOOLTIP_TITLE = "Layer ID"
-    L.SHARD_TOOLTIP_CURRENT = "当前 layer：%s"
-    L.SHARD_TOOLTIP_PLAYERS_HEADER = "其他 layer 上的玩家："
-    L.SHARD_TOOLTIP_ALL_SAME = "所有已同步玩家都在同一 layer。"
 end
 
 -- Keep literal slash commands intact when translating help text.

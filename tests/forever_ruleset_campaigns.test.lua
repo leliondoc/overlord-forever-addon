@@ -172,4 +172,124 @@ for _, retired in ipairs({ "normal", "rp", "hardcore" }) do
 end
 assert(not pools:AreOutpostCrossPoolsLinked("global", "pve"))
 
+-- 3. 2.6.1: the rules read again after the login --------------------------------------
+-- A Roleplay PvP client loaded before the game answered its RP rule: the session went to
+-- the PvP campaign. The rules read again name Roleplay PvP: confirmed after CONFIRM_SEC,
+-- the session stops (as in an instance, no resume) and asks for /reload.
+local live = {}
+local function session(rules, realm)
+    Enum.GameRule = { HardcoreRuleset = 1, RPRuleset = 2, PvPRuleset = 3 }
+    live = rules
+    C_GameRules = { IsGameRuleActive = function(rule) return live[rule] end }
+    GetRealmName = function() return realm end
+    assert(loadfile("RealmPools.lua"))()
+    return Overlord.RealmPools
+end
+pools = session({ [1] = false, [3] = true }, "")
+assert(pools:GetRuleset() == "pvp" and pools._rulesetSettled == false,
+    "An unanswered RP rule must be read as unsettled")
+live = { [1] = false, [2] = true, [3] = true }
+assert(pools:CheckSessionRuleset(10) == nil, "One reading is not enough")
+assert(pools:CheckSessionRuleset(12) == nil, "Confirmed before CONFIRM_SEC")
+assert(pools:CheckSessionRuleset(13) == "rppvp", "Roleplay PvP read after the login was not caught")
+assert(pools:GetRuleset() == "pvp", "The session's campaign must not switch mid-session")
+live = { [1] = false, [2] = false, [3] = true }
+assert(pools:CheckSessionRuleset(99) == "rppvp", "A found mismatch must stay")
+
+-- A right campaign is never stopped; a single odd reading is forgotten.
+pools = session({ [1] = false, [2] = true, [3] = true }, "")
+assert(pools:GetRuleset() == "rppvp" and pools._rulesetSettled == true)
+for t = 0, 60, 5 do assert(pools:CheckSessionRuleset(t) == nil) end
+live = { [1] = false, [2] = false, [3] = true }
+assert(pools:CheckSessionRuleset(61) == nil)
+live = { [1] = false, [2] = true, [3] = true }
+assert(pools:CheckSessionRuleset(65) == nil)
+live = { [1] = false, [2] = false, [3] = true }
+assert(pools:CheckSessionRuleset(70) == nil, "Two readings that are not in a row confirmed a mismatch")
+-- Every rule off (what a client answers before it knows them) on a realm without a name: a PvP
+-- session is paused for it only after NORMAL_CONFIRM_SEC, never after CONFIRM_SEC.
+pools = session({ [1] = false, [3] = true }, "")
+assert(pools:GetRuleset() == "pvp")
+live = { [1] = false, [2] = false, [3] = false }
+assert(pools:CheckSessionRuleset(10) == nil)
+assert(pools:CheckSessionRuleset(14) == nil, "An unbacked Normal reading paused a PvP session after CONFIRM_SEC")
+live = { [1] = false, [2] = false, [3] = true }
+assert(pools:CheckSessionRuleset(18) == nil and pools._rulesetPending == nil, "The PvP answer did not clear it")
+live = { [1] = false, [2] = false, [3] = false }
+assert(pools:CheckSessionRuleset(20) == nil)
+assert(pools:CheckSessionRuleset(20 + pools.NORMAL_CONFIRM_SEC) == "normal", "A Normal reading that held was never confirmed")
+-- A realm name that says Normal backs it: CONFIRM_SEC is enough.
+pools = session({ [1] = false, [3] = true }, "Some PvE Realm")
+assert(pools:GetRuleset() == "pvp")
+live ={ [1] = false, [2] = false, [3] = false }
+assert(pools:CheckSessionRuleset(10) == nil and pools:CheckSessionRuleset(13) == "normal")
+-- Still unanswered: nothing is concluded.
+pools = session({ [3] = true }, "")
+assert(pools:CheckSessionRuleset(0) == nil and pools:CheckSessionRuleset(10) == nil)
+-- A rule this client does not know (no Hardcore in Enum.GameRule) is not waited for.
+pools = session({ [2] = true, [3] = true }, "")
+Enum.GameRule.HardcoreRuleset = nil
+assert(loadfile("RealmPools.lua"))()
+assert(Overlord.RealmPools:GetRuleset() == "rppvp" and Overlord.RealmPools._rulesetSettled == true)
+
+-- Core: the whole addon stops for the session and a resume is refused.
+pools = session({ [1] = false, [3] = true }, "")
+assert(pools:GetRuleset() == "pvp")
+local printed = {}
+local realPrint, realGetTime = print, GetTime
+print = function(text) printed[#printed + 1] = tostring(text) end
+local clock = 100
+GetTime = function() return clock end
+IsInInstance = IsInInstance or function() return false end
+Overlord.InstanceSuspended, Overlord.RulesetMismatch = false, nil
+assert(Overlord:CheckSessionRuleset() == false, "Stopped on a right reading")
+live = { [1] = false, [2] = true, [3] = true }
+assert(Overlord:CheckSessionRuleset() == false, "Stopped on the first reading")
+clock = 104
+assert(Overlord:CheckSessionRuleset() == true and Overlord.RulesetMismatch == "rppvp")
+assert(Overlord.InstanceSuspended == true, "The wrong campaign kept running")
+assert(#printed == 1 and printed[1]:find("/reload", 1, true), "The player was not told to /reload")
+clock = 200
+assert(Overlord:CheckSessionRuleset() == true and #printed == 1, "The /reload line was repeated")
+-- Out of any instance, login stages done: the resume itself must refuse.
+local realInit, realInstanceInfo = Overlord._deferredModuleInitDone, GetInstanceInfo
+Overlord._deferredModuleInitDone = true
+GetInstanceInfo = function() return "", "none" end
+Overlord:ResumeFromInstance()
+assert(Overlord.InstanceSuspended == true, "Leaving an instance resumed the wrong campaign")
+Overlord._deferredModuleInitDone, GetInstanceInfo = realInit, realInstanceInfo
+-- A first odd reading at the last check of the list (60 s) is confirmed CONFIRM_SEC later by a
+-- check of its own; a right reading arms nothing.
+do
+    local realTimer, armed = C_Timer, {}
+    C_Timer = { After = function(delay, fn) armed[#armed + 1] = { delay = delay, fn = fn } end }
+    pools = session({ [1] = false, [3] = true }, "")
+    Overlord.InstanceSuspended, Overlord.RulesetMismatch = false, nil
+    Overlord._rulesetConfirmArmed, Overlord._rulesetConfirmCount = nil, nil
+    printed = {}
+    clock = 160
+    assert(Overlord:CheckSessionRuleset() == false and #armed == 0, "A right reading armed a confirmation")
+    live = { [1] = false, [2] = true, [3] = true }
+    assert(Overlord:CheckSessionRuleset() == false and #armed == 1, "A first odd reading armed no confirmation")
+    assert(armed[1].delay > pools.CONFIRM_SEC, "The confirmation came before CONFIRM_SEC")
+    clock = clock + armed[1].delay
+    armed[1].fn()
+    assert(Overlord.RulesetMismatch == "rppvp" and Overlord.InstanceSuspended == true and #printed == 1,
+        "The odd reading of the last check was never confirmed")
+    -- Inside an instance nothing is read (a battleground's rules are not the realm's).
+    pools = session({ [1] = false, [3] = true }, "")
+    assert(pools:GetRuleset() == "pvp")
+    Overlord.InstanceSuspended, Overlord.RulesetMismatch = false, nil
+    Overlord._rulesetConfirmArmed, Overlord._rulesetConfirmCount = nil, nil
+    local realInInstance = IsInInstance
+    IsInInstance = function() return true, "pvp" end
+    live = { [1] = false, [2] = true, [3] = true }
+    assert(Overlord:CheckSessionRuleset() == false and pools._rulesetPending == nil,
+        "The rules were read inside an instance")
+    IsInInstance = realInInstance
+    C_Timer = realTimer
+end
+print, GetTime = realPrint, realGetTime
+Overlord.InstanceSuspended, Overlord.RulesetMismatch = false, nil
+
 print("Ruleset campaigns: detection, pools, relay and Battle.net separation OK")

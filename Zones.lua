@@ -203,6 +203,15 @@ local function LoginQuarantineBlocksLocalGameplay(zone)
     return true
 end
 
+-- Does z keep a zone locked for faction pf, and for good (hard)? A zone under siege
+-- (in_progress) or ours waiting on the login quarantine only closes it for a moment.
+local function ZoneBlocksAvailability(z, pf)
+    if not z then return true, true end
+    local ours = z.owner == pf and z.status == "captured"
+    if ours and not LoginQuarantineBlocksLocalGameplay(z) then return false, false end
+    return true, not ours and z.status ~= "in_progress"
+end
+
 -- Liste des prérequis pour qu'une faction attaque / tienne une capture sur zoneId (chaîne + base ennemie).
 function Overlord.Zones:GetPrereqZoneIdsForAttacker(zoneId, attackingFaction)
     local front = Overlord.Fronts and Overlord.Fronts:GetCurrentFront()
@@ -1715,6 +1724,11 @@ end
 -- Cooldown pour le message CAPTURE_CANCELLED (evite le spam quand les ZS arrivent toutes les 2s)
 local captureCancelledCooldowns = {}
 local CAPTURE_CANCELLED_COOLDOWN = 30
+-- "X is now available" said once per opening of a zone (2026-11-21: Thoradin's Wall
+-- announced three times in a row). An enemy wave on a prerequisite (in_progress) or a
+-- siege of the zone that fails closes it for a moment only; the line comes back only
+-- after a real change: the zone captured by anyone, a truce, or a prerequisite lost.
+local availableAnnounced = {}
 
 -- ==================== Mines de coins ====================
 -- Zones de minage separees du systeme de capture. Le joueur accumule de l'or
@@ -1998,6 +2012,7 @@ function Overlord.Zones:_DoUpdateAvailableZones(suppressNotifications)
     -- appliques avant le depart d'une capture et pour l'affichage des zones disponibles.
 
     for _, zone in ipairs(Overlord.ZoneDatabase) do
+        if zone.status == "captured" then availableAnnounced[zone.id] = nil end
         if zone.owner == pf and zone.status == "captured" then
             -- Deja normalise dans la premiere passe ; ne pas recalculer les prereqs.
         elseif zone.status == "in_progress" then
@@ -2042,6 +2057,7 @@ function Overlord.Zones:_DoUpdateAvailableZones(suppressNotifications)
         else
             -- Treve : pas de zone « disponible » tant que le front est en pause (aligne carte / pointillés / capteur).
             if select(1, self:IsFrontOnTruce(zone.id)) then
+                availableAnnounced[zone.id] = nil
                 if zone.owner == pf and zone.status == "captured" then
                     zone.status = "captured"
                 else
@@ -2049,21 +2065,24 @@ function Overlord.Zones:_DoUpdateAvailableZones(suppressNotifications)
                 end
             else
             local prereqsMet = true
+            -- A lock that lasts: a blocking zone neither in_progress nor in login quarantine.
+            local hardLock = false
             local prereqIds = self:GetPrereqZoneIdsForAttacker(zone.id, pf)
             if not prereqIds then
                 prereqsMet = false
+                hardLock = true
             end
             if prereqIds then
                 for _, prereqId in ipairs(prereqIds) do
-                    local prereq = self:GetZone(prereqId)
                     -- Le prerequis doit etre COMPLETEMENT capture (status == "captured"),
                     -- pas seulement owner == pf. Une zone en "in_progress" a deja owner = pf
                     -- via le ZS broadcast mais la capture n'est pas terminee : l'accepter comme
                     -- prerequis debloque les zones suivantes trop tot (ex: hammerfell dispo
                     -- pendant la capture de Grangeneuve au lieu d'apres).
-                    if not prereq or prereq.owner ~= pf or prereq.status ~= "captured"
-                        or LoginQuarantineBlocksLocalGameplay(prereq) then
+                    local blocked, hard = ZoneBlocksAvailability(self:GetZone(prereqId), pf)
+                    if blocked then
                         prereqsMet = false
+                        hardLock = hard
                         break
                     end
                 end
@@ -2073,10 +2092,13 @@ function Overlord.Zones:_DoUpdateAvailableZones(suppressNotifications)
                 local enemyBaseId = Overlord.Fronts and Overlord.Fronts:GetEnemyCapitalId(pf)
                 if zone.id == enemyBaseId then
                     for _, z in ipairs(Overlord.ZoneDatabase) do
-                        if z.id ~= zone.id and (z.owner ~= pf or z.status ~= "captured"
-                            or LoginQuarantineBlocksLocalGameplay(z)) then
-                            prereqsMet = false
-                            break
+                        if z.id ~= zone.id then
+                            local blocked, hard = ZoneBlocksAvailability(z, pf)
+                            if blocked then
+                                prereqsMet = false
+                                hardLock = hard
+                                break
+                            end
                         end
                     end
                 end
@@ -2085,8 +2107,11 @@ function Overlord.Zones:_DoUpdateAvailableZones(suppressNotifications)
             if prereqsMet then
                 if old ~= "available" then
                     zone.status = "available"
+                    local announced = availableAnnounced[zone.id]
+                    -- Set on a silent opening too (login, other front): a later flicker stays quiet.
+                    availableAnnounced[zone.id] = true
                     if old ~= "captured" and Overlord.InActiveFront
-                        and not suppressNotifications then
+                        and not suppressNotifications and not announced then
                         Overlord:PrintNotification(string.format("|cFF00FF00[Overlord]|r " .. L.ZONE_NOW_AVAILABLE, zone.name))
                     end
                 end
@@ -2095,6 +2120,7 @@ function Overlord.Zones:_DoUpdateAvailableZones(suppressNotifications)
                 end
             else
                 zone.status = "locked"
+                if hardLock then availableAnnounced[zone.id] = nil end
             end
             end
         end
@@ -2106,4 +2132,4 @@ end
 
 -- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
 Overlord.MemoryParts = Overlord.MemoryParts or {}
-Overlord.MemoryParts["Zones.lua"] = function() return { CAPITAL_HOLD_TIME = CAPITAL_HOLD_TIME, CAPITAL_VICTORY_COOLDOWN = CAPITAL_VICTORY_COOLDOWN, VICTORY_SPACING = VICTORY_SPACING, CAPITAL_KEPT_STAMP_OFFSET = CAPITAL_KEPT_STAMP_OFFSET, CAPITAL_STAMP_SLACK = CAPITAL_STAMP_SLACK, cachedDisplayOrder = cachedDisplayOrder, cachedDisplayFaction = cachedDisplayFaction, cachedDisplayFrontId = cachedDisplayFrontId, cachedPlayerZone = cachedPlayerZone, cachedPlayerZoneTime = cachedPlayerZoneTime, ZoneLookup = ZoneLookup, VICTORY_PROOF_LATE_SECONDS = VICTORY_PROOF_LATE_SECONDS, NormalizePlayerOwnedZoneStatus = NormalizePlayerOwnedZoneStatus, capitalOwnerSeen = capitalOwnerSeen, mapAspectRatio = mapAspectRatio, mapAspectCalculatedFor = mapAspectCalculatedFor, PLAYER_ZONE_CACHE_TTL = PLAYER_ZONE_CACHE_TTL, captureCancelledCooldowns = captureCancelledCooldowns, CAPTURE_CANCELLED_COOLDOWN = CAPTURE_CANCELLED_COOLDOWN, MineLookup = MineLookup, mineMapIDs = mineMapIDs, cachedPlayerMine = cachedPlayerMine, cachedPlayerMineTime = cachedPlayerMineTime, PLAYER_MINE_CACHE_TTL = PLAYER_MINE_CACHE_TTL, resourceContextByMapID = resourceContextByMapID, _lastUpdateAvailableAt = _lastUpdateAvailableAt, _updateAvailablePending = _updateAvailablePending, _updateAvailableSuppressNotifications = _updateAvailableSuppressNotifications, UPDATE_AVAILABLE_MIN_INTERVAL = UPDATE_AVAILABLE_MIN_INTERVAL } end
+Overlord.MemoryParts["Zones.lua"] = function() return { CAPITAL_HOLD_TIME = CAPITAL_HOLD_TIME, CAPITAL_VICTORY_COOLDOWN = CAPITAL_VICTORY_COOLDOWN, VICTORY_SPACING = VICTORY_SPACING, CAPITAL_KEPT_STAMP_OFFSET = CAPITAL_KEPT_STAMP_OFFSET, CAPITAL_STAMP_SLACK = CAPITAL_STAMP_SLACK, cachedDisplayOrder = cachedDisplayOrder, cachedDisplayFaction = cachedDisplayFaction, cachedDisplayFrontId = cachedDisplayFrontId, cachedPlayerZone = cachedPlayerZone, cachedPlayerZoneTime = cachedPlayerZoneTime, ZoneLookup = ZoneLookup, VICTORY_PROOF_LATE_SECONDS = VICTORY_PROOF_LATE_SECONDS, NormalizePlayerOwnedZoneStatus = NormalizePlayerOwnedZoneStatus, capitalOwnerSeen = capitalOwnerSeen, mapAspectRatio = mapAspectRatio, mapAspectCalculatedFor = mapAspectCalculatedFor, PLAYER_ZONE_CACHE_TTL = PLAYER_ZONE_CACHE_TTL, captureCancelledCooldowns = captureCancelledCooldowns, availableAnnounced = availableAnnounced, CAPTURE_CANCELLED_COOLDOWN = CAPTURE_CANCELLED_COOLDOWN, MineLookup = MineLookup, mineMapIDs = mineMapIDs, cachedPlayerMine = cachedPlayerMine, cachedPlayerMineTime = cachedPlayerMineTime, PLAYER_MINE_CACHE_TTL = PLAYER_MINE_CACHE_TTL, resourceContextByMapID = resourceContextByMapID, _lastUpdateAvailableAt = _lastUpdateAvailableAt, _updateAvailablePending = _updateAvailablePending, _updateAvailableSuppressNotifications = _updateAvailableSuppressNotifications, UPDATE_AVAILABLE_MIN_INTERVAL = UPDATE_AVAILABLE_MIN_INTERVAL } end

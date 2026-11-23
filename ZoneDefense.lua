@@ -57,6 +57,12 @@ local function layerNow()
     return Overlord.Shard and tonumber(Overlord.Shard.currentShardID) or nil
 end
 
+-- 2.7.0 (Layers OL): a mark changes when two groups of one layer meet, which is no layer change.
+-- The waits below end on a sign of a real one (Shard:NoteHop: a group joined, a phase change).
+local function hopEpoch()
+    return Overlord.Shard and tonumber(Overlord.Shard.layerEpoch) or 0
+end
+
 local function zoneOf(zoneId)
     local zones, fronts = Overlord.Zones, Overlord.Fronts
     return (zones and zones.GetZone and zones:GetZone(zoneId))
@@ -123,17 +129,19 @@ function Defense:TickDefender(zone)
         if not noticeDue("defender", zone) or now - (tonumber(remote.openedAt) or now) < self.FIRST_WAIT + self.SPREAD then
             return false
         end
-        -- "Another layer" is only said when it is known: the capturer's layer, told with his
-        -- capture, and ours, both read from the game, differ. An attacker out of nameplate range,
-        -- stealthed, or one whose layer nobody told is not said to be elsewhere.
+        -- 2.7.0 (Layers OL): no layer can be read any more. Said as likely, never as known, and
+        -- only when both sides carry a mark and his is not proven on our layer: a capturer we
+        -- saw, or whose mark became ours, is on our layer.
         local theirs, ours = tonumber(zone.zsRelayCapturerShard), layerNow()
-        if not theirs or not ours or theirs == ours then return false end
+        local shard = Overlord.Shard
+        if not theirs or not ours or theirs == ours or not shard or not shard.IsOurLayer
+            or (shard.ValidMark and not shard:ValidMark(theirs)) or shard:IsOurLayer(theirs) then return false end
         control:ScanNearbyPlayers(zone)
         local scan = control.GetCachedScan and control:GetCachedScan() or nil
         if scan and (tonumber(scan.visibleEnemy) or 0) > 0 then return false end
         local lease = Overlord.CaptureLease
         if notice("defender", zone, string.format(
-            L.DEFENSE_UNSEEN_ATTACKER_INFO or "%s: %s is capturing from another layer, where you cannot see or stop each other. Join their layer to fight for the point.",
+            L.DEFENSE_UNSEEN_ATTACKER_INFO or "%s: %s is capturing here and you see no enemy: probably another layer, where you cannot see or stop each other.",
             zone.name or zone.id, lease and lease.DisplayName and lease:DisplayName(remote.originName) or "?")) then
             self.stats.told = self.stats.told + 1
         end
@@ -259,7 +267,7 @@ function Defense:UnseenDefenders(zone, seen, friends)
     if row.count > seen and zone.holdAuthorityLocal then
         local L = Overlord.L or {}
         notice("capturer", zone, string.format(
-            L.DEFENSE_UNSEEN_DEFENDERS or "%s: %d defender(s) you cannot see hold this point (another layer). Your capture is pushed back while they stay; join their layer to fight them.",
+            L.DEFENSE_UNSEEN_DEFENDERS or "%s: %d defender(s) you cannot see hold this point (another layer). Your capture is pushed back while they stay.",
             zone.name or zone.id, row.count))
     end
     return math.min(row.count, math.max(seen, tonumber(friends) or 1, 1))
@@ -272,7 +280,7 @@ function Defense:NoteWaveFailed(zone)
     if not row or not self.HOLDS_CAPTURES or GetTime() - row.at > self.TTL then return false end
     held[zone.id] = nil
     if row.count <= (tonumber(row.seen) or 0) then return false end
-    locks[zone.id] = { untilAt = GetTime() + self.LOCK, layer = layerNow() }
+    locks[zone.id] = { untilAt = GetTime() + self.LOCK, layer = hopEpoch() }
     self.stats.held = self.stats.held + 1
     return true
 end
@@ -282,7 +290,7 @@ end
 -- to hear his and follow it. A wait already running (unseen defenders) is kept.
 function Defense:NoteHandOver(zone)
     if not zone or self:IsLocked(zone) then return false end
-    locks[zone.id] = { untilAt = GetTime() + self.HANDOVER, layer = layerNow() }
+    locks[zone.id] = { untilAt = GetTime() + self.HANDOVER, layer = hopEpoch() }
     return true
 end
 
@@ -290,8 +298,7 @@ end
 function Defense:IsLocked(zone)
     local row = zone and locks[zone.id]
     if not row then return false end
-    local layer = layerNow()
-    if GetTime() >= row.untilAt or (layer ~= nil and row.layer ~= nil and layer ~= row.layer) then
+    if GetTime() >= row.untilAt or hopEpoch() ~= row.layer then
         locks[zone.id] = nil
         return false
     end

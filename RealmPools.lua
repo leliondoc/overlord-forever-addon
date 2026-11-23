@@ -47,15 +47,19 @@ local function RulesetFromRealmName(name)
 end
 RealmPools.RulesetFromRealmName = RulesetFromRealmName
 
--- Detected once per session: saved buckets and wire tags must never change while
--- the character is logged in. Unknown (no API, unreadable realm) = the historical
--- population (PvP), exactly what every client did before 1.4.0.
-function RealmPools:GetRuleset()
-    if self._ruleset then return self._ruleset end
+-- One reading of the rules and the realm name, kept nowhere: (ruleset or nil, what was
+-- read, settled). Settled = every rule this client knows has answered (a rule missing
+-- from Enum.GameRule is not waited for; no rule API at all = nothing to wait for).
+local function ReadRuleset()
     local rules = Enum and Enum.GameRule
     local hc = GameRuleActive(rules and rules.HardcoreRuleset)
     local rp = GameRuleActive(rules and rules.RPRuleset)
     local pvp = GameRuleActive(rules and rules.PvPRuleset)
+    local apiPresent = type(rules) == "table" and type(C_GameRules) == "table"
+        and type(C_GameRules.IsGameRuleActive) == "function"
+    local settled = not apiPresent
+        or ((rules.HardcoreRuleset == nil or hc ~= nil) and (rules.RPRuleset == nil or rp ~= nil)
+            and (rules.PvPRuleset == nil or pvp ~= nil))
     local ruleset
     if hc then ruleset = "hardcore"
     elseif rp and pvp then ruleset = "rppvp"
@@ -73,12 +77,58 @@ function RealmPools:GetRuleset()
     end
     -- A realm named Roleplay PvP completes a single rule read as on: both are meant.
     if fromName == "rppvp" and (ruleset == "rp" or ruleset == "pvp") then ruleset = "rppvp" end
+    return ruleset, { hc = hc, rp = rp, pvp = pvp, realm = okName and realm or nil }, settled
+end
+
+-- Detected once per session: saved buckets and wire tags must never change while
+-- the character is logged in. Unknown (no API, unreadable realm) = the historical
+-- population (PvP), exactly what every client did before 1.4.0.
+function RealmPools:GetRuleset()
+    if self._ruleset then return self._ruleset end
+    local ruleset, read, settled = ReadRuleset()
     -- Neither the game rules nor the realm name answered: PvP is assumed for the
     -- session. /ov network shows it so a wrong campaign is visible at launch.
     self._rulesetAssumed = ruleset == nil
     self._ruleset = ruleset or "pvp"
-    self._rulesetRead = { hc = hc, rp = rp, pvp = pvp, realm = okName and realm or nil }
+    self._rulesetRead = read
+    self._rulesetSettled = settled
     return self._ruleset
+end
+
+-- 2.6.1: the campaign is chosen at ADDON_LOADED, and the client may not know its realm
+-- yet (a Roleplay PvP client showed realm "" and id 0 there). A rule read before the
+-- game had it put Roleplay PvP players in the PvP campaign, their guild's rows with
+-- them. After the login the rules are read again: a settled answer that names another
+-- campaign, read the same way twice CONFIRM_SEC apart, means this session runs in the
+-- wrong campaign. Returns that ruleset (once found it stays), nil otherwise.
+RealmPools.CONFIRM_SEC = 3
+-- "No rule on" is also what a client answers before it knows its rules: a Normal reading that
+-- no realm name backs must hold that long before a PvP session is paused for it (pausing a
+-- healthy player is worse than a Normal one speaking a few seconds more in the wrong campaign).
+RealmPools.NORMAL_CONFIRM_SEC = 30
+function RealmPools:CheckSessionRuleset(now)
+    if self._rulesetMismatch then return self._rulesetMismatch end
+    local current = self:GetRuleset()
+    local fresh, read, settled = ReadRuleset()
+    if not settled or fresh == nil or fresh == current then
+        self._rulesetPending = nil
+        return nil
+    end
+    now = tonumber(now) or 0
+    local pending = self._rulesetPending
+    if pending and pending.ruleset == fresh then
+        if now - pending.at < pending.need then return nil end
+        self._rulesetPending = nil
+        self._rulesetMismatch = fresh
+        self._rulesetMismatchRead = read
+        return fresh
+    end
+    local need = self.CONFIRM_SEC
+    if fresh == "normal" and RulesetFromRealmName(read.realm) ~= "normal" then
+        need = self.NORMAL_CONFIRM_SEC
+    end
+    self._rulesetPending = { ruleset = fresh, at = now, need = need }
+    return nil
 end
 
 -- /ov network: what the campaign was detected from, and where this client plays.

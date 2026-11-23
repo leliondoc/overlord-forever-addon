@@ -640,23 +640,6 @@ local ROWS = {
             OverlordDB.config.chatBadges = value == true
         end },
 
-    -- 2.5.0: volunteer to invite the players that ask to join our layer (LayerJumper), off by
-    -- default; the same choice as the button of the layers window and /ov layer help on|off.
-    { kind = "checkbox", var = "Overlord_LayerHelp", label = "LJ_HELP_OPTION_LABEL",
-        fallback = "Help others change layer", tooltip = "LJ_HELP_MODE_TOOLTIP",
-        default = false,
-        get = function()
-            local cfg = OverlordDB and OverlordDB.config
-            return cfg ~= nil and cfg.layerHelpMode == "auto"
-        end,
-        set = function(value)
-            if not OverlordDB then return end
-            OverlordDB.config = OverlordDB.config or {}
-            OverlordDB.config.layerHelpMode = value == true and "auto" or "off"
-            local jumper = Overlord.LayerJumper
-            if jumper and jumper.RefreshUI then jumper:RefreshUI() end
-        end },
-
     { kind = "header", label = "SETTINGS_SECTION_MAP", fallback = "Map and minimap" },
     { kind = "dropdown", var = SP.WorldMapModeVariableName, label = "MAP_WORLD_OVERLAYS_LABEL",
         fallback = "Overlord on the world map", tooltip = "MAP_MODE_TOOLTIP",
