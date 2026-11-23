@@ -95,15 +95,11 @@ local function GetShardPlayerNameColorEscape(faction)
         math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5))
 end
 
+-- 2.7.0 (Layers OL): a mark as the panel shows it, "#OL37"; "#OL?" while it has no number yet.
 local function BuildShardDisplayTag(shardId)
-    local tag = "#" .. tostring(shardId)
     local shardMod = Overlord.Shard
-    local _, realm = shardMod and shardMod.GetShardReference
-        and shardMod:GetShardReference(shardId)
-    if realm and realm ~= "" then
-        return tag .. " " .. string.format(L.SHARD_BADGE_REFERENCE, realm)
-    end
-    return tag
+    local code = shardMod and shardMod.DisplayCode and shardMod:DisplayCode(shardId)
+    return "#" .. (code or "OL?")
 end
 
 local function ShardPlayerAlreadyGrouped(fullName)
@@ -1057,13 +1053,18 @@ function Overlord.UI:CreateMainFrame()
         GameTooltip:AddLine(" ", tp.BODY[1], tp.BODY[2], tp.BODY[3])
         local shardMod = Overlord.Shard
         local shardID = shardMod and shardMod:GetCurrentShardID()
+        -- 2.7.0 (Layers OL): our code, what it means, and the players proven on our layer (a mark
+        -- of our tag, or one whose player we saw).
+        local shardCode = shardID ~= nil and shardMod.DisplayCode and shardMod:DisplayCode(shardID) or nil
+        if shardCode then
+            GameTooltip:AddLine(string.format(L.SHARD_TOOLTIP_CURRENT, "#" .. shardCode), tp.BODY[1], tp.BODY[2], tp.BODY[3], true)
+        else
+            GameTooltip:AddLine(L.SHARD_TOOLTIP_UNDETECTED, tp.MUTED[1], tp.MUTED[2], tp.MUTED[3], true)
+        end
+        if L.SHARD_TOOLTIP_HINT then
+            GameTooltip:AddLine(L.SHARD_TOOLTIP_HINT, tp.MUTED[1], tp.MUTED[2], tp.MUTED[3], true)
+        end
         if shardID ~= nil then
-            GameTooltip:AddLine(string.format(L.SHARD_TOOLTIP_CURRENT, tostring(shardID)), tp.BODY[1], tp.BODY[2], tp.BODY[3], true)
-            local referencePlayer = shardMod:GetCurrentShardReference()
-            if referencePlayer then
-                GameTooltip:AddLine(string.format(L.SHARD_TOOLTIP_REFERENCE_REALM, referencePlayer), tp.MUTED[1], tp.MUTED[2], tp.MUTED[3], true)
-            end
-            GameTooltip:AddLine(" ", tp.BODY[1], tp.BODY[2], tp.BODY[3])
             local count, preview, inspected = 0, {}, 0
             local node = shardMod.peerTail
             local previewMax = tonumber(Overlord.UI.SHARD_TOOLTIP_PLAYER_MAX) or 12
@@ -1073,7 +1074,7 @@ function Overlord.UI:CreateMainFrame()
                 local sid = player and shardMod.knownShards[player]
                 inspected = inspected + 1
                 if player and sid ~= nil and (tonumber(node.expiresAt) or 0) > GetTime()
-                    and tonumber(sid) ~= tonumber(shardID)
+                    and shardMod.IsOurLayer and shardMod:IsOurLayer(sid)
                     and (not shardMod.PartyInviteTargetIsUsable
                         or shardMod:PartyInviteTargetIsUsable(player))
                     and not ShardPlayerAlreadyGrouped(player) then
@@ -1083,23 +1084,18 @@ function Overlord.UI:CreateMainFrame()
                 node = node.prev
             end
             if count > 0 then
+                GameTooltip:AddLine(" ", tp.BODY[1], tp.BODY[2], tp.BODY[3])
                 GameTooltip:AddLine(L.SHARD_TOOLTIP_PLAYERS_HEADER, tp.HL[1], tp.HL[2], tp.HL[3])
                 for _, row in ipairs(preview) do
-                    local player, sid = row.player, row.shard
+                    local player = row.player
                     local hl = GetShardPlayerNameColorEscape(GetShardPlayerFaction(player)) .. player .. "|r"
-                    GameTooltip:AddLine(string.format("  %s (%s)", hl, BuildShardDisplayTag(sid)), tp.MUTED[1], tp.MUTED[2], tp.MUTED[3])
+                    GameTooltip:AddLine("  " .. hl, tp.MUTED[1], tp.MUTED[2], tp.MUTED[3])
                 end
+                -- Apercu volontairement borne (scan de 48 entrees au plus).
                 if node then
                     GameTooltip:AddLine("  ...", tp.MUTED[1], tp.MUTED[2], tp.MUTED[3])
                 end
-            elseif node then
-                -- Apercu volontairement borne (scan de 48 entrees au plus).
-                GameTooltip:AddLine("  ...", tp.MUTED[1], tp.MUTED[2], tp.MUTED[3])
-            else
-                GameTooltip:AddLine(L.SHARD_TOOLTIP_ALL_SAME, tp.BODY[1], tp.BODY[2], tp.BODY[3])
             end
-        else
-            GameTooltip:AddLine(L.SHARD_TOOLTIP_UNDETECTED, tp.MUTED[1], tp.MUTED[2], tp.MUTED[3], true)
         end
         if Overlord.LayerJumper and L.LJ_CLICK_HINT then
             GameTooltip:AddLine(" ", tp.BODY[1], tp.BODY[2], tp.BODY[3])
@@ -1108,8 +1104,7 @@ function Overlord.UI:CreateMainFrame()
         GameTooltip:Show()
     end)
     shardFrame:SetScript("OnLeave", GameTooltip_Hide)
-    -- 2.5.0: a click opens the whole list (every known player and layer), where a layer can
-    -- be joined (LayerJumper.lua).
+    -- A click opens the Layers OL window: how the codes work (LayerJumper.lua).
     shardFrame:EnableMouse(true)
     shardFrame:SetScript("OnClick", function()
         local jumper = Overlord.LayerJumper
@@ -1545,9 +1540,9 @@ function Overlord.UI:CreateZoneListSection(parent)
     zoneListFrame.groupsBtn = groupsBtn
     Overlord.UI.groupFinderBtn = groupsBtn
 
-    -- 2.5.0: Layers (row 4, left, where Contact was since 1.7.1): the window of the players we
-    -- hear and their layer, the same one as a click on the layer number at the top left of the
-    -- panel. The author's contact link moved to the options (SettingsPanel, General).
+    -- Layers OL (row 4, left): the window that explains the codes Overlord gives to layers, the
+    -- same one as a click on the code at the top left of the panel (2.7.0; the Layers window of
+    -- 2.5.0, and its way to another layer, are gone).
     local layersBtn = CreateWC3Button(actionsCard, btnWidth, btnHeight,
         L.LJ_TITLE or "Layers",
         Overlord.PlayerFaction == "Horde" and "Interface\\Icons\\Spell_Arcane_PortalOrgrimmar"
@@ -2370,7 +2365,6 @@ end
 -- Cache etat panel : evite SyncFrontPicker / emblemes a chaque tick (perf .18).
 local lastPanelStateKey = nil
 local lastShardBadgeID = nil
-local lastShardBadgeRealm = nil
 local lastZoneListRefreshAt = 0
 local ZONE_LIST_REFRESH_INTERVAL = 2.0
 local ZONE_LIST_SYNC_INTERVAL = 0.25
@@ -3223,24 +3217,14 @@ function Overlord.UI:RefreshShardBadge()
         end
     end
     local shardID = shardMod and shardMod:GetCurrentShardID()
-    local referenceRealm
-    if shardID ~= nil then
-        local _
-        _, referenceRealm = shardMod:GetCurrentShardReference()
-    end
     local visibleShardID = active and shardID or nil
-    referenceRealm = visibleShardID and referenceRealm or nil
-    if visibleShardID == lastShardBadgeID and referenceRealm == lastShardBadgeRealm then return end
+    if visibleShardID == lastShardBadgeID then return end
     lastShardBadgeID = visibleShardID
-    lastShardBadgeRealm = referenceRealm
     if visibleShardID ~= nil then
-        self.shardText:SetText("#" .. tostring(shardID))
-        if referenceRealm and referenceRealm ~= "" then
-            self.shardRealmText:SetText(string.format(L.SHARD_BADGE_REFERENCE, referenceRealm))
-            self.shardRealmText:Show()
-        else
-            self.shardRealmText:Hide()
-        end
+        -- 2.7.0 (Layers OL): "#OL37", as the layer number stood here before; "#OL?" until the mark
+        -- has a number (nobody met yet, no capture begun).
+        self.shardText:SetText(BuildShardDisplayTag(shardID))
+        self.shardRealmText:Hide()
         local shardW = self.shardText:GetStringWidth() or 0
         local realmW = self.shardRealmText:IsShown()
             and (self.shardRealmText:GetStringWidth() or 0) or 0
@@ -3527,4 +3511,4 @@ end
 -- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
 Overlord.MemoryParts = Overlord.MemoryParts or {}
 Overlord.MemoryParts["UI.lua"] = function() return { mainFrame = mainFrame, mainFrameShell = mainFrameShell, zoneListFrame = zoneListFrame, activeZoneFrame = activeZoneFrame, lastPanelLayoutKey = lastPanelLayoutKey, lastForcesOffZone = lastForcesOffZone, lastForcesDisplayKey = lastForcesDisplayKey, lastHeaderBandHeight = lastHeaderBandHeight, lastDominationPaintKey = lastDominationPaintKey, C_ALLIANCE = C_ALLIANCE, C_HORDE = C_HORDE, C = C, PANEL_LINK = PANEL_LINK, SCROLL_IND_UP = SCROLL_IND_UP, SCROLL_IND_DOWN = SCROLL_IND_DOWN, ZONE_LINE_ICON = ZONE_LINE_ICON, ZONE_LINE_NORMAL_H = ZONE_LINE_NORMAL_H, ZONE_LINE_ROW_GAP = ZONE_LINE_ROW_GAP, ZONES_PANEL_W = ZONES_PANEL_W, ZONES_COL_PAD = ZONES_COL_PAD, ZONES_COL_GAP = ZONES_COL_GAP, ZONE_LINE_NAME_GAP = ZONE_LINE_NAME_GAP, ZONE_LINE_STATUS_GAP = ZONE_LINE_STATUS_GAP, ZONES_CONTENT_TOP = ZONES_CONTENT_TOP, ZONES_TRUCE_CONTENT_TOP = ZONES_TRUCE_CONTENT_TOP, FRONT_PICKER_PAD_LEFT = FRONT_PICKER_PAD_LEFT, FRONT_PICKER_PAD_RIGHT = FRONT_PICKER_PAD_RIGHT, FRONT_PICKER_CHEVRON = FRONT_PICKER_CHEVRON, FRONT_PICKER_TEXT_GAP = FRONT_PICKER_TEXT_GAP, FRONT_PICKER_MIN_W = FRONT_PICKER_MIN_W, FRONT_PICKER_SINGLE_H = FRONT_PICKER_SINGLE_H, FRONT_PICKER_TEXT_MIN_W = FRONT_PICKER_TEXT_MIN_W, FRONT_ART_DISPLAY_ASPECT = FRONT_ART_DISPLAY_ASPECT, userMovedPanel = userMovedPanel, UI_SCALE_MIN = UI_SCALE_MIN, UI_SCALE_MAX = UI_SCALE_MAX, worldMapPanelRetryFrame = worldMapPanelRetryFrame, worldMapPanelFrameHooked = worldMapPanelFrameHooked, worldMapMaximizeHooked = worldMapMaximizeHooked, worldMapMinimizeHooked = worldMapMinimizeHooked, lastMainFrameHeight = lastMainFrameHeight, lastForcesAnchorMode = lastForcesAnchorMode, lastFrontEmblemKey = lastFrontEmblemKey, lastActiveZoneStatusKey = lastActiveZoneStatusKey, lastActiveZoneTimerAt = lastActiveZoneTimerAt, ACTIVE_ZONE_TIMER_INTERVAL = ACTIVE_ZONE_TIMER_INTERVAL, cachedRefreshActiveZone = cachedRefreshActiveZone, cachedRefreshActiveZoneAt = cachedRefreshActiveZoneAt, REFRESH_ACTIVE_ZONE_LOOKUP_SEC = REFRESH_ACTIVE_ZONE_LOOKUP_SEC, lastShardScanFromUiAt = lastShardScanFromUiAt } end
-Overlord.MemoryParts["UI.lua#2"] = function() return { SHARD_UI_SCAN_INTERVAL = SHARD_UI_SCAN_INTERVAL, lastActiveZoneTagText = lastActiveZoneTagText, lastActiveZoneFrameHeight = lastActiveZoneFrameHeight, lastActiveZoneIdle = lastActiveZoneIdle, discordPopupFrame = discordPopupFrame, linkPopupKind = linkPopupKind, lastPanelStateKey = lastPanelStateKey, lastShardBadgeID = lastShardBadgeID, lastShardBadgeRealm = lastShardBadgeRealm, lastZoneListRefreshAt = lastZoneListRefreshAt, ZONE_LIST_REFRESH_INTERVAL = ZONE_LIST_REFRESH_INTERVAL, ZONE_LIST_SYNC_INTERVAL = ZONE_LIST_SYNC_INTERVAL, lastZoneListSyncRefreshAt = lastZoneListSyncRefreshAt, zoneListRefreshForced = zoneListRefreshForced, uiRefreshPending = uiRefreshPending, uiRefreshLastAt = uiRefreshLastAt, UI_REFRESH_MIN_INTERVAL = UI_REFRESH_MIN_INTERVAL, actionGridRefreshPending = actionGridRefreshPending, lastIndicatorInvalidateAt = lastIndicatorInvalidateAt, INDICATOR_INVALIDATE_INTERVAL = INDICATOR_INVALIDATE_INTERVAL, mapOverlayRefreshPending = mapOverlayRefreshPending, mapOverlayRefreshLastAt = mapOverlayRefreshLastAt, MAP_OVERLAY_REFRESH_MIN_INTERVAL = MAP_OVERLAY_REFRESH_MIN_INTERVAL, DOMINATION_GLIDE_SPEED = DOMINATION_GLIDE_SPEED, FORCES_SCAN_INTERVAL = FORCES_SCAN_INTERVAL, lastForcesDisplayScan = lastForcesDisplayScan, cachedDisplayEnemyCount = cachedDisplayEnemyCount, lastForcesButtonRefreshCount = lastForcesButtonRefreshCount, lastVictoryAlertFaction = lastVictoryAlertFaction, lastVictoryAlertAt = lastVictoryAlertAt, VICTORY_ALERT_COLORS = VICTORY_ALERT_COLORS, spectatorRefreshTicker = spectatorRefreshTicker, spectatorSyncTicker = spectatorSyncTicker, SPECTATOR_TIMER_INTERVAL = SPECTATOR_TIMER_INTERVAL, SPECTATOR_FULL_REFRESH_INTERVAL = SPECTATOR_FULL_REFRESH_INTERVAL, spectatorLastFullRefresh = spectatorLastFullRefresh, spectatorLastTimerTick = spectatorLastTimerTick, hiddenByCombat = hiddenByCombat, combatFrame = combatFrame } end
+Overlord.MemoryParts["UI.lua#2"] = function() return { SHARD_UI_SCAN_INTERVAL = SHARD_UI_SCAN_INTERVAL, lastActiveZoneTagText = lastActiveZoneTagText, lastActiveZoneFrameHeight = lastActiveZoneFrameHeight, lastActiveZoneIdle = lastActiveZoneIdle, discordPopupFrame = discordPopupFrame, linkPopupKind = linkPopupKind, lastPanelStateKey = lastPanelStateKey, lastShardBadgeID = lastShardBadgeID,lastZoneListRefreshAt = lastZoneListRefreshAt, ZONE_LIST_REFRESH_INTERVAL = ZONE_LIST_REFRESH_INTERVAL, ZONE_LIST_SYNC_INTERVAL = ZONE_LIST_SYNC_INTERVAL, lastZoneListSyncRefreshAt = lastZoneListSyncRefreshAt, zoneListRefreshForced = zoneListRefreshForced, uiRefreshPending = uiRefreshPending, uiRefreshLastAt = uiRefreshLastAt, UI_REFRESH_MIN_INTERVAL = UI_REFRESH_MIN_INTERVAL, actionGridRefreshPending = actionGridRefreshPending, lastIndicatorInvalidateAt = lastIndicatorInvalidateAt, INDICATOR_INVALIDATE_INTERVAL = INDICATOR_INVALIDATE_INTERVAL, mapOverlayRefreshPending = mapOverlayRefreshPending, mapOverlayRefreshLastAt = mapOverlayRefreshLastAt, MAP_OVERLAY_REFRESH_MIN_INTERVAL = MAP_OVERLAY_REFRESH_MIN_INTERVAL, DOMINATION_GLIDE_SPEED = DOMINATION_GLIDE_SPEED, FORCES_SCAN_INTERVAL = FORCES_SCAN_INTERVAL, lastForcesDisplayScan = lastForcesDisplayScan, cachedDisplayEnemyCount = cachedDisplayEnemyCount, lastForcesButtonRefreshCount = lastForcesButtonRefreshCount, lastVictoryAlertFaction = lastVictoryAlertFaction, lastVictoryAlertAt = lastVictoryAlertAt, VICTORY_ALERT_COLORS = VICTORY_ALERT_COLORS, spectatorRefreshTicker = spectatorRefreshTicker, spectatorSyncTicker = spectatorSyncTicker, SPECTATOR_TIMER_INTERVAL = SPECTATOR_TIMER_INTERVAL, SPECTATOR_FULL_REFRESH_INTERVAL = SPECTATOR_FULL_REFRESH_INTERVAL, spectatorLastFullRefresh = spectatorLastFullRefresh, spectatorLastTimerTick = spectatorLastTimerTick, hiddenByCombat = hiddenByCombat, combatFrame = combatFrame } end

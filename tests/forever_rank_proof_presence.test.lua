@@ -149,7 +149,13 @@ assert(#layers == 1 and layers[1].who == "Layer Player" and layers[1].sid == 17,
 presence("Layer Far", "2.2.0~t0~y" .. layout .. "~s4" .. tail, "CHANNEL", "Layer Far,Relay Hop")
 assert(#layers == 1, "a relayed presence gave a layer")
 presence("Layer Old", "2.1.1~t0~y" .. layout .. tail)
-assert(#layers == 1, "a presence without a layer gave one")
+-- (2.7.0: its own presence without a mark lets go of the mark we hold for it, and writes
+-- nothing for a player we hold nothing of: a row for every contact would fill the table.)
+assert(#layers == 1, "a presence without a layer made a row for a player we hold nothing of")
+me.Shard.knownShards = { ["Layer Old"] = 482100137 }
+presence("Layer Old", "2.1.1~t0~y" .. layout .. tail)
+assert(#layers == 2 and layers[2].who == "Layer Old" and layers[2].sid == 0,
+    "a first-hand presence without a layer does not let go of the mark held for its player")
 assert(not net:IsOutdatedMapPeer("Layer Player"), "a presence with a layer left the map exchange")
 print("Layer in the presence: first-hand only, rank claim and layout read the same, " .. #wire .. "/170 bytes OK")
 
@@ -196,25 +202,28 @@ do
     me.LayerJumper = { ForgetLayer = function(_, who) forgot[#forgot + 1] = who end }
     local savedShard = me.Shard
     me.Shard = { SetPlayerShard = function(_, who, sid, first) said[#said + 1] = { who, sid, first } end,
-        SetPlayerHelper = function() end }
+        SetPlayerHelper = function() end, knownShards = { ["Helper One"] = 482100137 } }
     presence("Helper One", "2.5.4~t0~y" .. layout .. "~q0~s17" .. tail)
     assert(#forgot == 0, "a presence naming a layer took its player off the Layers window")
     assert(#said == 1 and said[1][1] == "Helper One" and said[1][2] == 17 and said[1][3] == true,
         "the layer of a first-hand presence is not passed on as the player's own word")
-    me.Shard = savedShard
+    -- (2.7.0: its own presence without a mark says that it holds none now: a word of 0.)
     presence("Helper One", "2.5.4~t0~y" .. layout .. "~q0" .. tail)
-    assert(#forgot == 1 and forgot[1] == "Helper One", "a presence without a layer left its player in the Layers window")
+    assert(#forgot == 0 and #said == 2 and said[2][1] == "Helper One" and said[2][2] == 0,
+        "a presence without a layer did not let go of the mark held for its player")
     presence("Helper Far", "2.5.4~t0~y" .. layout .. tail, "CHANNEL", "Helper Far,Relay Hop")
-    assert(#forgot == 1, "a relayed presence took a player off the Layers window")
+    assert(#forgot == 0 and #said == 2, "a relayed presence let go of a player's mark")
+    me.Shard = savedShard
     -- A layer said and refused (out of range, no room): the row listed for that player goes too.
     me.Shard = { SetPlayerShard = function() return false end, SetPlayerHelper = function() end }
     presence("Helper One", "2.5.4~t0~y" .. layout .. "~q0~s18" .. tail)
-    assert(#forgot == 2 and forgot[2] == "Helper One", "a refused layer left the older row in the Layers window")
+    assert(#forgot == 1 and forgot[1] == "Helper One", "a refused layer left the older row in the Layers window")
     me.Shard = { SetPlayerShard = function() return true end, SetPlayerHelper = function() end }
     presence("Helper One", "2.5.4~t0~y" .. layout .. "~q0~s19" .. tail)
-    assert(#forgot == 2, "a layer that was taken removed its player from the Layers window")
+    assert(#forgot == 1, "a layer that was taken removed its player from the Layers window")
     -- An error of the window is said, as an error of the layer is.
-    me.LayerJumper = { ForgetLayer = function() error("window broken") end }
+    me.Shard = { SetPlayerShard = function() error("window broken") end, SetPlayerHelper = function() end,
+        knownShards = { ["Helper One"] = 482100137 } }
     net.stats.lastError = nil
     presence("Helper One", "2.5.4~t0~y" .. layout .. "~q0" .. tail)
     assert(tostring(net.stats.lastError):find("window broken", 1, true), "an error of ForgetLayer was swallowed")
@@ -224,7 +233,8 @@ do
     -- can whisper. Asked of the list alone, a client without a list read no whispered layer at
     -- all and its Layers window stayed empty.
     local taken, marks, dropped = {}, {}, {}
-    me.Shard = { SetPlayerShard = function(_, who, sid, first) taken[#taken + 1] = { who, sid, first }; return true end,
+    me.Shard = { knownShards = { ["Book Friend"] = 482100137, ["Stranger One"] = 482100137 },
+        SetPlayerShard = function(_, who, sid, first) taken[#taken + 1] = { who, sid, first }; return true end,
         SetPlayerHelper = function(_, who, helps) marks[#marks + 1] = { who, helps } end }
     me.LayerJumper = { ForgetLayer = function(_, who) dropped[#dropped + 1] = who end }
     local savedDirectory = me.ChannelDirectory
@@ -238,7 +248,8 @@ do
     presence("Stranger One", "2.5.4~t0~y" .. layout .. "~q0" .. tail, "WHISPER")
     assert(#taken == 1 and #marks == 1 and #dropped == 0, "a stranger's whisper gave or took a layer or a helper mark")
     presence("Book Friend", "2.5.4~t0~y" .. layout .. "~q0" .. tail, "WHISPER")
-    assert(#dropped == 1 and dropped[1] == "Book Friend", "a known player's whisper without a layer did not take it off the window")
+    assert(#dropped == 0 and #taken == 2 and taken[2][1] == "Book Friend" and taken[2][2] == 0,
+        "a known player's whisper without a layer did not let go of its mark")
     -- Over Battle.net: a friend of the other faction unless the game shows that character in ours.
     -- Its layer still goes to Overlord.Shard (the captures read it); the window is told it is
     -- the other side, and lists our faction only.
@@ -270,6 +281,27 @@ do
     presence("Book Friend", "2.5.4~t0~y" .. layout .. "~q0~s23" .. tail, "WHISPER")
     assert(#taken == takenSoFar, "a whispered layer was read without any directory")
     me.ChannelDirectory = savedDirectory
+    -- 2.7.0: a presence is dated by its packet, not by its arrival: one that waited 30 s in its
+    -- sender's queue says the mark its player held 30 s ago (it may have changed layer since).
+    do
+        local dated = {}
+        me.Shard = { SetPlayerShard = function(_, who, sid, first, saidAt) dated[#dated + 1] = { who, sid, saidAt } end,
+            SetPlayerHelper = function() end, knownShards = { ["Late Presence"] = 482100137 } }
+        for _, body in ipairs({ "~q0~s482100137", "~q0" }) do
+            serial = serial + 1
+            now = now + 400
+            net:Receive(table.concat({ "global", "nh" .. serial, time() - 30, "*", "Late Presence", "NH",
+                "2.5.4~t0~y" .. layout .. body .. tail }, "|"), "Late Presence", "CHANNEL")
+        end
+        assert(#dated == 2 and dated[1][2] == 482100137 and dated[1][3] == GetTime() - 400 - 30,
+            "a presence naming a mark is dated by its arrival: " .. tostring(dated[1] and dated[1][3]))
+        assert(dated[2][2] == 0 and dated[2][3] == GetTime() - 30, "a presence without a mark is dated by its arrival")
+        -- (The chance number of a 2.6.0 client is left to expire: no 0 is written over it.)
+        me.Shard.knownShards["Late Presence"] = 31234
+        me.Shard.ValidMark = function(_, v) return v >= 100000 and v or nil end
+        presence("Late Presence", "2.5.4~t0~y" .. layout .. "~q0" .. tail)
+        assert(#dated == 2, "a 0 was written over the chance number of a 2.6.0 client")
+    end
     me.Shard = savedShard
     me.LayerJumper = nil
 end

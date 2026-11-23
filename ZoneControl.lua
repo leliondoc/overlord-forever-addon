@@ -212,6 +212,15 @@ local ZONE_ENTRY_SYNC_GRACE_SECONDS = 7
 local function BeginZoneEntrySyncGrace(zoneId)
     pendingEntrySyncZoneId = zoneId
     pendingEntrySyncUntil = GetTime() + ZONE_ENTRY_SYNC_GRACE_SECONDS
+    -- (2.7.0: a sign of a layer change re-arms this wait; a phase event that fires several times
+    -- in a row asks the map once, not once per event. A layer change after the ask (another
+    -- layerEpoch) asks again: the map of the new layer may differ; a burst of them asks once.)
+    local control, now = Overlord.ZoneControl, GetTime()
+    local epoch = Overlord.Shard and tonumber(Overlord.Shard.layerEpoch) or 0
+    local since = now - (control._entryAskAt or -1e9)
+    if control._entryAskZone == zoneId
+        and (since < 3 or (since < 14 and control._entryAskEpoch == epoch)) then return end
+    control._entryAskZone, control._entryAskAt, control._entryAskEpoch = zoneId, now, epoch
     if Overlord.Sync and Overlord.Sync.SendSyncRequest then
         Overlord.Sync:SendSyncRequest({ criticalChannel = true })
     end
@@ -1002,7 +1011,9 @@ end
 function Overlord.ZoneControl:CheckPlayerPosition()
     local currentZone = Overlord.Zones:GetCurrentPlayerZone()
     local currentId = currentZone and currentZone.id or nil
-    local currentShardId = Overlord.Shard and tonumber(Overlord.Shard.currentShardID) or nil
+    -- 2.7.0 (Layers OL): a sign of a layer change (Shard:NoteHop), not a change of our mark,
+    -- which also happens when two groups of one layer meet.
+    local currentShardId = Overlord.Shard and tonumber(Overlord.Shard.layerEpoch) or nil
     if previousCaptureCheckShardId ~= nil and currentShardId ~= nil
         and previousCaptureCheckShardId ~= currentShardId then
         -- Un hop de shard peut conserver exactement les memes coordonnees/disque. Sans

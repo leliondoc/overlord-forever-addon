@@ -39,7 +39,9 @@ local zones = { home = home, back = back, flank = flank, zcapital = capital }
 local prereqs = { home = {}, back = { "home" }, flank = { "home" }, zcapital = { "back", "flank" } }
 
 Overlord = { PlayerFaction = "Alliance", L = {}, InActiveFront = true,
-    UI = { RequestRefresh = function() end }, Shard = { currentShardID = 7 },
+    UI = { RequestRefresh = function() end }, Shard = { currentShardID = 7000, layerEpoch = 0, proven = {},
+        IsOurLayer = function(self, id) return id == self.currentShardID or self.proven[id] == true end,
+        ValidMark = function(_, id) return type(id) == "number" and id >= 1000 and id or nil end },
     ZoneDatabase = { home, back, flank, capital } }
 function Overlord:PrintNotification(text) printed[#printed + 1] = text end
 Overlord.ServerNow = function() return wall + mono end
@@ -150,15 +152,21 @@ do
     visibleEnemy = 2
     assert(not Defense:TickDefender(back) and #printed == 0, "a chat line for an attacker in plain sight")
     visibleEnemy = 0
-    -- "Another layer" is said only when both layers are known and differ (ours is 7).
+    -- 2.7.0 (Layers O): "another layer" is said only when both sides carry a mark and his is
+    -- not proven on our layer (ours is 7000).
     back.zsRelayCapturerShard = nil
-    assert(not Defense:TickDefender(back) and #printed == 0, "another layer was said of an attacker whose layer nobody told")
-    back.zsRelayCapturerShard = 7
-    assert(not Defense:TickDefender(back) and #printed == 0, "another layer was said of an attacker of our own layer, out of sight")
+    assert(not Defense:TickDefender(back) and #printed == 0, "another layer was said of an attacker whose mark nobody told")
+    back.zsRelayCapturerShard = 0
+    assert(not Defense:TickDefender(back) and #printed == 0, "another layer was said of an attacker who holds no mark")
+    back.zsRelayCapturerShard = 7000
+    assert(not Defense:TickDefender(back) and #printed == 0, "another layer was said of an attacker of our own mark, out of sight")
     Overlord.Shard.currentShardID = nil
-    back.zsRelayCapturerShard = 9
-    assert(not Defense:TickDefender(back) and #printed == 0, "another layer was said without knowing ours")
-    Overlord.Shard.currentShardID = 7
+    back.zsRelayCapturerShard = 9000
+    assert(not Defense:TickDefender(back) and #printed == 0, "another layer was said without a mark of our own")
+    Overlord.Shard.currentShardID = 7000
+    Overlord.Shard.proven[9000] = true
+    assert(not Defense:TickDefender(back) and #printed == 0, "another layer was said of a mark proven on our layer")
+    Overlord.Shard.proven[9000] = nil
     assert(not Defense:TickDefender(back) and #sent == 0, "a report left although unseen defenders hold nothing")
     assert(#printed == 1 and printed[1]:find("Hugo Sky", 1, true) and printed[1]:find("another layer", 1, true),
         "the defender was not told that the capturer is on another layer: " .. tostring(printed[1]))
@@ -183,7 +191,7 @@ do
     mono = mono + Defense.FIRST_WAIT + Defense.SPREAD + 0.1
     assert(Defense:TickDefender(back), "a defender standing on the point said nothing")
     local firstSaid = mono
-    assert(#sent == 1 and sent[1] == "ZD:back:wdef2:Hugo Sky:3:7", "the report: " .. tostring(sent[1]))
+    assert(#sent == 1 and sent[1] == "ZD:back:wdef2:Hugo Sky:3:7000", "the report: " .. tostring(sent[1]))
     assert(#printed == 1 and printed[1]:find("Hugo Sky", 1, true) and printed[1]:find("3", 1, true),
         "the defender was not told that an unseen capturer is held: " .. tostring(printed[1]))
     assert(Defense:AlertMuted(back, "Hugo Sky") and not Defense:AlertMuted(back, "Jack Sky")
@@ -213,7 +221,7 @@ do
     assert(not Defense:TickDefender(back) and #sent == 0, "every defender of a crowd spoke")
     draw = 0.01
     mono = mono + Defense.GAP
-    assert(Defense:TickDefender(back) and sent[1] == "ZD:back:wmany:Hugo Sky:" .. Defense.MAX_COUNT .. ":7",
+    assert(Defense:TickDefender(back) and sent[1] == "ZD:back:wmany:Hugo Sky:" .. Defense.MAX_COUNT .. ":7000",
         "an unbounded count, or nobody of a crowd spoke: " .. tostring(sent[1]))
     friendly, draw = 3, 0
     -- Not able to hold a point (dead, mounted, stealthed, unflagged), or inside an instance: nothing.
@@ -296,9 +304,13 @@ do
     Defense:OnReport("zcapital:wmine:Local Hero:5:3", "Enemy One")
     Defense:UnseenDefenders(target, 0, 8)
     Defense:NoteWaveFailed(target)
-    Overlord.Shard.currentShardID = 8
+    -- (2.7.0: a mark that changes is two groups of one layer meeting; the wait ends on a sign
+    -- of a layer change, Shard:NoteHop.)
+    Overlord.Shard.currentShardID = 8000
+    assert(Defense:IsLocked(target), "a change of our mark ended the wait")
+    Overlord.Shard.currentShardID = 7000
+    Overlord.Shard.layerEpoch = Overlord.Shard.layerEpoch + 1
     assert(not Defense:IsLocked(target), "on another layer the fight is another one")
-    Overlord.Shard.currentShardID = 7
     -- Switched off: nothing counts.
     Defense:OnReport("zcapital:wmine:Local Hero:5:3", "Enemy One")
     Defense:SetHoldsCaptures(false)

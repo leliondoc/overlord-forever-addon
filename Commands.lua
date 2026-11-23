@@ -101,7 +101,8 @@ local function ShowShardDebug()
     local age = shard.currentShardID ~= nil and (GetTime() - shard.lastUpdateAt) or nil
     Overlord:PrintNotification(string.format(
         "|cFFFFD100[Overlord]|r Shard=%s  context=%s  source=%s  age=%s  groupRequest=%s",
-        tostring(shard.currentShardID or "?"), tostring(shard.localContextKey),
+        tostring(shard.currentShardID or "?") .. " (#" .. tostring(shard.DisplayCode and shard:DisplayCode(shard.currentShardID) or "OL?")
+            .. (shard.IsMarkPinned and shard:IsMarkPinned() and ", pinned" or "") .. ")", tostring(shard.localContextKey),
         tostring(shard.localShardSource or "?"), age and string.format("%.1fs", age) or "?",
         tostring(shard.keepShardRequest ~= nil)))
     local gk = Overlord.GuildKeep
@@ -265,6 +266,10 @@ function SyncReport.Network()
             .. ", channel OverlordF" .. pools:GetChannelSuffix() .. ")"
             .. (pools._rulesetAssumed and " ASSUMED: game rules and realm name gave no answer" or ""))
         R.Detail("Campaign detected from: " .. pools:DescribeDetection())
+        if Overlord.RulesetMismatch then
+            R.Detail("Campaign PAUSED: the game now says " .. tostring(Overlord.RulesetMismatch)
+                .. " ruleset; nothing is sent or received until /reload")
+        end
         if Overlord.DescribeCampaignWeek then R.Detail("Campaign week: " .. Overlord:DescribeCampaignWeek()) end
         if sync.IsChannelClosed and sync:IsChannelClosed() and not sync._channelRefusedAt then
             R.Detail("Channel: cannot be joined (tried again at login, /reload or on leaving an instance)")
@@ -432,6 +437,8 @@ local PERF_MODULES = {
     "ChannelDirectory", "GuildLane",
     -- 2.5.1: the Layers window and the action bar shortcut.
     "LayerJumper",
+    -- 2.7.0: the banner on the nameplate of an enemy capturer in sight.
+    "CaptorSpot",
 }
 local PERF_SPIKE_MS = 50
 local perfState = nil
@@ -1117,7 +1124,7 @@ local function CommandHandler(msg)
         ShowShardDebug()
 
     elseif cmd == "layer" or cmd == "layers" then
-        -- 2.5.0: the layers of the players heard, and joining one (/ov layer help on|off).
+        -- 2.7.0: the Layers OL window (how the codes Overlord gives to layers work).
         if Overlord.LayerJumper then Overlord.LayerJumper:HandleCommand(args) end
 
     elseif cmd == "groups" or cmd == "group" then

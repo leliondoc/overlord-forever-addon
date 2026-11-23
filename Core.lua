@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.6.0"
+Overlord.Version = "2.7.0"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -566,20 +566,44 @@ function Overlord:IsKillScoringActive()
 end
 
 -- ============================================================
--- Module Shard : detection du shardID via parsing GUID (ServerID)
--- Format : Type-0-ServerID-InstanceID-ZoneUID-NpcID-SpawnUID
--- 2.3.3: on Forever the layer is the ServerID (3rd field). The ZoneUID differs between
--- players standing together on one layer and changes from day to day; the ServerID is
--- shared by players who see each other and differs across layers (field readings
--- 2026-11: UnitPhaseReason sharding, group hops). Creatures of players (pets, totems)
--- carry other server numbers: player-controlled units are skipped, and a layer is
--- believed only once two different NPCs agree.
--- Sources : vignettes monde, cible, souris, nameplates.
+-- Module Shard: "Layers OL" (2.7.0)
+-- The game hides the layer in creature GUIDs since hotfix 1.60.1 (each creature carries a
+-- number of its own, different on every client): no layer can be read any more. Two players
+-- who see each other are on the same layer, though, and a player's name reads the same for
+-- everybody. So each client carries a mark of its own making, and marks merge by sight:
+--   * mark = tag * 1000 + number. tag: 100..999999, drawn at random when the mark is made
+--     (a value under 100000 is no mark: the released 2.6.0 still sends chance numbers read
+--     from creature GUIDs, all under 65536, which would win over every real mark);
+--     number: 0 (none yet) or 1..999, shown as "OL<number>". Nine digits at most: it fits the
+--     layer field every wire line already carries (SH, the presence "~s", the capturer of a
+--     ZS, GW, MN, ZD) and stays under 2^31 for "%d". Three digits for the number (bench
+--     2026-11-22: with two, fifty marks alive already shared numbers); the tag keeps its six,
+--     which are what proves a layer.
+--   * A player in sight says its mark (its SH, its presence, the capture line that names it):
+--     the two marks become one, the same on both sides. A numbered mark wins over one without
+--     a number, then the smaller tag, then the higher number. Only a mark said WHILE we see
+--     its player counts: one heard before may be the mark of the layer that player just left
+--     (bench 2026-11-22: believed, such words put one mark on two layers in minutes). "Said"
+--     is the time its player sent it (a relayed copy is up to two minutes old), and only that
+--     player's own word counts: what somebody else repeats of it is never merged with.
+--   * Same tag = same layer, proven. Different tags prove nothing: two groups of one layer that
+--     never met carry two marks. Nothing here says "another layer".
+--   * A number is drawn when a second player joins the mark, or when we start a capture (its
+--     alert then names it), at random among the numbers no mark we hear carries: most clients
+--     do not hear each other fast enough to count in order.
+--   * While we capture, our mark does not change (PIN_SEC after each line of the capture):
+--     the code its alert showed to everybody stays the code our own panel shows. A stronger
+--     mark seen meanwhile is only noted as our layer, and taken once the capture is over.
+--   * The mark is dropped on anything that may be a layer change (joining a group, a phase
+--     change, a loading screen, another front), and our peers are told at once (SH 0).
+-- Nothing here moves a player to another layer, nor helps to.
 -- ============================================================
 Overlord.Shard = {
-    currentShardID = nil,        -- shardID local detecte (0 = couche par defaut valide)
-    knownShards = {},            -- [playerName] = shardID (autres joueurs via sync)
-    knownShardUpdatedAt = {},    -- [playerName] = GetTime() du dernier SH recu
+    currentShardID = nil,        -- our mark (nil: none yet)
+    knownShards = {},            -- [playerName] = mark (other players, via sync)
+    knownShardUpdatedAt = {},    -- [playerName] = GetTime() of the last word about it
+    saidMarks = {},              -- [playerName] = the mark that player said ITSELF (0: none)
+    knownShardSaidAt = {},       -- [playerName] = GetTime() at which it said it
     peerNodes = {},              -- ordre LRU/TTL, entretien O(1)
     peerHead = nil,
     peerTail = nil,
@@ -590,291 +614,420 @@ Overlord.Shard = {
     shardReferenceFullNames = {},-- [shardID] = Nom-Royaume canonique du referent
     shardReferenceRealms = {},   -- [shardID] = royaume affiche pour le referent
     shardReferenceCheckedAt = {},-- [shardID] = dernier recalcul du referent
-    lastUpdateAt = 0,            -- GetTime() de la derniere detection
-    lastScanAttemptAt = 0,       -- GetTime() du dernier scan, y compris resultat inconnu
-    nextMaintenanceScanAt = 0,   -- prochain essai adaptatif (backoff si shard inconnue)
+    lastUpdateAt = 0,            -- GetTime() of the last change of our mark
+    lastScanAttemptAt = 0,       -- GetTime() of the last upkeep pass
     lastBroadcastAt = 0,         -- GetTime() du dernier SH envoye
     localContextKey = "",       -- front/fortin pour lequel currentShardID a ete mesure
     localContextStartedAt = 0,   -- interdit de reutiliser le shard de la carte precedente
+    sight = {},                  -- [player GUID] = { name, at, checkedAt }: players seen lately
+    sightCount = 0,
+    aliases = {},                -- [tag] = GetTime(): tags proven on our layer that lost to ours
+    layerEpoch = 0,              -- +1 at each sign of a layer change (ZoneControl, ZoneDefense)
 }
 
 local SHARD_BROADCAST_INTERVAL = 60
 local SHARD_PEER_TTL = 180
-local SHARD_LAYER_ID_MAX = 100000000
-local ScheduleNextShardScan
+local SHARD_LAYER_ID_MAX = 1000000000
 local StopShardScanMaintenance
+local ArmShardTick
+local MARK_BASE = 1000 -- mark = tag * MARK_BASE + number
+
+-- TAG_MAX, NUMBER_MAX: the two parts of a mark. SIGHT_SEC: a player not shown by the game for
+-- that long is out of sight (two passes of the nameplates). RECHECK: between two readings of
+-- the mark of a player still in sight. GUARD: a mark counts when it is heard at least that
+-- long after its player came into sight (a word sent before, still on its way, does not).
+-- FRESH: a mark heard longer ago is not merged with. CREATE_WAIT: before making a mark of
+-- our own, time to take one from a player in sight. HOP_QUIET: after joining a group, nothing
+-- is believed (the game moves us a few seconds later). RELEASE_SEC: a numbered mark nobody
+-- confirmed for that long is dropped (its number goes back to the pool). BROADCAST_GAP:
+-- between two SH after changes. SAY_GAP: between two SH said because a player whose mark is
+-- not ours came into sight (never in a large event: the minute's SH does there).
+-- ALIAS_SEC: how long a tag proven on our layer under another mark stays "our layer".
+-- PIN_SEC: how long after a line of our own capture our mark cannot change.
+local MARK = {
+    TAG_MIN = 100, TAG_MAX = 999999, NUMBER_MAX = 999,
+    SIGHT_SEC = 25, RECHECK = 5, SIGHT_MAX = 96, FRESH = 90, GUARD = 6,
+    CREATE_WAIT = 6, HOP_QUIET = 10, RELEASE_SEC = 900,
+    BROADCAST_GAP = 10, SAY_GAP = 20, PIN_SEC = 60, ALIAS_SEC = 180, ALIAS_MAX = 64, TICK = 5, GROUP_SCAN = 10, GONE_GAP = 5,
+    raid = {}, party = { "party1", "party2", "party3", "party4" },
+}
+for i = 1, 40 do MARK.raid[i] = "raid" .. i end
+Overlord.Shard.MARK = MARK
 
 local function CoerceShardId(value)
     if value == nil then return nil end
     return tonumber(value)
 end
 
--- Parse le layer ID (ServerID) depuis un GUID unit/vignette (pcall : valeurs secret 12.0.5).
-local function ParseLayerIdFromGuidPieces(guid)
-    local guidType, zero, serverId = strsplit("-", guid)
-    if guidType ~= "Creature" and guidType ~= "Vehicle" and guidType ~= "GameObject" and guidType ~= "Vignette" then
+-- A mark as the wire carries it: a whole number whose tag is at least TAG_MIN.
+local function CoerceMark(value)
+    local id = tonumber(value)
+    if id == nil or id ~= id or id < MARK.TAG_MIN * MARK_BASE or id >= SHARD_LAYER_ID_MAX or id % 1 ~= 0 then
         return nil
     end
-    if zero ~= "0" or not serverId or not serverId:find("^%d+$") then return nil end
-    local layer = tonumber(serverId)
-    if layer and layer > 0 and layer < SHARD_LAYER_ID_MAX then return layer end
-    return nil
+    return id
 end
 
--- The layer is a pure function of the GUID string: the same creature seen again by
--- target, mouseover and nameplate events reuses the last answer (nil included)
--- instead of splitting the GUID into fresh pieces each time. Runs inside the pcall
--- below, so a secret GUID still errors out at the "" test before the memo is read.
-local function ParseLayerIdFromGuidString(guid)
-    if type(guid) ~= "string" or guid == "" then return nil end
-    local shard = Overlord.Shard
-    if guid == shard._layerMemoGuid then return shard._layerMemoLayer end
-    local layer = ParseLayerIdFromGuidPieces(guid)
-    shard._layerMemoGuid, shard._layerMemoLayer = guid, layer
-    return layer
+-- The value as a mark, or nil (Sync: what a capture line carries for its capturer).
+function Overlord.Shard:ValidMark(value)
+    return CoerceMark(value)
 end
 
-local function ExtractShardIDFromGUID(guid)
-    local ok, layerId = pcall(ParseLayerIdFromGuidString, guid)
-    if ok then return layerId end
-    return nil
+local function MarkTag(id) return (id - id % MARK_BASE) / MARK_BASE end
+
+-- Does mark a win over mark b? The same answer on every client.
+local function MarkBeats(a, b)
+    local an, bn = a % MARK_BASE, b % MARK_BASE
+    if (an > 0) ~= (bn > 0) then return an > 0 end
+    local at, bt = MarkTag(a), MarkTag(b)
+    if at ~= bt then return at < bt end
+    return an > bn
 end
 
-local function SafeUnitGUID(unit)
-    if not UnitGUID then return nil end
-    -- Ne pas inspecter `unit` avant le pcall : PARTY_KILL peut fournir une valeur
-    -- secrete 12.x a la place d'un ancien unit token.
-    local ok, guid = pcall(UnitGUID, unit)
-    if not ok or type(guid) ~= "string" then return nil end
-    return guid
+function Overlord.Shard:MarkWins(a, b)
+    a, b = CoerceMark(a), CoerceMark(b)
+    return a ~= nil and b ~= nil and MarkBeats(a, b)
 end
 
-local function ReadShardIDFromUnit(unit)
-    if not UnitExists(unit) or UnitIsPlayer(unit) then return nil end
-    -- 2.3.3: a pet, totem or summon carries its owner's server number, not the layer's.
-    if UnitPlayerControlled and UnitPlayerControlled(unit) then return nil end
-    if UnitIsVisible and not UnitIsVisible(unit) then return nil end
-    local guid = SafeUnitGUID(unit)
-    return ExtractShardIDFromGUID(guid), guid
+-- The same tag: the same layer, proven.
+function Overlord.Shard:SameLayer(a, b)
+    a, b = CoerceMark(a), CoerceMark(b)
+    return a ~= nil and b ~= nil and MarkTag(a) == MarkTag(b)
 end
 
-local function ExtractShardIDFromUnit(unit)
-    -- Les tests UnitExists/UnitIsPlayer et le GUID peuvent tous etre secrets en 12.x.
-    local ok, shardID, guid = pcall(ReadShardIDFromUnit, unit)
-    return ok and shardID or nil, ok and guid or nil
+-- Proven on our layer: our own tag, or a tag whose player we saw while it lost to ours (its
+-- players take our mark as they see us; until then their lines still carry the old one).
+function Overlord.Shard:IsOurLayer(id)
+    local mine, theirs = CoerceMark(self.currentShardID), CoerceMark(id)
+    if not mine or not theirs then return false end
+    local tag = MarkTag(theirs)
+    if tag == MarkTag(mine) then return true end
+    local at = self.aliases[tag]
+    return at ~= nil and GetTime() - at <= MARK.ALIAS_SEC
 end
 
--- Certaines vignettes retail utilisent un GUID d'enveloppe qui ne transporte pas un
--- numero de couche exploitable. Leur objectGUID pointe en revanche vers la creature / l'objet
--- effectivement present sur notre couche. L'acces reste protege car ces valeurs peuvent
--- etre secretes dans certains contextes 12.x.
--- (Named function: no closure per vignette on every scan.)
-local function ReadVignetteObjectGUID(vignetteGUID)
-    local info = C_VignetteInfo.GetVignetteInfo(vignetteGUID)
-    local guid = info and info.objectGUID
-    if type(guid) ~= "string" or guid == "" then return nil end
-    return guid
+-- "OL37", or nil for a mark without a number (and for no mark).
+function Overlord.Shard:DisplayCode(id)
+    local mark = CoerceMark(id)
+    local n = mark and mark % MARK_BASE or 0
+    if n < 1 then return nil end
+    return "OL" .. string.format("%d", n)
 end
 
-local function GetVignetteObjectGUID(vignetteGUID)
-    if not C_VignetteInfo or not C_VignetteInfo.GetVignetteInfo then return nil end
-    local ok, objectGUID = pcall(ReadVignetteObjectGUID, vignetteGUID)
-    if not ok then return nil end
-    return objectGUID
-end
-
--- 2.3.3: a layer is believed once two different NPCs (GUIDs) give it. Reused tables,
--- emptied at the start of each scan.
-local layerVoteSeen, layerVoteCount = {}, {}
--- Events: a new layer seen on one GUID waits here for a second NPC (ObserveShardFromGUID).
-local pendingEventLayer, pendingEventGuid, pendingEventAt
-local function ClearPendingEventLayer()
-    pendingEventLayer, pendingEventGuid, pendingEventAt = nil, nil, nil
-end
-local function ClearLayerVotes()
-    for k in pairs(layerVoteSeen) do layerVoteSeen[k] = nil end
-    for k in pairs(layerVoteCount) do layerVoteCount[k] = nil end
-end
--- The layer once a second NPC agrees with it, else nil.
-local function VoteLayer(layer, guid)
-    if layer == nil or type(guid) ~= "string" or layerVoteSeen[guid] then return nil end
-    layerVoteSeen[guid] = true
-    local n = (layerVoteCount[layer] or 0) + 1
-    layerVoteCount[layer] = n
-    if n >= 2 then return layer end
-    return nil
-end
-
--- Parcourt les vignettes actives (objectifs, caisses, elites, etc.) - se met a jour souvent sans PNJ a portee
-local function ScanVignettesForShardID()
-    if not C_VignetteInfo or not C_VignetteInfo.GetVignettes then return nil end
-    local ok, vignettes = pcall(C_VignetteInfo.GetVignettes)
-    if not ok or type(vignettes) ~= "table" then return nil end
-    for _, vignetteGUID in ipairs(vignettes) do
-        -- The vignette's own GUID, else its object's (the creature or object on our layer).
-        -- One vote per vignette: both GUIDs name the same thing.
-        local sid, voter = ExtractShardIDFromGUID(vignetteGUID), vignetteGUID
-        local objectGUID = GetVignetteObjectGUID(vignetteGUID)
-        if sid == nil then
-            sid, voter = ExtractShardIDFromGUID(objectGUID), objectGUID
-        elseif type(objectGUID) == "string" then
-            -- One NPC, one vote: its object already voted as a nameplate or target, or
-            -- it will not vote again under its own GUID.
-            if layerVoteSeen[objectGUID] then sid = nil end
-            layerVoteSeen[objectGUID] = true
-        end
-        local agreed = VoteLayer(sid, voter)
-        if agreed ~= nil then return agreed end
+local function RefreshShardBadgeAfterScan()
+    if Overlord.UI and Overlord.UI.RefreshShardBadge then
+        Overlord.UI:RefreshShardBadge()
     end
-    return nil
 end
 
--- Scanne les unites proches pour trouver un shardID
-local SHARD_SCAN_UNITS = { "target", "mouseover", "focus", "softenemy", "softfriend", "softinteract" }
-local SHARD_NAMEPLATE_UNITS = {}
-for i = 1, 40 do SHARD_NAMEPLATE_UNITS[i] = "nameplate" .. i end
+function Overlord.Shard:SetMark(id)
+    if id == self.currentShardID then return false end
+    self.currentShardID = id
+    self.lastUpdateAt = id ~= nil and GetTime() or 0
+    self.localShardSource = id ~= nil and "sight" or nil
+    self._markDue = id ~= nil or nil
+    RefreshShardBadgeAfterScan()
+    return true
+end
 
--- (Named function: no closure per plate on every scan.)
+-- Nothing seen before this moment counts any more. quiet: seconds during which nothing is
+-- believed at all (joining a group: the game moves us a few seconds later).
+function Overlord.Shard:ClearSight(quiet)
+    for k in pairs(self.sight) do self.sight[k] = nil end
+    for k in pairs(self.aliases) do self.aliases[k] = nil end
+    self.sightCount = 0
+    self._markConfirmedAt, self._markBornAt, self._markDue, self._markSayAt = nil, nil, nil, nil
+    self._markPinnedUntil = nil
+    local now = GetTime()
+    local quietUntil = math.max(tonumber(self._markQuietUntil) or 0, now + (tonumber(quiet) or 0))
+    self._markQuietUntil = quietUntil
+    self._markCreateAt = math.max(quietUntil, now) + MARK.CREATE_WAIT
+end
+
+-- Our mark is about to be dropped: the players who hold it are told at once (SH 0), so that
+-- nobody who sees us on another layer a moment later merges with the mark we left behind.
+function Overlord.Shard:TellMarkGone()
+    if CoerceMark(self.currentShardID) == nil then return false end
+    -- (Never at the door of an instance: the loading screen of a battleground runs this before
+    -- the addon is suspended, and the game may not say "instance" yet.)
+    if Overlord.InstanceSuspended or (IsInInstance and IsInInstance()) then return false end
+    local now = GetTime()
+    if now - (tonumber(self._markGoneAt) or -1e9) < MARK.GONE_GAP then return false end
+    self._markGoneAt = now
+    local sync = Overlord.Sync
+    if not (sync and sync.BroadcastShard) then return false end
+    self.lastBroadcastAt = now
+    pcall(sync.BroadcastShard, sync, 0)
+    return true
+end
+
+-- A sign of a layer change on the spot (joining a group, a phase change): the mark is dropped
+-- and those who watch for a hop (ZoneControl's entry sync, ZoneDefense's waits) are told.
+function Overlord.Shard:NoteHop(quiet)
+    self.layerEpoch = (tonumber(self.layerEpoch) or 0) + 1
+    self:TellMarkGone()
+    self:ClearSight(quiet)
+    self:SetMark(nil)
+end
+
+-- The number of a tag: read from the tag itself (tags are drawn at random, so is the number),
+-- the same on every client that takes this tag, without a word between them: two players who
+-- meet once and hear each other rarely (no channel, no group) show one code. Past a number
+-- another tag we hear carries (two layers would show one code), the next free one; any number
+-- when all are taken. (A number carried by our own tag is the same mark: not in the way.)
+function Overlord.Shard:PickMarkNumber(tag)
+    local taken, now = {}, GetTime()
+    tag = tonumber(tag)
+    for player, id in pairs(self.knownShards) do
+        -- (A 2.6.0 chance number is no mark and takes no number.)
+        local mark = CoerceMark(id) or 0
+        local n = mark % MARK_BASE
+        if n >= 1 and (mark - n) / MARK_BASE ~= tag
+            and now - (self.knownShardUpdatedAt[player] or 0) <= SHARD_PEER_TTL then taken[n] = true end
+    end
+    local n = tag and tag >= 1 and tag % MARK.NUMBER_MAX + 1 or math.random(1, MARK.NUMBER_MAX)
+    for _ = 1, MARK.NUMBER_MAX do
+        if not taken[n] then return n end
+        n = n % MARK.NUMBER_MAX + 1
+    end
+    return n
+end
+
+-- A number for our mark, drawn now if it has none. The mark, or nil without one.
+function Overlord.Shard:EnsureMarkNumber()
+    local mine = CoerceMark(self.currentShardID)
+    if not mine then return nil end
+    if mine % MARK_BASE >= 1 then return mine end
+    mine = mine + self:PickMarkNumber(MarkTag(mine))
+    self:SetMark(mine)
+    return mine
+end
+
+local function NewMark()
+    return math.random(MARK.TAG_MIN, MARK.TAG_MAX) * MARK_BASE
+end
+
+-- Our capture begins or goes on (Sync builds its line): the mark its alert names, made now if
+-- we hold none, and numbered. nil where no mark is carried.
+function Overlord.Shard:MarkForCapture()
+    if not (Overlord.IsShardHelperActive and Overlord:IsShardHelperActive()) then return nil end
+    -- (The context this mark belongs to is settled first: made under the key of a moment ago, the
+    -- next upkeep pass would drop it, and the second line of the capture would name another code.)
+    if not self:SyncLocalContext() then return nil end
+    local now = GetTime()
+    if now < (tonumber(self._markQuietUntil) or 0) then return nil end
+    if self.currentShardID == nil then
+        self:SetMark(NewMark())
+        self._markBornAt = now
+    end
+    self._markConfirmedAt = now
+    local mark = self:EnsureMarkNumber()
+    -- The alert of this capture names this code on every client: ours stays as it is.
+    if mark then self._markPinnedUntil = now + MARK.PIN_SEC end
+    return mark
+end
+
+-- Our mark cannot change now: a line of our own capture named it a moment ago.
+function Overlord.Shard:IsMarkPinned(now)
+    return (now or GetTime()) < (tonumber(self._markPinnedUntil) or 0)
+end
+
+-- A player in sight carries this mark: one layer, one mark.
+function Overlord.Shard:MeetMark(peerId, now)
+    local theirs = CoerceMark(peerId)
+    if not theirs then return false end
+    now = now or GetTime()
+    if now < (tonumber(self._markQuietUntil) or 0) then return false end
+    local mine = CoerceMark(self.currentShardID)
+    if mine == nil then
+        self:SetMark(theirs)
+    elseif MarkTag(mine) == MarkTag(theirs) then
+        if theirs % MARK_BASE > mine % MARK_BASE and not self:IsMarkPinned(now) then self:SetMark(theirs) end
+    elseif MarkBeats(theirs, mine) and not self:IsMarkPinned(now) then
+        self.aliases[MarkTag(mine)] = now
+        self:SetMark(theirs)
+    else
+        -- (Theirs lost to ours, or ours is pinned by our capture: their tag is our layer all
+        -- the same, and a stronger one is taken at a later sight, once the capture is over.)
+        self.aliases[MarkTag(theirs)] = now
+    end
+    self._markConfirmedAt = now
+    self:EnsureMarkNumber()
+    return true
+end
+
+-- The mark of a player the game shows us right now (row: its line of self.sight), if it was
+-- said while that player was in sight: heard GUARD seconds or more after it came into sight.
+function Overlord.Shard:MeetPlayer(row, now)
+    local player = self:ResolveKnownShardPlayer(row.name, true)
+    if not player then return false end
+    local id, saidAt = self.saidMarks[player], self.knownShardSaidAt[player]
+    if id == nil or saidAt == nil then return false end
+    now = now or GetTime()
+    if now - saidAt > MARK.FRESH or saidAt < row.since + MARK.GUARD then return false end
+    return self:MeetMark(id, now)
+end
+
+-- (Inside a pcall: every one of these reads may be a secret value in 12.x.)
+local function ReadSeenPlayerGuid(unit)
+    if not UnitExists(unit) or not UnitIsPlayer(unit) then return nil end
+    if UnitIsUnit and UnitIsUnit(unit, "player") then return nil end
+    if UnitIsVisible and not UnitIsVisible(unit) then return nil end
+    local guid = UnitGUID(unit)
+    if type(guid) ~= "string" or guid == "" then return nil end
+    return guid
+end
+
+-- (Named function: no closure per plate on every pass.)
 local function ReadPlateToken(plate)
     return plate.namePlateUnitToken
 end
 
--- 2.5.3: the layers the NPCs of this scan gave (vignettes aside: some carry a wrapper GUID),
--- for ResolveContradictedLayer. One layer only, else "mixed".
-function Overlord.Shard:NoteScanUnitLayer(layer)
-    if layer == nil then return end
-    if self._scanUnitLayer == nil then
-        self._scanUnitLayer = layer
-    elseif self._scanUnitLayer ~= layer then
-        self._scanUnitMixed = true
+function Overlord.Shard:PruneSight(now)
+    local kept = 0
+    for guid, row in pairs(self.sight) do
+        if now - row.at > MARK.SIGHT_SEC then self.sight[guid] = nil else kept = kept + 1 end
     end
+    self.sightCount = kept
 end
 
-function Overlord.Shard:ScanForShardID()
-    ClearLayerVotes()
-    self._scanUnitLayer, self._scanUnitMixed, self._scanTargetLayer = nil, nil, nil
-    local shardID, guid, agreed
-    for i = 1, #SHARD_SCAN_UNITS do
-        shardID, guid = ExtractShardIDFromUnit(SHARD_SCAN_UNITS[i])
-        if i == 1 then self._scanTargetLayer = shardID end
-        self:NoteScanUnitLayer(shardID)
-        agreed = VoteLayer(shardID, guid)
-        if agreed ~= nil then return agreed end
-    end
-    -- Les tokens sont attribues par WoW et ne sont pas limites a nameplate1..40.
-    -- platesCovered: every listed plate was read without error, so the fixed tokens
-    -- below would only read the same units a second time. Any unreadable token or
-    -- failed unit read (secret values) keeps the fixed loop as the fallback.
-    local platesCovered = false
-    if C_NamePlate and C_NamePlate.GetNamePlates then
-        local ok, plates = pcall(C_NamePlate.GetNamePlates)
-        if ok and type(plates) == "table" then
-            platesCovered = true
-            for _, plate in ipairs(plates) do
-                local readable, unit = pcall(ReadPlateToken, plate)
-                if readable and unit then
-                    local unitOk
-                    unitOk, shardID, guid = pcall(ReadShardIDFromUnit, unit)
-                    if not unitOk then
-                        platesCovered = false
-                    else
-                        self:NoteScanUnitLayer(shardID)
-                        agreed = VoteLayer(shardID, guid)
-                        if agreed ~= nil then return agreed end
-                    end
-                else
-                    platesCovered = false
-                end
+-- A unit the game shows us (nameplate, target, mouseover, a group mate in range): if it is a
+-- player, it is on our layer. Its name is read once per player; its mark at most every RECHECK.
+function Overlord.Shard:NoteSeenUnit(unit, now)
+    now = now or GetTime()
+    if now < (tonumber(self._markQuietUntil) or 0) then return false end
+    local ok, guid = pcall(ReadSeenPlayerGuid, unit)
+    if not ok or not guid then return false end
+    local row = self.sight[guid]
+    if row then
+        row.at = now
+        if now - row.checkedAt < MARK.RECHECK then return true end
+    else
+        if self.sightCount >= MARK.SIGHT_MAX then
+            -- (A full table in a 200 v 200: one walk a second, not one per nameplate event.)
+            if now - (tonumber(self._sightPrunedAt) or -1e9) < 1 then return false end
+            self._sightPrunedAt = now
+            self:PruneSight(now)
+            if self.sightCount >= MARK.SIGHT_MAX then return false end
+        end
+        local sync = Overlord.Sync
+        if not (sync and sync.CanonicalForeverNameFromUnit) then return false end
+        local okName, name = pcall(sync.CanonicalForeverNameFromUnit, sync, unit)
+        if not okName or type(name) ~= "string" or name == "" then return false end
+        row = { name = name, at = now, since = now, checkedAt = now }
+        self.sight[guid] = row
+        self.sightCount = self.sightCount + 1
+        -- An Overlord player we heard of comes into sight under another mark than ours (or
+        -- none): ours is said a few seconds from now, when it counts for that player (GUARD);
+        -- its own word, said the same way, then counts for us. One SH for all the players of
+        -- that moment. Nothing for a player we never heard: most do not run the addon, and
+        -- the minute's SH and the presence reach the others.
+        if not self._markSayAt then
+            local _, theirs = self:ResolveKnownShardPlayer(name, true)
+            -- (0: a player of this version that holds no mark. Any other value that is no mark
+            -- is the chance number of a 2.6.0 client, which cannot use ours.)
+            if theirs ~= nil and (theirs == 0 or CoerceMark(theirs) ~= nil)
+                and not self:SameLayer(theirs, self.currentShardID) then
+                self._markSayAt = now + MARK.GUARD + 1
             end
         end
+        return true
     end
-    -- Secours pour les clients qui n'exposent pas la liste des frames.
-    if not platesCovered then
-        for i = 1, #SHARD_NAMEPLATE_UNITS do
-            shardID, guid = ExtractShardIDFromUnit(SHARD_NAMEPLATE_UNITS[i])
-            self:NoteScanUnitLayer(shardID)
-            agreed = VoteLayer(shardID, guid)
-            if agreed ~= nil then return agreed end
-        end
-    end
-    return ScanVignettesForShardID()
+    row.checkedAt = now
+    self:MeetPlayer(row, now)
+    return true
 end
 
--- Duree pendant laquelle les events bruyants reutilisent une mesure confirmee.
--- La maintenance one-shot et les invalidations monde/phase assurent le filet de fraicheur.
-local SHARD_FRESH_SECONDS = 30
-local SHARD_NEGATIVE_FRESH_SECONDS = 2
-local SHARD_KNOWN_SCAN_INTERVAL = 30
-local SHARD_UNKNOWN_SCAN_MIN = 2
-local SHARD_UNKNOWN_SCAN_MAX = 30
-
--- 2.5.3: after a layer hop, the old layer stayed shown for good (seen in game: 4 min on
--- 6868 while every NPC in sight gave 7090). Two NPCs of the new layer had to come in one
--- scan, or 30 s apart at most; with friendly plates off, a scan only sees the target.
--- A scan where NPCs give one other layer and nothing gives the shown one, more than
--- SHARD_FRESH_SECONDS after its last proof, forgets it (badge hidden rather than wrong).
--- Then the layer of the NPC the player targets is taken (player creatures are skipped
--- before this). Called when the scan found no two NPCs that agree; the new layer or nil.
-function Overlord.Shard:ResolveContradictedLayer(now)
-    local unitLayer = self._scanUnitLayer
-    if unitLayer == nil or self._scanUnitMixed then return nil end
-    local current = CoerceShardId(self.currentShardID)
-    if current ~= nil then
-        if unitLayer == current or layerVoteCount[current] then return nil end
-        if now - (tonumber(self.lastUpdateAt) or 0) < SHARD_FRESH_SECONDS then return nil end
-        self.currentShardID = nil
-        self.lastUpdateAt = 0
-        self.localShardSource = nil
-        self.contradictedBy = unitLayer
-        ClearPendingEventLayer()
-    end
-    if self.contradictedBy == unitLayer and self._scanTargetLayer == unitLayer then return unitLayer end
-    return nil
-end
-
--- Met a jour le shardID courant. skipIfFresh=true (evenements haute frequence) : ne rescanne pas
--- (GetVignettes + jusqu'a 40 nameplates) si un shardID a deja ete confirme il y a moins de
--- SHARD_FRESH_SECONDS -- les changements monde/phase invalident le contexte immediatement.
-function Overlord.Shard:Update(skipIfFresh)
+function Overlord.Shard:UpdateNow()
     if not self:SyncLocalContext() then return false end
     if not (Overlord.IsShardHelperActive and Overlord:IsShardHelperActive()) then
-        self.currentShardID = nil
+        if self.currentShardID ~= nil then
+            self:TellMarkGone()
+            self:SetMark(nil)
+        end
         self.lastUpdateAt = 0
-        self.contradictedBy = nil
         if StopShardScanMaintenance then StopShardScanMaintenance() end
         return false
     end
     local now = GetTime()
-    local freshFor = self.currentShardID ~= nil
-        and SHARD_FRESH_SECONDS or SHARD_NEGATIVE_FRESH_SECONDS
-    if skipIfFresh and self.currentShardID == nil
-        and now < (tonumber(self.nextMaintenanceScanAt) or 0) then
-        return false
-    end
-    if skipIfFresh and (tonumber(self.lastScanAttemptAt) or 0) > 0
-        and (now - self.lastScanAttemptAt) < freshFor then
-        return false
-    end
     self.lastScanAttemptAt = now
-    local newShard = self:ScanForShardID()
-    if newShard == nil then newShard = self:ResolveContradictedLayer(now) end
-    if newShard ~= nil then
-        local changed = (newShard ~= self.currentShardID)
-        self.currentShardID = newShard
-        self.lastUpdateAt = now
-        self.localShardSource = "guid"
-        self.contradictedBy = nil
-        -- Heartbeat leger : garde les infos de shard vivantes entre raids / communaute.
-        if Overlord.Sync and Overlord.Sync.BroadcastShard
-            and (changed or (self.lastBroadcastAt + SHARD_BROADCAST_INTERVAL <= self.lastUpdateAt)) then
-            self.lastBroadcastAt = self.lastUpdateAt
-            Overlord.Sync:BroadcastShard(newShard)
+    if now >= (tonumber(self._markQuietUntil) or 0) then
+        if now - (tonumber(self._sightScanAt) or -1e9) >= MARK.GROUP_SCAN then
+            self._sightScanAt = now
+            -- The players still in sight: a nameplate tells us once, when it appears, and two
+            -- players who stand together for minutes must go on counting as in sight.
+            if C_NamePlate and C_NamePlate.GetNamePlates then
+                local ok, plates = pcall(C_NamePlate.GetNamePlates)
+                if ok and type(plates) == "table" then
+                    for i = 1, #plates do
+                        local readable, unit = pcall(ReadPlateToken, plates[i])
+                        if readable and unit then self:NoteSeenUnit(unit, now) end
+                    end
+                end
+            end
+            self:NoteSeenUnit("target", now)
+            -- Group mates in range: seen without a nameplate (friendly plates are often off).
+            if IsInGroup and IsInGroup() then
+                local raid = IsInRaid and IsInRaid()
+                local units = raid and MARK.raid or MARK.party
+                local count = raid and math.min(GetNumGroupMembers and GetNumGroupMembers() or 0, #units) or #units
+                for i = 1, count do self:NoteSeenUnit(units[i], now) end
+            end
+        end
+        -- A player the game no longer shows is out of sight: seen again, it starts anew. (Marks
+        -- are only read above, at the moment the game shows their player.)
+        for guid, row in pairs(self.sight) do
+            if now - row.at > MARK.SIGHT_SEC then
+                self.sight[guid] = nil
+                self.sightCount = math.max(0, self.sightCount - 1)
+            end
+        end
+        if self.currentShardID == nil and now >= (tonumber(self._markCreateAt) or 0) then
+            self:SetMark(NewMark())
+            self._markBornAt = now
         end
     end
-    if ScheduleNextShardScan then
-        ScheduleNextShardScan(self.currentShardID ~= nil)
+    local mine = CoerceMark(self.currentShardID)
+    -- A numbered mark nobody confirmed for a long time: its number goes back to the pool.
+    if mine and mine % MARK_BASE >= 1
+        and now - (tonumber(self._markConfirmedAt) or tonumber(self._markBornAt) or now) > MARK.RELEASE_SEC then
+        self:TellMarkGone()
+        self:ClearSight()
+        self:SetMark(nil)
+        mine = nil
     end
-    return true, newShard
+    local aliasCount = 0
+    for tag, at in pairs(self.aliases) do
+        if now - at > MARK.ALIAS_SEC then self.aliases[tag] = nil else aliasCount = aliasCount + 1 end
+    end
+    if aliasCount > MARK.ALIAS_MAX then
+        for tag in pairs(self.aliases) do self.aliases[tag] = nil end
+    end
+    if mine and Overlord.Sync and Overlord.Sync.BroadcastShard then
+        local last = tonumber(self.lastBroadcastAt) or 0
+        local sayAt = self._markSayAt
+        local large = sayAt and Overlord.Sync.IsLargeEvent and Overlord.Sync:IsLargeEvent()
+        if large then self._markSayAt, sayAt = nil, nil end
+        if (self._markDue and now - last >= MARK.BROADCAST_GAP) or (sayAt and now >= sayAt and now - last >= MARK.SAY_GAP)
+            or now - last >= SHARD_BROADCAST_INTERVAL then
+            self._markDue, self._markSayAt = nil, nil
+            self.lastBroadcastAt = now
+            Overlord.Sync:BroadcastShard(mine)
+        end
+    end
+    if ArmShardTick then ArmShardTick() end
+    return true, self.currentShardID
+end
+
+-- The upkeep of our mark: every TICK seconds while a front, an outpost or a keep is active,
+-- and from the panel's badge. (One pass at a time: a change repaints the badge, which asks.)
+function Overlord.Shard:Update()
+    if self._inUpdate then return false end
+    self._inUpdate = true
+    local ok, active, mark = pcall(self.UpdateNow, self)
+    self._inUpdate = nil
+    if not ok then error(active, 0) end
+    return active, mark
 end
 
 -- Retourne le shardID courant (ou nil si inconnu)
@@ -1015,6 +1168,8 @@ function Overlord.Shard:RemoveKnownShardPeer(playerName)
     local shard = self.knownShards[playerName]
     self.knownShards[playerName] = nil
     self.knownShardUpdatedAt[playerName] = nil
+    self.saidMarks[playerName] = nil
+    self.knownShardSaidAt[playerName] = nil
     -- (2.5.1: a departure leaves ResolveIndex in place, under its three keys, without
     -- building it again. A rebuild per departure was a whole pass per stale killer of a
     -- guild rampage, the exact name included, in one frame.)
@@ -1094,20 +1249,34 @@ function Overlord.Shard:IsPlayerHelper(playerName)
     return untilAt ~= nil and untilAt > GetTime()
 end
 
--- Enregistre le shardID d'un autre joueur (recu via sync)
--- firstHand (2.5.4): said by that player itself on our side, the game naming it as the sender
--- (its presence, its own SH; never over Battle.net from a friend the game does not show in our
--- faction). A relayed copy or a name read in a payload is not: only the Layers window reads the
--- difference (LayerJumper NoteLayer).
-function Overlord.Shard:SetPlayerShard(playerName, shardID, firstHand)
+-- Enregistre le shardID d'un autre joueur (recu via sync). 0: that player holds no mark now.
+-- firstHand: the game itself names that player as the sender, on our side (never a relay's
+-- word for it): only such a word may raise the number of our own mark.
+-- saidAt: nil = that player's own word, said now; a GetTime() = its own word, said then (a
+-- relayed copy: Sync:WordSaidAt); false = somebody else's word about it (a capture line
+-- relayed by a third player), kept for the tooltip only and never over its own word.
+function Overlord.Shard:SetPlayerShard(playerName, shardID, firstHand, saidAt)
     if not playerName or shardID == nil then return end
     local sid = CoerceShardId(shardID)
-    if sid == nil or sid ~= sid or sid < 0 or sid >= SHARD_LAYER_ID_MAX then return false end
+    if sid == nil or sid ~= sid or sid < 0 or sid >= SHARD_LAYER_ID_MAX or sid % 1 ~= 0 then return false end
     local previousShard = CoerceShardId(self.knownShards[playerName])
     local now = GetTime()
+    local ownWord = saidAt ~= false
+    if ownWord then
+        saidAt = math.min(now, tonumber(saidAt) or now)
+        -- (An older copy of its own word, delivered late by a relay: the newer one stands.)
+        local heldAt = self.knownShardSaidAt[playerName]
+        if heldAt and saidAt < heldAt then return true end
+    elseif previousShard ~= nil and self.knownShardSaidAt[playerName] ~= nil then
+        return true
+    end
     if previousShard == nil and not self:EnsurePeerCapacity(playerName, now) then return false end
     self.knownShards[playerName] = sid
     self.knownShardUpdatedAt[playerName] = now
+    if ownWord then
+        self.saidMarks[playerName] = sid
+        self.knownShardSaidAt[playerName] = saidAt
+    end
     self:TouchPeerNode(playerName, now)
     if previousShard ~= sid then
         self._gkPromptPeerRevision = (tonumber(self._gkPromptPeerRevision) or 0) + 1
@@ -1134,9 +1303,15 @@ function Overlord.Shard:SetPlayerShard(playerName, shardID, firstHand)
             self.shardReferenceCheckedAt[sid] = now
         end
     end
-    -- 2.5.4: the Layers window keeps it longer than we do, for its list only (LayerJumper NoteLayer).
-    local jumper = Overlord.LayerJumper
-    if jumper and jumper.NoteLayer then jumper:NoteLayer(playerName, sid, firstHand == true) end
+    -- Our own tag said with a higher number: the number of our mark, drawn by one of ours a
+    -- moment before or after we drew one (the higher of the two on every client).
+    -- (Only from that player itself, as the game names it: a relayed or forged word cannot
+    -- rewrite the code every holder of the tag shows.)
+    local mine, theirs = CoerceMark(self.currentShardID), CoerceMark(sid)
+    if firstHand == true and ownWord and mine and theirs and MarkTag(theirs) == MarkTag(mine)
+        and theirs % MARK_BASE > mine % MARK_BASE and not self:IsMarkPinned() then
+        self:SetMark(theirs)
+    end
     return true
 end
 
@@ -1146,15 +1321,22 @@ end
 function Overlord.Shard:RefreshLocalContext(contextKey, skipScan)
     contextKey = tostring(contextKey or "")
     if self.localContextKey == contextKey then return false end
+    local previousKey = tostring(self.localContextKey or "")
     self.localContextKey = contextKey
     self.localContextStartedAt = GetTime()
-    self.currentShardID = nil
+    -- (During our capture the key may flip between a front and an outpost map, or come back
+    -- after a zone event: the code its alert named stays ours while we stay on a front. Never
+    -- from one front to another: that is another map, perhaps another layer.)
+    if contextKey ~= "" and self:IsMarkPinned()
+        and not (previousKey:sub(1, 6) == "front:" and contextKey:sub(1, 6) == "front:") then
+        return true
+    end
+    self:TellMarkGone()
+    self:SetMark(nil)
     self.lastUpdateAt = 0
     self.lastScanAttemptAt = 0
-    self.localShardSource = nil
     self.keepShardRequest = nil
-    self.contradictedBy = nil
-    ClearPendingEventLayer()
+    self:ClearSight()
     if StopShardScanMaintenance then StopShardScanMaintenance() end
     if not skipScan and contextKey ~= "" and Overlord.IsShardHelperActive
         and Overlord:IsShardHelperActive() then
@@ -1178,22 +1360,24 @@ function Overlord.Shard:SyncLocalContext()
             return true
         end
     end
-    local front = Overlord.InActiveFront and Overlord.Fronts
+    local front = Overlord.InActiveFront and Overlord.Fronts and Overlord.Fronts.GetCurrentFront
         and Overlord.Fronts:GetCurrentFront()
     self:RefreshLocalContext(front and ("front:" .. tostring(front.id)) or "", true)
     return true
 end
 
-function Overlord.Shard:InvalidateLocalContext()
+-- zoneOnly: a zone border crossed without a loading screen (ZONE_CHANGED_NEW_AREA). During
+-- our capture the code its alert named stays ours: a point near a border fires it on the spot.
+function Overlord.Shard:InvalidateLocalContext(zoneOnly)
+    if zoneOnly and self:IsMarkPinned() then return end
     self.localContextKey = ""
     self.localContextStartedAt = GetTime()
-    self.currentShardID = nil
+    self:TellMarkGone()
+    self:SetMark(nil)
     self.lastUpdateAt = 0
     self.lastScanAttemptAt = 0
-    self.localShardSource = nil
     self.keepShardRequest = nil
-    self.contradictedBy = nil
-    ClearPendingEventLayer()
+    self:ClearSight()
     if StopShardScanMaintenance then StopShardScanMaintenance() end
 end
 
@@ -1365,25 +1549,21 @@ function Overlord.Shard:AddToIndex(index, player)
     IndexSetAdd(index.byBase, (player:match("^([^%-]+)") or player):lower(), player)
 end
 
+-- Not proven on our layer (another mark than ours: another layer, or players of ours we have
+-- not met yet). false without a mark on either side.
 function Overlord.Shard:IsPlayerOnDifferentShard(playerName)
-    local myShard = CoerceShardId(self.currentShardID)
-    if myShard == nil then return false end
+    if CoerceMark(self.currentShardID) == nil then return false end
     local resolved, theirShard = self:ResolveKnownShardPlayer(playerName)
-    if not resolved or not theirShard then return false end
-    return tonumber(theirShard) ~= myShard
+    if not resolved or CoerceMark(theirShard) == nil then return false end
+    return not self:IsOurLayer(theirShard)
 end
 
--- Filet d'evenements : vignettes, souris et kills rafraichissent sans attendre le ticker.
--- VIGNETTES_UPDATED peut spammer (zone chargee) : debounce pour eviter N scans par frame.
--- Aucun risque de "throttle" cote serveur : tout est local (GUID / liste vignettes).
+-- The players the game shows us come by events (nameplate, target, mouseover); joining a group
+-- is the game's own way to another layer. Everything else is the upkeep pass (Shard:Update).
 local shardPulseFrame
-local shardEventDebounceHandle
-local shardEventNeedsUnthrottledScan = false
-local SHARD_EVENT_DEBOUNCE_SEC = 0.3
 local lastShardPeerPurgeAt = 0
-local shardScanTimer
+local shardTickTimer
 local shardPeerMaintenanceTimer
-local shardUnknownScanDelay = SHARD_UNKNOWN_SCAN_MIN
 
 local function PurgeExpiredShardPeers()
     local now = GetTime()
@@ -1400,147 +1580,22 @@ local function PurgeExpiredShardPeers()
     end
 end
 
-local function RefreshShardBadgeAfterScan()
-    if Overlord.UI and Overlord.UI.RefreshShardBadge then
-        Overlord.UI:RefreshShardBadge()
-    end
-end
-
--- Les preuves unitaires sont lues au moment exact ou WoW expose le token. Attendre le
--- debounce perdait parfois la cible / le cadavre avant le scan, notamment dans un fortin
--- sans vignette exploitable. Ce chemin ne parcourt ni les vignettes ni les 40 nameplates.
--- 2.3.3: one GUID confirms the known layer, but a new layer needs a second, different NPC
--- giving it within SHARD_EVENT_AGREE_SECONDS (a killed totem carries its owner's server).
-local SHARD_EVENT_AGREE_SECONDS = 30
--- confirmOnly (a killed creature's raw GUID, never checked for a player owner): it may
--- confirm the known layer but never move it.
--- targeted (2.5.3): the GUID of the NPC the player targets. Once a scan dropped the shown
--- layer for this one (ResolveContradictedLayer), it is taken without a second NPC.
-local function ObserveShardFromGUID(guid, confirmOnly, targeted)
-    if not Overlord.Shard:SyncLocalContext() then return false end
-    if not (Overlord.IsShardHelperActive and Overlord:IsShardHelperActive()) then return false end
-    local shardID = ExtractShardIDFromGUID(guid)
-    if shardID == nil then return false end
-    local now = GetTime()
-    local changed = shardID ~= CoerceShardId(Overlord.Shard.currentShardID)
-    if changed and confirmOnly and Overlord.Shard.currentShardID ~= nil then return false end
-    if changed then
-        if targeted and not confirmOnly and Overlord.Shard.currentShardID == nil
-            and Overlord.Shard.contradictedBy == shardID then
-            ClearPendingEventLayer()
-        elseif pendingEventLayer == shardID and pendingEventGuid ~= guid
-            and now - (pendingEventAt or 0) <= SHARD_EVENT_AGREE_SECONDS then
-            ClearPendingEventLayer()
-        else
-            pendingEventLayer, pendingEventGuid, pendingEventAt = shardID, guid, now
-            return false
-        end
-    else
-        -- An NPC of the known layer contradicts the waiting one.
-        ClearPendingEventLayer()
-    end
-    -- Same layer measured under 2 s ago (every NPC mouseover, nameplate and soft
-    -- target in a crowd): nothing to update, broadcast or repaint.
-    if not changed and Overlord.Shard.localShardSource == "guid"
-        and now - (tonumber(Overlord.Shard.lastUpdateAt) or 0) < 2 then return true end
-    Overlord.Shard.currentShardID = shardID
-    Overlord.Shard.lastUpdateAt = now
-    Overlord.Shard.lastScanAttemptAt = now
-    Overlord.Shard.localShardSource = "guid"
-    Overlord.Shard.contradictedBy = nil
-    if Overlord.Sync and Overlord.Sync.BroadcastShard
-        and (changed or (tonumber(Overlord.Shard.lastBroadcastAt) or 0)
-            + SHARD_BROADCAST_INTERVAL <= now) then
-        Overlord.Shard.lastBroadcastAt = now
-        Overlord.Sync:BroadcastShard(shardID)
-    end
-    -- Ne pas annuler/recreer le timer pour chaque nameplate d'une zone peuplee.
-    if ScheduleNextShardScan and (changed or not shardScanTimer) then
-        ScheduleNextShardScan(true)
-    end
-    RefreshShardBadgeAfterScan()
-    return true
-end
-
-local function ObserveShardFromUnit(unit)
-    local shardID, guid = ExtractShardIDFromUnit(unit)
-    return shardID ~= nil and ObserveShardFromGUID(guid, nil, unit == "target")
-end
-
-local function LocalShardEvidenceNeedsRefresh(maxAge)
-    local shardID = CoerceShardId(Overlord.Shard.currentShardID)
-    local measuredAt = tonumber(Overlord.Shard.lastUpdateAt) or 0
-    local contextAt = tonumber(Overlord.Shard.localContextStartedAt) or 0
-    return shardID == nil or measuredAt <= 0 or measuredAt < contextAt
-        or GetTime() - measuredAt > (tonumber(maxAge) or 8)
-end
-
-local SHARD_LOCAL_KILL_UNITS = { "player", "pet", "vehicle" }
-local function CompareLocalKillAttacker(attackerGUID)
-    if type(attackerGUID) ~= "string" or attackerGUID == "" then return false end
-    for i = 1, #SHARD_LOCAL_KILL_UNITS do
-        local localGUID = UnitGUID(SHARD_LOCAL_KILL_UNITS[i])
-        if localGUID and attackerGUID == localGUID then return true end
-    end
-    return false
-end
-local function PartyKillAttackerIsLocal(attackerGUID)
-    if not UnitGUID then return false end
-    -- Un PARTY_KILL de raid peut provenir d'un membre sur une autre couche. La comparaison
-    -- complete reste dans pcall car les GUID de combat peuvent etre secrets en 12.x.
-    -- (Fonction nommee : pas de closure par kill, plusieurs par seconde en raid.)
-    local ok, isLocal = pcall(CompareLocalKillAttacker, attackerGUID)
-    return ok and isLocal == true
-end
-
 StopShardScanMaintenance = function()
-    if shardScanTimer and shardScanTimer.Cancel then shardScanTimer:Cancel() end
-    shardScanTimer = nil
-    shardUnknownScanDelay = SHARD_UNKNOWN_SCAN_MIN
-    Overlord.Shard.nextMaintenanceScanAt = 0
+    if shardTickTimer and shardTickTimer.Cancel then shardTickTimer:Cancel() end
+    shardTickTimer = nil
 end
 
-ScheduleNextShardScan = function(hasKnownShard)
-    if not C_Timer or not C_Timer.NewTimer then return end
-    if not (Overlord.IsShardHelperActive and Overlord:IsShardHelperActive()) then
-        StopShardScanMaintenance()
-        return false
-    end
+-- One timer at a time; Shard:Update arms the next one while a front is active.
+-- (One function for every tick: no closure made every five seconds.)
+local function ShardTick()
+    shardTickTimer = nil
+    if Overlord.InstanceSuspended then return end
+    Overlord.Shard:Update()
+end
 
-    local delay
-    if hasKnownShard then
-        shardUnknownScanDelay = SHARD_UNKNOWN_SCAN_MIN
-        delay = SHARD_KNOWN_SCAN_INTERVAL
-        local lastBroadcast = tonumber(Overlord.Shard.lastBroadcastAt) or 0
-        -- Rescan when the heartbeat falls due; once overdue (a scan found no two NPCs that
-        -- agree), the usual interval: no rescan every second.
-        local untilBroadcast = lastBroadcast > 0
-            and SHARD_BROADCAST_INTERVAL - (GetTime() - lastBroadcast) or 0
-        if untilBroadcast > 0 then
-            delay = math.min(delay, math.max(1, untilBroadcast))
-        end
-    else
-        delay = shardUnknownScanDelay
-        shardUnknownScanDelay = math.min(
-            SHARD_UNKNOWN_SCAN_MAX, math.max(SHARD_UNKNOWN_SCAN_MIN, delay * 2))
-    end
-
-    if shardScanTimer and shardScanTimer.Cancel then shardScanTimer:Cancel() end
-    Overlord.Shard.nextMaintenanceScanAt = GetTime() + delay
-    shardScanTimer = C_Timer.NewTimer(delay, function()
-        shardScanTimer = nil
-        Overlord.Shard.nextMaintenanceScanAt = 0
-        if Overlord.InstanceSuspended then
-            ScheduleNextShardScan(Overlord.Shard.currentShardID ~= nil)
-            return
-        end
-        if Overlord.IsShardHelperActive and Overlord:IsShardHelperActive() then
-            Overlord.Shard:Update()
-            RefreshShardBadgeAfterScan()
-        else
-            StopShardScanMaintenance()
-        end
-    end)
+ArmShardTick = function()
+    if shardTickTimer or not C_Timer or not C_Timer.NewTimer then return end
+    shardTickTimer = C_Timer.NewTimer(MARK.TICK, ShardTick)
 end
 
 local function ScheduleShardPeerMaintenance()
@@ -1552,109 +1607,30 @@ local function ScheduleShardPeerMaintenance()
     end)
 end
 
-local function ScheduleShardUpdateFromEvent(_, event, unit)
+local function HandleShardPulseEvent(_, event, unit)
     if Overlord.InstanceSuspended then return end
-    if not (Overlord.IsShardHelperActive and Overlord:IsShardHelperActive()) then return end
-    local evidenceUnit
-    if event == "PLAYER_TARGET_CHANGED" then
-        evidenceUnit = "target"
-    elseif event == "UPDATE_MOUSEOVER_UNIT" then
-        evidenceUnit = "mouseover"
-    elseif event == "PLAYER_FOCUS_CHANGED" then
-        evidenceUnit = "focus"
-    elseif event == "PLAYER_SOFT_ENEMY_CHANGED" then
-        evidenceUnit = "softenemy"
-    elseif event == "PLAYER_SOFT_FRIEND_CHANGED" then
-        evidenceUnit = "softfriend"
-    elseif event == "PLAYER_SOFT_INTERACT_CHANGED" then
-        evidenceUnit = "softinteract"
-    elseif event == "NAME_PLATE_UNIT_ADDED" then
-        evidenceUnit = unit
-    end
-    -- Une preuve unitaire rafraichit aussi un shard connu mais age de plus de 8 s.
-    -- C'etait le cas exact ou le timer refusait de partir malgre un nouveau PNJ cible.
-    local needsRefresh = LocalShardEvidenceNeedsRefresh(8)
-    if evidenceUnit and ObserveShardFromUnit(evidenceUnit) then return end
-    if needsRefresh then
-        -- Une cible peut devenir indisponible entre l'event et UnitGUID. Le scan debounced
-        -- reste force pour profiter d'une autre nameplate / vignette de la meme frame.
-        if evidenceUnit then shardEventNeedsUnthrottledScan = true end
-    end
-    -- Coalescer la rafale sans annuler/recreer un timer a chaque evenement.
-    if shardEventDebounceHandle then return end
-    -- Known layer measured under 8 s ago, same context, last scan far from the 30 s
-    -- freshness edge (1 s margin for a late timer): the debounced Update(true) would
-    -- return at once. Skip the timer and its closure but keep what its callback does
-    -- (context check now, badge at most once per debounce window); any other case,
-    -- including a context change found here, arms the timer as before.
-    if not needsRefresh and not shardEventNeedsUnthrottledScan then
-        local shard = Overlord.Shard
-        local now = GetTime()
-        -- A crowd sends tens of these events a second: one check per debounce window,
-        -- as the single pending timer gave before.
-        if now - (tonumber(shard._eventFastPathAt) or -10) < SHARD_EVENT_DEBOUNCE_SEC then return end
-        shard._eventFastPathAt = now
-        if shard:SyncLocalContext() and not LocalShardEvidenceNeedsRefresh(8)
-            and (tonumber(shard.lastScanAttemptAt) or 0) > 0
-            and now + SHARD_EVENT_DEBOUNCE_SEC + 1 < shard.lastScanAttemptAt + SHARD_FRESH_SECONDS then
-            if now - (tonumber(shard._eventBadgeRefreshAt) or -10) >= SHARD_EVENT_DEBOUNCE_SEC then
-                shard._eventBadgeRefreshAt = now
-                RefreshShardBadgeAfterScan()
-            end
-            return
-        end
-    end
-    shardEventDebounceHandle = C_Timer.NewTimer(SHARD_EVENT_DEBOUNCE_SEC, function()
-        shardEventDebounceHandle = nil
-        if Overlord.InstanceSuspended then return end
-        if Overlord.IsShardHelperActive and Overlord:IsShardHelperActive() then
-            local forceScan = shardEventNeedsUnthrottledScan
-            shardEventNeedsUnthrottledScan = false
-            -- In a crowd of players (their GUIDs carry no layer) every mouseover
-            -- asked for a full nameplate + vignette scan, up to 3 per second.
-            local scanNow = GetTime()
-            if forceScan and scanNow - (Overlord.Shard._lastForcedEventScanAt or -10) < 2 then
-                forceScan = false
-            end
-            if forceScan then Overlord.Shard._lastForcedEventScanAt = scanNow end
-            Overlord.Shard:Update(not forceScan)
-            RefreshShardBadgeAfterScan()
-        end
-    end)
-end
-
-local function HandleShardPulseEvent(frame, event, ...)
-    if event == "PARTY_KILL" then
-        if Overlord.InstanceSuspended then return end
-        if not (Overlord.IsShardHelperActive and Overlord:IsShardHelperActive()) then return end
-        local arg1, arg2 = ...
-        -- En 12.0 PARTY_KILL peut fournir (attackerGUID, targetGUID). Consommer d'abord
-        -- targetGUID : contrairement au token "target", il survit a la disparition du cadavre.
-        -- Le format legacy fournit parfois arg1 comme unit token ; les deux replis le couvrent.
-        if not (PartyKillAttackerIsLocal(arg1) and ObserveShardFromGUID(arg2, true))
-            and not ObserveShardFromUnit(arg1)
-            and not ObserveShardFromUnit("target") then
-            if LocalShardEvidenceNeedsRefresh(8) then
-                -- En zone PvP les GUID joueurs ne portent pas de shard : la preuve reste
-                -- vieille et chaque PARTY_KILL de raid (plusieurs/s en 200v200) lancait un
-                -- scan complet des nameplates. Meme scan force, via le debounce commun.
-                shardEventNeedsUnthrottledScan = true
-                ScheduleShardUpdateFromEvent(frame, event)
-            end
-        end
+    local shard = Overlord.Shard
+    if event == "GROUP_JOINED" then
+        -- (The game moves the player who was invited, not the one who invites: during our own
+        -- capture, the leader of the new group keeps the code its alert named.)
+        if shard:IsMarkPinned() and UnitIsGroupLeader and UnitIsGroupLeader("player") then return end
+        shard:NoteHop(MARK.HOP_QUIET)
         return
     end
-    ScheduleShardUpdateFromEvent(frame, event, ...)
+    if not (Overlord.IsShardHelperActive and Overlord:IsShardHelperActive()) then return end
+    if event == "PLAYER_TARGET_CHANGED" then
+        unit = "target"
+    elseif event == "UPDATE_MOUSEOVER_UNIT" then
+        unit = "mouseover"
+    end
+    if unit then shard:NoteSeenUnit(unit) end
+    if not shardTickTimer then ArmShardTick() end
 end
 
--- Initialise le ticker de mise a jour du shard (marqueur legacy des tests).
--- Maintenance one-shot adaptative : rapide tant que la shard est inconnue, lente
--- une fois stable. Les transitions et preuves ephemeres restent event-driven.
-Overlord.Shard.PULSE_EVENTS = { "VIGNETTES_UPDATED", "UPDATE_MOUSEOVER_UNIT", "PLAYER_TARGET_CHANGED",
-    "PLAYER_FOCUS_CHANGED", "PLAYER_SOFT_ENEMY_CHANGED", "PLAYER_SOFT_FRIEND_CHANGED",
-    "PLAYER_SOFT_INTERACT_CHANGED", "NAME_PLATE_UNIT_ADDED", "PARTY_KILL" }
+Overlord.Shard.PULSE_EVENTS = { "UPDATE_MOUSEOVER_UNIT", "PLAYER_TARGET_CHANGED", "NAME_PLATE_UNIT_ADDED",
+    "GROUP_JOINED" }
 -- 2.6.0: in an instance the pulse leaves the event stream (its handler returned at once there,
--- after the game had called it for every nameplate, mouseover and kill of a battleground).
+-- after the game had called it for every nameplate and mouseover of a battleground).
 function Overlord.Shard:SetPulseEvents(on)
     if not shardPulseFrame then return end
     for _, event in ipairs(self.PULSE_EVENTS) do
@@ -2054,6 +2030,8 @@ local function SchedulePostInstanceWorldRecovery()
 end
 
 local function CompleteResumeFromInstance(reason)
+    -- 2.6.1: a session found in the wrong campaign stays stopped until /reload.
+    if Overlord.RulesetMismatch then return false end
     if not Overlord._deferredModuleInitDone then
         -- PLAYER_ENTERING_WORLD peut arriver pendant une sanitation login longue. Aucun
         -- Resume/Join/handler module ne doit contourner les barrieres requises. Garder
@@ -2089,6 +2067,9 @@ local function CompleteResumeFromInstance(reason)
     end
     if Overlord.LayerJumper and Overlord.LayerJumper.OnInstanceResume then
         pcall(Overlord.LayerJumper.OnInstanceResume, Overlord.LayerJumper)
+    end
+    if Overlord.CaptorSpot and Overlord.CaptorSpot.OnInstanceResume then
+        pcall(Overlord.CaptorSpot.OnInstanceResume, Overlord.CaptorSpot)
     end
     -- Un loading survenu avant l'initialisation de Sync conserve le ZR au lieu de
     -- marquer la vague comme relachee sans transport. Le rejouer avant la rotation.
@@ -2260,6 +2241,10 @@ function Overlord:SuspendForInstance()
     if self.LayerJumper and self.LayerJumper.OnInstanceSuspend then
         pcall(self.LayerJumper.OnInstanceSuspend, self.LayerJumper)
     end
+    -- 2.7.0 ("Capturer spotted"): nobody followed, no banner on a nameplate, no event.
+    if self.CaptorSpot and self.CaptorSpot.OnInstanceSuspend then
+        pcall(self.CaptorSpot.OnInstanceSuspend, self.CaptorSpot)
+    end
     if self.MostWanted and self.MostWanted.OnInstanceSuspend then
         pcall(self.MostWanted.OnInstanceSuspend, self.MostWanted)
     end
@@ -2371,6 +2356,51 @@ function Overlord:PrimeLoginInstanceBarrier(inInstance)
     self._loginSuspendDeferred = true
     self._loginResumeDeferred = nil
     return true
+end
+
+-- 2.6.1: the campaign (ruleset) is read once at ADDON_LOADED, sometimes before the client
+-- knows its realm. After the login the rules are read again (RealmPools:CheckSessionRuleset);
+-- if they now name another campaign, everything stops as in an instance, for the whole
+-- session (no resume), and one line asks for /reload, which reads the rules afresh. Reading
+-- the rules costs a few API calls, at PLAYER_ENTERING_WORLD and in the first five minutes only.
+-- (Every 5 s in the first minute, then up to 5 minutes: a rule answered at 40 s waited for the
+-- 60 s check before, while the session spoke in the wrong campaign. A reading is ~20 µs.)
+local RULESET_CHECK_DELAYS = { 1.5, 4, 8, 12, 16, 20, 25, 30, 35, 40, 45, 50, 55, 60, 90, 120, 180, 300 }
+function Overlord:CheckSessionRuleset()
+    if self.RulesetMismatch then return true end
+    local pools = self.RealmPools
+    if not pools or not pools.CheckSessionRuleset then return false end
+    -- (Not read inside an instance: everything is stopped there already, and a battleground's
+    -- rules are not the realm's. The next check outside reads them.)
+    if IsInInstance and IsInInstance() then return false end
+    local wrong = pools:CheckSessionRuleset(GetTime and GetTime() or 0)
+    if not wrong then
+        -- (A first reading that differs is confirmed CONFIRM_SEC later, whatever the next check
+        -- of the list: the last one, at 60 s, would otherwise wait for nothing.)
+        -- (Five at most a session: rules that kept changing their answer would not re-arm forever.)
+        if pools._rulesetPending and not self._rulesetConfirmArmed and C_Timer and C_Timer.After
+            and (self._rulesetConfirmCount or 0) < 5 then
+            self._rulesetConfirmArmed = true
+            self._rulesetConfirmCount = (self._rulesetConfirmCount or 0) + 1
+            C_Timer.After((tonumber(pools._rulesetPending.need) or 3) + 0.5, function()
+                Overlord._rulesetConfirmArmed = nil
+                Overlord:CheckSessionRuleset()
+            end)
+        end
+        return false
+    end
+    self.RulesetMismatch = wrong
+    self:SuspendForInstance()
+    print("|cFF00FF00[Overlord]|r " .. ((L and L.RULESET_MISMATCH_RELOAD)
+        or "Overlord is paused for this session: your realm's rules were not known yet when it loaded. Type /reload to play in the right campaign."))
+    return true
+end
+
+function Overlord:ScheduleSessionRulesetChecks()
+    if not C_Timer or not C_Timer.After then return end
+    for _, delay in ipairs(RULESET_CHECK_DELAYS) do
+        C_Timer.After(delay, function() Overlord:CheckSessionRuleset() end)
+    end
 end
 
 function Overlord:ResumeCaptureAfterLoginBarrier()
@@ -3176,15 +3206,10 @@ function Overlord:Initialize()
     OverlordDB.frontDominationTimeByPool, OverlordDB.dominationBoostPct = nil, nil
     OverlordDB.frontDominationPoolVersion, OverlordDB.globalDominationUnifiedVersion = nil, nil
     OverlordDB.frontDominationMigrated = nil
-    -- 1.6.1 cleared the Layer Jumper's saved jump and helper choice at every login; 2.5.0 brings
-    -- the module back (LayerJumper.lua) and keeps them. Once only: a choice made before 1.6.1 by
-    -- a player who skipped every version since is forgotten, so that nobody helps (invites by
-    -- itself) without having chosen it in this version.
-    if OverlordDB.layerHelpEra ~= 250 then
-        OverlordDB.layerHelpEra = 250
-        OverlordDB.layerJumperHop = nil
-        if type(OverlordDB.config) == "table" then OverlordDB.config.layerHelpMode = nil end
-    end
+    -- 2.7.0: the way to another layer is gone (Layers OL only names layers): its saved jump and
+    -- the helper's choice go with it.
+    OverlordDB.layerHelpEra, OverlordDB.layerJumperHop = nil, nil
+    if type(OverlordDB.config) == "table" then OverlordDB.config.layerHelpMode = nil end
     -- 1.8.1: outposts parked by an unreleased 1.4.0 build (2026-10-03, minutes); the
     -- one-week recovery of that week can no longer match.
     OverlordDB.outpostsByPool = nil
@@ -4840,7 +4865,7 @@ end
 local FRONT_ENTER_DELAY = 1.2
 
 function Overlord:CheckActiveFrontZone()
-    if not self.IsInitialized then return end
+    if not self.IsInitialized or self.RulesetMismatch then return end
     if not self._deferredModuleInitDone then
         self._loginFrontCheckDeferred = true
         return
@@ -4951,6 +4976,10 @@ function Overlord:OnLeaveFront()
     end
     if self.General and self.General.OnLeaveFront then
         self.General:OnLeaveFront()
+    end
+    -- 2.7.0 ("Capturer spotted"): the capturers of the front we leave are no longer followed.
+    if self.CaptorSpot and self.CaptorSpot.Clear then
+        pcall(self.CaptorSpot.Clear, self.CaptorSpot)
     end
 end
 
@@ -5580,6 +5609,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "PLAYER_LOGIN" then
         eventFrame:UnregisterEvent("PLAYER_LOGIN")
         Overlord._loginChannelPending = true
+        Overlord:ScheduleSessionRulesetChecks()
         StartAutoSave()
         Overlord:ScheduleNextReset()
 
@@ -5686,15 +5716,17 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         Overlord:ApplyGhostHudLayout()
     elseif event == "UNIT_PHASE" then
         local unit = ...
-        if unit == "player" and Overlord.Shard and Overlord.Shard.InvalidateLocalContext then
+        if unit == "player" and not Overlord.InstanceSuspended
+            and Overlord.Shard and Overlord.Shard.InvalidateLocalContext then
             -- Un hop de phase peut garder la meme map : invalider avant tout prochain tick/GA.
+            if Overlord.Shard.NoteHop then Overlord.Shard:NoteHop() end
             Overlord.Shard:InvalidateLocalContext()
         end
     elseif event == "ZONE_CHANGED_NEW_AREA" or event == "PLAYER_ENTERING_WORLD" then
         -- 2.2.2: the game swaps its zone channels now; ours keep away a moment (SyncAux).
         if Overlord.Sync and Overlord.Sync.NoteZoneSwap then Overlord.Sync:NoteZoneSwap() end
         if Overlord.Shard and Overlord.Shard.InvalidateLocalContext then
-            Overlord.Shard:InvalidateLocalContext()
+            Overlord.Shard:InvalidateLocalContext(event == "ZONE_CHANGED_NEW_AREA")
         end
         local inInstance = IsInInstance()
         -- Filet de securite GetInstanceInfo() UNIQUEMENT quand on n'est pas deja suspendu :
@@ -5728,6 +5760,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         end
         if event == "PLAYER_ENTERING_WORLD" then
             Overlord:FinalizeCaptureReleaseAfterWorldEntry(inInstance)
+            Overlord:CheckSessionRuleset()
         end
         Overlord:ApplyGhostHudLayout()
     end
@@ -5739,5 +5772,5 @@ end)
 
 -- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
 Overlord.MemoryParts = Overlord.MemoryParts or {}
-Overlord.MemoryParts["Core.lua"] = function() return { CAPTURE_SYNC_GATE_TIMEOUT = CAPTURE_SYNC_GATE_TIMEOUT, CAPTURE_SYNC_SETTLE_SECONDS = CAPTURE_SYNC_SETTLE_SECONDS, CAPTURE_SYNC_REMOTE_ADOPT_RESET_SECONDS = CAPTURE_SYNC_REMOTE_ADOPT_RESET_SECONDS, staleSessionUpdatedAtZeroed = staleSessionUpdatedAtZeroed, captureSyncGate = captureSyncGate, SHARD_BROADCAST_INTERVAL = SHARD_BROADCAST_INTERVAL, SHARD_PEER_TTL = SHARD_PEER_TTL, SHARD_LAYER_ID_MAX = SHARD_LAYER_ID_MAX, ScheduleNextShardScan = ScheduleNextShardScan, StopShardScanMaintenance = StopShardScanMaintenance, layerVoteSeen = layerVoteSeen, layerVoteCount = layerVoteCount, pendingEventLayer = pendingEventLayer, pendingEventGuid = pendingEventGuid, pendingEventAt = pendingEventAt, SHARD_SCAN_UNITS = SHARD_SCAN_UNITS, SHARD_NAMEPLATE_UNITS = SHARD_NAMEPLATE_UNITS, SHARD_FRESH_SECONDS = SHARD_FRESH_SECONDS, SHARD_NEGATIVE_FRESH_SECONDS = SHARD_NEGATIVE_FRESH_SECONDS, SHARD_KNOWN_SCAN_INTERVAL = SHARD_KNOWN_SCAN_INTERVAL, SHARD_UNKNOWN_SCAN_MIN = SHARD_UNKNOWN_SCAN_MIN, SHARD_UNKNOWN_SCAN_MAX = SHARD_UNKNOWN_SCAN_MAX, localShardReferenceFullName = localShardReferenceFullName, localShardReferenceRealm = localShardReferenceRealm, SHARD_HELPER_MEMORY = SHARD_HELPER_MEMORY, SHARD_HELPER_MAX = SHARD_HELPER_MAX, shardPulseFrame = shardPulseFrame, shardEventDebounceHandle = shardEventDebounceHandle, shardEventNeedsUnthrottledScan = shardEventNeedsUnthrottledScan, SHARD_EVENT_DEBOUNCE_SEC = SHARD_EVENT_DEBOUNCE_SEC, lastShardPeerPurgeAt = lastShardPeerPurgeAt, shardScanTimer = shardScanTimer, shardPeerMaintenanceTimer = shardPeerMaintenanceTimer, shardUnknownScanDelay = shardUnknownScanDelay, SHARD_EVENT_AGREE_SECONDS = SHARD_EVENT_AGREE_SECONDS, SHARD_LOCAL_KILL_UNITS = SHARD_LOCAL_KILL_UNITS, pendingFrontEnter = pendingFrontEnter, catchUpNotified = catchUpNotified, postInstanceRecoveryTimers = postInstanceRecoveryTimers, resumeInstanceRetryTimers = resumeInstanceRetryTimers, RESUME_INSTANCE_RETRY_DELAYS = RESUME_INSTANCE_RETRY_DELAYS, POST_INSTANCE_RECHECK_DELAYS = POST_INSTANCE_RECHECK_DELAYS, ADDON_SOUNDS = ADDON_SOUNDS, FACTION_CALL_SOUND_KIT = FACTION_CALL_SOUND_KIT, WELCOME_POPUP_SOUND_KIT = WELCOME_POPUP_SOUND_KIT, GENERAL_CLAIM_SOUND = GENERAL_CLAIM_SOUND, GENERAL_RELEASE_SOUND = GENERAL_RELEASE_SOUND, GENERAL_DUEL_MUSIC_FILE = GENERAL_DUEL_MUSIC_FILE, GENERAL_DUEL_FADE_MS = GENERAL_DUEL_FADE_MS, generalDuelMusicActive = generalDuelMusicActive } end
-Overlord.MemoryParts["Core.lua#2"] = function() return { generalDuelSoundHandle = generalDuelSoundHandle, generalDuelFadeStopHandle = generalDuelFadeStopHandle, LOCALE_DISPLAY = LOCALE_DISPLAY, FormatLocaleTagUncached = FormatLocaleTagUncached, eventFrame = eventFrame, RESET_RULE_BY_REGION = RESET_RULE_BY_REGION, RESET_HOUR_UNNAMED = RESET_HOUR_UNNAMED, RESET_WDAY_UNNAMED = RESET_WDAY_UNNAMED, WEEKLY_RESET_SNAP_SEC = WEEKLY_RESET_SNAP_SEC, SECONDS_PER_DAY = SECONDS_PER_DAY, SECONDS_PER_WEEK = SECONDS_PER_WEEK, CAMPAIGN_EPOCH_TOLERANCE_SEC = CAMPAIGN_EPOCH_TOLERANCE_SEC, REGIONAL_RESET_CACHE_SEC = REGIONAL_RESET_CACHE_SEC, LEGACY_US_MIN_GAP_SEC = LEGACY_US_MIN_GAP_SEC, WEEKLY_RESET_REENTRY_GUARD_SEC = WEEKLY_RESET_REENTRY_GUARD_SEC, cachedRegionalResetTs = cachedRegionalResetTs, cachedRegionalResetWallAt = cachedRegionalResetWallAt, lastEnsureCampaignFreshAt = lastEnsureCampaignFreshAt, ENSURE_CAMPAIGN_FRESH_INTERVAL = ENSURE_CAMPAIGN_FRESH_INTERVAL, BETA_WEEK_PHASE = BETA_WEEK_PHASE, RULESET_WORLD_KEYS = RULESET_WORLD_KEYS, RULESET_WORLD_SCALARS = RULESET_WORLD_SCALARS, saveDirty = saveDirty, EXCLUDED_BG_MAP_IDS = EXCLUDED_BG_MAP_IDS, OPEN_WORLD_CONTINENT_INSTANCE_IDS = OPEN_WORLD_CONTINENT_INSTANCE_IDS, FRONT_ENTER_DELAY = FRONT_ENTER_DELAY, REMOTE_OBSERVER_INTERVAL = REMOTE_OBSERVER_INTERVAL, updateTicker = updateTicker, frontTickPhase = frontTickPhase, truceExpireTicker = truceExpireTicker, strategicSiteTicker = strategicSiteTicker, remoteObserverTicker = remoteObserverTicker, remoteObserverState = remoteObserverState, REMOTE_OBSERVER_LIST_REBUILD_SEC = REMOTE_OBSERVER_LIST_REBUILD_SEC, ticksSinceLadderSnapshot = ticksSinceLadderSnapshot, ladderSnapshotThisSession = ladderSnapshotThisSession, ghostHudSuppressed = ghostHudSuppressed } end
+Overlord.MemoryParts["Core.lua"] = function() return { CAPTURE_SYNC_GATE_TIMEOUT = CAPTURE_SYNC_GATE_TIMEOUT, CAPTURE_SYNC_SETTLE_SECONDS = CAPTURE_SYNC_SETTLE_SECONDS, CAPTURE_SYNC_REMOTE_ADOPT_RESET_SECONDS = CAPTURE_SYNC_REMOTE_ADOPT_RESET_SECONDS, staleSessionUpdatedAtZeroed = staleSessionUpdatedAtZeroed, captureSyncGate = captureSyncGate, SHARD_BROADCAST_INTERVAL = SHARD_BROADCAST_INTERVAL, SHARD_PEER_TTL = SHARD_PEER_TTL, SHARD_LAYER_ID_MAX = SHARD_LAYER_ID_MAX, StopShardScanMaintenance = StopShardScanMaintenance, ArmShardTick = ArmShardTick, MARK = MARK, MARK_BASE = MARK_BASE, shardTickTimer = shardTickTimer, localShardReferenceFullName = localShardReferenceFullName, localShardReferenceRealm = localShardReferenceRealm, SHARD_HELPER_MEMORY = SHARD_HELPER_MEMORY, SHARD_HELPER_MAX = SHARD_HELPER_MAX, shardPulseFrame = shardPulseFrame, lastShardPeerPurgeAt = lastShardPeerPurgeAt, shardPeerMaintenanceTimer = shardPeerMaintenanceTimer, pendingFrontEnter = pendingFrontEnter, catchUpNotified = catchUpNotified, postInstanceRecoveryTimers = postInstanceRecoveryTimers, resumeInstanceRetryTimers = resumeInstanceRetryTimers, RESUME_INSTANCE_RETRY_DELAYS = RESUME_INSTANCE_RETRY_DELAYS, POST_INSTANCE_RECHECK_DELAYS = POST_INSTANCE_RECHECK_DELAYS, ADDON_SOUNDS = ADDON_SOUNDS, FACTION_CALL_SOUND_KIT = FACTION_CALL_SOUND_KIT, WELCOME_POPUP_SOUND_KIT = WELCOME_POPUP_SOUND_KIT, GENERAL_CLAIM_SOUND = GENERAL_CLAIM_SOUND, GENERAL_RELEASE_SOUND = GENERAL_RELEASE_SOUND, GENERAL_DUEL_MUSIC_FILE = GENERAL_DUEL_MUSIC_FILE, GENERAL_DUEL_FADE_MS = GENERAL_DUEL_FADE_MS, generalDuelMusicActive = generalDuelMusicActive } end
+Overlord.MemoryParts["Core.lua#2"] = function() return { generalDuelSoundHandle = generalDuelSoundHandle, generalDuelFadeStopHandle = generalDuelFadeStopHandle, LOCALE_DISPLAY = LOCALE_DISPLAY, FormatLocaleTagUncached = FormatLocaleTagUncached, eventFrame = eventFrame, RESET_RULE_BY_REGION = RESET_RULE_BY_REGION, RESET_HOUR_UNNAMED = RESET_HOUR_UNNAMED, RESET_WDAY_UNNAMED = RESET_WDAY_UNNAMED, WEEKLY_RESET_SNAP_SEC = WEEKLY_RESET_SNAP_SEC, SECONDS_PER_DAY = SECONDS_PER_DAY, SECONDS_PER_WEEK = SECONDS_PER_WEEK, CAMPAIGN_EPOCH_TOLERANCE_SEC = CAMPAIGN_EPOCH_TOLERANCE_SEC, REGIONAL_RESET_CACHE_SEC = REGIONAL_RESET_CACHE_SEC, LEGACY_US_MIN_GAP_SEC = LEGACY_US_MIN_GAP_SEC, WEEKLY_RESET_REENTRY_GUARD_SEC = WEEKLY_RESET_REENTRY_GUARD_SEC, cachedRegionalResetTs = cachedRegionalResetTs, cachedRegionalResetWallAt = cachedRegionalResetWallAt, lastEnsureCampaignFreshAt = lastEnsureCampaignFreshAt, ENSURE_CAMPAIGN_FRESH_INTERVAL = ENSURE_CAMPAIGN_FRESH_INTERVAL, BETA_WEEK_PHASE = BETA_WEEK_PHASE, RULESET_WORLD_KEYS = RULESET_WORLD_KEYS, RULESET_WORLD_SCALARS = RULESET_WORLD_SCALARS, RULESET_CHECK_DELAYS = RULESET_CHECK_DELAYS, saveDirty = saveDirty, EXCLUDED_BG_MAP_IDS = EXCLUDED_BG_MAP_IDS, OPEN_WORLD_CONTINENT_INSTANCE_IDS = OPEN_WORLD_CONTINENT_INSTANCE_IDS, FRONT_ENTER_DELAY = FRONT_ENTER_DELAY, REMOTE_OBSERVER_INTERVAL = REMOTE_OBSERVER_INTERVAL, updateTicker = updateTicker, frontTickPhase = frontTickPhase, truceExpireTicker = truceExpireTicker, strategicSiteTicker = strategicSiteTicker, remoteObserverTicker = remoteObserverTicker, remoteObserverState = remoteObserverState, REMOTE_OBSERVER_LIST_REBUILD_SEC = REMOTE_OBSERVER_LIST_REBUILD_SEC, ticksSinceLadderSnapshot = ticksSinceLadderSnapshot, ladderSnapshotThisSession = ladderSnapshotThisSession, ghostHudSuppressed = ghostHudSuppressed } end

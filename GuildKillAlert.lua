@@ -495,18 +495,8 @@ end
 
 -- Texte identique pour le detecteur et pour chaque receveur du GW.
 function GKA:BuildAlertText(guildName, faction, kills, members, zoneRef, shard, ally)
+    -- 2.7.0 (Layers OL): no layer in a rampage alert, sent or received (see where it is detected).
     local shardSuffix = ""
-    if shard then
-        local tag = string.format((L and L.SHARD_ALERT_TAG) or " #%s", tostring(shard))
-        tag = tag:match("^%s*(.-)%s*$") or tag
-        -- 2.5.0: the layer can be clicked (no player named: those of ours known on that layer).
-        local jumper = Overlord.LayerJumper
-        if jumper and jumper.ChatLink and not self._simulating then
-            local ok, linked = pcall(jumper.ChatLink, jumper, nil, shard, tag)
-            if ok and type(linked) == "string" then tag = linked end
-        end
-        shardSuffix = " (" .. tag .. ")"
-    end
     local location = ResolveLocationLabel(zoneRef)
     if ally then
         if location then
@@ -630,7 +620,10 @@ function GKA:Evaluate(guild, now)
     if not HasDistinctMembers(events, self.MEMBER_THRESHOLD) then return false end
     local kills, members, zoneRef, byPlayer = Summarize(guild)
     if kills < self.KILL_THRESHOLD or members < self.MEMBER_THRESHOLD then return false end
-    local shard = GuildShard(byPlayer)
+    -- 2.7.0 (Layers OL): a rampage names no layer. Its "layer" was a vote over what was last
+    -- heard of each killer, which no client shares with another; and a field of nine digits
+    -- made every 2.6.0 client drop the whole alert and stop passing it on.
+    local shard = nil
     guild.detectedAt = now
     -- Les kills suivants doivent reconstituer un nouveau seuil complet.
     -- (Emptied in place, events recycled: Summarize's results hold no event table.)
@@ -741,7 +734,7 @@ function GKA:ChainCoverKey(payload)
     if zoneRef and zoneRef ~= "" and not IsValidZoneRef(zoneRef) then return nil end
     if shardStr and shardStr ~= "" then
         local shard = tonumber(shardStr)
-        if not shard or shard ~= math.floor(shard) or shard < 0 or shard > 99999999 then return nil end
+        if not shard or shard ~= math.floor(shard) or shard < 0 or shard > 999999999 then return nil end
     end
     local ts, serverNow = tonumber(tsStr), ServerNow()
     if not ts or ts ~= ts or ts > serverNow + NETWORK_MAX_SKEW or serverNow - ts > NETWORK_MAX_AGE then return nil end
@@ -772,7 +765,7 @@ function GKA:OnReceiveNetworkAlert(payload, sender, channel)
     local shard = nil
     if shardStr and shardStr ~= "" then
         shard = tonumber(shardStr)
-        if not shard or shard ~= math.floor(shard) or shard < 0 or shard > 99999999 then return false end
+        if not shard or shard ~= math.floor(shard) or shard < 0 or shard > 999999999 then return false end
     end
     local ts = tonumber(tsStr)
     local serverNow = ServerNow()
@@ -836,7 +829,7 @@ local SIM_GUILD = "Empire [TEST]"
 local SIM_NAMES = { "Sima", "Simb", "Simc", "Simd", "Sime" }
 -- Layer fictif de la guilde simulee (jamais celui du joueur) ; un membre isole
 -- sur un autre layer montre que la majorite l'emporte.
-local SIM_GUILD_SHARD, SIM_STRAY_SHARD = 143, 87
+local SIM_GUILD_SHARD, SIM_STRAY_SHARD = 2143, 2187
 local SIM_ZONE_REF = "#1417"
 
 local function ForgetGuild(guildName, faction)

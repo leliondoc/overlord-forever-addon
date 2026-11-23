@@ -1814,6 +1814,10 @@ local function PlaceBadge(frame, parent)
     local mw = Overlord.MostWanted
     local skull = mw and mw.skulls and frame.unit and mw.skulls[frame.unit]
     local beside = skull and skull.IsShown and skull:IsShown() and (mw.SKULL_SIZE or 16) + 2 or 0
+    -- (2.7.0: and left of the banner of a capturer in sight, CaptorSpot.lua.)
+    local spot = Overlord.CaptorSpot
+    local banner = spot and spot.icons and frame.unit and spot.icons[frame.unit]
+    if banner and banner.IsShown and banner:IsShown() then beside = beside + (spot.ICON_SIZE or 16) + 2 end
     frame:SetPoint("RIGHT", parent.healthBar or parent, "LEFT", -3 - beside, 0)
 end
 

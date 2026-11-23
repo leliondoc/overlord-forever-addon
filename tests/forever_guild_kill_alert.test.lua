@@ -22,7 +22,7 @@ Overlord.PlayerFaction = "Horde"
 Overlord.Zones.GetEnemyFactionName = function() return "Alliance" end
 local printed = {}
 Overlord.PrintNotification = function(_, text) printed[#printed + 1] = text end
-local shards = { [NAMES[1]] = 143 }
+local shards = { [NAMES[1]] = 5143 }
 Overlord.Sync.GetShardAlertTagForPlayer = function(_, name)
     return shards[name] and (" #" .. shards[name]) or ""
 end
@@ -123,14 +123,15 @@ assert(alerts() == 0, "Five duplicated kills triggered the alert")
 for m = 1, 5 do kill(NAMES[m], 4) end
 assert(alerts() == 1, "20 kills by 5 members did not alert")
 local text = printed[1]
-assert(text:find("20+ HK by 5+ members (#143)!", 1, true), text)
+-- (2.7.0, Layers O: a rampage names no layer, whatever is known of its killers.)
+assert(text:find("20+ HK by 5+ members!", 1, true), text)
 for _, name in ipairs(NAMES) do assert(not text:find(name, 1, true), "Alert named a player: " .. text) end
 
 -- The detector shares exactly one GW, after a random delay, through the relay only.
 assert(#sent == 0 and #timers == 1, "GW was not deferred")
 flush()
 assert(#sent == 1 and sent[1][1] == "beta" and sent[1][2] == "GW", "GW did not go through the relay alone")
-assert(sent[1][3] == "1:Empire:A:20:5::143:" .. serverClock, sent[1][3])
+assert(sent[1][3] == "1:Empire:A:20:5:::" .. serverClock, sent[1][3])
 
 -- Cooldown: another burst right away stays silent and sends nothing.
 sent = {}
@@ -198,14 +199,14 @@ assert(alerts("FormerGuild") == 0 and #timers == 0, "Cached guild was attributed
 
 -- Layer: majority of the guild's killers wins; none known -> no number.
 reset()
-shards = { [NAMES[1]] = 143, [NAMES[2]] = 88, [NAMES[3]] = 88 }
+shards = { [NAMES[1]] = 5143, [NAMES[2]] = 9988, [NAMES[3]] = 9988 }
 raid()
-assert(printed[1] and printed[1]:find("(#88)", 1, true), tostring(printed[1]))
+assert(printed[1] and printed[1]:find("members!", 1, true), tostring(printed[1]))
 reset()
 shards = {}
 raid()
 assert(printed[1] and printed[1]:find("members!", 1, true), "Unknown layer shown: " .. tostring(printed[1]))
-shards = { [NAMES[1]] = 143 }
+shards = { [NAMES[1]] = 5143 }
 
 -- Location: "#uiMapID" in the K, sub-maps climb to their zone, majority wins.
 local maps = {
@@ -224,15 +225,15 @@ reset()
 kill(NAMES[1], 30, "#1420")
 raid("#9001", 30)
 assert(alerts() == 1, "Located raid did not alert")
-assert(printed[1]:find("in Arathi Highlands (#143)!", 1, true), printed[1])
+assert(printed[1]:find("in Arathi Highlands!", 1, true), printed[1])
 flush()
-assert(sent[1][3]:find(":#9001:143:", 1, true), sent[1][3])
+assert(sent[1][3]:find(":#9001::", 1, true), sent[1][3])
 
 -- Another detector's GW arriving during our delay cancels our own send.
 reset()
 raid()
 assert(alerts() == 1 and #timers == 1)
-assert(not GKA:OnReceiveNetworkAlert(gw("Empire", "Alliance", 21, 5, "", 143), "Other Tester", "BETA"),
+assert(not GKA:OnReceiveNetworkAlert(gw("Empire", "Alliance", 21, 5, "", 5143), "Other Tester", "BETA"),
     "Duplicate GW printed after local detection")
 flush()
 assert(alerts() == 1 and #sent == 0, "Detector still sent after another GW arrived")
@@ -266,11 +267,11 @@ assert(GKA:IsEnabled())
 
 -- Receiving a GW prints the very same text, once per guild per 10 minutes.
 reset()
-local iron = gw("Iron Watch", "Alliance", 27, 6, "#1417", 55)
+local iron = gw("Iron Watch", "Alliance", 27, 6, "#1417", 4455)
 assert(GKA:OnReceiveNetworkAlert(iron, "Relay Tester", "BETA"), "Valid GW rejected")
 assert(printed[1] == "|cFFFF4444[Overlord]|r "
-    .. GKA:BuildAlertText("Iron Watch", "Alliance", 27, 6, "#1417", 55), tostring(printed[1]))
-assert(printed[1]:find("27+ HK by 6+ members in Arathi Highlands (#55)!", 1, true), printed[1])
+    .. GKA:BuildAlertText("Iron Watch", "Alliance", 27, 6, "#1417", 4455), tostring(printed[1]))
+assert(printed[1]:find("27+ HK by 6+ members in Arathi Highlands!", 1, true), printed[1])
 assert(not GKA:OnReceiveNetworkAlert(iron, "Other Tester", "CHANNEL"), "Duplicate GW printed twice")
 assert(#sent == 0, "Receiver re-broadcast the GW")
 
@@ -371,7 +372,7 @@ OverlordDB.config.guildKillAlertEnabled = nil
 local tagFn = Overlord.Sync.GetShardAlertTagForPlayer
 GKA:HandleCommand({ "guildkills", "test" })
 assert(#printed == 1 and printed[1]:find("Empire [TEST]", 1, true)
-    and printed[1]:find("20+ HK by 5+ members in Arathi Highlands (#143)!", 1, true)
+    and printed[1]:find("20+ HK by 5+ members in Arathi Highlands!", 1, true)
     and not printed[1]:find("Sim", 1, true), tostring(printed[1]))
 assert(#sent == 0 and #timers == 0, "Simulation sent network traffic")
 assert(OverlordDB.config.guildKillAlertEnabled == nil, "Simulation changed the default setting")
