@@ -206,6 +206,35 @@ assert(tooltipState.status == "in_progress" and tooltipState.updatedAt == observ
     "Presentation mutated the remote gameplay state")
 tooltipState.updatedAt = now
 assert(activeTooltip(), "Fresh heartbeat did not restore capture presentation")
+-- A live assault keeps the holder's name on the map; the assault is a line of its own.
+assert(op:GetOutpostMapSubtitle(tooltipState, tooltipSite) == "Defender Guild",
+    "a live assault hid the holder on the map")
+assert(op:IsOutpostCaptureLive(tooltipState, tooltipSite), "live assault not seen")
+tooltipState.previousOwnerGuild = ""
+assert(op:GetOutpostMapSubtitle(tooltipState, tooltipSite) == (Overlord.L.OUTPOST_NEUTRAL or "Unclaimed"),
+    "an assault on a free site did not say it is free")
+tooltipState.previousOwnerGuild = "Defender Guild"
+do
+    local src = io.open("MapMarkersKeep.lua", "rb"):read("*a")
+    assert(src:find("local live = Overlord.GuildKeep.GetKeepCaptureMapLabel", 1, true)
+        and src:find("    if live then return live end", 1, true),
+        "the keep's siege line does not carry the assault")
+    assert(select(2, src:gsub('GameTooltip:AddLine%(L%.[A-Z_]*CAPTURING or "Capturing%.%.%."%, 1, 0%.55, 0%.2%)', "")) == 4,
+        "the four keep/outpost tooltips do not add the assault after the holder")
+    local ctl = io.open("OutpostControl.lua", "rb"):read("*a")
+    assert(not ctl:find(".. L.OUTPOST_CAPTURE_LOST)", 1, true)
+        and select(2, ctl:gsub("string%.format%(L%.OUTPOST_CAPTURE_LOST, OP:GetDisplayName%(site%)%)", "")) == 2,
+        "capture lost does not name its site")
+    for _, f in ipairs({ "Locales.lua", "Locales_ptBR.lua", "Locales_zhCN.lua" }) do
+        local s = io.open(f, "rb"):read("*a")
+        local n = 0
+        for v in s:gmatch('\nL%.OUTPOST_CAPTURE_LOST%s*=%s*"([^"]*)"') do
+            n = n + 1
+            assert(select(2, v:gsub("%%s", "")) == 1, f .. ": capture lost without one %s: " .. v)
+        end
+        assert(n >= 1, f .. ": no capture lost line")
+    end
+end
 tooltipState.updatedAt = now - 3600
 tooltipState.holdAuthorityLocal, tooltipState.isHolding = true, true
 assert(activeTooltip(), "Local authoritative capture expired like a remote observation")

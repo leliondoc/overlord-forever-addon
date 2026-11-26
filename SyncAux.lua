@@ -1248,6 +1248,136 @@ function Overlord.Sync:OnReceiveFactionCall(payload, sender)
     Overlord:PrintRaidWarning(msg)
 end
 
+-- ============ Appel a la guilde (CG) ============
+-- Le cor de la guilde : le meme avertissement de raid, pour les membres de sa guilde qui ont
+-- Overlord, n'importe ou hors instance. Un seul message GUILD : le serveur ne le donne qu'a la
+-- guilde et nomme lui-meme l'expediteur. Un appel toutes les 10 minutes pour toute la guilde
+-- (recevoir un appel lance le delai, comme pour la faction : un seul heraut a la fois).
+local GUILD_CALL = { COOLDOWN = 600, PER_SENDER = 600 }
+
+local function GuildCallKey()
+    if not (IsInGuild and IsInGuild()) then return nil end
+    local guild = GetGuildInfo and GetGuildInfo("player")
+    if type(guild) ~= "string" or guild == "" then return nil end
+    return guild:lower()
+end
+
+function Overlord.Sync:GetGuildCallCooldownRemaining()
+    local key = GuildCallKey()
+    local saved = OverlordDB and OverlordDB.guildCallAt
+    if not key or type(saved) ~= "table" then return 0 end
+    local last = NormalizeFactionCallTimestamp(saved[key])
+    if last <= 0 then return 0 end
+    local now = FactionCallCooldownNow()
+    -- A date beyond the delay itself (a clock set back) blocks nothing.
+    if last > now + GUILD_CALL.COOLDOWN then return 0 end
+    local rem = GUILD_CALL.COOLDOWN - (now - last)
+    if rem <= 0 then return 0 end
+    return math.min(rem, GUILD_CALL.COOLDOWN)
+end
+
+function Overlord.Sync:SetGuildCallCooldown(at)
+    local key = GuildCallKey()
+    if not key or not OverlordDB then return end
+    -- Une ligne par guilde (les persos du compte partagent OverlordDB : le delai d'une guilde
+    -- survit a l'appel d'un alt dans une autre) ; les lignes dont le delai est fini sont
+    -- purgees a chaque ecriture, donc la table reste a quelques lignes.
+    local now = FactionCallCooldownNow()
+    local saved = type(OverlordDB.guildCallAt) == "table" and OverlordDB.guildCallAt or {}
+    for k, v in pairs(saved) do
+        local t = NormalizeFactionCallTimestamp(v)
+        if t <= 0 or now - t >= GUILD_CALL.COOLDOWN or t > now + GUILD_CALL.COOLDOWN then saved[k] = nil end
+    end
+    saved[key] = tonumber(at) or now
+    OverlordDB.guildCallAt = saved
+    if Overlord.Button and Overlord.Button.Refresh then
+        Overlord.Button:Refresh()
+    end
+end
+
+-- <carte>:<point Overlord>:<x>:<y> ; la carte est un uiMapID, nomme par chaque client dans sa
+-- langue, la position en pourcents entiers.
+function Overlord.Sync:BuildGuildCallPayload()
+    local mapID, x, y = 0, 0, 0
+    if C_Map and C_Map.GetBestMapForUnit then
+        local ok, best = pcall(C_Map.GetBestMapForUnit, "player")
+        if ok and type(best) == "number" then
+            mapID = best
+            local okPos, pos = pcall(C_Map.GetPlayerMapPosition, best, "player")
+            if okPos and pos and pos.GetXY then
+                local px, py = pos:GetXY()
+                if px and py then
+                    x, y = math.floor(px * 100 + 0.5), math.floor(py * 100 + 0.5)
+                end
+            end
+        end
+    end
+    local zone = Overlord.Zones and Overlord.Zones.GetCurrentPlayerZone and Overlord.Zones:GetCurrentPlayerZone()
+    local zoneId = (zone and type(zone.id) == "string") and zone.id or ""
+    return mapID .. ":" .. zoneId .. ":" .. x .. ":" .. y
+end
+
+function Overlord.Sync:BroadcastGuildCall(payload)
+    if type(payload) ~= "string" or payload == "" then return false end
+    if Overlord.InstanceSuspended or IsInInstance() then return false end
+    if not GuildCallKey() then return false end
+    if self:GetGuildCallCooldownRemaining() > 0 then return false end
+    if self:SendAddonChecked("CG:" .. payload, "GUILD") ~= true then return false end
+    self:SetGuildCallCooldown(FactionCallCooldownNow())
+    return true
+end
+
+-- Lu seulement sur GUILD (Sync:OnAddonMessage) : l'expediteur est un membre de notre guilde.
+-- Le lieu n'est fait que de ce que ce client connait (nom de carte du jeu, points Overlord,
+-- deux nombres) : rien du texte recu n'est affiche tel quel.
+function Overlord.Sync:OnReceiveGuildCall(payload, sender)
+    if type(payload) ~= "string" or type(sender) ~= "string" or sender == "" then return end
+    if Overlord.InstanceSuspended or IsInInstance() then return end
+    if self:IsSenderLocalPlayer(sender) then return end
+    -- Guild name not known yet (just after login): no delay could be kept, so nothing shown.
+    if not GuildCallKey() then return end
+    local p = self:GetPriv()
+    if not p then return end
+    p.cgRecvLast = p.cgRecvLast or {}
+    local senderKey, now = sender:lower(), GetTime()
+    local last = p.cgRecvLast[senderKey]
+    if last and now - last < GUILD_CALL.PER_SENDER then return end
+    if self:GetGuildCallCooldownRemaining() > 0 then return end
+    p.cgRecvLast[senderKey] = now
+    self:SetGuildCallCooldown(FactionCallCooldownNow())
+
+    local mapField, zoneId, xField, yField = strsplit(":", payload, 5)
+    local mapName = ""
+    local mapID = tonumber(mapField)
+    if mapID and mapID > 0 and C_Map and C_Map.GetMapInfo then
+        local ok, info = pcall(C_Map.GetMapInfo, math.floor(mapID))
+        if ok and type(info) == "table" and type(info.name) == "string" then mapName = info.name end
+    end
+    local pointName = ""
+    if type(zoneId) == "string" and zoneId ~= "" then
+        local z = Overlord.Zones and Overlord.Zones.GetZone and Overlord.Zones:GetZone(zoneId)
+        if not z and Overlord.Fronts and Overlord.Fronts.GetZone then z = Overlord.Fronts:GetZone(zoneId) end
+        pointName = (z and type(z.name) == "string") and z.name or ""
+    end
+    local place = mapName
+    if pointName ~= "" and pointName ~= mapName then
+        place = (mapName ~= "") and (pointName .. ", " .. mapName) or pointName
+    end
+    local x, y = tonumber(xField), tonumber(yField)
+    if place ~= "" and mapName ~= "" and x and y and x > 0 and y > 0 and x <= 100 and y <= 100 then
+        place = string.format("%s (%d, %d)", place, math.floor(x), math.floor(y))
+    end
+    local senderShort = sender:match("^([^%-]+)") or sender
+    local msg
+    if place ~= "" then
+        msg = string.format(L.GUILD_CALL_RECEIVED, senderShort, place)
+    else
+        msg = string.format(L.GUILD_CALL_RECEIVED_GENERIC, senderShort)
+    end
+    Overlord:PrintNotification("|cFFFFD100[Overlord]|r |cFFFF4444" .. msg .. "|r")
+    Overlord:PrintRaidWarning(msg)
+end
+
 function Overlord.Sync:OnReceiveMining(payload, sender)
     if not payload or payload == "" then return end
     if not Overlord.Zones then return end
@@ -2601,10 +2731,11 @@ end
 -- lignes par type sur cinq secondes laisse une marge superieure au debit legitime
 -- (~42) tout en coupant les rafales avant les allocations et mutations suivantes.
 -- Les snapshots territoriaux (OP/LO/LOC/ZA/ZS...) gardent leurs propres bornes.
-local SCORE_BURST_TYPES = { K = true, EK = true, LK = true, LC = true, LR = true }
+local SCORE_BURST_TYPES = { K = true, EK = true, LK = true, LC = true, LR = true, AC = true }
 -- K : un proprietaire honnete emet son total au plus toutes les 30 s (trois copies
 -- directes au plus) ; 8 par 5 s coupe un flood de totaux sans toucher au legitime.
-local SCORE_BURST_MAX = { K = 8, EK = 40, LK = 80, LC = 80, LR = 80 }
+-- AC (Gurubashi Arena capture): one every 4 min at most on a whole pool; 8 per 5 s is a flood.
+local SCORE_BURST_MAX = { K = 8, EK = 40, LK = 80, LC = 80, LR = 80, AC = 8 }
 local senderBurstWindow = {}      -- sender -> { counts = { K=.. }, windowStart }
 local senderBurstQuarantine = {}  -- sender -> msgType -> expiration (GetTime)
 local BURST_WINDOW = 5
@@ -2668,5 +2799,5 @@ end)
 
 -- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
 Overlord.MemoryParts = Overlord.MemoryParts or {}
-Overlord.MemoryParts["SyncAux.lua"] = function() return { TUNING = TUNING, lastStaleObserverPoll = lastStaleObserverPoll, STALE_OBSERVER_POLL_INTERVAL = STALE_OBSERVER_POLL_INTERVAL, STALE_OBSERVER_POLL_INTERVAL_LARGE = STALE_OBSERVER_POLL_INTERVAL_LARGE, STALE_CAPITAL_OBSERVER_POLL_INTERVAL = STALE_CAPITAL_OBSERVER_POLL_INTERVAL, lastObserverFinalStatePoll = lastObserverFinalStatePoll, OBSERVER_FINAL_STATE_POLL_INTERVAL = OBSERVER_FINAL_STATE_POLL_INTERVAL, CONSULT_FRONT_SR_COOLDOWN = CONSULT_FRONT_SR_COOLDOWN, lastConsultFrontSR = lastConsultFrontSR, ACTIVE_ZA_COOLDOWN = ACTIVE_ZA_COOLDOWN, ACTIVE_ZA_CAPTURE_COOLDOWN = ACTIVE_ZA_CAPTURE_COOLDOWN, PASSIVE_ZA_COOLDOWN = PASSIVE_ZA_COOLDOWN, PASSIVE_STATE_BUNDLE_COOLDOWN = PASSIVE_STATE_BUNDLE_COOLDOWN, CONTROLLED_ZA_JITTER_MIN = CONTROLLED_ZA_JITTER_MIN, CONTROLLED_ZA_JITTER_MAX = CONTROLLED_ZA_JITTER_MAX, activeZaLastSentAt = activeZaLastSentAt, passiveZaLastSentAt = passiveZaLastSentAt, controlledZaPending = controlledZaPending, controlledZaToken = controlledZaToken, passiveStateBundleLastSentAt = passiveStateBundleLastSentAt, FC_COOLDOWN_FACTION = FC_COOLDOWN_FACTION, FC_COOLDOWN_RECV = FC_COOLDOWN_RECV, FC_COOLDOWN_EPOCH_MIN = FC_COOLDOWN_EPOCH_MIN, PREREQ_MISMATCH_SR_COOLDOWN = PREREQ_MISMATCH_SR_COOLDOWN, PREREQ_MISMATCH_MAX_ZS_AGE = PREREQ_MISMATCH_MAX_ZS_AGE, PREREQ_MISMATCH_ROUND_AT = PREREQ_MISMATCH_ROUND_AT, PREREQ_MISMATCH_WAVE_FORGET = PREREQ_MISMATCH_WAVE_FORGET, lastPrereqMismatchSR = lastPrereqMismatchSR, leaderboardRaceQueue = leaderboardRaceQueue, leaderboardRacePumpScheduled = leaderboardRacePumpScheduled, LEADERBOARD_RACE_QUEUE_MAX = LEADERBOARD_RACE_QUEUE_MAX, LEADERBOARD_RACE_GAP = LEADERBOARD_RACE_GAP, whisperOfflineFilterInstalled = whisperOfflineFilterInstalled, whisperOfflineFilterAttempts = whisperOfflineFilterAttempts, WHISPER_FAIL_NEEDLES = WHISPER_FAIL_NEEDLES, BoundSecurityEvidenceTable = BoundSecurityEvidenceTable, ReleaseSecurityEvidenceKey = ReleaseSecurityEvidenceKey, PruneSecurityEvidenceTable = PruneSecurityEvidenceTable, senderBroadcastHistory = senderBroadcastHistory, spoofBlacklist = spoofBlacklist, ANTISPOOF_WINDOW = ANTISPOOF_WINDOW, ANTISPOOF_ACTIVE_THRESHOLD = ANTISPOOF_ACTIVE_THRESHOLD, ANTISPOOF_RECENT = ANTISPOOF_RECENT, ANTISPOOF_MIN_ACTIVE_ZONES = ANTISPOOF_MIN_ACTIVE_ZONES, ANTISPOOF_BLACKLIST_DURATION = ANTISPOOF_BLACKLIST_DURATION, spoofDetectedNotified = spoofDetectedNotified, passiveSyncTicker = passiveSyncTicker, PASSIVE_SYNC_INTERVAL = PASSIVE_SYNC_INTERVAL, killSpoofCounts = killSpoofCounts, killSpoofBlacklist = killSpoofBlacklist } end
+Overlord.MemoryParts["SyncAux.lua"] = function() return { TUNING = TUNING, lastStaleObserverPoll = lastStaleObserverPoll, STALE_OBSERVER_POLL_INTERVAL = STALE_OBSERVER_POLL_INTERVAL, STALE_OBSERVER_POLL_INTERVAL_LARGE = STALE_OBSERVER_POLL_INTERVAL_LARGE, STALE_CAPITAL_OBSERVER_POLL_INTERVAL = STALE_CAPITAL_OBSERVER_POLL_INTERVAL, lastObserverFinalStatePoll = lastObserverFinalStatePoll, OBSERVER_FINAL_STATE_POLL_INTERVAL = OBSERVER_FINAL_STATE_POLL_INTERVAL, CONSULT_FRONT_SR_COOLDOWN = CONSULT_FRONT_SR_COOLDOWN, lastConsultFrontSR = lastConsultFrontSR, ACTIVE_ZA_COOLDOWN = ACTIVE_ZA_COOLDOWN, ACTIVE_ZA_CAPTURE_COOLDOWN = ACTIVE_ZA_CAPTURE_COOLDOWN, PASSIVE_ZA_COOLDOWN = PASSIVE_ZA_COOLDOWN, PASSIVE_STATE_BUNDLE_COOLDOWN = PASSIVE_STATE_BUNDLE_COOLDOWN, CONTROLLED_ZA_JITTER_MIN = CONTROLLED_ZA_JITTER_MIN, CONTROLLED_ZA_JITTER_MAX = CONTROLLED_ZA_JITTER_MAX, activeZaLastSentAt = activeZaLastSentAt, passiveZaLastSentAt = passiveZaLastSentAt, controlledZaPending = controlledZaPending, controlledZaToken = controlledZaToken, passiveStateBundleLastSentAt = passiveStateBundleLastSentAt, FC_COOLDOWN_FACTION = FC_COOLDOWN_FACTION, FC_COOLDOWN_RECV = FC_COOLDOWN_RECV, FC_COOLDOWN_EPOCH_MIN = FC_COOLDOWN_EPOCH_MIN, GUILD_CALL = GUILD_CALL, PREREQ_MISMATCH_SR_COOLDOWN = PREREQ_MISMATCH_SR_COOLDOWN, PREREQ_MISMATCH_MAX_ZS_AGE = PREREQ_MISMATCH_MAX_ZS_AGE, PREREQ_MISMATCH_ROUND_AT = PREREQ_MISMATCH_ROUND_AT, PREREQ_MISMATCH_WAVE_FORGET = PREREQ_MISMATCH_WAVE_FORGET, lastPrereqMismatchSR = lastPrereqMismatchSR, leaderboardRaceQueue = leaderboardRaceQueue, leaderboardRacePumpScheduled = leaderboardRacePumpScheduled, LEADERBOARD_RACE_QUEUE_MAX = LEADERBOARD_RACE_QUEUE_MAX, LEADERBOARD_RACE_GAP = LEADERBOARD_RACE_GAP, whisperOfflineFilterInstalled = whisperOfflineFilterInstalled, whisperOfflineFilterAttempts = whisperOfflineFilterAttempts, WHISPER_FAIL_NEEDLES = WHISPER_FAIL_NEEDLES, BoundSecurityEvidenceTable = BoundSecurityEvidenceTable, ReleaseSecurityEvidenceKey = ReleaseSecurityEvidenceKey, PruneSecurityEvidenceTable = PruneSecurityEvidenceTable, senderBroadcastHistory = senderBroadcastHistory, spoofBlacklist = spoofBlacklist, ANTISPOOF_WINDOW = ANTISPOOF_WINDOW, ANTISPOOF_ACTIVE_THRESHOLD = ANTISPOOF_ACTIVE_THRESHOLD, ANTISPOOF_RECENT = ANTISPOOF_RECENT, ANTISPOOF_MIN_ACTIVE_ZONES = ANTISPOOF_MIN_ACTIVE_ZONES, ANTISPOOF_BLACKLIST_DURATION = ANTISPOOF_BLACKLIST_DURATION, spoofDetectedNotified = spoofDetectedNotified, passiveSyncTicker = passiveSyncTicker, PASSIVE_SYNC_INTERVAL = PASSIVE_SYNC_INTERVAL, killSpoofCounts = killSpoofCounts, killSpoofBlacklist = killSpoofBlacklist } end
 Overlord.MemoryParts["SyncAux.lua#2"] = function() return { KILLSPOOF_WINDOW = KILLSPOOF_WINDOW, KILLSPOOF_THRESHOLD = KILLSPOOF_THRESHOLD, KILLSPOOF_BLACKLIST_DURATION = KILLSPOOF_BLACKLIST_DURATION, PLAUSIBLE_KILL_CEILING = PLAUSIBLE_KILL_CEILING, BLOCKED_KILL_CONTRIBUTOR_BASES = BLOCKED_KILL_CONTRIBUTOR_BASES, CAMPAIGN_KILL_ROW_REMOVALS = CAMPAIGN_KILL_ROW_REMOVALS, MAX_KILL_PAYLOAD_BYTES = MAX_KILL_PAYLOAD_BYTES, MAX_LR_PAYLOAD_BYTES = MAX_LR_PAYLOAD_BYTES, VALID_RACE_FILE = VALID_RACE_FILE, RACE_FILE_ALIASES = RACE_FILE_ALIASES, MAX_KILL_PAYLOAD_GUILD_LEN = MAX_KILL_PAYLOAD_GUILD_LEN, securityEvidenceTableMeta = securityEvidenceTableMeta, PLAUSIBLE_CAPTURE_CEILING = PLAUSIBLE_CAPTURE_CEILING, lastLbCaptureBatchTsByZoneId = lastLbCaptureBatchTsByZoneId, captureCreditProgressEvidence = captureCreditProgressEvidence, lastDirectCaptureCreditAt = lastDirectCaptureCreditAt, observedUnitsSnapshot = observedUnitsSnapshot, observedUnitsSnapshotAt = observedUnitsSnapshotAt, OBSERVED_UNITS_SNAPSHOT_INTERVAL = OBSERVED_UNITS_SNAPSHOT_INTERVAL, CAPTURE_CREDIT_MIN_OBSERVED_SEC = CAPTURE_CREDIT_MIN_OBSERVED_SEC, CAPTURE_CREDIT_MIN_HOLD_SEC = CAPTURE_CREDIT_MIN_HOLD_SEC, CAPTURE_CREDIT_SENDER_GAP_SEC = CAPTURE_CREDIT_SENDER_GAP_SEC, VALID_CAPTURE_CLASS = VALID_CAPTURE_CLASS, SCORE_BURST_TYPES = SCORE_BURST_TYPES, SCORE_BURST_MAX = SCORE_BURST_MAX, senderBurstWindow = senderBurstWindow, senderBurstQuarantine = senderBurstQuarantine, BURST_WINDOW = BURST_WINDOW, BURST_QUARANTINE_DURATION = BURST_QUARANTINE_DURATION } end

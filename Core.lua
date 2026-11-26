@@ -1,6 +1,6 @@
 -- Core.lua - Point d'entrée principal de l'addon Overlord
 Overlord = Overlord or {}
-Overlord.Version = "2.7.0"
+Overlord.Version = "2.8.0"
 -- Transport : canal de faction, groupe et ponts Battle.net (relais SyncRelay.lua).
 Overlord.RelayEnabled = true
 Overlord.IsInitialized = false
@@ -2041,8 +2041,33 @@ local function CompleteResumeFromInstance(reason)
         Overlord._loginFrontCheckDeferred = true
         return false
     end
+    -- 2026-11-26: the rules are read on every way out of an instance, not only at its
+    -- PLAYER_ENTERING_WORLD (a resume by ZONE_CHANGED_NEW_AREA, a retry or the forced one read
+    -- nothing, and a session that loaded inside stayed past the five minutes of checks). A
+    -- reading that differs keeps the session stopped until its confirmation (CONFIRM_SEC): the
+    -- wrong campaign never speaks first. Not a Normal reading ("no rule on", NORMAL_CONFIRM_SEC):
+    -- a right PvP player whose rules flicker off at the exit would wait 30 s for it, as before.
+    if Overlord:CheckSessionRuleset() then return false end
+    local pending = Overlord.RealmPools and Overlord.RealmPools._rulesetPending
+    local need = pending and tonumber(pending.need) or 0
+    if Overlord._rulesetConfirmArmed and pending
+        and need <= (tonumber(Overlord.RealmPools.CONFIRM_SEC) or 3) then
+        Overlord._resumeAwaitsRuleset = true
+        -- (A confirmation armed earlier for a Normal reading would come 30 s late for this one.)
+        local at = (GetTime and GetTime() or 0) + need + 0.5
+        if (Overlord._rulesetConfirmAt or 0) > at + 0.05 and C_Timer and C_Timer.After then
+            Overlord._rulesetConfirmAt = at
+            C_Timer.After(need + 0.5, function() Overlord:RulesetConfirmTick() end)
+        end
+        return false
+    end
     Overlord.InstanceSuspended = false
+    Overlord._resumeAwaitsRuleset = nil
     CancelResumeFromInstanceRetryTimers()
+    if Overlord._rulesetChecksDeferred then
+        Overlord._rulesetChecksDeferred = nil
+        Overlord:ScheduleSessionRulesetChecks()
+    end
     Overlord:RequireCaptureSync("instance")
     if Overlord.Combat then Overlord.Combat:Resume() end
     if Overlord.Sync then Overlord.Sync:Resume() end
@@ -2060,6 +2085,12 @@ local function CompleteResumeFromInstance(reason)
     end
     if Overlord.ActionShortcut and Overlord.ActionShortcut.OnInstanceResume then
         pcall(Overlord.ActionShortcut.OnInstanceResume, Overlord.ActionShortcut)
+    end
+    if Overlord.CornerWidget and Overlord.CornerWidget.OnInstanceResume then
+        pcall(Overlord.CornerWidget.OnInstanceResume, Overlord.CornerWidget)
+    end
+    if Overlord.Arena and Overlord.Arena.OnInstanceResume then
+        pcall(Overlord.Arena.OnInstanceResume, Overlord.Arena)
     end
     if Overlord.Shard and Overlord.Shard.SetPulseEvents then pcall(Overlord.Shard.SetPulseEvents, Overlord.Shard, true) end
     if Overlord.GeneralNameplate and Overlord.GeneralNameplate.SetNameplateEvents then
@@ -2221,6 +2252,14 @@ function Overlord:SuspendForInstance()
         if self.RankProof and self.RankProof.RemoveChatBadges then
             pcall(self.RankProof.RemoveChatBadges, self.RankProof)
         end
+        -- UI only, as the circles: the corner widget leaves at once too.
+        if self.CornerWidget and self.CornerWidget.OnInstanceSuspend then
+            pcall(self.CornerWidget.OnInstanceSuspend, self.CornerWidget)
+        end
+        -- The arena's clock stops at once (it sends nothing when it stops).
+        if self.Arena and self.Arena.OnInstanceSuspend then
+            pcall(self.Arena.OnInstanceSuspend, self.Arena)
+        end
         return false
     end
     -- Invalide le callback Flush differe d'une sortie precedente avant toute
@@ -2259,6 +2298,14 @@ function Overlord:SuspendForInstance()
     -- Top ranks seen by others: no inspect, whisper or badge in an instance.
     if self.RankProof and self.RankProof.OnInstanceSuspend then
         pcall(self.RankProof.OnInstanceSuspend, self.RankProof)
+    end
+    -- Corner widget: hidden, its tooltip closed.
+    if self.CornerWidget and self.CornerWidget.OnInstanceSuspend then
+        pcall(self.CornerWidget.OnInstanceSuspend, self.CornerWidget)
+    end
+    -- Gurubashi Arena: its clock and its catch-up stop.
+    if self.Arena and self.Arena.OnInstanceSuspend then
+        pcall(self.Arena.OnInstanceSuspend, self.Arena)
     end
     -- 2.6.0: the shard pulse and the General's nameplate badges leave the event stream.
     if self.Shard and self.Shard.SetPulseEvents then pcall(self.Shard.SetPulseEvents, self.Shard, false) end
@@ -2382,22 +2429,73 @@ function Overlord:CheckSessionRuleset()
             and (self._rulesetConfirmCount or 0) < 5 then
             self._rulesetConfirmArmed = true
             self._rulesetConfirmCount = (self._rulesetConfirmCount or 0) + 1
-            C_Timer.After((tonumber(pools._rulesetPending.need) or 3) + 0.5, function()
-                Overlord._rulesetConfirmArmed = nil
-                Overlord:CheckSessionRuleset()
-            end)
+            local delay = (tonumber(pools._rulesetPending.need) or 3) + 0.5
+            self._rulesetConfirmAt = (GetTime and GetTime() or 0) + delay
+            C_Timer.After(delay, function() Overlord:RulesetConfirmTick() end)
         end
         return false
     end
     self.RulesetMismatch = wrong
     self:SuspendForInstance()
+    -- (2026-11-26: the names this session's bucket learnt in the wrong campaign leave it.)
+    if self.Leaderboard and self.Leaderboard.PurgeCampaignJournal then
+        local ok, count = pcall(self.Leaderboard.PurgeCampaignJournal, self.Leaderboard)
+        self:NoteCampaignPurge(ok and count or 0, ok and "pause" or "pause-error")
+    end
     print("|cFF00FF00[Overlord]|r " .. ((L and L.RULESET_MISMATCH_RELOAD)
         or "Overlord is paused for this session: your realm's rules were not known yet when it loaded. Type /reload to play in the right campaign."))
     return true
 end
 
+-- The confirmation of a differing reading; a resume held for it goes on once it is cleared.
+function Overlord:RulesetConfirmTick()
+    self._rulesetConfirmArmed, self._rulesetConfirmAt = nil, nil
+    self:CheckSessionRuleset()
+    if self._resumeAwaitsRuleset and not self._rulesetConfirmArmed then
+        self._resumeAwaitsRuleset = nil
+        if not self.RulesetMismatch and self.InstanceSuspended then
+            self:ResumeFromInstance()
+        end
+    end
+end
+
+-- The bucket's journal (Leaderboard:BeginCampaignJournal) stays open the whole session: a
+-- mismatch found late (rules answered after the checks, a loading screen at 10 min) and the
+-- logout reading (PurgeCampaignJournalAtLogout) both still purge it. It closes on a pause.
+-- 2026-11-26: at logout or /reload, before anything is saved. A rule read on that our campaign
+-- does not have (RealmPools:LogoutRulesetDiffers) means the whole session ran in the wrong one:
+-- the names its bucket learnt leave it, so the account's characters of this campaign never
+-- serve them. Nothing else changes; inside an instance nothing is read (a battleground's rules
+-- are not the realm's).
+function Overlord:PurgeCampaignJournalAtLogout()
+    if self.RulesetMismatch then return false end
+    -- (Nor just out of one, before the resume: the rules may still be the instance's.)
+    if self.InstanceSuspended or (IsInInstance and IsInInstance()) then return false end
+    local pools, lb = self.RealmPools, self.Leaderboard
+    if not (pools and pools.LogoutRulesetDiffers and lb and lb.PurgeCampaignJournal) then return false end
+    if not pools:LogoutRulesetDiffers() then return false end
+    self:NoteCampaignPurge(lb:PurgeCampaignJournal(), "logout")
+    return true
+end
+
+-- The last purge (names that left this campaign's ranking, when, why): /ov network shows it
+-- (RealmPools:DescribeDetection), kept across sessions. Nothing removed unseen.
+function Overlord:NoteCampaignPurge(count, why)
+    if type(OverlordDB) ~= "table" then return end
+    -- (Nothing purged: an earlier real purge stays shown; a failed one is always noted.)
+    if (tonumber(count) or 0) <= 0 and why ~= "pause-error" and type(OverlordDB.campaignPurge) == "table" then return end
+    OverlordDB.campaignPurge = { n = math.max(0, math.floor(tonumber(count) or 0)), why = why,
+        at = math.floor((GetServerTime and GetServerTime()) or (time and time()) or 0) }
+end
+
 function Overlord:ScheduleSessionRulesetChecks()
     if not C_Timer or not C_Timer.After then return end
+    -- (Logged in inside an instance: nothing is read there, so the list starts at the first
+    -- resume outside, CompleteResumeFromInstance; the journal stays open until it ends.)
+    if IsInInstance and IsInInstance() then
+        self._rulesetChecksDeferred = true
+        return
+    end
     for _, delay in ipairs(RULESET_CHECK_DELAYS) do
         C_Timer.After(delay, function() Overlord:CheckSessionRuleset() end)
     end
@@ -3504,6 +3602,19 @@ function Overlord:Initialize()
                 or not Overlord.Leaderboard.EnsureOutpostLedgerPrepared then return true end
             return Overlord.Leaderboard:EnsureOutpostLedgerPrepared(true)
         end, true)
+
+        -- 2026-11-26: restores done, nothing heard yet (Sync opens below). A campaign read at load
+        -- that the re-check may still overturn keeps a journal of the names its bucket learns,
+        -- purged if the session pauses (CheckSessionRuleset). A right reading keeps none.
+        AddLoginInitStage("RulesetJournal", function()
+            local pools, lb = Overlord.RealmPools, Overlord.Leaderboard
+            if Overlord.RulesetMismatch or not lb or not lb.BeginCampaignJournal
+                or not pools or not pools.IsLoadReadingDoubtful or not pools:IsLoadReadingDoubtful() then
+                return true
+            end
+            lb:BeginCampaignJournal()
+            return true
+        end)
 
         for _, mod in ipairs({ "Ressources", "Combat" }) do
             local moduleName = mod
@@ -5673,6 +5784,9 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
                 OverlordDB.lastLogoutError = tostring(method) .. ": " .. tostring(err)
             end
         end
+        -- 2026-11-26: first, before any save: a session that ran in the wrong campaign gives
+        -- back the names it learnt (a right one keeps everything).
+        persist(Overlord, "PurgeCampaignJournalAtLogout")
         -- 2.2.2 : lignes playerInfo compactes (metatable) reecrites en lignes nommees,
         -- seule forme que l'ecriture des SavedVariables voit en entier. En premier : rien
         -- de ce qui suit ne peut l'empecher, et toute ligne ecrite ensuite reste nommee.

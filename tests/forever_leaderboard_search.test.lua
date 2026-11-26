@@ -153,6 +153,7 @@ function methods:SetVerticalScroll(n)
     if self.scripts.OnVerticalScroll then self.scripts.OnVerticalScroll() end
 end
 function methods:IsShown() return self.shown and (not self.parent or self.parent:IsShown()) end
+function methods:IsVisible() return self:IsShown() end
 function methods:Show() self.shown = true end
 function methods:Hide() self.shown = false; if self.scripts.OnHide then self.scripts.OnHide(self) end end
 function methods:SetShown(v) if v then self:Show() else self:Hide() end end
@@ -412,6 +413,75 @@ assert(frame.width == 1550, "The ranking window changed width: " .. tostring(fra
 assert(frame.guildRatingBlock == nil and frame.guildBlock.width == 372
     and frame.guildKeepBlock.width == 336 and frame.outpostBlock.width == 336,
     "Column widths: the four tables no longer add up to the window")
+-- Keeps and outposts: one row per site (who holds it, its captures this week), every site
+-- listed; the Gurubashi Arena board always shown under them, across both columns.
+do
+    local ui = Overlord.LeaderboardUI
+    local SW = Overlord.MemoryParts["LeaderboardUI.lua#2"]().SitesWeek
+    assert(frame.guildKeepBlock.height == ui.SitesBlockHeight() and frame.outpostBlock.height == ui.SitesBlockHeight()
+        and ui.SitesBlockHeight() == 24 + 4 + 8 * 24 + 8, 'The keep and outpost tables are not 8 rows tall')
+    local arena = frame.arenaView
+    assert(arena and arena:IsShown() and arena.points.TOPLEFT[2] == frame.guildKeepBlock
+        and arena.points.TOPLEFT[3] == 'BOTTOMLEFT' and arena.points.RIGHT[2] == frame.outpostBlock
+        and arena.points.BOTTOM[2] == frame.capturesPanel, 'The arena board is not under the keeps and outposts')
+    -- The capturers and rivalries view takes the whole column, the arena with it.
+    ui:ToggleSitesWeek()
+    assert(frame.sitesWeek:IsShown() and not arena:IsShown() and not frame.guildKeepBlock:IsShown()
+        and frame.sitesWeek.points.BOTTOM[2] == frame.capturesPanel, 'The weekly view does not cover the arena')
+    ui:ToggleSitesWeek()
+    assert(not frame.sitesWeek:IsShown() and arena:IsShown() and frame.outpostBlock:IsShown(),
+        'The arena board did not come back with the keeps and outposts')
+    local saved = { Overlord.OutpostSites, Overlord.Outpost, Overlord.GuildKeep, Overlord.Sync, frame._lbSource }
+    local names = { GetSite = function(_, k) return { key = k } end,
+        GetShortDisplayName = function(_, s) return 'Name ' .. s.key end }
+    Overlord.OutpostSites = { keepA = { isFortress = true }, keepB = { isFortress = true }, opA = {}, opB = {}, opC = {} }
+    Overlord.Outpost, Overlord.GuildKeep, Overlord.Sync = names, names, nil
+    local rows = {
+        { outpostSiteKey = 'opB', guild = 'Black Hand', faction = 'Horde', captures = 3 },
+        { outpostSiteKey = 'opB', guild = 'Dawn Watch', faction = 'Alliance', captures = 1, currentlyHeld = true,
+            capturer = 'Ana', outpostAtlas = 'hall' },
+        { outpostSiteKey = 'opA', guild = 'Gronk', faction = 'Horde', captures = 0, currentlyHeld = true },
+        { outpostSiteKey = 'keepA', guild = 'Keep Row', faction = 'Horde', captures = 9 },
+    }
+    local list = SW.BySite(rows, false)
+    assert(#list == 3, 'Not one row per outpost: ' .. #list)
+    assert(list[1].outpostSiteKey == 'opB' and list[1].guild == 'Dawn Watch' and list[1].faction == 'Alliance'
+        and list[1].captures == 4 and list[1].atlas == 'hall' and list[1].capturer == 'Ana'
+        and #list[1].guilds == 2 and list[1].guilds[1].guild == 'Black Hand' and list[1].guilds[1].captures == 3,
+        'A site row does not name its holder or add up its week')
+    assert(list[2].outpostSiteKey == 'opA' and list[2].guild == 'Gronk' and list[2].captures == 0
+        and #list[2].guilds == 0, 'A site held without a capture this week is lost')
+    assert(list[3].outpostSiteKey == 'opC' and not list[3].currentlyHeld and list[3].guild == ''
+        and list[3].siteName == 'Name opC', 'A free site is not listed')
+    local keeps = SW.BySite(rows, true)
+    assert(#keeps == 2 and keeps[1].keepSiteKey == 'keepA' and keeps[1].captures == 9 and not keeps[1].currentlyHeld
+        and keeps[2].keepSiteKey == 'keepB', 'Keeps and outposts mixed')
+    local source = { sortedOutposts = rows }
+    frame._lbSource = source
+    local volatile = Overlord.MemoryParts["LeaderboardUI.lua#2"]().lbVolatileLists
+    local builtOutposts = source.sortedOutposts
+    source.sortedOutposts = volatile.none
+    SW.memo[false][volatile.none] = nil   -- (an earlier paint may have memoized it)
+    assert(#SW.ListFor(source, 'sortedOutposts', false) == 0, 'Lists not built yet showed every site as unclaimed')
+    source.sortedOutposts = builtOutposts
+    local full = SW.ListFor(source, 'sortedOutposts', false)
+    assert(SW.ListFor(source, 'sortedOutposts', false) == full, 'The site rows are rebuilt for the same list')
+    local searched = SW.ListFor({ sortedOutposts = { rows[1] } }, 'sortedOutposts', false)
+    assert(#searched == 1 and searched[1] == full[1], 'A search does not keep the whole line of the sites it names')
+    ui.OnSiteRowEnter({ _olSiteEntry = full[1] })
+    assert(table.concat(tip.lines, ' | ') == 'Name opB | Held by <Dawn Watch> | Taken by Ana | Captures this week'
+        .. ' | Black Hand = 3 | Dawn Watch = 1', 'Site tooltip: ' .. table.concat(tip.lines, ' | '))
+    ui.OnSiteRowEnter({ _olSiteEntry = full[3] })
+    assert(table.concat(tip.lines, ' | ') == 'Name opC | Unclaimed', 'Free site tooltip: ' .. table.concat(tip.lines, ' | '))
+    Overlord.OutpostSites, Overlord.Outpost, Overlord.GuildKeep, Overlord.Sync, frame._lbSource =
+        saved[1], saved[2], saved[3], saved[4], saved[5]
+    -- The scroll of both tables follows the rows painted (every site), not the raw rows: early in
+    -- the week, with fewer captures than visible rows, the outposts past the 8th stayed out of reach.
+    local src = io.open('LeaderboardUI.lua', 'rb'):read('*a')
+    assert(src:find('lbFrame.scrollGuildKeep, lbFrame.scrollChildGuildKeep,%s+#SitesWeek%.ListFor%(view, "sortedGuildKeeps", true%)')
+        and src:find('lbFrame.scrollOutpost, lbFrame.scrollChildOutpost,%s+#SitesWeek%.ListFor%(view, "sortedOutposts", false%)'),
+        'The keep/outpost scroll does not count the site rows painted')
+end
 local function guildRowsShown()
     local count, byRank = 0, {}
     for _, w in ipairs(frames) do

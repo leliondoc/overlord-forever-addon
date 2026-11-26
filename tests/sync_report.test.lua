@@ -401,3 +401,13 @@ do
     CreateFrame = stub
 end
 print("Sync report: colored summary, worst-level header, red non-zero counters, stalled catch-up flagged OK")
+
+-- Gurubashi Arena: what its ledger kept, waits, refused and pushed out is on a row of its own.
+local savedArena = Overlord.Arena
+Overlord.Arena = { GetStats = function() return 12, 3, { stale = 2, full = 1 }, 4 end }
+out = run()
+local arenaRow = assert(find(out, "Gurubashi Arena"), "No arena summary row")
+assert(arenaRow:find("12 captures kept (3 waiting to be judged), 4 older captures pushed out of the full ledger; refused: full 1, stale 2", 1, true),
+    "Arena row wrong: " .. arenaRow)
+Overlord.Arena = savedArena
+print("Sync report: the arena row counts what its ledger refused and pushed out OK")

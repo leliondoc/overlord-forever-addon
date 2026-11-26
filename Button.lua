@@ -50,6 +50,22 @@ local function GetCooldownRemaining()
     return 0
 end
 
+-- The guild horn, next to the faction's in the same prompt.
+local function GetGuildCooldownRemaining()
+    if Overlord.Sync and Overlord.Sync.GetGuildCallCooldownRemaining then
+        return Overlord.Sync:GetGuildCallCooldownRemaining()
+    end
+    return 0
+end
+
+local function PlayerHasGuild()
+    return IsInGuild and IsInGuild() and true or false
+end
+
+local function GuildHornReady()
+    return PlayerHasGuild() and GetGuildCooldownRemaining() <= 0
+end
+
 local function FormatCooldown(sec)
     sec = math.max(0, math.ceil(sec))
     local h = math.floor(sec / 3600)
@@ -165,7 +181,10 @@ end
 local function UpdateCooldownVisual()
     if not btnFrame or not cdFrame then return end
     local rem = GetCooldownRemaining()
-    if rem > 0 then
+    -- The button opens both horns: it shows the faction's countdown, or greys, only when the
+    -- guild horn cannot sound either.
+    local guildReady = GuildHornReady()
+    if rem > 0 and not guildReady then
         local now = GetTime()
         -- Re-ancre le swipe seulement si le reste serveur a derive (>1.5 s)
         if not cdSwipeExpireAt or math.abs((cdSwipeExpireAt - now) - rem) > 1.5 then
@@ -180,7 +199,7 @@ local function UpdateCooldownVisual()
         cdSwipeExpireAt = nil
         cdFrame:Clear()
         if btnFrame.label and L.FACTION_CALL_BUTTON then btnFrame.label:SetText(L.FACTION_CALL_BUTTON) end
-        if not Overlord.InActiveFront then
+        if not guildReady and (rem > 0 or not Overlord.InActiveFront) then
             btnFrame.icon:SetDesaturated(true)
             btnFrame.icon:SetAlpha(0.35)
         else
@@ -276,9 +295,15 @@ end
 
 -- The countdown only ticks while the panel shows it: opening the panel runs
 -- Button:Show -> Refresh, which repaints the true remaining time and restarts it.
+-- A ready guild horn is what the button shows: the faction countdown under it changes nothing
+-- on screen, so no 1 s repaint for its 4 h (the tick that sees the guild delay end still repaints).
+local function AnyCooldownRunning()
+    return not GuildHornReady() and (GetCooldownRemaining() > 0 or GetGuildCooldownRemaining() > 0)
+end
+
 local function StartCooldownTicker()
     StopCooldownTicker()
-    if GetCooldownRemaining() <= 0 then return end
+    if not AnyCooldownRunning() then return end
     if not CooldownTickerWanted() then return end
     cdTicker = C_Timer.NewTicker(1, function()
         if not CooldownTickerWanted() then
@@ -286,7 +311,7 @@ local function StartCooldownTicker()
             return
         end
         UpdateCooldownVisual()
-        if GetCooldownRemaining() <= 0 then
+        if not AnyCooldownRunning() then
             StopCooldownTicker()
         end
     end)
@@ -324,7 +349,7 @@ local function WireFactionCallGridButton(btn)
         GameTooltip:ClearAllPoints()
         GameTooltip:SetPoint("BOTTOMLEFT", self, "TOPLEFT", 0, 8)
         local t = Overlord.UI.TooltipPalette()
-        GameTooltip:AddLine(L.FACTION_CALL_TOOLTIP_TITLE, t.HL[1], t.HL[2], t.HL[3])
+        GameTooltip:AddLine(L.FACTION_CALL_BUTTON, t.HL[1], t.HL[2], t.HL[3])
         GameTooltip:AddLine(L.FACTION_CALL_TOOLTIP, t.BODY[1], t.BODY[2], t.BODY[3], true)
         local rem = GetCooldownRemaining()
         if rem > 0 then
@@ -333,6 +358,16 @@ local function WireFactionCallGridButton(btn)
             GameTooltip:AddLine(L.FACTION_CALL_TOOLTIP_NOT_IN_FRONT, t.MUTED[1], t.MUTED[2], t.MUTED[3], true)
         else
             GameTooltip:AddLine(L.FACTION_CALL_TOOLTIP_SHARED, t.MUTED[1], t.MUTED[2], t.MUTED[3], true)
+        end
+        if PlayerHasGuild() then
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine(L.GUILD_CALL_TOOLTIP, t.BODY[1], t.BODY[2], t.BODY[3], true)
+            local guildRem = GetGuildCooldownRemaining()
+            if guildRem > 0 then
+                GameTooltip:AddLine(string.format(L.FACTION_CALL_TOOLTIP_CD, FormatCooldown(guildRem)), t.MUTED[1], t.MUTED[2], t.MUTED[3])
+            else
+                GameTooltip:AddLine(L.GUILD_CALL_TOOLTIP_SHARED, t.MUTED[1], t.MUTED[2], t.MUTED[3], true)
+            end
         end
         GameTooltip:Show()
     end)
@@ -422,7 +457,7 @@ function Overlord.Button:Refresh()
     ApplyTheme()
     UpdateCooldownVisual()
     self:RefreshGeneralButton()
-    if GetCooldownRemaining() > 0 then
+    if AnyCooldownRunning() then
         StartCooldownTicker()
     else
         StopCooldownTicker()
@@ -449,57 +484,78 @@ end
 -- du joueur (decoration d'origine, 256 x 128) au centre de l'ecran, avec un cor dans sa
 -- fente : ni fond ni texte. C'est le clic sur le cor qui sonne l'appel ; un clic ailleurs,
 -- Echap ou dix secondes referment l'invite.
+-- Deux casernes cote a cote pour un joueur en guilde, le cor de la faction a gauche,
+-- celui de la guilde (tabard) a droite. Un cor qui ne peut pas sonner reste visible, grise,
+-- avec son temps restant ou, au survol, la raison.
 local CALL_PROMPT_ICON = "Interface\\Icons\\INV_Misc_Horn_01"
+local GUILD_CALL_ICON = "Interface\\Icons\\INV_Shirt_GuildTabard_01"
 local CALL_PROMPT_DECO = {
     Alliance = "garrzoneability-barracksalliance",
     Horde = "garrzoneability-barrackshorde",
 }
 local CALL_PROMPT_ARM_DELAY = 0.35 -- un double-clic sur la grille ne confirme pas
 local CALL_PROMPT_TIMEOUT = 10
+local CALL_PROMPT_GAP = 12
 local callPrompt = nil
+
+-- Ce qui distingue les deux cors ; les textes sont des cles de L, lues au survol.
+local CALL_HORNS = {
+    faction = {
+        icon = CALL_PROMPT_ICON, remaining = GetCooldownRemaining,
+        ready = function() return Overlord.InActiveFront == true end,
+        title = "FACTION_CALL_TOOLTIP_TITLE", shared = "FACTION_CALL_TOOLTIP_SHARED",
+        blockedTip = "FACTION_CALL_TOOLTIP_NOT_IN_FRONT", blockedMsg = "FACTION_CALL_NOT_IN_FRONT",
+    },
+    guild = {
+        icon = GUILD_CALL_ICON, remaining = GetGuildCooldownRemaining,
+        ready = PlayerHasGuild,
+        title = "GUILD_CALL_TOOLTIP_TITLE", shared = "GUILD_CALL_TOOLTIP_SHARED",
+        blockedTip = "GUILD_CALL_NO_GUILD", blockedMsg = "GUILD_CALL_NO_GUILD",
+    },
+}
 
 local function HideCallPrompt()
     if callPrompt then callPrompt:Hide() end
 end
 
-local function CreateCallPrompt()
-    -- Plein ecran, invisible : un clic hors du cor referme. Enfant du bouton de la grille,
-    -- l'invite disparait avec le panneau (instance comprise).
-    local f = CreateFrame("Button", nil, btnFrame)
-    f:SetFrameStrata("DIALOG")
-    f:SetAllPoints(UIParent)
-    f:RegisterForClicks("AnyUp")
-    f:SetScript("OnClick", HideCallPrompt)
-    f:Hide()
-
+local function CreateCallHorn(f, kind)
+    local spec = CALL_HORNS[kind]
     local box = CreateFrame("Frame", nil, f)
     box:SetSize(256, 128)
-    box:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
 
     -- La fente des deux decorations fait 42 a 44 px, centree 1 px sous le milieu.
     local horn = CreateFrame("Button", nil, box)
     horn:SetSize(46, 46)
     horn:SetPoint("CENTER", 0, -1)
     horn:RegisterForClicks("LeftButtonUp")
+    horn._olCallHorn = true
     local icon = horn:CreateTexture(nil, "ARTWORK")
     icon:SetAllPoints()
-    icon:SetTexture(CALL_PROMPT_ICON)
+    icon:SetTexture(spec.icon)
     icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     local glow = horn:CreateTexture(nil, "HIGHLIGHT")
     glow:SetAllPoints()
     glow:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
     glow:SetBlendMode("ADD")
     horn:SetScript("OnMouseDown", function()
-        if not f._onCooldown then icon:SetVertexColor(0.7, 0.7, 0.7) end
+        if box._ready then icon:SetVertexColor(0.7, 0.7, 0.7) end
     end)
     horn:SetScript("OnMouseUp", function()
-        if not f._onCooldown then icon:SetVertexColor(1, 1, 1) end
+        if box._ready then icon:SetVertexColor(1, 1, 1) end
     end)
     horn:SetScript("OnClick", function()
-        if f._onCooldown then return end
         if GetTime() - (f._shownAt or 0) < CALL_PROMPT_ARM_DELAY then return end
+        if spec.remaining() > 0 then return end
+        if not spec.ready() then
+            Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. (L[spec.blockedMsg] or ""))
+            return
+        end
         HideCallPrompt()
-        Overlord.Button:OnClick(true)
+        if kind == "guild" then
+            Overlord.Button:OnGuildCallClick()
+        else
+            Overlord.Button:OnClick(true)
+        end
     end)
     horn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_NONE")
@@ -507,12 +563,14 @@ local function CreateCallPrompt()
         GameTooltip:SetPoint("BOTTOM", box, "TOP", 0, 2)
         local t = Overlord.UI.TooltipPalette()
         -- Titre et delai seulement : ce que fait l'appel est dit sur le bouton de la grille.
-        GameTooltip:AddLine(L.FACTION_CALL_TOOLTIP_TITLE, t.HL[1], t.HL[2], t.HL[3])
-        local rem = GetCooldownRemaining()
+        GameTooltip:AddLine(L[spec.title] or "", t.HL[1], t.HL[2], t.HL[3])
+        local rem = spec.remaining()
         if rem > 0 then
             GameTooltip:AddLine(string.format(L.FACTION_CALL_TOOLTIP_CD, FormatCooldown(rem)), t.MUTED[1], t.MUTED[2], t.MUTED[3])
+        elseif not spec.ready() then
+            GameTooltip:AddLine(L[spec.blockedTip] or "", t.MUTED[1], t.MUTED[2], t.MUTED[3], true)
         else
-            GameTooltip:AddLine(L.FACTION_CALL_TOOLTIP_SHARED, t.MUTED[1], t.MUTED[2], t.MUTED[3], true)
+            GameTooltip:AddLine(L[spec.shared] or "", t.MUTED[1], t.MUTED[2], t.MUTED[3], true)
         end
         GameTooltip:Show()
     end)
@@ -522,44 +580,55 @@ local function CreateCallPrompt()
     local decoFrame = CreateFrame("Frame", nil, box)
     decoFrame:SetAllPoints()
     decoFrame:SetFrameLevel(horn:GetFrameLevel() + 1)
-    f.deco = decoFrame:CreateTexture(nil, "ARTWORK")
-    f.deco:SetPoint("CENTER")
+    box.deco = decoFrame:CreateTexture(nil, "ARTWORK")
+    box.deco:SetPoint("CENTER")
 
     local countdown = decoFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     countdown:SetPoint("CENTER", horn, "CENTER", 0, 0)
     countdown:SetShadowOffset(1, -1)
 
     -- Etat du cor : pret, ou grise (mais visible) avec le temps restant ecrit dessus.
+    function box.Refresh()
+        local rem = spec.remaining()
+        countdown:SetText(rem > 0 and FormatCooldown(rem) or "")
+        local ready = rem <= 0 and spec.ready() and true or false
+        if box._ready ~= ready then
+            box._ready = ready
+            icon:SetDesaturated(not ready)
+            if ready then icon:SetVertexColor(1, 1, 1) else icon:SetVertexColor(0.6, 0.6, 0.6) end
+            glow:SetAlpha(ready and 1 or 0)
+        end
+    end
+    return box
+end
+
+local function CreateCallPrompt()
+    -- Plein ecran, invisible : un clic hors des cors referme. Enfant du bouton de la grille,
+    -- l'invite disparait avec le panneau (instance comprise).
+    local f = CreateFrame("Button", nil, btnFrame)
+    f:SetFrameStrata("DIALOG")
+    f:SetAllPoints(UIParent)
+    f:RegisterForClicks("AnyUp")
+    f:SetScript("OnClick", HideCallPrompt)
+    f:Hide()
+
+    f.horns = { faction = CreateCallHorn(f, "faction"), guild = CreateCallHorn(f, "guild") }
     local function refresh()
-        local rem = GetCooldownRemaining()
-        if rem > 0 then
-            countdown:SetText(FormatCooldown(rem))
-            if not f._onCooldown then
-                f._onCooldown = true
-                icon:SetDesaturated(true)
-                icon:SetVertexColor(0.6, 0.6, 0.6)
-                glow:SetAlpha(0)
-            end
-        elseif f._onCooldown ~= false then
-            f._onCooldown = false
-            countdown:SetText("")
-            icon:SetDesaturated(false)
-            icon:SetVertexColor(1, 1, 1)
-            glow:SetAlpha(1)
+        for _, box in pairs(f.horns) do
+            if box:IsShown() then box.Refresh() end
         end
     end
     local ticker = nil
     f:SetScript("OnShow", function(self)
         self._shownAt = GetTime()
         refresh()
-        if self._onCooldown and not ticker then
-            ticker = C_Timer.NewTicker(1, refresh)
-        end
+        if not ticker then ticker = C_Timer.NewTicker(1, refresh) end
     end)
     -- Panneau ferme pendant l'invite : elle ne doit pas revenir avec lui.
     f:SetScript("OnHide", function(self)
         if ticker then ticker:Cancel(); ticker = nil end
-        if GameTooltip:GetOwner() == horn then GameTooltip:Hide() end
+        local owner = GameTooltip:GetOwner()
+        if owner and owner._olCallHorn then GameTooltip:Hide() end
         self:Hide()
     end)
     if Overlord.UI and Overlord.UI.BindEscapeClose then
@@ -574,7 +643,19 @@ local function ShowCallPrompt()
     if not deco then return false end
     callPrompt = callPrompt or CreateCallPrompt()
     local f = callPrompt
-    f.deco:SetAtlas(deco, true)
+    local faction, guild = f.horns.faction, f.horns.guild
+    faction:ClearAllPoints()
+    guild:ClearAllPoints()
+    if PlayerHasGuild() then
+        faction:SetPoint("RIGHT", UIParent, "CENTER", -CALL_PROMPT_GAP / 2, 0)
+        guild:SetPoint("LEFT", UIParent, "CENTER", CALL_PROMPT_GAP / 2, 0)
+        guild:Show()
+    else
+        faction:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+        guild:Hide()
+    end
+    faction.deco:SetAtlas(deco, true)
+    guild.deco:SetAtlas(deco, true)
     f:Show()
     local shownAt = f._shownAt
     C_Timer.After(CALL_PROMPT_TIMEOUT, function()
@@ -583,21 +664,21 @@ local function ShowCallPrompt()
     return true
 end
 
--- confirmed : vrai quand le clic vient du cor de l'invite. Instance, combat et hors front
--- se disent tout de suite, sans ouvrir l'invite. Pendant le delai partage l'invite s'ouvre
--- quand meme : le cor y est grise, avec le temps restant.
+-- confirmed : vrai quand le clic vient du cor de la faction. Hors instance un clic sur la
+-- grille ouvre toujours l'invite (le cor de la guilde sonne aussi hors front et en combat) ;
+-- combat, delai et hors front se disent au clic sur le cor de la faction.
 function Overlord.Button:OnClick(confirmed)
     if Overlord.InstanceSuspended then
         Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. (L.DISABLED_IN_INSTANCE or ""))
         return
     end
+    if not confirmed and ShowCallPrompt() then return end
     if InCombatLockdown() then
         Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.FACTION_CALL_COMBAT)
         return
     end
     local rem = GetCooldownRemaining()
     if rem > 0 then
-        if not confirmed and ShowCallPrompt() then return end
         Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. string.format(L.FACTION_CALL_COOLDOWN_SHARED, FormatCooldown(rem)))
         return
     end
@@ -606,10 +687,7 @@ function Overlord.Button:OnClick(confirmed)
         return
     end
     -- Seul le clic sur le cor envoie : sans invite possible, rien ne part.
-    if not confirmed then
-        ShowCallPrompt()
-        return
-    end
+    if not confirmed then return end
     local payload = Overlord.Sync:BuildFactionCallPayload()
     if not payload then return end
     local sent = Overlord.Sync:BroadcastFactionCall(payload)
@@ -629,6 +707,34 @@ function Overlord.Button:OnClick(confirmed)
         Overlord:PlayAddonSound("faction_call")
     end
     Overlord:PrintNotification("|cFF00FF00[Overlord]|r " .. L.FACTION_CALL_SENT)
+end
+
+-- Le cor de la guilde : partout hors instance, combat compris.
+function Overlord.Button:OnGuildCallClick()
+    if Overlord.InstanceSuspended then
+        Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. (L.DISABLED_IN_INSTANCE or ""))
+        return
+    end
+    local sync = Overlord.Sync
+    if not sync or not sync.BroadcastGuildCall then return end
+    if not PlayerHasGuild() then
+        Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. L.GUILD_CALL_NO_GUILD)
+        return
+    end
+    local rem = GetGuildCooldownRemaining()
+    if rem > 0 then
+        Overlord:PrintNotification("|cFFFFD100[Overlord]|r " .. string.format(L.GUILD_CALL_COOLDOWN, FormatCooldown(rem)))
+        return
+    end
+    if not sync:BroadcastGuildCall(sync:BuildGuildCallPayload()) then
+        Overlord:PrintNotification("|cFFFF8C33[Overlord]|r " .. L.GUILD_CALL_FAILED)
+        return
+    end
+    self:Refresh()
+    if Overlord.PlayAddonSound then
+        Overlord:PlayAddonSound("faction_call")
+    end
+    Overlord:PrintNotification("|cFF00FF00[Overlord]|r " .. L.GUILD_CALL_SENT)
 end
 
 function Overlord.Button:OnGeneralClick()
@@ -669,4 +775,4 @@ end
 
 -- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
 Overlord.MemoryParts = Overlord.MemoryParts or {}
-Overlord.MemoryParts["Button.lua"] = function() return { BTN_SIZE = BTN_SIZE, btnFrame = btnFrame, generalBtnFrame = generalBtnFrame, cdFrame = cdFrame, cdTicker = cdTicker, cdSwipeExpireAt = cdSwipeExpireAt, FACTION_ICON = FACTION_ICON, GENERAL_GRID_ICON = GENERAL_GRID_ICON, PANEL_BADGE_SCALE = PANEL_BADGE_SCALE, C_ALLIANCE = C_ALLIANCE, C_HORDE = C_HORDE, C = C, CALL_PROMPT_ICON = CALL_PROMPT_ICON, CALL_PROMPT_DECO = CALL_PROMPT_DECO, CALL_PROMPT_ARM_DELAY = CALL_PROMPT_ARM_DELAY, CALL_PROMPT_TIMEOUT = CALL_PROMPT_TIMEOUT, callPrompt = callPrompt, parentShowHooked = parentShowHooked } end
+Overlord.MemoryParts["Button.lua"] = function() return { BTN_SIZE = BTN_SIZE, btnFrame = btnFrame, generalBtnFrame = generalBtnFrame, cdFrame = cdFrame, cdTicker = cdTicker, cdSwipeExpireAt = cdSwipeExpireAt, FACTION_ICON = FACTION_ICON, GENERAL_GRID_ICON = GENERAL_GRID_ICON, PANEL_BADGE_SCALE = PANEL_BADGE_SCALE, C_ALLIANCE = C_ALLIANCE, C_HORDE = C_HORDE, C = C, CALL_PROMPT_ICON = CALL_PROMPT_ICON, CALL_PROMPT_DECO = CALL_PROMPT_DECO, CALL_PROMPT_ARM_DELAY = CALL_PROMPT_ARM_DELAY, CALL_PROMPT_TIMEOUT = CALL_PROMPT_TIMEOUT, GUILD_CALL_ICON = GUILD_CALL_ICON, CALL_PROMPT_GAP = CALL_PROMPT_GAP, CALL_HORNS = CALL_HORNS, callPrompt = callPrompt, parentShowHooked = parentShowHooked } end

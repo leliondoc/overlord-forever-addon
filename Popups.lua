@@ -1278,6 +1278,23 @@ local function CreateFeaturedFrontActivityRow(parent)
     return row
 end
 
+-- Colour of an activity row's value (the panel's rows and the corner widget's tooltip).
+function Overlord.Popups.FrontActivityValueColor(active, ageSeconds, kills, captures)
+    local br, bg, bb = GetFrontActivityAgeColor(active, ageSeconds)
+    local bracket = active and GetFrontFightBracket(kills)
+    if active and not bracket and ((tonumber(kills) or 0) > 0 or (tonumber(captures) or 0) > 0) then
+        -- 1+ kill ou captures : meme or que les petits combats.
+        br, bg, bb = 1, 0.82, 0.35
+    end
+    if bracket then
+        -- Plus le combat est gros, plus c'est rouge.
+        if bracket >= 50 then br, bg, bb = 1, 0.25, 0.25
+        elseif bracket >= 20 then br, bg, bb = 1, 0.5, 0.15
+        else br, bg, bb = 1, 0.82, 0.35 end
+    end
+    return br, bg, bb
+end
+
 local function SetFeaturedFrontActivityRow(row, frontId, label, active, ageSeconds, isFeatured, kills, captures)
     if not row then return end
     row:Show()
@@ -1306,18 +1323,7 @@ local function SetFeaturedFrontActivityRow(row, frontId, label, active, ageSecon
     end
     ApplyFrontActivityIcon(row.frontIcon, iconSpec)
 
-    local br, bg, bb = GetFrontActivityAgeColor(active, ageSeconds)
-    local bracket = active and GetFrontFightBracket(kills)
-    if active and not bracket and ((tonumber(kills) or 0) > 0 or (tonumber(captures) or 0) > 0) then
-        -- 1+ kill ou captures : meme or que les petits combats.
-        br, bg, bb = 1, 0.82, 0.35
-    end
-    if bracket then
-        -- Plus le combat est gros, plus c'est rouge.
-        if bracket >= 50 then br, bg, bb = 1, 0.25, 0.25
-        elseif bracket >= 20 then br, bg, bb = 1, 0.5, 0.15
-        else br, bg, bb = 1, 0.82, 0.35 end
-    end
+    local br, bg, bb = Overlord.Popups.FrontActivityValueColor(active, ageSeconds, kills, captures)
     if active then
         row.valueFs:SetText(ageText)
         row.valueFs:SetTextColor(br, bg, bb)

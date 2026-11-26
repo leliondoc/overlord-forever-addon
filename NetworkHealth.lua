@@ -201,8 +201,9 @@ function NH:Compute()
             waiting and string.format("waiting on one peer for %ds", hr.stepAge) or text)
     end
     if sync and sync.GetOutpostClaimStats then
-        local accepted, refused, last, noCapturer, reasons = sync:GetOutpostClaimStats()
+        local accepted, refused, last, noCapturer, reasons, watched = sync:GetOutpostClaimStats()
         noCapturer = tonumber(noCapturer) or 0
+        watched = tonumber(watched) or 0
         -- The other refusals by cause, most frequent first (at most four).
         local causes = {}
         for reason, count in pairs(reasons or {}) do causes[#causes + 1] = { reason, count } end
@@ -213,10 +214,31 @@ function NH:Compute()
         local parts = {}
         for i = 1, math.min(4, #causes) do parts[i] = causes[i][1] .. " " .. causes[i][2] end
         add("claims", "ok", "Keep/outpost captures",
-            string.format("%d accepted, %d refused%s%s%s", accepted, refused,
+            string.format("%d accepted%s, %d refused%s%s%s", accepted,
+                watched > 0 and string.format(" (%d of them ending an assault seen here)", watched) or "", refused,
                 noCapturer > 0 and string.format(", of which %d routine copies without capturer", noCapturer) or "",
                 #parts > 0 and ("; by cause: " .. table.concat(parts, ", ")) or "",
                 last and (" (last: " .. last .. ")") or ""))
+    end
+    local arena = Overlord.Arena
+    if arena and arena.GetStats then
+        local kept, waiting, refused, evicted, evictedWaiting = arena:GetStats()
+        evictedWaiting = tonumber(evictedWaiting) or 0
+        local parts = {}
+        for reason, count in pairs(refused or {}) do parts[#parts + 1] = reason .. " " .. count end
+        table.sort(parts)
+        -- (The relay sends the arena last: refused on a busy queue, given up for any other packet.)
+        local rs = Overlord.Relay and Overlord.Relay.stats or {}
+        local relayRefused, relayDropped, relayExpired = tonumber(rs.arenaRefused) or 0,
+            tonumber(rs.arenaDropped) or 0, tonumber(rs.arenaExpired) or 0
+        add("arena", evicted > 0 and "warn" or "ok", "Gurubashi Arena",
+            string.format("%d captures kept (%d waiting to be judged)%s%s%s%s", kept, waiting,
+                evicted > 0 and string.format(", %d older captures pushed out of the full ledger", evicted) or "",
+                evictedWaiting > 0 and string.format(", %d waiting rows pushed out", evictedWaiting) or "",
+                #parts > 0 and ("; refused: " .. table.concat(parts, ", ")) or "",
+                (relayRefused + relayDropped + relayExpired) > 0 and string.format(
+                    "; sent last by the relay: %d refused on a busy queue, %d given up for other packets, %d expired",
+                    relayRefused, relayDropped, relayExpired) or ""))
     end
     if net and net.GetQueueSummary then
         local q = net:GetQueueSummary()

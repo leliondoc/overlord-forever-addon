@@ -760,7 +760,7 @@ end
 
 function Overlord.Sync:GetOutpostClaimStats()
     return outpostClaimStats.accepted, outpostClaimStats.refused, outpostClaimStats.lastRefused,
-        outpostClaimStats.noCapturer, outpostClaimStats.reasons
+        outpostClaimStats.noCapturer, outpostClaimStats.reasons, outpostClaimStats.watched or 0
 end
 
 -- Keep/outpost freshness, for the map pull a neighbour's presence triggers (1.8.2;
@@ -875,6 +875,62 @@ local function MayRestoreObservedAssault(siteKey, st, sender)
         and OP:IsObserverOutpostCaptureStale(st, OP:GetSite(siteKey), ClaimServerNow()) or false
 end
 
+-- The claim ends the assault this map is watching: same site, faction, guild and assailant,
+-- dated after the assault began. Its guild and name are already on this map (the assault's
+-- heartbeats), so believing it shows nothing new; without it, the capture of a player our
+-- ranking knows under no guild yet (no kill since the weekly reset) never ended the assault
+-- here, and an allied retake of the site could not follow (it stayed "in progress").
+-- Only for a capturer our ranking knows under no guild at all: one it knows under another guild
+-- is refused as before (mega audit 2026-11-26).
+-- The assault as this client saw it, for this session only: when it first saw it (server
+-- time, never what a heartbeat states) and every assailant its heartbeats named (several
+-- holders take turns; the one who completes signs). Forgotten once the site shows anything
+-- else, another guild or side assaults it, or nothing was heard for 15 min. One row per site.
+local watchedAssaults = {}
+local WATCHED_NAMES_MAX, WATCHED_QUIET_SEC = 6, 900
+local function CanonicalAssailant(name)
+    name = NormalizeOpCapturerName(name)
+    local sync = Overlord.Sync
+    return name ~= "" and sync.CanonicalForeverName and sync:CanonicalForeverName(name) or nil
+end
+local function NoteWatchedAssault(siteKey, st)
+    if type(st) ~= "table" or st.status ~= "in_progress" then
+        watchedAssaults[siteKey] = nil
+        return
+    end
+    local key = Overlord.Outpost:SanitizeGuildName(st.ownerGuild or ""):lower() .. ":" .. tostring(st.ownerFaction)
+    local now = math.floor(ClaimServerNow())
+    local w = watchedAssaults[siteKey]
+    if not w or w.key ~= key or now - w.lastAt > WATCHED_QUIET_SEC then
+        w = { key = key, seenAt = now, lastAt = now, names = {}, n = 0 }
+        watchedAssaults[siteKey] = w
+    end
+    w.lastAt = now
+    local name = CanonicalAssailant(st.opRelayCapturerName)
+    if name and not w.names[name] and w.n < WATCHED_NAMES_MAX then
+        w.names[name] = true
+        w.n = w.n + 1
+    end
+end
+local function ClaimEndsWatchedAssault(siteKey, guild, faction, claimTs, capturer)
+    if CapturerLadderGuild(capturer) ~= "" then return false end
+    local OP = Overlord.Outpost
+    local st = OP and OP.GetState and OP:GetState(siteKey) or nil
+    if type(st) ~= "table" or st.status ~= "in_progress" or st.holdAuthorityLocal then return false end
+    local key = OP:SanitizeGuildName(st.ownerGuild or ""):lower()
+    if st.ownerFaction ~= faction or key ~= guild:lower() then return false end
+    local w = watchedAssaults[siteKey]
+    -- (Quiet for 15 min: forgotten here too, not only at the next heartbeat.)
+    if w and (w.key ~= key .. ":" .. tostring(faction)
+        or math.floor(ClaimServerNow()) - w.lastAt > WATCHED_QUIET_SEC) then w = nil end
+    if CanonicalAssailant(st.opRelayCapturerName) ~= capturer and not (w and w.names[capturer]) then
+        return false
+    end
+    local began = w and w.seenAt
+        or math.floor((tonumber(st.updatedAt) or 0) - (tonumber(st.holdTimeElapsed) or 0))
+    return began > 0 and claimTs >= began - 60
+end
+
 -- Decides whether one capture claim may enter the ledger and the map.
 -- Returns true, "known" | "catch-up" | "owner", canonical capturer; or false, reason.
 function Overlord.Sync:AuthorizeOutpostClaim(siteKey, guild, faction, claimTs, capturer, sender, sourceChannel, pool)
@@ -928,21 +984,26 @@ function Overlord.Sync:AuthorizeOutpostClaim(siteKey, guild, faction, claimTs, c
             return true, "catch-up", capturer
         elseif not self.IsKnownLeaderboardSubject or not self:IsKnownLeaderboardSubject(capturer) then
             solicitedReason = "catch-up-unknown"
-            NotePendingCapturer(capturer, guild)
         else
             local ladderGuild = CapturerLadderGuild(capturer)
             if ladderGuild == "" or ladderGuild:lower() ~= guild:lower() then
                 solicitedReason = "catch-up-guild"
-                NotePendingCapturer(capturer, guild)
             else
                 outpostClaimStats.accepted = outpostClaimStats.accepted + 1
                 return true, "catch-up", capturer
             end
         end
+        if solicitedReason and ClaimEndsWatchedAssault(siteKey, guild, faction, claimTs, capturer) then
+            outpostClaimStats.accepted = outpostClaimStats.accepted + 1
+            outpostClaimStats.watched = (outpostClaimStats.watched or 0) + 1
+            return true, "catch-up", capturer
+        end
+        if solicitedReason then NotePendingCapturer(capturer, guild) end
     end
     if SenderIsOutpostCapturer(sender, capturer) then
         local senderFaction = LiveSenderFaction(sender, sourceChannel)
         if senderFaction ~= faction then return false, "owner-faction" end
+        local endsWatched = false
         -- Credited to the guild the ladder knows for the capturer (their own K / GI, group, a
         -- page), or to ours when the game's roster lists them: without the channel nobody hears a GI.
         -- 2.2.2: or to the guild the game shows for them in our group (read from the unit, not
@@ -956,8 +1017,11 @@ function Overlord.Sync:AuthorizeOutpostClaim(siteKey, guild, faction, claimTs, c
                 local unitGuild, unitFaction = GetOpAddonSenderGuild(sender)
                 if not (type(unitGuild) == "string" and unitGuild ~= "" and unitFaction == faction
                     and unitGuild:lower() == guild:lower()) then
-                    NotePendingCapturer(capturer, guild)
-                    return false, ladderGuild == "" and "owner-guild-unknown" or "owner-guild"
+                    if not ClaimEndsWatchedAssault(siteKey, guild, faction, claimTs, capturer) then
+                        NotePendingCapturer(capturer, guild)
+                        return false, ladderGuild == "" and "owner-guild-unknown" or "owner-guild"
+                    end
+                    endsWatched = true
                 end
             end
         end
@@ -985,6 +1049,7 @@ function Overlord.Sync:AuthorizeOutpostClaim(siteKey, guild, faction, claimTs, c
             if not node.claimTs or claimTs > node.claimTs then node.claimTs, node.claimGap = claimTs, gap end
         end
         outpostClaimStats.accepted = outpostClaimStats.accepted + 1
+        if endsWatched then outpostClaimStats.watched = (outpostClaimStats.watched or 0) + 1 end
         return true, "owner", capturer
     end
     return false, solicitedReason or "untrusted"
@@ -1787,6 +1852,7 @@ function Overlord.Sync:OnReceiveOutpostState(payload, sender, channel)
         Overlord.Outpost:ApplyRemoteState(siteKey, remote, true)
     end
     local stAfter = Overlord.Outpost:GetState(siteKey)
+    NoteWatchedAssault(siteKey, stAfter)
     if (status == "in_progress" or status == "held")
         and Overlord.FrontActivity and Overlord.FrontActivity.RecordByZoneRef then
         Overlord.FrontActivity:RecordByZoneRef(
@@ -2396,5 +2462,5 @@ end
 
 -- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
 Overlord.MemoryParts = Overlord.MemoryParts or {}
-Overlord.MemoryParts["SyncOutpost.lua"] = function() return { OP_POST_CAPTURE_STATE_DELAY = OP_POST_CAPTURE_STATE_DELAY, OP_CAPTURE_REPLAY_DELAY_1 = OP_CAPTURE_REPLAY_DELAY_1, OP_CAPTURE_REPLAY_DELAY_2 = OP_CAPTURE_REPLAY_DELAY_2, lastOPRelayBroadcast = lastOPRelayBroadcast, OP_ROUTINE_RELAY_INTERVAL = OP_ROUTINE_RELAY_INTERVAL, VALID_OP_STATUS = VALID_OP_STATUS, OC_DEDUP_SEC = OC_DEDUP_SEC, OP_DEDUP_SEC = OP_DEDUP_SEC, OP_DEDUP_MAX = OP_DEDUP_MAX, OC_DEDUP_MAX = OC_DEDUP_MAX, lastStaleOutpostObserverPoll = lastStaleOutpostObserverPoll, staleOutpostPullRound = staleOutpostPullRound, STALE_OUTPOST_OBSERVER_POLL_INTERVAL = STALE_OUTPOST_OBSERVER_POLL_INTERVAL, STALE_OUTPOST_OBSERVER_POLL_INTERVAL_LARGE = STALE_OUTPOST_OBSERVER_POLL_INTERVAL_LARGE, opCaptureAlertDedup = opCaptureAlertDedup, OP_CAPTURE_ALERT_DEDUP_SEC = OP_CAPTURE_ALERT_DEDUP_SEC, OP_ASSAULT_ALERT_COOLDOWN = OP_ASSAULT_ALERT_COOLDOWN, OP_DEFENDER_ALERT_COOLDOWN = OP_DEFENDER_ALERT_COOLDOWN, opAssaultAlertLast = opAssaultAlertLast, opAssaultAlertEmitted = opAssaultAlertEmitted, opAssaultAlertWaveKey = opAssaultAlertWaveKey, opDefenderAlertLast = opDefenderAlertLast, opDefenderAlertEmitted = opDefenderAlertEmitted, opDefenderAlertHadGuild = opDefenderAlertHadGuild, opDefenderAlertWaveKey = opDefenderAlertWaveKey, opTransitionBefore = opTransitionBefore, pendingRestoreOc = pendingRestoreOc, pendingRestoreOcCount = pendingRestoreOcCount, PENDING_RESTORE_OC_MAX = PENDING_RESTORE_OC_MAX, pendingRestoreOcFlushQueued = pendingRestoreOcFlushQueued, LO_DEDUP_SEC = LO_DEDUP_SEC, LOC_DEDUP_SEC = LOC_DEDUP_SEC, OUTPOST_LADDER_DEDUP_MAX = OUTPOST_LADDER_DEDUP_MAX, srLegacyOutpostCountCursor = srLegacyOutpostCountCursor, opDedup = opDedup, ocDedup = ocDedup, loDedup = loDedup, loSendDedup = loSendDedup, locDedup = locDedup, OUTPOST_CLAIM_PEER_WINDOW = OUTPOST_CLAIM_PEER_WINDOW, OUTPOST_CLAIM_HISTORY_WINDOW = OUTPOST_CLAIM_HISTORY_WINDOW, OUTPOST_CLAIM_PEER_MAX = OUTPOST_CLAIM_PEER_MAX, OUTPOST_OWNER_CLAIM_TTL = OUTPOST_OWNER_CLAIM_TTL, OUTPOST_OWNER_CLAIM_MAX = OUTPOST_OWNER_CLAIM_MAX, OUTPOST_CLAIM_WINDOW_BUDGET = OUTPOST_CLAIM_WINDOW_BUDGET, OUTPOST_ROW_PACKETS_MAX = OUTPOST_ROW_PACKETS_MAX, OUTPOST_OWNER_CLAIMS_PER_HOUR = OUTPOST_OWNER_CLAIMS_PER_HOUR, OUTPOST_CLAIM_REFILL_SEC = OUTPOST_CLAIM_REFILL_SEC, OUTPOST_CLAIM_FUTURE_SKEW = OUTPOST_CLAIM_FUTURE_SKEW, outpostClaimPeers = outpostClaimPeers } end
+Overlord.MemoryParts["SyncOutpost.lua"] = function() return { OP_POST_CAPTURE_STATE_DELAY = OP_POST_CAPTURE_STATE_DELAY, OP_CAPTURE_REPLAY_DELAY_1 = OP_CAPTURE_REPLAY_DELAY_1, OP_CAPTURE_REPLAY_DELAY_2 = OP_CAPTURE_REPLAY_DELAY_2, lastOPRelayBroadcast = lastOPRelayBroadcast, OP_ROUTINE_RELAY_INTERVAL = OP_ROUTINE_RELAY_INTERVAL, VALID_OP_STATUS = VALID_OP_STATUS, OC_DEDUP_SEC = OC_DEDUP_SEC, OP_DEDUP_SEC = OP_DEDUP_SEC, OP_DEDUP_MAX = OP_DEDUP_MAX, OC_DEDUP_MAX = OC_DEDUP_MAX, lastStaleOutpostObserverPoll = lastStaleOutpostObserverPoll, staleOutpostPullRound = staleOutpostPullRound, STALE_OUTPOST_OBSERVER_POLL_INTERVAL = STALE_OUTPOST_OBSERVER_POLL_INTERVAL, STALE_OUTPOST_OBSERVER_POLL_INTERVAL_LARGE = STALE_OUTPOST_OBSERVER_POLL_INTERVAL_LARGE, opCaptureAlertDedup = opCaptureAlertDedup, OP_CAPTURE_ALERT_DEDUP_SEC = OP_CAPTURE_ALERT_DEDUP_SEC, OP_ASSAULT_ALERT_COOLDOWN = OP_ASSAULT_ALERT_COOLDOWN, OP_DEFENDER_ALERT_COOLDOWN = OP_DEFENDER_ALERT_COOLDOWN, opAssaultAlertLast = opAssaultAlertLast, opAssaultAlertEmitted = opAssaultAlertEmitted, opAssaultAlertWaveKey = opAssaultAlertWaveKey, opDefenderAlertLast = opDefenderAlertLast, opDefenderAlertEmitted = opDefenderAlertEmitted, opDefenderAlertHadGuild = opDefenderAlertHadGuild, opDefenderAlertWaveKey = opDefenderAlertWaveKey, opTransitionBefore = opTransitionBefore, pendingRestoreOc = pendingRestoreOc, pendingRestoreOcCount = pendingRestoreOcCount, PENDING_RESTORE_OC_MAX = PENDING_RESTORE_OC_MAX, pendingRestoreOcFlushQueued = pendingRestoreOcFlushQueued, LO_DEDUP_SEC = LO_DEDUP_SEC, LOC_DEDUP_SEC = LOC_DEDUP_SEC, OUTPOST_LADDER_DEDUP_MAX = OUTPOST_LADDER_DEDUP_MAX, srLegacyOutpostCountCursor = srLegacyOutpostCountCursor, opDedup = opDedup, ocDedup = ocDedup, loDedup = loDedup, loSendDedup = loSendDedup, locDedup = locDedup, OUTPOST_CLAIM_PEER_WINDOW = OUTPOST_CLAIM_PEER_WINDOW, OUTPOST_CLAIM_HISTORY_WINDOW = OUTPOST_CLAIM_HISTORY_WINDOW, OUTPOST_CLAIM_PEER_MAX = OUTPOST_CLAIM_PEER_MAX, OUTPOST_OWNER_CLAIM_TTL = OUTPOST_OWNER_CLAIM_TTL, OUTPOST_OWNER_CLAIM_MAX = OUTPOST_OWNER_CLAIM_MAX, OUTPOST_CLAIM_WINDOW_BUDGET = OUTPOST_CLAIM_WINDOW_BUDGET, OUTPOST_ROW_PACKETS_MAX = OUTPOST_ROW_PACKETS_MAX, OUTPOST_OWNER_CLAIMS_PER_HOUR = OUTPOST_OWNER_CLAIMS_PER_HOUR, OUTPOST_CLAIM_REFILL_SEC = OUTPOST_CLAIM_REFILL_SEC, OUTPOST_CLAIM_FUTURE_SKEW = OUTPOST_CLAIM_FUTURE_SKEW, outpostClaimPeers = outpostClaimPeers, watchedAssaults = watchedAssaults } end
 Overlord.MemoryParts["SyncOutpost.lua#2"] = function() return { outpostClaimPeerCount = outpostClaimPeerCount, ownerClaimDedup = ownerClaimDedup, outpostClaimStats = outpostClaimStats, FactionToCode = FactionToCode, VALID_POOL_TAG = VALID_POOL_TAG, pendingCapturers = pendingCapturers, pendingCapturerState = pendingCapturerState, PENDING_CAPTURER_MAX = PENDING_CAPTURER_MAX, PENDING_CAPTURER_TTL = PENDING_CAPTURER_TTL, outpostMapStamps = outpostMapStamps, UNSTAMPED_SITE = UNSTAMPED_SITE, outpostMapContent = outpostMapContent, OWN_SITE_WARNING_SEC = OWN_SITE_WARNING_SEC, ownSiteWarnedAt = ownSiteWarnedAt, halfAlertPending = halfAlertPending, SR_MINIMAL_OP_SITE_MAX = SR_MINIMAL_OP_SITE_MAX, outpostKnownSkipped = outpostKnownSkipped, OUTPOST_MARK_CHARS = OUTPOST_MARK_CHARS, OUTPOST_MARK_MAX = OUTPOST_MARK_MAX, OUTPOST_MARK_MOD = OUTPOST_MARK_MOD, SR_OUTPOST_COUNT_MAX = SR_OUTPOST_COUNT_MAX, SR_OUTPOST_ROW_BUCKETS = SR_OUTPOST_ROW_BUCKETS, SR_OUTPOST_ROW_BUCKETS_PER_REQUEST = SR_OUTPOST_ROW_BUCKETS_PER_REQUEST, OUTPOST_HISTORY_REPLY_COOLDOWN = OUTPOST_HISTORY_REPLY_COOLDOWN, OUTPOST_HISTORY_SEND_INTERVAL = OUTPOST_HISTORY_SEND_INTERVAL, outpostHistoryRepliedAt = outpostHistoryRepliedAt, outpostHistoryRepliedCount = outpostHistoryRepliedCount, outpostHistoryReply = outpostHistoryReply } end

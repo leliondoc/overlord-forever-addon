@@ -3113,16 +3113,17 @@ function Overlord.Sync:OnBNetMessage(message, senderID)
         return
     end
 
-    -- Format normal: msgType:band:payload (band = realm_A ou realm_H)
+    -- Format normal: msgType:band:payload (band = Forever_<pool>_A ou _H)
     local band = c2 and message:sub(c1 + 1, c2 - 1) or message:sub(c1 + 1)
     local payload = c2 and message:sub(c2 + 1) or nil
-    if band:match("_[AH]$") then
-        -- 1.4.0: a Battle.net friend on another ruleset plays another campaign.
-        if band:match("^Forever_") and not IsCompatibleForeverBand(band) then return end
-    else
-        payload = c2 and message:sub(c1 + 1) or band
-        band = nil
-    end
+    -- 1.4.0: a Battle.net friend on another ruleset plays another campaign.
+    -- Every Forever client since 1.0.0 sends its band (SendToBNet): a message without
+    -- one, or with a realm band of the retail era, says nothing of its ruleset and
+    -- went through unchecked. It is read only with a band of our own ruleset.
+    -- 2026-11-26: and only if that band is the campaign its realm's friends agree on
+    -- (RealmPools:IsBNetBandRefused, noted for every band, refused or not).
+    if Overlord.RealmPools:IsBNetBandRefused(bnetInfo, band) then return end
+    if not IsCompatibleForeverBand(band) then return end
     -- A direct message from a compatible friend proves a live bridge (relay
     -- envelopes are noted by the relay itself, after their own band check).
     if Overlord.Relay and Overlord.Relay.NoteBNetHeard then
@@ -3218,6 +3219,7 @@ function Overlord.Sync:OnReceiveR2Relay(senderID, band, innerMsg, bnetInfo)
     if not innerMsg or not Overlord.Relay then return end
     local envelope = innerMsg:sub(1, 3)
     if envelope ~= "BR:" and envelope ~= "BF:" then return end
+    if Overlord.RealmPools:IsBNetBandRefused(bnetInfo, band) then return end
     if not IsCompatibleForeverBand(band) then return end
     if envelope == "BF:" then
         return Overlord.Relay:ReceiveFragment(innerMsg:sub(4), ResolveBNetGameplaySender(self, senderID, bnetInfo), "BNET", senderID)
@@ -3235,6 +3237,11 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
     if channel == "BETA" and (not Overlord.Relay or not Overlord.Relay:IsDispatching(sender)) then return end
     -- 2.1.1: the guild only carries relay fragments, and our own copy stops there (SyncGuild.lua).
     if channel == "GUILD" then
+        -- The guild's call to arms (CG), read only here (never relayed, never from elsewhere).
+        if type(message) == "string" and message:sub(1, 3) == "CG:" then
+            if self.OnReceiveGuildCall then self:OnReceiveGuildCall(message:sub(4), sender) end
+            return
+        end
         local guildLane = Overlord.GuildLane
         if not guildLane or not guildLane:OnHeard(message, sender) then return end
     elseif channel == "CHANNEL" then
@@ -3373,6 +3380,10 @@ function Overlord.Sync:OnAddonMessage(prefix, message, channel, sender)
         end
     elseif msgType == "FC" then
         self:OnReceiveFactionCall(payload or "", sender)
+    elseif msgType == "AC" or msgType == "AQ" or msgType == "AL" then
+        if Overlord.Arena then
+            ok, err = pcall(Overlord.Arena.OnReceive, Overlord.Arena, msgType, payload or "", sender, channel)
+        end
     elseif msgType == "GW" then
         if Overlord.GuildKillAlert then
             ok, err = pcall(Overlord.GuildKillAlert.OnReceiveNetworkAlert,
@@ -10635,12 +10646,16 @@ function Overlord.Sync:OnReceiveLeaderboardCaptures(payload, sender, channel)
     local previousCaptureTotal = Overlord.Leaderboard.GetMaxCapturesForDedupName
         and Overlord.Leaderboard:GetMaxCapturesForDedupName(playerName) or 0
     local verifiedZones = {}
+    local rowGuild, rowGuildAt
     if zoneList and zoneList ~= "" then
         for zoneId in string.gmatch(zoneList, "[^,]+") do
-            local knownZone = Overlord.Zones:GetZone(zoneId)
+            -- The guild of a player without a kill row (SyncHistoryCatchup, CaptureRowGuildItem).
+            local at, guild = zoneId:match("^=(%d+)=(.*)$")
+            if at then rowGuild, rowGuildAt = guild, tonumber(at) end
+            local knownZone = not at and (Overlord.Zones:GetZone(zoneId)
                 or (Overlord.Fronts and Overlord.Fronts:IsKnownZoneId(zoneId))
                 or (Overlord.Leaderboard.IsValidCaptureObjectiveId
-                    and Overlord.Leaderboard:IsValidCaptureObjectiveId(zoneId))
+                    and Overlord.Leaderboard:IsValidCaptureObjectiveId(zoneId)))
             if zoneId ~= "" and knownZone then
                 verifiedZones[#verifiedZones + 1] = zoneId
             end
@@ -10674,6 +10689,16 @@ function Overlord.Sync:OnReceiveLeaderboardCaptures(payload, sender, channel)
     end
     if localeClaimVerified and Overlord.Leaderboard.SetPlayerLocale then
         Overlord.Leaderboard:SetPlayerLocale(playerName, locTag)
+    end
+    -- Taken as a kill row's guild from a page (a page or a feed row we asked for only, never
+    -- an SR:F reply), so the keep and outpost claims of a player who only captures pass.
+    -- (An empty guild is a dated departure.)
+    if rowGuild and (rowGuild == "" and (rowGuildAt or 0) > 0 or self:IsValidGuildSyncToken(rowGuild))
+        and Overlord.Leaderboard.MergeCaptureRowGuild
+        and (self.IsExpectedPagedLeaderboardDelivery
+            and self:IsExpectedPagedLeaderboardDelivery("LC", playerName, sender, channel)) == true then
+        local owner = self.KillSyncSenderOwnsPlayer and self:KillSyncSenderOwnsPlayer(sender, playerName) or false
+        Overlord.Leaderboard:MergeCaptureRowGuild(playerName, normalizedFaction, rowGuild, rowGuildAt, owner)
     end
 
     for _, zoneId in ipairs(verifiedZones) do

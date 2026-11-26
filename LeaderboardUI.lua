@@ -61,20 +61,18 @@ local LB_GUILD_KILLS_TEXT_W = 58
 -- icone + nom 8..130, guilde 134..244, captures 246..306 (60 px : « Eroberungen ») ; les
 -- 30 px de droite restent au bouton de l'en-tete des avant-postes et au rail.
 local LB_GK_KEEP_LEFT = 8
-local LB_GK_KEEP_NAME_W = 100
-local LB_GK_COL_KEEP = -99
-local LB_GK_COL_GUILD = 21
-local LB_GK_COL_WINS = 106
-local LB_GK_GUILD_NAME_W = 110
-local LB_GK_WINS_W = 60
--- Avant-postes : 3 colonnes (site, guilde, captures)
+-- Two columns, site then holder (no count column, it read as the holder's captures).
+-- Row 336 px: icon 8..26, site name 30..160, holder 166..306 (the scroll rail after it).
+local LB_GK_KEEP_NAME_W = 130
+local LB_GK_COL_KEEP = -84
+local LB_GK_COL_GUILD = 68
+local LB_GK_GUILD_NAME_W = 140
+-- Avant-postes : 2 colonnes (site, guilde)
 local LB_OP_OUTPOST_LEFT = LB_GK_KEEP_LEFT
 local LB_OP_OUTPOST_NAME_W = LB_GK_KEEP_NAME_W
 local LB_OP_COL_OUTPOST = LB_GK_COL_KEEP
 local LB_OP_COL_GUILD = LB_GK_COL_GUILD
-local LB_OP_COL_CAPTURES = LB_GK_COL_WINS
 local LB_OP_GUILD_NAME_W = LB_GK_GUILD_NAME_W
-local LB_OP_CAPTURES_W = LB_GK_WINS_W
 -- Limite gauche de la colonne guilde (evite le chevauchement avec l'avant-poste)
 local LB_OP_GUILD_COL_LEFT = (LB_OUTPOST_W / 2) + LB_OP_COL_GUILD - (LB_OP_GUILD_NAME_W / 2)
 local LB_OP_GUILD_COL_RIGHT = LB_OP_GUILD_COL_LEFT + LB_OP_GUILD_NAME_W
@@ -849,6 +847,12 @@ end
 -- Enfant du bandeau : il suit son tableau quand un volet le remplace. Cree une fois,
 -- rien a l'affichage.
 Overlord.LeaderboardUI.TABLE_TITLE_H = 22
+-- Keeps and outposts: one row per site, 8 rows tall (the 8 keeps fit, the outposts scroll);
+-- the Gurubashi Arena board fills the rest of the column under them.
+Overlord.LeaderboardUI.SITES_ROWS = 8
+function Overlord.LeaderboardUI.SitesBlockHeight()
+    return LB_HEADER_H + LB_GAP_HEADER + Overlord.LeaderboardUI.SITES_ROWS * GUILD_ROW_HEIGHT + 8
+end
 function Overlord.LeaderboardUI.AddTableTitle(anchor, text, P)
     local strip = CreateFrame("Frame", nil, anchor)
     strip:SetHeight(Overlord.LeaderboardUI.TABLE_TITLE_H - 2)
@@ -946,8 +950,8 @@ local function LayoutLeaderboardSections()
     leftStack:SetPoint("TOPLEFT", header, "TOPLEFT")
     leftStack:SetPoint("BOTTOMRIGHT", capPanel, "BOTTOMRIGHT")
 
-    -- Guildes (tues et cote) a leur place de toujours, puis fortins et avant-postes
-    -- (meme hauteur que la pile gauche)
+    -- Guildes (tues et cote) a leur place de toujours (meme hauteur que la pile gauche), puis
+    -- forts et avant-postes (hauteur fixe, une ligne par lieu) et l'arene de Gurubashi dessous.
     guildBlock:ClearAllPoints()
     guildBlock:SetPoint("LEFT", leftStack, "RIGHT", LB_COL_GAP, 0)
     guildBlock:SetPoint("TOP", header, "TOP", 0, 0)
@@ -957,14 +961,15 @@ local function LayoutLeaderboardSections()
     guildKeepBlock:ClearAllPoints()
     guildKeepBlock:SetPoint("LEFT", guildBlock, "RIGHT", LB_COL_GAP, 0)
     guildKeepBlock:SetPoint("TOP", header, "TOP", 0, 0)
-    guildKeepBlock:SetPoint("BOTTOM", capPanel, "BOTTOM", 0, 0)
+    guildKeepBlock:SetHeight(Overlord.LeaderboardUI.SitesBlockHeight())
     guildKeepBlock:SetWidth(LB_GUILD_KEEP_W)
 
     outpostBlock:ClearAllPoints()
     outpostBlock:SetPoint("LEFT", guildKeepBlock, "RIGHT", LB_COL_GAP, 0)
     outpostBlock:SetPoint("TOP", header, "TOP", 0, 0)
-    outpostBlock:SetPoint("BOTTOM", capPanel, "BOTTOM", 0, 0)
+    outpostBlock:SetHeight(Overlord.LeaderboardUI.SitesBlockHeight())
     outpostBlock:SetWidth(LB_OUTPOST_W)
+    Overlord.LeaderboardUI:PlaceArenaView()
 
     LayoutGuildPanelFill()
 
@@ -1025,16 +1030,17 @@ function SitesWeek.Colored(text, faction)
     return string.format("|cFF%02X%02X%02X%s|r", c[1] * 255, c[2] * 255, c[3] * 255, text)
 end
 
-function SitesWeek.ToggleButton(parent, tipTitle, tipBody)
+-- onClick / iconPath: the arena board's button (default: this view's).
+function SitesWeek.ToggleButton(parent, tipTitle, tipBody, onClick, iconPath)
     local btn = CreateFrame("Button", nil, parent)
     btn:SetSize(20, 20)
     btn:SetPoint("RIGHT", parent, "RIGHT", -8, 0)
     local icon = btn:CreateTexture(nil, "ARTWORK")
     icon:SetAllPoints()
-    icon:SetTexture(SitesWeek.ICON)
+    icon:SetTexture(iconPath or SitesWeek.ICON)
     icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     btn:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
-    btn:SetScript("OnClick", function() Overlord.LeaderboardUI:ToggleSitesWeek() end)
+    btn:SetScript("OnClick", onClick or function() Overlord.LeaderboardUI:ToggleSitesWeek() end)
     btn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:AddLine(tipTitle or "", 1, 0.82, 0)
@@ -1121,6 +1127,109 @@ function SitesWeek.Paint(half, fill)
     half._paintedList, half._paintedOffset, half._paintedVisible = half.list, half.offset, visible
 end
 
+-- ---------- Keeps and outposts: one row per site ----------
+-- Who holds the site now, how many captures it saw this week, and the week's guilds for the
+-- tooltip. Read from the (site, guild) rows of Leaderboard:GetSortedOutposts, once per
+-- built list (kept by the list's table); every site is listed, a free one too. Held sites
+-- first, then the busiest, then by name.
+SitesWeek.NONE = {}
+SitesWeek.memo = { [true] = setmetatable({}, { __mode = "k" }), [false] = setmetatable({}, { __mode = "k" }) }
+
+function SitesWeek.BySite(rows, fortress)
+    local bySite, list = {}, {}
+    for siteKey, site in pairs(Overlord.OutpostSites or SitesWeek.NONE) do
+        if type(site) == "table" and (site.isFortress == true) == fortress then
+            local entry = {
+                guild = "", faction = "", captures = 0, guilds = {}, outpostSiteKey = siteKey,
+                keepSiteKey = fortress and siteKey or nil,
+                siteName = fortress and GetGuildKeepSiteDisplayName(siteKey) or GetOutpostSiteDisplayName(siteKey),
+            }
+            bySite[siteKey] = entry
+            list[#list + 1] = entry
+        end
+    end
+    for _, row in ipairs(rows) do
+        local entry = type(row) == "table" and bySite[row.outpostSiteKey]
+        if entry then
+            local n = math.floor(tonumber(row.captures) or 0)
+            -- (The rows come sorted by captures, then guild: the tooltip keeps that order.)
+            if n > 0 then
+                entry.captures = entry.captures + n
+                entry.guilds[#entry.guilds + 1] = { guild = row.guild or "", faction = row.faction or "", captures = n }
+            end
+            if row.currentlyHeld and not entry.currentlyHeld and (row.guild or "") ~= "" then
+                entry.currentlyHeld, entry.guild, entry.faction = true, row.guild, row.faction or ""
+                entry.capturer, entry.atlas = row.capturer, row.outpostAtlas
+            end
+        end
+    end
+    for _, e in ipairs(list) do
+        e.sig = e.guild .. "|" .. e.faction .. "|" .. e.captures .. "|" .. tostring(e.atlas or "")
+            .. "|" .. e.siteName
+    end
+    table.sort(list, function(a, b)
+        if (a.currentlyHeld and true or false) ~= (b.currentlyHeld and true or false) then
+            return a.currentlyHeld == true
+        end
+        if a.captures ~= b.captures then return a.captures > b.captures end
+        if a.siteName ~= b.siteName then return a.siteName < b.siteName end
+        return a.outpostSiteKey < b.outpostSiteKey
+    end)
+    return list
+end
+
+-- The rows a view shows. A search view keeps the sites its matching rows name (a guild
+-- searched shows the sites it holds or took this week), each with its whole line.
+function SitesWeek.ListFor(view, field, fortress)
+    local rows = view and view[field] or SitesWeek.NONE
+    -- (Lists not built yet, or their build failed: no site row rather than every site
+    -- "Unclaimed", which would read as a real week without holders.)
+    if rows == lbVolatileLists.none then return SitesWeek.NONE end
+    local memo = SitesWeek.memo[fortress]
+    local list = memo[rows]
+    if list then return list end
+    local source = lbFrame and lbFrame._lbSource
+    if not source or view == source then
+        list = SitesWeek.BySite(rows, fortress)
+    else
+        local named = {}
+        for _, row in ipairs(rows) do
+            if type(row) == "table" and row.outpostSiteKey then named[row.outpostSiteKey] = true end
+        end
+        list = {}
+        for _, e in ipairs(SitesWeek.ListFor(source, field, fortress)) do
+            if named[e.outpostSiteKey] then list[#list + 1] = e end
+        end
+    end
+    memo[rows] = list
+    return list
+end
+
+function SitesWeek.PaintSiteRow(row, entry, icon, siteFs, siteMaxW, P)
+    if entry.currentlyHeld then
+        row.name:SetText(TruncateTextToWidth(entry.guild, LB_OP_GUILD_NAME_W, "GameFontNormal"))
+        local c = SitesWeek.RGB[entry.faction] or P.white
+        row.name:SetTextColor(c[1], c[2], c[3])
+    else
+        row.name:SetText(L.LB_SITE_FREE or "Unclaimed")
+        row.name:SetTextColor(P.gray[1], P.gray[2], P.gray[3])
+    end
+    if entry.currentlyHeld and entry.atlas and icon and icon.SetAtlas then
+        -- Taille fixe : avec la taille native de l'atlas (parfois 0 sur Forever),
+        -- le nom du site sautait vers la gauche sur certaines lignes seulement.
+        icon:SetAtlas(entry.atlas, false)
+        icon:SetSize(GUILD_KEEP_ICON, GUILD_KEEP_ICON)
+        icon:Show()
+    elseif icon then
+        icon:Hide()
+    end
+    if siteFs then
+        siteFs:SetText(TruncateTextToWidth(entry.siteName, siteMaxW, "GameFontNormalSmall"))
+        siteFs:SetShown(entry.siteName ~= "")
+        SetSecondaryTextColor(siteFs, P, nil)
+    end
+end
+
 function SitesWeek.FillCapturer(cells, c, index)
     local nameW = 140
     cells[1]:SetText(index)
@@ -1146,6 +1255,12 @@ function Overlord.LeaderboardUI:CreateSitesWeekToggle(P)
     if not lbFrame then return end
     lbFrame._sitesPalette = P
     SitesWeek.ToggleButton(lbFrame.outpostHeaderBand, L.SITES_WEEK_TIP_TITLE, L.SITES_WEEK_TIP_BODY)
+    -- Gurubashi Arena board (Arena.lua): always shown under the keeps and outposts (placed by
+    -- LayoutLeaderboardSections); a bounded catch-up when the window opens.
+    self:CreateArenaView(P)
+    lbFrame:HookScript("OnShow", function()
+        if Overlord.Arena and Overlord.Arena.CatchUp then pcall(Overlord.Arena.CatchUp, Overlord.Arena, false) end
+    end)
     lbFrame:HookScript("OnHide", function()
         if lbFrame.sitesWeek and lbFrame.sitesWeek:IsShown() then Overlord.LeaderboardUI:ToggleSitesWeek() end
     end)
@@ -1155,7 +1270,8 @@ function Overlord.LeaderboardUI:CreateSitesWeekView(P)
     if not lbFrame or lbFrame.sitesWeek then return lbFrame and lbFrame.sitesWeek end
     local view = CreateFrame("Frame", nil, lbFrame)
     view:SetPoint("TOPLEFT", lbFrame.guildKeepBlock, "TOPLEFT", 0, 0)
-    view:SetPoint("BOTTOMRIGHT", lbFrame.outpostBlock, "BOTTOMRIGHT", 0, 0)
+    view:SetPoint("RIGHT", lbFrame.outpostBlock, "RIGHT", 0, 0)
+    view:SetPoint("BOTTOM", lbFrame.capturesPanel or lbFrame.outpostBlock, "BOTTOM", 0, 0)
     view:Hide()
     lbFrame.sitesWeek = view
     -- Un seul titre pour le volet : ses deux moities se nomment deja dans leurs colonnes.
@@ -1190,9 +1306,12 @@ function Overlord.LeaderboardUI:ToggleSitesWeek()
     view:SetShown(show)
     lbFrame.guildKeepBlock:SetShown(not show)
     lbFrame.outpostBlock:SetShown(not show)
+    if lbFrame.arenaView then lbFrame.arenaView:SetShown(not show) end
     if show then
         view.capturers.offset, view.rivalries.offset = 0, 0
         self:RefreshSitesWeek()
+    else
+        self:RefreshArena()
     end
 end
 
@@ -1213,6 +1332,98 @@ function Overlord.LeaderboardUI:RefreshSitesWeek()
     -- The stats getter keeps its tables while nothing changed, so Paint skips an unchanged Refresh.
     SitesWeek.Paint(view.capturers, view.capturers.fill)
     SitesWeek.Paint(view.rivalries, view.rivalries.fill)
+end
+
+-- ---------- Arene de Gurubashi (Arena.lua) ----------
+-- Toujours affichee sous les forts et les avant-postes : a gauche les guildes par prises de la
+-- semaine, a droite les dernieres prises (qui l'a prise a qui), le detenteur dans le titre.
+-- Donnees : le registre local de l'arene, rien d'envoye a l'ouverture sinon un rattrapage
+-- borne (Arena:CatchUp, au plus un toutes les 10 min).
+-- Room above its column band: its title strip (10 px above the band, TABLE_TITLE_H tall), air.
+SitesWeek.ARENA_GAP = 40
+
+function SitesWeek.FillArenaGuild(cells, g, index)
+    cells[1]:SetText(index)
+    cells[2]:SetText(LbCrestMarkup(g.faction, 14) .. " "
+        .. SitesWeek.Colored(TruncateTextToWidth(g.guild, 180, "GameFontNormal"), g.faction))
+    cells[3]:SetText(g.captures)
+end
+
+function SitesWeek.ArenaAgo(ts)
+    local sec = math.max(0, (GetServerTime and GetServerTime() or ts) - ts)
+    if SecondsToTime then return SecondsToTime(math.max(60, sec), true, false, 1) end
+    return math.floor(sec / 60) .. " min"
+end
+
+function SitesWeek.FillArenaRecent(cells, r)
+    cells[1]:SetText(string.format(L.DOM_TIP_AGO or "%s ago", SitesWeek.ArenaAgo(r.ts)))
+    local taker = SitesWeek.Colored(TruncateTextToWidth(r.guild, 95, "GameFontNormal"), r.faction)
+    if r.previous then
+        cells[2]:SetText(taker .. " |cFFB0A080>|r "
+            .. SitesWeek.Colored(TruncateTextToWidth(r.previous, 95, "GameFontNormal"), r.previousFaction))
+    else
+        cells[2]:SetText(taker)
+    end
+end
+
+function Overlord.LeaderboardUI:CreateArenaView(P)
+    if not lbFrame or lbFrame.arenaView then return lbFrame and lbFrame.arenaView end
+    local view = CreateFrame("Frame", nil, lbFrame)
+    view:SetSize(LB_GUILD_KEEP_W + LB_COL_GAP + LB_OUTPOST_W, 200)
+    lbFrame.arenaView = view
+    view.title = Overlord.LeaderboardUI.AddTableTitle(view, L.ARENA_TIP_TITLE or "Gurubashi Arena", P)
+    -- The rules on the title: no button of its own any more.
+    view.title:EnableMouse(true)
+    view.title:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:AddLine(L.ARENA_TIP_TITLE or "Gurubashi Arena", 1, 0.82, 0)
+        if L.ARENA_TIP_BODY then GameTooltip:AddLine(L.ARENA_TIP_BODY, 1, 1, 1, true) end
+        GameTooltip:Show()
+    end)
+    view.title:SetScript("OnLeave", GameTooltip_Hide)
+    view.guilds = SitesWeek.Half(view, P, "TOPLEFT", {
+        { x = -149, w = 26, text = "#" },
+        { x = -20, w = 200, text = L.ARENA_COL_GUILDS or "Guilds this week", justify = "LEFT" },
+        { x = 109, w = 58, text = L.LB_COL_CAPTURES or "Captures" },
+    }, L.ARENA_EMPTY or "Nobody has taken the arena this week.")
+    view.recent = SitesWeek.Half(view, P, "TOPRIGHT", {
+        { x = -118, w = 86, text = L.ARENA_COL_WHEN or "When" },
+        { x = 40, w = 208, text = L.ARENA_COL_TAKEN or "Taken by (from)", justify = "LEFT" },
+    }, "")
+    view.guilds.fill = SitesWeek.FillArenaGuild
+    view.recent.fill = SitesWeek.FillArenaRecent
+    return view
+end
+
+-- Under the keeps and outposts, across both columns, down to the bottom of the captures.
+function Overlord.LeaderboardUI:PlaceArenaView()
+    local view = lbFrame and lbFrame.arenaView
+    if not view or not lbFrame.capturesPanel then return end
+    view:ClearAllPoints()
+    view:SetPoint("TOPLEFT", lbFrame.guildKeepBlock, "BOTTOMLEFT", 0, -SitesWeek.ARENA_GAP)
+    view:SetPoint("RIGHT", lbFrame.outpostBlock, "RIGHT", 0, 0)
+    view:SetPoint("BOTTOM", lbFrame.capturesPanel, "BOTTOM", 0, 0)
+end
+
+function Overlord.LeaderboardUI:RefreshArena()
+    local view = lbFrame and lbFrame.arenaView
+    local arena = Overlord.Arena
+    if not view or not view:IsVisible() or not arena or not arena.GetBoard then return end
+    local board = arena:GetBoard()
+    local holder = board.holder
+    local title = L.ARENA_TIP_TITLE or "Gurubashi Arena"
+    if holder then
+        title = string.format(L.ARENA_HELD_BY or "%s: held by %s for %s", title,
+            SitesWeek.Colored(holder.guild, holder.faction), SitesWeek.ArenaAgo(holder.ts))
+    else
+        title = title .. " - |cFFB3B3B3" .. (L.ARENA_UNCLAIMED or "Unclaimed") .. "|r"
+    end
+    view.title.title:SetText(title)
+    view.guilds.list = board.guilds
+    view.recent.list = board.recent
+    -- (The fold keeps its tables while nothing changed: Paint skips an unchanged list.)
+    SitesWeek.Paint(view.guilds, view.guilds.fill)
+    SitesWeek.Paint(view.recent, view.recent.fill)
 end
 
 function Overlord.LeaderboardUI:CreateFrame()
@@ -1627,14 +1838,8 @@ function Overlord.LeaderboardUI:CreateFrame()
     gkhGuild:SetPoint("CENTER", guildKeepHeaderBand, "CENTER", LB_GK_COL_GUILD, 0)
     gkhGuild:SetWidth(LB_GK_GUILD_NAME_W)
     gkhGuild:SetJustifyH("CENTER")
-    gkhGuild:SetText(L.LB_COL_GUILD or "Guild")
+    gkhGuild:SetText(L.LB_COL_HELD_BY or "Held by")
     ApplyOfficialHeaderColor(gkhGuild, P)
-    local gkhWins = guildKeepHeaderBand:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    gkhWins:SetPoint("CENTER", guildKeepHeaderBand, "CENTER", LB_GK_COL_WINS, 0)
-    gkhWins:SetWidth(LB_GK_WINS_W)
-    gkhWins:SetJustifyH("CENTER")
-    gkhWins:SetText(L.LB_COL_CAPTURES or "Captures")
-    ApplyOfficialHeaderColor(gkhWins, P)
 
     local guildKeepPanel = CreateOfficialSubPanel(guildKeepBlock, LB_GUILD_KEEP_W, 400, P)
     guildKeepPanel:SetPoint("TOP", guildKeepHeaderBand, "BOTTOM", 0, -LB_GAP_HEADER)
@@ -1706,14 +1911,8 @@ function Overlord.LeaderboardUI:CreateFrame()
     ophGuild:SetPoint("CENTER", outpostHeaderBand, "CENTER", LB_OP_COL_GUILD, 0)
     ophGuild:SetWidth(LB_OP_GUILD_NAME_W)
     ophGuild:SetJustifyH("CENTER")
-    ophGuild:SetText(L.LB_COL_GUILD or "Guild")
+    ophGuild:SetText(L.LB_COL_HELD_BY or "Held by")
     ApplyOfficialHeaderColor(ophGuild, P)
-    local ophCaptures = outpostHeaderBand:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    ophCaptures:SetPoint("CENTER", outpostHeaderBand, "CENTER", LB_OP_COL_CAPTURES, 0)
-    ophCaptures:SetWidth(LB_OP_CAPTURES_W)
-    ophCaptures:SetJustifyH("CENTER")
-    ophCaptures:SetText(L.LB_COL_CAPTURES or "Captures")
-    ApplyOfficialHeaderColor(ophCaptures, P)
 
     local outpostPanel = CreateOfficialSubPanel(outpostBlock, LB_OUTPOST_W, 400, P)
     outpostPanel:SetPoint("TOP", outpostHeaderBand, "BOTTOM", 0, -LB_GAP_HEADER)
@@ -2051,25 +2250,35 @@ function Overlord.LeaderboardUI.OnGuildRowEnter(row)
     GameTooltip:Show()
 end
 
--- 1.7.2: hovering a keep or outpost row names the character who took the site
--- (the capture is signed by him on the network). Read from the row entry, no scan.
+-- Hovering a keep or outpost row: the site, who holds it and who took it for them (the
+-- capture is signed on the network), then the guilds that took it this week. Read from
+-- the row entry, no scan.
 function Overlord.LeaderboardUI.OnSiteRowEnter(row)
     local entry = row and row._olSiteEntry
     if not entry or not GameTooltip then return end
     GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
-    local r, g, b = 1, 1, 1
-    if row.name and row.name.GetTextColor then r, g, b = row.name:GetTextColor() end
-    GameTooltip:AddLine("<" .. tostring(entry.guild or "") .. ">", r or 1, g or 1, b or 1)
-    local siteName = entry.keepSiteKey and GetGuildKeepSiteDisplayName(entry.keepSiteKey)
-        or GetOutpostSiteDisplayName(entry.outpostSiteKey)
-    if siteName and siteName ~= "" then
-        GameTooltip:AddLine(siteName, 0.8, 0.8, 0.8)
+    GameTooltip:AddLine(entry.siteName or "", 1, 0.82, 0)
+    if entry.currentlyHeld then
+        local c = SitesWeek.RGB[entry.faction] or { 1, 1, 1 }
+        GameTooltip:AddLine(string.format(L.LB_SITE_HELD_BY or "Held by %s", "<" .. tostring(entry.guild) .. ">"),
+            c[1], c[2], c[3])
+        local capturer = entry.capturer
+        if type(capturer) == "string" and capturer ~= "" then
+            local sync = Overlord.Sync
+            local shown = (sync and sync.CanonicalForeverName and sync:CanonicalForeverName(capturer)) or capturer
+            GameTooltip:AddLine(string.format(L.LB_OUTPOST_CAPTURED_BY or "Taken by %s", shown), 0.4, 1, 0.4)
+        end
+    else
+        GameTooltip:AddLine(L.LB_SITE_FREE or "Unclaimed", 0.6, 0.6, 0.6)
     end
-    local capturer = entry.capturer
-    if type(capturer) == "string" and capturer ~= "" then
-        local sync = Overlord.Sync
-        local shown = (sync and sync.CanonicalForeverName and sync:CanonicalForeverName(capturer)) or capturer
-        GameTooltip:AddLine(string.format(L.LB_OUTPOST_CAPTURED_BY or "Taken by %s", shown), 0.4, 1, 0.4)
+    local guilds = entry.guilds or SitesWeek.NONE
+    if #guilds > 0 then
+        GameTooltip:AddLine(L.LB_SITE_WEEK or "Captures this week", 1, 0.82, 0)
+        for i = 1, math.min(#guilds, 8) do
+            local g = guilds[i]
+            local c = SitesWeek.RGB[g.faction] or { 1, 1, 1 }
+            GameTooltip:AddDoubleLine(g.guild, tostring(g.captures), c[1], c[2], c[3], 1, 1, 1)
+        end
     end
     GameTooltip:Show()
 end
@@ -2252,11 +2461,6 @@ function Overlord.LeaderboardUI:CreateGuildKeepRow(parent, index, yOffset, P)
     row.name:SetJustifyH("CENTER")
     row.name:SetWordWrap(false)
 
-    row.wins = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    row.wins:SetPoint("CENTER", row, "CENTER", LB_GK_COL_WINS, 0)
-    row.wins:SetWidth(LB_GK_WINS_W)
-    row.wins:SetJustifyH("CENTER")
-
     row:EnableMouse(true)
     row:SetScript("OnEnter", Overlord.LeaderboardUI.OnSiteRowEnter)
     row:SetScript("OnLeave", GameTooltip_Hide)
@@ -2310,11 +2514,6 @@ function Overlord.LeaderboardUI:CreateOutpostRow(parent, index, yOffset, P)
     row.name:SetJustifyH("CENTER")
     row.name:SetWordWrap(false)
     row.name:SetNonSpaceWrap(false)
-
-    row.captures = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    row.captures:SetPoint("CENTER", row, "CENTER", LB_OP_COL_CAPTURES, 0)
-    row.captures:SetWidth(LB_OP_CAPTURES_W)
-    row.captures:SetJustifyH("CENTER")
 
     row:EnableMouse(true)
     row:SetScript("OnEnter", Overlord.LeaderboardUI.OnSiteRowEnter)
@@ -2682,7 +2881,7 @@ end
 
 RenderGuildKeepRows = function(force)
     if not lbFrame or not lbFrame._lbView then return end
-    local list = lbFrame._lbView.sortedGuildKeeps or {}
+    local list = SitesWeek.ListFor(lbFrame._lbView, "sortedGuildKeeps", true)
     local first, poolSize, total = GetVirtualRowWindow(
         lbFrame.scrollGuildKeep, GUILD_ROW_HEIGHT, #list)
     Overlord.LeaderboardUI:EnsureGuildKeepRows(poolSize)
@@ -2703,40 +2902,9 @@ RenderGuildKeepRows = function(force)
                     Overlord.LeaderboardUI.OnSiteRowEnter(row)
                 end
             end
-            local rank = lbFrame._lbView.ranks and lbFrame._lbView.ranks.sortedGuildKeeps[dataIndex] or dataIndex
-            local medalColor = MEDAL_COLORS[rank]
-            local keepName = GetGuildKeepSiteDisplayName(entry.keepSiteKey)
-            local wins = math.floor(tonumber(entry.wins) or 0)
-            local paintKey = rank .. "|" .. tostring(entry.guild or "") .. "|"
-                .. tostring(entry.faction or "") .. "|" .. tostring(entry.keepSiteKey or "") .. "|"
-                .. tostring(wins) .. "|" .. (entry.currentlyHeld and "1" or "0") .. "|"
-                .. tostring(entry.keepAtlas or "") .. "|" .. keepName
-            if row._lbPaintKey ~= paintKey then
-                row._lbPaintKey = paintKey
-                row.name:SetText(entry.guild or "")
-                if entry.faction == "Horde" then
-                    row.name:SetTextColor(1.0, 0.40, 0.27)
-                elseif entry.faction == "Alliance" then
-                    row.name:SetTextColor(0.427, 0.702, 0.949)
-                elseif medalColor then
-                    row.name:SetTextColor(medalColor[1], medalColor[2], medalColor[3])
-                else
-                    row.name:SetTextColor(P.white[1], P.white[2], P.white[3])
-                end
-                if entry.currentlyHeld and entry.keepAtlas and row.keepIcon and row.keepIcon.SetAtlas then
-                    row.keepIcon:SetAtlas(entry.keepAtlas, false)
-                    row.keepIcon:SetSize(GUILD_KEEP_ICON, GUILD_KEEP_ICON)
-                    row.keepIcon:Show()
-                elseif row.keepIcon then
-                    row.keepIcon:Hide()
-                end
-                if row.keepName then
-                    row.keepName:SetText(keepName)
-                    row.keepName:SetShown(keepName ~= "")
-                    if keepName ~= "" then SetSecondaryTextColor(row.keepName, P, medalColor) end
-                end
-                row.wins:SetText(tostring(wins))
-                SetSecondaryTextColor(row.wins, P, (wins > 0 or entry.currentlyHeld) and medalColor or nil)
+            if row._lbPaintKey ~= entry.sig then
+                row._lbPaintKey = entry.sig
+                SitesWeek.PaintSiteRow(row, entry, row.keepIcon, row.keepName, LB_GK_KEEP_NAME_W, P)
             end
             row:Show()
         elseif row then
@@ -2750,7 +2918,7 @@ end
 
 RenderOutpostRows = function(force)
     if not lbFrame or not lbFrame._lbView then return end
-    local list = lbFrame._lbView.sortedOutposts or {}
+    local list = SitesWeek.ListFor(lbFrame._lbView, "sortedOutposts", false)
     local first, poolSize, total = GetVirtualRowWindow(
         lbFrame.scrollOutpost, GUILD_ROW_HEIGHT, #list)
     Overlord.LeaderboardUI:EnsureOutpostRows(poolSize)
@@ -2771,43 +2939,10 @@ RenderOutpostRows = function(force)
                     Overlord.LeaderboardUI.OnSiteRowEnter(row)
                 end
             end
-            local rank = lbFrame._lbView.ranks and lbFrame._lbView.ranks.sortedOutposts[dataIndex] or dataIndex
-            local medalColor = MEDAL_COLORS[rank]
-            local outpostName = GetOutpostSiteDisplayName(entry.outpostSiteKey)
-            local captures = math.floor(tonumber(entry.captures) or 0)
-            local paintKey = rank .. "|" .. tostring(entry.guild or "") .. "|"
-                .. tostring(entry.faction or "") .. "|" .. tostring(entry.outpostSiteKey or "") .. "|"
-                .. tostring(captures) .. "|" .. (entry.currentlyHeld and "1" or "0") .. "|"
-                .. tostring(entry.outpostAtlas or "") .. "|" .. outpostName
-            if row._lbPaintKey ~= paintKey then
-                row._lbPaintKey = paintKey
-                row.name:SetText(TruncateTextToWidth(entry.guild or "", LB_OP_GUILD_NAME_W, "GameFontNormal"))
-                if entry.faction == "Horde" then
-                    row.name:SetTextColor(1.0, 0.40, 0.27)
-                elseif entry.faction == "Alliance" then
-                    row.name:SetTextColor(0.427, 0.702, 0.949)
-                elseif medalColor then
-                    row.name:SetTextColor(medalColor[1], medalColor[2], medalColor[3])
-                else
-                    row.name:SetTextColor(P.white[1], P.white[2], P.white[3])
-                end
-                if entry.currentlyHeld and entry.outpostAtlas and row.outpostIcon and row.outpostIcon.SetAtlas then
-                    -- Taille fixe : avec la taille native de l'atlas (parfois 0 sur Forever),
-                    -- le nom du site sautait vers la gauche sur certaines lignes seulement.
-                    row.outpostIcon:SetAtlas(entry.outpostAtlas, false)
-                    row.outpostIcon:SetSize(GUILD_KEEP_ICON, GUILD_KEEP_ICON)
-                    row.outpostIcon:Show()
-                elseif row.outpostIcon then
-                    row.outpostIcon:Hide()
-                end
-                if row.outpostName then
-                    row.outpostName:SetText(TruncateTextToWidth(
-                        outpostName, LB_OP_OUTPOST_NAME_MAX_W, "GameFontNormalSmall"))
-                    row.outpostName:SetShown(outpostName ~= "")
-                    if outpostName ~= "" then SetSecondaryTextColor(row.outpostName, P, medalColor) end
-                end
-                row.captures:SetText(tostring(captures))
-                SetSecondaryTextColor(row.captures, P, medalColor)
+            if row._lbPaintKey ~= entry.sig then
+                row._lbPaintKey = entry.sig
+                SitesWeek.PaintSiteRow(row, entry, row.outpostIcon, row.outpostName,
+                    LB_OP_OUTPOST_NAME_MAX_W, P)
             end
             row:Show()
         elseif row then
@@ -3421,13 +3556,13 @@ function LbPerf.PaintList(key)
         if not same then RenderGuildRows(false) end
     elseif key == "keep" then
         scroll = lbFrame.scrollGuildKeep
-        same = LbPerf.SameInputs(scroll, GUILD_ROW_HEIGHT, #(view.sortedGuildKeeps or {}), gen, view,
-            view.sortedGuildKeeps, view.ranks)
+        local list = SitesWeek.ListFor(view, "sortedGuildKeeps", true)
+        same = LbPerf.SameInputs(scroll, GUILD_ROW_HEIGHT, #list, gen, view, list)
         if not same then RenderGuildKeepRows(false) end
     elseif key == "outpost" then
         scroll = lbFrame.scrollOutpost
-        same = LbPerf.SameInputs(scroll, GUILD_ROW_HEIGHT, #(view.sortedOutposts or {}), gen, view,
-            view.sortedOutposts, view.ranks)
+        local list = SitesWeek.ListFor(view, "sortedOutposts", false)
+        same = LbPerf.SameInputs(scroll, GUILD_ROW_HEIGHT, #list, gen, view, list)
         if not same then RenderOutpostRows(false) end
     else
         scroll = key == "Alliance" and lbFrame.scrollAlli or lbFrame.scrollHorde
@@ -3513,12 +3648,9 @@ function Overlord.LeaderboardUI:PaintView()
         lbFrame.kbEmptyHint:SetShown(not searching and PlayerSort.Mode() == "kb" and view.kbBuilt == true
             and #(view.sortedKB or {}) == 0)
     end
-    if lbFrame.guildKeepEmptyHint then
-        lbFrame.guildKeepEmptyHint:SetShown(not searching and #view.sortedGuildKeeps == 0)
-    end
-    if lbFrame.outpostEmptyHint then
-        lbFrame.outpostEmptyHint:SetShown(not searching and #view.sortedOutposts == 0)
-    end
+    -- Keeps and outposts list every site (an unclaimed one says so): no empty hint over them.
+    if lbFrame.guildKeepEmptyHint then lbFrame.guildKeepEmptyHint:Hide() end
+    if lbFrame.outpostEmptyHint then lbFrame.outpostEmptyHint:Hide() end
 
     LayoutLeaderboardSections()
     FitLeaderboardFrameHeight()
@@ -3530,12 +3662,13 @@ function Overlord.LeaderboardUI:PaintView()
         lbFrame.scrollKills, lbFrame.scrollChildKills, killCount, KILL_ROW_HEIGHT)
     SetLeaderboardScrollExtent(
         lbFrame.scrollGuild, lbFrame.scrollChildGuild, #guildList, GUILD_ROW_HEIGHT)
+    -- (The lists painted: one row per site, unclaimed sites included.)
     SetLeaderboardScrollExtent(
         lbFrame.scrollGuildKeep, lbFrame.scrollChildGuildKeep,
-        #view.sortedGuildKeeps, GUILD_ROW_HEIGHT)
+        #SitesWeek.ListFor(view, "sortedGuildKeeps", true), GUILD_ROW_HEIGHT)
     SetLeaderboardScrollExtent(
         lbFrame.scrollOutpost, lbFrame.scrollChildOutpost,
-        #view.sortedOutposts, GUILD_ROW_HEIGHT)
+        #SitesWeek.ListFor(view, "sortedOutposts", false), GUILD_ROW_HEIGHT)
     SetLeaderboardScrollExtent(
         lbFrame.scrollAlli, lbFrame.scrollChildAlli, alliCount, CAPTURE_ROW_HEIGHT)
     SetLeaderboardScrollExtent(
@@ -3986,6 +4119,7 @@ function Overlord.LeaderboardUI:Refresh()
     view.sortedGuildKeeps = sortedGuildKeeps or lbVolatileLists.none
     view.sortedOutposts = sortedOutposts or lbVolatileLists.none
     self:RefreshSitesWeek()
+    self:RefreshArena()
     view.meta = dc.meta or {}
     view.locale = dc.locale or {}
     -- Totaux avant le dessin : la hauteur du cadre est calculee avec leur ligne.
@@ -4284,5 +4418,5 @@ end
 
 -- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
 Overlord.MemoryParts = Overlord.MemoryParts or {}
-Overlord.MemoryParts["LeaderboardUI.lua"] = function() return { lbFrame = lbFrame, rows = rows, guildRows = guildRows, guildKeepRows = guildKeepRows, outpostRows = outpostRows, MAX_VISIBLE_KILL_ROWS = MAX_VISIBLE_KILL_ROWS, KILL_ROW_HEIGHT = KILL_ROW_HEIGHT, MAX_CAPTURE_LINES = MAX_CAPTURE_LINES, CAPTURE_ROW_HEIGHT = CAPTURE_ROW_HEIGHT, GUILD_ROW_HEIGHT = GUILD_ROW_HEIGHT, VIRTUAL_ROW_OVERSCAN = VIRTUAL_ROW_OVERSCAN, GUILD_KEEP_ICON = GUILD_KEEP_ICON, LB_MAIN_W = LB_MAIN_W, LB_GUILD_KILLS_W = LB_GUILD_KILLS_W, LB_GUILD_KEEP_W = LB_GUILD_KEEP_W, LB_OUTPOST_W = LB_OUTPOST_W, LB_COL_GAP = LB_COL_GAP, GuildRating = GuildRating, LB_FRAME_PAD = LB_FRAME_PAD, LB_SIZE_BOOST = LB_SIZE_BOOST, LB_KEYART = LB_KEYART, LB_FRAME_W = LB_FRAME_W, LB_GUILD_COL_RANK = LB_GUILD_COL_RANK, LB_GUILD_COL_NAME = LB_GUILD_COL_NAME, LB_GUILD_COL_MEMBERS = LB_GUILD_COL_MEMBERS, LB_GUILD_COL_KILLS = LB_GUILD_COL_KILLS, LB_GUILD_NAME_W = LB_GUILD_NAME_W, LB_GUILD_RANK_W = LB_GUILD_RANK_W, LB_GUILD_MEMBERS_W = LB_GUILD_MEMBERS_W, LB_GUILD_KILLS_TEXT_W = LB_GUILD_KILLS_TEXT_W, LB_GK_KEEP_LEFT = LB_GK_KEEP_LEFT, LB_GK_KEEP_NAME_W = LB_GK_KEEP_NAME_W, LB_GK_COL_KEEP = LB_GK_COL_KEEP, LB_GK_COL_GUILD = LB_GK_COL_GUILD, LB_GK_COL_WINS = LB_GK_COL_WINS, LB_GK_GUILD_NAME_W = LB_GK_GUILD_NAME_W, LB_GK_WINS_W = LB_GK_WINS_W, LB_OP_OUTPOST_LEFT = LB_OP_OUTPOST_LEFT, LB_OP_OUTPOST_NAME_W = LB_OP_OUTPOST_NAME_W, LB_OP_COL_OUTPOST = LB_OP_COL_OUTPOST, LB_OP_COL_GUILD = LB_OP_COL_GUILD, LB_OP_COL_CAPTURES = LB_OP_COL_CAPTURES, LB_OP_GUILD_NAME_W = LB_OP_GUILD_NAME_W, LB_OP_CAPTURES_W = LB_OP_CAPTURES_W, LB_OP_GUILD_COL_LEFT = LB_OP_GUILD_COL_LEFT, LB_OP_GUILD_COL_RIGHT = LB_OP_GUILD_COL_RIGHT, LB_OP_OUTPOST_NAME_MAX_W = LB_OP_OUTPOST_NAME_MAX_W, LB_GAP_SECTION = LB_GAP_SECTION, LB_GAP_HEADER = LB_GAP_HEADER, LB_ROW_PAD = LB_ROW_PAD } end
+Overlord.MemoryParts["LeaderboardUI.lua"] = function() return { lbFrame = lbFrame, rows = rows, guildRows = guildRows, guildKeepRows = guildKeepRows, outpostRows = outpostRows, MAX_VISIBLE_KILL_ROWS = MAX_VISIBLE_KILL_ROWS, KILL_ROW_HEIGHT = KILL_ROW_HEIGHT, MAX_CAPTURE_LINES = MAX_CAPTURE_LINES, CAPTURE_ROW_HEIGHT = CAPTURE_ROW_HEIGHT, GUILD_ROW_HEIGHT = GUILD_ROW_HEIGHT, VIRTUAL_ROW_OVERSCAN = VIRTUAL_ROW_OVERSCAN, GUILD_KEEP_ICON = GUILD_KEEP_ICON, LB_MAIN_W = LB_MAIN_W, LB_GUILD_KILLS_W = LB_GUILD_KILLS_W, LB_GUILD_KEEP_W = LB_GUILD_KEEP_W, LB_OUTPOST_W = LB_OUTPOST_W, LB_COL_GAP = LB_COL_GAP, GuildRating = GuildRating, LB_FRAME_PAD = LB_FRAME_PAD, LB_SIZE_BOOST = LB_SIZE_BOOST, LB_KEYART = LB_KEYART, LB_FRAME_W = LB_FRAME_W, LB_GUILD_COL_RANK = LB_GUILD_COL_RANK, LB_GUILD_COL_NAME = LB_GUILD_COL_NAME, LB_GUILD_COL_MEMBERS = LB_GUILD_COL_MEMBERS, LB_GUILD_COL_KILLS = LB_GUILD_COL_KILLS, LB_GUILD_NAME_W = LB_GUILD_NAME_W, LB_GUILD_RANK_W = LB_GUILD_RANK_W, LB_GUILD_MEMBERS_W = LB_GUILD_MEMBERS_W, LB_GUILD_KILLS_TEXT_W = LB_GUILD_KILLS_TEXT_W, LB_GK_KEEP_LEFT = LB_GK_KEEP_LEFT, LB_GK_KEEP_NAME_W = LB_GK_KEEP_NAME_W, LB_GK_COL_KEEP = LB_GK_COL_KEEP, LB_GK_COL_GUILD = LB_GK_COL_GUILD, LB_GK_GUILD_NAME_W = LB_GK_GUILD_NAME_W, LB_OP_OUTPOST_LEFT = LB_OP_OUTPOST_LEFT, LB_OP_OUTPOST_NAME_W = LB_OP_OUTPOST_NAME_W, LB_OP_COL_OUTPOST = LB_OP_COL_OUTPOST, LB_OP_COL_GUILD = LB_OP_COL_GUILD, LB_OP_GUILD_NAME_W = LB_OP_GUILD_NAME_W, LB_OP_GUILD_COL_LEFT = LB_OP_GUILD_COL_LEFT, LB_OP_GUILD_COL_RIGHT = LB_OP_GUILD_COL_RIGHT, LB_OP_OUTPOST_NAME_MAX_W = LB_OP_OUTPOST_NAME_MAX_W, LB_GAP_SECTION = LB_GAP_SECTION, LB_GAP_HEADER = LB_GAP_HEADER, LB_ROW_PAD = LB_ROW_PAD } end
 Overlord.MemoryParts["LeaderboardUI.lua#2"] = function() return { LB_KILLS_SCROLL_GUTTER = LB_KILLS_SCROLL_GUTTER, LB_KILLS_RIGHT = LB_KILLS_RIGHT, LB_CAPTURE_PANEL_W = LB_CAPTURE_PANEL_W, LB_ICON_SIZE = LB_ICON_SIZE, LB_HEADER_H = LB_HEADER_H, LB_KILL_COL_RANK_W = LB_KILL_COL_RANK_W, LB_KILL_COL_ICON_W = LB_KILL_COL_ICON_W, LB_KILL_COL_KILLS_W = LB_KILL_COL_KILLS_W, PlayerSort = PlayerSort, LB_CAPTURE_ROW_PAD = LB_CAPTURE_ROW_PAD, LB_CAPTURE_SCROLL_GUTTER = LB_CAPTURE_SCROLL_GUTTER, LB_CAPTURE_COL_ICON_W = LB_CAPTURE_COL_ICON_W, LB_CAPTURE_COL_COUNT_W = LB_CAPTURE_COL_COUNT_W, MEDAL_COLORS = MEDAL_COLORS, LB_CREST = LB_CREST, lbRefreshPending = lbRefreshPending, lbRefreshLastAt = lbRefreshLastAt, lbRefreshToken = lbRefreshToken, LB_REFRESH_MIN_INTERVAL = LB_REFRESH_MIN_INTERVAL, LB_REFRESH_DEBOUNCE = LB_REFRESH_DEBOUNCE, lbSectionsLayoutDone = lbSectionsLayoutDone, RenderKillRows = RenderKillRows, RenderGuildRows = RenderGuildRows, RenderGuildKeepRows = RenderGuildKeepRows, RenderOutpostRows = RenderOutpostRows, RenderCaptureRows = RenderCaptureRows, LbPerf = LbPerf, LbBuild = LbBuild, lbMeasureByFont = lbMeasureByFont, lbTruncateCache = lbTruncateCache, lbTruncateCacheCount = lbTruncateCacheCount, LB_TRUNCATE_CACHE_MAX = LB_TRUNCATE_CACHE_MAX, lbVolatileLists = lbVolatileLists, LB_VOLATILE_LISTS_TTL = LB_VOLATILE_LISTS_TTL, LB_VOLATILE_WORK_PER_SLICE = LB_VOLATILE_WORK_PER_SLICE, LB_VOLATILE_MS_PER_SLICE = LB_VOLATILE_MS_PER_SLICE, SCROLL_IND_UP = SCROLL_IND_UP, SCROLL_IND_DOWN = SCROLL_IND_DOWN, cachedPalette = cachedPalette, SitesWeek = SitesWeek, lastRefreshIfVisibleAt = lastRefreshIfVisibleAt, REFRESH_IF_VISIBLE_INTERVAL = REFRESH_IF_VISIBLE_INTERVAL, refreshIfVisiblePending = refreshIfVisiblePending } end

@@ -1,11 +1,16 @@
-2.7.0
+2.8.0
 
-**Overlord Forever 2.7.0**
+**Overlord Forever 2.8.0**
 
-- Layers OL: since game hotfix 1.60.1 the layer of a creature can no longer be read, and Overlord's layer numbers were gone. Overlord now names layers itself. Overlord players who see each other share a code such as #OL137, shown at the top left of the panel and in capture alerts ("layer #OL137", with "(yours)" when the capture happens on your layer). A code appears after a few seconds in sight of another Overlord player, or when you start a capture. The Layers OL button opens a window that explains how to read it. Overlord no longer offers any way to move to another player's layer.
-- Capturer spotted: when an enemy who is capturing a point of the front you stand on shows up on your screen (nameplate or target), their faction banner appears next to their health bar and one chat line tells you they are on your layer.
-- Roleplay PvP: a player whose realm rules were not yet known when Overlord loaded could be counted in the PvP campaign for the whole session, and their group's kills reached the PvP ranking with them. Overlord now reads the rules again after login; if they turn out different, it pauses for the session and asks for a /reload. Rows that already reached the PvP ranking leave it at the weekly reset.
-- Capture alerts name the capturer by first and last name only.
-- Players still on 2.6.0 show a long number instead of the #OL code in their alerts; captures, the map and the ranking pass between both versions as before.
-- The tutorial describes Layers OL and Capturer spotted in every language.
+- Gurubashi Arena (Stranglethorn Vale): a new free-for-all guild capture. Any guild takes it from any other, your own faction included: stay 5 minutes in the pit with nobody from outside your guild alive in it. Its board sits under the leaderboard's keeps and outposts (holder, captures per guild this week, latest captures) and its holder shows on the Stranglethorn map. It is not counted in the guild rating, and it never slows kills, captures or the ranking on the network.
+- Guild horn: the Call to arms button now opens two horns. The faction horn works as before; the guild horn warns your guild mates running Overlord, with your zone and position, anywhere outside instances (once every 10 minutes for the whole guild).
+- Corner widget (Options, On-screen panels, off by default): a small button you can drag anywhere. Hover it for the guild table and Recent activity; click it to open Overlord.
+- Leaderboard: the keeps and outposts tables show one row per site with its holder; hover a row for each guild's captures of that site this week.
+- Keeps and outposts taken by a player who captures without killing now reach every map, including players who log in later.
+- A keep taken by a guild of the faction that already held it no longer makes maps go back and forth.
+- Map labels keep the holder's name during an assault; alerts and leaderboard wording are clearer in every language.
+- Roleplay PvP: rows from a session that read its realm rules wrong are kept out of the other campaigns' rankings.
+- Players on 2.7.0 must update: they do not see the arena, and their maps can stay wrong after a capture by a player without kills.
+- New files in this version: restart the game completely (a /reload is not enough).
+- The tutorial describes the arena, the guild horn and the corner widget in every language.
 - Network and sync hardening.

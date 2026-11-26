@@ -144,6 +144,11 @@ jobs:
           lua5.1 tests/forever_domination_v2.test.lua
           lua5.1 tests/sync_report.test.lua
           lua5.1 tests/forever_call_to_arms.test.lua
+          lua5.1 tests/forever_guild_call.test.lua
+          lua5.1 tests/forever_corner_widget.test.lua
+          lua5.1 tests/forever_capture_row_guild.test.lua
+          lua5.1 tests/forever_arena.test.lua
+          lua5.1 tests/forever_bnet_realm_bands.test.lua
           lua5.1 tests/forever_zone_partial_merge.test.lua
           lua5.1 tests/forever_capital_kept.test.lua
           lua5.1 tests/forever_available_alert_once.test.lua
