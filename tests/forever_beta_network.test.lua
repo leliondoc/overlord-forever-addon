@@ -20,20 +20,22 @@ C_Timer = {
     NewTicker = function() return {} end,
 }
 local clients = {}
-local function drain()
-    while #pending > 0 do
-        table.sort(pending, function(a, b) return a.at < b.at end)
-        local item = table.remove(pending, 1)
-        now = item.at; item.run(); calls = calls + 1
-        for _, replica in ipairs(clients) do
-            local bytes = replica.Relay.stats.bytes or 0
-            local credit = math.min(500, (replica.credit or 500) + (now - (replica.checkedAt or 100)) * 1000)
-            assert(bytes - (replica.checkedBytes or 0) <= credit + 0.001, "Shared transport budget exceeded")
-            replica.credit = credit - (bytes - (replica.checkedBytes or 0))
-            replica.checkedAt, replica.checkedBytes = now, bytes
-        end
-        assert(calls < 100000, "Relay loop / unbounded pump")
+-- One timer, then the shared budget of every replica checked.
+local function step()
+    table.sort(pending, function(a, b) return a.at < b.at end)
+    local item = table.remove(pending, 1)
+    now = item.at; item.run(); calls = calls + 1
+    for _, replica in ipairs(clients) do
+        local bytes = replica.Relay.stats.bytes or 0
+        local credit = math.min(500, (replica.credit or 500) + (now - (replica.checkedAt or 100)) * 1000)
+        assert(bytes - (replica.checkedBytes or 0) <= credit + 0.001, "Shared transport budget exceeded")
+        replica.credit = credit - (bytes - (replica.checkedBytes or 0))
+        replica.checkedAt, replica.checkedBytes = now, bytes
     end
+    assert(calls < 100000, "Relay loop / unbounded pump")
+end
+local function drain()
+    while #pending > 0 do step() end
 end
 local function client(name, channel, pool)
     local a = { Version = "1.0.0", CommunityModeEnabled = true, RelayEnabled = true,
@@ -526,6 +528,86 @@ do
     assert(busy.Relay:IsUrgentPacket("HR", "x") and not busy.Relay:IsUrgentPacket("HB", "x")
         and not busy.Relay:IsUrgentPacket("LK", "x"), "Catch-up data must stay in the bulk lane")
     drain()
+end
+-- Gurubashi Arena (AC, AQ, AL): never ahead of anything. Admitted on a quiet queue only, sent
+-- once nothing else waits, and the first packet a full queue gives up.
+do
+    local fun = client("Fun Tester", "fun")
+    local funWatch = client("Funwatch Tester", "fun")
+    assert(fun.Relay:Send("AC", "arena-first"), "a quiet queue refused an arena capture")
+    for i = 1, 10 do assert(fun.Relay:Send("K", "fun-kill-" .. i)) end
+    local droppedBefore = fun.Relay.stats.dropped
+    assert(not fun.Relay:Send("AC", "arena-busy"), "an arena capture entered a busy queue")
+    assert(fun.Relay.stats.arenaRefused == 1 and fun.Relay.stats.dropped == droppedBefore,
+        "an arena refusal was counted as a relay loss")
+    drain()
+    assert(#funWatch.received == 11 and funWatch.received[11].kind == "AC"
+        and funWatch.received[11].payload == "arena-first",
+        "the arena capture left before kills queued after it")
+    local packed = client("Packed Tester", "packed")
+    local packedWatch = client("Packedwatch Tester", "packed")
+    assert(packed.Relay:Send("AL", "arena-packed"))
+    for i = 1, 83 do assert(packed.Relay:Send("K", "packed-" .. i)) end
+    -- A copy that cannot be queued anyway (oversized) takes no arena slot.
+    assert(not packed.Relay:Send("K", string.rep("x", 4000)))
+    assert((packed.Relay.stats.arenaDropped or 0) == 0, "an oversized packet pushed the arena out for nothing")
+    assert(packed.Relay:Send("K", "packed-84"), "a kill was refused while an arena packet held a slot")
+    assert(packed.Relay.kindStats.AL and packed.Relay.kindStats.AL.dropped == 1
+        and packed.Relay.stats.arenaDropped == 1 and (packed.Relay.stats.displaced or 0) == 0,
+        "the arena packet given up for a kill was not counted as the arena's")
+    drain()
+    assert(#packedWatch.received == 84 and packedWatch.received[84].payload == "packed-84",
+        "a kill was lost for an arena packet")
+    -- A capture alert on a full queue gives up the arena packet, not a kill.
+    local alert = client("Alertfull Tester", "alertfull")
+    local alertWatch = client("Alertfullwatch Tester", "alertfull")
+    assert(alert.Relay:Send("K", "alertfull-0"))
+    assert(alert.Relay:Send("AQ", "arena-ask"))
+    for i = 1, 82 do assert(alert.Relay:Send("K", "alertfull-" .. i)) end
+    assert(alert.Relay:Send("ZS", "alertfull-alert"), "a full queue refused a capture alert")
+    assert(alert.Relay.kindStats.AQ.dropped == 1 and alert.Relay.kindStats.K.dropped == 0,
+        "the capture alert pushed out a kill while an arena packet waited")
+    drain()
+    assert(#alertWatch.received == 84 and alertWatch.received[1].kind == "ZS", "the alert or a kill was lost")
+    -- A ranking page over its own cap keeps its backpressure: it takes no arena slot.
+    do
+        local paged = client("Paged Tester", "pagedcap")
+        local pagedWatch = client("Pagedwatch Tester", "pagedcap")
+        paged.Relay.peers[pagedWatch.name:lower()] = { via = pagedWatch.name, transport = "CHANNEL", at = now, hops = 1 }
+        assert(paged.Relay:Send("AC", "arena-paged"))
+        local accepted = 0
+        for i = 1, 8 do if paged.Relay:Send("HB", "8:page-" .. i, pagedWatch.name) then accepted = accepted + 1 end end
+        assert(accepted >= 1 and accepted < 8, "fixture: the paged cap did not bite: " .. accepted)
+        assert((paged.Relay.stats.arenaDropped or 0) == 0, "ranking pages over their cap pushed the arena out")
+        drain()
+    end
+    -- One pump tick at a frozen clock: the arena spends only what lies above its reserve, and a
+    -- started arena packet still gives its slot to a kill.
+    local res = client("Reserve Tester", "reserve")
+    local resWatch = client("Reservewatch Tester", "reserve")
+    now = now + 5
+    local before = res.Relay.stats.bytes or 0
+    assert(res.Relay:Send("AL", string.rep("y", 900)))
+    -- (Timers one by one until the first that sends: that tick alone is measured.)
+    local spent = 0
+    while spent == 0 and #pending > 0 do
+        step()
+        spent = (res.Relay.stats.bytes or 0) - before
+    end
+    -- (One 282 B fragment a tick: started, not finished.)
+    assert(spent > 0 and spent < 500, "fixture: the arena packet was not started: " .. spent)
+    local src = io.open("SyncRelay.lua", "rb"):read("*a")
+    assert(src:find("spend(task.bytes, task.reserve)", 1, true)
+        and src:find("for _, task in ipairs(item.tasks) do task.reserve = ARENA.reserve end", 1, true)
+        and src:find("math.min(reserve or 0, math.max(0, 500 - bytes))", 1, true),
+        "the arena no longer leaves a byte reserve to the others")
+    for i = 1, 83 do assert(res.Relay:Send("K", "reserve-" .. i)) end
+    assert(res.Relay:Send("K", "reserve-84"), "a started arena packet kept its slot against a kill")
+    assert(res.Relay.stats.arenaDropped == 1, "the started arena packet given up was not counted")
+    drain()
+    local kills = 0
+    for _, m in ipairs(resWatch.received) do if m.kind == "K" then kills = kills + 1 end end
+    assert(kills == 84, "a kill was lost behind a started arena packet: " .. kills)
 end
 -- A long local quota wait must not churn retry records or discard copies after
 -- three seconds. Ready BNet work behind waiting copies in BOTH lanes still runs.

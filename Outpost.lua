@@ -1051,21 +1051,24 @@ function Overlord.Outpost:IsObserverOutpostCaptureStale(st, site, now)
     return age > remaining + OUTPOST_OBSERVER_STALE_BUFFER
 end
 
+-- The holder's line: the guild holding the site, also during an assault (the assault is a line
+-- of its own, IsOutpostCaptureLive), else "Unclaimed".
 function Overlord.Outpost:GetOutpostMapSubtitle(st, site, displayMapID)
     if not st or not site then return (L and L.OUTPOST_NEUTRAL) or "Unclaimed" end
     if st.status == "in_progress" then
-        if self:IsObserverOutpostCaptureStale(st, site) then
-            local previousGuild = sanitizeGuildName(st.previousOwnerGuild or "")
-            if previousGuild ~= "" then return previousGuild end
-            return (L and L.OUTPOST_NEUTRAL) or "Unclaimed"
-        end
-        return (L and L.OUTPOST_CAPTURING) or "Capturing..."
+        local previousGuild = sanitizeGuildName(st.previousOwnerGuild or "")
+        if previousGuild ~= "" then return previousGuild end
+        return (L and L.OUTPOST_NEUTRAL) or "Unclaimed"
     end
     if st.status == "held" then
         local g = sanitizeGuildName(st.ownerGuild or "")
         if g ~= "" then return g end
     end
     return (L and L.OUTPOST_NEUTRAL) or "Unclaimed"
+end
+
+function Overlord.Outpost:IsOutpostCaptureLive(st, site)
+    return st ~= nil and st.status == "in_progress" and not self:IsObserverOutpostCaptureStale(st, site)
 end
 
 function Overlord.Outpost:ShouldShowInProgressOnMap(st, site, mapID)

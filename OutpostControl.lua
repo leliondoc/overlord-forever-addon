@@ -720,7 +720,8 @@ function Overlord.OutpostControl:UpdateHoldTimer(siteKey, st, site, deltaTime, i
                     st.holdStartTime = nil
                     self:RevertCapture(siteKey, st)
                     if L.OUTPOST_CAPTURE_LOST then
-                        Overlord:PrintNotification("|cFFFF4444[Overlord]|r " .. L.OUTPOST_CAPTURE_LOST)
+                        Overlord:PrintNotification("|cFFFF4444[Overlord]|r "
+                            .. string.format(L.OUTPOST_CAPTURE_LOST, OP:GetDisplayName(site)))
                     end
                 else
                     BroadcastOP(siteKey, false)
@@ -770,7 +771,8 @@ function Overlord.OutpostControl:UpdateHoldTimer(siteKey, st, site, deltaTime, i
             st.holdStartTime = nil
             self:RevertCapture(siteKey, st)
             if L.OUTPOST_CAPTURE_LOST then
-                Overlord:PrintNotification("|cFFFF4444[Overlord]|r " .. L.OUTPOST_CAPTURE_LOST)
+                Overlord:PrintNotification("|cFFFF4444[Overlord]|r "
+                    .. string.format(L.OUTPOST_CAPTURE_LOST, OP:GetDisplayName(site)))
             end
         else
             BroadcastOP(siteKey, false)

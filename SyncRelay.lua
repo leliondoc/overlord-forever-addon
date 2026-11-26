@@ -8,9 +8,10 @@ local sync = addon.Sync
 local net = { peers = {}, stats = { sent = 0, received = 0, dropped = 0 } }
 addon.Relay = net
 local allowed = {}
-for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA FK LK LR LC LO LOC TV VT VF FR VB MN MS OP OC SH HR HB HA CR CA GR GY GI FC GW GE GP GX GD GM"):gmatch("%S+") do
+for kind in ("NH SR K EK C ZS ZR ZA CB NR NC NA FA FK LK LR LC LO LOC TV VT VF FR VB MN MS OP OC SH HR HB HA CR CA GR GY GI FC GW GE GP GX GD GM AC AQ AL"):gmatch("%S+") do
     allowed[kind] = true
 end
+-- AC/AQ/AL: the Gurubashi Arena (Arena.lua), a capture broadcast and its point-to-point catch-up.
 -- ZD (2.4.0: defenders a capturer cannot see, ZoneDefense.lua) is read and passed on only while
 -- ZoneDefense.HOLDS_CAPTURES is on: off, it means nothing, and nobody's relay pays for it. A relay
 -- before 2.4.0 neither reads nor passes it on.
@@ -257,6 +258,31 @@ local function queuedPagedCount()
     end
     return count
 end
+-- Gurubashi Arena (AC, AQ, AL): a small side feature, never ahead of anything. Admitted only
+-- on a quiet queue (fewer than ARENA.admitBelow packets, ARENA.queueMax of its own), sent only
+-- once nothing else waits in any lane, and the first packet a full queue gives up (started or
+-- not). It spends only the bytes above ARENA.reserve (capped at what the 500 B bucket leaves
+-- once the copy is paid): a kill right behind it leaves within half a second at worst.
+-- Its refusals, drops and expiries have their own counters (net.stats.arena*, the arena line of
+-- /ov network), never the relay's: a refusal by design does not turn the network light yellow.
+-- The arena's catch-up fills the gaps.
+-- (One table: the main chunk is at Lua 5.1's 200 locals.)
+local ARENA = { kinds = { AC = true, AQ = true, AL = true }, admitBelow = 8, queueMax = 4, reserve = 250 }
+local function isArena(p) return p ~= nil and ARENA.kinds[p.kind] == true end
+-- An arena copy lost on any path: its own counter, never the relay's (see above).
+function ARENA.lost(p, field)
+    net.stats[field] = (net.stats[field] or 0) + 1
+    ARENA.countKind(p.kind, "dropped")
+end
+local function notArena(p) return not isArena(p) end
+local function queuedArenaCount()
+    local count = 0
+    for i = bulkLane.head, #bulkLane.items do
+        local item = bulkLane.items[i]
+        if item and isArena(item.p) then count = count + 1 end
+    end
+    return count
+end
 local function laneFor(p)
     return isCatchup(p) and catchupLane
         or (isReplicatedState(p) and stateLane or (isUrgent(p) and urgentLane or bulkLane))
@@ -336,6 +362,7 @@ local function countKind(kind, field, amount)
     local row = kindRow(kind)
     if row then row[field] = row[field] + (amount or 1) end
 end
+ARENA.countKind = countKind
 -- Instantane ZA relaye pour un autre : le destinataire jette tout le lot s'il
 -- manque une page. Une fois une page refusee ici, les suivantes du meme lot ne
 -- servent plus a rien en aval ; les refuser d'emblee rend leur budget aux autres.
@@ -369,6 +396,11 @@ local function isZaBatchLost(p)
     return lostAt ~= nil and GetTime() - lostAt < LOST_ZA_BATCH_SEC
 end
 local function rejectAdmission(p)
+    if isArena(p) then
+        net.stats.arenaRefused = (net.stats.arenaRefused or 0) + 1
+        countKind(p.kind, "dropped")
+        return false
+    end
     net.stats.dropped = net.stats.dropped + 1
     local field = p.path and #p.path > 1 and "relayRejected" or "localRejected"
     net.stats[field] = (net.stats[field] or 0) + 1
@@ -382,6 +414,10 @@ local function rejectAdmission(p)
     return false
 end
 local function rejectNoTask(p, reason)
+    if isArena(p) then
+        ARENA.lost(p, "arenaDropped")
+        return false
+    end
     markZaBatchLost(p)
     net.stats.dropped = net.stats.dropped + 1
     local side = p.path and #p.path > 1 and "forward" or "local"
@@ -422,6 +458,25 @@ local function dropBorrowedCatchup(anyLevel, includeLocal)
     local item = table.remove(catchupLane.items, i)
     dedup.abandon(item.tasks)
     countKind(item.p.kind, "dropped")
+    return true
+end
+-- An arena packet (see isArena), started or not, whose next copy is not leaving right now:
+-- given up before anything else.
+local function waitingArenaIndex()
+    for i = bulkLane.head, #bulkLane.items do
+        local item = bulkLane.items[i]
+        local task = item and item.tasks[item.index]
+        if item and isArena(item.p) and not (task and task.sending) then return i end
+    end
+    return nil
+end
+local function dropWaitingArena()
+    local i = waitingArenaIndex()
+    if not i then return false end
+    local item = table.remove(bulkLane.items, i)
+    dedup.abandon(item.tasks, item.index)
+    countKind(item.p.kind, "dropped")
+    net.stats.arenaDropped = (net.stats.arenaDropped or 0) + 1
     return true
 end
 local function dropWaitingForUrgent()
@@ -488,9 +543,13 @@ local function dropExpiredWaiting()
                 table.remove(lane.items, i)
                 forgetPresence(item)
                 dedup.abandon(item.tasks)
-                countKind(item.p.kind, "dropped")
-                net.stats.expired = (net.stats.expired or 0) + 1
-                net.NoteExpiredFinal(item.p, item.tasks, 1)
+                if isArena(item.p) then
+                    ARENA.lost(item.p, "arenaExpired")
+                else
+                    countKind(item.p.kind, "dropped")
+                    net.stats.expired = (net.stats.expired or 0) + 1
+                    net.NoteExpiredFinal(item.p, item.tasks, 1)
+                end
                 return true
             end
         end
@@ -1403,7 +1462,7 @@ end
 -- quarter of relay bytes (2026-10-01). The owner still sends its own copies to its
 -- channel, group and Battle.net friends.
 local CATCHUP_KINDS = {}
-for kind in ("SR ZA HR HA HB LK LC LR LO LOC GY CA GR CR"):gmatch("%S+") do CATCHUP_KINDS[kind] = true end
+for kind in ("SR ZA HR HA HB LK LC LR LO LOC GY CA GR CR AQ AL"):gmatch("%S+") do CATCHUP_KINDS[kind] = true end
 local function isPointToPointCatchup(kind, target)
     return CATCHUP_KINDS[kind] == true and target ~= nil and target ~= "*"
 end
@@ -1787,11 +1846,13 @@ local stateCredit, stateAt = 500, GetTime()
 local mapServiceRun = 0
 local mapControlCooldown = 0
 local pagedServiceRun = 0
-local function spend(bytes)
+local function spend(bytes, reserve)
     local now = GetTime()
     tokens = math.min(500, tokens + math.max(0, now - budgetAt) * 1000)
     budgetAt = now
-    if bytes > tokens then return false end
+    -- (A reserve never above what the 500 B bucket leaves once the copy is paid: a 430 B
+    -- Battle.net copy of the arena needs a full bucket, and still leaves.)
+    if bytes + math.min(reserve or 0, math.max(0, 500 - bytes)) > tokens then return false end
     tokens = tokens - bytes
     return true
 end
@@ -2222,7 +2283,7 @@ local function emit(task)
         end
         if cover.skip then return true end
     end
-    if not spend(task.bytes) then return false end
+    if not spend(task.bytes, task.reserve) then return false end
     task.spent = task.bytes
     task.sending = true
     local sent, reason
@@ -2249,6 +2310,10 @@ local function emit(task)
         -- blocking every other peer behind a dead friend for the full TTL.
         if task.transport == "BNET" then
             if task.covState then task.covState.gone = true end
+            if ARENA.kinds[task.packetKind] then
+                net.stats.arenaDropped = (net.stats.arenaDropped or 0) + 1
+                return true
+            end
             net.stats.dropped = net.stats.dropped + 1
             net.stats.bnetAbandoned = (net.stats.bnetAbandoned or 0) + 1
             return true
@@ -2306,6 +2371,9 @@ function net:Queue(p, immediate)
     if not p or not allowed[p.kind] then return false end
     if isZaBatchLost(p) then
         self.stats.zaBatchSkipped = (self.stats.zaBatchSkipped or 0) + 1
+        return rejectAdmission(p)
+    end
+    if isArena(p) and (queuedCount() >= ARENA.admitBelow or queuedArenaCount() >= ARENA.queueMax) then
         return rejectAdmission(p)
     end
     local urgent = isUrgent(p)
@@ -2373,7 +2441,9 @@ function net:Queue(p, immediate)
             and (urgent or (lane == bulkLane and borrowedCatchupIndex() ~= nil))
         -- A malformed or unroutable map page must not evict a live progress
         -- packet just because it claimed a known target.
-        if mapCatchup or lane == stateLane or reclaimPresence or liveReclaim then
+        -- (Also before taking an arena slot: a copy that cannot be queued takes nothing.)
+        if mapCatchup or lane == stateLane or reclaimPresence or liveReclaim
+            or (not isArena(p) and waitingArenaIndex() ~= nil) then
             wire = encode(p)
             if #wire > MAX_PACKET then return false end
             local tasks, reason = tasksFor(p, wire)
@@ -2383,8 +2453,14 @@ function net:Queue(p, immediate)
             if #item.tasks == 0 then return noTask(p, tasks, reason) end
         end
         -- Full: an urgent packet displaces the oldest waiting bulk packet instead
-        -- of being refused. Bulk packets are refused as before.
-        if not ((reclaimPresence and dropWaitingPresence())
+        -- of being refused. Bulk packets are refused as before. Any packet takes a waiting
+        -- arena packet's slot first (see isArena; counted as the arena's).
+        -- (Not for a lane whose own cap is full: a freed bulk slot does not lift it, and paged
+        -- ranking pages keep their backpressure.)
+        local laneCapped = (lane == stateLane and laneSize(stateLane) >= STATE_QUEUE)
+            or (isPagedCatchup(p) and queuedPagedCount() >= PAGED_QUEUE)
+        local tookArena = not isArena(p) and not laneCapped and dropWaitingArena()
+        if not tookArena and not ((reclaimPresence and dropWaitingPresence())
             or (lane == stateLane and laneSize(stateLane) < STATE_QUEUE
                 and dropWaitingForState())
             or (mapControl and (dropBorrowedLegacyForMapControl()
@@ -2399,8 +2475,11 @@ function net:Queue(p, immediate)
             or (lane == bulkLane and not catchup and dropBorrowedCatchup())) then
             return rejectAdmission(p)
         end
-        self.stats.dropped = self.stats.dropped + 1
-        self.stats.displaced = (self.stats.displaced or 0) + 1
+        -- (A slot taken from the arena is counted as the arena's: nothing of the others displaced.)
+        if not tookArena then
+            self.stats.dropped = self.stats.dropped + 1
+            self.stats.displaced = (self.stats.displaced or 0) + 1
+        end
     end
     -- The ordinary path still rejects overload before encoding fragments.
     if not item then
@@ -2413,6 +2492,9 @@ function net:Queue(p, immediate)
                 or (p.kind == "ZA" and mapCatchup and queuedZaCount() < (localMap and MAP_CATCHUP_EXTRA
                     or MAP_RELAY_BATCH)))) }
         if #item.tasks == 0 then return noTask(p, tasks, reason) end
+    end
+    if isArena(p) then
+        for _, task in ipairs(item.tasks) do task.reserve = ARENA.reserve end
     end
     if replace then
         dedup.abandon(previous.tasks)
@@ -2558,7 +2640,7 @@ pump = function()
         return firstTerminal or firstReady
     end
     local urgentIndex = readyIndex(urgentLane)
-    local bulkIndex = readyIndex(bulkLane)
+    local bulkIndex = readyIndex(bulkLane, notArena)
     local stateIndex = readyIndex(stateLane)
     local mapControlIndex = readyIndex(catchupLane, isTargetedMapControl)
     local mapPageIndex = readyIndex(catchupLane, net._pumpIsMapPage)
@@ -2615,6 +2697,11 @@ pump = function()
     end
     -- Historical keep proofs and idle snapshots use only otherwise idle service.
     -- They never delay a ready request, ranking row, map page or live state.
+    -- The arena only when nothing else waits at all (see isArena).
+    if not index and queuedCount() == queuedArenaCount() then
+        index = readyIndex(bulkLane, isArena)
+        if index then lane = bulkLane end
+    end
     if not index then
         if queuedCount() > 0 then schedule() end
         return
@@ -2631,7 +2718,11 @@ pump = function()
             if task then
                 dedup.abandon(item.tasks, item.index)
                 countKind(item.p.kind, "dropped")
-                net.stats.expired = (net.stats.expired or 0) + 1
+                if isArena(item.p) then
+                    net.stats.arenaExpired = (net.stats.arenaExpired or 0) + 1
+                else
+                    net.stats.expired = (net.stats.expired or 0) + 1
+                end
                 net.NoteExpiredFinal(item.p, item.tasks, item.index)
             end
             item.index = #item.tasks + 1
@@ -2673,7 +2764,9 @@ pump = function()
             task.defers = (task.defers or 0) + 1
             item.index = item.index + 1
             local deferLane = lane
-            if hasLaneRoom(deferLane, item.p) then
+            if isArena(item.p) then
+                ARENA.lost(item.p, "arenaDropped")
+            elseif hasLaneRoom(deferLane, item.p) then
                 deferLane.items[#deferLane.items + 1] = {
                     p = item.p, tasks = { task }, index = 1, protected = item.protected, queuedAt = item.queuedAt,
                 }
@@ -2693,10 +2786,12 @@ pump = function()
             -- copies behind it: retry it later on its own, at most three times.
             task.refused = nil
             task.retries = (task.retries or 0) + 1
-            net.stats.refused = (net.stats.refused or 0) + 1
+            if not isArena(item.p) then net.stats.refused = (net.stats.refused or 0) + 1 end
             item.index = item.index + 1
             local retryLane = lane
-            if task.retries <= 3 and hasLaneRoom(retryLane, item.p) then
+            if isArena(item.p) then
+                ARENA.lost(item.p, "arenaDropped")
+            elseif task.retries <= 3 and hasLaneRoom(retryLane, item.p) then
                 retryLane.items[#retryLane.items + 1] = {
                     p = item.p, tasks = { task }, index = 1, protected = item.protected, queuedAt = item.queuedAt,
                 }

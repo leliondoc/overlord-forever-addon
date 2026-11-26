@@ -1298,4 +1298,74 @@ do
     Overlord.Relay = realRelay
     lb.IsLocalGuildRosterMember = realRoster
 end
+-- ===== (42) the assault this map watches ends with its assailant's claim, even when the
+-- ranking knows him under no guild yet (no kill since the weekly reset): the guild and the
+-- name are already on this map. Anything else is still refused.
+resetWorld()
+tick(300)
+do
+    local raider = "Raider Nobody"
+    sync:OnReceiveOutpostState(string.format("v1:silverpine:in_progress:10:Raid Guild:H:0:0:%d:300:global:0:::0:0:%s",
+        now, raider), raider .. "-Forever", "CHANNEL")
+    local watched = op:GetState("silverpine")
+    assert(watched.status == "in_progress" and watched.ownerGuild == "Raid Guild", "fixture assault not observed")
+    local function solicited(g, fac, ts, who)
+        assert(sync:NoteOutpostClaimPeer("Helper Tester", "A:1.7.2:0::H"))
+        return (sync:AuthorizeOutpostClaim("silverpine", g, fac, ts, who, helper, "WHISPER", "global"))
+    end
+    assert(not solicited("Raid Guild", "Horde", now, "Someone Else"), "a claim naming another capturer ended the assault")
+    assert(not solicited("Other Guild", "Horde", now, raider), "a claim of another guild ended the assault")
+    assert(not solicited("Raid Guild", "Alliance", now, raider), "a claim of the other faction ended the assault")
+    assert(not solicited("Raid Guild", "Horde", now - 600, raider), "a claim dated before the assault ended it")
+    assert(not sync:AuthorizeOutpostClaim("silverpine", "Raid Guild", "Horde", now, raider,
+        "Stranger One-Forever", "CHANNEL", "global"), "an unsolicited copy ended the assault")
+    assert(count("silverpine", "Raid Guild") == 0, "a refused claim entered the ledger")
+    local function heartbeat(who, held)
+        sync:OnReceiveOutpostState(string.format("v1:silverpine:in_progress:%d:Raid Guild:H:0:0:%d:300:global:0:::0:0:%s",
+            held, now, who), who .. "-Forever", "CHANNEL")
+    end
+    -- A heartbeat stating the assault began long ago does not move what this map saw.
+    heartbeat(raider, 290)
+    assert(not solicited("Raid Guild", "Horde", now - 300, raider), "a heartbeat's own age widened the claim window")
+    -- Several holders take turns: the one who completes signs, even when he is not the last named.
+    heartbeat("Raider Two", 30)
+    -- One the ranking knows under another guild stays refused, even named by the assault.
+    local three = "Raider Three"
+    lb.kills[three] = 5
+    lb.playerInfo[three] = { class = "WARRIOR", faction = "Horde", level = 30, locale = "enus",
+        guild = "Other Guild", guildAt = now, guildAuth = true }
+    heartbeat(three, 40)
+    local _, _, _, _, _, watchedBefore = sync:GetOutpostClaimStats()
+    assert(sync:NoteOutpostClaimPeer("Helper Tester", "A:1.7.2:0::H"))
+    local okThree, whyThree = sync:AuthorizeOutpostClaim("silverpine", "Raid Guild", "Horde", now, three, helper,
+        "WHISPER", "global")
+    assert(not okThree and whyThree == "catch-up-guild",
+        "a capturer known under another guild ended the assault: " .. tostring(whyThree))
+    assert(solicited("Raid Guild", "Horde", now, "Raider Two"), "an earlier holder of the same assault was refused")
+    local _, _, _, _, _, watchedAfter = sync:GetOutpostClaimStats()
+    assert(watchedAfter == watchedBefore + 1, "the claims ending a watched assault are not counted")
+    -- Quiet for 15 min: the watch is forgotten (an earlier holder no longer ends the assault).
+    tick(901)
+    assert(op:GetState("silverpine").status == "in_progress", "fixture: the assault went away")
+    assert(not solicited("Raid Guild", "Horde", now, "Raider Two"), "a watch quiet for 15 min still ended the assault")
+    heartbeat(raider, 50)
+    -- His own live claim (owner path, heard by a Horde player) is believed and counted the same way.
+    local ownFaction = Overlord.PlayerFaction
+    Overlord.PlayerFaction = "Horde"
+    local okOwn, whyOwn = sync:AuthorizeOutpostClaim("silverpine", "Raid Guild", "Horde", now, raider, raider .. "-Forever",
+        "CHANNEL", "global")
+    assert(okOwn, "the assailant's own live claim was refused: " .. tostring(whyOwn))
+    Overlord.PlayerFaction = ownFaction
+    local _, _, _, _, _, watchedOwner = sync:GetOutpostClaimStats()
+    assert(watchedOwner == watchedAfter + 1, "the owner path does not count the claims ending a watched assault")
+    -- The real reply (the map a pull brings back): believed, counted, and the map shows it.
+    tick(300)
+    assert(sync:NoteOutpostClaimPeer("Helper Tester", "A:1.7.2:0::H"))
+    sync:OnReceiveOutpostState(heldWire("silverpine", "Raid Guild", "Horde", now - 10, raider, nil, now), helper, "WHISPER")
+    assert(count("silverpine", "Raid Guild") == 1, "the assailant's capture was refused")
+    assert(watched.status == "held" and watched.ownerGuild == "Raid Guild" and watched.ownerFaction == "Horde",
+        "the watched assault did not end with its capture: " .. tostring(watched.status))
+end
+print("Outpost claims: a watched assault ends with its assailant's claim, nothing else")
+
 print("Forever outpost capturer claims: forged rows refused, capturer believed live, catch-up by content, convergent ledger, purge, bounded probes, ledger buckets")

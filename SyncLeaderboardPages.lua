@@ -452,6 +452,10 @@ local function rowDigest(kind, payload)
         -- name:race:sex:epoch:observedAt
         local head = payload:match("^([^:]*:[^:]*:[^:]*:[^:]*):[^:]*$")
         if head then return head end
+    elseif kind == "LC" and payload:find("=", 1, true) then
+        -- The guild item of a player without a kill row ("=<guildAt>=<guild>", no zone holds a
+        -- "="): its guild counts, its date does not, as in a kill row.
+        return (payload:gsub("([:,])=%d+=", "%1=="))
     end
     return payload
 end
@@ -475,6 +479,9 @@ local function digestHash(kind, payload)
         local c4 = colonAfter(payload, 0)
         for _ = 2, 4 do c4 = c4 and colonAfter(payload, c4) end
         if c4 and not colonAfter(payload, c4) then return foldRange(payload, 0, 1, c4 - 1) end
+    elseif kind == "LC" and payload:find("=", 1, true) then
+        -- (A few rows only: the players who capture without killing.)
+        return hash(rowDigest(kind, payload))
     end
     return hash(payload)
 end
@@ -2156,11 +2163,14 @@ local function feedRow(sub, id, wireEpoch)
             end
         end
     else
-        -- (30: the fields around the name and the zones, at their longest.)
+        -- (30: the fields around the name and the zones, at their longest; then the guild item of
+        -- a player without a kill row, see SyncHistoryCatchup.)
+        snap.kills[name] = lb.kills and lb.kills[name]
+        local item = sync._CaptureRowGuildItem and sync._CaptureRowGuildItem(snap, name, info, true, wireEpoch)
         snap.captureCount[name], snap.captures[name] = count, feed.captureZones(lb.captures and lb.captures[name], count,
-            math.max(0, feed.CAPTURE_ROW_MAX - #name - 30))
+            math.max(0, feed.CAPTURE_ROW_MAX - #name - 30 - (item and #item + 1 or 0)))
         payload = sync:BuildPagedLeaderboardCapturePayload(snap, name, wireEpoch)
-        snap.captureCount[name], snap.captures[name] = nil, nil
+        snap.captureCount[name], snap.captures[name], snap.kills[name] = nil, nil, nil
         local compact = payload and compactRow8("LC", payload, wireEpoch)
         row = compact and ("c" .. compact) or nil
     end

@@ -689,6 +689,22 @@ local ROWS = {
     { kind = "checkbox", var = SP.ShowFloatingObjectiveVariableName, label = "FLOATING_OBJECTIVE_LABEL",
         fallback = "Floating next objective", tooltip = "FLOATING_OBJECTIVE_TOOLTIP", default = false,
         get = SP.GetShowFloatingObjective, set = SP.SetShowFloatingObjective },
+    -- Corner widget (CornerWidget.lua): guild table and Recent activity on hover, off by default.
+    { kind = "checkbox", var = "Overlord_CornerWidget", label = "CORNER_WIDGET_LABEL",
+        fallback = "Corner widget", tooltip = "CORNER_WIDGET_TOOLTIP",
+        default = false,
+        get = function()
+            local cfg = OverlordDB and OverlordDB.config
+            return cfg ~= nil and cfg.showCornerWidget == true
+        end,
+        set = function(value)
+            if not OverlordDB then return end
+            OverlordDB.config = OverlordDB.config or {}
+            OverlordDB.config.showCornerWidget = value == true
+            if Overlord.CornerWidget and Overlord.CornerWidget.Refresh then
+                pcall(Overlord.CornerWidget.Refresh, Overlord.CornerWidget)
+            end
+        end },
     -- 2.5.0: the "+N platinum" text rising over the character (Ressources ShowFloatingGold), off by default.
     { kind = "checkbox", var = "Overlord_PlatinumText", label = "PLATINUM_TEXT_LABEL",
         fallback = "Floating platinum gains", tooltip = "PLATINUM_TEXT_TOOLTIP",

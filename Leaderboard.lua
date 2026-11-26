@@ -3321,6 +3321,109 @@ function Overlord.Leaderboard:EnsureLegacyScoreSanitized()
     return false
 end
 
+-- 2026-11-26 (Roleplay PvP players in the Normal ranking): a session whose campaign was read
+-- wrong at load runs in another ruleset's bucket until the re-check pauses it (Core
+-- CheckSessionRuleset). What it heard meanwhile on lanes without a pool (group, raid, whisper)
+-- stayed in that account-wide bucket, served later by the account's characters of that ruleset.
+-- From the end of the login restores to the logout, such a session notes every name its bucket
+-- learns (a key new to the table: rows it already had are never noted); on a pause, or on a
+-- logout reading that names another campaign (Core PurgeCampaignJournalAtLogout), those names
+-- leave the bucket, and a snapshot written during the session goes with them. Nothing is noted
+-- on a reading the realm name backs. Cost: one array slot per new name and table (16 bytes;
+-- a first login of the week learning the whole ranking, 10,000 names, is about 0.5 MB).
+local campaignJournal = nil
+local CAMPAIGN_JOURNAL_FIELDS = { "kills", "captureCount", "captures", "playerInfo", "bountyKills", "bountyTimes" }
+local CAMPAIGN_JOURNAL_MT = {
+    __newindex = function(t, k, v)
+        rawset(t, k, v)
+        local keys = v ~= nil and campaignJournal and campaignJournal.tables[t]
+        if keys then keys[#keys + 1] = k end
+    end,
+}
+
+function Overlord.Leaderboard:BeginCampaignJournal()
+    if campaignJournal or not OverlordDB then return false end
+    local bucket = OverlordDB.leaderboard
+    if type(bucket) ~= "table" then return false end
+    campaignJournal = { tables = {}, pool = currentSavedVarsPool(),
+        at = (GetServerTime and GetServerTime()) or time() }
+    -- (The tables the session writes are this module's; Save links them into the bucket. Both
+    -- are attached: the same table once, a field the bucket lacks still journaled.)
+    self:AttachCampaignJournal(self)
+    self:AttachCampaignJournal(bucket)
+    return true
+end
+
+-- The finished week's tables leave the journal at a weekly reset inside the session: they
+-- become the pending archive (OpenAtomicWeeklyBucket), which a later purge must not touch.
+function Overlord.Leaderboard:DetachCampaignJournal(bucket)
+    local journal = campaignJournal
+    if not journal or type(bucket) ~= "table" then return end
+    for _, field in ipairs(CAMPAIGN_JOURNAL_FIELDS) do
+        local rows = bucket[field]
+        if type(rows) == "table" and journal.tables[rows] then
+            journal.tables[rows] = nil
+            if getmetatable(rows) == CAMPAIGN_JOURNAL_MT then setmetatable(rows, nil) end
+        end
+    end
+end
+
+-- The bucket's tables join the open journal (a weekly reset inside the session swaps in new
+-- ones: OpenAtomicWeeklyBucket).
+function Overlord.Leaderboard:AttachCampaignJournal(bucket)
+    local journal = campaignJournal
+    if not journal or type(bucket) ~= "table" then return end
+    for _, field in ipairs(CAMPAIGN_JOURNAL_FIELDS) do
+        local rows = bucket[field]
+        if type(rows) == "table" and getmetatable(rows) == nil and not journal.tables[rows] then
+            journal.tables[rows] = {}
+            setmetatable(rows, CAMPAIGN_JOURNAL_MT)
+        end
+    end
+end
+
+function Overlord.Leaderboard:EndCampaignJournal()
+    local journal = campaignJournal
+    if not journal then return nil end
+    campaignJournal = nil
+    for rows in pairs(journal.tables) do
+        if getmetatable(rows) == CAMPAIGN_JOURNAL_MT then setmetatable(rows, nil) end
+    end
+    return journal
+end
+
+-- The session ran in the wrong campaign: its bucket gives back the names it learnt. Returns
+-- how many names left it.
+function Overlord.Leaderboard:PurgeCampaignJournal()
+    local journal = self:EndCampaignJournal()
+    if not journal then return 0 end
+    local removed, count = {}, 0
+    for rows, keys in pairs(journal.tables) do
+        for i = 1, #keys do
+            local key = keys[i]
+            if rawget(rows, key) ~= nil then
+                rows[key] = nil
+                if not removed[key] then removed[key] = true; count = count + 1 end
+            end
+        end
+    end
+    local snap = OverlordDB and OverlordDB.leaderboardSnapshot
+    if type(snap) == "table" and normalizeSavedVarsPool(tostring(snap.pool or "global")) == journal.pool
+        and (tonumber(snap.at) or 0) >= journal.at then
+        OverlordDB.leaderboardSnapshot = nil
+    end
+    local shown = OverlordDB and OverlordDB.leaderboardDisplayCache
+    if type(shown) == "table" and shown.pool == journal.pool then OverlordDB.leaderboardDisplayCache = nil end
+    if count > 0 then
+        dedupKillMaxIndex = nil
+        dedupCaptureMaxIndex = nil
+        dedupHardEpoch = dedupHardEpoch + 1
+        self:MarkMetaDirty()
+        self:MarkDirty()
+    end
+    return count
+end
+
 -- loadFromDB : false si changement de faction (ne pas charger des donnees d'un autre perso)
 function Overlord.Leaderboard:Initialize(loadFromDB)
     if self._legacyScoreSanitizeFailed or self._networkHotIndexPrepFailed then return "blocked" end
@@ -4425,6 +4528,93 @@ end
 -- invalidaient puis reconstruisaient l'index dedup plusieurs fois par paquet
 -- (niveau -> classe -> guilde), soit O(lignes * playerInfo) pendant une rafale.
 -- Cette voie n'effectue aucun scan global et n'invalide qu'une fois.
+-- The guild register of a page row (kill row, or capture row of a player without one).
+function Overlord.Leaderboard:MergeGuildRegister(row, faction, guild, guildAt, hasGuildRegister,
+    guildAuthoritative, guildSnapshot)
+    local changed = false
+    local guildFactionCompatible = faction ~= "Alliance" and faction ~= "Horde"
+        or (row.faction or "") == "" or row.faction == faction
+    local snapshot = guildSnapshot == true and guildAuthoritative ~= true
+    if hasGuildRegister and (guildAuthoritative == true
+        or (snapshot and guildFactionCompatible)
+        or (row.guildAuth ~= true and row.guildReplica ~= true
+            and sanitizeGuildName(guild or "") ~= "" and guildFactionCompatible)) then
+        local incomingGuild = sanitizeGuildName(guild or "")
+        local incomingAt = normalizeGuildAt(guildAt)
+        if incomingAt <= leaderboardServerNow() + 300 then
+            local currentGuild = sanitizeGuildName(row.guild or "")
+            local currentAt = normalizeGuildAt(row.guildAt)
+            local wins = false
+            if guildAuthoritative ~= true and not snapshot and incomingGuild == "" then
+                wins = false
+            elseif guildAuthoritative == true and row.guildAuth ~= true
+                and row.guildReplica ~= true then
+                wins = true
+            elseif not snapshot and guildAuthoritative ~= true then
+                -- Seconde main contre seconde main (le filtre ci-dessus exclut un
+                -- registre fort) : une guilde vide (inconnue ou ancien faux depart
+                -- relaye) se remplit toujours ; entre deux guildes, la date la plus
+                -- recente gagne.
+                wins = incomingGuild ~= "" and (currentGuild == ""
+                    or guildLwwValueWins(incomingGuild, incomingAt, currentGuild, currentAt))
+            elseif row.guildAuth == true or row.guildReplica == true or snapshot then
+                wins = guildRecordWins(incomingGuild, incomingAt,
+                    guildAuthoritative == true, currentGuild, currentAt,
+                    row.guildAuth == true, snapshot, row.guildReplica == true)
+            elseif incomingGuild:lower() == currentGuild:lower() then
+                wins = incomingAt > currentAt
+                    or (incomingAt == currentAt and incomingGuild < currentGuild)
+            else
+                wins = guildLwwValueWins(incomingGuild, incomingAt, currentGuild, currentAt)
+            end
+            -- An owner's K re-dates its unchanged guild on every broadcast: applying
+            -- each one bumped the meta epoch and kept the meta index rebuild from
+            -- finishing (Sonnet audit 1.3.5). Same strong guild within a minute: no-op,
+            -- like SetPlayerGuild's re-confirmation rule.
+            if wins and guildAuthoritative == true and not snapshot and row.guildAuth == true
+                and row.guildReplica ~= true and incomingGuild:lower() == currentGuild:lower()
+                and incomingAt >= currentAt and incomingAt - currentAt < 60 then
+                wins = false
+            end
+            if wins then
+                row.guild = incomingGuild
+                row.guildAt = incomingAt
+                row.guildAuth = guildAuthoritative == true or nil
+                row.guildReplica = snapshot or nil
+                changed = true
+            elseif incomingGuild:lower() == currentGuild:lower()
+                and guildAuthoritative == true and row.guildAuth ~= true
+                and (row.guildReplica ~= true or incomingAt >= currentAt) then
+                row.guildAuth = true
+                row.guildReplica = nil
+                changed = true
+            end
+        end
+    end
+
+    return changed
+end
+
+-- The guild a page capture row carries for a player without a kill row (Sync,
+-- OnReceiveLeaderboardCaptures), merged as a page's register: same rules as a kill row's.
+function Overlord.Leaderboard:MergeCaptureRowGuild(playerName, faction, guild, guildAt, authoritative)
+    if not playerName or playerName == "" then return false end
+    -- (A departure: no guild, dated. It never creates a row.)
+    if sanitizeGuildName(guild or "") == "" and (normalizeGuildAt(guildAt) <= 0
+        or type(self.playerInfo[playerName]) ~= "table") then return false end
+    local row = self.playerInfo[playerName]
+    if type(row) ~= "table" then
+        row = newInfoRow(self.playerInfo, nil, "", 0, "", 0, "", "", nil, nil, 0, "", nil, nil, nil)
+        self.playerInfo[playerName] = row
+        NoteDedupCanonicalName(self, playerName)
+    end
+    if row.guild == nil then row.guild = "" end
+    if row.guildAt == nil then row.guildAt = 0 end
+    if not self:MergeGuildRegister(row, faction, guild, guildAt, true, authoritative == true, true) then return false end
+    self:MarkPlayerMetaDirty(playerName)
+    return true
+end
+
 function Overlord.Leaderboard:MergeLeaderboardKillMetadata(
     playerName, level, classToken, faction, localeTag, guild, guildAt, hasGuildRegister,
     raceFile, raceSexOpt, raceAtOpt, guildAuthoritative, guildSnapshot)
@@ -4488,64 +4678,9 @@ function Overlord.Leaderboard:MergeLeaderboardKillMetadata(
     -- recente gagne (regle Retail). Sinon la premiere guilde recue restait figee chez
     -- l'autre faction, qui ne voit jamais le K direct du joueur (ecart EMPIRE).
     -- guildSnapshot doit provenir du gate HR/pagination attendu, jamais d'un bit du paquet.
-    local guildFactionCompatible = faction ~= "Alliance" and faction ~= "Horde"
-        or (row.faction or "") == "" or row.faction == faction
-    local snapshot = guildSnapshot == true and guildAuthoritative ~= true
-    if hasGuildRegister and (guildAuthoritative == true
-        or (snapshot and guildFactionCompatible)
-        or (row.guildAuth ~= true and row.guildReplica ~= true
-            and sanitizeGuildName(guild or "") ~= "" and guildFactionCompatible)) then
-        local incomingGuild = sanitizeGuildName(guild or "")
-        local incomingAt = normalizeGuildAt(guildAt)
-        if incomingAt <= leaderboardServerNow() + 300 then
-            local currentGuild = sanitizeGuildName(row.guild or "")
-            local currentAt = normalizeGuildAt(row.guildAt)
-            local wins = false
-            if guildAuthoritative ~= true and not snapshot and incomingGuild == "" then
-                wins = false
-            elseif guildAuthoritative == true and row.guildAuth ~= true
-                and row.guildReplica ~= true then
-                wins = true
-            elseif not snapshot and guildAuthoritative ~= true then
-                -- Seconde main contre seconde main (le filtre ci-dessus exclut un
-                -- registre fort) : une guilde vide (inconnue ou ancien faux depart
-                -- relaye) se remplit toujours ; entre deux guildes, la date la plus
-                -- recente gagne.
-                wins = incomingGuild ~= "" and (currentGuild == ""
-                    or guildLwwValueWins(incomingGuild, incomingAt, currentGuild, currentAt))
-            elseif row.guildAuth == true or row.guildReplica == true or snapshot then
-                wins = guildRecordWins(incomingGuild, incomingAt,
-                    guildAuthoritative == true, currentGuild, currentAt,
-                    row.guildAuth == true, snapshot, row.guildReplica == true)
-            elseif incomingGuild:lower() == currentGuild:lower() then
-                wins = incomingAt > currentAt
-                    or (incomingAt == currentAt and incomingGuild < currentGuild)
-            else
-                wins = guildLwwValueWins(incomingGuild, incomingAt, currentGuild, currentAt)
-            end
-            -- An owner's K re-dates its unchanged guild on every broadcast: applying
-            -- each one bumped the meta epoch and kept the meta index rebuild from
-            -- finishing (Sonnet audit 1.3.5). Same strong guild within a minute: no-op,
-            -- like SetPlayerGuild's re-confirmation rule.
-            if wins and guildAuthoritative == true and not snapshot and row.guildAuth == true
-                and row.guildReplica ~= true and incomingGuild:lower() == currentGuild:lower()
-                and incomingAt >= currentAt and incomingAt - currentAt < 60 then
-                wins = false
-            end
-            if wins then
-                row.guild = incomingGuild
-                row.guildAt = incomingAt
-                row.guildAuth = guildAuthoritative == true or nil
-                row.guildReplica = snapshot or nil
-                changed = true
-            elseif incomingGuild:lower() == currentGuild:lower()
-                and guildAuthoritative == true and row.guildAuth ~= true
-                and (row.guildReplica ~= true or incomingAt >= currentAt) then
-                row.guildAuth = true
-                row.guildReplica = nil
-                changed = true
-            end
-        end
+    if self:MergeGuildRegister(row, faction, guild, guildAt, hasGuildRegister,
+        guildAuthoritative, guildSnapshot) then
+        changed = true
     end
 
     local sync = Overlord.Sync
@@ -6632,6 +6767,8 @@ function Overlord.Leaderboard:OpenAtomicWeeklyBucket(archiveEpoch, resetEpoch, c
     self.bountyKills = newBucket.bountyKills
     self.playerInfo = newBucket.playerInfo
     OverlordDB.leaderboard = newBucket
+    self:DetachCampaignJournal(oldBucket)
+    self:AttachCampaignJournal(newBucket)
     OverlordDB.leaderboardDisplayCache = nil
     OverlordDB.leaderboardLocalKillKeys = {}
     OverlordDB.leaderboardResetEpoch = resetEpoch
@@ -7954,4 +8091,4 @@ end
 -- (/ov perf mem: this file's own tables, out of reach of a walk from Overlord otherwise.)
 Overlord.MemoryParts = Overlord.MemoryParts or {}
 Overlord.MemoryParts["Leaderboard.lua"] = function() return { PLAUSIBLE_OUTPOST_CAPTURE_COUNT = PLAUSIBLE_OUTPOST_CAPTURE_COUNT, dedupCanonicalIndex = dedupCanonicalIndex, dedupCanonicalValid = dedupCanonicalValid, dedupCanonicalGeneration = dedupCanonicalGeneration, dedupKillMaxIndex = dedupKillMaxIndex, dedupCaptureMaxIndex = dedupCaptureMaxIndex, NoteDedupCanonicalName = NoteDedupCanonicalName, hotRebuildJournals = hotRebuildJournals, dedupHardEpoch = dedupHardEpoch, VALID_ZONE_IDS = VALID_ZONE_IDS, VALID_SPECIAL_OBJECTIVE_IDS = VALID_SPECIAL_OBJECTIVE_IDS, validGuildKeepRegistrySource = validGuildKeepRegistrySource, validOutpostRegistrySource = validOutpostRegistrySource, MAX_GUILD_NAME_LEN = MAX_GUILD_NAME_LEN, VALID_SAVED_VARS_POOLS = VALID_SAVED_VARS_POOLS, LOCAL_GUILD_ROSTER_TTL = LOCAL_GUILD_ROSTER_TTL, localGuildRosterKeys = localGuildRosterKeys, localGuildRosterKeyCount = localGuildRosterKeyCount, localGuildRosterCacheAt = localGuildRosterCacheAt, localGuildRosterCacheFresh = localGuildRosterCacheFresh, localGuildRosterGuild = localGuildRosterGuild, localGuildRosterEventAt = localGuildRosterEventAt, localGuildRosterRetryBudget = localGuildRosterRetryBudget, localGuildRosterGeneration = localGuildRosterGeneration, localGuildRosterBuild = localGuildRosterBuild, localGuildRosterMembershipChangePending = localGuildRosterMembershipChangePending, LOCAL_GUILD_ROSTER_ROWS_PER_SLICE = LOCAL_GUILD_ROSTER_ROWS_PER_SLICE, LOCAL_GUILD_ROSTER_MS_PER_SLICE = LOCAL_GUILD_ROSTER_MS_PER_SLICE, LOCAL_GUILD_ROSTER_SELF_ECHO_WINDOW = LOCAL_GUILD_ROSTER_SELF_ECHO_WINDOW, localGuildRosterSelfRequestAt = localGuildRosterSelfRequestAt, metaRebuildJournals = metaRebuildJournals, copyPublishedMeta = copyPublishedMeta, META_ENTRY_SLOT = META_ENTRY_SLOT, META_PROFILE_SLOT = META_PROFILE_SLOT, metaProfiles = metaProfiles, META_MT = META_MT, INFO_PROFILE_FIELD = INFO_PROFILE_FIELD, newInfoRow = newInfoRow, compactInfoRow = compactInfoRow, materializeInfoRow = materializeInfoRow, infoRowIsEmpty = infoRowIsEmpty, infoRowsNamedForSave = infoRowsNamedForSave, compactInfoContainers = compactInfoContainers, metaRefreshWork = metaRefreshWork, META_REFRESH_DELAY = META_REFRESH_DELAY, DISPLAY_KILL_RANK_LIMIT = DISPLAY_KILL_RANK_LIMIT, DISPLAY_GUILD_RANK_LIMIT = DISPLAY_GUILD_RANK_LIMIT, DISPLAY_PREVIEW_ROW_LIMIT = DISPLAY_PREVIEW_ROW_LIMIT, DISPLAY_CAPTURE_RANK_LIMIT = DISPLAY_CAPTURE_RANK_LIMIT, DISPLAY_CAPTURE_PREVIEW_LIMIT = DISPLAY_CAPTURE_PREVIEW_LIMIT } end
-Overlord.MemoryParts["Leaderboard.lua#2"] = function() return { DISPLAY_CACHE_WORK_PER_SLICE = DISPLAY_CACHE_WORK_PER_SLICE, DISPLAY_CACHE_SLICE_BUDGET_MS = DISPLAY_CACHE_SLICE_BUDGET_MS, displayMetaArrays = displayMetaArrays, displayKillRowPool = displayKillRowPool, displayKillRowPoolTimer = displayKillRowPoolTimer, displayKillRowPoolBuilds = displayKillRowPoolBuilds, DISPLAY_KILL_ROW_POOL_SEC = DISPLAY_KILL_ROW_POOL_SEC, LEGACY_SCORE_SANITIZE_VERSION = LEGACY_SCORE_SANITIZE_VERSION, OUTPOST_CAPTURER_LEDGER_VERSION = OUTPOST_CAPTURER_LEDGER_VERSION, OUTPOST_LEDGER_ROWS_MAX = OUTPOST_LEDGER_ROWS_MAX, OUTPOST_LEDGER_EVENTS_MAX = OUTPOST_LEDGER_EVENTS_MAX, OUTPOST_LEDGER_REBUILD_DEBOUNCE = OUTPOST_LEDGER_REBUILD_DEBOUNCE, OUTPOST_LEDGER_PURGE_TS = OUTPOST_LEDGER_PURGE_TS, OUTPOST_EVENTS_PER_PACKET = OUTPOST_EVENTS_PER_PACKET, OUTPOST_WEEKLY_STATS_MIN_INTERVAL = OUTPOST_WEEKLY_STATS_MIN_INTERVAL, MAX_HISTORY_ENTRIES = MAX_HISTORY_ENTRIES, MAX_HISTORY_PLAYERS = MAX_HISTORY_PLAYERS, LADDER_SNAPSHOT_MAX_KILL_PLAYERS = LADDER_SNAPSHOT_MAX_KILL_PLAYERS, LADDER_SNAPSHOT_MAX_CAPTURE_PLAYERS_PER_FACTION = LADDER_SNAPSHOT_MAX_CAPTURE_PLAYERS_PER_FACTION, LADDER_SNAPSHOT_WORK_PER_SLICE = LADDER_SNAPSHOT_WORK_PER_SLICE, LADDER_SNAPSHOT_SLICE_BUDGET_MS = LADDER_SNAPSHOT_SLICE_BUDGET_MS, LADDER_SNAPSHOT_MAX_ZONES_PER_PLAYER = LADDER_SNAPSHOT_MAX_ZONES_PER_PLAYER, LADDER_SNAPSHOT_MAX_ZONE_BYTES_PER_PLAYER = LADDER_SNAPSHOT_MAX_ZONE_BYTES_PER_PLAYER, WEEKLY_ARCHIVE_WORK_PER_SLICE = WEEKLY_ARCHIVE_WORK_PER_SLICE, WEEKLY_ARCHIVE_SLICE_BUDGET_MS = WEEKLY_ARCHIVE_SLICE_BUDGET_MS, snapshotKillRowPool = snapshotKillRowPool, RESTORE_SLICE_MS = RESTORE_SLICE_MS, RESTORE_CHECK_EVERY = RESTORE_CHECK_EVERY } end
+Overlord.MemoryParts["Leaderboard.lua#2"] = function() return { DISPLAY_CACHE_WORK_PER_SLICE = DISPLAY_CACHE_WORK_PER_SLICE, DISPLAY_CACHE_SLICE_BUDGET_MS = DISPLAY_CACHE_SLICE_BUDGET_MS, displayMetaArrays = displayMetaArrays, displayKillRowPool = displayKillRowPool, displayKillRowPoolTimer = displayKillRowPoolTimer, displayKillRowPoolBuilds = displayKillRowPoolBuilds, DISPLAY_KILL_ROW_POOL_SEC = DISPLAY_KILL_ROW_POOL_SEC, LEGACY_SCORE_SANITIZE_VERSION = LEGACY_SCORE_SANITIZE_VERSION, OUTPOST_CAPTURER_LEDGER_VERSION = OUTPOST_CAPTURER_LEDGER_VERSION, OUTPOST_LEDGER_ROWS_MAX = OUTPOST_LEDGER_ROWS_MAX, OUTPOST_LEDGER_EVENTS_MAX = OUTPOST_LEDGER_EVENTS_MAX, OUTPOST_LEDGER_REBUILD_DEBOUNCE = OUTPOST_LEDGER_REBUILD_DEBOUNCE, OUTPOST_LEDGER_PURGE_TS = OUTPOST_LEDGER_PURGE_TS, OUTPOST_EVENTS_PER_PACKET = OUTPOST_EVENTS_PER_PACKET, OUTPOST_WEEKLY_STATS_MIN_INTERVAL = OUTPOST_WEEKLY_STATS_MIN_INTERVAL, MAX_HISTORY_ENTRIES = MAX_HISTORY_ENTRIES, MAX_HISTORY_PLAYERS = MAX_HISTORY_PLAYERS, LADDER_SNAPSHOT_MAX_KILL_PLAYERS = LADDER_SNAPSHOT_MAX_KILL_PLAYERS, LADDER_SNAPSHOT_MAX_CAPTURE_PLAYERS_PER_FACTION = LADDER_SNAPSHOT_MAX_CAPTURE_PLAYERS_PER_FACTION, LADDER_SNAPSHOT_WORK_PER_SLICE = LADDER_SNAPSHOT_WORK_PER_SLICE, LADDER_SNAPSHOT_SLICE_BUDGET_MS = LADDER_SNAPSHOT_SLICE_BUDGET_MS, LADDER_SNAPSHOT_MAX_ZONES_PER_PLAYER = LADDER_SNAPSHOT_MAX_ZONES_PER_PLAYER, LADDER_SNAPSHOT_MAX_ZONE_BYTES_PER_PLAYER = LADDER_SNAPSHOT_MAX_ZONE_BYTES_PER_PLAYER, WEEKLY_ARCHIVE_WORK_PER_SLICE = WEEKLY_ARCHIVE_WORK_PER_SLICE, WEEKLY_ARCHIVE_SLICE_BUDGET_MS = WEEKLY_ARCHIVE_SLICE_BUDGET_MS, snapshotKillRowPool = snapshotKillRowPool, RESTORE_SLICE_MS = RESTORE_SLICE_MS, RESTORE_CHECK_EVERY = RESTORE_CHECK_EVERY, campaignJournal = campaignJournal } end

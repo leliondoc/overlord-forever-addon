@@ -66,7 +66,7 @@ function GK:IsKeepNeutralForDisplay(st, key)
         and select(1, self:GetKeepDisplayTenant(st, key)) == "")
 end
 function GK:GetKeepCaptureMapLabel(st, key)
-    if self:IsKeepCaptureInProgress(st, key) then return L.OUTPOST_CAPTURING or "Capturing..." end
+    if self:IsKeepCaptureInProgress(st, key) then return L.GUILD_KEEP_CAPTURING or "Capturing..." end
 end
 function GK:GetKeepCaptureAvailableHint() return L.FORTRESS_CAPTURE_AVAILABLE or "Available at any time" end
 function GK:GetEffectiveHeldTenant(st, key)

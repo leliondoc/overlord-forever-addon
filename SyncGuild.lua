@@ -96,6 +96,8 @@ local TERMINAL, ALERT, ROUTINE = 3, 2, 1
 -- Any path: a capture told by a friend of ours is what the guild would otherwise never hear.
 -- (2.4.0: ZD, defenders a capturer cannot see: said for the guild mates that carry it to the
 -- other faction, and on that side for the capturer.)
+-- (The Gurubashi Arena, AC, is not said here: it would take the captures' rank, slots and share.
+-- It goes last on the relay's other paths and comes back by its own catch-up.)
 local FIXED_LEVEL = { C = TERMINAL, TV = TERMINAL, GE = TERMINAL, GX = TERMINAL,
     GD = TERMINAL, FC = ALERT, ZD = ALERT }
 -- Our own only: nobody relays a presence or a keep claim.

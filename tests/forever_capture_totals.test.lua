@@ -225,6 +225,35 @@ for count = 42, 48 do
 end
 assert(#(B.Overlord.Leaderboard.captures[top] or {}) == 36, "the zones never came whole: "
     .. #(B.Overlord.Leaderboard.captures[top] or {}))
+-- A ranked player's capture row never carries his guild (his kill row does).
+for _, row in ipairs(wire) do
+    if row.from == A.name and row.kind == "HB" and row.at >= mark and row.payload:find("c" .. top .. ":", 1, true) then
+        assert(not row.payload:find("=%d+=Veteran Guild"), "a ranked player's capture row carried his guild")
+    end
+end
+-- A player who captures without killing: his guild rides his capture row, the row stays short.
+do
+    local loner = "Zora Capturer"
+    -- (The longest guild name a player can have: 24 bytes.)
+    A.Overlord.Leaderboard.playerInfo[loner] = info()
+    A.Overlord.Leaderboard.playerInfo[loner].guild = "Veteran Guild Of Ashenva"
+    holdSilently(A, loner, 40, zones)
+    local markLoner = now
+    A.Overlord.Leaderboard:SetPlayerCaptureCount(loner, 41, true)
+    advance(feed.CAPTURE_LINGER + 40)
+    local carried, longest = false, 0
+    for _, row in ipairs(wire) do
+        if row.from == A.name and row.to == B.name and row.kind == "HB" and row.at >= markLoner then
+            local len = tonumber(row.payload:match("(%d+):c" .. loner .. ":"))
+            if len then
+                longest = math.max(longest, len)
+                carried = carried or row.payload:find("=1790016000=Veteran Guild Of Ashenva", 1, true) ~= nil
+            end
+        end
+    end
+    assert(carried, "the guild of a capture-only player did not ride the feed")
+    assert(longest > 0 and longest <= feed.CAPTURE_ROW_MAX + 1, "the guild made the feed's capture row too long: " .. longest)
+end
 -- A short list travels whole, as before.
 A.Overlord.Leaderboard.captures[names[4]] = { zones[1], zones[2], zones[3] }
 A.Overlord.Leaderboard:SetPlayerCaptureCount(names[4], 3, true)

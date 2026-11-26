@@ -2089,6 +2089,10 @@ function Overlord.MapMarkers:Initialize()
         if Overlord.MapMarkers.RefreshWorldEmblems then
             Overlord.MapMarkers:RefreshWorldEmblems(mapID, layoutChanged, contentRefresh)
         end
+        -- Gurubashi Arena (Arena.lua): its holder on the Stranglethorn map, whatever the branch.
+        if Overlord.Arena and Overlord.Arena.RefreshMapPin then
+            Overlord.Arena:RefreshMapPin(mapID, layoutChanged, contentRefresh)
+        end
 
         -- Hommage guilde (Durotar, Kalimdor…) : copie exacte pins fortin.
         -- layoutChanged (pas "true" fige) : RefreshGuildHonorOverlays fait un early-return sur

@@ -283,6 +283,28 @@ local function BuildSnapshotKillPayload(snapshot, name, wireEpoch)
     return #payload <= 250 and payload or nil
 end
 
+-- (See BuildSnapshotCapturePayload.) Nil when a kill row of the player is served (it carries the
+-- guild) or the register is not a strong one. A strong departure (no guild, dated) travels as
+-- "=<guildAt>=", as a kill row's does: a peer still holding the old guild learns it left.
+local function CaptureRowGuildItem(snapshot, name, info, full, wireEpoch)
+    if not full or type(info) ~= "table" then return nil end
+    if info.guildAuth ~= true and info.guildReplica ~= true then return nil end
+    local at = math.max(0, math.floor(tonumber(info.guildAt) or 0))
+    local guild = SafeWireField(info.guild, 96)
+    if guild == "" then
+        if at <= 0 then return nil end
+    elseif not (sync.IsValidGuildSyncToken and sync:IsValidGuildSyncToken(guild)) then
+        return nil
+    end
+    -- (A kill row that cannot be served, level or class outside the ranking's, leaves the guild
+    -- to this row.)
+    if type(snapshot.kills) == "table" and snapshot.kills[name] ~= nil
+        and sync.BuildPagedLeaderboardKillPayload
+        and sync:BuildPagedLeaderboardKillPayload(snapshot, name, wireEpoch) ~= nil then return nil end
+    return "=" .. tostring(at) .. "=" .. guild
+end
+sync._CaptureRowGuildItem = CaptureRowGuildItem
+
 local function BuildSnapshotCapturePayload(snapshot, name, wireEpoch, full)
     if not ContributorCanRelay(name)
         or (sync.IsDeniedKillContributor and sync:IsDeniedKillContributor(name)) then return nil end
@@ -307,6 +329,14 @@ local function BuildSnapshotCapturePayload(snapshot, name, wireEpoch, full)
         end
     end
     for i = #safeZones, uniqueCount + 1, -1 do safeZones[i] = nil end
+    -- A player who captures without killing has no kill row, the only row that carried his
+    -- guild: keep and outpost claims of his stayed refused wherever the ranking did not know
+    -- it (late arrivals: for good, until his first kill). His page capture row (full: pages and
+    -- the feed only) then carries it as one last item of the list, "=<guildAt>=<guild>", under
+    -- the kill row's own rule (a strong register only: his own word, a roster, a group, a page).
+    -- A client before this reads it as an unknown zone and drops it.
+    local guildItem = CaptureRowGuildItem(snapshot, name, info, full, wireEpoch)
+    if guildItem then safeZones[#safeZones + 1] = guildItem end
     local prefix = table.concat({
         SafeWireField(name, 80),
         FactionCode(info.faction),
