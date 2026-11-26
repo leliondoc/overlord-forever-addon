@@ -7,7 +7,7 @@
 - Corner widget (Options, On-screen panels, off by default): a small button you can drag anywhere. Hover it for the guild table and Recent activity; click it to open Overlord.
 - Leaderboard: the keeps and outposts tables show one row per site with its holder; hover a row for each guild's captures of that site this week.
 - Keeps and outposts taken by a player who captures without killing now reach every map, including players who log in later.
-- A keep taken by a guild of the faction that already held it no longer makes maps go back and forth.
+- Maps no longer show one allied guild taking a keep from another when the enemy held it in between.
 - Map labels keep the holder's name during an assault; alerts and leaderboard wording are clearer in every language.
 - Roleplay PvP: rows from a session that read its realm rules wrong are kept out of the other campaigns' rankings.
 - Players on 2.7.0 must update: they do not see the arena, and their maps can stay wrong after a capture by a player without kills.

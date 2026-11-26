@@ -125,7 +125,7 @@ friend(119, "Still Wrong", 7006)
 for i = 111, 113 do say(i, "global") end
 for i = 111, 113 do say(i, "rpv") end
 assert(not say(119, "global"), "a character's old word kept counting for its first campaign")
-assert(OverlordDB.bnetRealmBands.g7006.bands.global.a111 == nil,
+assert(OverlordDB.bnetRealmBands.g7006.bands.global["Player-7006-0000006F"] == nil,
     "an old word stayed in the saved table")
 
 -- 10. A mixed realm (two campaigns with BAND_MIN characters each): nothing is refused there.
@@ -204,16 +204,21 @@ for i = 171, 173 do say(i, "rpv") end
 assert(say(179, "global"), "a GUID's server id and a record's realm id were counted in one tally")
 assert(OverlordDB.bnetRealmBands.g7011 and OverlordDB.bnetRealmBands.r7011, "the two keys were not kept apart")
 
--- 16. One game account, one word: a player's alts on one realm count once.
+-- 16. A game account id is a session handle: one friend heard over three sessions, each time
+-- under a new id, is one speaker (one word in the saved table), never a majority.
 reset()
-friend(201, "Alt One", 7014); say(201, "rpv")
-friend(201, "Alt Two", 7014, { playerGuid = "Player-7014-0000A002" }); say(201, "rpv")
-friend(201, "Alt Three", 7014, { playerGuid = "Player-7014-0000A003" }); say(201, "rpv")
+local movingGuid = "Player-7014-0000A001"
+for session = 1, 3 do
+    rp._bandVerdict, rp._bandPruned = nil, nil
+    friend(200 + session, "Moving Id", 7014, { playerGuid = movingGuid })
+    say(200 + session, "rpv")
+    now = now + 7200
+end
 friend(209, "Other Pvp", 7014)
-assert(say(209, "global"), "three alts of one game account made a majority")
-friend(202, "Second Rp", 7014); friend(203, "Third Rp", 7014)
-say(202, "rpv"); say(203, "rpv")
-assert(not say(209, "global"), "three game accounts did not make a majority")
+assert(say(209, "global"), "one friend under three session ids made a majority")
+local rpvWords = 0
+for _ in pairs(OverlordDB.bnetRealmBands.g7014.bands.rpv or {}) do rpvWords = rpvWords + 1 end
+assert(rpvWords == 1, "one friend under three session ids left " .. rpvWords .. " words")
 
 -- 15. The rule itself, whatever our campaign: under a Roleplay PvP majority, Normal, Roleplay
 -- and PvP bands are refused; under a hardcore one, Normal is, PvP is not.

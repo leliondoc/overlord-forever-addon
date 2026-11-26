@@ -241,10 +241,10 @@ local function BandIdentity(info)
             key = id and id ~= "0" and ("g" .. id) or false
             bandGuidRealm[guid] = key
         end
-        -- (One game account, one word: three alts of one player are not three friends.)
-        if key then return key, account and ("a" .. tostring(account)) or guid end
+        -- (The character's GUID: a game account id is a session handle, never saved.)
+        if key then return key, guid end
     end
-    local who = account and ("a" .. tostring(account)) or guid
+    local who = guid
     if not who then
         local name = info.characterName
         who = type(name) == "string" and name ~= "" and name:lower() or nil

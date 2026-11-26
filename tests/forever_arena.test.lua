@@ -148,6 +148,26 @@ Overlord.InstanceSuspended = true
 Overlord.InstanceSuspended = false
 lb.GetHotPlayerGuildState, lb.playerInfo["Bridge Tester"] = savedHot, savedInfo
 lb.playerInfo["Remote Tester"] = savedRemote
+-- A catch-up ask through the real relay: from a direct neighbour (no hop) it is answered; the
+-- same ask passed on by another peer is refused.
+do
+    local net = Overlord.Relay
+    local answers = {}
+    local savedSend = net.Send
+    net.Send = function(_, kind, payload, target) answers[#answers + 1] = kind .. ">" .. tostring(target); return true end
+    local me = UnitName("player")
+    local function asked(id, path)
+        s:OnBNetMessage("R2:Forever_eu_A:BR:eu|arena-ask" .. id .. "|" .. server .. "|" .. me .. "|" .. path .. "|AQ|"
+            .. string.format("1:%s:%d:0:0:1", POOL, campaign), 123)
+    end
+    asked(1, "Remote Tester,Bridge Tester")
+    assert(#answers == 0, "a relayed catch-up ask was answered: " .. table.concat(answers, " "))
+    asked(2, "Bridge Tester")
+    assert(not net.stats.lastError, tostring(net.stats.lastError))
+    assert(#answers == 1 and answers[1] == "AL>Bridge Tester",
+        "a direct neighbour's ask through the relay was not answered: " .. table.concat(answers, " "))
+    net.Send = savedSend
+end
 
 -- 3b. Full ledger: a believed row leaves only for a believed row dated after it; a live
 -- announce is dated now; a believed copy fixes a waiting row put on the other side.
@@ -502,7 +522,7 @@ assert(suspends == 2 and core:find("pcall(Overlord.Arena.OnInstanceResume, Overl
     "the arena is not cut in instances")
 local lbui = read("LeaderboardUI.lua")
 assert(lbui:find("function Overlord.LeaderboardUI:PlaceArenaView()", 1, true)
-    and lbui:find("    self:CreateArenaView(P)\r\n", 1, true) and not lbui:find("ToggleArena", 1, true),
+    and lbui:find("\n    self:CreateArenaView%(P%)\r?\n") and not lbui:find("ToggleArena", 1, true),
     "the arena board is not always shown under the keeps and outposts")
 local function count(text, pat) local k = 0; for _ in text:gmatch(pat) do k = k + 1 end; return k end
 for _, key in ipairs({ "ARENA_TIP_TITLE", "ARENA_TIP_BODY", "ARENA_COL_GUILDS", "ARENA_COL_WHEN", "ARENA_COL_TAKEN",
